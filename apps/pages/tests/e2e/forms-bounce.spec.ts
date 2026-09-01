@@ -149,6 +149,85 @@ test.describe('the respondent is told, while they are still on the form', () => 
 
     await expect(page.getByText('Check your email')).toBeVisible();
   });
+
+  /**
+   * ── THE MAIL THAT NEVER LEFT ─────────────────────────────────────────────
+   *
+   * A dispatch that fails after its retries are spent (an unsynced template, a
+   * rate limit, an outage) is written onto the token as FAILED by
+   * `sendEmailTask`'s `onFailure`. From where the respondent sits it is the
+   * same fact a bounce is — the link is not coming — so it is surfaced the same
+   * way and on the same schedule.
+   *
+   * The SENTENCE differs on purpose. A bounce points at the address they typed;
+   * this points at us. Telling somebody to go hunting for a typo in an address
+   * we never actually mailed is a small lie with a real cost, so the copy owns
+   * the failure and offers the recovery instead.
+   */
+  test('a send that never left is reported too, and owns the failure', async ({ page }) => {
+    const email = freshEmail('nosend');
+    await page.goto(fillPath);
+    await typeEmailAndLeave(page, email);
+    await expect(page.getByTestId('forms-link-sent')).toBeVisible();
+
+    await markDelivery(email, 'FAILED', 'Resend send failed: Template not found');
+
+    const failed = page.getByTestId('forms-bounced');
+    await expect(failed).toBeVisible({ timeout: 20_000 });
+    await expect(failed).toContainText(email);
+    // Ours, not theirs — and a way forward.
+    await expect(failed).toContainText(/couldn’t send/i);
+    await expect(failed).toContainText(/on us/i);
+
+    // The reassuring line is REPLACED, exactly as it is for a bounce.
+    await expect(page.getByTestId('forms-link-sent')).toHaveCount(0);
+  });
+
+  /**
+   * THE POINT OF THE WHOLE FIX, end to end.
+   *
+   * The bug was not that nobody was told; it was that the system had decided a
+   * live link already covered the address and would never send another. So the
+   * assertion that matters is not the banner — it is that pressing Submit after
+   * a failed send actually mints and dispatches a NEW link, which is exactly
+   * what the banner promises.
+   */
+  test('submitting after a failed send mints a fresh link rather than standing down', async ({
+    page,
+  }) => {
+    const prisma = await getTestPrisma();
+    const email = freshEmail('retry');
+    await page.goto(fillPath);
+    await typeEmailAndLeave(page, email);
+    await expect(page.getByTestId('forms-link-sent')).toBeVisible();
+
+    await markDelivery(email, 'FAILED', 'Resend send failed: Template not found');
+    await expect(page.getByTestId('forms-bounced')).toBeVisible({ timeout: 20_000 });
+
+    const response = await prisma.formResponse.findFirstOrThrow({
+      where: { form_id: formId!, email_normalized: email.toLowerCase() },
+      select: { id: true },
+    });
+    expect(await prisma.formMagicToken.count({ where: { response_id: response.id } })).toBe(1);
+
+    await page.getByLabel(NAME_LABEL, { exact: true }).fill('Second Try');
+    await page.getByRole('radio', { name: '7', exact: true }).click();
+    await page.getByRole('button', { name: 'Submit' }).click();
+    await expect(page.getByText('Check your email')).toBeVisible();
+
+    /**
+     * TWO tokens, and the new one is clean. Before the fix this was one — the
+     * submit found the failed token unspent, unexpired and young, concluded a
+     * live link already covered the address, and sent nothing at all.
+     */
+    const tokens = await prisma.formMagicToken.findMany({
+      where: { response_id: response.id },
+      orderBy: { created_at: 'desc' },
+      select: { delivery_state: true },
+    });
+    expect(tokens).toHaveLength(2);
+    expect(tokens[0].delivery_state).toBeNull();
+  });
 });
 
 test.describe('the status endpoint is not a mailbox oracle', () => {
@@ -250,6 +329,79 @@ test.describe('the status endpoint is not a mailbox oracle', () => {
 
     const response = await page.request.get(deliveryPath);
     expect(await response.json()).toEqual({ state: 'bounced' });
+  });
+
+  /**
+   * A DISPATCH FAILURE WIDENS NOTHING, and it is worth pinning why rather than
+   * only that.
+   *
+   * `failed` is a fact about OUR infrastructure — a template not yet synced, a
+   * rate limit, an outage — recorded before anything is asked of the
+   * recipient's mail system. It is therefore equally likely for a real mailbox
+   * and for one that does not exist, and carries no information about which. It
+   * is still cookie-scoped, still only ever a failure, and still counted
+   * against the distinct-address ceiling.
+   */
+  test('reports a failed send to the browser that caused it, and to nobody else', async ({
+    page,
+  }) => {
+    const email = freshEmail('nosend-api');
+    await page.goto(fillPath);
+    await typeEmailAndLeave(page, email);
+    await expect(page.getByTestId('forms-link-sent')).toBeVisible();
+
+    await markDelivery(email, 'FAILED', 'Resend send failed: Template not found');
+
+    const owner = await page.request.get(deliveryPath);
+    expect(await owner.json()).toEqual({ state: 'failed' });
+
+    // A browser that caused no send holds no cookie and learns nothing — and
+    // naming the address does not help, because there is no parameter for one.
+    const clean = await page.context().browser()!.newContext();
+    try {
+      const blind = await clean.request.get(deliveryPath);
+      expect(await blind.json()).toEqual({ state: 'pending' });
+      const named = await clean.request.get(
+        `${deliveryPath}?email=${encodeURIComponent(email)}`
+      );
+      expect(await named.json()).toEqual({ state: 'pending' });
+    } finally {
+      await clean.close();
+    }
+  });
+
+  /**
+   * A watch id that is not this browser's is answered exactly as one in flight.
+   *
+   * `failed` must not become the state that finally distinguishes "no such
+   * send" from "send outstanding" — that sameness is what keeps the substituted
+   * stand-in id (set whenever there was no real send) from leaking back out.
+   */
+  test('answers a foreign watch id `pending`, even while a real send has failed', async ({
+    page,
+    browser,
+  }) => {
+    const email = freshEmail('nosend-foreign');
+    await page.goto(fillPath);
+    await typeEmailAndLeave(page, email);
+    await expect(page.getByTestId('forms-link-sent')).toBeVisible();
+    await markDelivery(email, 'FAILED');
+
+    const context = await browser.newContext();
+    try {
+      await context.addCookies([
+        {
+          name: `forms_watch_${FORM_SLUG}`,
+          value: randomUUID(),
+          domain: 'localhost',
+          path: `/${CLASS}/forms`,
+        },
+      ]);
+      const response = await context.request.get(deliveryPath);
+      expect(await response.json()).toEqual({ state: 'pending' });
+    } finally {
+      await context.close();
+    }
   });
 
   test('is never cached', async ({ page }) => {

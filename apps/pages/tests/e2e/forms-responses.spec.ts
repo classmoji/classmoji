@@ -306,6 +306,71 @@ test.describe('forms responses — owner', () => {
     await expect(drawer.locator('input[type="text"], textarea, select')).toHaveCount(0);
   });
 
+  /**
+   * ── "Unverified" is three different situations wearing one chip ──────────
+   *
+   * Somebody who has not got round to clicking, somebody whose mail bounced,
+   * and somebody whose mail NEVER LEFT US all show as Unverified, and a course
+   * would chase all three the same way. The third is the one this row exists
+   * for: the address may be perfectly good, the person is waiting for something
+   * that was never sent, and telling an instructor to go and check their email
+   * address would send them after a mistake nobody made.
+   *
+   * Its own words, therefore — "Not sent" on the row, and the reason the
+   * dispatch gave in the drawer — rather than being folded into "Bounced".
+   */
+  test('a response whose verification mail never went out says so, in its own words', async ({
+    page,
+  }) => {
+    const prisma = await getTestPrisma();
+    const revision = await prisma.formRevision.findFirstOrThrow({
+      where: { form_id: formId! },
+      select: { id: true },
+    });
+
+    const email = 'zz-e2e-neversent@example.edu';
+    const response = await prisma.formResponse.create({
+      data: {
+        form_id: formId!,
+        revision_id: revision.id,
+        email,
+        email_normalized: email,
+        name: 'Never Sent',
+        answers: { [NAME_FIELD]: 'Never Sent', [SCALE_FIELD]: 3 },
+        submission_state: 'PENDING_VERIFICATION',
+        submitted_at: new Date(),
+      },
+    });
+    await prisma.formMagicToken.create({
+      data: {
+        response_id: response.id,
+        token_hash: `zz-e2e-neversent-${response.id}`,
+        expires_at: new Date(Date.now() + 3_600_000),
+        delivery_state: 'FAILED',
+        delivery_detail: 'Resend send failed: Template not found',
+      },
+    });
+
+    try {
+      await loginAs(page, 'owner');
+      await page.goto(responsesPath);
+
+      const chip = page.getByTestId(`forms-bounce-chip-${response.id}`);
+      await expect(chip).toBeVisible();
+      // NOT "Bounced" — the address was never tried.
+      await expect(chip).toHaveText('Not sent');
+
+      await page.getByText(email).first().click();
+      const drawer = page.getByRole('dialog', { name: 'Response details' });
+      const delivery = drawer.getByTestId('forms-response-delivery');
+      await expect(delivery).toContainText('Never sent');
+      // The reason, for whoever has to work out why.
+      await expect(delivery).toContainText('Template not found');
+    } finally {
+      await prisma.formResponse.delete({ where: { id: response.id } }).catch(() => {});
+    }
+  });
+
   test('inline status editing writes through and suggests labels already in use', async ({
     page,
   }) => {

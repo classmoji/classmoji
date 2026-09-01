@@ -143,6 +143,24 @@ export const MAGIC_TOKEN_WINDOW_MS = 60 * 60 * 1000;
  * live link at all.
  */
 export const MAGIC_TOKEN_REUSE_MS = MAGIC_TOKEN_TTL_MS / 2;
+/**
+ * The `delivery_state` meaning "we never managed to hand this message to the
+ * provider at all".
+ *
+ * Not one of the provider's own states — those are reported by the Resend
+ * webhook ('SENT', 'DELIVERED', 'BOUNCED', 'DELAYED', 'COMPLAINED') and all
+ * describe a message that at least left. This one is written by
+ * `sendEmailTask`'s `onFailure` hook, after its retries are exhausted, and
+ * describes the opposite: nothing was sent, so there is nothing to bounce.
+ *
+ * It shares the column because it answers the same question every other value
+ * there answers — "did the mail carrying this link reach them?" — and because
+ * the column is deliberately a plain string so a new value costs no migration.
+ * Named here because the reuse rule turns on it; the writer (packages/tasks)
+ * and the readers (the `/delivery` endpoint, the staff row) spell the same
+ * literal, exactly as they already do for 'SENT' and 'BOUNCED'.
+ */
+export const MAGIC_LINK_SEND_FAILED = 'FAILED';
 /** Abandoned server-side partials are swept after this long. */
 export const DRAFT_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 /**
@@ -613,17 +631,44 @@ async function mintLinkFor(
 /**
  * When this response last got a link that is STILL WORTH POINTING AT, or null.
  *
- * Three conditions, and each one is a way the reuse could otherwise strand
+ * Four conditions, and each one is a way the reuse could otherwise strand
  * somebody with a dead link and no mail:
  *
  *  - unspent (`used_at` null) — a link that has been clicked opens nothing;
  *  - unexpired — the obvious one;
  *  - minted inside `MAGIC_TOKEN_REUSE_MS` — so what is handed back has real
- *    life left, not the last twenty minutes of it.
+ *    life left, not the last twenty minutes of it;
+ *  - NOT KNOWN TO HAVE FAILED TO SEND — see below.
  *
  * The RAW token is not recoverable (only its digest is stored), which is
  * exactly right: reuse means "send nothing", never "send the old link again".
  * The one already in their inbox is the copy.
+ *
+ * ── "A token exists" is not "mail reached them" ────────────────────────────
+ * The first three conditions all describe the TOKEN. None of them describes the
+ * MESSAGE, and that gap stranded people: a mail whose Trigger run failed (an
+ * unsynced template, a rate limit, a provider outage) leaves a token that is
+ * unspent, unexpired and freshly minted, so every check above passes and the
+ * next blur or submit concludes a live link already covers the address and
+ * sends nothing. Somebody who never received a link could then never get one —
+ * the failure being asynchronous, the page that asked for the mail had already
+ * answered the browser successfully.
+ *
+ * `delivery_state === 'FAILED'` is written by `sendEmailTask`'s `onFailure`
+ * hook, which fires only once the retries are exhausted. So it means "this
+ * message is never going out", not "an attempt went badly".
+ *
+ * ── Why only a KNOWN failure disqualifies ──────────────────────────────────
+ * A NULL `delivery_state` is "nothing reported yet", and a send dispatched
+ * seconds ago always looks exactly like that. Treating unknown as failed would
+ * make every fresh token unreusable and bring back the double-send this rule
+ * exists to prevent — two mails for one action, seconds apart. So the filter is
+ * written as "null, or anything that is not FAILED" rather than as a whitelist
+ * of good states: an unfamiliar state a future provider event introduces stays
+ * reusable, which is the same conservative direction the column's own comment
+ * takes. Spelled out as an explicit OR rather than a bare `not`, because
+ * `not` against a NULL column is exactly the SQL three-valued-logic trap that
+ * would silently exclude every unreported send.
  *
  * Called inside the form's row lock by every path that would otherwise mint, so
  * two concurrent sends for one address cannot both decide they are the first.
@@ -639,6 +684,7 @@ async function findLiveLink(
       used_at: null,
       expires_at: { gt: now },
       created_at: { gt: new Date(now.getTime() - MAGIC_TOKEN_REUSE_MS) },
+      OR: [{ delivery_state: null }, { delivery_state: { not: MAGIC_LINK_SEND_FAILED } }],
     },
     orderBy: { created_at: 'desc' },
     // The id comes back so a caller who sends NOTHING can still point a browser

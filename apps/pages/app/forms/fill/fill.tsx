@@ -136,15 +136,17 @@ const DELIVERY_POLL_WINDOW_MS = 3 * 60_000;
 /**
  * Watch for a bounce on the send this browser just caused.
  *
- * Keyed on `token` — a value that changes each time a send happens — so
- * re-typing an address restarts the watch rather than leaving it pinned to the
- * previous one. Passing `null` means "nothing outstanding" and the effect does
- * nothing at all.
+ * Keyed on `token` — a value that changes every time the server re-points the
+ * watch cookie, which is every blur send, every resend, and every submit — so
+ * each new send restarts the watch rather than leaving it pinned to the
+ * previous one's answer. That is what stops a warning about a dead send
+ * outliving the fresh send that replaced it. Passing `null` means "nothing
+ * outstanding" and the effect does nothing at all.
  *
  * The endpoint takes NO address and is keyed only on an HttpOnly cookie this
  * server set; see `delivery.ts` for why that is what keeps it from being a
- * mailbox oracle. It reports `bounced` and `delayed` and flattens everything
- * else — delivered included — into `pending`.
+ * mailbox oracle. It reports `bounced`, `failed` and `delayed` and flattens
+ * everything else — delivered included — into `pending`.
  */
 function useDeliveryWatch(deliveryPath: string, token: string | number | null): DeliveryState {
   const [state, setState] = useState<DeliveryState>('pending');
@@ -187,7 +189,7 @@ function useDeliveryWatch(deliveryPath: string, token: string | number | null): 
         });
         if (response.ok) {
           const body = (await response.json()) as { state?: DeliveryState };
-          if (body.state === 'bounced' || body.state === 'delayed') {
+          if (body.state === 'bounced' || body.state === 'failed' || body.state === 'delayed') {
             // Answered. Stop asking — the answer will not improve.
             setState(body.state);
             return;
@@ -660,7 +662,10 @@ export const action = async ({
         null
       );
     }
-    return { state: 'check-email', email: identity.email } satisfies ActionResult;
+    // The submit reply carries a watch cookie too, and a trapped bot must get
+    // the same one for the same reason: a reply whose SHAPE differed is how a
+    // bot learns the trap sprang.
+    return withWatch({ state: 'check-email', email: identity.email } satisfies ActionResult, null);
   }
 
   if (!identity.email) {
@@ -916,12 +921,40 @@ export const action = async ({
      */
     await dispatchVerifyEmail(result.emails, result.verifyUrl ?? '');
 
-    return { state: 'check-email', email: identity.email } satisfies ActionResult;
+    /**
+     * ── The watch follows the NEWEST send, submit included ────────────────
+     *
+     * The submit used to answer without a watch cookie, which left the browser
+     * pointed at whatever the blur had set — or, for somebody whose autofill
+     * filled the address without ever firing a blur send, at nothing at all. So
+     * a bounce on the check-email screen, the one surface where the person is
+     * sitting and waiting for the mail, could go unreported entirely.
+     *
+     * It matters more now that a failed dispatch is reported. The submit is the
+     * path that RECOVERS from one — a token marked FAILED no longer satisfies
+     * reuse, so this call mints and dispatches a fresh link — and without this
+     * cookie the page would keep answering for the dead send and go on telling
+     * somebody "we couldn't send it" seconds after we successfully did.
+     *
+     * `watchTokenId` is the reused live token when nothing was sent, and the
+     * fresh one when something was, so it always names the send that is
+     * genuinely outstanding.
+     */
+    return withWatch(
+      { state: 'check-email', email: identity.email } satisfies ActionResult,
+      result.watchTokenId
+    );
   } catch (error) {
     // The same view as success. A visible cooldown would answer "has this
-    // address submitted recently?" — the same oracle by another name.
+    // address submitted recently?" — the same oracle by another name, and the
+    // cookie has to match: a reply without one would say "nothing was sent" out
+    // loud. The stand-in id answers `pending`, exactly as an in-flight send
+    // does.
     if ((error as { code?: string }).code === 'MAGIC_LINK_COOLDOWN') {
-      return { state: 'check-email', email: identity.email } satisfies ActionResult;
+      return withWatch(
+        { state: 'check-email', email: identity.email } satisfies ActionResult,
+        null
+      );
     }
     return publicFailure(error);
   }
@@ -1344,22 +1377,52 @@ export default function FormFill() {
   }, [linkResult]);
 
   /**
-   * ── Did the message bounce? ──────────────────────────────────────────────
+   * ── Which send is being watched ──────────────────────────────────────────
    *
-   * Started by the send itself and keyed on WHEN it happened, so each new
-   * address restarts the watch instead of inheriting the previous answer. The
-   * server is asked over a cookie it set on that very response — there is no
-   * address in the request and none could be put there.
+   * One counter, bumped by every server reply that re-pointed the watch cookie:
+   * the blur send and the resend (`link-sent`), and the submit (`check-email`).
+   * Zero means nothing has been sent yet in this page's life, which is what
+   * `null` tells the hook to do — nothing.
    *
-   * The answer only ever moves in the alarming direction: `bounced` and
-   * `delayed` are reported, everything else stays `pending`. A successful
-   * delivery is therefore indistinguishable from a message still in flight,
-   * which is exactly what stops this being a way to test whether an address
-   * exists.
+   * It has to include the SUBMIT, and that is the whole reason it is a counter
+   * rather than the send timestamp it used to be. The submit is the path that
+   * recovers from a failed dispatch — a token marked FAILED no longer satisfies
+   * reuse, so submitting mints and dispatches a fresh link — and the server has
+   * just re-pointed the cookie at that new send. Left keyed on the blur alone,
+   * the page would hold the previous answer and go on saying "we couldn't send
+   * it" seconds after a link successfully went out. Restarting resets the state
+   * to `pending` and asks about the new send, so if THAT one fails too the
+   * warning honestly comes back.
+   *
+   * The server is asked over a cookie it set on that very reply — there is no
+   * address in the request and none could be put there. The answer only ever
+   * moves in the alarming direction: `bounced`, `failed` and `delayed` are
+   * reported, everything else stays `pending`. A successful delivery is
+   * therefore indistinguishable from a message still in flight, which is what
+   * stops this being a way to test whether an address exists.
    */
+  const [watchGeneration, setWatchGeneration] = useState(0);
+  useEffect(() => {
+    if (linkResult?.state === 'link-sent') setWatchGeneration(generation => generation + 1);
+  }, [linkResult]);
+  useEffect(() => {
+    if (result?.state === 'check-email') setWatchGeneration(generation => generation + 1);
+  }, [result]);
+
   const deliveryPath = `/${params.classroomSlug}/forms/${params.formSlug}/delivery`;
-  const delivery = useDeliveryWatch(deliveryPath, linkSentFor?.at ?? null);
+  const delivery = useDeliveryWatch(deliveryPath, watchGeneration === 0 ? null : watchGeneration);
   const bounced = delivery === 'bounced';
+  /**
+   * The mail never left us — the dispatch failed after its retries were spent.
+   *
+   * Held apart from `bounced` because the sentence differs, but it must reach
+   * every place `bounced` reaches: `undelivered` is what "the link is not
+   * coming, whatever the reason" is called below, and it is what suppresses the
+   * reassuring "check your inbox" line. Anything that branches on `bounced`
+   * alone would leave somebody staring at an inbox that was never mailed.
+   */
+  const sendFailed = delivery === 'failed';
+  const undelivered = bounced || sendFailed;
 
   if (data.view === 'signin') {
     return (
@@ -1450,29 +1513,54 @@ export default function FormFill() {
     const resent = linkResult?.state === 'link-sent' && linkResult.resent;
 
     /**
-     * IT BOUNCED, AND THEY ARE STILL HERE.
+     * IT NEVER ARRIVED, AND THEY ARE STILL HERE.
      *
      * The reassuring copy is replaced rather than added to. "We sent a link —
      * check your inbox" is now known to be false, and leaving it on screen
      * beside a warning would send somebody off to search a mailbox that never
      * received anything. Both existing doors — resend, and change the address —
      * are kept, because they are exactly the two things that can help.
+     *
+     * ── Two ways the link fails to arrive, two different sentences ─────────
+     * A BOUNCE is the recipient's mail system refusing a message that left us:
+     * usually a typo, so the address is what to look at. A FAILED DISPATCH is
+     * ours — the send never reached the mail provider at all — and telling
+     * somebody to check an address we never actually tried would send them
+     * hunting for a mistake they did not make. So the failure is owned plainly
+     * and the offer is to try again, with the change-address door still there
+     * for anyone who wants it. Both keep the same shape, the same two buttons
+     * and the same `forms-bounced` hook, because the page's job is identical:
+     * the link is not coming, nothing is lost, here is what to do.
      */
-    if (bounced) {
+    if (undelivered) {
       return (
         <FormCanvas theme={data.theme} classroomName={data.classroomName}>
-          <FormNotice icon="⚠️" title="That email did not go through">
+          <FormNotice
+            icon="⚠️"
+            title={sendFailed ? 'We could not send that email' : 'That email did not go through'}
+          >
             {/* The outcome, not the cause — see the note on the in-form banner.
                 Naming WHY delivery failed would tell anyone who typed an
                 address more about that mailbox than they should learn, and it
                 changes nothing about what this person should do next. */}
             <p data-testid="forms-bounced">
-              We could not deliver to <strong className="font-semibold">{checkEmail}</strong>.
-              Nothing is recorded yet, and your answers are still here.
+              {sendFailed ? (
+                <>
+                  Something went wrong on our side and the link to{' '}
+                  <strong className="font-semibold">{checkEmail}</strong> never went out. Nothing is
+                  recorded yet, and your answers are still here.
+                </>
+              ) : (
+                <>
+                  We could not deliver to <strong className="font-semibold">{checkEmail}</strong>.
+                  Nothing is recorded yet, and your answers are still here.
+                </>
+              )}
             </p>
             <p className="mt-3 text-gray-500 dark:text-gray-400">
-              The usual cause is a typo in the address. Change it below and we will send a new link
-              straight away.
+              {sendFailed
+                ? 'This is usually temporary. Try that address again below — or use a different one if you would rather.'
+                : 'The usual cause is a typo in the address. Change it below and we will send a new link straight away.'}
             </p>
 
             <div className="mt-6 flex flex-wrap items-center gap-3">
@@ -1665,13 +1753,25 @@ export default function FormFill() {
           link, a link for an address that already responded, a send the
           cooldown swallowed. Any difference between them answers "has this
           person already applied?" for anybody who can type an address. */}
-      {/* THE BOUNCE, WHILE THEY ARE STILL TYPING.
+      {/* THE FAILURE, WHILE THEY ARE STILL TYPING.
           This is the whole point of sending on blur: the message has already
           failed and they have not finished the form, so the correction costs
           them nothing. It REPLACES the reassuring line rather than sitting
-          under it — telling somebody to check an inbox that rejected the mail
-          is worse than saying nothing. */}
-      {!verifiedHere && bounced && linkSent ? (
+          under it — telling somebody to check an inbox that never received the
+          mail is worse than saying nothing.
+
+          A BOUNCE points at the address; a FAILED DISPATCH points at us. The
+          two sentences differ because the action does: one is "check what you
+          typed", the other is "that was our fault, we will try again". Sending
+          somebody hunting for a typo in an address we never actually mailed
+          would be a small lie with a real cost.
+
+          "Press Submit and we will try again" is a promise the reuse rule now
+          keeps: a token whose send failed no longer satisfies `findLiveLink`,
+          so the submit mints and dispatches a fresh link instead of concluding
+          one is already in their inbox. Before that fix this banner would have
+          been telling them to do the one thing guaranteed to send nothing. */}
+      {!verifiedHere && undelivered && linkSent ? (
         <div
           role="alert"
           data-testid="forms-bounced"
@@ -1683,13 +1783,27 @@ export default function FormFill() {
               any of that here would widen the very oracle the rate limits are
               holding shut, in exchange for nothing the person can act on. The
               action is the same in every case: check the address. */}
-          <strong className="font-semibold">We couldn&rsquo;t deliver to {linkSent.email}.</strong>{' '}
-          Check the address above — fix it and we will send a new link. Nothing you have typed is
-          lost.
+          {sendFailed ? (
+            <>
+              <strong className="font-semibold">
+                We couldn&rsquo;t send the link to {linkSent.email}.
+              </strong>{' '}
+              That one is on us, not on your address. Finish your answers and press Submit — we will
+              try again then. Nothing you have typed is lost.
+            </>
+          ) : (
+            <>
+              <strong className="font-semibold">
+                We couldn&rsquo;t deliver to {linkSent.email}.
+              </strong>{' '}
+              Check the address above — fix it and we will send a new link. Nothing you have typed
+              is lost.
+            </>
+          )}
         </div>
       ) : null}
 
-      {!verifiedHere && !bounced && linkSent ? (
+      {!verifiedHere && !undelivered && linkSent ? (
         <div
           role="status"
           data-testid="forms-link-sent"
