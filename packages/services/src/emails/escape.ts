@@ -19,14 +19,23 @@ export const escapeHtml = (value: string): string =>
     return replacements[c] ?? c;
   });
 
-/** Escape every value in a variables bag. Numbers pass through untouched. */
+/**
+ * Escape every value in a variables bag, and hand back strings only.
+ *
+ * A number is stringified rather than passed through. Resend rejects the whole
+ * send with `Variable "X" must be a \`string\`` when a variable arrives as a
+ * number, and since the send happens inside a Trigger task, that rejection
+ * surfaces nowhere the caller or the recipient can see — the mail simply never
+ * arrives. Coercing here means no caller can reintroduce it. A number needs no
+ * HTML escaping, so String() is the whole of the work.
+ */
 export const escapeVars = <T extends Record<string, string | number | null | undefined>>(
   vars: T
-): Record<string, string | number> => {
-  const out: Record<string, string | number> = {};
+): Record<string, string> => {
+  const out: Record<string, string> = {};
   for (const [key, value] of Object.entries(vars)) {
     if (value === null || value === undefined) continue;
-    out[key] = typeof value === 'number' ? value : escapeHtml(String(value));
+    out[key] = typeof value === 'number' ? String(value) : escapeHtml(String(value));
   }
   return out;
 };
