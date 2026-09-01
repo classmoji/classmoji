@@ -54,6 +54,11 @@ export default [
   // rather than the exemption arriving ahead of the routes it describes.
   route(':classroomSlug/forms/:formSlug', 'forms/fill/fill.tsx'),
   route(':classroomSlug/forms/:formSlug/verify', 'forms/fill/verify.tsx'),
+  // A resource route (no component): the fill page polls it for a bounce on the
+  // send it just caused. It answers JSON, takes NO address, and is keyed only
+  // on the HttpOnly watch cookie — see the module for why that is what keeps it
+  // from being a mailbox oracle. Static `delivery` outranks `:formSlug`.
+  route(':classroomSlug/forms/:formSlug/delivery', 'forms/fill/delivery.ts'),
 
   ...prefix('_site/:subdomain', [
     // A resource route (no component): it answers with text/plain and has no

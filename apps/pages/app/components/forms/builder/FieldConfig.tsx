@@ -223,6 +223,7 @@ function TypeSpecific({ field, onChange, scopes, nested }: FieldConfigProps) {
           <input
             value={(field.domain as string) ?? ''}
             placeholder="dartmouth.edu"
+            data-testid="forms-field-domain"
             onChange={event =>
               onChange({
                 domain: event.target.value.trim() === '' ? undefined : event.target.value,
@@ -230,6 +231,18 @@ function TypeSpecific({ field, onChange, scopes, nested }: FieldConfigProps) {
             }
             className={inputClass}
           />
+          {/* Said plainly, because the consequence is a REFUSAL rather than a
+              hint: an address outside the domain cannot be submitted at all, on
+              either side of the wire — the contract's `email` answer schema
+              refines on it, and the renderer builds its client schema from that
+              same contract. An instructor who read this as "we suggest" would
+              shut out every student with a personal address and not find out
+              until one of them emailed to ask why. */}
+          <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+            {(field.domain as string | undefined)?.trim()
+              ? `Only ${String(field.domain).trim()} addresses are accepted — anything else is refused when they submit.`
+              : 'Leave this empty to accept any address. Name a domain and every other domain is refused.'}
+          </p>
         </Row>
       );
 

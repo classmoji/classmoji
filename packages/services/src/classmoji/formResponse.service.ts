@@ -443,6 +443,13 @@ export type FormEmailTemplateId = 'form-verify-link' | 'form-verify-reminder';
 export interface FormVerifyEmail {
   payload: {
     to: string;
+    /**
+     * Correlation for the mail task — see `composeLinkEmail`. Absent when there
+     * is nothing to correlate, which every caller must tolerate: the whole
+     * bounce feature is additive, and a send without this behaves exactly as
+     * sends did before it existed.
+     */
+    formMagicTokenId?: string;
     template: {
       id: FormEmailTemplateId;
       variables: Record<string, string | number>;
@@ -476,6 +483,12 @@ export interface BeginPublicSubmissionResult {
    * what the BROWSER itself did, never from this.
    */
   linkAlreadySentAt: Date | null;
+  /**
+   * The send this browser may ask about later — see the identical field on
+   * `AddressVerificationResult`, including why a null here must never be
+   * allowed to show through as a missing cookie.
+   */
+  watchTokenId: string | null;
   /**
    * Composed mail for the CALLER to send — EMPTY when a live link already
    * covers this response. Services must not import @classmoji/tasks (tasks
@@ -514,6 +527,7 @@ function composeLinkEmail({
   classroomName,
   verifyUrl,
   template,
+  formMagicTokenId,
 }: {
   to: string;
   name?: string | null;
@@ -521,10 +535,18 @@ function composeLinkEmail({
   classroomName: string;
   verifyUrl: string;
   template: FormEmailTemplateId;
+  /**
+   * The token row this message carries the link for, so the mail task can write
+   * the provider's message id back onto it and a later bounce can be traced to
+   * a person. Carried in the ENVELOPE, never in the template variables: it is
+   * plumbing for the sender, not something a recipient should ever see.
+   */
+  formMagicTokenId?: string;
 }): FormVerifyEmail {
   return {
     payload: {
       to,
+      ...(formMagicTokenId ? { formMagicTokenId } : {}),
       template: {
         id: template,
         variables: escapeVars({
@@ -554,7 +576,7 @@ async function mintLinkFor(
   tx: Prisma.TransactionClient,
   responseId: string,
   now: Date
-): Promise<string> {
+): Promise<{ raw: string; tokenId: string }> {
   const recentTokens = await tx.formMagicToken.count({
     where: {
       response_id: responseId,
@@ -569,14 +591,23 @@ async function mintLinkFor(
   }
 
   const { raw, hash } = mintMagicToken();
-  await tx.formMagicToken.create({
+  /**
+   * The row id comes back beside the raw token because both are needed and only
+   * one of them may ever leave the building. The RAW TOKEN is the credential —
+   * mailed, stored as a digest, and the whole authentication for a public
+   * response. The ROW ID is a bare handle: nothing in this system authenticates
+   * with it, so it is safe to hand to a mail task (to write the provider's
+   * message id back) and to a browser (to ask "did my send bounce?").
+   */
+  const created = await tx.formMagicToken.create({
     data: {
       response_id: responseId,
       token_hash: hash,
       expires_at: new Date(now.getTime() + MAGIC_TOKEN_TTL_MS),
     },
+    select: { id: true },
   });
-  return raw;
+  return { raw, tokenId: created.id };
 }
 
 /**
@@ -601,7 +632,7 @@ async function findLiveLink(
   tx: Prisma.TransactionClient,
   responseId: string,
   now: Date
-): Promise<{ created_at: Date } | null> {
+): Promise<{ id: string; created_at: Date } | null> {
   return tx.formMagicToken.findFirst({
     where: {
       response_id: responseId,
@@ -610,7 +641,10 @@ async function findLiveLink(
       created_at: { gt: new Date(now.getTime() - MAGIC_TOKEN_REUSE_MS) },
     },
     orderBy: { created_at: 'desc' },
-    select: { created_at: true },
+    // The id comes back so a caller who sends NOTHING can still point a browser
+    // at the send that is already outstanding — otherwise re-typing the same
+    // address would replace a real bounce watch with a dead one.
+    select: { id: true, created_at: true },
   });
 }
 
@@ -756,11 +790,14 @@ export async function beginPublicSubmission({
         verifyUrl: null,
         mode: existing ? ('existing' as const) : ('new' as const),
         linkAlreadySentAt: live.created_at,
+        // Nothing was sent, but a send IS outstanding — so the browser is
+        // pointed at that one rather than at nothing.
+        watchTokenId: live.id,
         emails: [],
       };
     }
 
-    const raw = await mintLinkFor(tx, responseId, now);
+    const { raw, tokenId } = await mintLinkFor(tx, responseId, now);
     const verifyUrl = verifyUrlFor({
       classroomSlug: loadedForm.classroom.slug,
       formSlug: loadedForm.slug,
@@ -773,6 +810,7 @@ export async function beginPublicSubmission({
       verifyUrl,
       mode: existing ? ('existing' as const) : ('new' as const),
       linkAlreadySentAt: null,
+      watchTokenId: tokenId,
       emails: [
         composeLinkEmail({
           to: email.trim(),
@@ -781,6 +819,7 @@ export async function beginPublicSubmission({
           classroomName: loadedForm.classroom.name,
           verifyUrl,
           template: 'form-verify-link',
+          formMagicTokenId: tokenId,
         }),
       ],
     };
@@ -804,6 +843,22 @@ export interface AddressVerificationResult {
    * oracle, which is the thing the whole flow is built to avoid.
    */
   sent: boolean;
+  /**
+   * The send this browser may ask about later, or null when there is none.
+   *
+   * A bare row handle, NOT a credential: nothing authenticates with it, and the
+   * only thing it unlocks is "did the message for this one send bounce?" — a
+   * question about something the asker themselves just caused.
+   *
+   * ── Null is not a signal, because the caller must not let it become one ───
+   * This is null in exactly the case `sent: false` is interesting — an address
+   * that has already verified — so a route that set a cookie when it is present
+   * and no cookie when it is absent would have rebuilt the membership oracle out
+   * of `Set-Cookie` headers. The fill action therefore ALWAYS sets a watch
+   * cookie and substitutes an opaque id of its own when this is null. See the
+   * note there; it is the reason this field can exist at all.
+   */
+  watchTokenId: string | null;
 }
 
 /**
@@ -901,7 +956,7 @@ export async function beginAddressVerification({
      * themselves asking.
      */
     if (existing && existing.verified_at !== null && !force) {
-      return { emails: [], verifyUrl: null, sent: false };
+      return { emails: [], verifyUrl: null, sent: false, watchTokenId: null };
     }
 
     const responseId =
@@ -934,10 +989,14 @@ export async function beginAddressVerification({
      */
     if (!force) {
       const live = await findLiveLink(tx, responseId, now);
-      if (live) return { emails: [], verifyUrl: null, sent: false };
+      // No mail — but the outstanding send is the one worth watching, so its id
+      // goes back rather than nothing. Without this, reloading the form and
+      // re-typing the same address would swap a live bounce watch for a dead
+      // one and a real bounce would never reach the page.
+      if (live) return { emails: [], verifyUrl: null, sent: false, watchTokenId: live.id };
     }
 
-    const raw = await mintLinkFor(tx, responseId, now);
+    const { raw, tokenId } = await mintLinkFor(tx, responseId, now);
     const verifyUrl = verifyUrlFor({
       classroomSlug: loadedForm.classroom.slug,
       formSlug: loadedForm.slug,
@@ -953,10 +1012,12 @@ export async function beginAddressVerification({
           classroomName: loadedForm.classroom.name,
           verifyUrl,
           template: 'form-verify-link',
+          formMagicTokenId: tokenId,
         }),
       ],
       verifyUrl,
       sent: true,
+      watchTokenId: tokenId,
     };
   });
 }
@@ -1737,6 +1798,23 @@ const RESPONSE_SELECT = {
   submitted_at: true,
   created_at: true,
   updated_at: true,
+  /**
+   * The most recent send's delivery outcome — STAFF ONLY, and the answer to the
+   * question an unverified row otherwise cannot answer.
+   *
+   * An unverified response looks identical whether the person changed their
+   * mind or never received the link, and those want opposite responses from a
+   * course. Only the provider knows which, and this is where it lands.
+   *
+   * Newest first, take 1: earlier tokens for the same response are superseded
+   * (a resend, a reminder), and the current state of the LATEST send is what
+   * describes the situation now.
+   */
+  tokens: {
+    select: { delivery_state: true, delivery_detail: true, created_at: true },
+    orderBy: { created_at: 'desc' as const },
+    take: 1,
+  },
 } satisfies Prisma.FormResponseSelect;
 
 /**
@@ -1991,7 +2069,9 @@ export async function remindUnverified(now: Date = new Date()): Promise<Reminder
     if (servedAlready > 0) continue;
 
     try {
-      const raw = await getPrisma().$transaction(tx => mintLinkFor(tx, response.id, now));
+      const { raw, tokenId } = await getPrisma().$transaction(tx =>
+        mintLinkFor(tx, response.id, now)
+      );
       emails.push(
         composeLinkEmail({
           to: response.email,
@@ -2004,6 +2084,9 @@ export async function remindUnverified(now: Date = new Date()): Promise<Reminder
             rawToken: raw,
           }),
           template: 'form-verify-reminder',
+          // A reminder bounces exactly as a first send does, and the staff row
+          // wants to know that too — nobody is on a page to be told.
+          formMagicTokenId: tokenId,
         })
       );
       remindedByStage[stageIndex] += 1;

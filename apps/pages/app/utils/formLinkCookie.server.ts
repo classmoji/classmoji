@@ -152,3 +152,103 @@ export function clearFormLinkCookie({
     maxAgeSeconds: 0,
   });
 }
+
+// ─── The WATCH cookie ───────────────────────────────────────────────────────
+
+/**
+ * "Did the message this browser just caused bounce?" — and nothing else.
+ *
+ * ── This is NOT the cookie above, and the difference is the whole design ───
+ * The verified-link cookie holds the RAW MAGIC TOKEN and means "the person here
+ * has proved they can read that mailbox". This one is set at BLUR, before
+ * anybody has proved anything, so it must not carry that token or anything like
+ * it — HttpOnly keeps a value away from scripts, not from the person at the
+ * keyboard with devtools open, and handing an unverified browser the mailbox
+ * credential would be exactly the wrong direction.
+ *
+ * So it holds a `form_magic_tokens` ROW ID. Nothing in this system
+ * authenticates with a row id: it opens no link, submits no response and proves
+ * no address. The single question it can answer is the one its holder already
+ * knows the context for — "the send I just triggered, how did it go?"
+ *
+ * A DIFFERENT NAME, deliberately. `readFormLinkCookie` matches on the name, so
+ * these two can never be confused for one another by accident; the submit path
+ * has no way to read this one even if a future edit forgot the distinction.
+ *
+ * ── Why it is ALWAYS set ───────────────────────────────────────────────────
+ * A cookie that appeared only when mail actually went out would answer "has
+ * this address already responded?" through the presence of a `Set-Cookie`
+ * header — the membership oracle the entire flow is built to avoid, rebuilt in
+ * a response header. The fill action therefore sets one on EVERY early-send
+ * reply, substituting an opaque id of its own when there is no real send to
+ * point at, and the status endpoint answers `pending` for an id it cannot find
+ * rather than 404ing. A watcher cannot tell the two apart.
+ */
+const watchCookieNameFor = (formSlug: string): string =>
+  `forms_watch_${formSlug.replace(/[^a-zA-Z0-9-]/g, '')}`;
+
+/**
+ * How long a browser may keep asking about one send.
+ *
+ * Short: the page polls for a bounce for a bounded window while somebody is
+ * actually on the form. A bounce that lands after they have gone is what the
+ * STAFF surfacing is for — this cookie is not trying to be a mailbox.
+ */
+export const WATCH_COOKIE_MAX_AGE_SECONDS = 30 * 60;
+
+/** The watch id this browser holds for one form, or null. */
+export function readFormWatchCookie(request: Request, formSlug: string): string | null {
+  const header = request.headers.get('cookie');
+  if (!header) return null;
+
+  const wanted = watchCookieNameFor(formSlug);
+  let found: string | null = null;
+  for (const part of header.split(';')) {
+    const [name, ...rest] = part.trim().split('=');
+    if (name !== wanted) continue;
+    const value = rest.join('=').trim();
+    if (value) found = value;
+  }
+  return found;
+}
+
+/**
+ * `Set-Cookie` naming the send this browser may ask about.
+ *
+ * Same scoping as the link cookie — the form in the NAME, the classroom's forms
+ * subtree in the path — for the same RFC 6265 reason documented above: a cookie
+ * scoped to the form's own path is silently absent from React Router's
+ * `.data` requests, which is the entire flow it exists for.
+ */
+export function formWatchCookie({
+  request,
+  classroomSlug,
+  formSlug,
+  watchId,
+}: {
+  request: Request;
+  classroomSlug: string;
+  formSlug: string;
+  /**
+   * The send to watch, or NULL when there is none to point at.
+   *
+   * Null mints a random stand-in rather than omitting the cookie, and that
+   * substitution is the whole reason this parameter is nullable instead of the
+   * caller being trusted to remember. A caller that skipped the header when it
+   * had nothing real would be answering "did this address already respond?" and
+   * "did the honeypot spring?" in a response header. The stand-in resolves to
+   * no row, and `/delivery` reports `pending` for exactly that — the same word
+   * it uses for a send in flight and for one that arrived.
+   */
+  watchId: string | null;
+}): string {
+  const attributes = [
+    `${watchCookieNameFor(formSlug)}=${encodeURIComponent(watchId ?? crypto.randomUUID())}`,
+    `Path=${pathFor(classroomSlug)}`,
+    `Max-Age=${WATCH_COOKIE_MAX_AGE_SECONDS}`,
+    'HttpOnly',
+    'SameSite=Lax',
+  ];
+  if (isSecure(request)) attributes.push('Secure');
+  return attributes.join('; ');
+}

@@ -49,6 +49,20 @@ export interface ResponseRow {
   revisionId: string;
   answers: Record<string, unknown>;
   resolvedContext: unknown;
+  /**
+   * WHY this row never verified, when the mail provider has said.
+   *
+   * An unverified row is somebody who tried and did not finish, and it reads
+   * identically whether they changed their mind or never received the link.
+   * Those deserve opposite responses from a course — chase one, leave the other
+   * — and until the provider's bounce reached us there was no way to tell them
+   * apart.
+   *
+   * Null means nothing has been reported: no webhook configured yet, a send
+   * that predates the feature, or a message still in flight. Deliberately NOT
+   * rendered as "delivered fine" — an absence of news is not news.
+   */
+  delivery: { state: string; detail: string | null } | null;
 }
 
 export interface ResponsesContext extends FormAdminContext {
@@ -147,6 +161,8 @@ export function toResponseRow(row: {
   revision_id: string;
   answers: unknown;
   resolved_context: unknown;
+  /** The newest send's delivery outcome, when the caller selected it. */
+  tokens?: Array<{ delivery_state: string | null; delivery_detail: string | null }>;
 }): ResponseRow {
   return {
     id: row.id,
@@ -168,6 +184,18 @@ export function toResponseRow(row: {
     revisionId: row.revision_id,
     answers: (row.answers ?? {}) as Record<string, unknown>,
     resolvedContext: row.resolved_context ?? null,
+    /**
+     * Only a state we actually have. A token with a null `delivery_state` — a
+     * send from before the webhook existed, or one nothing has been reported
+     * about — collapses to null here rather than becoming a row on screen that
+     * says nothing.
+     */
+    delivery: row.tokens?.[0]?.delivery_state
+      ? {
+          state: row.tokens[0].delivery_state,
+          detail: row.tokens[0].delivery_detail ?? null,
+        }
+      : null,
   };
 }
 

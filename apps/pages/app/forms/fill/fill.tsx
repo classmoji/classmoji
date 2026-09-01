@@ -1,12 +1,21 @@
 import { useEffect, useState } from 'react';
-import { data, useFetcher, useLoaderData, type SubmitTarget } from 'react-router';
+import { data, useFetcher, useLoaderData, useParams, type SubmitTarget } from 'react-router';
 import { exceedsMaxDepth, type FormField } from '@classmoji/services/form-contract';
 
 import { ClassmojiService } from '~/utils/db.server.ts';
 import { checkOrigin, readCappedBody } from '~/utils/originCheck.server.ts';
-import { clientIpFor, recordSubmissionAttempt } from '~/utils/submissionRate.server.ts';
-import { clearFormLinkCookie, readFormLinkCookie } from '~/utils/formLinkCookie.server.ts';
+import {
+  clientIpFor,
+  recordAddressProbe,
+  recordSubmissionAttempt,
+} from '~/utils/submissionRate.server.ts';
+import {
+  clearFormLinkCookie,
+  formWatchCookie,
+  readFormLinkCookie,
+} from '~/utils/formLinkCookie.server.ts';
 import { dispatchVerifyEmail } from '~/utils/tasks.server.ts';
+import { checkMailDomain, domainOf, suggestDomain } from '~/utils/emailDomain.server.ts';
 import {
   FormCanvas,
   FormHeader,
@@ -15,8 +24,15 @@ import {
 } from '~/components/forms/FormCanvas.tsx';
 import AnswerView from '~/components/forms/AnswerView.tsx';
 import FormRenderer, { draftKeyFor } from '~/components/forms/FormRenderer.tsx';
-import { extractIdentity } from '~/components/forms/answerCoerce.ts';
+import { extractIdentity, identityPlan } from '~/components/forms/answerCoerce.ts';
 import { loadPublicForm, type PublicFormLoad } from './publicForm.server.ts';
+/**
+ * From the import-free leaf, NEVER from `delivery.ts` itself — that module
+ * imports Prisma, and an edge to it from this page (which has a client bundle)
+ * drags `@prisma/client` into the browser build and breaks hydration for the
+ * routes around it. See `deliveryState.ts`.
+ */
+import type { DeliveryState } from './deliveryState.ts';
 
 /**
  * The public fill page — `/{classroomSlug}/forms/{slug}`.
@@ -104,6 +120,104 @@ const RESEND_COOLDOWN_MS = 30_000;
 const normalizeAddress = (email: string): string => email.trim().toLowerCase();
 
 /**
+ * How long the page keeps asking whether its message bounced, and how often.
+ *
+ * ── Bounded on purpose ─────────────────────────────────────────────────────
+ * Many bounces are SMTP-time rejections and land within seconds; plenty arrive
+ * minutes or hours later, long after the tab is closed. Polling forever would
+ * chase the second group and never catch them, so the page watches for as long
+ * as somebody is plausibly still filling the form in and then stops. A bounce
+ * that lands afterwards is surfaced to STAFF on the response row — the surface
+ * that is still there tomorrow.
+ */
+const DELIVERY_POLL_MS = 4_000;
+const DELIVERY_POLL_WINDOW_MS = 3 * 60_000;
+
+/**
+ * Watch for a bounce on the send this browser just caused.
+ *
+ * Keyed on `token` — a value that changes each time a send happens — so
+ * re-typing an address restarts the watch rather than leaving it pinned to the
+ * previous one. Passing `null` means "nothing outstanding" and the effect does
+ * nothing at all.
+ *
+ * The endpoint takes NO address and is keyed only on an HttpOnly cookie this
+ * server set; see `delivery.ts` for why that is what keeps it from being a
+ * mailbox oracle. It reports `bounced` and `delayed` and flattens everything
+ * else — delivered included — into `pending`.
+ */
+function useDeliveryWatch(deliveryPath: string, token: string | number | null): DeliveryState {
+  const [state, setState] = useState<DeliveryState>('pending');
+
+  useEffect(() => {
+    if (token === null) return;
+    setState('pending');
+
+    const controller = new AbortController();
+    const startedAt = Date.now();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let stopped = false;
+
+    const stop = () => {
+      stopped = true;
+      controller.abort();
+      if (timer) clearTimeout(timer);
+    };
+
+    const poll = async () => {
+      /**
+       * A HIDDEN TAB IS NOT ASKING.
+       *
+       * Somebody who has navigated away, switched tabs, or closed the page is
+       * not going to read the answer, and a background tab quietly requesting
+       * every four seconds for three minutes is exactly the kind of thing that
+       * should not outlive the attention it serves. The window keeps running,
+       * so coming back mid-window resumes rather than restarting.
+       */
+      if (stopped) return;
+      if (typeof document !== 'undefined' && document.hidden) {
+        timer = setTimeout(poll, DELIVERY_POLL_MS);
+        return;
+      }
+
+      try {
+        const response = await fetch(deliveryPath, {
+          signal: controller.signal,
+          headers: { accept: 'application/json' },
+        });
+        if (response.ok) {
+          const body = (await response.json()) as { state?: DeliveryState };
+          if (body.state === 'bounced' || body.state === 'delayed') {
+            // Answered. Stop asking — the answer will not improve.
+            setState(body.state);
+            return;
+          }
+        }
+      } catch {
+        // A failed poll is not news. The whole feature is a courtesy; a network
+        // blip must never turn into a message about somebody's address.
+      }
+
+      if (!stopped && Date.now() - startedAt < DELIVERY_POLL_WINDOW_MS) {
+        timer = setTimeout(poll, DELIVERY_POLL_MS);
+      }
+    };
+
+    timer = setTimeout(poll, DELIVERY_POLL_MS);
+    // Belt beside the brace: a page being torn down stops asking immediately
+    // rather than leaving one last request in flight against a dead document.
+    window.addEventListener('pagehide', stop);
+
+    return () => {
+      stop();
+      window.removeEventListener('pagehide', stop);
+    };
+  }, [deliveryPath, token]);
+
+  return state;
+}
+
+/**
  * "just now" / "4 minutes ago" / "2 hours ago", for a link this browser sent.
  *
  * Deliberately coarse. The point of the line is "it is already in your inbox,
@@ -187,6 +301,30 @@ type ActionResult =
    */
   | { state: 'link-skipped' }
   /**
+   * The DNS answer for the domain they just typed — the deliverability half of
+   * the same blur that fires the link send.
+   *
+   * ONE state for every outcome, with `advice: null` meaning "nothing to say".
+   * A trapped bot, a half-typed address, a resolver that timed out and a domain
+   * that is simply fine all come back identically, so neither a person nor a
+   * script can read anything out of the SHAPE of the reply — only out of advice
+   * that is actually there.
+   *
+   * Never a gate: nothing on the submit path reads this. See
+   * `emailDomain.server.ts` for why "no MX" is not "no mail".
+   */
+  | {
+      state: 'domain-checked';
+      advice: null | {
+        /** The domain as typed, so the message can quote it back. */
+        domain: string;
+        /** DNS says nothing will accept mail here. Advisory. */
+        noMailServer: boolean;
+        /** A single near-miss correction, or null. Never applied for them. */
+        suggestion: string | null;
+      };
+    }
+  /**
    * Submitted under an address this browser had already verified. The response
    * is recorded; there is no second round trip.
    */
@@ -232,8 +370,15 @@ interface SubmissionBody {
    * when the respondent leaves the email field. `resend` is the check-email
    * screen's button — the one place a link is minted for an address that has
    * already responded, because that is the person ASKING for it.
+   *
+   * `check-domain` rides the SAME blur as `verify-email` and is deliberately a
+   * SEPARATE request rather than extra data on that one: a DNS lookup must never
+   * be able to delay the mail, and two requests cannot wait on each other. It is
+   * a peer of the others here so that everything guarding this action — the
+   * origin check, the body cap, the honeypot, the per-client ceiling — guards it
+   * too, without a line of it being written twice.
    */
-  intent?: 'autosave' | 'submit' | 'verify-email' | 'resend';
+  intent?: 'autosave' | 'submit' | 'verify-email' | 'resend' | 'check-domain';
   /**
    * Classroom only. Per repeat group, the review targets the BROWSER rendered.
    * Not trusted for anything — the server re-resolves the team under the form's
@@ -441,6 +586,46 @@ export const action = async ({
   });
 
   const linkIntent = body.intent === 'verify-email' || body.intent === 'resend';
+  const domainIntent = body.intent === 'check-domain';
+
+  /** The "nothing to say" reply. The ONLY shape a caller can be refused with. */
+  const noAdvice = { state: 'domain-checked', advice: null } satisfies ActionResult;
+
+  /**
+   * ── The watch cookie, on EVERY reply an early send can produce ───────────
+   *
+   * The page polls `/delivery` with this to learn whether the message it just
+   * caused bounced. What matters more than the polling is that the `Set-Cookie`
+   * header is IDENTICAL IN SHAPE whatever happened on the server.
+   *
+   * Four outcomes here send no mail at all: a sprung honeypot, an address that
+   * has already verified, an address a live link already covers, and a send the
+   * per-address cooldown swallowed. Every one of them renders the same line as a
+   * real send, deliberately — that sameness is what stops this endpoint
+   * answering "has this person already applied?", and it is what stops a bot
+   * learning that the trap sprang. A cookie present only when mail actually went
+   * out would put both answers back on the wire, in a response header, for
+   * anybody willing to look.
+   *
+   * So there is ALWAYS a cookie, and when there is no real send to point at it
+   * carries a fresh random id. `/delivery` answers `pending` for an id it cannot
+   * find — the same thing it says for a send in flight and for one that arrived
+   * — so the substitution is not observable from outside.
+   */
+  const withWatch = (result: ActionResult, watchTokenId: string | null) =>
+    data(result, {
+      headers: {
+        'Set-Cookie': formWatchCookie({
+          request,
+          classroomSlug: params.classroomSlug!,
+          formSlug: params.formSlug!,
+          // Null means "no real send to point at" — `formWatchCookie` mints the
+          // indistinguishable stand-in, in the server-only module where the
+          // randomness belongs.
+          watchId: watchTokenId,
+        }),
+      },
+    });
 
   /**
    * The honeypot, checked AFTER the identity is read and BEFORE anything is
@@ -458,14 +643,28 @@ export const action = async ({
    * would otherwise have found the softer door.
    */
   if (typeof body.trap === 'string' && body.trap.trim() !== '') {
-    return (
-      linkIntent
-        ? { state: 'link-sent', email: identity.email, resent: body.intent === 'resend' }
-        : { state: 'check-email', email: identity.email }
-    ) satisfies ActionResult;
+    // The domain check answers with its own "nothing to say" rather than a link
+    // state — a bot must not be able to tell the trap sprang by noticing that
+    // the reply changed shape.
+    if (domainIntent) return noAdvice;
+    // A trapped bot gets the watch cookie a real send would have got. Without
+    // it, the ABSENCE of Set-Cookie would tell the bot the trap had sprung —
+    // which is precisely how a bot learns to leave the field alone next time.
+    if (linkIntent) {
+      return withWatch(
+        {
+          state: 'link-sent',
+          email: identity.email,
+          resent: body.intent === 'resend',
+        } satisfies ActionResult,
+        null
+      );
+    }
+    return { state: 'check-email', email: identity.email } satisfies ActionResult;
   }
 
   if (!identity.email) {
+    if (domainIntent) return noAdvice;
     // Nothing to say on the early send — the address is simply not finished.
     if (linkIntent) return { state: 'link-skipped' } satisfies ActionResult;
     return {
@@ -505,6 +704,53 @@ export const action = async ({
     });
   }
 
+  /**
+   * ── Can that domain receive mail? ────────────────────────────────────────
+   *
+   * Placed AFTER the per-client ceiling deliberately. A DNS lookup for an
+   * arbitrary caller-supplied domain is exactly the kind of thing that becomes
+   * somebody's free resolver if it is not bounded, and this endpoint is public
+   * and anonymous. Two bounds apply and they cover different directions: the
+   * ceiling above limits how often ONE client may ask, and the module's cache
+   * limits how often ANY number of clients cause a real lookup for the SAME
+   * domain. Neither alone is enough — the first lets a botnet through, the
+   * second lets one client walk a dictionary.
+   *
+   * The result is advice and only ever advice; nothing downstream reads it.
+   */
+  if (domainIntent) {
+    const domain = domainOf(identity.email);
+    if (!domain) return noAdvice;
+
+    /**
+     * The restriction the instructor configured, if any — the single most
+     * valuable "did you mean" candidate there is. Read through `identityPlan`
+     * so it is the domain of THE SAME FIELD the blur reported, rather than of
+     * whichever email field happens to be first by some other reckoning.
+     */
+    const fields = loaded.fields as FormField[];
+    const plan = identityPlan(fields);
+    const configured = plan.emailFieldId
+      ? ((fields.find(field => field.id === plan.emailFieldId) as { domain?: string } | undefined)
+          ?.domain ?? null)
+      : null;
+
+    const verdict = await checkMailDomain(domain);
+    const suggestion = suggestDomain(domain, configured);
+
+    /**
+     * Silence unless there is something a person can act on. `unknown` is a
+     * statement about the resolver, not the address, and rendering it would
+     * turn a network blip into "your email is wrong".
+     */
+    if (verdict !== 'no-mail-server' && !suggestion) return noAdvice;
+
+    return {
+      state: 'domain-checked',
+      advice: { domain, noMailServer: verdict === 'no-mail-server', suggestion },
+    } satisfies ActionResult;
+  }
+
   const revisionId = String(body.revisionId ?? '');
 
   /**
@@ -540,6 +786,32 @@ export const action = async ({
   // screen asks for it. Every outcome renders identically — see the note on
   // `beginAddressVerification`.
   if (linkIntent) {
+    /**
+     * Count this address against the client's DISTINCT-ADDRESS budget.
+     *
+     * Cookie-scoping the status endpoint stops a stranger asking about somebody
+     * else's send; it does NOT stop the person who types an address they are
+     * curious about, lets us mail it, and reads their own bounce. That is a real
+     * oracle and this is what bounds it — see `ADDRESS_PROBE_LIMIT`.
+     *
+     * The return value is deliberately DROPPED here. Exceeding the budget must
+     * not change what this endpoint says or does: the mail still goes, the form
+     * still works, and the same line renders. All that changes is that
+     * `/delivery` stops reporting outcomes to this client — which is the state
+     * everything was in before this feature existed.
+     */
+    recordAddressProbe(
+      clientIpFor(request),
+      `${params.classroomSlug}/${params.formSlug}`,
+      identity.email
+    );
+
+    const sentState = {
+      state: 'link-sent',
+      email: identity.email,
+      resent: body.intent === 'resend',
+    } satisfies ActionResult;
+
     try {
       const result = await ClassmojiService.formResponse.beginAddressVerification({
         formId: loaded.form.id,
@@ -551,11 +823,7 @@ export const action = async ({
 
       await dispatchVerifyEmail(result.emails, result.verifyUrl ?? '');
 
-      return {
-        state: 'link-sent',
-        email: identity.email,
-        resent: body.intent === 'resend',
-      } satisfies ActionResult;
+      return withWatch(sentState, result.watchTokenId);
     } catch (error) {
       const code = (error as { code?: string }).code;
 
@@ -563,11 +831,7 @@ export const action = async ({
       // makes it indistinguishable: a visible cooldown answers "has this
       // address asked for a link recently?"
       if (code === 'MAGIC_LINK_COOLDOWN') {
-        return {
-          state: 'link-sent',
-          email: identity.email,
-          resent: body.intent === 'resend',
-        } satisfies ActionResult;
+        return withWatch(sentState, null);
       }
 
       // A form that closed, or a page rendered against a revision that has
@@ -957,6 +1221,7 @@ function ClassroomFill({ data }: { data: ClassroomFillData }) {
 
 export default function FormFill() {
   const data = useLoaderData() as ClientFormLoad;
+  const params = useParams();
   const fetcher = useFetcher<ActionResult>();
   const result = fetcher.data;
 
@@ -970,6 +1235,28 @@ export default function FormFill() {
    */
   const linkFetcher = useFetcher<ActionResult>();
   const linkResult = linkFetcher.data;
+
+  /**
+   * A THIRD fetcher, for the deliverability check.
+   *
+   * Not folded into the link send, and this is the whole reason the check is a
+   * separate request: a DNS lookup can take two seconds, and the send must not
+   * wait for it — the link going out promptly is the feature, the warning is the
+   * courtesy. Two fetchers means the slow one cannot hold the fast one up, and
+   * a resolver that never answers costs the respondent nothing at all.
+   */
+  const domainFetcher = useFetcher<ActionResult>();
+  const domainAdvice =
+    domainFetcher.data?.state === 'domain-checked' ? domainFetcher.data.advice : null;
+
+  /**
+   * Dismissed by domain, not by a bare boolean.
+   *
+   * Somebody who waves away the warning for `dartmuoth.edu` and then types
+   * `gmial.com` is making a NEW mistake, and a dismissal that outlived the
+   * address it was about would hide it.
+   */
+  const [dismissedDomain, setDismissedDomain] = useState<string | null>(null);
 
   /**
    * The address the check-email state names.
@@ -1055,6 +1342,24 @@ export default function FormFill() {
       setLinkSentFor({ email: linkResult.email, at: Date.now() });
     }
   }, [linkResult]);
+
+  /**
+   * ── Did the message bounce? ──────────────────────────────────────────────
+   *
+   * Started by the send itself and keyed on WHEN it happened, so each new
+   * address restarts the watch instead of inheriting the previous answer. The
+   * server is asked over a cookie it set on that very response — there is no
+   * address in the request and none could be put there.
+   *
+   * The answer only ever moves in the alarming direction: `bounced` and
+   * `delayed` are reported, everything else stays `pending`. A successful
+   * delivery is therefore indistinguishable from a message still in flight,
+   * which is exactly what stops this being a way to test whether an address
+   * exists.
+   */
+  const deliveryPath = `/${params.classroomSlug}/forms/${params.formSlug}/delivery`;
+  const delivery = useDeliveryWatch(deliveryPath, linkSentFor?.at ?? null);
+  const bounced = delivery === 'bounced';
 
   if (data.view === 'signin') {
     return (
@@ -1143,6 +1448,69 @@ export default function FormFill() {
 
   if (checkEmail) {
     const resent = linkResult?.state === 'link-sent' && linkResult.resent;
+
+    /**
+     * IT BOUNCED, AND THEY ARE STILL HERE.
+     *
+     * The reassuring copy is replaced rather than added to. "We sent a link —
+     * check your inbox" is now known to be false, and leaving it on screen
+     * beside a warning would send somebody off to search a mailbox that never
+     * received anything. Both existing doors — resend, and change the address —
+     * are kept, because they are exactly the two things that can help.
+     */
+    if (bounced) {
+      return (
+        <FormCanvas theme={data.theme} classroomName={data.classroomName}>
+          <FormNotice icon="⚠️" title="That email did not go through">
+            {/* The outcome, not the cause — see the note on the in-form banner.
+                Naming WHY delivery failed would tell anyone who typed an
+                address more about that mailbox than they should learn, and it
+                changes nothing about what this person should do next. */}
+            <p data-testid="forms-bounced">
+              We could not deliver to <strong className="font-semibold">{checkEmail}</strong>.
+              Nothing is recorded yet, and your answers are still here.
+            </p>
+            <p className="mt-3 text-gray-500 dark:text-gray-400">
+              The usual cause is a typo in the address. Change it below and we will send a new link
+              straight away.
+            </p>
+
+            <div className="mt-6 flex flex-wrap items-center gap-3">
+              <button
+                type="button"
+                data-testid="forms-wrong-address"
+                onClick={() => {
+                  setCorrecting(true);
+                  setSentTo(null);
+                }}
+                className="rounded-md bg-gray-900 px-5 py-2.5 text-sm font-semibold text-white dark:bg-white dark:text-gray-900"
+              >
+                Use a different address →
+              </button>
+              <button
+                type="button"
+                data-testid="forms-resend"
+                disabled={!resendReady || linkFetcher.state !== 'idle'}
+                onClick={() =>
+                  linkFetcher.submit(
+                    {
+                      intent: 'resend',
+                      identity: { email: checkEmail, name: kept?.name ?? null },
+                      revisionId: data.revisionId,
+                      trap: '',
+                    } as SubmitTarget,
+                    { method: 'post', encType: 'application/json' }
+                  )
+                }
+                className="text-sm font-medium text-blue-600 hover:underline disabled:opacity-50 dark:text-blue-400"
+              >
+                {resendReady ? 'Try that address again' : `Try again in ${resendIn}s`}
+              </button>
+            </div>
+          </FormNotice>
+        </FormCanvas>
+      );
+    }
 
     /**
      * The link went out EARLIER — when they typed the address — and submitting
@@ -1297,7 +1665,31 @@ export default function FormFill() {
           link, a link for an address that already responded, a send the
           cooldown swallowed. Any difference between them answers "has this
           person already applied?" for anybody who can type an address. */}
-      {!verifiedHere && linkSent ? (
+      {/* THE BOUNCE, WHILE THEY ARE STILL TYPING.
+          This is the whole point of sending on blur: the message has already
+          failed and they have not finished the form, so the correction costs
+          them nothing. It REPLACES the reassuring line rather than sitting
+          under it — telling somebody to check an inbox that rejected the mail
+          is worse than saying nothing. */}
+      {!verifiedHere && bounced && linkSent ? (
+        <div
+          role="alert"
+          data-testid="forms-bounced"
+          className="mb-6 rounded-md border border-red-200 bg-red-50 px-3 py-2.5 text-sm text-red-900 dark:border-red-900 dark:bg-red-950 dark:text-red-200"
+        >
+          {/* Deliberately ONE sentence about the outcome and nothing about the
+              cause. The webhook knows whether the mailbox is missing, the
+              domain refused us, or the recipient is suppressed — and repeating
+              any of that here would widen the very oracle the rate limits are
+              holding shut, in exchange for nothing the person can act on. The
+              action is the same in every case: check the address. */}
+          <strong className="font-semibold">We couldn&rsquo;t deliver to {linkSent.email}.</strong>{' '}
+          Check the address above — fix it and we will send a new link. Nothing you have typed is
+          lost.
+        </div>
+      ) : null}
+
+      {!verifiedHere && !bounced && linkSent ? (
         <div
           role="status"
           data-testid="forms-link-sent"
@@ -1306,6 +1698,62 @@ export default function FormFill() {
           Check <strong className="font-semibold">{linkSent.email}</strong> for a verification link.
           Clicking it now means you are done as soon as you submit — and it is also how you open
           your answers later to change them.
+        </div>
+      ) : null}
+
+      {/* The deliverability warning.
+          ADVISORY, and it says so: no Submit button is disabled, no field is
+          marked invalid, and the copy is "check the spelling", never "that
+          address is wrong". DNS is not authoritative about mail acceptance
+          (see `emailDomain.server.ts`), so the one thing this must never do is
+          stand between somebody and a form they filled in correctly. */}
+      {domainAdvice && dismissedDomain !== domainAdvice.domain ? (
+        <div
+          role="status"
+          data-testid="forms-domain-warning"
+          className="mb-6 rounded-md border border-amber-200 bg-amber-50 px-3 py-2.5 text-sm text-amber-900 dark:border-amber-900 dark:bg-amber-950 dark:text-amber-200"
+        >
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              {domainAdvice.noMailServer ? (
+                <p>
+                  We can&rsquo;t find a mail server for{' '}
+                  <strong className="font-semibold">{domainAdvice.domain}</strong> — check the
+                  spelling.
+                </p>
+              ) : (
+                <p>
+                  Just checking <strong className="font-semibold">{domainAdvice.domain}</strong> is
+                  the address you meant.
+                </p>
+              )}
+
+              {/* A suggestion, not a correction. Nothing here writes into the
+                  field: an auto-correct that guesses wrong files the response
+                  under an address the person does not own, and they would have
+                  no way of knowing. */}
+              {domainAdvice.suggestion ? (
+                <p className="mt-1" data-testid="forms-domain-suggestion">
+                  Did you mean <strong className="font-semibold">{domainAdvice.suggestion}</strong>?
+                </p>
+              ) : null}
+
+              <p className="mt-1 text-amber-800 dark:text-amber-300">
+                You can submit anyway — we just won&rsquo;t be able to reach you if it&rsquo;s
+                wrong.
+              </p>
+            </div>
+
+            <button
+              type="button"
+              data-testid="forms-domain-dismiss"
+              onClick={() => setDismissedDomain(domainAdvice.domain)}
+              aria-label="Dismiss the email address warning"
+              className="shrink-0 rounded px-1.5 text-amber-700 hover:text-amber-900 dark:text-amber-300 dark:hover:text-amber-100"
+            >
+              ✕
+            </button>
+          </div>
         </div>
       ) : null}
 
@@ -1335,7 +1783,7 @@ export default function FormFill() {
          * finished the form — and if they open it on the way, the submit is a
          * single round trip.
          */
-        onIdentityEmail={submission =>
+        onIdentityEmail={submission => {
           linkFetcher.submit(
             {
               intent: 'verify-email',
@@ -1344,8 +1792,19 @@ export default function FormFill() {
               trap: submission.trap,
             } as SubmitTarget,
             { method: 'post', encType: 'application/json' }
-          )
-        }
+          );
+          // Fired alongside, never before or after: they are two independent
+          // questions about the same address and neither waits on the other.
+          domainFetcher.submit(
+            {
+              intent: 'check-domain',
+              identity: { email: submission.email, name: submission.name },
+              revisionId: data.revisionId,
+              trap: submission.trap,
+            } as SubmitTarget,
+            { method: 'post', encType: 'application/json' }
+          );
+        }}
         footnote={
           verifiedHere ? (
             <>

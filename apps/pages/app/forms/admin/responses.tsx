@@ -202,6 +202,21 @@ const STATE_CHIP: Record<string, { label: string; title: string }> = {
   },
 };
 
+/**
+ * The provider's delivery states, in words a course can act on.
+ *
+ * Deliberately plain. "Permanent/Suppressed" is what Resend says and it belongs
+ * in the detail line; what a person triaging a waitlist needs on the row is
+ * whether chasing this address is worth their time.
+ */
+const DELIVERY_LABEL: Record<string, string> = {
+  BOUNCED: 'Bounced — we could not deliver',
+  DELAYED: 'Delayed — still trying',
+  COMPLAINED: 'Marked as spam by the recipient',
+  DELIVERED: 'Delivered',
+  SENT: 'Sent',
+};
+
 const absolute = (iso: string) => dayjs(iso).format('MMM D, YYYY h:mm A');
 
 /**
@@ -1029,6 +1044,21 @@ function ResponseTableRow({
               {chip.label}
             </span>
           ) : null}
+          {/* The bounce, ON THE ROW.
+              An Unverified chip says somebody did not finish; this says we were
+              never able to reach them, which is the difference between a person
+              to chase and a mailbox that does not exist. Only a hard failure
+              earns a place here — a delay or a delivery belongs in the drawer,
+              not in a scan of the table. */}
+          {row.delivery?.state === 'BOUNCED' || row.delivery?.state === 'COMPLAINED' ? (
+            <span
+              title={row.delivery.detail ?? DELIVERY_LABEL[row.delivery.state]}
+              data-testid={`forms-bounce-chip-${row.id}`}
+              className="rounded-full bg-red-100 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-red-700 dark:bg-red-950 dark:text-red-300"
+            >
+              {row.delivery.state === 'BOUNCED' ? 'Bounced' : 'Spam'}
+            </span>
+          ) : null}
         </div>
       </td>
       <td className="px-4 py-3 text-sm text-gray-600 dark:text-gray-300">
@@ -1148,6 +1178,30 @@ function ResponseDrawer({
                   <span className="block text-xs text-gray-500 dark:text-gray-400">
                     Deleted then, unless you give it a status.
                   </span>
+                </dd>
+              </>
+            ) : null}
+            {/* WHY it never verified, when the provider has said.
+                Shown only when there is something to say: silence here means no
+                report, which is NOT the same as "delivered fine" and must not
+                be rendered as though it were. */}
+            {row.delivery ? (
+              <>
+                <dt className="text-gray-500 dark:text-gray-400">Email delivery</dt>
+                <dd
+                  data-testid="forms-response-delivery"
+                  className={
+                    row.delivery.state === 'BOUNCED' || row.delivery.state === 'COMPLAINED'
+                      ? 'text-red-700 dark:text-red-300'
+                      : 'text-gray-800 dark:text-gray-100'
+                  }
+                >
+                  {DELIVERY_LABEL[row.delivery.state] ?? row.delivery.state}
+                  {row.delivery.detail ? (
+                    <span className="block text-xs text-gray-500 dark:text-gray-400">
+                      {row.delivery.detail}
+                    </span>
+                  ) : null}
                 </dd>
               </>
             ) : null}

@@ -249,6 +249,98 @@ describe.skipIf(!RUN)('forms builder lifecycle (integration)', () => {
     expect(idsOf(await publishedFields(form.id)).slice(0, 5)).toEqual(idsOf(afterSave));
   });
 
+  /**
+   * THE EMAIL DOMAIN RESTRICTION SURVIVES EVERY HOP THE BUILDER MAKES.
+   *
+   * `formContract.test.ts` proves the refinement REJECTS the wrong domain. This
+   * proves the restriction is still there to do the rejecting — a different
+   * claim, and the one the builder can break on its own.
+   *
+   * `emailDef` is `.strict()`, so `domain` is either in the schema or it is a
+   * save failure; what it is NOT is guaranteed to reach the PUBLISHED REVISION,
+   * because a revision is a separate copy written by `publish`. The path a
+   * restriction actually takes is: typed in the config pane → normalized draft →
+   * read back by the builder's loader → posted again verbatim on the next save →
+   * copied into revision 1 → and, after an edit, copied into revision 2. A drop
+   * anywhere along it turns a Dartmouth-only waitlist into an open one, and the
+   * form still looks right in the builder because the DRAFT kept the value.
+   */
+  it('round-trips an email domain restriction through save, publish and re-publish', async () => {
+    const emailFieldId = randomUUID();
+
+    const form = await formService.create({
+      classroomId,
+      title: `Domain Restricted ${suite}`,
+      access: 'PUBLIC',
+      createdBy: ownerId,
+      fields: [
+        {
+          id: emailFieldId,
+          type: 'email',
+          label: 'School email',
+          required: true,
+          domain: 'dartmouth.edu',
+        },
+      ] as unknown as FormField[],
+    });
+
+    // The normalized draft the builder's loader hands back to the config pane.
+    const draft = await storedDraft(form.id);
+    expect(draft[0]).toMatchObject({ type: 'email', domain: 'dartmouth.edu' });
+
+    // Saving the value the builder READ BACK — the round trip that matters,
+    // because that is literally what the route posts.
+    await formService.update(form.id, { fields: draft });
+    expect(await storedDraft(form.id)).toMatchObject([{ domain: 'dartmouth.edu' }]);
+
+    await formService.publish(form.id);
+    const live = await publishedFields(form.id);
+    expect(live[0]).toMatchObject({ id: emailFieldId, domain: 'dartmouth.edu' });
+
+    // ── Revision 2 ─────────────────────────────────────────────────────────
+    // An unrelated edit must not quietly drop the restriction.
+    const { revision: second } = await formService.publishNewVersion(form.id, [
+      { ...live[0], label: 'Dartmouth email' },
+      { type: 'short_text', label: 'Full name', required: false },
+    ] as unknown as FormField[]);
+
+    expect(formService.fieldsOf(second.fields)[0]).toMatchObject({
+      id: emailFieldId,
+      label: 'Dartmouth email',
+      domain: 'dartmouth.edu',
+    });
+
+    /**
+     * CLEARING it is the other direction, and the one a `??`-style merge gets
+     * wrong: the config pane sends `domain: undefined` for an emptied input, and
+     * a definition that read absent as "keep the old value" would leave behind a
+     * restriction the instructor believes they removed.
+     */
+    const { revision: third } = await formService.publishNewVersion(form.id, [
+      { id: emailFieldId, type: 'email', label: 'Any email', required: true },
+    ] as unknown as FormField[]);
+
+    expect(formService.fieldsOf(third.fields)[0]).not.toHaveProperty('domain');
+  });
+
+  /**
+   * A form with NO domain is unchanged by the feature existing at all — the
+   * companion to the test above, and the one that would catch a default
+   * sneaking in (`domain: ''` would refine every address against a bare `@`).
+   */
+  it('leaves an email field without a domain unrestricted', async () => {
+    const form = await formService.create({
+      classroomId,
+      title: `Unrestricted ${suite}`,
+      access: 'PUBLIC',
+      createdBy: ownerId,
+      fields: [{ type: 'email', label: 'Email', required: true }] as unknown as FormField[],
+    });
+
+    await formService.publish(form.id);
+    expect((await publishedFields(form.id))[0]).not.toHaveProperty('domain');
+  });
+
   it('refuses OPEN on a form that was never published, so the list can say "publish first"', async () => {
     const form = await formService.create({
       classroomId,

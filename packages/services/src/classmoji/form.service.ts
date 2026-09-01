@@ -59,7 +59,16 @@ export const FORM_UNKNOWN_OPTION_SOURCE = 'FORM_UNKNOWN_OPTION_SOURCE';
  * responses view, so these are refused at create rather than shadowed at route
  * time. Compare AFTER titleToIdentifier — the check is on the derived slug.
  */
-export const RESERVED_FORM_SLUGS: ReadonlySet<string> = new Set(['edit', 'responses', 'new']);
+export const RESERVED_FORM_SLUGS: ReadonlySet<string> = new Set([
+  'edit',
+  'responses',
+  'new',
+  // Public per-form surfaces. Static segments outrank `:formSlug` at route
+  // time, so a form claiming one of these would not be a security problem — it
+  // would simply be unreachable, which is a worse thing to discover later.
+  'verify',
+  'delivery',
+]);
 
 /** Highest numeric fallback: `{base}-2` … `{base}-50`, mirroring page.service. */
 export const FORM_SLUG_MAX_SUFFIX = 50;

@@ -100,9 +100,28 @@ test.describe('builder — the close time', () => {
     const closes = page.getByLabel('Closes');
     await expect(closes).toHaveAttribute('type', 'datetime-local');
 
-    // 5pm on the day, in the BROWSER's zone (pinned to Pacific/Honolulu).
-    await closes.fill('2027-01-12T17:00');
-    await closes.blur();
+    /**
+     * 5pm on the day, in the BROWSER's zone (pinned to Pacific/Honolulu) —
+     * typed until REACT has it, not merely until the DOM does.
+     *
+     * `fill()` sets the input's value and dispatches events. If that lands
+     * before hydration nothing is listening, and the next render replaces what
+     * was typed with the (empty) value from state. The failure is silent and
+     * looks exactly like a broken save: the field is blank, the button says
+     * "Saved", and no autosave ever carried the date.
+     *
+     * The builder exposes no hydration marker (the fill renderer's
+     * `data-hydrated` has no counterpart here), so this retries until the value
+     * STICKS — the same claim, by observation. Made explicit after the race
+     * surfaced under a heavier client module graph; merely enabling Playwright
+     * tracing was enough to slow things down and hide it again, which is the
+     * signature of a timing race rather than a broken control.
+     */
+    await expect(async () => {
+      await closes.fill('2027-01-12T17:00');
+      await closes.blur();
+      await expect(closes).toHaveValue('2027-01-12T17:00');
+    }).toPass({ timeout: 15_000 });
 
     const prisma = await getTestPrisma();
     await expect

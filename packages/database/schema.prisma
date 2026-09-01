@@ -1676,8 +1676,30 @@ model FormMagicToken {
   used_at     DateTime?
   created_at  DateTime  @default(now())
 
+  /// What the mail provider called the message this token was sent in.
+  ///
+  /// One token is one send, which is what makes this row the natural place to
+  /// correlate a bounce back to a response: the provider's webhook knows only a
+  /// message id, and without this it can say "something bounced" and nothing
+  /// more. Nullable because it is written AFTER the send returns — the send is
+  /// dispatched through Trigger.dev, so the id exists only inside that run —
+  /// and because every send made before this column existed has none.
+  provider_message_id String?
+  /// How delivery went, as the provider last reported it: 'SENT', 'DELIVERED',
+  /// 'BOUNCED', 'DELAYED', 'COMPLAINED'. A plain string rather than an enum
+  /// because the set belongs to the provider, and an unfamiliar event type
+  /// should become a value we ignore rather than a migration that blocks a
+  /// webhook.
+  delivery_state  String?
+  /// The provider's stated reason, for the staff row. Never shown to a filler.
+  delivery_detail String?
+
   response FormResponse @relation(fields: [response_id], references: [id], onDelete: Cascade)
 
   @@index([response_id])
+  /// The webhook's only lookup key: a bounce arrives naming a message, and this
+  /// is what turns that into a response. NOT unique — a provider retry carries
+  /// the same id, and a duplicate must be a no-op rather than an error.
+  @@index([provider_message_id])
   @@map("form_magic_tokens")
 }
