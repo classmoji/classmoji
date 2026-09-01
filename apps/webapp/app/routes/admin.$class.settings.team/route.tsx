@@ -40,7 +40,13 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
 
   return namedAction(request, {
     async createTag() {
-      return ClassmojiService.organizationTag.create(classroom.id, data.name);
+      // Trim and reject empty, matching the repository form's inline tag creation:
+      // otherwise the two paths can mint 'Section A' and 'Section A ' as separate,
+      // visually identical tags. Upsert so the trimmed name can't collide either.
+      const name = typeof data.name === 'string' ? data.name.trim() : '';
+      if (!name) return { error: 'Please enter a tag name.' };
+
+      return ClassmojiService.organizationTag.upsert(classroom.id, name);
     },
 
     async deleteTag() {
