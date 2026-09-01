@@ -1,6 +1,7 @@
 import getPrisma from '@classmoji/database';
 import { Prisma } from '@prisma/client';
 import type { EventType } from '@prisma/client';
+import { pagesUrl } from '../emails/escape.ts';
 
 type DateInput = Date | string;
 type CalendarEditScope = 'this_only' | 'this_and_future' | 'all';
@@ -96,6 +97,40 @@ interface CalendarDeadlineItem {
   pages: unknown[];
   slides: unknown[];
   github_issue_url: string | null;
+}
+
+/**
+ * A form's `closes_at`, synthesized as a calendar item the same way an
+ * assignment's `student_deadline` is. There is no CalendarEvent row behind it.
+ *
+ * `event_type: 'DEADLINE'` is deliberately reused rather than inventing a sixth
+ * type: it is already a synthetic literal (not a value of the Prisma EventType
+ * enum), it is already in the calendar's event-type filter list, and the ICS
+ * generator already renders it as an all-day event. A form close IS a deadline.
+ *
+ * `is_form_close` is what tells the two apart. It matters: `is_deadline` alone
+ * makes an item draggable in the admin calendar, and that drag handler parses
+ * an assignment id out of the event id. Form closes opt out of the drag.
+ */
+interface CalendarFormCloseItem {
+  id: string;
+  event_type: 'DEADLINE';
+  title: string;
+  description: string;
+  start_time: Date;
+  end_time: Date;
+  is_deadline: true;
+  is_form_close: true;
+  is_unpublished: boolean;
+  form_id: string;
+  form_slug: string;
+  form_status: string;
+  form_access: string;
+  /** Where clicking through goes: the responses view for staff, the fill page otherwise. */
+  form_url: string;
+  pages: unknown[];
+  slides: unknown[];
+  github_issue_url: null;
 }
 
 interface CalendarEventCreateData {
@@ -494,7 +529,8 @@ export const getClassroomCalendar = async (
   endDate: Date,
   userId: string | null = null,
   includeRawLinks: boolean = false,
-  includeUnpublished: boolean = false
+  includeUnpublished: boolean = false,
+  { canManageForms = false }: { canManageForms?: boolean } = {}
 ) => {
   // Get all calendar events that could appear in this range
   const events = await getPrisma().calendarEvent.findMany({
@@ -576,12 +612,102 @@ export const getClassroomCalendar = async (
     includeUnpublished
   );
 
+  // Get form close dates. Where the click-through goes is a role question, and
+  // deliberately NOT keyed off `includeUnpublished`: the assistant calendar
+  // passes that too, but the forms responses view is OWNER|TEACHER only
+  // (apps/pages formAuth.server), so an assistant sent there would get a 403.
+  // Callers pass `canManageForms` from the resolved membership role.
+  const formCloses = await getFormCloseEventsForRange(classroomId, startDate, endDate, {
+    forStaff: canManageForms,
+  });
+
   // Combine and sort by start time
-  const allEvents = [...expandedEvents, ...deadlines].sort(
+  const allEvents = [...expandedEvents, ...deadlines, ...formCloses].sort(
     (a, b) => new Date(a.start_time).getTime() - new Date(b.start_time).getTime()
   );
 
   return allEvents;
+};
+
+/**
+ * Get form close dates as calendar items.
+ *
+ * Mirrors getDeadlinesForRange: no CalendarEvent rows are written, the items are
+ * synthesized per request from `Form.closes_at`.
+ *
+ * Which forms appear:
+ *   - OPEN and CLOSED forms with a `closes_at` in range. A CLOSED form keeps its
+ *     event on purpose — the date it closed is real history, and having an event
+ *     vanish from the calendar the moment an instructor closes the form would be
+ *     worse than showing it. This matches assignment deadlines, which stay on the
+ *     calendar after they pass.
+ *   - DRAFT forms never appear, in either view. A draft has never been published,
+ *     has no revision to render, and its close date is not yet a commitment. It
+ *     is not surfaced to staff either — unlike an unpublished assignment, which
+ *     staff see flagged via `is_unpublished` — because a draft form's close date
+ *     is routinely a placeholder from the builder.
+ *   - A form with no `closes_at` has no deadline and therefore no event.
+ *
+ * @param {string} classroomId - The classroom ID
+ * @param {Date} startDate - Start of date range
+ * @param {Date} endDate - End of date range
+ * @param {boolean} [options.forStaff=false] - Point the link at the responses view instead of the
+ *   fill page. Only for callers who have established the viewer is OWNER or TEACHER: the responses
+ *   view in apps/pages is gated to those two roles, so an assistant sent there gets a 403.
+ */
+export const getFormCloseEventsForRange = async (
+  classroomId: string,
+  startDate: Date,
+  endDate: Date,
+  { forStaff = false }: { forStaff?: boolean } = {}
+): Promise<CalendarFormCloseItem[]> => {
+  const forms = await getPrisma().form.findMany({
+    where: {
+      classroom_id: classroomId,
+      status: { in: ['OPEN', 'CLOSED'] },
+      closes_at: { gte: startDate, lte: endDate },
+    },
+    select: {
+      id: true,
+      title: true,
+      slug: true,
+      description: true,
+      status: true,
+      access: true,
+      closes_at: true,
+      classroom: { select: { slug: true } },
+    },
+    orderBy: { closes_at: 'asc' },
+  });
+
+  const base = pagesUrl();
+
+  return forms.map(form => {
+    const closesAt = form.closes_at!;
+    const formPath = `${base}/${form.classroom.slug}/forms/${form.slug}`;
+
+    return {
+      id: `form-close-${form.id}`,
+      event_type: 'DEADLINE' as const,
+      title: `${form.title} closes`,
+      description: form.description ?? 'Form',
+      start_time: closesAt,
+      end_time: closesAt,
+      is_deadline: true as const,
+      is_form_close: true as const,
+      // Draft forms are filtered out above, so nothing that reaches here is
+      // unpublished. The field exists for shape parity with deadline items.
+      is_unpublished: false,
+      form_id: form.id,
+      form_slug: form.slug,
+      form_status: form.status,
+      form_access: form.access,
+      form_url: forStaff ? `${formPath}/responses` : formPath,
+      pages: [],
+      slides: [],
+      github_issue_url: null,
+    };
+  });
 };
 
 /**

@@ -30,6 +30,7 @@
 import { ClassmojiService } from '@classmoji/services';
 import { ToolError } from '../mcp/errors.ts';
 import type { ResourceDefinition, ToolContext } from '../mcp/registry.ts';
+import { assertProTier } from '../authz/proTier.ts';
 import { MEMBER, QUIZ_ROLES, classroomCtx, isStaff, sanitizedSettings } from './shape.ts';
 
 // ─── pages ───────────────────────────────────────────────────────────────────
@@ -98,6 +99,8 @@ interface ModuleItemRow {
   slide?: { id: string; title?: string | null; is_draft?: boolean } | null;
   quiz?: { id: string; name?: string | null; status?: string } | null;
   repository?: { id: string; title?: string | null; is_published?: boolean } | null;
+  /** Form is the fifth item type. It carries `title`, not `name`. */
+  form?: { id: string; title?: string | null; status?: string; access?: string } | null;
 }
 
 interface ModuleRow {
@@ -111,10 +114,25 @@ interface ModuleRow {
   items: ModuleItemRow[];
 }
 
+/**
+ * One item, reduced to {type, target id, title}.
+ *
+ * Exactly one of the five target columns is populated per row (the item_type
+ * names which), so the `??` chain resolves whichever it is. Forms are included:
+ * `module.listForClassroom`'s ITEM_INCLUDE already loads `form: true`, and its
+ * `isItemPublished` already hides a DRAFT form from students the same way it
+ * hides a draft page — so nothing here has to re-decide visibility. A Form's
+ * label lives in `title` (a Quiz is the odd one out with `name`).
+ */
 function moduleItemSummary(item: ModuleItemRow) {
-  const target = item.page ?? item.slide ?? item.quiz ?? item.repository ?? null;
+  const target = item.page ?? item.slide ?? item.quiz ?? item.repository ?? item.form ?? null;
   const title =
-    item.page?.title ?? item.slide?.title ?? item.quiz?.name ?? item.repository?.title ?? null;
+    item.page?.title ??
+    item.slide?.title ??
+    item.quiz?.name ??
+    item.repository?.title ??
+    item.form?.title ??
+    null;
   return {
     id: item.id,
     type: item.item_type,
@@ -129,7 +147,7 @@ export const modulesResource: ResourceDefinition = {
   uriTemplate: 'classmoji://{org}/{slug}/modules',
   title: 'Modules (curriculum lists)',
   description:
-    'Ordered curriculum modules with their content items (pages, repos, quizzes, slides). ' +
+    'Ordered curriculum modules with their content items (pages, repos, quizzes, slides, forms). ' +
     'Students see published modules/items only; staff also see unpublished. Returns ' +
     '{enabled:false} when the classroom hides modules (show_modules).',
   scope: 'read',
@@ -196,31 +214,24 @@ interface QuizRow {
 }
 
 /**
- * The MCP face of the webapp's assertProTier (apps/webapp/app/utils/helpers.ts)
- * — same decision, different error type.
+ * The Pro gate this file APPLIES (in the quizzes resource below) and no longer
+ * owns.
  *
- * Resolves by classroom ID, which is what the authorization context already
- * carries. The previous version took the slug, looked the classroom up again
- * and refused when the two disagreed, on the premise that a bare slug was
- * unique only per git org — that premise has been false since the global unique
- * index landed (schema.prisma: `slug String @unique`), so the guard could never
- * fire and the round trip bought nothing. Passing the ID straight through is
- * both simpler and strictly safer: there is no second lookup to disagree with.
+ * It used to CARRY the gate: a hand-mirrored copy of the webapp's
+ * `assertProTier` that reached into `subscription.getProStateForClassroomId`
+ * itself and raised its own error. That copy is retired.
+ * `@classmoji/auth/server`'s lifted `assertProTier` is now the single
+ * implementation the webapp, apps/pages' forms subtree and this server all gate
+ * on; `../authz/proTier.ts` does nothing but translate its thrown 403 Response
+ * into a ToolError, and it takes the whole ToolContext (reading the
+ * already-authorized classroom's slug off it) rather than a bare classroom id.
  *
- * The `ends_at` test is NOT reimplemented here. It lives once, in
- * `subscription.getProStateForClassroomId`, precisely so this file and the
- * webapp cannot drift into gating on different definitions of "active".
- *
- * EXPORTED because the quiz WRITE tools (tools/quizzes.ts) apply the same gate
- * the webapp's quiz action applies before every mutation. One definition, one
- * import — the read resource and the write tools cannot drift apart.
+ * An `export { assertProTier }` used to sit here, left over from that move: a
+ * pass-through of a symbol this module does not define and that no module ever
+ * imported from it — the quiz write tools and the forms tools both take it from
+ * `../authz/proTier.ts` directly. A re-export nobody uses reads like a second
+ * home for a decision that must have exactly one, so it is gone.
  */
-export async function assertProTier(classroomId: string): Promise<void> {
-  const proState = await ClassmojiService.subscription.getProStateForClassroomId(classroomId);
-  if (!proState.isPro) {
-    throw new ToolError('forbidden', 'This feature requires a Pro subscription');
-  }
-}
 
 export const quizzesResource: ResourceDefinition = {
   name: 'quizzes',
@@ -236,7 +247,7 @@ export const quizzesResource: ResourceDefinition = {
     const { classroomId, role, membership } = classroomCtx(ctx);
 
     // Gate order mirrors the routes: access (done) → Pro tier → quizzes_enabled.
-    await assertProTier(classroomId);
+    await assertProTier(ctx);
     if (sanitizedSettings(ctx).quizzes_enabled === false) {
       throw new ToolError('forbidden', 'Quizzes are currently disabled for this classroom');
     }

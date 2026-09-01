@@ -871,6 +871,19 @@ export async function getPageBySlugForSite(classroomId: string, slugOrId: string
   return prisma.page.findFirst({ where: { classroom_id: classroomId, id: slugOrId } });
 }
 
+/**
+ * Compile-time exhaustiveness guard for this file's switches over
+ * ModuleItemType, mirroring module.service's. Adding a value to the enum
+ * without teaching `placeholderDueAt` about it is a type error here rather than
+ * a new item type silently rendering as "has no deadline".
+ *
+ * Local rather than imported: module.service keeps its copy private, and one
+ * three-line helper per file beats widening that module's public surface.
+ */
+const unhandledSiteItemType = (type: never): never => {
+  throw new Error(`Unhandled ModuleItemType: ${String(type)}`);
+};
+
 // Only the fields a visibility decision, a link, or a redacted placeholder's
 // date needs. Notably absent: a repository's attached resources and quizzes,
 // and — the point of the narrow `assignments` select — every assignment column
@@ -890,6 +903,17 @@ const SITE_ITEM_INCLUDE = {
     },
   },
   quiz: { select: { id: true, name: true, status: true, due_date: true } },
+  // Narrow for the same reason as its siblings, but note what IS here: a form's
+  // title and slug reach an anonymous request. That is not the leak the rest of
+  // this include guards against — they are only ever RENDERED when
+  // isItemPubliclyVisible says `access === 'PUBLIC'`, and a PUBLIC form is
+  // already a link anyone may open and fill without signing in. `status` and
+  // `access` are the two flags that decision reads; `closes_at` is the one date
+  // a redacted CLASSROOM form is allowed to contribute (see placeholderDueAt).
+  // Nothing else — no field list, no revision, no response count.
+  form: {
+    select: { id: true, title: true, slug: true, status: true, access: true, closes_at: true },
+  },
 } satisfies Prisma.ModuleItemInclude;
 
 type SiteModuleItem = Prisma.ModuleItemGetPayload<{ include: typeof SITE_ITEM_INCLUDE }>;
@@ -929,19 +953,36 @@ export type SiteScheduleModule = Omit<SiteModule, 'items'> & { items: SiteSchedu
  *
  * Repositories reduce to their EARLIEST published assignment deadline, the same
  * reduction the admin repo summary makes ("earliest assignment deadline =
- * repository due date"). Quizzes carry their own. Pages and slides have no
- * date at all, and get a bare placeholder.
+ * repository due date"). Quizzes carry their own, and a FORM's `closes_at` is
+ * its due date — which is how a members-only (CLASSROOM) form still tells the
+ * public schedule "something is due Sep 12" without ever naming itself. Pages
+ * and slides have no date at all, and get a bare placeholder.
+ *
+ * A switch rather than the if-chain this replaced: every type states its answer
+ * out loud, and the `never` default means a sixth ModuleItemType cannot quietly
+ * inherit "no date" the way a FORM would have.
  */
 function placeholderDueAt(item: SiteModuleItem): Date | null {
-  if (item.item_type === 'QUIZ') return item.quiz?.due_date ?? null;
-  if (item.item_type !== 'REPOSITORY') return null;
+  switch (item.item_type) {
+    // Neither has a deadline to redact.
+    case 'PAGE':
+    case 'SLIDE':
+      return null;
+    case 'QUIZ':
+      return item.quiz?.due_date ?? null;
+    case 'FORM':
+      return item.form?.closes_at ?? null;
+    case 'REPOSITORY': {
+      const deadlines = (item.repository?.assignments ?? [])
+        .map(assignment => assignment.student_deadline)
+        .filter((deadline): deadline is Date => deadline !== null);
 
-  const deadlines = (item.repository?.assignments ?? [])
-    .map(assignment => assignment.student_deadline)
-    .filter((deadline): deadline is Date => deadline !== null);
-
-  if (deadlines.length === 0) return null;
-  return deadlines.reduce((earliest, deadline) => (deadline < earliest ? deadline : earliest));
+      if (deadlines.length === 0) return null;
+      return deadlines.reduce((earliest, deadline) => (deadline < earliest ? deadline : earliest));
+    }
+    default:
+      return unhandledSiteItemType(item.item_type);
+  }
 }
 
 /**
@@ -955,7 +996,8 @@ function placeholderDueAt(item: SiteModuleItem): Date | null {
  * isItemPublished, and modules left with nothing are dropped, exactly as
  * before. An ANONYMOUS visitor gets a three-way split:
  *
- *   - isItemPubliclyVisible          → the item itself (a public page or deck)
+ *   - isItemPubliclyVisible          → the item itself (a public page, deck or
+ *                                     form)
  *   - published but not public       → a placeholder: type and date only
  *   - not published at all           → nothing
  *

@@ -41,6 +41,25 @@ export async function getTestPrisma(): Promise<TestPrisma> {
   return cached;
 }
 
+/**
+ * The service layer, loaded the way `getTestPrisma` loads the client.
+ *
+ * `@classmoji/services` re-exports `@classmoji/database`, which constructs its
+ * PrismaClient at module scope — so the dynamic import must happen AFTER
+ * DATABASE_URL has been resolved from `.dev-context`. A static import at the
+ * top of a spec would connect to whatever DATABASE_URL was set when Playwright
+ * started, which on a devport is the wrong database.
+ *
+ * Use this when the assertion should go through the same function the app goes
+ * through (`listByFormId` rather than a hand-written `findMany`): the point of
+ * the check is then the service's behaviour, not the table's contents.
+ */
+export async function getTestServices() {
+  await getTestPrisma();
+  const { ClassmojiService } = await import('@classmoji/services');
+  return ClassmojiService;
+}
+
 export interface PageRow {
   id: string;
   title: string;

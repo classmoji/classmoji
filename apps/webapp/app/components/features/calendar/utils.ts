@@ -13,6 +13,14 @@ export interface CalendarEvent {
   event_type: string;
   occurrence_date?: string | null;
   is_deadline?: boolean;
+  /**
+   * A synthesized form-close item. A deadline for rendering, filtering and ICS
+   * export, but with no assignment behind it — so it is never draggable.
+   */
+  is_form_close?: boolean;
+  form_url?: string | null;
+  form_status?: string | null;
+  form_access?: string | null;
   is_unpublished?: boolean;
   [key: string]: unknown;
 }

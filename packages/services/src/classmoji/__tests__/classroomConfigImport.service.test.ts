@@ -162,18 +162,14 @@ describe('remapModuleItem', () => {
   });
 
   it('returns null when the referenced resource was not imported (missing map)', () => {
-    expect(
-      remapModuleItem(item({ item_type: 'PAGE', page_id: 'p-src' }), emptyMaps())
-    ).toBeNull();
+    expect(remapModuleItem(item({ item_type: 'PAGE', page_id: 'p-src' }), emptyMaps())).toBeNull();
     expect(
       remapModuleItem(
         item({ item_type: 'REPOSITORY', repository_id: 'r-src' }),
         emptyMaps({ repositories: { other: 'x' } })
       )
     ).toBeNull();
-    expect(
-      remapModuleItem(item({ item_type: 'QUIZ', quiz_id: 'q-src' }), emptyMaps())
-    ).toBeNull();
+    expect(remapModuleItem(item({ item_type: 'QUIZ', quiz_id: 'q-src' }), emptyMaps())).toBeNull();
     expect(
       remapModuleItem(item({ item_type: 'SLIDE', slide_id: 's-src' }), emptyMaps())
     ).toBeNull();
@@ -181,9 +177,25 @@ describe('remapModuleItem', () => {
 
   it('returns null when the source id for the item type is null', () => {
     expect(remapModuleItem(item({ item_type: 'PAGE', page_id: null }), emptyMaps())).toBeNull();
-    expect(
-      remapModuleItem(item({ item_type: 'SLIDE', slide_id: null }), emptyMaps())
-    ).toBeNull();
+    expect(remapModuleItem(item({ item_type: 'SLIDE', slide_id: null }), emptyMaps())).toBeNull();
+  });
+
+  it('drops a FORM item, because forms are not in the config bundle yet', () => {
+    // An explicit case, not the default. Forms have no `idMaps.forms` to remap
+    // through and nothing exports them, so a FORM item is skipped exactly as an
+    // unmapped page is — and a source classroom holding one still imports.
+    expect(remapModuleItem(item({ item_type: 'FORM', position: 2 }), emptyMaps())).toBeNull();
+  });
+
+  it('THROWS on an item type nobody taught it about, rather than skipping it', () => {
+    // The property that matters more than the FORM case above. `default:
+    // return null` is precisely how a FORM item would have been swallowed by an
+    // importer nobody remembered to update: silent data loss with no signal
+    // anywhere. The `never` default makes the NEXT new ModuleItemType a compile
+    // error; this pins the runtime half of that guarantee.
+    expect(() => remapModuleItem(item({ item_type: 'WORKSHEET' as never }), emptyMaps())).toThrow(
+      /Unhandled ModuleItemType/
+    );
   });
 
   it('only consults the map matching the item type', () => {

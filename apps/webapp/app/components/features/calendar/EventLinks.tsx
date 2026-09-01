@@ -59,7 +59,12 @@ const EventLinks = ({
   const hasSlides = (event.slides?.length ?? 0) > 0;
   const hasAssignments = (event.assignments?.length ?? 0) > 0;
   const hasGitHubIssue = event.github_issue_url;
-  const hasAnyLinks = hasMeetingLink || hasPages || hasSlides || hasAssignments || hasGitHubIssue;
+  // Synthesized form-close events carry a single link, already pointed at the
+  // right surface by the service: the responses view for staff, the fill page
+  // for everyone else.
+  const formUrl = event.is_form_close ? (event.form_url ?? null) : null;
+  const hasAnyLinks =
+    hasMeetingLink || hasPages || hasSlides || hasAssignments || hasGitHubIssue || formUrl;
 
   if (!hasAnyLinks) {
     return null;
@@ -152,6 +157,26 @@ const EventLinks = ({
             </NavLink>
           );
         })}
+
+      {/* Form close - opens the form (or its responses, for staff) in a new tab */}
+      {formUrl && (
+        <a
+          href={formUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="flex items-center gap-2 text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300 text-sm"
+        >
+          <IconClipboardList size={18} className="text-ink-3" />
+          <span className="underline">
+            {formUrl.endsWith('/responses')
+              ? 'View responses'
+              : event.form_status === 'CLOSED'
+                ? 'View form (closed)'
+                : 'Open form'}
+          </span>
+          <IconExternalLink size={14} className="text-ink-3" />
+        </a>
+      )}
 
       {/* GitHub Issue - opens in new tab */}
       {hasGitHubIssue && (

@@ -157,6 +157,32 @@ const buildModuleNodes = (
               )
             );
           break;
+        // listForClassroom already dropped DRAFT forms for students, so for them
+        // anything here is OPEN or CLOSED; staff additionally see drafts, marked
+        // as such. The close time is the leaf's deadline; access says who may
+        // open it.
+        case 'FORM':
+          if (item.form)
+            children.push(
+              ...resourceLeaves(
+                {
+                  forms: [
+                    {
+                      id: item.form.id,
+                      title: item.form.title,
+                      slug: item.form.slug,
+                      status: item.form.status,
+                      access: item.form.access,
+                      closes_at: item.form.closes_at,
+                    },
+                  ],
+                },
+                1,
+                `mi-${item.id}`,
+                ctx
+              )
+            );
+          break;
       }
     }
 

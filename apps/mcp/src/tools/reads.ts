@@ -241,8 +241,9 @@ export const listModulesTool = mirrorResourceTool({
   name: 'list_modules',
   title: 'List modules',
   description:
-    'Ordered curriculum modules with their content items (pages, repos, quizzes, slides). Students ' +
-    'see published modules/items only; staff also see unpublished. Returns {enabled:false} when ' +
+    'Ordered curriculum modules with their content items (pages, repos, quizzes, slides, forms). ' +
+    'Students see published modules/items only; staff also see unpublished. Returns ' +
+    '{enabled:false} when ' +
     'the classroom hides modules. Any member.',
 });
 

@@ -59,15 +59,23 @@ export const submittedPill = (status?: string) => {
 };
 
 /**
- * Turn a node's linked pages / slides / quizzes into read-only resource leaves.
- * Delegates to the shared {@link buildResourceLeaves}, supplying the student
- * quizzes route as the quiz href.
+ * Turn a node's linked pages / slides / quizzes / forms into read-only resource
+ * leaves. Delegates to the shared {@link buildResourceLeaves}, supplying the
+ * student quizzes route as the quiz href.
  */
 export const resourceLeaves = (
   input: {
     pages?: Array<{ page: { id: string; title: string } }>;
     slides?: Array<{ slide: { id: string; title: string } }>;
     quizzes?: Array<{ id: string; name: string }>;
+    forms?: Array<{
+      id: string;
+      title: string;
+      slug: string;
+      status: string;
+      access: string;
+      closes_at: Date | string | null;
+    }>;
   },
   level: number,
   keyPrefix: string,

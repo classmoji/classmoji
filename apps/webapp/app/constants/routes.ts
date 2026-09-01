@@ -23,6 +23,7 @@ import {
   IconHeartRateMonitor,
   IconStack2,
   IconLifebuoy,
+  IconForms,
 } from '@tabler/icons-react';
 
 /**
@@ -33,7 +34,7 @@ export const routeCategories = {
     label: 'Content',
     // Pages is LAST on purpose: it is the class's reading surface (its front
     // page, docked), not a task list, so it sits after the coursework entries.
-    items: ['modules', 'repositories', 'assignments', 'slides', 'quizzes', 'pages'],
+    items: ['modules', 'repositories', 'assignments', 'slides', 'quizzes', 'forms', 'pages'],
   },
   assessment: {
     label: 'Assessment',
@@ -113,6 +114,18 @@ export const routes = {
     // page — CommonLayout hides this whole entry from non-owners when the
     // class has no readable pages, the same way Modules hides.
     roles: ['OWNER', 'TEACHER', 'ASSISTANT', 'STUDENT'],
+    category: 'content',
+  },
+  forms: {
+    link: '/forms',
+    label: 'Forms',
+    icon: IconForms,
+    // Staff-only and management-only: the entry opens the builder/list, which
+    // lives in apps/pages behind a redirect. Students reach a classroom form by
+    // its link or a module item, never through this nav item — there is no
+    // student forms list in v1.
+    roles: ['OWNER', 'TEACHER'],
+    isProTier: true,
     category: 'content',
   },
   resources: {

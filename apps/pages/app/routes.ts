@@ -19,9 +19,46 @@ import { flatRoutes } from '@react-router/fs-routes';
  * declaration order, which is what keeps `RESERVED_PAGE_SLUGS`
  * (app / classmoji / sign-in / schedule / robots.txt) from being shadowed by a
  * page that claims one as its slug.
+ *
+ * The `/:classroomSlug/forms` subtree is declared here too, with its modules
+ * under `app/forms/**`, for the same reason the site tree is: it must NOT
+ * inherit the `$classroomSlug` layout that `flatRoutes` builds from
+ * `app/routes/`. That layout loads the classroom's page list and wraps
+ * everything beneath it in `PagesSidebar` — chrome a form builder does not want
+ * and a public fill page must never show. Naming a flat file
+ * `$classroomSlug_.forms` would escape it as well, but only for as long as
+ * every future contributor remembers the trailing underscore; living outside
+ * `app/routes/` makes the escape structural and visible in one file. The same
+ * static-beats-dynamic ranking keeps `/cs52/forms` from matching the page-view
+ * route, and `forms/new` ahead of `forms/:formSlug`.
  */
 export default [
   ...(await flatRoutes()),
+
+  route(':classroomSlug/forms', 'forms/admin/list.tsx', [
+    // The new-form drawer renders into the list's `<Outlet />`, so the table
+    // stays on screen behind it.
+    route('new', 'forms/admin/new.tsx'),
+  ]),
+  route(':classroomSlug/forms/:formSlug/edit', 'forms/admin/builder.tsx'),
+  route(':classroomSlug/forms/:formSlug/responses', 'forms/admin/responses.tsx'),
+  // A resource route (no component): it answers with text/csv and has no
+  // business rendering anything. Static `responses` outranks `:formSlug`, and
+  // `RESERVED_FORM_SLUGS` refuses `responses` at create, so neither of these can
+  // ever be shadowed by a real form.
+  route(':classroomSlug/forms/:formSlug/responses/export', 'forms/admin/responsesExport.ts'),
+
+  // The public fill surfaces, exempted from the root login redirect (see
+  // app/utils/formsPaths.ts). Placeholders until the renderer lands; they are
+  // declared NOW so the routing skeleton and the gate are settled together
+  // rather than the exemption arriving ahead of the routes it describes.
+  route(':classroomSlug/forms/:formSlug', 'forms/fill/fill.tsx'),
+  route(':classroomSlug/forms/:formSlug/verify', 'forms/fill/verify.tsx'),
+  // A resource route (no component): the fill page polls it for a bounce on the
+  // send it just caused. It answers JSON, takes NO address, and is keyed only
+  // on the HttpOnly watch cookie — see the module for why that is what keeps it
+  // from being a mailbox oracle. Static `delivery` outranks `:formSlug`.
+  route(':classroomSlug/forms/:formSlug/delivery', 'forms/fill/delivery.ts'),
 
   ...prefix('_site/:subdomain', [
     // A resource route (no component): it answers with text/plain and has no

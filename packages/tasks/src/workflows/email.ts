@@ -1,7 +1,34 @@
 import { logger, task } from '@trigger.dev/sdk';
 import { Resend } from 'resend';
+import getPrisma from '@classmoji/database';
 
-export interface SendEmailTaskPayload {
+/**
+ * Correlate this send back to the thing that asked for it.
+ *
+ * ── Why the id has to travel with the payload ──────────────────────────────
+ * The provider's message id exists only INSIDE this run. Mail is dispatched
+ * fire-and-forget (`sendEmailTask.trigger(...)`), so the route that asked for it
+ * has already answered the browser by the time Resend replies. The only place
+ * that can write the id down is here, and the only way this task can know WHICH
+ * row to write it onto is if the caller says so.
+ *
+ * Optional everywhere, and read by nothing else. A send without it behaves
+ * exactly as every send did before this field existed — which is what lets the
+ * correlation ship ahead of the webhook that eventually consumes it.
+ */
+interface SendEmailCorrelation {
+  /**
+   * The `form_magic_tokens` row this message carries the link for.
+   *
+   * One token is one send, so the mapping is exact. Named for the table rather
+   * than something generic because it IS specific: another caller wanting
+   * correlation should add its own field and its own write-back rather than
+   * overloading this one into meaning "some row somewhere".
+   */
+  formMagicTokenId?: string;
+}
+
+export interface SendEmailTaskPayload extends SendEmailCorrelation {
   to: string;
   subject: string;
   html: string;
@@ -15,7 +42,7 @@ export interface SendEmailTaskPayload {
  * `subject` is optional because the template carries its own; pass it only to
  * override per-send.
  */
-export interface SendEmailTaskTemplatePayload {
+export interface SendEmailTaskTemplatePayload extends SendEmailCorrelation {
   to: string;
   template: {
     id: string;
@@ -32,9 +59,8 @@ interface SendEmailTaskWrappedPayload {
 
 type SendEmailTaskInput = SendEmailTaskBody | SendEmailTaskWrappedPayload;
 
-const isTemplatePayload = (
-  payload: SendEmailTaskBody
-): payload is SendEmailTaskTemplatePayload => 'template' in payload;
+const isTemplatePayload = (payload: SendEmailTaskBody): payload is SendEmailTaskTemplatePayload =>
+  'template' in payload;
 
 interface SendEmailTaskContext {
   ctx: {
@@ -132,9 +158,51 @@ export const sendEmailTask = task({
 
     logger.info('Email sent', { ...logCtx, emailId: data?.id });
 
+    await recordProviderMessageId(payload, data?.id);
+
     return data;
   },
 });
+
+/**
+ * Write the provider's message id onto the row that asked for the send.
+ *
+ * ── Why every failure here is swallowed ────────────────────────────────────
+ * THE MAIL HAS ALREADY GONE OUT by the time this runs. Throwing would fail a
+ * run whose side effect already happened, and this task retries five times — so
+ * a database blip would not "fix" the correlation, it would send the person up
+ * to five copies of the same verification link. Losing the id costs a bounce we
+ * cannot attribute; throwing costs the recipient their inbox. The trade is not
+ * close.
+ *
+ * A RETRY IS SAFE FOR THE OPPOSITE REASON. The send carries an idempotency key
+ * derived from the run id, so a retried attempt gets the SAME message id back
+ * from Resend and this write is byte-for-byte the one that already happened.
+ *
+ * `delivery_state` starts at 'SENT' — meaning "the provider accepted it", which
+ * is genuinely all that is known at this point. Delivery, bouncing and delay are
+ * later facts, and only the webhook can report them.
+ */
+async function recordProviderMessageId(
+  payload: SendEmailTaskBody,
+  messageId: string | undefined
+): Promise<void> {
+  if (!payload.formMagicTokenId || !messageId) return;
+
+  try {
+    await getPrisma().formMagicToken.update({
+      where: { id: payload.formMagicTokenId },
+      data: { provider_message_id: messageId, delivery_state: 'SENT' },
+    });
+  } catch (error) {
+    // A token can legitimately be gone: the response it belonged to may have
+    // been deleted between the dispatch and the send. Warn, never throw.
+    logger.warn('Could not record provider message id', {
+      formMagicTokenId: payload.formMagicTokenId,
+      error: (error as Error).message,
+    });
+  }
+}
 
 /** Resend caps a batch at 100 messages per request. */
 const RESEND_BATCH_LIMIT = 100;

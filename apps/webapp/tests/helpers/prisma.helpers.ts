@@ -1,4 +1,5 @@
 import getPrisma from '@classmoji/database';
+import { parseFormDefinition } from '@classmoji/services/form-contract';
 import { getDevContext } from './env.helpers';
 
 /**
@@ -235,9 +236,7 @@ export async function seedStudentSubmission(
  * Read a GitRepoAssignment's status by id. Throws if missing. Lets a spec
  * assert that a (re)submission flipped the row's status in the DB.
  */
-export async function getSubmissionStatus(
-  gitRepoAssignmentId: string
-): Promise<'OPEN' | 'CLOSED'> {
+export async function getSubmissionStatus(gitRepoAssignmentId: string): Promise<'OPEN' | 'CLOSED'> {
   const prisma = getTestPrisma();
   const row = await prisma.gitRepoAssignment.findUnique({
     where: { id: gitRepoAssignmentId },
@@ -351,10 +350,7 @@ export async function seedAssignmentGrade(
 }
 
 /** Flip an assignment's `grades_released` flag (controls student visibility). */
-export async function setGradesReleased(
-  assignmentId: string,
-  released: boolean
-): Promise<void> {
+export async function setGradesReleased(assignmentId: string, released: boolean): Promise<void> {
   const prisma = getTestPrisma();
   await prisma.assignment.update({
     where: { id: assignmentId },
@@ -535,15 +531,19 @@ export interface SeededModule {
   title: string;
 }
 
-type ModuleItemKind = 'PAGE' | 'REPOSITORY' | 'QUIZ' | 'SLIDE';
+type ModuleItemKind = 'PAGE' | 'REPOSITORY' | 'QUIZ' | 'SLIDE' | 'FORM';
 
-const MODULE_ITEM_COLUMN: Record<ModuleItemKind, 'page_id' | 'repository_id' | 'quiz_id' | 'slide_id'> =
-  {
-    PAGE: 'page_id',
-    REPOSITORY: 'repository_id',
-    QUIZ: 'quiz_id',
-    SLIDE: 'slide_id',
-  };
+// Mirrors ITEM_TYPE_COLUMN in module.service.
+const MODULE_ITEM_COLUMN: Record<
+  ModuleItemKind,
+  'page_id' | 'repository_id' | 'quiz_id' | 'slide_id' | 'form_id'
+> = {
+  PAGE: 'page_id',
+  REPOSITORY: 'repository_id',
+  QUIZ: 'quiz_id',
+  SLIDE: 'slide_id',
+  FORM: 'form_id',
+};
 
 /**
  * Create a Module for a classroom. Idempotent by title (deletes any prior row
@@ -608,6 +608,103 @@ export async function getModulePublishedState(moduleId: string): Promise<boolean
 export async function deleteModuleById(id: string): Promise<void> {
   const prisma = getTestPrisma();
   await prisma.module.delete({ where: { id } }).catch(() => undefined);
+}
+
+// ---------------------------------------------------------------------------
+// Forms
+// ---------------------------------------------------------------------------
+
+export interface SeededForm {
+  formId: string;
+  title: string;
+  /** The form's address segment: `{pagesUrl}/{class}/forms/{slug}`. */
+  slug: string;
+}
+
+/**
+ * A minimal one-question definition, parsed through the real contract so the
+ * stored JSON carries the same `definition_version` and minted field ids a
+ * form published through form.service would.
+ */
+const seedFormDefinition = () =>
+  parseFormDefinition([{ type: 'short_text', label: 'Your name', required: true }]);
+
+/**
+ * Create a form for a classroom, optionally already published.
+ *
+ * Writes the rows form.service.publish would rather than calling it: a form is
+ * OPEN only when it has a revision AND `current_revision_id` points at it, and
+ * a spec that skipped either would be asserting against a state the app never
+ * produces. `slug` is passed explicitly (not derived by the service's
+ * uniquifier) so the caller can assert the resulting href deterministically.
+ *
+ * Idempotent by slug — the classroom's existing form at that address is deleted
+ * first, which is why callers must use a namespaced (`zz-…`) title.
+ */
+export async function seedForm(
+  classroomId: string,
+  title: string,
+  options: {
+    status?: 'DRAFT' | 'OPEN' | 'CLOSED';
+    access?: 'PUBLIC' | 'CLASSROOM';
+    closesAt?: Date | null;
+    /** Defaults to the classroom's OWNER, which every seeded classroom has. */
+    createdBy?: string;
+  } = {}
+): Promise<SeededForm> {
+  const prisma = getTestPrisma();
+  const { status = 'OPEN', access = 'PUBLIC', closesAt = null } = options;
+  const slug = title.toLowerCase().replace(/\s+/g, '-');
+
+  await prisma.form.deleteMany({ where: { classroom_id: classroomId, slug } });
+
+  let createdBy = options.createdBy;
+  if (!createdBy) {
+    const owner = await prisma.classroomMembership.findFirst({
+      where: { classroom_id: classroomId, role: 'OWNER' },
+      select: { user_id: true },
+    });
+    if (!owner) throw new Error(`No OWNER membership found for classroom ${classroomId}`);
+    createdBy = owner.user_id;
+  }
+
+  const definition = seedFormDefinition();
+  const form = await prisma.form.create({
+    data: {
+      classroom_id: classroomId,
+      title,
+      slug,
+      access,
+      status: 'DRAFT',
+      draft_fields: definition as object,
+      created_by: createdBy,
+      closes_at: closesAt,
+    },
+  });
+
+  // A DRAFT has no revision by definition — that is exactly why the student
+  // tree hides it — so only a published form gets one.
+  if (status !== 'DRAFT') {
+    const revision = await prisma.formRevision.create({
+      data: { form_id: form.id, version: 1, fields: definition as object },
+    });
+    await prisma.form.update({
+      where: { id: form.id },
+      data: { current_revision_id: revision.id, status },
+    });
+  }
+
+  return { formId: form.id, title: form.title, slug: form.slug };
+}
+
+/**
+ * Delete a form by id. Cascades to its revisions and responses. Safe to call in
+ * cleanup even if already deleted — but delete the enclosing module FIRST, so
+ * the module item referencing this form is gone before the form is.
+ */
+export async function deleteFormById(id: string): Promise<void> {
+  const prisma = getTestPrisma();
+  await prisma.form.delete({ where: { id } }).catch(() => undefined);
 }
 
 /** Upsert the three student-navigation visibility toggles for a classroom. */

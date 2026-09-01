@@ -36,3 +36,9 @@ export const escapeVars = <T extends Record<string, string | number | null | und
  * defaulted to classmoji.com, which is wrong — the app is app.classmoji.io.
  */
 export const appUrl = (): string => process.env.WEBAPP_URL ?? 'https://app.classmoji.io';
+
+/**
+ * The pages-service URL used in email links. Forms live in apps/pages, not the
+ * webapp, so a form verification link points here — never at appUrl().
+ */
+export const pagesUrl = (): string => process.env.PAGES_URL ?? 'https://pages.classmoji.io';

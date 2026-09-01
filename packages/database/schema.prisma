@@ -121,6 +121,32 @@ enum ClassroomStatus {
   UNPUBLISHED
 }
 
+/// Who may fill a form, and therefore which identity semantics its responses
+/// carry. PUBLIC = anyone with the link; identity is an email address proven by
+/// a magic link. CLASSROOM = signed-in members only; identity is the session's
+/// user. Frozen once a form leaves DRAFT — flipping mid-collection would mix
+/// two identity semantics into one response set.
+enum FormAccess {
+  PUBLIC
+  CLASSROOM
+}
+
+enum FormStatus {
+  DRAFT
+  OPEN
+  CLOSED
+}
+
+/// PENDING_VERIFICATION is the public path's holding state: the answers are
+/// stored but count for nothing until the magic link is clicked. DRAFT is the
+/// server-side autosave row for identified fillers. Only SUBMITTED rows with a
+/// verified_at count toward the response cap and the FIFO ordering.
+enum SubmissionState {
+  DRAFT
+  PENDING_VERIFICATION
+  SUBMITTED
+}
+
 // ============================================================================
 // BETTERAUTH TABLES
 // ============================================================================
@@ -296,6 +322,8 @@ model User {
   oauth_applications            OauthApplication[]
   oauth_access_tokens           OauthAccessToken[]
   oauth_consents                OauthConsent[]
+  forms_created                 Form[]
+  form_responses                FormResponse[]
 
   @@unique([provider, provider_id])
   @@index([provider, login])
@@ -398,6 +426,7 @@ model Classroom {
   notifications         Notification[]
   import_job            ImportJob?
   site                  ClassroomSite?
+  forms                 Form[]
 
   // Logically redundant now that slug is globally unique, but retained: it is
   // the compound key live upserts select on (githubClassroomImport, example
@@ -452,22 +481,22 @@ model ClassroomSettings {
 // There is deliberately NO nav column: site navigation is authored content (a
 // "Page directory" block on a page), not configuration.
 model ClassroomSite {
-  id           String @id @default(uuid())
-  classroom_id String @unique
+  id                        String    @id @default(uuid())
+  classroom_id              String    @unique
   // A single lowercase DNS label — validated by SUBDOMAIN_REGEX in
   // packages/utils/src/subdomains.ts and by a CHECK constraint in the
   // add_classroom_sites migration (the two must stay byte-identical). Labels in
   // RESERVED_SUBDOMAINS are refused in the service layer, not by the DB: the
   // list is product policy and changes without a migration.
-  subdomain    String @unique
+  subdomain                 String    @unique
   // A site can only be enabled once home_page_id is set — enforced in
   // site.service (HOME_PAGE_REQUIRED), not by the DB, because it is a
   // cross-column rule the FK cannot express.
-  is_enabled   Boolean @default(false)
+  is_enabled                Boolean   @default(false)
   // SetNull, not Cascade: deleting the home page must take the site offline for
   // repair, never delete the site row (and with it the claimed subdomain).
-  home_page_id String?
-  show_schedule Boolean @default(true)
+  home_page_id              String?
+  show_schedule             Boolean   @default(true)
   // The IANA zone the PUBLIC schedule renders deadlines in, e.g.
   // `America/New_York`. Null = fall back to UTC, and the schedule then LABELS
   // the date as UTC rather than printing a bare, ambiguous one.
@@ -483,7 +512,7 @@ model ClassroomSite {
   // database gains and renames zones without a migration, so the authority has
   // to be the runtime's own tz data (same reasoning as RESERVED_SUBDOMAINS).
   // The CHECK in add_site_timezone is a shape floor only.
-  timezone     String?
+  timezone                  String?
   // An instructor-owned hostname (PRO only) that serves this same site, stored
   // as a bare lowercase domain with no scheme, port or trailing dot — the exact
   // shape a Host header normalizes to, because that is what it is compared
@@ -492,7 +521,7 @@ model ClassroomSite {
   // CHECK in the add_custom_domains migration; the platform-domain and
   // reserved-suffix refusals live in site.service (product policy, no
   // migration when it changes).
-  custom_domain String? @unique
+  custom_domain             String?   @unique
   // Set the first time this claim actually SERVES over its own hostname — a
   // completed TLS handshake on a cert we asked Fly to issue is the ownership
   // proof. Per CLAIM, not per hostname: cleared whenever custom_domain is
@@ -500,8 +529,8 @@ model ClassroomSite {
   // hand the next claimant an already-verified domain. Gates the canonical/
   // og:url flip, never the serving decision itself.
   custom_domain_verified_at DateTime?
-  created_at    DateTime @default(now())
-  updated_at    DateTime @default(now()) @updatedAt
+  created_at                DateTime  @default(now())
+  updated_at                DateTime  @default(now()) @updatedAt
 
   classroom Classroom @relation(fields: [classroom_id], references: [id], onDelete: Cascade)
   home_page Page?     @relation("SiteHomePage", fields: [home_page_id], references: [id], onDelete: SetNull)
@@ -664,9 +693,10 @@ enum ModuleItemType {
   REPOSITORY
   QUIZ
   SLIDE
+  FORM
 }
 
-// A single ordered entry in a Module's content list. Exactly one of the four
+// A single ordered entry in a Module's content list. Exactly one of the five
 // *_id fields is set (enforced in the service layer + a CHECK migration).
 // An item may appear in multiple modules, but not twice in the same module.
 model ModuleItem {
@@ -678,6 +708,7 @@ model ModuleItem {
   repository_id String?
   quiz_id       String?
   slide_id      String?
+  form_id       String?
   created_at    DateTime       @default(now())
   updated_at    DateTime       @default(now()) @updatedAt
 
@@ -686,11 +717,13 @@ model ModuleItem {
   repository Repository? @relation(fields: [repository_id], references: [id], onDelete: Cascade)
   quiz       Quiz?       @relation(fields: [quiz_id], references: [id], onDelete: Cascade)
   slide      Slide?      @relation(fields: [slide_id], references: [id], onDelete: Cascade)
+  form       Form?       @relation(fields: [form_id], references: [id], onDelete: Cascade)
 
   @@unique([module_id, page_id])
   @@unique([module_id, repository_id])
   @@unique([module_id, quiz_id])
   @@unique([module_id, slide_id])
+  @@unique([module_id, form_id])
   @@index([module_id])
   @@map("module_items")
 }
@@ -1489,4 +1522,184 @@ model ProcessedWebhookEvent {
 
   @@index([source, processed_at])
   @@map("processed_webhook_events")
+}
+
+// ============================================================================
+// FORMS
+// ============================================================================
+// Unlike pages and slides, a form's DEFINITION lives in Postgres, not in the
+// classroom's GitHub content repo: responses foreign-key to the exact revision
+// they were filled against, and a Git-backed content.json cannot participate in
+// that transaction. Definitions are immutable revisions, so editing a live form
+// never orphans the answers already collected.
+
+model Form {
+  id                  String     @id @default(uuid())
+  classroom_id        String
+  title               String
+  /// The form's address: `/{class}/forms/{slug}`. Derived from the title at
+  /// create and immutable once the form is published — a slug already in
+  /// circulation must not break. Reserved words (edit/responses/new) are
+  /// rejected in form.service, not here.
+  slug                String
+  description         String?
+  /// Frozen once status leaves DRAFT (enforced in form.service).
+  access              FormAccess @default(PUBLIC)
+  status              FormStatus @default(DRAFT)
+  /// The builder's working copy of the field list, in the same shape a
+  /// FormRevision stores. Revisions are immutable and are foreign-keyed by the
+  /// responses filled against them, so an in-progress edit cannot live in one —
+  /// it lives here until `publish` snapshots it into revision N+1.
+  draft_fields        Json?
+  /// The revision the fill page renders. Null until first publish. Deliberately
+  /// a plain column and NOT a relation: a FK here plus FormRevision.form_id
+  /// would be a cycle, and the pointer is only ever set to a revision of this
+  /// same form (form.service is the only writer).
+  current_revision_id String?
+  /// Max VERIFIED responses. Null = uncapped. Enforced atomically under a row
+  /// lock on this form, counting only submission_state SUBMITTED rows.
+  response_cap        Int?
+  closes_at           DateTime?
+  /// A filler may replace their existing response until the form closes. The
+  /// per-mode partial unique indexes hold either way: one row per identity,
+  /// overwritten rather than duplicated.
+  allow_multiple      Boolean    @default(false)
+  /// Public fills always store a server-side row (they must, to be verified).
+  /// This governs anonymous DRAFT autosave: off → localStorage only, on →
+  /// drafts persist server-side keyed by draft_token, with an on-form
+  /// disclosure. GC'd by the same 48h expiry sweep.
+  save_partials       Boolean    @default(false)
+  confirmation_email  Boolean    @default(false)
+  created_by          String
+  created_at          DateTime   @default(now())
+  updated_at          DateTime   @default(now()) @updatedAt
+
+  classroom    Classroom      @relation(fields: [classroom_id], references: [id], onDelete: Cascade)
+  creator      User           @relation(fields: [created_by], references: [id])
+  revisions    FormRevision[]
+  responses    FormResponse[]
+  module_items ModuleItem[]
+
+  @@unique([classroom_id, slug])
+  @@index([classroom_id])
+  @@map("forms")
+}
+
+/// An immutable snapshot of a form's field list. Replaces per-response
+/// definition snapshots: every response points at the revision it rendered
+/// against, so one row holds the schema for all of them.
+model FormRevision {
+  id      String @id @default(uuid())
+  form_id String
+  version Int
+  /// The versioned definition contract (see formContract.ts) — a field list,
+  /// every field carrying a uuid `id` that answers key on. Tier-1 option
+  /// sources (roster, teaching team) are MATERIALIZED to {id,label} here at
+  /// publish; Tier-2 (teammates) resolve per respondent at render and are
+  /// never stored in a revision.
+  fields  Json
+
+  created_at DateTime @default(now())
+
+  form      Form           @relation(fields: [form_id], references: [id], onDelete: Cascade)
+  responses FormResponse[]
+
+  @@unique([form_id, version])
+  @@map("form_revisions")
+}
+
+model FormResponse {
+  id               String  @id @default(uuid())
+  form_id          String
+  /// What the person actually saw. Cascade rather than Prisma's default
+  /// Restrict: deleting a form cascades to both revisions and responses, and
+  /// under Restrict that delete order is a coin flip. No path ever deletes a
+  /// revision on its own.
+  revision_id      String
+  /// Null for anonymous public submissions; the session user for classroom
+  /// fills. SetNull so a deleted account leaves the response (and its
+  /// resolved_context name snapshot) intact.
+  user_id          String?
+  /// As typed, for display. `email_normalized` (lower/trim) is the identity key
+  /// the partial unique index enforces.
+  email            String
+  email_normalized String
+  name             String?
+  /// { [fieldUuid]: value }. Repeat groups nest exactly one level:
+  /// { [groupUuid]: { [targetUserId]: { [fieldUuid]: value } } }.
+  answers          Json
+  /// Per-respondent Tier-2 snapshot: the resolved team, its scope, and the
+  /// review targets [{ user_id, name, login, removed }]. Names are snapshotted
+  /// so roster churn and account deletion never orphan a peer review — never
+  /// re-joined against the live roster.
+  resolved_context Json?
+
+  submission_state SubmissionState @default(PENDING_VERIFICATION)
+  /// Magic-link confirmation time. Set once and preserved across later edits —
+  /// the cap and the FIFO ordering count from the FIRST verification.
+  verified_at      DateTime?
+  /// Opaque cookie value keying an anonymous server-side partial (only when the
+  /// form's save_partials is on). GC'd by the expiry sweep.
+  draft_token      String?         @unique
+  /// Staff-only free-text triage label ("responded to", "on roster", …).
+  /// Suggestions come from the labels already used on the same form. Never
+  /// visible to the filler on any surface, including the magic-link review page.
+  staff_status     String?
+  /// Staff-only note living with the submission. Same visibility rule.
+  staff_note       String?
+
+  submitted_at DateTime @default(now())
+  created_at   DateTime @default(now())
+  updated_at   DateTime @default(now()) @updatedAt
+
+  form     Form             @relation(fields: [form_id], references: [id], onDelete: Cascade)
+  revision FormRevision     @relation(fields: [revision_id], references: [id], onDelete: Cascade)
+  user     User?            @relation(fields: [user_id], references: [id], onDelete: SetNull)
+  tokens   FormMagicToken[]
+
+  // Identity uniqueness is per access mode and cannot be expressed in Prisma —
+  // two PARTIAL unique indexes are added by raw SQL in the migration:
+  //   (form_id, user_id)          WHERE user_id IS NOT NULL
+  //   (form_id, email_normalized) WHERE user_id IS NULL
+  @@index([form_id, submitted_at])
+  @@map("form_responses")
+}
+
+/// Single-use, short-lived verify/edit links for public submissions. The raw
+/// token is emailed and never stored; only its sha256 hex digest lives here.
+/// `created_at` also drives the per-response send cooldown.
+model FormMagicToken {
+  id          String    @id @default(uuid())
+  response_id String
+  token_hash  String    @unique
+  expires_at  DateTime
+  used_at     DateTime?
+  created_at  DateTime  @default(now())
+
+  /// What the mail provider called the message this token was sent in.
+  ///
+  /// One token is one send, which is what makes this row the natural place to
+  /// correlate a bounce back to a response: the provider's webhook knows only a
+  /// message id, and without this it can say "something bounced" and nothing
+  /// more. Nullable because it is written AFTER the send returns — the send is
+  /// dispatched through Trigger.dev, so the id exists only inside that run —
+  /// and because every send made before this column existed has none.
+  provider_message_id String?
+  /// How delivery went, as the provider last reported it: 'SENT', 'DELIVERED',
+  /// 'BOUNCED', 'DELAYED', 'COMPLAINED'. A plain string rather than an enum
+  /// because the set belongs to the provider, and an unfamiliar event type
+  /// should become a value we ignore rather than a migration that blocks a
+  /// webhook.
+  delivery_state  String?
+  /// The provider's stated reason, for the staff row. Never shown to a filler.
+  delivery_detail String?
+
+  response FormResponse @relation(fields: [response_id], references: [id], onDelete: Cascade)
+
+  @@index([response_id])
+  /// The webhook's only lookup key: a bounce arrives naming a message, and this
+  /// is what turns that into a response. NOT unique — a provider retry carries
+  /// the same id, and a duplicate must be a no-op rather than an error.
+  @@index([provider_message_id])
+  @@map("form_magic_tokens")
 }

@@ -62,6 +62,17 @@ import {
   resourceLinksListTool,
 } from './resourceLinks.ts';
 import {
+  listFormsTool,
+  formGetTool,
+  formCreateTool,
+  formUpdateTool,
+  formPublishTool,
+  formDeleteTool,
+  listFormResponsesTool,
+  formResponseGetTool,
+  formResponseUpdateTool,
+} from './forms.ts';
+import {
   teamCreateTool,
   teamDeleteTool,
   teamRenameTool,
@@ -197,4 +208,19 @@ export function registerAllTools(): void {
   registerToolDefinition(teamMemberRemoveTool);
   registerToolDefinition(teamTagAddTool);
   registerToolDefinition(teamTagRemoveTool);
+
+  // Forms (OWNER+TEACHER — the tier apps/pages' assertFormAdmin composes from
+  // requireClassroomStaff; each tool also re-checks Pro tier in-handler). The
+  // response tools read applicant PII, so both of them write an audit VIEW row
+  // the way the web responses loader does; form_delete cascades to every
+  // response and is confirm-gated.
+  registerToolDefinition(listFormsTool);
+  registerToolDefinition(formGetTool);
+  registerToolDefinition(formCreateTool);
+  registerToolDefinition(formUpdateTool);
+  registerToolDefinition(formPublishTool);
+  registerToolDefinition(formDeleteTool);
+  registerToolDefinition(listFormResponsesTool);
+  registerToolDefinition(formResponseGetTool);
+  registerToolDefinition(formResponseUpdateTool);
 }
