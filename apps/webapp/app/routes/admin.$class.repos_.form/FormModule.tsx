@@ -587,7 +587,7 @@ const FormModule = ({
                     label="Team Tag"
                     extra={
                       isNewTagOpen ? (
-                        <div className="flex items-center gap-2">
+                        <div className="mt-2 flex items-center gap-2">
                           <Input
                             size="small"
                             autoFocus
@@ -621,6 +621,7 @@ const FormModule = ({
                           <Button
                             type="text"
                             size="small"
+                            className="!text-ink-2 hover:enabled:!text-ink-1"
                             onClick={closeNewTag}
                             disabled={isCreatingTag}
                           >
@@ -631,7 +632,7 @@ const FormModule = ({
                         <button
                           type="button"
                           onClick={() => setIsNewTagOpen(true)}
-                          className="text-xs text-ink-3 hover:text-ink-1 transition-colors"
+                          className="mt-1 text-xs text-ink-3 hover:text-ink-1 transition-colors"
                         >
                           + New tag
                         </button>
