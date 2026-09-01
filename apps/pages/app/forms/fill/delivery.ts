@@ -29,14 +29,25 @@ export type { DeliveryState, DeliveryStatus };
  *  2. Asking about somebody else's send requires their cookie, which is their
  *     browser — at which point the attacker has the browser and this endpoint is
  *     the least of it.
- *  3. THE ANSWER IS ASYMMETRIC ON PURPOSE. Only bounced and delayed are ever
- *     reported. `DELIVERED` is deliberately flattened into `pending`, so a
- *     successful delivery is INDISTINGUISHABLE from a message still in flight,
- *     from a webhook that is not configured, and from an id that names nothing.
- *     Reporting delivery would turn this into an address-validity probe: type an
- *     address, watch for `delivered`, learn the mailbox exists. Bounced is safe
- *     to report for the same reason it is useful — it is the failure of the
- *     asker's own action, and it is what the person needs to be told.
+ *  3. THE ANSWER IS ASYMMETRIC ON PURPOSE. Only failure is ever reported —
+ *     bounced, delayed, and failed. `DELIVERED` is deliberately flattened into
+ *     `pending`, so a successful delivery is INDISTINGUISHABLE from a message
+ *     still in flight, from a webhook that is not configured, and from an id
+ *     that names nothing. Reporting delivery would turn this into an
+ *     address-validity probe: type an address, watch for `delivered`, learn the
+ *     mailbox exists. Bounced is safe to report for the same reason it is
+ *     useful — it is the failure of the asker's own action, and it is what the
+ *     person needs to be told.
+ *
+ *     `failed` — the dispatch never reached the provider — WIDENS NOTHING, and
+ *     it is worth being precise about why. It is a fact about OUR infrastructure
+ *     (a template not yet synced, a rate limit, an outage), not about the
+ *     address: it is written before anything is asked of the recipient's mail
+ *     system, so it can be reported for a perfectly valid mailbox and for a
+ *     nonexistent one with equal probability. It therefore carries no
+ *     information about whether a mailbox exists, which is the only thing this
+ *     endpoint must never disclose. It is still cookie-scoped, still failure-
+ *     only, and still counted against the distinct-address ceiling.
  *  4. AN UNKNOWN ID IS `pending`, NEVER 404. The fill action always sets a watch
  *     cookie, substituting an opaque id when there was no real send (an address
  *     that has already responded is mailed nothing — see
@@ -164,6 +175,13 @@ export const loader = async ({
   }
 
   if (token.delivery_state === 'BOUNCED') return answer('bounced');
+  /**
+   * The send that never left. Written by `sendEmailTask`'s `onFailure` hook once
+   * its retries are exhausted, so it means "this message is not coming" rather
+   * than "an attempt went badly" — which is the same thing a bounce means to the
+   * person waiting, and is reported for the same reason.
+   */
+  if (token.delivery_state === 'FAILED') return answer('failed');
   if (token.delivery_state === 'DELAYED') return answer('delayed');
 
   // SENT, DELIVERED, COMPLAINED, null, or a state this build has never heard

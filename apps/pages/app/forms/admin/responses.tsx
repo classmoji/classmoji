@@ -211,11 +211,32 @@ const STATE_CHIP: Record<string, { label: string; title: string }> = {
  */
 const DELIVERY_LABEL: Record<string, string> = {
   BOUNCED: 'Bounced — we could not deliver',
+  /**
+   * NOT a bounce, and the difference is the whole point of the row.
+   *
+   * A bounce means the message left and the recipient's mail system refused it,
+   * so the address is the thing to question. FAILED means it never left us at
+   * all — so the address may be perfectly good and this person is waiting for a
+   * link that was never sent. Chasing them about their email would be the wrong
+   * move; the resend button is the right one.
+   */
+  FAILED: 'Never sent — the message failed on our side',
   DELAYED: 'Delayed — still trying',
   COMPLAINED: 'Marked as spam by the recipient',
   DELIVERED: 'Delivered',
   SENT: 'Sent',
 };
+
+/**
+ * The states that mean "this person was never reached", as opposed to "this
+ * person has not got round to clicking yet".
+ *
+ * That is the distinction the whole surface exists to draw: an Unverified chip
+ * alone leaves an instructor chasing somebody who never received mail. All
+ * three are terminal and all three are red; a DELAYED or a DELIVERED is not,
+ * and stays out of the table scan.
+ */
+const UNREACHED = new Set(['BOUNCED', 'COMPLAINED', 'FAILED']);
 
 const absolute = (iso: string) => dayjs(iso).format('MMM D, YYYY h:mm A');
 
@@ -1044,19 +1065,31 @@ function ResponseTableRow({
               {chip.label}
             </span>
           ) : null}
-          {/* The bounce, ON THE ROW.
+          {/* WE NEVER REACHED THEM, ON THE ROW.
               An Unverified chip says somebody did not finish; this says we were
               never able to reach them, which is the difference between a person
-              to chase and a mailbox that does not exist. Only a hard failure
+              to chase and a person who is owed an apology. Only a hard failure
               earns a place here — a delay or a delivery belongs in the drawer,
-              not in a scan of the table. */}
-          {row.delivery?.state === 'BOUNCED' || row.delivery?.state === 'COMPLAINED' ? (
+              not in a scan of the table.
+
+              THREE WORDS, NOT ONE, because the follow-up differs. "Bounced" and
+              "Spam" are facts about the recipient's mail system and point at the
+              address. "Not sent" is a fact about OURS — the dispatch failed and
+              no message ever left — so the address may be fine and the person is
+              simply waiting for something that never went. Collapsing it into
+              "Bounced" would send staff to correct an address that was never
+              wrong. */}
+          {row.delivery && UNREACHED.has(row.delivery.state) ? (
             <span
               title={row.delivery.detail ?? DELIVERY_LABEL[row.delivery.state]}
               data-testid={`forms-bounce-chip-${row.id}`}
               className="rounded-full bg-red-100 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-red-700 dark:bg-red-950 dark:text-red-300"
             >
-              {row.delivery.state === 'BOUNCED' ? 'Bounced' : 'Spam'}
+              {row.delivery.state === 'BOUNCED'
+                ? 'Bounced'
+                : row.delivery.state === 'FAILED'
+                  ? 'Not sent'
+                  : 'Spam'}
             </span>
           ) : null}
         </div>
@@ -1181,17 +1214,20 @@ function ResponseDrawer({
                 </dd>
               </>
             ) : null}
-            {/* WHY it never verified, when the provider has said.
-                Shown only when there is something to say: silence here means no
-                report, which is NOT the same as "delivered fine" and must not
-                be rendered as though it were. */}
+            {/* WHY it never verified, when anything is known.
+                Usually the provider's report; sometimes our own — a dispatch
+                that failed before the message ever reached Resend says FAILED
+                here, with the reason it gave. Shown only when there is
+                something to say: silence means no report at all, which is NOT
+                the same as "delivered fine" and must not be rendered as though
+                it were. */}
             {row.delivery ? (
               <>
                 <dt className="text-gray-500 dark:text-gray-400">Email delivery</dt>
                 <dd
                   data-testid="forms-response-delivery"
                   className={
-                    row.delivery.state === 'BOUNCED' || row.delivery.state === 'COMPLAINED'
+                    UNREACHED.has(row.delivery.state)
                       ? 'text-red-700 dark:text-red-300'
                       : 'text-gray-800 dark:text-gray-100'
                   }

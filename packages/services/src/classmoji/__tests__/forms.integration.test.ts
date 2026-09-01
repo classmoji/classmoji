@@ -545,6 +545,129 @@ describe.skipIf(!RUN)('forms services (integration)', () => {
       });
 
       /**
+       * ── THE FOURTH WAY, and the one that stranded somebody ────────────────
+       *
+       * A token is not a delivery. The three conditions above all describe the
+       * TOKEN — unspent, unexpired, young — and every one of them is satisfied
+       * by a link whose mail never went out at all. That is not hypothetical:
+       * a Trigger run failed with "Template not found", the page had already
+       * answered the browser successfully, and four hours later the submit
+       * found a pristine token, concluded a live link covered the address, and
+       * sent nothing. The applicant could not be sent a link BECAUSE the
+       * system believed it already had.
+       *
+       * Marked by `sendEmailTask`'s `onFailure`, so FAILED means the retries
+       * are spent and the message is genuinely never going out.
+       */
+      it('mints afresh when the previous send is known to have failed', async () => {
+        const { formId, revisionId } = await makeOpenForm();
+        const fieldId = await nameFieldId(revisionId);
+        const email = `reuse-failed-${suite}@example.test`;
+
+        // Blur: the link is minted and dispatched.
+        const blur = await responseService.beginAddressVerification({ formId, email, revisionId });
+        expect(blur.sent).toBe(true);
+
+        // The dispatch fails, asynchronously, long after the page answered.
+        await prisma.formMagicToken.updateMany({
+          where: { id: blur.watchTokenId! },
+          data: {
+            delivery_state: responseService.MAGIC_LINK_SEND_FAILED,
+            delivery_detail: 'Resend send failed: Template not found',
+          },
+        });
+
+        // BOTH paths back in must mint. Re-typing the address is the first
+        // chance to recover, and submitting is the one the form's own copy
+        // promises ("press Submit — we will try again then").
+        const retyped = await responseService.beginAddressVerification({
+          formId,
+          email,
+          revisionId,
+        });
+        expect(retyped.sent).toBe(true);
+        expect(retyped.emails).toHaveLength(1);
+        expect(retyped.watchTokenId).not.toBe(blur.watchTokenId);
+
+        // And that fresh token is dispatched with its OWN id, so its own
+        // outcome can be written back rather than the dead one's.
+        expect(retyped.emails[0].payload.formMagicTokenId).toBe(retyped.watchTokenId);
+
+        // Now fail that one too, and submit.
+        await prisma.formMagicToken.updateMany({
+          where: { id: retyped.watchTokenId! },
+          data: { delivery_state: responseService.MAGIC_LINK_SEND_FAILED },
+        });
+        const submitted = await beginFor(formId, revisionId, fieldId, email);
+        expect(submitted.rawToken).not.toBeNull();
+        expect(submitted.emails).toHaveLength(1);
+        expect(submitted.linkAlreadySentAt).toBeNull();
+
+        // The link it hands over is real — a fresh mint, not a resurrection of
+        // a dead one.
+        const review = await responseService.verifyMagicToken(tokenOf(submitted));
+        expect(review.response.answers).toEqual({ [fieldId]: 'Maya' });
+      });
+
+      /**
+       * THE OTHER HALF OF THAT RULE, and the regression it guards.
+       *
+       * A send dispatched seconds ago has NO delivery state — nothing has been
+       * reported about it yet, and nothing will be for a while. If "not known
+       * to have succeeded" disqualified reuse, every fresh token would be
+       * unreusable and the double-send this whole rule exists to prevent would
+       * be back: two mails for one action, seconds apart. Only a KNOWN failure
+       * disqualifies.
+       */
+      it('still reuses a send nothing has been reported about yet', async () => {
+        const { formId, revisionId } = await makeOpenForm();
+        const fieldId = await nameFieldId(revisionId);
+        const email = `reuse-inflight-${suite}@example.test`;
+
+        const blur = await responseService.beginAddressVerification({ formId, email, revisionId });
+        const row = await rowFor(formId, email);
+        expect(
+          await prisma.formMagicToken.findFirstOrThrow({ where: { id: blur.watchTokenId! } })
+        ).toMatchObject({ delivery_state: null });
+
+        const submitted = await beginFor(formId, revisionId, fieldId, email);
+        expect(submitted.emails).toHaveLength(0);
+        expect(submitted.linkAlreadySentAt).not.toBeNull();
+        expect(await prisma.formMagicToken.count({ where: { response_id: row.id } })).toBe(1);
+      });
+
+      /**
+       * A state that is not FAILED is not a failure.
+       *
+       * The filter is written as "null, or not FAILED" rather than as a list of
+       * acceptable states, so a value this build has never heard of — a future
+       * provider event, a state added by a later migration — keeps a live link
+       * reusable rather than quietly doubling everybody's mail. 'SENT' is the
+       * ordinary case and the one that must never regress: it is written by the
+       * task on every successful dispatch.
+       */
+      it('reuses a link the provider accepted, and one in a state it does not know', async () => {
+        const { formId, revisionId } = await makeOpenForm();
+        const fieldId = await nameFieldId(revisionId);
+
+        for (const state of ['SENT', 'DELIVERED', 'SOMETHING_NEW']) {
+          const email = `reuse-${state.toLowerCase()}-${suite}@example.test`;
+          const blur = await responseService.beginAddressVerification({
+            formId,
+            email,
+            revisionId,
+          });
+          await prisma.formMagicToken.updateMany({
+            where: { id: blur.watchTokenId! },
+            data: { delivery_state: state },
+          });
+
+          const submitted = await beginFor(formId, revisionId, fieldId, email);
+          expect(submitted.emails, `${state} must stay reusable`).toHaveLength(0);
+        }
+      });
+
+      /**
        * THE SAFETY NET for somebody who loses the one mail.
        *
        * The reminder sweep is idempotent through the token table — a stage is

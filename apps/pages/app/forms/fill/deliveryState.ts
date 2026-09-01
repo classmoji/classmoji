@@ -29,6 +29,17 @@ export type DeliveryState =
   | 'pending'
   /** The provider could not deliver it. The one thing worth interrupting for. */
   | 'bounced'
+  /**
+   * WE never managed to send it — the dispatch failed outright, so no message
+   * reached the provider at all.
+   *
+   * Kept separate from `bounced` because the copy must not lie about whose
+   * fault it was and the recovery differs: a bounce says "that address did not
+   * accept mail" and is usually a typo to fix; this says "we did not get it
+   * out" and is usually worth simply asking again. The same weight, though —
+   * from where the respondent sits, both mean the link is not coming.
+   */
+  | 'failed'
   /** Delayed, and still trying. Worth a softer word, not an alarm. */
   | 'delayed';
 
