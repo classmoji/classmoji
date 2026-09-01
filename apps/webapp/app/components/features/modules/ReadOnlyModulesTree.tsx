@@ -83,9 +83,9 @@ export const isFormClosed = (form: { status: string; closes_at: Date | string | 
 // read-only resource leaf nodes (each opens the relevant app in a new tab).
 export const buildResourceLeaves = (
   input: {
-    pages?: Array<{ page: { id: string; title: string } }>;
-    slides?: Array<{ slide: { id: string; title: string } }>;
-    quizzes?: Array<{ id: string; name: string }>;
+    pages?: Array<{ page: { id: string; title: string; is_draft?: boolean } }>;
+    slides?: Array<{ slide: { id: string; title: string; is_draft?: boolean } }>;
+    quizzes?: Array<{ id: string; name: string; status?: string }>;
     forms?: Array<{
       id: string;
       title: string;
@@ -97,8 +97,18 @@ export const buildResourceLeaves = (
   },
   level: number,
   keyPrefix: string,
-  ctx: { classSlug: string; slidesUrl: string; pagesUrl: string; quizzesHref: string }
+  // `isStaff` comes from the route's gate, never from the URL prefix. Only staff
+  // loaders fetch draft slides and non-live quizzes; it defaults to false so a
+  // caller that omits it cannot label anything.
+  ctx: {
+    classSlug: string;
+    slidesUrl: string;
+    pagesUrl: string;
+    quizzesHref: string;
+    isStaff?: boolean;
+  }
 ): ModuleTreeNode[] => {
+  const isStaff = ctx.isStaff === true;
   const out: ModuleTreeNode[] = [];
   (input.pages ?? []).forEach(({ page }) =>
     out.push({
@@ -108,6 +118,7 @@ export const buildResourceLeaves = (
       resourceIcon: 'page',
       name: page.title,
       pageId: page.id,
+      statusNode: isStaff && page.is_draft === true ? <Tag color="orange">Draft</Tag> : null,
       href: `${ctx.pagesUrl}/${ctx.classSlug}/${page.id}`,
     })
   );
@@ -118,9 +129,13 @@ export const buildResourceLeaves = (
       level,
       resourceIcon: 'slide',
       name: slide.title,
+      statusNode: isStaff && slide.is_draft === true ? <Tag color="orange">Draft</Tag> : null,
       href: `${ctx.slidesUrl}/${slide.id}`,
     })
   );
+  // A quiz reaches here unpublished only in the staff preview. DRAFT is content
+  // students have never seen; CLOSED is content they can no longer attempt —
+  // both read wrong sitting unlabelled next to the live ones.
   (input.quizzes ?? []).forEach(q =>
     out.push({
       key: `${keyPrefix}-quiz-${q.id}`,
@@ -128,6 +143,12 @@ export const buildResourceLeaves = (
       level,
       resourceIcon: 'quiz',
       name: q.name,
+      statusNode:
+        isStaff && q.status === 'DRAFT' ? (
+          <Tag color="orange">Draft</Tag>
+        ) : isStaff && q.status === 'CLOSED' ? (
+          <Tag>Closed</Tag>
+        ) : null,
       href: ctx.quizzesHref,
     })
   );

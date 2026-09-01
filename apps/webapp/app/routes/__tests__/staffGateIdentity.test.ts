@@ -76,7 +76,6 @@ vi.mock('~/components/features/dashboard', () => ({
 vi.mock('~/components/features/modules/studentTree', () => ({ buildStudentTree: () => [] }));
 vi.mock('~/components/features/modules/ReadOnlyModulesTree', () => ({ default: () => null }));
 vi.mock('../student.$class.repos/ModuleAccordion', () => ({ default: () => null }));
-vi.mock('../assistant.$class_.repos/RepositoryAssignmentsTable', () => ({ default: () => null }));
 vi.mock('../assistant.$class_.grading/RepositoryAssignmentsTable', () => ({
   default: () => null,
 }));
