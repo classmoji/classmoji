@@ -757,6 +757,16 @@ export const getDeadlinesForRange = async (
         },
       },
       pages: {
+        // Only filter out drafts if not including unpublished content
+        ...(includeUnpublished
+          ? {}
+          : {
+              where: {
+                page: {
+                  is_draft: false,
+                },
+              },
+            }),
         include: {
           page: {
             select: {

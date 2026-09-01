@@ -60,7 +60,10 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
             },
             orderBy: { student_deadline: 'asc' },
           },
+          // Pages and slides are both filtered to published content here, so
+          // the spotlight counts the same set whichever resource type it lists.
           pages: {
+            where: { page: { is_draft: false } },
             include: { page: { select: { id: true, title: true } } },
             orderBy: { order: 'asc' },
           },

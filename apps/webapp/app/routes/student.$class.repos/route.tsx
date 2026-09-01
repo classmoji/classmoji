@@ -28,7 +28,11 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
       assignments: {
         where: { is_published: true },
         include: {
-          pages: { include: { page: true }, orderBy: { order: 'asc' } },
+          pages: {
+            where: { page: { is_draft: false } },
+            include: { page: true },
+            orderBy: { order: 'asc' },
+          },
           slides: {
             where: { slide: { is_draft: false } },
             include: { slide: true },
@@ -37,7 +41,13 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
         },
         orderBy: { student_deadline: 'asc' },
       },
-      pages: { include: { page: true }, orderBy: { order: 'asc' } },
+      // Attached pages and slides are both filtered to published content here,
+      // so the tree lists the same set whichever resource type it renders.
+      pages: {
+        where: { page: { is_draft: false } },
+        include: { page: true },
+        orderBy: { order: 'asc' },
+      },
       slides: {
         where: { slide: { is_draft: false } },
         include: { slide: true },
