@@ -417,7 +417,8 @@ async function loadSiteContext(
 }
 
 /**
- * Which hostname should a request served on the SUBDOMAIN call canonical?
+ * Which hostname does a site call its own, asked from anywhere but the custom
+ * domain itself?
  *
  * The custom domain, once it is verified and the classroom is actually on PRO —
  * otherwise the two hostnames would disagree about which of them is canonical,
@@ -428,8 +429,20 @@ async function loadSiteContext(
  * The subscription lookup runs ONLY for the handful of sites that have a domain
  * to flip to — the overwhelmingly common request reads `custom_domain === null`
  * and does no extra work at all.
+ *
+ * Exported because the question has a second asker: the forms admin's copied
+ * link (`publicFormOrigin`) shares a form on the address of the course, and
+ * that address has to mean the same thing there as it does in `rel=canonical`.
+ * Its site row comes from `getSiteForClassroom` — the bare `ClassroomSite`,
+ * with no `classroom` include — so the parameter names the four columns this
+ * actually reads rather than `SiteWithClassroom`, which both callers satisfy.
  */
-async function canonicalOriginForSite(site: SiteWithClassroom): Promise<string | null> {
+export async function canonicalOriginForSite(
+  site: Pick<
+    SiteWithClassroom,
+    'subdomain' | 'classroom_id' | 'custom_domain' | 'custom_domain_verified_at'
+  >
+): Promise<string | null> {
   const subdomainOrigin = siteOrigin(site.subdomain);
   if (!site.custom_domain || !site.custom_domain_verified_at) return subdomainOrigin;
 

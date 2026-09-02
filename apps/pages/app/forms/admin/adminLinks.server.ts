@@ -1,10 +1,10 @@
 import { ClassmojiService } from '~/utils/db.server.ts';
 // The app's one place for these reads. `app/site/env.server.ts` was written for
-// the class-site routes, but `webappUrl` and `siteOrigin` are the same two
-// answers the forms admin needs, complete with their dev fallbacks — a second
-// copy here would be a second set of defaults to keep in step.
-import { siteOrigin, webappUrl } from '~/site/env.server.ts';
-import { rolePrefix } from '~/site/tenant.server.ts';
+// the class-site routes, but `webappUrl` is the same answer the forms admin
+// needs, complete with its dev fallbacks — a second copy here would be a second
+// set of defaults to keep in step.
+import { webappUrl } from '~/site/env.server.ts';
+import { canonicalOriginForSite, rolePrefix } from '~/site/tenant.server.ts';
 
 /**
  * The two links the forms admin screens need that point OUTSIDE the pages app.
@@ -36,18 +36,28 @@ export function classroomHomeUrl(role: string, classroomSlug: string): string {
 /**
  * The origin a form's public link should be shared on.
  *
- * The SHORT class-site link when the classroom has a site — `cs52.classmoji.io`
- * — because that is the address of the course, and a link that fits on a slide
- * is the whole point of the bridge in `app/site/forms.ts`. Both hostnames serve
- * the same form; the site one just 302s across.
+ * The SHORT class-site link when the classroom has a site — `cs52.classmoji.io`,
+ * or `cs52.dartmouth.edu` once the instructor connects their own domain —
+ * because that is the address of the course, and a link that fits on a slide is
+ * the whole point of the bridge in `app/site/forms.ts`. Every one of those
+ * hostnames serves the same form; the site ones just 302 across.
+ *
+ * WHICH of them is the site's own rule, not a second one written here:
+ * `canonicalOriginForSite` is what the site itself puts in `rel=canonical`, and
+ * a form shared on a course should be shared on the address that course claims.
+ * The deliberate consequence is the lapsed case. When PRO lapses the custom
+ * domain stops being canonical and the copied link goes back to the subdomain —
+ * a longer URL, but the custom host is 302ing visitors to that subdomain
+ * anyway, and a link that keeps working beats a link that is shorter.
  *
  * Falls back to the origin that served THIS request (not `pagesUrl()`): that is
  * what the list has always copied, and it is what keeps the link right on a
  * devport, in a tunnel, and anywhere else the configured URL is not the one the
  * instructor is actually looking at.
  *
- * `siteOrigin` returns null when SITE_BASE_DOMAIN is unset, so an environment
- * with the site feature off keeps the canonical link with no branch of its own.
+ * The canonical origin is null when SITE_BASE_DOMAIN is unset, so an
+ * environment with the site feature off keeps the canonical link with no branch
+ * of its own.
  */
 export async function publicFormOrigin(
   classroom: { id: string; status?: string; is_archived?: boolean },
@@ -65,5 +75,5 @@ export async function publicFormOrigin(
 
   const site = await ClassmojiService.site.getSiteForClassroom(classroom.id);
   if (!site || !site.is_enabled) return requestOrigin;
-  return siteOrigin(site.subdomain) ?? requestOrigin;
+  return (await canonicalOriginForSite(site)) ?? requestOrigin;
 }
