@@ -77,19 +77,43 @@ describe('cross-file registry agreement', () => {
   const repoFile = (relative: string) =>
     readFileSync(fileURLToPath(new URL(relative, import.meta.url)), 'utf-8');
 
-  it('RESERVED_PAGE_SLUGS matches the migration that evicted pages holding them', () => {
-    const sql = repoFile(
-      '../../../database/migrations/20260821003300_page_slug_backfill_and_unique/migration.sql'
-    );
+  const reservedArrayIn = (migration: string): Set<string> => {
+    const sql = repoFile(`../../../database/migrations/${migration}/migration.sql`);
     const declaration = sql.match(/reserved CONSTANT TEXT\[\] := ARRAY\[([^\]]+)\]/);
-    if (!declaration) throw new Error('reserved array not found in the migration');
+    if (!declaration) throw new Error(`reserved array not found in ${migration}`);
 
-    const fromSql = declaration[1]
-      .split(',')
-      .map(entry => entry.trim().replace(/^'|'$/g, ''))
-      .filter(Boolean);
+    return new Set(
+      declaration[1]
+        .split(',')
+        .map(entry => entry.trim().replace(/^'|'$/g, ''))
+        .filter(Boolean)
+    );
+  };
 
-    expect(new Set(fromSql)).toEqual(new Set(RESERVED_PAGE_SLUGS));
+  /**
+   * The LATEST eviction migration is the one that has to match exactly: it ran
+   * against every row in the table, so anything reserved but absent from its
+   * array is a slug some page still holds and the router will never reach.
+   * Adding an entry to the registry means adding a migration here too.
+   */
+  it('RESERVED_PAGE_SLUGS matches the migration that evicted pages holding them', () => {
+    expect(reservedArrayIn('20260902180000_reserve_forms_page_slug')).toEqual(
+      new Set(RESERVED_PAGE_SLUGS)
+    );
+  });
+
+  /**
+   * Earlier migrations are HISTORY — they name the registry as it stood when
+   * they ran — so they are only required to be a subset. An entry that vanished
+   * from the registry but still appears in one of them would mean a page was
+   * evicted from a path that is free again, which nothing else would catch.
+   */
+  it('the first eviction migration lists only slugs still reserved today', () => {
+    for (const slug of reservedArrayIn('20260821003300_page_slug_backfill_and_unique')) {
+      expect(RESERVED_PAGE_SLUGS.has(slug), `${slug} was evicted but is no longer reserved`).toBe(
+        true
+      );
+    }
   });
 
   it('SUBDOMAIN_REGEX matches the CHECK constraint that enforces it', () => {
