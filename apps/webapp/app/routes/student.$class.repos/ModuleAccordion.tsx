@@ -5,17 +5,20 @@ import { IconChevronDown, IconCheck, IconUsers } from '@tabler/icons-react';
 import ResourceLinks from './ResourceLinks';
 import AssignmentCard from './AssignmentCard';
 
+// The `is_draft` / `status` flags below are only ever set to a draft value on
+// the teaching-team view, whose loader fetches unpublished content too.
 interface LinkedPage {
-  page: { id: string; title: string };
+  page: { id: string; title: string; is_draft?: boolean };
 }
 
 interface LinkedSlide {
-  slide: { id: string; title: string };
+  slide: { id: string; title: string; is_draft?: boolean };
 }
 
 interface LinkedQuiz {
   id: string;
   name: string;
+  status?: string;
 }
 
 interface Assignment {
@@ -23,6 +26,8 @@ interface Assignment {
   title: string;
   grades_released?: boolean;
   student_deadline?: string | Date | null;
+  // Only ever false on the teaching-team view, which fetches drafts too.
+  is_published?: boolean;
   [key: string]: unknown;
 }
 
@@ -35,6 +40,8 @@ interface Repository {
   team_formation_mode?: string | null;
   team_formation_deadline?: string | Date | null;
   max_team_size?: number | null;
+  // Only ever false on the teaching-team view, which fetches drafts too.
+  is_published?: boolean;
   assignments?: Assignment[];
   pages?: LinkedPage[];
   slides?: LinkedSlide[];
@@ -146,7 +153,8 @@ const TeamFormationBanner = ({ repository, userTeam, classSlug }: TeamFormationB
 
 interface ModuleCardProps {
   repository: Repository;
-  ordinal: number;
+  /** Position among PUBLISHED repositories; null for a draft, which has none. */
+  ordinal: number | null;
   repoAssignmentsByAssignmentId: Record<string, RepoAssignment>;
   userTeam?: UserTeam;
   classSlug: string | undefined;
@@ -157,12 +165,27 @@ interface ModuleCardProps {
 }
 
 const buildSummary = (repository: Repository) => {
-  const qCount = repository.quizzes?.length ?? 0;
+  const quizzes = repository.quizzes ?? [];
+  const qCount = quizzes.length;
   const sCount = repository.slides?.length ?? 0;
   const pCount = repository.pages?.length ?? 0;
   const aCount = repository.assignments?.length ?? 0;
+  // Pages, slides and assignments each carry their own Draft chip one row away,
+  // so their totals stand alone. Quizzes are counted here and nowhere else, so
+  // an unannotated total would read as more LIVE quizzes than the repository
+  // actually has — a draft was never released, a closed one can no longer be
+  // attempted. `status` is undefined on student payloads, so this annotates
+  // nothing there.
+  const qDrafts = quizzes.filter(q => q.status === 'DRAFT').length;
+  const qClosed = quizzes.filter(q => q.status === 'CLOSED').length;
   const parts: string[] = [];
-  if (qCount) parts.push(`${qCount} ${qCount === 1 ? 'quiz' : 'quizzes'}`);
+  if (qCount) {
+    const quizLabel = `${qCount} ${qCount === 1 ? 'quiz' : 'quizzes'}`;
+    const notes: string[] = [];
+    if (qDrafts) notes.push(`${qDrafts} draft${qDrafts === 1 ? '' : 's'}`);
+    if (qClosed) notes.push(`${qClosed} closed`);
+    parts.push(notes.length ? `${quizLabel} (${notes.join(', ')})` : quizLabel);
+  }
   if (sCount) parts.push(`${sCount} slide ${sCount === 1 ? 'deck' : 'decks'}`);
   if (pCount) parts.push(`${pCount} ${pCount === 1 ? 'page' : 'pages'}`);
   if (aCount) parts.push(`${aCount} ${aCount === 1 ? 'assignment' : 'assignments'}`);
@@ -188,7 +211,13 @@ const ModuleCard = ({
     const ra = repoAssignmentsByAssignmentId[String(a.id)];
     return ra?.status === 'CLOSED';
   }).length;
-  const pct = total > 0 ? Math.round((done / total) * 100) : null;
+  // Submission progress is a viewer's OWN progress, so it needs their own
+  // repo-assignments. The staff loader passes `{}`, which would otherwise render
+  // every bar at a meaningless 0% — a wall of them in an all-drafts classroom.
+  // Keyed off the data rather than the URL prefix: whoever has no submissions to
+  // show gets no bar, whichever prefix they arrived on.
+  const hasOwnSubmissions = Object.keys(repoAssignmentsByAssignmentId).length > 0;
+  const pct = hasOwnSubmissions && total > 0 ? Math.round((done / total) * 100) : null;
   const summary = buildSummary(repository);
 
   const hasExpandableContent =
@@ -216,12 +245,25 @@ const ModuleCard = ({
       >
         <div className="flex items-start justify-between gap-3">
           <div className="flex-1 min-w-0">
-            <div className="text-xs font-semibold tracking-[0.18em] text-ink-4">
-              MODULE #{ordinal}
+            {/* Drafts hold no place in the published sequence, so they get no
+                number rather than one that shifts every other module's. */}
+            {ordinal !== null && (
+              <div className="text-xs font-semibold tracking-[0.18em] text-ink-4">
+                MODULE #{ordinal}
+              </div>
+            )}
+            <div className="mt-1 flex flex-wrap items-center gap-2">
+              <h3 className="text-lg sm:text-xl font-semibold text-ink-0 tracking-tight">
+                {repository.title}
+              </h3>
+              {/* Staff-only: the loader that feeds this view fetches drafts, so
+                  say which rows students cannot see yet. */}
+              {repository.is_published === false && (
+                <Tag color="orange" className="shrink-0">
+                  Draft
+                </Tag>
+              )}
             </div>
-            <h3 className="mt-1 text-lg sm:text-xl font-semibold text-ink-0 tracking-tight">
-              {repository.title}
-            </h3>
             {summary && <p className="text-sm text-ink-3 mt-1">{summary}</p>}
           </div>
           {hasExpandableContent && (
@@ -319,6 +361,17 @@ const ModuleAccordion = ({
   pagesUrl,
   rolePrefix = 'student',
 }: ModuleAccordionProps) => {
+  // MODULE #N counts PUBLISHED repositories only, so a staff viewer sees the
+  // same numbers their students do — the student dashboard computes the ordinal
+  // the same way, as an index into the published list. Drafts sit in place but
+  // take no number, rather than pushing every later module's number up by one.
+  let publishedSoFar = 0;
+  const ordinals = repositories.map(r => (r.is_published === false ? null : ++publishedSoFar));
+  // Auto-expand surfaces a viewer's own unfinished work, so it needs their own
+  // repo-assignments. The staff loader passes `{}`, where every card would
+  // qualify and an all-drafts classroom would open fully expanded.
+  const hasOwnSubmissions = Object.keys(repoAssignmentsByAssignmentId).length > 0;
+
   return (
     <div className="space-y-4 lg:space-y-5">
       {repositories.map((repository, idx) => {
@@ -330,14 +383,14 @@ const ModuleAccordion = ({
           <ModuleCard
             key={repository.id}
             repository={repository}
-            ordinal={idx + 1}
+            ordinal={ordinals[idx]}
             repoAssignmentsByAssignmentId={repoAssignmentsByAssignmentId}
             userTeam={repository.slug ? userTeamsByModuleSlug[repository.slug] : undefined}
             classSlug={classSlug}
             slidesUrl={slidesUrl}
             pagesUrl={pagesUrl}
             rolePrefix={rolePrefix}
-            defaultOpen={hasOpenAssignment}
+            defaultOpen={hasOwnSubmissions && hasOpenAssignment}
           />
         );
       })}
