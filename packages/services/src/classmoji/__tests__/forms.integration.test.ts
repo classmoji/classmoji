@@ -1218,7 +1218,9 @@ describe.skipIf(!RUN)('forms services (integration)', () => {
 
   describe('drafts, staff triage, and the expiry sweep', () => {
     it('refuses an anonymous server-side draft when save_partials is off', async () => {
-      const { formId, revisionId } = await makeOpenForm();
+      // Explicitly off: partial saving DEFAULTS to on now, so a form that says
+      // nothing gets it. This test is about the instructor who turned it off.
+      const { formId, revisionId } = await makeOpenForm({ save_partials: false });
       expect(
         await codeOf(
           responseService.upsertDraft({

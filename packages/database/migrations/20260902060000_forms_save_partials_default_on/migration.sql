@@ -1,0 +1,12 @@
+-- Server-side partial saving is ON by default for new forms.
+--
+-- localStorage alone loses a half-filled form to a different device, a private
+-- window, or cleared site data, and "I typed all that and it's gone" is the
+-- ordinary disaster this prevents. An instructor who would rather not hold
+-- partial answers can still turn it off per form.
+--
+-- DEFAULT ONLY. Existing forms keep whatever they were set to — an instructor
+-- who deliberately turned this off must not have it turned back on by a
+-- migration, and one who never thought about it did not consent to storing
+-- partial answers under the old default either.
+ALTER TABLE "forms" ALTER COLUMN "save_partials" SET DEFAULT true;
