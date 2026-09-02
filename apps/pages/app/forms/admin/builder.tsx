@@ -15,7 +15,7 @@ import {
   sortableKeyboardCoordinates,
   verticalListSortingStrategy,
 } from '@dnd-kit/sortable';
-import { IconListDetails, IconLock, IconPlus } from '@tabler/icons-react';
+import { IconCopy, IconListDetails, IconLock, IconPlus } from '@tabler/icons-react';
 import type { FormField } from '@classmoji/services/form-contract';
 
 import { ClassmojiService } from '~/utils/db.server.ts';
@@ -23,6 +23,9 @@ import { assertFormAdmin, formMutationBlocked } from '~/utils/formAuth.server.ts
 import FormPreview from '~/components/forms/FormPreview.tsx';
 import { ConfirmDialog } from '~/components/forms/ConfirmDialog.tsx';
 import FieldCard from '~/components/forms/builder/FieldCard.tsx';
+import { BackToClassroom } from '~/components/forms/BackToClassroom.tsx';
+import { useCopyLink } from '~/components/forms/useCopyLink.ts';
+import { classroomHomeUrl, publicFormOrigin } from './adminLinks.server.ts';
 import type { ScopeChoices } from '~/components/forms/builder/FieldConfig.tsx';
 import { FIELD_TYPE_META, makeField } from '~/components/forms/fieldTypes.ts';
 
@@ -90,7 +93,9 @@ export const loader = async ({
   request: Request;
 }) => {
   const classroomSlug = params.classroomSlug!;
-  const { classroom } = await assertFormAdmin(classroomSlug, request, { action: 'edit_form' });
+  const { classroom, membership } = await assertFormAdmin(classroomSlug, request, {
+    action: 'edit_form',
+  });
 
   const form = await ClassmojiService.form.findBySlug(classroom.id, params.formSlug!, {
     includeCurrentRevision: true,
@@ -100,15 +105,23 @@ export const loader = async ({
   // Team-review scopes. Read here rather than in the component because both
   // lists are classroom-scoped data and the picker must never be able to name a
   // tag or an assignment from another classroom.
-  const [tags, repositories] = await Promise.all([
+  const [tags, repositories, shareOrigin] = await Promise.all([
     ClassmojiService.organizationTag.findByClassroomId(classroom.id),
     ClassmojiService.repository.findByClassroomId(classroom.id),
+    // The same origin the list copies, resolved the same way, so the two
+    // surfaces can never hand out two different addresses for one form.
+    publicFormOrigin(classroom, new URL(request.url).origin),
   ]);
 
   const revisions = (form as { revisions?: Array<{ version: number }> }).revisions ?? [];
 
   return {
     classroomSlug,
+    classroomName: (classroom as { name?: string | null }).name ?? classroomSlug,
+    classroomHome: classroomHomeUrl(membership.role, classroomSlug),
+    // Built on the server because only the server knows whether this classroom
+    // has a course site to shorten the link onto.
+    publicUrl: `${shareOrigin}/${classroomSlug}/forms/${form.slug}`,
     form: {
       id: form.id,
       title: form.title,
@@ -254,6 +267,7 @@ export const action = async ({
 
 export default function FormBuilder() {
   const data = useLoaderData<typeof loader>();
+  const { copiedKey, copy } = useCopyLink();
   const fetcher = useFetcher<{
     error?: string;
     ok?: boolean;
@@ -371,12 +385,16 @@ export default function FormBuilder() {
     <div className="mx-auto max-w-7xl px-6 py-8">
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
         <div className="min-w-0">
-          <Link
-            to={`/${data.classroomSlug}/forms`}
-            className="text-xs text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
-          >
-            ← Forms
-          </Link>
+          <div className="flex items-center gap-1.5 text-xs text-gray-400">
+            <BackToClassroom href={data.classroomHome} name={data.classroomName} />
+            <span className="text-gray-300 dark:text-gray-600">·</span>
+            <Link
+              to={`/${data.classroomSlug}/forms`}
+              className="hover:text-gray-600 dark:hover:text-gray-300"
+            >
+              Forms
+            </Link>
+          </div>
           <input
             value={title}
             onChange={event => setTitle(event.target.value)}
@@ -398,6 +416,19 @@ export default function FormBuilder() {
               responses page owns its own empty state — gating this on a count
               would hide the link in precisely the case where someone is
               wondering whether anything has come in. */}
+          {/* The link a respondent gets — the SHORT one on a classroom that has
+              a course site. The builder is where a form is finished, and the
+              instructor's next move after publishing it is to send it to
+              someone; until now that meant going back to the list to find the
+              copy button. */}
+          <button
+            type="button"
+            onClick={() => copy(data.publicUrl)}
+            title={`Copy the public link to this form (${data.publicUrl})`}
+            className="flex items-center gap-1.5 rounded-md border border-gray-300 px-3 py-2 text-sm font-medium text-gray-700 hover:border-gray-400 hover:text-gray-900 dark:border-gray-600 dark:text-gray-200 dark:hover:border-gray-500 dark:hover:text-white"
+          >
+            <IconCopy size={16} /> {copiedKey ? 'Copied' : 'Copy link'}
+          </button>
           <Link
             to={`/${data.classroomSlug}/forms/${data.form.slug}/responses`}
             title="See the responses collected by this form"

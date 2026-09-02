@@ -162,10 +162,17 @@ export const RESERVED_SUBDOMAINS: ReadonlySet<string> = new Set([
  * because the platform answers that path first.
  *
  * Two other places must agree with this set and cannot import it:
- *   - packages/database/migrations/20260821003300_page_slug_backfill_and_unique/migration.sql
- *     re-lists it (SQL has no imports) to evict pages already squatting on one.
+ *   - the migrations that evict pages already squatting on one (SQL has no
+ *     imports, so each re-lists the whole set):
+ *     20260821003300_page_slug_backfill_and_unique added the first five;
+ *     20260902180000_reserve_forms_page_slug added `forms`.
  *   - the site route table, which is what actually claims these paths.
  * page.service's create() DOES import it, so new pages can never land here.
+ *
+ * ADDING AN ENTRY IS TWO CHANGES, not one. Listing a slug here stops new pages
+ * from taking it; it does nothing about the pages already holding it, which
+ * keep a slug the router will never reach. Each addition therefore ships with a
+ * migration that evicts the incumbents, modelled on the August one.
  *
  * `robots.txt` cannot currently be produced by titleToIdentifier (the dot is
  * stripped) and is listed anyway: the registry describes the URL namespace, not
@@ -176,6 +183,8 @@ export const RESERVED_PAGE_SLUGS: ReadonlySet<string> = new Set([
   'classmoji',
   'sign-in',
   'schedule',
+  // The class-site short link to a form: `{subdomain}/forms/{formSlug}`.
+  'forms',
   'robots.txt',
 ]);
 
