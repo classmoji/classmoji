@@ -150,7 +150,17 @@ export function formLinkCookie({
 // ─── The WATCH cookie ───────────────────────────────────────────────────────
 
 /**
- * "Did the message this browser just caused bounce?" — and nothing else.
+ * "Which send did this browser cause?" — and only ever that.
+ *
+ * ── Two questions, one id ──────────────────────────────────────────────────
+ * It was built for one: did the message this browser just caused bounce? The
+ * fill action now reads it back for a second, and they are the same question
+ * asked from different ends — the page asks `/delivery` how that send went, and
+ * the action asks whether a send exists to point at instead of making another
+ * (see `heldTokenId` in `forms/fill/fill.tsx` and `findLiveLink` in the
+ * service). Both are questions about something the holder themselves caused;
+ * neither is answerable by anyone else's cookie, because the service checks the
+ * id against the response being written.
  *
  * ── This is NOT the cookie above, and the difference is the whole design ───
  * The verified-link cookie holds the RAW MAGIC TOKEN and means "the person here
@@ -162,8 +172,11 @@ export function formLinkCookie({
  *
  * So it holds a `form_magic_tokens` ROW ID. Nothing in this system
  * authenticates with a row id: it opens no link, submits no response and proves
- * no address. The single question it can answer is the one its holder already
- * knows the context for — "the send I just triggered, how did it go?"
+ * no address. The two questions above are the only ones it can answer, and both
+ * are about a send its holder already knows they triggered. Even the reuse one
+ * takes nothing away: the worst a forged or borrowed id achieves is suppressing
+ * a mail to an address, which is precisely what that address's own browser
+ * would have done a moment earlier.
  *
  * A DIFFERENT NAME, deliberately. `readFormLinkCookie` matches on the name, so
  * these two can never be confused for one another by accident; the submit path
@@ -182,13 +195,34 @@ const watchCookieNameFor = (formSlug: string): string =>
   `forms_watch_${formSlug.replace(/[^a-zA-Z0-9-]/g, '')}`;
 
 /**
- * How long a browser may keep asking about one send.
+ * How long this cookie lives — which is now TWO promises, not one.
  *
- * Short: the page polls for a bounce for a bounded window while somebody is
- * actually on the form. A bounce that lands after they have gone is what the
- * STAFF surfacing is for — this cookie is not trying to be a mailbox.
+ * The first is the original: how long a browser may keep asking whether one
+ * send bounced. That is a short question. The page polls for a couple of
+ * minutes while somebody is actually on the form, and a bounce landing after
+ * they have gone is what the STAFF surfacing is for — this cookie has never
+ * been trying to be a mailbox.
+ *
+ * The second is why the number went up. The same id is now the proof a browser
+ * offers that it ALREADY RECEIVED a link for this form (see `findLiveLink` in
+ * `formResponse.service`), so this lifetime IS the boundary between "still
+ * filling the same form in" and "came back later". Both mistakes are visible
+ * from the outside: too short and somebody slow over a long form gets a second
+ * identical mail at Submit; too long and somebody returning tomorrow is told to
+ * check an inbox for a link they can no longer find.
+ *
+ * FOUR HOURS covers any single sitting, interruptions included, and expires
+ * comfortably before tomorrow morning — which is the return visit that must be
+ * mailed. It is not a licence to be vague about the boundary: cookies cleared,
+ * a private window, a different device and a different browser all present
+ * nothing and are mailed immediately, whatever the clock says.
+ *
+ * The longer life costs nothing on the polling side. `/delivery` still answers
+ * only `pending` for an id it cannot find, and `mayLearnDeliveryOutcome` is
+ * what bounds how much a client can learn — neither is a function of how long
+ * the cookie lives.
  */
-export const WATCH_COOKIE_MAX_AGE_SECONDS = 30 * 60;
+export const WATCH_COOKIE_MAX_AGE_SECONDS = 4 * 60 * 60;
 
 /** The watch id this browser holds for one form, or null. */
 export function readFormWatchCookie(request: Request, formSlug: string): string | null {

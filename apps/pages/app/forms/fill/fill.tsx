@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { data, useFetcher, useLoaderData, useParams, type SubmitTarget } from 'react-router';
 import { exceedsMaxDepth, type FormField } from '@classmoji/services/form-contract';
 
@@ -14,6 +14,7 @@ import {
   formLinkCookie,
   formWatchCookie,
   readFormLinkCookie,
+  readFormWatchCookie,
 } from '~/utils/formLinkCookie.server.ts';
 import { dispatchVerifyEmail } from '~/utils/tasks.server.ts';
 import { checkMailDomain, domainOf, suggestDomain } from '~/utils/emailDomain.server.ts';
@@ -133,6 +134,16 @@ const normalizeAddress = (email: string): string => email.trim().toLowerCase();
  */
 const DELIVERY_POLL_MS = 4_000;
 const DELIVERY_POLL_WINDOW_MS = 3 * 60_000;
+
+/**
+ * How long the blur send waits to see whether a Submit is following it.
+ *
+ * A quarter of a second: comfortably longer than the gap between `focusout` and
+ * `submit` on a click (one mouseup, plus the form's own validation pass), and
+ * far too short for anybody tabbing on to the next question to notice their
+ * link taking a moment longer to leave. See `cancelPendingLinkSend`.
+ */
+const BLUR_SEND_HOLD_MS = 250;
 
 /**
  * Watch for a bounce on the send this browser just caused.
@@ -595,6 +606,31 @@ export const action = async ({
   const noAdvice = { state: 'domain-checked', advice: null } satisfies ActionResult;
 
   /**
+   * ── The READ half of the watch cookie: "have we already mailed this fill?" ─
+   *
+   * The watch cookie was set on the reply that sent a link, and holds that
+   * send's row id. Presenting it back is how this browser shows it is the one
+   * we mailed — which is the entire basis of the reuse rule now. See
+   * `findLiveLink`; the service checks the id names a live token for the very
+   * response being written, so a cookie left over from a different address, or
+   * the random stand-in a no-send reply sets, resolves to nothing and a fresh
+   * link is minted.
+   *
+   * This replaced a TIME window, which was wrong in both directions at once. A
+   * day of it turned "you already have a link" into a lie for anyone who came
+   * back the next morning; two minutes of it sent two identical mails to anyone
+   * who took longer than two minutes over the form. Neither length was ever
+   * going to work, because the question was never how long ago — it was whether
+   * this is still the same browser, mid-fill.
+   *
+   * A browser that blocks cookies presents nothing and is mailed on both the
+   * blur and the submit. That is the honest fallback: two mails is worse than
+   * one, and better than telling somebody to check an inbox they have no link
+   * in.
+   */
+  const heldTokenId = readFormWatchCookie(request, params.formSlug!);
+
+  /**
    * ── The watch cookie, on EVERY reply an early send can produce ───────────
    *
    * The page polls `/delivery` with this to learn whether the message it just
@@ -602,18 +638,20 @@ export const action = async ({
    * header is IDENTICAL IN SHAPE whatever happened on the server.
    *
    * Four outcomes here send no mail at all: a sprung honeypot, an address that
-   * has already verified, an address a live link already covers, and a send the
-   * per-address cooldown swallowed. Every one of them renders the same line as a
-   * real send, deliberately — that sameness is what stops this endpoint
-   * answering "has this person already applied?", and it is what stops a bot
-   * learning that the trap sprang. A cookie present only when mail actually went
-   * out would put both answers back on the wire, in a response header, for
-   * anybody willing to look.
+   * has already verified, a browser that presented a link it still holds, and a
+   * send the per-address cooldown swallowed. Every one of them renders the same
+   * line as a real send, deliberately — that sameness is what stops this
+   * endpoint answering "has this person already applied?", and it is what stops
+   * a bot learning that the trap sprang. A cookie present only when mail
+   * actually went out would put both answers back on the wire, in a response
+   * header, for anybody willing to look.
    *
    * So there is ALWAYS a cookie, and when there is no real send to point at it
    * carries a fresh random id. `/delivery` answers `pending` for an id it cannot
    * find — the same thing it says for a send in flight and for one that arrived
-   * — so the substitution is not observable from outside.
+   * — so the substitution is not observable from outside. The stand-in is
+   * harmless as a `heldTokenId` too: it names no token, so the next request
+   * mints rather than falling silent.
    */
   const withWatch = (result: ActionResult, watchTokenId: string | null) =>
     data(result, {
@@ -825,6 +863,11 @@ export const action = async ({
         name: identity.name,
         revisionId,
         force: body.intent === 'resend',
+        // NOT on a resend. That is somebody looking at "we sent a link" and
+        // telling us it never came; answering them with the link they are
+        // holding a cookie for is the one reply that helps nobody. `force`
+        // skips the check anyway — passing null says so out loud.
+        heldTokenId: body.intent === 'resend' ? null : heldTokenId,
       });
 
       await dispatchVerifyEmail(result.emails, result.verifyUrl ?? '');
@@ -924,13 +967,19 @@ export const action = async ({
       // The revision the BROWSER rendered against, not the current one — sending
       // the current one would make the staleness check unfalsifiable.
       revisionId,
+      // The link this browser already holds, if it holds one — the blur send
+      // set the cookie naming it. Without this the submit has no way to tell
+      // "I was mailed a minute ago" from "I have never been mailed", and would
+      // have to guess from a clock.
+      heldTokenId,
     });
 
     /**
-     * An EMPTY `emails` means a live link already covers this address — the one
-     * minted when they typed it — and dispatching nothing is the correct
-     * outcome, not a swallowed failure. The service only returns empty when it
-     * has confirmed an unspent, unexpired, young token exists, so "no mail" is
+     * An EMPTY `emails` means this browser already holds a live link for this
+     * response — the one minted when they typed the address — and dispatching
+     * nothing is the correct outcome, not a swallowed failure. The service only
+     * returns empty when the id this browser presented names an unspent,
+     * unexpired token whose send is not known to have failed, so "no mail" is
      * never "no link".
      */
     await dispatchVerifyEmail(result.emails, result.verifyUrl ?? '');
@@ -1295,6 +1344,38 @@ export default function FormFill() {
   const domainFetcher = useFetcher<ActionResult>();
   const domainAdvice =
     domainFetcher.data?.state === 'domain-checked' ? domainFetcher.data.advice : null;
+
+  /**
+   * ── The blur send waits a beat, so the submit can call it off ────────────
+   *
+   * Somebody who types their address LAST and clicks Submit fires both: the
+   * click blurs the email field on its way to the button, so a `verify-email`
+   * request and a `submit` request leave within milliseconds of each other.
+   * Neither carries the watch cookie the other is about to set — no reply has
+   * come back yet — so the server cannot tell they are one action, and mails
+   * twice. On a form whose email input sits at the bottom (every form that
+   * does not ask for an address of its own) that is not an edge case, it is
+   * the ordinary path.
+   *
+   * The server cannot fix this: the two requests are genuinely indistinguish-
+   * able from two browsers, which is exactly what scoping reuse to a browser
+   * means. So the page, which knows they are one action, says so — by holding
+   * the blur send for a moment and dropping it if a submit follows. The submit
+   * mints and mails the link itself, so nothing is lost by not sending twice.
+   *
+   * Long enough to cover the gap between `focusout` and `submit` (one mouseup,
+   * plus the form's own validation), short enough that somebody who tabs on to
+   * the next question never notices. If validation REFUSES the submit, no
+   * cancel happens and the send goes out on schedule — which is right, because
+   * they are still filling the form in.
+   */
+  const pendingLinkSend = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const cancelPendingLinkSend = () => {
+    if (pendingLinkSend.current === null) return;
+    clearTimeout(pendingLinkSend.current);
+    pendingLinkSend.current = null;
+  };
+  useEffect(() => cancelPendingLinkSend, []);
 
   /**
    * Dismissed by domain, not by a bare boolean.
@@ -1916,17 +1997,27 @@ export default function FormFill() {
          * single round trip.
          */
         onIdentityEmail={submission => {
-          linkFetcher.submit(
-            {
-              intent: 'verify-email',
-              identity: { email: submission.email, name: submission.name },
-              revisionId: data.revisionId,
-              trap: submission.trap,
-            } as SubmitTarget,
-            { method: 'post', encType: 'application/json' }
-          );
+          // Held for a beat rather than sent outright — see
+          // `cancelPendingLinkSend`. A Submit arriving in that window is the
+          // same action as this blur, and mails the link itself.
+          cancelPendingLinkSend();
+          pendingLinkSend.current = setTimeout(() => {
+            pendingLinkSend.current = null;
+            linkFetcher.submit(
+              {
+                intent: 'verify-email',
+                identity: { email: submission.email, name: submission.name },
+                revisionId: data.revisionId,
+                trap: submission.trap,
+              } as SubmitTarget,
+              { method: 'post', encType: 'application/json' }
+            );
+          }, BLUR_SEND_HOLD_MS);
           // Fired alongside, never before or after: they are two independent
           // questions about the same address and neither waits on the other.
+          // NOT held back with the send above: it mails nothing, and the
+          // "did you mean gmail.com?" warning is most useful while they are
+          // still looking at the field.
           domainFetcher.submit(
             {
               intent: 'check-domain',
@@ -1951,6 +2042,10 @@ export default function FormFill() {
           )
         }
         onSubmit={submission => {
+          // This submit IS the blur that just fired, finishing. Drop the held
+          // send: it would be a second identical mail, and this request mints
+          // and mails the link anyway.
+          cancelPendingLinkSend();
           // Held BEFORE the request goes out, so "wrong address" has something
           // to come back to even if the round trip never completes.
           setKept({

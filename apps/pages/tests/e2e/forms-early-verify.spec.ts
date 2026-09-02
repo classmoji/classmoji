@@ -4,7 +4,12 @@ import * as path from 'path';
 import { fileURLToPath } from 'url';
 import { test, expect, type Page } from '@playwright/test';
 
-import { getClassroomIdBySlug, getTestClassroomSlug, getTestPrisma, getTestServices } from '../helpers';
+import {
+  getClassroomIdBySlug,
+  getTestClassroomSlug,
+  getTestPrisma,
+  getTestServices,
+} from '../helpers';
 import { parseFormDefinition } from '@classmoji/services/form-contract';
 import { presetByKey } from '../../app/components/forms/presets.ts';
 import { SUBMISSION_RATE_LIMIT } from '../../app/utils/submissionRate.server.ts';
@@ -28,10 +33,12 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
  *  2. a link opened before the form is finished says so, and does not render an
  *     empty answer set as if it were a submission;
  *  3. a verified browser submits in one step — and NO second mail is sent;
- *  3b. neither does an UNVERIFIED one: the submit reuses the link already in
- *     the inbox, and the check-email screen says so rather than promising a
- *     message nobody sent. A submit with nothing to reuse still mails, and a
- *     spent link puts the mail back — nobody is left holding no link;
+ *  3b. neither does an UNVERIFIED one: the submit reuses the link this browser
+ *     already holds, and the check-email screen says so rather than promising a
+ *     message nobody sent. It holds it however long the form took — reuse is
+ *     scoped to the browser, not to a clock. A submit with nothing to show
+ *     still mails, and a spent link puts the mail back — nobody is left holding
+ *     no link;
  *  4. THE BINDING: a browser holding a verified link for one address cannot
  *     submit under another;
  *  5. the old two-step flow still works untouched, because the early send is an
@@ -382,17 +389,60 @@ test.describe('the link, opened before the form is finished', () => {
     expect(Object.values(rows[0].answers as Record<string, unknown>)).toContain('Old Way');
   });
 
+  /**
+   * ── THE ADDRESS TYPED LAST, AND THE CLICK THAT BLURS IT ──────────────────
+   *
+   * The one journey where the blur send and the submit are genuinely
+   * simultaneous. Clicking Submit moves focus off the email field on the way to
+   * the button, so `verify-email` and the submit leave within milliseconds of
+   * each other — and neither carries the watch cookie the other is about to
+   * set, because no reply has come back yet.
+   *
+   * The server cannot tell those two requests apart from two browsers. That is
+   * not a bug in the reuse rule, it is what scoping reuse to a browser MEANS —
+   * so the page is what has to know they are one action, by holding the blur
+   * send for a moment and dropping it when a submit follows (see
+   * `BLUR_SEND_HOLD_MS` in `fill.tsx`).
+   *
+   * Measured, not assumed: before that hold this produced TWO identical mails,
+   * seconds apart, on every form whose email input sits at the bottom — which
+   * is every form that does not ask for an address of its own. One mail is the
+   * whole assertion.
+   */
+  test('typing the address last and clicking Submit still mails exactly once', async ({ page }) => {
+    const email = freshEmail('lastfield');
+    await page.goto(fillPath);
+
+    // Everything EXCEPT the address, so the email field is the last one touched
+    // and the click to Submit is what blurs it.
+    await fillTheRest(page, 'Last Field');
+    await page.getByLabel(EMAIL_LABEL, { exact: true }).fill(email);
+    await page.getByRole('button', { name: 'Submit' }).click();
+
+    await expect(page.getByRole('heading', { name: 'Check your email' })).toBeVisible();
+    await waitForLinks(email, 1);
+
+    // Long enough for a suppressed second send to have shown up if there were
+    // one — the hold is a quarter of a second, and the dispatch behind it is
+    // fast.
+    await page.waitForTimeout(1500);
+    expect(linksFor(email)).toHaveLength(1);
+
+    // And the one link that went out finishes the job.
+    await page.goto(linkTarget(linksFor(email)[0]));
+    await expect(page.getByText(/You[’']re in\./)).toBeVisible();
+  });
 });
 
-// ─── One live link per address ──────────────────────────────────────────────
+// ─── One live link per address, per browser ─────────────────────────────────
 
 /**
  * The two ways the reuse could have gone wrong, and neither does.
  *
- * Reuse stands in for a mail only when there is genuinely a working link to
- * stand in for. Everywhere else — nothing sent before, or a link that has been
- * spent — the mail comes back, because the one state nobody may end up in is
- * "submitted, no mail, no link".
+ * Reuse stands in for a mail only when this browser can SHOW a working link to
+ * stand in for. Everywhere else — nothing sent before, a link that has been
+ * spent, a browser that cannot reach the one we mailed — the mail comes back,
+ * because the one state nobody may end up in is "submitted, no mail, no link".
  */
 test.describe('a submit that has nothing to reuse still mails', () => {
   /**
@@ -511,9 +561,7 @@ test.describe('the binding between a verified link and an address', () => {
     const victimRow = rows.find(row => row.email === victim);
     expect(victimRow?.submission_state).toBe('PENDING_VERIFICATION');
     expect(victimRow?.verified_at).toBeNull();
-    expect(
-      rows.filter(row => row.submission_state === 'SUBMITTED')
-    ).toHaveLength(0);
+    expect(rows.filter(row => row.submission_state === 'SUBMITTED')).toHaveLength(0);
   });
 
   test('the browser that verified stays verified, and its edit lands', async ({ page }) => {
@@ -614,7 +662,9 @@ test.describe('resend and wrong-address', () => {
       .getByRole('radiogroup', { name: SCALE_LABEL })
       .getByRole('radio', { name: '7' })
       .click();
-    await page.getByLabel(LONG_LABEL, { exact: true }).fill('A long answer I do not want to retype.');
+    await page
+      .getByLabel(LONG_LABEL, { exact: true })
+      .fill('A long answer I do not want to retype.');
     await page.getByRole('button', { name: 'Submit' }).click();
     await expect(page.getByRole('heading', { name: 'Check your email' })).toBeVisible();
 
