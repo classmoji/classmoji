@@ -451,19 +451,18 @@ test.describe('public fill — the happy path', () => {
     const link = await readMagicLink(email);
     await page.goto(linkTarget(link));
 
-    // The review page shows what they sent, read-only, with their identity.
+    // Opening the link IS the confirmation — there is no second act. The page
+    // reports the outcome and shows what is on file, read-only.
     // `.first()` throughout: the name and the address appear both in the
     // identity block and as the answers they were given as — which is correct,
     // and is why these are not unique locators.
-    await expect(page.getByRole('button', { name: 'Confirm' })).toBeVisible();
+    await expect(page.getByText(/You[’']re in\./)).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Confirm' })).toHaveCount(0);
     await expect(page.getByText('Maya Chen').first()).toBeVisible();
     await expect(page.getByText(email).first()).toBeVisible();
     await expect(page.getByText('Everything, ideally.')).toBeVisible();
-    // Read-only: a review page that offered inputs would be an edit page.
+    // Read-only until they ask to edit.
     await expect(page.locator('form input[type="text"], form textarea')).toHaveCount(0);
-
-    await page.getByRole('button', { name: 'Confirm' }).click();
-    await expect(page.getByRole('heading', { name: "You're in" })).toBeVisible();
 
     rows = await responsesOf(formId!);
     expect(rows).toHaveLength(1);
@@ -496,7 +495,7 @@ test.describe('public fill — the happy path', () => {
     expect(rows[0].name).toBe('Attempt 1');
   });
 
-  test('a fresh link on a verified response opens it for editing', async ({ page }) => {
+  test('the same link opens the response for editing, later', async ({ page }) => {
     const email = 'zz-e2e-edit@example.edu';
 
     await page.goto(fillPath);
@@ -504,20 +503,21 @@ test.describe('public fill — the happy path', () => {
     await page.getByRole('button', { name: 'Submit' }).click();
     await expect(page.getByRole('heading', { name: 'Check your email' })).toBeVisible();
 
-    await page.goto(linkTarget(await readMagicLink(email)));
-    await page.getByRole('button', { name: 'Confirm' }).click();
-    await expect(page.getByRole('heading', { name: "You're in" })).toBeVisible();
+    const link = await readMagicLink(email);
+    await page.goto(linkTarget(link));
+    await expect(page.getByText(/You[’']re in\./)).toBeVisible();
 
     const verifiedAt = (await responsesOf(formId!))[0].verified_at;
 
-    // Submitting again with the same address mails a link to the response that
-    // already exists — the edit path.
-    await page.goto(fillPath);
-    await fillWaitlist(page, email, 'Ignored');
-    await page.getByRole('button', { name: 'Submit' }).click();
-    await expect(page.getByRole('heading', { name: 'Check your email' })).toBeVisible();
-
-    await page.goto(linkTarget(await readMagicLink(email)));
+    /**
+     * Coming back to edit is the SAME link, not a new one.
+     *
+     * This used to submit the form a second time to have a fresh link mailed,
+     * because the first one was spent on confirming. Nothing is spent now, so
+     * the round trip through the inbox is gone — and so is the second mail it
+     * used to cost.
+     */
+    await page.goto(linkTarget(link));
     await page.getByRole('button', { name: 'Edit answers' }).click();
     await page.getByLabel(LONG_LABEL, { exact: true }).fill('Actually, just the basics.');
     await page.getByRole('button', { name: 'Save and confirm' }).click();
@@ -1085,8 +1085,8 @@ test.describe('magic link', () => {
 
     const link = await readMagicLink(email);
     await page.goto(linkTarget(link));
-    await page.getByRole('button', { name: 'Confirm' }).click();
-    await expect(page.getByRole('heading', { name: "You're in" })).toBeVisible();
+    await expect(page.getByText(/You[’']re in\./)).toBeVisible();
+    expect((await responsesOf(formId!))[0].submission_state).toBe('SUBMITTED');
 
     /**
      * Reopening it lands back on the response, not on a dead end.
@@ -1098,11 +1098,8 @@ test.describe('magic link', () => {
      * whoever came back.
      */
     await page.goto(linkTarget(link));
-    await expect(page.getByText('This is the response we already have for you.')).toBeVisible();
-
-    // And re-confirming edits the one row rather than filing a second.
-    await page.getByRole('button', { name: 'Confirm' }).click();
-    await expect(page.getByRole('heading', { name: "You're in" })).toBeVisible();
+    await expect(page.getByText(/You[’']re in\./)).toBeVisible();
+    await expect(page.getByText('Twice').first()).toBeVisible();
 
     expect(await responsesOf(formId!)).toHaveLength(1);
   });
@@ -1195,8 +1192,7 @@ test.describe('localStorage draft', () => {
     ).toBe(true);
 
     await page.goto(linkTarget(await readMagicLink(email)));
-    await page.getByRole('button', { name: 'Confirm' }).click();
-    await expect(page.getByRole('heading', { name: "You're in" })).toBeVisible();
+    await expect(page.getByText(/You[’']re in\./)).toBeVisible();
 
     await expect
       .poll(async () =>
