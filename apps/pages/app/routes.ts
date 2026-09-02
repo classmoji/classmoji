@@ -80,6 +80,16 @@ export default [
       route('schedule', 'site/schedule.tsx'),
       route('app', 'site/app.tsx'),
       route(':pageSlug', 'site/page.tsx'),
+
+      // Everything else on a course site. Inside the layout ON PURPOSE: the
+      // shell's ErrorBoundary is the only thing that renders a branded 404, and
+      // without this route a two-segment address matched nothing and fell all
+      // the way to the ROOT boundary's generic "try again in a moment".
+      //
+      // A splat carries `splatPenalty` and therefore always ranks LAST, so it
+      // cannot shadow a sibling: `forms/*`, `:pageSlug`, the static segments and
+      // the index all outrank it. Asserted in `tests/unit/site-routes.spec.ts`.
+      route('*', 'site/not-found.tsx'),
     ]),
   ]),
 ] satisfies RouteConfig;

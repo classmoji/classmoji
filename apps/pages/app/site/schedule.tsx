@@ -28,7 +28,10 @@ export const loader = async (args: LoaderFunctionArgs) => {
   const { site, viewer, seoOrigin } = await resolveSiteContext(args);
 
   if (!site.show_schedule) {
-    throw new Response('missing', {
+    // A course that does not publish a schedule has no page at this address —
+    // the same refusal a missing page slug gets, and deliberately NOT the
+    // `missing` a hostname pointing at no site at all gets.
+    throw new Response('no-page', {
       status: 404,
       headers: siteHeaders({ request, cacheable: false, noindex: true }),
     });

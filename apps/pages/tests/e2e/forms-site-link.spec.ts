@@ -171,6 +171,44 @@ test.describe('the short form link on a class-site host', () => {
     }
   });
 
+  test('an address that matches no route is a branded not-found, not an outage', async ({
+    request,
+  }) => {
+    // Lives in this file to reuse its site fixture (the `beforeAll` above is
+    // the only place a class site is claimed for a test host), and because it
+    // is the same class of bug: a link somebody shared, on a course host, that
+    // the `_site` tree had no route for. The forms bridge got a route; two
+    // segments past the host still fell through to React Router's built-in 404
+    // and the ROOT error boundary's "This page is unavailable / Try again in a
+    // moment." — a bad link reading as a broken server.
+    //
+    // The route-ranking half of the fix is covered without a server in
+    // `tests/unit/site-routes.spec.ts`; this is the rendered proof.
+    // Both shapes of "nothing here" on a site that DOES exist: an address the
+    // route tree has no route for, and a page slug nobody authored. They are
+    // one sentence for the reader and must stay one sentence in the markup.
+    for (const path of ['/dartmouth-cs52-26f/forms/cs52-waitlist', '/no-such-page']) {
+      const response = await request.get(`${BASE}${path}`, {
+        headers: { host: siteHost },
+        maxRedirects: 0,
+        failOnStatusCode: false,
+      });
+
+      expect(response.status(), path).toBe(404);
+      const body = await response.text();
+      // The apostrophe in "There's no page at this address" is HTML-escaped by
+      // the SSR pass, so match the halves that survive verbatim.
+      expect(body, path).toContain('no page at this address');
+      expect(body, path).toContain('Check the link');
+      // The root boundary's outage copy, and the missing-SITE copy: this site
+      // resolved, so neither sentence is true here.
+      expect(body, path).not.toContain('Try again in a moment.');
+      expect(body, path).not.toContain('no site here');
+      // The site tree is script-less; an error document is no exception.
+      expect(body, path).not.toContain('window.__reactRouterContext');
+    }
+  });
+
   test('the internal namespace stays unreachable from the canonical host', async ({ request }) => {
     // The bridge added a route under `/_site`; the middleware's refusal of that
     // prefix on the canonical host has to keep covering it.

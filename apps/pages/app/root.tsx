@@ -6,6 +6,7 @@ import {
   ScrollRestoration,
   redirect,
   useLocation,
+  isRouteErrorResponse,
   useRouteError,
   useLoaderData,
   useRouteLoaderData,
@@ -393,9 +394,22 @@ const Root = () => {
 
 // Error boundary
 export function ErrorBoundary() {
-  const error = useRouteError() as { message?: string; stack?: string } | undefined;
+  const routeError = useRouteError();
+  const error = routeError as { message?: string; stack?: string } | undefined;
   const location = useLocation();
   const isDevelopment = import.meta.env.MODE === 'development';
+
+  /**
+   * A 404 is a bad address, not a broken server, and telling someone to "try
+   * again in a moment" is advice that can never work — it reads as an outage we
+   * are about to fix.
+   *
+   * Every site route now throws its own 404 into the class-site layout's
+   * boundary (see `site/not-found.tsx`), so this is the BACKSTOP for whatever
+   * still reaches the root: a 404 thrown above the layout, or one on the editor
+   * app's own tree.
+   */
+  const isNotFound = isRouteErrorResponse(routeError) && routeError.status === 404;
 
   // The loader may be what threw, so the site flag is derived from the URL
   // rather than loader data.
@@ -412,10 +426,14 @@ export function ErrorBoundary() {
         <body className="bg-gray-50 dark:bg-[#191919]">
           <div className="min-h-screen flex flex-col items-center justify-center px-4">
             <h1 className="text-2xl font-bold text-gray-900 dark:text-white mb-2">
-              This page is unavailable
+              {isNotFound ? 'Not found' : 'This page is unavailable'}
             </h1>
             <p className="text-gray-600 dark:text-gray-400">
-              {isDevelopment ? error?.message : 'Try again in a moment.'}
+              {isNotFound
+                ? 'That address does not match anything on this site.'
+                : isDevelopment
+                  ? error?.message
+                  : 'Try again in a moment.'}
             </p>
             {isDevelopment && error?.stack && (
               <pre className="mt-4 p-4 bg-gray-100 rounded-md text-xs overflow-auto max-w-2xl">
@@ -440,18 +458,26 @@ export function ErrorBoundary() {
         <div className="min-h-screen flex flex-col items-center justify-center px-4">
           <div className="text-6xl mb-4 text-center">📄</div>
           <h1 className="text-2xl font-bold text-gray-900 dark:text-white mb-2">
-            Something went wrong
+            {isNotFound ? 'Not found' : 'Something went wrong'}
           </h1>
           <p className="text-gray-600 dark:text-gray-400 mb-4">
-            {isDevelopment ? error?.message : 'Please try refreshing the page.'}
+            {isNotFound
+              ? 'That address does not match anything here.'
+              : isDevelopment
+                ? error?.message
+                : 'Please try refreshing the page.'}
           </p>
           <div className="flex gap-4">
-            <button
-              onClick={() => window.location.reload()}
-              className="px-4 py-2 bg-black text-white rounded-md hover:bg-gray-800"
-            >
-              Refresh
-            </button>
+            {/* Reloading a 404 reproduces the 404. Only the way back out is
+                worth offering. */}
+            {isNotFound ? null : (
+              <button
+                onClick={() => window.location.reload()}
+                className="px-4 py-2 bg-black text-white rounded-md hover:bg-gray-800"
+              >
+                Refresh
+              </button>
+            )}
             <button
               onClick={() => window.history.back()}
               className="px-4 py-2 border border-gray-300 rounded-md hover:bg-gray-50"
