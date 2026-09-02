@@ -396,7 +396,7 @@ const PROBLEM_COPY: Record<LinkProblem, { icon: string; title: string; body: str
   expired: {
     icon: '⏳',
     title: 'This link has expired',
-    body: 'Links last 48 hours. Fill the form in again and we will send you a new one — if you already had a response saved, the new link will open it.',
+    body: 'Fill the form in again and we will send you a new one — if you already had a response saved, the new link will open it.',
   },
   // Deliberately NEUTRAL. A used token means the response was confirmed — but
   // saying so to whoever holds a spent link would confirm that the address
