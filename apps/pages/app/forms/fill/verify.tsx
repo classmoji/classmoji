@@ -407,9 +407,16 @@ export default function FormVerify() {
             recorded{result.edited ? ' with your changes' : ''}. We have your answers and the
             teaching team can see them.
           </p>
+          {/* Points at the link they already have, NOT back at the form.
+              "Fill it in again with the same address and we will email you"
+              was never true for somebody who has verified: that address is
+              deliberately sent nothing, so the instruction led to a blank form
+              and mail that was never coming. The link in their inbox is the way
+              back, and since a submission stopped spending it, saying so is
+              finally honest. */}
           <p className="mt-3 text-gray-500 dark:text-gray-400">
-            Nothing else is needed from you. If you want to change something later, fill the form in
-            again with the same address and we will email you a link to your response.
+            Nothing else is needed from you. Keep the email we sent you — that link brings you back
+            to this response for as long as the form is open.
           </p>
         </FormNotice>
       </FormCanvas>

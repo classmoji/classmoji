@@ -1512,9 +1512,13 @@ export default function FormFill() {
             Your response to <strong className="font-semibold">{data.form.title}</strong> is
             recorded. We have your answers and the teaching team can see them.
           </p>
+          {/* Same correction as the verify screen's copy, for the same reason:
+              re-filling the form with an address that has already verified
+              sends nothing at all, so this used to send people to a blank form
+              to wait for mail that would never arrive. */}
           <p className="mt-3 text-gray-500 dark:text-gray-400">
-            Nothing else is needed from you. If you want to change something later, fill the form in
-            again with the same address and we will email you a link to your response.
+            Nothing else is needed from you. Keep the email we sent you — that link brings you back
+            to this response for as long as the form is open.
           </p>
         </FormNotice>
       </FormCanvas>
