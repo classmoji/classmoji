@@ -184,21 +184,29 @@ test.describe('the short form link on a class-site host', () => {
     //
     // The route-ranking half of the fix is covered without a server in
     // `tests/unit/site-routes.spec.ts`; this is the rendered proof.
-    const response = await request.get(`${BASE}/dartmouth-cs52-26f/forms/cs52-waitlist`, {
-      headers: { host: siteHost },
-      maxRedirects: 0,
-      failOnStatusCode: false,
-    });
+    // Both shapes of "nothing here" on a site that DOES exist: an address the
+    // route tree has no route for, and a page slug nobody authored. They are
+    // one sentence for the reader and must stay one sentence in the markup.
+    for (const path of ['/dartmouth-cs52-26f/forms/cs52-waitlist', '/no-such-page']) {
+      const response = await request.get(`${BASE}${path}`, {
+        headers: { host: siteHost },
+        maxRedirects: 0,
+        failOnStatusCode: false,
+      });
 
-    expect(response.status()).toBe(404);
-    const body = await response.text();
-    // The apostrophe in "There's no site here" is HTML-escaped by the SSR pass,
-    // so match the halves that survive verbatim.
-    expect(body).toContain('no site here');
-    expect(body).toContain('Classmoji course website');
-    expect(body).not.toContain('Try again in a moment.');
-    // The site tree is script-less; an error document is no exception.
-    expect(body).not.toContain('window.__reactRouterContext');
+      expect(response.status(), path).toBe(404);
+      const body = await response.text();
+      // The apostrophe in "There's no page at this address" is HTML-escaped by
+      // the SSR pass, so match the halves that survive verbatim.
+      expect(body, path).toContain('no page at this address');
+      expect(body, path).toContain('Check the link');
+      // The root boundary's outage copy, and the missing-SITE copy: this site
+      // resolved, so neither sentence is true here.
+      expect(body, path).not.toContain('Try again in a moment.');
+      expect(body, path).not.toContain('no site here');
+      // The site tree is script-less; an error document is no exception.
+      expect(body, path).not.toContain('window.__reactRouterContext');
+    }
   });
 
   test('the internal namespace stays unreachable from the canonical host', async ({ request }) => {

@@ -31,7 +31,12 @@ export const loader = ({ request }: LoaderFunctionArgs) => {
   // Byte-identical to page.tsx's "no such page" refusal: same status, same
   // `error.data`, so the layout's ErrorBoundary renders ONE not-found for both
   // and there is no second copy to keep in sync.
-  throw new Response('missing', {
+  //
+  // `no-page` rather than `missing`: the layout resolved this site before this
+  // loader ran, so the visitor is looking at a course website that exists — the
+  // address is what is wrong. `missing` stays reserved for a hostname that
+  // points at no site at all.
+  throw new Response('no-page', {
     status: 404,
     headers: siteHeaders({ request, cacheable: false, noindex: true }),
   });

@@ -139,8 +139,10 @@ test.describe('the not-found route module', () => {
     const response = thrown as Response;
     expect(response.status).toBe(404);
     // Same `error.data` page.tsx throws, so the layout's boundary renders ONE
-    // not-found for both a missing page and an unmatched address.
-    expect(await response.text()).toBe('missing');
+    // not-found for both a missing page and an unmatched address — and NOT the
+    // `missing` reserved for a hostname that resolves to no site, whose copy
+    // ("there's no site here") would be a lie on a site that just rendered.
+    expect(await response.text()).toBe('no-page');
     expect(response.headers.get('Cache-Control')).toBe('no-store');
     expect(response.headers.get('X-Robots-Tag')).toBe('noindex');
     expect(response.headers.get('Content-Security-Policy')).toContain("default-src 'none'");
