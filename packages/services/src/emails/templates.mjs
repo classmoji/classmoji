@@ -226,15 +226,6 @@ Need help, email us at hello@classmoji.io`,
       { key: 'FORM_TITLE', type: 'string' },
       { key: 'CLASSROOM_NAME', type: 'string' },
       { key: 'VERIFY_URL', type: 'string' },
-      // Declared but no longer rendered here. ONE builder in
-      // formResponse.service composes the payload for this template and for the
-      // reminder, which still quotes the hours legitimately (a reminder only
-      // ever goes to a row that has NOT verified, so the 48-hour deadline is
-      // still that reader's truth). Keeping the key declared means the shared
-      // payload stays valid for both; dropping it would hand Resend a variable
-      // this template does not know, and a rejected send here is invisible —
-      // see the `escapeVars` comment for how that failure mode already bit us.
-      { key: 'EXPIRES_HOURS', type: 'string', fallbackValue: '48' },
     ],
     html: shell({
       title: 'Verify your email',
@@ -253,77 +244,27 @@ Need help, email us at hello@classmoji.io`,
           color: MUTED,
           pb: 20,
         }),
-        button('{{{VERIFY_URL}}}', 'Verify my email'),
-        // The second job this link does, said plainly. It is the durable handle
-        // on the response — the only one, since there is deliberately no
-        // "look up my response by email" form anywhere in the product.
+        button('{{{VERIFY_URL}}}', 'Confirm my response'),
+        /*
+         * ONE sentence for the link's whole life, because it now has one.
+         *
+         * This block used to be three: a "keep this email", a number of hours,
+         * and an instruction for getting another link. The hours were a
+         * deadline that only existed because the link used to expire; the
+         * instruction ("open the form again with the same address") never
+         * worked for anybody who had already verified, since that address is
+         * deliberately sent nothing. Both are gone along with the deadline
+         * itself — see `LINK_OPEN_HORIZON_MS`.
+         */
         text(
-          '<strong>Keep this email.</strong> This link is your way back to your answers: click it now to carry on filling the form in, and click it again any time after you submit to read or change what you sent.',
+          '<strong>Keep this email.</strong> The same link brings you back to your answers any time while the form is open, so you can read or change what you sent.',
           { size: 14, lh: 22, color: MUTED, pb: 8 }
         ),
-        // No hours, and no "request another one".
-        //
-        // The hours were the VERIFICATION deadline, which stopped being the
-        // link's whole life when a submission started extending it — quoting 48
-        // to somebody whose link now lasts as long as the form would be worse
-        // than saying nothing. And "open the form again with the same address"
-        // was never a way to get a second link: an address that has already
-        // verified is deliberately sent nothing at all, so the instruction sent
-        // people to a blank form and no mail. The resend button on the
-        // check-your-email screen is the real door, and it is only reachable by
-        // the person who asked.
-        text('The link keeps working for as long as this form is open.', {
-          size: 14,
-          lh: 22,
-          color: MUTED,
-          pb: 8,
-        }),
         // A public form is a link anyone can share, so the recipient may
         // genuinely not have submitted anything — that has to be a real option,
         // and "ignore this" has to be the first thing the sentence says.
         text(
           'If you did not use this address on a Classmoji form, ignore this email. Nothing is recorded without the click.',
-          { size: 14, lh: 22, color: MUTED, pb: 24 }
-        ),
-      ],
-    }),
-  },
-
-  {
-    name: 'Form — Verify reminder',
-    alias: 'form-verify-reminder',
-    // A nudge, not a re-announcement. The subject leads with the ask because
-    // this lands in an inbox that already contains the first mail, and the only
-    // useful thing it can add is "this is still outstanding".
-    subject: '[Classmoji] One click to finish your {{{FORM_TITLE}}} entry',
-    variables: [
-      { key: 'RECIPIENT_NAME', type: 'string', fallbackValue: 'there' },
-      { key: 'FORM_TITLE', type: 'string' },
-      { key: 'CLASSROOM_NAME', type: 'string' },
-      { key: 'VERIFY_URL', type: 'string' },
-      { key: 'EXPIRES_HOURS', type: 'string', fallbackValue: '48' },
-    ],
-    html: shell({
-      title: 'One click to finish',
-      preheader: 'Your {{{FORM_TITLE}}} entry is waiting on one click.',
-      rows: [
-        heading('One click to finish'),
-        text(
-          'Hi {{{RECIPIENT_NAME}}}, your answers to <strong>{{{FORM_TITLE}}}</strong> for {{{CLASSROOM_NAME}}} are saved but not recorded — they are waiting on you to verify this address.'
-        ),
-        text('This is the last thing the form needs from you.', {
-          size: 14,
-          lh: 22,
-          color: MUTED,
-          pb: 20,
-        }),
-        button('{{{VERIFY_URL}}}', 'Finish my entry'),
-        text(
-          'This is a fresh link and works for {{{EXPIRES_HOURS}}} hours. It also opens your answers if you want to change anything before you finish.',
-          { size: 14, lh: 22, color: MUTED, pb: 8 }
-        ),
-        text(
-          'If you have changed your mind, do nothing — an entry that is never verified is never recorded.',
           { size: 14, lh: 22, color: MUTED, pb: 24 }
         ),
       ],

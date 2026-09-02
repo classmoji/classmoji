@@ -171,12 +171,10 @@ export function toResponseRow(row: {
     userId: row.user_id,
     submittedAt: row.submitted_at.toISOString(),
     verifiedAt: row.verified_at ? row.verified_at.toISOString() : null,
-    // The sweep measures from `created_at`, and a labelled row is exempt — so
-    // the date is only offered for a row that will actually go.
-    expiresAt:
-      row.submission_state === 'PENDING_VERIFICATION' && row.created_at && !row.staff_status
-        ? ClassmojiService.formResponse.pendingExpiresAt(row.created_at).toISOString()
-        : null,
+    // Always null now. Unverified rows are kept for the life of the form, so
+    // there is no date to warn anybody about. The field stays on the shape
+    // because the staff table renders it, and "never" is the answer it wants.
+    expiresAt: null as string | null,
     updatedAt: row.updated_at.toISOString(),
     submissionState: row.submission_state,
     staffStatus: row.staff_status,

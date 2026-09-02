@@ -7,7 +7,10 @@ import { checkOrigin, readCappedBody } from '~/utils/originCheck.server.ts';
 import { FormCanvas, FormHeader, FormNotice } from '~/components/forms/FormCanvas.tsx';
 import FormRenderer, { clearDraftsForForm } from '~/components/forms/FormRenderer.tsx';
 import AnswerView from '~/components/forms/AnswerView.tsx';
-import { formLinkCookie } from '~/utils/formLinkCookie.server.ts';
+import {
+  EDIT_LINK_COOKIE_MAX_AGE_SECONDS,
+  formLinkCookie,
+} from '~/utils/formLinkCookie.server.ts';
 import { themeFor, type CanvasTheme } from './publicForm.server.ts';
 
 /**
@@ -76,18 +79,28 @@ export type VerifyLoad =
       form: { id: string; title: string; description: string | null };
       identity: { email: string; name: string | null };
     }
+  /**
+   * The response is IN — recorded by the loader on this very request, or on an
+   * earlier one. There is no pending state to show and nothing to agree to.
+   */
   | {
-      view: 'review';
+      view: 'recorded';
       theme: CanvasTheme;
       classroomName: string;
       fillPath: string;
       form: { id: string; title: string; description: string | null };
-      /** Already confirmed once — this link is an EDIT link, not a first confirm. */
-      alreadyVerified: boolean;
       identity: { email: string; name: string | null };
       fields: unknown[];
       answers: Record<string, unknown>;
       resolvedContext: unknown;
+    }
+  /** Their answers are safe; a place is not available. */
+  | {
+      view: 'blocked';
+      reason: 'cap' | 'closed';
+      theme: CanvasTheme;
+      classroomName: string;
+      fillPath: string;
     };
 
 /** Map a service error code to the state the page renders. */
@@ -195,9 +208,65 @@ export const loader = async ({
     );
   }
 
+  /**
+   * ── Clicking the link IS the confirmation ────────────────────────────────
+   *
+   * There used to be a Confirm button here, so a person who had already filled
+   * the form in and pressed Submit was asked to agree to their own answers a
+   * second time. The click on the link is the only thing that was ever missing
+   * — it is what proves the address — so doing it here removes a step without
+   * removing a check.
+   *
+   * Recording on a GET is deliberate and safe in this one direction: a mail
+   * scanner that pre-fetches the link finalises a submission the person had
+   * already made, which is the outcome they asked for. Nothing is created by
+   * the fetch — a row with no answers takes the "go and finish" branch above.
+   *
+   * Idempotent: a row that is already SUBMITTED is left alone, so a reload, a
+   * scanner and the person all land on the same page.
+   */
+  let recorded = resolved.response;
+  if (resolved.response.submission_state !== 'SUBMITTED') {
+    try {
+      const outcome = await ClassmojiService.formResponse.confirmSubmission(token);
+      recorded = outcome.response;
+    } catch (error) {
+      const code = (error as { code?: string }).code;
+      // Their answers are safe either way; what they cannot have is a place.
+      if (code === 'FORM_CAP_REACHED' || code === 'FORM_NOT_OPEN' || code === 'FORM_CLOSED') {
+        return data(
+          {
+            view: 'blocked' as const,
+            reason: code === 'FORM_CAP_REACHED' ? ('cap' as const) : ('closed' as const),
+            theme,
+            classroomName,
+            fillPath,
+          },
+          { headers: NO_STORE }
+        );
+      }
+      if (code && code.startsWith('MAGIC_LINK_')) return problem(problemFor(code));
+      throw error;
+    }
+  }
+
+  // This browser keeps the link, so coming back on this machine needs no trip
+  // through the inbox.
+  const headers = new Headers(NO_STORE);
+  headers.append(
+    'Set-Cookie',
+    formLinkCookie({
+      request,
+      classroomSlug,
+      formSlug,
+      rawToken: token,
+      maxAgeSeconds: EDIT_LINK_COOKIE_MAX_AGE_SECONDS,
+    })
+  );
+
   return data(
     {
-      view: 'review' as const,
+      view: 'recorded' as const,
       theme,
       classroomName,
       fillPath,
@@ -206,13 +275,12 @@ export const loader = async ({
         title: resolved.form.title,
         description: resolved.form.description,
       },
-      alreadyVerified: resolved.response.verified_at !== null,
-      identity: { email: resolved.response.email, name: resolved.response.name },
+      identity: { email: recorded.email, name: recorded.name },
       fields: ClassmojiService.form.fieldsOf(resolved.revision.fields),
-      answers: (resolved.response.answers ?? {}) as Record<string, unknown>,
-      resolvedContext: resolved.response.resolved_context,
+      answers: (recorded.answers ?? {}) as Record<string, unknown>,
+      resolvedContext: recorded.resolved_context,
     },
-    { headers: NO_STORE }
+    { headers }
   );
 };
 
@@ -374,12 +442,21 @@ export default function FormVerify() {
   const [editing, setEditing] = useState(false);
 
   /**
-   * The confirmed response is the moment the browser draft has served its
-   * purpose. Clearing it HERE rather than on the fill page's check-email state
-   * is deliberate: the fill page cannot know whether a submission was a first
-   * one or an edit (telling it would be the membership oracle), and an edit
-   * whose link is never clicked should still find its draft waiting.
+   * A recorded response is the moment the browser draft has served its purpose.
+   *
+   * Clearing it HERE rather than on the fill page's check-email state is
+   * deliberate: the fill page cannot know whether a submission was a first one
+   * or an edit (telling it would be the membership oracle), and an edit whose
+   * link is never clicked should still find its draft waiting.
+   *
+   * Driven by the LOADER now, not by a confirm action. Opening the link is what
+   * records the response, so the recorded view is where the draft becomes
+   * spent — and an edit saved from this page lands here too, via `result`.
    */
+  const recordedFormId = loaded.view === 'recorded' ? loaded.form.id : null;
+  useEffect(() => {
+    if (recordedFormId) clearDraftsForForm(recordedFormId);
+  }, [recordedFormId]);
   useEffect(() => {
     if (result?.state === 'confirmed') clearDraftsForForm(result.formId);
   }, [result]);
@@ -518,6 +595,31 @@ export default function FormVerify() {
     );
   }
 
+  /**
+   * They clicked in good faith and there is no place for them — the form filled
+   * up, or closed, between submitting and clicking. Their answers are still on
+   * file; what they cannot have is a spot, and saying so plainly beats a
+   * cheerful screen that implies otherwise.
+   */
+  if (loaded.view === 'blocked') {
+    return (
+      <FormCanvas theme={loaded.theme} classroomName={loaded.classroomName}>
+        <FormNotice
+          icon={loaded.reason === 'cap' ? '🚦' : '🔒'}
+          title={loaded.reason === 'cap' ? 'This form is full' : 'This form has closed'}
+        >
+          <p>
+            Your answers were saved, but{' '}
+            {loaded.reason === 'cap'
+              ? 'every place had been taken by the time you confirmed'
+              : 'the form closed before you confirmed'}
+            , so they are not counted. The teaching team can still see that you tried.
+          </p>
+        </FormNotice>
+      </FormCanvas>
+    );
+  }
+
   const fields = loaded.fields as FormField[];
 
   return (
@@ -568,10 +670,11 @@ export default function FormVerify() {
         </>
       ) : (
         <>
+          {/* Already recorded by the time this renders — the loader did it.
+              So this states the outcome rather than asking for it. */}
           <div className="mb-2 text-sm text-gray-600 dark:text-gray-300">
-            {loaded.alreadyVerified
-              ? 'This is the response we already have for you. Confirm it as it stands, or change it first.'
-              : 'Here is what you sent. Confirm it and your response is recorded.'}
+            You&rsquo;re in. This is what {loaded.form.title} has for you — change it any time
+            while the form is open, using the same link.
           </div>
 
           <div className="mb-7 border-t border-gray-200 pt-5 dark:border-gray-700">
@@ -591,28 +694,13 @@ export default function FormVerify() {
             </div>
           ) : null}
 
-          <div className="flex flex-wrap items-center gap-3">
-            <button
-              type="button"
-              disabled={fetcher.state !== 'idle'}
-              onClick={() =>
-                fetcher.submit(
-                  { token: tokenFromLocation() },
-                  { method: 'post', encType: 'application/json' }
-                )
-              }
-              className="rounded-md bg-gray-900 px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-gray-700 disabled:opacity-50 dark:bg-white dark:text-gray-900 dark:hover:bg-gray-200"
-            >
-              {fetcher.state !== 'idle' ? 'Confirming…' : 'Confirm'}
-            </button>
-            <button
-              type="button"
-              onClick={() => setEditing(true)}
-              className="rounded-md border border-gray-300 px-4 py-2.5 text-sm font-medium text-gray-700 dark:border-gray-600 dark:text-gray-200"
-            >
-              Edit answers
-            </button>
-          </div>
+          <button
+            type="button"
+            onClick={() => setEditing(true)}
+            className="rounded-md border border-gray-300 px-4 py-2.5 text-sm font-medium text-gray-700 dark:border-gray-600 dark:text-gray-200"
+          >
+            Edit answers
+          </button>
         </>
       )}
     </FormCanvas>

@@ -371,11 +371,10 @@ test.describe('the link, opened before the form is finished', () => {
     await page.waitForTimeout(750);
     expect(linksFor(email)).toHaveLength(1);
 
-    // And the original link still verifies and completes the submission.
+    // And the original link still completes the submission — by being opened,
+    // which is the only step there is now.
     await page.goto(linkTarget(link));
-    await expect(page.getByRole('button', { name: 'Confirm' })).toBeVisible();
-    await page.getByRole('button', { name: 'Confirm' }).click();
-    await expect(page.getByRole('heading', { name: "You're in" })).toBeVisible();
+    await expect(page.getByText(/You[’']re in\./)).toBeVisible();
 
     const rows = await responsesOf(formId!);
     expect(rows).toHaveLength(1);
@@ -426,8 +425,7 @@ test.describe('a submit that has nothing to reuse still mails', () => {
     expect(linksFor(email)).toHaveLength(1);
 
     await page.goto(linkTarget(links[0]));
-    await page.getByRole('button', { name: 'Confirm' }).click();
-    await expect(page.getByRole('heading', { name: "You're in" })).toBeVisible();
+    await expect(page.getByText(/You[’']re in\./)).toBeVisible();
   });
 
   /**

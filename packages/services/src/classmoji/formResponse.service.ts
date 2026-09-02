@@ -97,8 +97,25 @@ const serviceError = (code: string, message: string) => Object.assign(new Error(
 
 // ─── Magic-link policy ──────────────────────────────────────────────────────
 
-/** How long a verify/edit link stays usable. */
-export const MAGIC_TOKEN_TTL_MS = 48 * 60 * 60 * 1000;
+/**
+ * A link lives as long as its form does. There is no second clock.
+ *
+ * It used to be minted with 48 hours on it, and that number then had to mean
+ * two different things at once — a deadline to verify, and the life of the
+ * handle somebody keeps on their own response. Every surface that tried to
+ * explain it got one of the two wrong, and the flow grew reminders to chase a
+ * deadline that only existed because the number did.
+ *
+ * `assertAccepting` is what actually decides whether a response can still be
+ * written; this only decides how long the link keeps opening it. On a form with
+ * no close date that is a long backstop rather than forever — an unbounded
+ * bearer credential is worth avoiding even when nothing is enforcing it.
+ */
+export const LINK_OPEN_HORIZON_MS = 365 * 24 * 60 * 60 * 1000;
+
+/** When a link minted now should stop working: the form's life, not a TTL. */
+const linkExpiresAt = (form: { closes_at: Date | null }, now: Date): Date =>
+  form.closes_at ?? new Date(now.getTime() + LINK_OPEN_HORIZON_MS);
 /**
  * Links per response inside the rolling window.
  *
@@ -130,19 +147,18 @@ export const MAGIC_TOKEN_WINDOW_MS = 60 * 60 * 1000;
  * stranger can make us send mail. The link is already in their inbox; the right
  * thing to do with it is point at it.
  *
- * ── Why HALF the token's life ──────────────────────────────────────────────
- * A link's usefulness is bounded by its 48-hour life, not by minutes: somebody
- * filling in a long form, or coming back to it after lunch, should be told
- * about the link they already have rather than handed a second one. But a link
- * minted 47 hours ago is about to die, and reusing THAT would strand them. One
- * constant settles both: reuse only inside the first half of the life, and the
- * link handed back always has at least another 24 hours on it.
+ * ── Why a day ──────────────────────────────────────────────────────────────
+ * This used to be half the token's life, back when a token had a life of its
+ * own. A link now lasts as long as its form, so "half of that" would mean a
+ * link minted six months ago still suppressing a fresh send — which is the
+ * opposite of the point. A day is the span over which "you already have it" is
+ * a helpful answer rather than a baffling one.
  *
  * A link is reusable only while it is also unspent and unexpired — see
  * `findLiveLink`. Anything else mints fresh, so nobody is ever left with no
  * live link at all.
  */
-export const MAGIC_TOKEN_REUSE_MS = MAGIC_TOKEN_TTL_MS / 2;
+export const MAGIC_TOKEN_REUSE_MS = 24 * 60 * 60 * 1000;
 /**
  * The `delivery_state` meaning "we never managed to hand this message to the
  * provider at all".
@@ -161,92 +177,9 @@ export const MAGIC_TOKEN_REUSE_MS = MAGIC_TOKEN_TTL_MS / 2;
  * literal, exactly as they already do for 'SENT' and 'BOUNCED'.
  */
 export const MAGIC_LINK_SEND_FAILED = 'FAILED';
-/**
- * How long an edit link lives on a form that never closes.
- *
- * A backstop, not the rule. The rule is the form: `assertAccepting` refuses
- * every write to a form that is not OPEN, so a token outliving its form's
- * usefulness opens a page that can be read and not changed. This exists so that
- * "no close date" does not mean "immortal bearer credential", and it is
- * deliberately long — a waitlist that runs a whole term is the ordinary case,
- * and a link that dies before its form does is the exact failure this rule
- * exists to fix.
- */
-export const EDIT_LINK_OPEN_HORIZON_MS = 365 * 24 * 60 * 60 * 1000;
-
-/**
- * When the link that carried a submission should expire, now that it has.
- *
- * ── Two clocks, deliberately not the same one ──────────────────────────────
- * A token is MINTED with `MAGIC_TOKEN_TTL_MS` (48h), and that number means one
- * thing: how long you have to prove the address before the pending row stops
- * holding its place in the queue. `assertCapAvailable` counts unverified rows
- * by exactly that window and `expireStale` sweeps by it, so it must not move.
- *
- * Once the answers are in, the same token stops being a verification deadline
- * and becomes the handle on the response — the ONE thing the person can come
- * back with, since there is deliberately no "look up my response by email"
- * form anywhere in the product. That job's natural length is the form's own
- * life, not forty-eight hours.
- *
- * So the token is not SPENT at submit, it is EXTENDED here. The verification
- * window keeps its meaning for every row still inside it; the edit window
- * begins only for a row that has actually been submitted.
- *
- * Never shortens. A form closing sooner than the token's current expiry leaves
- * that expiry alone: the form gate already refuses the edit, and being able to
- * READ BACK what you submitted is not something a close date should take away.
- */
-const editLinkExpiresAt = (
-  form: { closes_at: Date | null },
-  currentExpiry: Date,
-  now: Date
-): Date => {
-  const horizon = form.closes_at ?? new Date(now.getTime() + EDIT_LINK_OPEN_HORIZON_MS);
-  return horizon.getTime() > currentExpiry.getTime() ? horizon : currentExpiry;
-};
 /** Abandoned server-side partials are swept after this long. */
 export const DRAFT_TTL_MS = 30 * 24 * 60 * 60 * 1000;
-/**
- * How long an unverified row survives.
- *
- * ── Why this is no longer the link's TTL ───────────────────────────────────
- * It used to be 48h, exactly as long as the link that would verify it, on the
- * reasoning that a row nobody can verify any more is only holding a
- * (form_id, email_normalized) slot hostage. That reasoning had a cost nobody
- * was paying attention to: the instructor never learned that somebody tried.
- * A waitlist that quietly deletes half its applicants is worse than one that
- * shows them as unverified, and "did anybody bounce off the confirmation
- * step?" is a question staff can only answer if the rows are still there.
- *
- * Holding the slot is no longer the problem it was, either: a later submission
- * from the same address REUSES the row and mints a fresh link (see
- * `beginPublicSubmission`), so an abandoned row does not lock anybody out.
- *
- * Thirty days matches the anonymous-draft TTL — one retention story for
- * "personal data typed by someone who never finished", rather than two.
- */
-export const PENDING_TTL_MS = DRAFT_TTL_MS;
 
-/**
- * When a still-unverified response is nudged, measured from its first
- * submission.
- *
- * Six hours catches the overwhelmingly common case — "I meant to click that
- * later" — inside the same day, while a full 42 hours of link life remain.
- * Twenty-four hours is the last honest moment to ask: a fresh link minted then
- * outlives the reminder by another two days, and a third nudge on a form
- * somebody has now ignored twice is spam wearing a helpful hat.
- *
- * IDEMPOTENCE COMES FROM THE TOKEN TABLE, not from a column. A stage is due
- * only when NO token for the response was created after `submitted_at + stage`
- * — and sending mints one, which is precisely the record that the stage has
- * been served. Running the sweep twice in a row therefore mails once, and the
- * property survives a process restart, a re-run by hand, and a schedule that
- * fires late. A resend the person asked for suppresses the next nudge too,
- * which is correct: they have a fresh link in their inbox already.
- */
-export const REMINDER_STAGES_MS = [6 * 60 * 60 * 1000, 24 * 60 * 60 * 1000] as const;
 
 /**
  * The raw token is returned to the caller ONCE and never stored; only its
@@ -318,99 +251,46 @@ const answersAreEmpty = (answers: unknown): boolean =>
   !answers || typeof answers !== 'object' || Object.keys(answers as object).length === 0;
 
 /**
- * Refuse if the cap is already full — with the queue ordered by FIRST
- * SUBMISSION, not by who read their email fastest.
+ * Refuse if the cap is already full. A place is taken when the link is clicked.
  *
- * ── What is counted ────────────────────────────────────────────────────────
- * Two classes of row, and the second is the whole point of this function:
+ * ── What is counted, and why it is only one thing ──────────────────────────
+ * Confirmed responses. Nothing else.
  *
- *  1. VERIFIED submissions. Unconditional: they are in, and they are in
- *     wherever they sit in the order.
- *  2. UNVERIFIED submissions that came in BEFORE this one and can still be
- *     verified — a real answer set (not an address placeholder) holding a
- *     token that is neither spent nor expired.
+ * This used to also count unverified submissions as RESERVATIONS, so that two
+ * people submitting a second apart against the last slot were ranked by
+ * submission time rather than by whose mail server was quicker. That fairness
+ * was real, and it cost a second clock: a reservation has to expire, or one
+ * abandoned submission holds a slot for ever — which is where the forty-eight
+ * hours came from, and the reminders that existed to chase it, and the copy on
+ * four screens trying to explain a deadline nobody could see.
  *
- * Class 2 is a RESERVATION, and it is what stops a slow inbox from costing
- * somebody their place. Before this, the cap counted verified rows only, so
- * two people submitting one second apart against the last slot were ranked by
- * how quickly their mail server delivered: the later submission that verified
- * first took the place, and the earlier one was told the form had filled up.
- *
- * ── Why this does not make an unverified row "close" a form ────────────────
- * The reservation is consulted ONLY here, on the transition into the cap. The
- * fill loader and `beginPublicSubmission` still count verified rows alone, so
- * a pending row never turns a form away at the door — it only loses a tie it
- * was already winning on time. That asymmetry is deliberate: a reservation is
- * a promise to the person who submitted first, not a lock on the form.
+ * The rule is now the one a person would guess: your place is when you click.
+ * A link never expires while its form is open, so nobody is racing a deadline
+ * to claim one — the tie it used to break can only happen on a capped form, at
+ * the exact boundary, between two people who submitted seconds apart, and the
+ * loser can still confirm the moment a place frees up.
  *
  * ── Why it stays exact under concurrency ───────────────────────────────────
  * Every writer holds the form's row lock (see `lockForm`), so these counts are
- * taken in a serialized order. N simultaneous confirmations against a cap of K
- * admit exactly K — and now it is always the K earliest submissions, whatever
- * order the confirmations arrive in, because each one measures itself against
- * everything that came before it rather than against whatever happens to be
- * verified at that instant.
- *
- * `before` is the submitted_at this response WILL HOLD when the transaction
- * commits — for a row whose placeholder timestamp is being bumped to now, that
- * is `now`, not the value on disk. Passing the stale one would let a browser
- * that merely typed an address hours ago jump the queue.
- *
- * Omitting `before` (the classroom path, where a submission verifies in the
- * same transaction) counts verified rows only, which is the behaviour that
- * path has always had.
+ * taken in a serialized order: N simultaneous confirmations against a cap of K
+ * admit exactly K.
  */
 async function assertCapAvailable(
   tx: Prisma.TransactionClient,
   form: LockedFormRow,
-  { excludeResponseId, before, now }: { excludeResponseId?: string; before?: Date; now?: Date } = {}
+  { excludeResponseId }: { excludeResponseId?: string } = {}
 ): Promise<void> {
   if (form.response_cap === null) return;
 
-  // Sentinels rather than nullable casts: no row has an empty-string id, and
-  // nothing was submitted before the epoch, so "absent" is expressed as a
-  // predicate that is simply never true. One query, no dynamic SQL.
-  const exclude = excludeResponseId ?? '';
-  const cutoff = before ?? new Date(0);
-  const at = now ?? new Date();
-  /**
-   * The outer bound on how long a place can be held.
-   *
-   * A live token is the natural test for "can still verify", and on its own it
-   * is not enough: the reminder pass mints a FRESH link at six hours and again
-   * at twenty-four, and the resend button mints one whenever it is pressed, so
-   * "holds a live token" could be renewed indefinitely and a slot held for
-   * weeks by somebody who never verifies. The window is therefore measured from
-   * the SUBMISSION — one link's life, whatever links have been sent since —
-   * which is exactly the promise the design makes: verify within the window and
-   * you keep the place you submitted for.
-   */
-  const windowOpened = new Date(at.getTime() - MAGIC_TOKEN_TTL_MS);
+  const taken = await tx.formResponse.count({
+    where: {
+      form_id: form.id,
+      submission_state: 'SUBMITTED',
+      verified_at: { not: null },
+      ...(excludeResponseId ? { id: { not: excludeResponseId } } : {}),
+    },
+  });
 
-  const rows = await tx.$queryRaw<Array<{ count: bigint }>>`
-    SELECT COUNT(*) AS count
-    FROM form_responses r
-    WHERE r.form_id = ${form.id}
-      AND r.id <> ${exclude}
-      AND (
-        (r.submission_state = 'SUBMITTED' AND r.verified_at IS NOT NULL)
-        OR (
-          r.submission_state = 'PENDING_VERIFICATION'
-          AND r.submitted_at < ${cutoff}
-          AND r.submitted_at > ${windowOpened}
-          AND r.answers <> '{}'::jsonb
-          AND EXISTS (
-            SELECT 1
-            FROM form_magic_tokens t
-            WHERE t.response_id = r.id
-              AND t.used_at IS NULL
-              AND t.expires_at > ${at}
-          )
-        )
-      )
-  `;
-
-  const taken = Number(rows[0]?.count ?? 0);
   if (taken >= form.response_cap) {
     throw serviceError(FORM_CAP_REACHED, 'This form has reached its response limit.');
   }
@@ -616,7 +496,6 @@ function composeLinkEmail({
           FORM_TITLE: formTitle,
           CLASSROOM_NAME: classroomName,
           VERIFY_URL: verifyUrl,
-          EXPIRES_HOURS: MAGIC_TOKEN_TTL_MS / (60 * 60 * 1000),
         }),
       },
     },
@@ -637,6 +516,7 @@ function composeLinkEmail({
 async function mintLinkFor(
   tx: Prisma.TransactionClient,
   responseId: string,
+  form: { closes_at: Date | null },
   now: Date
 ): Promise<{ raw: string; tokenId: string }> {
   const recentTokens = await tx.formMagicToken.count({
@@ -665,7 +545,7 @@ async function mintLinkFor(
     data: {
       response_id: responseId,
       token_hash: hash,
-      expires_at: new Date(now.getTime() + MAGIC_TOKEN_TTL_MS),
+      expires_at: linkExpiresAt(form, now),
     },
     select: { id: true },
   });
@@ -889,7 +769,7 @@ export async function beginPublicSubmission({
       };
     }
 
-    const { raw, tokenId } = await mintLinkFor(tx, responseId, now);
+    const { raw, tokenId } = await mintLinkFor(tx, responseId, form, now);
     const verifyUrl = verifyUrlFor({
       classroomSlug: loadedForm.classroom.slug,
       formSlug: loadedForm.slug,
@@ -1088,7 +968,7 @@ export async function beginAddressVerification({
       if (live) return { emails: [], verifyUrl: null, sent: false, watchTokenId: live.id };
     }
 
-    const { raw, tokenId } = await mintLinkFor(tx, responseId, now);
+    const { raw, tokenId } = await mintLinkFor(tx, responseId, form, now);
     const verifyUrl = verifyUrlFor({
       classroomSlug: loadedForm.classroom.slug,
       formSlug: loadedForm.slug,
@@ -1253,11 +1133,7 @@ export async function confirmSubmission(rawToken: string, { answers }: { answers
     // have taken a slot. See `alreadyCounted`.
     if (!counted) {
       assertAccepting(lockedForm, now);
-      await assertCapAvailable(tx, lockedForm, {
-        excludeResponseId: response.id,
-        before: response.submitted_at,
-        now,
-      });
+      await assertCapAvailable(tx, lockedForm, { excludeResponseId: response.id });
     }
 
     const data: Prisma.FormResponseUncheckedUpdateInput = {
@@ -1289,14 +1165,9 @@ export async function confirmSubmission(rawToken: string, { answers }: { answers
       data.answers = parseAnswers(fields, answers) as unknown as Prisma.InputJsonValue;
     }
 
-    // NOT spent — extended. See `editLinkExpiresAt`: from here the link stops
-    // being a verification deadline and becomes the person's way back to their
-    // own answers, which is the promise the email now makes.
-    await tx.formMagicToken.update({
-      where: { id: token.id },
-      data: { expires_at: editLinkExpiresAt(lockedForm, token.expires_at, now) },
-    });
-
+    // The token is left exactly as it is: not spent, not extended. It was
+    // minted with the form's life already on it, so there is nothing here that
+    // needs to change for it to keep opening this response.
     const updated = await tx.formResponse.update({ where: { id: response.id }, data });
     return { response: updated, firstVerification: !counted };
   });
@@ -1469,23 +1340,10 @@ export async function submitVerifiedPublic({
     const counted = alreadyCounted(response);
     if (!counted) {
       assertAccepting(lockedForm, now);
-      // `before: now` — this row's FIFO position is the submission happening
-      // right now, not the moment its address was typed.
-      await assertCapAvailable(tx, lockedForm, {
-        excludeResponseId: response.id,
-        before: now,
-        now,
-      });
+      await assertCapAvailable(tx, lockedForm, { excludeResponseId: response.id });
     }
 
-    // NOT spent — extended, exactly as in `confirmSubmission`. This is the path
-    // an ordinary submission takes now that verification happens at blur time,
-    // so it is the one that decides whether "keep this email" is true.
-    await tx.formMagicToken.update({
-      where: { id: token.id },
-      data: { expires_at: editLinkExpiresAt(lockedForm, token.expires_at, now) },
-    });
-
+    // Token untouched, exactly as in `confirmSubmission`.
     return tx.formResponse.update({
       where: { id: response.id },
       data: {
@@ -1647,7 +1505,7 @@ export async function submitClassroom({
     // a classroom submission verifies in this same transaction, so there is no
     // unverified queue for it to be ranked against.
     if (!existing || !alreadyCounted(existing)) {
-      await assertCapAvailable(tx, form, { excludeResponseId: existing?.id, now });
+      await assertCapAvailable(tx, form, { excludeResponseId: existing?.id });
     }
 
     const data = {
@@ -2052,17 +1910,23 @@ export async function deleteResponse(responseId: string) {
  * that calls it lives in `packages/tasks/src/workflows/forms.ts`.
  */
 export async function expireStale(now: Date = new Date()) {
-  const pendingBefore = new Date(now.getTime() - PENDING_TTL_MS);
   const draftsBefore = new Date(now.getTime() - DRAFT_TTL_MS);
 
-  const pending = await getPrisma().formResponse.deleteMany({
-    where: {
-      submission_state: 'PENDING_VERIFICATION',
-      created_at: { lt: pendingBefore },
-      staff_status: null,
-    },
-  });
-
+  /**
+   * DRAFTS ONLY. Unverified submissions are kept indefinitely now.
+   *
+   * An abandoned entry is a real applicant: somebody who filled the form in
+   * and did not click. They are visible to staff, and "did anybody bounce off
+   * the confirmation step?" is worth being able to answer for the whole life
+   * of the form. Deleting them was tidying at the cost of information — and
+   * their link never expires while the form is open, so one of them can still
+   * finish months later.
+   *
+   * A draft is a different object: half-typed answers nobody has ever seen,
+   * saved automatically under an on-form promise. Keeping those for ever means
+   * holding somebody's personal data because they started typing, so the
+   * thirty-day sweep stays exactly where it was.
+   */
   const drafts = await getPrisma().formResponse.deleteMany({
     where: {
       submission_state: 'DRAFT',
@@ -2071,144 +1935,6 @@ export async function expireStale(now: Date = new Date()) {
     },
   });
 
-  return { pendingDeleted: pending.count, draftsDeleted: drafts.count };
+  return { draftsDeleted: drafts.count };
 }
 
-/** When an unverified row will be swept, for the staff surface to show. */
-export const pendingExpiresAt = (createdAt: Date): Date =>
-  new Date(createdAt.getTime() + PENDING_TTL_MS);
-
-// ─── Reminders ──────────────────────────────────────────────────────────────
-
-export interface ReminderSweepResult {
-  /** Composed mail for the CALLER to send, in submission order. */
-  emails: FormVerifyEmail[];
-  /** Rows nudged, by stage index. For the task's log line. */
-  remindedByStage: number[];
-  /** Rows that were due but had spent their hourly link budget. */
-  skippedForCooldown: number;
-}
-
-/**
- * Nudge the people who submitted a public response and never clicked the link.
- *
- * ── Who is in scope ────────────────────────────────────────────────────────
- * PENDING_VERIFICATION, `verified_at` still null, and a NON-EMPTY answer set.
- * The last of those matters: a row with `{}` for answers is an address
- * somebody typed into a form and abandoned — possibly somebody else's address,
- * typed by a stranger — and mailing it twice more would turn the early-send
- * convenience into an unsolicited three-message sequence. An entry has to
- * exist before "finish your entry" is a sentence worth sending.
- *
- * ── Idempotence, with no column to track it ────────────────────────────────
- * A stage is due when the response is at least `stage` old AND NO TOKEN for it
- * was created after `submitted_at + stage`. Sending mints a token, which places
- * a token after that boundary — so the same stage can never fire twice, and the
- * property is recomputed from durable state on every run rather than
- * remembered. Running the sweep twice back to back mails once. So does running
- * it after a restart, or by hand, or late.
- *
- * A link the person asked for themselves (the resend button) suppresses the
- * next nudge for the same reason, which is the behaviour you want: they have a
- * fresh link in their inbox already.
- *
- * ── Failure is per row ─────────────────────────────────────────────────────
- * One row that has spent its hourly link budget must not abort the sweep for
- * everybody else, so the cooldown is caught and counted rather than thrown.
- *
- * The caller sends (or logs) the mail — the same "service prepares, route
- * delivers" split `beginPublicSubmission` uses, and the reason this is
- * testable without a mail transport.
- */
-export async function remindUnverified(now: Date = new Date()): Promise<ReminderSweepResult> {
-  const oldest = new Date(now.getTime() - REMINDER_STAGES_MS[0]);
-
-  const candidates = await getPrisma().formResponse.findMany({
-    where: {
-      submission_state: 'PENDING_VERIFICATION',
-      verified_at: null,
-      user_id: null,
-      submitted_at: { lte: oldest },
-      // Only forms that could still take the response. Nudging somebody towards
-      // a form that closed is worse than saying nothing.
-      form: { status: 'OPEN', access: 'PUBLIC' },
-    },
-    select: {
-      id: true,
-      email: true,
-      name: true,
-      answers: true,
-      submitted_at: true,
-      form: {
-        select: {
-          title: true,
-          slug: true,
-          closes_at: true,
-          classroom: { select: { slug: true, name: true } },
-        },
-      },
-    },
-    orderBy: { submitted_at: 'asc' },
-  });
-
-  const emails: FormVerifyEmail[] = [];
-  const remindedByStage = REMINDER_STAGES_MS.map(() => 0);
-  let skippedForCooldown = 0;
-
-  for (const response of candidates) {
-    if (answersAreEmpty(response.answers)) continue;
-    if (response.form.closes_at && response.form.closes_at.getTime() <= now.getTime()) continue;
-
-    const age = now.getTime() - response.submitted_at.getTime();
-
-    // The LATEST stage this row has come of age for. Checking newest-first
-    // means a sweep that missed a run does not send two nudges in a row to
-    // catch up — it sends the one that is actually current.
-    let stageIndex = -1;
-    for (let index = REMINDER_STAGES_MS.length - 1; index >= 0; index--) {
-      if (age >= REMINDER_STAGES_MS[index]) {
-        stageIndex = index;
-        break;
-      }
-    }
-    if (stageIndex < 0) continue;
-
-    const boundary = new Date(response.submitted_at.getTime() + REMINDER_STAGES_MS[stageIndex]);
-    const servedAlready = await getPrisma().formMagicToken.count({
-      where: { response_id: response.id, created_at: { gt: boundary } },
-    });
-    if (servedAlready > 0) continue;
-
-    try {
-      const { raw, tokenId } = await getPrisma().$transaction(tx =>
-        mintLinkFor(tx, response.id, now)
-      );
-      emails.push(
-        composeLinkEmail({
-          to: response.email,
-          name: response.name,
-          formTitle: response.form.title,
-          classroomName: response.form.classroom.name,
-          verifyUrl: verifyUrlFor({
-            classroomSlug: response.form.classroom.slug,
-            formSlug: response.form.slug,
-            rawToken: raw,
-          }),
-          template: 'form-verify-reminder',
-          // A reminder bounces exactly as a first send does, and the staff row
-          // wants to know that too — nobody is on a page to be told.
-          formMagicTokenId: tokenId,
-        })
-      );
-      remindedByStage[stageIndex] += 1;
-    } catch (error) {
-      if ((error as { code?: string }).code === MAGIC_LINK_COOLDOWN) {
-        skippedForCooldown += 1;
-        continue;
-      }
-      throw error;
-    }
-  }
-
-  return { emails, remindedByStage, skippedForCooldown };
-}
