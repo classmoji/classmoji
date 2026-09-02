@@ -38,12 +38,13 @@ const RUN = Boolean(DATABASE_URL) && isLocal && !isSharedDevDb;
 /**
  * The link a `beginPublicSubmission` MINTED.
  *
- * `rawToken` is nullable now: a submission whose address already holds a live,
- * unspent, young link reuses it and mails nothing (see `MAGIC_TOKEN_REUSE_MS`).
- * Every call site below that asks for a token is one where a fresh token is
- * genuinely expected — a first begin for a new address, or one whose previous
- * link has been spent or aged out — so a null here is a real failure and says
- * so, rather than surfacing three frames later as "cannot read null".
+ * `rawToken` is nullable now: a submission that PRESENTS a live, unspent link
+ * of its own reuses it and mails nothing (see `findLiveLink`). Every call site
+ * below that asks for a token is one where a fresh token is genuinely expected
+ * — a first begin for a new address, or one that presented nothing, or one
+ * whose presented link is spent, expired or undeliverable — so a null here is a
+ * real failure and says so, rather than surfacing three frames later as "cannot
+ * read null".
  */
 const tokenOf = ({ rawToken }: { rawToken: string | null }): string => {
   if (!rawToken) throw new Error('expected a freshly minted link, got a reused one');
@@ -459,37 +460,73 @@ describe.skipIf(!RUN)('forms services (integration)', () => {
     });
 
     /**
-     * ── One live link per address ───────────────────────────────────────────
+     * ── One live link per address, per BROWSER ──────────────────────────────
      *
      * Typing an address mails a link; submitting used to mail a second one
      * seconds later. Two mails for one action reads as broken, and the second
-     * makes the first ambiguous. So a send that finds a live, unspent, young
-     * link stands down — and every way that link could stop being usable puts
-     * the mint back, which is what stops "no mail" from ever meaning "no link".
+     * makes the first ambiguous. So a send that can be shown a live link stands
+     * down — and every way that link could stop being usable, or stop being
+     * reachable by the caller, puts the mint back. That is what stops "no mail"
+     * from ever meaning "no link".
+     *
+     * SHOWN is the word that changed. This used to ask a clock — "was a link
+     * for this address minted recently?" — and no answer to that question is
+     * right: a day of it left a person coming back the next morning waiting for
+     * mail that was suppressed, and two minutes of it double-mails anyone slow
+     * over a long form. The caller now has to NAME the link it holds
+     * (`heldTokenId`, the watch cookie's id in the fill route), which is the
+     * same browser, mid-fill, and nothing else.
      */
-    describe('reusing a link that is already in the inbox', () => {
-      const beginFor = (formId: string, revisionId: string, fieldId: string, email: string) =>
+    describe('reusing a link this browser can show it holds', () => {
+      const beginFor = (
+        formId: string,
+        revisionId: string,
+        fieldId: string,
+        email: string,
+        heldTokenId?: string | null
+      ) =>
         responseService.beginPublicSubmission({
           formId,
           email,
           answers: { [fieldId]: 'Maya' },
           revisionId,
+          heldTokenId,
         });
 
-      it('a submit after the address was typed sends nothing and mints nothing', async () => {
+      it('a submit that presents the blur link sends nothing and mints nothing', async () => {
         const { formId, revisionId } = await makeOpenForm();
         const fieldId = await nameFieldId(revisionId);
         const email = `reuse-blur-${suite}@example.test`;
 
-        // Exactly the uninterrupted path: leave the email field, then submit.
+        // Exactly the uninterrupted path: leave the email field, then submit —
+        // the browser presenting the id the blur reply put in its cookie.
         const blur = await responseService.beginAddressVerification({ formId, email, revisionId });
         expect(blur.sent).toBe(true);
 
-        const submitted = await beginFor(formId, revisionId, fieldId, email);
+        /**
+         * AND THE FORM TOOK THREE HOURS TO FILL IN.
+         *
+         * The whole point of scoping this to the browser rather than to a
+         * clock. A two-minute window would have sent a second identical mail
+         * here; anything shorter than "however long a person takes over a form"
+         * would too, and no such number exists.
+         */
+        const longFill = new Date(Date.now() - 3 * 60 * 60 * 1000);
+        await prisma.formMagicToken.updateMany({
+          where: { id: blur.watchTokenId! },
+          data: { created_at: longFill },
+        });
+
+        const submitted = await beginFor(formId, revisionId, fieldId, email, blur.watchTokenId);
         expect(submitted.rawToken).toBeNull();
         expect(submitted.verifyUrl).toBeNull();
         expect(submitted.emails).toHaveLength(0);
-        expect(submitted.linkAlreadySentAt).not.toBeNull();
+        // And it reports the link's TRUE age — three hours ago, not a
+        // comfortable "just now" from a clock that no longer decides anything.
+        // The fill route drops this field (rendering it would answer "has this
+        // person applied?"), so this assertion is the only thing keeping it
+        // honest.
+        expect(submitted.linkAlreadySentAt?.getTime()).toBe(longFill.getTime());
 
         // One link for the whole journey, and it opens the answers that were
         // just submitted — the placeholder overwrite filled the same row in.
@@ -508,26 +545,74 @@ describe.skipIf(!RUN)('forms services (integration)', () => {
         const { formId, revisionId } = await makeOpenForm();
         const email = `reuse-retype-${suite}@example.test`;
 
-        await responseService.beginAddressVerification({ formId, email, revisionId });
-        const again = await responseService.beginAddressVerification({ formId, email, revisionId });
+        const first = await responseService.beginAddressVerification({ formId, email, revisionId });
+        const again = await responseService.beginAddressVerification({
+          formId,
+          email,
+          revisionId,
+          heldTokenId: first.watchTokenId,
+        });
 
         expect(again.sent).toBe(false);
         expect(again.emails).toHaveLength(0);
+        // The same send stays the one worth watching, so a real bounce still
+        // reaches the page.
+        expect(again.watchTokenId).toBe(first.watchTokenId);
         const row = await rowFor(formId, email);
         expect(await prisma.formMagicToken.count({ where: { response_id: row.id } })).toBe(1);
       });
 
       /**
-       * The two ways a link stops being worth pointing at. Each one has to put
-       * the mint back — the one outcome that must never happen is somebody
-       * submitting, getting no mail, and holding no live link.
+       * ── THE CASE THE OLD RULE GOT WRONG ──────────────────────────────────
        *
-       * "Spent" used to be a third way and is not one any more: confirming
-       * EXTENDS a link rather than consuming it, so the person is left holding
-       * the most useful link they have ever had. That case is covered just
-       * below, because "no new mail" is only correct while the old link works.
+       * A caller holding nothing is a browser that cannot reach the link we
+       * mailed: a different device, tomorrow's page load, a cleared cookie jar,
+       * a form republished since. Under the time window it was told to check an
+       * inbox for a link it could not find, and nothing arrived. It is mailed.
+       *
+       * This is the assertion that the address alone is no longer sufficient
+       * grounds for silence — delete `heldTokenId` from the service and this
+       * fails, whatever the clock says.
        */
-      it('mints afresh once the previous link is expired or old', async () => {
+      it('a submit from a browser holding nothing is mailed a link of its own', async () => {
+        const { formId, revisionId } = await makeOpenForm();
+        const fieldId = await nameFieldId(revisionId);
+        const email = `reuse-elsewhere-${suite}@example.test`;
+
+        const blur = await responseService.beginAddressVerification({ formId, email, revisionId });
+        expect(blur.sent).toBe(true);
+
+        // Seconds later — the age is not what decides this.
+        const elsewhere = await beginFor(formId, revisionId, fieldId, email, null);
+        expect(elsewhere.rawToken).not.toBeNull();
+        expect(elsewhere.emails).toHaveLength(1);
+        expect(elsewhere.linkAlreadySentAt).toBeNull();
+
+        const row = await rowFor(formId, email);
+        expect(await prisma.formMagicToken.count({ where: { response_id: row.id } })).toBe(2);
+
+        // And the same for a browser coming back to the FORM rather than the
+        // submit — the blur that fires on tomorrow's page load.
+        const tomorrow = await responseService.beginAddressVerification({
+          formId,
+          email,
+          revisionId,
+        });
+        expect(tomorrow.sent).toBe(true);
+        expect(tomorrow.emails).toHaveLength(1);
+      });
+
+      /**
+       * The ways a link stops being worth pointing at even when the caller CAN
+       * point at it. Each one has to put the mint back — the one outcome that
+       * must never happen is somebody submitting, getting no mail, and holding
+       * no live link.
+       *
+       * A KNOWN-FAILED send is a fifth way and has a test of its own below,
+       * because it is the one that actually stranded somebody and the reasoning
+       * is worth its own space.
+       */
+      it('a presented link that is spent, expired or foreign puts the mint back', async () => {
         const { formId, revisionId } = await makeOpenForm();
         const fieldId = await nameFieldId(revisionId);
 
@@ -538,21 +623,52 @@ describe.skipIf(!RUN)('forms services (integration)', () => {
           where: { response_id: dead.responseId },
           data: { expires_at: new Date(Date.now() - 1000) },
         });
-        expect((await beginFor(formId, revisionId, fieldId, deadEmail)).rawToken).not.toBeNull();
-
-        // OLD: still valid, but past the reuse window — so what it would hand
-        // back has less than half its life left. Mint rather than strand.
-        const oldEmail = `reuse-old-${suite}@example.test`;
-        const old = await beginFor(formId, revisionId, fieldId, oldEmail);
-        await prisma.formMagicToken.updateMany({
-          where: { response_id: old.responseId },
-          data: {
-            created_at: new Date(Date.now() - responseService.MAGIC_TOKEN_REUSE_MS - 60_000),
-          },
+        const deadHeld = await prisma.formMagicToken.findFirstOrThrow({
+          where: { response_id: dead.responseId },
         });
-        const renewed = await beginFor(formId, revisionId, fieldId, oldEmail);
-        expect(renewed.rawToken).not.toBeNull();
-        expect(renewed.emails).toHaveLength(1);
+        expect(
+          (await beginFor(formId, revisionId, fieldId, deadEmail, deadHeld.id)).rawToken
+        ).not.toBeNull();
+
+        // SPENT. Nothing writes `used_at` any more — a submission extends its
+        // link rather than consuming it — but rows written before that change
+        // still carry it, and a spent link opens nothing.
+        const spentEmail = `reuse-spent-${suite}@example.test`;
+        const spent = await beginFor(formId, revisionId, fieldId, spentEmail);
+        const spentHeld = await prisma.formMagicToken.findFirstOrThrow({
+          where: { response_id: spent.responseId },
+        });
+        await prisma.formMagicToken.update({
+          where: { id: spentHeld.id },
+          data: { used_at: new Date() },
+        });
+        const afterSpent = await beginFor(formId, revisionId, fieldId, spentEmail, spentHeld.id);
+        expect(afterSpent.rawToken).not.toBeNull();
+        expect(afterSpent.emails).toHaveLength(1);
+
+        /**
+         * FOREIGN: a live id, but for somebody else's response.
+         *
+         * The realistic version is one person's own browser — they typed one
+         * address, then corrected it to another, and the cookie still names the
+         * first link. It opens the wrong row, so it is no use to them, and
+         * `response_id` is what refuses it. Without that check a cookie could
+         * suppress the mail for an address it has nothing to do with.
+         */
+        const otherEmail = `reuse-foreign-other-${suite}@example.test`;
+        const other = await beginFor(formId, revisionId, fieldId, otherEmail);
+        const otherHeld = await prisma.formMagicToken.findFirstOrThrow({
+          where: { response_id: other.responseId },
+        });
+
+        const correctedEmail = `reuse-foreign-${suite}@example.test`;
+        const corrected = await beginFor(formId, revisionId, fieldId, correctedEmail, otherHeld.id);
+        expect(corrected.rawToken).not.toBeNull();
+        expect(corrected.emails).toHaveLength(1);
+        // And the foreign response was not touched on the way past.
+        expect(
+          await prisma.formMagicToken.count({ where: { response_id: other.responseId } })
+        ).toBe(1);
       });
 
       /**
@@ -572,7 +688,7 @@ describe.skipIf(!RUN)('forms services (integration)', () => {
         const rawToken = tokenOf(first);
         await responseService.confirmSubmission(rawToken);
 
-        const after = await beginFor(formId, revisionId, fieldId, email);
+        const after = await beginFor(formId, revisionId, fieldId, email, first.watchTokenId);
         expect(after.rawToken).toBeNull();
         expect(after.emails).toHaveLength(0);
 
@@ -621,6 +737,7 @@ describe.skipIf(!RUN)('forms services (integration)', () => {
           formId,
           email,
           revisionId,
+          heldTokenId: blur.watchTokenId,
         });
         expect(retyped.sent).toBe(true);
         expect(retyped.emails).toHaveLength(1);
@@ -635,7 +752,7 @@ describe.skipIf(!RUN)('forms services (integration)', () => {
           where: { id: retyped.watchTokenId! },
           data: { delivery_state: responseService.MAGIC_LINK_SEND_FAILED },
         });
-        const submitted = await beginFor(formId, revisionId, fieldId, email);
+        const submitted = await beginFor(formId, revisionId, fieldId, email, retyped.watchTokenId);
         expect(submitted.rawToken).not.toBeNull();
         expect(submitted.emails).toHaveLength(1);
         expect(submitted.linkAlreadySentAt).toBeNull();
@@ -667,7 +784,7 @@ describe.skipIf(!RUN)('forms services (integration)', () => {
           await prisma.formMagicToken.findFirstOrThrow({ where: { id: blur.watchTokenId! } })
         ).toMatchObject({ delivery_state: null });
 
-        const submitted = await beginFor(formId, revisionId, fieldId, email);
+        const submitted = await beginFor(formId, revisionId, fieldId, email, blur.watchTokenId);
         expect(submitted.emails).toHaveLength(0);
         expect(submitted.linkAlreadySentAt).not.toBeNull();
         expect(await prisma.formMagicToken.count({ where: { response_id: row.id } })).toBe(1);
@@ -699,42 +816,49 @@ describe.skipIf(!RUN)('forms services (integration)', () => {
             data: { delivery_state: state },
           });
 
-          const submitted = await beginFor(formId, revisionId, fieldId, email);
+          const submitted = await beginFor(formId, revisionId, fieldId, email, blur.watchTokenId);
           expect(submitted.emails, `${state} must stay reusable`).toHaveLength(0);
         }
       });
-
     });
 
     /**
-     * The cooldown is now a limit on ASKING, not on submitting.
+     * The cooldown is a limit on ASKING, not on submitting — for a browser that
+     * can show what it already has.
      *
-     * Repeating the submit no longer spends the budget at all — the second one
-     * reuses the live link — so the only way to reach the ceiling is the resend
-     * button, which force-mints because it is the person on the check-email
-     * screen saying the mail did not arrive. That is the shape worth pinning:
-     * one link for the address, plus `MAX_PER_WINDOW - 1` times of asking
-     * again, and then an hour's wait.
+     * Repeating the submit from the SAME fill costs nothing: it presents the
+     * link it holds and reuses it. So the ordinary way to reach the ceiling is
+     * the resend button, which force-mints because it is the person on the
+     * check-email screen saying the mail did not arrive. That is the shape
+     * worth pinning: one link for the address, plus `MAX_PER_WINDOW - 1` times
+     * of asking again, and then an hour's wait.
+     *
+     * A caller presenting NOTHING each time spends a slot each time instead,
+     * and hits the same ceiling three tries in. That is the ceiling doing its
+     * job — it is what bounds what one mailbox can be sent — and it is why the
+     * per-address budget matters more now than it did under a time window.
      */
     it('allows three link sends per response per hour, then cools down', async () => {
       const { formId, revisionId } = await makeOpenForm();
       const fieldId = await nameFieldId(revisionId);
       const email = `cooldown-${suite}@example.test`;
-      const submit = () =>
+      const submit = (heldTokenId?: string | null) =>
         responseService.beginPublicSubmission({
           formId,
           email,
           answers: { [fieldId]: 'Maya' },
           revisionId,
+          heldTokenId,
         });
       /** The check-email screen's "send it again". */
       const askAgain = () =>
         responseService.beginAddressVerification({ formId, email, revisionId, force: true });
 
       const first = await submit();
-      const second = await submit();
+      const second = await submit(first.watchTokenId);
       expect(second.mode).toBe('existing');
-      // The second submit cost nothing: same row, same link, no mail.
+      // The second submit cost nothing: same row, same link, no mail — because
+      // it could show the link the first one minted.
       expect(second.rawToken).toBeNull();
       expect(second.emails).toHaveLength(0);
 
@@ -745,7 +869,13 @@ describe.skipIf(!RUN)('forms services (integration)', () => {
       expect(await codeOf(askAgain())).toBe(responseService.MAGIC_LINK_COOLDOWN);
       // And a submit in that state is still not an error — it has a live link
       // to point at, which is exactly what the cooldown means.
-      await expect(submit()).resolves.toMatchObject({ rawToken: null, emails: [] });
+      await expect(submit(first.watchTokenId)).resolves.toMatchObject({
+        rawToken: null,
+        emails: [],
+      });
+      // A caller with nothing to show is refused rather than mailed, which is
+      // the ceiling doing the job the reuse rule no longer does.
+      expect(await codeOf(submit())).toBe(responseService.MAGIC_LINK_COOLDOWN);
 
       // The refused send must not have left a token behind.
       expect(first.responseId).toBe(second.responseId);
@@ -951,23 +1081,37 @@ describe.skipIf(!RUN)('forms services (integration)', () => {
         )
       );
 
+      /**
+       * ONE ROW. That is what this test is for, and it is the part the row lock
+       * decides: six writers serialized, one select-then-insert that cannot go
+       * stale, one (form_id, email_normalized) slot.
+       *
+       * Six at once, none of them presenting a link, is not a journey anybody
+       * makes — it is the lock under load. Reuse cannot help here and should not
+       * pretend to: each caller has nothing to show, so each is a browser we
+       * have not mailed as far as the service can tell, and the thing that
+       * actually bounds the mailbox is the per-address ceiling. It holds: three
+       * links, then a cooldown, from six simultaneous tries.
+       */
       const rows = await prisma.formResponse.findMany({ where: { form_id: formId } });
       expect(rows).toHaveLength(1);
 
-      /**
-       * The row lock serializes them, and reuse is decided INSIDE it — so the
-       * first one through mints and the other five find that link and stand
-       * down. Nobody is refused (a cooldown for pressing Submit twice would be
-       * a bad way to meet a form) and the mailbox gets exactly one message.
-       */
       const fulfilled = outcomes.filter(outcome => outcome.status === 'fulfilled');
-      expect(fulfilled).toHaveLength(6);
       const minted = fulfilled.filter(
         outcome =>
           (outcome as PromiseFulfilledResult<{ rawToken: string | null }>).value.rawToken !== null
       );
-      expect(minted).toHaveLength(1);
-      expect(await prisma.formMagicToken.count({ where: { response_id: rows[0].id } })).toBe(1);
+      expect(minted).toHaveLength(responseService.MAGIC_TOKEN_MAX_PER_WINDOW);
+      expect(
+        outcomes.filter(
+          outcome =>
+            outcome.status === 'rejected' &&
+            (outcome.reason as { code?: string }).code === responseService.MAGIC_LINK_COOLDOWN
+        )
+      ).toHaveLength(6 - responseService.MAGIC_TOKEN_MAX_PER_WINDOW);
+      expect(await prisma.formMagicToken.count({ where: { response_id: rows[0].id } })).toBe(
+        responseService.MAGIC_TOKEN_MAX_PER_WINDOW
+      );
     });
 
     it('the partial unique index refuses a second row for one classroom user', async () => {
@@ -1725,12 +1869,14 @@ describe.skipIf(!RUN)('forms services (integration)', () => {
         /**
          * The other device: an ordinary submission, and a link of its own.
          *
-         * The submit itself mints nothing — the address already holds the live
-         * link the laptop is sitting on — so the phone gets its second link the
-         * only way a second link is ever handed out: by asking for it on the
-         * check-email screen. Which is exactly how somebody ends up holding two
-         * live links for one response, and therefore the honest way to set this
-         * scenario up.
+         * The phone holds nothing — the live link for this address is in the
+         * laptop's cookie jar, on the other side of the room — so its submit
+         * mints and mails a second one. That is the whole reason reuse is
+         * scoped to a browser: silence here would leave somebody on a phone
+         * told to check an inbox for a link only the laptop can reach.
+         *
+         * And it is how one response comes to have two live links, which is the
+         * scenario this test needs.
          */
         const begun = await responseService.beginPublicSubmission({
           formId,
@@ -1738,14 +1884,8 @@ describe.skipIf(!RUN)('forms services (integration)', () => {
           answers: { [fieldId]: 'From the phone' },
           revisionId,
         });
-        expect(begun.rawToken).toBeNull();
-        const phone = await responseService.beginAddressVerification({
-          formId,
-          email,
-          revisionId,
-          force: true,
-        });
-        await responseService.confirmSubmission(tokenIn(phone));
+        expect(begun.rawToken).not.toBeNull();
+        await responseService.confirmSubmission(tokenOf(begun));
         const counted = await prisma.formResponse.findUniqueOrThrow({
           where: { id: begun.responseId },
         });
