@@ -1567,8 +1567,13 @@ model Form {
   /// Public fills always store a server-side row (they must, to be verified).
   /// This governs anonymous DRAFT autosave: off → localStorage only, on →
   /// drafts persist server-side keyed by draft_token, with an on-form
-  /// disclosure. GC'd by the same 48h expiry sweep.
-  save_partials       Boolean    @default(false)
+  /// disclosure. Swept after DRAFT_TTL_MS.
+  ///
+  /// ON by default. Losing a half-filled form to a closed tab is the ordinary
+  /// disaster, and localStorage does not survive a different device, a private
+  /// window, or cleared site data. An instructor who would rather not hold
+  /// partial answers can turn it off per form.
+  save_partials       Boolean    @default(true)
   confirmation_email  Boolean    @default(false)
   created_by          String
   created_at          DateTime   @default(now())

@@ -126,6 +126,7 @@ export const loader = async ({
       // silently moving the deadline for everyone else.
       closesAtIso: form.closes_at ? form.closes_at.toISOString() : '',
       allowMultiple: form.allow_multiple,
+      savePartials: form.save_partials,
     },
     fields: fieldsOf(form.draft_fields),
     scopes: {
@@ -160,6 +161,7 @@ export const action = async ({
     responseCap?: number | null;
     closesAt?: string | null;
     allowMultiple?: boolean;
+    savePartials?: boolean;
   };
 
   // Resolve by (classroom, slug), never by an id from the request body: the
@@ -223,6 +225,7 @@ export const action = async ({
             ? { closes_at: body.closesAt ? new Date(body.closesAt) : null }
             : {}),
           ...(body.allowMultiple !== undefined ? { allow_multiple: body.allowMultiple } : {}),
+          ...(body.savePartials !== undefined ? { save_partials: body.savePartials } : {}),
         });
         await audit('UPDATE', 'forms.builder.save-meta');
         return { ok: true, savedAt: new Date().toISOString() };
@@ -568,6 +571,18 @@ export default function FormBuilder() {
               onChange={event => post({ intent: 'save-meta', allowMultiple: event.target.checked })}
             />
             Let one person submit more than once
+          </label>
+          {/* Partial saving is ON by default, and this is the only way to turn
+              it off. A default that collects something, with no control to
+              refuse it, is not a default — it is a decision taken on somebody
+              else's behalf and never offered back. */}
+          <label className="mt-1 flex items-center gap-2 border border-transparent py-1 text-sm text-gray-700 dark:text-gray-200">
+            <input
+              type="checkbox"
+              defaultChecked={data.form.savePartials}
+              onChange={event => post({ intent: 'save-meta', savePartials: event.target.checked })}
+            />
+            Save answers as people type
           </label>
           <span className="mt-1 block h-4" />
         </div>
