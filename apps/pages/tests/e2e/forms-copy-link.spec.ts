@@ -3,18 +3,28 @@ import { test, expect } from '@playwright/test';
 import { getTestClassroomSlug, getTestPrisma } from '../helpers';
 
 /**
- * Which hostname "Copy link" copies — the whole matrix, against a real database.
+ * What "Copy link" copies — the WHOLE URL, the whole matrix, against a real
+ * database.
  *
- * `publicFormOrigin` now asks `canonicalOriginForSite`, the same rule the class
- * site uses for its own `rel=canonical`, so a course that has connected its own
- * domain shares forms on that domain. The four rows below are that rule seen
- * from the forms side: a claim only counts once it is VERIFIED and the
- * classroom is actually on PRO, and every other combination stays on the
- * subdomain.
+ * The whole URL is the point. An earlier version of this file asserted only the
+ * origin, and the path was appended by each caller — always in the pages shape,
+ * `/{classroomSlug}/forms/{formSlug}`. A class-site host does not serve that
+ * path: `app/site/forms.ts` bridges the SHORT `/forms/{formSlug}` and 404s
+ * everything else, so every link copied for a classroom with a site was a 404,
+ * on the subdomain as well as on a custom domain. Asserting the origin alone is
+ * what let it through, so these assertions name the string an instructor
+ * actually pastes.
+ *
+ * `publicFormUrlFor` asks `canonicalOriginForSite` for the hostname, the same
+ * rule the class site uses for its own `rel=canonical`, so a course that has
+ * connected its own domain shares forms on that domain. The four rows below are
+ * that rule seen from the forms side: a claim only counts once it is VERIFIED
+ * and the classroom is actually on PRO, and every other combination stays on
+ * the subdomain.
  *
  * ── Why this is here and not in tests/unit ─────────────────────────────────
  * The other specs for this decision (`custom-domains.spec.ts`) test
- * `seoOriginFor`, which is pure. What is new here is not that rule but the
+ * `seoOriginFor`, which is pure. What is tested here is not that rule but the
  * WIRING to it, and the wiring runs two database reads — the site row and the
  * classroom's PRO state. The Playwright runner has no module mocking, and
  * bending production code into an injection seam to fake a subscription would
@@ -53,9 +63,21 @@ const CUSTOM_DOMAIN_ORIGIN = `https://${CUSTOM_DOMAIN}`;
 /** What the copied link falls back to: the origin serving the admin screen. */
 const REQUEST_ORIGIN = 'http://localhost:7100';
 
+/**
+ * Any slug at all. `publicFormUrlFor` never looks the form up — it decides on
+ * the CLASSROOM's site and then builds a path — so no row has to exist for
+ * these assertions to be the real ones.
+ */
+const FORM_SLUG = 'zz-e2e-copy-link-form';
+
+/** The short bridge path, the only forms URL a class-site host serves. */
+const siteLink = (origin: string) => `${origin}/forms/${FORM_SLUG}`;
+/** The canonical pages route, which the bridge redirects to. */
+const pagesLink = `${REQUEST_ORIGIN}/${CLASS}/forms/${FORM_SLUG}`;
+
 type Classroom = { id: string; status: string; is_archived: boolean };
 
-let publicFormOrigin: typeof import('../../app/forms/admin/adminLinks.server.ts').publicFormOrigin;
+let publicFormUrlFor: typeof import('../../app/forms/admin/adminLinks.server.ts').publicFormUrlFor;
 let classroom: Classroom;
 /** The site row this file displaced, if the machine had one. */
 let restoreSite: (() => Promise<void>) | null = null;
@@ -73,7 +95,7 @@ test.beforeAll(async () => {
   // Imported AFTER getTestPrisma has resolved DATABASE_URL from `.dev-context`
   // — the module chain constructs its Prisma client at import, and a static
   // import at the top of this file would bind the wrong database on a devport.
-  ({ publicFormOrigin } = await import('../../app/forms/admin/adminLinks.server.ts'));
+  ({ publicFormUrlFor } = await import('../../app/forms/admin/adminLinks.server.ts'));
 
   const found = await prisma.classroom.findUnique({
     where: { slug: CLASS },
@@ -198,12 +220,18 @@ async function withProSubscription(run: () => Promise<void>) {
   }
 }
 
-test.describe('the origin "Copy link" copies', () => {
+/** The URL the copy button would hand out for `FORM_SLUG` on this classroom. */
+async function copiedLink(withClassroom: Classroom = classroom): Promise<string> {
+  const build = await publicFormUrlFor(withClassroom, REQUEST_ORIGIN, CLASS);
+  return build(FORM_SLUG);
+}
+
+test.describe('the URL "Copy link" copies', () => {
   test('a site with no custom domain keeps the subdomain', async () => {
     // The behaviour before this change, and the one almost every classroom has.
     await setCustomDomain({ domain: null, verified: false });
 
-    expect(await publicFormOrigin(classroom, REQUEST_ORIGIN)).toBe(SUBDOMAIN_ORIGIN);
+    expect(await copiedLink()).toBe(siteLink(SUBDOMAIN_ORIGIN));
   });
 
   test('a VERIFIED custom domain on an active PRO is what gets copied', async () => {
@@ -213,7 +241,7 @@ test.describe('the origin "Copy link" copies', () => {
     await setCustomDomain({ domain: CUSTOM_DOMAIN, verified: true });
 
     await withProSubscription(async () => {
-      expect(await publicFormOrigin(classroom, REQUEST_ORIGIN)).toBe(CUSTOM_DOMAIN_ORIGIN);
+      expect(await copiedLink()).toBe(siteLink(CUSTOM_DOMAIN_ORIGIN));
     });
   });
 
@@ -223,7 +251,7 @@ test.describe('the origin "Copy link" copies', () => {
     await setCustomDomain({ domain: CUSTOM_DOMAIN, verified: false });
 
     await withProSubscription(async () => {
-      expect(await publicFormOrigin(classroom, REQUEST_ORIGIN)).toBe(SUBDOMAIN_ORIGIN);
+      expect(await copiedLink()).toBe(siteLink(SUBDOMAIN_ORIGIN));
     });
   });
 
@@ -234,7 +262,7 @@ test.describe('the origin "Copy link" copies', () => {
     // URL beats a broken one.
     await setCustomDomain({ domain: CUSTOM_DOMAIN, verified: true });
 
-    expect(await publicFormOrigin(classroom, REQUEST_ORIGIN)).toBe(SUBDOMAIN_ORIGIN);
+    expect(await copiedLink()).toBe(siteLink(SUBDOMAIN_ORIGIN));
   });
 });
 
@@ -248,19 +276,15 @@ test.describe('the guards that keep a copied link off a site that does not serve
     await withProSubscription(async () => {
       const prisma = await getTestPrisma();
 
-      expect(await publicFormOrigin({ ...classroom, is_archived: true }, REQUEST_ORIGIN)).toBe(
-        REQUEST_ORIGIN
-      );
-      expect(await publicFormOrigin({ ...classroom, status: 'UNPUBLISHED' }, REQUEST_ORIGIN)).toBe(
-        REQUEST_ORIGIN
-      );
+      expect(await copiedLink({ ...classroom, is_archived: true })).toBe(pagesLink);
+      expect(await copiedLink({ ...classroom, status: 'UNPUBLISHED' })).toBe(pagesLink);
 
       await prisma.classroomSite.update({
         where: { classroom_id: classroom.id },
         data: { is_enabled: false },
       });
       try {
-        expect(await publicFormOrigin(classroom, REQUEST_ORIGIN)).toBe(REQUEST_ORIGIN);
+        expect(await copiedLink()).toBe(pagesLink);
       } finally {
         await prisma.classroomSite.update({
           where: { classroom_id: classroom.id },

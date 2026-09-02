@@ -25,10 +25,12 @@ import {
  * and the next move after publishing is to send the link to someone. Until now
  * that meant navigating back to the list to find the copy button.
  *
- * What is NOT asserted here is the SHORT link. `publicFormOrigin` resolves the
- * classroom's site host when it has one, and the dev stack deliberately runs
- * with SITE_BASE_DOMAIN unset (see `forms-site-link.spec.ts`), so on this
- * server the origin resolves to the request's own — which is what these
+ * What is NOT asserted here is the SHORT link. `publicFormUrlFor` resolves the
+ * classroom's site host when it has one — and on that host the link is a
+ * different PATH too, `/forms/{slug}` rather than `/{class}/forms/{slug}`,
+ * which is what `forms-copy-link.spec.ts` covers. The dev stack deliberately
+ * runs with SITE_BASE_DOMAIN unset (see `forms-site-link.spec.ts`), so on this
+ * server no site serves and the link is the request-origin one these
  * assertions expect.
  */
 

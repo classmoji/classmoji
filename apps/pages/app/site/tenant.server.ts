@@ -431,7 +431,7 @@ async function loadSiteContext(
  * and does no extra work at all.
  *
  * Exported because the question has a second asker: the forms admin's copied
- * link (`publicFormOrigin`) shares a form on the address of the course, and
+ * link (`publicFormUrlFor`) shares a form on the address of the course, and
  * that address has to mean the same thing there as it does in `rel=canonical`.
  * Its site row comes from `getSiteForClassroom` — the bare `ClassroomSite`,
  * with no `classroom` include — so the parameter names the four columns this

@@ -17,7 +17,7 @@ import { assertFormAdmin, formMutationBlocked } from '~/utils/formAuth.server.ts
 import { ConfirmDialog } from '~/components/forms/ConfirmDialog.tsx';
 import { BackToClassroom } from '~/components/forms/BackToClassroom.tsx';
 import { useCopyLink } from '~/components/forms/useCopyLink.ts';
-import { classroomHomeUrl, publicFormOrigin } from './adminLinks.server.ts';
+import { classroomHomeUrl, publicFormUrlFor } from './adminLinks.server.ts';
 
 dayjs.extend(relativeTime);
 
@@ -46,6 +46,12 @@ interface FormRow {
   responseCap: number | null;
   closesAt: string | null;
   updatedAt: string;
+  /**
+   * The link the copy button hands out — built in the loader, because it is the
+   * only place that knows whether this classroom has a course site and
+   * therefore which PATH the link takes. See `publicFormUrlFor`.
+   */
+  publicUrl: string;
 }
 
 export const loader = async ({
@@ -60,11 +66,13 @@ export const loader = async ({
     action: 'list_forms',
   });
 
-  const [forms, shareOrigin] = await Promise.all([
+  const [forms, publicUrlFor] = await Promise.all([
     ClassmojiService.form.findByClassroomId(classroom.id),
     // The classroom's own site host when it has one, so what staff copy is the
-    // short link they would put on a slide. See publicFormOrigin.
-    publicFormOrigin(classroom, new URL(request.url).origin),
+    // short link they would put on a slide. Resolved ONCE for the classroom and
+    // applied per row — the hostname is a property of the classroom, not of the
+    // form. See publicFormUrlFor.
+    publicFormUrlFor(classroom, new URL(request.url).origin, classroomSlug),
   ]);
 
   const classroomName = (classroom as { name?: string | null }).name ?? classroomSlug;
@@ -73,7 +81,6 @@ export const loader = async ({
     classroomSlug,
     classroomName,
     classroomHome: classroomHomeUrl(membership.role, classroomSlug),
-    shareOrigin,
     forms: forms.map(
       (form): FormRow => ({
         id: form.id,
@@ -92,6 +99,7 @@ export const loader = async ({
         // string arrived.
         closesAt: form.closes_at ? form.closes_at.toISOString() : null,
         updatedAt: form.updated_at.toISOString(),
+        publicUrl: publicUrlFor(form.slug),
       })
     ),
   };
@@ -188,8 +196,7 @@ const STATUS_CHIP: Record<FormStatus, string> = {
 };
 
 export default function FormsList() {
-  const { forms, classroomSlug, classroomName, classroomHome, shareOrigin } =
-    useLoaderData<typeof loader>();
+  const { forms, classroomSlug, classroomName, classroomHome } = useLoaderData<typeof loader>();
   const fetcher = useFetcher<{ error?: string; ok?: boolean }>();
   const [query, setQuery] = useState('');
   const { copiedKey, copy } = useCopyLink();
@@ -204,8 +211,6 @@ export default function FormsList() {
       form => form.title.toLowerCase().includes(needle) || form.slug.toLowerCase().includes(needle)
     );
   }, [forms, query]);
-
-  const linkFor = (form: FormRow) => `${shareOrigin}/${classroomSlug}/forms/${form.slug}`;
 
   const setStatus = (form: FormRow, status: FormStatus) => {
     fetcher.submit(
@@ -368,7 +373,7 @@ export default function FormsList() {
                       </Link>
                       <button
                         type="button"
-                        onClick={() => copy(linkFor(form), form.id)}
+                        onClick={() => copy(form.publicUrl, form.id)}
                         title="Copy the link to this form"
                         aria-label={`Copy link to ${form.title}`}
                         className="text-gray-400 hover:text-gray-700 dark:hover:text-gray-200"
@@ -376,7 +381,7 @@ export default function FormsList() {
                         <IconCopy size={16} />
                       </button>
                       <a
-                        href={linkFor(form)}
+                        href={form.publicUrl}
                         target="_blank"
                         rel="noreferrer"
                         title="Open the form as a respondent sees it"

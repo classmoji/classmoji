@@ -25,7 +25,7 @@ import { ConfirmDialog } from '~/components/forms/ConfirmDialog.tsx';
 import FieldCard from '~/components/forms/builder/FieldCard.tsx';
 import { BackToClassroom } from '~/components/forms/BackToClassroom.tsx';
 import { useCopyLink } from '~/components/forms/useCopyLink.ts';
-import { classroomHomeUrl, publicFormOrigin } from './adminLinks.server.ts';
+import { classroomHomeUrl, publicFormUrlFor } from './adminLinks.server.ts';
 import type { ScopeChoices } from '~/components/forms/builder/FieldConfig.tsx';
 import { FIELD_TYPE_META, makeField } from '~/components/forms/fieldTypes.ts';
 
@@ -105,12 +105,12 @@ export const loader = async ({
   // Team-review scopes. Read here rather than in the component because both
   // lists are classroom-scoped data and the picker must never be able to name a
   // tag or an assignment from another classroom.
-  const [tags, repositories, shareOrigin] = await Promise.all([
+  const [tags, repositories, publicUrlFor] = await Promise.all([
     ClassmojiService.organizationTag.findByClassroomId(classroom.id),
     ClassmojiService.repository.findByClassroomId(classroom.id),
-    // The same origin the list copies, resolved the same way, so the two
+    // The same URL the list copies, built by the same function, so the two
     // surfaces can never hand out two different addresses for one form.
-    publicFormOrigin(classroom, new URL(request.url).origin),
+    publicFormUrlFor(classroom, new URL(request.url).origin, classroomSlug),
   ]);
 
   const revisions = (form as { revisions?: Array<{ version: number }> }).revisions ?? [];
@@ -120,8 +120,9 @@ export const loader = async ({
     classroomName: (classroom as { name?: string | null }).name ?? classroomSlug,
     classroomHome: classroomHomeUrl(membership.role, classroomSlug),
     // Built on the server because only the server knows whether this classroom
-    // has a course site to shorten the link onto.
-    publicUrl: `${shareOrigin}/${classroomSlug}/forms/${form.slug}`,
+    // has a course site to shorten the link onto — and the short link is a
+    // different PATH, not just a different host.
+    publicUrl: publicUrlFor(form.slug),
     form: {
       id: form.id,
       title: form.title,
