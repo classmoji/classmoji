@@ -1736,8 +1736,8 @@ export default function FormFill() {
               </>
             ) : (
               <>
-                Nothing is recorded until you click it. The link works for 48 hours, and the same
-                link lets you change your answers later.
+                Nothing is recorded until you click it. The same link brings you back to your
+                answers for as long as the form is open.
               </>
             )}
           </p>
