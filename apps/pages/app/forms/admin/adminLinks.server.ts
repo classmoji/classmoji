@@ -50,12 +50,18 @@ export function classroomHomeUrl(role: string, classroomSlug: string): string {
  * with the site feature off keeps the canonical link with no branch of its own.
  */
 export async function publicFormOrigin(
-  classroomId: string,
+  classroom: { id: string; status?: string },
   requestOrigin: string
 ): Promise<string> {
-  const site = await ClassmojiService.site.getSiteForClassroom(classroomId);
-  // A site switched off does not serve `/forms/…` either — the bridge resolves
-  // through the same lookup — so a disabled site keeps the canonical link.
+  // A classroom that has never been opened does not serve its site at all —
+  // `getSiteBySubdomain` calls that `unavailable` — so a short link built here
+  // would 404 until the instructor publishes. The canonical one works today,
+  // and a link that works is worth more than a link that is shorter.
+  if (classroom.status === 'UNPUBLISHED') return requestOrigin;
+
+  const site = await ClassmojiService.site.getSiteForClassroom(classroom.id);
+  // Same reasoning for a site switched off: the bridge resolves through the
+  // same lookup and would refuse it.
   if (!site || !site.is_enabled) return requestOrigin;
   return siteOrigin(site.subdomain) ?? requestOrigin;
 }

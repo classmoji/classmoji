@@ -64,7 +64,7 @@ export const loader = async ({
     ClassmojiService.form.findByClassroomId(classroom.id),
     // The classroom's own site host when it has one, so what staff copy is the
     // short link they would put on a slide. See publicFormOrigin.
-    publicFormOrigin(classroom.id, new URL(request.url).origin),
+    publicFormOrigin(classroom, new URL(request.url).origin),
   ]);
 
   const classroomName = (classroom as { name?: string | null }).name ?? classroomSlug;

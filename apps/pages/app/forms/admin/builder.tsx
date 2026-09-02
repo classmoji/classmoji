@@ -110,7 +110,7 @@ export const loader = async ({
     ClassmojiService.repository.findByClassroomId(classroom.id),
     // The same origin the list copies, resolved the same way, so the two
     // surfaces can never hand out two different addresses for one form.
-    publicFormOrigin(classroom.id, new URL(request.url).origin),
+    publicFormOrigin(classroom, new URL(request.url).origin),
   ]);
 
   const revisions = (form as { revisions?: Array<{ version: number }> }).revisions ?? [];

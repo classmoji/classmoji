@@ -25,8 +25,12 @@ import { getPagesBaseURL, getTestClassroomSlug, getTestPrisma } from '../helpers
  * this file at it:
  *
  *   cd apps/pages && npm run pages:build
- *   SITE_BASE_DOMAIN=lvh.me PAGES_URL=http://localhost:7159 PORT=7159 \
- *     NODE_ENV=production node --experimental-strip-types server.ts
+ *   # devport.sh run is not optional: it exports the DATABASE_URL of THIS
+ *   # worktree's database. Without it the server boots against the default
+ *   # `classmoji` one and the fixture below is written to the wrong place.
+ *   ../../scripts/devport.sh run env SITE_BASE_DOMAIN=lvh.me PORT=7159 \
+ *     PAGES_URL=http://localhost:7159 NODE_ENV=production \
+ *     node --experimental-strip-types server.ts
  *   FORMS_SITE_PAGES_URL=http://localhost:7159 \
  *     npx playwright test tests/e2e/forms-site-link.spec.ts
  *
