@@ -17,22 +17,28 @@ import { themeFor, type CanvasTheme } from './publicForm.server.ts';
  * ── What the link proves ───────────────────────────────────────────────────
  * That whoever holds it can read the mailbox the response was submitted under.
  * That is the ENTIRE authentication for a public submission, which is why the
- * token is 256 bits, hashed at rest, single-use, and 48-hour-lived — and why
- * this page has no other way in. There is no "look up my response by email"
- * form anywhere in the stack, because that is the enumeration hole the link
- * exists to close.
+ * token is 256 bits and hashed at rest — and why this page has no other way
+ * in. There is no "look up my response by email" form anywhere in the stack,
+ * because that is the enumeration hole the link exists to close.
  *
- * ── Read is not consume ────────────────────────────────────────────────────
- * The loader calls `verifyMagicToken`, which does NOT burn the token: reloading
+ * ── Two clocks, not one lifetime ───────────────────────────────────────────
+ * The token is MINTED with 48 hours on it, and that number is the deadline to
+ * CLICK: an unconfirmed row only holds its place in the queue while its link
+ * is live (`assertCapAvailable`). Confirming does not spend the token, it
+ * EXTENDS it to the form's own life — from that point the link is the person's
+ * handle on their response, which is the only handle there is.
+ *
+ * ── Nothing here consumes ──────────────────────────────────────────────────
+ * The loader calls `verifyMagicToken`, which does not burn the token: reloading
  * the review page, or opening the link twice before deciding, must not cost the
- * person their response. The token is consumed only by the confirm action, in
- * the same transaction that flips the row to SUBMITTED.
+ * person their response. Neither does confirming, any more — see
+ * `editLinkExpiresAt` for why single-use was dropped.
  *
  * ── Editing ────────────────────────────────────────────────────────────────
  * "Edit answers" mounts the SAME renderer the fill page uses, prefilled, and
- * resubmits with the token — `confirmSubmission` replaces the answers inside
- * the transaction that consumes it. A response that was already verified keeps
- * its original `verified_at`, so editing never costs a FIFO waitlist place.
+ * resubmits with the token — `confirmSubmission` replaces the answers. A
+ * response that was already verified keeps its original `verified_at`, so
+ * editing never costs a FIFO waitlist place.
  *
  * ── Cache ──────────────────────────────────────────────────────────────────
  * `no-store`, because this page serves one person's answers to a bearer-token
@@ -328,7 +334,11 @@ const PROBLEM_COPY: Record<LinkProblem, { icon: string; title: string; body: str
   expired: {
     icon: '⏳',
     title: 'This link has expired',
-    body: 'Links last 48 hours. Fill the form in again and we will send you a new one — if you already had a response saved, the new link will open it.',
+    // No number here any more. A link can reach this screen by two different
+    // routes now — the 48-hour click deadline on a response that was never
+    // confirmed, and a confirmed response whose FORM has since closed — and
+    // "links last 48 hours" is plainly wrong for the second.
+    body: 'Fill the form in again and we will send you a new one — if you already had a response saved, the new link will open it.',
   },
   // Deliberately NEUTRAL. A used token means the response was confirmed — but
   // saying so to whoever holds a spent link would confirm that the address

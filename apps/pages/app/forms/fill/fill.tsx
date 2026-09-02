@@ -1655,8 +1655,15 @@ export default function FormFill() {
               </>
             ) : (
               <>
-                Nothing is recorded until you click it. The link works for 48 hours, and the same
-                link lets you change your answers later.
+                {/* Both clocks, in the order they apply to the reader. The 48
+                    hours is the deadline to CLICK — it is what stops an
+                    unconfirmed row holding a place in the queue for ever. Once
+                    they have clicked, the same link stops being a deadline and
+                    becomes their way back. Saying "works for 48 hours" and
+                    "change your answers later" in one breath, as this did,
+                    described neither clock and contradicted itself. */}
+                Nothing is recorded until you click it, so do that within 48 hours. After that the
+                same link stays yours for as long as the form is open.
               </>
             )}
           </p>
