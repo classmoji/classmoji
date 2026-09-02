@@ -19,6 +19,9 @@ import * as assignmentGradeService from './assignmentGrade.service.ts';
 import * as auditService from './audit.service.ts';
 import * as calendarService from './calendar.service.ts';
 import * as icsGeneratorService from './icsGenerator.service.ts';
+import * as formService from './form.service.ts';
+import * as formResponseService from './formResponse.service.ts';
+import * as formTeamResolverService from './formTeamResolver.ts';
 import * as pageService from './page.service.ts';
 import * as pageContentService from './pageContent.service.ts';
 import * as siteService from './site.service.ts';
@@ -72,6 +75,9 @@ const ClassmojiService = {
   audit: auditService,
   calendar: calendarService,
   icsGenerator: icsGeneratorService,
+  form: formService,
+  formResponse: formResponseService,
+  formTeam: formTeamResolverService,
   page: pageService,
   pageContent: pageContentService,
   site: siteService,
@@ -132,6 +138,9 @@ export {
   auditService,
   calendarService,
   icsGeneratorService,
+  formService,
+  formResponseService,
+  formTeamResolverService,
   pageService,
   pageContentService,
   siteService,

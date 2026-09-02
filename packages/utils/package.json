@@ -10,7 +10,8 @@
     "format:check": "prettier --check \"**/*.{js,jsx,ts,tsx,json,md}\""
   },
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./themes": "./src/themes.ts"
   },
   "devDependencies": {
     "vitest": "^4.1.5"

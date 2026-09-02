@@ -15,6 +15,7 @@ import { ToastContainer } from 'react-toastify';
 import { MantineProvider } from '@mantine/core';
 
 import { prisma, getAuthSession } from '~/utils/db.server.ts';
+import { classifyFormsPath } from '~/utils/formsPaths.ts';
 import useStore from '~/store';
 
 /**
@@ -88,9 +89,44 @@ export const loader = async ({ request }: { request: Request }) => {
     return { user: null, isSite: false };
   }
 
+  // Forms are classified BEFORE the page-view branch, because `/{class}/forms`
+  // has the shape that branch matches and would otherwise be looked up as a
+  // Page id of 'forms' — a query that can only ever miss, on a code path whose
+  // public/private answer has nothing to do with forms.
+  //
+  // This does NOT weaken the gate. Admin forms paths (the list, the new-form
+  // drawer, the builder, and every shape this classifier does not recognize)
+  // fall through to the standard `getAuthSession` check below and are still
+  // redirected to the webapp login when there is no session. Only the PUBLIC
+  // fill surfaces — `/{class}/forms/{slug}` and its `/verify` page — are
+  // exempted, because a waitlist link must open for a stranger.
+  //
+  // The exemption makes the route-level gates load-bearing rather than
+  // belt-and-braces: for the exempted shapes this loader is no longer a second
+  // wall, so `assertFormAdmin` in every forms loader AND action is the only
+  // thing between anonymous and admin data. See app/utils/formsPaths.ts for the
+  // full rule and its fail-closed default.
+  const formsRoute = classifyFormsPath(url.pathname);
+
+  if (formsRoute === 'public') {
+    // Best-effort session, exactly like the public-page branch: a signed-in
+    // member filling a public form should still see themselves in the chrome.
+    const authData = await getAuthSession(request).catch(() => null);
+    let user = null;
+    if (authData) {
+      user = await prisma.user
+        .findUnique({
+          where: { id: authData.userId },
+          include: { classroom_memberships: { include: { classroom: true } } },
+        })
+        .catch(() => null);
+    }
+    return { user, isPublicAccess: true, isSite: false };
+  }
+
   // Check if this is a page view route (/:classroomSlug/:pageId pattern)
   // Allow public pages to be viewed without authentication
-  const pageViewMatch = url.pathname.match(/^\/([^/]+)\/([^/]+)$/);
+  const pageViewMatch = formsRoute === null ? url.pathname.match(/^\/([^/]+)\/([^/]+)$/) : null;
 
   if (pageViewMatch) {
     const [, , pageId] = pageViewMatch;
@@ -193,8 +229,19 @@ const DARK_MODE_SCRIPT = `
  * If it is exactly 'dark' or 'light' we honour it and DO NOT attach the
  * prefers-color-scheme listener, so the embedded reader matches the app even
  * when the app theme differs from the OS. With no such param (the canonical
- * pages host, opened directly) this is byte-for-byte the OS-driven behavior of
+ * pages host, opened directly) this is the OS-driven behavior of
  * `DARK_MODE_SCRIPT`. Class sites never carry the param and keep `DARK_MODE_SCRIPT`.
+ *
+ * FORCED LIGHT IS A POSITIVE MARKER. `?theme=light` adds a `light` class as well
+ * as removing `dark`, because "no dark class" cannot be told apart from "nobody
+ * expressed a preference" — and something has to be able to tell, or a rule
+ * keyed on `prefers-color-scheme` darkens a deliberately-light embed on a
+ * dark-mode machine. The forms canvas is the rule that needs it today (see
+ * `components/forms/FormCanvas.tsx`); every Tailwind `dark:` utility in this app
+ * is in the same position, compiling to a media query for want of a
+ * `@custom-variant dark`. Only this branch sets `light`, and this branch returns
+ * before the OS listener is attached, so `light` and `dark` are never both
+ * present.
  */
 const APP_DARK_MODE_SCRIPT = `
               (function() {
@@ -202,9 +249,11 @@ const APP_DARK_MODE_SCRIPT = `
                   var forced = new URLSearchParams(window.location.search).get('theme');
                   if (forced === 'dark' || forced === 'light') {
                     if (forced === 'dark') {
+                      document.documentElement.classList.remove('light');
                       document.documentElement.classList.add('dark');
                     } else {
                       document.documentElement.classList.remove('dark');
+                      document.documentElement.classList.add('light');
                     }
                     return;
                   }

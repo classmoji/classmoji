@@ -41,7 +41,21 @@ export interface StudentTreeCtx {
   studentRepoByRepositoryId?: Record<string, { name: string }>;
   /** The viewer's latest autograding result per repository unit, keyed by id. */
   autogradingByRepositoryId?: Record<string, AutogradingResultData>;
+  /**
+   * Whether the viewer is teaching staff, taken from the membership the route's
+   * gate returned — never inferred from `rolePrefix`, which is only the URL the
+   * viewer happened to arrive on.
+   *
+   * Staff loaders fetch unpublished content; student loaders filter it out. This
+   * flag decides only whether a "Draft" chip is drawn, and it defaults to false
+   * so a caller that never sets it cannot label anything. It is presentation —
+   * WHAT a viewer receives is settled in the loader, not here.
+   */
+  isStaff?: boolean;
 }
+
+/** Marks content students cannot see yet. Matches the module row's own chip. */
+const DRAFT_TAG = <Tag color="orange">Draft</Tag>;
 
 export const submittedPill = (status?: string) => {
   const submitted = status === 'CLOSED';
@@ -59,15 +73,23 @@ export const submittedPill = (status?: string) => {
 };
 
 /**
- * Turn a node's linked pages / slides / quizzes into read-only resource leaves.
- * Delegates to the shared {@link buildResourceLeaves}, supplying the student
- * quizzes route as the quiz href.
+ * Turn a node's linked pages / slides / quizzes / forms into read-only resource
+ * leaves. Delegates to the shared {@link buildResourceLeaves}, supplying the
+ * student quizzes route as the quiz href.
  */
 export const resourceLeaves = (
   input: {
-    pages?: Array<{ page: { id: string; title: string } }>;
-    slides?: Array<{ slide: { id: string; title: string } }>;
-    quizzes?: Array<{ id: string; name: string }>;
+    pages?: Array<{ page: { id: string; title: string; is_draft?: boolean } }>;
+    slides?: Array<{ slide: { id: string; title: string; is_draft?: boolean } }>;
+    quizzes?: Array<{ id: string; name: string; status?: string }>;
+    forms?: Array<{
+      id: string;
+      title: string;
+      slug: string;
+      status: string;
+      access: string;
+      closes_at: Date | string | null;
+    }>;
   },
   level: number,
   keyPrefix: string,
@@ -113,6 +135,10 @@ export const buildRepositoryNode = (
       weightText: a.weight != null ? `${a.weight}%` : undefined,
       statusNode: (
         <div className="flex items-center gap-2 flex-wrap">
+          {/* Staff-only, and gated on the flag rather than on the data: a
+              student payload carries is_published too (always true, the loader
+              filtered on it), so the flag is what keeps this off their tree. */}
+          {ctx.isStaff === true && a.is_published === false && DRAFT_TAG}
           {submittedPill(ra?.status)}
           {showGrades && (
             <span className="inline-flex items-center gap-1 whitespace-nowrap">

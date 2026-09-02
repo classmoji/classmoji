@@ -8,6 +8,7 @@ import {
   IconTrash,
   IconFileText,
   IconFolder,
+  IconForms,
   IconPresentation,
   IconHelpCircle,
   IconArrowUp,
@@ -17,7 +18,8 @@ import {
 } from '@tabler/icons-react';
 
 import { ClassmojiService } from '@classmoji/services';
-import type { ModuleItemType } from '@prisma/client';
+import type { FormAccess, FormStatus, ModuleItemType } from '@prisma/client';
+import { formatCloseDate } from '~/components/features/modules/ReadOnlyModulesTree';
 import { requireClassroomAdmin } from '~/utils/routeAuth.server';
 import ModuleFormModal, { type ModuleFormModule } from '../admin.$class.modules/ModuleFormModal';
 import type { Route } from './+types/route';
@@ -45,12 +47,48 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
 
 type ModuleItem = Route.ComponentProps['loaderData']['module']['items'][number];
 
+/**
+ * Compile-time exhaustiveness guard for the switches over ModuleItemType below,
+ * mirroring the one in module.service. Adding a value to the enum without
+ * teaching every switch about it becomes a type error here rather than an item
+ * that silently renders as "Unknown" / unpublished / unaddable.
+ */
+const unhandledItemType = (type: never): never => {
+  throw new Error(`Unhandled ModuleItemType: ${String(type)}`);
+};
+
 const TYPE_META: Record<ModuleItemType, { label: string; icon: Icon }> = {
   PAGE: { label: 'Page', icon: IconFileText },
   REPOSITORY: { label: 'Repository', icon: IconFolder },
   QUIZ: { label: 'Quiz', icon: IconHelpCircle },
   SLIDE: { label: 'Slides', icon: IconPresentation },
+  FORM: { label: 'Form', icon: IconForms },
 };
+
+// A form's two lifecycle axes, as an instructor reads them. Both are exhaustive
+// Records over their enums, so adding a status or an access mode fails to
+// compile here rather than rendering the raw enum name.
+const FORM_STATUS_TEXT: Record<FormStatus, string> = {
+  DRAFT: 'Draft',
+  OPEN: 'Open',
+  CLOSED: 'Closed',
+};
+const FORM_ACCESS_TEXT: Record<FormAccess, string> = {
+  PUBLIC: 'Public',
+  CLASSROOM: 'Classroom',
+};
+
+/** "Public · Open · closes Jan 12, 5:00 PM" — access, status, then the deadline. */
+const formSummary = (form: {
+  status: FormStatus;
+  access: FormAccess;
+  closes_at: Date | string | null;
+}): string =>
+  [
+    FORM_ACCESS_TEXT[form.access],
+    FORM_STATUS_TEXT[form.status],
+    ...(form.closes_at ? [`closes ${formatCloseDate(form.closes_at)}`] : []),
+  ].join(' · ');
 
 const itemLabel = (item: ModuleItem): string => {
   switch (item.item_type) {
@@ -62,15 +100,21 @@ const itemLabel = (item: ModuleItem): string => {
       return item.quiz?.name ?? '(deleted quiz)';
     case 'SLIDE':
       return item.slide?.title ?? '(deleted slides)';
+    case 'FORM':
+      return item.form?.title ?? '(deleted form)';
     default:
-      return 'Unknown';
+      return unhandledItemType(item.item_type);
   }
 };
 
 // Display label + student-visibility for an item. Keep this client-safe: route
 // components cannot call server services without pulling Node-only code into
 // the browser bundle.
-const describeItem = (item: ModuleItem): { label: string; published: boolean } => {
+//
+// `note` is the optional muted line after the title. Only forms use it today:
+// a form carries two axes the other types don't (who may open it, and when it
+// stops accepting answers), and neither is recoverable from the Published pill.
+const describeItem = (item: ModuleItem): { label: string; published: boolean; note?: string } => {
   switch (item.item_type) {
     case 'PAGE':
       return { label: itemLabel(item), published: !!item.page && !item.page.is_draft };
@@ -83,8 +127,16 @@ const describeItem = (item: ModuleItem): { label: string; published: boolean } =
       return { label: itemLabel(item), published: !!item.quiz && item.quiz.status !== 'DRAFT' };
     case 'SLIDE':
       return { label: itemLabel(item), published: !!item.slide && !item.slide.is_draft };
+    // Matches isItemPublished in module.service: a CLOSED form is still shown
+    // to students (reading "Closed"); only a DRAFT is hidden.
+    case 'FORM':
+      return {
+        label: itemLabel(item),
+        published: !!item.form && item.form.status !== 'DRAFT',
+        note: item.form ? formSummary(item.form) : undefined,
+      };
     default:
-      return { label: itemLabel(item), published: false };
+      return unhandledItemType(item.item_type);
   }
 };
 
@@ -163,6 +215,7 @@ const ModuleDetail = ({ loaderData }: Route.ComponentProps) => {
       ),
       QUIZ: new Set(items.filter(i => i.item_type === 'QUIZ').map(i => i.quiz_id)),
       SLIDE: new Set(items.filter(i => i.item_type === 'SLIDE').map(i => i.slide_id)),
+      FORM: new Set(items.filter(i => i.item_type === 'FORM').map(i => i.form_id)),
     }),
     [items]
   );
@@ -185,8 +238,19 @@ const ModuleDetail = ({ loaderData }: Route.ComponentProps) => {
         return candidates.slides
           .filter(s => !addedIds.SLIDE.has(s.id))
           .map(s => ({ value: s.id, label: s.title }));
+      // A DRAFT form is addable on purpose — an instructor builds the module
+      // before opening the form — so the option says so rather than hiding it.
+      // The suffix stays plain text because the Select filters on `label`
+      // (optionFilterProp), which a JSX pill would break.
+      case 'FORM':
+        return candidates.forms
+          .filter(f => !addedIds.FORM.has(f.id))
+          .map(f => ({
+            value: f.id,
+            label: `${f.title} — ${FORM_ACCESS_TEXT[f.access]} · ${FORM_STATUS_TEXT[f.status]}`,
+          }));
       default:
-        return [];
+        return unhandledItemType(type);
     }
   };
 
@@ -238,7 +302,7 @@ const ModuleDetail = ({ loaderData }: Route.ComponentProps) => {
           </Button>
           <Popconfirm
             title="Delete module"
-            description="This removes the module. Its items (pages, repositories, quizzes, slides) are kept."
+            description="This removes the module. Its items (pages, repositories, quizzes, slides, forms) are kept."
             okText="Delete"
             okButtonProps={{ danger: true }}
             cancelText="Cancel"
@@ -270,7 +334,7 @@ const ModuleDetail = ({ loaderData }: Route.ComponentProps) => {
           <div className="text-center py-10 text-gray-500">
             <div className="font-medium">No items in this module</div>
             <div className="text-sm">
-              Use “Add item” to place pages, repositories, quizzes or slides in order.
+              Use “Add item” to place pages, repositories, quizzes, slides or forms in order.
             </div>
           </div>
         ) : (
@@ -278,7 +342,7 @@ const ModuleDetail = ({ loaderData }: Route.ComponentProps) => {
             {items.map((item, index) => {
               const meta = TYPE_META[item.item_type];
               const ItemIcon = meta.icon;
-              const { label, published } = describeItem(item);
+              const { label, published, note } = describeItem(item);
               return (
                 <li key={item.id} className="flex items-center gap-3 py-2.5">
                   <div className="flex flex-col">
@@ -305,6 +369,9 @@ const ModuleDetail = ({ loaderData }: Route.ComponentProps) => {
                   <ItemIcon size={18} className="text-gray-400 shrink-0" />
                   <span className="min-w-0 flex-1 truncate text-ink-1">{label}</span>
 
+                  {note && (
+                    <span className="shrink-0 text-xs text-ink-3 whitespace-nowrap">{note}</span>
+                  )}
                   <Tag className="shrink-0">{meta.label}</Tag>
                   <Tag color={published ? 'green' : 'orange'} className="shrink-0">
                     {published ? 'Published' : 'Draft'}

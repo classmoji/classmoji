@@ -27,6 +27,11 @@ const targets = {
   pagePath: (page: { slug: string | null; id: string }) => `/${page.slug || page.id}`,
   slidesUrl: 'https://slides.example',
   appBase: 'https://app.example/student/cs52',
+  // Absolute, on the canonical pages host — NOT a site-relative `/cs52/forms/…`.
+  // The site middleware rewrites every path on a tenant host into
+  // `/_site/{subdomain}/…` before React Router sees it, so a relative form link
+  // would 404. The origin is pinned here for exactly that reason.
+  formsBase: 'https://pages.example/cs52/forms',
   timezone: 'America/New_York',
 };
 
@@ -45,6 +50,22 @@ const placeholder = (
   due_at: Date | string | null = null
 ): ScheduleItem => ({ kind: 'placeholder', id, item_type, due_at });
 
+/**
+ * A form the SERVICE has already ruled openable by this viewer.
+ *
+ * That precondition is the whole reason this fixture is safe: only an
+ * OPEN/CLOSED **and** `access: PUBLIC` form reaches an anonymous visitor as a
+ * visible item (`isItemPubliclyVisible`), and only a non-DRAFT one reaches a
+ * member. A CLASSROOM form arrives here as a placeholder, a DRAFT not at all —
+ * both pinned in site.service.test.ts, which is the layer that decides.
+ */
+const visibleForm = (
+  id: string,
+  title: string,
+  slug: string,
+  closes_at: Date | string | null = null
+): ScheduleItem => ({ kind: 'visible', item_type: 'FORM', form: { id, title, slug, closes_at } });
+
 test.describe('visible rows', () => {
   test('a public page becomes an internal link at its slug', () => {
     const [row] = toScheduleRows([visiblePage('p1', 'Syllabus', 'syllabus')], targets);
@@ -54,6 +75,7 @@ test.describe('visible rows', () => {
       href: '/syllabus',
       typeLabel: 'Page',
       external: false,
+      due: null,
     });
   });
 
@@ -71,6 +93,9 @@ test.describe('visible rows', () => {
       targets
     );
 
+    // `due: null` on all three is the assertion, not boilerplate: a repo or a
+    // quiz link is only ever shown to a MEMBER, who reads the real deadline in
+    // the app. A second copy printed here is a second copy to go stale.
     expect(rows).toEqual([
       {
         kind: 'link',
@@ -78,6 +103,7 @@ test.describe('visible rows', () => {
         href: 'https://slides.example/s1',
         typeLabel: 'Slides',
         external: true,
+        due: null,
       },
       {
         kind: 'link',
@@ -85,6 +111,7 @@ test.describe('visible rows', () => {
         href: 'https://app.example/student/cs52/repos',
         typeLabel: 'Assignment',
         external: true,
+        due: null,
       },
       {
         kind: 'link',
@@ -92,8 +119,57 @@ test.describe('visible rows', () => {
         href: 'https://app.example/student/cs52/quizzes',
         typeLabel: 'Quiz',
         external: true,
+        due: null,
       },
     ]);
+  });
+
+  test('a public form links to the fill page on the canonical pages host', () => {
+    const [row] = toScheduleRows(
+      [visibleForm('f1', 'Project Preferences', 'project-preferences')],
+      targets
+    );
+
+    expect(row).toEqual({
+      kind: 'link',
+      label: 'Project Preferences',
+      // Absolute and cross-origin. A site-relative '/cs52/forms/…' would be
+      // rewritten to '/_site/cs52/cs52/forms/…' by the tenant host middleware
+      // and 404 — on the one link here whose job is to open for a stranger.
+      href: 'https://pages.example/cs52/forms/project-preferences',
+      typeLabel: 'Form',
+      external: true,
+      due: null,
+    });
+  });
+
+  test("a form's closing date is shown on the row, in the course's zone", () => {
+    // 23:59 Sep 12 in America/New_York, stored as the instant it is. Read in
+    // UTC this is Sep 13 — the same off-by-a-day the placeholder dates carry.
+    const [row] = toScheduleRows(
+      [visibleForm('f1', 'Waitlist', 'waitlist', new Date('2026-09-13T03:59:00Z'))],
+      targets
+    );
+
+    expect(row).toMatchObject({ label: 'Waitlist', due: 'Sep 12, 2026' });
+  });
+
+  test('a form with no closing date gets no date rather than an invented one', () => {
+    const [row] = toScheduleRows([visibleForm('f1', 'Feedback', 'feedback')], targets);
+    expect(row).toMatchObject({ due: null });
+  });
+
+  test('an untitled form still gets a label, and its slug still builds the href', () => {
+    const [row] = toScheduleRows([visibleForm('f1', '', 'untitled-form')], targets);
+    expect(row).toMatchObject({
+      label: 'Untitled',
+      href: 'https://pages.example/cs52/forms/untitled-form',
+    });
+  });
+
+  test('a visible FORM whose target row vanished is dropped, not locked', () => {
+    const rows = toScheduleRows([{ kind: 'visible', item_type: 'FORM', form: null }], targets);
+    expect(rows).toEqual([]);
   });
 
   test('an untitled target still gets a label rather than an empty link', () => {
@@ -126,6 +202,7 @@ test.describe('placeholder rows', () => {
         placeholder('b', 'QUIZ'),
         placeholder('c', 'PAGE'),
         placeholder('d', 'SLIDE'),
+        placeholder('e', 'FORM'),
       ],
       targets
     );
@@ -134,7 +211,22 @@ test.describe('placeholder rows', () => {
       'Quiz',
       'Page',
       'Slides',
+      'Form',
     ]);
+  });
+
+  test('a members-only form contributes its closing date and nothing else', () => {
+    // A CLASSROOM form: published, so the course's rhythm shows ("a form is due
+    // Sep 12"), but members-only, so the service redacted it before this layer
+    // ever saw a title or a slug. There is no href to follow and no name to
+    // read — the row is the date and the word "Form".
+    const [row] = toScheduleRows([placeholder('i1', 'FORM', '2026-09-13T03:59:00Z')], targets);
+
+    expect(row).toEqual({ kind: 'placeholder', id: 'i1', typeLabel: 'Form', due: 'Sep 12, 2026' });
+    expect(row).not.toHaveProperty('href');
+    expect(row).not.toHaveProperty('label');
+    // The strongest form of it: whatever this row is, none of it is the form.
+    expect(JSON.stringify(row)).not.toContain('waitlist');
   });
 
   test('an item with no deadline gets no date rather than an invented one', () => {
@@ -301,6 +393,7 @@ test.describe('sections', () => {
             placeholder('i2', 'PAGE'),
             placeholder('i3', 'SLIDE'),
             placeholder('i4', 'QUIZ'),
+            placeholder('i5', 'FORM', '2026-09-13T03:59:00Z'),
           ],
         },
       ],
@@ -310,5 +403,42 @@ test.describe('sections', () => {
     for (const row of sections[0].rows) {
       expect(Object.keys(row).sort()).toEqual(['due', 'id', 'kind', 'typeLabel']);
     }
+  });
+
+  test('three forms, three fates: public links, members-only redacts, draft absent', () => {
+    // The end of the pipeline for the case forms added. The SERVICE decided all
+    // three (site.service.test.ts pins that); this asserts what a visitor
+    // actually READS at the other end of that decision.
+    const [section] = toScheduleSections(
+      [
+        {
+          id: 'mod-1',
+          title: 'Week 1',
+          items: [
+            // OPEN + PUBLIC → openable by anyone, so it keeps its name.
+            visibleForm('f-open', 'Waitlist', 'waitlist', '2026-09-13T03:59:00Z'),
+            // OPEN + CLASSROOM → published, members-only. Date, no identity.
+            placeholder('f-classroom', 'FORM', '2026-09-20T03:59:00Z'),
+            // DRAFT → the service emitted NOTHING for it. Not a placeholder:
+            // a locked row would advertise unreleased work to the open web.
+          ],
+        },
+      ],
+      targets
+    );
+
+    expect(section.rows).toEqual([
+      {
+        kind: 'link',
+        label: 'Waitlist',
+        href: 'https://pages.example/cs52/forms/waitlist',
+        typeLabel: 'Form',
+        external: true,
+        due: 'Sep 12, 2026',
+      },
+      { kind: 'placeholder', id: 'f-classroom', typeLabel: 'Form', due: 'Sep 19, 2026' },
+    ]);
+    // Two items in, two rows out: the draft added nothing at all.
+    expect(section.rows).toHaveLength(2);
   });
 });

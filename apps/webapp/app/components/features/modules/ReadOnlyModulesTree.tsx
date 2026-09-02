@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { Table } from 'antd';
+import { Table, Tag } from 'antd';
 import {
   IconBrandGithub,
   IconChevronDown,
@@ -7,6 +7,7 @@ import {
   IconFileText,
   IconFolder,
   IconFolderOpen,
+  IconForms,
   IconPresentation,
   IconRobot,
 } from '@tabler/icons-react';
@@ -29,7 +30,7 @@ export interface ModuleTreeNode {
   actionNode?: React.ReactNode;
   autogradingNode?: React.ReactNode;
   href?: string;
-  resourceIcon?: 'page' | 'slide' | 'quiz';
+  resourceIcon?: 'page' | 'slide' | 'quiz' | 'form';
   /**
    * Set on page leaves only. Inside the student/assistant shell it makes the
    * row open the peek drawer instead of a new tab, so a lab guide can be read
@@ -59,18 +60,55 @@ export const repoGithubUrl = (name: string, gitOrgLogin?: string | null) =>
       ? `https://github.com/${gitOrgLogin}/${name}`
       : null;
 
-// Turn a module's / assignment's linked pages, slides and quizzes into read-only
-// resource leaf nodes (each opens the relevant app in a new tab).
+/**
+ * A form's close time as a member reads it: "Jan 12, 5:00 PM". Unlike an
+ * assignment's date-only student deadline, the clock matters — a form stops
+ * accepting answers at an instant, not at the end of a day. Shared with the
+ * admin module builder so both surfaces phrase the deadline identically.
+ */
+export const formatCloseDate = (value: Date | string): string =>
+  new Date(value).toLocaleString(undefined, {
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  });
+
+/** Whether a form no longer accepts answers: closed by hand, or past its close time. */
+export const isFormClosed = (form: { status: string; closes_at: Date | string | null }): boolean =>
+  form.status === 'CLOSED' ||
+  (!!form.closes_at && new Date(form.closes_at).getTime() <= Date.now());
+
+// Turn a module's / assignment's linked pages, slides, quizzes and forms into
+// read-only resource leaf nodes (each opens the relevant app in a new tab).
 export const buildResourceLeaves = (
   input: {
-    pages?: Array<{ page: { id: string; title: string } }>;
-    slides?: Array<{ slide: { id: string; title: string } }>;
-    quizzes?: Array<{ id: string; name: string }>;
+    pages?: Array<{ page: { id: string; title: string; is_draft?: boolean } }>;
+    slides?: Array<{ slide: { id: string; title: string; is_draft?: boolean } }>;
+    quizzes?: Array<{ id: string; name: string; status?: string }>;
+    forms?: Array<{
+      id: string;
+      title: string;
+      slug: string;
+      status: string;
+      access: string;
+      closes_at: Date | string | null;
+    }>;
   },
   level: number,
   keyPrefix: string,
-  ctx: { classSlug: string; slidesUrl: string; pagesUrl: string; quizzesHref: string }
+  // `isStaff` comes from the route's gate, never from the URL prefix. Only staff
+  // loaders fetch draft slides and non-live quizzes; it defaults to false so a
+  // caller that omits it cannot label anything.
+  ctx: {
+    classSlug: string;
+    slidesUrl: string;
+    pagesUrl: string;
+    quizzesHref: string;
+    isStaff?: boolean;
+  }
 ): ModuleTreeNode[] => {
+  const isStaff = ctx.isStaff === true;
   const out: ModuleTreeNode[] = [];
   (input.pages ?? []).forEach(({ page }) =>
     out.push({
@@ -80,6 +118,7 @@ export const buildResourceLeaves = (
       resourceIcon: 'page',
       name: page.title,
       pageId: page.id,
+      statusNode: isStaff && page.is_draft === true ? <Tag color="orange">Draft</Tag> : null,
       href: `${ctx.pagesUrl}/${ctx.classSlug}/${page.id}`,
     })
   );
@@ -90,9 +129,13 @@ export const buildResourceLeaves = (
       level,
       resourceIcon: 'slide',
       name: slide.title,
+      statusNode: isStaff && slide.is_draft === true ? <Tag color="orange">Draft</Tag> : null,
       href: `${ctx.slidesUrl}/${slide.id}`,
     })
   );
+  // A quiz reaches here unpublished only in the staff preview. DRAFT is content
+  // students have never seen; CLOSED is content they can no longer attempt —
+  // both read wrong sitting unlabelled next to the live ones.
   (input.quizzes ?? []).forEach(q =>
     out.push({
       key: `${keyPrefix}-quiz-${q.id}`,
@@ -100,9 +143,40 @@ export const buildResourceLeaves = (
       level,
       resourceIcon: 'quiz',
       name: q.name,
+      statusNode:
+        isStaff && q.status === 'DRAFT' ? (
+          <Tag color="orange">Draft</Tag>
+        ) : isStaff && q.status === 'CLOSED' ? (
+          <Tag>Closed</Tag>
+        ) : null,
       href: ctx.quizzesHref,
     })
   );
+  // Forms live in the pages app: /{class}/forms/{slug}. The close time is this
+  // leaf's deadline, so it reads where an assignment's "due …" reads. A DRAFT
+  // only ever reaches here in the staff preview — listForClassroom drops it for
+  // students — and it says so rather than showing a close time it can't honour.
+  (input.forms ?? []).forEach(form => {
+    out.push({
+      key: `${keyPrefix}-form-${form.id}`,
+      kind: 'resource',
+      level,
+      resourceIcon: 'form',
+      name: form.title,
+      typeText: form.access === 'PUBLIC' ? 'Public form' : 'Classroom form',
+      statusNode:
+        form.status === 'DRAFT' ? (
+          <Tag color="orange">Draft</Tag>
+        ) : isFormClosed(form) ? (
+          <Tag>Closed</Tag>
+        ) : form.closes_at ? (
+          <span className="text-xs text-ink-3 whitespace-nowrap">
+            Closes {formatCloseDate(form.closes_at)}
+          </span>
+        ) : null,
+      href: `${ctx.pagesUrl}/${ctx.classSlug}/forms/${form.slug}`,
+    });
+  });
   return out;
 };
 
@@ -155,7 +229,9 @@ const NodeIcon = ({ node, isExpanded }: { node: ModuleTreeNode; isExpanded: bool
       ? IconPresentation
       : node.resourceIcon === 'quiz'
         ? IconRobot
-        : IconFileText;
+        : node.resourceIcon === 'form'
+          ? IconForms
+          : IconFileText;
   return <Icon size={15} className="text-ink-3 shrink-0" />;
 };
 

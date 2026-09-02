@@ -3,7 +3,7 @@ import type { HeadersFunction, LoaderFunctionArgs, MetaFunction } from 'react-ro
 
 import { routeSiteHeaders, siteHeaders } from './headers.server.ts';
 import { isMember, resolveSiteContext, rolePrefix, sitePagePath } from './tenant.server.ts';
-import { slidesUrl, webappUrl } from './env.server.ts';
+import { pagesUrl, slidesUrl, webappUrl } from './env.server.ts';
 import { toScheduleSections } from './scheduleRows.ts';
 import { ClassmojiService } from '~/utils/db.server.ts';
 
@@ -17,9 +17,10 @@ import { ClassmojiService } from '~/utils/db.server.ts';
  * Item visibility is entirely the service's decision
  * (`listPublicModulesForViewer`), and this route never re-filters — one
  * visibility rule, in one place. Members get every published item with its
- * title and link. Anonymous visitors get public pages and decks as links, and
- * everything else as a PLACEHOLDER: its type, its deadline if it has one, and
- * nothing else. The structure of the course is public; its contents are not.
+ * title and link. Anonymous visitors get public pages, decks and forms as
+ * links, and everything else as a PLACEHOLDER: its type, its deadline if it has
+ * one, and nothing else. The structure of the course is public; its contents
+ * are not.
  */
 
 export const loader = async (args: LoaderFunctionArgs) => {
@@ -44,10 +45,17 @@ export const loader = async (args: LoaderFunctionArgs) => {
   const prefix = rolePrefix(viewer.role) ?? 'student';
   const appBase = `${webappUrl()}/${prefix}/${site.classroom.slug}`;
 
+  // Forms live on the CANONICAL pages host, not on this tenant host: the site
+  // middleware rewrites every path here into `/_site/{subdomain}/…`, so a
+  // site-relative form link would 404. Absolute, and the classroom slug — not
+  // the subdomain — because that is what the fill route is keyed on.
+  const formsBase = `${pagesUrl()}/${site.classroom.slug}/forms`;
+
   const sections = toScheduleSections(modules, {
     pagePath: sitePagePath,
     slidesUrl: slidesUrl(),
     appBase,
+    formsBase,
     // The COURSE's zone, not the server's and not the reader's. This page ships
     // no JavaScript, so whatever is formatted here is final — there is no
     // client pass to re-render dates the way every member-facing view gets for
@@ -141,9 +149,11 @@ const SiteSchedule = () => {
                           className="flex items-center justify-between gap-4 px-4 py-3 text-gray-900 no-underline hover:bg-stone-50 dark:text-gray-100 dark:hover:bg-neutral-900"
                         >
                           <span className="truncate">{row.label}</span>
+                          {/* One expression per span, not adjacent children:
+                              a script-less document should not carry React's
+                              text-node separator comments in view-source. */}
                           <span className="shrink-0 text-xs text-gray-500 dark:text-gray-400">
-                            {row.typeLabel}
-                            {row.external ? ' ↗' : ''}
+                            {`${row.due ? `Due ${row.due} · ` : ''}${row.typeLabel}${row.external ? ' ↗' : ''}`}
                           </span>
                         </a>
                       </li>

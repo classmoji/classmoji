@@ -12,6 +12,7 @@
   "exports": {
     ".": "./src/index.ts",
     "./flags": "./src/classmoji/repoAnalytics.flags.ts",
+    "./form-contract": "./src/classmoji/formContract.ts",
     "./import-progress": "./src/classmoji/importProgress.ts",
     "./remove-user-payload": "./src/classmoji/removeUserPayload.ts",
     "./slides": "./src/slides/index.ts",

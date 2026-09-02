@@ -208,6 +208,70 @@ Need help, email us at hello@classmoji.io`,
   },
 
   {
+    name: 'Form — Verify link',
+    alias: 'form-verify-link',
+    // "Verify your email", not "confirm your response": this mail now goes out
+    // as soon as the address is typed, so on most sends there is no response to
+    // confirm yet — only an address to prove. Saying "confirm your response" to
+    // somebody who has not finished the form reads as a message about work they
+    // have not done. The form's title is in the subject because someone who
+    // filled in three of these needs to know which one this is.
+    subject: '[Classmoji] Verify your email for {{{FORM_TITLE}}}',
+    // Every one of these is user-authored (a form title, a classroom name, a
+    // name the filler typed about themselves) and Resend substitutes variables
+    // RAW — `formResponse.service` runs them through `escapeVars` before they
+    // get here. Keys are UPPERCASE to match what that service composes.
+    variables: [
+      { key: 'RECIPIENT_NAME', type: 'string', fallbackValue: 'there' },
+      { key: 'FORM_TITLE', type: 'string' },
+      { key: 'CLASSROOM_NAME', type: 'string' },
+      { key: 'VERIFY_URL', type: 'string' },
+    ],
+    html: shell({
+      title: 'Verify your email',
+      preheader: 'One click to verify your email for {{{FORM_TITLE}}}.',
+      rows: [
+        heading('Verify your email'),
+        // Deliberately covers both readings — the person still typing, and the
+        // person who has already pressed Submit — because ONE template serves
+        // both and the sender must not be able to tell them apart.
+        text(
+          'Hi {{{RECIPIENT_NAME}}}, you used this address on <strong>{{{FORM_TITLE}}}</strong> for {{{CLASSROOM_NAME}}}. Click below to verify it.'
+        ),
+        text('Your response is not recorded until this address is verified.', {
+          size: 14,
+          lh: 22,
+          color: MUTED,
+          pb: 20,
+        }),
+        button('{{{VERIFY_URL}}}', 'Confirm my response'),
+        /*
+         * ONE sentence for the link's whole life, because it now has one.
+         *
+         * This block used to be three: a "keep this email", a number of hours,
+         * and an instruction for getting another link. The hours were a
+         * deadline that only existed because the link used to expire; the
+         * instruction ("open the form again with the same address") never
+         * worked for anybody who had already verified, since that address is
+         * deliberately sent nothing. Both are gone along with the deadline
+         * itself — see `LINK_OPEN_HORIZON_MS`.
+         */
+        text(
+          '<strong>Keep this email.</strong> The same link brings you back to your answers any time while the form is open, so you can read or change what you sent.',
+          { size: 14, lh: 22, color: MUTED, pb: 8 }
+        ),
+        // A public form is a link anyone can share, so the recipient may
+        // genuinely not have submitted anything — that has to be a real option,
+        // and "ignore this" has to be the first thing the sentence says.
+        text(
+          'If you did not use this address on a Classmoji form, ignore this email. Nothing is recorded without the click.',
+          { size: 14, lh: 22, color: MUTED, pb: 24 }
+        ),
+      ],
+    }),
+  },
+
+  {
     name: 'Regrade — Requested',
     alias: 'regrade-requested',
     subject: '[Classmoji] Action required: Regrade requested',

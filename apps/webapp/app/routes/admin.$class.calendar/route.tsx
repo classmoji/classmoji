@@ -46,6 +46,9 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
 
   const { start, end } = getCalendarDateRange(year, month);
 
+  const role = membership!.role;
+  const isAdmin = ['OWNER', 'TEACHER'].includes(role);
+
   let events: Awaited<ReturnType<typeof ClassmojiService.calendar.getClassroomCalendar>> = [];
   try {
     // Pass includeRawLinks=true for admin UI editing, includeUnpublished=true to see draft assignments
@@ -55,7 +58,10 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
       end,
       null, // userId not needed for admin
       true, // includeRawLinks for editing UI
-      true // includeUnpublished to see draft/unpublished assignments
+      true, // includeUnpublished to see draft/unpublished assignments
+      // Form-close events link to the responses view only for OWNER/TEACHER —
+      // this route also admits ASSISTANT, and that page refuses them.
+      { canManageForms: isAdmin }
     );
   } catch (error: unknown) {
     console.error(
@@ -84,9 +90,6 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
       orderBy: { title: 'asc' },
     }),
   ]);
-
-  const role = membership!.role;
-  const isAdmin = ['OWNER', 'TEACHER'].includes(role);
 
   // Build subscription URL
   const subscriptionUrl = buildCalendarUrl(classSlug);
@@ -550,6 +553,11 @@ const AdminCalendar = ({ loaderData }: Route.ComponentProps) => {
   };
 
   const handleDeadlineDrop = (deadline: CalendarEvent, newDateTime: Date) => {
+    // Form-close items are deadlines too, but there is no assignment behind them
+    // and the id below would not parse. CourseCalendar already refuses to drag
+    // them; this is the second lock.
+    if (deadline.is_form_close) return;
+
     // Extract assignment ID from deadline event ID (format: 'deadline-{assignment.id}')
     const assignmentId = deadline.id!.replace('deadline-', '');
 
