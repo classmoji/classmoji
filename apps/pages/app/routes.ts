@@ -17,8 +17,8 @@ import { flatRoutes } from '@react-router/fs-routes';
  *
  * Static segments outrank `:pageSlug` in React Router's ranking regardless of
  * declaration order, which is what keeps `RESERVED_PAGE_SLUGS`
- * (app / classmoji / sign-in / schedule / robots.txt) from being shadowed by a
- * page that claims one as its slug.
+ * (app / classmoji / sign-in / schedule / forms / robots.txt) from being
+ * shadowed by a page that claims one as its slug.
  *
  * The `/:classroomSlug/forms` subtree is declared here too, with its modules
  * under `app/forms/**`, for the same reason the site tree is: it must NOT
@@ -64,6 +64,15 @@ export default [
     // A resource route (no component): it answers with text/plain and has no
     // business rendering the site shell.
     route('robots.txt', 'site/robots.ts'),
+
+    // The short-link bridge: `cs52.classmoji.io/forms/waitlist` 302s to the
+    // canonical host's `/{classroomSlug}/forms/waitlist`. A resource route for
+    // the same reason robots.txt is one — it answers with a `Location` header,
+    // so there is nothing for the site layout to wrap. Outside the layout it
+    // also skips that loader's page-index query on a response nobody renders.
+    // Static `forms` outranks `:pageSlug`, and `forms` is in
+    // RESERVED_PAGE_SLUGS so no page can hold the segment either.
+    route('forms/*', 'site/forms.ts'),
 
     layout('site/layout.tsx', [
       index('site/home.tsx'),

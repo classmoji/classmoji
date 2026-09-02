@@ -117,3 +117,65 @@ export function isPublicFormsPath(pathname: string): boolean {
 export function isFormsPath(pathname: string): boolean {
   return classifyFormsPath(pathname) !== null;
 }
+
+/**
+ * A form slug as `titleToIdentifier` (and therefore the create path) can
+ * produce one: lowercase alphanumerics with interior hyphens.
+ *
+ * The bridge below validates against it rather than forwarding whatever
+ * arrived, because its output goes into a `Location` header. Everything the
+ * check accepts is byte-identical decoded and raw, which is what lets the
+ * bridge read React Router's already-decoded splat param instead of doing raw
+ * path surgery on the request URL.
+ */
+const FORM_SLUG = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+
+/**
+ * Second-level paths under a form that the class-site bridge forwards.
+ *
+ * A superset of `PUBLIC_FORM_SUBPATHS`, and deliberately so. `delivery` is a
+ * RESOURCE route — the fill page polls it for a bounce — so `root.tsx` never
+ * runs for it and `classifyFormsPath` has no reason to exempt it from a login
+ * redirect it will never meet. The bridge asks a different question: "does this
+ * path belong to the public fill flow", and delivery does. Widening the gate's
+ * set to match would exempt a path the gate does not guard, which is a change
+ * with no upside; two sets, each answering its own question, is the honest
+ * shape.
+ */
+const BRIDGED_FORM_SUBPATHS: ReadonlySet<string> = new Set([...PUBLIC_FORM_SUBPATHS, 'delivery']);
+
+/**
+ * The canonical-host path suffix a class-site request for `/forms/{rest}`
+ * should be redirected to, or `null` when this shape is not bridged.
+ *
+ * `rest` is the splat under `_site/{subdomain}/forms/`. The answer is appended
+ * to `/{classroomSlug}/forms/` on the canonical pages host — see
+ * `app/site/forms.ts` for why a class site redirects instead of rendering.
+ *
+ * ADMIN SURFACES ARE NOT BRIDGED. `/forms` (the list), `/forms/new`, and
+ * everything under a form that is not a fill surface answer 404 on a site host:
+ * a course website is an anonymous, script-less reading surface, and a staff
+ * screen reached from it could only bounce the visitor to a login. The
+ * one-segment case is passed through `classifyFormsPath` rather than compared
+ * against a second copy of the admin names, so an admin path invented later is
+ * refused here the moment it is refused there.
+ */
+export function siteFormsBridgePath(rest: string): string | null {
+  const segments = rest.split('/').filter(Boolean);
+  // `{slug}` or `{slug}/{subpath}`. `responses/export` is the only deeper shape
+  // that exists, and it is an admin one.
+  if (segments.length === 0 || segments.length > 2) return null;
+
+  const slug = segments[0];
+  if (!FORM_SLUG.test(slug)) return null;
+  // Catches `new`; every other RESERVED_FORM_SLUGS entry is refused at create,
+  // so a bridged link to one simply finds no form on the far side.
+  if (classifyFormsPath(`/_/forms/${slug}`) !== 'public') return null;
+
+  if (segments.length === 1) return slug;
+
+  // Folded for the same reason the gate folds these: a mail client that
+  // upper-cased `/verify` must not turn a magic link into a 404.
+  const subpath = segments[1].toLowerCase();
+  return BRIDGED_FORM_SUBPATHS.has(subpath) ? `${slug}/${subpath}` : null;
+}

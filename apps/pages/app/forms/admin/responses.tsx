@@ -7,11 +7,13 @@ import { IconDownload, IconSearch, IconTrash, IconX } from '@tabler/icons-react'
 import type { FormField } from '@classmoji/services/form-contract';
 
 import AnswerView from '~/components/forms/AnswerView.tsx';
+import { BackToClassroom } from '~/components/forms/BackToClassroom.tsx';
 import { ConfirmDialog } from '~/components/forms/ConfirmDialog.tsx';
 import { answerColumnFields, formatAnswer } from '~/components/forms/answerFormat.ts';
 import { ClassmojiService } from '~/utils/db.server.ts';
 import { formMutationBlocked } from '~/utils/formAuth.server.ts';
 import { hasRepeatGroup } from './responsesCsv.server.ts';
+import { classroomHomeUrl } from './adminLinks.server.ts';
 import {
   NO_STORE,
   auditResponses,
@@ -101,9 +103,13 @@ export const loader = async ({
     data: { count: rows.length },
   });
 
+  const classroom = context.classroom as { name?: string | null; slug: string };
+
   return data(
     {
       classroomSlug: params.classroomSlug!,
+      classroomName: classroom.name ?? params.classroomSlug!,
+      classroomHome: classroomHomeUrl(context.membership.role, params.classroomSlug!),
       form: context.form,
       rows,
       suggestions,
@@ -263,6 +269,8 @@ const chipTitle = (
 export default function FormResponses() {
   const {
     classroomSlug,
+    classroomName,
+    classroomHome,
     form,
     rows,
     suggestions,
@@ -372,23 +380,26 @@ export default function FormResponses() {
   return (
     <div className="mx-auto max-w-[96rem] px-6 py-8">
       <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
-        <h1 className="text-base font-semibold text-gray-600 dark:text-gray-400">
-          <Link
-            to={`/${classroomSlug}/forms`}
-            className="hover:text-gray-900 dark:hover:text-white"
-          >
-            Forms
-          </Link>
-          <span className="mx-1.5 text-gray-300 dark:text-gray-600">/</span>
-          <Link
-            to={`/${classroomSlug}/forms/${form.slug}/edit`}
-            className="text-gray-900 hover:text-blue-600 dark:text-white dark:hover:text-blue-400"
-          >
-            {form.title}
-          </Link>
-          <span className="mx-1.5 text-gray-300 dark:text-gray-600">/</span>
-          Responses
-        </h1>
+        <div className="min-w-0">
+          <BackToClassroom href={classroomHome} name={classroomName} />
+          <h1 className="text-base font-semibold text-gray-600 dark:text-gray-400">
+            <Link
+              to={`/${classroomSlug}/forms`}
+              className="hover:text-gray-900 dark:hover:text-white"
+            >
+              Forms
+            </Link>
+            <span className="mx-1.5 text-gray-300 dark:text-gray-600">/</span>
+            <Link
+              to={`/${classroomSlug}/forms/${form.slug}/edit`}
+              className="text-gray-900 hover:text-blue-600 dark:text-white dark:hover:text-blue-400"
+            >
+              {form.title}
+            </Link>
+            <span className="mx-1.5 text-gray-300 dark:text-gray-600">/</span>
+            Responses
+          </h1>
+        </div>
 
         <div className="flex items-center gap-2">
           <div className="relative">
