@@ -1076,7 +1076,7 @@ test.describe('magic link', () => {
     await expect(page.getByRole('link', { name: 'Request a new link' })).toBeVisible();
   });
 
-  test('a link is single-use, and the spent link is neutral about why', async ({ page }) => {
+  test('the link still opens the response after it has been confirmed', async ({ page }) => {
     const email = 'zz-e2e-twice@example.edu';
     await page.goto(fillPath);
     await fillWaitlist(page, email, 'Twice');
@@ -1088,14 +1088,21 @@ test.describe('magic link', () => {
     await page.getByRole('button', { name: 'Confirm' }).click();
     await expect(page.getByRole('heading', { name: "You're in" })).toBeVisible();
 
-    // Reopening the spent link says the LINK is used, never that the response
-    // exists — whoever holds a stale link is not necessarily the person who
-    // owns the mailbox.
+    /**
+     * Reopening it lands back on the response, not on a dead end.
+     *
+     * This used to assert "This link has already been used" — the behaviour the
+     * email contradicted in the same breath by telling people to keep it. The
+     * link is the ONLY handle on a public response, since there is deliberately
+     * no look-up-by-email anywhere in the product, so spending it stranded
+     * whoever came back.
+     */
     await page.goto(linkTarget(link));
-    await expect(
-      page.getByRole('heading', { name: 'This link has already been used' })
-    ).toBeVisible();
-    await expect(page.getByRole('link', { name: 'Request a new link' })).toBeVisible();
+    await expect(page.getByText('This is the response we already have for you.')).toBeVisible();
+
+    // And re-confirming edits the one row rather than filing a second.
+    await page.getByRole('button', { name: 'Confirm' }).click();
+    await expect(page.getByRole('heading', { name: "You're in" })).toBeVisible();
 
     expect(await responsesOf(formId!)).toHaveLength(1);
   });

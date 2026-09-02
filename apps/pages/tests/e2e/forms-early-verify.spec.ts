@@ -431,17 +431,22 @@ test.describe('a submit that has nothing to reuse still mails', () => {
   });
 
   /**
-   * NOBODY IS STRANDED. Reuse only ever stands in for a link that still works,
-   * so a spent one puts the mail back — which is the difference between "you
-   * already have it" and "you have nothing".
+   * NOBODY IS STRANDED — and after this change, nobody is sent back to their
+   * inbox either.
+   *
+   * This used to assert that a second pass MAILED AGAIN, because submitting
+   * spent the link and left the browser holding a dead credential. Both halves
+   * of that are gone: the token outlives its submission, and the cookie
+   * carrying it is kept rather than cleared. So the second pass is simply an
+   * edit, recorded on the spot, with no new mail — the outcome the old
+   * behaviour was making up for.
    */
-  test('a spent earlier link makes the submit mail again', async ({ page }) => {
+  test('a second pass on the same browser edits in place and mails nothing', async ({ page }) => {
     const email = freshEmail('respend');
     await page.goto(fillPath);
     await typeEmailAndLeave(page, email);
     const [first] = await waitForLinks(email, 1);
 
-    // Open and spend it — this browser now holds a verified, USED token.
     await page.goto(linkTarget(first));
     await page.getByTestId('forms-go-finish').click();
     await page.getByLabel(EMAIL_LABEL, { exact: true }).fill(email);
@@ -449,17 +454,17 @@ test.describe('a submit that has nothing to reuse still mails', () => {
     await page.getByRole('button', { name: 'Submit' }).click();
     await expect(page.getByRole('heading', { name: "You're in" })).toBeVisible();
 
-    // A second pass has no live link to lean on, so it mails a fresh edit link
-    // rather than leaving somebody looking at "check your email" for nothing.
+    // Straight through on the shortcut: no "check your email" in sight.
     await page.goto(fillPath);
     await page.getByLabel(EMAIL_LABEL, { exact: true }).fill(email);
     await fillTheRest(page, 'Second Pass');
     await page.getByRole('button', { name: 'Submit' }).click();
-    await expect(page.getByRole('heading', { name: 'Check your email' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: "You're in" })).toBeVisible();
 
-    const links = await waitForLinks(email, 2);
-    expect(links).toHaveLength(2);
-    expect(links[1]).not.toBe(first);
+    // Still exactly one link, and it is still the first one.
+    await page.waitForTimeout(750);
+    expect(linksFor(email)).toHaveLength(1);
+    expect(linksFor(email)[0]).toBe(first);
   });
 });
 
@@ -513,7 +518,7 @@ test.describe('the binding between a verified link and an address', () => {
     ).toHaveLength(0);
   });
 
-  test('a spent link does not let the same browser submit twice', async ({ page }) => {
+  test('the browser that verified stays verified, and its edit lands', async ({ page }) => {
     const email = freshEmail('spent');
     await page.goto(fillPath);
     await typeEmailAndLeave(page, email);
@@ -526,20 +531,27 @@ test.describe('the binding between a verified link and an address', () => {
     await page.getByRole('button', { name: 'Submit' }).click();
     await expect(page.getByRole('heading', { name: "You're in" })).toBeVisible();
 
-    // The token is spent and the cookie cleared, so a second pass is an
-    // ordinary edit request: a link to the mailbox, not a silent overwrite.
+    /**
+     * The cookie SURVIVES the submission now, so coming back still says "your
+     * address is verified in this browser" — and it is true, because the token
+     * behind it outlives the submission too.
+     *
+     * This used to assert the opposite of both lines: no verified banner, and a
+     * second trip to the mailbox to change an answer. That was the cost of
+     * spending the link, paid by the person least able to understand it — the
+     * one sitting at the machine that had already proved who they were.
+     */
     await page.goto(fillPath);
-    await expect(page.getByTestId('forms-verified-here')).toHaveCount(0);
+    await expect(page.getByTestId('forms-verified-here')).toHaveCount(1);
     await page.getByLabel(EMAIL_LABEL, { exact: true }).fill(email);
     await fillTheRest(page, 'Second Go');
     await page.getByRole('button', { name: 'Submit' }).click();
-    await expect(page.getByRole('heading', { name: 'Check your email' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: "You're in" })).toBeVisible();
 
     const rows = await responsesOf(formId!);
     expect(rows).toHaveLength(1);
-    // The stored answers are still the confirmed ones — an unconfirmed edit
-    // request does not change what is on file.
-    expect(Object.values(rows[0].answers as Record<string, unknown>)).toContain('First Go');
+    // The edit replaced the answers rather than filing a second response.
+    expect(Object.values(rows[0].answers as Record<string, unknown>)).toContain('Second Go');
   });
 });
 

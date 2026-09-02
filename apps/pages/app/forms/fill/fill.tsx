@@ -10,7 +10,8 @@ import {
   recordSubmissionAttempt,
 } from '~/utils/submissionRate.server.ts';
 import {
-  clearFormLinkCookie,
+  EDIT_LINK_COOKIE_MAX_AGE_SECONDS,
+  formLinkCookie,
   formWatchCookie,
   readFormLinkCookie,
 } from '~/utils/formLinkCookie.server.ts';
@@ -881,15 +882,28 @@ export const action = async ({
         revisionId,
       });
 
+      /**
+       * The cookie STAYS, and is re-issued with a fresh lifetime.
+       *
+       * It used to be cleared here, because submitting spent the token and a
+       * dead credential left in the jar only looked like breakage. The token
+       * now outlives the submission (see `editLinkExpiresAt`), so the cookie is
+       * no longer a spent receipt — it is this browser's copy of the edit link,
+       * and keeping it is what lets somebody come straight back to their own
+       * answers on the machine they used, without going to their inbox at all.
+       *
+       * Re-issued rather than simply left alone so the browser's expiry tracks
+       * the token's: it was written with the 48-hour verification window, which
+       * is now much the shorter of the two clocks.
+       */
       return data({ state: 'recorded-public' } satisfies ActionResult, {
-        // The token is spent. Leaving the cookie behind would make the next
-        // submit offer a dead credential — harmless, since it falls back, but
-        // it would look like the shortcut had broken.
         headers: {
-          'Set-Cookie': clearFormLinkCookie({
+          'Set-Cookie': formLinkCookie({
             request,
             classroomSlug: params.classroomSlug!,
             formSlug: params.formSlug!,
+            rawToken: linkToken,
+            maxAgeSeconds: EDIT_LINK_COOKIE_MAX_AGE_SECONDS,
           }),
         },
       });

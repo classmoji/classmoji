@@ -226,6 +226,14 @@ Need help, email us at hello@classmoji.io`,
       { key: 'FORM_TITLE', type: 'string' },
       { key: 'CLASSROOM_NAME', type: 'string' },
       { key: 'VERIFY_URL', type: 'string' },
+      // Declared but no longer rendered here. ONE builder in
+      // formResponse.service composes the payload for this template and for the
+      // reminder, which still quotes the hours legitimately (a reminder only
+      // ever goes to a row that has NOT verified, so the 48-hour deadline is
+      // still that reader's truth). Keeping the key declared means the shared
+      // payload stays valid for both; dropping it would hand Resend a variable
+      // this template does not know, and a rejected send here is invisible —
+      // see the `escapeVars` comment for how that failure mode already bit us.
       { key: 'EXPIRES_HOURS', type: 'string', fallbackValue: '48' },
     ],
     html: shell({
@@ -250,13 +258,26 @@ Need help, email us at hello@classmoji.io`,
         // on the response — the only one, since there is deliberately no
         // "look up my response by email" form anywhere in the product.
         text(
-          '<strong>Keep this email.</strong> The same link opens your answers again later if you want to change them — and if you are still filling the form in, you can click it now and go straight back to finish.',
+          '<strong>Keep this email.</strong> This link is your way back to your answers: click it now to carry on filling the form in, and click it again any time after you submit to read or change what you sent.',
           { size: 14, lh: 22, color: MUTED, pb: 8 }
         ),
-        text(
-          'The link works for {{{EXPIRES_HOURS}}} hours. If you need a new one, open the form again with the same address.',
-          { size: 14, lh: 22, color: MUTED, pb: 8 }
-        ),
+        // No hours, and no "request another one".
+        //
+        // The hours were the VERIFICATION deadline, which stopped being the
+        // link's whole life when a submission started extending it — quoting 48
+        // to somebody whose link now lasts as long as the form would be worse
+        // than saying nothing. And "open the form again with the same address"
+        // was never a way to get a second link: an address that has already
+        // verified is deliberately sent nothing at all, so the instruction sent
+        // people to a blank form and no mail. The resend button on the
+        // check-your-email screen is the real door, and it is only reachable by
+        // the person who asked.
+        text('The link keeps working for as long as this form is open.', {
+          size: 14,
+          lh: 22,
+          color: MUTED,
+          pb: 8,
+        }),
         // A public form is a link anyone can share, so the recipient may
         // genuinely not have submitted anything — that has to be a real option,
         // and "ignore this" has to be the first thing the sentence says.
