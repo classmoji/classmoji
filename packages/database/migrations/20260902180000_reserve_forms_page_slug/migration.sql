@@ -44,16 +44,25 @@ DECLARE
   chosen TEXT;
   n_evicted INT;
 BEGIN
-  SELECT COUNT(*) INTO n_evicted FROM "pages" WHERE "slug" = 'forms';
-  RAISE NOTICE 'reserving page slug "forms": % page(s) to evict', n_evicted;
+  SELECT COUNT(*) INTO n_evicted FROM "pages" WHERE "slug" = ANY (reserved);
+  RAISE NOTICE 'reserving page slug "forms": % page(s) on a reserved slug', n_evicted;
 
-  -- Every row holding it is evicted, including the oldest: a reserved slug has
+  -- Driven off `reserved`, NOT off the literal 'forms', for two reasons. It is
+  -- what makes the array the eviction set rather than decoration — the
+  -- cross-file test in packages/utils asserts exactly that, and a contributor
+  -- copying this file for a seventh reserved slug would otherwise add it to the
+  -- array, watch the test go green, and evict nothing. And it costs nothing:
+  -- the other five were evicted in August and page.service has refused them at
+  -- create ever since, so they match no rows here and a re-apply matches none
+  -- either.
+  --
+  -- Every row holding one is evicted, including the oldest: a reserved slug has
   -- no winner. Ordered so a dry run, staging and production resolve two pages
   -- in one classroom the same way.
   FOR loser IN
     SELECT "id", "classroom_id", "slug" AS old_slug
     FROM "pages"
-    WHERE "slug" = 'forms'
+    WHERE "slug" = ANY (reserved)
     ORDER BY "classroom_id", "created_at", "id"
   LOOP
     cands := ARRAY(SELECT loser.old_slug || '-' || n FROM generate_series(2, max_suffix) AS n);

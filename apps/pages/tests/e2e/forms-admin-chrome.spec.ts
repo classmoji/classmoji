@@ -98,6 +98,19 @@ test.describe('the way back to Classmoji', () => {
     );
   });
 
+  test('and a teacher at their own tree, which is the whole point', async ({ page }) => {
+    // `/admin/:class/**` carries an owner-only loader, so a teacher sent there
+    // would be turned away from a screen they are entitled to. This is the
+    // branch the role mapping exists for; asserting only the owner case would
+    // pass against a hardcoded `/admin`.
+    await loginAs(page, 'teacher', `/${CLASS}/forms`);
+
+    await expect(page.locator(BACK_LINK)).toHaveAttribute(
+      'href',
+      `${WEBAPP}/teacher/${CLASS}/dashboard`
+    );
+  });
+
   test('so do the builder and the responses view', async ({ page }) => {
     await loginAs(page, 'owner', `/${CLASS}/forms/${FORM_SLUG}/edit`);
     await expect(page.locator(BACK_LINK)).toHaveAttribute(

@@ -50,18 +50,20 @@ export function classroomHomeUrl(role: string, classroomSlug: string): string {
  * with the site feature off keeps the canonical link with no branch of its own.
  */
 export async function publicFormOrigin(
-  classroom: { id: string; status?: string },
+  classroom: { id: string; status?: string; is_archived?: boolean },
   requestOrigin: string
 ): Promise<string> {
-  // A classroom that has never been opened does not serve its site at all —
-  // `getSiteBySubdomain` calls that `unavailable` — so a short link built here
-  // would 404 until the instructor publishes. The canonical one works today,
-  // and a link that works is worth more than a link that is shorter.
-  if (classroom.status === 'UNPUBLISHED') return requestOrigin;
+  // The three conditions under which the site does not serve, mirroring
+  // `getSiteBySubdomain` — which is what the bridge resolves through, so a
+  // short link built past any of them would 404 while the canonical one works.
+  // A link that works beats a link that is shorter.
+  //
+  // BOTH classroom conditions, not just the status one: `is_archived` is a
+  // separate boolean from ClassroomStatus, and the staff gate does not consider
+  // it, so staff of an archived classroom do reach this screen.
+  if (classroom.is_archived || classroom.status === 'UNPUBLISHED') return requestOrigin;
 
   const site = await ClassmojiService.site.getSiteForClassroom(classroom.id);
-  // Same reasoning for a site switched off: the bridge resolves through the
-  // same lookup and would refuse it.
   if (!site || !site.is_enabled) return requestOrigin;
   return siteOrigin(site.subdomain) ?? requestOrigin;
 }
