@@ -161,6 +161,50 @@ export const MAGIC_TOKEN_REUSE_MS = MAGIC_TOKEN_TTL_MS / 2;
  * literal, exactly as they already do for 'SENT' and 'BOUNCED'.
  */
 export const MAGIC_LINK_SEND_FAILED = 'FAILED';
+/**
+ * How long an edit link lives on a form that never closes.
+ *
+ * A backstop, not the rule. The rule is the form: `assertAccepting` refuses
+ * every write to a form that is not OPEN, so a token outliving its form's
+ * usefulness opens a page that can be read and not changed. This exists so that
+ * "no close date" does not mean "immortal bearer credential", and it is
+ * deliberately long — a waitlist that runs a whole term is the ordinary case,
+ * and a link that dies before its form does is the exact failure this rule
+ * exists to fix.
+ */
+export const EDIT_LINK_OPEN_HORIZON_MS = 365 * 24 * 60 * 60 * 1000;
+
+/**
+ * When the link that carried a submission should expire, now that it has.
+ *
+ * ── Two clocks, deliberately not the same one ──────────────────────────────
+ * A token is MINTED with `MAGIC_TOKEN_TTL_MS` (48h), and that number means one
+ * thing: how long you have to prove the address before the pending row stops
+ * holding its place in the queue. `assertCapAvailable` counts unverified rows
+ * by exactly that window and `expireStale` sweeps by it, so it must not move.
+ *
+ * Once the answers are in, the same token stops being a verification deadline
+ * and becomes the handle on the response — the ONE thing the person can come
+ * back with, since there is deliberately no "look up my response by email"
+ * form anywhere in the product. That job's natural length is the form's own
+ * life, not forty-eight hours.
+ *
+ * So the token is not SPENT at submit, it is EXTENDED here. The verification
+ * window keeps its meaning for every row still inside it; the edit window
+ * begins only for a row that has actually been submitted.
+ *
+ * Never shortens. A form closing sooner than the token's current expiry leaves
+ * that expiry alone: the form gate already refuses the edit, and being able to
+ * READ BACK what you submitted is not something a close date should take away.
+ */
+const editLinkExpiresAt = (
+  form: { closes_at: Date | null },
+  currentExpiry: Date,
+  now: Date
+): Date => {
+  const horizon = form.closes_at ?? new Date(now.getTime() + EDIT_LINK_OPEN_HORIZON_MS);
+  return horizon.getTime() > currentExpiry.getTime() ? horizon : currentExpiry;
+};
 /** Abandoned server-side partials are swept after this long. */
 export const DRAFT_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 /**
@@ -634,7 +678,9 @@ async function mintLinkFor(
  * Four conditions, and each one is a way the reuse could otherwise strand
  * somebody with a dead link and no mail:
  *
- *  - unspent (`used_at` null) — a link that has been clicked opens nothing;
+ *  - unspent (`used_at` null) — nothing sets this column any more, since a
+ *    submission now EXTENDS its link rather than spending it, but rows written
+ *    before that change still carry it and a spent link opens nothing;
  *  - unexpired — the obvious one;
  *  - minted inside `MAGIC_TOKEN_REUSE_MS` — so what is handed back has real
  *    life left, not the last twenty minutes of it;
@@ -1243,7 +1289,13 @@ export async function confirmSubmission(rawToken: string, { answers }: { answers
       data.answers = parseAnswers(fields, answers) as unknown as Prisma.InputJsonValue;
     }
 
-    await tx.formMagicToken.update({ where: { id: token.id }, data: { used_at: now } });
+    // NOT spent — extended. See `editLinkExpiresAt`: from here the link stops
+    // being a verification deadline and becomes the person's way back to their
+    // own answers, which is the promise the email now makes.
+    await tx.formMagicToken.update({
+      where: { id: token.id },
+      data: { expires_at: editLinkExpiresAt(lockedForm, token.expires_at, now) },
+    });
 
     const updated = await tx.formResponse.update({ where: { id: response.id }, data });
     return { response: updated, firstVerification: !counted };
@@ -1329,8 +1381,15 @@ export async function verifyAddressByToken(rawToken: string, now: Date = new Dat
  * treats as "no shortcut available" rather than as an error. A stale cookie
  * must never be able to make a legitimate submission fail.
  *
- * The token is CONSUMED here: it was single-use before this feature and it is
- * single-use now. A later edit takes a fresh link, exactly as it always did.
+ * The token SURVIVES here, and its life is extended to the form's — see
+ * `editLinkExpiresAt`. It used to be spent at this line, inherited from the
+ * flow where the link's only job was confirming one submission. Verification
+ * moved to blur time, which quietly gave the link a second job — being the
+ * handle on the response — and spending it cut that job off at the exact
+ * moment the response became worth returning to. Nothing was protected by the
+ * spend that the pre-submit behaviour did not already allow: the link is
+ * openable as many times as you like while you are still filling the form in,
+ * so "whoever holds this mail can open this response" was always the model.
  *
  * @throws MAGIC_LINK_NOT_BOUND, FORM_CAP_REACHED, FORM_NOT_OPEN, FORM_CLOSED,
  *   FORM_REVISION_STALE, FORM_ACCESS_MISMATCH, and the contract's
@@ -1419,7 +1478,13 @@ export async function submitVerifiedPublic({
       });
     }
 
-    await tx.formMagicToken.update({ where: { id: token.id }, data: { used_at: now } });
+    // NOT spent — extended, exactly as in `confirmSubmission`. This is the path
+    // an ordinary submission takes now that verification happens at blur time,
+    // so it is the one that decides whether "keep this email" is true.
+    await tx.formMagicToken.update({
+      where: { id: token.id },
+      data: { expires_at: editLinkExpiresAt(lockedForm, token.expires_at, now) },
+    });
 
     return tx.formResponse.update({
       where: { id: response.id },

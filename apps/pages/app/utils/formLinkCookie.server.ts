@@ -102,6 +102,17 @@ export function readFormLinkCookie(request: Request, formSlug: string): string |
   return found;
 }
 
+/**
+ * How long this browser keeps its copy of the edit link after a submission.
+ *
+ * The token behind it now lives as long as the form does, so the cookie is the
+ * shorter promise of the two and that is the right way round — a stale cookie
+ * costs one round trip through the inbox, never access. Two hundred days sits
+ * under the 400-day ceiling browsers cap `Max-Age` at, so the number the server
+ * asks for is the number the browser actually keeps.
+ */
+export const EDIT_LINK_COOKIE_MAX_AGE_SECONDS = 200 * 24 * 60 * 60;
+
 /** `Set-Cookie` that hands this browser the verified link for one form. */
 export function formLinkCookie({
   request,
@@ -127,31 +138,14 @@ export function formLinkCookie({
   return attributes.join('; ');
 }
 
-/**
- * `Set-Cookie` that takes it away again — sent the moment the token is spent.
- *
- * The attributes must match the ones it was set with (name, path) or the
- * browser keeps the original and the next submit offers a token the server has
- * already burned. Harmless (it would fall back), but it would look like the
- * feature was broken.
+/*
+ * `clearFormLinkCookie` used to live here, sent "the moment the token is
+ * spent". A submission extends its token now instead of spending it, so that
+ * moment no longer exists and the cookie is deliberately kept — see the submit
+ * branch in `forms/fill/fill.tsx`. Removed rather than left unused, because a
+ * helper whose whole rationale has stopped being true is a trap for whoever
+ * reaches for it next.
  */
-export function clearFormLinkCookie({
-  request,
-  classroomSlug,
-  formSlug,
-}: {
-  request: Request;
-  classroomSlug: string;
-  formSlug: string;
-}): string {
-  return formLinkCookie({
-    request,
-    classroomSlug,
-    formSlug,
-    rawToken: '',
-    maxAgeSeconds: 0,
-  });
-}
 
 // ─── The WATCH cookie ───────────────────────────────────────────────────────
 

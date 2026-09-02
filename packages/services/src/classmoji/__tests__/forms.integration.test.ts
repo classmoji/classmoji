@@ -432,14 +432,27 @@ describe.skipIf(!RUN)('forms services (integration)', () => {
         responseService.MAGIC_LINK_EXPIRED
       );
 
-      const used = await responseService.beginPublicSubmission({
+      /**
+       * A link that HAS been spent is still refused — but nothing spends one
+       * any more, so the only way to reach this state is a row written before
+       * submissions started extending their token instead of consuming it.
+       * Set by hand here for exactly that reason: the rejection has to keep
+       * working for rows already in the database, and no live path produces it.
+       */
+      const legacy = await responseService.beginPublicSubmission({
         formId,
-        email: `used-${suite}@example.test`,
+        email: `legacy-spent-${suite}@example.test`,
         answers: { [fieldId]: 'Maya' },
         revisionId,
       });
-      await responseService.confirmSubmission(tokenOf(used));
-      expect(await codeOf(responseService.confirmSubmission(tokenOf(used)))).toBe(
+      await prisma.formMagicToken.updateMany({
+        where: { response_id: legacy.responseId },
+        data: { used_at: new Date() },
+      });
+      expect(await codeOf(responseService.verifyMagicToken(tokenOf(legacy)))).toBe(
+        responseService.MAGIC_LINK_USED
+      );
+      expect(await codeOf(responseService.confirmSubmission(tokenOf(legacy)))).toBe(
         responseService.MAGIC_LINK_USED
       );
     });
@@ -504,21 +517,18 @@ describe.skipIf(!RUN)('forms services (integration)', () => {
       });
 
       /**
-       * The three ways a link stops being worth pointing at. Each one has to
-       * put the mint back — the one outcome that must never happen is somebody
+       * The two ways a link stops being worth pointing at. Each one has to put
+       * the mint back — the one outcome that must never happen is somebody
        * submitting, getting no mail, and holding no live link.
+       *
+       * "Spent" used to be a third way and is not one any more: confirming
+       * EXTENDS a link rather than consuming it, so the person is left holding
+       * the most useful link they have ever had. That case is covered just
+       * below, because "no new mail" is only correct while the old link works.
        */
-      it('mints afresh once the previous link is spent, expired, or old', async () => {
+      it('mints afresh once the previous link is expired or old', async () => {
         const { formId, revisionId } = await makeOpenForm();
         const fieldId = await nameFieldId(revisionId);
-
-        // SPENT.
-        const spentEmail = `reuse-spent-${suite}@example.test`;
-        const spent = await beginFor(formId, revisionId, fieldId, spentEmail);
-        await responseService.confirmSubmission(tokenOf(spent));
-        const afterSpent = await beginFor(formId, revisionId, fieldId, spentEmail);
-        expect(afterSpent.rawToken).not.toBeNull();
-        expect(afterSpent.emails).toHaveLength(1);
 
         // EXPIRED.
         const deadEmail = `reuse-expired-${suite}@example.test`;
@@ -542,6 +552,32 @@ describe.skipIf(!RUN)('forms services (integration)', () => {
         const renewed = await beginFor(formId, revisionId, fieldId, oldEmail);
         expect(renewed.rawToken).not.toBeNull();
         expect(renewed.emails).toHaveLength(1);
+      });
+
+      /**
+       * Confirming does NOT put the mint back, and that is the point.
+       *
+       * Silence here is only defensible because the link they already hold
+       * still works — so this asserts both halves together. Assert the "no
+       * second mail" half alone and you have written the exact bug this change
+       * fixed: a person confirmed, got nothing, and held a dead link.
+       */
+      it('sends nothing more after a confirm, because the first link still works', async () => {
+        const { formId, revisionId } = await makeOpenForm();
+        const fieldId = await nameFieldId(revisionId);
+        const email = `reuse-confirmed-${suite}@example.test`;
+
+        const first = await beginFor(formId, revisionId, fieldId, email);
+        const rawToken = tokenOf(first);
+        await responseService.confirmSubmission(rawToken);
+
+        const after = await beginFor(formId, revisionId, fieldId, email);
+        expect(after.rawToken).toBeNull();
+        expect(after.emails).toHaveLength(0);
+
+        // The half that makes the silence honest.
+        const reopened = await responseService.verifyMagicToken(rawToken);
+        expect(reopened.response.submission_state).toBe('SUBMITTED');
       });
 
       /**
@@ -790,18 +826,16 @@ describe.skipIf(!RUN)('forms services (integration)', () => {
         answers: { [fieldId]: 'Maya Chen' },
         revisionId,
       });
-      const confirmed = await responseService.confirmSubmission(tokenOf(first));
+      const rawToken = tokenOf(first);
+      const confirmed = await responseService.confirmSubmission(rawToken);
       const originalVerifiedAt = confirmed.response.verified_at;
 
       await new Promise(resolve => setTimeout(resolve, 20));
 
-      const again = await responseService.beginPublicSubmission({
-        formId,
-        email,
-        answers: { [fieldId]: 'Maya Chen' },
-        revisionId,
-      });
-      const edited = await responseService.confirmSubmission(tokenOf(again), {
+      // The SAME link does the edit. This used to need a second round trip
+      // through the inbox to mint a replacement, because confirming spent the
+      // first one; the link outliving its own submission is what removed it.
+      const edited = await responseService.confirmSubmission(rawToken, {
         answers: { [fieldId]: 'Maya R. Chen' },
       });
 
@@ -1608,7 +1642,7 @@ describe.skipIf(!RUN)('forms services (integration)', () => {
         return { formId, revisionId, fieldId, email, rawToken };
       };
 
-      it('records the response and spends the link', async () => {
+      it('records the response and keeps the link alive', async () => {
         const { formId, revisionId, fieldId, email, rawToken } = await verifiedSetup('ok');
 
         const response = await responseService.submitVerifiedPublic({
@@ -1624,10 +1658,69 @@ describe.skipIf(!RUN)('forms services (integration)', () => {
         expect(response.verified_at).not.toBeNull();
         expect(response.answers).toEqual({ [fieldId]: 'Maya' });
 
+        // The link SURVIVES its own submission, and its life is now the form's
+        // rather than the 48-hour verification window it was minted with. This
+        // is what makes "keep this email" true.
         const token = await prisma.formMagicToken.findUniqueOrThrow({
           where: { token_hash: responseService.hashToken(rawToken) },
         });
-        expect(token.used_at).not.toBeNull();
+        expect(token.used_at).toBeNull();
+        expect(token.expires_at.getTime()).toBeGreaterThan(
+          Date.now() + responseService.MAGIC_TOKEN_TTL_MS
+        );
+      });
+
+      /**
+       * ── The promise the email makes ─────────────────────────────────────
+       *
+       * "Keep this email — click it again any time after you submit to read or
+       * change what you sent." That sentence was false for the whole of the
+       * blur-time flow: the link was spent at submit, so the one handle on the
+       * response died at the exact moment the response became worth returning
+       * to. This is the test that would have caught it.
+       */
+      it('reopens the answers after submitting, and edits them', async () => {
+        const { formId, revisionId, fieldId, email, rawToken } = await verifiedSetup('durable');
+
+        await responseService.submitVerifiedPublic({
+          rawToken,
+          formId,
+          email,
+          name: 'Maya',
+          answers: { [fieldId]: 'Maya' },
+          revisionId,
+        });
+
+        // Reading it back is the first half of the promise.
+        const reopened = await responseService.verifyMagicToken(rawToken);
+        expect(reopened.response.submission_state).toBe('SUBMITTED');
+        expect(reopened.response.answers).toEqual({ [fieldId]: 'Maya' });
+
+        // Changing it is the second, and the edit must not take a new cap slot.
+        await responseService.submitVerifiedPublic({
+          rawToken,
+          formId,
+          email,
+          name: 'Maya',
+          answers: { [fieldId]: 'Maya Fixed' },
+          revisionId,
+        });
+
+        expect((await rowFor(formId, email)).answers).toEqual({ [fieldId]: 'Maya Fixed' });
+        expect(
+          await prisma.formResponse.count({
+            where: { form_id: formId, submission_state: 'SUBMITTED' },
+          })
+        ).toBe(1);
+
+        // And it is STILL live — durable means durable, not "one more go".
+        expect(
+          (
+            await prisma.formMagicToken.findUniqueOrThrow({
+              where: { token_hash: responseService.hashToken(rawToken) },
+            })
+          ).used_at
+        ).toBeNull();
       });
 
       /**
@@ -1753,14 +1846,14 @@ describe.skipIf(!RUN)('forms services (integration)', () => {
             where: { form_id: formId, submission_state: 'SUBMITTED', verified_at: { not: null } },
           })
         ).toBe(1);
-        // And the link it rode in on is spent.
+        // And the link it rode in on still opens the response it created.
         expect(
           (
             await prisma.formMagicToken.findUniqueOrThrow({
               where: { token_hash: responseService.hashToken(rawToken) },
             })
           ).used_at
-        ).not.toBeNull();
+        ).toBeNull();
       });
 
       it('a link that was never opened does not bind', async () => {
@@ -1784,8 +1877,18 @@ describe.skipIf(!RUN)('forms services (integration)', () => {
         ).toBe('MAGIC_LINK_NOT_BOUND');
       });
 
-      it('a spent link does not bind a second time', async () => {
-        const { formId, revisionId, fieldId, email, rawToken } = await verifiedSetup('spent');
+      /**
+       * A link that binds more than once is still bound to ONE address.
+       *
+       * This used to assert that a second bind failed outright, which the
+       * durable link makes wrong — editing your own response is the feature.
+       * What must survive is the binding itself: the row is found FROM the
+       * token, so re-using it to submit under a different address has to fail
+       * exactly as it did on the first use. Repeated use widens what the holder
+       * can do to their OWN response and nothing else.
+       */
+      it('binds again after submitting, but never to a different address', async () => {
+        const { formId, revisionId, fieldId, email, rawToken } = await verifiedSetup('rebind');
         await responseService.submitVerifiedPublic({
           rawToken,
           formId,
@@ -1794,13 +1897,24 @@ describe.skipIf(!RUN)('forms services (integration)', () => {
           revisionId,
         });
 
+        // Their own address: allowed, and it edits.
+        const edited = await responseService.submitVerifiedPublic({
+          rawToken,
+          formId,
+          email,
+          answers: { [fieldId]: 'Changed' },
+          revisionId,
+        });
+        expect((edited.answers as Record<string, string>)[fieldId]).toBe('Changed');
+
+        // Somebody else's: refused, on the second use as on the first.
         expect(
           await codeOf(
             responseService.submitVerifiedPublic({
               rawToken,
               formId,
-              email,
-              answers: { [fieldId]: 'Changed' },
+              email: `someone-else-${suite}@example.test`,
+              answers: { [fieldId]: 'Not mine' },
               revisionId,
             })
           )
