@@ -1567,7 +1567,12 @@ model Form {
   /// Public fills always store a server-side row (they must, to be verified).
   /// This governs anonymous DRAFT autosave: off → localStorage only, on →
   /// drafts persist server-side keyed by draft_token, with an on-form
-  /// disclosure. Swept after DRAFT_TTL_MS.
+  /// disclosure. Kept indefinitely — nothing expires form responses.
+  ///
+  /// There is deliberately no cleanup job. A handful of half-started entries
+  /// costs nothing, staff rather like seeing them, and a sweep is a scheduled
+  /// task plus a retention constant plus tests to guard a problem nobody has.
+  /// If volume ever becomes one, that is the moment to design for it.
   ///
   /// ON by default. Losing a half-filled form to a closed tab is the ordinary
   /// disaster, and localStorage does not survive a different device, a private
@@ -1644,7 +1649,8 @@ model FormResponse {
   /// the cap and the FIFO ordering count from the FIRST verification.
   verified_at      DateTime?
   /// Opaque cookie value keying an anonymous server-side partial (only when the
-  /// form's save_partials is on). GC'd by the expiry sweep.
+  /// form's save_partials is on). Kept until somebody deletes it — there is no
+  /// expiry sweep.
   draft_token      String?         @unique
   /// Staff-only free-text triage label ("responded to", "on roster", …).
   /// Suggestions come from the labels already used on the same form. Never

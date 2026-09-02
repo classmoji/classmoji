@@ -109,6 +109,7 @@ describe.skipIf(!RUN)('forms services (integration)', () => {
     response_cap?: number | null;
     allow_multiple?: boolean;
     closes_at?: Date | null;
+    save_partials?: boolean;
   } = {}) => {
     const form = await formService.create({
       classroomId,
@@ -1214,9 +1215,9 @@ describe.skipIf(!RUN)('forms services (integration)', () => {
     });
   });
 
-  // ── drafts, triage, sweep ────────────────────────────────────────────────
+  // ── drafts and staff triage ────────────────────────────────────────────────
 
-  describe('drafts, staff triage, and the expiry sweep', () => {
+  describe('drafts and staff triage', () => {
     it('refuses an anonymous server-side draft when save_partials is off', async () => {
       // Explicitly off: partial saving DEFAULTS to on now, so a form that says
       // nothing gets it. This test is about the instructor who turned it off.
@@ -1348,7 +1349,7 @@ describe.skipIf(!RUN)('forms services (integration)', () => {
       expect(await prisma.formResponse.findUnique({ where: { id: begun.responseId } })).toBeNull();
     });
 
-    it('the sweep drops stale unverified rows and orphan drafts, keeping the rest', async () => {
+    it('nothing is ever deleted, whatever state it is in', async () => {
       const { formId, revisionId } = await makeOpenForm();
       const fieldId = await nameFieldId(revisionId);
       const long_ago = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000);
@@ -1361,25 +1362,6 @@ describe.skipIf(!RUN)('forms services (integration)', () => {
       });
       await prisma.formResponse.update({
         where: { id: stale.responseId },
-        data: { created_at: long_ago },
-      });
-
-      const fresh = await responseService.beginPublicSubmission({
-        formId,
-        email: `fresh-pending-${suite}@example.test`,
-        answers: { [fieldId]: 'Maya' },
-        revisionId,
-      });
-
-      const verified = await responseService.beginPublicSubmission({
-        formId,
-        email: `verified-${suite}@example.test`,
-        answers: { [fieldId]: 'Maya' },
-        revisionId,
-      });
-      await responseService.confirmSubmission(tokenOf(verified));
-      await prisma.formResponse.update({
-        where: { id: verified.responseId },
         data: { created_at: long_ago },
       });
 
@@ -1396,38 +1378,14 @@ describe.skipIf(!RUN)('forms services (integration)', () => {
         },
       });
 
-      const memberDraft = await prisma.formResponse.create({
-        data: {
-          form_id: formId,
-          revision_id: revisionId,
-          user_id: studentAId,
-          email: `member-${suite}@example.test`,
-          email_normalized: `member-${suite}@example.test`,
-          answers: {},
-          submission_state: 'DRAFT',
-          updated_at: long_ago,
-        },
-      });
-
-      await responseService.expireStale();
-
-      const survivors = await prisma.formResponse.findMany({
-        where: { form_id: formId },
-        select: { id: true },
-      });
-      const ids = survivors.map(row => row.id);
-
-      // Anonymous drafts still go: half-typed answers nobody ever saw, kept
-      // only because somebody started filling a form in.
-      expect(ids).not.toContain(orphanDraft.id);
-
-      // Everything a person actually submitted stays, however old and however
-      // unverified. An abandoned entry is a real applicant, and staff being
-      // able to see that somebody tried is worth more than a tidy table.
+      // Ninety days old, unverified, and a draft nobody ever submitted — all of
+      // it still here. There is no sweep: forms keep what they collect until
+      // somebody deletes it on purpose.
+      const ids = (
+        await prisma.formResponse.findMany({ where: { form_id: formId }, select: { id: true } })
+      ).map(row => row.id);
       expect(ids).toContain(stale.responseId);
-      expect(ids).toContain(fresh.responseId);
-      expect(ids).toContain(verified.responseId);
-      expect(ids).toContain(memberDraft.id);
+      expect(ids).toContain(orphanDraft.id);
     });
   });
 
@@ -2099,8 +2057,6 @@ describe.skipIf(!RUN)('forms services (integration)', () => {
         responseId: labelled.responseId,
         staff_status: 'chased',
       });
-
-      await responseService.expireStale();
 
       const survivors = (
         await prisma.formResponse.findMany({ where: { form_id: formId }, select: { id: true } })

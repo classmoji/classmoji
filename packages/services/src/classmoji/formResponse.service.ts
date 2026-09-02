@@ -177,8 +177,6 @@ export const MAGIC_TOKEN_REUSE_MS = 24 * 60 * 60 * 1000;
  * literal, exactly as they already do for 'SENT' and 'BOUNCED'.
  */
 export const MAGIC_LINK_SEND_FAILED = 'FAILED';
-/** Abandoned server-side partials are swept after this long. */
-export const DRAFT_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 
 
 /**
@@ -1875,66 +1873,4 @@ export async function deleteResponse(responseId: string) {
 
 // ─── Expiry sweep ───────────────────────────────────────────────────────────
 
-/**
- * Drop the rows that are holding uniqueness slots without holding a submission.
- *
- * ── What changed, and why ──────────────────────────────────────────────────
- * This used to delete every PENDING_VERIFICATION row at 48 hours, on the
- * argument that a row nobody can verify any more is dead weight on the
- * (form_id, email_normalized) slot. The argument was half right and the
- * consequence was bad: an applicant who typed their address, got distracted,
- * and never clicked simply VANISHED, and the instructor never learned that
- * anybody had tried. On a waitlist that is the most interesting row on the
- * page — somebody who wanted in and bounced off a confirmation step.
- *
- * They are visible as `Unverified` in the responses table, so the fix is to let
- * them stay there: the age is now 30 days, the same retention the anonymous
- * drafts get, and the responses surface says out loud when each one goes.
- * Nothing disappears without having been visible for a month first.
- *
- * The slot is no longer hostage either. A later submission from the same
- * address REUSES the pending row and mints a fresh link (see
- * `beginPublicSubmission`), so an abandoned row costs nobody their second try —
- * which is what made the aggressive sweep necessary in the first place.
- *
- * Three classes now:
- *  - PENDING_VERIFICATION older than 30 days, EXCEPT any a staff member has put
- *    a triage label on. Somebody wrote something about that row; deleting it
- *    would throw away a person's work as well as a person's record.
- *  - Orphan DRAFT partials older than 30 days — the anonymous, cookie-keyed
- *    autosaves the "save partial responses" toggle creates. A classroom draft
- *    (user_id set) is kept: it belongs to an identified member and is theirs to
- *    finish or delete.
- *
- * Pure service function with no scheduling of its own; the Trigger.dev task
- * that calls it lives in `packages/tasks/src/workflows/forms.ts`.
- */
-export async function expireStale(now: Date = new Date()) {
-  const draftsBefore = new Date(now.getTime() - DRAFT_TTL_MS);
-
-  /**
-   * DRAFTS ONLY. Unverified submissions are kept indefinitely now.
-   *
-   * An abandoned entry is a real applicant: somebody who filled the form in
-   * and did not click. They are visible to staff, and "did anybody bounce off
-   * the confirmation step?" is worth being able to answer for the whole life
-   * of the form. Deleting them was tidying at the cost of information — and
-   * their link never expires while the form is open, so one of them can still
-   * finish months later.
-   *
-   * A draft is a different object: half-typed answers nobody has ever seen,
-   * saved automatically under an on-form promise. Keeping those for ever means
-   * holding somebody's personal data because they started typing, so the
-   * thirty-day sweep stays exactly where it was.
-   */
-  const drafts = await getPrisma().formResponse.deleteMany({
-    where: {
-      submission_state: 'DRAFT',
-      user_id: null,
-      updated_at: { lt: draftsBefore },
-    },
-  });
-
-  return { draftsDeleted: drafts.count };
-}
 
