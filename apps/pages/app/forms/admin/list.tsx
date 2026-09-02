@@ -15,6 +15,9 @@ import {
 import { ClassmojiService, prisma } from '~/utils/db.server.ts';
 import { assertFormAdmin, formMutationBlocked } from '~/utils/formAuth.server.ts';
 import { ConfirmDialog } from '~/components/forms/ConfirmDialog.tsx';
+import { BackToClassroom } from '~/components/forms/BackToClassroom.tsx';
+import { useCopyLink } from '~/components/forms/useCopyLink.ts';
+import { classroomHomeUrl, publicFormOrigin } from './adminLinks.server.ts';
 
 dayjs.extend(relativeTime);
 
@@ -53,16 +56,24 @@ export const loader = async ({
   request: Request;
 }) => {
   const classroomSlug = params.classroomSlug!;
-  const { classroom } = await assertFormAdmin(classroomSlug, request, { action: 'list_forms' });
+  const { classroom, membership } = await assertFormAdmin(classroomSlug, request, {
+    action: 'list_forms',
+  });
 
-  const forms = await ClassmojiService.form.findByClassroomId(classroom.id);
+  const [forms, shareOrigin] = await Promise.all([
+    ClassmojiService.form.findByClassroomId(classroom.id),
+    // The classroom's own site host when it has one, so what staff copy is the
+    // short link they would put on a slide. See publicFormOrigin.
+    publicFormOrigin(classroom.id, new URL(request.url).origin),
+  ]);
+
+  const classroomName = (classroom as { name?: string | null }).name ?? classroomSlug;
 
   return {
     classroomSlug,
-    classroomName: (classroom as { name?: string | null }).name ?? classroomSlug,
-    // The share link is built from the host that served this request, so it is
-    // right in dev, on the devport, and in production without a second env var.
-    origin: new URL(request.url).origin,
+    classroomName,
+    classroomHome: classroomHomeUrl(membership.role, classroomSlug),
+    shareOrigin,
     forms: forms.map(
       (form): FormRow => ({
         id: form.id,
@@ -177,10 +188,11 @@ const STATUS_CHIP: Record<FormStatus, string> = {
 };
 
 export default function FormsList() {
-  const { forms, classroomSlug, origin } = useLoaderData<typeof loader>();
+  const { forms, classroomSlug, classroomName, classroomHome, shareOrigin } =
+    useLoaderData<typeof loader>();
   const fetcher = useFetcher<{ error?: string; ok?: boolean }>();
   const [query, setQuery] = useState('');
-  const [copied, setCopied] = useState<string | null>(null);
+  const { copiedKey, copy } = useCopyLink();
   // The form a delete has been REQUESTED for and not yet confirmed. Holding the
   // row (not a boolean) is what lets the dialog name the form being deleted.
   const [pendingDelete, setPendingDelete] = useState<FormRow | null>(null);
@@ -193,19 +205,7 @@ export default function FormsList() {
     );
   }, [forms, query]);
 
-  const linkFor = (form: FormRow) => `${origin}/${classroomSlug}/forms/${form.slug}`;
-
-  const copyLink = async (form: FormRow) => {
-    try {
-      await navigator.clipboard.writeText(linkFor(form));
-      setCopied(form.id);
-      setTimeout(() => setCopied(current => (current === form.id ? null : current)), 1500);
-    } catch {
-      // Clipboard is permission-gated and blocked outright in some embedded
-      // contexts. The link is visible on the row's View action either way, so a
-      // refusal is a non-event rather than an error to shout about.
-    }
-  };
+  const linkFor = (form: FormRow) => `${shareOrigin}/${classroomSlug}/forms/${form.slug}`;
 
   const setStatus = (form: FormRow, status: FormStatus) => {
     fetcher.submit(
@@ -229,7 +229,10 @@ export default function FormsList() {
       <Outlet />
 
       <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
-        <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Forms</h1>
+        <div className="min-w-0">
+          <BackToClassroom href={classroomHome} name={classroomName} />
+          <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Forms</h1>
+        </div>
         <div className="flex items-center gap-2">
           <div className="relative">
             <IconSearch
@@ -365,7 +368,7 @@ export default function FormsList() {
                       </Link>
                       <button
                         type="button"
-                        onClick={() => copyLink(form)}
+                        onClick={() => copy(linkFor(form), form.id)}
                         title="Copy the link to this form"
                         aria-label={`Copy link to ${form.title}`}
                         className="text-gray-400 hover:text-gray-700 dark:hover:text-gray-200"
@@ -399,7 +402,7 @@ export default function FormsList() {
                       >
                         <IconTrash size={16} />
                       </button>
-                      {copied === form.id ? (
+                      {copiedKey === form.id ? (
                         <span className="text-xs text-emerald-600 dark:text-emerald-400">
                           copied
                         </span>
