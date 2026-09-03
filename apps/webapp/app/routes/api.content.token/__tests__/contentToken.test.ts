@@ -40,8 +40,13 @@ const post = (body: unknown, headers: Record<string, string> = {}) =>
 
 const authed = (body: unknown) => post(body, { Authorization: `Bearer ${SECRET}` });
 
+// Real uuids: the route validates the shape before it queries, so a fixture id
+// like 'class-1' would now be refused as a 400 and never reach the mock.
+const CLASSROOM_ID = '3f2504e0-4f89-41d3-9a0c-0305e82c3301';
+const UNKNOWN_ID = '9c858901-8a57-4791-81fe-4c455b099bc9';
+
 const CLASSROOM = {
-  id: 'class-1',
+  id: CLASSROOM_ID,
   content_repo: 'content-cs101',
   git_organization: { id: 'org-1', provider: 'GITHUB', login: 'dartmouth-cs', installationId: '9' },
 };
@@ -60,7 +65,7 @@ describe('POST /api/content/token', () => {
   it('503s when CONTENT_WORKER_SHARED_SECRET is unset, without touching the database', async () => {
     delete process.env.CONTENT_WORKER_SHARED_SECRET;
 
-    const res = await action(authed({ classroomId: 'class-1' }));
+    const res = await action(authed({ classroomId: CLASSROOM_ID }));
 
     expect(res.status).toBe(503);
     expect(await res.json()).toEqual({ error: 'not configured' });
@@ -71,7 +76,9 @@ describe('POST /api/content/token', () => {
   });
 
   it('401s on a wrong secret', async () => {
-    const res = await action(post({ classroomId: 'class-1' }, { Authorization: 'Bearer wrong' }));
+    const res = await action(
+      post({ classroomId: CLASSROOM_ID }, { Authorization: 'Bearer wrong' })
+    );
 
     expect(res.status).toBe(401);
     expect(await res.json()).toEqual({ error: 'unauthorized' });
@@ -80,7 +87,7 @@ describe('POST /api/content/token', () => {
   });
 
   it('401s on a missing Authorization header', async () => {
-    const res = await action(post({ classroomId: 'class-1' }));
+    const res = await action(post({ classroomId: CLASSROOM_ID }));
 
     expect(res.status).toBe(401);
     expect(await res.json()).toEqual({ error: 'unauthorized' });
@@ -91,7 +98,7 @@ describe('POST /api/content/token', () => {
     // Guards the compare itself: a `startsWith`, or a truncated buffer compare,
     // would let this through.
     const res = await action(
-      post({ classroomId: 'class-1' }, { Authorization: `Bearer ${SECRET.slice(0, -1)}` })
+      post({ classroomId: CLASSROOM_ID }, { Authorization: `Bearer ${SECRET.slice(0, -1)}` })
     );
 
     expect(res.status).toBe(401);
@@ -101,7 +108,7 @@ describe('POST /api/content/token', () => {
   it('404s on an unknown classroom', async () => {
     findByIdMock.mockResolvedValue(null);
 
-    const res = await action(authed({ classroomId: 'nope' }));
+    const res = await action(authed({ classroomId: UNKNOWN_ID }));
 
     expect(res.status).toBe(404);
     expect(await res.json()).toEqual({ error: 'not found' });
@@ -111,7 +118,7 @@ describe('POST /api/content/token', () => {
   it('404s on a classroom with no git organization', async () => {
     findByIdMock.mockResolvedValue({ ...CLASSROOM, git_organization: null });
 
-    const res = await action(authed({ classroomId: 'class-1' }));
+    const res = await action(authed({ classroomId: CLASSROOM_ID }));
 
     expect(res.status).toBe(404);
     expect(await res.json()).toEqual({ error: 'not found' });
@@ -124,7 +131,7 @@ describe('POST /api/content/token', () => {
       expiresAt: '2026-09-03T01:00:00Z',
     });
 
-    const res = await action(authed({ classroomId: 'class-1' }));
+    const res = await action(authed({ classroomId: CLASSROOM_ID }));
 
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({
@@ -148,7 +155,7 @@ describe('POST /api/content/token', () => {
     findByIdMock.mockResolvedValue(CLASSROOM);
     getInstallationTokenMock.mockResolvedValue({ token: 't', expiresAt: 'e' });
 
-    await action(authed({ classroomId: 'class-1' }));
+    await action(authed({ classroomId: CLASSROOM_ID }));
 
     expect(getInstallationTokenMock).toHaveBeenCalledWith({
       repositories: ['content-cs101'],
@@ -160,7 +167,7 @@ describe('POST /api/content/token', () => {
     findByIdMock.mockResolvedValue(CLASSROOM);
     getInstallationTokenMock.mockResolvedValue({ token: 't', expiresAt: 'e' });
 
-    const res = await action(authed({ classroomId: 'class-1' }));
+    const res = await action(authed({ classroomId: CLASSROOM_ID }));
 
     expect(res.headers.get('Cache-Control')).toBe('no-store');
   });
@@ -172,13 +179,36 @@ describe('POST /api/content/token', () => {
     expect(findByIdMock).not.toHaveBeenCalled();
   });
 
+  it('400s on a malformed classroomId WITHOUT querying the database', async () => {
+    // Prisma rejects a malformed uuid rather than returning no rows, so
+    // reaching the query would turn a plainly bad request into an unhandled
+    // 500. The `not.toHaveBeenCalled` is the real assertion here.
+    const res = await action(authed({ classroomId: 'not-a-uuid' }));
+
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: 'classroomId must be a uuid' });
+    expect(findByIdMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['sql-ish injection', "' OR 1=1 --"],
+    ['uppercase uuid', '3F2504E0-4F89-41D3-9A0C-0305E82C3301'],
+    ['uuid with surrounding text', ` ${'3f2504e0-4f89-41d3-9a0c-0305e82c3301'} `],
+    ['too short', '3f2504e0-4f89-41d3-9a0c-0305e82c330'],
+  ])('400s on a %s classroomId', async (_label, id) => {
+    const res = await action(authed({ classroomId: id }));
+
+    expect(res.status).toBe(400);
+    expect(findByIdMock).not.toHaveBeenCalled();
+  });
+
   it('502s, and does not leak the token or the raw error, when the mint fails', async () => {
     findByIdMock.mockResolvedValue(CLASSROOM);
     getInstallationTokenMock.mockRejectedValue(
       new Error('https://x-access-token:ghs_leaked@github.com/... not found')
     );
 
-    const res = await action(authed({ classroomId: 'class-1' }));
+    const res = await action(authed({ classroomId: CLASSROOM_ID }));
     const body = await res.text();
 
     expect(res.status).toBe(502);

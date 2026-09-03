@@ -311,6 +311,44 @@ describe('contentAssets.service', () => {
       expect(getTree).not.toHaveBeenCalled();
     });
 
+    it('resolves null instead of throwing when the sync itself fails', async () => {
+      // The render-path contract. A GitHub 403 rate limit or a 5xx must cost
+      // staleness, not a broken page — the previous map is still in the table
+      // and still usable.
+      contentAssetFindFirst.mockResolvedValue(null);
+      getTree.mockRejectedValue(
+        Object.assign(new Error('API rate limit exceeded'), {
+          status: 403,
+        })
+      );
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+      await expect(ensureContentAssets('class-1', { maxAgeMs: 60_000 })).resolves.toBeNull();
+
+      // Silently swallowing it would make a permanently failing sync invisible.
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining('sync failed for class-1'),
+        expect.any(Error)
+      );
+      warn.mockRestore();
+    });
+
+    it('still throws from syncContentAssets, which is called deliberately', async () => {
+      // The other half of the contract: only the render-path entry swallows.
+      getTree.mockRejectedValue(new Error('API rate limit exceeded'));
+
+      await expect(syncContentAssets('class-1')).rejects.toThrow(/rate limit/);
+    });
+
+    it('reads the classroom once, not once per guard', async () => {
+      contentAssetFindFirst.mockResolvedValue(null);
+      getTree.mockResolvedValue({ sha: 'r', truncated: false, entries: [] });
+
+      await ensureContentAssets('class-1', { maxAgeMs: 60_000 });
+
+      expect(classroomFindUnique).toHaveBeenCalledTimes(1);
+    });
+
     it('syncs when the classroom has never synced', async () => {
       // Self-bootstrapping: no backfill job, no migration. The first render of
       // a classroom that has no map builds one.
