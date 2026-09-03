@@ -1,0 +1,61 @@
+import { treeKey, errorResponse } from './cache.ts';
+import { contentTypeForPath } from './content-type.ts';
+import type { Env } from './env.ts';
+import { GitHubOrigin } from './origins/github.ts';
+import type { TreeEntry } from './origins/types.ts';
+import { serveBlobBySha } from './blob.ts';
+import { withOriginRetry } from './token.ts';
+import { cacheControlFor, nowSeconds, type ThemeVerification } from './verify.ts';
+
+/** The success half of the verification union. */
+type VerifiedTheme = Extract<ThemeVerification, { ok: true }>;
+
+const origin = new GitHubOrigin();
+
+/** Tree listings are immutable (keyed by tree sha), so R2 is the source of truth after the first fetch. */
+async function loadTree(
+  env: Env,
+  ctx: ExecutionContext,
+  classroomId: string,
+  treeSha: string
+): Promise<TreeEntry[]> {
+  const key = treeKey(treeSha);
+  const hit = await env.CACHE.get(key);
+  if (hit) return (await hit.json()) as TreeEntry[];
+
+  const entries = await withOriginRetry(env, classroomId, ref =>
+    origin.fetchTree({ ...ref, treeSha })
+  );
+
+  ctx.waitUntil(
+    env.CACHE.put(key, JSON.stringify(entries), {
+      httpMetadata: { contentType: 'application/json; charset=utf-8' },
+    }).catch(error => {
+      console.warn(`[content] failed to cache ${key}:`, error);
+    })
+  );
+
+  return entries;
+}
+
+/** Exact path match against the stored tree — no prefix guessing, no traversal. */
+export function findEntry(entries: TreeEntry[], relPath: string): TreeEntry | undefined {
+  return entries.find(entry => entry.path === relPath);
+}
+
+export async function serveTheme(
+  env: Env,
+  ctx: ExecutionContext,
+  verified: VerifiedTheme
+): Promise<Response> {
+  const entries = await loadTree(env, ctx, verified.classroomId, verified.treeSha);
+  const entry = findEntry(entries, verified.relPath);
+  if (!entry) return errorResponse(404, 'not found');
+
+  return serveBlobBySha(env, ctx, {
+    classroomId: verified.classroomId,
+    sha: entry.sha,
+    contentType: contentTypeForPath(verified.relPath),
+    cacheControl: cacheControlFor(verified.tier, verified.exp, nowSeconds()),
+  });
+}

@@ -1,0 +1,82 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "classmoji-content",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-09-03",
+  "workers_dev": false,
+  "observability": {
+    "enabled": true
+  },
+  // Workers Caching sits in front of the Worker; the Cache-Control we emit
+  // (no-store for draft, immutable otherwise) is what decides what it keeps.
+  "cache": {
+    "enabled": true
+  },
+
+  "env": {
+    "staging": {
+      "name": "classmoji-content-staging",
+      "routes": [
+        {
+          "pattern": "content-staging.classmoji.io",
+          "custom_domain": true
+        }
+      ],
+      "vars": {
+        "CONTENT_TOKEN_ENDPOINT": "https://staging.classmoji.io/api/content/token",
+        "ENVIRONMENT": "staging"
+      },
+      "r2_buckets": [
+        {
+          "binding": "CACHE",
+          "bucket_name": "classmoji-content-cache-stg"
+        }
+      ],
+      "images": {
+        "binding": "IMAGES"
+      },
+      "observability": {
+        "enabled": true
+      },
+      // No cross_version_cache on staging: a deploy should invalidate, so what
+      // you just shipped is what you are looking at.
+      "cache": {
+        "enabled": true
+      }
+    },
+
+    // Defined so the two environments stay in step. NOT deployed by CI — there
+    // is no production workflow, and deploying this is a deliberate, manual act.
+    "production": {
+      "name": "classmoji-content",
+      "routes": [
+        {
+          "pattern": "content.classmoji.io",
+          "custom_domain": true
+        }
+      ],
+      "vars": {
+        "CONTENT_TOKEN_ENDPOINT": "https://app.classmoji.io/api/content/token",
+        "ENVIRONMENT": "production"
+      },
+      "r2_buckets": [
+        {
+          "binding": "CACHE",
+          "bucket_name": "classmoji-content-cache-prod"
+        }
+      ],
+      "images": {
+        "binding": "IMAGES"
+      },
+      "observability": {
+        "enabled": true
+      },
+      // Content is immutable and content-addressed, so a warm cache should
+      // survive a deploy.
+      "cache": {
+        "enabled": true,
+        "cross_version_cache": true
+      }
+    }
+  }
+}
