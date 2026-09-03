@@ -17,16 +17,35 @@ import { useRevalidator } from 'react-router';
  * external image, a `data:` URI, and for a deployment where the delivery layer
  * is switched off entirely.
  */
-export function useAssetMap(resolvedAssets: Record<string, string> | null | undefined) {
+export function useAssetMap(
+  resolvedAssets: Record<string, string> | null | undefined,
+  /**
+   * Identity of the document this map belongs to (the page id).
+   *
+   * The route stays MOUNTED across navigations — same route, new params — so
+   * without this the map accumulates across pages. References are repo-relative
+   * and repeat (`assets/hero.png` exists in many page folders), so a stale
+   * entry is not a harmless miss: it is classroom A's signed URL rendered on
+   * classroom B's page.
+   */
+  resetKey?: string
+) {
   const mapRef = useRef<Map<string, string>>(new Map());
+  const seededFor = useRef<string | undefined>(resetKey);
 
   // Seeded during render, not in an effect: BlockNote asks for a file URL as
   // part of its first paint, and an effect would run after that — showing one
   // frame of broken images on every load.
   useMemo(() => {
+    if (seededFor.current !== resetKey) {
+      seededFor.current = resetKey;
+      // A fresh map, not a merge — including the upload entries `remember` added,
+      // which belong to the document being navigated away from.
+      mapRef.current = new Map();
+    }
     if (!resolvedAssets) return;
     for (const [ref, url] of Object.entries(resolvedAssets)) mapRef.current.set(ref, url);
-  }, [resolvedAssets]);
+  }, [resolvedAssets, resetKey]);
 
   /** BlockNote's `resolveFileUrl`: display URL in, stored ref untouched. */
   const resolveFileUrl = useCallback(async (url: string) => mapRef.current.get(url) ?? url, []);
@@ -52,8 +71,15 @@ export function useAssetMap(resolvedAssets: Record<string, string> | null | unde
   );
 }
 
-/** A signed delivery URL, by shape — no need to ship the origin to the client. */
-const DELIVERY_URL = /\/c\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\//;
+/**
+ * A signed delivery URL, by shape — no need to ship the origin to the client.
+ *
+ * `blob` and `theme` only. A `/missing/` URL is the deterministic 404 the
+ * resolver mints for a reference the asset map has never heard of: it will 404
+ * again after any number of revalidations, so retrying one is guaranteed waste.
+ */
+const DELIVERY_URL =
+  /\/c\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\/(?:blob|theme)\//;
 
 /**
  * Re-resolve once when a signed URL comes back 403.

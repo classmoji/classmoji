@@ -212,6 +212,18 @@ describe('resolveAssetUrl — a path the map has never heard of', () => {
     expect(logged).toContain(REPO_PATH);
   });
 
+  it('refuses to sign a TREE row as a blob — a directory is not a file', async () => {
+    // `lookupContentAsset` is keyed by path alone, so a reference naming a
+    // folder comes back carrying the folder's tree sha. Signing it would mint a
+    // confidently-wrong blob URL the Worker cannot serve.
+    lookupContentAsset.mockResolvedValue({ sha: TREE_SHA, type: 'tree', size: 0 });
+
+    await expect(resolveAssetUrl(ctx, 'pages/lab-1/assets')).resolves.toBe(
+      `${ORIGIN}/c/${CLASSROOM_ID}/missing/${encodeURIComponent('pages/lab-1/assets')}`
+    );
+    await expect(resolveAssetSrcSet(ctx, 'pages/lab-1/assets')).resolves.toBeNull();
+  });
+
   it('falls back to the reference when the path has no extension to sign', async () => {
     await expect(resolveAssetUrl(ctx, 'pages/lab-1/assets/LICENSE')).resolves.toBe(
       'pages/lab-1/assets/LICENSE'

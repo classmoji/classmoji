@@ -245,21 +245,30 @@ export async function savePageContent(
  * Takes a Buffer — callers converting from a Web API File do the
  * File→Buffer adaptation app-side.
  *
- * ## Why `url` is a repo path and not a URL
+ * ## Why `url` is a repo path — but only when something can read one
  *
- * What goes INTO the document is the reference — `pages/lab-1/assets/x.png` —
- * because that is the only form that keeps following the file: it survives a
- * re-upload, a cache bust, and a viewer in a different tier. `displayUrl` is
- * the signed URL for showing the image in the editor right now, and it is
- * deliberately a separate field so a caller cannot store one by accident.
+ * What goes INTO the document should be the reference — `pages/lab-1/assets/
+ * x.png` — because that is the only form that keeps following the file: it
+ * survives a re-upload, a cache bust, and a viewer in a different tier.
+ * `displayUrl` is the signed URL for showing the image right now, deliberately
+ * a separate field so a caller cannot store one by accident.
+ *
+ * That only holds while the delivery layer is CONFIGURED, because it is the
+ * only thing that knows how to turn a bare path back into something a browser
+ * can fetch. Unconfigured, there is no read-side translation anywhere — editor,
+ * viewer, or class site — so storing a path would make every upload a 404 the
+ * moment it is saved. So when nothing can be signed, `url` stays the legacy
+ * absolute URL, exactly as it was before this existed. Switching the layer on
+ * changes what NEW uploads store; the old absolute URLs keep resolving through
+ * case 2 of the resolver.
  *
  * `displayUrl` is signed DIRECTLY from the sha the upload just returned rather
  * than looked up in the asset map, because the push webhook that would put a
  * row there has not fired yet — a map lookup here would reliably miss.
  *
- * @returns `{ url: repoPath, path, displayUrl }`. `displayUrl` is null when the
- *   delivery layer is not configured; the caller then displays `path` through
- *   whatever legacy URL it already builds.
+ * @returns `{ url, path, displayUrl }`. `path` is always the repo path.
+ *   `displayUrl` is null when the delivery layer is off, and `url` is then the
+ *   legacy absolute URL rather than the path.
  */
 export async function uploadPageAsset(
   page: PageWithContentRepo,
@@ -280,7 +289,8 @@ export async function uploadPageAsset(
 
   const displayUrl = await signUploadedAsset(page, result.path, result.sha);
 
-  return { url: result.path, path: result.path, displayUrl };
+  // No signature means no reader can resolve a bare path — store the legacy URL.
+  return { url: displayUrl ? result.path : result.url, path: result.path, displayUrl };
 }
 
 /**
