@@ -403,8 +403,18 @@ export const loader = async ({
     }
   }
 
+  // Cloudinary video hosting is Pro-only, and the properties panel offers an
+  // "Upload to Cloudinary" button. Resolved ONLY for editors: viewers never see
+  // that button, and this loader is on the hot path for every student opening
+  // every slide, so a tier query for them would be pure cost. The real gate is
+  // in api.video.upload-cloudinary, which re-decides per request.
+  const isPro = canEdit
+    ? (await ClassmojiService.subscription.getProStateForClassroomId(slide.classroom_id)).isPro
+    : false;
+
   return {
     slide,
+    isPro,
     contentUrl,
     slideContent,
     contentError,
@@ -1594,6 +1604,7 @@ export const action = async ({
 export default function SlideViewer() {
   const {
     slide,
+    isPro,
     contentUrl,
     slideContent,
     contentError,
@@ -2390,6 +2401,7 @@ export default function SlideViewer() {
       onDeleteTheme={handleDeleteTheme}
       customThemes={customThemes}
       sharedThemes={sharedThemes}
+      isPro={isPro}
     >
       <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
         {/* Navbar - uses grid layout to center toolbar when editing */}
