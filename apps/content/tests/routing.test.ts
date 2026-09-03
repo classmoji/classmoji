@@ -158,21 +158,33 @@ describe('blob delivery', () => {
     expect(await response.text()).toBe('cached-bytes');
     expect(response.headers.get('Content-Type')).toBe('image/png');
     expect(response.headers.get('Cache-Control')).toMatch(/^public, max-age=\d+, immutable$/);
+    // Without Vary, the first visitor's negotiated format is pinned for everyone.
+    expect(response.headers.get('Vary')).toBe('Accept');
+    expect(response.headers.get('Content-Security-Policy')).toBe("default-src 'none'; sandbox");
     expect(bucket.gets).toEqual([`blobs/${BLOB_SHA}`]);
   });
 
-  it('never stores draft content', async () => {
-    const bucket = fakeBucket({
-      [`blobs/${BLOB_SHA}`]: { body: 'draft-bytes', contentType: 'image/png' },
-    });
+  it('marks draft content no-store, but still writes it to R2', async () => {
+    // Deliberate: `no-store` governs the SHARED caches in front of the Worker,
+    // which must never hold draft bytes. R2 sits behind the signature gate and
+    // is keyed by content hash, so a draft blob living there is not a
+    // disclosure — and it is what makes publishing a flip rather than a cold
+    // fetch. Empty bucket + stubbed origin so a put can actually happen and be
+    // observed; seeding the object would have made this assertion vacuous.
+    const bucket = fakeBucket();
+    const ctx = fakeContext();
+    stubUpstreams();
     const url = await signedBlobUrl({ sha: BLOB_SHA, ext: 'png', tier: 'draft' });
 
     const response = await worker.fetch(
       new Request(url),
       fakeEnv({ CACHE: bucket as unknown as R2Bucket }),
-      fakeContext()
+      ctx
     );
+
     expect(response.headers.get('Cache-Control')).toBe('no-store');
+    await ctx.settled();
+    expect(bucket.puts).toEqual([{ key: `blobs/${BLOB_SHA}`, contentType: 'image/png' }]);
   });
 
   it('pulls a miss from the origin and writes it back to R2', async () => {
@@ -295,6 +307,8 @@ describe('blob delivery', () => {
     expect(response.status).toBe(200);
     expect(await response.text()).toBe('original-bytes');
     expect(response.headers.get('Content-Type')).toBe('image/jpeg');
+    // A quota blip must not pin the un-resized original at the edge for a month.
+    expect(response.headers.get('Cache-Control')).toBe('public, max-age=60');
   });
 });
 
@@ -351,6 +365,38 @@ describe('theme delivery', () => {
       `trees/${TREE_SHA}.json`,
       `blobs/${THEME_BLOB_SHA}`,
     ]);
+  });
+
+  it('serves a truncated listing but never stores it', async () => {
+    // The key is content-addressed and treated as immutable, so caching a
+    // partial listing would 404 every omitted file forever — for every
+    // classroom that shares this tree sha.
+    stubUpstreams({
+      tree: () =>
+        new Response(
+          JSON.stringify({
+            truncated: true,
+            tree: [{ path: 'css/site.css', sha: THEME_BLOB_SHA, type: 'blob' }],
+          })
+        ),
+    });
+    const bucket = fakeBucket();
+    const ctx = fakeContext();
+    const url = await signedThemeUrl({
+      theme: 'aurora',
+      treeSha: TREE_SHA,
+      relPath: 'css/site.css',
+    });
+
+    const response = await worker.fetch(
+      new Request(url),
+      fakeEnv({ CACHE: bucket as unknown as R2Bucket }),
+      ctx
+    );
+
+    expect(response.status).toBe(200);
+    await ctx.settled();
+    expect(bucket.puts.map(put => put.key)).toEqual([`blobs/${THEME_BLOB_SHA}`]);
   });
 
   it('404s a path that is not in the tree', async () => {

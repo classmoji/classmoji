@@ -17,6 +17,10 @@ concurrency:
 jobs:
   deploy-content-worker:
     runs-on: ubuntu-latest
+    # Read-only token: this job checks out code and talks to Cloudflare and
+    # Infisical with their own credentials. It never writes back to the repo.
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v4
         with:
@@ -59,6 +63,18 @@ jobs:
       - name: Install Infisical CLI
         run: npm install -g @infisical/cli
 
+      # Secrets are pushed AFTER the deploy, and that order is required:
+      # `wrangler secret bulk` targets an existing Worker script, so on a
+      # first-ever deploy there is nothing to attach them to until the script
+      # exists. The cost is a short window — between the two steps — where a
+      # freshly deployed version is still reading the PREVIOUS values. That is
+      # invisible for an unchanged secret, but during a rotation the Worker
+      # verifies against the old signing key for those few seconds; roll keys
+      # by adding a new `keyVersion` rather than overwriting one in place.
+      #
+      # `--env=sta` is the Infisical slug for staging. It is not a typo for
+      # Trigger.dev's `stg`, which belongs to a different system entirely.
+      #
       # The Worker answers 503 for every content request until both secrets are
       # present, so this step verifies the export before pushing it and fails
       # the job loudly if the shape is wrong. Secret values are never printed.

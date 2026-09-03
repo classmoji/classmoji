@@ -59,14 +59,34 @@ cached.
   is ever handed a format it cannot decode.
 - **A failed transform is not a failure.** If the Images binding throws
   (unsupported source, quota), the original bytes are served with the original
-  content type. Only raster sources (png, jpg, jpeg, webp, avif, gif) are ever
-  sent to a transform.
+  content type — on a short `public, max-age=60`, so a passing quota blip does
+  not pin a full-size original at the edge for a month under a URL that asked
+  for a thumbnail. Only raster sources (png, jpg, jpeg, webp, avif, gif) are
+  ever sent to a transform.
+- **EXIF:** transformed variants are webp or avif, and both discard all
+  metadata unconditionally, so GPS never survives a transform. Untransformed
+  originals stream through verbatim, EXIF included — this is a pass-through
+  cache, and the place to strip metadata is upload. The Images *binding*
+  exposes no `metadata` option to change that; it exists only on the `cf.image`
+  fetch API.
 - **Draft content is `no-store`,** everything else `public, max-age=…, immutable`
   for as long as its signature lives. A just-expired signature is still honoured
   inside its tier's grace window (6h for public/enrolled, 5m for draft).
 - **Every response** carries CORS (`*`, `GET, HEAD, OPTIONS`, exposing
-  `Content-Type, Content-Length, ETag`) and `X-Content-Type-Options: nosniff`.
-  A `Set-Cookie` can never leave this Worker.
+  `Content-Type, Content-Length, ETag`), `X-Content-Type-Options: nosniff`, and
+  `Content-Security-Policy: default-src 'none'; sandbox`. A `Set-Cookie` can
+  never leave this Worker. The CSP matters because production serves from
+  `content.classmoji.io`, inside the app's `.classmoji.io` session-cookie
+  domain: without `sandbox`, an SVG carrying inline script and opened as a
+  top-level navigation would execute there. Subresource use (`<img>`, `<link>`,
+  fonts) is unaffected.
+- **Content responses carry `Vary: Accept`,** because `fmt=auto` negotiates
+  avif vs webp from that header and the answer is cached immutable for up to 30
+  days — otherwise the first Chrome visitor pins AVIF bytes for every Safari
+  visitor after them.
+- **A truncated tree listing is used but never stored.** `trees/{treeSha}.json`
+  is content-addressed and treated as immutable, so caching a partial listing
+  would 404 the omitted files forever, for every classroom sharing that sha.
 - **It fails closed.** Missing secrets produce a 503 at request time rather than
   a crash at load, and `/healthz` keeps answering so a bad deploy is visible.
 - **GitHub 401 →** the cached installation token is dropped and the fetch is

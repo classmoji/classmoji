@@ -4,6 +4,7 @@ import {
   type BlobRef,
   type OriginAdapter,
   type TreeEntry,
+  type TreeListing,
   type TreeRef,
 } from './types.ts';
 
@@ -43,7 +44,7 @@ export class GitHubOrigin implements OriginAdapter {
     });
   }
 
-  async fetchTree(ref: TreeRef): Promise<TreeEntry[]> {
+  async fetchTree(ref: TreeRef): Promise<TreeListing> {
     const response = await fetch(
       `${API}/repos/${ref.org}/${ref.repo}/git/trees/${ref.treeSha}?recursive=1`,
       { headers: headers(ref.token, 'application/vnd.github+json') }
@@ -55,7 +56,8 @@ export class GitHubOrigin implements OriginAdapter {
       throw new OriginError(response.status, `github tree ${ref.treeSha}: ${response.status}`);
 
     const payload = (await response.json()) as GitTreeResponse;
-    if (payload.truncated) {
+    const truncated = payload.truncated === true;
+    if (truncated) {
       console.warn(`[content] truncated tree listing for ${ref.org}/${ref.repo}@${ref.treeSha}`);
     }
 
@@ -65,6 +67,6 @@ export class GitHubOrigin implements OriginAdapter {
         entries.push({ path: entry.path, sha: entry.sha, type: 'blob' });
       }
     }
-    return entries;
+    return { entries, truncated };
   }
 }

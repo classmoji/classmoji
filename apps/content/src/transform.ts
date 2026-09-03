@@ -28,6 +28,20 @@ export function mediaTypeFor(format: ConcreteFormat): ConcreteMediaType {
  * Resize + re-encode via the Images binding. Returns `null` when Images cannot
  * do it (unsupported source, quota, anything else) — the caller then serves the
  * original bytes, because a slower image beats a broken one.
+ *
+ * EXIF, including GPS: there is no `metadata` option on the binding. It exists
+ * on the `cf.image` fetch API and is typed on `RequestInitCfPropertiesImage`,
+ * but the binding's `ImageTransform` / `ImageOutputOptions` accept no such key,
+ * so passing one risks the whole call being rejected and every image silently
+ * falling back to an un-resized original. It is also unnecessary here: we only
+ * ever emit webp or avif, and both discard all metadata unconditionally —
+ * `metadata` only ever governed JPEG output.
+ * https://developers.cloudflare.com/images/optimization/features/#metadata
+ *
+ * That guarantee holds only for transformed bytes. Untransformed originals —
+ * the plain blob path, and the fallback below — are streamed through verbatim,
+ * EXIF included, exactly as GitHub stores them. Stripping there would mean
+ * decoding every image on a cache miss; the place to strip is upload.
  */
 export async function transformImage(
   env: Env,

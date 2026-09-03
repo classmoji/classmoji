@@ -28,12 +28,23 @@ export const CORS_HEADERS: Readonly<Record<string, string>> = {
 };
 
 /**
- * Applied to every response leaving the Worker: CORS, nosniff, and a hard
- * guarantee that no cookie is ever set on a content domain.
+ * Production serves from content.classmoji.io, which sits inside the app's
+ * `.classmoji.io` session-cookie domain. Without this, an SVG carrying inline
+ * script — opened as a top-level navigation rather than through <img> — would
+ * execute on that domain. `sandbox` drops the response into an opaque origin
+ * with no script execution; subresource use (<img>, <link rel=stylesheet>,
+ * fonts) is untouched, because those never run script in the first place.
+ */
+export const CONTENT_SECURITY_POLICY = "default-src 'none'; sandbox";
+
+/**
+ * Applied to every response leaving the Worker: CORS, nosniff, the sandboxing
+ * CSP, and a hard guarantee that no cookie is ever set on a content domain.
  */
 export function finalizeHeaders(headers: Headers): Headers {
   for (const [name, value] of Object.entries(CORS_HEADERS)) headers.set(name, value);
   headers.set('X-Content-Type-Options', 'nosniff');
+  headers.set('Content-Security-Policy', CONTENT_SECURITY_POLICY);
   headers.delete('Set-Cookie');
   return headers;
 }
@@ -47,6 +58,12 @@ export function finalize(response: Response): Response {
   });
 }
 
+/**
+ * Short TTL for a response we are willing to serve but must not pin: a
+ * transform that fell back to the original, for instance.
+ */
+export const SHORT_CACHE_CONTROL = 'public, max-age=60';
+
 export function contentHeaders(
   contentType: string,
   cacheControl: string,
@@ -55,6 +72,11 @@ export function contentHeaders(
   const headers = new Headers(extra);
   headers.set('Content-Type', contentType);
   headers.set('Cache-Control', cacheControl);
+  // `fmt=auto` picks avif or webp from Accept, and the answer is cached
+  // immutable for up to 30 days. Without this the first Chrome visitor pins
+  // AVIF bytes under the URL for every Safari visitor after them. Set
+  // unconditionally — the header is static, so it costs nothing.
+  headers.set('Vary', 'Accept');
   return finalizeHeaders(headers);
 }
 
