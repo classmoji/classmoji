@@ -1,0 +1,131 @@
+name: Deploy to Cloudflare (Staging)
+
+on:
+  push:
+    branches:
+      - staging
+    paths:
+      - 'apps/content/**'
+      - 'packages/content-signing/**'
+      - '.github/workflows/deploy-cloudflare-staging.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-cloudflare-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  deploy-content-worker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+          token: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Heal package-lock.json against submodule workspaces
+        run: npm install --package-lock-only --no-audit --no-fund --legacy-peer-deps
+
+      - name: Install dependencies
+        run: npm ci --legacy-peer-deps
+
+      - name: Typecheck and test content-signing
+        run: |
+          if [ -d packages/content-signing ]; then
+            npm run typecheck -w packages/content-signing
+            npm run test -w packages/content-signing
+          else
+            echo "::notice::packages/content-signing is not in the tree yet; skipping its checks."
+          fi
+
+      - name: Typecheck and test content worker
+        run: |
+          npm run typecheck -w apps/content
+          npm run test -w apps/content
+
+      - name: Deploy content worker
+        working-directory: apps/content
+        run: npx wrangler deploy --env staging
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
+      - name: Install Infisical CLI
+        run: npm install -g @infisical/cli
+
+      # The Worker answers 503 for every content request until both secrets are
+      # present, so this step verifies the export before pushing it and fails
+      # the job loudly if the shape is wrong. Secret values are never printed.
+      - name: Sync secrets from Infisical
+        working-directory: apps/content
+        env:
+          INFISICAL_CLIENT_ID: ${{ secrets.INFISICAL_CLIENT_ID }}
+          INFISICAL_CLIENT_SECRET: ${{ secrets.INFISICAL_CLIENT_SECRET }}
+          INFISICAL_PROJECT_ID: e9a6487c-350e-41e7-8bba-2d95ca5934a6
+          INFISICAL_HOST: https://app.infisical.com
+          INFISICAL_DISABLE_UPDATE_CHECK: 'true'
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          set -euo pipefail
+
+          RAW_SECRETS="$(mktemp)"
+          BULK_SECRETS="$(mktemp)"
+          trap 'rm -f "$RAW_SECRETS" "$BULK_SECRETS"' EXIT
+
+          INFISICAL_TOKEN="$(infisical login \
+            --method=universal-auth \
+            --client-id="$INFISICAL_CLIENT_ID" \
+            --client-secret="$INFISICAL_CLIENT_SECRET" \
+            --silent --plain)"
+          export INFISICAL_TOKEN
+
+          infisical export \
+            --env=sta \
+            --path=/content-worker \
+            --projectId="$INFISICAL_PROJECT_ID" \
+            --format=json > "$RAW_SECRETS"
+
+          node --input-type=module -e '
+            import { readFileSync, writeFileSync } from "node:fs";
+            const [raw, out] = process.argv.slice(2);
+            const expected = ["CONTENT_SIGNING_SECRET", "CONTENT_WORKER_SHARED_SECRET"];
+
+            let parsed;
+            try {
+              parsed = JSON.parse(readFileSync(raw, "utf8"));
+            } catch {
+              console.error("::error::Infisical export was not valid JSON.");
+              process.exit(1);
+            }
+
+            // The CLI emits [{ key, value }, ...]; tolerate a plain { KEY: value } map too.
+            const secrets = Array.isArray(parsed)
+              ? Object.fromEntries(parsed.map(entry => [entry.key, entry.value]))
+              : parsed;
+
+            const found = Object.keys(secrets).sort();
+            const missing = expected.filter(key => !secrets[key]);
+            const unexpected = found.filter(key => !expected.includes(key));
+
+            if (missing.length || unexpected.length) {
+              if (missing.length) {
+                console.error(`::error::Infisical /content-worker (sta) is missing: ${missing.join(", ")}. The Worker would serve 503 for every request.`);
+              }
+              if (unexpected.length) {
+                console.error(`::error::Infisical /content-worker (sta) has unexpected keys: ${unexpected.join(", ")}.`);
+              }
+              process.exit(1);
+            }
+
+            writeFileSync(out, JSON.stringify(Object.fromEntries(expected.map(key => [key, secrets[key]]))));
+            console.log(`Verified ${expected.length} secrets from Infisical.`);
+          ' "$RAW_SECRETS" "$BULK_SECRETS"
+
+          npx wrangler secret bulk "$BULK_SECRETS" --env staging
