@@ -1,12 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import {
-  TIER_POLICY,
-  blobCanonicalString,
-  cacheControlFor,
-  nowSeconds,
-  themeCanonicalString,
-  verifyContentUrl,
-} from '../src/verify.ts';
+// The canonical builders come from the package itself: these assertions guard
+// the signing contract, so they must not be able to drift with the Worker's
+// seam. Verification goes through the seam, as the Worker does, so the
+// re-export stays exercised too.
+import { TIER_POLICY, blobCanonicalString, themeCanonicalString } from '@classmoji/content-signing';
+import { cacheControlFor, nowSeconds, verifyContentUrl } from '../src/verify.ts';
 import {
   BLOB_SHA,
   CLASSROOM,
@@ -160,7 +158,7 @@ describe('verifyContentUrl — blob', () => {
   });
 
   it('signs the lowercased host, so case in the request does not matter', async () => {
-    const url = await signedBlobUrl({ sha: BLOB_SHA, ext: 'png', signedHost: HOST });
+    const url = await signedBlobUrl({ sha: BLOB_SHA, ext: 'png' });
     expect(await verifyContentUrl(MASTER, url.replace(HOST, HOST.toUpperCase()))).toMatchObject({
       ok: true,
     });
@@ -316,8 +314,11 @@ describe('cacheControlFor', () => {
     expect(cacheControlFor('enrolled', now + 60, now)).toBe('public, max-age=60, immutable');
   });
 
-  it('clamps a past expiry to zero rather than emitting a negative max-age', () => {
+  it('gives a past expiry a short positive TTL instead of pinning it immutable', () => {
     const now = 1_700_000_000;
-    expect(cacheControlFor('public', now - 600, now)).toBe('public, max-age=0, immutable');
+    // Inside grace the URL is still served, but a zero max-age would send every
+    // cache back to the origin at once — and it must not be pinned immutable.
+    expect(cacheControlFor('public', now - 600, now)).toBe('public, max-age=60');
+    expect(cacheControlFor('public', now, now)).toBe('public, max-age=60');
   });
 });
