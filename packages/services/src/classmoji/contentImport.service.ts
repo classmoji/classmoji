@@ -21,6 +21,7 @@
 
 import getPrisma from '@classmoji/database';
 import { ContentService } from '../content/ContentService.ts';
+import { pagesContentBase, rawContentBase } from './contentRefs.ts';
 import { getGitProvider } from '../git/index.ts';
 import * as contentManifestService from './contentManifest.service.ts';
 import { createWithUniquePageSlug, ensureContentRepo, isPageSlugConflict } from './page.service.ts';
@@ -161,10 +162,10 @@ export interface UrlRewriteContext {
  * residual).
  */
 export function rewriteContentUrls(text: string, ctx: UrlRewriteContext): string {
-  const rawSource = `https://raw.githubusercontent.com/${ctx.sourceLogin}/${ctx.sourceRepo}/main`;
-  const rawTarget = `https://raw.githubusercontent.com/${ctx.targetLogin}/${ctx.targetRepo}/main`;
-  const pagesSource = `https://${ctx.sourceLogin}.github.io/${ctx.sourceRepo}`;
-  const pagesTarget = `https://${ctx.targetLogin}.github.io/${ctx.targetRepo}`;
+  const rawSource = rawContentBase(ctx.sourceLogin, ctx.sourceRepo);
+  const rawTarget = rawContentBase(ctx.targetLogin, ctx.targetRepo);
+  const pagesSource = pagesContentBase(ctx.sourceLogin, ctx.sourceRepo);
+  const pagesTarget = pagesContentBase(ctx.targetLogin, ctx.targetRepo);
   return text
     .replaceAll(`${rawSource}/${ctx.sourcePath}/`, `${rawTarget}/${ctx.targetPath}/`)
     .replaceAll(`${rawSource}/`, `${rawTarget}/`)

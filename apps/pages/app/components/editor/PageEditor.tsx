@@ -53,6 +53,13 @@ interface PageEditorProps {
   initialContent: unknown;
   pageId: string;
   darkMode: boolean;
+  /**
+   * Stored reference → signed display URL. Blocks keep the reference; BlockNote
+   * is handed the signed URL through `resolveFileUrl` at paint time only.
+   */
+  resolveFileUrl?: (url: string) => Promise<string>;
+  /** Called after an upload with the ref that was stored and the URL to show it with. */
+  onAssetUploaded?: (ref: string, displayUrl: string | null) => void;
   onChange?: (document: unknown) => void;
   /**
    * Fired once after mount with the editor's NORMALIZED document
@@ -65,7 +72,16 @@ interface PageEditorProps {
 }
 
 const PageEditor = forwardRef(function PageEditor(
-  { initialContent, pageId, darkMode, onChange, onReady, editable = true }: PageEditorProps,
+  {
+    initialContent,
+    pageId,
+    darkMode,
+    onChange,
+    onReady,
+    editable = true,
+    resolveFileUrl,
+    onAssetUploaded,
+  }: PageEditorProps,
   ref: React.Ref<{ getContent: () => unknown }>
 ) {
   // Upload handler: POSTs to the page's upload action
@@ -85,9 +101,13 @@ const PageEditor = forwardRef(function PageEditor(
       }
 
       const result = await response.json();
+      // What goes INTO the block is the repo path — the reference that keeps
+      // following the file. The signed URL only ever goes into the display map,
+      // so a save can never commit it.
+      onAssetUploaded?.(result.url, result.displayUrl);
       return result.url;
     },
-    [pageId]
+    [pageId, onAssetUploaded]
   );
 
   const typedInitialContent =
@@ -101,6 +121,9 @@ const PageEditor = forwardRef(function PageEditor(
       schema,
       initialContent: typedInitialContent,
       uploadFile,
+      // The one place a stored reference becomes a signed URL. BlockNote calls
+      // it per file block at render; the document it saves back is untouched.
+      ...(resolveFileUrl ? { resolveFileUrl } : {}),
       dropCursor: multiColumnDropCursor,
       dictionary: { ...defaultLocale, multi_column: multiColumnLocales.en },
     },

@@ -249,7 +249,7 @@ describe('pageContent.savePageContent', () => {
 // ─── uploadPageAsset ─────────────────────────────────────────────────────────
 
 describe('pageContent.uploadPageAsset', () => {
-  it('uploads a Buffer into the page assets folder and returns url + path', async () => {
+  it('returns the REPO PATH as the storable url, never the GitHub URL', async () => {
     uploadMock.mockResolvedValue({
       url: 'https://raw.githubusercontent.com/test-org/content-test-org-cs101/main/pages/syllabus/assets/a.png',
       path: 'pages/syllabus/assets/a.png',
@@ -265,9 +265,14 @@ describe('pageContent.uploadPageAsset', () => {
     expect(arg.file).toBe(buffer);
     expect(arg.filename).toBe('a.png');
     expect(arg.branch).toBe('main');
+    // `url` is what a caller stores into the block, so it MUST be the path:
+    // a stored absolute URL stops following the file the moment it is replaced.
     expect(result).toEqual({
-      url: 'https://raw.githubusercontent.com/test-org/content-test-org-cs101/main/pages/syllabus/assets/a.png',
+      url: 'pages/syllabus/assets/a.png',
       path: 'pages/syllabus/assets/a.png',
+      // No CONTENT_DELIVERY_ORIGIN / CONTENT_SIGNING_SECRET in this suite, so
+      // there is no signed URL to display with — the caller falls back.
+      displayUrl: null,
     });
   });
 });

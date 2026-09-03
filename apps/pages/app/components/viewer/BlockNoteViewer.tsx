@@ -14,9 +14,16 @@ import '~/styles/blocknote-overrides.css';
 interface BlockNoteViewerProps {
   content: unknown;
   darkMode: boolean;
+  /**
+   * Stored reference → signed display URL, same contract as the editor's. The
+   * viewer never writes, but it renders the same documents, so it needs the
+   * same translation or every repo-relative reference resolves against the
+   * pages origin and 404s.
+   */
+  resolveFileUrl?: (url: string) => Promise<string>;
 }
 
-const BlockNoteViewer = ({ content, darkMode }: BlockNoteViewerProps) => {
+const BlockNoteViewer = ({ content, darkMode, resolveFileUrl }: BlockNoteViewerProps) => {
   const [isMounted, setIsMounted] = useState(false);
   const initialContent =
     Array.isArray(content) && content.length > 0
@@ -26,6 +33,7 @@ const BlockNoteViewer = ({ content, darkMode }: BlockNoteViewerProps) => {
   const editor = useCreateBlockNote({
     schema,
     initialContent,
+    ...(resolveFileUrl ? { resolveFileUrl } : {}),
   });
 
   useEffect(() => {
