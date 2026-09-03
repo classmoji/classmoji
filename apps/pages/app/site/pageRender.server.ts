@@ -114,14 +114,16 @@ export async function renderPageForViewer(
     throw error;
   }
 
-  // Render-time URL resolution, public tier: an anonymous reader gets the
-  // longest-lived signature the layer mints. The rewrite runs on a CLONE —
+  // Render-time URL resolution. Public tier only for a page that is actually
+  // public: a members-only page reached by a signed-in member is `enrolled`, so
+  // its URLs expire on the shorter bucket and are not minted with the lifetime
+  // meant for anonymous readers. The rewrite runs on a CLONE —
   // `loadSitePageContent` caches its blocks for five minutes, and writing
   // signed URLs into that cache would hand the next reader this reader's
   // (expiring, tier-specific) URLs.
   const assetCtx = assetResolveContext(
     context.site.classroom as unknown as Parameters<typeof assetResolveContext>[0],
-    'public'
+    page.is_public ? 'public' : 'enrolled'
   );
   const resolvedBlocks = await resolveSiteAssets(assetCtx, content.blocks);
 
@@ -151,14 +153,10 @@ export async function renderPageForViewer(
       : null);
 
   // The cover is markup this app renders itself, so it takes the signed URL
-  // directly rather than going through the block rewrite.
-  const coverImage =
-    rawCover && assetCtx
-      ? {
-          ...rawCover,
-          url: await ClassmojiService.contentDelivery.resolveAssetUrl(assetCtx, rawCover.url),
-        }
-      : rawCover;
+  // directly rather than going through the block rewrite — but under the same
+  // guard: this is the anonymous, cached path, and a database hiccup resolving
+  // one image must degrade to the stored reference, not 500 the site.
+  const coverImage = await resolveSiteCover(assetCtx, rawCover);
 
   return {
     title: page.title || 'Untitled',
@@ -190,6 +188,29 @@ async function resolveSiteAssets(
   } catch (error) {
     console.warn('[site] asset resolution failed, rendering stored refs:', error);
     return blocks;
+  }
+}
+
+/**
+ * Resolve the cover image, or leave it exactly as stored.
+ *
+ * Same contract as `resolveSiteAssets`, for the same reason — these are the two
+ * resolves on the anonymous path, and neither is worth a 503.
+ */
+async function resolveSiteCover(
+  ctx: ReturnType<typeof assetResolveContext>,
+  cover: { url: string; position?: number } | null
+): Promise<{ url: string; position?: number } | null> {
+  if (!ctx || !cover?.url) return cover;
+
+  try {
+    return {
+      ...cover,
+      url: await ClassmojiService.contentDelivery.resolveAssetUrl(ctx, cover.url),
+    };
+  } catch (error) {
+    console.warn('[site] cover resolution failed, rendering the stored ref:', error);
+    return cover;
   }
 }
 

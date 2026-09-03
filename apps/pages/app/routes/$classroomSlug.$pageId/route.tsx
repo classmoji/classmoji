@@ -50,7 +50,7 @@ const PageRoute = () => {
     resolvedAssets,
   } = useLoaderData<typeof import('./route.server.ts').loader>();
   // Stored refs stay in the document; these are the URLs to display them with.
-  const assets = useAssetMap(resolvedAssets);
+  const assets = useAssetMap(resolvedAssets, page.id);
   // An expired draft signature on a stale tab re-resolves once instead of
   // leaving a page of broken images.
   const assetEpoch = useAssetRetry();

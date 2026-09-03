@@ -286,9 +286,13 @@ async function resolveOne(
   if (!path) return ref;
 
   const asset = await lookupContentAsset(ctx.classroom.id, path);
-  if (!asset) {
+  // A tree row is not a file. `lookupContentAsset` is keyed by path alone, so a
+  // reference naming a DIRECTORY comes back with the folder's tree sha — and
+  // signing that as a blob would mint a confidently-wrong URL the Worker cannot
+  // serve. There is no blob at that path, which is what `/missing/` means.
+  if (!asset || asset.type !== 'blob') {
     console.warn(
-      `[contentDelivery] No asset row for "${ref}" (path ${path}) in classroom ${ctx.classroom.id}`
+      `[contentDelivery] No blob row for "${ref}" (path ${path}) in classroom ${ctx.classroom.id}`
     );
     return missingUrl(env.origin, ctx.classroom.id, ref);
   }
@@ -338,9 +342,9 @@ export async function resolveAssetSrcSet(
 
   await ensureMap(ctx.classroom.id);
   const asset = await lookupContentAsset(ctx.classroom.id, path);
-  if (!asset) {
+  if (!asset || asset.type !== 'blob') {
     console.warn(
-      `[contentDelivery] No asset row for "${ref}" (path ${path}) in classroom ${ctx.classroom.id}`
+      `[contentDelivery] No blob row for "${ref}" (path ${path}) in classroom ${ctx.classroom.id}`
     );
     return null;
   }

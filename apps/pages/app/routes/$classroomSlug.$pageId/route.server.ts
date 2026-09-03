@@ -156,7 +156,13 @@ export const loader = async ({
   // client gets a parallel `ref → signed URL` map. Tier is per-VIEWER — an
   // editor (or an explicit preview) gets short-lived draft URLs, everyone else
   // the enrolled tier — which is exactly why the URL cannot live in the block.
-  const resolveTier = ClassmojiService.contentDelivery.tierFor({ canEdit, preview: wantsPreview });
+  // `previewActive`, not `wantsPreview`: the raw query param is attacker-supplied
+  // and is only honoured for staff. Passing it straight through would let an
+  // anonymous visitor mint draft-tier URLs by appending `?preview=1`.
+  const resolveTier = ClassmojiService.contentDelivery.tierFor({
+    canEdit,
+    preview: previewActive,
+  });
   const assetCtx = assetResolveContext(
     page.classroom as unknown as Parameters<typeof assetResolveContext>[0],
     resolveTier
