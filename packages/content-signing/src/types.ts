@@ -63,6 +63,7 @@ export type ThemeVerification =
 /** Raw fields lifted out of a blob URL, before any cryptographic check. */
 export interface ParsedBlobUrl {
   kind: 'blob';
+  host: string;
   classroomId: string;
   sha: string;
   ext: string;
@@ -76,6 +77,7 @@ export interface ParsedBlobUrl {
 /** Raw fields lifted out of a theme URL, before any cryptographic check. */
 export interface ParsedThemeUrl {
   kind: 'theme';
+  host: string;
   classroomId: string;
   theme: string;
   treeSha: string;

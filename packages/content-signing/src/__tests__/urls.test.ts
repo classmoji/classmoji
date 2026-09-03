@@ -1,20 +1,42 @@
 import { describe, expect, it } from 'vitest';
 
 import { bucketExpiry } from '../bucket.ts';
-import { TRANSFORM_WIDTHS, blobCanonicalString, themeCanonicalString } from '../canonical.ts';
+import {
+  TRANSFORM_WIDTHS,
+  blobCanonicalString,
+  hostOf,
+  themeCanonicalString,
+} from '../canonical.ts';
 import { signBlobUrl, signSrcSet, signThemeBase } from '../urls.ts';
 import { parseContentUrl } from '../verify.ts';
-import { CLASSROOM_A, NOW, ORIGIN, SHA, TREE_SHA, ctx } from './fixtures.ts';
+import { CLASSROOM_A, HOST, NOW, ORIGIN, SHA, TREE_SHA, ctx } from './fixtures.ts';
 
 function widthOf(url: string): number | null {
   const raw = new URL(url).searchParams.get('w');
   return raw === null ? null : Number(raw);
 }
 
+function entriesOf(srcset: string): { url: string; descriptor: number }[] {
+  return srcset.split(', ').map(entry => {
+    const [url, descriptor] = entry.split(' ');
+    return { url, descriptor: Number(descriptor.replace(/w$/, '')) };
+  });
+}
+
+describe('hostOf', () => {
+  it('lowercases, keeps the port, and ignores the scheme', () => {
+    expect(hostOf('https://CDN.Classmoji.Test')).toBe('cdn.classmoji.test');
+    expect(hostOf('http://cdn.classmoji.test')).toBe('cdn.classmoji.test');
+    expect(hostOf('https://cdn.classmoji.test:8443/base')).toBe('cdn.classmoji.test:8443');
+    expect(() => hostOf('not-a-url')).toThrow(TypeError);
+  });
+});
+
 describe('canonical strings', () => {
   it('pins the blob shape', () => {
     expect(
       blobCanonicalString({
+        host: HOST,
         classroomId: CLASSROOM_A,
         sha: SHA,
         ext: 'png',
@@ -22,10 +44,11 @@ describe('canonical strings', () => {
         keyVersion: 3,
         exp: 1767225600,
       })
-    ).toBe(`cm1|blob|${CLASSROOM_A}|${SHA}|png|public|3|1767225600||`);
+    ).toBe(`cm1|blob|${HOST}|${CLASSROOM_A}|${SHA}|png|public|3|1767225600||`);
 
     expect(
       blobCanonicalString({
+        host: HOST,
         classroomId: CLASSROOM_A,
         sha: SHA,
         ext: 'png',
@@ -34,12 +57,13 @@ describe('canonical strings', () => {
         exp: 1767225600,
         transform: { w: 1600, fmt: 'avif' },
       })
-    ).toBe(`cm1|blob|${CLASSROOM_A}|${SHA}|png|draft|0|1767225600|1600|avif`);
+    ).toBe(`cm1|blob|${HOST}|${CLASSROOM_A}|${SHA}|png|draft|0|1767225600|1600|avif`);
   });
 
   it('pins the theme shape', () => {
     expect(
       themeCanonicalString({
+        host: HOST,
         classroomId: CLASSROOM_A,
         theme: 'cosmo-dark',
         treeSha: TREE_SHA,
@@ -47,7 +71,7 @@ describe('canonical strings', () => {
         keyVersion: 2,
         exp: 1767225600,
       })
-    ).toBe(`cm1|theme|${CLASSROOM_A}|cosmo-dark|${TREE_SHA}|enrolled|2|1767225600`);
+    ).toBe(`cm1|theme|${HOST}|${CLASSROOM_A}|cosmo-dark|${TREE_SHA}|enrolled|2|1767225600`);
   });
 });
 
@@ -103,6 +127,25 @@ describe('signBlobUrl', () => {
       signBlobUrl(ORIGIN, ctx('public'), { sha: SHA, ext: 'png', transform: { w: 1024 } })
     ).rejects.toThrow(TypeError);
   });
+
+  it('rejects an origin with no host', async () => {
+    await expect(
+      signBlobUrl('cdn.classmoji.test', ctx('public'), { sha: SHA, ext: 'png' })
+    ).rejects.toThrow(TypeError);
+  });
+
+  it('rejects a nonsense now or keyVersion at mint', async () => {
+    for (const now of [Number.NaN, -1, 1.5, Infinity]) {
+      await expect(
+        signBlobUrl(ORIGIN, ctx('public', { now }), { sha: SHA, ext: 'png' })
+      ).rejects.toThrow(TypeError);
+    }
+    for (const keyVersion of [-1, 1.5, Number.NaN, Number.MAX_SAFE_INTEGER + 2]) {
+      await expect(
+        signBlobUrl(ORIGIN, ctx('public', { keyVersion }), { sha: SHA, ext: 'png' })
+      ).rejects.toThrow(TypeError);
+    }
+  });
 });
 
 describe('signThemeBase', () => {
@@ -135,40 +178,85 @@ describe('signThemeBase', () => {
     expect(parsed && parsed.kind === 'theme' ? parsed.relPath : null).toBe('fonts/inter.woff2');
   });
 
-  it('rejects malformed refs', async () => {
+  it('rejects malformed refs, including a leading dot in the theme', async () => {
     await expect(
       signThemeBase(ORIGIN, ctx('public'), { theme: 'Cosmo Dark', treeSha: TREE_SHA })
     ).rejects.toThrow(TypeError);
     await expect(
       signThemeBase(ORIGIN, ctx('public'), { theme: 'cosmo', treeSha: 'nope' })
     ).rejects.toThrow(TypeError);
+    for (const theme of ['.git', '..', '.', '.hidden']) {
+      await expect(
+        signThemeBase(ORIGIN, ctx('public'), { theme, treeSha: TREE_SHA })
+      ).rejects.toThrow(TypeError);
+    }
   });
 });
 
 describe('signSrcSet', () => {
   it('emits all three widths when the source width is unknown', async () => {
     const { src, srcset } = await signSrcSet(ORIGIN, ctx('public'), { sha: SHA, ext: 'png' });
-    const entries = srcset.split(', ');
-    expect(entries.length).toBe(3);
-    expect(entries.map(entry => entry.split(' ')[1])).toEqual(['800w', '1600w', '2560w']);
+    const entries = entriesOf(srcset);
+    expect(entries.map(entry => entry.descriptor)).toEqual([800, 1600, 2560]);
     expect(widthOf(src)).toBe(2560);
   });
 
   it('never emits a width larger than sourceWidth', async () => {
-    for (const sourceWidth of [800, 900, 1600, 1700, 2560, 4000]) {
+    for (const sourceWidth of [800, 900, 1599, 1600, 1700, 2560, 4000]) {
       const { src, srcset } = await signSrcSet(ORIGIN, ctx('public'), {
         sha: SHA,
         ext: 'png',
         sourceWidth,
       });
-      const urls = srcset.split(', ').map(entry => entry.split(' ')[0]);
-      for (const url of urls) {
-        const width = widthOf(url);
-        expect(width).not.toBeNull();
-        expect(width as number).toBeLessThanOrEqual(sourceWidth);
+      const entries = entriesOf(srcset);
+      for (const entry of entries) {
+        expect(entry.descriptor).toBeLessThanOrEqual(sourceWidth);
+        const width = widthOf(entry.url);
+        if (width !== null) expect(width).toBeLessThanOrEqual(sourceWidth);
       }
-      expect(urls.length).toBe(TRANSFORM_WIDTHS.filter(w => w <= sourceWidth).length);
-      expect(widthOf(src)).toBeLessThanOrEqual(sourceWidth);
+      // At most one candidate is the untransformed original.
+      expect(entries.filter(entry => widthOf(entry.url) === null).length).toBeLessThanOrEqual(1);
+      const srcWidth = widthOf(src);
+      if (srcWidth !== null) expect(srcWidth).toBeLessThanOrEqual(sourceWidth);
+    }
+  });
+
+  it('fills the gap with the original when the source sits between rungs', async () => {
+    const { srcset } = await signSrcSet(ORIGIN, ctx('public'), {
+      sha: SHA,
+      ext: 'png',
+      sourceWidth: 1599,
+    });
+    const entries = entriesOf(srcset);
+    expect(entries.map(entry => entry.descriptor)).toEqual([800, 1599]);
+    // The gap-filler is the untransformed original, not an upscale.
+    expect(widthOf(entries[0].url)).toBe(800);
+    expect(widthOf(entries[1].url)).toBeNull();
+  });
+
+  it('does not add an original above the top rung, where the cap is deliberate', async () => {
+    for (const sourceWidth of [2560, 4000]) {
+      const { srcset } = await signSrcSet(ORIGIN, ctx('public'), {
+        sha: SHA,
+        ext: 'png',
+        sourceWidth,
+      });
+      expect(entriesOf(srcset).map(entry => entry.descriptor)).toEqual([800, 1600, 2560]);
+    }
+  });
+
+  it('lands exactly on the ladder without a duplicate original', async () => {
+    for (const sourceWidth of TRANSFORM_WIDTHS) {
+      const { srcset } = await signSrcSet(ORIGIN, ctx('public'), {
+        sha: SHA,
+        ext: 'png',
+        sourceWidth,
+      });
+      const entries = entriesOf(srcset);
+      expect(entries.every(entry => widthOf(entry.url) !== null)).toBe(true);
+      expect(entries.map(entry => entry.descriptor)).toEqual(
+        TRANSFORM_WIDTHS.filter(width => width <= sourceWidth)
+      );
     }
   });
 
@@ -187,9 +275,10 @@ describe('signSrcSet', () => {
       sha: SHA,
       ext: 'png',
       fmt: 'avif',
+      sourceWidth: 1599,
     });
-    for (const entry of srcset.split(', ')) {
-      expect(new URL(entry.split(' ')[0]).searchParams.get('fmt')).toBe('avif');
+    for (const entry of entriesOf(srcset)) {
+      expect(new URL(entry.url).searchParams.get('fmt')).toBe('avif');
     }
   });
 

@@ -3,9 +3,11 @@ import {
   TRANSFORM_WIDTHS,
   assertClassroomId,
   assertKeyVersion,
+  assertNow,
   assertTier,
   assertTransform,
   blobCanonicalString,
+  hostOf,
   isExt,
   isGitSha,
   isTheme,
@@ -39,6 +41,9 @@ export interface SrcSet {
   srcset: string;
 }
 
+const SMALLEST_WIDTH = TRANSFORM_WIDTHS[0];
+const LARGEST_WIDTH = TRANSFORM_WIDTHS[TRANSFORM_WIDTHS.length - 1];
+
 function normalizeOrigin(origin: string): string {
   if (typeof origin !== 'string' || origin.length === 0) {
     throw new TypeError('content-signing: origin must be a non-empty string');
@@ -46,17 +51,20 @@ function normalizeOrigin(origin: string): string {
   return origin.replace(/\/+$/, '');
 }
 
-function assertContext(ctx: SigningContext): void {
+function assertContext(ctx: SigningContext): number {
   assertTier(ctx.tier);
   assertClassroomId(ctx.classroomId);
   assertKeyVersion(ctx.keyVersion);
+  const now = ctx.now ?? nowSeconds();
+  assertNow(now);
+  return now;
 }
 
 /**
  * `{origin}/c/{classroomId}/blob/{sha}.{ext}?p&v&exp&sig[&w][&fmt]`
  *
  * Transform params are inside the signature, so a client cannot widen or
- * re-encode an image it was not handed.
+ * re-encode an image it was not handed. So is the origin's host.
  */
 export async function signBlobUrl(
   origin: string,
@@ -64,7 +72,8 @@ export async function signBlobUrl(
   ref: BlobRef
 ): Promise<string> {
   const base = normalizeOrigin(origin);
-  assertContext(ctx);
+  const host = hostOf(base);
+  const now = assertContext(ctx);
   if (!isGitSha(ref.sha)) {
     throw new TypeError(`content-signing: sha must be a 40-hex git blob sha (got ${ref.sha})`);
   }
@@ -75,9 +84,9 @@ export async function signBlobUrl(
   }
   assertTransform(ref.transform);
 
-  const now = ctx.now ?? nowSeconds();
   const exp = bucketExpiry(ctx.tier, ctx.classroomId, now);
   const canonical = blobCanonicalString({
+    host,
     classroomId: ctx.classroomId,
     sha: ref.sha,
     ext: ref.ext,
@@ -110,9 +119,12 @@ export async function signThemeBase(
   ref: ThemeRef
 ): Promise<string> {
   const base = normalizeOrigin(origin);
-  assertContext(ctx);
+  const host = hostOf(base);
+  const now = assertContext(ctx);
   if (!isTheme(ref.theme)) {
-    throw new TypeError(`content-signing: theme must match [a-z0-9._-]+ (got ${ref.theme})`);
+    throw new TypeError(
+      `content-signing: theme must match [a-z0-9][a-z0-9._-]* (got ${ref.theme})`
+    );
   }
   if (!isGitSha(ref.treeSha)) {
     throw new TypeError(
@@ -120,9 +132,9 @@ export async function signThemeBase(
     );
   }
 
-  const now = ctx.now ?? nowSeconds();
   const exp = bucketExpiry(ctx.tier, ctx.classroomId, now);
   const canonical = themeCanonicalString({
+    host,
     classroomId: ctx.classroomId,
     theme: ref.theme,
     treeSha: ref.treeSha,
@@ -139,47 +151,53 @@ export async function signThemeBase(
 }
 
 /**
- * A responsive set for one image. Widths larger than `sourceWidth` are dropped
- * so the pipeline never upscales; when `sourceWidth` is unknown all three are
- * emitted. `src` is the largest signed width, as the non-srcset fallback.
+ * A responsive set for one image.
+ *
+ * Rungs larger than `sourceWidth` are dropped so the pipeline never upscales;
+ * with no `sourceWidth` all three are emitted. When the source sits between
+ * rungs (say 1599px) the untransformed original is added as the top candidate,
+ * so it is not capped at the rung below. Above the top rung the cap is
+ * deliberate and no original is added. `src` is the largest rendition.
  */
 export async function signSrcSet(
   origin: string,
   ctx: SigningContext,
   ref: SrcSetRef
 ): Promise<SrcSet> {
-  if (ref.sourceWidth !== undefined) {
-    if (!Number.isInteger(ref.sourceWidth) || ref.sourceWidth <= 0) {
-      throw new TypeError('content-signing: sourceWidth must be a positive integer');
-    }
+  const { sourceWidth } = ref;
+  if (sourceWidth !== undefined && (!Number.isSafeInteger(sourceWidth) || sourceWidth <= 0)) {
+    throw new TypeError('content-signing: sourceWidth must be a positive integer');
   }
 
-  const widths: TransformWidth[] = TRANSFORM_WIDTHS.filter(
-    width => ref.sourceWidth === undefined || width <= ref.sourceWidth
+  const ladder: TransformWidth[] = TRANSFORM_WIDTHS.filter(
+    width => sourceWidth === undefined || width <= sourceWidth
   );
 
-  // Source narrower than the smallest rendition: serve it untransformed.
-  if (widths.length === 0) {
-    const src = await signBlobUrl(origin, ctx, {
-      sha: ref.sha,
-      ext: ref.ext,
-      transform: ref.fmt ? { fmt: ref.fmt } : undefined,
-    });
-    return { src, srcset: `${src} ${ref.sourceWidth}w` };
+  const betweenRungs =
+    sourceWidth !== undefined &&
+    sourceWidth > SMALLEST_WIDTH &&
+    sourceWidth < LARGEST_WIDTH &&
+    !(TRANSFORM_WIDTHS as readonly number[]).includes(sourceWidth);
+  const needsOriginal = sourceWidth !== undefined && (ladder.length === 0 || betweenRungs);
+
+  const specs: { transform: Transform | undefined; width: number }[] = ladder.map(width => ({
+    transform: ref.fmt ? { w: width, fmt: ref.fmt } : { w: width },
+    width,
+  }));
+  if (needsOriginal) {
+    specs.push({ transform: ref.fmt ? { fmt: ref.fmt } : undefined, width: sourceWidth as number });
   }
 
   const urls = await Promise.all(
-    widths.map(width =>
-      signBlobUrl(origin, ctx, {
-        sha: ref.sha,
-        ext: ref.ext,
-        transform: ref.fmt ? { w: width, fmt: ref.fmt } : { w: width },
-      })
+    specs.map(spec =>
+      signBlobUrl(origin, ctx, { sha: ref.sha, ext: ref.ext, transform: spec.transform })
     )
   );
 
+  // The fallback stays a bounded rendition wherever one exists.
+  const srcIndex = ladder.length > 0 ? ladder.length - 1 : 0;
   return {
-    src: urls[urls.length - 1] as string,
-    srcset: urls.map((url, index) => `${url} ${widths[index]}w`).join(', '),
+    src: urls[srcIndex],
+    srcset: urls.map((url, index) => `${url} ${specs[index].width}w`).join(', '),
   };
 }

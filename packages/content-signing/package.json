@@ -1,8 +1,10 @@
 {
   "name": "@classmoji/content-signing",
+  "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit && npm run typecheck:workers",
+    "typecheck:workers": "tsc --noEmit -p tsconfig.workers.json",
     "test": "vitest run",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
@@ -13,6 +15,7 @@
     ".": "./src/index.ts"
   },
   "devDependencies": {
+    "@cloudflare/workers-types": "^5.20260903.1",
     "vitest": "^4.1.5"
   }
 }
