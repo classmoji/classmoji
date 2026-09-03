@@ -1,20 +1,21 @@
-import type { Env } from '../src/env.ts';
 import {
   blobCanonicalString,
   deriveKey,
+  hostOf,
   nowSeconds,
-  signCanonical,
+  signBlobUrl,
+  signThemeBase,
   themeCanonicalString,
-  toBase64Url,
   type Tier,
   type Transform,
-} from '../src/signing-stub.ts';
+} from '@classmoji/content-signing';
+import type { Env } from '../src/env.ts';
 
 export const MASTER = 'test-master-secret';
 export const CLASSROOM = 'c1a55c0d-0000-4000-8000-000000000001';
 export const ORIGIN = 'https://content-staging.classmoji.io';
 /** The host is part of every canonical string, so fixtures must mint for the origin they are fetched from. */
-export const HOST = new URL(ORIGIN).host;
+export const HOST = hostOf(ORIGIN);
 
 /** Git shas are validated as 40 lowercase hex characters, so fixtures must be real ones. */
 export const BLOB_SHA = '0123456789abcdef0123456789abcdef01234567';
@@ -97,14 +98,28 @@ export function futureExp(seconds = 3600): number {
   return nowSeconds() + seconds;
 }
 
-async function sign(
+function toBase64Url(bytes: ArrayBuffer): string {
+  let binary = '';
+  for (const byte of new Uint8Array(bytes)) binary += String.fromCharCode(byte);
+  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+
+/**
+ * Sign a canonical string the package built, using a key the package derived.
+ *
+ * `signBlobUrl` / `signThemeBase` pick their own `exp` (bucketed per tier) and
+ * always sign the origin's own host, so tests that pin an expiry or forge a
+ * host go through this instead. Everything security-relevant — key derivation
+ * and the canonical string itself — still comes from the package.
+ */
+async function signCanonicalString(
   master: string,
   classroomId: string,
   keyVersion: number,
   canonical: string
 ): Promise<string> {
   const key = await deriveKey(master, classroomId, keyVersion);
-  return toBase64Url(await signCanonical(key, canonical));
+  return toBase64Url(await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(canonical)));
 }
 
 export async function signedBlobUrl(options: {
@@ -113,6 +128,7 @@ export async function signedBlobUrl(options: {
   ext: string;
   tier?: Tier;
   keyVersion?: number;
+  /** Pin the expiry (grace/expiry tests). Otherwise the package buckets it. */
   exp?: number;
   transform?: Transform;
   master?: string;
@@ -122,13 +138,22 @@ export async function signedBlobUrl(options: {
   signedHost?: string;
 }): Promise<string> {
   const origin = options.origin ?? ORIGIN;
-  const host = options.signedHost ?? new URL(origin).host;
   const classroomId = options.classroomId ?? CLASSROOM;
   const tier = options.tier ?? 'public';
   const keyVersion = options.keyVersion ?? 1;
+  const master = options.master ?? MASTER;
+
+  if (options.exp === undefined && options.signedHost === undefined) {
+    return signBlobUrl(
+      origin,
+      { master, classroomId, keyVersion, tier },
+      { sha: options.sha, ext: options.ext, transform: options.transform }
+    );
+  }
+
   const exp = options.exp ?? futureExp();
   const canonical = blobCanonicalString({
-    host,
+    host: options.signedHost ?? hostOf(origin),
     classroomId,
     sha: options.sha,
     ext: options.ext,
@@ -137,12 +162,12 @@ export async function signedBlobUrl(options: {
     exp,
     transform: options.transform,
   });
-  const sig = await sign(options.master ?? MASTER, classroomId, keyVersion, canonical);
+  const sig = await signCanonicalString(master, classroomId, keyVersion, canonical);
 
-  const params = new URLSearchParams({ p: tier, v: String(keyVersion), exp: String(exp), sig });
-  if (options.transform?.w !== undefined) params.set('w', String(options.transform.w));
-  if (options.transform?.fmt !== undefined) params.set('fmt', options.transform.fmt);
-  return `${origin}/c/${classroomId}/blob/${options.sha}.${options.ext}?${params.toString()}`;
+  const query = [`p=${tier}`, `v=${keyVersion}`, `exp=${exp}`, `sig=${sig}`];
+  if (options.transform?.w !== undefined) query.push(`w=${options.transform.w}`);
+  if (options.transform?.fmt !== undefined) query.push(`fmt=${options.transform.fmt}`);
+  return `${origin}/c/${classroomId}/blob/${options.sha}.${options.ext}?${query.join('&')}`;
 }
 
 export async function signedThemeUrl(options: {
@@ -158,13 +183,23 @@ export async function signedThemeUrl(options: {
   signedHost?: string;
 }): Promise<string> {
   const origin = options.origin ?? ORIGIN;
-  const host = options.signedHost ?? new URL(origin).host;
   const classroomId = options.classroomId ?? CLASSROOM;
   const tier = options.tier ?? 'public';
   const keyVersion = options.keyVersion ?? 1;
+  const master = options.master ?? MASTER;
+
+  if (options.exp === undefined && options.signedHost === undefined) {
+    const base = await signThemeBase(
+      origin,
+      { master, classroomId, keyVersion, tier },
+      { theme: options.theme, treeSha: options.treeSha }
+    );
+    return `${base}${options.relPath}`;
+  }
+
   const exp = options.exp ?? futureExp();
   const canonical = themeCanonicalString({
-    host,
+    host: options.signedHost ?? hostOf(origin),
     classroomId,
     theme: options.theme,
     treeSha: options.treeSha,
@@ -172,6 +207,6 @@ export async function signedThemeUrl(options: {
     keyVersion,
     exp,
   });
-  const sig = await sign(options.master ?? MASTER, classroomId, keyVersion, canonical);
+  const sig = await signCanonicalString(master, classroomId, keyVersion, canonical);
   return `${origin}/c/${classroomId}/theme/${options.theme}/${options.treeSha}/${tier}.${keyVersion}.${exp}.${sig}/${options.relPath}`;
 }

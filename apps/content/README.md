@@ -89,24 +89,23 @@ for everything, so the deploy workflow fails loudly if either is missing.
 
 ## Signing
 
-The Worker codes against `@classmoji/content-signing`. Until that package is in
-this tree, `src/signing-stub.ts` mirrors its contract exactly — same names, same
-tiers and grace windows, same unix-seconds clock, same validation — so a URL
-minted by the real package verifies identically here. `src/verify.ts` is the
-only importer, so the swap is one line:
-
-```diff
--export * from './signing-stub.ts';
-+export * from '@classmoji/content-signing';
-```
-
-...plus `"@classmoji/content-signing": "*"` in this app's dependencies. Confirm
-the swapped import bundles (`wrangler deploy --env staging --dry-run`) BEFORE
-deleting `src/signing-stub.ts`; `tests/helpers.ts` then signs its fixtures with
-the package's `signBlobUrl` / `signThemeBase` instead of the stub primitives.
+Signatures are verified by `@classmoji/content-signing` — the same package the
+apps mint with, so a URL is checked by exactly the code that produced it.
+`src/verify.ts` is the one importer, a single `export * from` line; every other
+module goes through that seam rather than reaching for the package directly.
+wrangler bundles the workspace package's TypeScript source (its `exports` points
+at `src/index.ts`), so there is no build step to keep in sync.
 
 All times crossing this boundary are **unix seconds**, and `cacheControlFor`
-takes `now` explicitly — call sites pass `nowSeconds()`.
+takes `now` explicitly — call sites pass `nowSeconds()`. Past `exp` (inside the
+tier's grace window) it returns a short `public, max-age=60` rather than pinning
+a stale response immutable or sending every cache back at once with `max-age=0`.
+
+Test fixtures mint through the package's own `signBlobUrl` / `signThemeBase`.
+The two cases those cannot express — a pinned expiry (grace and expiry tests)
+and a forged host (replay tests) — build the canonical string with the package's
+`blobCanonicalString` / `themeCanonicalString` and sign it with a key from its
+`deriveKey`, so even those fixtures cannot drift from the contract.
 
 ## Working on it
 
