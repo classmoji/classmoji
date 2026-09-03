@@ -41,8 +41,13 @@ const THEMES_FOLDER = '.slidesthemes';
  *     wrong sha, a fresh URL points at the same wrong sha — that is a sync
  *     problem, and `syncContentAssets` is the fix.
  *
- * What it IS for: a stale or poisoned edge cache, where the origin is right and
- * the copy in front of it is not.
+ * What it IS for: a stale or poisoned EDGE cache — the CDN entries keyed by URL.
+ * It does NOT reach R2: the Worker keys R2 by content (`blobs/{sha}`), shared
+ * across classrooms and independent of the version, and it checks R2 before
+ * the origin. A bad object in R2 — a wrong body cached under the right sha —
+ * survives a bump; the lever for that layer is deleting the object
+ * (`wrangler r2 object delete`), after which the next miss refills it from
+ * origin. Two layers, two levers.
  *
  * The write is a relative increment (`{ increment: 1 }`) rather than a
  * read-then-write, so two owners clicking at the same moment produce two bumps
