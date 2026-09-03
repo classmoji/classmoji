@@ -12,6 +12,9 @@
     "cf:dev": "wrangler dev --env staging",
     "cf:types": "wrangler types"
   },
+  "dependencies": {
+    "@classmoji/content-signing": "*"
+  },
   "devDependencies": {
     "@cloudflare/workers-types": "5.20260903.1",
     "vitest": "^4.1.11",
