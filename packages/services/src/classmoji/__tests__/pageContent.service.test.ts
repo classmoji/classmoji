@@ -249,15 +249,24 @@ describe('pageContent.savePageContent', () => {
 // ─── uploadPageAsset ─────────────────────────────────────────────────────────
 
 describe('pageContent.uploadPageAsset', () => {
-  it('uploads a Buffer into the page assets folder and returns url + path', async () => {
+  const RAW_URL =
+    'https://raw.githubusercontent.com/test-org/content-test-org-cs101/main/pages/syllabus/assets/a.png';
+
+  beforeEach(() => {
     uploadMock.mockResolvedValue({
-      url: 'https://raw.githubusercontent.com/test-org/content-test-org-cs101/main/pages/syllabus/assets/a.png',
+      url: RAW_URL,
       path: 'pages/syllabus/assets/a.png',
-      sha: 'asset-sha',
+      // A real 40-hex blob sha — the signer refuses anything else.
+      sha: 'c'.repeat(40),
     });
+    delete process.env.CONTENT_DELIVERY_ORIGIN;
+    delete process.env.CONTENT_SIGNING_SECRET;
+  });
+
+  it('uploads a Buffer into the page assets folder', async () => {
     const buffer = Buffer.from('image-bytes');
 
-    const result = await uploadPageAsset(page, buffer, 'a.png');
+    await uploadPageAsset(page, buffer, 'a.png');
 
     const arg = callArg(uploadMock);
     expect(arg.repo).toBe('content-test-org-cs101');
@@ -265,10 +274,50 @@ describe('pageContent.uploadPageAsset', () => {
     expect(arg.file).toBe(buffer);
     expect(arg.filename).toBe('a.png');
     expect(arg.branch).toBe('main');
+  });
+
+  it('stores the REPO PATH once the delivery layer can sign it', async () => {
+    process.env.CONTENT_DELIVERY_ORIGIN = 'https://cdn.classmoji.test';
+    process.env.CONTENT_SIGNING_SECRET = 'test-master-secret';
+    const classroomPage = {
+      ...page,
+      classroom: { ...page.classroom, id: '3f2504e0-4f89-41d3-9a0c-0305e82c3301' },
+    };
+
+    const result = await uploadPageAsset(classroomPage, Buffer.from('x'), 'a.png');
+
+    // The path is what keeps following the file across re-uploads and bumps.
+    expect(result.url).toBe('pages/syllabus/assets/a.png');
+    expect(result.path).toBe('pages/syllabus/assets/a.png');
+    // Display is a separate field precisely so it cannot be stored by accident.
+    expect(result.displayUrl).toContain('https://cdn.classmoji.test/c/');
+    expect(result.displayUrl).toContain('p=draft');
+    expect(result.displayUrl).not.toBe(result.url);
+  });
+
+  it('falls back to the legacy absolute URL when nothing can sign', async () => {
+    // THE regression this guards: unconfigured, no surface — editor, viewer or
+    // class site — knows how to turn a bare path into a fetchable URL, so
+    // storing one would make every upload a 404 the moment it is saved.
+    const result = await uploadPageAsset(page, Buffer.from('x'), 'a.png');
+
     expect(result).toEqual({
-      url: 'https://raw.githubusercontent.com/test-org/content-test-org-cs101/main/pages/syllabus/assets/a.png',
+      url: RAW_URL,
       path: 'pages/syllabus/assets/a.png',
+      displayUrl: null,
     });
+  });
+
+  it('falls back the same way when the classroom has no id to sign against', async () => {
+    process.env.CONTENT_DELIVERY_ORIGIN = 'https://cdn.classmoji.test';
+    process.env.CONTENT_SIGNING_SECRET = 'test-master-secret';
+
+    // `page.classroom` here carries no id — signing is impossible, so this must
+    // degrade exactly like the unconfigured case rather than store a dead path.
+    const result = await uploadPageAsset(page, Buffer.from('x'), 'a.png');
+
+    expect(result.url).toBe(RAW_URL);
+    expect(result.displayUrl).toBeNull();
   });
 });
 

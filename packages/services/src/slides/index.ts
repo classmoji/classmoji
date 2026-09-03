@@ -10,6 +10,7 @@
 
 export * from './deckTypes.ts';
 export * from './deckHtml.ts';
+export * from './deckAssets.ts';
 export * from './deckMerge.ts';
 export * from './deckOps.ts';
 export * from './slideContent.service.ts';

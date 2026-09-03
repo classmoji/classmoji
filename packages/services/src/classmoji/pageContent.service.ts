@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { signBlobUrl } from '@classmoji/content-signing';
 import { z } from 'zod';
 import { ContentService } from '../content/ContentService.ts';
 import {
@@ -244,13 +245,36 @@ export async function savePageContent(
  * Takes a Buffer — callers converting from a Web API File do the
  * File→Buffer adaptation app-side.
  *
- * @returns `{ url, path }` — raw.githubusercontent.com URL for immediate use.
+ * ## Why `url` is a repo path — but only when something can read one
+ *
+ * What goes INTO the document should be the reference — `pages/lab-1/assets/
+ * x.png` — because that is the only form that keeps following the file: it
+ * survives a re-upload, a cache bust, and a viewer in a different tier.
+ * `displayUrl` is the signed URL for showing the image right now, deliberately
+ * a separate field so a caller cannot store one by accident.
+ *
+ * That only holds while the delivery layer is CONFIGURED, because it is the
+ * only thing that knows how to turn a bare path back into something a browser
+ * can fetch. Unconfigured, there is no read-side translation anywhere — editor,
+ * viewer, or class site — so storing a path would make every upload a 404 the
+ * moment it is saved. So when nothing can be signed, `url` stays the legacy
+ * absolute URL, exactly as it was before this existed. Switching the layer on
+ * changes what NEW uploads store; the old absolute URLs keep resolving through
+ * case 2 of the resolver.
+ *
+ * `displayUrl` is signed DIRECTLY from the sha the upload just returned rather
+ * than looked up in the asset map, because the push webhook that would put a
+ * row there has not fired yet — a map lookup here would reliably miss.
+ *
+ * @returns `{ url, path, displayUrl }`. `path` is always the repo path.
+ *   `displayUrl` is null when the delivery layer is off, and `url` is then the
+ *   legacy absolute URL rather than the path.
  */
 export async function uploadPageAsset(
   page: PageWithContentRepo,
   buffer: Buffer,
   filename: string
-): Promise<{ url: string; path: string }> {
+): Promise<{ url: string; path: string; displayUrl: string | null }> {
   const { gitOrganization, repo } = contentRepoFor(page);
 
   const result = await ContentService.upload({
@@ -263,7 +287,55 @@ export async function uploadPageAsset(
     message: `Upload asset for ${page.title || 'page'}`,
   });
 
-  return { url: result.url, path: result.path };
+  const displayUrl = await signUploadedAsset(page, result.path, result.sha);
+
+  // No signature means no reader can resolve a bare path — store the legacy URL.
+  return { url: displayUrl ? result.path : result.url, path: result.path, displayUrl };
+}
+
+/**
+ * Sign a just-uploaded blob at the draft tier, or null if that is not possible.
+ *
+ * Draft because only a writer ever sees this URL, and a writer is by definition
+ * looking at unpublished content. Every failure path returns null: an upload
+ * that succeeded must not be reported as failed because a URL could not be
+ * minted for it.
+ */
+async function signUploadedAsset(
+  page: PageWithContentRepo,
+  path: string,
+  sha: string
+): Promise<string | null> {
+  const origin = process.env.CONTENT_DELIVERY_ORIGIN;
+  const master = process.env.CONTENT_SIGNING_SECRET;
+  if (!origin || !master) return null;
+
+  const classroom = page.classroom as { id?: unknown; content_key_version?: unknown };
+  if (typeof classroom.id !== 'string') return null;
+
+  const name = path.slice(path.lastIndexOf('/') + 1);
+  const dot = name.lastIndexOf('.');
+  if (dot <= 0 || dot === name.length - 1) return null;
+
+  try {
+    return await signBlobUrl(
+      origin,
+      {
+        master,
+        classroomId: classroom.id,
+        keyVersion:
+          typeof classroom.content_key_version === 'number' ? classroom.content_key_version : 0,
+        tier: 'draft',
+      },
+      { sha, ext: name.slice(dot + 1).toLowerCase() }
+    );
+  } catch (error) {
+    console.warn(
+      `[pageContent.uploadPageAsset] Could not sign ${path}:`,
+      error instanceof Error ? error.message : error
+    );
+    return null;
+  }
 }
 
 // ─── Blank page content ──────────────────────────────────────────────────────

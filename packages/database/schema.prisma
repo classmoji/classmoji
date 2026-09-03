@@ -400,6 +400,12 @@ model Classroom {
   // True for the auto-provisioned per-user "Example Course" sandbox used by the
   // in-classroom onboarding tour. Backed by a mock GitOrganization (no live GitHub).
   is_example          Boolean         @default(false)
+  // Edge-cache bust for this classroom's content. Every signed content URL
+  // carries it, so bumping it changes ALL of them at once and the CDN misses
+  // on every asset until it refills. Old URLs STILL VERIFY — this is not a
+  // revocation, and nothing already handed out stops working; it only stops
+  // being the URL the app links to.
+  content_key_version Int             @default(0)
   created_at          DateTime        @default(now())
   updated_at          DateTime        @default(now()) @updatedAt
 
@@ -427,6 +433,7 @@ model Classroom {
   import_job            ImportJob?
   site                  ClassroomSite?
   forms                 Form[]
+  content_assets        ContentAsset[]
 
   // Logically redundant now that slug is globally unique, but retained: it is
   // the compound key live upserts select on (githubClassroomImport, example
@@ -1713,4 +1720,32 @@ model FormMagicToken {
   /// the same id, and a duplicate must be a no-op rather than an error.
   @@index([provider_message_id])
   @@map("form_magic_tokens")
+}
+
+/// Path → git object map for a classroom's content repo, refreshed from push
+/// webhooks and a TTL sweep. Read once per page render to turn a repo path
+/// into a content-addressed, signed URL. Blob rows are files; tree rows are
+/// directories (theme folders are served by their tree SHA).
+model ContentAsset {
+  classroom_id String
+  path         String
+  sha          String
+  type         String // 'blob' | 'tree'
+  size         Int      @default(0)
+  synced_at    DateTime
+
+  classroom Classroom @relation(fields: [classroom_id], references: [id], onDelete: Cascade)
+
+  @@id([classroom_id, path])
+  @@index([classroom_id, type])
+  /// Reverse lookup: given the sha out of a signed URL, find a path that holds
+  /// it. The editor does this on save so a stored block keeps the repo path
+  /// rather than freezing a signed URL into the content. Any matching row will
+  /// do — content-addressed means every path with this sha is byte-identical.
+  @@index([classroom_id, sha])
+  /// Freshness probe: `ensureContentAssets` reads the newest `synced_at` for a
+  /// classroom on the render path. Without this it scans and sorts every row
+  /// the classroom has, on every render.
+  @@index([classroom_id, synced_at])
+  @@map("content_assets")
 }

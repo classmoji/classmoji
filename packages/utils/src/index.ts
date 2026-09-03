@@ -27,3 +27,4 @@ export * from './subdomains.ts';
 export * from './debounce.ts';
 export * from './processSafety.ts';
 export * from './roomStateStore.ts';
+export * from './blockAssetRefs.ts';

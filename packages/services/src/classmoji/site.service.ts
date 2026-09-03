@@ -86,6 +86,9 @@ const SITE_CLASSROOM_SELECT = {
   is_archived: true,
   content_namespace: true,
   content_repo: true,
+  // Needed to MINT signed content URLs at render (the version is inside every
+  // signature). Not a secret — it is already visible in every URL it produces.
+  content_key_version: true,
   git_organization: { select: { id: true, login: true, provider: true } },
   settings: { select: { theme: true } },
 } satisfies Prisma.ClassroomSelect;

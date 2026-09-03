@@ -112,11 +112,15 @@ export async function savePageCoverImage(
 /**
  * Upload a file to the page's assets folder on GitHub.
  * Converts the Web API File to a Node.js Buffer for the service.
+ *
+ * `url` and `path` are both the repo path — the reference to STORE. `displayUrl`
+ * is the signed URL to show it with right now, and is null when the delivery
+ * layer is not configured.
  */
 export async function uploadPageAsset(
   page: PageForContent,
   file: File
-): Promise<{ url: string; path: string }> {
+): Promise<{ url: string; path: string; displayUrl: string | null }> {
   const buffer = Buffer.from(await file.arrayBuffer());
   return ClassmojiService.pageContent.uploadPageAsset(page, buffer, file.name);
 }
