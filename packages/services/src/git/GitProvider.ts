@@ -50,6 +50,19 @@ export class GitProvider {
     throw new Error('getCurrentUser() must be implemented by subclass');
   }
 
+  /**
+   * Mint a short-lived token for this installation, with its expiry.
+   *
+   * Distinct from `getAccessToken` only in that the caller is handing the token
+   * to somebody else and needs to know how long it stays good for.
+   */
+  async getInstallationToken(scope?: {
+    repositories?: string[];
+    permissions?: Record<string, string>;
+  }): Promise<{ token: string; expiresAt: string }> {
+    throw new Error('getInstallationToken() must be implemented by subclass');
+  }
+
   // ─── Repository ────────────────────────────────────────────────────────────
   async createRepository(org: string, name: string, isPrivate = true): Promise<GitRepository> {
     throw new Error('createRepository() must be implemented by subclass');
@@ -78,6 +91,24 @@ export class GitProvider {
   // ─── Branches & PRs ────────────────────────────────────────────────────────
   async getLatestCommitSHA(org: string, repo: string, branch?: string): Promise<string> {
     throw new Error('getLatestCommitSHA() must be implemented by subclass');
+  }
+
+  /**
+   * List every path in a repository and the git object behind it.
+   * `truncated` is the provider saying the listing was cut short — the entries
+   * that did arrive are still valid.
+   */
+  async getTree(
+    org: string,
+    repo: string,
+    ref: string,
+    recursive?: boolean
+  ): Promise<{
+    sha: string;
+    truncated: boolean;
+    entries: { path: string; sha: string; type: string; size?: number }[];
+  }> {
+    throw new Error('getTree() must be implemented by subclass');
   }
 
   async listCommits(
