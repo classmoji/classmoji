@@ -52,8 +52,23 @@ describe('GitHubOrigin.fetchTree', () => {
         })
       )) as unknown as typeof fetch;
 
-    const entries = await new GitHubOrigin().fetchTree({ ...ref, treeSha: 'tree1' });
-    expect(entries).toEqual([{ path: 'css/site.css', sha: 'b1', type: 'blob' }]);
+    const listing = await new GitHubOrigin().fetchTree({ ...ref, treeSha: 'tree1' });
+    expect(listing.entries).toEqual([{ path: 'css/site.css', sha: 'b1', type: 'blob' }]);
+    expect(listing.truncated).toBe(false);
+  });
+
+  it('reports a truncated listing so the caller can refuse to cache it', async () => {
+    globalThis.fetch = (async () =>
+      new Response(
+        JSON.stringify({
+          truncated: true,
+          tree: [{ path: 'css/site.css', sha: 'b1', type: 'blob' }],
+        })
+      )) as unknown as typeof fetch;
+
+    const listing = await new GitHubOrigin().fetchTree({ ...ref, treeSha: 'tree1' });
+    expect(listing.truncated).toBe(true);
+    expect(listing.entries).toHaveLength(1);
   });
 
   it('requests the recursive listing', async () => {
@@ -84,7 +99,7 @@ describe('deliveryStrategy', () => {
     canPresign: true,
     maxProxyBytes: 1000,
     fetchBlob: async () => new Response(''),
-    fetchTree: async () => [],
+    fetchTree: async () => ({ entries: [], truncated: false }),
     presign: async () => 'https://example.test/signed',
   };
 

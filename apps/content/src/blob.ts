@@ -1,4 +1,10 @@
-import { blobKey, contentHeaders, errorResponse, variantKey } from './cache.ts';
+import {
+  SHORT_CACHE_CONTROL,
+  blobKey,
+  contentHeaders,
+  errorResponse,
+  variantKey,
+} from './cache.ts';
 import { contentTypeForExtension, isRasterExtension } from './content-type.ts';
 import type { Env } from './env.ts';
 import { GitHubOrigin } from './origins/github.ts';
@@ -47,6 +53,12 @@ export async function serveBlobBySha(
 
   // Size is unknown before the fetch, so this always proxies today. The branch
   // is the seam for an origin that knows sizes and can presign large objects.
+  //
+  // NOT PRODUCTION-READY: `Response.redirect` bypasses `finalizeHeaders`, so
+  // this reply would carry no CORS, no nosniff and no CSP, and it hands the
+  // browser a URL this Worker no longer controls. Route it through
+  // `finalizeHeaders` — and decide what the redirect target may set — before
+  // any origin sets `canPresign` to true.
   if (deliveryStrategy(origin, undefined) === 'presign' && origin.presign) {
     const presign = origin.presign.bind(origin);
     const location = await withOriginRetry(env, options.classroomId, originRef =>
@@ -131,9 +143,12 @@ async function serveVariant(
   const transformed = await transformImage(env, original, width, format);
   if (!transformed) {
     // Images could not handle it — serve the untransformed original rather
-    // than a broken image.
+    // than a broken image, but on a short TTL. The tier's cache-control is
+    // immutable for up to 30 days; a ten-minute Images quota blip must not pin
+    // a 4 MB original at the edge for a month under a URL that asked for an
+    // 800px variant. A minute later, the next request retries the transform.
     return new Response(original, {
-      headers: contentHeaders(options.contentType, options.cacheControl),
+      headers: contentHeaders(options.contentType, SHORT_CACHE_CONTROL),
     });
   }
 

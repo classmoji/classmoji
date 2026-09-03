@@ -12,7 +12,15 @@ type VerifiedTheme = Extract<ThemeVerification, { ok: true }>;
 
 const origin = new GitHubOrigin();
 
-/** Tree listings are immutable (keyed by tree sha), so R2 is the source of truth after the first fetch. */
+/**
+ * Tree listings are immutable (keyed by tree sha), so R2 is the source of truth
+ * after the first fetch.
+ *
+ * A truncated listing is used for THIS request but never stored: the key is
+ * content-addressed and treated as immutable, so a partial listing would 404
+ * every omitted file forever, for every classroom sharing that tree sha. Paying
+ * the origin fetch again next request is the cheaper mistake.
+ */
 async function loadTree(
   env: Env,
   ctx: ExecutionContext,
@@ -23,9 +31,14 @@ async function loadTree(
   const hit = await env.CACHE.get(key);
   if (hit) return (await hit.json()) as TreeEntry[];
 
-  const entries = await withOriginRetry(env, classroomId, ref =>
+  const { entries, truncated } = await withOriginRetry(env, classroomId, ref =>
     origin.fetchTree({ ...ref, treeSha })
   );
+
+  if (truncated) {
+    console.warn(`[content] refusing to cache truncated tree ${treeSha}`);
+    return entries;
+  }
 
   ctx.waitUntil(
     env.CACHE.put(key, JSON.stringify(entries), {

@@ -25,6 +25,18 @@ export interface TreeEntry {
   type: 'blob';
 }
 
+/**
+ * A tree listing plus whether the origin cut it short.
+ *
+ * `truncated` has to travel with the entries: the listing is stored under an
+ * immutable `trees/{treeSha}.json` key, so caching a partial one would 404 the
+ * omitted files forever — for every classroom that shares that tree sha.
+ */
+export interface TreeListing {
+  entries: TreeEntry[];
+  truncated: boolean;
+}
+
 export class OriginError extends Error {
   readonly status: number;
 
@@ -49,7 +61,7 @@ export interface OriginAdapter {
   /** Above this size, proxying through the Worker is the wrong move. */
   readonly maxProxyBytes: number;
   fetchBlob(ref: BlobRef): Promise<Response>;
-  fetchTree(ref: TreeRef): Promise<TreeEntry[]>;
+  fetchTree(ref: TreeRef): Promise<TreeListing>;
   presign?(ref: BlobRef): Promise<string>;
 }
 

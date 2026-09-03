@@ -1,4 +1,4 @@
-import type { BlobRef, OriginAdapter, TreeEntry, TreeRef } from './types.ts';
+import type { BlobRef, OriginAdapter, TreeListing, TreeRef } from './types.ts';
 
 const NOT_IMPLEMENTED = 'not implemented';
 
@@ -16,7 +16,7 @@ export class MediaOrigin implements OriginAdapter {
     throw new Error(NOT_IMPLEMENTED);
   }
 
-  async fetchTree(_ref: TreeRef): Promise<TreeEntry[]> {
+  async fetchTree(_ref: TreeRef): Promise<TreeListing> {
     throw new Error(NOT_IMPLEMENTED);
   }
 

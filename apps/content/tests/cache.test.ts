@@ -24,12 +24,15 @@ describe('R2 key derivation', () => {
 });
 
 describe('response headers', () => {
-  it('puts CORS and nosniff on everything', () => {
+  it('puts CORS, nosniff and the sandboxing CSP on everything', () => {
     const headers = finalizeHeaders(new Headers());
     expect(headers.get('Access-Control-Allow-Origin')).toBe('*');
     expect(headers.get('Access-Control-Allow-Methods')).toBe('GET, HEAD, OPTIONS');
     expect(headers.get('Access-Control-Expose-Headers')).toBe('Content-Type, Content-Length, ETag');
     expect(headers.get('X-Content-Type-Options')).toBe('nosniff');
+    // content.classmoji.io sits under the app's .classmoji.io cookie domain:
+    // an SVG with inline script, opened top-level, must not run there.
+    expect(headers.get('Content-Security-Policy')).toBe("default-src 'none'; sandbox");
   });
 
   it('never lets a cookie out', () => {
@@ -41,6 +44,12 @@ describe('response headers', () => {
     const headers = contentHeaders('image/png', 'public, max-age=60, immutable');
     expect(headers.get('Content-Type')).toBe('image/png');
     expect(headers.get('Cache-Control')).toBe('public, max-age=60, immutable');
+  });
+
+  it('varies on Accept, because fmt=auto negotiates the stored format', () => {
+    expect(contentHeaders('image/avif', 'public, max-age=60, immutable').get('Vary')).toBe(
+      'Accept'
+    );
   });
 
   it('never caches an error', async () => {
