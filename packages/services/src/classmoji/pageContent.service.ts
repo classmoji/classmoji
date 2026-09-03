@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { signBlobUrl } from '@classmoji/content-signing';
 import { z } from 'zod';
 import { ContentService } from '../content/ContentService.ts';
 import {
@@ -244,13 +245,27 @@ export async function savePageContent(
  * Takes a Buffer — callers converting from a Web API File do the
  * File→Buffer adaptation app-side.
  *
- * @returns `{ url, path }` — raw.githubusercontent.com URL for immediate use.
+ * ## Why `url` is a repo path and not a URL
+ *
+ * What goes INTO the document is the reference — `pages/lab-1/assets/x.png` —
+ * because that is the only form that keeps following the file: it survives a
+ * re-upload, a cache bust, and a viewer in a different tier. `displayUrl` is
+ * the signed URL for showing the image in the editor right now, and it is
+ * deliberately a separate field so a caller cannot store one by accident.
+ *
+ * `displayUrl` is signed DIRECTLY from the sha the upload just returned rather
+ * than looked up in the asset map, because the push webhook that would put a
+ * row there has not fired yet — a map lookup here would reliably miss.
+ *
+ * @returns `{ url: repoPath, path, displayUrl }`. `displayUrl` is null when the
+ *   delivery layer is not configured; the caller then displays `path` through
+ *   whatever legacy URL it already builds.
  */
 export async function uploadPageAsset(
   page: PageWithContentRepo,
   buffer: Buffer,
   filename: string
-): Promise<{ url: string; path: string }> {
+): Promise<{ url: string; path: string; displayUrl: string | null }> {
   const { gitOrganization, repo } = contentRepoFor(page);
 
   const result = await ContentService.upload({
@@ -263,7 +278,54 @@ export async function uploadPageAsset(
     message: `Upload asset for ${page.title || 'page'}`,
   });
 
-  return { url: result.url, path: result.path };
+  const displayUrl = await signUploadedAsset(page, result.path, result.sha);
+
+  return { url: result.path, path: result.path, displayUrl };
+}
+
+/**
+ * Sign a just-uploaded blob at the draft tier, or null if that is not possible.
+ *
+ * Draft because only a writer ever sees this URL, and a writer is by definition
+ * looking at unpublished content. Every failure path returns null: an upload
+ * that succeeded must not be reported as failed because a URL could not be
+ * minted for it.
+ */
+async function signUploadedAsset(
+  page: PageWithContentRepo,
+  path: string,
+  sha: string
+): Promise<string | null> {
+  const origin = process.env.CONTENT_DELIVERY_ORIGIN;
+  const master = process.env.CONTENT_SIGNING_SECRET;
+  if (!origin || !master) return null;
+
+  const classroom = page.classroom as { id?: unknown; content_key_version?: unknown };
+  if (typeof classroom.id !== 'string') return null;
+
+  const name = path.slice(path.lastIndexOf('/') + 1);
+  const dot = name.lastIndexOf('.');
+  if (dot <= 0 || dot === name.length - 1) return null;
+
+  try {
+    return await signBlobUrl(
+      origin,
+      {
+        master,
+        classroomId: classroom.id,
+        keyVersion:
+          typeof classroom.content_key_version === 'number' ? classroom.content_key_version : 0,
+        tier: 'draft',
+      },
+      { sha, ext: name.slice(dot + 1).toLowerCase() }
+    );
+  } catch (error) {
+    console.warn(
+      `[pageContent.uploadPageAsset] Could not sign ${path}:`,
+      error instanceof Error ? error.message : error
+    );
+    return null;
+  }
 }
 
 // ─── Blank page content ──────────────────────────────────────────────────────

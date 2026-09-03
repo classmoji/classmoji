@@ -10,6 +10,8 @@ import {
   type SitePageIndexEntry,
 } from './tenant.server.ts';
 import type { PageLinkResolver } from './viewerSchema.server.ts';
+import { collectBlockAssetRefs, mapBlockAssetRefs } from '@classmoji/utils';
+import { assetResolveContext } from '~/utils/assetRefs.server.ts';
 
 /**
  * The shared "render one page of this site" path.
@@ -112,10 +114,21 @@ export async function renderPageForViewer(
     throw error;
   }
 
+  // Render-time URL resolution, public tier: an anonymous reader gets the
+  // longest-lived signature the layer mints. The rewrite runs on a CLONE —
+  // `loadSitePageContent` caches its blocks for five minutes, and writing
+  // signed URLs into that cache would hand the next reader this reader's
+  // (expiring, tier-specific) URLs.
+  const assetCtx = assetResolveContext(
+    context.site.classroom as unknown as Parameters<typeof assetResolveContext>[0],
+    'public'
+  );
+  const resolvedBlocks = await resolveSiteAssets(assetCtx, content.blocks);
+
   let rendered;
   try {
     rendered = await renderSitePage({
-      blocks: content.blocks,
+      blocks: resolvedBlocks,
       resolveLink,
       // The site's setting, not the viewer's: `/schedule` 404s for everyone
       // when it is off, so a directory tile pointing at it is dropped.
@@ -131,17 +144,53 @@ export async function renderPageForViewer(
 
   // Cover image: the JSON wrapper's metadata wins, with the legacy DB columns
   // as a fallback for pages saved before covers moved into content.json.
-  const coverImage =
+  const rawCover =
     content.coverImage ||
     (page.header_image_url
       ? { url: page.header_image_url, position: page.header_image_position ?? 50 }
       : null);
+
+  // The cover is markup this app renders itself, so it takes the signed URL
+  // directly rather than going through the block rewrite.
+  const coverImage =
+    rawCover && assetCtx
+      ? {
+          ...rawCover,
+          url: await ClassmojiService.contentDelivery.resolveAssetUrl(assetCtx, rawCover.url),
+        }
+      : rawCover;
 
   return {
     title: page.title || 'Untitled',
     html: siteArticleWrapper(rendered.html),
     coverImage,
   };
+}
+
+/**
+ * Resolve a document's asset references for the public site.
+ *
+ * Failure is not fatal: a resolve that throws leaves the ORIGINAL blocks, which
+ * render through the legacy URLs. A site that shows images from the old path is
+ * strictly better than a 503, and this is the one surface with anonymous
+ * readers and a shared cache in front of it.
+ */
+async function resolveSiteAssets(
+  ctx: ReturnType<typeof assetResolveContext>,
+  blocks: unknown[]
+): Promise<unknown[]> {
+  if (!ctx) return blocks;
+
+  const refs = collectBlockAssetRefs(blocks);
+  if (refs.length === 0) return blocks;
+
+  try {
+    const resolved = await ClassmojiService.contentDelivery.resolveMany(ctx, refs);
+    return mapBlockAssetRefs(blocks, ref => resolved.get(ref) ?? ref);
+  } catch (error) {
+    console.warn('[site] asset resolution failed, rendering stored refs:', error);
+    return blocks;
+  }
 }
 
 function serviceUnavailable(request: Request): Response {
