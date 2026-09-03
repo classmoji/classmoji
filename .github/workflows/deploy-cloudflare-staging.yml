@@ -102,22 +102,37 @@ jobs:
             --silent --plain)"
           export INFISICAL_TOKEN
 
+          # stdout is the payload and never printed; stderr carries only the
+          # CLI's own messages, so it is safe to show and is the one place a
+          # silent-but-successful export explains itself.
+          EXPORT_STDERR="$(mktemp)"
           infisical export \
             --env=sta \
             --path=/content-worker \
             --projectId="$INFISICAL_PROJECT_ID" \
-            --format=json > "$RAW_SECRETS"
+            --format=json --silent > "$RAW_SECRETS" 2> "$EXPORT_STDERR" || {
+              echo "::error::infisical export failed:"; cat "$EXPORT_STDERR"; exit 1; }
+          [ -s "$EXPORT_STDERR" ] && { echo "infisical export stderr:"; cat "$EXPORT_STDERR"; }
+          rm -f "$EXPORT_STDERR"
 
           node --input-type=module -e '
             import { readFileSync, writeFileSync } from "node:fs";
             const [raw, out] = process.argv.slice(2);
             const expected = ["CONTENT_SIGNING_SECRET", "CONTENT_WORKER_SHARED_SECRET"];
 
+            const text = readFileSync(raw, "utf8");
+            // Tolerate anything the CLI prints ahead of the payload: parse from
+            // the first JSON opener onwards.
+            const start = Math.min(...["[", "{"].map(c => text.indexOf(c)).filter(i => i >= 0));
             let parsed;
             try {
-              parsed = JSON.parse(readFileSync(raw, "utf8"));
-            } catch {
-              console.error("::error::Infisical export was not valid JSON.");
+              if (!Number.isFinite(start)) throw new Error("no JSON opener");
+              parsed = JSON.parse(text.slice(start));
+            } catch (error) {
+              // Diagnose without disclosing: length, shape, and the first line
+              // with any token long enough to be a value masked.
+              const head = text.split("\n")[0].slice(0, 80).replace(/\S{12,}/g, "<redacted>");
+              console.error(`::error::Infisical export was not valid JSON (${text.length} bytes, ${error.message}). First line: ${JSON.stringify(head)}`);
               process.exit(1);
             }
 
