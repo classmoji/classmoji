@@ -1,5 +1,6 @@
 import { graceFor, nowSeconds } from './bucket.ts';
 import {
+  BLOB_QUERY_KEYS,
   SCHEME_SEGMENTS,
   SCHEME_SEGMENT_PATTERN,
   blobCanonicalString,
@@ -34,6 +35,9 @@ const fail = (reason: VerifyFailure): { ok: false; reason: VerifyFailure } => ({
   reason,
 });
 
+/** Anything still percent-encoded after one decode. */
+const PERCENT_ESCAPE = /%[0-9a-fA-F]{2}/;
+
 function toUrl(url: string | URL): URL | null {
   if (url instanceof URL) return url;
   try {
@@ -55,6 +59,21 @@ function parseNonNegativeInt(value: string | null): number | null {
   if (value === null || !/^(0|[1-9][0-9]*)$/.test(value)) return null;
   const parsed = Number(value);
   return Number.isSafeInteger(parsed) ? parsed : null;
+}
+
+/**
+ * Every query key must be signed and appear once. An unknown or repeated key
+ * means somebody appended something the signature does not cover - and
+ * `searchParams.get` would silently hand back only the first of a repeated pair.
+ */
+function queryKeysOk(url: URL, allowed: readonly string[]): boolean {
+  const seen = new Set<string>();
+  for (const key of url.searchParams.keys()) {
+    if (!allowed.includes(key)) return false;
+    if (seen.has(key)) return false;
+    seen.add(key);
+  }
+  return true;
 }
 
 interface PolicyFields {
@@ -97,8 +116,44 @@ function parseTransform(url: URL): Transform | null | undefined {
   return transform;
 }
 
-function parseBlob(url: URL, classroomId: string, segments: string[]): ParseResult {
+/**
+ * Decode and validate the path under a signed theme folder.
+ *
+ * Exported because the guarantee matters to callers that resolve these paths
+ * themselves: the result is decoded exactly once, has no empty, dot, or
+ * dot-dot segment, no separator or control character, and - crucially - nothing
+ * still percent-encoded, so a second decode downstream cannot resurrect `../`
+ * out of `%252e%252e%252f`. Returns null when the path is unusable.
+ *
+ * The cost is that a file whose real name contains a percent escape sequence
+ * (`report%2Bdraft.png`) is refused rather than served.
+ */
+export function normalizeRelPath(segments: string[]): string | null {
+  let rest = segments;
+  // A signed theme base ends in a slash; that single empty tail is the folder.
+  if (rest.length > 0 && rest[rest.length - 1] === '') rest = rest.slice(0, -1);
+
+  const decoded: string[] = [];
+  for (const segment of rest) {
+    if (segment === '') return null;
+    const part = decodeSegment(segment);
+    if (part === null) return null;
+    if (part === '' || part === '.' || part === '..') return null;
+    if (PERCENT_ESCAPE.test(part)) return null;
+    if (part.includes('/') || part.includes('\\')) return null;
+    for (const char of part) {
+      const code = char.codePointAt(0) ?? 0;
+      if (code < 0x20 || code === 0x7f) return null;
+    }
+    decoded.push(part);
+  }
+
+  return decoded.join('/');
+}
+
+function parseBlob(url: URL, host: string, classroomId: string, segments: string[]): ParseResult {
   if (segments.length !== 4) return fail('malformed');
+  if (!queryKeysOk(url, BLOB_QUERY_KEYS)) return fail('malformed');
 
   const file = decodeSegment(segments[3]);
   if (file === null) return fail('malformed');
@@ -120,40 +175,15 @@ function parseBlob(url: URL, classroomId: string, segments: string[]): ParseResu
   const transform = parseTransform(url);
   if (transform === null) return fail('malformed');
 
-  const value: ParsedBlobUrl = { kind: 'blob', classroomId, sha, ext, ...policy };
+  const value: ParsedBlobUrl = { kind: 'blob', host, classroomId, sha, ext, ...policy };
   if (transform) value.transform = transform;
   return { ok: true, value };
 }
 
-function parseRelPath(segments: string[]): string | null {
-  let rest = segments;
-  let trailingSlash = false;
-  if (rest.length > 0 && rest[rest.length - 1] === '') {
-    rest = rest.slice(0, -1);
-    trailingSlash = true;
-  }
-
-  const decoded: string[] = [];
-  for (const segment of rest) {
-    if (segment === '') return null;
-    const part = decodeSegment(segment);
-    if (part === null) return null;
-    if (part === '.' || part === '..') return null;
-    // A decoded separator would let an encoded '..' slip past the checks above.
-    if (part.includes('/') || part.includes('\\')) return null;
-    for (const char of part) {
-      const code = char.codePointAt(0) ?? 0;
-      if (code < 0x20 || code === 0x7f) return null;
-    }
-    decoded.push(part);
-  }
-
-  if (decoded.length === 0) return '';
-  return decoded.join('/') + (trailingSlash ? '/' : '');
-}
-
-function parseTheme(classroomId: string, segments: string[]): ParseResult {
+function parseTheme(url: URL, host: string, classroomId: string, segments: string[]): ParseResult {
   if (segments.length < 6) return fail('malformed');
+  // Nothing in a theme URL is carried in the query, so nothing may appear there.
+  if (!queryKeysOk(url, [])) return fail('malformed');
 
   const theme = decodeSegment(segments[3]);
   if (theme === null || !isTheme(theme)) return fail('malformed');
@@ -166,16 +196,27 @@ function parseTheme(classroomId: string, segments: string[]): ParseResult {
   const policy = readPolicy(parts[0], parts[1], parts[2], parts[3]);
   if (!policy) return fail('malformed');
 
-  const relPath = parseRelPath(segments.slice(6));
+  const relPath = normalizeRelPath(segments.slice(6));
   if (relPath === null) return fail('malformed');
 
-  const value: ParsedThemeUrl = { kind: 'theme', classroomId, theme, treeSha, ...policy, relPath };
+  const value: ParsedThemeUrl = {
+    kind: 'theme',
+    host,
+    classroomId,
+    theme,
+    treeSha,
+    ...policy,
+    relPath,
+  };
   return { ok: true, value };
 }
 
 function parseInternal(url: string | URL): ParseResult {
   const parsedUrl = toUrl(url);
   if (!parsedUrl) return fail('malformed');
+
+  const host = parsedUrl.host.toLowerCase();
+  if (!host) return fail('malformed');
 
   const segments = parsedUrl.pathname.split('/');
   if (segments.shift() !== '') return fail('malformed');
@@ -189,13 +230,13 @@ function parseInternal(url: string | URL): ParseResult {
   const classroomId = segments[1];
   if (!isClassroomId(classroomId)) return fail('malformed');
 
-  if (segments[2] === 'blob') return parseBlob(parsedUrl, classroomId, segments);
-  if (segments[2] === 'theme') return parseTheme(classroomId, segments);
+  if (segments[2] === 'blob') return parseBlob(parsedUrl, host, classroomId, segments);
+  if (segments[2] === 'theme') return parseTheme(parsedUrl, host, classroomId, segments);
   return fail('malformed');
 }
 
 /**
- * Structural parse only — no key material, no signature check. Returns null on
+ * Structural parse only - no key material, no signature check. Returns null on
  * anything that is not a well-formed content URL of a supported version.
  */
 export function parseContentUrl(url: string | URL): ParsedContentUrl | null {
@@ -203,7 +244,7 @@ export function parseContentUrl(url: string | URL): ParsedContentUrl | null {
   return result.ok ? result.value : null;
 }
 
-/** null when the signature is still within its tier's grace window. */
+/** null when the signature is past its tier's grace window. */
 function expiryFailure(tier: Tier, exp: number, now: number): { inGrace: boolean } | null {
   const seconds = Math.floor(now);
   if (seconds <= exp) return { inGrace: false };
@@ -211,6 +252,7 @@ function expiryFailure(tier: Tier, exp: number, now: number): { inGrace: boolean
   return null;
 }
 
+/** Constant-time by construction: the comparison happens inside Web Crypto. */
 async function checkSignature(
   master: string,
   parsed: ParsedContentUrl,
@@ -230,6 +272,7 @@ async function verifyParsedBlob(
   if (!signature) return fail('malformed');
 
   const canonical = blobCanonicalString({
+    host: parsed.host,
     classroomId: parsed.classroomId,
     sha: parsed.sha,
     ext: parsed.ext,
@@ -267,6 +310,7 @@ async function verifyParsedTheme(
   if (!signature) return fail('malformed');
 
   const canonical = themeCanonicalString({
+    host: parsed.host,
     classroomId: parsed.classroomId,
     theme: parsed.theme,
     treeSha: parsed.treeSha,
@@ -331,9 +375,14 @@ export async function verifyContentUrl(
  * Draft URLs are never stored anywhere. Everything else is immutable for the
  * life of its signature: the content is sha-addressed and the expiry is baked
  * into the URL, so a cache entry can live exactly that long.
+ *
+ * Past `exp` - i.e. inside grace - the URL is still being served but must not
+ * be pinned as immutable, so it gets a short positive TTL instead. A zero
+ * max-age would send every cache back to the origin at once.
  */
 export function cacheControlFor(tier: Tier, exp: number, now: number): string {
   if (tier === 'draft') return 'no-store';
-  const maxAge = Math.max(0, Math.floor(exp) - Math.floor(now));
+  const maxAge = Math.floor(exp) - Math.floor(now);
+  if (maxAge <= 0) return 'public, max-age=60';
   return `public, max-age=${maxAge}, immutable`;
 }

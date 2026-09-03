@@ -13,16 +13,19 @@ export type {
 } from './types.ts';
 
 export {
+  BLOB_QUERY_KEYS,
   CANONICAL_VERSION,
   SCHEME_SEGMENTS,
   TIERS,
   TRANSFORM_FORMATS,
   TRANSFORM_WIDTHS,
   blobCanonicalString,
+  hostOf,
   themeCanonicalString,
 } from './canonical.ts';
 
 export {
+  MIN_REMAINING_SECONDS,
   TIER_POLICY,
   bucketExpiry,
   bucketOffset,
@@ -38,6 +41,7 @@ export { signBlobUrl, signSrcSet, signThemeBase } from './urls.ts';
 
 export {
   cacheControlFor,
+  normalizeRelPath,
   parseContentUrl,
   verifyBlobUrl,
   verifyContentUrl,

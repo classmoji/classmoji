@@ -5,6 +5,7 @@ import { signBlobUrl, signThemeBase } from '../urls.ts';
 import type { Tier } from '../types.ts';
 import {
   cacheControlFor,
+  normalizeRelPath,
   parseContentUrl,
   verifyBlobUrl,
   verifyContentUrl,
@@ -14,9 +15,11 @@ import {
   CLASSROOM_A,
   CLASSROOM_B,
   MASTER,
+  HOST,
   NOW,
   ORIGIN,
   OTHER_MASTER,
+  OTHER_ORIGIN,
   OTHER_SHA,
   SHA,
   TREE_SHA,
@@ -339,7 +342,153 @@ describe('cacheControlFor', () => {
     );
   });
 
-  it('floors at zero once expired', () => {
-    expect(cacheControlFor('public', NOW - 10, NOW)).toBe('public, max-age=0, immutable');
+  it('gives a short positive TTL inside grace, never immutable', () => {
+    expect(cacheControlFor('public', NOW - 10, NOW)).toBe('public, max-age=60');
+    expect(cacheControlFor('enrolled', NOW, NOW)).toBe('public, max-age=60');
+    expect(cacheControlFor('draft', NOW - 10, NOW)).toBe('no-store');
+  });
+});
+
+describe('host binding', () => {
+  it('rejects a URL replayed against another host', async () => {
+    const url = await blob('public');
+    expect(await verifyBlobUrl(MASTER, url.replace(ORIGIN, OTHER_ORIGIN), NOW)).toEqual({
+      ok: false,
+      reason: 'bad-signature',
+    });
+
+    const base = await themeBase('public');
+    expect(
+      await verifyThemeUrl(MASTER, `${base.replace(ORIGIN, OTHER_ORIGIN)}theme.css`, NOW)
+    ).toEqual({ ok: false, reason: 'bad-signature' });
+  });
+
+  it('rejects the same host on a different port', async () => {
+    const url = await blob('public');
+    expect(await verifyBlobUrl(MASTER, url.replace(HOST, `${HOST}:8443`), NOW)).toEqual({
+      ok: false,
+      reason: 'bad-signature',
+    });
+  });
+
+  it('does not distinguish http from https on the same host', async () => {
+    const url = await blob('public');
+    const overHttp = await verifyBlobUrl(MASTER, url.replace('https://', 'http://'), NOW);
+    expect(overHttp.ok).toBe(true);
+  });
+
+  it('is case-insensitive about the host', async () => {
+    const url = await blob('public');
+    const shouted = await verifyBlobUrl(MASTER, url.replace(HOST, HOST.toUpperCase()), NOW);
+    expect(shouted.ok).toBe(true);
+  });
+});
+
+describe('query parameters', () => {
+  it('rejects a repeated key', async () => {
+    const withWidth = await blob('public', { w: 800 });
+    expect(await verifyBlobUrl(MASTER, `${withWidth}&w=2560`, NOW)).toEqual({
+      ok: false,
+      reason: 'malformed',
+    });
+
+    const url = await blob('public');
+    expect(await verifyBlobUrl(MASTER, `${url}&sig=AAAA`, NOW)).toEqual({
+      ok: false,
+      reason: 'malformed',
+    });
+  });
+
+  it('rejects an unsigned extra key', async () => {
+    const url = await blob('public');
+    for (const extra of ['attacker=1', 'utm_source=x', 'W=800']) {
+      expect(await verifyBlobUrl(MASTER, `${url}&${extra}`, NOW)).toEqual({
+        ok: false,
+        reason: 'malformed',
+      });
+    }
+  });
+
+  it('accepts exactly the allowlist', async () => {
+    const url = await blob('public', { w: 1600, fmt: 'webp' });
+    expect([...new URL(url).searchParams.keys()].sort()).toEqual([
+      'exp',
+      'fmt',
+      'p',
+      'sig',
+      'v',
+      'w',
+    ]);
+    expect((await verifyBlobUrl(MASTER, url, NOW)).ok).toBe(true);
+  });
+
+  it('rejects any query at all on a theme URL', async () => {
+    const base = await themeBase('public');
+    expect((await verifyThemeUrl(MASTER, `${base}theme.css`, NOW)).ok).toBe(true);
+    for (const query of ['?x=1', '?p=draft', '?sig=AAAA']) {
+      expect(await verifyThemeUrl(MASTER, `${base}theme.css${query}`, NOW)).toEqual({
+        ok: false,
+        reason: 'malformed',
+      });
+    }
+  });
+});
+
+describe('relPath decoding', () => {
+  it('rejects a double-encoded traversal', async () => {
+    const base = await themeBase('public');
+    for (const relPath of [
+      '%252e%252e%252fsecret.css',
+      'css/%252e%252e%252f%252e%252e%252fsecret.css',
+      '%252e%252e',
+    ]) {
+      expect(await verifyThemeUrl(MASTER, `${base}${relPath}`, NOW)).toEqual({
+        ok: false,
+        reason: 'malformed',
+      });
+    }
+  });
+
+  it('rejects an encoded separator, backslash, or NUL', async () => {
+    const base = await themeBase('public');
+    for (const relPath of ['a%5c..%5cb.css', 'a%2fb.css', 'theme%00.css']) {
+      expect(await verifyThemeUrl(MASTER, `${base}${relPath}`, NOW)).toEqual({
+        ok: false,
+        reason: 'malformed',
+      });
+    }
+  });
+
+  it('collapses a singly-encoded dot segment inside the folder instead of escaping', async () => {
+    const base = await themeBase('public');
+    const result = await verifyThemeUrl(MASTER, `${base}css/%2e%2e/theme.css`, NOW);
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.relPath).toBe('theme.css');
+      expect(result.relPath).not.toContain('..');
+    }
+  });
+
+  it('guards segments that never went through URL normalization', () => {
+    expect(normalizeRelPath([])).toBe('');
+    expect(normalizeRelPath([''])).toBe('');
+    expect(normalizeRelPath(['css', 'main.css'])).toBe('css/main.css');
+    expect(normalizeRelPath(['css', ''])).toBe('css');
+    expect(normalizeRelPath(['hero%20shot.png'])).toBe('hero shot.png');
+
+    for (const segments of [
+      ['..'],
+      ['.'],
+      ['a', '..', 'b'],
+      ['', 'css'],
+      ['a', '', 'b'],
+      ['%2e%2e'],
+      ['%252e%252e'],
+      ['a%5cb'],
+      ['a%2fb'],
+      ['a%00b'],
+    ]) {
+      expect(normalizeRelPath(segments)).toBeNull();
+    }
   });
 });

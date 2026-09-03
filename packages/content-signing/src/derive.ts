@@ -6,8 +6,17 @@ const KEY_CACHE_LIMIT = 256;
 /** `master NUL classroomId|keyVersion` -> derived key. Insertion-ordered LRU. */
 const keyCache = new Map<string, Promise<CryptoKey>>();
 
+/**
+ * Node's DOM lib declares `crypto` with `var` and @cloudflare/workers-types with
+ * `const`, and only the former lands on `typeof globalThis`. Reading it
+ * structurally is the one spelling that typechecks under both.
+ */
+interface WebCryptoGlobal {
+  crypto?: { subtle?: SubtleCrypto };
+}
+
 function subtle(): SubtleCrypto {
-  const cryptoRef = globalThis.crypto;
+  const cryptoRef = (globalThis as unknown as WebCryptoGlobal).crypto;
   if (!cryptoRef?.subtle) {
     throw new Error('content-signing: Web Crypto (globalThis.crypto.subtle) is unavailable');
   }
@@ -54,10 +63,14 @@ export function deriveKey(
     return cached;
   }
 
-  const pending = deriveKeyUncached(master, classroomId, keyVersion).catch(error => {
-    keyCache.delete(cacheKey);
-    throw error;
-  });
+  // Only evict on failure if this promise is still the cached one: a later
+  // successful derive for the same key must not be dropped by an earlier reject.
+  const pending: Promise<CryptoKey> = deriveKeyUncached(master, classroomId, keyVersion).catch(
+    error => {
+      if (keyCache.get(cacheKey) === pending) keyCache.delete(cacheKey);
+      throw error;
+    }
+  );
 
   if (keyCache.size >= KEY_CACHE_LIMIT) {
     const oldest = keyCache.keys().next();

@@ -4,6 +4,8 @@ export const MASTER = 'master-secret-for-tests-only';
 export const OTHER_MASTER = 'a-different-master-secret';
 
 export const ORIGIN = 'https://cdn.classmoji.test';
+export const HOST = 'cdn.classmoji.test';
+export const OTHER_ORIGIN = 'https://other.classmoji.test';
 
 export const CLASSROOM_A = '11111111-2222-4333-8444-555555555555';
 export const CLASSROOM_B = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee';

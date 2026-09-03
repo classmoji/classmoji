@@ -20,10 +20,14 @@ export const TIERS: readonly Tier[] = ['public', 'enrolled', 'draft'];
 export const TRANSFORM_WIDTHS: readonly TransformWidth[] = [800, 1600, 2560];
 export const TRANSFORM_FORMATS: readonly TransformFormat[] = ['webp', 'avif', 'auto'];
 
+/** Query keys a blob URL may carry. Anything else is unsigned, so it is refused. */
+export const BLOB_QUERY_KEYS: readonly string[] = ['p', 'v', 'exp', 'sig', 'w', 'fmt'];
+
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const GIT_SHA_PATTERN = /^[0-9a-f]{40}$/;
 const EXT_PATTERN = /^[a-z0-9]{1,8}$/;
-const THEME_PATTERN = /^[a-z0-9._-]+$/;
+// Leading dots are excluded so a theme can never name a dotfile directory.
+const THEME_PATTERN = /^[a-z0-9][a-z0-9._-]*$/;
 
 export function isClassroomId(value: unknown): value is string {
   return typeof value === 'string' && UUID_PATTERN.test(value);
@@ -54,11 +58,11 @@ export function isTransformFormat(value: unknown): value is TransformFormat {
 }
 
 export function isUnixSeconds(value: unknown): value is number {
-  return typeof value === 'number' && Number.isInteger(value) && value >= 0;
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
 }
 
 export function isKeyVersion(value: unknown): value is number {
-  return typeof value === 'number' && Number.isInteger(value) && value >= 0;
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
 }
 
 function assert(condition: boolean, message: string): void {
@@ -77,7 +81,18 @@ export function assertTier(value: Tier): void {
 }
 
 export function assertKeyVersion(value: number): void {
-  assert(isKeyVersion(value), `content-signing: keyVersion must be a non-negative integer`);
+  assert(
+    isKeyVersion(value),
+    `content-signing: keyVersion must be a non-negative safe integer (got ${value})`
+  );
+}
+
+/** Mint-side guard: a NaN or fractional clock would sign an expiry nobody can verify. */
+export function assertNow(value: number): void {
+  assert(
+    isUnixSeconds(value),
+    `content-signing: now must be a non-negative integer of unix seconds (got ${value})`
+  );
 }
 
 export function assertTransform(transform: Transform | undefined): void {
@@ -93,7 +108,29 @@ export function assertTransform(transform: Transform | undefined): void {
   }
 }
 
+/**
+ * Host a URL is bound to: lowercased, port included. Signatures cover it, so a
+ * URL minted for one host cannot be replayed against another.
+ *
+ * Scheme is deliberately NOT covered - http and https on the same host share a
+ * signature.
+ */
+export function hostOf(origin: string | URL): string {
+  if (origin instanceof URL) return origin.host.toLowerCase();
+  let parsed: URL;
+  try {
+    parsed = new URL(origin);
+  } catch {
+    throw new TypeError(`content-signing: origin must be an absolute URL (got ${origin})`);
+  }
+  if (!parsed.host) {
+    throw new TypeError(`content-signing: origin must carry a host (got ${origin})`);
+  }
+  return parsed.host.toLowerCase();
+}
+
 export interface BlobCanonicalFields {
+  host: string;
   classroomId: string;
   sha: string;
   ext: string;
@@ -104,6 +141,7 @@ export interface BlobCanonicalFields {
 }
 
 export interface ThemeCanonicalFields {
+  host: string;
   classroomId: string;
   theme: string;
   treeSha: string;
@@ -112,20 +150,40 @@ export interface ThemeCanonicalFields {
   exp: number;
 }
 
-/** `cm1|blob|{classroomId}|{sha}|{ext}|{p}|{v}|{exp}|{w or ''}|{fmt or ''}` */
+/** `cm1|blob|{host}|{classroomId}|{sha}|{ext}|{p}|{v}|{exp}|{w or ''}|{fmt or ''}` */
 export function blobCanonicalString(fields: BlobCanonicalFields): string {
-  const { classroomId, sha, ext, tier, keyVersion, exp, transform } = fields;
+  const { host, classroomId, sha, ext, tier, keyVersion, exp, transform } = fields;
   const w = transform?.w === undefined ? '' : String(transform.w);
   const fmt = transform?.fmt ?? '';
-  return [CANONICAL_VERSION, 'blob', classroomId, sha, ext, tier, keyVersion, exp, w, fmt].join(
-    '|'
-  );
+  return [
+    CANONICAL_VERSION,
+    'blob',
+    host,
+    classroomId,
+    sha,
+    ext,
+    tier,
+    keyVersion,
+    exp,
+    w,
+    fmt,
+  ].join('|');
 }
 
-/** `cm1|theme|{classroomId}|{theme}|{treeSha}|{p}|{v}|{exp}` */
+/** `cm1|theme|{host}|{classroomId}|{theme}|{treeSha}|{p}|{v}|{exp}` */
 export function themeCanonicalString(fields: ThemeCanonicalFields): string {
-  const { classroomId, theme, treeSha, tier, keyVersion, exp } = fields;
-  return [CANONICAL_VERSION, 'theme', classroomId, theme, treeSha, tier, keyVersion, exp].join('|');
+  const { host, classroomId, theme, treeSha, tier, keyVersion, exp } = fields;
+  return [
+    CANONICAL_VERSION,
+    'theme',
+    host,
+    classroomId,
+    theme,
+    treeSha,
+    tier,
+    keyVersion,
+    exp,
+  ].join('|');
 }
 
 const encoder = new TextEncoder();
