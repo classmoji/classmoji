@@ -108,6 +108,22 @@ jobs:
             --projectId="$INFISICAL_PROJECT_ID" \
             --format=json > "$RAW_SECRETS"
 
+          infisical --version
+
+          # Keys only, never values: what this identity can actually see.
+          keys_visible() {
+            infisical export --env=sta --path="$1" --projectId="$INFISICAL_PROJECT_ID" \
+              --format=dotenv --silent 2>/dev/null | cut -d= -f1 | sed 's/^/    /'
+          }
+          if [ ! -s "$RAW_SECRETS" ]; then
+            echo "::warning::Export returned an empty payload. Keys visible to this identity:"
+            echo "  /content-worker:"; keys_visible /content-worker
+            echo "  /:"; keys_visible /
+            echo "  debug log (stderr) for the JSON export:"
+            infisical export --env=sta --path=/content-worker --projectId="$INFISICAL_PROJECT_ID" \
+              --format=json --log-level debug 2>&1 >/dev/null | tail -20 | sed 's/^/    /' || true
+          fi
+
           node --input-type=module -e '
             import { readFileSync, writeFileSync } from "node:fs";
             const [raw, out] = process.argv.slice(2);
