@@ -15,8 +15,11 @@
 
 import { randomUUID } from 'crypto';
 import getPrisma from '@classmoji/database';
+import { ClassmojiService } from '@classmoji/services';
 import { requireClassroomStaff } from '@classmoji/auth/server';
+import { cloudinaryVideoSelection } from '@classmoji/utils';
 import { processZipImport } from '~/utils/slidesComImporter.server';
+import { isCloudinaryConfigured } from '~/utils/cloudinaryService.server';
 import { importStreamManager } from '~/utils/importStreamManager';
 
 // Max file size for ZIP uploads (in bytes)
@@ -38,7 +41,10 @@ export const action = async ({ request }: { request: Request }) => {
   try {
     const cloudinaryVideoPathsRaw = formData.get('cloudinaryVideoPaths') as string | null;
     if (cloudinaryVideoPathsRaw) {
-      cloudinaryVideoPaths = JSON.parse(cloudinaryVideoPathsRaw);
+      const parsed = JSON.parse(cloudinaryVideoPathsRaw);
+      // Client-supplied: valid JSON is not necessarily the array everything
+      // downstream assumes.
+      cloudinaryVideoPaths = Array.isArray(parsed) ? parsed.filter(p => typeof p === 'string') : [];
     }
   } catch (e: unknown) {
     console.warn('Failed to parse cloudinaryVideoPaths:', e);
@@ -102,6 +108,34 @@ export const action = async ({ request }: { request: Request }) => {
     return Response.json(
       { error: 'Classroom content namespace not configured' },
       { status: 400 }
+    );
+  }
+
+  // Cloudinary video hosting is a Pro feature — Cloudinary bills per account,
+  // and the form field below is client-supplied, so this is the enforcement
+  // point rather than the import page's UI.
+  //
+  // A non-Pro classroom DEGRADES instead of being refused: an empty selection
+  // is exactly the state `slidesComImporter.server.ts` already handles when
+  // Cloudinary is unconfigured, so every video is committed to the content repo
+  // and the import still succeeds. Refusing here would break imports that
+  // worked yesterday for a reason the uploader cannot fix mid-upload.
+  //
+  // Reads the tier through `subscription.getProStateForClassroomId`, the single
+  // owner of what "Pro" means (it is what `assertProTier` calls too) — a second
+  // copy of the rule here is how a lapsed subscription keeps one surface open
+  // after it has closed in another.
+  const { isPro } = await ClassmojiService.subscription.getProStateForClassroomId(classroom.id);
+  const requestedCloudinaryVideoPaths = cloudinaryVideoPaths;
+  cloudinaryVideoPaths = cloudinaryVideoSelection({
+    isPro,
+    configured: isCloudinaryConfigured(),
+    requested: requestedCloudinaryVideoPaths,
+  });
+
+  if (!isPro && requestedCloudinaryVideoPaths.length > 0) {
+    console.info(
+      `[import.start] Classroom ${classroomSlug} is not Pro — ${requestedCloudinaryVideoPaths.length} video(s) requested for Cloudinary will be stored in the content repo instead`
     );
   }
 

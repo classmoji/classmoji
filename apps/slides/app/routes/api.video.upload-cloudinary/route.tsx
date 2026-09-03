@@ -15,6 +15,7 @@
 
 import { v2 as cloudinary } from 'cloudinary';
 import getPrisma from '@classmoji/database';
+import { ClassmojiService } from '@classmoji/services';
 import { ContentService } from '@classmoji/content';
 import { assertSlideAccess } from '@classmoji/auth/server';
 import { fetchContent, getMimeType } from '~/utils/contentProxy';
@@ -59,6 +60,31 @@ export const action = async ({ request }: { request: Request }) => {
       slide,
       accessType: 'edit',
     });
+
+    // Cloudinary video hosting is a Pro feature — Cloudinary bills per account.
+    //
+    // `assertSlideAccess({ accessType: 'edit' })` above only proves the caller
+    // is staff on THIS slide's classroom; it says nothing about the plan, so
+    // without this every classroom could push video into a paid account.
+    //
+    // Unlike the slides IMPORT path, which silently degrades to the content
+    // repo, this is an explicit "Upload to Cloudinary" click: refuse it and say
+    // why, rather than appearing to succeed while doing something else.
+    //
+    // Placed BEFORE the credential config, the upload, and the GitHub delete
+    // below — the delete is destructive and irreversible, so ordering is the
+    // whole point. Fails closed: if the tier lookup throws, the catch at the
+    // bottom returns 500 and nothing has been uploaded or deleted yet.
+    const { isPro } = await ClassmojiService.subscription.getProStateForClassroomId(
+      slide.classroom_id
+    );
+
+    if (!isPro) {
+      return new Response(JSON.stringify({ error: 'Cloudinary video hosting is a Pro feature' }), {
+        status: 403,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }
 
     // Configure Cloudinary from environment variables
     const cloudName = process.env.CLOUDINARY_CLOUD_NAME;
