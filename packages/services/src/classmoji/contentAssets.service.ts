@@ -91,6 +91,8 @@ async function loadClassroomRaw(classroomId: string) {
   });
 }
 
+type ClassroomRecord = Awaited<ReturnType<typeof loadClassroomRaw>>;
+
 /**
  * The classroom plus the two things a sync needs from it: which org, which repo.
  *
@@ -99,9 +101,7 @@ async function loadClassroomRaw(classroomId: string) {
  * configuration error at that point, not a branch worth threading through four
  * call sites.
  */
-async function resolveClassroom(classroomId: string): Promise<ResolvedClassroom> {
-  const classroom = await loadClassroomRaw(classroomId);
-
+function toResolvedClassroom(classroom: ClassroomRecord, classroomId: string): ResolvedClassroom {
   if (!classroom) {
     throw new Error(`[contentAssets] No such classroom: ${classroomId}`);
   }
@@ -120,15 +120,19 @@ async function resolveClassroom(classroomId: string): Promise<ResolvedClassroom>
   };
 }
 
+async function resolveClassroom(classroomId: string): Promise<ResolvedClassroom> {
+  return toResolvedClassroom(await loadClassroomRaw(classroomId), classroomId);
+}
+
 /**
  * Can the delivery layer serve this classroom at all?
  *
  * GitHub-only for now: `getTree` and `getInstallationToken` are implemented on
- * GitHubProvider, and the base-class stubs throw. Checked rather than caught so
- * an unsupported classroom costs one indexed read instead of a thrown API call.
+ * GitHubProvider, and the base-class stubs throw. A predicate over an
+ * already-loaded row rather than its own query, so a caller reads the classroom
+ * once and both this and `toResolvedClassroom` work from that one read.
  */
-async function isDeliverable(classroomId: string): Promise<boolean> {
-  const classroom = await loadClassroomRaw(classroomId);
+function isDeliverable(classroom: ClassroomRecord): boolean {
   return Boolean(
     classroom?.content_repo &&
     classroom.git_organization?.login &&
@@ -349,20 +353,29 @@ export async function syncContentAssets(
  * never arrived costs staleness bounded by `maxAgeMs`, not a permanently wrong
  * map.
  *
- * Returns null when it did nothing, so a caller can tell a no-op from a sync.
+ * NEVER THROWS — see the body. Returns null whenever no sync happened, whether
+ * because the map was fresh, the classroom is not served by this layer, or the
+ * refresh itself failed. A caller on a render path can therefore ignore the
+ * result entirely; one that cares only needs to know a non-null means the map
+ * was just rebuilt.
  */
 export async function ensureContentAssets(
   classroomId: string,
   { maxAgeMs }: { maxAgeMs: number }
 ): Promise<SyncContentAssetsResult | null> {
-  // Unlike syncContentAssets — which is called deliberately, and where a
-  // misconfigured classroom SHOULD be an error somebody sees — this one is
-  // meant to sit on a render path. A classroom the delivery layer cannot serve
-  // (GitLab-backed, the mock org behind an example classroom, or simply no
-  // content repo) must therefore be a quiet no-op: the page renders through
-  // the legacy path, which is exactly what it did before this existed.
-  // Throwing here would turn "unsupported" into a broken page on every load.
-  if (!(await isDeliverable(classroomId))) {
+  // THIS FUNCTION DOES NOT THROW. It is the one entry point meant to sit on a
+  // render path, so every way it can fail has to degrade to "the page renders
+  // through the legacy path" — which is exactly what it did before any of this
+  // existed. syncContentAssets keeps throwing, because it is called
+  // deliberately and its failures should reach somebody.
+  //
+  // Two separate failure classes, and both return the same null:
+  //
+  //   CONFIGURATION — GitLab-backed, the mock org behind an example classroom,
+  //   or simply no content repo. Known before any API call, so it is checked
+  //   rather than caught.
+  const classroom = await loadClassroomRaw(classroomId);
+  if (!isDeliverable(classroom)) {
     return null;
   }
 
@@ -376,7 +389,16 @@ export async function ensureContentAssets(
     return null;
   }
 
-  return syncContentAssets(classroomId, { full: true });
+  try {
+    //   RUNTIME — a GitHub 403 rate limit, a 5xx, a network blip. Not
+    //   predictable and not this caller's problem: the previous map is still in
+    //   the table and still usable, so a failed refresh should cost staleness,
+    //   never a broken page. Caught here and only here.
+    return await fullSync(toResolvedClassroom(classroom, classroomId));
+  } catch (error: unknown) {
+    console.warn(`[contentAssets] sync failed for ${classroomId}; serving stale/legacy:`, error);
+    return null;
+  }
 }
 
 /**

@@ -61,6 +61,13 @@ function secureCompare(a: string, b: string): boolean {
   return crypto.timingSafeEqual(digestA, digestB);
 }
 
+/**
+ * Classroom ids are `@default(uuid())`, so they are always lowercase v4. Pinned
+ * to lowercase deliberately: an uppercase variant would not match a stored id
+ * anyway, so accepting it would only trade this 400 for a 404 one query later.
+ */
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
 function json(body: unknown, status: number): Response {
   return new Response(JSON.stringify(body), {
     status,
@@ -110,6 +117,15 @@ export const action = async ({ request }: Route.ActionArgs) => {
 
   if (typeof classroomId !== 'string' || !classroomId) {
     return json({ error: 'classroomId is required' }, 400);
+  }
+
+  // Checked BEFORE the lookup, because Prisma does not treat a malformed uuid
+  // as "no such row" — it rejects the query, which would surface here as an
+  // unhandled 500 for what is plainly a bad request. Refusing on shape keeps
+  // the contract honest: 400 means the Worker sent something wrong, 404 means
+  // it sent something well-formed that does not exist.
+  if (!UUID_PATTERN.test(classroomId)) {
+    return json({ error: 'classroomId must be a uuid' }, 400);
   }
 
   const classroom = await ClassmojiService.classroom.findById(classroomId);
