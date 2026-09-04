@@ -5,6 +5,7 @@ import { assertSlideAccess } from '@classmoji/auth/server';
 import { SandpackRenderer } from '@classmoji/ui-components/sandpack';
 import RevealPresenter from '~/components/RevealPresenter';
 import { fetchContent } from '~/utils/contentProxy';
+import { deckDeliveryContext, resolveDeckDelivery } from '~/utils/deckDelivery.server';
 
 /**
  * Follow route - Audience sync view
@@ -43,7 +44,7 @@ export const loader = async ({
   }
 
   // Authorization: check view access (supports public slides, membership, and shareCode)
-  const { accessGrantedVia, canViewSpeakerNotes } = await assertSlideAccess({
+  const { accessGrantedVia, canEdit, canViewSpeakerNotes } = await assertSlideAccess({
     request,
     slideId,
     slide,
@@ -78,7 +79,17 @@ export const loader = async ({
   });
 
   if (contentResult) {
-    slideContent = contentResult.content as string;
+    // Same read-side delivery pass the deck viewer runs. A follower is usually
+    // a student or a shareCode guest, so the tier lands on `enrolled`/`public`
+    // rather than the staff `draft` bucket — `tierFor` decides, not this route.
+    const { html } = await resolveDeckDelivery(
+      contentResult.content as string,
+      deckDeliveryContext(slide, gitOrgLogin, repo, {
+        canEdit,
+        isPublicSite: slide.is_public,
+      })
+    );
+    slideContent = html;
 
     // Strip speaker notes from content if user doesn't have permission to view them
     // Followers are typically students/public who shouldn't see notes unless show_speaker_notes is enabled
