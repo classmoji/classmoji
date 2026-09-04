@@ -125,8 +125,12 @@ jobs:
       - uses: superfly/flyctl-actions/setup-flyctl@master
       - name: Deploy hook-station
         run: |
-          CONFIG=$(scripts/fly-autostop-config.sh apps/hook-station/fly.toml stop)
-          flyctl deploy --config "$CONFIG" --dockerfile apps/hook-station/Dockerfile --remote-only --app classmoji-hook-station-staging
+          # hook-station is the one staging app that must NOT scale to zero: a
+          # cold start takes ~20 s and GitHub gives a webhook delivery 10 s with
+          # no retry, so every push/issue event that arrived while it slept was
+          # lost. Deploy the production config as-is (auto_stop off, one machine
+          # always running; shared-cpu-1x, pennies).
+          flyctl deploy --config apps/hook-station/fly.toml --dockerfile apps/hook-station/Dockerfile --remote-only --app classmoji-hook-station-staging
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
 
