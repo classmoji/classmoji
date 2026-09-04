@@ -31,6 +31,17 @@ interface ServeOptions {
   sha: string;
   contentType: string;
   cacheControl: string;
+  /** HEAD: answer from R2 metadata when the object is there, and never buffer. */
+  head?: boolean;
+}
+
+function storedHeaders(object: R2Object, fallbackType: string, cacheControl: string): Headers {
+  const headers = contentHeaders(object.httpMetadata?.contentType ?? fallbackType, cacheControl);
+  headers.set('ETag', object.httpEtag);
+  // R2 knows the length without reading a byte, so there is no reason to make a
+  // client guess at download progress.
+  headers.set('Content-Length', String(object.size));
+  return headers;
 }
 
 function storedResponse(
@@ -38,9 +49,23 @@ function storedResponse(
   fallbackType: string,
   cacheControl: string
 ): Response {
-  const headers = contentHeaders(object.httpMetadata?.contentType ?? fallbackType, cacheControl);
-  headers.set('ETag', object.httpEtag);
-  return new Response(object.body, { headers });
+  return new Response(object.body, { headers: storedHeaders(object, fallbackType, cacheControl) });
+}
+
+/**
+ * A HEAD answered from R2's metadata alone — no bytes read, no origin touched.
+ * Returns null when the object is not there, so the caller can fall through to
+ * the full path (which will warm R2 for the HEAD after this one).
+ */
+async function storedHead(
+  env: Env,
+  key: string,
+  fallbackType: string,
+  cacheControl: string
+): Promise<Response | null> {
+  const object = await env.CACHE.head(key);
+  if (!object) return null;
+  return new Response(null, { headers: storedHeaders(object, fallbackType, cacheControl) });
 }
 
 /** The origin's own `Content-Length`, when it sent a usable one. */
@@ -62,7 +87,8 @@ function streamAndCache(
   key: string,
   body: ReadableStream<Uint8Array>,
   contentType: string,
-  cacheControl: string
+  cacheControl: string,
+  contentLength: number | null
 ): Response {
   const [toClient, toCache] = body.tee();
   ctx.waitUntil(
@@ -70,7 +96,11 @@ function streamAndCache(
       console.warn(`[content] failed to cache ${key}:`, error);
     })
   );
-  return new Response(toClient, { headers: contentHeaders(contentType, cacheControl) });
+  const headers = contentHeaders(contentType, cacheControl);
+  // Only ever forwarded, never computed: working it out would mean buffering
+  // the very stream this path exists to avoid buffering.
+  if (contentLength !== null) headers.set('Content-Length', String(contentLength));
+  return new Response(toClient, { headers });
 }
 
 /** One shape for both ways a source can be too large: declared, and counted. */
@@ -93,6 +123,12 @@ export async function serveBlobBySha(
   options: ServeOptions
 ): Promise<Response> {
   const key = blobKey(options.sha);
+
+  if (options.head) {
+    const head = await storedHead(env, key, options.contentType, options.cacheControl);
+    if (head) return head;
+  }
+
   const hit = await env.CACHE.get(key);
   if (hit) return storedResponse(hit, options.contentType, options.cacheControl);
 
@@ -121,7 +157,15 @@ export async function serveBlobBySha(
     return errorResponse(502, 'origin unavailable');
   }
 
-  return streamAndCache(env, ctx, key, response.body, options.contentType, options.cacheControl);
+  return streamAndCache(
+    env,
+    ctx,
+    key,
+    response.body,
+    options.contentType,
+    options.cacheControl,
+    declaredLength(response.headers)
+  );
 }
 
 /**
@@ -159,7 +203,15 @@ async function loadOriginalBytes(
   const declared = declaredLength(response.headers);
   if (declared !== null && declared > MAX_TRANSFORM_SOURCE_BYTES) {
     warnOversizedSource(options.sha, declared);
-    return streamAndCache(env, ctx, key, response.body, options.contentType, SHORT_CACHE_CONTROL);
+    return streamAndCache(
+      env,
+      ctx,
+      key,
+      response.body,
+      options.contentType,
+      SHORT_CACHE_CONTROL,
+      declared
+    );
   }
 
   const bytes = await readBounded(response.body, MAX_TRANSFORM_SOURCE_BYTES);
@@ -191,6 +243,11 @@ async function serveVariant(
 ): Promise<Response> {
   const format = negotiateFormat(verified.transform?.fmt, request.headers.get('Accept'));
   const key = variantKey(options.sha, width, format);
+
+  if (options.head) {
+    const head = await storedHead(env, key, mediaTypeFor(format), options.cacheControl);
+    if (head) return head;
+  }
 
   const hit = await env.CACHE.get(key);
   if (hit) return storedResponse(hit, mediaTypeFor(format), options.cacheControl);
@@ -234,6 +291,7 @@ export async function serveBlob(
     sha: verified.sha,
     contentType: contentTypeForExtension(verified.ext),
     cacheControl: cacheControlFor(verified.tier, verified.exp, nowSeconds()),
+    head: request.method === 'HEAD',
   };
 
   const width = verified.transform?.w;

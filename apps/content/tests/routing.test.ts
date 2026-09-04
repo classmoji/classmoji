@@ -236,6 +236,125 @@ describe('blob delivery', () => {
     expect(bucket.gets).toEqual([`blobs/${BLOB_SHA}`]);
   });
 
+  it('carries Content-Length on an R2 hit, straight from the stored size', async () => {
+    const bucket = fakeBucket({
+      [`blobs/${BLOB_SHA}`]: { body: 'cached-bytes', contentType: 'image/png' },
+    });
+    const url = await signedBlobUrl({ sha: BLOB_SHA, ext: 'png' });
+
+    const response = await worker.fetch(
+      new Request(url),
+      fakeEnv({ CACHE: bucket as unknown as R2Bucket }),
+      fakeContext()
+    );
+
+    expect(response.headers.get('Content-Length')).toBe(String('cached-bytes'.length));
+  });
+
+  it("forwards the origin's Content-Length without buffering to find it", async () => {
+    stubUpstreams({
+      blob: () => new Response('origin-bytes', { headers: { 'Content-Length': '12' } }),
+    });
+    const url = await signedBlobUrl({ sha: BLOB_SHA, ext: 'css' });
+
+    const response = await worker.fetch(new Request(url), fakeEnv(), fakeContext());
+
+    expect(response.headers.get('Content-Length')).toBe('12');
+  });
+
+  it('omits Content-Length when the origin sent none', async () => {
+    stubUpstreams();
+    const url = await signedBlobUrl({ sha: BLOB_SHA, ext: 'css' });
+
+    const response = await worker.fetch(new Request(url), fakeEnv(), fakeContext());
+
+    expect(response.headers.get('Content-Length')).toBeNull();
+  });
+
+  it('answers HEAD on a cached blob from R2 metadata - no body, no origin', async () => {
+    const bucket = fakeBucket({
+      [`blobs/${BLOB_SHA}`]: { body: 'cached-bytes', contentType: 'image/png' },
+    });
+    const fetchSpy = vi.fn(() => {
+      throw new Error('HEAD must not reach the origin');
+    });
+    globalThis.fetch = fetchSpy as unknown as typeof fetch;
+    const url = await signedBlobUrl({ sha: BLOB_SHA, ext: 'png' });
+
+    const response = await worker.fetch(
+      new Request(url, { method: 'HEAD' }),
+      fakeEnv({ CACHE: bucket as unknown as R2Bucket }),
+      fakeContext()
+    );
+
+    expect(response.status).toBe(200);
+    expect(await response.text()).toBe('');
+    expect(response.headers.get('Content-Type')).toBe('image/png');
+    expect(response.headers.get('Content-Length')).toBe(String('cached-bytes'.length));
+    expect(response.headers.get('ETag')).toBe(`"blobs/${BLOB_SHA}"`);
+    expect(response.headers.get('Cache-Control')).toMatch(/^public, max-age=\d+, immutable$/);
+    expect(response.headers.get('Access-Control-Allow-Origin')).toBe('*');
+    expect(response.headers.get('Content-Security-Policy')).toBe("default-src 'none'; sandbox");
+    expect(fetchSpy).not.toHaveBeenCalled();
+    // Metadata only: the object's bytes were never opened.
+    expect(bucket.heads).toEqual([`blobs/${BLOB_SHA}`]);
+    expect(bucket.gets).toEqual([]);
+  });
+
+  it('answers HEAD on a cached variant from the variant key', async () => {
+    const bucket = fakeBucket({
+      [`blobs/${BLOB_SHA}/w800.webp`]: { body: 'webp-bytes', contentType: 'image/webp' },
+    });
+    const url = await signedBlobUrl({
+      sha: BLOB_SHA,
+      ext: 'jpg',
+      transform: { w: 800, fmt: 'webp' },
+    });
+
+    const response = await worker.fetch(
+      new Request(url, { method: 'HEAD' }),
+      fakeEnv({ CACHE: bucket as unknown as R2Bucket }),
+      fakeContext()
+    );
+
+    expect(response.status).toBe(200);
+    expect(await response.text()).toBe('');
+    expect(response.headers.get('Content-Type')).toBe('image/webp');
+    expect(bucket.heads).toEqual([`blobs/${BLOB_SHA}/w800.webp`]);
+    expect(bucket.gets).toEqual([]);
+  });
+
+  it('falls through to the origin for HEAD on a cold blob, and still sends no body', async () => {
+    // Warming the cache on a HEAD is the point: the GET behind it is a hit.
+    stubUpstreams();
+    const bucket = fakeBucket();
+    const ctx = fakeContext();
+    const url = await signedBlobUrl({ sha: BLOB_SHA, ext: 'css' });
+
+    const response = await worker.fetch(
+      new Request(url, { method: 'HEAD' }),
+      fakeEnv({ CACHE: bucket as unknown as R2Bucket }),
+      ctx
+    );
+
+    expect(response.status).toBe(200);
+    expect(await response.text()).toBe('');
+    expect(bucket.heads).toEqual([`blobs/${BLOB_SHA}`]);
+    await ctx.settled();
+    expect(bucket.puts.map(put => put.key)).toEqual([`blobs/${BLOB_SHA}`]);
+  });
+
+  it('sends no body on a HEAD that is refused', async () => {
+    const response = await worker.fetch(
+      new Request(`${ORIGIN}/robots.txt`, { method: 'HEAD' }),
+      fakeEnv(),
+      fakeContext()
+    );
+
+    expect(response.status).toBe(404);
+    expect(await response.text()).toBe('');
+  });
+
   it('marks draft content no-store, but still writes it to R2', async () => {
     // Deliberate: `no-store` governs the SHARED caches in front of the Worker,
     // which must never hold draft bytes. R2 sits behind the signature gate and

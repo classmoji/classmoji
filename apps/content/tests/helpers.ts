@@ -32,6 +32,7 @@ interface StoredObject {
 
 export interface FakeBucket {
   get(key: string): Promise<unknown>;
+  head(key: string): Promise<unknown>;
   put(
     key: string,
     value: unknown,
@@ -39,29 +40,41 @@ export interface FakeBucket {
   ): Promise<unknown>;
   readonly puts: Array<{ key: string; contentType?: string }>;
   readonly gets: string[];
+  readonly heads: string[];
 }
 
 export function fakeBucket(initial: Record<string, StoredObject> = {}): FakeBucket {
   const store = new Map(Object.entries(initial));
   const puts: Array<{ key: string; contentType?: string }> = [];
   const gets: string[] = [];
+  const heads: string[] = [];
+
+  const metadata = (key: string, object: StoredObject) => ({
+    httpMetadata: { contentType: object.contentType },
+    httpEtag: `"${key}"`,
+    size: object.size ?? new TextEncoder().encode(object.body).byteLength,
+  });
 
   return {
     puts,
     gets,
+    heads,
     async get(key: string) {
       gets.push(key);
       const object = store.get(key);
       if (!object) return null;
       return {
+        ...metadata(key, object),
         body: new Response(object.body).body,
-        httpMetadata: { contentType: object.contentType },
-        httpEtag: `"${key}"`,
-        size: object.size ?? new TextEncoder().encode(object.body).byteLength,
         arrayBuffer: async () => new TextEncoder().encode(object.body).buffer,
         json: async () => JSON.parse(object.body),
         text: async () => object.body,
       };
+    },
+    async head(key: string) {
+      heads.push(key);
+      const object = store.get(key);
+      return object ? metadata(key, object) : null;
     },
     async put(key: string, _value: unknown, options?: { httpMetadata?: { contentType?: string } }) {
       puts.push({ key, contentType: options?.httpMetadata?.contentType });
