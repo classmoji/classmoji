@@ -40,7 +40,8 @@ vi.mock('@classmoji/database', () => ({
 
 const getTree = vi.fn();
 const getDefaultBranch = vi.fn();
-const getGitProvider = vi.fn(() => ({ getTree, getDefaultBranch }));
+const getLatestCommitSHA = vi.fn();
+const getGitProvider = vi.fn(() => ({ getTree, getDefaultBranch, getLatestCommitSHA }));
 vi.mock('../../git/index.ts', () => ({
   getGitProvider: (...a: unknown[]) => getGitProvider(...(a as [])),
 }));
@@ -60,11 +61,16 @@ const {
   lookupContentAssetBySha,
 } = await import('../contentAssets.service.ts');
 
+/** The default branch head every full sync in this file reads the tree at. */
+const HEAD_COMMIT = 'f'.repeat(40);
+
 const CLASSROOM = {
   id: 'class-1',
   content_repo: 'content-cs101',
   // Freshness lives HERE, not on the newest row — see ensureContentAssets.
   content_assets_synced_at: null as Date | null,
+  // The commit the map is level with; null = never synced, no chain to gap.
+  content_assets_synced_commit: null as string | null,
   git_organization: { id: 'org-1', provider: 'GITHUB', login: 'dartmouth-cs' },
 };
 
@@ -90,6 +96,7 @@ describe('contentAssets.service', () => {
     classroomFindUnique.mockResolvedValue(CLASSROOM);
     classroomFindFirst.mockResolvedValue({ id: 'class-1' });
     getDefaultBranch.mockResolvedValue('main');
+    getLatestCommitSHA.mockResolvedValue(HEAD_COMMIT);
     setupTransaction();
   });
 
@@ -109,8 +116,11 @@ describe('contentAssets.service', () => {
       const result = await syncContentAssets('class-1');
 
       expect(result).toEqual({ mode: 'full', upserted: 3, deleted: 4, truncated: false });
-      expect(getTree).toHaveBeenCalledWith('dartmouth-cs', 'content-cs101', 'main', true);
+      // Read AT the head commit, not at the moving branch — so the commit the
+      // run records describes exactly the entries it stored.
       expect(getDefaultBranch).toHaveBeenCalledWith('dartmouth-cs', 'content-cs101');
+      expect(getLatestCommitSHA).toHaveBeenCalledWith('dartmouth-cs', 'content-cs101', 'main');
+      expect(getTree).toHaveBeenCalledWith('dartmouth-cs', 'content-cs101', HEAD_COMMIT, true);
       expect(contentAssetUpsert).toHaveBeenCalledTimes(3);
 
       // Directories are rows too — theme folders are addressed by tree SHA, so
@@ -188,7 +198,7 @@ describe('contentAssets.service', () => {
 
       await syncContentAssets('class-1');
 
-      expect(getTree).toHaveBeenCalledWith('dartmouth-cs', 'content-cs101', 'master', true);
+      expect(getLatestCommitSHA).toHaveBeenCalledWith('dartmouth-cs', 'content-cs101', 'master');
     });
 
     it('defaults a missing size to 0 rather than writing undefined', async () => {
@@ -219,6 +229,10 @@ describe('contentAssets.service', () => {
       expect(classroomUpdate).toHaveBeenCalledTimes(1);
       const [stamp] = classroomUpdate.mock.calls[0];
       expect(stamp.where).toEqual({ id: 'class-1' });
+      // The commit the tree was read at rides along with the timestamp: it is
+      // the state the map is now level with, and the next push's `before` is
+      // measured against it.
+      expect(stamp.data.content_assets_synced_commit).toBe(HEAD_COMMIT);
       // The run's one stamp — the same instant every row it wrote carries.
       const rowStamp = contentAssetUpsert.mock.calls[0][0].create.synced_at;
       expect(stamp.data.content_assets_synced_at).toEqual(rowStamp);
@@ -382,11 +396,11 @@ describe('contentAssets.service', () => {
       expect(result.mode).toBe('full');
     });
 
-    it('does NOT stamp the classroom', async () => {
+    it('does NOT stamp the classroom as fully synced', async () => {
       // It applied the paths one push named and knows nothing about the rest of
-      // the repo. Stamping here would let a steady trickle of webhooks suppress
-      // the daily full refresh — which exists to repair the webhooks that never
-      // arrive at all.
+      // the repo. Stamping the TIMESTAMP here would let a steady trickle of
+      // webhooks suppress the daily full refresh — which exists to repair the
+      // webhooks that never arrive at all.
       getMeta.mockResolvedValue({ sha: 'sha-a', size: 10 });
 
       const result = await syncContentAssets('class-1', {
@@ -395,6 +409,108 @@ describe('contentAssets.service', () => {
 
       expect(result.mode).toBe('incremental');
       expect(classroomUpdate).not.toHaveBeenCalled();
+    });
+
+    it('records the push it landed as the commit the map is level with', async () => {
+      // The other half of dropped-delivery detection: without this, every push
+      // would look like a gap against a commit only full syncs ever move.
+      // Commit only — the freshness timestamp stays untouched, so the daily
+      // full refresh still fires.
+      getMeta.mockResolvedValue({ sha: 'sha-a', size: 10 });
+
+      await syncContentAssets('class-1', {
+        changes: { added: ['images/a.png'], modified: [], removed: [] },
+        before: null,
+        after: 'b'.repeat(40),
+      });
+
+      expect(classroomUpdate).toHaveBeenCalledTimes(1);
+      const [update] = classroomUpdate.mock.calls[0];
+      expect(update).toEqual({
+        where: { id: 'class-1' },
+        data: { content_assets_synced_commit: 'b'.repeat(40) },
+      });
+      // In the transaction, so a failed apply cannot claim a commit it never
+      // applied — and ahead of the sweep, whose count is read off the tail.
+      const ops = transaction.mock.calls[0][0] as { op: string }[];
+      expect(ops[0].op).toBe('classroomUpdate');
+      expect(ops.at(-1)?.op).toBe('deleteMany');
+    });
+  });
+
+  describe('dropped-delivery detection', () => {
+    const LEVEL = 'a'.repeat(40);
+    const changes = { added: ['images/a.png'], modified: [], removed: [] };
+
+    beforeEach(() => {
+      getMeta.mockResolvedValue({ sha: 'sha-a', size: 10 });
+      getTree.mockResolvedValue({ sha: 'r', truncated: false, entries: [] });
+    });
+
+    it('escalates to a full sync when the push does not build on the stored commit', async () => {
+      // THE regression this guards. A dropped delivery used to be invisible:
+      // the next push applies cleanly — its own lists are internally consistent
+      // — so the map silently keeps rows for paths the missing push deleted and
+      // never learns about the ones it added, and it all looks healthy until
+      // the nightly sweep happens to run.
+      classroomFindUnique.mockResolvedValue({
+        ...CLASSROOM,
+        content_assets_synced_commit: LEVEL,
+      });
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+      const result = await syncContentAssets('class-1', {
+        changes,
+        before: 'c'.repeat(40),
+        after: 'd'.repeat(40),
+      });
+
+      expect(result.mode).toBe('full');
+      expect(getMeta).not.toHaveBeenCalled();
+      // Silently escalating would hide a webhook that is permanently failing.
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('a delivery was missed'));
+      warn.mockRestore();
+    });
+
+    it('stays incremental when the push builds on exactly the stored commit', async () => {
+      classroomFindUnique.mockResolvedValue({
+        ...CLASSROOM,
+        content_assets_synced_commit: LEVEL,
+      });
+
+      const result = await syncContentAssets('class-1', {
+        changes,
+        before: LEVEL,
+        after: 'd'.repeat(40),
+      });
+
+      expect(result.mode).toBe('incremental');
+      expect(getTree).not.toHaveBeenCalled();
+    });
+
+    it('does not treat a first sync as a missed delivery', async () => {
+      // Null stored commit means there is no chain yet, not a gap in one. Every
+      // classroom in the table starts here, so counting it would make the first
+      // push after this shipped a full sync for all of them at once.
+      const result = await syncContentAssets('class-1', {
+        changes,
+        before: 'c'.repeat(40),
+        after: 'd'.repeat(40),
+      });
+
+      expect(result.mode).toBe('incremental');
+    });
+
+    it('does not escalate a caller that cannot answer the question', async () => {
+      // A manual or TTL run carries no `before`. Silence is not evidence.
+      classroomFindUnique.mockResolvedValue({
+        ...CLASSROOM,
+        content_assets_synced_commit: LEVEL,
+      });
+
+      const result = await syncContentAssets('class-1', { changes });
+
+      expect(result.mode).toBe('incremental');
     });
   });
 

@@ -58,6 +58,8 @@ const buildApp = async (): Promise<FastifyInstance> => {
 interface PushOverrides {
   ref?: string;
   forced?: boolean;
+  before?: string;
+  after?: string;
   repo?: string;
   owner?: string;
   defaultBranch?: string;
@@ -70,12 +72,14 @@ const pushBody = ({
   repo = 'content-cs101',
   owner = 'acme',
   defaultBranch = 'main',
+  before = 'a'.repeat(40),
+  after = 'b'.repeat(40),
   commits = [{ added: ['images/one.png'], modified: [], removed: [] }],
 }: PushOverrides = {}): string =>
   JSON.stringify({
     ref,
-    before: 'a'.repeat(40),
-    after: 'b'.repeat(40),
+    before,
+    after,
     forced,
     commits,
     repository: {
@@ -134,7 +138,24 @@ describe('which pushes are ours', () => {
       },
       forced: false,
       complete: true,
+      before: 'a'.repeat(40),
+      after: 'b'.repeat(40),
     });
+  });
+
+  /**
+   * `before` is the only way the sync can tell an EARLIER delivery went
+   * missing: a push whose parent is not the commit the map is level with proves
+   * the repo moved unseen, and that run has to re-read the whole tree instead of
+   * applying a diff against a state nobody holds. `after` is the commit the map
+   * records once it has applied this one.
+   */
+  it('reports the commits the push spans, so a dropped delivery is detectable', async () => {
+    await post(app, pushBody({ before: 'c'.repeat(40), after: 'd'.repeat(40) }));
+
+    const payload = contentAssetsSync.mock.calls[0][0];
+    expect(payload.before).toBe('c'.repeat(40));
+    expect(payload.after).toBe('d'.repeat(40));
   });
 
   /**

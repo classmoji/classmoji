@@ -76,6 +76,10 @@ interface PushCommit {
 interface PushEventPayload {
   ref?: string;
   forced?: boolean;
+  /** The commit the branch pointed at BEFORE this push. */
+  before?: string;
+  /** The commit it points at now. */
+  after?: string;
   commits?: PushCommit[];
   repository?: {
     name?: string;
@@ -155,6 +159,13 @@ async function handlePush(data: PushEventPayload): Promise<void> {
     // against what we last synced and cannot be applied incrementally.
     forced: Boolean(data.forced),
     complete: commits.length < GITHUB_COMMIT_CAP,
+    // The commits this push spans. `before` is the only way the sync can tell
+    // that an EARLIER delivery went missing: a push whose parent is not the
+    // commit the map is level with proves the repo moved unseen, and that run
+    // has to re-read the whole tree rather than apply a diff against a state
+    // nobody holds. `after` is what the map records once it has.
+    before: data.before,
+    after: data.after,
   });
 }
 

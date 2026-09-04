@@ -60,6 +60,14 @@ export interface ContentAssetChanges {
 export interface SyncContentAssetsOptions {
   full?: boolean;
   changes?: ContentAssetChanges;
+  /**
+   * The commit the push built ON — `before` from the webhook. Compared against
+   * the commit the map was last brought level with; a mismatch means a delivery
+   * went missing and this run escalates to a full tree read.
+   */
+  before?: string | null;
+  /** The commit the push LANDED — `after`. Recorded once the diff is applied. */
+  after?: string | null;
 }
 
 export interface SyncContentAssetsResult {
@@ -79,6 +87,8 @@ interface ResolvedClassroom {
   id: string;
   content_repo: string;
   org: string;
+  /** The commit the map was last brought level with; null = never synced. */
+  syncedCommit: string | null;
   gitOrganization: NonNullable<Awaited<ReturnType<typeof loadClassroomRaw>>>['git_organization'];
 }
 
@@ -92,7 +102,8 @@ async function loadClassroomRaw(classroomId: string) {
 type ClassroomRecord = Awaited<ReturnType<typeof loadClassroomRaw>>;
 
 /**
- * The classroom plus the two things a sync needs from it: which org, which repo.
+ * The classroom plus what a sync needs from it: which org, which repo, and the
+ * commit the map was last brought level with.
  *
  * Throws rather than returning null. Every caller here is already committed to
  * syncing, so "this classroom has no git organization" is a programming or
@@ -114,6 +125,7 @@ function toResolvedClassroom(classroom: ClassroomRecord, classroomId: string): R
     id: classroom.id,
     content_repo: classroom.content_repo,
     org: classroom.git_organization.login,
+    syncedCommit: classroom.content_assets_synced_commit ?? null,
     gitOrganization: classroom.git_organization,
   };
 }
@@ -166,15 +178,27 @@ export async function resolveContentBranch(
   return getGitProvider(gitOrganization).getDefaultBranch(org, repo);
 }
 
+/**
+ * The default branch's tree, plus the commit it was read AT.
+ *
+ * The branch head is resolved first and the tree is then read at that commit
+ * rather than at the branch name, so the commit this returns describes exactly
+ * the entries it returns. That matters because the commit is recorded as the
+ * state the map is level with: reading the tree at a moving branch and asking
+ * for its head separately could record a commit whose tree was never read, and
+ * a later push building on that commit would then find the chain intact and
+ * skip the escalation that should have repaired it.
+ */
 async function readRepoTree(
   classroom: ResolvedClassroom
-): Promise<{ entries: TreeEntry[]; truncated: boolean }> {
+): Promise<{ entries: TreeEntry[]; truncated: boolean; commit: string }> {
   const provider = getGitProvider(classroom.gitOrganization);
   const branch = await provider.getDefaultBranch(classroom.org, classroom.content_repo);
+  const commit = await provider.getLatestCommitSHA(classroom.org, classroom.content_repo, branch);
   const tree = await provider.getTree(
     classroom.org,
     classroom.content_repo,
-    branch,
+    commit,
     /* recursive */ true
   );
 
@@ -188,7 +212,7 @@ async function readRepoTree(
     );
   }
 
-  return { entries: tree.entries, truncated: tree.truncated };
+  return { entries: tree.entries, truncated: tree.truncated, commit };
 }
 
 function upsertOp(classroomId: string, entry: TreeEntry, syncedAt: Date) {
@@ -250,13 +274,19 @@ async function fullSync(classroom: ResolvedClassroom): Promise<SyncContentAssets
   // Before the read, not after — see the header. A row written while the tree
   // is in flight must stamp ABOVE this run, or the sweep deletes it.
   const syncedAt = new Date();
-  const { entries, truncated } = await readRepoTree(classroom);
+  const { entries, truncated, commit } = await readRepoTree(classroom);
 
   // FIRST, not last. The sweep's count is read off the tail of the results, so
   // the stamp goes in front of the upserts rather than after the delete.
+  //
+  // The commit rides along with the timestamp: this run read the repo at it, so
+  // it is the state the map is now level with, and the next push's `before` is
+  // measured against it. A truncated run records it too — it did read the tree
+  // at that commit, and refusing to record would leave a repo that is simply
+  // too big permanently claiming a missed delivery on every push.
   const stampOp = getPrisma().classroom.update({
     where: { id: classroom.id },
-    data: { content_assets_synced_at: syncedAt },
+    data: { content_assets_synced_at: syncedAt, content_assets_synced_commit: commit },
   });
 
   const operations = entries.map(entry => upsertOp(classroom.id, entry, syncedAt));
@@ -298,7 +328,8 @@ async function fullSync(classroom: ResolvedClassroom): Promise<SyncContentAssets
  */
 async function incrementalSync(
   classroom: ResolvedClassroom,
-  changes: ContentAssetChanges
+  changes: ContentAssetChanges,
+  after: string | null
 ): Promise<SyncContentAssetsResult> {
   const removed = unique(changes.removed ?? []);
   const touched = unique([...(changes.added ?? []), ...(changes.modified ?? [])]);
@@ -351,7 +382,24 @@ async function incrementalSync(
   const syncedAt = new Date();
   const operations = entries.map(entry => upsertOp(classroom.id, entry, syncedAt));
 
+  // The commit this diff lands the map on — and ONLY the commit. The freshness
+  // timestamp deliberately stays untouched (see `ensureContentAssets`): this run
+  // applied the paths one push named and knows nothing about the rest of the
+  // repo, so it may not suppress the daily full refresh. It may, however, say
+  // which commit the map is now level with, which is what lets the NEXT push
+  // notice a delivery that went missing. Inside the transaction, so a failed
+  // apply does not claim a commit it never applied.
+  const commitOps = after
+    ? [
+        getPrisma().classroom.update({
+          where: { id: classroom.id },
+          data: { content_assets_synced_commit: after },
+        }),
+      ]
+    : [];
+
   const results = await getPrisma().$transaction([
+    ...commitOps,
     ...operations,
     getPrisma().contentAsset.deleteMany({
       where: { classroom_id: classroom.id, path: { in: toDelete } },
@@ -381,6 +429,9 @@ function touchesThemes(changes: ContentAssetChanges): boolean {
  * change under `.slidesthemes/` escalates back to full regardless, because a
  * theme is addressed by its tree SHA and no per-file update can produce one.
  * Pass `full: true` to force the full path even when `changes` is present.
+ *
+ * A push that does not build on the commit the map is level with escalates too
+ * — see `missedDelivery`.
  */
 export async function syncContentAssets(
   classroomId: string,
@@ -388,9 +439,45 @@ export async function syncContentAssets(
 ): Promise<SyncContentAssetsResult> {
   const classroom = await resolveClassroom(classroomId);
 
-  const goFull = opts.full === true || !opts.changes || touchesThemes(opts.changes);
+  const missed = missedDelivery(classroom, opts.before);
+  if (missed) {
+    // Loud, because it is the only evidence that deliveries are being lost. One
+    // line is a hiccup; the same classroom every day is a webhook that needs
+    // looking at, and a map that has been running on the nightly sweep.
+    console.warn(
+      `[contentAssets] Push for ${classroomId} builds on ${opts.before}, but the map is level ` +
+        `with ${classroom.syncedCommit} — a delivery was missed. Escalating to a full sync.`
+    );
+  }
 
-  return goFull ? fullSync(classroom) : incrementalSync(classroom, opts.changes!);
+  const goFull = opts.full === true || !opts.changes || touchesThemes(opts.changes) || missed;
+
+  return goFull
+    ? fullSync(classroom)
+    : incrementalSync(classroom, opts.changes!, opts.after ?? null);
+}
+
+/**
+ * Did the repo move without the map seeing it?
+ *
+ * A push webhook names the commit it built ON as well as the one it landed. If
+ * that parent is not the commit the map was last brought level with, some push
+ * in between never reached us — a dropped delivery, hook-station down, an App
+ * install that finished after the first push — and the diff in hand is a diff
+ * against a state the map does not hold. Applying it converges on nothing: the
+ * paths the missing push added stay absent, the ones it deleted stay behind as
+ * rows the renderer will happily sign 404s for, and the whole thing looks
+ * perfectly healthy until the nightly sweep happens to run.
+ *
+ * BOTH sides have to be present. A null stored commit is a classroom that has
+ * never synced, which is not a gap — there is no chain yet — and every classroom
+ * in the table starts there, so counting it would make the first push after this
+ * shipped a full sync for all of them at once. A push with no `before` is a
+ * caller that cannot answer the question (a manual or TTL run), and silence is
+ * not evidence.
+ */
+function missedDelivery(classroom: ResolvedClassroom, before: string | null | undefined): boolean {
+  return Boolean(before && classroom.syncedCommit && before !== classroom.syncedCommit);
 }
 
 /**

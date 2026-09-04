@@ -371,50 +371,58 @@ model GitOrganization {
 }
 
 model Classroom {
-  id                       String          @id @default(uuid())
+  id                           String          @id @default(uuid())
   // GLOBALLY unique. The slug is the sole key in every app URL — /admin/:class,
   // /student/:class, the ICS calendar feed, and the autograde callback — and
   // none of them carry an org segment, so a slug reused across orgs resolves to
   // the wrong classroom. e.g. "cs101-fall-2025".
-  slug                     String          @unique
-  git_org_id               String
-  name                     String
+  slug                         String          @unique
+  git_org_id                   String
+  name                         String
   // Internal identifier only. Historically the content repo name was derived
   // as content-{orgLogin}-{content_namespace}; it no longer names any repo.
-  content_namespace        String
+  content_namespace            String
   // The GitHub repo (in git_organization) holding this classroom's pages &
   // slides content. STORED and fully user-editable — never re-derived. Set at
   // creation for every classroom; defaults to `content-{content_namespace}`.
   // NOT the same as ClassroomSettings.content_repo_name, which is a legacy
   // ORG-level content repo override (`content-{login}`) for a DIFFERENT repo.
-  content_repo             String
+  content_repo                 String
   // GitHub Classroom course id, set on import; null for classrooms created
   // directly in Classmoji. Unique because one GitHub Classroom course maps to at
   // most one Classmoji classroom, which makes it the stable idempotency key for
   // re-imports — the slug can be suffixed on collision, so it can't be.
   // (Postgres allows many NULLs under a unique index, which is the semantics we
   // want: existing imported rows stay null and never collide.)
-  github_classroom_id      Int?            @unique
-  status                   ClassroomStatus @default(ACTIVE)
-  is_archived              Boolean         @default(false)
+  github_classroom_id          Int?            @unique
+  status                       ClassroomStatus @default(ACTIVE)
+  is_archived                  Boolean         @default(false)
   // True for the auto-provisioned per-user "Example Course" sandbox used by the
   // in-classroom onboarding tour. Backed by a mock GitOrganization (no live GitHub).
-  is_example               Boolean         @default(false)
+  is_example                   Boolean         @default(false)
   // Edge-cache bust for this classroom's content. Every signed content URL
   // carries it, so bumping it changes ALL of them at once and the CDN misses
   // on every asset until it refills. Old URLs STILL VERIFY — this is not a
   // revocation, and nothing already handed out stops working; it only stops
   // being the URL the app links to.
-  content_key_version      Int             @default(0)
+  content_key_version          Int             @default(0)
   // When the asset map was last rebuilt FROM THE REPO'S TREE — a full sync, and
   // only a full sync. This is what `ensureContentAssets` measures its 24h
   // refresh against, deliberately NOT the newest `content_assets.synced_at`:
   // incremental webhook applies and upload-time writes both stamp rows `now`,
   // so reading the rows would let a single upload make a stale map look fresh
   // and suppress the daily repair for another day. Null means never synced.
-  content_assets_synced_at DateTime?
-  created_at               DateTime        @default(now())
-  updated_at               DateTime        @default(now()) @updatedAt
+  content_assets_synced_at     DateTime?
+  // The content-repo commit the map was last brought level with: the head commit
+  // a full sync read the tree at, or the `after` sha an incremental apply
+  // landed. This is how a DROPPED push webhook becomes visible — the next push
+  // names the commit it built on, and if that is not this value then something
+  // changed the repo the map never saw, so the run escalates to a full tree read
+  // rather than applying a diff against a state we do not have. Null means never
+  // synced: no chain yet, so nothing to have a gap in.
+  content_assets_synced_commit String?
+  created_at                   DateTime        @default(now())
+  updated_at                   DateTime        @default(now()) @updatedAt
 
   git_organization      GitOrganization       @relation(fields: [git_org_id], references: [id], onDelete: Cascade)
   settings              ClassroomSettings?
