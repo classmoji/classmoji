@@ -14,7 +14,7 @@
  */
 import { serveBlob } from './blob.ts';
 import { errorResponse, jsonResponse, preflightResponse, withoutBody } from './cache.ts';
-import { isConfigured, type Env } from './env.ts';
+import { isConfigured, signingSecrets, type Env } from './env.ts';
 import { OriginError } from './origins/types.ts';
 import { serveTheme } from './theme.ts';
 import { isClassroomId, parseContentUrl, verifyContentUrl } from './verify.ts';
@@ -36,6 +36,25 @@ const MISSING_PATH = /^\/c\/([^/]+)\/missing\/(.+)$/;
 
 /** A repo path is the app's own string, but it arrives from the network. */
 const MAX_LOGGED_PATH = 512;
+
+/**
+ * `classroomId|keyVersion` pairs already reported as still using the previous
+ * signing key, so each one is logged once per isolate instead of once per
+ * request.
+ *
+ * A rotation stays open for as long as the longest signature lives — 30 days
+ * for the public tier — and a warn on every request for a month would bury the
+ * 403 and 404 lines an operator actually searches for. The cost is that the
+ * count is no longer traffic: it says which classrooms are still handing out
+ * old URLs, not how often.
+ */
+const ROTATION_LOG_LIMIT = 512;
+const rotationLogged = new Set<string>();
+
+/** Test/ops hook: forget which rotations have already been reported. */
+export function clearRotationLog(): void {
+  rotationLogged.clear();
+}
 
 /** C0 controls, DEL, and the C1 block - everything a log line must not contain. */
 function isControl(code: number): boolean {
@@ -101,12 +120,11 @@ async function handle(request: Request, env: Env, ctx: ExecutionContext): Promis
     return errorResponse(404, 'missing');
   }
 
-  const signingSecret = env.CONTENT_SIGNING_SECRET;
-  if (!signingSecret || !env.CONTENT_WORKER_SHARED_SECRET || !env.CONTENT_TOKEN_ENDPOINT) {
-    return errorResponse(503, 'not configured');
-  }
+  // One definition of "configured", shared with /healthz — the verifier below
+  // needs no narrowed local now that it takes the whole list of secrets.
+  if (!isConfigured(env)) return errorResponse(503, 'not configured');
 
-  const verified = await verifyContentUrl(signingSecret, request.url);
+  const verified = await verifyContentUrl(signingSecrets(env), request.url);
   if (!verified.ok) {
     // Structural parse only (no crypto) - just to recover the classroom id
     // for a URL whose signature we don't yet trust. Never log `sig`, the
@@ -119,6 +137,24 @@ async function handle(request: Request, env: Env, ctx: ExecutionContext): Promis
     if (v !== null) message += ` v=${v}`;
     console.warn(message);
     return errorResponse(403, verified.reason);
+  }
+
+  // Rotation telemetry: which classrooms are still serving URLs minted under
+  // the old key. Once per classroom and key version per isolate — see
+  // `rotationLogged`. Carries no signature and no query string, for the same
+  // reason the 403 line above does not.
+  if (verified.keySlot === 'previous') {
+    const rotation = `${verified.classroomId}|${verified.keyVersion}`;
+    if (!rotationLogged.has(rotation)) {
+      // Bounded: an isolate that has seen this many distinct pairs starts a
+      // fresh window rather than growing without limit.
+      if (rotationLogged.size >= ROTATION_LOG_LIMIT) rotationLogged.clear();
+      rotationLogged.add(rotation);
+      console.warn(
+        `[content] key=previous classroom=${verified.classroomId} path=${url.pathname}` +
+          ` p=${verified.tier} v=${verified.keyVersion}`
+      );
+    }
   }
 
   try {

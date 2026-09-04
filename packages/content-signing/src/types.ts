@@ -14,10 +14,31 @@ export interface Transform {
 }
 
 /**
+ * One master secret, or an ordered list of them for verification: the current
+ * key first, then the previous one while a rotation is in flight. A bare string
+ * is the single-key case and the only shape signing accepts.
+ */
+export type MasterSecrets = string | readonly string[];
+
+/**
+ * Which entry in that ordered list verified a signature. `previous` means the
+ * URL was minted before the current rotation — worth a log line, because the
+ * moment those stop arriving is the moment the previous key can be dropped.
+ *
+ * Unrelated to `keyVersion`, which is the classroom's own counter carried in
+ * the URL. A key version retires one classroom's URLs; a key slot is which
+ * master the whole deployment is holding.
+ */
+export type KeySlot = 'current' | 'previous';
+
+/**
  * Everything needed to mint a URL for one classroom.
  *
  * `now` is unix seconds and defaults to the current wall clock. Pass it
  * explicitly wherever the output has to be deterministic.
+ *
+ * Signing takes exactly one master — the current one. Only verification ever
+ * looks at more than one key.
  */
 export interface SigningContext {
   master: string;
@@ -42,6 +63,7 @@ export type BlobVerification =
       exp: number;
       transform?: Transform;
       inGrace: boolean;
+      keySlot: KeySlot;
     }
   | { ok: false; reason: VerifyFailure };
 
@@ -57,6 +79,7 @@ export type ThemeVerification =
       exp: number;
       relPath: string;
       inGrace: boolean;
+      keySlot: KeySlot;
     }
   | { ok: false; reason: VerifyFailure };
 

@@ -101,11 +101,15 @@ cached.
 | `CONTENT_TOKEN_ENDPOINT` | var | webapp endpoint that mints installation tokens |
 | `ENVIRONMENT` | var | `staging` / `production` |
 | `CONTENT_SIGNING_SECRET` | secret | HMAC master key for signed URLs |
+| `CONTENT_SIGNING_SECRET_PREVIOUS` | secret, optional | the key the current one replaced; accepted for verification during a rotation, never signed with |
 | `CONTENT_WORKER_SHARED_SECRET` | secret | bearer token presented to the token endpoint |
 
-Secrets come from Infisical (`/content-worker`, env `sta`) and are pushed by CI
-with `wrangler secret bulk` after the deploy. A Worker without them serves 503
-for everything, so the deploy workflow fails loudly if either is missing.
+Secrets come from Infisical (`/content-worker`, env `sta` for staging and `prod`
+for production) and are pushed by CI with `wrangler secret bulk` after the
+deploy. A Worker without the two required ones serves 503 for everything, so the
+deploy workflow fails loudly if either is missing; the previous-key slot is
+allowed but never required, and `/healthz` deliberately says nothing about
+whether it is set.
 
 ## Signing
 
@@ -144,6 +148,7 @@ npx wrangler deploy --env staging --dry-run --outdir /tmp/content-dryrun
 # 2. Put local secrets in apps/content/.dev.vars (git-ignored):
 #      CONTENT_SIGNING_SECRET="..."
 #      CONTENT_WORKER_SHARED_SECRET="..."
+#      CONTENT_SIGNING_SECRET_PREVIOUS="..."   # optional, only to rehearse a rotation
 # 3. Run it (local R2 + local Images emulation):
 npm run cf:dev -w apps/content
 
@@ -214,6 +219,7 @@ Logs** (`classmoji-content-staging` or `classmoji-content`), with
 | Shape | Means |
 | --- | --- |
 | `[content] 403 {reason} classroom=… path=… p=… v=…` | refused: `bad-signature`, `expired`, `malformed`, `unsupported-version`. Never carries `sig` or a query string |
+| `[content] key=previous classroom=… path=… p=… v=…` | served, but the signature only verified against `CONTENT_SIGNING_SECRET_PREVIOUS`. Expected during a rotation. Logged once per classroom and key version per isolate, so it counts classrooms, not requests |
 | `[content] 404 missing classroom=… path=…` | the app minted a `/missing/` URL: a reference that resolves to no blob (deleted, renamed, or a directory). Not an attack — a content bug |
 | `[content] origin blob {sha}: {status}` | GitHub refused the blob; the client got a 502 |
 | `[content] origin error: …` / `[content] unhandled error: …` | 502 / 500 |
@@ -233,15 +239,104 @@ control character in it is replaced and the whole path is capped at 512
 characters. Otherwise a `%0A` would let an unauthenticated request write its
 own `[content] 403 …` line into the stream you are searching.
 
+### Rotating the signing secret
+
+The apps sign with one key; the Worker verifies against two. That gap is the
+whole trick: it lets a key change without invalidating every URL already sitting
+in a browser, a `<link>` tag, or an edge cache.
+
+1. **Set both keys in Infisical**, project `e9a6487c-350e-41e7-8bba-2d95ca5934a6`,
+   environment `prod`. The `/content-worker` folder holds *references* to the
+   root-level secrets the Fly apps read, so there is one value per key and not
+   two copies to keep in step — but a brand-new key needs the reference created
+   the first time round:
+
+   - root `CONTENT_SIGNING_SECRET_PREVIOUS` ← the current value of `CONTENT_SIGNING_SECRET`
+   - root `CONTENT_SIGNING_SECRET` ← a fresh `openssl rand -hex 32`
+   - `/content-worker` ← a reference for `CONTENT_SIGNING_SECRET_PREVIOUS` alongside
+     the two that are already there
+
+   Do these as one edit. Between writing the new current key and writing the
+   previous one there is no fallback, and anything the apps mint in that gap
+   verifies against nothing.
+
+2. **The Fly apps pick it up on their own.** Infisical's native sync pushes the
+   new value to them; from that moment they sign with the new key. They never
+   read `CONTENT_SIGNING_SECRET_PREVIOUS` — signing has exactly one key, always
+   the current one.
+
+3. **The Worker gets both on its next deploy.** The secret sync is a step of
+   `deploy-cloudflare-prod.yml`, so it runs when something under `apps/content/**`
+   or `packages/content-signing/**` lands on `main` — or immediately, on a
+   `workflow_dispatch` run of that workflow, which is how you push a secret
+   change with no code change behind it.
+
+   That workflow deploys first and pushes secrets second (`wrangler secret bulk`
+   needs a script to attach to), so for a few seconds a freshly deployed version
+   is still reading the old values. During a rotation that window is harmless
+   precisely because of the previous-key slot: the Worker is verifying with a
+   key it already accepts either way.
+
+4. **Wait out the longest signature still in the wild** — 30 days, the public
+   tier's bucket, plus its 6h grace. `enrolled` is 7 days and `draft` is 4
+   hours, so the public tier is the one that sets the clock. Watch for the line
+   that says the old key is still carrying traffic:
+
+   ```
+   [content] key=previous classroom=… path=… p=… v=…
+   ```
+
+   That line is logged once per classroom and key version per isolate, not once
+   per request — a warn on every request for a month would bury the 403 and 404
+   lines. Which means its disappearance is a *weaker* signal than it looks:
+   isolates recycle, so a fresh one logs the same classroom again, and a quiet
+   hour may just be a quiet hour.
+
+   Read it as a count instead. Query Workers Logs for `key=previous` over a
+   fixed window (a day, say) and watch the number of distinct classrooms fall.
+   Zero across a busy window, held for a few days, is what "drained" looks
+   like; a single silent hour is not.
+
+   Cut it short only if you are rotating **because the old key leaked**, and go
+   in knowing what it costs: every URL minted under it — the ones already in
+   pages people have open, in browser caches, and linked from anywhere the
+   class site has been shared — starts answering 403 the moment the slot
+   clears. Assets come back as soon as a page re-renders and re-signs, so the
+   damage is broken images and stylesheets until then, not lost content.
+
+5. **Clear the previous key — in two places.** Removing it from Infisical is
+   not enough: `wrangler secret bulk` only writes the keys it is handed and
+   never deletes, so a secret dropped from the export simply stops being
+   updated and keeps its last value on the Worker forever.
+
+   ```sh
+   # Infisical: delete root CONTENT_SIGNING_SECRET_PREVIOUS and its
+   # /content-worker reference, then:
+   npx wrangler secret delete CONTENT_SIGNING_SECRET_PREVIOUS --env production
+   ```
+
+   `/healthz` will not confirm this for you — it says nothing about the
+   previous-key slot on purpose, because it is unauthenticated. Check with
+   `npx wrangler secret list --env production`.
+
 ## Deployment
 
 Staging deploys from `.github/workflows/deploy-cloudflare-staging.yml` on pushes
 to `staging`, as `classmoji-content-staging`.
 
-Production will deploy from a workflow on pushes to `main`, as
-`classmoji-content`. **That workflow is not in the tree yet** — it lands in a
-separate PR; until it does, production is deployed by hand with
-`npx wrangler deploy --env production`.
+Production deploys from `.github/workflows/deploy-cloudflare-prod.yml` on
+pushes to `main`, as `classmoji-content`. It is the same job as staging's with
+two things that are not a rename: the branch is `main`, and the Infisical
+environment slug is `prod` where staging's is `sta`. `workflow_dispatch` runs it
+by hand — which is also how you push a secret change without a code change,
+since the secret sync only runs as part of a deploy. Dispatch it **against
+`main`**: the job is guarded on that ref, so a dispatch from any other branch
+does nothing rather than shipping that branch to `content.classmoji.io`.
+
+A push to `main` that touches `packages/content-signing/**` starts the Fly
+workflows too, and nothing orders them against this one. So for one deploy the
+apps and the Worker may be running different versions of the signing package: a
+change to a canonical string has to verify what the previous version minted.
 
 The top-level config is named `classmoji-content-unconfigured` on purpose. It
 carries no R2 bucket, no Images binding and no vars, and wrangler falls back to
@@ -249,3 +344,50 @@ it whenever no `--env` is given — so a bare `npx wrangler deploy` creates a
 throwaway Worker nothing routes to, instead of replacing production with a
 bindingless build that 503s everything. Every real deploy names its
 environment; `cf:dev` and `cf:types` pass `--env staging` for the same reason.
+
+### First production deploy
+
+Once, in this order:
+
+1. **R2 read on the Cloudflare API token** — already done. The token in
+   `CLOUDFLARE_API_TOKEN` needs Workers Scripts edit *and* R2 read, or the
+   deploy fails validating the `CACHE` binding rather than at request time.
+
+   The bucket itself already exists too: `classmoji-content-cache-prod` and
+   `classmoji-content-cache-stg` were both created on 2026-09-03. Nothing to do
+   here — but a fresh account would need it before the first deploy, because
+   wrangler binds an existing bucket and never creates one:
+
+   ```sh
+   npx wrangler r2 bucket create classmoji-content-cache-prod
+   ```
+2. **Push to `main`.** The workflow deploys `classmoji-content` and then pushes
+   `CONTENT_SIGNING_SECRET` and `CONTENT_WORKER_SHARED_SECRET` from Infisical
+   `prod`. Both must already exist under `/content-worker` there — the job
+   fails loudly rather than shipping a Worker that 503s everything.
+3. **Check it is configured.**
+
+   ```sh
+   curl -s https://content.classmoji.io/healthz
+   # {"ok":true,"environment":"production","configured":true}
+   ```
+
+   `configured:false` means the secret step did not land; re-run the workflow
+   with `workflow_dispatch` rather than redeploying by hand.
+4. **The custom domain and its certificate are wrangler's job.** The
+   `production` env declares `content.classmoji.io` as a `custom_domain`, so
+   wrangler creates the hostname and orders an Advanced Certificate for it on
+   the first deploy. Nothing to click, and nothing to add in the dashboard.
+
+   **Universal SSL stays OFF on the `classmoji.io` zone.** It is disabled on
+   purpose — it fights Fly's renewal of the `*.classmoji.io` wildcard — and the
+   Advanced Certificate above is what covers this hostname. Turning Universal
+   SSL back on to "fix" a certificate here breaks the apps instead.
+5. **Then the per-classroom gate.** A deployed Worker serves nobody by itself.
+   The apps mint signed URLs only where `isContentDeliveryConfigured`
+   (`contentDelivery.service.ts`) is satisfied *and* the classroom is switched
+   on: `Classroom.content_delivery_enabled`, which staff toggle in the admin app
+   under `/content-delivery`.
+
+   That toggle is the rollout. Turn on one classroom, watch its logs, and widen
+   from there — it is the last step, never the first.
