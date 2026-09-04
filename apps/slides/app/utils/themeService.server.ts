@@ -6,7 +6,7 @@
  */
 
 import { ContentService } from '@classmoji/content';
-import { GitHubProvider } from '@classmoji/services';
+import { ClassmojiService, GitHubProvider } from '@classmoji/services';
 import getPrisma from '@classmoji/database';
 
 const THEMES_FOLDER = '.slidesthemes';
@@ -166,6 +166,20 @@ export async function saveTheme({
     message: `Save shared theme: ${themeName}`,
     onProgress,
   });
+
+  // A theme is delivered by the SHA of its TREE, so a save that does not
+  // refresh the asset map leaves every deck in the classroom signing the
+  // PREVIOUS tree — the edge keeps handing back the old CSS until a push
+  // webhook or the nightly sweep catches up. Full mode, because no per-file
+  // update can produce a tree SHA.
+  //
+  // AWAITED, and the ordering is the point. The only caller is the slides.com
+  // zip importer, which runs fire-and-forget behind an SSE progress stream and
+  // writes its deck rows immediately after this returns — so nothing is
+  // blocking on a user's request here, and the map has to be level with the new
+  // theme BEFORE the decks that reference it exist. Never throws: the commit
+  // already reached GitHub and the save has succeeded whatever the cache does.
+  await ClassmojiService.contentAssets.syncContentAssetsForRepo(org, repoName, 'theme-save');
 
   return {
     themePath,

@@ -31,8 +31,10 @@ vi.mock('../../content/ContentService.ts', () => ({
 // webhook — see recordContentAsset. Mocked here so this suite keeps pinning the
 // GitHub interactions and nothing reaches Prisma.
 const recordContentAssetMock = vi.fn();
+const resolveContentBranchMock = vi.fn();
 vi.mock('../contentAssets.service.ts', () => ({
   recordContentAsset: (...args: unknown[]) => recordContentAssetMock(...args),
+  resolveContentBranch: (...args: unknown[]) => resolveContentBranchMock(...args),
 }));
 
 const {
@@ -268,6 +270,7 @@ describe('pageContent.uploadPageAsset', () => {
       sha: 'c'.repeat(40),
     });
     recordContentAssetMock.mockResolvedValue(true);
+    resolveContentBranchMock.mockResolvedValue('main');
     delete process.env.CONTENT_DELIVERY_ORIGIN;
     delete process.env.CONTENT_SIGNING_SECRET;
   });
@@ -283,6 +286,22 @@ describe('pageContent.uploadPageAsset', () => {
     expect(arg.file).toBe(buffer);
     expect(arg.filename).toBe('a.png');
     expect(arg.branch).toBe('main');
+  });
+
+  it('commits to the repo default branch rather than a hardcoded main', async () => {
+    // A course imported from an older org is on `master`. Committing to `main`
+    // there either creates a branch nobody renders from or is refused outright,
+    // and the asset map would then hold a blob the served branch never had.
+    resolveContentBranchMock.mockResolvedValue('master');
+
+    await uploadPageAsset(page, Buffer.from('x'), 'a.png');
+
+    expect(resolveContentBranchMock).toHaveBeenCalledWith(
+      gitOrganization,
+      'test-org',
+      'content-test-org-cs101'
+    );
+    expect(callArg(uploadMock).branch).toBe('master');
   });
 
   it('stores the REPO PATH once the delivery layer can sign it', async () => {

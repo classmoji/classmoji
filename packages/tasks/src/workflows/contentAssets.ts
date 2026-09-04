@@ -36,12 +36,37 @@ interface ContentAssetsSyncPayload {
   forced?: boolean;
   /** False when the push payload's `commits[]` was capped (GitHub sends at most 20). */
   complete?: boolean;
+  /**
+   * The commit the push built on. A push whose parent is not the commit the map
+   * is level with means an earlier delivery was lost, and the sync escalates to
+   * a full tree read rather than applying a diff against a state it never had.
+   */
+  before?: string;
+  /** The commit the push landed — recorded as the map's new level. */
+  after?: string;
 }
 
 export const contentAssetsSyncTask = task({
   id: 'content-assets-sync',
+  /**
+   * ONE sync per classroom at a time.
+   *
+   * The map is only self-correcting if the runs that build it are ordered.
+   * Two deliveries for one repo arriving together can apply their diffs in
+   * either order and record either `after` as "the commit the map is level
+   * with" — so the map's commit can move BACKWARDS, which hides the very gap
+   * `before` exists to expose. `concurrencyKey` (passed at trigger time, per
+   * classroom) gives each classroom its own copy of this queue, and the limit
+   * of 1 on that copy is what serializes them. Classrooms still run in
+   * parallel with each other.
+   *
+   * The queue is the fence, not the whole guarantee: a retry or a render-path
+   * `ensureContentAssets` still runs outside it, which is why the incremental
+   * commit write is also a compare-and-swap.
+   */
+  queue: { concurrencyLimit: 1 },
   run: async (payload: ContentAssetsSyncPayload) => {
-    const { classroomId, reason, changes, forced, complete } = payload;
+    const { classroomId, reason, changes, forced, complete, before, after } = payload;
 
     // Three separate reasons the incremental path can't be used, all meaning
     // the same thing: we do not have a trustworthy list of what changed.
@@ -50,6 +75,8 @@ export const contentAssetsSyncTask = task({
     const result = await ClassmojiService.contentAssets.syncContentAssets(classroomId, {
       full,
       changes,
+      before,
+      after,
     });
 
     logger.info('Synced content assets', {

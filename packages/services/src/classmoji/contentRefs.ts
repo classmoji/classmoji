@@ -29,6 +29,45 @@ export function contentProxyBase(login: string, repo: string): string {
   return `/content/${login}/${repo}`;
 }
 
+/**
+ * A commit-pinned ref: 40 hex characters where a branch name would be.
+ *
+ * These are not references to "the current file", they are references to one
+ * exact historical version, and every caller here has to leave them alone for
+ * its own reason. The delivery resolver must not turn one into a repo path,
+ * because the map holds the DEFAULT BRANCH's content and serving that would
+ * quietly hand back today's bytes for a URL that asked for a specific old
+ * revision. The import rewriter must not repoint one at the target repo,
+ * because that commit does not exist there and never will.
+ */
+export function isCommitRef(ref: string): boolean {
+  return /^[0-9a-f]{40}$/i.test(ref);
+}
+
+/**
+ * Split `{ref}/{path}` off the tail of a raw URL, where the ref may be
+ * fully qualified.
+ *
+ * GitHub's own "Raw" button emits `refs/heads/main/...`, not `main/...`, and
+ * the two are the same URL. Consuming ONE segment as the ref against the
+ * qualified form leaves `ref: 'refs'` and a path of `heads/main/pages/…` — a
+ * path no repo has, so the resolver misses it and the rewriter carries the
+ * item folder across unremapped. Tags (`refs/tags/v1`) arrive the same way.
+ *
+ * Returns null when there is no path after the ref, which is not a file
+ * reference at all.
+ */
+export function splitRawRef(rest: string): { ref: string; path: string } | null {
+  const qualified = /^(refs\/(?:heads|tags)\/[^/]+)\/(.+)$/.exec(rest);
+  if (qualified) {
+    return { ref: qualified[1], path: qualified[2] };
+  }
+
+  const slash = rest.indexOf('/');
+  if (slash <= 0) return null;
+  return { ref: rest.slice(0, slash), path: rest.slice(slash + 1) };
+}
+
 /** Everything after the first `?` or `#` — never part of a repo path. */
 function stripUrlTail(value: string): string {
   const cut = value.search(/[?#]/);
@@ -49,10 +88,10 @@ function decodePathOnce(path: string): string {
  *
  * Null is the answer for every external URL, every other classroom's repo, and
  * every `data:` — the caller leaves those exactly as it found them. The raw
- * shape is matched branch-agnostically (the rewriter only ever writes `main`,
- * but content imported or hand-authored elsewhere may name another branch),
- * which is why the branch segment is consumed positionally rather than by
- * comparing against a fixed prefix.
+ * shape is matched branch-agnostically (content imported or hand-authored
+ * elsewhere may name any branch), which is why the ref is consumed positionally
+ * rather than by comparing against a fixed prefix. A COMMIT-pinned raw URL is
+ * deliberately not a match: see `isCommitRef`.
  */
 export function extractOwnRepoPath(urlOrRef: string, login: string, repo: string): string | null {
   if (typeof urlOrRef !== 'string' || urlOrRef.length === 0) return null;
@@ -71,11 +110,11 @@ export function extractOwnRepoPath(urlOrRef: string, login: string, repo: string
 
   const rawPrefix = `${RAW_HOST}/${login}/${repo}/`;
   if (bare.startsWith(rawPrefix)) {
-    // The next segment is the branch/ref, whatever it is called.
-    const rest = bare.slice(rawPrefix.length);
-    const slash = rest.indexOf('/');
-    if (slash <= 0) return null;
-    return normalizeExtracted(rest.slice(slash + 1));
+    // The leading segment(s) are the ref, whatever it is called and however it
+    // is qualified.
+    const split = splitRawRef(bare.slice(rawPrefix.length));
+    if (!split || isCommitRef(split.ref)) return null;
+    return normalizeExtracted(split.path);
   }
 
   return null;

@@ -62,10 +62,15 @@ async function bootstrapContentAssets({ dryRun }: { dryRun: boolean }): Promise<
     // No `changes`, so the task takes the full path: read the whole tree and
     // stamp-and-sweep. That is the only correct mode for a classroom whose map
     // may be absent, partial, or arbitrarily out of date.
-    await Tasks.contentAssetsSyncTask.trigger({
-      classroomId: classroom.id,
-      reason: 'bootstrap' as const,
-    });
+    await Tasks.contentAssetsSyncTask.trigger(
+      {
+        classroomId: classroom.id,
+        reason: 'bootstrap' as const,
+      },
+      // Same per-classroom fence the webhook uses: a bootstrap run must queue
+      // behind a live delivery for that classroom rather than race it.
+      { concurrencyKey: classroom.id }
+    );
     triggered += 1;
     console.log(`   ✅ queued ${label}`);
   }

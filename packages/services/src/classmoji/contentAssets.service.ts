@@ -27,8 +27,6 @@ import { getGitProvider } from '../git/index.ts';
  *     for vanished paths go away.
  */
 
-const DEFAULT_BRANCH = 'main';
-
 /**
  * Above this many changed paths, one tree call beats N per-path reads.
  *
@@ -62,6 +60,14 @@ export interface ContentAssetChanges {
 export interface SyncContentAssetsOptions {
   full?: boolean;
   changes?: ContentAssetChanges;
+  /**
+   * The commit the push built ON — `before` from the webhook. Compared against
+   * the commit the map was last brought level with; a mismatch means a delivery
+   * went missing and this run escalates to a full tree read.
+   */
+  before?: string | null;
+  /** The commit the push LANDED — `after`. Recorded once the diff is applied. */
+  after?: string | null;
 }
 
 export interface SyncContentAssetsResult {
@@ -81,6 +87,8 @@ interface ResolvedClassroom {
   id: string;
   content_repo: string;
   org: string;
+  /** The commit the map was last brought level with; null = never synced. */
+  syncedCommit: string | null;
   gitOrganization: NonNullable<Awaited<ReturnType<typeof loadClassroomRaw>>>['git_organization'];
 }
 
@@ -94,7 +102,8 @@ async function loadClassroomRaw(classroomId: string) {
 type ClassroomRecord = Awaited<ReturnType<typeof loadClassroomRaw>>;
 
 /**
- * The classroom plus the two things a sync needs from it: which org, which repo.
+ * The classroom plus what a sync needs from it: which org, which repo, and the
+ * commit the map was last brought level with.
  *
  * Throws rather than returning null. Every caller here is already committed to
  * syncing, so "this classroom has no git organization" is a programming or
@@ -116,6 +125,7 @@ function toResolvedClassroom(classroom: ClassroomRecord, classroomId: string): R
     id: classroom.id,
     content_repo: classroom.content_repo,
     org: classroom.git_organization.login,
+    syncedCommit: classroom.content_assets_synced_commit ?? null,
     gitOrganization: classroom.git_organization,
   };
 }
@@ -147,14 +157,48 @@ interface TreeEntry {
   size?: number;
 }
 
+/**
+ * The branch a classroom's content repo actually serves.
+ *
+ * Asked, never assumed. A course imported from an older org is on `master`, and
+ * against such a repo a hardcoded `main` does not read stale content — the tree
+ * call 404s, the sync throws, and the classroom keeps an empty map while every
+ * asset falls back to the legacy path. One `GET /repos` per sync buys the
+ * difference.
+ *
+ * Deliberately NOT memoised. A default branch can be renamed, the value is only
+ * ever read on the far side of a network call that dwarfs it, and a cache here
+ * would need invalidating from a place that has no idea this module exists.
+ */
+export async function resolveContentBranch(
+  gitOrganization: Parameters<typeof getGitProvider>[0],
+  org: string,
+  repo: string
+): Promise<string> {
+  return getGitProvider(gitOrganization).getDefaultBranch(org, repo);
+}
+
+/**
+ * The default branch's tree, plus the commit it was read AT.
+ *
+ * The branch head is resolved first and the tree is then read at that commit
+ * rather than at the branch name, so the commit this returns describes exactly
+ * the entries it returns. That matters because the commit is recorded as the
+ * state the map is level with: reading the tree at a moving branch and asking
+ * for its head separately could record a commit whose tree was never read, and
+ * a later push building on that commit would then find the chain intact and
+ * skip the escalation that should have repaired it.
+ */
 async function readRepoTree(
   classroom: ResolvedClassroom
-): Promise<{ entries: TreeEntry[]; truncated: boolean }> {
+): Promise<{ entries: TreeEntry[]; truncated: boolean; commit: string }> {
   const provider = getGitProvider(classroom.gitOrganization);
+  const branch = await provider.getDefaultBranch(classroom.org, classroom.content_repo);
+  const commit = await provider.getLatestCommitSHA(classroom.org, classroom.content_repo, branch);
   const tree = await provider.getTree(
     classroom.org,
     classroom.content_repo,
-    DEFAULT_BRANCH,
+    commit,
     /* recursive */ true
   );
 
@@ -168,7 +212,7 @@ async function readRepoTree(
     );
   }
 
-  return { entries: tree.entries, truncated: tree.truncated };
+  return { entries: tree.entries, truncated: tree.truncated, commit };
 }
 
 function upsertOp(classroomId: string, entry: TreeEntry, syncedAt: Date) {
@@ -194,6 +238,16 @@ function upsertOp(classroomId: string, entry: TreeEntry, syncedAt: Date) {
  * deleted. Doing it this way rather than diffing means the sweep is correct
  * even when the previous state was partial, wrong, or absent.
  *
+ * The stamp is taken BEFORE the tree is read, and that ordering is the whole
+ * safety of the sweep. Reading a repo's tree is a network round trip — often
+ * hundreds of milliseconds, sometimes seconds — and `recordContentAsset` writes
+ * a row for a just-uploaded file stamped `now`. Stamping AFTER the read puts
+ * this run's stamp ahead of that row, and `synced_at < syncedAt` then deletes
+ * it: the file is genuinely in the repo, it is simply newer than the snapshot
+ * this run read, and the teacher who just uploaded it watches it render as a
+ * dangling URL. Stamping first can only ever leave a row the sweep keeps, which
+ * is the same too-large-map trade the truncated case takes below.
+ *
  * The whole thing is ONE transaction: a half-applied sync would leave the map
  * claiming paths at SHAs that never coexisted, and a reader cannot tell that
  * from a good map. All-or-nothing means a failure leaves the previous map
@@ -217,14 +271,22 @@ function upsertOp(classroomId: string, entry: TreeEntry, syncedAt: Date) {
  * into a permanent re-sync loop against a repo that is simply too big.
  */
 async function fullSync(classroom: ResolvedClassroom): Promise<SyncContentAssetsResult> {
-  const { entries, truncated } = await readRepoTree(classroom);
+  // Before the read, not after — see the header. A row written while the tree
+  // is in flight must stamp ABOVE this run, or the sweep deletes it.
   const syncedAt = new Date();
+  const { entries, truncated, commit } = await readRepoTree(classroom);
 
   // FIRST, not last. The sweep's count is read off the tail of the results, so
   // the stamp goes in front of the upserts rather than after the delete.
+  //
+  // The commit rides along with the timestamp: this run read the repo at it, so
+  // it is the state the map is now level with, and the next push's `before` is
+  // measured against it. A truncated run records it too — it did read the tree
+  // at that commit, and refusing to record would leave a repo that is simply
+  // too big permanently claiming a missed delivery on every push.
   const stampOp = getPrisma().classroom.update({
     where: { id: classroom.id },
-    data: { content_assets_synced_at: syncedAt },
+    data: { content_assets_synced_at: syncedAt, content_assets_synced_commit: commit },
   });
 
   const operations = entries.map(entry => upsertOp(classroom.id, entry, syncedAt));
@@ -266,7 +328,8 @@ async function fullSync(classroom: ResolvedClassroom): Promise<SyncContentAssets
  */
 async function incrementalSync(
   classroom: ResolvedClassroom,
-  changes: ContentAssetChanges
+  changes: ContentAssetChanges,
+  after: string | null
 ): Promise<SyncContentAssetsResult> {
   const removed = unique(changes.removed ?? []);
   const touched = unique([...(changes.added ?? []), ...(changes.modified ?? [])]);
@@ -319,12 +382,55 @@ async function incrementalSync(
   const syncedAt = new Date();
   const operations = entries.map(entry => upsertOp(classroom.id, entry, syncedAt));
 
+  // The commit this diff lands the map on — and ONLY the commit. The freshness
+  // timestamp deliberately stays untouched (see `ensureContentAssets`): this run
+  // applied the paths one push named and knows nothing about the rest of the
+  // repo, so it may not suppress the daily full refresh. It may, however, say
+  // which commit the map is now level with, which is what lets the NEXT push
+  // notice a delivery that went missing. Inside the transaction, so a failed
+  // apply does not claim a commit it never applied.
+  //
+  // A COMPARE-AND-SWAP, not a write: `updateMany` matched on the commit this
+  // run read, so it lands only if nothing moved the classroom in between.
+  // Deliveries for one classroom are meant to run one at a time (the sync task
+  // carries a per-classroom concurrency key), but a Trigger retry, a manual
+  // sync, or a render-path `ensureContentAssets` can still overlap — and a
+  // blind write from the slower of two runs would move the map's commit
+  // BACKWARDS, which reads as a missed delivery on the next push at best and
+  // hides a real one at worst.
+  //
+  // Suppressed entirely when the listing was truncated: the run could not apply
+  // the deletions it inferred, so the map is not level with `after` and must not
+  // say it is.
+  const casCommit = after && !truncated ? after : null;
+  const commitOps = casCommit
+    ? [
+        getPrisma().classroom.updateMany({
+          where: { id: classroom.id, content_assets_synced_commit: classroom.syncedCommit },
+          data: { content_assets_synced_commit: casCommit },
+        }),
+      ]
+    : [];
+
   const results = await getPrisma().$transaction([
+    ...commitOps,
     ...operations,
     getPrisma().contentAsset.deleteMany({
       where: { classroom_id: classroom.id, path: { in: toDelete } },
     }),
   ]);
+
+  if (casCommit && (results[0] as { count: number }).count === 0) {
+    // Lost the race. The ROWS this run wrote are still correct — they are
+    // content-addressed and idempotent — so only the commit claim is dropped.
+    // Whoever won recorded a commit this run cannot vouch for, and the next
+    // push's `before` will not match it, which escalates to a full tree read.
+    // That is the repair, and it is the one the mismatch path already runs.
+    console.warn(
+      `[contentAssets] Concurrent sync for ${classroom.id} moved the map past ` +
+        `${classroom.syncedCommit}; not recording ${casCommit}. The next push escalates.`
+    );
+  }
 
   // Same positional coupling as fullSync: the delete is appended last.
   const deleted = (results.at(-1) as { count: number }).count;
@@ -349,6 +455,10 @@ function touchesThemes(changes: ContentAssetChanges): boolean {
  * change under `.slidesthemes/` escalates back to full regardless, because a
  * theme is addressed by its tree SHA and no per-file update can produce one.
  * Pass `full: true` to force the full path even when `changes` is present.
+ *
+ * A push that does not build on the commit the map is level with escalates too
+ * — see `missedDelivery` — as does the FIRST push for a classroom whose tree
+ * has never been read.
  */
 export async function syncContentAssets(
   classroomId: string,
@@ -356,9 +466,97 @@ export async function syncContentAssets(
 ): Promise<SyncContentAssetsResult> {
   const classroom = await resolveClassroom(classroomId);
 
-  const goFull = opts.full === true || !opts.changes || touchesThemes(opts.changes);
+  const missed = missedDelivery(classroom, opts.before);
+  if (missed) {
+    // Loud, because it is the only evidence that deliveries are being lost. One
+    // line is a hiccup; the same classroom every day is a webhook that needs
+    // looking at, and a map that has been running on the nightly sweep.
+    console.warn(
+      `[contentAssets] Push for ${classroomId} builds on ${opts.before}, but the map is level ` +
+        `with ${classroom.syncedCommit} — a delivery was missed. Escalating to a full sync.`
+    );
+  }
 
-  return goFull ? fullSync(classroom) : incrementalSync(classroom, opts.changes!);
+  // A classroom with no recorded commit has never had its whole tree read, and
+  // a diff cannot build a map out of nothing: applying one push's paths would
+  // leave every file the push did not touch missing, and then RECORD that
+  // half-map as level with `after` — so the chain starts from a state that was
+  // never true and the gap never shows up again. The first sync reads the tree.
+  const firstSync = Boolean(opts.changes) && !classroom.syncedCommit;
+
+  const goFull =
+    opts.full === true || !opts.changes || touchesThemes(opts.changes) || missed || firstSync;
+
+  return goFull
+    ? fullSync(classroom)
+    : incrementalSync(classroom, opts.changes!, opts.after ?? null);
+}
+
+/**
+ * Did the repo move without the map seeing it?
+ *
+ * A push webhook names the commit it built ON as well as the one it landed. If
+ * that parent is not the commit the map was last brought level with, some push
+ * in between never reached us — a dropped delivery, hook-station down, an App
+ * install that finished after the first push — and the diff in hand is a diff
+ * against a state the map does not hold. Applying it converges on nothing: the
+ * paths the missing push added stay absent, the ones it deleted stay behind as
+ * rows the renderer will happily sign 404s for, and the whole thing looks
+ * perfectly healthy until the nightly sweep happens to run.
+ *
+ * BOTH sides have to be present. A null stored commit is a classroom that has
+ * never synced, which is not a gap — there is no chain yet — and every classroom
+ * in the table starts there, so counting it would make the first push after this
+ * shipped a full sync for all of them at once. A push with no `before` is a
+ * caller that cannot answer the question (a manual or TTL run), and silence is
+ * not evidence.
+ */
+function missedDelivery(classroom: ResolvedClassroom, before: string | null | undefined): boolean {
+  return Boolean(before && classroom.syncedCommit && before !== classroom.syncedCommit);
+}
+
+/**
+ * Full-sync whatever classroom owns this content repo, addressed by org + repo.
+ *
+ * For writers that commit to a content repo DIRECTLY and need the map to
+ * reflect it before the next render — a shared theme save is the case that
+ * forced this. A theme is served by the SHA of its TREE, so until the map is
+ * rebuilt every deck in the classroom keeps signing the previous tree and the
+ * edge keeps serving the previous CSS. The push webhook would eventually fix
+ * it, but "eventually" is after the author has already reloaded and seen their
+ * change not take.
+ *
+ * Full mode always, for the same reason: no per-file update can produce a tree
+ * SHA, so an incremental apply cannot see a theme edit at all.
+ *
+ * NEVER THROWS. It sits after a write that already succeeded, and a commit that
+ * reached GitHub must not be reported as a failed save because a cache could
+ * not be refreshed. Returns null when nothing was synced — no classroom claims
+ * this repo, or the refresh itself failed and the next sync will repair it.
+ */
+export async function syncContentAssetsForRepo(
+  org: string,
+  repo: string,
+  reason: string
+): Promise<SyncContentAssetsResult | null> {
+  try {
+    const classroom = await getPrisma().classroom.findFirst({
+      where: { content_repo: repo, git_organization: { login: org } },
+      select: { id: true },
+    });
+    // Not ours to care about — the same ordinary, non-error case the push
+    // webhook's classroom lookup treats as "not a content repo".
+    if (!classroom) return null;
+
+    return await syncContentAssets(classroom.id, { full: true });
+  } catch (error: unknown) {
+    console.warn(
+      `[contentAssets] ${reason} sync failed for ${org}/${repo}; ` +
+        'the next webhook or daily sweep will repair it:',
+      error
+    );
+    return null;
+  }
 }
 
 /**
@@ -537,6 +735,40 @@ export async function lookupContentTree(
     where: { classroom_id: classroomId, path: normalized, type: 'tree' },
     select: { sha: true, type: true, size: true },
   });
+}
+
+/**
+ * Many SHAs → a path holding each, in ONE query.
+ *
+ * The batch form of `lookupContentAssetBySha`, and it exists for the same
+ * reason `lookupContentAssets` does: an import rewrites a whole classroom's
+ * worth of content at once, and resolving each signed URL on its own was a
+ * round trip per image per page. SHAs the map has never heard of are simply
+ * absent from the returned map.
+ *
+ * Where two paths share a SHA the winner is the lowest path, matching the
+ * single-SHA lookup's `orderBy` — content-addressed means they are
+ * byte-identical, so the choice cannot be wrong, only arbitrary, and pinning it
+ * keeps repeated imports of the same content producing the same output.
+ */
+export async function lookupContentAssetsBySha(
+  classroomId: string,
+  shas: string[]
+): Promise<Map<string, string>> {
+  const wanted = [...new Set(shas)];
+  if (wanted.length === 0) return new Map();
+
+  const rows = await getPrisma().contentAsset.findMany({
+    where: { classroom_id: classroomId, sha: { in: wanted } },
+    select: { path: true, sha: true },
+    orderBy: { path: 'asc' },
+  });
+
+  const bySha = new Map<string, string>();
+  for (const row of rows as { path: string; sha: string }[]) {
+    if (!bySha.has(row.sha)) bySha.set(row.sha, row.path);
+  }
+  return bySha;
 }
 
 /**

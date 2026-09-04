@@ -58,6 +58,10 @@ const buildApp = async (): Promise<FastifyInstance> => {
 interface PushOverrides {
   ref?: string;
   forced?: boolean;
+  before?: string;
+  after?: string;
+  created?: boolean;
+  deleted?: boolean;
   repo?: string;
   owner?: string;
   defaultBranch?: string;
@@ -70,12 +74,18 @@ const pushBody = ({
   repo = 'content-cs101',
   owner = 'acme',
   defaultBranch = 'main',
+  before = 'a'.repeat(40),
+  after = 'b'.repeat(40),
+  created = false,
+  deleted = false,
   commits = [{ added: ['images/one.png'], modified: [], removed: [] }],
 }: PushOverrides = {}): string =>
   JSON.stringify({
     ref,
-    before: 'a'.repeat(40),
-    after: 'b'.repeat(40),
+    before,
+    after,
+    created,
+    deleted,
     forced,
     commits,
     repository: {
@@ -124,17 +134,73 @@ describe('which pushes are ours', () => {
       select: { id: true },
     });
     expect(contentAssetsSync).toHaveBeenCalledTimes(1);
-    expect(contentAssetsSync).toHaveBeenCalledWith({
-      classroomId: 'classroom-1',
-      reason: 'push',
-      changes: {
-        added: ['images/one.png'],
-        modified: ['pages/intro.md'],
-        removed: ['images/old.png'],
+    expect(contentAssetsSync).toHaveBeenCalledWith(
+      {
+        classroomId: 'classroom-1',
+        reason: 'push',
+        changes: {
+          added: ['images/one.png'],
+          modified: ['pages/intro.md'],
+          removed: ['images/old.png'],
+        },
+        forced: false,
+        complete: true,
+        before: 'a'.repeat(40),
+        after: 'b'.repeat(40),
       },
-      forced: false,
-      complete: true,
-    });
+      // One sync per classroom at a time: two deliveries for one repo applied
+      // concurrently can record their commits in either order, moving the map's
+      // recorded commit backwards and hiding the gap `before` exists to expose.
+      { concurrencyKey: 'classroom-1' }
+    );
+  });
+
+  /**
+   * `before` is the only way the sync can tell an EARLIER delivery went
+   * missing: a push whose parent is not the commit the map is level with proves
+   * the repo moved unseen, and that run has to re-read the whole tree instead of
+   * applying a diff against a state nobody holds. `after` is the commit the map
+   * records once it has applied this one.
+   */
+  it('reports the commits the push spans, so a dropped delivery is detectable', async () => {
+    await post(app, pushBody({ before: 'c'.repeat(40), after: 'd'.repeat(40) }));
+
+    const payload = contentAssetsSync.mock.calls[0][0];
+    expect(payload.before).toBe('c'.repeat(40));
+    expect(payload.after).toBe('d'.repeat(40));
+  });
+
+  /**
+   * GitHub sends 40 zeros as `before` when a ref is CREATED. Forwarded as-is:
+   * it is not the commit any map is level with, so the sync treats it as the
+   * gap it is and re-reads the whole tree rather than applying a diff against
+   * a state nobody holds.
+   */
+  it('forwards the all-zero before of a branch-creation push', async () => {
+    await post(app, pushBody({ before: '0'.repeat(40), created: true }));
+
+    expect(contentAssetsSync).toHaveBeenCalledTimes(1);
+    expect(contentAssetsSync.mock.calls[0][0].before).toBe('0'.repeat(40));
+  });
+
+  /**
+   * `created` and `deleted` are fields the handler has no opinion about. It
+   * must not choke on them — a push it fails to answer is a delivery GitHub
+   * records as failed and a map that silently stops converging.
+   */
+  it('handles created/deleted push flags without breaking', async () => {
+    const created = await post(app, pushBody({ created: true, before: '0'.repeat(40) }));
+    expect(created.statusCode).toBe(200);
+
+    contentAssetsSync.mockClear();
+
+    const deleted = await post(
+      app,
+      pushBody({ deleted: true, after: '0'.repeat(40), commits: [] })
+    );
+    expect(deleted.statusCode).toBe(200);
+    expect(contentAssetsSync).toHaveBeenCalledTimes(1);
+    expect(contentAssetsSync.mock.calls[0][0].after).toBe('0'.repeat(40));
   });
 
   /**

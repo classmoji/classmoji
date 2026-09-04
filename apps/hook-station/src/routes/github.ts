@@ -76,6 +76,10 @@ interface PushCommit {
 interface PushEventPayload {
   ref?: string;
   forced?: boolean;
+  /** The commit the branch pointed at BEFORE this push. */
+  before?: string;
+  /** The commit it points at now. */
+  after?: string;
   commits?: PushCommit[];
   repository?: {
     name?: string;
@@ -147,15 +151,30 @@ async function handlePush(data: PushEventPayload): Promise<void> {
 
   const commits = data.commits ?? [];
 
-  await Tasks.contentAssetsSyncTask.trigger({
-    classroomId: classroom.id,
-    reason: 'push' as const,
-    changes: aggregateChanges(commits),
-    // A force-push rewrites history, so the commits listed are not a diff
-    // against what we last synced and cannot be applied incrementally.
-    forced: Boolean(data.forced),
-    complete: commits.length < GITHUB_COMMIT_CAP,
-  });
+  await Tasks.contentAssetsSyncTask.trigger(
+    {
+      classroomId: classroom.id,
+      reason: 'push' as const,
+      changes: aggregateChanges(commits),
+      // A force-push rewrites history, so the commits listed are not a diff
+      // against what we last synced and cannot be applied incrementally.
+      forced: Boolean(data.forced),
+      complete: commits.length < GITHUB_COMMIT_CAP,
+      // The commits this push spans. `before` is the only way the sync can tell
+      // that an EARLIER delivery went missing: a push whose parent is not the
+      // commit the map is level with proves the repo moved unseen, and that run
+      // has to re-read the whole tree rather than apply a diff against a state
+      // nobody holds. `after` is what the map records once it has.
+      before: data.before,
+      after: data.after,
+    },
+    {
+      // One sync per classroom at a time. Two deliveries for one repo applied
+      // concurrently can record their commits in either order, moving the map's
+      // recorded commit backwards and hiding the gap `before` exists to expose.
+      concurrencyKey: classroom.id,
+    }
+  );
 }
 
 export default async function githubRoutes(fastify: FastifyInstance): Promise<void> {
