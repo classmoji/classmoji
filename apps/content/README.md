@@ -238,10 +238,17 @@ own `[content] 403 …` line into the stream you are searching.
 Staging deploys from `.github/workflows/deploy-cloudflare-staging.yml` on pushes
 to `staging`, as `classmoji-content-staging`.
 
-Production will deploy from a workflow on pushes to `main`, as
-`classmoji-content`. **That workflow is not in the tree yet** — it lands in a
-separate PR; until it does, production is deployed by hand with
-`npx wrangler deploy --env production`.
+Production deploys from `.github/workflows/deploy-cloudflare-prod.yml` on
+pushes to `main`, as `classmoji-content`. It is the same job as staging's with
+two things that are not a rename: the branch is `main`, and the Infisical
+environment slug is `prod` where staging's is `sta`. `workflow_dispatch` runs it
+by hand — which is also how you push a secret change without a code change,
+since the secret sync only runs as part of a deploy.
+
+A push to `main` that touches `packages/content-signing/**` starts the Fly
+workflows too, and nothing orders them against this one. So for one deploy the
+apps and the Worker may be running different versions of the signing package: a
+change to a canonical string has to verify what the previous version minted.
 
 The top-level config is named `classmoji-content-unconfigured` on purpose. It
 carries no R2 bucket, no Images binding and no vars, and wrangler falls back to
