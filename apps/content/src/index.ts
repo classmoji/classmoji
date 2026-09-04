@@ -17,7 +17,7 @@ import { errorResponse, jsonResponse, preflightResponse } from './cache.ts';
 import { isConfigured, type Env } from './env.ts';
 import { OriginError } from './origins/types.ts';
 import { serveTheme } from './theme.ts';
-import { verifyContentUrl } from './verify.ts';
+import { parseContentUrl, verifyContentUrl } from './verify.ts';
 
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
@@ -44,7 +44,19 @@ export default {
     }
 
     const verified = await verifyContentUrl(signingSecret, request.url);
-    if (!verified.ok) return errorResponse(403, verified.reason);
+    if (!verified.ok) {
+      // Structural parse only (no crypto) - just to recover the classroom id
+      // for a URL whose signature we don't yet trust. Never log `sig`, the
+      // query string, or the full URL: those can leak a valid credential.
+      const classroomId = parseContentUrl(request.url)?.classroomId ?? 'unknown';
+      const p = url.searchParams.get('p');
+      const v = url.searchParams.get('v');
+      let message = `[content] 403 ${verified.reason} classroom=${classroomId} path=${url.pathname}`;
+      if (p !== null) message += ` p=${p}`;
+      if (v !== null) message += ` v=${v}`;
+      console.warn(message);
+      return errorResponse(403, verified.reason);
+    }
 
     try {
       return verified.kind === 'blob'
