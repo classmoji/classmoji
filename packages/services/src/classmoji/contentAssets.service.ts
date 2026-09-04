@@ -402,6 +402,52 @@ export async function ensureContentAssets(
 }
 
 /**
+ * Record ONE just-uploaded blob in the map, now, without waiting for a sync.
+ *
+ * The map is otherwise filled by a push webhook or by `ensureContentAssets`'
+ * 24-hour refresh, and both are too late for the file a teacher just dropped
+ * into the editor: the save stores a repo path, the next render looks that path
+ * up, misses, and the resolver emits its "dangling" URL. The upload already
+ * knows everything a row needs — path, blob sha, size — so writing it here
+ * removes the round trip entirely.
+ *
+ * A later full sync overwrites this row with identical values and its sweep
+ * keeps it (the stamp is `now`), so this is only an early write of what the
+ * sync would have written anyway. Type is always `blob`: an upload writes a
+ * file, never a tree.
+ *
+ * NEVER THROWS, for the same reason `ensureContentAssets` does not — it sits on
+ * an upload path, and an upload that reached the repo must not be reported as
+ * failed because a cache row could not be written. Returns whether the row was
+ * written: false covers both "this classroom is not served by the delivery
+ * layer" (GitLab-backed, mock org, no content repo) and "the write failed".
+ */
+export async function recordContentAsset(
+  classroomId: string,
+  entry: { path: string; sha: string; size?: number }
+): Promise<boolean> {
+  try {
+    // Configuration, checked rather than caught — same split as ensureContentAssets.
+    const classroom = await loadClassroomRaw(classroomId);
+    if (!isDeliverable(classroom)) return false;
+
+    await upsertOp(
+      classroomId,
+      { path: entry.path, sha: entry.sha, type: 'blob', size: entry.size },
+      new Date()
+    );
+    return true;
+  } catch (error: unknown) {
+    console.warn(
+      `[contentAssets] Could not record ${entry.path} for ${classroomId}; ` +
+        'the next sync will pick it up:',
+      error
+    );
+    return false;
+  }
+}
+
+/**
  * One path → the git object behind it. Null when the map has never heard of it.
  */
 export async function lookupContentAsset(

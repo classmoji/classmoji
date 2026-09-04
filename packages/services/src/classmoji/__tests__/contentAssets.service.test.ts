@@ -46,6 +46,7 @@ vi.mock('../../content/ContentService.ts', () => ({
 const {
   syncContentAssets,
   ensureContentAssets,
+  recordContentAsset,
   lookupContentAsset,
   lookupContentTree,
   lookupContentAssetBySha,
@@ -359,6 +360,84 @@ describe('contentAssets.service', () => {
 
       expect(result?.mode).toBe('full');
       expect(getTree).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe('recordContentAsset', () => {
+    it('upserts one blob row with the same shape a sync would write', async () => {
+      // The point of the whole helper: the row exists before any webhook or
+      // 24-hour refresh, so the very next render resolves the path instead of
+      // signing a dangling URL for it.
+      await expect(
+        recordContentAsset('class-1', { path: 'pages/home/assets/x.png', sha: 'sha-x', size: 512 })
+      ).resolves.toBe(true);
+
+      expect(contentAssetUpsert).toHaveBeenCalledTimes(1);
+      const [args] = contentAssetUpsert.mock.calls[0];
+      expect(args.where).toEqual({
+        classroom_id_path: { classroom_id: 'class-1', path: 'pages/home/assets/x.png' },
+      });
+      // An upload writes a file, never a tree.
+      expect(args.create).toMatchObject({
+        classroom_id: 'class-1',
+        path: 'pages/home/assets/x.png',
+        sha: 'sha-x',
+        type: 'blob',
+        size: 512,
+      });
+      expect(args.update).toMatchObject({ sha: 'sha-x', type: 'blob', size: 512 });
+      // Stamped now, so the next full sync's sweep keeps it rather than
+      // deleting a row for a file that is genuinely in the repo.
+      expect(args.create.synced_at).toBeInstanceOf(Date);
+      expect(args.update.synced_at).toEqual(args.create.synced_at);
+    });
+
+    it('defaults a missing size to 0, as the tree entries do', async () => {
+      await recordContentAsset('class-1', { path: 'images/a.png', sha: 'sha-a' });
+
+      expect(contentAssetUpsert.mock.calls[0][0].create.size).toBe(0);
+    });
+
+    it('no-ops for a classroom the delivery layer cannot serve', async () => {
+      // GitLab-backed, the mock org behind an example classroom, or no content
+      // repo. The upload itself still succeeded, so this must not throw.
+      classroomFindUnique.mockResolvedValue({
+        ...CLASSROOM,
+        git_organization: { ...CLASSROOM.git_organization, provider: 'GITLAB' },
+      });
+
+      await expect(
+        recordContentAsset('class-1', { path: 'images/a.png', sha: 'sha-a' })
+      ).resolves.toBe(false);
+      expect(contentAssetUpsert).not.toHaveBeenCalled();
+    });
+
+    it('no-ops for a classroom with no content repo', async () => {
+      classroomFindUnique.mockResolvedValue({ ...CLASSROOM, content_repo: null });
+
+      await expect(
+        recordContentAsset('class-1', { path: 'images/a.png', sha: 'sha-a' })
+      ).resolves.toBe(false);
+      expect(contentAssetUpsert).not.toHaveBeenCalled();
+    });
+
+    it('resolves false instead of throwing when the write fails', async () => {
+      // It sits on an upload path. A file that reached the repo must never be
+      // reported as a failed upload because a cache row could not be written.
+      contentAssetUpsert.mockImplementation(() => {
+        throw new Error('connection terminated');
+      });
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+      await expect(
+        recordContentAsset('class-1', { path: 'images/a.png', sha: 'sha-a' })
+      ).resolves.toBe(false);
+
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining('Could not record images/a.png for class-1'),
+        expect.any(Error)
+      );
+      warn.mockRestore();
     });
   });
 
