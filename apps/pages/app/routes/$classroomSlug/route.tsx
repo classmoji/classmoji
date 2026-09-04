@@ -10,6 +10,8 @@ import {
 } from './embedBridge.ts';
 
 import { ClassmojiService, getAuthSession } from '~/utils/db.server.ts';
+import { assetResolveContext } from '~/utils/assetRefs.server.ts';
+import { headerImageRefs, withResolvedHeaderImages } from '~/utils/headerImages.ts';
 
 import PagesLayout from '~/components/layout/PagesLayout.tsx';
 import PagesSidebar from '~/components/layout/PagesSidebar.tsx';
@@ -96,6 +98,30 @@ export const loader = async ({
     pages = allPages.filter(p => p.is_public && !p.is_draft);
   }
 
+  // Header thumbnails carry a stored reference, exactly like a block does, so
+  // they need the same render-time resolution — and the same PER-VIEWER tier as
+  // the page render itself: staff get short-lived draft URLs, an anonymous
+  // visitor the public bucket, everyone else enrolled. A failure here degrades
+  // to the stored references (the list still renders, thumbnails may not) rather
+  // than 500ing a classroom's whole page list over one image.
+  let resolvedPages = pages;
+  const assetCtx = assetResolveContext(
+    classroom as unknown as Parameters<typeof assetResolveContext>[0],
+    ClassmojiService.contentDelivery.tierFor({
+      canEdit: view === 'admin',
+      isPublicSite: view === 'public',
+    })
+  );
+  const headerRefs = headerImageRefs(pages);
+  if (assetCtx && headerRefs.length > 0) {
+    try {
+      const resolved = await ClassmojiService.contentDelivery.resolveMany(assetCtx, headerRefs);
+      resolvedPages = withResolvedHeaderImages(pages, resolved);
+    } catch (error) {
+      console.warn('[pages] Header image resolution failed, rendering stored refs:', error);
+    }
+  }
+
   return {
     view,
     isEmbedded,
@@ -120,7 +146,7 @@ export const loader = async ({
           }
         : null,
     },
-    pages: pages.map(p => ({
+    pages: resolvedPages.map(p => ({
       id: p.id,
       title: p.title,
       slug: p.slug,

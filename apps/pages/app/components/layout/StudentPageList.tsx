@@ -35,7 +35,10 @@ const StudentPageList = ({ pages, classroom }: StudentPageListProps) => {
             {page.header_image_url ? (
               <div
                 className="h-32 bg-gray-100 dark:bg-gray-800 bg-cover bg-center"
-                style={{ backgroundImage: `url(${page.header_image_url})` }}
+                // Quoted: the loader hands back a signed delivery URL here, and
+                // an unquoted CSS `url()` ends at the first `)` — which a stored
+                // reference is free to contain.
+                style={{ backgroundImage: `url("${page.header_image_url}")` }}
               />
             ) : (
               <div className="h-32 bg-gray-100 dark:bg-gray-800 flex items-center justify-center">
