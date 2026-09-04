@@ -18,7 +18,6 @@ import {
   loadDeck,
   parseSlidesFragment,
   previewBranchName,
-  rewriteDeckAssetUrls,
   resolveDeckPreviewConflicts,
   saveDeck,
   saveDeckFromOps,
@@ -34,6 +33,13 @@ import { useUser } from '~/hooks';
 import { fetchContent } from '~/utils/contentProxy';
 import { diffDeckSnapshots, extractDeckSnapshot, type DeckSnapshot } from '~/utils/deckOpsDiff';
 import { getThemeUrls } from '~/utils/themeService.server';
+import {
+  deckAccessFor,
+  deckDeliveryContext,
+  resolveDeckAssets,
+  resolveDeliveryThemeUrls,
+  resolveReadThemeUrls,
+} from '~/utils/deckDelivery.server';
 import RevealSlides, { type RevealSlidesHandle } from '~/components/RevealSlides';
 import SlideToolbar from '~/components/SlideToolbar';
 import SlideNotesPanel from '~/components/SlideNotesPanel';
@@ -52,133 +58,6 @@ import {
   type ConflictUnit,
   type OrderConflict,
 } from '~/components/preview/PreviewControls';
-
-/**
- * Resolve shared-theme URLs for read-side deck rendering (Phase 4c). Same
- * resolution the save path uses (getThemeUrls with identical args), so the
- * generated document matches the saved index.html artifact byte-for-byte.
- * Unlike the save path (which is about to persist and falls back to theme
- * 'white'), a resolve failure on a READ must not mutate the deck — we just
- * render without theme links (generateDeckHtml warns).
- */
-async function resolveReadThemeUrls(
-  deck: DeckJson,
-  gitOrgLogin: string,
-  repo: string
-): Promise<DeckThemeUrls | undefined> {
-  if (!deck.theme.startsWith('shared:')) return undefined;
-  const sharedThemeName = deck.theme.replace('shared:', '');
-  try {
-    const urls = await getThemeUrls(gitOrgLogin, repo, sharedThemeName);
-    return {
-      libCssUrl: urls.libCssUrl,
-      customThemeUrl: urls.customThemeUrl,
-      bodyClasses: urls.bodyClasses,
-    };
-  } catch (error: unknown) {
-    const message = error instanceof Error ? error.message : String(error);
-    console.warn(`Could not resolve shared theme URLs for "${sharedThemeName}":`, message);
-    return undefined;
-  }
-}
-
-/**
- * The classroom shape the content resolver needs, or null when this deck's
- * classroom cannot be served by the delivery layer at all.
- */
-function deliveryContext(
-  slide: {
-    classroom?: { id?: string; content_key_version?: number; content_repo?: string } | null;
-  },
-  gitOrgLogin: string | undefined,
-  repo: string | undefined,
-  tier: 'public' | 'enrolled' | 'draft'
-) {
-  const classroom = slide.classroom;
-  if (!classroom?.id || !repo || !gitOrgLogin) return null;
-  return {
-    classroom: {
-      id: classroom.id,
-      content_key_version: classroom.content_key_version ?? 0,
-      content_repo: repo,
-      git_organization: { login: gitOrgLogin },
-    },
-    tier,
-  };
-}
-
-type DeliveryContext = ReturnType<typeof deliveryContext>;
-
-/**
- * Read-side theme URLs, signed when the delivery layer is on.
- *
- * `getThemeUrls` still does the work that needs GitHub — which lib CSS variant
- * exists, whether there is a custom-theme.css, what the manifest's bodyClasses
- * are. This only swaps the BASE those files hang off, from the content proxy to
- * the signed theme folder, keeping the exact filenames it resolved. Deriving
- * the filenames independently would silently downgrade a deck on `offline-v1`
- * to a 404, and would invent a custom-theme.css for themes that have none.
- *
- * A theme is signed as a FOLDER, so the CSS's own relative `url()` references
- * inherit the signature and keep resolving.
- */
-async function resolveDeliveryThemeUrls(
-  deck: DeckJson,
-  gitOrgLogin: string,
-  repo: string,
-  ctx: DeliveryContext
-): Promise<DeckThemeUrls | undefined> {
-  const base = await resolveReadThemeUrls(deck, gitOrgLogin, repo);
-  if (!base || !ctx || !deck.theme.startsWith('shared:')) return base;
-
-  const themeName = deck.theme.replace('shared:', '');
-  const signedBase = await ClassmojiService.contentDelivery.resolveThemeBase(ctx, themeName);
-  if (!signedBase) return base;
-
-  // `/content/{org}/{repo}/.slidesthemes/{theme}/lib/offline-v2.css` → `lib/offline-v2.css`
-  const marker = `/.slidesthemes/${themeName}/`;
-  const rebase = (url: string | null | undefined): string | null | undefined => {
-    if (!url) return url;
-    const at = url.indexOf(marker);
-    return at === -1 ? url : `${signedBase}${url.slice(at + marker.length)}`;
-  };
-
-  return {
-    ...base,
-    libCssUrl: rebase(base.libCssUrl),
-    customThemeUrl: rebase(base.customThemeUrl),
-  };
-}
-
-/**
- * Sign the image references inside already-rendered deck HTML.
- *
- * READ ONLY. The stored document keeps `/content/{org}/{repo}/{path}`, and this
- * is the view of it — which is why it is never applied to content on its way
- * into the editor: the editor posts its document back on save, and a signed URL
- * that made that round trip would be committed into deck.json, freezing one
- * viewer's expiring signature into the deck forever.
- *
- * A failure renders the deck with its stored URLs, which still work through the
- * content proxy. Nothing here is allowed to break a deck read.
- */
-async function resolveDeckAssets(html: string, ctx: DeliveryContext): Promise<string> {
-  if (!ctx || !html) return html;
-
-  try {
-    return await rewriteDeckAssetUrls(html, async refs => {
-      // Theme assets are excluded on purpose: a theme is signed as a folder
-      // (so its relative url() keeps working) and rewriting one of its files
-      // to a standalone blob URL would break precisely that.
-      const wanted = refs.filter(ref => !ref.includes('.slidesthemes/'));
-      return ClassmojiService.contentDelivery.resolveMany(ctx, wanted);
-    });
-  } catch (error: unknown) {
-    const message = error instanceof Error ? error.message : String(error);
-    console.warn('[slides] Asset resolution failed, serving stored URLs:', message);
-    return html;
-  }
-}
 
 // Loader to fetch slide metadata and content from database/GitHub
 export const loader = async ({
@@ -294,15 +173,11 @@ export const loader = async ({
   // Per-VIEWER tier: staff and preview readers get short-lived draft URLs, a
   // public deck's anonymous readers get the long public bucket, everyone else
   // the enrolled one. This is the reason a signed URL cannot live in the deck.
-  const deliveryCtx = deliveryContext(
+  const deliveryCtx = deckDeliveryContext(
     slide,
     gitOrgLogin,
     repo,
-    ClassmojiService.contentDelivery.tierFor({
-      canEdit,
-      preview: previewActive,
-      isPublicSite: slide.is_public,
-    })
+    deckAccessFor('viewer', { canEdit, previewActive }, slide)
   );
 
   // GitHub's free diff UI for the pending preview (branch segment URL-encoded —
@@ -838,11 +713,11 @@ export const action = async ({
             loaded.deck,
             gitOrgLogin,
             repo,
-            deliveryContext(
+            deckDeliveryContext(
               slide,
               gitOrgLogin,
               repo,
-              ClassmojiService.contentDelivery.tierFor({ canEdit: true })
+              deckAccessFor('viewer', { canEdit: true }, slide)
             )
           );
           return {

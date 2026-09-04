@@ -22,6 +22,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 const ensureContentAssets = vi.fn();
 const lookupContentAsset = vi.fn();
 const lookupContentAssetBySha = vi.fn();
+const lookupContentAssets = vi.fn();
 const lookupContentTree = vi.fn();
 
 vi.mock('@classmoji/database', () => ({ default: () => ({}) }));
@@ -29,6 +30,7 @@ vi.mock('../contentAssets.service.ts', () => ({
   ensureContentAssets: (...args: unknown[]) => ensureContentAssets(...args),
   lookupContentAsset: (...args: unknown[]) => lookupContentAsset(...args),
   lookupContentAssetBySha: (...args: unknown[]) => lookupContentAssetBySha(...args),
+  lookupContentAssets: (...args: unknown[]) => lookupContentAssets(...args),
   lookupContentTree: (...args: unknown[]) => lookupContentTree(...args),
 }));
 
@@ -82,6 +84,12 @@ beforeEach(() => {
   vi.spyOn(console, 'warn').mockImplementation(() => {});
   ensureContentAssets.mockResolvedValue(null);
   lookupContentAsset.mockResolvedValue({ sha: BLOB_SHA, type: 'blob', size: 1234 });
+  // The batch form answers for whatever paths it is handed, so a test only has
+  // to override it when it wants a path to be MISSING from the map.
+  lookupContentAssets.mockImplementation(
+    async (_classroomId: string, paths: string[]) =>
+      new Map(paths.map(path => [path, { sha: BLOB_SHA, type: 'blob', size: 1234 }]))
+  );
   lookupContentTree.mockResolvedValue({ sha: TREE_SHA, type: 'tree', size: 0 });
   configure();
 });
@@ -247,11 +255,12 @@ describe('with the delivery layer switched off', () => {
 
     expect(ensureContentAssets).not.toHaveBeenCalled();
     expect(lookupContentAsset).not.toHaveBeenCalled();
+    expect(lookupContentAssets).not.toHaveBeenCalled();
   });
 });
 
 describe('resolveMany', () => {
-  it('refreshes the map ONCE for the batch, then looks each ref up', async () => {
+  it('refreshes the map ONCE for the batch, and reads it in ONE query', async () => {
     const map = await resolveMany(ctx, [REPO_PATH, RAW_URL, 'https://example.com/x.png']);
 
     expect(ensureContentAssets).toHaveBeenCalledTimes(1);
@@ -259,15 +268,55 @@ describe('resolveMany', () => {
       maxAgeMs: 24 * 60 * 60 * 1000,
     });
 
-    // Both stored shapes name the same file, so both look up the same path.
-    expect(lookupContentAsset).toHaveBeenCalledTimes(2);
+    // One lookup for the whole document, never one per reference.
+    expect(lookupContentAssets).toHaveBeenCalledTimes(1);
+    expect(lookupContentAsset).not.toHaveBeenCalled();
+    // Both stored shapes name the same file, so the batch asks for it once —
+    // and the foreign URL never reaches the map at all.
+    expect(lookupContentAssets).toHaveBeenCalledWith(CLASSROOM_ID, [REPO_PATH]);
+
     expect(map.get('https://example.com/x.png')).toBe('https://example.com/x.png');
     expect(parseContentUrl(map.get(REPO_PATH)!)).toMatchObject({ sha: BLOB_SHA });
   });
 
+  it('maps every ref back to its own URL from the one batched read', async () => {
+    const OTHER = 'pages/lab-2/assets/diagram.png';
+    const OTHER_SHA = 'c'.repeat(40);
+    lookupContentAssets.mockResolvedValue(
+      new Map([
+        [REPO_PATH, { sha: BLOB_SHA, type: 'blob', size: 1 }],
+        [OTHER, { sha: OTHER_SHA, type: 'blob', size: 2 }],
+      ])
+    );
+
+    const map = await resolveMany(ctx, [REPO_PATH, RAW_URL, PAGES_URL, OTHER, 'x.png']);
+
+    expect(lookupContentAssets).toHaveBeenCalledTimes(1);
+    // All three shapes of the same file get that file's sha...
+    for (const ref of [REPO_PATH, RAW_URL, PAGES_URL]) {
+      expect(parseContentUrl(map.get(ref)!)).toMatchObject({ sha: BLOB_SHA });
+    }
+    // ...and a different file gets its own, from the same single read.
+    expect(parseContentUrl(map.get(OTHER)!)).toMatchObject({ sha: OTHER_SHA });
+    // A path the batch did not return is the dangling /missing/ URL, exactly
+    // as the single-ref resolver reports it.
+    expect(map.get('x.png')).toBe(`${ORIGIN}/c/${CLASSROOM_ID}/missing/x.png`);
+  });
+
+  it('never blob-signs a tree row', async () => {
+    lookupContentAssets.mockResolvedValue(
+      new Map([[REPO_PATH, { sha: TREE_SHA, type: 'tree', size: 0 }]])
+    );
+    const map = await resolveMany(ctx, [REPO_PATH]);
+    expect(map.get(REPO_PATH)).toBe(
+      `${ORIGIN}/c/${CLASSROOM_ID}/missing/${encodeURIComponent(REPO_PATH)}`
+    );
+  });
+
   it('de-duplicates repeated references', async () => {
     await resolveMany(ctx, [REPO_PATH, REPO_PATH, REPO_PATH]);
-    expect(lookupContentAsset).toHaveBeenCalledTimes(1);
+    expect(lookupContentAssets).toHaveBeenCalledTimes(1);
+    expect(lookupContentAssets).toHaveBeenCalledWith(CLASSROOM_ID, [REPO_PATH]);
   });
 
   it('keys the result by the ORIGINAL reference, so a caller can look up blind', async () => {

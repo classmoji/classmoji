@@ -488,6 +488,36 @@ export async function lookupContentAsset(
 }
 
 /**
+ * Many paths → the git objects behind them, in ONE query.
+ *
+ * The batch form exists because a render resolves a whole document at once: a
+ * forty-image deck opened by a lecture hall of students was forty `findUnique`
+ * round trips per view through `lookupContentAsset`. Paths the map has never
+ * heard of are simply absent from the returned map, which is the same "null"
+ * the single-path lookup reports, and lets the caller keep its per-ref
+ * branching unchanged.
+ */
+export async function lookupContentAssets(
+  classroomId: string,
+  paths: string[]
+): Promise<Map<string, ContentAssetRecord>> {
+  const wanted = [...new Set(paths)];
+  if (wanted.length === 0) return new Map();
+
+  const rows = await getPrisma().contentAsset.findMany({
+    where: { classroom_id: classroomId, path: { in: wanted } },
+    select: { path: true, sha: true, type: true, size: true },
+  });
+
+  return new Map(
+    rows.map((row: { path: string } & ContentAssetRecord) => [
+      row.path,
+      { sha: row.sha, type: row.type, size: row.size },
+    ])
+  );
+}
+
+/**
  * A directory's tree object, for the folders that are served whole — themes.
  *
  * Explicitly filtered to `type: 'tree'` rather than just looked up by path: a
