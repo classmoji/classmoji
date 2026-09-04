@@ -214,6 +214,16 @@ function upsertOp(classroomId: string, entry: TreeEntry, syncedAt: Date) {
  * deleted. Doing it this way rather than diffing means the sweep is correct
  * even when the previous state was partial, wrong, or absent.
  *
+ * The stamp is taken BEFORE the tree is read, and that ordering is the whole
+ * safety of the sweep. Reading a repo's tree is a network round trip — often
+ * hundreds of milliseconds, sometimes seconds — and `recordContentAsset` writes
+ * a row for a just-uploaded file stamped `now`. Stamping AFTER the read puts
+ * this run's stamp ahead of that row, and `synced_at < syncedAt` then deletes
+ * it: the file is genuinely in the repo, it is simply newer than the snapshot
+ * this run read, and the teacher who just uploaded it watches it render as a
+ * dangling URL. Stamping first can only ever leave a row the sweep keeps, which
+ * is the same too-large-map trade the truncated case takes below.
+ *
  * The whole thing is ONE transaction: a half-applied sync would leave the map
  * claiming paths at SHAs that never coexisted, and a reader cannot tell that
  * from a good map. All-or-nothing means a failure leaves the previous map
@@ -237,8 +247,10 @@ function upsertOp(classroomId: string, entry: TreeEntry, syncedAt: Date) {
  * into a permanent re-sync loop against a repo that is simply too big.
  */
 async function fullSync(classroom: ResolvedClassroom): Promise<SyncContentAssetsResult> {
-  const { entries, truncated } = await readRepoTree(classroom);
+  // Before the read, not after — see the header. A row written while the tree
+  // is in flight must stamp ABOVE this run, or the sweep deletes it.
   const syncedAt = new Date();
+  const { entries, truncated } = await readRepoTree(classroom);
 
   // FIRST, not last. The sweep's count is read off the tail of the results, so
   // the stamp goes in front of the upserts rather than after the delete.

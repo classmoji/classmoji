@@ -113,7 +113,9 @@ describe('contentAssets.service', () => {
 
       // The sweep is what deletes paths removed from the repo. Every row
       // written this run carries the same stamp, so `lt` matches only rows an
-      // earlier run wrote and this one did not refresh.
+      // earlier run wrote and this one did not refresh — and the stamp is taken
+      // BEFORE the tree read, so a row written while it was in flight is above
+      // it rather than below. See the ordering test below.
       const [sweep] = contentAssetDeleteMany.mock.calls[0];
       expect(sweep.where.classroom_id).toBe('class-1');
       expect(sweep.where.synced_at.lt).toBeInstanceOf(Date);
@@ -137,6 +139,33 @@ describe('contentAssets.service', () => {
 
       expect(result).toEqual({ mode: 'full', upserted: 1, deleted: 0, truncated: true });
       expect(contentAssetDeleteMany).not.toHaveBeenCalled();
+    });
+
+    it('takes its stamp BEFORE the tree read, so a row written during it survives', async () => {
+      // THE race this guards. Reading a repo's tree is a network round trip,
+      // and `recordContentAsset` writes a row for a just-uploaded file stamped
+      // `now`. Stamping AFTER the read puts the run's stamp ahead of that row,
+      // and the sweep's `synced_at < stamp` deletes it — a file that IS in the
+      // repo, simply newer than the snapshot this run read, and the teacher who
+      // just uploaded it watches it render as a dangling URL.
+      vi.useFakeTimers();
+      try {
+        let midRead = 0;
+        getTree.mockImplementation(async () => {
+          // The read takes time; a concurrent upload's row stamps in here.
+          vi.advanceTimersByTime(5_000);
+          midRead = Date.now();
+          return { sha: 'r', truncated: false, entries: [] };
+        });
+
+        await syncContentAssets('class-1');
+
+        const [sweep] = contentAssetDeleteMany.mock.calls[0];
+        expect(sweep.where.synced_at.lt.getTime()).toBeLessThan(midRead);
+      } finally {
+        getTree.mockReset();
+        vi.useRealTimers();
+      }
     });
 
     it('reads the tree at the repo default branch, not a hardcoded main', async () => {
