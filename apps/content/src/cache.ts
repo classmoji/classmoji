@@ -57,7 +57,10 @@ export function finalizeHeaders(headers: Headers): Headers {
  * its way to R2.
  */
 export function withoutBody(response: Response): Response {
-  void response.body?.cancel();
+  // Swallowed, not ignored: cancelling a tee'd branch whose partner already
+  // errored rejects, and an unhandled rejection here would take down a request
+  // that has otherwise succeeded.
+  response.body?.cancel().catch(() => {});
   return new Response(null, {
     status: response.status,
     statusText: response.statusText,

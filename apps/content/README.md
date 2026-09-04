@@ -227,6 +227,12 @@ someone's browser, not an attacker: signatures expire, and the grace window is
 6h (5m for draft). A burst of `404 missing` means content references drifted
 from the repo — look at the resolver, not the Worker.
 
+A `\uFFFD` in a logged path is this Worker defusing the path, not a corrupt
+file: the repo path in a `/missing/` URL arrives from the network, so every
+control character in it is replaced and the whole path is capped at 512
+characters. Otherwise a `%0A` would let an unauthenticated request write its
+own `[content] 403 …` line into the stream you are searching.
+
 ## Deployment
 
 Staging deploys from `.github/workflows/deploy-cloudflare-staging.yml` on pushes

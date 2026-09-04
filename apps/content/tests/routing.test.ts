@@ -186,8 +186,42 @@ describe('routing', () => {
 
     expect(warn).toHaveBeenCalledTimes(1);
     const [message] = warn.mock.calls[0] as [string];
-    expect(message).toBe(`[content] 404 missing classroom=${CLASSROOM} path=${ref}`);
+    expect(message).toContain(`[content] 404 missing classroom=${CLASSROOM}`);
+    expect(message).toContain(`path=${ref}`);
     expect(message).not.toContain('cb=1');
+  });
+
+  it('cannot be made to forge a second log line through the repo path', async () => {
+    // `url.pathname` keeps its escapes, so decoding is what would turn %0A into
+    // a real newline - and a newline in console.warn is a whole fake entry, in
+    // exactly the shape the README tells operators to search for.
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const forged = `logo.png\n[content] 403 bad-signature classroom=${CLASSROOM} path=/c/x`;
+    await worker.fetch(
+      new Request(`${ORIGIN}/c/${CLASSROOM}/missing/${encodeURIComponent(forged)}`),
+      fakeEnv(),
+      fakeContext()
+    );
+
+    expect(warn).toHaveBeenCalledTimes(1);
+    const [message] = warn.mock.calls[0] as [string];
+    expect(message).not.toContain('\n');
+    expect(message).not.toContain('\r');
+    // The text survives, defanged - an operator still sees what was asked for.
+    expect(message).toContain('logo.png');
+    expect(message).toContain('\uFFFD');
+  });
+
+  it('caps the logged repo path so one request cannot flood the stream', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    await worker.fetch(
+      new Request(`${ORIGIN}/c/${CLASSROOM}/missing/${'a'.repeat(4000)}`),
+      fakeEnv(),
+      fakeContext()
+    );
+
+    const [message] = warn.mock.calls[0] as [string];
+    expect(message.length).toBeLessThan(700);
   });
 
   it('403s any other unknown segment - only /missing/ is a known unsigned shape', async () => {
@@ -260,6 +294,36 @@ describe('blob delivery', () => {
     const response = await worker.fetch(new Request(url), fakeEnv(), fakeContext());
 
     expect(response.headers.get('Content-Length')).toBe('12');
+  });
+
+  it('drops the Content-Length of a compressed origin response', async () => {
+    // The runtime adds Accept-Encoding and GitHub gzips text, so the header
+    // describes the ENCODED body while `tee()` hands us the decoded bytes.
+    // Forwarding it would abort the download with a length mismatch.
+    stubUpstreams({
+      blob: () =>
+        new Response('origin-bytes', {
+          headers: { 'Content-Length': '17', 'Content-Encoding': 'gzip' },
+        }),
+    });
+    const url = await signedBlobUrl({ sha: BLOB_SHA, ext: 'css' });
+
+    const response = await worker.fetch(new Request(url), fakeEnv(), fakeContext());
+
+    expect(response.headers.get('Content-Length')).toBeNull();
+    expect(await response.text()).toBe('origin-bytes');
+  });
+
+  it('ignores a Content-Length that is not plain digits', async () => {
+    // Number('0x10') is 16, and a hex length forwarded as decimal is a mismatch.
+    stubUpstreams({
+      blob: () => new Response('origin-bytes', { headers: { 'Content-Length': '0x10' } }),
+    });
+    const url = await signedBlobUrl({ sha: BLOB_SHA, ext: 'css' });
+
+    const response = await worker.fetch(new Request(url), fakeEnv(), fakeContext());
+
+    expect(response.headers.get('Content-Length')).toBeNull();
   });
 
   it('omits Content-Length when the origin sent none', async () => {
@@ -341,7 +405,15 @@ describe('blob delivery', () => {
     expect(await response.text()).toBe('');
     expect(bucket.heads).toEqual([`blobs/${BLOB_SHA}`]);
     await ctx.settled();
-    expect(bucket.puts.map(put => put.key)).toEqual([`blobs/${BLOB_SHA}`]);
+    // The whole object, not a stalled prefix: the delivery half of the tee is
+    // cancelled rather than abandoned, so the write-back half runs to the end.
+    expect(bucket.puts).toEqual([
+      {
+        key: `blobs/${BLOB_SHA}`,
+        contentType: 'text/css; charset=utf-8',
+        bytes: 'origin-bytes'.length,
+      },
+    ]);
   });
 
   it('sends no body on a HEAD that is refused', async () => {
@@ -375,7 +447,9 @@ describe('blob delivery', () => {
 
     expect(response.headers.get('Cache-Control')).toBe('no-store');
     await ctx.settled();
-    expect(bucket.puts).toEqual([{ key: `blobs/${BLOB_SHA}`, contentType: 'image/png' }]);
+    expect(bucket.puts).toEqual([
+      { key: `blobs/${BLOB_SHA}`, contentType: 'image/png', bytes: 'origin-bytes'.length },
+    ]);
   });
 
   it('pulls a miss from the origin and writes it back to R2', async () => {
@@ -392,7 +466,11 @@ describe('blob delivery', () => {
     expect(await response.text()).toBe('origin-bytes');
     await ctx.settled();
     expect(bucket.puts).toEqual([
-      { key: `blobs/${BLOB_SHA}`, contentType: 'text/css; charset=utf-8' },
+      {
+        key: `blobs/${BLOB_SHA}`,
+        contentType: 'text/css; charset=utf-8',
+        bytes: 'origin-bytes'.length,
+      },
     ]);
   });
 

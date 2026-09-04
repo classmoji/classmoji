@@ -37,13 +37,17 @@ export const MAX_TRANSFORM_SOURCE_BYTES = 20 * 1024 * 1024;
  * bigger than the ceiling. For a source whose size is unknown up front, this is
  * the only way to hold the bound: `arrayBuffer()` commits to the whole thing
  * before it knows how big it is.
+ *
+ * Each chunk is dropped as it is copied into the result. Holding the chunk list
+ * and the merged buffer at once would put peak usage at twice the ceiling,
+ * which is the number that actually has to fit in the isolate.
  */
 export async function readBounded(
   stream: ReadableStream<Uint8Array>,
   limit: number
 ): Promise<ArrayBuffer | null> {
   const reader = stream.getReader();
-  const chunks: Uint8Array[] = [];
+  const chunks: Array<Uint8Array | undefined> = [];
   let total = 0;
 
   try {
@@ -63,9 +67,12 @@ export async function readBounded(
 
   const merged = new Uint8Array(total);
   let offset = 0;
-  for (const chunk of chunks) {
+  for (let index = 0; index < chunks.length; index += 1) {
+    const chunk = chunks[index];
+    if (!chunk) continue;
     merged.set(chunk, offset);
     offset += chunk.byteLength;
+    chunks[index] = undefined;
   }
   return merged.buffer;
 }

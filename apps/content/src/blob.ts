@@ -68,12 +68,26 @@ async function storedHead(
   return new Response(null, { headers: storedHeaders(object, fallbackType, cacheControl) });
 }
 
-/** The origin's own `Content-Length`, when it sent a usable one. */
+/**
+ * The origin's own `Content-Length`, when it sent one we can honestly forward.
+ *
+ * A compressed response is the trap. The runtime adds `Accept-Encoding` to
+ * every subrequest and GitHub gzips text, so `Content-Length` describes the
+ * ENCODED body — but reading `response.body` (to tee it, here) hands us the
+ * decoded bytes. Copying the header onto the decoded stream promises a length
+ * we then fail to deliver, and the browser aborts with
+ * ERR_CONTENT_LENGTH_MISMATCH on every cold css, svg or json blob. When the
+ * origin says it encoded the body, we say nothing about its length.
+ *
+ * `Number` is too generous on its own: it reads '0x10' as 16 and ' 12 ' as 12,
+ * so the digits are checked before the conversion.
+ */
 function declaredLength(headers: Headers): number | null {
+  if (headers.has('Content-Encoding')) return null;
   const raw = headers.get('Content-Length');
-  if (raw === null) return null;
+  if (raw === null || !/^\d+$/.test(raw)) return null;
   const value = Number(raw);
-  return Number.isSafeInteger(value) && value >= 0 ? value : null;
+  return Number.isSafeInteger(value) ? value : null;
 }
 
 /**
@@ -252,6 +266,14 @@ async function serveVariant(
   const hit = await env.CACHE.get(key);
   if (hit) return storedResponse(hit, mediaTypeFor(format), options.cacheControl);
 
+  // A HEAD on a COLD variant deliberately falls through to the whole transform,
+  // paying an Images call for a reply that carries no bytes. The alternative —
+  // HEAD the original and answer from its headers — would be cheaper and wrong:
+  // it would report the original's content type and length for a URL that asked
+  // for an 800px webp, which is the one thing a HEAD exists to tell you. The
+  // transform is cached on the way past, so the cost is paid once and the GET
+  // behind it is a hit. HEAD on an image variant is rare (monitoring, not
+  // browsers), so this is not a hot path.
   const original = await loadOriginalBytes(env, ctx, options);
   if (original instanceof Response) return original;
 

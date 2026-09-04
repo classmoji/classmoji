@@ -17,7 +17,7 @@ import { errorResponse, jsonResponse, preflightResponse, withoutBody } from './c
 import { isConfigured, type Env } from './env.ts';
 import { OriginError } from './origins/types.ts';
 import { serveTheme } from './theme.ts';
-import { parseContentUrl, verifyContentUrl } from './verify.ts';
+import { isClassroomId, parseContentUrl, verifyContentUrl } from './verify.ts';
 
 /**
  * `/c/{classroomId}/missing/{encodedRepoPath}` — the deterministic URL the
@@ -27,17 +27,44 @@ import { parseContentUrl, verifyContentUrl } from './verify.ts';
  * renamed is not a tampered URL, and the two must not share a log line. Every
  * OTHER unknown third segment stays a 403 — an unrecognized shape is exactly
  * what tampering looks like.
+ *
+ * The classroom segment is captured loosely and then checked with the signing
+ * package's own `isClassroomId`, so this and the verifier cannot drift apart on
+ * what a classroom id is.
  */
-const MISSING_PATH =
-  /^\/c\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\/missing\/(.+)$/;
+const MISSING_PATH = /^\/c\/([^/]+)\/missing\/(.+)$/;
 
-/** Best-effort decode for the log line only; a bad escape logs the raw segment. */
+/** A repo path is the app's own string, but it arrives from the network. */
+const MAX_LOGGED_PATH = 512;
+
+/** C0 controls, DEL, and the C1 block - everything a log line must not contain. */
+function isControl(code: number): boolean {
+  return code < 0x20 || (code >= 0x7f && code <= 0x9f);
+}
+
+/**
+ * Make one untrusted segment safe to put in a log line.
+ *
+ * `url.pathname` keeps its percent-escapes, so decoding is what turns `%0A`
+ * into a real newline — and a newline in `console.warn` is a whole forged
+ * entry. An unauthenticated request could otherwise write a convincing
+ * `[content] 403 bad-signature classroom=…` line into the log an operator is
+ * told to search. Every control character becomes U+FFFD, and the result is
+ * capped so one request cannot flood the stream either.
+ */
 function decodeForLog(value: string): string {
+  let decoded: string;
   try {
-    return decodeURIComponent(value);
+    decoded = decodeURIComponent(value);
   } catch {
-    return value;
+    decoded = value;
   }
+
+  let safe = '';
+  for (const char of decoded.slice(0, MAX_LOGGED_PATH)) {
+    safe += isControl(char.codePointAt(0) ?? 0) ? '\uFFFD' : char;
+  }
+  return safe;
 }
 
 /**
@@ -67,7 +94,7 @@ async function handle(request: Request, env: Env, ctx: ExecutionContext): Promis
   if (!url.pathname.startsWith('/c/')) return errorResponse(404, 'not found');
 
   const missing = MISSING_PATH.exec(url.pathname);
-  if (missing) {
+  if (missing && isClassroomId(missing[1])) {
     // The repo path is the app's own reference, not a credential — but the
     // query string still never reaches a log.
     console.warn(`[content] 404 missing classroom=${missing[1]} path=${decodeForLog(missing[2])}`);

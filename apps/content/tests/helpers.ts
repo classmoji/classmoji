@@ -38,14 +38,40 @@ export interface FakeBucket {
     value: unknown,
     options?: { httpMetadata?: { contentType?: string } }
   ): Promise<unknown>;
-  readonly puts: Array<{ key: string; contentType?: string }>;
+  readonly puts: Array<{ key: string; contentType?: string; bytes: number }>;
   readonly gets: string[];
   readonly heads: string[];
 }
 
+/**
+ * Consume whatever R2 was handed, and say how big it was.
+ *
+ * Real R2 reads the stream it is given; a fake that only records the key would
+ * hide the bug that matters here. The write-back half of a `tee()` is a stream
+ * nobody else reads, so if the delivery half is abandoned rather than
+ * cancelled, this read is where it stalls — and a hung `ctx.settled()` or a
+ * short byte count is the test failing, which is the point.
+ */
+async function drain(value: unknown): Promise<number> {
+  if (value instanceof ReadableStream) {
+    const reader = (value as ReadableStream<Uint8Array>).getReader();
+    let total = 0;
+    for (;;) {
+      const { done, value: chunk } = await reader.read();
+      if (done) break;
+      total += chunk.byteLength;
+    }
+    return total;
+  }
+  if (typeof value === 'string') return new TextEncoder().encode(value).byteLength;
+  if (value instanceof ArrayBuffer) return value.byteLength;
+  if (ArrayBuffer.isView(value)) return value.byteLength;
+  return 0;
+}
+
 export function fakeBucket(initial: Record<string, StoredObject> = {}): FakeBucket {
   const store = new Map(Object.entries(initial));
-  const puts: Array<{ key: string; contentType?: string }> = [];
+  const puts: Array<{ key: string; contentType?: string; bytes: number }> = [];
   const gets: string[] = [];
   const heads: string[] = [];
 
@@ -76,8 +102,9 @@ export function fakeBucket(initial: Record<string, StoredObject> = {}): FakeBuck
       const object = store.get(key);
       return object ? metadata(key, object) : null;
     },
-    async put(key: string, _value: unknown, options?: { httpMetadata?: { contentType?: string } }) {
-      puts.push({ key, contentType: options?.httpMetadata?.contentType });
+    async put(key: string, value: unknown, options?: { httpMetadata?: { contentType?: string } }) {
+      const bytes = await drain(value);
+      puts.push({ key, contentType: options?.httpMetadata?.contentType, bytes });
       store.set(key, { body: 'stored', contentType: options?.httpMetadata?.contentType });
       return {};
     },
