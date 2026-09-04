@@ -19,6 +19,27 @@ import { OriginError } from './origins/types.ts';
 import { serveTheme } from './theme.ts';
 import { parseContentUrl, verifyContentUrl } from './verify.ts';
 
+/**
+ * `/c/{classroomId}/missing/{encodedRepoPath}` — the deterministic URL the
+ * app's resolver mints for a reference it cannot resolve (see `missingUrl` in
+ * `contentDelivery.service.ts`). It carries no signature and never will, so it
+ * is routed before verification and answered 404: a file that was deleted or
+ * renamed is not a tampered URL, and the two must not share a log line. Every
+ * OTHER unknown third segment stays a 403 — an unrecognized shape is exactly
+ * what tampering looks like.
+ */
+const MISSING_PATH =
+  /^\/c\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\/missing\/(.+)$/;
+
+/** Best-effort decode for the log line only; a bad escape logs the raw segment. */
+function decodeForLog(value: string): string {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
+}
+
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     if (request.method === 'OPTIONS') return preflightResponse();
@@ -37,6 +58,16 @@ export default {
     }
 
     if (!url.pathname.startsWith('/c/')) return errorResponse(404, 'not found');
+
+    const missing = MISSING_PATH.exec(url.pathname);
+    if (missing) {
+      // The repo path is the app's own reference, not a credential — but the
+      // query string still never reaches a log.
+      console.warn(
+        `[content] 404 missing classroom=${missing[1]} path=${decodeForLog(missing[2])}`
+      );
+      return errorResponse(404, 'missing');
+    }
 
     const signingSecret = env.CONTENT_SIGNING_SECRET;
     if (!signingSecret || !env.CONTENT_WORKER_SHARED_SECRET || !env.CONTENT_TOKEN_ENDPOINT) {

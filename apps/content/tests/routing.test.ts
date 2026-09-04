@@ -156,6 +156,58 @@ describe('routing', () => {
     expect(await response.json()).toEqual({ error: 'malformed' });
   });
 
+  it("404s the resolver's dangling-reference URL rather than 403ing it", async () => {
+    // The app mints /c/{classroomId}/missing/{encodedRepoPath} for a reference
+    // it cannot resolve. A deleted file is not a tampered URL.
+    const ref = 'assets/img/logo v2.png';
+    const response = await worker.fetch(
+      new Request(`${ORIGIN}/c/${CLASSROOM}/missing/${encodeURIComponent(ref)}`),
+      fakeEnv(),
+      fakeContext()
+    );
+
+    expect(response.status).toBe(404);
+    expect(await response.json()).toEqual({ error: 'missing' });
+    expect(response.headers.get('Cache-Control')).toBe('no-store');
+    expect(response.headers.get('Access-Control-Allow-Origin')).toBe('*');
+    expect(response.headers.get('X-Content-Type-Options')).toBe('nosniff');
+    expect(response.headers.get('Content-Security-Policy')).toBe("default-src 'none'; sandbox");
+  });
+
+  it('logs the classroom and the decoded repo path on a 404 missing - never the query', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const ref = 'assets/img/logo.png';
+    await worker.fetch(
+      new Request(`${ORIGIN}/c/${CLASSROOM}/missing/${encodeURIComponent(ref)}?cb=1`),
+      fakeEnv(),
+      fakeContext()
+    );
+
+    expect(warn).toHaveBeenCalledTimes(1);
+    const [message] = warn.mock.calls[0] as [string];
+    expect(message).toBe(`[content] 404 missing classroom=${CLASSROOM} path=${ref}`);
+    expect(message).not.toContain('cb=1');
+  });
+
+  it('403s any other unknown segment - only /missing/ is a known unsigned shape', async () => {
+    const response = await worker.fetch(
+      new Request(`${ORIGIN}/c/${CLASSROOM}/other/x`),
+      fakeEnv(),
+      fakeContext()
+    );
+    expect(response.status).toBe(403);
+    expect(await response.json()).toEqual({ error: 'malformed' });
+  });
+
+  it('403s a /missing/ URL whose classroom is not a uuid', async () => {
+    const response = await worker.fetch(
+      new Request(`${ORIGIN}/c/not-a-uuid/missing/logo.png`),
+      fakeEnv(),
+      fakeContext()
+    );
+    expect(response.status).toBe(403);
+  });
+
   it('403s an expired URL with the reason', async () => {
     const url = await signedBlobUrl({ sha: BLOB_SHA, ext: 'png', exp: nowSeconds() - 86400 });
     const response = await worker.fetch(new Request(url), fakeEnv(), fakeContext());
