@@ -90,6 +90,39 @@ export async function resolveDocumentAssets(
 }
 
 /**
+ * Responsive candidates for a document's images → `{ signedSrc: srcset }`.
+ *
+ * Keyed by the RESOLVED src rather than by the stored reference, because the
+ * consumer is a DOM pass over markup BlockNote already rendered — it has the
+ * `src`, not the ref. The pairing is exact: `resolveSrcSets` returns the
+ * untransformed original as its `src`, which is the same URL `resolveMany` put
+ * in the display map for that reference.
+ *
+ * Empty for everything that should not get a set — a gif, an svg, a non-image,
+ * an external URL, a classroom the layer is off for — and the client renders
+ * those with a plain `src`, which is the correct outcome rather than a failure.
+ */
+export async function resolveDocumentSrcSets(
+  ctx: AssetResolveContext | null,
+  blocks: unknown,
+  extraRefs: Array<string | null | undefined> = []
+): Promise<Record<string, string>> {
+  if (!ctx) return {};
+
+  const refs = [
+    ...collectBlockAssetRefs(blocks),
+    ...extraRefs.filter((ref): ref is string => typeof ref === 'string' && ref.length > 0),
+  ];
+  if (refs.length === 0) return {};
+
+  const sets = await ClassmojiService.contentDelivery.resolveSrcSets(ctx, refs);
+
+  const out: Record<string, string> = {};
+  for (const { src, srcset } of sets.values()) out[src] = srcset;
+  return out;
+}
+
+/**
  * Replace any signed URL in a document with the repo path behind it.
  *
  * Defense in depth for the save path. The editor is told to keep the stored

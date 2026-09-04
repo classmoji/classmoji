@@ -25,6 +25,7 @@ import { JSDOM as UntypedJSDOM } from 'jsdom';
 
 import {
   addHeadingAnchors,
+  addImageSrcSets,
   renderSitePage,
   siteArticleWidthClass,
   siteArticleWrapper,
@@ -758,5 +759,62 @@ test.describe('article width', () => {
     for (const width of [null, undefined, 0, 9, -1]) {
       expect(siteArticleWidthClass(width)).toBe('max-w-3xl');
     }
+  });
+});
+
+/* ------------------------------------------------------------------ *
+ * Responsive images
+ * ------------------------------------------------------------------ */
+
+/**
+ * `addImageSrcSets` is a post-pass for the same reason `addHeadingAnchors` is:
+ * BlockNote's image block owns its markup, and replacing it in the viewer
+ * schema to add two attributes would mean owning its caption, its width prop
+ * and its wrapper forever.
+ */
+const SIGNED = 'https://content.classmoji.io/c/abc/blob/aaa.png?p=public&sig=x';
+const LADDER = `${SIGNED}&w=800&fmt=auto 800w, ${SIGNED}&w=1600&fmt=auto 1600w`;
+const SIZES = '(max-width: 1024px) 100vw, 1024px';
+
+test.describe('addImageSrcSets', () => {
+  test('hangs the candidates and the sizes hint off a matching <img>', () => {
+    const html = addImageSrcSets(
+      `<figure><img src="${SIGNED}" alt="A diagram"></figure>`,
+      new Map([[SIGNED, LADDER]]),
+      SIZES
+    );
+
+    expect(html).toContain('srcset="');
+    expect(html).toContain('800w');
+    expect(html).toContain('1600w');
+    expect(html).toContain(`sizes="${SIZES}"`);
+    // Everything else the block rendered survives untouched.
+    expect(html).toContain('alt="A diagram"');
+    expect(html).toContain('<figure>');
+  });
+
+  test('leaves an image with no candidates exactly as rendered', () => {
+    // A gif, an svg, an external image, a classroom with the layer off — all of
+    // them arrive here as a miss, and all of them are correct as a plain src.
+    const html = '<img src="https://images.example.com/hero.png">';
+
+    expect(addImageSrcSets(html, new Map([[SIGNED, LADDER]]), SIZES)).toBe(html);
+  });
+
+  test('never overwrites a srcset that is already there', () => {
+    // An author can paste HTML into a page, and their own responsive image is
+    // content. It is also the guard that makes the pass safe to run twice.
+    const html = `<img src="${SIGNED}" srcset="https://cdn.example.com/a@2x.png 2x">`;
+
+    expect(addImageSrcSets(html, new Map([[SIGNED, LADDER]]), SIZES)).toBe(html);
+  });
+
+  test('does not re-serialize the article when nothing matched', () => {
+    // Serializing costs a pass over the whole document; a page whose images all
+    // declined must not pay it, and the identity return is how that is visible.
+    const html = '<p>No images here at all.</p>';
+
+    expect(addImageSrcSets(html, new Map(), SIZES)).toBe(html);
+    expect(addImageSrcSets(html, new Map([[SIGNED, LADDER]]), SIZES)).toBe(html);
   });
 });

@@ -16,6 +16,7 @@ import {
   canonicalizeDocumentAssets,
   canonicalizeOpsAssets,
   resolveDocumentAssets,
+  resolveDocumentSrcSets,
 } from '~/utils/assetRefs.server.ts';
 
 /**
@@ -168,6 +169,11 @@ export const loader = async ({
     resolveTier
   );
   const resolvedAssets = await resolveDocumentAssets(assetCtx, viewerContent, [coverImage?.url]);
+  // Responsive candidates for the raster images, keyed by the URL the block
+  // will actually render. Concurrent with nothing else here on purpose — it is
+  // one map read and one signing pass over the same references, and a page with
+  // no raster images of ours costs a filter and no query.
+  const resolvedSrcSets = await resolveDocumentSrcSets(assetCtx, viewerContent, [coverImage?.url]);
 
   // Build GitHub repo info for link
   const gitOrg = (page.classroom as Record<string, unknown>).git_organization as {
@@ -213,6 +219,11 @@ export const loader = async ({
     // Display-only: `{ storedRef: signedUrl }`. Absent keys mean "use the ref
     // as-is" (an external image, or the delivery layer switched off).
     resolvedAssets,
+    // Also display-only, and keyed the other way — `{ signedUrl: srcset }` —
+    // because its consumer is a DOM pass that has the rendered `src`, not the
+    // stored reference. An absent key means "one size only", which is the right
+    // answer for a gif, an svg, and anything that is not an image.
+    resolvedSrcSets,
     userRole,
     canEdit,
     notice,

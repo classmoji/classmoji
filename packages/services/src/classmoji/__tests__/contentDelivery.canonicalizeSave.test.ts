@@ -255,16 +255,13 @@ describe('saveDeck canonicalizes on the way in', () => {
     expect(html.startsWith('<h2>Title</h2>')).toBe(true);
   });
 
-  it('reaches srcset candidates, inline style url() and speaker notes', async () => {
+  it('reaches inline style url() and speaker notes, not just src', async () => {
     await saveDeck({
       slide,
       deck: deckWith([
         {
           id: 'aaaa1111',
-          html: [
-            `<img srcset="${signedDeckUrl} 800w, ${FOREIGN} 1600w">`,
-            `<div style="background-image: url('${signedDeckUrl}'); color: red"></div>`,
-          ].join(''),
+          html: `<div style="background-image: url('${signedDeckUrl}'); color: red"></div>`,
           notes: `<img src="${signedDeckUrl}">`,
         },
       ]),
@@ -272,10 +269,8 @@ describe('saveDeck canonicalizes on the way in', () => {
     });
 
     const written = writtenDeck().slides[0];
-    expect(written.html).toContain(`${DECK_PATH_REF} 800w`);
-    // The author's own external candidate is content, not ours to rewrite.
-    expect(written.html).toContain(`${FOREIGN} 1600w`);
     expect(written.html).toContain(`url('${DECK_PATH_REF}')`);
+    // Untouched declarations in the same style attribute stay put.
     expect(written.html).toContain('color: red');
     expect(written.notes).toContain(`src="${DECK_PATH_REF}"`);
   });
@@ -316,6 +311,75 @@ describe('saveDeck canonicalizes on the way in', () => {
     });
 
     expect(writtenDeck().slides[0].children[0].html).toContain(`src="${DECK_PATH_REF}"`);
+  });
+
+  it('strips a srcset of OURS rather than storing it', async () => {
+    // THE thing the design forbids. A responsive set is DERIVED — expiring,
+    // tier-specific URLs — and the read side regenerates one on every render,
+    // so there is nothing to preserve and everything to go stale. Rewriting the
+    // candidates to repo paths would be almost as bad: a stored `srcset` of
+    // paths is a set the browser cannot fetch.
+    await saveDeck({
+      slide,
+      deck: deckWith([
+        {
+          id: 'aaaa1111',
+          html:
+            `<img src="${signedDeckUrl}" ` +
+            `srcset="${signedDeckUrl}&w=800&fmt=auto 800w, ${signedDeckUrl}&w=1600&fmt=auto 1600w" ` +
+            'sizes="(max-width: 1024px) 100vw, 1024px">',
+        },
+      ]),
+      message: 'save',
+    });
+
+    const html = writtenDeck().slides[0].html as string;
+    expect(html).toContain(`src="${DECK_PATH_REF}"`);
+    expect(html).not.toContain('srcset');
+    expect(html).not.toContain('sizes');
+  });
+
+  it('strips a MIXED set too — one of ours in it is enough', async () => {
+    // A set mixing a repo image with an external one is not something an author
+    // writes; it is what a read-side pass leaves behind if it rewrites instead
+    // of regenerating. Keeping the foreign candidate and dropping ours would
+    // store a half-set that describes an image the browser cannot assemble.
+    await saveDeck({
+      slide,
+      deck: deckWith([
+        {
+          id: 'aaaa1111',
+          html: `<img src="${signedDeckUrl}" srcset="${signedDeckUrl} 800w, ${FOREIGN} 1600w">`,
+        },
+      ]),
+      message: 'save',
+    });
+
+    const html = writtenDeck().slides[0].html as string;
+    expect(html).toContain(`src="${DECK_PATH_REF}"`);
+    expect(html).not.toContain('srcset');
+  });
+
+  it('strips one whose candidates are ours even when the src is not', async () => {
+    await saveDeck({
+      slide,
+      deck: deckWith([
+        { id: 'aaaa1111', html: `<img src="${FOREIGN}" srcset="${signedDeckUrl} 800w">` },
+      ]),
+      message: 'save',
+    });
+
+    expect(writtenDeck().slides[0].html).not.toContain('srcset');
+  });
+
+  it("keeps an author's own external srcset — that is content, not ours", async () => {
+    const html =
+      '<img src="https://cdn.example.com/a.png" ' +
+      'srcset="https://cdn.example.com/a.png 1x, https://cdn.example.com/a@2x.png 2x">';
+
+    await saveDeck({ slide, deck: deckWith([{ id: 'aaaa1111', html }]), message: 'save' });
+
+    expect(writtenDeck().slides[0].html).toBe(html);
   });
 
   it('leaves a deck with nothing of ours in it byte-identical', async () => {

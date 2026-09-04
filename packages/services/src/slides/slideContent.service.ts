@@ -20,6 +20,7 @@ import type { DeckJson } from './deckTypes.ts';
 import { canonicalizeDeckAssets } from './deckAssets.ts';
 import {
   canonicalizeMany,
+  isOwnAssetRef,
   type ResolveContext,
 } from '../classmoji/contentDelivery.service.ts';
 
@@ -242,7 +243,16 @@ async function canonicalizeDeckForSave(
   if (!ctx) return deck;
 
   try {
-    return await canonicalizeDeckAssets(deck, refs => canonicalizeMany(ctx, refs));
+    // The predicate is what makes the `srcset` strip safe. A responsive set is
+    // DERIVED — expiring, tier-specific URLs — and the read side regenerates
+    // one on every render, so ours is dropped rather than stored. An author's
+    // own `<img srcset>` pointing at an external CDN is content, and the
+    // predicate says no to it.
+    return await canonicalizeDeckAssets(
+      deck,
+      refs => canonicalizeMany(ctx, refs),
+      ref => isOwnAssetRef(ctx, ref)
+    );
   } catch (error) {
     console.warn(
       '[slideContent] Could not canonicalize deck asset refs on save:',

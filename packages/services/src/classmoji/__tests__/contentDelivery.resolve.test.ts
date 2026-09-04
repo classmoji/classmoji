@@ -41,6 +41,7 @@ const {
   resolveAssetSrcSet,
   resolveAssetUrl,
   resolveMany,
+  resolveSrcSets,
   resolveThemeBase,
   tierFor,
 } = await import('../contentDelivery.service.ts');
@@ -337,7 +338,7 @@ describe('resolveMany', () => {
 });
 
 describe('resolveAssetSrcSet', () => {
-  it('emits every rung, each one independently verifiable', async () => {
+  it('emits every rung with fmt=auto, each one independently verifiable', async () => {
     const result = await resolveAssetSrcSet(ctx, REPO_PATH);
     expect(result).not.toBeNull();
 
@@ -346,11 +347,36 @@ describe('resolveAssetSrcSet', () => {
     expect(candidates.map(c => c.split(' ')[1])).toEqual(['800w', '1600w', '2560w']);
 
     for (const candidate of candidates) {
-      await expect(verifyContentUrl(MASTER, candidate.split(' ')[0])).resolves.toMatchObject({
-        ok: true,
-      });
+      const url = candidate.split(' ')[0];
+      // Every rung asks for a width AND a format — `fmt=auto` is what serves
+      // WebP/AVIF to the browsers that take them and the original to the rest.
+      expect(url).toContain('fmt=auto');
+      await expect(verifyContentUrl(MASTER, url)).resolves.toMatchObject({ ok: true });
     }
-    expect(result!.src).toBe(candidates[2].split(' ')[0]);
+  });
+
+  it('makes `src` the untransformed original, matching what resolveAssetUrl gives', async () => {
+    const result = await resolveAssetSrcSet(ctx, REPO_PATH);
+
+    // THE pairing the render-time passes depend on: a caller matches a resolved
+    // `src` to its candidate list by string equality, so the two entry points
+    // must agree byte for byte on the same reference. It is also the fallback
+    // for a browser that ignores `srcset` — which must not be a capped rendition.
+    expect(result!.src).toBe(await resolveAssetUrl(ctx, REPO_PATH));
+    expect(result!.src).not.toContain('w=');
+    expect(result!.src).not.toContain('fmt=');
+    await expect(verifyContentUrl(MASTER, result!.src)).resolves.toMatchObject({ ok: true });
+  });
+
+  it('declines a gif, an svg, and anything that is not a raster image', async () => {
+    // A resize would flatten a gif's animation to a still, an svg is already
+    // resolution independent, and `w=` on a PDF means nothing. Each of these is
+    // a correct "no set", not a failure — the caller renders a plain `src`.
+    for (const path of ['pages/a/loop.gif', 'pages/a/logo.svg', 'pages/a/handout.pdf']) {
+      await expect(resolveAssetSrcSet(ctx, path)).resolves.toBeNull();
+    }
+    // And it declines on the SHAPE of the reference, before the map is touched.
+    expect(lookupContentAsset).not.toHaveBeenCalled();
   });
 
   it('is null — not a passthrough — for a ref that has no responsive set', async () => {
@@ -358,6 +384,42 @@ describe('resolveAssetSrcSet', () => {
 
     lookupContentAsset.mockResolvedValue(null);
     await expect(resolveAssetSrcSet(ctx, REPO_PATH)).resolves.toBeNull();
+  });
+});
+
+describe('resolveSrcSets', () => {
+  it('answers for the raster images and stays silent about everything else', async () => {
+    const sets = await resolveSrcSets(ctx, [
+      REPO_PATH,
+      RAW_URL,
+      'pages/a/loop.gif',
+      'pages/a/logo.svg',
+      'https://example.com/hero.png',
+    ]);
+
+    // The repo path and the legacy absolute URL are the SAME file addressed two
+    // ways, so both get a set — and both get the same one.
+    expect([...sets.keys()].sort()).toEqual([RAW_URL, REPO_PATH].sort());
+    expect(sets.get(REPO_PATH)!.srcset).toBe(sets.get(RAW_URL)!.srcset);
+  });
+
+  it('reduces before it queries — a document of gifs costs no map read', async () => {
+    const sets = await resolveSrcSets(ctx, ['a/x.gif', 'a/y.svg', 'https://example.com/z.png']);
+
+    expect(sets.size).toBe(0);
+    expect(lookupContentAssets).not.toHaveBeenCalled();
+    expect(ensureContentAssets).not.toHaveBeenCalled();
+  });
+
+  it('looks the whole batch up once, not once per image', async () => {
+    await resolveSrcSets(ctx, ['pages/a/one.png', 'pages/a/two.jpg', 'pages/a/three.webp']);
+
+    expect(lookupContentAssets).toHaveBeenCalledTimes(1);
+    expect(ensureContentAssets).toHaveBeenCalledTimes(1);
+  });
+
+  it('is empty for a classroom that has not been opted in', async () => {
+    await expect(resolveSrcSets(offCtx, [REPO_PATH])).resolves.toEqual(new Map());
   });
 });
 

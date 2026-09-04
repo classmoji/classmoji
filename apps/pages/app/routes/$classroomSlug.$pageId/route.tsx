@@ -1,5 +1,7 @@
 import { useLoaderData, useFetcher, useOutletContext } from 'react-router';
 import { useAssetMap, useAssetRetry } from '~/hooks/useAssetMap.ts';
+import { useImageSrcSets } from '~/hooks/useImageSrcSets.ts';
+import { IMAGE_SIZES } from '~/utils/imageSizes.ts';
 import { useState, useEffect, useMemo, useRef, useCallback, lazy, Suspense } from 'react';
 import { IconPhoto } from '@tabler/icons-react';
 import { toast } from 'react-toastify';
@@ -48,12 +50,18 @@ const PageRoute = () => {
     noticeAutoMerged,
     contentSha,
     resolvedAssets,
+    resolvedSrcSets,
   } = useLoaderData<typeof import('./route.server.ts').loader>();
   // Stored refs stay in the document; these are the URLs to display them with.
   const assets = useAssetMap(resolvedAssets, page.id);
   // An expired draft signature on a stale tab re-resolves once instead of
   // leaving a page of broken images.
   const assetEpoch = useAssetRetry();
+  // BlockNote owns the `<img>` and its `resolveFileUrl` contract returns one
+  // string, so the responsive candidates are applied to the rendered markup
+  // rather than handed to the block. See useImageSrcSets.
+  const contentRef = useRef<HTMLDivElement | null>(null);
+  useImageSrcSets(contentRef, resolvedSrcSets, IMAGE_SIZES, `${page.id}:${assetEpoch}`);
   const outletContext = useOutletContext<{ isEmbedded?: boolean }>();
   const isEmbedded = outletContext?.isEmbedded || false;
   // Preview mode is strictly read-only — editing chrome is suppressed while
@@ -659,7 +667,7 @@ const PageRoute = () => {
           </span>
         )}
 
-        <div className="mt-2">
+        <div className="mt-2" ref={contentRef}>
           {!isClient ? (
             /* SSR placeholder — BlockNote requires browser APIs */
             <div className="flex items-center justify-center py-12">

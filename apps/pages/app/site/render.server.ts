@@ -313,6 +313,51 @@ export function addHeadingAnchors(html: string): {
 }
 
 /* ------------------------------------------------------------------ *
+ * Responsive images
+ * ------------------------------------------------------------------ */
+
+/**
+ * Hang a `srcset` and a `sizes` off every `<img>` we have candidates for.
+ *
+ * A post-pass, for the same reason `addHeadingAnchors` is one: BlockNote's
+ * image block owns its own markup — the wrapper, the caption, the width prop —
+ * and replacing that block in the viewer schema to add two attributes would
+ * mean owning all of it forever. Two attributes is what this actually is.
+ *
+ * Keyed by the `src` the render already emitted, which is the resolved signed
+ * URL: `resolveSrcSets` returns the untransformed original as its `src`, and it
+ * is byte-identical to what `resolveMany` gave the block, so the pairing is
+ * exact rather than heuristic.
+ *
+ * Never over an existing `srcset`. An author can paste HTML, and their own
+ * responsive image is content.
+ */
+export function addImageSrcSets(
+  html: string,
+  srcsets: ReadonlyMap<string, string>,
+  sizes: string
+): string {
+  if (srcsets.size === 0) return html;
+
+  const host = anchorHost();
+  host.innerHTML = html;
+
+  let changed = false;
+  for (const img of host.querySelectorAll('img')) {
+    if (img.hasAttribute('srcset')) continue;
+    const srcset = srcsets.get(img.getAttribute('src') ?? '');
+    if (!srcset) continue;
+    img.setAttribute('srcset', srcset);
+    img.setAttribute('sizes', sizes);
+    changed = true;
+  }
+
+  // Serializing costs a re-render of the whole article; a page whose images all
+  // declined (a deck of gifs, an external-image page) should not pay it.
+  return changed ? host.innerHTML : html;
+}
+
+/* ------------------------------------------------------------------ *
  * Wrapper markup
  * ------------------------------------------------------------------ */
 

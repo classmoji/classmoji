@@ -181,12 +181,17 @@ export function rebaseThemeRef(
 export interface DeckDeliveryResolvers {
   resolveMany(ctx: NonNullable<DeliveryContext>, refs: string[]): Promise<Map<string, string>>;
   resolveThemeBase(ctx: NonNullable<DeliveryContext>, themeName: string): Promise<string | null>;
+  resolveSrcSets(
+    ctx: NonNullable<DeliveryContext>,
+    refs: string[]
+  ): Promise<Map<string, { src: string; srcset: string }>>;
 }
 
 const defaultResolvers: DeckDeliveryResolvers = {
   resolveMany: (ctx, refs) => ClassmojiService.contentDelivery.resolveMany(ctx, refs),
   resolveThemeBase: (ctx, themeName) =>
     ClassmojiService.contentDelivery.resolveThemeBase(ctx, themeName),
+  resolveSrcSets: (ctx, refs) => ClassmojiService.contentDelivery.resolveSrcSets(ctx, refs),
 };
 
 /**
@@ -223,22 +228,39 @@ export async function resolveDeckDelivery(
   }
 
   try {
-    const rewritten = await rewriteDeckAssetUrls(html, async refs => {
-      // Theme assets never go through the blob resolver: a theme is signed as a
-      // folder, and rewriting one of its files to a standalone blob URL would
-      // break precisely the relative `url()` references the folder exists for.
-      const resolved = await resolvers.resolveMany(
-        ctx,
-        refs.filter(ref => !isThemeRef(ref))
-      );
-      if (themeName && themeBase) {
-        for (const ref of refs) {
-          const rebased = rebaseThemeRef(ref, themeName, themeBase);
-          if (rebased) resolved.set(ref, rebased);
+    const rewritten = await rewriteDeckAssetUrls(
+      html,
+      async refs => {
+        // Theme assets never go through the blob resolver: a theme is signed as
+        // a folder, and rewriting one of its files to a standalone blob URL
+        // would break precisely the relative `url()` references the folder
+        // exists for.
+        const resolved = await resolvers.resolveMany(
+          ctx,
+          refs.filter(ref => !isThemeRef(ref))
+        );
+        if (themeName && themeBase) {
+          for (const ref of refs) {
+            const rebased = rebaseThemeRef(ref, themeName, themeBase);
+            if (rebased) resolved.set(ref, rebased);
+          }
         }
+        return resolved;
+      },
+      {
+        // Responsive candidates for the raster `<img>`s only. A theme file is
+        // excluded for the same reason it is above — it is served out of a
+        // signed FOLDER, and a per-blob transform URL would leave that folder.
+        srcSets: async refs => {
+          const sets = await resolvers.resolveSrcSets(
+            ctx,
+            refs.filter(ref => !isThemeRef(ref))
+          );
+          return new Map([...sets].map(([ref, set]) => [ref, set.srcset]));
+        },
+        sizes: ClassmojiService.contentDelivery.IMAGE_SIZES,
       }
-      return resolved;
-    });
+    );
     return { html: rewritten, themeBase };
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : String(error);

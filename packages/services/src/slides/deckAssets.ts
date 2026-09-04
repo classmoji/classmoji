@@ -104,7 +104,33 @@ function elementRefs(attribs: Record<string, string>, out: Set<string>): void {
 }
 
 /** An element carrying attributes we may rewrite. Cheerio's node, narrowed. */
-type AssetElement = { attribs: Record<string, string> };
+type AssetElement = { name?: string; attribs: Record<string, string> };
+
+/** What a pass may do to an element beyond swapping URLs for other URLs. */
+export interface RewriteElementOptions {
+  /**
+   * READ side: `<img>` `src` → the responsive set to hang off it.
+   *
+   * Only `<img>`, and only `src` — never a `data-background-*` attribute.
+   * Reveal reads those itself and sets them as a CSS background, where a
+   * `srcset` means nothing at all; emitting one there would be dead weight in
+   * the markup and a lie about what the browser is going to fetch.
+   */
+  srcSets?: Map<string, string>;
+  /** The `sizes` hint written alongside an emitted `srcset`. */
+  sizes?: string;
+  /**
+   * WRITE side: is this reference one of ours?
+   *
+   * When it is, the element's `srcset` is REMOVED rather than rewritten. A
+   * stored `srcset` is the failure the design forbids — it is a set of derived,
+   * expiring, tier-specific URLs frozen into the document — and the read side
+   * regenerates one on every render anyway, so there is nothing to preserve.
+   * An author's own responsive `<img>` pointing at an external CDN is content
+   * and is left exactly as written.
+   */
+  isOwnRef?: (ref: string) => boolean;
+}
 
 /**
  * Apply `map` to every URL-bearing attribute on these elements, in place.
@@ -115,7 +141,8 @@ type AssetElement = { attribs: Record<string, string> };
  */
 function rewriteElements(
   elements: AssetElement[],
-  map: (ref: string) => string | undefined
+  map: (ref: string) => string | undefined,
+  opts: RewriteElementOptions = {}
 ): boolean {
   let changed = false;
 
@@ -136,7 +163,21 @@ function rewriteElements(
       changed = true;
     }
 
-    if (srcset) {
+    // A stored `srcset` of OURS is dropped, never rewritten — see isOwnRef.
+    // One candidate of ours is enough: a mixed set is not something an author
+    // writes, and keeping half of one stores a set the browser cannot assemble.
+    const isOwnRef = opts.isOwnRef;
+    const ownSrcSet =
+      srcset !== undefined &&
+      isOwnRef !== undefined &&
+      ((src !== undefined && isOwnRef(src)) ||
+        splitSrcSet(srcset).some(part => isOwnRef(part.url)));
+
+    if (ownSrcSet) {
+      delete el.attribs['srcset'];
+      delete el.attribs['sizes'];
+      changed = true;
+    } else if (srcset) {
       const parts = splitSrcSet(srcset);
       if (parts.some(part => map(part.url) !== undefined)) {
         el.attribs['srcset'] = parts
@@ -167,6 +208,16 @@ function rewriteElements(
         changed = true;
       }
     }
+
+    // Last, so it reads the ORIGINAL `src` (captured above) and lands on the
+    // element after its own rewrite. Never over an existing `srcset`: if one
+    // survived to here it is the author's, pointing somewhere we do not own.
+    const responsive = src && el.name === 'img' ? opts.srcSets?.get(src) : undefined;
+    if (responsive && el.attribs['srcset'] === undefined) {
+      el.attribs['srcset'] = responsive;
+      if (opts.sizes) el.attribs['sizes'] = opts.sizes;
+      changed = true;
+    }
   }
 
   return changed;
@@ -185,13 +236,14 @@ function rewriteElements(
  */
 export function rewriteFragmentAssetUrls(
   html: string,
-  map: (ref: string) => string | undefined
+  map: (ref: string) => string | undefined,
+  opts: RewriteElementOptions = {}
 ): string {
   if (!html) return html;
   const $ = cheerio.load(html, null, false);
   const elements = $(ASSET_SELECTOR).toArray();
   if (elements.length === 0) return html;
-  if (!rewriteElements(elements, map)) return html;
+  if (!rewriteElements(elements, map, opts)) return html;
   return $.root().html() ?? html;
 }
 
@@ -282,7 +334,8 @@ export function rewriteSlideAttrs(
  */
 export async function canonicalizeDeckAssets(
   deck: DeckJson,
-  canonicalize: (refs: string[]) => Promise<Map<string, string>>
+  canonicalize: (refs: string[]) => Promise<Map<string, string>>,
+  isOwnRef?: (ref: string) => boolean
 ): Promise<DeckJson> {
   const refs = new Set<string>();
   const collect = (slides: DeckSlide[] | undefined): void => {
@@ -301,6 +354,9 @@ export async function canonicalizeDeckAssets(
     const next = canonical.get(ref);
     return next === undefined || next === ref ? undefined : next;
   };
+  // Dropping a `srcset` is a change even when no URL moved, which is why the
+  // predicate rides along rather than being applied in a second pass.
+  const opts = isOwnRef ? { isOwnRef } : {};
 
   // Identity all the way up when nothing moved: each level reports its own
   // change rather than reading a shared flag, so one edited slide at the end of
@@ -308,9 +364,10 @@ export async function canonicalizeDeckAssets(
   const rewrite = (slides: DeckSlide[]): DeckSlide[] => {
     let changed = false;
     const next = slides.map(slide => {
-      const html = slide.html === undefined ? slide.html : rewriteFragmentAssetUrls(slide.html, map);
+      const html =
+        slide.html === undefined ? slide.html : rewriteFragmentAssetUrls(slide.html, map, opts);
       const notes =
-        slide.notes === undefined ? slide.notes : rewriteFragmentAssetUrls(slide.notes, map);
+        slide.notes === undefined ? slide.notes : rewriteFragmentAssetUrls(slide.notes, map, opts);
       const attrs = slide.attrs === undefined ? slide.attrs : rewriteSlideAttrs(slide.attrs, map);
       const children = slide.children === undefined ? slide.children : rewrite(slide.children);
       if (
@@ -343,7 +400,8 @@ export async function canonicalizeDeckAssets(
  */
 export async function rewriteDeckAssetUrls(
   html: string,
-  resolve: (refs: string[]) => Promise<Map<string, string>>
+  resolve: (refs: string[]) => Promise<Map<string, string>>,
+  opts: { srcSets?: (refs: string[]) => Promise<Map<string, string>>; sizes?: string } = {}
 ): Promise<string> {
   if (!html) return html;
 
@@ -357,14 +415,26 @@ export async function rewriteDeckAssetUrls(
   if (candidates.size === 0) return html;
 
   const resolved = await resolve([...candidates]);
-  if (resolved.size === 0) return html;
+
+  // Asked for only where a set could be used: the `src` of an `<img>`. A deck
+  // full of backgrounds and links therefore pays nothing for this.
+  const imageSrcs = elements
+    .filter(el => el.name === 'img' && el.attribs.src)
+    .map(el => el.attribs.src);
+  const srcSetsByRef = opts.srcSets && imageSrcs.length > 0 ? await opts.srcSets(imageSrcs) : null;
+
+  if (resolved.size === 0 && !srcSetsByRef?.size) return html;
 
   const map = (ref: string): string | undefined => {
     const next = resolved.get(ref);
     return next === undefined || next === ref ? undefined : next;
   };
 
-  if (!rewriteElements(elements, map)) return html;
+  // Keyed by the STORED reference, which is what the emit step looks up: it
+  // reads the `src` the element arrived with, not the one it leaves with.
+  if (!rewriteElements(elements, map, { srcSets: srcSetsByRef ?? undefined, sizes: opts.sizes })) {
+    return html;
+  }
 
   // A full document keeps its doctype/head. A FRAGMENT does not survive as a
   // fragment — cheerio promotes one to a full `<html><head><body>` document on

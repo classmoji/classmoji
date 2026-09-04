@@ -1,6 +1,11 @@
 import { ClassmojiService } from '~/utils/db.server.ts';
 import { loadSitePageContent, SiteContentUnavailableError } from './content.server.ts';
-import { renderSitePage, siteArticleWrapper, SiteRenderError } from './render.server.ts';
+import {
+  addImageSrcSets,
+  renderSitePage,
+  siteArticleWrapper,
+  SiteRenderError,
+} from './render.server.ts';
 import { siteHeaders } from './headers.server.ts';
 import {
   loadSitePageIndex,
@@ -158,11 +163,45 @@ export async function renderPageForViewer(
   // one image must degrade to the stored reference, not 500 the site.
   const coverImage = await resolveSiteCover(assetCtx, rawCover);
 
+  const html = await addSiteImageSrcSets(assetCtx, content.blocks, rendered.html);
+
   return {
     title: page.title || 'Untitled',
-    html: siteArticleWrapper(rendered.html),
+    html: siteArticleWrapper(html),
     coverImage,
   };
+}
+
+/**
+ * Give the rendered article's images their responsive candidates.
+ *
+ * Runs on the STORED refs (`content.blocks`, before the rewrite) because that
+ * is what the resolver takes, and lands on the rendered HTML by matching the
+ * `src` the rewrite produced — `resolveSrcSets` returns the untransformed
+ * original as its `src`, which is the same URL `resolveMany` handed the block.
+ *
+ * Same contract as the two resolves above: a failure leaves the article exactly
+ * as rendered. A page whose images load at their full size is not worth a 503
+ * on the one surface with anonymous readers and a shared cache in front of it.
+ */
+async function addSiteImageSrcSets(
+  ctx: ReturnType<typeof assetResolveContext>,
+  blocks: unknown[],
+  html: string
+): Promise<string> {
+  if (!ctx) return html;
+
+  const refs = collectBlockAssetRefs(blocks);
+  if (refs.length === 0) return html;
+
+  try {
+    const sets = await ClassmojiService.contentDelivery.resolveSrcSets(ctx, refs);
+    const bySrc = new Map([...sets.values()].map(set => [set.src, set.srcset]));
+    return addImageSrcSets(html, bySrc, ClassmojiService.contentDelivery.IMAGE_SIZES);
+  } catch (error) {
+    console.warn('[site] srcset resolution failed, serving single-size images:', error);
+    return html;
+  }
 }
 
 /**

@@ -265,6 +265,37 @@ function normalizeRepoRelative(ref: string): string | null {
   return parts.join('/');
 }
 
+/**
+ * Extensions a responsive set is worth emitting for.
+ *
+ * Deliberately narrow. `gif` is excluded because the pipeline's resize would
+ * flatten an animation to a still; `svg` because it is already resolution
+ * independent and rasterizing it is a downgrade; everything non-image because
+ * a `w=` on a PDF is meaningless. A file that is not on this list gets the
+ * plain signed URL and no `srcset`, which is the correct answer, not a
+ * degradation.
+ */
+const RASTER_IMAGE_EXTENSIONS = new Set(['png', 'jpg', 'jpeg', 'webp', 'avif']);
+
+/**
+ * The `sizes` hint a page or deck image ships with.
+ *
+ * One constant, shared by the pages viewer, the class site and the deck
+ * rewrite, because the three must not drift into three different answers for
+ * the same image. An image block is laid out at the full width of the article
+ * column, and the widest column the editor offers is `max-w-7xl`; below a
+ * desktop breakpoint it is the viewport. 1024px is the middle of the column
+ * range and errs one rung low rather than high, which costs a slightly softer
+ * image on the widest setting and saves a 2560px download on every other one.
+ */
+export const IMAGE_SIZES = '(max-width: 1024px) 100vw, 1024px';
+
+/** Is this path one the image pipeline should produce a responsive set for? */
+export function isRasterImagePath(path: string): boolean {
+  const ext = extensionOf(path);
+  return ext !== null && RASTER_IMAGE_EXTENSIONS.has(ext);
+}
+
 /** Lowercased extension, or null when the path has none. */
 function extensionOf(path: string): string | null {
   const name = path.slice(path.lastIndexOf('/') + 1);
@@ -360,16 +391,57 @@ export async function resolveAssetUrl(
 }
 
 /**
+ * Sign one already-resolved raster image as `{ src, srcset }`.
+ *
+ * `src` is the PLAIN signed URL — no `w=`, no `fmt=` — deliberately, and this
+ * is the one place it matters. It is the untransformed original, so it is
+ * byte-identical to what `resolveAssetUrl` and `resolveMany` hand back for the
+ * same reference; a caller can therefore pair a resolved `src` with its set by
+ * string equality, which is exactly what the render-time passes do. It is also
+ * the safe fallback for a browser that ignores `srcset` entirely.
+ *
+ * The ladder carries `fmt=auto`, so each rung is served as WebP or AVIF to the
+ * browsers that accept them and as the original format to the ones that do not.
+ *
+ * No `sourceWidth` is passed: the asset map stores a file's size in BYTES, not
+ * its pixel width, so all three rungs are emitted and the Worker's `scale-down`
+ * fit is what keeps a 900px source from being upscaled to 2560 — it caps at the
+ * source and stops. The cost of not knowing the width is a slightly wasteful
+ * candidate list, never a blurry image.
+ */
+async function signResponsive(
+  ctx: ResolveContext,
+  env: { origin: string; master: string },
+  path: string,
+  sha: string
+): Promise<{ src: string; srcset: string } | null> {
+  const ext = extensionOf(path);
+  if (!ext || !RASTER_IMAGE_EXTENSIONS.has(ext)) return null;
+
+  try {
+    const signing = signingContext(ctx, env.master);
+    const [src, ladder] = await Promise.all([
+      signBlobUrl(env.origin, signing, { sha, ext }),
+      signSrcSet(env.origin, signing, { sha, ext, fmt: 'auto' }),
+    ]);
+    return { src, srcset: ladder.srcset };
+  } catch (error) {
+    console.warn(
+      `[contentDelivery] Could not sign a srcset for ${path} in classroom ${ctx.classroom.id}:`,
+      error instanceof Error ? error.message : error
+    );
+    return null;
+  }
+}
+
+/**
  * A responsive `{ src, srcset }` for one image reference.
  *
- * Null — not a passthrough string — whenever a responsive set cannot be built
- * (unconfigured, not our repo, unknown to the map, unsignable). The caller
- * needs to tell "here is a srcset" from "there is no srcset", and an unsigned
- * legacy URL is a `src`, not a set.
- *
- * No `sourceWidth` is passed: the asset map stores a file's size in bytes, not
- * its pixel width, so all three rungs are emitted and the pipeline declines to
- * upscale on its own.
+ * Null — not a passthrough string — whenever a responsive set cannot or should
+ * not be built: the layer is off for this classroom or deployment, the
+ * reference is not ours, the map has never heard of it, it is not a raster
+ * image, or it cannot be signed. The caller needs to tell "here is a srcset"
+ * from "there is no srcset", and an unsigned legacy URL is a `src`, not a set.
  */
 export async function resolveAssetSrcSet(
   ctx: ResolveContext,
@@ -379,7 +451,7 @@ export async function resolveAssetSrcSet(
   if (!env) return null;
 
   const path = toRepoPath(ctx, ref);
-  if (!path) return null;
+  if (!path || !isRasterImagePath(path)) return null;
 
   await ensureMap(ctx.classroom.id);
   const asset = await lookupContentAsset(ctx.classroom.id, path);
@@ -390,18 +462,53 @@ export async function resolveAssetSrcSet(
     return null;
   }
 
-  const ext = extensionOf(path);
-  if (!ext) return null;
+  return signResponsive(ctx, env, path, asset.sha);
+}
 
-  try {
-    return await signSrcSet(env.origin, signingContext(ctx, env.master), { sha: asset.sha, ext });
-  } catch (error) {
-    console.warn(
-      `[contentDelivery] Could not sign a srcset for ${path} in classroom ${ctx.classroom.id}:`,
-      error instanceof Error ? error.message : error
-    );
-    return null;
+/**
+ * Responsive sets for a whole page's images, in one pass.
+ *
+ * The batched twin of `resolveAssetSrcSet`, and the entry point a render should
+ * use for the same reason `resolveMany` is: one map-freshness check and one
+ * query for the whole document rather than one of each per image.
+ *
+ * Only references that actually GOT a set appear in the result. A caller looks
+ * up unconditionally and treats a miss as "render this one with a plain `src`",
+ * which covers the gif, the svg, the external image and the file that is not an
+ * image at all — all of them correct outcomes rather than failures.
+ */
+export async function resolveSrcSets(
+  ctx: ResolveContext,
+  refs: string[]
+): Promise<Map<string, { src: string; srcset: string }>> {
+  const sets = new Map<string, { src: string; srcset: string }>();
+
+  const env = deliveryEnvFor(ctx);
+  if (!env) return sets;
+
+  // Reduced BEFORE the map is touched: a gif, an svg, a PDF and an external
+  // image all drop out on the shape of the reference alone, so a document full
+  // of them costs no query at all.
+  const wanted = new Map<string, string>();
+  for (const ref of new Set(refs.filter(ref => typeof ref === 'string' && ref.length > 0))) {
+    const path = toRepoPath(ctx, ref);
+    if (path && isRasterImagePath(path)) wanted.set(ref, path);
   }
+  if (wanted.size === 0) return sets;
+
+  await ensureMap(ctx.classroom.id);
+  const assets = await lookupContentAssets(ctx.classroom.id, [...new Set(wanted.values())]);
+
+  await Promise.all(
+    [...wanted].map(async ([ref, path]) => {
+      const asset = assets.get(path);
+      if (!asset || asset.type !== 'blob') return;
+      const set = await signResponsive(ctx, env, path, asset.sha);
+      if (set) sets.set(ref, set);
+    })
+  );
+
+  return sets;
 }
 
 /**

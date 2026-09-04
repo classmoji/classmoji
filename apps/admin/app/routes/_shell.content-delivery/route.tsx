@@ -62,8 +62,8 @@ const ConfirmBulk = ({
               {enabling
                 ? `Every classroom in this list (${count}) starts serving its page and deck assets through signed delivery URLs on the next render.`
                 : `Every classroom in this list (${count}) goes back to the legacy raw/proxy URLs on the next render.`}{' '}
-              Stored content is not touched — this only changes the URLs the apps
-              hand out, and it can be reversed from this screen.
+              Stored content is not touched — this only changes the URLs the apps hand out, and it
+              can be reversed from this screen.
             </p>
           </div>
         </div>

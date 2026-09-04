@@ -106,6 +106,26 @@ function fakeResolvers(overrides: Partial<DeckDeliveryResolvers> = {}): DeckDeli
     async resolveThemeBase() {
       return null;
     },
+    /**
+     * A responsive set for the raster images under this classroom's path.
+     *
+     * `src` is the plain signed URL — identical to what `resolveMany` returns
+     * for the same reference — because that pairing is what lets a caller match
+     * a resolved `src` to its set by string equality.
+     */
+    async resolveSrcSets(_ctx, refs) {
+      const out = new Map<string, { src: string; srcset: string }>();
+      const own = `/content/${ORG}/${REPO}/`;
+      for (const ref of refs) {
+        if (!ref.startsWith(own) || !/\.(png|jpe?g|webp|avif)$/i.test(ref)) continue;
+        const src = `${ORIGIN}/c/${CLASSROOM}/blob/sha-${ref.split('/').pop()}?p=draft`;
+        out.set(ref, {
+          src,
+          srcset: [800, 1600, 2560].map(w => `${src}&w=${w}&fmt=auto ${w}w`).join(', '),
+        });
+      }
+      return out;
+    },
     ...overrides,
   };
 }
@@ -197,6 +217,10 @@ test.describe('asset rewriting', () => {
       async resolveThemeBase() {
         calls += 1;
         return null;
+      },
+      async resolveSrcSets(_ctx, refs) {
+        calls += 1;
+        return fakeResolvers().resolveSrcSets(_ctx, refs);
       },
     };
 
@@ -391,4 +415,65 @@ test('deckDeliveryContext refuses a classroom that has not been opted in', () =>
     classroom: { id: CLASSROOM, content_key_version: 3, content_repo: REPO },
   };
   expect(deckDeliveryContext(missing, ORG, REPO, { canEdit: true })).toBe(null);
+});
+
+test.describe('responsive images', () => {
+  test('a raster <img> gets a srcset and sizes; its plain src stays the fallback', async () => {
+    const ref = `/content/${ORG}/${REPO}/slides/deck/a.png`;
+    const { html: out } = await resolveDeckDelivery(`<img src="${ref}">`, ctx(), {
+      resolvers: fakeResolvers(),
+      themeName: null,
+    });
+
+    expect(out).toContain('srcset="');
+    expect(out).toContain('sizes="');
+    // The three rungs, each asking the pipeline for a width and a format. The
+    // `&` separators are HTML-escaped in an attribute value, which is correct
+    // and is why this matches on the tail rather than on a whole query string.
+    for (const width of [800, 1600, 2560]) {
+      expect(out).toContain(`w=${width}`);
+      expect(out).toContain(`fmt=auto ${width}w`);
+    }
+    // And the untransformed original is still what `src` points at, which is
+    // both the fallback for a browser that ignores srcset and the thing that
+    // makes the src/srcset pair matchable by string equality.
+    expect(out).toMatch(/src="[^"]*\/blob\/sha-a\.png\?p=draft"/);
+  });
+
+  test('never on a background attribute — Reveal paints those as CSS', async () => {
+    const ref = `/content/${ORG}/${REPO}/slides/deck/bg.png`;
+    const { html: out } = await resolveDeckDelivery(
+      `<section data-background-image="${ref}"></section>`,
+      ctx(),
+      { resolvers: fakeResolvers(), themeName: null }
+    );
+
+    expect(out).toContain('data-background-image="');
+    expect(out).not.toContain('srcset');
+  });
+
+  test('a gif, an svg and a foreign image get no set at all', async () => {
+    const html = [
+      `<img src="/content/${ORG}/${REPO}/slides/deck/loop.gif">`,
+      `<img src="/content/${ORG}/${REPO}/slides/deck/logo.svg">`,
+      '<img src="https://images.example.com/hero.png">',
+    ].join('');
+
+    const { html: out } = await resolveDeckDelivery(html, ctx(), {
+      resolvers: fakeResolvers(),
+      themeName: null,
+    });
+
+    expect(out).not.toContain('srcset');
+  });
+
+  test("does not clobber an author's own srcset", async () => {
+    const html = '<img src="https://cdn.example.com/a.png" srcset="https://cdn.example.com/a2.png 2x">';
+    const { html: out } = await resolveDeckDelivery(html, ctx(), {
+      resolvers: fakeResolvers(),
+      themeName: null,
+    });
+
+    expect(out).toBe(html);
+  });
 });
