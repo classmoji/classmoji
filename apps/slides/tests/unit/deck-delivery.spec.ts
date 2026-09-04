@@ -90,41 +90,35 @@ const PUBLIC_SLIDE = { ...SLIDE, is_public: true };
  */
 function fakeResolvers(overrides: Partial<DeckDeliveryResolvers> = {}): DeckDeliveryResolvers {
   return {
-    async resolveMany(_ctx, refs) {
-      const out = new Map<string, string>();
+    /**
+     * Both halves out of one pass, exactly as the real resolver does it.
+     *
+     * The `src` inside a candidate set is the SAME string the url map carries
+     * for that reference — that pairing is the contract, and it only holds
+     * because both were minted together.
+     */
+    async resolveDelivery(_ctx, refs) {
+      const urls = new Map<string, string>();
+      const srcSets = new Map<string, { src: string; srcset: string }>();
       const own = `/content/${ORG}/${REPO}/`;
       for (const ref of refs) {
-        out.set(
-          ref,
-          ref.startsWith(own)
-            ? `${ORIGIN}/c/${CLASSROOM}/blob/sha-${ref.split('/').pop()}?p=draft`
-            : ref
-        );
+        if (!ref.startsWith(own)) {
+          urls.set(ref, ref);
+          continue;
+        }
+        const src = `${ORIGIN}/c/${CLASSROOM}/blob/sha-${ref.split('/').pop()}?p=draft`;
+        urls.set(ref, src);
+        if (/\.(png|jpe?g|webp|avif)$/i.test(ref)) {
+          srcSets.set(ref, {
+            src,
+            srcset: [800, 1600, 2560].map(w => `${src}&w=${w}&fmt=auto ${w}w`).join(', '),
+          });
+        }
       }
-      return out;
+      return { urls, srcSets };
     },
     async resolveThemeBase() {
       return null;
-    },
-    /**
-     * A responsive set for the raster images under this classroom's path.
-     *
-     * `src` is the plain signed URL — identical to what `resolveMany` returns
-     * for the same reference — because that pairing is what lets a caller match
-     * a resolved `src` to its set by string equality.
-     */
-    async resolveSrcSets(_ctx, refs) {
-      const out = new Map<string, { src: string; srcset: string }>();
-      const own = `/content/${ORG}/${REPO}/`;
-      for (const ref of refs) {
-        if (!ref.startsWith(own) || !/\.(png|jpe?g|webp|avif)$/i.test(ref)) continue;
-        const src = `${ORIGIN}/c/${CLASSROOM}/blob/sha-${ref.split('/').pop()}?p=draft`;
-        out.set(ref, {
-          src,
-          srcset: [800, 1600, 2560].map(w => `${src}&w=${w}&fmt=auto ${w}w`).join(', '),
-        });
-      }
-      return out;
     },
     ...overrides,
   };
@@ -210,17 +204,13 @@ test.describe('asset rewriting', () => {
 
     let calls = 0;
     const counting: DeckDeliveryResolvers = {
-      async resolveMany(_ctx, refs) {
+      async resolveDelivery(_ctx, refs) {
         calls += 1;
-        return fakeResolvers().resolveMany(_ctx, refs);
+        return fakeResolvers().resolveDelivery(_ctx, refs);
       },
       async resolveThemeBase() {
         calls += 1;
         return null;
-      },
-      async resolveSrcSets(_ctx, refs) {
-        calls += 1;
-        return fakeResolvers().resolveSrcSets(_ctx, refs);
       },
     };
 
@@ -236,7 +226,7 @@ test.describe('asset rewriting', () => {
     const html = `<img src="/content/${ORG}/${REPO}/a.png">`;
     const { html: out } = await resolveDeckDelivery(html, ctx(), {
       resolvers: fakeResolvers({
-        async resolveMany() {
+        async resolveDelivery() {
           throw new Error('asset map is down');
         },
       }),
@@ -283,9 +273,9 @@ test.describe('shared theme links', () => {
 
     const { html: out, themeBase } = await resolveDeckDelivery(html, ctx(), {
       resolvers: fakeResolvers({
-        async resolveMany(_ctx, refs) {
+        async resolveDelivery(_ctx, refs) {
           seen.push(...refs);
-          return fakeResolvers().resolveMany(_ctx, refs);
+          return fakeResolvers().resolveDelivery(_ctx, refs);
         },
         async resolveThemeBase() {
           return BASE;
@@ -476,4 +466,24 @@ test.describe('responsive images', () => {
 
     expect(out).toBe(html);
   });
+});
+
+test('resolves a deck read in ONE pass, not one per concern', async () => {
+  // Two passes would pay two asset-map reads per deck view AND read the clock
+  // twice — and a bucketed expiry that turns over between them mints a
+  // different `src` for the same file than the candidate list was built beside.
+  let calls = 0;
+  const html = `<img src="/content/${ORG}/${REPO}/a.png"><img src="/content/${ORG}/${REPO}/b.jpg">`;
+
+  await resolveDeckDelivery(html, ctx(), {
+    themeName: null,
+    resolvers: fakeResolvers({
+      async resolveDelivery(c, refs) {
+        calls += 1;
+        return fakeResolvers().resolveDelivery(c, refs);
+      },
+    }),
+  });
+
+  expect(calls).toBe(1);
 });

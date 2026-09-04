@@ -372,6 +372,19 @@ describe('saveDeck canonicalizes on the way in', () => {
     expect(writtenDeck().slides[0].html).not.toContain('srcset');
   });
 
+  it('keeps an external srcset hanging off a REPO-relative src', async () => {
+    // The case the strip used to get wrong. `src` being ours is not evidence
+    // that the SET is ours — an author can perfectly well point a repo image's
+    // candidates at an external CDN, and deleting their set is a silent edit of
+    // their slide. Whose the set is, is a question about the set.
+    const html = `<img src="${DECK_PATH_REF}" srcset="https://cdn.example.com/a@2x.png 2x">`;
+
+    await saveDeck({ slide, deck: deckWith([{ id: 'aaaa1111', html }]), message: 'save' });
+
+    expect(writtenDeck().slides[0].html).toContain('srcset');
+    expect(writtenDeck().slides[0].html).toContain('a@2x.png 2x');
+  });
+
   it("keeps an author's own external srcset — that is content, not ours", async () => {
     const html =
       '<img src="https://cdn.example.com/a.png" ' +
@@ -387,5 +400,92 @@ describe('saveDeck canonicalizes on the way in', () => {
     await saveDeck({ slide, deck: deckWith([{ id: 'aaaa1111', html }]), message: 'save' });
 
     expect(writtenDeck().slides[0].html).toBe(html);
+  });
+});
+
+describe('the deck fields that are not slides', () => {
+  const deckWith = (extra: Record<string, unknown>) => ({
+    version: 1 as const,
+    theme: 'white',
+    codeTheme: 'github',
+    slides: [{ id: 'aaaa1111', html: '<h1>Hi</h1>' }] as never,
+    ...extra,
+  });
+
+  it('canonicalizes a url() inside the deck-level customCss', async () => {
+    // `customCss` is verbatim `<style>` content and is rewritten on READ like
+    // everything else — so it comes back carrying a signed URL, and a
+    // stylesheet frozen to an expiring signature breaks a deck's whole look
+    // rather than one image.
+    await saveDeck({
+      slide,
+      deck: deckWith({
+        customCss: `.title { background-image: url('${signedDeckUrl}'); color: red; }`,
+      }),
+      message: 'save',
+    });
+
+    expect(writtenDeck().customCss).toContain(`url('${DECK_PATH_REF}')`);
+    expect(writtenDeck().customCss).toContain('color: red');
+  });
+
+  it('canonicalizes an extraCss href and keeps its media query', async () => {
+    await saveDeck({
+      slide,
+      deck: deckWith({
+        extraCss: [
+          { href: signedDeckUrl, media: '(prefers-color-scheme: dark)' },
+          { href: 'https://cdn.example.com/vendor.css' },
+        ],
+      }),
+      message: 'save',
+    });
+
+    const extraCss = writtenDeck().extraCss;
+    expect(extraCss[0]).toEqual({
+      href: DECK_PATH_REF,
+      media: '(prefers-color-scheme: dark)',
+    });
+    // Somebody else's stylesheet is left exactly as written.
+    expect(extraCss[1]).toEqual({ href: 'https://cdn.example.com/vendor.css' });
+  });
+
+  it('leaves a deck whose stylesheets hold nothing of ours byte-identical', async () => {
+    const customCss = '.title { color: red; }';
+    await saveDeck({ slide, deck: deckWith({ customCss }), message: 'save' });
+
+    expect(writtenDeck().customCss).toBe(customCss);
+  });
+});
+
+describe('applying the save pass twice', () => {
+  it('is a no-op the second time — the route may canonicalize first', async () => {
+    const deck = {
+      version: 1 as const,
+      theme: 'white',
+      codeTheme: 'github',
+      customCss: `.a { background: url('${signedDeckUrl}'); }`,
+      extraCss: [{ href: signedDeckUrl }],
+      slides: [
+        {
+          id: 'aaaa1111',
+          html: `<img src="${signedDeckUrl}" srcset="${signedDeckUrl} 800w">`,
+          notes: `<img src="${signedDeckUrl}">`,
+          attrs: { 'data-background-image': signedDeckUrl },
+          children: [{ id: 'bbbb2222', html: `<img src="${signedDeckUrl}">` }],
+        },
+      ] as never,
+    };
+
+    await saveDeck({ slide, deck, message: 'first' });
+    const first = writtenDeck();
+
+    uploadBatchMock.mockClear();
+    await saveDeck({ slide, deck: first, message: 'second' });
+
+    // Every derivation this pass performs is a removal, and there is nothing
+    // left to remove — which is exactly what lets the pages/deck routes keep
+    // their own canonicalization without either half knowing about the other.
+    expect(writtenDeck()).toEqual(first);
   });
 });

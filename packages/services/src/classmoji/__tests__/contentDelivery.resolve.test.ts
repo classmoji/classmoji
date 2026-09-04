@@ -38,9 +38,11 @@ const {
   canonicalizeAssetRef,
   isContentDeliveryConfigured,
   isContentDeliveryEnabled,
+  isOwnAssetRef,
   resolveAssetSrcSet,
   resolveAssetUrl,
   resolveMany,
+  resolveDelivery,
   resolveSrcSets,
   resolveThemeBase,
   tierFor,
@@ -561,5 +563,115 @@ describe('the per-classroom gate', () => {
     // signed URL back on save. There is a path behind it, and it is what gets
     // written.
     expect(await canonicalizeAssetRef(offCtx, signed)).toBe(REPO_PATH);
+  });
+});
+
+/**
+ * `resolveDelivery` — the batched pass both of the above are built on.
+ *
+ * What it exists to guarantee is the PAIRING: the `src` a block ends up
+ * rendering and the key its candidate list is filed under have to be the same
+ * string, and they only are if both were minted under the same clock.
+ */
+describe('resolveDelivery', () => {
+  it('mints the src and its candidate list under one clock', async () => {
+    const { urls, srcSets } = await resolveDelivery(ctx, [REPO_PATH], { srcSets: true });
+
+    const set = srcSets.get(REPO_PATH);
+    expect(set).toBeDefined();
+    // THE regression this guards. Expiries are bucketed, so two sequential
+    // resolves usually agree — until one straddles a bucket boundary, at which
+    // point the src and the srcset key differ by an `exp=` and every candidate
+    // list is silently dropped for the tier with the shortest bucket (draft:
+    // staff, on every page they open).
+    expect(urls.get(REPO_PATH)).toBe(set!.src);
+    expect(set!.srcset).toContain('fmt=auto');
+  });
+
+  it('holds the whole batch to one ensure and one map read', async () => {
+    await resolveDelivery(ctx, ['pages/a/one.png', 'pages/a/two.jpg', RAW_URL], { srcSets: true });
+
+    expect(ensureContentAssets).toHaveBeenCalledTimes(1);
+    expect(lookupContentAssets).toHaveBeenCalledTimes(1);
+  });
+
+  it('answers for every input ref, and only signs sets for raster images', async () => {
+    const refs = [REPO_PATH, 'pages/a/loop.gif', 'https://example.com/x.png'];
+    const { urls, srcSets } = await resolveDelivery(ctx, refs, { srcSets: true });
+
+    for (const ref of refs) expect(urls.has(ref)).toBe(true);
+    expect([...srcSets.keys()]).toEqual([REPO_PATH]);
+    // The gif still resolves — it just resolves to a single signed URL.
+    expect(urls.get('pages/a/loop.gif')).toContain('/blob/');
+  });
+
+  it('is a pure passthrough with no srcsets when the classroom is off', async () => {
+    const { urls, srcSets } = await resolveDelivery(offCtx, [REPO_PATH], { srcSets: true });
+
+    expect(urls.get(REPO_PATH)).toBe(REPO_PATH);
+    expect(srcSets.size).toBe(0);
+  });
+});
+
+/**
+ * The two derived URLs that are NOT blob signatures.
+ *
+ * Both reach storage the same way anything else does — a render emits one, a
+ * browser hands it back on save — and neither was recognized before, so both
+ * could be persisted. A stored theme URL freezes an expiry into a deck's
+ * stylesheet; a stored `/missing/` placeholder is worse, because it does not
+ * name a file at all and no later sync can repair it.
+ */
+describe('canonicalizing the derived URLs that are not blob signatures', () => {
+  it('turns a /missing/ placeholder back into the reference it stood for', async () => {
+    lookupContentAssets.mockImplementation(async () => new Map());
+    const resolved = await resolveMany(ctx, [REPO_PATH]);
+    const placeholder = resolved.get(REPO_PATH)!;
+    expect(placeholder).toContain('/missing/');
+
+    // No map read is possible here — the placeholder exists precisely BECAUSE
+    // the map had no row — and none is needed: it carries its own reference.
+    expect(await canonicalizeAssetRef(ctx, placeholder)).toBe(REPO_PATH);
+    expect(lookupContentAssetBySha).not.toHaveBeenCalled();
+  });
+
+  it('round-trips a placeholder for a legacy absolute reference too', async () => {
+    lookupContentAssets.mockImplementation(async () => new Map());
+    const placeholder = (await resolveMany(ctx, [RAW_URL])).get(RAW_URL)!;
+
+    expect(await canonicalizeAssetRef(ctx, placeholder)).toBe(RAW_URL);
+  });
+
+  it('counts a placeholder as ours, so a srcset around one is not left behind', () => {
+    const placeholder = `${ORIGIN}/c/${CLASSROOM_ID}/missing/${encodeURIComponent(REPO_PATH)}`;
+    expect(isOwnAssetRef(ctx, placeholder)).toBe(true);
+  });
+
+  it("leaves another classroom's placeholder alone", async () => {
+    const other = '11111111-2222-3333-4444-555555555555';
+    const foreign = `${ORIGIN}/c/${other}/missing/${encodeURIComponent(REPO_PATH)}`;
+
+    // Its path means nothing in this classroom's repo; "resolving" it would
+    // silently retarget the reference at a file we do not have.
+    expect(isOwnAssetRef(ctx, foreign)).toBe(false);
+    expect(await canonicalizeAssetRef(ctx, foreign)).toBe(foreign);
+  });
+
+  it('turns a signed theme URL into the path inside the theme folder', async () => {
+    const base = await resolveThemeBase(ctx, 'midnight');
+    const signed = `${base}lib/offline-v2.css`;
+
+    // A theme URL reaches storage through a deck's `<link href>` or an inline
+    // `url()`, and it expires exactly like a blob URL does. Its path is fully
+    // determined by the URL, so no map read is needed for this one either.
+    expect(await canonicalizeAssetRef(ctx, signed)).toBe(
+      '.slidesthemes/midnight/lib/offline-v2.css'
+    );
+    expect(lookupContentAssetBySha).not.toHaveBeenCalled();
+  });
+
+  it('canonicalizes the theme folder itself when nothing follows it', async () => {
+    const base = await resolveThemeBase(ctx, 'midnight');
+    expect(await canonicalizeAssetRef(ctx, base!)).toBe('.slidesthemes/midnight');
   });
 });

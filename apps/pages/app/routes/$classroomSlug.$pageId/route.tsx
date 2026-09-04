@@ -1,7 +1,6 @@
 import { useLoaderData, useFetcher, useOutletContext } from 'react-router';
 import { useAssetMap, useAssetRetry } from '~/hooks/useAssetMap.ts';
-import { useImageSrcSets } from '~/hooks/useImageSrcSets.ts';
-import { IMAGE_SIZES } from '~/utils/imageSizes.ts';
+import type { AssetSrcSets } from '~/hooks/useAssetSrcSets.ts';
 import { useState, useEffect, useMemo, useRef, useCallback, lazy, Suspense } from 'react';
 import { IconPhoto } from '@tabler/icons-react';
 import { toast } from 'react-toastify';
@@ -57,11 +56,16 @@ const PageRoute = () => {
   // An expired draft signature on a stale tab re-resolves once instead of
   // leaving a page of broken images.
   const assetEpoch = useAssetRetry();
-  // BlockNote owns the `<img>` and its `resolveFileUrl` contract returns one
-  // string, so the responsive candidates are applied to the rendered markup
-  // rather than handed to the block. See useImageSrcSets.
-  const contentRef = useRef<HTMLDivElement | null>(null);
-  useImageSrcSets(contentRef, resolvedSrcSets, IMAGE_SIZES, `${page.id}:${assetEpoch}`);
+  // Responsive candidates, keyed by the stored reference and handed to the
+  // image and profile blocks through context. A save-merge folds in blocks this
+  // client has never seen, and the loader's map has no entry for them — the
+  // action ships theirs alongside the merged document, and they are layered on
+  // top here until the next load makes them part of the loader payload.
+  const [mergedSrcSets, setMergedSrcSets] = useState<AssetSrcSets>({});
+  const srcSets = useMemo(
+    () => ({ ...(resolvedSrcSets ?? {}), ...mergedSrcSets }),
+    [resolvedSrcSets, mergedSrcSets]
+  );
   const outletContext = useOutletContext<{ isEmbedded?: boolean }>();
   const isEmbedded = outletContext?.isEmbedded || false;
   // Preview mode is strictly read-only — editing chrome is suppressed while
@@ -389,6 +393,10 @@ const PageRoute = () => {
             assets.remember(ref, url);
           }
         }
+        const mergedSets = fetcher.data.resolved_src_sets;
+        if (mergedSets && typeof mergedSets === 'object') {
+          setMergedSrcSets(current => ({ ...current, ...(mergedSets as AssetSrcSets) }));
+        }
         setEditorDoc(fetcher.data.merged_content);
         setEditorEpoch(epoch => epoch + 1);
         const n = fetcher.data.merged_with_concurrent;
@@ -667,7 +675,7 @@ const PageRoute = () => {
           </span>
         )}
 
-        <div className="mt-2" ref={contentRef}>
+        <div className="mt-2">
           {!isClient ? (
             /* SSR placeholder — BlockNote requires browser APIs */
             <div className="flex items-center justify-center py-12">
@@ -691,6 +699,7 @@ const PageRoute = () => {
                 onChange={handleEditorChange}
                 onReady={handleEditorReady}
                 resolveFileUrl={assets.resolveFileUrl}
+                srcSets={srcSets}
                 onAssetUploaded={assets.remember}
                 // P5: block editing while the save-merge chooser is open so no
                 // edits are silently discarded when the resolved merge remounts
@@ -716,6 +725,7 @@ const PageRoute = () => {
                 content={content}
                 darkMode={darkMode}
                 resolveFileUrl={assets.resolveFileUrl}
+                srcSets={srcSets}
               />
             </Suspense>
           )}

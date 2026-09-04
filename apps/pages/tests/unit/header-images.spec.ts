@@ -13,7 +13,7 @@
  */
 
 import { test, expect } from '@playwright/test';
-import { headerImageRefs, withResolvedHeaderImages } from '../../app/utils/headerImages.ts';
+import { cssUrl, headerImageRefs, withResolvedHeaderImages } from '../../app/utils/headerImages.ts';
 
 const REF = 'pages/lab-1/assets/hero.png';
 const SIGNED = 'https://content.classmoji.io/c/abc/blob/aaa.png?p=enrolled&sig=x';
@@ -74,5 +74,35 @@ test.describe('withResolvedHeaderImages', () => {
     expect(out[0]).toBe(row);
     // A resolve that answers with the reference itself is a miss, not a change.
     expect(out[1]).toBe(resolvedRow);
+  });
+});
+
+/**
+ * The thumbnail is painted as a CSS `background-image`, which is the one place
+ * a URL becomes SYNTAX rather than an attribute value — and React escapes
+ * neither: `style={{ backgroundImage }}` goes to the CSSOM verbatim.
+ */
+test.describe('cssUrl', () => {
+  test('quotes the value, so a `)` cannot end the token early', () => {
+    expect(cssUrl('https://x.test/a(1).png')).toBe('url("https://x.test/a(1).png")');
+  });
+
+  test('escapes the two characters that terminate a quoted CSS string', () => {
+    // A bare `"` closes the string; a bare backslash escapes whatever follows.
+    // Both are legal in a URL and neither is exotic in a filename.
+    expect(cssUrl('a\"b')).toBe('url("a\\\"b")');
+    expect(cssUrl('a\\b')).toBe('url("a\\\\b")');
+  });
+
+  test('drops control characters rather than escaping them', () => {
+    // They cannot appear in a well-formed URL, so their only purpose here would
+    // be to break out of the declaration.
+    const nasty = 'a' + String.fromCharCode(10) + 'b' + String.fromCharCode(0) + 'c';
+    expect(cssUrl(nasty)).toBe('url("abc")');
+  });
+
+  test('leaves an ordinary signed URL alone', () => {
+    const signed = 'https://content.classmoji.io/c/abc/blob/aaa.png?p=public&sig=x';
+    expect(cssUrl(signed)).toBe(`url("${signed}")`);
   });
 });

@@ -5,7 +5,11 @@ import { ServerBlockNoteEditor } from '@blocknote/server-util';
 import { JSDOM as UntypedJSDOM } from 'jsdom';
 
 import { redactDocumentForViewer } from './redact.server.ts';
-import { createViewerSchema, type PageLinkResolver } from './viewerSchema.server.ts';
+import {
+  createViewerSchema,
+  type PageLinkResolver,
+  type SiteSrcSets,
+} from './viewerSchema.server.ts';
 
 /** The only part of jsdom's surface this module touches. */
 type DomFactory = new (html?: string) => { window: { document: Document } };
@@ -157,6 +161,16 @@ export type RenderSitePageOptions = {
    * decided never links somewhere that 404s.
    */
   showSchedule?: boolean;
+  /**
+   * `{ signedUrl: srcset }` for this page's images.
+   *
+   * Handed to the SCHEMA rather than applied to the rendered HTML afterwards.
+   * A post-pass could only match on `src` and could not see `previewWidth`,
+   * which lives in the block's props and is the only thing that says how wide
+   * the image will actually be laid out — and a `srcset` whose `sizes` is a
+   * guess is how a 400px image downloads a 2560px rendition.
+   */
+  srcSets?: SiteSrcSets;
 };
 
 /** BlockNote's own wrappers, in the order the client viewer nests them. */
@@ -179,6 +193,7 @@ export async function renderSitePage({
   blocks,
   resolveLink,
   showSchedule,
+  srcSets,
 }: RenderSitePageOptions): Promise<RenderedPage> {
   // Redact BEFORE serializing: BlockNote writes block props onto the wrapper
   // as data-* attributes, so a hidden page's title would ship in the HTML even
@@ -191,7 +206,7 @@ export async function renderSitePage({
     html = await withServerBlockNoteLock(async () => {
       // The schema is per-render because its link resolution is per-viewer.
       const editor = ServerBlockNoteEditor.create({
-        schema: createViewerSchema(resolveLink, { showSchedule }),
+        schema: createViewerSchema(resolveLink, { showSchedule, ...(srcSets ? { srcSets } : {}) }),
       });
 
       // `editor.isEditable` is `true` inside ServerBlockNoteEditor and setting
@@ -310,51 +325,6 @@ export function addHeadingAnchors(html: string): {
   }
 
   return { html: host.innerHTML, headings };
-}
-
-/* ------------------------------------------------------------------ *
- * Responsive images
- * ------------------------------------------------------------------ */
-
-/**
- * Hang a `srcset` and a `sizes` off every `<img>` we have candidates for.
- *
- * A post-pass, for the same reason `addHeadingAnchors` is one: BlockNote's
- * image block owns its own markup — the wrapper, the caption, the width prop —
- * and replacing that block in the viewer schema to add two attributes would
- * mean owning all of it forever. Two attributes is what this actually is.
- *
- * Keyed by the `src` the render already emitted, which is the resolved signed
- * URL: `resolveSrcSets` returns the untransformed original as its `src`, and it
- * is byte-identical to what `resolveMany` gave the block, so the pairing is
- * exact rather than heuristic.
- *
- * Never over an existing `srcset`. An author can paste HTML, and their own
- * responsive image is content.
- */
-export function addImageSrcSets(
-  html: string,
-  srcsets: ReadonlyMap<string, string>,
-  sizes: string
-): string {
-  if (srcsets.size === 0) return html;
-
-  const host = anchorHost();
-  host.innerHTML = html;
-
-  let changed = false;
-  for (const img of host.querySelectorAll('img')) {
-    if (img.hasAttribute('srcset')) continue;
-    const srcset = srcsets.get(img.getAttribute('src') ?? '');
-    if (!srcset) continue;
-    img.setAttribute('srcset', srcset);
-    img.setAttribute('sizes', sizes);
-    changed = true;
-  }
-
-  // Serializing costs a re-render of the whole article; a page whose images all
-  // declined (a deck of gifs, an external-image page) should not pay it.
-  return changed ? host.innerHTML : html;
 }
 
 /* ------------------------------------------------------------------ *

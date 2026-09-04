@@ -59,67 +59,52 @@ export function assetResolveContext(
 }
 
 /**
- * Resolve every reference in a document → `{ ref: signedUrl }` for the client.
+ * Resolve every reference in a document, for the client.
  *
- * Returns an empty object (never throws, never rewrites the blocks) when the
- * classroom is unservable or the delivery layer is switched off, so the client
- * falls through to the stored reference on every lookup miss.
+ * `assets` is `{ storedRef: signedUrl }` and `srcSets` is
+ * `{ storedRef: srcset }` — both keyed the same way, on purpose. The blocks
+ * hold the stored reference and nothing else; asking one of them to look itself
+ * up by its signed URL would mean reproducing a signature, which means
+ * reproducing a clock, an expiry bucket and a tier.
+ *
+ * ONE service call, not two. Two would pay for two asset-map reads and, worse,
+ * read the clock twice: expiries are bucketed, so two passes that straddle a
+ * bucket boundary mint different URLs for the same file, and every srcset would
+ * be silently dropped for exactly the viewers on the shortest bucket — staff,
+ * on the draft tier. `resolveDelivery` mints both under one `now`.
+ *
+ * Empty (never throws, never rewrites the blocks) when the classroom is
+ * unservable or the delivery layer is off, so the client falls through to the
+ * stored reference on every lookup miss.
  */
 export async function resolveDocumentAssets(
   ctx: AssetResolveContext | null,
   blocks: unknown,
   extraRefs: Array<string | null | undefined> = []
-): Promise<Record<string, string>> {
-  if (!ctx) return {};
+): Promise<{ assets: Record<string, string>; srcSets: Record<string, string> }> {
+  if (!ctx) return { assets: {}, srcSets: {} };
 
   const refs = [
     ...collectBlockAssetRefs(blocks),
     ...extraRefs.filter((ref): ref is string => typeof ref === 'string' && ref.length > 0),
   ];
-  if (refs.length === 0) return {};
+  if (refs.length === 0) return { assets: {}, srcSets: {} };
 
-  const resolved = await ClassmojiService.contentDelivery.resolveMany(ctx, refs);
+  const { urls, srcSets } = await ClassmojiService.contentDelivery.resolveDelivery(ctx, refs, {
+    srcSets: true,
+  });
 
-  const out: Record<string, string> = {};
-  for (const [ref, url] of resolved) {
+  const assets: Record<string, string> = {};
+  for (const [ref, url] of urls) {
     // Only entries that actually changed: a passthrough would just be noise in
     // the loader payload, and the client already falls back to the ref itself.
-    if (url !== ref) out[ref] = url;
+    if (url !== ref) assets[ref] = url;
   }
-  return out;
-}
 
-/**
- * Responsive candidates for a document's images → `{ signedSrc: srcset }`.
- *
- * Keyed by the RESOLVED src rather than by the stored reference, because the
- * consumer is a DOM pass over markup BlockNote already rendered — it has the
- * `src`, not the ref. The pairing is exact: `resolveSrcSets` returns the
- * untransformed original as its `src`, which is the same URL `resolveMany` put
- * in the display map for that reference.
- *
- * Empty for everything that should not get a set — a gif, an svg, a non-image,
- * an external URL, a classroom the layer is off for — and the client renders
- * those with a plain `src`, which is the correct outcome rather than a failure.
- */
-export async function resolveDocumentSrcSets(
-  ctx: AssetResolveContext | null,
-  blocks: unknown,
-  extraRefs: Array<string | null | undefined> = []
-): Promise<Record<string, string>> {
-  if (!ctx) return {};
+  const sets: Record<string, string> = {};
+  for (const [ref, set] of srcSets) sets[ref] = set.srcset;
 
-  const refs = [
-    ...collectBlockAssetRefs(blocks),
-    ...extraRefs.filter((ref): ref is string => typeof ref === 'string' && ref.length > 0),
-  ];
-  if (refs.length === 0) return {};
-
-  const sets = await ClassmojiService.contentDelivery.resolveSrcSets(ctx, refs);
-
-  const out: Record<string, string> = {};
-  for (const { src, srcset } of sets.values()) out[src] = srcset;
-  return out;
+  return { assets, srcSets: sets };
 }
 
 /**

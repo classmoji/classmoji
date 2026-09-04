@@ -3,6 +3,7 @@ import { BlockNoteSchema } from '@blocknote/core';
 import { createReactBlockSpec } from '@blocknote/react';
 
 import { schema as editorSchema } from '~/components/editor/blocks/index.tsx';
+import { AVATAR_SIZES, imageSizesFor, responsiveImageAttrs } from '~/utils/imageSizes.ts';
 import {
   navGridEntryEmoji,
   navGridEntryLabel,
@@ -133,6 +134,17 @@ export type SitePageLink = { href: string; title: string; membersOnly?: boolean 
  */
 export type PageLinkResolver = (pageId: string) => SitePageLink | null;
 
+/**
+ * `{ signedUrl: srcset }` for the images on this page.
+ *
+ * Keyed by the SIGNED url, not the stored reference — the site rewrites a
+ * document's references to signed URLs before rendering it, so by the time a
+ * block render sees `props.url` it is already the signed one. (The editor is
+ * the opposite: its blocks keep the stored reference and the display URL rides
+ * beside them, so its map is keyed by the reference.)
+ */
+export type SiteSrcSets = Record<string, string>;
+
 /* ------------------------------------------------------------------ *
  * Static block implementations
  * ------------------------------------------------------------------ */
@@ -174,29 +186,112 @@ function StaticTerminal(props: RenderProps) {
   ]);
 }
 
-function StaticProfile(props: RenderProps) {
-  const name = String(props.block.props.name || '');
-  const title = String(props.block.props.title || '');
-  const imageUrl = String(props.block.props.imageUrl || '');
+/**
+ * Responsive candidates for one already-rewritten reference.
+ *
+ * The block's `url` prop has ALREADY been swapped for the signed URL by the
+ * site's document rewrite before it reaches a render, so the lookup here is
+ * keyed by the signed URL — the opposite of the editor, where the block still
+ * holds the stored reference. `SiteSrcSets` is built to match; see
+ * `siteSrcSetsBySignedUrl`.
+ *
+ * `srcSet` and `sizes` are returned together or not at all: a `srcSet` with no
+ * `sizes` makes the browser assume the image fills the viewport and fetch the
+ * widest rung, which is worse than shipping no candidates.
+ */
+function responsiveAttrs(srcSets: SiteSrcSets, url: string, sizes: string) {
+  return responsiveImageAttrs(srcSets, url, sizes);
+}
 
-  return h('div', { className: 'profile-block' }, [
-    h(
+function makeStaticProfile(srcSets: SiteSrcSets) {
+  return function StaticProfile(props: RenderProps) {
+    const name = String(props.block.props.name || '');
+    const title = String(props.block.props.title || '');
+    const imageUrl = String(props.block.props.imageUrl || '');
+
+    return h('div', { className: 'profile-block' }, [
+      h(
+        'div',
+        { key: 'a', className: 'profile-avatar-wrapper' },
+        imageUrl
+          ? h('img', {
+              src: imageUrl,
+              // A fixed 64px circle. Saying so is the whole point: it is what
+              // makes the browser take the smallest rung rather than a 2560px
+              // rendition of an instructor's camera JPEG.
+              ...responsiveAttrs(srcSets, imageUrl, AVATAR_SIZES),
+              alt: name || 'Profile image',
+              className: 'profile-avatar-image',
+              loading: 'lazy',
+            })
+          : h('div', { className: 'profile-avatar-placeholder' }, '👤')
+      ),
+      h('div', { key: 't', style: { flex: 1, minWidth: 0 } }, [
+        name ? h('div', { key: 'n', className: 'profile-display-name' }, name) : null,
+        title ? h('div', { key: 'r', className: 'profile-display-title' }, title) : null,
+      ]),
+    ]);
+  };
+}
+
+/**
+ * The image block, statically.
+ *
+ * It has to be overridden here for the same reason `toggleListItem` does: the
+ * editor's image block is built on BlockNote's `ResizableFileBlockWrapper`,
+ * which needs editor context the server render does not provide — it throws,
+ * BlockNote swallows the throw, and the block renders as NOTHING. Verified by
+ * the block-coverage test in tests/unit/site-render.spec.ts.
+ *
+ * Rendering it here rather than post-processing the HTML also means `sizes` can
+ * be computed from the block's own `previewWidth`, which is the only place that
+ * number exists. An image the author resized to 400px says so, and stops
+ * fetching a 2560px rendition to paint 400 pixels.
+ */
+function makeStaticImage(srcSets: SiteSrcSets) {
+  return function StaticImage(props: RenderProps) {
+    const url = String(props.block.props.url || '');
+    if (!url) return h('div', { className: 'bn-site-empty' });
+
+    const caption = String(props.block.props.caption || '');
+    const name = String(props.block.props.name || '');
+    const rawWidth = props.block.props.previewWidth;
+    const previewWidth = typeof rawWidth === 'number' ? rawWidth : null;
+
+    // `showPreview: false` is the author asking for a download link, not a
+    // picture — the same choice BlockNote's own block honours.
+    if (props.block.props.showPreview === false) {
+      return h('div', { className: 'bn-file-block-content-wrapper' }, [
+        h(
+          'div',
+          { key: 'f', className: 'bn-file-name-with-icon' },
+          h('p', { className: 'bn-file-name' }, name || caption || url)
+        ),
+        caption ? h('p', { key: 'c', className: 'bn-file-caption' }, caption) : null,
+      ]);
+    }
+
+    return h(
       'div',
-      { key: 'a', className: 'profile-avatar-wrapper' },
-      imageUrl
-        ? h('img', {
-            src: imageUrl,
-            alt: name || 'Profile image',
-            className: 'profile-avatar-image',
-            loading: 'lazy',
-          })
-        : h('div', { className: 'profile-avatar-placeholder' }, '👤')
-    ),
-    h('div', { key: 't', style: { flex: 1, minWidth: 0 } }, [
-      name ? h('div', { key: 'n', className: 'profile-display-name' }, name) : null,
-      title ? h('div', { key: 'r', className: 'profile-display-title' }, title) : null,
-    ]),
-  ]);
+      {
+        className: 'bn-file-block-content-wrapper',
+        // BlockNote's own wrapper sets the resized width inline; matching it is
+        // what keeps a resized image the same size on the site as in the editor.
+        style: previewWidth ? { width: `${previewWidth}px` } : undefined,
+      },
+      [
+        h('img', {
+          key: 'i',
+          className: 'bn-visual-media',
+          src: url,
+          ...responsiveAttrs(srcSets, url, imageSizesFor(previewWidth)),
+          alt: caption || name || 'Image',
+          loading: 'lazy',
+        }),
+        caption ? h('p', { key: 'c', className: 'bn-file-caption' }, caption) : null,
+      ]
+    );
+  };
 }
 
 function StaticDivider() {
@@ -410,6 +505,7 @@ function StaticToggleListItem(props: RenderProps) {
 
 /** Block types this module replaces with a static, viewer-safe render. */
 export const OVERRIDDEN_BLOCK_TYPES = [
+  'image',
   'callout',
   'terminal',
   'profile',
@@ -461,15 +557,17 @@ function staticSpec(type: OverriddenBlockType, render: (props: never) => React.R
  */
 export function createViewerSchema(
   resolveLink: PageLinkResolver,
-  options: { showSchedule?: boolean } = {}
+  options: { showSchedule?: boolean; srcSets?: SiteSrcSets } = {}
 ) {
   const showSchedule = options.showSchedule === true;
+  const srcSets = options.srcSets ?? {};
 
   const blockSpecs = {
     ...editorSchema.blockSpecs,
+    image: staticSpec('image', makeStaticImage(srcSets)),
     callout: staticSpec('callout', StaticCallout),
     terminal: staticSpec('terminal', StaticTerminal),
-    profile: staticSpec('profile', StaticProfile),
+    profile: staticSpec('profile', makeStaticProfile(srcSets)),
     divider: staticSpec('divider', StaticDivider),
     embed: staticSpec('embed', StaticEmbed),
     video: staticSpec('video', StaticVideo),

@@ -25,7 +25,6 @@ import { JSDOM as UntypedJSDOM } from 'jsdom';
 
 import {
   addHeadingAnchors,
-  addImageSrcSets,
   renderSitePage,
   siteArticleWidthClass,
   siteArticleWrapper,
@@ -763,58 +762,86 @@ test.describe('article width', () => {
 });
 
 /* ------------------------------------------------------------------ *
- * Responsive images
+ * Responsive images on the class site
  * ------------------------------------------------------------------ */
 
 /**
- * `addImageSrcSets` is a post-pass for the same reason `addHeadingAnchors` is:
- * BlockNote's image block owns its markup, and replacing it in the viewer
- * schema to add two attributes would mean owning its caption, its width prop
- * and its wrapper forever.
+ * The site renders images through a STATIC image spec, not the editor's.
+ *
+ * The editor's image block is built on BlockNote's `ResizableFileBlockWrapper`,
+ * which needs editor context the server render does not provide: it throws,
+ * BlockNote swallows the throw, and the block renders as NOTHING at all. The
+ * block-coverage test above is what caught that; these pin what replaced it.
+ *
+ * Rendering the candidates here rather than post-processing the HTML is also
+ * what makes `sizes` correct — `previewWidth` lives in the block's props and
+ * nowhere in the markup, and it is the only thing that says how wide the image
+ * will actually be laid out.
  */
-const SIGNED = 'https://content.classmoji.io/c/abc/blob/aaa.png?p=public&sig=x';
-const LADDER = `${SIGNED}&w=800&fmt=auto 800w, ${SIGNED}&w=1600&fmt=auto 1600w`;
-const SIZES = '(max-width: 1024px) 100vw, 1024px';
+const SITE_SIGNED = 'https://content.classmoji.io/c/abc/blob/aaa.png?p=public&sig=x';
+const SITE_LADDER = `${SITE_SIGNED}&w=800&fmt=auto 800w, ${SITE_SIGNED}&w=1600&fmt=auto 1600w`;
 
-test.describe('addImageSrcSets', () => {
-  test('hangs the candidates and the sizes hint off a matching <img>', () => {
-    const html = addImageSrcSets(
-      `<figure><img src="${SIGNED}" alt="A diagram"></figure>`,
-      new Map([[SIGNED, LADDER]]),
-      SIZES
-    );
+const renderImage = (props: Record<string, unknown>, srcSets?: Record<string, string>) =>
+  renderSitePage({
+    blocks: [{ type: 'image', props }],
+    resolveLink: () => null,
+    ...(srcSets ? { srcSets } : {}),
+  });
+
+test.describe('class-site images', () => {
+  test('renders the image at all — the whole reason it is overridden', async () => {
+    const { html } = await renderImage({ url: SITE_SIGNED, caption: 'A diagram' });
+
+    // Matched without the query string: `&` is HTML-escaped inside an
+    // attribute value, which is correct and not what this test is about.
+    expect(html).toContain('/blob/aaa.png');
+    expect(html).toContain('bn-visual-media');
+    expect(html).toContain('A diagram');
+  });
+
+  test('hangs the candidates and a column-width hint off a plain image', async () => {
+    const { html } = await renderImage({ url: SITE_SIGNED }, { [SITE_SIGNED]: SITE_LADDER });
 
     expect(html).toContain('srcset="');
     expect(html).toContain('800w');
-    expect(html).toContain('1600w');
-    expect(html).toContain(`sizes="${SIZES}"`);
-    // Everything else the block rendered survives untouched.
-    expect(html).toContain('alt="A diagram"');
-    expect(html).toContain('<figure>');
+    expect(html).toContain('sizes="(max-width: 1024px) 100vw, 1024px"');
   });
 
-  test('leaves an image with no candidates exactly as rendered', () => {
-    // A gif, an svg, an external image, a classroom with the layer off — all of
-    // them arrive here as a miss, and all of them are correct as a plain src.
-    const html = '<img src="https://images.example.com/hero.png">';
+  test('a resized image asks for the width it will actually be painted at', async () => {
+    const { html } = await renderImage(
+      { url: SITE_SIGNED, previewWidth: 300 },
+      { [SITE_SIGNED]: SITE_LADDER }
+    );
 
-    expect(addImageSrcSets(html, new Map([[SIGNED, LADDER]]), SIZES)).toBe(html);
+    // The regression: one global 1024px hint made a 300px image fetch a 2560px
+    // rendition. The width also lands inline, so the site matches the editor.
+    expect(html).toContain('sizes="min(100vw, 300px)"');
+    expect(html).toContain('width: 300px');
   });
 
-  test('never overwrites a srcset that is already there', () => {
-    // An author can paste HTML into a page, and their own responsive image is
-    // content. It is also the guard that makes the pass safe to run twice.
-    const html = `<img src="${SIGNED}" srcset="https://cdn.example.com/a@2x.png 2x">`;
+  test('an avatar asks for 64px, not a column', async () => {
+    const { html } = await renderSitePage({
+      blocks: [{ type: 'profile', props: { name: 'Ada', imageUrl: SITE_SIGNED } }],
+      resolveLink: () => null,
+      srcSets: { [SITE_SIGNED]: SITE_LADDER },
+    });
 
-    expect(addImageSrcSets(html, new Map([[SIGNED, LADDER]]), SIZES)).toBe(html);
+    expect(html).toContain('profile-avatar-image');
+    expect(html).toContain('sizes="64px"');
   });
 
-  test('does not re-serialize the article when nothing matched', () => {
-    // Serializing costs a pass over the whole document; a page whose images all
-    // declined must not pay it, and the identity return is how that is visible.
-    const html = '<p>No images here at all.</p>';
+  test('an image with no candidates renders one size and no empty attributes', async () => {
+    const { html } = await renderImage({ url: 'https://images.example.com/hero.png' }, {});
 
-    expect(addImageSrcSets(html, new Map(), SIZES)).toBe(html);
-    expect(addImageSrcSets(html, new Map([[SIGNED, LADDER]]), SIZES)).toBe(html);
+    expect(html).toContain('https://images.example.com/hero.png');
+    expect(html).not.toContain('srcset');
+    expect(html).not.toContain('sizes=');
+  });
+
+  test('showPreview:false still renders the filename rather than a picture', async () => {
+    const { html } = await renderImage({ url: SITE_SIGNED, name: 'diagram.png', showPreview: false });
+
+    expect(html).toContain('diagram.png');
+    expect(html).not.toContain('bn-visual-media');
   });
 });

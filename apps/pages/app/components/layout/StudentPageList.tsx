@@ -5,6 +5,7 @@ import dayjs from 'dayjs';
  * Student page list — card grid of published pages.
  */
 import type { PageSummary, ClassroomSummary } from '~/types/pages.ts';
+import { cssUrl } from '~/utils/headerImages.ts';
 
 interface StudentPageListProps {
   pages: PageSummary[];
@@ -35,10 +36,10 @@ const StudentPageList = ({ pages, classroom }: StudentPageListProps) => {
             {page.header_image_url ? (
               <div
                 className="h-32 bg-gray-100 dark:bg-gray-800 bg-cover bg-center"
-                // Quoted: the loader hands back a signed delivery URL here, and
-                // an unquoted CSS `url()` ends at the first `)` — which a stored
-                // reference is free to contain.
-                style={{ backgroundImage: `url("${page.header_image_url}")` }}
+                // A URL becoming CSS syntax: quoting closes the `)` hole, and
+                // `cssUrl` closes the quote and backslash ones behind it. React
+                // does not escape a style value — it hands it to the CSSOM.
+                style={{ backgroundImage: cssUrl(page.header_image_url) }}
               />
             ) : (
               <div className="h-32 bg-gray-100 dark:bg-gray-800 flex items-center justify-center">

@@ -179,19 +179,29 @@ export function rebaseThemeRef(
  * the asset map. Production always uses the default.
  */
 export interface DeckDeliveryResolvers {
-  resolveMany(ctx: NonNullable<DeliveryContext>, refs: string[]): Promise<Map<string, string>>;
-  resolveThemeBase(ctx: NonNullable<DeliveryContext>, themeName: string): Promise<string | null>;
-  resolveSrcSets(
+  /**
+   * URLs and responsive candidates in ONE pass.
+   *
+   * One call, not two, because two would pay two asset-map reads per deck read
+   * and — the part that actually breaks — read the clock twice: expiries are
+   * bucketed, and a pass that straddles a boundary mints a different `src` for
+   * the same file than the one its candidate list was built beside.
+   */
+  resolveDelivery(
     ctx: NonNullable<DeliveryContext>,
     refs: string[]
-  ): Promise<Map<string, { src: string; srcset: string }>>;
+  ): Promise<{
+    urls: Map<string, string>;
+    srcSets: Map<string, { src: string; srcset: string }>;
+  }>;
+  resolveThemeBase(ctx: NonNullable<DeliveryContext>, themeName: string): Promise<string | null>;
 }
 
 const defaultResolvers: DeckDeliveryResolvers = {
-  resolveMany: (ctx, refs) => ClassmojiService.contentDelivery.resolveMany(ctx, refs),
+  resolveDelivery: (ctx, refs) =>
+    ClassmojiService.contentDelivery.resolveDelivery(ctx, refs, { srcSets: true }),
   resolveThemeBase: (ctx, themeName) =>
     ClassmojiService.contentDelivery.resolveThemeBase(ctx, themeName),
-  resolveSrcSets: (ctx, refs) => ClassmojiService.contentDelivery.resolveSrcSets(ctx, refs),
 };
 
 /**
@@ -227,6 +237,10 @@ export async function resolveDeckDelivery(
     }
   }
 
+  // Filled by the resolve below and read by the srcset step after it — the
+  // rewrite calls them in that order, and says so. One pass, one clock.
+  let candidates = new Map<string, { src: string; srcset: string }>();
+
   try {
     const rewritten = await rewriteDeckAssetUrls(
       html,
@@ -235,29 +249,24 @@ export async function resolveDeckDelivery(
         // a folder, and rewriting one of its files to a standalone blob URL
         // would break precisely the relative `url()` references the folder
         // exists for.
-        const resolved = await resolvers.resolveMany(
+        const { urls, srcSets } = await resolvers.resolveDelivery(
           ctx,
           refs.filter(ref => !isThemeRef(ref))
         );
+        candidates = srcSets;
         if (themeName && themeBase) {
           for (const ref of refs) {
             const rebased = rebaseThemeRef(ref, themeName, themeBase);
-            if (rebased) resolved.set(ref, rebased);
+            if (rebased) urls.set(ref, rebased);
           }
         }
-        return resolved;
+        return urls;
       },
       {
-        // Responsive candidates for the raster `<img>`s only. A theme file is
-        // excluded for the same reason it is above — it is served out of a
-        // signed FOLDER, and a per-blob transform URL would leave that folder.
-        srcSets: async refs => {
-          const sets = await resolvers.resolveSrcSets(
-            ctx,
-            refs.filter(ref => !isThemeRef(ref))
-          );
-          return new Map([...sets].map(([ref, set]) => [ref, set.srcset]));
-        },
+        // Keyed by the STORED reference, which is what the emit step looks up.
+        // Theme files never appear here: they were filtered out above, and a
+        // per-blob transform URL would leave the signed folder they live in.
+        srcSets: async () => new Map([...candidates].map(([ref, set]) => [ref, set.srcset])),
         sizes: ClassmojiService.contentDelivery.IMAGE_SIZES,
       }
     );

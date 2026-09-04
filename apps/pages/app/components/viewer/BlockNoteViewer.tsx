@@ -3,6 +3,7 @@ import { BlockNoteView } from '@blocknote/mantine';
 import { MantineProvider } from '@mantine/core';
 import { useState, useEffect } from 'react';
 import { schema, type PageBlockInsertions } from '~/components/editor/blocks/index.tsx';
+import { AssetSrcSetContext, NO_SRC_SETS, type AssetSrcSets } from '~/hooks/useAssetSrcSets.ts';
 
 import '@blocknote/mantine/style.css';
 import '@blocknote/core/fonts/inter.css';
@@ -21,9 +22,16 @@ interface BlockNoteViewerProps {
    * pages origin and 404s.
    */
   resolveFileUrl?: (url: string) => Promise<string>;
+  /** Responsive candidates, keyed by the stored reference. Same as the editor's. */
+  srcSets?: AssetSrcSets;
 }
 
-const BlockNoteViewer = ({ content, darkMode, resolveFileUrl }: BlockNoteViewerProps) => {
+const BlockNoteViewer = ({
+  content,
+  darkMode,
+  resolveFileUrl,
+  srcSets,
+}: BlockNoteViewerProps) => {
   const [isMounted, setIsMounted] = useState(false);
   const initialContent =
     Array.isArray(content) && content.length > 0
@@ -58,7 +66,9 @@ const BlockNoteViewer = ({ content, darkMode, resolveFileUrl }: BlockNoteViewerP
       }}
     >
       <div className="page-editor">
-        <BlockNoteView editor={editor} editable={false} theme={darkMode ? 'dark' : 'light'} />
+        <AssetSrcSetContext.Provider value={srcSets ?? NO_SRC_SETS}>
+          <BlockNoteView editor={editor} editable={false} theme={darkMode ? 'dark' : 'light'} />
+        </AssetSrcSetContext.Provider>
       </div>
     </MantineProvider>
   );

@@ -164,14 +164,20 @@ function rewriteElements(
     }
 
     // A stored `srcset` of OURS is dropped, never rewritten — see isOwnRef.
-    // One candidate of ours is enough: a mixed set is not something an author
+    // One CANDIDATE of ours is enough: a mixed set is not something an author
     // writes, and keeping half of one stores a set the browser cannot assemble.
+    //
+    // The `src` is deliberately NOT part of this test. It used to be, and that
+    // was wrong in the one case that matters: an author writing
+    // `<img src="assets/a.png" srcset="https://cdn.example/a@2x.png 2x">` has a
+    // repo-relative src and an external set, and treating the src as proof of
+    // ownership silently deleted their set. Whose the set is, is a question
+    // about the set.
     const isOwnRef = opts.isOwnRef;
     const ownSrcSet =
       srcset !== undefined &&
       isOwnRef !== undefined &&
-      ((src !== undefined && isOwnRef(src)) ||
-        splitSrcSet(srcset).some(part => isOwnRef(part.url)));
+      splitSrcSet(srcset).some(part => isOwnRef(part.url));
 
     if (ownSrcSet) {
       delete el.attribs['srcset'];
@@ -347,6 +353,14 @@ export async function canonicalizeDeckAssets(
     }
   };
   collect(deck.slides);
+  // Not only the slides. `customCss` is verbatim `<style>` content and can name
+  // a background image through `url()`; `extraCss[].href` is a re-emitted
+  // `<link rel=stylesheet>`. Both are rewritten on READ like everything else,
+  // so both can come back carrying a signed URL — and a stylesheet frozen to an
+  // expiring signature breaks a deck's whole look, not one image.
+  if (deck.customCss) for (const ref of cssUrls(deck.customCss)) refs.add(ref);
+  for (const entry of deck.extraCss ?? []) if (entry.href) refs.add(entry.href);
+
   if (refs.size === 0) return deck;
 
   const canonical = await canonicalize([...refs]);
@@ -385,7 +399,24 @@ export async function canonicalizeDeckAssets(
   };
 
   const slides = rewrite(deck.slides);
-  return slides === deck.slides ? deck : { ...deck, slides };
+
+  const customCss = deck.customCss ? rewriteCssUrls(deck.customCss, map) : deck.customCss;
+
+  let extraCssChanged = false;
+  const extraCss = deck.extraCss?.map(entry => {
+    const href = entry.href ? map(entry.href) : undefined;
+    if (href === undefined) return entry;
+    extraCssChanged = true;
+    return { ...entry, href };
+  });
+
+  if (slides === deck.slides && customCss === deck.customCss && !extraCssChanged) return deck;
+  return {
+    ...deck,
+    slides,
+    ...(deck.customCss === undefined ? {} : { customCss }),
+    ...(deck.extraCss === undefined ? {} : { extraCss: extraCss as typeof deck.extraCss }),
+  };
 }
 
 /**
@@ -414,6 +445,10 @@ export async function rewriteDeckAssetUrls(
 
   if (candidates.size === 0) return html;
 
+  // ORDER IS PART OF THE CONTRACT: `resolve` runs first, and `opts.srcSets`
+  // second, so a caller may answer the second from whatever the first computed.
+  // That is how the deck read path gets both out of ONE asset-map read under
+  // one clock instead of resolving the same references twice.
   const resolved = await resolve([...candidates]);
 
   // Asked for only where a set could be used: the `src` of an `<img>`. A deck

@@ -26,12 +26,16 @@ export interface DeliveryRow {
 /** Example classrooms are per-user onboarding sandboxes — noise on this list. */
 const NOT_EXAMPLE = { is_example: false } as const;
 
-export async function loadContentDelivery({ request }: LoaderFunctionArgs) {
-  await requirePlatformAdmin(request);
-
-  const url = new URL(request.url);
-  const q = (url.searchParams.get('q') ?? '').trim();
-
+/**
+ * The filter the list is showing, from the request.
+ *
+ * Shared by the loader and the action, and that sharing is the point: the bulk
+ * buttons say "in this list", and a list narrowed by a search while the update
+ * quietly hit every classroom on the platform is a confirmation dialog that
+ * lies. One function, one answer, both directions.
+ */
+function searchFilter(request: Request) {
+  const q = (new URL(request.url).searchParams.get('q') ?? '').trim();
   const search = q
     ? {
         OR: [
@@ -41,10 +45,17 @@ export async function loadContentDelivery({ request }: LoaderFunctionArgs) {
         ],
       }
     : {};
+  return { q, where: { ...search, ...NOT_EXAMPLE } };
+}
+
+export async function loadContentDelivery({ request }: LoaderFunctionArgs) {
+  await requirePlatformAdmin(request);
+
+  const { q, where } = searchFilter(request);
 
   const [classrooms, enabledCount, totalCount] = await Promise.all([
     prisma.classroom.findMany({
-      where: { ...search, ...NOT_EXAMPLE },
+      where,
       orderBy: [{ content_delivery_enabled: 'desc' }, { created_at: 'desc' }],
       select: {
         id: true,
@@ -55,8 +66,10 @@ export async function loadContentDelivery({ request }: LoaderFunctionArgs) {
         git_organization: { select: { login: true } },
       },
     }),
-    prisma.classroom.count({ where: { ...NOT_EXAMPLE, content_delivery_enabled: true } }),
-    prisma.classroom.count({ where: NOT_EXAMPLE }),
+    // Both counts are scoped to the SAME filter the rows are, so "12 of 30 on"
+    // describes the list in front of you rather than the whole platform.
+    prisma.classroom.count({ where: { ...where, content_delivery_enabled: true } }),
+    prisma.classroom.count({ where }),
   ]);
 
   const rows: DeliveryRow[] = classrooms.map(c => ({
@@ -92,6 +105,8 @@ export async function loadContentDelivery({ request }: LoaderFunctionArgs) {
 export async function contentDeliveryAction({ request }: ActionFunctionArgs) {
   await requirePlatformAdmin(request);
 
+  // Read the body BEFORE anything else touches the request: `searchFilter`
+  // reads the URL, which survives, but the body can only be consumed once.
   const form = await request.formData();
   const intent = String(form.get('intent') ?? '');
 
@@ -99,23 +114,49 @@ export async function contentDeliveryAction({ request }: ActionFunctionArgs) {
     const classroomId = String(form.get('classroomId') ?? '');
     if (!classroomId) return { error: 'No classroom named.' };
     const enabled = form.get('enabled') === 'true';
-    await prisma.classroom.update({
-      where: { id: classroomId },
-      data: { content_delivery_enabled: enabled },
-    });
+    try {
+      await prisma.classroom.update({
+        where: { id: classroomId },
+        data: { content_delivery_enabled: enabled },
+      });
+    } catch (error) {
+      // P2025 — the row is gone. An admin list is a snapshot, and a classroom
+      // deleted in another tab (or by its owner, mid-session) is the ordinary
+      // way to get here. The row says so and the list revalidates; anything
+      // else is a real fault and belongs in the logs.
+      if (isRecordNotFound(error)) {
+        return { error: 'That classroom no longer exists — the list is out of date.' };
+      }
+      console.error('[admin] content-delivery toggle failed:', error);
+      return { error: 'Could not change that classroom. Try again.' };
+    }
     return { ok: true, changed: 1 };
   }
 
   if (intent === 'enable-all' || intent === 'disable-all') {
     const enabled = intent === 'enable-all';
-    // Scoped to the same set the list shows. Example classrooms are excluded so
-    // "enable for all" means the classrooms an admin can actually see here.
-    const { count } = await prisma.classroom.updateMany({
-      where: { ...NOT_EXAMPLE, content_delivery_enabled: !enabled },
-      data: { content_delivery_enabled: enabled },
-    });
-    return { ok: true, changed: count };
+    // Scoped to the SAME filter the list is showing, because the dialog that
+    // asked for this said "in this list". An admin who searched for one course
+    // and clicked "Enable for all" must not switch on the whole platform.
+    const { where } = searchFilter(request);
+    try {
+      const { count } = await prisma.classroom.updateMany({
+        where: { ...where, content_delivery_enabled: !enabled },
+        data: { content_delivery_enabled: enabled },
+      });
+      return { ok: true, changed: count };
+    } catch (error) {
+      console.error('[admin] content-delivery bulk update failed:', error);
+      return { error: 'Could not apply that change. Try again.' };
+    }
   }
 
   return { error: `Unknown intent: ${intent || '(none)'}` };
+}
+
+/** Prisma's "record not found" for an update/delete, without importing its client. */
+function isRecordNotFound(error: unknown): boolean {
+  return (
+    typeof error === 'object' && error !== null && (error as { code?: unknown }).code === 'P2025'
+  );
 }

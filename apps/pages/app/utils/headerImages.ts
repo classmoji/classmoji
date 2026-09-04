@@ -45,3 +45,26 @@ export function withResolvedHeaderImages<T extends PageWithHeaderImage>(
     return url === undefined || url === ref ? page : { ...page, header_image_url: url };
   });
 }
+
+/**
+ * One URL as a CSS `url("…")` token, safe to interpolate.
+ *
+ * A background image is the one place a URL becomes CSS SYNTAX rather than an
+ * attribute value, and React escapes neither — `style={{ backgroundImage }}` is
+ * handed to the CSSOM verbatim. Quoting alone is not enough: a `"` inside the
+ * value closes the string, and a backslash escapes whatever follows it. Both
+ * are legal in a URL and neither is exotic in a filename.
+ *
+ * So both are backslash-escaped, and control characters — which cannot appear
+ * in a well-formed URL and can only be there to break out of the declaration —
+ * are dropped rather than escaped.
+ */
+export function cssUrl(value: string): string {
+  const escaped = value
+    // the characters that terminate a CSS string, and they are being removed.
+    // eslint-disable-next-line no-control-regex -- deliberate, see above.
+    .replace(/[\x00-\x1f\x7f]/g, '')
+    .replace(/\\/g, '\\\\')
+    .replace(/"/g, '\\"');
+  return `url("${escaped}")`;
+}

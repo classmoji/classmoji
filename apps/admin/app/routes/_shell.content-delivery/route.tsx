@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Form, useFetcher, useLoaderData, useNavigation } from 'react-router';
+import { Form, useActionData, useFetcher, useLoaderData, useNavigation } from 'react-router';
 import { IconAlertTriangle, IconSearch } from '@tabler/icons-react';
 import { useDebouncedSearch } from '~/hooks/useDebouncedSearch';
 import { contentDeliveryAction, loadContentDelivery } from './route.server';
@@ -23,12 +23,14 @@ const ConfirmBulk = ({
   intent,
   count,
   busy,
+  error,
   onCancel,
   onConfirm,
 }: {
   intent: BulkIntent;
   count: number;
   busy: boolean;
+  error?: string | null;
   onCancel: () => void;
   onConfirm: () => void;
 }) => {
@@ -60,13 +62,18 @@ const ConfirmBulk = ({
             </h2>
             <p className="mt-1.5 text-sm text-ink-2">
               {enabling
-                ? `${count} classroom${count === 1 ? '' : 's'} in this list start serving page and deck assets through signed delivery URLs on the next render.`
-                : `${count} classroom${count === 1 ? '' : 's'} in this list go back to the legacy raw/proxy URLs on the next render.`}{' '}
+                ? `${count} classroom${count === 1 ? '' : 's'} in the list you are looking at start serving page and deck assets through signed delivery URLs on the next render.`
+                : `${count} classroom${count === 1 ? '' : 's'} in the list you are looking at go back to the legacy raw/proxy URLs on the next render.`}{' '}
               Stored content is not touched — this only changes the URLs the apps hand out, and it
               can be reversed from this screen.
             </p>
           </div>
         </div>
+        {error ? (
+          <p role="alert" className="mt-3 text-sm text-red-600 dark:text-red-400">
+            {error}
+          </p>
+        ) : null}
         <div className="mt-5 flex justify-end gap-2">
           <button
             type="button"
@@ -99,8 +106,13 @@ const RowToggle = ({ row }: { row: DeliveryRow }) => {
   const enabled = pending === undefined ? row.enabled : pending === 'true';
   const busy = fetcher.state !== 'idle';
 
+  // The action's `{ error }` is only worth returning if something renders it.
+  // A row that silently keeps its old state after a failed write is worse than
+  // no toggle at all — the admin walks away believing the flag moved.
+  const error = (fetcher.data as { error?: string } | undefined)?.error;
+
   return (
-    <fetcher.Form method="post">
+    <fetcher.Form method="post" className="flex flex-col items-end gap-1">
       <input type="hidden" name="intent" value="toggle" />
       <input type="hidden" name="classroomId" value={row.id} />
       <input type="hidden" name="enabled" value={enabled ? 'false' : 'true'} />
@@ -117,6 +129,11 @@ const RowToggle = ({ row }: { row: DeliveryRow }) => {
       >
         {enabled ? 'On' : 'Off'}
       </button>
+      {error ? (
+        <span role="alert" className="text-[11px] text-red-600 dark:text-red-400 text-right">
+          {error}
+        </span>
+      ) : null}
     </fetcher.Form>
   );
 };
@@ -125,6 +142,7 @@ const ContentDelivery = () => {
   const { rows, query, enabledCount, totalCount, envConfigured } = useLoaderData<typeof loader>();
   const { inputRef, onSearchChange, searching } = useDebouncedSearch(query);
   const navigation = useNavigation();
+  const actionData = useActionData<{ error?: string; ok?: boolean; changed?: number }>();
   const [confirming, setConfirming] = useState<BulkIntent | null>(null);
 
   const bulkIntent = navigation.formData?.get('intent');
@@ -142,9 +160,12 @@ const ContentDelivery = () => {
     }
     if (submitted.current && navigation.state === 'idle') {
       submitted.current = false;
-      setConfirming(null);
+      // A failed bulk update keeps the dialog open with the reason on it —
+      // closing it would leave an admin looking at an unchanged list with no
+      // idea whether the click registered.
+      if (!actionData?.error) setConfirming(null);
     }
-  }, [bulkBusy, navigation.state]);
+  }, [bulkBusy, navigation.state, actionData]);
 
   // How many rows the button in front of you would actually change. "Enable for
   // all" touches the ones that are off; "disable" the ones that are on. Saying
@@ -193,7 +214,7 @@ const ContentDelivery = () => {
         <div className="flex flex-wrap items-center justify-between gap-2 mb-3 px-1">
           <p className="text-xs text-ink-3">
             {enabledCount} of {totalCount} classrooms on
-            {query ? ` · ${rows.length} matching “${query}”` : ''}
+            {query ? ` · matching “${query}”` : ''}
           </p>
           <div className="flex gap-2">
             <button
@@ -258,6 +279,7 @@ const ContentDelivery = () => {
           intent={confirming}
           count={affected}
           busy={bulkBusy}
+          error={bulkBusy ? null : actionData?.error}
           onCancel={() => setConfirming(null)}
           onConfirm={() => {
             const form = document.getElementById('bulk-form') as HTMLFormElement | null;

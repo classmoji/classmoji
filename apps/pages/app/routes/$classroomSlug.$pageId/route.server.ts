@@ -16,7 +16,6 @@ import {
   canonicalizeDocumentAssets,
   canonicalizeOpsAssets,
   resolveDocumentAssets,
-  resolveDocumentSrcSets,
 } from '~/utils/assetRefs.server.ts';
 
 /**
@@ -168,12 +167,17 @@ export const loader = async ({
     page.classroom as unknown as Parameters<typeof assetResolveContext>[0],
     resolveTier
   );
-  const resolvedAssets = await resolveDocumentAssets(assetCtx, viewerContent, [coverImage?.url]);
-  // Responsive candidates for the raster images, keyed by the URL the block
-  // will actually render. Concurrent with nothing else here on purpose — it is
-  // one map read and one signing pass over the same references, and a page with
-  // no raster images of ours costs a filter and no query.
-  const resolvedSrcSets = await resolveDocumentSrcSets(assetCtx, viewerContent, [coverImage?.url]);
+  // ONE pass for both. Two sequential resolves read the clock twice, and a
+  // draft-tier expiry bucket that turns over between them mints a different
+  // `src` for the same file — at which point every candidate list is thrown
+  // away for exactly the viewers who look at pages most. The cover is in the
+  // ref list for its display URL; it does not need candidates, because
+  // `HeaderImage` renders it as a CSS background, where `srcset` means nothing.
+  const { assets: resolvedAssets, srcSets: resolvedSrcSets } = await resolveDocumentAssets(
+    assetCtx,
+    viewerContent,
+    [coverImage?.url]
+  );
 
   // Build GitHub repo info for link
   const gitOrg = (page.classroom as Record<string, unknown>).git_organization as {
@@ -219,10 +223,11 @@ export const loader = async ({
     // Display-only: `{ storedRef: signedUrl }`. Absent keys mean "use the ref
     // as-is" (an external image, or the delivery layer switched off).
     resolvedAssets,
-    // Also display-only, and keyed the other way — `{ signedUrl: srcset }` —
-    // because its consumer is a DOM pass that has the rendered `src`, not the
-    // stored reference. An absent key means "one size only", which is the right
-    // answer for a gif, an svg, and anything that is not an image.
+    // Also display-only, and keyed the SAME way — `{ storedRef: srcset }` —
+    // because the consumer is the image block, which holds the stored reference
+    // and would otherwise have to reproduce a signature to find its own entry.
+    // An absent key means "one size only", which is the right answer for a gif,
+    // an svg, and anything that is not an image.
     resolvedSrcSets,
     userRole,
     canEdit,
@@ -495,7 +500,7 @@ export const action = async ({
       // A merged document is one the editor has never seen — it carries stored
       // refs for blocks folded in from main, and the client's display map has
       // no entry for them. Resolve alongside it or those images render broken.
-      const mergedAssets = mergedDocument
+      const merged = mergedDocument
         ? await resolveDocumentAssets(actionAssetCtx, mergedDocument)
         : null;
 
@@ -506,7 +511,10 @@ export const action = async ({
           ? {
               merged_with_concurrent: mergedWithConcurrent,
               merged_content: mergedDocument,
-              resolved_assets: mergedAssets,
+              resolved_assets: merged?.assets ?? null,
+              // The folded-in blocks need candidates too, or every image the
+              // merge brought in paints at full size until the next load.
+              resolved_src_sets: merged?.srcSets ?? null,
             }
           : {}),
       });
