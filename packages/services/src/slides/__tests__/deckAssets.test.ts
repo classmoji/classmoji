@@ -12,7 +12,13 @@
 
 import { describe, it, expect } from 'vitest';
 import * as cheerio from 'cheerio';
-import { rewriteDeckAssetUrls } from '../deckAssets.ts';
+import {
+  collectDeckAssetRefs,
+  collectSlideAttrRefs,
+  rewriteDeckAssetUrls,
+  rewriteFragmentAssetUrls,
+  rewriteSlideAttrs,
+} from '../deckAssets.ts';
 
 const SIGNED = 'https://cdn.test/c/3f2504e0-4f89-41d3-9a0c-0305e82c3301/blob/abc.png?sig=x';
 const REF = '/content/org/repo/slides/deck/images/a.png';
@@ -133,5 +139,129 @@ describe('rewriteDeckAssetUrls', () => {
     expect(out).toContain('<!DOCTYPE html>');
     expect(out).toContain('<title>d</title>');
     expect(out).toContain(`src="${SIGNED}"`);
+  });
+});
+
+/**
+ * The fragment pass — the one the SAVE path runs.
+ *
+ * A stored slide's `html` is the inner content of its `<section>`, not a
+ * document. `cheerio.load` promotes a fragment to `<html><head><body>` on
+ * parse, so the read-side pass gets away with serializing the root only
+ * because it always runs on a whole generated deck. Running that on a slide
+ * would have wrapped every rewritten slide in a document.
+ */
+describe('rewriteFragmentAssetUrls', () => {
+  const map = (pairs: Record<string, string>) => (ref: string) => pairs[ref];
+
+  it('rewrites a fragment without wrapping it in a document', () => {
+    const out = rewriteFragmentAssetUrls(
+      `<h2>Title</h2><img src="${REF}">`,
+      map({ [REF]: SIGNED })
+    );
+
+    expect(out).toBe(`<h2>Title</h2><img src="${SIGNED}">`);
+    expect(out).not.toContain('<html');
+    expect(out).not.toContain('<body');
+  });
+
+  it('returns the input string by identity when nothing maps', () => {
+    // Identity, not an equal string: it is what keeps an untouched slide from
+    // being re-serialized (and re-normalized) on every single save.
+    const html = `<img src="${REF}">`;
+    expect(rewriteFragmentAssetUrls(html, map({}))).toBe(html);
+    expect(rewriteFragmentAssetUrls('<p>no assets at all</p>', map({ [REF]: SIGNED }))).toBe(
+      '<p>no assets at all</p>'
+    );
+  });
+
+  it('drops a srcset the predicate claims, and keeps one it does not', () => {
+    const ours = rewriteFragmentAssetUrls(
+      `<img src="${REF}" srcset="${REF} 800w" sizes="100vw">`,
+      map({ [REF]: SIGNED }),
+      { isOwnRef: ref => ref === REF }
+    );
+    expect(ours).toContain(`src="${SIGNED}"`);
+    expect(ours).not.toContain('srcset');
+    // `sizes` goes with it — a hint for a set that no longer exists is noise.
+    expect(ours).not.toContain('sizes');
+
+    const theirs = `<img src="${REF}" srcset="https://cdn.example.com/a@2x.png 2x">`;
+    expect(rewriteFragmentAssetUrls(theirs, map({}), { isOwnRef: ref => ref === REF })).toBe(
+      theirs
+    );
+  });
+
+  it('emits a responsive set on an <img>, and never on a background attribute', () => {
+    const withSet = rewriteFragmentAssetUrls(`<img src="${REF}">`, map({}), {
+      srcSets: new Map([[REF, `${SIGNED} 800w`]]),
+      sizes: '100vw',
+    });
+    expect(withSet).toContain(`srcset="${SIGNED} 800w"`);
+    expect(withSet).toContain('sizes="100vw"');
+
+    // Reveal paints these as a CSS background, where `srcset` does not exist.
+    const background = `<section data-background-image="${REF}"></section>`;
+    expect(
+      rewriteFragmentAssetUrls(background, map({}), {
+        srcSets: new Map([[REF, `${SIGNED} 800w`]]),
+        sizes: '100vw',
+      })
+    ).toBe(background);
+  });
+});
+
+/**
+ * A slide's `<section>` attributes live in a plain map, not in its HTML — so
+ * `data-background-image`, `data-background-video` and `style` are invisible to
+ * every pass that walks the markup, and need their own.
+ */
+describe('rewriteSlideAttrs', () => {
+  const map = (pairs: Record<string, string>) => (ref: string) => pairs[ref];
+
+  it('rewrites the background image, the video list and inline url()', () => {
+    const out = rewriteSlideAttrs(
+      {
+        'data-background-image': REF,
+        'data-background-video': `${REF}, https://cdn.example.com/b.webm`,
+        style: `background-image: url('${REF}'); color: red`,
+        'data-transition': 'fade',
+      },
+      map({ [REF]: SIGNED })
+    );
+
+    expect(out['data-background-image']).toBe(SIGNED);
+    // Order preserved, the foreign source untouched, the list re-joined trimmed.
+    expect(out['data-background-video']).toBe(`${SIGNED},https://cdn.example.com/b.webm`);
+    expect(out.style).toBe(`background-image: url('${SIGNED}'); color: red`);
+    // Everything the map does not claim is byte-identical.
+    expect(out['data-transition']).toBe('fade');
+  });
+
+  it('returns the same object when nothing maps', () => {
+    const attrs = { 'data-background-image': REF, 'data-transition': 'fade' };
+    expect(rewriteSlideAttrs(attrs, map({}))).toBe(attrs);
+  });
+});
+
+describe('collecting refs for the save pass', () => {
+  it('finds every candidate in a fragment, once each', () => {
+    const refs = collectDeckAssetRefs(
+      `<img src="${REF}" srcset="${REF} 800w, ${SIGNED} 1600w">` +
+        `<a href="${REF}">dl</a><div style="background: url(${REF})"></div>`
+    );
+
+    expect(refs.sort()).toEqual([REF, SIGNED].sort());
+  });
+
+  it('finds the ones that only exist in a slide attrs map', () => {
+    expect(
+      collectSlideAttrRefs({
+        'data-background-image': REF,
+        'data-background-video': `${SIGNED}`,
+        'data-transition': 'fade',
+      }).sort()
+    ).toEqual([REF, SIGNED].sort());
+    expect(collectSlideAttrRefs(undefined)).toEqual([]);
   });
 });

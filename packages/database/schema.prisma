@@ -406,6 +406,13 @@ model Classroom {
   // revocation, and nothing already handed out stops working; it only stops
   // being the URL the app links to.
   content_key_version          Int             @default(0)
+  // Per-classroom switch for the signed content delivery layer. The env vars
+  // say whether this DEPLOYMENT can sign; this says whether this CLASSROOM
+  // should. Both must be true before a URL is rewritten, and either being false
+  // gives the identical legacy behaviour (the resolvers pass references
+  // through). Defaults false so a deploy into an env that already carries the
+  // signing secrets changes nothing until a classroom is opted in.
+  content_delivery_enabled     Boolean         @default(false)
   // When the asset map was last rebuilt FROM THE REPO'S TREE — a full sync, and
   // only a full sync. This is what `ensureContentAssets` measures its 24h
   // refresh against, deliberately NOT the newest `content_assets.synced_at`:

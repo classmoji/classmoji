@@ -15,6 +15,7 @@ export type AssetClassroom = {
   id: string;
   content_key_version: number;
   content_repo: string;
+  content_delivery_enabled?: boolean | null;
   git_organization?: { login?: string | null } | null;
 };
 
@@ -23,6 +24,7 @@ export type AssetResolveContext = {
     id: string;
     content_key_version: number;
     content_repo: string;
+    content_delivery_enabled: boolean;
     git_organization: { login: string };
   };
   tier: 'public' | 'enrolled' | 'draft';
@@ -46,6 +48,10 @@ export function assetResolveContext(
       id: classroom.id,
       content_key_version: classroom.content_key_version ?? 0,
       content_repo: classroom.content_repo,
+      // A row loaded without the column reads as off, which is the safe
+      // direction: the resolvers then hand back stored references, exactly as
+      // they did before the delivery layer existed.
+      content_delivery_enabled: classroom.content_delivery_enabled === true,
       git_organization: { login },
     },
     tier,
@@ -53,34 +59,52 @@ export function assetResolveContext(
 }
 
 /**
- * Resolve every reference in a document → `{ ref: signedUrl }` for the client.
+ * Resolve every reference in a document, for the client.
  *
- * Returns an empty object (never throws, never rewrites the blocks) when the
- * classroom is unservable or the delivery layer is switched off, so the client
- * falls through to the stored reference on every lookup miss.
+ * `assets` is `{ storedRef: signedUrl }` and `srcSets` is
+ * `{ storedRef: srcset }` — both keyed the same way, on purpose. The blocks
+ * hold the stored reference and nothing else; asking one of them to look itself
+ * up by its signed URL would mean reproducing a signature, which means
+ * reproducing a clock, an expiry bucket and a tier.
+ *
+ * ONE service call, not two. Two would pay for two asset-map reads and, worse,
+ * read the clock twice: expiries are bucketed, so two passes that straddle a
+ * bucket boundary mint different URLs for the same file, and every srcset would
+ * be silently dropped for exactly the viewers on the shortest bucket — staff,
+ * on the draft tier. `resolveDelivery` mints both under one `now`.
+ *
+ * Empty (never throws, never rewrites the blocks) when the classroom is
+ * unservable or the delivery layer is off, so the client falls through to the
+ * stored reference on every lookup miss.
  */
 export async function resolveDocumentAssets(
   ctx: AssetResolveContext | null,
   blocks: unknown,
   extraRefs: Array<string | null | undefined> = []
-): Promise<Record<string, string>> {
-  if (!ctx) return {};
+): Promise<{ assets: Record<string, string>; srcSets: Record<string, string> }> {
+  if (!ctx) return { assets: {}, srcSets: {} };
 
   const refs = [
     ...collectBlockAssetRefs(blocks),
     ...extraRefs.filter((ref): ref is string => typeof ref === 'string' && ref.length > 0),
   ];
-  if (refs.length === 0) return {};
+  if (refs.length === 0) return { assets: {}, srcSets: {} };
 
-  const resolved = await ClassmojiService.contentDelivery.resolveMany(ctx, refs);
+  const { urls, srcSets } = await ClassmojiService.contentDelivery.resolveDelivery(ctx, refs, {
+    srcSets: true,
+  });
 
-  const out: Record<string, string> = {};
-  for (const [ref, url] of resolved) {
+  const assets: Record<string, string> = {};
+  for (const [ref, url] of urls) {
     // Only entries that actually changed: a passthrough would just be noise in
     // the loader payload, and the client already falls back to the ref itself.
-    if (url !== ref) out[ref] = url;
+    if (url !== ref) assets[ref] = url;
   }
-  return out;
+
+  const sets: Record<string, string> = {};
+  for (const [ref, set] of srcSets) sets[ref] = set.srcset;
+
+  return { assets, srcSets: sets };
 }
 
 /**

@@ -36,7 +36,14 @@ const CLASSROOM = '11111111-2222-3333-4444-555555555555';
 const ORIGIN = 'https://content-staging.classmoji.io';
 
 const SLIDE = {
-  classroom: { id: CLASSROOM, content_key_version: 3, content_repo: REPO },
+  classroom: {
+    id: CLASSROOM,
+    content_key_version: 3,
+    content_repo: REPO,
+    // The classroom's own switch. `deckDeliveryContext` refuses a context
+    // without it, exactly as it refuses one with the env unset.
+    content_delivery_enabled: true,
+  },
   is_public: false,
 };
 
@@ -83,18 +90,32 @@ const PUBLIC_SLIDE = { ...SLIDE, is_public: true };
  */
 function fakeResolvers(overrides: Partial<DeckDeliveryResolvers> = {}): DeckDeliveryResolvers {
   return {
-    async resolveMany(_ctx, refs) {
-      const out = new Map<string, string>();
+    /**
+     * Both halves out of one pass, exactly as the real resolver does it.
+     *
+     * The `src` inside a candidate set is the SAME string the url map carries
+     * for that reference — that pairing is the contract, and it only holds
+     * because both were minted together.
+     */
+    async resolveDelivery(_ctx, refs) {
+      const urls = new Map<string, string>();
+      const srcSets = new Map<string, { src: string; srcset: string }>();
       const own = `/content/${ORG}/${REPO}/`;
       for (const ref of refs) {
-        out.set(
-          ref,
-          ref.startsWith(own)
-            ? `${ORIGIN}/c/${CLASSROOM}/blob/sha-${ref.split('/').pop()}?p=draft`
-            : ref
-        );
+        if (!ref.startsWith(own)) {
+          urls.set(ref, ref);
+          continue;
+        }
+        const src = `${ORIGIN}/c/${CLASSROOM}/blob/sha-${ref.split('/').pop()}?p=draft`;
+        urls.set(ref, src);
+        if (/\.(png|jpe?g|webp|avif)$/i.test(ref)) {
+          srcSets.set(ref, {
+            src,
+            srcset: [800, 1600, 2560].map(w => `${src}&w=${w}&fmt=auto ${w}w`).join(', '),
+          });
+        }
       }
-      return out;
+      return { urls, srcSets };
     },
     async resolveThemeBase() {
       return null;
@@ -183,9 +204,9 @@ test.describe('asset rewriting', () => {
 
     let calls = 0;
     const counting: DeckDeliveryResolvers = {
-      async resolveMany(_ctx, refs) {
+      async resolveDelivery(_ctx, refs) {
         calls += 1;
-        return fakeResolvers().resolveMany(_ctx, refs);
+        return fakeResolvers().resolveDelivery(_ctx, refs);
       },
       async resolveThemeBase() {
         calls += 1;
@@ -205,7 +226,7 @@ test.describe('asset rewriting', () => {
     const html = `<img src="/content/${ORG}/${REPO}/a.png">`;
     const { html: out } = await resolveDeckDelivery(html, ctx(), {
       resolvers: fakeResolvers({
-        async resolveMany() {
+        async resolveDelivery() {
           throw new Error('asset map is down');
         },
       }),
@@ -252,9 +273,9 @@ test.describe('shared theme links', () => {
 
     const { html: out, themeBase } = await resolveDeckDelivery(html, ctx(), {
       resolvers: fakeResolvers({
-        async resolveMany(_ctx, refs) {
+        async resolveDelivery(_ctx, refs) {
           seen.push(...refs);
-          return fakeResolvers().resolveMany(_ctx, refs);
+          return fakeResolvers().resolveDelivery(_ctx, refs);
         },
         async resolveThemeBase() {
           return BASE;
@@ -367,4 +388,102 @@ test.describe('deckAccessFor — the tier inputs, per surface', () => {
     expect(tierOf('follow', STUDENT, PUBLIC_SLIDE)).toBe('public');
     expect(tierOf('follow', OWNER)).toBe('draft');
   });
+});
+
+test('deckDeliveryContext refuses a classroom that has not been opted in', () => {
+  // The env is fully configured here (beforeEach set it) — this is the state
+  // production is in on the day this ships, and the flag is what keeps every
+  // deck on its legacy URLs until somebody chooses otherwise.
+  const off = {
+    ...SLIDE,
+    classroom: { ...SLIDE.classroom, content_delivery_enabled: false },
+  };
+  expect(deckDeliveryContext(off, ORG, REPO, { canEdit: true })).toBe(null);
+
+  const missing = {
+    ...SLIDE,
+    classroom: { id: CLASSROOM, content_key_version: 3, content_repo: REPO },
+  };
+  expect(deckDeliveryContext(missing, ORG, REPO, { canEdit: true })).toBe(null);
+});
+
+test.describe('responsive images', () => {
+  test('a raster <img> gets a srcset and sizes; its plain src stays the fallback', async () => {
+    const ref = `/content/${ORG}/${REPO}/slides/deck/a.png`;
+    const { html: out } = await resolveDeckDelivery(`<img src="${ref}">`, ctx(), {
+      resolvers: fakeResolvers(),
+      themeName: null,
+    });
+
+    expect(out).toContain('srcset="');
+    expect(out).toContain('sizes="');
+    // The three rungs, each asking the pipeline for a width and a format. The
+    // `&` separators are HTML-escaped in an attribute value, which is correct
+    // and is why this matches on the tail rather than on a whole query string.
+    for (const width of [800, 1600, 2560]) {
+      expect(out).toContain(`w=${width}`);
+      expect(out).toContain(`fmt=auto ${width}w`);
+    }
+    // And the untransformed original is still what `src` points at, which is
+    // both the fallback for a browser that ignores srcset and the thing that
+    // makes the src/srcset pair matchable by string equality.
+    expect(out).toMatch(/src="[^"]*\/blob\/sha-a\.png\?p=draft"/);
+  });
+
+  test('never on a background attribute — Reveal paints those as CSS', async () => {
+    const ref = `/content/${ORG}/${REPO}/slides/deck/bg.png`;
+    const { html: out } = await resolveDeckDelivery(
+      `<section data-background-image="${ref}"></section>`,
+      ctx(),
+      { resolvers: fakeResolvers(), themeName: null }
+    );
+
+    expect(out).toContain('data-background-image="');
+    expect(out).not.toContain('srcset');
+  });
+
+  test('a gif, an svg and a foreign image get no set at all', async () => {
+    const html = [
+      `<img src="/content/${ORG}/${REPO}/slides/deck/loop.gif">`,
+      `<img src="/content/${ORG}/${REPO}/slides/deck/logo.svg">`,
+      '<img src="https://images.example.com/hero.png">',
+    ].join('');
+
+    const { html: out } = await resolveDeckDelivery(html, ctx(), {
+      resolvers: fakeResolvers(),
+      themeName: null,
+    });
+
+    expect(out).not.toContain('srcset');
+  });
+
+  test("does not clobber an author's own srcset", async () => {
+    const html = '<img src="https://cdn.example.com/a.png" srcset="https://cdn.example.com/a2.png 2x">';
+    const { html: out } = await resolveDeckDelivery(html, ctx(), {
+      resolvers: fakeResolvers(),
+      themeName: null,
+    });
+
+    expect(out).toBe(html);
+  });
+});
+
+test('resolves a deck read in ONE pass, not one per concern', async () => {
+  // Two passes would pay two asset-map reads per deck view AND read the clock
+  // twice — and a bucketed expiry that turns over between them mints a
+  // different `src` for the same file than the candidate list was built beside.
+  let calls = 0;
+  const html = `<img src="/content/${ORG}/${REPO}/a.png"><img src="/content/${ORG}/${REPO}/b.jpg">`;
+
+  await resolveDeckDelivery(html, ctx(), {
+    themeName: null,
+    resolvers: fakeResolvers({
+      async resolveDelivery(c, refs) {
+        calls += 1;
+        return fakeResolvers().resolveDelivery(c, refs);
+      },
+    }),
+  });
+
+  expect(calls).toBe(1);
 });

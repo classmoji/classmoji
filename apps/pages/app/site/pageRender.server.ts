@@ -125,13 +125,15 @@ export async function renderPageForViewer(
     context.site.classroom as unknown as Parameters<typeof assetResolveContext>[0],
     page.is_public ? 'public' : 'enrolled'
   );
-  const resolvedBlocks = await resolveSiteAssets(assetCtx, content.blocks);
+  const { blocks: resolvedBlocks, srcSets } = await resolveSiteAssets(assetCtx, content.blocks);
 
   let rendered;
   try {
     rendered = await renderSitePage({
       blocks: resolvedBlocks,
       resolveLink,
+      // Keyed by the signed URL, because the blocks now hold signed URLs.
+      srcSets,
       // The site's setting, not the viewer's: `/schedule` 404s for everyone
       // when it is off, so a directory tile pointing at it is dropped.
       showSchedule: context.site.show_schedule === true,
@@ -176,18 +178,28 @@ export async function renderPageForViewer(
 async function resolveSiteAssets(
   ctx: ReturnType<typeof assetResolveContext>,
   blocks: unknown[]
-): Promise<unknown[]> {
-  if (!ctx) return blocks;
+): Promise<{ blocks: unknown[]; srcSets: Record<string, string> }> {
+  if (!ctx) return { blocks, srcSets: {} };
 
   const refs = collectBlockAssetRefs(blocks);
-  if (refs.length === 0) return blocks;
+  if (refs.length === 0) return { blocks, srcSets: {} };
 
   try {
-    const resolved = await ClassmojiService.contentDelivery.resolveMany(ctx, refs);
-    return mapBlockAssetRefs(blocks, ref => resolved.get(ref) ?? ref);
+    // ONE pass: the URLs and the candidate lists come out of the same map read
+    // under the same clock, so the `src` a block ends up with is exactly the
+    // key its candidate list is filed under.
+    const { urls, srcSets } = await ClassmojiService.contentDelivery.resolveDelivery(ctx, refs, {
+      srcSets: true,
+    });
+    const bySignedUrl: Record<string, string> = {};
+    for (const set of srcSets.values()) bySignedUrl[set.src] = set.srcset;
+    return {
+      blocks: mapBlockAssetRefs(blocks, ref => urls.get(ref) ?? ref),
+      srcSets: bySignedUrl,
+    };
   } catch (error) {
     console.warn('[site] asset resolution failed, rendering stored refs:', error);
-    return blocks;
+    return { blocks, srcSets: {} };
   }
 }
 
@@ -206,7 +218,16 @@ async function resolveSiteCover(
   try {
     return {
       ...cover,
-      url: await ClassmojiService.contentDelivery.resolveAssetUrl(ctx, cover.url),
+      // A single capped rendition, not a candidate list. The cover is painted
+      // as a CSS `background-image`, where `srcset` does not exist — so the
+      // only lever is the URL itself, and an instructor's untouched camera
+      // JPEG at the top of a public page is the single heaviest thing a class
+      // site serves. 2560 is the widest rung the pipeline offers, still an
+      // honest full-bleed banner on a retina display, and `fmt=auto` takes the
+      // WebP/AVIF saving on top.
+      url: await ClassmojiService.contentDelivery.resolveAssetUrl(ctx, cover.url, {
+        transform: { w: 2560, fmt: 'auto' },
+      }),
     };
   } catch (error) {
     console.warn('[site] cover resolution failed, rendering the stored ref:', error);

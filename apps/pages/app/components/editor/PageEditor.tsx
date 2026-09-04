@@ -27,6 +27,7 @@ import {
   type PageBlockInsertions,
 } from './blocks/index.tsx';
 import { ReplaceUrlItem, RemoveProfileImageItem } from './ReplaceUrlItem.tsx';
+import { AssetSrcSetContext, NO_SRC_SETS, type AssetSrcSets } from '~/hooks/useAssetSrcSets.ts';
 
 // Custom drag handle menu — extends default with block-specific actions
 const CustomDragHandleMenu = () => (
@@ -58,6 +59,12 @@ interface PageEditorProps {
    * is handed the signed URL through `resolveFileUrl` at paint time only.
    */
   resolveFileUrl?: (url: string) => Promise<string>;
+  /**
+   * Responsive candidates, keyed by the STORED reference. Handed to the image
+   * and profile blocks through context rather than through the editor, because
+   * `resolveFileUrl` returns one string and has no room for a second value.
+   */
+  srcSets?: AssetSrcSets;
   /** Called after an upload with the ref that was stored and the URL to show it with. */
   onAssetUploaded?: (ref: string, displayUrl: string | null) => void;
   onChange?: (document: unknown) => void;
@@ -80,6 +87,7 @@ const PageEditor = forwardRef(function PageEditor(
     onReady,
     editable = true,
     resolveFileUrl,
+    srcSets,
     onAssetUploaded,
   }: PageEditorProps,
   ref: React.Ref<{ getContent: () => unknown }>
@@ -299,24 +307,29 @@ const PageEditor = forwardRef(function PageEditor(
           box-sizing: border-box !important;
         }
       `}</style>
-      <BlockNoteView
-        editor={editor}
-        editable={editable}
-        theme={darkMode ? 'dark' : 'light'}
-        slashMenu={false}
-        formattingToolbar={false}
-        sideMenu={false}
-        onChange={() => onChange?.(editor.document)}
-      >
-        <SideMenuController
-          sideMenu={props => <SideMenu {...props} dragHandleMenu={CustomDragHandleMenu} />}
-        />
-        <FormattingToolbarController formattingToolbar={() => <FormattingToolbar />} />
-        <SuggestionMenuController
-          triggerCharacter="/"
-          getItems={async query => filterSuggestionItems(getAllSlashMenuItems(editor), query)}
-        />
-      </BlockNoteView>
+      {/* Above the view, not inside it: BlockNote portals every block render
+          into this tree (its own file blocks read their dictionary the same
+          way), so a provider here is what the image and profile blocks see. */}
+      <AssetSrcSetContext.Provider value={srcSets ?? NO_SRC_SETS}>
+        <BlockNoteView
+          editor={editor}
+          editable={editable}
+          theme={darkMode ? 'dark' : 'light'}
+          slashMenu={false}
+          formattingToolbar={false}
+          sideMenu={false}
+          onChange={() => onChange?.(editor.document)}
+        >
+          <SideMenuController
+            sideMenu={props => <SideMenu {...props} dragHandleMenu={CustomDragHandleMenu} />}
+          />
+          <FormattingToolbarController formattingToolbar={() => <FormattingToolbar />} />
+          <SuggestionMenuController
+            triggerCharacter="/"
+            getItems={async query => filterSuggestionItems(getAllSlashMenuItems(editor), query)}
+          />
+        </BlockNoteView>
+      </AssetSrcSetContext.Provider>
     </div>
   );
 });

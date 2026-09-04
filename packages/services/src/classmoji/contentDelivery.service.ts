@@ -101,6 +101,14 @@ export interface ResolveClassroom {
   content_key_version: number;
   content_repo: string;
   git_organization: { login: string };
+  /**
+   * This classroom's own switch. REQUIRED, and deliberately not optional: a
+   * caller that forgets it would otherwise get `undefined`, and the difference
+   * between "off" and "the caller did not say" is exactly the difference
+   * between a safe deploy and every classroom in production being switched over
+   * at once. Typed as required so the compiler names every context builder.
+   */
+  content_delivery_enabled: boolean;
 }
 
 export interface ResolveContext {
@@ -137,6 +145,38 @@ export function isContentDeliveryConfigured(): boolean {
   return Boolean(process.env.CONTENT_SIGNING_SECRET && process.env.CONTENT_DELIVERY_ORIGIN);
 }
 
+/**
+ * Is the delivery layer switched on for THIS classroom?
+ *
+ * The env check above is about the deployment; this is about the row. Both have
+ * to be true, and the two are separate on purpose: production Fly apps already
+ * carry `CONTENT_SIGNING_SECRET` and `CONTENT_DELIVERY_ORIGIN`, so a gate made
+ * of env alone would have flipped every classroom the moment this deployed. The
+ * column defaults to false, which makes that deploy a no-op and turns rollout
+ * into a decision per classroom.
+ *
+ * Strict `=== true` rather than truthiness: a caller that selected the row
+ * without the column gets `undefined`, and "I did not ask" must read as off.
+ */
+export function isContentDeliveryEnabled(
+  classroom: { content_delivery_enabled?: boolean | null } | null | undefined
+): boolean {
+  return classroom?.content_delivery_enabled === true;
+}
+
+/**
+ * The env + classroom pair, or null when either half says no.
+ *
+ * Every resolver's first line. Returning null is what produces the legacy
+ * result — the reference back unchanged, or `null` for the entry points whose
+ * "no" is an absence — and it is byte-identical whether the deployment cannot
+ * sign or this classroom has not been opted in.
+ */
+function deliveryEnvFor(ctx: ResolveContext): { origin: string; master: string } | null {
+  if (!isContentDeliveryEnabled(ctx.classroom)) return null;
+  return deliveryEnv();
+}
+
 function deliveryEnv(): { origin: string; master: string } | null {
   const origin = process.env.CONTENT_DELIVERY_ORIGIN;
   const master = process.env.CONTENT_SIGNING_SECRET;
@@ -169,13 +209,31 @@ export function tierFor({
   return 'enrolled';
 }
 
-function signingContext(ctx: ResolveContext, master: string): SigningContext {
+/**
+ * The signing context for one pass, optionally pinned to one clock.
+ *
+ * `now` matters more than it looks. Expiries are BUCKETED, so two signatures
+ * minted a tick apart usually land in the same bucket and come out identical —
+ * usually. Straddle a bucket boundary and they do not, and a caller that pairs
+ * a `src` with its `srcset` by string equality (which is the whole contract
+ * between `resolveMany` and `resolveSrcSets`) silently drops every set.
+ *
+ * So a pass that mints more than one URL pins its own `now` and hands the same
+ * one to every signature in the batch. `nowSeconds()` is read once, at the top.
+ */
+function signingContext(ctx: ResolveContext, master: string, now?: number): SigningContext {
   return {
     master,
     classroomId: ctx.classroom.id,
     keyVersion: ctx.classroom.content_key_version,
     tier: ctx.tier,
+    ...(now === undefined ? {} : { now }),
   };
+}
+
+/** Unix seconds — the one clock read a batched pass pins itself to. */
+function passClock(): number {
+  return Math.floor(Date.now() / 1000);
 }
 
 /**
@@ -225,6 +283,37 @@ function normalizeRepoRelative(ref: string): string | null {
   return parts.join('/');
 }
 
+/**
+ * Extensions a responsive set is worth emitting for.
+ *
+ * Deliberately narrow. `gif` is excluded because the pipeline's resize would
+ * flatten an animation to a still; `svg` because it is already resolution
+ * independent and rasterizing it is a downgrade; everything non-image because
+ * a `w=` on a PDF is meaningless. A file that is not on this list gets the
+ * plain signed URL and no `srcset`, which is the correct answer, not a
+ * degradation.
+ */
+const RASTER_IMAGE_EXTENSIONS = new Set(['png', 'jpg', 'jpeg', 'webp', 'avif']);
+
+/**
+ * The `sizes` hint a page or deck image ships with.
+ *
+ * One constant, shared by the pages viewer, the class site and the deck
+ * rewrite, because the three must not drift into three different answers for
+ * the same image. An image block is laid out at the full width of the article
+ * column, and the widest column the editor offers is `max-w-7xl`; below a
+ * desktop breakpoint it is the viewport. 1024px is the middle of the column
+ * range and errs one rung low rather than high, which costs a slightly softer
+ * image on the widest setting and saves a 2560px download on every other one.
+ */
+export const IMAGE_SIZES = '(max-width: 1024px) 100vw, 1024px';
+
+/** Is this path one the image pipeline should produce a responsive set for? */
+export function isRasterImagePath(path: string): boolean {
+  const ext = extensionOf(path);
+  return ext !== null && RASTER_IMAGE_EXTENSIONS.has(ext);
+}
+
 /** Lowercased extension, or null when the path has none. */
 function extensionOf(path: string): string | null {
   const name = path.slice(path.lastIndexOf('/') + 1);
@@ -245,6 +334,38 @@ function missingUrl(origin: string, classroomId: string, ref: string): string {
   return `${origin.replace(/\/+$/, '')}/c/${classroomId}/missing/${encodeURIComponent(ref)}`;
 }
 
+/**
+ * A `/missing/` placeholder of ours → the reference it was minted for.
+ *
+ * The placeholder is a URL we hand a render when the map has never heard of a
+ * reference, and it is the one derived URL that is NOT a signature — so
+ * `parseContentUrl` does not see it and, until this existed, neither did the
+ * save path. A render that produced one, a browser that handed it back, and a
+ * save that stored it turned a temporarily-unresolvable reference into a
+ * permanently broken one: the placeholder does not name a file, so no later
+ * sync can ever repair it.
+ *
+ * Matched by shape rather than by parsing, and scoped to THIS classroom: another
+ * classroom's placeholder decodes to a path that means nothing here.
+ *
+ * Null when the string is not one of ours, which is every ordinary reference.
+ */
+const MISSING_URL =
+  /^https?:\/\/[^/]+\/c\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\/missing\/([^/?#]+)$/i;
+
+function parseMissingUrl(ctx: ResolveContext, ref: string): string | null {
+  const match = MISSING_URL.exec(ref);
+  if (!match || match[1].toLowerCase() !== ctx.classroom.id.toLowerCase()) return null;
+  try {
+    const decoded = decodeURIComponent(match[2]);
+    return decoded.length > 0 ? decoded : null;
+  } catch {
+    // A placeholder we did not mint, or one mangled in transit. Not ours to
+    // rewrite — leave the caller's string alone.
+    return null;
+  }
+}
+
 /** Sign one already-resolved asset, degrading to the legacy ref on refusal. */
 async function signAsset(
   ctx: ResolveContext,
@@ -252,7 +373,8 @@ async function signAsset(
   ref: string,
   path: string,
   sha: string,
-  transform?: ResolveTransform
+  transform?: ResolveTransform,
+  now?: number
 ): Promise<string> {
   const ext = extensionOf(path);
   if (!ext) {
@@ -260,7 +382,7 @@ async function signAsset(
     return ref;
   }
   try {
-    return await signBlobUrl(env.origin, signingContext(ctx, env.master), {
+    return await signBlobUrl(env.origin, signingContext(ctx, env.master, now), {
       sha,
       ext,
       ...(transform ? { transform } : {}),
@@ -281,7 +403,8 @@ async function resolveOne(
   ctx: ResolveContext,
   env: { origin: string; master: string },
   ref: string,
-  transform?: ResolveTransform
+  transform?: ResolveTransform,
+  now?: number
 ): Promise<string> {
   const path = toRepoPath(ctx, ref);
   if (!path) return ref;
@@ -298,7 +421,7 @@ async function resolveOne(
     return missingUrl(env.origin, ctx.classroom.id, ref);
   }
 
-  return signAsset(ctx, env, ref, path, asset.sha, transform);
+  return signAsset(ctx, env, ref, path, asset.sha, transform, now);
 }
 
 /**
@@ -312,7 +435,7 @@ export async function resolveAssetUrl(
   ref: string,
   opts: { transform?: ResolveTransform } = {}
 ): Promise<string> {
-  const env = deliveryEnv();
+  const env = deliveryEnvFor(ctx);
   if (!env) return ref;
 
   await ensureMap(ctx.classroom.id);
@@ -320,26 +443,68 @@ export async function resolveAssetUrl(
 }
 
 /**
+ * Sign one already-resolved raster image as `{ src, srcset }`.
+ *
+ * `src` is the PLAIN signed URL — no `w=`, no `fmt=` — deliberately, and this
+ * is the one place it matters. It is the untransformed original, so it is
+ * byte-identical to what `resolveAssetUrl` and `resolveMany` hand back for the
+ * same reference; a caller can therefore pair a resolved `src` with its set by
+ * string equality, which is exactly what the render-time passes do. It is also
+ * the safe fallback for a browser that ignores `srcset` entirely.
+ *
+ * The ladder carries `fmt=auto`, so each rung is served as WebP or AVIF to the
+ * browsers that accept them and as the original format to the ones that do not.
+ *
+ * No `sourceWidth` is passed: the asset map stores a file's size in BYTES, not
+ * its pixel width, so all three rungs are emitted and the Worker's `scale-down`
+ * fit is what keeps a 900px source from being upscaled to 2560 — it caps at the
+ * source and stops. The cost of not knowing the width is a slightly wasteful
+ * candidate list, never a blurry image.
+ */
+async function signResponsive(
+  ctx: ResolveContext,
+  env: { origin: string; master: string },
+  path: string,
+  sha: string,
+  now?: number
+): Promise<{ src: string; srcset: string } | null> {
+  const ext = extensionOf(path);
+  if (!ext || !RASTER_IMAGE_EXTENSIONS.has(ext)) return null;
+
+  try {
+    const signing = signingContext(ctx, env.master, now);
+    const [src, ladder] = await Promise.all([
+      signBlobUrl(env.origin, signing, { sha, ext }),
+      signSrcSet(env.origin, signing, { sha, ext, fmt: 'auto' }),
+    ]);
+    return { src, srcset: ladder.srcset };
+  } catch (error) {
+    console.warn(
+      `[contentDelivery] Could not sign a srcset for ${path} in classroom ${ctx.classroom.id}:`,
+      error instanceof Error ? error.message : error
+    );
+    return null;
+  }
+}
+
+/**
  * A responsive `{ src, srcset }` for one image reference.
  *
- * Null — not a passthrough string — whenever a responsive set cannot be built
- * (unconfigured, not our repo, unknown to the map, unsignable). The caller
- * needs to tell "here is a srcset" from "there is no srcset", and an unsigned
- * legacy URL is a `src`, not a set.
- *
- * No `sourceWidth` is passed: the asset map stores a file's size in bytes, not
- * its pixel width, so all three rungs are emitted and the pipeline declines to
- * upscale on its own.
+ * Null — not a passthrough string — whenever a responsive set cannot or should
+ * not be built: the layer is off for this classroom or deployment, the
+ * reference is not ours, the map has never heard of it, it is not a raster
+ * image, or it cannot be signed. The caller needs to tell "here is a srcset"
+ * from "there is no srcset", and an unsigned legacy URL is a `src`, not a set.
  */
 export async function resolveAssetSrcSet(
   ctx: ResolveContext,
   ref: string
 ): Promise<{ src: string; srcset: string } | null> {
-  const env = deliveryEnv();
+  const env = deliveryEnvFor(ctx);
   if (!env) return null;
 
   const path = toRepoPath(ctx, ref);
-  if (!path) return null;
+  if (!path || !isRasterImagePath(path)) return null;
 
   await ensureMap(ctx.classroom.id);
   const asset = await lookupContentAsset(ctx.classroom.id, path);
@@ -350,18 +515,41 @@ export async function resolveAssetSrcSet(
     return null;
   }
 
-  const ext = extensionOf(path);
-  if (!ext) return null;
+  return signResponsive(ctx, env, path, asset.sha);
+}
 
-  try {
-    return await signSrcSet(env.origin, signingContext(ctx, env.master), { sha: asset.sha, ext });
-  } catch (error) {
-    console.warn(
-      `[contentDelivery] Could not sign a srcset for ${path} in classroom ${ctx.classroom.id}:`,
-      error instanceof Error ? error.message : error
-    );
-    return null;
-  }
+/**
+ * Responsive sets for a whole page's images, in one pass.
+ *
+ * Keyed by the STORED reference — never by the signed URL. A consumer that had
+ * to reproduce a signature to find its own entry would be reproducing a clock,
+ * an expiry bucket and a tier, and would get it wrong the moment any of the
+ * three moved. The stored ref is the one part of an image that does not move.
+ *
+ * Only references that actually GOT a set appear. A caller looks up
+ * unconditionally and treats a miss as "render this one with a plain `src`",
+ * which covers the gif, the svg, the external image and the file that is not an
+ * image at all — all correct outcomes rather than failures.
+ *
+ * Prefer `resolveDelivery` when you also need the URLs: this discards them, and
+ * resolving twice pays two map reads and risks two clocks.
+ */
+export async function resolveSrcSets(
+  ctx: ResolveContext,
+  refs: string[]
+): Promise<Map<string, { src: string; srcset: string }>> {
+  // Reduced BEFORE the map is touched: a gif, an svg, a PDF and an external
+  // image all drop out on the shape of the reference alone, so a document full
+  // of them costs no query at all.
+  const raster = refs.filter(ref => {
+    if (typeof ref !== 'string' || ref.length === 0) return false;
+    const path = toRepoPath(ctx, ref);
+    return path !== null && isRasterImagePath(path);
+  });
+  if (raster.length === 0) return new Map();
+
+  const { srcSets } = await resolveDelivery(ctx, raster, { srcSets: true });
+  return srcSets;
 }
 
 /**
@@ -379,7 +567,7 @@ export async function resolveThemeBase(
   ctx: ResolveContext,
   themeName: string
 ): Promise<string | null> {
-  const env = deliveryEnv();
+  const env = deliveryEnvFor(ctx);
   if (!env || !themeName) return null;
 
   await ensureMap(ctx.classroom.id);
@@ -406,30 +594,37 @@ export async function resolveThemeBase(
 }
 
 /**
- * Resolve a whole page's references in one pass.
+ * Resolve a whole page's references — URLs and responsive sets — in one pass.
  *
- * This is the entry point a render should use. Both the map freshness check
- * (a DB read, and possibly a GitHub tree call) and the map lookup itself
- * happen ONCE for the batch rather than once per image — a page with twenty
- * images costs one ensure and one query, not twenty of each.
+ * This is the entry point a render should use. Three things happen exactly
+ * once for the batch rather than once per image: the map freshness check (a DB
+ * read, and possibly a GitHub tree call), the map lookup, and — the one that
+ * bites — the CLOCK.
  *
- * Every input ref appears in the returned map, including the ones that resolve
- * to themselves, so a caller can look up unconditionally.
+ * Expiries are bucketed, so two signatures minted a tick apart are normally
+ * identical. Normally. Straddle a bucket boundary and they are not, and a
+ * caller pairing a `src` with its `srcset` by string equality silently drops
+ * every set it just paid to compute. One `now`, read here, goes into every
+ * signature below.
+ *
+ * Every input ref appears in `urls`, including the ones that resolve to
+ * themselves, so a caller can look up unconditionally. `srcSets` holds only the
+ * refs that earned one, keyed by the stored reference.
  */
-export async function resolveMany(
+export async function resolveDelivery(
   ctx: ResolveContext,
-  refs: string[]
-): Promise<Map<string, string>> {
+  refs: string[],
+  opts: { srcSets?: boolean } = {}
+): Promise<{ urls: Map<string, string>; srcSets: Map<string, { src: string; srcset: string }> }> {
   const unique = [...new Set(refs.filter(ref => typeof ref === 'string' && ref.length > 0))];
-  const resolved = new Map<string, string>();
+  const urls = new Map<string, string>();
+  const srcSets = new Map<string, { src: string; srcset: string }>();
 
-  const env = deliveryEnv();
+  const env = deliveryEnvFor(ctx);
   if (!env) {
-    for (const ref of unique) resolved.set(ref, ref);
-    return resolved;
+    for (const ref of unique) urls.set(ref, ref);
+    return { urls, srcSets };
   }
-
-  await ensureMap(ctx.classroom.id);
 
   // Reduce first, look up once. A reference that is not ours resolves to
   // itself without ever reaching the map, and the ones that remain share a
@@ -439,12 +634,14 @@ export async function resolveMany(
   for (const ref of unique) {
     const path = toRepoPath(ctx, ref);
     if (path) wanted.set(ref, path);
-    else resolved.set(ref, ref);
+    else urls.set(ref, ref);
   }
 
-  if (wanted.size === 0) return resolved;
+  if (wanted.size === 0) return { urls, srcSets };
 
+  await ensureMap(ctx.classroom.id);
   const assets = await lookupContentAssets(ctx.classroom.id, [...new Set(wanted.values())]);
+  const now = passClock();
 
   await Promise.all(
     [...wanted].map(async ([ref, path]) => {
@@ -456,14 +653,40 @@ export async function resolveMany(
         console.warn(
           `[contentDelivery] No blob row for "${ref}" (path ${path}) in classroom ${ctx.classroom.id}`
         );
-        resolved.set(ref, missingUrl(env.origin, ctx.classroom.id, ref));
+        urls.set(ref, missingUrl(env.origin, ctx.classroom.id, ref));
         return;
       }
-      resolved.set(ref, await signAsset(ctx, env, ref, path, asset.sha));
+
+      if (opts.srcSets && isRasterImagePath(path)) {
+        const set = await signResponsive(ctx, env, path, asset.sha, now);
+        if (set) {
+          // The set's `src` IS the plain signed URL under the same clock — so
+          // this is not a second signature for the same file, it is the one.
+          urls.set(ref, set.src);
+          srcSets.set(ref, set);
+          return;
+        }
+      }
+
+      urls.set(ref, await signAsset(ctx, env, ref, path, asset.sha, undefined, now));
     })
   );
 
-  return resolved;
+  return { urls, srcSets };
+}
+
+/**
+ * Resolve a whole page's references in one pass.
+ *
+ * The URL-only form of `resolveDelivery`, kept because most callers want
+ * exactly this and a `.urls` at every call site would be noise.
+ */
+export async function resolveMany(
+  ctx: ResolveContext,
+  refs: string[]
+): Promise<Map<string, string>> {
+  const { urls } = await resolveDelivery(ctx, refs);
+  return urls;
 }
 
 /**
@@ -477,13 +700,36 @@ export async function resolveMany(
  * Scoped to THIS classroom's own URLs: a signed URL for another classroom is
  * left alone, because its sha means nothing in this classroom's map and
  * "resolving" it would silently retarget the reference.
+ *
+ * Deliberately NOT behind the per-classroom gate. Every other entry point is,
+ * because they MINT URLs and the flag decides whether this classroom's URLs
+ * should be minted at all. This one only ever removes one — so it has to keep
+ * working after the flag is switched back off, or the signed URLs already
+ * sitting in an open editor would be committed on the next save. A reference
+ * that is not a signed URL of ours costs one cheap parse and returns unchanged.
  */
 export async function canonicalizeAssetRef(ctx: ResolveContext, urlOrRef: string): Promise<string> {
   if (typeof urlOrRef !== 'string' || urlOrRef.length === 0) return urlOrRef;
 
+  // A `/missing/` placeholder carries its own reference — no map read needed,
+  // and none possible: the placeholder exists precisely because the map had no
+  // row. Undoing it restores the reference a later sync can still repair.
+  const missing = parseMissingUrl(ctx, urlOrRef);
+  if (missing !== null) return missing;
+
   const parsed = parseContentUrl(urlOrRef);
-  if (!parsed || parsed.kind !== 'blob') return urlOrRef;
+  if (!parsed) return urlOrRef;
   if (parsed.classroomId !== ctx.classroom.id) return urlOrRef;
+
+  // A signed THEME url reaches storage through a deck's `<link href>` or an
+  // inline `url()`, and it expires exactly like a blob url does. Its repo path
+  // is fully determined by the URL — theme name plus relative path — so it
+  // needs no map read at all.
+  if (parsed.kind === 'theme') {
+    return parsed.relPath
+      ? `${THEMES_FOLDER}/${parsed.theme}/${parsed.relPath}`
+      : `${THEMES_FOLDER}/${parsed.theme}`;
+  }
 
   const asset = await lookupContentAssetBySha(ctx.classroom.id, parsed.sha);
   if (!asset) {
@@ -498,6 +744,52 @@ export async function canonicalizeAssetRef(ctx: ResolveContext, urlOrRef: string
   }
 
   return asset.path;
+}
+
+/**
+ * Batched `canonicalizeAssetRef`.
+ *
+ * The save paths canonicalize a whole document at once, and doing that one
+ * `await` at a time would serialize a lookup per image. Every input ref appears
+ * in the result, including the ones that come back unchanged, so a caller can
+ * look up unconditionally.
+ */
+export async function canonicalizeMany(
+  ctx: ResolveContext,
+  refs: string[]
+): Promise<Map<string, string>> {
+  const unique = [...new Set(refs.filter(ref => typeof ref === 'string' && ref.length > 0))];
+  const canonical = new Map<string, string>();
+
+  await Promise.all(
+    unique.map(async ref => {
+      canonical.set(ref, await canonicalizeAssetRef(ctx, ref));
+    })
+  );
+
+  return canonical;
+}
+
+/**
+ * Does this reference name something in THIS classroom's content repo?
+ *
+ * Synchronous and map-free — it answers from the shape of the string alone,
+ * which is all a caller deciding "is this ours to rewrite" needs. Three shapes
+ * count: a repo-relative path, one of the legacy absolute URLs into this
+ * classroom's repo, and a signed delivery URL minted for this classroom.
+ *
+ * The save paths use it to decide whose `srcset` they may strip. An author's
+ * own responsive `<img srcset>` pointing at some external CDN is content, and
+ * removing it would be a silent edit of their slide.
+ */
+export function isOwnAssetRef(ctx: ResolveContext, ref: string): boolean {
+  if (typeof ref !== 'string' || ref.length === 0) return false;
+  if (toRepoPath(ctx, ref) !== null) return true;
+  // The placeholder is derived from one of ours and belongs to the same set —
+  // leaving it out here would let a stale `srcset` survive around one.
+  if (parseMissingUrl(ctx, ref) !== null) return true;
+  const parsed = parseContentUrl(ref);
+  return parsed !== null && parsed.classroomId === ctx.classroom.id;
 }
 
 /**
