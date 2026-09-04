@@ -10,7 +10,13 @@ import type { Env } from './env.ts';
 import { GitHubOrigin } from './origins/github.ts';
 import { deliveryStrategy, type OriginAdapter } from './origins/types.ts';
 import { withOriginRetry } from './token.ts';
-import { negotiateFormat, mediaTypeFor, transformImage } from './transform.ts';
+import {
+  MAX_TRANSFORM_SOURCE_BYTES,
+  negotiateFormat,
+  mediaTypeFor,
+  readBounded,
+  transformImage,
+} from './transform.ts';
 import { cacheControlFor, nowSeconds, type BlobVerification } from './verify.ts';
 
 /** The success half of the verification union. */
@@ -35,6 +41,45 @@ function storedResponse(
   const headers = contentHeaders(object.httpMetadata?.contentType ?? fallbackType, cacheControl);
   headers.set('ETag', object.httpEtag);
   return new Response(object.body, { headers });
+}
+
+/** The origin's own `Content-Length`, when it sent a usable one. */
+function declaredLength(headers: Headers): number | null {
+  const raw = headers.get('Content-Length');
+  if (raw === null) return null;
+  const value = Number(raw);
+  return Number.isSafeInteger(value) && value >= 0 ? value : null;
+}
+
+/**
+ * Stream an origin body to the client while a tee'd copy lands in R2. Bytes are
+ * never buffered here — this is the path every untransformed miss takes, and
+ * the one the transform path falls back to when its source is too big to hold.
+ */
+function streamAndCache(
+  env: Env,
+  ctx: ExecutionContext,
+  key: string,
+  body: ReadableStream<Uint8Array>,
+  contentType: string,
+  cacheControl: string
+): Response {
+  const [toClient, toCache] = body.tee();
+  ctx.waitUntil(
+    env.CACHE.put(key, toCache, { httpMetadata: { contentType } }).catch(error => {
+      console.warn(`[content] failed to cache ${key}:`, error);
+    })
+  );
+  return new Response(toClient, { headers: contentHeaders(contentType, cacheControl) });
+}
+
+/** One shape for both ways a source can be too large: declared, and counted. */
+function warnOversizedSource(sha: string, size: number | null): void {
+  const measured = size === null ? 'over the' : `${size} bytes, over the`;
+  console.warn(
+    `[content] skipping transform for ${sha}: source is ${measured} ` +
+      `${MAX_TRANSFORM_SOURCE_BYTES} byte ceiling`
+  );
 }
 
 /**
@@ -76,24 +121,17 @@ export async function serveBlobBySha(
     return errorResponse(502, 'origin unavailable');
   }
 
-  const [toClient, toCache] = response.body.tee();
-  ctx.waitUntil(
-    env.CACHE.put(key, toCache, { httpMetadata: { contentType: options.contentType } }).catch(
-      error => {
-        console.warn(`[content] failed to cache ${key}:`, error);
-      }
-    )
-  );
-
-  return new Response(toClient, {
-    headers: contentHeaders(options.contentType, options.cacheControl),
-  });
+  return streamAndCache(env, ctx, key, response.body, options.contentType, options.cacheControl);
 }
 
 /**
  * Materialize a blob's bytes for the transform path (R2 first, else origin,
- * caching the original on the way through). Returns an error Response when the
- * origin fails, so the caller can pass it straight back.
+ * caching the original on the way through).
+ *
+ * Returns a Response instead of bytes when there are none to hand back: an
+ * origin failure, or a source past `MAX_TRANSFORM_SOURCE_BYTES`, which is
+ * streamed untransformed on the short TTL a failed transform gets. Either way
+ * the caller passes it straight through.
  */
 async function loadOriginalBytes(
   env: Env,
@@ -102,17 +140,37 @@ async function loadOriginalBytes(
 ): Promise<ArrayBuffer | Response> {
   const key = blobKey(options.sha);
   const hit = await env.CACHE.get(key);
-  if (hit) return hit.arrayBuffer();
+  if (hit) {
+    if (hit.size > MAX_TRANSFORM_SOURCE_BYTES) {
+      warnOversizedSource(options.sha, hit.size);
+      return storedResponse(hit, options.contentType, SHORT_CACHE_CONTROL);
+    }
+    return hit.arrayBuffer();
+  }
 
   const response = await withOriginRetry(env, options.classroomId, ref =>
     origin.fetchBlob({ ...ref, sha: options.sha })
   );
-  if (!response.ok) {
+  if (!response.ok || !response.body) {
     console.warn(`[content] origin blob ${options.sha}: ${response.status}`);
     return errorResponse(502, 'origin unavailable');
   }
 
-  const bytes = await response.arrayBuffer();
+  const declared = declaredLength(response.headers);
+  if (declared !== null && declared > MAX_TRANSFORM_SOURCE_BYTES) {
+    warnOversizedSource(options.sha, declared);
+    return streamAndCache(env, ctx, key, response.body, options.contentType, SHORT_CACHE_CONTROL);
+  }
+
+  const bytes = await readBounded(response.body, MAX_TRANSFORM_SOURCE_BYTES);
+  if (bytes === null) {
+    // The origin declared no size, so the ceiling could only be enforced by
+    // counting - and the bytes counted are gone with the cancelled stream. The
+    // untransformed path fetches it again and streams it, caching on the way.
+    warnOversizedSource(options.sha, null);
+    return serveBlobBySha(env, ctx, { ...options, cacheControl: SHORT_CACHE_CONTROL });
+  }
+
   ctx.waitUntil(
     env.CACHE.put(key, bytes, { httpMetadata: { contentType: options.contentType } }).catch(
       error => {

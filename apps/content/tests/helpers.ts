@@ -26,6 +26,8 @@ export const THEME_BLOB_SHA = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
 interface StoredObject {
   body: string;
   contentType?: string;
+  /** Override the reported size, so a ceiling can be tested without the bytes. */
+  size?: number;
 }
 
 export interface FakeBucket {
@@ -55,6 +57,7 @@ export function fakeBucket(initial: Record<string, StoredObject> = {}): FakeBuck
         body: new Response(object.body).body,
         httpMetadata: { contentType: object.contentType },
         httpEtag: `"${key}"`,
+        size: object.size ?? new TextEncoder().encode(object.body).byteLength,
         arrayBuffer: async () => new TextEncoder().encode(object.body).buffer,
         json: async () => JSON.parse(object.body),
         text: async () => object.body,

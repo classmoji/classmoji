@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import worker from '../src/index.ts';
 import { clearOriginCache } from '../src/token.ts';
+import { MAX_TRANSFORM_SOURCE_BYTES } from '../src/transform.ts';
 import { nowSeconds } from '../src/verify.ts';
 import {
   BLOB_SHA,
@@ -352,6 +353,115 @@ describe('blob delivery', () => {
 
     expect(response.status).toBe(200);
     expect(bucket.gets).toEqual([`blobs/${BLOB_SHA}`]);
+  });
+
+  it('skips the transform when R2 already knows the source is too big', async () => {
+    // The transform path is the one place a whole object is buffered, inside a
+    // shared 128 MB isolate. A known-oversize source never enters it.
+    const bucket = fakeBucket({
+      [`blobs/${BLOB_SHA}`]: {
+        body: 'huge-bytes',
+        contentType: 'image/jpeg',
+        size: MAX_TRANSFORM_SOURCE_BYTES + 1,
+      },
+    });
+    const images = { input: vi.fn() } as unknown as ImagesBinding;
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const url = await signedBlobUrl({
+      sha: BLOB_SHA,
+      ext: 'jpg',
+      transform: { w: 800, fmt: 'webp' },
+    });
+
+    const response = await worker.fetch(
+      new Request(url),
+      fakeEnv({ CACHE: bucket as unknown as R2Bucket, IMAGES: images }),
+      fakeContext()
+    );
+
+    expect(response.status).toBe(200);
+    expect(await response.text()).toBe('huge-bytes');
+    expect(response.headers.get('Content-Type')).toBe('image/jpeg');
+    expect(response.headers.get('Cache-Control')).toBe('public, max-age=60');
+    expect((images as unknown as { input: ReturnType<typeof vi.fn> }).input).not.toHaveBeenCalled();
+    expect(warn.mock.calls[0]?.[0]).toContain(`skipping transform for ${BLOB_SHA}`);
+  });
+
+  it("skips the transform when the origin's Content-Length is over the ceiling", async () => {
+    stubUpstreams({
+      blob: () =>
+        new Response('huge-bytes', {
+          headers: { 'Content-Length': String(MAX_TRANSFORM_SOURCE_BYTES + 1) },
+        }),
+    });
+    const bucket = fakeBucket();
+    const images = { input: vi.fn() } as unknown as ImagesBinding;
+    const ctx = fakeContext();
+    const url = await signedBlobUrl({
+      sha: BLOB_SHA,
+      ext: 'jpg',
+      transform: { w: 800, fmt: 'webp' },
+    });
+
+    const response = await worker.fetch(
+      new Request(url),
+      fakeEnv({ CACHE: bucket as unknown as R2Bucket, IMAGES: images }),
+      ctx
+    );
+
+    expect(response.status).toBe(200);
+    expect(await response.text()).toBe('huge-bytes');
+    expect(response.headers.get('Cache-Control')).toBe('public, max-age=60');
+    expect((images as unknown as { input: ReturnType<typeof vi.fn> }).input).not.toHaveBeenCalled();
+    // Streamed, not buffered - the original still lands in R2 on the way past.
+    await ctx.settled();
+    expect(bucket.puts.map(put => put.key)).toEqual([`blobs/${BLOB_SHA}`]);
+  });
+
+  it('aborts a transform whose source outgrows the ceiling mid-stream', async () => {
+    // No Content-Length: the only way to hold the bound is to count as we read,
+    // and the counted bytes go with the cancelled stream.
+    let call = 0;
+    stubUpstreams({
+      blob: () => {
+        call += 1;
+        if (call > 1) return new Response('origin-bytes');
+        let sent = 0;
+        return new Response(
+          new ReadableStream<Uint8Array>({
+            pull(controller) {
+              if (sent > MAX_TRANSFORM_SOURCE_BYTES) return controller.close();
+              sent += 1024 * 1024;
+              controller.enqueue(new Uint8Array(1024 * 1024));
+            },
+          })
+        );
+      },
+    });
+    const bucket = fakeBucket();
+    const images = { input: vi.fn() } as unknown as ImagesBinding;
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const ctx = fakeContext();
+    const url = await signedBlobUrl({
+      sha: BLOB_SHA,
+      ext: 'jpg',
+      transform: { w: 800, fmt: 'webp' },
+    });
+
+    const response = await worker.fetch(
+      new Request(url),
+      fakeEnv({ CACHE: bucket as unknown as R2Bucket, IMAGES: images }),
+      ctx
+    );
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get('Cache-Control')).toBe('public, max-age=60');
+    expect(await response.text()).toBe('origin-bytes');
+    expect((images as unknown as { input: ReturnType<typeof vi.fn> }).input).not.toHaveBeenCalled();
+    expect(call).toBe(2);
+    expect(
+      warn.mock.calls.some(([message]) => String(message).includes('skipping transform'))
+    ).toBe(true);
   });
 
   it('serves the original bytes when the Images binding throws', async () => {
