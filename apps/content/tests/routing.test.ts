@@ -123,6 +123,25 @@ describe('routing', () => {
     expect(response.headers.get('Cache-Control')).toBe('no-store');
   });
 
+  it('logs the reason, classroom, path, and p/v on a 403 - never the signature', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const path = `/c/${CLASSROOM}/blob/${BLOB_SHA}.png`;
+    const response = await worker.fetch(
+      new Request(`${ORIGIN}${path}?p=public&v=1&exp=${futureExp()}&sig=nope`),
+      fakeEnv(),
+      fakeContext()
+    );
+    expect(response.status).toBe(403);
+    expect(warn).toHaveBeenCalledTimes(1);
+    const [message] = warn.mock.calls[0] as [string];
+    expect(message).toContain('bad-signature');
+    expect(message).toContain(`classroom=${CLASSROOM}`);
+    expect(message).toContain(`path=${path}`);
+    expect(message).toContain('p=public');
+    expect(message).toContain('v=1');
+    expect(message).not.toContain('sig=');
+  });
+
   it('403s a URL minted for a different delivery host', async () => {
     const url = await signedBlobUrl({ sha: BLOB_SHA, ext: 'png', signedHost: 'evil.example.com' });
     const response = await worker.fetch(new Request(url), fakeEnv(), fakeContext());
