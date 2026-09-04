@@ -17,11 +17,12 @@ const contentAssetDeleteMany = vi.fn();
 const contentAssetFindFirst = vi.fn();
 const contentAssetFindUnique = vi.fn();
 const classroomFindUnique = vi.fn();
+const classroomUpdate = vi.fn();
 const transaction = vi.fn();
 
 vi.mock('@classmoji/database', () => ({
   default: () => ({
-    classroom: { findUnique: classroomFindUnique },
+    classroom: { findUnique: classroomFindUnique, update: classroomUpdate },
     contentAsset: {
       upsert: contentAssetUpsert,
       deleteMany: contentAssetDeleteMany,
@@ -46,6 +47,7 @@ vi.mock('../../content/ContentService.ts', () => ({
 const {
   syncContentAssets,
   ensureContentAssets,
+  recordContentAsset,
   lookupContentAsset,
   lookupContentTree,
   lookupContentAssetBySha,
@@ -54,13 +56,22 @@ const {
 const CLASSROOM = {
   id: 'class-1',
   content_repo: 'content-cs101',
+  // Freshness lives HERE, not on the newest row — see ensureContentAssets.
+  content_assets_synced_at: null as Date | null,
   git_organization: { id: 'org-1', provider: 'GITHUB', login: 'dartmouth-cs' },
 };
+
+/** A classroom whose last FULL sync finished `ms` ago. */
+const syncedAgo = (ms: number) => ({
+  ...CLASSROOM,
+  content_assets_synced_at: new Date(Date.now() - ms),
+});
 
 /** The upsert/deleteMany mocks return tagged markers so ops stay identifiable. */
 const setupTransaction = (deletedCount = 0) => {
   contentAssetUpsert.mockImplementation(args => ({ op: 'upsert', args }));
   contentAssetDeleteMany.mockImplementation(args => ({ op: 'deleteMany', args }));
+  classroomUpdate.mockImplementation(args => ({ op: 'classroomUpdate', args }));
   transaction.mockImplementation((ops: { op: string }[]) =>
     Promise.resolve(ops.map(op => (op.op === 'deleteMany' ? { count: deletedCount } : op)))
   );
@@ -135,6 +146,51 @@ describe('contentAssets.service', () => {
       await syncContentAssets('class-1');
 
       expect(contentAssetUpsert.mock.calls[0][0].create.size).toBe(0);
+    });
+
+    it('stamps the classroom with the run, inside the same transaction', async () => {
+      // A run that read the whole tree is the ONLY thing entitled to say the
+      // map matches the repo, and the stamp is what `ensureContentAssets`
+      // measures against. In the transaction so a sync that fails leaves the
+      // classroom looking exactly as unsynced as it is.
+      getTree.mockResolvedValue({
+        sha: 'r',
+        truncated: false,
+        entries: [{ path: 'images/a.png', sha: 'sha-a', type: 'blob', size: 1 }],
+      });
+
+      await syncContentAssets('class-1');
+
+      expect(classroomUpdate).toHaveBeenCalledTimes(1);
+      const [stamp] = classroomUpdate.mock.calls[0];
+      expect(stamp.where).toEqual({ id: 'class-1' });
+      // The run's one stamp — the same instant every row it wrote carries.
+      const rowStamp = contentAssetUpsert.mock.calls[0][0].create.synced_at;
+      expect(stamp.data.content_assets_synced_at).toEqual(rowStamp);
+
+      const ops = transaction.mock.calls[0][0] as { op: string }[];
+      expect(ops).toContainEqual({ op: 'classroomUpdate', args: stamp });
+      // Ahead of the sweep, which the result's delete count is read off the
+      // tail of — see fullSync.
+      expect(ops[0].op).toBe('classroomUpdate');
+      expect(ops.at(-1)?.op).toBe('deleteMany');
+    });
+
+    it('stamps even when the tree came back truncated', async () => {
+      // It read the tree and applied everything that arrived, which is as
+      // current as this classroom can get. Refusing to stamp would put a repo
+      // that is simply too big into a permanent re-sync loop.
+      getTree.mockResolvedValue({
+        sha: 'r',
+        truncated: true,
+        entries: [{ path: 'images/a.png', sha: 'sha-a', type: 'blob', size: 1 }],
+      });
+
+      await syncContentAssets('class-1');
+
+      expect(classroomUpdate).toHaveBeenCalledTimes(1);
+      const ops = transaction.mock.calls[0][0] as { op: string }[];
+      expect(ops[0].op).toBe('classroomUpdate');
     });
   });
 
@@ -270,11 +326,26 @@ describe('contentAssets.service', () => {
 
       expect(result.mode).toBe('full');
     });
+
+    it('does NOT stamp the classroom', async () => {
+      // It applied the paths one push named and knows nothing about the rest of
+      // the repo. Stamping here would let a steady trickle of webhooks suppress
+      // the daily full refresh — which exists to repair the webhooks that never
+      // arrive at all.
+      getMeta.mockResolvedValue({ sha: 'sha-a', size: 10 });
+
+      const result = await syncContentAssets('class-1', {
+        changes: { added: ['images/a.png'], modified: [], removed: [] },
+      });
+
+      expect(result.mode).toBe('incremental');
+      expect(classroomUpdate).not.toHaveBeenCalled();
+    });
   });
 
   describe('ensureContentAssets', () => {
-    it('no-ops when the map is fresher than maxAgeMs', async () => {
-      contentAssetFindFirst.mockResolvedValue({ synced_at: new Date(Date.now() - 1000) });
+    it('no-ops when the last FULL sync is fresher than maxAgeMs', async () => {
+      classroomFindUnique.mockResolvedValue(syncedAgo(1000));
 
       const result = await ensureContentAssets('class-1', { maxAgeMs: 60_000 });
 
@@ -282,13 +353,50 @@ describe('contentAssets.service', () => {
       expect(getTree).not.toHaveBeenCalled();
     });
 
-    it('syncs when the map is stale', async () => {
-      contentAssetFindFirst.mockResolvedValue({ synced_at: new Date(Date.now() - 120_000) });
+    it('syncs when the last full sync is older than maxAgeMs', async () => {
+      classroomFindUnique.mockResolvedValue(syncedAgo(120_000));
       getTree.mockResolvedValue({ sha: 'r', truncated: false, entries: [] });
 
       const result = await ensureContentAssets('class-1', { maxAgeMs: 60_000 });
 
       expect(result?.mode).toBe('full');
+    });
+
+    it('still refreshes a stale map that a fresh UPLOAD row just touched', async () => {
+      // THE regression this guards. `recordContentAsset` stamps its row `now`,
+      // so reading freshness off the newest row let one teacher uploading one
+      // image make a week-old map look fresh for another 24 hours — on exactly
+      // the classrooms that need the repair, the ones whose push webhook is not
+      // arriving. Pushed files stay dangling and deleted files never get swept
+      // for as long as anyone keeps uploading.
+      const DAY = 24 * 60 * 60 * 1000;
+      classroomFindUnique.mockResolvedValue(syncedAgo(7 * DAY));
+      getTree.mockResolvedValue({ sha: 'r', truncated: false, entries: [] });
+
+      await recordContentAsset('class-1', { path: 'pages/home/assets/x.png', sha: 'sha-x' });
+      expect(contentAssetUpsert).toHaveBeenCalled();
+
+      // What the upload leaves behind: a row stamped NOW on a map whose last
+      // real sync was a week ago. Seeded explicitly, because the old probe read
+      // exactly this and would answer "fresh" — the bug.
+      contentAssetFindFirst.mockResolvedValue({ synced_at: new Date() });
+
+      const result = await ensureContentAssets('class-1', { maxAgeMs: DAY });
+
+      // The classroom stamp is untouched, so the daily repair still fires.
+      expect(getTree).toHaveBeenCalledTimes(1);
+      expect(result?.mode).toBe('full');
+    });
+
+    it('syncs when the classroom has never fully synced', async () => {
+      // Null stamp, whatever the rows say.
+      classroomFindUnique.mockResolvedValue({ ...CLASSROOM, content_assets_synced_at: null });
+      getTree.mockResolvedValue({ sha: 'r', truncated: false, entries: [] });
+
+      const result = await ensureContentAssets('class-1', { maxAgeMs: 60_000 });
+
+      expect(result?.mode).toBe('full');
+      expect(getTree).toHaveBeenCalledTimes(1);
     });
 
     it('no-ops instead of throwing for a classroom the delivery layer cannot serve', async () => {
@@ -301,7 +409,6 @@ describe('contentAssets.service', () => {
 
       await expect(ensureContentAssets('class-1', { maxAgeMs: 60_000 })).resolves.toBeNull();
       expect(getTree).not.toHaveBeenCalled();
-      expect(contentAssetFindFirst).not.toHaveBeenCalled();
     });
 
     it('no-ops for a classroom with no content repo', async () => {
@@ -315,7 +422,6 @@ describe('contentAssets.service', () => {
       // The render-path contract. A GitHub 403 rate limit or a 5xx must cost
       // staleness, not a broken page — the previous map is still in the table
       // and still usable.
-      contentAssetFindFirst.mockResolvedValue(null);
       getTree.mockRejectedValue(
         Object.assign(new Error('API rate limit exceeded'), {
           status: 403,
@@ -341,24 +447,97 @@ describe('contentAssets.service', () => {
     });
 
     it('reads the classroom once, not once per guard', async () => {
-      contentAssetFindFirst.mockResolvedValue(null);
       getTree.mockResolvedValue({ sha: 'r', truncated: false, entries: [] });
 
       await ensureContentAssets('class-1', { maxAgeMs: 60_000 });
 
       expect(classroomFindUnique).toHaveBeenCalledTimes(1);
     });
+  });
 
-    it('syncs when the classroom has never synced', async () => {
-      // Self-bootstrapping: no backfill job, no migration. The first render of
-      // a classroom that has no map builds one.
-      contentAssetFindFirst.mockResolvedValue(null);
-      getTree.mockResolvedValue({ sha: 'r', truncated: false, entries: [] });
+  describe('recordContentAsset', () => {
+    it('upserts one blob row with the same shape a sync would write', async () => {
+      // The point of the whole helper: the row exists before any webhook or
+      // 24-hour refresh, so the very next render resolves the path instead of
+      // signing a dangling URL for it.
+      await expect(
+        recordContentAsset('class-1', { path: 'pages/home/assets/x.png', sha: 'sha-x', size: 512 })
+      ).resolves.toBe(true);
 
-      const result = await ensureContentAssets('class-1', { maxAgeMs: 60_000 });
+      expect(contentAssetUpsert).toHaveBeenCalledTimes(1);
+      const [args] = contentAssetUpsert.mock.calls[0];
+      expect(args.where).toEqual({
+        classroom_id_path: { classroom_id: 'class-1', path: 'pages/home/assets/x.png' },
+      });
+      // An upload writes a file, never a tree.
+      expect(args.create).toMatchObject({
+        classroom_id: 'class-1',
+        path: 'pages/home/assets/x.png',
+        sha: 'sha-x',
+        type: 'blob',
+        size: 512,
+      });
+      expect(args.update).toMatchObject({ sha: 'sha-x', type: 'blob', size: 512 });
+      // Stamped now, so the next full sync's sweep keeps it rather than
+      // deleting a row for a file that is genuinely in the repo.
+      expect(args.create.synced_at).toBeInstanceOf(Date);
+      expect(args.update.synced_at).toEqual(args.create.synced_at);
+    });
 
-      expect(result?.mode).toBe('full');
-      expect(getTree).toHaveBeenCalledTimes(1);
+    it('defaults a missing size to 0, as the tree entries do', async () => {
+      await recordContentAsset('class-1', { path: 'images/a.png', sha: 'sha-a' });
+
+      expect(contentAssetUpsert.mock.calls[0][0].create.size).toBe(0);
+    });
+
+    it('no-ops for a classroom the delivery layer cannot serve', async () => {
+      // GitLab-backed, the mock org behind an example classroom, or no content
+      // repo. The upload itself still succeeded, so this must not throw.
+      classroomFindUnique.mockResolvedValue({
+        ...CLASSROOM,
+        git_organization: { ...CLASSROOM.git_organization, provider: 'GITLAB' },
+      });
+
+      await expect(
+        recordContentAsset('class-1', { path: 'images/a.png', sha: 'sha-a' })
+      ).resolves.toBe(false);
+      expect(contentAssetUpsert).not.toHaveBeenCalled();
+    });
+
+    it('no-ops for a classroom with no content repo', async () => {
+      classroomFindUnique.mockResolvedValue({ ...CLASSROOM, content_repo: null });
+
+      await expect(
+        recordContentAsset('class-1', { path: 'images/a.png', sha: 'sha-a' })
+      ).resolves.toBe(false);
+      expect(contentAssetUpsert).not.toHaveBeenCalled();
+    });
+
+    it('does NOT stamp the classroom as fully synced', async () => {
+      // One file is not the repo. This is the whole reason freshness moved off
+      // the rows — see the ensureContentAssets suite.
+      await recordContentAsset('class-1', { path: 'images/a.png', sha: 'sha-a' });
+
+      expect(classroomUpdate).not.toHaveBeenCalled();
+    });
+
+    it('resolves false instead of throwing when the write fails', async () => {
+      // It sits on an upload path. A file that reached the repo must never be
+      // reported as a failed upload because a cache row could not be written.
+      contentAssetUpsert.mockImplementation(() => {
+        throw new Error('connection terminated');
+      });
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+      await expect(
+        recordContentAsset('class-1', { path: 'images/a.png', sha: 'sha-a' })
+      ).resolves.toBe(false);
+
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining('Could not record images/a.png for class-1'),
+        expect.any(Error)
+      );
+      warn.mockRestore();
     });
   });
 

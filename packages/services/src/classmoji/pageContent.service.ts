@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { signBlobUrl } from '@classmoji/content-signing';
 import { z } from 'zod';
 import { ContentService } from '../content/ContentService.ts';
+import { recordContentAsset } from './contentAssets.service.ts';
 import {
   dedupeMergedTreeIds,
   indexResolutions,
@@ -266,6 +267,12 @@ export async function savePageContent(
  * than looked up in the asset map, because the push webhook that would put a
  * row there has not fired yet — a map lookup here would reliably miss.
  *
+ * Which is also why the row is written HERE. `displayUrl` only covers the
+ * editor's own preview; the moment the page is saved and re-rendered, the
+ * stored path goes through the map like any other, and a miss there renders as
+ * a dangling URL. The upload already has the path, the sha and the size, so the
+ * row is recorded from them rather than left to a webhook round trip.
+ *
  * @returns `{ url, path, displayUrl }`. `path` is always the repo path.
  *   `displayUrl` is null when the delivery layer is off, and `url` is then the
  *   legacy absolute URL rather than the path.
@@ -286,6 +293,17 @@ export async function uploadPageAsset(
     branch: 'main',
     message: `Upload asset for ${page.title || 'page'}`,
   });
+
+  const classroomId = (page.classroom as { id?: unknown }).id;
+  if (typeof classroomId === 'string') {
+    // Never throws, and its failure is not this caller's problem: the file is
+    // already in the repo, and the next sync writes the same row.
+    await recordContentAsset(classroomId, {
+      path: result.path,
+      sha: result.sha,
+      size: buffer.length,
+    });
+  }
 
   const displayUrl = await signUploadedAsset(page, result.path, result.sha);
 

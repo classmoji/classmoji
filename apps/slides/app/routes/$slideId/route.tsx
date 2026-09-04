@@ -948,6 +948,17 @@ export const action = async ({
         message: `Upload image for slides: ${slide.title}`,
       });
 
+      // Record the row now rather than waiting for the push webhook: a deck
+      // saved right after the upload stores this repo path, and a render that
+      // misses the asset map signs a dangling URL. Never throws.
+      if (slide.classroom_id) {
+        await ClassmojiService.contentAssets.recordContentAsset(slide.classroom_id, {
+          path: result.path,
+          sha: result.sha,
+          size: buffer.length,
+        });
+      }
+
       // Return content proxy URL instead of raw.githubusercontent.com
       // Content proxy handles MIME types correctly and has CDN+API fallback
       return {

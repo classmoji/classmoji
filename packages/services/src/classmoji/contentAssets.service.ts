@@ -132,7 +132,7 @@ async function resolveClassroom(classroomId: string): Promise<ResolvedClassroom>
  * already-loaded row rather than its own query, so a caller reads the classroom
  * once and both this and `toResolvedClassroom` work from that one read.
  */
-function isDeliverable(classroom: ClassroomRecord): boolean {
+function isDeliverable(classroom: ClassroomRecord): classroom is NonNullable<ClassroomRecord> {
   return Boolean(
     classroom?.content_repo &&
     classroom.git_organization?.login &&
@@ -205,22 +205,40 @@ function upsertOp(classroomId: string, entry: TreeEntry, syncedAt: Date) {
  * does not delete, which can only leave the map too large — a superset, whose
  * worst case is a stale row, rather than a subset, whose worst case is a
  * missing asset on a live page.
+ *
+ * THIS is also the only thing that stamps `Classroom.content_assets_synced_at`,
+ * the value `ensureContentAssets` measures its refresh against. Only a run that
+ * read the repo's whole tree can honestly claim the map matches the repo, so an
+ * incremental apply and an upload-time row must not move it — see
+ * `ensureContentAssets`. The stamp goes INSIDE the transaction, so a sync that
+ * fails leaves the classroom looking exactly as unsynced as it is. A truncated
+ * run still stamps: it read the tree and applied everything that arrived, which
+ * is as current as this classroom can get, and refusing to stamp would put it
+ * into a permanent re-sync loop against a repo that is simply too big.
  */
 async function fullSync(classroom: ResolvedClassroom): Promise<SyncContentAssetsResult> {
   const { entries, truncated } = await readRepoTree(classroom);
   const syncedAt = new Date();
+
+  // FIRST, not last. The sweep's count is read off the tail of the results, so
+  // the stamp goes in front of the upserts rather than after the delete.
+  const stampOp = getPrisma().classroom.update({
+    where: { id: classroom.id },
+    data: { content_assets_synced_at: syncedAt },
+  });
 
   const operations = entries.map(entry => upsertOp(classroom.id, entry, syncedAt));
 
   let deleted = 0;
 
   if (truncated) {
-    await getPrisma().$transaction(operations);
+    await getPrisma().$transaction([stampOp, ...operations]);
   } else {
     // Destructured rather than indexed off the tail: the sweep's count is
     // positionally coupled to it being the LAST operation, and appending
     // another op later would otherwise report a wrong count silently.
     const [...results] = await getPrisma().$transaction([
+      stampOp,
       ...operations,
       getPrisma().contentAsset.deleteMany({
         where: { classroom_id: classroom.id, synced_at: { lt: syncedAt } },
@@ -346,12 +364,16 @@ export async function syncContentAssets(
 /**
  * Make sure the map exists and is not older than `maxAgeMs`, syncing if not.
  *
+ * Age is `Classroom.content_assets_synced_at`, which only a FULL sync writes —
+ * the one thing that can claim the map matches the repo. See the body.
+ *
  * This is what makes the system self-bootstrapping. No classroom needs to be
  * migrated into the delivery layer and no backfill job has to run: the first
- * render of a classroom that has never synced finds no rows, syncs, and
- * proceeds. It is also the backstop for a missed push webhook — a delivery that
- * never arrived costs staleness bounded by `maxAgeMs`, not a permanently wrong
- * map.
+ * render of a classroom that has never fully synced finds a null stamp, syncs,
+ * and proceeds. It is also the backstop for a missed push webhook — a delivery
+ * that never arrived costs staleness bounded by `maxAgeMs`, not a permanently
+ * wrong map — which is why the bound has to hold no matter how much OTHER
+ * write traffic the classroom saw in the meantime.
  *
  * NEVER THROWS — see the body. Returns null whenever no sync happened, whether
  * because the map was fresh, the classroom is not served by this layer, or the
@@ -379,13 +401,18 @@ export async function ensureContentAssets(
     return null;
   }
 
-  const newest = await getPrisma().contentAsset.findFirst({
-    where: { classroom_id: classroomId },
-    orderBy: { synced_at: 'desc' },
-    select: { synced_at: true },
-  });
+  // Read off the CLASSROOM, not off the newest row. The rows cannot answer this
+  // question: an incremental webhook apply stamps the paths one push touched,
+  // and `recordContentAsset` stamps the single file a teacher just uploaded,
+  // both with `now` — so the newest row says "something was written recently",
+  // never "the map matches the repo". Measuring against it let one upload
+  // suppress the daily repair for another 24 hours on exactly the classrooms
+  // that need it most: the ones whose push webhook is not arriving, where
+  // pushed files render as dangling URLs and deleted files are never swept.
+  // Only `fullSync` writes this stamp. Null means never fully synced.
+  const lastFullSync = classroom.content_assets_synced_at;
 
-  if (newest && Date.now() - newest.synced_at.getTime() < maxAgeMs) {
+  if (lastFullSync && Date.now() - lastFullSync.getTime() < maxAgeMs) {
     return null;
   }
 
@@ -398,6 +425,52 @@ export async function ensureContentAssets(
   } catch (error: unknown) {
     console.warn(`[contentAssets] sync failed for ${classroomId}; serving stale/legacy:`, error);
     return null;
+  }
+}
+
+/**
+ * Record ONE just-uploaded blob in the map, now, without waiting for a sync.
+ *
+ * The map is otherwise filled by a push webhook or by `ensureContentAssets`'
+ * 24-hour refresh, and both are too late for the file a teacher just dropped
+ * into the editor: the save stores a repo path, the next render looks that path
+ * up, misses, and the resolver emits its "dangling" URL. The upload already
+ * knows everything a row needs — path, blob sha, size — so writing it here
+ * removes the round trip entirely.
+ *
+ * A later full sync overwrites this row with identical values and its sweep
+ * keeps it (the stamp is `now`), so this is only an early write of what the
+ * sync would have written anyway. Type is always `blob`: an upload writes a
+ * file, never a tree.
+ *
+ * NEVER THROWS, for the same reason `ensureContentAssets` does not — it sits on
+ * an upload path, and an upload that reached the repo must not be reported as
+ * failed because a cache row could not be written. Returns whether the row was
+ * written: false covers both "this classroom is not served by the delivery
+ * layer" (GitLab-backed, mock org, no content repo) and "the write failed".
+ */
+export async function recordContentAsset(
+  classroomId: string,
+  entry: { path: string; sha: string; size?: number }
+): Promise<boolean> {
+  try {
+    // Configuration, checked rather than caught — same split as ensureContentAssets.
+    const classroom = await loadClassroomRaw(classroomId);
+    if (!isDeliverable(classroom)) return false;
+
+    await upsertOp(
+      classroomId,
+      { path: entry.path, sha: entry.sha, type: 'blob', size: entry.size },
+      new Date()
+    );
+    return true;
+  } catch (error: unknown) {
+    console.warn(
+      `[contentAssets] Could not record ${entry.path} for ${classroomId}; ` +
+        'the next sync will pick it up:',
+      error
+    );
+    return false;
   }
 }
 

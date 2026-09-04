@@ -27,6 +27,14 @@ vi.mock('../../content/ContentService.ts', () => ({
   },
 }));
 
+// The asset map row is written at upload time rather than left to the push
+// webhook — see recordContentAsset. Mocked here so this suite keeps pinning the
+// GitHub interactions and nothing reaches Prisma.
+const recordContentAssetMock = vi.fn();
+vi.mock('../contentAssets.service.ts', () => ({
+  recordContentAsset: (...args: unknown[]) => recordContentAssetMock(...args),
+}));
+
 const {
   loadPageContent,
   savePageContent,
@@ -259,6 +267,7 @@ describe('pageContent.uploadPageAsset', () => {
       // A real 40-hex blob sha — the signer refuses anything else.
       sha: 'c'.repeat(40),
     });
+    recordContentAssetMock.mockResolvedValue(true);
     delete process.env.CONTENT_DELIVERY_ORIGIN;
     delete process.env.CONTENT_SIGNING_SECRET;
   });
@@ -306,6 +315,31 @@ describe('pageContent.uploadPageAsset', () => {
       path: 'pages/syllabus/assets/a.png',
       displayUrl: null,
     });
+  });
+
+  it('records the uploaded blob in the asset map before returning', async () => {
+    // THE regression this guards: without the row, the save stores a repo path
+    // the next render cannot resolve, and the viewer gets the resolver's
+    // "dangling" URL until a push webhook or the 24-hour refresh catches up.
+    const classroomPage = {
+      ...page,
+      classroom: { ...page.classroom, id: '3f2504e0-4f89-41d3-9a0c-0305e82c3301' },
+    };
+    const buffer = Buffer.from('image-bytes');
+
+    await uploadPageAsset(classroomPage, buffer, 'a.png');
+
+    expect(recordContentAssetMock).toHaveBeenCalledWith('3f2504e0-4f89-41d3-9a0c-0305e82c3301', {
+      path: 'pages/syllabus/assets/a.png',
+      sha: 'c'.repeat(40),
+      size: buffer.length,
+    });
+  });
+
+  it('skips the map write when there is no classroom id to key it on', async () => {
+    await uploadPageAsset(page, Buffer.from('x'), 'a.png');
+
+    expect(recordContentAssetMock).not.toHaveBeenCalled();
   });
 
   it('falls back the same way when the classroom has no id to sign against', async () => {
