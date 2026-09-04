@@ -47,6 +47,50 @@ export interface DeliveryAccess {
   isPublicSite?: boolean;
 }
 
+/** The deck surfaces that resolve content. Each has its own tier posture. */
+export type DeckSurface = 'viewer' | 'present' | 'speaker' | 'follow';
+
+/** The slice of `assertSlideAccess`'s result a tier decision may look at. */
+export interface SlideAccessResultLike {
+  canEdit: boolean;
+  /** The viewer's `previewActive` — a staff read of the preview BRANCH. */
+  previewActive?: boolean;
+}
+
+/**
+ * `assertSlideAccess`'s answer + the deck's flags → the tier inputs, per surface.
+ *
+ * A function rather than four inline object literals because the surfaces do
+ * NOT agree, and the places they disagree are the places this went wrong
+ * before:
+ *
+ *   - `present` and `speaker` pin `canEdit: false` on purpose. Both stay open
+ *     for hours, and `draft` is an exact `now + 4h` with five minutes of grace,
+ *     so an instructor who opens the presenter in the morning and reaches slide
+ *     40 after lunch would get a 403 on a lazily-loaded Reveal background.
+ *     Content is sha-addressed and immutable, so the longer bucket shows the
+ *     same bytes; `draft` exists for the editor's 403-and-revalidate flow, not
+ *     for presenting.
+ *   - only `viewer` honours `previewActive`. `follow` has a `?preview=true`
+ *     query param of its own that means "thumbnail render", and letting that
+ *     reach `tierFor` would mint draft URLs for a hall full of students.
+ */
+export function deckAccessFor(
+  surface: DeckSurface,
+  access: SlideAccessResultLike,
+  slide: { is_public?: boolean | null }
+): DeliveryAccess {
+  const isPublicSite = Boolean(slide.is_public);
+  if (surface === 'present' || surface === 'speaker') {
+    return { canEdit: false, isPublicSite };
+  }
+  return {
+    canEdit: access.canEdit,
+    preview: surface === 'viewer' ? Boolean(access.previewActive) : false,
+    isPublicSite,
+  };
+}
+
 /**
  * The classroom shape the content resolver needs, or null when this deck's
  * classroom cannot be served by the delivery layer at all.
@@ -63,6 +107,12 @@ export function deckDeliveryContext(
   repo: string | undefined,
   access: DeliveryAccess
 ) {
+  // A deployment with no signing secret or no origin can never rewrite
+  // anything, and every pass below would be a cheerio parse and re-serialize
+  // for a byte-identical result. Refusing the context here is what keeps that
+  // off the read path entirely.
+  if (!ClassmojiService.contentDelivery.isContentDeliveryConfigured()) return null;
+
   const classroom = slide.classroom;
   if (!classroom?.id || !repo || !gitOrgLogin) return null;
   return {

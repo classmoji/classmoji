@@ -34,6 +34,7 @@ import { fetchContent } from '~/utils/contentProxy';
 import { diffDeckSnapshots, extractDeckSnapshot, type DeckSnapshot } from '~/utils/deckOpsDiff';
 import { getThemeUrls } from '~/utils/themeService.server';
 import {
+  deckAccessFor,
   deckDeliveryContext,
   resolveDeckAssets,
   resolveDeliveryThemeUrls,
@@ -172,11 +173,12 @@ export const loader = async ({
   // Per-VIEWER tier: staff and preview readers get short-lived draft URLs, a
   // public deck's anonymous readers get the long public bucket, everyone else
   // the enrolled one. This is the reason a signed URL cannot live in the deck.
-  const deliveryCtx = deckDeliveryContext(slide, gitOrgLogin, repo, {
-    canEdit,
-    preview: previewActive,
-    isPublicSite: slide.is_public,
-  });
+  const deliveryCtx = deckDeliveryContext(
+    slide,
+    gitOrgLogin,
+    repo,
+    deckAccessFor('viewer', { canEdit, previewActive }, slide)
+  );
 
   // GitHub's free diff UI for the pending preview (branch segment URL-encoded —
   // preview branch names contain slashes).
@@ -711,7 +713,12 @@ export const action = async ({
             loaded.deck,
             gitOrgLogin,
             repo,
-            deckDeliveryContext(slide, gitOrgLogin, repo, { canEdit: true })
+            deckDeliveryContext(
+              slide,
+              gitOrgLogin,
+              repo,
+              deckAccessFor('viewer', { canEdit: true }, slide)
+            )
           );
           return {
             intent: 'fetch-latest',

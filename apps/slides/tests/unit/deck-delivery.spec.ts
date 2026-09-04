@@ -13,15 +13,13 @@
  * The regression that produced this file: the rewrite lived inside the deck
  * VIEWER route, so `/present`, `/follow` and `/speaker` served raw
  * `/content/{org}/{repo}/...` URLs — dead the moment a content repo goes
- * private. The last test in this file guards that wiring at the source level,
- * because a loader test would need Postgres, GitHub and a session.
+ * private. `deckAccessFor` is the per-surface half of the fix, and the last
+ * block here pins it against the shapes `assertSlideAccess` actually returns.
  */
 
 import { test, expect } from '@playwright/test';
-import * as fs from 'fs';
-import * as path from 'path';
-import { fileURLToPath } from 'url';
 import {
+  deckAccessFor,
   deckDeliveryContext,
   isThemeRef,
   rebaseThemeRef,
@@ -32,8 +30,6 @@ import {
   type DeliveryContext,
 } from '../../app/utils/deckDelivery.server.ts';
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-
 const ORG = 'cs98-org';
 const REPO = 'cs98-content';
 const CLASSROOM = '11111111-2222-3333-4444-555555555555';
@@ -41,13 +37,44 @@ const ORIGIN = 'https://content-staging.classmoji.io';
 
 const SLIDE = {
   classroom: { id: CLASSROOM, content_key_version: 3, content_repo: REPO },
+  is_public: false,
 };
+
+/**
+ * `deckDeliveryContext` refuses to exist when the delivery layer is off, so
+ * every test that wants a context has to switch it on — and put the process
+ * back exactly as it found it. The runner is `workers: 1`, so a leaked delete
+ * here would silently disable the layer for every later spec in the file.
+ */
+const ENV_KEYS = ['CONTENT_SIGNING_SECRET', 'CONTENT_DELIVERY_ORIGIN'] as const;
+let savedEnv: Record<string, string | undefined> = {};
+
+test.beforeEach(() => {
+  savedEnv = Object.fromEntries(ENV_KEYS.map(key => [key, process.env[key]]));
+  process.env.CONTENT_SIGNING_SECRET = 'test-master-secret';
+  process.env.CONTENT_DELIVERY_ORIGIN = ORIGIN;
+});
+
+test.afterEach(() => {
+  for (const key of ENV_KEYS) {
+    if (savedEnv[key] === undefined) delete process.env[key];
+    else process.env[key] = savedEnv[key];
+  }
+});
 
 function ctx(): NonNullable<DeliveryContext> {
   const built = deckDeliveryContext(SLIDE, ORG, REPO, { canEdit: true });
   if (!built) throw new Error('expected a delivery context');
   return built;
 }
+
+/** Owner / teacher: edits anything. */
+const OWNER = { canEdit: true };
+/** Assistant on a colleague's deck without `allow_team_edit`: staff, no edit. */
+const ASSISTANT_NO_EDIT = { canEdit: false };
+/** Student, and a shareCode guest — same shape from the tier's point of view. */
+const STUDENT = { canEdit: false };
+const PUBLIC_SLIDE = { ...SLIDE, is_public: true };
 
 /**
  * Stands in for `contentDelivery.resolveMany`: signs whatever lives under this
@@ -95,6 +122,15 @@ test.describe('tier selection', () => {
     expect(deckDeliveryContext(SLIDE, ORG, undefined, { canEdit: true })).toBeNull();
     expect(deckDeliveryContext({ classroom: null }, ORG, REPO, { canEdit: true })).toBeNull();
   });
+
+  test('no context at all when the delivery layer is switched off', () => {
+    delete process.env.CONTENT_SIGNING_SECRET;
+    expect(deckDeliveryContext(SLIDE, ORG, REPO, { canEdit: true })).toBeNull();
+
+    process.env.CONTENT_SIGNING_SECRET = 'test-master-secret';
+    delete process.env.CONTENT_DELIVERY_ORIGIN;
+    expect(deckDeliveryContext(SLIDE, ORG, REPO, { canEdit: true })).toBeNull();
+  });
 });
 
 test.describe('asset rewriting', () => {
@@ -128,21 +164,41 @@ test.describe('asset rewriting', () => {
     expect(themeBase).toBeNull();
   });
 
-  test('is a no-op when the delivery layer is unconfigured', async () => {
-    // The REAL resolvers, with CONTENT_SIGNING_SECRET / CONTENT_DELIVERY_ORIGIN
-    // unset: resolveMany hands every ref back unchanged before it ever reaches
-    // the asset map, and resolveThemeBase returns null.
-    delete process.env.CONTENT_SIGNING_SECRET;
-    delete process.env.CONTENT_DELIVERY_ORIGIN;
+  test('is a no-op when the delivery layer is unconfigured — and does no work', async () => {
     const html = [
       `<link rel="stylesheet" href="/content/${ORG}/${REPO}/.slidesthemes/cs98/lib/offline-v2.css">`,
       `<div class="reveal" data-theme="shared:cs98"><div class="slides">`,
       `<section><img src="/content/${ORG}/${REPO}/slides/w1/images/hero.jpeg"></section>`,
       `</div></div>`,
     ].join('');
-    const { html: out, themeBase } = await resolveDeckDelivery(html, ctx());
+
+    delete process.env.CONTENT_SIGNING_SECRET;
+    delete process.env.CONTENT_DELIVERY_ORIGIN;
+
+    // The route builds its context exactly like this, and gets nothing — which
+    // is what keeps the cheerio parse and both delivery calls off the read
+    // path of a deployment that could not have rewritten anything anyway.
+    const offCtx = deckDeliveryContext(SLIDE, ORG, REPO, { canEdit: true });
+    expect(offCtx).toBeNull();
+
+    let calls = 0;
+    const counting: DeckDeliveryResolvers = {
+      async resolveMany(_ctx, refs) {
+        calls += 1;
+        return fakeResolvers().resolveMany(_ctx, refs);
+      },
+      async resolveThemeBase() {
+        calls += 1;
+        return null;
+      },
+    };
+
+    const { html: out, themeBase } = await resolveDeckDelivery(html, offCtx, {
+      resolvers: counting,
+    });
     expect(out).toBe(html);
     expect(themeBase).toBeNull();
+    expect(calls).toBe(0);
   });
 
   test('a resolver blow-up serves the stored URLs instead of failing the read', async () => {
@@ -239,28 +295,76 @@ test.describe('shared theme links', () => {
   });
 });
 
-test.describe('every deck surface runs the pass', () => {
-  // A loader test would need Postgres, GitHub and a session; this is the
-  // cheapest honest guard that the three presentation routes did not quietly
-  // stop resolving. Precedent: tests/unit/session-cookie.spec.ts.
-  const ROUTES = ['$slideId_.present', '$slideId_.follow', '$slideId_.speaker'];
-
-  for (const route of ROUTES) {
-    test(`${route} resolves deck assets in its loader`, () => {
-      const file = path.join(__dirname, '../../app/routes', route, 'route.tsx');
-      const source = fs.readFileSync(file, 'utf-8');
-      expect(source).toContain("from '~/utils/deckDelivery.server'");
-      expect(source).toContain('resolveDeckDelivery(');
-      expect(source).toContain('deckDeliveryContext(');
-      // The tier comes from the access result, never from a literal.
-      expect(source).toMatch(/canEdit[,\s]/);
+test.describe('deckAccessFor — the tier inputs, per surface', () => {
+  test('the viewer follows the access result exactly', () => {
+    expect(deckAccessFor('viewer', OWNER, SLIDE)).toEqual({
+      canEdit: true,
+      preview: false,
+      isPublicSite: false,
     });
-  }
+    expect(deckAccessFor('viewer', ASSISTANT_NO_EDIT, SLIDE)).toEqual({
+      canEdit: false,
+      preview: false,
+      isPublicSite: false,
+    });
+    expect(deckAccessFor('viewer', STUDENT, PUBLIC_SLIDE)).toEqual({
+      canEdit: false,
+      preview: false,
+      isPublicSite: true,
+    });
+  });
 
-  test('$slideId keeps resolving through the shared module', () => {
-    const file = path.join(__dirname, '../../app/routes/$slideId/route.tsx');
-    const source = fs.readFileSync(file, 'utf-8');
-    expect(source).toContain("from '~/utils/deckDelivery.server'");
-    expect(source).toContain('resolveDeckAssets(slideContent, deliveryCtx)');
+  test('only the viewer honours a preview-BRANCH read', () => {
+    const staffPreview = { canEdit: true, previewActive: true };
+    expect(deckAccessFor('viewer', staffPreview, SLIDE).preview).toBe(true);
+    // /follow has a `?preview=true` of its own that means "thumbnail". Even
+    // handed the viewer's flag, this surface must never mint draft URLs — a
+    // lecture hall of students would be signing into the 4h bucket.
+    expect(deckAccessFor('follow', staffPreview, SLIDE).preview).toBe(false);
+    expect(deckAccessFor('present', staffPreview, SLIDE).preview).toBeUndefined();
+    expect(deckAccessFor('speaker', staffPreview, SLIDE).preview).toBeUndefined();
+  });
+
+  test('present and speaker never claim edit access, whoever is looking', () => {
+    // Both surfaces stay open for hours; draft is an exact now+4h with five
+    // minutes of grace, so a lazily-loaded background on slide 40 would 403
+    // after lunch. Content is sha-addressed, so the longer bucket is the same
+    // bytes.
+    for (const surface of ['present', 'speaker'] as const) {
+      for (const access of [OWNER, ASSISTANT_NO_EDIT, STUDENT]) {
+        expect(deckAccessFor(surface, access, SLIDE)).toEqual({
+          canEdit: false,
+          isPublicSite: false,
+        });
+      }
+      expect(deckAccessFor(surface, OWNER, PUBLIC_SLIDE).isPublicSite).toBe(true);
+    }
+  });
+
+  test('follow passes a follower through untouched', () => {
+    // A shareCode guest and an enrolled student are the same shape here.
+    expect(deckAccessFor('follow', STUDENT, SLIDE)).toEqual({
+      canEdit: false,
+      preview: false,
+      isPublicSite: false,
+    });
+    // Staff following along still edit, so they still get the draft bucket.
+    expect(deckAccessFor('follow', OWNER, SLIDE).canEdit).toBe(true);
+  });
+
+  test('the tiers those shapes actually produce', () => {
+    const tierOf = (
+      surface: Parameters<typeof deckAccessFor>[0],
+      access: typeof OWNER,
+      slide = SLIDE
+    ) => deckDeliveryContext(slide, ORG, REPO, deckAccessFor(surface, access, slide))?.tier;
+
+    expect(tierOf('viewer', OWNER)).toBe('draft');
+    expect(tierOf('present', OWNER)).toBe('enrolled');
+    expect(tierOf('speaker', OWNER)).toBe('enrolled');
+    expect(tierOf('present', OWNER, PUBLIC_SLIDE)).toBe('public');
+    expect(tierOf('follow', STUDENT)).toBe('enrolled');
+    expect(tierOf('follow', STUDENT, PUBLIC_SLIDE)).toBe('public');
+    expect(tierOf('follow', OWNER)).toBe('draft');
   });
 });

@@ -53,9 +53,13 @@ function splitSrcSet(value: string): { url: string; descriptor: string }[] {
 /**
  * Split a `data-background-video` source list.
  *
- * Reveal accepts a comma-separated list of sources and trims each one itself,
- * so the trimmed form is what goes back; order is preserved, and a list whose
- * items all decline is never written back at all (the `changed` flag below).
+ * Reveal splits this on commas but does NOT trim the pieces (unlike
+ * `data-background-image`, which it does trim), so a list written as
+ * `a.mp4, b.webm` already depends on the browser tolerating the leading space.
+ * We trim deliberately and write the trimmed form back — it is what Reveal
+ * would need anyway — and preserve order. A list whose sources all decline is
+ * never written back at all (the `changed` flag below), so an untouched deck
+ * keeps its original spacing byte for byte.
  */
 function splitVideoSources(value: string): string[] {
   return value
@@ -179,7 +183,10 @@ export async function rewriteDeckAssetUrls(
 
   if (!changed) return html;
 
-  // A full document keeps its doctype/head; a fragment round-trips as a
-  // fragment. cheerio's `html()` on the root does the right thing for both.
+  // A full document keeps its doctype/head. A FRAGMENT does not survive as a
+  // fragment — cheerio promotes one to a full `<html><head><body>` document on
+  // parse, and serializing the root gives that back. What keeps a fragment
+  // caller safe is the `changed` short-circuit above: a document with nothing
+  // to rewrite is returned as the caller's own string, never re-serialized.
   return $.root().html() ?? html;
 }

@@ -13,6 +13,7 @@ import {
   ensureContentAssets,
   lookupContentAsset,
   lookupContentAssetBySha,
+  lookupContentAssets,
   lookupContentTree,
 } from './contentAssets.service.ts';
 import { extractOwnRepoPath } from './contentRefs.ts';
@@ -407,10 +408,10 @@ export async function resolveThemeBase(
 /**
  * Resolve a whole page's references in one pass.
  *
- * This is the entry point a render should use. The map freshness check happens
- * ONCE for the batch (it is a DB read, and possibly a GitHub tree call) rather
- * than once per image, which is the difference between a page with twenty
- * images costing one ensure and costing twenty.
+ * This is the entry point a render should use. Both the map freshness check
+ * (a DB read, and possibly a GitHub tree call) and the map lookup itself
+ * happen ONCE for the batch rather than once per image — a page with twenty
+ * images costs one ensure and one query, not twenty of each.
  *
  * Every input ref appears in the returned map, including the ones that resolve
  * to themselves, so a caller can look up unconditionally.
@@ -430,9 +431,35 @@ export async function resolveMany(
 
   await ensureMap(ctx.classroom.id);
 
+  // Reduce first, look up once. A reference that is not ours resolves to
+  // itself without ever reaching the map, and the ones that remain share a
+  // single `findMany` — the difference between a forty-image deck costing one
+  // query per view and costing forty.
+  const wanted = new Map<string, string>();
+  for (const ref of unique) {
+    const path = toRepoPath(ctx, ref);
+    if (path) wanted.set(ref, path);
+    else resolved.set(ref, ref);
+  }
+
+  if (wanted.size === 0) return resolved;
+
+  const assets = await lookupContentAssets(ctx.classroom.id, [...new Set(wanted.values())]);
+
   await Promise.all(
-    unique.map(async ref => {
-      resolved.set(ref, await resolveOne(ctx, env, ref));
+    [...wanted].map(async ([ref, path]) => {
+      const asset = assets.get(path);
+      // Identical branching to `resolveOne`: a path the map has never heard of
+      // and a TREE row both mean "there is no blob here", and both get the
+      // deterministic /missing/ URL rather than a confidently-wrong signature.
+      if (!asset || asset.type !== 'blob') {
+        console.warn(
+          `[contentDelivery] No blob row for "${ref}" (path ${path}) in classroom ${ctx.classroom.id}`
+        );
+        resolved.set(ref, missingUrl(env.origin, ctx.classroom.id, ref));
+        return;
+      }
+      resolved.set(ref, await signAsset(ctx, env, ref, path, asset.sha));
     })
   );
 

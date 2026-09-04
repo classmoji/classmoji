@@ -5,7 +5,11 @@ import { assertSlideAccess } from '@classmoji/auth/server';
 import { SandpackRenderer } from '@classmoji/ui-components/sandpack';
 import RevealPresenter from '~/components/RevealPresenter';
 import { fetchContent } from '~/utils/contentProxy';
-import { deckDeliveryContext, resolveDeckDelivery } from '~/utils/deckDelivery.server';
+import {
+  deckAccessFor,
+  deckDeliveryContext,
+  resolveDeckDelivery,
+} from '~/utils/deckDelivery.server';
 
 /**
  * Follow route - Audience sync view
@@ -82,12 +86,11 @@ export const loader = async ({
     // Same read-side delivery pass the deck viewer runs. A follower is usually
     // a student or a shareCode guest, so the tier lands on `enrolled`/`public`
     // rather than the staff `draft` bucket — `tierFor` decides, not this route.
+    // The `preview` local above is this route's THUMBNAIL flag and is
+    // deliberately not part of the access shape; `deckAccessFor` cannot see it.
     const { html } = await resolveDeckDelivery(
       contentResult.content as string,
-      deckDeliveryContext(slide, gitOrgLogin, repo, {
-        canEdit,
-        isPublicSite: slide.is_public,
-      })
+      deckDeliveryContext(slide, gitOrgLogin, repo, deckAccessFor('follow', { canEdit }, slide))
     );
     slideContent = html;
 

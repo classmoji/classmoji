@@ -11,6 +11,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
+import * as cheerio from 'cheerio';
 import { rewriteDeckAssetUrls } from '../deckAssets.ts';
 
 const SIGNED = 'https://cdn.test/c/3f2504e0-4f89-41d3-9a0c-0305e82c3301/blob/abc.png?sig=x';
@@ -102,6 +103,26 @@ describe('rewriteDeckAssetUrls', () => {
       '<section data-background-video="https://example.com/a.mp4, https://example.com/b.webm"></section>';
 
     await expect(rewriteDeckAssetUrls(html, resolver({ [REF]: SIGNED }))).resolves.toBe(html);
+  });
+
+  it("escapes a signed URL's query string so it survives serialization", async () => {
+    // Every real signed URL carries a multi-parameter policy. Serialized into
+    // an attribute the `&` must become `&amp;`, and must decode back to the
+    // exact URL the resolver minted — an over- or under-escaped one is a
+    // broken signature, not a cosmetic difference.
+    const MULTI = `https://cdn.test/c/3f2504e0-4f89-41d3-9a0c-0305e82c3301/blob/abc.png?p=enrolled&v=0&exp=1&sig=abc`;
+    const html = `<section data-background-image="${REF}"><img src="${REF}"></section>`;
+
+    const out = await rewriteDeckAssetUrls(html, resolver({ [REF]: MULTI }));
+
+    expect(out).toContain('?p=enrolled&amp;v=0&amp;exp=1&amp;sig=abc');
+    expect(out).not.toContain('?p=enrolled&v=0');
+
+    // Re-parsing is what the browser and the deck parser both do; the URL that
+    // comes back out must be the one that went in.
+    const $ = cheerio.load(out);
+    expect($('img').attr('src')).toBe(MULTI);
+    expect($('section').attr('data-background-image')).toBe(MULTI);
   });
 
   it('keeps a full document a full document', async () => {
