@@ -59,8 +59,11 @@ export function findEntry(entries: TreeEntry[], relPath: string): TreeEntry | un
 export async function serveTheme(
   env: Env,
   ctx: ExecutionContext,
-  verified: VerifiedTheme
+  verified: VerifiedTheme,
+  head = false
 ): Promise<Response> {
+  // The tree is read either way: a theme URL names a path, and only the listing
+  // turns that into the sha a HEAD would look up.
   const entries = await loadTree(env, ctx, verified.classroomId, verified.treeSha);
   const entry = findEntry(entries, verified.relPath);
   if (!entry) return errorResponse(404, 'not found');
@@ -70,5 +73,6 @@ export async function serveTheme(
     sha: entry.sha,
     contentType: contentTypeForPath(verified.relPath),
     cacheControl: cacheControlFor(verified.tier, verified.exp, nowSeconds()),
+    head,
   });
 }

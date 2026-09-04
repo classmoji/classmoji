@@ -49,6 +49,25 @@ export function finalizeHeaders(headers: Headers): Headers {
   return headers;
 }
 
+/**
+ * The same response with its body dropped — what a HEAD gets.
+ *
+ * The body is cancelled rather than abandoned: on the origin path it is one
+ * half of a `tee()`, and a branch nobody reads eventually stalls the branch on
+ * its way to R2.
+ */
+export function withoutBody(response: Response): Response {
+  // Swallowed, not ignored: cancelling a tee'd branch whose partner already
+  // errored rejects, and an unhandled rejection here would take down a request
+  // that has otherwise succeeded.
+  response.body?.cancel().catch(() => {});
+  return new Response(null, {
+    status: response.status,
+    statusText: response.statusText,
+    headers: response.headers,
+  });
+}
+
 export function finalize(response: Response): Response {
   const headers = finalizeHeaders(new Headers(response.headers));
   return new Response(response.body, {

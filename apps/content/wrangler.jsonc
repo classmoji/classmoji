@@ -1,6 +1,13 @@
 {
   "$schema": "./node_modules/wrangler/config-schema.json",
-  "name": "classmoji-content",
+  // Deliberately NOT the production name, and deliberately bindingless.
+  // wrangler applies the top level when no --env is given, so if this said
+  // "classmoji-content" a bare `npx wrangler deploy` would overwrite the
+  // production script with a build that has no R2 bucket, no Images binding
+  // and no vars — a 503 on content.classmoji.io from a one-word slip. Every
+  // real deploy names its environment (`--env staging` / `--env production`);
+  // a bare one lands here, on a throwaway Worker nothing routes to.
+  "name": "classmoji-content-unconfigured",
   "main": "src/index.ts",
   "compatibility_date": "2026-09-03",
   "workers_dev": false,

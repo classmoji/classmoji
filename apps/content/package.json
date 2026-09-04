@@ -10,7 +10,7 @@
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "cf:dev": "wrangler dev --env staging",
-    "cf:types": "wrangler types"
+    "cf:types": "wrangler types --env staging"
   },
   "dependencies": {
     "@classmoji/content-signing": "*"

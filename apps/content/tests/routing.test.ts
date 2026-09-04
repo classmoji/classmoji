@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import worker from '../src/index.ts';
 import { clearOriginCache } from '../src/token.ts';
+import { MAX_TRANSFORM_SOURCE_BYTES } from '../src/transform.ts';
 import { nowSeconds } from '../src/verify.ts';
 import {
   BLOB_SHA,
@@ -156,6 +157,92 @@ describe('routing', () => {
     expect(await response.json()).toEqual({ error: 'malformed' });
   });
 
+  it("404s the resolver's dangling-reference URL rather than 403ing it", async () => {
+    // The app mints /c/{classroomId}/missing/{encodedRepoPath} for a reference
+    // it cannot resolve. A deleted file is not a tampered URL.
+    const ref = 'assets/img/logo v2.png';
+    const response = await worker.fetch(
+      new Request(`${ORIGIN}/c/${CLASSROOM}/missing/${encodeURIComponent(ref)}`),
+      fakeEnv(),
+      fakeContext()
+    );
+
+    expect(response.status).toBe(404);
+    expect(await response.json()).toEqual({ error: 'missing' });
+    expect(response.headers.get('Cache-Control')).toBe('no-store');
+    expect(response.headers.get('Access-Control-Allow-Origin')).toBe('*');
+    expect(response.headers.get('X-Content-Type-Options')).toBe('nosniff');
+    expect(response.headers.get('Content-Security-Policy')).toBe("default-src 'none'; sandbox");
+  });
+
+  it('logs the classroom and the decoded repo path on a 404 missing - never the query', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const ref = 'assets/img/logo.png';
+    await worker.fetch(
+      new Request(`${ORIGIN}/c/${CLASSROOM}/missing/${encodeURIComponent(ref)}?cb=1`),
+      fakeEnv(),
+      fakeContext()
+    );
+
+    expect(warn).toHaveBeenCalledTimes(1);
+    const [message] = warn.mock.calls[0] as [string];
+    expect(message).toContain(`[content] 404 missing classroom=${CLASSROOM}`);
+    expect(message).toContain(`path=${ref}`);
+    expect(message).not.toContain('cb=1');
+  });
+
+  it('cannot be made to forge a second log line through the repo path', async () => {
+    // `url.pathname` keeps its escapes, so decoding is what would turn %0A into
+    // a real newline - and a newline in console.warn is a whole fake entry, in
+    // exactly the shape the README tells operators to search for.
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const forged = `logo.png\n[content] 403 bad-signature classroom=${CLASSROOM} path=/c/x`;
+    await worker.fetch(
+      new Request(`${ORIGIN}/c/${CLASSROOM}/missing/${encodeURIComponent(forged)}`),
+      fakeEnv(),
+      fakeContext()
+    );
+
+    expect(warn).toHaveBeenCalledTimes(1);
+    const [message] = warn.mock.calls[0] as [string];
+    expect(message).not.toContain('\n');
+    expect(message).not.toContain('\r');
+    // The text survives, defanged - an operator still sees what was asked for.
+    expect(message).toContain('logo.png');
+    expect(message).toContain('\uFFFD');
+  });
+
+  it('caps the logged repo path so one request cannot flood the stream', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    await worker.fetch(
+      new Request(`${ORIGIN}/c/${CLASSROOM}/missing/${'a'.repeat(4000)}`),
+      fakeEnv(),
+      fakeContext()
+    );
+
+    const [message] = warn.mock.calls[0] as [string];
+    expect(message.length).toBeLessThan(700);
+  });
+
+  it('403s any other unknown segment - only /missing/ is a known unsigned shape', async () => {
+    const response = await worker.fetch(
+      new Request(`${ORIGIN}/c/${CLASSROOM}/other/x`),
+      fakeEnv(),
+      fakeContext()
+    );
+    expect(response.status).toBe(403);
+    expect(await response.json()).toEqual({ error: 'malformed' });
+  });
+
+  it('403s a /missing/ URL whose classroom is not a uuid', async () => {
+    const response = await worker.fetch(
+      new Request(`${ORIGIN}/c/not-a-uuid/missing/logo.png`),
+      fakeEnv(),
+      fakeContext()
+    );
+    expect(response.status).toBe(403);
+  });
+
   it('403s an expired URL with the reason', async () => {
     const url = await signedBlobUrl({ sha: BLOB_SHA, ext: 'png', exp: nowSeconds() - 86400 });
     const response = await worker.fetch(new Request(url), fakeEnv(), fakeContext());
@@ -183,6 +270,163 @@ describe('blob delivery', () => {
     expect(bucket.gets).toEqual([`blobs/${BLOB_SHA}`]);
   });
 
+  it('carries Content-Length on an R2 hit, straight from the stored size', async () => {
+    const bucket = fakeBucket({
+      [`blobs/${BLOB_SHA}`]: { body: 'cached-bytes', contentType: 'image/png' },
+    });
+    const url = await signedBlobUrl({ sha: BLOB_SHA, ext: 'png' });
+
+    const response = await worker.fetch(
+      new Request(url),
+      fakeEnv({ CACHE: bucket as unknown as R2Bucket }),
+      fakeContext()
+    );
+
+    expect(response.headers.get('Content-Length')).toBe(String('cached-bytes'.length));
+  });
+
+  it("forwards the origin's Content-Length without buffering to find it", async () => {
+    stubUpstreams({
+      blob: () => new Response('origin-bytes', { headers: { 'Content-Length': '12' } }),
+    });
+    const url = await signedBlobUrl({ sha: BLOB_SHA, ext: 'css' });
+
+    const response = await worker.fetch(new Request(url), fakeEnv(), fakeContext());
+
+    expect(response.headers.get('Content-Length')).toBe('12');
+  });
+
+  it('drops the Content-Length of a compressed origin response', async () => {
+    // The runtime adds Accept-Encoding and GitHub gzips text, so the header
+    // describes the ENCODED body while `tee()` hands us the decoded bytes.
+    // Forwarding it would abort the download with a length mismatch.
+    stubUpstreams({
+      blob: () =>
+        new Response('origin-bytes', {
+          headers: { 'Content-Length': '17', 'Content-Encoding': 'gzip' },
+        }),
+    });
+    const url = await signedBlobUrl({ sha: BLOB_SHA, ext: 'css' });
+
+    const response = await worker.fetch(new Request(url), fakeEnv(), fakeContext());
+
+    expect(response.headers.get('Content-Length')).toBeNull();
+    expect(await response.text()).toBe('origin-bytes');
+  });
+
+  it('ignores a Content-Length that is not plain digits', async () => {
+    // Number('0x10') is 16, and a hex length forwarded as decimal is a mismatch.
+    stubUpstreams({
+      blob: () => new Response('origin-bytes', { headers: { 'Content-Length': '0x10' } }),
+    });
+    const url = await signedBlobUrl({ sha: BLOB_SHA, ext: 'css' });
+
+    const response = await worker.fetch(new Request(url), fakeEnv(), fakeContext());
+
+    expect(response.headers.get('Content-Length')).toBeNull();
+  });
+
+  it('omits Content-Length when the origin sent none', async () => {
+    stubUpstreams();
+    const url = await signedBlobUrl({ sha: BLOB_SHA, ext: 'css' });
+
+    const response = await worker.fetch(new Request(url), fakeEnv(), fakeContext());
+
+    expect(response.headers.get('Content-Length')).toBeNull();
+  });
+
+  it('answers HEAD on a cached blob from R2 metadata - no body, no origin', async () => {
+    const bucket = fakeBucket({
+      [`blobs/${BLOB_SHA}`]: { body: 'cached-bytes', contentType: 'image/png' },
+    });
+    const fetchSpy = vi.fn(() => {
+      throw new Error('HEAD must not reach the origin');
+    });
+    globalThis.fetch = fetchSpy as unknown as typeof fetch;
+    const url = await signedBlobUrl({ sha: BLOB_SHA, ext: 'png' });
+
+    const response = await worker.fetch(
+      new Request(url, { method: 'HEAD' }),
+      fakeEnv({ CACHE: bucket as unknown as R2Bucket }),
+      fakeContext()
+    );
+
+    expect(response.status).toBe(200);
+    expect(await response.text()).toBe('');
+    expect(response.headers.get('Content-Type')).toBe('image/png');
+    expect(response.headers.get('Content-Length')).toBe(String('cached-bytes'.length));
+    expect(response.headers.get('ETag')).toBe(`"blobs/${BLOB_SHA}"`);
+    expect(response.headers.get('Cache-Control')).toMatch(/^public, max-age=\d+, immutable$/);
+    expect(response.headers.get('Access-Control-Allow-Origin')).toBe('*');
+    expect(response.headers.get('Content-Security-Policy')).toBe("default-src 'none'; sandbox");
+    expect(fetchSpy).not.toHaveBeenCalled();
+    // Metadata only: the object's bytes were never opened.
+    expect(bucket.heads).toEqual([`blobs/${BLOB_SHA}`]);
+    expect(bucket.gets).toEqual([]);
+  });
+
+  it('answers HEAD on a cached variant from the variant key', async () => {
+    const bucket = fakeBucket({
+      [`blobs/${BLOB_SHA}/w800.webp`]: { body: 'webp-bytes', contentType: 'image/webp' },
+    });
+    const url = await signedBlobUrl({
+      sha: BLOB_SHA,
+      ext: 'jpg',
+      transform: { w: 800, fmt: 'webp' },
+    });
+
+    const response = await worker.fetch(
+      new Request(url, { method: 'HEAD' }),
+      fakeEnv({ CACHE: bucket as unknown as R2Bucket }),
+      fakeContext()
+    );
+
+    expect(response.status).toBe(200);
+    expect(await response.text()).toBe('');
+    expect(response.headers.get('Content-Type')).toBe('image/webp');
+    expect(bucket.heads).toEqual([`blobs/${BLOB_SHA}/w800.webp`]);
+    expect(bucket.gets).toEqual([]);
+  });
+
+  it('falls through to the origin for HEAD on a cold blob, and still sends no body', async () => {
+    // Warming the cache on a HEAD is the point: the GET behind it is a hit.
+    stubUpstreams();
+    const bucket = fakeBucket();
+    const ctx = fakeContext();
+    const url = await signedBlobUrl({ sha: BLOB_SHA, ext: 'css' });
+
+    const response = await worker.fetch(
+      new Request(url, { method: 'HEAD' }),
+      fakeEnv({ CACHE: bucket as unknown as R2Bucket }),
+      ctx
+    );
+
+    expect(response.status).toBe(200);
+    expect(await response.text()).toBe('');
+    expect(bucket.heads).toEqual([`blobs/${BLOB_SHA}`]);
+    await ctx.settled();
+    // The whole object, not a stalled prefix: the delivery half of the tee is
+    // cancelled rather than abandoned, so the write-back half runs to the end.
+    expect(bucket.puts).toEqual([
+      {
+        key: `blobs/${BLOB_SHA}`,
+        contentType: 'text/css; charset=utf-8',
+        bytes: 'origin-bytes'.length,
+      },
+    ]);
+  });
+
+  it('sends no body on a HEAD that is refused', async () => {
+    const response = await worker.fetch(
+      new Request(`${ORIGIN}/robots.txt`, { method: 'HEAD' }),
+      fakeEnv(),
+      fakeContext()
+    );
+
+    expect(response.status).toBe(404);
+    expect(await response.text()).toBe('');
+  });
+
   it('marks draft content no-store, but still writes it to R2', async () => {
     // Deliberate: `no-store` governs the SHARED caches in front of the Worker,
     // which must never hold draft bytes. R2 sits behind the signature gate and
@@ -203,7 +447,9 @@ describe('blob delivery', () => {
 
     expect(response.headers.get('Cache-Control')).toBe('no-store');
     await ctx.settled();
-    expect(bucket.puts).toEqual([{ key: `blobs/${BLOB_SHA}`, contentType: 'image/png' }]);
+    expect(bucket.puts).toEqual([
+      { key: `blobs/${BLOB_SHA}`, contentType: 'image/png', bytes: 'origin-bytes'.length },
+    ]);
   });
 
   it('pulls a miss from the origin and writes it back to R2', async () => {
@@ -220,7 +466,11 @@ describe('blob delivery', () => {
     expect(await response.text()).toBe('origin-bytes');
     await ctx.settled();
     expect(bucket.puts).toEqual([
-      { key: `blobs/${BLOB_SHA}`, contentType: 'text/css; charset=utf-8' },
+      {
+        key: `blobs/${BLOB_SHA}`,
+        contentType: 'text/css; charset=utf-8',
+        bytes: 'origin-bytes'.length,
+      },
     ]);
   });
 
@@ -300,6 +550,115 @@ describe('blob delivery', () => {
 
     expect(response.status).toBe(200);
     expect(bucket.gets).toEqual([`blobs/${BLOB_SHA}`]);
+  });
+
+  it('skips the transform when R2 already knows the source is too big', async () => {
+    // The transform path is the one place a whole object is buffered, inside a
+    // shared 128 MB isolate. A known-oversize source never enters it.
+    const bucket = fakeBucket({
+      [`blobs/${BLOB_SHA}`]: {
+        body: 'huge-bytes',
+        contentType: 'image/jpeg',
+        size: MAX_TRANSFORM_SOURCE_BYTES + 1,
+      },
+    });
+    const images = { input: vi.fn() } as unknown as ImagesBinding;
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const url = await signedBlobUrl({
+      sha: BLOB_SHA,
+      ext: 'jpg',
+      transform: { w: 800, fmt: 'webp' },
+    });
+
+    const response = await worker.fetch(
+      new Request(url),
+      fakeEnv({ CACHE: bucket as unknown as R2Bucket, IMAGES: images }),
+      fakeContext()
+    );
+
+    expect(response.status).toBe(200);
+    expect(await response.text()).toBe('huge-bytes');
+    expect(response.headers.get('Content-Type')).toBe('image/jpeg');
+    expect(response.headers.get('Cache-Control')).toBe('public, max-age=60');
+    expect((images as unknown as { input: ReturnType<typeof vi.fn> }).input).not.toHaveBeenCalled();
+    expect(warn.mock.calls[0]?.[0]).toContain(`skipping transform for ${BLOB_SHA}`);
+  });
+
+  it("skips the transform when the origin's Content-Length is over the ceiling", async () => {
+    stubUpstreams({
+      blob: () =>
+        new Response('huge-bytes', {
+          headers: { 'Content-Length': String(MAX_TRANSFORM_SOURCE_BYTES + 1) },
+        }),
+    });
+    const bucket = fakeBucket();
+    const images = { input: vi.fn() } as unknown as ImagesBinding;
+    const ctx = fakeContext();
+    const url = await signedBlobUrl({
+      sha: BLOB_SHA,
+      ext: 'jpg',
+      transform: { w: 800, fmt: 'webp' },
+    });
+
+    const response = await worker.fetch(
+      new Request(url),
+      fakeEnv({ CACHE: bucket as unknown as R2Bucket, IMAGES: images }),
+      ctx
+    );
+
+    expect(response.status).toBe(200);
+    expect(await response.text()).toBe('huge-bytes');
+    expect(response.headers.get('Cache-Control')).toBe('public, max-age=60');
+    expect((images as unknown as { input: ReturnType<typeof vi.fn> }).input).not.toHaveBeenCalled();
+    // Streamed, not buffered - the original still lands in R2 on the way past.
+    await ctx.settled();
+    expect(bucket.puts.map(put => put.key)).toEqual([`blobs/${BLOB_SHA}`]);
+  });
+
+  it('aborts a transform whose source outgrows the ceiling mid-stream', async () => {
+    // No Content-Length: the only way to hold the bound is to count as we read,
+    // and the counted bytes go with the cancelled stream.
+    let call = 0;
+    stubUpstreams({
+      blob: () => {
+        call += 1;
+        if (call > 1) return new Response('origin-bytes');
+        let sent = 0;
+        return new Response(
+          new ReadableStream<Uint8Array>({
+            pull(controller) {
+              if (sent > MAX_TRANSFORM_SOURCE_BYTES) return controller.close();
+              sent += 1024 * 1024;
+              controller.enqueue(new Uint8Array(1024 * 1024));
+            },
+          })
+        );
+      },
+    });
+    const bucket = fakeBucket();
+    const images = { input: vi.fn() } as unknown as ImagesBinding;
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const ctx = fakeContext();
+    const url = await signedBlobUrl({
+      sha: BLOB_SHA,
+      ext: 'jpg',
+      transform: { w: 800, fmt: 'webp' },
+    });
+
+    const response = await worker.fetch(
+      new Request(url),
+      fakeEnv({ CACHE: bucket as unknown as R2Bucket, IMAGES: images }),
+      ctx
+    );
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get('Cache-Control')).toBe('public, max-age=60');
+    expect(await response.text()).toBe('origin-bytes');
+    expect((images as unknown as { input: ReturnType<typeof vi.fn> }).input).not.toHaveBeenCalled();
+    expect(call).toBe(2);
+    expect(
+      warn.mock.calls.some(([message]) => String(message).includes('skipping transform'))
+    ).toBe(true);
   });
 
   it('serves the original bytes when the Images binding throws', async () => {

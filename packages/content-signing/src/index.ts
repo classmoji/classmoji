@@ -21,6 +21,7 @@ export {
   TRANSFORM_WIDTHS,
   blobCanonicalString,
   hostOf,
+  isClassroomId,
   themeCanonicalString,
 } from './canonical.ts';
 
