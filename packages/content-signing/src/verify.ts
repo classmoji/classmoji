@@ -19,6 +19,8 @@ import {
 import { deriveKey, verifyCanonical } from './derive.ts';
 import type {
   BlobVerification,
+  KeySlot,
+  MasterSecrets,
   ParsedBlobUrl,
   ParsedContentUrl,
   ParsedThemeUrl,
@@ -252,19 +254,50 @@ function expiryFailure(tier: Tier, exp: number, now: number): { inGrace: boolean
   return null;
 }
 
-/** Constant-time by construction: the comparison happens inside Web Crypto. */
+/**
+ * Normalize whatever the caller passed into an ordered list of usable secrets.
+ *
+ * Empty entries are dropped rather than tried, so a deployment can clear its
+ * previous-key slot by blanking it instead of restructuring the call. Nothing
+ * left to try is a programming error, not a failed verification: answering
+ * `bad-signature` there would turn a misconfigured deployment into a story
+ * about forged URLs.
+ */
+function masterList(master: MasterSecrets): readonly string[] {
+  const candidates = typeof master === 'string' ? [master] : master;
+  const usable = candidates.filter(entry => typeof entry === 'string' && entry.length > 0);
+  if (usable.length === 0) {
+    throw new TypeError('content-signing: at least one master secret is required');
+  }
+  return usable;
+}
+
+/**
+ * Try each master in order and report which one matched, or null for none.
+ *
+ * The current key is first, so the steady state costs exactly one derive and
+ * one verify; a previous key is only reached for a URL the current key already
+ * rejected. Each comparison is constant-time by construction — it happens
+ * inside Web Crypto — and the loop leaks only how many keys are configured,
+ * which is not a secret.
+ */
 async function checkSignature(
-  master: string,
+  masters: readonly string[],
   parsed: ParsedContentUrl,
   canonical: string,
   signature: Uint8Array<ArrayBuffer>
-): Promise<boolean> {
-  const key = await deriveKey(master, parsed.classroomId, parsed.keyVersion);
-  return verifyCanonical(key, signature, canonical);
+): Promise<KeySlot | null> {
+  for (const [index, master] of masters.entries()) {
+    const key = await deriveKey(master, parsed.classroomId, parsed.keyVersion);
+    if (await verifyCanonical(key, signature, canonical)) {
+      return index === 0 ? 'current' : 'previous';
+    }
+  }
+  return null;
 }
 
 async function verifyParsedBlob(
-  master: string,
+  masters: readonly string[],
   parsed: ParsedBlobUrl,
   now: number
 ): Promise<BlobVerification> {
@@ -281,7 +314,8 @@ async function verifyParsedBlob(
     exp: parsed.exp,
     transform: parsed.transform,
   });
-  if (!(await checkSignature(master, parsed, canonical, signature))) return fail('bad-signature');
+  const keySlot = await checkSignature(masters, parsed, canonical, signature);
+  if (!keySlot) return fail('bad-signature');
 
   const expiry = expiryFailure(parsed.tier, parsed.exp, now);
   if (!expiry) return fail('expired');
@@ -296,13 +330,14 @@ async function verifyParsedBlob(
     keyVersion: parsed.keyVersion,
     exp: parsed.exp,
     inGrace: expiry.inGrace,
+    keySlot,
   };
   if (parsed.transform) verified.transform = parsed.transform;
   return verified;
 }
 
 async function verifyParsedTheme(
-  master: string,
+  masters: readonly string[],
   parsed: ParsedThemeUrl,
   now: number
 ): Promise<ThemeVerification> {
@@ -318,7 +353,8 @@ async function verifyParsedTheme(
     keyVersion: parsed.keyVersion,
     exp: parsed.exp,
   });
-  if (!(await checkSignature(master, parsed, canonical, signature))) return fail('bad-signature');
+  const keySlot = await checkSignature(masters, parsed, canonical, signature);
+  if (!keySlot) return fail('bad-signature');
 
   const expiry = expiryFailure(parsed.tier, parsed.exp, now);
   if (!expiry) return fail('expired');
@@ -334,41 +370,50 @@ async function verifyParsedTheme(
     exp: parsed.exp,
     relPath: parsed.relPath,
     inGrace: expiry.inGrace,
+    keySlot,
   };
 }
 
+/**
+ * `master` is the current secret, or an ordered list with the previous one
+ * after it during a rotation. The result says which slot matched, so a caller
+ * can watch previous-key traffic drain before retiring that key.
+ */
 export async function verifyBlobUrl(
-  master: string,
+  master: MasterSecrets,
   url: string | URL,
   now: number = nowSeconds()
 ): Promise<BlobVerification> {
+  const masters = masterList(master);
   const parsed = parseInternal(url);
   if (!parsed.ok) return fail(parsed.reason);
   if (parsed.value.kind !== 'blob') return fail('malformed');
-  return verifyParsedBlob(master, parsed.value, now);
+  return verifyParsedBlob(masters, parsed.value, now);
 }
 
 export async function verifyThemeUrl(
-  master: string,
+  master: MasterSecrets,
   url: string | URL,
   now: number = nowSeconds()
 ): Promise<ThemeVerification> {
+  const masters = masterList(master);
   const parsed = parseInternal(url);
   if (!parsed.ok) return fail(parsed.reason);
   if (parsed.value.kind !== 'theme') return fail('malformed');
-  return verifyParsedTheme(master, parsed.value, now);
+  return verifyParsedTheme(masters, parsed.value, now);
 }
 
 export async function verifyContentUrl(
-  master: string,
+  master: MasterSecrets,
   url: string | URL,
   now: number = nowSeconds()
 ): Promise<BlobVerification | ThemeVerification> {
+  const masters = masterList(master);
   const parsed = parseInternal(url);
   if (!parsed.ok) return fail(parsed.reason);
   return parsed.value.kind === 'blob'
-    ? verifyParsedBlob(master, parsed.value, now)
-    : verifyParsedTheme(master, parsed.value, now);
+    ? verifyParsedBlob(masters, parsed.value, now)
+    : verifyParsedTheme(masters, parsed.value, now);
 }
 
 /**

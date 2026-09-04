@@ -6,6 +6,7 @@ import { nowSeconds } from '../src/verify.ts';
 import {
   BLOB_SHA,
   CLASSROOM,
+  MASTER,
   MISSING_SHA,
   ORIGIN,
   THEME_BLOB_SHA,
@@ -72,6 +73,22 @@ describe('routing', () => {
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({ ok: true, environment: 'test', configured: false });
     expect(response.headers.get('Cache-Control')).toBe('no-store');
+  });
+
+  it('never says on /healthz whether a previous signing key is set', async () => {
+    const rotating = await worker.fetch(
+      new Request(`${ORIGIN}/healthz`),
+      fakeEnv({ CONTENT_SIGNING_SECRET_PREVIOUS: 'the-key-being-retired' }),
+      fakeContext()
+    );
+    const settled = await worker.fetch(new Request(`${ORIGIN}/healthz`), fakeEnv(), fakeContext());
+
+    // Byte-identical: /healthz is unauthenticated, and "a rotation is under
+    // way here" is not something an anonymous request gets to learn.
+    const body = await rotating.text();
+    expect(body).toBe(await settled.text());
+    expect(JSON.parse(body)).toEqual({ ok: true, environment: 'test', configured: true });
+    expect(body.toLowerCase()).not.toContain('previous');
   });
 
   it('404s any path that is not content', async () => {
@@ -793,5 +810,65 @@ describe('theme delivery', () => {
 
     expect(response.status).toBe(404);
     expect(await response.json()).toEqual({ error: 'not found' });
+  });
+});
+
+/**
+ * Two keys accepted, one key signed with. The point of the second slot is that
+ * URLs already in browsers and caches keep resolving across a key change.
+ */
+describe('signing key rotation', () => {
+  const ROTATED = 'the-rotated-in-master-secret';
+
+  const cachedBlob = () =>
+    fakeBucket({ [`blobs/${BLOB_SHA}`]: { body: 'cached-bytes', contentType: 'image/png' } });
+
+  /** Signed under the key being retired — a URL minted before the rotation. */
+  const oldUrl = () => signedBlobUrl({ sha: BLOB_SHA, ext: 'png', master: MASTER });
+
+  it('serves a previous-key URL while the previous slot is set', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const env = fakeEnv({
+      CACHE: cachedBlob() as unknown as R2Bucket,
+      CONTENT_SIGNING_SECRET: ROTATED,
+      CONTENT_SIGNING_SECRET_PREVIOUS: MASTER,
+    });
+
+    const response = await worker.fetch(new Request(await oldUrl()), env, fakeContext());
+    expect(response.status).toBe(200);
+    expect(await response.text()).toBe('cached-bytes');
+
+    // The one line that tells an operator the old key is still carrying
+    // traffic — and, when it stops appearing, that the key can go.
+    expect(warn).toHaveBeenCalledTimes(1);
+    const [message] = warn.mock.calls[0] as [string];
+    expect(message).toContain('key=previous');
+    expect(message).toContain(`classroom=${CLASSROOM}`);
+    expect(message).toContain(`path=/c/${CLASSROOM}/blob/${BLOB_SHA}.png`);
+    expect(message).not.toContain('sig=');
+  });
+
+  it('403s that same URL once the previous slot is cleared', async () => {
+    const env = fakeEnv({
+      CACHE: cachedBlob() as unknown as R2Bucket,
+      CONTENT_SIGNING_SECRET: ROTATED,
+    });
+    const response = await worker.fetch(new Request(await oldUrl()), env, fakeContext());
+    expect(response.status).toBe(403);
+    expect(await response.json()).toEqual({ error: 'bad-signature' });
+  });
+
+  it('says nothing about rotation for a URL the current key signed', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const env = fakeEnv({
+      CACHE: cachedBlob() as unknown as R2Bucket,
+      CONTENT_SIGNING_SECRET: ROTATED,
+      CONTENT_SIGNING_SECRET_PREVIOUS: MASTER,
+    });
+    const url = await signedBlobUrl({ sha: BLOB_SHA, ext: 'png', master: ROTATED });
+
+    const response = await worker.fetch(new Request(url), env, fakeContext());
+    expect(response.status).toBe(200);
+    expect(warn).not.toHaveBeenCalled();
   });
 });

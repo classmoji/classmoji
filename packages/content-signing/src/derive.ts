@@ -43,6 +43,11 @@ async function deriveKeyUncached(
  *
  * The master is only ever used to derive; callers hold derived keys. Results
  * are memoized (bounded, LRU) because the Worker re-derives on every request.
+ *
+ * The master is part of the cache key, not just the classroom and version.
+ * That is what makes it safe to verify against two masters during a rotation:
+ * the previous key's derivation cannot be served from a current-key entry, so
+ * a rotated deployment cannot accept a signature the current key would refuse.
  */
 export function deriveKey(
   master: string,

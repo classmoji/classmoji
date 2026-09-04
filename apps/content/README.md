@@ -101,11 +101,15 @@ cached.
 | `CONTENT_TOKEN_ENDPOINT` | var | webapp endpoint that mints installation tokens |
 | `ENVIRONMENT` | var | `staging` / `production` |
 | `CONTENT_SIGNING_SECRET` | secret | HMAC master key for signed URLs |
+| `CONTENT_SIGNING_SECRET_PREVIOUS` | secret, optional | the key the current one replaced; accepted for verification during a rotation, never signed with |
 | `CONTENT_WORKER_SHARED_SECRET` | secret | bearer token presented to the token endpoint |
 
-Secrets come from Infisical (`/content-worker`, env `sta`) and are pushed by CI
-with `wrangler secret bulk` after the deploy. A Worker without them serves 503
-for everything, so the deploy workflow fails loudly if either is missing.
+Secrets come from Infisical (`/content-worker`, env `sta` for staging and `prod`
+for production) and are pushed by CI with `wrangler secret bulk` after the
+deploy. A Worker without the two required ones serves 503 for everything, so the
+deploy workflow fails loudly if either is missing; the previous-key slot is
+allowed but never required, and `/healthz` deliberately says nothing about
+whether it is set.
 
 ## Signing
 
@@ -214,6 +218,7 @@ Logs** (`classmoji-content-staging` or `classmoji-content`), with
 | Shape | Means |
 | --- | --- |
 | `[content] 403 {reason} classroom=… path=… p=… v=…` | refused: `bad-signature`, `expired`, `malformed`, `unsupported-version`. Never carries `sig` or a query string |
+| `[content] key=previous classroom=… path=… p=… v=…` | served, but the signature only verified against `CONTENT_SIGNING_SECRET_PREVIOUS`. Expected during a rotation; when it stops, the old key can be dropped |
 | `[content] 404 missing classroom=… path=…` | the app minted a `/missing/` URL: a reference that resolves to no blob (deleted, renamed, or a directory). Not an attack — a content bug |
 | `[content] origin blob {sha}: {status}` | GitHub refused the blob; the client got a 502 |
 | `[content] origin error: …` / `[content] unhandled error: …` | 502 / 500 |

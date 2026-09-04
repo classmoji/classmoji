@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { TIER_POLICY, bucketExpiry } from '../bucket.ts';
+import { clearKeyCache } from '../derive.ts';
 import { signBlobUrl, signThemeBase } from '../urls.ts';
 import type { Tier } from '../types.ts';
 import {
@@ -50,6 +51,7 @@ describe('round trip', () => {
       keyVersion: 0,
       exp: bucketExpiry(tier, CLASSROOM_A, NOW),
       inGrace: false,
+      keySlot: 'current',
     });
   });
 
@@ -78,6 +80,7 @@ describe('round trip', () => {
       exp,
       relPath: '',
       inGrace: false,
+      keySlot: 'current',
     });
 
     for (const relPath of ['theme.css', 'fonts/inter.woff2', 'img/hero%20shot.png']) {
@@ -490,5 +493,100 @@ describe('relPath decoding', () => {
     ]) {
       expect(normalizeRelPath(segments)).toBeNull();
     }
+  });
+});
+
+/**
+ * Rotation: verification accepts an ordered list of masters, the current one
+ * first. Signing never does — the apps mint under one key, and the second slot
+ * exists only so URLs already in browsers and caches survive the change.
+ */
+describe('key rotation', () => {
+  /** The key rotated IN. `MASTER` plays the one being retired. */
+  const ROTATED = 'the-rotated-in-master-secret';
+  const both = [ROTATED, MASTER] as const;
+
+  const mintedUnder = (master: string) =>
+    signBlobUrl(ORIGIN, ctx('public', { master }), { sha: SHA, ext: 'png' });
+
+  it('verifies a current-key URL and says which key did it', async () => {
+    const url = await mintedUnder(ROTATED);
+    const result = await verifyBlobUrl(both, url, NOW);
+    expect(result.ok && result.keySlot).toBe('current');
+  });
+
+  it('verifies a previous-key URL and reports the previous slot', async () => {
+    const url = await mintedUnder(MASTER);
+    const result = await verifyBlobUrl(both, url, NOW);
+    expect(result.ok && result.keySlot).toBe('previous');
+  });
+
+  it('reports the current slot for the single-key API', async () => {
+    const url = await mintedUnder(MASTER);
+    expect((await verifyBlobUrl(MASTER, url, NOW)).ok).toBe(true);
+    const result = await verifyBlobUrl(MASTER, url, NOW);
+    expect(result.ok && result.keySlot).toBe('current');
+    // A one-element list is the same thing spelled differently.
+    const asList = await verifyBlobUrl([MASTER], url, NOW);
+    expect(asList.ok && asList.keySlot).toBe('current');
+  });
+
+  it('rejects a URL neither key signed', async () => {
+    const url = await mintedUnder(OTHER_MASTER);
+    expect(await verifyBlobUrl(both, url, NOW)).toEqual({ ok: false, reason: 'bad-signature' });
+  });
+
+  it('stops accepting the previous key once the slot is cleared', async () => {
+    const url = await mintedUnder(MASTER);
+
+    // While the rotation is in flight, the old URL still works.
+    const during = await verifyBlobUrl(both, url, NOW);
+    expect(during.ok && during.keySlot).toBe('previous');
+
+    // Clearing the slot — dropping the entry, or blanking it — retires it.
+    expect(await verifyBlobUrl([ROTATED], url, NOW)).toEqual({
+      ok: false,
+      reason: 'bad-signature',
+    });
+    expect(await verifyBlobUrl([ROTATED, ''], url, NOW)).toEqual({
+      ok: false,
+      reason: 'bad-signature',
+    });
+  });
+
+  it('applies the same fallback to theme URLs', async () => {
+    const base = await signThemeBase(ORIGIN, ctx('public', { master: MASTER }), {
+      theme: 'cosmo-dark',
+      treeSha: TREE_SHA,
+    });
+    const result = await verifyThemeUrl(both, `${base}css/site.css`, NOW);
+    expect(result.ok && result.keySlot).toBe('previous');
+    expect(result.ok && result.relPath).toBe('css/site.css');
+  });
+
+  it('refuses to verify with no usable key at all', async () => {
+    const url = await mintedUnder(MASTER);
+    // Not `bad-signature`: an unconfigured deployment is a deployment bug, and
+    // reporting it as a forged URL would send the operator hunting an attacker.
+    await expect(verifyBlobUrl([], url, NOW)).rejects.toThrow(TypeError);
+    await expect(verifyBlobUrl('', url, NOW)).rejects.toThrow(TypeError);
+    await expect(verifyBlobUrl(['', ''], url, NOW)).rejects.toThrow(TypeError);
+  });
+
+  it('keys the derived-key cache by master, not just classroom and version', async () => {
+    clearKeyCache();
+
+    // Same classroom and keyVersion under both masters: everything in the
+    // cache key except the master itself is identical, so a cache that ignored
+    // the master would hand the second derive the first one's key.
+    const currentUrl = await mintedUnder(ROTATED);
+    expect((await verifyBlobUrl(ROTATED, currentUrl, NOW)).ok).toBe(true);
+
+    const previousUrl = await mintedUnder(MASTER);
+    expect(previousUrl).not.toBe(currentUrl);
+    expect((await verifyBlobUrl(MASTER, previousUrl, NOW)).ok).toBe(true);
+
+    expect((await verifyBlobUrl(MASTER, currentUrl, NOW)).ok).toBe(false);
+    expect((await verifyBlobUrl(ROTATED, previousUrl, NOW)).ok).toBe(false);
   });
 });

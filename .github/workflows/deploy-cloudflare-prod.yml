@@ -85,9 +85,11 @@ jobs:
       # first-ever deploy there is nothing to attach them to until the script
       # exists. The cost is a short window — between the two steps — where a
       # freshly deployed version is still reading the PREVIOUS values. That is
-      # invisible for an unchanged secret, but during a rotation the Worker
-      # verifies against the old signing key for those few seconds; roll keys
-      # by adding a new `keyVersion` rather than overwriting one in place.
+      # invisible for an unchanged secret, and harmless for a signing-key
+      # rotation too, because the Worker keeps verifying against
+      # CONTENT_SIGNING_SECRET_PREVIOUS: for those few seconds it simply has
+      # not been told about the new key yet, and every URL in flight was minted
+      # under one it still accepts.
       #
       # `--env=prod` is the Infisical slug for production, and it is the second
       # place this file is not a mechanical rename: staging's slug is the
@@ -140,7 +142,12 @@ jobs:
             import { readFileSync, writeFileSync } from "node:fs";
             // `node -e` puts the first extra argument at argv[1], not argv[2].
             const [raw, out] = process.argv.slice(1);
-            const expected = ["CONTENT_SIGNING_SECRET", "CONTENT_WORKER_SHARED_SECRET"];
+            const required = ["CONTENT_SIGNING_SECRET", "CONTENT_WORKER_SHARED_SECRET"];
+            // Present only while a signing key is being rotated: the Worker
+            // verifies against it as a fallback so URLs minted under the old
+            // key survive the change. Allowed, never required.
+            const optional = ["CONTENT_SIGNING_SECRET_PREVIOUS"];
+            const allowed = [...required, ...optional];
 
             const text = readFileSync(raw, "utf8");
             // Tolerate anything the CLI prints ahead of the payload: parse from
@@ -164,8 +171,8 @@ jobs:
               : parsed;
 
             const found = Object.keys(secrets).sort();
-            const missing = expected.filter(key => !secrets[key]);
-            const unexpected = found.filter(key => !expected.includes(key));
+            const missing = required.filter(key => !secrets[key]);
+            const unexpected = found.filter(key => !allowed.includes(key));
 
             if (missing.length || unexpected.length) {
               if (missing.length) {
@@ -177,8 +184,13 @@ jobs:
               process.exit(1);
             }
 
-            writeFileSync(out, JSON.stringify(Object.fromEntries(expected.map(key => [key, secrets[key]]))));
-            console.log(`Verified ${expected.length} secrets from Infisical.`);
+            // Only keys that are actually set are pushed. Note the asymmetry:
+            // removing the previous key from Infisical does not remove it from
+            // the Worker, because `secret bulk` never deletes. Finishing a
+            // rotation takes an explicit `wrangler secret delete`.
+            const pushing = allowed.filter(key => secrets[key]);
+            writeFileSync(out, JSON.stringify(Object.fromEntries(pushing.map(key => [key, secrets[key]]))));
+            console.log(`Verified ${pushing.length} secrets from Infisical (${pushing.join(", ")}).`);
           ' "$RAW_SECRETS" "$BULK_SECRETS"
 
           npx wrangler secret bulk "$BULK_SECRETS" --env production

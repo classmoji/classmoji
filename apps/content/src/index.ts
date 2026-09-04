@@ -14,7 +14,7 @@
  */
 import { serveBlob } from './blob.ts';
 import { errorResponse, jsonResponse, preflightResponse, withoutBody } from './cache.ts';
-import { isConfigured, type Env } from './env.ts';
+import { isConfigured, signingSecrets, type Env } from './env.ts';
 import { OriginError } from './origins/types.ts';
 import { serveTheme } from './theme.ts';
 import { isClassroomId, parseContentUrl, verifyContentUrl } from './verify.ts';
@@ -101,12 +101,11 @@ async function handle(request: Request, env: Env, ctx: ExecutionContext): Promis
     return errorResponse(404, 'missing');
   }
 
-  const signingSecret = env.CONTENT_SIGNING_SECRET;
-  if (!signingSecret || !env.CONTENT_WORKER_SHARED_SECRET || !env.CONTENT_TOKEN_ENDPOINT) {
-    return errorResponse(503, 'not configured');
-  }
+  // One definition of "configured", shared with /healthz — the verifier below
+  // needs no narrowed local now that it takes the whole list of secrets.
+  if (!isConfigured(env)) return errorResponse(503, 'not configured');
 
-  const verified = await verifyContentUrl(signingSecret, request.url);
+  const verified = await verifyContentUrl(signingSecrets(env), request.url);
   if (!verified.ok) {
     // Structural parse only (no crypto) - just to recover the classroom id
     // for a URL whose signature we don't yet trust. Never log `sig`, the
@@ -119,6 +118,18 @@ async function handle(request: Request, env: Env, ctx: ExecutionContext): Promis
     if (v !== null) message += ` v=${v}`;
     console.warn(message);
     return errorResponse(403, verified.reason);
+  }
+
+  // Rotation telemetry, and the only signal that says when the old key can go.
+  // A warn per request is loud on purpose: the line stops appearing when the
+  // last URL minted under the previous key has aged out, and that silence is
+  // the go-ahead to clear the slot. Carries no signature and no query string,
+  // for the same reason the 403 line above does not.
+  if (verified.keySlot === 'previous') {
+    console.warn(
+      `[content] key=previous classroom=${verified.classroomId} path=${url.pathname}` +
+        ` p=${verified.tier} v=${verified.keyVersion}`
+    );
   }
 
   try {

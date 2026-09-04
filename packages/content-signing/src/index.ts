@@ -1,5 +1,7 @@
 export type {
   BlobVerification,
+  KeySlot,
+  MasterSecrets,
   ParsedBlobUrl,
   ParsedContentUrl,
   ParsedThemeUrl,

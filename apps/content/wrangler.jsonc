@@ -20,6 +20,19 @@
     "enabled": true
   },
 
+  // Secrets are not declared here. CI pushes them with `wrangler secret bulk`
+  // from Infisical `/content-worker` after each deploy:
+  //
+  //   CONTENT_SIGNING_SECRET           HMAC master key for signed URLs
+  //   CONTENT_WORKER_SHARED_SECRET     bearer token for the token endpoint
+  //   CONTENT_SIGNING_SECRET_PREVIOUS  optional, and only while rotating: the
+  //     key the current one replaced. Verification falls back to it so URLs
+  //     already in browsers and caches keep working across the change; nothing
+  //     signs with it. Blanking it in Infisical does NOT remove it from the
+  //     Worker — `wrangler secret bulk` only sets the keys it is handed — so a
+  //     rotation ends with an explicit
+  //     `npx wrangler secret delete CONTENT_SIGNING_SECRET_PREVIOUS --env <env>`.
+  //     See "Rotating the signing secret" in README.md.
   "env": {
     "staging": {
       "name": "classmoji-content-staging",
