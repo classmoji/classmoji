@@ -410,6 +410,26 @@ export class GitHubProvider extends GitProvider {
   // ─── Branches & PRs ────────────────────────────────────────────────────────
 
   /**
+   * The repository's default branch.
+   *
+   * `main` for most classrooms and `master` for anything imported from an older
+   * course, so a caller that needs the branch content is actually served from
+   * has to ask. One `GET /repos` — the same request `getRepository` makes.
+   *
+   * @param {string} org - Organization login
+   * @param {string} repo - Repository name
+   * @returns {Promise<string>} Default branch name
+   */
+  async getDefaultBranch(org: string, repo: string): Promise<string> {
+    const octokit = await this.#getOctokit();
+    const { data } = await octokit.request('GET /repos/{owner}/{repo}', {
+      owner: org,
+      repo,
+    });
+    return data.default_branch;
+  }
+
+  /**
    * Get the latest commit SHA for a branch
    * @param {string} org - Organization login
    * @param {string} repo - Repository name

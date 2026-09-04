@@ -89,6 +89,20 @@ export class GitProvider {
   }
 
   // ─── Branches & PRs ────────────────────────────────────────────────────────
+  /**
+   * The branch a repository serves as its head — `main` for most, `master` for
+   * anything created before GitHub changed the default, and whatever the owner
+   * renamed it to otherwise.
+   *
+   * Anything that reads a repo's CURRENT content has to ask rather than assume.
+   * A hardcoded `main` against a `master` repo does not read stale content, it
+   * reads nothing at all: the tree call 404s and the classroom ends up with no
+   * asset map, which is exactly the failure the map exists to prevent.
+   */
+  async getDefaultBranch(org: string, repo: string): Promise<string> {
+    throw new Error('getDefaultBranch() must be implemented by subclass');
+  }
+
   async getLatestCommitSHA(org: string, repo: string, branch?: string): Promise<string> {
     throw new Error('getLatestCommitSHA() must be implemented by subclass');
   }

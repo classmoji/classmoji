@@ -34,7 +34,8 @@ vi.mock('@classmoji/database', () => ({
 }));
 
 const getTree = vi.fn();
-const getGitProvider = vi.fn(() => ({ getTree }));
+const getDefaultBranch = vi.fn();
+const getGitProvider = vi.fn(() => ({ getTree, getDefaultBranch }));
 vi.mock('../../git/index.ts', () => ({
   getGitProvider: (...a: unknown[]) => getGitProvider(...(a as [])),
 }));
@@ -81,6 +82,7 @@ describe('contentAssets.service', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     classroomFindUnique.mockResolvedValue(CLASSROOM);
+    getDefaultBranch.mockResolvedValue('main');
     setupTransaction();
   });
 
@@ -101,6 +103,7 @@ describe('contentAssets.service', () => {
 
       expect(result).toEqual({ mode: 'full', upserted: 3, deleted: 4, truncated: false });
       expect(getTree).toHaveBeenCalledWith('dartmouth-cs', 'content-cs101', 'main', true);
+      expect(getDefaultBranch).toHaveBeenCalledWith('dartmouth-cs', 'content-cs101');
       expect(contentAssetUpsert).toHaveBeenCalledTimes(3);
 
       // Directories are rows too — theme folders are addressed by tree SHA, so
@@ -134,6 +137,22 @@ describe('contentAssets.service', () => {
 
       expect(result).toEqual({ mode: 'full', upserted: 1, deleted: 0, truncated: true });
       expect(contentAssetDeleteMany).not.toHaveBeenCalled();
+    });
+
+    it('reads the tree at the repo default branch, not a hardcoded main', async () => {
+      // A course imported from an older org is on `master`. Against `main` the
+      // tree call 404s, the sync throws, and the classroom keeps an EMPTY map —
+      // every asset falls back to the legacy path forever.
+      getDefaultBranch.mockResolvedValue('master');
+      getTree.mockResolvedValue({
+        sha: 'r',
+        truncated: false,
+        entries: [{ path: 'images/a.png', sha: 'sha-a', type: 'blob', size: 1 }],
+      });
+
+      await syncContentAssets('class-1');
+
+      expect(getTree).toHaveBeenCalledWith('dartmouth-cs', 'content-cs101', 'master', true);
     });
 
     it('defaults a missing size to 0 rather than writing undefined', async () => {

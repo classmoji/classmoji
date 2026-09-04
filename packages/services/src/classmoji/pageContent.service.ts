@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { signBlobUrl } from '@classmoji/content-signing';
 import { z } from 'zod';
 import { ContentService } from '../content/ContentService.ts';
-import { recordContentAsset } from './contentAssets.service.ts';
+import { recordContentAsset, resolveContentBranch } from './contentAssets.service.ts';
 import {
   dedupeMergedTreeIds,
   indexResolutions,
@@ -284,13 +284,19 @@ export async function uploadPageAsset(
 ): Promise<{ url: string; path: string; displayUrl: string | null }> {
   const { gitOrganization, repo } = contentRepoFor(page);
 
+  // Asked, not assumed — the same reason the asset sync asks. A content repo on
+  // `master` would otherwise take every upload onto a branch nobody renders
+  // from, and the map would then sign URLs for a blob the default branch has
+  // never held.
+  const branch = await resolveContentBranch(gitOrganization, gitOrganization.login, repo);
+
   const result = await ContentService.upload({
     gitOrganization,
     repo,
     folder: `${page.content_path}/assets`,
     file: buffer,
     filename,
-    branch: 'main',
+    branch,
     message: `Upload asset for ${page.title || 'page'}`,
   });
 
