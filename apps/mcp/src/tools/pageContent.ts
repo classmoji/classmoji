@@ -491,12 +491,22 @@ export const pageContentApplyTool: ToolDefinition<PageContentApplyArgs> = {
     // result/audit report the re-mints.
     const idRemints: Array<{ op_index: number; from: string; to: string }> = [];
 
+    // Ops that would leave the document unopenable (a columnList dropped below
+    // two columns, a stray block parked directly in one) are repaired rather
+    // than committed as-is. Reported back because the repair changes the
+    // layout the caller asked for: silently unwrapping a row would leave an
+    // agent believing its delete did exactly what it said.
+    const structureRepairs: Array<{ kind: string; id?: string }> = [];
+
     let newBlocks: unknown[];
     try {
       newBlocks = ClassmojiService.pageContent.applyBlockOps(
         priorBlocks,
         args.ops as Parameters<typeof ClassmojiService.pageContent.applyBlockOps>[1],
-        { onIdRemint: remint => idRemints.push(remint) }
+        {
+          onIdRemint: remint => idRemints.push(remint),
+          onStructureRepair: repair => structureRepairs.push(repair),
+        }
       );
     } catch (error) {
       if (error instanceof Error && error.name === 'BlockOpError') {
@@ -582,6 +592,7 @@ export const pageContentApplyTool: ToolDefinition<PageContentApplyArgs> = {
         commit_sha: saved.commit,
         committed_to: committedTo,
         ...(hasDestructiveOps ? { prior_block_count: priorCount } : {}),
+        ...(structureRepairs.length > 0 ? { structure_repairs: structureRepairs } : {}),
       } as Prisma.InputJsonValue,
     });
 
@@ -591,6 +602,15 @@ export const pageContentApplyTool: ToolDefinition<PageContentApplyArgs> = {
       block_count: countBlocks(newBlocks as BlockNode[]),
       committed_to: committedTo,
       applied,
+      ...(structureRepairs.length > 0
+        ? {
+            structure_repairs: structureRepairs,
+            note:
+              'The ops would have left a column layout BlockNote cannot open, so it was repaired ' +
+              '(a columnList needs at least two columns, and only columns as children). Re-read ' +
+              'the outline to see the resulting structure.',
+          }
+        : {}),
     });
   },
 };

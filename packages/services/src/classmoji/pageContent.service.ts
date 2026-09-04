@@ -225,7 +225,18 @@ export async function savePageContent(
   // absence both serialize as no key, matching what pre-merge saves produced —
   // a semantic accept must not sprinkle `"coverImage": null` into documents
   // that never had one. Reads treat a missing key and null identically.
-  const wrapper: { blocks: unknown; coverImage?: PageCoverImage } = { blocks };
+  // Last gate before the bytes hit the repo, so a caller that forgets to
+  // normalize still cannot commit an unopenable document. Idempotent, so the
+  // paths that already normalized pay only a structural walk.
+  //
+  // Two writers reach content.json WITHOUT coming through here, and neither is
+  // covered by this line: acceptPreview's clean git merge (handled explicitly,
+  // see repairMergedContent) and contentImport's byte-for-byte page copy, which
+  // never parses the blocks — a broken page in a source classroom still
+  // propagates to every classroom that imports it.
+  const wrapper: { blocks: unknown; coverImage?: PageCoverImage } = {
+    blocks: Array.isArray(blocks) ? normalizeBlockStructure(blocks) : blocks,
+  };
   if (coverImage != null) {
     wrapper.coverImage = coverImage;
   }
@@ -616,6 +627,150 @@ function insertBlocksAt(
   }
 }
 
+// ─── Structural normalization (multi-column invariants) ──────────────────────
+//
+// `columnList` / `column` (@blocknote/xl-multi-column) are the only blocks in
+// the page schema whose ProseMirror content expressions constrain their
+// CHILDREN: `columnList` is `"column column+"` (every child a column, minimum
+// two) and `column` is `"blockContainer+"` (at least one child). Everything
+// else accepts whatever children it is handed, which is why the op vocabulary
+// can otherwise stay schema-agnostic.
+//
+// That gap is not theoretical. A `delete` op naming a column splices it out
+// with no idea it was the second-to-last one; an `insert` positioned `after` a
+// column lands a paragraph as a columnList's direct child. Either document
+// serializes and commits perfectly happily — and then throws "Error creating
+// document from blocks passed as `initialContent`" for EVERY reader, because
+// ProseMirror refuses to build a doc that violates the schema. The viewer and
+// the editor share that failure, so a page broken this way cannot be repaired
+// in the editor either; the only way back is a re-commit from outside. That
+// asymmetry is why the invariant is enforced on the way IN rather than left to
+// render-time tolerance.
+
+const COLUMN_LIST_TYPE = 'columnList';
+const COLUMN_TYPE = 'column';
+
+/** A structural repair made on the way into a commit. */
+export interface BlockStructureRepair {
+  kind:
+    | 'column_list_unwrapped'
+    | 'column_list_child_wrapped'
+    | 'empty_column_filled'
+    | 'stray_column_unwrapped';
+  /** Id of the offending block, when it had one. */
+  id?: string;
+}
+
+function emptyParagraph(): BlockNode {
+  // Same shape blankPageBlocks persists: a repair writes to the repo, and a
+  // props-less paragraph would materialize with populated props on the next
+  // editor load, making the following save report a block nobody edited as
+  // changed. Ids are minted by normalizeBlockStructure once repairs settle.
+  return { type: 'paragraph', props: { ...STANDARD_BLOCK_PROPS }, content: [], children: [] };
+}
+
+function repairAt(block: BlockNode, kind: BlockStructureRepair['kind']): BlockStructureRepair {
+  return { kind, ...(typeof block.id === 'string' && block.id ? { id: block.id } : {}) };
+}
+
+/**
+ * Restore the multi-column invariants, in place (callers pass clones).
+ *
+ * - a `column` with no children gets an empty paragraph, so emptying one slot
+ *   of a row keeps the row rather than killing the document
+ * - a non-column child of a `columnList` is wrapped in its own column, which
+ *   keeps it exactly where it was authored
+ * - a `columnList` left with fewer than two columns is unwrapped: its columns'
+ *   children take its place, in order. This matches what the editor does when
+ *   you delete the second-to-last column — the content returns to full width
+ *   instead of growing a blank column nobody asked for
+ * - a `column` outside any `columnList` is unwrapped the same way
+ *
+ * Content is never dropped: every unwrap splices the children up in place.
+ */
+function repairColumnStructure(
+  blocks: BlockNode[],
+  insideColumnList: boolean,
+  onRepair?: (repair: BlockStructureRepair) => void
+): void {
+  for (let i = 0; i < blocks.length; i++) {
+    const block = blocks[i];
+    if (!block || typeof block !== 'object') continue;
+
+    // Depth first: a child columnList must already be valid (or gone) before
+    // this level decides what its own children are.
+    if (Array.isArray(block.children)) {
+      repairColumnStructure(block.children, block.type === COLUMN_LIST_TYPE, onRepair);
+    }
+
+    if (block.type === COLUMN_TYPE) {
+      if (!insideColumnList) {
+        const lifted = Array.isArray(block.children) ? block.children : [];
+        blocks.splice(i, 1, ...lifted);
+        onRepair?.(repairAt(block, 'stray_column_unwrapped'));
+        i += lifted.length - 1;
+      } else if (!Array.isArray(block.children) || block.children.length === 0) {
+        block.children = [emptyParagraph()];
+        onRepair?.(repairAt(block, 'empty_column_filled'));
+      }
+      continue;
+    }
+
+    if (block.type !== COLUMN_LIST_TYPE) continue;
+
+    const kids = Array.isArray(block.children) ? block.children : [];
+
+    // Strays become columns of their own so the row keeps its authored order.
+    const columns = kids.map(kid => {
+      if (kid?.type === COLUMN_TYPE) return kid;
+      // The stray's id, not the row's: the caller is being told to go look at
+      // something, and the row alone doesn't say which block moved.
+      onRepair?.(repairAt(kid ?? block, 'column_list_child_wrapped'));
+      return { type: COLUMN_TYPE, props: { width: 1 }, children: [kid ?? emptyParagraph()] };
+    });
+
+    if (columns.length >= 2) {
+      block.children = columns;
+      continue;
+    }
+
+    // One column (or none) left — unwrap, keeping the content in place.
+    const lifted = columns.flatMap(column =>
+      Array.isArray(column.children) ? column.children : []
+    );
+    blocks.splice(i, 1, ...lifted);
+    onRepair?.(repairAt(block, 'column_list_unwrapped'));
+    i += lifted.length - 1;
+  }
+}
+
+/**
+ * Return a document that BlockNote can actually open: same blocks, with the
+ * multi-column invariants restored (see `repairColumnStructure`). Pure and
+ * idempotent — a document that is already valid is returned structurally
+ * unchanged, so it is safe to call on every path that produces one.
+ */
+export function normalizeBlockStructure<T = unknown>(
+  blocks: T[],
+  { onRepair }: { onRepair?: (repair: BlockStructureRepair) => void } = {}
+): T[] {
+  const copy = structuredClone(blocks) as unknown as BlockNode[];
+
+  let repaired = false;
+  repairColumnStructure(copy, false, repair => {
+    repaired = true;
+    onRepair?.(repair);
+  });
+
+  // A repair invents blocks (the filler paragraph, the wrapping column) and
+  // they must not reach the repo id-less: only the MCP path runs ensureBlockIds
+  // afterwards, and apps/pages never id-fills on read, so BlockNote would mint
+  // a random id client-side and the next ops-shaped save would name a block the
+  // stored document doesn't have. Gated on an actual repair to keep the
+  // documented promise that a valid document comes back unchanged.
+  return (repaired ? ensureBlockIds(copy) : copy) as unknown as T[];
+}
+
 /**
  * Apply a sequence of block operations to a document. Pure — returns a new
  * blocks array, input untouched. Ops are applied sequentially, so later ops
@@ -641,7 +796,13 @@ function insertBlocksAt(
 export function applyBlockOps(
   blocks: unknown[],
   ops: BlockOp[],
-  { onIdRemint }: { onIdRemint?: (remint: BlockIdRemint) => void } = {}
+  {
+    onIdRemint,
+    onStructureRepair,
+  }: {
+    onIdRemint?: (remint: BlockIdRemint) => void;
+    onStructureRepair?: (repair: BlockStructureRepair) => void;
+  } = {}
 ): unknown[] {
   let doc = structuredClone(blocks) as BlockNode[];
 
@@ -707,7 +868,13 @@ export function applyBlockOps(
     }
   }
 
-  return doc;
+  // Ops are structural, not schema-aware: a delete that empties a columnList
+  // below two columns applies cleanly and yields a document no reader can
+  // open. Repair before the result escapes, so what callers report and what
+  // gets committed are the same document.
+  return normalizeBlockStructure(doc, {
+    ...(onStructureRepair ? { onRepair: onStructureRepair } : {}),
+  });
 }
 
 // ─── Preview branches (plan §3b) ─────────────────────────────────────────────
@@ -897,6 +1064,50 @@ function extractBlocks(content: string | null | undefined): BlockNode[] {
  * top-level blocks (base = merge-base version, ours = main, theirs = preview)
  * so the caller can resolve semantically and re-apply.
  */
+/**
+ * Normalize a document GitHub's merge API just produced, committing a repair
+ * only when one was actually needed.
+ *
+ * @param mergedFile - the post-merge content.json read (content + blob sha).
+ * @returns the sha of the repair commit, or null when nothing needed fixing.
+ */
+async function repairMergedContent(
+  page: PageWithContentRepo,
+  mergedFile: { content?: string | null; sha?: string | null } | null,
+  mergedSha: string | null
+): Promise<string | null> {
+  const blocks = mergedFile?.content ? parseBlocksStrict(mergedFile.content) : null;
+  // Unparseable content.json is not this function's problem to solve — the
+  // merge stands and the existing conflict/reload flows already cover it.
+  if (!blocks) return null;
+
+  let repaired = false;
+  const normalized = normalizeBlockStructure(blocks, {
+    onRepair: () => {
+      repaired = true;
+    },
+  });
+  if (!repaired) return null;
+
+  try {
+    const saved = await savePageContent(page, normalized, {
+      coverImage: extractCover(mergedFile?.content),
+      // CAS on the blob the merge produced: if anything landed in between,
+      // that write went through savePageContent and was normalized itself, so
+      // losing this race leaves a valid document either way.
+      ...(mergedSha ? { expectedSha: mergedSha } : {}),
+      message: `Accept preview (repaired column layout): ${page.title}`,
+    });
+    return saved.sha;
+  } catch (error: unknown) {
+    console.warn(
+      `[pageContent.acceptPreview] Could not commit the post-merge column repair for ${page.content_path}:`,
+      error instanceof Error ? error.message : String(error)
+    );
+    return null;
+  }
+}
+
 export async function acceptPreview(page: PageWithContentRepo): Promise<AcceptPreviewResult> {
   const { gitOrganization, repo } = contentRepoFor(page);
   const branch = previewBranchName(page.content_path);
@@ -925,6 +1136,16 @@ export async function acceptPreview(page: PageWithContentRepo): Promise<AcceptPr
         ...(result.sha ? { ref: result.sha } : { skipCache: true }),
       });
       newSha = mergedFile?.sha ?? null;
+
+      // A CLEAN git merge is not a valid document. Both sides can individually
+      // satisfy the multi-column invariants and still merge into something no
+      // reader can open: deleting two different columns from the same row is
+      // two non-overlapping hunks in a pretty-printed content.json, so git
+      // merges them without a conflict and never runs the semantic fallback.
+      // This is the default route for a published page (applies land on the
+      // preview branch), so it is the likeliest way the invariant gets broken,
+      // not an exotic one. Repair on top of the merge commit.
+      newSha = (await repairMergedContent(page, mergedFile, newSha)) ?? newSha;
     } catch (error: unknown) {
       // Advisory only — the merge itself stands.
       console.warn(
@@ -1658,8 +1879,14 @@ async function runSaveMerge(
           ? `Update page (merged): ${page.title}`
           : `Update page: ${page.title}`);
 
+    // Both sides can be individually valid and still merge into a document
+    // that isn't (each deletes a different column of the same three-column
+    // row). Normalize once, so the commit and the document handed back to the
+    // client are the same blocks — the client adopts what main now holds.
+    const merged = normalizeBlockStructure(merge.merged);
+
     try {
-      const saved = await savePageContent(page, merge.merged, {
+      const saved = await savePageContent(page, merged, {
         // Preserve main's CURRENT cover explicitly (the editor save carries no
         // cover; passing it avoids savePageContent's extra preserve re-read).
         coverImage: extractCover(ours.content),
@@ -1670,7 +1897,7 @@ async function runSaveMerge(
         merged: true,
         sha: saved.sha,
         commit: saved.commit,
-        document: merge.merged,
+        document: merged,
         auto_merged: merge.autoMerged,
         concurrent,
       };

@@ -41,6 +41,7 @@ const {
   uploadPageAsset,
   ensureBlockIds,
   applyBlockOps,
+  normalizeBlockStructure,
   blankPageBlocks,
   blankPageContentJson,
   BlockOpError,
@@ -251,6 +252,59 @@ describe('pageContent.savePageContent', () => {
     expect(arg.content).toBe(
       JSON.stringify({ blocks }, null, 2) // 2-space pretty wrapper, null cover omitted
     );
+  });
+});
+
+describe('pageContent.savePageContent — structural gate', () => {
+  // The claim this makes true: a caller that forgets to normalize still cannot
+  // commit a document BlockNote refuses to open.
+  const oneColumnRow = [
+    {
+      id: 'row',
+      type: 'columnList',
+      props: {},
+      children: [
+        {
+          id: 'col',
+          type: 'column',
+          props: { width: 1 },
+          children: [{ id: 'kept', type: 'paragraph', content: [] }],
+        },
+      ],
+    },
+  ];
+
+  it('repairs a one-column row on the way into the commit', async () => {
+    await savePageContent(page, oneColumnRow, { coverImage: null });
+
+    const committed = writtenWrapper().blocks;
+    expect(committed.map((b: { id: string; type: string }) => b.type)).toEqual(['paragraph']);
+    expect(committed.map((b: { id: string }) => b.id)).toEqual(['kept']);
+  });
+
+  it('leaves a valid document byte-identical', async () => {
+    const valid = [
+      {
+        id: 'row',
+        type: 'columnList',
+        props: {},
+        children: ['a', 'b'].map(k => ({
+          id: `col-${k}`,
+          type: 'column',
+          props: { width: 1 },
+          children: [{ id: `p-${k}`, type: 'paragraph', content: [] }],
+        })),
+      },
+    ];
+
+    await savePageContent(page, valid, { coverImage: null });
+
+    expect(writtenWrapper().blocks).toEqual(valid);
+  });
+
+  it('passes a non-array through untouched (legacy/degenerate payloads)', async () => {
+    await savePageContent(page, null, { coverImage: null });
+    expect(writtenWrapper()).toEqual({ blocks: null });
   });
 });
 
@@ -674,6 +728,239 @@ describe('pageContent.applyBlockOps', () => {
   });
 });
 
+// ─── normalizeBlockStructure ─────────────────────────────────────────────────
+
+// A `columnList` is `"column column+"` in BlockNote's ProseMirror schema and a
+// `column` is `"blockContainer+"`. A document that breaks either commits fine
+// and then throws "Error creating document from blocks passed as
+// `initialContent`" in every viewer AND the editor, so it can only be fixed by
+// a re-commit from outside — the reason these are repaired on write.
+
+describe('pageContent.normalizeBlockStructure', () => {
+  const column = (id: string, childId: string) => ({
+    id,
+    type: 'column',
+    props: { width: 1 },
+    children: [{ id: childId, type: 'paragraph', content: [] }],
+  });
+
+  const row = (id: string, columns: unknown[]) => ({
+    id,
+    type: 'columnList',
+    props: {},
+    children: columns,
+  });
+
+  const types = (blocks: unknown[]) => (blocks as Array<{ type: string }>).map(b => b.type);
+  const ids = (blocks: unknown[]) => (blocks as Array<{ id: string }>).map(b => b.id);
+
+  it('leaves a valid document structurally untouched', () => {
+    const doc = [row('r', [column('c1', 'p1'), column('c2', 'p2')])];
+    expect(normalizeBlockStructure(doc)).toEqual(doc);
+  });
+
+  it('is pure — the input is not mutated', () => {
+    const doc = [row('r', [column('c1', 'p1')])];
+    const snapshot = structuredClone(doc);
+    normalizeBlockStructure(doc);
+    expect(doc).toEqual(snapshot);
+  });
+
+  it('unwraps a columnList left with a single column, keeping the content', () => {
+    const result = normalizeBlockStructure([
+      { id: 'before', type: 'paragraph', content: [] },
+      row('r', [column('c1', 'p1')]),
+      { id: 'after', type: 'paragraph', content: [] },
+    ]);
+
+    expect(ids(result)).toEqual(['before', 'p1', 'after']);
+  });
+
+  it('drops a columnList with no columns at all', () => {
+    const result = normalizeBlockStructure([
+      row('r', []),
+      { id: 'keep', type: 'paragraph', content: [] },
+    ]);
+
+    expect(ids(result)).toEqual(['keep']);
+  });
+
+  it('wraps a non-column child of a columnList in its own column, in place', () => {
+    const result = normalizeBlockStructure([
+      row('r', [
+        column('c1', 'p1'),
+        { id: 'stray', type: 'paragraph', content: [] },
+        column('c2', 'p2'),
+      ]),
+    ]) as Array<{ children: Array<{ type: string; children: Array<{ id: string }> }> }>;
+
+    expect(types(result[0].children)).toEqual(['column', 'column', 'column']);
+    expect(result[0].children[1].children[0].id).toBe('stray');
+
+    const repairs: Array<{ kind: string; id?: string }> = [];
+    normalizeBlockStructure(
+      [
+        row('r', [
+          column('c1', 'p1'),
+          { id: 'stray', type: 'paragraph', content: [] },
+          column('c2', 'p2'),
+        ]),
+      ],
+      { onRepair: r => repairs.push(r) }
+    );
+    // The stray's id, not the row's — the caller is being pointed at a block.
+    expect(repairs).toEqual([{ kind: 'column_list_child_wrapped', id: 'stray' }]);
+  });
+
+  it('gives an emptied column a paragraph rather than killing the row', () => {
+    const result = normalizeBlockStructure([
+      row('r', [
+        column('c1', 'p1'),
+        { id: 'c2', type: 'column', props: { width: 1 }, children: [] },
+      ]),
+    ]) as Array<{ children: Array<{ children: Array<{ type: string; id?: string }> }> }>;
+
+    expect(types(result[0].children as unknown[])).toEqual(['column', 'column']);
+    expect(result[0].children[1].children).toMatchObject([
+      {
+        type: 'paragraph',
+        props: { textColor: 'default', backgroundColor: 'default', textAlignment: 'left' },
+        content: [],
+        children: [],
+      },
+    ]);
+    // Repairs invent blocks; they must not reach the repo without an id.
+    expect(result[0].children[1].children[0].id).toEqual(expect.any(String));
+  });
+
+  it('unwraps a column that is not inside a columnList', () => {
+    const result = normalizeBlockStructure([column('stray', 'p1')]);
+    expect(ids(result)).toEqual(['p1']);
+  });
+
+  it('repairs nested rows depth-first', () => {
+    const inner = row('inner', [column('ic1', 'ip1')]);
+    const result = normalizeBlockStructure([
+      row('outer', [
+        { id: 'oc1', type: 'column', props: { width: 1 }, children: [inner] },
+        column('oc2', 'op2'),
+      ]),
+    ]) as Array<{ children: Array<{ children: Array<{ id: string }> }> }>;
+
+    // The inner one-column row collapses into its content; the outer row,
+    // still two columns wide, survives.
+    expect(result[0].children[0].children.map(b => b.id)).toEqual(['ip1']);
+    expect(types(result as unknown[])).toEqual(['columnList']);
+  });
+
+  it('is idempotent', () => {
+    const once = normalizeBlockStructure([row('r', [column('c1', 'p1')])]);
+    expect(normalizeBlockStructure(once)).toEqual(once);
+  });
+
+  it('reports each repair through onRepair', () => {
+    const repairs: Array<{ kind: string; id?: string }> = [];
+    normalizeBlockStructure([row('r', [column('c1', 'p1')])], {
+      onRepair: repair => repairs.push(repair),
+    });
+
+    expect(repairs).toEqual([{ kind: 'column_list_unwrapped', id: 'r' }]);
+  });
+});
+
+describe('pageContent.applyBlockOps — column invariants', () => {
+  // The live failure: an agent deleted two of three columns from a staff row,
+  // the commit succeeded, and every reader of the page threw on load.
+  const staffRow = () => [
+    {
+      id: 'row',
+      type: 'columnList',
+      props: {},
+      children: ['a', 'b', 'c'].map(key => ({
+        id: `col-${key}`,
+        type: 'column',
+        props: { width: 1 },
+        children: [{ id: `profile-${key}`, type: 'profile', props: { name: key }, children: [] }],
+      })),
+    },
+  ];
+
+  it('a delete that would leave one column unwraps the row instead', () => {
+    const result = applyBlockOps(staffRow(), [
+      { op: 'delete', id: 'col-b' },
+      { op: 'delete', id: 'col-c' },
+    ]) as Array<{ id: string; type: string }>;
+
+    expect(result.map(b => b.type)).toEqual(['profile']);
+    expect(result.map(b => b.id)).toEqual(['profile-a']);
+  });
+
+  it('a delete down to two columns leaves the row alone', () => {
+    const result = applyBlockOps(staffRow(), [{ op: 'delete', id: 'col-c' }]) as Array<{
+      type: string;
+      children: unknown[];
+    }>;
+
+    expect(result[0].type).toBe('columnList');
+    expect(result[0].children).toHaveLength(2);
+  });
+
+  it('reports the repair through onStructureRepair', () => {
+    const repairs: Array<{ kind: string; id?: string }> = [];
+    applyBlockOps(
+      staffRow(),
+      [
+        { op: 'delete', id: 'col-b' },
+        { op: 'delete', id: 'col-c' },
+      ],
+      { onStructureRepair: repair => repairs.push(repair) }
+    );
+
+    expect(repairs).toEqual([{ kind: 'column_list_unwrapped', id: 'row' }]);
+  });
+
+  it('an insert positioned beside a column is wrapped into a column of its own', () => {
+    const result = applyBlockOps(staffRow(), [
+      {
+        op: 'insert',
+        blocks: [{ id: 'note', type: 'paragraph', content: [] }],
+        position: { after: 'col-a' },
+      },
+    ]) as Array<{ children: Array<{ type: string; children: Array<{ id: string }> }> }>;
+
+    expect(result[0].children.map(c => c.type)).toEqual(['column', 'column', 'column', 'column']);
+    expect(result[0].children[1].children[0].id).toBe('note');
+  });
+
+  it('replace_all carrying a one-column row is repaired too', () => {
+    const result = applyBlockOps(
+      [{ id: 'x', type: 'paragraph', content: [] }],
+      [
+        {
+          op: 'replace_all',
+          blocks: [
+            {
+              id: 'row',
+              type: 'columnList',
+              props: {},
+              children: [
+                {
+                  id: 'only',
+                  type: 'column',
+                  props: { width: 1 },
+                  children: [{ id: 'p', type: 'paragraph', content: [] }],
+                },
+              ],
+            },
+          ],
+        },
+      ]
+    ) as Array<{ id: string }>;
+
+    expect(result.map(b => b.id)).toEqual(['p']);
+  });
+});
+
 // ─── preview branches (plan §3b) ─────────────────────────────────────────────
 
 const PREVIEW_BRANCH = 'preview/pages/syllabus';
@@ -827,6 +1114,76 @@ describe('pageContent.acceptPreview', () => {
       merge_base_sha: 'main-head',
       commits: [],
     });
+
+  // The incident class, reached through the path git merges CLEANLY: two sides
+  // each delete a different column of the same three-column row, neither side
+  // is invalid on its own, and the hunks don't overlap — so there is no 409 and
+  // the semantic fallback never runs. Without a post-merge check, main lands a
+  // one-column row and the page becomes unopenable in viewer AND editor.
+  const mergedOneColumnRow = JSON.stringify({
+    blocks: [
+      {
+        id: 'row',
+        type: 'columnList',
+        props: {},
+        children: [
+          {
+            id: 'col-a',
+            type: 'column',
+            props: { width: 1 },
+            children: [{ id: 'profile-a', type: 'profile', props: {}, children: [] }],
+          },
+        ],
+      },
+    ],
+  });
+
+  it('clean merge: repairs a column layout the merge broke, reporting the repair sha', async () => {
+    mergeBranchMock.mockResolvedValue({ merged: true, sha: 'merge-sha' });
+    deleteBranchMock.mockResolvedValue({ deleted: true });
+    getContentMock.mockResolvedValue({ content: mergedOneColumnRow, sha: 'merged-blob-sha' });
+    putMock.mockResolvedValue({ sha: 'repaired-blob-sha', commit: 'repair-commit' });
+    branchFullyMerged();
+
+    const result = await acceptPreview(page);
+
+    // The row is gone; the profile it held survives at the top level.
+    const committed = writtenWrapper().blocks;
+    expect(committed.map((b: { type: string }) => b.type)).toEqual(['profile']);
+    expect(committed.map((b: { id: string }) => b.id)).toEqual(['profile-a']);
+
+    // CAS'd on the blob the merge produced, and the caller is handed the sha of
+    // the REPAIR — the merge's own blob sha is already stale.
+    expect(callArg(putMock)).toMatchObject({ expectedSha: 'merged-blob-sha' });
+    expect(result).toEqual({ merged: true, sha: 'repaired-blob-sha' });
+  });
+
+  it('clean merge: writes nothing when the merged document is already valid', async () => {
+    mergeBranchMock.mockResolvedValue({ merged: true, sha: 'merge-sha' });
+    deleteBranchMock.mockResolvedValue({ deleted: true });
+    getContentMock.mockResolvedValue({ content: '{"blocks":[]}', sha: 'merged-blob-sha' });
+    branchFullyMerged();
+
+    const result = await acceptPreview(page);
+
+    expect(putMock).not.toHaveBeenCalled();
+    expect(result).toEqual({ merged: true, sha: 'merged-blob-sha' });
+  });
+
+  it('clean merge: a failed repair commit leaves the merge standing', async () => {
+    mergeBranchMock.mockResolvedValue({ merged: true, sha: 'merge-sha' });
+    deleteBranchMock.mockResolvedValue({ deleted: true });
+    getContentMock.mockResolvedValue({ content: mergedOneColumnRow, sha: 'merged-blob-sha' });
+    // A racing writer took the sha — that write went through savePageContent
+    // and was normalized itself, so the document ends up valid either way.
+    putMock.mockRejectedValue(Object.assign(new Error('conflict'), { status: 409 }));
+    branchFullyMerged();
+
+    const result = await acceptPreview(page);
+
+    expect(result).toEqual({ merged: true, sha: 'merged-blob-sha' });
+    expect(deleteBranchMock).toHaveBeenCalled();
+  });
 
   it('clean merge: merges main←preview, deletes the branch, returns the content BLOB sha', async () => {
     mergeBranchMock.mockResolvedValue({ merged: true, sha: 'merge-sha' });
