@@ -48,6 +48,23 @@ interface ContentAssetsSyncPayload {
 
 export const contentAssetsSyncTask = task({
   id: 'content-assets-sync',
+  /**
+   * ONE sync per classroom at a time.
+   *
+   * The map is only self-correcting if the runs that build it are ordered.
+   * Two deliveries for one repo arriving together can apply their diffs in
+   * either order and record either `after` as "the commit the map is level
+   * with" — so the map's commit can move BACKWARDS, which hides the very gap
+   * `before` exists to expose. `concurrencyKey` (passed at trigger time, per
+   * classroom) gives each classroom its own copy of this queue, and the limit
+   * of 1 on that copy is what serializes them. Classrooms still run in
+   * parallel with each other.
+   *
+   * The queue is the fence, not the whole guarantee: a retry or a render-path
+   * `ensureContentAssets` still runs outside it, which is why the incremental
+   * commit write is also a compare-and-swap.
+   */
+  queue: { concurrencyLimit: 1 },
   run: async (payload: ContentAssetsSyncPayload) => {
     const { classroomId, reason, changes, forced, complete, before, after } = payload;
 

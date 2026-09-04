@@ -19,6 +19,8 @@ const contentAssetFindUnique = vi.fn();
 const classroomFindUnique = vi.fn();
 const classroomFindFirst = vi.fn();
 const classroomUpdate = vi.fn();
+const classroomUpdateMany = vi.fn();
+const contentAssetFindMany = vi.fn();
 const transaction = vi.fn();
 
 vi.mock('@classmoji/database', () => ({
@@ -27,11 +29,13 @@ vi.mock('@classmoji/database', () => ({
       findUnique: classroomFindUnique,
       findFirst: classroomFindFirst,
       update: classroomUpdate,
+      updateMany: classroomUpdateMany,
     },
     contentAsset: {
       upsert: contentAssetUpsert,
       deleteMany: contentAssetDeleteMany,
       findFirst: contentAssetFindFirst,
+      findMany: contentAssetFindMany,
       findUnique: contentAssetFindUnique,
     },
     $transaction: transaction,
@@ -54,6 +58,7 @@ vi.mock('../../content/ContentService.ts', () => ({
 const {
   syncContentAssets,
   syncContentAssetsForRepo,
+  lookupContentAssetsBySha,
   ensureContentAssets,
   recordContentAsset,
   lookupContentAsset,
@@ -80,13 +85,24 @@ const syncedAgo = (ms: number) => ({
   content_assets_synced_at: new Date(Date.now() - ms),
 });
 
-/** The upsert/deleteMany mocks return tagged markers so ops stay identifiable. */
-const setupTransaction = (deletedCount = 0) => {
+/**
+ * The upsert/deleteMany mocks return tagged markers so ops stay identifiable.
+ * `casCount` models the compare-and-swap: 1 when it lands, 0 when another run
+ * moved the classroom's commit first.
+ */
+const setupTransaction = (deletedCount = 0, casCount = 1) => {
   contentAssetUpsert.mockImplementation(args => ({ op: 'upsert', args }));
   contentAssetDeleteMany.mockImplementation(args => ({ op: 'deleteMany', args }));
   classroomUpdate.mockImplementation(args => ({ op: 'classroomUpdate', args }));
+  classroomUpdateMany.mockImplementation(args => ({ op: 'classroomUpdateMany', args }));
   transaction.mockImplementation((ops: { op: string }[]) =>
-    Promise.resolve(ops.map(op => (op.op === 'deleteMany' ? { count: deletedCount } : op)))
+    Promise.resolve(
+      ops.map(op => {
+        if (op.op === 'deleteMany') return { count: deletedCount };
+        if (op.op === 'classroomUpdateMany') return { count: casCount };
+        return op;
+      })
+    )
   );
 };
 
@@ -264,6 +280,19 @@ describe('contentAssets.service', () => {
   });
 
   describe('incremental sync', () => {
+    /** The commit the map is level with. */
+    const LEVEL = 'a'.repeat(40);
+
+    beforeEach(() => {
+      // An incremental sync only ever happens for a classroom whose tree has
+      // already been read once — a null commit escalates to full, deliberately,
+      // because a diff cannot build a map out of nothing.
+      classroomFindUnique.mockResolvedValue({
+        ...CLASSROOM,
+        content_assets_synced_commit: LEVEL,
+      });
+    });
+
     it('re-reads changed paths uncached, upserts them, and deletes removed ones', async () => {
       getMeta.mockImplementation(({ path }: { path: string }) =>
         Promise.resolve({ sha: `sha-${path}`, size: 10 })
@@ -424,17 +453,72 @@ describe('contentAssets.service', () => {
         after: 'b'.repeat(40),
       });
 
-      expect(classroomUpdate).toHaveBeenCalledTimes(1);
-      const [update] = classroomUpdate.mock.calls[0];
+      // A COMPARE-AND-SWAP: matched on the commit this run read, so a slower
+      // concurrent run cannot move the map's commit backwards.
+      expect(classroomUpdateMany).toHaveBeenCalledTimes(1);
+      const [update] = classroomUpdateMany.mock.calls[0];
       expect(update).toEqual({
-        where: { id: 'class-1' },
+        where: { id: 'class-1', content_assets_synced_commit: LEVEL },
         data: { content_assets_synced_commit: 'b'.repeat(40) },
       });
+      // The freshness timestamp is untouched, so the daily full refresh fires.
+      expect(classroomUpdate).not.toHaveBeenCalled();
       // In the transaction, so a failed apply cannot claim a commit it never
       // applied — and ahead of the sweep, whose count is read off the tail.
       const ops = transaction.mock.calls[0][0] as { op: string }[];
-      expect(ops[0].op).toBe('classroomUpdate');
+      expect(ops[0].op).toBe('classroomUpdateMany');
       expect(ops.at(-1)?.op).toBe('deleteMany');
+    });
+
+    it('drops the commit claim when a concurrent run got there first', async () => {
+      // The CAS matched nothing: something moved the classroom past the commit
+      // this run read. The ROWS it wrote stay — they are content-addressed and
+      // idempotent — but it must not claim a level it cannot vouch for. The
+      // winner's commit will not match the next push's `before`, which
+      // escalates, and that is the repair.
+      classroomFindUnique.mockResolvedValue({
+        ...CLASSROOM,
+        content_assets_synced_commit: LEVEL,
+      });
+      setupTransaction(0, /* casCount */ 0);
+      getMeta.mockResolvedValue({ sha: 'sha-a', size: 10 });
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+      const result = await syncContentAssets('class-1', {
+        changes: { added: ['images/a.png'], modified: [], removed: [] },
+        before: LEVEL,
+        after: 'b'.repeat(40),
+      });
+
+      expect(result.mode).toBe('incremental');
+      expect(result.upserted).toBe(1);
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('Concurrent sync for class-1'));
+      warn.mockRestore();
+    });
+
+    it('does NOT record a commit when the listing came back truncated', async () => {
+      // It could not apply the deletions it inferred, so the map is not level
+      // with `after` and must not say it is. Recording would make the next
+      // push look clean against a map that is missing rows.
+      classroomFindUnique.mockResolvedValue({
+        ...CLASSROOM,
+        content_assets_synced_commit: LEVEL,
+      });
+      const many = Array.from({ length: 31 }, (_unused, i) => `images/f${i}.png`);
+      getTree.mockResolvedValue({
+        sha: 'r',
+        truncated: true,
+        entries: [{ path: many[0], sha: 'sha-0', type: 'blob', size: 1 }],
+      });
+
+      const result = await syncContentAssets('class-1', {
+        changes: { added: many, modified: [], removed: [] },
+        before: LEVEL,
+        after: 'b'.repeat(40),
+      });
+
+      expect(result.truncated).toBe(true);
+      expect(classroomUpdateMany).not.toHaveBeenCalled();
     });
   });
 
@@ -488,17 +572,51 @@ describe('contentAssets.service', () => {
       expect(getTree).not.toHaveBeenCalled();
     });
 
-    it('does not treat a first sync as a missed delivery', async () => {
-      // Null stored commit means there is no chain yet, not a gap in one. Every
-      // classroom in the table starts here, so counting it would make the first
-      // push after this shipped a full sync for all of them at once.
+    it('escalates a FIRST sync because there is no map, not because of a gap', async () => {
+      // Null stored commit is not a gap in the chain — there is no chain — so
+      // this is not reported as a missed delivery. It still goes full, and for
+      // a different reason: a diff cannot build a map out of nothing. Applying
+      // one push's paths would leave every untouched file missing and then
+      // record that half-map as level with `after`, starting the chain from a
+      // state that was never true.
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
       const result = await syncContentAssets('class-1', {
         changes,
         before: 'c'.repeat(40),
         after: 'd'.repeat(40),
       });
 
-      expect(result.mode).toBe('incremental');
+      expect(result.mode).toBe('full');
+      expect(getMeta).not.toHaveBeenCalled();
+      expect(warn).not.toHaveBeenCalledWith(expect.stringContaining('a delivery was missed'));
+      warn.mockRestore();
+    });
+
+    it('escalates a first sync even when the push carries no before at all', async () => {
+      const result = await syncContentAssets('class-1', { changes, after: 'd'.repeat(40) });
+
+      expect(result.mode).toBe('full');
+    });
+
+    it('escalates a branch-creation push, whose before is all zeros', async () => {
+      // GitHub sends 40 zeros as `before` when a ref is created. It is not the
+      // commit the map is level with, so it is a gap like any other.
+      classroomFindUnique.mockResolvedValue({
+        ...CLASSROOM,
+        content_assets_synced_commit: LEVEL,
+      });
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+      const result = await syncContentAssets('class-1', {
+        changes,
+        before: '0'.repeat(40),
+        after: 'd'.repeat(40),
+      });
+
+      expect(result.mode).toBe('full');
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('a delivery was missed'));
+      warn.mockRestore();
     });
 
     it('does not escalate a caller that cannot answer the question', async () => {
@@ -784,6 +902,36 @@ describe('contentAssets.service', () => {
         where: { classroom_id: 'class-1', path: '.slidesthemes/midnight', type: 'tree' },
         select: { sha: true, type: true, size: true },
       });
+    });
+
+    it('resolves many shas in ONE query, lowest path winning a tie', async () => {
+      // An import rewrites a course's worth of content at once; per-sha lookups
+      // were a round trip per image per page.
+      contentAssetFindMany.mockResolvedValue([
+        { path: 'pages/lab-1/a.png', sha: 'sha-a' },
+        { path: 'pages/lab-9/copy-of-a.png', sha: 'sha-a' },
+        { path: 'pages/lab-2/b.png', sha: 'sha-b' },
+      ]);
+
+      const found = await lookupContentAssetsBySha('class-1', ['sha-a', 'sha-b', 'sha-a']);
+
+      expect(contentAssetFindMany).toHaveBeenCalledTimes(1);
+      expect(contentAssetFindMany).toHaveBeenCalledWith({
+        where: { classroom_id: 'class-1', sha: { in: ['sha-a', 'sha-b'] } },
+        select: { path: true, sha: true },
+        orderBy: { path: 'asc' },
+      });
+      // Two paths at one sha are byte-identical, so either is correct — the
+      // order is pinned so repeated imports produce the same output.
+      expect(found.get('sha-a')).toBe('pages/lab-1/a.png');
+      expect(found.get('sha-b')).toBe('pages/lab-2/b.png');
+      // A sha the map has never heard of is simply absent.
+      expect(found.has('sha-z')).toBe(false);
+    });
+
+    it('does not query at all for an empty sha list', async () => {
+      await expect(lookupContentAssetsBySha('class-1', [])).resolves.toEqual(new Map());
+      expect(contentAssetFindMany).not.toHaveBeenCalled();
     });
 
     it('resolves a sha back to a path, deterministically', async () => {

@@ -9,7 +9,7 @@
  * 404s the moment the source classroom is deleted with GitHub cleanup.
  */
 
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 vi.mock('@classmoji/database', () => ({ default: () => ({}) }));
 vi.mock('../../content/ContentService.ts', () => ({ ContentService: {} }));
@@ -17,8 +17,19 @@ vi.mock('../../git/index.ts', () => ({ getGitProvider: vi.fn() }));
 vi.mock('../page.service.ts', () => ({ ensureContentRepo: vi.fn() }));
 vi.mock('../contentManifest.service.ts', () => ({ saveManifest: vi.fn() }));
 
-const { isTextContentPath, rewriteContentUrls, rewriteStagedFiles, collectSignedBlobShas } =
-  await import('../contentImport.service.ts');
+/** The one asset-map query the sha sweep makes; asserted on below. */
+const lookupContentAssetsBySha = vi.fn();
+vi.mock('../contentAssets.service.ts', () => ({
+  lookupContentAssetsBySha: (...a: unknown[]) => lookupContentAssetsBySha(...a),
+}));
+
+const {
+  isTextContentPath,
+  rewriteContentUrls,
+  rewriteStagedFiles,
+  collectSignedBlobShas,
+  resolveShaPaths,
+} = await import('../contentImport.service.ts');
 
 /** Source and target deliberately live in DIFFERENT orgs — the org segment of
  *  every URL must be swapped too, not just the repo name. */
@@ -114,6 +125,40 @@ describe('rewriteContentUrls', () => {
     );
   });
 
+  it('rewrites a fully-qualified refs/heads raw URL, folder remap and all', () => {
+    // THE shape GitHub's own "Raw" button emits. Taking one segment as the
+    // branch reads `refs` as the branch and `heads/main/pages/lab-1/…` as the
+    // path, so the item folder is never recognized — the copy lands on a path
+    // no repo has, and every image 404s in the target.
+    const suffixed = { ...ctx, targetPath: 'pages/lab-1-2' };
+    const text =
+      'https://raw.githubusercontent.com/dartmouth-cs52/content-dartmouth-cs52-cs52-25s/refs/heads/main/pages/lab-1/a.png';
+    expect(rewriteContentUrls(text, suffixed)).toBe(
+      'https://raw.githubusercontent.com/brown-cs32/content-brown-cs32-cs32-26f/refs/heads/main/pages/lab-1-2/a.png'
+    );
+  });
+
+  it('rewrites a refs/tags raw URL the same way', () => {
+    const suffixed = { ...ctx, targetPath: 'pages/lab-1-2' };
+    const text =
+      'https://raw.githubusercontent.com/dartmouth-cs52/content-dartmouth-cs52-cs52-25s/refs/tags/v1/pages/lab-1/a.png';
+    expect(rewriteContentUrls(text, suffixed)).toBe(
+      'https://raw.githubusercontent.com/brown-cs32/content-brown-cs32-cs32-26f/refs/tags/v1/pages/lab-1-2/a.png'
+    );
+  });
+
+  it('leaves a COMMIT-pinned raw URL completely alone, repo swap included', () => {
+    // It asks for one exact historical revision, and that commit exists only in
+    // the SOURCE repo — a fresh import's target has none of its history.
+    // Repointing it guarantees a 404; leaving it resolves for as long as the
+    // source repo is around.
+    const suffixed = { ...ctx, targetPath: 'pages/lab-1-2' };
+    const text = `https://raw.githubusercontent.com/dartmouth-cs52/content-dartmouth-cs52-cs52-25s/${'a'.repeat(
+      40
+    )}/pages/lab-1/a.png`;
+    expect(rewriteContentUrls(text, suffixed)).toBe(text);
+  });
+
   it('rewrites the /content/{org}/{repo} proxy shape, item-specific and general', () => {
     const suffixed = { ...ctx, targetPath: 'pages/lab-1-2' };
     const own = '/content/dartmouth-cs52/content-dartmouth-cs52-cs52-25s/pages/lab-1/a.svg';
@@ -140,6 +185,14 @@ describe('rewriteContentUrls', () => {
     // path belongs to a repo this import has nothing to do with.
     const suffixed = { ...ctx, targetPath: 'pages/lab-1-2' };
     const text = 'https://raw.githubusercontent.com/someone-else/other-repo/main/pages/lab-1/x.png';
+    expect(rewriteContentUrls(text, suffixed)).toBe(text);
+  });
+
+  it('does not rewrite a bare path sitting in a foreign URL’s query string', () => {
+    // `=` is not a value boundary: `?src=pages/lab-1/a.png` on somebody else's
+    // host is their query string, not our repo path.
+    const suffixed = { ...ctx, targetPath: 'pages/lab-1-2' };
+    const text = 'https://images.example.com/resize?src=pages/lab-1/a.png&w=800';
     expect(rewriteContentUrls(text, suffixed)).toBe(text);
   });
 
@@ -322,5 +375,68 @@ describe('rewriteStagedFiles', () => {
     );
     expect(out[1]!.content).toBe(binary);
     expect(out).toHaveLength(2);
+  });
+});
+
+/**
+ * The sha sweep: every signed blob an import references, resolved against the
+ * SOURCE classroom's asset map in one query for the whole run.
+ */
+describe('resolveShaPaths', () => {
+  const CLASS_ID = '3f2504e0-4f89-41d3-9a0c-0305e82c3301';
+  const SHA = 'c'.repeat(40);
+  const OTHER = 'd'.repeat(40);
+
+  beforeEach(() => {
+    lookupContentAssetsBySha.mockReset();
+  });
+
+  it('makes ONE query for every sha across every text it is given', async () => {
+    // THE regression this guards: resolving per sha, inside the staging loop,
+    // was a round trip per image per page — on the one code path whose entire
+    // job is copying a course's worth of images.
+    lookupContentAssetsBySha.mockResolvedValue(new Map([[SHA, 'pages/lab-1/a.png']]));
+
+    const found = await resolveShaPaths(CLASS_ID, [
+      `<img src="/c/${CLASS_ID}/blob/${SHA}.png?p=draft">`,
+      `<img src="/c/${CLASS_ID}/blob/${OTHER}.svg?p=live">`,
+      // The same sha again, and a shape that carries none.
+      `<img src="/c/${CLASS_ID}/blob/${SHA}.png?p=live">`,
+      'pages/lab-1/plain.png',
+    ]);
+
+    expect(lookupContentAssetsBySha).toHaveBeenCalledTimes(1);
+    const [classroomId, shas] = lookupContentAssetsBySha.mock.calls[0];
+    expect(classroomId).toBe(CLASS_ID);
+    expect([...(shas as string[])].sort()).toEqual([SHA, OTHER].sort());
+    expect(found.get(SHA)).toBe('pages/lab-1/a.png');
+  });
+
+  it('does not query when the content references no signed blobs', async () => {
+    await expect(resolveShaPaths(CLASS_ID, ['{"src":"pages/lab-1/a.png"}'])).resolves.toEqual(
+      new Map()
+    );
+    expect(lookupContentAssetsBySha).not.toHaveBeenCalled();
+  });
+
+  it('degrades to an empty map when the lookup fails', async () => {
+    // Best effort: the rewriter then leaves those URLs alone and warns. An
+    // import must not fail over a reference it could not tidy up.
+    lookupContentAssetsBySha.mockRejectedValue(new Error('connection terminated'));
+
+    await expect(
+      resolveShaPaths(CLASS_ID, [`<img src="/c/${CLASS_ID}/blob/${SHA}.png">`])
+    ).resolves.toEqual(new Map());
+  });
+
+  it('feeds the rewriter, which leaves an unresolved sha verbatim and warns', async () => {
+    lookupContentAssetsBySha.mockResolvedValue(new Map());
+    const url = `https://cdn.classmoji.test/c/${CLASS_ID}/blob/${SHA}.png?p=draft`;
+    const onWarn = vi.fn();
+
+    const shaPaths = await resolveShaPaths(CLASS_ID, [url]);
+
+    expect(rewriteContentUrls(url, { ...ctx, shaPaths, onWarn })).toBe(url);
+    expect(onWarn).toHaveBeenCalledWith(expect.stringContaining(SHA));
   });
 });

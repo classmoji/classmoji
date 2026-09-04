@@ -21,8 +21,8 @@
 
 import getPrisma from '@classmoji/database';
 import { ContentService } from '../content/ContentService.ts';
-import { contentProxyBase, pagesContentBase } from './contentRefs.ts';
-import { lookupContentAssetBySha } from './contentAssets.service.ts';
+import { contentProxyBase, isCommitRef, pagesContentBase, splitRawRef } from './contentRefs.ts';
+import { lookupContentAssetsBySha } from './contentAssets.service.ts';
 import { getGitProvider } from '../git/index.ts';
 import * as contentManifestService from './contentManifest.service.ts';
 import { createWithUniquePageSlug, ensureContentRepo, isPageSlugConflict } from './page.service.ts';
@@ -195,6 +195,18 @@ const THEMES_FOLDER = '.slidesthemes';
  * catches cross-item references — those keep their original folder, correct
  * whenever that item was imported un-renamed; a renamed cross-referenced item
  * is a documented residual.
+ *
+ * RESIDUALS this does not fix, and cannot from here:
+ *
+ *   - A recovered `/theme/` reference becomes `.slidesthemes/{name}`, which is
+ *     outside any item's `sourcePath` and so is carried across unchanged. It
+ *     resolves only if the TARGET repo already has a theme by that name —
+ *     shared themes are per-repo and an import copies pages and decks, not the
+ *     `.slidesthemes/` folder. A deck importing onto a repo without that theme
+ *     falls back to its own CSS, which is visible and fixable; inventing a
+ *     theme copy here would not be.
+ *   - A cross-item bare path (`pages/lab-9/…`) keeps its folder, for the same
+ *     reason and with the same caveat as the URL shapes above.
  */
 export function rewriteContentUrls(text: string, ctx: UrlRewriteContext): string {
   const rawSourcePrefix = `${RAW_HOST}/${ctx.sourceLogin}/${ctx.sourceRepo}/`;
@@ -230,25 +242,42 @@ export function rewriteContentUrls(text: string, ctx: UrlRewriteContext): string
   return rewriteBarePaths(rewritten, ctx);
 }
 
-/** The raw shape, on whatever branch the reference happens to name. */
+/**
+ * The raw shape, on whatever ref the reference happens to name.
+ *
+ * The ref is whatever `splitRawRef` says it is — including the fully-qualified
+ * `refs/heads/main` that GitHub's own Raw button emits, which is why this does
+ * not just take the first segment. Getting that wrong is not cosmetic: `refs`
+ * would be read as the branch, the item folder would never be recognized, and
+ * the copied page would point at `…/{target}/heads/main/pages/lab-1/…` — a path
+ * that exists in no repo at all.
+ *
+ * A COMMIT-pinned URL is left entirely alone, repo swap included. It asks for
+ * one exact historical revision, and that commit exists only in the SOURCE
+ * repo — a fresh import's target has none of its history. Pointing it at the
+ * target guarantees a 404, where leaving it at least resolves for as long as
+ * the source repo is around.
+ */
 function rewriteRawUrls(
   text: string,
   sourcePrefix: string,
   targetPrefix: string,
   ctx: UrlRewriteContext
 ): string {
-  // `[^/\s"'()<>]+` is the branch segment — one path segment, whatever it is
-  // called — and the rest is the repo path, matched non-greedily up to the
-  // first delimiter so surrounding markup or JSON is never swallowed.
-  const pattern = new RegExp(`${escapeRegExp(sourcePrefix)}([^/\\s"'()<>]+)/([^\\s"'()<>]*)`, 'g');
+  // Everything after the repo, up to the first delimiter, so surrounding markup
+  // or JSON is never swallowed; `splitRawRef` then separates ref from path.
+  const pattern = new RegExp(`${escapeRegExp(sourcePrefix)}([^\\s"'()<>]*)`, 'g');
   const itemPrefix = ctx.sourcePath ? `${ctx.sourcePath}/` : '';
 
-  return text.replace(pattern, (_match, branch: string, repoPath: string) => {
+  return text.replace(pattern, (match, rest: string) => {
+    const split = splitRawRef(rest);
+    if (!split || isCommitRef(split.ref)) return match;
+
     const mapped =
-      itemPrefix && repoPath.startsWith(itemPrefix)
-        ? `${ctx.targetPath}/${repoPath.slice(itemPrefix.length)}`
-        : repoPath;
-    return `${targetPrefix}${branch}/${mapped}`;
+      itemPrefix && split.path.startsWith(itemPrefix)
+        ? `${ctx.targetPath}/${split.path.slice(itemPrefix.length)}`
+        : split.path;
+    return `${targetPrefix}${split.ref}/${mapped}`;
   });
 }
 
@@ -268,7 +297,10 @@ function rewriteRawUrls(
 function rewriteBarePaths(text: string, ctx: UrlRewriteContext): string {
   if (!ctx.sourcePath || ctx.sourcePath === ctx.targetPath) return text;
 
-  const pattern = new RegExp(`(^|["'(\\s=,>])${escapeRegExp(ctx.sourcePath)}/`, 'g');
+  // `=` and `,` are deliberately NOT boundaries: a foreign URL's query string
+  // (`?src=pages/lab-1/a.png`) would otherwise be rewritten inside a link this
+  // import has no business touching.
+  const pattern = new RegExp(`(^|["'(\\s>])${escapeRegExp(ctx.sourcePath)}/`, 'g');
   return text.replace(pattern, (_match, lead: string) => `${lead}${ctx.targetPath}/`);
 }
 
@@ -276,6 +308,12 @@ function rewriteBarePaths(text: string, ctx: UrlRewriteContext): string {
  * `/c/{classroomId}/{blob|theme|missing}/…` — the shapes OUR delivery layer
  * emits, matched by path rather than by host because the origin is deployment
  * configuration and staging, production and local all differ.
+ *
+ * The classroom-id class assumes a UUID (hex and dashes). `Classroom.id` is
+ * `@default(uuid())` and has been since the model existed; if that ever changes
+ * to a slug or a cuid, this stops matching and signed URLs start being copied
+ * verbatim again — silently, since a non-match is indistinguishable from
+ * ordinary text.
  */
 const SIGNED_URL_PATTERN =
   /(?:https?:\/\/[^\s"'()<>]+)?\/c\/[0-9a-fA-F-]{8,36}\/(blob|theme|missing)\/([^\s"'()<>]*)/g;
@@ -365,17 +403,46 @@ function escapeRegExp(value: string): string {
 }
 
 /**
+ * A staged write alongside its decoded text, so the utf8 round trip happens
+ * once.
+ *
+ * The import needs to READ every text file before it rewrites any of them — the
+ * signed-blob shas across the whole batch are resolved in a single query — and
+ * decoding in both passes meant base64-decoding a course's entire content
+ * twice. `text` is null for binaries, which are never decoded at all: their
+ * bytes are not valid utf8 and a round trip would replace them with U+FFFD.
+ */
+export interface DecodedFile {
+  file: BatchFile;
+  text: string | null;
+}
+
+/** Decode the text files of a staged batch; binaries carry a null text. */
+export function decodeStagedFiles(files: BatchFile[]): DecodedFile[] {
+  return files.map(file => ({
+    file,
+    text: isTextContentPath(file.path)
+      ? Buffer.from(file.content, 'base64').toString('utf8')
+      : null,
+  }));
+}
+
+/** Rewrite already-decoded staged files; binaries pass through untouched. */
+export function rewriteDecodedFiles(decoded: DecodedFile[], ctx: UrlRewriteContext): BatchFile[] {
+  return decoded.map(({ file, text }) => {
+    if (text === null) return file;
+    const rewritten = rewriteContentUrls(text, ctx);
+    if (rewritten === text) return file;
+    return { ...file, content: Buffer.from(rewritten, 'utf8').toString('base64') };
+  });
+}
+
+/**
  * Apply `rewriteContentUrls` to the text files in a staged item's writes
  * (base64-decoded, rewritten, re-encoded); binaries pass through untouched.
  */
 export function rewriteStagedFiles(files: BatchFile[], ctx: UrlRewriteContext): BatchFile[] {
-  return files.map(file => {
-    if (!isTextContentPath(file.path)) return file;
-    const decoded = Buffer.from(file.content, 'base64').toString('utf8');
-    const rewritten = rewriteContentUrls(decoded, ctx);
-    if (rewritten === decoded) return file;
-    return { ...file, content: Buffer.from(rewritten, 'utf8').toString('base64') };
-  });
+  return rewriteDecodedFiles(decodeStagedFiles(files), ctx);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -518,52 +585,48 @@ async function collectFolderFiles({
 /** A source content row staged for import after its files were read. */
 interface StagedItem<Source> {
   source: Source;
-  files: BatchFile[];
+  files: DecodedFile[];
   targetTitle: string;
   targetSlug: string;
   targetContentPath: string;
-  /** Source-map paths for the signed blobs this item references — see below. */
-  shaPaths: ReadonlyMap<string, string>;
 }
 
 /**
- * Resolve the signed-blob shas in some text back to SOURCE repo paths.
+ * Resolve every signed-blob sha an import references back to SOURCE repo paths,
+ * in one query for the whole run.
  *
  * A signed URL names content (a sha), not location, so the only way to recover
  * a path is the source classroom's own asset map. Resolved here, in the import,
  * because the rewriter itself is pure — it is called from a Trigger task and
  * from a local clone helper, neither of which should acquire a database.
  *
+ * ONE query, for the whole batch, once. Per-sha lookups inside the staging loop
+ * made this a round trip per image per page, on the code path whose entire job
+ * is copying a course's worth of images.
+ *
  * Best effort throughout: a sha the map has never heard of simply stays out of
  * the map, and the rewriter leaves that URL alone and warns. An import must not
  * fail over a reference it could not tidy up.
  */
-async function resolveShaPaths(
+export async function resolveShaPaths(
   classroomId: string,
   texts: string[]
 ): Promise<ReadonlyMap<string, string>> {
-  const shas = new Set(texts.flatMap(text => collectSignedBlobShas(text)));
-  if (shas.size === 0) return new Map();
+  const shas = [...new Set(texts.flatMap(text => collectSignedBlobShas(text)))];
+  if (shas.length === 0) return new Map();
 
-  const found = await Promise.all(
-    [...shas].map(async sha => {
-      try {
-        const row = await lookupContentAssetBySha(classroomId, sha);
-        return row ? ([sha, row.path] as [string, string]) : null;
-      } catch {
-        return null;
-      }
-    })
-  );
-
-  return new Map(found.filter((pair): pair is [string, string] => pair !== null));
+  try {
+    return await lookupContentAssetsBySha(classroomId, shas);
+  } catch {
+    return new Map();
+  }
 }
 
-/** The decoded text of every rewritable file in a staged batch. */
-function stagedTexts(files: BatchFile[]): string[] {
-  return files
-    .filter(file => isTextContentPath(file.path))
-    .map(file => Buffer.from(file.content, 'base64').toString('utf8'));
+/** Every decoded text a staged item carries, for the sha sweep. */
+function stagedTexts<Source>(items: StagedItem<Source>[]): string[] {
+  return items.flatMap(item =>
+    item.files.map(file => file.text).filter((text): text is string => text !== null)
+  );
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -773,24 +836,16 @@ async function importPages({
         warn('pages', `skipped "${page.title}" — no files at ${page.content_path}`);
         continue;
       }
-      // Repoint source-repo asset references at the copied files — otherwise
-      // deleting the source classroom (with GitHub cleanup) 404s every image.
-      // The header image goes into the same lookup: it is stored on the row
-      // rather than in the files, but it is the same repo and the same shapes.
-      const shaPaths = await resolveShaPaths(source.classroomId, [
-        ...stagedTexts(files),
-        page.header_image_url ?? '',
-      ]);
-      files = rewriteStagedFiles(files, {
-        sourceLogin: source.login,
-        sourceRepo: source.repo,
-        sourcePath: page.content_path,
-        targetLogin: target.login,
-        targetRepo: target.repo,
-        targetPath: targetContentPath,
-        shaPaths,
+      // Staged DECODED and un-rewritten. The rewrite needs the signed-blob
+      // shas of the whole batch resolved first, and that is one query for the
+      // run rather than one per page — see resolveShaPaths.
+      staged.push({
+        source: page,
+        files: decodeStagedFiles(files),
+        targetTitle,
+        targetSlug,
+        targetContentPath,
       });
-      staged.push({ source: page, files, targetTitle, targetSlug, targetContentPath, shaPaths });
     } finally {
       consumed++;
       emitProgress(onProgress, { kind: 'pages', done: consumed, total });
@@ -799,12 +854,34 @@ async function importPages({
 
   if (staged.length === 0) return 0;
 
+  // Repoint source-repo asset references at the copied files — otherwise
+  // deleting the source classroom (with GitHub cleanup) 404s every image. The
+  // header images go into the same sweep: they are stored on the row rather
+  // than in the files, but they are the same repo and the same shapes.
+  const shaPaths = await resolveShaPaths(source.classroomId, [
+    ...stagedTexts(staged),
+    ...staged.map(item => item.source.header_image_url ?? ''),
+  ]);
+
+  const written = staged.map(item => ({
+    item,
+    files: rewriteDecodedFiles(item.files, {
+      sourceLogin: source.login,
+      sourceRepo: source.repo,
+      sourcePath: item.source.content_path,
+      targetLogin: target.login,
+      targetRepo: target.repo,
+      targetPath: item.targetContentPath,
+      shaPaths,
+    }),
+  }));
+
   // ONE commit for all page files.
   try {
     await ContentService.uploadBatch({
       gitOrganization: target.gitOrganization,
       repo: target.repo,
-      files: staged.flatMap(s => s.files),
+      files: written.flatMap(w => w.files),
       branch: 'main',
       message: commitMessage,
     });
@@ -846,7 +923,7 @@ async function importPages({
                   targetLogin: target.login,
                   targetRepo: target.repo,
                   targetPath: item.targetContentPath,
-                  shaPaths: item.shaPaths,
+                  shaPaths,
                 })
               : item.source.header_image_url,
             header_image_position: item.source.header_image_position,
@@ -944,25 +1021,14 @@ async function importSlides({
         warn('slides', `skipped "${slide.title}" — no files at ${slide.content_path}`);
         continue;
       }
-      // Repoint source-repo asset references at the copied files (deck.json +
-      // index.html are rewritten in lockstep, keeping the pair consistent).
-      const shaPaths = await resolveShaPaths(source.classroomId, stagedTexts(files));
-      files = rewriteStagedFiles(files, {
-        sourceLogin: source.login,
-        sourceRepo: source.repo,
-        sourcePath: slide.content_path,
-        targetLogin: target.login,
-        targetRepo: target.repo,
-        targetPath: targetContentPath,
-        shaPaths,
-      });
+      // Staged DECODED and un-rewritten — the whole batch's signed-blob shas
+      // resolve in one query below, not one per deck.
       staged.push({
         source: slide,
-        files,
+        files: decodeStagedFiles(files),
         targetTitle: slide.title,
         targetSlug,
         targetContentPath,
-        shaPaths,
       });
     } finally {
       consumed++;
@@ -972,13 +1038,29 @@ async function importSlides({
 
   if (staged.length === 0) return 0;
 
+  // Repoint source-repo asset references at the copied files (deck.json +
+  // index.html are rewritten in lockstep, keeping the pair consistent).
+  const shaPaths = await resolveShaPaths(source.classroomId, stagedTexts(staged));
+
+  const files = staged.flatMap(item =>
+    rewriteDecodedFiles(item.files, {
+      sourceLogin: source.login,
+      sourceRepo: source.repo,
+      sourcePath: item.source.content_path,
+      targetLogin: target.login,
+      targetRepo: target.repo,
+      targetPath: item.targetContentPath,
+      shaPaths,
+    })
+  );
+
   // ONE commit for all slide files (deck.json + generated index.html copied
   // verbatim — never regenerated).
   try {
     await ContentService.uploadBatch({
       gitOrganization: target.gitOrganization,
       repo: target.repo,
-      files: staged.flatMap(s => s.files),
+      files,
       branch: 'main',
       message: commitMessage,
     });

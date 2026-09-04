@@ -389,11 +389,25 @@ async function incrementalSync(
   // which commit the map is now level with, which is what lets the NEXT push
   // notice a delivery that went missing. Inside the transaction, so a failed
   // apply does not claim a commit it never applied.
-  const commitOps = after
+  //
+  // A COMPARE-AND-SWAP, not a write: `updateMany` matched on the commit this
+  // run read, so it lands only if nothing moved the classroom in between.
+  // Deliveries for one classroom are meant to run one at a time (the sync task
+  // carries a per-classroom concurrency key), but a Trigger retry, a manual
+  // sync, or a render-path `ensureContentAssets` can still overlap — and a
+  // blind write from the slower of two runs would move the map's commit
+  // BACKWARDS, which reads as a missed delivery on the next push at best and
+  // hides a real one at worst.
+  //
+  // Suppressed entirely when the listing was truncated: the run could not apply
+  // the deletions it inferred, so the map is not level with `after` and must not
+  // say it is.
+  const casCommit = after && !truncated ? after : null;
+  const commitOps = casCommit
     ? [
-        getPrisma().classroom.update({
-          where: { id: classroom.id },
-          data: { content_assets_synced_commit: after },
+        getPrisma().classroom.updateMany({
+          where: { id: classroom.id, content_assets_synced_commit: classroom.syncedCommit },
+          data: { content_assets_synced_commit: casCommit },
         }),
       ]
     : [];
@@ -405,6 +419,18 @@ async function incrementalSync(
       where: { classroom_id: classroom.id, path: { in: toDelete } },
     }),
   ]);
+
+  if (casCommit && (results[0] as { count: number }).count === 0) {
+    // Lost the race. The ROWS this run wrote are still correct — they are
+    // content-addressed and idempotent — so only the commit claim is dropped.
+    // Whoever won recorded a commit this run cannot vouch for, and the next
+    // push's `before` will not match it, which escalates to a full tree read.
+    // That is the repair, and it is the one the mismatch path already runs.
+    console.warn(
+      `[contentAssets] Concurrent sync for ${classroom.id} moved the map past ` +
+        `${classroom.syncedCommit}; not recording ${casCommit}. The next push escalates.`
+    );
+  }
 
   // Same positional coupling as fullSync: the delete is appended last.
   const deleted = (results.at(-1) as { count: number }).count;
@@ -431,7 +457,8 @@ function touchesThemes(changes: ContentAssetChanges): boolean {
  * Pass `full: true` to force the full path even when `changes` is present.
  *
  * A push that does not build on the commit the map is level with escalates too
- * — see `missedDelivery`.
+ * — see `missedDelivery` — as does the FIRST push for a classroom whose tree
+ * has never been read.
  */
 export async function syncContentAssets(
   classroomId: string,
@@ -450,7 +477,15 @@ export async function syncContentAssets(
     );
   }
 
-  const goFull = opts.full === true || !opts.changes || touchesThemes(opts.changes) || missed;
+  // A classroom with no recorded commit has never had its whole tree read, and
+  // a diff cannot build a map out of nothing: applying one push's paths would
+  // leave every file the push did not touch missing, and then RECORD that
+  // half-map as level with `after` — so the chain starts from a state that was
+  // never true and the gap never shows up again. The first sync reads the tree.
+  const firstSync = Boolean(opts.changes) && !classroom.syncedCommit;
+
+  const goFull =
+    opts.full === true || !opts.changes || touchesThemes(opts.changes) || missed || firstSync;
 
   return goFull
     ? fullSync(classroom)
@@ -700,6 +735,40 @@ export async function lookupContentTree(
     where: { classroom_id: classroomId, path: normalized, type: 'tree' },
     select: { sha: true, type: true, size: true },
   });
+}
+
+/**
+ * Many SHAs → a path holding each, in ONE query.
+ *
+ * The batch form of `lookupContentAssetBySha`, and it exists for the same
+ * reason `lookupContentAssets` does: an import rewrites a whole classroom's
+ * worth of content at once, and resolving each signed URL on its own was a
+ * round trip per image per page. SHAs the map has never heard of are simply
+ * absent from the returned map.
+ *
+ * Where two paths share a SHA the winner is the lowest path, matching the
+ * single-SHA lookup's `orderBy` — content-addressed means they are
+ * byte-identical, so the choice cannot be wrong, only arbitrary, and pinning it
+ * keeps repeated imports of the same content producing the same output.
+ */
+export async function lookupContentAssetsBySha(
+  classroomId: string,
+  shas: string[]
+): Promise<Map<string, string>> {
+  const wanted = [...new Set(shas)];
+  if (wanted.length === 0) return new Map();
+
+  const rows = await getPrisma().contentAsset.findMany({
+    where: { classroom_id: classroomId, sha: { in: wanted } },
+    select: { path: true, sha: true },
+    orderBy: { path: 'asc' },
+  });
+
+  const bySha = new Map<string, string>();
+  for (const row of rows as { path: string; sha: string }[]) {
+    if (!bySha.has(row.sha)) bySha.set(row.sha, row.path);
+  }
+  return bySha;
 }
 
 /**
