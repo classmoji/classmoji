@@ -11,18 +11,30 @@ import * as cheerio from 'cheerio';
  * samples, and inside anything else an instructor pasted. Parsing and
  * re-serializing cannot have that class of bug.
  *
- * Four places hold a URL worth rewriting:
+ * Six places hold a URL worth rewriting:
  *   - `src`     — images, videos, iframes;
  *   - `href`    — downloadable attachments (and stylesheet links, which the
  *                 caller is expected to exclude — see below);
  *   - `srcset`  — a comma-separated candidate list, each with its own URL;
- *   - `style`   — inline `background-image: url(...)` and friends.
+ *   - `style`   — inline `background-image: url(...)` and friends;
+ *   - `data-background-image` — Reveal's slide background, which is a real
+ *                 repo asset that happens to be addressed from a `data-*`
+ *                 attribute rather than an `<img>`;
+ *   - `data-background-video` — same, as a comma-separated source list.
+ *
+ * `data-background-iframe` is deliberately NOT in that list: it names a PAGE
+ * to embed, not an asset in the content repo, and signing it as a blob would
+ * point the iframe at a file the Worker serves with the wrong content type.
  *
  * Everything the resolver does not map is left byte-identical. That includes
  * theme stylesheets: a theme is signed as a FOLDER so its relative `url()`
  * references keep working, and rewriting its `<link href>` to a blob URL would
  * break exactly that. The caller's resolver is what declines those.
  */
+
+/** Reveal's slide-background attributes that name a repo asset. */
+const BG_IMAGE = 'data-background-image';
+const BG_VIDEO = 'data-background-video';
 
 /** Split a `srcset` into its candidates without losing the descriptors. */
 function splitSrcSet(value: string): { url: string; descriptor: string }[] {
@@ -36,6 +48,20 @@ function splitSrcSet(value: string): { url: string; descriptor: string }[] {
         ? { url: part, descriptor: '' }
         : { url: part.slice(0, space), descriptor: part.slice(space) };
     });
+}
+
+/**
+ * Split a `data-background-video` source list.
+ *
+ * Reveal accepts a comma-separated list of sources and trims each one itself,
+ * so the trimmed form is what goes back; order is preserved, and a list whose
+ * items all decline is never written back at all (the `changed` flag below).
+ */
+function splitVideoSources(value: string): string[] {
+  return value
+    .split(',')
+    .map(part => part.trim())
+    .filter(part => part.length > 0);
 }
 
 /** Every `url(...)` in a CSS declaration list, with its quoting preserved. */
@@ -73,14 +99,20 @@ export async function rewriteDeckAssetUrls(
   const $ = cheerio.load(html);
   const candidates = new Set<string>();
 
-  const elements = $('[src], [srcset], [href], [style]').toArray();
+  const elements = $(
+    '[src], [srcset], [href], [style], [data-background-image], [data-background-video]'
+  ).toArray();
 
   for (const el of elements) {
     const { src, srcset, href, style } = el.attribs;
+    const bgImage = el.attribs[BG_IMAGE];
+    const bgVideo = el.attribs[BG_VIDEO];
     if (src) candidates.add(src);
     if (href) candidates.add(href);
     if (srcset) for (const part of splitSrcSet(srcset)) candidates.add(part.url);
     if (style) for (const url of cssUrls(style)) candidates.add(url);
+    if (bgImage) candidates.add(bgImage);
+    if (bgVideo) for (const source of splitVideoSources(bgVideo)) candidates.add(source);
   }
 
   if (candidates.size === 0) return html;
@@ -97,6 +129,8 @@ export async function rewriteDeckAssetUrls(
 
   for (const el of elements) {
     const { src, srcset, href, style } = el.attribs;
+    const bgImage = el.attribs[BG_IMAGE];
+    const bgVideo = el.attribs[BG_VIDEO];
 
     const nextSrc = src ? map(src) : undefined;
     if (nextSrc !== undefined) {
@@ -124,6 +158,20 @@ export async function rewriteDeckAssetUrls(
       const nextStyle = rewriteCssUrls(style, map);
       if (nextStyle !== style) {
         el.attribs['style'] = nextStyle;
+        changed = true;
+      }
+    }
+
+    const nextBgImage = bgImage ? map(bgImage) : undefined;
+    if (nextBgImage !== undefined) {
+      el.attribs[BG_IMAGE] = nextBgImage;
+      changed = true;
+    }
+
+    if (bgVideo) {
+      const sources = splitVideoSources(bgVideo);
+      if (sources.some(source => map(source) !== undefined)) {
+        el.attribs[BG_VIDEO] = sources.map(source => map(source) ?? source).join(',');
         changed = true;
       }
     }
