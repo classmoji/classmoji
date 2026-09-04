@@ -36,7 +36,12 @@ const THEMES_FOLDER = '.slidesthemes';
 
 /** The slide fields a delivery context needs. Narrow on purpose. */
 interface DeliverySlide {
-  classroom?: { id?: string; content_key_version?: number; content_repo?: string } | null;
+  classroom?: {
+    id?: string;
+    content_key_version?: number;
+    content_repo?: string;
+    content_delivery_enabled?: boolean | null;
+  } | null;
 }
 
 /** What the viewer's tier decision is made of. Passed straight to `tierFor`. */
@@ -115,11 +120,16 @@ export function deckDeliveryContext(
 
   const classroom = slide.classroom;
   if (!classroom?.id || !repo || !gitOrgLogin) return null;
+  // The classroom's own switch, checked here rather than left to the resolvers:
+  // refusing the context is what keeps a cheerio parse-and-reserialize off the
+  // read path of every deck in a classroom that has not been opted in.
+  if (!ClassmojiService.contentDelivery.isContentDeliveryEnabled(classroom)) return null;
   return {
     classroom: {
       id: classroom.id,
       content_key_version: classroom.content_key_version ?? 0,
       content_repo: repo,
+      content_delivery_enabled: true,
       git_organization: { login: gitOrgLogin },
     },
     tier: ClassmojiService.contentDelivery.tierFor(access),

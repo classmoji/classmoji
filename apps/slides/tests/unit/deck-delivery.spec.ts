@@ -36,7 +36,14 @@ const CLASSROOM = '11111111-2222-3333-4444-555555555555';
 const ORIGIN = 'https://content-staging.classmoji.io';
 
 const SLIDE = {
-  classroom: { id: CLASSROOM, content_key_version: 3, content_repo: REPO },
+  classroom: {
+    id: CLASSROOM,
+    content_key_version: 3,
+    content_repo: REPO,
+    // The classroom's own switch. `deckDeliveryContext` refuses a context
+    // without it, exactly as it refuses one with the env unset.
+    content_delivery_enabled: true,
+  },
   is_public: false,
 };
 
@@ -367,4 +374,21 @@ test.describe('deckAccessFor — the tier inputs, per surface', () => {
     expect(tierOf('follow', STUDENT, PUBLIC_SLIDE)).toBe('public');
     expect(tierOf('follow', OWNER)).toBe('draft');
   });
+});
+
+test('deckDeliveryContext refuses a classroom that has not been opted in', () => {
+  // The env is fully configured here (beforeEach set it) — this is the state
+  // production is in on the day this ships, and the flag is what keeps every
+  // deck on its legacy URLs until somebody chooses otherwise.
+  const off = {
+    ...SLIDE,
+    classroom: { ...SLIDE.classroom, content_delivery_enabled: false },
+  };
+  expect(deckDeliveryContext(off, ORG, REPO, { canEdit: true })).toBe(null);
+
+  const missing = {
+    ...SLIDE,
+    classroom: { id: CLASSROOM, content_key_version: 3, content_repo: REPO },
+  };
+  expect(deckDeliveryContext(missing, ORG, REPO, { canEdit: true })).toBe(null);
 });

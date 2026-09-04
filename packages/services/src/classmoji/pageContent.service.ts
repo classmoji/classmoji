@@ -43,6 +43,8 @@ export interface PageWithContentRepo {
   classroom: {
     /** Stored content repo name — never re-derived from org + namespace. */
     content_repo: string;
+    /** This classroom's content-delivery switch (see contentDelivery.service). */
+    content_delivery_enabled?: boolean;
     git_organization?: {
       provider: string;
       login: string;
@@ -324,6 +326,12 @@ export async function uploadPageAsset(
  * looking at unpublished content. Every failure path returns null: an upload
  * that succeeded must not be reported as failed because a URL could not be
  * minted for it.
+ *
+ * Gated on the classroom's own switch as well as the env, because this is the
+ * one signing call that changes what gets STORED: `uploadPageAsset` writes the
+ * bare repo path when a display URL came back and the legacy absolute URL when
+ * it did not. A classroom the readers do not resolve for must keep getting the
+ * legacy URL, or every upload into it would save as a path nothing can read.
  */
 async function signUploadedAsset(
   page: PageWithContentRepo,
@@ -334,7 +342,12 @@ async function signUploadedAsset(
   const master = process.env.CONTENT_SIGNING_SECRET;
   if (!origin || !master) return null;
 
-  const classroom = page.classroom as { id?: unknown; content_key_version?: unknown };
+  const classroom = page.classroom as {
+    id?: unknown;
+    content_key_version?: unknown;
+    content_delivery_enabled?: unknown;
+  };
+  if (classroom.content_delivery_enabled !== true) return null;
   if (typeof classroom.id !== 'string') return null;
 
   const name = path.slice(path.lastIndexOf('/') + 1);

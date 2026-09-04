@@ -101,6 +101,14 @@ export interface ResolveClassroom {
   content_key_version: number;
   content_repo: string;
   git_organization: { login: string };
+  /**
+   * This classroom's own switch. REQUIRED, and deliberately not optional: a
+   * caller that forgets it would otherwise get `undefined`, and the difference
+   * between "off" and "the caller did not say" is exactly the difference
+   * between a safe deploy and every classroom in production being switched over
+   * at once. Typed as required so the compiler names every context builder.
+   */
+  content_delivery_enabled: boolean;
 }
 
 export interface ResolveContext {
@@ -135,6 +143,38 @@ const ENSURE_MAX_AGE_MS = 24 * 60 * 60 * 1000;
  */
 export function isContentDeliveryConfigured(): boolean {
   return Boolean(process.env.CONTENT_SIGNING_SECRET && process.env.CONTENT_DELIVERY_ORIGIN);
+}
+
+/**
+ * Is the delivery layer switched on for THIS classroom?
+ *
+ * The env check above is about the deployment; this is about the row. Both have
+ * to be true, and the two are separate on purpose: production Fly apps already
+ * carry `CONTENT_SIGNING_SECRET` and `CONTENT_DELIVERY_ORIGIN`, so a gate made
+ * of env alone would have flipped every classroom the moment this deployed. The
+ * column defaults to false, which makes that deploy a no-op and turns rollout
+ * into a decision per classroom.
+ *
+ * Strict `=== true` rather than truthiness: a caller that selected the row
+ * without the column gets `undefined`, and "I did not ask" must read as off.
+ */
+export function isContentDeliveryEnabled(
+  classroom: { content_delivery_enabled?: boolean | null } | null | undefined
+): boolean {
+  return classroom?.content_delivery_enabled === true;
+}
+
+/**
+ * The env + classroom pair, or null when either half says no.
+ *
+ * Every resolver's first line. Returning null is what produces the legacy
+ * result — the reference back unchanged, or `null` for the entry points whose
+ * "no" is an absence — and it is byte-identical whether the deployment cannot
+ * sign or this classroom has not been opted in.
+ */
+function deliveryEnvFor(ctx: ResolveContext): { origin: string; master: string } | null {
+  if (!isContentDeliveryEnabled(ctx.classroom)) return null;
+  return deliveryEnv();
 }
 
 function deliveryEnv(): { origin: string; master: string } | null {
@@ -312,7 +352,7 @@ export async function resolveAssetUrl(
   ref: string,
   opts: { transform?: ResolveTransform } = {}
 ): Promise<string> {
-  const env = deliveryEnv();
+  const env = deliveryEnvFor(ctx);
   if (!env) return ref;
 
   await ensureMap(ctx.classroom.id);
@@ -335,7 +375,7 @@ export async function resolveAssetSrcSet(
   ctx: ResolveContext,
   ref: string
 ): Promise<{ src: string; srcset: string } | null> {
-  const env = deliveryEnv();
+  const env = deliveryEnvFor(ctx);
   if (!env) return null;
 
   const path = toRepoPath(ctx, ref);
@@ -379,7 +419,7 @@ export async function resolveThemeBase(
   ctx: ResolveContext,
   themeName: string
 ): Promise<string | null> {
-  const env = deliveryEnv();
+  const env = deliveryEnvFor(ctx);
   if (!env || !themeName) return null;
 
   await ensureMap(ctx.classroom.id);
@@ -423,7 +463,7 @@ export async function resolveMany(
   const unique = [...new Set(refs.filter(ref => typeof ref === 'string' && ref.length > 0))];
   const resolved = new Map<string, string>();
 
-  const env = deliveryEnv();
+  const env = deliveryEnvFor(ctx);
   if (!env) {
     for (const ref of unique) resolved.set(ref, ref);
     return resolved;
@@ -477,6 +517,13 @@ export async function resolveMany(
  * Scoped to THIS classroom's own URLs: a signed URL for another classroom is
  * left alone, because its sha means nothing in this classroom's map and
  * "resolving" it would silently retarget the reference.
+ *
+ * Deliberately NOT behind the per-classroom gate. Every other entry point is,
+ * because they MINT URLs and the flag decides whether this classroom's URLs
+ * should be minted at all. This one only ever removes one — so it has to keep
+ * working after the flag is switched back off, or the signed URLs already
+ * sitting in an open editor would be committed on the next save. A reference
+ * that is not a signed URL of ours costs one cheap parse and returns unchanged.
  */
 export async function canonicalizeAssetRef(ctx: ResolveContext, urlOrRef: string): Promise<string> {
   if (typeof urlOrRef !== 'string' || urlOrRef.length === 0) return urlOrRef;

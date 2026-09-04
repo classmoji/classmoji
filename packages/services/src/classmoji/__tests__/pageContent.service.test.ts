@@ -309,7 +309,11 @@ describe('pageContent.uploadPageAsset', () => {
     process.env.CONTENT_SIGNING_SECRET = 'test-master-secret';
     const classroomPage = {
       ...page,
-      classroom: { ...page.classroom, id: '3f2504e0-4f89-41d3-9a0c-0305e82c3301' },
+      classroom: {
+        ...page.classroom,
+        id: '3f2504e0-4f89-41d3-9a0c-0305e82c3301',
+        content_delivery_enabled: true,
+      },
     };
 
     const result = await uploadPageAsset(classroomPage, Buffer.from('x'), 'a.png');
@@ -367,10 +371,44 @@ describe('pageContent.uploadPageAsset', () => {
 
     // `page.classroom` here carries no id — signing is impossible, so this must
     // degrade exactly like the unconfigured case rather than store a dead path.
-    const result = await uploadPageAsset(page, Buffer.from('x'), 'a.png');
+    const result = await uploadPageAsset(
+      { ...page, classroom: { ...page.classroom, content_delivery_enabled: true } },
+      Buffer.from('x'),
+      'a.png'
+    );
 
     expect(result.url).toBe(RAW_URL);
     expect(result.displayUrl).toBeNull();
+  });
+
+  it('stores the legacy URL for a classroom that has not been opted in', async () => {
+    // THE case that makes shipping this safe: production already carries both
+    // env vars, so the ENV says yes here. The classroom's own flag is what
+    // holds the line, and an upload into a classroom that is still off has to
+    // store exactly what it stored yesterday — a URL the legacy readers resolve.
+    process.env.CONTENT_DELIVERY_ORIGIN = 'https://cdn.classmoji.test';
+    process.env.CONTENT_SIGNING_SECRET = 'test-master-secret';
+    const classroomPage = {
+      ...page,
+      classroom: {
+        ...page.classroom,
+        id: '3f2504e0-4f89-41d3-9a0c-0305e82c3301',
+        content_delivery_enabled: false,
+      },
+    };
+
+    const result = await uploadPageAsset(classroomPage, Buffer.from('x'), 'a.png');
+
+    expect(result.url).toBe(RAW_URL);
+    expect(result.displayUrl).toBeNull();
+    // The map row is still written. It is harmless while the flag is off and it
+    // is what makes flipping the switch take effect on the very next render
+    // instead of waiting for a push webhook.
+    expect(recordContentAssetMock).toHaveBeenCalledWith('3f2504e0-4f89-41d3-9a0c-0305e82c3301', {
+      path: 'pages/syllabus/assets/a.png',
+      sha: 'c'.repeat(40),
+      size: 1,
+    });
   });
 });
 

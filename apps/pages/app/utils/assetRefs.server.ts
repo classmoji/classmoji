@@ -15,6 +15,7 @@ export type AssetClassroom = {
   id: string;
   content_key_version: number;
   content_repo: string;
+  content_delivery_enabled?: boolean | null;
   git_organization?: { login?: string | null } | null;
 };
 
@@ -23,6 +24,7 @@ export type AssetResolveContext = {
     id: string;
     content_key_version: number;
     content_repo: string;
+    content_delivery_enabled: boolean;
     git_organization: { login: string };
   };
   tier: 'public' | 'enrolled' | 'draft';
@@ -46,6 +48,10 @@ export function assetResolveContext(
       id: classroom.id,
       content_key_version: classroom.content_key_version ?? 0,
       content_repo: classroom.content_repo,
+      // A row loaded without the column reads as off, which is the safe
+      // direction: the resolvers then hand back stored references, exactly as
+      // they did before the delivery layer existed.
+      content_delivery_enabled: classroom.content_delivery_enabled === true,
       git_organization: { login },
     },
     tier,

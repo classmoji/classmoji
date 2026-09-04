@@ -37,6 +37,7 @@ vi.mock('../contentAssets.service.ts', () => ({
 const {
   canonicalizeAssetRef,
   isContentDeliveryConfigured,
+  isContentDeliveryEnabled,
   resolveAssetSrcSet,
   resolveAssetUrl,
   resolveMany,
@@ -58,10 +59,14 @@ const ctx = {
     id: CLASSROOM_ID,
     content_key_version: 7,
     content_repo: 'content-dartmouth-cs52-cs52-25s',
+    content_delivery_enabled: true,
     git_organization: { login: 'dartmouth-cs52' },
   },
   tier: 'enrolled' as const,
 };
+
+/** The same classroom with its own switch off — the shipping default. */
+const offCtx = { ...ctx, classroom: { ...ctx.classroom, content_delivery_enabled: false } };
 
 /** The same file, written the four ways content has ever addressed it. */
 const REPO_PATH = 'pages/lab-1/assets/hero.png';
@@ -420,5 +425,79 @@ describe('canonicalizeAssetRef', () => {
     lookupContentAssetBySha.mockResolvedValue(null);
 
     await expect(canonicalizeAssetRef(ctx, signed)).resolves.toBe(signed);
+  });
+});
+
+/**
+ * The per-classroom gate.
+ *
+ * This is the half that makes the deploy safe. Production Fly apps ALREADY
+ * carry `CONTENT_SIGNING_SECRET` and `CONTENT_DELIVERY_ORIGIN`, so a gate made
+ * of env alone would have switched every classroom the moment this shipped.
+ * Every assertion below therefore runs with the env fully configured — the
+ * point is that a classroom whose flag is false behaves exactly as if it were
+ * not.
+ */
+describe('the per-classroom gate', () => {
+  it('reads a missing column as off — "I did not ask" is not "yes"', () => {
+    expect(isContentDeliveryEnabled({ content_delivery_enabled: true })).toBe(true);
+    expect(isContentDeliveryEnabled({ content_delivery_enabled: false })).toBe(false);
+    expect(isContentDeliveryEnabled({})).toBe(false);
+    expect(isContentDeliveryEnabled(null)).toBe(false);
+    expect(isContentDeliveryEnabled(undefined)).toBe(false);
+  });
+
+  it('env configured + flag false → the reference back, untouched', async () => {
+    expect(isContentDeliveryConfigured()).toBe(true);
+
+    expect(await resolveAssetUrl(offCtx, REPO_PATH)).toBe(REPO_PATH);
+    expect(await resolveAssetUrl(offCtx, RAW_URL)).toBe(RAW_URL);
+    expect(await resolveAssetUrl(offCtx, PROXY_URL)).toBe(PROXY_URL);
+  });
+
+  it('is the same answer the env-off path gives — byte for byte', async () => {
+    const withFlagOff = await resolveMany(offCtx, [REPO_PATH, PAGES_URL, 'https://x.test/a.png']);
+
+    unconfigure();
+    const withEnvOff = await resolveMany(ctx, [REPO_PATH, PAGES_URL, 'https://x.test/a.png']);
+    configure();
+
+    expect([...withFlagOff]).toEqual([...withEnvOff]);
+  });
+
+  it('never touches the asset map when the flag is off', async () => {
+    await resolveAssetUrl(offCtx, REPO_PATH);
+    await resolveMany(offCtx, [REPO_PATH]);
+    await resolveThemeBase(offCtx, 'dartmouth');
+    await resolveAssetSrcSet(offCtx, REPO_PATH);
+
+    // Not one ensure, not one lookup: refusing early is what keeps a classroom
+    // that has not been opted in off the delivery layer's query path entirely.
+    expect(ensureContentAssets).not.toHaveBeenCalled();
+    expect(lookupContentAsset).not.toHaveBeenCalled();
+    expect(lookupContentAssets).not.toHaveBeenCalled();
+    expect(lookupContentTree).not.toHaveBeenCalled();
+  });
+
+  it('gives resolveMany a pure passthrough — every ref present, every ref itself', async () => {
+    const refs = [REPO_PATH, RAW_URL, 'https://example.com/logo.svg'];
+    const resolved = await resolveMany(offCtx, refs);
+    for (const ref of refs) expect(resolved.get(ref)).toBe(ref);
+  });
+
+  it('withholds a srcset and a theme base rather than inventing one', async () => {
+    expect(await resolveAssetSrcSet(offCtx, REPO_PATH)).toBeNull();
+    expect(await resolveThemeBase(offCtx, 'dartmouth')).toBeNull();
+  });
+
+  it('still canonicalizes — a flag flipped off must not let a signed URL be stored', async () => {
+    const signed = await resolveAssetUrl(ctx, REPO_PATH);
+    expect(signed).not.toBe(REPO_PATH);
+
+    lookupContentAssetBySha.mockResolvedValue({ path: REPO_PATH, sha: BLOB_SHA, type: 'blob' });
+    // The editor was open while the switch was flipped; the browser hands the
+    // signed URL back on save. There is a path behind it, and it is what gets
+    // written.
+    expect(await canonicalizeAssetRef(offCtx, signed)).toBe(REPO_PATH);
   });
 });
