@@ -34,6 +34,56 @@
   //     `npx wrangler secret delete CONTENT_SIGNING_SECRET_PREVIOUS --env <env>`.
   //     See "Rotating the signing secret" in README.md.
   "env": {
+    // LOCAL ONLY. Never deployed — `workers_dev` is false and there are no
+    // routes, so a `wrangler deploy --env dev` would publish a script nothing
+    // can reach. It exists so `wrangler dev` stops borrowing `staging`, whose
+    // CONTENT_TOKEN_ENDPOINT points at staging.classmoji.io: a local Worker
+    // asking STAGING to mint a GitHub token is both wrong and a needless reach
+    // into a deployed environment.
+    //
+    // The host is part of every signature, so this env only ever verifies URLs
+    // minted for the exact origin `wrangler dev` listens on — set the apps'
+    // CONTENT_DELIVERY_ORIGIN to `http://localhost:8787`, port included.
+    // See "Local end-to-end" in README.md.
+    //
+    // CONTENT_TOKEN_ENDPOINT defaults to the webapp port `.dev-context` reports
+    // for a plain `npm run dev` (3000). A devport shifts it (3050, 3100, …), so
+    // override rather than editing this file:
+    //
+    //   npm run cf:dev:local -w apps/content -- \
+    //     --var CONTENT_TOKEN_ENDPOINT:http://localhost:3050/api/content/token
+    //
+    // A CONTENT_TOKEN_ENDPOINT line in apps/content/.dev.vars also wins over
+    // the value here.
+    "dev": {
+      "name": "classmoji-content-dev",
+      "workers_dev": false,
+      "vars": {
+        "CONTENT_TOKEN_ENDPOINT": "http://localhost:3000/api/content/token",
+        "ENVIRONMENT": "development"
+      },
+      "r2_buckets": [
+        {
+          // `wrangler dev` keeps this bucket in its on-disk simulator under
+          // .wrangler/state and never touches Cloudflare. The name is still
+          // deliberately neither deployed bucket, so that a `--remote` run
+          // cannot land in the staging or production cache.
+          "binding": "CACHE",
+          "bucket_name": "classmoji-content-cache-dev"
+        }
+      ],
+      "images": {
+        "binding": "IMAGES"
+      },
+      "observability": {
+        "enabled": true
+      },
+      // A local run should always serve what the code in front of you does.
+      "cache": {
+        "enabled": false
+      }
+    },
+
     "staging": {
       "name": "classmoji-content-staging",
       "routes": [
