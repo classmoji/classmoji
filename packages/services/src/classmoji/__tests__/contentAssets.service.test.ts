@@ -17,12 +17,17 @@ const contentAssetDeleteMany = vi.fn();
 const contentAssetFindFirst = vi.fn();
 const contentAssetFindUnique = vi.fn();
 const classroomFindUnique = vi.fn();
+const classroomFindFirst = vi.fn();
 const classroomUpdate = vi.fn();
 const transaction = vi.fn();
 
 vi.mock('@classmoji/database', () => ({
   default: () => ({
-    classroom: { findUnique: classroomFindUnique, update: classroomUpdate },
+    classroom: {
+      findUnique: classroomFindUnique,
+      findFirst: classroomFindFirst,
+      update: classroomUpdate,
+    },
     contentAsset: {
       upsert: contentAssetUpsert,
       deleteMany: contentAssetDeleteMany,
@@ -47,6 +52,7 @@ vi.mock('../../content/ContentService.ts', () => ({
 
 const {
   syncContentAssets,
+  syncContentAssetsForRepo,
   ensureContentAssets,
   recordContentAsset,
   lookupContentAsset,
@@ -82,6 +88,7 @@ describe('contentAssets.service', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     classroomFindUnique.mockResolvedValue(CLASSROOM);
+    classroomFindFirst.mockResolvedValue({ id: 'class-1' });
     getDefaultBranch.mockResolvedValue('main');
     setupTransaction();
   });
@@ -388,6 +395,52 @@ describe('contentAssets.service', () => {
 
       expect(result.mode).toBe('incremental');
       expect(classroomUpdate).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('syncContentAssetsForRepo', () => {
+    it('full-syncs the classroom that owns the repo', async () => {
+      // What a theme save needs. A theme is delivered by the SHA of its TREE,
+      // so until the map is rebuilt every deck keeps signing the PREVIOUS tree
+      // and the edge keeps serving the previous CSS — the author reloads and
+      // their change has not taken. Full mode, because no per-file update can
+      // produce a tree SHA.
+      getTree.mockResolvedValue({ sha: 'r', truncated: false, entries: [] });
+
+      const result = await syncContentAssetsForRepo('dartmouth-cs', 'content-cs101', 'theme-save');
+
+      expect(classroomFindFirst).toHaveBeenCalledWith({
+        where: { content_repo: 'content-cs101', git_organization: { login: 'dartmouth-cs' } },
+        select: { id: true },
+      });
+      expect(result?.mode).toBe('full');
+    });
+
+    it('no-ops for a repo no classroom claims as its content repo', async () => {
+      classroomFindFirst.mockResolvedValue(null);
+
+      await expect(
+        syncContentAssetsForRepo('someone-else', 'other-repo', 'theme-save')
+      ).resolves.toBeNull();
+      expect(getTree).not.toHaveBeenCalled();
+    });
+
+    it('resolves null instead of throwing when the sync fails', async () => {
+      // It runs AFTER a commit that already reached GitHub. A save that
+      // succeeded must never be reported as failed because a cache could not
+      // be refreshed.
+      getTree.mockRejectedValue(new Error('API rate limit exceeded'));
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+      await expect(
+        syncContentAssetsForRepo('dartmouth-cs', 'content-cs101', 'theme-save')
+      ).resolves.toBeNull();
+
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining('theme-save sync failed for dartmouth-cs/content-cs101'),
+        expect.any(Error)
+      );
+      warn.mockRestore();
     });
   });
 

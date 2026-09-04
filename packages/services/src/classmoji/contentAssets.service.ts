@@ -394,6 +394,50 @@ export async function syncContentAssets(
 }
 
 /**
+ * Full-sync whatever classroom owns this content repo, addressed by org + repo.
+ *
+ * For writers that commit to a content repo DIRECTLY and need the map to
+ * reflect it before the next render — a shared theme save is the case that
+ * forced this. A theme is served by the SHA of its TREE, so until the map is
+ * rebuilt every deck in the classroom keeps signing the previous tree and the
+ * edge keeps serving the previous CSS. The push webhook would eventually fix
+ * it, but "eventually" is after the author has already reloaded and seen their
+ * change not take.
+ *
+ * Full mode always, for the same reason: no per-file update can produce a tree
+ * SHA, so an incremental apply cannot see a theme edit at all.
+ *
+ * NEVER THROWS. It sits after a write that already succeeded, and a commit that
+ * reached GitHub must not be reported as a failed save because a cache could
+ * not be refreshed. Returns null when nothing was synced — no classroom claims
+ * this repo, or the refresh itself failed and the next sync will repair it.
+ */
+export async function syncContentAssetsForRepo(
+  org: string,
+  repo: string,
+  reason: string
+): Promise<SyncContentAssetsResult | null> {
+  try {
+    const classroom = await getPrisma().classroom.findFirst({
+      where: { content_repo: repo, git_organization: { login: org } },
+      select: { id: true },
+    });
+    // Not ours to care about — the same ordinary, non-error case the push
+    // webhook's classroom lookup treats as "not a content repo".
+    if (!classroom) return null;
+
+    return await syncContentAssets(classroom.id, { full: true });
+  } catch (error: unknown) {
+    console.warn(
+      `[contentAssets] ${reason} sync failed for ${org}/${repo}; ` +
+        'the next webhook or daily sweep will repair it:',
+      error
+    );
+    return null;
+  }
+}
+
+/**
  * Make sure the map exists and is not older than `maxAgeMs`, syncing if not.
  *
  * Age is `Classroom.content_assets_synced_at`, which only a FULL sync writes —
