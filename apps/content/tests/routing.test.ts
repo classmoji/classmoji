@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import worker from '../src/index.ts';
+import worker, { clearRotationLog } from '../src/index.ts';
 import { clearOriginCache } from '../src/token.ts';
 import { MAX_TRANSFORM_SOURCE_BYTES } from '../src/transform.ts';
 import { nowSeconds } from '../src/verify.ts';
@@ -45,6 +45,7 @@ function stubUpstreams(handlers: { blob?: () => Response; tree?: () => Response 
 
 beforeEach(() => {
   clearOriginCache();
+  clearRotationLog();
 });
 
 afterEach(() => {
@@ -846,6 +847,47 @@ describe('signing key rotation', () => {
     expect(message).toContain(`classroom=${CLASSROOM}`);
     expect(message).toContain(`path=/c/${CLASSROOM}/blob/${BLOB_SHA}.png`);
     expect(message).not.toContain('sig=');
+  });
+
+  it('logs the rotation once per classroom and key version, not once per request', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const env = fakeEnv({
+      CACHE: cachedBlob() as unknown as R2Bucket,
+      CONTENT_SIGNING_SECRET: ROTATED,
+      CONTENT_SIGNING_SECRET_PREVIOUS: MASTER,
+    });
+    const url = await oldUrl();
+
+    for (let i = 0; i < 3; i += 1) {
+      const response = await worker.fetch(new Request(url), env, fakeContext());
+      expect(response.status).toBe(200);
+    }
+
+    // A rotation runs for up to 30 days. One warn per request would bury every
+    // 403 and 404 line in the stream for a month.
+    expect(warn).toHaveBeenCalledTimes(1);
+  });
+
+  it('treats a whitespace-only previous slot as cleared', async () => {
+    // A slot "emptied" with a space must not become a master key the Worker
+    // will verify against.
+    const env = fakeEnv({
+      CACHE: cachedBlob() as unknown as R2Bucket,
+      CONTENT_SIGNING_SECRET: ROTATED,
+      CONTENT_SIGNING_SECRET_PREVIOUS: ' ',
+    });
+
+    const stale = await worker.fetch(new Request(await oldUrl()), env, fakeContext());
+    expect(stale.status).toBe(403);
+    expect(await stale.json()).toEqual({ error: 'bad-signature' });
+
+    // Nor is the blank itself usable as a key by anyone who guesses it.
+    const forged = await signedBlobUrl({ sha: BLOB_SHA, ext: 'png', master: ' ' });
+    expect((await worker.fetch(new Request(forged), env, fakeContext())).status).toBe(403);
+
+    // The current key still works, so this is a cleared slot and not an outage.
+    const current = await signedBlobUrl({ sha: BLOB_SHA, ext: 'png', master: ROTATED });
+    expect((await worker.fetch(new Request(current), env, fakeContext())).status).toBe(200);
   });
 
   it('403s that same URL once the previous slot is cleared', async () => {

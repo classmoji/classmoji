@@ -554,6 +554,40 @@ describe('key rotation', () => {
     });
   });
 
+  it('treats a whitespace-only slot as cleared, not as a key', async () => {
+    // The realistic way a slot gets "emptied": a space or a stray newline left
+    // behind in a secret store. Honouring it would make ` ` a live master key.
+    for (const blank of ['   ', '\n', '\t ']) {
+      expect(await verifyBlobUrl([ROTATED, blank], await mintedUnder(MASTER), NOW)).toEqual({
+        ok: false,
+        reason: 'bad-signature',
+      });
+
+      const signedWithBlank = await signBlobUrl(ORIGIN, ctx('public', { master: blank }), {
+        sha: SHA,
+        ext: 'png',
+      });
+      expect(await verifyBlobUrl([ROTATED, blank], signedWithBlank, NOW)).toEqual({
+        ok: false,
+        reason: 'bad-signature',
+      });
+    }
+
+    // And a list of nothing but blanks is still an unconfigured deployment.
+    await expect(verifyBlobUrl(['  ', '\n'], await mintedUnder(MASTER), NOW)).rejects.toThrow(
+      TypeError
+    );
+  });
+
+  it('never trims a key it does accept', async () => {
+    // Trimming here would silently disagree with the apps, which sign with the
+    // exact bytes their secret store handed them.
+    const padded = `  ${MASTER}  `;
+    const url = await mintedUnder(padded);
+    expect((await verifyBlobUrl(padded, url, NOW)).ok).toBe(true);
+    expect((await verifyBlobUrl(MASTER, url, NOW)).ok).toBe(false);
+  });
+
   it('applies the same fallback to theme URLs', async () => {
     const base = await signThemeBase(ORIGIN, ctx('public', { master: MASTER }), {
       theme: 'cosmo-dark',

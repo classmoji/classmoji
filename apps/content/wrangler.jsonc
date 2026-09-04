@@ -65,8 +65,10 @@
       }
     },
 
-    // Defined so the two environments stay in step. NOT deployed by CI — there
-    // is no production workflow, and deploying this is a deliberate, manual act.
+    // DEPLOYED BY CI, on every push to `main` that touches apps/content/** or
+    // packages/content-signing/** — see .github/workflows/deploy-cloudflare-prod.yml.
+    // Anything merged to `main` ships to content.classmoji.io; there is no
+    // separate promotion step and no manual gate in between.
     "production": {
       "name": "classmoji-content",
       "routes": [

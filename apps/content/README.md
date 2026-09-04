@@ -148,6 +148,7 @@ npx wrangler deploy --env staging --dry-run --outdir /tmp/content-dryrun
 # 2. Put local secrets in apps/content/.dev.vars (git-ignored):
 #      CONTENT_SIGNING_SECRET="..."
 #      CONTENT_WORKER_SHARED_SECRET="..."
+#      CONTENT_SIGNING_SECRET_PREVIOUS="..."   # optional, only to rehearse a rotation
 # 3. Run it (local R2 + local Images emulation):
 npm run cf:dev -w apps/content
 
@@ -218,7 +219,7 @@ Logs** (`classmoji-content-staging` or `classmoji-content`), with
 | Shape | Means |
 | --- | --- |
 | `[content] 403 {reason} classroom=… path=… p=… v=…` | refused: `bad-signature`, `expired`, `malformed`, `unsupported-version`. Never carries `sig` or a query string |
-| `[content] key=previous classroom=… path=… p=… v=…` | served, but the signature only verified against `CONTENT_SIGNING_SECRET_PREVIOUS`. Expected during a rotation; when it stops, the old key can be dropped |
+| `[content] key=previous classroom=… path=… p=… v=…` | served, but the signature only verified against `CONTENT_SIGNING_SECRET_PREVIOUS`. Expected during a rotation. Logged once per classroom and key version per isolate, so it counts classrooms, not requests |
 | `[content] 404 missing classroom=… path=…` | the app minted a `/missing/` URL: a reference that resolves to no blob (deleted, renamed, or a directory). Not an attack — a content bug |
 | `[content] origin blob {sha}: {status}` | GitHub refused the blob; the client got a 502 |
 | `[content] origin error: …` / `[content] unhandled error: …` | 502 / 500 |
@@ -285,8 +286,16 @@ in a browser, a `<link>` tag, or an edge cache.
    [content] key=previous classroom=… path=… p=… v=…
    ```
 
-   When it stops appearing, nothing minted under the old key is still being
-   fetched. That silence, not the calendar, is the real signal.
+   That line is logged once per classroom and key version per isolate, not once
+   per request — a warn on every request for a month would bury the 403 and 404
+   lines. Which means its disappearance is a *weaker* signal than it looks:
+   isolates recycle, so a fresh one logs the same classroom again, and a quiet
+   hour may just be a quiet hour.
+
+   Read it as a count instead. Query Workers Logs for `key=previous` over a
+   fixed window (a day, say) and watch the number of distinct classrooms fall.
+   Zero across a busy window, held for a few days, is what "drained" looks
+   like; a single silent hour is not.
 
    Cut it short only if you are rotating **because the old key leaked**, and go
    in knowing what it costs: every URL minted under it — the ones already in
@@ -320,7 +329,9 @@ pushes to `main`, as `classmoji-content`. It is the same job as staging's with
 two things that are not a rename: the branch is `main`, and the Infisical
 environment slug is `prod` where staging's is `sta`. `workflow_dispatch` runs it
 by hand — which is also how you push a secret change without a code change,
-since the secret sync only runs as part of a deploy.
+since the secret sync only runs as part of a deploy. Dispatch it **against
+`main`**: the job is guarded on that ref, so a dispatch from any other branch
+does nothing rather than shipping that branch to `content.classmoji.io`.
 
 A push to `main` that touches `packages/content-signing/**` starts the Fly
 workflows too, and nothing orders them against this one. So for one deploy the
@@ -341,6 +352,15 @@ Once, in this order:
 1. **R2 read on the Cloudflare API token** — already done. The token in
    `CLOUDFLARE_API_TOKEN` needs Workers Scripts edit *and* R2 read, or the
    deploy fails validating the `CACHE` binding rather than at request time.
+
+   The bucket itself already exists too: `classmoji-content-cache-prod` and
+   `classmoji-content-cache-stg` were both created on 2026-09-03. Nothing to do
+   here — but a fresh account would need it before the first deploy, because
+   wrangler binds an existing bucket and never creates one:
+
+   ```sh
+   npx wrangler r2 bucket create classmoji-content-cache-prod
+   ```
 2. **Push to `main`.** The workflow deploys `classmoji-content` and then pushes
    `CONTENT_SIGNING_SECRET` and `CONTENT_WORKER_SHARED_SECRET` from Infisical
    `prod`. Both must already exist under `/content-worker` there — the job
@@ -363,11 +383,11 @@ Once, in this order:
    purpose — it fights Fly's renewal of the `*.classmoji.io` wildcard — and the
    Advanced Certificate above is what covers this hostname. Turning Universal
    SSL back on to "fix" a certificate here breaks the apps instead.
-5. **Then the per-classroom gate.** A deployed Worker serves nobody by itself:
-   content only flows through it once the apps mint signed URLs pointing at it.
-   Today that switch is deployment-wide (`CONTENT_SIGNING_SECRET` plus
-   `CONTENT_DELIVERY_ORIGIN` — `isContentDeliveryConfigured` in
-   `contentDelivery.service.ts`); the per-classroom gate that lets production be
-   turned on one classroom at a time lands with the rollout. Either way it is
-   the last step, not the first — deploy the Worker, watch `/healthz` and the
-   logs, and only then start routing real classrooms at it.
+5. **Then the per-classroom gate.** A deployed Worker serves nobody by itself.
+   The apps mint signed URLs only where `isContentDeliveryConfigured`
+   (`contentDelivery.service.ts`) is satisfied *and* the classroom is switched
+   on: `Classroom.content_delivery_enabled`, which staff toggle in the admin app
+   under `/content-delivery`.
+
+   That toggle is the rollout. Turn on one classroom, watch its logs, and widen
+   from there — it is the last step, never the first.

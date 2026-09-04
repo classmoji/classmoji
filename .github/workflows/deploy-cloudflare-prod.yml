@@ -14,16 +14,26 @@ on:
       - '.github/workflows/deploy-cloudflare-prod.yml'
   workflow_dispatch:
 
-# Serialize prod deploys. `cancel-in-progress: false` because the second half of
-# this job pushes secrets: a cancelled run can leave a deployed script whose
-# secrets were never synced, which is a 503 rather than a stale version.
+# One production deploy at a time. The group is a CONSTANT, not `github.ref`:
+# `workflow_dispatch` can be fired from any branch, and a per-ref group would
+# put such a run in its own lane and let it interleave with a push to `main` —
+# two `wrangler deploy` and two `secret bulk` calls racing over one script.
+#
+# `cancel-in-progress: false` because the second half of this job pushes
+# secrets: a cancelled run can leave a deployed script whose secrets were never
+# synced, which is a 503 rather than a stale version.
 concurrency:
-  group: deploy-cloudflare-${{ github.ref }}
+  group: deploy-cloudflare-production
   cancel-in-progress: false
 
 jobs:
   deploy-content-worker-prod:
     runs-on: ubuntu-latest
+    # Production is whatever is on `main`, full stop. A `workflow_dispatch` from
+    # a feature branch would otherwise deploy that branch straight to
+    # content.classmoji.io, so it is a no-op here instead. Re-running production
+    # by hand means dispatching this workflow against `main`.
+    if: github.ref == 'refs/heads/main'
     # Read-only token: this job checks out code and talks to Cloudflare and
     # Infisical with their own credentials. It never writes back to the repo.
     permissions:
@@ -171,24 +181,57 @@ jobs:
               : parsed;
 
             const found = Object.keys(secrets).sort();
-            const missing = required.filter(key => !secrets[key]);
-            const unexpected = found.filter(key => !allowed.includes(key));
+            const valueOf = key => (typeof secrets[key] === "string" ? secrets[key] : "");
+            // Whitespace-only is blank. A slot cleared with a space or a stray
+            // newline must not be pushed: the Worker would then hold " " as a
+            // master key, which is a signing key anybody can guess.
+            const isSet = key => valueOf(key).trim().length > 0;
 
-            if (missing.length || unexpected.length) {
-              if (missing.length) {
-                console.error(`::error::Infisical /content-worker (prod) is missing: ${missing.join(", ")}. The Worker would serve 503 for every request.`);
-              }
-              if (unexpected.length) {
-                console.error(`::error::Infisical /content-worker (prod) has unexpected keys: ${unexpected.join(", ")}.`);
+            // A reference Infisical failed to expand is still a plain string,
+            // so it passes every other check here and the Worker boots
+            // reporting configured:true while 403ing every URL.
+            const UNEXPANDED = /\$\{/;
+            // Signing keys are openssl rand -hex 32, i.e. 64 characters. 32 is
+            // a floor meant to catch a placeholder, not a spec.
+            const MIN_SIGNING_LENGTH = 32;
+            const signingKeys = ["CONTENT_SIGNING_SECRET", "CONTENT_SIGNING_SECRET_PREVIOUS"];
+
+            const missing = required.filter(key => !isSet(key));
+            const unexpected = found.filter(key => !allowed.includes(key));
+            const unexpanded = allowed.filter(key => isSet(key) && UNEXPANDED.test(valueOf(key)));
+            const tooShort = signingKeys.filter(
+              key => isSet(key) && valueOf(key).trim().length < MIN_SIGNING_LENGTH
+            );
+
+            // Names and counts only — never a value, not even a fragment.
+            const problems = [];
+            if (missing.length) {
+              problems.push(`is missing or blank: ${missing.join(", ")}. The Worker would serve 503 for every request.`);
+            }
+            if (unexpected.length) {
+              problems.push(`has unexpected keys: ${unexpected.join(", ")}.`);
+            }
+            if (unexpanded.length) {
+              problems.push(`has unexpanded references: ${unexpanded.join(", ")}. A literal reference verifies nothing: every URL would 403 while /healthz still said configured:true.`);
+            }
+            if (tooShort.length) {
+              problems.push(`has signing keys under ${MIN_SIGNING_LENGTH} characters: ${tooShort.join(", ")}. These are openssl rand -hex 32.`);
+            }
+
+            if (problems.length) {
+              for (const problem of problems) {
+                console.error(`::error::Infisical /content-worker (prod) ${problem}`);
               }
               process.exit(1);
             }
 
-            // Only keys that are actually set are pushed. Note the asymmetry:
+            // Only keys that are actually set are pushed, and their values go
+            // through untouched — trimming here would desync the Worker from
+            // the Fly apps, which read the same secret raw. Note the asymmetry:
             // removing the previous key from Infisical does not remove it from
             // the Worker, because `secret bulk` never deletes. Finishing a
             // rotation takes an explicit `wrangler secret delete`.
-            const pushing = allowed.filter(key => secrets[key]);
+            const pushing = allowed.filter(isSet);
             writeFileSync(out, JSON.stringify(Object.fromEntries(pushing.map(key => [key, secrets[key]]))));
             console.log(`Verified ${pushing.length} secrets from Infisical (${pushing.join(", ")}).`);
           ' "$RAW_SECRETS" "$BULK_SECRETS"

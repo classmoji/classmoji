@@ -37,6 +37,25 @@ const MISSING_PATH = /^\/c\/([^/]+)\/missing\/(.+)$/;
 /** A repo path is the app's own string, but it arrives from the network. */
 const MAX_LOGGED_PATH = 512;
 
+/**
+ * `classroomId|keyVersion` pairs already reported as still using the previous
+ * signing key, so each one is logged once per isolate instead of once per
+ * request.
+ *
+ * A rotation stays open for as long as the longest signature lives — 30 days
+ * for the public tier — and a warn on every request for a month would bury the
+ * 403 and 404 lines an operator actually searches for. The cost is that the
+ * count is no longer traffic: it says which classrooms are still handing out
+ * old URLs, not how often.
+ */
+const ROTATION_LOG_LIMIT = 512;
+const rotationLogged = new Set<string>();
+
+/** Test/ops hook: forget which rotations have already been reported. */
+export function clearRotationLog(): void {
+  rotationLogged.clear();
+}
+
 /** C0 controls, DEL, and the C1 block - everything a log line must not contain. */
 function isControl(code: number): boolean {
   return code < 0x20 || (code >= 0x7f && code <= 0x9f);
@@ -120,16 +139,22 @@ async function handle(request: Request, env: Env, ctx: ExecutionContext): Promis
     return errorResponse(403, verified.reason);
   }
 
-  // Rotation telemetry, and the only signal that says when the old key can go.
-  // A warn per request is loud on purpose: the line stops appearing when the
-  // last URL minted under the previous key has aged out, and that silence is
-  // the go-ahead to clear the slot. Carries no signature and no query string,
-  // for the same reason the 403 line above does not.
+  // Rotation telemetry: which classrooms are still serving URLs minted under
+  // the old key. Once per classroom and key version per isolate — see
+  // `rotationLogged`. Carries no signature and no query string, for the same
+  // reason the 403 line above does not.
   if (verified.keySlot === 'previous') {
-    console.warn(
-      `[content] key=previous classroom=${verified.classroomId} path=${url.pathname}` +
-        ` p=${verified.tier} v=${verified.keyVersion}`
-    );
+    const rotation = `${verified.classroomId}|${verified.keyVersion}`;
+    if (!rotationLogged.has(rotation)) {
+      // Bounded: an isolate that has seen this many distinct pairs starts a
+      // fresh window rather than growing without limit.
+      if (rotationLogged.size >= ROTATION_LOG_LIMIT) rotationLogged.clear();
+      rotationLogged.add(rotation);
+      console.warn(
+        `[content] key=previous classroom=${verified.classroomId} path=${url.pathname}` +
+          ` p=${verified.tier} v=${verified.keyVersion}`
+      );
+    }
   }
 
   try {

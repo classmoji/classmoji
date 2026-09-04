@@ -257,15 +257,20 @@ function expiryFailure(tier: Tier, exp: number, now: number): { inGrace: boolean
 /**
  * Normalize whatever the caller passed into an ordered list of usable secrets.
  *
- * Empty entries are dropped rather than tried, so a deployment can clear its
- * previous-key slot by blanking it instead of restructuring the call. Nothing
- * left to try is a programming error, not a failed verification: answering
- * `bad-signature` there would turn a misconfigured deployment into a story
- * about forged URLs.
+ * Blank entries are dropped rather than tried, so a deployment can clear its
+ * previous-key slot by emptying it instead of restructuring the call. Blank
+ * means whitespace too: a slot cleared with a space or a stray newline must not
+ * become a live master, or ` ` would be a key anyone could sign with. The
+ * surviving values are kept verbatim — never trimmed — because the apps sign
+ * with the exact bytes they were given.
+ *
+ * Nothing left to try is a programming error, not a failed verification:
+ * answering `bad-signature` there would turn a misconfigured deployment into a
+ * story about forged URLs.
  */
 function masterList(master: MasterSecrets): readonly string[] {
   const candidates = typeof master === 'string' ? [master] : master;
-  const usable = candidates.filter(entry => typeof entry === 'string' && entry.length > 0);
+  const usable = candidates.filter(entry => typeof entry === 'string' && entry.trim().length > 0);
   if (usable.length === 0) {
     throw new TypeError('content-signing: at least one master secret is required');
   }

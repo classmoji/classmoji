@@ -42,12 +42,18 @@ export function isConfigured(env: Env): boolean {
 /**
  * Master secrets to verify against, current first.
  *
+ * A whitespace-only value counts as unset. A cleared previous-key slot can
+ * easily end up holding a space or a newline, and a Worker that accepted ` `
+ * as a master would accept signatures anyone could mint. Values that do survive
+ * are passed through verbatim — never trimmed — because the apps sign with the
+ * exact bytes Infisical gave them.
+ *
  * Empty when the Worker is unconfigured — callers answer 503 before reaching
  * for this, and the signing package refuses an empty list rather than treating
  * a missing key as a bad signature.
  */
 export function signingSecrets(env: Env): string[] {
   return [env.CONTENT_SIGNING_SECRET, env.CONTENT_SIGNING_SECRET_PREVIOUS].filter(
-    (secret): secret is string => typeof secret === 'string' && secret.length > 0
+    (secret): secret is string => typeof secret === 'string' && secret.trim().length > 0
   );
 }
