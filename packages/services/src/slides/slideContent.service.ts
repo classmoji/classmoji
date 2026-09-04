@@ -17,6 +17,11 @@ import {
   type ParseOptions,
 } from './deckHtml.ts';
 import type { DeckJson } from './deckTypes.ts';
+import { canonicalizeDeckAssets } from './deckAssets.ts';
+import {
+  canonicalizeMany,
+  type ResolveContext,
+} from '../classmoji/contentDelivery.service.ts';
 
 // Structural type compatible with ContentService's (unexported) git org record.
 interface GitOrgRecord {
@@ -41,6 +46,15 @@ export interface SlideContentTarget {
     /** Stored content repo name — never re-derived from org + namespace. */
     content_repo: string | null;
     git_organization: GitOrgRecord | null;
+    /**
+     * Classroom id and delivery state, needed only by the save-time
+     * canonicalization below. Optional because several callers (createSlide
+     * before the row exists, the importer's synthetic target) legitimately do
+     * not have them — a target without an id simply skips the pass.
+     */
+    id?: string;
+    content_key_version?: number;
+    content_delivery_enabled?: boolean | null;
   } | null;
 }
 
@@ -187,6 +201,58 @@ export interface SaveDeckResult {
 }
 
 /**
+ * The classroom context the save-time canonicalization needs, or null.
+ *
+ * Null is a normal state: `createSlide` saves a starter deck before there is a
+ * row to key on, and a target assembled without the classroom join has no id.
+ * Neither can be carrying one of OUR signed URLs, so skipping the pass is
+ * correct rather than merely tolerable.
+ *
+ * The tier is arbitrary — canonicalization only ever removes a signature and
+ * never mints one, so nothing but the classroom id is read.
+ */
+function deckResolveContext(slide: SlideContentTarget): ResolveContext | null {
+  const classroom = slide.classroom;
+  const login = classroom?.git_organization?.login;
+  if (!classroom?.id || !classroom.content_repo || !login) return null;
+  return {
+    classroom: {
+      id: classroom.id,
+      content_key_version: classroom.content_key_version ?? 0,
+      content_repo: classroom.content_repo,
+      content_delivery_enabled: classroom.content_delivery_enabled === true,
+      git_organization: { login },
+    },
+    tier: 'draft',
+  };
+}
+
+/**
+ * A deck with every signed URL of ours replaced by the repo path behind it.
+ *
+ * Failure is swallowed on purpose. The asset map lives in Postgres, and a
+ * database hiccup must not turn a save into a lost edit — the worst case of
+ * skipping this pass is the state the deck was already in before it existed.
+ */
+async function canonicalizeDeckForSave(
+  slide: SlideContentTarget,
+  deck: DeckJson
+): Promise<DeckJson> {
+  const ctx = deckResolveContext(slide);
+  if (!ctx) return deck;
+
+  try {
+    return await canonicalizeDeckAssets(deck, refs => canonicalizeMany(ctx, refs));
+  } catch (error) {
+    console.warn(
+      '[slideContent] Could not canonicalize deck asset refs on save:',
+      error instanceof Error ? error.message : error
+    );
+    return deck;
+  }
+}
+
+/**
  * Save a deck: conflict check (§3 2×2 table) → generateDeckHtml → ONE atomic
  * uploadBatch commit (deck.json + index.html on main; deck.json only on
  * preview branches) → bump slide.updated_at (main writes only).
@@ -226,6 +292,13 @@ export async function saveDeck({
   const { gitOrganization, repo } = resolveSlideRepoContext(slide);
   const deckPath = `${slide.content_path}/deck.json`;
   const htmlPath = `${slide.content_path}/index.html`;
+
+  // Before anything is serialized: a signed delivery URL must not reach
+  // deck.json. It would freeze one viewer's tier and one expiring signature
+  // into the deck, and stop the reference following its file. This is the only
+  // choke point every writer passes — the editor, deck_apply over MCP, the
+  // importer — so it is the only place the invariant can actually be promised.
+  deck = await canonicalizeDeckForSave(slide, deck);
 
   const isPreviewBranch = branch != null && branch.startsWith(PREVIEW_BRANCH_PREFIX);
   const targetBranch = branch ?? 'main';

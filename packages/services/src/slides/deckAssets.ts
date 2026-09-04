@@ -1,5 +1,7 @@
 import * as cheerio from 'cheerio';
 
+import type { DeckJson, DeckSlide } from './deckTypes.ts';
+
 /**
  * Render-time asset rewriting for generated deck HTML.
  *
@@ -84,51 +86,37 @@ function rewriteCssUrls(style: string, map: (ref: string) => string | undefined)
   });
 }
 
+/** The attribute selector every pass below scans. One place, one answer. */
+const ASSET_SELECTOR =
+  '[src], [srcset], [href], [style], [data-background-image], [data-background-video]';
+
+/** Every candidate reference an element carries, in no particular order. */
+function elementRefs(attribs: Record<string, string>, out: Set<string>): void {
+  const { src, srcset, href, style } = attribs;
+  const bgImage = attribs[BG_IMAGE];
+  const bgVideo = attribs[BG_VIDEO];
+  if (src) out.add(src);
+  if (href) out.add(href);
+  if (srcset) for (const part of splitSrcSet(srcset)) out.add(part.url);
+  if (style) for (const url of cssUrls(style)) out.add(url);
+  if (bgImage) out.add(bgImage);
+  if (bgVideo) for (const source of splitVideoSources(bgVideo)) out.add(source);
+}
+
+/** An element carrying attributes we may rewrite. Cheerio's node, narrowed. */
+type AssetElement = { attribs: Record<string, string> };
+
 /**
- * Rewrite every asset URL in a deck document that `resolve` has a mapping for.
+ * Apply `map` to every URL-bearing attribute on these elements, in place.
  *
- * `resolve` is handed every candidate reference at once so the caller can do a
- * single batched lookup, and returns only the ones it wants changed — a
- * reference absent from the returned map is left exactly as it was.
- *
- * Returns the input string untouched when there is nothing to change, so a
- * caller can use it unconditionally without paying a re-serialization.
+ * Returns whether anything actually changed, which is what lets both callers
+ * hand the input string straight back when nothing did — the difference between
+ * a no-op pass and re-serializing every deck on every read.
  */
-export async function rewriteDeckAssetUrls(
-  html: string,
-  resolve: (refs: string[]) => Promise<Map<string, string>>
-): Promise<string> {
-  if (!html) return html;
-
-  const $ = cheerio.load(html);
-  const candidates = new Set<string>();
-
-  const elements = $(
-    '[src], [srcset], [href], [style], [data-background-image], [data-background-video]'
-  ).toArray();
-
-  for (const el of elements) {
-    const { src, srcset, href, style } = el.attribs;
-    const bgImage = el.attribs[BG_IMAGE];
-    const bgVideo = el.attribs[BG_VIDEO];
-    if (src) candidates.add(src);
-    if (href) candidates.add(href);
-    if (srcset) for (const part of splitSrcSet(srcset)) candidates.add(part.url);
-    if (style) for (const url of cssUrls(style)) candidates.add(url);
-    if (bgImage) candidates.add(bgImage);
-    if (bgVideo) for (const source of splitVideoSources(bgVideo)) candidates.add(source);
-  }
-
-  if (candidates.size === 0) return html;
-
-  const resolved = await resolve([...candidates]);
-  if (resolved.size === 0) return html;
-
-  const map = (ref: string): string | undefined => {
-    const next = resolved.get(ref);
-    return next === undefined || next === ref ? undefined : next;
-  };
-
+function rewriteElements(
+  elements: AssetElement[],
+  map: (ref: string) => string | undefined
+): boolean {
   let changed = false;
 
   for (const el of elements) {
@@ -181,7 +169,202 @@ export async function rewriteDeckAssetUrls(
     }
   }
 
-  if (!changed) return html;
+  return changed;
+}
+
+/**
+ * The same rewrite over a FRAGMENT — a stored slide's inner HTML.
+ *
+ * A separate entry point rather than a flag on the pass below, because the
+ * difference is not cosmetic: `cheerio.load` promotes a fragment to a full
+ * `<html><head><body>` document, and serializing that back would wrap every
+ * rewritten slide in a document. The read path never hit this because it only
+ * ever runs on a whole generated deck; the save path runs on slides.
+ *
+ * Synchronous, because the caller already has its answers.
+ */
+export function rewriteFragmentAssetUrls(
+  html: string,
+  map: (ref: string) => string | undefined
+): string {
+  if (!html) return html;
+  const $ = cheerio.load(html, null, false);
+  const elements = $(ASSET_SELECTOR).toArray();
+  if (elements.length === 0) return html;
+  if (!rewriteElements(elements, map)) return html;
+  return $.root().html() ?? html;
+}
+
+/**
+ * Every asset reference in a fragment of deck HTML.
+ *
+ * Split out from the rewrite because the SAVE path needs the collection and the
+ * mapping in two separate steps: it canonicalizes a whole deck's references in
+ * one batch and then rewrites every slide against the one answer, rather than
+ * paying a lookup round per slide.
+ */
+export function collectDeckAssetRefs(html: string | null | undefined): string[] {
+  if (!html) return [];
+  // `false` = parse as a FRAGMENT. A stored slide's `html` is the inner content
+  // of its `<section>`, not a document, and the document parser would wrap it.
+  // Collection does not serialize, so this only matters for consistency with
+  // `rewriteFragmentAssetUrls` — but the two must agree on what an element is.
+  const $ = cheerio.load(html, null, false);
+  const found = new Set<string>();
+  for (const el of $(ASSET_SELECTOR).toArray()) elementRefs(el.attribs, found);
+  return [...found];
+}
+
+/**
+ * The same collection over a slide's `<section>` attributes.
+ *
+ * A stored slide keeps its section attributes as a plain map rather than as
+ * markup, so `data-background-image`, `data-background-video` and `style` never
+ * appear in the HTML the pass above walks — they would be silently missed.
+ */
+export function collectSlideAttrRefs(attrs: Record<string, string> | undefined): string[] {
+  if (!attrs) return [];
+  const found = new Set<string>();
+  elementRefs(attrs, found);
+  return [...found];
+}
+
+/** Rewrite a slide's `<section>` attribute map; returns it by identity if unchanged. */
+export function rewriteSlideAttrs(
+  attrs: Record<string, string>,
+  map: (ref: string) => string | undefined
+): Record<string, string> {
+  let next: Record<string, string> | null = null;
+  const set = (name: string, value: string) => {
+    next = next ?? { ...attrs };
+    next[name] = value;
+  };
+
+  const bgImage = attrs[BG_IMAGE];
+  if (bgImage) {
+    const mapped = map(bgImage);
+    if (mapped !== undefined) set(BG_IMAGE, mapped);
+  }
+
+  const bgVideo = attrs[BG_VIDEO];
+  if (bgVideo) {
+    const sources = splitVideoSources(bgVideo);
+    if (sources.some(source => map(source) !== undefined)) {
+      set(BG_VIDEO, sources.map(source => map(source) ?? source).join(','));
+    }
+  }
+
+  const style = attrs.style;
+  if (style) {
+    const rewritten = rewriteCssUrls(style, map);
+    if (rewritten !== style) set('style', rewritten);
+  }
+
+  return next ?? attrs;
+}
+
+/**
+ * Replace every signed URL of ours in a deck with the repo path behind it.
+ *
+ * The write-side twin of the read-side rewrite above, and the reason it exists
+ * in the SERVICE rather than in a route: a deck reaches storage from the slides
+ * editor, from `deck_apply` over MCP, and from an import, and only the first of
+ * those ever had a canonicalizing route layer. A signed URL committed into
+ * deck.json is a reference that expires and stops following its file — this is
+ * the one place that can promise it never happens.
+ *
+ * `canonicalize` is handed EVERY reference in the deck at once and returns the
+ * ones it wants changed; a reference it leaves alone (an external image, a
+ * theme file, another classroom's URL) is byte-identical on the way out.
+ *
+ * Pure: a clone is returned and the input deck is never mutated. Slides with
+ * nothing to change keep their original objects.
+ */
+export async function canonicalizeDeckAssets(
+  deck: DeckJson,
+  canonicalize: (refs: string[]) => Promise<Map<string, string>>
+): Promise<DeckJson> {
+  const refs = new Set<string>();
+  const collect = (slides: DeckSlide[] | undefined): void => {
+    for (const slide of slides ?? []) {
+      for (const ref of collectDeckAssetRefs(slide.html)) refs.add(ref);
+      for (const ref of collectDeckAssetRefs(slide.notes)) refs.add(ref);
+      for (const ref of collectSlideAttrRefs(slide.attrs)) refs.add(ref);
+      collect(slide.children);
+    }
+  };
+  collect(deck.slides);
+  if (refs.size === 0) return deck;
+
+  const canonical = await canonicalize([...refs]);
+  const map = (ref: string): string | undefined => {
+    const next = canonical.get(ref);
+    return next === undefined || next === ref ? undefined : next;
+  };
+
+  // Identity all the way up when nothing moved: each level reports its own
+  // change rather than reading a shared flag, so one edited slide at the end of
+  // a deck does not make every earlier stack look rewritten.
+  const rewrite = (slides: DeckSlide[]): DeckSlide[] => {
+    let changed = false;
+    const next = slides.map(slide => {
+      const html = slide.html === undefined ? slide.html : rewriteFragmentAssetUrls(slide.html, map);
+      const notes =
+        slide.notes === undefined ? slide.notes : rewriteFragmentAssetUrls(slide.notes, map);
+      const attrs = slide.attrs === undefined ? slide.attrs : rewriteSlideAttrs(slide.attrs, map);
+      const children = slide.children === undefined ? slide.children : rewrite(slide.children);
+      if (
+        html === slide.html &&
+        notes === slide.notes &&
+        attrs === slide.attrs &&
+        children === slide.children
+      ) {
+        return slide;
+      }
+      changed = true;
+      return { ...slide, html, notes, attrs, children } as DeckSlide;
+    });
+    return changed ? next : slides;
+  };
+
+  const slides = rewrite(deck.slides);
+  return slides === deck.slides ? deck : { ...deck, slides };
+}
+
+/**
+ * Rewrite every asset URL in a deck document that `resolve` has a mapping for.
+ *
+ * `resolve` is handed every candidate reference at once so the caller can do a
+ * single batched lookup, and returns only the ones it wants changed — a
+ * reference absent from the returned map is left exactly as it was.
+ *
+ * Returns the input string untouched when there is nothing to change, so a
+ * caller can use it unconditionally without paying a re-serialization.
+ */
+export async function rewriteDeckAssetUrls(
+  html: string,
+  resolve: (refs: string[]) => Promise<Map<string, string>>
+): Promise<string> {
+  if (!html) return html;
+
+  const $ = cheerio.load(html);
+  const candidates = new Set<string>();
+
+  const elements = $(ASSET_SELECTOR).toArray();
+
+  for (const el of elements) elementRefs(el.attribs, candidates);
+
+  if (candidates.size === 0) return html;
+
+  const resolved = await resolve([...candidates]);
+  if (resolved.size === 0) return html;
+
+  const map = (ref: string): string | undefined => {
+    const next = resolved.get(ref);
+    return next === undefined || next === ref ? undefined : next;
+  };
+
+  if (!rewriteElements(elements, map)) return html;
 
   // A full document keeps its doctype/head. A FRAGMENT does not survive as a
   // fragment — cheerio promotes one to a full `<html><head><body>` document on

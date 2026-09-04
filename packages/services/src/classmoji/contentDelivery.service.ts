@@ -548,6 +548,49 @@ export async function canonicalizeAssetRef(ctx: ResolveContext, urlOrRef: string
 }
 
 /**
+ * Batched `canonicalizeAssetRef`.
+ *
+ * The save paths canonicalize a whole document at once, and doing that one
+ * `await` at a time would serialize a lookup per image. Every input ref appears
+ * in the result, including the ones that come back unchanged, so a caller can
+ * look up unconditionally.
+ */
+export async function canonicalizeMany(
+  ctx: ResolveContext,
+  refs: string[]
+): Promise<Map<string, string>> {
+  const unique = [...new Set(refs.filter(ref => typeof ref === 'string' && ref.length > 0))];
+  const canonical = new Map<string, string>();
+
+  await Promise.all(
+    unique.map(async ref => {
+      canonical.set(ref, await canonicalizeAssetRef(ctx, ref));
+    })
+  );
+
+  return canonical;
+}
+
+/**
+ * Does this reference name something in THIS classroom's content repo?
+ *
+ * Synchronous and map-free — it answers from the shape of the string alone,
+ * which is all a caller deciding "is this ours to rewrite" needs. Three shapes
+ * count: a repo-relative path, one of the legacy absolute URLs into this
+ * classroom's repo, and a signed delivery URL minted for this classroom.
+ *
+ * The save paths use it to decide whose `srcset` they may strip. An author's
+ * own responsive `<img srcset>` pointing at some external CDN is content, and
+ * removing it would be a silent edit of their slide.
+ */
+export function isOwnAssetRef(ctx: ResolveContext, ref: string): boolean {
+  if (typeof ref !== 'string' || ref.length === 0) return false;
+  if (toRepoPath(ctx, ref) !== null) return true;
+  const parsed = parseContentUrl(ref);
+  return parsed !== null && parsed.classroomId === ctx.classroom.id;
+}
+
+/**
  * Refresh the asset map if it is stale, and never let that fail a render.
  *
  * `ensureContentAssets` reaches GitHub on a miss, and GitHub is allowed to be

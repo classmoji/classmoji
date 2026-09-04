@@ -1,8 +1,10 @@
 import { createHash } from 'node:crypto';
 import { signBlobUrl } from '@classmoji/content-signing';
 import { z } from 'zod';
+import { collectBlockAssetRefs, mapBlockAssetRefs } from '@classmoji/utils';
 import { ContentService } from '../content/ContentService.ts';
 import { recordContentAsset, resolveContentBranch } from './contentAssets.service.ts';
+import { canonicalizeMany, type ResolveContext } from './contentDelivery.service.ts';
 import {
   dedupeMergedTreeIds,
   indexResolutions,
@@ -169,6 +171,101 @@ export async function loadPageContent(
   return { format: 'none', blocks: null, coverImage: null, sha: null };
 }
 
+// ─── Canonicalize on save ────────────────────────────────────────────────────
+
+/**
+ * A signed URL must never reach `content.json`. This is where that is enforced.
+ *
+ * The pages app already canonicalizes in its route layer, and that is the right
+ * place for it — it is closest to the browser that handed the URL back. But it
+ * is not the only door into a save any more: `page_content_apply` reaches
+ * `savePageContentFromOps` straight from MCP, an import writes through
+ * `savePageContent`, and any future caller gets no route layer at all. A
+ * backstop in the service is what makes the invariant a property of the WRITE
+ * rather than a property of one caller.
+ *
+ * Applying it twice is a no-op by construction: the second pass sees repo paths,
+ * `parseContentUrl` declines them, and they come back unchanged. That is what
+ * lets the route keep its own pass without either of them having to know about
+ * the other.
+ *
+ * The tier is `draft` and it does not matter: canonicalization only ever
+ * REMOVES a signature, and it never mints one, so nothing in the context
+ * except the classroom id is read.
+ */
+function pageResolveContext(page: PageWithContentRepo): ResolveContext | null {
+  const classroom = page.classroom as {
+    id?: unknown;
+    content_key_version?: unknown;
+    content_delivery_enabled?: unknown;
+    content_repo?: unknown;
+  };
+  const login = page.classroom.git_organization?.login;
+  if (typeof classroom.id !== 'string' || !login || typeof classroom.content_repo !== 'string') {
+    return null;
+  }
+  return {
+    classroom: {
+      id: classroom.id,
+      content_key_version:
+        typeof classroom.content_key_version === 'number' ? classroom.content_key_version : 0,
+      content_repo: classroom.content_repo,
+      content_delivery_enabled: classroom.content_delivery_enabled === true,
+      git_organization: { login },
+    },
+    tier: 'draft',
+  };
+}
+
+/**
+ * Replace every signed URL of ours in a block tree with the path behind it.
+ *
+ * Returns the input by identity when there is nothing to change, so a document
+ * with no assets — the common case — costs one tree walk and no allocation.
+ * A failure here is swallowed: the asset map lives in Postgres, and a database
+ * hiccup must not turn a save into a lost edit. The worst case is the state we
+ * were already in before this existed.
+ */
+async function canonicalizePageBlocks<T>(page: PageWithContentRepo, blocks: T): Promise<T> {
+  const ctx = pageResolveContext(page);
+  if (!ctx) return blocks;
+
+  const refs = [...new Set(collectBlockAssetRefs(blocks))];
+  if (refs.length === 0) return blocks;
+
+  try {
+    const canonical = await canonicalizeMany(ctx, refs);
+    return mapBlockAssetRefs(blocks, ref => canonical.get(ref) ?? ref);
+  } catch (error) {
+    console.warn(
+      '[pageContent] Could not canonicalize asset refs on save:',
+      error instanceof Error ? error.message : error
+    );
+    return blocks;
+  }
+}
+
+/** The same pass over the cover image, which lives beside the blocks, not in them. */
+async function canonicalizePageCover(
+  page: PageWithContentRepo,
+  cover: PageCoverImage | null | undefined
+): Promise<PageCoverImage | null | undefined> {
+  const ctx = pageResolveContext(page);
+  if (!ctx || !cover?.url) return cover;
+
+  try {
+    const canonical = await canonicalizeMany(ctx, [cover.url]);
+    const url = canonical.get(cover.url) ?? cover.url;
+    return url === cover.url ? cover : { ...cover, url };
+  } catch (error) {
+    console.warn(
+      '[pageContent] Could not canonicalize the cover image on save:',
+      error instanceof Error ? error.message : error
+    );
+    return cover;
+  }
+}
+
 /**
  * Save BlockNote JSON content to `content.json` (wrapper format
  * `{ blocks, coverImage? }`). Does NOT touch the legacy `index.html`.
@@ -200,6 +297,12 @@ export async function savePageContent(
 ): Promise<{ sha: string; commit: string }> {
   const { gitOrganization, repo } = contentRepoFor(page);
   const path = `${page.content_path}/content.json`;
+
+  // The backstop, before anything is serialized. A signed URL in here would be
+  // frozen into the document — one viewer's tier, one expiring signature, and a
+  // reference that stops following its file.
+  blocks = await canonicalizePageBlocks(page, blocks);
+  coverImage = await canonicalizePageCover(page, coverImage);
 
   // When coverImage isn't explicitly provided, read the existing JSON to
   // preserve it (fresh read — a stale cached coverImage must not resurrect).
@@ -1584,6 +1687,13 @@ async function runSaveMerge(
 ): Promise<SavePageMergeResult> {
   const { gitOrganization, repo } = contentRepoFor(page);
   const path = `${page.content_path}/content.json`;
+
+  // `theirs` is the only side that came from a browser (or from an MCP caller),
+  // so it is the only side that can be carrying a signed URL. `ours` was just
+  // read from the repo and `base` from a commit — both are already canonical.
+  // Done once, outside the CAS retry loop: a retry re-reads main, it does not
+  // re-receive the posted document.
+  theirs = await canonicalizePageBlocks(page, theirs);
 
   const chosen = resolutions ? indexResolutions(resolutions) : null;
 
