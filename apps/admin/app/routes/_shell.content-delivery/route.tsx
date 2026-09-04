@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Form, useFetcher, useLoaderData, useNavigation } from 'react-router';
 import { IconAlertTriangle, IconSearch } from '@tabler/icons-react';
 import { useDebouncedSearch } from '~/hooks/useDebouncedSearch';
@@ -60,8 +60,8 @@ const ConfirmBulk = ({
             </h2>
             <p className="mt-1.5 text-sm text-ink-2">
               {enabling
-                ? `Every classroom in this list (${count}) starts serving its page and deck assets through signed delivery URLs on the next render.`
-                : `Every classroom in this list (${count}) goes back to the legacy raw/proxy URLs on the next render.`}{' '}
+                ? `${count} classroom${count === 1 ? '' : 's'} in this list start serving page and deck assets through signed delivery URLs on the next render.`
+                : `${count} classroom${count === 1 ? '' : 's'} in this list go back to the legacy raw/proxy URLs on the next render.`}{' '}
               Stored content is not touched — this only changes the URLs the apps hand out, and it
               can be reversed from this screen.
             </p>
@@ -130,10 +130,27 @@ const ContentDelivery = () => {
   const bulkIntent = navigation.formData?.get('intent');
   const bulkBusy = bulkIntent === 'enable-all' || bulkIntent === 'disable-all';
 
-  // Close the dialog once the submission it opened has landed.
+  // Close the dialog once the submission it opened has LANDED — which needs the
+  // memory of a submission having started. Without it the effect fires on the
+  // render that opens the dialog, where the navigation is idle because nothing
+  // has been submitted yet, and closes it again before anyone sees it.
+  const submitted = useRef(false);
   useEffect(() => {
-    if (!bulkBusy && navigation.state === 'idle') setConfirming(null);
+    if (bulkBusy) {
+      submitted.current = true;
+      return;
+    }
+    if (submitted.current && navigation.state === 'idle') {
+      submitted.current = false;
+      setConfirming(null);
+    }
   }, [bulkBusy, navigation.state]);
+
+  // How many rows the button in front of you would actually change. "Enable for
+  // all" touches the ones that are off; "disable" the ones that are on. Saying
+  // "all N classrooms" when N-1 are already there is how a confirmation stops
+  // being read.
+  const affected = confirming === 'enable-all' ? totalCount - enabledCount : enabledCount;
 
   return (
     <>
@@ -239,7 +256,7 @@ const ContentDelivery = () => {
       {confirming ? (
         <ConfirmBulk
           intent={confirming}
-          count={totalCount}
+          count={affected}
           busy={bulkBusy}
           onCancel={() => setConfirming(null)}
           onConfirm={() => {
