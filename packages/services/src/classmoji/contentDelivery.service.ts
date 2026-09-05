@@ -9,6 +9,7 @@ import {
   type TransformFormat,
   type TransformWidth,
 } from '@classmoji/content-signing';
+import { ContentService } from '../content/ContentService.ts';
 import {
   ensureContentAssets,
   lookupContentAsset,
@@ -90,6 +91,24 @@ export async function bumpContentKeyVersion(
  * Everything here is therefore pure derivation, and the save paths run
  * `canonicalizeAssetRef` to make sure the derivation never leaks back into
  * storage.
+ *
+ * ## Referenced content, and root content
+ *
+ * Everything above is about REFERENCED content — the images a document points
+ * at. The plan's other half is ROOT content: `content.json`, `deck.json`, the
+ * generated `index.html`. Nothing points at those, so for a long time nothing
+ * could address them by sha and they were read straight from GitHub — the Pages
+ * CDN first, the App token's contents API behind it.
+ *
+ * That is no longer true, and `fetchContentText` below is where it stopped
+ * being true. A save records the sha its commit returned (`recordContentAsset`),
+ * so the map answers "what is current?" for root files exactly as it does for
+ * referenced ones, and a read signs that sha like any other blob. The pointer
+ * the reference graph was missing is the map row.
+ *
+ * What that buys is not bandwidth — these files are small. It is that GitHub is
+ * touched once per SAVE instead of once per VIEW, and that a `/present` opened
+ * a second after a save shows the deck that was just saved.
  */
 
 /** Access tier a render mints URLs for. See @classmoji/content-signing. */
@@ -687,6 +706,224 @@ export async function resolveMany(
 ): Promise<Map<string, string>> {
   const { urls } = await resolveDelivery(ctx, refs);
   return urls;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Reading a repo's TEXT
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Where a repo file's bytes actually came from. Logged, and returned so a
+ * caller (and a staging log) can see the mix rather than guess at it.
+ */
+export type ContentTextSource = 'worker' | 'api' | 'cdn';
+
+export interface ContentText {
+  text: string;
+  /**
+   * The git blob sha the bytes came from, or null.
+   *
+   * Null is only ever the CDN's answer: GitHub Pages serves a path and reports
+   * no object id, so there is nothing honest to put here. The Worker path takes
+   * the sha it signed and the API path takes the one the contents API returned,
+   * both of which name the exact object.
+   */
+  sha: string | null;
+  source: ContentTextSource;
+}
+
+/**
+ * What a text read needs to know. A `ResolveContext` satisfies it structurally,
+ * so a caller that already built one for images can pass it straight through;
+ * the tier on it is ignored (see below).
+ */
+export interface TextReadContext {
+  classroom: ResolveClassroom;
+}
+
+/**
+ * A hung origin must not hold a render open.
+ *
+ * The Worker answers an R2 hit in milliseconds and a cold miss in the time
+ * GitHub takes, so anything past this is a network that has stopped rather than
+ * a slow file — and the API fallback below is still a correct answer. Short
+ * enough that the fallback is not itself a timeout, long enough that a cold
+ * blob on a bad day still wins.
+ */
+const TEXT_FETCH_TIMEOUT_MS = 6000;
+
+/**
+ * One repo file's TEXT, through the delivery layer when it can be.
+ *
+ * ## The problem this exists for
+ *
+ * Images have gone through the Worker by blob sha for a while; text had not.
+ * A deck's `index.html` was read CDN-first from `{org}.github.io`, which lags a
+ * push by minutes (a rapid second save can ERROR the Pages build and stretch
+ * that further) — so an instructor saved a deck, opened `/present`, and was
+ * shown the previous version of their own slides.
+ *
+ * Reading it by SHA removes the question. The asset map holds the sha the last
+ * write produced, the Worker is keyed by content, and a URL naming a sha can
+ * only ever return that sha's bytes. Freshness stops being a cache policy and
+ * becomes a property of the address — which is why the save paths write the
+ * returned sha into the map (`recordContentAsset`) the moment a commit lands.
+ *
+ * ## The tiers
+ *
+ * Always `enrolled`, whoever is reading. This is a server-to-server fetch: the
+ * bytes are handed to a loader that has already done its own authorization, and
+ * they are never given to a browser as a URL. The tier here therefore decides
+ * nothing about access — it only picks an expiry bucket and a `Cache-Control`,
+ * and `enrolled`'s week is the right middle: long enough that one signature
+ * serves a lecture hall's worth of `/follow` reads out of the edge, short
+ * enough not to mint the 30-day public bucket for content nobody published.
+ *
+ * ## The fallback, and why its order is INVERTED
+ *
+ * When the classroom's gate is off, the deployment cannot sign, or the map has
+ * no row for this path, the read falls back — API first, CDN last. That is the
+ * opposite of the order this replaces, and deliberately so: the map being
+ * briefly behind (a save whose row has not landed, a path a sync has not seen)
+ * is exactly the case where the CDN is stalest, so the authenticated read that
+ * always sees the current commit has to go first. The CDN survives only as the
+ * answer of last resort, and Phase 4 deletes it.
+ *
+ * ## Never throws
+ *
+ * This sits on the render path of every deck and page. Every failure — a 502
+ * from the Worker, a GitHub rate limit, a DNS blip — degrades to the next tier
+ * and finally to `null`, which callers already render as "content unavailable".
+ * An exception here would be a 500 on a page whose bytes are one tier away.
+ */
+export async function fetchContentText(
+  ctx: TextReadContext,
+  repoPath: string,
+  opts: { label?: string; skipCache?: boolean } = {}
+): Promise<ContentText | null> {
+  const path = normalizeRepoRelative(repoPath);
+  if (!path) return null;
+
+  const result =
+    (await readTextThroughWorker(ctx, path)) ?? (await readTextFromGitHub(ctx, path, opts));
+
+  // Debug, not warn: one line per file per render is a lot of lines, and the
+  // question they answer — "is this deployment actually serving text from the
+  // Worker, and for which classrooms?" — is one you go looking for during a
+  // rollout rather than one that should interrupt you. The repo's no-console
+  // rule allows only warn/error precisely so that ordinary chatter does not
+  // land at a level an operator is told to search; this is the exception that
+  // proves it, and it stays below that line on purpose.
+  // eslint-disable-next-line no-console
+  console.debug(
+    `[contentDelivery] text ${opts.label ?? 'read'} source=${result?.source ?? 'none'} ` +
+      `path=${path} classroom=${ctx.classroom.id}`
+  );
+
+  return result;
+}
+
+/** The map lookup + signed fetch. Null means "not through the Worker" — never an error. */
+async function readTextThroughWorker(
+  ctx: TextReadContext,
+  path: string
+): Promise<ContentText | null> {
+  if (!isContentDeliveryEnabled(ctx.classroom)) return null;
+  const env = deliveryEnv();
+  if (!env) return null;
+
+  const ext = extensionOf(path);
+  if (!ext) return null;
+
+  try {
+    await ensureMap(ctx.classroom.id);
+    const asset = await lookupContentAsset(ctx.classroom.id, path);
+    // No row, or a TREE row — a directory is not a file. Either way there is no
+    // blob to sign, and the fallback is the honest answer rather than a
+    // confidently-wrong URL.
+    if (!asset || asset.type !== 'blob') return null;
+
+    const url = await signBlobUrl(
+      env.origin,
+      // Server-to-server: `enrolled` names the cache bucket, not the reader.
+      {
+        master: env.master,
+        classroomId: ctx.classroom.id,
+        keyVersion: ctx.classroom.content_key_version,
+        tier: 'enrolled',
+      },
+      { sha: asset.sha, ext }
+    );
+
+    const response = await fetch(url, { signal: AbortSignal.timeout(TEXT_FETCH_TIMEOUT_MS) });
+    if (!response.ok) {
+      console.warn(
+        `[contentDelivery] Worker returned ${response.status} for ${path} ` +
+          `(classroom ${ctx.classroom.id}); falling back to the API`
+      );
+      return null;
+    }
+
+    return { text: await response.text(), sha: asset.sha, source: 'worker' };
+  } catch (error) {
+    console.warn(
+      `[contentDelivery] Worker text read failed for ${path} (classroom ${ctx.classroom.id}):`,
+      error instanceof Error ? error.message : error
+    );
+    return null;
+  }
+}
+
+/**
+ * The fallback pair, in the order that favours freshness: contents API, then
+ * the Pages CDN.
+ *
+ * The API read is authenticated and always sees the current commit; the CDN is
+ * a build artifact minutes behind it. Marked for deletion with the rest of the
+ * CDN tier in Phase 4 — by then every classroom is on the layer and a repo that
+ * has gone private serves nothing from `github.io` anyway.
+ */
+async function readTextFromGitHub(
+  ctx: TextReadContext,
+  path: string,
+  opts: { skipCache?: boolean }
+): Promise<ContentText | null> {
+  const orgLogin = ctx.classroom.git_organization.login;
+  const repo = ctx.classroom.content_repo;
+  if (!orgLogin || !repo) return null;
+
+  try {
+    const file = await ContentService.getContent({
+      orgLogin,
+      repo,
+      path,
+      ...(opts.skipCache ? { skipCache: true } : {}),
+    });
+    if (file?.content) return { text: file.content, sha: file.sha ?? null, source: 'api' };
+  } catch (error) {
+    console.warn(
+      `[contentDelivery] API text read failed for ${repo}/${path}:`,
+      error instanceof Error ? error.message : error
+    );
+  }
+
+  // DEPRECATED — Phase 4 removes this tier entirely. It is last rather than
+  // first (which is how this read used to be ordered) because GitHub Pages lags
+  // a push by minutes, and the whole point of the map-first path above is that
+  // a save is visible the instant it returns.
+  try {
+    const response = await fetch(`https://${orgLogin}.github.io/${repo}/${path}`, {
+      signal: AbortSignal.timeout(TEXT_FETCH_TIMEOUT_MS),
+    });
+    if (response.ok) return { text: await response.text(), sha: null, source: 'cdn' };
+  } catch (error) {
+    console.warn(
+      `[contentDelivery] CDN text read failed for ${repo}/${path}:`,
+      error instanceof Error ? error.message : error
+    );
+  }
+
+  return null;
 }
 
 /**
