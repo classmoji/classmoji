@@ -241,8 +241,27 @@ export type Tier = 'public' | 'enrolled' | 'draft';
 /** The three rungs `signSrcSet` emits. Mirrors TRANSFORM_WIDTHS. */
 export const EXPECTED_WIDTHS = [800, 1600, 2560] as const;
 
-/** The `sizes` constant every surface shares. Mirrors IMAGE_SIZES. */
+/**
+ * The `sizes` FALLBACK — mirrors `IMAGE_SIZES`.
+ *
+ * Not "the sizes constant every surface uses", which is the tempting and wrong
+ * reading. It is what a surface emits when it does not know how wide the image
+ * will be laid out. A block that carries `previewWidth` produces a better hint
+ * from it (see `expectedSizesFor`), and that applies to the editor, the viewer
+ * AND the class site — the difference is the BLOCK, not the surface.
+ */
 export const EXPECTED_SIZES = '(max-width: 1024px) 100vw, 1024px';
+
+/** The `sizes` a block with this preview width should emit. Mirrors `imageSizesFor`. */
+export function expectedSizesFor(previewWidth?: number | null): string {
+  if (typeof previewWidth !== 'number' || !Number.isFinite(previewWidth) || previewWidth <= 0) {
+    return EXPECTED_SIZES;
+  }
+  return `min(100vw, ${Math.round(previewWidth)}px)`;
+}
+
+/** The preview width `imageBlock` writes, so assertions can derive `sizes`. */
+export const FIXTURE_PREVIEW_WIDTH = 512;
 
 const UUID = '[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}';
 
@@ -447,6 +466,54 @@ export async function readImages(page: Page, selector = 'img'): Promise<Rendered
     out.push(await readImage(images.nth(index)));
   }
   return out;
+}
+
+/**
+ * Reload until the page's images satisfy a predicate, or give up.
+ *
+ * NOT a flake workaround — a real property of the system being tested. Page and
+ * deck content lives in a git repository, and GitHub's contents API is
+ * eventually consistent: a read issued immediately after a write can legally
+ * return the previous commit. The app itself is built around this (the slides
+ * suite has its own `reloadUntil` for the same reason), so a spec that saved
+ * and then asserted on one render would be asserting that GitHub is strongly
+ * consistent, and would fail perhaps one run in five.
+ *
+ * The predicate is about the CONTENT, never a timeout: the loop ends the moment
+ * the expected state is visible, and a failure after the last attempt is a real
+ * failure rather than a slow success.
+ */
+export async function reloadUntilImages(
+  page: Page,
+  url: string,
+  predicate: (images: RenderedImage[]) => boolean,
+  { selector = 'img', attempts = 6, delayMs = 2_000 } = {}
+): Promise<RenderedImage[]> {
+  let images: RenderedImage[] = [];
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    await page.goto(url);
+    await page.waitForLoadState('networkidle');
+    images = await readImages(page, selector);
+    if (predicate(images)) return images;
+    if (attempt < attempts - 1) await page.waitForTimeout(delayMs);
+  }
+  return images;
+}
+
+/** The same wait, for a surface only reachable over plain HTTP. */
+export async function fetchUntilHtml(
+  fetcher: (url: string) => Promise<{ status: number; body: string }>,
+  url: string,
+  predicate: (html: string) => boolean,
+  { attempts = 6, delayMs = 2_000 } = {}
+): Promise<{ status: number; body: string }> {
+  let last = { status: 0, body: '' };
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    last = await fetcher(url);
+    if (last.status === 200 && predicate(last.body)) return last;
+    if (attempt < attempts - 1) await new Promise(resolve => setTimeout(resolve, delayMs));
+  }
+  return last;
 }
 
 /**
@@ -779,7 +846,7 @@ export async function assetRow(
  */
 export async function syncMap(classroomId: string): Promise<void> {
   const service = await services();
-  await service.contentAssets.syncContentAssets({ classroomId, full: true });
+  await service.contentAssets.syncContentAssets(classroomId, { full: true });
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -835,6 +902,68 @@ export async function readStoredContent(
   const file = await readRepoFile(target, `${contentPath.replace(/\/+$/, '')}/content.json`);
   if (!file) throw new Error(`no content.json at ${contentPath} in ${target.content_repo}`);
   return { raw: file.content, json: JSON.parse(file.content) };
+}
+
+/**
+ * A page row with the classroom and git organization a content write needs.
+ *
+ * `contentRepoFor` in the page-content service refuses anything less, and the
+ * refusal is a thrown Error rather than a typed one — so the include list is
+ * part of the contract, not an optimization.
+ */
+export async function pageWithRepo(pageId: string) {
+  const service = await services();
+  return service.page.findById(pageId, { includeClassroom: true });
+}
+
+/** A page's blocks, through the product's own reader. */
+export async function loadPageBlocks(pageId: string): Promise<unknown[]> {
+  const service = await services();
+  const page = await pageWithRepo(pageId);
+  const content = await service.pageContent.loadPageContent(page, { skipCache: true });
+  return Array.isArray(content?.blocks) ? content.blocks : [];
+}
+
+/**
+ * Write a page's blocks through the product's own save path.
+ *
+ * Through `savePageContent` rather than a hand-rolled `ContentService.put`,
+ * because the save path is where `canonicalizeAssetRef` runs — the pass that
+ * keeps a rendered signature from being written back into storage. A fixture
+ * that bypassed it would set up the very state the storage assertions are
+ * meant to prove impossible.
+ */
+export async function savePageBlocks(pageId: string, blocks: unknown[]): Promise<void> {
+  const service = await services();
+  const page = await pageWithRepo(pageId);
+  await service.pageContent.savePageContent(page, blocks, {
+    message: `${E2E_PREFIX}: fixture write`,
+  });
+}
+
+/** The BlockNote image block the editor itself would have inserted. */
+export function imageBlock(repoPath: string, caption: string): Record<string, unknown> {
+  return {
+    id: `${E2E_SLUG_PREFIX}-${Math.random().toString(36).slice(2, 10)}`,
+    type: 'image',
+    props: {
+      // The STORED value: a bare repo path. The signed URL is derived from it
+      // at render time and never written back.
+      url: repoPath,
+      caption,
+      previewWidth: FIXTURE_PREVIEW_WIDTH,
+      backgroundColor: 'default',
+      textAlignment: 'left',
+      name: '',
+    },
+    content: undefined,
+    children: [],
+  };
+}
+
+/** Does any block still reference this repo path, anywhere in its props? */
+export function blocksReference(blocks: unknown[], repoPath: string): boolean {
+  return JSON.stringify(blocks).includes(repoPath);
 }
 
 /**
