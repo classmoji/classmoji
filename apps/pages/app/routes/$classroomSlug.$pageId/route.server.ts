@@ -10,6 +10,13 @@ import {
 import { migrateHtmlToBlockNote } from '~/utils/migration.server.ts';
 import { schema } from '~/components/editor/blocks/index.tsx';
 import type { PageForContent } from '~/types/pages.ts';
+import {
+  assetResolveContext,
+  canonicalizeAssetRef,
+  canonicalizeDocumentAssets,
+  canonicalizeOpsAssets,
+  resolveDocumentAssets,
+} from '~/utils/assetRefs.server.ts';
 
 /**
  * Public page viewer route - read-only view for students and public access.
@@ -145,6 +152,33 @@ export const loader = async ({
       ? { url: page.header_image_url, position: page.header_image_position ?? 50 }
       : null);
 
+  // Render-time URL resolution: the blocks keep their stored references and the
+  // client gets a parallel `ref → signed URL` map. Tier is per-VIEWER — an
+  // editor (or an explicit preview) gets short-lived draft URLs, everyone else
+  // the enrolled tier — which is exactly why the URL cannot live in the block.
+  // `previewActive`, not `wantsPreview`: the raw query param is attacker-supplied
+  // and is only honoured for staff. Passing it straight through would let an
+  // anonymous visitor mint draft-tier URLs by appending `?preview=1`.
+  const resolveTier = ClassmojiService.contentDelivery.tierFor({
+    canEdit,
+    preview: previewActive,
+  });
+  const assetCtx = assetResolveContext(
+    page.classroom as unknown as Parameters<typeof assetResolveContext>[0],
+    resolveTier
+  );
+  // ONE pass for both. Two sequential resolves read the clock twice, and a
+  // draft-tier expiry bucket that turns over between them mints a different
+  // `src` for the same file — at which point every candidate list is thrown
+  // away for exactly the viewers who look at pages most. The cover is in the
+  // ref list for its display URL; it does not need candidates, because
+  // `HeaderImage` renders it as a CSS background, where `srcset` means nothing.
+  const { assets: resolvedAssets, srcSets: resolvedSrcSets } = await resolveDocumentAssets(
+    assetCtx,
+    viewerContent,
+    [coverImage?.url]
+  );
+
   // Build GitHub repo info for link
   const gitOrg = (page.classroom as Record<string, unknown>).git_organization as {
     login?: string;
@@ -186,6 +220,15 @@ export const loader = async ({
     },
     content: viewerContent,
     coverImage,
+    // Display-only: `{ storedRef: signedUrl }`. Absent keys mean "use the ref
+    // as-is" (an external image, or the delivery layer switched off).
+    resolvedAssets,
+    // Also display-only, and keyed the SAME way — `{ storedRef: srcset }` —
+    // because the consumer is the image block, which holds the stored reference
+    // and would otherwise have to reproduce a signature to find its own entry.
+    // An absent key means "one size only", which is the right answer for a gif,
+    // an svg, and anything that is not an image.
+    resolvedSrcSets,
     userRole,
     canEdit,
     notice,
@@ -231,6 +274,14 @@ export const action = async ({
   }
 
   const actionPage = page as unknown as PageForContent;
+
+  // Save-side asset context. The tier is irrelevant to canonicalization (it
+  // only ever turns a signed URL back into a path) but the context type carries
+  // one; 'draft' names the only tier a writer can be in.
+  const actionAssetCtx = assetResolveContext(
+    page.classroom as unknown as Parameters<typeof assetResolveContext>[0],
+    'draft'
+  );
 
   // Check if user can edit
   const authData = await getAuthSession(request).catch(() => null);
@@ -314,7 +365,10 @@ export const action = async ({
           { status: 400 }
         );
       }
-      saveOps = parsed.data;
+      // Defense in depth: strip any signed URL back to its repo path BEFORE it
+      // can be committed. An ops save carries only the blocks that changed —
+      // which is exactly where a just-uploaded image's display URL would be.
+      saveOps = await canonicalizeOpsAssets(actionAssetCtx, parsed.data);
     }
 
     try {
@@ -379,7 +433,10 @@ export const action = async ({
         mergedDocument = mergeResult.document;
       } else {
         // ── Whole-document save (7.5 path, unchanged) ─────────────────────
-        const blocks = JSON.parse(data.content as string);
+        const blocks = await canonicalizeDocumentAssets(
+          actionAssetCtx,
+          JSON.parse(data.content as string)
+        );
 
         if (!expectedSha) {
           // Token-less save. Legit only when content.json doesn't exist yet
@@ -440,11 +497,25 @@ export const action = async ({
       // Return the new sha — the editor's conflict token for its next save.
       // A merged save also returns the committed document + the concurrent
       // count (the editor adopts the document and toasts the count).
+      // A merged document is one the editor has never seen — it carries stored
+      // refs for blocks folded in from main, and the client's display map has
+      // no entry for them. Resolve alongside it or those images render broken.
+      const merged = mergedDocument
+        ? await resolveDocumentAssets(actionAssetCtx, mergedDocument)
+        : null;
+
       return Response.json({
         success: true,
         sha,
         ...(mergedDocument
-          ? { merged_with_concurrent: mergedWithConcurrent, merged_content: mergedDocument }
+          ? {
+              merged_with_concurrent: mergedWithConcurrent,
+              merged_content: mergedDocument,
+              resolved_assets: merged?.assets ?? null,
+              // The folded-in blocks need candidates too, or every image the
+              // merge brought in paints at full size until the next load.
+              resolved_src_sets: merged?.srcSets ?? null,
+            }
           : {}),
       });
     } catch (error: unknown) {
@@ -638,9 +709,10 @@ export const action = async ({
 
   if (intent === 'set-header-image') {
     try {
-      const coverImage = data.url
+      const coverUrl = await canonicalizeAssetRef(actionAssetCtx, data.url as string | null);
+      const coverImage = coverUrl
         ? {
-            url: data.url as string,
+            url: coverUrl,
             position: typeof data.position === 'number' ? data.position : 50,
           }
         : null;
@@ -671,12 +743,14 @@ export const action = async ({
       if (!file || typeof file === 'string') {
         return Response.json({ error: 'No file provided' }, { status: 400 });
       }
-      const { url } = await uploadPageAsset(actionPage, file);
+      // `url` is the repo path (what gets stored); `displayUrl` is the signed
+      // URL for showing it right now — the two are never the same string.
+      const { url, displayUrl } = await uploadPageAsset(actionPage, file);
       const { sha } = await savePageCoverImage(actionPage, { url, position: 50 });
       await ClassmojiService.page.quickUpdate(pageId, {
         updated_at: new Date(),
       });
-      return Response.json({ success: true, url, sha });
+      return Response.json({ success: true, url, displayUrl, sha });
     } catch (error: unknown) {
       if ((error as { status?: number } | null)?.status === 409) {
         // F5: the asset uploaded fine, but the cover-image metadata write

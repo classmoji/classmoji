@@ -1,6 +1,9 @@
 import { createReactBlockSpec, type ReactCustomBlockRenderProps } from '@blocknote/react';
 import { useState, useRef } from 'react';
 import { IconCamera } from '@tabler/icons-react';
+import { useResolvedFileUrl } from './useResolvedFileUrl.ts';
+import { useAssetSrcSets } from '~/hooks/useAssetSrcSets.ts';
+import { AVATAR_SIZES, responsiveImageAttrs } from '~/utils/imageSizes.ts';
 
 const profilePropSchema = {
   name: { default: '' },
@@ -21,6 +24,21 @@ export const Profile = createReactBlockSpec(
     render: function ProfileRenderer(props: ProfileRenderProps) {
       const { name, title, imageUrl } = props.block.props;
       const isEditable = props.editor.isEditable;
+      // The block stores a repo reference; this is the URL to display it with.
+      // BlockNote only resolves its own file blocks, so a custom block has to
+      // make the call itself or it renders the raw reference and 404s.
+      const avatarSrc = useResolvedFileUrl(
+        typeof imageUrl === 'string' ? imageUrl : '',
+        props.editor.resolveFileUrl
+      );
+      // The avatar is a fixed 64px circle, so `sizes` is the whole point here:
+      // it is what makes the browser take the 800px rung (in WebP or AVIF)
+      // instead of an instructor's untouched 4000px camera JPEG.
+      const avatarResponsive = responsiveImageAttrs(
+        useAssetSrcSets(),
+        typeof imageUrl === 'string' ? imageUrl : '',
+        AVATAR_SIZES
+      );
       const [isUploading, setIsUploading] = useState(false);
       const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -70,7 +88,8 @@ export const Profile = createReactBlockSpec(
           >
             {imageUrl ? (
               <img
-                src={typeof imageUrl === 'string' ? imageUrl : ''}
+                src={avatarSrc}
+                {...avatarResponsive}
                 alt={typeof name === 'string' ? name : 'Profile image'}
                 className="profile-avatar-image"
               />

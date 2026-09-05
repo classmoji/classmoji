@@ -27,6 +27,16 @@ vi.mock('../../content/ContentService.ts', () => ({
   },
 }));
 
+// The asset map row is written at upload time rather than left to the push
+// webhook — see recordContentAsset. Mocked here so this suite keeps pinning the
+// GitHub interactions and nothing reaches Prisma.
+const recordContentAssetMock = vi.fn();
+const resolveContentBranchMock = vi.fn();
+vi.mock('../contentAssets.service.ts', () => ({
+  recordContentAsset: (...args: unknown[]) => recordContentAssetMock(...args),
+  resolveContentBranch: (...args: unknown[]) => resolveContentBranchMock(...args),
+}));
+
 const {
   loadPageContent,
   savePageContent,
@@ -249,15 +259,26 @@ describe('pageContent.savePageContent', () => {
 // ─── uploadPageAsset ─────────────────────────────────────────────────────────
 
 describe('pageContent.uploadPageAsset', () => {
-  it('uploads a Buffer into the page assets folder and returns url + path', async () => {
+  const RAW_URL =
+    'https://raw.githubusercontent.com/test-org/content-test-org-cs101/main/pages/syllabus/assets/a.png';
+
+  beforeEach(() => {
     uploadMock.mockResolvedValue({
-      url: 'https://raw.githubusercontent.com/test-org/content-test-org-cs101/main/pages/syllabus/assets/a.png',
+      url: RAW_URL,
       path: 'pages/syllabus/assets/a.png',
-      sha: 'asset-sha',
+      // A real 40-hex blob sha — the signer refuses anything else.
+      sha: 'c'.repeat(40),
     });
+    recordContentAssetMock.mockResolvedValue(true);
+    resolveContentBranchMock.mockResolvedValue('main');
+    delete process.env.CONTENT_DELIVERY_ORIGIN;
+    delete process.env.CONTENT_SIGNING_SECRET;
+  });
+
+  it('uploads a Buffer into the page assets folder', async () => {
     const buffer = Buffer.from('image-bytes');
 
-    const result = await uploadPageAsset(page, buffer, 'a.png');
+    await uploadPageAsset(page, buffer, 'a.png');
 
     const arg = callArg(uploadMock);
     expect(arg.repo).toBe('content-test-org-cs101');
@@ -265,9 +286,128 @@ describe('pageContent.uploadPageAsset', () => {
     expect(arg.file).toBe(buffer);
     expect(arg.filename).toBe('a.png');
     expect(arg.branch).toBe('main');
+  });
+
+  it('commits to the repo default branch rather than a hardcoded main', async () => {
+    // A course imported from an older org is on `master`. Committing to `main`
+    // there either creates a branch nobody renders from or is refused outright,
+    // and the asset map would then hold a blob the served branch never had.
+    resolveContentBranchMock.mockResolvedValue('master');
+
+    await uploadPageAsset(page, Buffer.from('x'), 'a.png');
+
+    expect(resolveContentBranchMock).toHaveBeenCalledWith(
+      gitOrganization,
+      'test-org',
+      'content-test-org-cs101'
+    );
+    expect(callArg(uploadMock).branch).toBe('master');
+  });
+
+  it('stores the REPO PATH once the delivery layer can sign it', async () => {
+    process.env.CONTENT_DELIVERY_ORIGIN = 'https://cdn.classmoji.test';
+    process.env.CONTENT_SIGNING_SECRET = 'test-master-secret';
+    const classroomPage = {
+      ...page,
+      classroom: {
+        ...page.classroom,
+        id: '3f2504e0-4f89-41d3-9a0c-0305e82c3301',
+        content_delivery_enabled: true,
+      },
+    };
+
+    const result = await uploadPageAsset(classroomPage, Buffer.from('x'), 'a.png');
+
+    // The path is what keeps following the file across re-uploads and bumps.
+    expect(result.url).toBe('pages/syllabus/assets/a.png');
+    expect(result.path).toBe('pages/syllabus/assets/a.png');
+    // Display is a separate field precisely so it cannot be stored by accident.
+    expect(result.displayUrl).toContain('https://cdn.classmoji.test/c/');
+    expect(result.displayUrl).toContain('p=draft');
+    expect(result.displayUrl).not.toBe(result.url);
+  });
+
+  it('falls back to the legacy absolute URL when nothing can sign', async () => {
+    // THE regression this guards: unconfigured, no surface — editor, viewer or
+    // class site — knows how to turn a bare path into a fetchable URL, so
+    // storing one would make every upload a 404 the moment it is saved.
+    const result = await uploadPageAsset(page, Buffer.from('x'), 'a.png');
+
     expect(result).toEqual({
-      url: 'https://raw.githubusercontent.com/test-org/content-test-org-cs101/main/pages/syllabus/assets/a.png',
+      url: RAW_URL,
       path: 'pages/syllabus/assets/a.png',
+      displayUrl: null,
+    });
+  });
+
+  it('records the uploaded blob in the asset map before returning', async () => {
+    // THE regression this guards: without the row, the save stores a repo path
+    // the next render cannot resolve, and the viewer gets the resolver's
+    // "dangling" URL until a push webhook or the 24-hour refresh catches up.
+    const classroomPage = {
+      ...page,
+      classroom: { ...page.classroom, id: '3f2504e0-4f89-41d3-9a0c-0305e82c3301' },
+    };
+    const buffer = Buffer.from('image-bytes');
+
+    await uploadPageAsset(classroomPage, buffer, 'a.png');
+
+    expect(recordContentAssetMock).toHaveBeenCalledWith('3f2504e0-4f89-41d3-9a0c-0305e82c3301', {
+      path: 'pages/syllabus/assets/a.png',
+      sha: 'c'.repeat(40),
+      size: buffer.length,
+    });
+  });
+
+  it('skips the map write when there is no classroom id to key it on', async () => {
+    await uploadPageAsset(page, Buffer.from('x'), 'a.png');
+
+    expect(recordContentAssetMock).not.toHaveBeenCalled();
+  });
+
+  it('falls back the same way when the classroom has no id to sign against', async () => {
+    process.env.CONTENT_DELIVERY_ORIGIN = 'https://cdn.classmoji.test';
+    process.env.CONTENT_SIGNING_SECRET = 'test-master-secret';
+
+    // `page.classroom` here carries no id — signing is impossible, so this must
+    // degrade exactly like the unconfigured case rather than store a dead path.
+    const result = await uploadPageAsset(
+      { ...page, classroom: { ...page.classroom, content_delivery_enabled: true } },
+      Buffer.from('x'),
+      'a.png'
+    );
+
+    expect(result.url).toBe(RAW_URL);
+    expect(result.displayUrl).toBeNull();
+  });
+
+  it('stores the legacy URL for a classroom that has not been opted in', async () => {
+    // THE case that makes shipping this safe: production already carries both
+    // env vars, so the ENV says yes here. The classroom's own flag is what
+    // holds the line, and an upload into a classroom that is still off has to
+    // store exactly what it stored yesterday — a URL the legacy readers resolve.
+    process.env.CONTENT_DELIVERY_ORIGIN = 'https://cdn.classmoji.test';
+    process.env.CONTENT_SIGNING_SECRET = 'test-master-secret';
+    const classroomPage = {
+      ...page,
+      classroom: {
+        ...page.classroom,
+        id: '3f2504e0-4f89-41d3-9a0c-0305e82c3301',
+        content_delivery_enabled: false,
+      },
+    };
+
+    const result = await uploadPageAsset(classroomPage, Buffer.from('x'), 'a.png');
+
+    expect(result.url).toBe(RAW_URL);
+    expect(result.displayUrl).toBeNull();
+    // The map row is still written. It is harmless while the flag is off and it
+    // is what makes flipping the switch take effect on the very next render
+    // instead of waiting for a push webhook.
+    expect(recordContentAssetMock).toHaveBeenCalledWith('3f2504e0-4f89-41d3-9a0c-0305e82c3301', {
+      path: 'pages/syllabus/assets/a.png',
+      sha: 'c'.repeat(40),
+      size: 1,
     });
   });
 });

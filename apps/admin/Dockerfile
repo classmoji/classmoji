@@ -12,6 +12,7 @@ ENV NODE_OPTIONS="--max-old-space-size=2048"
 COPY package.json package-lock.json .npmrc ./
 COPY apps/admin/package.json apps/admin/
 COPY apps/ai-agent/package.jso[n] apps/ai-agent/
+COPY apps/content/package.json apps/content/
 COPY apps/hook-station/package.json apps/hook-station/
 COPY apps/mcp/package.json apps/mcp/
 COPY apps/pages/package.json apps/pages/
@@ -20,6 +21,7 @@ COPY apps/slides/package.json apps/slides/
 COPY apps/webapp/package.json apps/webapp/
 COPY packages/auth/package.json packages/auth/
 COPY packages/content/package.json packages/content/
+COPY packages/content-signing/package.json packages/content-signing/
 COPY packages/database/package.json packages/database/
 COPY packages/eslint-config/package.json packages/eslint-config/
 COPY packages/services/package.json packages/services/
@@ -53,6 +55,8 @@ WORKDIR /app
 
 RUN apk add --no-cache openssl libc6-compat
 
+COPY --from=build /app/node_modules ./node_modules
+
 COPY --from=build /app/apps/admin/build ./apps/admin/build
 COPY --from=build /app/apps/admin/server.ts ./apps/admin/server.ts
 # The server/ directory is NOT optional: server.ts loads ./server/app.ts, and an
@@ -60,7 +64,6 @@ COPY --from=build /app/apps/admin/server.ts ./apps/admin/server.ts
 # the deploy job still reads green. apps/pages learned this the hard way.
 COPY --from=build /app/apps/admin/server ./apps/admin/server
 COPY --from=build /app/apps/admin/package.json ./apps/admin/package.json
-COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/package.json ./
 COPY --from=build /app/package-lock.json ./
 COPY --from=build /app/turbo.json ./

@@ -33,6 +33,13 @@ import { useUser } from '~/hooks';
 import { fetchContent } from '~/utils/contentProxy';
 import { diffDeckSnapshots, extractDeckSnapshot, type DeckSnapshot } from '~/utils/deckOpsDiff';
 import { getThemeUrls } from '~/utils/themeService.server';
+import {
+  deckAccessFor,
+  deckDeliveryContext,
+  resolveDeckAssets,
+  resolveDeliveryThemeUrls,
+  resolveReadThemeUrls,
+} from '~/utils/deckDelivery.server';
 import RevealSlides, { type RevealSlidesHandle } from '~/components/RevealSlides';
 import SlideToolbar from '~/components/SlideToolbar';
 import SlideNotesPanel from '~/components/SlideNotesPanel';
@@ -51,35 +58,6 @@ import {
   type ConflictUnit,
   type OrderConflict,
 } from '~/components/preview/PreviewControls';
-
-/**
- * Resolve shared-theme URLs for read-side deck rendering (Phase 4c). Same
- * resolution the save path uses (getThemeUrls with identical args), so the
- * generated document matches the saved index.html artifact byte-for-byte.
- * Unlike the save path (which is about to persist and falls back to theme
- * 'white'), a resolve failure on a READ must not mutate the deck — we just
- * render without theme links (generateDeckHtml warns).
- */
-async function resolveReadThemeUrls(
-  deck: DeckJson,
-  gitOrgLogin: string,
-  repo: string
-): Promise<DeckThemeUrls | undefined> {
-  if (!deck.theme.startsWith('shared:')) return undefined;
-  const sharedThemeName = deck.theme.replace('shared:', '');
-  try {
-    const urls = await getThemeUrls(gitOrgLogin, repo, sharedThemeName);
-    return {
-      libCssUrl: urls.libCssUrl,
-      customThemeUrl: urls.customThemeUrl,
-      bodyClasses: urls.bodyClasses,
-    };
-  } catch (error: unknown) {
-    const message = error instanceof Error ? error.message : String(error);
-    console.warn(`Could not resolve shared theme URLs for "${sharedThemeName}":`, message);
-    return undefined;
-  }
-}
 
 // Loader to fetch slide metadata and content from database/GitHub
 export const loader = async ({
@@ -192,6 +170,16 @@ export const loader = async ({
   // Staff asked for a preview but no branch exists → render main with a notice.
   const previewMissing = Boolean(canEdit && wantsPreview && !previewStatus?.exists);
 
+  // Per-VIEWER tier: staff and preview readers get short-lived draft URLs, a
+  // public deck's anonymous readers get the long public bucket, everyone else
+  // the enrolled one. This is the reason a signed URL cannot live in the deck.
+  const deliveryCtx = deckDeliveryContext(
+    slide,
+    gitOrgLogin,
+    repo,
+    deckAccessFor('viewer', { canEdit, previewActive }, slide)
+  );
+
   // GitHub's free diff UI for the pending preview (branch segment URL-encoded —
   // preview branch names contain slashes).
   const diffUrl = `https://github.com/${gitOrgLogin}/${repo}/compare/main...${encodeURIComponent(previewBranch)}`;
@@ -221,7 +209,16 @@ export const loader = async ({
         // deck.json exists: render server-side with the SAME generator +
         // theme-URL resolution the save path uses, so this document is
         // identical to the index.html artifact the last save committed.
-        const themeUrls = await resolveReadThemeUrls(loaded.deck, gitOrgLogin, repo);
+        // Theme links are signed even in edit mode: they live in <head> and
+        // the editor posts back only the <div class="slides"> fragment, so
+        // they can never round-trip into a stored document. Image URLs are
+        // deliberately NOT signed here for exactly the opposite reason.
+        const themeUrls = await resolveDeliveryThemeUrls(
+          loaded.deck,
+          gitOrgLogin,
+          repo,
+          deliveryCtx
+        );
         contentResult = {
           content: generateDeckHtml(loaded.deck, {
             title: slide.title,
@@ -302,7 +299,7 @@ export const loader = async ({
   if (previewActive && !contentResult) {
     try {
       const loaded = await loadDeck(slide, { ref: previewBranch, skipCache: true });
-      const themeUrls = await resolveReadThemeUrls(loaded.deck, gitOrgLogin, repo);
+      const themeUrls = await resolveDeliveryThemeUrls(loaded.deck, gitOrgLogin, repo, deliveryCtx);
       contentResult = {
         content: generateDeckHtml(loaded.deck, {
           title: slide.title,
@@ -355,6 +352,15 @@ export const loader = async ({
     slideContent = contentResult.content as string;
     usedApiFallback = contentResult.source === 'api';
 
+    // Sign the deck's image references — but never for the document the editor
+    // is about to load. Entering edit mode always re-reads through
+    // `fetch-latest` (which does no image pass), so restricting this to
+    // non-edit reads is what guarantees a signed URL can never be posted back
+    // and committed into deck.json.
+    if (mode !== 'edit') {
+      slideContent = await resolveDeckAssets(slideContent, deliveryCtx);
+    }
+
     // Strip speaker notes from content if user doesn't have permission to view them
     // Notes are in <aside class="notes"> elements within each slide section
     if (!canViewSpeakerNotes && slideContent) {
@@ -385,14 +391,20 @@ export const loader = async ({
     if (themeMatch) {
       const themeName = themeMatch[1];
       try {
-        const themeUrls = await getThemeUrls(gitOrgLogin, repo, themeName);
+        const themeUrls = await resolveDeliveryThemeUrls(
+          { theme: `shared:${themeName}` } as DeckJson,
+          gitOrgLogin,
+          repo,
+          deliveryCtx
+        );
+        if (!themeUrls) throw new Error(`No theme URLs for ${themeName}`);
         preloadedSharedTheme = {
           id: `shared:${themeName}`,
           name: themeName
             .split('-')
             .map((w: string) => w.charAt(0).toUpperCase() + w.slice(1))
             .join(' '),
-          libCssUrl: themeUrls.libCssUrl,
+          libCssUrl: themeUrls.libCssUrl ?? undefined,
           customThemeUrl: themeUrls.customThemeUrl ?? undefined,
           bodyClasses: themeUrls.bodyClasses as string,
         };
@@ -403,8 +415,18 @@ export const loader = async ({
     }
   }
 
+  // Cloudinary video hosting is Pro-only, and the properties panel offers an
+  // "Upload to Cloudinary" button. Resolved ONLY for editors: viewers never see
+  // that button, and this loader is on the hot path for every student opening
+  // every slide, so a tier query for them would be pure cost. The real gate is
+  // in api.video.upload-cloudinary, which re-decides per request.
+  const isPro = canEdit
+    ? (await ClassmojiService.subscription.getProStateForClassroomId(slide.classroom_id)).isPro
+    : false;
+
   return {
     slide,
+    isPro,
     contentUrl,
     slideContent,
     contentError,
@@ -685,7 +707,19 @@ export const action = async ({
         if (loaded.sha_source === 'deck') {
           // Same generator + theme-URL resolution as the save path — the
           // returned document is identical to the saved index.html artifact.
-          const themeUrls = await resolveReadThemeUrls(loaded.deck, gitOrgLogin, repo);
+          // Theme only. This document goes straight into the editor and comes
+          // back on save; a signed image URL in it would be committed.
+          const themeUrls = await resolveDeliveryThemeUrls(
+            loaded.deck,
+            gitOrgLogin,
+            repo,
+            deckDeliveryContext(
+              slide,
+              gitOrgLogin,
+              repo,
+              deckAccessFor('viewer', { canEdit: true }, slide)
+            )
+          );
           return {
             intent: 'fetch-latest',
             content: generateDeckHtml(loaded.deck, {
@@ -788,6 +822,17 @@ export const action = async ({
         folder: `${slide.content_path}/images`,
         message: `Upload image for slides: ${slide.title}`,
       });
+
+      // Record the row now rather than waiting for the push webhook: a deck
+      // saved right after the upload stores this repo path, and a render that
+      // misses the asset map signs a dangling URL. Never throws.
+      if (slide.classroom_id) {
+        await ClassmojiService.contentAssets.recordContentAsset(slide.classroom_id, {
+          path: result.path,
+          sha: result.sha,
+          size: buffer.length,
+        });
+      }
 
       // Return content proxy URL instead of raw.githubusercontent.com
       // Content proxy handles MIME types correctly and has CDN+API fallback
@@ -1594,6 +1639,7 @@ export const action = async ({
 export default function SlideViewer() {
   const {
     slide,
+    isPro,
     contentUrl,
     slideContent,
     contentError,
@@ -2390,6 +2436,7 @@ export default function SlideViewer() {
       onDeleteTheme={handleDeleteTheme}
       customThemes={customThemes}
       sharedThemes={sharedThemes}
+      isPro={isPro}
     >
       <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
         {/* Navbar - uses grid layout to center toolbar when editing */}

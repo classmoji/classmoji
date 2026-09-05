@@ -494,6 +494,11 @@ interface LinkCandidate {
 }
 
 const REVEAL_CORE_RE = /reveal\.js@[^/]+\/dist\/reveal(?:\.min)?\.css/;
+
+/** A signed delivery theme folder: `/c/{classroomId}/theme/{name}/{treeSha}/...`. */
+const DELIVERY_THEME_HREF =
+  /\/c\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\/theme\//;
+
 const BUILTIN_THEME_RE = /reveal\.js@[^/]+\/dist\/theme\/([\w-]+?)(?:\.min)?\.css/;
 // Recognizes BOTH highlight.js styles AND the reveal plugin path (the starter
 // links monokai via `reveal.js@*/plugin/highlight/monokai.css`).
@@ -591,7 +596,15 @@ export function parseDeckHtml(html: string, opts: ParseOptions = {}): ParsedDeck
         return;
       }
       // Shared-theme assets are regenerated from caller-resolved themeUrls.
-      if (declared.startsWith('shared:') && href.includes(`${THEMES_FOLDER}/`)) {
+      // Both shapes count: the content-proxy path, and a signed delivery theme
+      // folder (`/c/{classroomId}/theme/...`), which carries no `.slidesthemes/`
+      // segment at all. Missing the second would park an expiring signed URL in
+      // `extraCss` — a stored signature, which is the one thing the delivery
+      // layer exists to prevent.
+      if (
+        declared.startsWith('shared:') &&
+        (href.includes(`${THEMES_FOLDER}/`) || DELIVERY_THEME_HREF.test(href))
+      ) {
         return;
       }
       // Custom-theme file link (when the generator emitted one) — regenerated.

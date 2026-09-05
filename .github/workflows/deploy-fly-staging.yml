@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: deploy-${{ github.ref }}
+  group: deploy-staging
   cancel-in-progress: false
 
 jobs:
@@ -31,27 +31,63 @@ jobs:
         with:
           filters: |
             webapp:
+              - 'package.json'
+              - 'package-lock.json'
+              - '.npmrc'
+              - '.dockerignore'
+              - '.github/workflows/deploy-fly-staging.yml'
               - 'apps/webapp/**'
               - 'packages/**'
             ai-agent:
+              - 'package.json'
+              - 'package-lock.json'
+              - '.npmrc'
+              - '.dockerignore'
+              - '.github/workflows/deploy-fly-staging.yml'
+              - 'scripts/docker/ai-agent.staging.Dockerfile'
               - 'apps/ai-agent'
               - 'apps/ai-agent/**'
               - 'packages/**'
             hook-station:
+              - 'package.json'
+              - 'package-lock.json'
+              - '.npmrc'
+              - '.dockerignore'
+              - '.github/workflows/deploy-fly-staging.yml'
               - 'apps/hook-station/**'
               - 'packages/**'
             mcp:
+              - 'package.json'
+              - 'package-lock.json'
+              - '.npmrc'
+              - '.dockerignore'
+              - '.github/workflows/deploy-fly-staging.yml'
               - 'apps/mcp/**'
               - 'packages/**'
             site:
               - 'apps/site/**'
             slides:
+              - 'package.json'
+              - 'package-lock.json'
+              - '.npmrc'
+              - '.dockerignore'
+              - '.github/workflows/deploy-fly-staging.yml'
               - 'apps/slides/**'
               - 'packages/**'
             pages:
+              - 'package.json'
+              - 'package-lock.json'
+              - '.npmrc'
+              - '.dockerignore'
+              - '.github/workflows/deploy-fly-staging.yml'
               - 'apps/pages/**'
               - 'packages/**'
             admin:
+              - 'package.json'
+              - 'package-lock.json'
+              - '.npmrc'
+              - '.dockerignore'
+              - '.github/workflows/deploy-fly-staging.yml'
               - 'apps/admin/**'
               - 'packages/**'
             tasks:
@@ -64,6 +100,7 @@ jobs:
     needs: changes
     if: needs.changes.outputs.webapp == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
         with:
@@ -78,10 +115,14 @@ jobs:
       - name: Deploy webapp
         run: |
           CONFIG=$(scripts/fly-autostop-config.sh apps/webapp/fly.toml stop)
-          flyctl deploy --config "$CONFIG" --dockerfile apps/webapp/Dockerfile --remote-only --app classmoji-webapp-staging
+          flyctl deploy --config "$CONFIG" --dockerfile apps/webapp/Dockerfile --remote-only --depot=true --depot-scope=app --app classmoji-webapp-staging
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
 
+  # Keep at most two monorepo builds active after webapp completes.
+  # Lane 1: ai-agent -> mcp -> slides. Lane 2: hook-station -> pages -> admin.
+  # Existing always() guards let a lane continue after a failed/skipped sibling;
+  # every service still requires a successful/skipped webapp migration barrier.
   deploy-ai-agent:
     needs: [changes, deploy-webapp]
     # Always wait on deploy-webapp so that any pending Prisma migration
@@ -90,6 +131,7 @@ jobs:
     # `always()` lets this run even when deploy-webapp was skipped.
     if: always() && needs.changes.outputs.ai-agent == 'true' && (needs.deploy-webapp.result == 'success' || needs.deploy-webapp.result == 'skipped')
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
         with:
@@ -104,7 +146,7 @@ jobs:
       - name: Deploy ai-agent
         run: |
           CONFIG=$(scripts/fly-autostop-config.sh apps/ai-agent/fly.toml suspend)
-          flyctl deploy --config "$CONFIG" --dockerfile apps/ai-agent/Dockerfile --remote-only --app classmoji-ai-agent-staging
+          flyctl deploy --config "$CONFIG" --dockerfile scripts/docker/ai-agent.staging.Dockerfile --remote-only --depot=true --depot-scope=app --app classmoji-ai-agent-staging
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
 
@@ -112,6 +154,7 @@ jobs:
     needs: [changes, deploy-webapp]
     if: always() && needs.changes.outputs.hook-station == 'true' && (needs.deploy-webapp.result == 'success' || needs.deploy-webapp.result == 'skipped')
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
         with:
@@ -125,15 +168,20 @@ jobs:
       - uses: superfly/flyctl-actions/setup-flyctl@master
       - name: Deploy hook-station
         run: |
-          CONFIG=$(scripts/fly-autostop-config.sh apps/hook-station/fly.toml stop)
-          flyctl deploy --config "$CONFIG" --dockerfile apps/hook-station/Dockerfile --remote-only --app classmoji-hook-station-staging
+          # hook-station is the one staging app that must NOT scale to zero: a
+          # cold start takes ~20 s and GitHub gives a webhook delivery 10 s with
+          # no retry, so every push/issue event that arrived while it slept was
+          # lost. Deploy the production config as-is (auto_stop off, one machine
+          # always running; shared-cpu-1x, pennies).
+          flyctl deploy --config apps/hook-station/fly.toml --dockerfile apps/hook-station/Dockerfile --remote-only --depot=true --depot-scope=app --app classmoji-hook-station-staging
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
 
   deploy-mcp:
-    needs: [changes, deploy-webapp]
+    needs: [changes, deploy-webapp, deploy-ai-agent]
     if: always() && needs.changes.outputs.mcp == 'true' && (needs.deploy-webapp.result == 'success' || needs.deploy-webapp.result == 'skipped')
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
         with:
@@ -149,7 +197,7 @@ jobs:
         run: |
           if flyctl status --app classmoji-mcp-staging >/dev/null 2>&1; then
             CONFIG=$(scripts/fly-autostop-config.sh apps/mcp/fly.toml stop)
-            flyctl deploy --config "$CONFIG" --dockerfile apps/mcp/Dockerfile --remote-only --app classmoji-mcp-staging
+            flyctl deploy --config "$CONFIG" --dockerfile apps/mcp/Dockerfile --remote-only --depot=true --depot-scope=app --app classmoji-mcp-staging
           else
             echo "::notice::Skipping mcp deploy because Fly app classmoji-mcp-staging is not provisioned."
           fi
@@ -160,6 +208,7 @@ jobs:
     needs: changes
     if: needs.changes.outputs.site == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
         with:
@@ -176,7 +225,7 @@ jobs:
         run: |
           if flyctl status --app classmoji-site-staging >/dev/null 2>&1; then
             CONFIG=$(../../scripts/fly-autostop-config.sh fly.toml stop)
-            flyctl deploy --config "$CONFIG" --remote-only --app classmoji-site-staging
+            flyctl deploy --config "$CONFIG" --remote-only --depot=true --depot-scope=app --app classmoji-site-staging
           else
             echo "::notice::Skipping site deploy because Fly app classmoji-site-staging is not provisioned."
           fi
@@ -184,9 +233,10 @@ jobs:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
 
   deploy-slides:
-    needs: [changes, deploy-webapp]
+    needs: [changes, deploy-webapp, deploy-ai-agent, deploy-mcp]
     if: always() && needs.changes.outputs.slides == 'true' && (needs.deploy-webapp.result == 'success' || needs.deploy-webapp.result == 'skipped')
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
         with:
@@ -201,14 +251,15 @@ jobs:
       - name: Deploy slides
         run: |
           CONFIG=$(scripts/fly-autostop-config.sh apps/slides/fly.toml stop)
-          flyctl deploy --config "$CONFIG" --dockerfile apps/slides/Dockerfile --remote-only --app classmoji-slides-staging
+          flyctl deploy --config "$CONFIG" --dockerfile apps/slides/Dockerfile --remote-only --depot=true --depot-scope=app --app classmoji-slides-staging
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
 
   deploy-pages:
-    needs: [changes, deploy-webapp]
+    needs: [changes, deploy-webapp, deploy-hook-station]
     if: always() && needs.changes.outputs.pages == 'true' && (needs.deploy-webapp.result == 'success' || needs.deploy-webapp.result == 'skipped')
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
         with:
@@ -223,14 +274,15 @@ jobs:
       - name: Deploy pages
         run: |
           CONFIG=$(scripts/fly-autostop-config.sh apps/pages/fly.toml stop)
-          flyctl deploy --config "$CONFIG" --dockerfile apps/pages/Dockerfile --remote-only --app classmoji-pages-staging
+          flyctl deploy --config "$CONFIG" --dockerfile apps/pages/Dockerfile --remote-only --depot=true --depot-scope=app --app classmoji-pages-staging
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
 
   deploy-admin:
-    needs: [changes, deploy-webapp]
+    needs: [changes, deploy-webapp, deploy-hook-station, deploy-pages]
     if: always() && needs.changes.outputs.admin == 'true' && (needs.deploy-webapp.result == 'success' || needs.deploy-webapp.result == 'skipped')
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
         with:
@@ -245,7 +297,7 @@ jobs:
       - name: Deploy admin
         run: |
           CONFIG=$(scripts/fly-autostop-config.sh apps/admin/fly.toml stop)
-          flyctl deploy --config "$CONFIG" --dockerfile apps/admin/Dockerfile --remote-only --app classmoji-admin-staging
+          flyctl deploy --config "$CONFIG" --dockerfile apps/admin/Dockerfile --remote-only --depot=true --depot-scope=app --app classmoji-admin-staging
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
 
@@ -253,6 +305,7 @@ jobs:
     needs: [changes, deploy-webapp]
     if: always() && needs.changes.outputs.tasks == 'true' && (needs.deploy-webapp.result == 'success' || needs.deploy-webapp.result == 'skipped')
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
         with:

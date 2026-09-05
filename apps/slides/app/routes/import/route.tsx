@@ -6,7 +6,7 @@
  * Requires OWNER or TEACHER role.
  */
 
-import { useState, useCallback, useEffect, useRef } from 'react';
+import { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import { useLoaderData, useNavigate } from 'react-router';
 import { useDropzone, type FileRejection } from 'react-dropzone';
 import getPrisma from '@classmoji/database';
@@ -68,7 +68,12 @@ export const loader = async ({ request }: { request: Request }) => {
     : getContentRepoName({ login: gitOrgLogin });
   const savedThemes = await listSavedThemes(gitOrgLogin, repoName);
 
+  // Cloudinary video hosting is Pro-only. This drives the UI ONLY — the real
+  // gate is in api.slides.import.start, which re-decides on every submission.
+  const { isPro } = await ClassmojiService.subscription.getProStateForClassroomId(classroom.id);
+
   return {
+    isPro,
     classroomSlug,
     contentNamespace: classroom.content_namespace,
     gitOrgLogin,
@@ -93,7 +98,7 @@ export const loader = async ({ request }: { request: Request }) => {
 // and stream progress via SSE
 
 export default function ImportPage() {
-  const { classroomSlug, classroom, repositories, savedThemes, webappUrl, slidesListUrl } =
+  const { isPro, classroomSlug, classroom, repositories, savedThemes, webappUrl, slidesListUrl } =
     useLoaderData<typeof loader>();
   const userContext = useUser();
   const user = userContext?.user;
@@ -113,6 +118,15 @@ export default function ImportPage() {
   const [showVideoModal, setShowVideoModal] = useState(false);
   const [cloudinaryVideoPaths, setCloudinaryVideoPaths] = useState<string[]>([]);
   const [analyzingVideos, setAnalyzingVideos] = useState(false);
+
+  // What actually leaves the browser. A non-Pro classroom never offers the
+  // Cloudinary choice, so the state should already be empty; deriving it here
+  // means no future edit can reintroduce a populated field on that path. The
+  // server re-decides regardless — this is presentation, not the gate.
+  const submittedCloudinaryVideoPaths = useMemo(
+    () => (isPro ? cloudinaryVideoPaths : []),
+    [isPro, cloudinaryVideoPaths]
+  );
 
   // Import progress state (SSE-based)
   const [importId, setImportId] = useState<string | null>(null);
@@ -138,36 +152,45 @@ export default function ImportPage() {
   const canImport = membership?.role === 'OWNER' || membership?.role === 'TEACHER';
 
   // File dropzone
-  const onDrop = useCallback(async (acceptedFiles: File[]) => {
-    if (acceptedFiles.length > 0) {
-      const file = acceptedFiles[0];
-      setSelectedFile(file);
-      setDropzoneError(null); // Clear any previous error
+  const onDrop = useCallback(
+    async (acceptedFiles: File[]) => {
+      if (acceptedFiles.length > 0) {
+        const file = acceptedFiles[0];
+        setSelectedFile(file);
+        setDropzoneError(null); // Clear any previous error
 
-      // Analyze ZIP for videos (client-side, reads only metadata)
-      setAnalyzingVideos(true);
-      try {
-        const videos = await analyzeZipForVideos(file);
+        // Analyze ZIP for videos (client-side, reads only metadata)
+        setAnalyzingVideos(true);
+        try {
+          const videos = await analyzeZipForVideos(file);
 
-        if (videos.length > 0) {
-          setDetectedVideos(videos);
-          // Pre-select videos recommended for Cloudinary
-          const suggested = videos.filter(v => v.suggestCloudinary).map(v => v.path);
-          setCloudinaryVideoPaths(suggested);
-          setShowVideoModal(true);
-        } else {
-          // No videos found, clear any previous state
-          setDetectedVideos([]);
-          setCloudinaryVideoPaths([]);
+          if (videos.length > 0) {
+            setDetectedVideos(videos);
+            // Non-Pro classrooms still get the count — it is useful either way —
+            // but never the Cloudinary choice, so no selection and no modal.
+            if (isPro) {
+              // Pre-select videos recommended for Cloudinary
+              const suggested = videos.filter(v => v.suggestCloudinary).map(v => v.path);
+              setCloudinaryVideoPaths(suggested);
+              setShowVideoModal(true);
+            } else {
+              setCloudinaryVideoPaths([]);
+            }
+          } else {
+            // No videos found, clear any previous state
+            setDetectedVideos([]);
+            setCloudinaryVideoPaths([]);
+          }
+        } catch (err: unknown) {
+          console.error('Failed to analyze ZIP for videos:', err);
+          // Don't block import if analysis fails
+        } finally {
+          setAnalyzingVideos(false);
         }
-      } catch (err: unknown) {
-        console.error('Failed to analyze ZIP for videos:', err);
-        // Don't block import if analysis fails
-      } finally {
-        setAnalyzingVideos(false);
       }
-    }
-  }, []);
+    },
+    [isPro]
+  );
 
   const onDropRejected = useCallback((fileRejections: FileRejection[]) => {
     const rejection = fileRejections[0];
@@ -229,7 +252,7 @@ export default function ImportPage() {
         }
 
         // Add cloudinary video paths
-        formData.set('cloudinaryVideoPaths', JSON.stringify(cloudinaryVideoPaths));
+        formData.set('cloudinaryVideoPaths', JSON.stringify(submittedCloudinaryVideoPaths));
 
         // POST to the async start endpoint
         const response = await fetch('/api/slides/import/start', {
@@ -253,7 +276,7 @@ export default function ImportPage() {
         setIsSubmitting(false);
       }
     },
-    [selectedFile, cloudinaryVideoPaths]
+    [selectedFile, submittedCloudinaryVideoPaths]
   );
 
   // Handle import cancellation (close modal and reset state)
@@ -322,7 +345,7 @@ export default function ImportPage() {
             <input
               type="hidden"
               name="cloudinaryVideoPaths"
-              value={JSON.stringify(cloudinaryVideoPaths)}
+              value={JSON.stringify(submittedCloudinaryVideoPaths)}
             />
 
             {/* Error message */}
@@ -403,21 +426,29 @@ export default function ImportPage() {
                         {detectedVideos.length} video{detectedVideos.length !== 1 ? 's' : ''}
                       </span>{' '}
                       detected
-                      {cloudinaryVideoPaths.length > 0 && (
+                      {isPro && cloudinaryVideoPaths.length > 0 && (
                         <span className="ml-1">
                           ({cloudinaryVideoPaths.length} → Cloudinary,{' '}
                           {detectedVideos.length - cloudinaryVideoPaths.length} → GitHub)
                         </span>
                       )}
                     </div>
-                    <button
-                      type="button"
-                      onClick={() => setShowVideoModal(true)}
-                      className="text-xs text-blue-600 dark:text-blue-400 hover:underline"
-                    >
-                      Change
-                    </button>
+                    {isPro && (
+                      <button
+                        type="button"
+                        onClick={() => setShowVideoModal(true)}
+                        className="text-xs text-blue-600 dark:text-blue-400 hover:underline"
+                      >
+                        Change
+                      </button>
+                    )}
                   </div>
+                  {!isPro && (
+                    <p className="mt-2 text-xs text-blue-700 dark:text-blue-300">
+                      Videos are stored in the content repo — files over 100 MB will fail the
+                      import. Cloudinary video hosting is a Pro feature.
+                    </p>
+                  )}
                 </div>
               )}
 

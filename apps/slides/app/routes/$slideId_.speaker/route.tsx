@@ -3,6 +3,7 @@ import getPrisma from '@classmoji/database';
 import { assertSlideAccess } from '@classmoji/auth/server';
 import SpeakerView from '~/components/SpeakerView';
 import { fetchContent } from '~/utils/contentProxy';
+import { deckAccessFor, deckDeliveryContext, resolveDeckAssets } from '~/utils/deckDelivery.server';
 
 /**
  * Speaker route - Remote speaker notes view
@@ -39,7 +40,7 @@ export const loader = async ({
   }
 
   // Authorization: require speakerNotes access (staff, or viewers when show_speaker_notes=true)
-  await assertSlideAccess({
+  const { canEdit } = await assertSlideAccess({
     request,
     slideId,
     slide,
@@ -67,9 +68,19 @@ export const loader = async ({
   });
 
   if (contentResult) {
+    // Sign the deck's references BEFORE the fragment is cut out: the speaker
+    // view renders these slides too, and a raw `/content/...` ref is dead the
+    // moment the content repo goes private. Assets only — this view keeps the
+    // `.slides` fragment and throws the document's <head> away, so resolving a
+    // theme base here would be a lookup for an answer nobody reads.
+    const html = await resolveDeckAssets(
+      contentResult.content as string,
+      deckDeliveryContext(slide, gitOrgLogin, repo, deckAccessFor('speaker', { canEdit }, slide))
+    );
+
     // Parse the HTML to extract just the slides content
     const parser = await import('cheerio');
-    const $ = parser.load(contentResult.content);
+    const $ = parser.load(html ?? '');
     slideContent = $('.slides').html();
   } else {
     contentError = 'Failed to load slide content';
