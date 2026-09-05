@@ -30,6 +30,19 @@ interface StoredObject {
   size?: number;
 }
 
+export interface FakeBucketOptions {
+  /**
+   * Whether the origin behind this test declared an honest `Content-Length`.
+   *
+   * Real R2 takes a `ReadableStream` only when the runtime already knows how
+   * many bytes are coming — which it does from the origin response's
+   * `Content-Length`, and only when the body was not encoded. There is no way
+   * to observe that from a stream object, so the test says it instead. Default
+   * false: GitHub gzips text, the runtime decodes it, and the length is gone.
+   */
+  originDeclaresLength?: boolean;
+}
+
 export interface FakeBucket {
   get(key: string): Promise<unknown>;
   head(key: string): Promise<unknown>;
@@ -38,7 +51,7 @@ export interface FakeBucket {
     value: unknown,
     options?: { httpMetadata?: { contentType?: string } }
   ): Promise<unknown>;
-  readonly puts: Array<{ key: string; contentType?: string; bytes: number }>;
+  readonly puts: Array<{ key: string; contentType?: string; bytes: number; streamed: boolean }>;
   readonly gets: string[];
   readonly heads: string[];
 }
@@ -69,9 +82,12 @@ async function drain(value: unknown): Promise<number> {
   return 0;
 }
 
-export function fakeBucket(initial: Record<string, StoredObject> = {}): FakeBucket {
+export function fakeBucket(
+  initial: Record<string, StoredObject> = {},
+  options: FakeBucketOptions = {}
+): FakeBucket {
   const store = new Map(Object.entries(initial));
-  const puts: Array<{ key: string; contentType?: string; bytes: number }> = [];
+  const puts: Array<{ key: string; contentType?: string; bytes: number; streamed: boolean }> = [];
   const gets: string[] = [];
   const heads: string[] = [];
 
@@ -102,10 +118,21 @@ export function fakeBucket(initial: Record<string, StoredObject> = {}): FakeBuck
       const object = store.get(key);
       return object ? metadata(key, object) : null;
     },
-    async put(key: string, value: unknown, options?: { httpMetadata?: { contentType?: string } }) {
+    async put(
+      key: string,
+      value: unknown,
+      putOptions?: { httpMetadata?: { contentType?: string } }
+    ) {
+      const streamed = value instanceof ReadableStream;
+      if (streamed && !options.originDeclaresLength) {
+        // The real rejection, verbatim: R2 refuses a stream whose length the
+        // runtime cannot see. A fake that drained it regardless is why every
+        // text blob silently failed to cache in production.
+        throw new Error('Provided readable stream must have a known length');
+      }
       const bytes = await drain(value);
-      puts.push({ key, contentType: options?.httpMetadata?.contentType, bytes });
-      store.set(key, { body: 'stored', contentType: options?.httpMetadata?.contentType });
+      puts.push({ key, contentType: putOptions?.httpMetadata?.contentType, bytes, streamed });
+      store.set(key, { body: 'stored', contentType: putOptions?.httpMetadata?.contentType });
       return {};
     },
   };
