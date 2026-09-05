@@ -121,7 +121,7 @@ describe('fetchContentText through the Worker', () => {
     expect(getContent).not.toHaveBeenCalled();
   });
 
-  it('always mints the enrolled tier, whoever is reading', async () => {
+  it('always mints the `week` tier, whoever is reading', async () => {
     // This is a server-to-server fetch: the bytes go to a loader that has
     // already authorized its viewer, and the URL is never handed to a browser.
     // The tier here picks an expiry bucket and a Cache-Control, nothing else.

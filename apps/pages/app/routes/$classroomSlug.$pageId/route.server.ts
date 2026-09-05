@@ -187,10 +187,13 @@ export const loader = async ({
     page.classroom as unknown as Parameters<typeof assetResolveContext>[0],
     resolveTier
   );
-  // ONE pass for both. Two sequential resolves read the clock twice, and a
-  // draft-tier expiry bucket that turns over between them mints a different
-  // `src` for the same file — at which point every candidate list is thrown
-  // away for exactly the viewers who look at pages most. The cover is in the
+  // ONE pass for both. Two sequential resolves read the clock twice, and an
+  // expiry that moves between the two reads mints a different `src` for the
+  // same file — at which point every candidate list is thrown away, because the
+  // pairing is by string equality. On `edit` the expiry is an exact `now + 4h`,
+  // so it moves on EVERY tick; on `week` and `month` it only moves across a
+  // bucket boundary (or the roll-forward near one). Rare on a reader, constant
+  // for an editor, and wrong in both cases. The cover is in the
   // ref list for its display URL; it does not need candidates, because
   // `HeaderImage` renders it as a CSS background, where `srcset` means nothing.
   const { assets: resolvedAssets, srcSets: resolvedSrcSets } = await resolveDocumentAssets(

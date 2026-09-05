@@ -71,7 +71,13 @@ export const loader = async ({
     // Same read-side delivery pass the deck viewer runs: the stored document
     // holds `/content/...` refs, and a presenter must see the signed ones or a
     // private content repo shows them nothing. `deckAccessFor` deliberately
-    // does NOT hand this surface the draft tier — see its comment.
+    // does NOT hand this surface the `edit` tier — see its comment.
+    //
+    // `canEdit` is passed because `assertSlideAccess` answered it and this
+    // route has no business rewriting it; `deckAccessFor` then IGNORES it for
+    // this surface and takes the deck's visibility instead. A presentation
+    // stays open for hours, and the 4h `edit` bucket would 403 a lazily loaded
+    // background mid-lecture.
     const { html } = await resolveDeckDelivery(
       contentResult.content,
       deckDeliveryContext(slide, gitOrgLogin, repo, deckAccessFor('present', { canEdit }, slide))

@@ -75,6 +75,11 @@ export const loader = async ({
     // moment the content repo goes private. Assets only — this view keeps the
     // `.slides` fragment and throws the document's <head> away, so resolving a
     // theme base here would be a lookup for an answer nobody reads.
+    //
+    // `canEdit` is passed because `assertSlideAccess` answered it, and is then
+    // IGNORED by `deckAccessFor` for this surface: the speaker view is a read
+    // surface that stays open for a whole lecture, so it takes the deck's
+    // visibility rather than the 4h `edit` bucket.
     const html = await resolveDeckAssets(
       contentResult.content,
       deckDeliveryContext(slide, gitOrgLogin, repo, deckAccessFor('speaker', { canEdit }, slide))

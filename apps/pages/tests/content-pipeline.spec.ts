@@ -706,7 +706,7 @@ test.describe('E2E CD — pages, what each audience sees', () => {
    *
    * A class site is anonymous and server-rendered, so it needs neither a
    * session nor a database — which is exactly the pair staging cannot give
-   * this pack. Against staging the site already carries public-tier images, so
+   * this pack. Against staging the site already carries `month`-tier images, so
    * the scenario reads what is there; locally it has to make one first,
    * because a freshly seeded classroom has no public site and no pictures.
    */
@@ -714,17 +714,31 @@ test.describe('E2E CD — pages, what each audience sees', () => {
    * The signed-in half of the staging story, and the only thing
    * `E2E_SESSION_COOKIE` is for.
    *
-   * With a member's token the pack can open a page the public site never shows
-   * and check the one property that distinguishes a member render from an
-   * anonymous one: the tier is NOT `public`. It cannot be more specific than
-   * that without knowing the token's role — a student's render is `enrolled`,
-   * a staff member's is `draft`, and both are correct — so the assertion is the
-   * boundary rather than the exact value. The exact values are pinned by the
-   * local scenarios, which know who they signed in as.
+   * This scenario knows two things it cannot look up: it does not know the
+   * token's ROLE (staff render `edit`, a member renders a read tier), and
+   * `discoverMemberContentUrl` takes the first content link on the index, so it
+   * does not know the page's VISIBILITY either (a public page correctly mints
+   * `month`, exactly like the class site). Every combination is legitimate, so
+   * there is no tier this render must avoid.
+   *
+   * It used to assert `not public`, which was true only while the tier was
+   * chosen by SURFACE. Under the visibility rule that assertion fails on a
+   * perfectly correct render of a public page — so what is left is the part
+   * that is true for every role and every visibility: the URLs are signed,
+   * bound to the delivery origin, and carry a tier this deployment still
+   * recognises. That last clause is not filler right after a rename: a surface
+   * left minting a retired tier name shows up here as an unknown `p`.
+   *
+   * The exact per-role, per-visibility values are pinned by the local
+   * scenarios, which know who they signed in as and what they are looking at,
+   * and by the `tierFor` unit tests.
    */
-  test('a signed-in member on staging gets a non-`month` tier', async ({ page, context }) => {
+  test('a signed-in member on staging gets a signed, origin-bound URL', async ({
+    page,
+    context,
+  }) => {
     requireDelivery();
-    test.skip(e2eTarget() !== 'staging', 'this is the staging form of the week-tier check');
+    test.skip(e2eTarget() !== 'staging', 'this is the staging form of the signed-render check');
     test.skip(authSkipReason() !== null, authSkipReason() ?? '');
 
     const applied = await applyStagingSession(context);
@@ -749,8 +763,8 @@ test.describe('E2E CD — pages, what each audience sees', () => {
       expect(image.signed?.origin).toBe(env.deliveryOrigin);
       expect(
         image.signed?.tier,
-        `a member-facing render must not use the \`month\` tier: ${describeSignedUrl(image.src)}`
-      ).not.toBe('month');
+        `unknown tier — a surface is minting a retired name: ${describeSignedUrl(image.src)}`
+      ).toMatch(/^(edit|week|month)$/);
     }
   });
 
@@ -779,8 +793,8 @@ test.describe('E2E CD — pages, what each audience sees', () => {
 
     for (const image of images) {
       expect(image.signed?.origin).toBe(env.deliveryOrigin);
-      // Anonymous readers, so `public` and nothing else. A `draft` or
-      // a `week` URL on an anonymous page would be a lifetime mismatch.
+      // A public page on an anonymous surface, so `month` and nothing else.
+      // An `edit` or `week` URL here would be a lifetime mismatch.
       expect(image.signed?.tier, describeSignedUrl(image.src)).toBe('month');
       expect(image.signed?.w, 'the fallback src carries no width').toBeNull();
       if (image.candidates.length > 0) {
@@ -899,8 +913,12 @@ test.describe('E2E CD — pages, what each audience sees', () => {
       //
       // A student rather than the owner, because an owner can edit and would
       // (correctly) get `edit`. Byte-equality holds because both reads land in
-      // the same 30-day bucket for this classroom; only a read that straddled a
-      // bucket boundary could differ, and the bucket is 30 days wide.
+      // the same 30-day bucket for this classroom. Two windows could split
+      // them, and both are negligible here: a read that straddled a bucket
+      // boundary (the bucket is 30 days wide), and one where the two reads fall
+      // on either side of MIN_REMAINING_SECONDS — the last hour of a bucket,
+      // where minting rolls forward to the next one. Seconds apart, 30 days of
+      // bucket, so neither is a flake worth guarding against.
       await loginAs(page, 'student', `/${env.classroomSlug}/${publicPage.id}`);
       const inApp = await reloadUntilImages(
         page,
@@ -1207,7 +1225,7 @@ test.describe('E2E CD — the Worker, directly', () => {
 
     // Against a deployed target there is no database and no session, so the
     // signature comes off the public class site — anonymous, server-rendered,
-    // and already carrying current public-tier URLs. This is the whole reason
+    // and already carrying current `month`-tier URLs. This is the whole reason
     // the Worker's contract is checkable against staging at all.
     if (e2eTarget() === 'staging') {
       try {

@@ -388,6 +388,12 @@ export function hasStagingSession(): boolean {
  * hard-coding an id would rot the first time someone tidied the classroom. The
  * index is the same list a member browses, so whatever it links to is by
  * definition something they may open.
+ *
+ * It says nothing about the page's VISIBILITY, though — it takes the first
+ * link, public or members-only. A caller cannot infer a tier from what comes
+ * back: the tier follows the content's visibility, so a public page here mints
+ * `month` exactly as the class site does. Assert the shape of the URL, not
+ * which tier it landed on.
  */
 export async function discoverMemberContentUrl(
   page: Page,
