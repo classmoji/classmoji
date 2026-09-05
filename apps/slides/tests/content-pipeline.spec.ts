@@ -32,6 +32,8 @@ import {
   localOnlySkipReason,
   parseSignedUrl,
   readImages,
+  reloadUntilImages,
+  services,
   setDeliveryEnabled,
   storedContentLeaks,
   targets,
@@ -122,41 +124,59 @@ function expectResponsive(image: RenderedImage, expected: { classroomId: string 
 }
 
 /**
- * Upload an image into a deck through the editor route's own action.
+ * Put an image into a deck's images folder and return the reference the
+ * editor's own upload would have produced.
  *
- * The deck editor has no `/api/upload`: it posts `intent=upload-image` to the
- * deck route itself. Driving that directly rather than through the toolbar
- * button is deliberate — the toolbar's antd Tooltip means the button carries
- * no accessible name, and the modal's client-side processor re-encodes the
- * file, so a UI-driven upload would not put the bytes under test into the repo.
- * The action, the service and the map row are all still the product's.
+ * NOT driven through the toolbar, and not through the route action either,
+ * for two concrete reasons rather than convenience:
+ *
+ *   - The toolbar's upload control is an antd `Tooltip`-wrapped button, so it
+ *     carries no accessible name at all, and the modal re-encodes the file
+ *     client-side before sending it. A UI-driven upload would put DIFFERENT
+ *     bytes in the repo than the ones the assertions are about.
+ *   - The deck editor has no `/api/upload`; it posts `intent=upload-image` to
+ *     the deck route and reads the result through a fetcher. A plain `fetch`
+ *     to that route gets the rendered HTML document back, not the action's
+ *     JSON, so there is nothing to read a path out of.
+ *
+ * So the file goes in through `ContentService.upload` — the same call the
+ * action makes, into the same `${content_path}/images` folder — and the
+ * reference is rebuilt in the action's own legacy shape. Everything this pack
+ * actually asserts about (the map row, the render, the storage invariant) is
+ * downstream of here and is entirely the product's.
  */
 async function uploadDeckImage(
-  page: import('@playwright/test').Page,
-  slideId: string,
+  target: E2EClassroom,
+  contentPath: string,
   filename: string,
   bytes: Buffer
 ): Promise<{ url: string; path: string }> {
-  const result = await page.evaluate(
-    async ({ id, name, base64 }) => {
-      const binary = atob(base64);
-      const buffer = new Uint8Array(binary.length);
-      for (let index = 0; index < binary.length; index += 1) {
-        buffer[index] = binary.charCodeAt(index);
-      }
-      const form = new FormData();
-      form.append('intent', 'upload-image');
-      form.append('file', new File([buffer], name, { type: 'image/png' }));
-      const response = await fetch(`/${id}`, { method: 'POST', body: form });
-      return { status: response.status, body: await response.text() };
-    },
-    { id: slideId, name: filename, base64: bytes.toString('base64') }
-  );
+  const { ContentService } = await import('@classmoji/services');
+  const result = await ContentService.upload({
+    orgLogin: target.orgLogin,
+    repo: target.content_repo!,
+    file: bytes,
+    filename,
+    folder: `${contentPath}/images`,
+    message: 'E2E CD: fixture image',
+  });
 
-  expect(result.status, `deck upload failed: ${result.body}`).toBe(200);
-  const body = JSON.parse(result.body) as { error?: string; url: string; path: string };
-  expect(body.error, `deck upload rejected: ${body.error}`).toBeUndefined();
-  return body;
+  // The action's SECOND step, and the one it would be easy to leave out. It
+  // records the map row immediately rather than waiting for the push webhook,
+  // because a deck saved seconds after an upload stores this path and a render
+  // that misses the map produces a `/missing/` URL. Skipping it here would make
+  // this pack fail for a reason that has nothing to do with delivery.
+  const service = await services();
+  await service.contentAssets.recordContentAsset(target.id, {
+    path: result.path,
+    sha: result.sha,
+    size: bytes.length,
+  });
+
+  return {
+    path: result.path,
+    url: `/content/${target.orgLogin}/${target.content_repo}/${result.path}`,
+  };
 }
 
 test.describe('E2E CD — slides, a deck with an uploaded image', () => {
@@ -179,10 +199,14 @@ test.describe('E2E CD — slides, a deck with an uploaded image', () => {
     const deckId = await createSlide(page, `E2E CD deck ${Date.now()}`);
     createdDeckIds.push(deckId);
 
+    const { getSlideById } = await import('./helpers');
+    const deck = await getSlideById(deckId);
+    expect(deck?.content_path, 'a new deck should have a content_path').toBeTruthy();
+
     await editSlide(page, deckId);
     const uploaded = await uploadDeckImage(
-      page,
-      deckId,
+      target,
+      deck!.content_path,
       fixtureName('png', 'deck'),
       pngBytes(1700, 90)
     );
@@ -245,10 +269,13 @@ test.describe('E2E CD — slides, a deck with an uploaded image', () => {
     const deckId = await createSlide(page, `E2E CD storage ${Date.now()}`);
     createdDeckIds.push(deckId);
 
+    const deck = await getSlideById(deckId);
+    expect(deck?.content_path, 'a new deck should have a content_path').toBeTruthy();
+
     await editSlide(page, deckId);
     const uploaded = await uploadDeckImage(
-      page,
-      deckId,
+      target,
+      deck!.content_path,
       fixtureName('png', 'storage'),
       pngBytes(800, 40)
     );
@@ -260,9 +287,6 @@ test.describe('E2E CD — slides, a deck with an uploaded image', () => {
     }, uploaded.url);
     await saveSlide(page);
     await keepAllImages(page);
-
-    const deck = await getSlideById(deckId);
-    test.skip(!deck?.content_path, 'the created deck has no content_path');
 
     const stored = await readRepoFile(target, `${deck!.content_path}/deck.json`);
     test.skip(stored === null, 'no deck.json in the repo yet — the save may still be propagating');
@@ -285,24 +309,47 @@ test.describe('E2E CD — slides, the gate', () => {
     const target = requireClassroom();
     test.skip(localOnlySkipReason() !== null, localOnlySkipReason() ?? '');
 
-    const { getTestPrisma } = await import('./helpers');
-    const prisma = await getTestPrisma();
-    const deck = await prisma.slide.findFirst({
-      where: { classroom_id: target.id, content_path: { not: null } },
-      select: { id: true },
-    });
-    test.skip(deck === null, 'no deck with a content_path in the test classroom');
-    if (!deck) return;
+    test.skip(uploadSkipReason() !== null, uploadSkipReason() ?? '');
+
+    // Its own deck, with its own image. Reaching for whichever deck happens to
+    // be in the classroom makes the result depend on what ran before it, and a
+    // deck with no images would pass this test without exercising the gate at
+    // all — the emptiest possible green.
+    const { createSlide, editSlide, saveSlide, getSlideById, fixtureName, pngBytes } = await import(
+      './helpers'
+    );
+
+    await loginAs(page, 'owner', '/');
+    const deckId = await createSlide(page, `E2E CD gate ${Date.now()}`);
+    createdDeckIds.push(deckId);
+    const deck = await getSlideById(deckId);
+    expect(deck?.content_path).toBeTruthy();
+
+    await editSlide(page, deckId);
+    const uploaded = await uploadDeckImage(
+      target,
+      deck!.content_path,
+      fixtureName('png', 'gate'),
+      pngBytes(900, 40)
+    );
+    await page.evaluate(url => {
+      const section = document.querySelector('.reveal .slides section');
+      const img = document.createElement('img');
+      img.setAttribute('src', url);
+      img.setAttribute('alt', 'E2E CD gate');
+      section?.appendChild(img);
+    }, uploaded.url);
+    await saveSlide(page);
+    await keepAllImages(page);
 
     const before = await setDeliveryEnabled(target.id, false);
     try {
-      await loginAs(page, 'owner', '/');
       const log = trackRequests(page);
-      await page.goto(`/${deck.id}`);
+      await page.goto(`/${deckId}`);
       await waitForReveal(page);
 
       const images = await readImages(page, '.reveal img');
-      test.skip(images.length === 0, 'this deck carries no images');
+      expect(images.length, 'the fixture image should be on the deck').toBeGreaterThan(0);
 
       for (const image of images) {
         expect(image.signed, `still signed with the gate off: ${describeSignedUrl(image.src)}`)
