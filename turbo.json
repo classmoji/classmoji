@@ -99,6 +99,25 @@
     "db:dev": {},
     "test": {
       "cache": false,
+      // turbo hands a task only the environment it has been told about, so an
+      // E2E_* variable set on the command line simply does not reach Playwright
+      // unless it is named here. The failure mode is quiet and expensive: the
+      // content-delivery pack reads these to decide what it can exercise, so a
+      // missing name turns into every scenario skipping and a green run that
+      // tested nothing. Declared on the task rather than in globalEnv because
+      // these steer tests only — they are not part of any build's identity.
+      "env": [
+        "E2E_TARGET",
+        "E2E_PAGES_URL",
+        "E2E_SLIDES_URL",
+        "E2E_WEBAPP_URL",
+        "E2E_CLASS_SITE_URL",
+        "E2E_CLASSROOM_SLUG",
+        "E2E_CD_CONTENT_REPO",
+        "E2E_SESSION_COOKIE",
+        "E2E_ALLOW_REMOTE_DB_I_KNOW_WHAT_I_AM_DOING",
+        "TEST_CLASSROOM_SLUG"
+      ],
       "outputs": ["test-results/**", "playwright-report/**"]
     },
     "test:integration": {

@@ -1,0 +1,130 @@
+name: Content Delivery E2E
+
+# The content-delivery pack (apps/pages + apps/slides, `content-pipeline.spec.ts`)
+# run against DEPLOYED staging. Modelled on e2e.yml, with one deliberate
+# difference: e2e.yml builds and starts the whole stack on the runner, while
+# this suite has no stack of its own at all — it points a browser and an HTTP
+# client at staging.classmoji.io and content-staging.classmoji.io.
+#
+# Manual-only, and that is a safety property, not a cost saving. The pack writes
+# when it can: an upload lands a real file in a real GitHub content repo, and
+# the gate/cache-reset scenarios write to a database. On a deployed target those
+# are all skipped (see below), but a scheduled or push trigger would be one
+# environment variable away from turning a green pipeline into a writer against
+# a shared environment.
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: 'Branch or ref to run the specs from'
+        required: false
+        default: staging
+
+# WHAT ACTUALLY RUNS AGAINST STAGING
+#
+# Eight of the nineteen scenarios, verified green against cs98-test on
+# 2026-09-04: the public-tier class-site render with its ladder, /healthz, the
+# 200 + HEAD parity, the four refusals (tampered sig, appended width, extended
+# expiry, foreign classroom) and the /missing/ 404. Every one is a read.
+#
+# The other eleven skip with a named reason, and those reasons are real gaps
+# rather than laziness:
+#
+#   - The pack opens no database against a deployed target — `prisma()` throws
+#     while E2E_TARGET=staging, on purpose. So every scenario that needs a
+#     classroom row skips, and so does every scenario that would WRITE one: a
+#     cache reset against a shared environment changes every URL every real
+#     viewer is holding.
+#   - Anything signed-in skips WITHOUT E2E_SESSION_COOKIE. `/test-login` 404s
+#     outside development and staging has no seeded credentials. With the secret
+#     set, the pack attaches that `classmoji.session_token` to the browser
+#     context — scoped to the three staging origins by URL, never by domain, so
+#     it cannot follow a redirect to production — and one more scenario runs:
+#     a member-facing page must not be served at the `public` tier. It cannot
+#     assert `enrolled` exactly, because a staff token would correctly produce
+#     `draft`; the local pack pins the exact values.
+#   - Uploads skip unless E2E_CD_CONTENT_REPO=1 says the target classroom's repo
+#     is genuinely writable. It is not set here on purpose: nothing scheduled
+#     should be committing fixture PNGs to a course repository.
+#
+# What is left is the part that needs no credentials and writes nothing: the
+# public class-site render at the `public` tier, and the Worker's own contract —
+# 200/HEAD parity, the four 403 refusals, the /missing/ 404, and /healthz.
+env:
+  E2E_TARGET: staging
+  E2E_PAGES_URL: https://pages.staging.classmoji.io
+  E2E_SLIDES_URL: https://slides.staging.classmoji.io
+  E2E_WEBAPP_URL: https://staging.classmoji.io
+  E2E_CLASS_SITE_URL: https://cs98-test.staging.classmoji.io
+  CONTENT_DELIVERY_ORIGIN: https://content-staging.classmoji.io
+  E2E_CLASSROOM_SLUG: cs98-test
+
+# Read-only. This job checks out code and talks to staging over HTTP; it has no
+# reason to write to the repository, and the default token grant is wider than
+# that.
+permissions:
+  contents: read
+
+jobs:
+  content-e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || 'staging' }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # The specs import @classmoji/services for the resolver assertions, and
+      # that package re-exports @classmoji/database, which builds its client at
+      # module scope. Without a generated client the import throws before a
+      # single skip can be printed.
+      - name: Generate Prisma client
+        run: npm run db:generate
+
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps chromium
+
+      # OPTIONAL SECRET, and the only one this workflow has any use for.
+      #
+      # `E2E_STAGING_SESSION_COOKIE` is a `classmoji.session_token` value for a
+      # member of cs98-test on staging. With it, the signed-in scenarios (the
+      # editor's draft tier, a member's enrolled tier) run; without it they skip
+      # with that exact instruction. It is NOT created here and no value is
+      # invented: a maintainer mints a session and stores it, or leaves it unset
+      # and accepts the smaller suite.
+      #
+      # It is a live credential with an eight-hour life, so it will go stale;
+      # the skip that follows is correct behaviour, not a broken pipeline.
+      # Two steps, not one `&&` chain: the pages pack is where nearly all the
+      # staging coverage lives, and a chained slides failure would have hidden
+      # whether pages had passed. `if: always()` on the second means one report
+      # never suppresses the other.
+      - name: Run the pages content-delivery pack against staging
+        env:
+          E2E_SESSION_COOKIE: ${{ secrets.E2E_STAGING_SESSION_COOKIE }}
+        run: npx playwright test --config apps/pages/playwright.config.ts content-pipeline
+
+      - name: Run the slides content-delivery pack against staging
+        if: always()
+        env:
+          E2E_SESSION_COOKIE: ${{ secrets.E2E_STAGING_SESSION_COOKIE }}
+        run: npx playwright test --config apps/slides/playwright.config.ts content-pipeline
+
+      - name: Upload Playwright reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: content-e2e-report
+          path: |
+            apps/pages/playwright-report
+            apps/slides/playwright-report
+          retention-days: 7

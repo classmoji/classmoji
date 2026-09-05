@@ -149,8 +149,11 @@ npx wrangler deploy --env staging --dry-run --outdir /tmp/content-dryrun
 #      CONTENT_SIGNING_SECRET="..."
 #      CONTENT_WORKER_SHARED_SECRET="..."
 #      CONTENT_SIGNING_SECRET_PREVIOUS="..."   # optional, only to rehearse a rotation
-# 3. Run it (local R2 + local Images emulation):
-npm run cf:dev -w apps/content
+# 3. Run it (local R2 + local Images emulation), on the local `dev` env:
+npm run cf:dev:local -w apps/content
+#    `cf:dev` runs `--env staging`, whose CONTENT_TOKEN_ENDPOINT is
+#    staging.classmoji.io — fine for a bindings-only smoke, wrong the moment
+#    you want the Worker to fetch a blob. Use `cf:dev:local` for that.
 
 # 4. Health:
 curl -s localhost:8787/healthz
@@ -167,6 +170,131 @@ staging will always 403 here, and that is correct, not a bug. The apps point
 their minting at the local Worker with `CONTENT_DELIVERY_ORIGIN`; set it to
 `http://localhost:8787` for a local smoke, and remember the port is signed too
 — `:8788` will not verify against a `:8787` signature.
+
+### Local end-to-end
+
+Running the whole pipeline — editor upload, signed render, Worker fetch — on
+one machine. This is what `npm run e2e:content` drives; the Playwright pack is
+in `apps/pages/tests/content-pipeline.spec.ts` and
+`apps/slides/tests/content-pipeline.spec.ts`.
+
+Three things have to agree, and all three are easy to get subtly wrong:
+
+1. **The same signing secret in both places.** The apps sign; the Worker
+   verifies. A mismatch is indistinguishable from tampering — every image 403s
+   with `bad-signature` and nothing says why.
+2. **The origin the apps sign for is the origin the Worker answers on**, host
+   *and* port, because the host is inside the canonical string.
+3. **The Worker's token endpoint points at the LOCAL webapp**, not staging.
+
+#### 1. Generate a throwaway pair
+
+Never reuse the staging or production secret locally; a local signature must
+not verify anywhere real.
+
+```sh
+openssl rand -base64 32   # -> CONTENT_SIGNING_SECRET
+openssl rand -base64 32   # -> CONTENT_WORKER_SHARED_SECRET
+```
+
+#### 2. Repo root `.env` (git-ignored) — what the apps sign with
+
+```sh
+CONTENT_SIGNING_SECRET="<the first value>"
+CONTENT_WORKER_SHARED_SECRET="<the second value>"
+CONTENT_DELIVERY_ORIGIN="http://localhost:8787"
+```
+
+`CONTENT_DELIVERY_ORIGIN` has no trailing slash and names the port. Both of
+the first two must be set or `isContentDeliveryConfigured()` is false and every
+app renders legacy refs — the same outcome as the feature being off, which is
+why a "nothing is signed" local run is nearly always a missing env var rather
+than a bug.
+
+#### 3. `apps/content/.dev.vars` (git-ignored) — what the Worker verifies with
+
+```sh
+CONTENT_SIGNING_SECRET="<the SAME first value>"
+CONTENT_WORKER_SHARED_SECRET="<the SAME second value>"
+# Only if the webapp is on a devport rather than 3000:
+# CONTENT_TOKEN_ENDPOINT="http://localhost:3050/api/content/token"
+```
+
+Leave `CONTENT_SIGNING_SECRET_PREVIOUS` out unless you are rehearsing a
+rotation. Then:
+
+```sh
+npm run cf:dev:local -w apps/content
+curl -s localhost:8787/healthz    # {"ok":true,"environment":"development","configured":true}
+```
+
+`configured: false` there means the Worker never read `.dev.vars` — check you
+put it in `apps/content/`, not the repo root.
+
+#### 4. Turn the flag on for one classroom
+
+`content_delivery_enabled` defaults to false, per classroom, and the env check
+above is separate from it. Both have to be true. Locally, flip it directly:
+
+The pack's default local classroom is `classmoji-dev-winter-2025` — the one
+`npm run db:seed` creates — so that is the slug to flip unless you set
+`E2E_CLASSROOM_SLUG` to something else:
+
+```sh
+# .dev-context has the database this checkout is actually using.
+psql "$DATABASE_URL" -c \
+  "update classrooms set content_delivery_enabled = true where slug = 'classmoji-dev-winter-2025';"
+```
+
+(`cs98-test` is the STAGING classroom; flipping that name locally updates zero
+rows and looks exactly like the feature not working.)
+
+Every write in the pack — the flag, the cache bump, the uploads and the repo
+deletes — is refused unless `DATABASE_URL` resolves to a host on localhost.
+`E2E_ALLOW_REMOTE_DB_I_KNOW_WHAT_I_AM_DOING=1` lifts that for a non-local host,
+and does not lift it for anything that looks managed or production.
+
+In the UI it lives at **Settings → Content** for the classroom
+(`/admin/:class/settings/content`), alongside **Reset content cache** — the
+button that increments `content_key_version` and so changes every signed URL
+the classroom hands out.
+
+To watch the gate work, set it back to `false` and reload: every `<img>` goes
+back to a legacy `raw.githubusercontent.com` / `/content/{org}/{repo}/…` ref
+and nothing is requested from `localhost:8787` at all.
+
+#### 5. What the classroom actually has to be
+
+Three things beyond the flag, each of which fails in its own confusing way:
+
+- **A content repo that exists on GitHub, in an org with the App installed.**
+  `npm run db:seed` gives the dev classroom the synthetic org `dev-org` and the
+  repo `content-classmoji-dev-winter-2025`, and neither exists. An upload then
+  fails at the GitHub API and tells you nothing about delivery. Point the
+  classroom at a real one (`git_org_id` + `content_repo`, with the org's
+  `github_installation_id` set) before expecting an upload to work.
+- **Pages or decks with real `content_path`s.** The delivery layer resolves
+  references; a classroom with no content has nothing to resolve, and every
+  assertion about it is vacuously true.
+- **`SITE_BASE_DOMAIN`, if you want the `public` tier.** The class-site host
+  rewriter is a no-op without it, and `public` is only ever minted for the
+  class-site surface — so with it unset there is no way to see that tier at all.
+  Start the pages app with e.g. `SITE_BASE_DOMAIN=classmoji.io` and address the
+  site with a `Host:` header; there is no local DNS for it. The site also has to
+  be *enabled* and have a home page — a claimed-but-disabled site 404s.
+
+Then:
+
+```sh
+E2E_CD_CONTENT_REPO=1 npm run e2e:content
+```
+
+`E2E_CD_CONTENT_REPO=1` is your assertion that the classroom's repo is real and
+writable; without it the upload scenarios skip rather than fail. Two caches sit
+between a write and what you see, and the pack waits both out rather than
+sleeping: GitHub's contents API is eventually consistent after a write, and the
+page loader passes `skipCache: canEdit`, so staff read fresh while a student or
+an anonymous site visitor gets a 60-second cache.
 
 ## Operating
 
