@@ -1,7 +1,18 @@
 /**
- * Content Proxy Route
+ * Content Proxy Route — LEGACY, kept for links already in the wild.
  *
- * Proxies content from GitHub repositories with CDN-first strategy.
+ * Everything new goes through the delivery Worker: signed, sha-addressed URLs
+ * minted at render time. This route survives because stored documents, browser
+ * bookmarks and shared slide links still carry `/content/{org}/{repo}/{path}`,
+ * and because it is the client-side fallback the deck surfaces hand their
+ * presenter component.
+ *
+ * TEXT served from here now goes through the same map-first read the loaders
+ * use (`fetchContentText`), so an old link is not a stale link. Binary files
+ * keep the legacy `fetchContent` ladder: the delivery layer serves those as
+ * signed URLs at the point of render, and there is nothing to gain from
+ * re-plumbing a path nothing new points at.
+ *
  * Serves CSS, fonts, and other assets with correct MIME types.
  *
  * URL pattern: /content/:org/:repo/*path
@@ -29,11 +40,15 @@
 
 import { fetchContent, getMimeType, isBinaryFile } from '~/utils/contentProxy';
 import { getAuthSession } from '@classmoji/auth/server';
+import { ClassmojiService } from '@classmoji/services';
 import { getContentRepoName } from '@classmoji/utils';
 import getPrisma from '@classmoji/database';
 
 interface ContentRouteMembership {
   classroom?: {
+    id?: string;
+    content_key_version?: number;
+    content_delivery_enabled?: boolean | null;
     content_repo?: string | null;
     git_organization?: {
       login: string;
@@ -41,6 +56,9 @@ interface ContentRouteMembership {
     } | null;
   } | null;
 }
+
+/** The classroom this request was authorized against, for the text read below. */
+type MatchedClassroom = NonNullable<ContentRouteMembership['classroom']>;
 
 // In-memory cache for user classroom memberships
 // Avoids DB hit on every asset request (CSS, fonts, images, etc.)
@@ -83,6 +101,41 @@ async function getCachedMemberships(userId: string) {
   return memberships;
 }
 
+/**
+ * The map-first text read, degrading to the legacy ladder.
+ *
+ * `matched` is null only when access was granted by a branch that did not
+ * resolve a classroom row — there is nothing to sign against then, and the
+ * legacy ladder is the whole answer.
+ */
+async function fetchProxyText(
+  matched: MatchedClassroom | null,
+  org: string,
+  repo: string,
+  path: string
+): Promise<{ content: string; source: string } | null> {
+  if (matched?.id) {
+    const text = await ClassmojiService.contentDelivery.fetchContentText(
+      {
+        classroom: {
+          id: matched.id,
+          content_key_version: matched.content_key_version ?? 0,
+          content_repo: repo,
+          content_delivery_enabled: matched.content_delivery_enabled === true,
+          git_organization: { login: org },
+        },
+      },
+      path,
+      { label: 'proxy' }
+    );
+    if (text) return { content: text.text, source: text.source };
+    return null;
+  }
+
+  const legacy = await fetchContent({ org, repo, path });
+  return legacy ? { content: legacy.content as string, source: legacy.source } : null;
+}
+
 export const loader = async ({
   params,
   request,
@@ -102,6 +155,9 @@ export const loader = async ({
   // Try authentication first
   const authData = await getAuthSession(request);
   let hasAccess = false;
+  // Kept from whichever branch granted access: the text read below needs the
+  // classroom's id and cache version to sign, and its org/repo to fall back.
+  let matched: MatchedClassroom | null = null;
 
   // Path 1: Authenticated user - check classroom memberships
   if (authData) {
@@ -111,7 +167,7 @@ export const loader = async ({
     // The classroom's content repo is STORED and user-editable — never re-derived.
     // Legacy classrooms without one fall back to the ORG-level content repo
     // (organization.settings.content_repo_name).
-    hasAccess = memberships.some((m: ContentRouteMembership) => {
+    const match = memberships.find((m: ContentRouteMembership) => {
       const gitOrg = m.classroom?.git_organization;
       if (!gitOrg || gitOrg.login !== org) return false;
 
@@ -125,6 +181,8 @@ export const loader = async ({
 
       return repo === expectedRepo; // EXACT match only
     });
+    hasAccess = Boolean(match);
+    matched = match?.classroom ?? null;
   }
 
   // Path 2: Public slide access - validate slideId points to a public slide
@@ -156,6 +214,7 @@ export const loader = async ({
 
           if (isSlideContent || isSharedAsset) {
             hasAccess = true;
+            matched = slide.classroom;
           }
         }
       }
@@ -166,9 +225,17 @@ export const loader = async ({
     throw new Response('Forbidden - no access to this content', { status: 403 });
   }
 
-  // 4. Proceed with fetch
+  // 4. Proceed with fetch.
+  //
+  // Text goes through the asset map like every other read now, so an old
+  // `/content/...` link serves the same bytes the loaders do rather than
+  // whatever GitHub Pages last built. Binary falls through to the legacy
+  // ladder — the delivery layer hands those out as signed URLs at render time,
+  // so nothing new arrives here for them.
   const binary = isBinaryFile(path);
-  const result = await fetchContent({ org, repo, path, binary });
+  const result = binary
+    ? await fetchContent({ org, repo, path, binary })
+    : await fetchProxyText(matched, org, repo, path);
 
   if (!result) {
     throw new Response('Not found', { status: 404 });

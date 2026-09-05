@@ -30,12 +30,12 @@ import {
 } from '@classmoji/services/slides';
 import { SandpackRenderer } from '@classmoji/ui-components/sandpack';
 import { useUser } from '~/hooks';
-import { fetchContent } from '~/utils/contentProxy';
 import { diffDeckSnapshots, extractDeckSnapshot, type DeckSnapshot } from '~/utils/deckOpsDiff';
 import { getThemeUrls } from '~/utils/themeService.server';
 import {
   deckAccessFor,
   deckDeliveryContext,
+  readDeckText,
   resolveDeckAssets,
   resolveDeliveryThemeUrls,
   resolveReadThemeUrls,
@@ -184,12 +184,21 @@ export const loader = async ({
   // preview branch names contain slashes).
   const diffUrl = `https://github.com/${gitOrgLogin}/${repo}/compare/main...${encodeURIComponent(previewBranch)}`;
 
-  // Fetch content: API-first for edit mode (freshness), CDN-first for view mode (speed)
-  // CDN has ~3 minute propagation delay after saves, so edit mode needs fresh API data
+  // Two reads, and the split is deliberate.
+  //
+  // EDIT mode keeps the contents API (skipCache), and must: it reads a PREVIEW
+  // BRANCH when one is active, and preview branches are not in the asset map at
+  // all — nothing there has a sha to sign. It also seeds the save conflict
+  // token, which has to be the sha of the file on the branch being written.
+  // Staff-only and low volume, so the API call per open is affordable.
+  //
+  // VIEW mode reads through the delivery layer by sha (see below), which is
+  // what makes a save visible the moment it returns instead of whenever GitHub
+  // Pages finishes rebuilding.
   let slideContent: string | null = null;
   let contentError: string | null = null;
   let usedApiFallback = false;
-  let contentResult: { content: string | Buffer; source: string } | null = null;
+  let contentResult: { content: string; source: string } | null = null;
 
   // Conflict token for the editor (Phase 4b): the sha of the deck's SOURCE OF
   // TRUTH — deck.json once it exists (materialized by the first dual-write
@@ -316,40 +325,34 @@ export const loader = async ({
     }
   }
 
-  // Staff view mode: API-first. The CDN (GitHub Pages) lags saves by minutes —
-  // and rapid consecutive saves can ERROR its builds, extending the lag — so a
-  // hard reload right after saving showed stale content to the very person who
-  // saved. Staff read the committed truth from the API; students keep the
-  // cheap CDN path (eventual consistency is fine for them). Thumbnails
-  // (?preview=true) stay CDN — a staff landing page renders ~20 at once and
-  // must not fan out API reads (the D4 amplification).
-  if (!contentResult && canEdit && !isThumbnail) {
-    try {
-      const result = await ContentService.getContent({
-        orgLogin: gitOrgLogin,
-        repo,
-        path: filePath,
-      });
-      if (result) {
-        contentResult = { content: result.content, source: 'api' };
-      }
-    } catch (e: unknown) {
-      const message = e instanceof Error ? e.message : String(e);
-      console.warn('[Loader] Staff view API read failed, falling back to CDN:', message);
-    }
-  }
-
-  // CDN-first for student/anonymous view mode, or as fallback if API failed
+  // Live deck, for everyone: read by SHA through the delivery layer.
+  //
+  // This replaces a three-way split — staff read the contents API, students
+  // read the CDN, thumbnails read the CDN — that existed entirely because
+  // GitHub Pages lags a save by minutes and rapid saves can ERROR its builds.
+  // Addressing the file by sha makes that question go away, so the split goes
+  // with it, and the three surfaces stop being able to disagree about what the
+  // current deck is.
+  //
+  // Cost moves in the right direction on every one of them. Staff no longer
+  // spend an installation-token API call per view. Students no longer wait out
+  // a Pages build. Thumbnails — a staff landing page renders ~20 at once, which
+  // is why they were pinned to the CDN to avoid the API fan-out — now cost one
+  // indexed map read each and are served from the edge; the API fan-out they
+  // were protected from only happens if the map misses, which a save's own
+  // write-through is what prevents.
   if (!contentResult) {
-    contentResult = await fetchContent({
-      org: gitOrgLogin,
+    contentResult = await readDeckText(
+      slide,
+      gitOrgLogin,
       repo,
-      path: filePath,
-    });
+      filePath,
+      isThumbnail ? 'thumbnail' : 'viewer'
+    );
   }
 
   if (contentResult) {
-    slideContent = contentResult.content as string;
+    slideContent = contentResult.content;
     usedApiFallback = contentResult.source === 'api';
 
     // Sign the deck's image references — but never for the document the editor
