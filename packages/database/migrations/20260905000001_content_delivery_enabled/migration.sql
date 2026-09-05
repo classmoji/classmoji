@@ -1,0 +1,13 @@
+-- Per-classroom switch for the content delivery layer.
+--
+-- The env vars (`CONTENT_SIGNING_SECRET` + `CONTENT_DELIVERY_ORIGIN`) say
+-- whether a DEPLOYMENT can sign at all; this says whether a CLASSROOM should.
+-- Both must be true before a single URL is rewritten, and either one being
+-- false produces the exact same legacy behaviour — the resolvers hand back the
+-- reference they were given.
+--
+-- DEFAULT false, deliberately. Production Fly apps already carry the env vars,
+-- so an env-only gate would switch every classroom over the moment this ships.
+-- Defaulting off makes the deploy a no-op and turns rollout into a per-classroom
+-- decision made in the platform-admin app (or one UPDATE on staging).
+ALTER TABLE "classrooms" ADD COLUMN     "content_delivery_enabled" BOOLEAN NOT NULL DEFAULT false;

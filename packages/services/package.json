@@ -19,6 +19,7 @@
     "./slides/ops": "./src/slides/deckOps.ts"
   },
   "dependencies": {
+    "@classmoji/content-signing": "*",
     "@classmoji/database": "*",
     "@classmoji/utils": "*",
     "@octokit/auth-app": "^7.1.3",

@@ -27,6 +27,30 @@ vi.mock('../../content/ContentService.ts', () => ({
   },
 }));
 
+// The asset map row is written at upload time rather than left to the push
+// webhook — see recordContentAsset. Mocked here so this suite keeps pinning the
+// GitHub interactions and nothing reaches Prisma.
+const recordContentAssetMock = vi.fn();
+const resolveContentBranchMock = vi.fn();
+vi.mock('../contentAssets.service.ts', () => ({
+  recordContentAsset: (...args: unknown[]) => recordContentAssetMock(...args),
+  resolveContentBranch: (...args: unknown[]) => resolveContentBranchMock(...args),
+}));
+
+// The map-first read (`viaWorker`). Mocked at the module seam so this suite
+// stays about page-content shapes; contentDelivery.text.test.ts owns the read
+// itself. `canonicalizeMany` is passed through unchanged — the save path calls
+// it and this suite is not testing canonicalization.
+const fetchContentTextMock = vi.fn();
+vi.mock('../contentDelivery.service.ts', () => ({
+  fetchContentText: (...args: unknown[]) => fetchContentTextMock(...args),
+  // Real, not a stub: the two probes sharing ONE budget object is the thing
+  // being asserted, and a mock that handed out a fresh object each call would
+  // make that assertion vacuous.
+  textReadBudget: () => ({ workerUnavailable: false }),
+  canonicalizeMany: async (_ctx: unknown, refs: string[]) => new Map(refs.map(r => [r, r])),
+}));
+
 const {
   loadPageContent,
   savePageContent,
@@ -246,18 +270,186 @@ describe('pageContent.savePageContent', () => {
   });
 });
 
+// ─── loadPageContent via the delivery layer ──────────────────────────────────
+
+describe('pageContent.loadPageContent viaWorker', () => {
+  // The map-first read only has a context to work with when the page carries
+  // its classroom id and repo — the resolver's own requirement.
+  const keyedPage = {
+    ...page,
+    classroom: { ...page.classroom, id: '3f2504e0-4f89-41d3-9a0c-0305e82c3301' },
+  };
+
+  beforeEach(() => {
+    fetchContentTextMock.mockResolvedValue(null);
+  });
+
+  it('reads content.json through the map, and never touches GitHub on a hit', async () => {
+    // The whole point: a page view costs no GitHub call, and the sha the map
+    // signed is the sha the reader gets.
+    fetchContentTextMock.mockResolvedValueOnce({
+      text: JSON.stringify({ blocks: [{ id: 'b1' }], coverImage: cover }),
+      sha: 'map-sha',
+      source: 'worker',
+    });
+
+    const result = await loadPageContent(keyedPage, { viaWorker: true });
+
+    expect(result).toEqual({
+      format: 'json',
+      blocks: [{ id: 'b1' }],
+      coverImage: cover,
+      sha: 'map-sha',
+    });
+    expect(getContentMock).not.toHaveBeenCalled();
+  });
+
+  it('falls through to index.html for a legacy page', async () => {
+    fetchContentTextMock
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce({ text: '<h1>Legacy</h1>', sha: 'html-sha', source: 'worker' });
+
+    const result = await loadPageContent(keyedPage, { viaWorker: true });
+
+    expect(result).toEqual({
+      format: 'html',
+      blocks: '<h1>Legacy</h1>',
+      coverImage: null,
+      sha: 'html-sha',
+    });
+  });
+
+  it('falls back to the GitHub read when the map has nothing', async () => {
+    // The layer is an accelerator, never the reason a page fails to load.
+    getContentMock.mockResolvedValueOnce({
+      content: JSON.stringify({ blocks: [], coverImage: null }),
+      sha: 'github-sha',
+    });
+
+    const result = await loadPageContent(keyedPage, { viaWorker: true });
+
+    expect(result.sha).toBe('github-sha');
+  });
+
+  it('asks the map only, so a miss does not read GitHub twice', async () => {
+    // `fetchContentText` has its own API-then-CDN ladder, and the caller's own
+    // GitHub read is sitting right behind this one — without fallback:'none'
+    // every map miss would pay two contents-API reads and a CDN fetch for one
+    // page. Both probes also share one circuit breaker, so an unreachable
+    // Worker costs one timeout for the render rather than one per file.
+    getContentMock.mockResolvedValue(null);
+
+    await loadPageContent(keyedPage, { viaWorker: true });
+
+    for (const call of fetchContentTextMock.mock.calls) {
+      expect(call[2]).toMatchObject({ fallback: 'none' });
+    }
+    // content.json + index.html, from the caller's read — not four.
+    expect(getContentMock).toHaveBeenCalledTimes(2);
+    // One budget object, shared by both probes.
+    const budgets = fetchContentTextMock.mock.calls.map(
+      call => (call[2] as { budget: unknown }).budget
+    );
+    expect(budgets[0]).toBe(budgets[1]);
+  });
+
+  it('is ignored for a preview-branch read', async () => {
+    // Preview branches have no map rows at all; signing against one would serve
+    // main's bytes under a preview URL.
+    getContentMock.mockResolvedValueOnce({ content: '{"blocks":[]}', sha: 'branch-sha' });
+
+    await loadPageContent(keyedPage, { viaWorker: true, ref: 'preview/pages/syllabus' });
+
+    expect(fetchContentTextMock).not.toHaveBeenCalled();
+    expect(callArg(getContentMock).ref).toBe('preview/pages/syllabus');
+  });
+});
+
+// ─── savePageContent write-through ───────────────────────────────────────────
+
+describe('pageContent.savePageContent write-through', () => {
+  const blocks = [{ id: 'b1', type: 'paragraph', content: [] }];
+  // The fixture above deliberately has no classroom id (several callers have
+  // none); this one does, because the map row is keyed on it.
+  const keyedPage = { ...page, classroom: { ...page.classroom, id: 'class-1' } };
+
+  beforeEach(() => {
+    recordContentAssetMock.mockResolvedValue(true);
+  });
+
+  it('records content.json at the sha the commit returned', async () => {
+    // This is what makes a save VISIBLE. content.json is read through the map
+    // now, so a row one save behind is the previous version of the page on a
+    // student's screen — not merely a stale cache.
+    await savePageContent(keyedPage, blocks, { coverImage: null });
+
+    expect(recordContentAssetMock).toHaveBeenCalledWith('class-1', {
+      path: 'pages/syllabus/content.json',
+      sha: 'new-sha',
+      // The real byte length of what was committed — a writer that has the
+      // bytes must not hand the map a size it made up, because `size ?? 0`
+      // would overwrite one an earlier sync actually measured.
+      size: Buffer.byteLength(callArg(putMock).content as string),
+    });
+  });
+
+  it('still records a save aimed explicitly at the default branch', async () => {
+    // The guard tests the `preview/` prefix rather than the absence of a
+    // branch: a caller naming main would otherwise write it and silently lose
+    // the map row, which is the stale read this whole path exists to close.
+    getContentMock.mockResolvedValueOnce(null);
+
+    await savePageContent(keyedPage, blocks, { branch: 'main' });
+
+    expect(recordContentAssetMock).toHaveBeenCalledWith(
+      'class-1',
+      expect.objectContaining({ path: 'pages/syllabus/content.json', sha: 'new-sha' })
+    );
+  });
+
+  it('records nothing for a preview-branch save', async () => {
+    // A preview branch is not in the map. Recording its sha would publish an
+    // unaccepted draft to every reader.
+    getContentMock.mockResolvedValueOnce(null);
+
+    await savePageContent(keyedPage, blocks, { branch: 'preview/pages/syllabus' });
+
+    expect(recordContentAssetMock).not.toHaveBeenCalled();
+  });
+
+  it('still returns the save when the map write cannot be keyed', async () => {
+    // A page assembled without its classroom id has nothing to key a row on.
+    // The commit stands; the next sync picks it up.
+    const result = await savePageContent(page, blocks, { coverImage: null });
+
+    expect(result).toEqual({ sha: 'new-sha', commit: 'commit-1' });
+    expect(recordContentAssetMock).not.toHaveBeenCalled();
+  });
+});
+
 // ─── uploadPageAsset ─────────────────────────────────────────────────────────
 
 describe('pageContent.uploadPageAsset', () => {
-  it('uploads a Buffer into the page assets folder and returns url + path', async () => {
+  const RAW_URL =
+    'https://raw.githubusercontent.com/test-org/content-test-org-cs101/main/pages/syllabus/assets/a.png';
+
+  beforeEach(() => {
     uploadMock.mockResolvedValue({
-      url: 'https://raw.githubusercontent.com/test-org/content-test-org-cs101/main/pages/syllabus/assets/a.png',
+      url: RAW_URL,
       path: 'pages/syllabus/assets/a.png',
-      sha: 'asset-sha',
+      // A real 40-hex blob sha — the signer refuses anything else.
+      sha: 'c'.repeat(40),
     });
+    recordContentAssetMock.mockResolvedValue(true);
+    resolveContentBranchMock.mockResolvedValue('main');
+    delete process.env.CONTENT_DELIVERY_ORIGIN;
+    delete process.env.CONTENT_SIGNING_SECRET;
+  });
+
+  it('uploads a Buffer into the page assets folder', async () => {
     const buffer = Buffer.from('image-bytes');
 
-    const result = await uploadPageAsset(page, buffer, 'a.png');
+    await uploadPageAsset(page, buffer, 'a.png');
 
     const arg = callArg(uploadMock);
     expect(arg.repo).toBe('content-test-org-cs101');
@@ -265,9 +457,128 @@ describe('pageContent.uploadPageAsset', () => {
     expect(arg.file).toBe(buffer);
     expect(arg.filename).toBe('a.png');
     expect(arg.branch).toBe('main');
+  });
+
+  it('commits to the repo default branch rather than a hardcoded main', async () => {
+    // A course imported from an older org is on `master`. Committing to `main`
+    // there either creates a branch nobody renders from or is refused outright,
+    // and the asset map would then hold a blob the served branch never had.
+    resolveContentBranchMock.mockResolvedValue('master');
+
+    await uploadPageAsset(page, Buffer.from('x'), 'a.png');
+
+    expect(resolveContentBranchMock).toHaveBeenCalledWith(
+      gitOrganization,
+      'test-org',
+      'content-test-org-cs101'
+    );
+    expect(callArg(uploadMock).branch).toBe('master');
+  });
+
+  it('stores the REPO PATH once the delivery layer can sign it', async () => {
+    process.env.CONTENT_DELIVERY_ORIGIN = 'https://cdn.classmoji.test';
+    process.env.CONTENT_SIGNING_SECRET = 'test-master-secret';
+    const classroomPage = {
+      ...page,
+      classroom: {
+        ...page.classroom,
+        id: '3f2504e0-4f89-41d3-9a0c-0305e82c3301',
+        content_delivery_enabled: true,
+      },
+    };
+
+    const result = await uploadPageAsset(classroomPage, Buffer.from('x'), 'a.png');
+
+    // The path is what keeps following the file across re-uploads and bumps.
+    expect(result.url).toBe('pages/syllabus/assets/a.png');
+    expect(result.path).toBe('pages/syllabus/assets/a.png');
+    // Display is a separate field precisely so it cannot be stored by accident.
+    expect(result.displayUrl).toContain('https://cdn.classmoji.test/c/');
+    expect(result.displayUrl).toContain('p=edit');
+    expect(result.displayUrl).not.toBe(result.url);
+  });
+
+  it('falls back to the legacy absolute URL when nothing can sign', async () => {
+    // THE regression this guards: unconfigured, no surface — editor, viewer or
+    // class site — knows how to turn a bare path into a fetchable URL, so
+    // storing one would make every upload a 404 the moment it is saved.
+    const result = await uploadPageAsset(page, Buffer.from('x'), 'a.png');
+
     expect(result).toEqual({
-      url: 'https://raw.githubusercontent.com/test-org/content-test-org-cs101/main/pages/syllabus/assets/a.png',
+      url: RAW_URL,
       path: 'pages/syllabus/assets/a.png',
+      displayUrl: null,
+    });
+  });
+
+  it('records the uploaded blob in the asset map before returning', async () => {
+    // THE regression this guards: without the row, the save stores a repo path
+    // the next render cannot resolve, and the viewer gets the resolver's
+    // "dangling" URL until a push webhook or the 24-hour refresh catches up.
+    const classroomPage = {
+      ...page,
+      classroom: { ...page.classroom, id: '3f2504e0-4f89-41d3-9a0c-0305e82c3301' },
+    };
+    const buffer = Buffer.from('image-bytes');
+
+    await uploadPageAsset(classroomPage, buffer, 'a.png');
+
+    expect(recordContentAssetMock).toHaveBeenCalledWith('3f2504e0-4f89-41d3-9a0c-0305e82c3301', {
+      path: 'pages/syllabus/assets/a.png',
+      sha: 'c'.repeat(40),
+      size: buffer.length,
+    });
+  });
+
+  it('skips the map write when there is no classroom id to key it on', async () => {
+    await uploadPageAsset(page, Buffer.from('x'), 'a.png');
+
+    expect(recordContentAssetMock).not.toHaveBeenCalled();
+  });
+
+  it('falls back the same way when the classroom has no id to sign against', async () => {
+    process.env.CONTENT_DELIVERY_ORIGIN = 'https://cdn.classmoji.test';
+    process.env.CONTENT_SIGNING_SECRET = 'test-master-secret';
+
+    // `page.classroom` here carries no id — signing is impossible, so this must
+    // degrade exactly like the unconfigured case rather than store a dead path.
+    const result = await uploadPageAsset(
+      { ...page, classroom: { ...page.classroom, content_delivery_enabled: true } },
+      Buffer.from('x'),
+      'a.png'
+    );
+
+    expect(result.url).toBe(RAW_URL);
+    expect(result.displayUrl).toBeNull();
+  });
+
+  it('stores the legacy URL for a classroom that has not been opted in', async () => {
+    // THE case that makes shipping this safe: production already carries both
+    // env vars, so the ENV says yes here. The classroom's own flag is what
+    // holds the line, and an upload into a classroom that is still off has to
+    // store exactly what it stored yesterday — a URL the legacy readers resolve.
+    process.env.CONTENT_DELIVERY_ORIGIN = 'https://cdn.classmoji.test';
+    process.env.CONTENT_SIGNING_SECRET = 'test-master-secret';
+    const classroomPage = {
+      ...page,
+      classroom: {
+        ...page.classroom,
+        id: '3f2504e0-4f89-41d3-9a0c-0305e82c3301',
+        content_delivery_enabled: false,
+      },
+    };
+
+    const result = await uploadPageAsset(classroomPage, Buffer.from('x'), 'a.png');
+
+    expect(result.url).toBe(RAW_URL);
+    expect(result.displayUrl).toBeNull();
+    // The map row is still written. It is harmless while the flag is off and it
+    // is what makes flipping the switch take effect on the very next render
+    // instead of waiting for a push webhook.
+    expect(recordContentAssetMock).toHaveBeenCalledWith('3f2504e0-4f89-41d3-9a0c-0305e82c3301', {
+      path: 'pages/syllabus/assets/a.png',
+      sha: 'c'.repeat(40),
+      size: 1,
     });
   });
 });

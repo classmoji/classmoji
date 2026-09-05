@@ -1,4 +1,6 @@
 import { useLoaderData, useFetcher, useOutletContext } from 'react-router';
+import { useAssetMap, useAssetRetry } from '~/hooks/useAssetMap.ts';
+import type { AssetSrcSets } from '~/hooks/useAssetSrcSets.ts';
 import { useState, useEffect, useMemo, useRef, useCallback, lazy, Suspense } from 'react';
 import { IconPhoto } from '@tabler/icons-react';
 import { toast } from 'react-toastify';
@@ -46,7 +48,24 @@ const PageRoute = () => {
     notice,
     noticeAutoMerged,
     contentSha,
+    resolvedAssets,
+    resolvedSrcSets,
   } = useLoaderData<typeof import('./route.server.ts').loader>();
+  // Stored refs stay in the document; these are the URLs to display them with.
+  const assets = useAssetMap(resolvedAssets, page.id);
+  // An expired `edit` signature on a stale tab re-resolves once instead of
+  // leaving a page of broken images.
+  const assetEpoch = useAssetRetry();
+  // Responsive candidates, keyed by the stored reference and handed to the
+  // image and profile blocks through context. A save-merge folds in blocks this
+  // client has never seen, and the loader's map has no entry for them — the
+  // action ships theirs alongside the merged document, and they are layered on
+  // top here until the next load makes them part of the loader payload.
+  const [mergedSrcSets, setMergedSrcSets] = useState<AssetSrcSets>({});
+  const srcSets = useMemo(
+    () => ({ ...(resolvedSrcSets ?? {}), ...mergedSrcSets }),
+    [resolvedSrcSets, mergedSrcSets]
+  );
   const outletContext = useOutletContext<{ isEmbedded?: boolean }>();
   const isEmbedded = outletContext?.isEmbedded || false;
   // Preview mode is strictly read-only — editing chrome is suppressed while
@@ -366,6 +385,18 @@ const PageRoute = () => {
         // The NORMALIZED baseline for the adopted doc is captured by the
         // editor's onReady after the epoch remount, paired with the new sha.
         pendingBaselineShaRef.current = newSha;
+        // Blocks folded in from main are new to this client — seed their
+        // display URLs before the remount, or those images paint broken.
+        const merged = fetcher.data.resolved_assets;
+        if (merged && typeof merged === 'object') {
+          for (const [ref, url] of Object.entries(merged as Record<string, string>)) {
+            assets.remember(ref, url);
+          }
+        }
+        const mergedSets = fetcher.data.resolved_src_sets;
+        if (mergedSets && typeof mergedSets === 'object') {
+          setMergedSrcSets(current => ({ ...current, ...(mergedSets as AssetSrcSets) }));
+        }
         setEditorDoc(fetcher.data.merged_content);
         setEditorEpoch(epoch => epoch + 1);
         const n = fetcher.data.merged_with_concurrent;
@@ -401,7 +432,7 @@ const PageRoute = () => {
       // decides.
       setSaveStatus('error');
     }
-  }, [fetcher.state, fetcher.data, page.id]);
+  }, [fetcher.state, fetcher.data, page.id, assets]);
 
   // Surface cover-image failures (incl. the F5 409 "page changed — try again") —
   // the cover flow has no inline status indicator of its own.
@@ -559,7 +590,7 @@ const PageRoute = () => {
 
       {coverImage?.url && (
         <HeaderImage
-          imageUrl={coverImage.url}
+          imageUrl={assets.displayUrl(coverImage.url) as string}
           position={coverImage.position ?? 50}
           editMode={canEdit}
           pageId={page.id}
@@ -667,6 +698,9 @@ const PageRoute = () => {
                 darkMode={darkMode}
                 onChange={handleEditorChange}
                 onReady={handleEditorReady}
+                resolveFileUrl={assets.resolveFileUrl}
+                srcSets={srcSets}
+                onAssetUploaded={assets.remember}
                 // P5: block editing while the save-merge chooser is open so no
                 // edits are silently discarded when the resolved merge remounts
                 // the editor. The chooser is the way forward (Apply / Reload).
@@ -682,7 +716,17 @@ const PageRoute = () => {
                 </div>
               }
             >
-              <BlockNoteViewer key={page.id} content={content} darkMode={darkMode} />
+              <BlockNoteViewer
+                // The epoch rebuilds the viewer after a 403 retry — BlockNote
+                // asks for a file URL once per mount, so a refreshed map only
+                // reaches it through a remount. Safe here and only here: the
+                // viewer holds no unsaved state, the editor does.
+                key={`${page.id}:${assetEpoch}`}
+                content={content}
+                darkMode={darkMode}
+                resolveFileUrl={assets.resolveFileUrl}
+                srcSets={srcSets}
+              />
             </Suspense>
           )}
         </div>

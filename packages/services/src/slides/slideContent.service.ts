@@ -17,6 +17,13 @@ import {
   type ParseOptions,
 } from './deckHtml.ts';
 import type { DeckJson } from './deckTypes.ts';
+import { canonicalizeDeckAssets } from './deckAssets.ts';
+import { recordContentAssets, resolveContentBranch } from '../classmoji/contentAssets.service.ts';
+import {
+  canonicalizeMany,
+  isOwnAssetRef,
+  type ResolveContext,
+} from '../classmoji/contentDelivery.service.ts';
 
 // Structural type compatible with ContentService's (unexported) git org record.
 interface GitOrgRecord {
@@ -41,6 +48,15 @@ export interface SlideContentTarget {
     /** Stored content repo name — never re-derived from org + namespace. */
     content_repo: string | null;
     git_organization: GitOrgRecord | null;
+    /**
+     * Classroom id and delivery state, needed only by the save-time
+     * canonicalization below. Optional because several callers (createSlide
+     * before the row exists, the importer's synthetic target) legitimately do
+     * not have them — a target without an id simply skips the pass.
+     */
+    id?: string;
+    content_key_version?: number;
+    content_delivery_enabled?: boolean | null;
   } | null;
 }
 
@@ -187,6 +203,67 @@ export interface SaveDeckResult {
 }
 
 /**
+ * The classroom context the save-time canonicalization needs, or null.
+ *
+ * Null is a normal state: `createSlide` saves a starter deck before there is a
+ * row to key on, and a target assembled without the classroom join has no id.
+ * Neither can be carrying one of OUR signed URLs, so skipping the pass is
+ * correct rather than merely tolerable.
+ *
+ * The tier is arbitrary — canonicalization only ever removes a signature and
+ * never mints one, so nothing but the classroom id is read.
+ */
+function deckResolveContext(slide: SlideContentTarget): ResolveContext | null {
+  const classroom = slide.classroom;
+  const login = classroom?.git_organization?.login;
+  if (!classroom?.id || !classroom.content_repo || !login) return null;
+  return {
+    classroom: {
+      id: classroom.id,
+      content_key_version: classroom.content_key_version ?? 0,
+      content_repo: classroom.content_repo,
+      content_delivery_enabled: classroom.content_delivery_enabled === true,
+      git_organization: { login },
+    },
+    tier: 'edit',
+  };
+}
+
+/**
+ * A deck with every signed URL of ours replaced by the repo path behind it.
+ *
+ * Failure is swallowed on purpose. The asset map lives in Postgres, and a
+ * database hiccup must not turn a save into a lost edit — the worst case of
+ * skipping this pass is the state the deck was already in before it existed.
+ */
+async function canonicalizeDeckForSave(
+  slide: SlideContentTarget,
+  deck: DeckJson
+): Promise<DeckJson> {
+  const ctx = deckResolveContext(slide);
+  if (!ctx) return deck;
+
+  try {
+    // The predicate is what makes the `srcset` strip safe. A responsive set is
+    // DERIVED — expiring, tier-specific URLs — and the read side regenerates
+    // one on every render, so ours is dropped rather than stored. An author's
+    // own `<img srcset>` pointing at an external CDN is content, and the
+    // predicate says no to it.
+    return await canonicalizeDeckAssets(
+      deck,
+      refs => canonicalizeMany(ctx, refs),
+      ref => isOwnAssetRef(ctx, ref)
+    );
+  } catch (error) {
+    console.warn(
+      '[slideContent] Could not canonicalize deck asset refs on save:',
+      error instanceof Error ? error.message : error
+    );
+    return deck;
+  }
+}
+
+/**
  * Save a deck: conflict check (§3 2×2 table) → generateDeckHtml → ONE atomic
  * uploadBatch commit (deck.json + index.html on main; deck.json only on
  * preview branches) → bump slide.updated_at (main writes only).
@@ -227,7 +304,28 @@ export async function saveDeck({
   const deckPath = `${slide.content_path}/deck.json`;
   const htmlPath = `${slide.content_path}/index.html`;
 
+  // Before anything is serialized: a signed delivery URL must not reach
+  // deck.json. It would freeze one viewer's tier and one expiring signature
+  // into the deck, and stop the reference following its file. This is the only
+  // choke point every writer passes — the editor, deck_apply over MCP, the
+  // importer — so it is the only place the invariant can actually be promised.
+  deck = await canonicalizeDeckForSave(slide, deck);
+
   const isPreviewBranch = branch != null && branch.startsWith(PREVIEW_BRANCH_PREFIX);
+  // ASSUMED `main`, where `uploadPageAsset` ASKS — and the asymmetry is
+  // deliberate, not an oversight.
+  //
+  // `resolveContentBranch` is an uncached GitHub call. An upload pays it gladly:
+  // it happens when a teacher drops a file into the editor, which is rare. A
+  // deck save is the editor's hot path, and putting a default-branch lookup in
+  // front of every one of them spends the org installation's shared limit on a
+  // question whose answer has not changed since the repo was created — classmoji
+  // creates content repos on `main`.
+  //
+  // The gap this leaves is a content repo imported from an older org that is on
+  // `master`: deck saves there fail on a missing ref, exactly as they did before
+  // this layer existed. Worth fixing WITH a cache rather than with a call per
+  // save — tracked, not done here.
   const targetBranch = branch ?? 'main';
   // Ref for conflict checks: the branch being written (main when absent) —
   // §3b: expected_sha refers to the file on the branch being written.
@@ -334,6 +432,18 @@ export async function saveDeck({
     throw new Error('uploadBatch did not return a sha for deck.json');
   }
 
+  // Write-through: the map learns this commit's shas NOW rather than when the
+  // push webhook arrives, which is what makes `/present` fresh the instant a
+  // save returns. The read side signs whatever sha the map holds, so a row that
+  // is one save behind IS the previous deck on screen — the exact bug this
+  // whole path exists to close.
+  //
+  // Main writes only. A preview branch is not in the map, and recording its
+  // shas would point every reader at unpublished content.
+  if (!isPreviewBranch) {
+    await recordDeckFiles(slide, result.files, files);
+  }
+
   // Bump updated_at for main writes (a preview-branch commit changes nothing
   // students or the live viewer can see).
   if (slide.id && !isPreviewBranch) {
@@ -344,4 +454,37 @@ export async function saveDeck({
   }
 
   return { sha: newDeckSha, commit: result.commit, html };
+}
+
+/**
+ * Put a just-committed deck's files into the asset map.
+ *
+ * Never throws — `recordContentAssets` swallows its own failures, and this adds
+ * the one branch it cannot: a target assembled without the classroom join (the
+ * importer's synthetic target) has nothing to key a row on. Such a save is
+ * still committed; the map picks it up on the next sync. `createSlide` DOES
+ * reach here — it passes the whole classroom row.
+ *
+ * Sizes come from the bytes that were actually committed, which this caller
+ * still has in hand. Guessing one would be worse than omitting it: the map's
+ * size column is written by tree syncs that measured it, and an invented value
+ * would overwrite a measured one.
+ */
+async function recordDeckFiles(
+  slide: SlideContentTarget,
+  committed: Array<{ path: string; sha: string }>,
+  written: Array<{ path: string; content: string }>
+): Promise<void> {
+  const classroomId = slide.classroom?.id;
+  if (!classroomId) return;
+
+  const bytes = new Map(written.map(file => [file.path, Buffer.byteLength(file.content)]));
+  await recordContentAssets(
+    classroomId,
+    committed.map(file => ({
+      path: file.path,
+      sha: file.sha,
+      ...(bytes.has(file.path) ? { size: bytes.get(file.path) } : {}),
+    }))
+  );
 }

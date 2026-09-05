@@ -4,7 +4,12 @@ import getPrisma from '@classmoji/database';
 import { assertSlideAccess } from '@classmoji/auth/server';
 import { SandpackRenderer } from '@classmoji/ui-components/sandpack';
 import RevealPresenter from '~/components/RevealPresenter';
-import { fetchContent } from '~/utils/contentProxy';
+import {
+  deckAccessFor,
+  deckDeliveryContext,
+  readDeckText,
+  resolveDeckDelivery,
+} from '~/utils/deckDelivery.server';
 
 export const loader = async ({
   params,
@@ -32,7 +37,7 @@ export const loader = async ({
   }
 
   // Authorization: require present permission (owner/teacher/assistant)
-  const { canPresent } = await assertSlideAccess({
+  const { canPresent, canEdit } = await assertSlideAccess({
     request,
     slideId,
     slide,
@@ -49,22 +54,35 @@ export const loader = async ({
   const repo = slide.classroom.content_repo;
   const filePath = `${slide.content_path}/index.html`;
 
-  // Build the content URL using content proxy (CDN-first + API fallback)
-  // Used as client-side fallback if server-side fetch fails
+  // Legacy proxy URL, kept as the client-side fallback when the server-side
+  // read below fails entirely.
   const contentUrl = `/content/${gitOrgLogin}/${repo}/${filePath}`;
 
-  // Fetch content using shared utility (CDN first, API fallback)
+  // Read the deck by SHA through the delivery layer. This route is the reason
+  // that matters: the presenter is opened seconds after a save, and the CDN
+  // path this replaces lagged a push by minutes — so a deck saved at the
+  // lectern showed the version from before the fix.
   let slideContent: string | null = null;
   let contentError: string | null = null;
 
-  const contentResult = await fetchContent({
-    org: gitOrgLogin,
-    repo,
-    path: filePath,
-  });
+  const contentResult = await readDeckText(slide, gitOrgLogin, repo, filePath, 'present');
 
   if (contentResult) {
-    slideContent = contentResult.content as string;
+    // Same read-side delivery pass the deck viewer runs: the stored document
+    // holds `/content/...` refs, and a presenter must see the signed ones or a
+    // private content repo shows them nothing. `deckAccessFor` deliberately
+    // does NOT hand this surface the `edit` tier — see its comment.
+    //
+    // `canEdit` is passed because `assertSlideAccess` answered it and this
+    // route has no business rewriting it; `deckAccessFor` then IGNORES it for
+    // this surface and takes the deck's visibility instead. A presentation
+    // stays open for hours, and the 4h `edit` bucket would 403 a lazily loaded
+    // background mid-lecture.
+    const { html } = await resolveDeckDelivery(
+      contentResult.content,
+      deckDeliveryContext(slide, gitOrgLogin, repo, deckAccessFor('present', { canEdit }, slide))
+    );
+    slideContent = html;
   } else {
     contentError = 'Failed to load slide content';
   }

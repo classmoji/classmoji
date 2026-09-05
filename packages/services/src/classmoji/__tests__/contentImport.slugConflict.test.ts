@@ -55,6 +55,12 @@ vi.mock('../../git/index.ts', () => ({
 }));
 
 vi.mock('../contentManifest.service.ts', () => ({ saveManifest: vi.fn() }));
+// The import records what it wrote into the asset map; stubbed so this suite
+// stays about slug allocation and nothing reaches Prisma.
+vi.mock('../contentAssets.service.ts', () => ({
+  lookupContentAssetsBySha: async () => new Map(),
+  recordContentAssets: async () => true,
+}));
 vi.mock('../notification.service.ts', () => ({
   runSafely: vi.fn(),
   getStudentsInClassroom: vi.fn(),
@@ -128,7 +134,13 @@ beforeEach(() => {
       write(title.toLowerCase().replace(/ /g, '-'))
   );
   pageCreate.mockImplementation(async () => ({ id: 'new-page' }));
-  uploadBatch.mockResolvedValue(undefined);
+  // `files` is part of uploadBatch's real return shape — each written file's
+  // blob sha, which the import records into the asset map on the way out.
+  uploadBatch.mockImplementation(async ({ files }: { files: Array<{ path: string }> }) => ({
+    commit: 'c1',
+    filesUploaded: files.length,
+    files: files.map((file, index) => ({ path: file.path, sha: `sha-${index}` })),
+  }));
   ensureContentRepo.mockResolvedValue(undefined);
 });
 

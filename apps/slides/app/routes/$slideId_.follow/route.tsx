@@ -4,7 +4,13 @@ import getPrisma from '@classmoji/database';
 import { assertSlideAccess } from '@classmoji/auth/server';
 import { SandpackRenderer } from '@classmoji/ui-components/sandpack';
 import RevealPresenter from '~/components/RevealPresenter';
-import { fetchContent } from '~/utils/contentProxy';
+import {
+  deckDeliveryContext,
+  deckAccessFor,
+  isThumbnailRequest,
+  readDeckText,
+  resolveDeckDelivery,
+} from '~/utils/deckDelivery.server';
 
 /**
  * Follow route - Audience sync view
@@ -25,7 +31,7 @@ export const loader = async ({
   if (!slideId) throw new Response('Missing slideId', { status: 400 });
   const url = new URL(request.url);
   const shareCode = url.searchParams.get('shareCode');
-  const preview = url.searchParams.get('preview') === 'true';
+  const preview = isThumbnailRequest(url);
 
   const slide = await getPrisma().slide.findUnique({
     where: { id: slideId },
@@ -43,7 +49,7 @@ export const loader = async ({
   }
 
   // Authorization: check view access (supports public slides, membership, and shareCode)
-  const { accessGrantedVia, canViewSpeakerNotes } = await assertSlideAccess({
+  const { accessGrantedVia, canEdit, canViewSpeakerNotes } = await assertSlideAccess({
     request,
     slideId,
     slide,
@@ -64,21 +70,35 @@ export const loader = async ({
   const repo = slide.classroom.content_repo;
   const filePath = `${slide.content_path}/index.html`;
 
-  // Build the content URL using content proxy (CDN-first + API fallback)
+  // Legacy proxy URL, kept as the client-side fallback when the server-side
+  // read below fails entirely.
   const contentUrl = `/content/${gitOrgLogin}/${repo}/${filePath}`;
 
-  // Fetch content using shared utility (CDN first, API fallback)
+  // Read the deck by SHA through the delivery layer. This is the highest-fanout
+  // deck read in the app — a lecture hall opens it at once — and it is now the
+  // cheapest: one signed URL per sha, served from the edge, and zero GitHub
+  // calls per viewer.
   let slideContent: string | null = null;
   let contentError: string | null = null;
 
-  const contentResult = await fetchContent({
-    org: gitOrgLogin,
-    repo,
-    path: filePath,
-  });
+  const contentResult = await readDeckText(slide, gitOrgLogin, repo, filePath, 'follow');
 
   if (contentResult) {
-    slideContent = contentResult.content as string;
+    // Same read-side delivery pass the deck viewer runs, but `/follow` is a
+    // READ surface for everyone who opens it — staff included — so
+    // `deckAccessFor` pins `canEdit: false` and the lifetime comes from the
+    // DECK's visibility: `month` for a public deck, `week` for the rest.
+    // `canEdit` is still passed, and still ignored for the tier, because it is
+    // what `assertSlideAccess` answered and this route has no business
+    // rewriting it. The 4h `edit` bucket is unreachable here on purpose: a
+    // lecture that outruns four hours must not 403 a lazily-loaded background
+    // mid-talk, and the speaker view's `/follow?preview=true` panes are the
+    // highest-fanout case of exactly that.
+    const { html } = await resolveDeckDelivery(
+      contentResult.content,
+      deckDeliveryContext(slide, gitOrgLogin, repo, deckAccessFor('follow', { canEdit }, slide))
+    );
+    slideContent = html;
 
     // Strip speaker notes from content if user doesn't have permission to view them
     // Followers are typically students/public who shouldn't see notes unless show_speaker_notes is enabled

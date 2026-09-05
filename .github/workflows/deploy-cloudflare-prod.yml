@@ -1,0 +1,239 @@
+name: Deploy to Cloudflare (Production)
+
+on:
+  push:
+    # Production's branch is `main`, not a branch named after the wrangler
+    # environment: the two names simply do not line up, and this is the first
+    # of the two places where this file is more than a `staging` -> `production`
+    # rename of its sibling.
+    branches:
+      - main
+    paths:
+      - 'apps/content/**'
+      - 'packages/content-signing/**'
+      - '.github/workflows/deploy-cloudflare-prod.yml'
+  workflow_dispatch:
+
+# One production deploy at a time. The group is a CONSTANT, not `github.ref`:
+# `workflow_dispatch` can be fired from any branch, and a per-ref group would
+# put such a run in its own lane and let it interleave with a push to `main` —
+# two `wrangler deploy` and two `secret bulk` calls racing over one script.
+#
+# `cancel-in-progress: false` because the second half of this job pushes
+# secrets: a cancelled run can leave a deployed script whose secrets were never
+# synced, which is a 503 rather than a stale version.
+concurrency:
+  group: deploy-cloudflare-production
+  cancel-in-progress: false
+
+jobs:
+  deploy-content-worker-prod:
+    runs-on: ubuntu-latest
+    # Production is whatever is on `main`, full stop. A `workflow_dispatch` from
+    # a feature branch would otherwise deploy that branch straight to
+    # content.classmoji.io, so it is a no-op here instead. Re-running production
+    # by hand means dispatching this workflow against `main`.
+    if: github.ref == 'refs/heads/main'
+    # Read-only token: this job checks out code and talks to Cloudflare and
+    # Infisical with their own credentials. It never writes back to the repo.
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+          token: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Heal package-lock.json against submodule workspaces
+        run: npm install --package-lock-only --no-audit --no-fund --legacy-peer-deps
+
+      - name: Install dependencies
+        run: npm ci --legacy-peer-deps
+
+      - name: Typecheck and test content-signing
+        run: |
+          if [ -d packages/content-signing ]; then
+            npm run typecheck -w packages/content-signing
+            npm run test -w packages/content-signing
+          else
+            echo "::notice::packages/content-signing is not in the tree yet; skipping its checks."
+          fi
+
+      - name: Typecheck and test content worker
+        run: |
+          npm run typecheck -w apps/content
+          npm run test -w apps/content
+
+      # `packages/content-signing/**` is also matched by the Fly workflows'
+      # `packages/**` filters, so a push to `main` that touches the signing
+      # package deploys the apps AND this Worker as two independent workflows,
+      # in no guaranteed order. For the length of that window one side runs the
+      # new code and the other the old, so a change to a canonical string (or
+      # to what the signature covers) MUST still verify URLs minted by the
+      # previous version — bump `CANONICAL_VERSION` and keep accepting the old
+      # one for a release rather than editing a canonical string in place. Do
+      # not try to sequence the two workflows; compatibility across one deploy
+      # is the property that actually holds.
+      - name: Deploy content worker
+        working-directory: apps/content
+        run: npx wrangler deploy --env production
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
+      - name: Install Infisical CLI
+        run: npm install -g @infisical/cli
+
+      # Secrets are pushed AFTER the deploy, and that order is required:
+      # `wrangler secret bulk` targets an existing Worker script, so on a
+      # first-ever deploy there is nothing to attach them to until the script
+      # exists. The cost is a short window — between the two steps — where a
+      # freshly deployed version is still reading the PREVIOUS values. That is
+      # invisible for an unchanged secret, and harmless for a signing-key
+      # rotation too, because the Worker keeps verifying against
+      # CONTENT_SIGNING_SECRET_PREVIOUS: for those few seconds it simply has
+      # not been told about the new key yet, and every URL in flight was minted
+      # under one it still accepts.
+      #
+      # `--env=prod` is the Infisical slug for production, and it is the second
+      # place this file is not a mechanical rename: staging's slug is the
+      # three-letter `sta`, production's is the four-letter `prod`. Neither is
+      # Trigger.dev's `stg`, which belongs to a different system entirely.
+      #
+      # The Worker answers 503 for every content request until both secrets are
+      # present, so this step verifies the export before pushing it and fails
+      # the job loudly if the shape is wrong. Secret values are never printed.
+      - name: Sync secrets from Infisical
+        working-directory: apps/content
+        env:
+          INFISICAL_CLIENT_ID: ${{ secrets.INFISICAL_CLIENT_ID }}
+          INFISICAL_CLIENT_SECRET: ${{ secrets.INFISICAL_CLIENT_SECRET }}
+          INFISICAL_PROJECT_ID: e9a6487c-350e-41e7-8bba-2d95ca5934a6
+          INFISICAL_HOST: https://app.infisical.com
+          INFISICAL_DISABLE_UPDATE_CHECK: 'true'
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          set -euo pipefail
+
+          RAW_SECRETS="$(mktemp)"
+          BULK_SECRETS="$(mktemp)"
+          trap 'rm -f "$RAW_SECRETS" "$BULK_SECRETS"' EXIT
+
+          INFISICAL_TOKEN="$(infisical login \
+            --method=universal-auth \
+            --client-id="$INFISICAL_CLIENT_ID" \
+            --client-secret="$INFISICAL_CLIENT_SECRET" \
+            --silent --plain)"
+          export INFISICAL_TOKEN
+
+          # stdout is the payload and never printed; stderr carries only the
+          # CLI's own messages, so it is safe to show and is the one place a
+          # silent-but-successful export explains itself.
+          EXPORT_STDERR="$(mktemp)"
+          infisical export \
+            --env=prod \
+            --path=/content-worker \
+            --projectId="$INFISICAL_PROJECT_ID" \
+            --format=json --silent > "$RAW_SECRETS" 2> "$EXPORT_STDERR" || {
+              echo "::error::infisical export failed:"; cat "$EXPORT_STDERR"; exit 1; }
+          [ -s "$EXPORT_STDERR" ] && { echo "infisical export stderr:"; cat "$EXPORT_STDERR"; }
+          rm -f "$EXPORT_STDERR"
+
+          infisical --version
+
+          node --input-type=module -e '
+            import { readFileSync, writeFileSync } from "node:fs";
+            // `node -e` puts the first extra argument at argv[1], not argv[2].
+            const [raw, out] = process.argv.slice(1);
+            const required = ["CONTENT_SIGNING_SECRET", "CONTENT_WORKER_SHARED_SECRET"];
+            // Present only while a signing key is being rotated: the Worker
+            // verifies against it as a fallback so URLs minted under the old
+            // key survive the change. Allowed, never required.
+            const optional = ["CONTENT_SIGNING_SECRET_PREVIOUS"];
+            const allowed = [...required, ...optional];
+
+            const text = readFileSync(raw, "utf8");
+            // Tolerate anything the CLI prints ahead of the payload: parse from
+            // the first JSON opener onwards.
+            const start = Math.min(...["[", "{"].map(c => text.indexOf(c)).filter(i => i >= 0));
+            let parsed;
+            try {
+              if (!Number.isFinite(start)) throw new Error("no JSON opener");
+              parsed = JSON.parse(text.slice(start));
+            } catch (error) {
+              // Diagnose without disclosing: length, shape, and the first line
+              // with any token long enough to be a value masked.
+              const head = text.split("\n")[0].slice(0, 80).replace(/\S{12,}/g, "<redacted>");
+              console.error(`::error::Infisical export was not valid JSON (${text.length} bytes, ${error.message}). First line: ${JSON.stringify(head)}`);
+              process.exit(1);
+            }
+
+            // The CLI emits [{ key, value }, ...]; tolerate a plain { KEY: value } map too.
+            const secrets = Array.isArray(parsed)
+              ? Object.fromEntries(parsed.map(entry => [entry.key, entry.value]))
+              : parsed;
+
+            const found = Object.keys(secrets).sort();
+            const valueOf = key => (typeof secrets[key] === "string" ? secrets[key] : "");
+            // Whitespace-only is blank. A slot cleared with a space or a stray
+            // newline must not be pushed: the Worker would then hold " " as a
+            // master key, which is a signing key anybody can guess.
+            const isSet = key => valueOf(key).trim().length > 0;
+
+            // A reference Infisical failed to expand is still a plain string,
+            // so it passes every other check here and the Worker boots
+            // reporting configured:true while 403ing every URL.
+            const UNEXPANDED = /\$\{/;
+            // Signing keys are openssl rand -hex 32, i.e. 64 characters. 32 is
+            // a floor meant to catch a placeholder, not a spec.
+            const MIN_SIGNING_LENGTH = 32;
+            const signingKeys = ["CONTENT_SIGNING_SECRET", "CONTENT_SIGNING_SECRET_PREVIOUS"];
+
+            const missing = required.filter(key => !isSet(key));
+            const unexpected = found.filter(key => !allowed.includes(key));
+            const unexpanded = allowed.filter(key => isSet(key) && UNEXPANDED.test(valueOf(key)));
+            const tooShort = signingKeys.filter(
+              key => isSet(key) && valueOf(key).trim().length < MIN_SIGNING_LENGTH
+            );
+
+            // Names and counts only — never a value, not even a fragment.
+            const problems = [];
+            if (missing.length) {
+              problems.push(`is missing or blank: ${missing.join(", ")}. The Worker would serve 503 for every request.`);
+            }
+            if (unexpected.length) {
+              problems.push(`has unexpected keys: ${unexpected.join(", ")}.`);
+            }
+            if (unexpanded.length) {
+              problems.push(`has unexpanded references: ${unexpanded.join(", ")}. A literal reference verifies nothing: every URL would 403 while /healthz still said configured:true.`);
+            }
+            if (tooShort.length) {
+              problems.push(`has signing keys under ${MIN_SIGNING_LENGTH} characters: ${tooShort.join(", ")}. These are openssl rand -hex 32.`);
+            }
+
+            if (problems.length) {
+              for (const problem of problems) {
+                console.error(`::error::Infisical /content-worker (prod) ${problem}`);
+              }
+              process.exit(1);
+            }
+
+            // Only keys that are actually set are pushed, and their values go
+            // through untouched — trimming here would desync the Worker from
+            // the Fly apps, which read the same secret raw. Note the asymmetry:
+            // removing the previous key from Infisical does not remove it from
+            // the Worker, because `secret bulk` never deletes. Finishing a
+            // rotation takes an explicit `wrangler secret delete`.
+            const pushing = allowed.filter(isSet);
+            writeFileSync(out, JSON.stringify(Object.fromEntries(pushing.map(key => [key, secrets[key]]))));
+            console.log(`Verified ${pushing.length} secrets from Infisical (${pushing.join(", ")}).`);
+          ' "$RAW_SECRETS" "$BULK_SECRETS"
+
+          npx wrangler secret bulk "$BULK_SECRETS" --env production

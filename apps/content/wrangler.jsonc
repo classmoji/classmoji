@@ -1,0 +1,154 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  // Deliberately NOT the production name, and deliberately bindingless.
+  // wrangler applies the top level when no --env is given, so if this said
+  // "classmoji-content" a bare `npx wrangler deploy` would overwrite the
+  // production script with a build that has no R2 bucket, no Images binding
+  // and no vars — a 503 on content.classmoji.io from a one-word slip. Every
+  // real deploy names its environment (`--env staging` / `--env production`);
+  // a bare one lands here, on a throwaway Worker nothing routes to.
+  "name": "classmoji-content-unconfigured",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-09-03",
+  "workers_dev": false,
+  "observability": {
+    "enabled": true
+  },
+  // Workers Caching sits in front of the Worker; the Cache-Control we emit
+  // (no-store for `edit`, immutable otherwise) is what decides what it keeps.
+  "cache": {
+    "enabled": true
+  },
+
+  // Secrets are not declared here. CI pushes them with `wrangler secret bulk`
+  // from Infisical `/content-worker` after each deploy:
+  //
+  //   CONTENT_SIGNING_SECRET           HMAC master key for signed URLs
+  //   CONTENT_WORKER_SHARED_SECRET     bearer token for the token endpoint
+  //   CONTENT_SIGNING_SECRET_PREVIOUS  optional, and only while rotating: the
+  //     key the current one replaced. Verification falls back to it so URLs
+  //     already in browsers and caches keep working across the change; nothing
+  //     signs with it. Blanking it in Infisical does NOT remove it from the
+  //     Worker — `wrangler secret bulk` only sets the keys it is handed — so a
+  //     rotation ends with an explicit
+  //     `npx wrangler secret delete CONTENT_SIGNING_SECRET_PREVIOUS --env <env>`.
+  //     See "Rotating the signing secret" in README.md.
+  "env": {
+    // LOCAL ONLY. Never deployed — `workers_dev` is false and there are no
+    // routes, so a `wrangler deploy --env dev` would publish a script nothing
+    // can reach. It exists so `wrangler dev` stops borrowing `staging`, whose
+    // CONTENT_TOKEN_ENDPOINT points at staging.classmoji.io: a local Worker
+    // asking STAGING to mint a GitHub token is both wrong and a needless reach
+    // into a deployed environment.
+    //
+    // The host is part of every signature, so this env only ever verifies URLs
+    // minted for the exact origin `wrangler dev` listens on — set the apps'
+    // CONTENT_DELIVERY_ORIGIN to `http://localhost:8787`, port included.
+    // See "Local end-to-end" in README.md.
+    //
+    // CONTENT_TOKEN_ENDPOINT defaults to the webapp port `.dev-context` reports
+    // for a plain `npm run dev` (3000). A devport shifts it (3050, 3100, …), so
+    // override rather than editing this file:
+    //
+    //   npm run cf:dev:local -w apps/content -- \
+    //     --var CONTENT_TOKEN_ENDPOINT:http://localhost:3050/api/content/token
+    //
+    // A CONTENT_TOKEN_ENDPOINT line in apps/content/.dev.vars also wins over
+    // the value here.
+    "dev": {
+      "name": "classmoji-content-dev",
+      "workers_dev": false,
+      "vars": {
+        "CONTENT_TOKEN_ENDPOINT": "http://localhost:3000/api/content/token",
+        "ENVIRONMENT": "development"
+      },
+      "r2_buckets": [
+        {
+          // `wrangler dev` keeps this bucket in its on-disk simulator under
+          // .wrangler/state and never touches Cloudflare. The name is still
+          // deliberately neither deployed bucket, so that a `--remote` run
+          // cannot land in the staging or production cache.
+          "binding": "CACHE",
+          "bucket_name": "classmoji-content-cache-dev"
+        }
+      ],
+      "images": {
+        "binding": "IMAGES"
+      },
+      "observability": {
+        "enabled": true
+      },
+      // A local run should always serve what the code in front of you does.
+      "cache": {
+        "enabled": false
+      }
+    },
+
+    "staging": {
+      "name": "classmoji-content-staging",
+      "routes": [
+        {
+          "pattern": "content-staging.classmoji.io",
+          "custom_domain": true
+        }
+      ],
+      "vars": {
+        "CONTENT_TOKEN_ENDPOINT": "https://staging.classmoji.io/api/content/token",
+        "ENVIRONMENT": "staging"
+      },
+      "r2_buckets": [
+        {
+          "binding": "CACHE",
+          "bucket_name": "classmoji-content-cache-stg"
+        }
+      ],
+      "images": {
+        "binding": "IMAGES"
+      },
+      "observability": {
+        "enabled": true
+      },
+      // No cross_version_cache on staging: a deploy should invalidate, so what
+      // you just shipped is what you are looking at.
+      "cache": {
+        "enabled": true
+      }
+    },
+
+    // DEPLOYED BY CI, on every push to `main` that touches apps/content/** or
+    // packages/content-signing/** — see .github/workflows/deploy-cloudflare-prod.yml.
+    // Anything merged to `main` ships to content.classmoji.io; there is no
+    // separate promotion step and no manual gate in between.
+    "production": {
+      "name": "classmoji-content",
+      "routes": [
+        {
+          "pattern": "content.classmoji.io",
+          "custom_domain": true
+        }
+      ],
+      "vars": {
+        "CONTENT_TOKEN_ENDPOINT": "https://app.classmoji.io/api/content/token",
+        "ENVIRONMENT": "production"
+      },
+      "r2_buckets": [
+        {
+          "binding": "CACHE",
+          "bucket_name": "classmoji-content-cache-prod"
+        }
+      ],
+      "images": {
+        "binding": "IMAGES"
+      },
+      "observability": {
+        "enabled": true
+      },
+      // Content is immutable and content-addressed, so a warm cache should
+      // survive a deploy.
+      "cache": {
+        "enabled": true,
+        "cross_version_cache": true
+      }
+    }
+  }
+}

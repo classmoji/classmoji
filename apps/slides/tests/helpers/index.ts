@@ -8,6 +8,9 @@
 // Authentication helpers
 export { loginAs, logout, isLoggedIn, getSessionToken, type TestRole } from './auth.helpers';
 
+// Content delivery helpers — one implementation, shared with apps/pages.
+export * from './contentDelivery.helpers';
+
 // Environment helpers
 export {
   getDevPort,

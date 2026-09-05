@@ -30,9 +30,18 @@ import {
 } from '@classmoji/services/slides';
 import { SandpackRenderer } from '@classmoji/ui-components/sandpack';
 import { useUser } from '~/hooks';
-import { fetchContent } from '~/utils/contentProxy';
 import { diffDeckSnapshots, extractDeckSnapshot, type DeckSnapshot } from '~/utils/deckOpsDiff';
 import { getThemeUrls } from '~/utils/themeService.server';
+import {
+  deckAccessFor,
+  deckDeliveryContext,
+  readDeckText,
+  resolveDeckAssets,
+  resolveDeliveryThemeUrls,
+  resolveReadThemeUrls,
+  gitBlobSha,
+} from '~/utils/deckDelivery.server';
+import { displayDeckContent, settleSaveRefresh } from '~/utils/deckViewContent';
 import RevealSlides, { type RevealSlidesHandle } from '~/components/RevealSlides';
 import SlideToolbar from '~/components/SlideToolbar';
 import SlideNotesPanel from '~/components/SlideNotesPanel';
@@ -51,35 +60,6 @@ import {
   type ConflictUnit,
   type OrderConflict,
 } from '~/components/preview/PreviewControls';
-
-/**
- * Resolve shared-theme URLs for read-side deck rendering (Phase 4c). Same
- * resolution the save path uses (getThemeUrls with identical args), so the
- * generated document matches the saved index.html artifact byte-for-byte.
- * Unlike the save path (which is about to persist and falls back to theme
- * 'white'), a resolve failure on a READ must not mutate the deck — we just
- * render without theme links (generateDeckHtml warns).
- */
-async function resolveReadThemeUrls(
-  deck: DeckJson,
-  gitOrgLogin: string,
-  repo: string
-): Promise<DeckThemeUrls | undefined> {
-  if (!deck.theme.startsWith('shared:')) return undefined;
-  const sharedThemeName = deck.theme.replace('shared:', '');
-  try {
-    const urls = await getThemeUrls(gitOrgLogin, repo, sharedThemeName);
-    return {
-      libCssUrl: urls.libCssUrl,
-      customThemeUrl: urls.customThemeUrl,
-      bodyClasses: urls.bodyClasses,
-    };
-  } catch (error: unknown) {
-    const message = error instanceof Error ? error.message : String(error);
-    console.warn(`Could not resolve shared theme URLs for "${sharedThemeName}":`, message);
-    return undefined;
-  }
-}
 
 // Loader to fetch slide metadata and content from database/GitHub
 export const loader = async ({
@@ -192,16 +172,43 @@ export const loader = async ({
   // Staff asked for a preview but no branch exists → render main with a notice.
   const previewMissing = Boolean(canEdit && wantsPreview && !previewStatus?.exists);
 
+  // The deck VIEWER is the one EDITING surface, so it is the only one that can
+  // mint the short-lived `edit` bucket: staff, and a staff read of the preview
+  // BRANCH, get it. Every other reader here takes the DECK's own visibility —
+  // `month` for a public deck, `week` for the rest. This is the reason a signed
+  // URL cannot live in the deck.
+  const deliveryCtx = deckDeliveryContext(
+    slide,
+    gitOrgLogin,
+    repo,
+    deckAccessFor('viewer', { canEdit, previewActive }, slide)
+  );
+
   // GitHub's free diff UI for the pending preview (branch segment URL-encoded —
   // preview branch names contain slashes).
   const diffUrl = `https://github.com/${gitOrgLogin}/${repo}/compare/main...${encodeURIComponent(previewBranch)}`;
 
-  // Fetch content: API-first for edit mode (freshness), CDN-first for view mode (speed)
-  // CDN has ~3 minute propagation delay after saves, so edit mode needs fresh API data
+  // Two reads, and the split is deliberate.
+  //
+  // EDIT mode keeps the contents API (skipCache), and must: it reads a PREVIEW
+  // BRANCH when one is active, and preview branches are not in the asset map at
+  // all — nothing there has a sha to sign. It also seeds the save conflict
+  // token, which has to be the sha of the file on the branch being written.
+  // Staff-only and low volume, so the API call per open is affordable.
+  //
+  // VIEW mode reads through the delivery layer by sha (see below), which is
+  // what makes a save visible the moment it returns instead of whenever GitHub
+  // Pages finishes rebuilding.
   let slideContent: string | null = null;
   let contentError: string | null = null;
   let usedApiFallback = false;
-  let contentResult: { content: string | Buffer; source: string } | null = null;
+  let contentResult: { content: string; source: string; sha?: string | null } | null = null;
+  // The IDENTITY of the deck the VIEW-MODE read resolved, and only that read.
+  // Edit mode and the preview branch generate their document from deck.json, so
+  // they name no index.html object and leave this null — as does the CDN
+  // fallback, which serves a path and reports no object id. Null therefore
+  // means "cannot tell what this is", which is what the client must assume.
+  let deckSha: string | null = null;
 
   // Conflict token for the editor (Phase 4b): the sha of the deck's SOURCE OF
   // TRUTH — deck.json once it exists (materialized by the first dual-write
@@ -221,7 +228,16 @@ export const loader = async ({
         // deck.json exists: render server-side with the SAME generator +
         // theme-URL resolution the save path uses, so this document is
         // identical to the index.html artifact the last save committed.
-        const themeUrls = await resolveReadThemeUrls(loaded.deck, gitOrgLogin, repo);
+        // Theme links are signed even in edit mode: they live in <head> and
+        // the editor posts back only the <div class="slides"> fragment, so
+        // they can never round-trip into a stored document. Image URLs are
+        // deliberately NOT signed here for exactly the opposite reason.
+        const themeUrls = await resolveDeliveryThemeUrls(
+          loaded.deck,
+          gitOrgLogin,
+          repo,
+          deliveryCtx
+        );
         contentResult = {
           content: generateDeckHtml(loaded.deck, {
             title: slide.title,
@@ -302,7 +318,7 @@ export const loader = async ({
   if (previewActive && !contentResult) {
     try {
       const loaded = await loadDeck(slide, { ref: previewBranch, skipCache: true });
-      const themeUrls = await resolveReadThemeUrls(loaded.deck, gitOrgLogin, repo);
+      const themeUrls = await resolveDeliveryThemeUrls(loaded.deck, gitOrgLogin, repo, deliveryCtx);
       contentResult = {
         content: generateDeckHtml(loaded.deck, {
           title: slide.title,
@@ -319,41 +335,59 @@ export const loader = async ({
     }
   }
 
-  // Staff view mode: API-first. The CDN (GitHub Pages) lags saves by minutes —
-  // and rapid consecutive saves can ERROR its builds, extending the lag — so a
-  // hard reload right after saving showed stale content to the very person who
-  // saved. Staff read the committed truth from the API; students keep the
-  // cheap CDN path (eventual consistency is fine for them). Thumbnails
-  // (?preview=true) stay CDN — a staff landing page renders ~20 at once and
-  // must not fan out API reads (the D4 amplification).
-  if (!contentResult && canEdit && !isThumbnail) {
-    try {
-      const result = await ContentService.getContent({
-        orgLogin: gitOrgLogin,
-        repo,
-        path: filePath,
-      });
-      if (result) {
-        contentResult = { content: result.content, source: 'api' };
-      }
-    } catch (e: unknown) {
-      const message = e instanceof Error ? e.message : String(e);
-      console.warn('[Loader] Staff view API read failed, falling back to CDN:', message);
-    }
-  }
-
-  // CDN-first for student/anonymous view mode, or as fallback if API failed
+  // Live deck, for everyone: read by SHA through the delivery layer.
+  //
+  // This replaces a three-way split — staff read the contents API, students
+  // read the CDN, thumbnails read the CDN — that existed entirely because
+  // GitHub Pages lags a save by minutes and rapid saves can ERROR its builds.
+  // Addressing the file by sha makes that question go away, so the split goes
+  // with it, and the three surfaces stop being able to disagree about what the
+  // current deck is.
+  //
+  // Cost moves in the right direction on every one of them: no GitHub call for
+  // the deck TEXT on any of the three, where staff used to spend an
+  // installation-token read per view and students waited out a Pages build.
+  // Deck text only — a deck on a shared theme still resolves its theme URLs
+  // through `getThemeUrls`, which does reach GitHub (pre-existing, and its own
+  // follow-up).
+  //
+  // THUMBNAILS keep their own rule, and it is the one the CDN pinning was
+  // for. A staff landing page renders ~20 at once; when the map answers they
+  // all come from the edge, but a map MISS on the default ladder would put
+  // twenty authenticated reads against the org installation's shared limit in
+  // one page load. So a thumbnail that misses goes to the CDN and stops there:
+  // a thumbnail is a picture of a deck, three minutes stale is invisible on
+  // one, and a rate limit is not. (The other half of that fan-out — twenty
+  // concurrent map refreshes on a stale classroom — is collapsed into one
+  // inside `ensureContentAssets`.)
   if (!contentResult) {
-    contentResult = await fetchContent({
-      org: gitOrgLogin,
+    contentResult = await readDeckText(
+      slide,
+      gitOrgLogin,
       repo,
-      path: filePath,
-    });
+      filePath,
+      isThumbnail ? 'thumbnail' : 'viewer',
+      isThumbnail ? { fallback: 'cdn-only' } : {}
+    );
   }
 
   if (contentResult) {
-    slideContent = contentResult.content as string;
+    slideContent = contentResult.content;
+    deckSha = contentResult.sha ?? null;
+    // Kept for the client-side fallback's own bookkeeping. It now means "the
+    // delivery layer could not answer and GitHub did", which is a narrower
+    // thing than it used to be — `worker` is the ordinary case and `cdn` is
+    // the thumbnail one.
     usedApiFallback = contentResult.source === 'api';
+
+    // Sign the deck's image references — but never for the document the editor
+    // is about to load. Entering edit mode always re-reads through
+    // `fetch-latest` (which does no image pass), so restricting this to
+    // non-edit reads is what guarantees a signed URL can never be posted back
+    // and committed into deck.json.
+    if (mode !== 'edit') {
+      slideContent = await resolveDeckAssets(slideContent, deliveryCtx);
+    }
 
     // Strip speaker notes from content if user doesn't have permission to view them
     // Notes are in <aside class="notes"> elements within each slide section
@@ -385,14 +419,20 @@ export const loader = async ({
     if (themeMatch) {
       const themeName = themeMatch[1];
       try {
-        const themeUrls = await getThemeUrls(gitOrgLogin, repo, themeName);
+        const themeUrls = await resolveDeliveryThemeUrls(
+          { theme: `shared:${themeName}` } as DeckJson,
+          gitOrgLogin,
+          repo,
+          deliveryCtx
+        );
+        if (!themeUrls) throw new Error(`No theme URLs for ${themeName}`);
         preloadedSharedTheme = {
           id: `shared:${themeName}`,
           name: themeName
             .split('-')
             .map((w: string) => w.charAt(0).toUpperCase() + w.slice(1))
             .join(' '),
-          libCssUrl: themeUrls.libCssUrl,
+          libCssUrl: themeUrls.libCssUrl ?? undefined,
           customThemeUrl: themeUrls.customThemeUrl ?? undefined,
           bodyClasses: themeUrls.bodyClasses as string,
         };
@@ -431,6 +471,10 @@ export const loader = async ({
     autoEdit: mode === 'edit',
     // Indicate if we fell back to API (CDN wasn't available yet)
     usedApiFallback,
+    // index.html's blob sha for the view-mode read (null when this read could
+    // not name an object). The client matches it against the sha a save just
+    // committed to know its loader refresh has actually landed.
+    deckSha,
     // Conflict token (edit mode only; null in view mode): sha of the deck's
     // source of truth + which file it came from. The client echoes it back on
     // every save so saveDeck can 409 instead of clobbering a concurrent write.
@@ -462,6 +506,53 @@ export const loader = async ({
 };
 
 // Action to save slide content or fetch fresh content from GitHub API
+/**
+ * Record a just-written `.slidesthemes/` file in the asset map.
+ *
+ * These four writes used to need nothing: the map only served IMAGES, and a
+ * theme's css reached the browser through the `/content/...` proxy, which read
+ * GitHub directly. Text goes through the map now, so a snippet or custom theme
+ * saved here and not recorded serves its PREVIOUS bytes until the push webhook
+ * lands — the author edits a theme, reloads, and sees the old one.
+ *
+ * `themeService.saveSharedTheme` handles the folder case differently, and has
+ * to: a shared theme is addressed by its FOLDER's tree sha, so it runs a full
+ * sync. These paths are flat files, so their own blob sha is the whole answer.
+ *
+ * Never throws — the file is already committed, and the next sync writes the
+ * same row.
+ */
+async function recordThemeFile(
+  slide: { classroom_id?: string | null },
+  path: string,
+  sha: string,
+  content: FormDataEntryValue
+): Promise<void> {
+  if (!slide.classroom_id) return;
+  await ClassmojiService.contentAssets.recordContentAsset(slide.classroom_id, {
+    path,
+    sha,
+    size: Buffer.byteLength(String(content)),
+  });
+}
+
+/**
+ * Forget `.slidesthemes/` paths the repo no longer has.
+ *
+ * The mirror of `recordThemeFile`, and needed for the same reason: blobs are
+ * content-addressed and immutable, so a row that outlives its file keeps
+ * serving that file's last bytes out of R2. A renamed snippet would answer
+ * under BOTH names until the next full sweep, and a deleted theme would go on
+ * resolving.
+ */
+async function forgetThemeFiles(
+  slide: { classroom_id?: string | null },
+  paths: string[]
+): Promise<void> {
+  if (!slide.classroom_id) return;
+  await ClassmojiService.contentAssets.removeContentAssets(slide.classroom_id, paths);
+}
+
 export const action = async ({
   request,
   params,
@@ -681,8 +772,19 @@ export const action = async ({
 
   // ─────────────────────────────────────────────────────────────────────────
 
-  // Fetch latest content from GitHub API (bypasses CDN cache)
-  // Used when entering edit mode to ensure we're editing the current version
+  // Read the deck straight from the GitHub API for the EDITOR.
+  //
+  // Not a CDN-lag workaround any more — where the delivery layer answers (the
+  // classroom's flag on, the signing env set, and a map row for the path) the
+  // loader reads the deck text by sha through the Worker and is not behind; on
+  // the fallback paths it still reaches the contents API and then the lagging
+  // CDN. Either way that is not what this is for now. It exists for the two
+  // things the loader's view-mode read deliberately cannot give the editor: a
+  // conflict token (the sha of the file about to be written, read skipCache so
+  // a per-process cache cannot hand back a token that would silently revert a
+  // concurrent write), and a document whose image refs are still the stored
+  // `/content/...` ones — a signed URL that round-tripped through the editor
+  // would be committed into deck.json.
   if (intent === 'fetch-latest') {
     try {
       // Phase 4c: deck.json-first, mirroring the edit-mode loader. skipCache:
@@ -695,7 +797,19 @@ export const action = async ({
         if (loaded.sha_source === 'deck') {
           // Same generator + theme-URL resolution as the save path — the
           // returned document is identical to the saved index.html artifact.
-          const themeUrls = await resolveReadThemeUrls(loaded.deck, gitOrgLogin, repo);
+          // Theme only. This document goes straight into the editor and comes
+          // back on save; a signed image URL in it would be committed.
+          const themeUrls = await resolveDeliveryThemeUrls(
+            loaded.deck,
+            gitOrgLogin,
+            repo,
+            deckDeliveryContext(
+              slide,
+              gitOrgLogin,
+              repo,
+              deckAccessFor('viewer', { canEdit: true }, slide)
+            )
+          );
           return {
             intent: 'fetch-latest',
             content: generateDeckHtml(loaded.deck, {
@@ -799,6 +913,17 @@ export const action = async ({
         message: `Upload image for slides: ${slide.title}`,
       });
 
+      // Record the row now rather than waiting for the push webhook: a deck
+      // saved right after the upload stores this repo path, and a render that
+      // misses the asset map signs a dangling URL. Never throws.
+      if (slide.classroom_id) {
+        await ClassmojiService.contentAssets.recordContentAsset(slide.classroom_id, {
+          path: result.path,
+          sha: result.sha,
+          size: buffer.length,
+        });
+      }
+
       // Return content proxy URL instead of raw.githubusercontent.com
       // Content proxy handles MIME types correctly and has CDN+API fallback
       return {
@@ -830,13 +955,14 @@ export const action = async ({
           .replace(/\s+/g, '-')
           .replace(/[^a-z0-9-]/g, '') + '.html';
 
-      await ContentService.put({
+      const written = await ContentService.put({
         orgLogin: gitOrgLogin,
         repo,
         path: `.slidesthemes/snippets/${filename}`,
         content: String(content),
         message: `Add snippet: ${name}`,
       });
+      await recordThemeFile(slide, `.slidesthemes/snippets/${filename}`, written.sha, content);
 
       return {
         intent: 'save-snippet',
@@ -890,13 +1016,15 @@ export const action = async ({
       }
 
       // Save the updated content
-      await ContentService.put({
+      const written = await ContentService.put({
         orgLogin: gitOrgLogin,
         repo,
         path: newPath,
         content: String(content),
         message: `Update snippet: ${name}`,
       });
+      await recordThemeFile(slide, newPath, written.sha, content);
+      if (id !== newFilename) await forgetThemeFiles(slide, [oldPath]);
 
       return {
         intent: 'update-snippet',
@@ -929,6 +1057,7 @@ export const action = async ({
         path: `.slidesthemes/snippets/${id}`,
         message: `Delete snippet: ${id}`,
       });
+      await forgetThemeFiles(slide, [`.slidesthemes/snippets/${id}`]);
 
       return {
         intent: 'delete-snippet',
@@ -959,13 +1088,14 @@ export const action = async ({
         .replace(/[^a-z0-9-]/g, '');
       const filename = `${baseName}-${type}.css`;
 
-      await ContentService.put({
+      const written = await ContentService.put({
         orgLogin: gitOrgLogin,
         repo,
         path: `.slidesthemes/${filename}`,
         content: String(content),
         message: `Add custom CSS theme: ${name} (${type})`,
       });
+      await recordThemeFile(slide, `.slidesthemes/${filename}`, written.sha, content);
 
       return {
         intent: 'save-theme',
@@ -1021,13 +1151,15 @@ export const action = async ({
       }
 
       // Save the updated content
-      await ContentService.put({
+      const written = await ContentService.put({
         orgLogin: gitOrgLogin,
         repo,
         path: newPath,
         content: String(content),
         message: `Update CSS theme: ${name} (${type})`,
       });
+      await recordThemeFile(slide, newPath, written.sha, content);
+      if (id !== newFilename) await forgetThemeFiles(slide, [oldPath]);
 
       return {
         intent: 'update-theme',
@@ -1061,6 +1193,7 @@ export const action = async ({
         path: `.slidesthemes/${id}`,
         message: `Delete CSS theme: ${id}`,
       });
+      await forgetThemeFiles(slide, [`.slidesthemes/${id}`]);
 
       return {
         intent: 'delete-theme',
@@ -1089,6 +1222,16 @@ export const action = async ({
         paths,
         message: `Clean up unused images from slides: ${slide.title}`,
       });
+
+      // Only the ones that actually went. `deleteMultiple` reports per-path
+      // errors and keeps going, so forgetting the whole list would drop rows
+      // for images still in the repo — which is a dangling URL, the failure
+      // this map exists to prevent.
+      const failed = new Set(result.errors.map(entry => entry.split(':')[0]));
+      await forgetThemeFiles(
+        slide,
+        (paths as string[]).filter(path => !failed.has(path))
+      );
 
       return {
         intent: 'delete-images',
@@ -1374,6 +1517,11 @@ export const action = async ({
         sha: result.sha,
         sha_source: 'deck' as const,
         savedContent: result.html,
+        // The committed index.html's IDENTITY. `sha` above is deck.json's, and
+        // the viewer's read is of index.html — comparing those two would never
+        // match. Hashed from the bytes just committed, which is the same object
+        // git stored, so no extra API call buys it.
+        html_sha: gitBlobSha(result.html),
         orphanedImages,
         adoption_required: result.adoption_required,
         ...(result.concurrent > 0 ? { merged_with_concurrent: result.concurrent } : {}),
@@ -1555,7 +1703,10 @@ export const action = async ({
       console.error('Failed to detect orphaned images:', err);
     }
 
-    // Return the full HTML so UI can update without waiting for CDN.
+    // Return the full HTML: it is the editor's next-session document and the
+    // baseline the next save diffs against, and it stays UNSIGNED for that.
+    // View mode no longer renders it once the loader's revalidation lands —
+    // that read is by sha through the Worker, so it is not behind this one.
     // sha is the DECK sha (+ sha_source 'deck') — deck.json now exists, so the
     // client's conflict token must point at it for the next save.
     // merged_with_concurrent (present iff the merge path committed) → the
@@ -1566,6 +1717,8 @@ export const action = async ({
       sha: saved.sha,
       sha_source: 'deck' as const,
       savedContent: saved.html,
+      // index.html's identity — see the ops path above for why it is not `sha`.
+      html_sha: gitBlobSha(saved.html),
       orphanedImages,
       ...(mergedSave ? { merged_with_concurrent: mergedWithConcurrent } : {}),
     };
@@ -1607,6 +1760,7 @@ export default function SlideViewer() {
     isPro,
     contentUrl,
     slideContent,
+    deckSha,
     contentError,
     snippets: initialSnippets,
     cssThemes: initialCssThemes,
@@ -1712,8 +1866,34 @@ export default function SlideViewer() {
   // token over the stale DOM, would clobber the folded-in concurrent changes.
   const [editorEpoch, setEditorEpoch] = useState(0);
   const [autoEditTriggered, setAutoEditTriggered] = useState(false);
-  // Track editable content separately from CDN content
+  // Track editable content separately from the loader's content
   const [editableContent, setEditableContent] = useState<string | null>(null);
+  // VIEW mode renders the LOADER's copy of the deck, not the editor's.
+  //
+  // They are the same document with one difference that matters: the loader's
+  // has been through `resolveDeckAssets`, so its images are signed
+  // `content-*.classmoji.io` URLs, while the editor's is the stored document
+  // with raw `/content/...` refs — which is exactly what must NOT be signed
+  // (a signed URL that round-tripped through the editor would be committed
+  // into deck.json, freezing one viewer's expiring signature into the deck).
+  //
+  // So view mode preferred `editableContent` only because the loader used to
+  // be BEHIND after a save: it read the Pages CDN, which lags a push by
+  // minutes. Usually it no longer is — but only when the classroom's delivery
+  // flag is on, the signing env is set and the asset map has a row for the
+  // path does the loader read by sha through the Worker; otherwise it still
+  // falls back to the contents API and then that same lagging CDN. React
+  // Router revalidates this route's loader automatically when the save
+  // fetcher's action returns, and this flag says that refresh landed AND
+  // named the object we committed. Until then view mode keeps showing the copy
+  // we just saved rather than flashing the pre-save deck.
+  const [viewFromLoader, setViewFromLoader] = useState(false);
+  // Armed on a save's success, disarmed when its loader refresh settles.
+  const awaitingSaveRefreshRef = useRef(false);
+  // The blob sha of the index.html that save committed. The loader naming the
+  // SAME object is the only proof its read caught up — see `settleSaveRefresh`
+  // for why comparing the rendered documents cannot work.
+  const savedShaRef = useRef<string | null>(null);
   // Orphaned images cleanup
   const [orphanedImages, setOrphanedImages] = useState<
     Array<{ path: string; name: string; url: string }>
@@ -1757,12 +1937,27 @@ export default function SlideViewer() {
 
   // Store returnUrl in sessionStorage and clean the URL on mount
   useEffect(() => {
+    const url = new URL(window.location.href);
+    let cleaned = false;
     // Check if we have a returnUrl from query params
     if (returnUrl) {
       sessionStorage.setItem('slidesReturnUrl', returnUrl);
       // Clean the URL by removing the returnUrl param
-      const url = new URL(window.location.href);
       url.searchParams.delete('returnUrl');
+      cleaned = true;
+    }
+    // `?mode=edit` is a ONE-SHOT instruction: it exists so the new-slide path
+    // can land in the editor, and `autoEditTriggered` already makes sure it
+    // fires once. Leaving it in the URL makes every later revalidation take
+    // the loader's EDIT branch, whose document is deliberately unsigned — so
+    // a post-save refresh would hand view mode raw `/content/...` refs and
+    // call it fresh. The editor gets its own document from `fetch-latest`, so
+    // dropping the param costs it nothing.
+    if (url.searchParams.has('mode')) {
+      url.searchParams.delete('mode');
+      cleaned = true;
+    }
+    if (cleaned) {
       window.history.replaceState({}, '', url.toString());
     }
     // Set backUrl from sessionStorage (or fall back to webappUrl)
@@ -1868,6 +2063,12 @@ export default function SlideViewer() {
     if (fetcher.data?.intent === 'fetch-latest' && fetcher.data?.content) {
       // Got fresh content from GitHub API - enter edit mode with it
       setEditableContent(fetcher.data.content);
+      // This read is skipCache and can be AHEAD of the loader (someone else
+      // saved since this page loaded), so it becomes the freshest thing we
+      // hold. Hand view mode back to it until the next save's refresh lands.
+      awaitingSaveRefreshRef.current = false;
+      savedShaRef.current = null;
+      setViewFromLoader(false);
       // Refresh the conflict token (also the recovery path after a 409:
       // fresh content + fresh token, unsaved changes discarded)
       if (fetcher.data.content_sha) {
@@ -2024,9 +2225,19 @@ export default function SlideViewer() {
       }
       fetcher.submit(payload, { method: 'post' });
     } else if (fetcher.data?.savedContent) {
-      // After save, update our local content to match what was saved
-      // This prevents stale content when CDN hasn't updated yet
+      // After save, update our local content to match what was saved. This is
+      // the EDITOR's copy: it seeds the next edit session and is what the next
+      // save diffs against, and it must stay unsigned for that round trip.
       setEditableContent(fetcher.data.savedContent);
+      // View mode wants the loader's signed copy instead — but not yet. The
+      // action has only just returned; the loader revalidation React Router
+      // fires off the back of it is still in flight, so `slideContent` still
+      // holds the PRE-save deck. Showing it now would flash the old slides.
+      // Fall back to what we just saved until the loader comes back naming the
+      // index.html this save committed (below).
+      savedShaRef.current = fetcher.data.html_sha ?? null;
+      awaitingSaveRefreshRef.current = true;
+      setViewFromLoader(false);
       // The save materialized deck.json — future saves must key on ITS sha
       if (fetcher.data.sha) {
         setContentToken({
@@ -2093,6 +2304,46 @@ export default function SlideViewer() {
       );
     }
   }, [fetcher.data]);
+
+  // Settle the post-save loader refresh armed above.
+  //
+  // React Router revalidates this route's loader off the back of the save
+  // fetcher's action, so there is nothing to trigger here — only something to
+  // WAIT for, and the wait has to be told apart from a loader that never came
+  // back with anything new. New `slideContent` is that signal: it is the
+  // committed deck, resolved through the delivery layer, and view mode can
+  // switch to it. Anything else — a no-op save, or a route that later opts out
+  // of revalidation — settles on the copy we saved locally, which is what this
+  // shipped with before, so the failure mode here is "no worse than before".
+  //
+  // Deliberately NOT gated on `isEditing`: this only ever moves what VIEW mode
+  // renders. `editableContent` — the editor's document, its diff baseline and
+  // its conflict token — is never touched from here, so an edit session in
+  // progress (an auto-save keeps one open) cannot be clobbered by a refresh.
+  useEffect(() => {
+    if (!awaitingSaveRefreshRef.current) return;
+    const outcome = settleSaveRefresh({
+      loaderSha: deckSha,
+      savedSha: savedShaRef.current,
+      fetcherIdle: fetcher.state === 'idle',
+    });
+    if (!outcome.settled) return;
+    awaitingSaveRefreshRef.current = false;
+    if (!outcome.viewFromLoader) {
+      // The loader settled on something other than what we committed: a read
+      // that has not caught up, or one that cannot name what it fetched. Stay
+      // on the saved copy — correct content, legacy image URLs — and say so,
+      // because this is the branch that would otherwise be invisible.
+      console.debug(
+        '[slides] Post-save loader refresh did not name the committed deck; ' +
+          `keeping the locally saved copy (loader=${deckSha ?? 'null'}, saved=${
+            savedShaRef.current ?? 'null'
+          })`
+      );
+    }
+    savedShaRef.current = null;
+    if (outcome.viewFromLoader) setViewFromLoader(true);
+  }, [fetcher.state, deckSha]);
 
   // Handle image upload - returns a promise that resolves with the image URL
   const handleImageUpload = useCallback(
@@ -2333,9 +2584,17 @@ export default function SlideViewer() {
   }, []);
 
   // Determine which content to show
-  // - When editing: use editableContent (fresh from API or after save)
-  // - When viewing: use CDN content (slideContent) or editableContent if we have it
-  const displayContent = isEditing ? editableContent : editableContent || slideContent;
+  // - When editing: editableContent, the editor's own unsigned round-trip copy
+  // - When viewing: the loader's copy once a save's revalidation has landed
+  //   (see `viewFromLoader`) — same document, but with its images resolved
+  //   through the delivery layer. Before that, and on a page that has not
+  //   saved anything, the pre-existing order stands.
+  const displayContent = displayDeckContent({
+    isEditing,
+    viewFromLoader,
+    editableContent,
+    loaderContent: slideContent,
+  });
 
   // Save a new snippet
   const handleSaveSnippet = useCallback(

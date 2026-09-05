@@ -104,19 +104,62 @@ export class GitHubProvider extends GitProvider {
   // ─── Auth & User ───────────────────────────────────────────────────────────
 
   /**
-   * Get an installation access token
-   * @returns {Promise<string>} GitHub access token
+   * Mint an installation access token, WITH its expiry.
+   *
+   * Same single API call `getAccessToken` has always made — it just stops
+   * throwing away the other half of the answer. GitHub returns `expires_at`
+   * alongside the token (one hour out), and a caller that hands the token to
+   * another process cannot re-derive it: the content Worker caches the token
+   * for its lifetime, and without a stated expiry it would have to either
+   * re-mint on every cache miss or guess. Guessing high serves 401s, guessing
+   * low is the re-mint it was trying to avoid.
+   *
+   * ── SCOPE DOWN whenever the token leaves this process ─────────────────────
+   * With no body, GitHub returns a token carrying EVERY permission the
+   * installation holds on EVERY repo in the org — student assignment repos and
+   * staff grading repos included. That is the right token for our own
+   * background work, and far too much authority to hand to anything else.
+   *
+   * `scope` narrows it at the source. GitHub mints the token already limited,
+   * so a caller downstream cannot widen it and a leak in transit is bounded to
+   * what was asked for. Pass `{ repositories: [repo], permissions: { contents:
+   * 'read' } }` and a stolen token reads one repo instead of writing all of
+   * them. Omit it and behaviour is exactly what it has always been, which is
+   * what keeps every existing caller correct.
+   *
+   * `repositories` names repos by SHORT name, not `owner/repo`. Asking for a
+   * repo the installation cannot access, or a permission it was not granted,
+   * is a 422 rather than a quietly-broader token.
+   *
+   * @param {Object} [scope] - Optional narrowing for the minted token
+   * @param {string[]} [scope.repositories] - Repo short names to limit the token to
+   * @param {Object} [scope.permissions] - Permission subset, e.g. { contents: 'read' }
+   * @returns {Promise<{token: string, expiresAt: string}>} Token and its ISO-8601 expiry
    */
-  async getAccessToken(): Promise<string> {
+  async getInstallationToken(scope?: {
+    repositories?: string[];
+    permissions?: Record<string, string>;
+  }): Promise<{ token: string; expiresAt: string }> {
     const jwtToken = generateGitHubJWT();
     const url = `https://api.github.com/app/installations/${this.installationId}/access_tokens`;
+
+    const body: Record<string, unknown> = {};
+    if (scope?.repositories?.length) body.repositories = scope.repositories;
+    if (scope?.permissions && Object.keys(scope.permissions).length) {
+      body.permissions = scope.permissions;
+    }
+    const hasScope = Object.keys(body).length > 0;
 
     const response = await fetch(url, {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${jwtToken}`,
         Accept: 'application/vnd.github+json',
+        // Only sent alongside a body: an unscoped call stays byte-for-byte the
+        // request it was before this parameter existed.
+        ...(hasScope ? { 'Content-Type': 'application/json' } : {}),
       },
+      ...(hasScope ? { body: JSON.stringify(body) } : {}),
     });
 
     if (!response.ok) {
@@ -127,7 +170,25 @@ export class GitHubProvider extends GitProvider {
     if (!data.token) {
       throw new Error('Failed to retrieve GitHub installation token');
     }
-    return data.token;
+    // `expires_at` has been in every response this endpoint has ever sent, but
+    // it is not what the request is FOR — falling back to the documented one
+    // hour keeps a token that arrived without one usable instead of failing a
+    // render over a missing timestamp.
+    const expiresAt =
+      typeof data.expires_at === 'string'
+        ? data.expires_at
+        : new Date(Date.now() + 60 * 60 * 1000).toISOString();
+
+    return { token: data.token, expiresAt };
+  }
+
+  /**
+   * Get an installation access token
+   * @returns {Promise<string>} GitHub access token
+   */
+  async getAccessToken(): Promise<string> {
+    const { token } = await this.getInstallationToken();
+    return token;
   }
 
   /**
@@ -349,6 +410,26 @@ export class GitHubProvider extends GitProvider {
   // ─── Branches & PRs ────────────────────────────────────────────────────────
 
   /**
+   * The repository's default branch.
+   *
+   * `main` for most classrooms and `master` for anything imported from an older
+   * course, so a caller that needs the branch content is actually served from
+   * has to ask. One `GET /repos` — the same request `getRepository` makes.
+   *
+   * @param {string} org - Organization login
+   * @param {string} repo - Repository name
+   * @returns {Promise<string>} Default branch name
+   */
+  async getDefaultBranch(org: string, repo: string): Promise<string> {
+    const octokit = await this.#getOctokit();
+    const { data } = await octokit.request('GET /repos/{owner}/{repo}', {
+      owner: org,
+      repo,
+    });
+    return data.default_branch;
+  }
+
+  /**
    * Get the latest commit SHA for a branch
    * @param {string} org - Organization login
    * @param {string} repo - Repository name
@@ -363,6 +444,62 @@ export class GitHubProvider extends GitProvider {
       branch,
     });
     return data.commit.sha;
+  }
+
+  /**
+   * List a repository's tree — every path and the git object behind it.
+   *
+   * One call for a whole content repo, which is the point: the alternative is a
+   * `contents/` request per path, and a course repo has hundreds. `recursive`
+   * asks GitHub to walk subdirectories rather than returning only the top
+   * level.
+   *
+   * `truncated` is GitHub's, and it is a real state rather than an error: past
+   * roughly 100k entries (or 7MB) the response is CUT SHORT and what came back
+   * is still valid, just incomplete. Callers are expected to use the entries
+   * and report the flag — dropping the response would leave a classroom with no
+   * map at all, which is strictly worse than a partial one.
+   *
+   * @param {string} org - Organization login
+   * @param {string} repo - Repository name
+   * @param {string} ref - Branch, tag or SHA to read the tree at
+   * @param {boolean} [recursive] - Walk subdirectories (default: true)
+   */
+  async getTree(
+    org: string,
+    repo: string,
+    ref: string,
+    recursive: boolean = true
+  ): Promise<{
+    sha: string;
+    truncated: boolean;
+    entries: { path: string; sha: string; type: string; size?: number }[];
+  }> {
+    const octokit = await this.#getOctokit();
+    const { data } = await octokit.request('GET /repos/{owner}/{repo}/git/trees/{tree_sha}', {
+      owner: org,
+      repo,
+      tree_sha: ref,
+      ...(recursive ? { recursive: '1' } : {}),
+    });
+
+    return {
+      sha: data.sha,
+      truncated: Boolean(data.truncated),
+      entries: (data.tree ?? [])
+        // An entry without a path or sha cannot be looked up or addressed, so
+        // it is not a row — GitHub returns these for commit entries
+        // (submodules), which this map has nothing to say about.
+        .filter((entry): entry is typeof entry & { path: string; sha: string } =>
+          Boolean(entry.path && entry.sha)
+        )
+        .map(entry => ({
+          path: entry.path,
+          sha: entry.sha,
+          type: entry.type ?? 'blob',
+          size: entry.size,
+        })),
+    };
   }
 
   async listCommits(

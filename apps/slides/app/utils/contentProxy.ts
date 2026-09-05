@@ -1,30 +1,60 @@
 /**
- * Content Proxy Utility
+ * Content Proxy Utility — the LEGACY read, for what the delivery layer does not
+ * carry yet.
  *
- * Unified system for fetching content from GitHub repositories.
- * Uses a three-tier fallback strategy:
- * 1. GitHub Pages CDN (fast, but may get ECONNRESET from some cloud providers)
- * 2. GitHub Contents API (authenticated, immediate, but 1MB file size limit)
- * 3. GitHub Git Blobs API (authenticated, supports files up to 100MB)
+ * Anything that can be addressed by sha goes through
+ * `ClassmojiService.contentDelivery.fetchContentText` instead: it resolves a
+ * repo path to a blob sha through the asset map and fetches it from the Worker,
+ * so a save is visible the instant it returns. What is left here is the binary
+ * tail — fonts and images reached through the old `/content/{org}/{repo}/…`
+ * proxy — plus the last-resort path for a request that could not be tied to a
+ * classroom.
+ *
+ * Fallback order, and it depends on `preferCdn`:
+ *
+ *   preferCdn=false — Contents API → Git Blobs API → Pages CDN
+ *   preferCdn=true  — Pages CDN → Contents API → Git Blobs API
+ *
+ * API-first is the fix this change is about: GitHub Pages lags a push by
+ * minutes, and rapid consecutive saves can ERROR its build and stretch that
+ * further, so an instructor who saved a deck and opened the presenter was
+ * served the previous version of their own slides.
+ *
+ * But API-first is only right where staleness is the expensive failure. For a
+ * classroom the delivery layer is NOT switched on for, every image and font of
+ * every deck still comes through this proxy — and putting those on the
+ * authenticated read spends the org installation's shared 5,000/h limit on
+ * files whose bytes have not changed since they were uploaded. There, the CDN
+ * being three minutes behind costs nothing and a rate limit costs everything,
+ * so those keep the old order. The caller decides, because only the caller
+ * knows the classroom's gate.
+ *
+ * The CDN tier is slated for deletion in Phase 4 either way: a private content
+ * repo serves nothing from `github.io`.
  *
  * Note: raw.githubusercontent.com is blocked/rate-limited from Fly.io IPs,
  * so we use the authenticated Git Blobs API for large files instead.
- *
- * Used by:
- * - HTML slide content (loader)
- * - CSS/font assets (content proxy route)
  */
 
 import { ContentService } from '@classmoji/content';
 
 /**
- * Fetch content from GitHub with CDN-first strategy
+ * A hung origin must not hold a render open. Mirrors the delivery layer's own
+ * bound (`TEXT_FETCH_TIMEOUT_MS` in contentDelivery.service).
+ */
+const CONTENT_FETCH_TIMEOUT_MS = 6000;
+
+/**
+ * Fetch content from GitHub.
  *
  * @param {Object} options
  * @param {string} options.org - GitHub organization login
  * @param {string} options.repo - Repository name
  * @param {string} options.path - File path within the repo
  * @param {boolean} [options.binary=false] - If true, returns Buffer instead of string
+ * @param {boolean} [options.preferCdn=false] - Try the Pages CDN first. For
+ *   assets of a classroom the delivery layer is not switched on for, where a
+ *   few minutes of staleness is free and an API call per image is not.
  * @returns {Promise<{content: string | Buffer, source: 'cdn' | 'api' | 'blob'} | null>}
  */
 export async function fetchContent({
@@ -32,29 +62,41 @@ export async function fetchContent({
   repo,
   path,
   binary = false,
+  preferCdn = false,
 }: {
   org: string;
   repo: string;
   path: string;
   binary?: boolean;
+  preferCdn?: boolean;
 }): Promise<{ content: string | Buffer; source: 'cdn' | 'api' | 'blob' } | null> {
-  // Try GitHub Pages CDN first (may fail from some cloud providers due to IP blocking)
-  const cdnUrl = `https://${org}.github.io/${repo}/${path}`;
-
-  try {
-    const response = await fetch(cdnUrl);
-    if (response.ok) {
-      const content = binary ? Buffer.from(await response.arrayBuffer()) : await response.text();
-      return { content, source: 'cdn' };
+  /**
+   * The Pages CDN leg. Bounded: this runs on a render path, and an unreachable
+   * github.io must cost a fallback rather than a held-open request.
+   */
+  const readCdn = async (): Promise<{ content: string | Buffer; source: 'cdn' } | null> => {
+    try {
+      const response = await fetch(`https://${org}.github.io/${repo}/${path}`, {
+        signal: AbortSignal.timeout(CONTENT_FETCH_TIMEOUT_MS),
+      });
+      if (response.ok) {
+        const content = binary ? Buffer.from(await response.arrayBuffer()) : await response.text();
+        return { content, source: 'cdn' };
+      }
+    } catch (err: unknown) {
+      // Network error (likely ECONNRESET from Fly.io IPs) or the timeout above.
+      const message = err instanceof Error ? err.message : String(err);
+      console.log(`CDN fetch failed for ${path}: ${message}`);
     }
-    // CDN returned error (404, 500, etc.) - fall through to API
-  } catch (err: unknown) {
-    // Network error (likely ECONNRESET from Fly.io) - fall through to API
-    const message = err instanceof Error ? err.message : String(err);
-    console.log(`CDN fetch failed for ${path}: ${message}`);
+    return null;
+  };
+
+  if (preferCdn) {
+    const cdn = await readCdn();
+    if (cdn) return cdn;
   }
 
-  // Fallback to GitHub API
+  // The authenticated read: it always sees the current commit.
   try {
     const result = await ContentService.getContent({
       orgLogin: org,
@@ -71,12 +113,12 @@ export async function fetchContent({
     }
   } catch (apiErr: unknown) {
     const message = apiErr instanceof Error ? apiErr.message : String(apiErr);
-    console.error(`API fallback failed for ${path}:`, message);
+    console.error(`API read failed for ${path}:`, message);
   }
 
-  // Try Git Blobs API for large binary files (> 1MB Contents API limit)
-  // Uses authenticated GitHub API which works from Fly.io (unlike raw.githubusercontent.com)
-  // Git Blobs API supports files up to 100MB
+  // Git Blobs API for large binary files (> the 1MB Contents API limit).
+  // Authenticated, works from Fly.io (unlike raw.githubusercontent.com), and
+  // supports files up to 100MB.
   if (binary) {
     try {
       const result = await ContentService.getLargeContent({
@@ -95,7 +137,10 @@ export async function fetchContent({
     }
   }
 
-  return null;
+  // DEPRECATED — Phase 4 removes this tier along with GitHub Pages itself. When
+  // `preferCdn` is set it already ran above; here it is the last resort after
+  // the authenticated reads could not answer.
+  return preferCdn ? null : await readCdn();
 }
 
 /**

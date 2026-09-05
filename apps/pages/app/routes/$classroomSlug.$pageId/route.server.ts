@@ -10,6 +10,13 @@ import {
 import { migrateHtmlToBlockNote } from '~/utils/migration.server.ts';
 import { schema } from '~/components/editor/blocks/index.tsx';
 import type { PageForContent } from '~/types/pages.ts';
+import {
+  assetResolveContext,
+  canonicalizeAssetRef,
+  canonicalizeDocumentAssets,
+  canonicalizeOpsAssets,
+  resolveDocumentAssets,
+} from '~/utils/assetRefs.server.ts';
 
 /**
  * Public page viewer route - read-only view for students and public access.
@@ -109,13 +116,21 @@ export const loader = async ({
   // Staff asked for a preview but no branch exists → render main with a notice.
   const previewMissing = Boolean(canEdit && wantsPreview && !previewStatus?.exists);
 
-  // Load content from GitHub (page includes classroom.git_organization via
-  // includeClassroom). Staff loads bypass the 60s per-process cache: for
-  // canEdit users this read IS the edit surface (the editor mounts inline) and
-  // seeds the save conflict token, so a cached read on another Fly instance
-  // could silently revert an MCP write (4b parity with slides). It also keeps
-  // the post-accept redirect (`?notice=preview-accepted`, staff-only) from
-  // showing pre-accept cached content under the success toast.
+  // Load content. This loader serves two surfaces, and they read differently.
+  //
+  // The EDITOR (canEdit, and any preview-branch read) goes to GitHub: this read
+  // IS the edit surface — the editor mounts inline — and it seeds the save
+  // conflict token, which must be the sha of the file on the branch being
+  // written. `skipCache` for the same reason: the 60s per-process cache has no
+  // cross-instance invalidation, so a cached read on another Fly instance could
+  // silently revert an MCP write (4b parity with slides). It also keeps the
+  // post-accept redirect (`?notice=preview-accepted`) from showing pre-accept
+  // content under the success toast. Preview branches have no map rows at all,
+  // which is the other reason this side cannot use the layer.
+  //
+  // The VIEWER reads by sha through the delivery layer, so a student sees a
+  // save the moment it returns rather than up to a minute later, and a page
+  // view costs no GitHub call.
   const {
     format,
     content,
@@ -123,7 +138,11 @@ export const loader = async ({
     sha: contentFileSha,
   } = await loadPageContent(
     pageForContent,
-    previewActive ? { ref: previewBranch, skipCache: true } : { skipCache: canEdit }
+    previewActive
+      ? { ref: previewBranch, skipCache: true }
+      : canEdit
+        ? { skipCache: true }
+        : { viaWorker: true }
   );
 
   let viewerContent: unknown;
@@ -144,6 +163,44 @@ export const loader = async ({
     (page.header_image_url
       ? { url: page.header_image_url, position: page.header_image_position ?? 50 }
       : null);
+
+  // Render-time URL resolution: the blocks keep their stored references and the
+  // client gets a parallel `ref → signed URL` map. The lifetime is per-VIEWER
+  // and per-PAGE — an editor (or an explicit preview) gets short-lived `edit`
+  // URLs, a reader gets `month` on a public page and `week` otherwise — which
+  // is exactly why the URL cannot live in the block.
+  //
+  // `page.is_public` is passed because visibility, not surface, decides the
+  // lifetime: this same page rendered on the class site is the same file with
+  // the same readers, and used to be minted on a different bucket purely
+  // because it came through a different door.
+  //
+  // `previewActive`, not `wantsPreview`: the raw query param is attacker-supplied
+  // and is only honoured for staff. Passing it straight through would let an
+  // anonymous visitor mint `edit`-tier URLs by appending `?preview=1`.
+  const resolveTier = ClassmojiService.contentDelivery.tierFor({
+    canEdit,
+    preview: previewActive,
+    isPublic: page.is_public,
+  });
+  const assetCtx = assetResolveContext(
+    page.classroom as unknown as Parameters<typeof assetResolveContext>[0],
+    resolveTier
+  );
+  // ONE pass for both. Two sequential resolves read the clock twice, and an
+  // expiry that moves between the two reads mints a different `src` for the
+  // same file — at which point every candidate list is thrown away, because the
+  // pairing is by string equality. On `edit` the expiry is an exact `now + 4h`,
+  // so it moves on EVERY tick; on `week` and `month` it only moves across a
+  // bucket boundary (or the roll-forward near one). Rare on a reader, constant
+  // for an editor, and wrong in both cases. The cover is in the
+  // ref list for its display URL; it does not need candidates, because
+  // `HeaderImage` renders it as a CSS background, where `srcset` means nothing.
+  const { assets: resolvedAssets, srcSets: resolvedSrcSets } = await resolveDocumentAssets(
+    assetCtx,
+    viewerContent,
+    [coverImage?.url]
+  );
 
   // Build GitHub repo info for link
   const gitOrg = (page.classroom as Record<string, unknown>).git_organization as {
@@ -186,6 +243,15 @@ export const loader = async ({
     },
     content: viewerContent,
     coverImage,
+    // Display-only: `{ storedRef: signedUrl }`. Absent keys mean "use the ref
+    // as-is" (an external image, or the delivery layer switched off).
+    resolvedAssets,
+    // Also display-only, and keyed the SAME way — `{ storedRef: srcset }` —
+    // because the consumer is the image block, which holds the stored reference
+    // and would otherwise have to reproduce a signature to find its own entry.
+    // An absent key means "one size only", which is the right answer for a gif,
+    // an svg, and anything that is not an image.
+    resolvedSrcSets,
     userRole,
     canEdit,
     notice,
@@ -231,6 +297,14 @@ export const action = async ({
   }
 
   const actionPage = page as unknown as PageForContent;
+
+  // Save-side asset context. The tier is irrelevant to canonicalization (it
+  // only ever turns a signed URL back into a path) but the context type carries
+  // one; 'edit' names the only tier a writer can be in.
+  const actionAssetCtx = assetResolveContext(
+    page.classroom as unknown as Parameters<typeof assetResolveContext>[0],
+    'edit'
+  );
 
   // Check if user can edit
   const authData = await getAuthSession(request).catch(() => null);
@@ -314,7 +388,10 @@ export const action = async ({
           { status: 400 }
         );
       }
-      saveOps = parsed.data;
+      // Defense in depth: strip any signed URL back to its repo path BEFORE it
+      // can be committed. An ops save carries only the blocks that changed —
+      // which is exactly where a just-uploaded image's display URL would be.
+      saveOps = await canonicalizeOpsAssets(actionAssetCtx, parsed.data);
     }
 
     try {
@@ -379,7 +456,10 @@ export const action = async ({
         mergedDocument = mergeResult.document;
       } else {
         // ── Whole-document save (7.5 path, unchanged) ─────────────────────
-        const blocks = JSON.parse(data.content as string);
+        const blocks = await canonicalizeDocumentAssets(
+          actionAssetCtx,
+          JSON.parse(data.content as string)
+        );
 
         if (!expectedSha) {
           // Token-less save. Legit only when content.json doesn't exist yet
@@ -440,11 +520,25 @@ export const action = async ({
       // Return the new sha — the editor's conflict token for its next save.
       // A merged save also returns the committed document + the concurrent
       // count (the editor adopts the document and toasts the count).
+      // A merged document is one the editor has never seen — it carries stored
+      // refs for blocks folded in from main, and the client's display map has
+      // no entry for them. Resolve alongside it or those images render broken.
+      const merged = mergedDocument
+        ? await resolveDocumentAssets(actionAssetCtx, mergedDocument)
+        : null;
+
       return Response.json({
         success: true,
         sha,
         ...(mergedDocument
-          ? { merged_with_concurrent: mergedWithConcurrent, merged_content: mergedDocument }
+          ? {
+              merged_with_concurrent: mergedWithConcurrent,
+              merged_content: mergedDocument,
+              resolved_assets: merged?.assets ?? null,
+              // The folded-in blocks need candidates too, or every image the
+              // merge brought in paints at full size until the next load.
+              resolved_src_sets: merged?.srcSets ?? null,
+            }
           : {}),
       });
     } catch (error: unknown) {
@@ -638,9 +732,10 @@ export const action = async ({
 
   if (intent === 'set-header-image') {
     try {
-      const coverImage = data.url
+      const coverUrl = await canonicalizeAssetRef(actionAssetCtx, data.url as string | null);
+      const coverImage = coverUrl
         ? {
-            url: data.url as string,
+            url: coverUrl,
             position: typeof data.position === 'number' ? data.position : 50,
           }
         : null;
@@ -671,12 +766,14 @@ export const action = async ({
       if (!file || typeof file === 'string') {
         return Response.json({ error: 'No file provided' }, { status: 400 });
       }
-      const { url } = await uploadPageAsset(actionPage, file);
+      // `url` is the repo path (what gets stored); `displayUrl` is the signed
+      // URL for showing it right now — the two are never the same string.
+      const { url, displayUrl } = await uploadPageAsset(actionPage, file);
       const { sha } = await savePageCoverImage(actionPage, { url, position: 50 });
       await ClassmojiService.page.quickUpdate(pageId, {
         updated_at: new Date(),
       });
-      return Response.json({ success: true, url, sha });
+      return Response.json({ success: true, url, displayUrl, sha });
     } catch (error: unknown) {
       if ((error as { status?: number } | null)?.status === 409) {
         // F5: the asset uploaded fine, but the cover-image metadata write
