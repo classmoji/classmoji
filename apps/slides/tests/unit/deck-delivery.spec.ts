@@ -373,12 +373,42 @@ test.describe('deckAccessFor — the tier inputs, per surface', () => {
     expect(deckAccessFor('follow', OWNER, SLIDE).canEdit).toBe(true);
   });
 
+  test('the thumbnail form of follow is read-only, even for an owner', () => {
+    // `/speaker` embeds `/follow?preview=true` in its current and next panes.
+    // Signed as `draft`, those iframes expire four hours in — mid-lecture for
+    // a long class — and the lazily-loaded backgrounds start 403ing.
+    expect(deckAccessFor('follow', OWNER, SLIDE, { thumbnail: true })).toEqual({
+      canEdit: false,
+      preview: false,
+      isPublicSite: false,
+    });
+    // The thumbnail flag still never becomes the viewer's preview-BRANCH flag.
+    expect(
+      deckAccessFor('follow', { canEdit: true, previewActive: true }, SLIDE, { thumbnail: true })
+        .preview
+    ).toBe(false);
+    // Plain `/follow` is untouched: staff still edit there.
+    expect(deckAccessFor('follow', OWNER, SLIDE, { thumbnail: false }).canEdit).toBe(true);
+    expect(deckAccessFor('follow', OWNER, SLIDE).canEdit).toBe(true);
+    // A student was already read-only, and the flag changes nothing for them.
+    expect(deckAccessFor('follow', STUDENT, SLIDE, { thumbnail: true })).toEqual(
+      deckAccessFor('follow', STUDENT, SLIDE)
+    );
+    // Only `follow` has a thumbnail form — the other surfaces ignore the flag.
+    for (const surface of ['viewer', 'present', 'speaker'] as const) {
+      expect(deckAccessFor(surface, OWNER, SLIDE, { thumbnail: true })).toEqual(
+        deckAccessFor(surface, OWNER, SLIDE)
+      );
+    }
+  });
+
   test('the tiers those shapes actually produce', () => {
     const tierOf = (
       surface: Parameters<typeof deckAccessFor>[0],
       access: typeof OWNER,
-      slide = SLIDE
-    ) => deckDeliveryContext(slide, ORG, REPO, deckAccessFor(surface, access, slide))?.tier;
+      slide = SLIDE,
+      opts: Parameters<typeof deckAccessFor>[3] = {}
+    ) => deckDeliveryContext(slide, ORG, REPO, deckAccessFor(surface, access, slide, opts))?.tier;
 
     expect(tierOf('viewer', OWNER)).toBe('draft');
     expect(tierOf('present', OWNER)).toBe('enrolled');
@@ -387,6 +417,10 @@ test.describe('deckAccessFor — the tier inputs, per surface', () => {
     expect(tierOf('follow', STUDENT)).toBe('enrolled');
     expect(tierOf('follow', STUDENT, PUBLIC_SLIDE)).toBe('public');
     expect(tierOf('follow', OWNER)).toBe('draft');
+    // The speaker view's panes: an owner, but not the 4h bucket.
+    expect(tierOf('follow', OWNER, SLIDE, { thumbnail: true })).toBe('enrolled');
+    expect(tierOf('follow', OWNER, PUBLIC_SLIDE, { thumbnail: true })).toBe('public');
+    expect(tierOf('follow', STUDENT, SLIDE, { thumbnail: true })).toBe('enrolled');
   });
 });
 

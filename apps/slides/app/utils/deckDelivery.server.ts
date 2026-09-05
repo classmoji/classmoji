@@ -78,19 +78,34 @@ export interface SlideAccessResultLike {
  *     for presenting.
  *   - only `viewer` honours `previewActive`. `follow` has a `?preview=true`
  *     query param of its own that means "thumbnail render", and letting that
- *     reach `tierFor` would mint draft URLs for a hall full of students.
+ *     reach `tierFor` would mint draft URLs for a hall full of students. It
+ *     arrives as `opts.thumbnail`, and is never allowed to become `preview`.
+ *   - a THUMBNAIL `follow` is read-only, and gets the same treatment as
+ *     `present`/`speaker` for the same reason. The speaker view embeds
+ *     `/follow?preview=true` in its current and next panes, so staff opening
+ *     `/speaker` were signing those iframes into the 4-hour `draft` bucket —
+ *     and a lecture that runs longer than four hours 403s a lazily-loaded
+ *     Reveal background mid-talk. Nobody edits through a thumbnail, so
+ *     `canEdit` is pinned false and the tier lands on `enrolled` (or `public`
+ *     for a public deck): the same immutable sha-addressed bytes, with an
+ *     expiry that outlives the class.
  */
 export function deckAccessFor(
   surface: DeckSurface,
   access: SlideAccessResultLike,
-  slide: { is_public?: boolean | null }
+  slide: { is_public?: boolean | null },
+  opts: { thumbnail?: boolean } = {}
 ): DeliveryAccess {
   const isPublicSite = Boolean(slide.is_public);
   if (surface === 'present' || surface === 'speaker') {
     return { canEdit: false, isPublicSite };
   }
+  // The read-only iframe form of `/follow`. Only `follow` has one here: the
+  // deck viewer's `?preview=true` landing-page thumbnail is a different
+  // surface with a different lifetime, and is deliberately left alone.
+  const isReadOnlyThumbnail = surface === 'follow' && Boolean(opts.thumbnail);
   return {
-    canEdit: access.canEdit,
+    canEdit: isReadOnlyThumbnail ? false : access.canEdit,
     preview: surface === 'viewer' ? Boolean(access.previewActive) : false,
     isPublicSite,
   };
