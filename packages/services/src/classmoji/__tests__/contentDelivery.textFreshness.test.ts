@@ -123,6 +123,7 @@ const readCtx = {
 const deck = {
   version: 1 as const,
   theme: 'white',
+  codeTheme: 'github-dark',
   slides: [{ id: 's1', html: '<h1>Take two</h1>' }],
 };
 

@@ -39,10 +39,14 @@ interface PageContentResult {
  * @param options.ref - Git ref to read from (e.g. the page's preview branch).
  * @param options.skipCache - Bypass the 60s ContentService cache (sha-bearing
  *   reads that seed an expectedSha MUST pass true).
+ * @param options.viaWorker - Read by SHA through the delivery layer. For
+ *   RENDER reads only: it makes a save visible the moment it returns and costs
+ *   no GitHub call, but a preview branch has no map rows and the editor's own
+ *   load must see the branch it will write to.
  */
 export async function loadPageContent(
   page: PageForContent,
-  options: { ref?: string; skipCache?: boolean } = {}
+  options: { ref?: string; skipCache?: boolean; viaWorker?: boolean } = {}
 ): Promise<PageContentResult> {
   const { format, blocks, coverImage, sha } = await ClassmojiService.pageContent.loadPageContent(
     page,

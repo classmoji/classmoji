@@ -795,17 +795,24 @@ const TEXT_FETCH_TIMEOUT_MS = 6000;
  * from the Worker, a GitHub rate limit, a DNS blip — degrades to the next tier
  * and finally to `null`, which callers already render as "content unavailable".
  * An exception here would be a 500 on a page whose bytes are one tier away.
+ *
+ * Which is also why `workerOnly` exists. Swallowing failures collapses "this
+ * file does not exist" and "GitHub is down" into the same `null`, and a caller
+ * that must tell those apart — the class site, which answers the first with an
+ * empty page and the second with a 503, because a blank page cached for a
+ * minute in front of anonymous readers is the worse outcome — passes it and
+ * runs its own typed read when the map has nothing.
  */
 export async function fetchContentText(
   ctx: TextReadContext,
   repoPath: string,
-  opts: { label?: string; skipCache?: boolean } = {}
+  opts: { label?: string; skipCache?: boolean; workerOnly?: boolean } = {}
 ): Promise<ContentText | null> {
   const path = normalizeRepoRelative(repoPath);
   if (!path) return null;
 
-  const result =
-    (await readTextThroughWorker(ctx, path)) ?? (await readTextFromGitHub(ctx, path, opts));
+  const viaWorker = await readTextThroughWorker(ctx, path);
+  const result = viaWorker ?? (opts.workerOnly ? null : await readTextFromGitHub(ctx, path, opts));
 
   // Debug, not warn: one line per file per render is a lot of lines, and the
   // question they answer — "is this deployment actually serving text from the

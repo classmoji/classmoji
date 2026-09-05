@@ -258,6 +258,33 @@ describe('fetchContentText fallbacks', () => {
   });
 });
 
+describe('fetchContentText workerOnly', () => {
+  it('answers from the map and nothing else', async () => {
+    const calls = stubFetch({ worker: () => new Response('worker-bytes') });
+
+    const result = await fetchContentText(ctx, DECK_PATH, { workerOnly: true });
+
+    expect(result?.source).toBe('worker');
+    expect(calls).toHaveLength(1);
+    expect(getContent).not.toHaveBeenCalled();
+  });
+
+  it('returns null rather than falling back, so the caller can tell why', async () => {
+    // The class site needs "no content.json" and "GitHub is down" to be
+    // different answers — one is an empty page, the other a 503 — and the
+    // ordinary fallback collapses both into null. So the map gets out of the
+    // way and the caller runs its own typed read.
+    lookupContentAsset.mockResolvedValue(null);
+    const calls = stubFetch({});
+
+    const result = await fetchContentText(ctx, DECK_PATH, { workerOnly: true });
+
+    expect(result).toBeNull();
+    expect(getContent).not.toHaveBeenCalled();
+    expect(calls).toEqual([]);
+  });
+});
+
 describe('fetchContentText path handling', () => {
   it('collapses a relative path to the form the map is keyed by', async () => {
     stubFetch({});

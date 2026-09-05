@@ -4,7 +4,11 @@ import { z } from 'zod';
 import { collectBlockAssetRefs, mapBlockAssetRefs } from '@classmoji/utils';
 import { ContentService } from '../content/ContentService.ts';
 import { recordContentAsset, resolveContentBranch } from './contentAssets.service.ts';
-import { canonicalizeMany, type ResolveContext } from './contentDelivery.service.ts';
+import {
+  canonicalizeMany,
+  fetchContentText,
+  type ResolveContext,
+} from './contentDelivery.service.ts';
 import {
   dedupeMergedTreeIds,
   indexResolutions,
@@ -98,12 +102,26 @@ function contentRepoFor(page: PageWithContentRepo) {
  *   reads that will be used as expectedSha MUST pass true).
  * @param options.ref - Git ref (branch/sha) to read from — e.g. the page's
  *   preview branch. Ref-bearing reads always bypass the cache.
+ * @param options.viaWorker - Read by SHA through the delivery layer
+ *   (`fetchContentText`) rather than straight from GitHub. For RENDER reads: a
+ *   save is visible the moment it returns, and a page view costs no GitHub call
+ *   at all. Ignored when `ref` is set — a preview branch has no map rows to
+ *   sign against, which is also why the editor's own load leaves this off.
  */
 export async function loadPageContent(
   page: PageWithContentRepo,
-  { skipCache = false, ref }: { skipCache?: boolean; ref?: string } = {}
+  {
+    skipCache = false,
+    ref,
+    viaWorker = false,
+  }: { skipCache?: boolean; ref?: string; viaWorker?: boolean } = {}
 ): Promise<PageContentResult> {
   const { gitOrganization, repo } = contentRepoFor(page);
+
+  if (viaWorker && !ref) {
+    const viaMap = await loadPageContentViaWorker(page);
+    if (viaMap) return viaMap;
+  }
 
   // Try JSON first (BlockNote format)
   try {
@@ -169,6 +187,52 @@ export async function loadPageContent(
   }
 
   return { format: 'none', blocks: null, coverImage: null, sha: null };
+}
+
+/**
+ * The map-first form of the load above: same precedence, same shapes.
+ *
+ * Null means "the delivery layer had nothing to say" — the classroom is not
+ * opted in, the deployment cannot sign, or the map has no row for either file.
+ * The caller then runs its ordinary GitHub read, so this is purely an
+ * accelerator that can never be the reason a page fails to load.
+ *
+ * `fetchContentText` does its own API-then-CDN fallback, so a hit here has
+ * already exhausted the alternatives for that path; a null on `content.json`
+ * genuinely means the file is not there, and the `index.html` probe below is
+ * the legacy-page case rather than a retry.
+ */
+async function loadPageContentViaWorker(
+  page: PageWithContentRepo
+): Promise<PageContentResult | null> {
+  const ctx = pageResolveContext(page);
+  if (!ctx) return null;
+
+  const json = await fetchContentText(ctx, `${page.content_path}/content.json`, { label: 'page' });
+  if (json) {
+    try {
+      const parsed = JSON.parse(json.text);
+      // Two stored shapes: the `{ blocks, coverImage? }` wrapper, and a bare
+      // blocks array from before the wrapper existed.
+      if (parsed && !Array.isArray(parsed) && Array.isArray(parsed.blocks)) {
+        return {
+          format: 'json',
+          blocks: parsed.blocks,
+          coverImage: parsed.coverImage || null,
+          sha: json.sha,
+        };
+      }
+      return { format: 'json', blocks: parsed, coverImage: null, sha: json.sha };
+    } catch {
+      // Malformed JSON falls through to the HTML probe, exactly as the GitHub
+      // path does — a corrupt content.json must not hide a legacy index.html.
+    }
+  }
+
+  const html = await fetchContentText(ctx, `${page.content_path}/index.html`, { label: 'page' });
+  if (html) return { format: 'html', blocks: html.text, coverImage: null, sha: html.sha };
+
+  return null;
 }
 
 // ─── Canonicalize on save ────────────────────────────────────────────────────

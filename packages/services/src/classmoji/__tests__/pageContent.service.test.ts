@@ -37,6 +37,16 @@ vi.mock('../contentAssets.service.ts', () => ({
   resolveContentBranch: (...args: unknown[]) => resolveContentBranchMock(...args),
 }));
 
+// The map-first read (`viaWorker`). Mocked at the module seam so this suite
+// stays about page-content shapes; contentDelivery.text.test.ts owns the read
+// itself. `canonicalizeMany` is passed through unchanged — the save path calls
+// it and this suite is not testing canonicalization.
+const fetchContentTextMock = vi.fn();
+vi.mock('../contentDelivery.service.ts', () => ({
+  fetchContentText: (...args: unknown[]) => fetchContentTextMock(...args),
+  canonicalizeMany: async (_ctx: unknown, refs: string[]) => new Map(refs.map(r => [r, r])),
+}));
+
 const {
   loadPageContent,
   savePageContent,
@@ -253,6 +263,79 @@ describe('pageContent.savePageContent', () => {
     expect(arg.content).toBe(
       JSON.stringify({ blocks }, null, 2) // 2-space pretty wrapper, null cover omitted
     );
+  });
+});
+
+// ─── loadPageContent via the delivery layer ──────────────────────────────────
+
+describe('pageContent.loadPageContent viaWorker', () => {
+  // The map-first read only has a context to work with when the page carries
+  // its classroom id and repo — the resolver's own requirement.
+  const keyedPage = {
+    ...page,
+    classroom: { ...page.classroom, id: '3f2504e0-4f89-41d3-9a0c-0305e82c3301' },
+  };
+
+  beforeEach(() => {
+    fetchContentTextMock.mockResolvedValue(null);
+  });
+
+  it('reads content.json through the map, and never touches GitHub on a hit', async () => {
+    // The whole point: a page view costs no GitHub call, and the sha the map
+    // signed is the sha the reader gets.
+    fetchContentTextMock.mockResolvedValueOnce({
+      text: JSON.stringify({ blocks: [{ id: 'b1' }], coverImage: cover }),
+      sha: 'map-sha',
+      source: 'worker',
+    });
+
+    const result = await loadPageContent(keyedPage, { viaWorker: true });
+
+    expect(result).toEqual({
+      format: 'json',
+      blocks: [{ id: 'b1' }],
+      coverImage: cover,
+      sha: 'map-sha',
+    });
+    expect(getContentMock).not.toHaveBeenCalled();
+  });
+
+  it('falls through to index.html for a legacy page', async () => {
+    fetchContentTextMock
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce({ text: '<h1>Legacy</h1>', sha: 'html-sha', source: 'worker' });
+
+    const result = await loadPageContent(keyedPage, { viaWorker: true });
+
+    expect(result).toEqual({
+      format: 'html',
+      blocks: '<h1>Legacy</h1>',
+      coverImage: null,
+      sha: 'html-sha',
+    });
+  });
+
+  it('falls back to the GitHub read when the map has nothing', async () => {
+    // The layer is an accelerator, never the reason a page fails to load.
+    getContentMock.mockResolvedValueOnce({
+      content: JSON.stringify({ blocks: [], coverImage: null }),
+      sha: 'github-sha',
+    });
+
+    const result = await loadPageContent(keyedPage, { viaWorker: true });
+
+    expect(result.sha).toBe('github-sha');
+  });
+
+  it('is ignored for a preview-branch read', async () => {
+    // Preview branches have no map rows at all; signing against one would serve
+    // main's bytes under a preview URL.
+    getContentMock.mockResolvedValueOnce({ content: '{"blocks":[]}', sha: 'branch-sha' });
+
+    await loadPageContent(keyedPage, { viaWorker: true, ref: 'preview/pages/syllabus' });
+
+    expect(fetchContentTextMock).not.toHaveBeenCalled();
+    expect(callArg(getContentMock).ref).toBe('preview/pages/syllabus');
   });
 });
 

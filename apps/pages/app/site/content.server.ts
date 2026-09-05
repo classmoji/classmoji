@@ -1,4 +1,4 @@
-import { ContentService } from '@classmoji/services';
+import { ClassmojiService, ContentService } from '@classmoji/services';
 
 import { migrateHtmlToBlockNote } from '~/utils/migration.server.ts';
 import { schema } from '~/components/editor/blocks/index.tsx';
@@ -63,6 +63,10 @@ export type SiteContentPage = {
 
 /** The classroom fields a content read needs (the narrow site select). */
 export type SiteContentClassroom = {
+  /** Present on the site select; absent only in older test fixtures. */
+  id?: string;
+  content_key_version?: number;
+  content_delivery_enabled?: boolean | null;
   content_repo: string | null;
   git_organization: { login: string | null } | null;
 };
@@ -79,10 +83,39 @@ const statusOf = (error: unknown): number | null => {
  * unavailability so it can never be mistaken for "no content".
  */
 async function readContentFile(
+  classroom: SiteContentClassroom,
   orgLogin: string,
   repo: string,
   path: string
-): Promise<{ content: string; sha: string } | null> {
+): Promise<{ content: string; sha: string | null } | null> {
+  // The delivery layer first, by sha. A save is then visible to the site the
+  // moment it returns rather than after the five-minute cache below — and the
+  // read costs no GitHub call at all, which matters on the one surface with
+  // anonymous readers and no upper bound on traffic.
+  //
+  // `workerOnly` is what makes this safe to put in front of the read below:
+  // `fetchContentText` swallows every failure into `null`, which would collapse
+  // "this page has no content.json" and "GitHub is down" into the same answer —
+  // and this module exists precisely because that distinction decides between
+  // an empty page and a 503. So the map either answers or gets out of the way,
+  // and the typed read below keeps owning the failure semantics.
+  if (classroom.id) {
+    const viaMap = await ClassmojiService.contentDelivery.fetchContentText(
+      {
+        classroom: {
+          id: classroom.id,
+          content_key_version: classroom.content_key_version ?? 0,
+          content_repo: repo,
+          content_delivery_enabled: classroom.content_delivery_enabled === true,
+          git_organization: { login: orgLogin },
+        },
+      },
+      path,
+      { label: 'site', workerOnly: true }
+    );
+    if (viaMap) return { content: viaMap.text, sha: viaMap.sha };
+  }
+
   try {
     return await ContentService.getContent({
       orgLogin,
@@ -119,7 +152,12 @@ export async function loadSitePageContent(
     return { format: 'none', blocks: [], coverImage: null };
   }
 
-  const jsonFile = await readContentFile(orgLogin, repo, `${page.content_path}/content.json`);
+  const jsonFile = await readContentFile(
+    classroom,
+    orgLogin,
+    repo,
+    `${page.content_path}/content.json`
+  );
 
   if (jsonFile?.content) {
     let parsed: unknown;
@@ -155,7 +193,12 @@ export async function loadSitePageContent(
     };
   }
 
-  const htmlFile = await readContentFile(orgLogin, repo, `${page.content_path}/index.html`);
+  const htmlFile = await readContentFile(
+    classroom,
+    orgLogin,
+    repo,
+    `${page.content_path}/index.html`
+  );
 
   if (htmlFile?.content) {
     // The migration builds its own ServerBlockNoteEditor, so it contends for

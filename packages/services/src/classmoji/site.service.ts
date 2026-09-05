@@ -75,8 +75,10 @@ export class SiteError extends Error {
  * never be in it. Only `theme` is pulled through, by explicit select.
  *
  * `git_organization` likewise selects identity only — `access_token` is a
- * GitLab/Gitea credential. Content reads on the public site go to the GitHub
- * Pages CDN (getContentUrl), which needs nothing but the login and repo name.
+ * GitLab/Gitea credential. Site content reads need nothing more than the login
+ * and repo name: they resolve a path to a blob sha through the asset map and
+ * fetch it from the delivery Worker, and the contents API behind that runs on
+ * the installation token the service looks up for itself.
  */
 const SITE_CLASSROOM_SELECT = {
   id: true,
