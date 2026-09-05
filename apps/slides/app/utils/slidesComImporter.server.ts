@@ -814,7 +814,7 @@ export async function processZipImport({
   // 13. Batch upload all files in single commit
   onProgress({ type: 'step', step: 'uploading_github', current: 0, total: files.length });
   try {
-    await ContentService.uploadBatch({
+    const result = await ContentService.uploadBatch({
       orgLogin: org,
       repo: repoName,
       files,
@@ -823,6 +823,10 @@ export async function processZipImport({
         onProgress({ type: 'step', step: 'uploading_github', current, total, filename });
       },
     });
+    // Write-through: an imported deck is opened the moment the import finishes,
+    // and its index.html is read through the asset map. Without this the first
+    // views fall back to the contents API until the push webhook lands.
+    await ClassmojiService.contentAssets.recordContentAssets(classroom.id, result.files);
   } catch (uploadError: unknown) {
     console.log(uploadError);
     // If upload fails, clean up slide record and Cloudinary videos

@@ -315,6 +315,15 @@ export async function acceptDeckPreview(
     return null;
   };
 
+  /**
+   * index.html's sha from whichever regenerate actually landed, or null.
+   *
+   * Written by `regenerateFrom` rather than returned from it because the retry
+   * path below calls it twice and only the successful call's sha is the one the
+   * map should hold.
+   */
+  let htmlSha: string | null = null;
+
   // Render + commit the artifact, CAS-pinned on the deck.json sha it was
   // generated from: if a concurrent save moves deck.json, the write aborts
   // (DeckConflictError) instead of publishing a stale artifact.
@@ -342,15 +351,6 @@ export async function acceptDeckPreview(
     });
     htmlSha = written.files.find(file => file.path === htmlPath)?.sha ?? null;
   };
-
-  /**
-   * index.html's sha from whichever regenerate actually landed, or null.
-   *
-   * Written by `regenerateFrom` rather than returned from it because the retry
-   * path below calls it twice and only the successful call's sha is the one the
-   * map should hold.
-   */
-  let htmlSha: string | null = null;
 
   let mergedSha: string | null = null;
   let htmlRegenerated = false;
