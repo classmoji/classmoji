@@ -197,10 +197,12 @@ export async function loadPageContent(
  * The caller then runs its ordinary GitHub read, so this is purely an
  * accelerator that can never be the reason a page fails to load.
  *
- * `fetchContentText` does its own API-then-CDN fallback, so a hit here has
- * already exhausted the alternatives for that path; a null on `content.json`
- * genuinely means the file is not there, and the `index.html` probe below is
- * the legacy-page case rather than a retry.
+ * `workerOnly`, and it matters: `fetchContentText` would otherwise run its own
+ * API-then-CDN fallback, and the caller's GitHub read is sitting right behind
+ * this call — so every map miss would pay TWO contents-API reads and a CDN
+ * fetch to answer one page. The caller's read is also the better of the two:
+ * it carries the full `gitOrganization` record, where the fallback can only
+ * pass a login and re-resolve it as GitHub.
  */
 async function loadPageContentViaWorker(
   page: PageWithContentRepo
@@ -208,7 +210,8 @@ async function loadPageContentViaWorker(
   const ctx = pageResolveContext(page);
   if (!ctx) return null;
 
-  const json = await fetchContentText(ctx, `${page.content_path}/content.json`, { label: 'page' });
+  const opts = { label: 'page', workerOnly: true } as const;
+  const json = await fetchContentText(ctx, `${page.content_path}/content.json`, opts);
   if (json) {
     try {
       const parsed = JSON.parse(json.text);
@@ -229,7 +232,7 @@ async function loadPageContentViaWorker(
     }
   }
 
-  const html = await fetchContentText(ctx, `${page.content_path}/index.html`, { label: 'page' });
+  const html = await fetchContentText(ctx, `${page.content_path}/index.html`, opts);
   if (html) return { format: 'html', blocks: html.text, coverImage: null, sha: html.sha };
 
   return null;

@@ -327,6 +327,21 @@ describe('pageContent.loadPageContent viaWorker', () => {
     expect(result.sha).toBe('github-sha');
   });
 
+  it('asks the map only, so a miss does not read GitHub twice', async () => {
+    // `fetchContentText` has its own API-then-CDN ladder, and the caller's own
+    // GitHub read is sitting right behind this one — without workerOnly every
+    // map miss would pay two contents-API reads and a CDN fetch for one page.
+    getContentMock.mockResolvedValue(null);
+
+    await loadPageContent(keyedPage, { viaWorker: true });
+
+    for (const call of fetchContentTextMock.mock.calls) {
+      expect(call[2]).toMatchObject({ workerOnly: true });
+    }
+    // content.json + index.html, from the caller's read — not four.
+    expect(getContentMock).toHaveBeenCalledTimes(2);
+  });
+
   it('is ignored for a preview-branch read', async () => {
     // Preview branches have no map rows at all; signing against one would serve
     // main's bytes under a preview URL.
