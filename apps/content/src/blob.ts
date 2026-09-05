@@ -19,6 +19,14 @@ import {
 } from './transform.ts';
 import { cacheControlFor, nowSeconds, type BlobVerification } from './verify.ts';
 
+/**
+ * What a caught rejection actually says. Workers Logs renders a thrown object
+ * as a bare stack, so every cache warning logs this instead.
+ */
+function messageOf(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 /** The success half of the verification union. */
 type VerifiedBlob = Extract<BlobVerification, { ok: true }>;
 
@@ -103,9 +111,66 @@ function declaredLength(headers: Headers): number | null {
 }
 
 /**
- * Stream an origin body to the client while a tee'd copy lands in R2. Bytes are
- * never buffered here — this is the path every untransformed miss takes, and
- * the one the transform path falls back to when its source is too big to hold.
+ * Ceiling on a cache copy we have to hold in memory because the origin never
+ * said how long it was. Text blobs — `content.json`, `index.html`, css — are
+ * kilobytes, and images arrive identity-encoded with a length, so nothing on
+ * the normal path comes near this. It is here so a pathological body cannot
+ * trade a cache write for the isolate's memory.
+ */
+export const MAX_UNKNOWN_LENGTH_CACHE_BYTES = 32 * 1024 * 1024;
+
+/**
+ * Put the tee'd cache branch into R2, buffering it only when we must.
+ *
+ * R2 accepts a `ReadableStream` only when the runtime knows its length up
+ * front, which it does from the origin's `Content-Length` — and only when the
+ * origin sent one it did not encode. GitHub gzips text, so every
+ * `content.json`, `index.html` and stylesheet arrives with the length of the
+ * ENCODED body while `tee()` hands us the decoded bytes: length unknown, and
+ * the streaming put rejects. That failure is silent to the client (the write is
+ * in `waitUntil`), so text was served correctly and re-pulled from GitHub on
+ * every single read, never landing in R2 or at the edge.
+ *
+ * With no length there is nothing to declare up front, so the only way to write
+ * it is to hold it. `readBounded` caps how much — past the ceiling the copy is
+ * dropped rather than cached, which costs a re-fetch and never the isolate.
+ */
+async function putCacheBranch(
+  env: Env,
+  key: string,
+  toCache: ReadableStream<Uint8Array>,
+  contentType: string,
+  contentLength: number | null
+): Promise<void> {
+  try {
+    if (contentLength !== null) {
+      await env.CACHE.put(key, toCache, { httpMetadata: { contentType } });
+      return;
+    }
+    const bytes = await readBounded(toCache, MAX_UNKNOWN_LENGTH_CACHE_BYTES);
+    if (bytes === null) {
+      // The size can only be named by buffering it, which is the thing the
+      // ceiling exists to refuse.
+      console.warn(
+        `[content] not caching ${key}: unknown-length origin body over the ` +
+          `${MAX_UNKNOWN_LENGTH_CACHE_BYTES} byte ceiling`
+      );
+      return;
+    }
+    await env.CACHE.put(key, bytes, { httpMetadata: { contentType } });
+  } catch (error) {
+    // The message, not the error: Workers Logs renders a thrown object as a
+    // stack, and the stack of a caught R2 rejection says nothing about why.
+    console.warn(`[content] failed to cache ${key}: ${messageOf(error)}`);
+  }
+}
+
+/**
+ * Stream an origin body to the client while a tee'd copy lands in R2. The
+ * client's half always streams — this is the path every untransformed miss
+ * takes, and the one the transform path falls back to when its source is too
+ * big to hold. Only the cache half is ever buffered, and only when the origin
+ * left its length unknown.
  */
 function streamAndCache(
   env: Env,
@@ -117,11 +182,7 @@ function streamAndCache(
   contentLength: number | null
 ): Response {
   const [toClient, toCache] = body.tee();
-  ctx.waitUntil(
-    env.CACHE.put(key, toCache, { httpMetadata: { contentType } }).catch(error => {
-      console.warn(`[content] failed to cache ${key}:`, error);
-    })
-  );
+  ctx.waitUntil(putCacheBranch(env, key, toCache, contentType, contentLength));
   const headers = contentHeaders(contentType, cacheControl);
   // Only ever forwarded, never computed: working it out would mean buffering
   // the very stream this path exists to avoid buffering.
@@ -252,7 +313,7 @@ async function loadOriginalBytes(
   ctx.waitUntil(
     env.CACHE.put(key, bytes, { httpMetadata: { contentType: options.contentType } }).catch(
       error => {
-        console.warn(`[content] failed to cache ${key}:`, error);
+        console.warn(`[content] failed to cache ${key}: ${messageOf(error)}`);
       }
     )
   );
@@ -304,7 +365,7 @@ async function serveVariant(
   ctx.waitUntil(
     env.CACHE.put(key, transformed, { httpMetadata: { contentType: mediaTypeFor(format) } }).catch(
       error => {
-        console.warn(`[content] failed to cache ${key}:`, error);
+        console.warn(`[content] failed to cache ${key}: ${messageOf(error)}`);
       }
     )
   );

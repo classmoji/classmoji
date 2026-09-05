@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { MAX_UNKNOWN_LENGTH_CACHE_BYTES } from '../src/blob.ts';
 import worker, { clearRotationLog } from '../src/index.ts';
 import { clearOriginCache } from '../src/token.ts';
 import { MAX_TRANSFORM_SOURCE_BYTES } from '../src/transform.ts';
@@ -20,6 +21,19 @@ import {
 } from './helpers.ts';
 
 const realFetch = globalThis.fetch;
+
+/** Size a body without holding a copy of it — the oversized cases are 32 MB. */
+async function countBytes(response: Response): Promise<number> {
+  const body = response.body;
+  if (!body) return 0;
+  const reader = body.getReader();
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) return total;
+    total += value.byteLength;
+  }
+}
 
 /** Routes the two upstreams the Worker talks to: the token endpoint and GitHub. */
 function stubUpstreams(handlers: { blob?: () => Response; tree?: () => Response } = {}) {
@@ -307,11 +321,27 @@ describe('blob delivery', () => {
     stubUpstreams({
       blob: () => new Response('origin-bytes', { headers: { 'Content-Length': '12' } }),
     });
+    const bucket = fakeBucket({}, { originDeclaresLength: true });
+    const ctx = fakeContext();
     const url = await signedBlobUrl({ sha: BLOB_SHA, ext: 'css' });
 
-    const response = await worker.fetch(new Request(url), fakeEnv(), fakeContext());
+    const response = await worker.fetch(
+      new Request(url),
+      fakeEnv({ CACHE: bucket as unknown as R2Bucket }),
+      ctx
+    );
 
     expect(response.headers.get('Content-Length')).toBe('12');
+    // A declared length is the one case R2 can take the stream itself.
+    await ctx.settled();
+    expect(bucket.puts).toEqual([
+      {
+        key: `blobs/${BLOB_SHA}`,
+        contentType: 'text/css; charset=utf-8',
+        bytes: 'origin-bytes'.length,
+        streamed: true,
+      },
+    ]);
   });
 
   it('drops the Content-Length of a compressed origin response', async () => {
@@ -430,6 +460,7 @@ describe('blob delivery', () => {
         key: `blobs/${BLOB_SHA}`,
         contentType: 'text/css; charset=utf-8',
         bytes: 'origin-bytes'.length,
+        streamed: false,
       },
     ]);
   });
@@ -608,6 +639,7 @@ describe('blob delivery', () => {
         key: `blobs/${BLOB_SHA}`,
         contentType: 'text/html; charset=utf-8',
         bytes: 'origin-bytes'.length,
+        streamed: false,
       },
     ]);
   });
@@ -633,7 +665,12 @@ describe('blob delivery', () => {
     expect(response.headers.get('Cache-Control')).toBe('no-store');
     await ctx.settled();
     expect(bucket.puts).toEqual([
-      { key: `blobs/${BLOB_SHA}`, contentType: 'image/png', bytes: 'origin-bytes'.length },
+      {
+        key: `blobs/${BLOB_SHA}`,
+        contentType: 'image/png',
+        bytes: 'origin-bytes'.length,
+        streamed: false,
+      },
     ]);
   });
 
@@ -655,8 +692,137 @@ describe('blob delivery', () => {
         key: `blobs/${BLOB_SHA}`,
         contentType: 'text/css; charset=utf-8',
         bytes: 'origin-bytes'.length,
+        streamed: false,
       },
     ]);
+  });
+
+  it('caches a gzipped text blob, whose decoded length the origin never declared', async () => {
+    // The production bug. GitHub gzips content.json, index.html and css; the
+    // runtime decodes them, so the declared length describes bytes we no longer
+    // hold and R2 refuses the resulting unknown-length stream. Every text read
+    // was served correctly and then re-pulled from GitHub, forever.
+    const bucket = fakeBucket();
+    const ctx = fakeContext();
+    stubUpstreams({
+      blob: () =>
+        new Response('{"page":"bytes"}', {
+          headers: { 'Content-Length': '19', 'Content-Encoding': 'gzip' },
+        }),
+    });
+    const url = await signedBlobUrl({ sha: BLOB_SHA, ext: 'json' });
+
+    const response = await worker.fetch(
+      new Request(url),
+      fakeEnv({ CACHE: bucket as unknown as R2Bucket }),
+      ctx
+    );
+
+    expect(response.status).toBe(200);
+    expect(await response.text()).toBe('{"page":"bytes"}');
+    await ctx.settled();
+    expect(bucket.puts).toEqual([
+      {
+        key: `blobs/${BLOB_SHA}`,
+        contentType: 'application/json; charset=utf-8',
+        bytes: '{"page":"bytes"}'.length,
+        streamed: false,
+      },
+    ]);
+  });
+
+  it('hands R2 the stream itself when the origin measured the body', async () => {
+    // Images arrive identity-encoded with a real Content-Length, so the length
+    // survives to R2 and nothing is ever held in memory.
+    const bucket = fakeBucket({}, { originDeclaresLength: true });
+    const ctx = fakeContext();
+    stubUpstreams({
+      blob: () => new Response('png-bytes', { headers: { 'Content-Length': '9' } }),
+    });
+    const url = await signedBlobUrl({ sha: BLOB_SHA, ext: 'png' });
+
+    const response = await worker.fetch(
+      new Request(url),
+      fakeEnv({ CACHE: bucket as unknown as R2Bucket }),
+      ctx
+    );
+
+    expect(response.status).toBe(200);
+    await ctx.settled();
+    expect(bucket.puts).toEqual([
+      {
+        key: `blobs/${BLOB_SHA}`,
+        contentType: 'image/png',
+        bytes: 'png-bytes'.length,
+        streamed: true,
+      },
+    ]);
+  });
+
+  it('serves an unknown-length body over the ceiling without caching it', async () => {
+    // Nothing on the real path comes near 32 MB of undeclared length. The
+    // ceiling is here so a body that does costs a re-fetch, not the isolate.
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const bucket = fakeBucket();
+    const ctx = fakeContext();
+    const chunk = new Uint8Array(4 * 1024 * 1024);
+    const chunks = MAX_UNKNOWN_LENGTH_CACHE_BYTES / chunk.byteLength;
+    stubUpstreams({
+      blob: () =>
+        new Response(
+          new ReadableStream<Uint8Array>({
+            start(controller) {
+              for (let index = 0; index < chunks; index += 1) controller.enqueue(chunk);
+              controller.enqueue(new Uint8Array(1));
+              controller.close();
+            },
+          })
+        ),
+    });
+    const url = await signedBlobUrl({ sha: BLOB_SHA, ext: 'css' });
+
+    const response = await worker.fetch(
+      new Request(url),
+      fakeEnv({ CACHE: bucket as unknown as R2Bucket }),
+      ctx
+    );
+
+    expect(response.status).toBe(200);
+    expect(await countBytes(response)).toBe(MAX_UNKNOWN_LENGTH_CACHE_BYTES + 1);
+    await ctx.settled();
+    expect(bucket.puts).toEqual([]);
+    expect(warn.mock.calls[0]?.[0]).toBe(
+      `[content] not caching blobs/${BLOB_SHA}: unknown-length origin body over the ` +
+        `${MAX_UNKNOWN_LENGTH_CACHE_BYTES} byte ceiling`
+    );
+  });
+
+  it('logs what R2 actually said when a cache write fails', async () => {
+    // Workers Logs renders a thrown object as a bare stack, which is how a
+    // put that had been failing on every text blob for weeks read as noise.
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const bucket = fakeBucket();
+    const failing = {
+      ...bucket,
+      put: async () => {
+        throw new Error('the R2 service is having a bad day');
+      },
+    };
+    const ctx = fakeContext();
+    stubUpstreams();
+    const url = await signedBlobUrl({ sha: BLOB_SHA, ext: 'css' });
+
+    const response = await worker.fetch(
+      new Request(url),
+      fakeEnv({ CACHE: failing as unknown as R2Bucket }),
+      ctx
+    );
+
+    expect(response.status).toBe(200);
+    await ctx.settled();
+    expect(warn.mock.calls[0]?.[0]).toBe(
+      `[content] failed to cache blobs/${BLOB_SHA}: the R2 service is having a bad day`
+    );
   });
 
   it('502s an origin failure and does not cache it', async () => {
@@ -776,7 +942,7 @@ describe('blob delivery', () => {
           headers: { 'Content-Length': String(MAX_TRANSFORM_SOURCE_BYTES + 1) },
         }),
     });
-    const bucket = fakeBucket();
+    const bucket = fakeBucket({}, { originDeclaresLength: true });
     const images = { input: vi.fn() } as unknown as ImagesBinding;
     const ctx = fakeContext();
     const url = await signedBlobUrl({
