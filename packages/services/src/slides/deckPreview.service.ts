@@ -20,6 +20,7 @@
 
 import getPrisma from '@classmoji/database';
 import { ContentService } from '../content/ContentService.ts';
+import { recordContentAssets } from '../classmoji/contentAssets.service.ts';
 import { generateDeckHtml, type DeckThemeUrls } from './deckHtml.ts';
 import {
   indexResolutions,
@@ -324,7 +325,7 @@ export async function acceptDeckPreview(
       themeUrls,
       includeNotes: true,
     });
-    await ContentService.uploadBatch({
+    const written = await ContentService.uploadBatch({
       gitOrganization,
       repo,
       files: [{ path: htmlPath, content: html, encoding: 'utf-8' as const }],
@@ -339,7 +340,17 @@ export async function acceptDeckPreview(
         }
       },
     });
+    htmlSha = written.files.find(file => file.path === htmlPath)?.sha ?? null;
   };
+
+  /**
+   * index.html's sha from whichever regenerate actually landed, or null.
+   *
+   * Written by `regenerateFrom` rather than returned from it because the retry
+   * path below calls it twice and only the successful call's sha is the one the
+   * map should hold.
+   */
+  let htmlSha: string | null = null;
 
   let mergedSha: string | null = null;
   let htmlRegenerated = false;
@@ -387,6 +398,19 @@ export async function acceptDeckPreview(
     // Preview never wrote deck.json (nothing but the branch point) — the
     // merge was a no-op for content; there is nothing to regenerate.
     console.warn(`[deckPreview] No deck.json on main after merge for ${deckPath}`);
+  }
+
+  // Write-through. A git merge produces a commit nobody in this process wrote,
+  // so there is no put() result to take shas from — but both are already in
+  // hand: `mergedSha` came from reading deck.json at the merge commit, and
+  // `htmlSha` from the regenerate's own batch. Without this, accepting a
+  // preview would publish a deck that `/present` keeps serving the pre-accept
+  // version of until the push webhook lands.
+  if (slide.classroom?.id) {
+    const written: Array<{ path: string; sha: string }> = [];
+    if (mergedSha) written.push({ path: deckPath, sha: mergedSha });
+    if (htmlSha) written.push({ path: htmlPath, sha: htmlSha });
+    await recordContentAssets(slide.classroom.id, written);
   }
 
   // Concurrent-stacking guard: a stacking apply may have committed to the

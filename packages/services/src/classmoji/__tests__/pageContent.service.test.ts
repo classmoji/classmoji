@@ -256,6 +256,50 @@ describe('pageContent.savePageContent', () => {
   });
 });
 
+// ─── savePageContent write-through ───────────────────────────────────────────
+
+describe('pageContent.savePageContent write-through', () => {
+  const blocks = [{ id: 'b1', type: 'paragraph', content: [] }];
+  // The fixture above deliberately has no classroom id (several callers have
+  // none); this one does, because the map row is keyed on it.
+  const keyedPage = { ...page, classroom: { ...page.classroom, id: 'class-1' } };
+
+  beforeEach(() => {
+    recordContentAssetMock.mockResolvedValue(true);
+  });
+
+  it('records content.json at the sha the commit returned', async () => {
+    // This is what makes a save VISIBLE. content.json is read through the map
+    // now, so a row one save behind is the previous version of the page on a
+    // student's screen — not merely a stale cache.
+    await savePageContent(keyedPage, blocks, { coverImage: null });
+
+    expect(recordContentAssetMock).toHaveBeenCalledWith('class-1', {
+      path: 'pages/syllabus/content.json',
+      sha: 'new-sha',
+    });
+  });
+
+  it('records nothing for a preview-branch save', async () => {
+    // A preview branch is not in the map. Recording its sha would publish an
+    // unaccepted draft to every reader.
+    getContentMock.mockResolvedValueOnce(null);
+
+    await savePageContent(keyedPage, blocks, { branch: 'preview/pages/syllabus' });
+
+    expect(recordContentAssetMock).not.toHaveBeenCalled();
+  });
+
+  it('still returns the save when the map write cannot be keyed', async () => {
+    // A page assembled without its classroom id has nothing to key a row on.
+    // The commit stands; the next sync picks it up.
+    const result = await savePageContent(page, blocks, { coverImage: null });
+
+    expect(result).toEqual({ sha: 'new-sha', commit: 'commit-1' });
+    expect(recordContentAssetMock).not.toHaveBeenCalled();
+  });
+});
+
 // ─── uploadPageAsset ─────────────────────────────────────────────────────────
 
 describe('pageContent.uploadPageAsset', () => {

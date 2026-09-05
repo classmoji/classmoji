@@ -335,7 +335,7 @@ export async function savePageContent(
     wrapper.coverImage = coverImage;
   }
 
-  return ContentService.put({
+  const result = await ContentService.put({
     gitOrganization,
     repo,
     path,
@@ -344,6 +344,33 @@ export async function savePageContent(
     ...(expectedSha ? { expectedSha } : {}),
     ...(branch ? { branch } : {}),
   });
+
+  // Write-through: `content.json` is READ through the map now (see
+  // `fetchContentText`), so a row that is one save behind is not a stale cache,
+  // it is the previous version of the page on a student's screen. The contents
+  // API just told us the new blob sha; recording it here is what makes the save
+  // visible the moment it returns, rather than when the push webhook lands.
+  //
+  // Default branch only. A preview branch is not in the map, and recording its
+  // sha would publish an unaccepted draft to every reader.
+  if (!branch) {
+    await recordPageFile(page, path, result.sha);
+  }
+
+  return result;
+}
+
+/**
+ * Put a just-committed page file into the asset map.
+ *
+ * Never throws — `recordContentAsset` swallows its own failures, and this adds
+ * the one branch it cannot: a page assembled without its classroom id has
+ * nothing to key a row on. The commit still stands; the next sync picks it up.
+ */
+async function recordPageFile(page: PageWithContentRepo, path: string, sha: string): Promise<void> {
+  const classroomId = (page.classroom as { id?: unknown }).id;
+  if (typeof classroomId !== 'string') return;
+  await recordContentAsset(classroomId, { path, sha });
 }
 
 /**
@@ -1054,6 +1081,14 @@ export async function acceptPreview(page: PageWithContentRepo): Promise<AcceptPr
         error instanceof Error ? error.message : String(error)
       );
     }
+
+    // Write-through, same as an ordinary save. A git-level merge produces a
+    // commit nobody in this process wrote, so there is no put() result to take
+    // a sha from — but the read above already fetched it at the merge commit,
+    // which is the same value. Without this, accepting a preview would publish
+    // content the read side keeps serving the pre-accept version of until the
+    // webhook lands.
+    if (newSha) await recordPageFile(page, path, newSha);
 
     // Concurrent-stacking guard: a stacking apply may have committed to the
     // preview branch AFTER the merge snapshot GitHub used. If the branch now

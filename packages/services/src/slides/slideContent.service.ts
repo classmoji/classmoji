@@ -18,6 +18,7 @@ import {
 } from './deckHtml.ts';
 import type { DeckJson } from './deckTypes.ts';
 import { canonicalizeDeckAssets } from './deckAssets.ts';
+import { recordContentAssets } from '../classmoji/contentAssets.service.ts';
 import {
   canonicalizeMany,
   isOwnAssetRef,
@@ -417,6 +418,18 @@ export async function saveDeck({
     throw new Error('uploadBatch did not return a sha for deck.json');
   }
 
+  // Write-through: the map learns this commit's shas NOW rather than when the
+  // push webhook arrives, which is what makes `/present` fresh the instant a
+  // save returns. The read side signs whatever sha the map holds, so a row that
+  // is one save behind IS the previous deck on screen — the exact bug this
+  // whole path exists to close.
+  //
+  // Main writes only. A preview branch is not in the map, and recording its
+  // shas would point every reader at unpublished content.
+  if (!isPreviewBranch) {
+    await recordDeckFiles(slide, result.files);
+  }
+
   // Bump updated_at for main writes (a preview-branch commit changes nothing
   // students or the live viewer can see).
   if (slide.id && !isPreviewBranch) {
@@ -427,4 +440,24 @@ export async function saveDeck({
   }
 
   return { sha: newDeckSha, commit: result.commit, html };
+}
+
+/**
+ * Put a just-committed deck's files into the asset map.
+ *
+ * Never throws — `recordContentAssets` swallows its own failures, and this adds
+ * the one branch it cannot: a target with no classroom id (createSlide's
+ * starter deck, the importer's synthetic target) has nothing to key a row on.
+ * Such a save is still committed; the map picks it up on the next sync.
+ */
+async function recordDeckFiles(
+  slide: SlideContentTarget,
+  files: Array<{ path: string; sha: string }>
+): Promise<void> {
+  const classroomId = slide.classroom?.id;
+  if (!classroomId) return;
+  await recordContentAssets(
+    classroomId,
+    files.map(file => ({ path: file.path, sha: file.sha }))
+  );
 }

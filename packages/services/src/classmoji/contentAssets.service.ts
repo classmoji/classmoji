@@ -627,6 +627,52 @@ export async function ensureContentAssets(
 }
 
 /**
+ * Record several just-written blobs in the map in one pass.
+ *
+ * The batch form of `recordContentAsset`, and the one every TEXT save uses: a
+ * deck save commits `deck.json` and `index.html` together, so recording them
+ * one at a time would load the classroom twice to answer the same question.
+ *
+ * Same contract as the single form in every other respect — never throws, and
+ * a classroom the delivery layer does not serve is a quiet `false`. Partial
+ * success is reported as failure: the caller's only use for the answer is a
+ * log line, and "some rows landed" is not a state worth a second return shape.
+ */
+export async function recordContentAssets(
+  classroomId: string,
+  entries: Array<{ path: string; sha: string; size?: number }>
+): Promise<boolean> {
+  if (entries.length === 0) return true;
+
+  try {
+    const classroom = await loadClassroomRaw(classroomId);
+    if (!isDeliverable(classroom)) return false;
+
+    // One stamp for the batch. These files were committed together, and a sync
+    // sweep compares against this value — giving them separate `now`s would be
+    // a distinction the repo does not make.
+    const syncedAt = new Date();
+    await Promise.all(
+      entries.map(entry =>
+        upsertOp(
+          classroomId,
+          { path: entry.path, sha: entry.sha, type: 'blob', size: entry.size },
+          syncedAt
+        )
+      )
+    );
+    return true;
+  } catch (error: unknown) {
+    console.warn(
+      `[contentAssets] Could not record ${entries.length} path(s) for ${classroomId}; ` +
+        'the next sync will pick them up:',
+      error
+    );
+    return false;
+  }
+}
+
+/**
  * Record ONE just-uploaded blob in the map, now, without waiting for a sync.
  *
  * The map is otherwise filled by a push webhook or by `ensureContentAssets`'
@@ -635,6 +681,12 @@ export async function ensureContentAssets(
  * up, misses, and the resolver emits its "dangling" URL. The upload already
  * knows everything a row needs — path, blob sha, size — so writing it here
  * removes the round trip entirely.
+ *
+ * The same reasoning applies to the TEXT a save writes — `content.json`,
+ * `deck.json`, the generated `index.html` — for a sharper reason: those are
+ * read THROUGH the map now (see `fetchContentText`), so a missing row is not a
+ * dangling image, it is `/present` showing the previous version of the deck
+ * that was just saved. Multi-file saves use `recordContentAssets` above.
  *
  * A later full sync overwrites this row with identical values and its sweep
  * keeps it (the stamp is `now`), so this is only an early write of what the
