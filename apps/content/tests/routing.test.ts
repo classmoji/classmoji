@@ -497,6 +497,49 @@ describe('blob delivery', () => {
     expect(response.headers.get('Content-Type')).toBe('application/json; charset=utf-8');
   });
 
+  it('ignores the type R2 stored and trusts the signed extension', async () => {
+    // R2 keys are content-addressed — `blobs/{sha}`, no classroom — so ONE
+    // object is shared by every classroom and every path holding those bytes,
+    // and whichever extension was fetched first wrote the stored type. Trusting
+    // it means a stylesheet whose bytes also live at a `.txt` path anywhere in
+    // the fleet is served `text/plain` to everyone, and `nosniff` then makes
+    // the browser refuse it as a stylesheet. The signed extension is
+    // per-request and unforgeable; the stored type is someone else's answer.
+    const bucket = fakeBucket({
+      [`blobs/${BLOB_SHA}`]: {
+        body: 'body { color: red }',
+        contentType: 'text/plain; charset=utf-8',
+      },
+    });
+    const url = await signedBlobUrl({ sha: BLOB_SHA, ext: 'css', tier: 'enrolled' });
+
+    const response = await worker.fetch(
+      new Request(url),
+      fakeEnv({ CACHE: bucket as unknown as R2Bucket }),
+      fakeContext()
+    );
+
+    expect(response.headers.get('Content-Type')).toBe('text/css; charset=utf-8');
+  });
+
+  it('answers HEAD from the signed extension too', async () => {
+    // Same object, same trap — a HEAD is answered straight from R2 metadata,
+    // which is exactly where the wrong stored type lives.
+    const bucket = fakeBucket({
+      [`blobs/${BLOB_SHA}`]: { body: '<!doctype html>', contentType: 'application/octet-stream' },
+    });
+    const url = await signedBlobUrl({ sha: BLOB_SHA, ext: 'html', tier: 'enrolled' });
+
+    const response = await worker.fetch(
+      new Request(url, { method: 'HEAD' }),
+      fakeEnv({ CACHE: bucket as unknown as R2Bucket }),
+      fakeContext()
+    );
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get('Content-Type')).toBe('text/html; charset=utf-8');
+  });
+
   it('serves a draft html blob no-store, exactly like a draft image', async () => {
     // The per-tier cache lifetimes are decided by `cacheControlFor` on the
     // tier alone; text takes the same answer images take, unchanged.

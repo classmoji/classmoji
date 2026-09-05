@@ -60,8 +60,10 @@ vi.mock('../contentManifest.service.ts', () => ({
 // it (fetchContentText), so a create that does not record its shas is a page
 // that renders empty until the push webhook lands.
 const recordContentAssetsMock = vi.fn();
+const removeContentAssetFolderMock = vi.fn();
 vi.mock('../contentAssets.service.ts', () => ({
   recordContentAssets: (...args: unknown[]) => recordContentAssetsMock(...args),
+  removeContentAssetFolder: (...args: unknown[]) => removeContentAssetFolderMock(...args),
 }));
 
 vi.mock('../notification.service.ts', () => ({
@@ -433,6 +435,11 @@ describe('page.deletePage', () => {
     );
     expect(pageDeleteMock).toHaveBeenCalledWith({ where: { id: 'page-1' } });
     expect(saveManifestMock).toHaveBeenCalledWith('class-1');
+    // …and the map rows. Blobs are content-addressed and immutable, so a row
+    // that outlives the folder keeps serving the deleted page's last
+    // content.json out of R2 — a deleted page that still renders, until the
+    // next full sync sweeps it.
+    expect(removeContentAssetFolderMock).toHaveBeenCalledWith('class-1', 'pages/doomed');
     expect(result.success).toBe(true);
   });
 

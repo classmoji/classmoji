@@ -118,7 +118,7 @@ async function readContentFile(
       },
     },
     path,
-    { label: 'site', workerOnly: true }
+    { label: 'site', fallback: 'none' }
   );
   if (viaMap) return { content: viaMap.text, sha: viaMap.sha };
 

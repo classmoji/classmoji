@@ -36,7 +36,7 @@ vi.mock('../../content/ContentService.ts', () => ({
   ContentService: { getContent: (...args: unknown[]) => getContent(...args) },
 }));
 
-const { fetchContentText } = await import('../contentDelivery.service.ts');
+const { fetchContentText, textReadBudget } = await import('../contentDelivery.service.ts');
 const { verifyContentUrl } = await import('@classmoji/content-signing');
 
 const ORIGIN = 'https://cdn.classmoji.test';
@@ -258,11 +258,11 @@ describe('fetchContentText fallbacks', () => {
   });
 });
 
-describe('fetchContentText workerOnly', () => {
+describe("fetchContentText fallback: 'none'", () => {
   it('answers from the map and nothing else', async () => {
     const calls = stubFetch({ worker: () => new Response('worker-bytes') });
 
-    const result = await fetchContentText(ctx, DECK_PATH, { workerOnly: true });
+    const result = await fetchContentText(ctx, DECK_PATH, { fallback: 'none' });
 
     expect(result?.source).toBe('worker');
     expect(calls).toHaveLength(1);
@@ -277,11 +277,84 @@ describe('fetchContentText workerOnly', () => {
     lookupContentAsset.mockResolvedValue(null);
     const calls = stubFetch({});
 
-    const result = await fetchContentText(ctx, DECK_PATH, { workerOnly: true });
+    const result = await fetchContentText(ctx, DECK_PATH, { fallback: 'none' });
 
     expect(result).toBeNull();
     expect(getContent).not.toHaveBeenCalled();
     expect(calls).toEqual([]);
+  });
+});
+
+describe("fetchContentText fallback: 'cdn-only'", () => {
+  it('skips the API leg entirely on a map miss', async () => {
+    // The thumbnail rule. A staff landing page renders ~20 decks at once, and
+    // twenty authenticated reads against the org installation's shared limit in
+    // one page load is the amplification the CDN pinning existed to prevent.
+    // Three minutes stale is invisible on a thumbnail; a rate limit is not.
+    lookupContentAsset.mockResolvedValue(null);
+    const calls = stubFetch({});
+
+    const result = await fetchContentText(ctx, DECK_PATH, { fallback: 'cdn-only' });
+
+    expect(result).toEqual({ text: 'cdn-bytes', sha: null, source: 'cdn' });
+    expect(getContent).not.toHaveBeenCalled();
+    expect(calls).toEqual([CDN_URL]);
+  });
+
+  it('still prefers the map when it has the row', async () => {
+    const calls = stubFetch({ worker: () => new Response('the current deck') });
+
+    const result = await fetchContentText(ctx, DECK_PATH, { fallback: 'cdn-only' });
+
+    expect(result?.source).toBe('worker');
+    expect(calls).not.toContain(CDN_URL);
+  });
+});
+
+describe('fetchContentText transport circuit', () => {
+  it('stops probing the Worker for this render once it is unreachable', async () => {
+    // A page probes content.json then index.html. A dead origin is about the
+    // ORIGIN, not the file, so paying the timeout twice only turns one stalled
+    // render into two.
+    const attempts: string[] = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.startsWith(ORIGIN)) {
+          attempts.push(url);
+          throw new Error('ETIMEDOUT');
+        }
+        return new Response('cdn-bytes');
+      })
+    );
+
+    const budget = textReadBudget();
+    await fetchContentText(ctx, DECK_PATH, { budget });
+    await fetchContentText(ctx, 'slides/lecture-1/deck.json', { budget });
+
+    expect(attempts).toHaveLength(1);
+    expect(budget.workerUnavailable).toBe(true);
+  });
+
+  it('does NOT trip on a plain map miss', async () => {
+    // This path having no row says nothing about the next path.
+    lookupContentAsset.mockResolvedValue(null);
+    stubFetch({});
+
+    const budget = textReadBudget();
+    await fetchContentText(ctx, DECK_PATH, { budget });
+
+    expect(budget.workerUnavailable).toBe(false);
+  });
+
+  it('does NOT trip on a Worker refusal — that is an answer, not a dead origin', async () => {
+    stubFetch({ worker: () => new Response('nope', { status: 403 }) });
+
+    const budget = textReadBudget();
+    await fetchContentText(ctx, DECK_PATH, { budget });
+
+    expect(budget.workerUnavailable).toBe(false);
   });
 });
 

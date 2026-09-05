@@ -2,7 +2,7 @@ import getPrisma from '@classmoji/database';
 import { titleToIdentifier, RESERVED_PAGE_SLUGS } from '@classmoji/utils';
 import { ContentService } from '../content/ContentService.ts';
 import { getGitProvider } from '../git/index.ts';
-import { recordContentAssets } from './contentAssets.service.ts';
+import { recordContentAssets, removeContentAssetFolder } from './contentAssets.service.ts';
 import * as contentManifestService from './contentManifest.service.ts';
 import * as notificationService from './notification.service.ts';
 import { blankPageContentJson, previewBranchName } from './pageContent.service.ts';
@@ -748,6 +748,11 @@ export async function deletePage(pageId: string) {
       console.error('Failed to delete page content from GitHub:', error);
       // Continue with database deletion even if GitHub fails
     }
+
+    // Forget the map rows too. The blobs are content-addressed and immutable,
+    // so a surviving row keeps serving the deleted page's last bytes out of R2
+    // — a deleted page that still renders, until the next sweep.
+    await removeContentAssetFolder(classroomId, page.content_path);
 
     // Drop any pending preview branch alongside the folder — a stale
     // preview/<content_path> ref would retarget a future page reusing the slug.

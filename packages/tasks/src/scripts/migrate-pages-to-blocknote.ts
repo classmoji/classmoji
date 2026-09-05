@@ -1,5 +1,6 @@
 import { PrismaClient } from '@prisma/client';
 import { ContentService } from '@classmoji/content';
+import { ClassmojiService } from '@classmoji/services';
 import { migrateHtmlToBlockNote } from '../../../../apps/pages/app/utils/migration.server.ts';
 import { BlockNoteSchema, defaultBlockSpecs, createCodeBlockSpec } from '@blocknote/core';
 import { multiColumnSchema } from '@blocknote/xl-multi-column';
@@ -167,12 +168,24 @@ async function migratePagesToBlockNote(): Promise<void> {
         const blockNoteContent = await migrateHtmlToBlockNote(htmlContent, schema);
 
         // Save as content.json to GitHub
-        await ContentService.put({
+        const contentJson = JSON.stringify(blockNoteContent, null, 2);
+        const written = await ContentService.put({
           gitOrganization: effectiveGitOrg,
           repo,
           path: `${page.content_path}/content.json`,
-          content: JSON.stringify(blockNoteContent, null, 2),
+          content: contentJson,
           message: `Migrate ${page.slug} from HTML to BlockNote format`,
+        });
+
+        // Record the row like any other save. `content.json` is READ through
+        // the asset map, and a migration that skipped this would leave every
+        // page it converted falling back to the contents API — one GitHub call
+        // per view, across a whole classroom at once — until the push webhook
+        // caught up. Never throws.
+        await ClassmojiService.contentAssets.recordContentAsset(page.classroom.id, {
+          path: `${page.content_path}/content.json`,
+          sha: written.sha,
+          size: Buffer.byteLength(contentJson),
         });
 
         console.log(`✅ Converted ${page.slug}`);

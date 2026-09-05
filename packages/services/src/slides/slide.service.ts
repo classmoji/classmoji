@@ -12,6 +12,7 @@
 
 import getPrisma from '@classmoji/database';
 import { ContentService } from '../content/ContentService.ts';
+import { removeContentAssetFolder } from '../classmoji/contentAssets.service.ts';
 import * as contentManifestService from '../classmoji/contentManifest.service.ts';
 import { ensureContentRepo } from '../classmoji/page.service.ts';
 import { mintSlideId, type IdGenerator } from './deckHtml.ts';
@@ -469,6 +470,19 @@ export async function deleteSharedTheme(
     path: `${THEMES_FOLDER}/${themeName}`,
     message: `Delete shared theme: ${themeName}`,
   });
+
+  // And the map rows. A theme folder is addressed by its TREE sha, so a
+  // surviving row keeps a deleted theme resolvable and its css servable from
+  // R2 long after the folder is gone.
+  const classrooms = await getPrisma().classroom.findMany({
+    where: { content_repo: contentRepo, git_organization: { login: gitOrgLogin } },
+    select: { id: true },
+  });
+  await Promise.all(
+    classrooms.map(classroom =>
+      removeContentAssetFolder(classroom.id, `${THEMES_FOLDER}/${themeName}`)
+    )
+  );
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -546,6 +560,11 @@ export async function deleteSlide({
     console.error('Failed to delete slide content from GitHub:', error);
     // Continue with database deletion even if GitHub fails.
   }
+
+  // Forget the map rows too. Blobs are content-addressed and immutable, so a
+  // surviving row keeps serving the deleted deck's last index.html out of R2 —
+  // a deleted deck that still presents, until the next sweep.
+  await removeContentAssetFolder(slide.classroom_id, slide.content_path);
 
   // Drop any pending preview branch alongside the folder — a stale
   // preview/<content_path> ref would retarget a future deck reusing the slug.

@@ -18,7 +18,7 @@ import {
 } from './deckHtml.ts';
 import type { DeckJson } from './deckTypes.ts';
 import { canonicalizeDeckAssets } from './deckAssets.ts';
-import { recordContentAssets } from '../classmoji/contentAssets.service.ts';
+import { recordContentAssets, resolveContentBranch } from '../classmoji/contentAssets.service.ts';
 import {
   canonicalizeMany,
   isOwnAssetRef,
@@ -312,6 +312,20 @@ export async function saveDeck({
   deck = await canonicalizeDeckForSave(slide, deck);
 
   const isPreviewBranch = branch != null && branch.startsWith(PREVIEW_BRANCH_PREFIX);
+  // ASSUMED `main`, where `uploadPageAsset` ASKS — and the asymmetry is
+  // deliberate, not an oversight.
+  //
+  // `resolveContentBranch` is an uncached GitHub call. An upload pays it gladly:
+  // it happens when a teacher drops a file into the editor, which is rare. A
+  // deck save is the editor's hot path, and putting a default-branch lookup in
+  // front of every one of them spends the org installation's shared limit on a
+  // question whose answer has not changed since the repo was created — classmoji
+  // creates content repos on `main`.
+  //
+  // The gap this leaves is a content repo imported from an older org that is on
+  // `master`: deck saves there fail on a missing ref, exactly as they did before
+  // this layer existed. Worth fixing WITH a cache rather than with a call per
+  // save — tracked, not done here.
   const targetBranch = branch ?? 'main';
   // Ref for conflict checks: the branch being written (main when absent) —
   // §3b: expected_sha refers to the file on the branch being written.

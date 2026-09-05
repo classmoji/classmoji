@@ -7,6 +7,7 @@ import { recordContentAsset, resolveContentBranch } from './contentAssets.servic
 import {
   canonicalizeMany,
   fetchContentText,
+  textReadBudget,
   type ResolveContext,
 } from './contentDelivery.service.ts';
 import {
@@ -213,7 +214,10 @@ async function loadPageContentViaWorker(
   const ctx = pageResolveContext(page);
   if (!ctx) return null;
 
-  const opts = { label: 'page', workerOnly: true } as const;
+  // One circuit for both probes: if the Worker is unreachable, the second probe
+  // must not pay the timeout again to learn the same thing.
+  const budget = textReadBudget();
+  const opts = { label: 'page', fallback: 'none', budget } as const;
   const json = await fetchContentText(ctx, `${page.content_path}/content.json`, opts);
   if (json) {
     try {

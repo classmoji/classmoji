@@ -44,6 +44,10 @@ vi.mock('../contentAssets.service.ts', () => ({
 const fetchContentTextMock = vi.fn();
 vi.mock('../contentDelivery.service.ts', () => ({
   fetchContentText: (...args: unknown[]) => fetchContentTextMock(...args),
+  // Real, not a stub: the two probes sharing ONE budget object is the thing
+  // being asserted, and a mock that handed out a fresh object each call would
+  // make that assertion vacuous.
+  textReadBudget: () => ({ workerUnavailable: false }),
   canonicalizeMany: async (_ctx: unknown, refs: string[]) => new Map(refs.map(r => [r, r])),
 }));
 
@@ -329,17 +333,24 @@ describe('pageContent.loadPageContent viaWorker', () => {
 
   it('asks the map only, so a miss does not read GitHub twice', async () => {
     // `fetchContentText` has its own API-then-CDN ladder, and the caller's own
-    // GitHub read is sitting right behind this one — without workerOnly every
-    // map miss would pay two contents-API reads and a CDN fetch for one page.
+    // GitHub read is sitting right behind this one — without fallback:'none'
+    // every map miss would pay two contents-API reads and a CDN fetch for one
+    // page. Both probes also share one circuit breaker, so an unreachable
+    // Worker costs one timeout for the render rather than one per file.
     getContentMock.mockResolvedValue(null);
 
     await loadPageContent(keyedPage, { viaWorker: true });
 
     for (const call of fetchContentTextMock.mock.calls) {
-      expect(call[2]).toMatchObject({ workerOnly: true });
+      expect(call[2]).toMatchObject({ fallback: 'none' });
     }
     // content.json + index.html, from the caller's read — not four.
     expect(getContentMock).toHaveBeenCalledTimes(2);
+    // One budget object, shared by both probes.
+    const budgets = fetchContentTextMock.mock.calls.map(
+      call => (call[2] as { budget: unknown }).budget
+    );
+    expect(budgets[0]).toBe(budgets[1]);
   });
 
   it('is ignored for a preview-branch read', async () => {

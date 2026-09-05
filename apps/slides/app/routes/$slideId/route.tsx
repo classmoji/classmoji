@@ -334,28 +334,39 @@ export const loader = async ({
   // with it, and the three surfaces stop being able to disagree about what the
   // current deck is.
   //
-  // Cost moves in the right direction on every one of them. Staff no longer
-  // spend an installation-token API call per view. Students no longer wait out
-  // a Pages build. Thumbnails — a staff landing page renders ~20 at once, which
-  // is why they were pinned to the CDN to avoid an API fan-out — are served
-  // from the edge for two DB reads apiece (the map row, and the freshness stamp
-  // `ensureContentAssets` checks). The fan-out they were protected from is now
-  // two separate things, and both are handled: a map MISS falls back to the
-  // API, which the save-time write-through is what prevents; and a stale map
-  // would have had all twenty start their own full sync, which
-  // `ensureContentAssets` collapses into one.
+  // Cost moves in the right direction on every one of them: no GitHub call for
+  // the deck TEXT on any of the three, where staff used to spend an
+  // installation-token read per view and students waited out a Pages build.
+  // Deck text only — a deck on a shared theme still resolves its theme URLs
+  // through `getThemeUrls`, which does reach GitHub (pre-existing, and its own
+  // follow-up).
+  //
+  // THUMBNAILS keep their own rule, and it is the one the CDN pinning was
+  // for. A staff landing page renders ~20 at once; when the map answers they
+  // all come from the edge, but a map MISS on the default ladder would put
+  // twenty authenticated reads against the org installation's shared limit in
+  // one page load. So a thumbnail that misses goes to the CDN and stops there:
+  // a thumbnail is a picture of a deck, three minutes stale is invisible on
+  // one, and a rate limit is not. (The other half of that fan-out — twenty
+  // concurrent map refreshes on a stale classroom — is collapsed into one
+  // inside `ensureContentAssets`.)
   if (!contentResult) {
     contentResult = await readDeckText(
       slide,
       gitOrgLogin,
       repo,
       filePath,
-      isThumbnail ? 'thumbnail' : 'viewer'
+      isThumbnail ? 'thumbnail' : 'viewer',
+      isThumbnail ? { fallback: 'cdn-only' } : {}
     );
   }
 
   if (contentResult) {
     slideContent = contentResult.content;
+    // Kept for the client-side fallback's own bookkeeping. It now means "the
+    // delivery layer could not answer and GitHub did", which is a narrower
+    // thing than it used to be — `worker` is the ordinary case and `cdn` is
+    // the thumbnail one.
     usedApiFallback = contentResult.source === 'api';
 
     // Sign the deck's image references — but never for the document the editor
@@ -508,6 +519,23 @@ async function recordThemeFile(
     sha,
     size: Buffer.byteLength(String(content)),
   });
+}
+
+/**
+ * Forget `.slidesthemes/` paths the repo no longer has.
+ *
+ * The mirror of `recordThemeFile`, and needed for the same reason: blobs are
+ * content-addressed and immutable, so a row that outlives its file keeps
+ * serving that file's last bytes out of R2. A renamed snippet would answer
+ * under BOTH names until the next full sweep, and a deleted theme would go on
+ * resolving.
+ */
+async function forgetThemeFiles(
+  slide: { classroom_id?: string | null },
+  paths: string[]
+): Promise<void> {
+  if (!slide.classroom_id) return;
+  await ClassmojiService.contentAssets.removeContentAssets(slide.classroom_id, paths);
 }
 
 export const action = async ({
@@ -970,6 +998,7 @@ export const action = async ({
         message: `Update snippet: ${name}`,
       });
       await recordThemeFile(slide, newPath, written.sha, content);
+      if (id !== newFilename) await forgetThemeFiles(slide, [oldPath]);
 
       return {
         intent: 'update-snippet',
@@ -1002,6 +1031,7 @@ export const action = async ({
         path: `.slidesthemes/snippets/${id}`,
         message: `Delete snippet: ${id}`,
       });
+      await forgetThemeFiles(slide, [`.slidesthemes/snippets/${id}`]);
 
       return {
         intent: 'delete-snippet',
@@ -1103,6 +1133,7 @@ export const action = async ({
         message: `Update CSS theme: ${name} (${type})`,
       });
       await recordThemeFile(slide, newPath, written.sha, content);
+      if (id !== newFilename) await forgetThemeFiles(slide, [oldPath]);
 
       return {
         intent: 'update-theme',
@@ -1136,6 +1167,7 @@ export const action = async ({
         path: `.slidesthemes/${id}`,
         message: `Delete CSS theme: ${id}`,
       });
+      await forgetThemeFiles(slide, [`.slidesthemes/${id}`]);
 
       return {
         intent: 'delete-theme',
@@ -1164,6 +1196,16 @@ export const action = async ({
         paths,
         message: `Clean up unused images from slides: ${slide.title}`,
       });
+
+      // Only the ones that actually went. `deleteMultiple` reports per-path
+      // errors and keeps going, so forgetting the whole list would drop rows
+      // for images still in the repo — which is a dangling URL, the failure
+      // this map exists to prevent.
+      const failed = new Set(result.errors.map(entry => entry.split(':')[0]));
+      await forgetThemeFiles(
+        slide,
+        (paths as string[]).filter(path => !failed.has(path))
+      );
 
       return {
         intent: 'delete-images',

@@ -162,7 +162,8 @@ export async function readDeckText(
   gitOrgLogin: string,
   repo: string,
   path: string,
-  label: string
+  label: string,
+  opts: { fallback?: 'api-then-cdn' | 'cdn-only' } = {}
 ): Promise<{ content: string; source: 'worker' | 'api' | 'cdn' } | null> {
   const classroom = slide.classroom;
   if (!classroom?.id) return null;
@@ -178,7 +179,7 @@ export async function readDeckText(
       },
     },
     path,
-    { label }
+    { label, ...(opts.fallback ? { fallback: opts.fallback } : {}) }
   );
 
   return result ? { content: result.text, source: result.source } : null;

@@ -132,6 +132,9 @@ async function fetchProxyText(
     return null;
   }
 
+  // No classroom to sign against — the legacy ladder is the whole answer, and
+  // it stays API-first because this is TEXT, where staleness is the expensive
+  // failure (see fetchContent's header).
   const legacy = await fetchContent({ org, repo, path });
   return legacy ? { content: legacy.content as string, source: legacy.source } : null;
 }
@@ -246,8 +249,17 @@ export const loader = async ({
   // ladder — the delivery layer hands those out as signed URLs at render time,
   // so nothing new arrives here for them.
   const binary = isBinaryFile(path);
+  // Binary keeps CDN-first for a classroom the layer is NOT switched on for.
+  // Every image and font of every deck in such a classroom comes through here,
+  // and those bytes never change once uploaded — so a few minutes of CDN
+  // staleness is free where an authenticated read per image spends the org
+  // installation's shared limit. An opted-in classroom serves its assets as
+  // signed URLs and barely reaches this route at all, so API-first is right
+  // there. Unknown classroom reads as "not opted in": the safe direction is
+  // the one that cannot exhaust a rate limit.
+  const preferCdn = matched?.content_delivery_enabled !== true;
   const result = binary
-    ? await fetchContent({ org, repo, path, binary })
+    ? await fetchContent({ org, repo, path, binary, preferCdn })
     : await fetchProxyText(matched, org, repo, path);
 
   if (!result) {

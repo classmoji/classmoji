@@ -35,8 +35,24 @@ interface ServeOptions {
   head?: boolean;
 }
 
-function storedHeaders(object: R2Object, fallbackType: string, cacheControl: string): Headers {
-  const headers = contentHeaders(object.httpMetadata?.contentType ?? fallbackType, cacheControl);
+/**
+ * Headers for an object served out of R2.
+ *
+ * `contentType` is the type the SIGNED EXTENSION says, and the stored
+ * `httpMetadata.contentType` is deliberately ignored. R2 keys are
+ * content-addressed — `blobs/{sha}`, no classroom in the key — so one object is
+ * shared by every classroom and every path that holds those bytes, and whatever
+ * extension happened to be fetched FIRST wrote the stored type. A stylesheet
+ * whose bytes also live at a `.txt` path anywhere in the fleet would then be
+ * served `text/plain` to everyone, and `nosniff` (correctly) makes the browser
+ * refuse it as a stylesheet.
+ *
+ * The signed extension is per-request and inside the signature, so it is both
+ * correct for this caller and unforgeable. The stored value can only ever be a
+ * different caller's answer to a different question.
+ */
+function storedHeaders(object: R2Object, contentType: string, cacheControl: string): Headers {
+  const headers = contentHeaders(contentType, cacheControl);
   headers.set('ETag', object.httpEtag);
   // R2 knows the length without reading a byte, so there is no reason to make a
   // client guess at download progress.
@@ -44,12 +60,8 @@ function storedHeaders(object: R2Object, fallbackType: string, cacheControl: str
   return headers;
 }
 
-function storedResponse(
-  object: R2ObjectBody,
-  fallbackType: string,
-  cacheControl: string
-): Response {
-  return new Response(object.body, { headers: storedHeaders(object, fallbackType, cacheControl) });
+function storedResponse(object: R2ObjectBody, contentType: string, cacheControl: string): Response {
+  return new Response(object.body, { headers: storedHeaders(object, contentType, cacheControl) });
 }
 
 /**
@@ -60,12 +72,12 @@ function storedResponse(
 async function storedHead(
   env: Env,
   key: string,
-  fallbackType: string,
+  contentType: string,
   cacheControl: string
 ): Promise<Response | null> {
   const object = await env.CACHE.head(key);
   if (!object) return null;
-  return new Response(null, { headers: storedHeaders(object, fallbackType, cacheControl) });
+  return new Response(null, { headers: storedHeaders(object, contentType, cacheControl) });
 }
 
 /**

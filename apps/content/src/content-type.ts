@@ -1,8 +1,11 @@
 /**
  * Extension → Content-Type. Anything unmapped is served as an opaque download.
  *
- * The type comes from the EXTENSION and from nothing else — the bytes are never
- * inspected. That is deliberate, and it is what makes serving TEXT here safe:
+ * The type comes from the SIGNED EXTENSION and from nothing else — the bytes
+ * are never inspected, and neither is the type R2 has stored against the object
+ * (see `storedHeaders` in blob.ts: R2 keys are content-addressed, so a stored
+ * type is whatever extension reached that sha first, across all classrooms).
+ * That is deliberate, and it is what makes serving TEXT here safe:
  * a `.html` blob is `text/html; charset=utf-8` because the URL said `.html`,
  * and a signature covers the extension, so a caller cannot re-label one file as
  * another. `nosniff` plus the sandboxing CSP on every response (see cache.ts)
