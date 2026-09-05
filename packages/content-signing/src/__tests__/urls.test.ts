@@ -134,6 +134,30 @@ describe('signBlobUrl', () => {
     ).rejects.toThrow(TypeError);
   });
 
+  it('signs the text extensions the delivery layer serves', async () => {
+    // Root content — a deck's index.html, a page's content.json, a theme's css
+    // and fonts — is signed by exactly the same call an image is. There is no
+    // separate text scheme and no per-extension allowlist: the extension is a
+    // FIELD of the canonical string, so a signature for one extension can
+    // never serve another.
+    for (const ext of ['html', 'json', 'css', 'js', 'md', 'txt', 'svg', 'woff', 'woff2', 'ttf']) {
+      const url = await signBlobUrl(ORIGIN, ctx('enrolled'), { sha: SHA, ext });
+      expect(url.startsWith(`${ORIGIN}/c/${CLASSROOM_A}/blob/${SHA}.${ext}?`)).toBe(true);
+      const parsed = parseContentUrl(url);
+      expect(parsed).toMatchObject({ kind: 'blob', sha: SHA, ext });
+    }
+  });
+
+  it('gives one blob a different signature per extension', async () => {
+    // The guarantee behind "never sniff" on the Worker: re-labelling a signed
+    // .json as .html is not a URL edit, it is a forgery.
+    const asJson = await signBlobUrl(ORIGIN, ctx('enrolled'), { sha: SHA, ext: 'json' });
+    const asHtml = await signBlobUrl(ORIGIN, ctx('enrolled'), { sha: SHA, ext: 'html' });
+    expect(new URL(asJson).searchParams.get('sig')).not.toBe(
+      new URL(asHtml).searchParams.get('sig')
+    );
+  });
+
   it('rejects a nonsense now or keyVersion at mint', async () => {
     for (const now of [Number.NaN, -1, 1.5, Infinity]) {
       await expect(
