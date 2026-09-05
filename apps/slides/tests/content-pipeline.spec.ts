@@ -29,12 +29,16 @@ import {
   classroom as loadClassroom,
   deliverySkipReason,
   describeSignedUrl,
+  describeUrls,
+  e2eTarget,
   getTestClassroomSlug,
   loginAs,
   localOnlySkipReason,
+  markScenarioRan,
   parseSignedUrl,
   readImages,
   reloadUntilImages,
+  scenariosThatRan,
   services,
   setDeliveryEnabled,
   storedContentLeaks,
@@ -45,6 +49,13 @@ import {
 } from './helpers';
 
 const env = targets();
+
+/**
+ * No trace, no video. Both record full request URLs, and every URL in this pack
+ * is a signed credential; a Playwright report is a CI artifact. See the same
+ * note in the pages pack.
+ */
+test.use({ trace: 'off', video: 'off' });
 
 let deliveryDown: string | null = 'not probed';
 let room: E2EClassroom | null = null;
@@ -130,10 +141,18 @@ function requireClassroom(): E2EClassroom {
  */
 async function keepAllImages(page: import('@playwright/test').Page): Promise<void> {
   const keepAll = page.getByRole('button', { name: 'Keep All' });
-  if (await keepAll.isVisible().catch(() => false)) {
-    await keepAll.click();
-    await keepAll.waitFor({ state: 'hidden' }).catch(() => undefined);
+  // `isVisible()` answers about THIS instant. The modal appears after the save
+  // round-trips, so an immediate check reliably said "not there" and the test
+  // moved on with a destructive dialog still open behind it — where a later
+  // click could land on its delete button. A bounded three-second wait is the
+  // difference between "no modal" and "no modal yet".
+  try {
+    await keepAll.waitFor({ state: 'visible', timeout: 3_000 });
+  } catch {
+    return; // Genuinely absent: this save orphaned nothing.
   }
+  await keepAll.click();
+  await keepAll.waitFor({ state: 'hidden' }).catch(() => undefined);
 }
 
 /** The shared responsive contract, identical to the pages pack's. */
@@ -216,6 +235,10 @@ test.describe('E2E CD — slides, a deck with an uploaded image', () => {
     page,
   }) => {
     requireDelivery();
+    markScenarioRan();
+    // Creates a deck, commits an image and saves, all against a real GitHub
+    // repo. The default 60s budget does not cover it.
+    test.setTimeout(180_000);
     const target = requireClassroom();
     test.skip(uploadSkipReason() !== null, uploadSkipReason() ?? '');
     test.skip(
@@ -291,6 +314,10 @@ test.describe('E2E CD — slides, a deck with an uploaded image', () => {
 
   test('deck.json stores no signature, no srcset and no delivery origin', async ({ page }) => {
     requireDelivery();
+    markScenarioRan();
+    // Creates a deck, commits an image and saves, all against a real GitHub
+    // repo. The default 60s budget does not cover it.
+    test.setTimeout(180_000);
     const target = requireClassroom();
     test.skip(uploadSkipReason() !== null, uploadSkipReason() ?? '');
 
@@ -339,6 +366,10 @@ test.describe('E2E CD — slides, the gate', () => {
     page,
   }) => {
     requireDelivery();
+    markScenarioRan();
+    // Creates a deck, commits an image and saves, all against a real GitHub
+    // repo. The default 60s budget does not cover it.
+    test.setTimeout(180_000);
     const target = requireClassroom();
     test.skip(localOnlySkipReason() !== null, localOnlySkipReason() ?? '');
 
@@ -393,10 +424,31 @@ test.describe('E2E CD — slides, the gate', () => {
       // The positive half: they fell back to the legacy proxy form, rather than
       // to nothing at all.
       expect(images.some(image => /\/content\/[^/]+\/[^/]+\//.test(image.src))).toBe(true);
-      expect(log.delivery(), 'the gate is off; the delivery origin must be untouched').toEqual([]);
+      expect(
+        describeUrls(log.delivery()),
+        'the gate is off; the delivery origin must be untouched'
+      ).toEqual([]);
       log.stop();
     } finally {
       await setDeliveryEnabled(target.id, before);
     }
   });
+});
+
+/**
+ * The check that the suite did anything at all — see the note on the pages
+ * pack's copy. A run where every scenario skips is green and worthless, and
+ * that has already happened here once (turbo dropped E2E_CD_CONTENT_REPO).
+ */
+test('E2E CD — at least one slides scenario actually ran', async () => {
+  test.skip(
+    e2eTarget() === 'staging',
+    'the slides pack has no staging form: every scenario here needs an editor session'
+  );
+  expect(
+    scenariosThatRan(),
+    'every slides scenario skipped. The run is green and proved nothing — check the skip reasons ' +
+      'above (a missing Worker, E2E_CD_CONTENT_REPO not reaching Playwright, or a classroom whose ' +
+      'content_delivery_enabled is false).'
+  ).toBeGreaterThan(0);
 });

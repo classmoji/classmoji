@@ -22,7 +22,13 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as zlib from 'node:zlib';
 import { fileURLToPath } from 'node:url';
-import type { Locator, Page, Request } from '@playwright/test';
+import type { BrowserContext, Locator, Page, Request } from '@playwright/test';
+import {
+  assertWritableDatabase,
+  databaseHost,
+  isLocalDatabaseHost,
+  resolvedDatabaseUrl,
+} from './databaseGuard.ts';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.join(__dirname, '../..');
@@ -80,6 +86,107 @@ export function devDatabaseUrl(): string | null {
   return match ? match[1] : null;
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Fail-open detector
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * How many scenarios got far enough to assert something.
+ *
+ * The failure this exists for has already happened once: `npm run e2e:content`
+ * reported two green tasks while every scenario skipped, because turbo did not
+ * pass `E2E_CD_CONTENT_REPO` through and each skip looked individually
+ * reasonable. A suite whose skips are all "correct" can still be worth nothing,
+ * and nothing in a green summary says so. Each pack ends with a check on this
+ * counter.
+ */
+let scenariosRun = 0;
+
+/** Call once a scenario has reached its first real assertion. */
+export function markScenarioRan(): void {
+  scenariosRun += 1;
+}
+
+export function scenariosThatRan(): number {
+  return scenariosRun;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Origin safety
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** The only content origin a staging run may ever talk to. */
+const STAGING_DELIVERY_ORIGIN = 'https://content-staging.classmoji.io';
+
+/**
+ * Hosts this pack must never be pointed at, however it is configured.
+ *
+ * The pack signs in, uploads, deletes and flips flags. Against production that
+ * is not a bad test run, it is an incident — so production is refused at the
+ * point the origin is resolved rather than trusted to be excluded by whichever
+ * skip happens to fire first. The rule is positive: a `classmoji.io` host has
+ * to SAY `staging` somewhere. `app.` and `content.` are named too, so the error
+ * can be specific about the two that matter most.
+ */
+function assertSafeOrigin(label: string, raw: string): string {
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    throw new Error(`${label} is not a valid URL: ${JSON.stringify(raw)}`);
+  }
+
+  const host = url.hostname.toLowerCase();
+  if (LOCAL_ORIGIN_HOSTS.has(host)) return raw;
+
+  const named: Record<string, string> = {
+    'app.classmoji.io': 'the production webapp',
+    'content.classmoji.io': 'the production content Worker',
+    'pages.classmoji.io': 'the production pages app',
+    'slides.classmoji.io': 'the production slides app',
+  };
+  if (named[host]) {
+    throw new Error(
+      `${label} points at ${named[host]} (${host}). This pack uploads, deletes and changes ` +
+        'classroom rows; it must never be aimed at production.'
+    );
+  }
+
+  const isClassmoji = host === 'classmoji.io' || host.endsWith('.classmoji.io');
+  if (isClassmoji && !host.includes('staging')) {
+    throw new Error(
+      `${label} points at '${host}', a classmoji.io host that is not a staging one. ` +
+        'Only staging hosts are allowed; use E2E_TARGET=local for a local run.'
+    );
+  }
+
+  return raw;
+}
+
+const LOCAL_ORIGIN_HOSTS = new Set(['localhost', '127.0.0.1', '::1', '[::1]', '0.0.0.0']);
+
+/**
+ * The delivery origin for a staging run, ignoring the environment entirely.
+ *
+ * `npm run e2e:content` runs under `dotenv -e .env`, and a local `.env` sets
+ * `CONTENT_DELIVERY_ORIGIN=http://localhost:8787`. Read as an override, that
+ * value silently redirected a staging run at a Worker on the developer's own
+ * machine — which answers, and whose signatures are for a different host, so
+ * the suite would have reported refusals as if staging had produced them. The
+ * staging origin is therefore a constant, and a conflicting env value is
+ * reported rather than obeyed.
+ */
+function stagingDeliveryOrigin(): string {
+  const override = process.env.CONTENT_DELIVERY_ORIGIN;
+  if (override && new URL(override).host !== new URL(STAGING_DELIVERY_ORIGIN).host) {
+    console.warn(
+      `[e2e] IGNORING CONTENT_DELIVERY_ORIGIN=${override} — a staging run always uses ` +
+        `${STAGING_DELIVERY_ORIGIN}. (Your .env sets this for local work; that is expected.)`
+    );
+  }
+  return STAGING_DELIVERY_ORIGIN;
+}
+
 export interface ContentDeliveryTargets {
   target: E2ETarget;
   /** Pages app — the page editor and the private page view. */
@@ -110,24 +217,55 @@ export function targets(): ContentDeliveryTargets {
   if (target === 'staging') {
     return {
       target,
-      pages: process.env.E2E_PAGES_URL ?? 'https://pages.staging.classmoji.io',
-      slides: process.env.E2E_SLIDES_URL ?? 'https://slides.staging.classmoji.io',
-      webapp: process.env.E2E_WEBAPP_URL ?? 'https://staging.classmoji.io',
-      classSite: process.env.E2E_CLASS_SITE_URL ?? 'https://cs98-test.staging.classmoji.io',
-      deliveryOrigin: process.env.CONTENT_DELIVERY_ORIGIN ?? 'https://content-staging.classmoji.io',
+      pages: assertSafeOrigin(
+        'E2E_PAGES_URL',
+        process.env.E2E_PAGES_URL ?? 'https://pages.staging.classmoji.io'
+      ),
+      slides: assertSafeOrigin(
+        'E2E_SLIDES_URL',
+        process.env.E2E_SLIDES_URL ?? 'https://slides.staging.classmoji.io'
+      ),
+      webapp: assertSafeOrigin(
+        'E2E_WEBAPP_URL',
+        process.env.E2E_WEBAPP_URL ?? 'https://staging.classmoji.io'
+      ),
+      classSite: assertSafeOrigin(
+        'E2E_CLASS_SITE_URL',
+        process.env.E2E_CLASS_SITE_URL ?? 'https://cs98-test.staging.classmoji.io'
+      ),
+      // Deliberately NOT read from the environment. See stagingDeliveryOrigin.
+      deliveryOrigin: stagingDeliveryOrigin(),
       classroomSlug: process.env.E2E_CLASSROOM_SLUG ?? 'cs98-test',
     };
   }
 
   return {
     target,
-    pages: process.env.E2E_PAGES_URL ?? devPort('Pages') ?? 'http://localhost:7100',
-    slides: process.env.E2E_SLIDES_URL ?? devPort('Slides') ?? 'http://localhost:6500',
-    webapp: process.env.E2E_WEBAPP_URL ?? devPort('Webapp') ?? 'http://localhost:3000',
+    pages: assertSafeOrigin(
+      'E2E_PAGES_URL',
+      process.env.E2E_PAGES_URL ?? devPort('Pages') ?? 'http://localhost:7100'
+    ),
+    slides: assertSafeOrigin(
+      'E2E_SLIDES_URL',
+      process.env.E2E_SLIDES_URL ?? devPort('Slides') ?? 'http://localhost:6500'
+    ),
+    webapp: assertSafeOrigin(
+      'E2E_WEBAPP_URL',
+      process.env.E2E_WEBAPP_URL ?? devPort('Webapp') ?? 'http://localhost:3000'
+    ),
     // Locally the class site is served by the pages app on a host header it
     // cannot fake from Playwright, so the reachable surface is the same origin.
-    classSite: process.env.E2E_CLASS_SITE_URL ?? devPort('Pages') ?? 'http://localhost:7100',
-    deliveryOrigin: process.env.CONTENT_DELIVERY_ORIGIN ?? 'http://localhost:8787',
+    classSite: assertSafeOrigin(
+      'E2E_CLASS_SITE_URL',
+      process.env.E2E_CLASS_SITE_URL ?? devPort('Pages') ?? 'http://localhost:7100'
+    ),
+    // A local run signs for, and probes, whatever the apps were started with —
+    // but it still may not be a production host: an operator who exported the
+    // production origin and forgot would otherwise aim the refusal probes there.
+    deliveryOrigin: assertSafeOrigin(
+      'CONTENT_DELIVERY_ORIGIN',
+      process.env.CONTENT_DELIVERY_ORIGIN ?? 'http://localhost:8787'
+    ),
     classroomSlug: process.env.E2E_CLASSROOM_SLUG ?? 'classmoji-dev-winter-2025',
   };
 }
@@ -202,6 +340,69 @@ export function authSkipReason(): string | null {
     'staging has no test-login route and no seeded credentials: set E2E_SESSION_COOKIE to a ' +
     '`classmoji.session_token` value for a member of the target classroom, or run with E2E_TARGET=local'
   );
+}
+
+/** The session cookie name better-auth issues, and the one the apps read. */
+const SESSION_COOKIE = 'classmoji.session_token';
+
+/**
+ * Sign a browser context in on a DEPLOYED target, using a real session token.
+ *
+ * Scoped to the three staging origins by URL and to nothing else. A cookie is
+ * a live credential for a real account, so it is set per-origin rather than by
+ * domain: a `.classmoji.io` domain cookie would be attached to production the
+ * moment any redirect crossed over, which is the one thing this pack must never
+ * do. `assertSafeOrigin` has already refused a production host by this point,
+ * so the two checks compound.
+ *
+ * No-op unless the target is staging AND a token was supplied, so a local run
+ * (which mints its own sessions through `/test-login`) is unaffected.
+ */
+export async function applyStagingSession(context: BrowserContext): Promise<boolean> {
+  const token = process.env.E2E_SESSION_COOKIE;
+  if (e2eTarget() !== 'staging' || !token) return false;
+
+  const { pages, slides, classSite } = targets();
+  await context.addCookies(
+    [...new Set([pages, slides, classSite])].map(url => ({
+      name: SESSION_COOKIE,
+      value: token,
+      url,
+      httpOnly: true,
+      secure: true,
+      sameSite: 'Lax' as const,
+    }))
+  );
+  return true;
+}
+
+/** Is a signed-in staging run actually configured? */
+export function hasStagingSession(): boolean {
+  return e2eTarget() === 'staging' && Boolean(process.env.E2E_SESSION_COOKIE);
+}
+
+/**
+ * The first content link on a classroom index, or null.
+ *
+ * Staging has no database to query for "a page this member can see", and
+ * hard-coding an id would rot the first time someone tidied the classroom. The
+ * index is the same list a member browses, so whatever it links to is by
+ * definition something they may open.
+ */
+export async function discoverMemberContentUrl(
+  page: Page,
+  classroomSlug: string
+): Promise<string | null> {
+  await page.goto(`/${classroomSlug}`);
+  await page.waitForLoadState('networkidle');
+  const href = await page
+    .locator(`a[href^="/${classroomSlug}/"]`)
+    .first()
+    .getAttribute('href')
+    .catch(() => null);
+  if (!href) return null;
+  // `/new` is the create form, not content.
+  return href.endsWith('/new') ? null : href;
 }
 
 /**
@@ -393,6 +594,18 @@ export function describeSignedUrl(raw: string): string {
   if (parsed.w !== null) bits.push(`w=${parsed.w}`);
   if (parsed.fmt !== null) bits.push(`fmt=${parsed.fmt}`);
   return `${parsed.origin}/c/${parsed.classroomId}/blob/${parsed.sha}.${parsed.ext}?${bits.join('&')}`;
+}
+
+/**
+ * A list of URLs, reduced to something safe to put in a failure message.
+ *
+ * `expect(log.delivery()).toEqual([])` reads well and, on failure, prints every
+ * signed URL it saw — into a Playwright report that CI uploads as an artifact,
+ * where a `public`-tier signature stays valid for a month. Comparing the
+ * redacted form instead keeps the assertion and loses the credential.
+ */
+export function describeUrls(urls: string[]): string[] {
+  return urls.map(describeSignedUrl);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -755,6 +968,11 @@ async function prisma() {
     const url = devDatabaseUrl();
     if (url) process.env.DATABASE_URL = url;
   }
+  // Reads are harmless, but every write path in this file reaches the database
+  // through here, and the classroom this pack reads is the same one it later
+  // mutates. Checking once, at the connection, is what makes the guard hard to
+  // route around.
+  assertWritableDatabase('open a database connection for the content-delivery e2e pack');
   const { default: getPrisma } = await import('@classmoji/database');
   return getPrisma();
 }
@@ -810,6 +1028,7 @@ export async function classroom(slug = targets().classroomSlug): Promise<E2EClas
  * switch the feature ON in the dev database of anyone who had it off.
  */
 export async function setDeliveryEnabled(classroomId: string, enabled: boolean): Promise<boolean> {
+  assertWritableDatabase(`set content_delivery_enabled on classroom ${classroomId}`);
   const db = await prisma();
   const before = await db.classroom.findUniqueOrThrow({
     where: { id: classroomId },
@@ -841,6 +1060,7 @@ export async function keyVersion(classroomId: string): Promise<number> {
  * relative increment that makes two concurrent clicks safe.
  */
 export async function bumpKeyVersion(classroomId: string): Promise<number> {
+  assertWritableDatabase(`bump content_key_version on classroom ${classroomId}`);
   const service = await services();
   const { content_key_version } = await service.contentDelivery.bumpContentKeyVersion(classroomId);
   return content_key_version;
@@ -868,6 +1088,7 @@ export async function assetRow(
  * looks exactly like the bug it is meant to catch.
  */
 export async function syncMap(classroomId: string): Promise<void> {
+  assertWritableDatabase(`re-sync the asset map for classroom ${classroomId}`);
   const service = await services();
   await service.contentAssets.syncContentAssets(classroomId, { full: true });
 }
@@ -901,6 +1122,11 @@ export async function readRepoFile(
 
 /** Delete a file from the content repo — used to manufacture a dangling ref. */
 export async function deleteRepoFile(target: E2EClassroom, repoPath: string): Promise<void> {
+  // A repo write does not go through Prisma, so it would not be covered by the
+  // connection guard. The database is still the right thing to check: it is
+  // what told us WHICH repo to write to, so a production database means a
+  // production repo even though the write itself is a GitHub call.
+  assertWritableDatabase(`delete ${repoPath} from ${target.content_repo}`);
   const { ContentService } = await import('@classmoji/services');
   if (!target.content_repo) throw new Error(`classroom ${target.slug} has no content_repo`);
   await ContentService.delete({
@@ -936,7 +1162,13 @@ export async function readStoredContent(
  */
 export async function pageWithRepo(pageId: string) {
   const service = await services();
-  return service.page.findById(pageId, { includeClassroom: true });
+  const page = await service.page.findById(pageId, { includeClassroom: true });
+  // `findById` is nullable, and every caller here immediately hands the result
+  // to a content-repo write that dereferences `classroom.git_organization`.
+  // Throwing names the missing page; passing null through produced a
+  // `Cannot read properties of null` from three frames deeper.
+  if (!page) throw new Error(`no page with id '${pageId}'`);
+  return page;
 }
 
 /** A page's blocks, through the product's own reader. */
@@ -957,6 +1189,7 @@ export async function loadPageBlocks(pageId: string): Promise<unknown[]> {
  * meant to prove impossible.
  */
 export async function savePageBlocks(pageId: string, blocks: unknown[]): Promise<void> {
+  assertWritableDatabase(`write page content for ${pageId}`);
   const service = await services();
   const page = await pageWithRepo(pageId);
   await service.pageContent.savePageContent(page, blocks, {

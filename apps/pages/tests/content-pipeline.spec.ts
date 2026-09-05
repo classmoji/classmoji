@@ -28,6 +28,7 @@ import {
   FOREIGN_CLASSROOM_ID,
   type E2EClassroom,
   type RenderedImage,
+  applyStagingSession,
   appendWidth,
   assetRow,
   authSkipReason,
@@ -38,6 +39,8 @@ import {
   deleteRepoFile,
   deliverySkipReason,
   describeSignedUrl,
+  describeUrls,
+  discoverMemberContentUrl,
   e2eTarget,
   harvestSignedFromHtml,
   FIXTURE_PREVIEW_WIDTH,
@@ -51,6 +54,7 @@ import {
   imagesFromHtml,
   keyVersion,
   loadPageBlocks,
+  markScenarioRan,
   loginAs,
   localOnlySkipReason,
   parseMissingUrl,
@@ -60,6 +64,7 @@ import {
   readStoredContent,
   reloadUntilImages,
   savePageBlocks,
+  scenariosThatRan,
   services,
   setDeliveryEnabled,
   storedContentLeaks,
@@ -74,6 +79,18 @@ import {
 const env = targets();
 
 /**
+ * No trace, no video, for this pack specifically.
+ *
+ * Both capture full request URLs, and every URL here is a signed credential
+ * good for up to a month on the public tier. `retries: 0` happens to mean the
+ * config's `on-first-retry` never fires today, but that is a coincidence of a
+ * setting in another file — one `--retries=1` on a command line and the pack
+ * starts writing signatures into an artifact CI uploads. Turned off here so it
+ * cannot.
+ */
+test.use({ trace: 'off', video: 'off' });
+
+/**
  * Resolved once, in `beforeAll`, and consulted by every gate.
  *
  * `test.skip()` inside a test body is what produces a readable reason in the
@@ -86,6 +103,16 @@ let classroomError: string | null = null;
 
 /** Repo paths this run wrote; removed in `afterAll` whatever happened. */
 const uploadedPaths: string[] = [];
+
+/**
+ * The classroom's `content_key_version` before the bump scenario moved it.
+ *
+ * The bump is a relative increment with no product-level undo — correct for a
+ * cache bust, awkward for a test that runs on every commit: the dev classroom's
+ * version climbed by one per run, and the number in a developer's database
+ * became a count of how often the suite had run.
+ */
+let keyVersionBeforeBump: number | null = null;
 
 /**
  * A page's blocks as they were BEFORE this run touched them.
@@ -111,6 +138,21 @@ test.beforeAll(async () => {
 
 test.afterAll(async () => {
   await clearMintedSessions();
+
+  // Put the cache-bust version back. Local only, and only if this run moved it.
+  if (keyVersionBeforeBump !== null && localOnlySkipReason() === null) {
+    try {
+      const { getTestPrisma } = await import('./helpers');
+      const prisma = await getTestPrisma();
+      await prisma.classroom.update({
+        where: { id: target!.id },
+        data: { content_key_version: keyVersionBeforeBump },
+      });
+    } catch {
+      // Harmless if it fails: a higher version invalidates caches, it does not
+      // break anything.
+    }
+  }
 
   if (!target || uploadSkipReason() !== null) return;
 
@@ -221,21 +263,52 @@ interface TestPage {
   classroomId: string;
 }
 
-/** A staff-editable page in the target classroom, from the seeded content. */
-async function anyEditablePage(classroomId: string): Promise<TestPage | null> {
-  const service = await services();
-  const pages = await service.page.findByClassroomId(classroomId).catch(() => null);
-  const row = pages?.find(
-    (page: { content_path?: string | null }) => typeof page.content_path === 'string'
+/**
+ * The shape this pack needs from a page row, once it is known to be usable.
+ *
+ * `content_path` is typed nullable on the service's return even though the
+ * column is not, and `is_draft` defaults to TRUE — so "the first page in the
+ * classroom" is quite likely to be an unpublished one with nothing behind it.
+ * Both are filtered here, once, rather than at four call sites that each got it
+ * slightly differently.
+ */
+interface PageRow {
+  id: string;
+  slug: string | null;
+  content_path: string | null;
+  is_public: boolean;
+  is_draft: boolean;
+}
+
+function usablePages(rows: PageRow[]): (PageRow & { content_path: string })[] {
+  return rows.filter(
+    (row): row is PageRow & { content_path: string } =>
+      typeof row.content_path === 'string' && row.content_path.length > 0 && !row.is_draft
   );
-  if (!row) return null;
+}
+
+async function classroomPages(
+  classroomId: string
+): Promise<(PageRow & { content_path: string })[]> {
+  const service = await services();
+  const rows = (await service.page.findByClassroomId(classroomId).catch(() => [])) as PageRow[];
+  return usablePages(rows);
+}
+
+function toTestPage(row: PageRow & { content_path: string }, classroomId: string): TestPage {
   return {
     id: row.id,
-    slug: row.slug,
+    slug: row.slug ?? row.id,
     contentPath: row.content_path,
     classroomSlug: env.classroomSlug,
     classroomId,
   };
+}
+
+/** A staff-editable, published page in the target classroom. */
+async function anyEditablePage(classroomId: string): Promise<TestPage | null> {
+  const row = (await classroomPages(classroomId))[0];
+  return row ? toTestPage(row, classroomId) : null;
 }
 
 /**
@@ -319,6 +392,9 @@ test.describe('E2E CD — pages, the editor', () => {
     page,
   }) => {
     requireDelivery();
+    // Uploads, commits and deletes against a real GitHub repo, plus the waits
+    // that outlast a 60s content cache. The default 60s budget is not enough.
+    test.setTimeout(180_000);
     const room = requireClassroom();
     test.skip(uploadSkipReason() !== null, uploadSkipReason() ?? '');
     test.skip(
@@ -332,6 +408,7 @@ test.describe('E2E CD — pages, the editor', () => {
 
     await loginAs(page, 'owner', `/${target.classroomSlug}/${target.id}`);
 
+    markScenarioRan();
     const uploaded = await uploadAsset(
       page,
       target.id,
@@ -400,7 +477,10 @@ test.describe('E2E CD — pages, the editor', () => {
       sizes: expectedSizesFor(FIXTURE_PREVIEW_WIDTH),
     });
 
-    // Exactly one network request for this image. The browser picks ONE
+    // Exactly one network request for this image. This is a safe count only
+    // because the draft tier is served `no-store` — on a cacheable tier a
+    // second navigation legitimately produces zero requests, and asserting
+    // "exactly one" there would be asserting that the cache had missed.
     // candidate out of the set; a page that fetched two is a page that painted
     // a `src` and then swapped in a `srcset` after layout, which is precisely
     // the double-download the block's synchronous attribute wiring prevents.
@@ -413,6 +493,9 @@ test.describe('E2E CD — pages, the editor', () => {
     page,
   }) => {
     requireDelivery();
+    // Uploads, commits and deletes against a real GitHub repo, plus the waits
+    // that outlast a 60s content cache. The default 60s budget is not enough.
+    test.setTimeout(180_000);
     const room = requireClassroom();
     test.skip(uploadSkipReason() !== null, uploadSkipReason() ?? '');
 
@@ -420,6 +503,7 @@ test.describe('E2E CD — pages, the editor', () => {
     test.skip(target === null, 'no page with a content_path in the test classroom');
     if (!target) return;
 
+    markScenarioRan();
     await loginAs(page, 'owner', `/${target.classroomSlug}/${target.id}`);
     const uploaded = await uploadAsset(
       page,
@@ -462,6 +546,9 @@ test.describe('E2E CD — pages, the editor', () => {
 
   test('removing the block removes the reference from stored content', async ({ page }) => {
     requireDelivery();
+    // Uploads, commits and deletes against a real GitHub repo, plus the waits
+    // that outlast a 60s content cache. The default 60s budget is not enough.
+    test.setTimeout(180_000);
     const room = requireClassroom();
     test.skip(uploadSkipReason() !== null, uploadSkipReason() ?? '');
 
@@ -469,6 +556,7 @@ test.describe('E2E CD — pages, the editor', () => {
     test.skip(target === null, 'no page with a content_path in the test classroom');
     if (!target) return;
 
+    markScenarioRan();
     await loginAs(page, 'owner', `/${target.classroomSlug}/${target.id}`);
     const uploaded = await uploadAsset(
       page,
@@ -498,6 +586,9 @@ test.describe('E2E CD — pages, the editor', () => {
 
   test('a GIF gets a plain signed URL and no responsive ladder', async ({ page }) => {
     requireDelivery();
+    // Uploads, commits and deletes against a real GitHub repo, plus the waits
+    // that outlast a 60s content cache. The default 60s budget is not enough.
+    test.setTimeout(180_000);
     const room = requireClassroom();
     test.skip(uploadSkipReason() !== null, uploadSkipReason() ?? '');
     test.skip(
@@ -509,6 +600,7 @@ test.describe('E2E CD — pages, the editor', () => {
     test.skip(target === null, 'no page with a content_path in the test classroom');
     if (!target) return;
 
+    markScenarioRan();
     await loginAs(page, 'owner', `/${target.classroomSlug}/${target.id}`);
     const uploaded = await uploadAsset(
       page,
@@ -558,11 +650,7 @@ test.describe('E2E CD — pages, what each audience sees', () => {
 
     test.skip(uploadSkipReason() !== null, uploadSkipReason() ?? '');
 
-    const service = await services();
-    const pages = await service.page.findByClassroomId(room.id);
-    const privatePage = pages.find(
-      (row: { is_public?: boolean; is_draft?: boolean }) => row.is_public === false && !row.is_draft
-    );
+    const privatePage = (await classroomPages(room.id)).find(row => row.is_public === false);
     test.skip(privatePage === undefined, 'no published non-public page in this classroom');
     if (!privatePage) return;
 
@@ -578,17 +666,8 @@ test.describe('E2E CD — pages, what each audience sees', () => {
     // test because the tier is a property of the VIEWER, and the only way to
     // observe `enrolled` is to be someone who cannot edit.
     await loginAs(page, 'owner', `/${env.classroomSlug}`);
-    const fixture = await withFixtureImage(
-      page,
-      {
-        id: privatePage.id,
-        slug: privatePage.slug,
-        contentPath: privatePage.content_path,
-        classroomSlug: env.classroomSlug,
-        classroomId: room.id,
-      },
-      'enrolled'
-    );
+    markScenarioRan();
+    const fixture = await withFixtureImage(page, toTestPage(privatePage, room.id), 'enrolled');
 
     await loginAs(page, 'student', `/${env.classroomSlug}/${privatePage.id}`);
 
@@ -616,7 +695,9 @@ test.describe('E2E CD — pages, what each audience sees', () => {
       expect(image.signed?.tier, describeSignedUrl(image.src)).toBe('enrolled');
     }
     expect(log.missing()).toEqual([]);
-    expect(log.legacy(), 'a delivered page must not also fetch legacy refs').toEqual([]);
+    expect(describeUrls(log.legacy()), 'a delivered page must not also fetch legacy refs').toEqual(
+      []
+    );
     log.stop();
   });
 
@@ -629,14 +710,68 @@ test.describe('E2E CD — pages, what each audience sees', () => {
    * the scenario reads what is there; locally it has to make one first,
    * because a freshly seeded classroom has no public site and no pictures.
    */
+  /**
+   * The signed-in half of the staging story, and the only thing
+   * `E2E_SESSION_COOKIE` is for.
+   *
+   * With a member's token the pack can open a page the public site never shows
+   * and check the one property that distinguishes a member render from an
+   * anonymous one: the tier is NOT `public`. It cannot be more specific than
+   * that without knowing the token's role — a student's render is `enrolled`,
+   * a staff member's is `draft`, and both are correct — so the assertion is the
+   * boundary rather than the exact value. The exact values are pinned by the
+   * local scenarios, which know who they signed in as.
+   */
+  test('a signed-in member on staging gets a non-public tier', async ({ page, context }) => {
+    requireDelivery();
+    test.skip(e2eTarget() !== 'staging', 'this is the staging form of the enrolled-tier check');
+    test.skip(authSkipReason() !== null, authSkipReason() ?? '');
+
+    const applied = await applyStagingSession(context);
+    expect(applied, 'a staging session cookie should have been attached').toBe(true);
+
+    const contentUrl = await discoverMemberContentUrl(page, env.classroomSlug);
+    test.skip(
+      contentUrl === null,
+      `no content linked from /${env.classroomSlug} — either the cookie is not valid for this ` +
+        'classroom, or the classroom has no pages'
+    );
+    if (!contentUrl) return;
+
+    const images = await reloadUntilImages(page, contentUrl, seen =>
+      seen.some(image => image.signed !== null)
+    );
+    const signedImages = images.filter(image => image.signed !== null);
+    test.skip(signedImages.length === 0, `no delivered images on ${contentUrl}`);
+
+    markScenarioRan();
+    for (const image of signedImages) {
+      expect(image.signed?.origin).toBe(env.deliveryOrigin);
+      expect(
+        image.signed?.tier,
+        `a member-facing render must not use the public tier: ${describeSignedUrl(image.src)}`
+      ).not.toBe('public');
+    }
+  });
+
   test('a public class site serves the public tier, with its ladder', async ({ request }) => {
     requireDelivery();
     test.skip(e2eTarget() !== 'staging', 'the local form of this scenario is the next test');
 
-    const response = await request.get(env.classSite);
-    expect(response.status(), `${env.classSite} should serve a class site`).toBe(200);
+    markScenarioRan();
+    // Same cold-start allowance as the harvest above.
+    const response = await fetchUntilHtml(
+      async url => {
+        const result = await request.get(url, { timeout: 30_000 });
+        return { status: result.status(), body: await result.text() };
+      },
+      env.classSite,
+      html => imagesFromHtml(html).some(image => image.signed !== null),
+      { attempts: 5, delayMs: 4_000 }
+    );
+    expect(response.status, `${env.classSite} should serve a class site`).toBe(200);
 
-    const html = await response.text();
+    const html = response.body;
     const images = imagesFromHtml(html).filter(image => image.signed !== null);
     expect(images.length, 'the staging class site should carry delivered images').toBeGreaterThan(
       0
@@ -682,44 +817,48 @@ test.describe('E2E CD — pages, what each audience sees', () => {
     );
 
     const service = await services();
-    const pages = await service.page.findByClassroomId(room.id);
-    const publicPage = pages.find((row: { is_public?: boolean }) => row.is_public === true);
-    test.skip(publicPage === undefined, 'no public page in this classroom');
+    // Published AND public: a draft page is invisible on a class site, so
+    // choosing one made the site render a 404 that looked like a delivery bug.
+    const publicPage = (await classroomPages(room.id)).find(row => row.is_public === true);
+    test.skip(publicPage === undefined, 'no published public page in this classroom');
     if (!publicPage || !baseDomain) return;
 
     await loginAs(page, 'owner', `/${env.classroomSlug}/${publicPage.id}`);
-    const fixture = await withFixtureImage(
-      page,
-      {
-        id: publicPage.id,
-        slug: publicPage.slug,
-        contentPath: publicPage.content_path,
-        classroomSlug: env.classroomSlug,
-        classroomId: room.id,
-      },
-      'public'
-    );
+    markScenarioRan();
+    const fixture = await withFixtureImage(page, toTestPage(publicPage, room.id), 'public');
 
     // A classroom holds at most one site, so this may displace an existing row.
     // Whatever was there is put back in the `finally`.
     const existing = await service.site.getSiteForClassroom(room.id).catch(() => null);
     const subdomain = existing?.subdomain ?? `${E2E_SLUG_PREFIX}-${Date.now().toString(36)}`;
-    if (!existing) await service.site.validateAndClaimSubdomain(room.id, subdomain);
-
-    // Both settings applied unconditionally, INCLUDING on a row this run did
-    // not create. Claiming a subdomain only reserves the name: a site that is
-    // claimed but not enabled 404s, which is the least obvious way for this
-    // scenario to fail — and it is exactly what a previous interrupted run
-    // leaves behind. Enabling one without a home page is refused outright.
     const restoreSite = existing
       ? { is_enabled: existing.is_enabled, home_page_id: existing.home_page_id }
       : null;
-    await service.site.upsertSiteSettings(room.id, {
-      is_enabled: true,
-      home_page_id: existing?.home_page_id ?? publicPage.id,
-    });
 
+    // EVERYTHING that mutates the site is inside the try, including the claim.
+    // It was outside, and `upsertSiteSettings` throws HOME_PAGE_REQUIRED when
+    // the home page it is handed is a draft — so the claim succeeded, the
+    // enable threw, the `finally` never ran, and the run left a permanently
+    // claimed `e2e-cd-*` subdomain behind. Setup that can fail belongs under
+    // the same guard as the assertions.
+    let claimed = false;
     try {
+      if (!existing) {
+        await service.site.validateAndClaimSubdomain(room.id, subdomain);
+        claimed = true;
+      }
+
+      // Applied unconditionally, INCLUDING to a row this run did not create.
+      // Claiming a subdomain only reserves the name: a site that is claimed but
+      // not enabled 404s, which is the least obvious way for this scenario to
+      // fail, and is exactly what an interrupted run leaves behind. Enabling one
+      // without a home page is refused outright — hence the published-page
+      // filter above.
+      await service.site.upsertSiteSettings(room.id, {
+        is_enabled: true,
+        home_page_id: existing?.home_page_id ?? publicPage.id,
+      });
+
       // Reached by Host header, not by hostname: there is no DNS for
       // `{subdomain}.{base}` locally. The site tree is script-less by design,
       // so the server's own markup is the whole story — which is precisely why
@@ -756,9 +895,26 @@ test.describe('E2E CD — pages, what each audience sees', () => {
       expect(html).not.toContain('raw.githubusercontent.com');
       expect(html).not.toMatch(/\/c\/[0-9a-f-]{36}\/missing\//i);
     } finally {
+      // Restore in ONE call, with the exact prior pair. Splitting it invites
+      // HOME_PAGE_REQUIRED on the way back (a site cannot be enabled without a
+      // home page, and cannot keep a home page it is not allowed to hold), and
+      // a swallowed failure there leaves someone else's site switched on.
       if (restoreSite) {
-        await service.site.upsertSiteSettings(room.id, restoreSite).catch(() => undefined);
-      } else {
+        try {
+          await service.site.upsertSiteSettings(room.id, restoreSite);
+        } catch (error) {
+          // Deliberately loud. This is a pre-existing site belonging to the
+          // classroom, and leaving it in the state THIS test wanted is a real
+          // change to someone's course that nobody asked for.
+          console.warn(
+            `[e2e] COULD NOT RESTORE the class site for ${room.slug} to ` +
+              `${JSON.stringify(restoreSite)} — it is currently enabled with home page ` +
+              `${publicPage.id}. Fix it by hand. Cause: ${
+                error instanceof Error ? error.message : String(error)
+              }`
+          );
+        }
+      } else if (claimed) {
         await service.site.deleteSiteForClassroom(room.id).catch(() => undefined);
       }
     }
@@ -771,6 +927,9 @@ test.describe('E2E CD — pages, when a file goes away', () => {
     request,
   }) => {
     requireDelivery();
+    // Uploads, commits and deletes against a real GitHub repo, plus the waits
+    // that outlast a 60s content cache. The default 60s budget is not enough.
+    test.setTimeout(180_000);
     const room = requireClassroom();
     test.skip(uploadSkipReason() !== null, uploadSkipReason() ?? '');
     test.skip(
@@ -787,6 +946,7 @@ test.describe('E2E CD — pages, when a file goes away', () => {
     // what breaks, the file underneath it is, and the resolver has to turn a
     // reference it can no longer satisfy into something deterministic rather
     // than into a confidently wrong signature.
+    markScenarioRan();
     const uploaded = await withFixtureImage(page, target, 'doomed');
 
     // Remove the file behind the app's back, then run the SAME sync the push
@@ -844,6 +1004,9 @@ test.describe('E2E CD — pages, the gate', () => {
     page,
   }) => {
     requireDelivery();
+    // Uploads, commits and deletes against a real GitHub repo, plus the waits
+    // that outlast a 60s content cache. The default 60s budget is not enough.
+    test.setTimeout(180_000);
     const room = requireClassroom();
     test.skip(localOnlySkipReason() !== null, localOnlySkipReason() ?? '');
 
@@ -857,6 +1020,7 @@ test.describe('E2E CD — pages, the gate', () => {
     // signed" is a real observation rather than the vacuous truth a page with
     // no images would give either way.
     await loginAs(page, 'owner', `/${target.classroomSlug}/${target.id}`);
+    markScenarioRan();
     const fixture = await withFixtureImage(page, target, 'gate');
     // Wait for the write to be visible BEFORE flipping the gate, so "no signed
     // images" cannot be the consistency window wearing the gate's clothes.
@@ -878,7 +1042,26 @@ test.describe('E2E CD — pages, the gate', () => {
           `still signed with the gate off: ${describeSignedUrl(image.src)}`
         ).toBeNull();
       }
-      expect(log.delivery(), 'the gate is off; the delivery origin must be untouched').toEqual([]);
+      expect(
+        describeUrls(log.delivery()),
+        'the gate is off; the delivery origin must be untouched'
+      ).toEqual([]);
+
+      // The positive half. "Nothing is signed" is also true of a page that
+      // rendered no image at all, or one whose src is an empty string — so the
+      // fixture reference has to come back in a shape the legacy path can
+      // actually serve: the bare repo path, or the `/content/{org}/{repo}/…`
+      // proxy the app emitted before delivery existed.
+      const legacyShapes = images.filter(
+        image =>
+          /\/content\/[^/]+\/[^/]+\//.test(image.src) ||
+          image.src.includes(fixture.path) ||
+          /raw\.githubusercontent\.com/.test(image.src)
+      );
+      expect(
+        legacyShapes.length,
+        `no image fell back to a legacy reference; saw ${images.map(i => i.src.slice(0, 80)).join(', ')}`
+      ).toBeGreaterThan(0);
       log.stop();
 
       // Flip it back and the same page signs again — the point of the gate is
@@ -905,6 +1088,9 @@ test.describe('E2E CD — pages, the gate', () => {
     request,
   }) => {
     requireDelivery();
+    // Uploads, commits and deletes against a real GitHub repo, plus the waits
+    // that outlast a 60s content cache. The default 60s budget is not enough.
+    test.setTimeout(180_000);
     const room = requireClassroom();
     test.skip(localOnlySkipReason() !== null, localOnlySkipReason() ?? '');
     test.skip(uploadSkipReason() !== null, uploadSkipReason() ?? '');
@@ -918,6 +1104,7 @@ test.describe('E2E CD — pages, the gate', () => {
     if (!target) return;
 
     await loginAs(page, 'owner', `/${target.classroomSlug}/${target.id}`);
+    markScenarioRan();
     const fixture = await withFixtureImage(page, target, 'version');
     const settled = await reloadUntilImages(page, `/${target.classroomSlug}/${target.id}`, seen =>
       seen.some(image => image.signed?.sha === fixture.sha)
@@ -931,8 +1118,17 @@ test.describe('E2E CD — pages, the gate', () => {
 
     // Through the same service the settings action calls, so the assertion is
     // about the product's own increment rather than a hand-written update.
+    keyVersionBeforeBump = versionBefore;
     const versionAfter = await bumpKeyVersion(room.id);
     expect(versionAfter).toBe(versionBefore + 1);
+
+    // Re-read rather than trusting the `beforeAll` snapshot: `room` was loaded
+    // once at file scope, so its `content_key_version` is now stale by exactly
+    // the thing this scenario just changed. Anything downstream that signed
+    // from the snapshot would be signing with the old version and asserting
+    // against the new one.
+    const roomAfter = await loadClassroom(room.slug);
+    expect(roomAfter.content_key_version).toBe(versionAfter);
 
     await page.reload();
     await page.waitForLoadState('networkidle');
@@ -983,11 +1179,26 @@ test.describe('E2E CD — the Worker, directly', () => {
     // the Worker's contract is checkable against staging at all.
     if (e2eTarget() === 'staging') {
       try {
-        const response = await request.get(env.classSite);
-        const image = await harvestSignedFromHtml(await response.text());
+        // Staging Fly apps scale to zero, so the first request after a quiet
+        // period can 502 or time out while a machine boots. Retrying on the
+        // CONTENT we need — a signed image in the markup — covers the cold
+        // start without a sleep, and fails honestly if the site is genuinely
+        // serving nothing.
+        const response = await fetchUntilHtml(
+          async url => {
+            const result = await request.get(url, { timeout: 30_000 });
+            return { status: result.status(), body: await result.text() };
+          },
+          env.classSite,
+          html => imagesFromHtml(html).some(image => image.signed !== null),
+          { attempts: 5, delayMs: 4_000 }
+        );
+        const image = await harvestSignedFromHtml(response.body);
         signedUrl = image?.src ?? null;
         if (!signedUrl) {
-          harvestError = `no signed image on ${env.classSite} — is content delivery on for that classroom?`;
+          harvestError =
+            `no signed image on ${env.classSite} (HTTP ${response.status}) — ` +
+            'is content delivery on for that classroom?';
         }
       } catch (error) {
         harvestError = error instanceof Error ? error.message : String(error);
@@ -1031,10 +1242,15 @@ test.describe('E2E CD — the Worker, directly', () => {
   function requireSignedUrl(): string {
     requireDelivery();
     test.skip(signedUrl === null, `no signed URL to work from: ${harvestError}`);
+    markScenarioRan();
     return signedUrl as string;
   }
 
   test('/healthz reports a configured Worker', async ({ request }) => {
+    // Deliberately does NOT count toward `scenariosThatRan`. It is a
+    // connectivity check that passes whenever a Worker is up, including in
+    // exactly the situation the counter exists to catch — every real scenario
+    // skipping. A detector that its own trivial case satisfies detects nothing.
     const response = await request.get(`${env.deliveryOrigin}/healthz`);
     expect(response.status()).toBe(200);
     const body = (await response.json()) as { ok: boolean; configured: boolean };
@@ -1065,7 +1281,12 @@ test.describe('E2E CD — the Worker, directly', () => {
     // The interesting forgery: `w=` is a real, valid parameter — it is just not
     // one THIS signature covers. Transforms are inside the canonical string
     // precisely so a client cannot widen an image it was handed.
-    const response = await request.get(appendWidth(requireSignedUrl(), 800));
+    const url = requireSignedUrl();
+    // The forgery only means anything if the URL did not already carry a
+    // width: appending `w=800` to a URL signed WITH `w=800` changes nothing,
+    // and the 403 would then be proving that a valid URL is valid.
+    expect(parseSignedUrl(url)?.w, 'the harvested src should be the untransformed one').toBeNull();
+    const response = await request.get(appendWidth(url, 800));
     expect(response.status()).toBe(403);
   });
 
@@ -1095,4 +1316,33 @@ test.describe('E2E CD — the Worker, directly', () => {
     // re-adds the file, and a cached 404 would outlive the fix.
     expect(response.headers()['cache-control']).toContain('no-store');
   });
+});
+
+/**
+ * The check that the suite did anything at all.
+ *
+ * Every skip in this file is individually defensible, and a run in which ALL of
+ * them fire still reports two green tasks — which is exactly what happened when
+ * turbo silently dropped `E2E_CD_CONTENT_REPO` from the environment. Green
+ * because nothing ran is the one failure mode a test suite cannot report about
+ * itself, so it is asserted here explicitly.
+ *
+ * Ordered last by being declared last: Playwright runs a file's tests in
+ * declaration order with `fullyParallel: false`, so by the time this executes
+ * every scenario above has had its turn.
+ *
+ * Staging is exempt on purpose — there, most scenarios SHOULD skip, and the
+ * ones that run are counted by their own assertions.
+ */
+test('E2E CD — at least one scenario actually ran', async () => {
+  test.skip(
+    e2eTarget() === 'staging',
+    'staging legitimately skips most of the pack; the local run is the one that must not be empty'
+  );
+  expect(
+    scenariosThatRan(),
+    'every scenario in this pack skipped. The run is green and proved nothing — check the skip ' +
+      'reasons above (a missing Worker, E2E_CD_CONTENT_REPO not reaching Playwright, or a ' +
+      'classroom whose content_delivery_enabled is false).'
+  ).toBeGreaterThan(0);
 });

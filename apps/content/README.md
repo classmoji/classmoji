@@ -236,11 +236,23 @@ put it in `apps/content/`, not the repo root.
 `content_delivery_enabled` defaults to false, per classroom, and the env check
 above is separate from it. Both have to be true. Locally, flip it directly:
 
+The pack's default local classroom is `classmoji-dev-winter-2025` — the one
+`npm run db:seed` creates — so that is the slug to flip unless you set
+`E2E_CLASSROOM_SLUG` to something else:
+
 ```sh
 # .dev-context has the database this checkout is actually using.
 psql "$DATABASE_URL" -c \
-  "update classrooms set content_delivery_enabled = true where slug = 'cs98-test';"
+  "update classrooms set content_delivery_enabled = true where slug = 'classmoji-dev-winter-2025';"
 ```
+
+(`cs98-test` is the STAGING classroom; flipping that name locally updates zero
+rows and looks exactly like the feature not working.)
+
+Every write in the pack — the flag, the cache bump, the uploads and the repo
+deletes — is refused unless `DATABASE_URL` resolves to a host on localhost.
+`E2E_ALLOW_REMOTE_DB_I_KNOW_WHAT_I_AM_DOING=1` lifts that for a non-local host,
+and does not lift it for anything that looks managed or production.
 
 In the UI it lives at **Settings → Content** for the classroom
 (`/admin/:class/settings/content`), alongside **Reset content cache** — the

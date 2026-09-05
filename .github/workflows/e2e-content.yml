@@ -35,11 +35,14 @@ on:
 #     classroom row skips, and so does every scenario that would WRITE one: a
 #     cache reset against a shared environment changes every URL every real
 #     viewer is holding.
-#   - Anything signed-in skips. `/test-login` 404s outside development and
-#     staging has no seeded credentials, so there is no way to become an owner
-#     or a student. E2E_SESSION_COOKIE (a `classmoji.session_token` for a member
-#     of cs98-test) is the missing piece; the pack reads it and says so when it
-#     is absent.
+#   - Anything signed-in skips WITHOUT E2E_SESSION_COOKIE. `/test-login` 404s
+#     outside development and staging has no seeded credentials. With the secret
+#     set, the pack attaches that `classmoji.session_token` to the browser
+#     context — scoped to the three staging origins by URL, never by domain, so
+#     it cannot follow a redirect to production — and one more scenario runs:
+#     a member-facing page must not be served at the `public` tier. It cannot
+#     assert `enrolled` exactly, because a staff token would correctly produce
+#     `draft`; the local pack pins the exact values.
 #   - Uploads skip unless E2E_CD_CONTENT_REPO=1 says the target classroom's repo
 #     is genuinely writable. It is not set here on purpose: nothing scheduled
 #     should be committing fixture PNGs to a course repository.
@@ -55,6 +58,12 @@ env:
   E2E_CLASS_SITE_URL: https://cs98-test.staging.classmoji.io
   CONTENT_DELIVERY_ORIGIN: https://content-staging.classmoji.io
   E2E_CLASSROOM_SLUG: cs98-test
+
+# Read-only. This job checks out code and talks to staging over HTTP; it has no
+# reason to write to the repository, and the default token grant is wider than
+# that.
+permissions:
+  contents: read
 
 jobs:
   content-e2e:
@@ -95,12 +104,20 @@ jobs:
       #
       # It is a live credential with an eight-hour life, so it will go stale;
       # the skip that follows is correct behaviour, not a broken pipeline.
-      - name: Run the content-delivery pack against staging
+      # Two steps, not one `&&` chain: the pages pack is where nearly all the
+      # staging coverage lives, and a chained slides failure would have hidden
+      # whether pages had passed. `if: always()` on the second means one report
+      # never suppresses the other.
+      - name: Run the pages content-delivery pack against staging
         env:
           E2E_SESSION_COOKIE: ${{ secrets.E2E_STAGING_SESSION_COOKIE }}
-        run: |
-          npx playwright test --config apps/pages/playwright.config.ts content-pipeline
-          npx playwright test --config apps/slides/playwright.config.ts content-pipeline
+        run: npx playwright test --config apps/pages/playwright.config.ts content-pipeline
+
+      - name: Run the slides content-delivery pack against staging
+        if: always()
+        env:
+          E2E_SESSION_COOKIE: ${{ secrets.E2E_STAGING_SESSION_COOKIE }}
+        run: npx playwright test --config apps/slides/playwright.config.ts content-pipeline
 
       - name: Upload Playwright reports
         if: always()
