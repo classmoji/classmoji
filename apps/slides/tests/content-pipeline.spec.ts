@@ -223,9 +223,8 @@ test.describe('E2E CD — slides, a deck with an uploaded image', () => {
       `content_delivery_enabled is false for '${target.slug}' — see apps/content/README.md, "Local end-to-end"`
     );
 
-    const { createSlide, editSlide, saveSlide, presentSlide, fixtureName, pngBytes } = await import(
-      './helpers'
-    );
+    const { createSlide, editSlide, saveSlide, presentSlide, fixtureName, pngBytes } =
+      await import('./helpers');
 
     await loginAs(page, 'owner', '/');
     const deckId = await createSlide(page, `E2E CD deck ${Date.now()}`);
@@ -349,9 +348,8 @@ test.describe('E2E CD — slides, the gate', () => {
     // be in the classroom makes the result depend on what ran before it, and a
     // deck with no images would pass this test without exercising the gate at
     // all — the emptiest possible green.
-    const { createSlide, editSlide, saveSlide, getSlideById, fixtureName, pngBytes } = await import(
-      './helpers'
-    );
+    const { createSlide, editSlide, saveSlide, getSlideById, fixtureName, pngBytes } =
+      await import('./helpers');
 
     await loginAs(page, 'owner', '/');
     const deckId = await createSlide(page, `E2E CD gate ${Date.now()}`);
@@ -387,8 +385,10 @@ test.describe('E2E CD — slides, the gate', () => {
       expect(images.length, 'the fixture image should be on the deck').toBeGreaterThan(0);
 
       for (const image of images) {
-        expect(image.signed, `still signed with the gate off: ${describeSignedUrl(image.src)}`)
-          .toBeNull();
+        expect(
+          image.signed,
+          `still signed with the gate off: ${describeSignedUrl(image.src)}`
+        ).toBeNull();
       }
       // The positive half: they fell back to the legacy proxy form, rather than
       // to nothing at all.

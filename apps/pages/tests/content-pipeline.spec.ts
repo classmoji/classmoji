@@ -166,7 +166,10 @@ function expectResponsive(
   expected: { classroomId: string; tier: string; keyVersion?: number; sizes?: string }
 ): void {
   const signed = image.signed;
-  expect(signed, `src is not a signed delivery URL: ${describeSignedUrl(image.src)}`).not.toBeNull();
+  expect(
+    signed,
+    `src is not a signed delivery URL: ${describeSignedUrl(image.src)}`
+  ).not.toBeNull();
   if (!signed) return;
 
   expect(signed.origin).toBe(env.deliveryOrigin);
@@ -345,8 +348,10 @@ test.describe('E2E CD — pages, the editor', () => {
     expect(uploaded.displayUrl, 'the layer is on, so a display URL was signed').not.toBeNull();
 
     const displaySigned = parseSignedUrl(uploaded.displayUrl ?? '');
-    expect(displaySigned, `displayUrl is not signed: ${describeSignedUrl(uploaded.displayUrl ?? '')}`)
-      .not.toBeNull();
+    expect(
+      displaySigned,
+      `displayUrl is not signed: ${describeSignedUrl(uploaded.displayUrl ?? '')}`
+    ).not.toBeNull();
     // Staff uploading into an editor is the draft tier by definition.
     expect(displaySigned?.tier).toBe('draft');
 
@@ -495,7 +500,10 @@ test.describe('E2E CD — pages, the editor', () => {
     requireDelivery();
     const room = requireClassroom();
     test.skip(uploadSkipReason() !== null, uploadSkipReason() ?? '');
-    test.skip(!room.content_delivery_enabled, `content_delivery_enabled is false for '${room.slug}'`);
+    test.skip(
+      !room.content_delivery_enabled,
+      `content_delivery_enabled is false for '${room.slug}'`
+    );
 
     const target = await anyEditablePage(room.id);
     test.skip(target === null, 'no page with a content_path in the test classroom');
@@ -543,7 +551,10 @@ test.describe('E2E CD — pages, what each audience sees', () => {
     requireDelivery();
     const room = requireClassroom();
     test.skip(authSkipReason() !== null, authSkipReason() ?? '');
-    test.skip(!room.content_delivery_enabled, `content_delivery_enabled is false for '${room.slug}'`);
+    test.skip(
+      !room.content_delivery_enabled,
+      `content_delivery_enabled is false for '${room.slug}'`
+    );
 
     test.skip(uploadSkipReason() !== null, uploadSkipReason() ?? '');
 
@@ -627,7 +638,9 @@ test.describe('E2E CD — pages, what each audience sees', () => {
 
     const html = await response.text();
     const images = imagesFromHtml(html).filter(image => image.signed !== null);
-    expect(images.length, 'the staging class site should carry delivered images').toBeGreaterThan(0);
+    expect(images.length, 'the staging class site should carry delivered images').toBeGreaterThan(
+      0
+    );
 
     for (const image of images) {
       expect(image.signed?.origin).toBe(env.deliveryOrigin);
@@ -760,7 +773,10 @@ test.describe('E2E CD — pages, when a file goes away', () => {
     requireDelivery();
     const room = requireClassroom();
     test.skip(uploadSkipReason() !== null, uploadSkipReason() ?? '');
-    test.skip(!room.content_delivery_enabled, `content_delivery_enabled is false for '${room.slug}'`);
+    test.skip(
+      !room.content_delivery_enabled,
+      `content_delivery_enabled is false for '${room.slug}'`
+    );
 
     const target = await anyEditablePage(room.id);
     test.skip(target === null, 'no page with a content_path in the test classroom');
@@ -797,7 +813,10 @@ test.describe('E2E CD — pages, when a file goes away', () => {
     );
 
     const missing = parseMissingUrl(resolved);
-    expect(missing, `a dangling reference must resolve to /missing/, got ${resolved}`).not.toBeNull();
+    expect(
+      missing,
+      `a dangling reference must resolve to /missing/, got ${resolved}`
+    ).not.toBeNull();
     expect(missing?.classroomId.toLowerCase()).toBe(room.id.toLowerCase());
     expect(missing?.ref).toBe(uploaded.path);
 
@@ -854,8 +873,10 @@ test.describe('E2E CD — pages, the gate', () => {
       const images = await readImages(page);
       expect(images.length, 'the fixture image should still be on the page').toBeGreaterThan(0);
       for (const image of images) {
-        expect(image.signed, `still signed with the gate off: ${describeSignedUrl(image.src)}`)
-          .toBeNull();
+        expect(
+          image.signed,
+          `still signed with the gate off: ${describeSignedUrl(image.src)}`
+        ).toBeNull();
       }
       expect(log.delivery(), 'the gate is off; the delivery origin must be untouched').toEqual([]);
       log.stop();
@@ -868,8 +889,10 @@ test.describe('E2E CD — pages, the gate', () => {
       await page.waitForLoadState('networkidle');
 
       const signedAgain = (await readImages(page)).filter(image => image.signed !== null);
-      expect(signedAgain.length, 'the gate went back on; the image should sign again')
-        .toBeGreaterThan(0);
+      expect(
+        signedAgain.length,
+        'the gate went back on; the image should sign again'
+      ).toBeGreaterThan(0);
       expect(secondLog.delivery().length).toBeGreaterThan(0);
       secondLog.stop();
     } finally {
@@ -885,7 +908,10 @@ test.describe('E2E CD — pages, the gate', () => {
     const room = requireClassroom();
     test.skip(localOnlySkipReason() !== null, localOnlySkipReason() ?? '');
     test.skip(uploadSkipReason() !== null, uploadSkipReason() ?? '');
-    test.skip(!room.content_delivery_enabled, `content_delivery_enabled is false for '${room.slug}'`);
+    test.skip(
+      !room.content_delivery_enabled,
+      `content_delivery_enabled is false for '${room.slug}'`
+    );
 
     const target = await anyEditablePage(room.id);
     test.skip(target === null, 'no page with a content_path in the test classroom');

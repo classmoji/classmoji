@@ -22,19 +22,24 @@ on:
 
 # WHAT ACTUALLY RUNS AGAINST STAGING
 #
-# Roughly a third of the pack. The rest skips with a named reason, and those
-# reasons are real gaps rather than laziness:
+# Eight of the nineteen scenarios, verified green against cs98-test on
+# 2026-09-04: the public-tier class-site render with its ladder, /healthz, the
+# 200 + HEAD parity, the four refusals (tampered sig, appended width, extended
+# expiry, foreign classroom) and the /missing/ 404. Every one is a read.
 #
+# The other eleven skip with a named reason, and those reasons are real gaps
+# rather than laziness:
+#
+#   - The pack opens no database against a deployed target — `prisma()` throws
+#     while E2E_TARGET=staging, on purpose. So every scenario that needs a
+#     classroom row skips, and so does every scenario that would WRITE one: a
+#     cache reset against a shared environment changes every URL every real
+#     viewer is holding.
 #   - Anything signed-in skips. `/test-login` 404s outside development and
-#     staging has no seeded password, so there is no way to become an owner or
-#     a student. Supplying E2E_SESSION_COOKIE (a `classmoji.session_token` for a
-#     member of cs98-test) is what would unlock the editor and enrolled-tier
-#     scenarios; the pack reads it and skips clearly when it is absent.
-#   - Anything that toggles `content_delivery_enabled` or bumps
-#     `content_key_version` skips unconditionally. Those are database writes,
-#     the pack refuses to open a Prisma client while E2E_TARGET=staging, and
-#     that refusal is deliberate — a cache reset against a shared environment
-#     changes every URL every real viewer holds.
+#     staging has no seeded credentials, so there is no way to become an owner
+#     or a student. E2E_SESSION_COOKIE (a `classmoji.session_token` for a member
+#     of cs98-test) is the missing piece; the pack reads it and says so when it
+#     is absent.
 #   - Uploads skip unless E2E_CD_CONTENT_REPO=1 says the target classroom's repo
 #     is genuinely writable. It is not set here on purpose: nothing scheduled
 #     should be committing fixture PNGs to a course repository.

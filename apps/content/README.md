@@ -251,6 +251,39 @@ To watch the gate work, set it back to `false` and reload: every `<img>` goes
 back to a legacy `raw.githubusercontent.com` / `/content/{org}/{repo}/…` ref
 and nothing is requested from `localhost:8787` at all.
 
+#### 5. What the classroom actually has to be
+
+Three things beyond the flag, each of which fails in its own confusing way:
+
+- **A content repo that exists on GitHub, in an org with the App installed.**
+  `npm run db:seed` gives the dev classroom the synthetic org `dev-org` and the
+  repo `content-classmoji-dev-winter-2025`, and neither exists. An upload then
+  fails at the GitHub API and tells you nothing about delivery. Point the
+  classroom at a real one (`git_org_id` + `content_repo`, with the org's
+  `github_installation_id` set) before expecting an upload to work.
+- **Pages or decks with real `content_path`s.** The delivery layer resolves
+  references; a classroom with no content has nothing to resolve, and every
+  assertion about it is vacuously true.
+- **`SITE_BASE_DOMAIN`, if you want the `public` tier.** The class-site host
+  rewriter is a no-op without it, and `public` is only ever minted for the
+  class-site surface — so with it unset there is no way to see that tier at all.
+  Start the pages app with e.g. `SITE_BASE_DOMAIN=classmoji.io` and address the
+  site with a `Host:` header; there is no local DNS for it. The site also has to
+  be *enabled* and have a home page — a claimed-but-disabled site 404s.
+
+Then:
+
+```sh
+E2E_CD_CONTENT_REPO=1 npm run e2e:content
+```
+
+`E2E_CD_CONTENT_REPO=1` is your assertion that the classroom's repo is real and
+writable; without it the upload scenarios skip rather than fail. Two caches sit
+between a write and what you see, and the pack waits both out rather than
+sleeping: GitHub's contents API is eventually consistent after a write, and the
+page loader passes `skipCache: canEdit`, so staff read fresh while a student or
+an anonymous site visitor gets a 60-second cache.
+
 ## Operating
 
 ### R2 layout, and purging one blob

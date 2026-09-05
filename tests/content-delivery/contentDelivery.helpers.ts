@@ -200,7 +200,7 @@ export function authSkipReason(): string | null {
   if (process.env.E2E_SESSION_COOKIE) return null;
   return (
     'staging has no test-login route and no seeded credentials: set E2E_SESSION_COOKIE to a ' +
-    "`classmoji.session_token` value for a member of the target classroom, or run with E2E_TARGET=local"
+    '`classmoji.session_token` value for a member of the target classroom, or run with E2E_TARGET=local'
   );
 }
 
@@ -728,10 +728,7 @@ export function pngBytes(width = 1200, height = 60): Buffer {
  * test is about animation.
  */
 export function gifBytes(): Buffer {
-  return Buffer.from(
-    'R0lGODdhAQABAIAAAP///////ywAAAAAAQABAAACAkQBADs=',
-    'base64'
-  );
+  return Buffer.from('R0lGODdhAQABAIAAAP///////ywAAAAAAQABAAACAkQBADs=', 'base64');
 }
 
 /** A unique, prefixed name for a fixture file. */
