@@ -422,7 +422,7 @@ export async function verifyContentUrl(
 }
 
 /**
- * Draft URLs are never stored anywhere. Everything else is immutable for the
+ * `edit` URLs are never stored anywhere. Everything else is immutable for the
  * life of its signature: the content is sha-addressed and the expiry is baked
  * into the URL, so a cache entry can live exactly that long.
  *
@@ -431,7 +431,7 @@ export async function verifyContentUrl(
  * max-age would send every cache back to the origin at once.
  */
 export function cacheControlFor(tier: Tier, exp: number, now: number): string {
-  if (tier === 'draft') return 'no-store';
+  if (tier === 'edit') return 'no-store';
   const maxAge = Math.floor(exp) - Math.floor(now);
   if (maxAge <= 0) return 'public, max-age=60';
   return `public, max-age=${maxAge}, immutable`;

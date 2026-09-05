@@ -146,7 +146,7 @@ describe('routing', () => {
   it('403s an unsigned or tampered URL, and never caches the refusal', async () => {
     const response = await worker.fetch(
       new Request(
-        `${ORIGIN}/c/${CLASSROOM}/blob/${BLOB_SHA}.png?p=public&v=1&exp=${futureExp()}&sig=nope`
+        `${ORIGIN}/c/${CLASSROOM}/blob/${BLOB_SHA}.png?p=month&v=1&exp=${futureExp()}&sig=nope`
       ),
       fakeEnv(),
       fakeContext()
@@ -160,7 +160,7 @@ describe('routing', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const path = `/c/${CLASSROOM}/blob/${BLOB_SHA}.png`;
     const response = await worker.fetch(
-      new Request(`${ORIGIN}${path}?p=public&v=1&exp=${futureExp()}&sig=nope`),
+      new Request(`${ORIGIN}${path}?p=month&v=1&exp=${futureExp()}&sig=nope`),
       fakeEnv(),
       fakeContext()
     );
@@ -170,7 +170,7 @@ describe('routing', () => {
     expect(message).toContain('bad-signature');
     expect(message).toContain(`classroom=${CLASSROOM}`);
     expect(message).toContain(`path=${path}`);
-    expect(message).toContain('p=public');
+    expect(message).toContain('p=month');
     expect(message).toContain('v=1');
     expect(message).not.toContain('sig=');
   });
@@ -490,7 +490,7 @@ describe('blob delivery', () => {
         contentType: 'text/html; charset=utf-8',
       },
     });
-    const url = await signedBlobUrl({ sha: BLOB_SHA, ext: 'html', tier: 'enrolled' });
+    const url = await signedBlobUrl({ sha: BLOB_SHA, ext: 'html', tier: 'week' });
 
     const response = await worker.fetch(
       new Request(url),
@@ -517,7 +517,7 @@ describe('blob delivery', () => {
     const bucket = fakeBucket({
       [`blobs/${BLOB_SHA}`]: { body: '<!doctype html><p>not json</p>' },
     });
-    const url = await signedBlobUrl({ sha: BLOB_SHA, ext: 'json', tier: 'enrolled' });
+    const url = await signedBlobUrl({ sha: BLOB_SHA, ext: 'json', tier: 'week' });
 
     const response = await worker.fetch(
       new Request(url),
@@ -542,7 +542,7 @@ describe('blob delivery', () => {
         contentType: 'text/plain; charset=utf-8',
       },
     });
-    const url = await signedBlobUrl({ sha: BLOB_SHA, ext: 'css', tier: 'enrolled' });
+    const url = await signedBlobUrl({ sha: BLOB_SHA, ext: 'css', tier: 'week' });
 
     const response = await worker.fetch(
       new Request(url),
@@ -559,7 +559,7 @@ describe('blob delivery', () => {
     const bucket = fakeBucket({
       [`blobs/${BLOB_SHA}`]: { body: '<!doctype html>', contentType: 'application/octet-stream' },
     });
-    const url = await signedBlobUrl({ sha: BLOB_SHA, ext: 'html', tier: 'enrolled' });
+    const url = await signedBlobUrl({ sha: BLOB_SHA, ext: 'html', tier: 'week' });
 
     const response = await worker.fetch(
       new Request(url, { method: 'HEAD' }),
@@ -571,13 +571,13 @@ describe('blob delivery', () => {
     expect(response.headers.get('Content-Type')).toBe('text/html; charset=utf-8');
   });
 
-  it('serves a draft html blob no-store, exactly like a draft image', async () => {
+  it('serves an `edit` html blob no-store, exactly like an `edit` image', async () => {
     // The per-tier cache lifetimes are decided by `cacheControlFor` on the
     // tier alone; text takes the same answer images take, unchanged.
     const bucket = fakeBucket({
       [`blobs/${BLOB_SHA}`]: { body: '<!doctype html>', contentType: 'text/html; charset=utf-8' },
     });
-    const url = await signedBlobUrl({ sha: BLOB_SHA, ext: 'html', tier: 'draft' });
+    const url = await signedBlobUrl({ sha: BLOB_SHA, ext: 'html', tier: 'edit' });
 
     const response = await worker.fetch(
       new Request(url),
@@ -602,7 +602,7 @@ describe('blob delivery', () => {
     const url = await signedBlobUrl({
       sha: BLOB_SHA,
       ext: 'json',
-      tier: 'enrolled',
+      tier: 'week',
       transform: { w: 800, fmt: 'auto' },
     });
 
@@ -624,7 +624,7 @@ describe('blob delivery', () => {
     const ctx = fakeContext();
     stubUpstreams();
 
-    const url = await signedBlobUrl({ sha: BLOB_SHA, ext: 'html', tier: 'enrolled' });
+    const url = await signedBlobUrl({ sha: BLOB_SHA, ext: 'html', tier: 'week' });
     const response = await worker.fetch(
       new Request(url),
       fakeEnv({ CACHE: bucket as unknown as R2Bucket }),
@@ -644,17 +644,17 @@ describe('blob delivery', () => {
     ]);
   });
 
-  it('marks draft content no-store, but still writes it to R2', async () => {
+  it('marks `edit` content no-store, but still writes it to R2', async () => {
     // Deliberate: `no-store` governs the SHARED caches in front of the Worker,
-    // which must never hold draft bytes. R2 sits behind the signature gate and
-    // is keyed by content hash, so a draft blob living there is not a
+    // which must never hold `edit` bytes. R2 sits behind the signature gate and
+    // is keyed by content hash, so an `edit` blob living there is not a
     // disclosure — and it is what makes publishing a flip rather than a cold
     // fetch. Empty bucket + stubbed origin so a put can actually happen and be
     // observed; seeding the object would have made this assertion vacuous.
     const bucket = fakeBucket();
     const ctx = fakeContext();
     stubUpstreams();
-    const url = await signedBlobUrl({ sha: BLOB_SHA, ext: 'png', tier: 'draft' });
+    const url = await signedBlobUrl({ sha: BLOB_SHA, ext: 'png', tier: 'edit' });
 
     const response = await worker.fetch(
       new Request(url),

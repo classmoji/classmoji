@@ -128,7 +128,7 @@ describe('fetchContentText through the Worker', () => {
     const calls = stubFetch({});
     await fetchContentText(ctx, DECK_PATH);
 
-    expect(new URL(calls[0]).searchParams.get('p')).toBe('enrolled');
+    expect(new URL(calls[0]).searchParams.get('p')).toBe('week');
   });
 
   it('follows the sha, so a save is visible the moment its row lands', async () => {

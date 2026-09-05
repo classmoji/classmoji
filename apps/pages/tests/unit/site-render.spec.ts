@@ -778,7 +778,7 @@ test.describe('article width', () => {
  * nowhere in the markup, and it is the only thing that says how wide the image
  * will actually be laid out.
  */
-const SITE_SIGNED = 'https://content.classmoji.io/c/abc/blob/aaa.png?p=public&sig=x';
+const SITE_SIGNED = 'https://content.classmoji.io/c/abc/blob/aaa.png?p=month&sig=x';
 const SITE_LADDER = `${SITE_SIGNED}&w=800&fmt=auto 800w, ${SITE_SIGNED}&w=1600&fmt=auto 1600w`;
 
 const renderImage = (props: Record<string, unknown>, srcSets?: Record<string, string>) =>

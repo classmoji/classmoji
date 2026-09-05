@@ -287,7 +287,7 @@ function pageResolveContext(page: PageWithContentRepo): ResolveContext | null {
       content_delivery_enabled: classroom.content_delivery_enabled === true,
       git_organization: { login },
     },
-    tier: 'draft',
+    tier: 'edit',
   };
 }
 
@@ -584,7 +584,7 @@ async function signUploadedAsset(
         classroomId: classroom.id,
         keyVersion:
           typeof classroom.content_key_version === 'number' ? classroom.content_key_version : 0,
-        tier: 'draft',
+        tier: 'edit',
       },
       { sha, ext: name.slice(dot + 1).toLowerCase() }
     );

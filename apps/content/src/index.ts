@@ -43,7 +43,7 @@ const MAX_LOGGED_PATH = 512;
  * request.
  *
  * A rotation stays open for as long as the longest signature lives — 30 days
- * for the public tier — and a warn on every request for a month would bury the
+ * for the `month` tier — and a warn on every request for that long would bury the
  * 403 and 404 lines an operator actually searches for. The cost is that the
  * count is no longer traffic: it says which classrooms are still handing out
  * old URLs, not how often.

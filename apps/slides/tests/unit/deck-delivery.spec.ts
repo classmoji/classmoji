@@ -13,15 +13,16 @@
  * The regression that produced this file: the rewrite lived inside the deck
  * VIEWER route, so `/present`, `/follow` and `/speaker` served raw
  * `/content/{org}/{repo}/...` URLs — dead the moment a content repo goes
- * private. `deckAccessFor` is the per-surface half of the fix, and the last
- * block here pins it against the shapes `assertSlideAccess` actually returns.
+ * private. `deckAccessFor` is the per-surface half of the fix, and the block
+ * below pins it against the shapes `assertSlideAccess` actually returns: the
+ * deck VIEWER is the only editing surface, and every other surface takes the
+ * DECK's visibility.
  */
 
 import { test, expect } from '@playwright/test';
 import {
   deckAccessFor,
   deckDeliveryContext,
-  followDeckAccess,
   gitBlobSha,
   isThumbnailRequest,
   isThemeRef,
@@ -109,7 +110,7 @@ function fakeResolvers(overrides: Partial<DeckDeliveryResolvers> = {}): DeckDeli
           urls.set(ref, ref);
           continue;
         }
-        const src = `${ORIGIN}/c/${CLASSROOM}/blob/sha-${ref.split('/').pop()}?p=draft`;
+        const src = `${ORIGIN}/c/${CLASSROOM}/blob/sha-${ref.split('/').pop()}?p=edit`;
         urls.set(ref, src);
         if (/\.(png|jpe?g|webp|avif)$/i.test(ref)) {
           srcSets.set(ref, {
@@ -129,16 +130,15 @@ function fakeResolvers(overrides: Partial<DeckDeliveryResolvers> = {}): DeckDeli
 
 test.describe('tier selection', () => {
   test('runs through tierFor rather than a per-route rule', () => {
-    expect(deckDeliveryContext(SLIDE, ORG, REPO, { canEdit: true })?.tier).toBe('draft');
-    expect(deckDeliveryContext(SLIDE, ORG, REPO, { canEdit: false })?.tier).toBe('enrolled');
-    expect(
-      deckDeliveryContext(SLIDE, ORG, REPO, { canEdit: false, isPublicSite: true })?.tier
-    ).toBe('public');
+    expect(deckDeliveryContext(SLIDE, ORG, REPO, { canEdit: true })?.tier).toBe('edit');
+    expect(deckDeliveryContext(SLIDE, ORG, REPO, { canEdit: false })?.tier).toBe('week');
+    expect(deckDeliveryContext(SLIDE, ORG, REPO, { canEdit: false, isPublic: true })?.tier).toBe(
+      'month'
+    );
     // A staff preview outranks a public deck — editing, not browsing.
     expect(
-      deckDeliveryContext(SLIDE, ORG, REPO, { canEdit: false, preview: true, isPublicSite: true })
-        ?.tier
-    ).toBe('draft');
+      deckDeliveryContext(SLIDE, ORG, REPO, { canEdit: false, preview: true, isPublic: true })?.tier
+    ).toBe('edit');
   });
 
   test('no context at all when the classroom cannot be served', () => {
@@ -163,7 +163,7 @@ test.describe('asset rewriting', () => {
     const { html: out } = await resolveDeckDelivery(html, ctx(), {
       resolvers: fakeResolvers(),
     });
-    expect(out).toContain(`${ORIGIN}/c/${CLASSROOM}/blob/sha-hero.jpeg?p=draft`);
+    expect(out).toContain(`${ORIGIN}/c/${CLASSROOM}/blob/sha-hero.jpeg?p=edit`);
     expect(out).not.toContain(`/content/${ORG}/${REPO}/slides`);
   });
 
@@ -289,7 +289,7 @@ test.describe('shared theme links', () => {
     expect(themeBase).toBe(BASE);
     expect(out).toContain(`${BASE}lib/offline-v2.css`);
     expect(out).toContain(`${BASE}custom-theme.css`);
-    expect(out).toContain(`${ORIGIN}/c/${CLASSROOM}/blob/sha-hero.jpeg?p=draft`);
+    expect(out).toContain(`${ORIGIN}/c/${CLASSROOM}/blob/sha-hero.jpeg?p=edit`);
     // A theme file signed as a standalone blob would break the relative
     // `url()` references the folder signature exists for.
     expect(seen.some(ref => ref.includes('.slidesthemes/'))).toBe(false);
@@ -315,93 +315,58 @@ test.describe('shared theme links', () => {
 
     expect(themeCalls).toBe(0);
     expect(out).toContain(`/content/${ORG}/${REPO}/.slidesthemes/cs98/lib/offline-v2.css`);
-    expect(out).toContain(`${ORIGIN}/c/${CLASSROOM}/blob/sha-hero.jpeg?p=draft`);
+    expect(out).toContain(`${ORIGIN}/c/${CLASSROOM}/blob/sha-hero.jpeg?p=edit`);
   });
 });
 
 test.describe('deckAccessFor — the tier inputs, per surface', () => {
-  test('the viewer follows the access result exactly', () => {
+  test('the viewer is the only editing surface, and follows the access result', () => {
     expect(deckAccessFor('viewer', OWNER, SLIDE)).toEqual({
       canEdit: true,
       preview: false,
-      isPublicSite: false,
+      isPublic: false,
     });
     expect(deckAccessFor('viewer', ASSISTANT_NO_EDIT, SLIDE)).toEqual({
       canEdit: false,
       preview: false,
-      isPublicSite: false,
+      isPublic: false,
     });
     expect(deckAccessFor('viewer', STUDENT, PUBLIC_SLIDE)).toEqual({
       canEdit: false,
       preview: false,
-      isPublicSite: true,
+      isPublic: true,
     });
   });
 
   test('only the viewer honours a preview-BRANCH read', () => {
     const staffPreview = { canEdit: true, previewActive: true };
     expect(deckAccessFor('viewer', staffPreview, SLIDE).preview).toBe(true);
-    // /follow has a `?preview=true` of its own that means "thumbnail". Even
-    // handed the viewer's flag, this surface must never mint draft URLs — a
-    // lecture hall of students would be signing into the 4h bucket.
-    expect(deckAccessFor('follow', staffPreview, SLIDE).preview).toBe(false);
-    expect(deckAccessFor('present', staffPreview, SLIDE).preview).toBeUndefined();
-    expect(deckAccessFor('speaker', staffPreview, SLIDE).preview).toBeUndefined();
-  });
-
-  test('present and speaker never claim edit access, whoever is looking', () => {
-    // Both surfaces stay open for hours; draft is an exact now+4h with five
-    // minutes of grace, so a lazily-loaded background on slide 40 would 403
-    // after lunch. Content is sha-addressed, so the longer bucket is the same
-    // bytes.
-    for (const surface of ['present', 'speaker'] as const) {
-      for (const access of [OWNER, ASSISTANT_NO_EDIT, STUDENT]) {
-        expect(deckAccessFor(surface, access, SLIDE)).toEqual({
-          canEdit: false,
-          isPublicSite: false,
-        });
-      }
-      expect(deckAccessFor(surface, OWNER, PUBLIC_SLIDE).isPublicSite).toBe(true);
+    // Everywhere else the flag is dropped on the floor. `/follow` has a
+    // `?preview=true` of its own that means "thumbnail", and a surface that
+    // let the two meet would sign a lecture hall into the 4h bucket.
+    for (const surface of ['present', 'speaker', 'follow'] as const) {
+      expect(deckAccessFor(surface, staffPreview, SLIDE).preview).toBeUndefined();
     }
   });
 
-  test('follow passes a follower through untouched', () => {
-    // A shareCode guest and an enrolled student are the same shape here.
-    expect(deckAccessFor('follow', STUDENT, SLIDE)).toEqual({
-      canEdit: false,
-      preview: false,
-      isPublicSite: false,
-    });
-    // Staff following along still edit, so they still get the draft bucket.
-    expect(deckAccessFor('follow', OWNER, SLIDE).canEdit).toBe(true);
-  });
-
-  test('the thumbnail form of follow is read-only, even for an owner', () => {
-    // `/speaker` embeds `/follow?preview=true` in its current and next panes.
-    // Signed as `draft`, those iframes expire four hours in — mid-lecture for
-    // a long class — and the lazily-loaded backgrounds start 403ing.
-    expect(deckAccessFor('follow', OWNER, SLIDE, { thumbnail: true })).toEqual({
-      canEdit: false,
-      preview: false,
-      isPublicSite: false,
-    });
-    // The thumbnail flag still never becomes the viewer's preview-BRANCH flag.
-    expect(
-      deckAccessFor('follow', { canEdit: true, previewActive: true }, SLIDE, { thumbnail: true })
-        .preview
-    ).toBe(false);
-    // Plain `/follow` is untouched: staff still edit there.
-    expect(deckAccessFor('follow', OWNER, SLIDE, { thumbnail: false }).canEdit).toBe(true);
-    expect(deckAccessFor('follow', OWNER, SLIDE).canEdit).toBe(true);
-    // A student was already read-only, and the flag changes nothing for them.
-    expect(deckAccessFor('follow', STUDENT, SLIDE, { thumbnail: true })).toEqual(
-      deckAccessFor('follow', STUDENT, SLIDE)
-    );
-    // Only `follow` has a thumbnail form — the other surfaces ignore the flag.
-    for (const surface of ['viewer', 'present', 'speaker'] as const) {
-      expect(deckAccessFor(surface, OWNER, SLIDE, { thumbnail: true })).toEqual(
-        deckAccessFor(surface, OWNER, SLIDE)
-      );
+  test('no surface but the viewer claims edit access, whoever is looking', () => {
+    // present/speaker stay open for hours and `edit` is an exact now+4h with
+    // five minutes of grace, so a lazily-loaded background on slide 40 would
+    // 403 after lunch. `/follow` is a READ surface for everyone including
+    // staff — nobody edits a deck through the audience view, and `/speaker`
+    // embeds it as an iframe. Content is sha-addressed, so the longer bucket
+    // is the same bytes.
+    for (const surface of ['present', 'speaker', 'follow'] as const) {
+      for (const access of [OWNER, ASSISTANT_NO_EDIT, STUDENT]) {
+        expect(deckAccessFor(surface, access, SLIDE)).toEqual({
+          canEdit: false,
+          isPublic: false,
+        });
+      }
+      expect(deckAccessFor(surface, OWNER, PUBLIC_SLIDE)).toEqual({
+        canEdit: false,
+        isPublic: true,
+      });
     }
   });
 
@@ -409,25 +374,47 @@ test.describe('deckAccessFor — the tier inputs, per surface', () => {
     const tierOf = (
       surface: Parameters<typeof deckAccessFor>[0],
       access: typeof OWNER,
-      slide = SLIDE,
-      opts: Parameters<typeof deckAccessFor>[3] = {}
-    ) => deckDeliveryContext(slide, ORG, REPO, deckAccessFor(surface, access, slide, opts))?.tier;
+      slide = SLIDE
+    ) => deckDeliveryContext(slide, ORG, REPO, deckAccessFor(surface, access, slide))?.tier;
 
-    expect(tierOf('viewer', OWNER)).toBe('draft');
-    expect(tierOf('present', OWNER)).toBe('enrolled');
-    expect(tierOf('speaker', OWNER)).toBe('enrolled');
-    expect(tierOf('present', OWNER, PUBLIC_SLIDE)).toBe('public');
-    expect(tierOf('follow', STUDENT)).toBe('enrolled');
-    expect(tierOf('follow', STUDENT, PUBLIC_SLIDE)).toBe('public');
-    expect(tierOf('follow', OWNER)).toBe('draft');
-    // The speaker view's panes: an owner, but not the 4h bucket.
-    expect(tierOf('follow', OWNER, SLIDE, { thumbnail: true })).toBe('enrolled');
-    expect(tierOf('follow', OWNER, PUBLIC_SLIDE, { thumbnail: true })).toBe('public');
-    expect(tierOf('follow', STUDENT, SLIDE, { thumbnail: true })).toBe('enrolled');
+    // The one editing surface.
+    expect(tierOf('viewer', OWNER)).toBe('edit');
+    expect(tierOf('viewer', OWNER, PUBLIC_SLIDE)).toBe('edit');
+    expect(tierOf('viewer', STUDENT)).toBe('week');
+    expect(tierOf('viewer', STUDENT, PUBLIC_SLIDE)).toBe('month');
+
+    // Every read surface reduces to the DECK's visibility and nothing else —
+    // same answer for an owner and for a student, which is the whole point.
+    for (const surface of ['present', 'speaker', 'follow'] as const) {
+      for (const access of [OWNER, ASSISTANT_NO_EDIT, STUDENT]) {
+        expect(tierOf(surface, access), `${surface} private`).toBe('week');
+        expect(tierOf(surface, access, PUBLIC_SLIDE), `${surface} public`).toBe('month');
+      }
+    }
+  });
+
+  test('no read surface can reach `edit`, even handed a staff preview', () => {
+    // The speaker view's current/next panes are `/follow?preview=true`
+    // iframes, and a lecture that outran four hours used to 403 a lazily
+    // loaded background mid-talk. This used to depend on `/follow` correctly
+    // spotting its thumbnail flag; now it is structural — the flag never
+    // reaches a tier decision, so there is nothing left to get wrong.
+    const staffPreview = { canEdit: true, previewActive: true };
+    for (const surface of ['present', 'speaker', 'follow'] as const) {
+      for (const slide of [SLIDE, PUBLIC_SLIDE]) {
+        const tier = deckDeliveryContext(
+          slide,
+          ORG,
+          REPO,
+          deckAccessFor(surface, staffPreview, slide)
+        )?.tier;
+        expect(tier, surface).not.toBe('edit');
+      }
+    }
   });
 });
 
-test.describe('the /follow route\'s own wiring', () => {
+test.describe("the /follow route's own preview parameter", () => {
   const followUrl = (query: string) => new URL(`https://slides.classmoji.io/deck-1/follow${query}`);
 
   test('only `preview=true` is the thumbnail form', () => {
@@ -440,28 +427,28 @@ test.describe('the /follow route\'s own wiring', () => {
     expect(isThumbnailRequest(followUrl('?shareCode=abc123'))).toBe(false);
   });
 
-  test('the URL alone decides the tier the speaker panes get', () => {
-    // The whole chain the route runs: query param → thumbnail flag → access
-    // shape → tier. This is what `/speaker` embeds, and it must not be draft.
-    const tierOf = (url: URL, access: typeof OWNER, slide = SLIDE) =>
-      deckDeliveryContext(slide, ORG, REPO, followDeckAccess(url, access, slide))?.tier;
-
-    expect(tierOf(followUrl('?preview=true'), OWNER)).toBe('enrolled');
-    expect(tierOf(followUrl('?preview=true'), OWNER, PUBLIC_SLIDE)).toBe('public');
-    // Plain /follow is untouched — staff editing along still get draft.
-    expect(tierOf(followUrl(''), OWNER)).toBe('draft');
-    // And a follower is a follower either way.
-    expect(tierOf(followUrl('?preview=true'), STUDENT)).toBe('enrolled');
-    expect(tierOf(followUrl(''), STUDENT)).toBe('enrolled');
-  });
-
-  test('a thumbnail never claims edit access', () => {
-    expect(followDeckAccess(followUrl('?preview=true'), OWNER, SLIDE)).toEqual({
-      canEdit: false,
-      preview: false,
-      isPublicSite: false,
-    });
-    expect(followDeckAccess(followUrl(''), OWNER, SLIDE).canEdit).toBe(true);
+  test('the flag decides layout and cannot reach a signature', () => {
+    // It used to feed the tier as well, to keep the speaker panes off the 4h
+    // bucket. `deckAccessFor` now pins every `/follow` read to `canEdit:
+    // false`, so both forms of the route mint the same tier and the parameter
+    // has no way to affect one.
+    for (const access of [OWNER, STUDENT]) {
+      const tier = deckDeliveryContext(
+        SLIDE,
+        ORG,
+        REPO,
+        deckAccessFor('follow', access, SLIDE)
+      )?.tier;
+      expect(tier).toBe('week');
+    }
+    expect(
+      deckDeliveryContext(
+        PUBLIC_SLIDE,
+        ORG,
+        REPO,
+        deckAccessFor('follow', OWNER, PUBLIC_SLIDE)
+      )?.tier
+    ).toBe('month');
   });
 });
 
@@ -520,7 +507,7 @@ test.describe('responsive images', () => {
     // And the untransformed original is still what `src` points at, which is
     // both the fallback for a browser that ignores srcset and the thing that
     // makes the src/srcset pair matchable by string equality.
-    expect(out).toMatch(/src="[^"]*\/blob\/sha-a\.png\?p=draft"/);
+    expect(out).toMatch(/src="[^"]*\/blob\/sha-a\.png\?p=edit"/);
   });
 
   test('never on a background attribute — Reveal paints those as CSS', async () => {

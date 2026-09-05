@@ -84,7 +84,7 @@ const DELIVERY_URL =
 /**
  * Re-resolve once when a signed URL comes back 403.
  *
- * A draft URL lives four hours. A tab left open past that has a document full
+ * An `edit` URL lives four hours. A tab left open past that has a document full
  * of references whose signatures have expired, and every image on it breaks at
  * once — with no user action that would refresh them, because the document
  * itself did not change. One revalidation re-runs the loader, which mints a

@@ -21,9 +21,9 @@ export interface TierPolicy {
 }
 
 export const TIER_POLICY: Readonly<Record<Tier, TierPolicy>> = {
-  public: { bucketSeconds: 30 * DAY, ttlSeconds: null, graceSeconds: 6 * HOUR },
-  enrolled: { bucketSeconds: 7 * DAY, ttlSeconds: null, graceSeconds: 6 * HOUR },
-  draft: { bucketSeconds: null, ttlSeconds: 4 * HOUR, graceSeconds: 5 * 60 },
+  edit: { bucketSeconds: null, ttlSeconds: 4 * HOUR, graceSeconds: 5 * 60 },
+  week: { bucketSeconds: 7 * DAY, ttlSeconds: null, graceSeconds: 6 * HOUR },
+  month: { bucketSeconds: 30 * DAY, ttlSeconds: null, graceSeconds: 6 * HOUR },
 };
 
 /**
@@ -50,7 +50,7 @@ export function bucketOffset(classroomId: string, bucketSeconds: number): number
  * Bucketed tiers round up to the end of the classroom's current bucket, so
  * every URL minted inside one bucket is byte-identical and cacheable - unless
  * that end is less than MIN_REMAINING_SECONDS away, in which case they roll to
- * the following bucket. Draft is an exact `now + 4h`. The result is always
+ * the following bucket. `edit` is an exact `now + 4h`. The result is always
  * strictly greater than `now`.
  */
 export function bucketExpiry(tier: Tier, classroomId: string, now: number): number {

@@ -99,28 +99,49 @@ export const loader = async ({
   }
 
   // Header thumbnails carry a stored reference, exactly like a block does, so
-  // they need the same render-time resolution — and the same PER-VIEWER tier as
-  // the page render itself: staff get short-lived draft URLs, an anonymous
-  // visitor the public bucket, everyone else enrolled. A failure here degrades
-  // to the stored references (the list still renders, thumbnails may not) rather
-  // than 500ing a classroom's whole page list over one image.
-  let resolvedPages = pages;
-  const assetCtx = assetResolveContext(
-    classroom as unknown as Parameters<typeof assetResolveContext>[0],
-    ClassmojiService.contentDelivery.tierFor({
-      canEdit: view === 'admin',
-      isPublicSite: view === 'public',
-    })
-  );
-  const headerRefs = headerImageRefs(pages);
-  if (assetCtx && headerRefs.length > 0) {
+  // they need the same render-time resolution — and the same lifetime rule as
+  // the page render itself. That rule is per-PAGE, not per-list: a list mixes
+  // public and members-only pages, and a thumbnail gets the lifetime its OWN
+  // page earns, not the one the visitor's door would have implied. So the
+  // refs are resolved in two passes, `week` then `month`, rather than one pass
+  // on a tier picked from `view`. Staff can edit any of them and take `edit`
+  // for the whole list in a single pass.
+  //
+  // A reference shared by a public and a members-only page is resolved twice
+  // and the `month` pass wins, which is the correct direction: the file is
+  // reachable by an anonymous reader either way.
+  //
+  // A failure here degrades to the stored references (the list still renders,
+  // thumbnails may not) rather than 500ing a classroom's whole page list over
+  // one image.
+  const canEditPages = view === 'admin';
+  const refGroups: Array<{ isPublic: boolean; refs: string[] }> = canEditPages
+    ? [{ isPublic: false, refs: headerImageRefs(pages) }]
+    : [
+        { isPublic: false, refs: headerImageRefs(pages.filter(page => !page.is_public)) },
+        { isPublic: true, refs: headerImageRefs(pages.filter(page => page.is_public)) },
+      ];
+
+  const resolvedRefs = new Map<string, string>();
+  for (const group of refGroups) {
+    if (group.refs.length === 0) continue;
+    const assetCtx = assetResolveContext(
+      classroom as unknown as Parameters<typeof assetResolveContext>[0],
+      ClassmojiService.contentDelivery.tierFor({
+        canEdit: canEditPages,
+        isPublic: group.isPublic,
+      })
+    );
+    if (!assetCtx) continue;
     try {
-      const resolved = await ClassmojiService.contentDelivery.resolveMany(assetCtx, headerRefs);
-      resolvedPages = withResolvedHeaderImages(pages, resolved);
+      const resolved = await ClassmojiService.contentDelivery.resolveMany(assetCtx, group.refs);
+      for (const [ref, url] of resolved) resolvedRefs.set(ref, url);
     } catch (error) {
       console.warn('[pages] Header image resolution failed, rendering stored refs:', error);
     }
   }
+  const resolvedPages =
+    resolvedRefs.size > 0 ? withResolvedHeaderImages(pages, resolvedRefs) : pages;
 
   return {
     view,

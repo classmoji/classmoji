@@ -25,12 +25,12 @@ describe('canonical strings', () => {
         classroomId: CLASSROOM,
         sha: BLOB_SHA,
         ext: 'png',
-        tier: 'public',
+        tier: 'month',
         keyVersion: 1,
         exp: 1_700_000_000,
         transform: { w: 800, fmt: 'auto' },
       })
-    ).toBe(`cm1|blob|${HOST}|${CLASSROOM}|${BLOB_SHA}|png|public|1|1700000000|800|auto`);
+    ).toBe(`cm1|blob|${HOST}|${CLASSROOM}|${BLOB_SHA}|png|month|1|1700000000|800|auto`);
 
     expect(
       themeCanonicalString({
@@ -38,11 +38,11 @@ describe('canonical strings', () => {
         classroomId: CLASSROOM,
         theme: 'aurora',
         treeSha: TREE_SHA,
-        tier: 'enrolled',
+        tier: 'week',
         keyVersion: 2,
         exp: 1_700_000_000,
       })
-    ).toBe(`cm1|theme|${HOST}|${CLASSROOM}|aurora|${TREE_SHA}|enrolled|2|1700000000`);
+    ).toBe(`cm1|theme|${HOST}|${CLASSROOM}|aurora|${TREE_SHA}|week|2|1700000000`);
   });
 
   it('leaves the transform fields empty when there is no transform', () => {
@@ -52,11 +52,11 @@ describe('canonical strings', () => {
         classroomId: CLASSROOM,
         sha: BLOB_SHA,
         ext: 'css',
-        tier: 'draft',
+        tier: 'edit',
         keyVersion: 0,
         exp: 1_700_000_000,
       })
-    ).toBe(`cm1|blob|${HOST}|${CLASSROOM}|${BLOB_SHA}|css|draft|0|1700000000||`);
+    ).toBe(`cm1|blob|${HOST}|${CLASSROOM}|${BLOB_SHA}|css|edit|0|1700000000||`);
   });
 });
 
@@ -69,7 +69,7 @@ describe('verifyContentUrl — blob', () => {
       classroomId: CLASSROOM,
       sha: BLOB_SHA,
       ext: 'png',
-      tier: 'public',
+      tier: 'month',
       keyVersion: 1,
     });
   });
@@ -193,20 +193,20 @@ describe('verifyContentUrl — blob', () => {
     const url = await signedBlobUrl({
       sha: BLOB_SHA,
       ext: 'png',
-      tier: 'enrolled',
+      tier: 'week',
       exp: justExpired,
     });
     expect(await verifyContentUrl(MASTER, url)).toMatchObject({ ok: true, inGrace: true });
 
-    const past = justExpired + TIER_POLICY.enrolled.graceSeconds + 60;
+    const past = justExpired + TIER_POLICY.week.graceSeconds + 60;
     expect(await verifyContentUrl(MASTER, url, past)).toEqual({ ok: false, reason: 'expired' });
   });
 
-  it('gives draft a much shorter grace than enrolled', async () => {
+  it('gives edit a much shorter grace than week', async () => {
     const justExpired = nowSeconds() - 10;
-    const url = await signedBlobUrl({ sha: BLOB_SHA, ext: 'png', tier: 'draft', exp: justExpired });
-    const afterDraftGrace = justExpired + TIER_POLICY.draft.graceSeconds + 60;
-    expect(TIER_POLICY.draft.graceSeconds).toBeLessThan(TIER_POLICY.enrolled.graceSeconds);
+    const url = await signedBlobUrl({ sha: BLOB_SHA, ext: 'png', tier: 'edit', exp: justExpired });
+    const afterDraftGrace = justExpired + TIER_POLICY.edit.graceSeconds + 60;
+    expect(TIER_POLICY.edit.graceSeconds).toBeLessThan(TIER_POLICY.week.graceSeconds);
     expect(await verifyContentUrl(MASTER, url, afterDraftGrace)).toEqual({
       ok: false,
       reason: 'expired',
@@ -304,21 +304,21 @@ describe('verifyContentUrl — theme', () => {
 });
 
 describe('cacheControlFor', () => {
-  it('never stores draft content', () => {
-    expect(cacheControlFor('draft', futureExp(), nowSeconds())).toBe('no-store');
+  it('never stores `edit` content', () => {
+    expect(cacheControlFor('edit', futureExp(), nowSeconds())).toBe('no-store');
   });
 
   it('caches until the signature dies', () => {
     const now = 1_700_000_000;
-    expect(cacheControlFor('public', now + 600, now)).toBe('public, max-age=600, immutable');
-    expect(cacheControlFor('enrolled', now + 60, now)).toBe('public, max-age=60, immutable');
+    expect(cacheControlFor('month', now + 600, now)).toBe('public, max-age=600, immutable');
+    expect(cacheControlFor('week', now + 60, now)).toBe('public, max-age=60, immutable');
   });
 
   it('gives a past expiry a short positive TTL instead of pinning it immutable', () => {
     const now = 1_700_000_000;
     // Inside grace the URL is still served, but a zero max-age would send every
     // cache back to the origin at once — and it must not be pinned immutable.
-    expect(cacheControlFor('public', now - 600, now)).toBe('public, max-age=60');
-    expect(cacheControlFor('public', now, now)).toBe('public, max-age=60');
+    expect(cacheControlFor('month', now - 600, now)).toBe('public, max-age=60');
+    expect(cacheControlFor('month', now, now)).toBe('public, max-age=60');
   });
 });

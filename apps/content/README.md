@@ -22,7 +22,7 @@ GET /healthz
 OPTIONS *
 ```
 
-`p` is the tier (`public` | `enrolled` | `draft`), `v` the key version, `exp` a
+`p` is the tier (`month` | `week` | `edit`), `v` the key version, `exp` a
 unix-seconds expiry, `sig` the base64url HMAC. `w` (800 | 1600 | 2560) and `fmt`
 (webp | avif | auto) request an image variant and are part of the signed string,
 so they cannot be swapped.
@@ -45,6 +45,39 @@ percent-encoded after one decode is refused.
 is no separate version field. Anything else is a 404. An unsigned, tampered, or
 long-expired URL is a 403 with `Cache-Control: no-store` — a refusal is never
 cached.
+
+### Tiers
+
+Each tier is named for the window it buys, because that is the only thing it
+decides:
+
+| Tier | Window | Cache | Minted when |
+| --- | --- | --- | --- |
+| `edit` | exact `now + 4h`, 5m grace | `no-store` | the viewer can edit, or an explicit staff read of a preview branch |
+| `week` | end of the classroom's current 7d bucket, 6h grace | `public, max-age={exp-now}, immutable` | everything else — the ordinary members-only read |
+| `month` | end of the classroom's current 30d bucket, 6h grace | `public, max-age={exp-now}, immutable` | the content itself is public (`Page.is_public`, or a deck's) |
+
+**A tier is not access control — the signature is.** It picks a lifetime and a
+cacheability for a URL that has already been minted for someone who was allowed
+to have it. Nothing here reads a session, and the Worker cannot tell an enrolled
+student from an anonymous visitor.
+
+Which tier a render gets follows the CONTENT's visibility, not the surface
+showing it, so a public page is `month` whether it is rendered inside the pages
+app or on the class site, and inside one bucket the two are byte-identical.
+Bucket boundaries are staggered per classroom so the fleet does not cold-fill in
+unison.
+
+The corollary is the part worth saying out loud: flipping a page or deck from
+public to private does **not** revoke URLs already issued for it — the tier's
+lifetime is the mitigation, and **Reset content cache** (which bumps the
+classroom's key version) is what stops new URLs being minted under the old key.
+
+**Renamed 2026-09-05.** The tiers used to be called `public`, `enrolled` and
+`draft`, which read like permissions they never were. `p` is inside the
+canonical string, so a URL minted before that date verifies against nothing and
+403s with `bad-signature`. Nothing is in production, so this only ever bit
+staging.
 
 ### Text blobs
 
@@ -81,7 +114,7 @@ Two rules hold for all of them:
 mistake) is served untransformed from `blobs/{sha}`: the transform gate is
 `isRasterExtension`, and `svg`, `html` and `json` all fall outside it. Cache
 lifetimes are decided by the tier alone, so text gets exactly the `immutable`
-an image gets, and exactly the `no-store` on `draft`.
+an image gets, and exactly the `no-store` on `edit`.
 
 ## Behaviour worth knowing
 
@@ -106,9 +139,9 @@ an image gets, and exactly the `no-store` on `draft`.
   cache, and the place to strip metadata is upload. The Images *binding*
   exposes no `metadata` option to change that; it exists only on the `cf.image`
   fetch API.
-- **Draft content is `no-store`,** everything else `public, max-age=…, immutable`
+- **The `edit` tier is `no-store`,** everything else `public, max-age=…, immutable`
   for as long as its signature lives. A just-expired signature is still honoured
-  inside its tier's grace window (6h for public/enrolled, 5m for draft).
+  inside its tier's grace window (6h for `month` and `week`, 5m for `edit`).
 - **Every response** carries CORS (`*`, `GET, HEAD, OPTIONS`, exposing
   `Content-Type, Content-Length, ETag`), `X-Content-Type-Options: nosniff`, and
   `Content-Security-Policy: default-src 'none'; sandbox`. A `Set-Cookie` can
@@ -313,12 +346,14 @@ Three things beyond the flag, each of which fails in its own confusing way:
 - **Pages or decks with real `content_path`s.** The delivery layer resolves
   references; a classroom with no content has nothing to resolve, and every
   assertion about it is vacuously true.
-- **`SITE_BASE_DOMAIN`, if you want the `public` tier.** The class-site host
-  rewriter is a no-op without it, and `public` is only ever minted for the
-  class-site surface — so with it unset there is no way to see that tier at all.
-  Start the pages app with e.g. `SITE_BASE_DOMAIN=classmoji.io` and address the
-  site with a `Host:` header; there is no local DNS for it. The site also has to
-  be *enabled* and have a home page — a claimed-but-disabled site 404s.
+- **`SITE_BASE_DOMAIN`, if you want the class-site surface.** The class-site
+  host rewriter is a no-op without it, so with it unset there is no way to reach
+  the site at all. Start the pages app with e.g. `SITE_BASE_DOMAIN=classmoji.io`
+  and address the site with a `Host:` header; there is no local DNS for it. The
+  site also has to be *enabled* and have a home page — a claimed-but-disabled
+  site 404s. Seeing the `month` tier no longer needs any of it: the tier follows
+  the content's visibility, so a public page mints `month` inside the pages app
+  too.
 
 Then:
 
@@ -395,7 +430,7 @@ Logs** (`classmoji-content-staging` or `classmoji-content`), with
 
 A burst of `403 bad-signature` on one classroom usually means a stale page in
 someone's browser, not an attacker: signatures expire, and the grace window is
-6h (5m for draft). A burst of `404 missing` means content references drifted
+6h (5m for `edit`). A burst of `404 missing` means content references drifted
 from the repo — look at the resolver, not the Worker.
 
 A `\uFFFD` in a logged path is this Worker defusing the path, not a corrupt
@@ -442,9 +477,9 @@ in a browser, a `<link>` tag, or an edge cache.
    precisely because of the previous-key slot: the Worker is verifying with a
    key it already accepts either way.
 
-4. **Wait out the longest signature still in the wild** — 30 days, the public
-   tier's bucket, plus its 6h grace. `enrolled` is 7 days and `draft` is 4
-   hours, so the public tier is the one that sets the clock. Watch for the line
+4. **Wait out the longest signature still in the wild** — 30 days, the `month`
+   tier's bucket, plus its 6h grace. `week` is 7 days and `edit` is 4 hours, so
+   `month` is the one that sets the clock. Watch for the line
    that says the old key is still carrying traffic:
 
    ```

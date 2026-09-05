@@ -209,7 +209,7 @@ export async function signedBlobUrl(options: {
 }): Promise<string> {
   const origin = options.origin ?? ORIGIN;
   const classroomId = options.classroomId ?? CLASSROOM;
-  const tier = options.tier ?? 'public';
+  const tier = options.tier ?? 'month';
   const keyVersion = options.keyVersion ?? 1;
   const master = options.master ?? MASTER;
 
@@ -254,7 +254,7 @@ export async function signedThemeUrl(options: {
 }): Promise<string> {
   const origin = options.origin ?? ORIGIN;
   const classroomId = options.classroomId ?? CLASSROOM;
-  const tier = options.tier ?? 'public';
+  const tier = options.tier ?? 'month';
   const keyVersion = options.keyVersion ?? 1;
   const master = options.master ?? MASTER;
 

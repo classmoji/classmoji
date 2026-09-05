@@ -114,16 +114,19 @@ export async function renderPageForViewer(
     throw error;
   }
 
-  // Render-time URL resolution. Public tier only for a page that is actually
-  // public: a members-only page reached by a signed-in member is `enrolled`, so
-  // its URLs expire on the shorter bucket and are not minted with the lifetime
-  // meant for anonymous readers. The rewrite runs on a CLONE —
-  // `loadSitePageContent` caches its blocks for five minutes, and writing
-  // signed URLs into that cache would hand the next reader this reader's
-  // (expiring, tier-specific) URLs.
+  // Render-time URL resolution. The lifetime comes from the PAGE's visibility,
+  // through the same `tierFor` the pages app calls — not from the fact that
+  // this is the class site. A public page is `month` here and `month` in the
+  // app, which is what makes the two URLs identical inside a bucket; a
+  // members-only page reached by a signed-in member is `week` on both, so its
+  // URLs expire on the shorter bucket rather than borrowing the lifetime meant
+  // for anonymous readers. Nothing on this surface can edit, so `canEdit` is
+  // pinned false. The rewrite runs on a CLONE — `loadSitePageContent` caches
+  // its blocks for five minutes, and writing signed URLs into that cache would
+  // hand the next reader this reader's (expiring, tier-specific) URLs.
   const assetCtx = assetResolveContext(
     context.site.classroom as unknown as Parameters<typeof assetResolveContext>[0],
-    page.is_public ? 'public' : 'enrolled'
+    ClassmojiService.contentDelivery.tierFor({ canEdit: false, isPublic: page.is_public })
   );
   const { blocks: resolvedBlocks, srcSets } = await resolveSiteAssets(assetCtx, content.blocks);
 

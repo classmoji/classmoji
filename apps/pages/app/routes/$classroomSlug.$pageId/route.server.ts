@@ -165,15 +165,23 @@ export const loader = async ({
       : null);
 
   // Render-time URL resolution: the blocks keep their stored references and the
-  // client gets a parallel `ref → signed URL` map. Tier is per-VIEWER — an
-  // editor (or an explicit preview) gets short-lived draft URLs, everyone else
-  // the enrolled tier — which is exactly why the URL cannot live in the block.
+  // client gets a parallel `ref → signed URL` map. The lifetime is per-VIEWER
+  // and per-PAGE — an editor (or an explicit preview) gets short-lived `edit`
+  // URLs, a reader gets `month` on a public page and `week` otherwise — which
+  // is exactly why the URL cannot live in the block.
+  //
+  // `page.is_public` is passed because visibility, not surface, decides the
+  // lifetime: this same page rendered on the class site is the same file with
+  // the same readers, and used to be minted on a different bucket purely
+  // because it came through a different door.
+  //
   // `previewActive`, not `wantsPreview`: the raw query param is attacker-supplied
   // and is only honoured for staff. Passing it straight through would let an
-  // anonymous visitor mint draft-tier URLs by appending `?preview=1`.
+  // anonymous visitor mint `edit`-tier URLs by appending `?preview=1`.
   const resolveTier = ClassmojiService.contentDelivery.tierFor({
     canEdit,
     preview: previewActive,
+    isPublic: page.is_public,
   });
   const assetCtx = assetResolveContext(
     page.classroom as unknown as Parameters<typeof assetResolveContext>[0],
@@ -289,10 +297,10 @@ export const action = async ({
 
   // Save-side asset context. The tier is irrelevant to canonicalization (it
   // only ever turns a signed URL back into a path) but the context type carries
-  // one; 'draft' names the only tier a writer can be in.
+  // one; 'edit' names the only tier a writer can be in.
   const actionAssetCtx = assetResolveContext(
     page.classroom as unknown as Parameters<typeof assetResolveContext>[0],
-    'draft'
+    'edit'
   );
 
   // Check if user can edit

@@ -156,13 +156,19 @@ async function keepAllImages(page: import('@playwright/test').Page): Promise<voi
 }
 
 /** The shared responsive contract, identical to the pages pack's. */
-function expectResponsive(image: RenderedImage, expected: { classroomId: string }): void {
+function expectResponsive(
+  image: RenderedImage,
+  expected: { classroomId: string; tier?: string }
+): void {
   const signed = image.signed;
   expect(signed, `src is not signed: ${describeSignedUrl(image.src)}`).not.toBeNull();
   if (!signed) return;
 
   expect(signed.origin).toBe(env.deliveryOrigin);
   expect(signed.classroomId.toLowerCase()).toBe(expected.classroomId.toLowerCase());
+  if (expected.tier !== undefined) {
+    expect(signed.tier, describeSignedUrl(image.src)).toBe(expected.tier);
+  }
   expect(signed.w, 'the fallback src carries no width').toBeNull();
   expect(signed.sig.length).toBeGreaterThan(0);
   expect(image.sizes).toBe(EXPECTED_SIZES);
@@ -294,7 +300,9 @@ test.describe('E2E CD — slides, a deck with an uploaded image', () => {
       image => image.alt === 'E2E CD fixture'
     );
     expect(viewerImages.length, 'the fixture image should be on the rendered deck').toBe(1);
-    expectResponsive(viewerImages[0], { classroomId: target.id });
+    // The deck VIEWER is the one editing surface, and this session owns the
+    // deck — so it, and only it, mints the 4h `edit` bucket.
+    expectResponsive(viewerImages[0], { classroomId: target.id, tier: 'edit' });
 
     expect(viewerLog.forSha(viewerImages[0].signed!.sha).length, 'one image, one fetch').toBe(1);
     expect(viewerLog.missing()).toEqual([]);
@@ -303,13 +311,32 @@ test.describe('E2E CD — slides, a deck with an uploaded image', () => {
     // `/present` is a different render path off the same deck, and it has
     // regressed independently before — a signed viewer with an unsigned
     // presentation is exactly the split this asserts against.
+    //
+    // It is also where the tier stops following the person and starts
+    // following the DECK. The same owner who just got `edit` in the viewer
+    // gets `week` here, because a presentation stays open for hours and the
+    // 4h bucket would 403 a lazily-loaded background mid-lecture. A new deck
+    // is not public, so `week` is the deck's own visibility answer.
     await presentSlide(page, deckId);
     await waitForReveal(page);
     const presentImages = (await readImages(page, '.reveal img')).filter(
       image => image.alt === 'E2E CD fixture'
     );
     expect(presentImages.length).toBe(1);
-    expectResponsive(presentImages[0], { classroomId: target.id });
+    expectResponsive(presentImages[0], { classroomId: target.id, tier: 'week' });
+
+    // And publishing the deck moves `/present` to the 30-day bucket, without
+    // anything about the VIEWER changing. This is the visibility rule end to
+    // end: one owner, one surface, two answers, decided by the deck.
+    const { setSlideVisibility } = await import('./helpers');
+    await setSlideVisibility(page, deckId, 'public');
+    await presentSlide(page, deckId);
+    await waitForReveal(page);
+    const publicPresentImages = (await readImages(page, '.reveal img')).filter(
+      image => image.alt === 'E2E CD fixture'
+    );
+    expect(publicPresentImages.length).toBe(1);
+    expectResponsive(publicPresentImages[0], { classroomId: target.id, tier: 'month' });
   });
 
   test('deck.json stores no signature, no srcset and no delivery origin', async ({ page }) => {
