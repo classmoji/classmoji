@@ -375,7 +375,25 @@ describe('pageContent.savePageContent write-through', () => {
     expect(recordContentAssetMock).toHaveBeenCalledWith('class-1', {
       path: 'pages/syllabus/content.json',
       sha: 'new-sha',
+      // The real byte length of what was committed — a writer that has the
+      // bytes must not hand the map a size it made up, because `size ?? 0`
+      // would overwrite one an earlier sync actually measured.
+      size: Buffer.byteLength(callArg(putMock).content as string),
     });
+  });
+
+  it('still records a save aimed explicitly at the default branch', async () => {
+    // The guard tests the `preview/` prefix rather than the absence of a
+    // branch: a caller naming main would otherwise write it and silently lose
+    // the map row, which is the stale read this whole path exists to close.
+    getContentMock.mockResolvedValueOnce(null);
+
+    await savePageContent(keyedPage, blocks, { branch: 'main' });
+
+    expect(recordContentAssetMock).toHaveBeenCalledWith(
+      'class-1',
+      expect.objectContaining({ path: 'pages/syllabus/content.json', sha: 'new-sha' })
+    );
   });
 
   it('records nothing for a preview-branch save', async () => {

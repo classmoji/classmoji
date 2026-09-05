@@ -230,10 +230,16 @@ export const action = async ({ request }: { request: Request }) => {
       });
 
       // Both rewrites below record what they wrote. index.html and deck.json
-      // are READ through the asset map now (fetchContentText), and a duplicate
-      // that skipped this would render as the ORIGINAL deck's content — the
-      // copy's paths are new, so the map has no row for them at all until the
-      // push webhook lands.
+      // are READ through the asset map now (fetchContentText), and the copy's
+      // paths are new, so the map has no row for them until the push webhook
+      // lands.
+      //
+      // Only what the REWRITES write, though: `copyFolder` above is what puts
+      // the files there, and it reports no shas, so a deck whose content had no
+      // self-referencing paths to rewrite gets no rows here. That is a missing
+      // row, not a wrong one — the read falls back to the contents API and
+      // serves the right bytes — so it costs one GitHub call per view until the
+      // webhook arrives rather than showing the wrong deck.
       const written: Array<{ path: string; sha: string }> = [];
 
       if (indexFile?.content && slide.content_path !== newContentPath) {

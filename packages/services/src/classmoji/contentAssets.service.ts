@@ -231,6 +231,30 @@ function upsertOp(classroomId: string, entry: TreeEntry, syncedAt: Date) {
 }
 
 /**
+ * `upsertOp` for a writer that may not know the file's SIZE.
+ *
+ * A tree read always carries one, so `upsertOp` above writes it
+ * unconditionally. A write-through often cannot: an accept learns its sha by
+ * reading a file's metadata rather than its bytes, and `size ?? 0` would then
+ * ZERO a real size an earlier sync had measured. On an update the column is
+ * left alone; a new row starts at 0 and the next full sync fills it in.
+ */
+function upsertKnownOp(classroomId: string, entry: TreeEntry, syncedAt: Date) {
+  const changed = {
+    sha: entry.sha,
+    type: entry.type,
+    synced_at: syncedAt,
+    ...(entry.size === undefined ? {} : { size: entry.size }),
+  };
+
+  return getPrisma().contentAsset.upsert({
+    where: { classroom_id_path: { classroom_id: classroomId, path: entry.path } },
+    create: { classroom_id: classroomId, path: entry.path, size: 0, ...changed },
+    update: changed,
+  });
+}
+
+/**
  * Rebuild the whole map from the repo's tree.
  *
  * Stamp-and-sweep: every row written this run carries the same `syncedAt`, and
@@ -583,6 +607,37 @@ export async function ensureContentAssets(
   classroomId: string,
   { maxAgeMs }: { maxAgeMs: number }
 ): Promise<SyncContentAssetsResult | null> {
+  // One refresh per classroom at a time, per process.
+  //
+  // The stamp that makes this cheap is written at the END of a sync, so N
+  // concurrent callers all read the same stale value and all start their own —
+  // and a staff landing page renders ~20 deck thumbnails at once, each of which
+  // now reads through the map. Twenty full syncs is sixty GitHub calls to
+  // compute one answer, on exactly the classroom that was already behind.
+  //
+  // Sharing the in-flight promise costs nothing when the map is fresh (the
+  // fast path below returns before this ever holds anything for long) and turns
+  // that burst into one sync the other nineteen wait on.
+  const inFlight = ensuring.get(classroomId);
+  if (inFlight) return inFlight;
+
+  const run = ensureOnce(classroomId, maxAgeMs).finally(() => ensuring.delete(classroomId));
+  ensuring.set(classroomId, run);
+  return run;
+}
+
+/**
+ * In-flight refreshes, keyed by classroom. Per-process and deliberately so:
+ * this is a stampede guard, not a lock. Two Fly instances syncing the same
+ * classroom at once is harmless — `fullSync` is one transaction and idempotent —
+ * and a real lock would need a table nobody wants to operate.
+ */
+const ensuring = new Map<string, Promise<SyncContentAssetsResult | null>>();
+
+async function ensureOnce(
+  classroomId: string,
+  maxAgeMs: number
+): Promise<SyncContentAssetsResult | null> {
   // THIS FUNCTION DOES NOT THROW. It is the one entry point meant to sit on a
   // render path, so every way it can fail has to degrade to "the page renders
   // through the legacy path" — which is exactly what it did before any of this
@@ -654,7 +709,7 @@ export async function recordContentAssets(
     const syncedAt = new Date();
     await Promise.all(
       entries.map(entry =>
-        upsertOp(
+        upsertKnownOp(
           classroomId,
           { path: entry.path, sha: entry.sha, type: 'blob', size: entry.size },
           syncedAt
@@ -708,7 +763,7 @@ export async function recordContentAsset(
     const classroom = await loadClassroomRaw(classroomId);
     if (!isDeliverable(classroom)) return false;
 
-    await upsertOp(
+    await upsertKnownOp(
       classroomId,
       { path: entry.path, sha: entry.sha, type: 'blob', size: entry.size },
       new Date()

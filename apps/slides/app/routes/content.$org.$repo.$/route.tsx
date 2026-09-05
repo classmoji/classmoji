@@ -167,7 +167,7 @@ export const loader = async ({
     // The classroom's content repo is STORED and user-editable — never re-derived.
     // Legacy classrooms without one fall back to the ORG-level content repo
     // (organization.settings.content_repo_name).
-    const match = memberships.find((m: ContentRouteMembership) => {
+    const matches = memberships.filter((m: ContentRouteMembership) => {
       const gitOrg = m.classroom?.git_organization;
       if (!gitOrg || gitOrg.login !== org) return false;
 
@@ -181,8 +181,21 @@ export const loader = async ({
 
       return repo === expectedRepo; // EXACT match only
     });
-    hasAccess = Boolean(match);
-    matched = match?.classroom ?? null;
+    hasAccess = matches.length > 0;
+
+    // ONE match, or none — never "the first of several".
+    //
+    // Access is settled by `hasAccess` above and is unaffected by this. What
+    // this decides is which classroom's ROLLOUT GATE and key version the text
+    // read below signs under, and several of a user's classrooms can legitimately
+    // share one content repo (the org-level `content_repo_name` fallback is
+    // org-wide). Picking the first would let a classroom whose
+    // `content_delivery_enabled` is still false have its text served through the
+    // Worker because a sibling classroom on the same repo is switched on — which
+    // is exactly the per-classroom rollout the flag exists to control.
+    //
+    // Ambiguity therefore reads as "no classroom", and the legacy ladder answers.
+    matched = matches.length === 1 ? (matches[0].classroom ?? null) : null;
   }
 
   // Path 2: Public slide access - validate slideId points to a public slide
@@ -244,11 +257,15 @@ export const loader = async ({
   // Get MIME type - pass content for magic byte detection on extensionless files
   const mimeType = getMimeType(path, binary ? (result.content as Buffer) : undefined);
 
-  // Set cache headers - assets are versioned by path (hash-based filenames)
-  // so they can be cached aggressively. 1 hour browser + CDN caching.
+  // Binary is versioned by path (hash-based filenames) and can be cached hard.
+  // TEXT cannot: a deck's index.html lives at a stable path and changes on every
+  // save, so an hour of browser caching here would put the staleness straight
+  // back — in a bookmarked `/content/...` link and in the presenter's own
+  // client-side fallback, which is the one place a stale deck is worst. A
+  // minute keeps the proxy cheap without outliving a save by much.
   const headers = {
     'Content-Type': mimeType,
-    'Cache-Control': 'public, max-age=3600', // 1 hour
+    'Cache-Control': binary ? 'public, max-age=3600' : 'public, max-age=60',
     'X-Content-Source': result.source, // Debug header
   };
 

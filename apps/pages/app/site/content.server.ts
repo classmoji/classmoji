@@ -61,12 +61,20 @@ export type SiteContentPage = {
   content_path: string;
 };
 
-/** The classroom fields a content read needs (the narrow site select). */
+/**
+ * The classroom fields a content read needs (the narrow site select).
+ *
+ * The delivery fields are REQUIRED, matching `ResolveClassroom`'s reasoning:
+ * a site select that quietly stopped carrying `content_delivery_enabled` would
+ * read as `undefined`, which means "off" — and the class site would fall back
+ * to reading GitHub on every render for a classroom that had been switched on,
+ * with nothing failing to say so. Typed required so the compiler names the
+ * select instead.
+ */
 export type SiteContentClassroom = {
-  /** Present on the site select; absent only in older test fixtures. */
-  id?: string;
-  content_key_version?: number;
-  content_delivery_enabled?: boolean | null;
+  id: string;
+  content_key_version: number;
+  content_delivery_enabled: boolean | null;
   content_repo: string | null;
   git_organization: { login: string | null } | null;
 };
@@ -99,22 +107,20 @@ async function readContentFile(
   // and this module exists precisely because that distinction decides between
   // an empty page and a 503. So the map either answers or gets out of the way,
   // and the typed read below keeps owning the failure semantics.
-  if (classroom.id) {
-    const viaMap = await ClassmojiService.contentDelivery.fetchContentText(
-      {
-        classroom: {
-          id: classroom.id,
-          content_key_version: classroom.content_key_version ?? 0,
-          content_repo: repo,
-          content_delivery_enabled: classroom.content_delivery_enabled === true,
-          git_organization: { login: orgLogin },
-        },
+  const viaMap = await ClassmojiService.contentDelivery.fetchContentText(
+    {
+      classroom: {
+        id: classroom.id,
+        content_key_version: classroom.content_key_version,
+        content_repo: repo,
+        content_delivery_enabled: classroom.content_delivery_enabled === true,
+        git_organization: { login: orgLogin },
       },
-      path,
-      { label: 'site', workerOnly: true }
-    );
-    if (viaMap) return { content: viaMap.text, sha: viaMap.sha };
-  }
+    },
+    path,
+    { label: 'site', workerOnly: true }
+  );
+  if (viaMap) return { content: viaMap.text, sha: viaMap.sha };
 
   try {
     return await ContentService.getContent({

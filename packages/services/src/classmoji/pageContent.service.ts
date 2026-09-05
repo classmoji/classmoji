@@ -77,6 +77,9 @@ interface BlockNode {
   [key: string]: unknown;
 }
 
+/** Singleton preview branch per page: `preview/<content_path>`. */
+export const PAGE_PREVIEW_BRANCH_PREFIX = 'preview/';
+
 // ─── Repo resolution ─────────────────────────────────────────────────────────
 
 function contentRepoFor(page: PageWithContentRepo) {
@@ -402,11 +405,12 @@ export async function savePageContent(
     wrapper.coverImage = coverImage;
   }
 
+  const content = JSON.stringify(wrapper, null, 2);
   const result = await ContentService.put({
     gitOrganization,
     repo,
     path,
-    content: JSON.stringify(wrapper, null, 2),
+    content,
     message: message ?? `Update page: ${page.title}`,
     ...(expectedSha ? { expectedSha } : {}),
     ...(branch ? { branch } : {}),
@@ -420,8 +424,13 @@ export async function savePageContent(
   //
   // Default branch only. A preview branch is not in the map, and recording its
   // sha would publish an unaccepted draft to every reader.
-  if (!branch) {
-    await recordPageFile(page, path, result.sha);
+  //
+  // The test is on the PREFIX, not on `branch` being absent, and deliberately
+  // so — it matches `saveDeck`'s. No caller passes `branch: 'main'` today, but
+  // one that did would otherwise write the default branch and silently lose its
+  // map row, which is exactly the stale read this path exists to close.
+  if (!branch || !branch.startsWith(PAGE_PREVIEW_BRANCH_PREFIX)) {
+    await recordPageFile(page, path, result.sha, content);
   }
 
   return result;
@@ -434,10 +443,22 @@ export async function savePageContent(
  * the one branch it cannot: a page assembled without its classroom id has
  * nothing to key a row on. The commit still stands; the next sync picks it up.
  */
-async function recordPageFile(page: PageWithContentRepo, path: string, sha: string): Promise<void> {
+async function recordPageFile(
+  page: PageWithContentRepo,
+  path: string,
+  sha: string,
+  content?: string
+): Promise<void> {
   const classroomId = (page.classroom as { id?: unknown }).id;
   if (typeof classroomId !== 'string') return;
-  await recordContentAsset(classroomId, { path, sha });
+  await recordContentAsset(classroomId, {
+    path,
+    sha,
+    // The real byte length, but only where the writer actually has the bytes.
+    // A row is a cache of what the repo holds; handing it a size it does not
+    // know would overwrite a good one an earlier sync had measured.
+    ...(content === undefined ? {} : { size: Buffer.byteLength(content) }),
+  });
 }
 
 /**
@@ -936,7 +957,7 @@ export function applyBlockOps(
 
 /** The singleton preview branch for a content path (e.g. `preview/pages/syllabus`). */
 export function previewBranchName(contentPath: string): string {
-  return `preview/${contentPath}`;
+  return `${PAGE_PREVIEW_BRANCH_PREFIX}${contentPath}`;
 }
 
 export interface PreviewStatus {

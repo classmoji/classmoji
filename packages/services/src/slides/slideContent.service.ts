@@ -427,7 +427,7 @@ export async function saveDeck({
   // Main writes only. A preview branch is not in the map, and recording its
   // shas would point every reader at unpublished content.
   if (!isPreviewBranch) {
-    await recordDeckFiles(slide, result.files);
+    await recordDeckFiles(slide, result.files, files);
   }
 
   // Bump updated_at for main writes (a preview-branch commit changes nothing
@@ -446,18 +446,31 @@ export async function saveDeck({
  * Put a just-committed deck's files into the asset map.
  *
  * Never throws — `recordContentAssets` swallows its own failures, and this adds
- * the one branch it cannot: a target with no classroom id (createSlide's
- * starter deck, the importer's synthetic target) has nothing to key a row on.
- * Such a save is still committed; the map picks it up on the next sync.
+ * the one branch it cannot: a target assembled without the classroom join (the
+ * importer's synthetic target) has nothing to key a row on. Such a save is
+ * still committed; the map picks it up on the next sync. `createSlide` DOES
+ * reach here — it passes the whole classroom row.
+ *
+ * Sizes come from the bytes that were actually committed, which this caller
+ * still has in hand. Guessing one would be worse than omitting it: the map's
+ * size column is written by tree syncs that measured it, and an invented value
+ * would overwrite a measured one.
  */
 async function recordDeckFiles(
   slide: SlideContentTarget,
-  files: Array<{ path: string; sha: string }>
+  committed: Array<{ path: string; sha: string }>,
+  written: Array<{ path: string; content: string }>
 ): Promise<void> {
   const classroomId = slide.classroom?.id;
   if (!classroomId) return;
+
+  const bytes = new Map(written.map(file => [file.path, Buffer.byteLength(file.content)]));
   await recordContentAssets(
     classroomId,
-    files.map(file => ({ path: file.path, sha: file.sha }))
+    committed.map(file => ({
+      path: file.path,
+      sha: file.sha,
+      ...(bytes.has(file.path) ? { size: bytes.get(file.path) } : {}),
+    }))
   );
 }

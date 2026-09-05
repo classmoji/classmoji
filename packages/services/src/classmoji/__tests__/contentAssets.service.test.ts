@@ -679,6 +679,33 @@ describe('contentAssets.service', () => {
   });
 
   describe('ensureContentAssets', () => {
+    it('collapses a concurrent burst into ONE sync', async () => {
+      // A staff landing page renders ~20 deck thumbnails at once, and each now
+      // reads through the map. The freshness stamp is written at the END of a
+      // sync, so without this guard all twenty read the same stale value and
+      // all start their own — sixty GitHub calls to compute one answer, on
+      // exactly the classroom that was already behind.
+      classroomFindUnique.mockResolvedValue(syncedAgo(10 * 60_000));
+
+      const results = await Promise.all(
+        Array.from({ length: 20 }, () => ensureContentAssets('class-1', { maxAgeMs: 60_000 }))
+      );
+
+      expect(getTree).toHaveBeenCalledTimes(1);
+      // Every caller still gets the answer — they waited on the one sync.
+      for (const result of results) expect(result).toEqual(results[0]);
+    });
+
+    it('does not hold the in-flight entry past the sync', async () => {
+      // A stampede guard, not a cache: the next stale read must sync again.
+      classroomFindUnique.mockResolvedValue(syncedAgo(10 * 60_000));
+
+      await ensureContentAssets('class-1', { maxAgeMs: 60_000 });
+      await ensureContentAssets('class-1', { maxAgeMs: 60_000 });
+
+      expect(getTree).toHaveBeenCalledTimes(2);
+    });
+
     it('no-ops when the last FULL sync is fresher than maxAgeMs', async () => {
       classroomFindUnique.mockResolvedValue(syncedAgo(1000));
 

@@ -337,10 +337,13 @@ export const loader = async ({
   // Cost moves in the right direction on every one of them. Staff no longer
   // spend an installation-token API call per view. Students no longer wait out
   // a Pages build. Thumbnails — a staff landing page renders ~20 at once, which
-  // is why they were pinned to the CDN to avoid the API fan-out — now cost one
-  // indexed map read each and are served from the edge; the API fan-out they
-  // were protected from only happens if the map misses, which a save's own
-  // write-through is what prevents.
+  // is why they were pinned to the CDN to avoid an API fan-out — are served
+  // from the edge for two DB reads apiece (the map row, and the freshness stamp
+  // `ensureContentAssets` checks). The fan-out they were protected from is now
+  // two separate things, and both are handled: a map MISS falls back to the
+  // API, which the save-time write-through is what prevents; and a stale map
+  // would have had all twenty start their own full sync, which
+  // `ensureContentAssets` collapses into one.
   if (!contentResult) {
     contentResult = await readDeckText(
       slide,
@@ -477,6 +480,36 @@ export const loader = async ({
 };
 
 // Action to save slide content or fetch fresh content from GitHub API
+/**
+ * Record a just-written `.slidesthemes/` file in the asset map.
+ *
+ * These four writes used to need nothing: the map only served IMAGES, and a
+ * theme's css reached the browser through the `/content/...` proxy, which read
+ * GitHub directly. Text goes through the map now, so a snippet or custom theme
+ * saved here and not recorded serves its PREVIOUS bytes until the push webhook
+ * lands — the author edits a theme, reloads, and sees the old one.
+ *
+ * `themeService.saveSharedTheme` handles the folder case differently, and has
+ * to: a shared theme is addressed by its FOLDER's tree sha, so it runs a full
+ * sync. These paths are flat files, so their own blob sha is the whole answer.
+ *
+ * Never throws — the file is already committed, and the next sync writes the
+ * same row.
+ */
+async function recordThemeFile(
+  slide: { classroom_id?: string | null },
+  path: string,
+  sha: string,
+  content: FormDataEntryValue
+): Promise<void> {
+  if (!slide.classroom_id) return;
+  await ClassmojiService.contentAssets.recordContentAsset(slide.classroom_id, {
+    path,
+    sha,
+    size: Buffer.byteLength(String(content)),
+  });
+}
+
 export const action = async ({
   request,
   params,
@@ -868,13 +901,14 @@ export const action = async ({
           .replace(/\s+/g, '-')
           .replace(/[^a-z0-9-]/g, '') + '.html';
 
-      await ContentService.put({
+      const written = await ContentService.put({
         orgLogin: gitOrgLogin,
         repo,
         path: `.slidesthemes/snippets/${filename}`,
         content: String(content),
         message: `Add snippet: ${name}`,
       });
+      await recordThemeFile(slide, `.slidesthemes/snippets/${filename}`, written.sha, content);
 
       return {
         intent: 'save-snippet',
@@ -928,13 +962,14 @@ export const action = async ({
       }
 
       // Save the updated content
-      await ContentService.put({
+      const written = await ContentService.put({
         orgLogin: gitOrgLogin,
         repo,
         path: newPath,
         content: String(content),
         message: `Update snippet: ${name}`,
       });
+      await recordThemeFile(slide, newPath, written.sha, content);
 
       return {
         intent: 'update-snippet',
@@ -997,13 +1032,14 @@ export const action = async ({
         .replace(/[^a-z0-9-]/g, '');
       const filename = `${baseName}-${type}.css`;
 
-      await ContentService.put({
+      const written = await ContentService.put({
         orgLogin: gitOrgLogin,
         repo,
         path: `.slidesthemes/${filename}`,
         content: String(content),
         message: `Add custom CSS theme: ${name} (${type})`,
       });
+      await recordThemeFile(slide, `.slidesthemes/${filename}`, written.sha, content);
 
       return {
         intent: 'save-theme',
@@ -1059,13 +1095,14 @@ export const action = async ({
       }
 
       // Save the updated content
-      await ContentService.put({
+      const written = await ContentService.put({
         orgLogin: gitOrgLogin,
         repo,
         path: newPath,
         content: String(content),
         message: `Update CSS theme: ${name} (${type})`,
       });
+      await recordThemeFile(slide, newPath, written.sha, content);
 
       return {
         intent: 'update-theme',

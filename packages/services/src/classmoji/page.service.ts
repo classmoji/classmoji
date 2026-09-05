@@ -460,6 +460,11 @@ export async function createPage({
 
   // Never throws, and its failure is not this caller's problem: the files are
   // already committed, and the next sync writes the same rows.
+  //
+  // No sizes: the import branch's `files` carry base64 for binary uploads, so a
+  // byte length taken here would be the encoding's, not the file's — and a
+  // wrong size overwrites a right one a tree sync measured. Omitted rather than
+  // guessed; the next full sync fills the column in.
   await recordContentAssets(
     ctx.classroom.id,
     written.map(file => ({ path: file.path, sha: file.sha }))
