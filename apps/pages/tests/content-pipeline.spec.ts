@@ -38,6 +38,8 @@ import {
   deleteRepoFile,
   deliverySkipReason,
   describeSignedUrl,
+  e2eTarget,
+  harvestSignedFromHtml,
   FIXTURE_PREVIEW_WIDTH,
   expectedSizesFor,
   extendExpiry,
@@ -607,6 +609,47 @@ test.describe('E2E CD — pages, what each audience sees', () => {
     log.stop();
   });
 
+  /**
+   * The one member-facing surface a DEPLOYED target can be checked on.
+   *
+   * A class site is anonymous and server-rendered, so it needs neither a
+   * session nor a database — which is exactly the pair staging cannot give
+   * this pack. Against staging the site already carries public-tier images, so
+   * the scenario reads what is there; locally it has to make one first,
+   * because a freshly seeded classroom has no public site and no pictures.
+   */
+  test('a public class site serves the public tier, with its ladder', async ({ request }) => {
+    requireDelivery();
+    test.skip(e2eTarget() !== 'staging', 'the local form of this scenario is the next test');
+
+    const response = await request.get(env.classSite);
+    expect(response.status(), `${env.classSite} should serve a class site`).toBe(200);
+
+    const html = await response.text();
+    const images = imagesFromHtml(html).filter(image => image.signed !== null);
+    expect(images.length, 'the staging class site should carry delivered images').toBeGreaterThan(0);
+
+    for (const image of images) {
+      expect(image.signed?.origin).toBe(env.deliveryOrigin);
+      // Anonymous readers, so `public` and nothing else. A `draft` or
+      // `enrolled` URL on an anonymous page would be a tier leak.
+      expect(image.signed?.tier, describeSignedUrl(image.src)).toBe('public');
+      expect(image.signed?.w, 'the fallback src carries no width').toBeNull();
+      if (image.candidates.length > 0) {
+        expect(image.candidates.map(candidate => candidate.width)).toEqual([...EXPECTED_WIDTHS]);
+        for (const candidate of image.candidates) {
+          expect(candidate.parsed?.sha).toBe(image.signed?.sha);
+          expect(candidate.parsed?.fmt).toBe('auto');
+          expect(candidate.parsed?.exp).toBe(image.signed?.exp);
+        }
+        expect(image.sizes).toBeTruthy();
+      }
+    }
+
+    expect(html).not.toContain('raw.githubusercontent.com');
+    expect(html).not.toMatch(/\/c\/[0-9a-f-]{36}\/missing\//i);
+  });
+
   test('a public class-site page is served at the public tier, with its ladder', async ({
     page,
     request,
@@ -902,9 +945,32 @@ test.describe('E2E CD — the Worker, directly', () => {
   /** Why no URL could be harvested, for the skip message. */
   let harvestError: string | null = null;
 
-  test.beforeAll(async ({ browser }) => {
-    if (deliveryDown !== null || localOnlySkipReason() !== null || !target) {
-      harvestError = deliveryDown ?? localOnlySkipReason() ?? 'no classroom';
+  test.beforeAll(async ({ browser, request }) => {
+    if (deliveryDown !== null) {
+      harvestError = deliveryDown;
+      return;
+    }
+
+    // Against a deployed target there is no database and no session, so the
+    // signature comes off the public class site — anonymous, server-rendered,
+    // and already carrying current public-tier URLs. This is the whole reason
+    // the Worker's contract is checkable against staging at all.
+    if (e2eTarget() === 'staging') {
+      try {
+        const response = await request.get(env.classSite);
+        const image = await harvestSignedFromHtml(await response.text());
+        signedUrl = image?.src ?? null;
+        if (!signedUrl) {
+          harvestError = `no signed image on ${env.classSite} — is content delivery on for that classroom?`;
+        }
+      } catch (error) {
+        harvestError = error instanceof Error ? error.message : String(error);
+      }
+      return;
+    }
+
+    if (localOnlySkipReason() !== null || !target) {
+      harvestError = localOnlySkipReason() ?? 'no classroom';
       return;
     }
     if (uploadSkipReason() !== null) {
@@ -990,10 +1056,13 @@ test.describe('E2E CD — the Worker, directly', () => {
   });
 
   test('a /missing/ URL is a 404 that is never cached', async ({ request }) => {
-    requireDelivery();
-    const room = requireClassroom();
+    // The classroom id comes from the harvested URL rather than the database,
+    // so this runs against a deployed target too. It is a read of a path that
+    // by construction names no file — nothing is created and nothing is
+    // written, which is what makes it safe to point at staging.
+    const classroomId = parseSignedUrl(requireSignedUrl())!.classroomId;
     const response = await request.get(
-      `${env.deliveryOrigin}/c/${room.id}/missing/${encodeURIComponent('pages/e2e-cd/nope.png')}`
+      `${env.deliveryOrigin}/c/${classroomId}/missing/${encodeURIComponent('pages/e2e-cd/nope.png')}`
     );
     expect(response.status()).toBe(404);
     // Never cached: the reference may become resolvable the moment someone

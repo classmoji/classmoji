@@ -169,10 +169,21 @@ export async function deliverySkipReason(): Promise<string | null> {
   return null;
 }
 
-/** Scenarios that write to the database or read Prisma directly. */
+/**
+ * Scenarios that need a Prisma client, to read the classroom or to write to it.
+ *
+ * The message says all three things a reader needs, because "local only" on its
+ * own invites the wrong fix. This pack refuses to open a database connection
+ * against a deployed target at all (see `prisma()` below), so the read-side
+ * scenarios have no classroom row to work from; the write-side ones would be
+ * changing a shared environment, where a cache-reset alone rewrites every URL
+ * every real viewer is holding; and the editor scenarios need a session, which
+ * staging cannot mint because `/test-login` does not exist outside development.
+ */
 export function localOnlySkipReason(): string | null {
   return e2eTarget() === 'staging'
-    ? 'local only: this scenario writes to the database (content_delivery_enabled / content_key_version) and must never touch a deployed one'
+    ? 'needs a database and a signed-in session, and this pack opens neither against a deployed target ' +
+        '(no Prisma connection, no /test-login) — run with E2E_TARGET=local for this one'
     : null;
 }
 
@@ -498,6 +509,21 @@ export async function reloadUntilImages(
     if (attempt < attempts - 1) await page.waitForTimeout(delayMs);
   }
   return images;
+}
+
+/**
+ * A signed URL taken off a page, with no database and no session.
+ *
+ * This is what lets the Worker's own contract be checked against a DEPLOYED
+ * environment. Everything else in the pack needs Prisma or an editor session,
+ * neither of which exists against staging — but a public class site is
+ * anonymous, server-rendered and already full of `public`-tier URLs, so one GET
+ * yields a genuine, current signature to probe with. Minting one in the test
+ * instead would mean re-implementing the canonical string and the key
+ * derivation, and would then only ever prove the test agrees with itself.
+ */
+export async function harvestSignedFromHtml(html: string): Promise<RenderedImage | null> {
+  return imagesFromHtml(html).find(image => image.signed !== null) ?? null;
 }
 
 /** The same wait, for a surface only reachable over plain HTTP. */

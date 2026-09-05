@@ -20,6 +20,8 @@
  */
 import { expect, test } from './fixtures/test.fixture';
 import {
+  E2E_PREFIX,
+  E2E_SLUG_PREFIX,
   EXPECTED_SIZES,
   EXPECTED_WIDTHS,
   type E2EClassroom,
@@ -51,6 +53,24 @@ let classroomError: string | null = null;
 /** Decks this run created, torn down in `afterAll`. */
 const createdDeckIds: string[] = [];
 
+/**
+ * Content-repo folders this run created, and the guard on deleting them.
+ *
+ * Deleting a folder from a real course repository is the most destructive thing
+ * this file can do, so it is allowed for exactly one shape: a path this run
+ * created, under `slides/`, whose name carries the `e2e-cd` marker. Anything
+ * else is left alone even if it looks like litter.
+ */
+const createdDeckPaths: string[] = [];
+
+function safeToDelete(contentPath: string): boolean {
+  return (
+    contentPath.startsWith('slides/') &&
+    contentPath.split('/').length === 2 &&
+    contentPath.includes(E2E_SLUG_PREFIX)
+  );
+}
+
 test.beforeAll(async () => {
   deliveryDown = await deliverySkipReason();
   if (localOnlySkipReason() === null) {
@@ -67,11 +87,23 @@ test.afterAll(async () => {
   const { getTestPrisma } = await import('./helpers');
   const prisma = await getTestPrisma();
   for (const id of createdDeckIds.splice(0)) {
-    // The database row only. The deck's folder in the content repo is left
-    // alone deliberately: deleting a folder from a real course repository to
-    // tidy after a test is exactly the blast radius this file refuses to have.
-    // Everything is prefixed `E2E CD`, so the leftovers are findable.
     await prisma.slide.delete({ where: { id } }).catch(() => undefined);
+  }
+
+  // And the folders. Each run creates three decks in a real course repository,
+  // so "the leftovers are findable by their prefix" is not good enough — a few
+  // runs bury the repo in `slides/e2e-cd-*`. `safeToDelete` is what keeps this
+  // from ever being a folder a human made.
+  if (uploadSkipReason() !== null) return;
+  const { ContentService } = await import('@classmoji/services');
+  for (const contentPath of createdDeckPaths.splice(0)) {
+    if (!safeToDelete(contentPath)) continue;
+    await ContentService.deleteFolder({
+      orgLogin: room.orgLogin,
+      repo: room.content_repo!,
+      path: contentPath,
+      message: `${E2E_PREFIX}: remove test deck ${contentPath}`,
+    }).catch(() => undefined);
   }
 });
 
@@ -202,6 +234,7 @@ test.describe('E2E CD — slides, a deck with an uploaded image', () => {
     const { getSlideById } = await import('./helpers');
     const deck = await getSlideById(deckId);
     expect(deck?.content_path, 'a new deck should have a content_path').toBeTruthy();
+    createdDeckPaths.push(deck!.content_path);
 
     await editSlide(page, deckId);
     const uploaded = await uploadDeckImage(
@@ -271,6 +304,7 @@ test.describe('E2E CD — slides, a deck with an uploaded image', () => {
 
     const deck = await getSlideById(deckId);
     expect(deck?.content_path, 'a new deck should have a content_path').toBeTruthy();
+    createdDeckPaths.push(deck!.content_path);
 
     await editSlide(page, deckId);
     const uploaded = await uploadDeckImage(
@@ -324,6 +358,7 @@ test.describe('E2E CD — slides, the gate', () => {
     createdDeckIds.push(deckId);
     const deck = await getSlideById(deckId);
     expect(deck?.content_path).toBeTruthy();
+    createdDeckPaths.push(deck!.content_path);
 
     await editSlide(page, deckId);
     const uploaded = await uploadDeckImage(
