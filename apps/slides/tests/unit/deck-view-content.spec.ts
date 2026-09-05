@@ -90,33 +90,67 @@ test.describe('displayDeckContent — which document is on screen', () => {
 });
 
 test.describe('settleSaveRefresh — has the save’s loader refresh landed', () => {
-  test('new loader content settles it, whatever the fetcher is doing', () => {
-    // Checked BEFORE the idle state on purpose: the two can arrive in either
-    // order, and settling on idle first would give up one render too early.
-    expect(
-      settleSaveRefresh({ loaderContent: SIGNED, preSaveContent: 'old', fetcherIdle: false })
-    ).toEqual({ settled: true, viewFromLoader: true });
-    expect(
-      settleSaveRefresh({ loaderContent: SIGNED, preSaveContent: 'old', fetcherIdle: true })
-    ).toEqual({ settled: true, viewFromLoader: true });
+  const SAVED = 'a'.repeat(40);
+  const OLDER = 'b'.repeat(40);
+
+  test('the loader naming the committed deck settles it, fetcher or no fetcher', () => {
+    // Checked BEFORE the idle state on purpose: the loader data and the
+    // fetcher's idle transition can arrive in either order, and settling on
+    // idle first would give up one render before the answer showed up.
+    expect(settleSaveRefresh({ loaderSha: SAVED, savedSha: SAVED, fetcherIdle: false })).toEqual({
+      settled: true,
+      viewFromLoader: true,
+    });
+    expect(settleSaveRefresh({ loaderSha: SAVED, savedSha: SAVED, fetcherIdle: true })).toEqual({
+      settled: true,
+      viewFromLoader: true,
+    });
   });
 
   test('an in-flight refresh keeps waiting', () => {
-    expect(
-      settleSaveRefresh({ loaderContent: 'old', preSaveContent: 'old', fetcherIdle: false })
-    ).toEqual({ settled: false, viewFromLoader: false });
+    expect(settleSaveRefresh({ loaderSha: OLDER, savedSha: SAVED, fetcherIdle: false })).toEqual({
+      settled: false,
+      viewFromLoader: false,
+    });
   });
 
-  test('a loader that never came back with anything new keeps the saved copy', () => {
-    // A no-op save, or a route that later opts out of revalidation: stop
-    // waiting, but stay on what the client saved locally — the behaviour that
-    // shipped before this. Degrading to stale slides would be worse.
-    expect(
-      settleSaveRefresh({ loaderContent: 'old', preSaveContent: 'old', fetcherIdle: true })
-    ).toEqual({ settled: true, viewFromLoader: false });
-    // Same for a loader with no content at all.
-    expect(
-      settleSaveRefresh({ loaderContent: null, preSaveContent: null, fetcherIdle: true })
-    ).toEqual({ settled: true, viewFromLoader: false });
+  test('a loader read that has not caught up never wins', () => {
+    // The map row is not updated yet, or a Worker 502 fell back to another
+    // instance's <60s API cache. The bytes WILL differ from the last read —
+    // `draft` expiries are an exact now+4h, so every signed URL in the document
+    // changes every second — which is exactly why identity is the test and
+    // "the document changed" is not. Settling true here would put the PRE-save
+    // deck on screen: worse than the bug this fixes.
+    expect(settleSaveRefresh({ loaderSha: OLDER, savedSha: SAVED, fetcherIdle: true })).toEqual({
+      settled: true,
+      viewFromLoader: false,
+    });
+  });
+
+  test('a read that cannot name what it fetched never wins', () => {
+    // The CDN fallback serves a path and reports no object id, and so does an
+    // edit/preview-branch render generated from deck.json. Null is "cannot
+    // tell", and must never be read as agreement — including with itself.
+    expect(settleSaveRefresh({ loaderSha: null, savedSha: SAVED, fetcherIdle: false })).toEqual({
+      settled: false,
+      viewFromLoader: false,
+    });
+    expect(settleSaveRefresh({ loaderSha: null, savedSha: SAVED, fetcherIdle: true })).toEqual({
+      settled: true,
+      viewFromLoader: false,
+    });
+    expect(settleSaveRefresh({ loaderSha: null, savedSha: null, fetcherIdle: true })).toEqual({
+      settled: true,
+      viewFromLoader: false,
+    });
+  });
+
+  test('a save that reported no sha keeps the locally saved copy', () => {
+    // Nothing to match against — an older server, or a path that did not
+    // return one. Degrade to the behaviour that shipped before this.
+    expect(settleSaveRefresh({ loaderSha: SAVED, savedSha: null, fetcherIdle: true })).toEqual({
+      settled: true,
+      viewFromLoader: false,
+    });
   });
 });

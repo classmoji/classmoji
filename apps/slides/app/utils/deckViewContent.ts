@@ -14,12 +14,16 @@
  *     into the deck forever. It is also the next save's diff baseline.
  *
  * View mode used to prefer the editor's copy, and had to: the loader read the
- * Pages CDN, which lags a push by minutes, so after a save it was BEHIND. It no
- * longer is — the loader reads the deck text through the delivery Worker by
- * sha, and React Router revalidates it automatically off the back of the save
- * fetcher's action. So view mode goes back to the loader's copy as soon as that
- * refresh lands, and shows the legacy `/content/...` document only in the gap
- * before it does.
+ * Pages CDN, which lags a push by minutes, so after a save it was BEHIND.
+ * Usually it no longer is — WHEN the classroom's delivery flag is on, the
+ * signing env is configured and the asset map has a row for the path, the
+ * loader reads the deck text through the Worker by sha; otherwise it still
+ * falls back to the contents API and then that same lagging CDN. React Router
+ * revalidates the loader automatically off the back of the save fetcher's
+ * action either way. So view mode goes back to the loader's copy once that
+ * refresh is CONFIRMED — by sha, see `settleSaveRefresh`, because on the
+ * fallback paths it may well not be fresh — and otherwise stays on the
+ * document the client saved.
  *
  * Pure, and separated from the route so the choice can be pinned without a
  * browser or the dev stack.
@@ -56,10 +60,14 @@ export function displayDeckContent({
 
 /** What the viewer knows while it waits for a save's loader refresh. */
 export interface SaveRefreshInputs {
-  /** The loader's content as it stands now. */
-  loaderContent: string | null;
-  /** The loader's content at the moment the save's action returned. */
-  preSaveContent: string | null;
+  /**
+   * The git blob sha of the index.html the loader's view-mode read resolved,
+   * or null when that read could not name an object (the CDN fallback, or an
+   * edit/preview-branch render generated from deck.json).
+   */
+  loaderSha: string | null;
+  /** The git blob sha of the index.html the save just committed. */
+  savedSha: string | null;
   /** The save fetcher has finished — action AND its revalidation. */
   fetcherIdle: boolean;
 }
@@ -77,21 +85,29 @@ export interface SaveRefreshOutcome {
  *
  * There is nothing to trigger — the revalidation is already in flight when the
  * action returns — only something to wait for, and the wait has to be told
- * apart from a loader that never came back with anything new. NEW loader
- * content is that signal, and it is checked before the fetcher's idle state on
- * purpose: the two can arrive in either order, and settling on "idle" first
- * would give up one render before the answer showed up.
+ * apart from a loader that came back with a STALE deck.
  *
- * Everything else settles on the copy the client saved locally — the behaviour
- * that shipped before this — so a no-op save, or a route that later opts out of
- * revalidation, degrades to "no worse than before" rather than to stale slides.
+ * The test is IDENTITY, not bytes. Comparing rendered HTML cannot work here:
+ * the read side signs asset URLs per viewer, and the `draft` tier anyone with
+ * edit access gets is an exact `now + 4h` rather than a bucketed expiry, so two
+ * reads of an unchanged deck differ every second. "The document changed" would
+ * be true on every single read, and a stale one — a map row not yet updated, a
+ * Worker 502 falling back to another instance's <60s API cache — would settle
+ * as if it were fresh and put the PRE-save deck on screen. Worse than the bug
+ * this set out to fix.
+ *
+ * So: the loader must name the very object the save committed. A different sha
+ * is a read that has not caught up; a null sha is a read that cannot say what
+ * it fetched. Both settle on the copy the client saved locally — the behaviour
+ * that shipped before this — so every uncertain case degrades to "no worse than
+ * before" rather than to stale slides.
  */
 export function settleSaveRefresh({
-  loaderContent,
-  preSaveContent,
+  loaderSha,
+  savedSha,
   fetcherIdle,
 }: SaveRefreshInputs): SaveRefreshOutcome {
-  if (loaderContent && loaderContent !== preSaveContent) {
+  if (savedSha && loaderSha === savedSha) {
     return { settled: true, viewFromLoader: true };
   }
   return { settled: fetcherIdle, viewFromLoader: false };

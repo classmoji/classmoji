@@ -23,6 +23,7 @@
  * content proxy. Nothing here is allowed to break a deck read.
  */
 
+import { createHash } from 'node:crypto';
 import { ClassmojiService } from '@classmoji/services';
 import {
   rewriteDeckAssetUrls,
@@ -112,6 +113,36 @@ export function deckAccessFor(
 }
 
 /**
+ * `/follow`'s THUMBNAIL flag, read from the request URL.
+ *
+ * `?preview=true` on this route means "render me as a thumbnail" — the speaker
+ * view's current/next panes and nothing else. It is a different parameter from
+ * the deck viewer's `?preview=1`, which means "read the preview BRANCH", and
+ * the two must never be confused: one is a read-only iframe, the other is a
+ * staff read that legitimately earns draft URLs.
+ *
+ * Exported so the route reads the parameter in exactly one place, and so the
+ * param → flag → tier chain can be pinned without a database behind it.
+ */
+export function isThumbnailRequest(url: URL): boolean {
+  return url.searchParams.get('preview') === 'true';
+}
+
+/**
+ * The `/follow` route's whole tier decision, from its request URL.
+ *
+ * The route's own wiring, hoisted out of the loader so it is testable: the
+ * loader around it needs Prisma and a session, this does not.
+ */
+export function followDeckAccess(
+  url: URL,
+  access: SlideAccessResultLike,
+  slide: { is_public?: boolean | null }
+): DeliveryAccess {
+  return deckAccessFor('follow', access, slide, { thumbnail: isThumbnailRequest(url) });
+}
+
+/**
  * The classroom shape the content resolver needs, or null when this deck's
  * classroom cannot be served by the delivery layer at all.
  *
@@ -171,6 +202,11 @@ export type DeliveryContext = ReturnType<typeof deckDeliveryContext>;
  *
  * The shape matches what `fetchContent` returned, so the call sites keep their
  * existing branching; `source` now also carries `'worker'`.
+ *
+ * `sha` is the git blob sha the bytes came from — the file's IDENTITY, and the
+ * only honest way to ask "is this read the deck that was just saved?". It is
+ * null on the CDN path (GitHub Pages serves a path and names no object), so a
+ * caller comparing identities must read null as "cannot tell", never as a match.
  */
 export async function readDeckText(
   slide: DeliverySlide,
@@ -179,7 +215,7 @@ export async function readDeckText(
   path: string,
   label: string,
   opts: { fallback?: 'api-then-cdn' | 'cdn-only' } = {}
-): Promise<{ content: string; source: 'worker' | 'api' | 'cdn' } | null> {
+): Promise<{ content: string; source: 'worker' | 'api' | 'cdn'; sha: string | null } | null> {
   const classroom = slide.classroom;
   if (!classroom?.id) return null;
 
@@ -197,7 +233,25 @@ export async function readDeckText(
     { label, ...(opts.fallback ? { fallback: opts.fallback } : {}) }
   );
 
-  return result ? { content: result.text, source: result.source } : null;
+  return result ? { content: result.text, source: result.source, sha: result.sha } : null;
+}
+
+/**
+ * The git blob sha of a string, as git itself computes it.
+ *
+ * `sha1("blob " + byteLength + "\0" + bytes)`. This is not a hash we invented:
+ * it is the object id GitHub will report for those exact bytes, so a writer can
+ * name what it just committed without spending an API call to ask.
+ *
+ * Used to give a save the IDENTITY of the index.html it wrote, so the viewer can
+ * tell its own commit from a stale read. Comparing rendered HTML instead cannot
+ * work: the read side signs asset URLs, and the `draft` tier's expiry is an
+ * exact `now + 4h` rather than a bucket, so a staff read of an UNCHANGED deck
+ * comes back with different bytes every second.
+ */
+export function gitBlobSha(content: string): string {
+  const bytes = Buffer.from(content, 'utf8');
+  return createHash('sha1').update(`blob ${bytes.length}\0`).update(bytes).digest('hex');
 }
 
 /** The `shared:` theme a rendered deck declares, or null. */

@@ -39,6 +39,7 @@ import {
   resolveDeckAssets,
   resolveDeliveryThemeUrls,
   resolveReadThemeUrls,
+  gitBlobSha,
 } from '~/utils/deckDelivery.server';
 import { displayDeckContent, settleSaveRefresh } from '~/utils/deckViewContent';
 import RevealSlides, { type RevealSlidesHandle } from '~/components/RevealSlides';
@@ -199,7 +200,13 @@ export const loader = async ({
   let slideContent: string | null = null;
   let contentError: string | null = null;
   let usedApiFallback = false;
-  let contentResult: { content: string; source: string } | null = null;
+  let contentResult: { content: string; source: string; sha?: string | null } | null = null;
+  // The IDENTITY of the deck the VIEW-MODE read resolved, and only that read.
+  // Edit mode and the preview branch generate their document from deck.json, so
+  // they name no index.html object and leave this null — as does the CDN
+  // fallback, which serves a path and reports no object id. Null therefore
+  // means "cannot tell what this is", which is what the client must assume.
+  let deckSha: string | null = null;
 
   // Conflict token for the editor (Phase 4b): the sha of the deck's SOURCE OF
   // TRUTH — deck.json once it exists (materialized by the first dual-write
@@ -364,6 +371,7 @@ export const loader = async ({
 
   if (contentResult) {
     slideContent = contentResult.content;
+    deckSha = contentResult.sha ?? null;
     // Kept for the client-side fallback's own bookkeeping. It now means "the
     // delivery layer could not answer and GitHub did", which is a narrower
     // thing than it used to be — `worker` is the ordinary case and `cdn` is
@@ -461,6 +469,10 @@ export const loader = async ({
     autoEdit: mode === 'edit',
     // Indicate if we fell back to API (CDN wasn't available yet)
     usedApiFallback,
+    // index.html's blob sha for the view-mode read (null when this read could
+    // not name an object). The client matches it against the sha a save just
+    // committed to know its loader refresh has actually landed.
+    deckSha,
     // Conflict token (edit mode only; null in view mode): sha of the deck's
     // source of truth + which file it came from. The client echoes it back on
     // every save so saveDeck can 409 instead of clobbering a concurrent write.
@@ -760,8 +772,11 @@ export const action = async ({
 
   // Read the deck straight from the GitHub API for the EDITOR.
   //
-  // Not a CDN-lag workaround any more — the loader reads the deck text through
-  // the delivery Worker by sha, so it is not behind. This exists for the two
+  // Not a CDN-lag workaround any more — where the delivery layer answers (the
+  // classroom's flag on, the signing env set, and a map row for the path) the
+  // loader reads the deck text by sha through the Worker and is not behind; on
+  // the fallback paths it still reaches the contents API and then the lagging
+  // CDN. Either way that is not what this is for now. It exists for the two
   // things the loader's view-mode read deliberately cannot give the editor: a
   // conflict token (the sha of the file about to be written, read skipCache so
   // a per-process cache cannot hand back a token that would silently revert a
@@ -1500,6 +1515,11 @@ export const action = async ({
         sha: result.sha,
         sha_source: 'deck' as const,
         savedContent: result.html,
+        // The committed index.html's IDENTITY. `sha` above is deck.json's, and
+        // the viewer's read is of index.html — comparing those two would never
+        // match. Hashed from the bytes just committed, which is the same object
+        // git stored, so no extra API call buys it.
+        html_sha: gitBlobSha(result.html),
         orphanedImages,
         adoption_required: result.adoption_required,
         ...(result.concurrent > 0 ? { merged_with_concurrent: result.concurrent } : {}),
@@ -1695,6 +1715,8 @@ export const action = async ({
       sha: saved.sha,
       sha_source: 'deck' as const,
       savedContent: saved.html,
+      // index.html's identity — see the ops path above for why it is not `sha`.
+      html_sha: gitBlobSha(saved.html),
       orphanedImages,
       ...(mergedSave ? { merged_with_concurrent: mergedWithConcurrent } : {}),
     };
@@ -1736,6 +1758,7 @@ export default function SlideViewer() {
     isPro,
     contentUrl,
     slideContent,
+    deckSha,
     contentError,
     snippets: initialSnippets,
     cssThemes: initialCssThemes,
@@ -1854,17 +1877,21 @@ export default function SlideViewer() {
   //
   // So view mode preferred `editableContent` only because the loader used to
   // be BEHIND after a save: it read the Pages CDN, which lags a push by
-  // minutes. It no longer does — the loader reads the deck text through the
-  // Worker by sha — and React Router revalidates this route's loader
-  // automatically when the save fetcher's action returns. This flag is what
-  // says that refresh has landed; until it does, view mode keeps showing the
-  // copy we just saved rather than flashing the pre-save deck.
+  // minutes. Usually it no longer is — but only when the classroom's delivery
+  // flag is on, the signing env is set and the asset map has a row for the
+  // path does the loader read by sha through the Worker; otherwise it still
+  // falls back to the contents API and then that same lagging CDN. React
+  // Router revalidates this route's loader automatically when the save
+  // fetcher's action returns, and this flag says that refresh landed AND
+  // named the object we committed. Until then view mode keeps showing the copy
+  // we just saved rather than flashing the pre-save deck.
   const [viewFromLoader, setViewFromLoader] = useState(false);
   // Armed on a save's success, disarmed when its loader refresh settles.
   const awaitingSaveRefreshRef = useRef(false);
-  // `slideContent` as it stood when that save returned — how we tell a landed
-  // refresh from a loader that never re-ran.
-  const preSaveContentRef = useRef<string | null>(null);
+  // The blob sha of the index.html that save committed. The loader naming the
+  // SAME object is the only proof its read caught up — see `settleSaveRefresh`
+  // for why comparing the rendered documents cannot work.
+  const savedShaRef = useRef<string | null>(null);
   // Orphaned images cleanup
   const [orphanedImages, setOrphanedImages] = useState<
     Array<{ path: string; name: string; url: string }>
@@ -1908,12 +1935,27 @@ export default function SlideViewer() {
 
   // Store returnUrl in sessionStorage and clean the URL on mount
   useEffect(() => {
+    const url = new URL(window.location.href);
+    let cleaned = false;
     // Check if we have a returnUrl from query params
     if (returnUrl) {
       sessionStorage.setItem('slidesReturnUrl', returnUrl);
       // Clean the URL by removing the returnUrl param
-      const url = new URL(window.location.href);
       url.searchParams.delete('returnUrl');
+      cleaned = true;
+    }
+    // `?mode=edit` is a ONE-SHOT instruction: it exists so the new-slide path
+    // can land in the editor, and `autoEditTriggered` already makes sure it
+    // fires once. Leaving it in the URL makes every later revalidation take
+    // the loader's EDIT branch, whose document is deliberately unsigned — so
+    // a post-save refresh would hand view mode raw `/content/...` refs and
+    // call it fresh. The editor gets its own document from `fetch-latest`, so
+    // dropping the param costs it nothing.
+    if (url.searchParams.has('mode')) {
+      url.searchParams.delete('mode');
+      cleaned = true;
+    }
+    if (cleaned) {
       window.history.replaceState({}, '', url.toString());
     }
     // Set backUrl from sessionStorage (or fall back to webappUrl)
@@ -2023,7 +2065,7 @@ export default function SlideViewer() {
       // saved since this page loaded), so it becomes the freshest thing we
       // hold. Hand view mode back to it until the next save's refresh lands.
       awaitingSaveRefreshRef.current = false;
-      preSaveContentRef.current = null;
+      savedShaRef.current = null;
       setViewFromLoader(false);
       // Refresh the conflict token (also the recovery path after a 409:
       // fresh content + fresh token, unsaved changes discarded)
@@ -2189,8 +2231,9 @@ export default function SlideViewer() {
       // action has only just returned; the loader revalidation React Router
       // fires off the back of it is still in flight, so `slideContent` still
       // holds the PRE-save deck. Showing it now would flash the old slides.
-      // Fall back to what we just saved until that refresh lands (below).
-      preSaveContentRef.current = slideContent;
+      // Fall back to what we just saved until the loader comes back naming the
+      // index.html this save committed (below).
+      savedShaRef.current = fetcher.data.html_sha ?? null;
       awaitingSaveRefreshRef.current = true;
       setViewFromLoader(false);
       // The save materialized deck.json — future saves must key on ITS sha
@@ -2278,15 +2321,27 @@ export default function SlideViewer() {
   useEffect(() => {
     if (!awaitingSaveRefreshRef.current) return;
     const outcome = settleSaveRefresh({
-      loaderContent: slideContent,
-      preSaveContent: preSaveContentRef.current,
+      loaderSha: deckSha,
+      savedSha: savedShaRef.current,
       fetcherIdle: fetcher.state === 'idle',
     });
     if (!outcome.settled) return;
     awaitingSaveRefreshRef.current = false;
-    preSaveContentRef.current = null;
+    if (!outcome.viewFromLoader) {
+      // The loader settled on something other than what we committed: a read
+      // that has not caught up, or one that cannot name what it fetched. Stay
+      // on the saved copy — correct content, legacy image URLs — and say so,
+      // because this is the branch that would otherwise be invisible.
+      console.debug(
+        '[slides] Post-save loader refresh did not name the committed deck; ' +
+          `keeping the locally saved copy (loader=${deckSha ?? 'null'}, saved=${
+            savedShaRef.current ?? 'null'
+          })`
+      );
+    }
+    savedShaRef.current = null;
     if (outcome.viewFromLoader) setViewFromLoader(true);
-  }, [fetcher.state, slideContent]);
+  }, [fetcher.state, deckSha]);
 
   // Handle image upload - returns a promise that resolves with the image URL
   const handleImageUpload = useCallback(
