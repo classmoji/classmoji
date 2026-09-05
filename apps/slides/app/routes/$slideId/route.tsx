@@ -40,6 +40,7 @@ import {
   resolveDeliveryThemeUrls,
   resolveReadThemeUrls,
 } from '~/utils/deckDelivery.server';
+import { displayDeckContent, settleSaveRefresh } from '~/utils/deckViewContent';
 import RevealSlides, { type RevealSlidesHandle } from '~/components/RevealSlides';
 import SlideToolbar from '~/components/SlideToolbar';
 import SlideNotesPanel from '~/components/SlideNotesPanel';
@@ -757,8 +758,16 @@ export const action = async ({
 
   // ─────────────────────────────────────────────────────────────────────────
 
-  // Fetch latest content from GitHub API (bypasses CDN cache)
-  // Used when entering edit mode to ensure we're editing the current version
+  // Read the deck straight from the GitHub API for the EDITOR.
+  //
+  // Not a CDN-lag workaround any more — the loader reads the deck text through
+  // the delivery Worker by sha, so it is not behind. This exists for the two
+  // things the loader's view-mode read deliberately cannot give the editor: a
+  // conflict token (the sha of the file about to be written, read skipCache so
+  // a per-process cache cannot hand back a token that would silently revert a
+  // concurrent write), and a document whose image refs are still the stored
+  // `/content/...` ones — a signed URL that round-tripped through the editor
+  // would be committed into deck.json.
   if (intent === 'fetch-latest') {
     try {
       // Phase 4c: deck.json-first, mirroring the edit-mode loader. skipCache:
@@ -1672,7 +1681,10 @@ export const action = async ({
       console.error('Failed to detect orphaned images:', err);
     }
 
-    // Return the full HTML so UI can update without waiting for CDN.
+    // Return the full HTML: it is the editor's next-session document and the
+    // baseline the next save diffs against, and it stays UNSIGNED for that.
+    // View mode no longer renders it once the loader's revalidation lands —
+    // that read is by sha through the Worker, so it is not behind this one.
     // sha is the DECK sha (+ sha_source 'deck') — deck.json now exists, so the
     // client's conflict token must point at it for the next save.
     // merged_with_concurrent (present iff the merge path committed) → the
@@ -1829,8 +1841,30 @@ export default function SlideViewer() {
   // token over the stale DOM, would clobber the folded-in concurrent changes.
   const [editorEpoch, setEditorEpoch] = useState(0);
   const [autoEditTriggered, setAutoEditTriggered] = useState(false);
-  // Track editable content separately from CDN content
+  // Track editable content separately from the loader's content
   const [editableContent, setEditableContent] = useState<string | null>(null);
+  // VIEW mode renders the LOADER's copy of the deck, not the editor's.
+  //
+  // They are the same document with one difference that matters: the loader's
+  // has been through `resolveDeckAssets`, so its images are signed
+  // `content-*.classmoji.io` URLs, while the editor's is the stored document
+  // with raw `/content/...` refs — which is exactly what must NOT be signed
+  // (a signed URL that round-tripped through the editor would be committed
+  // into deck.json, freezing one viewer's expiring signature into the deck).
+  //
+  // So view mode preferred `editableContent` only because the loader used to
+  // be BEHIND after a save: it read the Pages CDN, which lags a push by
+  // minutes. It no longer does — the loader reads the deck text through the
+  // Worker by sha — and React Router revalidates this route's loader
+  // automatically when the save fetcher's action returns. This flag is what
+  // says that refresh has landed; until it does, view mode keeps showing the
+  // copy we just saved rather than flashing the pre-save deck.
+  const [viewFromLoader, setViewFromLoader] = useState(false);
+  // Armed on a save's success, disarmed when its loader refresh settles.
+  const awaitingSaveRefreshRef = useRef(false);
+  // `slideContent` as it stood when that save returned — how we tell a landed
+  // refresh from a loader that never re-ran.
+  const preSaveContentRef = useRef<string | null>(null);
   // Orphaned images cleanup
   const [orphanedImages, setOrphanedImages] = useState<
     Array<{ path: string; name: string; url: string }>
@@ -1985,6 +2019,12 @@ export default function SlideViewer() {
     if (fetcher.data?.intent === 'fetch-latest' && fetcher.data?.content) {
       // Got fresh content from GitHub API - enter edit mode with it
       setEditableContent(fetcher.data.content);
+      // This read is skipCache and can be AHEAD of the loader (someone else
+      // saved since this page loaded), so it becomes the freshest thing we
+      // hold. Hand view mode back to it until the next save's refresh lands.
+      awaitingSaveRefreshRef.current = false;
+      preSaveContentRef.current = null;
+      setViewFromLoader(false);
       // Refresh the conflict token (also the recovery path after a 409:
       // fresh content + fresh token, unsaved changes discarded)
       if (fetcher.data.content_sha) {
@@ -2141,9 +2181,18 @@ export default function SlideViewer() {
       }
       fetcher.submit(payload, { method: 'post' });
     } else if (fetcher.data?.savedContent) {
-      // After save, update our local content to match what was saved
-      // This prevents stale content when CDN hasn't updated yet
+      // After save, update our local content to match what was saved. This is
+      // the EDITOR's copy: it seeds the next edit session and is what the next
+      // save diffs against, and it must stay unsigned for that round trip.
       setEditableContent(fetcher.data.savedContent);
+      // View mode wants the loader's signed copy instead — but not yet. The
+      // action has only just returned; the loader revalidation React Router
+      // fires off the back of it is still in flight, so `slideContent` still
+      // holds the PRE-save deck. Showing it now would flash the old slides.
+      // Fall back to what we just saved until that refresh lands (below).
+      preSaveContentRef.current = slideContent;
+      awaitingSaveRefreshRef.current = true;
+      setViewFromLoader(false);
       // The save materialized deck.json — future saves must key on ITS sha
       if (fetcher.data.sha) {
         setContentToken({
@@ -2210,6 +2259,34 @@ export default function SlideViewer() {
       );
     }
   }, [fetcher.data]);
+
+  // Settle the post-save loader refresh armed above.
+  //
+  // React Router revalidates this route's loader off the back of the save
+  // fetcher's action, so there is nothing to trigger here — only something to
+  // WAIT for, and the wait has to be told apart from a loader that never came
+  // back with anything new. New `slideContent` is that signal: it is the
+  // committed deck, resolved through the delivery layer, and view mode can
+  // switch to it. Anything else — a no-op save, or a route that later opts out
+  // of revalidation — settles on the copy we saved locally, which is what this
+  // shipped with before, so the failure mode here is "no worse than before".
+  //
+  // Deliberately NOT gated on `isEditing`: this only ever moves what VIEW mode
+  // renders. `editableContent` — the editor's document, its diff baseline and
+  // its conflict token — is never touched from here, so an edit session in
+  // progress (an auto-save keeps one open) cannot be clobbered by a refresh.
+  useEffect(() => {
+    if (!awaitingSaveRefreshRef.current) return;
+    const outcome = settleSaveRefresh({
+      loaderContent: slideContent,
+      preSaveContent: preSaveContentRef.current,
+      fetcherIdle: fetcher.state === 'idle',
+    });
+    if (!outcome.settled) return;
+    awaitingSaveRefreshRef.current = false;
+    preSaveContentRef.current = null;
+    if (outcome.viewFromLoader) setViewFromLoader(true);
+  }, [fetcher.state, slideContent]);
 
   // Handle image upload - returns a promise that resolves with the image URL
   const handleImageUpload = useCallback(
@@ -2450,9 +2527,17 @@ export default function SlideViewer() {
   }, []);
 
   // Determine which content to show
-  // - When editing: use editableContent (fresh from API or after save)
-  // - When viewing: use CDN content (slideContent) or editableContent if we have it
-  const displayContent = isEditing ? editableContent : editableContent || slideContent;
+  // - When editing: editableContent, the editor's own unsigned round-trip copy
+  // - When viewing: the loader's copy once a save's revalidation has landed
+  //   (see `viewFromLoader`) — same document, but with its images resolved
+  //   through the delivery layer. Before that, and on a page that has not
+  //   saved anything, the pre-existing order stands.
+  const displayContent = displayDeckContent({
+    isEditing,
+    viewFromLoader,
+    editableContent,
+    loaderContent: slideContent,
+  });
 
   // Save a new snippet
   const handleSaveSnippet = useCallback(
