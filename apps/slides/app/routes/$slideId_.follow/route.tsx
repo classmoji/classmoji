@@ -5,8 +5,9 @@ import { assertSlideAccess } from '@classmoji/auth/server';
 import { SandpackRenderer } from '@classmoji/ui-components/sandpack';
 import RevealPresenter from '~/components/RevealPresenter';
 import {
-  deckAccessFor,
   deckDeliveryContext,
+  followDeckAccess,
+  isThumbnailRequest,
   readDeckText,
   resolveDeckDelivery,
 } from '~/utils/deckDelivery.server';
@@ -30,7 +31,7 @@ export const loader = async ({
   if (!slideId) throw new Response('Missing slideId', { status: 400 });
   const url = new URL(request.url);
   const shareCode = url.searchParams.get('shareCode');
-  const preview = url.searchParams.get('preview') === 'true';
+  const preview = isThumbnailRequest(url);
 
   const slide = await getPrisma().slide.findUnique({
     where: { id: slideId },
@@ -86,11 +87,14 @@ export const loader = async ({
     // Same read-side delivery pass the deck viewer runs. A follower is usually
     // a student or a shareCode guest, so the tier lands on `enrolled`/`public`
     // rather than the staff `draft` bucket — `tierFor` decides, not this route.
-    // The `preview` local above is this route's THUMBNAIL flag and is
-    // deliberately not part of the access shape; `deckAccessFor` cannot see it.
+    // `followDeckAccess` re-reads this route's THUMBNAIL flag off the URL and
+    // hands it to `deckAccessFor` as `thumbnail` — never as the viewer's
+    // preview-BRANCH flag. It marks the read-only iframe form (the speaker
+    // view's panes), so staff get the long-lived tier there instead of a 4h
+    // `draft` signature that expires part-way through a long lecture.
     const { html } = await resolveDeckDelivery(
       contentResult.content,
-      deckDeliveryContext(slide, gitOrgLogin, repo, deckAccessFor('follow', { canEdit }, slide))
+      deckDeliveryContext(slide, gitOrgLogin, repo, followDeckAccess(url, { canEdit }, slide))
     );
     slideContent = html;
 

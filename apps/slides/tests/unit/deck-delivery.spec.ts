@@ -21,6 +21,9 @@ import { test, expect } from '@playwright/test';
 import {
   deckAccessFor,
   deckDeliveryContext,
+  followDeckAccess,
+  gitBlobSha,
+  isThumbnailRequest,
   isThemeRef,
   rebaseThemeRef,
   resolveDeckAssets,
@@ -373,12 +376,42 @@ test.describe('deckAccessFor — the tier inputs, per surface', () => {
     expect(deckAccessFor('follow', OWNER, SLIDE).canEdit).toBe(true);
   });
 
+  test('the thumbnail form of follow is read-only, even for an owner', () => {
+    // `/speaker` embeds `/follow?preview=true` in its current and next panes.
+    // Signed as `draft`, those iframes expire four hours in — mid-lecture for
+    // a long class — and the lazily-loaded backgrounds start 403ing.
+    expect(deckAccessFor('follow', OWNER, SLIDE, { thumbnail: true })).toEqual({
+      canEdit: false,
+      preview: false,
+      isPublicSite: false,
+    });
+    // The thumbnail flag still never becomes the viewer's preview-BRANCH flag.
+    expect(
+      deckAccessFor('follow', { canEdit: true, previewActive: true }, SLIDE, { thumbnail: true })
+        .preview
+    ).toBe(false);
+    // Plain `/follow` is untouched: staff still edit there.
+    expect(deckAccessFor('follow', OWNER, SLIDE, { thumbnail: false }).canEdit).toBe(true);
+    expect(deckAccessFor('follow', OWNER, SLIDE).canEdit).toBe(true);
+    // A student was already read-only, and the flag changes nothing for them.
+    expect(deckAccessFor('follow', STUDENT, SLIDE, { thumbnail: true })).toEqual(
+      deckAccessFor('follow', STUDENT, SLIDE)
+    );
+    // Only `follow` has a thumbnail form — the other surfaces ignore the flag.
+    for (const surface of ['viewer', 'present', 'speaker'] as const) {
+      expect(deckAccessFor(surface, OWNER, SLIDE, { thumbnail: true })).toEqual(
+        deckAccessFor(surface, OWNER, SLIDE)
+      );
+    }
+  });
+
   test('the tiers those shapes actually produce', () => {
     const tierOf = (
       surface: Parameters<typeof deckAccessFor>[0],
       access: typeof OWNER,
-      slide = SLIDE
-    ) => deckDeliveryContext(slide, ORG, REPO, deckAccessFor(surface, access, slide))?.tier;
+      slide = SLIDE,
+      opts: Parameters<typeof deckAccessFor>[3] = {}
+    ) => deckDeliveryContext(slide, ORG, REPO, deckAccessFor(surface, access, slide, opts))?.tier;
 
     expect(tierOf('viewer', OWNER)).toBe('draft');
     expect(tierOf('present', OWNER)).toBe('enrolled');
@@ -387,6 +420,66 @@ test.describe('deckAccessFor — the tier inputs, per surface', () => {
     expect(tierOf('follow', STUDENT)).toBe('enrolled');
     expect(tierOf('follow', STUDENT, PUBLIC_SLIDE)).toBe('public');
     expect(tierOf('follow', OWNER)).toBe('draft');
+    // The speaker view's panes: an owner, but not the 4h bucket.
+    expect(tierOf('follow', OWNER, SLIDE, { thumbnail: true })).toBe('enrolled');
+    expect(tierOf('follow', OWNER, PUBLIC_SLIDE, { thumbnail: true })).toBe('public');
+    expect(tierOf('follow', STUDENT, SLIDE, { thumbnail: true })).toBe('enrolled');
+  });
+});
+
+test.describe('the /follow route\'s own wiring', () => {
+  const followUrl = (query: string) => new URL(`https://slides.classmoji.io/deck-1/follow${query}`);
+
+  test('only `preview=true` is the thumbnail form', () => {
+    expect(isThumbnailRequest(followUrl('?preview=true'))).toBe(true);
+    expect(isThumbnailRequest(followUrl(''))).toBe(false);
+    // `?preview=1` is the deck VIEWER's preview-BRANCH gate, a different
+    // parameter on a different route. It is not a thumbnail.
+    expect(isThumbnailRequest(followUrl('?preview=1'))).toBe(false);
+    expect(isThumbnailRequest(followUrl('?preview=false'))).toBe(false);
+    expect(isThumbnailRequest(followUrl('?shareCode=abc123'))).toBe(false);
+  });
+
+  test('the URL alone decides the tier the speaker panes get', () => {
+    // The whole chain the route runs: query param → thumbnail flag → access
+    // shape → tier. This is what `/speaker` embeds, and it must not be draft.
+    const tierOf = (url: URL, access: typeof OWNER, slide = SLIDE) =>
+      deckDeliveryContext(slide, ORG, REPO, followDeckAccess(url, access, slide))?.tier;
+
+    expect(tierOf(followUrl('?preview=true'), OWNER)).toBe('enrolled');
+    expect(tierOf(followUrl('?preview=true'), OWNER, PUBLIC_SLIDE)).toBe('public');
+    // Plain /follow is untouched — staff editing along still get draft.
+    expect(tierOf(followUrl(''), OWNER)).toBe('draft');
+    // And a follower is a follower either way.
+    expect(tierOf(followUrl('?preview=true'), STUDENT)).toBe('enrolled');
+    expect(tierOf(followUrl(''), STUDENT)).toBe('enrolled');
+  });
+
+  test('a thumbnail never claims edit access', () => {
+    expect(followDeckAccess(followUrl('?preview=true'), OWNER, SLIDE)).toEqual({
+      canEdit: false,
+      preview: false,
+      isPublicSite: false,
+    });
+    expect(followDeckAccess(followUrl(''), OWNER, SLIDE).canEdit).toBe(true);
+  });
+});
+
+test.describe('gitBlobSha — naming what a save committed', () => {
+  test('agrees with git hash-object', () => {
+    // Pinned against `printf 'hello world\n' | git hash-object --stdin`. If
+    // this drifts, a save can no longer recognise its own commit in the
+    // loader's read and the viewer silently stops refreshing after a save.
+    expect(gitBlobSha('hello world\n')).toBe('3b18e512dba79e4c8300dd08aeb37f8e728b8dad');
+    // The empty blob, the other value git documents.
+    expect(gitBlobSha('')).toBe('e69de29bb2d1d6434b8b29ae775ad8c2e48c5391');
+  });
+
+  test('hashes BYTES, not characters', () => {
+    // The length in the header is the byte length — a deck full of typographic
+    // quotes and em dashes would otherwise hash to something git never stored.
+    expect(gitBlobSha('é')).toBe(gitBlobSha('\u00e9'));
+    expect(gitBlobSha('a')).not.toBe(gitBlobSha('é'));
   });
 });
 
