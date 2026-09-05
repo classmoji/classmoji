@@ -21,6 +21,7 @@ const classroomFindFirst = vi.fn();
 const classroomUpdate = vi.fn();
 const classroomUpdateMany = vi.fn();
 const contentAssetFindMany = vi.fn();
+const executeRaw = vi.fn();
 const transaction = vi.fn();
 
 vi.mock('@classmoji/database', () => ({
@@ -39,8 +40,26 @@ vi.mock('@classmoji/database', () => ({
       findUnique: contentAssetFindUnique,
     },
     $transaction: transaction,
+    $executeRaw: executeRaw,
   }),
 }));
+
+/**
+ * The sync writes its whole batch as ONE tagged-template statement, so the mock
+ * receives `(strings, ...params)`. These read the batch back out positionally,
+ * in the order `upsertManyOp` interpolates them.
+ *
+ * Positional and therefore brittle by design: the parameter order is part of
+ * the statement, and a reordering that these did not notice would be a silent
+ * column swap in production.
+ */
+type RawCall = [TemplateStringsArray, string, Date, string[], string[], string[], number[]];
+const rawCall = (n = 0) => executeRaw.mock.calls[n] as RawCall;
+const upsertSql = (n = 0) => rawCall(n)[0].join('?');
+const upsertedPathsOf = (n = 0) => rawCall(n)[3];
+const upsertedShasOf = (n = 0) => rawCall(n)[4];
+const upsertedSizesOf = (n = 0) => rawCall(n)[6];
+const upsertStampOf = (n = 0) => rawCall(n)[2];
 
 const getTree = vi.fn();
 const getDefaultBranch = vi.fn();
@@ -61,6 +80,8 @@ const {
   lookupContentAssetsBySha,
   ensureContentAssets,
   recordContentAsset,
+  removeContentAssets,
+  removeContentAssetFolder,
   lookupContentAsset,
   lookupContentTree,
   lookupContentAssetBySha,
@@ -92,6 +113,7 @@ const syncedAgo = (ms: number) => ({
  */
 const setupTransaction = (deletedCount = 0, casCount = 1) => {
   contentAssetUpsert.mockImplementation(args => ({ op: 'upsert', args }));
+  executeRaw.mockImplementation(() => ({ op: 'upsertMany' }));
   contentAssetDeleteMany.mockImplementation(args => ({ op: 'deleteMany', args }));
   classroomUpdate.mockImplementation(args => ({ op: 'classroomUpdate', args }));
   classroomUpdateMany.mockImplementation(args => ({ op: 'classroomUpdateMany', args }));
@@ -137,12 +159,12 @@ describe('contentAssets.service', () => {
       expect(getDefaultBranch).toHaveBeenCalledWith('dartmouth-cs', 'content-cs101');
       expect(getLatestCommitSHA).toHaveBeenCalledWith('dartmouth-cs', 'content-cs101', 'main');
       expect(getTree).toHaveBeenCalledWith('dartmouth-cs', 'content-cs101', HEAD_COMMIT, true);
-      expect(contentAssetUpsert).toHaveBeenCalledTimes(3);
+      // ONE statement for the whole tree, not one per entry.
+      expect(executeRaw).toHaveBeenCalledTimes(1);
 
       // Directories are rows too — theme folders are addressed by tree SHA, so
       // dropping them would make themes unresolvable.
-      const upsertedPaths = contentAssetUpsert.mock.calls.map(([args]) => args.create.path);
-      expect(upsertedPaths).toEqual(['images', 'images/a.png', 'images/b.png']);
+      expect(upsertedPathsOf()).toEqual(['images', 'images/a.png', 'images/b.png']);
 
       // The sweep is what deletes paths removed from the repo. Every row
       // written this run carries the same stamp, so `lt` matches only rows an
@@ -153,9 +175,42 @@ describe('contentAssets.service', () => {
       expect(sweep.where.classroom_id).toBe('class-1');
       expect(sweep.where.synced_at.lt).toBeInstanceOf(Date);
 
-      const stamps = contentAssetUpsert.mock.calls.map(([args]) => args.create.synced_at.getTime());
-      expect(new Set(stamps).size).toBe(1);
-      expect(stamps[0]).toBe(sweep.where.synced_at.lt.getTime());
+      // One stamp for the batch — the same instant the sweep measures against.
+      expect(upsertStampOf().getTime()).toBe(sweep.where.synced_at.lt.getTime());
+    });
+
+    it('never moves a row BACKWARDS onto the sha the tree reported', async () => {
+      // THE regression. `syncedAt` is taken before the tree read so the sweep
+      // keeps a row written while it was in flight — but the write itself used
+      // to be unconditional, so the same ordering that saved that row from the
+      // DELETE handed it to the UPDATE. A save that landed mid-sync had its sha
+      // replaced by the pre-save one, and `/present` served the old deck until
+      // the next webhook. Surviving-and-wrong is worse than not surviving.
+      getTree.mockResolvedValue({
+        sha: 'r',
+        truncated: false,
+        entries: [{ path: 'slides/a/index.html', sha: 'pre-save-sha', type: 'blob', size: 1 }],
+      });
+
+      await syncContentAssets('class-1');
+
+      // The guard is in the statement, not in application code: only Postgres
+      // knows which rows a concurrent writer moved while this batch was built.
+      expect(upsertSql()).toContain('WHERE content_assets.synced_at < EXCLUDED.synced_at');
+      // …and it is on the UPDATE branch of the conflict, so a brand-new path is
+      // still inserted.
+      expect(upsertSql()).toContain('ON CONFLICT (classroom_id, path) DO UPDATE');
+    });
+
+    it('sends no statement at all for an empty tree', async () => {
+      getTree.mockResolvedValue({ sha: 'r', truncated: false, entries: [] });
+
+      await syncContentAssets('class-1');
+
+      expect(executeRaw).not.toHaveBeenCalled();
+      // The stamp and the sweep still run: an emptied repo must still sweep.
+      expect(classroomUpdate).toHaveBeenCalledTimes(1);
+      expect(contentAssetDeleteMany).toHaveBeenCalledTimes(1);
     });
 
     it('does NOT sweep when GitHub truncated the tree', async () => {
@@ -226,7 +281,7 @@ describe('contentAssets.service', () => {
 
       await syncContentAssets('class-1');
 
-      expect(contentAssetUpsert.mock.calls[0][0].create.size).toBe(0);
+      expect(upsertedSizesOf()[0]).toBe(0);
     });
 
     it('stamps the classroom with the run, inside the same transaction', async () => {
@@ -250,8 +305,7 @@ describe('contentAssets.service', () => {
       // measured against it.
       expect(stamp.data.content_assets_synced_commit).toBe(HEAD_COMMIT);
       // The run's one stamp — the same instant every row it wrote carries.
-      const rowStamp = contentAssetUpsert.mock.calls[0][0].create.synced_at;
-      expect(stamp.data.content_assets_synced_at).toEqual(rowStamp);
+      expect(stamp.data.content_assets_synced_at).toEqual(upsertStampOf());
 
       const ops = transaction.mock.calls[0][0] as { op: string }[];
       expect(ops).toContainEqual({ op: 'classroomUpdate', args: stamp });
@@ -360,8 +414,7 @@ describe('contentAssets.service', () => {
 
       // Still incremental: the tree is only the source of SHAs here, so the
       // untouched path must not be rewritten and nothing must be swept.
-      const upsertedPaths = contentAssetUpsert.mock.calls.map(([args]) => args.create.path);
-      expect(upsertedPaths).not.toContain('images/untouched.png');
+      expect(upsertedPathsOf()).not.toContain('images/untouched.png');
       expect(contentAssetDeleteMany.mock.calls[0][0].where.path).toEqual({ in: [] });
     });
 
@@ -814,6 +867,72 @@ describe('contentAssets.service', () => {
       await ensureContentAssets('class-1', { maxAgeMs: 60_000 });
 
       expect(classroomFindUnique).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe('removeContentAssets', () => {
+    it('forgets exactly the paths it is given', async () => {
+      // Blobs are content-addressed and immutable, so a row that outlives its
+      // file keeps serving that file's last bytes out of R2 — a deleted page
+      // that still renders.
+      contentAssetDeleteMany.mockResolvedValue({ count: 2 });
+
+      await expect(
+        removeContentAssets('class-1', ['pages/gone/content.json', 'pages/gone/index.html'])
+      ).resolves.toBe(true);
+
+      expect(contentAssetDeleteMany).toHaveBeenCalledWith({
+        where: {
+          classroom_id: 'class-1',
+          path: { in: ['pages/gone/content.json', 'pages/gone/index.html'] },
+        },
+      });
+    });
+
+    it('sends nothing for an empty list', async () => {
+      await expect(removeContentAssets('class-1', [])).resolves.toBe(true);
+      expect(contentAssetDeleteMany).not.toHaveBeenCalled();
+    });
+
+    it('never throws — the sweep is the backstop', async () => {
+      contentAssetDeleteMany.mockRejectedValue(new Error('connection terminated'));
+      await expect(removeContentAssets('class-1', ['a.png'])).resolves.toBe(false);
+    });
+  });
+
+  describe('removeContentAssetFolder', () => {
+    it('matches the folder itself and everything under it', async () => {
+      // The folder row matters: theme folders are addressed by their TREE sha,
+      // so leaving one keeps a deleted theme resolvable.
+      contentAssetDeleteMany.mockResolvedValue({ count: 5 });
+
+      await removeContentAssetFolder('class-1', 'slides/lecture-1');
+
+      expect(contentAssetDeleteMany).toHaveBeenCalledWith({
+        where: {
+          classroom_id: 'class-1',
+          OR: [{ path: 'slides/lecture-1' }, { path: { startsWith: 'slides/lecture-1/' } }],
+        },
+      });
+    });
+
+    it('refuses a prefix that would match the whole map', async () => {
+      // The failure mode is not subtle: an empty prefix empties the classroom.
+      for (const folder of ['', '/', '///']) {
+        expect(await removeContentAssetFolder('class-1', folder)).toBe(false);
+      }
+      expect(contentAssetDeleteMany).not.toHaveBeenCalled();
+    });
+
+    it('does not let a trailing slash widen the match', async () => {
+      contentAssetDeleteMany.mockResolvedValue({ count: 0 });
+
+      await removeContentAssetFolder('class-1', 'pages/lab-1/');
+
+      expect(contentAssetDeleteMany.mock.calls[0][0].where.OR).toEqual([
+        { path: 'pages/lab-1' },
+        { path: { startsWith: 'pages/lab-1/' } },
+      ]);
     });
   });
 

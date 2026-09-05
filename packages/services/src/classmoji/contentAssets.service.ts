@@ -72,6 +72,12 @@ export interface SyncContentAssetsOptions {
 
 export interface SyncContentAssetsResult {
   mode: 'full' | 'incremental';
+  /**
+   * Entries this run APPLIED, which is not always the number of rows it
+   * changed: the upsert skips any row a newer write-through already holds (see
+   * `upsertManyOp`). The difference is a save that landed mid-sync, so it is
+   * the count being right rather than the write being wrong.
+   */
   upserted: number;
   deleted: number;
   truncated: boolean;
@@ -215,19 +221,65 @@ async function readRepoTree(
   return { entries: tree.entries, truncated: tree.truncated, commit };
 }
 
-function upsertOp(classroomId: string, entry: TreeEntry, syncedAt: Date) {
-  const row = {
-    sha: entry.sha,
-    type: entry.type,
-    size: entry.size ?? 0,
-    synced_at: syncedAt,
-  };
+/**
+ * A whole tree's worth of rows, in ONE statement, that never moves a row
+ * BACKWARDS.
+ *
+ * Two problems, one fix.
+ *
+ * ── The correctness one ────────────────────────────────────────────────────
+ * `fullSync` takes its `syncedAt` BEFORE reading the tree, which is what makes
+ * the sweep safe (see the header). But the write it fed was unconditional, so
+ * the same ordering that protected a fresh row from the DELETE handed it
+ * straight to the UPDATE: a save whose write-through landed while the tree read
+ * was in flight got its sha replaced by the pre-save one the tree had reported.
+ * The row survived and was wrong, which is worse than not surviving — the
+ * renderer signs a URL for the previous deck and `/present` serves it until the
+ * next webhook or the 24-hour refresh.
+ *
+ * `WHERE content_assets.synced_at < EXCLUDED.synced_at` is the whole fix. A row
+ * stamped at or after this run keeps everything it has; every other row is
+ * brought level with the tree.
+ *
+ * Deliberately NOT a Prisma upsert with an extra `where`: Prisma has no
+ * conditional-update upsert, and the shapes that look like one degrade to
+ * read-then-create, which inside `$transaction` surfaces as a P2002 on the
+ * primary key rather than as a skip.
+ *
+ * ── The size one ───────────────────────────────────────────────────────────
+ * A repo of a few thousand files became a few thousand statements in a single
+ * transaction — the plan's "chunk the upserts" follow-up. One `INSERT … SELECT
+ * FROM UNNEST` is not a chunked version of that, it is the whole batch as a
+ * single round trip, so the follow-up is closed rather than deferred.
+ *
+ * `synced_at` and `classroom_id` are scalars rather than parallel arrays on
+ * purpose: they are the same for every row, and an array of `Date` would put
+ * timestamp serialization between the driver and a `TIMESTAMP(3)` column for no
+ * gain. Their types come from the INSERT target columns, so neither is cast;
+ * the four arrays are cast because `UNNEST` has nothing else to infer from.
+ *
+ * Returns null for an empty batch — `UNNEST` of empty arrays is a valid no-op,
+ * but there is no reason to send it.
+ */
+function upsertManyOp(classroomId: string, entries: TreeEntry[], syncedAt: Date) {
+  if (entries.length === 0) return null;
 
-  return getPrisma().contentAsset.upsert({
-    where: { classroom_id_path: { classroom_id: classroomId, path: entry.path } },
-    create: { classroom_id: classroomId, path: entry.path, ...row },
-    update: row,
-  });
+  return getPrisma().$executeRaw`
+    INSERT INTO content_assets (classroom_id, path, sha, type, size, synced_at)
+    SELECT ${classroomId}, entry.path, entry.sha, entry.type, entry.size, ${syncedAt}
+    FROM UNNEST(
+      ${entries.map(entry => entry.path)}::text[],
+      ${entries.map(entry => entry.sha)}::text[],
+      ${entries.map(entry => entry.type)}::text[],
+      ${entries.map(entry => entry.size ?? 0)}::int[]
+    ) AS entry(path, sha, type, size)
+    ON CONFLICT (classroom_id, path) DO UPDATE
+      SET sha = EXCLUDED.sha,
+          type = EXCLUDED.type,
+          size = EXCLUDED.size,
+          synced_at = EXCLUDED.synced_at
+      WHERE content_assets.synced_at < EXCLUDED.synced_at
+  `;
 }
 
 /**
@@ -313,7 +365,10 @@ async function fullSync(classroom: ResolvedClassroom): Promise<SyncContentAssets
     data: { content_assets_synced_at: syncedAt, content_assets_synced_commit: commit },
   });
 
-  const operations = entries.map(entry => upsertOp(classroom.id, entry, syncedAt));
+  // One statement for the whole tree, and one that refuses to move a row
+  // backwards — see `upsertManyOp`.
+  const upsert = upsertManyOp(classroom.id, entries, syncedAt);
+  const operations = upsert ? [upsert] : [];
 
   let deleted = 0;
 
@@ -404,7 +459,8 @@ async function incrementalSync(
   const toDelete = truncated ? unique(removed) : unique([...removed, ...vanished]);
 
   const syncedAt = new Date();
-  const operations = entries.map(entry => upsertOp(classroom.id, entry, syncedAt));
+  const upsert = upsertManyOp(classroom.id, entries, syncedAt);
+  const operations = upsert ? [upsert] : [];
 
   // The commit this diff lands the map on — and ONLY the commit. The freshness
   // timestamp deliberately stays untouched (see `ensureContentAssets`): this run
@@ -649,7 +705,18 @@ async function ensureOnce(
   //   CONFIGURATION — GitLab-backed, the mock org behind an example classroom,
   //   or simply no content repo. Known before any API call, so it is checked
   //   rather than caught.
-  const classroom = await loadClassroomRaw(classroomId);
+  //
+  //   The DB read itself is inside the try, though, which it did not used to
+  //   be: the doc above promises this never throws, and a Postgres blip on the
+  //   render path would have broken that promise in the one place a caller is
+  //   least equipped to handle it.
+  let classroom: ClassroomRecord;
+  try {
+    classroom = await loadClassroomRaw(classroomId);
+  } catch (error: unknown) {
+    console.warn(`[contentAssets] Could not load classroom ${classroomId}; serving stale:`, error);
+    return null;
+  }
   if (!isDeliverable(classroom)) {
     return null;
   }
@@ -678,6 +745,86 @@ async function ensureOnce(
   } catch (error: unknown) {
     console.warn(`[contentAssets] sync failed for ${classroomId}; serving stale/legacy:`, error);
     return null;
+  }
+}
+
+/**
+ * Forget paths the repo no longer has, now, without waiting for a sweep.
+ *
+ * The mirror image of `recordContentAssets`, and it exists for the same reason:
+ * the map is read on the render path, so a row that outlives its file is not a
+ * stale cache entry, it is WRONG CONTENT. A deleted page whose row survives
+ * keeps serving its last bytes from R2 — the blob is content-addressed and
+ * immutable, so it is still perfectly servable — and a renamed snippet serves
+ * its pre-rename bytes under the old name until the next full sync.
+ *
+ * `paths` is explicit. A folder delete has `removeContentAssetFolder` below,
+ * which is the only prefix match on offer and is guarded — "delete everything
+ * under this folder" is one empty string away from emptying a classroom's map.
+ *
+ * NEVER THROWS, like its counterpart — a delete that reached the repo must not
+ * be reported as failed because a cache row could not be cleared. The next full
+ * sync's sweep is the backstop either way; this only shortens the window.
+ */
+export async function removeContentAssets(classroomId: string, paths: string[]): Promise<boolean> {
+  const unique = [...new Set(paths.filter(path => typeof path === 'string' && path.length > 0))];
+  if (unique.length === 0) return true;
+
+  try {
+    await getPrisma().contentAsset.deleteMany({
+      where: { classroom_id: classroomId, path: { in: unique } },
+    });
+    return true;
+  } catch (error: unknown) {
+    console.warn(
+      `[contentAssets] Could not remove ${unique.length} path(s) for ${classroomId}; ` +
+        "the next full sync's sweep will:",
+      error
+    );
+    return false;
+  }
+}
+
+/**
+ * Forget every row under a folder the repo no longer has.
+ *
+ * The companion to `ContentService.deleteFolder`, which reports how many files
+ * it removed but not which — and the map is the only thing that still knows.
+ * Matches the folder itself (theme folders are rows too, addressed by their
+ * tree sha) and everything beneath it.
+ *
+ * GUARDED, because the failure mode is not subtle: an empty or `/` prefix would
+ * match every row this classroom has. A refusal is logged rather than thrown —
+ * the folder is already gone from the repo, and the sweep is the backstop.
+ */
+export async function removeContentAssetFolder(
+  classroomId: string,
+  folder: string
+): Promise<boolean> {
+  const prefix = folder.replace(/^\/+|\/+$/g, '');
+  if (prefix.length === 0) {
+    console.warn(
+      `[contentAssets] Refusing to clear the whole map for ${classroomId} ` +
+        `(empty folder prefix "${folder}")`
+    );
+    return false;
+  }
+
+  try {
+    await getPrisma().contentAsset.deleteMany({
+      where: {
+        classroom_id: classroomId,
+        OR: [{ path: prefix }, { path: { startsWith: `${prefix}/` } }],
+      },
+    });
+    return true;
+  } catch (error: unknown) {
+    console.warn(
+      `[contentAssets] Could not remove ${prefix}/ for ${classroomId}; ` +
+        "the next full sync's sweep will:",
+      error
+    );
+    return false;
   }
 }
 
