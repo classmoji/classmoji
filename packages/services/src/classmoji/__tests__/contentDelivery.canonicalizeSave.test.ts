@@ -58,6 +58,7 @@ vi.mock('../../content/ContentService.ts', () => ({
 vi.mock('../contentAssets.service.ts', () => ({
   ensureContentAssets: async () => null,
   recordContentAsset: async () => null,
+  recordContentAssets: async () => null,
   lookupContentAsset: async (_id: string, path: string) => ({
     sha: path === DECK_PATH_REF ? DECK_SHA : BLOB_SHA,
     type: 'blob',

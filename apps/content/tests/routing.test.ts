@@ -445,6 +445,173 @@ describe('blob delivery', () => {
     expect(await response.text()).toBe('');
   });
 
+  // ── Text blobs ─────────────────────────────────────────────────────────────
+  //
+  // A deck's index.html, a page's content.json and a theme's css are served by
+  // exactly the same path as an image: sha-addressed, signed, immutable. The
+  // only thing that changes is the content type — and the guarantee that an
+  // .html served from here is INERT if a browser opens it directly.
+
+  it('serves an html blob as inert text/html', async () => {
+    const bucket = fakeBucket({
+      [`blobs/${BLOB_SHA}`]: {
+        body: '<!doctype html><script>alert(document.cookie)</script>',
+        contentType: 'text/html; charset=utf-8',
+      },
+    });
+    const url = await signedBlobUrl({ sha: BLOB_SHA, ext: 'html', tier: 'enrolled' });
+
+    const response = await worker.fetch(
+      new Request(url),
+      fakeEnv({ CACHE: bucket as unknown as R2Bucket }),
+      fakeContext()
+    );
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get('Content-Type')).toBe('text/html; charset=utf-8');
+    // The three headers that make the script above harmless. Production serves
+    // from content.classmoji.io, inside the app's session-cookie domain, so a
+    // top-level navigation to this document must land in an opaque origin.
+    expect(response.headers.get('Content-Security-Policy')).toBe("default-src 'none'; sandbox");
+    expect(response.headers.get('X-Content-Type-Options')).toBe('nosniff');
+    expect(response.headers.get('Set-Cookie')).toBeNull();
+    expect(response.headers.get('Access-Control-Allow-Origin')).toBe('*');
+    expect(response.headers.get('Cache-Control')).toMatch(/^public, max-age=\d+, immutable$/);
+  });
+
+  it('types a text blob from its extension alone, never from its bytes', async () => {
+    // The object in R2 has no stored content type at all, and its body is
+    // plainly html. The reply is still json, because the SIGNED extension said
+    // json — sniffing is what would let one file be re-labelled as another.
+    const bucket = fakeBucket({
+      [`blobs/${BLOB_SHA}`]: { body: '<!doctype html><p>not json</p>' },
+    });
+    const url = await signedBlobUrl({ sha: BLOB_SHA, ext: 'json', tier: 'enrolled' });
+
+    const response = await worker.fetch(
+      new Request(url),
+      fakeEnv({ CACHE: bucket as unknown as R2Bucket }),
+      fakeContext()
+    );
+
+    expect(response.headers.get('Content-Type')).toBe('application/json; charset=utf-8');
+  });
+
+  it('ignores the type R2 stored and trusts the signed extension', async () => {
+    // R2 keys are content-addressed — `blobs/{sha}`, no classroom — so ONE
+    // object is shared by every classroom and every path holding those bytes,
+    // and whichever extension was fetched first wrote the stored type. Trusting
+    // it means a stylesheet whose bytes also live at a `.txt` path anywhere in
+    // the fleet is served `text/plain` to everyone, and `nosniff` then makes
+    // the browser refuse it as a stylesheet. The signed extension is
+    // per-request and unforgeable; the stored type is someone else's answer.
+    const bucket = fakeBucket({
+      [`blobs/${BLOB_SHA}`]: {
+        body: 'body { color: red }',
+        contentType: 'text/plain; charset=utf-8',
+      },
+    });
+    const url = await signedBlobUrl({ sha: BLOB_SHA, ext: 'css', tier: 'enrolled' });
+
+    const response = await worker.fetch(
+      new Request(url),
+      fakeEnv({ CACHE: bucket as unknown as R2Bucket }),
+      fakeContext()
+    );
+
+    expect(response.headers.get('Content-Type')).toBe('text/css; charset=utf-8');
+  });
+
+  it('answers HEAD from the signed extension too', async () => {
+    // Same object, same trap — a HEAD is answered straight from R2 metadata,
+    // which is exactly where the wrong stored type lives.
+    const bucket = fakeBucket({
+      [`blobs/${BLOB_SHA}`]: { body: '<!doctype html>', contentType: 'application/octet-stream' },
+    });
+    const url = await signedBlobUrl({ sha: BLOB_SHA, ext: 'html', tier: 'enrolled' });
+
+    const response = await worker.fetch(
+      new Request(url, { method: 'HEAD' }),
+      fakeEnv({ CACHE: bucket as unknown as R2Bucket }),
+      fakeContext()
+    );
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get('Content-Type')).toBe('text/html; charset=utf-8');
+  });
+
+  it('serves a draft html blob no-store, exactly like a draft image', async () => {
+    // The per-tier cache lifetimes are decided by `cacheControlFor` on the
+    // tier alone; text takes the same answer images take, unchanged.
+    const bucket = fakeBucket({
+      [`blobs/${BLOB_SHA}`]: { body: '<!doctype html>', contentType: 'text/html; charset=utf-8' },
+    });
+    const url = await signedBlobUrl({ sha: BLOB_SHA, ext: 'html', tier: 'draft' });
+
+    const response = await worker.fetch(
+      new Request(url),
+      fakeEnv({ CACHE: bucket as unknown as R2Bucket }),
+      fakeContext()
+    );
+
+    expect(response.headers.get('Cache-Control')).toBe('no-store');
+  });
+
+  it('ignores a width on a text blob and serves the original', async () => {
+    // `w=` is signed, so it cannot be added by a client — but a stale URL or a
+    // caller mistake must not reach the Images binding with a json body. The
+    // transform gate is raster-only, and everything else falls through to the
+    // plain blob path.
+    const bucket = fakeBucket({
+      [`blobs/${BLOB_SHA}`]: {
+        body: '{"version":1}',
+        contentType: 'application/json; charset=utf-8',
+      },
+    });
+    const url = await signedBlobUrl({
+      sha: BLOB_SHA,
+      ext: 'json',
+      tier: 'enrolled',
+      transform: { w: 800, fmt: 'auto' },
+    });
+
+    const response = await worker.fetch(
+      new Request(url),
+      fakeEnv({ CACHE: bucket as unknown as R2Bucket }),
+      fakeContext()
+    );
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get('Content-Type')).toBe('application/json; charset=utf-8');
+    // The original key, not `blobs/{sha}/w800.webp` — no variant was consulted.
+    expect(bucket.gets).toEqual([`blobs/${BLOB_SHA}`]);
+    expect(await response.text()).toBe('{"version":1}');
+  });
+
+  it('pulls an html miss from the origin and caches it under the text type', async () => {
+    const bucket = fakeBucket();
+    const ctx = fakeContext();
+    stubUpstreams();
+
+    const url = await signedBlobUrl({ sha: BLOB_SHA, ext: 'html', tier: 'enrolled' });
+    const response = await worker.fetch(
+      new Request(url),
+      fakeEnv({ CACHE: bucket as unknown as R2Bucket }),
+      ctx
+    );
+
+    expect(response.status).toBe(200);
+    expect(await response.text()).toBe('origin-bytes');
+    await ctx.settled();
+    expect(bucket.puts).toEqual([
+      {
+        key: `blobs/${BLOB_SHA}`,
+        contentType: 'text/html; charset=utf-8',
+        bytes: 'origin-bytes'.length,
+      },
+    ]);
+  });
+
   it('marks draft content no-store, but still writes it to R2', async () => {
     // Deliberate: `no-store` governs the SHARED caches in front of the Worker,
     // which must never hold draft bytes. R2 sits behind the signature gate and

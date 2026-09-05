@@ -46,6 +46,43 @@ is no separate version field. Anything else is a 404. An unsigned, tampered, or
 long-expired URL is a 403 with `Cache-Control: no-store` — a refusal is never
 cached.
 
+### Text blobs
+
+`{ext}` is not only an image extension. A deck's `index.html` and `deck.json`, a
+page's `content.json`, a theme's css/js/fonts and any `.md`/`.txt` in a content
+repo go through the SAME blob route — sha-addressed, signed the same way. That
+is what makes them fresh by construction rather than by waiting out a GitHub
+Pages rebuild. There is no separate text scheme and no per-extension allowlist:
+the extension is a FIELD of the canonical string, so a signature minted for
+`.json` can never serve the same sha as `.html`.
+
+| Extension | Content-Type |
+| --- | --- |
+| `html`, `htm` | `text/html; charset=utf-8` |
+| `css` | `text/css; charset=utf-8` |
+| `js`, `mjs` | `text/javascript; charset=utf-8` |
+| `json` | `application/json; charset=utf-8` |
+| `md` | `text/markdown; charset=utf-8` |
+| `txt` | `text/plain; charset=utf-8` |
+| `svg` | `image/svg+xml` — an image, but never transformed |
+| `woff`, `woff2`, `ttf`, `otf` | the matching `font/*` |
+
+Two rules hold for all of them:
+
+- **The type comes from the extension, never from the bytes.** Nothing here
+  sniffs, and `X-Content-Type-Options: nosniff` tells the browser not to either.
+- **A served `.html` is inert.** `Content-Security-Policy: default-src 'none';
+  sandbox` drops it into an opaque origin with no script execution, so opening
+  one as a top-level navigation cannot run script on the `.classmoji.io`
+  session-cookie domain — the same reason the CSP was there for SVG. No
+  response from this Worker carries a cookie.
+
+`w=`/`fmt=` stay raster-only. A text URL carrying one (a stale link, a caller
+mistake) is served untransformed from `blobs/{sha}`: the transform gate is
+`isRasterExtension`, and `svg`, `html` and `json` all fall outside it. Cache
+lifetimes are decided by the tier alone, so text gets exactly the `immutable`
+an image gets, and exactly the `no-store` on `draft`.
+
 ## Behaviour worth knowing
 
 - **Bytes stream.** A miss is piped to the browser while a tee'd copy goes to R2

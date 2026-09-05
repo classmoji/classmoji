@@ -138,6 +138,53 @@ export function deckDeliveryContext(
 
 export type DeliveryContext = ReturnType<typeof deckDeliveryContext>;
 
+/**
+ * Read a deck's stored TEXT — `index.html`, `deck.json` — through the map.
+ *
+ * The read-side twin of `deckDeliveryContext`, and deliberately NOT gated the
+ * way that one is. `deckDeliveryContext` refuses a context when the layer is
+ * off, because a rewrite pass that cannot sign anything is a cheerio parse for
+ * a byte-identical result. This one still has work to do in that case: the
+ * fallback ladder inside `fetchContentText` (contents API, then the Pages CDN)
+ * is how a classroom that has not been opted in keeps reading its own decks,
+ * and it needs the org and repo to do it.
+ *
+ * Why it exists at all: `/present`, `/follow` and `/speaker` read `index.html`
+ * CDN-first, and GitHub Pages lags a push by minutes — so an instructor who
+ * saved a deck and opened the presenter was shown the previous version of
+ * their own slides. Reading by sha removes the question.
+ *
+ * The shape matches what `fetchContent` returned, so the call sites keep their
+ * existing branching; `source` now also carries `'worker'`.
+ */
+export async function readDeckText(
+  slide: DeliverySlide,
+  gitOrgLogin: string,
+  repo: string,
+  path: string,
+  label: string,
+  opts: { fallback?: 'api-then-cdn' | 'cdn-only' } = {}
+): Promise<{ content: string; source: 'worker' | 'api' | 'cdn' } | null> {
+  const classroom = slide.classroom;
+  if (!classroom?.id) return null;
+
+  const result = await ClassmojiService.contentDelivery.fetchContentText(
+    {
+      classroom: {
+        id: classroom.id,
+        content_key_version: classroom.content_key_version ?? 0,
+        content_repo: repo,
+        content_delivery_enabled: classroom.content_delivery_enabled === true,
+        git_organization: { login: gitOrgLogin },
+      },
+    },
+    path,
+    { label, ...(opts.fallback ? { fallback: opts.fallback } : {}) }
+  );
+
+  return result ? { content: result.text, source: result.source } : null;
+}
+
 /** The `shared:` theme a rendered deck declares, or null. */
 export function sharedThemeName(html: string | null | undefined): string | null {
   if (!html) return null;

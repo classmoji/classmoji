@@ -56,6 +56,16 @@ vi.mock('../contentManifest.service.ts', () => ({
   saveManifest: (...args: unknown[]) => saveManifestMock(...args),
 }));
 
+// The asset map. A created page's index.html and content.json are READ through
+// it (fetchContentText), so a create that does not record its shas is a page
+// that renders empty until the push webhook lands.
+const recordContentAssetsMock = vi.fn();
+const removeContentAssetFolderMock = vi.fn();
+vi.mock('../contentAssets.service.ts', () => ({
+  recordContentAssets: (...args: unknown[]) => recordContentAssetsMock(...args),
+  removeContentAssetFolder: (...args: unknown[]) => removeContentAssetFolderMock(...args),
+}));
+
 vi.mock('../notification.service.ts', () => ({
   runSafely: vi.fn(),
   getStudentsInClassroom: vi.fn(),
@@ -96,7 +106,14 @@ describe('page.createPage', () => {
     pageFindFirstMock.mockResolvedValue(null); // no content-path collision
     repositoryExistsMock.mockResolvedValue(true);
     putMock.mockResolvedValue({ sha: 'abc', commit: 'c1' });
-    uploadBatchMock.mockResolvedValue({ commit: 'c2', filesUploaded: 2 });
+    // `files` is part of uploadBatch's real return shape — each file's blob
+    // sha, which is exactly what the write-through records.
+    uploadBatchMock.mockImplementation(async ({ files }: { files: Array<{ path: string }> }) => ({
+      commit: 'c2',
+      filesUploaded: files.length,
+      files: files.map((file, index) => ({ path: file.path, sha: `sha-${index}` })),
+    }));
+    recordContentAssetsMock.mockResolvedValue(true);
     pageCreateMock.mockImplementation((args: { data: Record<string, unknown> }) => ({
       id: 'page-1',
       ...args.data,
@@ -350,6 +367,31 @@ describe('page.createPage', () => {
     expect(((failure as Error).cause as { code?: string })?.code).toBe('P2002');
     expect(saveManifestMock).not.toHaveBeenCalled();
   });
+
+  it('records both created files in the asset map', async () => {
+    // index.html and content.json are READ through the map (fetchContentText),
+    // so a create that skips this is a brand-new page that renders empty until
+    // the push webhook lands — on the one surface where the author is watching.
+    await createPage({ classroomId: 'class-1', title: 'My New Page', createdBy: 'user-1' });
+
+    expect(recordContentAssetsMock).toHaveBeenCalledWith('class-1', [
+      { path: 'pages/my-new-page/index.html', sha: 'sha-0' },
+      { path: 'pages/my-new-page/content.json', sha: 'sha-1' },
+    ]);
+  });
+
+  it('records the single-file create too', async () => {
+    await createPage({
+      classroomId: 'class-1',
+      title: 'Imported',
+      createdBy: 'user-1',
+      html: '<h1>Imported</h1>',
+    });
+
+    expect(recordContentAssetsMock).toHaveBeenCalledWith('class-1', [
+      { path: 'pages/imported/index.html', sha: 'abc' },
+    ]);
+  });
 });
 
 describe('page.deletePage', () => {
@@ -393,6 +435,11 @@ describe('page.deletePage', () => {
     );
     expect(pageDeleteMock).toHaveBeenCalledWith({ where: { id: 'page-1' } });
     expect(saveManifestMock).toHaveBeenCalledWith('class-1');
+    // …and the map rows. Blobs are content-addressed and immutable, so a row
+    // that outlives the folder keeps serving the deleted page's last
+    // content.json out of R2 — a deleted page that still renders, until the
+    // next full sync sweeps it.
+    expect(removeContentAssetFolderMock).toHaveBeenCalledWith('class-1', 'pages/doomed');
     expect(result.success).toBe(true);
   });
 

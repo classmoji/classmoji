@@ -4,10 +4,10 @@ import getPrisma from '@classmoji/database';
 import { assertSlideAccess } from '@classmoji/auth/server';
 import { SandpackRenderer } from '@classmoji/ui-components/sandpack';
 import RevealPresenter from '~/components/RevealPresenter';
-import { fetchContent } from '~/utils/contentProxy';
 import {
   deckAccessFor,
   deckDeliveryContext,
+  readDeckText,
   resolveDeckDelivery,
 } from '~/utils/deckDelivery.server';
 
@@ -69,18 +69,18 @@ export const loader = async ({
   const repo = slide.classroom.content_repo;
   const filePath = `${slide.content_path}/index.html`;
 
-  // Build the content URL using content proxy (CDN-first + API fallback)
+  // Legacy proxy URL, kept as the client-side fallback when the server-side
+  // read below fails entirely.
   const contentUrl = `/content/${gitOrgLogin}/${repo}/${filePath}`;
 
-  // Fetch content using shared utility (CDN first, API fallback)
+  // Read the deck by SHA through the delivery layer. This is the highest-fanout
+  // deck read in the app — a lecture hall opens it at once — and it is now the
+  // cheapest: one signed URL per sha, served from the edge, and zero GitHub
+  // calls per viewer.
   let slideContent: string | null = null;
   let contentError: string | null = null;
 
-  const contentResult = await fetchContent({
-    org: gitOrgLogin,
-    repo,
-    path: filePath,
-  });
+  const contentResult = await readDeckText(slide, gitOrgLogin, repo, filePath, 'follow');
 
   if (contentResult) {
     // Same read-side delivery pass the deck viewer runs. A follower is usually
@@ -89,7 +89,7 @@ export const loader = async ({
     // The `preview` local above is this route's THUMBNAIL flag and is
     // deliberately not part of the access shape; `deckAccessFor` cannot see it.
     const { html } = await resolveDeckDelivery(
-      contentResult.content as string,
+      contentResult.content,
       deckDeliveryContext(slide, gitOrgLogin, repo, deckAccessFor('follow', { canEdit }, slide))
     );
     slideContent = html;

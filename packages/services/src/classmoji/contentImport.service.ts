@@ -22,7 +22,7 @@
 import getPrisma from '@classmoji/database';
 import { ContentService } from '../content/ContentService.ts';
 import { contentProxyBase, isCommitRef, pagesContentBase, splitRawRef } from './contentRefs.ts';
-import { lookupContentAssetsBySha } from './contentAssets.service.ts';
+import { lookupContentAssetsBySha, recordContentAssets } from './contentAssets.service.ts';
 import { getGitProvider } from '../git/index.ts';
 import * as contentManifestService from './contentManifest.service.ts';
 import { createWithUniquePageSlug, ensureContentRepo, isPageSlugConflict } from './page.service.ts';
@@ -878,13 +878,18 @@ async function importPages({
 
   // ONE commit for all page files.
   try {
-    await ContentService.uploadBatch({
+    const result = await ContentService.uploadBatch({
       gitOrganization: target.gitOrganization,
       repo: target.repo,
       files: written.flatMap(w => w.files),
       branch: 'main',
       message: commitMessage,
     });
+    // Write-through: imported `content.json` is read through the asset map, and
+    // an import is followed immediately by someone opening what they imported.
+    // Without this the first views fall back to the contents API until the push
+    // webhook lands — correct, but a GitHub call per view for no reason.
+    await recordContentAssets(target.classroomId, result.files);
   } catch (error: unknown) {
     warn('pages', `page content commit failed: ${errText(error)}`);
     return 0;
@@ -1057,13 +1062,17 @@ async function importSlides({
   // ONE commit for all slide files (deck.json + generated index.html copied
   // verbatim — never regenerated).
   try {
-    await ContentService.uploadBatch({
+    const result = await ContentService.uploadBatch({
       gitOrganization: target.gitOrganization,
       repo: target.repo,
       files,
       branch: 'main',
       message: commitMessage,
     });
+    // Write-through, for the same reason as the page batch above: `deck.json`
+    // and `index.html` are read through the map, and an imported deck is
+    // usually opened straight away.
+    await recordContentAssets(target.classroomId, result.files);
   } catch (error: unknown) {
     warn('slides', `slide content commit failed: ${errText(error)}`);
     return 0;

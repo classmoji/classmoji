@@ -30,12 +30,12 @@ import {
 } from '@classmoji/services/slides';
 import { SandpackRenderer } from '@classmoji/ui-components/sandpack';
 import { useUser } from '~/hooks';
-import { fetchContent } from '~/utils/contentProxy';
 import { diffDeckSnapshots, extractDeckSnapshot, type DeckSnapshot } from '~/utils/deckOpsDiff';
 import { getThemeUrls } from '~/utils/themeService.server';
 import {
   deckAccessFor,
   deckDeliveryContext,
+  readDeckText,
   resolveDeckAssets,
   resolveDeliveryThemeUrls,
   resolveReadThemeUrls,
@@ -184,12 +184,21 @@ export const loader = async ({
   // preview branch names contain slashes).
   const diffUrl = `https://github.com/${gitOrgLogin}/${repo}/compare/main...${encodeURIComponent(previewBranch)}`;
 
-  // Fetch content: API-first for edit mode (freshness), CDN-first for view mode (speed)
-  // CDN has ~3 minute propagation delay after saves, so edit mode needs fresh API data
+  // Two reads, and the split is deliberate.
+  //
+  // EDIT mode keeps the contents API (skipCache), and must: it reads a PREVIEW
+  // BRANCH when one is active, and preview branches are not in the asset map at
+  // all — nothing there has a sha to sign. It also seeds the save conflict
+  // token, which has to be the sha of the file on the branch being written.
+  // Staff-only and low volume, so the API call per open is affordable.
+  //
+  // VIEW mode reads through the delivery layer by sha (see below), which is
+  // what makes a save visible the moment it returns instead of whenever GitHub
+  // Pages finishes rebuilding.
   let slideContent: string | null = null;
   let contentError: string | null = null;
   let usedApiFallback = false;
-  let contentResult: { content: string | Buffer; source: string } | null = null;
+  let contentResult: { content: string; source: string } | null = null;
 
   // Conflict token for the editor (Phase 4b): the sha of the deck's SOURCE OF
   // TRUTH — deck.json once it exists (materialized by the first dual-write
@@ -316,40 +325,48 @@ export const loader = async ({
     }
   }
 
-  // Staff view mode: API-first. The CDN (GitHub Pages) lags saves by minutes —
-  // and rapid consecutive saves can ERROR its builds, extending the lag — so a
-  // hard reload right after saving showed stale content to the very person who
-  // saved. Staff read the committed truth from the API; students keep the
-  // cheap CDN path (eventual consistency is fine for them). Thumbnails
-  // (?preview=true) stay CDN — a staff landing page renders ~20 at once and
-  // must not fan out API reads (the D4 amplification).
-  if (!contentResult && canEdit && !isThumbnail) {
-    try {
-      const result = await ContentService.getContent({
-        orgLogin: gitOrgLogin,
-        repo,
-        path: filePath,
-      });
-      if (result) {
-        contentResult = { content: result.content, source: 'api' };
-      }
-    } catch (e: unknown) {
-      const message = e instanceof Error ? e.message : String(e);
-      console.warn('[Loader] Staff view API read failed, falling back to CDN:', message);
-    }
-  }
-
-  // CDN-first for student/anonymous view mode, or as fallback if API failed
+  // Live deck, for everyone: read by SHA through the delivery layer.
+  //
+  // This replaces a three-way split — staff read the contents API, students
+  // read the CDN, thumbnails read the CDN — that existed entirely because
+  // GitHub Pages lags a save by minutes and rapid saves can ERROR its builds.
+  // Addressing the file by sha makes that question go away, so the split goes
+  // with it, and the three surfaces stop being able to disagree about what the
+  // current deck is.
+  //
+  // Cost moves in the right direction on every one of them: no GitHub call for
+  // the deck TEXT on any of the three, where staff used to spend an
+  // installation-token read per view and students waited out a Pages build.
+  // Deck text only — a deck on a shared theme still resolves its theme URLs
+  // through `getThemeUrls`, which does reach GitHub (pre-existing, and its own
+  // follow-up).
+  //
+  // THUMBNAILS keep their own rule, and it is the one the CDN pinning was
+  // for. A staff landing page renders ~20 at once; when the map answers they
+  // all come from the edge, but a map MISS on the default ladder would put
+  // twenty authenticated reads against the org installation's shared limit in
+  // one page load. So a thumbnail that misses goes to the CDN and stops there:
+  // a thumbnail is a picture of a deck, three minutes stale is invisible on
+  // one, and a rate limit is not. (The other half of that fan-out — twenty
+  // concurrent map refreshes on a stale classroom — is collapsed into one
+  // inside `ensureContentAssets`.)
   if (!contentResult) {
-    contentResult = await fetchContent({
-      org: gitOrgLogin,
+    contentResult = await readDeckText(
+      slide,
+      gitOrgLogin,
       repo,
-      path: filePath,
-    });
+      filePath,
+      isThumbnail ? 'thumbnail' : 'viewer',
+      isThumbnail ? { fallback: 'cdn-only' } : {}
+    );
   }
 
   if (contentResult) {
-    slideContent = contentResult.content as string;
+    slideContent = contentResult.content;
+    // Kept for the client-side fallback's own bookkeeping. It now means "the
+    // delivery layer could not answer and GitHub did", which is a narrower
+    // thing than it used to be — `worker` is the ordinary case and `cdn` is
+    // the thumbnail one.
     usedApiFallback = contentResult.source === 'api';
 
     // Sign the deck's image references — but never for the document the editor
@@ -474,6 +491,53 @@ export const loader = async ({
 };
 
 // Action to save slide content or fetch fresh content from GitHub API
+/**
+ * Record a just-written `.slidesthemes/` file in the asset map.
+ *
+ * These four writes used to need nothing: the map only served IMAGES, and a
+ * theme's css reached the browser through the `/content/...` proxy, which read
+ * GitHub directly. Text goes through the map now, so a snippet or custom theme
+ * saved here and not recorded serves its PREVIOUS bytes until the push webhook
+ * lands — the author edits a theme, reloads, and sees the old one.
+ *
+ * `themeService.saveSharedTheme` handles the folder case differently, and has
+ * to: a shared theme is addressed by its FOLDER's tree sha, so it runs a full
+ * sync. These paths are flat files, so their own blob sha is the whole answer.
+ *
+ * Never throws — the file is already committed, and the next sync writes the
+ * same row.
+ */
+async function recordThemeFile(
+  slide: { classroom_id?: string | null },
+  path: string,
+  sha: string,
+  content: FormDataEntryValue
+): Promise<void> {
+  if (!slide.classroom_id) return;
+  await ClassmojiService.contentAssets.recordContentAsset(slide.classroom_id, {
+    path,
+    sha,
+    size: Buffer.byteLength(String(content)),
+  });
+}
+
+/**
+ * Forget `.slidesthemes/` paths the repo no longer has.
+ *
+ * The mirror of `recordThemeFile`, and needed for the same reason: blobs are
+ * content-addressed and immutable, so a row that outlives its file keeps
+ * serving that file's last bytes out of R2. A renamed snippet would answer
+ * under BOTH names until the next full sweep, and a deleted theme would go on
+ * resolving.
+ */
+async function forgetThemeFiles(
+  slide: { classroom_id?: string | null },
+  paths: string[]
+): Promise<void> {
+  if (!slide.classroom_id) return;
+  await ClassmojiService.contentAssets.removeContentAssets(slide.classroom_id, paths);
+}
+
 export const action = async ({
   request,
   params,
@@ -865,13 +929,14 @@ export const action = async ({
           .replace(/\s+/g, '-')
           .replace(/[^a-z0-9-]/g, '') + '.html';
 
-      await ContentService.put({
+      const written = await ContentService.put({
         orgLogin: gitOrgLogin,
         repo,
         path: `.slidesthemes/snippets/${filename}`,
         content: String(content),
         message: `Add snippet: ${name}`,
       });
+      await recordThemeFile(slide, `.slidesthemes/snippets/${filename}`, written.sha, content);
 
       return {
         intent: 'save-snippet',
@@ -925,13 +990,15 @@ export const action = async ({
       }
 
       // Save the updated content
-      await ContentService.put({
+      const written = await ContentService.put({
         orgLogin: gitOrgLogin,
         repo,
         path: newPath,
         content: String(content),
         message: `Update snippet: ${name}`,
       });
+      await recordThemeFile(slide, newPath, written.sha, content);
+      if (id !== newFilename) await forgetThemeFiles(slide, [oldPath]);
 
       return {
         intent: 'update-snippet',
@@ -964,6 +1031,7 @@ export const action = async ({
         path: `.slidesthemes/snippets/${id}`,
         message: `Delete snippet: ${id}`,
       });
+      await forgetThemeFiles(slide, [`.slidesthemes/snippets/${id}`]);
 
       return {
         intent: 'delete-snippet',
@@ -994,13 +1062,14 @@ export const action = async ({
         .replace(/[^a-z0-9-]/g, '');
       const filename = `${baseName}-${type}.css`;
 
-      await ContentService.put({
+      const written = await ContentService.put({
         orgLogin: gitOrgLogin,
         repo,
         path: `.slidesthemes/${filename}`,
         content: String(content),
         message: `Add custom CSS theme: ${name} (${type})`,
       });
+      await recordThemeFile(slide, `.slidesthemes/${filename}`, written.sha, content);
 
       return {
         intent: 'save-theme',
@@ -1056,13 +1125,15 @@ export const action = async ({
       }
 
       // Save the updated content
-      await ContentService.put({
+      const written = await ContentService.put({
         orgLogin: gitOrgLogin,
         repo,
         path: newPath,
         content: String(content),
         message: `Update CSS theme: ${name} (${type})`,
       });
+      await recordThemeFile(slide, newPath, written.sha, content);
+      if (id !== newFilename) await forgetThemeFiles(slide, [oldPath]);
 
       return {
         intent: 'update-theme',
@@ -1096,6 +1167,7 @@ export const action = async ({
         path: `.slidesthemes/${id}`,
         message: `Delete CSS theme: ${id}`,
       });
+      await forgetThemeFiles(slide, [`.slidesthemes/${id}`]);
 
       return {
         intent: 'delete-theme',
@@ -1124,6 +1196,16 @@ export const action = async ({
         paths,
         message: `Clean up unused images from slides: ${slide.title}`,
       });
+
+      // Only the ones that actually went. `deleteMultiple` reports per-path
+      // errors and keeps going, so forgetting the whole list would drop rows
+      // for images still in the repo — which is a dangling URL, the failure
+      // this map exists to prevent.
+      const failed = new Set(result.errors.map(entry => entry.split(':')[0]));
+      await forgetThemeFiles(
+        slide,
+        (paths as string[]).filter(path => !failed.has(path))
+      );
 
       return {
         intent: 'delete-images',

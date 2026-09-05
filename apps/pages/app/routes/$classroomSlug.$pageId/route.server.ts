@@ -116,13 +116,21 @@ export const loader = async ({
   // Staff asked for a preview but no branch exists → render main with a notice.
   const previewMissing = Boolean(canEdit && wantsPreview && !previewStatus?.exists);
 
-  // Load content from GitHub (page includes classroom.git_organization via
-  // includeClassroom). Staff loads bypass the 60s per-process cache: for
-  // canEdit users this read IS the edit surface (the editor mounts inline) and
-  // seeds the save conflict token, so a cached read on another Fly instance
-  // could silently revert an MCP write (4b parity with slides). It also keeps
-  // the post-accept redirect (`?notice=preview-accepted`, staff-only) from
-  // showing pre-accept cached content under the success toast.
+  // Load content. This loader serves two surfaces, and they read differently.
+  //
+  // The EDITOR (canEdit, and any preview-branch read) goes to GitHub: this read
+  // IS the edit surface — the editor mounts inline — and it seeds the save
+  // conflict token, which must be the sha of the file on the branch being
+  // written. `skipCache` for the same reason: the 60s per-process cache has no
+  // cross-instance invalidation, so a cached read on another Fly instance could
+  // silently revert an MCP write (4b parity with slides). It also keeps the
+  // post-accept redirect (`?notice=preview-accepted`) from showing pre-accept
+  // content under the success toast. Preview branches have no map rows at all,
+  // which is the other reason this side cannot use the layer.
+  //
+  // The VIEWER reads by sha through the delivery layer, so a student sees a
+  // save the moment it returns rather than up to a minute later, and a page
+  // view costs no GitHub call.
   const {
     format,
     content,
@@ -130,7 +138,11 @@ export const loader = async ({
     sha: contentFileSha,
   } = await loadPageContent(
     pageForContent,
-    previewActive ? { ref: previewBranch, skipCache: true } : { skipCache: canEdit }
+    previewActive
+      ? { ref: previewBranch, skipCache: true }
+      : canEdit
+        ? { skipCache: true }
+        : { viaWorker: true }
   );
 
   let viewerContent: unknown;

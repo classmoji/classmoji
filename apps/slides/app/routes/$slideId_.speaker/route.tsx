@@ -2,8 +2,12 @@ import { useLoaderData } from 'react-router';
 import getPrisma from '@classmoji/database';
 import { assertSlideAccess } from '@classmoji/auth/server';
 import SpeakerView from '~/components/SpeakerView';
-import { fetchContent } from '~/utils/contentProxy';
-import { deckAccessFor, deckDeliveryContext, resolveDeckAssets } from '~/utils/deckDelivery.server';
+import {
+  deckAccessFor,
+  deckDeliveryContext,
+  readDeckText,
+  resolveDeckAssets,
+} from '~/utils/deckDelivery.server';
 
 /**
  * Speaker route - Remote speaker notes view
@@ -57,15 +61,13 @@ export const loader = async ({
   const repo = slide.classroom.content_repo;
   const filePath = `${slide.content_path}/index.html`;
 
-  // Fetch content using shared utility (CDN first, API fallback)
+  // Read the deck by SHA through the delivery layer — the same read the
+  // presenter makes, and for the same reason: this view is opened alongside a
+  // live presentation, where showing the pre-save deck is worse than useless.
   let slideContent: string | null = null;
   let contentError: string | null = null;
 
-  const contentResult = await fetchContent({
-    org: gitOrgLogin,
-    repo,
-    path: filePath,
-  });
+  const contentResult = await readDeckText(slide, gitOrgLogin, repo, filePath, 'speaker');
 
   if (contentResult) {
     // Sign the deck's references BEFORE the fragment is cut out: the speaker
@@ -74,7 +76,7 @@ export const loader = async ({
     // `.slides` fragment and throws the document's <head> away, so resolving a
     // theme base here would be a lookup for an answer nobody reads.
     const html = await resolveDeckAssets(
-      contentResult.content as string,
+      contentResult.content,
       deckDeliveryContext(slide, gitOrgLogin, repo, deckAccessFor('speaker', { canEdit }, slide))
     );
 

@@ -4,7 +4,12 @@ import { z } from 'zod';
 import { collectBlockAssetRefs, mapBlockAssetRefs } from '@classmoji/utils';
 import { ContentService } from '../content/ContentService.ts';
 import { recordContentAsset, resolveContentBranch } from './contentAssets.service.ts';
-import { canonicalizeMany, type ResolveContext } from './contentDelivery.service.ts';
+import {
+  canonicalizeMany,
+  fetchContentText,
+  textReadBudget,
+  type ResolveContext,
+} from './contentDelivery.service.ts';
 import {
   dedupeMergedTreeIds,
   indexResolutions,
@@ -73,6 +78,9 @@ interface BlockNode {
   [key: string]: unknown;
 }
 
+/** Singleton preview branch per page: `preview/<content_path>`. */
+export const PAGE_PREVIEW_BRANCH_PREFIX = 'preview/';
+
 // ─── Repo resolution ─────────────────────────────────────────────────────────
 
 function contentRepoFor(page: PageWithContentRepo) {
@@ -98,12 +106,26 @@ function contentRepoFor(page: PageWithContentRepo) {
  *   reads that will be used as expectedSha MUST pass true).
  * @param options.ref - Git ref (branch/sha) to read from — e.g. the page's
  *   preview branch. Ref-bearing reads always bypass the cache.
+ * @param options.viaWorker - Read by SHA through the delivery layer
+ *   (`fetchContentText`) rather than straight from GitHub. For RENDER reads: a
+ *   save is visible the moment it returns, and a page view costs no GitHub call
+ *   at all. Ignored when `ref` is set — a preview branch has no map rows to
+ *   sign against, which is also why the editor's own load leaves this off.
  */
 export async function loadPageContent(
   page: PageWithContentRepo,
-  { skipCache = false, ref }: { skipCache?: boolean; ref?: string } = {}
+  {
+    skipCache = false,
+    ref,
+    viaWorker = false,
+  }: { skipCache?: boolean; ref?: string; viaWorker?: boolean } = {}
 ): Promise<PageContentResult> {
   const { gitOrganization, repo } = contentRepoFor(page);
+
+  if (viaWorker && !ref) {
+    const viaMap = await loadPageContentViaWorker(page);
+    if (viaMap) return viaMap;
+  }
 
   // Try JSON first (BlockNote format)
   try {
@@ -169,6 +191,58 @@ export async function loadPageContent(
   }
 
   return { format: 'none', blocks: null, coverImage: null, sha: null };
+}
+
+/**
+ * The map-first form of the load above: same precedence, same shapes.
+ *
+ * Null means "the delivery layer had nothing to say" — the classroom is not
+ * opted in, the deployment cannot sign, or the map has no row for either file.
+ * The caller then runs its ordinary GitHub read, so this is purely an
+ * accelerator that can never be the reason a page fails to load.
+ *
+ * `workerOnly`, and it matters: `fetchContentText` would otherwise run its own
+ * API-then-CDN fallback, and the caller's GitHub read is sitting right behind
+ * this call — so every map miss would pay TWO contents-API reads and a CDN
+ * fetch to answer one page. The caller's read is also the better of the two:
+ * it carries the full `gitOrganization` record, where the fallback can only
+ * pass a login and re-resolve it as GitHub.
+ */
+async function loadPageContentViaWorker(
+  page: PageWithContentRepo
+): Promise<PageContentResult | null> {
+  const ctx = pageResolveContext(page);
+  if (!ctx) return null;
+
+  // One circuit for both probes: if the Worker is unreachable, the second probe
+  // must not pay the timeout again to learn the same thing.
+  const budget = textReadBudget();
+  const opts = { label: 'page', fallback: 'none', budget } as const;
+  const json = await fetchContentText(ctx, `${page.content_path}/content.json`, opts);
+  if (json) {
+    try {
+      const parsed = JSON.parse(json.text);
+      // Two stored shapes: the `{ blocks, coverImage? }` wrapper, and a bare
+      // blocks array from before the wrapper existed.
+      if (parsed && !Array.isArray(parsed) && Array.isArray(parsed.blocks)) {
+        return {
+          format: 'json',
+          blocks: parsed.blocks,
+          coverImage: parsed.coverImage || null,
+          sha: json.sha,
+        };
+      }
+      return { format: 'json', blocks: parsed, coverImage: null, sha: json.sha };
+    } catch {
+      // Malformed JSON falls through to the HTML probe, exactly as the GitHub
+      // path does — a corrupt content.json must not hide a legacy index.html.
+    }
+  }
+
+  const html = await fetchContentText(ctx, `${page.content_path}/index.html`, opts);
+  if (html) return { format: 'html', blocks: html.text, coverImage: null, sha: html.sha };
+
+  return null;
 }
 
 // ─── Canonicalize on save ────────────────────────────────────────────────────
@@ -335,14 +409,59 @@ export async function savePageContent(
     wrapper.coverImage = coverImage;
   }
 
-  return ContentService.put({
+  const content = JSON.stringify(wrapper, null, 2);
+  const result = await ContentService.put({
     gitOrganization,
     repo,
     path,
-    content: JSON.stringify(wrapper, null, 2),
+    content,
     message: message ?? `Update page: ${page.title}`,
     ...(expectedSha ? { expectedSha } : {}),
     ...(branch ? { branch } : {}),
+  });
+
+  // Write-through: `content.json` is READ through the map now (see
+  // `fetchContentText`), so a row that is one save behind is not a stale cache,
+  // it is the previous version of the page on a student's screen. The contents
+  // API just told us the new blob sha; recording it here is what makes the save
+  // visible the moment it returns, rather than when the push webhook lands.
+  //
+  // Default branch only. A preview branch is not in the map, and recording its
+  // sha would publish an unaccepted draft to every reader.
+  //
+  // The test is on the PREFIX, not on `branch` being absent, and deliberately
+  // so — it matches `saveDeck`'s. No caller passes `branch: 'main'` today, but
+  // one that did would otherwise write the default branch and silently lose its
+  // map row, which is exactly the stale read this path exists to close.
+  if (!branch || !branch.startsWith(PAGE_PREVIEW_BRANCH_PREFIX)) {
+    await recordPageFile(page, path, result.sha, content);
+  }
+
+  return result;
+}
+
+/**
+ * Put a just-committed page file into the asset map.
+ *
+ * Never throws — `recordContentAsset` swallows its own failures, and this adds
+ * the one branch it cannot: a page assembled without its classroom id has
+ * nothing to key a row on. The commit still stands; the next sync picks it up.
+ */
+async function recordPageFile(
+  page: PageWithContentRepo,
+  path: string,
+  sha: string,
+  content?: string
+): Promise<void> {
+  const classroomId = (page.classroom as { id?: unknown }).id;
+  if (typeof classroomId !== 'string') return;
+  await recordContentAsset(classroomId, {
+    path,
+    sha,
+    // The real byte length, but only where the writer actually has the bytes.
+    // A row is a cache of what the repo holds; handing it a size it does not
+    // know would overwrite a good one an earlier sync had measured.
+    ...(content === undefined ? {} : { size: Buffer.byteLength(content) }),
   });
 }
 
@@ -842,7 +961,7 @@ export function applyBlockOps(
 
 /** The singleton preview branch for a content path (e.g. `preview/pages/syllabus`). */
 export function previewBranchName(contentPath: string): string {
-  return `preview/${contentPath}`;
+  return `${PAGE_PREVIEW_BRANCH_PREFIX}${contentPath}`;
 }
 
 export interface PreviewStatus {
@@ -1054,6 +1173,14 @@ export async function acceptPreview(page: PageWithContentRepo): Promise<AcceptPr
         error instanceof Error ? error.message : String(error)
       );
     }
+
+    // Write-through, same as an ordinary save. A git-level merge produces a
+    // commit nobody in this process wrote, so there is no put() result to take
+    // a sha from — but the read above already fetched it at the merge commit,
+    // which is the same value. Without this, accepting a preview would publish
+    // content the read side keeps serving the pre-accept version of until the
+    // webhook lands.
+    if (newSha) await recordPageFile(page, path, newSha);
 
     // Concurrent-stacking guard: a stacking apply may have committed to the
     // preview branch AFTER the merge snapshot GitHub used. If the branch now

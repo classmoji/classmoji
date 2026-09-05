@@ -16,8 +16,11 @@ describe('content type mapping', () => {
     ['webp', 'image/webp'],
     ['avif', 'image/avif'],
     ['svg', 'image/svg+xml'],
+    ['html', 'text/html; charset=utf-8'],
+    ['htm', 'text/html; charset=utf-8'],
     ['css', 'text/css; charset=utf-8'],
     ['js', 'text/javascript; charset=utf-8'],
+    ['mjs', 'text/javascript; charset=utf-8'],
     ['woff', 'font/woff'],
     ['woff2', 'font/woff2'],
     ['ttf', 'font/ttf'],
@@ -39,6 +42,14 @@ describe('content type mapping', () => {
 
   it('is case-insensitive', () => {
     expect(contentTypeForExtension('PNG')).toBe('image/png');
+  });
+
+  it('gives every text type an explicit charset', () => {
+    // Without one a browser falls back to its own locale default, and a deck's
+    // smart quotes come out as mojibake on machines nobody tests on.
+    for (const ext of ['html', 'htm', 'css', 'js', 'mjs', 'json', 'txt', 'md']) {
+      expect(contentTypeForExtension(ext)).toMatch(/; charset=utf-8$/);
+    }
   });
 });
 
@@ -63,7 +74,10 @@ describe('isRasterExtension', () => {
     for (const ext of ['png', 'jpg', 'jpeg', 'webp', 'avif', 'gif']) {
       expect(isRasterExtension(ext)).toBe(true);
     }
-    for (const ext of ['svg', 'pdf', 'css', 'mp4']) {
+    // svg is in this list on purpose: it IS an image, but a
+    // resolution-independent one, so rasterizing it to a `w=` rung is a
+    // downgrade rather than a variant. Text never reaches a transform at all.
+    for (const ext of ['svg', 'pdf', 'css', 'mp4', 'html', 'json', 'md', 'woff2']) {
       expect(isRasterExtension(ext)).toBe(false);
     }
   });

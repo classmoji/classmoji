@@ -37,6 +37,20 @@ vi.mock('../contentAssets.service.ts', () => ({
   resolveContentBranch: (...args: unknown[]) => resolveContentBranchMock(...args),
 }));
 
+// The map-first read (`viaWorker`). Mocked at the module seam so this suite
+// stays about page-content shapes; contentDelivery.text.test.ts owns the read
+// itself. `canonicalizeMany` is passed through unchanged — the save path calls
+// it and this suite is not testing canonicalization.
+const fetchContentTextMock = vi.fn();
+vi.mock('../contentDelivery.service.ts', () => ({
+  fetchContentText: (...args: unknown[]) => fetchContentTextMock(...args),
+  // Real, not a stub: the two probes sharing ONE budget object is the thing
+  // being asserted, and a mock that handed out a fresh object each call would
+  // make that assertion vacuous.
+  textReadBudget: () => ({ workerUnavailable: false }),
+  canonicalizeMany: async (_ctx: unknown, refs: string[]) => new Map(refs.map(r => [r, r])),
+}));
+
 const {
   loadPageContent,
   savePageContent,
@@ -253,6 +267,163 @@ describe('pageContent.savePageContent', () => {
     expect(arg.content).toBe(
       JSON.stringify({ blocks }, null, 2) // 2-space pretty wrapper, null cover omitted
     );
+  });
+});
+
+// ─── loadPageContent via the delivery layer ──────────────────────────────────
+
+describe('pageContent.loadPageContent viaWorker', () => {
+  // The map-first read only has a context to work with when the page carries
+  // its classroom id and repo — the resolver's own requirement.
+  const keyedPage = {
+    ...page,
+    classroom: { ...page.classroom, id: '3f2504e0-4f89-41d3-9a0c-0305e82c3301' },
+  };
+
+  beforeEach(() => {
+    fetchContentTextMock.mockResolvedValue(null);
+  });
+
+  it('reads content.json through the map, and never touches GitHub on a hit', async () => {
+    // The whole point: a page view costs no GitHub call, and the sha the map
+    // signed is the sha the reader gets.
+    fetchContentTextMock.mockResolvedValueOnce({
+      text: JSON.stringify({ blocks: [{ id: 'b1' }], coverImage: cover }),
+      sha: 'map-sha',
+      source: 'worker',
+    });
+
+    const result = await loadPageContent(keyedPage, { viaWorker: true });
+
+    expect(result).toEqual({
+      format: 'json',
+      blocks: [{ id: 'b1' }],
+      coverImage: cover,
+      sha: 'map-sha',
+    });
+    expect(getContentMock).not.toHaveBeenCalled();
+  });
+
+  it('falls through to index.html for a legacy page', async () => {
+    fetchContentTextMock
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce({ text: '<h1>Legacy</h1>', sha: 'html-sha', source: 'worker' });
+
+    const result = await loadPageContent(keyedPage, { viaWorker: true });
+
+    expect(result).toEqual({
+      format: 'html',
+      blocks: '<h1>Legacy</h1>',
+      coverImage: null,
+      sha: 'html-sha',
+    });
+  });
+
+  it('falls back to the GitHub read when the map has nothing', async () => {
+    // The layer is an accelerator, never the reason a page fails to load.
+    getContentMock.mockResolvedValueOnce({
+      content: JSON.stringify({ blocks: [], coverImage: null }),
+      sha: 'github-sha',
+    });
+
+    const result = await loadPageContent(keyedPage, { viaWorker: true });
+
+    expect(result.sha).toBe('github-sha');
+  });
+
+  it('asks the map only, so a miss does not read GitHub twice', async () => {
+    // `fetchContentText` has its own API-then-CDN ladder, and the caller's own
+    // GitHub read is sitting right behind this one — without fallback:'none'
+    // every map miss would pay two contents-API reads and a CDN fetch for one
+    // page. Both probes also share one circuit breaker, so an unreachable
+    // Worker costs one timeout for the render rather than one per file.
+    getContentMock.mockResolvedValue(null);
+
+    await loadPageContent(keyedPage, { viaWorker: true });
+
+    for (const call of fetchContentTextMock.mock.calls) {
+      expect(call[2]).toMatchObject({ fallback: 'none' });
+    }
+    // content.json + index.html, from the caller's read — not four.
+    expect(getContentMock).toHaveBeenCalledTimes(2);
+    // One budget object, shared by both probes.
+    const budgets = fetchContentTextMock.mock.calls.map(
+      call => (call[2] as { budget: unknown }).budget
+    );
+    expect(budgets[0]).toBe(budgets[1]);
+  });
+
+  it('is ignored for a preview-branch read', async () => {
+    // Preview branches have no map rows at all; signing against one would serve
+    // main's bytes under a preview URL.
+    getContentMock.mockResolvedValueOnce({ content: '{"blocks":[]}', sha: 'branch-sha' });
+
+    await loadPageContent(keyedPage, { viaWorker: true, ref: 'preview/pages/syllabus' });
+
+    expect(fetchContentTextMock).not.toHaveBeenCalled();
+    expect(callArg(getContentMock).ref).toBe('preview/pages/syllabus');
+  });
+});
+
+// ─── savePageContent write-through ───────────────────────────────────────────
+
+describe('pageContent.savePageContent write-through', () => {
+  const blocks = [{ id: 'b1', type: 'paragraph', content: [] }];
+  // The fixture above deliberately has no classroom id (several callers have
+  // none); this one does, because the map row is keyed on it.
+  const keyedPage = { ...page, classroom: { ...page.classroom, id: 'class-1' } };
+
+  beforeEach(() => {
+    recordContentAssetMock.mockResolvedValue(true);
+  });
+
+  it('records content.json at the sha the commit returned', async () => {
+    // This is what makes a save VISIBLE. content.json is read through the map
+    // now, so a row one save behind is the previous version of the page on a
+    // student's screen — not merely a stale cache.
+    await savePageContent(keyedPage, blocks, { coverImage: null });
+
+    expect(recordContentAssetMock).toHaveBeenCalledWith('class-1', {
+      path: 'pages/syllabus/content.json',
+      sha: 'new-sha',
+      // The real byte length of what was committed — a writer that has the
+      // bytes must not hand the map a size it made up, because `size ?? 0`
+      // would overwrite one an earlier sync actually measured.
+      size: Buffer.byteLength(callArg(putMock).content as string),
+    });
+  });
+
+  it('still records a save aimed explicitly at the default branch', async () => {
+    // The guard tests the `preview/` prefix rather than the absence of a
+    // branch: a caller naming main would otherwise write it and silently lose
+    // the map row, which is the stale read this whole path exists to close.
+    getContentMock.mockResolvedValueOnce(null);
+
+    await savePageContent(keyedPage, blocks, { branch: 'main' });
+
+    expect(recordContentAssetMock).toHaveBeenCalledWith(
+      'class-1',
+      expect.objectContaining({ path: 'pages/syllabus/content.json', sha: 'new-sha' })
+    );
+  });
+
+  it('records nothing for a preview-branch save', async () => {
+    // A preview branch is not in the map. Recording its sha would publish an
+    // unaccepted draft to every reader.
+    getContentMock.mockResolvedValueOnce(null);
+
+    await savePageContent(keyedPage, blocks, { branch: 'preview/pages/syllabus' });
+
+    expect(recordContentAssetMock).not.toHaveBeenCalled();
+  });
+
+  it('still returns the save when the map write cannot be keyed', async () => {
+    // A page assembled without its classroom id has nothing to key a row on.
+    // The commit stands; the next sync picks it up.
+    const result = await savePageContent(page, blocks, { coverImage: null });
+
+    expect(result).toEqual({ sha: 'new-sha', commit: 'commit-1' });
+    expect(recordContentAssetMock).not.toHaveBeenCalled();
   });
 });
 
