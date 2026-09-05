@@ -21,11 +21,25 @@ a revocation: URLs signed under the old version keep verifying until they expire
 
 ## Tiers
 
-| Tier       | Expiry                        | Grace on verify | Cache-Control                          |
-| ---------- | ----------------------------- | --------------- | -------------------------------------- |
-| `public`   | end of the current 30d bucket | 6h              | `public, max-age={exp-now}, immutable` |
-| `enrolled` | end of the current 7d bucket  | 6h              | `public, max-age={exp-now}, immutable` |
-| `draft`    | exact `now + 4h`              | 5m              | `no-store`                             |
+A tier is named for its window because that is all it decides. It is **not**
+access control — the signature is; a tier only sets how long an already-minted
+URL lives and whether a cache may keep it.
+
+| Tier    | Expiry                        | Grace on verify | Cache-Control                          |
+| ------- | ----------------------------- | --------------- | -------------------------------------- |
+| `month` | end of the current 30d bucket | 6h              | `public, max-age={exp-now}, immutable` |
+| `week`  | end of the current 7d bucket  | 6h              | `public, max-age={exp-now}, immutable` |
+| `edit`  | exact `now + 4h`              | 5m              | `no-store`                             |
+
+The caller picks the tier; this package only validates that `p` is one of the
+three. In the apps that choice follows the content's visibility — `edit` for a
+viewer who can edit, `month` for content that is public, `week` otherwise — so
+the same file rendered on two different surfaces mints the same URL.
+
+**Renamed 2026-09-05.** These were `public`, `enrolled` and `draft`, names that
+read like permissions they never were. `p` is a field of the canonical string,
+so every URL minted before that date now fails `bad-signature`. Nothing is in
+production; only staging ever held one.
 
 Bucket boundaries are staggered per classroom so the fleet does not cold-fill in
 unison:
@@ -42,7 +56,7 @@ every viewer back at once; grace keeps the outgoing bucket's URLs serving
 meanwhile.
 
 Grace covers a page rendered just before rollover and still sitting in a cache;
-for `draft` it covers clock skew only. An expired-beyond-grace signature fails
+for `edit` it covers clock skew only. An expired-beyond-grace signature fails
 with `expired`. Nothing validates that `exp` is not further in the future than the
 tier could have produced. Past `exp` but inside grace, `cacheControlFor` returns
 `public, max-age=60` rather than an immutable zero TTL.
@@ -110,7 +124,7 @@ Minting (Node app):
 ```ts
 import { signBlobUrl, signSrcSet, signThemeBase } from '@classmoji/content-signing';
 
-const ctx = { master: env.CONTENT_MASTER_SECRET, classroomId, keyVersion, tier: 'enrolled' };
+const ctx = { master: env.CONTENT_MASTER_SECRET, classroomId, keyVersion, tier: 'week' };
 
 const url = await signBlobUrl(origin, ctx, { sha, ext: 'png' });
 const { src, srcset } = await signSrcSet(origin, ctx, { sha, ext: 'png', sourceWidth: 1600 });

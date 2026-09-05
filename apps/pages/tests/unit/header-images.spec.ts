@@ -16,7 +16,7 @@ import { test, expect } from '@playwright/test';
 import { cssUrl, headerImageRefs, withResolvedHeaderImages } from '../../app/utils/headerImages.ts';
 
 const REF = 'pages/lab-1/assets/hero.png';
-const SIGNED = 'https://content.classmoji.io/c/abc/blob/aaa.png?p=enrolled&sig=x';
+const SIGNED = 'https://content.classmoji.io/c/abc/blob/aaa.png?p=week&sig=x';
 
 test.describe('headerImageRefs', () => {
   test('collects each reference once and skips rows without one', () => {
@@ -102,7 +102,7 @@ test.describe('cssUrl', () => {
   });
 
   test('leaves an ordinary signed URL alone', () => {
-    const signed = 'https://content.classmoji.io/c/abc/blob/aaa.png?p=public&sig=x';
+    const signed = 'https://content.classmoji.io/c/abc/blob/aaa.png?p=month&sig=x';
     expect(cssUrl(signed)).toBe(`url("${signed}")`);
   });
 });

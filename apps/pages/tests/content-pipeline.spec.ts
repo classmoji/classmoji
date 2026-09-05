@@ -82,7 +82,7 @@ const env = targets();
  * No trace, no video, for this pack specifically.
  *
  * Both capture full request URLs, and every URL here is a signed credential
- * good for up to a month on the public tier. `retries: 0` happens to mean the
+ * good for up to a month on the `month` tier. `retries: 0` happens to mean the
  * config's `on-first-retry` never fires today, but that is a coincidence of a
  * setting in another file — one `--retries=1` on a command line and the pack
  * starts writing signatures into an artifact CI uploads. Turned off here so it
@@ -388,7 +388,7 @@ async function withFixtureImage(
 // ─────────────────────────────────────────────────────────────────────────────
 
 test.describe('E2E CD — pages, the editor', () => {
-  test('an uploaded raster image renders as a signed draft src with a three-rung srcset', async ({
+  test('an uploaded raster image renders as a signed `edit` src with a three-rung srcset', async ({
     page,
   }) => {
     requireDelivery();
@@ -429,8 +429,8 @@ test.describe('E2E CD — pages, the editor', () => {
       displaySigned,
       `displayUrl is not signed: ${describeSignedUrl(uploaded.displayUrl ?? '')}`
     ).not.toBeNull();
-    // Staff uploading into an editor is the draft tier by definition.
-    expect(displaySigned?.tier).toBe('draft');
+    // Staff uploading into an editor is the `edit` tier by definition.
+    expect(displaySigned?.tier).toBe('edit');
 
     // The asset map learned about the file as part of the upload — this is what
     // makes the very first render resolvable rather than a `/missing/`.
@@ -473,12 +473,12 @@ test.describe('E2E CD — pages, the editor', () => {
     // `previewWidth` rather than the generic viewer constant.
     expectResponsive(rendered, {
       classroomId: room.id,
-      tier: 'draft',
+      tier: 'edit',
       sizes: expectedSizesFor(FIXTURE_PREVIEW_WIDTH),
     });
 
     // Exactly one network request for this image. This is a safe count only
-    // because the draft tier is served `no-store` — on a cacheable tier a
+    // because the `edit` tier is served `no-store` — on a cacheable tier a
     // second navigation legitimately produces zero requests, and asserting
     // "exactly one" there would be asserting that the cache had missed.
     // candidate out of the set; a page that fetched two is a page that painted
@@ -629,7 +629,7 @@ test.describe('E2E CD — pages, the editor', () => {
             git_organization: { login: room.orgLogin },
             content_delivery_enabled: room.content_delivery_enabled,
           },
-          tier: 'draft',
+          tier: 'edit',
         },
         uploaded.path
       )
@@ -639,7 +639,7 @@ test.describe('E2E CD — pages, the editor', () => {
 });
 
 test.describe('E2E CD — pages, what each audience sees', () => {
-  test('a signed-in member gets the enrolled tier on a private page', async ({ page }) => {
+  test('a signed-in member gets the `week` tier on a private page', async ({ page }) => {
     requireDelivery();
     const room = requireClassroom();
     test.skip(authSkipReason() !== null, authSkipReason() ?? '');
@@ -664,10 +664,10 @@ test.describe('E2E CD — pages, what each audience sees', () => {
 
     // Staff puts the image there; a student looks at it. Two sessions in one
     // test because the tier is a property of the VIEWER, and the only way to
-    // observe `enrolled` is to be someone who cannot edit.
+    // observe `week` is to be someone who cannot edit.
     await loginAs(page, 'owner', `/${env.classroomSlug}`);
     markScenarioRan();
-    const fixture = await withFixtureImage(page, toTestPage(privatePage, room.id), 'enrolled');
+    const fixture = await withFixtureImage(page, toTestPage(privatePage, room.id), 'week');
 
     await loginAs(page, 'student', `/${env.classroomSlug}/${privatePage.id}`);
 
@@ -692,7 +692,7 @@ test.describe('E2E CD — pages, what each audience sees', () => {
     ).toBeDefined();
 
     for (const image of signedImages) {
-      expect(image.signed?.tier, describeSignedUrl(image.src)).toBe('enrolled');
+      expect(image.signed?.tier, describeSignedUrl(image.src)).toBe('week');
     }
     expect(log.missing()).toEqual([]);
     expect(describeUrls(log.legacy()), 'a delivered page must not also fetch legacy refs').toEqual(
@@ -706,7 +706,7 @@ test.describe('E2E CD — pages, what each audience sees', () => {
    *
    * A class site is anonymous and server-rendered, so it needs neither a
    * session nor a database — which is exactly the pair staging cannot give
-   * this pack. Against staging the site already carries public-tier images, so
+   * this pack. Against staging the site already carries `month`-tier images, so
    * the scenario reads what is there; locally it has to make one first,
    * because a freshly seeded classroom has no public site and no pictures.
    */
@@ -714,17 +714,31 @@ test.describe('E2E CD — pages, what each audience sees', () => {
    * The signed-in half of the staging story, and the only thing
    * `E2E_SESSION_COOKIE` is for.
    *
-   * With a member's token the pack can open a page the public site never shows
-   * and check the one property that distinguishes a member render from an
-   * anonymous one: the tier is NOT `public`. It cannot be more specific than
-   * that without knowing the token's role — a student's render is `enrolled`,
-   * a staff member's is `draft`, and both are correct — so the assertion is the
-   * boundary rather than the exact value. The exact values are pinned by the
-   * local scenarios, which know who they signed in as.
+   * This scenario knows two things it cannot look up: it does not know the
+   * token's ROLE (staff render `edit`, a member renders a read tier), and
+   * `discoverMemberContentUrl` takes the first content link on the index, so it
+   * does not know the page's VISIBILITY either (a public page correctly mints
+   * `month`, exactly like the class site). Every combination is legitimate, so
+   * there is no tier this render must avoid.
+   *
+   * It used to assert `not public`, which was true only while the tier was
+   * chosen by SURFACE. Under the visibility rule that assertion fails on a
+   * perfectly correct render of a public page — so what is left is the part
+   * that is true for every role and every visibility: the URLs are signed,
+   * bound to the delivery origin, and carry a tier this deployment still
+   * recognises. That last clause is not filler right after a rename: a surface
+   * left minting a retired tier name shows up here as an unknown `p`.
+   *
+   * The exact per-role, per-visibility values are pinned by the local
+   * scenarios, which know who they signed in as and what they are looking at,
+   * and by the `tierFor` unit tests.
    */
-  test('a signed-in member on staging gets a non-public tier', async ({ page, context }) => {
+  test('a signed-in member on staging gets a signed, origin-bound URL', async ({
+    page,
+    context,
+  }) => {
     requireDelivery();
-    test.skip(e2eTarget() !== 'staging', 'this is the staging form of the enrolled-tier check');
+    test.skip(e2eTarget() !== 'staging', 'this is the staging form of the signed-render check');
     test.skip(authSkipReason() !== null, authSkipReason() ?? '');
 
     const applied = await applyStagingSession(context);
@@ -749,12 +763,12 @@ test.describe('E2E CD — pages, what each audience sees', () => {
       expect(image.signed?.origin).toBe(env.deliveryOrigin);
       expect(
         image.signed?.tier,
-        `a member-facing render must not use the public tier: ${describeSignedUrl(image.src)}`
-      ).not.toBe('public');
+        `unknown tier — a surface is minting a retired name: ${describeSignedUrl(image.src)}`
+      ).toMatch(/^(edit|week|month)$/);
     }
   });
 
-  test('a public class site serves the public tier, with its ladder', async ({ request }) => {
+  test('a public class site serves the `month` tier, with its ladder', async ({ request }) => {
     requireDelivery();
     test.skip(e2eTarget() !== 'staging', 'the local form of this scenario is the next test');
 
@@ -779,9 +793,9 @@ test.describe('E2E CD — pages, what each audience sees', () => {
 
     for (const image of images) {
       expect(image.signed?.origin).toBe(env.deliveryOrigin);
-      // Anonymous readers, so `public` and nothing else. A `draft` or
-      // `enrolled` URL on an anonymous page would be a tier leak.
-      expect(image.signed?.tier, describeSignedUrl(image.src)).toBe('public');
+      // A public page on an anonymous surface, so `month` and nothing else.
+      // An `edit` or `week` URL here would be a lifetime mismatch.
+      expect(image.signed?.tier, describeSignedUrl(image.src)).toBe('month');
       expect(image.signed?.w, 'the fallback src carries no width').toBeNull();
       if (image.candidates.length > 0) {
         expect(image.candidates.map(candidate => candidate.width)).toEqual([...EXPECTED_WIDTHS]);
@@ -798,7 +812,7 @@ test.describe('E2E CD — pages, what each audience sees', () => {
     expect(html).not.toMatch(/\/c\/[0-9a-f-]{36}\/missing\//i);
   });
 
-  test('a public class-site page is served at the public tier, with its ladder', async ({
+  test('one public page mints one URL, in the app and on the class site', async ({
     page,
     request,
   }) => {
@@ -825,7 +839,7 @@ test.describe('E2E CD — pages, what each audience sees', () => {
 
     await loginAs(page, 'owner', `/${env.classroomSlug}/${publicPage.id}`);
     markScenarioRan();
-    const fixture = await withFixtureImage(page, toTestPage(publicPage, room.id), 'public');
+    const fixture = await withFixtureImage(page, toTestPage(publicPage, room.id), 'month');
 
     // A classroom holds at most one site, so this may displace an existing row.
     // Whatever was there is put back in the `finally`.
@@ -862,7 +876,7 @@ test.describe('E2E CD — pages, what each audience sees', () => {
       // Reached by Host header, not by hostname: there is no DNS for
       // `{subdomain}.{base}` locally. The site tree is script-less by design,
       // so the server's own markup is the whole story — which is precisely why
-      // this is the only place the `public` tier is observable.
+      // this is the only place the class-site render is observable.
       const response = await fetchUntilHtml(
         async url => {
           const result = await request.get(url, {
@@ -885,11 +899,47 @@ test.describe('E2E CD — pages, what each audience sees', () => {
       expect(ours, 'the fixture image should be on the public page').toBeDefined();
       if (!ours) return;
 
-      expect(ours.signed?.tier, describeSignedUrl(ours.src)).toBe('public');
+      expect(ours.signed?.tier, describeSignedUrl(ours.src)).toBe('month');
       // The class site sizes from the block's own `previewWidth` exactly as the
       // editor does — the hint follows the BLOCK, not the surface.
       expect(ours.sizes).toBe(expectedSizesFor(FIXTURE_PREVIEW_WIDTH));
       expect(ours.candidates.map(candidate => candidate.width)).toEqual([...EXPECTED_WIDTHS]);
+
+      // The point of tiering by VISIBILITY: this same public page, read in the
+      // pages app by a member who cannot edit, mints the SAME URL — same tier,
+      // same expiry bucket, same signature, byte for byte. It used to mint
+      // `enrolled` here and `public` on the site, which is two cache entries
+      // and two lifetimes for one public file.
+      //
+      // A student rather than the owner, because an owner can edit and would
+      // (correctly) get `edit`. Byte-equality holds because both reads land in
+      // the same 30-day bucket for this classroom. Two windows could split
+      // them, and both are negligible here: a read that straddled a bucket
+      // boundary (the bucket is 30 days wide), and one where the two reads fall
+      // on either side of MIN_REMAINING_SECONDS — the last hour of a bucket,
+      // where minting rolls forward to the next one. Seconds apart, 30 days of
+      // bucket, so neither is a flake worth guarding against.
+      await loginAs(page, 'student', `/${env.classroomSlug}/${publicPage.id}`);
+      const inApp = await reloadUntilImages(
+        page,
+        `/${env.classroomSlug}/${publicPage.id}`,
+        images => images.some(image => image.signed?.sha === fixture.sha),
+        { attempts: 8, delayMs: 10_000 }
+      );
+      const appOurs = inApp.find(image => image.signed?.sha === fixture.sha);
+      expect(
+        appOurs,
+        `the student should see the fixture image in the app; saw ${
+          inApp.map(image => describeSignedUrl(image.src)).join(', ') || '<no images>'
+        }`
+      ).toBeDefined();
+      if (appOurs) {
+        expect(appOurs.signed?.tier, describeSignedUrl(appOurs.src)).toBe('month');
+        expect(
+          appOurs.src,
+          'the app viewer and the class site must mint the identical URL for one public image'
+        ).toBe(ours.src);
+      }
 
       // No legacy escape hatch left in the markup, and nothing unresolvable.
       expect(html).not.toContain('raw.githubusercontent.com');
@@ -967,7 +1017,7 @@ test.describe('E2E CD — pages, when a file goes away', () => {
           git_organization: { login: room.orgLogin },
           content_delivery_enabled: room.content_delivery_enabled,
         },
-        tier: 'enrolled',
+        tier: 'week',
       },
       uploaded.path
     );
@@ -1175,7 +1225,7 @@ test.describe('E2E CD — the Worker, directly', () => {
 
     // Against a deployed target there is no database and no session, so the
     // signature comes off the public class site — anonymous, server-rendered,
-    // and already carrying current public-tier URLs. This is the whole reason
+    // and already carrying current `month`-tier URLs. This is the whole reason
     // the Worker's contract is checkable against staging at all.
     if (e2eTarget() === 'staging') {
       try {

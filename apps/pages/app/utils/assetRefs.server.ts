@@ -5,7 +5,7 @@ import { ClassmojiService } from './db.server.ts';
  * Page-side asset resolution: the policy half of the two-pass rewrite.
  *
  * The tree walk itself lives in `@classmoji/utils` (pure, unit-tested); what is
- * here is everything that needs a classroom, a viewer tier, and the delivery
+ * here is everything that needs a classroom, a signature lifetime, and the delivery
  * service — building a resolve context, batching a document's references into
  * one resolve, and canonicalizing on the way back in.
  */
@@ -27,7 +27,7 @@ export type AssetResolveContext = {
     content_delivery_enabled: boolean;
     git_organization: { login: string };
   };
-  tier: 'public' | 'enrolled' | 'draft';
+  tier: 'edit' | 'week' | 'month';
 };
 
 /**
@@ -71,7 +71,7 @@ export function assetResolveContext(
  * read the clock twice: expiries are bucketed, so two passes that straddle a
  * bucket boundary mint different URLs for the same file, and every srcset would
  * be silently dropped for exactly the viewers on the shortest bucket — staff,
- * on the draft tier. `resolveDelivery` mints both under one `now`.
+ * on the `edit` tier. `resolveDelivery` mints both under one `now`.
  *
  * Empty (never throws, never rewrites the blocks) when the classroom is
  * unservable or the delivery layer is off, so the client falls through to the

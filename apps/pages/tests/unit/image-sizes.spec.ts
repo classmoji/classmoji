@@ -24,7 +24,7 @@ import {
 } from '../../app/utils/imageSizes.ts';
 
 const REF = 'pages/lab-1/assets/hero.png';
-const SIGNED = 'https://content.classmoji.io/c/abc/blob/aaa.png?p=enrolled&sig=x';
+const SIGNED = 'https://content.classmoji.io/c/abc/blob/aaa.png?p=week&sig=x';
 const LADDER = `${SIGNED}&w=800&fmt=auto 800w, ${SIGNED}&w=1600&fmt=auto 1600w`;
 
 test.describe('imageSizesFor', () => {

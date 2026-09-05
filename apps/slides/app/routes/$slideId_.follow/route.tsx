@@ -6,7 +6,7 @@ import { SandpackRenderer } from '@classmoji/ui-components/sandpack';
 import RevealPresenter from '~/components/RevealPresenter';
 import {
   deckDeliveryContext,
-  followDeckAccess,
+  deckAccessFor,
   isThumbnailRequest,
   readDeckText,
   resolveDeckDelivery,
@@ -84,17 +84,19 @@ export const loader = async ({
   const contentResult = await readDeckText(slide, gitOrgLogin, repo, filePath, 'follow');
 
   if (contentResult) {
-    // Same read-side delivery pass the deck viewer runs. A follower is usually
-    // a student or a shareCode guest, so the tier lands on `enrolled`/`public`
-    // rather than the staff `draft` bucket — `tierFor` decides, not this route.
-    // `followDeckAccess` re-reads this route's THUMBNAIL flag off the URL and
-    // hands it to `deckAccessFor` as `thumbnail` — never as the viewer's
-    // preview-BRANCH flag. It marks the read-only iframe form (the speaker
-    // view's panes), so staff get the long-lived tier there instead of a 4h
-    // `draft` signature that expires part-way through a long lecture.
+    // Same read-side delivery pass the deck viewer runs, but `/follow` is a
+    // READ surface for everyone who opens it — staff included — so
+    // `deckAccessFor` pins `canEdit: false` and the lifetime comes from the
+    // DECK's visibility: `month` for a public deck, `week` for the rest.
+    // `canEdit` is still passed, and still ignored for the tier, because it is
+    // what `assertSlideAccess` answered and this route has no business
+    // rewriting it. The 4h `edit` bucket is unreachable here on purpose: a
+    // lecture that outruns four hours must not 403 a lazily-loaded background
+    // mid-talk, and the speaker view's `/follow?preview=true` panes are the
+    // highest-fanout case of exactly that.
     const { html } = await resolveDeckDelivery(
       contentResult.content,
-      deckDeliveryContext(slide, gitOrgLogin, repo, followDeckAccess(url, { canEdit }, slide))
+      deckDeliveryContext(slide, gitOrgLogin, repo, deckAccessFor('follow', { canEdit }, slide))
     );
     slideContent = html;
 

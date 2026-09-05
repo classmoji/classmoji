@@ -263,7 +263,7 @@ async function loadPageContentViaWorker(
  * lets the route keep its own pass without either of them having to know about
  * the other.
  *
- * The tier is `draft` and it does not matter: canonicalization only ever
+ * The tier is `edit` and it does not matter: canonicalization only ever
  * REMOVES a signature, and it never mints one, so nothing in the context
  * except the classroom id is read.
  */
@@ -287,7 +287,7 @@ function pageResolveContext(page: PageWithContentRepo): ResolveContext | null {
       content_delivery_enabled: classroom.content_delivery_enabled === true,
       git_organization: { login },
     },
-    tier: 'draft',
+    tier: 'edit',
   };
 }
 
@@ -542,10 +542,11 @@ export async function uploadPageAsset(
 }
 
 /**
- * Sign a just-uploaded blob at the draft tier, or null if that is not possible.
+ * Sign a just-uploaded blob at the `edit` tier, or null if that is not possible.
  *
- * Draft because only a writer ever sees this URL, and a writer is by definition
- * looking at unpublished content. Every failure path returns null: an upload
+ * `edit` because only a writer ever sees this URL, and a writer is by definition
+ * looking at content that may be about to change. Every failure path returns
+ * null: an upload
  * that succeeded must not be reported as failed because a URL could not be
  * minted for it.
  *
@@ -584,7 +585,7 @@ async function signUploadedAsset(
         classroomId: classroom.id,
         keyVersion:
           typeof classroom.content_key_version === 'number' ? classroom.content_key_version : 0,
-        tier: 'draft',
+        tier: 'edit',
       },
       { sha, ext: name.slice(dot + 1).toLowerCase() }
     );

@@ -1,5 +1,19 @@
-/** Access tier a signed URL was minted for. */
-export type Tier = 'public' | 'enrolled' | 'draft';
+/**
+ * How long a signed URL lives, named for its window.
+ *
+ * NOT access control — the signature is. A tier only decides the lifetime and
+ * the cacheability of a URL that has already been minted for a viewer who was
+ * allowed to have it:
+ *
+ *   - `edit`  — an exact 4h TTL, 5 minutes of grace, `no-store`. The editor's
+ *               403-and-revalidate flow, and the only tier a writer is in.
+ *   - `week`  — a 7-day bucket, 6h of grace, `immutable`.
+ *   - `month` — a 30-day bucket, 6h of grace, `immutable`.
+ *
+ * Bucketed tiers are staggered per classroom, so every URL minted for one file
+ * inside one bucket is byte-identical and therefore cacheable.
+ */
+export type Tier = 'edit' | 'week' | 'month';
 
 /** Widths the image pipeline is allowed to render. */
 export type TransformWidth = 800 | 1600 | 2560;

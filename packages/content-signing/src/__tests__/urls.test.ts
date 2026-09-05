@@ -40,11 +40,11 @@ describe('canonical strings', () => {
         classroomId: CLASSROOM_A,
         sha: SHA,
         ext: 'png',
-        tier: 'public',
+        tier: 'month',
         keyVersion: 3,
         exp: 1767225600,
       })
-    ).toBe(`cm1|blob|${HOST}|${CLASSROOM_A}|${SHA}|png|public|3|1767225600||`);
+    ).toBe(`cm1|blob|${HOST}|${CLASSROOM_A}|${SHA}|png|month|3|1767225600||`);
 
     expect(
       blobCanonicalString({
@@ -52,12 +52,12 @@ describe('canonical strings', () => {
         classroomId: CLASSROOM_A,
         sha: SHA,
         ext: 'png',
-        tier: 'draft',
+        tier: 'edit',
         keyVersion: 0,
         exp: 1767225600,
         transform: { w: 1600, fmt: 'avif' },
       })
-    ).toBe(`cm1|blob|${HOST}|${CLASSROOM_A}|${SHA}|png|draft|0|1767225600|1600|avif`);
+    ).toBe(`cm1|blob|${HOST}|${CLASSROOM_A}|${SHA}|png|edit|0|1767225600|1600|avif`);
   });
 
   it('pins the theme shape', () => {
@@ -67,22 +67,22 @@ describe('canonical strings', () => {
         classroomId: CLASSROOM_A,
         theme: 'cosmo-dark',
         treeSha: TREE_SHA,
-        tier: 'enrolled',
+        tier: 'week',
         keyVersion: 2,
         exp: 1767225600,
       })
-    ).toBe(`cm1|theme|${HOST}|${CLASSROOM_A}|cosmo-dark|${TREE_SHA}|enrolled|2|1767225600`);
+    ).toBe(`cm1|theme|${HOST}|${CLASSROOM_A}|cosmo-dark|${TREE_SHA}|week|2|1767225600`);
   });
 });
 
 describe('signBlobUrl', () => {
   it('emits the documented shape', async () => {
-    const url = await signBlobUrl(ORIGIN, ctx('public'), { sha: SHA, ext: 'png' });
-    const exp = bucketExpiry('public', CLASSROOM_A, NOW);
+    const url = await signBlobUrl(ORIGIN, ctx('month'), { sha: SHA, ext: 'png' });
+    const exp = bucketExpiry('month', CLASSROOM_A, NOW);
     expect(url.startsWith(`${ORIGIN}/c/${CLASSROOM_A}/blob/${SHA}.png?`)).toBe(true);
 
     const params = new URL(url).searchParams;
-    expect(params.get('p')).toBe('public');
+    expect(params.get('p')).toBe('month');
     expect(params.get('v')).toBe('0');
     expect(params.get('exp')).toBe(String(exp));
     expect(params.get('sig')).toMatch(/^[A-Za-z0-9_-]{43}$/);
@@ -91,7 +91,7 @@ describe('signBlobUrl', () => {
   });
 
   it('carries transform params', async () => {
-    const url = await signBlobUrl(ORIGIN, ctx('enrolled'), {
+    const url = await signBlobUrl(ORIGIN, ctx('week'), {
       sha: SHA,
       ext: 'jpg',
       transform: { w: 2560, fmt: 'webp' },
@@ -102,8 +102,8 @@ describe('signBlobUrl', () => {
   });
 
   it('is byte-identical for every mint inside one bucket', async () => {
-    const first = await signBlobUrl(ORIGIN, ctx('public'), { sha: SHA, ext: 'png' });
-    const later = await signBlobUrl(ORIGIN, ctx('public', { now: NOW + 3600 }), {
+    const first = await signBlobUrl(ORIGIN, ctx('month'), { sha: SHA, ext: 'png' });
+    const later = await signBlobUrl(ORIGIN, ctx('month', { now: NOW + 3600 }), {
       sha: SHA,
       ext: 'png',
     });
@@ -111,26 +111,26 @@ describe('signBlobUrl', () => {
   });
 
   it('trims a trailing slash off the origin', async () => {
-    const url = await signBlobUrl(`${ORIGIN}/`, ctx('public'), { sha: SHA, ext: 'png' });
+    const url = await signBlobUrl(`${ORIGIN}/`, ctx('month'), { sha: SHA, ext: 'png' });
     expect(url.startsWith(`${ORIGIN}/c/`)).toBe(true);
   });
 
   it('rejects malformed refs', async () => {
-    await expect(signBlobUrl(ORIGIN, ctx('public'), { sha: 'nope', ext: 'png' })).rejects.toThrow(
+    await expect(signBlobUrl(ORIGIN, ctx('month'), { sha: 'nope', ext: 'png' })).rejects.toThrow(
       TypeError
     );
-    await expect(signBlobUrl(ORIGIN, ctx('public'), { sha: SHA, ext: 'PNG' })).rejects.toThrow(
+    await expect(signBlobUrl(ORIGIN, ctx('month'), { sha: SHA, ext: 'PNG' })).rejects.toThrow(
       TypeError
     );
     await expect(
       // @ts-expect-error - exercising the runtime guard
-      signBlobUrl(ORIGIN, ctx('public'), { sha: SHA, ext: 'png', transform: { w: 1024 } })
+      signBlobUrl(ORIGIN, ctx('month'), { sha: SHA, ext: 'png', transform: { w: 1024 } })
     ).rejects.toThrow(TypeError);
   });
 
   it('rejects an origin with no host', async () => {
     await expect(
-      signBlobUrl('cdn.classmoji.test', ctx('public'), { sha: SHA, ext: 'png' })
+      signBlobUrl('cdn.classmoji.test', ctx('month'), { sha: SHA, ext: 'png' })
     ).rejects.toThrow(TypeError);
   });
 
@@ -141,7 +141,7 @@ describe('signBlobUrl', () => {
     // FIELD of the canonical string, so a signature for one extension can
     // never serve another.
     for (const ext of ['html', 'json', 'css', 'js', 'md', 'txt', 'svg', 'woff', 'woff2', 'ttf']) {
-      const url = await signBlobUrl(ORIGIN, ctx('enrolled'), { sha: SHA, ext });
+      const url = await signBlobUrl(ORIGIN, ctx('week'), { sha: SHA, ext });
       expect(url.startsWith(`${ORIGIN}/c/${CLASSROOM_A}/blob/${SHA}.${ext}?`)).toBe(true);
       const parsed = parseContentUrl(url);
       expect(parsed).toMatchObject({ kind: 'blob', sha: SHA, ext });
@@ -151,8 +151,8 @@ describe('signBlobUrl', () => {
   it('gives one blob a different signature per extension', async () => {
     // The guarantee behind "never sniff" on the Worker: re-labelling a signed
     // .json as .html is not a URL edit, it is a forgery.
-    const asJson = await signBlobUrl(ORIGIN, ctx('enrolled'), { sha: SHA, ext: 'json' });
-    const asHtml = await signBlobUrl(ORIGIN, ctx('enrolled'), { sha: SHA, ext: 'html' });
+    const asJson = await signBlobUrl(ORIGIN, ctx('week'), { sha: SHA, ext: 'json' });
+    const asHtml = await signBlobUrl(ORIGIN, ctx('week'), { sha: SHA, ext: 'html' });
     expect(new URL(asJson).searchParams.get('sig')).not.toBe(
       new URL(asHtml).searchParams.get('sig')
     );
@@ -161,12 +161,12 @@ describe('signBlobUrl', () => {
   it('rejects a nonsense now or keyVersion at mint', async () => {
     for (const now of [Number.NaN, -1, 1.5, Infinity]) {
       await expect(
-        signBlobUrl(ORIGIN, ctx('public', { now }), { sha: SHA, ext: 'png' })
+        signBlobUrl(ORIGIN, ctx('month', { now }), { sha: SHA, ext: 'png' })
       ).rejects.toThrow(TypeError);
     }
     for (const keyVersion of [-1, 1.5, Number.NaN, Number.MAX_SAFE_INTEGER + 2]) {
       await expect(
-        signBlobUrl(ORIGIN, ctx('public', { keyVersion }), { sha: SHA, ext: 'png' })
+        signBlobUrl(ORIGIN, ctx('month', { keyVersion }), { sha: SHA, ext: 'png' })
       ).rejects.toThrow(TypeError);
     }
   });
@@ -174,11 +174,11 @@ describe('signBlobUrl', () => {
 
 describe('signThemeBase', () => {
   it('puts the policy in the path and ends with a slash', async () => {
-    const base = await signThemeBase(ORIGIN, ctx('enrolled'), {
+    const base = await signThemeBase(ORIGIN, ctx('week'), {
       theme: 'cosmo-dark',
       treeSha: TREE_SHA,
     });
-    const exp = bucketExpiry('enrolled', CLASSROOM_A, NOW);
+    const exp = bucketExpiry('week', CLASSROOM_A, NOW);
     expect(base.endsWith('/')).toBe(true);
 
     const prefix = `${ORIGIN}/c/${CLASSROOM_A}/theme/cosmo-dark/${TREE_SHA}/`;
@@ -186,14 +186,14 @@ describe('signThemeBase', () => {
 
     const policy = base.slice(prefix.length, -1).split('.');
     expect(policy.length).toBe(4);
-    expect(policy[0]).toBe('enrolled');
+    expect(policy[0]).toBe('week');
     expect(policy[1]).toBe('0');
     expect(policy[2]).toBe(String(exp));
     expect(policy[3]).toMatch(/^[A-Za-z0-9_-]{43}$/);
   });
 
   it('authorizes any relative path under the folder', async () => {
-    const base = await signThemeBase(ORIGIN, ctx('public'), {
+    const base = await signThemeBase(ORIGIN, ctx('month'), {
       theme: 'cosmo-dark',
       treeSha: TREE_SHA,
     });
@@ -204,14 +204,14 @@ describe('signThemeBase', () => {
 
   it('rejects malformed refs, including a leading dot in the theme', async () => {
     await expect(
-      signThemeBase(ORIGIN, ctx('public'), { theme: 'Cosmo Dark', treeSha: TREE_SHA })
+      signThemeBase(ORIGIN, ctx('month'), { theme: 'Cosmo Dark', treeSha: TREE_SHA })
     ).rejects.toThrow(TypeError);
     await expect(
-      signThemeBase(ORIGIN, ctx('public'), { theme: 'cosmo', treeSha: 'nope' })
+      signThemeBase(ORIGIN, ctx('month'), { theme: 'cosmo', treeSha: 'nope' })
     ).rejects.toThrow(TypeError);
     for (const theme of ['.git', '..', '.', '.hidden']) {
       await expect(
-        signThemeBase(ORIGIN, ctx('public'), { theme, treeSha: TREE_SHA })
+        signThemeBase(ORIGIN, ctx('month'), { theme, treeSha: TREE_SHA })
       ).rejects.toThrow(TypeError);
     }
   });
@@ -219,7 +219,7 @@ describe('signThemeBase', () => {
 
 describe('signSrcSet', () => {
   it('emits all three widths when the source width is unknown', async () => {
-    const { src, srcset } = await signSrcSet(ORIGIN, ctx('public'), { sha: SHA, ext: 'png' });
+    const { src, srcset } = await signSrcSet(ORIGIN, ctx('month'), { sha: SHA, ext: 'png' });
     const entries = entriesOf(srcset);
     expect(entries.map(entry => entry.descriptor)).toEqual([800, 1600, 2560]);
     expect(widthOf(src)).toBe(2560);
@@ -227,7 +227,7 @@ describe('signSrcSet', () => {
 
   it('never emits a width larger than sourceWidth', async () => {
     for (const sourceWidth of [800, 900, 1599, 1600, 1700, 2560, 4000]) {
-      const { src, srcset } = await signSrcSet(ORIGIN, ctx('public'), {
+      const { src, srcset } = await signSrcSet(ORIGIN, ctx('month'), {
         sha: SHA,
         ext: 'png',
         sourceWidth,
@@ -246,7 +246,7 @@ describe('signSrcSet', () => {
   });
 
   it('fills the gap with the original when the source sits between rungs', async () => {
-    const { srcset } = await signSrcSet(ORIGIN, ctx('public'), {
+    const { srcset } = await signSrcSet(ORIGIN, ctx('month'), {
       sha: SHA,
       ext: 'png',
       sourceWidth: 1599,
@@ -260,7 +260,7 @@ describe('signSrcSet', () => {
 
   it('does not add an original above the top rung, where the cap is deliberate', async () => {
     for (const sourceWidth of [2560, 4000]) {
-      const { srcset } = await signSrcSet(ORIGIN, ctx('public'), {
+      const { srcset } = await signSrcSet(ORIGIN, ctx('month'), {
         sha: SHA,
         ext: 'png',
         sourceWidth,
@@ -271,7 +271,7 @@ describe('signSrcSet', () => {
 
   it('lands exactly on the ladder without a duplicate original', async () => {
     for (const sourceWidth of TRANSFORM_WIDTHS) {
-      const { srcset } = await signSrcSet(ORIGIN, ctx('public'), {
+      const { srcset } = await signSrcSet(ORIGIN, ctx('month'), {
         sha: SHA,
         ext: 'png',
         sourceWidth,
@@ -285,7 +285,7 @@ describe('signSrcSet', () => {
   });
 
   it('serves an untransformed original when the source is narrower than 800', async () => {
-    const { src, srcset } = await signSrcSet(ORIGIN, ctx('public'), {
+    const { src, srcset } = await signSrcSet(ORIGIN, ctx('month'), {
       sha: SHA,
       ext: 'png',
       sourceWidth: 500,
@@ -295,7 +295,7 @@ describe('signSrcSet', () => {
   });
 
   it('threads the format through every rendition', async () => {
-    const { srcset } = await signSrcSet(ORIGIN, ctx('public'), {
+    const { srcset } = await signSrcSet(ORIGIN, ctx('month'), {
       sha: SHA,
       ext: 'png',
       fmt: 'avif',
@@ -308,7 +308,7 @@ describe('signSrcSet', () => {
 
   it('rejects a nonsense sourceWidth', async () => {
     await expect(
-      signSrcSet(ORIGIN, ctx('public'), { sha: SHA, ext: 'png', sourceWidth: 0 })
+      signSrcSet(ORIGIN, ctx('month'), { sha: SHA, ext: 'png', sourceWidth: 0 })
     ).rejects.toThrow(TypeError);
   });
 });

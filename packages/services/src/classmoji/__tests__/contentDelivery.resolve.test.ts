@@ -65,7 +65,7 @@ const ctx = {
     content_delivery_enabled: true,
     git_organization: { login: 'dartmouth-cs52' },
   },
-  tier: 'enrolled' as const,
+  tier: 'week' as const,
 };
 
 /** The same classroom with its own switch off — the shipping default. */
@@ -121,18 +121,52 @@ describe('isContentDeliveryConfigured', () => {
 });
 
 describe('tierFor', () => {
-  it('gives an editor draft — even on the public site they are editing, not browsing', () => {
-    expect(tierFor({ canEdit: true })).toBe('draft');
-    expect(tierFor({ canEdit: true, isPublicSite: true })).toBe('draft');
+  it('gives an editor `edit` — public or not, they are editing, not browsing', () => {
+    expect(tierFor({ canEdit: true })).toBe('edit');
+    expect(tierFor({ canEdit: true, isPublic: true })).toBe('edit');
   });
 
-  it('gives an explicit preview draft regardless of edit rights', () => {
-    expect(tierFor({ canEdit: false, preview: true })).toBe('draft');
+  it('gives an explicit preview `edit` regardless of edit rights', () => {
+    expect(tierFor({ canEdit: false, preview: true })).toBe('edit');
+    expect(tierFor({ canEdit: false, preview: true, isPublic: true })).toBe('edit');
   });
 
-  it('gives the anonymous class site public and everyone else enrolled', () => {
-    expect(tierFor({ canEdit: false, isPublicSite: true })).toBe('public');
-    expect(tierFor({ canEdit: false })).toBe('enrolled');
+  it('reads the CONTENT for everyone else: public is `month`, the rest `week`', () => {
+    expect(tierFor({ canEdit: false, isPublic: true })).toBe('month');
+    expect(tierFor({ canEdit: false, isPublic: false })).toBe('week');
+    // Absent is not public. A caller that has not looked up a visibility must
+    // land on the shorter lifetime, never the 30-day one.
+    expect(tierFor({ canEdit: false })).toBe('week');
+  });
+
+  it('pins the whole matrix, so no caller has to re-derive it', () => {
+    const matrix: Array<[Parameters<typeof tierFor>[0], string]> = [
+      [{ canEdit: true, isPublic: true }, 'edit'],
+      [{ canEdit: true, isPublic: false }, 'edit'],
+      [{ canEdit: false, preview: true, isPublic: true }, 'edit'],
+      [{ canEdit: false, preview: true, isPublic: false }, 'edit'],
+      [{ canEdit: false, isPublic: true }, 'month'],
+      [{ canEdit: false, isPublic: false }, 'week'],
+    ];
+    for (const [input, tier] of matrix) {
+      expect(tierFor(input), JSON.stringify(input)).toBe(tier);
+    }
+  });
+
+  it('never looks at the surface: one public file, one lifetime', () => {
+    // The regression this rule replaces. The pages app viewer and the class
+    // site render the SAME public page, and the surface-keyed rule minted
+    // `enrolled` for one and `public` for the other — two lifetimes and two
+    // cache entries for one file. Both now reduce to the same inputs, which is
+    // what makes the two URLs byte-identical inside a bucket.
+    const appViewer = tierFor({ canEdit: false, preview: false, isPublic: true });
+    const classSite = tierFor({ canEdit: false, isPublic: true });
+    expect(appViewer).toBe('month');
+    expect(classSite).toBe(appViewer);
+
+    // And the same for a members-only page: `week` through either door.
+    expect(tierFor({ canEdit: false, preview: false, isPublic: false })).toBe('week');
+    expect(tierFor({ canEdit: false, isPublic: false })).toBe('week');
   });
 });
 
@@ -148,7 +182,7 @@ describe('resolveAssetUrl — case 1: a repo-relative reference', () => {
       classroomId: CLASSROOM_ID,
       sha: BLOB_SHA,
       ext: 'png',
-      tier: 'enrolled',
+      tier: 'week',
       keyVersion: 7,
     });
 

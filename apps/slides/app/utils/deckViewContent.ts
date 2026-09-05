@@ -88,7 +88,7 @@ export interface SaveRefreshOutcome {
  * apart from a loader that came back with a STALE deck.
  *
  * The test is IDENTITY, not bytes. Comparing rendered HTML cannot work here:
- * the read side signs asset URLs per viewer, and the `draft` tier anyone with
+ * the read side signs asset URLs per viewer, and the `edit` tier anyone with
  * edit access gets is an exact `now + 4h` rather than a bucketed expiry, so two
  * reads of an unchanged deck differ every second. "The document changed" would
  * be true on every single read, and a stale one — a map row not yet updated, a

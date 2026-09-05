@@ -89,7 +89,7 @@ const classroom = {
 const page = { title: 'Lab 1', content_path: 'pages/lab-1', classroom };
 const slide = { id: 'slide-1', title: 'Lecture 1', content_path: 'slides/lecture-1', classroom };
 
-const ctx = { classroom, tier: 'draft' as const };
+const ctx = { classroom, tier: 'edit' as const };
 
 /** A URL a foreign CDN owns — the pass must not touch it, ever. */
 const FOREIGN = 'https://images.example.com/hero.png';

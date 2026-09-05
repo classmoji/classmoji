@@ -217,7 +217,7 @@ describe('rewriteContentUrls: our own signed URLs', () => {
   const SHA = 'c'.repeat(40);
 
   it('turns a signed blob URL back into a repo path via the source map', () => {
-    const url = `https://cdn.classmoji.test/c/${CLASS_ID}/blob/${SHA}.png?p=draft&v=0&exp=1&sig=x`;
+    const url = `https://cdn.classmoji.test/c/${CLASS_ID}/blob/${SHA}.png?p=edit&v=0&exp=1&sig=x`;
     const shaPaths = new Map([[SHA, 'pages/lab-1/assets/d.png']]);
 
     // Resolved to the SOURCE path, then carried onto the target's folder by
@@ -229,7 +229,7 @@ describe('rewriteContentUrls: our own signed URLs', () => {
     // A blob URL names CONTENT, not location. Inventing a path would put a
     // confidently wrong reference into content nobody will think to check;
     // leaving it keeps the breakage where it already was, and visible.
-    const url = `https://cdn.classmoji.test/c/${CLASS_ID}/blob/${SHA}.png?p=draft&v=0`;
+    const url = `https://cdn.classmoji.test/c/${CLASS_ID}/blob/${SHA}.png?p=edit&v=0`;
     const onWarn = vi.fn();
 
     expect(rewriteContentUrls(url, { ...suffixed, onWarn })).toBe(url);
@@ -259,7 +259,7 @@ describe('rewriteContentUrls: our own signed URLs', () => {
   it('collects the blob shas a document references, for the map lookup', () => {
     const other = 'd'.repeat(40);
     const text = [
-      `/c/${CLASS_ID}/blob/${SHA}.png?p=draft`,
+      `/c/${CLASS_ID}/blob/${SHA}.png?p=edit`,
       `/c/${CLASS_ID}/blob/${other}.svg?p=live`,
       `/c/${CLASS_ID}/blob/${SHA}.png?p=live`,
       `/c/${CLASS_ID}/theme/midnight/${'a'.repeat(40)}/draft.0.1.s/`,
@@ -291,7 +291,7 @@ describe('rewriteContentUrls: a fixture carrying every shape', () => {
       proxy: '/content/dartmouth-cs52/content-dartmouth-cs52-cs52-25s/pages/lab-1/assets/proxy.svg',
       bare: 'pages/lab-1/assets/bare.png',
       crossItem: 'pages/lab-9/assets/other.png',
-      signed: `https://cdn.classmoji.test/c/${CLASS_ID}/blob/${SHA}.png?p=draft&v=0&exp=1&sig=z`,
+      signed: `https://cdn.classmoji.test/c/${CLASS_ID}/blob/${SHA}.png?p=edit&v=0&exp=1&sig=z`,
       missing: `https://cdn.classmoji.test/c/${CLASS_ID}/missing/${encodeURIComponent(
         'pages/lab-1/assets/gone.png'
       )}`,
@@ -398,7 +398,7 @@ describe('resolveShaPaths', () => {
     lookupContentAssetsBySha.mockResolvedValue(new Map([[SHA, 'pages/lab-1/a.png']]));
 
     const found = await resolveShaPaths(CLASS_ID, [
-      `<img src="/c/${CLASS_ID}/blob/${SHA}.png?p=draft">`,
+      `<img src="/c/${CLASS_ID}/blob/${SHA}.png?p=edit">`,
       `<img src="/c/${CLASS_ID}/blob/${OTHER}.svg?p=live">`,
       // The same sha again, and a shape that carries none.
       `<img src="/c/${CLASS_ID}/blob/${SHA}.png?p=live">`,
@@ -431,7 +431,7 @@ describe('resolveShaPaths', () => {
 
   it('feeds the rewriter, which leaves an unresolved sha verbatim and warns', async () => {
     lookupContentAssetsBySha.mockResolvedValue(new Map());
-    const url = `https://cdn.classmoji.test/c/${CLASS_ID}/blob/${SHA}.png?p=draft`;
+    const url = `https://cdn.classmoji.test/c/${CLASS_ID}/blob/${SHA}.png?p=edit`;
     const onWarn = vi.fn();
 
     const shaPaths = await resolveShaPaths(CLASS_ID, [url]);

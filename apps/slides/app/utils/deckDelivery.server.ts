@@ -45,12 +45,13 @@ interface DeliverySlide {
   } | null;
 }
 
-/** What the viewer's tier decision is made of. Passed straight to `tierFor`. */
+/** What the tier decision is made of. Passed straight to `tierFor`. */
 export interface DeliveryAccess {
   canEdit: boolean;
   /** The staff-only preview BRANCH read — not a thumbnail render. */
   preview?: boolean;
-  isPublicSite?: boolean;
+  /** The DECK's own visibility, never the surface it is rendered on. */
+  isPublic?: boolean;
 }
 
 /** The deck surfaces that resolve content. Each has its own tier posture. */
@@ -64,52 +65,41 @@ export interface SlideAccessResultLike {
 }
 
 /**
- * `assertSlideAccess`'s answer + the deck's flags → the tier inputs, per surface.
+ * `assertSlideAccess`'s answer + the deck's visibility → the tier inputs.
  *
- * A function rather than four inline object literals because the surfaces do
- * NOT agree, and the places they disagree are the places this went wrong
- * before:
+ * The deck VIEWER is the only EDITING surface, so it is the only one that may
+ * reach `edit`. Every other surface pins `canEdit: false` and lands on the
+ * deck's own visibility: `month` for a public deck, `week` otherwise.
  *
- *   - `present` and `speaker` pin `canEdit: false` on purpose. Both stay open
- *     for hours, and `draft` is an exact `now + 4h` with five minutes of grace,
- *     so an instructor who opens the presenter in the morning and reaches slide
- *     40 after lunch would get a 403 on a lazily-loaded Reveal background.
- *     Content is sha-addressed and immutable, so the longer bucket shows the
- *     same bytes; `draft` exists for the editor's 403-and-revalidate flow, not
- *     for presenting.
- *   - only `viewer` honours `previewActive`. `follow` has a `?preview=true`
- *     query param of its own that means "thumbnail render", and letting that
- *     reach `tierFor` would mint draft URLs for a hall full of students. It
- *     arrives as `opts.thumbnail`, and is never allowed to become `preview`.
- *   - a THUMBNAIL `follow` is read-only, and gets the same treatment as
- *     `present`/`speaker` for the same reason. The speaker view embeds
- *     `/follow?preview=true` in its current and next panes, so staff opening
- *     `/speaker` were signing those iframes into the 4-hour `draft` bucket —
- *     and a lecture that runs longer than four hours 403s a lazily-loaded
- *     Reveal background mid-talk. Nobody edits through a thumbnail, so
- *     `canEdit` is pinned false and the tier lands on `enrolled` (or `public`
- *     for a public deck): the same immutable sha-addressed bytes, with an
- *     expiry that outlives the class.
+ * Pinning it rather than passing `access.canEdit` through is the whole point,
+ * and each surface earns it for its own reason:
+ *
+ *   - `present` and `speaker` stay open for hours, and `edit` is an exact
+ *     `now + 4h` with five minutes of grace — so an instructor who opened the
+ *     presenter in the morning and reached slide 40 after lunch would get a
+ *     403 on a lazily-loaded Reveal background. Content is sha-addressed and
+ *     immutable, so the longer bucket shows the same bytes.
+ *   - `follow` is a READ surface for everyone who opens it, staff included.
+ *     Nobody edits a deck through the audience view, and its highest-fanout
+ *     use is an iframe: the speaker view embeds `/follow?preview=true` in its
+ *     current and next panes. Staff used to get the 4h bucket on a plain
+ *     `/follow`, and a lecture that outran four hours 403'd mid-talk. No form
+ *     of `/follow` can be `edit` now — a stronger guarantee than the thumbnail
+ *     flag that used to carve out the iframe case, because this route's
+ *     `?preview=true` no longer reaches a tier decision at all and so can no
+ *     longer be confused with the deck viewer's `?preview=1`.
+ *   - only `viewer` honours `previewActive`, the staff read of the preview
+ *     BRANCH. That is a genuine pre-publication read of bytes that are about
+ *     to change, which is what the short TTL is for.
  */
 export function deckAccessFor(
   surface: DeckSurface,
   access: SlideAccessResultLike,
-  slide: { is_public?: boolean | null },
-  opts: { thumbnail?: boolean } = {}
+  slide: { is_public?: boolean | null }
 ): DeliveryAccess {
-  const isPublicSite = Boolean(slide.is_public);
-  if (surface === 'present' || surface === 'speaker') {
-    return { canEdit: false, isPublicSite };
-  }
-  // The read-only iframe form of `/follow`. Only `follow` has one here: the
-  // deck viewer's `?preview=true` landing-page thumbnail is a different
-  // surface with a different lifetime, and is deliberately left alone.
-  const isReadOnlyThumbnail = surface === 'follow' && Boolean(opts.thumbnail);
-  return {
-    canEdit: isReadOnlyThumbnail ? false : access.canEdit,
-    preview: surface === 'viewer' ? Boolean(access.previewActive) : false,
-    isPublicSite,
-  };
+  const isPublic = Boolean(slide.is_public);
+  if (surface !== 'viewer') return { canEdit: false, isPublic };
+  return { canEdit: access.canEdit, preview: Boolean(access.previewActive), isPublic };
 }
 
 /**
@@ -117,29 +107,15 @@ export function deckAccessFor(
  *
  * `?preview=true` on this route means "render me as a thumbnail" — the speaker
  * view's current/next panes and nothing else. It is a different parameter from
- * the deck viewer's `?preview=1`, which means "read the preview BRANCH", and
- * the two must never be confused: one is a read-only iframe, the other is a
- * staff read that legitimately earns draft URLs.
+ * the deck viewer's `?preview=1`, which means "read the preview BRANCH".
  *
- * Exported so the route reads the parameter in exactly one place, and so the
- * param → flag → tier chain can be pinned without a database behind it.
+ * It decides LAYOUT and nothing else. It used to feed the tier as well, to keep
+ * the speaker view's panes off the 4h bucket; `deckAccessFor` now pins every
+ * `/follow` read to `canEdit: false`, so the flag can no longer reach a
+ * signature at all.
  */
 export function isThumbnailRequest(url: URL): boolean {
   return url.searchParams.get('preview') === 'true';
-}
-
-/**
- * The `/follow` route's whole tier decision, from its request URL.
- *
- * The route's own wiring, hoisted out of the loader so it is testable: the
- * loader around it needs Prisma and a session, this does not.
- */
-export function followDeckAccess(
-  url: URL,
-  access: SlideAccessResultLike,
-  slide: { is_public?: boolean | null }
-): DeliveryAccess {
-  return deckAccessFor('follow', access, slide, { thumbnail: isThumbnailRequest(url) });
 }
 
 /**
@@ -148,9 +124,10 @@ export function followDeckAccess(
  *
  * The tier is decided HERE, by `ClassmojiService.contentDelivery.tierFor`, so
  * the four deck surfaces cannot drift into four different answers to "which
- * bucket is this viewer in". Staff and preview readers get short-lived draft
- * URLs, a public deck's anonymous readers the long public bucket, everyone else
- * the enrolled one. This is the reason a signed URL cannot live in the deck.
+ * bucket is this read in". An editing viewer and a preview-branch read get the
+ * short-lived `edit` bucket; everything else takes the DECK's visibility —
+ * `month` for a public deck, `week` for the rest. This is the reason a signed
+ * URL cannot live in the deck.
  */
 export function deckDeliveryContext(
   slide: DeliverySlide,
@@ -245,7 +222,7 @@ export async function readDeckText(
  *
  * Used to give a save the IDENTITY of the index.html it wrote, so the viewer can
  * tell its own commit from a stale read. Comparing rendered HTML instead cannot
- * work: the read side signs asset URLs, and the `draft` tier's expiry is an
+ * work: the read side signs asset URLs, and the `edit` tier's expiry is an
  * exact `now + 4h` rather than a bucket, so a staff read of an UNCHANGED deck
  * comes back with different bytes every second.
  */

@@ -87,7 +87,7 @@ export async function bumpContentKeyVersion(
  *   - the SHA changes when the file changes, so a stored URL stops following
  *     its file and a re-upload never shows;
  *   - the tier is per-VIEWER, so one stored URL cannot be right for a student
- *     and for the instructor previewing a draft.
+ *     and for the instructor editing the same page.
  *
  * Everything here is therefore pure derivation, and the save paths run
  * `canonicalizeAssetRef` to make sure the derivation never leaks back into
@@ -112,7 +112,7 @@ export async function bumpContentKeyVersion(
  * a second after a save shows the deck that was just saved.
  */
 
-/** Access tier a render mints URLs for. See @classmoji/content-signing. */
+/** Signature lifetime a render mints URLs for. See @classmoji/content-signing. */
 export type ResolveTier = Tier;
 
 /** The classroom fields a resolve needs. Narrow on purpose — no secrets. */
@@ -205,28 +205,44 @@ function deliveryEnv(): { origin: string; master: string } | null {
 }
 
 /**
- * Which tier this render is for.
+ * Which LIFETIME this render mints URLs for.
  *
- * `draft` for anyone who can edit and for an explicit preview — they are the
- * only viewers allowed to see content that has not been published, and the
- * short expiry is the price. `public` only for the class-site surface, whose
- * readers are anonymous by definition. Everything else is `enrolled`.
+ * Not a permission, however the names used to read: what a viewer is allowed
+ * to fetch is decided by the signature, and by the authorization the caller
+ * did before it got here. A tier only picks how long the URL lives and whether
+ * it may be cached.
  *
- * Order matters: an instructor previewing their own class site is editing, not
- * browsing, so the draft check comes first.
+ *   - `edit` for anyone who can edit and for an explicit staff preview. Both
+ *     are looking at bytes that may be about to change, and both depend on the
+ *     403-and-revalidate flow, which is what the exact 4h TTL and `no-store`
+ *     are for.
+ *   - `month` for content that is PUBLIC. Its readers are anonymous by
+ *     definition, so there is nothing a shorter lifetime would buy.
+ *   - `week` for everything else.
+ *
+ * Order matters: an instructor previewing their own public page is editing,
+ * not browsing, so the edit check comes first.
+ *
+ * `isPublic` is the CONTENT's own visibility — `Page.is_public`, a deck's
+ * `is_public` — and never "is this the class-site surface". Keying off the
+ * SURFACE is what this replaces, and what it got wrong: the same public page
+ * was minted `p=enrolled` inside the pages app and `p=public` on the class
+ * site, so one public file had two lifetimes and two cache entries depending
+ * on which door a reader came through. Visibility is a property of the file;
+ * the surface is not.
  */
 export function tierFor({
   canEdit,
   preview,
-  isPublicSite,
+  isPublic,
 }: {
   canEdit: boolean;
   preview?: boolean;
-  isPublicSite?: boolean;
+  isPublic?: boolean;
 }): ResolveTier {
-  if (canEdit || preview) return 'draft';
-  if (isPublicSite) return 'public';
-  return 'enrolled';
+  if (canEdit || preview) return 'edit';
+  if (isPublic) return 'month';
+  return 'week';
 }
 
 /**
@@ -839,15 +855,15 @@ function withDeadline<T>(work: Promise<T>, ms: number, what: string): Promise<T>
  * becomes a property of the address — which is why the save paths write the
  * returned sha into the map (`recordContentAsset`) the moment a commit lands.
  *
- * ## The tiers
+ * ## The tier
  *
- * Always `enrolled`, whoever is reading. This is a server-to-server fetch: the
+ * Always `week`, whoever is reading. This is a server-to-server fetch: the
  * bytes are handed to a loader that has already done its own authorization, and
  * they are never given to a browser as a URL. The tier here therefore decides
  * nothing about access — it only picks an expiry bucket and a `Cache-Control`,
- * and `enrolled`'s week is the right middle: long enough that one signature
- * serves a lecture hall's worth of `/follow` reads out of the edge, short
- * enough not to mint the 30-day public bucket for content nobody published.
+ * and a week is the right middle: long enough that one signature serves a
+ * lecture hall's worth of `/follow` reads out of the edge, short enough not to
+ * mint the 30-day bucket for content nobody published.
  *
  * ## When the map cannot answer
  *
@@ -932,12 +948,12 @@ async function readTextThroughWorker(
   try {
     const url = await signBlobUrl(
       env.origin,
-      // Server-to-server: `enrolled` names the cache bucket, not the reader.
+      // Server-to-server: `week` names the cache bucket, not the reader.
       {
         master: env.master,
         classroomId: ctx.classroom.id,
         keyVersion: ctx.classroom.content_key_version,
-        tier: 'enrolled',
+        tier: 'week',
       },
       { sha: asset.sha, ext }
     );

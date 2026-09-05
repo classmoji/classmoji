@@ -23,7 +23,7 @@ const classroom = {
 
 test.describe('assetResolveContext', () => {
   test('carries the classroom flag through to the resolver', () => {
-    expect(assetResolveContext(classroom, 'enrolled')?.classroom.content_delivery_enabled).toBe(
+    expect(assetResolveContext(classroom, 'week')?.classroom.content_delivery_enabled).toBe(
       true
     );
   });
@@ -32,7 +32,7 @@ test.describe('assetResolveContext', () => {
     for (const value of [false, null, undefined]) {
       const ctx = assetResolveContext(
         { ...classroom, content_delivery_enabled: value as boolean | null },
-        'enrolled'
+        'week'
       );
       // Never `undefined` — a real `false`, because the resolver compares
       // strictly and "I did not ask" must not be able to mean yes.
@@ -44,13 +44,13 @@ test.describe('assetResolveContext', () => {
     // No content repo and no git org are normal states, not failures — every
     // caller degrades to the stored references, which is what the page did
     // before any of this existed.
-    expect(assetResolveContext({ ...classroom, content_repo: '' }, 'enrolled')).toBeNull();
-    expect(assetResolveContext({ ...classroom, git_organization: null }, 'enrolled')).toBeNull();
-    expect(assetResolveContext(null, 'enrolled')).toBeNull();
+    expect(assetResolveContext({ ...classroom, content_repo: '' }, 'week')).toBeNull();
+    expect(assetResolveContext({ ...classroom, git_organization: null }, 'week')).toBeNull();
+    expect(assetResolveContext(null, 'week')).toBeNull();
   });
 
   test('passes the tier through untouched', () => {
-    for (const tier of ['public', 'enrolled', 'draft'] as const) {
+    for (const tier of ['month', 'week', 'edit'] as const) {
       expect(assetResolveContext(classroom, tier)?.tier).toBe(tier);
     }
   });

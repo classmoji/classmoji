@@ -225,7 +225,7 @@ function deckResolveContext(slide: SlideContentTarget): ResolveContext | null {
       content_delivery_enabled: classroom.content_delivery_enabled === true,
       git_organization: { login },
     },
-    tier: 'draft',
+    tier: 'edit',
   };
 }
 

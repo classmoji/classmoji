@@ -388,6 +388,12 @@ export function hasStagingSession(): boolean {
  * hard-coding an id would rot the first time someone tidied the classroom. The
  * index is the same list a member browses, so whatever it links to is by
  * definition something they may open.
+ *
+ * It says nothing about the page's VISIBILITY, though — it takes the first
+ * link, public or members-only. A caller cannot infer a tier from what comes
+ * back: the tier follows the content's visibility, so a public page here mints
+ * `month` exactly as the class site does. Assert the shape of the URL, not
+ * which tier it landed on.
  */
 export async function discoverMemberContentUrl(
   page: Page,
@@ -448,7 +454,7 @@ export async function workerHealth(origin: string): Promise<WorkerHealth | null>
 // Signed URL shape
 // ─────────────────────────────────────────────────────────────────────────────
 
-export type Tier = 'public' | 'enrolled' | 'draft';
+export type Tier = 'month' | 'week' | 'edit';
 
 /** The three rungs `signSrcSet` emits. Mirrors TRANSFORM_WIDTHS. */
 export const EXPECTED_WIDTHS = [800, 1600, 2560] as const;
@@ -521,7 +527,7 @@ export function parseSignedUrl(raw: string): SignedUrl | null {
   const exp = url.searchParams.get('exp');
   const sig = url.searchParams.get('sig');
   if (!tier || !keyVersion || !exp || !sig) return null;
-  if (tier !== 'public' && tier !== 'enrolled' && tier !== 'draft') return null;
+  if (tier !== 'month' && tier !== 'week' && tier !== 'edit') return null;
 
   const w = url.searchParams.get('w');
   return {

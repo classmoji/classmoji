@@ -494,7 +494,7 @@ describe('pageContent.uploadPageAsset', () => {
     expect(result.path).toBe('pages/syllabus/assets/a.png');
     // Display is a separate field precisely so it cannot be stored by accident.
     expect(result.displayUrl).toContain('https://cdn.classmoji.test/c/');
-    expect(result.displayUrl).toContain('p=draft');
+    expect(result.displayUrl).toContain('p=edit');
     expect(result.displayUrl).not.toBe(result.url);
   });
 

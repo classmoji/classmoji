@@ -16,7 +16,8 @@ export const SCHEME_SEGMENTS: Readonly<Record<string, string>> = { c: CANONICAL_
 /** A segment that looks like a content scheme, known or not. */
 export const SCHEME_SEGMENT_PATTERN = /^c[0-9]*$/;
 
-export const TIERS: readonly Tier[] = ['public', 'enrolled', 'draft'];
+/** Every tier, shortest lifetime first. See `Tier` in types.ts. */
+export const TIERS: readonly Tier[] = ['edit', 'week', 'month'];
 export const TRANSFORM_WIDTHS: readonly TransformWidth[] = [800, 1600, 2560];
 export const TRANSFORM_FORMATS: readonly TransformFormat[] = ['webp', 'avif', 'auto'];
 

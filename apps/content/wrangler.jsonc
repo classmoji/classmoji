@@ -15,7 +15,7 @@
     "enabled": true
   },
   // Workers Caching sits in front of the Worker; the Cache-Control we emit
-  // (no-store for draft, immutable otherwise) is what decides what it keeps.
+  // (no-store for `edit`, immutable otherwise) is what decides what it keeps.
   "cache": {
     "enabled": true
   },

@@ -23,7 +23,7 @@ on:
 # WHAT ACTUALLY RUNS AGAINST STAGING
 #
 # Eight of the nineteen scenarios, verified green against cs98-test on
-# 2026-09-04: the public-tier class-site render with its ladder, /healthz, the
+# 2026-09-04: the `month`-tier class-site render with its ladder, /healthz, the
 # 200 + HEAD parity, the four refusals (tampered sig, appended width, extended
 # expiry, foreign classroom) and the /missing/ 404. Every one is a read.
 #
@@ -40,9 +40,11 @@ on:
 #     set, the pack attaches that `classmoji.session_token` to the browser
 #     context — scoped to the three staging origins by URL, never by domain, so
 #     it cannot follow a redirect to production — and one more scenario runs:
-#     a member-facing page must not be served at the `public` tier. It cannot
-#     assert `enrolled` exactly, because a staff token would correctly produce
-#     `draft`; the local pack pins the exact values.
+#     a signed-in render must come back signed, origin-bound, and on a tier this
+#     deployment still recognises. It cannot assert a specific tier: the tier
+#     follows the CONTENT's visibility and the viewer's edit rights, and this
+#     scenario knows neither the token's role nor which page the index linked
+#     to. The local pack pins the exact values.
 #   - Uploads skip unless E2E_CD_CONTENT_REPO=1 says the target classroom's repo
 #     is genuinely writable. It is not set here on purpose: nothing scheduled
 #     should be committing fixture PNGs to a course repository.
@@ -97,7 +99,7 @@ jobs:
       #
       # `E2E_STAGING_SESSION_COOKIE` is a `classmoji.session_token` value for a
       # member of cs98-test on staging. With it, the signed-in scenarios (the
-      # editor's draft tier, a member's enrolled tier) run; without it they skip
+      # editor's `edit` tier, a member's read tier) run; without it they skip
       # with that exact instruction. It is NOT created here and no value is
       # invented: a maintainer mints a session and stores it, or leaves it unset
       # and accepts the smaller suite.

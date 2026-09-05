@@ -29,7 +29,7 @@ import {
   withoutParam,
 } from './fixtures.ts';
 
-const TIERS: Tier[] = ['public', 'enrolled', 'draft'];
+const TIERS: Tier[] = ['month', 'week', 'edit'];
 
 const blob = (tier: Tier, transform?: { w?: 800 | 1600 | 2560; fmt?: 'webp' | 'avif' | 'auto' }) =>
   signBlobUrl(ORIGIN, ctx(tier), { sha: SHA, ext: 'png', transform });
@@ -91,21 +91,21 @@ describe('round trip', () => {
   });
 
   it('dispatches on shape through verifyContentUrl', async () => {
-    const blobResult = await verifyContentUrl(MASTER, await blob('public'), NOW);
+    const blobResult = await verifyContentUrl(MASTER, await blob('month'), NOW);
     expect(blobResult.ok && blobResult.kind).toBe('blob');
 
-    const themeResult = await verifyContentUrl(MASTER, `${await themeBase('public')}a.css`, NOW);
+    const themeResult = await verifyContentUrl(MASTER, `${await themeBase('month')}a.css`, NOW);
     expect(themeResult.ok && themeResult.kind).toBe('theme');
   });
 
   it('accepts a URL object as well as a string', async () => {
-    const url = await blob('enrolled');
+    const url = await blob('week');
     expect((await verifyBlobUrl(MASTER, new URL(url), NOW)).ok).toBe(true);
   });
 
   it('survives a keyVersion bump only under the matching version', async () => {
-    const v0 = await blob('public');
-    const v1 = await signBlobUrl(ORIGIN, ctx('public', { keyVersion: 1 }), {
+    const v0 = await blob('month');
+    const v1 = await signBlobUrl(ORIGIN, ctx('month', { keyVersion: 1 }), {
       sha: SHA,
       ext: 'png',
     });
@@ -116,7 +116,7 @@ describe('round trip', () => {
 });
 
 describe('grace', () => {
-  it.each(['public', 'enrolled'] as const)(
+  it.each(['month', 'week'] as const)(
     'accepts a previous-bucket %s signature inside 6h, not after',
     async tier => {
       const url = await blob(tier);
@@ -138,23 +138,23 @@ describe('grace', () => {
     }
   );
 
-  it('gives draft only a 5 minute skew allowance', async () => {
-    const url = await blob('draft');
+  it('gives edit only a 5 minute skew allowance', async () => {
+    const url = await blob('edit');
     const exp = NOW + 4 * 3600;
-    expect(TIER_POLICY.draft.graceSeconds).toBe(300);
+    expect(TIER_POLICY.edit.graceSeconds).toBe(300);
 
     const inGrace = await verifyBlobUrl(MASTER, url, exp + 300);
     expect(inGrace.ok).toBe(true);
     if (inGrace.ok) expect(inGrace.inGrace).toBe(true);
 
     expect(await verifyBlobUrl(MASTER, url, exp + 301)).toEqual({ ok: false, reason: 'expired' });
-    // A 6h grace would have covered this; draft must not.
+    // A 6h grace would have covered this; edit must not.
     expect(await verifyBlobUrl(MASTER, url, exp + 3600)).toEqual({ ok: false, reason: 'expired' });
   });
 
   it('applies the same grace to theme URLs', async () => {
-    const base = await themeBase('enrolled');
-    const exp = bucketExpiry('enrolled', CLASSROOM_A, NOW);
+    const base = await themeBase('week');
+    const exp = bucketExpiry('week', CLASSROOM_A, NOW);
     const inGrace = await verifyThemeUrl(MASTER, `${base}theme.css`, exp + 60);
     expect(inGrace.ok).toBe(true);
     if (inGrace.ok) expect(inGrace.inGrace).toBe(true);
@@ -168,52 +168,52 @@ describe('grace', () => {
 
 describe('tamper vectors', () => {
   it('rejects a stripped signature as malformed', async () => {
-    const url = withoutParam(await blob('public'), 'sig');
+    const url = withoutParam(await blob('month'), 'sig');
     expect(await verifyBlobUrl(MASTER, url, NOW)).toEqual({ ok: false, reason: 'malformed' });
   });
 
   it('rejects a flipped tier', async () => {
-    const url = withParam(await blob('enrolled'), 'p', 'public');
+    const url = withParam(await blob('week'), 'p', 'month');
     expect(await verifyBlobUrl(MASTER, url, NOW)).toEqual({ ok: false, reason: 'bad-signature' });
   });
 
   it('rejects an altered width', async () => {
-    const url = withParam(await blob('public', { w: 800 }), 'w', '2560');
+    const url = withParam(await blob('month', { w: 800 }), 'w', '2560');
     expect(await verifyBlobUrl(MASTER, url, NOW)).toEqual({ ok: false, reason: 'bad-signature' });
   });
 
   it('rejects an added width on an untransformed URL', async () => {
-    const url = withParam(await blob('public'), 'w', '800');
+    const url = withParam(await blob('month'), 'w', '800');
     expect(await verifyBlobUrl(MASTER, url, NOW)).toEqual({ ok: false, reason: 'bad-signature' });
   });
 
   it('rejects an altered format', async () => {
-    const url = withParam(await blob('public', { fmt: 'webp' }), 'fmt', 'avif');
+    const url = withParam(await blob('month', { fmt: 'webp' }), 'fmt', 'avif');
     expect(await verifyBlobUrl(MASTER, url, NOW)).toEqual({ ok: false, reason: 'bad-signature' });
   });
 
   it('rejects an altered sha', async () => {
-    const url = (await blob('public')).replace(SHA, OTHER_SHA);
+    const url = (await blob('month')).replace(SHA, OTHER_SHA);
     expect(await verifyBlobUrl(MASTER, url, NOW)).toEqual({ ok: false, reason: 'bad-signature' });
   });
 
   it('rejects an altered ext', async () => {
-    const url = (await blob('public')).replace(`${SHA}.png`, `${SHA}.gif`);
+    const url = (await blob('month')).replace(`${SHA}.png`, `${SHA}.gif`);
     expect(await verifyBlobUrl(MASTER, url, NOW)).toEqual({ ok: false, reason: 'bad-signature' });
   });
 
   it('rejects a swapped classroomId', async () => {
-    const url = (await blob('public')).replace(CLASSROOM_A, CLASSROOM_B);
+    const url = (await blob('month')).replace(CLASSROOM_A, CLASSROOM_B);
     expect(await verifyBlobUrl(MASTER, url, NOW)).toEqual({ ok: false, reason: 'bad-signature' });
   });
 
   it('rejects a bumped keyVersion', async () => {
-    const url = withParam(await blob('public'), 'v', '1');
+    const url = withParam(await blob('month'), 'v', '1');
     expect(await verifyBlobUrl(MASTER, url, NOW)).toEqual({ ok: false, reason: 'bad-signature' });
   });
 
   it('rejects a stretched expiry', async () => {
-    const url = await blob('draft');
+    const url = await blob('edit');
     const stretched = withParam(url, 'exp', String(NOW + 400 * 86400));
     expect(await verifyBlobUrl(MASTER, stretched, NOW)).toEqual({
       ok: false,
@@ -222,7 +222,7 @@ describe('tamper vectors', () => {
   });
 
   it('rejects a theme relPath that escapes the folder', async () => {
-    const base = await themeBase('public');
+    const base = await themeBase('month');
     // Escaping eats the policy segment, so there is nothing left to verify against.
     for (const relPath of ['../secret.css', 'css/../../secret.css', '../../../../etc/passwd']) {
       expect(await verifyThemeUrl(MASTER, `${base}${relPath}`, NOW)).toEqual({
@@ -233,7 +233,7 @@ describe('tamper vectors', () => {
   });
 
   it('never lets a traversal survive into relPath', async () => {
-    const base = await themeBase('public');
+    const base = await themeBase('month');
     // %2e%2e is a dot segment to the URL parser: this collapses back inside the
     // folder rather than escaping it, and what the Worker sees is the normalized path.
     const result = await verifyThemeUrl(MASTER, `${base}css/%2e%2e/theme.css`, NOW);
@@ -244,8 +244,8 @@ describe('tamper vectors', () => {
   });
 
   it('rejects a tampered theme policy segment', async () => {
-    const base = await themeBase('enrolled');
-    const tampered = base.replace('/enrolled.', '/public.');
+    const base = await themeBase('week');
+    const tampered = base.replace('/week.', '/month.');
     expect(await verifyThemeUrl(MASTER, `${tampered}theme.css`, NOW)).toEqual({
       ok: false,
       reason: 'bad-signature',
@@ -253,13 +253,13 @@ describe('tamper vectors', () => {
   });
 
   it('rejects an unknown canonical version', async () => {
-    const url = (await blob('public')).replace('/c/', '/c2/');
+    const url = (await blob('month')).replace('/c/', '/c2/');
     expect(await verifyBlobUrl(MASTER, url, NOW)).toEqual({
       ok: false,
       reason: 'unsupported-version',
     });
 
-    const base = (await themeBase('public')).replace('/c/', '/c9/');
+    const base = (await themeBase('month')).replace('/c/', '/c9/');
     expect(await verifyThemeUrl(MASTER, `${base}theme.css`, NOW)).toEqual({
       ok: false,
       reason: 'unsupported-version',
@@ -271,13 +271,13 @@ describe('tamper vectors', () => {
       'not-a-url',
       `${ORIGIN}/`,
       `${ORIGIN}/c/${CLASSROOM_A}`,
-      `${ORIGIN}/c/not-a-uuid/blob/${SHA}.png?p=public&v=0&exp=1&sig=AAAA`,
-      `${ORIGIN}/c/${CLASSROOM_A}/other/${SHA}.png?p=public&v=0&exp=1&sig=AAAA`,
+      `${ORIGIN}/c/not-a-uuid/blob/${SHA}.png?p=month&v=0&exp=1&sig=AAAA`,
+      `${ORIGIN}/c/${CLASSROOM_A}/other/${SHA}.png?p=month&v=0&exp=1&sig=AAAA`,
       `${ORIGIN}/c/${CLASSROOM_A}/blob/${SHA}.png?p=teacher&v=0&exp=1&sig=AAAA`,
-      `${ORIGIN}/c/${CLASSROOM_A}/blob/${SHA}.png?p=public&v=x&exp=1&sig=AAAA`,
-      `${ORIGIN}/c/${CLASSROOM_A}/blob/${SHA}.png?p=public&v=0&exp=1&sig=AA*A`,
-      `${ORIGIN}/c/${CLASSROOM_A}/blob/${SHA}.png?p=public&v=0&exp=1&sig=AAAA&w=999`,
-      `${ORIGIN}/c/${CLASSROOM_A}/blob/${SHA}?p=public&v=0&exp=1&sig=AAAA`,
+      `${ORIGIN}/c/${CLASSROOM_A}/blob/${SHA}.png?p=month&v=x&exp=1&sig=AAAA`,
+      `${ORIGIN}/c/${CLASSROOM_A}/blob/${SHA}.png?p=month&v=0&exp=1&sig=AA*A`,
+      `${ORIGIN}/c/${CLASSROOM_A}/blob/${SHA}.png?p=month&v=0&exp=1&sig=AAAA&w=999`,
+      `${ORIGIN}/c/${CLASSROOM_A}/blob/${SHA}?p=month&v=0&exp=1&sig=AAAA`,
     ];
     for (const url of cases) {
       expect(await verifyContentUrl(MASTER, url, NOW)).toEqual({ ok: false, reason: 'malformed' });
@@ -285,11 +285,11 @@ describe('tamper vectors', () => {
   });
 
   it('will not verify a blob URL as a theme URL, or vice versa', async () => {
-    expect(await verifyThemeUrl(MASTER, await blob('public'), NOW)).toEqual({
+    expect(await verifyThemeUrl(MASTER, await blob('month'), NOW)).toEqual({
       ok: false,
       reason: 'malformed',
     });
-    expect(await verifyBlobUrl(MASTER, `${await themeBase('public')}a.css`, NOW)).toEqual({
+    expect(await verifyBlobUrl(MASTER, `${await themeBase('month')}a.css`, NOW)).toEqual({
       ok: false,
       reason: 'malformed',
     });
@@ -298,11 +298,11 @@ describe('tamper vectors', () => {
 
 describe('master secret', () => {
   it('rejects everything signed under a different master', async () => {
-    expect(await verifyBlobUrl(OTHER_MASTER, await blob('public'), NOW)).toEqual({
+    expect(await verifyBlobUrl(OTHER_MASTER, await blob('month'), NOW)).toEqual({
       ok: false,
       reason: 'bad-signature',
     });
-    expect(await verifyThemeUrl(OTHER_MASTER, `${await themeBase('public')}a.css`, NOW)).toEqual({
+    expect(await verifyThemeUrl(OTHER_MASTER, `${await themeBase('month')}a.css`, NOW)).toEqual({
       ok: false,
       reason: 'bad-signature',
     });
@@ -311,14 +311,14 @@ describe('master secret', () => {
 
 describe('parseContentUrl', () => {
   it('returns raw fields without touching key material', async () => {
-    const url = await blob('draft', { w: 800 });
+    const url = await blob('edit', { w: 800 });
     const parsed = parseContentUrl(url);
     expect(parsed).toMatchObject({
       kind: 'blob',
       classroomId: CLASSROOM_A,
       sha: SHA,
       ext: 'png',
-      tier: 'draft',
+      tier: 'edit',
       keyVersion: 0,
       exp: NOW + 4 * 3600,
       transform: { w: 800 },
@@ -334,40 +334,38 @@ describe('parseContentUrl', () => {
 });
 
 describe('cacheControlFor', () => {
-  it('never stores draft', () => {
-    expect(cacheControlFor('draft', NOW + 4 * 3600, NOW)).toBe('no-store');
+  it('never stores edit', () => {
+    expect(cacheControlFor('edit', NOW + 4 * 3600, NOW)).toBe('no-store');
   });
 
   it('caches the rest for exactly the remaining life of the signature', () => {
-    expect(cacheControlFor('public', NOW + 100, NOW)).toBe('public, max-age=100, immutable');
-    expect(cacheControlFor('enrolled', NOW + 604800, NOW)).toBe(
-      'public, max-age=604800, immutable'
-    );
+    expect(cacheControlFor('month', NOW + 100, NOW)).toBe('public, max-age=100, immutable');
+    expect(cacheControlFor('week', NOW + 604800, NOW)).toBe('public, max-age=604800, immutable');
   });
 
   it('gives a short positive TTL inside grace, never immutable', () => {
-    expect(cacheControlFor('public', NOW - 10, NOW)).toBe('public, max-age=60');
-    expect(cacheControlFor('enrolled', NOW, NOW)).toBe('public, max-age=60');
-    expect(cacheControlFor('draft', NOW - 10, NOW)).toBe('no-store');
+    expect(cacheControlFor('month', NOW - 10, NOW)).toBe('public, max-age=60');
+    expect(cacheControlFor('week', NOW, NOW)).toBe('public, max-age=60');
+    expect(cacheControlFor('edit', NOW - 10, NOW)).toBe('no-store');
   });
 });
 
 describe('host binding', () => {
   it('rejects a URL replayed against another host', async () => {
-    const url = await blob('public');
+    const url = await blob('month');
     expect(await verifyBlobUrl(MASTER, url.replace(ORIGIN, OTHER_ORIGIN), NOW)).toEqual({
       ok: false,
       reason: 'bad-signature',
     });
 
-    const base = await themeBase('public');
+    const base = await themeBase('month');
     expect(
       await verifyThemeUrl(MASTER, `${base.replace(ORIGIN, OTHER_ORIGIN)}theme.css`, NOW)
     ).toEqual({ ok: false, reason: 'bad-signature' });
   });
 
   it('rejects the same host on a different port', async () => {
-    const url = await blob('public');
+    const url = await blob('month');
     expect(await verifyBlobUrl(MASTER, url.replace(HOST, `${HOST}:8443`), NOW)).toEqual({
       ok: false,
       reason: 'bad-signature',
@@ -375,13 +373,13 @@ describe('host binding', () => {
   });
 
   it('does not distinguish http from https on the same host', async () => {
-    const url = await blob('public');
+    const url = await blob('month');
     const overHttp = await verifyBlobUrl(MASTER, url.replace('https://', 'http://'), NOW);
     expect(overHttp.ok).toBe(true);
   });
 
   it('is case-insensitive about the host', async () => {
-    const url = await blob('public');
+    const url = await blob('month');
     const shouted = await verifyBlobUrl(MASTER, url.replace(HOST, HOST.toUpperCase()), NOW);
     expect(shouted.ok).toBe(true);
   });
@@ -389,13 +387,13 @@ describe('host binding', () => {
 
 describe('query parameters', () => {
   it('rejects a repeated key', async () => {
-    const withWidth = await blob('public', { w: 800 });
+    const withWidth = await blob('month', { w: 800 });
     expect(await verifyBlobUrl(MASTER, `${withWidth}&w=2560`, NOW)).toEqual({
       ok: false,
       reason: 'malformed',
     });
 
-    const url = await blob('public');
+    const url = await blob('month');
     expect(await verifyBlobUrl(MASTER, `${url}&sig=AAAA`, NOW)).toEqual({
       ok: false,
       reason: 'malformed',
@@ -403,7 +401,7 @@ describe('query parameters', () => {
   });
 
   it('rejects an unsigned extra key', async () => {
-    const url = await blob('public');
+    const url = await blob('month');
     for (const extra of ['attacker=1', 'utm_source=x', 'W=800']) {
       expect(await verifyBlobUrl(MASTER, `${url}&${extra}`, NOW)).toEqual({
         ok: false,
@@ -413,7 +411,7 @@ describe('query parameters', () => {
   });
 
   it('accepts exactly the allowlist', async () => {
-    const url = await blob('public', { w: 1600, fmt: 'webp' });
+    const url = await blob('month', { w: 1600, fmt: 'webp' });
     expect([...new URL(url).searchParams.keys()].sort()).toEqual([
       'exp',
       'fmt',
@@ -426,9 +424,9 @@ describe('query parameters', () => {
   });
 
   it('rejects any query at all on a theme URL', async () => {
-    const base = await themeBase('public');
+    const base = await themeBase('month');
     expect((await verifyThemeUrl(MASTER, `${base}theme.css`, NOW)).ok).toBe(true);
-    for (const query of ['?x=1', '?p=draft', '?sig=AAAA']) {
+    for (const query of ['?x=1', '?p=edit', '?sig=AAAA']) {
       expect(await verifyThemeUrl(MASTER, `${base}theme.css${query}`, NOW)).toEqual({
         ok: false,
         reason: 'malformed',
@@ -439,7 +437,7 @@ describe('query parameters', () => {
 
 describe('relPath decoding', () => {
   it('rejects a double-encoded traversal', async () => {
-    const base = await themeBase('public');
+    const base = await themeBase('month');
     for (const relPath of [
       '%252e%252e%252fsecret.css',
       'css/%252e%252e%252f%252e%252e%252fsecret.css',
@@ -453,7 +451,7 @@ describe('relPath decoding', () => {
   });
 
   it('rejects an encoded separator, backslash, or NUL', async () => {
-    const base = await themeBase('public');
+    const base = await themeBase('month');
     for (const relPath of ['a%5c..%5cb.css', 'a%2fb.css', 'theme%00.css']) {
       expect(await verifyThemeUrl(MASTER, `${base}${relPath}`, NOW)).toEqual({
         ok: false,
@@ -463,7 +461,7 @@ describe('relPath decoding', () => {
   });
 
   it('collapses a singly-encoded dot segment inside the folder instead of escaping', async () => {
-    const base = await themeBase('public');
+    const base = await themeBase('month');
     const result = await verifyThemeUrl(MASTER, `${base}css/%2e%2e/theme.css`, NOW);
     expect(result.ok).toBe(true);
     if (result.ok) {
@@ -507,7 +505,7 @@ describe('key rotation', () => {
   const both = [ROTATED, MASTER] as const;
 
   const mintedUnder = (master: string) =>
-    signBlobUrl(ORIGIN, ctx('public', { master }), { sha: SHA, ext: 'png' });
+    signBlobUrl(ORIGIN, ctx('month', { master }), { sha: SHA, ext: 'png' });
 
   it('verifies a current-key URL and says which key did it', async () => {
     const url = await mintedUnder(ROTATED);
@@ -563,7 +561,7 @@ describe('key rotation', () => {
         reason: 'bad-signature',
       });
 
-      const signedWithBlank = await signBlobUrl(ORIGIN, ctx('public', { master: blank }), {
+      const signedWithBlank = await signBlobUrl(ORIGIN, ctx('month', { master: blank }), {
         sha: SHA,
         ext: 'png',
       });
@@ -589,7 +587,7 @@ describe('key rotation', () => {
   });
 
   it('applies the same fallback to theme URLs', async () => {
-    const base = await signThemeBase(ORIGIN, ctx('public', { master: MASTER }), {
+    const base = await signThemeBase(ORIGIN, ctx('month', { master: MASTER }), {
       theme: 'cosmo-dark',
       treeSha: TREE_SHA,
     });

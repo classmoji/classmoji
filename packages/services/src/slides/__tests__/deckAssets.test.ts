@@ -116,13 +116,13 @@ describe('rewriteDeckAssetUrls', () => {
     // an attribute the `&` must become `&amp;`, and must decode back to the
     // exact URL the resolver minted — an over- or under-escaped one is a
     // broken signature, not a cosmetic difference.
-    const MULTI = `https://cdn.test/c/3f2504e0-4f89-41d3-9a0c-0305e82c3301/blob/abc.png?p=enrolled&v=0&exp=1&sig=abc`;
+    const MULTI = `https://cdn.test/c/3f2504e0-4f89-41d3-9a0c-0305e82c3301/blob/abc.png?p=week&v=0&exp=1&sig=abc`;
     const html = `<section data-background-image="${REF}"><img src="${REF}"></section>`;
 
     const out = await rewriteDeckAssetUrls(html, resolver({ [REF]: MULTI }));
 
-    expect(out).toContain('?p=enrolled&amp;v=0&amp;exp=1&amp;sig=abc');
-    expect(out).not.toContain('?p=enrolled&v=0');
+    expect(out).toContain('?p=week&amp;v=0&amp;exp=1&amp;sig=abc');
+    expect(out).not.toContain('?p=week&v=0');
 
     // Re-parsing is what the browser and the deck parser both do; the URL that
     // comes back out must be the one that went in.

@@ -117,7 +117,7 @@ test.describe('settleSaveRefresh — has the save’s loader refresh landed', ()
   test('a loader read that has not caught up never wins', () => {
     // The map row is not updated yet, or a Worker 502 fell back to another
     // instance's <60s API cache. The bytes WILL differ from the last read —
-    // `draft` expiries are an exact now+4h, so every signed URL in the document
+    // `edit` expiries are an exact now+4h, so every signed URL in the document
     // changes every second — which is exactly why identity is the test and
     // "the document changed" is not. Settling true here would put the PRE-save
     // deck on screen: worse than the bug this fixes.

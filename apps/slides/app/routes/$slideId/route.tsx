@@ -172,9 +172,11 @@ export const loader = async ({
   // Staff asked for a preview but no branch exists → render main with a notice.
   const previewMissing = Boolean(canEdit && wantsPreview && !previewStatus?.exists);
 
-  // Per-VIEWER tier: staff and preview readers get short-lived draft URLs, a
-  // public deck's anonymous readers get the long public bucket, everyone else
-  // the enrolled one. This is the reason a signed URL cannot live in the deck.
+  // The deck VIEWER is the one EDITING surface, so it is the only one that can
+  // mint the short-lived `edit` bucket: staff, and a staff read of the preview
+  // BRANCH, get it. Every other reader here takes the DECK's own visibility —
+  // `month` for a public deck, `week` for the rest. This is the reason a signed
+  // URL cannot live in the deck.
   const deliveryCtx = deckDeliveryContext(
     slide,
     gitOrgLogin,
