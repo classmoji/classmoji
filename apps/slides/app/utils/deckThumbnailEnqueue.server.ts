@@ -34,11 +34,10 @@ import { ClassmojiService } from '@classmoji/services';
 export const ENQUEUE_WINDOW_MS = 10 * 60 * 1000;
 
 /**
- * Per-deck last-attempt clock, modelled on `unreachableClassrooms` in
- * contentDelivery: in-process, unbounded in principle and pruned in practice,
- * and it does not have to be shared. A second instance getting its own window
- * costs one extra enqueue, which the task's own skip-if-unchanged check throws
- * away for free.
+ * Per-deck last-attempt clock: in-process, unbounded in principle and pruned in
+ * practice, and it does not have to be shared. A second instance getting its
+ * own window costs one extra enqueue, which the task's own skip-if-unchanged
+ * check throws away for free.
  */
 const lastEnqueuedAt = new Map<string, number>();
 
