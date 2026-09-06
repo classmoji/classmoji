@@ -843,6 +843,118 @@ const TEXT_FETCH_TIMEOUT_MS = 6000;
 const ENSURE_MAP_TIMEOUT_MS = 4000;
 
 /**
+ * How long a classroom stays written off after a read finds it unreachable.
+ *
+ * Long enough to cover the page that provoked it and the two or three reloads
+ * that follow — the fan-out this exists for is one screen's worth of thumbnails
+ * and an instructor refreshing it. Short enough that a repo made readable again
+ * (access restored, a private repo re-shared) starts working within a few
+ * minutes without anyone restarting anything.
+ */
+const UNREACHABLE_WINDOW_MS = 5 * 60 * 1000;
+
+/**
+ * Ceiling on how many classrooms may be remembered at once.
+ *
+ * The map is per-process and bounded twice — expired entries are dropped on
+ * every insert, and this catches the pathological case where they arrive faster
+ * than they expire. Reaching it clears the map rather than evicting one entry:
+ * this is a latency optimization, and forgetting everything costs one slow read
+ * per classroom, which is exactly the state it started in.
+ */
+const UNREACHABLE_MAX_CLASSROOMS = 500;
+
+/**
+ * Classrooms whose content origin answered nothing at all, and until when.
+ *
+ * ## The fan-out this is for
+ *
+ * The slides index renders every deck as an iframe, each of which runs the
+ * thumbnail read in its own loader. When a classroom's content repo cannot be
+ * read — access revoked, a repo gone private, a deleted repo still referenced —
+ * every one of those reads burns its whole budget before failing, and with
+ * ~19 thumbnails at a browser's ~6 concurrent connections the page dribbles in
+ * over minutes and looks hung. The failure is a property of the CLASSROOM, not
+ * of the 19 files, so the first read is entitled to answer for the rest.
+ *
+ * ## What may and may not consult it
+ *
+ * Only DECORATIVE reads (see `fetchContentText`). A thumbnail is a picture of a
+ * deck and its absence costs a grey rectangle; a person actually opening that
+ * deck must still make the attempt, because "the repo was unreadable four
+ * minutes ago" is not an answer to "show me my slides" — and the window would
+ * otherwise keep a recovered classroom broken for five minutes after it healed.
+ *
+ * ## What may write to it
+ *
+ * Only a read where every leg that reached an origin failed with a transport or
+ * permission error. A 404 is explicitly NOT one: a file that does not exist
+ * says nothing about whether the repo can be read, and treating it as a
+ * classroom-wide outage would blank thumbnails for decks whose `index.html`
+ * simply has not been generated yet.
+ */
+const unreachableClassrooms = new Map<string, { until: number }>();
+
+/** Test/ops seam — the map is module state and would otherwise leak between cases. */
+export function clearUnreachableClassrooms(): void {
+  unreachableClassrooms.clear();
+}
+
+function isClassroomUnreachable(classroomId: string, now: number = Date.now()): boolean {
+  const entry = unreachableClassrooms.get(classroomId);
+  if (!entry) return false;
+  if (entry.until <= now) {
+    unreachableClassrooms.delete(classroomId);
+    return false;
+  }
+  return true;
+}
+
+/**
+ * Write a classroom off for a window, once.
+ *
+ * A read that lands inside an OPEN window neither extends it nor logs again:
+ * the window is "we have already been told", and re-arming it on every failure
+ * would let a steady trickle of reads keep a healed classroom written off
+ * indefinitely. That also makes the log exactly one line per window, which is
+ * the only rate that is readable when the trigger is a page of thumbnails.
+ */
+function rememberUnreachable(classroomId: string, path: string): void {
+  const now = Date.now();
+  if (isClassroomUnreachable(classroomId, now)) return;
+
+  for (const [id, entry] of unreachableClassrooms) {
+    if (entry.until <= now) unreachableClassrooms.delete(id);
+  }
+  if (unreachableClassrooms.size >= UNREACHABLE_MAX_CLASSROOMS) unreachableClassrooms.clear();
+  unreachableClassrooms.set(classroomId, { until: now + UNREACHABLE_WINDOW_MS });
+
+  // eslint-disable-next-line no-console
+  console.debug(
+    `[contentDelivery] classroom ${classroomId} content origin unreachable ` +
+      `(last failure: ${path}); skipping decorative reads for ` +
+      `${Math.round(UNREACHABLE_WINDOW_MS / 1000)}s`
+  );
+}
+
+/**
+ * What the legs of one read concluded, in the order they ran.
+ *
+ * Only legs that actually REACHED an origin record anything. A leg that was
+ * skipped — the delivery layer off, no map row, a `cdn-only` read never trying
+ * the API — says nothing about reachability and must not be able to condemn a
+ * classroom on its own.
+ *
+ *   - `miss` — an origin answered, and the answer was "no such file" (a 404).
+ *     Proof the origin is REACHABLE, which is why it disqualifies the write-off.
+ *   - `error` — transport or permission: a timeout, a refused socket, a 403, a
+ *     5xx. The origin did not answer the question.
+ */
+interface TextReadTrace {
+  outcomes: Array<'miss' | 'error'>;
+}
+
+/**
  * Reject after `ms`, so a call with no cancellation of its own cannot hold a
  * render open.
  *
@@ -911,15 +1023,55 @@ export async function fetchContentText(
     skipCache?: boolean;
     fallback?: TextFallback;
     budget?: TextReadBudget;
+    /**
+     * Per-leg deadline, overriding `TEXT_FETCH_TIMEOUT_MS`.
+     *
+     * For a caller whose read is worth LESS than the default budget, not more.
+     * A thumbnail is the case: it is decorative, and its loader is one of
+     * nineteen the browser is running at six-at-a-time, so a leg that waits the
+     * full six seconds turns one unreadable classroom into a page that dribbles
+     * in over minutes. Two seconds is generous for a read that is expected to
+     * hit the edge and pointless to extend for one that will not.
+     */
+    deadlineMs?: number;
+    /**
+     * This read is decorative — its absence costs a placeholder, not an error.
+     *
+     * Decorative reads consult the unreachable-classroom window and return
+     * `null` immediately when it is open, so one classroom's broken repo costs
+     * one timeout per window instead of one per file. Reads that a person is
+     * actually waiting on leave this off and always make the attempt; see
+     * `unreachableClassrooms`.
+     */
+    decorative?: boolean;
   } = {}
 ): Promise<ContentText | null> {
   const path = normalizeRepoRelative(repoPath);
   if (!path) return null;
 
+  // Already known unreachable, and this read is decorative. No map lookup, no
+  // socket, no wait — the answer was established by the read that paid for it.
+  if (opts.decorative && isClassroomUnreachable(ctx.classroom.id)) {
+    logTextRead(opts.label, path, ctx.classroom.id, 'unreachable');
+    return null;
+  }
+
+  const deadlineMs = opts.deadlineMs ?? TEXT_FETCH_TIMEOUT_MS;
   const fallback = opts.fallback ?? 'api-then-cdn';
-  const viaWorker = await readTextThroughWorker(ctx, path, opts.budget);
+  const trace: TextReadTrace = { outcomes: [] };
+  const viaWorker = await readTextThroughWorker(ctx, path, deadlineMs, trace, opts.budget);
   const result =
-    viaWorker ?? (fallback === 'none' ? null : await readTextFromGitHub(ctx, path, fallback, opts));
+    viaWorker ??
+    (fallback === 'none'
+      ? null
+      : await readTextFromGitHub(ctx, path, fallback, deadlineMs, trace, opts));
+
+  // Every leg that reached an origin failed, and none of them failed by
+  // answering "no such file". That is a classroom-level fault, so record it
+  // once and let the decorative reads behind this one skip the wait.
+  if (!result && trace.outcomes.length > 0 && trace.outcomes.every(o => o === 'error')) {
+    rememberUnreachable(ctx.classroom.id, path);
+  }
 
   logTextRead(opts.label, path, ctx.classroom.id, result?.source ?? 'none');
   return result;
@@ -1082,6 +1234,8 @@ async function warmOneTextFile(
 async function readTextThroughWorker(
   ctx: TextReadContext,
   path: string,
+  deadlineMs: number,
+  trace: TextReadTrace,
   budget?: TextReadBudget
 ): Promise<ContentText | null> {
   if (!isContentDeliveryEnabled(ctx.classroom)) return null;
@@ -1097,15 +1251,19 @@ async function readTextThroughWorker(
   let asset: ContentAssetRecord | null;
   try {
     // Bounded: a stale map turns this into three GitHub calls, and a slow
-    // GitHub must cost a fallback rather than a held-open render.
-    await withDeadline(ensureMap(ctx.classroom.id), ENSURE_MAP_TIMEOUT_MS, 'map refresh').catch(
-      error => {
-        console.warn(
-          `[contentDelivery] Map refresh gave up for classroom ${ctx.classroom.id}:`,
-          error instanceof Error ? error.message : error
-        );
-      }
-    );
+    // GitHub must cost a fallback rather than a held-open render. Never longer
+    // than the caller's own budget — a decorative read that asked for two
+    // seconds must not spend four of them here before its fetch begins.
+    await withDeadline(
+      ensureMap(ctx.classroom.id),
+      Math.min(ENSURE_MAP_TIMEOUT_MS, deadlineMs),
+      'map refresh'
+    ).catch(error => {
+      console.warn(
+        `[contentDelivery] Map refresh gave up for classroom ${ctx.classroom.id}:`,
+        error instanceof Error ? error.message : error
+      );
+    });
     asset = await lookupContentAsset(ctx.classroom.id, path);
   } catch (error) {
     // The map itself is unreachable, which is not the Worker's fault — do not
@@ -1125,10 +1283,15 @@ async function readTextThroughWorker(
   try {
     const url = await signTextUrl(ctx.classroom, env, asset.sha, ext);
 
-    const response = await fetch(url, { signal: AbortSignal.timeout(TEXT_FETCH_TIMEOUT_MS) });
+    const response = await fetch(url, { signal: AbortSignal.timeout(deadlineMs) });
     if (!response.ok) {
       // A refusal is an ANSWER, not a dead origin: the Worker is up and said
       // no. Fall back for this path and leave the circuit closed.
+      //
+      // A 404 is the Worker saying the sha is not there, which is proof it is
+      // reachable; anything else (a 403, or the 502 it answers when its own
+      // origin pull fails) is the repo not being readable through it.
+      trace.outcomes.push(response.status === 404 ? 'miss' : 'error');
       console.warn(
         `[contentDelivery] Worker returned ${response.status} for ${path} ` +
           `(classroom ${ctx.classroom.id}); falling back`
@@ -1142,6 +1305,7 @@ async function readTextThroughWorker(
     // and it is about the ORIGIN rather than this file. Trip the circuit so the
     // rest of this render does not queue up behind the same dead connection.
     if (budget) budget.workerUnavailable = true;
+    trace.outcomes.push('error');
     console.warn(
       `[contentDelivery] Worker text read failed for ${path} (classroom ${ctx.classroom.id}); ` +
         'skipping the Worker for the rest of this read:',
@@ -1167,6 +1331,8 @@ async function readTextFromGitHub(
   ctx: TextReadContext,
   path: string,
   fallback: TextFallback,
+  deadlineMs: number,
+  trace: TextReadTrace,
   opts: { skipCache?: boolean }
 ): Promise<ContentText | null> {
   const orgLogin = ctx.classroom.git_organization.login;
@@ -1182,11 +1348,17 @@ async function readTextFromGitHub(
           path,
           ...(opts.skipCache ? { skipCache: true } : {}),
         }),
-        TEXT_FETCH_TIMEOUT_MS,
+        deadlineMs,
         'contents API read'
       );
       if (file?.content) return { text: file.content, sha: file.sha ?? null, source: 'api' };
+      // `getContent` returns null for a 404 and THROWS for everything else, so
+      // reaching here is GitHub saying the file is not in the repo — which is
+      // also proof that the repo could be read.
+      trace.outcomes.push('miss');
     } catch (error) {
+      // A 403 (no access), a 5xx, or our own deadline. Not an answer.
+      trace.outcomes.push('error');
       console.warn(
         `[contentDelivery] API text read failed for ${repo}/${path}:`,
         error instanceof Error ? error.message : error
@@ -1200,10 +1372,12 @@ async function readTextFromGitHub(
   // a save is visible the instant it returns.
   try {
     const response = await fetch(`https://${orgLogin}.github.io/${repo}/${path}`, {
-      signal: AbortSignal.timeout(TEXT_FETCH_TIMEOUT_MS),
+      signal: AbortSignal.timeout(deadlineMs),
     });
     if (response.ok) return { text: await response.text(), sha: null, source: 'cdn' };
+    trace.outcomes.push(response.status === 404 ? 'miss' : 'error');
   } catch (error) {
+    trace.outcomes.push('error');
     console.warn(
       `[contentDelivery] CDN text read failed for ${repo}/${path}:`,
       error instanceof Error ? error.message : error

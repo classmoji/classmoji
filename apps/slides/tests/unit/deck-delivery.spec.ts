@@ -23,6 +23,7 @@ import { test, expect } from '@playwright/test';
 import {
   deckAccessFor,
   deckDeliveryContext,
+  deckTextReadOptions,
   gitBlobSha,
   isThumbnailRequest,
   isThemeRef,
@@ -442,12 +443,8 @@ test.describe("the /follow route's own preview parameter", () => {
       expect(tier).toBe('week');
     }
     expect(
-      deckDeliveryContext(
-        PUBLIC_SLIDE,
-        ORG,
-        REPO,
-        deckAccessFor('follow', OWNER, PUBLIC_SLIDE)
-      )?.tier
+      deckDeliveryContext(PUBLIC_SLIDE, ORG, REPO, deckAccessFor('follow', OWNER, PUBLIC_SLIDE))
+        ?.tier
     ).toBe('month');
   });
 });
@@ -538,7 +535,8 @@ test.describe('responsive images', () => {
   });
 
   test("does not clobber an author's own srcset", async () => {
-    const html = '<img src="https://cdn.example.com/a.png" srcset="https://cdn.example.com/a2.png 2x">';
+    const html =
+      '<img src="https://cdn.example.com/a.png" srcset="https://cdn.example.com/a2.png 2x">';
     const { html: out } = await resolveDeckDelivery(html, ctx(), {
       resolvers: fakeResolvers(),
       themeName: null,
@@ -566,4 +564,31 @@ test('resolves a deck read in ONE pass, not one per concern', async () => {
   });
 
   expect(calls).toBe(1);
+});
+
+test.describe('what a thumbnail read asks for', () => {
+  test('caps its budget and declares itself decorative', () => {
+    // The index renders one iframe per deck, so an unreadable content repo costs
+    // every thumbnail loader the full read budget — nineteen of them, six at a
+    // time, is a page that dribbles in over minutes. Two seconds because a
+    // thumbnail is decorative, and `decorative` so the ones behind the first can
+    // skip the wait entirely once the classroom is known unreachable.
+    expect(deckTextReadOptions('thumbnail', { fallback: 'cdn-only', thumbnail: true })).toEqual({
+      label: 'thumbnail',
+      fallback: 'cdn-only',
+      deadlineMs: 2000,
+      decorative: true,
+    });
+  });
+
+  test('leaves a read someone is waiting on entirely alone', () => {
+    // No shorter budget and no `decorative`: a person opening a deck must get
+    // the full attempt, whatever an earlier thumbnail concluded about the
+    // classroom. That is also what lets a recovered repo work again at once.
+    expect(deckTextReadOptions('present')).toEqual({ label: 'present' });
+    expect(deckTextReadOptions('viewer', { fallback: 'api-then-cdn' })).toEqual({
+      label: 'viewer',
+      fallback: 'api-then-cdn',
+    });
+  });
 });

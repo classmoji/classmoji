@@ -185,13 +185,57 @@ export type DeliveryContext = ReturnType<typeof deckDeliveryContext>;
  * null on the CDN path (GitHub Pages serves a path and names no object), so a
  * caller comparing identities must read null as "cannot tell", never as a match.
  */
+/**
+ * Per-leg budget for a THUMBNAIL read, well under the default six seconds.
+ *
+ * The index renders every deck as its own iframe, so nineteen decks is nineteen
+ * loaders running six-at-a-time in the browser. For a classroom whose content
+ * repo cannot be read at all — access revoked, repo gone private, repo deleted
+ * — each of those spends its whole budget before failing, and the page dribbles
+ * in over minutes and reads as hung.
+ *
+ * Two seconds because a thumbnail is decorative: the read it is meant to win is
+ * an edge hit measured in milliseconds, and extending the wait for one that is
+ * going to fail buys a picture nobody is looking at yet. Paired with
+ * `decorative: true` below, which stops the second thumbnail of a broken
+ * classroom paying even this.
+ */
+const THUMBNAIL_READ_DEADLINE_MS = 2000;
+
+/** What a deck surface asks a text read for. Exported so the thumbnail policy is pinnable. */
+export function deckTextReadOptions(
+  label: string,
+  opts: { fallback?: 'api-then-cdn' | 'cdn-only'; thumbnail?: boolean } = {}
+): {
+  label: string;
+  fallback?: 'api-then-cdn' | 'cdn-only';
+  deadlineMs?: number;
+  decorative?: true;
+} {
+  return {
+    label,
+    ...(opts.fallback ? { fallback: opts.fallback } : {}),
+    ...(opts.thumbnail
+      ? { deadlineMs: THUMBNAIL_READ_DEADLINE_MS, decorative: true as const }
+      : {}),
+  };
+}
+
 export async function readDeckText(
   slide: DeliverySlide,
   gitOrgLogin: string,
   repo: string,
   path: string,
   label: string,
-  opts: { fallback?: 'api-then-cdn' | 'cdn-only' } = {}
+  opts: {
+    fallback?: 'api-then-cdn' | 'cdn-only';
+    /**
+     * This read is for a THUMBNAIL. Caps the per-leg wait and lets the read
+     * skip a classroom already known unreachable — both of which are only
+     * acceptable because the failure mode is a grey rectangle.
+     */
+    thumbnail?: boolean;
+  } = {}
 ): Promise<{ content: string; source: 'worker' | 'api' | 'cdn'; sha: string | null } | null> {
   const classroom = slide.classroom;
   if (!classroom?.id) return null;
@@ -207,7 +251,7 @@ export async function readDeckText(
       },
     },
     path,
-    { label, ...(opts.fallback ? { fallback: opts.fallback } : {}) }
+    deckTextReadOptions(label, opts)
   );
 
   return result ? { content: result.text, source: result.source, sha: result.sha } : null;

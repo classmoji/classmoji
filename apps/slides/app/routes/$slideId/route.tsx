@@ -367,7 +367,11 @@ export const loader = async ({
       repo,
       filePath,
       isThumbnail ? 'thumbnail' : 'viewer',
-      isThumbnail ? { fallback: 'cdn-only' } : {}
+      // `thumbnail: true` also caps the per-leg wait and lets a classroom
+      // already known unreachable answer instantly — see readDeckText. The
+      // index renders one iframe per deck, so an unreadable content repo would
+      // otherwise cost every one of them the full budget.
+      isThumbnail ? { fallback: 'cdn-only', thumbnail: true } : {}
     );
   }
 
