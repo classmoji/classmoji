@@ -150,6 +150,14 @@ export const action = async ({ request }: Route.ActionArgs) => {
     // one already limited, so the blast radius of a leaked token — or of a
     // leaked CONTENT_WORKER_SHARED_SECRET — is read-only on one content repo
     // for one hour, rather than write access across the org.
+    //
+    // NOT one GitHub API call per request. Two caches sit in front of this
+    // mint and they compose: the Worker keeps the token for its lifetime in
+    // each isolate, so it only asks here on a cold isolate, and the provider
+    // caches the down-scoped token per (installation, repo, permissions) while
+    // collapsing concurrent cold asks into a single mint. The effective rate is
+    // roughly one mint per content repo per hour, rather than the one-per-pull
+    // it would be if every call reached GitHub.
     const { token, expiresAt } = await provider.getInstallationToken({
       repositories: [repo],
       permissions: { contents: 'read' },
