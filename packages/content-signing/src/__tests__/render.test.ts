@@ -109,6 +109,32 @@ describe('verifyRenderToken', () => {
     await expect(verifyRenderToken(MASTER, token, fields({ now: exp + 1 }))).resolves.toEqual({
       ok: false,
       reason: 'expired',
+      exp,
+      skewSeconds: 1,
+    });
+  });
+
+  it('reports HOW LATE an expired token was, so a clock can be blamed', async () => {
+    // A render token lives 120 seconds and is minted immediately before the
+    // POST that presents it. There is no legitimate way to be five minutes
+    // late, so the number is the diagnosis: the two machines disagree about
+    // what time it is. The route logs it and still answers a bare 403.
+    const token = await signRenderToken(MASTER, fields());
+    const exp = NOW + RENDER_TOKEN_TTL_SECONDS;
+
+    await expect(
+      verifyRenderToken(MASTER, token, fields({ now: exp + 300 }))
+    ).resolves.toMatchObject({ ok: false, reason: 'expired', skewSeconds: 300 });
+  });
+
+  it('carries no skew on a failure that is not expiry', async () => {
+    // A forged token must read as forged and nothing else — an `exp` on a
+    // bad-signature answer would be a free oracle for whether a guess was
+    // otherwise well formed.
+    const token = await signRenderToken(MASTER, fields());
+    await expect(verifyRenderToken(MASTER, token, fields({ slideId: SLIDE_B }))).resolves.toEqual({
+      ok: false,
+      reason: 'bad-signature',
     });
   });
 

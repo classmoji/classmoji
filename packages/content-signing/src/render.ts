@@ -64,7 +64,20 @@ export interface RenderTokenFields {
   now?: number;
 }
 
-export type RenderVerification = { ok: true; exp: number } | { ok: false; reason: VerifyFailure };
+/**
+ * The answer, and — on an EXPIRED token only — enough to diagnose a clock.
+ *
+ * `skewSeconds` is `now - exp`: how far past its expiry the token was when it
+ * arrived. A token has a 120-second life and is presented seconds after it is
+ * minted, so a positive skew of any size means the two machines disagree about
+ * the time, not that the render was slow. This repo has been bitten by exactly
+ * that before (a fast Trigger clock read as an outage), and the number turns a
+ * silent 403 into a one-line diagnosis. It never leaves the server: the caller
+ * still answers a bare `Forbidden`.
+ */
+export type RenderVerification =
+  | { ok: true; exp: number }
+  | { ok: false; reason: VerifyFailure; exp?: number; skewSeconds?: number };
 
 const TOKEN_PATTERN = /^(0|[1-9][0-9]*)\.([A-Za-z0-9_-]+)$/;
 
@@ -146,7 +159,11 @@ export async function verifyRenderToken(
   // Signature first, expiry second: a forged token should read as forged, not
   // as merely stale, and answering "expired" to something that never verified
   // would be a free oracle for whether a guess was otherwise well formed.
-  if (now > exp) return { ok: false, reason: 'expired' };
+  //
+  // A token that DID verify and is merely late reports how late, because that
+  // is the number that separates "the render queue was slow" from "these two
+  // machines disagree about what time it is".
+  if (now > exp) return { ok: false, reason: 'expired', exp, skewSeconds: now - exp };
 
   return { ok: true, exp };
 }

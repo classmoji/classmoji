@@ -35,16 +35,6 @@ export interface DeckRenderTokenTarget {
   keyVersion?: number | null;
 }
 
-/**
- * Can this deployment mint or check render tokens at all?
- *
- * Only the signing secret matters here — unlike `isContentDeliveryConfigured`,
- * which also needs an origin for the URLs it mints. A render token is not a URL.
- */
-export function isDeckRenderTokenConfigured(): boolean {
-  return Boolean(process.env.CONTENT_SIGNING_SECRET);
-}
-
 function master(): string | null {
   return process.env.CONTENT_SIGNING_SECRET || null;
 }
