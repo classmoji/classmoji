@@ -1,10 +1,11 @@
-import { task, logger } from '@trigger.dev/sdk';
+import { task, logger, wait } from '@trigger.dev/sdk';
 import getPrisma from '@classmoji/database';
 import { ClassmojiService, ContentService } from '@classmoji/services';
 
 import {
   BrowserRunError,
   isBrowserRunConfigured,
+  redactRenderToken,
   screenshotToBase64,
 } from '../helpers/browserRun.ts';
 
@@ -48,6 +49,11 @@ import {
  * full of grey rectangles nobody can tell from real ones. 429 and 5xx rethrow
  * so the retry policy can have another go; a 4xx that means "this page will not
  * render" returns quietly, because retrying it three times changes nothing.
+ *
+ * Either way `thumbnail_rendered_at` is stamped. It is the LAST ATTEMPT, not
+ * the last success — the index rate-limits its on-view enqueue off that column,
+ * and a deck whose renders keep failing is exactly the deck that would otherwise
+ * be re-asked for by every page load forever.
  */
 
 /** How long the whole navigation may take. Browser Run caps this at 60s. */
@@ -56,8 +62,27 @@ const NAVIGATION_TIMEOUT_MS = 30000;
 /** How long to wait for the render page to declare itself painted. */
 const READY_TIMEOUT_MS = 15000;
 
+/**
+ * The longest we will sit on a 429's `Retry-After` before rethrowing.
+ *
+ * `maxDuration` is 120s and a render costs ~6s of it, so honouring an
+ * arbitrarily long back-off would spend the whole run waiting and then be killed
+ * for it. Past this the retry policy's own scheduling is the better instrument:
+ * it costs nothing to wait between attempts.
+ */
+const MAX_RETRY_AFTER_SECONDS = 90;
+
 export interface DeckThumbnailPayload {
   slideId: string;
+  /**
+   * Render even when the deck's `index.html` has not moved.
+   *
+   * The sha check answers "has the DECK changed?", which is the right question
+   * for a save and the wrong one for a THEME edit: the same document renders
+   * differently under new CSS, and every deck in the classroom is stale while
+   * its sha says otherwise. The new sha is still recorded afterwards.
+   */
+  force?: boolean;
 }
 
 export type DeckThumbnailResult =
@@ -117,16 +142,23 @@ export const deckThumbnailRender = task({
   maxDuration: 120,
   retry: { maxAttempts: 3, minTimeoutInMs: 5000 },
   run: async (payload: DeckThumbnailPayload): Promise<DeckThumbnailResult> => {
-    const { slideId } = payload;
+    const { slideId, force = false } = payload;
 
+    // ERROR, not warn: a deployment missing these renders no thumbnails at all
+    // and says so on every run. That is a configuration fault someone has to
+    // fix, not a condition to be noted — and the message names the variable so
+    // the fix does not need a code read.
     if (!isBrowserRunConfigured()) {
-      logger.warn('Browser Run is not configured; skipping thumbnail render', { slideId });
+      logger.error(
+        'CLOUDFLARE_ACCOUNT_ID and/or CLOUDFLARE_BROWSER_RENDERING_TOKEN are unset; no deck thumbnails can be rendered',
+        { slideId }
+      );
       return { status: 'skipped', reason: 'browser-run-unconfigured' };
     }
 
     const slidesOrigin = process.env.SLIDES_URL;
     if (!slidesOrigin) {
-      logger.warn('SLIDES_URL is unset; skipping thumbnail render', { slideId });
+      logger.error('SLIDES_URL is unset; no deck thumbnails can be rendered', { slideId });
       return { status: 'skipped', reason: 'slides-url-unset' };
     }
 
@@ -146,9 +178,12 @@ export const deckThumbnailRender = task({
     const indexPath = `${slide.content_path}/index.html`;
     const thumbnailPath = ClassmojiService.deckThumbnail.thumbnailPathFor(slide.content_path);
 
-    // 2-3. Skip when the document this thumbnail was taken of has not moved.
+    // 2-3. Skip when the document this thumbnail was taken of has not moved —
+    //      unless the caller knows something the sha cannot express. A theme
+    //      edit changes how every deck in a classroom LOOKS without touching a
+    //      byte of any of them.
     const indexSha = await currentIndexSha(slide.classroom_id, gitOrganization, repo, indexPath);
-    if (indexSha && indexSha === slide.thumbnail_rendered_sha && slide.thumbnail_path) {
+    if (!force && indexSha && indexSha === slide.thumbnail_rendered_sha && slide.thumbnail_path) {
       logger.info('Deck unchanged since its thumbnail was rendered', { slideId, sha: indexSha });
       return { status: 'unchanged', sha: indexSha };
     }
@@ -166,11 +201,14 @@ export const deckThumbnailRender = task({
       return { status: 'skipped', reason: 'signing-unconfigured' };
     }
 
-    // 5. Screenshot. The token is in the URL, so the URL is never logged.
+    // 5. Screenshot. The token travels as a HEADER, so the URL carries no
+    //    credential and is safe in an access log — the render route reads
+    //    nothing else.
     let base64: string;
     try {
       base64 = await screenshotToBase64({
-        url: ClassmojiService.deckThumbnail.thumbnailSourceUrl(slidesOrigin, slide.id, token),
+        url: ClassmojiService.deckThumbnail.thumbnailSourceUrl(slidesOrigin, slide.id),
+        headers: { [ClassmojiService.deckThumbnail.RENDER_TOKEN_HEADER]: token },
         width: ClassmojiService.deckThumbnail.THUMBNAIL_WIDTH,
         height: ClassmojiService.deckThumbnail.THUMBNAIL_HEIGHT,
         readySelector: ClassmojiService.deckThumbnail.THUMBNAIL_READY_SELECTOR,
@@ -179,28 +217,55 @@ export const deckThumbnailRender = task({
         readyTimeoutMs: READY_TIMEOUT_MS,
       });
     } catch (error: unknown) {
+      // Every message from here on is redacted before it is logged or returned.
+      // Cloudflare quotes the request back in some of its errors, and this run's
+      // `reason` is stored on the run itself where anyone can read it.
+      const reason = redactRenderToken(error instanceof Error ? error.message : String(error));
+
       if (error instanceof BrowserRunError && error.retryable) {
-        // Rethrow so the task's own retry policy handles it. The `Retry-After`
-        // a 429 carries is logged rather than slept on: sleeping would spend
-        // this run's maxDuration to save a scheduling round trip.
-        logger.warn('Browser Run asked us to back off', {
-          slideId,
-          status: error.status,
-          retryAfterSeconds: error.retryAfterSeconds,
-        });
+        // A 429 that names a back-off is HONOURED before the rethrow. Retrying
+        // into a closed window just burns the attempt budget and arrives at the
+        // same 429; capped, because this run has a `maxDuration` to keep.
+        const retryAfter = error.retryAfterSeconds;
+        if (retryAfter !== null && retryAfter > 0) {
+          const seconds = Math.min(retryAfter, MAX_RETRY_AFTER_SECONDS);
+          logger.warn('Browser Run asked us to back off; waiting before the retry', {
+            slideId,
+            status: error.status,
+            retryAfterSeconds: retryAfter,
+            waitingSeconds: seconds,
+          });
+          await wait.for({ seconds });
+        } else {
+          logger.warn('Browser Run asked us to back off', {
+            slideId,
+            status: error.status,
+            retryAfterSeconds: retryAfter,
+          });
+        }
+        // Rethrow into the task's own retry policy either way: the wait was the
+        // server's instruction, the retry is ours.
         throw error;
       }
+
       // Everything else: the deck keeps whatever thumbnail it has. Nothing is
-      // deleted, nothing is written, and the index falls back to a placeholder
-      // only for decks that never had one.
+      // deleted, nothing is committed, and the index falls back to a placeholder
+      // only for decks that never had one. The ATTEMPT is recorded, though —
+      // see `thumbnail_rendered_at` below.
       logger.error('Thumbnail render failed; keeping the existing thumbnail', {
         slideId,
-        error: error instanceof Error ? error.message : String(error),
+        error: reason,
       });
-      return {
-        status: 'failed',
-        reason: error instanceof Error ? error.message : String(error),
-      };
+
+      // The path and the sha are left exactly as they were: the row must keep
+      // pointing at the picture that is actually in the repo. Only the attempt
+      // clock moves, which is what stops the index re-asking on every load.
+      await getPrisma().slide.update({
+        where: { id: slide.id },
+        data: { thumbnail_rendered_at: new Date() },
+      });
+
+      return { status: 'failed', reason };
     }
 
     // 6. Commit. `uploadBatch` is the only commit path that carries binary —
@@ -257,11 +322,17 @@ export const deckThumbnailRender = task({
     // 8. Record what was rendered and from which document. `thumbnail_rendered_sha`
     //    is the index.html sha, NOT the thumbnail's own — it is the answer to
     //    "has the deck changed since the picture was taken?".
+    //
+    //    A NULL sha (the map had no row and the metadata read failed) is left
+    //    OUT of the update rather than written. Writing null would erase a
+    //    perfectly good previous answer and make the next run re-render for no
+    //    reason; leaving it costs one stale sha until a read succeeds, which is
+    //    strictly the smaller mistake.
     await getPrisma().slide.update({
       where: { id: slide.id },
       data: {
         thumbnail_path: thumbnailPath,
-        thumbnail_rendered_sha: indexSha,
+        ...(indexSha ? { thumbnail_rendered_sha: indexSha } : {}),
         thumbnail_rendered_at: new Date(),
       },
     });

@@ -62,7 +62,36 @@ function parseArgs(argv: string[]): Options {
   return { dryRun, classroomSlug: classroomSlug || null };
 }
 
+/**
+ * What the render needs to exist at all, checked HERE rather than discovered
+ * three hundred runs later.
+ *
+ * The task itself skips politely when these are missing — the right behaviour
+ * for a save-triggered render nobody is watching. A backfill is the opposite: a
+ * deliberate one-shot someone is waiting on, and queueing hundreds of runs that
+ * will each log an error and return `skipped` looks exactly like success from
+ * the outside. Refuse instead, and name the variable.
+ */
+const REQUIRED_ENV = [
+  'CLOUDFLARE_ACCOUNT_ID',
+  'CLOUDFLARE_BROWSER_RENDERING_TOKEN',
+  'SLIDES_URL',
+] as const;
+
+function assertConfigured(): void {
+  const missing = REQUIRED_ENV.filter(name => !process.env[name]);
+  if (missing.length === 0) return;
+
+  console.error(
+    `❌ Refusing to run: ${missing.join(', ')} ${missing.length === 1 ? 'is' : 'are'} unset.`
+  );
+  console.error('   Every queued run would skip without rendering anything.');
+  process.exit(1);
+}
+
 async function backfillDeckThumbnails({ dryRun, classroomSlug }: Options): Promise<void> {
+  assertConfigured();
+
   const slides = await getPrisma().slide.findMany({
     where: {
       classroom: {
@@ -131,12 +160,18 @@ async function backfillDeckThumbnails({ dryRun, classroomSlug }: Options): Promi
         continue;
       }
 
-      // The same per-classroom fence the save path uses: a backfill run queues
-      // behind a live render for that classroom rather than racing it into the
-      // same repo.
+      // The same per-classroom fence AND the same idempotency key the save path
+      // uses. The fence keeps a backfill run queued behind a live render for
+      // that classroom rather than racing it into the same repo; the key is what
+      // makes a backfill collapse into a save's pending run — someone editing a
+      // deck while this sweeps their classroom gets one render, not two.
       await Tasks.deckThumbnailRender.trigger(
         { slideId: slide.id },
-        { concurrencyKey: classroomId }
+        {
+          concurrencyKey: classroomId,
+          idempotencyKey: `deck-thumb:${slide.id}`,
+          idempotencyKeyTTL: '90s',
+        }
       );
       triggered += 1;
       console.log(`   ✅ queued ${label}`);

@@ -13,12 +13,20 @@
  * back out; there is nothing to crop out of a page that never had them.
  *
  * ── What authorises the request ────────────────────────────────────────────
- * A signed render token in `?render=`, and NOTHING ELSE. No session is
- * consulted and no cookie would help: the caller is a headless browser on
- * infrastructure we do not control, and it must be able to read exactly one
- * deck for exactly two minutes. The token binds `{host, classroomId, slideId,
- * exp}` under the classroom's derived key, in its own `cm1|render|` namespace
- * (see packages/content-signing/src/render.ts).
+ * A signed render token in the `X-Render-Token` HEADER, and NOTHING ELSE. No
+ * session is consulted and no cookie would help: the caller is a headless
+ * browser on infrastructure we do not control, and it must be able to read
+ * exactly one deck for exactly two minutes. The token binds `{host,
+ * classroomId, slideId, exp}` under the classroom's derived key, in its own
+ * `cm1|render|` namespace (see packages/content-signing/src/render.ts).
+ *
+ * A HEADER rather than the `?render=` query string it started as. A query
+ * string is written to every access log in the path — this app's own `morgan`
+ * line included — kept in proxy caches, and handed on in a `Referer`. Browser
+ * Run's `/screenshot` accepts `setExtraHTTPHeaders`, so the credential travels
+ * out of band and the URL is a plain, loggable URL. The query parameter is NOT
+ * accepted as a fallback: a credential channel nobody uses is a credential
+ * channel nobody watches.
  *
  * ── What it is allowed to see ──────────────────────────────────────────────
  * The FIRST slide, with NO speaker notes. Notes are dropped structurally —
@@ -58,22 +66,58 @@ import {
  * exactly this attribute and renders at exactly this size, and it cannot import
  * this route.
  */
-const { THUMBNAIL_READY_ATTRIBUTE } = ClassmojiService.deckThumbnail;
+const { RENDER_TOKEN_HEADER, THUMBNAIL_READY_ATTRIBUTE } = ClassmojiService.deckThumbnail;
 
 /**
- * Never cached, never indexed, never framed.
+ * Never cached, never indexed, never framed. The SAME headers on the refusal
+ * and on the render — a 403 that leaked into a cache or an index would be its
+ * own small problem, and there is no reason for the two answers to differ.
  *
- * `no-store` because the URL carries a 120-second credential, and a cached copy
- * would outlive it in someone else's store. `noindex` because the route is
- * reachable by URL and a crawler that got hold of one should not keep it.
+ * `no-store` because the response is one deck's content served without a
+ * session; `noindex` because the route is reachable by URL and a crawler that
+ * got hold of one should not keep it; `no-referrer` so the URL cannot travel
+ * onward through anything the page loads.
  */
-const RENDER_HEADERS: Record<string, string> = {
+export const RENDER_HEADERS: Record<string, string> = {
   'Content-Type': 'text/html; charset=utf-8',
   'Cache-Control': 'no-store, no-cache, must-revalidate, private',
   'X-Robots-Tag': 'noindex, nofollow, noarchive',
   'Referrer-Policy': 'no-referrer',
   'X-Frame-Options': 'DENY',
 };
+
+/**
+ * The ONE refusal this route has.
+ *
+ * An unknown slide id and a bad token answer byte-for-byte identically, so the
+ * response tells a caller nothing about which decks exist. That is only true if
+ * there is a single place that builds it — two `new Response('Forbidden')`
+ * literals drift, and the drift is the oracle.
+ */
+export function renderRefusal(): Response {
+  return new Response('Forbidden', { status: 403, headers: RENDER_HEADERS });
+}
+
+/**
+ * Why we refused, for the SERVER LOG only. Never reaches the response.
+ *
+ * `expired` versus `invalid` is the difference between "these two machines
+ * disagree about the time" and "that signature is not ours", and one of those is
+ * a five-minute fix nobody can make from a bare 403. A render token lives 120
+ * seconds and is minted immediately before the POST that presents it, so a
+ * positive skew of any size means a clock rather than a slow queue — this repo
+ * has already lost an afternoon to a fast Trigger clock reading as an outage.
+ */
+export function refusalDetail(
+  slide: unknown,
+  verification: { ok: boolean; reason?: string; exp?: number; skewSeconds?: number }
+): string {
+  if (!slide) return 'unknown-slide';
+  if (verification.reason === 'expired') {
+    return `expired ${verification.skewSeconds}s ago (exp ${verification.exp}) — check for clock skew between the render worker and this host`;
+  }
+  return `invalid (${verification.reason})`;
+}
 
 /**
  * The deck reduced to its first slide.
@@ -168,7 +212,8 @@ export const loader = async ({
   if (!slideId) throw new Response('Missing slideId', { status: 400 });
 
   const url = new URL(request.url);
-  const token = url.searchParams.get('render');
+  // The header, and only the header. See the note at the top of this file.
+  const token = request.headers.get(RENDER_TOKEN_HEADER);
 
   const slide = await getPrisma().slide.findUnique({
     where: { id: slideId },
@@ -187,8 +232,12 @@ export const loader = async ({
     : ({ ok: false, reason: 'malformed' } as const);
 
   if (!slide || !verification.ok) {
-    // The reason is never echoed: a caller learns only that it was refused.
-    throw new Response('Forbidden', { status: 403, headers: RENDER_HEADERS });
+    // SERVER-SIDE ONLY — the caller still gets a bare `Forbidden` with nothing
+    // in it. See `refusalDetail` for why the distinction is worth making.
+    console.warn(
+      `[thumbnail-source] Refused a render for ${slideId}: ${refusalDetail(slide, verification)}`
+    );
+    throw renderRefusal();
   }
 
   const gitOrgLogin = slide.classroom?.git_organization?.login;

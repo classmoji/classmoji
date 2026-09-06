@@ -41,14 +41,27 @@ export function thumbnailPathFor(contentPath: string): string {
 }
 
 /**
- * The URL Browser Run is pointed at.
+ * The header the render token travels in, and the ONLY channel the route reads.
  *
- * The token goes in the query string because that is the only channel a
- * screenshot request has — Browser Run navigates, it does not carry headers we
- * choose per-request. The route answers `no-store` and `noindex` precisely
- * because of that.
+ * It used to be a `?render=` query parameter, which is the obvious shape for a
+ * "navigate to this URL" API — and the wrong one for a credential. A query
+ * string is written to every access log in the path (the slides app's own
+ * `morgan` line included), kept in proxy caches, and handed on in a `Referer`.
+ * Browser Run's `/screenshot` accepts `setExtraHTTPHeaders`, so the token
+ * travels as a header instead and the URL is a plain, loggable URL.
+ *
+ * One caveat, deliberately accepted: Puppeteer's `setExtraHTTPHeaders` applies
+ * to every request the PAGE makes, so a deck's images are fetched with this
+ * header attached too. The token is bound to the render host, so it verifies
+ * nowhere else and a CDN that receives it holds nothing usable.
  */
-export function thumbnailSourceUrl(origin: string, slideId: string, token: string): string {
+export const RENDER_TOKEN_HEADER = 'X-Render-Token';
+
+/**
+ * The URL Browser Run is pointed at. No credential in it, by design — see
+ * `RENDER_TOKEN_HEADER`.
+ */
+export function thumbnailSourceUrl(origin: string, slideId: string): string {
   const base = origin.replace(/\/+$/, '');
-  return `${base}/${slideId}/thumbnail-source?render=${encodeURIComponent(token)}`;
+  return `${base}/${slideId}/thumbnail-source`;
 }

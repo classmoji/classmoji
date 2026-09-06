@@ -39,12 +39,14 @@ const warmContentBlob = vi.fn();
 const loggerInfo = vi.fn();
 const loggerWarn = vi.fn();
 const loggerError = vi.fn();
+const waitFor = vi.fn();
 
 // `task()` normally returns a trigger handle; return the config so the test can
 // call `run` directly.
 vi.mock('@trigger.dev/sdk', () => ({
   task: (config: unknown) => config,
   logger: { info: loggerInfo, warn: loggerWarn, error: loggerError },
+  wait: { for: waitFor },
 }));
 
 vi.mock('@classmoji/database', () => ({
@@ -66,9 +68,10 @@ vi.mock('@classmoji/services', () => ({
       THUMBNAIL_HEIGHT: 720,
       THUMBNAIL_WEBP_QUALITY: 80,
       THUMBNAIL_READY_SELECTOR: '[data-thumbnail-ready]',
+      RENDER_TOKEN_HEADER: 'X-Render-Token',
       thumbnailPathFor: (contentPath: string) => `${contentPath}/thumbnail.webp`,
-      thumbnailSourceUrl: (origin: string, slideId: string, token: string) =>
-        `${origin}/${slideId}/thumbnail-source?render=${encodeURIComponent(token)}`,
+      thumbnailSourceUrl: (origin: string, slideId: string) =>
+        `${origin}/${slideId}/thumbnail-source`,
     },
   },
   ContentService: { uploadBatch, getMeta },
@@ -86,9 +89,9 @@ const { deckThumbnailRender } = await import('../deckThumbnail.ts');
 
 type Result = { status: string; reason?: string; sha?: string; path?: string; bytes?: number };
 
-const run = (slideId = SLIDE_ID): Promise<Result> =>
+const run = (payload: { slideId?: string; force?: boolean } = {}): Promise<Result> =>
   (deckThumbnailRender as unknown as { run: (p: unknown, c?: unknown) => Promise<Result> }).run(
-    { slideId },
+    { slideId: SLIDE_ID, ...payload },
     {}
   );
 
@@ -294,7 +297,7 @@ describe('rendering and committing', () => {
     );
   });
 
-  it('mints the token per run and never logs it', async () => {
+  it('mints the token per run, sends it as a HEADER, and never logs it', async () => {
     await run();
 
     expect(signDeckRenderToken).toHaveBeenCalledWith({
@@ -304,8 +307,13 @@ describe('rendering and committing', () => {
       keyVersion: 0,
     });
 
-    const url = screenshotToBase64.mock.calls[0][0].url as string;
-    expect(url).toContain('/thumbnail-source?render=');
+    // The URL carries NO credential: it is written to the slides app's own
+    // access log on every render, and a query-string token would be written
+    // with it.
+    const call = screenshotToBase64.mock.calls[0][0];
+    expect(call.url).toBe(`https://slides.classmoji.test/${SLIDE_ID}/thumbnail-source`);
+    expect(call.url).not.toContain('render=');
+    expect(call.headers).toEqual({ 'X-Render-Token': '1767225720.c2lnbmF0dXJl' });
 
     const logged = JSON.stringify([
       loggerInfo.mock.calls,
@@ -315,10 +323,75 @@ describe('rendering and committing', () => {
     expect(logged).not.toContain('1767225720.c2lnbmF0dXJl');
     expect(logged).not.toContain('render=');
   });
+
+  it('leaves the recorded sha alone when nothing could tell it what the sha is', async () => {
+    // Map miss AND a metadata read that threw: `indexSha` is null. Writing that
+    // null would erase a previous, perfectly good answer and make the next run
+    // re-render for no reason — the render still happens, the column does not
+    // move.
+    lookupContentAsset.mockResolvedValue(null);
+    getMeta.mockRejectedValue(new Error('GitHub is having a moment'));
+    findUnique.mockResolvedValue(slideRow({ thumbnail_rendered_sha: 'e'.repeat(40) }));
+
+    await expect(run()).resolves.toMatchObject({ status: 'rendered' });
+
+    expect(update).toHaveBeenCalledWith({
+      where: { id: SLIDE_ID },
+      data: {
+        thumbnail_path: 'slides/week-01-intro/thumbnail.webp',
+        thumbnail_rendered_at: expect.any(Date),
+      },
+    });
+    expect(update.mock.calls[0][0].data).not.toHaveProperty('thumbnail_rendered_sha');
+  });
+});
+
+describe('force', () => {
+  it('renders a deck whose sha has not moved when the payload says to', async () => {
+    // A theme edit changes how every deck in a classroom LOOKS without touching
+    // a byte of any of them, so the sha check answers the wrong question there.
+    findUnique.mockResolvedValue(
+      slideRow({
+        thumbnail_path: 'slides/week-01-intro/thumbnail.webp',
+        thumbnail_rendered_sha: INDEX_SHA,
+      })
+    );
+
+    await expect(run({ force: true })).resolves.toMatchObject({ status: 'rendered' });
+    expect(screenshotToBase64).toHaveBeenCalledTimes(1);
+  });
+
+  it('still records the sha it rendered from', async () => {
+    findUnique.mockResolvedValue(
+      slideRow({
+        thumbnail_path: 'slides/week-01-intro/thumbnail.webp',
+        thumbnail_rendered_sha: INDEX_SHA,
+      })
+    );
+
+    await run({ force: true });
+
+    expect(update).toHaveBeenCalledWith({
+      where: { id: SLIDE_ID },
+      data: expect.objectContaining({ thumbnail_rendered_sha: INDEX_SHA }),
+    });
+  });
+
+  it('is off by default — the ordinary save path still skips', async () => {
+    findUnique.mockResolvedValue(
+      slideRow({
+        thumbnail_path: 'slides/week-01-intro/thumbnail.webp',
+        thumbnail_rendered_sha: INDEX_SHA,
+      })
+    );
+
+    await expect(run()).resolves.toMatchObject({ status: 'unchanged' });
+    expect(screenshotToBase64).not.toHaveBeenCalled();
+  });
 });
 
 describe('failure keeps the existing thumbnail', () => {
-  it('rethrows a 429 so the retry policy handles it, committing nothing', async () => {
+  it('honours a 429’s Retry-After before rethrowing into the retry policy', async () => {
     screenshotToBase64.mockRejectedValue(
       new BrowserRunError('Rate limited', {
         status: 429,
@@ -328,12 +401,38 @@ describe('failure keeps the existing thumbnail', () => {
     );
 
     await expect(run()).rejects.toThrow('Rate limited');
+
+    // The server said when to come back; retrying inside that window just burns
+    // an attempt to arrive at the same 429.
+    expect(waitFor).toHaveBeenCalledWith({ seconds: 7 });
     expect(uploadBatch).not.toHaveBeenCalled();
     expect(update).not.toHaveBeenCalled();
     expect(loggerWarn).toHaveBeenCalledWith(
       expect.stringContaining('back off'),
-      expect.objectContaining({ status: 429, retryAfterSeconds: 7 })
+      expect.objectContaining({ status: 429, retryAfterSeconds: 7, waitingSeconds: 7 })
     );
+  });
+
+  it('caps the wait at 90s — this run has a maxDuration to keep', async () => {
+    screenshotToBase64.mockRejectedValue(
+      new BrowserRunError('Rate limited', {
+        status: 429,
+        retryable: true,
+        retryAfterSeconds: 3600,
+      })
+    );
+
+    await expect(run()).rejects.toThrow('Rate limited');
+    expect(waitFor).toHaveBeenCalledWith({ seconds: 90 });
+  });
+
+  it('does not wait at all when there is no Retry-After to honour', async () => {
+    screenshotToBase64.mockRejectedValue(
+      new BrowserRunError('Rate limited', { status: 429, retryable: true })
+    );
+
+    await expect(run()).rejects.toThrow('Rate limited');
+    expect(waitFor).not.toHaveBeenCalled();
   });
 
   it('rethrows a 5xx as well', async () => {
@@ -342,6 +441,7 @@ describe('failure keeps the existing thumbnail', () => {
     );
     await expect(run()).rejects.toThrow('Bad gateway');
     expect(uploadBatch).not.toHaveBeenCalled();
+    expect(waitFor).not.toHaveBeenCalled();
   });
 
   it('returns quietly on a 422, leaving the stored thumbnail and its sha alone', async () => {
@@ -358,14 +458,45 @@ describe('failure keeps the existing thumbnail', () => {
     await expect(run()).resolves.toMatchObject({ status: 'failed' });
     expect(uploadBatch).not.toHaveBeenCalled();
     expect(recordContentAsset).not.toHaveBeenCalled();
-    // Crucially NOT updated: the row still points at the picture in the repo.
-    expect(update).not.toHaveBeenCalled();
+
+    // The ATTEMPT is stamped and nothing else. `thumbnail_path` and
+    // `thumbnail_rendered_sha` still describe the picture that is actually in
+    // the repo, and the index rate-limits its on-view enqueue against the
+    // timestamp — without this, a deck whose renders keep failing would be
+    // re-asked for by every single page load.
+    expect(update).toHaveBeenCalledWith({
+      where: { id: SLIDE_ID },
+      data: { thumbnail_rendered_at: expect.any(Date) },
+    });
   });
 
   it('never deletes or blanks a thumbnail on any failure path', async () => {
     screenshotToBase64.mockRejectedValue(new Error('something else entirely'));
     await expect(run()).resolves.toMatchObject({ status: 'failed' });
-    expect(update).not.toHaveBeenCalled();
+
+    const data = update.mock.calls[0][0].data;
+    expect(Object.keys(data)).toEqual(['thumbnail_rendered_at']);
+  });
+
+  it('redacts the render token out of the reason it reports and logs', async () => {
+    // The `reason` is stored on the Trigger run where anyone with dashboard
+    // access reads it, and Cloudflare quotes the request back in its errors.
+    const token = '1767225720.c2lnbmF0dXJl';
+    screenshotToBase64.mockRejectedValue(
+      new BrowserRunError(
+        `Navigation failed for https://slides.classmoji.test/d/thumbnail-source?render=${token} headers {"X-Render-Token":"${token}"}`,
+        { status: 422, retryable: false }
+      )
+    );
+
+    const result = await run();
+
+    expect(result.status).toBe('failed');
+    expect(result.reason).not.toContain(token);
+    expect(result.reason).toContain('Navigation failed');
+
+    const logged = JSON.stringify(loggerError.mock.calls);
+    expect(logged).not.toContain(token);
   });
 });
 

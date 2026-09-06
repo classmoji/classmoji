@@ -22,10 +22,14 @@
 -- that nobody changed, and each of those is a new whole WebP in the repo's
 -- history (compressed formats do not delta).
 --
--- `thumbnail_rendered_at` is when that render landed. The index reads it to
--- rate-limit the on-view enqueue for decks that have no thumbnail yet, so a
--- classroom whose renders are failing is retried on a timer rather than on
--- every page load.
+-- `thumbnail_rendered_at` is the LAST RENDER ATTEMPT — success or failure. Not
+-- "when the current picture was made": the index rate-limits its on-view
+-- enqueue against this column, and if only successes stamped it, a deck whose
+-- renders keep failing would carry a permanently-NULL timestamp and be
+-- re-enqueued by every single page load, forever. Stamping the attempt is what
+-- makes that a ten-minute retry instead. `thumbnail_path` and
+-- `thumbnail_rendered_sha` still describe the picture actually in the repo, and
+-- a failed render leaves both exactly as it found them.
 --
 -- All three NULLABLE with no default and no backfill. NULL across the board
 -- means "never rendered", which is exactly true of every existing deck; the

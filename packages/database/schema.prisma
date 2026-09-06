@@ -1242,6 +1242,9 @@ model Slide {
   // gate. `thumbnail_rendered_sha` is the blob sha of the index.html the
   // picture was taken of, and skipping a render when it still matches is what
   // keeps a save that did not change slide one from committing a new WebP.
+  // `thumbnail_rendered_at` is the LAST RENDER ATTEMPT — success OR failure —
+  // because the index rate-limits its on-view enqueue against it, and a deck
+  // whose renders keep failing must not be re-asked for on every page load.
   thumbnail_path         String?
   thumbnail_rendered_sha String?
   thumbnail_rendered_at  DateTime?
