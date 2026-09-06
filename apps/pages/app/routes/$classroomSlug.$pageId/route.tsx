@@ -700,6 +700,7 @@ const PageRoute = () => {
                 onReady={handleEditorReady}
                 resolveFileUrl={assets.resolveFileUrl}
                 srcSets={srcSets}
+                displayUrl={assets.displayUrl}
                 onAssetUploaded={assets.remember}
                 // P5: block editing while the save-merge chooser is open so no
                 // edits are silently discarded when the resolved merge remounts
@@ -726,6 +727,7 @@ const PageRoute = () => {
                 darkMode={darkMode}
                 resolveFileUrl={assets.resolveFileUrl}
                 srcSets={srcSets}
+                displayUrl={assets.displayUrl}
               />
             </Suspense>
           )}

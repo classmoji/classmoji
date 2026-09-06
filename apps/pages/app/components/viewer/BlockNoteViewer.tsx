@@ -4,6 +4,11 @@ import { MantineProvider } from '@mantine/core';
 import { useState, useEffect } from 'react';
 import { schema, type PageBlockInsertions } from '~/components/editor/blocks/index.tsx';
 import { AssetSrcSetContext, NO_SRC_SETS, type AssetSrcSets } from '~/hooks/useAssetSrcSets.ts';
+import {
+  AssetDisplayUrlContext,
+  IDENTITY_DISPLAY_URL,
+  type DisplayUrlLookup,
+} from '~/hooks/useAssetDisplayUrl.ts';
 
 import '@blocknote/mantine/style.css';
 import '@blocknote/core/fonts/inter.css';
@@ -24,6 +29,12 @@ interface BlockNoteViewerProps {
   resolveFileUrl?: (url: string) => Promise<string>;
   /** Responsive candidates, keyed by the stored reference. Same as the editor's. */
   srcSets?: AssetSrcSets;
+  /**
+   * The same map as `resolveFileUrl`, read synchronously. Custom blocks call it
+   * during render so the signed URL is in `src` on the FIRST commit — an
+   * effect-time swap paints the bare stored path, and the browser fetches it.
+   */
+  displayUrl?: DisplayUrlLookup;
 }
 
 const BlockNoteViewer = ({
@@ -31,6 +42,7 @@ const BlockNoteViewer = ({
   darkMode,
   resolveFileUrl,
   srcSets,
+  displayUrl,
 }: BlockNoteViewerProps) => {
   const [isMounted, setIsMounted] = useState(false);
   const initialContent =
@@ -67,7 +79,9 @@ const BlockNoteViewer = ({
     >
       <div className="page-editor">
         <AssetSrcSetContext.Provider value={srcSets ?? NO_SRC_SETS}>
-          <BlockNoteView editor={editor} editable={false} theme={darkMode ? 'dark' : 'light'} />
+          <AssetDisplayUrlContext.Provider value={displayUrl ?? IDENTITY_DISPLAY_URL}>
+            <BlockNoteView editor={editor} editable={false} theme={darkMode ? 'dark' : 'light'} />
+          </AssetDisplayUrlContext.Provider>
         </AssetSrcSetContext.Provider>
       </div>
     </MantineProvider>
