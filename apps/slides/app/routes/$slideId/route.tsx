@@ -525,6 +525,27 @@ async function recordThemeFile(
 }
 
 /**
+ * A theme file changed, so every card in the classroom is now a picture of the
+ * OLD theme. Ask for new ones.
+ *
+ * This is the case the render task's idempotence check cannot see. It asks "has
+ * this deck's `index.html` moved?" — and a theme edit moves nothing inside any
+ * deck while changing how all of them look, so every deck would answer "no" and
+ * keep its stale card until somebody happened to edit it. Hence `force`.
+ *
+ * Fire and forget, and NEVER awaited: the theme is committed and recorded by the
+ * time this runs, and a Trigger.dev outage must not turn a successful theme save
+ * into an error on an author's screen. The services helper swallows its own
+ * failures.
+ */
+function refreshClassroomCards(slide: { classroom_id?: string | null }, themeName: string): void {
+  void ClassmojiService.deckThumbnail.enqueueClassroomThumbnails(slide.classroom_id, {
+    themeName,
+    force: true,
+  });
+}
+
+/**
  * Forget `.slidesthemes/` paths the repo no longer has.
  *
  * The mirror of `recordThemeFile`, and needed for the same reason: blobs are
@@ -951,6 +972,7 @@ export const action = async ({
         message: `Add snippet: ${name}`,
       });
       await recordThemeFile(slide, `.slidesthemes/snippets/${filename}`, written.sha, content);
+      refreshClassroomCards(slide, filename);
 
       return {
         intent: 'save-snippet',
@@ -1013,6 +1035,7 @@ export const action = async ({
       });
       await recordThemeFile(slide, newPath, written.sha, content);
       if (id !== newFilename) await forgetThemeFiles(slide, [oldPath]);
+      refreshClassroomCards(slide, newFilename);
 
       return {
         intent: 'update-snippet',
@@ -1084,6 +1107,7 @@ export const action = async ({
         message: `Add custom CSS theme: ${name} (${type})`,
       });
       await recordThemeFile(slide, `.slidesthemes/${filename}`, written.sha, content);
+      refreshClassroomCards(slide, filename);
 
       return {
         intent: 'save-theme',
@@ -1148,6 +1172,7 @@ export const action = async ({
       });
       await recordThemeFile(slide, newPath, written.sha, content);
       if (id !== newFilename) await forgetThemeFiles(slide, [oldPath]);
+      refreshClassroomCards(slide, newFilename);
 
       return {
         intent: 'update-theme',

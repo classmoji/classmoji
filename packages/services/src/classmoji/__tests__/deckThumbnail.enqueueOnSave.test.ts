@@ -23,8 +23,11 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
+const slideFindMany = vi.fn();
 vi.mock('@classmoji/database', () => ({
-  default: () => ({ slide: { update: vi.fn() } }),
+  default: () => ({
+    slide: { update: vi.fn(), findMany: (...a: unknown[]) => slideFindMany(...a) },
+  }),
 }));
 
 const triggerMock = vi.fn();
@@ -78,7 +81,8 @@ vi.mock('../contentAssets.service.ts', () => ({
   resolveContentBranch: async () => 'main',
 }));
 
-const { enqueueDeckThumbnail } = await import('../deckThumbnail.service.ts');
+const { enqueueClassroomThumbnails, enqueueDeckThumbnail } =
+  await import('../deckThumbnail.service.ts');
 const { saveDeck } = await import('../../slides/slideContent.service.ts');
 
 const CLASSROOM_ID = '3f2504e0-4f89-41d3-9a0c-0305e82c3301';
@@ -253,5 +257,72 @@ describe('enqueueDeckThumbnail', () => {
 
     const [, , options] = triggerMock.mock.calls[0] as [string, unknown, Record<string, unknown>];
     expect(options).not.toHaveProperty('concurrencyKey');
+  });
+
+  it('sends `force` only when it is asked for', async () => {
+    await enqueueDeckThumbnail(SLIDE_ID, CLASSROOM_ID);
+    expect(triggerMock.mock.calls[0][1]).toEqual({ slideId: SLIDE_ID });
+
+    await enqueueDeckThumbnail(SLIDE_ID, CLASSROOM_ID, { force: true });
+    expect(triggerMock.mock.calls[1][1]).toEqual({ slideId: SLIDE_ID, force: true });
+  });
+});
+
+/**
+ * A THEME edit is the one case the render task's idempotence check gets wrong.
+ *
+ * It asks "has this deck's `index.html` moved?" — and a theme edit moves no byte
+ * inside any deck while changing how all of them look. Left alone, every deck in
+ * the classroom would answer "unchanged" and keep a card of the old theme until
+ * somebody happened to edit it.
+ */
+describe('enqueueClassroomThumbnails', () => {
+  const DECK_IDS = ['deck-a', 'deck-b', 'deck-c'];
+
+  beforeEach(() => {
+    slideFindMany.mockResolvedValue(DECK_IDS.map(id => ({ id })));
+  });
+
+  it('asks for every deck in the classroom, with force', async () => {
+    await enqueueClassroomThumbnails(CLASSROOM_ID, { themeName: 'dartmouth', force: true });
+
+    expect(triggerMock).toHaveBeenCalledTimes(3);
+    for (const [index, id] of DECK_IDS.entries()) {
+      expect(triggerMock.mock.calls[index][1]).toEqual({ slideId: id, force: true });
+    }
+    expect(slideFindMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { classroom_id: CLASSROOM_ID } })
+    );
+  });
+
+  it('reuses the per-deck idempotency key, so a save and a theme edit collapse', async () => {
+    await enqueueClassroomThumbnails(CLASSROOM_ID, { force: true });
+
+    const [, , options] = triggerMock.mock.calls[0] as [string, unknown, Record<string, unknown>];
+    expect(options).toMatchObject({
+      idempotencyKey: 'deck-thumb:deck-a',
+      idempotencyKeyTTL: '90s',
+      concurrencyKey: CLASSROOM_ID,
+    });
+  });
+
+  it('never rejects — a theme save is finished before this runs', async () => {
+    slideFindMany.mockRejectedValue(new Error('database is having a moment'));
+    await expect(
+      enqueueClassroomThumbnails(CLASSROOM_ID, { force: true })
+    ).resolves.toBeUndefined();
+
+    triggerMock.mockRejectedValue(new Error('trigger.dev is down'));
+    slideFindMany.mockResolvedValue([{ id: 'deck-a' }]);
+    await expect(
+      enqueueClassroomThumbnails(CLASSROOM_ID, { force: true })
+    ).resolves.toBeUndefined();
+  });
+
+  it('does nothing at all without a classroom', async () => {
+    await enqueueClassroomThumbnails(null, { force: true });
+    await enqueueClassroomThumbnails(undefined);
+    expect(slideFindMany).not.toHaveBeenCalled();
+    expect(triggerMock).not.toHaveBeenCalled();
   });
 });

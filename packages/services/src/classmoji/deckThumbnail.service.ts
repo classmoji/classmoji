@@ -18,6 +18,7 @@
  * at build; the id is a constant here so there is one place to change.
  */
 import { tasks } from '@trigger.dev/sdk';
+import getPrisma from '@classmoji/database';
 
 /** The task's own `id` in `packages/tasks/src/workflows/deckThumbnail.ts`. */
 const DECK_THUMBNAIL_TASK_ID = 'deck-thumbnail-render';
@@ -86,17 +87,22 @@ const IDEMPOTENCY_TTL = '90s';
  * @param classroomId the deck's classroom, used only as the concurrency key. A
  *                    missing one costs fair queueing, not correctness, so it is
  *                    optional rather than a reason to skip the enqueue.
+ * @param opts        `force` renders even when the deck's `index.html` has not
+ *                    moved. A SAVE never needs it — an unchanged document makes
+ *                    the same picture — but a THEME edit changes how every deck
+ *                    in a classroom looks without touching a byte of any of them.
  */
 export async function enqueueDeckThumbnail(
   slideId: string | null | undefined,
-  classroomId?: string | null
+  classroomId?: string | null,
+  opts: { force?: boolean } = {}
 ): Promise<void> {
   if (!slideId) return;
 
   try {
     await tasks.trigger(
       DECK_THUMBNAIL_TASK_ID,
-      { slideId },
+      { slideId, ...(opts.force ? { force: true } : {}) },
       {
         delay: DEBOUNCE_DELAY,
         idempotencyKey: `deck-thumb:${slideId}`,
@@ -112,6 +118,64 @@ export async function enqueueDeckThumbnail(
     // eslint-disable-next-line no-console
     console.debug(
       `[deckThumbnail] Could not enqueue a render for slide ${slideId}:`,
+      error instanceof Error ? error.message : error
+    );
+  }
+}
+
+/**
+ * Re-render every deck in one classroom. Fire and forget, like its sibling.
+ *
+ * ## What this is for
+ *
+ * A THEME edit — a custom-theme CSS write, a snippet, a `saveTheme` — changes
+ * how every deck in the classroom LOOKS without changing a byte of any deck's
+ * own files. The render task's idempotence check asks "has this deck's
+ * `index.html` moved?", which is the right question for a save and exactly the
+ * wrong one here: it would answer "no" for every deck and the classroom would
+ * keep its old cards until someone happened to edit each one. Hence `force`.
+ *
+ * ## Why it does not filter by theme
+ *
+ * `themeName` is accepted and logged, and it does NOT narrow the set. A deck's
+ * theme lives inside its own `index.html` (`data-theme="shared:<name>"`), not in
+ * a column — so narrowing would mean fetching and parsing every deck's document
+ * to decide which ones to skip, which costs more than the renders it saves. The
+ * task's own `queue: { concurrencyLimit: 4 }` meters the result, and a deck on a
+ * different theme costs one render that produces a near-identical picture.
+ *
+ * ## Contract
+ *
+ * NEVER REJECTS and is called WITHOUT `await`, exactly like `enqueueDeck-
+ * Thumbnail`. A theme save is finished when its files are committed; whether the
+ * cards catch up is not the saver's problem, and it must never be able to fail
+ * somebody's save. Each deck goes out under the same `deck-thumb:{slideId}` key,
+ * so a theme edit and a deck save inside the window collapse into one run.
+ */
+export async function enqueueClassroomThumbnails(
+  classroomId: string | null | undefined,
+  opts: { themeName?: string | null; force?: boolean } = {}
+): Promise<void> {
+  if (!classroomId) return;
+
+  try {
+    const slides = await getPrisma().slide.findMany({
+      where: { classroom_id: classroomId },
+      select: { id: true },
+    });
+
+    // Sequential rather than `Promise.all`: this is background work behind a
+    // save that has already returned, and a classroom with forty decks has no
+    // reason to open forty concurrent trigger requests to do it.
+    for (const slide of slides) {
+      await enqueueDeckThumbnail(slide.id, classroomId, { force: opts.force });
+    }
+  } catch (error) {
+    // eslint-disable-next-line no-console
+    console.debug(
+      `[deckThumbnail] Could not enqueue renders for classroom ${classroomId}${
+        opts.themeName ? ` after a "${opts.themeName}" theme edit` : ''
+      }:`,
       error instanceof Error ? error.message : error
     );
   }
