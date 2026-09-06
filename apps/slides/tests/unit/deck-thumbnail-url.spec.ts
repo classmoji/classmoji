@@ -19,6 +19,8 @@
  *     with holes in it.
  */
 
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { test, expect } from '@playwright/test';
 import {
   publicContentUrl,
@@ -193,6 +195,51 @@ test.describe('a deck thumbnail URL', () => {
     expect(urls.get('d')).toContain(OTHER_CLASSROOM);
   });
 
+  test('falls back to the proxy when the layer answers a /missing/ placeholder', async () => {
+    // `/missing/` is the delivery layer's deliberate 404 for a reference the
+    // asset map has never heard of — for a thumbnail that means the map has not
+    // caught up with the commit, not that there is no file. Handing it to an
+    // <img> is a broken-image icon on the card; the proxy can still serve the
+    // bytes that ARE in the repo.
+    const urls = await resolveDeckThumbnailUrls([slide()], {
+      resolve: async (ctx, refs) =>
+        new Map(
+          refs.map(ref => [
+            ref,
+            `${ORIGIN}/c/${ctx.classroom.id}/missing/${encodeURIComponent(ref)}`,
+          ])
+        ),
+    });
+
+    expect(urls.get('deck-1')).toBe(`/content/${ORG}/${REPO}/slides/week-1/thumbnail.webp`);
+  });
+
+  test('falls back to the proxy for anything a browser could not fetch', async () => {
+    // A bare repo path, an empty string, a relative fragment: each is a
+    // broken-image icon in an <img src>, and this page draws twenty cards.
+    for (const answer of ['', 'slides/week-1/thumbnail.webp', './thumbnail.webp']) {
+      const urls = await resolveDeckThumbnailUrls([slide()], {
+        resolve: async (_ctx, refs) => new Map(refs.map(ref => [ref, answer])),
+      });
+      expect(urls.get('deck-1')).toBe(`/content/${ORG}/${REPO}/slides/week-1/thumbnail.webp`);
+    }
+  });
+
+  test('another classroom’s /missing/ shape is refused just the same', async () => {
+    // The SHAPE is what makes it unfetchable, not whose it is.
+    const urls = await resolveDeckThumbnailUrls([slide()], {
+      resolve: async (_ctx, refs) =>
+        new Map(refs.map(ref => [ref, `${ORIGIN}/c/${OTHER_CLASSROOM}/missing/${ref}`])),
+    });
+
+    expect(urls.get('deck-1')).toBe(`/content/${ORG}/${REPO}/slides/week-1/thumbnail.webp`);
+  });
+
+  test('keeps an ordinary absolute URL, which is the whole point', async () => {
+    const urls = await resolveDeckThumbnailUrls([slide()], { resolve: fakeResolver() });
+    expect(urls.get('deck-1')).toContain(`${ORIGIN}/c/${CLASSROOM}/blob/`);
+  });
+
   test('degrades to the proxy URL when the delivery call throws', async () => {
     // The file is committed either way, and the proxy can still serve it — a
     // resolver hiccup must cost a slower image, not a missing one.
@@ -293,5 +340,43 @@ test.describe('the on-view enqueue', () => {
         thumbnail_rendered_at: new Date(),
       })
     ).toBe('rate-limited');
+  });
+});
+
+/**
+ * The `intent: 'thumbnail'` action spends a render — a booted browser and a
+ * commit into a classroom's content repo. It needs a session and a slide gate,
+ * and every refusal has to look like every other refusal.
+ *
+ * The action needs Postgres, so these are read off the source. What is pinned is
+ * the ORDER and the SHAPE: session before anything else, and one outcome string
+ * for "no", so the endpoint is not an oracle for which slide ids exist.
+ */
+test.describe('the on-view enqueue endpoint', () => {
+  const INDEX_SOURCE = readFileSync(
+    fileURLToPath(new URL('../../app/routes/_index/route.tsx', import.meta.url)),
+    'utf8'
+  );
+
+  const branch = INDEX_SOURCE.slice(
+    INDEX_SOURCE.indexOf("if (intent === 'thumbnail')"),
+    INDEX_SOURCE.indexOf("if (intent === 'rename')")
+  );
+
+  test('requires a session before it does anything else', () => {
+    expect(branch).toContain(
+      "if (!authData) return { intent: 'thumbnail', outcome: 'rate-limited' }"
+    );
+    // Before the slide lookup, and before the access check that would otherwise
+    // be the first thing an anonymous caller reached.
+    expect(branch.indexOf('!authData')).toBeLessThan(branch.indexOf('assertSlideAccess'));
+    expect(branch.indexOf('!authData')).toBeLessThan(branch.indexOf('findUnique'));
+  });
+
+  test('answers anonymous, denied and rate-limited with the same outcome', () => {
+    // Three different reasons, one visible answer. A distinguishable 401 or 403
+    // would tell an unauthenticated caller which slide ids exist.
+    const outcomes = [...branch.matchAll(/outcome: '([a-z-]+)'/g)].map(match => match[1]);
+    expect(new Set(outcomes)).toEqual(new Set(['invalid', 'rate-limited']));
   });
 });

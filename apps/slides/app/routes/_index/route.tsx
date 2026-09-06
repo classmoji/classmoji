@@ -159,7 +159,14 @@ export const action = async ({ request }: { request: Request }) => {
     const slideId = formData.get('slideId') as string | null;
     if (!slideId) return { intent: 'thumbnail', outcome: 'invalid' };
 
-    // The same gate the card's own link is behind: a viewer may ask for a
+    // A SESSION first. This endpoint spends a render — a booted browser, a
+    // commit into a content repo — and the loader that produces the placeholder
+    // cards it answers for is behind a session already. Anonymous callers get
+    // the same `rate-limited` shape as everything else here rather than a 401,
+    // because a distinguishable refusal is an oracle for which slide ids exist.
+    if (!authData) return { intent: 'thumbnail', outcome: 'rate-limited' };
+
+    // Then the same gate the card's own link is behind: a viewer may ask for a
     // picture of a deck they may open, and nothing else. A refusal answers the
     // same shape as a rate-limited request — this endpoint tells a caller
     // nothing about decks it cannot see.
@@ -374,6 +381,15 @@ export const action = async ({ request }: { request: Request }) => {
         },
       });
 
+      // A copy is a new deck with new content at a new path, and no thumbnail —
+      // `copyFolder` above copies the SOURCE's `thumbnail.webp` into the new
+      // folder, but nothing points the new row at it and its picture is of the
+      // deck before the path rewrites. Enqueue a real one.
+      //
+      // Same contract as every other enqueue: after the row lands, never
+      // awaited, and unable to fail a duplication that has already committed.
+      void ClassmojiService.deckThumbnail.enqueueDeckThumbnail(newSlide.id, slide.classroom_id);
+
       // Update the content manifest
       await ClassmojiService.contentManifest.saveManifest(slide.classroom_id);
 
@@ -475,7 +491,9 @@ function DeckThumbnail({
     return (
       <img
         src={slide.thumbnailUrl}
-        alt={slide.title}
+        // Decorative: the deck's title is the card's own <h3>, right below this,
+        // and a screen reader announcing it twice is worse than not at all.
+        alt=""
         loading="lazy"
         decoding="async"
         className="w-full h-full object-cover"

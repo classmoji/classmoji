@@ -675,7 +675,19 @@ export async function resolveDeckThumbnailUrls(
           ctx,
           entries.map(entry => entry.path)
         );
-        for (const entry of entries) out.set(entry.id, urls.get(entry.path) ?? null);
+        for (const entry of entries) {
+          const resolved = urls.get(entry.path);
+          out.set(
+            entry.id,
+            isFetchableThumbnailUrl(resolved)
+              ? resolved
+              : legacyContentUrl(
+                  ctx.classroom.git_organization.login,
+                  ctx.classroom.content_repo,
+                  entry.path
+                )
+          );
+        }
       } catch (error: unknown) {
         const message = error instanceof Error ? error.message : String(error);
         console.warn('[slides] Thumbnail URL resolution failed, serving proxy URLs:', message);
@@ -699,4 +711,38 @@ export async function resolveDeckThumbnailUrls(
 /** `/content/{org}/{repo}/{path}` — the slides app's own session-gated proxy. */
 function legacyContentUrl(gitOrgLogin: string, repo: string, path: string): string {
   return `/content/${gitOrgLogin}/${repo}/${path}`;
+}
+
+/**
+ * The delivery layer's `/missing/` placeholder — a URL, deliberately, so a
+ * render still produces a page and the same absent reference always produces the
+ * same URL. `contentDelivery` mints one when the asset map has never heard of a
+ * path, which for a thumbnail means "the map has not caught up with the commit
+ * yet", not "there is no file".
+ */
+const MISSING_PLACEHOLDER =
+  /\/c\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\/missing\//i;
+
+/**
+ * Is this something a signed-in browser can actually fetch a picture from?
+ *
+ * The delivery layer answers a URL for every reference it is handed, and two of
+ * its answers are not pictures:
+ *
+ *   - a `/missing/` placeholder, which is a deliberate 404 for a reference the
+ *     asset map does not know. A thumbnail is committed and the row written in
+ *     the same task, but a classroom the layer cannot serve gets no row at all —
+ *     and the file is in the repo either way, so the proxy can still serve it.
+ *   - anything that is neither absolute nor an app-relative `/content/…` path.
+ *     A bare repo path or an empty string in an `<img src>` is a broken-image
+ *     icon on a card, and this page draws twenty cards.
+ *
+ * Both fall back to the proxy URL rather than to nothing: the index is a
+ * signed-in page, so `/content/{org}/{repo}/…` is a URL this viewer can already
+ * fetch, and its binary branch is CDN-first.
+ */
+function isFetchableThumbnailUrl(url: string | undefined): url is string {
+  if (!url) return false;
+  if (MISSING_PLACEHOLDER.test(url)) return false;
+  return /^https?:\/\//i.test(url) || url.startsWith('/content/');
 }
