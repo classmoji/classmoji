@@ -434,13 +434,21 @@ async function signAsset(
   }
 }
 
-/** The map lookup shared by every single-ref entry point. */
+/**
+ * The map lookup shared by every single-ref entry point.
+ *
+ * `mapIsCurrent` is the caller's `ensureMapBounded` verdict. See that function:
+ * a miss against a map whose refresh gave up is "we do not know", and answering
+ * it with a placeholder would turn a cold classroom's whole page into
+ * `/missing/` URLs no later sync can repair.
+ */
 async function resolveOne(
   ctx: ResolveContext,
   env: { origin: string; master: string },
   ref: string,
   transform?: ResolveTransform,
-  now?: number
+  now?: number,
+  mapIsCurrent: boolean = true
 ): Promise<string> {
   const path = toRepoPath(ctx, ref);
   if (!path) return ref;
@@ -454,7 +462,7 @@ async function resolveOne(
     console.warn(
       `[contentDelivery] No blob row for "${ref}" (path ${path}) in classroom ${ctx.classroom.id}`
     );
-    return missingUrl(env.origin, ctx.classroom.id, ref);
+    return mapIsCurrent ? missingUrl(env.origin, ctx.classroom.id, ref) : ref;
   }
 
   return signAsset(ctx, env, ref, path, asset.sha, transform, now);
@@ -474,8 +482,8 @@ export async function resolveAssetUrl(
   const env = deliveryEnvFor(ctx);
   if (!env) return ref;
 
-  await ensureMap(ctx.classroom.id);
-  return resolveOne(ctx, env, ref, opts.transform);
+  const mapIsCurrent = await ensureMapBounded(ctx.classroom.id);
+  return resolveOne(ctx, env, ref, opts.transform, undefined, mapIsCurrent);
 }
 
 /**
@@ -542,7 +550,10 @@ export async function resolveAssetSrcSet(
   const path = toRepoPath(ctx, ref);
   if (!path || !isRasterImagePath(path)) return null;
 
-  await ensureMap(ctx.classroom.id);
+  // Bounded, but the verdict is not needed: this function's miss answer is
+  // already `null` — "there is no srcset" — and the caller renders a plain
+  // `src`. Nothing here can assert a placeholder into content.
+  await ensureMapBounded(ctx.classroom.id);
   const asset = await lookupContentAsset(ctx.classroom.id, path);
   if (!asset || asset.type !== 'blob') {
     console.warn(
@@ -606,7 +617,10 @@ export async function resolveThemeBase(
   const env = deliveryEnvFor(ctx);
   if (!env || !themeName) return null;
 
-  await ensureMap(ctx.classroom.id);
+  // Bounded, verdict unused for the same reason as `resolveAssetSrcSet`: a miss
+  // here is `null`, and the caller renders the deck without theme links rather
+  // than pointing it at a URL that names no file.
+  await ensureMapBounded(ctx.classroom.id);
   const tree = await lookupContentTree(ctx.classroom.id, `${THEMES_FOLDER}/${themeName}`);
   if (!tree) {
     console.warn(
@@ -675,7 +689,7 @@ export async function resolveDelivery(
 
   if (wanted.size === 0) return { urls, srcSets };
 
-  await ensureMap(ctx.classroom.id);
+  const mapIsCurrent = await ensureMapBounded(ctx.classroom.id);
   const assets = await lookupContentAssets(ctx.classroom.id, [...new Set(wanted.values())]);
   const now = passClock();
 
@@ -689,7 +703,10 @@ export async function resolveDelivery(
         console.warn(
           `[contentDelivery] No blob row for "${ref}" (path ${path}) in classroom ${ctx.classroom.id}`
         );
-        urls.set(ref, missingUrl(env.origin, ctx.classroom.id, ref));
+        // Unless the refresh gave up, in which case the map cannot be trusted
+        // to have said "no" — a never-synced classroom would otherwise render
+        // every single reference as a placeholder. See `ensureMapBounded`.
+        urls.set(ref, mapIsCurrent ? missingUrl(env.origin, ctx.classroom.id, ref) : ref);
         return;
       }
 
@@ -1837,5 +1854,65 @@ async function ensureMap(classroomId: string): Promise<void> {
       `[contentDelivery] Asset map refresh failed for classroom ${classroomId}:`,
       error instanceof Error ? error.message : error
     );
+  }
+}
+
+/**
+ * `ensureMap`, but it cannot hold a render open — and it SAYS whether it
+ * finished.
+ *
+ * ## The bound
+ *
+ * A stale map turns `ensureMap` into three GitHub round trips (default branch,
+ * head commit, whole tree) on the render path. It already degrades to "serve
+ * what the map has" when GitHub fails, but only after GitHub has finished being
+ * slow, and a page resolving forty images pays that once for the batch and once
+ * for every unbatched single-ref call. This is the same `ENSURE_MAP_TIMEOUT_MS`
+ * the text read path applies at `readTextThroughWorker`.
+ *
+ * ## Why the return value is the whole point
+ *
+ * Bounding the refresh is a one-liner. Bounding it CORRECTLY is not, because
+ * the resolvers' miss branch is not neutral: a ref the map has no row for gets
+ * the deterministic `/missing/` placeholder, which is the right answer for a
+ * classroom whose map is known-good and genuinely does not have the file.
+ *
+ * For a classroom that has never fully synced, the map is empty — every ref
+ * misses. Today the refresh runs to completion and fills it before the lookup,
+ * so that case never arises. Add a timeout without adding this flag and the
+ * cold classroom becomes the WORST case rather than a degraded one: the refresh
+ * gives up, the empty map answers "no" to everything, and the whole page
+ * renders `/missing/` placeholders that no later sync can repair — strictly
+ * worse than the legacy URLs it used to show.
+ *
+ * So `false` means "we do not know", and every caller reads it as such: fall
+ * back to the stored reference, which is a legacy URL that still works for the
+ * classrooms that have one and a broken image for the ones that do not —
+ * exactly the pre-delivery behaviour, and never a placeholder baked into
+ * content by a later save.
+ *
+ * `false` covers a timed-out refresh on a WARM classroom too, where the row
+ * really might be absent. That is deliberate: the honest answer there is also
+ * "we do not know", and a stored ref degrades where a placeholder asserts.
+ * `content_assets_synced_at` is not read to narrow it further — that is another
+ * database round trip on the render path to sharpen a case that already
+ * degrades safely.
+ *
+ * @returns `true` when the map is as fresh as this render is going to get it —
+ *          either the refresh completed or none was needed. `false` only when
+ *          the refresh ran out of time.
+ */
+async function ensureMapBounded(classroomId: string): Promise<boolean> {
+  try {
+    // `ensureMap` swallows its own failures, so the only thing that can reject
+    // here is the deadline.
+    await withDeadline(ensureMap(classroomId), ENSURE_MAP_TIMEOUT_MS, 'map refresh');
+    return true;
+  } catch (error) {
+    console.warn(
+      `[contentDelivery] Map refresh gave up for classroom ${classroomId}:`,
+      error instanceof Error ? error.message : error
+    );
+    return false;
   }
 }
