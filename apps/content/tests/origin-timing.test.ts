@@ -129,6 +129,41 @@ describe('the origin pull log line', () => {
     expect(pullLines(info)[0]).toContain('bytes=unknown');
   });
 
+  it('bills a silent token endpoint to the token leg, not to the blob', async () => {
+    // The regression this pins: the timing callback used to fire only after a
+    // mint RESOLVED, so the one case the bound exists for — the endpoint going
+    // quiet for the whole of `TOKEN_FETCH_TIMEOUT_MS` — reported nothing at
+    // all. Its time then fell through into the remainder, and the line read
+    // `token=0ms (cached) blob=25000ms`: an operator sent to GitHub for a stall
+    // the webapp caused. The mint below is slow and then fails, which is that
+    // timeout in miniature.
+    stubUpstreams({
+      token: async () => {
+        await new Promise(resolve => setTimeout(resolve, 30));
+        return timeoutRejection();
+      },
+    });
+    const info = vi.spyOn(console, 'info').mockImplementation(() => {});
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const url = await signedBlobUrl({ sha: BLOB_SHA, ext: 'png' });
+    const response = await worker.fetch(new Request(url), fakeEnv(), fakeContext());
+    expect(response.status).toBe(502);
+
+    const lines = pullLines(info);
+    expect(lines).toHaveLength(1);
+
+    // `minted` on the failing path always: a cache hit is a map lookup and has
+    // nothing to fail on, so an acquisition that threw was a mint.
+    const token = lines[0].match(/token=(\d+)ms \(minted\)/);
+    expect(token).not.toBeNull();
+    expect(Number(token?.[1])).toBeGreaterThanOrEqual(25);
+
+    // And GitHub is credited with nothing, because that leg never ran.
+    expect(lines[0]).toContain('blob=0ms');
+    expect(lines[0]).toContain('status=0');
+  });
+
   it('still logs the pull that never got a response', async () => {
     // The timeout case is the one most worth seeing, so it is timed and logged
     // like any other. `status=0` is the marker for "no response existed".

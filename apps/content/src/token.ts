@@ -153,14 +153,47 @@ function isUnauthorized(value: unknown): boolean {
 }
 
 /**
+ * One acquisition, reported whether it returns or throws.
+ *
+ * The `finally` is the entire point. The acquisition most worth reporting is
+ * the one that FAILED — a token endpoint gone silent for the full
+ * `TOKEN_FETCH_TIMEOUT_MS` is exactly the shape a timing line exists to name —
+ * and a callback that only fired on success would leave that time
+ * unattributed, to be swept into whatever leg is measured as the remainder.
+ * The pull would then be logged as `token=0ms (cached) blob=25000ms`: the
+ * precise inversion of what happened, pointing an operator at GitHub for a
+ * stall the webapp caused.
+ *
+ * A throw can only come from a mint — a cache hit is a map lookup and has
+ * nothing to fail on — so `minted` is the honest source on that path.
+ */
+async function acquireOriginRef(
+  env: Env,
+  classroomId: string,
+  forceRefresh: boolean,
+  onToken?: (timing: OriginTokenTiming) => void
+): Promise<OriginRef> {
+  const startedAt = Date.now();
+  let source: OriginTokenTiming['source'] = 'minted';
+  try {
+    const { ref, timing } = await getOriginRefTimed(env, classroomId, forceRefresh);
+    source = timing.source;
+    return ref;
+  } finally {
+    onToken?.({ ms: Date.now() - startedAt, source });
+  }
+}
+
+/**
  * Run an origin call with the classroom's token. If the origin rejects the
  * credential — a 401 response or an OriginAuthError — drop the cached token
  * and try exactly once more with a fresh one.
  *
- * `onToken` is called for EVERY acquisition, so a retry reports twice. A caller
- * that is timing the pull should therefore accumulate rather than overwrite:
- * the retry path really did spend two token acquisitions, and a log line that
- * showed only the second would hide the one that made the request slow.
+ * `onToken` is called for EVERY acquisition, one that THREW included, so a
+ * retry reports twice. A caller that is timing the pull should therefore
+ * accumulate rather than overwrite: the retry path really did spend two token
+ * acquisitions, and a log line that showed only the second would hide the one
+ * that made the request slow.
  */
 export async function withOriginRetry<T>(
   env: Env,
@@ -168,17 +201,14 @@ export async function withOriginRetry<T>(
   run: (ref: OriginRef) => Promise<T>,
   onToken?: (timing: OriginTokenTiming) => void
 ): Promise<T> {
-  const first = await getOriginRefTimed(env, classroomId);
-  onToken?.(first.timing);
+  const ref = await acquireOriginRef(env, classroomId, false, onToken);
   try {
-    const result = await run(first.ref);
+    const result = await run(ref);
     if (!isUnauthorized(result)) return result;
   } catch (error) {
     if (!(error instanceof OriginAuthError)) throw error;
   }
 
   invalidateOriginRef(classroomId);
-  const refreshed = await getOriginRefTimed(env, classroomId, true);
-  onToken?.(refreshed.timing);
-  return run(refreshed.ref);
+  return run(await acquireOriginRef(env, classroomId, true, onToken));
 }
