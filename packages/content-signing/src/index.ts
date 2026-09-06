@@ -22,10 +22,15 @@ export {
   TRANSFORM_FORMATS,
   TRANSFORM_WIDTHS,
   blobCanonicalString,
+  fromBase64Url,
   hostOf,
   isClassroomId,
+  isUuid,
+  renderCanonicalString,
   themeCanonicalString,
+  toBase64Url,
 } from './canonical.ts';
+export type { RenderCanonicalFields } from './canonical.ts';
 
 export {
   MIN_REMAINING_SECONDS,
@@ -37,7 +42,10 @@ export {
   nowSeconds,
 } from './bucket.ts';
 
-export { clearKeyCache, deriveKey } from './derive.ts';
+export { clearKeyCache, deriveKey, signCanonical, verifyCanonical } from './derive.ts';
+
+export type { RenderTokenFields, RenderVerification } from './render.ts';
+export { RENDER_TOKEN_TTL_SECONDS, signRenderToken, verifyRenderToken } from './render.ts';
 
 export type { BlobRef, SrcSet, SrcSetRef, ThemeRef } from './urls.ts';
 export { signBlobUrl, signSrcSet, signThemeBase } from './urls.ts';

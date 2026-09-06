@@ -1,0 +1,221 @@
+/**
+ * `/{slideId}/thumbnail-source` — the page a screenshot is taken OF.
+ *
+ * A deck's card image on the slides index is a stored WebP, rendered once per
+ * save by Cloudflare Browser Run (`deck-thumbnail-render`) and committed into
+ * the classroom's content repo. Browser Run navigates HERE, waits for
+ * `[data-thumbnail-ready]`, and screenshots a 1280×720 viewport.
+ *
+ * A RESOURCE route on purpose — no default export, no React, no app chrome.
+ * The response IS the deck's own generated document, trimmed to its first
+ * slide. Reusing `$slideId` would have put the viewer's toolbar, preview
+ * banner and Sandpack mounts inside the frame and then required cropping them
+ * back out; there is nothing to crop out of a page that never had them.
+ *
+ * ── What authorises the request ────────────────────────────────────────────
+ * A signed render token in `?render=`, and NOTHING ELSE. No session is
+ * consulted and no cookie would help: the caller is a headless browser on
+ * infrastructure we do not control, and it must be able to read exactly one
+ * deck for exactly two minutes. The token binds `{host, classroomId, slideId,
+ * exp}` under the classroom's derived key, in its own `cm1|render|` namespace
+ * (see packages/content-signing/src/render.ts).
+ *
+ * ── What it is allowed to see ──────────────────────────────────────────────
+ * The FIRST slide, with NO speaker notes. Notes are dropped structurally —
+ * `includeNotes: false` means the generator never emits an `<aside
+ * class="notes">` at all, rather than the view path's after-the-fact regex
+ * strip — because this image is later served to everyone who can see the deck's
+ * card, and a private note baked into it could not be taken back.
+ *
+ * Asset URLs are signed at the deck's own visibility tier (`month` public,
+ * `week` otherwise), never `edit`: the delivery pass here is a READ like any
+ * other, and `deckAccessFor`'s reasoning applies unchanged.
+ */
+
+import getPrisma from '@classmoji/database';
+import { ClassmojiService } from '@classmoji/services';
+import {
+  generateDeckHtml,
+  loadDeck,
+  type DeckJson,
+  type DeckSlide,
+} from '@classmoji/services/slides';
+import {
+  deckDeliveryContext,
+  resolveDeckAssets,
+  resolveDeliveryThemeUrls,
+} from '~/utils/deckDelivery.server';
+
+/** The viewport Browser Run is told to use. Kept here so the two agree. */
+export const THUMBNAIL_WIDTH = 1280;
+export const THUMBNAIL_HEIGHT = 720;
+
+/** The attribute Browser Run's `waitForSelector` waits for. */
+export const THUMBNAIL_READY_ATTRIBUTE = 'data-thumbnail-ready';
+
+/**
+ * Never cached, never indexed, never framed.
+ *
+ * `no-store` because the URL carries a 120-second credential, and a cached copy
+ * would outlive it in someone else's store. `noindex` because the route is
+ * reachable by URL and a crawler that got hold of one should not keep it.
+ */
+const RENDER_HEADERS: Record<string, string> = {
+  'Content-Type': 'text/html; charset=utf-8',
+  'Cache-Control': 'no-store, no-cache, must-revalidate, private',
+  'X-Robots-Tag': 'noindex, nofollow, noarchive',
+  'Referrer-Policy': 'no-referrer',
+  'X-Frame-Options': 'DENY',
+};
+
+/**
+ * The deck reduced to its first slide.
+ *
+ * A top-level section may be a vertical STACK, in which case Reveal's first
+ * slide is that stack's first child — so the stack is kept and everything after
+ * its first child is dropped, rather than the stack being flattened. Notes are
+ * not stripped here; the generator is told not to emit them.
+ */
+export function firstSlideOnly(deck: DeckJson): DeckJson {
+  const first: DeckSlide | undefined = deck.slides[0];
+  if (!first) return { ...deck, slides: [] };
+  const trimmed: DeckSlide =
+    first.children && first.children.length > 0
+      ? { ...first, children: [first.children[0]] }
+      : first;
+  return { ...deck, slides: [trimmed] };
+}
+
+/**
+ * The one script the render page carries, plus the chrome suppression.
+ *
+ * Reveal draws controls, a progress bar and a slide number; none of them belong
+ * in a card image. Hiding them in CSS is cheaper and more reliable than
+ * re-configuring the deck's own `Reveal.initialize` call, which is emitted by
+ * the shared generator and must stay byte-identical to what a save writes.
+ *
+ * The readiness signal is a HARD-CAPPED settle, not a promise chain that can
+ * hang: images and fonts get their chance, then the flag goes up no matter
+ * what. Browser Run's `waitForSelector` is the outer bound, and a deck with one
+ * unreachable image must produce a slightly incomplete thumbnail rather than
+ * burning the whole render budget and producing none.
+ */
+function readinessScript(): string {
+  return [
+    '<style>',
+    '  .reveal .controls, .reveal .progress, .reveal .slide-number { display: none !important; }',
+    '  html, body { margin: 0; overflow: hidden; }',
+    '</style>',
+    '<script>',
+    '  (function () {',
+    '    var done = false;',
+    '    function mark() {',
+    '      if (done) return;',
+    '      done = true;',
+    `      document.documentElement.setAttribute('${THUMBNAIL_READY_ATTRIBUTE}', '');`,
+    '    }',
+    '    // Outer cap: whatever else happens, the page declares itself ready.',
+    '    setTimeout(mark, 8000);',
+    '    function settle() {',
+    '      var pending = [];',
+    '      var images = document.images || [];',
+    '      for (var i = 0; i < images.length; i += 1) {',
+    '        var img = images[i];',
+    '        if (img.complete) continue;',
+    '        pending.push(',
+    '          new Promise(function (resolve) {',
+    "            img.addEventListener('load', resolve, { once: true });",
+    "            img.addEventListener('error', resolve, { once: true });",
+    '          })',
+    '        );',
+    '      }',
+    '      if (document.fonts && document.fonts.ready) {',
+    '        pending.push(document.fonts.ready.catch(function () {}));',
+    '      }',
+    '      Promise.all(pending).then(function () {',
+    '        requestAnimationFrame(function () { requestAnimationFrame(mark); });',
+    '      }, mark);',
+    '    }',
+    "    if (document.readyState === 'complete') settle();",
+    "    else window.addEventListener('load', settle);",
+    '  })();',
+    '</script>',
+  ].join('\n');
+}
+
+/** Splice the readiness block in just before `</body>`; append if absent. */
+function withReadinessMarker(html: string): string {
+  const block = readinessScript();
+  const at = html.lastIndexOf('</body>');
+  return at === -1 ? `${html}\n${block}` : `${html.slice(0, at)}${block}\n${html.slice(at)}`;
+}
+
+export const loader = async ({
+  params,
+  request,
+}: {
+  params: Record<string, string | undefined>;
+  request: Request;
+}) => {
+  const { slideId } = params;
+  if (!slideId) throw new Response('Missing slideId', { status: 400 });
+
+  const url = new URL(request.url);
+  const token = url.searchParams.get('render');
+
+  const slide = await getPrisma().slide.findUnique({
+    where: { id: slideId },
+    include: { classroom: { include: { git_organization: true } } },
+  });
+
+  // 404 before the token check would tell an unauthenticated caller which slide
+  // ids exist, so an unknown deck answers exactly what a bad token does.
+  const verification = slide
+    ? await ClassmojiService.deckRenderToken.verifyDeckRenderToken(token, {
+        origin: url.origin,
+        classroomId: slide.classroom_id,
+        slideId: slide.id,
+        keyVersion: slide.classroom?.content_key_version,
+      })
+    : ({ ok: false, reason: 'malformed' } as const);
+
+  if (!slide || !verification.ok) {
+    // The reason is never echoed: a caller learns only that it was refused.
+    throw new Response('Forbidden', { status: 403, headers: RENDER_HEADERS });
+  }
+
+  const gitOrgLogin = slide.classroom?.git_organization?.login;
+  const repo = slide.classroom?.content_repo;
+  if (!gitOrgLogin || !repo) {
+    throw new Response('Git organization not configured', { status: 400 });
+  }
+
+  // skipCache: the render is the point of a save, and the 60s response cache is
+  // per-process with no cross-instance invalidation — a cached deck here would
+  // freeze the PREVIOUS save's picture under the CURRENT save's sha, and the
+  // task's skip-if-unchanged check would then never render it again.
+  const loaded = await loadDeck(slide, { skipCache: true });
+  const deck = firstSlideOnly(loaded.deck);
+
+  // Pinned to the deck's own visibility, exactly as `deckAccessFor` pins every
+  // non-viewer surface. `canEdit: false` is not a formality: `edit` mints
+  // `no-store` URLs on a 4h exact TTL, which is the wrong bucket for an image
+  // whose whole purpose is to be cached hard once it is committed.
+  const deliveryCtx = deckDeliveryContext(slide, gitOrgLogin, repo, {
+    canEdit: false,
+    isPublic: Boolean(slide.is_public),
+  });
+
+  const themeUrls = await resolveDeliveryThemeUrls(deck, gitOrgLogin, repo, deliveryCtx);
+  const generated = generateDeckHtml(deck, {
+    title: slide.title,
+    themeUrls,
+    // Speaker notes never reach the screenshot service. Not stripped after the
+    // fact — never emitted.
+    includeNotes: false,
+  });
+
+  const html = (await resolveDeckAssets(generated, deliveryCtx)) ?? generated;
+
+  return new Response(withReadinessMarker(html), { headers: RENDER_HEADERS });
+};

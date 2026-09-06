@@ -30,8 +30,13 @@ const EXT_PATTERN = /^[a-z0-9]{1,8}$/;
 // Leading dots are excluded so a theme can never name a dotfile directory.
 const THEME_PATTERN = /^[a-z0-9][a-z0-9._-]*$/;
 
-export function isClassroomId(value: unknown): value is string {
+/** A lowercase RFC-4122 UUID. Classroom ids and slide ids are the same shape. */
+export function isUuid(value: unknown): value is string {
   return typeof value === 'string' && UUID_PATTERN.test(value);
+}
+
+export function isClassroomId(value: unknown): value is string {
+  return isUuid(value);
 }
 
 export function isGitSha(value: unknown): value is string {
@@ -169,6 +174,33 @@ export function blobCanonicalString(fields: BlobCanonicalFields): string {
     w,
     fmt,
   ].join('|');
+}
+
+export interface RenderCanonicalFields {
+  host: string;
+  classroomId: string;
+  slideId: string;
+  exp: number;
+}
+
+/**
+ * `cm1|render|{host}|{classroomId}|{slideId}|{exp}`
+ *
+ * A DISTINCT discriminator from `blob` and `theme`, and that is the whole
+ * point: a render token authorises a headless browser to read ONE deck's first
+ * slide for two minutes, and it must not be usable — nor mistakeable — as a
+ * content URL. The namespaces cannot collide because the second field differs,
+ * and every verifier covers the whole canonical string.
+ *
+ * No tier and no key version in here. The lifetime is an exact TTL rather than
+ * a bucket (120 seconds, no grace), and the key version is not carried in the
+ * token at all: the verifier derives with the classroom's CURRENT version, so
+ * bumping `content_key_version` retires a classroom's render tokens exactly as
+ * it retires its signed asset URLs.
+ */
+export function renderCanonicalString(fields: RenderCanonicalFields): string {
+  const { host, classroomId, slideId, exp } = fields;
+  return [CANONICAL_VERSION, 'render', host, classroomId, slideId, exp].join('|');
 }
 
 /** `cm1|theme|{host}|{classroomId}|{theme}|{treeSha}|{p}|{v}|{exp}` */

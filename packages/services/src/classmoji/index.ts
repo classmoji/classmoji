@@ -52,6 +52,7 @@ import * as classroomInviteService from './classroomInvite.service.ts';
 import * as contentManifestService from './contentManifest.service.ts';
 import * as contentAssetsService from './contentAssets.service.ts';
 import * as contentDeliveryService from './contentDelivery.service.ts';
+import * as deckRenderTokenService from './deckRenderToken.service.ts';
 import * as resourceViewService from './resourceView.service.ts';
 import * as gitRepoAnalyticsService from './repoAnalytics.service.ts';
 import * as dashboardService from './dashboard.service.ts';
@@ -110,6 +111,7 @@ const ClassmojiService = {
   contentManifest: contentManifestService,
   contentAssets: contentAssetsService,
   contentDelivery: contentDeliveryService,
+  deckRenderToken: deckRenderTokenService,
   resourceView: resourceViewService,
   repoAnalytics: gitRepoAnalyticsService,
   dashboard: dashboardService,
@@ -175,6 +177,7 @@ export {
   contentManifestService,
   contentAssetsService,
   contentDeliveryService,
+  deckRenderTokenService,
   resourceViewService,
   gitRepoAnalyticsService,
   dashboardService,
