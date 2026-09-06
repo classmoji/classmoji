@@ -227,6 +227,31 @@ export const deckThumbnailRender = task({
         sha: committed.sha,
         size: bytes,
       });
+
+      // 7b. Pull it through the Worker at the tier the index will sign, so the
+      //     first person to open the index does not wait on a cold origin pull.
+      //     This is the one page that asks for twenty cold images at once, which
+      //     is the case a warm is for.
+      //
+      //     AFTER the row above — the warm looks the sha up in the map — and not
+      //     awaited: the thumbnail is committed and recorded, and a cache fill
+      //     may not fail or delay a run that has already done its work. The
+      //     visibility passed is the DECK's own, because that is what
+      //     `tierFor` gets on the read side; anything else fills an entry
+      //     nobody asks for.
+      if (slide.classroom) {
+        void ClassmojiService.contentDelivery.warmContentBlob(
+          {
+            classroom: {
+              id: slide.classroom.id,
+              content_key_version: slide.classroom.content_key_version,
+              content_delivery_enabled: slide.classroom.content_delivery_enabled,
+            },
+          },
+          [thumbnailPath],
+          { isPublic: slide.is_public }
+        );
+      }
     }
 
     // 8. Record what was rendered and from which document. `thumbnail_rendered_sha`

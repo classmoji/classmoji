@@ -1374,6 +1374,126 @@ async function warmOneTextFile(
   }
 }
 
+/**
+ * Pull a just-committed BINARY file through the Worker, at the tier its readers
+ * will ask for.
+ *
+ * ## Why text's warm could not just be widened
+ *
+ * `warmContentText` signs at `week`, always, and says so in `signTextUrl`: a
+ * server-to-server text read hands its bytes to a loader that has already done
+ * its own authorization, so the tier only names a cache bucket. That reasoning
+ * does not survive the jump to a file a BROWSER fetches. A deck thumbnail is
+ * loaded by the reader's own browser from the URL the index signed, and the
+ * index signs it at `tierFor({ canEdit: false, isPublic })` — `month` for a
+ * public deck, `week` for everything else. The Worker's edge entry is keyed by
+ * URL, so a warm at the wrong tier fills an entry nobody ever asks for: it
+ * succeeds, it logs a 200, and every reader still pays the cold pull. Nothing
+ * anywhere would report that.
+ *
+ * So the tier is an argument, and the caller is expected to pass exactly what
+ * the reader's `resolveDelivery` will compute. A test asserts the two URLs are
+ * byte-identical, because that equality is the entire point and it is invisible
+ * from either side alone.
+ *
+ * ## Why binary is worth warming at all
+ *
+ * `warmContentText` refuses binaries deliberately — nobody blocks a render on a
+ * megabyte image, and warming every upload would be a lot of bytes moved for
+ * nothing. A deck thumbnail is the exception the rule was not written for: the
+ * slides index asks for up to twenty of them AT ONCE, all cold, all freshly
+ * committed, on the one page whose whole purpose is to show them. That is
+ * precisely the "many cold images at once" case the warm exists for.
+ *
+ * ## Contract
+ *
+ * Identical to `warmContentText`'s and for identical reasons: it NEVER REJECTS
+ * and is called WITHOUT `await`. A rejection would surface long after the
+ * commit that provoked it had returned successfully.
+ *
+ * @param ctx      the classroom whose Worker cache is being filled.
+ * @param paths    repo-relative paths that were just committed and recorded.
+ * @param opts     `isPublic` is the CONTENT's own visibility — a deck's
+ *                 `is_public` — and picks the tier exactly as the reader's does.
+ */
+export async function warmContentBlob(
+  ctx: WarmContext,
+  paths: string[],
+  opts: { isPublic?: boolean } = {}
+): Promise<void> {
+  if (!isContentDeliveryEnabled(ctx.classroom)) return;
+  const env = deliveryEnv();
+  if (!env) return;
+
+  const unique = [
+    ...new Set(
+      paths.map(path => normalizeRepoRelative(path)).filter((path): path is string => path !== null)
+    ),
+  ];
+  if (unique.length === 0) return;
+
+  // Never `edit`: that tier answers `Cache-Control: no-store`, which is exactly
+  // wrong for a cache fill, and would warm an entry the Worker refuses to keep.
+  const tier = tierFor({ canEdit: false, isPublic: opts.isPublic });
+
+  await Promise.all(unique.map(path => warmOneBlob(ctx.classroom, env, tier, path)));
+}
+
+/**
+ * One binary file's warm. Swallows everything, by design.
+ *
+ * The body is READ rather than cancelled, same as the text warm: the Worker
+ * tees its origin response into R2 while streaming to us, and abandoning our
+ * half early races the write this exists to cause. A thumbnail is tens of
+ * kilobytes, so reading it costs nothing worth saving.
+ */
+async function warmOneBlob(
+  classroom: WarmContext['classroom'],
+  env: { origin: string; master: string },
+  tier: ResolveTier,
+  path: string
+): Promise<void> {
+  try {
+    const ext = extensionOf(path);
+    if (!ext) return;
+
+    // The row the commit just wrote. No `ensureMap`, for the text warm's
+    // reason: a refresh could only move us off the sha the caller just
+    // recorded, and the caller awaited that write before calling here.
+    const asset = await lookupContentAsset(classroom.id, path);
+    if (!asset || asset.type !== 'blob') return;
+
+    // The same three inputs `signingContext` feeds `signAsset` on the read
+    // side, and no transform — the index renders the untransformed original,
+    // so a `w=` or `fmt=` here would warm a URL it never asks for.
+    const url = await signBlobUrl(
+      env.origin,
+      {
+        master: env.master,
+        classroomId: classroom.id,
+        keyVersion: classroom.content_key_version,
+        tier,
+      },
+      { sha: asset.sha, ext }
+    );
+    const response = await fetch(url, { signal: AbortSignal.timeout(WARM_FETCH_TIMEOUT_MS) });
+    await response.arrayBuffer();
+
+    // eslint-disable-next-line no-console
+    console.debug(
+      `[contentDelivery] warm blob ${path} sha=${asset.sha} tier=${tier} ` +
+        `status=${response.status} classroom=${classroom.id}`
+    );
+  } catch (error) {
+    // Debug, not warn — a cold cache is not an incident. See `warmOneTextFile`.
+    // eslint-disable-next-line no-console
+    console.debug(
+      `[contentDelivery] warm blob failed for ${path} (classroom ${classroom.id}):`,
+      error instanceof Error ? error.message : error
+    );
+  }
+}
+
 /** The map lookup + signed fetch. Null means "not through the Worker" — never an error. */
 async function readTextThroughWorker(
   ctx: TextReadContext,

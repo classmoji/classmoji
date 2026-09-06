@@ -34,6 +34,7 @@ const uploadBatch = vi.fn();
 const getMeta = vi.fn();
 const screenshotToBase64 = vi.fn();
 const isBrowserRunConfigured = vi.fn();
+const warmContentBlob = vi.fn();
 
 const loggerInfo = vi.fn();
 const loggerWarn = vi.fn();
@@ -58,6 +59,7 @@ vi.mock('@classmoji/database', () => ({
 vi.mock('@classmoji/services', () => ({
   ClassmojiService: {
     contentAssets: { lookupContentAsset, recordContentAsset },
+    contentDelivery: { warmContentBlob },
     deckRenderToken: { signDeckRenderToken },
     deckThumbnail: {
       THUMBNAIL_WIDTH: 1280,
@@ -133,6 +135,7 @@ beforeEach(() => {
     files: [{ path: 'slides/week-01-intro/thumbnail.webp', sha: THUMB_SHA }],
   });
   recordContentAsset.mockResolvedValue(true);
+  warmContentBlob.mockResolvedValue(undefined);
   update.mockResolvedValue({});
 });
 
@@ -212,6 +215,59 @@ describe('rendering and committing', () => {
       sha: THUMB_SHA,
       size: Buffer.from(IMAGE_BASE64, 'base64').length,
     });
+  });
+
+  it("warms the committed image at the deck's own visibility tier", async () => {
+    await run();
+
+    // `isPublic` is the deck's, because that is exactly what the index feeds
+    // `tierFor` when it signs the URL a browser will ask for. A warm at any
+    // other tier fills an entry nobody requests and reports nothing.
+    expect(warmContentBlob).toHaveBeenCalledWith(
+      {
+        classroom: {
+          id: CLASSROOM_ID,
+          content_key_version: 0,
+          content_delivery_enabled: true,
+        },
+      },
+      ['slides/week-01-intro/thumbnail.webp'],
+      { isPublic: false }
+    );
+
+    // A public deck is signed at `month`; the flag has to travel, not default.
+    warmContentBlob.mockClear();
+    findUnique.mockResolvedValue(slideRow({ is_public: true }));
+    await run();
+    expect(warmContentBlob).toHaveBeenCalledWith(expect.anything(), expect.anything(), {
+      isPublic: true,
+    });
+  });
+
+  it('warms only after the asset row lands, and does not wait for it', async () => {
+    const order: string[] = [];
+    recordContentAsset.mockImplementation(async () => {
+      order.push('record');
+      return true;
+    });
+    // The warm looks the sha up in the map, so a warm that ran first would look
+    // up a row that is not there yet and quietly do nothing. Never resolving is
+    // how "not awaited" is proved: an awaited warm would hang this test.
+    warmContentBlob.mockImplementation(() => {
+      order.push('warm');
+      return new Promise(() => {});
+    });
+
+    await expect(run()).resolves.toMatchObject({ status: 'rendered' });
+    expect(order).toEqual(['record', 'warm']);
+  });
+
+  it('does not warm when the commit produced no sha to warm', async () => {
+    uploadBatch.mockResolvedValue({ commit: 'c'.repeat(40), filesUploaded: 0, files: [] });
+
+    await expect(run()).resolves.toMatchObject({ status: 'rendered' });
+    expect(recordContentAsset).not.toHaveBeenCalled();
+    expect(warmContentBlob).not.toHaveBeenCalled();
   });
 
   it("stores the INDEX's sha, not the thumbnail's, as what was rendered from", async () => {
