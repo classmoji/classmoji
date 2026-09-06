@@ -41,25 +41,66 @@ export function thumbnailPathFor(contentPath: string): string {
 }
 
 /**
- * The header the render token travels in, and the ONLY channel the route reads.
+ * The cookie the render token travels in, and the ONLY channel the route reads.
  *
- * It used to be a `?render=` query parameter, which is the obvious shape for a
- * "navigate to this URL" API — and the wrong one for a credential. A query
- * string is written to every access log in the path (the slides app's own
- * `morgan` line included), kept in proxy caches, and handed on in a `Referer`.
- * Browser Run's `/screenshot` accepts `setExtraHTTPHeaders`, so the token
- * travels as a header instead and the URL is a plain, loggable URL.
+ * It has had three homes, and the reasoning for each move is worth keeping:
  *
- * One caveat, deliberately accepted: Puppeteer's `setExtraHTTPHeaders` applies
- * to every request the PAGE makes, so a deck's images are fetched with this
- * header attached too. The token is bound to the render host, so it verifies
- * nowhere else and a CDN that receives it holds nothing usable.
+ *   - `?render=` in the QUERY STRING. The obvious shape for a "navigate to this
+ *     URL" API, and the wrong one for a credential: a query string is written
+ *     to every access log in the path (this app's own `morgan` line included),
+ *     kept in proxy caches, and handed on in a `Referer`.
+ *   - `X-Render-Token` as a REQUEST HEADER. Out of the logs — but Puppeteer's
+ *     `setExtraHTTPHeaders` applies to every request the PAGE makes, so a
+ *     deck's images carried the live token to `*.github.io` and to the content
+ *     Worker. Host-bound or not, that is our credential in a third party's
+ *     logs.
+ *   - a COOKIE, which is what this is. Cookies are HOST-SCOPED by the browser
+ *     itself: `cm_render` is set for the render host and no cross-host
+ *     subresource can ever receive it. Same-origin asset fetches do carry it,
+ *     and that origin is ours.
+ *
+ * `httpOnly` and `secure` because there is no reason for anything in the page
+ * to read it and no reason for it to travel in clear; `sameSite: 'Strict'`
+ * because the only navigation that should present it is the one Browser Run
+ * makes itself.
  */
-export const RENDER_TOKEN_HEADER = 'X-Render-Token';
+export const RENDER_TOKEN_COOKIE = 'cm_render';
+
+/** The Puppeteer `setCookie` descriptor Browser Run's `cookies` array takes. */
+export interface RenderTokenCookie {
+  name: string;
+  value: string;
+  domain: string;
+  path: string;
+  httpOnly: boolean;
+  secure: boolean;
+  sameSite: 'Strict';
+}
+
+/**
+ * The one cookie the screenshot request carries.
+ *
+ * `domain` is the render HOST, not the origin — a cookie domain has no scheme
+ * and no port, and handing CDP one with either produces a cookie the browser
+ * never sends. `secure: true` is safe on a local `http://localhost` render too:
+ * browsers treat localhost as a trustworthy origin and send Secure cookies to
+ * it.
+ */
+export function renderTokenCookie(origin: string, token: string): RenderTokenCookie {
+  return {
+    name: RENDER_TOKEN_COOKIE,
+    value: token,
+    domain: new URL(origin).hostname,
+    path: '/',
+    httpOnly: true,
+    secure: true,
+    sameSite: 'Strict',
+  };
+}
 
 /**
  * The URL Browser Run is pointed at. No credential in it, by design — see
- * `RENDER_TOKEN_HEADER`.
+ * `RENDER_TOKEN_COOKIE`.
  */
 export function thumbnailSourceUrl(origin: string, slideId: string): string {
   const base = origin.replace(/\/+$/, '');

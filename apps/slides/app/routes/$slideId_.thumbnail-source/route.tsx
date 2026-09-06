@@ -13,20 +13,27 @@
  * back out; there is nothing to crop out of a page that never had them.
  *
  * ── What authorises the request ────────────────────────────────────────────
- * A signed render token in the `X-Render-Token` HEADER, and NOTHING ELSE. No
- * session is consulted and no cookie would help: the caller is a headless
- * browser on infrastructure we do not control, and it must be able to read
- * exactly one deck for exactly two minutes. The token binds `{host,
+ * A signed render token in the `cm_render` COOKIE, and NOTHING ELSE. No session
+ * is consulted and the session cookie machinery is never touched: the caller is
+ * a headless browser on infrastructure we do not control, and it must be able to
+ * read exactly one deck for exactly two minutes. The token binds `{host,
  * classroomId, slideId, exp}` under the classroom's derived key, in its own
  * `cm1|render|` namespace (see packages/content-signing/src/render.ts).
  *
- * A HEADER rather than the `?render=` query string it started as. A query
- * string is written to every access log in the path — this app's own `morgan`
- * line included — kept in proxy caches, and handed on in a `Referer`. Browser
- * Run's `/screenshot` accepts `setExtraHTTPHeaders`, so the credential travels
- * out of band and the URL is a plain, loggable URL. The query parameter is NOT
- * accepted as a fallback: a credential channel nobody uses is a credential
- * channel nobody watches.
+ * A COOKIE, and only a cookie. The two channels it is NOT allowed to arrive on
+ * are the two it used to:
+ *
+ *   - `?render=` in the query string, which this app's own `morgan` access log
+ *     writes on every request, which proxies cache, and which travels onward in
+ *     a `Referer`;
+ *   - an `X-Render-Token` header, which Browser Run attaches to every request
+ *     the PAGE makes — so a deck's images carried the live token to
+ *     `*.github.io` and to the content Worker.
+ *
+ * A cookie is scoped BY HOST by the browser itself: it reaches this origin and
+ * no other. Neither of the old channels is accepted as a fallback — a
+ * credential channel nobody uses is a credential channel nobody watches, and a
+ * request presenting one is refused exactly like a request presenting nothing.
  *
  * ── What it is allowed to see ──────────────────────────────────────────────
  * The FIRST slide, with NO speaker notes. Notes are dropped structurally —
@@ -66,7 +73,7 @@ import {
  * exactly this attribute and renders at exactly this size, and it cannot import
  * this route.
  */
-const { RENDER_TOKEN_HEADER, THUMBNAIL_READY_ATTRIBUTE } = ClassmojiService.deckThumbnail;
+const { RENDER_TOKEN_COOKIE, THUMBNAIL_READY_ATTRIBUTE } = ClassmojiService.deckThumbnail;
 
 /**
  * Never cached, never indexed, never framed. The SAME headers on the refusal
@@ -96,6 +103,37 @@ export const RENDER_HEADERS: Record<string, string> = {
  */
 export function renderRefusal(): Response {
   return new Response('Forbidden', { status: 403, headers: RENDER_HEADERS });
+}
+
+/**
+ * Pull `cm_render` out of a `Cookie` header. Nothing else, and no session code.
+ *
+ * Deliberately a plain parser rather than anything from the auth package: this
+ * route has no session, must never acquire one, and reaching for the session
+ * cookie machinery is how a route that "just needs to read a cookie" ends up
+ * resolving a membership. Ten lines of `split(';')` cannot do that.
+ *
+ * The token is `{exp}.{base64url}`, so it needs no encoding — but a cookie value
+ * may legally be percent-encoded, and a malformed escape must read as a bad
+ * token rather than throw a 500 out of a route whose whole job is to refuse.
+ */
+export function renderTokenFromCookies(header: string | null): string | null {
+  if (!header) return null;
+
+  for (const pair of header.split(';')) {
+    const at = pair.indexOf('=');
+    if (at === -1) continue;
+    if (pair.slice(0, at).trim() !== RENDER_TOKEN_COOKIE) continue;
+
+    const raw = pair.slice(at + 1).trim();
+    try {
+      return decodeURIComponent(raw);
+    } catch {
+      return raw;
+    }
+  }
+
+  return null;
 }
 
 /**
@@ -212,8 +250,8 @@ export const loader = async ({
   if (!slideId) throw new Response('Missing slideId', { status: 400 });
 
   const url = new URL(request.url);
-  // The header, and only the header. See the note at the top of this file.
-  const token = request.headers.get(RENDER_TOKEN_HEADER);
+  // The cookie, and only the cookie. See the note at the top of this file.
+  const token = renderTokenFromCookies(request.headers.get('cookie'));
 
   const slide = await getPrisma().slide.findUnique({
     where: { id: slideId },

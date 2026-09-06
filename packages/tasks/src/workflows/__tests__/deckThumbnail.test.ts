@@ -68,7 +68,16 @@ vi.mock('@classmoji/services', () => ({
       THUMBNAIL_HEIGHT: 720,
       THUMBNAIL_WEBP_QUALITY: 80,
       THUMBNAIL_READY_SELECTOR: '[data-thumbnail-ready]',
-      RENDER_TOKEN_HEADER: 'X-Render-Token',
+      RENDER_TOKEN_COOKIE: 'cm_render',
+      renderTokenCookie: (origin: string, token: string) => ({
+        name: 'cm_render',
+        value: token,
+        domain: new URL(origin).hostname,
+        path: '/',
+        httpOnly: true,
+        secure: true,
+        sameSite: 'Strict',
+      }),
       thumbnailPathFor: (contentPath: string) => `${contentPath}/thumbnail.webp`,
       thumbnailSourceUrl: (origin: string, slideId: string) =>
         `${origin}/${slideId}/thumbnail-source`,
@@ -297,7 +306,7 @@ describe('rendering and committing', () => {
     );
   });
 
-  it('mints the token per run, sends it as a HEADER, and never logs it', async () => {
+  it('mints the token per run, sends it as a HOST-SCOPED COOKIE, and never logs it', async () => {
     await run();
 
     expect(signDeckRenderToken).toHaveBeenCalledWith({
@@ -313,7 +322,22 @@ describe('rendering and committing', () => {
     const call = screenshotToBase64.mock.calls[0][0];
     expect(call.url).toBe(`https://slides.classmoji.test/${SLIDE_ID}/thumbnail-source`);
     expect(call.url).not.toContain('render=');
-    expect(call.headers).toEqual({ 'X-Render-Token': '1767225720.c2lnbmF0dXJl' });
+
+    // A cookie rather than an extra HEADER: a header rides along on every
+    // subresource the page fetches, which put the live token in the logs of
+    // `*.github.io` and the content Worker. A cookie is scoped to this host.
+    expect(call.headers).toBeUndefined();
+    expect(call.cookies).toEqual([
+      {
+        name: 'cm_render',
+        value: '1767225720.c2lnbmF0dXJl',
+        domain: 'slides.classmoji.test',
+        path: '/',
+        httpOnly: true,
+        secure: true,
+        sameSite: 'Strict',
+      },
+    ]);
 
     const logged = JSON.stringify([
       loggerInfo.mock.calls,
@@ -321,7 +345,7 @@ describe('rendering and committing', () => {
       loggerError.mock.calls,
     ]);
     expect(logged).not.toContain('1767225720.c2lnbmF0dXJl');
-    expect(logged).not.toContain('render=');
+    expect(logged).not.toContain('cm_render');
   });
 
   it('leaves the recorded sha alone when nothing could tell it what the sha is', async () => {
@@ -484,7 +508,7 @@ describe('failure keeps the existing thumbnail', () => {
     const token = '1767225720.c2lnbmF0dXJl';
     screenshotToBase64.mockRejectedValue(
       new BrowserRunError(
-        `Navigation failed for https://slides.classmoji.test/d/thumbnail-source?render=${token} headers {"X-Render-Token":"${token}"}`,
+        `Navigation failed for https://slides.classmoji.test/d/thumbnail-source with cookie cm_render=${token}`,
         { status: 422, retryable: false }
       )
     );

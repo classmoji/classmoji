@@ -201,14 +201,15 @@ export const deckThumbnailRender = task({
       return { status: 'skipped', reason: 'signing-unconfigured' };
     }
 
-    // 5. Screenshot. The token travels as a HEADER, so the URL carries no
-    //    credential and is safe in an access log — the render route reads
-    //    nothing else.
+    // 5. Screenshot. The token travels as a host-scoped COOKIE, so the URL
+    //    carries no credential and is safe in an access log, and no cross-host
+    //    subresource the page fetches can ever receive it — the render route
+    //    reads nothing else.
     let base64: string;
     try {
       base64 = await screenshotToBase64({
         url: ClassmojiService.deckThumbnail.thumbnailSourceUrl(slidesOrigin, slide.id),
-        headers: { [ClassmojiService.deckThumbnail.RENDER_TOKEN_HEADER]: token },
+        cookies: [ClassmojiService.deckThumbnail.renderTokenCookie(slidesOrigin, token)],
         width: ClassmojiService.deckThumbnail.THUMBNAIL_WIDTH,
         height: ClassmojiService.deckThumbnail.THUMBNAIL_HEIGHT,
         readySelector: ClassmojiService.deckThumbnail.THUMBNAIL_READY_SELECTOR,

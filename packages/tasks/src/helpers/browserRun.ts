@@ -82,6 +82,17 @@ export const MIN_IMAGE_BYTES = 2 * 1024;
  */
 export const MAX_IMAGE_BYTES = 600 * 1024;
 
+/** Puppeteer's `setCookie` shape, which Browser Run's `cookies` array takes. */
+export interface ScreenshotCookie {
+  name: string;
+  value: string;
+  domain?: string;
+  path?: string;
+  httpOnly?: boolean;
+  secure?: boolean;
+  sameSite?: 'Strict' | 'Lax' | 'None';
+}
+
 export interface ScreenshotRequest {
   url: string;
   width: number;
@@ -95,12 +106,15 @@ export interface ScreenshotRequest {
   /** How long to wait for `readySelector` after navigation, in ms. */
   readyTimeoutMs?: number;
   /**
-   * Extra request headers the headless browser sends — how the render token
-   * travels. Puppeteer's `setExtraHTTPHeaders` applies them to every request the
-   * PAGE makes, subresources included; that is acceptable only because the token
-   * is bound to the render host and is worthless anywhere else.
+   * Cookies the headless browser is seeded with — how the render token travels.
+   *
+   * A cookie rather than a header because the browser scopes it BY HOST: a
+   * `setExtraHTTPHeaders` entry rides along on every subresource the page
+   * fetches, which put the live token in `*.github.io`'s and the content
+   * Worker's logs. A cookie set for the render host reaches the render host and
+   * nothing else.
    */
-  headers?: Record<string, string>;
+  cookies?: ScreenshotCookie[];
   /** Injectable for tests; defaults to global fetch. */
   fetchImpl?: typeof fetch;
 }
@@ -108,16 +122,22 @@ export interface ScreenshotRequest {
 /**
  * Scrub a render token out of anything about to be logged or returned.
  *
- * Two shapes, because the token has had two homes: the `?render=` query string
- * it used to travel in (still worth stripping — an old URL can turn up in a
- * cached error string), and the `X-Render-Token` header it travels in now.
- * Cloudflare quotes the request back in several of its error messages, so this
- * runs on every message that leaves this module and on the task's own logging.
+ * Every shape the token has ever travelled in, because an error string can
+ * quote an old one: the `cm_render` COOKIE it uses now, the `X-Render-Token`
+ * header and the `?render=` query string it used before that. Cloudflare quotes
+ * the request back in several of its messages, so this runs on everything that
+ * leaves this module and on the task's own logging.
  */
 export function redactRenderToken(text: string): string {
-  return text
-    .replace(/render=[^&\s"'\\]*/gi, 'render=[redacted]')
-    .replace(/(x-render-token["']?\s*[:=]\s*["']?)[^\s"',}\]&]+/gi, '$1[redacted]');
+  return (
+    text
+      .replace(/cm_render=[^;\s"',}\]&]*/gi, 'cm_render=[redacted]')
+      // `(?<![\w-])` so this does not re-match the `render=` inside the
+      // `cm_render=[redacted]` the rule above just wrote — which would swallow
+      // the `;` that ends the cookie and mangle the rest of the header.
+      .replace(/(?<![\w-])render=[^&;\s"'\\]*/gi, 'render=[redacted]')
+      .replace(/(x-render-token["']?\s*[:=]\s*["']?)[^\s"',}\]&]+/gi, '$1[redacted]')
+  );
 }
 
 export function isBrowserRunConfigured(): boolean {
@@ -219,7 +239,7 @@ export async function screenshotToBase64(request: ScreenshotRequest): Promise<st
         // Nothing on a slide is a video or a socket, and both are ways for
         // `networkidle0` to never arrive.
         rejectResourceTypes: ['media', 'websocket'],
-        ...(request.headers ? { setExtraHTTPHeaders: request.headers } : {}),
+        ...(request.cookies?.length ? { cookies: request.cookies } : {}),
       }),
     }
   );

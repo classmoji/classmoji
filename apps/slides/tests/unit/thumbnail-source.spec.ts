@@ -17,8 +17,10 @@
  *     drift is an oracle for which decks exist.
  *   - the route is a RESOURCE route: no `default` export, no `ErrorBoundary`.
  *     Either one would put React chrome inside the screenshot.
- *   - the render TOKEN never reaches an access log, which is the whole reason
- *     it travels in a header rather than the query string it started in.
+ *   - the render TOKEN never reaches an access log, and never reaches a
+ *     third-party host either — which is the whole reason it travels in a
+ *     host-scoped cookie rather than the query string or the extra request
+ *     header it used before.
  */
 
 import { readFileSync } from 'node:fs';
@@ -30,6 +32,7 @@ import {
   firstSlideOnly,
   refusalDetail,
   renderRefusal,
+  renderTokenFromCookies,
 } from '../../app/routes/$slideId_.thumbnail-source/route.tsx';
 import * as thumbnailSourceRoute from '../../app/routes/$slideId_.thumbnail-source/route.tsx';
 import { ClassmojiService } from '@classmoji/services';
@@ -201,7 +204,9 @@ test.describe('the resource-route invariant', () => {
   });
 });
 
-test.describe('the render token cannot reach an access log', () => {
+test.describe('the render token travels in a host-scoped cookie', () => {
+  const TOKEN = '1767225720.c2lnbmF0dXJl';
+
   test('the URL Browser Run is pointed at carries no credential', () => {
     const url = ClassmojiService.deckThumbnail.thumbnailSourceUrl(
       'https://slides.classmoji.io',
@@ -212,22 +217,81 @@ test.describe('the render token cannot reach an access log', () => {
     expect(url).not.toContain('render=');
   });
 
-  test('the route reads the header and refuses the query string', () => {
-    // Not a fallback, deliberately: a credential channel nobody uses is a
-    // credential channel nobody watches.
-    expect(ROUTE_SOURCE).toContain('request.headers.get(RENDER_TOKEN_HEADER)');
-    expect(ROUTE_SOURCE).not.toContain("searchParams.get('render')");
+  test('the cookie is scoped to the render host, httpOnly, secure and Strict', () => {
+    // Host scoping is the whole point: an extra request HEADER is attached to
+    // every subresource the page fetches, which handed the live token to
+    // `*.github.io` and to the content Worker. A cookie reaches this origin and
+    // nothing else. The domain is a HOST — no scheme, no port — or the browser
+    // never sends it.
+    const cookie = ClassmojiService.deckThumbnail.renderTokenCookie(
+      'https://slides.classmoji.io',
+      TOKEN
+    );
+
+    expect(cookie).toEqual({
+      name: 'cm_render',
+      value: TOKEN,
+      domain: 'slides.classmoji.io',
+      path: '/',
+      httpOnly: true,
+      secure: true,
+      sameSite: 'Strict',
+    });
   });
 
-  test('the production access-log format has no token that can hold a header', () => {
+  test('a domain never carries a scheme or a port', () => {
+    expect(
+      ClassmojiService.deckThumbnail.renderTokenCookie('http://localhost:6500', TOKEN).domain
+    ).toBe('localhost');
+  });
+
+  test('the route reads that cookie and only that cookie', () => {
+    expect(renderTokenFromCookies(`cm_render=${TOKEN}`)).toBe(TOKEN);
+    expect(renderTokenFromCookies(`a=1; cm_render=${TOKEN}; b=2`)).toBe(TOKEN);
+    expect(renderTokenFromCookies('classmoji.session_token=abc; other=1')).toBeNull();
+    expect(renderTokenFromCookies(null)).toBeNull();
+    expect(renderTokenFromCookies('')).toBeNull();
+    // A prefix match must not count.
+    expect(renderTokenFromCookies(`x_cm_render=${TOKEN}`)).toBeNull();
+  });
+
+  test('a malformed percent-escape is a bad token, never a 500', () => {
+    // This route's whole job is to refuse; throwing out of the parser would
+    // turn a bad cookie into a server error.
+    expect(renderTokenFromCookies('cm_render=%E0%A4%A')).toBe('%E0%A4%A');
+  });
+
+  test('it never touches the session cookie machinery', () => {
+    // A route with no session must not acquire the means to resolve one. Ten
+    // lines of `split(';')` cannot; `@classmoji/auth` can.
+    expect(ROUTE_SOURCE).not.toContain('@classmoji/auth');
+    expect(ROUTE_SOURCE).not.toContain('sessionTokenFromCookieHeader');
+    expect(ROUTE_SOURCE).not.toContain('getAuthSession');
+  });
+
+  test('a token in a header or a query string is refused, not accepted', () => {
+    // Neither old channel is a fallback: a credential channel nobody uses is a
+    // credential channel nobody watches. A request presenting one presents no
+    // cookie, so it takes the same refusal as a request presenting nothing.
+    expect(ROUTE_SOURCE).toContain("renderTokenFromCookies(request.headers.get('cookie'))");
+    expect(ROUTE_SOURCE).not.toContain("searchParams.get('render')");
+    expect(ROUTE_SOURCE).not.toContain('RENDER_TOKEN_HEADER');
+
+    // A header-bearing request carries no `cm_render`, so the parser answers
+    // null and the loader refuses exactly as it does for an absent token.
+    expect(renderTokenFromCookies('x-render-token=' + TOKEN)).toBeNull();
+  });
+
+  test('the production access-log format cannot contain the cookie', () => {
     // `morgan('tiny')` is `:method :url :status :res[content-length] -
-    // :response-time ms`. None of those can carry a request header, and the URL
-    // no longer carries the credential either. A format string with
-    // `:req[...]` in it — or a custom format — would need this test rewritten,
-    // which is the point.
+    // :response-time ms`. None of those can carry a request header, so the
+    // `Cookie` header never reaches the log — and the URL carries no credential
+    // either. A format with `:req[...]` in it, or a custom format string, would
+    // need this test rewritten, which is the point.
     const format = SERVER_SOURCE.match(/app\.use\(morgan\((['"])([^'"]+)\1\)\)/);
     expect(format, 'server.ts should configure morgan with a named format').not.toBeNull();
     expect(['tiny', 'short', 'common', 'dev']).toContain(format?.[2]);
     expect(SERVER_SOURCE).not.toContain(':req[');
+    expect(SERVER_SOURCE).not.toContain('cm_render');
   });
 });

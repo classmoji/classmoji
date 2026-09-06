@@ -18,6 +18,10 @@
  *    are the cheapest thing that tells that apart from a slide.
  *  - REDACTION. The render token is a credential, and Cloudflare quotes the
  *    request back in several of its error messages.
+ *  - the TRANSPORT. The token rides in a host-scoped cookie, not a header: a
+ *    `setExtraHTTPHeaders` entry is attached to every subresource the page
+ *    fetches, which handed the live token to `*.github.io` and the content
+ *    Worker.
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -37,6 +41,16 @@ const IMAGE_BASE64 = IMAGE.toString('base64');
 
 const RENDER_TOKEN = '1767225720.c2lnbmF0dXJl';
 
+const RENDER_COOKIE = {
+  name: 'cm_render',
+  value: RENDER_TOKEN,
+  domain: 'slides.classmoji.test',
+  path: '/',
+  httpOnly: true,
+  secure: true,
+  sameSite: 'Strict' as const,
+};
+
 function response(
   body: BodyInit,
   { status = 200, headers = {} }: { status?: number; headers?: Record<string, string> } = {}
@@ -46,7 +60,7 @@ function response(
 
 const request = (fetchImpl: typeof fetch) => ({
   url: 'https://slides.classmoji.test/deck/thumbnail-source',
-  headers: { 'X-Render-Token': RENDER_TOKEN },
+  cookies: [RENDER_COOKIE],
   width: 1280,
   height: 720,
   readySelector: '[data-thumbnail-ready]',
@@ -94,8 +108,36 @@ describe('the request', () => {
       waitForSelector: { selector: '[data-thumbnail-ready]', timeout: 15000 },
       screenshotOptions: { type: 'webp', quality: 80, encoding: 'base64' },
       rejectResourceTypes: ['media', 'websocket'],
-      setExtraHTTPHeaders: { 'X-Render-Token': RENDER_TOKEN },
+      cookies: [RENDER_COOKIE],
     });
+  });
+
+  it('carries the token as a HOST-SCOPED cookie, never as an extra header', async () => {
+    // `setExtraHTTPHeaders` rides along on every request the PAGE makes, so a
+    // deck's images used to carry the live render token to `*.github.io` and to
+    // the content Worker. A cookie is scoped by host: it reaches the render
+    // origin and nothing else, while same-origin asset fetches — ours — still
+    // get it.
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValue(response(IMAGE_BASE64, { headers: { 'content-type': 'text/plain' } }));
+
+    await screenshotToBase64(request(fetchImpl as unknown as typeof fetch));
+
+    const body = JSON.parse(fetchImpl.mock.calls[0][1].body);
+    expect(body).not.toHaveProperty('setExtraHTTPHeaders');
+    expect(body.cookies).toEqual([
+      expect.objectContaining({
+        name: 'cm_render',
+        domain: 'slides.classmoji.test',
+        path: '/',
+        httpOnly: true,
+        secure: true,
+        sameSite: 'Strict',
+      }),
+    ]);
+    // And the URL still carries nothing.
+    expect(body.url).not.toContain('render=');
   });
 
   it('never sets bestAttempt — a waitForSelector timeout MUST fail the render', async () => {
@@ -112,15 +154,15 @@ describe('the request', () => {
     expect(JSON.parse(fetchImpl.mock.calls[0][1].body)).not.toHaveProperty('bestAttempt');
   });
 
-  it('omits setExtraHTTPHeaders entirely when there are none', async () => {
+  it('omits the cookies array entirely when there are none', async () => {
     const fetchImpl = vi
       .fn()
       .mockResolvedValue(response(IMAGE_BASE64, { headers: { 'content-type': 'text/plain' } }));
 
-    const { headers: _headers, ...noHeaders } = request(fetchImpl as unknown as typeof fetch);
-    await screenshotToBase64(noHeaders);
+    const { cookies: _cookies, ...noCookies } = request(fetchImpl as unknown as typeof fetch);
+    await screenshotToBase64(noCookies);
 
-    expect(JSON.parse(fetchImpl.mock.calls[0][1].body)).not.toHaveProperty('setExtraHTTPHeaders');
+    expect(JSON.parse(fetchImpl.mock.calls[0][1].body)).not.toHaveProperty('cookies');
   });
 
   it('refuses to call at all when unconfigured', async () => {
@@ -338,15 +380,16 @@ describe('classifying failures', () => {
   });
 
   it('never puts the RENDER token in the error, even when Cloudflare echoes it', async () => {
-    // Cloudflare's own message quotes the request back. Both shapes the token
-    // has ever travelled in have to come out: the header it uses now, and the
-    // `?render=` query string it used to.
+    // Cloudflare's own message quotes the request back. EVERY shape the token
+    // has travelled in has to come out — the `cm_render` cookie it uses now,
+    // and the header and query string it used before that, either of which can
+    // still surface from an older error string.
     const fetchImpl = vi.fn().mockResolvedValue(
       response(
         JSON.stringify({
           errors: [
             {
-              message: `Navigation failed for https://slides.classmoji.test/d/thumbnail-source?render=${RENDER_TOKEN} with headers {"X-Render-Token":"${RENDER_TOKEN}"}`,
+              message: `Navigation failed for https://slides.classmoji.test/d/thumbnail-source?render=${RENDER_TOKEN} with cookie cm_render=${RENDER_TOKEN}; Path=/ and headers {"X-Render-Token":"${RENDER_TOKEN}"}`,
             },
           ],
         }),
@@ -359,8 +402,8 @@ describe('classifying failures', () => {
     )) as BrowserRunError;
 
     expect(error.message).not.toContain(RENDER_TOKEN);
+    expect(error.message).toContain('cm_render=[redacted]');
     expect(error.message).toContain('render=[redacted]');
-    expect(error.message).toContain('[redacted]');
     // Still legible as an error: the redaction takes the credential, not the
     // diagnosis.
     expect(error.message).toContain('Navigation failed');
@@ -368,6 +411,15 @@ describe('classifying failures', () => {
 });
 
 describe('redactRenderToken', () => {
+  it('takes the cookie form, and leaves the rest of the cookie header readable', () => {
+    expect(redactRenderToken(`cm_render=${RENDER_TOKEN}; Path=/; HttpOnly`)).toBe(
+      'cm_render=[redacted]; Path=/; HttpOnly'
+    );
+    expect(redactRenderToken(`a=1; cm_render=${RENDER_TOKEN}; b=2`)).toBe(
+      'a=1; cm_render=[redacted]; b=2'
+    );
+  });
+
   it('takes the query-string form wherever it appears', () => {
     expect(redactRenderToken(`https://x.test/a/thumbnail-source?render=${RENDER_TOKEN}`)).toBe(
       'https://x.test/a/thumbnail-source?render=[redacted]'
