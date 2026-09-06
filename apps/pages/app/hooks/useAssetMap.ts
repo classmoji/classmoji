@@ -17,6 +17,37 @@ import { useRevalidator } from 'react-router';
  * external image, a `data:` URI, and for a deployment where the delivery layer
  * is switched off entirely.
  */
+/**
+ * Fold the loader's `ref → signed URL` payload into a display map, in place.
+ *
+ * A MERGE, not a replacement: a revalidation ships a fresh payload for the same
+ * document, and the entries `remember` added for assets uploaded since the last
+ * load have no row on the server yet. Dropping them would un-resolve every
+ * image the author just added. Discarding the map wholesale is the NAVIGATION
+ * case, and that decision belongs to the caller, against the reset key.
+ */
+export function seedAssetMap(
+  map: Map<string, string>,
+  resolvedAssets: Record<string, string> | null | undefined
+): Map<string, string> {
+  if (!resolvedAssets) return map;
+  for (const [ref, url] of Object.entries(resolvedAssets)) map.set(ref, url);
+  return map;
+}
+
+/**
+ * The lookup itself, lifted out of the hook so the first-paint guarantee is
+ * testable without an editor: a seeded reference resolves to its signed URL,
+ * and everything else — an external image, a `data:` URI, a reference the map
+ * has never heard of, an empty string — comes back untouched.
+ */
+export function lookupDisplayUrl<T extends string | null | undefined>(
+  map: ReadonlyMap<string, string>,
+  ref: T
+): T {
+  return ref ? ((map.get(ref) ?? ref) as T) : ref;
+}
+
 export function useAssetMap(
   resolvedAssets: Record<string, string> | null | undefined,
   /**
@@ -43,16 +74,22 @@ export function useAssetMap(
       // which belong to the document being navigated away from.
       mapRef.current = new Map();
     }
-    if (!resolvedAssets) return;
-    for (const [ref, url] of Object.entries(resolvedAssets)) mapRef.current.set(ref, url);
+    seedAssetMap(mapRef.current, resolvedAssets);
   }, [resolvedAssets, resetKey]);
 
   /** BlockNote's `resolveFileUrl`: display URL in, stored ref untouched. */
   const resolveFileUrl = useCallback(async (url: string) => mapRef.current.get(url) ?? url, []);
 
-  /** Synchronous lookup for markup this app renders itself (the cover image). */
+  /**
+   * The synchronous lookup, for every surface that can ask during render.
+   *
+   * That is the cover image this app renders itself AND, through
+   * `AssetDisplayUrlContext`, every custom block — which is what keeps a bare
+   * stored path off the first DOM commit. A stable identity because it reads
+   * through the ref rather than closing over a map.
+   */
   const displayUrl = useCallback(
-    (ref: string | null | undefined) => (ref ? (mapRef.current.get(ref) ?? ref) : ref),
+    <T extends string | null | undefined>(ref: T): T => lookupDisplayUrl(mapRef.current, ref),
     []
   );
 
