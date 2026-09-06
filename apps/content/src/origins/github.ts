@@ -16,7 +16,13 @@ const API_VERSION = '2022-11-28';
 const MAX_PROXY_BYTES = 100 * 1024 * 1024;
 
 /**
- * How long GitHub may take to start answering for a blob.
+ * How long GitHub may take to start answering — for a blob, and for a tree.
+ *
+ * One number for both because it is one upstream and one failure: whichever
+ * call is outstanding, a socket GitHub has stopped answering on must not be
+ * able to hold a Worker invocation open. A tree listing is the cheaper of the
+ * two, so a bound sized for a cold 100 MB blob is generous for it by
+ * construction — and a second constant would only invite the two to drift.
  *
  * Long enough that a genuinely cold, genuinely large object still lands — the
  * reason to proxy at all is that the Worker can wait where a browser will not.
@@ -69,11 +75,31 @@ export class GitHubOrigin implements OriginAdapter {
     }
   }
 
+  /**
+   * The repo's blob listing.
+   *
+   * Bounded and mapped exactly like `fetchBlob`, and for the same reason: this
+   * is a plain `fetch` to the same upstream, so without the deadline a silent
+   * socket holds the invocation open, and without the mapping the runtime's own
+   * rejection escapes as a 500 rather than the 502 the caller falls back from.
+   * Cheaper than a blob read does not mean incapable of hanging.
+   */
   async fetchTree(ref: TreeRef): Promise<TreeListing> {
-    const response = await fetch(
-      `${API}/repos/${ref.org}/${ref.repo}/git/trees/${ref.treeSha}?recursive=1`,
-      { headers: headers(ref.token, 'application/vnd.github+json') }
-    );
+    let response: Response;
+    try {
+      response = await fetch(
+        `${API}/repos/${ref.org}/${ref.repo}/git/trees/${ref.treeSha}?recursive=1`,
+        {
+          headers: headers(ref.token, 'application/vnd.github+json'),
+          signal: AbortSignal.timeout(BLOB_FETCH_TIMEOUT_MS),
+        }
+      );
+    } catch (error) {
+      throw new OriginError(
+        502,
+        `github tree ${ref.treeSha} unreachable: ${error instanceof Error ? error.message : String(error)}`
+      );
+    }
 
     if (response.status === 401)
       throw new OriginAuthError('github rejected the installation token');

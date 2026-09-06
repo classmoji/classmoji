@@ -209,6 +209,37 @@ describe('origin timeouts', () => {
     expect(init.signal).toBeInstanceOf(AbortSignal);
   });
 
+  it('asks GitHub with the same deadline attached for a tree', async () => {
+    // The tree listing is a plain fetch to the same upstream, so it can hang in
+    // exactly the same way. An unbounded call here would hold the invocation
+    // open no matter how carefully the blob read beside it is bounded.
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ tree: [] })));
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    await new GitHubOrigin().fetchTree({
+      org: 'classmoji',
+      repo: 'content-cs1',
+      token: 'ghs_x',
+      treeSha: 'main',
+    });
+
+    const [, init] = fetchMock.mock.calls[0] as unknown as [string, { signal?: AbortSignal }];
+    expect(init.signal).toBeInstanceOf(AbortSignal);
+  });
+
+  it('turns a tree timeout into an origin error rather than a raw rejection', async () => {
+    globalThis.fetch = (() => timeoutRejection()) as unknown as typeof fetch;
+
+    await expect(
+      new GitHubOrigin().fetchTree({
+        org: 'classmoji',
+        repo: 'content-cs1',
+        token: 'ghs_x',
+        treeSha: 'main',
+      })
+    ).rejects.toBeInstanceOf(OriginError);
+  });
+
   it('turns a blob timeout into an origin error rather than a raw rejection', async () => {
     // Not the runtime's own DOMException: the router answers `OriginError` with
     // a 502 the app falls back from, and anything else with an opaque 500.
