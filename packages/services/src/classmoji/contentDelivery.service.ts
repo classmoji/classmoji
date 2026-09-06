@@ -887,11 +887,18 @@ const UNREACHABLE_MAX_CLASSROOMS = 500;
  *
  * ## What may write to it
  *
- * Only a read where every leg that reached an origin failed with a transport or
- * permission error. A 404 is explicitly NOT one: a file that does not exist
- * says nothing about whether the repo can be read, and treating it as a
- * classroom-wide outage would blank thumbnails for decks whose `index.html`
- * simply has not been generated yet.
+ * One leg, and one verdict: the WORKER leg concluding `unreachable` on a read
+ * that produced no content. See `WorkerLegOutcome` for what earns that.
+ *
+ * The Worker alone, because it is the only leg that actually reports what it
+ * found. The CDN leg answers 404 for every headline case this exists for — a
+ * repo made private, a repo deleted, Pages never published — so a rule that
+ * waited for both legs to fail armed for none of them: `{org}.github.io` said
+ * "no such file" and the read looked, to that rule, like a missing `index.html`.
+ *
+ * And a 404 from the WORKER is still explicitly not a fault: that one really is
+ * a missing file, and treating it as a classroom-wide outage would blank
+ * thumbnails for decks whose `index.html` has simply not been generated yet.
  */
 const unreachableClassrooms = new Map<string, { until: number }>();
 
@@ -938,21 +945,62 @@ function rememberUnreachable(classroomId: string, path: string): void {
 }
 
 /**
- * What the legs of one read concluded, in the order they ran.
+ * What the Worker leg of one read concluded.
  *
- * Only legs that actually REACHED an origin record anything. A leg that was
- * skipped — the delivery layer off, no map row, a `cdn-only` read never trying
- * the API — says nothing about reachability and must not be able to condemn a
- * classroom on its own.
+ *   - `miss` — a 404. The sha is not there, which is PROOF the Worker and the
+ *     repo behind it can be reached.
+ *   - `refused` — an answer about THIS request rather than about the repo: a
+ *     signature the Worker declined, a malformed URL. A deployment fault, and
+ *     condemning the classroom for one would blank thumbnails for a repo that
+ *     is perfectly healthy.
+ *   - `unreachable` — the repo could not be read through the Worker: a 403, a
+ *     5xx (including the 502 it answers when its own origin pull fails), or a
+ *     transport failure that was not our own deadline. This is the only verdict
+ *     that may write a classroom off.
+ *   - `aborted` — OUR deadline expired. Deliberately not a fault of the origin:
+ *     a cold pull legitimately outruns a two second thumbnail budget, and
+ *     treating our own impatience as an outage would write off a classroom that
+ *     is merely slow — and keep it written off for five minutes.
  *
- *   - `miss` — an origin answered, and the answer was "no such file" (a 404).
- *     Proof the origin is REACHABLE, which is why it disqualifies the write-off.
- *   - `error` — transport or permission: a timeout, a refused socket, a 403, a
- *     5xx. The origin did not answer the question.
+ * A leg that never RAN records nothing at all: the delivery layer switched off,
+ * no map row for this path, the per-render circuit already open, or the read
+ * out of budget before the fetch began. None of those say anything about
+ * reachability, and none may condemn a classroom.
  */
+type WorkerLegOutcome = 'miss' | 'refused' | 'unreachable' | 'aborted';
+
 interface TextReadTrace {
-  outcomes: Array<'miss' | 'error'>;
+  worker?: WorkerLegOutcome;
 }
+
+/**
+ * A Worker refusal, classified. See `WorkerLegOutcome`.
+ *
+ * The 502 is the important one and the reason this is not simply "not ok": it
+ * is what the Worker answers when its OWN origin pull fails, which is exactly
+ * the shape of a content repo that has gone private or been deleted.
+ */
+function workerVerdictFor(status: number): WorkerLegOutcome {
+  if (status === 404) return 'miss';
+  if (status === 403 || status >= 500) return 'unreachable';
+  return 'refused';
+}
+
+/**
+ * Did WE give up, or did the origin?
+ *
+ * `AbortSignal.timeout` rejects with a `TimeoutError` and an explicit `abort()`
+ * with an `AbortError`; either way the deadline that expired is one set in this
+ * file, and nothing has been learned about the upstream. Distinguishing them
+ * from a refused socket is what keeps a slow classroom from being written off
+ * as a broken one.
+ */
+function isAbortError(error: unknown): boolean {
+  if (typeof error !== 'object' || error === null) return false;
+  const name = (error as { name?: unknown }).name;
+  return name === 'AbortError' || name === 'TimeoutError';
+}
+
 
 /**
  * Reject after `ms`, so a call with no cancellation of its own cannot hold a
@@ -1058,18 +1106,22 @@ export async function fetchContentText(
 
   const deadlineMs = opts.deadlineMs ?? TEXT_FETCH_TIMEOUT_MS;
   const fallback = opts.fallback ?? 'api-then-cdn';
-  const trace: TextReadTrace = { outcomes: [] };
+  const trace: TextReadTrace = {};
   const viaWorker = await readTextThroughWorker(ctx, path, deadlineMs, trace, opts.budget);
   const result =
     viaWorker ??
-    (fallback === 'none'
-      ? null
-      : await readTextFromGitHub(ctx, path, fallback, deadlineMs, trace, opts));
+    (fallback === 'none' ? null : await readTextFromGitHub(ctx, path, fallback, deadlineMs, opts));
 
-  // Every leg that reached an origin failed, and none of them failed by
-  // answering "no such file". That is a classroom-level fault, so record it
-  // once and let the decorative reads behind this one skip the wait.
-  if (!result && trace.outcomes.length > 0 && trace.outcomes.every(o => o === 'error')) {
+  // Nothing produced content, and the Worker leg says the repo cannot be read
+  // through it at all. That is a classroom-level fault, so record it once and
+  // let the decorative reads behind this one skip the wait.
+  //
+  // Independent of what the CDN leg said, on purpose. `{org}.github.io` answers
+  // 404 for every case this exists for — repo private, repo deleted, Pages
+  // never published — so a rule that needed BOTH legs to fail armed for none of
+  // them. And a Worker 404, or our own deadline expiring, is not this: see
+  // `WorkerLegOutcome`.
+  if (!result && trace.worker === 'unreachable') {
     rememberUnreachable(ctx.classroom.id, path);
   }
 
@@ -1286,12 +1338,10 @@ async function readTextThroughWorker(
     const response = await fetch(url, { signal: AbortSignal.timeout(deadlineMs) });
     if (!response.ok) {
       // A refusal is an ANSWER, not a dead origin: the Worker is up and said
-      // no. Fall back for this path and leave the circuit closed.
-      //
-      // A 404 is the Worker saying the sha is not there, which is proof it is
-      // reachable; anything else (a 403, or the 502 it answers when its own
-      // origin pull fails) is the repo not being readable through it.
-      trace.outcomes.push(response.status === 404 ? 'miss' : 'error');
+      // no. Fall back for this path and leave the per-render circuit closed.
+      // What KIND of no it was decides the classroom write-off — see
+      // `workerVerdictFor`.
+      trace.worker = workerVerdictFor(response.status);
       console.warn(
         `[contentDelivery] Worker returned ${response.status} for ${path} ` +
           `(classroom ${ctx.classroom.id}); falling back`
@@ -1304,8 +1354,15 @@ async function readTextThroughWorker(
     // A throw here is transport — a timeout, a DNS failure, a refused socket —
     // and it is about the ORIGIN rather than this file. Trip the circuit so the
     // rest of this render does not queue up behind the same dead connection.
+    //
+    // The circuit trips for OUR deadline too (one render that has already
+    // outrun its budget will not do better on the next path), but the
+    // classroom-level write-off does not: a cold pull outrunning a two second
+    // thumbnail budget is a slow repo, not an unreadable one, and five minutes
+    // of blanked thumbnails is far too much to conclude from our own
+    // impatience.
     if (budget) budget.workerUnavailable = true;
-    trace.outcomes.push('error');
+    trace.worker = isAbortError(error) ? 'aborted' : 'unreachable';
     console.warn(
       `[contentDelivery] Worker text read failed for ${path} (classroom ${ctx.classroom.id}); ` +
         'skipping the Worker for the rest of this read:',
@@ -1332,13 +1389,16 @@ async function readTextFromGitHub(
   path: string,
   fallback: TextFallback,
   deadlineMs: number,
-  trace: TextReadTrace,
   opts: { skipCache?: boolean }
 ): Promise<ContentText | null> {
   const orgLogin = ctx.classroom.git_organization.login;
   const repo = ctx.classroom.content_repo;
   if (!orgLogin || !repo) return null;
 
+  // No trace to write. Neither of these legs may condemn a classroom: the CDN
+  // answers 404 for a private, deleted or never-published repo alike, and the
+  // contents API is reached only after the Worker has already had its say. See
+  // `unreachableClassrooms`.
   if (fallback !== 'cdn-only') {
     try {
       const file = await withDeadline(
@@ -1352,13 +1412,8 @@ async function readTextFromGitHub(
         'contents API read'
       );
       if (file?.content) return { text: file.content, sha: file.sha ?? null, source: 'api' };
-      // `getContent` returns null for a 404 and THROWS for everything else, so
-      // reaching here is GitHub saying the file is not in the repo — which is
-      // also proof that the repo could be read.
-      trace.outcomes.push('miss');
     } catch (error) {
       // A 403 (no access), a 5xx, or our own deadline. Not an answer.
-      trace.outcomes.push('error');
       console.warn(
         `[contentDelivery] API text read failed for ${repo}/${path}:`,
         error instanceof Error ? error.message : error
@@ -1375,9 +1430,7 @@ async function readTextFromGitHub(
       signal: AbortSignal.timeout(deadlineMs),
     });
     if (response.ok) return { text: await response.text(), sha: null, source: 'cdn' };
-    trace.outcomes.push(response.status === 404 ? 'miss' : 'error');
   } catch (error) {
-    trace.outcomes.push('error');
     console.warn(
       `[contentDelivery] CDN text read failed for ${repo}/${path}:`,
       error instanceof Error ? error.message : error
