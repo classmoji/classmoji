@@ -46,12 +46,13 @@ import {
   resolveDeliveryThemeUrls,
 } from '~/utils/deckDelivery.server';
 
-/** The viewport Browser Run is told to use. Kept here so the two agree. */
-export const THUMBNAIL_WIDTH = 1280;
-export const THUMBNAIL_HEIGHT = 720;
-
-/** The attribute Browser Run's `waitForSelector` waits for. */
-export const THUMBNAIL_READY_ATTRIBUTE = 'data-thumbnail-ready';
+/**
+ * Geometry and the readiness attribute come from the shared contract in
+ * `@classmoji/services`, not from a constant here: the render task waits for
+ * exactly this attribute and renders at exactly this size, and it cannot import
+ * this route.
+ */
+const { THUMBNAIL_READY_ATTRIBUTE } = ClassmojiService.deckThumbnail;
 
 /**
  * Never cached, never indexed, never framed.

@@ -1,0 +1,373 @@
+/**
+ * Unit tests for the deck-thumbnail render task.
+ *
+ * Four things matter here, and none of them is the plumbing:
+ *
+ *  - it does NOT render when the deck's `index.html` is the same document the
+ *    stored thumbnail was taken of. That check is what makes a backfill, a
+ *    Trigger retry and a save that only touched slide 40 all free — and it is
+ *    what bounds git growth, because a WebP does not delta-compress and every
+ *    render that lands is a whole new object in the repo's history;
+ *  - a 429 rethrows so the task's own retry policy handles it, while a render
+ *    that simply will not work returns quietly — either way NOTHING is
+ *    committed and the deck keeps the thumbnail it already had;
+ *  - the LOOP GUARD: this task must never reach a deck WRITE path, because the
+ *    enqueue for it lives inside those. Asserted structurally, since the only
+ *    way that regresses is somebody reaching for a convenient helper;
+ *  - the render token never reaches a log line.
+ *
+ * `@trigger.dev/sdk`, `@classmoji/database`, `@classmoji/services` and the
+ * Browser Run helper are mocked, so `run` is invoked directly and nothing
+ * reaches Cloudflare, GitHub or Postgres.
+ */
+
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+const findUnique = vi.fn();
+const update = vi.fn();
+const lookupContentAsset = vi.fn();
+const recordContentAsset = vi.fn();
+const signDeckRenderToken = vi.fn();
+const uploadBatch = vi.fn();
+const getMeta = vi.fn();
+const screenshotToBase64 = vi.fn();
+const isBrowserRunConfigured = vi.fn();
+
+const loggerInfo = vi.fn();
+const loggerWarn = vi.fn();
+const loggerError = vi.fn();
+
+// `task()` normally returns a trigger handle; return the config so the test can
+// call `run` directly.
+vi.mock('@trigger.dev/sdk', () => ({
+  task: (config: unknown) => config,
+  logger: { info: loggerInfo, warn: loggerWarn, error: loggerError },
+}));
+
+vi.mock('@classmoji/database', () => ({
+  default: () => ({ slide: { findUnique, update } }),
+}));
+
+/**
+ * The thumbnail contract is mirrored rather than stubbed: these constants are
+ * the agreement between this task and the render route, and a test that invents
+ * its own values would pass while the two halves disagreed.
+ */
+vi.mock('@classmoji/services', () => ({
+  ClassmojiService: {
+    contentAssets: { lookupContentAsset, recordContentAsset },
+    deckRenderToken: { signDeckRenderToken },
+    deckThumbnail: {
+      THUMBNAIL_WIDTH: 1280,
+      THUMBNAIL_HEIGHT: 720,
+      THUMBNAIL_WEBP_QUALITY: 80,
+      THUMBNAIL_READY_SELECTOR: '[data-thumbnail-ready]',
+      thumbnailPathFor: (contentPath: string) => `${contentPath}/thumbnail.webp`,
+      thumbnailSourceUrl: (origin: string, slideId: string, token: string) =>
+        `${origin}/${slideId}/thumbnail-source?render=${encodeURIComponent(token)}`,
+    },
+  },
+  ContentService: { uploadBatch, getMeta },
+}));
+
+// The error class is REAL — the task branches on `instanceof` and on
+// `retryable`, and a stubbed class would make that branch untestable.
+vi.mock('../../helpers/browserRun.ts', async importOriginal => {
+  const actual = (await importOriginal()) as Record<string, unknown>;
+  return { ...actual, screenshotToBase64, isBrowserRunConfigured };
+});
+
+const { BrowserRunError } = await import('../../helpers/browserRun.ts');
+const { deckThumbnailRender } = await import('../deckThumbnail.ts');
+
+type Result = { status: string; reason?: string; sha?: string; path?: string; bytes?: number };
+
+const run = (slideId = SLIDE_ID): Promise<Result> =>
+  (deckThumbnailRender as unknown as { run: (p: unknown, c?: unknown) => Promise<Result> }).run(
+    { slideId },
+    {}
+  );
+
+const SLIDE_ID = '22222222-3333-4444-8555-666666666666';
+const CLASSROOM_ID = '11111111-2222-4333-8444-555555555555';
+const INDEX_SHA = 'a'.repeat(40);
+const THUMB_SHA = 'b'.repeat(40);
+
+/** A one-pixel WebP is not needed — the task only ever moves the base64 around. */
+const IMAGE_BASE64 = Buffer.from('not really a webp, but bytes are bytes').toString('base64');
+
+function slideRow(overrides: Record<string, unknown> = {}) {
+  return {
+    id: SLIDE_ID,
+    classroom_id: CLASSROOM_ID,
+    slug: 'week-01-intro',
+    title: 'Week 01 — Intro',
+    content_path: 'slides/week-01-intro',
+    is_public: false,
+    thumbnail_path: null,
+    thumbnail_rendered_sha: null,
+    classroom: {
+      id: CLASSROOM_ID,
+      content_repo: 'content-cs52-25w',
+      content_key_version: 0,
+      content_delivery_enabled: true,
+      git_organization: { login: 'cs52', provider: 'GITHUB' },
+    },
+    ...overrides,
+  };
+}
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  process.env.SLIDES_URL = 'https://slides.classmoji.test';
+  isBrowserRunConfigured.mockReturnValue(true);
+  findUnique.mockResolvedValue(slideRow());
+  lookupContentAsset.mockResolvedValue({ sha: INDEX_SHA, type: 'blob', size: 1234 });
+  signDeckRenderToken.mockResolvedValue('1767225720.c2lnbmF0dXJl');
+  screenshotToBase64.mockResolvedValue(IMAGE_BASE64);
+  uploadBatch.mockResolvedValue({
+    commit: 'c'.repeat(40),
+    filesUploaded: 1,
+    files: [{ path: 'slides/week-01-intro/thumbnail.webp', sha: THUMB_SHA }],
+  });
+  recordContentAsset.mockResolvedValue(true);
+  update.mockResolvedValue({});
+});
+
+describe('skip when the deck has not changed', () => {
+  it('returns unchanged without booting a browser or writing a commit', async () => {
+    findUnique.mockResolvedValue(
+      slideRow({
+        thumbnail_path: 'slides/week-01-intro/thumbnail.webp',
+        thumbnail_rendered_sha: INDEX_SHA,
+      })
+    );
+
+    await expect(run()).resolves.toEqual({ status: 'unchanged', sha: INDEX_SHA });
+    expect(screenshotToBase64).not.toHaveBeenCalled();
+    expect(uploadBatch).not.toHaveBeenCalled();
+    expect(update).not.toHaveBeenCalled();
+    expect(signDeckRenderToken).not.toHaveBeenCalled();
+  });
+
+  it('still renders when the sha matches but no thumbnail was ever stored', async () => {
+    // The sha alone is not enough: a row can carry a sha from a run whose
+    // commit never landed, and answering "unchanged" there would leave the deck
+    // permanently without a picture.
+    findUnique.mockResolvedValue(
+      slideRow({ thumbnail_path: null, thumbnail_rendered_sha: INDEX_SHA })
+    );
+
+    await expect(run()).resolves.toMatchObject({ status: 'rendered' });
+    expect(screenshotToBase64).toHaveBeenCalledTimes(1);
+  });
+
+  it('falls back to a metadata read when the asset map has no row', async () => {
+    lookupContentAsset.mockResolvedValue(null);
+    getMeta.mockResolvedValue({ sha: INDEX_SHA });
+    findUnique.mockResolvedValue(
+      slideRow({
+        thumbnail_path: 'slides/week-01-intro/thumbnail.webp',
+        thumbnail_rendered_sha: INDEX_SHA,
+      })
+    );
+
+    await expect(run()).resolves.toEqual({ status: 'unchanged', sha: INDEX_SHA });
+    expect(getMeta).toHaveBeenCalledWith(
+      expect.objectContaining({ path: 'slides/week-01-intro/index.html', skipCache: true })
+    );
+    expect(screenshotToBase64).not.toHaveBeenCalled();
+  });
+});
+
+describe('rendering and committing', () => {
+  it('commits the image as base64 beside the deck and records the asset row', async () => {
+    await expect(run()).resolves.toMatchObject({
+      status: 'rendered',
+      path: 'slides/week-01-intro/thumbnail.webp',
+      sha: THUMB_SHA,
+    });
+
+    expect(uploadBatch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        repo: 'content-cs52-25w',
+        message: 'chore(thumbnail): week-01-intro',
+        // `put`/`putFile` are UTF-8 only; base64 through uploadBatch is the one
+        // commit path that can carry a WebP intact.
+        files: [
+          {
+            path: 'slides/week-01-intro/thumbnail.webp',
+            content: IMAGE_BASE64,
+            encoding: 'base64',
+          },
+        ],
+        primeCache: false,
+      })
+    );
+
+    expect(recordContentAsset).toHaveBeenCalledWith(CLASSROOM_ID, {
+      path: 'slides/week-01-intro/thumbnail.webp',
+      sha: THUMB_SHA,
+      size: Buffer.from(IMAGE_BASE64, 'base64').length,
+    });
+  });
+
+  it("stores the INDEX's sha, not the thumbnail's, as what was rendered from", async () => {
+    await run();
+    expect(update).toHaveBeenCalledWith({
+      where: { id: SLIDE_ID },
+      data: {
+        thumbnail_path: 'slides/week-01-intro/thumbnail.webp',
+        thumbnail_rendered_sha: INDEX_SHA,
+        thumbnail_rendered_at: expect.any(Date),
+      },
+    });
+  });
+
+  it('renders at 1280x720 and waits for the readiness selector', async () => {
+    await run();
+    expect(screenshotToBase64).toHaveBeenCalledWith(
+      expect.objectContaining({
+        width: 1280,
+        height: 720,
+        quality: 80,
+        readySelector: '[data-thumbnail-ready]',
+      })
+    );
+  });
+
+  it('mints the token per run and never logs it', async () => {
+    await run();
+
+    expect(signDeckRenderToken).toHaveBeenCalledWith({
+      origin: 'https://slides.classmoji.test',
+      classroomId: CLASSROOM_ID,
+      slideId: SLIDE_ID,
+      keyVersion: 0,
+    });
+
+    const url = screenshotToBase64.mock.calls[0][0].url as string;
+    expect(url).toContain('/thumbnail-source?render=');
+
+    const logged = JSON.stringify([
+      loggerInfo.mock.calls,
+      loggerWarn.mock.calls,
+      loggerError.mock.calls,
+    ]);
+    expect(logged).not.toContain('1767225720.c2lnbmF0dXJl');
+    expect(logged).not.toContain('render=');
+  });
+});
+
+describe('failure keeps the existing thumbnail', () => {
+  it('rethrows a 429 so the retry policy handles it, committing nothing', async () => {
+    screenshotToBase64.mockRejectedValue(
+      new BrowserRunError('Rate limited', {
+        status: 429,
+        retryable: true,
+        retryAfterSeconds: 7,
+      })
+    );
+
+    await expect(run()).rejects.toThrow('Rate limited');
+    expect(uploadBatch).not.toHaveBeenCalled();
+    expect(update).not.toHaveBeenCalled();
+    expect(loggerWarn).toHaveBeenCalledWith(
+      expect.stringContaining('back off'),
+      expect.objectContaining({ status: 429, retryAfterSeconds: 7 })
+    );
+  });
+
+  it('rethrows a 5xx as well', async () => {
+    screenshotToBase64.mockRejectedValue(
+      new BrowserRunError('Bad gateway', { status: 502, retryable: true })
+    );
+    await expect(run()).rejects.toThrow('Bad gateway');
+    expect(uploadBatch).not.toHaveBeenCalled();
+  });
+
+  it('returns quietly on a 422, leaving the stored thumbnail and its sha alone', async () => {
+    findUnique.mockResolvedValue(
+      slideRow({
+        thumbnail_path: 'slides/week-01-intro/thumbnail.webp',
+        thumbnail_rendered_sha: 'd'.repeat(40),
+      })
+    );
+    screenshotToBase64.mockRejectedValue(
+      new BrowserRunError('Navigation timed out', { status: 422, retryable: false })
+    );
+
+    await expect(run()).resolves.toMatchObject({ status: 'failed' });
+    expect(uploadBatch).not.toHaveBeenCalled();
+    expect(recordContentAsset).not.toHaveBeenCalled();
+    // Crucially NOT updated: the row still points at the picture in the repo.
+    expect(update).not.toHaveBeenCalled();
+  });
+
+  it('never deletes or blanks a thumbnail on any failure path', async () => {
+    screenshotToBase64.mockRejectedValue(new Error('something else entirely'));
+    await expect(run()).resolves.toMatchObject({ status: 'failed' });
+    expect(update).not.toHaveBeenCalled();
+  });
+});
+
+describe('skips rather than fails when it cannot run at all', () => {
+  it('skips when Browser Run is unconfigured', async () => {
+    isBrowserRunConfigured.mockReturnValue(false);
+    await expect(run()).resolves.toEqual({
+      status: 'skipped',
+      reason: 'browser-run-unconfigured',
+    });
+    expect(findUnique).not.toHaveBeenCalled();
+  });
+
+  it('skips when SLIDES_URL is unset', async () => {
+    delete process.env.SLIDES_URL;
+    await expect(run()).resolves.toEqual({ status: 'skipped', reason: 'slides-url-unset' });
+  });
+
+  it('skips a slide that no longer exists', async () => {
+    findUnique.mockResolvedValue(null);
+    await expect(run()).resolves.toEqual({ status: 'skipped', reason: 'slide-not-found' });
+  });
+
+  it('skips a classroom with no content repo', async () => {
+    findUnique.mockResolvedValue(
+      slideRow({ classroom: { ...slideRow().classroom, content_repo: null } })
+    );
+    await expect(run()).resolves.toEqual({ status: 'skipped', reason: 'no-content-repo' });
+  });
+
+  it('skips when nothing can sign a render token', async () => {
+    signDeckRenderToken.mockResolvedValue(null);
+    await expect(run()).resolves.toEqual({ status: 'skipped', reason: 'signing-unconfigured' });
+    expect(screenshotToBase64).not.toHaveBeenCalled();
+  });
+});
+
+describe('loop guard', () => {
+  const source = readFileSync(
+    fileURLToPath(new URL('../deckThumbnail.ts', import.meta.url)),
+    'utf8'
+  );
+  // The prose above the task names these deliberately; strip comments so the
+  // assertion is about the CODE and not about the explanation of the rule.
+  const code = source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/.*$/gm, '$1');
+
+  it.each(['saveDeck', 'saveDeckWithMerge', 'saveDeckFromOps', 'recordDeckFiles'])(
+    'never calls %s — the enqueue for this task lives inside those',
+    name => {
+      expect(code).not.toContain(name);
+    }
+  );
+
+  it('does not import the deck engine at all', () => {
+    expect(code).not.toContain('@classmoji/services/slides');
+  });
+
+  it('never touches deck.json, whose sha the editor watches for its own save', () => {
+    expect(code).not.toContain('deck.json');
+  });
+});

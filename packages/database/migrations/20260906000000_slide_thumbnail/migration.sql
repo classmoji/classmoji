@@ -1,0 +1,37 @@
+-- The stored card image for a deck, and the render it came from.
+--
+-- The slides index used to draw every deck as a live `<iframe>` of the deck
+-- itself: up to twenty full authenticated document requests, each booting
+-- Reveal.js inside a 0.2-scaled frame, each paying a shared-theme preload of
+-- three authenticated GitHub calls. One stored image per deck replaces all of
+-- it, committed into the classroom's own content repo beside the deck's files
+-- so it inherits the delivery layer already in place — asset-map write-through,
+-- signed Worker URLs, tiered caching, and the legacy proxy for classrooms whose
+-- gate is off.
+--
+-- `thumbnail_path` is a repo-relative path (`slides/<slug>/thumbnail.webp`),
+-- not a URL. A URL would be wrong twice over: signatures expire, and the same
+-- file is addressed differently depending on whether its classroom is served by
+-- the delivery layer. The path is what both answers are derived FROM.
+--
+-- `thumbnail_rendered_sha` is the git blob sha of the `index.html` the picture
+-- was taken of, and it is what makes the render job idempotent: a save that did
+-- not change the deck's rendered document leaves this equal to the current sha,
+-- and the task returns without booting a browser or writing a commit. Without
+-- it every save of a twenty-slide deck would re-render a picture of slide one
+-- that nobody changed, and each of those is a new whole WebP in the repo's
+-- history (compressed formats do not delta).
+--
+-- `thumbnail_rendered_at` is when that render landed. The index reads it to
+-- rate-limit the on-view enqueue for decks that have no thumbnail yet, so a
+-- classroom whose renders are failing is retried on a timer rather than on
+-- every page load.
+--
+-- All three NULLABLE with no default and no backfill. NULL across the board
+-- means "never rendered", which is exactly true of every existing deck; the
+-- index draws a placeholder card for those and the backfill task fills them in.
+-- Nothing here is derived state that must be repaired — the file in the repo is
+-- the artifact, and these columns are how a writer avoids re-making it.
+ALTER TABLE "slides" ADD COLUMN "thumbnail_path" TEXT;
+ALTER TABLE "slides" ADD COLUMN "thumbnail_rendered_sha" TEXT;
+ALTER TABLE "slides" ADD COLUMN "thumbnail_rendered_at" TIMESTAMP(3);
