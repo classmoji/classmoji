@@ -760,3 +760,88 @@ test.describe('article width', () => {
     }
   });
 });
+
+/* ------------------------------------------------------------------ *
+ * Responsive images on the class site
+ * ------------------------------------------------------------------ */
+
+/**
+ * The site renders images through a STATIC image spec, not the editor's.
+ *
+ * The editor's image block is built on BlockNote's `ResizableFileBlockWrapper`,
+ * which needs editor context the server render does not provide: it throws,
+ * BlockNote swallows the throw, and the block renders as NOTHING at all. The
+ * block-coverage test above is what caught that; these pin what replaced it.
+ *
+ * Rendering the candidates here rather than post-processing the HTML is also
+ * what makes `sizes` correct — `previewWidth` lives in the block's props and
+ * nowhere in the markup, and it is the only thing that says how wide the image
+ * will actually be laid out.
+ */
+const SITE_SIGNED = 'https://content.classmoji.io/c/abc/blob/aaa.png?p=month&sig=x';
+const SITE_LADDER = `${SITE_SIGNED}&w=800&fmt=auto 800w, ${SITE_SIGNED}&w=1600&fmt=auto 1600w`;
+
+const renderImage = (props: Record<string, unknown>, srcSets?: Record<string, string>) =>
+  renderSitePage({
+    blocks: [{ type: 'image', props }],
+    resolveLink: () => null,
+    ...(srcSets ? { srcSets } : {}),
+  });
+
+test.describe('class-site images', () => {
+  test('renders the image at all — the whole reason it is overridden', async () => {
+    const { html } = await renderImage({ url: SITE_SIGNED, caption: 'A diagram' });
+
+    // Matched without the query string: `&` is HTML-escaped inside an
+    // attribute value, which is correct and not what this test is about.
+    expect(html).toContain('/blob/aaa.png');
+    expect(html).toContain('bn-visual-media');
+    expect(html).toContain('A diagram');
+  });
+
+  test('hangs the candidates and a column-width hint off a plain image', async () => {
+    const { html } = await renderImage({ url: SITE_SIGNED }, { [SITE_SIGNED]: SITE_LADDER });
+
+    expect(html).toContain('srcset="');
+    expect(html).toContain('800w');
+    expect(html).toContain('sizes="(max-width: 1024px) 100vw, 1024px"');
+  });
+
+  test('a resized image asks for the width it will actually be painted at', async () => {
+    const { html } = await renderImage(
+      { url: SITE_SIGNED, previewWidth: 300 },
+      { [SITE_SIGNED]: SITE_LADDER }
+    );
+
+    // The regression: one global 1024px hint made a 300px image fetch a 2560px
+    // rendition. The width also lands inline, so the site matches the editor.
+    expect(html).toContain('sizes="min(100vw, 300px)"');
+    expect(html).toContain('width: 300px');
+  });
+
+  test('an avatar asks for 64px, not a column', async () => {
+    const { html } = await renderSitePage({
+      blocks: [{ type: 'profile', props: { name: 'Ada', imageUrl: SITE_SIGNED } }],
+      resolveLink: () => null,
+      srcSets: { [SITE_SIGNED]: SITE_LADDER },
+    });
+
+    expect(html).toContain('profile-avatar-image');
+    expect(html).toContain('sizes="64px"');
+  });
+
+  test('an image with no candidates renders one size and no empty attributes', async () => {
+    const { html } = await renderImage({ url: 'https://images.example.com/hero.png' }, {});
+
+    expect(html).toContain('https://images.example.com/hero.png');
+    expect(html).not.toContain('srcset');
+    expect(html).not.toContain('sizes=');
+  });
+
+  test('showPreview:false still renders the filename rather than a picture', async () => {
+    const { html } = await renderImage({ url: SITE_SIGNED, name: 'diagram.png', showPreview: false });
+
+    expect(html).toContain('diagram.png');
+    expect(html).not.toContain('bn-visual-media');
+  });
+});

@@ -27,6 +27,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
 const TABS = [
   { to: '/', label: 'Users', end: true },
   { to: '/classrooms', label: 'Classrooms', end: false },
+  { to: '/content-delivery', label: 'Content delivery', end: false },
 ];
 
 const AdminShell = () => {

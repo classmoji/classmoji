@@ -1,0 +1,23 @@
+-- The content-repo commit a classroom's asset map was last brought level with.
+--
+-- The map is kept current by push webhooks, and webhook delivery is not
+-- guaranteed: hook-station can be down, GitHub can drop a delivery, a repo can
+-- be pushed to before its App install finishes. A dropped delivery used to be
+-- INVISIBLE. The next push applied cleanly — its own added/modified/removed
+-- lists are internally consistent — so the map silently kept rows for paths the
+-- missing push deleted and missed the ones it added, and stayed wrong until the
+-- nightly full sweep happened to run.
+--
+-- A push webhook names the commit it built on (`before`) as well as the one it
+-- landed (`after`), which makes the gap detectable for the cost of one column:
+-- record the commit each sync brought the map level with, and compare the next
+-- push's `before` against it. A mismatch means the repo moved without the map
+-- seeing it, and that run escalates to a full tree read instead of applying a
+-- diff against a state we never had.
+--
+-- NULLABLE with no default and no backfill. NULL means "never synced", and it
+-- escalates nothing: there is no chain yet for a push to have a gap in, and
+-- inventing one would make every classroom's first webhook a full sync for no
+-- reason. Every existing classroom starts here and picks the chain up on its
+-- next sync.
+ALTER TABLE "classrooms" ADD COLUMN "content_assets_synced_commit" TEXT;

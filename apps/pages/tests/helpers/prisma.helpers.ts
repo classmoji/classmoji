@@ -5,6 +5,7 @@ import { fileURLToPath } from 'url';
 // PrismaClient eagerly at module import, so the runtime import MUST happen
 // after DATABASE_URL is resolved (see getTestPrisma's dynamic import).
 import type getPrismaType from '@classmoji/database';
+import { assertWritableDatabase } from '../../../../tests/content-delivery/databaseGuard';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -34,6 +35,14 @@ export async function getTestPrisma(): Promise<TestPrisma> {
     const url = databaseUrlFromDevContext();
     if (url) process.env.DATABASE_URL = url;
   }
+  // Every suite that reaches the database goes through here, and several of
+  // them write: sessions are minted, fixtures are created, classroom columns
+  // are flipped. Which database that lands in is decided by whatever
+  // DATABASE_URL happened to be exported — a value that is routinely pointed at
+  // a deployed environment for an afternoon's debugging and not put back. The
+  // guard is on the resolved host, so intent (E2E_TARGET, NODE_ENV) cannot vouch
+  // for connectivity.
+  assertWritableDatabase('open a test database connection');
   if (!cached) {
     const { default: getPrisma } = await import('@classmoji/database');
     cached = getPrisma();

@@ -1,5 +1,5 @@
 import { useParams } from 'react-router';
-import { Form, Switch } from 'antd';
+import { Button, Form, Modal, Switch } from 'antd';
 import { IconInfoCircle, IconExternalLink } from '@tabler/icons-react';
 
 import { namedAction } from 'remix-utils/named-action';
@@ -96,6 +96,28 @@ const SettingsContent = ({ loaderData }: Route.ComponentProps) => {
     );
   };
 
+  // The cache bust. Confirmed rather than immediate because it is a global act
+  // — every asset URL in the classroom changes at once — even though it is a
+  // safe one, and the confirm is where "safe" gets said out loud.
+  const handleResetContentCache = () => {
+    Modal.confirm({
+      title: 'Reset content cache',
+      content:
+        'Every image and file gets a new URL and is fetched fresh. Nothing is deleted, and links you have already shared keep working.',
+      okText: 'Reset cache',
+      onOk: () => {
+        fetcher!.submit(
+          { _action: 'resetContentCache' },
+          {
+            method: 'POST',
+            encType: 'application/json',
+            action: `/admin/${classSlug}/settings/content`,
+          }
+        );
+      },
+    });
+  };
+
   // Toggle which course sections appear in the student/assistant sidebar.
   const handleNavToggle =
     (key: 'show_modules' | 'show_pages' | 'show_repos') => (checked: boolean) => {
@@ -154,6 +176,19 @@ const SettingsContent = ({ loaderData }: Route.ComponentProps) => {
           <span className="font-mono text-sm">{repoName}</span>
           <IconExternalLink size={16} />
         </a>
+      </SettingSection>
+
+      {/* Content cache bust */}
+      <SettingSection
+        title="Content Cache"
+        description="Gives every image and file in this classroom a fresh URL. Use it if something looks stuck."
+      >
+        <div className="flex items-center gap-3">
+          <Button onClick={handleResetContentCache}>Reset content cache</Button>
+          <span className="text-xs text-gray-500 dark:text-gray-400">
+            Version {organization.content_key_version ?? 0}
+          </span>
+        </div>
       </SettingSection>
 
       {/* Content Repository Name Setting - TEMPORARILY DISABLED
@@ -295,6 +330,23 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
       return {
         success: 'Content repository updated',
         action: ActionTypes.SAVE_CONTENT_SETTINGS,
+      };
+    },
+
+    // Gated by the same assertClassroomAccess + assertClassroomMutationAllowed
+    // pair above as every other action on this route — an OWNER of a classroom
+    // that is still open to writes. Nothing extra is needed: the bump is
+    // idempotent in effect (the version is only ever compared to itself), it
+    // destroys nothing, and it is scoped to the one classroom already
+    // authorized.
+    async resetContentCache() {
+      const { content_key_version } = await ClassmojiService.contentDelivery.bumpContentKeyVersion(
+        classroom.id
+      );
+      return {
+        success: 'Content cache reset',
+        content_key_version,
+        action: ActionTypes.RESET_CONTENT_CACHE,
       };
     },
 

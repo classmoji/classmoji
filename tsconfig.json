@@ -10,6 +10,7 @@
     { "path": "./apps/webapp" },
     { "path": "./packages/auth" },
     { "path": "./packages/content" },
+    { "path": "./packages/content-signing" },
     { "path": "./packages/database" },
     { "path": "./packages/services" },
     { "path": "./packages/tasks" },

@@ -36,6 +36,7 @@ export default [
         '@classmoji/services',
         '@classmoji/database',
         '@classmoji/utils',
+        '@classmoji/content-signing',
         '@classmoji/tasks',
       ],
     },

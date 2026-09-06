@@ -41,6 +41,50 @@ export class GitHubProvider extends GitProvider {
   static #installationCache: Map<string, { octokit: Octokit; expiresAt: number }> = new Map();
   static #CACHE_TTL_MS: number = 50 * 60 * 1000; // 50 minutes (before 1-hour expiry)
 
+  /**
+   * Minted SCOPED tokens, keyed by what they are scoped to.
+   *
+   * `#installationCache` above caches the Octokit client, which is a different
+   * thing: it holds the installation's full authority and refreshes its own
+   * credential internally. A scoped token is a value we hand to another process
+   * and then forget, so nothing was reusing it — every caller re-minted, one
+   * `POST /app/installations/{id}/access_tokens` per call.
+   *
+   * That is the whole cost being removed here. The content Worker asks for a
+   * token on any origin pull whose isolate has no cached one, which on staging
+   * was five mints in two minutes of light clicking. The token it gets back is
+   * read-only on a single repo and lives an hour, so serving the same one to
+   * the next asker grants nobody anything they were not already being handed.
+   *
+   * Keyed by (installation, repos, permissions) because those three are exactly
+   * what the minted token's authority depends on — a different repo or a wider
+   * permission set is a different token and must not share this entry.
+   */
+  static #scopedTokenCache: Map<string, { token: string; expiresAt: string; expiresAtMs: number }> =
+    new Map();
+
+  /**
+   * Mints currently in flight, same keys as `#scopedTokenCache`.
+   *
+   * A cold cache with N concurrent requests for one repo would otherwise fire N
+   * mints — the exact burst this is meant to remove, since the Worker's misses
+   * arrive together when a page's assets are pulled in parallel. Sharing the
+   * in-flight promise collapses them into one call. Cleared when it settles, so
+   * a failed mint is retried rather than remembered.
+   */
+  static #scopedTokenInFlight: Map<string, Promise<{ token: string; expiresAt: string }>> =
+    new Map();
+
+  // Stop serving a token this long before GitHub stops honouring it, so one
+  // handed out at the edge of the window still has life left when it is used.
+  static #TOKEN_SKEW_MS: number = 5 * 60 * 1000;
+
+  // Keys are per (installation, repo, permissions), so the natural ceiling is
+  // the number of content repos being served. Capped anyway: this map lives for
+  // the process's lifetime, and an unbounded map that only ever grows is a leak
+  // regardless of how slowly it fills.
+  static #TOKEN_CACHE_MAX: number = 256;
+
   installationId: string;
   orgLogin: string | null;
   _octokit: Octokit | null;
@@ -104,19 +148,185 @@ export class GitHubProvider extends GitProvider {
   // ─── Auth & User ───────────────────────────────────────────────────────────
 
   /**
-   * Get an installation access token
-   * @returns {Promise<string>} GitHub access token
+   * Mint an installation access token, WITH its expiry.
+   *
+   * Same single API call `getAccessToken` has always made — it just stops
+   * throwing away the other half of the answer. GitHub returns `expires_at`
+   * alongside the token (one hour out), and a caller that hands the token to
+   * another process cannot re-derive it: the content Worker caches the token
+   * for its lifetime, and without a stated expiry it would have to either
+   * re-mint on every cache miss or guess. Guessing high serves 401s, guessing
+   * low is the re-mint it was trying to avoid.
+   *
+   * ── SCOPE DOWN whenever the token leaves this process ─────────────────────
+   * With no body, GitHub returns a token carrying EVERY permission the
+   * installation holds on EVERY repo in the org — student assignment repos and
+   * staff grading repos included. That is the right token for our own
+   * background work, and far too much authority to hand to anything else.
+   *
+   * `scope` narrows it at the source. GitHub mints the token already limited,
+   * so a caller downstream cannot widen it and a leak in transit is bounded to
+   * what was asked for. Pass `{ repositories: [repo], permissions: { contents:
+   * 'read' } }` and a stolen token reads one repo instead of writing all of
+   * them. Omit it and behaviour is exactly what it has always been, which is
+   * what keeps every existing caller correct.
+   *
+   * `repositories` names repos by SHORT name, not `owner/repo`. Asking for a
+   * repo the installation cannot access, or a permission it was not granted,
+   * is a 422 rather than a quietly-broader token.
+   *
+   * ── SCOPED tokens are cached, unscoped ones are not ───────────────────────
+   * A scoped token is safe to reuse: it is pinned to the repos and permissions
+   * that were asked for, so the second caller asking for the same scope can
+   * only receive authority it was going to be granted anyway. It is also worth
+   * reusing — this used to be one GitHub API call per request, and the content
+   * Worker calls on every origin pull with a cold isolate.
+   *
+   * An UNSCOPED mint is left exactly as it was. Those tokens carry the
+   * installation's full authority, they are used by our own background work
+   * rather than handed outward, and nobody has complained about their rate — so
+   * caching them would be a change in the blast radius of a shared value bought
+   * for no measured gain. The behaviour of a `getInstallationToken()` with no
+   * argument is byte-for-byte what it has always been.
+   *
+   * @param {Object} [scope] - Optional narrowing for the minted token
+   * @param {string[]} [scope.repositories] - Repo short names to limit the token to
+   * @param {Object} [scope.permissions] - Permission subset, e.g. { contents: 'read' }
+   * @returns {Promise<{token: string, expiresAt: string}>} Token and its ISO-8601 expiry
    */
-  async getAccessToken(): Promise<string> {
+  async getInstallationToken(scope?: {
+    repositories?: string[];
+    permissions?: Record<string, string>;
+  }): Promise<{ token: string; expiresAt: string }> {
+    const repositories = scope?.repositories?.length ? scope.repositories : null;
+    const permissions =
+      scope?.permissions && Object.keys(scope.permissions).length ? scope.permissions : null;
+
+    // Same emptiness test the mint itself applies, so `{ repositories: [] }` is
+    // an unscoped call here for the same reason it is one on the wire.
+    if (!repositories && !permissions) {
+      return this.#mintInstallationToken(scope);
+    }
+
+    const key = GitHubProvider.#scopedTokenCacheKey(this.installationId, repositories, permissions);
+
+    const cached = GitHubProvider.#scopedTokenCache.get(key);
+    if (cached && Date.now() < cached.expiresAtMs - GitHubProvider.#TOKEN_SKEW_MS) {
+      return { token: cached.token, expiresAt: cached.expiresAt };
+    }
+
+    const inFlight = GitHubProvider.#scopedTokenInFlight.get(key);
+    if (inFlight) {
+      return inFlight;
+    }
+
+    const pending = this.#mintInstallationToken(scope)
+      .then(minted => {
+        GitHubProvider.#rememberScopedToken(key, minted);
+        return minted;
+      })
+      // Evicted whether it resolved or rejected. A rejection left in the map
+      // would make one transient GitHub failure the permanent answer for that
+      // repo, which is worse than the re-mint this exists to avoid.
+      .finally(() => {
+        GitHubProvider.#scopedTokenInFlight.delete(key);
+      });
+
+    GitHubProvider.#scopedTokenInFlight.set(key, pending);
+    return pending;
+  }
+
+  /**
+   * The identity of a scoped token: what it can reach, and as whom.
+   *
+   * Both lists are sorted so that callers who ask for the same authority in a
+   * different order share an entry rather than minting twice. ` ` joins the
+   * parts because it cannot occur in a repo name or a permission, so no pair of
+   * different scopes can collide on one key.
+   */
+  static #scopedTokenCacheKey(
+    installationId: string,
+    repositories: string[] | null,
+    permissions: Record<string, string> | null
+  ): string {
+    const repoPart = repositories ? [...repositories].sort().join(',') : '';
+    const permPart = permissions
+      ? Object.entries(permissions)
+          .map(([name, level]) => `${name}=${level}`)
+          .sort()
+          .join(',')
+      : '';
+    return `${installationId} ${repoPart} ${permPart}`;
+  }
+
+  /**
+   * Record a freshly minted token, and keep the map from growing without limit.
+   *
+   * Expired entries are swept on every insert rather than on a timer: this is a
+   * cache on a hot path, so the one moment it is guaranteed to be running is
+   * when something is being added to it, and a background sweep would be a
+   * second mechanism to keep a process alive for no benefit.
+   */
+  static #rememberScopedToken(key: string, minted: { token: string; expiresAt: string }): void {
+    const expiresAtMs = Date.parse(minted.expiresAt);
+    // Without a readable expiry there is no way to know when this token stops
+    // working, and a cache entry that outlives its token serves 401s. Hand it
+    // to the caller unremembered; the next call mints again.
+    if (!Number.isFinite(expiresAtMs)) {
+      return;
+    }
+
+    const cache = GitHubProvider.#scopedTokenCache;
+    const now = Date.now();
+    for (const [existingKey, entry] of cache) {
+      if (now >= entry.expiresAtMs - GitHubProvider.#TOKEN_SKEW_MS) {
+        cache.delete(existingKey);
+      }
+    }
+
+    // Delete-then-set so the refreshed entry moves to the back of the Map's
+    // insertion order, which is what makes the eviction below oldest-first.
+    cache.delete(key);
+    cache.set(key, { token: minted.token, expiresAt: minted.expiresAt, expiresAtMs });
+
+    while (cache.size > GitHubProvider.#TOKEN_CACHE_MAX) {
+      const oldest = cache.keys().next().value;
+      if (oldest === undefined) break;
+      cache.delete(oldest);
+    }
+  }
+
+  /**
+   * The actual mint — one `POST /app/installations/{id}/access_tokens`.
+   *
+   * Split out of `getInstallationToken` so the caching above wraps a call that
+   * unconditionally hits GitHub. Everything below this line is the request as it
+   * was before the cache existed.
+   */
+  async #mintInstallationToken(scope?: {
+    repositories?: string[];
+    permissions?: Record<string, string>;
+  }): Promise<{ token: string; expiresAt: string }> {
     const jwtToken = generateGitHubJWT();
     const url = `https://api.github.com/app/installations/${this.installationId}/access_tokens`;
+
+    const body: Record<string, unknown> = {};
+    if (scope?.repositories?.length) body.repositories = scope.repositories;
+    if (scope?.permissions && Object.keys(scope.permissions).length) {
+      body.permissions = scope.permissions;
+    }
+    const hasScope = Object.keys(body).length > 0;
 
     const response = await fetch(url, {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${jwtToken}`,
         Accept: 'application/vnd.github+json',
+        // Only sent alongside a body: an unscoped call stays byte-for-byte the
+        // request it was before this parameter existed.
+        ...(hasScope ? { 'Content-Type': 'application/json' } : {}),
       },
+      ...(hasScope ? { body: JSON.stringify(body) } : {}),
     });
 
     if (!response.ok) {
@@ -127,7 +337,25 @@ export class GitHubProvider extends GitProvider {
     if (!data.token) {
       throw new Error('Failed to retrieve GitHub installation token');
     }
-    return data.token;
+    // `expires_at` has been in every response this endpoint has ever sent, but
+    // it is not what the request is FOR — falling back to the documented one
+    // hour keeps a token that arrived without one usable instead of failing a
+    // render over a missing timestamp.
+    const expiresAt =
+      typeof data.expires_at === 'string'
+        ? data.expires_at
+        : new Date(Date.now() + 60 * 60 * 1000).toISOString();
+
+    return { token: data.token, expiresAt };
+  }
+
+  /**
+   * Get an installation access token
+   * @returns {Promise<string>} GitHub access token
+   */
+  async getAccessToken(): Promise<string> {
+    const { token } = await this.getInstallationToken();
+    return token;
   }
 
   /**
@@ -349,6 +577,26 @@ export class GitHubProvider extends GitProvider {
   // ─── Branches & PRs ────────────────────────────────────────────────────────
 
   /**
+   * The repository's default branch.
+   *
+   * `main` for most classrooms and `master` for anything imported from an older
+   * course, so a caller that needs the branch content is actually served from
+   * has to ask. One `GET /repos` — the same request `getRepository` makes.
+   *
+   * @param {string} org - Organization login
+   * @param {string} repo - Repository name
+   * @returns {Promise<string>} Default branch name
+   */
+  async getDefaultBranch(org: string, repo: string): Promise<string> {
+    const octokit = await this.#getOctokit();
+    const { data } = await octokit.request('GET /repos/{owner}/{repo}', {
+      owner: org,
+      repo,
+    });
+    return data.default_branch;
+  }
+
+  /**
    * Get the latest commit SHA for a branch
    * @param {string} org - Organization login
    * @param {string} repo - Repository name
@@ -363,6 +611,62 @@ export class GitHubProvider extends GitProvider {
       branch,
     });
     return data.commit.sha;
+  }
+
+  /**
+   * List a repository's tree — every path and the git object behind it.
+   *
+   * One call for a whole content repo, which is the point: the alternative is a
+   * `contents/` request per path, and a course repo has hundreds. `recursive`
+   * asks GitHub to walk subdirectories rather than returning only the top
+   * level.
+   *
+   * `truncated` is GitHub's, and it is a real state rather than an error: past
+   * roughly 100k entries (or 7MB) the response is CUT SHORT and what came back
+   * is still valid, just incomplete. Callers are expected to use the entries
+   * and report the flag — dropping the response would leave a classroom with no
+   * map at all, which is strictly worse than a partial one.
+   *
+   * @param {string} org - Organization login
+   * @param {string} repo - Repository name
+   * @param {string} ref - Branch, tag or SHA to read the tree at
+   * @param {boolean} [recursive] - Walk subdirectories (default: true)
+   */
+  async getTree(
+    org: string,
+    repo: string,
+    ref: string,
+    recursive: boolean = true
+  ): Promise<{
+    sha: string;
+    truncated: boolean;
+    entries: { path: string; sha: string; type: string; size?: number }[];
+  }> {
+    const octokit = await this.#getOctokit();
+    const { data } = await octokit.request('GET /repos/{owner}/{repo}/git/trees/{tree_sha}', {
+      owner: org,
+      repo,
+      tree_sha: ref,
+      ...(recursive ? { recursive: '1' } : {}),
+    });
+
+    return {
+      sha: data.sha,
+      truncated: Boolean(data.truncated),
+      entries: (data.tree ?? [])
+        // An entry without a path or sha cannot be looked up or addressed, so
+        // it is not a row — GitHub returns these for commit entries
+        // (submodules), which this map has nothing to say about.
+        .filter((entry): entry is typeof entry & { path: string; sha: string } =>
+          Boolean(entry.path && entry.sha)
+        )
+        .map(entry => ({
+          path: entry.path,
+          sha: entry.sha,
+          type: entry.type ?? 'blob',
+          size: entry.size,
+        })),
+    };
   }
 
   async listCommits(

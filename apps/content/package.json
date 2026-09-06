@@ -1,0 +1,24 @@
+{
+  "name": "@classmoji/content-worker",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Cloudflare Worker that serves signed classroom content from R2, backfilling from GitHub",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "cf:dev": "wrangler dev --env staging",
+    "cf:dev:local": "wrangler dev --env dev",
+    "cf:types": "wrangler types --env staging"
+  },
+  "dependencies": {
+    "@classmoji/content-signing": "*"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "5.20260903.1",
+    "vitest": "^4.1.11",
+    "wrangler": "4.128.0"
+  }
+}

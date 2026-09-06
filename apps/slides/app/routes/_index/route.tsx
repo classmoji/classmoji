@@ -229,17 +229,31 @@ export const action = async ({ request }: { request: Request }) => {
         skipCache: true,
       });
 
+      // Both rewrites below record what they wrote. index.html and deck.json
+      // are READ through the asset map now (fetchContentText), and the copy's
+      // paths are new, so the map has no row for them until the push webhook
+      // lands.
+      //
+      // Only what the REWRITES write, though: `copyFolder` above is what puts
+      // the files there, and it reports no shas, so a deck whose content had no
+      // self-referencing paths to rewrite gets no rows here. That is a missing
+      // row, not a wrong one — the read falls back to the contents API and
+      // serves the right bytes — so it costs one GitHub call per view until the
+      // webhook arrives rather than showing the wrong deck.
+      const written: Array<{ path: string; sha: string }> = [];
+
       if (indexFile?.content && slide.content_path !== newContentPath) {
         const updatedContent = indexFile.content.replaceAll(slide.content_path, newContentPath);
 
         if (updatedContent !== indexFile.content) {
-          await ContentService.put({
+          const result = await ContentService.put({
             gitOrganization,
             repo,
             path: indexPath,
             content: updatedContent,
             message: `Rewrite content paths for duplicated slides: ${slide.title}`,
           });
+          written.push({ path: indexPath, sha: result.sha });
         }
       }
 
@@ -258,14 +272,21 @@ export const action = async ({ request }: { request: Request }) => {
         const updatedDeck = deckFile.content.replaceAll(slide.content_path, newContentPath);
 
         if (updatedDeck !== deckFile.content) {
-          await ContentService.put({
+          const result = await ContentService.put({
             gitOrganization,
             repo,
             path: deckPath,
             content: updatedDeck,
             message: `Rewrite content paths for duplicated slides: ${slide.title}`,
           });
+          written.push({ path: deckPath, sha: result.sha });
         }
+      }
+
+      // Never throws: the copy is already committed, and the next sync writes
+      // the same rows.
+      if (slide.classroom_id) {
+        await ClassmojiService.contentAssets.recordContentAssets(slide.classroom_id, written);
       }
 
       // Create new database record

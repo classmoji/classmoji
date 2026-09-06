@@ -8,7 +8,10 @@ import { uploadPageAsset } from '~/utils/content.server.ts';
  *
  * POST /api/upload
  * Body: FormData with 'file' and 'pageId'
- * Returns: { url, path }
+ * Returns: `{ url, path, displayUrl }` — `url`/`path` are the repo path the
+ * editor stores in the block; `displayUrl` is the signed URL it displays with
+ * (null when the delivery layer is off, in which case the editor shows the
+ * path and the legacy proxy resolves it).
  */
 export const action = async ({ request }: { request: Request }) => {
   const formData = await request.formData();
@@ -42,8 +45,8 @@ export const action = async ({ request }: { request: Request }) => {
   if (blocked) return blocked;
 
   try {
-    const { url, path } = await uploadPageAsset(page, file);
-    return Response.json({ success: true, url, path });
+    const { url, path, displayUrl } = await uploadPageAsset(page, file);
+    return Response.json({ success: true, url, path, displayUrl });
   } catch (error: unknown) {
     console.error('[upload] Failed:', error);
     return Response.json(

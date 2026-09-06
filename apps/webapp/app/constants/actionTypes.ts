@@ -6,6 +6,7 @@ export const ActionTypes = {
   SAVE_QUIZ_SETTINGS: 'save-quiz-settings',
   SAVE_SLIDES_SETTINGS: 'save-slides-settings',
   SAVE_CONTENT_SETTINGS: 'save-content-settings',
+  RESET_CONTENT_CACHE: 'reset-content-cache',
 
   SAVE_ASSIGNMENT: 'save-assignment',
   DELETE_ASSIGNMENT: 'delete-assignment',

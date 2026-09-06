@@ -27,6 +27,12 @@ import {
   type PageBlockInsertions,
 } from './blocks/index.tsx';
 import { ReplaceUrlItem, RemoveProfileImageItem } from './ReplaceUrlItem.tsx';
+import { AssetSrcSetContext, NO_SRC_SETS, type AssetSrcSets } from '~/hooks/useAssetSrcSets.ts';
+import {
+  AssetDisplayUrlContext,
+  IDENTITY_DISPLAY_URL,
+  type DisplayUrlLookup,
+} from '~/hooks/useAssetDisplayUrl.ts';
 
 // Custom drag handle menu — extends default with block-specific actions
 const CustomDragHandleMenu = () => (
@@ -53,6 +59,25 @@ interface PageEditorProps {
   initialContent: unknown;
   pageId: string;
   darkMode: boolean;
+  /**
+   * Stored reference → signed display URL. Blocks keep the reference; BlockNote
+   * is handed the signed URL through `resolveFileUrl` at paint time only.
+   */
+  resolveFileUrl?: (url: string) => Promise<string>;
+  /**
+   * Responsive candidates, keyed by the STORED reference. Handed to the image
+   * and profile blocks through context rather than through the editor, because
+   * `resolveFileUrl` returns one string and has no room for a second value.
+   */
+  srcSets?: AssetSrcSets;
+  /**
+   * The same map as `resolveFileUrl`, read synchronously. Custom blocks call it
+   * during render so the signed URL is in `src` on the FIRST commit — an
+   * effect-time swap paints the bare stored path, and the browser fetches it.
+   */
+  displayUrl?: DisplayUrlLookup;
+  /** Called after an upload with the ref that was stored and the URL to show it with. */
+  onAssetUploaded?: (ref: string, displayUrl: string | null) => void;
   onChange?: (document: unknown) => void;
   /**
    * Fired once after mount with the editor's NORMALIZED document
@@ -65,7 +90,18 @@ interface PageEditorProps {
 }
 
 const PageEditor = forwardRef(function PageEditor(
-  { initialContent, pageId, darkMode, onChange, onReady, editable = true }: PageEditorProps,
+  {
+    initialContent,
+    pageId,
+    darkMode,
+    onChange,
+    onReady,
+    editable = true,
+    resolveFileUrl,
+    srcSets,
+    displayUrl,
+    onAssetUploaded,
+  }: PageEditorProps,
   ref: React.Ref<{ getContent: () => unknown }>
 ) {
   // Upload handler: POSTs to the page's upload action
@@ -85,9 +121,13 @@ const PageEditor = forwardRef(function PageEditor(
       }
 
       const result = await response.json();
+      // What goes INTO the block is the repo path — the reference that keeps
+      // following the file. The signed URL only ever goes into the display map,
+      // so a save can never commit it.
+      onAssetUploaded?.(result.url, result.displayUrl);
       return result.url;
     },
-    [pageId]
+    [pageId, onAssetUploaded]
   );
 
   const typedInitialContent =
@@ -101,6 +141,9 @@ const PageEditor = forwardRef(function PageEditor(
       schema,
       initialContent: typedInitialContent,
       uploadFile,
+      // The one place a stored reference becomes a signed URL. BlockNote calls
+      // it per file block at render; the document it saves back is untouched.
+      ...(resolveFileUrl ? { resolveFileUrl } : {}),
       dropCursor: multiColumnDropCursor,
       dictionary: { ...defaultLocale, multi_column: multiColumnLocales.en },
     },
@@ -276,24 +319,31 @@ const PageEditor = forwardRef(function PageEditor(
           box-sizing: border-box !important;
         }
       `}</style>
-      <BlockNoteView
-        editor={editor}
-        editable={editable}
-        theme={darkMode ? 'dark' : 'light'}
-        slashMenu={false}
-        formattingToolbar={false}
-        sideMenu={false}
-        onChange={() => onChange?.(editor.document)}
-      >
-        <SideMenuController
-          sideMenu={props => <SideMenu {...props} dragHandleMenu={CustomDragHandleMenu} />}
-        />
-        <FormattingToolbarController formattingToolbar={() => <FormattingToolbar />} />
-        <SuggestionMenuController
-          triggerCharacter="/"
-          getItems={async query => filterSuggestionItems(getAllSlashMenuItems(editor), query)}
-        />
-      </BlockNoteView>
+      {/* Above the view, not inside it: BlockNote portals every block render
+          into this tree (its own file blocks read their dictionary the same
+          way), so a provider here is what the image and profile blocks see. */}
+      <AssetSrcSetContext.Provider value={srcSets ?? NO_SRC_SETS}>
+        <AssetDisplayUrlContext.Provider value={displayUrl ?? IDENTITY_DISPLAY_URL}>
+          <BlockNoteView
+            editor={editor}
+            editable={editable}
+            theme={darkMode ? 'dark' : 'light'}
+            slashMenu={false}
+            formattingToolbar={false}
+            sideMenu={false}
+            onChange={() => onChange?.(editor.document)}
+          >
+            <SideMenuController
+              sideMenu={props => <SideMenu {...props} dragHandleMenu={CustomDragHandleMenu} />}
+            />
+            <FormattingToolbarController formattingToolbar={() => <FormattingToolbar />} />
+            <SuggestionMenuController
+              triggerCharacter="/"
+              getItems={async query => filterSuggestionItems(getAllSlashMenuItems(editor), query)}
+            />
+          </BlockNoteView>
+        </AssetDisplayUrlContext.Provider>
+      </AssetSrcSetContext.Provider>
     </div>
   );
 });

@@ -15,9 +15,13 @@ const slideDeleteMock = vi.fn();
 const slideUpdateMock = vi.fn();
 const gitOrgFindFirstMock = vi.fn();
 
+const classroomFindManyMock = vi.fn();
 vi.mock('@classmoji/database', () => ({
   default: () => ({
-    classroom: { findUnique: (...args: unknown[]) => classroomFindUniqueMock(...args) },
+    classroom: {
+      findUnique: (...args: unknown[]) => classroomFindUniqueMock(...args),
+      findMany: (...args: unknown[]) => classroomFindManyMock(...args),
+    },
     slide: {
       findUnique: (...args: unknown[]) => slideFindUniqueMock(...args),
       findFirst: (...args: unknown[]) => slideFindFirstMock(...args),
@@ -27,6 +31,8 @@ vi.mock('@classmoji/database', () => ({
       update: (...args: unknown[]) => slideUpdateMock(...args),
     },
     gitOrganization: { findFirst: (...args: unknown[]) => gitOrgFindFirstMock(...args) },
+    // The shared-theme delete asks which classrooms share the repo, so it can
+    // clear each one's rows for the folder it just removed.
   }),
 }));
 
@@ -54,6 +60,15 @@ vi.mock('../../classmoji/contentManifest.service.ts', () => ({
 const ensureContentRepoMock = vi.fn();
 vi.mock('../../classmoji/page.service.ts', () => ({
   ensureContentRepo: (...args: unknown[]) => ensureContentRepoMock(...args),
+}));
+
+// A delete has to forget the map rows too: blobs are content-addressed and
+// immutable, so a row that outlives its folder keeps serving the deleted deck's
+// last index.html out of R2.
+const removeContentAssetFolderMock = vi.fn();
+vi.mock('../../classmoji/contentAssets.service.ts', () => ({
+  removeContentAssetFolder: (...args: unknown[]) => removeContentAssetFolderMock(...args),
+  recordContentAssets: vi.fn(),
 }));
 
 const {
@@ -92,6 +107,8 @@ function seededIdGen(): () => string {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // Repo→classrooms lookup for the shared-theme delete's map cleanup.
+  classroomFindManyMock.mockResolvedValue([]);
   classroomFindUniqueMock.mockResolvedValue(classroom);
   slideFindFirstMock.mockResolvedValue(null);
   ensureContentRepoMock.mockResolvedValue({ repoName: 'content-test-org-26w' });

@@ -1,0 +1,59 @@
+name: Build staging Fly image
+
+on:
+  workflow_call:
+    inputs:
+      service:
+        required: true
+        type: string
+    secrets:
+      FLY_API_TOKEN:
+        required: true
+      PERSONAL_ACCESS_TOKEN:
+        required: true
+    outputs:
+      image:
+        description: Image pushed for this staging service and workflow attempt
+        value: ${{ jobs.build.outputs.image }}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    outputs:
+      image: ${{ steps.build.outputs.image }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+          token: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Heal package-lock.json against submodule workspaces
+        run: npm install --package-lock-only --no-audit --no-fund --legacy-peer-deps
+      - uses: superfly/flyctl-actions/setup-flyctl@master
+      - name: Build and push staging image
+        id: build
+        env:
+          SERVICE: ${{ inputs.service }}
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: |
+          case "$SERVICE" in
+            webapp|ai-agent|hook-station|mcp|pages|slides|admin) ;;
+            *) echo "Unsupported staging service: $SERVICE" >&2; exit 1 ;;
+          esac
+          APP="classmoji-${SERVICE}-staging"
+          if [ "$SERVICE" = mcp ] && ! flyctl status --app "$APP" >/dev/null 2>&1; then
+            echo "::notice::Skipping mcp build because its staging app is not provisioned."
+            exit 0
+          fi
+          DOCKERFILE="apps/${SERVICE}/Dockerfile"
+          if [ "$SERVICE" = ai-agent ]; then
+            DOCKERFILE=scripts/docker/ai-agent.staging.Dockerfile
+          fi
+          LABEL="staging-${GITHUB_SHA}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          flyctl deploy --config "apps/${SERVICE}/fly.toml" --dockerfile "$DOCKERFILE" \
+            --app "$APP" --remote-only --depot=true --depot-scope=app \
+            --build-only --push --image-label "$LABEL"
+          echo "image=registry.fly.io/${APP}:${LABEL}" >> "$GITHUB_OUTPUT"

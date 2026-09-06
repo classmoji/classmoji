@@ -66,7 +66,9 @@ const App = () => {
                       document.documentElement.classList.remove('dark');
                     }
                   });
-                } catch (error: unknown) { console.log(error); }
+                  // NOTE: this string is injected verbatim as JavaScript — no
+                  // TypeScript syntax here, or every page logs a SyntaxError.
+                } catch (error) { console.log(error); }
               })();
             `,
           }}

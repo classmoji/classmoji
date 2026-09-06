@@ -1,7 +1,18 @@
 /**
- * Content Proxy Route
+ * Content Proxy Route — LEGACY, kept for links already in the wild.
  *
- * Proxies content from GitHub repositories with CDN-first strategy.
+ * Everything new goes through the delivery Worker: signed, sha-addressed URLs
+ * minted at render time. This route survives because stored documents, browser
+ * bookmarks and shared slide links still carry `/content/{org}/{repo}/{path}`,
+ * and because it is the client-side fallback the deck surfaces hand their
+ * presenter component.
+ *
+ * TEXT served from here now goes through the same map-first read the loaders
+ * use (`fetchContentText`), so an old link is not a stale link. Binary files
+ * keep the legacy `fetchContent` ladder: the delivery layer serves those as
+ * signed URLs at the point of render, and there is nothing to gain from
+ * re-plumbing a path nothing new points at.
+ *
  * Serves CSS, fonts, and other assets with correct MIME types.
  *
  * URL pattern: /content/:org/:repo/*path
@@ -29,11 +40,15 @@
 
 import { fetchContent, getMimeType, isBinaryFile } from '~/utils/contentProxy';
 import { getAuthSession } from '@classmoji/auth/server';
+import { ClassmojiService } from '@classmoji/services';
 import { getContentRepoName } from '@classmoji/utils';
 import getPrisma from '@classmoji/database';
 
 interface ContentRouteMembership {
   classroom?: {
+    id?: string;
+    content_key_version?: number;
+    content_delivery_enabled?: boolean | null;
     content_repo?: string | null;
     git_organization?: {
       login: string;
@@ -41,6 +56,9 @@ interface ContentRouteMembership {
     } | null;
   } | null;
 }
+
+/** The classroom this request was authorized against, for the text read below. */
+type MatchedClassroom = NonNullable<ContentRouteMembership['classroom']>;
 
 // In-memory cache for user classroom memberships
 // Avoids DB hit on every asset request (CSS, fonts, images, etc.)
@@ -83,6 +101,44 @@ async function getCachedMemberships(userId: string) {
   return memberships;
 }
 
+/**
+ * The map-first text read, degrading to the legacy ladder.
+ *
+ * `matched` is null only when access was granted by a branch that did not
+ * resolve a classroom row — there is nothing to sign against then, and the
+ * legacy ladder is the whole answer.
+ */
+async function fetchProxyText(
+  matched: MatchedClassroom | null,
+  org: string,
+  repo: string,
+  path: string
+): Promise<{ content: string; source: string } | null> {
+  if (matched?.id) {
+    const text = await ClassmojiService.contentDelivery.fetchContentText(
+      {
+        classroom: {
+          id: matched.id,
+          content_key_version: matched.content_key_version ?? 0,
+          content_repo: repo,
+          content_delivery_enabled: matched.content_delivery_enabled === true,
+          git_organization: { login: org },
+        },
+      },
+      path,
+      { label: 'proxy' }
+    );
+    if (text) return { content: text.text, source: text.source };
+    return null;
+  }
+
+  // No classroom to sign against — the legacy ladder is the whole answer, and
+  // it stays API-first because this is TEXT, where staleness is the expensive
+  // failure (see fetchContent's header).
+  const legacy = await fetchContent({ org, repo, path });
+  return legacy ? { content: legacy.content as string, source: legacy.source } : null;
+}
+
 export const loader = async ({
   params,
   request,
@@ -102,6 +158,9 @@ export const loader = async ({
   // Try authentication first
   const authData = await getAuthSession(request);
   let hasAccess = false;
+  // Kept from whichever branch granted access: the text read below needs the
+  // classroom's id and cache version to sign, and its org/repo to fall back.
+  let matched: MatchedClassroom | null = null;
 
   // Path 1: Authenticated user - check classroom memberships
   if (authData) {
@@ -111,7 +170,7 @@ export const loader = async ({
     // The classroom's content repo is STORED and user-editable — never re-derived.
     // Legacy classrooms without one fall back to the ORG-level content repo
     // (organization.settings.content_repo_name).
-    hasAccess = memberships.some((m: ContentRouteMembership) => {
+    const matches = memberships.filter((m: ContentRouteMembership) => {
       const gitOrg = m.classroom?.git_organization;
       if (!gitOrg || gitOrg.login !== org) return false;
 
@@ -125,6 +184,21 @@ export const loader = async ({
 
       return repo === expectedRepo; // EXACT match only
     });
+    hasAccess = matches.length > 0;
+
+    // ONE match, or none — never "the first of several".
+    //
+    // Access is settled by `hasAccess` above and is unaffected by this. What
+    // this decides is which classroom's ROLLOUT GATE and key version the text
+    // read below signs under, and several of a user's classrooms can legitimately
+    // share one content repo (the org-level `content_repo_name` fallback is
+    // org-wide). Picking the first would let a classroom whose
+    // `content_delivery_enabled` is still false have its text served through the
+    // Worker because a sibling classroom on the same repo is switched on — which
+    // is exactly the per-classroom rollout the flag exists to control.
+    //
+    // Ambiguity therefore reads as "no classroom", and the legacy ladder answers.
+    matched = matches.length === 1 ? (matches[0].classroom ?? null) : null;
   }
 
   // Path 2: Public slide access - validate slideId points to a public slide
@@ -156,6 +230,7 @@ export const loader = async ({
 
           if (isSlideContent || isSharedAsset) {
             hasAccess = true;
+            matched = slide.classroom;
           }
         }
       }
@@ -166,9 +241,26 @@ export const loader = async ({
     throw new Response('Forbidden - no access to this content', { status: 403 });
   }
 
-  // 4. Proceed with fetch
+  // 4. Proceed with fetch.
+  //
+  // Text goes through the asset map like every other read now, so an old
+  // `/content/...` link serves the same bytes the loaders do rather than
+  // whatever GitHub Pages last built. Binary falls through to the legacy
+  // ladder — the delivery layer hands those out as signed URLs at render time,
+  // so nothing new arrives here for them.
   const binary = isBinaryFile(path);
-  const result = await fetchContent({ org, repo, path, binary });
+  // Binary keeps CDN-first for a classroom the layer is NOT switched on for.
+  // Every image and font of every deck in such a classroom comes through here,
+  // and those bytes never change once uploaded — so a few minutes of CDN
+  // staleness is free where an authenticated read per image spends the org
+  // installation's shared limit. An opted-in classroom serves its assets as
+  // signed URLs and barely reaches this route at all, so API-first is right
+  // there. Unknown classroom reads as "not opted in": the safe direction is
+  // the one that cannot exhaust a rate limit.
+  const preferCdn = matched?.content_delivery_enabled !== true;
+  const result = binary
+    ? await fetchContent({ org, repo, path, binary, preferCdn })
+    : await fetchProxyText(matched, org, repo, path);
 
   if (!result) {
     throw new Response('Not found', { status: 404 });
@@ -177,11 +269,15 @@ export const loader = async ({
   // Get MIME type - pass content for magic byte detection on extensionless files
   const mimeType = getMimeType(path, binary ? (result.content as Buffer) : undefined);
 
-  // Set cache headers - assets are versioned by path (hash-based filenames)
-  // so they can be cached aggressively. 1 hour browser + CDN caching.
+  // Binary is versioned by path (hash-based filenames) and can be cached hard.
+  // TEXT cannot: a deck's index.html lives at a stable path and changes on every
+  // save, so an hour of browser caching here would put the staleness straight
+  // back — in a bookmarked `/content/...` link and in the presenter's own
+  // client-side fallback, which is the one place a stale deck is worst. A
+  // minute keeps the proxy cheap without outliving a save by much.
   const headers = {
     'Content-Type': mimeType,
-    'Cache-Control': 'public, max-age=3600', // 1 hour
+    'Cache-Control': binary ? 'public, max-age=3600' : 'public, max-age=60',
     'X-Content-Source': result.source, // Debug header
   };
 

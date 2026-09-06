@@ -49,6 +49,7 @@
     "slides:test:ui": "dotenv -e .env -- ./scripts/devport.sh run turbo run test:ui --filter=@classmoji/slides",
     "pages:test": "dotenv -e .env -- ./scripts/devport.sh run turbo run test --filter=@classmoji/pages",
     "pages:test:ui": "dotenv -e .env -- ./scripts/devport.sh run turbo run test:ui --filter=@classmoji/pages",
+    "e2e:content": "dotenv -e .env -- ./scripts/devport.sh run turbo run test --filter=@classmoji/pages --filter=@classmoji/slides --concurrency=1 -- content-pipeline",
     "test": "dotenv -e .env -- ./scripts/devport.sh run turbo run test",
     "test:ai-agent": "dotenv -e .env -- ./scripts/devport.sh run turbo run test --filter=@classmoji/ai-agent",
     "test:ai-agent:integration": "dotenv -e .env -- ./scripts/devport.sh run turbo run test:integration --filter=@classmoji/ai-agent",
