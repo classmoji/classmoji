@@ -19,6 +19,7 @@ import {
 import type { DeckJson } from './deckTypes.ts';
 import { canonicalizeDeckAssets } from './deckAssets.ts';
 import { recordContentAssets, resolveContentBranch } from '../classmoji/contentAssets.service.ts';
+import { enqueueDeckThumbnail } from '../classmoji/deckThumbnail.service.ts';
 import {
   canonicalizeMany,
   isOwnAssetRef,
@@ -536,4 +537,20 @@ async function recordDeckFiles(
       ctx,
       committed.map(file => file.path)
     );
+
+  // And ask for a fresh picture of slide one. Same contract as the warm above,
+  // for the same reasons: after the rows (the render reads the map to decide
+  // whether the deck has moved since the last screenshot), never awaited, and
+  // unable to fail the save whatever Trigger.dev is doing.
+  //
+  // Deliberately NOT gated on `deckWarmContext`: that context exists to mint a
+  // signed URL and refuses a classroom the delivery layer does not serve. A
+  // thumbnail is committed into the content repo either way and is fetched
+  // through the legacy proxy for those classrooms, so gating it on the delivery
+  // switch would leave exactly the gate-off classrooms without cards.
+  //
+  // Only main-branch writes reach here — `saveDeck` skips `recordDeckFiles`
+  // entirely for a preview branch — so no screenshot is ever taken of content
+  // nobody has published.
+  void enqueueDeckThumbnail(slide.id, classroomId);
 }

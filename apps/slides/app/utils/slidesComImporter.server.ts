@@ -827,6 +827,12 @@ export async function processZipImport({
     // and its index.html is read through the asset map. Without this the first
     // views fall back to the contents API until the push webhook lands.
     await ClassmojiService.contentAssets.recordContentAssets(classroom.id, result.files);
+
+    // And a card for it. A slides.com import commits its own `index.html`
+    // rather than going through `saveDeck`, so `recordDeckFiles`' enqueue never
+    // fires for it — this is the only place the deck becomes visible. After the
+    // rows, not awaited, and unable to fail an import that has already landed.
+    void ClassmojiService.deckThumbnail.enqueueDeckThumbnail(slide.id, classroom.id);
   } catch (uploadError: unknown) {
     console.log(uploadError);
     // If upload fails, clean up slide record and Cloudinary videos
