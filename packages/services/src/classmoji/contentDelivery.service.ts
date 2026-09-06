@@ -805,6 +805,30 @@ export function textReadBudget(): TextReadBudget {
  * a slow file — and the fallbacks below are still a correct answer. Short
  * enough that the fallback is not itself a timeout, long enough that a cold
  * blob on a bad day still wins.
+ *
+ * ## Why six seconds is a LATENCY CEILING and not a failure budget
+ *
+ * A cold pull through the Worker is genuinely slow — the origin leg has to mint
+ * an installation token against the webapp and then pull the blob from GitHub,
+ * and on a save-fresh sha both of those are cold. Measured on staging that is
+ * seconds, not milliseconds, and it is why this number matters at all.
+ *
+ * Two things keep it from mattering often:
+ *
+ *   - `warmContentText` runs on every text SAVE, so the reader who opens a deck
+ *     a second after it was written is usually hitting a sha the Worker has
+ *     already pulled and put in R2. The cold pull is paid once, by a background
+ *     fetch nobody is waiting on, instead of by the first person to look.
+ *   - When a read DOES land cold and outruns this, nothing fails: the ladder in
+ *     `readTextFromGitHub` answers from the contents API, and the Pages CDN
+ *     behind that. So exceeding this budget costs a slower path to the same
+ *     bytes, not an error — which is exactly what makes six seconds a ceiling
+ *     on latency rather than a deadline the render can miss.
+ *
+ * Raising it would make a stalled Worker hold the render open for longer with
+ * nothing gained; lowering it would start losing races the Worker was going to
+ * win. Callers who want a tighter bound for a DECORATIVE read pass their own
+ * `deadlineMs` (see `fetchContentText`) rather than moving this.
  */
 const TEXT_FETCH_TIMEOUT_MS = 6000;
 
