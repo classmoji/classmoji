@@ -828,7 +828,11 @@ export function textReadBudget(): TextReadBudget {
  * Raising it would make a stalled Worker hold the render open for longer with
  * nothing gained; lowering it would start losing races the Worker was going to
  * win. Callers who want a tighter bound for a DECORATIVE read pass their own
- * `deadlineMs` (see `fetchContentText`) rather than moving this.
+ * `deadlineMs` (see `fetchContentText`) rather than moving this — and theirs
+ * bounds the WHOLE read rather than each leg, because a caller who says two
+ * seconds means the answer, not the socket. This one stays per-leg for the
+ * reason above: it is a ceiling on how long any single leg may stall, and the
+ * fallbacks behind it are still a correct answer worth waiting for.
  */
 const TEXT_FETCH_TIMEOUT_MS = 6000;
 
@@ -1001,6 +1005,45 @@ function isAbortError(error: unknown): boolean {
   return name === 'AbortError' || name === 'TimeoutError';
 }
 
+/**
+ * What each leg of one read may spend, and when the read as a whole is out of
+ * time.
+ *
+ * ## Why there is an overall bound and not only a per-leg one
+ *
+ * A read is up to four legs — a map refresh, the Worker, the contents API, the
+ * Pages CDN — and handing each of them the caller's number meant a "two second"
+ * thumbnail could spend eight. What a caller passes is a statement about how
+ * long the ANSWER is worth waiting for, not about any one socket, so a caller
+ * that sets `deadlineMs` fixes an instant the whole read must be done by and
+ * every leg after the first gets only what is left.
+ *
+ * `at` is null when no caller set one, and the default stays per-leg on
+ * purpose: `TEXT_FETCH_TIMEOUT_MS` is a latency CEILING rather than a deadline
+ * (see its own note). A `/present` that waits six seconds on a stalled Worker
+ * and then six more getting the real bytes from the contents API has done
+ * exactly the right thing, and an overall bound there would turn a slow success
+ * into a failure — which is the opposite of what the ladder is for.
+ */
+interface TextReadDeadline {
+  /** Ceiling on any single leg. */
+  cap: number;
+  /** Instant the whole read must be finished by, or null when only `cap` applies. */
+  at: number | null;
+}
+
+/**
+ * What this leg may spend: its own ceiling, the caller's, and the time left.
+ *
+ * Zero or less means the budget is gone and the leg must be SKIPPED, not
+ * started with an already-expired signal. A fetch that aborts on the next tick
+ * is a socket opened for nothing, and worse, it would record a verdict about an
+ * origin it never actually asked.
+ */
+function legBudgetMs(deadline: TextReadDeadline, ownCap: number = deadline.cap): number {
+  const capped = Math.min(ownCap, deadline.cap);
+  return deadline.at === null ? capped : Math.min(capped, deadline.at - Date.now());
+}
 
 /**
  * Reject after `ms`, so a call with no cancellation of its own cannot hold a
@@ -1072,14 +1115,21 @@ export async function fetchContentText(
     fallback?: TextFallback;
     budget?: TextReadBudget;
     /**
-     * Per-leg deadline, overriding `TEXT_FETCH_TIMEOUT_MS`.
+     * A budget for the WHOLE read — every leg together — replacing the default
+     * per-leg `TEXT_FETCH_TIMEOUT_MS`.
      *
-     * For a caller whose read is worth LESS than the default budget, not more.
-     * A thumbnail is the case: it is decorative, and its loader is one of
-     * nineteen the browser is running at six-at-a-time, so a leg that waits the
+     * For a caller whose read is worth LESS than the default, not more. A
+     * thumbnail is the case: it is decorative, and its loader is one of
+     * nineteen the browser is running six-at-a-time, so a read that waits the
      * full six seconds turns one unreadable classroom into a page that dribbles
-     * in over minutes. Two seconds is generous for a read that is expected to
-     * hit the edge and pointless to extend for one that will not.
+     * in over minutes. Two seconds is generous for a read expected to hit the
+     * edge and pointless to extend for one that will not.
+     *
+     * Overall rather than per-leg because that is what the caller means. A read
+     * is up to four legs — map refresh, Worker, contents API, Pages CDN — so
+     * handing each of them "two seconds" was how a two second thumbnail spent
+     * eight. Legs after the first get what is left of the budget, and a leg
+     * with nothing left is skipped rather than started. See `TextReadDeadline`.
      */
     deadlineMs?: number;
     /**
@@ -1104,13 +1154,19 @@ export async function fetchContentText(
     return null;
   }
 
-  const deadlineMs = opts.deadlineMs ?? TEXT_FETCH_TIMEOUT_MS;
+  // Taken ONCE, here, so every leg below is measured against the same instant.
+  // A caller that named a budget gets one for the whole read; one that did not
+  // keeps the per-leg ceiling the ladder was designed around.
+  const deadline: TextReadDeadline = {
+    cap: opts.deadlineMs ?? TEXT_FETCH_TIMEOUT_MS,
+    at: opts.deadlineMs === undefined ? null : Date.now() + opts.deadlineMs,
+  };
   const fallback = opts.fallback ?? 'api-then-cdn';
   const trace: TextReadTrace = {};
-  const viaWorker = await readTextThroughWorker(ctx, path, deadlineMs, trace, opts.budget);
+  const viaWorker = await readTextThroughWorker(ctx, path, deadline, trace, opts.budget);
   const result =
     viaWorker ??
-    (fallback === 'none' ? null : await readTextFromGitHub(ctx, path, fallback, deadlineMs, opts));
+    (fallback === 'none' ? null : await readTextFromGitHub(ctx, path, fallback, deadline, opts));
 
   // Nothing produced content, and the Worker leg says the repo cannot be read
   // through it at all. That is a classroom-level fault, so record it once and
@@ -1286,7 +1342,7 @@ async function warmOneTextFile(
 async function readTextThroughWorker(
   ctx: TextReadContext,
   path: string,
-  deadlineMs: number,
+  deadline: TextReadDeadline,
   trace: TextReadTrace,
   budget?: TextReadBudget
 ): Promise<ContentText | null> {
@@ -1303,19 +1359,20 @@ async function readTextThroughWorker(
   let asset: ContentAssetRecord | null;
   try {
     // Bounded: a stale map turns this into three GitHub calls, and a slow
-    // GitHub must cost a fallback rather than a held-open render. Never longer
-    // than the caller's own budget — a decorative read that asked for two
-    // seconds must not spend four of them here before its fetch begins.
-    await withDeadline(
-      ensureMap(ctx.classroom.id),
-      Math.min(ENSURE_MAP_TIMEOUT_MS, deadlineMs),
-      'map refresh'
-    ).catch(error => {
-      console.warn(
-        `[contentDelivery] Map refresh gave up for classroom ${ctx.classroom.id}:`,
-        error instanceof Error ? error.message : error
-      );
-    });
+    // GitHub must cost a fallback rather than a held-open render. The refresh
+    // is OPTIONAL, so it is the first thing dropped when the caller's overall
+    // budget is already spent — the row the map has is a perfectly good answer,
+    // and spending a decorative read's whole two seconds here would leave
+    // nothing for the fetch those seconds were meant for.
+    const mapMs = legBudgetMs(deadline, ENSURE_MAP_TIMEOUT_MS);
+    if (mapMs > 0) {
+      await withDeadline(ensureMap(ctx.classroom.id), mapMs, 'map refresh').catch(error => {
+        console.warn(
+          `[contentDelivery] Map refresh gave up for classroom ${ctx.classroom.id}:`,
+          error instanceof Error ? error.message : error
+        );
+      });
+    }
     asset = await lookupContentAsset(ctx.classroom.id, path);
   } catch (error) {
     // The map itself is unreachable, which is not the Worker's fault — do not
@@ -1332,10 +1389,16 @@ async function readTextThroughWorker(
   // row says nothing about the next path the caller probes.
   if (!asset || asset.type !== 'blob') return null;
 
+  // Out of time before the fetch even began. Skip it rather than start one on
+  // an already-expired signal, and record NOTHING: a leg that never asked has
+  // learned nothing about the origin.
+  const fetchMs = legBudgetMs(deadline);
+  if (fetchMs <= 0) return null;
+
   try {
     const url = await signTextUrl(ctx.classroom, env, asset.sha, ext);
 
-    const response = await fetch(url, { signal: AbortSignal.timeout(deadlineMs) });
+    const response = await fetch(url, { signal: AbortSignal.timeout(fetchMs) });
     if (!response.ok) {
       // A refusal is an ANSWER, not a dead origin: the Worker is up and said
       // no. Fall back for this path and leave the per-render circuit closed.
@@ -1388,7 +1451,7 @@ async function readTextFromGitHub(
   ctx: TextReadContext,
   path: string,
   fallback: TextFallback,
-  deadlineMs: number,
+  deadline: TextReadDeadline,
   opts: { skipCache?: boolean }
 ): Promise<ContentText | null> {
   const orgLogin = ctx.classroom.git_organization.login;
@@ -1399,7 +1462,8 @@ async function readTextFromGitHub(
   // answers 404 for a private, deleted or never-published repo alike, and the
   // contents API is reached only after the Worker has already had its say. See
   // `unreachableClassrooms`.
-  if (fallback !== 'cdn-only') {
+  const apiMs = fallback === 'cdn-only' ? 0 : legBudgetMs(deadline);
+  if (apiMs > 0) {
     try {
       const file = await withDeadline(
         ContentService.getContent({
@@ -1408,7 +1472,7 @@ async function readTextFromGitHub(
           path,
           ...(opts.skipCache ? { skipCache: true } : {}),
         }),
-        deadlineMs,
+        apiMs,
         'contents API read'
       );
       if (file?.content) return { text: file.content, sha: file.sha ?? null, source: 'api' };
@@ -1425,9 +1489,16 @@ async function readTextFromGitHub(
   // first (which is how this read used to be ordered) because GitHub Pages lags
   // a push by minutes, and the whole point of the map-first path above is that
   // a save is visible the instant it returns.
+  //
+  // Whatever the legs above spent comes out of this one's budget, and a read
+  // with nothing left stops here rather than opening a socket it is already too
+  // late to use.
+  const cdnMs = legBudgetMs(deadline);
+  if (cdnMs <= 0) return null;
+
   try {
     const response = await fetch(`https://${orgLogin}.github.io/${repo}/${path}`, {
-      signal: AbortSignal.timeout(deadlineMs),
+      signal: AbortSignal.timeout(cdnMs),
     });
     if (response.ok) return { text: await response.text(), sha: null, source: 'cdn' };
   } catch (error) {

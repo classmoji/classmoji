@@ -11,8 +11,8 @@
  *
  * Two things fix it, and both are pinned here:
  *
- *   - a DECORATIVE read may ask for a shorter per-leg budget, because the cost
- *     of giving up on a thumbnail is a grey rectangle;
+ *   - a DECORATIVE read may ask for a shorter budget for the WHOLE read, since
+ *     the cost of giving up on a thumbnail is a grey rectangle;
  *   - the first read to find a classroom's origin unreachable answers for the
  *     rest of the window, because that failure is a property of the classroom
  *     and not of the nineteen files.
@@ -138,20 +138,52 @@ afterEach(() => {
   delete process.env.CONTENT_SIGNING_SECRET;
 });
 
-describe('the per-leg deadline', () => {
-  it('gives every leg the budget the caller asked for', async () => {
+describe('the read budget', () => {
+  it('bounds the whole read, not each leg of it', async () => {
+    // The bug this pins: `deadlineMs` used to be handed to every leg, so a
+    // "two second" thumbnail could spend two on the map refresh, two more on
+    // the Worker and two more on the CDN. What a caller names is how long the
+    // ANSWER is worth waiting for, not how long any one socket may take.
     const timeout = vi.spyOn(AbortSignal, 'timeout');
-    stubLegs({ worker: () => ok('cdn-bytes') });
+    stubLegs({
+      worker: async () => {
+        await new Promise(resolve => setTimeout(resolve, 60));
+        return badGateway();
+      },
+      cdn: () => ok('cdn-bytes'),
+    });
 
     await fetchContentText(ctx, DECK_PATH, THUMBNAIL);
 
-    // Two seconds, not the default six. Every deadline this read handed out is
-    // the caller's — a leg that quietly kept the default would be the whole bug.
-    expect(timeout).toHaveBeenCalled();
-    for (const call of timeout.mock.calls) expect(call[0]).toBe(2000);
+    const budgets = timeout.mock.calls.map(call => Number(call[0]));
+    expect(budgets).toHaveLength(2);
+    expect(budgets[0]).toBeLessThanOrEqual(2000);
+    // The CDN leg gets only what the Worker leg left behind.
+    expect(budgets[1]).toBeLessThanOrEqual(budgets[0] - 50);
+  });
+
+  it('skips a leg it has no time left for rather than opening a doomed socket', async () => {
+    // A fetch started on an already-expired signal aborts on the next tick: a
+    // socket opened for nothing, and worse, a verdict recorded about an origin
+    // it never actually asked.
+    const timeout = vi.spyOn(AbortSignal, 'timeout');
+    stubLegs({
+      worker: async () => {
+        await new Promise(resolve => setTimeout(resolve, 120));
+        return badGateway();
+      },
+      cdn: () => ok('cdn-bytes'),
+    });
+
+    expect(await fetchContentText(ctx, DECK_PATH, { ...THUMBNAIL, deadlineMs: 100 })).toBeNull();
+    expect(timeout.mock.calls).toHaveLength(1);
   });
 
   it('leaves an ordinary read on the default budget', async () => {
+    // No caller-set deadline means no overall bound: `TEXT_FETCH_TIMEOUT_MS` is
+    // a per-leg latency ceiling, and a read that spends six seconds losing to a
+    // stalled Worker and then wins from the contents API has done exactly the
+    // right thing.
     const timeout = vi.spyOn(AbortSignal, 'timeout');
     stubLegs({ worker: () => ok('worker-bytes') });
 

@@ -186,7 +186,7 @@ export type DeliveryContext = ReturnType<typeof deckDeliveryContext>;
  * caller comparing identities must read null as "cannot tell", never as a match.
  */
 /**
- * Per-leg budget for a THUMBNAIL read, well under the default six seconds.
+ * What ONE whole THUMBNAIL read may take, well under the default six seconds.
  *
  * The index renders every deck as its own iframe, so nineteen decks is nineteen
  * loaders running six-at-a-time in the browser. For a classroom whose content
@@ -196,9 +196,14 @@ export type DeliveryContext = ReturnType<typeof deckDeliveryContext>;
  *
  * Two seconds because a thumbnail is decorative: the read it is meant to win is
  * an edge hit measured in milliseconds, and extending the wait for one that is
- * going to fail buys a picture nobody is looking at yet. Paired with
- * `decorative: true` below, which stops the second thumbnail of a broken
- * classroom paying even this.
+ * going to fail buys a picture nobody is looking at yet.
+ *
+ * It bounds the READ, not each of its legs. `fetchContentText` treats a
+ * caller-set budget as a deadline for the whole ladder — map refresh, Worker,
+ * then the CDN — handing each leg what is left and skipping one that has
+ * nothing; otherwise "two seconds" was three legs of two and the cap bought
+ * nothing. Paired with `decorative: true` below, which stops the second
+ * thumbnail of a broken classroom paying even this.
  */
 const THUMBNAIL_READ_DEADLINE_MS = 2000;
 

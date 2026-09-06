@@ -567,12 +567,17 @@ test('resolves a deck read in ONE pass, not one per concern', async () => {
 });
 
 test.describe('what a thumbnail read asks for', () => {
-  test('caps its budget and declares itself decorative', () => {
+  test('caps the whole read and declares itself decorative', () => {
     // The index renders one iframe per deck, so an unreadable content repo costs
     // every thumbnail loader the full read budget — nineteen of them, six at a
     // time, is a page that dribbles in over minutes. Two seconds because a
     // thumbnail is decorative, and `decorative` so the ones behind the first can
     // skip the wait entirely once the classroom is known unreachable.
+    //
+    // Two seconds for the READ, not for each of its legs: `fetchContentText`
+    // treats a caller-set `deadlineMs` as a deadline for the whole ladder and
+    // hands each leg what is left. Read per-leg, this number bought nothing —
+    // map refresh, Worker and CDN each took their own two.
     expect(deckTextReadOptions('thumbnail', { fallback: 'cdn-only', thumbnail: true })).toEqual({
       label: 'thumbnail',
       fallback: 'cdn-only',
