@@ -216,14 +216,18 @@ describe('remembering an unreachable classroom', () => {
     expect(lookupContentAsset).not.toHaveBeenCalled();
   });
 
-  it('arms on a Worker 403, which is the repo refusing to be read', async () => {
+  it('does not arm on a Worker 403, which is a signature fault, never a repo fault', async () => {
+    // The Worker 403s only when it declines the signature (rotation, clock
+    // skew, malformed URL). A repo it cannot read comes back as a 502. Writing
+    // a classroom off for our own deployment fault would blank every
+    // thumbnail on the site for five minutes.
     const stub = stubLegs({ worker: () => new Response('forbidden', { status: 403 }) });
 
     await fetchContentText(ctx, DECK_PATH, THUMBNAIL);
     stub.mockClear();
 
     await fetchContentText(ctx, 'slides/lecture-2/index.html', THUMBNAIL);
-    expect(stub).not.toHaveBeenCalled();
+    expect(stub).toHaveBeenCalled();
   });
 
   it('arms when the Worker connection is refused outright', async () => {

@@ -954,10 +954,12 @@ function rememberUnreachable(classroomId: string, path: string): void {
  *   - `miss` — a 404. The sha is not there, which is PROOF the Worker and the
  *     repo behind it can be reached.
  *   - `refused` — an answer about THIS request rather than about the repo: a
- *     signature the Worker declined, a malformed URL. A deployment fault, and
- *     condemning the classroom for one would blank thumbnails for a repo that
- *     is perfectly healthy.
- *   - `unreachable` — the repo could not be read through the Worker: a 403, a
+ *     signature the Worker declined (its 403 is ONLY ever that — an origin
+ *     that refuses the repo comes back as a 502), a malformed URL. A
+ *     deployment fault such as a key rotation or clock skew, and condemning
+ *     the classroom for one would blank every thumbnail on the site for a
+ *     repo that is perfectly healthy.
+ *   - `unreachable` — the repo could not be read through the Worker: a
  *     5xx (including the 502 it answers when its own origin pull fails), or a
  *     transport failure that was not our own deadline. This is the only verdict
  *     that may write a classroom off.
@@ -986,7 +988,7 @@ interface TextReadTrace {
  */
 function workerVerdictFor(status: number): WorkerLegOutcome {
   if (status === 404) return 'miss';
-  if (status === 403 || status >= 500) return 'unreachable';
+  if (status >= 500) return 'unreachable';
   return 'refused';
 }
 

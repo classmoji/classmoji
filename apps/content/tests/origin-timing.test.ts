@@ -159,8 +159,11 @@ describe('the origin pull log line', () => {
     expect(token).not.toBeNull();
     expect(Number(token?.[1])).toBeGreaterThanOrEqual(25);
 
-    // And GitHub is credited with nothing, because that leg never ran.
-    expect(lines[0]).toContain('blob=0ms');
+    // And GitHub is credited with nothing, because that leg never ran. The
+    // accounting is a difference of two clocks, so allow a tick of drift.
+    const blob = lines[0].match(/blob=(\d+)ms/);
+    expect(blob).not.toBeNull();
+    expect(Number(blob?.[1])).toBeLessThanOrEqual(2);
     expect(lines[0]).toContain('status=0');
   });
 
