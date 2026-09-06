@@ -1203,7 +1203,10 @@ export async function fetchContentText(
  * and decides nothing about access. See `fetchContentText`.
  */
 async function signTextUrl(
-  classroom: ResolveClassroom,
+  // Narrowed to what a signature is actually made of. Both callers hand over a
+  // wider object; naming only these two is what lets the warm carry its own
+  // context type rather than a read's.
+  classroom: { id: string; content_key_version: number },
   env: { origin: string; master: string },
   sha: string,
   ext: string
@@ -1237,6 +1240,36 @@ async function signTextUrl(
 const WARM_FETCH_TIMEOUT_MS = 30_000;
 
 /**
+ * What a WARM needs to know about the classroom it is filling the cache for.
+ *
+ * ## Why this is not a `ResolveContext`
+ *
+ * The save paths reach for a resolve context because they already build one for
+ * canonicalization, and the comments there say the fields beyond the id do not
+ * matter. For canonicalization that is true: it only ever REMOVES a signature
+ * and never mints one, so a placeholder key version changes nothing.
+ *
+ * A warm MINTS one. `content_key_version` goes into the signature, and the
+ * Worker's edge entry is keyed by URL — so a warm at a version the readers are
+ * not using fills an entry nobody will ever ask for. It succeeds, it logs a
+ * 200, and the reader it was meant to help still pays the cold pull. There is
+ * no signal anywhere that it happened. `content_delivery_enabled` is the other
+ * half: it decides whether there is a Worker cache to fill at all.
+ *
+ * So both are REQUIRED here, and a builder must produce them rather than
+ * default them. A `select:` that stops fetching one cannot silently become
+ * `?? 0` on the way in: the builder has to decide, in the open, whether to
+ * carry a real value or decline the warm.
+ */
+export interface WarmContext {
+  classroom: {
+    id: string;
+    content_key_version: number;
+    content_delivery_enabled: boolean;
+  };
+}
+
+/**
  * Pull each just-saved text file through the Worker, so the next reader does
  * not have to.
  *
@@ -1268,13 +1301,14 @@ const WARM_FETCH_TIMEOUT_MS = 30_000;
  * some time after the save had already returned successfully — a save reported
  * as broken because a cache fill was slow.
  *
- * @param ctx      the classroom being saved into
+ * @param ctx      the classroom being saved into. `WarmContext`, not a read's
+ *                 context — see that type for why the difference matters.
  * @param paths    the repo-relative TEXT files the save just committed and
  *                 recorded (`deck.json`, `index.html`, `content.json`). Binary
  *                 uploads are not warmed: nobody blocks a render on them, and
  *                 they are megabytes rather than kilobytes.
  */
-export async function warmContentText(ctx: TextReadContext, paths: string[]): Promise<void> {
+export async function warmContentText(ctx: WarmContext, paths: string[]): Promise<void> {
   // The same two gates the read path opens with. A classroom that is not on the
   // delivery layer has no Worker cache to warm, and a deployment that cannot
   // sign has no URL to warm it at.
@@ -1303,7 +1337,7 @@ export async function warmContentText(ctx: TextReadContext, paths: string[]): Pr
  * are kilobyte documents, so reading them costs nothing worth saving.
  */
 async function warmOneTextFile(
-  classroom: ResolveClassroom,
+  classroom: WarmContext['classroom'],
   env: { origin: string; master: string },
   path: string
 ): Promise<void> {

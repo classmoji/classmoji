@@ -33,7 +33,7 @@ import {
 } from './deckMerge.ts';
 import {
   DeckConflictError,
-  deckResolveContext,
+  deckWarmContext,
   previewBranchName,
   resolveSlideRepoContext,
   saveDeck,
@@ -420,7 +420,7 @@ export async function acceptDeckPreview(
     // than making that first read pay the cold origin pull. Not awaited: the
     // merge has landed and the rows are written, so nothing here may fail or
     // delay the accept.
-    const ctx = deckResolveContext(slide);
+    const ctx = deckWarmContext(slide);
     if (ctx)
       void warmContentText(
         ctx,

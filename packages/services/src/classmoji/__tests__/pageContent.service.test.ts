@@ -372,8 +372,18 @@ describe('pageContent.loadPageContent viaWorker', () => {
 describe('pageContent.savePageContent write-through', () => {
   const blocks = [{ id: 'b1', type: 'paragraph', content: [] }];
   // The fixture above deliberately has no classroom id (several callers have
-  // none); this one does, because the map row is keyed on it.
-  const keyedPage = { ...page, classroom: { ...page.classroom, id: 'class-1' } };
+  // none); this one does, because the map row is keyed on it — and it carries
+  // the key version and the switch too, because every real save path selects
+  // the whole classroom row and the WARM signs with both.
+  const keyedPage = {
+    ...page,
+    classroom: {
+      ...page.classroom,
+      id: 'class-1',
+      content_key_version: 3,
+      content_delivery_enabled: true,
+    },
+  };
 
   beforeEach(() => {
     recordContentAssetMock.mockResolvedValue(true);
@@ -402,9 +412,32 @@ describe('pageContent.savePageContent write-through', () => {
     await savePageContent(keyedPage, blocks, { coverImage: null });
 
     expect(warmContentTextMock).toHaveBeenCalledWith(
-      expect.objectContaining({ classroom: expect.objectContaining({ id: 'class-1' }) }),
+      expect.objectContaining({
+        classroom: expect.objectContaining({
+          id: 'class-1',
+          // The version the warm SIGNS with, carried through rather than
+          // defaulted. Warming at a version readers are not using fills an
+          // entry nobody asks for, reports a 200, and helps no one.
+          content_key_version: 3,
+          content_delivery_enabled: true,
+        }),
+      }),
       ['pages/syllabus/content.json']
     );
+  });
+
+  it('declines the warm rather than signing with a key version it was not given', async () => {
+    // The guard behind `WarmContext`. Every real save path selects the whole
+    // classroom row, so this is a future `select:` narrowing — and the failure
+    // it prevents is silent: a warm at version 0 succeeds, logs a 200, and
+    // fills a cache entry no reader will ever ask for. The row is still
+    // recorded; only the optimization is skipped.
+    const { content_key_version: _dropped, ...classroom } = keyedPage.classroom;
+
+    await savePageContent({ ...keyedPage, classroom }, blocks, { coverImage: null });
+
+    expect(recordContentAssetMock).toHaveBeenCalled();
+    expect(warmContentTextMock).not.toHaveBeenCalled();
   });
 
   it('does not warm a preview-branch save', async () => {
