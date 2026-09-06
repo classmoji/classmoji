@@ -29,7 +29,11 @@
  *
  * Asset URLs are signed at the deck's own visibility tier (`month` public,
  * `week` otherwise), never `edit`: the delivery pass here is a READ like any
- * other, and `deckAccessFor`'s reasoning applies unchanged.
+ * other, and `deckAccessFor`'s reasoning applies unchanged. For a classroom the
+ * delivery layer is NOT on for there is nothing to sign, and the stored
+ * `/content/…` references point at a session-gated proxy this caller cannot
+ * satisfy — so those are rewritten to the public Pages CDN instead (see the
+ * loader). Either way the render input needs no session.
  */
 
 import getPrisma from '@classmoji/database';
@@ -42,7 +46,9 @@ import {
 } from '@classmoji/services/slides';
 import {
   deckDeliveryContext,
+  publicDeckThemeUrls,
   resolveDeckAssets,
+  resolveDeckAssetsPublic,
   resolveDeliveryThemeUrls,
 } from '~/utils/deckDelivery.server';
 
@@ -207,7 +213,26 @@ export const loader = async ({
     isPublic: Boolean(slide.is_public),
   });
 
-  const themeUrls = await resolveDeliveryThemeUrls(deck, gitOrgLogin, repo, deliveryCtx);
+  // ── The half of this that is NOT about signatures ──────────────────────────
+  // A deck stores its images and its shared-theme links as `/content/{org}/
+  // {repo}/…`, and that route resolves the caller's MEMBERSHIP before it fetches
+  // a byte. The caller here has no membership and no session — it holds a render
+  // token and nothing else. Where the delivery layer is on, every one of those
+  // references leaves as a signed URL and the proxy is never asked; where it is
+  // off, `deckDeliveryContext` returns null, the references would go out
+  // unchanged, and each one would be refused inside the screenshot — an image of
+  // a deck with holes where its pictures are.
+  //
+  // So a null context takes the public CDN tier instead: the same one the proxy
+  // itself already prefers for exactly these classrooms, built by the same
+  // `getContentUrl`. The alternative was teaching the proxy to accept a render
+  // token, which puts a second credential on a session-gated route to save a URL
+  // rewrite.
+  const signedThemeUrls = await resolveDeliveryThemeUrls(deck, gitOrgLogin, repo, deliveryCtx);
+  const themeUrls = deliveryCtx
+    ? signedThemeUrls
+    : publicDeckThemeUrls(signedThemeUrls, gitOrgLogin, repo);
+
   const generated = generateDeckHtml(deck, {
     title: slide.title,
     themeUrls,
@@ -216,7 +241,10 @@ export const loader = async ({
     includeNotes: false,
   });
 
-  const html = (await resolveDeckAssets(generated, deliveryCtx)) ?? generated;
+  const html =
+    (deliveryCtx
+      ? await resolveDeckAssets(generated, deliveryCtx)
+      : await resolveDeckAssetsPublic(generated, gitOrgLogin, repo)) ?? generated;
 
   return new Response(withReadinessMarker(html), { headers: RENDER_HEADERS });
 };

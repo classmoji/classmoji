@@ -24,7 +24,7 @@
  */
 
 import { createHash } from 'node:crypto';
-import { ClassmojiService } from '@classmoji/services';
+import { ClassmojiService, getContentUrl } from '@classmoji/services';
 import {
   rewriteDeckAssetUrls,
   type DeckJson,
@@ -186,43 +186,24 @@ export type DeliveryContext = ReturnType<typeof deckDeliveryContext>;
  * caller comparing identities must read null as "cannot tell", never as a match.
  */
 /**
- * What ONE whole THUMBNAIL read may take, well under the default six seconds.
+ * What a deck surface asks a text read for.
  *
- * The index renders every deck as its own iframe, so nineteen decks is nineteen
- * loaders running six-at-a-time in the browser. For a classroom whose content
- * repo cannot be read at all — access revoked, repo gone private, repo deleted
- * — each of those spends its whole budget before failing, and the page dribbles
- * in over minutes and reads as hung.
- *
- * Two seconds because a thumbnail is decorative: the read it is meant to win is
- * an edge hit measured in milliseconds, and extending the wait for one that is
- * going to fail buys a picture nobody is looking at yet.
- *
- * It bounds the READ, not each of its legs. `fetchContentText` treats a
- * caller-set budget as a deadline for the whole ladder — map refresh, Worker,
- * then the CDN — handing each leg what is left and skipping one that has
- * nothing; otherwise "two seconds" was three legs of two and the cap bought
- * nothing. Paired with `decorative: true` below, which stops the second
- * thumbnail of a broken classroom paying even this.
+ * Every deck read is now one a person is waiting on: the index draws stored
+ * images rather than a live iframe per deck, so the "decorative" read — capped
+ * at two seconds, allowed to skip a classroom already known unreachable — has
+ * no producer left and is gone with it. Whoever reaches here opened a deck, and
+ * gets the full attempt.
  */
-const THUMBNAIL_READ_DEADLINE_MS = 2000;
-
-/** What a deck surface asks a text read for. Exported so the thumbnail policy is pinnable. */
 export function deckTextReadOptions(
   label: string,
-  opts: { fallback?: 'api-then-cdn' | 'cdn-only'; thumbnail?: boolean } = {}
+  opts: { fallback?: 'api-then-cdn' | 'cdn-only' } = {}
 ): {
   label: string;
   fallback?: 'api-then-cdn' | 'cdn-only';
-  deadlineMs?: number;
-  decorative?: true;
 } {
   return {
     label,
     ...(opts.fallback ? { fallback: opts.fallback } : {}),
-    ...(opts.thumbnail
-      ? { deadlineMs: THUMBNAIL_READ_DEADLINE_MS, decorative: true as const }
-      : {}),
   };
 }
 
@@ -234,12 +215,6 @@ export async function readDeckText(
   label: string,
   opts: {
     fallback?: 'api-then-cdn' | 'cdn-only';
-    /**
-     * This read is for a THUMBNAIL. Caps the per-leg wait and lets the read
-     * skip a classroom already known unreachable — both of which are only
-     * acceptable because the failure mode is a grey rectangle.
-     */
-    thumbnail?: boolean;
   } = {}
 ): Promise<{ content: string; source: 'worker' | 'api' | 'cdn'; sha: string | null } | null> {
   const classroom = slide.classroom;
@@ -497,4 +472,231 @@ export async function resolveDeliveryThemeUrls(
     libCssUrl: rebase(base.libCssUrl),
     customThemeUrl: rebase(base.customThemeUrl),
   };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// The PUBLIC read — for a caller that carries no session at all
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * `/content/{org}/{repo}/{path}` → the same file on the GitHub Pages CDN.
+ *
+ * The content proxy (`content.$org.$repo.$`) is session-gated: it resolves the
+ * caller's membership before it fetches a byte. That is right for every surface
+ * a person opens, and useless for the one caller that is not a person — the
+ * headless browser taking a deck's thumbnail, which holds a render token and
+ * nothing else. Where the delivery layer is switched ON, that deck's images
+ * arrive as signed URLs and the question never comes up; where it is OFF, the
+ * stored `/content/...` references would simply fail to load and the screenshot
+ * would be a deck with holes in it.
+ *
+ * So those get the public tier the proxy itself already prefers for exactly
+ * these classrooms — `preferCdn` in `contentProxy.ts`, built by the same
+ * `getContentUrl`. Same bytes, same repo, minus the session the screenshot
+ * service cannot have. A classroom whose content repo is private has the
+ * delivery layer on by definition — that is what the layer is for — so this
+ * branch cannot hand a private repo to a public URL.
+ *
+ * Anything that is not a reference into THIS repo — an absolute URL, a `data:`
+ * URI, another classroom's content — comes back untouched.
+ */
+export function publicContentUrl(
+  ref: string | null | undefined,
+  gitOrgLogin: string,
+  repo: string
+): string | null | undefined {
+  if (!ref) return ref;
+  const prefix = `/content/${gitOrgLogin}/${repo}/`;
+  if (!ref.startsWith(prefix)) return ref;
+  return getContentUrl({ org: gitOrgLogin, repo, path: ref.slice(prefix.length) });
+}
+
+/**
+ * The image pass for a render with no session: proxy references → the CDN.
+ *
+ * The signed twin is `resolveDeckAssets`; this is what the same document gets
+ * when there is no delivery context to sign with. Same rewriter, and the same
+ * "a reference nobody claims is left exactly as it was" contract.
+ */
+export async function resolveDeckAssetsPublic(
+  html: string | null,
+  gitOrgLogin: string,
+  repo: string
+): Promise<string | null> {
+  if (!html) return html;
+  try {
+    return await rewriteDeckAssetUrls(html, async refs => {
+      const urls = new Map<string, string>();
+      for (const ref of refs) {
+        const next = publicContentUrl(ref, gitOrgLogin, repo);
+        if (next && next !== ref) urls.set(ref, next);
+      }
+      return urls;
+    });
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.warn('[slides] Public asset rewrite failed, serving stored URLs:', message);
+    return html;
+  }
+}
+
+/**
+ * The shared-theme `<link>`s for a render with no session.
+ *
+ * `getThemeUrls` resolves WHICH files exist (offline-v1 vs v2, whether there is
+ * a custom-theme.css) against the authenticated API and returns them on the
+ * proxy base; only the base moves here, exactly as `resolveDeliveryThemeUrls`
+ * moves it to the signed folder. The CSS's own relative `url()` references then
+ * resolve against the CDN too — which is why the base is what gets swapped
+ * rather than the filenames being re-derived.
+ */
+export function publicDeckThemeUrls(
+  base: DeckThemeUrls | undefined,
+  gitOrgLogin: string,
+  repo: string
+): DeckThemeUrls | undefined {
+  if (!base) return base;
+  return {
+    ...base,
+    libCssUrl: publicContentUrl(base.libCssUrl, gitOrgLogin, repo),
+    customThemeUrl: publicContentUrl(base.customThemeUrl, gitOrgLogin, repo),
+  };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Deck THUMBNAILS — one stored image per deck, resolved for the index
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** The slide fields a thumbnail URL is resolved from. Narrow on purpose. */
+export interface ThumbnailSlide {
+  id: string;
+  is_public?: boolean | null;
+  thumbnail_path?: string | null;
+  classroom?: {
+    id?: string | null;
+    content_key_version?: number | null;
+    content_repo?: string | null;
+    content_delivery_enabled?: boolean | null;
+    git_organization?: { login?: string | null } | null;
+  } | null;
+}
+
+/** The one delivery call the thumbnail pass makes. A parameter so it is testable. */
+export type ThumbnailResolver = (
+  ctx: NonNullable<DeliveryContext>,
+  refs: string[]
+) => Promise<Map<string, string>>;
+
+const defaultThumbnailResolver: ThumbnailResolver = (ctx, refs) =>
+  ClassmojiService.contentDelivery.resolveMany(ctx, refs);
+
+/**
+ * Every deck's card image URL, in ONE delivery call per classroom and tier.
+ *
+ * The index draws up to twenty decks. It used to draw them as twenty live
+ * `<iframe>`s, each a full authenticated document request that booted Reveal
+ * inside a 0.2-scaled frame; they are one stored WebP each now, committed
+ * beside the deck's own files, so all this has to do is turn a stored path into
+ * a URL the browser may fetch.
+ *
+ * Three answers, and which one a deck gets is decided by its classroom and its
+ * own visibility, never by who is looking:
+ *
+ *   - no `thumbnail_path` → `null`. The deck has never been rendered, or its
+ *     render failed — which never deletes and never commits a placeholder. The
+ *     card draws its own; see the index route.
+ *   - delivery ON → a signed URL at the DECK's visibility tier: `month` for a
+ *     public deck, `week` for the rest. Never `edit`, which mints `no-store` on
+ *     an exact four-hour expiry — precisely wrong for an image whose whole
+ *     purpose is to be cached hard.
+ *   - delivery OFF → the legacy `/content/{org}/{repo}/{path}` proxy URL, whose
+ *     binary branch is already CDN-first for exactly these classrooms. Unlike
+ *     the thumbnail RENDER (which carries no session and so takes the public
+ *     CDN URL above), the index is a signed-in page and the proxy's gate is
+ *     already satisfied.
+ *
+ * Batched per classroom AND per tier, because the tier belongs to the deck: a
+ * classroom holding public and private decks costs two calls, not twenty. A
+ * batch that throws degrades to the proxy URL rather than to no image at all —
+ * the file is committed either way, and the proxy can still serve it.
+ */
+export async function resolveDeckThumbnailUrls(
+  slides: ThumbnailSlide[],
+  opts: { resolve?: ThumbnailResolver } = {}
+): Promise<Map<string, string | null>> {
+  const resolve = opts.resolve ?? defaultThumbnailResolver;
+  const out = new Map<string, string | null>();
+
+  const batches = new Map<
+    string,
+    { ctx: NonNullable<DeliveryContext>; entries: Array<{ id: string; path: string }> }
+  >();
+
+  for (const slide of slides) {
+    out.set(slide.id, null);
+
+    const path = slide.thumbnail_path;
+    const classroom = slide.classroom;
+    const login = classroom?.git_organization?.login;
+    const repo = classroom?.content_repo;
+    if (!path || !classroom?.id || !login || !repo) continue;
+
+    const ctx = deckDeliveryContext(
+      {
+        classroom: {
+          id: classroom.id,
+          content_key_version: classroom.content_key_version ?? 0,
+          content_repo: repo,
+          content_delivery_enabled: classroom.content_delivery_enabled,
+        },
+      },
+      login,
+      repo,
+      { canEdit: false, isPublic: Boolean(slide.is_public) }
+    );
+
+    // No context means the layer is off for this classroom, or this deployment
+    // cannot sign at all. Both are the legacy read, and both are the same URL.
+    if (!ctx) {
+      out.set(slide.id, legacyContentUrl(login, repo, path));
+      continue;
+    }
+
+    const key = `${classroom.id}|${ctx.tier}`;
+    const batch = batches.get(key) ?? { ctx, entries: [] };
+    batch.entries.push({ id: slide.id, path });
+    batches.set(key, batch);
+  }
+
+  await Promise.all(
+    [...batches.values()].map(async ({ ctx, entries }) => {
+      try {
+        const urls = await resolve(
+          ctx,
+          entries.map(entry => entry.path)
+        );
+        for (const entry of entries) out.set(entry.id, urls.get(entry.path) ?? null);
+      } catch (error: unknown) {
+        const message = error instanceof Error ? error.message : String(error);
+        console.warn('[slides] Thumbnail URL resolution failed, serving proxy URLs:', message);
+        for (const entry of entries) {
+          out.set(
+            entry.id,
+            legacyContentUrl(
+              ctx.classroom.git_organization.login,
+              ctx.classroom.content_repo,
+              entry.path
+            )
+          );
+        }
+      }
+    })
+  );
+
+  return out;
+}
+
+/** `/content/{org}/{repo}/{path}` — the slides app's own session-gated proxy. */
+function legacyContentUrl(gitOrgLogin: string, repo: string, path: string): string {
+  return `/content/${gitOrgLogin}/${repo}/${path}`;
 }
