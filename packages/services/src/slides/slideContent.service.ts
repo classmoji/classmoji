@@ -22,6 +22,7 @@ import { recordContentAssets, resolveContentBranch } from '../classmoji/contentA
 import {
   canonicalizeMany,
   isOwnAssetRef,
+  warmContentText,
   type ResolveContext,
 } from '../classmoji/contentDelivery.service.ts';
 
@@ -213,7 +214,7 @@ export interface SaveDeckResult {
  * The tier is arbitrary — canonicalization only ever removes a signature and
  * never mints one, so nothing but the classroom id is read.
  */
-function deckResolveContext(slide: SlideContentTarget): ResolveContext | null {
+export function deckResolveContext(slide: SlideContentTarget): ResolveContext | null {
   const classroom = slide.classroom;
   const login = classroom?.git_organization?.login;
   if (!classroom?.id || !classroom.content_repo || !login) return null;
@@ -487,4 +488,16 @@ async function recordDeckFiles(
       ...(bytes.has(file.path) ? { size: bytes.get(file.path) } : {}),
     }))
   );
+
+  // Pull the two files this commit produced through the Worker, so the reader
+  // who opens `/present` a second from now hits R2 instead of paying the cold
+  // origin pull. Not awaited — the save is finished, and a cache fill is not
+  // allowed to hold it open or to fail it. AFTER the rows above, because the
+  // warm looks each sha up in the map.
+  const ctx = deckResolveContext(slide);
+  if (ctx)
+    void warmContentText(
+      ctx,
+      committed.map(file => file.path)
+    );
 }

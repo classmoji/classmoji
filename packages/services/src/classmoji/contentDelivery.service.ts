@@ -901,6 +901,159 @@ export async function fetchContentText(
   return result;
 }
 
+/**
+ * The signed URL one repo file's TEXT is read at — the ONE place that shape is
+ * decided.
+ *
+ * Extracted rather than inlined because two callers now have to agree on it
+ * byte for byte. The read (`readTextThroughWorker`) mints it to fetch the file;
+ * the warm (`warmContentText`) mints it to fill the cache the read will hit.
+ * The Worker's R2 key is content-addressed and its edge entry is keyed by URL,
+ * so a warm that differed by so much as a tier would fill an entry no reader
+ * ever asks for — a cache warmed for nobody, and no way to tell from either
+ * side that it had happened.
+ *
+ * Always `week`, and always the classroom's current key version: a
+ * server-to-server read hands its bytes to a loader that has already done its
+ * own authorization, so the tier picks an expiry bucket and a `Cache-Control`
+ * and decides nothing about access. See `fetchContentText`.
+ */
+async function signTextUrl(
+  classroom: ResolveClassroom,
+  env: { origin: string; master: string },
+  sha: string,
+  ext: string
+): Promise<string> {
+  return signBlobUrl(
+    env.origin,
+    // Server-to-server: `week` names the cache bucket, not the reader.
+    {
+      master: env.master,
+      classroomId: classroom.id,
+      keyVersion: classroom.content_key_version,
+      tier: 'week',
+    },
+    { sha, ext }
+  );
+}
+
+/**
+ * How long a warm may run before it is abandoned.
+ *
+ * Far longer than a read's budget, and for the opposite reason: nobody is
+ * waiting on this. A cold pull is a token mint against the webapp plus a GitHub
+ * blob read, and on staging — where the webapp autostops and the token endpoint
+ * can be a cold start — that has been measured in the tens of seconds. A warm
+ * that gave up at the read's six seconds would abandon precisely the pulls that
+ * are slow enough to be worth warming.
+ *
+ * It is a bound rather than an absence of one so a hung origin cannot leave a
+ * socket open behind every save for as long as the process lives.
+ */
+const WARM_FETCH_TIMEOUT_MS = 30_000;
+
+/**
+ * Pull each just-saved text file through the Worker, so the next reader does
+ * not have to.
+ *
+ * ## Why this exists
+ *
+ * Every save mints new shas, and a sha the Worker has never seen is a cold
+ * pull: R2 misses, the Worker asks the webapp for an installation token, then
+ * asks GitHub for the blob. Measured on staging that is 4–25 seconds of Worker
+ * wall time (about 5ms of CPU — it is all waiting), against 100–300ms for an
+ * image that is already in R2. The app gives the Worker `TEXT_FETCH_TIMEOUT_MS`
+ * and then falls back, so the person who opens a deck right after saving it
+ * waits out the budget and is then served through GitHub — a save that appears
+ * to hang for six seconds, every time, for the FIRST reader only.
+ *
+ * The first reader is the wrong person to pay that. The save already knows
+ * exactly which shas are new, and it is already talking to the network, so this
+ * moves the cold pull onto the save's own tail where nobody is waiting: by the
+ * time a reader arrives the bytes are in R2 and the read is an edge hit.
+ *
+ * ## What it does NOT do
+ *
+ * It is not correctness. Every warm is allowed to fail — a 502, a timeout, a
+ * classroom whose row the map has not caught up on — and the read path is
+ * unchanged when it does: Worker, then contents API, then the CDN. Nothing
+ * downstream may be written to assume a warm ran.
+ *
+ * Which is why it never rejects and never throws. It is called WITHOUT `await`
+ * from the save paths, so a rejection would surface as an unhandled rejection
+ * some time after the save had already returned successfully — a save reported
+ * as broken because a cache fill was slow.
+ *
+ * @param ctx      the classroom being saved into
+ * @param paths    the repo-relative TEXT files the save just committed and
+ *                 recorded (`deck.json`, `index.html`, `content.json`). Binary
+ *                 uploads are not warmed: nobody blocks a render on them, and
+ *                 they are megabytes rather than kilobytes.
+ */
+export async function warmContentText(ctx: TextReadContext, paths: string[]): Promise<void> {
+  // The same two gates the read path opens with. A classroom that is not on the
+  // delivery layer has no Worker cache to warm, and a deployment that cannot
+  // sign has no URL to warm it at.
+  if (!isContentDeliveryEnabled(ctx.classroom)) return;
+  const env = deliveryEnv();
+  if (!env) return;
+
+  // Deduped: `saveDeck` writes `deck.json` and `index.html` in one commit, and
+  // a caller that passed the same path twice should not pull it twice.
+  const unique = [
+    ...new Set(
+      paths.map(path => normalizeRepoRelative(path)).filter((path): path is string => path !== null)
+    ),
+  ];
+  if (unique.length === 0) return;
+
+  await Promise.all(unique.map(path => warmOneTextFile(ctx.classroom, env, path)));
+}
+
+/**
+ * One file's warm. Swallows everything, by design — see `warmContentText`.
+ *
+ * The body is READ rather than cancelled. The Worker streams the origin body to
+ * its caller while a tee'd copy goes into R2, and dropping our half early is a
+ * needless race against the write this whole function exists to cause. These
+ * are kilobyte documents, so reading them costs nothing worth saving.
+ */
+async function warmOneTextFile(
+  classroom: ResolveClassroom,
+  env: { origin: string; master: string },
+  path: string
+): Promise<void> {
+  try {
+    const ext = extensionOf(path);
+    if (!ext) return;
+
+    // The row the save just wrote. No `ensureMap` here: a warm that had to
+    // refresh the map would be warming a sha the save did not produce, and the
+    // save awaited its own `recordContentAsset` before calling us.
+    const asset = await lookupContentAsset(classroom.id, path);
+    if (!asset || asset.type !== 'blob') return;
+
+    const url = await signTextUrl(classroom, env, asset.sha, ext);
+    const response = await fetch(url, { signal: AbortSignal.timeout(WARM_FETCH_TIMEOUT_MS) });
+    await response.arrayBuffer();
+
+    // eslint-disable-next-line no-console
+    console.debug(
+      `[contentDelivery] warm ${path} sha=${asset.sha} status=${response.status} ` +
+        `classroom=${classroom.id}`
+    );
+  } catch (error) {
+    // Debug, not warn: a failed warm is a cache that stayed cold, which the
+    // read path already handles. Logging it at a level operators are told to
+    // search would turn a latency optimization into a source of alarms.
+    // eslint-disable-next-line no-console
+    console.debug(
+      `[contentDelivery] warm failed for ${path} (classroom ${classroom.id}):`,
+      error instanceof Error ? error.message : error
+    );
+  }
+}
+
 /** The map lookup + signed fetch. Null means "not through the Worker" — never an error. */
 async function readTextThroughWorker(
   ctx: TextReadContext,
@@ -946,17 +1099,7 @@ async function readTextThroughWorker(
   if (!asset || asset.type !== 'blob') return null;
 
   try {
-    const url = await signBlobUrl(
-      env.origin,
-      // Server-to-server: `week` names the cache bucket, not the reader.
-      {
-        master: env.master,
-        classroomId: ctx.classroom.id,
-        keyVersion: ctx.classroom.content_key_version,
-        tier: 'week',
-      },
-      { sha: asset.sha, ext }
-    );
+    const url = await signTextUrl(ctx.classroom, env, asset.sha, ext);
 
     const response = await fetch(url, { signal: AbortSignal.timeout(TEXT_FETCH_TIMEOUT_MS) });
     if (!response.ok) {

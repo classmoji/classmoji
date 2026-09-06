@@ -8,6 +8,7 @@ import {
   canonicalizeMany,
   fetchContentText,
   textReadBudget,
+  warmContentText,
   type ResolveContext,
 } from './contentDelivery.service.ts';
 import {
@@ -463,6 +464,14 @@ async function recordPageFile(
     // know would overwrite a good one an earlier sync had measured.
     ...(content === undefined ? {} : { size: Buffer.byteLength(content) }),
   });
+
+  // The cold pull, moved off the first reader and onto the save's tail.
+  // Deliberately not awaited: a page save must return as soon as the commit and
+  // the row are done, and a cache fill that is still running (or has already
+  // failed) changes nothing about whether the save succeeded. AFTER the row is
+  // written, because the warm reads the sha back out of the map.
+  const ctx = pageResolveContext(page);
+  if (ctx) void warmContentText(ctx, [path]);
 }
 
 /**

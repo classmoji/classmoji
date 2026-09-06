@@ -42,6 +42,7 @@ vi.mock('../contentAssets.service.ts', () => ({
 // itself. `canonicalizeMany` is passed through unchanged — the save path calls
 // it and this suite is not testing canonicalization.
 const fetchContentTextMock = vi.fn();
+const warmContentTextMock = vi.fn(async (..._args: unknown[]) => {});
 vi.mock('../contentDelivery.service.ts', () => ({
   fetchContentText: (...args: unknown[]) => fetchContentTextMock(...args),
   // Real, not a stub: the two probes sharing ONE budget object is the thing
@@ -49,6 +50,7 @@ vi.mock('../contentDelivery.service.ts', () => ({
   // make that assertion vacuous.
   textReadBudget: () => ({ workerUnavailable: false }),
   canonicalizeMany: async (_ctx: unknown, refs: string[]) => new Map(refs.map(r => [r, r])),
+  warmContentText: (...args: unknown[]) => warmContentTextMock(...args),
 }));
 
 const {
@@ -391,6 +393,29 @@ describe('pageContent.savePageContent write-through', () => {
       // would overwrite one an earlier sync actually measured.
       size: Buffer.byteLength(callArg(putMock).content as string),
     });
+  });
+
+  it('warms the file it just wrote, for the classroom it wrote it to', async () => {
+    // The row alone is not enough: the sha is new, so the Worker has never
+    // pulled it, and whoever opens the page next would pay the cold origin
+    // pull. The save hands the warmer exactly the path it committed.
+    await savePageContent(keyedPage, blocks, { coverImage: null });
+
+    expect(warmContentTextMock).toHaveBeenCalledWith(
+      expect.objectContaining({ classroom: expect.objectContaining({ id: 'class-1' }) }),
+      ['pages/syllabus/content.json']
+    );
+  });
+
+  it('does not warm a preview-branch save', async () => {
+    // A preview branch has no map rows, so there is no sha to warm — and
+    // warming one would be a request for an unpublished draft.
+    await savePageContent(keyedPage, blocks, {
+      coverImage: null,
+      branch: 'preview/pages/syllabus',
+    });
+
+    expect(warmContentTextMock).not.toHaveBeenCalled();
   });
 
   it('still records a save aimed explicitly at the default branch', async () => {
