@@ -46,15 +46,58 @@ export function clearOriginCache(): void {
   cache.clear();
 }
 
+/**
+ * How long the token endpoint may take before the mint is abandoned.
+ *
+ * Generous, because this leg is legitimately slow: the endpoint lives in the
+ * webapp, and on an environment whose webapp autostops the first request after
+ * an idle period pays a cold start before it even reaches the GitHub App. A
+ * short bound here would turn "the app was asleep" into "the content origin is
+ * down" — the two look identical from this side and only one of them is true.
+ *
+ * It is a bound at all so a webapp that has stopped answering cannot hold a
+ * Worker invocation open indefinitely. Past this, the pull becomes an
+ * `OriginError`, which the router already answers 502 `origin unavailable` and
+ * the app already falls back from.
+ */
+export const TOKEN_FETCH_TIMEOUT_MS = 25_000;
+
+/**
+ * What one token acquisition cost, and whether it cost anything at all.
+ *
+ * The distinction is the whole point of measuring: a `cached` mint is
+ * sub-millisecond module-map work, and a `minted` one is a network round trip
+ * to a possibly-cold webapp. A pull that took four seconds means something very
+ * different depending on which of those it was, and without this the two are
+ * indistinguishable in the log.
+ */
+export interface OriginTokenTiming {
+  ms: number;
+  source: 'cached' | 'minted';
+}
+
 async function mintOriginRef(env: Env, classroomId: string, now: number): Promise<OriginRef> {
-  const response = await fetch(env.CONTENT_TOKEN_ENDPOINT, {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${env.CONTENT_WORKER_SHARED_SECRET}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({ classroomId }),
-  });
+  let response: Response;
+  try {
+    response = await fetch(env.CONTENT_TOKEN_ENDPOINT, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${env.CONTENT_WORKER_SHARED_SECRET}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ classroomId }),
+      signal: AbortSignal.timeout(TOKEN_FETCH_TIMEOUT_MS),
+    });
+  } catch (error) {
+    // A timeout or a refused socket is the origin being unreachable, which is
+    // the case `OriginError` already names — and deliberately NOT
+    // `OriginAuthError`, because retrying a hung endpoint with a fresh token
+    // would only spend the budget twice on the same silence.
+    throw new OriginError(
+      502,
+      `token endpoint unreachable: ${error instanceof Error ? error.message : String(error)}`
+    );
+  }
 
   if (response.status === 401)
     throw new OriginAuthError('token endpoint rejected the worker secret');
@@ -75,17 +118,34 @@ async function mintOriginRef(env: Env, classroomId: string, now: number): Promis
   return ref;
 }
 
+/**
+ * `getOriginRef`, plus what it cost.
+ *
+ * Split out rather than folded into the caller so the timing is taken around
+ * the acquisition itself and cannot drift as the cache logic changes. See
+ * `OriginTokenTiming` for why a cached hit is still worth reporting.
+ */
+export async function getOriginRefTimed(
+  env: Env,
+  classroomId: string,
+  forceRefresh = false
+): Promise<{ ref: OriginRef; timing: OriginTokenTiming }> {
+  const startedAt = Date.now();
+  const now = startedAt;
+  if (!forceRefresh) {
+    const cached = cachedOriginRef(classroomId, now);
+    if (cached) return { ref: cached, timing: { ms: Date.now() - startedAt, source: 'cached' } };
+  }
+  const ref = await mintOriginRef(env, classroomId, now);
+  return { ref, timing: { ms: Date.now() - startedAt, source: 'minted' } };
+}
+
 export async function getOriginRef(
   env: Env,
   classroomId: string,
   forceRefresh = false
 ): Promise<OriginRef> {
-  const now = Date.now();
-  if (!forceRefresh) {
-    const cached = cachedOriginRef(classroomId, now);
-    if (cached) return cached;
-  }
-  return mintOriginRef(env, classroomId, now);
+  return (await getOriginRefTimed(env, classroomId, forceRefresh)).ref;
 }
 
 function isUnauthorized(value: unknown): boolean {
@@ -96,20 +156,29 @@ function isUnauthorized(value: unknown): boolean {
  * Run an origin call with the classroom's token. If the origin rejects the
  * credential — a 401 response or an OriginAuthError — drop the cached token
  * and try exactly once more with a fresh one.
+ *
+ * `onToken` is called for EVERY acquisition, so a retry reports twice. A caller
+ * that is timing the pull should therefore accumulate rather than overwrite:
+ * the retry path really did spend two token acquisitions, and a log line that
+ * showed only the second would hide the one that made the request slow.
  */
 export async function withOriginRetry<T>(
   env: Env,
   classroomId: string,
-  run: (ref: OriginRef) => Promise<T>
+  run: (ref: OriginRef) => Promise<T>,
+  onToken?: (timing: OriginTokenTiming) => void
 ): Promise<T> {
-  const ref = await getOriginRef(env, classroomId);
+  const first = await getOriginRefTimed(env, classroomId);
+  onToken?.(first.timing);
   try {
-    const result = await run(ref);
+    const result = await run(first.ref);
     if (!isUnauthorized(result)) return result;
   } catch (error) {
     if (!(error instanceof OriginAuthError)) throw error;
   }
 
   invalidateOriginRef(classroomId);
-  return run(await getOriginRef(env, classroomId, true));
+  const refreshed = await getOriginRefTimed(env, classroomId, true);
+  onToken?.(refreshed.timing);
+  return run(refreshed.ref);
 }

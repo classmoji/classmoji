@@ -10,6 +10,7 @@ import type { Env } from './env.ts';
 import { GitHubOrigin } from './origins/github.ts';
 import { deliveryStrategy, type OriginAdapter } from './origins/types.ts';
 import { withOriginRetry } from './token.ts';
+import type { OriginTokenTiming } from './token.ts';
 import {
   MAX_TRANSFORM_SOURCE_BYTES,
   negotiateFormat,
@@ -190,6 +191,85 @@ function streamAndCache(
   return new Response(toClient, { headers });
 }
 
+/**
+ * Every origin pull, timed and split into its two legs.
+ *
+ * ## Why this line exists
+ *
+ * An R2 hit is measured in milliseconds. A MISS was measured on staging at
+ * 4–25 seconds of wall time against about 5ms of CPU, which says the whole cost
+ * is waiting — but not on what. There are exactly two things it can be waiting
+ * on, and they have completely different fixes: minting an installation token
+ * (a POST to the webapp, which on an autostopping environment can be a cold
+ * start), or reading the blob out of GitHub. Splitting them is the entire point;
+ * a single "slow pull" number would have left the question open.
+ *
+ * `token=<ms> (cached|minted)` says which of those it was — a cached token is
+ * module-map work and near zero, so a large number beside `cached` would itself
+ * be news. `blob=<ms>` is the remainder: the pull's wall time minus whatever the
+ * token legs cost, which is the GitHub leg and nothing else.
+ *
+ * ## What it must never contain
+ *
+ * No token, no signature, no query string. The sha is content-addressed and
+ * public by construction, and everything else on the line is a number. This is
+ * an INFO line rather than a warning: it describes healthy traffic, and the
+ * levels an operator is told to search are reserved for the 403/404/502 lines
+ * that mean something has gone wrong.
+ *
+ * `status=0` is the one shape that is not an HTTP status: it means the pull
+ * threw before any response existed — a timeout, a refused socket — and is
+ * followed by the router's own 502. `bytes=unknown` is ordinary rather than a
+ * failure: GitHub gzips text, so `Content-Length` describes an encoded body the
+ * runtime has already decoded, and `declaredLength` correctly refuses to report
+ * a number it would be wrong about.
+ */
+function logOriginPull(
+  sha: string,
+  token: { ms: number; source: OriginTokenTiming['source'] },
+  blobMs: number,
+  response: Response | null
+): void {
+  const status = response?.status ?? 0;
+  const length = response ? declaredLength(response.headers) : null;
+  console.info(
+    `[content] origin pull sha=${sha} token=${token.ms}ms (${token.source}) ` +
+      `blob=${blobMs}ms status=${status} bytes=${length ?? 'unknown'}`
+  );
+}
+
+/**
+ * One blob pull from the origin, with the token and blob legs measured.
+ *
+ * Every path that reaches past R2 goes through here, so there is one place the
+ * timing is taken and one shape it is reported in. Token acquisitions are
+ * ACCUMULATED because `withOriginRetry` can make two (a 401 costs a mint, a
+ * drop and a re-mint), and a line that reported only the second would hide the
+ * one that made the request slow. The source degrades to `minted` if any leg
+ * minted, for the same reason.
+ */
+async function pullBlobFromOrigin(env: Env, classroomId: string, sha: string): Promise<Response> {
+  const token = { ms: 0, source: 'cached' as OriginTokenTiming['source'] };
+  const startedAt = Date.now();
+  let response: Response | null = null;
+  try {
+    response = await withOriginRetry(
+      env,
+      classroomId,
+      ref => origin.fetchBlob({ ...ref, sha }),
+      timing => {
+        token.ms += timing.ms;
+        if (timing.source === 'minted') token.source = 'minted';
+      }
+    );
+    return response;
+  } finally {
+    // In `finally` so a pull that THREW — the timeout case, the one most worth
+    // seeing — is timed and logged exactly like one that answered.
+    logOriginPull(sha, token, Math.max(0, Date.now() - startedAt - token.ms), response);
+  }
+}
+
 /** One shape for both ways a source can be too large: declared, and counted. */
 function warnOversizedSource(sha: string, size: number | null): void {
   const measured = size === null ? 'over the' : `${size} bytes, over the`;
@@ -235,9 +315,7 @@ export async function serveBlobBySha(
     return Response.redirect(location, 302);
   }
 
-  const response = await withOriginRetry(env, options.classroomId, ref =>
-    origin.fetchBlob({ ...ref, sha: options.sha })
-  );
+  const response = await pullBlobFromOrigin(env, options.classroomId, options.sha);
 
   if (!response.ok || !response.body) {
     console.warn(`[content] origin blob ${options.sha}: ${response.status}`);
@@ -279,9 +357,7 @@ async function loadOriginalBytes(
     return hit.arrayBuffer();
   }
 
-  const response = await withOriginRetry(env, options.classroomId, ref =>
-    origin.fetchBlob({ ...ref, sha: options.sha })
-  );
+  const response = await pullBlobFromOrigin(env, options.classroomId, options.sha);
   if (!response.ok || !response.body) {
     console.warn(`[content] origin blob ${options.sha}: ${response.status}`);
     return errorResponse(502, 'origin unavailable');
