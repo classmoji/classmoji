@@ -8,7 +8,9 @@ import {
   canonicalizeMany,
   fetchContentText,
   textReadBudget,
+  warmContentText,
   type ResolveContext,
+  type WarmContext,
 } from './contentDelivery.service.ts';
 import {
   dedupeMergedTreeIds,
@@ -263,9 +265,11 @@ async function loadPageContentViaWorker(
  * lets the route keep its own pass without either of them having to know about
  * the other.
  *
- * The tier is `edit` and it does not matter: canonicalization only ever
- * REMOVES a signature, and it never mints one, so nothing in the context
- * except the classroom id is read.
+ * The tier is `edit` and it does not matter, and neither does the key version
+ * this defaults to 0: canonicalization only ever REMOVES a signature and never
+ * mints one, so nothing in the context except the classroom id is read. A
+ * caller that MINTS one wants `pageWarmContext`, which will not default what it
+ * is about to sign with.
  */
 function pageResolveContext(page: PageWithContentRepo): ResolveContext | null {
   const classroom = page.classroom as {
@@ -288,6 +292,38 @@ function pageResolveContext(page: PageWithContentRepo): ResolveContext | null {
       git_organization: { login },
     },
     tier: 'edit',
+  };
+}
+
+/**
+ * The classroom context a page's WARM signs with, or null.
+ *
+ * Strict where `pageResolveContext` defaults, and for one reason: a warm MINTS
+ * a signature and `content_key_version` goes into it, so warming at a version
+ * the readers are not using fills a cache entry nobody will ever ask for. It
+ * would log a 200 and change nothing, invisibly. A missing version therefore
+ * means no warm rather than a warm at version 0.
+ *
+ * The `unknown` casts are this file's existing shape — `PageWithContentRepo`
+ * types the classroom loosely — so the checks below are what stand in for the
+ * compiler here. `WarmContext` requiring both fields is what makes them
+ * unavoidable: neither can be quietly defaulted on the way in.
+ */
+function pageWarmContext(page: PageWithContentRepo): WarmContext | null {
+  const classroom = page.classroom as {
+    id?: unknown;
+    content_key_version?: unknown;
+    content_delivery_enabled?: unknown;
+  };
+  if (typeof classroom.id !== 'string') return null;
+  if (typeof classroom.content_key_version !== 'number') return null;
+  return {
+    classroom: {
+      id: classroom.id,
+      content_key_version: classroom.content_key_version,
+      // `=== true`, as on the read path: "the caller did not say" reads as off.
+      content_delivery_enabled: classroom.content_delivery_enabled === true,
+    },
   };
 }
 
@@ -463,6 +499,14 @@ async function recordPageFile(
     // know would overwrite a good one an earlier sync had measured.
     ...(content === undefined ? {} : { size: Buffer.byteLength(content) }),
   });
+
+  // The cold pull, moved off the first reader and onto the save's tail.
+  // Deliberately not awaited: a page save must return as soon as the commit and
+  // the row are done, and a cache fill that is still running (or has already
+  // failed) changes nothing about whether the save succeeded. AFTER the row is
+  // written, because the warm reads the sha back out of the map.
+  const ctx = pageWarmContext(page);
+  if (ctx) void warmContentText(ctx, [path]);
 }
 
 /**

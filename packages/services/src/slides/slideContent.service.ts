@@ -22,7 +22,9 @@ import { recordContentAssets, resolveContentBranch } from '../classmoji/contentA
 import {
   canonicalizeMany,
   isOwnAssetRef,
+  warmContentText,
   type ResolveContext,
+  type WarmContext,
 } from '../classmoji/contentDelivery.service.ts';
 
 // Structural type compatible with ContentService's (unexported) git org record.
@@ -203,15 +205,18 @@ export interface SaveDeckResult {
 }
 
 /**
- * The classroom context the save-time canonicalization needs, or null.
+ * The classroom context the save-time CANONICALIZATION needs, or null.
  *
  * Null is a normal state: `createSlide` saves a starter deck before there is a
  * row to key on, and a target assembled without the classroom join has no id.
  * Neither can be carrying one of OUR signed URLs, so skipping the pass is
  * correct rather than merely tolerable.
  *
- * The tier is arbitrary — canonicalization only ever removes a signature and
- * never mints one, so nothing but the classroom id is read.
+ * The tier and the key version are both arbitrary here, and the defaults below
+ * are honest for that reason: canonicalization only ever REMOVES a signature
+ * and never mints one, so nothing but the classroom id is read. A caller that
+ * needs to MINT one wants `deckWarmContext`, which refuses to default what it
+ * would then sign with.
  */
 function deckResolveContext(slide: SlideContentTarget): ResolveContext | null {
   const classroom = slide.classroom;
@@ -226,6 +231,38 @@ function deckResolveContext(slide: SlideContentTarget): ResolveContext | null {
       git_organization: { login },
     },
     tier: 'edit',
+  };
+}
+
+/**
+ * The classroom context a deck's WARM signs with, or null.
+ *
+ * Separate from `deckResolveContext`, and strict where that one defaults. A
+ * warm MINTS a signature, and `content_key_version` goes into it: warming at a
+ * version the readers are not using fills a cache entry nobody ever asks for.
+ * It would report a 200 and change nothing, with no signal on either side that
+ * it had happened — so where the resolve context can shrug and pass 0, this one
+ * declines the warm outright.
+ *
+ * `SlideContentTarget` types both fields as optional because several callers
+ * genuinely lack them (`createSlide` before the row exists, the importer's
+ * synthetic target). Every real save path selects the whole classroom row, so
+ * the checks below are a guard against a future `select:` narrowing rather than
+ * a branch taken today — and `WarmContext` requiring both is what stops that
+ * narrowing from turning into a silent `?? 0` here.
+ */
+export function deckWarmContext(slide: SlideContentTarget): WarmContext | null {
+  const classroom = slide.classroom;
+  if (!classroom?.id) return null;
+  if (typeof classroom.content_key_version !== 'number') return null;
+  return {
+    classroom: {
+      id: classroom.id,
+      content_key_version: classroom.content_key_version,
+      // `=== true` rather than a default: "the caller did not say" must read as
+      // off, exactly as it does on the read path.
+      content_delivery_enabled: classroom.content_delivery_enabled === true,
+    },
   };
 }
 
@@ -487,4 +524,16 @@ async function recordDeckFiles(
       ...(bytes.has(file.path) ? { size: bytes.get(file.path) } : {}),
     }))
   );
+
+  // Pull the two files this commit produced through the Worker, so the reader
+  // who opens `/present` a second from now hits R2 instead of paying the cold
+  // origin pull. Not awaited — the save is finished, and a cache fill is not
+  // allowed to hold it open or to fail it. AFTER the rows above, because the
+  // warm looks each sha up in the map.
+  const ctx = deckWarmContext(slide);
+  if (ctx)
+    void warmContentText(
+      ctx,
+      committed.map(file => file.path)
+    );
 }

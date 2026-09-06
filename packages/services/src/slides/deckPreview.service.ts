@@ -21,6 +21,7 @@
 import getPrisma from '@classmoji/database';
 import { ContentService } from '../content/ContentService.ts';
 import { recordContentAssets } from '../classmoji/contentAssets.service.ts';
+import { warmContentText } from '../classmoji/contentDelivery.service.ts';
 import { generateDeckHtml, type DeckThemeUrls } from './deckHtml.ts';
 import {
   indexResolutions,
@@ -32,6 +33,7 @@ import {
 } from './deckMerge.ts';
 import {
   DeckConflictError,
+  deckWarmContext,
   previewBranchName,
   resolveSlideRepoContext,
   saveDeck,
@@ -411,6 +413,19 @@ export async function acceptDeckPreview(
     if (mergedSha) written.push({ path: deckPath, sha: mergedSha });
     if (htmlSha) written.push({ path: htmlPath, sha: htmlSha });
     await recordContentAssets(slide.classroom.id, written);
+
+    // Accepting a preview publishes shas the Worker has never seen, exactly as
+    // an ordinary save does — and the person who accepts is usually the person
+    // who opens the deck a second later. Warm them off the accept's tail rather
+    // than making that first read pay the cold origin pull. Not awaited: the
+    // merge has landed and the rows are written, so nothing here may fail or
+    // delay the accept.
+    const ctx = deckWarmContext(slide);
+    if (ctx)
+      void warmContentText(
+        ctx,
+        written.map(file => file.path)
+      );
   }
 
   // Concurrent-stacking guard: a stacking apply may have committed to the

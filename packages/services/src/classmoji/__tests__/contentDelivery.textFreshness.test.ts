@@ -181,6 +181,15 @@ describe('a deck save is visible to the next read', () => {
     expect(rows.get(key(CLASSROOM_ID, DECK_PATH))?.sha).toBe(NEW_DECK_SHA);
     expect(saved.sha).toBe(NEW_DECK_SHA);
 
+    // The save also WARMS its own two files through the Worker (see
+    // `warmContentText` — that is its own suite). It is network this test is
+    // not about, so let it settle and set it aside; what follows counts the
+    // READ's calls only.
+    for (let i = 0; i < 500 && calls.length < 2; i += 1) {
+      await new Promise(resolve => setTimeout(resolve, 1));
+    }
+    calls.length = 0;
+
     // …and the read that /present makes now signs the new one. No cache to wait
     // out, no Pages build to wait for — the address moved, so the answer did.
     const read = await fetchContentText(readCtx, HTML_PATH, { label: 'present' });
