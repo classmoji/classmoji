@@ -245,7 +245,21 @@ export const action = async ({ request }: { request: Request }) => {
       // form, which the deck loader signs again at render — instead of leaving
       // it to expire in the copy and warning about every one.
       const copiedPaths = new Set(copy.paths);
+      // The copy is ADDITIVE — the rest of the repo is still there — so the
+      // classroom's asset index answers for everything `copyFolder` did not
+      // just write. Without it a chained reference to another deck that IS in
+      // this repo would be read as broken and counted as a residual.
+      let existingPaths: ReadonlySet<string>;
+      try {
+        existingPaths = await ClassmojiService.contentAssets.listContentAssetPaths(
+          slide.classroom_id
+        );
+      } catch {
+        existingPaths = new Set<string>();
+      }
+
       let uncopiedRefs = 0;
+      let unresolvedSignedRefs = 0;
       const shaPaths = await ClassmojiService.contentImport.resolveShaPaths(slide.classroom_id, [
         indexFile?.content ?? '',
         deckFile?.content ?? '',
@@ -258,9 +272,18 @@ export const action = async ({ request }: { request: Request }) => {
         targetRepo: repo,
         targetPath: newContentPath,
         shaPaths,
-        targetHasPath: (candidate: string) => copiedPaths.has(candidate),
+        targetHasPath: (candidate: string) =>
+          copiedPaths.has(candidate) || existingPaths.has(candidate),
         onUncopiedRef: () => {
           uncopiedRefs++;
+        },
+        // Counted, not logged one by one — and deliberately not through the
+        // rewriter's own wording, which is written for an IMPORT. A duplicate
+        // stays in the same classroom, so a signed URL it could not turn back
+        // into a repo path still resolves; it is simply frozen at today's key
+        // version instead of following the file.
+        onWarn: () => {
+          unresolvedSignedRefs++;
         },
       };
 
@@ -302,6 +325,13 @@ export const action = async ({ request }: { request: Request }) => {
         console.warn(
           `[slides.duplicate] left ${uncopiedRefs} reference(s) into another ${gitOrganization.login} ` +
             `repository untouched in "${slide.title}" — those files are not in this copy`
+        );
+      }
+      if (unresolvedSignedRefs > 0) {
+        console.warn(
+          `[slides.duplicate] kept ${unresolvedSignedRefs} signed URL(s) verbatim in ` +
+            `"${slide.title}" — the classroom's asset map has no path for them, so the copy ` +
+            `holds a frozen URL rather than a reference that follows the file`
         );
       }
 

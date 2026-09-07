@@ -646,3 +646,136 @@ describe('resolveShaPaths', () => {
     expect(onWarn).toHaveBeenCalledWith(expect.stringContaining(SHA));
   });
 });
+
+/**
+ * The deck DUPLICATE: one repo on both sides, only the item folder moves.
+ *
+ * The boundary class is what decides whether a path is rewritten, and a
+ * duplicate can afford two characters an import cannot. The blind
+ * `replaceAll(content_path, newPath)` this replaced caught these; a
+ * boundary-anchored rewrite that excluded `,` and `;` would silently leave
+ * every entry after the first pointing at the ORIGINAL deck.
+ */
+describe('rewriteContentUrls: same-repo copy (deck duplicate) boundaries', () => {
+  const dup = {
+    sourceLogin: 'dartmouth-cs52',
+    sourceRepo: 'content-dartmouth-cs52-cs52-25s',
+    sourcePath: 'slides/intro',
+    targetLogin: 'dartmouth-cs52',
+    targetRepo: 'content-dartmouth-cs52-cs52-25s',
+    targetPath: 'slides/intro-copy-1',
+  };
+
+  it('rewrites every entry of a comma-separated video list', () => {
+    const text = '<section data-background-video="slides/intro/a.mp4,slides/intro/b.webm">';
+    expect(rewriteContentUrls(text, dup)).toBe(
+      '<section data-background-video="slides/intro-copy-1/a.mp4,slides/intro-copy-1/b.webm">'
+    );
+  });
+
+  it('rewrites every candidate of a srcset', () => {
+    const text = '<img srcset="slides/intro/a.png 1x,slides/intro/b.png 2x">';
+    expect(rewriteContentUrls(text, dup)).toBe(
+      '<img srcset="slides/intro-copy-1/a.png 1x,slides/intro-copy-1/b.png 2x">'
+    );
+  });
+
+  it('rewrites a path behind an HTML-escaped quote, which ends in a semicolon', () => {
+    const text = '<div style="background:url(&quot;slides/intro/a.png&quot;)">';
+    expect(rewriteContentUrls(text, dup)).toBe(
+      '<div style="background:url(&quot;slides/intro-copy-1/a.png&quot;)">'
+    );
+  });
+
+  it('still refuses `=`, so a foreign query string is safe even here', () => {
+    const text = 'https://images.example.com/resize?src=slides/intro/a.png&w=800';
+    expect(rewriteContentUrls(text, dup)).toBe(text);
+  });
+
+  it('keeps `,` OUT of the boundary for a cross-repo import', () => {
+    // The relaxation is only sound when there is no other repo in play. On an
+    // import, a comma before a path can belong to somebody else's query string.
+    const text = 'https://images.example.com/pick?list=1,pages/lab-1/a.png';
+    expect(rewriteContentUrls(text, { ...ctx, targetPath: 'pages/lab-1-2' })).toBe(text);
+  });
+});
+
+/**
+ * Anchoring and parsing of the chained pass — the ways a loose pattern turns a
+ * reference it should not have matched into a broken one.
+ */
+describe('rewriteContentUrls: chained pass anchoring and parsing', () => {
+  const ORIGIN_REPO = 'content-dartmouth-cs52-cs52-24w';
+  const deck = { ...ctx, sourcePath: 'slides/lecture-1', targetPath: 'slides/lecture-1' };
+  const copied = (paths: string[]) => (path: string) => paths.includes(path);
+
+  it('does not reach inside a foreign URL that merely contains /content/{login}/', () => {
+    // `/content/` on somebody else's host is their path, not our proxy.
+    const text = `https://example.com/content/dartmouth-cs52/${ORIGIN_REPO}/slides/lecture-1/x.png`;
+    const onUncopiedRef = vi.fn();
+
+    expect(
+      rewriteContentUrls(text, {
+        ...deck,
+        targetHasPath: copied(['slides/lecture-1/x.png']),
+        onUncopiedRef,
+      })
+    ).toBe(text);
+    expect(onUncopiedRef).not.toHaveBeenCalled();
+  });
+
+  it('still rewrites the proxy shape at a real value boundary', () => {
+    const text = `<img src="/content/dartmouth-cs52/${ORIGIN_REPO}/slides/lecture-1/x.png">`;
+    expect(
+      rewriteContentUrls(text, { ...deck, targetHasPath: copied(['slides/lecture-1/x.png']) })
+    ).toBe('<img src="/content/brown-cs32/content-brown-cs32-cs32-26f/slides/lecture-1/x.png">');
+  });
+
+  it('does not read a content ROOT as a repo when the ref dropped its repo segment', () => {
+    // `/content/{login}/slides/…` is malformed — it has no repo. Parsed
+    // positionally it would eat `slides/` and leave `intro/x.png`, a path no
+    // import ever meant.
+    const text = '/content/dartmouth-cs52/slides/intro/x.png';
+    const onUncopiedRef = vi.fn();
+
+    expect(
+      rewriteContentUrls(text, {
+        ...deck,
+        targetHasPath: copied(['intro/x.png', 'slides/intro/x.png']),
+        onUncopiedRef,
+      })
+    ).toBe(text);
+    expect(onUncopiedRef).not.toHaveBeenCalled();
+  });
+
+  it('treats a bare `…/{repo}/` with no path as a base, not a broken reference', () => {
+    const text = `/content/dartmouth-cs52/${ORIGIN_REPO}/`;
+    const onUncopiedRef = vi.fn();
+
+    expect(rewriteContentUrls(text, { ...deck, targetHasPath: copied([]), onUncopiedRef })).toBe(
+      text
+    );
+    expect(onUncopiedRef).not.toHaveBeenCalled();
+  });
+
+  it('handles a comma-separated list of chained refs as separate references', () => {
+    // A tail class that swallowed the comma would match the whole list as one
+    // reference: nothing rewritten, and one bogus residual counted.
+    const text =
+      `"/content/dartmouth-cs52/${ORIGIN_REPO}/slides/lecture-1/a.mp4,` +
+      `/content/dartmouth-cs52/${ORIGIN_REPO}/slides/lecture-1/b.webm"`;
+    const onUncopiedRef = vi.fn();
+
+    expect(
+      rewriteContentUrls(text, {
+        ...deck,
+        targetHasPath: copied(['slides/lecture-1/a.mp4', 'slides/lecture-1/b.webm']),
+        onUncopiedRef,
+      })
+    ).toBe(
+      '"/content/brown-cs32/content-brown-cs32-cs32-26f/slides/lecture-1/a.mp4,' +
+        '/content/brown-cs32/content-brown-cs32-cs32-26f/slides/lecture-1/b.webm"'
+    );
+    expect(onUncopiedRef).not.toHaveBeenCalled();
+  });
+});

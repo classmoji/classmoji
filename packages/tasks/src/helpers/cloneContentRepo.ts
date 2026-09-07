@@ -88,6 +88,16 @@ export type CloneContentRepoResult =
       rewritten: number;
       /** Files in the pushed tree (excluding .git). */
       files: number;
+      /**
+       * Every repo path the push put in the target, POSIX-separated.
+       *
+       * Handed back because the URL rewrite does not end with the tree: the
+       * page ROWS carry a `header_image_url` that needs the same chained-import
+       * treatment, and that rewrite runs after this returns. It is the same set
+       * this helper gated its own rewrites on, so both halves of an import
+       * answer "did that file come along?" identically.
+       */
+      copied: ReadonlySet<string>;
       skipped?: never;
     }
   | {
@@ -95,6 +105,7 @@ export type CloneContentRepoResult =
       pushed: false;
       rewritten: number;
       files: number;
+      copied?: never;
       skipped: CloneSkipReason;
     };
 
@@ -187,7 +198,7 @@ function rewriteAssetUrls({
   root: string;
   source: ContentRepoCoordinates;
   target: ContentRepoCoordinates;
-}): { rewritten: number; files: number } {
+}): { rewritten: number; files: number; copied: ReadonlySet<string> } {
   const { rewriteContentUrls, isTextContentPath } = ClassmojiService.contentImport;
   const files = listFilesRecursive(root);
   // Repo-relative and POSIX-separated, which is how a reference spells a path.
@@ -242,7 +253,7 @@ function rewriteAssetUrls({
     });
   }
 
-  return { rewritten, files: files.length };
+  return { rewritten, files: files.length, copied };
 }
 
 /**
@@ -320,7 +331,7 @@ export const cloneContentRepo = async (
     }
     fs.rmSync(path.join(localPath, MANIFEST_PATH), { force: true });
 
-    const { rewritten, files } = rewriteAssetUrls({ root: localPath, source, target });
+    const { rewritten, files, copied } = rewriteAssetUrls({ root: localPath, source, target });
     if (files === 0) {
       logger.warn('content import: nothing left to push after pruning', {
         repo: `${source.orgLogin}/${source.repo}`,
@@ -360,7 +371,7 @@ export const cloneContentRepo = async (
       rewritten,
     });
 
-    return { pushed: true, rewritten, files };
+    return { pushed: true, rewritten, files, copied };
   } finally {
     if (fs.existsSync(localPath)) {
       fs.rmSync(localPath, { recursive: true, force: true });

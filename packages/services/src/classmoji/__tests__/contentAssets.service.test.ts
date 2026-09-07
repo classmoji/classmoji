@@ -85,6 +85,7 @@ const {
   lookupContentAsset,
   lookupContentTree,
   lookupContentAssetBySha,
+  listContentAssetPaths,
 } = await import('../contentAssets.service.ts');
 
 /** The default branch head every full sync in this file reads the tree at. */
@@ -1111,5 +1112,39 @@ describe('contentAssets.service', () => {
 
       await expect(syncContentAssets('nope')).rejects.toThrow(/No such classroom/i);
     });
+  });
+});
+
+/**
+ * The path index the import and the deck duplicate ask "did this file come
+ * along?" of, for everything the copy itself did not just write.
+ */
+describe('listContentAssetPaths', () => {
+  beforeEach(() => {
+    contentAssetFindMany.mockReset();
+  });
+
+  it('returns the classroom’s file paths as a set, excluding trees', async () => {
+    contentAssetFindMany.mockResolvedValue([
+      { path: 'pages/lab-1/content.json' },
+      { path: 'slides/intro/index.html' },
+    ]);
+
+    const paths = await listContentAssetPaths('class-1');
+
+    expect(paths).toBeInstanceOf(Set);
+    expect([...paths].sort()).toEqual(['pages/lab-1/content.json', 'slides/intro/index.html']);
+    // A directory is not a file a reference can resolve to: signing a tree sha
+    // as a blob mints a URL the Worker cannot serve.
+    const [args] = contentAssetFindMany.mock.calls[0] as [
+      { where: { classroom_id: string; type: string }; select: Record<string, boolean> },
+    ];
+    expect(args.where).toEqual({ classroom_id: 'class-1', type: 'blob' });
+    expect(args.select).toEqual({ path: true });
+  });
+
+  it('returns an empty set for a classroom with no rows', async () => {
+    contentAssetFindMany.mockResolvedValue([]);
+    await expect(listContentAssetPaths('class-empty')).resolves.toEqual(new Set());
   });
 });
