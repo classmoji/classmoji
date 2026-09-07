@@ -88,6 +88,16 @@ export type CloneContentRepoResult =
       rewritten: number;
       /** Files in the pushed tree (excluding .git). */
       files: number;
+      /**
+       * Every repo path the push put in the target, POSIX-separated.
+       *
+       * Handed back because the URL rewrite does not end with the tree: the
+       * page ROWS carry a `header_image_url` that needs the same chained-import
+       * treatment, and that rewrite runs after this returns. It is the same set
+       * this helper gated its own rewrites on, so both halves of an import
+       * answer "did that file come along?" identically.
+       */
+      copied: ReadonlySet<string>;
       skipped?: never;
     }
   | {
@@ -95,6 +105,7 @@ export type CloneContentRepoResult =
       pushed: false;
       rewritten: number;
       files: number;
+      copied?: never;
       skipped: CloneSkipReason;
     };
 
@@ -171,6 +182,13 @@ function listFilesRecursive(dir: string): string[] {
  * the org/repo segments of a URL actually change. The per-item path arguments
  * are therefore passed as the same value; the helper's item-specific pass
  * becomes a no-op and its repo-general pass does all the work.
+ *
+ * `targetHasPath` reads the pruned working tree, and on this path that IS the
+ * answer: what is pushed is the whole tree, force-pushed over the target's
+ * `main`, so a file is in the target exactly when it is on disk here. It gates
+ * the chained-import rewrite — a source repo that was itself imported still
+ * names the repo it came from, and those references are repointed only where
+ * the bytes actually came along. Everything else is counted and left alone.
  */
 function rewriteAssetUrls({
   root,
@@ -180,9 +198,16 @@ function rewriteAssetUrls({
   root: string;
   source: ContentRepoCoordinates;
   target: ContentRepoCoordinates;
-}): { rewritten: number; files: number } {
+}): { rewritten: number; files: number; copied: ReadonlySet<string> } {
   const { rewriteContentUrls, isTextContentPath } = ClassmojiService.contentImport;
   const files = listFilesRecursive(root);
+  // Repo-relative and POSIX-separated, which is how a reference spells a path.
+  const copied = new Set(files.map(file => path.relative(root, file).split(path.sep).join('/')));
+  const targetHasPath = (candidate: string): boolean => copied.has(candidate);
+  let uncopiedRefs = 0;
+  const onUncopiedRef = (): void => {
+    uncopiedRefs++;
+  };
   let rewritten = 0;
 
   for (const file of files) {
@@ -210,13 +235,25 @@ function rewriteAssetUrls({
       targetLogin: target.orgLogin,
       targetRepo: target.repo,
       targetPath: '',
+      targetHasPath,
+      onUncopiedRef,
     });
     if (updated === original) continue;
     fs.writeFileSync(file, updated, 'utf8');
     rewritten++;
   }
 
-  return { rewritten, files: files.length };
+  // One line for the whole copy: these are already-broken links the import
+  // declined to guess at, and a course can carry hundreds of them.
+  if (uncopiedRefs > 0) {
+    logger.warn('content import: left chained references to another repo in the org untouched', {
+      refs: uncopiedRefs,
+      org: source.orgLogin,
+      sourceRepo: source.repo,
+    });
+  }
+
+  return { rewritten, files: files.length, copied };
 }
 
 /**
@@ -294,7 +331,7 @@ export const cloneContentRepo = async (
     }
     fs.rmSync(path.join(localPath, MANIFEST_PATH), { force: true });
 
-    const { rewritten, files } = rewriteAssetUrls({ root: localPath, source, target });
+    const { rewritten, files, copied } = rewriteAssetUrls({ root: localPath, source, target });
     if (files === 0) {
       logger.warn('content import: nothing left to push after pruning', {
         repo: `${source.orgLogin}/${source.repo}`,
@@ -334,7 +371,7 @@ export const cloneContentRepo = async (
       rewritten,
     });
 
-    return { pushed: true, rewritten, files };
+    return { pushed: true, rewritten, files, copied };
   } finally {
     if (fs.existsSync(localPath)) {
       fs.rmSync(localPath, { recursive: true, force: true });

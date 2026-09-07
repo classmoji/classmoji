@@ -22,7 +22,11 @@
 import getPrisma from '@classmoji/database';
 import { ContentService } from '../content/ContentService.ts';
 import { contentProxyBase, isCommitRef, pagesContentBase, splitRawRef } from './contentRefs.ts';
-import { lookupContentAssetsBySha, recordContentAssets } from './contentAssets.service.ts';
+import {
+  listContentAssetPaths,
+  lookupContentAssetsBySha,
+  recordContentAssets,
+} from './contentAssets.service.ts';
 import { getGitProvider } from '../git/index.ts';
 import * as contentManifestService from './contentManifest.service.ts';
 import { createWithUniquePageSlug, ensureContentRepo, isPageSlugConflict } from './page.service.ts';
@@ -156,6 +160,22 @@ export interface UrlRewriteContext {
   shaPaths?: ReadonlyMap<string, string>;
   /** Where an unresolvable signed URL is reported. Defaults to console.warn. */
   onWarn?: (detail: string) => void;
+  /**
+   * Will the TARGET repo hold this path once the copy lands? Answers for the
+   * files this copy is writing PLUS whatever the target already had.
+   *
+   * This is the whole gate on the chained-import rewrite below: a reference
+   * into another repo of the SOURCE org is repointed only when the file it
+   * names actually came along. Absent (the default) means no chained rewriting
+   * happens at all, which is exactly the behaviour that predates it.
+   */
+  targetHasPath?: (path: string) => boolean;
+  /**
+   * Called once per chained reference left untouched because its file is not
+   * in the copy. Callers count these and report the total ONCE per import — a
+   * course can carry hundreds, and one warning each would bury everything else.
+   */
+  onUncopiedRef?: (ref: string) => void;
 }
 
 const RAW_HOST = 'https://raw.githubusercontent.com';
@@ -179,6 +199,8 @@ const THEMES_FOLDER = '.slidesthemes';
  *      new content is in.
  *   5. One of OUR signed URLs — `/c/{classroomId}/blob/…`, `/theme/…`,
  *      `/missing/…`.
+ *   6. Any of shapes 1-3 naming a DIFFERENT repo of the SAME org — what a repo
+ *      that was ITSELF created by an earlier import still holds. See below.
  *
  * The first four are the same thing with different prefixes: swap the source
  * repo's prefix for the target's. The fifth cannot be copied at all. A signed
@@ -196,6 +218,28 @@ const THEMES_FOLDER = '.slidesthemes';
  * whenever that item was imported un-renamed; a renamed cross-referenced item
  * is a documented residual.
  *
+ * CHAINED IMPORTS (shape 6). An import's source can itself be an import's
+ * target, and a copy carries its references along verbatim. Content that went
+ * A → B → C arrives at C still naming repo A, two hops back — which the passes
+ * above do not touch, because A is not the immediate source. The FILES came
+ * along at every hop and sit in C under the same relative path; only the
+ * reference is stale. That is not a cosmetic residual: C's delivery layer
+ * cannot sign another classroom's repo, and the legacy proxy answers 403 to
+ * anyone who is not a member of A's classroom, so every one of those images is
+ * simply gone. (Prod, 2026-09-07: `dartmouth-cs98-26f`, imported from
+ * `content-27w`, itself imported from `content-dartmouth-cs98-26w`, whose decks
+ * all still pointed at the 26W repo.)
+ *
+ * So a reference into ANY repo of the SOURCE org is a candidate, rewritten
+ * exactly like an immediate-source one — item-specific folder first, then
+ * repo-general — but ONLY when the file it names actually came along:
+ * `targetHasPath` must say the path is in this copy or already in the target
+ * repo. THE FILE MUST EXIST. A reference whose file did not come along is left
+ * exactly as it was — repointing it would replace a broken link with a
+ * confidently wrong one — and is reported through `onUncopiedRef` so the
+ * import can say how many it left. The org is never widened: a repo under a
+ * DIFFERENT login belongs to someone else and is untouched, file or no file.
+ *
  * RESIDUALS this does not fix, and cannot from here:
  *
  *   - A recovered `/theme/` reference becomes `.slidesthemes/{name}`, which is
@@ -207,6 +251,17 @@ const THEMES_FOLDER = '.slidesthemes';
  *     theme copy here would not be.
  *   - A cross-item bare path (`pages/lab-9/…`) keeps its folder, for the same
  *     reason and with the same caveat as the URL shapes above.
+ *   - A chained reference whose file is NOT in the copy: counted, reported, and
+ *     left alone, because nothing here can conjure the bytes.
+ *   - The chained gate is PATH EXISTENCE, not content identity. It asks whether
+ *     the target holds a file at that path, never whether it is the SAME file.
+ *     For content that arrived by import — the case this exists for — the two
+ *     coincide, because the copy is what put the path there. For a HAND-authored
+ *     cross-repo reference that happens to collide with a path the copy carries,
+ *     they do not: it is repointed at a different file with the same name. The
+ *     alternative is comparing shas across two repos on the rewrite path, and
+ *     landing a same-named asset where a 403 used to be is the better end of
+ *     that trade.
  */
 export function rewriteContentUrls(text: string, ctx: UrlRewriteContext): string {
   const rawSourcePrefix = `${RAW_HOST}/${ctx.sourceLogin}/${ctx.sourceRepo}/`;
@@ -239,7 +294,159 @@ export function rewriteContentUrls(text: string, ctx: UrlRewriteContext): string
     prefixed
   );
 
-  return rewriteBarePaths(rewritten, ctx);
+  // AFTER the immediate-source passes, so anything they own is already gone —
+  // and so a target-repo URL they just produced is never reconsidered here.
+  const chained = rewriteChainedRepoUrls(rewritten, ctx);
+
+  return rewriteBarePaths(chained, ctx);
+}
+
+/** A repo name inside a URL: one path segment, no URL or markup delimiter. */
+const REPO_SEGMENT = `[^/,\\s"'()<>]+`;
+
+/**
+ * Everything after the repo, up to the first delimiter.
+ *
+ * A COMMA ends it. `srcset` and `data-background-video` hold comma-separated
+ * lists of these references, and a class that swallowed the comma would match
+ * the whole list as one reference — a path no existence check can recognise, so
+ * every entry after the first would be left behind AND counted as a residual.
+ * Repo paths do not carry commas; lists of them do.
+ */
+const URL_TAIL = `[^,\\s"'()<>]*`;
+
+/**
+ * Shape 6: the same three URL shapes, naming another repo of the SOURCE org.
+ *
+ * Every rewrite is gated on `targetHasPath` — see the shape-6 paragraph above
+ * for why a reference whose file did not come along has to be left alone. With
+ * no predicate this pass does nothing at all, which is how every caller that
+ * has not opted in keeps its old behaviour.
+ *
+ * The SOURCE repo is skipped because the passes above already owned it, and the
+ * TARGET repo is skipped because a reference already pointing at the target is
+ * either their output or correct as it stands — reinterpreting it would make
+ * this pass' behaviour depend on whether the two classrooms happen to share an
+ * org, which is exactly the kind of asymmetry that hides bugs.
+ */
+function rewriteChainedRepoUrls(text: string, ctx: UrlRewriteContext): string {
+  if (!ctx.targetHasPath) return text;
+
+  const rawPattern = new RegExp(
+    `${escapeRegExp(`${RAW_HOST}/${ctx.sourceLogin}/`)}(${REPO_SEGMENT})/(${URL_TAIL})`,
+    'g'
+  );
+  const withRaw = text.replace(rawPattern, (match, repo: string, rest: string) => {
+    if (!isChainedRepo(repo, ctx)) return match;
+    // Same ref handling as the immediate-source raw pass: the ref is consumed
+    // positionally (it may be `refs/heads/main`), and a commit-pinned URL names
+    // history the target repo does not have, so it is never repointed.
+    const split = splitRawRef(rest);
+    if (!split || isCommitRef(split.ref)) return match;
+    const [path, tail] = splitPathTail(split.path);
+    if (!path) return match;
+    const mapped = mapCopiedPath(path, ctx);
+    if (mapped === null) return reportUncopied(match, ctx);
+    return `${RAW_HOST}/${ctx.targetLogin}/${ctx.targetRepo}/${split.ref}/${mapped}${tail}`;
+  });
+
+  // The CDN shape carries its own host, so it is unambiguous wherever it sits.
+  const withPagesCdn = rewriteChainedPlain(
+    withRaw,
+    `https://${ctx.sourceLogin}.github.io`,
+    pagesContentBase(ctx.targetLogin, ctx.targetRepo),
+    ctx
+  );
+
+  // The proxy shape is a root-relative path and has to be ANCHORED on a value
+  // boundary, like `rewriteBarePaths`. Unanchored it matches the tail of any
+  // URL that happens to contain the same segments — a foreign
+  // `https://example.com/content/{login}/anything/…` is somebody else's path,
+  // not our proxy, and rewriting it would point it at our repo.
+  //
+  // `,` and `;` ARE boundaries here, unconditionally, where `rewriteBarePaths`
+  // allows them only within one repo. The two are anchoring different things:
+  // a bare path is a folder name anyone's query string may contain, while
+  // `/content/{sourceLogin}/{repo}/` names our proxy and this org. What the
+  // comma buys is the same either way — `srcset` and comma-separated video
+  // lists put one immediately before a reference.
+  return rewriteChainedPlain(
+    withPagesCdn,
+    `/content/${ctx.sourceLogin}`,
+    contentProxyBase(ctx.targetLogin, ctx.targetRepo),
+    ctx,
+    `(^|["'(,;\\s>])`
+  );
+}
+
+/**
+ * The two ref-less shapes (Pages CDN, content proxy), which are a base, a repo
+ * segment and a path — so one implementation covers both.
+ */
+function rewriteChainedPlain(
+  text: string,
+  sourceOrgBase: string,
+  targetBase: string,
+  ctx: UrlRewriteContext,
+  lead = '()'
+): string {
+  const pattern = new RegExp(
+    `${lead}${escapeRegExp(sourceOrgBase)}/(${REPO_SEGMENT})/(${URL_TAIL})`,
+    'g'
+  );
+  return text.replace(pattern, (match, before: string, repo: string, rest: string) => {
+    if (!isChainedRepo(repo, ctx)) return match;
+    const [path, tail] = splitPathTail(rest);
+    // `…/{repo}/` with nothing after it names no file. It is a base, not a
+    // reference — leave it, and do NOT count it as a residual.
+    if (!path) return match;
+    const mapped = mapCopiedPath(path, ctx);
+    if (mapped === null) return reportUncopied(match, ctx);
+    return `${before}${targetBase}/${mapped}${tail}`;
+  });
+}
+
+/**
+ * The folder names a content repo keeps at its root. None of them is a repo.
+ *
+ * A malformed reference that dropped its repo segment — `/content/{login}/
+ * slides/intro/x.png` — otherwise parses as repo `slides` with the folder
+ * eaten, and the leftover `intro/x.png` is a path no import ever meant.
+ */
+const CONTENT_ROOTS = new Set(['pages', 'slides', THEMES_FOLDER]);
+
+/** Another repo of the source org — neither the immediate source nor the target. */
+function isChainedRepo(repo: string, ctx: UrlRewriteContext): boolean {
+  if (repo === ctx.sourceRepo || CONTENT_ROOTS.has(repo)) return false;
+  return !(ctx.sourceLogin === ctx.targetLogin && repo === ctx.targetRepo);
+}
+
+/**
+ * A path in some other repo of the org → where it lands in the TARGET, or null
+ * when the copy does not carry it.
+ *
+ * Item-specific first, repo-general second — the same order every other shape
+ * uses. Existence is checked on the DECODED path (the map holds repo paths, not
+ * percent-encoded URL segments) while the rewritten reference keeps the URL's
+ * own encoding: the prefixes being swapped are slugs, which never carry an
+ * escape.
+ */
+function mapCopiedPath(rawPath: string, ctx: UrlRewriteContext): string | null {
+  const has = ctx.targetHasPath;
+  if (!has || !rawPath) return null;
+
+  const itemPrefix = ctx.sourcePath ? `${ctx.sourcePath}/` : '';
+  if (itemPrefix && rawPath.startsWith(itemPrefix)) {
+    const candidate = `${ctx.targetPath}/${rawPath.slice(itemPrefix.length)}`;
+    if (has(decodePathOnce(candidate))) return candidate;
+  }
+  return has(decodePathOnce(rawPath)) ? rawPath : null;
+}
+
+/** Leave a chained reference exactly as it was, and say that it was left. */
+function reportUncopied(match: string, ctx: UrlRewriteContext): string {
+  ctx.onUncopiedRef?.(match);
+  return match;
 }
 
 /**
@@ -293,14 +500,26 @@ function rewriteRawUrls(
  * Skipped when the item's folder does not move: a whole-repo clone copies every
  * path unchanged and passes an empty `sourcePath`, where a prefix rewrite is
  * meaningless.
+ *
+ * `,` and `;` are boundaries ONLY when the copy stays inside ONE repo — the
+ * deck duplicate. What excluding them guards against is a FOREIGN url's query
+ * string (`https://images.example.com/resize?src=pages/lab-1/a.png`), and that
+ * hazard needs the reference to belong to some other repo; where source and
+ * target ARE the same repo, every path that matches is this repo's. What they
+ * buy there is not hypothetical: `srcset="…/a.png 1x,…/b.png 2x"`,
+ * `data-background-video="a.mp4,b.webm"` and `url(&quot;…&quot;)` each put a
+ * comma or a semicolon immediately before a path, and without them every entry
+ * after the first keeps pointing at the ORIGINAL deck's folder.
  */
 function rewriteBarePaths(text: string, ctx: UrlRewriteContext): string {
   if (!ctx.sourcePath || ctx.sourcePath === ctx.targetPath) return text;
 
-  // `=` and `,` are deliberately NOT boundaries: a foreign URL's query string
-  // (`?src=pages/lab-1/a.png`) would otherwise be rewritten inside a link this
-  // import has no business touching.
-  const pattern = new RegExp(`(^|["'(\\s>])${escapeRegExp(ctx.sourcePath)}/`, 'g');
+  const sameRepo = ctx.sourceLogin === ctx.targetLogin && ctx.sourceRepo === ctx.targetRepo;
+  // `=` is deliberately NOT a boundary in either mode: a foreign URL's query
+  // string (`?src=pages/lab-1/a.png`) must never be rewritten inside a link
+  // this copy has no business touching.
+  const boundary = sameRepo ? `["'(,;\\s>]` : `["'(\\s>]`;
+  const pattern = new RegExp(`(^|${boundary})${escapeRegExp(ctx.sourcePath)}/`, 'g');
   return text.replace(pattern, (_match, lead: string) => `${lead}${ctx.targetPath}/`);
 }
 
@@ -386,8 +605,13 @@ function blobShaOf(tail: string): string | null {
 }
 
 function stripQuery(value: string): string {
+  return splitPathTail(value)[0];
+}
+
+/** `path?query#hash` → the path and the tail, so a rewrite can re-attach it. */
+function splitPathTail(value: string): [string, string] {
   const cut = value.search(/[?#]/);
-  return cut === -1 ? value : value.slice(0, cut);
+  return cut === -1 ? [value, ''] : [value.slice(0, cut), value.slice(cut)];
 }
 
 function decodePathOnce(value: string): string {
@@ -622,6 +846,33 @@ export async function resolveShaPaths(
   }
 }
 
+/**
+ * "Will the target repo hold this path?", for one import pass.
+ *
+ * The union of what this pass is about to write (staged paths are already
+ * TARGET-shaped — `collectFolderFiles` remaps them on read) and what the target
+ * classroom already had. Both halves matter: the first covers the ordinary
+ * chained import, the second a second import into a classroom that has content
+ * already, including the slides pass seeing the pages this run just committed.
+ *
+ * Best effort on the index — a chained reference is repointed only on a
+ * positive answer, so a failed lookup costs residuals, never a wrong rewrite,
+ * and an import must not fail over a reference it could not tidy up.
+ */
+async function buildTargetPathIndex<Source>(
+  targetClassroomId: string,
+  staged: StagedItem<Source>[]
+): Promise<(path: string) => boolean> {
+  const incoming = new Set(staged.flatMap(item => item.files.map(({ file }) => file.path)));
+  let existing: ReadonlySet<string>;
+  try {
+    existing = await listContentAssetPaths(targetClassroomId);
+  } catch {
+    existing = new Set<string>();
+  }
+  return (path: string) => incoming.has(path) || existing.has(path);
+}
+
 /** Every decoded text a staged item carries, for the sha sweep. */
 function stagedTexts<Source>(items: StagedItem<Source>[]): string[] {
   return items.flatMap(item =>
@@ -704,6 +955,15 @@ export const importClassroomContent = async (
   const commitMessage = `Import content from ${source.slug}`;
   let createdAny = false;
 
+  // Chained references left alone because their file is not in the copy.
+  // Counted across BOTH passes and reported once at the end: a course can carry
+  // hundreds of them, and one warning each would push everything else out of
+  // the capped warning list.
+  let uncopiedRefs = 0;
+  const onUncopiedRef = (): void => {
+    uncopiedRefs++;
+  };
+
   // ── Pages ──
   if (wantPages) {
     try {
@@ -715,6 +975,7 @@ export const importClassroomContent = async (
         warn,
         idMap: summary.page_id_map,
         onProgress: opts.onProgress,
+        onUncopiedRef,
       });
       summary.pages = created;
       if (created > 0) createdAny = true;
@@ -740,12 +1001,24 @@ export const importClassroomContent = async (
         warn,
         idMap: summary.slide_id_map,
         onProgress: opts.onProgress,
+        onUncopiedRef,
       });
       summary.slides = created;
       if (created > 0) createdAny = true;
     } catch (error: unknown) {
       warn('slides', `slide import failed: ${errText(error)}`);
     }
+  }
+
+  // One line for the whole import, so the residuals are visible without being
+  // deafening. They are broken links either way; what this says is that the
+  // import saw them and declined to guess.
+  if (uncopiedRefs > 0) {
+    const detail =
+      `left ${uncopiedRefs} reference(s) into another ${source.login} repository untouched — ` +
+      `those files are not in this copy, so repointing them would have invented a path`;
+    console.warn(`[contentImport] ${detail}`);
+    warn('content', detail);
   }
 
   // ── Manifest refresh (once, non-fatal — mirrors create/delete flows) ──
@@ -774,6 +1047,7 @@ async function importPages({
   warn,
   idMap,
   onProgress,
+  onUncopiedRef,
 }: {
   source: RepoContext;
   target: RepoContext;
@@ -782,6 +1056,7 @@ async function importPages({
   warn: WarnFn;
   idMap: Record<string, string>;
   onProgress?: ContentProgressFn;
+  onUncopiedRef?: (ref: string) => void;
 }): Promise<number> {
   const sourcePages = await getPrisma().page.findMany({
     where: { classroom_id: source.classroomId },
@@ -862,6 +1137,9 @@ async function importPages({
     ...stagedTexts(staged),
     ...staged.map(item => item.source.header_image_url ?? ''),
   ]);
+  // Gates the chained-import rewrite: a reference into another repo of the
+  // source org is repointed only if that file is actually here.
+  const targetHasPath = await buildTargetPathIndex(target.classroomId, staged);
 
   const written = staged.map(item => ({
     item,
@@ -873,6 +1151,8 @@ async function importPages({
       targetRepo: target.repo,
       targetPath: item.targetContentPath,
       shaPaths,
+      targetHasPath,
+      onUncopiedRef,
     }),
   }));
 
@@ -929,6 +1209,8 @@ async function importPages({
                   targetRepo: target.repo,
                   targetPath: item.targetContentPath,
                   shaPaths,
+                  targetHasPath,
+                  onUncopiedRef,
                 })
               : item.source.header_image_url,
             header_image_position: item.source.header_image_position,
@@ -967,6 +1249,7 @@ async function importSlides({
   warn,
   idMap,
   onProgress,
+  onUncopiedRef,
 }: {
   source: RepoContext;
   target: RepoContext;
@@ -975,6 +1258,7 @@ async function importSlides({
   warn: WarnFn;
   idMap: Record<string, string>;
   onProgress?: ContentProgressFn;
+  onUncopiedRef?: (ref: string) => void;
 }): Promise<number> {
   const sourceSlides = await getPrisma().slide.findMany({
     where: { classroom_id: source.classroomId },
@@ -1046,6 +1330,8 @@ async function importSlides({
   // Repoint source-repo asset references at the copied files (deck.json +
   // index.html are rewritten in lockstep, keeping the pair consistent).
   const shaPaths = await resolveShaPaths(source.classroomId, stagedTexts(staged));
+  // Same gate as the page pass — see buildTargetPathIndex.
+  const targetHasPath = await buildTargetPathIndex(target.classroomId, staged);
 
   const files = staged.flatMap(item =>
     rewriteDecodedFiles(item.files, {
@@ -1056,6 +1342,8 @@ async function importSlides({
       targetRepo: target.repo,
       targetPath: item.targetContentPath,
       shaPaths,
+      targetHasPath,
+      onUncopiedRef,
     })
   );
 
