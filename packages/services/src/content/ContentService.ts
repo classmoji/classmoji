@@ -1475,7 +1475,12 @@ export class ContentService {
    * @param {string} options.sourcePath - Source folder path
    * @param {string} options.destPath - Destination folder path
    * @param {string} [options.message] - Commit message
-   * @returns {Promise<{ copied: number }>}
+   * @returns {Promise<{ copied: number, paths: string[] }>}
+   *
+   * `paths` are the DESTINATION paths written, recursively. The caller needs
+   * them to decide what the copy actually carries: a duplicated deck's HTML can
+   * reference a file by way of another repo, and repointing such a reference at
+   * this copy is only correct when the file is in it.
    */
   static async copyFolder({
     gitOrganization,
@@ -1489,12 +1494,13 @@ export class ContentService {
     sourcePath: string;
     destPath: string;
     message?: string;
-  }): Promise<{ copied: number }> {
+  }): Promise<{ copied: number; paths: string[] }> {
     const octokit = await getOctokit(gitOrganization);
 
     // Get all files in source folder
     const sourceFiles = await this.listFolder({ gitOrganization, repo, path: sourcePath });
     let copied = 0;
+    const paths: string[] = [];
 
     for (const item of sourceFiles) {
       if (item.type === 'file') {
@@ -1519,6 +1525,7 @@ export class ContentService {
         });
 
         copied++;
+        paths.push(newPath);
       } else if (item.type === 'dir') {
         // Recursively copy subdirectories
         const relativePath = item.path.slice(sourcePath.length).replace(/^\//, '');
@@ -1530,10 +1537,11 @@ export class ContentService {
           message,
         });
         copied += result.copied;
+        paths.push(...result.paths);
       }
     }
 
-    return { copied };
+    return { copied, paths };
   }
 
   /**

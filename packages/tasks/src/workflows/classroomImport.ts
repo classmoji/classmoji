@@ -496,7 +496,14 @@ export const importContentTask = task({
 
     const counts = { pages: 0, slides: 0 };
     if (wantPages) {
-      counts.pages = await importPageRows({ prisma, job, writer, source, target });
+      counts.pages = await importPageRows({
+        prisma,
+        job,
+        writer,
+        source,
+        target,
+        copied: clone.copied,
+      });
     }
     if (wantSlides) {
       counts.slides = await importSlideRows({ prisma, job, writer });
@@ -565,12 +572,21 @@ export async function importPageRows({
   writer,
   source,
   target,
+  copied,
 }: {
   prisma: PrismaClient;
   job: LoadedImportJob;
   writer: ProgressWriter;
   source: { orgLogin: string; repo: string };
   target: { orgLogin: string; repo: string };
+  /**
+   * Every repo path the clone pushed — what `header_image_url` is checked
+   * against for the chained-import rewrite. The tree and the rows have to
+   * answer "did that file come along?" the same way, so this is the SAME set
+   * the clone gated its own file rewrites on. Absent simply means no chained
+   * rewriting on this column.
+   */
+  copied?: ReadonlySet<string>;
 }): Promise<number> {
   const { rewriteContentUrls } = ClassmojiService.contentImport;
   const { createWithUniquePageSlug, isPageSlugConflict } = ClassmojiService.page;
@@ -585,6 +601,12 @@ export async function importPageRows({
   let done = already.size;
   let created = 0;
   const warnings: string[] = [];
+  // Chained header-image references left alone because the file is not in the
+  // copy. Reported once for the whole pass, never once per page.
+  let uncopiedRefs = 0;
+  const onUncopiedRef = (): void => {
+    uncopiedRefs++;
+  };
   for (const page of sourcePages) {
     // Resume: this page's row already exists from an earlier attempt. It still
     // counts as done — it IS imported — and it is not warned about.
@@ -616,6 +638,13 @@ export async function importPageRows({
                   targetLogin: target.orgLogin,
                   targetRepo: target.repo,
                   targetPath: '',
+                  // A header image is a reference like any other, and a page
+                  // whose classroom arrived by import can hold one naming the
+                  // repo two hops back. Without these it is the one reference
+                  // the copy leaves behind — the tree got rewritten, the row
+                  // did not.
+                  ...(copied ? { targetHasPath: (p: string) => copied.has(p) } : {}),
+                  onUncopiedRef,
                 })
               : page.header_image_url,
             header_image_position: page.header_image_position,
@@ -640,6 +669,17 @@ export async function importPageRows({
       done++;
       writer.patch({ phase: 'pages', status: 'running', done, total });
     }
+  }
+
+  if (uncopiedRefs > 0) {
+    logger.warn('content import: uncopied header image references', {
+      refs: uncopiedRefs,
+      org: source.orgLogin,
+    });
+    warnings.push(
+      `pages: left ${uncopiedRefs} header image reference(s) into another ${source.orgLogin} ` +
+        `repository untouched — those files are not in this copy`
+    );
   }
 
   writer.addWarnings(warnings);

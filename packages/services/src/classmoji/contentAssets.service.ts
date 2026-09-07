@@ -970,6 +970,26 @@ export async function lookupContentAssets(
 }
 
 /**
+ * Every FILE path a classroom's content repo holds, in one query.
+ *
+ * The import's chained-reference rewrite asks "did this file come along?", and
+ * for a target that already had content the answer lives here rather than in
+ * the batch being written. Whole-index rather than a filtered `path IN (…)`
+ * because the caller does not know the candidate paths until it has walked the
+ * content it is about to rewrite — and one index scan of short strings is
+ * cheaper than the two-pass walk that would avoid it.
+ *
+ * Trees are excluded: a directory is not a file a reference can resolve to.
+ */
+export async function listContentAssetPaths(classroomId: string): Promise<Set<string>> {
+  const rows = await getPrisma().contentAsset.findMany({
+    where: { classroom_id: classroomId, type: 'blob' },
+    select: { path: true },
+  });
+  return new Set(rows.map((row: { path: string }) => row.path));
+}
+
+/**
  * A directory's tree object, for the folders that are served whole — themes.
  *
  * Explicitly filtered to `type: 'tree'` rather than just looked up by path: a
