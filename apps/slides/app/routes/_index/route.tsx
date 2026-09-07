@@ -210,7 +210,7 @@ export const action = async ({ request }: { request: Request }) => {
       const newContentPath = `slides/${newSlug}`;
 
       // Copy content folder in GitHub
-      await ContentService.copyFolder({
+      const copy = await ContentService.copyFolder({
         gitOrganization,
         repo,
         sourcePath: slide.content_path,
@@ -218,16 +218,51 @@ export const action = async ({ request }: { request: Request }) => {
         message: `Duplicate slides: ${slide.title}`,
       });
 
-      // Rewrite content paths in the copied index.html
-      // Images and other assets reference the old content_path in their URLs
-      // e.g., /content/{org}/{repo}/{old_content_path}/images/...
+      // The two texts that carry references: the generated index.html and, for
+      // deck-first slides, deck.json. 404-tolerant — a legacy deck has no
+      // deck.json, and getContent returns null.
       const indexPath = `${newContentPath}/index.html`;
-      const indexFile = await ContentService.getContent({
-        gitOrganization,
-        repo,
-        path: indexPath,
-        skipCache: true,
-      });
+      const deckPath = `${newContentPath}/deck.json`;
+      const [indexFile, deckFile] = await Promise.all([
+        ContentService.getContent({ gitOrganization, repo, path: indexPath, skipCache: true }),
+        ContentService.getContent({ gitOrganization, repo, path: deckPath, skipCache: true }),
+      ]);
+
+      // Repoint the copy's references at the copy, through the SAME rewriter
+      // the classroom import uses. Not a blind `replaceAll` of the old folder
+      // name: that reaches inside a URL belonging to another repo — or another
+      // org — and rewrites the matching segment there, turning a reference that
+      // at least resolved into one that names a folder existing nowhere.
+      //
+      // The repo is the same on both sides, so ordinarily only the item folder
+      // moves. The exception is a CHAINED reference: a deck that arrived here
+      // by import still names the repo it came from, and `copyFolder` has just
+      // put those files in the new folder — so those are repointed at this
+      // repo, and only where the file is actually in the copy.
+      //
+      // `shaPaths` comes along for the ride so the rewriter can turn any signed
+      // URL in the source deck back into the repo path it names — the stored
+      // form, which the deck loader signs again at render — instead of leaving
+      // it to expire in the copy and warning about every one.
+      const copiedPaths = new Set(copy.paths);
+      let uncopiedRefs = 0;
+      const shaPaths = await ClassmojiService.contentImport.resolveShaPaths(slide.classroom_id, [
+        indexFile?.content ?? '',
+        deckFile?.content ?? '',
+      ]);
+      const rewriteCtx = {
+        sourceLogin: gitOrganization.login,
+        sourceRepo: repo,
+        sourcePath: slide.content_path,
+        targetLogin: gitOrganization.login,
+        targetRepo: repo,
+        targetPath: newContentPath,
+        shaPaths,
+        targetHasPath: (candidate: string) => copiedPaths.has(candidate),
+        onUncopiedRef: () => {
+          uncopiedRefs++;
+        },
+      };
 
       // Both rewrites below record what they wrote. index.html and deck.json
       // are READ through the asset map now (fetchContentText), and the copy's
@@ -242,45 +277,32 @@ export const action = async ({ request }: { request: Request }) => {
       // webhook arrives rather than showing the wrong deck.
       const written: Array<{ path: string; sha: string }> = [];
 
-      if (indexFile?.content && slide.content_path !== newContentPath) {
-        const updatedContent = indexFile.content.replaceAll(slide.content_path, newContentPath);
+      for (const [path, file] of [
+        [indexPath, indexFile],
+        [deckPath, deckFile],
+      ] as const) {
+        if (!file?.content || slide.content_path === newContentPath) continue;
+        const updated = ClassmojiService.contentImport.rewriteContentUrls(file.content, rewriteCtx);
+        if (updated === file.content) continue;
 
-        if (updatedContent !== indexFile.content) {
-          const result = await ContentService.put({
-            gitOrganization,
-            repo,
-            path: indexPath,
-            content: updatedContent,
-            message: `Rewrite content paths for duplicated slides: ${slide.title}`,
-          });
-          written.push({ path: indexPath, sha: result.sha });
-        }
+        const result = await ContentService.put({
+          gitOrganization,
+          repo,
+          path,
+          content: updated,
+          message: `Rewrite content paths for duplicated slides: ${slide.title}`,
+        });
+        written.push({ path, sha: result.sha });
       }
 
-      // Apply the same content-path rewrite to the copied deck.json (the
-      // source of truth for deck-first slides). 404-tolerant: legacy decks
-      // have no deck.json yet — getContent returns null and we skip.
-      const deckPath = `${newContentPath}/deck.json`;
-      const deckFile = await ContentService.getContent({
-        gitOrganization,
-        repo,
-        path: deckPath,
-        skipCache: true,
-      });
-
-      if (deckFile?.content && slide.content_path !== newContentPath) {
-        const updatedDeck = deckFile.content.replaceAll(slide.content_path, newContentPath);
-
-        if (updatedDeck !== deckFile.content) {
-          const result = await ContentService.put({
-            gitOrganization,
-            repo,
-            path: deckPath,
-            content: updatedDeck,
-            message: `Rewrite content paths for duplicated slides: ${slide.title}`,
-          });
-          written.push({ path: deckPath, sha: result.sha });
-        }
+      // One line for the duplicate, not one per reference. These are links that
+      // were already pointing at another repo and whose files did not come
+      // along; repointing them would have invented a path.
+      if (uncopiedRefs > 0) {
+        console.warn(
+          `[slides.duplicate] left ${uncopiedRefs} reference(s) into another ${gitOrganization.login} ` +
+            `repository untouched in "${slide.title}" — those files are not in this copy`
+        );
       }
 
       // Never throws: the copy is already committed, and the next sync writes

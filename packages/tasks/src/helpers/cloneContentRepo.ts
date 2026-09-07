@@ -171,6 +171,13 @@ function listFilesRecursive(dir: string): string[] {
  * the org/repo segments of a URL actually change. The per-item path arguments
  * are therefore passed as the same value; the helper's item-specific pass
  * becomes a no-op and its repo-general pass does all the work.
+ *
+ * `targetHasPath` reads the pruned working tree, and on this path that IS the
+ * answer: what is pushed is the whole tree, force-pushed over the target's
+ * `main`, so a file is in the target exactly when it is on disk here. It gates
+ * the chained-import rewrite — a source repo that was itself imported still
+ * names the repo it came from, and those references are repointed only where
+ * the bytes actually came along. Everything else is counted and left alone.
  */
 function rewriteAssetUrls({
   root,
@@ -183,6 +190,13 @@ function rewriteAssetUrls({
 }): { rewritten: number; files: number } {
   const { rewriteContentUrls, isTextContentPath } = ClassmojiService.contentImport;
   const files = listFilesRecursive(root);
+  // Repo-relative and POSIX-separated, which is how a reference spells a path.
+  const copied = new Set(files.map(file => path.relative(root, file).split(path.sep).join('/')));
+  const targetHasPath = (candidate: string): boolean => copied.has(candidate);
+  let uncopiedRefs = 0;
+  const onUncopiedRef = (): void => {
+    uncopiedRefs++;
+  };
   let rewritten = 0;
 
   for (const file of files) {
@@ -210,10 +224,22 @@ function rewriteAssetUrls({
       targetLogin: target.orgLogin,
       targetRepo: target.repo,
       targetPath: '',
+      targetHasPath,
+      onUncopiedRef,
     });
     if (updated === original) continue;
     fs.writeFileSync(file, updated, 'utf8');
     rewritten++;
+  }
+
+  // One line for the whole copy: these are already-broken links the import
+  // declined to guess at, and a course can carry hundreds of them.
+  if (uncopiedRefs > 0) {
+    logger.warn('content import: left chained references to another repo in the org untouched', {
+      refs: uncopiedRefs,
+      org: source.orgLogin,
+      sourceRepo: source.repo,
+    });
   }
 
   return { rewritten, files: files.length };

@@ -206,6 +206,212 @@ describe('rewriteContentUrls', () => {
 });
 
 /**
+ * Chained imports: the source repo was ITSELF created by an earlier import, so
+ * its content still names the repo it came from — two hops back. The files came
+ * along at every hop and sit in the target under the same relative path; only
+ * the reference is stale, and the target's delivery layer cannot sign another
+ * classroom's repo, so every one of those images is a 403.
+ *
+ * Prod, 2026-09-07: `dartmouth-cs98-26f` ← `content-27w` ← `content-…-26w`,
+ * where every deck's index.html still pointed at the 26W repo.
+ */
+describe('rewriteContentUrls: a chained import’s references to an earlier repo', () => {
+  /** A THIRD repo in the source org — where the content originally came from. */
+  const ORIGIN_REPO = 'content-dartmouth-cs52-cs52-24w';
+  const deck = { ...ctx, sourcePath: 'slides/lecture-1', targetPath: 'slides/lecture-1' };
+  /** The files the copy actually carries, target-shaped. */
+  const copied = (paths: string[]) => (path: string) => paths.includes(path);
+
+  it('repoints a /content/ proxy ref into the earlier repo when the file came along', () => {
+    const text = `/content/dartmouth-cs52/${ORIGIN_REPO}/slides/lecture-1/images/x.png`;
+    expect(
+      rewriteContentUrls(text, {
+        ...deck,
+        targetHasPath: copied(['slides/lecture-1/images/x.png']),
+      })
+    ).toBe('/content/brown-cs32/content-brown-cs32-cs32-26f/slides/lecture-1/images/x.png');
+  });
+
+  it('repoints the raw shape the same way, ref segment carried across', () => {
+    const text = `https://raw.githubusercontent.com/dartmouth-cs52/${ORIGIN_REPO}/main/slides/lecture-1/images/x.png`;
+    expect(
+      rewriteContentUrls(text, {
+        ...deck,
+        targetHasPath: copied(['slides/lecture-1/images/x.png']),
+      })
+    ).toBe(
+      'https://raw.githubusercontent.com/brown-cs32/content-brown-cs32-cs32-26f/main/slides/lecture-1/images/x.png'
+    );
+  });
+
+  it('repoints the {login}.github.io Pages-CDN shape the same way', () => {
+    const text = `https://dartmouth-cs52.github.io/${ORIGIN_REPO}/slides/lecture-1/images/x.png`;
+    expect(
+      rewriteContentUrls(text, {
+        ...deck,
+        targetHasPath: copied(['slides/lecture-1/images/x.png']),
+      })
+    ).toBe(
+      'https://brown-cs32.github.io/content-brown-cs32-cs32-26f/slides/lecture-1/images/x.png'
+    );
+  });
+
+  it('carries a chained ref onto a RENAMED item folder, like every other shape', () => {
+    // The item-specific rewrite runs first: the deck picked up a dedupe suffix
+    // in the target, and the copied file is under the suffixed folder.
+    const renamed = { ...deck, targetPath: 'slides/lecture-1-2' };
+    const text = `/content/dartmouth-cs52/${ORIGIN_REPO}/slides/lecture-1/images/x.png`;
+    expect(
+      rewriteContentUrls(text, {
+        ...renamed,
+        targetHasPath: copied(['slides/lecture-1-2/images/x.png']),
+      })
+    ).toBe('/content/brown-cs32/content-brown-cs32-cs32-26f/slides/lecture-1-2/images/x.png');
+  });
+
+  it('repoints a chained ref to ANOTHER item repo-generally when that path exists', () => {
+    // Not under this deck's folder, so it keeps its own — the same repo-general
+    // fallback the immediate-source shapes use.
+    const text = `/content/dartmouth-cs52/${ORIGIN_REPO}/slides/lecture-9/images/y.png`;
+    expect(
+      rewriteContentUrls(text, {
+        ...deck,
+        targetHasPath: copied(['slides/lecture-9/images/y.png']),
+      })
+    ).toBe('/content/brown-cs32/content-brown-cs32-cs32-26f/slides/lecture-9/images/y.png');
+  });
+
+  it('leaves a chained ref alone — and counts it — when the file is NOT in the copy', () => {
+    // THE rule: never invent a copy. The link is already broken; repointing it
+    // would replace a broken link with a confidently wrong one.
+    const text = `/content/dartmouth-cs52/${ORIGIN_REPO}/slides/lecture-1/images/gone.png`;
+    const onUncopiedRef = vi.fn();
+
+    expect(rewriteContentUrls(text, { ...deck, targetHasPath: copied([]), onUncopiedRef })).toBe(
+      text
+    );
+    expect(onUncopiedRef).toHaveBeenCalledTimes(1);
+    expect(onUncopiedRef).toHaveBeenCalledWith(expect.stringContaining(ORIGIN_REPO));
+  });
+
+  it('never widens past the source org — another org’s repo is untouched, file or not', () => {
+    const text = '/content/someone-else/their-content/slides/lecture-1/images/x.png';
+    const onUncopiedRef = vi.fn();
+
+    expect(
+      rewriteContentUrls(text, {
+        ...deck,
+        // Even though a file by that path IS in the copy.
+        targetHasPath: copied(['slides/lecture-1/images/x.png']),
+        onUncopiedRef,
+      })
+    ).toBe(text);
+    expect(onUncopiedRef).not.toHaveBeenCalled();
+  });
+
+  it('leaves a COMMIT-pinned chained raw URL alone: the target has no history', () => {
+    const text = `https://raw.githubusercontent.com/dartmouth-cs52/${ORIGIN_REPO}/${'a'.repeat(
+      40
+    )}/slides/lecture-1/images/x.png`;
+    expect(
+      rewriteContentUrls(text, {
+        ...deck,
+        targetHasPath: copied(['slides/lecture-1/images/x.png']),
+      })
+    ).toBe(text);
+  });
+
+  it('does nothing at all without a targetHasPath predicate', () => {
+    // Opt-in: a caller that cannot say what the copy carries gets exactly the
+    // behaviour that predates the chained rewrite.
+    const text = `/content/dartmouth-cs52/${ORIGIN_REPO}/slides/lecture-1/images/x.png`;
+    expect(rewriteContentUrls(text, deck)).toBe(text);
+  });
+
+  it('leaves a reference that already names the TARGET repo alone', () => {
+    // Same org on both sides: this is the earlier passes' own output, and
+    // reconsidering it would make the result depend on whether two classrooms
+    // happen to share an org.
+    const sameOrg = {
+      ...deck,
+      targetLogin: 'dartmouth-cs52',
+      targetRepo: 'content-dartmouth-cs52-cs52-26f',
+      targetPath: 'slides/lecture-1-2',
+    };
+    const text = '/content/dartmouth-cs52/content-dartmouth-cs52-cs52-26f/slides/lecture-1/x.png';
+    const onUncopiedRef = vi.fn();
+
+    expect(rewriteContentUrls(text, { ...sameOrg, targetHasPath: copied([]), onUncopiedRef })).toBe(
+      text
+    );
+    expect(onUncopiedRef).not.toHaveBeenCalled();
+  });
+
+  it('rewrites a chained ref on a whole-repo clone, where nothing moves', () => {
+    // cloneContentRepo passes an empty sourcePath: only the repo-general half
+    // of the rule can fire, and the cloned tree is the existence answer.
+    const clone = { ...ctx, sourcePath: '', targetPath: '' };
+    const text = `https://raw.githubusercontent.com/dartmouth-cs52/${ORIGIN_REPO}/main/slides/lecture-1/images/x.png`;
+    expect(
+      rewriteContentUrls(text, {
+        ...clone,
+        targetHasPath: copied(['slides/lecture-1/images/x.png']),
+      })
+    ).toBe(
+      'https://raw.githubusercontent.com/brown-cs32/content-brown-cs32-cs32-26f/main/slides/lecture-1/images/x.png'
+    );
+  });
+
+  it('keeps a query string on a rewritten chained ref', () => {
+    const text = `/content/dartmouth-cs52/${ORIGIN_REPO}/slides/lecture-1/images/x.png?v=2`;
+    expect(
+      rewriteContentUrls(text, {
+        ...deck,
+        targetHasPath: copied(['slides/lecture-1/images/x.png']),
+      })
+    ).toBe('/content/brown-cs32/content-brown-cs32-cs32-26f/slides/lecture-1/images/x.png?v=2');
+  });
+
+  it('reports every uncopied chained ref, so the count is the real one', () => {
+    const onUncopiedRef = vi.fn();
+    const text = [
+      `/content/dartmouth-cs52/${ORIGIN_REPO}/slides/lecture-1/a.png`,
+      `https://dartmouth-cs52.github.io/${ORIGIN_REPO}/slides/lecture-1/b.png`,
+      `https://raw.githubusercontent.com/dartmouth-cs52/${ORIGIN_REPO}/main/slides/lecture-1/c.png`,
+    ].join(' ');
+
+    expect(rewriteContentUrls(text, { ...deck, targetHasPath: copied([]), onUncopiedRef })).toBe(
+      text
+    );
+    expect(onUncopiedRef).toHaveBeenCalledTimes(3);
+  });
+
+  it('still repoints the IMMEDIATE source alongside a chained ref, in one pass', () => {
+    const fixture = JSON.stringify({
+      immediate:
+        '/content/dartmouth-cs52/content-dartmouth-cs52-cs52-25s/slides/lecture-1/images/now.png',
+      chained: `/content/dartmouth-cs52/${ORIGIN_REPO}/slides/lecture-1/images/then.png`,
+      bare: 'slides/lecture-1/images/bare.png',
+    });
+
+    expect(
+      JSON.parse(
+        rewriteContentUrls(fixture, {
+          ...deck,
+          targetPath: 'slides/lecture-1-2',
+          targetHasPath: copied(['slides/lecture-1-2/images/then.png']),
+        })
+      )
+    ).toEqual({
+      immediate:
+        '/content/brown-cs32/content-brown-cs32-cs32-26f/slides/lecture-1-2/images/now.png',
+      chained: '/content/brown-cs32/content-brown-cs32-cs32-26f/slides/lecture-1-2/images/then.png',
+      bare: 'slides/lecture-1-2/images/bare.png',
+    });
+  });
+});
+
+/**
  * A signed URL is bound to the SOURCE classroom's id and key version, and the
  * imported copy renders under a different classroom. Copying one verbatim does
  * not produce a stale link — it produces a permanently unauthorized one, and
