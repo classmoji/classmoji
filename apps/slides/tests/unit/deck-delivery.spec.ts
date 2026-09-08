@@ -566,30 +566,13 @@ test('resolves a deck read in ONE pass, not one per concern', async () => {
   expect(calls).toBe(1);
 });
 
-test.describe('what a thumbnail read asks for', () => {
-  test('caps the whole read and declares itself decorative', () => {
-    // The index renders one iframe per deck, so an unreadable content repo costs
-    // every thumbnail loader the full read budget — nineteen of them, six at a
-    // time, is a page that dribbles in over minutes. Two seconds because a
-    // thumbnail is decorative, and `decorative` so the ones behind the first can
-    // skip the wait entirely once the classroom is known unreachable.
-    //
-    // Two seconds for the READ, not for each of its legs: `fetchContentText`
-    // treats a caller-set `deadlineMs` as a deadline for the whole ladder and
-    // hands each leg what is left. Read per-leg, this number bought nothing —
-    // map refresh, Worker and CDN each took their own two.
-    expect(deckTextReadOptions('thumbnail', { fallback: 'cdn-only', thumbnail: true })).toEqual({
-      label: 'thumbnail',
-      fallback: 'cdn-only',
-      deadlineMs: 2000,
-      decorative: true,
-    });
-  });
-
-  test('leaves a read someone is waiting on entirely alone', () => {
-    // No shorter budget and no `decorative`: a person opening a deck must get
-    // the full attempt, whatever an earlier thumbnail concluded about the
-    // classroom. That is also what lets a recovered repo work again at once.
+test.describe('what a deck read asks for', () => {
+  test('leaves every read someone is waiting on entirely alone', () => {
+    // There is one kind of deck text read now. The other one — capped at two
+    // seconds and flagged `decorative`, so a classroom already known unreachable
+    // could be skipped — belonged to the index's per-deck iframe, which is a
+    // stored image now. Nothing produces it, so nothing may add a shorter budget
+    // back: whoever reaches here opened a deck and gets the full attempt.
     expect(deckTextReadOptions('present')).toEqual({ label: 'present' });
     expect(deckTextReadOptions('viewer', { fallback: 'api-then-cdn' })).toEqual({
       label: 'viewer',

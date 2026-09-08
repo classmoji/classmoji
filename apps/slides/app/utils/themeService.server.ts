@@ -111,6 +111,7 @@ export async function listSavedThemes(org: string, repoName: string) {
  * @param {string} options.bodyClasses - Body classes for the theme
  * @param {string} [options.customThemeCss] - Custom theme CSS content
  * @param {Array<{path: string, content: string, encoding: string}>} options.libFiles - Lib folder files
+ * @param {string} [options.classroomId] - Classroom whose deck cards this theme changes
  * @returns {Promise<{themePath: string, filesUploaded: number}>}
  */
 export async function saveTheme({
@@ -120,6 +121,7 @@ export async function saveTheme({
   bodyClasses,
   customThemeCss,
   libFiles,
+  classroomId,
   onProgress,
 }: {
   org: string;
@@ -128,6 +130,8 @@ export async function saveTheme({
   bodyClasses: string;
   customThemeCss?: string;
   libFiles: Array<{ path: string; content: string; encoding: 'utf-8' | 'base64' }>;
+  /** Optional only because a repo can be written without one; pass it if you have it. */
+  classroomId?: string | null;
   onProgress?: (progress: { current: number; total: number; filename?: string }) => void;
 }) {
   const themePath = `${THEMES_FOLDER}/${themeName}`;
@@ -180,6 +184,18 @@ export async function saveTheme({
   // theme BEFORE the decks that reference it exist. Never throws: the commit
   // already reached GitHub and the save has succeeded whatever the cache does.
   await ClassmojiService.contentAssets.syncContentAssetsForRepo(org, repoName, 'theme-save');
+
+  // Every card in the classroom is now a picture of the OLD theme. The render
+  // task's "has this deck changed?" check cannot see that — a theme edit moves
+  // no byte inside any deck — so these go out with `force`.
+  //
+  // Not awaited and unable to fail the save, exactly like the sync above is
+  // unable to: the commit has already reached GitHub, and whether the cards
+  // catch up is not this function's problem.
+  void ClassmojiService.deckThumbnail.enqueueClassroomThumbnails(classroomId, {
+    themeName,
+    force: true,
+  });
 
   return {
     themePath,

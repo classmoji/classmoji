@@ -58,13 +58,22 @@ vi.mock('../contentAssets.service.ts', () => ({
   },
   lookupContentAsset: async (classroomId: string, path: string) =>
     rows.get(key(classroomId, path)) ?? null,
-  lookupContentAssets: async () => new Map(),
+  // Answers from the same in-memory map, so the reader's batched
+  // `resolveDelivery` sees exactly the rows a commit wrote.
+  lookupContentAssets: async (classroomId: string, paths: string[]) =>
+    new Map(
+      paths.flatMap(path => {
+        const row = rows.get(key(classroomId, path));
+        return row ? ([[path, row]] as Array<[string, typeof row]>) : [];
+      })
+    ),
   lookupContentAssetBySha: async () => null,
   lookupContentTree: async () => null,
   resolveContentBranch: async () => 'main',
 }));
 
-const { fetchContentText, warmContentText } = await import('../contentDelivery.service.ts');
+const { fetchContentText, resolveDelivery, tierFor, warmContentBlob, warmContentText } =
+  await import('../contentDelivery.service.ts');
 const { saveDeck } = await import('../../slides/slideContent.service.ts');
 
 const ORIGIN = 'https://cdn.classmoji.test';
@@ -277,5 +286,122 @@ describe('warmContentText', () => {
     });
 
     await expect(warmContentText(readCtx, [HTML_PATH])).resolves.toBeUndefined();
+  });
+});
+
+/**
+ * The binary warm, whose whole reason to exist is one equality.
+ *
+ * A deck thumbnail is committed by a background task and then fetched by the
+ * READER'S OWN BROWSER from the URL the slides index signed — at
+ * `tierFor({ canEdit: false, isPublic })`, which is `week` for a private deck
+ * and `month` for a public one. The Worker's edge entry is keyed by URL, so a
+ * warm that signed at any other tier would fill an entry no reader ever asks
+ * for: it succeeds, it logs a 200, and every one of the twenty cards on the
+ * index still pays a cold origin pull. No signal on either side says so.
+ *
+ * Which is why the assertion here is not "it fetched something" but "it fetched
+ * the same string the resolver mints".
+ */
+const THUMB_PATH = `${CONTENT_PATH}/thumbnail.webp`;
+const THUMB_SHA = 'f'.repeat(40);
+
+/** What the slides index builds to resolve a card's URL. */
+const indexCtx = (isPublic: boolean) => ({
+  classroom: {
+    id: CLASSROOM_ID,
+    content_key_version: 3,
+    content_repo: 'content-test-org-cs101',
+    content_delivery_enabled: true,
+    git_organization: { login: 'test-org' },
+  },
+  tier: tierFor({ canEdit: false, isPublic }),
+});
+
+describe('warmContentBlob', () => {
+  beforeEach(() => {
+    rows.set(key(CLASSROOM_ID, THUMB_PATH), { sha: THUMB_SHA, type: 'blob', size: 51_200 });
+  });
+
+  it.each([
+    { isPublic: false, tier: 'week' },
+    { isPublic: true, tier: 'month' },
+  ])('warms the exact URL the index signs for a $tier deck', async ({ isPublic }) => {
+    const calls = stubFetch();
+
+    await warmContentBlob(readCtx, [THUMB_PATH], { isPublic });
+    expect(calls).toHaveLength(1);
+
+    const { urls } = await resolveDelivery(indexCtx(isPublic), [THUMB_PATH]);
+
+    // Byte for byte, or the cache was filled for a request nobody makes.
+    expect(calls[0]).toBe(urls.get(THUMB_PATH));
+    expect(calls[0]).toContain(`/blob/${THUMB_SHA}.webp`);
+  });
+
+  it('signs a public deck differently from a private one', async () => {
+    // Guards the test above from passing vacuously: if the tier stopped
+    // reaching the signature both cases would agree, and both would be right
+    // about the wrong thing.
+    const publicCalls = stubFetch();
+    await warmContentBlob(readCtx, [THUMB_PATH], { isPublic: true });
+
+    const privateCalls = stubFetch();
+    await warmContentBlob(readCtx, [THUMB_PATH], { isPublic: false });
+
+    expect(publicCalls[0]).not.toBe(privateCalls[0]);
+  });
+
+  it('defaults to the private tier when visibility is not stated', async () => {
+    const calls = stubFetch();
+    await warmContentBlob(readCtx, [THUMB_PATH]);
+
+    const { urls } = await resolveDelivery(indexCtx(false), [THUMB_PATH]);
+    expect(calls[0]).toBe(urls.get(THUMB_PATH));
+  });
+
+  it('is a no-op for a classroom that is not on the delivery layer', async () => {
+    const calls = stubFetch();
+
+    await warmContentBlob(
+      { classroom: { ...readCtx.classroom, content_delivery_enabled: false } },
+      [THUMB_PATH]
+    );
+
+    expect(calls).toHaveLength(0);
+  });
+
+  it('is a no-op when the deployment cannot sign', async () => {
+    delete process.env.CONTENT_SIGNING_SECRET;
+    const calls = stubFetch();
+
+    await warmContentBlob(readCtx, [THUMB_PATH]);
+
+    expect(calls).toHaveLength(0);
+  });
+
+  it('skips a path the map has no blob row for rather than guessing a sha', async () => {
+    rows.clear();
+    const calls = stubFetch();
+
+    await warmContentBlob(readCtx, [THUMB_PATH]);
+
+    expect(calls).toHaveLength(0);
+  });
+
+  it('pulls a duplicated path once', async () => {
+    const calls = stubFetch();
+
+    await warmContentBlob(readCtx, [THUMB_PATH, `./${THUMB_PATH}`, THUMB_PATH]);
+
+    expect(calls).toHaveLength(1);
+  });
+
+  it('never rejects, whatever the origin does', async () => {
+    stubFetch(async () => {
+      throw new Error('socket hang up');
+    });
+
+    await expect(warmContentBlob(readCtx, [THUMB_PATH])).resolves.toBeUndefined();
   });
 });

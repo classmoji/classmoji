@@ -1,0 +1,41 @@
+-- The stored card image for a deck, and the render it came from.
+--
+-- The slides index used to draw every deck as a live `<iframe>` of the deck
+-- itself: up to twenty full authenticated document requests, each booting
+-- Reveal.js inside a 0.2-scaled frame, each paying a shared-theme preload of
+-- three authenticated GitHub calls. One stored image per deck replaces all of
+-- it, committed into the classroom's own content repo beside the deck's files
+-- so it inherits the delivery layer already in place — asset-map write-through,
+-- signed Worker URLs, tiered caching, and the legacy proxy for classrooms whose
+-- gate is off.
+--
+-- `thumbnail_path` is a repo-relative path (`slides/<slug>/thumbnail.webp`),
+-- not a URL. A URL would be wrong twice over: signatures expire, and the same
+-- file is addressed differently depending on whether its classroom is served by
+-- the delivery layer. The path is what both answers are derived FROM.
+--
+-- `thumbnail_rendered_sha` is the git blob sha of the `index.html` the picture
+-- was taken of, and it is what makes the render job idempotent: a save that did
+-- not change the deck's rendered document leaves this equal to the current sha,
+-- and the task returns without booting a browser or writing a commit. Without
+-- it every save of a twenty-slide deck would re-render a picture of slide one
+-- that nobody changed, and each of those is a new whole WebP in the repo's
+-- history (compressed formats do not delta).
+--
+-- `thumbnail_rendered_at` is the LAST RENDER ATTEMPT — success or failure. Not
+-- "when the current picture was made": the index rate-limits its on-view
+-- enqueue against this column, and if only successes stamped it, a deck whose
+-- renders keep failing would carry a permanently-NULL timestamp and be
+-- re-enqueued by every single page load, forever. Stamping the attempt is what
+-- makes that a ten-minute retry instead. `thumbnail_path` and
+-- `thumbnail_rendered_sha` still describe the picture actually in the repo, and
+-- a failed render leaves both exactly as it found them.
+--
+-- All three NULLABLE with no default and no backfill. NULL across the board
+-- means "never rendered", which is exactly true of every existing deck; the
+-- index draws a placeholder card for those and the backfill task fills them in.
+-- Nothing here is derived state that must be repaired — the file in the repo is
+-- the artifact, and these columns are how a writer avoids re-making it.
+ALTER TABLE "slides" ADD COLUMN "thumbnail_path" TEXT;
+ALTER TABLE "slides" ADD COLUMN "thumbnail_rendered_sha" TEXT;
+ALTER TABLE "slides" ADD COLUMN "thumbnail_rendered_at" TIMESTAMP(3);

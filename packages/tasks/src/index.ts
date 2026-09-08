@@ -13,6 +13,7 @@ import * as importGithubClassroomTasks from './workflows/importGithubClassroom.t
 import * as classroomImportTasks from './workflows/classroomImport.ts';
 import * as customDomainTasks from './workflows/customDomains.ts';
 import * as contentAssetTasks from './workflows/contentAssets.ts';
+import * as deckThumbnailTasks from './workflows/deckThumbnail.ts';
 
 // comment to trigger a build
 
@@ -32,6 +33,7 @@ const Tasks = {
   ...classroomImportTasks,
   ...customDomainTasks,
   ...contentAssetTasks,
+  ...deckThumbnailTasks,
 };
 
 export default Tasks;
