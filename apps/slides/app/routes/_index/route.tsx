@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useLoaderData, Link, useFetcher } from 'react-router';
 import { Popconfirm, Modal, Input, Tooltip, Spin, message } from 'antd';
 import getPrisma from '@classmoji/database';
@@ -7,6 +7,8 @@ import { ClassmojiService } from '@classmoji/services';
 import { ContentService } from '@classmoji/content';
 import { slideService } from '@classmoji/services/slides';
 import { deleteSlideVideos } from '~/utils/cloudinaryService.server';
+import { resolveDeckThumbnailUrls } from '~/utils/deckDelivery.server';
+import { enqueueDeckThumbnail } from '~/utils/deckThumbnailEnqueue.server';
 
 export const loader = async ({ request }: { request: Request }) => {
   // 1. Require authentication
@@ -53,6 +55,12 @@ export const loader = async ({ request }: { request: Request }) => {
   }
 
   // 5. Fetch slides with role-based filtering
+  //
+  // The classroom now carries what a THUMBNAIL URL is resolved from as well as
+  // what the card prints: the repo the image lives in, the key version its
+  // signature is derived under, and whether the delivery layer is on for this
+  // classroom at all. None of that reaches the client — it is stripped below,
+  // so the shape the component sees is exactly what it was.
   const recentSlides = await getPrisma().slide.findMany({
     where: { OR: whereConditions },
     take: 20,
@@ -60,9 +68,14 @@ export const loader = async ({ request }: { request: Request }) => {
     include: {
       classroom: {
         select: {
+          id: true,
           slug: true,
           name: true,
           content_namespace: true,
+          content_repo: true,
+          content_key_version: true,
+          content_delivery_enabled: true,
+          git_organization: { select: { login: true } },
         },
       },
       links: {
@@ -74,8 +87,24 @@ export const loader = async ({ request }: { request: Request }) => {
     },
   });
 
+  // ONE delivery call per classroom and tier — not one per deck, and none at
+  // all for a deck that has never been rendered. This is the whole of the
+  // per-deck work the index does now: it used to do none here and all of it
+  // twenty times over, once inside each iframe's own `$slideId` loader.
+  const thumbnails = await resolveDeckThumbnailUrls(recentSlides);
+
   return {
-    slides: recentSlides,
+    slides: recentSlides.map(({ classroom, ...slide }) => ({
+      ...slide,
+      classroom: classroom
+        ? {
+            slug: classroom.slug,
+            name: classroom.name,
+            content_namespace: classroom.content_namespace,
+          }
+        : null,
+      thumbnailUrl: thumbnails.get(slide.id) ?? null,
+    })),
     webappUrl: process.env.WEBAPP_URL || 'http://localhost:3000',
   };
 };
@@ -121,6 +150,45 @@ export const action = async ({ request }: { request: Request }) => {
       const message = error instanceof Error ? error.message : 'Failed to delete slide';
       return { error: message };
     }
+  }
+
+  // A card scrolled into view with no stored thumbnail. Nobody is waiting on
+  // the answer and nothing is shown either way — the placeholder stays until a
+  // render lands and the next load picks it up.
+  if (intent === 'thumbnail') {
+    const slideId = formData.get('slideId') as string | null;
+    if (!slideId) return { intent: 'thumbnail', outcome: 'invalid' };
+
+    // A SESSION first. This endpoint spends a render — a booted browser, a
+    // commit into a content repo — and the loader that produces the placeholder
+    // cards it answers for is behind a session already. Anonymous callers get
+    // the same `rate-limited` shape as everything else here rather than a 401,
+    // because a distinguishable refusal is an oracle for which slide ids exist.
+    if (!authData) return { intent: 'thumbnail', outcome: 'rate-limited' };
+
+    // Then the same gate the card's own link is behind: a viewer may ask for a
+    // picture of a deck they may open, and nothing else. A refusal answers the
+    // same shape as a rate-limited request — this endpoint tells a caller
+    // nothing about decks it cannot see.
+    try {
+      await assertSlideAccess({ request, slideId, accessType: 'view' });
+    } catch {
+      return { intent: 'thumbnail', outcome: 'rate-limited' };
+    }
+
+    const slide = await getPrisma().slide.findUnique({
+      where: { id: slideId },
+      select: {
+        id: true,
+        classroom_id: true,
+        thumbnail_path: true,
+        thumbnail_rendered_at: true,
+      },
+    });
+    // Already has one: the client's copy of the loader data is simply behind.
+    if (!slide || slide.thumbnail_path) return { intent: 'thumbnail', outcome: 'rate-limited' };
+
+    return { intent: 'thumbnail', outcome: await enqueueDeckThumbnail(slide) };
   }
 
   if (intent === 'rename') {
@@ -365,6 +433,15 @@ export const action = async ({ request }: { request: Request }) => {
         },
       });
 
+      // A copy is a new deck with new content at a new path, and no thumbnail —
+      // `copyFolder` above copies the SOURCE's `thumbnail.webp` into the new
+      // folder, but nothing points the new row at it and its picture is of the
+      // deck before the path rewrites. Enqueue a real one.
+      //
+      // Same contract as every other enqueue: after the row lands, never
+      // awaited, and unable to fail a duplication that has already committed.
+      void ClassmojiService.deckThumbnail.enqueueDeckThumbnail(newSlide.id, slide.classroom_id);
+
       // Update the content manifest
       await ClassmojiService.contentManifest.saveManifest(slide.classroom_id);
 
@@ -378,6 +455,113 @@ export const action = async ({ request }: { request: Request }) => {
 
   return { error: 'Unknown action' };
 };
+
+/**
+ * How many missing thumbnails ONE page load may ask to have rendered.
+ *
+ * The per-deck window in `deckThumbnailEnqueue.server` is the real cap; this is
+ * the blast radius of a single load, so a staff index full of decks nobody has
+ * saved since this shipped trickles rather than firing twenty at once. The
+ * backfill script is the tool for "render all of them".
+ */
+const MAX_THUMBNAIL_ENQUEUES = 5;
+
+/**
+ * The placeholder's colour, from the classroom rather than the deck.
+ *
+ * A card with no image still has to be TELLABLE from its neighbours at a glance,
+ * and the useful grouping on this page is by course — the badge already prints
+ * the classroom slug. Deterministic, so the same class is the same colour on
+ * every load and between users; there is no stored accent colour to read.
+ */
+const PLACEHOLDER_ACCENTS = [
+  'bg-sky-100 text-sky-900 dark:bg-sky-950 dark:text-sky-200',
+  'bg-emerald-100 text-emerald-900 dark:bg-emerald-950 dark:text-emerald-200',
+  'bg-amber-100 text-amber-900 dark:bg-amber-950 dark:text-amber-200',
+  'bg-violet-100 text-violet-900 dark:bg-violet-950 dark:text-violet-200',
+  'bg-rose-100 text-rose-900 dark:bg-rose-950 dark:text-rose-200',
+  'bg-cyan-100 text-cyan-900 dark:bg-cyan-950 dark:text-cyan-200',
+];
+
+function placeholderAccent(seed: string | null | undefined): string {
+  if (!seed) return PLACEHOLDER_ACCENTS[0];
+  let hash = 0;
+  for (let i = 0; i < seed.length; i += 1) hash = (hash * 31 + seed.charCodeAt(i)) >>> 0;
+  return PLACEHOLDER_ACCENTS[hash % PLACEHOLDER_ACCENTS.length];
+}
+
+/**
+ * One card's picture: the stored image, or a placeholder that asks for one.
+ *
+ * This used to be a live `<iframe src="/{id}?preview=true">` — a full
+ * authenticated document request per deck, booting Reveal.js inside a
+ * 0.2-scaled frame, twenty of them on a staff index. The real cost was never
+ * the deck text: it was the unguarded shared-theme preload behind each one
+ * (a Prisma read, an installation-token mint and three authenticated GitHub
+ * calls per frame) plus a subscription-tier query per card. A stored image
+ * deletes both without either code path being touched.
+ *
+ * The observer exists only for decks with NO image. It fires once, disconnects,
+ * and asks the server; the answer changes nothing on screen, because a render
+ * takes seconds and commits to git. The next load has the picture.
+ */
+function DeckThumbnail({
+  slide,
+  accentSeed,
+  onNeedsRender,
+}: {
+  slide: { id: string; title: string; thumbnailUrl?: string | null };
+  accentSeed: string | null | undefined;
+  onNeedsRender: (slideId: string) => void;
+}) {
+  const ref = useRef<HTMLDivElement | null>(null);
+  const accent = placeholderAccent(accentSeed);
+
+  useEffect(() => {
+    if (slide.thumbnailUrl) return;
+    const el = ref.current;
+    if (!el || typeof IntersectionObserver === 'undefined') return;
+
+    const observer = new IntersectionObserver(
+      entries => {
+        for (const entry of entries) {
+          if (!entry.isIntersecting) continue;
+          observer.disconnect();
+          onNeedsRender(slide.id);
+        }
+      },
+      // A little ahead of the fold: the picture is for the NEXT load either
+      // way, so asking slightly early costs nothing and asking late wastes the
+      // scroll that would have justified it.
+      { rootMargin: '200px' }
+    );
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [slide.id, slide.thumbnailUrl, onNeedsRender]);
+
+  if (slide.thumbnailUrl) {
+    return (
+      <img
+        src={slide.thumbnailUrl}
+        // Decorative: the deck's title is the card's own <h3>, right below this,
+        // and a screen reader announcing it twice is worse than not at all.
+        alt=""
+        loading="lazy"
+        decoding="async"
+        className="w-full h-full object-cover"
+      />
+    );
+  }
+
+  return (
+    <div
+      ref={ref}
+      className={`w-full h-full flex items-center justify-center px-6 text-center ${accent}`}
+    >
+      <span className="text-sm font-medium line-clamp-3">{slide.title}</span>
+    </div>
+  );
+}
 
 export default function SlidesIndex() {
   const { slides: initialSlides, webappUrl } = useLoaderData<typeof loader>();
@@ -393,6 +577,34 @@ export default function SlidesIndex() {
     slideTitle: string;
   }>({ open: false, action: null, slideTitle: '' });
   const fetcher = useFetcher();
+
+  /**
+   * Thumbnail requests go out as a bare `fetch`, NOT through a fetcher.
+   *
+   * Two reasons, both about not disturbing the page. A fetcher submission
+   * revalidates the loader when it settles, and five of those would re-run the
+   * whole index query for a result that cannot have changed yet. And a single
+   * fetcher aborts its own in-flight request when it is submitted again, so
+   * five enqueues down one fetcher would be one enqueue and four cancellations.
+   *
+   * `?index` because this posts to the INDEX route's action, not the root
+   * layout's.
+   */
+  const requestedThumbnails = useRef<Set<string>>(new Set());
+  const thumbnailBudget = useRef(MAX_THUMBNAIL_ENQUEUES);
+  const requestThumbnail = useCallback((slideId: string) => {
+    if (requestedThumbnails.current.has(slideId)) return;
+    if (thumbnailBudget.current <= 0) return;
+    requestedThumbnails.current.add(slideId);
+    thumbnailBudget.current -= 1;
+
+    const body = new FormData();
+    body.append('intent', 'thumbnail');
+    body.append('slideId', slideId);
+    // Nothing is awaited and nothing is shown: the render lands in git seconds
+    // from now, and the next load of this page is what picks it up.
+    void fetch('/?index', { method: 'POST', body }).catch(() => {});
+  }, []);
 
   // Handle action responses
   useEffect(() => {
@@ -490,11 +702,10 @@ export default function SlidesIndex() {
                 {/* Slide Preview */}
                 <Link to={`/${slide.id}?returnUrl=${encodeURIComponent('/')}`} className="block">
                   <div className="aspect-video bg-gray-100 dark:bg-gray-700 overflow-hidden relative">
-                    <iframe
-                      src={`/${slide.id}?preview=true`}
-                      className="w-[500%] h-[500%] origin-top-left scale-[0.2] pointer-events-none border-0"
-                      title={`Preview of ${slide.title}`}
-                      loading="lazy"
+                    <DeckThumbnail
+                      slide={slide}
+                      accentSeed={slide.classroom?.slug || slide.classroom?.name}
+                      onNeedsRender={requestThumbnail}
                     />
                     {/* Badges overlay */}
                     <div className="absolute top-2 right-2 flex flex-col items-end gap-1">

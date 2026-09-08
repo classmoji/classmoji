@@ -434,13 +434,21 @@ async function signAsset(
   }
 }
 
-/** The map lookup shared by every single-ref entry point. */
+/**
+ * The map lookup shared by every single-ref entry point.
+ *
+ * `mapIsCurrent` is the caller's `ensureMapBounded` verdict. See that function:
+ * a miss against a map whose refresh gave up is "we do not know", and answering
+ * it with a placeholder would turn a cold classroom's whole page into
+ * `/missing/` URLs no later sync can repair.
+ */
 async function resolveOne(
   ctx: ResolveContext,
   env: { origin: string; master: string },
   ref: string,
   transform?: ResolveTransform,
-  now?: number
+  now?: number,
+  mapIsCurrent: boolean = true
 ): Promise<string> {
   const path = toRepoPath(ctx, ref);
   if (!path) return ref;
@@ -454,7 +462,7 @@ async function resolveOne(
     console.warn(
       `[contentDelivery] No blob row for "${ref}" (path ${path}) in classroom ${ctx.classroom.id}`
     );
-    return missingUrl(env.origin, ctx.classroom.id, ref);
+    return mapIsCurrent ? missingUrl(env.origin, ctx.classroom.id, ref) : ref;
   }
 
   return signAsset(ctx, env, ref, path, asset.sha, transform, now);
@@ -474,8 +482,8 @@ export async function resolveAssetUrl(
   const env = deliveryEnvFor(ctx);
   if (!env) return ref;
 
-  await ensureMap(ctx.classroom.id);
-  return resolveOne(ctx, env, ref, opts.transform);
+  const mapIsCurrent = await ensureMapBounded(ctx.classroom.id);
+  return resolveOne(ctx, env, ref, opts.transform, undefined, mapIsCurrent);
 }
 
 /**
@@ -542,7 +550,10 @@ export async function resolveAssetSrcSet(
   const path = toRepoPath(ctx, ref);
   if (!path || !isRasterImagePath(path)) return null;
 
-  await ensureMap(ctx.classroom.id);
+  // Bounded, but the verdict is not needed: this function's miss answer is
+  // already `null` — "there is no srcset" — and the caller renders a plain
+  // `src`. Nothing here can assert a placeholder into content.
+  await ensureMapBounded(ctx.classroom.id);
   const asset = await lookupContentAsset(ctx.classroom.id, path);
   if (!asset || asset.type !== 'blob') {
     console.warn(
@@ -606,7 +617,10 @@ export async function resolveThemeBase(
   const env = deliveryEnvFor(ctx);
   if (!env || !themeName) return null;
 
-  await ensureMap(ctx.classroom.id);
+  // Bounded, verdict unused for the same reason as `resolveAssetSrcSet`: a miss
+  // here is `null`, and the caller renders the deck without theme links rather
+  // than pointing it at a URL that names no file.
+  await ensureMapBounded(ctx.classroom.id);
   const tree = await lookupContentTree(ctx.classroom.id, `${THEMES_FOLDER}/${themeName}`);
   if (!tree) {
     console.warn(
@@ -675,7 +689,7 @@ export async function resolveDelivery(
 
   if (wanted.size === 0) return { urls, srcSets };
 
-  await ensureMap(ctx.classroom.id);
+  const mapIsCurrent = await ensureMapBounded(ctx.classroom.id);
   const assets = await lookupContentAssets(ctx.classroom.id, [...new Set(wanted.values())]);
   const now = passClock();
 
@@ -689,7 +703,10 @@ export async function resolveDelivery(
         console.warn(
           `[contentDelivery] No blob row for "${ref}" (path ${path}) in classroom ${ctx.classroom.id}`
         );
-        urls.set(ref, missingUrl(env.origin, ctx.classroom.id, ref));
+        // Unless the refresh gave up, in which case the map cannot be trusted
+        // to have said "no" — a never-synced classroom would otherwise render
+        // every single reference as a placeholder. See `ensureMapBounded`.
+        urls.set(ref, mapIsCurrent ? missingUrl(env.origin, ctx.classroom.id, ref) : ref);
         return;
       }
 
@@ -765,10 +782,12 @@ export interface TextReadContext {
  *     single document a person is waiting on: the authenticated read always
  *     sees the current commit, and the case that reaches it (a map briefly
  *     behind a save) is exactly when the CDN is stalest.
- *   - `cdn-only` — for a FAN-OUT. A staff landing page renders ~20 deck
- *     thumbnails at once, and twenty authenticated reads is the amplification
- *     the CDN pinning existed to prevent. A thumbnail is a picture of a deck;
- *     three minutes stale is invisible there and a rate limit is not.
+ *   - `cdn-only` — for a FAN-OUT: one screen that reads many files at once, and
+ *     where a rate limit is a worse answer than one three minutes stale. No
+ *     production caller today — the one there was, the slides index reading ~20
+ *     decks to draw ~20 iframes, draws stored images now and reads none of
+ *     them. Kept because the amplification it guards against is a property of
+ *     fan-out screens rather than of that one, and the next one will want it.
  *   - `none` — the map answers or it does not. For a caller that must tell "no
  *     such file" from "GitHub is down", because swallowing failures makes both
  *     of them `null`. The class site is the one that must: the first is an
@@ -827,12 +846,11 @@ export function textReadBudget(): TextReadBudget {
  *
  * Raising it would make a stalled Worker hold the render open for longer with
  * nothing gained; lowering it would start losing races the Worker was going to
- * win. Callers who want a tighter bound for a DECORATIVE read pass their own
- * `deadlineMs` (see `fetchContentText`) rather than moving this — and theirs
- * bounds the WHOLE read rather than each leg, because a caller who says two
- * seconds means the answer, not the socket. This one stays per-leg for the
- * reason above: it is a ceiling on how long any single leg may stall, and the
- * fallbacks behind it are still a correct answer worth waiting for.
+ * win. It is per-leg rather than a bound on the read as a whole, for the reason
+ * above: a ceiling on how long any single leg may stall, with the fallbacks
+ * behind it still a correct answer worth waiting for. Every text read is one a
+ * person is waiting on, so nobody asks for less — the one caller that did was
+ * the slides index's per-deck thumbnail, and that is a stored image now.
  */
 const TEXT_FETCH_TIMEOUT_MS = 6000;
 
@@ -845,207 +863,6 @@ const TEXT_FETCH_TIMEOUT_MS = 6000;
  * only after GitHub has finished being slow. This puts a ceiling on that.
  */
 const ENSURE_MAP_TIMEOUT_MS = 4000;
-
-/**
- * How long a classroom stays written off after a read finds it unreachable.
- *
- * Long enough to cover the page that provoked it and the two or three reloads
- * that follow — the fan-out this exists for is one screen's worth of thumbnails
- * and an instructor refreshing it. Short enough that a repo made readable again
- * (access restored, a private repo re-shared) starts working within a few
- * minutes without anyone restarting anything.
- */
-const UNREACHABLE_WINDOW_MS = 5 * 60 * 1000;
-
-/**
- * Ceiling on how many classrooms may be remembered at once.
- *
- * The map is per-process and bounded twice — expired entries are dropped on
- * every insert, and this catches the pathological case where they arrive faster
- * than they expire. Reaching it clears the map rather than evicting one entry:
- * this is a latency optimization, and forgetting everything costs one slow read
- * per classroom, which is exactly the state it started in.
- */
-const UNREACHABLE_MAX_CLASSROOMS = 500;
-
-/**
- * Classrooms whose content origin answered nothing at all, and until when.
- *
- * ## The fan-out this is for
- *
- * The slides index renders every deck as an iframe, each of which runs the
- * thumbnail read in its own loader. When a classroom's content repo cannot be
- * read — access revoked, a repo gone private, a deleted repo still referenced —
- * every one of those reads burns its whole budget before failing, and with
- * ~19 thumbnails at a browser's ~6 concurrent connections the page dribbles in
- * over minutes and looks hung. The failure is a property of the CLASSROOM, not
- * of the 19 files, so the first read is entitled to answer for the rest.
- *
- * ## What may and may not consult it
- *
- * Only DECORATIVE reads (see `fetchContentText`). A thumbnail is a picture of a
- * deck and its absence costs a grey rectangle; a person actually opening that
- * deck must still make the attempt, because "the repo was unreadable four
- * minutes ago" is not an answer to "show me my slides" — and the window would
- * otherwise keep a recovered classroom broken for five minutes after it healed.
- *
- * ## What may write to it
- *
- * One leg, and one verdict: the WORKER leg concluding `unreachable` on a read
- * that produced no content. See `WorkerLegOutcome` for what earns that.
- *
- * The Worker alone, because it is the only leg that actually reports what it
- * found. The CDN leg answers 404 for every headline case this exists for — a
- * repo made private, a repo deleted, Pages never published — so a rule that
- * waited for both legs to fail armed for none of them: `{org}.github.io` said
- * "no such file" and the read looked, to that rule, like a missing `index.html`.
- *
- * And a 404 from the WORKER is still explicitly not a fault: that one really is
- * a missing file, and treating it as a classroom-wide outage would blank
- * thumbnails for decks whose `index.html` has simply not been generated yet.
- */
-const unreachableClassrooms = new Map<string, { until: number }>();
-
-/** Test/ops seam — the map is module state and would otherwise leak between cases. */
-export function clearUnreachableClassrooms(): void {
-  unreachableClassrooms.clear();
-}
-
-function isClassroomUnreachable(classroomId: string, now: number = Date.now()): boolean {
-  const entry = unreachableClassrooms.get(classroomId);
-  if (!entry) return false;
-  if (entry.until <= now) {
-    unreachableClassrooms.delete(classroomId);
-    return false;
-  }
-  return true;
-}
-
-/**
- * Write a classroom off for a window, once.
- *
- * A read that lands inside an OPEN window neither extends it nor logs again:
- * the window is "we have already been told", and re-arming it on every failure
- * would let a steady trickle of reads keep a healed classroom written off
- * indefinitely. That also makes the log exactly one line per window, which is
- * the only rate that is readable when the trigger is a page of thumbnails.
- */
-function rememberUnreachable(classroomId: string, path: string): void {
-  const now = Date.now();
-  if (isClassroomUnreachable(classroomId, now)) return;
-
-  for (const [id, entry] of unreachableClassrooms) {
-    if (entry.until <= now) unreachableClassrooms.delete(id);
-  }
-  if (unreachableClassrooms.size >= UNREACHABLE_MAX_CLASSROOMS) unreachableClassrooms.clear();
-  unreachableClassrooms.set(classroomId, { until: now + UNREACHABLE_WINDOW_MS });
-
-  // eslint-disable-next-line no-console
-  console.debug(
-    `[contentDelivery] classroom ${classroomId} content origin unreachable ` +
-      `(last failure: ${path}); skipping decorative reads for ` +
-      `${Math.round(UNREACHABLE_WINDOW_MS / 1000)}s`
-  );
-}
-
-/**
- * What the Worker leg of one read concluded.
- *
- *   - `miss` — a 404. The sha is not there, which is PROOF the Worker and the
- *     repo behind it can be reached.
- *   - `refused` — an answer about THIS request rather than about the repo: a
- *     signature the Worker declined (its 403 is ONLY ever that — an origin
- *     that refuses the repo comes back as a 502), a malformed URL. A
- *     deployment fault such as a key rotation or clock skew, and condemning
- *     the classroom for one would blank every thumbnail on the site for a
- *     repo that is perfectly healthy.
- *   - `unreachable` — the repo could not be read through the Worker: a
- *     5xx (including the 502 it answers when its own origin pull fails), or a
- *     transport failure that was not our own deadline. This is the only verdict
- *     that may write a classroom off.
- *   - `aborted` — OUR deadline expired. Deliberately not a fault of the origin:
- *     a cold pull legitimately outruns a two second thumbnail budget, and
- *     treating our own impatience as an outage would write off a classroom that
- *     is merely slow — and keep it written off for five minutes.
- *
- * A leg that never RAN records nothing at all: the delivery layer switched off,
- * no map row for this path, the per-render circuit already open, or the read
- * out of budget before the fetch began. None of those say anything about
- * reachability, and none may condemn a classroom.
- */
-type WorkerLegOutcome = 'miss' | 'refused' | 'unreachable' | 'aborted';
-
-interface TextReadTrace {
-  worker?: WorkerLegOutcome;
-}
-
-/**
- * A Worker refusal, classified. See `WorkerLegOutcome`.
- *
- * The 502 is the important one and the reason this is not simply "not ok": it
- * is what the Worker answers when its OWN origin pull fails, which is exactly
- * the shape of a content repo that has gone private or been deleted.
- */
-function workerVerdictFor(status: number): WorkerLegOutcome {
-  if (status === 404) return 'miss';
-  if (status >= 500) return 'unreachable';
-  return 'refused';
-}
-
-/**
- * Did WE give up, or did the origin?
- *
- * `AbortSignal.timeout` rejects with a `TimeoutError` and an explicit `abort()`
- * with an `AbortError`; either way the deadline that expired is one set in this
- * file, and nothing has been learned about the upstream. Distinguishing them
- * from a refused socket is what keeps a slow classroom from being written off
- * as a broken one.
- */
-function isAbortError(error: unknown): boolean {
-  if (typeof error !== 'object' || error === null) return false;
-  const name = (error as { name?: unknown }).name;
-  return name === 'AbortError' || name === 'TimeoutError';
-}
-
-/**
- * What each leg of one read may spend, and when the read as a whole is out of
- * time.
- *
- * ## Why there is an overall bound and not only a per-leg one
- *
- * A read is up to four legs — a map refresh, the Worker, the contents API, the
- * Pages CDN — and handing each of them the caller's number meant a "two second"
- * thumbnail could spend eight. What a caller passes is a statement about how
- * long the ANSWER is worth waiting for, not about any one socket, so a caller
- * that sets `deadlineMs` fixes an instant the whole read must be done by and
- * every leg after the first gets only what is left.
- *
- * `at` is null when no caller set one, and the default stays per-leg on
- * purpose: `TEXT_FETCH_TIMEOUT_MS` is a latency CEILING rather than a deadline
- * (see its own note). A `/present` that waits six seconds on a stalled Worker
- * and then six more getting the real bytes from the contents API has done
- * exactly the right thing, and an overall bound there would turn a slow success
- * into a failure — which is the opposite of what the ladder is for.
- */
-interface TextReadDeadline {
-  /** Ceiling on any single leg. */
-  cap: number;
-  /** Instant the whole read must be finished by, or null when only `cap` applies. */
-  at: number | null;
-}
-
-/**
- * What this leg may spend: its own ceiling, the caller's, and the time left.
- *
- * Zero or less means the budget is gone and the leg must be SKIPPED, not
- * started with an already-expired signal. A fetch that aborts on the next tick
- * is a socket opened for nothing, and worse, it would record a verdict about an
- * origin it never actually asked.
- */
-function legBudgetMs(deadline: TextReadDeadline, ownCap: number = deadline.cap): number {
-  const capped = Math.min(ownCap, deadline.cap);
-  return deadline.at === null ? capped : Math.min(capped, deadline.at - Date.now());
-}
 
 /**
  * Reject after `ms`, so a call with no cancellation of its own cannot hold a
@@ -1096,9 +913,8 @@ function withDeadline<T>(work: Promise<T>, ms: number, what: string): Promise<T>
  *
  * ## When the map cannot answer
  *
- * See `TextFallback`. The default inverts the order this replaces; a fan-out
- * asks for `cdn-only`; a caller that needs its own error semantics asks for
- * `none`.
+ * See `TextFallback`. The default inverts the order this replaces; a caller
+ * that needs its own error semantics asks for `none`.
  *
  * ## Never throws
  *
@@ -1116,72 +932,15 @@ export async function fetchContentText(
     skipCache?: boolean;
     fallback?: TextFallback;
     budget?: TextReadBudget;
-    /**
-     * A budget for the WHOLE read — every leg together — replacing the default
-     * per-leg `TEXT_FETCH_TIMEOUT_MS`.
-     *
-     * For a caller whose read is worth LESS than the default, not more. A
-     * thumbnail is the case: it is decorative, and its loader is one of
-     * nineteen the browser is running six-at-a-time, so a read that waits the
-     * full six seconds turns one unreadable classroom into a page that dribbles
-     * in over minutes. Two seconds is generous for a read expected to hit the
-     * edge and pointless to extend for one that will not.
-     *
-     * Overall rather than per-leg because that is what the caller means. A read
-     * is up to four legs — map refresh, Worker, contents API, Pages CDN — so
-     * handing each of them "two seconds" was how a two second thumbnail spent
-     * eight. Legs after the first get what is left of the budget, and a leg
-     * with nothing left is skipped rather than started. See `TextReadDeadline`.
-     */
-    deadlineMs?: number;
-    /**
-     * This read is decorative — its absence costs a placeholder, not an error.
-     *
-     * Decorative reads consult the unreachable-classroom window and return
-     * `null` immediately when it is open, so one classroom's broken repo costs
-     * one timeout per window instead of one per file. Reads that a person is
-     * actually waiting on leave this off and always make the attempt; see
-     * `unreachableClassrooms`.
-     */
-    decorative?: boolean;
   } = {}
 ): Promise<ContentText | null> {
   const path = normalizeRepoRelative(repoPath);
   if (!path) return null;
 
-  // Already known unreachable, and this read is decorative. No map lookup, no
-  // socket, no wait — the answer was established by the read that paid for it.
-  if (opts.decorative && isClassroomUnreachable(ctx.classroom.id)) {
-    logTextRead(opts.label, path, ctx.classroom.id, 'unreachable');
-    return null;
-  }
-
-  // Taken ONCE, here, so every leg below is measured against the same instant.
-  // A caller that named a budget gets one for the whole read; one that did not
-  // keeps the per-leg ceiling the ladder was designed around.
-  const deadline: TextReadDeadline = {
-    cap: opts.deadlineMs ?? TEXT_FETCH_TIMEOUT_MS,
-    at: opts.deadlineMs === undefined ? null : Date.now() + opts.deadlineMs,
-  };
   const fallback = opts.fallback ?? 'api-then-cdn';
-  const trace: TextReadTrace = {};
-  const viaWorker = await readTextThroughWorker(ctx, path, deadline, trace, opts.budget);
+  const viaWorker = await readTextThroughWorker(ctx, path, opts.budget);
   const result =
-    viaWorker ??
-    (fallback === 'none' ? null : await readTextFromGitHub(ctx, path, fallback, deadline, opts));
-
-  // Nothing produced content, and the Worker leg says the repo cannot be read
-  // through it at all. That is a classroom-level fault, so record it once and
-  // let the decorative reads behind this one skip the wait.
-  //
-  // Independent of what the CDN leg said, on purpose. `{org}.github.io` answers
-  // 404 for every case this exists for — repo private, repo deleted, Pages
-  // never published — so a rule that needed BOTH legs to fail armed for none of
-  // them. And a Worker 404, or our own deadline expiring, is not this: see
-  // `WorkerLegOutcome`.
-  if (!result && trace.worker === 'unreachable') {
-    rememberUnreachable(ctx.classroom.id, path);
-  }
+    viaWorker ?? (fallback === 'none' ? null : await readTextFromGitHub(ctx, path, fallback, opts));
 
   logTextRead(opts.label, path, ctx.classroom.id, result?.source ?? 'none');
   return result;
@@ -1374,12 +1133,130 @@ async function warmOneTextFile(
   }
 }
 
+/**
+ * Pull a just-committed BINARY file through the Worker, at the tier its readers
+ * will ask for.
+ *
+ * ## Why text's warm could not just be widened
+ *
+ * `warmContentText` signs at `week`, always, and says so in `signTextUrl`: a
+ * server-to-server text read hands its bytes to a loader that has already done
+ * its own authorization, so the tier only names a cache bucket. That reasoning
+ * does not survive the jump to a file a BROWSER fetches. A deck thumbnail is
+ * loaded by the reader's own browser from the URL the index signed, and the
+ * index signs it at `tierFor({ canEdit: false, isPublic })` — `month` for a
+ * public deck, `week` for everything else. The Worker's edge entry is keyed by
+ * URL, so a warm at the wrong tier fills an entry nobody ever asks for: it
+ * succeeds, it logs a 200, and every reader still pays the cold pull. Nothing
+ * anywhere would report that.
+ *
+ * So the tier is an argument, and the caller is expected to pass exactly what
+ * the reader's `resolveDelivery` will compute. A test asserts the two URLs are
+ * byte-identical, because that equality is the entire point and it is invisible
+ * from either side alone.
+ *
+ * ## Why binary is worth warming at all
+ *
+ * `warmContentText` refuses binaries deliberately — nobody blocks a render on a
+ * megabyte image, and warming every upload would be a lot of bytes moved for
+ * nothing. A deck thumbnail is the exception the rule was not written for: the
+ * slides index asks for up to twenty of them AT ONCE, all cold, all freshly
+ * committed, on the one page whose whole purpose is to show them. That is
+ * precisely the "many cold images at once" case the warm exists for.
+ *
+ * ## Contract
+ *
+ * Identical to `warmContentText`'s and for identical reasons: it NEVER REJECTS
+ * and is called WITHOUT `await`. A rejection would surface long after the
+ * commit that provoked it had returned successfully.
+ *
+ * @param ctx      the classroom whose Worker cache is being filled.
+ * @param paths    repo-relative paths that were just committed and recorded.
+ * @param opts     `isPublic` is the CONTENT's own visibility — a deck's
+ *                 `is_public` — and picks the tier exactly as the reader's does.
+ */
+export async function warmContentBlob(
+  ctx: WarmContext,
+  paths: string[],
+  opts: { isPublic?: boolean } = {}
+): Promise<void> {
+  if (!isContentDeliveryEnabled(ctx.classroom)) return;
+  const env = deliveryEnv();
+  if (!env) return;
+
+  const unique = [
+    ...new Set(
+      paths.map(path => normalizeRepoRelative(path)).filter((path): path is string => path !== null)
+    ),
+  ];
+  if (unique.length === 0) return;
+
+  // Never `edit`: that tier answers `Cache-Control: no-store`, which is exactly
+  // wrong for a cache fill, and would warm an entry the Worker refuses to keep.
+  const tier = tierFor({ canEdit: false, isPublic: opts.isPublic });
+
+  await Promise.all(unique.map(path => warmOneBlob(ctx.classroom, env, tier, path)));
+}
+
+/**
+ * One binary file's warm. Swallows everything, by design.
+ *
+ * The body is READ rather than cancelled, same as the text warm: the Worker
+ * tees its origin response into R2 while streaming to us, and abandoning our
+ * half early races the write this exists to cause. A thumbnail is tens of
+ * kilobytes, so reading it costs nothing worth saving.
+ */
+async function warmOneBlob(
+  classroom: WarmContext['classroom'],
+  env: { origin: string; master: string },
+  tier: ResolveTier,
+  path: string
+): Promise<void> {
+  try {
+    const ext = extensionOf(path);
+    if (!ext) return;
+
+    // The row the commit just wrote. No `ensureMap`, for the text warm's
+    // reason: a refresh could only move us off the sha the caller just
+    // recorded, and the caller awaited that write before calling here.
+    const asset = await lookupContentAsset(classroom.id, path);
+    if (!asset || asset.type !== 'blob') return;
+
+    // The same three inputs `signingContext` feeds `signAsset` on the read
+    // side, and no transform — the index renders the untransformed original,
+    // so a `w=` or `fmt=` here would warm a URL it never asks for.
+    const url = await signBlobUrl(
+      env.origin,
+      {
+        master: env.master,
+        classroomId: classroom.id,
+        keyVersion: classroom.content_key_version,
+        tier,
+      },
+      { sha: asset.sha, ext }
+    );
+    const response = await fetch(url, { signal: AbortSignal.timeout(WARM_FETCH_TIMEOUT_MS) });
+    await response.arrayBuffer();
+
+    // eslint-disable-next-line no-console
+    console.debug(
+      `[contentDelivery] warm blob ${path} sha=${asset.sha} tier=${tier} ` +
+        `status=${response.status} classroom=${classroom.id}`
+    );
+  } catch (error) {
+    // Debug, not warn — a cold cache is not an incident. See `warmOneTextFile`.
+    // eslint-disable-next-line no-console
+    console.debug(
+      `[contentDelivery] warm blob failed for ${path} (classroom ${classroom.id}):`,
+      error instanceof Error ? error.message : error
+    );
+  }
+}
+
 /** The map lookup + signed fetch. Null means "not through the Worker" — never an error. */
 async function readTextThroughWorker(
   ctx: TextReadContext,
   path: string,
-  deadline: TextReadDeadline,
-  trace: TextReadTrace,
   budget?: TextReadBudget
 ): Promise<ContentText | null> {
   if (!isContentDeliveryEnabled(ctx.classroom)) return null;
@@ -1396,19 +1273,16 @@ async function readTextThroughWorker(
   try {
     // Bounded: a stale map turns this into three GitHub calls, and a slow
     // GitHub must cost a fallback rather than a held-open render. The refresh
-    // is OPTIONAL, so it is the first thing dropped when the caller's overall
-    // budget is already spent — the row the map has is a perfectly good answer,
-    // and spending a decorative read's whole two seconds here would leave
-    // nothing for the fetch those seconds were meant for.
-    const mapMs = legBudgetMs(deadline, ENSURE_MAP_TIMEOUT_MS);
-    if (mapMs > 0) {
-      await withDeadline(ensureMap(ctx.classroom.id), mapMs, 'map refresh').catch(error => {
+    // is OPTIONAL — the row the map already has is a perfectly good answer — so
+    // giving up on it costs freshness, not the read.
+    await withDeadline(ensureMap(ctx.classroom.id), ENSURE_MAP_TIMEOUT_MS, 'map refresh').catch(
+      error => {
         console.warn(
           `[contentDelivery] Map refresh gave up for classroom ${ctx.classroom.id}:`,
           error instanceof Error ? error.message : error
         );
-      });
-    }
+      }
+    );
     asset = await lookupContentAsset(ctx.classroom.id, path);
   } catch (error) {
     // The map itself is unreachable, which is not the Worker's fault — do not
@@ -1425,22 +1299,13 @@ async function readTextThroughWorker(
   // row says nothing about the next path the caller probes.
   if (!asset || asset.type !== 'blob') return null;
 
-  // Out of time before the fetch even began. Skip it rather than start one on
-  // an already-expired signal, and record NOTHING: a leg that never asked has
-  // learned nothing about the origin.
-  const fetchMs = legBudgetMs(deadline);
-  if (fetchMs <= 0) return null;
-
   try {
     const url = await signTextUrl(ctx.classroom, env, asset.sha, ext);
 
-    const response = await fetch(url, { signal: AbortSignal.timeout(fetchMs) });
+    const response = await fetch(url, { signal: AbortSignal.timeout(TEXT_FETCH_TIMEOUT_MS) });
     if (!response.ok) {
       // A refusal is an ANSWER, not a dead origin: the Worker is up and said
       // no. Fall back for this path and leave the per-render circuit closed.
-      // What KIND of no it was decides the classroom write-off — see
-      // `workerVerdictFor`.
-      trace.worker = workerVerdictFor(response.status);
       console.warn(
         `[contentDelivery] Worker returned ${response.status} for ${path} ` +
           `(classroom ${ctx.classroom.id}); falling back`
@@ -1453,15 +1318,9 @@ async function readTextThroughWorker(
     // A throw here is transport — a timeout, a DNS failure, a refused socket —
     // and it is about the ORIGIN rather than this file. Trip the circuit so the
     // rest of this render does not queue up behind the same dead connection.
-    //
-    // The circuit trips for OUR deadline too (one render that has already
-    // outrun its budget will not do better on the next path), but the
-    // classroom-level write-off does not: a cold pull outrunning a two second
-    // thumbnail budget is a slow repo, not an unreadable one, and five minutes
-    // of blanked thumbnails is far too much to conclude from our own
-    // impatience.
+    // Our own timeout expiring trips it too: a render that has already outrun
+    // the ceiling will not do better on the next path.
     if (budget) budget.workerUnavailable = true;
-    trace.worker = isAbortError(error) ? 'aborted' : 'unreachable';
     console.warn(
       `[contentDelivery] Worker text read failed for ${path} (classroom ${ctx.classroom.id}); ` +
         'skipping the Worker for the rest of this read:',
@@ -1487,19 +1346,13 @@ async function readTextFromGitHub(
   ctx: TextReadContext,
   path: string,
   fallback: TextFallback,
-  deadline: TextReadDeadline,
   opts: { skipCache?: boolean }
 ): Promise<ContentText | null> {
   const orgLogin = ctx.classroom.git_organization.login;
   const repo = ctx.classroom.content_repo;
   if (!orgLogin || !repo) return null;
 
-  // No trace to write. Neither of these legs may condemn a classroom: the CDN
-  // answers 404 for a private, deleted or never-published repo alike, and the
-  // contents API is reached only after the Worker has already had its say. See
-  // `unreachableClassrooms`.
-  const apiMs = fallback === 'cdn-only' ? 0 : legBudgetMs(deadline);
-  if (apiMs > 0) {
+  if (fallback !== 'cdn-only') {
     try {
       const file = await withDeadline(
         ContentService.getContent({
@@ -1508,7 +1361,7 @@ async function readTextFromGitHub(
           path,
           ...(opts.skipCache ? { skipCache: true } : {}),
         }),
-        apiMs,
+        TEXT_FETCH_TIMEOUT_MS,
         'contents API read'
       );
       if (file?.content) return { text: file.content, sha: file.sha ?? null, source: 'api' };
@@ -1525,16 +1378,9 @@ async function readTextFromGitHub(
   // first (which is how this read used to be ordered) because GitHub Pages lags
   // a push by minutes, and the whole point of the map-first path above is that
   // a save is visible the instant it returns.
-  //
-  // Whatever the legs above spent comes out of this one's budget, and a read
-  // with nothing left stops here rather than opening a socket it is already too
-  // late to use.
-  const cdnMs = legBudgetMs(deadline);
-  if (cdnMs <= 0) return null;
-
   try {
     const response = await fetch(`https://${orgLogin}.github.io/${repo}/${path}`, {
-      signal: AbortSignal.timeout(cdnMs),
+      signal: AbortSignal.timeout(TEXT_FETCH_TIMEOUT_MS),
     });
     if (response.ok) return { text: await response.text(), sha: null, source: 'cdn' };
   } catch (error) {
@@ -1717,5 +1563,65 @@ async function ensureMap(classroomId: string): Promise<void> {
       `[contentDelivery] Asset map refresh failed for classroom ${classroomId}:`,
       error instanceof Error ? error.message : error
     );
+  }
+}
+
+/**
+ * `ensureMap`, but it cannot hold a render open — and it SAYS whether it
+ * finished.
+ *
+ * ## The bound
+ *
+ * A stale map turns `ensureMap` into three GitHub round trips (default branch,
+ * head commit, whole tree) on the render path. It already degrades to "serve
+ * what the map has" when GitHub fails, but only after GitHub has finished being
+ * slow, and a page resolving forty images pays that once for the batch and once
+ * for every unbatched single-ref call. This is the same `ENSURE_MAP_TIMEOUT_MS`
+ * the text read path applies at `readTextThroughWorker`.
+ *
+ * ## Why the return value is the whole point
+ *
+ * Bounding the refresh is a one-liner. Bounding it CORRECTLY is not, because
+ * the resolvers' miss branch is not neutral: a ref the map has no row for gets
+ * the deterministic `/missing/` placeholder, which is the right answer for a
+ * classroom whose map is known-good and genuinely does not have the file.
+ *
+ * For a classroom that has never fully synced, the map is empty — every ref
+ * misses. Today the refresh runs to completion and fills it before the lookup,
+ * so that case never arises. Add a timeout without adding this flag and the
+ * cold classroom becomes the WORST case rather than a degraded one: the refresh
+ * gives up, the empty map answers "no" to everything, and the whole page
+ * renders `/missing/` placeholders that no later sync can repair — strictly
+ * worse than the legacy URLs it used to show.
+ *
+ * So `false` means "we do not know", and every caller reads it as such: fall
+ * back to the stored reference, which is a legacy URL that still works for the
+ * classrooms that have one and a broken image for the ones that do not —
+ * exactly the pre-delivery behaviour, and never a placeholder baked into
+ * content by a later save.
+ *
+ * `false` covers a timed-out refresh on a WARM classroom too, where the row
+ * really might be absent. That is deliberate: the honest answer there is also
+ * "we do not know", and a stored ref degrades where a placeholder asserts.
+ * `content_assets_synced_at` is not read to narrow it further — that is another
+ * database round trip on the render path to sharpen a case that already
+ * degrades safely.
+ *
+ * @returns `true` when the map is as fresh as this render is going to get it —
+ *          either the refresh completed or none was needed. `false` only when
+ *          the refresh ran out of time.
+ */
+async function ensureMapBounded(classroomId: string): Promise<boolean> {
+  try {
+    // `ensureMap` swallows its own failures, so the only thing that can reject
+    // here is the deadline.
+    await withDeadline(ensureMap(classroomId), ENSURE_MAP_TIMEOUT_MS, 'map refresh');
+    return true;
+  } catch (error) {
+    console.warn(
+      `[contentDelivery] Map refresh gave up for classroom ${classroomId}:`,
+      error instanceof Error ? error.message : error
+    );
+    return false;
   }
 }

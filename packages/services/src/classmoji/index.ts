@@ -52,6 +52,9 @@ import * as classroomInviteService from './classroomInvite.service.ts';
 import * as contentManifestService from './contentManifest.service.ts';
 import * as contentAssetsService from './contentAssets.service.ts';
 import * as contentDeliveryService from './contentDelivery.service.ts';
+import * as deckRenderTokenService from './deckRenderToken.service.ts';
+import * as deckThumbnailContract from './deckThumbnail.contract.ts';
+import * as deckThumbnailService from './deckThumbnail.service.ts';
 import * as resourceViewService from './resourceView.service.ts';
 import * as gitRepoAnalyticsService from './repoAnalytics.service.ts';
 import * as dashboardService from './dashboard.service.ts';
@@ -110,6 +113,12 @@ const ClassmojiService = {
   contentManifest: contentManifestService,
   contentAssets: contentAssetsService,
   contentDelivery: contentDeliveryService,
+  deckRenderToken: deckRenderTokenService,
+  // One namespace, two files. They read as a single thing to a caller
+  // (`deckThumbnail.thumbnailPathFor`, `deckThumbnail.enqueueDeckThumbnail`)
+  // and are split only because the contract half is imported by the slides
+  // render route and must stay free of the Trigger.dev client.
+  deckThumbnail: { ...deckThumbnailContract, ...deckThumbnailService },
   resourceView: resourceViewService,
   repoAnalytics: gitRepoAnalyticsService,
   dashboard: dashboardService,
@@ -175,6 +184,9 @@ export {
   contentManifestService,
   contentAssetsService,
   contentDeliveryService,
+  deckRenderTokenService,
+  deckThumbnailContract,
+  deckThumbnailService,
   resourceViewService,
   gitRepoAnalyticsService,
   dashboardService,

@@ -1236,6 +1236,19 @@ model Slide {
   created_at         DateTime @default(now())
   updated_at         DateTime @default(now()) @updatedAt
 
+  // Stored card image for the slides index. `thumbnail_path` is repo-relative
+  // (`slides/<slug>/thumbnail.webp`), never a URL — signatures expire and the
+  // same file is addressed differently depending on the classroom's delivery
+  // gate. `thumbnail_rendered_sha` is the blob sha of the index.html the
+  // picture was taken of, and skipping a render when it still matches is what
+  // keeps a save that did not change slide one from committing a new WebP.
+  // `thumbnail_rendered_at` is the LAST RENDER ATTEMPT — success OR failure —
+  // because the index rate-limits its on-view enqueue against it, and a deck
+  // whose renders keep failing must not be re-asked for on every page load.
+  thumbnail_path         String?
+  thumbnail_rendered_sha String?
+  thumbnail_rendered_at  DateTime?
+
   classroom          Classroom                @relation(fields: [classroom_id], references: [id], onDelete: Cascade)
   creator            User                     @relation(fields: [created_by], references: [id])
   links              SlideLink[]

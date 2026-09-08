@@ -132,22 +132,13 @@ export const loader = async ({
   // without edit access never pay the GitHub status call and the param is
   // silently ignored for them. Edit mode always works on main.
   const wantsPreview = url.searchParams.get('preview') === '1' && mode !== 'edit';
-  // DISTINCT param value: `?preview=true` is the landing page's thumbnail
-  // iframe render (and the speaker view's mini frames) — NOT the
-  // branch-preview gate above (`preview === '1'`). Thumbnails never show the
-  // preview banner, so skip the GitHub compare probe entirely: a staff
-  // landing page renders ~20 of these at once and must not fire ~20 compares.
-  //
-  // CLIENT-SUPPLIED, and it decides more than it used to: it now also makes the
-  // deck text read `decorative` (see the readDeckText call below). That is safe
-  // for exactly one reason — every effect of this flag is a DEGRADATION, never
-  // a denial. Setting it buys a shorter budget, a skipped compare and a
-  // placeholder where the deck would be; it grants no access, widens no gate,
-  // and reveals nothing the same viewer could not read without it. The access
-  // decisions are all above, on `canEdit` and the tier, and none of them read
-  // this. Anything added here that could ADMIT rather than degrade belongs
-  // behind the session, not behind a query string.
-  const isThumbnail = url.searchParams.get('preview') === 'true';
+  // NOTE: this route once also read `?preview=true` — a DIFFERENT param value,
+  // set by the index's thumbnail iframe, which shortened the deck read and
+  // skipped the compare probe below. The index draws stored images now, so
+  // nothing produces that value against this route and the flag is gone. The
+  // identically-named flag in `deckDelivery.server.ts` is `/follow`'s, and is
+  // about the speaker view's layout — unrelated.
+
   // Post-accept/discard success notice, round-tripped via redirect (staff only).
   const rawNotice = url.searchParams.get('notice');
   const notice =
@@ -167,7 +158,7 @@ export const loader = async ({
     commits_ahead?: number;
     oldest_commit_at?: string;
   } | null = null;
-  if (canEdit && !isThumbnail) {
+  if (canEdit) {
     try {
       previewStatus = await getDeckPreviewStatus(slide);
     } catch (e: unknown) {
@@ -351,45 +342,21 @@ export const loader = async ({
   // read the CDN, thumbnails read the CDN — that existed entirely because
   // GitHub Pages lags a save by minutes and rapid saves can ERROR its builds.
   // Addressing the file by sha makes that question go away, so the split goes
-  // with it, and the three surfaces stop being able to disagree about what the
+  // with it, and the surfaces stop being able to disagree about what the
   // current deck is.
   //
-  // Cost moves in the right direction on every one of them: no GitHub call for
-  // the deck TEXT on any of the three, where staff used to spend an
-  // installation-token read per view and students waited out a Pages build.
-  // Deck text only — a deck on a shared theme still resolves its theme URLs
-  // through `getThemeUrls`, which does reach GitHub (pre-existing, and its own
-  // follow-up).
+  // Cost moves in the right direction on both remaining ones: no GitHub call
+  // for the deck TEXT, where staff used to spend an installation-token read per
+  // view and students waited out a Pages build. Deck text only — a deck on a
+  // shared theme still resolves its theme URLs through `getThemeUrls`, which
+  // does reach GitHub (pre-existing, and its own follow-up).
   //
-  // THUMBNAILS keep their own rule, and it is the one the CDN pinning was
-  // for. A staff landing page renders ~20 at once; when the map answers they
-  // all come from the edge, but a map MISS on the default ladder would put
-  // twenty authenticated reads against the org installation's shared limit in
-  // one page load. So a thumbnail that misses goes to the CDN and stops there:
-  // a thumbnail is a picture of a deck, three minutes stale is invisible on
-  // one, and a rate limit is not. (The other half of that fan-out — twenty
-  // concurrent map refreshes on a stale classroom — is collapsed into one
-  // inside `ensureContentAssets`.)
+  // The third reader is gone entirely: the index drew one iframe of this route
+  // per deck and needed its own capped, CDN-pinned rule to keep twenty of them
+  // off the org installation's shared rate limit. It draws stored images now,
+  // so there is one kind of read here — one a person is waiting on.
   if (!contentResult) {
-    contentResult = await readDeckText(
-      slide,
-      gitOrgLogin,
-      repo,
-      filePath,
-      isThumbnail ? 'thumbnail' : 'viewer',
-      // `thumbnail: true` also caps the whole read at two seconds and lets a
-      // classroom already known unreachable answer instantly — see
-      // readDeckText. The index renders one iframe per deck, so an unreadable
-      // content repo would otherwise cost every one of them the full budget.
-      //
-      // `isThumbnail` comes from the query string, so a viewer can ask for this
-      // themselves. Acceptable because the whole of what it buys is a WORSE
-      // read: a shorter budget and a placeholder instead of a deck. It is never
-      // a denial and never an admission — a viewer who sets it sees strictly
-      // less than one who does not, and never anything they were not already
-      // entitled to. See the flag's definition in the loader above.
-      isThumbnail ? { fallback: 'cdn-only', thumbnail: true } : {}
-    );
+    contentResult = await readDeckText(slide, gitOrgLogin, repo, filePath, 'viewer');
   }
 
   if (contentResult) {
@@ -397,8 +364,8 @@ export const loader = async ({
     deckSha = contentResult.sha ?? null;
     // Kept for the client-side fallback's own bookkeeping. It now means "the
     // delivery layer could not answer and GitHub did", which is a narrower
-    // thing than it used to be — `worker` is the ordinary case and `cdn` is
-    // the thumbnail one.
+    // thing than it used to be — `worker` is the ordinary case and `cdn` the
+    // last rung of the ladder.
     usedApiFallback = contentResult.source === 'api';
 
     // Sign the deck's image references — but never for the document the editor
@@ -554,6 +521,27 @@ async function recordThemeFile(
     path,
     sha,
     size: Buffer.byteLength(String(content)),
+  });
+}
+
+/**
+ * A theme file changed, so every card in the classroom is now a picture of the
+ * OLD theme. Ask for new ones.
+ *
+ * This is the case the render task's idempotence check cannot see. It asks "has
+ * this deck's `index.html` moved?" — and a theme edit moves nothing inside any
+ * deck while changing how all of them look, so every deck would answer "no" and
+ * keep its stale card until somebody happened to edit it. Hence `force`.
+ *
+ * Fire and forget, and NEVER awaited: the theme is committed and recorded by the
+ * time this runs, and a Trigger.dev outage must not turn a successful theme save
+ * into an error on an author's screen. The services helper swallows its own
+ * failures.
+ */
+function refreshClassroomCards(slide: { classroom_id?: string | null }, themeName: string): void {
+  void ClassmojiService.deckThumbnail.enqueueClassroomThumbnails(slide.classroom_id, {
+    themeName,
+    force: true,
   });
 }
 
@@ -984,6 +972,7 @@ export const action = async ({
         message: `Add snippet: ${name}`,
       });
       await recordThemeFile(slide, `.slidesthemes/snippets/${filename}`, written.sha, content);
+      refreshClassroomCards(slide, filename);
 
       return {
         intent: 'save-snippet',
@@ -1046,6 +1035,7 @@ export const action = async ({
       });
       await recordThemeFile(slide, newPath, written.sha, content);
       if (id !== newFilename) await forgetThemeFiles(slide, [oldPath]);
+      refreshClassroomCards(slide, newFilename);
 
       return {
         intent: 'update-snippet',
@@ -1117,6 +1107,7 @@ export const action = async ({
         message: `Add custom CSS theme: ${name} (${type})`,
       });
       await recordThemeFile(slide, `.slidesthemes/${filename}`, written.sha, content);
+      refreshClassroomCards(slide, filename);
 
       return {
         intent: 'save-theme',
@@ -1181,6 +1172,7 @@ export const action = async ({
       });
       await recordThemeFile(slide, newPath, written.sha, content);
       if (id !== newFilename) await forgetThemeFiles(slide, [oldPath]);
+      refreshClassroomCards(slide, newFilename);
 
       return {
         intent: 'update-theme',

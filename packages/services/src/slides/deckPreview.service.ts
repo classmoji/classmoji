@@ -22,6 +22,7 @@ import getPrisma from '@classmoji/database';
 import { ContentService } from '../content/ContentService.ts';
 import { recordContentAssets } from '../classmoji/contentAssets.service.ts';
 import { warmContentText } from '../classmoji/contentDelivery.service.ts';
+import { enqueueDeckThumbnail } from '../classmoji/deckThumbnail.service.ts';
 import { generateDeckHtml, type DeckThemeUrls } from './deckHtml.ts';
 import {
   indexResolutions,
@@ -426,6 +427,13 @@ export async function acceptDeckPreview(
         ctx,
         written.map(file => file.path)
       );
+
+    // Accepting a preview is a publish: the deck on main is now different from
+    // the one the current card was taken of. Enqueue on the same terms as the
+    // warm — after the rows, never awaited, never able to fail the accept.
+    // This path commits its own `index.html` rather than going through
+    // `saveDeck`, so `recordDeckFiles`' enqueue never fires for it.
+    void enqueueDeckThumbnail(slide.id, slide.classroom.id);
   }
 
   // Concurrent-stacking guard: a stacking apply may have committed to the

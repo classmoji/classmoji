@@ -27,6 +27,7 @@ import {
   lookupContentAssetsBySha,
   recordContentAssets,
 } from './contentAssets.service.ts';
+import { enqueueDeckThumbnail } from './deckThumbnail.service.ts';
 import { getGitProvider } from '../git/index.ts';
 import * as contentManifestService from './contentManifest.service.ts';
 import { createWithUniquePageSlug, ensureContentRepo, isPageSlugConflict } from './page.service.ts';
@@ -1384,6 +1385,18 @@ async function importSlides({
       });
       idMap[item.source.id] = row.id;
       created++;
+
+      // An imported deck's files are copied verbatim, thumbnail included if the
+      // source had one — but that WebP is a picture of the SOURCE deck's assets
+      // at the source repo's URLs, and this import has just rewritten every one
+      // of those references. Re-render rather than inherit.
+      //
+      // Enqueued here rather than beside the `recordContentAssets` above (which
+      // is where the plan pointed) for the plain reason that the payload needs a
+      // slide id, and the rows do not exist until this loop. Same contract as
+      // everywhere else: not awaited, cannot fail the import. The task's own
+      // queue meters a forty-deck import down to four browsers at a time.
+      void enqueueDeckThumbnail(row.id, target.classroomId);
     } catch (error: unknown) {
       warn('slides', `DB row failed for "${item.targetTitle}": ${errText(error)}`);
     }

@@ -709,3 +709,103 @@ describe('canonicalizing the derived URLs that are not blob signatures', () => {
     expect(await canonicalizeAssetRef(ctx, base!)).toBe('.slidesthemes/midnight');
   });
 });
+
+/**
+ * The bounded map refresh, and the one case that makes it more than a timeout.
+ *
+ * Every resolver opens by refreshing the asset map if it is stale, and a stale
+ * map means three GitHub round trips — default branch, head commit, whole tree —
+ * on the render path. Slow GitHub must cost a degraded page, not a held-open
+ * one, so the refresh gets the same deadline the text read path already
+ * applies.
+ *
+ * The trap is that the miss branch is NOT neutral. A ref the map has no row for
+ * gets the deterministic `/missing/` placeholder, which is correct when the map
+ * is known-good and genuinely lacks the file. A classroom that has never fully
+ * synced has an EMPTY map, so every ref misses — and today that never shows
+ * because the refresh runs to completion and fills it first. Add a timeout
+ * naively and that classroom becomes the worst case rather than a degraded one:
+ * the whole page renders placeholders that name no file and that no later sync
+ * can repair.
+ *
+ * So a refresh that ran out of time means "we do not know", and a miss under it
+ * falls back to the STORED reference — the legacy URL that still works for the
+ * classrooms that have one, and the pre-delivery behaviour for the rest.
+ */
+describe('a map refresh that runs out of time', () => {
+  /** `ensureContentAssets` that never answers — GitHub gone quiet, not down. */
+  function hangTheRefresh(): void {
+    ensureContentAssets.mockImplementation(() => new Promise(() => {}));
+  }
+
+  /**
+   * Run something that starts with a refresh, letting the deadline fire.
+   *
+   * Fake timers rather than a real 4-second wait; the promise is started before
+   * the clock is advanced so the deadline's own `setTimeout` exists to advance.
+   */
+  async function pastTheDeadline<T>(work: () => Promise<T>): Promise<T> {
+    vi.useFakeTimers();
+    try {
+      const running = work();
+      await vi.advanceTimersByTimeAsync(10_000);
+      return await running;
+    } finally {
+      vi.useRealTimers();
+    }
+  }
+
+  it('hands back the stored reference for a cold classroom, not a placeholder', async () => {
+    // Never synced: the map is empty, so every path misses.
+    hangTheRefresh();
+    lookupContentAssets.mockResolvedValue(new Map());
+
+    const map = await pastTheDeadline(() => resolveMany(ctx, [REPO_PATH, PAGES_URL]));
+
+    expect(map.get(REPO_PATH)).toBe(REPO_PATH);
+    // The legacy absolute URL survives intact — for a classroom on the old path
+    // that is a working image, where a placeholder would be a guaranteed 404.
+    expect(map.get(PAGES_URL)).toBe(PAGES_URL);
+    for (const value of map.values()) expect(value).not.toContain('/missing/');
+  });
+
+  it('does the same for the single-reference resolver', async () => {
+    hangTheRefresh();
+    lookupContentAsset.mockResolvedValue(null);
+
+    const url = await pastTheDeadline(() => resolveAssetUrl(ctx, REPO_PATH));
+
+    expect(url).toBe(REPO_PATH);
+  });
+
+  it('still signs the rows the map DOES have', async () => {
+    // Degradation is scoped to misses. A stale-but-populated map is a perfectly
+    // good answer, and giving up on the refresh must not throw it away.
+    hangTheRefresh();
+
+    const url = await pastTheDeadline(() => resolveAssetUrl(ctx, REPO_PATH));
+
+    expect(parseContentUrl(url)).toMatchObject({ sha: BLOB_SHA });
+  });
+
+  it('does not hold the render open waiting for GitHub', async () => {
+    hangTheRefresh();
+    const warn = vi.spyOn(console, 'warn');
+
+    await pastTheDeadline(() => resolveMany(ctx, [REPO_PATH]));
+
+    expect(warn.mock.calls.map(call => call.join(' ')).join('\n')).toContain('Map refresh gave up');
+  });
+
+  it('placeholders as before once the refresh completes', async () => {
+    // The control. `ensureContentAssets` resolves (the beforeEach default), so
+    // the map's "no" is trustworthy and a miss is a real miss.
+    lookupContentAssets.mockResolvedValue(new Map());
+
+    const map = await resolveMany(ctx, [REPO_PATH]);
+
+    expect(map.get(REPO_PATH)).toBe(
+      `${ORIGIN}/c/${CLASSROOM_ID}/missing/${encodeURIComponent(REPO_PATH)}`
+    );
+  });
+});
