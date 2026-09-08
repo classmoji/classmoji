@@ -163,6 +163,18 @@ async function disableGithubPages(options: Options): Promise<void> {
 
       const pages = await provider.getRepoPages(org, repo);
       if (!pages) {
+        // GitHub answers 404 both for "no Pages site" and for "no such repo,
+        // as far as this installation is concerned". Reported as-is, the
+        // second becomes a confident "already off" over a repo that may still
+        // be serving its whole tree — the one wrong answer here that gets a
+        // repo flipped private on a false all-clear. One extra call settles it.
+        if (!(await provider.repositoryExists(org, repo))) {
+          record(
+            'failed',
+            `   ❌ ${label} — repo not visible to the GitHub App; cannot confirm Pages is off`
+          );
+          continue;
+        }
         record('already-off', `   ✅ ${label} — no Pages site${forced}`);
         continue;
       }

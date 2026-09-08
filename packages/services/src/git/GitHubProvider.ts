@@ -1306,6 +1306,11 @@ export class GitHubProvider extends GitProvider {
    * the repo rather than a failure — so it becomes `null` here and every other
    * status still throws. Callers get one value to branch on instead of having
    * to re-derive "absent" from an exception.
+   *
+   * `null` is "GitHub reports no Pages site here", which a repo this
+   * installation cannot see produces too — same 404, and indistinguishable
+   * from the status alone. Anything treating `null` as an all-clear should
+   * confirm the repo with `repositoryExists`.
    */
   async getRepoPages(org: string, repo: string): Promise<RepoPagesInfo | null> {
     const octokit = await this.#getOctokit();
@@ -1338,9 +1343,10 @@ export class GitHubProvider extends GitProvider {
    * IDEMPOTENT: GitHub returns 404 both for "no such repo" and for "this repo
    * has no Pages site". We cannot tell those apart from the status alone, and
    * the second is the overwhelmingly common one for a re-run — so a 404 is
-   * reported as `alreadyDisabled: true` rather than thrown. Callers that need
-   * to know the repo exists should ask `repositoryExists` first; the cutover
-   * script asks `getRepoPages` before this, which answers the same question.
+   * reported as `alreadyDisabled: true` rather than thrown. That makes
+   * `alreadyDisabled` mean "GitHub has no Pages site here to remove", NOT "the
+   * repo exists and is clean": a caller about to act on the all-clear — flip
+   * the repo private, say — must confirm the repo with `repositoryExists`.
    *
    * @param {string} org - Organization login
    * @param {string} repo - Repository name
