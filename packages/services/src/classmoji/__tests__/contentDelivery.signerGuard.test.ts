@@ -278,19 +278,50 @@ describe('the choke point', () => {
     expect(refusals()).toHaveLength(0);
   });
 
-  it('will not take a hand-built asset — the proof is nominal', async () => {
+  it('will not take a hand-built asset — the brand is nominal, and that is the point', async () => {
+    // The brand is NOMINAL, not unforgeable: `as unknown as MappedAsset` would
+    // get past it. What it buys is that passing a bare sha stops being possible
+    // by accident and becomes a cast somebody has to write and a reviewer can
+    // see. The wall that actually holds is the runtime `classroom_id` check
+    // above, which a cast cannot satisfy without naming a classroom; the second
+    // wall is the `no-restricted-imports` rule in the shared eslint config,
+    // which stops a module skipping this function entirely by importing
+    // `@classmoji/content-signing` and calling `signBlobUrl` itself.
+    //
+    // This assertion is live: if the brand ever stopped rejecting a plain
+    // object, `tsc --noEmit` would fail the directive as unused.
     await signBlobUrlForClassroom(
       { id: CLASSROOM_A, content_key_version: 7 },
       { origin: ORIGIN, master: MASTER },
       {
-        // @ts-expect-error a bare sha is not proof of anything. The only way to
-        // get a MappedAsset is to read a row out of a classroom's own map, and
-        // that is the entire point of the brand.
+        // @ts-expect-error a bare sha is not proof of anything — the ordinary
+        // way to get a MappedAsset is to read a row out of a classroom's map.
         asset: { classroom_id: CLASSROOM_A, path: REPO_PATH, sha: SHA_ORPHAN, type: 'blob' },
         ext: 'png',
         tier: 'week',
       }
     );
+  });
+
+  it('refuses a FORGED row even when the cast gets past the brand', async () => {
+    // The cast the brand cannot stop, made explicitly. A caller determined
+    // enough to write this still has to name a classroom on the row, and naming
+    // the wrong one is exactly what `mintSigned` refuses.
+    const forged = {
+      classroom_id: CLASSROOM_B,
+      path: REPO_PATH,
+      sha: SHA_ORPHAN,
+      type: 'blob',
+    } as unknown as MappedAsset;
+
+    const url = await signBlobUrlForClassroom(
+      { id: CLASSROOM_A, content_key_version: 7 },
+      { origin: ORIGIN, master: MASTER },
+      { asset: forged, ext: 'png', tier: 'week' }
+    );
+
+    expect(url).toBeNull();
+    expect(refusals()[0]).toContain(SHA_ORPHAN);
   });
 });
 

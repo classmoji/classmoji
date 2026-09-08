@@ -276,14 +276,27 @@ function passClock(): number {
  * ## What counts as proof
  *
  * A `MappedAsset`: a row read out of ONE classroom's `content_assets`, carrying
- * the classroom it was read for. It cannot be constructed outside this file
- * (the brand is a module-private symbol), which is what makes "I have a sha"
- * insufficient at the type level — a caller holding a bare 40-hex string has
- * nothing the signer will accept, and has to go get a row first.
+ * the classroom it was read for. The brand is a module-private symbol, so it
+ * cannot be produced by writing an object literal — only by a deliberate cast
+ * that a reader can see. That is what makes "I have a sha" insufficient at the
+ * type level: a caller holding a bare 40-hex string has nothing the signer will
+ * accept, and has to go get a row first.
  *
- * The brand alone cannot say WHICH classroom, so the runtime half does: every
- * mint asserts `asset.classroom_id === classroom.id`. A row genuinely read from
- * classroom B, handed to a mint for classroom A, is refused there.
+ * Three walls, none of them load-bearing alone:
+ *
+ *   1. the brand, which turns "pass a sha" into "write a cast" — a speed bump
+ *      that shows up in a diff, not a proof;
+ *   2. the runtime check, which is the one that actually holds: the brand
+ *      cannot say WHICH classroom, so every mint asserts
+ *      `asset.classroom_id === classroom.id`. A row genuinely read from
+ *      classroom B, handed to a mint for classroom A, is refused there — and a
+ *      cast cannot talk its way past it, because a forged row still has to name
+ *      a classroom;
+ *   3. a `no-restricted-imports` rule in the shared eslint config, which stops
+ *      a module from skipping all of the above by importing
+ *      `@classmoji/content-signing` and calling `signBlobUrl` itself. The
+ *      allowlist is this file, `deckRenderToken.service.ts`, the Worker's
+ *      verify seam, and tests.
  *
  * ## What a refusal does
  *
@@ -299,9 +312,13 @@ declare const MAPPED_ASSET: unique symbol;
  *
  * The brand is phantom — nothing carries it at runtime — so its only job is to
  * stop an object literal, a request parameter or another service's DTO from
- * being passed where a map row is required. Mint one with `mappedAsset`, which
- * is private to this module and is only ever called on the result of a
- * classroom-scoped lookup.
+ * being passed where a map row is required. It is NOMINAL, not unforgeable: a
+ * cast defeats it. That is on purpose and it is enough, because the cast is
+ * visible in review and the thing that actually refuses a wrong sha is the
+ * runtime `classroom_id` assertion in `mintSigned`, which no cast can satisfy
+ * without naming a classroom. Mint one with `mappedAsset`, which is private to
+ * this module and is only ever called on the result of a classroom-scoped
+ * lookup.
  */
 export interface MappedAsset {
   readonly [MAPPED_ASSET]: true;
