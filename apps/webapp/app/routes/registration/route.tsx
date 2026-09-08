@@ -502,6 +502,12 @@ export const action = async ({ request }: Route.ActionArgs) => {
       name: formData.name,
       email: formData.email,
       school_id: formData.school_id || null,
+      // `provider_email` is otherwise written on create only, so a returning
+      // user keeps whatever better-auth stored at first sign-in. The invite
+      // claim below reads the stored row rather than this form, so a stale
+      // value here silently costs the student their invite. Conditional: a
+      // profile whose email went private must not null out what we hold.
+      ...(formData.githubEmail ? { provider_email: formData.githubEmail } : {}),
     },
     create: {
       provider: 'GITHUB',
@@ -538,23 +544,11 @@ export const action = async ({ request }: Route.ActionArgs) => {
     data: { user_id: user.id },
   });
 
-  // Claim any pending classroom invites — match against the school email the student entered
-  // AND the email on their GitHub account, since instructors invite by either.
-  const invites = await ClassmojiService.classroomInvite.findInvitesByAnyEmail([
-    formData.email,
-    formData.githubEmail,
-  ]);
-  if (invites.length > 0) {
-    for (const invite of invites) {
-      await ClassmojiService.classroomMembership.create({
-        classroom_id: invite.classroom_id,
-        user_id: user.id,
-        role: 'STUDENT',
-        has_accepted_invite: false,
-      });
-    }
-    await ClassmojiService.classroomInvite.deleteManyInvites(invites.map(i => i.id));
-  }
+  // Claim any pending classroom invites addressed to either email we now hold
+  // for this user. The same call runs on login and on an email change, so a
+  // student invited at an address they did not register with is no longer
+  // stranded (#307).
+  await ClassmojiService.classroomInvite.claimPendingInvites(user.id);
 
   // Give every brand-new user a populated "Example Course" sandbox to explore
   // (the in-classroom onboarding tour runs here). Never let this break signup.

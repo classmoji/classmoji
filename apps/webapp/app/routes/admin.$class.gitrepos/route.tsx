@@ -58,8 +58,8 @@ async function fetchOrgRepositories(
         search: { nodes: { name: string }[]; repositoryCount: number };
       }>(
         `
-          query ($query: String!, $first: Int!, $after: String) {
-            search(query: $query, type: REPOSITORY, first: $first, after: $after) {
+          query ($searchQuery: String!, $first: Int!, $after: String) {
+            search(query: $searchQuery, type: REPOSITORY, first: $first, after: $after) {
               repositoryCount
               nodes {
                 ... on Repository {
@@ -74,7 +74,10 @@ async function fetchOrgRepositories(
           }
         `,
         {
-          query: searchQuery,
+          // NOT `query:` — @octokit/graphql reserves that option key (along with
+          // `method` and `url`) and rejects the call before it reaches GitHub.
+          // The GraphQL argument is still `query:`; only the variable is renamed.
+          searchQuery,
           first: pageSize,
           after: page > 1 ? btoa(`cursor:${(page - 1) * pageSize}`) : null,
         }

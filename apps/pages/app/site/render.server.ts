@@ -337,9 +337,18 @@ export function addHeadingAnchors(html: string): {
  * `bn-root` / `bn-container` / `bn-mantine` on the outside and
  * `ProseMirror bn-editor bn-default-styles` on the inside is the official
  * recipe for rendering serialized BlockNote HTML with the editor's stylesheet,
- * and it is the reason this feature ships ZERO custom block CSS: every block's
- * appearance comes from `@blocknote/mantine/style.css` plus the app's existing
- * overrides, which is also what makes the site look identical to the editor.
+ * and it is the reason this feature ships almost no custom block CSS: every
+ * block's appearance comes from `@blocknote/mantine/style.css` plus the app's
+ * existing overrides.
+ *
+ * That recipe carries every override keyed on a BlockNote class — but NOT the
+ * ones scoped to `.page-editor`, a class only the editor and the in-app viewer
+ * put on their wrapper. Headings are what proved it: their sizes lived under
+ * `.page-editor`, so a site page fell through to BlockNote's 3em/2em/1.3em and
+ * published a 48px H1 where the editor showed 30px (#288). The scale now lives
+ * unscoped in `blocknote-overrides.css`, as `--level`. Before assuming this
+ * wrapper makes the site identical to the editor, check whether the rule you
+ * care about is `.page-editor`-scoped; if it is, it does not ship here.
  *
  * The colour scheme is fixed to `light` server-side. BlockNote's theme is an
  * attribute, not a media query, and the document's dark-mode script toggles a
