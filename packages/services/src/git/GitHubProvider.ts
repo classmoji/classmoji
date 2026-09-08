@@ -2,7 +2,7 @@ import { App, Octokit } from 'octokit';
 import { createAppAuth } from '@octokit/auth-app';
 import { createHmac, timingSafeEqual } from 'crypto';
 import jwt from 'jsonwebtoken';
-import { GitProvider } from './GitProvider.ts';
+import { GitProvider, type RepoPagesInfo } from './GitProvider.ts';
 import type {
   CommitRecord,
   ContributorRecord,
@@ -30,6 +30,15 @@ function generateGitHubJWT(): string {
     iss: process.env.GITHUB_APP_ID,
   };
   return jwt.sign(payload, privateKey as string, { algorithm: 'RS256' });
+}
+
+/** An Octokit rejection carrying GitHub's 404 — "absent", not "broken". */
+function isNotFound(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    'status' in error &&
+    (error as Error & { status: number }).status === 404
+  );
 }
 
 /**
@@ -1288,6 +1297,67 @@ export class GitHubProvider extends GitProvider {
       },
     });
     return { alreadyEnabled: false };
+  }
+
+  /**
+   * Read a repository's GitHub Pages configuration, or `null` when it has none.
+   *
+   * GitHub answers 404 for "this repo has no Pages site", which is a fact about
+   * the repo rather than a failure — so it becomes `null` here and every other
+   * status still throws. Callers get one value to branch on instead of having
+   * to re-derive "absent" from an exception.
+   */
+  async getRepoPages(org: string, repo: string): Promise<RepoPagesInfo | null> {
+    const octokit = await this.#getOctokit();
+    try {
+      const { data } = await octokit.request('GET /repos/{owner}/{repo}/pages', {
+        owner: org,
+        repo,
+      });
+      return {
+        htmlUrl: data.html_url ?? null,
+        status: data.status ?? null,
+        buildType: (data as { build_type?: string | null }).build_type ?? null,
+        sourceBranch: data.source?.branch ?? null,
+        sourcePath: data.source?.path ?? null,
+      };
+    } catch (error: unknown) {
+      if (isNotFound(error)) return null;
+      throw error;
+    }
+  }
+
+  /**
+   * Turn GitHub Pages OFF for a repository. The inverse of enableGitHubPages.
+   *
+   * This exists for the content-delivery cutover: a content repo that is about
+   * to be flipped private must stop serving `{org}.github.io/{repo}/…` first.
+   * Pages left on a private repo is a leak — the site keeps serving the repo's
+   * files to anyone who knows the URL, whatever the repo's visibility says.
+   *
+   * IDEMPOTENT: GitHub returns 404 both for "no such repo" and for "this repo
+   * has no Pages site". We cannot tell those apart from the status alone, and
+   * the second is the overwhelmingly common one for a re-run — so a 404 is
+   * reported as `alreadyDisabled: true` rather than thrown. Callers that need
+   * to know the repo exists should ask `repositoryExists` first; the cutover
+   * script asks `getRepoPages` before this, which answers the same question.
+   *
+   * @param {string} org - Organization login
+   * @param {string} repo - Repository name
+   * @returns {Promise<{alreadyDisabled: boolean}>} `true` when there was nothing to turn off
+   */
+  async disableRepoPages(org: string, repo: string): Promise<{ alreadyDisabled: boolean }> {
+    const octokit = await this.#getOctokit();
+    try {
+      await octokit.request('DELETE /repos/{owner}/{repo}/pages', {
+        owner: org,
+        repo,
+      });
+      return { alreadyDisabled: false };
+    } catch (error: unknown) {
+      if (isNotFound(error)) return { alreadyDisabled: true };
+      throw error;
+    }
   }
 
   // ─── Webhooks ──────────────────────────────────────────────────────────────
