@@ -33,6 +33,7 @@ import * as regradeRequestService from './regradeRequest.service.ts';
 import * as gitRepoService from './gitRepo.service.ts';
 import * as subscriptionService from './subscription.service.ts';
 import * as entitlementService from './entitlement.service.ts';
+import * as instructorAudienceService from './instructorAudience.service.ts';
 export { ClassroomSettingsEntitlementError } from './classroom.service.ts';
 import * as teamMembershipService from './teamMembership.service.ts';
 import * as teamService from './team.service.ts';
@@ -94,6 +95,7 @@ const ClassmojiService = {
   gitRepo: gitRepoService,
   subscription: subscriptionService,
   entitlement: entitlementService,
+  instructorAudience: instructorAudienceService,
   teamMembership: teamMembershipService,
   team: teamService,
   teamAdmin: teamAdminService,

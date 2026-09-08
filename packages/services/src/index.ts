@@ -98,6 +98,13 @@ export type {
   GradingReportRow,
 } from './classmoji/gitRepoAssignmentGrader.service.ts';
 
+// Instructor audience for the newsletter segment. The mail-provider mechanics
+// that act on the answer live in the scheduled task that consumes it.
+export {
+  listInstructorContacts,
+  type InstructorContact,
+} from './classmoji/instructorAudience.service.ts';
+
 // Fly certificate automation for class-site custom domains. Every method throws
 // a typed FlyCertError when the credentials are absent, so importing this in a
 // deployment that has none is safe.
