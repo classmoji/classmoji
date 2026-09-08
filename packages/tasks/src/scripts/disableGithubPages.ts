@@ -10,15 +10,27 @@
  *
  * ORDER MATTERS and it is the reverse of what feels safe. Pages goes off
  * FIRST, while the repo is still public, so the fallback disappears while the
- * signed-URL path is still verifiable; the flip to private comes after. Tim
- * does the visibility flip by hand — this script only does the Pages half.
+ * signed-URL path is still verifiable; the flip to private comes after. The
+ * operator does the visibility flip by hand — this script only does the Pages
+ * half.
+ *
+ * NOT DURABLE ON ITS OWN, and this is the sharp edge. `ensureContentRepoExists`
+ * in page.service.ts calls `enableGitHubPages` unconditionally, and it runs on
+ * every page create, slide create, batch page import, class-to-class import and
+ * classroom-import run. So the next such action in a swept classroom turns Pages
+ * back ON — on a now-private repo, which is the leak this exists to close, and
+ * it happens silently (only the failure branch logs). Removing that call is its
+ * own Phase 4 line item; until it lands, treat a run of this script as good only
+ * until the classroom's next content write, and re-run before the visibility
+ * flip.
  *
  * REFUSES a classroom whose `content_delivery_enabled` is false. That gate is
  * what routes renders through the signed Worker; with it off, the repo's
  * images are still served over `github.io`, and taking Pages away would break
- * that classroom's content on the spot. `--force` overrides, for the sweep at
- * the end of the rollout when the gate is on everywhere and the remaining
- * repos are stragglers.
+ * that classroom's content on the spot. `--force` overrides it, and it also
+ * widens `--all-enabled` to every classroom with a content repo — that pairing
+ * is the end-of-rollout sweep, whose whole point is the gate-off stragglers the
+ * gated selection would otherwise drop.
  *
  * IDEMPOTENT: a repo with no Pages site answers 404, which is reported as
  * "already off" rather than thrown. Re-running over the same allowlist is
@@ -33,6 +45,7 @@
  *   npx tsx packages/tasks/src/scripts/disableGithubPages.ts --all-enabled --dry-run
  *   npx tsx packages/tasks/src/scripts/disableGithubPages.ts --all-enabled
  *   npx tsx packages/tasks/src/scripts/disableGithubPages.ts --classroom cs52-25s --force
+ *   npx tsx packages/tasks/src/scripts/disableGithubPages.ts --all-enabled --force
  *
  * DATABASE_URL and the GitHub App credentials come from the environment, the
  * same as every other script in this repo (see .dev-context) — this script
@@ -93,13 +106,30 @@ async function disableGithubPages(options: Options): Promise<void> {
   const classrooms = await getPrisma().classroom.findMany({
     where: {
       content_repo: { not: '' },
-      ...(allEnabled ? { content_delivery_enabled: true } : { slug: classroomSlug! }),
+      // `--all-enabled` means the gated set; `--all-enabled --force` is the
+      // end-of-rollout sweep, and the stragglers it exists for are exactly the
+      // gate-off classrooms that filter would drop. Widen, and leave the
+      // per-classroom refusal below as the thing that does the talking.
+      ...(allEnabled
+        ? force
+          ? {}
+          : { content_delivery_enabled: true }
+        : { slug: classroomSlug! }),
+      // Example classrooms are backed by a mock GitOrganization with no live
+      // GitHub behind it; a real API call there can only produce noise.
+      is_example: false,
     },
     select: {
       slug: true,
       content_repo: true,
       content_delivery_enabled: true,
-      git_organization: true,
+      // Explicit, not `git_organization: true` — that pulls every column of the
+      // row, the encrypted `access_token` included, into a process with no use
+      // for it. These three are all `getGitProvider` reads on the GitHub path,
+      // which is the only path this script takes.
+      git_organization: {
+        select: { provider: true, github_installation_id: true, login: true },
+      },
     },
     orderBy: { slug: 'asc' },
   });
@@ -131,15 +161,13 @@ async function disableGithubPages(options: Options): Promise<void> {
   };
 
   for (const classroom of classrooms) {
-    const org = classroom.git_organization?.login;
+    const gitOrg = classroom.git_organization;
+    const org = gitOrg.login;
     const repo = classroom.content_repo;
     const label = `${org ?? '?'}/${repo} (${classroom.slug})`;
 
-    if (!org || classroom.git_organization?.provider !== 'GITHUB') {
-      record(
-        'skipped',
-        `   ⏭️  ${label} — not a GitHub organization (${classroom.git_organization?.provider ?? 'none'})`
-      );
+    if (!org || gitOrg.provider !== 'GITHUB') {
+      record('skipped', `   ⏭️  ${label} — not a GitHub organization (${gitOrg.provider})`);
       continue;
     }
 
@@ -155,7 +183,7 @@ async function disableGithubPages(options: Options): Promise<void> {
     const forced = !classroom.content_delivery_enabled ? ' (FORCED, gate is off)' : '';
 
     try {
-      const provider = getGitProvider(classroom.git_organization);
+      const provider = getGitProvider(gitOrg);
       if (!(provider instanceof GitHubProvider)) {
         record('skipped', `   ⏭️  ${label} — provider has no Pages API`);
         continue;
@@ -179,9 +207,17 @@ async function disableGithubPages(options: Options): Promise<void> {
         continue;
       }
 
-      const state = `has_pages=true source=${pages.sourceBranch ?? '?'}${
-        pages.sourcePath && pages.sourcePath !== '/' ? pages.sourcePath : ''
-      } build=${pages.buildType ?? '?'} status=${pages.status ?? '?'}`;
+      // A `workflow` build serves from an Actions run, so `source` is not the
+      // truth for it — name the build type rather than print a branch that is
+      // not one. The URL leads: it is the thing about to stop serving, and the
+      // one field an operator can check by eye before approving a DELETE.
+      const source =
+        pages.buildType === 'workflow'
+          ? 'source=Actions workflow'
+          : `source=${pages.sourceBranch ?? '?'}${
+              pages.sourcePath && pages.sourcePath !== '/' ? pages.sourcePath : ''
+            }`;
+      const state = `${pages.htmlUrl ?? '(no url)'} ${source} build=${pages.buildType ?? '?'} status=${pages.status ?? '?'}`;
 
       if (dryRun) {
         record('would-disable', `   🔍 ${label} — ${state} → would DELETE${forced}`);
@@ -212,7 +248,9 @@ async function disableGithubPages(options: Options): Promise<void> {
   if (counts.failed) console.log(`❌ ${counts.failed} failed`);
   if (dryRun) console.log('\nNothing was changed. Re-run without --dry-run to apply.');
 
-  if (counts.failed > 0) process.exitCode = 1;
+  // A refusal is not a success: a runbook step or wrapper reading exit 0 would
+  // tick off a repo whose Pages is still up.
+  if (counts.failed > 0 || counts.refused > 0) process.exitCode = 1;
 }
 
 disableGithubPages(parseArgs(process.argv.slice(2))).catch((err: unknown) => {

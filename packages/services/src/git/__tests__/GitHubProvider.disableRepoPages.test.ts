@@ -76,6 +76,23 @@ describe('GitHubProvider.getRepoPages', () => {
     });
   });
 
+  // A workflow-built site has no meaningful `source`, and `html_url`/`status`
+  // can be absent while one is still building. Every field is optional in
+  // practice, so the fallbacks have to hold rather than throw.
+  it('fills in nulls for a sparse workflow-built payload', async () => {
+    const request = vi.fn(async () => ({
+      data: { build_type: 'workflow', status: null },
+    }));
+
+    await expect(providerWith(request).getRepoPages('org', 'repo')).resolves.toEqual({
+      htmlUrl: null,
+      status: null,
+      buildType: 'workflow',
+      sourceBranch: null,
+      sourcePath: null,
+    });
+  });
+
   it('returns null when the repo has no Pages site', async () => {
     const request = vi.fn(async () => {
       throw httpError(404);
