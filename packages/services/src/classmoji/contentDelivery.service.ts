@@ -11,11 +11,11 @@ import {
 } from '@classmoji/content-signing';
 import { ContentService } from '../content/ContentService.ts';
 import {
-  type ContentAssetRecord,
   ensureContentAssets,
   lookupContentAsset,
   lookupContentAssetBySha,
   lookupContentAssets,
+  lookupContentAssetsBySha,
   lookupContentTree,
 } from './contentAssets.service.ts';
 import { extractOwnRepoPath } from './contentRefs.ts';
@@ -245,31 +245,274 @@ export function tierFor({
   return 'week';
 }
 
-/**
- * The signing context for one pass, optionally pinned to one clock.
- *
- * `now` matters more than it looks. Expiries are BUCKETED, so two signatures
- * minted a tick apart usually land in the same bucket and come out identical —
- * usually. Straddle a bucket boundary and they do not, and a caller that pairs
- * a `src` with its `srcset` by string equality (which is the whole contract
- * between `resolveMany` and `resolveSrcSets`) silently drops every set.
- *
- * So a pass that mints more than one URL pins its own `now` and hands the same
- * one to every signature in the batch. `nowSeconds()` is read once, at the top.
- */
-function signingContext(ctx: ResolveContext, master: string, now?: number): SigningContext {
-  return {
-    master,
-    classroomId: ctx.classroom.id,
-    keyVersion: ctx.classroom.content_key_version,
-    tier: ctx.tier,
-    ...(now === undefined ? {} : { now }),
-  };
-}
-
 /** Unix seconds — the one clock read a batched pass pins itself to. */
 function passClock(): number {
   return Math.floor(Date.now() / 1000);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// The signing invariant
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * THE INVARIANT: the app only ever signs a sha that is in THAT classroom's map.
+ *
+ * ## Why the signer is where this has to live
+ *
+ * The Worker caches blobs by CONTENT — `blobs/{sha}` in R2, one object shared
+ * by every classroom that happens to hold the same bytes. That sharing is the
+ * whole reason the cache is worth having, and it is safe for exactly one
+ * reason: the signature is the proof of entitlement. The Worker does not know
+ * which files a classroom owns and is not the place to teach it; it knows only
+ * that a URL naming `{classroomId, sha}` carries a signature made with that
+ * classroom's derived key.
+ *
+ * So a signature over a sha that is NOT in the classroom's map is the single
+ * thing that would let classroom A read classroom B's cached private bytes.
+ * Not a Worker bug — a correctly verified signature over a claim the app
+ * should never have made. The control therefore belongs here, at the mint, and
+ * nowhere else.
+ *
+ * ## What counts as proof
+ *
+ * A `MappedAsset`: a row read out of ONE classroom's `content_assets`, carrying
+ * the classroom it was read for. The brand is a module-private symbol, so it
+ * cannot be produced by writing an object literal — only by a deliberate cast
+ * that a reader can see. That is what makes "I have a sha" insufficient at the
+ * type level: a caller holding a bare 40-hex string has nothing the signer will
+ * accept, and has to go get a row first.
+ *
+ * Three walls, none of them load-bearing alone:
+ *
+ *   1. the brand, which turns "pass a sha" into "write a cast" — a speed bump
+ *      that shows up in a diff, not a proof;
+ *   2. the runtime check, which is the one that actually holds: the brand
+ *      cannot say WHICH classroom, so every mint asserts
+ *      `asset.classroom_id === classroom.id`. A row genuinely read from
+ *      classroom B, handed to a mint for classroom A, is refused there — and a
+ *      cast cannot talk its way past it, because a forged row still has to name
+ *      a classroom;
+ *   3. a `no-restricted-imports` rule in the shared eslint config, which stops
+ *      a module from skipping all of the above by importing
+ *      `@classmoji/content-signing` and calling `signBlobUrl` itself. The
+ *      allowlist is this file, `deckRenderToken.service.ts`, the Worker's
+ *      verify seam, and tests.
+ *
+ * ## What a refusal does
+ *
+ * Never throws, never signs. It returns null, and each caller falls back to
+ * exactly what it already does when the map has no row: the stored reference,
+ * a `/missing/` placeholder, or a legacy URL. A refusal is a rendering
+ * degradation, never a 500 and never a silent success.
+ */
+declare const MAPPED_ASSET: unique symbol;
+
+/**
+ * A `content_assets` row, bound to the classroom it was read for.
+ *
+ * The brand is phantom — nothing carries it at runtime — so its only job is to
+ * stop an object literal, a request parameter or another service's DTO from
+ * being passed where a map row is required. It is NOMINAL, not unforgeable: a
+ * cast defeats it. That is on purpose and it is enough, because the cast is
+ * visible in review and the thing that actually refuses a wrong sha is the
+ * runtime `classroom_id` assertion in `mintSigned`, which no cast can satisfy
+ * without naming a classroom. Mint one with `mappedAsset`, which is private to
+ * this module and is only ever called on the result of a classroom-scoped
+ * lookup.
+ */
+export interface MappedAsset {
+  readonly [MAPPED_ASSET]: true;
+  /** The classroom whose map this row came out of. Asserted at every mint. */
+  readonly classroom_id: string;
+  readonly path: string;
+  readonly sha: string;
+  /** `blob` or `tree`. A directory is not a file and cannot be signed as one. */
+  readonly type: string;
+}
+
+/** The ONE place a proof is created. Private on purpose. */
+function mappedAsset(
+  classroomId: string,
+  path: string,
+  row: { sha: string; type: string }
+): MappedAsset {
+  return {
+    classroom_id: classroomId,
+    path,
+    sha: row.sha,
+    type: row.type,
+  } as unknown as MappedAsset;
+}
+
+/** One path → the proof for it, or null when this classroom's map has no row. */
+async function mappedAssetByPath(classroomId: string, path: string): Promise<MappedAsset | null> {
+  const row = await lookupContentAsset(classroomId, path);
+  return row ? mappedAsset(classroomId, path, row) : null;
+}
+
+/** Many paths → proofs, in the one query `lookupContentAssets` already batches. */
+async function mappedAssetsByPath(
+  classroomId: string,
+  paths: string[]
+): Promise<Map<string, MappedAsset>> {
+  const rows = await lookupContentAssets(classroomId, paths);
+  const proofs = new Map<string, MappedAsset>();
+  for (const [path, row] of rows) proofs.set(path, mappedAsset(classroomId, path, row));
+  return proofs;
+}
+
+/** One directory → the proof for its tree object, for the folders served whole. */
+async function mappedTreeByPath(classroomId: string, dirPath: string): Promise<MappedAsset | null> {
+  const row = await lookupContentTree(classroomId, dirPath);
+  return row ? mappedAsset(classroomId, dirPath, row) : null;
+}
+
+/**
+ * Many SHAs → proofs, for the callers that only ever have a sha.
+ *
+ * A path lookup is free for the resolvers — they are already reading the row
+ * they need. This is the extra query, and it exists for the paths where the sha
+ * arrives from somewhere that is not the map: a commit response, a task
+ * payload, a URL somebody pasted. Batched, because the alternative is a round
+ * trip per image on a save that rewrites a whole document.
+ *
+ * Filtered to blobs: a tree sha is 40 hex characters like any other, and
+ * "the map has this sha somewhere" is not a licence to address it as a file.
+ *
+ * A sha with no row is simply absent from the result — and logged, because on
+ * these paths that absence IS the refusal. Nothing downstream ever sees a
+ * proof for it, so the mint that would have happened cannot.
+ */
+export async function mappedAssetsBySha(
+  classroomId: string,
+  shas: string[]
+): Promise<Map<string, MappedAsset>> {
+  const wanted = [...new Set(shas.filter(sha => typeof sha === 'string' && sha.length > 0))];
+  if (wanted.length === 0) return new Map();
+
+  const bySha = await lookupContentAssetsBySha(classroomId, wanted, { type: 'blob' });
+  const proofs = new Map<string, MappedAsset>();
+  for (const [sha, path] of bySha) {
+    proofs.set(sha, mappedAsset(classroomId, path, { sha, type: 'blob' }));
+  }
+  for (const sha of wanted) {
+    if (!proofs.has(sha)) refuseToSign(classroomId, sha, 'no blob row for this sha');
+  }
+  return proofs;
+}
+
+/**
+ * A refusal, logged once per render rather than once per reference.
+ *
+ * A document whose refs all point at one absent sha would otherwise write a
+ * line per image. Folded on `{classroom, sha}` and flushed on the next
+ * microtask, the same shape `logTextRead` uses and for the same reason: a
+ * render is a handful of awaits, so the window always closes inside the
+ * request.
+ *
+ * `warn`, not `debug`: unlike a cold cache or a missing row, this one should
+ * never happen. The sha is safe to log — it is a public content address — and
+ * the signing secret is never anywhere near this line.
+ */
+const refusedThisTick = new Set<string>();
+
+function refuseToSign(classroomId: string, sha: string, why: string): null {
+  const key = `${classroomId}|${sha}`;
+  if (!refusedThisTick.has(key)) {
+    if (refusedThisTick.size === 0) queueMicrotask(() => refusedThisTick.clear());
+    refusedThisTick.add(key);
+    console.warn(
+      `[contentDelivery] refused to sign sha outside classroom map: ` +
+        `classroom=${classroomId} sha=${sha} (${why})`
+    );
+  }
+  return null;
+}
+
+/**
+ * The choke point. Every signature this app mints is made inside this function.
+ *
+ * The proof is checked, the signing context is built from the classroom the
+ * proof is bound to, and only then is the caller's `mint` given an origin and a
+ * context to sign with. A caller cannot reach `signBlobUrl`, `signSrcSet` or
+ * `signThemeBase` with a sha of its own choosing, because it never holds a
+ * signing context at all.
+ *
+ * Null on refusal AND on a signer validation error — the two are the same to
+ * every caller, which already renders a legacy ref or a placeholder for a miss.
+ *
+ * ## `now`
+ *
+ * It matters more than it looks. Expiries are BUCKETED, so two signatures
+ * minted a tick apart usually land in the same bucket and come out identical —
+ * usually. Straddle a bucket boundary and they do not, and a caller that pairs
+ * a `src` with its `srcset` by string equality (which is the whole contract
+ * between `resolveMany` and `resolveSrcSets`) silently drops every set. So a
+ * pass that mints more than one URL pins its own clock (`passClock`) and hands
+ * the same one to every mint in the batch.
+ */
+async function mintSigned<T>(
+  classroom: { id: string; content_key_version: number },
+  env: { origin: string; master: string },
+  asset: MappedAsset,
+  tier: ResolveTier,
+  expect: 'blob' | 'tree',
+  now: number | undefined,
+  mint: (origin: string, signing: SigningContext) => Promise<T>
+): Promise<T | null> {
+  // The invariant, in one line. A row read for another classroom names bytes
+  // this classroom has no claim on, and the Worker would honour the signature.
+  if (asset.classroom_id !== classroom.id) {
+    return refuseToSign(classroom.id, asset.sha, `row belongs to classroom ${asset.classroom_id}`);
+  }
+  // A tree is not a file. Signing a directory's sha as a blob mints a
+  // confidently-wrong URL the Worker cannot serve; signing a blob as a theme
+  // folder is the same mistake mirrored.
+  if (asset.type !== expect) {
+    return refuseToSign(classroom.id, asset.sha, `row is a ${asset.type}, not a ${expect}`);
+  }
+
+  const signing: SigningContext = {
+    master: env.master,
+    classroomId: classroom.id,
+    keyVersion: classroom.content_key_version,
+    tier,
+    ...(now === undefined ? {} : { now }),
+  };
+
+  try {
+    return await mint(env.origin, signing);
+  } catch (error) {
+    // A validation error — an ext the signer will not take, a classroom id that
+    // is not a UUID. Never a reason to break the render.
+    console.warn(
+      `[contentDelivery] Could not sign ${asset.path} for classroom ${classroom.id}:`,
+      error instanceof Error ? error.message : error
+    );
+    return null;
+  }
+}
+
+/**
+ * Sign one blob URL, given proof that its sha is in the classroom's map.
+ *
+ * The exported face of `mintSigned`, for the one caller outside this file that
+ * mints a URL — `pageContent.uploadPageAsset`, which has a sha from a commit
+ * response rather than from a resolve. It gets its proof from
+ * `mappedAssetsBySha` like anything else with only a sha.
+ */
+export async function signBlobUrlForClassroom(
+  classroom: { id: string; content_key_version: number },
+  env: { origin: string; master: string },
+  req: { asset: MappedAsset; ext: string; tier: ResolveTier; transform?: ResolveTransform }
+): Promise<string | null> {
+  return mintSigned(classroom, env, req.asset, req.tier, 'blob', undefined, (origin, signing) =>
+    signBlobUrl(origin, signing, {
+      sha: req.asset.sha,
+      ext: req.ext,
+      ...(req.transform ? { transform: req.transform } : {}),
+    })
+  );
 }
 
 /**
@@ -402,36 +645,39 @@ function parseMissingUrl(ctx: ResolveContext, ref: string): string | null {
   }
 }
 
-/** Sign one already-resolved asset, degrading to the legacy ref on refusal. */
+/**
+ * Sign one already-resolved asset, degrading to the legacy ref on refusal.
+ *
+ * Takes the map ROW, not a sha: the proof is what the signer requires, and
+ * handing this function a bare sha is not something a caller can express.
+ */
 async function signAsset(
   ctx: ResolveContext,
   env: { origin: string; master: string },
   ref: string,
-  path: string,
-  sha: string,
+  asset: MappedAsset,
   transform?: ResolveTransform,
   now?: number
 ): Promise<string> {
-  const ext = extensionOf(path);
+  const ext = extensionOf(asset.path);
   if (!ext) {
-    console.warn(`[contentDelivery] No extension on ${path} (classroom ${ctx.classroom.id})`);
+    console.warn(`[contentDelivery] No extension on ${asset.path} (classroom ${ctx.classroom.id})`);
     return ref;
   }
-  try {
-    return await signBlobUrl(env.origin, signingContext(ctx, env.master, now), {
-      sha,
-      ext,
-      ...(transform ? { transform } : {}),
-    });
-  } catch (error) {
-    // A refusal here is a validation error (an ext the signer will not take, a
-    // classroom id that is not a UUID) — never a reason to break the render.
-    console.warn(
-      `[contentDelivery] Could not sign ${path} for classroom ${ctx.classroom.id}:`,
-      error instanceof Error ? error.message : error
-    );
-    return ref;
-  }
+
+  const url = await mintSigned(
+    ctx.classroom,
+    env,
+    asset,
+    ctx.tier,
+    'blob',
+    now,
+    (origin, signing) =>
+      signBlobUrl(origin, signing, { sha: asset.sha, ext, ...(transform ? { transform } : {}) })
+  );
+  // A refusal degrades exactly as a signer validation error always has: the
+  // stored reference, which is a legacy URL for the classrooms that have one.
+  return url ?? ref;
 }
 
 /**
@@ -453,7 +699,7 @@ async function resolveOne(
   const path = toRepoPath(ctx, ref);
   if (!path) return ref;
 
-  const asset = await lookupContentAsset(ctx.classroom.id, path);
+  const asset = await mappedAssetByPath(ctx.classroom.id, path);
   // A tree row is not a file. `lookupContentAsset` is keyed by path alone, so a
   // reference naming a DIRECTORY comes back with the folder's tree sha — and
   // signing that as a blob would mint a confidently-wrong URL the Worker cannot
@@ -465,7 +711,7 @@ async function resolveOne(
     return mapIsCurrent ? missingUrl(env.origin, ctx.classroom.id, ref) : ref;
   }
 
-  return signAsset(ctx, env, ref, path, asset.sha, transform, now);
+  return signAsset(ctx, env, ref, asset, transform, now);
 }
 
 /**
@@ -508,27 +754,22 @@ export async function resolveAssetUrl(
 async function signResponsive(
   ctx: ResolveContext,
   env: { origin: string; master: string },
-  path: string,
-  sha: string,
+  asset: MappedAsset,
   now?: number
 ): Promise<{ src: string; srcset: string } | null> {
-  const ext = extensionOf(path);
+  const ext = extensionOf(asset.path);
   if (!ext || !RASTER_IMAGE_EXTENSIONS.has(ext)) return null;
 
-  try {
-    const signing = signingContext(ctx, env.master, now);
+  // ONE gate for the whole set. `src` and the ladder are minted inside it under
+  // a single signing context, which is what keeps the plain URL byte-identical
+  // to the one `resolveDelivery` hands back for the same reference.
+  return mintSigned(ctx.classroom, env, asset, ctx.tier, 'blob', now, async (origin, signing) => {
     const [src, ladder] = await Promise.all([
-      signBlobUrl(env.origin, signing, { sha, ext }),
-      signSrcSet(env.origin, signing, { sha, ext, fmt: 'auto' }),
+      signBlobUrl(origin, signing, { sha: asset.sha, ext }),
+      signSrcSet(origin, signing, { sha: asset.sha, ext, fmt: 'auto' }),
     ]);
     return { src, srcset: ladder.srcset };
-  } catch (error) {
-    console.warn(
-      `[contentDelivery] Could not sign a srcset for ${path} in classroom ${ctx.classroom.id}:`,
-      error instanceof Error ? error.message : error
-    );
-    return null;
-  }
+  });
 }
 
 /**
@@ -554,7 +795,7 @@ export async function resolveAssetSrcSet(
   // already `null` — "there is no srcset" — and the caller renders a plain
   // `src`. Nothing here can assert a placeholder into content.
   await ensureMapBounded(ctx.classroom.id);
-  const asset = await lookupContentAsset(ctx.classroom.id, path);
+  const asset = await mappedAssetByPath(ctx.classroom.id, path);
   if (!asset || asset.type !== 'blob') {
     console.warn(
       `[contentDelivery] No blob row for "${ref}" (path ${path}) in classroom ${ctx.classroom.id}`
@@ -562,7 +803,7 @@ export async function resolveAssetSrcSet(
     return null;
   }
 
-  return signResponsive(ctx, env, path, asset.sha);
+  return signResponsive(ctx, env, asset);
 }
 
 /**
@@ -621,7 +862,7 @@ export async function resolveThemeBase(
   // here is `null`, and the caller renders the deck without theme links rather
   // than pointing it at a URL that names no file.
   await ensureMapBounded(ctx.classroom.id);
-  const tree = await lookupContentTree(ctx.classroom.id, `${THEMES_FOLDER}/${themeName}`);
+  const tree = await mappedTreeByPath(ctx.classroom.id, `${THEMES_FOLDER}/${themeName}`);
   if (!tree) {
     console.warn(
       `[contentDelivery] No tree row for theme "${themeName}" in classroom ${ctx.classroom.id}`
@@ -629,18 +870,12 @@ export async function resolveThemeBase(
     return null;
   }
 
-  try {
-    return await signThemeBase(env.origin, signingContext(ctx, env.master), {
-      theme: themeName,
-      treeSha: tree.sha,
-    });
-  } catch (error) {
-    console.warn(
-      `[contentDelivery] Could not sign theme "${themeName}" for classroom ${ctx.classroom.id}:`,
-      error instanceof Error ? error.message : error
-    );
-    return null;
-  }
+  // Through the same gate as a blob. A theme base is a signature over a sha
+  // exactly as a blob URL is — the only differences are where in the URL the
+  // policy sits and that the object is a tree.
+  return mintSigned(ctx.classroom, env, tree, ctx.tier, 'tree', undefined, (origin, signing) =>
+    signThemeBase(origin, signing, { theme: themeName, treeSha: tree.sha })
+  );
 }
 
 /**
@@ -690,7 +925,7 @@ export async function resolveDelivery(
   if (wanted.size === 0) return { urls, srcSets };
 
   const mapIsCurrent = await ensureMapBounded(ctx.classroom.id);
-  const assets = await lookupContentAssets(ctx.classroom.id, [...new Set(wanted.values())]);
+  const assets = await mappedAssetsByPath(ctx.classroom.id, [...new Set(wanted.values())]);
   const now = passClock();
 
   await Promise.all(
@@ -711,7 +946,7 @@ export async function resolveDelivery(
       }
 
       if (opts.srcSets && isRasterImagePath(path)) {
-        const set = await signResponsive(ctx, env, path, asset.sha, now);
+        const set = await signResponsive(ctx, env, asset, now);
         if (set) {
           // The set's `src` IS the plain signed URL under the same clock — so
           // this is not a second signature for the same file, it is the one.
@@ -721,7 +956,7 @@ export async function resolveDelivery(
         }
       }
 
-      urls.set(ref, await signAsset(ctx, env, ref, path, asset.sha, undefined, now));
+      urls.set(ref, await signAsset(ctx, env, ref, asset, undefined, now));
     })
   );
 
@@ -969,20 +1204,11 @@ async function signTextUrl(
   // context type rather than a read's.
   classroom: { id: string; content_key_version: number },
   env: { origin: string; master: string },
-  sha: string,
+  asset: MappedAsset,
   ext: string
-): Promise<string> {
-  return signBlobUrl(
-    env.origin,
-    // Server-to-server: `week` names the cache bucket, not the reader.
-    {
-      master: env.master,
-      classroomId: classroom.id,
-      keyVersion: classroom.content_key_version,
-      tier: 'week',
-    },
-    { sha, ext }
-  );
+): Promise<string | null> {
+  // Server-to-server: `week` names the cache bucket, not the reader.
+  return signBlobUrlForClassroom(classroom, env, { asset, ext, tier: 'week' });
 }
 
 /**
@@ -1109,10 +1335,12 @@ async function warmOneTextFile(
     // The row the save just wrote. No `ensureMap` here: a warm that had to
     // refresh the map would be warming a sha the save did not produce, and the
     // save awaited its own `recordContentAsset` before calling us.
-    const asset = await lookupContentAsset(classroom.id, path);
+    const asset = await mappedAssetByPath(classroom.id, path);
     if (!asset || asset.type !== 'blob') return;
 
-    const url = await signTextUrl(classroom, env, asset.sha, ext);
+    const url = await signTextUrl(classroom, env, asset, ext);
+    // Refused, or unsignable. Nothing to warm — and the read path is unchanged.
+    if (!url) return;
     const response = await fetch(url, { signal: AbortSignal.timeout(WARM_FETCH_TIMEOUT_MS) });
     await response.arrayBuffer();
 
@@ -1219,22 +1447,16 @@ async function warmOneBlob(
     // The row the commit just wrote. No `ensureMap`, for the text warm's
     // reason: a refresh could only move us off the sha the caller just
     // recorded, and the caller awaited that write before calling here.
-    const asset = await lookupContentAsset(classroom.id, path);
+    const asset = await mappedAssetByPath(classroom.id, path);
     if (!asset || asset.type !== 'blob') return;
 
-    // The same three inputs `signingContext` feeds `signAsset` on the read
+    // The same gate, and the same signing inputs, `signAsset` uses on the read
     // side, and no transform — the index renders the untransformed original,
     // so a `w=` or `fmt=` here would warm a URL it never asks for.
-    const url = await signBlobUrl(
-      env.origin,
-      {
-        master: env.master,
-        classroomId: classroom.id,
-        keyVersion: classroom.content_key_version,
-        tier,
-      },
-      { sha: asset.sha, ext }
-    );
+    const url = await signBlobUrlForClassroom(classroom, env, { asset, ext, tier });
+    // Refused, or unsignable. A warm that cannot mint the reader's URL has
+    // nothing to fill, and the reader's own path is untouched either way.
+    if (!url) return;
     const response = await fetch(url, { signal: AbortSignal.timeout(WARM_FETCH_TIMEOUT_MS) });
     await response.arrayBuffer();
 
@@ -1269,7 +1491,7 @@ async function readTextThroughWorker(
   const ext = extensionOf(path);
   if (!ext) return null;
 
-  let asset: ContentAssetRecord | null;
+  let asset: MappedAsset | null;
   try {
     // Bounded: a stale map turns this into three GitHub calls, and a slow
     // GitHub must cost a fallback rather than a held-open render. The refresh
@@ -1283,7 +1505,7 @@ async function readTextThroughWorker(
         );
       }
     );
-    asset = await lookupContentAsset(ctx.classroom.id, path);
+    asset = await mappedAssetByPath(ctx.classroom.id, path);
   } catch (error) {
     // The map itself is unreachable, which is not the Worker's fault — do not
     // trip the circuit, just fall back for this path.
@@ -1300,7 +1522,10 @@ async function readTextThroughWorker(
   if (!asset || asset.type !== 'blob') return null;
 
   try {
-    const url = await signTextUrl(ctx.classroom, env, asset.sha, ext);
+    const url = await signTextUrl(ctx.classroom, env, asset, ext);
+    // A refusal is a MISS, not a dead origin: fall back for this path and leave
+    // the per-render circuit closed, exactly as a map miss above does.
+    if (!url) return null;
 
     const response = await fetch(url, { signal: AbortSignal.timeout(TEXT_FETCH_TIMEOUT_MS) });
     if (!response.ok) {

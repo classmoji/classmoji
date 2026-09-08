@@ -1024,16 +1024,27 @@ export async function lookupContentTree(
  * single-SHA lookup's `orderBy` — content-addressed means they are
  * byte-identical, so the choice cannot be wrong, only arbitrary, and pinning it
  * keeps repeated imports of the same content producing the same output.
+ *
+ * `opts.type` narrows to `blob` or `tree`. Unfiltered by default, because the
+ * import's rewrite only wants to know whether the sha is in this classroom's
+ * map at all. The signing guard asks for `blob`: a tree sha is 40 hex
+ * characters like any other, and "the map holds this sha somewhere" is not a
+ * licence to address a directory as a file.
  */
 export async function lookupContentAssetsBySha(
   classroomId: string,
-  shas: string[]
+  shas: string[],
+  opts: { type?: string } = {}
 ): Promise<Map<string, string>> {
   const wanted = [...new Set(shas)];
   if (wanted.length === 0) return new Map();
 
   const rows = await getPrisma().contentAsset.findMany({
-    where: { classroom_id: classroomId, sha: { in: wanted } },
+    where: {
+      classroom_id: classroomId,
+      sha: { in: wanted },
+      ...(opts.type ? { type: opts.type } : {}),
+    },
     select: { path: true, sha: true },
     orderBy: { path: 'asc' },
   });

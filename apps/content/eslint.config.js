@@ -15,4 +15,15 @@ export default [
       'import/no-unresolved': 'off',
     },
   },
+  {
+    // The VERIFY seam. The shared config forbids importing the signing package
+    // outside the app's one minting choke point, because a signature is the
+    // Worker's only proof of entitlement. This file is the other side of that
+    // contract: it re-exports the package so every Worker module verifies with
+    // exactly the code the apps signed with, and it mints nothing.
+    files: ['src/verify.ts'],
+    rules: {
+      'no-restricted-imports': 'off',
+    },
+  },
 ];
