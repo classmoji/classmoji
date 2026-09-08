@@ -40,12 +40,12 @@
  * are listed and skipped rather than half-attempted.
  *
  * Usage:
- *   npx tsx packages/tasks/src/scripts/disableGithubPages.ts --classroom cs98-fall-2026 --dry-run
- *   npx tsx packages/tasks/src/scripts/disableGithubPages.ts --classroom cs98-fall-2026
- *   npx tsx packages/tasks/src/scripts/disableGithubPages.ts --all-enabled --dry-run
- *   npx tsx packages/tasks/src/scripts/disableGithubPages.ts --all-enabled
- *   npx tsx packages/tasks/src/scripts/disableGithubPages.ts --classroom cs52-25s --force
- *   npx tsx packages/tasks/src/scripts/disableGithubPages.ts --all-enabled --force
+ *   npx tsx packages/tasks/src/scripts/disableGitHubPages.ts --classroom cs98-fall-2026 --dry-run
+ *   npx tsx packages/tasks/src/scripts/disableGitHubPages.ts --classroom cs98-fall-2026
+ *   npx tsx packages/tasks/src/scripts/disableGitHubPages.ts --all-enabled --dry-run
+ *   npx tsx packages/tasks/src/scripts/disableGitHubPages.ts --all-enabled
+ *   npx tsx packages/tasks/src/scripts/disableGitHubPages.ts --classroom cs52-25s --force
+ *   npx tsx packages/tasks/src/scripts/disableGitHubPages.ts --all-enabled --force
  *
  * DATABASE_URL and the GitHub App credentials come from the environment, the
  * same as every other script in this repo (see .dev-context) — this script
@@ -54,53 +54,16 @@
 
 import getPrisma from '@classmoji/database';
 import { getGitProvider, GitHubProvider } from '@classmoji/services';
-
-interface Options {
-  dryRun: boolean;
-  force: boolean;
-  allEnabled: boolean;
-  classroomSlug: string | null;
-}
-
-/** `--classroom <slug>` or `--classroom=<slug>`. */
-function parseArgs(argv: string[]): Options {
-  let classroomSlug: string | null = null;
-  const at = argv.indexOf('--classroom');
-  if (at !== -1 && argv[at + 1] && !argv[at + 1].startsWith('--')) {
-    classroomSlug = argv[at + 1];
-  } else {
-    const inline = argv.find(arg => arg.startsWith('--classroom='));
-    if (inline) classroomSlug = inline.slice('--classroom='.length);
-  }
-
-  return {
-    dryRun: argv.includes('--dry-run'),
-    force: argv.includes('--force'),
-    allEnabled: argv.includes('--all-enabled'),
-    classroomSlug: classroomSlug || null,
-  };
-}
-
-/**
- * Exactly one selector, always. Defaulting to "every classroom" on a script
- * that removes the fallback CDN for a whole install is the one mistake worth
- * making impossible, and `--all-enabled` says out loud which set is meant.
- */
-function assertSelector({ allEnabled, classroomSlug }: Options): void {
-  if (allEnabled && classroomSlug) {
-    console.error('❌ Pass either --classroom <slug> or --all-enabled, not both.');
-    process.exit(1);
-  }
-  if (!allEnabled && !classroomSlug) {
-    console.error('❌ Pass --classroom <slug>, or --all-enabled for every gated classroom.');
-    process.exit(1);
-  }
-}
+import { decideClassroom, parseArgs, selectorError, type Options } from './pagesOffDecision.ts';
 
 type Outcome = 'disabled' | 'already-off' | 'would-disable' | 'refused' | 'skipped' | 'failed';
 
-async function disableGithubPages(options: Options): Promise<void> {
-  assertSelector(options);
+async function disableGitHubPages(options: Options): Promise<void> {
+  const bad = selectorError(options);
+  if (bad) {
+    console.error(`❌ ${bad}`);
+    process.exit(1);
+  }
   const { dryRun, force, allEnabled, classroomSlug } = options;
 
   const classrooms = await getPrisma().classroom.findMany({
@@ -166,21 +129,21 @@ async function disableGithubPages(options: Options): Promise<void> {
     const repo = classroom.content_repo;
     const label = `${org ?? '?'}/${repo} (${classroom.slug})`;
 
-    if (!org || gitOrg.provider !== 'GITHUB') {
-      record('skipped', `   ⏭️  ${label} — not a GitHub organization (${gitOrg.provider})`);
+    const decision = decideClassroom({
+      provider: gitOrg.provider,
+      login: org,
+      contentDeliveryEnabled: classroom.content_delivery_enabled,
+      force,
+    });
+    if (decision.action === 'skip') {
+      record('skipped', `   ⏭️  ${label} — ${decision.reason}`);
       continue;
     }
-
-    // The refusal that makes this script safe to point at a slug someone read
-    // off a spreadsheet: with the gate off, github.io IS the delivery path.
-    if (!classroom.content_delivery_enabled && !force) {
-      record(
-        'refused',
-        `   🚫 ${label} — content_delivery_enabled is FALSE; Pages is still serving this class. Re-run with --force only if you mean it.`
-      );
+    if (decision.action === 'refuse') {
+      record('refused', `   🚫 ${label} — ${decision.reason}`);
       continue;
     }
-    const forced = !classroom.content_delivery_enabled ? ' (FORCED, gate is off)' : '';
+    const forced = decision.forced ? ' (FORCED, gate is off)' : '';
 
     try {
       const provider = getGitProvider(gitOrg);
@@ -224,7 +187,7 @@ async function disableGithubPages(options: Options): Promise<void> {
         continue;
       }
 
-      const { alreadyDisabled } = await provider.disableRepoPages(org, repo);
+      const { alreadyDisabled } = await provider.disableGitHubPages(org, repo);
       if (alreadyDisabled) {
         // Raced with someone else's turn-off between the GET and the DELETE.
         record('already-off', `   ✅ ${label} — already off${forced}`);
@@ -236,6 +199,18 @@ async function disableGithubPages(options: Options): Promise<void> {
       const status = (error as { status?: number }).status;
       const detail = error instanceof Error ? error.message : String(error);
       record('failed', `   ❌ ${label} — ${status ? `HTTP ${status}: ` : ''}${detail}`);
+
+      // A 403 is the App's Pages permission, which is a property of the
+      // installation and not of this repo — so every remaining classroom in the
+      // org would fail identically. Stop and say so once, rather than printing
+      // the same denial a hundred times and burying it in its own noise.
+      if (status === 403) {
+        console.error(
+          `\n🛑 Aborting: HTTP 403 means the GitHub App lacks the Pages permission for ${org}. ` +
+            `Grant it and re-run — the rest of this list would fail the same way.`
+        );
+        break;
+      }
     }
   }
 
@@ -253,7 +228,7 @@ async function disableGithubPages(options: Options): Promise<void> {
   if (counts.failed > 0 || counts.refused > 0) process.exitCode = 1;
 }
 
-disableGithubPages(parseArgs(process.argv.slice(2))).catch((err: unknown) => {
+disableGitHubPages(parseArgs(process.argv.slice(2))).catch((err: unknown) => {
   console.error('Disable GitHub Pages failed:', err);
   process.exitCode = 1;
 });

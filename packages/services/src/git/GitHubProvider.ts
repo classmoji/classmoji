@@ -483,12 +483,7 @@ export class GitHubProvider extends GitProvider {
       await this.getRepository(org, name);
       return true;
     } catch (error: unknown) {
-      if (
-        error instanceof Error &&
-        'status' in error &&
-        (error as Error & { status: number }).status === 404
-      )
-        return false;
+      if (isNotFound(error)) return false;
       throw error;
     }
   }
@@ -1059,12 +1054,7 @@ export class GitHubProvider extends GitProvider {
       });
       return true;
     } catch (error: unknown) {
-      if (
-        error instanceof Error &&
-        'status' in error &&
-        (error as Error & { status: number }).status === 404
-      )
-        return false;
+      if (isNotFound(error)) return false;
       throw error;
     }
   }
@@ -1277,15 +1267,7 @@ export class GitHubProvider extends GitProvider {
       });
       return { alreadyEnabled: true };
     } catch (error: unknown) {
-      if (
-        !(
-          error instanceof Error &&
-          'status' in error &&
-          (error as Error & { status: number }).status === 404
-        )
-      ) {
-        throw error;
-      }
+      if (!isNotFound(error)) throw error;
     }
 
     await octokit.request('POST /repos/{owner}/{repo}/pages', {
@@ -1352,7 +1334,7 @@ export class GitHubProvider extends GitProvider {
    * @param {string} repo - Repository name
    * @returns {Promise<{alreadyDisabled: boolean}>} `true` when there was nothing to turn off
    */
-  async disableRepoPages(org: string, repo: string): Promise<{ alreadyDisabled: boolean }> {
+  async disableGitHubPages(org: string, repo: string): Promise<{ alreadyDisabled: boolean }> {
     const octokit = await this.#getOctokit();
     try {
       await octokit.request('DELETE /repos/{owner}/{repo}/pages', {

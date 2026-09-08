@@ -226,7 +226,7 @@ describe('page.createPage', () => {
     expect(repositoryExistsMock).not.toHaveBeenCalled();
   });
 
-  it('creates the content repo (and enables Pages) when missing', async () => {
+  it('creates the content repo (and enables Pages) when missing and delivery is off', async () => {
     repositoryExistsMock.mockResolvedValue(false);
     vi.useFakeTimers();
     const pending = createPage({
@@ -244,6 +244,28 @@ describe('page.createPage', () => {
       'Course content for Test Class'
     );
     expect(enableGitHubPagesMock).toHaveBeenCalledWith('test-org', 'content-test-org-cs101');
+  });
+
+  // The cutover invariant. A classroom served by the signed-content Worker is
+  // on its way to a PRIVATE content repo; switching the public github.io site
+  // back on there is the leak the Pages-off helper exists to close, and a page
+  // create is the likeliest thing to do it. The repo is still created — only
+  // Pages is withheld.
+  it('does NOT enable Pages when content delivery is on for the classroom', async () => {
+    classroomFindUniqueMock.mockResolvedValue({ ...classroom, content_delivery_enabled: true });
+    repositoryExistsMock.mockResolvedValue(false);
+    vi.useFakeTimers();
+    const pending = createPage({
+      classroomId: 'class-1',
+      title: 'First Page',
+      createdBy: 'user-1',
+    });
+    await vi.runAllTimersAsync();
+    await pending;
+    vi.useRealTimers();
+
+    expect(createPublicRepositoryMock).toHaveBeenCalled();
+    expect(enableGitHubPagesMock).not.toHaveBeenCalled();
   });
 
   it('propagates route-identical errors for missing org config', async () => {
@@ -464,11 +486,20 @@ describe('page.ensureContentRepo', () => {
     repositoryExistsMock.mockResolvedValue(true);
   });
 
-  it('returns the repo name and always tries to enable Pages', async () => {
+  it('returns the repo name and tries to enable Pages while delivery is off', async () => {
     const result = await ensureContentRepo('class-1');
     expect(result).toEqual({ repoName: 'content-test-org-cs101' });
     expect(createPublicRepositoryMock).not.toHaveBeenCalled();
     expect(enableGitHubPagesMock).toHaveBeenCalledTimes(1);
+  });
+
+  // Same guard reached through the other entry point — this is the one every
+  // slide create, batch page import and classroom import goes through.
+  it('does NOT enable Pages when content delivery is on for the classroom', async () => {
+    classroomFindUniqueMock.mockResolvedValue({ ...classroom, content_delivery_enabled: true });
+    const result = await ensureContentRepo('class-1');
+    expect(result).toEqual({ repoName: 'content-test-org-cs101' });
+    expect(enableGitHubPagesMock).not.toHaveBeenCalled();
   });
 
   it('throws the route-identical message when repo creation fails', async () => {

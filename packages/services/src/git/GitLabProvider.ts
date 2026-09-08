@@ -503,10 +503,10 @@ export class GitLabProvider extends GitProvider {
    * @param {string} project - Project name
    * @returns {Promise<never>}
    */
-  async disableRepoPages(_group: string, _project: string): Promise<never> {
+  async disableGitHubPages(_group: string, _project: string): Promise<never> {
     // TODO: DELETE /api/v4/projects/:id/pages once a GitLab classroom needs it
     throw new Error(
-      'GitLabProvider.disableRepoPages() not implemented - GitLab uses CI/CD for Pages'
+      'GitLabProvider.disableGitHubPages() not implemented - GitLab uses CI/CD for Pages'
     );
   }
 

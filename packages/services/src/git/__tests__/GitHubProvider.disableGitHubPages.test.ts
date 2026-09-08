@@ -12,11 +12,11 @@ function providerWith(request: ReturnType<typeof vi.fn>): GitHubProvider {
   return provider;
 }
 
-describe('GitHubProvider.disableRepoPages', () => {
+describe('GitHubProvider.disableGitHubPages', () => {
   it('deletes the Pages site and reports that it had to', async () => {
     const request = vi.fn(async () => ({ status: 204 }));
 
-    const result = await providerWith(request).disableRepoPages('org', 'content-org-cs101');
+    const result = await providerWith(request).disableGitHubPages('org', 'content-org-cs101');
 
     expect(result).toEqual({ alreadyDisabled: false });
     expect(request).toHaveBeenCalledWith('DELETE /repos/{owner}/{repo}/pages', {
@@ -32,7 +32,7 @@ describe('GitHubProvider.disableRepoPages', () => {
       throw httpError(404);
     });
 
-    await expect(providerWith(request).disableRepoPages('org', 'repo')).resolves.toEqual({
+    await expect(providerWith(request).disableGitHubPages('org', 'repo')).resolves.toEqual({
       alreadyDisabled: true,
     });
   });
@@ -44,7 +44,7 @@ describe('GitHubProvider.disableRepoPages', () => {
       throw httpError(403);
     });
 
-    await expect(providerWith(request).disableRepoPages('org', 'repo')).rejects.toMatchObject({
+    await expect(providerWith(request).disableGitHubPages('org', 'repo')).rejects.toMatchObject({
       status: 403,
     });
   });
