@@ -150,6 +150,9 @@ describe('savePageContent canonicalizes on the way in', () => {
   });
 
   it('reaches a reference nested inside a column layout', async () => {
+    // Two columns, because a row with fewer is not a document BlockNote can
+    // open and savePageContent's structural gate would unwrap it before the
+    // write — which would make this test about normalization, not refs.
     await savePageContent(page, [
       {
         id: 'cl',
@@ -159,6 +162,11 @@ describe('savePageContent canonicalizes on the way in', () => {
             id: 'c1',
             type: 'column',
             children: [{ id: 'b1', type: 'image', props: { url: signedPageUrl } }],
+          },
+          {
+            id: 'c2',
+            type: 'column',
+            children: [{ id: 'b2', type: 'paragraph', content: [] }],
           },
         ],
       },
