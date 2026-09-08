@@ -918,15 +918,18 @@ function insertBlocksAt(
 // `columnList` / `column` (@blocknote/xl-multi-column) are the only blocks in
 // the page schema whose ProseMirror content expressions constrain their
 // CHILDREN: `columnList` is `"column column+"` (every child a column, minimum
-// two) and `column` is `"blockContainer+"` (at least one child). Everything
-// else accepts whatever children it is handed, which is why the op vocabulary
-// can otherwise stay schema-agnostic.
+// two) and `column` is `"blockContainer+"` (at least one child, and every child
+// an ordinary content block — a `columnList` is a `bnBlock`, NOT a
+// `blockContainer`, so a row nested directly in a column is as fatal as a row
+// with one column). Everything else accepts whatever children it is handed,
+// which is why the op vocabulary can otherwise stay schema-agnostic.
 //
 // That gap is not theoretical. A `delete` op naming a column splices it out
 // with no idea it was the second-to-last one; an `insert` positioned `after` a
-// column lands a paragraph as a columnList's direct child. Either document
-// serializes and commits perfectly happily — and then throws "Error creating
-// document from blocks passed as `initialContent`" for EVERY reader, because
+// paragraph that happens to live inside a column lands a whole row inside that
+// column. Either document serializes and commits perfectly happily — and then
+// throws "Error creating document from blocks passed as `initialContent`" for
+// EVERY reader, because
 // ProseMirror refuses to build a doc that violates the schema. The viewer and
 // the editor share that failure, so a page broken this way cannot be repaired
 // in the editor either; the only way back is a re-commit from outside. That
@@ -942,7 +945,8 @@ export interface BlockStructureRepair {
     | 'column_list_unwrapped'
     | 'column_list_child_wrapped'
     | 'empty_column_filled'
-    | 'stray_column_unwrapped';
+    | 'stray_column_unwrapped'
+    | 'nested_column_list_lifted';
   /** Id of the offending block, when it had one. */
   id?: string;
 }
@@ -962,17 +966,24 @@ function repairAt(block: BlockNode, kind: BlockStructureRepair['kind']): BlockSt
 /**
  * Restore the multi-column invariants, in place (callers pass clones).
  *
+ * - a `columnList` nested inside a `column` is LIFTED OUT, re-parented as the
+ *   next sibling of the row that contained it. Wrapping it in a column of its
+ *   own would satisfy the arity rule and still leave the document unopenable,
+ *   and unwrapping it would merge two authored layouts into one column; only
+ *   lifting keeps the rows distinct and the reading order intact
  * - a `column` with no children gets an empty paragraph, so emptying one slot
  *   of a row keeps the row rather than killing the document
  * - a non-column child of a `columnList` is wrapped in its own column, which
- *   keeps it exactly where it was authored
+ *   keeps it exactly where it was authored — unless it is itself a row, which
+ *   is lifted rather than wrapped
  * - a `columnList` left with fewer than two columns is unwrapped: its columns'
  *   children take its place, in order. This matches what the editor does when
  *   you delete the second-to-last column — the content returns to full width
  *   instead of growing a blank column nobody asked for
  * - a `column` outside any `columnList` is unwrapped the same way
  *
- * Content is never dropped: every unwrap splices the children up in place.
+ * Content is never dropped: every unwrap splices the children up in place, and
+ * every lift re-parents the row rather than flattening it.
  */
 function repairColumnStructure(
   blocks: BlockNode[],
@@ -1006,27 +1017,81 @@ function repairColumnStructure(
 
     const kids = Array.isArray(block.children) ? block.children : [];
 
-    // Strays become columns of their own so the row keeps its authored order.
-    const columns = kids.map(kid => {
-      if (kid?.type === COLUMN_TYPE) return kid;
-      // The stray's id, not the row's: the caller is being told to go look at
-      // something, and the row alone doesn't say which block moved.
-      onRepair?.(repairAt(kid ?? block, 'column_list_child_wrapped'));
-      return { type: COLUMN_TYPE, props: { width: 1 }, children: [kid ?? emptyParagraph()] };
-    });
+    // Rows pulled out of this one, re-parented as its siblings below. The
+    // children were already normalized on the way down, so anything still
+    // shaped like a row here is a row that belongs one level up.
+    const liftedRows: BlockNode[] = [];
+    // Wrap repairs are held rather than reported: see the unwrap branch.
+    const wrapRepairs: BlockStructureRepair[] = [];
+    const columns: BlockNode[] = [];
+
+    for (const kid of kids) {
+      // A row directly inside a row. Wrapping it in a column of its own would
+      // satisfy the arity rule and STILL be unopenable — `column` is
+      // `blockContainer+` and a `columnList` is not one — so the wrap would
+      // report a repair that fixed nothing. Lift it instead.
+      if (kid?.type === COLUMN_LIST_TYPE) {
+        liftedRows.push(kid);
+        onRepair?.(repairAt(kid, 'nested_column_list_lifted'));
+        continue;
+      }
+
+      if (kid?.type === COLUMN_TYPE) {
+        // Same violation one level down, and the likelier one: an `insert`
+        // positioned after a paragraph that lives in a column puts the whole
+        // row inside that column.
+        const grandkids = Array.isArray(kid.children) ? kid.children : [];
+        const kept = grandkids.filter(grandkid => {
+          if (grandkid?.type !== COLUMN_LIST_TYPE) return true;
+          liftedRows.push(grandkid);
+          onRepair?.(repairAt(grandkid, 'nested_column_list_lifted'));
+          return false;
+        });
+        if (kept.length !== grandkids.length) kid.children = kept;
+
+        // The arity rule already ran on the way down, so a column the lift
+        // just emptied has to be refilled HERE or it reaches the repo childless.
+        if (!Array.isArray(kid.children) || kid.children.length === 0) {
+          kid.children = [emptyParagraph()];
+          onRepair?.(repairAt(kid, 'empty_column_filled'));
+        }
+        columns.push(kid);
+        continue;
+      }
+
+      // An ordinary stray becomes a column of its own so the row keeps its
+      // authored order. The stray's id, not the row's: the caller is being told
+      // to go look at something, and the row alone doesn't say which block moved.
+      wrapRepairs.push(repairAt(kid ?? block, 'column_list_child_wrapped'));
+      columns.push({
+        type: COLUMN_TYPE,
+        props: { width: 1 },
+        children: [kid ?? emptyParagraph()],
+      });
+    }
 
     if (columns.length >= 2) {
       block.children = columns;
+      // The row survived, so the wrap is visible in the finished document.
+      for (const repair of wrapRepairs) onRepair?.(repair);
+      if (liftedRows.length > 0) {
+        blocks.splice(i + 1, 0, ...liftedRows);
+        i += liftedRows.length; // already normalized — don't walk them again
+      }
       continue;
     }
 
-    // One column (or none) left — unwrap, keeping the content in place.
+    // One column (or none) left — unwrap, keeping the content in place, and
+    // drop the wrap reports: the row they were made for is gone, so the
+    // finished document holds no trace of them and naming one would send a
+    // caller looking for a column that does not exist. The unwrap below is the
+    // repair that actually happened.
     const lifted = columns.flatMap(column =>
       Array.isArray(column.children) ? column.children : []
     );
-    blocks.splice(i, 1, ...lifted);
+    blocks.splice(i, 1, ...lifted, ...liftedRows);
     onRepair?.(repairAt(block, 'column_list_unwrapped'));
-    i += lifted.length - 1;
+    i += lifted.length + liftedRows.length - 1;
   }
 }
 
@@ -1414,6 +1479,11 @@ export async function acceptPreview(page: PageWithContentRepo): Promise<AcceptPr
     // ref immune to GitHub's eventually-consistent branch reads. 204 no-op
     // merges have no merge commit; fall back to a fresh main read.
     let newSha: string | null = null;
+    // Set only when the repair below actually committed. That commit went
+    // through savePageContent, which records the row (with the real byte size)
+    // and warms the file itself — so the write-through at the end of this block
+    // must not run again for it.
+    let repairedSha: string | null = null;
     try {
       const mergedFile = await ContentService.getContent({
         gitOrganization,
@@ -1431,7 +1501,8 @@ export async function acceptPreview(page: PageWithContentRepo): Promise<AcceptPr
       // This is the default route for a published page (applies land on the
       // preview branch), so it is the likeliest way the invariant gets broken,
       // not an exotic one. Repair on top of the merge commit.
-      newSha = (await repairMergedContent(page, mergedFile, newSha)) ?? newSha;
+      repairedSha = await repairMergedContent(page, mergedFile, newSha);
+      if (repairedSha) newSha = repairedSha;
     } catch (error: unknown) {
       // Advisory only — the merge itself stands.
       console.warn(
@@ -1446,7 +1517,7 @@ export async function acceptPreview(page: PageWithContentRepo): Promise<AcceptPr
     // which is the same value. Without this, accepting a preview would publish
     // content the read side keeps serving the pre-accept version of until the
     // webhook lands.
-    if (newSha) await recordPageFile(page, path, newSha);
+    if (newSha && newSha !== repairedSha) await recordPageFile(page, path, newSha);
 
     // Concurrent-stacking guard: a stacking apply may have committed to the
     // preview branch AFTER the merge snapshot GitHub used. If the branch now

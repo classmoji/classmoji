@@ -492,7 +492,8 @@ export const pageContentApplyTool: ToolDefinition<PageContentApplyArgs> = {
     const idRemints: Array<{ op_index: number; from: string; to: string }> = [];
 
     // Ops that would leave the document unopenable (a columnList dropped below
-    // two columns, a stray block parked directly in one) are repaired rather
+    // two columns, a stray block parked directly in one, a whole row inserted
+    // inside a column) are repaired rather
     // than committed as-is. Reported back because the repair changes the
     // layout the caller asked for: silently unwrapping a row would leave an
     // agent believing its delete did exactly what it said.
@@ -607,8 +608,9 @@ export const pageContentApplyTool: ToolDefinition<PageContentApplyArgs> = {
             structure_repairs: structureRepairs,
             note:
               'The ops would have left a column layout BlockNote cannot open, so it was repaired ' +
-              '(a columnList needs at least two columns, and only columns as children). Re-read ' +
-              'the outline to see the resulting structure.',
+              '(a columnList needs at least two columns and only columns as children, and a ' +
+              'column cannot contain another columnList — a nested one is lifted out to sit ' +
+              'after the row). Re-read the outline to see the resulting structure.',
           }
         : {}),
     });

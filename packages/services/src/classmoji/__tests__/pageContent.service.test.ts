@@ -1139,6 +1139,141 @@ describe('pageContent.normalizeBlockStructure', () => {
     expect(types(result as unknown[])).toEqual(['columnList']);
   });
 
+  // ── A column may hold only ordinary content ───────────────────────────────
+  //
+  // The third schema violation, and the one arity alone never catches: a
+  // `column` is `blockContainer+` and a `columnList` is a `bnBlock`, not a
+  // blockContainer. A row nested inside a column throws exactly the same
+  // "Error creating document from blocks passed as `initialContent`".
+
+  it('lifts a row nested inside a column out to sit after its row', () => {
+    // Both rows are individually valid — arity has nothing to complain about —
+    // and the document is still unopenable.
+    const inner = row('inner', [column('ic1', 'ip1'), column('ic2', 'ip2')]);
+    const repairs: Array<{ kind: string; id?: string }> = [];
+
+    const result = normalizeBlockStructure(
+      [
+        row('outer', [
+          { id: 'oc1', type: 'column', props: { width: 1 }, children: [inner] },
+          column('oc2', 'op2'),
+        ]),
+        { id: 'after', type: 'paragraph', content: [] },
+      ],
+      { onRepair: r => repairs.push(r) }
+    ) as Array<{
+      id: string;
+      type: string;
+      children?: Array<{ children: Array<{ id: string; type: string }> }>;
+    }>;
+
+    // The inner row is re-parented as the outer row's NEXT sibling — after the
+    // row it came out of, before whatever followed it.
+    expect(ids(result)).toEqual(['outer', 'inner', 'after']);
+    expect(types(result)).toEqual(['columnList', 'columnList', 'paragraph']);
+    // Lifted, not flattened: the inner row keeps both its columns.
+    expect((result[1].children ?? []).map(c => c.children.map(b => b.id))).toEqual([
+      ['ip1'],
+      ['ip2'],
+    ]);
+    // The lift emptied oc1, so the arity rule refills it — composed, not
+    // sequenced by luck: the empty check already ran on the way down.
+    expect((result[0].children ?? [])[0].children.map(b => b.type)).toEqual(['paragraph']);
+    expect(repairs).toEqual([
+      { kind: 'nested_column_list_lifted', id: 'inner' },
+      { kind: 'empty_column_filled', id: 'oc1' },
+    ]);
+  });
+
+  it('lifts a row parked directly in a row rather than wrapping it in a column', () => {
+    // Wrapping would satisfy `column column+` and still be unopenable, while
+    // reporting a repair that fixed nothing.
+    const repairs: Array<{ kind: string; id?: string }> = [];
+
+    const result = normalizeBlockStructure(
+      [
+        row('outer', [
+          column('oc1', 'op1'),
+          row('inner', [column('ic1', 'ip1'), column('ic2', 'ip2')]),
+        ]),
+      ],
+      { onRepair: r => repairs.push(r) }
+    ) as Array<{ id: string; type: string }>;
+
+    // Lifting leaves the outer row a single column, so it unwraps in turn —
+    // the two rules compose rather than fighting.
+    expect(ids(result)).toEqual(['op1', 'inner']);
+    expect(types(result)).toEqual(['paragraph', 'columnList']);
+    expect(repairs).toEqual([
+      { kind: 'nested_column_list_lifted', id: 'inner' },
+      { kind: 'column_list_unwrapped', id: 'outer' },
+    ]);
+  });
+
+  it('lifting is idempotent — a second pass repairs nothing', () => {
+    const once = normalizeBlockStructure([
+      row('outer', [
+        {
+          id: 'oc1',
+          type: 'column',
+          props: { width: 1 },
+          children: [row('inner', [column('ic1', 'ip1'), column('ic2', 'ip2')])],
+        },
+        column('oc2', 'op2'),
+      ]),
+    ]);
+
+    const repairs: Array<{ kind: string }> = [];
+    expect(normalizeBlockStructure(once, { onRepair: r => repairs.push(r) })).toEqual(once);
+    expect(repairs).toEqual([]);
+  });
+
+  it('leaves a valid document with deep, nesting-free columns byte-identical', () => {
+    // The promise the gate makes to every write path: calling it costs a walk,
+    // never a diff. A column may nest ordinary blocks as deep as it likes.
+    const doc = [
+      row('r', [
+        {
+          id: 'c1',
+          type: 'column',
+          props: { width: 1 },
+          children: [
+            {
+              id: 'list',
+              type: 'bulletListItem',
+              props: {},
+              content: [],
+              children: [
+                { id: 'sub', type: 'bulletListItem', props: {}, content: [], children: [] },
+              ],
+            },
+          ],
+        },
+        column('c2', 'p2'),
+      ]),
+      { id: 'tail', type: 'paragraph', content: [] },
+    ];
+
+    expect(JSON.stringify(normalizeBlockStructure(doc))).toBe(JSON.stringify(doc));
+  });
+
+  it('does not report a wrap the finished document holds no trace of', () => {
+    // A single stray in a row: it gets wrapped, then the one-column row unwraps
+    // and the wrap is gone. Reporting it would send a caller looking for a
+    // column that does not exist.
+    const repairs: Array<{ kind: string; id?: string }> = [];
+
+    const result = normalizeBlockStructure(
+      [row('r', [{ id: 'stray', type: 'paragraph', content: [] }])],
+      {
+        onRepair: r => repairs.push(r),
+      }
+    );
+
+    expect(ids(result)).toEqual(['stray']);
+    expect(repairs).toEqual([{ kind: 'column_list_unwrapped', id: 'r' }]);
+  });
+
   it('is idempotent', () => {
     const once = normalizeBlockStructure([row('r', [column('c1', 'p1')])]);
     expect(normalizeBlockStructure(once)).toEqual(once);
@@ -1216,6 +1351,48 @@ describe('pageContent.applyBlockOps — column invariants', () => {
 
     expect(result[0].children.map(c => c.type)).toEqual(['column', 'column', 'column', 'column']);
     expect(result[0].children[1].children[0].id).toBe('note');
+  });
+
+  it('an insert that lands a whole row inside a column lifts it back out', () => {
+    // The MCP shape of the bug: `after: 'profile-a'` names a block INSIDE a
+    // column, so the inserted row becomes that column's child. Arity is
+    // satisfied on both rows and the page is still unopenable.
+    const repairs: Array<{ kind: string; id?: string }> = [];
+
+    const result = applyBlockOps(
+      staffRow(),
+      [
+        {
+          op: 'insert',
+          blocks: [
+            {
+              id: 'inner',
+              type: 'columnList',
+              props: {},
+              children: ['x', 'y'].map(key => ({
+                id: `icol-${key}`,
+                type: 'column',
+                props: { width: 1 },
+                children: [{ id: `ip-${key}`, type: 'paragraph', content: [] }],
+              })),
+            },
+          ],
+          position: { after: 'profile-a' },
+        },
+      ],
+      { onStructureRepair: repair => repairs.push(repair) }
+    ) as Array<{ id: string; type: string; children: Array<{ children: Array<{ id: string }> }> }>;
+
+    // The staff row is untouched and the inserted row follows it.
+    expect(result.map(b => b.type)).toEqual(['columnList', 'columnList']);
+    expect(result.map(b => b.id)).toEqual(['row', 'inner']);
+    expect(result[0].children.map(c => c.children.map(b => b.id))).toEqual([
+      ['profile-a'],
+      ['profile-b'],
+      ['profile-c'],
+    ]);
+    // Reported, because the layout is not the one the caller asked for.
+    expect(repairs).toEqual([{ kind: 'nested_column_list_lifted', id: 'inner' }]);
   });
 
   it('replace_all carrying a one-column row is repaired too', () => {
@@ -1442,6 +1619,61 @@ describe('pageContent.acceptPreview', () => {
     // the REPAIR — the merge's own blob sha is already stale.
     expect(callArg(putMock)).toMatchObject({ expectedSha: 'merged-blob-sha' });
     expect(result).toEqual({ merged: true, sha: 'repaired-blob-sha' });
+  });
+
+  it('clean merge: records the repaired file once, not twice', async () => {
+    // The repair commit goes through savePageContent, which writes the map row
+    // (with the real byte size) and warms the file. Recording again here would
+    // overwrite that row with a sizeless one and pay a second warm for a sha
+    // the Worker is already pulling.
+    const keyedPage = {
+      ...page,
+      classroom: {
+        ...page.classroom,
+        id: 'class-1',
+        content_key_version: 3,
+        content_delivery_enabled: true,
+      },
+    };
+    recordContentAssetMock.mockResolvedValue(true);
+    mergeBranchMock.mockResolvedValue({ merged: true, sha: 'merge-sha' });
+    deleteBranchMock.mockResolvedValue({ deleted: true });
+    getContentMock.mockResolvedValue({ content: mergedOneColumnRow, sha: 'merged-blob-sha' });
+    putMock.mockResolvedValue({ sha: 'repaired-blob-sha', commit: 'repair-commit' });
+    branchFullyMerged();
+
+    await acceptPreview(keyedPage);
+
+    expect(recordContentAssetMock).toHaveBeenCalledTimes(1);
+    expect(recordContentAssetMock).toHaveBeenCalledWith(
+      'class-1',
+      expect.objectContaining({
+        path: 'pages/syllabus/content.json',
+        sha: 'repaired-blob-sha',
+        size: Buffer.byteLength(callArg(putMock).content as string),
+      })
+    );
+    expect(warmContentTextMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('clean merge: still records the merge itself when no repair was needed', async () => {
+    // The guard is on sha EQUALITY, not on "a repair was attempted" — a merge
+    // nobody had to fix still has to be written through, or accepting a preview
+    // serves the pre-accept version until the push webhook lands.
+    const keyedPage = { ...page, classroom: { ...page.classroom, id: 'class-1' } };
+    recordContentAssetMock.mockResolvedValue(true);
+    mergeBranchMock.mockResolvedValue({ merged: true, sha: 'merge-sha' });
+    deleteBranchMock.mockResolvedValue({ deleted: true });
+    getContentMock.mockResolvedValue({ content: '{"blocks":[]}', sha: 'merged-blob-sha' });
+    branchFullyMerged();
+
+    await acceptPreview(keyedPage);
+
+    expect(putMock).not.toHaveBeenCalled();
+    expect(recordContentAssetMock).toHaveBeenCalledExactlyOnceWith(
+      'class-1',
+      expect.objectContaining({ path: 'pages/syllabus/content.json', sha: 'merged-blob-sha' })
+    );
   });
 
   it('clean merge: writes nothing when the merged document is already valid', async () => {
