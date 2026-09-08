@@ -12,9 +12,10 @@
  *   - the RESPONSE HEADERS are identical on the render and on the refusal. A
  *     403 that got cached, or a render that got indexed, is its own small
  *     problem and there is no reason for the two to differ.
- *   - the REFUSAL is one function, so an unknown slide id and a bad token are
- *     byte-identical. Two `new Response('Forbidden')` literals drift, and the
- *     drift is an oracle for which decks exist.
+ *   - the REFUSAL is one function, so an unknown slide id, a bad token and a
+ *     deck with no content in the repo are byte-identical. Two
+ *     `new Response('Forbidden')` literals drift, and the drift is an oracle
+ *     for which decks exist and which have been generated.
  *   - the route is a RESOURCE route: no `default` export, no `ErrorBoundary`.
  *     Either one would put React chrome inside the screenshot.
  *   - the render TOKEN never reaches an access log, and never reaches a
@@ -122,14 +123,44 @@ test.describe('the response headers', () => {
   });
 });
 
-test.describe('an unknown slide and a bad token are the same answer', () => {
-  test('both go through the one refusal', () => {
-    // One condition, one throw. Splitting these — a 404 for an unknown id, a
-    // 403 for a bad token — would tell an unauthenticated caller exactly which
-    // slide ids exist.
+test.describe('an unknown slide, a bad token and a deck with no content are one answer', () => {
+  test('all of them go through the one refusal', () => {
+    // One condition for the two token cases, one throw. Splitting them — a 404
+    // for an unknown id, a 403 for a bad token — would tell an unauthenticated
+    // caller exactly which slide ids exist.
     expect(ROUTE_SOURCE).toContain('if (!slide || !verification.ok)');
-    expect(ROUTE_SOURCE.match(/throw renderRefusal\(\)/g)).toHaveLength(1);
+
+    // TWO throw sites now: the missing-content case is caught further down,
+    // once the token has already been verified. What must stay at ONE is the
+    // BUILDER — a second `status: 403` literal is how the answers start to
+    // differ, and the difference is an oracle for which decks have content.
+    expect(ROUTE_SOURCE.match(/throw renderRefusal\(\)/g)).toHaveLength(2);
     expect(ROUTE_SOURCE.match(/status: 403/g)).toHaveLength(1);
+  });
+
+  test('a deck whose content is missing is refused, not 500ed', () => {
+    // `loadDeck` throws `Slide content not found: …` for a deck that was never
+    // generated, or whose repo this installation cannot read — the ordinary
+    // state of a staging classroom copied from production. Uncaught, that is a
+    // 500 with a stack in the body, served to a caller holding nothing but a
+    // render token; and Browser Rendering does not read it as a failure either,
+    // so it goes on waiting for a readiness attribute that page will never
+    // raise and burns the entire `waitForSelector` budget first.
+    expect(ROUTE_SOURCE).toContain("error.message.startsWith('Slide content not found')");
+    expect(ROUTE_SOURCE).toContain('loaded = await loadDeck(slide, { skipCache: true })');
+
+    // Anything else out of `loadDeck` — a malformed deck, GitHub being down —
+    // still propagates. Swallowing those would turn a real fault into a silent
+    // refusal that reads like a permissions problem.
+    expect(ROUTE_SOURCE).toContain('throw error;');
+  });
+
+  test('the missing-content refusal carries no more detail than the others', () => {
+    // The path and the reason go to the SERVER log; the caller gets the same
+    // bare `Forbidden`, from the same builder.
+    expect(ROUTE_SOURCE).toContain('no content at ${slide.content_path}');
+    expect(ROUTE_SOURCE.match(/console\.warn\(/g)).toHaveLength(2);
+    expect(ROUTE_SOURCE).not.toContain("new Response('Slide content not found'");
   });
 
   test('the refusal is byte-identical every time it is built', async () => {

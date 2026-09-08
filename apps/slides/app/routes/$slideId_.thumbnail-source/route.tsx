@@ -106,10 +106,13 @@ export const RENDER_HEADERS: Record<string, string> = {
 /**
  * The ONE refusal this route has.
  *
- * An unknown slide id and a bad token answer byte-for-byte identically, so the
- * response tells a caller nothing about which decks exist. That is only true if
+ * An unknown slide id, a bad token and a deck with no content in the repo all
+ * answer byte-for-byte identically, so the response tells a caller nothing about
+ * which decks exist or which of them have been generated. That is only true if
  * there is a single place that builds it — two `new Response('Forbidden')`
- * literals drift, and the drift is the oracle.
+ * literals drift, and the drift is the oracle. Two THROW SITES is fine and one
+ * BUILDER is the invariant: the missing-content case is caught further down,
+ * once the token has already been verified, and comes back here for its bytes.
  */
 export function renderRefusal(): Response {
   return new Response('Forbidden', { status: 403, headers: RENDER_HEADERS });
@@ -298,7 +301,31 @@ export const loader = async ({
   // per-process with no cross-instance invalidation — a cached deck here would
   // freeze the PREVIOUS save's picture under the CURRENT save's sha, and the
   // task's skip-if-unchanged check would then never render it again.
-  const loaded = await loadDeck(slide, { skipCache: true });
+  //
+  // A deck with NO CONTENT in the repo takes the same refusal as a bad token.
+  // `loadDeck` throws for that, and an uncaught throw here is a 500 carrying a
+  // stack — served to an unauthenticated caller, and one the screenshot service
+  // does not read as a failure either: it goes on waiting for a readiness
+  // attribute that page will never raise, and spends the whole `waitForSelector`
+  // budget arriving at a render we already know cannot happen. The task now
+  // skips these before it calls Browser Run at all; this is the other half of
+  // the same fix, for the deck that loses its content between the two.
+  let loaded: Awaited<ReturnType<typeof loadDeck>>;
+  try {
+    loaded = await loadDeck(slide, { skipCache: true });
+  } catch (error: unknown) {
+    if (!(error instanceof Error) || !error.message.startsWith('Slide content not found')) {
+      throw error;
+    }
+    // SERVER-SIDE ONLY, exactly as the token refusal above. The caller gets the
+    // same bare `Forbidden` from the same builder, so the response still says
+    // nothing about which decks exist or which of them have content.
+    console.warn(
+      `[thumbnail-source] Refused a render for ${slideId}: no content at ${slide.content_path}`
+    );
+    throw renderRefusal();
+  }
+
   const deck = firstSlideOnly(loaded.deck);
 
   // Pinned to the deck's own visibility, exactly as `deckAccessFor` pins every

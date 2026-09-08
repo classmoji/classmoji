@@ -23,6 +23,17 @@
  * the cost of tolerating the other two is four lines, whereas the cost of
  * getting it wrong is a silently corrupt image committed into a content repo.
  *
+ * And in every one of them the base64 may arrive as a `data:` URI rather than
+ * bare, which is what production actually sends: the first staging renders came
+ * back `{"result": "data:image/webp;base64,UklGR…"}`. That is not a variant to
+ * guess at per branch — `imageFromPayload` is the SINGLE place a payload becomes
+ * an image, so all three shapes strip the prefix, validate what is left, and
+ * take the size window on the same bytes. It has to be stripped rather than
+ * tolerated: `Buffer.from(…, 'base64')` does not fail on a data URI, it silently
+ * skips the characters it cannot read and returns a short buffer — so an
+ * unstripped prefix reads as a plausible image of the wrong length, not as an
+ * error.
+ *
  * ── Failures ───────────────────────────────────────────────────────────────
  * `retryable` is the whole contract this hands its caller. 429 (rate limited,
  * with `Retry-After` in seconds) and 5xx are worth another attempt; 400 and 422
@@ -101,9 +112,16 @@ export interface ScreenshotRequest {
   readySelector: string;
   /** WebP quality, 1-100. */
   quality: number;
-  /** Whole-navigation budget in ms (Browser Run caps `gotoOptions.timeout` at 60000). */
+  /**
+   * Whole-navigation budget in ms. Defaults to 60000, which is also the spec's
+   * `gotoOptions.timeout` MAXIMUM — anything larger is rejected, and the thing
+   * this budget has to absorb is a cold Fly machine, not a slow page.
+   */
   navigationTimeoutMs?: number;
-  /** How long to wait for `readySelector` after navigation, in ms. */
+  /**
+   * How long to wait for `readySelector` after navigation, in ms. Defaults to
+   * 30000; the spec allows up to 120000.
+   */
   readyTimeoutMs?: number;
   /**
    * Cookies the headless browser is seeded with — how the render token travels.
@@ -183,7 +201,27 @@ async function describeFailure(response: Response): Promise<string> {
   return `HTTP ${response.status}`;
 }
 
+/**
+ * Standard base64, plus the line breaks a wrapped encoder inserts — and NOTHING
+ * else, spaces included. Tested BEFORE whitespace is stripped, on purpose: strip
+ * first and `the page could not be rendered` collapses into a run of letters
+ * that matches this pattern perfectly.
+ */
 const BASE64_PATTERN = /^[A-Za-z0-9+/\r\n]+={0,2}$/;
+
+/** The media type we ask for, and the only one a `data:` URI may claim. */
+const SCREENSHOT_MEDIA_TYPE = 'image/webp';
+
+/**
+ * `data:image/webp;base64,` and its siblings, per RFC 2397.
+ *
+ * Case-insensitive and tolerant of spacing because the prefix is written by the
+ * far side and nothing obliges it to be canonical; the SUBTYPE is captured
+ * rather than matched, so a payload that announces itself as something we did
+ * not ask for is refused with the type it claimed instead of being quietly
+ * accepted or quietly mangled.
+ */
+const IMAGE_DATA_URI_PREFIX = /^data:\s*(image\/[A-Za-z0-9.+-]+)\s*;\s*base64\s*,/i;
 
 /**
  * Screenshot one page, returning the image as base64 (what a git blob wants).
@@ -228,16 +266,26 @@ export async function screenshotToBase64(request: ScreenshotRequest): Promise<st
         url: request.url,
         viewport: { width: request.width, height: request.height, deviceScaleFactor: 1 },
         gotoOptions: {
-          waitUntil: 'networkidle0',
-          timeout: request.navigationTimeoutMs ?? 30000,
+          // `load`, NOT `networkidle0`. The readiness gate here is
+          // `[data-thumbnail-ready]`, which the page raises only after its
+          // images and fonts have settled — so `networkidle0` is a second,
+          // weaker gate in front of the real one, and one that a lazily loaded
+          // image or a cold token mint can keep from ever arriving. `load`
+          // hands off to `waitForSelector`, which is the check that means
+          // something.
+          waitUntil: 'load',
+          // The spec maximum. The budget is not for the page — the route
+          // answers in ~460ms once it is reached — it is for a Fly machine
+          // that has scaled to zero and has to boot before it can answer.
+          timeout: request.navigationTimeoutMs ?? 60000,
         },
         waitForSelector: {
           selector: request.readySelector,
-          timeout: request.readyTimeoutMs ?? 15000,
+          timeout: request.readyTimeoutMs ?? 30000,
         },
         screenshotOptions: { type: 'webp', quality: request.quality, encoding: 'base64' },
         // Nothing on a slide is a video or a socket, and both are ways for
-        // `networkidle0` to never arrive.
+        // `load` to sit waiting on a connection that never closes.
         rejectResourceTypes: ['media', 'websocket'],
         ...(request.cookies?.length ? { cookies: request.cookies } : {}),
       }),
@@ -272,23 +320,62 @@ export async function screenshotToBase64(request: ScreenshotRequest): Promise<st
     if (!image) {
       throw new BrowserRunError('Browser Run returned no image', { status: 200, retryable: false });
     }
-    return withinSizeWindow(image);
+    return imageFromPayload(image);
   }
 
   if (contentType.startsWith('image/')) {
     // `encoding: 'base64'` was asked for, so this is the endpoint disagreeing
     // with us rather than an error — take the bytes and encode them ourselves.
-    return withinSizeWindow(Buffer.from(await response.arrayBuffer()).toString('base64'));
+    return imageFromPayload(Buffer.from(await response.arrayBuffer()).toString('base64'));
   }
 
-  const text = (await response.text()).trim();
-  if (!text || !BASE64_PATTERN.test(text)) {
+  return imageFromPayload(await response.text());
+}
+
+/**
+ * A response payload becomes an image here, or it does not become one at all.
+ *
+ * One function for all three response shapes, because the failure this guards
+ * against is SILENT. The JSON branch used to hand `result` straight to the size
+ * window; when Cloudflare started answering `data:image/webp;base64,…` that made
+ * `Buffer.from` skip the 23 characters of prefix it could not decode and return
+ * a buffer several bytes short — still inside the size window, still committed,
+ * and corrupt. The text branch failed more honestly (`BASE64_PATTERN` has no
+ * `:` in it) but reported the data URI as "not an image", which sent the
+ * investigation at the render route rather than at the client.
+ *
+ * Order matters: strip, check the media type, validate, and only then measure.
+ * The size window has to see the DECODED bytes — which is what it measures,
+ * `Buffer.from(base64, 'base64').length` — and those bytes are only the image's
+ * once the prefix is gone.
+ */
+function imageFromPayload(payload: string): string {
+  const trimmed = payload.trim();
+  const prefix = IMAGE_DATA_URI_PREFIX.exec(trimmed);
+
+  if (prefix) {
+    const mediaType = prefix[1].toLowerCase();
+    // We asked for WebP. A payload announcing anything else is the endpoint
+    // having ignored `screenshotOptions.type`, and committing a PNG under a
+    // `.webp` name would serve every classroom a file whose bytes and whose
+    // extension disagree.
+    if (mediaType !== SCREENSHOT_MEDIA_TYPE) {
+      throw new BrowserRunError(
+        `Browser Run returned ${mediaType}, not the ${SCREENSHOT_MEDIA_TYPE} that was asked for`,
+        { status: 200, retryable: false }
+      );
+    }
+  }
+
+  const encoded = (prefix ? trimmed.slice(prefix[0].length) : trimmed).trim();
+  if (!encoded || !BASE64_PATTERN.test(encoded)) {
     throw new BrowserRunError('Browser Run returned a body that is not an image', {
       status: 200,
       retryable: false,
     });
   }
-  return withinSizeWindow(text.replace(/\s+/g, ''));
+
+  return withinSizeWindow(encoded.replace(/\s+/g, ''));
 }
 
 /**
@@ -302,6 +389,12 @@ export async function screenshotToBase64(request: ScreenshotRequest): Promise<st
  * thumbnail it already had and nothing is written.
  *
  * Not retryable: the same page will produce the same bytes on the next attempt.
+ *
+ * The window is in DECODED bytes, not base64 characters — a base64 count would
+ * be ~4/3 of the truth and both thresholds would sit in the wrong place. Reached
+ * only through `imageFromPayload`, so `base64` is validated and prefix-free by
+ * the time it arrives; handed a `data:` URI directly, `Buffer.from` would drop
+ * the prefix's characters and undercount.
  */
 function withinSizeWindow(base64: string): string {
   const bytes = Buffer.from(base64, 'base64').length;
