@@ -11,6 +11,7 @@
   },
   "exports": {
     ".": "./src/index.ts",
+    "./deck-thumbnail-contract": "./src/classmoji/deckThumbnail.contract.ts",
     "./flags": "./src/classmoji/repoAnalytics.flags.ts",
     "./form-contract": "./src/classmoji/formContract.ts",
     "./import-progress": "./src/classmoji/importProgress.ts",
