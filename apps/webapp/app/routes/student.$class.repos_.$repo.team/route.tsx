@@ -86,12 +86,19 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
     moduleSlug
   );
 
-  if (!repository || repository.type !== 'GROUP' || repository.team_formation_mode !== 'SELF_FORMED') {
+  if (
+    !repository ||
+    repository.type !== 'GROUP' ||
+    repository.team_formation_mode !== 'SELF_FORMED'
+  ) {
     return { error: 'Team formation not available for this repository' };
   }
 
   // Check deadline
-  if (repository.team_formation_deadline && new Date() > new Date(repository.team_formation_deadline)) {
+  if (
+    repository.team_formation_deadline &&
+    new Date() > new Date(repository.team_formation_deadline)
+  ) {
     return { error: 'Team formation deadline has passed' };
   }
 
@@ -286,7 +293,8 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
 };
 
 const StudentTeamPage = ({ loaderData }: Route.ComponentProps) => {
-  const { repository, teams, userTeam, maxTeamSize, deadlinePassed, deadline, classSlug } = loaderData;
+  const { repository, teams, userTeam, maxTeamSize, deadlinePassed, deadline, classSlug } =
+    loaderData;
   const fetcher = useFetcher();
   const [teamName, setTeamName] = useState('');
   const [showCreateForm, setShowCreateForm] = useState(false);
@@ -521,28 +529,36 @@ const StudentTeamPage = ({ loaderData }: Route.ComponentProps) => {
 
       {/* All Teams (for reference) */}
       {userTeam && teams.length > 1 && (
-        <Card title="All Teams" className="mt-6">
-          <List
-            dataSource={teams.filter(t => t.id !== userTeam.id)}
-            renderItem={team => (
-              <List.Item>
-                <List.Item.Meta
-                  avatar={<Avatar icon={<IconUsers size={16} />} />}
-                  title={team.name}
-                  description={
-                    <Tag
-                      color={maxTeamSize && team.memberships.length >= maxTeamSize ? 'red' : 'blue'}
-                    >
-                      {team.memberships.length}
-                      {maxTeamSize ? `/${maxTeamSize}` : ''} members
-                      {maxTeamSize && team.memberships.length >= maxTeamSize && ' (Full)'}
-                    </Tag>
-                  }
-                />
-              </List.Item>
-            )}
-          />
-        </Card>
+        // The gap lives on this wrapper, not on the Card's own className: antd
+        // v5 injects `.ant-card` styles at runtime, after the Tailwind sheet, so
+        // a same-specificity `mt-*` utility on the Card loses the cascade and
+        // the two cards render flush against each other.
+        <div className="mt-6">
+          <Card title="All Teams">
+            <List
+              dataSource={teams.filter(t => t.id !== userTeam.id)}
+              renderItem={team => (
+                <List.Item>
+                  <List.Item.Meta
+                    avatar={<Avatar icon={<IconUsers size={16} />} />}
+                    title={team.name}
+                    description={
+                      <Tag
+                        color={
+                          maxTeamSize && team.memberships.length >= maxTeamSize ? 'red' : 'blue'
+                        }
+                      >
+                        {team.memberships.length}
+                        {maxTeamSize ? `/${maxTeamSize}` : ''} members
+                        {maxTeamSize && team.memberships.length >= maxTeamSize && ' (Full)'}
+                      </Tag>
+                    }
+                  />
+                </List.Item>
+              )}
+            />
+          </Card>
+        </div>
       )}
     </div>
   );
