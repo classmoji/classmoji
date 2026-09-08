@@ -151,7 +151,11 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
     // Team: first SELF_FORMED repository where student is on a team, otherwise prompt
     let team: TeamSummary | null = null;
     let needsTeam: SelfFormedNeedsTeam | null = null;
-    const selfFormedModules = repositories.filter(m => m.team_formation_mode === 'SELF_FORMED');
+    // Both halves of the gate, matching the team route, which 400s on a repo
+    // that is SELF_FORMED but not GROUP.
+    const selfFormedModules = repositories.filter(
+      m => m.type === 'GROUP' && m.team_formation_mode === 'SELF_FORMED'
+    );
     for (const m of selfFormedModules) {
       if (!m.slug) continue;
       const tag = await ClassmojiService.organizationTag.findByClassroomIdAndName(

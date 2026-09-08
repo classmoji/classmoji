@@ -1,4 +1,5 @@
 import { Tag } from 'antd';
+import { Link } from 'react-router';
 import Emoji from '~/components/ui/display/Emoji';
 import {
   type ModuleTreeNode,
@@ -41,6 +42,15 @@ export interface StudentTreeCtx {
   studentRepoByRepositoryId?: Record<string, { name: string }>;
   /** The viewer's latest autograding result per repository unit, keyed by id. */
   autogradingByRepositoryId?: Record<string, AutogradingResultData>;
+  /**
+   * Self-formed group repos on this page, keyed by repository id, with the
+   * viewer's team state. Present only where the loader resolved it; a repo
+   * missing from this map renders exactly as it always did.
+   */
+  selfFormedByRepositoryId?: Record<
+    string,
+    { slug: string; hasTeam: boolean; deadlinePassed: boolean }
+  >;
   /**
    * Whether the viewer is teaching staff, taken from the membership the route's
    * gate returned — never inferred from `rolePrefix`, which is only the URL the
@@ -246,12 +256,55 @@ export const buildRepositoryNode = (
   const sourceRepoUrl = repository.template
     ? repoGithubUrl(repository.template, ctx.gitOrgLogin)
     : null;
-  const repositoryUrl = directRepoUrl ?? ownRepoUrl ?? sourceRepoUrl;
+  // The template fallback is deliberately NOT offered on a self-formed row: a
+  // student with no team has no repo of their own, and a "View" pointing at the
+  // instructor's template is how they end up committing and filing issues on
+  // it. Their own team repo still links normally once it exists.
+  const selfFormed = ctx.selfFormedByRepositoryId?.[String(repository.id)];
+  const repositoryUrl = selfFormed
+    ? (directRepoUrl ?? ownRepoUrl)
+    : (directRepoUrl ?? ownRepoUrl ?? sourceRepoUrl);
 
   const autogradingResult = ctx.autogradingByRepositoryId?.[String(repository.id)];
 
   const total = assignments.length;
   const done = assignments.filter(a => raByAssignmentId[String(a.id)]?.status === 'CLOSED').length;
+
+  const repositoryAction = repositoryUrl ? (
+    <a
+      href={repositoryUrl}
+      target="_blank"
+      rel="noreferrer"
+      className="text-sm font-medium text-sky-600 hover:text-sky-700 dark:text-sky-400"
+    >
+      View
+    </a>
+  ) : null;
+
+  // A self-formed group repo is the one case where the row's job is to send the
+  // viewer somewhere in the app rather than to GitHub: until they are on a team
+  // there is no repo to open, and the team page was previously reachable only
+  // by a link the instructor pasted by hand (#313).
+  const teamHref = selfFormed
+    ? `/${ctx.rolePrefix ?? 'student'}/${ctx.classSlug}/repos/${selfFormed.slug}/team`
+    : null;
+  const selfFormedAction =
+    selfFormed && teamHref && !(selfFormed.deadlinePassed && !selfFormed.hasTeam) ? (
+      <Link
+        to={teamHref}
+        className="text-sm font-medium text-sky-600 hover:text-sky-700 dark:text-sky-400"
+      >
+        {selfFormed.hasTeam ? 'View team' : 'Form a team'}
+      </Link>
+    ) : null;
+  // Only when there is no submission count to show, which is the state a repo
+  // awaiting a team is always in.
+  const selfFormedStatus =
+    selfFormed && !selfFormed.hasTeam ? (
+      <span className="text-xs font-medium text-ink-3">
+        {selfFormed.deadlinePassed ? 'Team formation closed' : 'No team yet'}
+      </span>
+    ) : null;
 
   return {
     key: `repository-${repository.id}`,
@@ -270,23 +323,15 @@ export const buildRepositoryNode = (
           repoName={directRepo?.name}
         />
       ) : null,
-    actionNode:
-      baseLevel === 0 && repositoryUrl ? (
-        <a
-          href={repositoryUrl}
-          target="_blank"
-          rel="noreferrer"
-          className="text-sm font-medium text-sky-600 hover:text-sky-700 dark:text-sky-400"
-        >
-          View
-        </a>
-      ) : null,
+    actionNode: baseLevel === 0 ? (selfFormedAction ?? repositoryAction) : null,
     statusNode:
       total > 0 ? (
         <span className="text-xs font-medium text-ink-2 tabular-nums">
           {done}/{total} submitted
         </span>
-      ) : null,
+      ) : (
+        selfFormedStatus
+      ),
     children: repositoryChildren,
   };
 };
