@@ -59,6 +59,24 @@ import {
   type DeckJson,
   type DeckSlide,
 } from '@classmoji/services/slides';
+/**
+ * Geometry and the readiness attribute come from the shared contract, not from a
+ * constant here: the render task waits for exactly this attribute and renders at
+ * exactly this size, and it cannot import this route.
+ *
+ * From `@classmoji/services/deck-thumbnail-contract` — the pure module — and NOT
+ * off `ClassmojiService.deckThumbnail` on the barrel. This route exports helpers
+ * besides `loader` (`renderTokenFromCookies` and friends, for the unit tests),
+ * so React Router's server-export stripping cannot empty the module: whatever
+ * those helpers reference survives into the CLIENT bundle. Reading the two
+ * constants off the barrel therefore dragged `@classmoji/services`' `index.ts` —
+ * and through it `GitHubProvider` and `node:crypto` — into the browser build,
+ * which failed it outright.
+ */
+import {
+  RENDER_TOKEN_COOKIE,
+  THUMBNAIL_READY_ATTRIBUTE,
+} from '@classmoji/services/deck-thumbnail-contract';
 import {
   deckDeliveryContext,
   publicDeckThemeUrls,
@@ -66,14 +84,6 @@ import {
   resolveDeckAssetsPublic,
   resolveDeliveryThemeUrls,
 } from '~/utils/deckDelivery.server';
-
-/**
- * Geometry and the readiness attribute come from the shared contract in
- * `@classmoji/services`, not from a constant here: the render task waits for
- * exactly this attribute and renders at exactly this size, and it cannot import
- * this route.
- */
-const { RENDER_TOKEN_COOKIE, THUMBNAIL_READY_ATTRIBUTE } = ClassmojiService.deckThumbnail;
 
 /**
  * Never cached, never indexed, never framed. The SAME headers on the refusal
