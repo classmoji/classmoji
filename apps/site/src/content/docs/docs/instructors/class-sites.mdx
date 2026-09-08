@@ -1,0 +1,67 @@
+---
+title: Publish a class website
+description: Put your pages, schedule and forms on a public address like cs52.classmoji.io
+---
+
+### What is a class website?
+
+A class website is a public address for your classroom. Claim a subdomain and the site is live at `cs52.classmoji.io`, serving the pages you choose, the course schedule, and any published forms.
+
+Publishing something to your students and putting it on the public web are two separate switches. Turning the site on publishes nothing by itself: every page keeps the status you already gave it, and you decide item by item what an anonymous visitor can see.
+
+### Claim a subdomain
+
+Go to **Settings → Website**. The **Course Website** section holds the subdomain field, pre-filled with your classroom slug when that slug is a legal subdomain.
+
+A subdomain is a single DNS label:
+
+- lowercase letters, numbers and hyphens
+- starts and ends with a letter or a number
+- up to 63 characters
+- unique across Classmoji, and names the platform needs (`app`, `api`, `docs` and similar) are reserved
+
+Availability is checked as you type, so a name that is taken or reserved is rejected before you save.
+
+### Choose a home page
+
+The **Home page** section picks the page served at the root of your site. You have to choose one before the site can be turned on, because a site with no home page has nothing to answer with.
+
+Any page can be the home page. Choosing a members-only page is allowed and sometimes deliberate (a syllabus behind sign-in), so it produces a hint rather than an error.
+
+### Turn the site on
+
+Flip **Website enabled**. The switch stays disabled until a home page is chosen.
+
+Switching it back off takes the site offline but keeps your subdomain claimed, so you can put a course site away between semesters and bring it back at the same address.
+
+### What visitors see
+
+Each page carries the same status it has everywhere else in Classmoji.
+
+| Status | Who can access |
+|--------|---------------|
+| **Draft** | Nobody. The page is hidden from all students. |
+| **Private** | Enrolled students only (requires login) |
+| **Public** | Anyone with the link, no login required |
+
+A visitor who opens a private page gets a sign-in page that names the course, rather than being thrown straight at a Github login screen. Students sign in there and read the page on the site.
+
+### Publish the schedule
+
+The **Public schedule** section publishes your course calendar at `/schedule` on the site. Modules marked **Public** appear there, with their items listed as pages, slides and assignments.
+
+Set the **Time zone** in the same section. Dates then read in the course's zone rather than in whatever zone the visitor's browser happens to be in.
+
+### Paths the platform owns
+
+A few first path segments belong to Classmoji and cannot be served by one of your pages: `app`, `classmoji`, `sign-in`, `schedule`, `forms` and `robots.txt`. Give a page any other slug and it is reachable at `cs52.classmoji.io/{slug}`.
+
+### Remove the site
+
+**Remove site** takes the site offline and frees the subdomain for another class. Use it when a course is finished and the address should go back into circulation; use the **Website enabled** switch instead when you want to keep the name.
+
+### What's next
+
+- [Use your own domain](/docs/instructors/custom-domains)
+- [Build pages](/docs/instructors/pages)
+- [Build modules](/docs/instructors/modules)
