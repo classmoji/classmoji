@@ -125,7 +125,6 @@ export async function ensureClassroomTeam(
 ) {
   const teamName = getTeamNameForClassroom(classroom, role);
 
-  console.log('teamName', teamName);
   try {
     return await gitProvider.getTeam(orgLogin, teamName);
   } catch (error) {

@@ -59,8 +59,15 @@ function toPath(name: string): string {
 export class GitLabProvider extends GitProvider {
   groupId: string;
   groupPath: string | null;
-  token: string | null;
   _client: unknown;
+
+  /**
+   * The access token lives in a private field, and is deliberately kept out of
+   * `credentials` and every public property. Anything that enumerates or
+   * serialises a provider — a log line, an error dump, `JSON.stringify` — would
+   * otherwise carry a live personal access token along with it.
+   */
+  #token: string | null;
 
   /**
    * @param {string} groupId - GitLab Group ID
@@ -68,10 +75,10 @@ export class GitLabProvider extends GitProvider {
    * @param {string} [token] - GitLab access token used to authenticate API calls
    */
   constructor(groupId: string, groupPath: string | null = null, token: string | null = null) {
-    super({ groupId, groupPath, token });
+    super({ groupId, groupPath });
     this.groupId = groupId;
     this.groupPath = groupPath;
-    this.token = token;
+    this.#token = token;
     this._client = null;
   }
 
@@ -89,12 +96,12 @@ export class GitLabProvider extends GitProvider {
     path: string,
     init: { method?: string; body?: unknown } = {}
   ): Promise<{ ok: boolean; status: number; body: unknown }> {
-    if (!this.token) {
+    if (!this.#token) {
       throw new Error('GitLabProvider requires an access token for API calls');
     }
 
     const headers: Record<string, string> = {
-      Authorization: `Bearer ${this.token}`,
+      Authorization: `Bearer ${this.#token}`,
       Accept: 'application/json',
     };
     const options: { method: string; headers: Record<string, string>; body?: string } = {
