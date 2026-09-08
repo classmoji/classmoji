@@ -160,12 +160,23 @@ export async function processZipImport({
     await new Promise(resolve => setTimeout(resolve, 2000));
   }
 
-  // Try to enable GitHub Pages (idempotent)
-  try {
-    await gitProvider.enableGitHubPages(org, repoName);
-  } catch (pagesError: unknown) {
-    const message = pagesError instanceof Error ? pagesError.message : String(pagesError);
-    console.warn(`Could not auto-enable GitHub Pages: ${message}`);
+  // Try to enable GitHub Pages (idempotent) — but NOT for a classroom already
+  // served by the signed-content Worker. Its content repo is on its way to
+  // private (or already there), and switching the public github.io site back on
+  // over a private repo is the leak the Pages-off helper exists to close. Same
+  // guard as page.service.ensureContentRepoExists; gate-off classrooms are
+  // untouched, because github.io is still how their images are served.
+  if (ClassmojiService.contentDelivery.isContentDeliveryEnabled(classroom)) {
+    console.warn(
+      `Not enabling GitHub Pages for ${org}/${repoName}: content delivery is on for this classroom`
+    );
+  } else {
+    try {
+      await gitProvider.enableGitHubPages(org, repoName);
+    } catch (pagesError: unknown) {
+      const message = pagesError instanceof Error ? pagesError.message : String(pagesError);
+      console.warn(`Could not auto-enable GitHub Pages: ${message}`);
+    }
   }
 
   // 7. Collect files for batch upload

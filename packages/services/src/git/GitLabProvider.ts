@@ -714,6 +714,30 @@ export class GitLabProvider extends GitProvider {
     );
   }
 
+  /**
+   * GitLab Pages state lives in CI/CD, not in an API this adapter speaks
+   * @param {string} group - Group path
+   * @param {string} project - Project name
+   * @returns {Promise<never>}
+   */
+  async getRepoPages(_group: string, _project: string): Promise<never> {
+    throw new Error('GitLabProvider.getRepoPages() not implemented - GitLab uses CI/CD for Pages');
+  }
+
+  /**
+   * GitLab Pages is removed by deleting the pages job / its deployment, not by
+   * one API call
+   * @param {string} group - Group path
+   * @param {string} project - Project name
+   * @returns {Promise<never>}
+   */
+  async disableGitHubPages(_group: string, _project: string): Promise<never> {
+    // TODO: DELETE /api/v4/projects/:id/pages once a GitLab classroom needs it
+    throw new Error(
+      'GitLabProvider.disableGitHubPages() not implemented - GitLab uses CI/CD for Pages'
+    );
+  }
+
   // ─── Webhooks ─────────────────────────────────────────────────────────────
 
   /**
