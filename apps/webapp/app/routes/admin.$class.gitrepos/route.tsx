@@ -33,6 +33,9 @@ interface GitOrganizationInput {
  * Fetch repositories from the organization using GitHub App installation token.
  * Supports server-side pagination and search via GitHub's GraphQL API.
  */
+/** Repository pages a search will scan before it stops looking. */
+const SEARCH_SCAN_PAGE_LIMIT = 20;
+
 async function fetchOrgRepositories(
   gitOrganization: GitOrganizationInput,
   { page = 1, pageSize = 25, search = '' }
@@ -51,41 +54,64 @@ async function fetchOrgRepositories(
     const gitProvider = getGitProvider(gitOrganization);
     const octokit = await (gitProvider as GitHubProvider).getOctokit();
 
-    // If searching, use GitHub's search API which supports name filtering
+    // Searching filters the ORG LISTING rather than calling GitHub's search API.
+    //
+    // That API matches whole tokens, never substrings: `classmoji in:name` finds
+    // this org's repo and `lassmoj in:name` finds nothing, so typing "412" could
+    // never match `assignment-BillyRonico412`. Its index also lags repo creation
+    // by minutes to hours, which is exactly the window an instructor is in when
+    // they publish an assignment and go looking for the repos it just made.
+    //
+    // This page is a filter over one org's known repositories, so it walks the
+    // same listing the unfiltered view pages through and matches in memory:
+    // substrings work, brand-new repos work, and there is no index to be stale.
     if (search) {
-      const searchQuery = `org:${gitOrgLogin} ${search} in:name`;
-      const response = await octokit.graphql<{
-        search: { nodes: { name: string }[]; repositoryCount: number };
-      }>(
-        `
-          query ($searchQuery: String!, $first: Int!, $after: String) {
-            search(query: $searchQuery, type: REPOSITORY, first: $first, after: $after) {
-              repositoryCount
-              nodes {
-                ... on Repository {
-                  name
+      const needle = search.trim().toLowerCase();
+      const matches: { name: string }[] = [];
+      let cursor: string | null = null;
+
+      // Bounded so a pathologically large org cannot hang the request. 20 pages
+      // of 100 covers every classroom org we have; past that the count reads
+      // "500+" rather than lying about the total.
+      for (let pageIndex = 0; pageIndex < SEARCH_SCAN_PAGE_LIMIT; pageIndex += 1) {
+        const scan: {
+          organization: {
+            repositories: {
+              nodes: { name: string }[];
+              pageInfo: { endCursor: string; hasNextPage: boolean };
+            };
+          };
+        } = await octokit.graphql(
+          `
+            query ($org: String!, $first: Int!, $after: String) {
+              organization(login: $org) {
+                repositories(first: $first, after: $after, orderBy: {field: NAME, direction: ASC}) {
+                  nodes {
+                    name
+                  }
+                  pageInfo {
+                    endCursor
+                    hasNextPage
+                  }
                 }
               }
-              pageInfo {
-                endCursor
-                hasNextPage
-              }
             }
-          }
-        `,
-        {
-          // NOT `query:` — @octokit/graphql reserves that option key (along with
-          // `method` and `url`) and rejects the call before it reaches GitHub.
-          // The GraphQL argument is still `query:`; only the variable is renamed.
-          searchQuery,
-          first: pageSize,
-          after: page > 1 ? btoa(`cursor:${(page - 1) * pageSize}`) : null,
-        }
-      );
+          `,
+          { org: gitOrgLogin, first: 100, after: cursor }
+        );
 
+        const { nodes, pageInfo } = scan.organization.repositories;
+        for (const node of nodes) {
+          if (node.name.toLowerCase().includes(needle)) matches.push(node);
+        }
+        if (!pageInfo.hasNextPage) break;
+        cursor = pageInfo.endCursor;
+      }
+
+      const offset = (page - 1) * pageSize;
       return {
-        repositories: response.search.nodes,
-        totalCount: response.search.repositoryCount,
+        repositories: matches.slice(offset, offset + pageSize),
+        totalCount: matches.length,
         lastRefresh: new Date().toISOString(),
       };
     }
