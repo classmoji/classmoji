@@ -1,5 +1,6 @@
 import _ from 'lodash';
 import getPrisma from '@classmoji/database';
+import { claimPendingInvites } from './classroomInvite.service.ts';
 import type { GitProvider, Prisma, GitRepo, Role } from '@prisma/client';
 import type {
   Repository as GradeModule,
@@ -134,6 +135,44 @@ export const create = async (
   });
 };
 
+/**
+ * Which of these addresses belong to an existing account, under EITHER address
+ * we hold (`email` or `provider_email`), compared case-insensitively.
+ *
+ * Answers one question for the roster: is a pending invite waiting on someone
+ * who has simply not signed up yet, or on an address nobody on Classmoji uses?
+ * The second is the shape of a typo, and it is invisible today — a mistyped
+ * invite looks exactly like a patient one.
+ *
+ * Returned lowercased, because that is the only form the caller can compare
+ * against an invite's `school_email`, which is stored as the instructor typed it.
+ */
+export const findRegisteredEmails = async (emails: string[]): Promise<Set<string>> => {
+  const candidates = Array.from(
+    new Set(emails.filter(e => !!e && e.trim().length > 0).map(e => e.trim().toLowerCase()))
+  );
+  if (candidates.length === 0) return new Set();
+
+  const users = await getPrisma().user.findMany({
+    where: {
+      OR: candidates.flatMap(email => [
+        { email: { equals: email, mode: 'insensitive' as const } },
+        { provider_email: { equals: email, mode: 'insensitive' as const } },
+      ]),
+    },
+    select: { email: true, provider_email: true },
+  });
+
+  const registered = new Set<string>();
+  for (const user of users) {
+    for (const address of [user.email, user.provider_email]) {
+      const normalized = address?.trim().toLowerCase();
+      if (normalized && candidates.includes(normalized)) registered.add(normalized);
+    }
+  }
+  return registered;
+};
+
 export const findBy = ({ where }: { where: Prisma.UserWhereUniqueInput }) => {
   return getPrisma().user.findUnique({
     where,
@@ -141,10 +180,24 @@ export const findBy = ({ where }: { where: Prisma.UserWhereUniqueInput }) => {
 };
 
 export const update = async (userId: string, updates: Prisma.UserUpdateInput) => {
-  return getPrisma().user.update({
+  const user = await getPrisma().user.update({
     where: { id: userId },
     data: updates,
   });
+
+  // Correcting a mistyped address is exactly what someone does after noticing
+  // they were invited to a classroom they never joined, so a pending invite for
+  // the NEW address is claimed here rather than waiting for the next login
+  // (#307). Never let it fail the update it is following.
+  if (updates.email !== undefined || updates.provider_email !== undefined) {
+    try {
+      await claimPendingInvites(userId);
+    } catch (error) {
+      console.error('Failed to claim pending invites after email change:', error);
+    }
+  }
+
+  return user;
 };
 
 export const deleteByLogin = async (login: string) => {

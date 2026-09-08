@@ -108,12 +108,27 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
     ...(isOwner ? { letter_grade: s.letter_grade, comment: s.comment } : {}),
   }));
 
+  // Is anyone actually reachable at each invited address? An invite whose
+  // address belongs to no account at all is the shape of a typo, or of a student
+  // who signed up with a different address — and until now it looked exactly
+  // like an invite that is merely waiting, which is how one sat unnoticed in
+  // production for six days (#307). Owner-only, like the address itself.
+  const registeredEmails = isOwner
+    ? await ClassmojiService.user.findRegisteredEmails(invitations.map(inv => inv.school_email))
+    : new Set<string>();
+
   // Pending invites are shaped the same way: an invite's school_email is a
   // contact field, so only an OWNER receives it.
   const rosterInvitations = invitations.map(inv => ({
     id: inv.id,
     student_name: inv.student_name,
-    ...(isOwner ? { school_email: inv.school_email } : {}),
+    ...(isOwner
+      ? {
+          school_email: inv.school_email,
+          has_account: registeredEmails.has(inv.school_email.trim().toLowerCase()),
+          invited_at: inv.created_at,
+        }
+      : {}),
   }));
 
   return {
@@ -137,6 +152,8 @@ const StudentsScreen = ({ loaderData }: Route.ComponentProps) => {
       name: inv.student_name,
       // Present for an OWNER only — the loader omits it for other staff.
       email: inv.school_email,
+      _hasAccount: inv.has_account,
+      _invitedAt: inv.invited_at,
       school_id: null,
       login: 'pending-invite',
       has_accepted_invite: false,

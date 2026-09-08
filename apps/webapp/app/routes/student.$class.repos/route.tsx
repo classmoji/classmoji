@@ -100,12 +100,58 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
     ownedRepositoryIds.add(r.repository_id);
   });
 
-  // Students only see repositories they actually have a repo for. Instructors
-  // previewing the student view still see every published repository.
+  // A SELF_FORMED group repo has NO GitRepo until the student forms a team, so
+  // the ownership filter alone hid the one page they need to reach (#313). The
+  // filter's original purpose — hiding unprovisioned individual repos — is
+  // unchanged.
+  const isSelfFormed = (repository: (typeof repositories)[number]) =>
+    repository.type === 'GROUP' &&
+    repository.team_formation_mode === 'SELF_FORMED' &&
+    !!repository.slug;
+
+  // Students only see repositories they actually have a repo for, plus any
+  // self-formed group repo still waiting on a team. Instructors previewing the
+  // student view still see every published repository.
   const visibleRepositories =
     membership?.role === 'STUDENT'
-      ? repositories.filter(r => ownedRepositoryIds.has(r.id))
+      ? repositories.filter(r => ownedRepositoryIds.has(r.id) || isSelfFormed(r))
       : repositories;
+
+  // Team state for the self-formed repos on this page. There is no
+  // Repository -> Team foreign key: a team is tied to a repo by the convention
+  // `Tag.name === Repository.slug`, so each costs a tag lookup plus a
+  // membership lookup. Bounded by the number of self-formed repos in one
+  // classroom, which is a handful at most.
+  //
+  // Only for viewers the team page itself admits: it allows STUDENT, OWNER and
+  // TEACHER, so an ASSISTANT — who can read THIS page — would follow the link
+  // into a full-page 403. No state means no link, and their rows render exactly
+  // as they did before.
+  const canReachTeamPage =
+    membership?.role === 'STUDENT' ||
+    membership?.role === 'OWNER' ||
+    membership?.role === 'TEACHER';
+  const selfFormedByRepositoryId: Record<
+    string,
+    { slug: string; hasTeam: boolean; deadlinePassed: boolean }
+  > = {};
+  for (const repository of canReachTeamPage ? visibleRepositories : []) {
+    if (!isSelfFormed(repository)) continue;
+    const tag = await ClassmojiService.organizationTag.findByClassroomIdAndName(
+      classroom.id,
+      repository.slug!
+    );
+    const userTeam = tag
+      ? await ClassmojiService.team.findUserTeamByTag(classroom.id, tag.id, userId)
+      : null;
+    selfFormedByRepositoryId[repository.id] = {
+      slug: repository.slug!,
+      hasTeam: !!userTeam,
+      deadlinePassed: repository.team_formation_deadline
+        ? new Date() > new Date(repository.team_formation_deadline)
+        : false,
+    };
+  }
   // Latest autograding result per repository unit — rendered as a pill in the
   // repos table, with the per-test breakdown one click away in a modal.
   const latestAutograding = await ClassmojiService.autogradingResult.findLatestByGitRepoIds(
@@ -123,6 +169,7 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
     gitOrgLogin,
     studentRepoByRepositoryId,
     autogradingByRepositoryId,
+    selfFormedByRepositoryId,
     slidesUrl: process.env.SLIDES_URL || 'http://localhost:6500',
     pagesUrl: process.env.PAGES_URL || 'http://localhost:7100',
     classSlug,
@@ -137,6 +184,7 @@ const StudentRepositories = ({ loaderData }: Route.ComponentProps) => {
     gitOrgLogin,
     studentRepoByRepositoryId,
     autogradingByRepositoryId,
+    selfFormedByRepositoryId,
     slidesUrl,
     pagesUrl,
     classSlug,
@@ -151,6 +199,7 @@ const StudentRepositories = ({ loaderData }: Route.ComponentProps) => {
     gitOrgLogin,
     studentRepoByRepositoryId,
     autogradingByRepositoryId,
+    selfFormedByRepositoryId,
     rolePrefix,
   };
   const nodes = (repositories as AnyRepository[]).map(r =>
