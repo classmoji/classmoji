@@ -742,6 +742,98 @@ test.describe('editor parity', () => {
     expect(editor, 'page-viewer.css should still size .page-header-image').not.toHaveLength(0);
     expect(coverHeights(SITE_STYLES)).toEqual(editor);
   });
+
+  /** Comments stripped, so prose in these files cannot be parsed as selectors. */
+  const uncommented = (css: string): string => css.replace(/\/\*[\s\S]*?\*\//g, '');
+
+  /** Every `rule { … }` pair in a stylesheet, as [selector, body]. */
+  const rules = (css: string): [string, string][] =>
+    [...uncommented(css).matchAll(/([^{}]+)\{([^{}]*)\}/g)].map(([, sel, body]) => [sel, body]);
+
+  /**
+   * The shared heading scale, keyed by level: every `--level` in
+   * blocknote-overrides.css.
+   *
+   * An H1 carries no `data-level` — BlockNote omits a prop equal to its default
+   * and heading's default level is 1 — so the `:not([data-level])` selector is
+   * the H1 rule, and the `[data-level="1"]` twin covers any export path that
+   * ever does write the attribute.
+   */
+  const sharedScale = (css: string): Record<string, string> => {
+    const scale: Record<string, string> = {};
+    for (const [selector, body] of rules(css)) {
+      const level = body.match(/--level:\s*([^;]+)/);
+      if (!level) continue;
+      const value = level[1].trim();
+      if (selector.includes(':not([data-level])')) scale['1'] = value;
+      for (const [, n] of selector.matchAll(/\[data-level="([1-6])"\]/g)) scale[n] = value;
+    }
+    return scale;
+  };
+
+  /** The editor's surviving tag-level copy: `.page-editor … hN { font-size }`. */
+  const editorHeadingSizes = (css: string): Record<string, string> => {
+    const sizes: Record<string, string> = {};
+    for (const [selector, body] of rules(css)) {
+      if (!selector.includes('.page-editor')) continue;
+      const size = body.match(/font-size:\s*([^;!]+)/);
+      if (!size) continue;
+      for (const [, level] of selector.matchAll(/(?:^|[\s>+~,])h([1-6])\b/g)) {
+        sizes[level] = size[1].trim();
+      }
+    }
+    return sizes;
+  };
+
+  const overridesCss = (): string =>
+    fs.readFileSync(new URL('../../app/styles/blocknote-overrides.css', import.meta.url), 'utf-8');
+
+  test('the heading scale is shared, not scoped to the editor', () => {
+    // The bug this pins: the sizes lived only under `.page-editor`, a class a
+    // server-rendered site page does not have, so the site fell through to
+    // BlockNote's 3em/2em/1.3em and published a 48px H1 where the editor showed
+    // 30px (#288). The scale is now unscoped `--level`, which reaches every
+    // surface — so a scoped selector here would re-break exactly one of them.
+    const scale = sharedScale(overridesCss());
+
+    expect(Object.keys(scale).sort()).toEqual(['1', '2', '3', '4', '5', '6']);
+
+    for (const [selector, body] of rules(overridesCss())) {
+      if (!/--level:/.test(body)) continue;
+      expect(selector, '--level must not be scoped to one surface').not.toMatch(
+        /\.page-editor|\.site-article|\.page-viewer/
+      );
+    }
+  });
+
+  test("the editor's own heading rules agree with the shared scale", () => {
+    // PageEditor's inline `16px !important` pin defeats `font-size: var(--level)`
+    // in the editor, so these tag-level rules are what it actually renders. Two
+    // live copies of one scale: this is the assertion that keeps them equal.
+    const scale = sharedScale(overridesCss());
+    const editor = editorHeadingSizes(overridesCss());
+
+    expect(
+      Object.keys(editor),
+      'blocknote-overrides.css should still size .page-editor headings'
+    ).not.toHaveLength(0);
+
+    for (const [level, size] of Object.entries(editor)) {
+      expect(size, `editor h${level} should match the shared --level`).toBe(scale[level]);
+    }
+  });
+
+  test('the site stylesheet does not fork the heading scale', () => {
+    // The recurrence this guards: "site headings look wrong" is a tempting
+    // one-line fix in SITE_STYLES, and it would move the site alone while the
+    // editor and the in-app viewer stayed on the shared scale.
+    for (const [selector, body] of rules(SITE_STYLES)) {
+      if (!/heading/.test(selector) && !/--level:/.test(body)) continue;
+      expect(body, `SITE_STYLES should not size headings (${selector.trim()})`).not.toMatch(
+        /font-size:|--level:/
+      );
+    }
+  });
 });
 
 test.describe('article width', () => {
