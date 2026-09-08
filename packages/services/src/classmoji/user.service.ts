@@ -1,5 +1,6 @@
 import _ from 'lodash';
 import getPrisma from '@classmoji/database';
+import { claimPendingInvites } from './classroomInvite.service.ts';
 import type { GitProvider, Prisma, GitRepo, Role } from '@prisma/client';
 import type {
   Repository as GradeModule,
@@ -141,10 +142,24 @@ export const findBy = ({ where }: { where: Prisma.UserWhereUniqueInput }) => {
 };
 
 export const update = async (userId: string, updates: Prisma.UserUpdateInput) => {
-  return getPrisma().user.update({
+  const user = await getPrisma().user.update({
     where: { id: userId },
     data: updates,
   });
+
+  // Correcting a mistyped address is exactly what someone does after noticing
+  // they were invited to a classroom they never joined, so a pending invite for
+  // the NEW address is claimed here rather than waiting for the next login
+  // (#307). Never let it fail the update it is following.
+  if (updates.email !== undefined || updates.provider_email !== undefined) {
+    try {
+      await claimPendingInvites(userId);
+    } catch (error) {
+      console.error('Failed to claim pending invites after email change:', error);
+    }
+  }
+
+  return user;
 };
 
 export const deleteByLogin = async (login: string) => {

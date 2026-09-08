@@ -79,7 +79,30 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
     // landing screen can show them in the Archived section.
     typedUser.memberships = (typedUser.memberships ?? []) as SelectOrganizationMembership[];
 
-    const hasExampleClassroom = typedUser.memberships.some(
+    // Claim any classroom invite addressed to this user before the page renders.
+    // This is the post-login seam: it is the default OAuth callbackURL, `email`
+    // is guaranteed above, and the claim is idempotent — so a student invited at
+    // an address they did not register with is picked up on their next sign-in
+    // instead of being stranded forever (#307). Never let it block the picker.
+    try {
+      const { claimed } = await ClassmojiService.classroomInvite.claimPendingInvites(typedUser.id);
+      if (claimed > 0) {
+        const refreshedUser = await ClassmojiService.user.findById(typedUser.id, {
+          includeMemberships: true,
+        });
+        if (refreshedUser) {
+          user = refreshedUser;
+          typedUser = user as AppUser;
+          typedUser.memberships = (typedUser.memberships ?? []) as SelectOrganizationMembership[];
+        }
+      }
+    } catch (error) {
+      console.error('Failed to claim pending classroom invites:', error);
+    }
+
+    // `?? []` because the claim above may have swapped in a refreshed user, which
+    // costs TypeScript the narrowing the initial assignment gave it.
+    const hasExampleClassroom = (typedUser.memberships ?? []).some(
       m => (m.organization as { is_example?: boolean }).is_example === true
     );
     if (!hasExampleClassroom && typedUser.login) {
