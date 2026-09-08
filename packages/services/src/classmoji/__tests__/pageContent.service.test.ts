@@ -30,28 +30,56 @@ vi.mock('../../content/ContentService.ts', () => ({
 // The asset map row is written at upload time rather than left to the push
 // webhook — see recordContentAsset. Mocked here so this suite keeps pinning the
 // GitHub interactions and nothing reaches Prisma.
+//
+// The rows a record actually WROTE are kept, because an upload signs only what
+// the map can vouch for: `signUploadedAsset` looks its sha back up rather than
+// trusting the commit response that produced it. A mock that recorded nothing
+// would be a classroom whose map has no row — a refusal, not a signature.
 const recordContentAssetMock = vi.fn();
 const resolveContentBranchMock = vi.fn();
+const recordedRows = new Map<string, string>();
 vi.mock('../contentAssets.service.ts', () => ({
-  recordContentAsset: (...args: unknown[]) => recordContentAssetMock(...args),
+  recordContentAsset: async (classroomId: string, entry: { path: string; sha: string }) => {
+    const ok = await recordContentAssetMock(classroomId, entry);
+    if (ok) recordedRows.set(`${classroomId}|${entry.sha}`, entry.path);
+    return ok;
+  },
   resolveContentBranch: (...args: unknown[]) => resolveContentBranchMock(...args),
+  lookupContentAssetsBySha: async (classroomId: string, shas: string[]) =>
+    new Map(
+      shas.flatMap(sha => {
+        const path = recordedRows.get(`${classroomId}|${sha}`);
+        return path ? ([[sha, path]] as Array<[string, string]>) : [];
+      })
+    ),
 }));
 
 // The map-first read (`viaWorker`). Mocked at the module seam so this suite
 // stays about page-content shapes; contentDelivery.text.test.ts owns the read
 // itself. `canonicalizeMany` is passed through unchanged — the save path calls
 // it and this suite is not testing canonicalization.
+//
+// The two signing-guard exports are the REAL ones. Stubbing them would stub out
+// the very check that decides whether an upload stores a repo path or a legacy
+// URL, which is what the upload assertions below are about.
 const fetchContentTextMock = vi.fn();
 const warmContentTextMock = vi.fn(async (..._args: unknown[]) => {});
-vi.mock('../contentDelivery.service.ts', () => ({
-  fetchContentText: (...args: unknown[]) => fetchContentTextMock(...args),
-  // Real, not a stub: the two probes sharing ONE budget object is the thing
-  // being asserted, and a mock that handed out a fresh object each call would
-  // make that assertion vacuous.
-  textReadBudget: () => ({ workerUnavailable: false }),
-  canonicalizeMany: async (_ctx: unknown, refs: string[]) => new Map(refs.map(r => [r, r])),
-  warmContentText: (...args: unknown[]) => warmContentTextMock(...args),
-}));
+vi.mock('../contentDelivery.service.ts', async () => {
+  const actual = await vi.importActual<typeof import('../contentDelivery.service.ts')>(
+    '../contentDelivery.service.ts'
+  );
+  return {
+    fetchContentText: (...args: unknown[]) => fetchContentTextMock(...args),
+    // Real, not a stub: the two probes sharing ONE budget object is the thing
+    // being asserted, and a mock that handed out a fresh object each call would
+    // make that assertion vacuous.
+    textReadBudget: () => ({ workerUnavailable: false }),
+    canonicalizeMany: async (_ctx: unknown, refs: string[]) => new Map(refs.map(r => [r, r])),
+    warmContentText: (...args: unknown[]) => warmContentTextMock(...args),
+    mappedAssetsBySha: actual.mappedAssetsBySha,
+    signBlobUrlForClassroom: actual.signBlobUrlForClassroom,
+  };
+});
 
 const {
   loadPageContent,
@@ -88,6 +116,7 @@ const writtenWrapper = () => JSON.parse(callArg(putMock).content as string);
 
 beforeEach(() => {
   vi.clearAllMocks();
+  recordedRows.clear();
   putMock.mockResolvedValue({ sha: 'new-sha', commit: 'commit-1' });
 });
 

@@ -1,5 +1,4 @@
 import { createHash } from 'node:crypto';
-import { signBlobUrl } from '@classmoji/content-signing';
 import { z } from 'zod';
 import { collectBlockAssetRefs, mapBlockAssetRefs } from '@classmoji/utils';
 import { ContentService } from '../content/ContentService.ts';
@@ -7,6 +6,8 @@ import { recordContentAsset, resolveContentBranch } from './contentAssets.servic
 import {
   canonicalizeMany,
   fetchContentText,
+  mappedAssetsBySha,
+  signBlobUrlForClassroom,
   textReadBudget,
   warmContentText,
   type ResolveContext,
@@ -610,6 +611,21 @@ export async function uploadPageAsset(
  * bare repo path when a display URL came back and the legacy absolute URL when
  * it did not. A classroom the readers do not resolve for must keep getting the
  * legacy URL, or every upload into it would save as a path nothing can read.
+ *
+ * ## The one call site that carries a sha in from outside the map
+ *
+ * Every other signature in the app is minted from a row the resolver just read
+ * by PATH for this classroom. This one starts from the sha a GitHub commit
+ * returned, which is not proof of anything the map knows — so it looks the sha
+ * up (`mappedAssetsBySha`) and signs only what comes back.
+ *
+ * That lookup is not ceremony. `recordContentAsset` above is allowed to decline
+ * — a classroom on a non-GitHub provider, one with no content repo, or a write
+ * that simply failed — and before this check a decline still produced a signed
+ * URL, which then made `uploadPageAsset` store the BARE REPO PATH for a file
+ * with no map row: an upload that saved as a reference no reader can resolve
+ * and no later sync repairs. Refusing here restores the legacy absolute URL for
+ * exactly those uploads, which is the answer that keeps working.
  */
 async function signUploadedAsset(
   page: PageWithContentRepo,
@@ -632,25 +648,21 @@ async function signUploadedAsset(
   const dot = name.lastIndexOf('.');
   if (dot <= 0 || dot === name.length - 1) return null;
 
-  try {
-    return await signBlobUrl(
-      origin,
-      {
-        master,
-        classroomId: classroom.id,
-        keyVersion:
-          typeof classroom.content_key_version === 'number' ? classroom.content_key_version : 0,
-        tier: 'edit',
-      },
-      { sha, ext: name.slice(dot + 1).toLowerCase() }
-    );
-  } catch (error) {
-    console.warn(
-      `[pageContent.uploadPageAsset] Could not sign ${path}:`,
-      error instanceof Error ? error.message : error
-    );
-    return null;
-  }
+  const asset = (await mappedAssetsBySha(classroom.id, [sha])).get(sha);
+  // The row the upload just wrote is missing, so there is nothing to prove this
+  // classroom's claim on these bytes. `mappedAssetsBySha` logs the refusal; the
+  // caller stores the legacy absolute URL, which still resolves.
+  if (!asset) return null;
+
+  return signBlobUrlForClassroom(
+    {
+      id: classroom.id,
+      content_key_version:
+        typeof classroom.content_key_version === 'number' ? classroom.content_key_version : 0,
+    },
+    { origin, master },
+    { asset, ext: name.slice(dot + 1).toLowerCase(), tier: 'edit' }
+  );
 }
 
 // ─── Blank page content ──────────────────────────────────────────────────────
