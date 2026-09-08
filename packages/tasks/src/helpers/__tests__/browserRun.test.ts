@@ -104,12 +104,52 @@ describe('the request', () => {
     expect(JSON.parse(init.body)).toEqual({
       url: 'https://slides.classmoji.test/deck/thumbnail-source',
       viewport: { width: 1280, height: 720, deviceScaleFactor: 1 },
-      gotoOptions: { waitUntil: 'networkidle0', timeout: 30000 },
-      waitForSelector: { selector: '[data-thumbnail-ready]', timeout: 15000 },
+      gotoOptions: { waitUntil: 'load', timeout: 60000 },
+      waitForSelector: { selector: '[data-thumbnail-ready]', timeout: 30000 },
       screenshotOptions: { type: 'webp', quality: 80, encoding: 'base64' },
       rejectResourceTypes: ['media', 'websocket'],
       cookies: [RENDER_COOKIE],
     });
+  });
+
+  it('budgets for a cold origin and lets the readiness selector be the gate', async () => {
+    // The first staging render timed out with the route answering in 461ms: the
+    // whole 30s went on a Fly machine that had scaled to zero. 60000 is the
+    // spec's `gotoOptions.timeout` MAXIMUM, and `waitForSelector.timeout` may go
+    // to 120000, so both of these are inside what the endpoint accepts.
+    //
+    // `load` rather than `networkidle0` because `[data-thumbnail-ready]` is the
+    // real readiness gate — the page raises it only after its own images and
+    // fonts settle — and `networkidle0` is a weaker gate in front of it that a
+    // lazily loaded image can keep from ever arriving.
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValue(response(IMAGE_BASE64, { headers: { 'content-type': 'text/plain' } }));
+
+    await screenshotToBase64(request(fetchImpl as unknown as typeof fetch));
+
+    const body = JSON.parse(fetchImpl.mock.calls[0][1].body);
+    expect(body.gotoOptions.waitUntil).toBe('load');
+    expect(body.gotoOptions.timeout).toBe(60000);
+    expect(body.gotoOptions.timeout).toBeLessThanOrEqual(60000);
+    expect(body.waitForSelector.timeout).toBe(30000);
+    expect(body.waitForSelector.timeout).toBeLessThanOrEqual(120000);
+  });
+
+  it('lets the caller override both budgets', async () => {
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValue(response(IMAGE_BASE64, { headers: { 'content-type': 'text/plain' } }));
+
+    await screenshotToBase64({
+      ...request(fetchImpl as unknown as typeof fetch),
+      navigationTimeoutMs: 45000,
+      readyTimeoutMs: 20000,
+    });
+
+    const body = JSON.parse(fetchImpl.mock.calls[0][1].body);
+    expect(body.gotoOptions.timeout).toBe(45000);
+    expect(body.waitForSelector.timeout).toBe(20000);
   });
 
   it('carries the token as a HOST-SCOPED cookie, never as an extra header', async () => {
@@ -213,6 +253,154 @@ describe('reading the response', () => {
       .mockResolvedValue(
         response('<html>gateway error</html>', { headers: { 'content-type': 'text/html' } })
       );
+    await expect(screenshotToBase64(request(fetchImpl as unknown as typeof fetch))).rejects.toThrow(
+      /not an image/
+    );
+  });
+});
+
+/**
+ * What Cloudflare actually sends: `result` is a `data:` URI, not bare base64.
+ *
+ * This is not a hypothetical tolerance. The first staging renders answered 200
+ * with `"data:image/webp;base64,UklGR…"`, and the two branches failed
+ * differently and both badly — JSON handed the prefix straight to
+ * `Buffer.from(…, 'base64')`, which does not throw on characters it cannot
+ * decode, it skips them, so a short buffer went to the size window and would
+ * have been committed; text refused it as "not an image", which pointed the
+ * investigation at the render route rather than at this file.
+ */
+describe('a data: URI is the shape production sends', () => {
+  const dataUri = (base64: string, mediaType = 'image/webp') =>
+    `data:${mediaType};base64,${base64}`;
+
+  it('strips the prefix off a JSON string result', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(
+      response(JSON.stringify({ success: true, result: dataUri(IMAGE_BASE64) }), {
+        headers: { 'content-type': 'application/json' },
+      })
+    );
+    await expect(screenshotToBase64(request(fetchImpl as unknown as typeof fetch))).resolves.toBe(
+      IMAGE_BASE64
+    );
+  });
+
+  it('strips it off the nested `result.screenshot` envelope too', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(
+      response(JSON.stringify({ success: true, result: { screenshot: dataUri(IMAGE_BASE64) } }), {
+        headers: { 'content-type': 'application/json' },
+      })
+    );
+    await expect(screenshotToBase64(request(fetchImpl as unknown as typeof fetch))).resolves.toBe(
+      IMAGE_BASE64
+    );
+  });
+
+  it('strips it off a text/plain body, which used to be refused outright', async () => {
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValue(
+        response(`${dataUri(IMAGE_BASE64)}\n`, { headers: { 'content-type': 'text/plain' } })
+      );
+    await expect(screenshotToBase64(request(fetchImpl as unknown as typeof fetch))).resolves.toBe(
+      IMAGE_BASE64
+    );
+  });
+
+  it('reads the prefix case-insensitively, as RFC 2397 allows', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(
+      response(
+        JSON.stringify({ success: true, result: `DATA:IMAGE/WEBP;BASE64,${IMAGE_BASE64}` }),
+        {
+          headers: { 'content-type': 'application/json' },
+        }
+      )
+    );
+    await expect(screenshotToBase64(request(fetchImpl as unknown as typeof fetch))).resolves.toBe(
+      IMAGE_BASE64
+    );
+  });
+
+  it('still takes bare base64 — the prefix is optional, not required', async () => {
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValue(response(IMAGE_BASE64, { headers: { 'content-type': 'text/plain' } }));
+    await expect(screenshotToBase64(request(fetchImpl as unknown as typeof fetch))).resolves.toBe(
+      IMAGE_BASE64
+    );
+  });
+
+  it('refuses a media type we did not ask for', async () => {
+    // `screenshotOptions.type` said webp. A PNG committed at `thumbnail.webp`
+    // is a file whose bytes and whose extension disagree, served to every
+    // classroom that opens the index.
+    const fetchImpl = vi.fn().mockResolvedValue(
+      response(JSON.stringify({ success: true, result: dataUri(IMAGE_BASE64, 'image/png') }), {
+        headers: { 'content-type': 'application/json' },
+      })
+    );
+
+    const error = (await screenshotToBase64(request(fetchImpl as unknown as typeof fetch)).catch(
+      (e: unknown) => e
+    )) as BrowserRunError;
+
+    expect(error).toBeInstanceOf(BrowserRunError);
+    expect(error.message).toMatch(/image\/png/);
+    expect(error.message).toMatch(/image\/webp/);
+    // The endpoint will answer the same way next time.
+    expect(error.retryable).toBe(false);
+  });
+
+  it('measures the size window on the DECODED bytes, not the prefixed string', async () => {
+    // The prefix is 23 characters. Left on, `Buffer.from` drops what it cannot
+    // decode and the count comes out short — which is how an image just over
+    // the floor gets reported as under it, and a corrupt one gets committed.
+    const justOverTheFloor = Buffer.alloc(MIN_IMAGE_BYTES + 16, 7).toString('base64');
+    const fetchImpl = vi.fn().mockResolvedValue(
+      response(JSON.stringify({ success: true, result: dataUri(justOverTheFloor) }), {
+        headers: { 'content-type': 'application/json' },
+      })
+    );
+
+    await expect(screenshotToBase64(request(fetchImpl as unknown as typeof fetch))).resolves.toBe(
+      justOverTheFloor
+    );
+  });
+
+  it('applies the floor to a data URI as well', async () => {
+    const tooSmall = Buffer.alloc(MIN_IMAGE_BYTES - 1, 7).toString('base64');
+    const fetchImpl = vi.fn().mockResolvedValue(
+      response(JSON.stringify({ success: true, result: dataUri(tooSmall) }), {
+        headers: { 'content-type': 'application/json' },
+      })
+    );
+    await expect(screenshotToBase64(request(fetchImpl as unknown as typeof fetch))).rejects.toThrow(
+      /floor/
+    );
+  });
+
+  it('refuses a data URI whose payload is not base64 at all', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(
+      response(
+        JSON.stringify({ success: true, result: 'data:image/webp;base64,<html>nope</html>' }),
+        {
+          headers: { 'content-type': 'application/json' },
+        }
+      )
+    );
+    await expect(screenshotToBase64(request(fetchImpl as unknown as typeof fetch))).rejects.toThrow(
+      /not an image/
+    );
+  });
+
+  it('refuses a JSON result that is prose rather than an image', async () => {
+    // The JSON branch used to skip validation entirely and hand whatever it
+    // found to the size window.
+    const fetchImpl = vi.fn().mockResolvedValue(
+      response(JSON.stringify({ success: true, result: 'the page could not be rendered' }), {
+        headers: { 'content-type': 'application/json' },
+      })
+    );
     await expect(screenshotToBase64(request(fetchImpl as unknown as typeof fetch))).rejects.toThrow(
       /not an image/
     );

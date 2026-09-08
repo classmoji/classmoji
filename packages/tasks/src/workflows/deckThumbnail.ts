@@ -43,6 +43,11 @@ import {
  * object in the repo's history whether or not the picture changed.
  *
  * ── FAILURE ────────────────────────────────────────────────────────────────
+ * Before any of that: a deck whose document is not in the repo is SKIPPED, not
+ * rendered and not failed. Step 2a catches it from the same metadata read the
+ * skip check already makes, so no token is minted and no browser is booted for
+ * a page that could only refuse.
+ *
  * A render that fails keeps the thumbnail already in the repo. Nothing is ever
  * deleted and no placeholder is ever committed — the index draws its own
  * placeholder for a deck that has none, which is strictly better than a repo
@@ -56,16 +61,31 @@ import {
  * be re-asked for by every page load forever.
  */
 
-/** How long the whole navigation may take. Browser Run caps this at 60s. */
-const NAVIGATION_TIMEOUT_MS = 30000;
+/**
+ * How long the whole navigation may take — the spec's maximum, deliberately.
+ *
+ * The render route itself answers in ~460ms. What this budget is actually for
+ * is the slides app's Fly machine having scaled to zero: the first staging run
+ * spent its entire 30s on a cold start and never reached a page at all. A cold
+ * boot is the ordinary case for the first render after a quiet period, not an
+ * anomaly, and failing it costs a browser and a retry to learn nothing.
+ */
+const NAVIGATION_TIMEOUT_MS = 60000;
 
-/** How long to wait for the render page to declare itself painted. */
-const READY_TIMEOUT_MS = 15000;
+/**
+ * How long to wait for the render page to declare itself painted.
+ *
+ * This is the gate that means something — `[data-thumbnail-ready]` goes up only
+ * on a page the route actually served, and the page's own hard cap on settling
+ * is 8s. Thirty seconds leaves room for a deck whose images come from a cold
+ * content Worker without ever being the thing that decides a render.
+ */
+const READY_TIMEOUT_MS = 30000;
 
 /**
  * The longest we will sit on a 429's `Retry-After` before rethrowing.
  *
- * `maxDuration` is 120s and a render costs ~6s of it, so honouring an
+ * `maxDuration` is 180s and a render costs ~6s of it, so honouring an
  * arbitrarily long back-off would spend the whole run waiting and then be killed
  * for it. Past this the retry policy's own scheduling is the better instrument:
  * it costs nothing to wait between attempts.
@@ -92,22 +112,46 @@ export type DeckThumbnailResult =
   | { status: 'failed'; reason: string };
 
 /**
- * The blob sha of the deck's rendered document.
+ * What is known about the deck's rendered document.
+ *
+ * Three answers, not two, and the third is the point. "No sha" used to mean
+ * both "the file is not there" and "we could not find out", and the task
+ * rendered on either — so a classroom whose repo this installation cannot read
+ * booted a browser, navigated to a route that could only 500, and then sat out
+ * the whole `waitForSelector` budget before failing. Those are different
+ * situations with opposite right answers: absent means there is nothing to
+ * photograph and the run should end; unknown means render and simply do not
+ * touch the recorded sha afterwards.
+ */
+type IndexDocumentLookup =
+  /** The sha to compare against, and to record once a render lands. */
+  | { kind: 'known'; sha: string }
+  /** GitHub answered 404: no such file, on a repo we can read or cannot. */
+  | { kind: 'absent' }
+  /** The read failed. Render anyway; the stored sha stays as it was. */
+  | { kind: 'unknown' };
+
+/**
+ * Resolve that, from the asset map first and GitHub second.
  *
  * The asset map answers first and usually: the save path writes the row through
  * at commit time, so the sha is already there by the time this runs. A classroom
  * the delivery layer does not serve has no map at all, and one GitHub metadata
  * read is well worth it — without a sha there is no skip check, and without the
  * skip check every save of every deck commits a fresh WebP.
+ *
+ * `getMeta` is what makes `absent` distinguishable at all: it answers `null` for
+ * a 404 and RETHROWS everything else, so a null here is GitHub saying the file
+ * is not there rather than a request that went wrong.
  */
 async function currentIndexSha(
   classroomId: string,
   gitOrganization: unknown,
   repo: string,
   path: string
-): Promise<string | null> {
+): Promise<IndexDocumentLookup> {
   const row = await ClassmojiService.contentAssets.lookupContentAsset(classroomId, path);
-  if (row?.sha) return row.sha;
+  if (row?.sha) return { kind: 'known', sha: row.sha };
 
   try {
     const meta = await ContentService.getMeta({
@@ -116,14 +160,16 @@ async function currentIndexSha(
       path,
       skipCache: true,
     });
-    return meta?.sha ?? null;
+    if (meta?.sha) return { kind: 'known', sha: meta.sha };
+    // A metadata row with no sha is not a 404 and is not an answer either.
+    return meta === null ? { kind: 'absent' } : { kind: 'unknown' };
   } catch (error: unknown) {
     logger.warn('Could not read index.html sha; rendering without the skip check', {
       classroomId,
       path,
       error: error instanceof Error ? error.message : String(error),
     });
-    return null;
+    return { kind: 'unknown' };
   }
 }
 
@@ -138,8 +184,15 @@ export const deckThumbnailRender = task({
    * deck and lets this queue meter them, rather than pacing itself.
    */
   queue: { concurrencyLimit: 4 },
-  /** A render is ~6s. Two minutes is the point at which something is wrong. */
-  maxDuration: 120,
+  /**
+   * A render is ~6s; this is the ceiling for the case where nothing goes right.
+   *
+   * It has to exceed the worst legal render end to end — 60s of navigation, then
+   * 30s waiting on the readiness selector, then the commit — or the run is
+   * killed at the exact moment the budget it was given would have paid off. Two
+   * minutes did not clear that; three does, with room for the commit.
+   */
+  maxDuration: 180,
   retry: { maxAttempts: 3, minTimeoutInMs: 5000 },
   run: async (payload: DeckThumbnailPayload): Promise<DeckThumbnailResult> => {
     const { slideId, force = false } = payload;
@@ -182,7 +235,34 @@ export const deckThumbnailRender = task({
     //      unless the caller knows something the sha cannot express. A theme
     //      edit changes how every deck in a classroom LOOKS without touching a
     //      byte of any of them.
-    const indexSha = await currentIndexSha(slide.classroom_id, gitOrganization, repo, indexPath);
+    const lookup = await currentIndexSha(slide.classroom_id, gitOrganization, repo, indexPath);
+
+    // 2a. Nothing to photograph. The document this task exists to render is not
+    //     in the repo — the deck was never generated, or this installation
+    //     cannot read the repo at all, which is the ordinary state of a staging
+    //     classroom copied from production.
+    //
+    //     BEFORE the token is minted, and before Browser Run is called: a render
+    //     of a deck with no content cannot succeed, and the way it fails is
+    //     expensive. The route answers a refusal, the readiness selector never
+    //     appears, and the browser sits out the entire `waitForSelector` budget
+    //     to reach a conclusion available here for one metadata read.
+    //
+    //     `force` does not override this. Force means "the sha is answering the
+    //     wrong question"; it cannot conjure a document that is not there.
+    //
+    //     INFO, not warn: for a staging classroom this is the correct and
+    //     permanent state of affairs, and a warning per deck per save would
+    //     train everyone to ignore the channel.
+    if (lookup.kind === 'absent') {
+      logger.info('Deck has no rendered document in the content repo; nothing to screenshot', {
+        slideId,
+        path: indexPath,
+      });
+      return { status: 'skipped', reason: 'no-content' };
+    }
+
+    const indexSha = lookup.kind === 'known' ? lookup.sha : null;
     if (!force && indexSha && indexSha === slide.thumbnail_rendered_sha && slide.thumbnail_path) {
       logger.info('Deck unchanged since its thumbnail was rendered', { slideId, sha: indexSha });
       return { status: 'unchanged', sha: indexSha };

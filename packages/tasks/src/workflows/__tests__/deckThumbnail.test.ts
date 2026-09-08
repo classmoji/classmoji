@@ -558,6 +558,78 @@ describe('skips rather than fails when it cannot run at all', () => {
   });
 });
 
+/**
+ * A 404 on the deck's document and a metadata read that BLEW UP are opposite
+ * situations, and "no sha" used to be the answer to both.
+ *
+ * Rendering the first one costs a browser, a token and the entire
+ * `waitForSelector` budget to arrive at a refusal that was knowable from the
+ * metadata read — and staging is full of them, because its classrooms are
+ * copies whose content repos the staging installation cannot read.
+ */
+describe('a deck with no document is skipped, not rendered', () => {
+  beforeEach(() => {
+    // Force the metadata read: with a row in the asset map there is already a
+    // sha and no question to ask.
+    lookupContentAsset.mockResolvedValue(null);
+  });
+
+  it('returns no-content without minting a token or booting a browser', async () => {
+    getMeta.mockResolvedValue(null);
+
+    await expect(run()).resolves.toEqual({ status: 'skipped', reason: 'no-content' });
+
+    expect(signDeckRenderToken).not.toHaveBeenCalled();
+    expect(screenshotToBase64).not.toHaveBeenCalled();
+    expect(uploadBatch).not.toHaveBeenCalled();
+    expect(update).not.toHaveBeenCalled();
+  });
+
+  it('says so at INFO — for a staging classroom this is the permanent state', async () => {
+    // A warning per deck per save would train everyone to ignore the channel.
+    getMeta.mockResolvedValue(null);
+    await run();
+
+    expect(loggerInfo).toHaveBeenCalledWith(
+      expect.stringContaining('nothing to screenshot'),
+      expect.objectContaining({ slideId: SLIDE_ID, path: 'slides/week-01-intro/index.html' })
+    );
+    expect(loggerError).not.toHaveBeenCalled();
+  });
+
+  it('is not overridden by force — force cannot conjure a document', async () => {
+    // `force` means "the sha is answering the wrong question", which is true of
+    // a theme edit and irrelevant to a file that is not there.
+    getMeta.mockResolvedValue(null);
+
+    await expect(run({ force: true })).resolves.toEqual({
+      status: 'skipped',
+      reason: 'no-content',
+    });
+    expect(screenshotToBase64).not.toHaveBeenCalled();
+  });
+
+  it('still RENDERS when the read merely failed — that is the other case', async () => {
+    // `getMeta` answers null for a 404 and rethrows everything else, which is
+    // the whole reason the two can be told apart. A transient GitHub fault must
+    // not read as a missing deck.
+    getMeta.mockRejectedValue(new Error('GitHub is having a moment'));
+
+    await expect(run()).resolves.toMatchObject({ status: 'rendered' });
+    expect(screenshotToBase64).toHaveBeenCalledTimes(1);
+  });
+
+  it('renders on a metadata row carrying no sha, rather than calling it absent', async () => {
+    // Not a 404 and not an answer either. Rendering is the safe reading: the
+    // worst case is one WebP nobody needed, against a deck that never gets a
+    // picture at all.
+    getMeta.mockResolvedValue({ size: 1234 });
+
+    await expect(run()).resolves.toMatchObject({ status: 'rendered' });
+    expect(screenshotToBase64).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe('loop guard', () => {
   const source = readFileSync(
     fileURLToPath(new URL('../deckThumbnail.ts', import.meta.url)),
