@@ -22,8 +22,12 @@ export function treeKey(treeSha: string): string {
 export const CORS_HEADERS: Readonly<Record<string, string>> = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'GET, HEAD, OPTIONS',
-  'Access-Control-Allow-Headers': 'Accept, Range, If-None-Match',
-  'Access-Control-Expose-Headers': 'Content-Type, Content-Length, ETag',
+  'Access-Control-Allow-Headers': 'Accept, Range, If-Range, If-None-Match',
+  // `Range` is in the allowed list above, so the range headers belong in this
+  // one: a cross-origin reader that cannot see `Content-Range` or
+  // `Accept-Ranges` cannot tell a 206 apart from a truncated 200.
+  'Access-Control-Expose-Headers':
+    'Content-Type, Content-Length, ETag, Accept-Ranges, Content-Range',
   'Access-Control-Max-Age': '86400',
 };
 
@@ -97,6 +101,31 @@ export function contentHeaders(
   // unconditionally — the header is static, so it costs nothing.
   headers.set('Vary', 'Accept');
   return finalizeHeaders(headers);
+}
+
+/**
+ * Headers for a reply that carries object bytes, as opposed to JSON or an error.
+ *
+ * `contentHeaders` plus `Accept-Ranges: bytes`. The line is drawn there on
+ * purpose: advertising range support on a 403 or on `/healthz` would be noise,
+ * and a client that never sees `Accept-Ranges` on the object itself has no way
+ * to know it may seek — which is the whole reason Chrome's `<video>` element
+ * gave up on these URLs.
+ *
+ * Every byte-carrying reply gets it, including the image-variant path, which
+ * then ignores any `Range` it is sent and answers a full 200. That is
+ * deliberate and RFC 7233 §3.1 permits it: variants are raster images, the only
+ * clients that seek are media players, and no media player ever asks for a
+ * `?w=800&fmt=webp` URL.
+ */
+export function blobHeaders(
+  contentType: string,
+  cacheControl: string,
+  extra?: HeadersInit
+): Headers {
+  const headers = contentHeaders(contentType, cacheControl, extra);
+  headers.set('Accept-Ranges', 'bytes');
+  return headers;
 }
 
 export function jsonResponse(body: unknown, status: number, cacheControl = 'no-store'): Response {

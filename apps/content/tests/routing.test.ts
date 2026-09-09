@@ -18,6 +18,7 @@ import {
   futureExp,
   signedBlobUrl,
   signedThemeUrl,
+  stubUpstreams,
 } from './helpers.ts';
 
 const realFetch = globalThis.fetch;
@@ -33,28 +34,6 @@ async function countBytes(response: Response): Promise<number> {
     if (done) return total;
     total += value.byteLength;
   }
-}
-
-/** Routes the two upstreams the Worker talks to: the token endpoint and GitHub. */
-function stubUpstreams(handlers: { blob?: () => Response; tree?: () => Response } = {}) {
-  globalThis.fetch = (async (input: RequestInfo | URL) => {
-    const url = String(input);
-    if (url.includes('/api/content/token')) {
-      return new Response(
-        JSON.stringify({
-          org: 'classmoji',
-          repo: 'content-cs1',
-          token: 'ghs_x',
-          expiresAt: new Date(Date.now() + 3600_000).toISOString(),
-        }),
-        { headers: { 'Content-Type': 'application/json' } }
-      );
-    }
-    if (url.includes('/git/trees/'))
-      return handlers.tree?.() ?? new Response(JSON.stringify({ tree: [] }));
-    if (url.includes('/git/blobs/')) return handlers.blob?.() ?? new Response('origin-bytes');
-    throw new Error(`unexpected fetch: ${url}`);
-  }) as unknown as typeof fetch;
 }
 
 beforeEach(() => {
