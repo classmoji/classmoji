@@ -1,4 +1,5 @@
 import getPrisma from '@classmoji/database';
+import { sortNaturallyBy } from '@classmoji/utils';
 import type { GitProvider, Prisma } from '@prisma/client';
 
 interface TeamCreatePayload {
@@ -55,7 +56,7 @@ export const deleteBySlug = async (classroomId: string, slug: string) => {
 };
 
 export const findByClassroomId = async (classroomId: string) => {
-  return getPrisma().team.findMany({
+  const teams = await getPrisma().team.findMany({
     where: {
       classroom_id: classroomId,
     },
@@ -72,6 +73,10 @@ export const findByClassroomId = async (classroomId: string) => {
       },
     },
   });
+
+  // Same human order as the repository tables, so a team sits in the same place
+  // on both screens.
+  return teams.sort(sortNaturallyBy(team => team.name));
 };
 
 export const findBySlugAndClassroomId = async (slug: string, classroomId: string) => {
