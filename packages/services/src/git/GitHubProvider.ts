@@ -18,6 +18,34 @@ const privateKey: string | null = process.env.GITHUB_PRIVATE_KEY_BASE64
   : null;
 
 /**
+ * An Octokit that REPORTS a rate limit instead of waiting one out.
+ *
+ * The `octokit` umbrella ships the throttling plugin pre-wired to retry once,
+ * and that retry is a `setTimeout` for however long GitHub asks for — on a
+ * primary limit that is time-until-reset, up to an hour. Every app-JWT caller
+ * here is either a web request or an operator sweep whose job is to say "try
+ * again in N seconds"; none of them may block for an hour, and a 403 slept
+ * through is a 403 the `GitHubRateLimitedError` detector never sees.
+ *
+ * Returning `false` from both hooks tells the plugin not to retry, so the
+ * original 403/429 — rate-limit headers intact — is thrown straight back.
+ *
+ * The retry plugin is the other sleeper: its default `doNotRetry` list skips
+ * 403 but not 429, so a secondary limit would still be retried three times
+ * (~14 s, four requests at the very limit complaining about volume) before
+ * surfacing. 429 is added to the list for the same reason.
+ */
+const ImmediateOctokit = Octokit.defaults({
+  throttle: {
+    onRateLimit: () => false,
+    onSecondaryRateLimit: () => false,
+  },
+  retry: {
+    doNotRetry: [400, 401, 403, 404, 422, 429, 451],
+  },
+});
+
+/**
  * Generate a GitHub App JWT for direct API authentication
  * Used for simple installation token requests without Octokit overhead
  * @returns {string} JWT token (valid for 10 minutes)
@@ -1745,12 +1773,21 @@ export class GitHubProvider extends GitProvider {
    * Get an app-authenticated (JWT) Octokit instance for app-level endpoints
    * such as `GET /app/installations/{installation_id}`. Not scoped to a single
    * installation — use the instance methods for installation-scoped calls.
+   *
+   * Throttling is DISABLED on this client: a rate limit is thrown immediately
+   * rather than slept off. See `ImmediateOctokit`.
    * @returns {Octokit}
    */
   static getAppOctokit(): Octokit {
     const app = new App({
       appId: process.env.GITHUB_APP_ID!,
       privateKey: privateKey!,
+      // A rate limit has to come back as an error, not as an hour-long sleep —
+      // see `ImmediateOctokit`. Every caller of this (the repair lookup, the
+      // installation webhooks, the post-install redirect) turns a throttle into
+      // a "try again in N seconds" answer, which it cannot do if the throttling
+      // plugin swallowed the 403 first.
+      Octokit: ImmediateOctokit,
     });
     return app.octokit;
   }

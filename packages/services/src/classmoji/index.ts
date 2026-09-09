@@ -35,6 +35,26 @@ import * as subscriptionService from './subscription.service.ts';
 import * as entitlementService from './entitlement.service.ts';
 import * as instructorAudienceService from './instructorAudience.service.ts';
 export { ClassroomSettingsEntitlementError } from './classroom.service.ts';
+// Installation repair: the refusal every caller has to tell apart from "not
+// installed", plus the shapes its results come back in.
+export {
+  GitHubRateLimitedError,
+  validateInstallationIdentity,
+  lookupInstallationForOrg,
+  listAppInstallations,
+  claimInstallationIfNull,
+  clearInstallationIfMatches,
+  repairInstallation,
+} from './gitOrganization.service.ts';
+export type {
+  InstallationLike,
+  InstallationAccountLike,
+  InstallationRejection,
+  InstallationValidation,
+  InstallationLookup,
+  RepairInstallationResult,
+  RepairInstallationOptions,
+} from './gitOrganization.service.ts';
 import * as teamMembershipService from './teamMembership.service.ts';
 import * as teamService from './team.service.ts';
 import * as teamTagService from './teamTag.service.ts';

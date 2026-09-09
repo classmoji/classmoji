@@ -69,6 +69,7 @@ vi.mock('~/components', () => ({
   RegradeRequestsTable: () => null,
 }));
 vi.mock('~/components/features/pages', () => ({ PagePeekProvider: () => null }));
+vi.mock('~/components/features/InstallAppBanner', () => ({ default: () => null }));
 vi.mock('~/components/features/dashboard', () => ({
   CockpitPanel: () => null,
   StaffCockpit: () => null,
