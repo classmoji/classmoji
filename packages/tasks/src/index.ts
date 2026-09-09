@@ -5,6 +5,7 @@ import * as autogradeTasks from './workflows/autograde.ts';
 import * as emailTasks from './workflows/email.ts';
 import * as extensionTasks from './workflows/extension.ts';
 import * as installationTasks from './workflows/installation.ts';
+import * as gitOrgInstallationRepairTasks from './workflows/gitOrgInstallationRepair.ts';
 import * as tokenTasks from './workflows/token.ts';
 import * as contributionTasks from './workflows/contribution.ts';
 import * as repoAnalyticsTasks from './workflows/repoAnalytics.ts';
@@ -26,6 +27,7 @@ const Tasks = {
   ...emailTasks,
   ...extensionTasks,
   ...installationTasks,
+  ...gitOrgInstallationRepairTasks,
   ...tokenTasks,
   ...contributionTasks,
   ...repoAnalyticsTasks,

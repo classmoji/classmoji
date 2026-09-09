@@ -52,6 +52,27 @@ export {
 
 export { ClassmojiService, HelperService, StripeService, FlyCertService, MarkdownImporter };
 
+// GitHub App installation repair, shared by the "Check again" action, the
+// create-classroom guard, the uninstall webhook and the operator sweep task.
+export {
+  GitHubRateLimitedError,
+  validateInstallationIdentity,
+  lookupInstallationForOrg,
+  listAppInstallations,
+  claimInstallationIfNull,
+  clearInstallationIfMatches,
+  repairInstallation,
+} from './classmoji/gitOrganization.service.ts';
+export type {
+  InstallationLike,
+  InstallationAccountLike,
+  InstallationRejection,
+  InstallationValidation,
+  InstallationLookup,
+  RepairInstallationResult,
+  RepairInstallationOptions,
+} from './classmoji/gitOrganization.service.ts';
+
 // Admin service result/error shapes shared by the web routes and the MCP tools.
 export { StaffServiceError } from './classmoji/staff.service.ts';
 export type { AddStaffResult, RemoveStaffResult, StaffRole } from './classmoji/staff.service.ts';

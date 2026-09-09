@@ -112,6 +112,9 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
     appInstalled: Boolean(classroom.git_organization?.github_installation_id),
     isExample: classroom.is_example,
     gitOrgLogin: classroom.git_organization?.login ?? null,
+    // Only GitHub orgs have an App to install; a GitLab/Gitea classroom must
+    // never be told to install one.
+    gitProvider: classroom.git_organization?.provider ?? null,
     githubAppName: process.env.GITHUB_APP_NAME,
   };
 };
@@ -247,20 +250,33 @@ const AdminDashboard = ({ loaderData }: Route.ComponentProps) => {
     appInstalled,
     isExample,
     gitOrgLogin,
+    gitProvider,
     githubAppName,
   } = loaderData;
   const { class: classSlug } = useParams();
   const [bannerDismissed, setBannerDismissed] = useState(false);
 
+  // `githubOrganization` is fetched ONLY when the app is installed, so with no
+  // installation it is null and `undefined !== 'none'` used to be true — the
+  // page then asserted "students can see each other's repositories" about an org
+  // whose settings it had never read, on a classroom where GitHub is not
+  // connected at all. Nothing here may speak about the org's live state unless
+  // that state was actually fetched.
   const showBanner =
-    !bannerDismissed && githubOrganization?.default_repository_permission !== 'none';
+    !bannerDismissed &&
+    Boolean(githubOrganization) &&
+    githubOrganization?.default_repository_permission !== 'none';
 
   return (
     <div className="min-h-full flex flex-col gap-4">
       <h1 className="mt-2 mb-1 text-lg font-semibold text-ink-0">Dashboard</h1>
 
-      {!appInstalled && !isExample && gitOrgLogin && (
-        <InstallAppBanner orgLogin={gitOrgLogin} githubAppName={githubAppName} />
+      {!appInstalled && !isExample && gitOrgLogin && gitProvider === 'GITHUB' && (
+        <InstallAppBanner
+          orgLogin={gitOrgLogin}
+          githubAppName={githubAppName}
+          classSlug={classSlug!}
+        />
       )}
 
       {showBanner && (
