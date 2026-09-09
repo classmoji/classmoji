@@ -1,4 +1,5 @@
 import getPrisma from '@classmoji/database';
+import { sortNaturallyBy } from '@classmoji/utils';
 import type { GitProvider, Prisma } from '@prisma/client';
 
 interface RepositoryCreatePayload {
@@ -65,7 +66,14 @@ export const findByRepository = async (classroomSlug: string, repositoryId: stri
     },
   });
 
-  return repos;
+  // Sorted in JS, not the query: Postgres would put `group-a10` above
+  // `group-a2`. Keyed on the column the reader scans — team for GROUP, student
+  // for INDIVIDUAL.
+  return repos.sort(
+    sortNaturallyBy(
+      repo => repo.team?.name ?? repo.student?.name ?? repo.student?.login ?? repo.name
+    )
+  );
 };
 
 export const findMany = async (query: Prisma.GitRepoWhereInput) => {
