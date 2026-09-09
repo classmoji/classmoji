@@ -37,13 +37,11 @@ interface Props {
 export default function InstallAppBanner({ orgLogin, githubAppName, classSlug }: Props) {
   const fetcher = useFetcher<InstallCheckResult>();
   const checking = fetcher.state !== 'idle';
+  const checkAction = `/api/classrooms/${encodeURIComponent(classSlug)}/github-installation`;
 
   const checkInstallation = useCallback(() => {
-    fetcher.submit(null, {
-      method: 'post',
-      action: `/api/classrooms/${encodeURIComponent(classSlug)}/github-installation`,
-    });
-  }, [fetcher, classSlug]);
+    fetcher.submit(null, { method: 'post', action: checkAction });
+  }, [fetcher, checkAction]);
 
   // Closing the popup runs the same check the button does. React Router
   // revalidates every loader on the page once a fetcher's action resolves, so a
@@ -74,9 +72,20 @@ export default function InstallAppBanner({ orgLogin, githubAppName, classSlug }:
                 Install GitHub App
               </Button>
             )}
-            <Button onClick={checkInstallation} loading={checking} disabled={checking}>
-              Check again
-            </Button>
+            {/* A Form, not an onClick: with lazy route discovery the client
+                only learns about the API route the first time something
+                points at it. A rendered Form is discovered on render, so the
+                click posts at once; a bare fetcher.submit discovers on click,
+                which on staging meant a ten-second manifest round trip during
+                which nothing on screen changed. (fetcher.Form is the same Form
+                underneath, with discovery defaulting to "render".) The
+                popup-close path submits to the same action, discovered by
+                this Form by then. */}
+            <fetcher.Form method="post" action={checkAction}>
+              <Button htmlType="submit" loading={checking} disabled={checking}>
+                Check again
+              </Button>
+            </fetcher.Form>
           </div>
           {result && <CheckOutcome result={result} orgLogin={orgLogin} />}
         </div>
