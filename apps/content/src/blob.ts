@@ -1,5 +1,6 @@
 import {
   SHORT_CACHE_CONTROL,
+  blobHeaders,
   blobKey,
   contentHeaders,
   errorResponse,
@@ -9,6 +10,16 @@ import { contentTypeForExtension, isRasterExtension } from './content-type.ts';
 import type { Env } from './env.ts';
 import { GitHubOrigin } from './origins/github.ts';
 import { deliveryStrategy, type OriginAdapter } from './origins/types.ts';
+import {
+  contentRangeHeader,
+  ifRangeMatches,
+  parseRange,
+  rangeLength,
+  sliceStream,
+  unsatisfiedRangeHeader,
+  type ByteRange,
+  type RangeOutcome,
+} from './range.ts';
 import { withOriginRetry } from './token.ts';
 import type { OriginTokenTiming } from './token.ts';
 import {
@@ -35,13 +46,31 @@ type VerifiedBlob = Extract<BlobVerification, { ok: true }>;
 // though the GitHub origin cannot presign.
 const origin: OriginAdapter = new GitHubOrigin();
 
-interface ServeOptions {
+export interface ServeOptions {
   classroomId: string;
   sha: string;
   contentType: string;
   cacheControl: string;
   /** HEAD: answer from R2 metadata when the object is there, and never buffer. */
   head?: boolean;
+  /** The request's `Range` header verbatim, or null when it sent none. */
+  range?: string | null;
+  /** The request's `If-Range` header verbatim, or null when it sent none. */
+  ifRange?: string | null;
+}
+
+/**
+ * The parts of a request that decide HOW a blob is served rather than WHICH
+ * one — so the blob route and the theme route cannot drift on it.
+ */
+export function deliveryOptions(
+  request: Request
+): Pick<ServeOptions, 'head' | 'range' | 'ifRange'> {
+  return {
+    head: request.method === 'HEAD',
+    range: request.headers.get('Range'),
+    ifRange: request.headers.get('If-Range'),
+  };
 }
 
 /**
@@ -61,7 +90,7 @@ interface ServeOptions {
  * different caller's answer to a different question.
  */
 function storedHeaders(object: R2Object, contentType: string, cacheControl: string): Headers {
-  const headers = contentHeaders(contentType, cacheControl);
+  const headers = blobHeaders(contentType, cacheControl);
   headers.set('ETag', object.httpEtag);
   // R2 knows the length without reading a byte, so there is no reason to make a
   // client guess at download progress.
@@ -87,6 +116,59 @@ async function storedHead(
   const object = await env.CACHE.head(key);
   if (!object) return null;
   return new Response(null, { headers: storedHeaders(object, contentType, cacheControl) });
+}
+
+/**
+ * A 206 for one byte range.
+ *
+ * Everything a full 200 carries — the type the signed extension names, the
+ * tier's cache-control, CORS, nosniff, the sandboxing CSP — plus the two
+ * headers that make it partial. `Content-Length` is the length of the RANGE and
+ * not of the object; `Content-Range` is what says where the rest of it went.
+ *
+ * `etag` is null on the origin-miss path, where the object is still on its way
+ * into R2 and has no stored validator yet. An `ETag` is not required on a 206,
+ * and inventing one the R2 write would then disagree with is worse than leaving
+ * it off: the next request is a cache hit and carries the real one.
+ */
+function partialResponse(
+  body: BodyInit | null,
+  options: ServeOptions,
+  etag: string | null,
+  range: ByteRange,
+  total: number
+): Response {
+  const headers = blobHeaders(options.contentType, options.cacheControl);
+  if (etag !== null) headers.set('ETag', etag);
+  headers.set('Content-Range', contentRangeHeader(range, total));
+  headers.set('Content-Length', String(rangeLength(range)));
+  return new Response(body, { status: 206, headers });
+}
+
+/**
+ * 416 for a range naming bytes the object does not have.
+ *
+ * The unsatisfied-range form of `Content-Range` is required by RFC 7233 §4.4,
+ * and it is the only thing that makes the refusal actionable: it tells the
+ * client how big the object really is, so the retry can be right.
+ */
+function rangeNotSatisfiable(total: number): Response {
+  const headers = blobHeaders('application/json; charset=utf-8', 'no-store');
+  headers.set('Content-Range', unsatisfiedRangeHeader(total));
+  return new Response(JSON.stringify({ error: 'range not satisfiable' }), { status: 416, headers });
+}
+
+/**
+ * What to do about this request's `Range`, given the object we actually hold.
+ *
+ * `If-Range` is weighed first and its failure is a full 200, never an error:
+ * a client saying "the range, but only if this is still the same file" and
+ * being wrong must get the whole new file rather than a slice of it.
+ */
+function rangeOutcome(options: ServeOptions, etag: string, total: number): RangeOutcome {
+  if (options.range === undefined || options.range === null) return { kind: 'full' };
+  if (!ifRangeMatches(options.ifRange, etag)) return { kind: 'full' };
+  return parseRange(options.range, total);
 }
 
 /**
@@ -184,7 +266,7 @@ function streamAndCache(
 ): Response {
   const [toClient, toCache] = body.tee();
   ctx.waitUntil(putCacheBranch(env, key, toCache, contentType, contentLength));
-  const headers = contentHeaders(contentType, cacheControl);
+  const headers = blobHeaders(contentType, cacheControl);
   // Only ever forwarded, never computed: working it out would mean buffering
   // the very stream this path exists to avoid buffering.
   if (contentLength !== null) headers.set('Content-Length', String(contentLength));
@@ -280,9 +362,143 @@ function warnOversizedSource(sha: string, size: number | null): void {
 }
 
 /**
+ * Answer from an object R2 already holds, with its metadata already in hand.
+ *
+ * Returns null when the object went away between the `head` and the `get` — an
+ * expiry or a lifecycle delete landing mid-request — so the caller falls
+ * through to the origin rather than inventing a 404 for a blob that exists.
+ */
+async function serveStored(
+  env: Env,
+  key: string,
+  stored: R2Object,
+  options: ServeOptions
+): Promise<Response | null> {
+  const outcome = rangeOutcome(options, stored.httpEtag, stored.size);
+
+  if (outcome.kind === 'unsatisfiable') return rangeNotSatisfiable(stored.size);
+
+  if (outcome.kind === 'full') {
+    const headers = storedHeaders(stored, options.contentType, options.cacheControl);
+    if (options.head) return new Response(null, { headers });
+    const hit = await env.CACHE.get(key);
+    if (!hit) return null;
+    return new Response(hit.body, { headers });
+  }
+
+  const { range } = outcome;
+  if (options.head) return partialResponse(null, options, stored.httpEtag, range, stored.size);
+
+  // R2's own ranged read: only these bytes leave storage, which is what makes a
+  // seek into the middle of a video cost the same as a seek into the start.
+  const hit = await env.CACHE.get(key, {
+    range: { offset: range.start, length: rangeLength(range) },
+  });
+  if (!hit) return null;
+  return partialResponse(hit.body, options, stored.httpEtag, range, stored.size);
+}
+
+/**
+ * A ranged request that missed the cache.
+ *
+ * Answering it with the whole object is the exact bug this file exists to fix,
+ * so the miss path has to produce a 206 as well — and it has to do so without
+ * giving up the cache write, because the point is that the SECOND request for
+ * that video is an R2 hit.
+ *
+ * Two shapes, chosen by whether the origin said how long the body is:
+ *
+ *   - Length known. The body is tee'd: one branch runs to the end and lands in
+ *     R2 exactly as an unranged miss would, and the client is handed a slice of
+ *     the other. Nothing is buffered, so this is a path a 40 MB video can take —
+ *     and it is the path media does take, because GitHub serves media
+ *     identity-encoded with a real `Content-Length`.
+ *   - Length unknown. `Content-Range` needs a total and the only way to learn
+ *     one is to count, so the body is held — under the same ceiling, and for the
+ *     same reason, as `putCacheBranch`. Text arrives this way (GitHub gzips it
+ *     and the runtime decodes it); media does not.
+ */
+async function serveRangeFromOrigin(
+  env: Env,
+  ctx: ExecutionContext,
+  key: string,
+  body: ReadableStream<Uint8Array>,
+  options: ServeOptions,
+  declared: number | null
+): Promise<Response> {
+  const full = () =>
+    streamAndCache(env, ctx, key, body, options.contentType, options.cacheControl, declared);
+
+  // Nothing is stored, so there is no validator to weigh an `If-Range` against.
+  // RFC 7233 §3.2: a server that cannot evaluate it treats the request as an
+  // ordinary GET, which is the conditional working as designed.
+  if (options.ifRange !== undefined && options.ifRange !== null) return full();
+
+  if (declared !== null) {
+    const outcome = parseRange(options.range, declared);
+    if (outcome.kind === 'full') return full();
+
+    const [toClient, toCache] = body.tee();
+    ctx.waitUntil(putCacheBranch(env, key, toCache, options.contentType, declared));
+
+    if (outcome.kind === 'unsatisfiable') {
+      // The client gets no bytes, but the pull is already paid for: cancel only
+      // this branch and let the other finish, so the corrected retry is a hit.
+      await toClient.cancel().catch(() => {});
+      return rangeNotSatisfiable(declared);
+    }
+
+    const { range } = outcome;
+    return partialResponse(
+      sliceStream(toClient, range.start, range.end),
+      options,
+      null,
+      range,
+      declared
+    );
+  }
+
+  const bytes = await readBounded(body, MAX_UNKNOWN_LENGTH_CACHE_BYTES);
+  if (bytes === null) {
+    // Counting was the only way to a total and the count blew the ceiling, so
+    // there is no `Content-Range` to send and the counted bytes went with the
+    // cancelled stream. The object is re-pulled and streamed whole: a 200 to a
+    // range request, and the one case left where that still happens. Only an
+    // enormous body whose length the origin never declared reaches here, which
+    // no media type does.
+    console.warn(
+      `[content] serving ${key} whole: unknown-length origin body over the ` +
+        `${MAX_UNKNOWN_LENGTH_CACHE_BYTES} byte ceiling, so no range could be resolved`
+    );
+    return serveBlobBySha(env, ctx, { ...options, range: null, ifRange: null });
+  }
+
+  const total = bytes.byteLength;
+  ctx.waitUntil(
+    env.CACHE.put(key, bytes, { httpMetadata: { contentType: options.contentType } }).catch(
+      error => {
+        console.warn(`[content] failed to cache ${key}: ${messageOf(error)}`);
+      }
+    )
+  );
+
+  const outcome = parseRange(options.range, total);
+  if (outcome.kind === 'unsatisfiable') return rangeNotSatisfiable(total);
+  if (outcome.kind === 'full') {
+    const headers = blobHeaders(options.contentType, options.cacheControl);
+    headers.set('Content-Length', String(total));
+    return new Response(bytes, { headers });
+  }
+
+  const { range } = outcome;
+  return partialResponse(bytes.slice(range.start, range.end + 1), options, null, range, total);
+}
+
+/**
  * Serve a blob by sha: R2 first, otherwise pull it from the origin and stream
  * it to the client while a tee'd copy lands in R2. Bytes are never buffered on
- * this path.
+ * this path unless a range has to be resolved against a length the origin never
+ * declared.
  */
 export async function serveBlobBySha(
   env: Env,
@@ -291,13 +507,20 @@ export async function serveBlobBySha(
 ): Promise<Response> {
   const key = blobKey(options.sha);
 
-  if (options.head) {
-    const head = await storedHead(env, key, options.contentType, options.cacheControl);
-    if (head) return head;
+  // A HEAD and a ranged GET are both settled from metadata: the stored size and
+  // etag decide the status, the headers and the byte positions before a single
+  // byte is read — and only then is a `get` issued, for exactly those bytes.
+  // A plain GET still takes the one-call path it always did.
+  if (options.head || (options.range !== undefined && options.range !== null)) {
+    const stored = await env.CACHE.head(key);
+    if (stored) {
+      const served = await serveStored(env, key, stored, options);
+      if (served) return served;
+    }
+  } else {
+    const hit = await env.CACHE.get(key);
+    if (hit) return storedResponse(hit, options.contentType, options.cacheControl);
   }
-
-  const hit = await env.CACHE.get(key);
-  if (hit) return storedResponse(hit, options.contentType, options.cacheControl);
 
   // Size is unknown before the fetch, so this always proxies today. The branch
   // is the seam for an origin that knows sizes and can presign large objects.
@@ -322,6 +545,12 @@ export async function serveBlobBySha(
     return errorResponse(502, 'origin unavailable');
   }
 
+  const declared = declaredLength(response.headers);
+
+  if (options.range !== undefined && options.range !== null) {
+    return serveRangeFromOrigin(env, ctx, key, response.body, options, declared);
+  }
+
   return streamAndCache(
     env,
     ctx,
@@ -329,7 +558,7 @@ export async function serveBlobBySha(
     response.body,
     options.contentType,
     options.cacheControl,
-    declaredLength(response.headers)
+    declared
   );
 }
 
@@ -462,12 +691,21 @@ export async function serveBlob(
     sha: verified.sha,
     contentType: contentTypeForExtension(verified.ext),
     cacheControl: cacheControlFor(verified.tier, verified.exp, nowSeconds()),
-    head: request.method === 'HEAD',
+    ...deliveryOptions(request),
   };
 
   const width = verified.transform?.w;
   if (width && isRasterExtension(verified.ext)) {
-    return serveVariant(env, ctx, request, verified, width, options);
+    // A `Range` on a `?w=…&fmt=…` URL is dropped rather than served. The
+    // variant path answers out of a DIFFERENT object than the one the range was
+    // computed against by whoever sent it, the clients that seek are media
+    // players, and no media player fetches a resized still. RFC 7233 §3.1 lets
+    // a server ignore a `Range`; the reply is the full 200 it has always been.
+    return serveVariant(env, ctx, request, verified, width, {
+      ...options,
+      range: null,
+      ifRange: null,
+    });
   }
 
   return serveBlobBySha(env, ctx, options);

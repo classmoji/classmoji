@@ -160,7 +160,7 @@ async function handle(request: Request, env: Env, ctx: ExecutionContext): Promis
   try {
     return verified.kind === 'blob'
       ? await serveBlob(env, ctx, request, verified)
-      : await serveTheme(env, ctx, verified, request.method === 'HEAD');
+      : await serveTheme(env, ctx, verified, request);
   } catch (error) {
     if (error instanceof OriginError) {
       console.warn('[content] origin error:', error.message);

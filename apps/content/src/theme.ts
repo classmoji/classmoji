@@ -3,7 +3,7 @@ import { contentTypeForPath } from './content-type.ts';
 import type { Env } from './env.ts';
 import { GitHubOrigin } from './origins/github.ts';
 import type { TreeEntry } from './origins/types.ts';
-import { serveBlobBySha } from './blob.ts';
+import { deliveryOptions, serveBlobBySha } from './blob.ts';
 import { withOriginRetry } from './token.ts';
 import { cacheControlFor, nowSeconds, type ThemeVerification } from './verify.ts';
 
@@ -60,7 +60,7 @@ export async function serveTheme(
   env: Env,
   ctx: ExecutionContext,
   verified: VerifiedTheme,
-  head = false
+  request: Request
 ): Promise<Response> {
   // The tree is read either way: a theme URL names a path, and only the listing
   // turns that into the sha a HEAD would look up.
@@ -68,11 +68,14 @@ export async function serveTheme(
   const entry = findEntry(entries, verified.relPath);
   if (!entry) return errorResponse(404, 'not found');
 
+  // The whole request shape — HEAD, `Range`, `If-Range` — is handed on rather
+  // than re-derived, so a theme asset and a blob cannot answer a seek
+  // differently for a file that is byte-for-byte the same object in R2.
   return serveBlobBySha(env, ctx, {
     classroomId: verified.classroomId,
     sha: entry.sha,
     contentType: contentTypeForPath(verified.relPath),
     cacheControl: cacheControlFor(verified.tier, verified.exp, nowSeconds()),
-    head,
+    ...deliveryOptions(request),
   });
 }

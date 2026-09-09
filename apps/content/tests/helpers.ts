@@ -43,8 +43,15 @@ export interface FakeBucketOptions {
   originDeclaresLength?: boolean;
 }
 
+/** The three shapes R2's `get` accepts for a ranged read. */
+export interface FakeRange {
+  offset?: number;
+  length?: number;
+  suffix?: number;
+}
+
 export interface FakeBucket {
-  get(key: string): Promise<unknown>;
+  get(key: string, options?: { range?: FakeRange }): Promise<unknown>;
   head(key: string): Promise<unknown>;
   put(
     key: string,
@@ -54,6 +61,24 @@ export interface FakeBucket {
   readonly puts: Array<{ key: string; contentType?: string; bytes: number; streamed: boolean }>;
   readonly gets: string[];
   readonly heads: string[];
+  /**
+   * Every ranged read, so a test can prove R2 was asked for exactly the bytes
+   * the client wanted rather than for the whole object and then sliced.
+   */
+  readonly ranges: Array<{ key: string; range: FakeRange }>;
+}
+
+/**
+ * The bytes a ranged read returns, resolved the way R2 resolves one: a suffix
+ * counts back from the end, a length reaching past the end returns fewer bytes
+ * rather than failing, and an absent length means "to the end".
+ */
+function sliceFor(all: Uint8Array, range: FakeRange): Uint8Array {
+  if (range.suffix !== undefined) return all.subarray(Math.max(0, all.byteLength - range.suffix));
+  const offset = range.offset ?? 0;
+  const end =
+    range.length === undefined ? all.byteLength : Math.min(all.byteLength, offset + range.length);
+  return all.subarray(offset, end);
 }
 
 /**
@@ -90,7 +115,10 @@ export function fakeBucket(
   const puts: Array<{ key: string; contentType?: string; bytes: number; streamed: boolean }> = [];
   const gets: string[] = [];
   const heads: string[] = [];
+  const ranges: Array<{ key: string; range: FakeRange }> = [];
 
+  // `size` is the size of the WHOLE object even on a ranged read — that is what
+  // real R2 reports, and it is the number `Content-Range` has to end with.
   const metadata = (key: string, object: StoredObject) => ({
     httpMetadata: { contentType: object.contentType },
     httpEtag: `"${key}"`,
@@ -101,16 +129,23 @@ export function fakeBucket(
     puts,
     gets,
     heads,
-    async get(key: string) {
+    ranges,
+    async get(key: string, getOptions?: { range?: FakeRange }) {
       gets.push(key);
       const object = store.get(key);
       if (!object) return null;
+      const all = new TextEncoder().encode(object.body);
+      const range = getOptions?.range;
+      if (range) ranges.push({ key, range });
+      const served = range ? sliceFor(all, range) : all;
       return {
         ...metadata(key, object),
-        body: new Response(object.body).body,
-        arrayBuffer: async () => new TextEncoder().encode(object.body).buffer,
-        json: async () => JSON.parse(object.body),
-        text: async () => object.body,
+        range,
+        body: new Response(served).body,
+        arrayBuffer: async () =>
+          served.buffer.slice(served.byteOffset, served.byteOffset + served.byteLength),
+        json: async () => JSON.parse(new TextDecoder().decode(served)),
+        text: async () => new TextDecoder().decode(served),
       };
     },
     async head(key: string) {
@@ -136,6 +171,34 @@ export function fakeBucket(
       return {};
     },
   };
+}
+
+/**
+ * Route the two upstreams the Worker talks to — the token endpoint and
+ * GitHub — through canned handlers, by replacing `globalThis.fetch`.
+ *
+ * The caller is responsible for putting the real `fetch` back; every suite that
+ * uses this does so in `afterEach`.
+ */
+export function stubUpstreams(handlers: { blob?: () => Response; tree?: () => Response } = {}) {
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    const url = String(input);
+    if (url.includes('/api/content/token')) {
+      return new Response(
+        JSON.stringify({
+          org: 'classmoji',
+          repo: 'content-cs1',
+          token: 'ghs_x',
+          expiresAt: new Date(Date.now() + 3600_000).toISOString(),
+        }),
+        { headers: { 'Content-Type': 'application/json' } }
+      );
+    }
+    if (url.includes('/git/trees/'))
+      return handlers.tree?.() ?? new Response(JSON.stringify({ tree: [] }));
+    if (url.includes('/git/blobs/')) return handlers.blob?.() ?? new Response('origin-bytes');
+    throw new Error(`unexpected fetch: ${url}`);
+  }) as unknown as typeof fetch;
 }
 
 export function fakeContext(): ExecutionContext & { settled(): Promise<void> } {
