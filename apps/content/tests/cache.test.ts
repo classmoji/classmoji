@@ -28,7 +28,14 @@ describe('response headers', () => {
     const headers = finalizeHeaders(new Headers());
     expect(headers.get('Access-Control-Allow-Origin')).toBe('*');
     expect(headers.get('Access-Control-Allow-Methods')).toBe('GET, HEAD, OPTIONS');
-    expect(headers.get('Access-Control-Expose-Headers')).toBe('Content-Type, Content-Length, ETag');
+    expect(headers.get('Access-Control-Expose-Headers')).toBe(
+      'Content-Type, Content-Length, ETag, Accept-Ranges, Content-Range'
+    );
+    // A cross-origin reader that is allowed to SEND `Range` but cannot READ
+    // `Content-Range` cannot tell a 206 from a truncated 200.
+    expect(headers.get('Access-Control-Allow-Headers')).toBe(
+      'Accept, Range, If-Range, If-None-Match'
+    );
     expect(headers.get('X-Content-Type-Options')).toBe('nosniff');
     // content.classmoji.io sits under the app's .classmoji.io cookie domain:
     // an SVG with inline script, opened top-level, must not run there.
