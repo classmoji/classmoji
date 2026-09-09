@@ -42,7 +42,7 @@ export function getGitProvider(gitOrganization: {
       if (!access_token) {
         throw new Error('GitLab provider requires access_token');
       }
-      return new GitLabProvider(gitOrganization.gitlab_group_id!, login);
+      return new GitLabProvider(gitOrganization.gitlab_group_id!, login, access_token);
 
     // Future implementations:
 
@@ -125,7 +125,6 @@ export async function ensureClassroomTeam(
 ) {
   const teamName = getTeamNameForClassroom(classroom, role);
 
-  console.log('teamName', teamName);
   try {
     return await gitProvider.getTeam(orgLogin, teamName);
   } catch (error) {

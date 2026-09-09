@@ -31,6 +31,16 @@ export interface GitProject {
   url: string;
 }
 
+/** A repository's live Pages configuration; `null` from a reader means none. */
+export interface RepoPagesInfo {
+  htmlUrl: string | null;
+  status: string | null;
+  /** 'legacy' (branch source) or 'workflow' (Actions source). */
+  buildType: string | null;
+  sourceBranch: string | null;
+  sourcePath: string | null;
+}
+
 export class GitProvider {
   credentials: unknown;
 

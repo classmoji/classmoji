@@ -1,10 +1,51 @@
 import { GitProvider } from './GitProvider.ts';
+import type { GitRepository } from './GitProvider.ts';
 import type {
   CommitRecord,
   ContributorRecord,
   LanguagesMap,
   PRSummary,
 } from '../classmoji/repoAnalytics.types.ts';
+
+/** Base URL of the GitLab instance (self-hosted instances override this). */
+function gitlabBaseUrl(): string {
+  return (process.env.GITLAB_URL || process.env.GITLAB_ISSUER || 'https://gitlab.com').replace(
+    /\/+$/,
+    ''
+  );
+}
+
+/**
+ * GitLab access levels, plus the GitHub permission names the rest of the
+ * codebase already speaks, mapped onto their GitLab equivalents.
+ * @see https://docs.gitlab.com/ee/api/members.html#roles
+ */
+const ACCESS_LEVELS: Record<string, number> = {
+  // GitLab's own role names
+  guest: 10,
+  reporter: 20,
+  developer: 30,
+  maintainer: 40,
+  owner: 50,
+  // GitHub permission names, for callers written against GitHubProvider
+  pull: 20,
+  triage: 20,
+  push: 30,
+  maintain: 40,
+  admin: 50,
+};
+
+/** Reporter — the level a plain organization invite lands on. */
+const REPORTER_ACCESS_LEVEL = 20;
+
+/** GitLab derives a project/group `path` from its name; mirror that slugging. */
+function toPath(name: string): string {
+  return name
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9._-]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+}
 
 /**
  * GitLab adapter - implements GitProvider interface.
@@ -21,14 +62,95 @@ export class GitLabProvider extends GitProvider {
   _client: unknown;
 
   /**
+   * The access token lives in a private field, and is deliberately kept out of
+   * `credentials` and every public property. Anything that enumerates or
+   * serialises a provider — a log line, an error dump, `JSON.stringify` — would
+   * otherwise carry a live personal access token along with it.
+   */
+  #token: string | null;
+
+  /**
    * @param {string} groupId - GitLab Group ID
    * @param {string} [groupPath] - Group path/slug (optional)
+   * @param {string} [token] - GitLab access token used to authenticate API calls
    */
-  constructor(groupId: string, groupPath: string | null = null) {
+  constructor(groupId: string, groupPath: string | null = null, token: string | null = null) {
     super({ groupId, groupPath });
     this.groupId = groupId;
     this.groupPath = groupPath;
+    this.#token = token;
     this._client = null;
+  }
+
+  // ─── REST plumbing ─────────────────────────────────────────────────────────
+
+  /**
+   * Issue a GitLab REST API call and parse the response.
+   *
+   * Returns the status alongside the parsed body rather than throwing, so a
+   * caller that treats a particular failure as expected (a subgroup path
+   * already taken, say) can branch on it. Callers with no such case should use
+   * {@link GitLabProvider.api} instead, which throws.
+   */
+  async request(
+    path: string,
+    init: { method?: string; body?: unknown } = {}
+  ): Promise<{ ok: boolean; status: number; body: unknown }> {
+    if (!this.#token) {
+      throw new Error('GitLabProvider requires an access token for API calls');
+    }
+
+    const headers: Record<string, string> = {
+      Authorization: `Bearer ${this.#token}`,
+      Accept: 'application/json',
+    };
+    const options: { method: string; headers: Record<string, string>; body?: string } = {
+      method: init.method || 'GET',
+      headers,
+    };
+    if (init.body !== undefined) {
+      headers['Content-Type'] = 'application/json';
+      options.body = JSON.stringify(init.body);
+    }
+
+    const res = await fetch(`${gitlabBaseUrl()}${path}`, options);
+    const text = await res.text();
+    let body: unknown = null;
+    if (text) {
+      try {
+        body = JSON.parse(text);
+      } catch {
+        body = text;
+      }
+    }
+    return { ok: res.ok, status: res.status, body };
+  }
+
+  /** {@link GitLabProvider.request}, but throws on a non-2xx response. */
+  async api(path: string, init: { method?: string; body?: unknown } = {}): Promise<unknown> {
+    const { ok, status, body } = await this.request(path, init);
+    if (!ok) {
+      const message =
+        body && typeof body === 'object' && 'message' in body
+          ? JSON.stringify((body as { message: unknown }).message)
+          : String(body ?? '');
+      throw new Error(`GitLab API ${init.method || 'GET'} ${path} failed (${status}): ${message}`);
+    }
+    return body;
+  }
+
+  /** Resolve a group path (or numeric id) to its numeric group id. */
+  async resolveGroupId(group: string): Promise<number> {
+    const body = (await this.api(`/api/v4/groups/${encodeURIComponent(group)}`)) as { id: number };
+    return body.id;
+  }
+
+  /** Resolve a username to its numeric user id, or null when no user matches. */
+  async resolveUserId(username: string): Promise<number | null> {
+    const users = (await this.api(
+      `/api/v4/users?username=${encodeURIComponent(username)}`
+    )) as Array<{ id: number }>;
+    return users.length > 0 ? users[0].id : null;
   }
 
   // ─── Auth & User ───────────────────────────────────────────────────────────
@@ -62,12 +184,23 @@ export class GitLabProvider extends GitProvider {
    * @returns {Promise<{id: string, name: string, url: string}>}
    */
   async createRepository(
-    _group: string,
-    _name: string,
-    _isPrivate: boolean = true
-  ): Promise<never> {
-    // TODO: POST /api/v4/projects with namespace_id
-    throw new Error('GitLabProvider.createRepository() not implemented');
+    group: string,
+    name: string,
+    isPrivate: boolean = true
+  ): Promise<GitRepository> {
+    const namespaceId = await this.resolveGroupId(group);
+
+    const project = (await this.api('/api/v4/projects', {
+      method: 'POST',
+      body: {
+        name,
+        path: toPath(name),
+        namespace_id: namespaceId,
+        visibility: isPrivate ? 'private' : 'public',
+      },
+    })) as { id: number; path: string; web_url: string };
+
+    return { id: String(project.id), name: project.path, url: project.web_url };
   }
 
   /**
@@ -318,18 +451,42 @@ export class GitLabProvider extends GitProvider {
   }
 
   /**
-   * Invite user to group
+   * Invite a user to a group.
+   *
+   * An email address goes through `/invitations`, which mails a join link to
+   * someone who may not have an account yet. A username is added straight to
+   * `/members`, which needs the numeric user id.
+   *
    * @param {string} group - Group path
-   * @param {string} userIdOrEmail - User ID or email
-   * @param {number[]} subgroupIds - Array of subgroup IDs (optional)
+   * @param {string} userIdOrEmail - Username or email address
+   * @param {number[]} [subgroupIds] - Array of subgroup IDs (unused on GitLab)
+   * @param {number} [accessLevel] - GitLab access level (default: Reporter)
    */
   async inviteToOrganization(
-    _group: string,
-    _userIdOrEmail: string,
-    _subgroupIds: number[]
-  ): Promise<never> {
-    // TODO: POST /api/v4/groups/:id/invitations or /members
-    throw new Error('GitLabProvider.inviteToOrganization() not implemented');
+    group: string,
+    userIdOrEmail: string,
+    _subgroupIds?: number[],
+    accessLevel: number = REPORTER_ACCESS_LEVEL
+  ): Promise<void> {
+    const groupId = await this.resolveGroupId(group);
+
+    if (userIdOrEmail.includes('@')) {
+      await this.api(`/api/v4/groups/${groupId}/invitations`, {
+        method: 'POST',
+        body: { email: userIdOrEmail, access_level: accessLevel },
+      });
+      return;
+    }
+
+    const userId = await this.resolveUserId(userIdOrEmail);
+    if (userId === null) {
+      throw new Error(`GitLab user not found: ${userIdOrEmail}`);
+    }
+
+    await this.api(`/api/v4/groups/${groupId}/members`, {
+      method: 'POST',
+      body: { user_id: userId, access_level: accessLevel },
+    });
   }
 
   /**
@@ -358,9 +515,38 @@ export class GitLabProvider extends GitProvider {
    * @param {string} username - GitLab username
    * @returns {Promise<Object>}
    */
-  async getUserByLogin(_username: string): Promise<never> {
-    // TODO: GET /api/v4/users?username=:username
-    throw new Error('GitLabProvider.getUserByLogin() not implemented');
+  async getUserByLogin(username: string): Promise<{ id: number; username: string } | null> {
+    const users = (await this.api(
+      `/api/v4/users?username=${encodeURIComponent(username)}`
+    )) as Array<{ id: number; username: string }>;
+    return users.length > 0 ? users[0] : null;
+  }
+
+  // ─── Groups ───────────────────────────────────────────────────────────────
+
+  /**
+   * List the groups this token can administer, for the org-picker.
+   * Maintainer (40) is the floor because anything less cannot create projects.
+   * @returns {Promise<Array<{id: number, full_path: string, name: string, avatar_url: string|null}>>}
+   */
+  async listGroups(): Promise<
+    Array<{ id: number; full_path: string; name: string; avatar_url: string | null }>
+  > {
+    const groups = (await this.api(
+      '/api/v4/groups?min_access_level=40&per_page=100&order_by=path&sort=asc'
+    )) as Array<{
+      id: number;
+      full_path: string;
+      name: string;
+      avatar_url: string | null;
+    }>;
+
+    return groups.map(g => ({
+      id: g.id,
+      full_path: g.full_path,
+      name: g.name,
+      avatar_url: g.avatar_url ?? null,
+    }));
   }
 
   // ─── Subgroups (Team equivalent) ──────────────────────────────────────────
@@ -371,9 +557,34 @@ export class GitLabProvider extends GitProvider {
    * @param {string} name - Subgroup name
    * @returns {Promise<{id: number, path: string, name: string}>}
    */
-  async createTeam(_group: string, _name: string): Promise<never> {
-    // TODO: POST /api/v4/groups with parent_id
-    throw new Error('GitLabProvider.createTeam() not implemented');
+  async createTeam(
+    group: string,
+    name: string
+  ): Promise<{ id: number; slug: string; name: string }> {
+    const parentId = await this.resolveGroupId(group);
+    const path = toPath(name);
+
+    const { ok, status, body } = await this.request('/api/v4/groups', {
+      method: 'POST',
+      body: { name, path, parent_id: parentId, visibility: 'private' },
+    });
+
+    if (ok) {
+      const created = body as { id: number; path: string; name: string };
+      return { id: created.id, slug: created.path, name: created.name };
+    }
+
+    // A taken path means the subgroup already exists — adopt it rather than
+    // fail, so provisioning can be re-run safely.
+    const message =
+      body && typeof body === 'object' && 'message' in body
+        ? JSON.stringify((body as { message: unknown }).message)
+        : String(body ?? '');
+    if (status === 400 && message.includes('has already been taken')) {
+      return this.getTeam(group, path);
+    }
+
+    throw new Error(`GitLab API POST /api/v4/groups failed (${status}): ${message}`);
   }
 
   /**
@@ -382,9 +593,14 @@ export class GitLabProvider extends GitProvider {
    * @param {string} subgroupPath - Subgroup path
    * @returns {Promise<{id: number, path: string, name: string}>}
    */
-  async getTeam(_group: string, _subgroupPath: string): Promise<never> {
-    // TODO: GET /api/v4/groups/:id (with full path)
-    throw new Error('GitLabProvider.getTeam() not implemented');
+  async getTeam(
+    group: string,
+    subgroupPath: string
+  ): Promise<{ id: number; slug: string; name: string }> {
+    const subgroup = (await this.api(
+      `/api/v4/groups/${encodeURIComponent(`${group}/${subgroupPath}`)}`
+    )) as { id: number; path: string; name: string };
+    return { id: subgroup.id, slug: subgroup.path, name: subgroup.name };
   }
 
   /**
@@ -456,13 +672,25 @@ export class GitLabProvider extends GitProvider {
    * @param {string} permission - Access level (default: maintainer)
    */
   async addCollaborator(
-    _group: string,
-    _project: string,
-    _username: string,
-    _permission: string = 'maintainer'
-  ): Promise<never> {
-    // TODO: POST /api/v4/projects/:id/members
-    throw new Error('GitLabProvider.addCollaborator() not implemented');
+    group: string,
+    project: string,
+    username: string,
+    permission: string = 'maintainer'
+  ): Promise<void> {
+    const accessLevel = ACCESS_LEVELS[permission.toLowerCase()];
+    if (accessLevel === undefined) {
+      throw new Error(`Unknown GitLab permission: ${permission}`);
+    }
+
+    const userId = await this.resolveUserId(username);
+    if (userId === null) {
+      throw new Error(`GitLab user not found: ${username}`);
+    }
+
+    await this.api(`/api/v4/projects/${encodeURIComponent(`${group}/${project}`)}/members`, {
+      method: 'POST',
+      body: { user_id: userId, access_level: accessLevel },
+    });
   }
 
   // ─── GitLab Pages ─────────────────────────────────────────────────────────
@@ -483,6 +711,30 @@ export class GitLabProvider extends GitProvider {
     // TODO: Check if pages job exists in .gitlab-ci.yml
     throw new Error(
       'GitLabProvider.enableGitHubPages() not implemented - GitLab uses CI/CD for Pages'
+    );
+  }
+
+  /**
+   * GitLab Pages state lives in CI/CD, not in an API this adapter speaks
+   * @param {string} group - Group path
+   * @param {string} project - Project name
+   * @returns {Promise<never>}
+   */
+  async getRepoPages(_group: string, _project: string): Promise<never> {
+    throw new Error('GitLabProvider.getRepoPages() not implemented - GitLab uses CI/CD for Pages');
+  }
+
+  /**
+   * GitLab Pages is removed by deleting the pages job / its deployment, not by
+   * one API call
+   * @param {string} group - Group path
+   * @param {string} project - Project name
+   * @returns {Promise<never>}
+   */
+  async disableGitHubPages(_group: string, _project: string): Promise<never> {
+    // TODO: DELETE /api/v4/projects/:id/pages once a GitLab classroom needs it
+    throw new Error(
+      'GitLabProvider.disableGitHubPages() not implemented - GitLab uses CI/CD for Pages'
     );
   }
 
