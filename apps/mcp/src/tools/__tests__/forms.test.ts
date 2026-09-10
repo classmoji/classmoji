@@ -1241,6 +1241,41 @@ describe('form_response_create', () => {
     ).toBe(true);
   });
 
+  it('accepts a timestamp carrying an offset, and still refuses a date alone', () => {
+    const schema = responsesSchema();
+    const at = (submitted_at: string) =>
+      schema.safeParse([{ email: 'maya@dartmouth.edu', answers: {}, submitted_at }]).success;
+
+    // The service parses with `new Date`, which honours an offset — refusing
+    // one would make a caller convert a real signup time by hand.
+    expect(at('2026-08-21T12:00:00+02:00')).toBe(true);
+    expect(at('2026-08-21T08:00:00-04:00')).toBe(true);
+    // A queue position needs a time of day.
+    expect(at('2026-08-21')).toBe(false);
+  });
+
+  it('refuses a row with no answers at all (a schema error, not a rejected batch)', () => {
+    const schema = responsesSchema();
+    expect(schema.safeParse([{ email: 'maya@dartmouth.edu' }]).success).toBe(false);
+    expect(schema.safeParse([{ email: 'maya@dartmouth.edu', answers: null }]).success).toBe(false);
+    expect(schema.safeParse([{ email: 'maya@dartmouth.edu', answers: 'nope' }]).success).toBe(
+      false
+    );
+    // An object keyed by field id is what the fill page posts; the contract
+    // owns the values, so anything may sit under a key.
+    expect(
+      schema.safeParse([{ email: 'maya@dartmouth.edu', answers: { 'f-name': 7 } }]).success
+    ).toBe(true);
+    expect(schema.safeParse([{ email: 'maya@dartmouth.edu', answers: {} }]).success).toBe(true);
+  });
+
+  it('is a write tool, rate-limited well below the default bucket', () => {
+    expect(formResponseCreateTool.scope).toBe('write');
+    // One call writes up to 200 rows and holds the form's row lock while it
+    // does; the 20-burst / 30-per-minute default is more than that deserves.
+    expect(formResponseCreateTool.rateLimit).toEqual({ capacity: 10, refillPerSecond: 0.1 });
+  });
+
   // ── Gates ────────────────────────────────────────────────────────────────
 
   it('denies a non-Pro classroom before it reads or writes anything', async () => {
@@ -1279,6 +1314,23 @@ describe('form_response_create', () => {
     expect((error as ToolError).message).toBe('Payload exceeds 2 MB');
     expect(mocks.formFindById).not.toHaveBeenCalled();
     expect(mocks.responseCreate).not.toHaveBeenCalled();
+  });
+
+  it('measures the cap in BYTES, not characters', async () => {
+    // 1.2M characters of a two-byte character: under the cap by string length,
+    // well over it once encoded — which is what actually crosses the wire and
+    // lands in the column.
+    const twoByte = 'é'.repeat(1_200_000);
+    expect(twoByte.length).toBeLessThan(2 * 1024 * 1024);
+    expect(new TextEncoder().encode(twoByte).length).toBeGreaterThan(2 * 1024 * 1024);
+
+    const error = await call({
+      responses: [{ email: 'maya@dartmouth.edu', answers: { 'f-why': twoByte } }],
+    }).catch(e => e);
+
+    expect(error).toBeInstanceOf(ToolError);
+    expect((error as ToolError).message).toBe('Payload exceeds 2 MB');
+    expect(mocks.formFindById).not.toHaveBeenCalled();
   });
 
   // ── What the service is handed ───────────────────────────────────────────
@@ -1346,7 +1398,7 @@ describe('form_response_create', () => {
 
   // ── Dry run vs commit ────────────────────────────────────────────────────
 
-  it('audits nothing on a dry run, and says so to the service', async () => {
+  it('audits a dry run as a VIEW — counts only, never the addresses', async () => {
     mocks.responseCreate.mockResolvedValue({
       ...COMMITTED,
       outcome: 'dry_run',
@@ -1358,12 +1410,82 @@ describe('form_response_create', () => {
 
     const input = mocks.responseCreate.mock.calls[0][0] as Record<string, unknown>;
     expect(input.dryRun).toBe(true);
-    // Nothing changed, so nothing is recorded — the same rule the sibling reads
-    // that audit nothing follow.
-    expect(input.audit).toBeUndefined();
-    expect(mocks.auditCreate).not.toHaveBeenCalled();
+    // `audit` is a REQUIRED service parameter now, so the descriptor goes on
+    // every call; the service ignores it on a dry run.
+    expect(input.audit).toBeDefined();
+
+    // A dry run answers "is this person already on the form, and in what
+    // state" for every address supplied — a read of other people's
+    // submissions, recorded like every other one.
+    expect(mocks.auditCreate).toHaveBeenCalledTimes(1);
+    const row = mocks.auditCreate.mock.calls[0][0] as {
+      action: string;
+      resource_type: string;
+      resource_id: string;
+      data: Record<string, unknown>;
+    };
+    expect(row.action).toBe('VIEW');
+    expect(row.resource_type).toBe('FORMS');
+    expect(row.resource_id).toBe('form-1');
+    expect(row.data.dry_run).toBe(true);
+    expect(row.data.counts).toEqual({ would_create: 1, created: 0, duplicate: 0, invalid: 0 });
+    // The audit log is not a second copy of the applicant list.
+    expect(JSON.stringify(row.data)).not.toContain('maya@dartmouth.edu');
+
     expect(payload.success).toBe(true);
     expect(payload.outcome).toBe('dry_run');
+  });
+
+  it('audits a commit that created nothing as a VIEW too', async () => {
+    mocks.responseCreate.mockResolvedValue({
+      outcome: 'committed',
+      revision_id: 'rev-1',
+      counts: { would_create: 0, created: 0, duplicate: 1, invalid: 0 },
+      rows: [
+        {
+          input_index: 0,
+          email: 'maya@dartmouth.edu',
+          disposition: 'duplicate',
+          response_id: 'resp-1',
+          existing_state: 'SUBMITTED',
+        },
+      ],
+    });
+
+    await call();
+
+    // Nothing was written, so the service wrote no CREATE row — but the call
+    // still disclosed who is already on the form, which is the read this
+    // records.
+    expect(mocks.auditCreate).toHaveBeenCalledTimes(1);
+    const row = mocks.auditCreate.mock.calls[0][0] as {
+      action: string;
+      data: Record<string, unknown>;
+    };
+    expect(row.action).toBe('VIEW');
+    expect(row.data.dry_run).toBe(false);
+    expect(row.data.counts).toEqual({ would_create: 0, created: 0, duplicate: 1, invalid: 0 });
+    expect(JSON.stringify(row.data)).not.toContain('maya@dartmouth.edu');
+  });
+
+  it('audits nothing here when rows were actually created — the service did it', async () => {
+    await call();
+    expect(mocks.responseCreate.mock.calls[0][0]).toMatchObject({ dryRun: false });
+    // The CREATE row commits inside the transaction that writes the responses,
+    // so the tool must not write a second one of its own.
+    expect(mocks.auditCreate).not.toHaveBeenCalled();
+  });
+
+  it('does not audit a rejected batch — it returns before any database read', async () => {
+    mocks.responseCreate.mockResolvedValue({
+      outcome: 'rejected',
+      revision_id: 'rev-1',
+      counts: { would_create: 0, created: 0, duplicate: 0, invalid: 1 },
+      rows: [{ input_index: 0, email: 'maya@dartmouth.edu', disposition: 'invalid' }],
+    });
+
+    await call();
+    expect(mocks.auditCreate).not.toHaveBeenCalled();
   });
 
   it('hands the service a complete audit descriptor on a commit', async () => {
@@ -1386,11 +1508,51 @@ describe('form_response_create', () => {
     expect(mocks.auditCreate).not.toHaveBeenCalled();
   });
 
+  it('passes the descriptor on a dry run too — the service requires it', async () => {
+    mocks.responseCreate.mockResolvedValue({
+      ...COMMITTED,
+      outcome: 'dry_run',
+      counts: { would_create: 1, created: 0, duplicate: 0, invalid: 0 },
+      rows: [{ input_index: 0, email: 'maya@dartmouth.edu', disposition: 'would_create' }],
+    });
+
+    await call({ dry_run: true });
+
+    const input = mocks.responseCreate.mock.calls[0][0] as {
+      audit: { data: { tool: string } };
+    };
+    expect(input.audit.data.tool).toBe('forms.responses.create');
+  });
+
   // ── The report ───────────────────────────────────────────────────────────
 
-  it('returns the service’s report verbatim, with success true on a commit', async () => {
+  it('rebuilds the report key by key, and ships nothing the service adds later', async () => {
+    // The service's DTO gains a debugging field. It must NOT reach a client
+    // just because it exists — this payload is an allow-list, like every other
+    // one in this file.
+    mocks.responseCreate.mockResolvedValue({
+      ...COMMITTED,
+      internal_trace_id: 'trace-abc',
+      rows: [
+        {
+          ...COMMITTED.rows[0],
+          email_normalized: 'maya@dartmouth.edu',
+          draft_token: 'SECRET-DRAFT-TOKEN',
+        },
+      ],
+    });
+
     const payload = parse(await call());
     expect(payload).toEqual({ success: true, ...COMMITTED });
+    expect(payload).not.toHaveProperty('internal_trace_id');
+    expect(payload.rows[0]).not.toHaveProperty('email_normalized');
+    expect(payload.rows[0]).not.toHaveProperty('draft_token');
+    expect(Object.keys(payload.counts).sort()).toEqual([
+      'created',
+      'duplicate',
+      'invalid',
+      'would_create',
+    ]);
   });
 
   it('reports success false — and every row — when the batch was rejected', async () => {
@@ -1450,16 +1612,18 @@ describe('form_response_create', () => {
   // ── Service refusals ─────────────────────────────────────────────────────
 
   it('turns each documented refusal into a ToolError carrying the service’s code', async () => {
+    // Exactly what `createResponses` can throw — FORM_NOT_FOUND is covered
+    // below, as the scoped not_found. The fill path's codes are deliberately
+    // NOT here: FORM_CLOSED cannot happen (a closed form is the ordinary
+    // case), FORM_ALREADY_SUBMITTED cannot (nothing is overwritten), and a bad
+    // answer set is a per-row `invalid` in the report, never an exception.
     const codes = [
-      'FORM_NOT_OPEN',
-      'FORM_CLOSED',
-      'FORM_CAP_REACHED',
-      'FORM_REVISION_STALE',
       'FORM_ACCESS_MISMATCH',
-      'FORM_ALREADY_SUBMITTED',
+      'FORM_FIELD_ACCESS_VIOLATION',
+      'FORM_NOT_OPEN',
       'FORM_BATCH_INVALID',
-      'FORM_ANSWERS_INVALID',
-      'FORM_ANSWERS_TOO_LARGE',
+      'FORM_REVISION_STALE',
+      'FORM_CAP_REACHED',
     ];
 
     for (const code of codes) {

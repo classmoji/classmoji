@@ -58,6 +58,17 @@ describe.skipIf(!RUN)('formResponse.createResponses (integration)', () => {
   /** An address nobody else in the suite will collide with. */
   const addr = (label: string) => `create-${suite}-${label}@example.test`;
 
+  /**
+   * The audit descriptor every call now carries — `audit` is a REQUIRED
+   * parameter, so there is no such thing as an unaudited batch to test.
+   */
+  const descriptor = () => ({
+    user_id: ownerId,
+    classroom_id: classroomId,
+    role: 'OWNER' as const,
+    data: { tool: 'form_response_create' },
+  });
+
   const makeForm = async ({
     access = 'PUBLIC' as const,
     fields = [NAME_FIELD, NOTE_FIELD] as unknown,
@@ -68,6 +79,7 @@ describe.skipIf(!RUN)('formResponse.createResponses (integration)', () => {
     response_cap?: number | null;
     allow_multiple?: boolean;
     closes_at?: Date | null;
+    save_partials?: boolean;
   } = {}) => {
     const form = await formService.create({
       classroomId,
@@ -178,6 +190,7 @@ describe.skipIf(!RUN)('formResponse.createResponses (integration)', () => {
       formId,
       revisionId,
       addedBy: ownerId,
+      audit: descriptor(),
       responses: ['a', 'b', 'c'].map((label, index) => ({
         email: addr(`happy-${label}`),
         name: `Person ${label}`,
@@ -219,6 +232,7 @@ describe.skipIf(!RUN)('formResponse.createResponses (integration)', () => {
       formId,
       revisionId,
       addedBy: ownerId,
+      audit: descriptor(),
       responses: [
         { email: addr('ids-a'), answers: answersFor(nameId, 'A') },
         { email: addr('ids-b'), answers: answersFor(nameId, 'B') },
@@ -242,6 +256,7 @@ describe.skipIf(!RUN)('formResponse.createResponses (integration)', () => {
       formId,
       revisionId,
       addedBy: ownerId,
+      audit: descriptor(),
       responses: [{ email: addr('nodate'), answers: answersFor(nameId, 'No Date') }],
     });
     const [row] = await rowsOf(formId);
@@ -260,6 +275,7 @@ describe.skipIf(!RUN)('formResponse.createResponses (integration)', () => {
       formId,
       revisionId,
       addedBy: ownerId,
+      audit: descriptor(),
       responses: [
         { email: email.toUpperCase(), answers: answersFor(nameId, 'Staff Overwrite Attempt') },
         { email: addr('dup-submitted-other'), answers: answersFor(nameId, 'Fresh') },
@@ -292,6 +308,7 @@ describe.skipIf(!RUN)('formResponse.createResponses (integration)', () => {
       formId,
       revisionId,
       addedBy: ownerId,
+      audit: descriptor(),
       responses: [{ email, answers: answersFor(nameId, 'Staff Version') }],
     });
 
@@ -308,7 +325,46 @@ describe.skipIf(!RUN)('formResponse.createResponses (integration)', () => {
     expect(after.added_by).toBeNull();
   });
 
-  it('refuses BOTH rows when one call carries the same address twice', async () => {
+  it('reports an anonymous DRAFT row as a duplicate and leaves it a draft', async () => {
+    const { formId, revisionId, nameId } = await makeOpenForm({ save_partials: true });
+    const email = addr('dup-draft');
+    const draft = await responseService.upsertDraft({
+      formId,
+      revisionId,
+      draftToken: randomUUID(),
+      email,
+      name: 'Half Typed',
+      answers: answersFor(nameId, 'Half Typed'),
+    });
+    expect(draft.submission_state).toBe('DRAFT');
+
+    const report = await responseService.createResponses({
+      formId,
+      revisionId,
+      addedBy: ownerId,
+      audit: descriptor(),
+      responses: [{ email: email.toUpperCase(), answers: answersFor(nameId, 'Staff Version') }],
+    });
+
+    expect(report.counts).toEqual({ would_create: 0, created: 0, duplicate: 1, invalid: 0 });
+    expect(report.rows[0]).toMatchObject({
+      disposition: 'duplicate',
+      response_id: draft.id,
+      existing_state: 'DRAFT',
+    });
+
+    // A DRAFT is somebody's half-finished typing, not a submission — and it is
+    // certainly not staff's to overwrite on the way past.
+    const after = await prisma.formResponse.findUniqueOrThrow({ where: { id: draft.id } });
+    expect(after.submission_state).toBe('DRAFT');
+    expect(after.name).toBe('Half Typed');
+    expect(after.answers).toEqual(answersFor(nameId, 'Half Typed'));
+    expect(after.added_by).toBeNull();
+    expect(after.draft_token).not.toBeNull();
+    expect(await rowsOf(formId)).toHaveLength(1);
+  });
+
+  it('marks BOTH rows invalid when one call carries the same address twice', async () => {
     const { formId, revisionId, nameId } = await makeOpenForm();
     const email = addr('twice');
 
@@ -316,6 +372,7 @@ describe.skipIf(!RUN)('formResponse.createResponses (integration)', () => {
       formId,
       revisionId,
       addedBy: ownerId,
+      audit: descriptor(),
       responses: [
         { email, answers: answersFor(nameId, 'First') },
         { email: ` ${email.toUpperCase()} `, answers: answersFor(nameId, 'Second') },
@@ -323,8 +380,13 @@ describe.skipIf(!RUN)('formResponse.createResponses (integration)', () => {
       ],
     });
 
-    expect(report.rows[0].disposition).toBe('duplicate');
-    expect(report.rows[1].disposition).toBe('duplicate');
+    // The caller's own list disagrees with itself — a data error like any
+    // other, so the whole batch is rejected and NOTHING is written, not even
+    // the third row that was fine.
+    expect(report.outcome).toBe('rejected');
+    expect(report.counts).toEqual({ would_create: 1, created: 0, duplicate: 0, invalid: 2 });
+    expect(report.rows[0].disposition).toBe('invalid');
+    expect(report.rows[1].disposition).toBe('invalid');
     expect(report.rows[0].issues?.[0]).toMatchObject({
       code: 'duplicate_in_input',
       path: 'email',
@@ -334,9 +396,7 @@ describe.skipIf(!RUN)('formResponse.createResponses (integration)', () => {
     expect(report.rows[0].response_id).toBeUndefined();
     expect(report.rows[0].existing_state).toBeUndefined();
 
-    const rows = await rowsOf(formId);
-    expect(rows).toHaveLength(1);
-    expect(rows[0].email_normalized).toBe(addr('twice-other'));
+    expect(await rowsOf(formId)).toHaveLength(0);
   });
 
   // ── All or nothing ───────────────────────────────────────────────────────
@@ -348,6 +408,7 @@ describe.skipIf(!RUN)('formResponse.createResponses (integration)', () => {
       formId,
       revisionId,
       addedBy: ownerId,
+      audit: descriptor(),
       responses: [
         { email: addr('reject-a'), answers: answersFor(nameId, 'Fine') },
         // The required field has no answer — the fill page's own rule.
@@ -368,12 +429,46 @@ describe.skipIf(!RUN)('formResponse.createResponses (integration)', () => {
     expect(issue?.message).toBeTruthy();
   });
 
+  it('names the offending key when the answers carry a field id the form has not', async () => {
+    const { formId, revisionId, nameId } = await makeOpenForm();
+    const stale = randomUUID();
+
+    const report = await responseService.createResponses({
+      formId,
+      revisionId,
+      addedBy: ownerId,
+      audit: descriptor(),
+      responses: [
+        {
+          email: addr('unknown-key'),
+          answers: { ...answersFor(nameId, 'Fine'), [stale]: 'from an older revision' },
+        },
+      ],
+    });
+
+    expect(report.outcome).toBe('rejected');
+    // ONE issue per refused key, each naming the key — not a single issue with
+    // an empty path, which is what zod's `unrecognized_keys` would give.
+    const issues = report.rows[0].issues ?? [];
+    expect(issues).toHaveLength(1);
+    expect(issues[0]).toMatchObject({
+      code: 'unrecognized_keys',
+      field_id: stale,
+      path: stale,
+    });
+    expect(issues[0]?.label).toBeUndefined();
+    expect(issues[0]?.message).toContain(stale);
+    expect(issues[0]?.message).toContain('form_get');
+    expect(await rowsOf(formId)).toHaveLength(0);
+  });
+
   it('marks a malformed address invalid', async () => {
     const { formId, revisionId, nameId } = await makeOpenForm();
     const report = await responseService.createResponses({
       formId,
       revisionId,
       addedBy: ownerId,
+      audit: descriptor(),
       responses: [{ email: 'not an address', answers: answersFor(nameId, 'X') }],
     });
     expect(report.outcome).toBe('rejected');
@@ -387,6 +482,7 @@ describe.skipIf(!RUN)('formResponse.createResponses (integration)', () => {
       formId,
       revisionId,
       addedBy: ownerId,
+      audit: descriptor(),
       responses: [
         { email: addr('past'), answers: answersFor(nameId, 'Past'), submittedAt: new Date(0) },
         {
@@ -418,6 +514,7 @@ describe.skipIf(!RUN)('formResponse.createResponses (integration)', () => {
       formId,
       revisionId,
       addedBy: ownerId,
+      audit: descriptor(),
       dryRun: true,
       responses: [
         { email: addr('dry-a'), answers: answersFor(nameId, 'A') },
@@ -452,6 +549,7 @@ describe.skipIf(!RUN)('formResponse.createResponses (integration)', () => {
           formId,
           revisionId,
           addedBy: ownerId,
+          audit: descriptor(),
           responses: twoRows,
         })
       )
@@ -466,6 +564,7 @@ describe.skipIf(!RUN)('formResponse.createResponses (integration)', () => {
           formId,
           revisionId,
           addedBy: ownerId,
+          audit: descriptor(),
           dryRun: true,
           responses: twoRows,
         })
@@ -476,6 +575,7 @@ describe.skipIf(!RUN)('formResponse.createResponses (integration)', () => {
       formId,
       revisionId,
       addedBy: ownerId,
+      audit: descriptor(),
       responses: [twoRows[0]],
     });
     expect(report.outcome).toBe('committed');
@@ -494,6 +594,7 @@ describe.skipIf(!RUN)('formResponse.createResponses (integration)', () => {
           formId,
           revisionId,
           addedBy: ownerId,
+          audit: descriptor(),
           responses: [{ email: addr('stale'), answers: answersFor(nameId, 'Stale') }],
         })
       )
@@ -509,6 +610,7 @@ describe.skipIf(!RUN)('formResponse.createResponses (integration)', () => {
           formId,
           revisionId,
           addedBy: ownerId,
+          audit: descriptor(),
           responses: [{ email: addr('classroom'), answers: answersFor(nameId, 'Nope') }],
         })
       )
@@ -522,6 +624,7 @@ describe.skipIf(!RUN)('formResponse.createResponses (integration)', () => {
         responseService.createResponses({
           formId: form.id,
           addedBy: ownerId,
+          audit: descriptor(),
           responses: [{ email: addr('draft'), answers: {} }],
         })
       )
@@ -536,6 +639,7 @@ describe.skipIf(!RUN)('formResponse.createResponses (integration)', () => {
       formId,
       revisionId,
       addedBy: ownerId,
+      audit: descriptor(),
       responses: [{ email: addr('closed'), answers: answersFor(nameId, 'Late') }],
     });
     expect(report.outcome).toBe('committed');
@@ -546,7 +650,13 @@ describe.skipIf(!RUN)('formResponse.createResponses (integration)', () => {
     const { formId, revisionId, nameId } = await makeOpenForm();
     expect(
       await codeOf(
-        responseService.createResponses({ formId, revisionId, addedBy: ownerId, responses: [] })
+        responseService.createResponses({
+          formId,
+          revisionId,
+          addedBy: ownerId,
+          audit: descriptor(),
+          responses: [],
+        })
       )
     ).toBe(responseService.FORM_BATCH_INVALID);
 
@@ -560,6 +670,7 @@ describe.skipIf(!RUN)('formResponse.createResponses (integration)', () => {
           formId,
           revisionId,
           addedBy: ownerId,
+          audit: descriptor(),
           responses: tooMany,
         })
       )
@@ -571,13 +682,6 @@ describe.skipIf(!RUN)('formResponse.createResponses (integration)', () => {
   describe('the audit row', () => {
     const auditsFor = (formId: string) =>
       prisma.auditLog.count({ where: { classroom_id: classroomId, resource_id: formId } });
-
-    const descriptor = () => ({
-      user_id: ownerId,
-      classroom_id: classroomId,
-      role: 'OWNER' as const,
-      data: { tool: 'form_response_create' },
-    });
 
     it('writes exactly one row on a commit, carrying the ids and counts', async () => {
       const { formId, revisionId, nameId } = await makeOpenForm();
@@ -612,10 +716,30 @@ describe.skipIf(!RUN)('formResponse.createResponses (integration)', () => {
         formId,
         revisionId,
         addedBy: ownerId,
-        dryRun: true,
         audit: descriptor(),
+        dryRun: true,
         responses: [{ email: addr('audit-dry'), answers: answersFor(nameId, 'Dry') }],
       });
+      expect(await auditsFor(formId)).toBe(0);
+    });
+
+    it('writes none on a commit that created nothing — a no-op is not a mutation', async () => {
+      const { formId, revisionId, nameId } = await makeOpenForm();
+      const email = addr('audit-noop');
+      await publicSubmit(formId, revisionId, email, 'Already Here');
+
+      const report = await responseService.createResponses({
+        formId,
+        revisionId,
+        addedBy: ownerId,
+        audit: descriptor(),
+        responses: [{ email, answers: answersFor(nameId, 'Staff Version') }],
+      });
+
+      expect(report.outcome).toBe('committed');
+      expect(report.counts).toEqual({ would_create: 0, created: 0, duplicate: 1, invalid: 0 });
+      // The transaction committed, but it wrote no response — so no CREATE row
+      // may claim it did. (The MCP tool records that case as the VIEW it was.)
       expect(await auditsFor(formId)).toBe(0);
     });
 
@@ -651,6 +775,7 @@ describe.skipIf(!RUN)('formResponse.createResponses (integration)', () => {
       formId,
       revisionId,
       addedBy: ownerId,
+      audit: descriptor(),
       responses: [
         {
           email: addr('order-late'),

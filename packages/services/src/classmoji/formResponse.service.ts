@@ -2,10 +2,10 @@ import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import getPrisma from '@classmoji/database';
 import {
   answersByteSize,
+  assertFieldsAllowedForAccess,
   flattenFields,
   parseAnswers,
   requiresResolvedContext,
-  FIELD_TYPE_REGISTRY,
   FORM_ANSWERS_INVALID,
   FORM_ANSWERS_TOO_LARGE,
   FORM_LIMITS,
@@ -1134,8 +1134,8 @@ export const isAddressPlaceholder = (response: {
  *
  * Two details that are easy to get wrong:
  *  - `verified_at` is set only the FIRST time. A later edit via a fresh link
- *    keeps the original timestamp, so editing an answer never costs the filler
- *    their place in a FIFO waitlist.
+ *    keeps the original timestamp. (The FIFO place itself is `submitted_at`,
+ *    which an edit does not move either — see `listByFormId`.)
  *  - the cap is checked only on that first transition. An already-verified
  *    response editing itself must not be bounced by a cap it is already inside.
  *
@@ -1642,6 +1642,15 @@ export interface CreateResponseIssue {
   message: string;
 }
 
+/**
+ * What happened to one row.
+ *
+ * `duplicate` is a statement about the DATABASE — an address already on the
+ * form, reported with the existing row's id and state, untouched. A batch may
+ * commit with duplicates in it. Two rows in one CALL sharing an address are
+ * `invalid` instead, carrying a `duplicate_in_input` issue: that is caller
+ * data disagreeing with itself, and it rejects the whole batch.
+ */
 export type CreateResponseDisposition = 'would_create' | 'created' | 'duplicate' | 'invalid';
 
 export interface CreateResponseRow {
@@ -1696,6 +1705,8 @@ interface ThrownIssue {
   code?: string;
   path?: Array<string | number>;
   message?: string;
+  /** `unrecognized_keys` only: the keys the strict object refused. */
+  keys?: string[];
 }
 
 /** Everything one input row needs, carried beside the row it will report as. */
@@ -1755,13 +1766,22 @@ const countRows = (rows: CreateResponseRow[]) => ({
  * row's id and state, and that row is left exactly as it was. A DRAFT or an
  * unverified placeholder is NOT a submission, so reporting one as "already
  * present" is a statement about what is there, not a claim that the person is
- * covered. Two rows in one call sharing an address are both refused; there is
- * no first-wins rule to guess wrong about.
+ * covered. Two rows in ONE call sharing an address are a different thing: that
+ * is the caller's own list contradicting itself, so BOTH are `invalid` and the
+ * batch is rejected like any other caller data error. There is no first-wins
+ * rule to guess wrong about.
  *
  * ── All or nothing ─────────────────────────────────────────────────────────
  * One invalid row rejects the batch, reports every row, and writes nothing —
  * `outcome: 'rejected'`, returned rather than thrown, because the report is the
  * useful part.
+ *
+ * ── `addedBy` and `audit` are REQUIRED ─────────────────────────────────────
+ * Neither is a convenience a future caller may skip. `added_by` is the only
+ * thing distinguishing a staff-typed row from the respondent's own testimony,
+ * and the audit descriptor is the only record that the batch happened at all.
+ * Making them arguments rather than defaults is what forces the next caller to
+ * answer "who is doing this, and where is it written down?".
  *
  * PUBLIC forms only. The email-uniqueness index is scoped `WHERE user_id IS
  * NULL`, so a staff-added row on a CLASSROOM form would not collide with the
@@ -1769,8 +1789,8 @@ const countRows = (rows: CreateResponseRow[]) => ({
  * excludes roster- and teammate-sourced field types for free, and both are
  * asserted against the registry rather than special-cased by name.
  *
- * @throws FORM_NOT_FOUND, FORM_ACCESS_MISMATCH, FORM_NOT_OPEN,
- *   FORM_BATCH_INVALID, FORM_REVISION_STALE, FORM_CAP_REACHED.
+ * @throws FORM_NOT_FOUND, FORM_ACCESS_MISMATCH, FORM_FIELD_ACCESS_VIOLATION,
+ *   FORM_NOT_OPEN, FORM_BATCH_INVALID, FORM_REVISION_STALE, FORM_CAP_REACHED.
  */
 export async function createResponses({
   formId,
@@ -1790,9 +1810,16 @@ export async function createResponses({
   revisionId?: string;
   responses: CreateResponseInput[];
   dryRun?: boolean;
-  /** The staff user doing the typing. Written to `added_by` on every row. */
-  addedBy?: string | null;
-  audit?: CreateResponsesAudit;
+  /**
+   * The staff user doing the typing. Written to `added_by` on every row.
+   * REQUIRED: attribution is the honesty guarantee, not an option.
+   */
+  addedBy: string;
+  /**
+   * REQUIRED, for the same reason. The row is written inside the transaction,
+   * and only when the batch actually created something.
+   */
+  audit: CreateResponsesAudit;
 }): Promise<CreateResponsesReport> {
   // ── Pre-flight, outside every lock ────────────────────────────────────────
   const form = await getPrisma().form.findUnique({
@@ -1842,19 +1869,10 @@ export async function createResponses({
       'This form has per-respondent fields — its responses cannot be created on somebody else’s behalf.'
     );
   }
-  const classroomOnly = [
-    ...new Set(
-      flattenFields(fields)
-        .filter(field => FIELD_TYPE_REGISTRY[field.type]?.classroomOnly)
-        .map(field => field.type)
-    ),
-  ];
-  if (classroomOnly.length > 0) {
-    throw serviceError(
-      FORM_ACCESS_MISMATCH,
-      `Field type(s) ${classroomOnly.join(', ')} require Classroom access — responses to them cannot be created this way.`
-    );
-  }
+  // The contract's own save-time rule, run again here rather than re-implemented
+  // — one definition of "classroom-only", in the module that owns the registry.
+  // Throws FORM_FIELD_ACCESS_VIOLATION.
+  assertFieldsAllowedForAccess(fields, 'PUBLIC');
 
   // ── Every row validated before a lock is taken ────────────────────────────
   const labels = new Map(flattenFields(fields).map(field => [field.id, labelOf(field)]));
@@ -1908,6 +1926,23 @@ export async function createResponses({
       const thrown = error as { code?: string; message?: string; issues?: ThrownIssue[] };
       if (thrown.issues && thrown.issues.length > 0) {
         for (const issue of thrown.issues) {
+          // A wrong or stale field uuid. Zod reports this ONCE for the whole
+          // object with an empty path and the offending keys in `keys`, which
+          // would otherwise reach the caller as `path: ''` naming nothing —
+          // useless for the one mistake most likely to produce it. One issue
+          // per key, each naming the key it is about.
+          if (issue.code === 'unrecognized_keys') {
+            for (const key of issue.keys ?? []) {
+              issues.push({
+                code: 'unrecognized_keys',
+                field_id: key,
+                label: undefined,
+                path: key,
+                message: `No field ${key} on this form — field ids come from form_get.`,
+              });
+            }
+            continue;
+          }
           const first = issue.path?.[0];
           const fieldId = typeof first === 'string' && labels.has(first) ? first : undefined;
           const label = fieldId ? labels.get(fieldId) : undefined;
@@ -1937,19 +1972,24 @@ export async function createResponses({
     return row;
   });
 
-  // Two rows in one call for the same person. BOTH are refused: picking a
-  // winner would silently drop the other one's answers, and the caller is the
-  // only one who knows which is right.
+  // Two rows in one call for the same person. This is not a "duplicate" in the
+  // sense the report otherwise uses that word — nothing in the database is
+  // being reported back — it is the caller's own list contradicting itself, so
+  // every row that shares an address is INVALID and the batch is rejected on
+  // the ordinary all-or-nothing rule. Picking a winner would silently drop the
+  // other one's answers, and the caller is the only one who knows which is
+  // right. Counted over every row whatever else is wrong with it: a row that
+  // already failed validation still names an address the batch repeats.
   const seen = new Map<string, number>();
   for (const row of prepared) {
     if (!row.emailNormalized) continue;
     seen.set(row.emailNormalized, (seen.get(row.emailNormalized) ?? 0) + 1);
   }
   for (const row of prepared) {
-    if (row.report.disposition !== 'would_create') continue;
     if ((seen.get(row.emailNormalized) ?? 0) < 2) continue;
-    row.report.disposition = 'duplicate';
+    row.report.disposition = 'invalid';
     row.report.issues = [
+      ...(row.report.issues ?? []),
       {
         code: 'duplicate_in_input',
         path: 'email',
@@ -1996,8 +2036,15 @@ export async function createResponses({
       }
       // Covers both callers: one that pinned a revision, and one that took the
       // current revision at pre-flight and would otherwise write answers
-      // validated against a definition a republish has since replaced.
-      assertRevisionCurrent(locked, targetRevisionId);
+      // validated against a definition a republish has since replaced. Not
+      // `assertRevisionCurrent` — its message tells a filler to reload the page
+      // they are looking at, and nobody on this path is looking at a page.
+      if (locked.current_revision_id !== targetRevisionId) {
+        throw serviceError(
+          FORM_REVISION_STALE,
+          `The form is now on revision ${locked.current_revision_id}; re-read it with form_get and pass revision_id.`
+        );
+      }
 
       const pending = prepared.filter(row => row.report.disposition === 'would_create');
 
@@ -2066,7 +2113,7 @@ export async function createResponses({
             submitted_at: row.submittedAt ?? now,
             // Now, never the row's own timestamp — see the note above.
             verified_at: now,
-            added_by: addedBy ?? null,
+            added_by: addedBy,
             staff_status: row.staffStatus,
             staff_note: row.staffNote,
             // Neither belongs to a row nobody filled in: there is no browser
@@ -2080,7 +2127,12 @@ export async function createResponses({
 
       const committed = report('committed');
 
-      if (audit) {
+      // Only when something was actually written. A batch that committed and
+      // created nothing — every address already on the form — mutated nothing,
+      // and a CREATE row claiming otherwise would be a lie in the one place
+      // that has to be literal. The caller audits that case as the read it
+      // really was (see the tool's VIEW row).
+      if (committed.counts.created > 0) {
         await tx.auditLog.create({
           data: {
             user_id: audit.user_id,
@@ -2104,7 +2156,10 @@ export async function createResponses({
     },
     // Generous enough for two hundred rows plus the audit; Prisma's default is
     // five seconds, and every public submitter is queued behind this lock.
-    { timeout: 30_000 }
+    // `maxWait` is the wait for a POOL CONNECTION, before any of that starts:
+    // the 2 s default can fail a batch under pool pressure without it ever
+    // reaching the database.
+    { timeout: 30_000, maxWait: 10_000 }
   );
 }
 

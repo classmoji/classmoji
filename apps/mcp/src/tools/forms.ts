@@ -25,11 +25,14 @@
  * on the web, one level down at the response. `formResponse.service` carries no
  * authorization by documented design, so it is only ever as scoped as its caller.
  *
- * RESPONSES ARE ALLOW-LISTED. `formResponse.listByFormId` has no `select` and
- * therefore returns `draft_token` (a bearer credential for an anonymous
- * server-side partial) and `email_normalized`. Never spread a service row: every
- * payload here is built field-by-field by `formSummary` / `responseSummary`,
- * which mirror the web's `toResponseRow` and exclude both.
+ * RESPONSES ARE ALLOW-LISTED. `formResponse.listByFormId` selects through its
+ * own `RESPONSE_SELECT`, which already omits `draft_token` (a bearer credential
+ * for an anonymous server-side partial), but that is the service's guarantee to
+ * keep, not this file's to rely on. The rule here is unchanged and independent:
+ * never spread a service row or a service DTO. Every payload is built
+ * field-by-field — `formSummary` / `responseSummary` mirror the web's
+ * `toResponseRow`, and the create report is rebuilt key by key — so a column or
+ * a debugging field added upstream cannot ship to clients by default.
  *
  * DEFINITIONS ROUND-TRIP, THEY ARE NOT RE-PARSED. `parseFormDefinition` mints
  * field ids; running a stored definition through it a second time would be a
@@ -105,19 +108,24 @@ const FORM_RULE_CODES: ReadonlySet<string> = new Set([
   'FORM_ROSTER_TOO_LARGE',
   // …and the rules `formResponse.service` owns, reached by form_response_create.
   // Same treatment for the same reason: each is a documented refusal a caller can
-  // act on — republish and retry (STALE), raise the cap (CAP_REACHED), publish the
+  // act on — re-read and retry (STALE), raise the cap (CAP_REACHED), publish the
   // form (NOT_OPEN) — and its service message names the specific numbers. Kept as
   // literals rather than imported symbols, exactly like the form-service codes
   // above, so this file never pulls a module that opens a Prisma client.
+  //
+  // ONLY what `createResponses` can actually throw. The codes the fill path
+  // raises — FORM_CLOSED (adding to a closed form is allowed here),
+  // FORM_ALREADY_SUBMITTED (nothing is ever overwritten), and the two answer
+  // codes (a bad answer set is a per-row `invalid` in the report, never an
+  // exception) — are deliberately absent: listing an unreachable code invites
+  // the next reader to write a handler for a case that cannot happen.
+  // FORM_FIELD_ACCESS_VIOLATION is reachable from here too, and already
+  // carried above.
   'FORM_NOT_OPEN',
-  'FORM_CLOSED',
   'FORM_CAP_REACHED',
   'FORM_REVISION_STALE',
   'FORM_ACCESS_MISMATCH',
-  'FORM_ALREADY_SUBMITTED',
   'FORM_BATCH_INVALID',
-  'FORM_ANSWERS_INVALID',
-  'FORM_ANSWERS_TOO_LARGE',
 ]);
 
 /**
@@ -1014,9 +1022,9 @@ const CREATE_RESPONSES_MAX_BYTES = 2 * 1024 * 1024;
  *
  * Declared here rather than imported for the same reason `FormRow` and
  * `ResponseRow` are: the barrel exports `ClassmojiService`, not the service
- * modules' types. It is an allow-listed DTO the service builds field by field —
- * it carries no `draft_token`, no `email_normalized` and no service row — which
- * is why this is the one payload in this file returned whole.
+ * modules' types. It is what the service hands back — NOT what this tool
+ * returns. The payload is rebuilt from it key by key below, on the same
+ * allow-list rule every other payload in this file follows.
  */
 interface CreateResponsesReport {
   outcome: 'dry_run' | 'committed' | 'rejected';
@@ -1045,7 +1053,7 @@ interface FormResponseCreateArgs {
   responses: Array<{
     email: string;
     name?: string;
-    answers: unknown;
+    answers: Record<string, unknown>;
     submitted_at?: string;
     staff_status?: string;
     staff_note?: string;
@@ -1071,18 +1079,30 @@ export const formResponseCreateTool: ToolDefinition<FormResponseCreateArgs> = {
     'the caller’s to supply, or make the field optional with form_update and form_publish first.\n' +
     'NO EMAIL OF ANY KIND IS SENT and no magic link is minted: nobody is contacted.\n' +
     'NEVER OVERWRITES. An address already on the form comes back as `duplicate` with the existing ' +
-    'row’s id and state, untouched; two rows in one call sharing an address are both refused. ALL ' +
-    'OR NOTHING on validation — one invalid row rejects the whole batch, writes nothing, and ' +
-    'reports every row.\n' +
+    'row’s id and state, untouched. Two rows in ONE call sharing an address are a caller error, ' +
+    'not a duplicate: both come back `invalid` and the whole batch is rejected. ALL OR NOTHING on ' +
+    'validation — one invalid row rejects the whole batch, writes nothing, and reports every ' +
+    'row.\n' +
     'Respects response_cap: a batch that does not fit fails naming the cap, what is already taken ' +
     'and the overflow — raise it with form_update. Allowed on OPEN and on CLOSED forms (adding to ' +
     'a closed waitlist is the ordinary case); refused on a DRAFT form and on CLASSROOM-access ' +
     'forms.\n' +
     'RUN IT WITH dry_run: true FIRST — that validates every row, checks duplicates and the cap, ' +
     'and writes nothing. Every created row records the acting staff user as `added_by`, so a ' +
-    'staff-typed row is never mistaken for the respondent’s own testimony.',
+    'staff-typed row is never mistaken for the respondent’s own testimony.\n' +
+    'Every created row is stamped verified at creation time, which is what counts it toward the ' +
+    'cap — and means the person will NOT receive a courtesy verification email if they later type ' +
+    'the same address into the open form (they can still submit and get a link).\n' +
+    'THERE IS NO UNDO TOOL. Rows can be removed one at a time in the web responses view, so run ' +
+    'with dry_run first.',
   scope: 'write',
   roles: FORMS_STAFF,
+  // One call can write up to two hundred rows and holds the form's row lock the
+  // whole time — every public submitter queues behind it — so the default
+  // 20-burst / 30-per-minute bucket is far more than this tool should be
+  // allowed. 10 burst / 6 per minute still leaves room for the intended
+  // dry-run → fix → dry-run → commit loop.
+  rateLimit: { capacity: 10, refillPerSecond: 0.1 },
   inputSchema: {
     classroom: classroomArg,
     form_id: formIdArg,
@@ -1102,19 +1122,27 @@ export const formResponseCreateTool: ToolDefinition<FormResponseCreateArgs> = {
             .email()
             .describe('Respondent email; the identity key. One response per email per form.'),
           name: z.string().min(1).max(200).optional(),
+          // An OBJECT keyed by field id — the contract owns the values, so they
+          // stay `unknown`. Typed here rather than left wholly unknown so that
+          // a row with no `answers` at all is a schema error the caller sees
+          // immediately, instead of a batch the service has to reject row by row.
           answers: z
-            .unknown()
+            .record(z.string(), z.unknown())
             .describe(
               'Keyed by field id from form_get, contract-shaped: real numbers, real booleans, ' +
                 'option ids not labels. Validated exactly as the fill page validates.'
             ),
           submitted_at: z
             .string()
-            .datetime()
+            // `offset: true` because the service parses this with `new Date`,
+            // which honours an offset; refusing "…+02:00" would force callers
+            // to convert a real signup time by hand. Date-only strings are
+            // still refused — a queue position needs a time.
+            .datetime({ offset: true })
             .optional()
             .describe(
-              'ISO 8601. Orders the responses list. Defaults to now. Future timestamps are ' +
-                'rejected.'
+              'ISO 8601 date-time, with Z or an offset. Orders the responses list. Defaults to ' +
+                'now. Future timestamps are rejected.'
             ),
           staff_status: z.string().max(200).optional(),
           staff_note: z.string().max(5000).optional(),
@@ -1134,8 +1162,15 @@ export const formResponseCreateTool: ToolDefinition<FormResponseCreateArgs> = {
     // The aggregate cap. The raw zod shape the registry hands the SDK cannot
     // carry a cross-field rule, so it is applied in-handler (the same place
     // staff_add applies its OWNER-only confirm rule) — and before the form is
-    // read, so an oversized payload costs one string measurement, not a query.
-    if (JSON.stringify(args.responses).length > CREATE_RESPONSES_MAX_BYTES) {
+    // read, so an oversized payload costs one measurement, not a query.
+    //
+    // BYTES, not string length: a name in Chinese or an emoji in an answer is
+    // several bytes per character, and the thing being capped is what goes
+    // over the wire and into the column. `formContract.answersByteSize` sizes
+    // the per-response limit exactly this way.
+    if (
+      new TextEncoder().encode(JSON.stringify(args.responses)).length > CREATE_RESPONSES_MAX_BYTES
+    ) {
       throw new ToolError('invalid_params', 'Payload exceeds 2 MB');
     }
 
@@ -1161,35 +1196,99 @@ export const formResponseCreateTool: ToolDefinition<FormResponseCreateArgs> = {
         })),
         dryRun: args.dry_run ?? false,
         addedBy: ctx.viewer.userId,
-        // The audit row is written INSIDE the service's transaction — up to two
-        // hundred rows commit with their audit or not at all — so this tool
-        // does NOT call writeAudit. A dry run and a rejected batch audit
-        // nothing, matching the sibling tools, which record no row when nothing
-        // changed. The names are still the web's `forms.*` vocabulary, tagged
+        // The CREATE row is written INSIDE the service's transaction — up to
+        // two hundred responses commit with their audit or not at all — so
+        // this tool does NOT call writeAudit for it. Passed on every call,
+        // dry runs included: the parameter is required (there is no unaudited
+        // batch), and the service writes the row only when it actually created
+        // something. The names are the web's `forms.*` vocabulary, tagged
         // `via: 'mcp'`, exactly as every other tool here.
-        ...(args.dry_run
-          ? {}
-          : {
-              audit: {
-                user_id: ctx.viewer.userId,
-                classroom_id: classroom.classroomId,
-                role: classroom.role,
-                data: {
-                  tool: 'forms.responses.create',
-                  via: VIA_MCP,
-                  mcp_tool: 'form_response_create',
-                  form_slug: form.slug,
-                },
-              },
-            }),
+        audit: {
+          user_id: ctx.viewer.userId,
+          classroom_id: classroom.classroomId,
+          role: classroom.role,
+          data: {
+            tool: 'forms.responses.create',
+            via: VIA_MCP,
+            mcp_tool: 'form_response_create',
+            form_slug: form.slug,
+          },
+        },
       })
     )) as CreateResponsesReport;
 
-    // Returned whole, which no other payload in this file is: the report is
-    // already an allow-listed DTO the service assembles field by field — ids,
-    // dispositions, counts and issues — with no service row spread into it, so
-    // there is no `draft_token` or `email_normalized` to leak.
-    return ok({ success: report.outcome !== 'rejected', ...report });
+    /**
+     * The call that wrote nothing is still a READ, and reads of other people's
+     * submissions are recorded here — the same doctrine behind the VIEW audits
+     * on list_form_responses and form_response_get.
+     *
+     * A dry run answers, for every address the caller supplies, "is this person
+     * already on the form, and in what state" — with the existing row's id. That
+     * is per-address membership in an applicant list, obtainable in one call for
+     * two hundred addresses, and it would otherwise leave no trace at all. A
+     * commit that created nothing (every address already present) discloses
+     * exactly the same thing, and the service deliberately writes no CREATE row
+     * for it, so this is the only record it gets.
+     *
+     * Counts and ids ONLY — never the addresses themselves. The audit log is not
+     * the place to make a second copy of the list.
+     *
+     * A `rejected` outcome is not audited: it returns before any database
+     * lookup, so it reveals nothing about who is on the form.
+     */
+    const dryRun = report.outcome === 'dry_run';
+    if (dryRun || (report.outcome === 'committed' && report.counts.created === 0)) {
+      await writeAudit(ctx, {
+        resource_type: FORMS_RESOURCE,
+        resource_id: form.id,
+        action: 'VIEW',
+        data: {
+          tool: 'forms.responses.create',
+          via: VIA_MCP,
+          mcp_tool: 'form_response_create',
+          form_slug: form.slug,
+          dry_run: dryRun,
+          counts: report.counts,
+        },
+      });
+    }
+
+    // Built key by key, like every other payload in this file, and NOT spread
+    // from the report. The service's return value is a DTO today, but "it is
+    // safe to spread because of what it currently contains" is exactly the
+    // assumption this module's allow-list rule exists to refuse: a debugging
+    // field added to the service's row — a normalized address, a trace id —
+    // would otherwise ship to clients the moment it was added, with nothing
+    // here changing to say so.
+    return ok({
+      success: report.outcome !== 'rejected',
+      outcome: report.outcome,
+      revision_id: report.revision_id,
+      counts: {
+        would_create: report.counts.would_create,
+        created: report.counts.created,
+        duplicate: report.counts.duplicate,
+        invalid: report.counts.invalid,
+      },
+      rows: report.rows.map(row => ({
+        input_index: row.input_index,
+        email: row.email,
+        disposition: row.disposition,
+        ...(row.response_id !== undefined ? { response_id: row.response_id } : {}),
+        ...(row.existing_state !== undefined ? { existing_state: row.existing_state } : {}),
+        ...(row.issues
+          ? {
+              issues: row.issues.map(issue => ({
+                code: issue.code,
+                field_id: issue.field_id,
+                label: issue.label,
+                path: issue.path,
+                message: issue.message,
+              })),
+            }
+          : {}),
+      })),
+    });
   },
 };
 
