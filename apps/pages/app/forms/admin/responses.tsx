@@ -1076,6 +1076,22 @@ function ResponseTableRow({
               {chip.label}
             </span>
           ) : null}
+          {/* SOMEBODY ELSE TYPED THIS IN.
+              A staff-added row reads exactly like a submission otherwise, and
+              the difference matters: one is what a person said, the other is
+              what a member of staff entered on their behalf. No new column —
+              the table already fights for width — so it rides in the Name cell,
+              which is where a reader is already looking to decide whose record
+              this is. */}
+          {row.addedBy ? (
+            <span
+              title="A member of staff created this record; the person did not fill the form in."
+              data-testid={`forms-added-by-chip-${row.id}`}
+              className="max-w-40 truncate rounded-full bg-gray-200 px-2 py-0.5 text-[10px] font-medium text-gray-600 dark:bg-gray-700 dark:text-gray-300"
+            >
+              Added by {row.addedByName ?? 'staff'}
+            </span>
+          ) : null}
           {/* WE NEVER REACHED THEM, ON THE ROW.
               An Unverified chip says somebody did not finish; this says we were
               never able to reach them, which is the difference between a person
@@ -1210,6 +1226,14 @@ function ResponseDrawer({
             <dt className="text-gray-500 dark:text-gray-400">State</dt>
             <dd className="text-gray-800 dark:text-gray-100">
               {chip ? `${chip.label} (${row.submissionState})` : row.submissionState}
+            </dd>
+            {/* ALWAYS shown, em dash and all. The row that says nobody added it
+                is the row that teaches a reader the distinction exists — hide
+                it on the common case and "Added by" only ever appears as a
+                surprise, on the rows where it is least welcome. */}
+            <dt className="text-gray-500 dark:text-gray-400">Added by</dt>
+            <dd data-testid="forms-response-added-by" className="text-gray-800 dark:text-gray-100">
+              {row.addedBy ? (row.addedByName ?? row.addedBy) : '—'}
             </dd>
             {/* Only for a row that is genuinely going. A labelled one is exempt
                 from the sweep, so offering it a date would be a false promise

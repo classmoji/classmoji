@@ -47,6 +47,22 @@ export interface ResponseRow {
   staffNote: string | null;
   /** The revision this response was filled against — the drawer renders it. */
   revisionId: string;
+  /**
+   * The staff user who created this row on the respondent's behalf. Null means
+   * the respondent submitted it themselves.
+   *
+   * On the surface because a staff-typed record and a respondent's own words
+   * are not the same kind of evidence, and nothing else on the row separates
+   * them: `revision_id` is documented as "what the person actually saw", which
+   * for a staff-added row is not true.
+   */
+  addedBy: string | null;
+  /**
+   * That staff user's display name, resolved once per load. Null when nobody
+   * added the row, and null when the account no longer resolves to a name — the
+   * table and the CSV each fall back rather than printing a bare uuid.
+   */
+  addedByName: string | null;
   answers: Record<string, unknown>;
   resolvedContext: unknown;
   /**
@@ -140,30 +156,61 @@ export async function requireFormForResponses(
   };
 }
 
+/**
+ * Names for the staff accounts that added rows on somebody's behalf.
+ *
+ * ONE query for the distinct ids on the page, not one per row: a batch import
+ * is the whole reason `added_by` exists, so a form can easily carry two hundred
+ * rows added by the same person. A user whose account has since been deleted
+ * simply is not in the map, and the row falls back to its id.
+ */
+async function addedByNames(ids: Array<string | null>): Promise<Map<string, string>> {
+  const distinct = [...new Set(ids.filter((id): id is string => Boolean(id)))];
+  if (distinct.length === 0) return new Map();
+
+  const users = await prisma.user.findMany({
+    where: { id: { in: distinct } },
+    select: { id: true, name: true, login: true, email: true },
+  });
+
+  return new Map(
+    users.map(user => [user.id, user.name || user.login || user.email || user.id] as const)
+  );
+}
+
 /** Every response to the form, FIFO, serialized for the client. */
 export async function loadResponseRows(formId: string): Promise<ResponseRow[]> {
   const rows = await ClassmojiService.formResponse.listByFormId(formId);
-  return rows.map(toResponseRow);
+  const names = await addedByNames(rows.map(row => row.added_by));
+  return rows.map(row => toResponseRow(row, names));
 }
 
-export function toResponseRow(row: {
-  id: string;
-  name: string | null;
-  email: string;
-  user_id: string | null;
-  submitted_at: Date;
-  verified_at: Date | null;
-  created_at?: Date;
-  updated_at: Date;
-  submission_state: string;
-  staff_status: string | null;
-  staff_note: string | null;
-  revision_id: string;
-  answers: unknown;
-  resolved_context: unknown;
-  /** The newest send's delivery outcome, when the caller selected it. */
-  tokens?: Array<{ delivery_state: string | null; delivery_detail: string | null }>;
-}): ResponseRow {
+export function toResponseRow(
+  row: {
+    id: string;
+    name: string | null;
+    email: string;
+    user_id: string | null;
+    submitted_at: Date;
+    verified_at: Date | null;
+    created_at?: Date;
+    updated_at: Date;
+    submission_state: string;
+    staff_status: string | null;
+    staff_note: string | null;
+    revision_id: string;
+    answers: unknown;
+    resolved_context: unknown;
+    /** The staff user who typed this row in; null when the respondent did. */
+    added_by?: string | null;
+    /** The newest send's delivery outcome, when the caller selected it. */
+    tokens?: Array<{ delivery_state: string | null; delivery_detail: string | null }>;
+  },
+  /** id → display name, from `addedByNames`. Empty is fine: every row falls back. */
+  names: Map<string, string> = new Map()
+): ResponseRow {
+  const addedBy = row.added_by ?? null;
+
   return {
     id: row.id,
     name: row.name,
@@ -180,6 +227,8 @@ export function toResponseRow(row: {
     staffStatus: row.staff_status,
     staffNote: row.staff_note,
     revisionId: row.revision_id,
+    addedBy,
+    addedByName: addedBy ? (names.get(addedBy) ?? null) : null,
     answers: (row.answers ?? {}) as Record<string, unknown>,
     resolvedContext: row.resolved_context ?? null,
     /**
