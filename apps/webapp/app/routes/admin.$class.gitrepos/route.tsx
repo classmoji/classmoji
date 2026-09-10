@@ -11,6 +11,7 @@ import { useDebounce } from '@uidotdev/usehooks';
 
 import { ActionTypes } from '~/constants';
 import { ClassmojiService, getGitProvider, GitHubProvider } from '@classmoji/services';
+import InstallAppBanner from '~/components/features/InstallAppBanner';
 import { useGlobalFetcher } from '~/hooks';
 import { waitForRunCompletion } from '~/utils/helpers';
 import { requireClassroomAdmin, assertClassroomMutationAllowed } from '~/utils/routeAuth.server';
@@ -41,6 +42,17 @@ async function fetchOrgRepositories(
   { page = 1, pageSize = 25, search = '' }
 ) {
   const gitOrgLogin = gitOrganization?.login;
+
+  // This whole page is GitHub's GraphQL API. A GitLab/Gitea classroom has no
+  // installation id and never will, so the "install the GitHub App" answer
+  // below is advice it can never act on — say what is actually true instead.
+  if (gitOrganization && gitOrganization.provider !== 'GITHUB') {
+    return {
+      repositories: [],
+      totalCount: 0,
+      error: 'Repository listing is only available for GitHub organizations.',
+    };
+  }
 
   if (!gitOrganization?.github_installation_id) {
     return {
@@ -235,6 +247,13 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
       search,
     }),
     gitOrgLogin,
+    // With no installation id every repository call fails in the same place, and
+    // the resulting "couldn't load repositories" describes a symptom. Surface the
+    // fixable cause so the page can offer the repair instead of the dead end.
+    appInstalled: Boolean(classroom.git_organization?.github_installation_id),
+    isExample: classroom.is_example,
+    gitProvider: classroom.git_organization?.provider ?? null,
+    githubAppName: process.env.GITHUB_APP_NAME,
     page,
     pageSize,
     search,
@@ -264,6 +283,13 @@ interface RepositoriesTableProps {
   search: string;
   onDelete: (record: { name: string }) => void;
   loading: boolean;
+  /**
+   * The org has no App installation. The page is already showing the install
+   * banner, which names the cause and offers the fix, so the generic
+   * "couldn't load repositories … try reinstalling" block below is suppressed
+   * rather than shown twice with the vaguer wording second.
+   */
+  installMissing: boolean;
 }
 
 const RepositoriesTable = ({
@@ -274,6 +300,7 @@ const RepositoriesTable = ({
   search,
   onDelete,
   loading,
+  installMissing,
 }: RepositoriesTableProps) => {
   const { repositories, totalCount, lastRefresh, error } = data;
   const [searchParams, setSearchParams] = useSearchParams();
@@ -368,7 +395,7 @@ const RepositoriesTable = ({
       )}
 
       {/* Error state */}
-      {error && (
+      {error && !installMissing && (
         <div className="mb-4 rounded-xl bg-rose-50/70 dark:bg-rose-900/20 ring-1 ring-rose-200 dark:ring-rose-800/60 p-4 flex items-start gap-3">
           <div className="shrink-0 mt-0.5 text-rose-600 dark:text-rose-300">
             <IconAlertTriangle size={18} strokeWidth={2} />
@@ -441,7 +468,20 @@ const RepositoriesTable = ({
 };
 
 const GithubRepositories = ({ loaderData }: Route.ComponentProps) => {
-  const { repositoriesPromise, gitOrgLogin, page, pageSize, search } = loaderData;
+  const {
+    repositoriesPromise,
+    gitOrgLogin,
+    appInstalled,
+    isExample,
+    gitProvider,
+    githubAppName,
+    page,
+    pageSize,
+    search,
+  } = loaderData;
+  const showInstallBanner =
+    !appInstalled && !isExample && Boolean(gitOrgLogin) && gitProvider === 'GITHUB';
+  const { class: classSlug } = useParams();
   const [searchParams, setSearchParams] = useSearchParams();
   const { revalidate, state } = useRevalidator();
   const [localSearch, setLocalSearch] = useState(search);
@@ -528,6 +568,16 @@ const GithubRepositories = ({ loaderData }: Route.ComponentProps) => {
         </div>
       </div>
 
+      {showInstallBanner && (
+        <div className="mb-4">
+          <InstallAppBanner
+            orgLogin={gitOrgLogin!}
+            githubAppName={githubAppName}
+            classSlug={classSlug!}
+          />
+        </div>
+      )}
+
       <TriggerProgress
         operation="DELETE_REPOS"
         validIdentifiers={['delete_git_repo']}
@@ -548,6 +598,7 @@ const GithubRepositories = ({ loaderData }: Route.ComponentProps) => {
                 search={search}
                 onDelete={deleteSingleRepository}
                 loading={isLoading}
+                installMissing={showInstallBanner}
               />
             )}
           </Await>

@@ -131,8 +131,9 @@ export const action = checkAuth(async ({ request }: { request: Request }) => {
     return { error: 'Classroom name is required' };
   }
 
-  // Get GitOrganization
-  const gitOrg = await getPrisma().gitOrganization.findUnique({
+  // Get GitOrganization. Reassigned by the installation guard below, which may
+  // hand back a repaired row carrying the installation id (and current login).
+  let gitOrg = await getPrisma().gitOrganization.findUnique({
     where: { id: git_org_id },
   });
 
@@ -166,6 +167,61 @@ export const action = checkAuth(async ({ request }: { request: Request }) => {
     return {
       error: 'Unable to verify organization membership',
     };
+  }
+
+  // An org with no installation id cannot be provisioned: `getGitProvider`
+  // throws on it, and it throws AFTER the transaction has already created the
+  // classroom, its settings and the owner membership — leaving a half-built
+  // classroom that also holds the slug the retry wants. Refuse here instead.
+  //
+  // The id is missing far more often than the app is: rows created GitHub-free
+  // by the Classroom ZIP import never had one, and a stale `installation.deleted`
+  // could clear one that a reinstall had replaced. So ask GitHub before
+  // refusing — most of these are one lookup away from working.
+  if (gitOrg.provider === 'GITHUB' && !gitOrg.github_installation_id) {
+    // `bypassCooldown` because this is a deliberate form submit, not a poll.
+    // The service's 15 s per-org cooldown exists to stop a button being mashed;
+    // honouring it here would have refused the create with "GitHub is rate
+    // limiting" when GitHub had never been asked — the instructor would have
+    // been told to wait on a limit that only ever lived in this process. One
+    // GitHub call per create is fine, and the in-flight map still collapses
+    // genuinely simultaneous callers into one request.
+    const repair = await ClassmojiService.gitOrganization.repairInstallation(gitOrg.id, {
+      bypassCooldown: true,
+    });
+
+    if (repair.status === 'connected' || repair.status === 'already-connected') {
+      if (!repair.org?.github_installation_id) {
+        return {
+          error: `Connect the Classmoji GitHub app to ${gitOrg.login} before creating a classroom.`,
+        };
+      }
+
+      // The org admin check above ran against the login as it stood BEFORE the
+      // repair. A repaired row can come back under a different login (a rename
+      // GitHub reports on the installation), and adopting it here would mean
+      // provisioning into an organization nobody verified this user administers.
+      // Refuse and make the next attempt re-run the check against the new name.
+      if (repair.org.login !== gitOrg.login) {
+        return {
+          error:
+            'The GitHub organization for this classroom has changed name; reload and try again.',
+        };
+      }
+
+      gitOrg = repair.org;
+    } else if (repair.status === 'rate-limited') {
+      // With the local cooldown bypassed, this can now only be GitHub's own
+      // 403/429 (a `GitHubRateLimitedError` out of the lookup), so the sentence
+      // is allowed to name GitHub — which is what it always claimed.
+      return {
+        error: `GitHub is rate limiting installation checks; try again in ${repair.retryAfterSeconds} seconds.`,
+      };
+    } else {
+      return {
+        error: `Connect the Classmoji GitHub app to ${gitOrg.login} before creating a classroom.`,
+      };
+    }
   }
 
   // Slug: prefer client-provided (user override / suggestion) when present, else derive from name.

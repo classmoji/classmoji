@@ -1,10 +1,11 @@
 import { Suspense } from 'react';
-import { Await } from 'react-router';
+import { Await, useParams } from 'react-router';
 import { Skeleton } from 'antd';
 
 import type { Route } from './+types/route';
 import { ClassmojiService } from '@classmoji/services';
 import { requireClassroomTeachingTeam } from '~/utils/routeAuth.server';
+import InstallAppBanner from '~/components/features/InstallAppBanner';
 import GradingTabsCard from '../admin.$class.dashboard/GradingTabsCard';
 import {
   MyDayQueue,
@@ -21,10 +22,14 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
   // This loader is served under both /assistant and /teacher (which re-exports
   // it), and the name describes the resource, not the prefix, so it is right
   // for both consumers.
-  const { userId, classroom } = await requireClassroomTeachingTeam(request, classSlug!, {
-    resourceType: 'STAFF_DASHBOARD',
-    action: 'view_dashboard',
-  });
+  const { userId, classroom, membership } = await requireClassroomTeachingTeam(
+    request,
+    classSlug!,
+    {
+      resourceType: 'STAFF_DASHBOARD',
+      action: 'view_dashboard',
+    }
+  );
 
   const cockpitPromise = Promise.all([
     ClassmojiService.taDashboard.overdueQueue(userId, classroom.id),
@@ -41,6 +46,16 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
       ClassmojiService.gitRepoAssignmentGrader.findGradersProgress(classroom.id),
     ]),
     cockpit: cockpitPromise,
+    // Teachers cannot browse /admin (that namespace is owner-only), so this is
+    // the only dashboard where a teacher can be shown that their classroom's
+    // GitHub App is missing. Assistants get the same loader and must NOT see it:
+    // they can neither install the app on the org nor pass the repair gate.
+    role: membership?.role ?? null,
+    appInstalled: Boolean(classroom.git_organization?.github_installation_id),
+    isExample: classroom.is_example,
+    gitOrgLogin: classroom.git_organization?.login ?? null,
+    gitProvider: classroom.git_organization?.provider ?? null,
+    githubAppName: process.env.GITHUB_APP_NAME,
   };
 };
 
@@ -61,23 +76,36 @@ const StatItem = ({ label, value, subtitle, valueColor }: StatItemProps) => (
       >
         {value}
       </div>
-      {subtitle && (
-        <div className="mt-0.5 text-xs text-ink-3 truncate">
-          {subtitle}
-        </div>
-      )}
+      {subtitle && <div className="mt-0.5 text-xs text-ink-3 truncate">{subtitle}</div>}
     </div>
   </div>
 );
 
 const AssistantDashboard = ({ loaderData }: Route.ComponentProps) => {
-  const { data, cockpit } = loaderData;
+  const { data, cockpit, role, appInstalled, isExample, gitOrgLogin, gitProvider, githubAppName } =
+    loaderData;
+  const { class: classSlug } = useParams();
+
+  // Owners land here too when they browse under /teacher; assistants never
+  // see it (they can't pass the repair gate).
+  const showInstallBanner =
+    (role === 'TEACHER' || role === 'OWNER') &&
+    !appInstalled &&
+    !isExample &&
+    Boolean(gitOrgLogin) &&
+    gitProvider === 'GITHUB';
 
   return (
     <div className="min-h-full flex flex-col gap-4">
-      <h1 className="mt-2 mb-1 text-lg font-semibold text-ink-1">
-        Dashboard
-      </h1>
+      <h1 className="mt-2 mb-1 text-lg font-semibold text-ink-1">Dashboard</h1>
+
+      {showInstallBanner && (
+        <InstallAppBanner
+          orgLogin={gitOrgLogin!}
+          githubAppName={githubAppName}
+          classSlug={classSlug!}
+        />
+      )}
 
       <Suspense fallback={<Skeleton active />}>
         <Await resolve={data} errorElement={null}>

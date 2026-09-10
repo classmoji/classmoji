@@ -13,45 +13,73 @@ const webhooks = new Webhooks({
   secret: githubWebhookSecret,
 });
 
+/**
+ * Handlers keyed `${X-GitHub-Event}.${action}`.
+ *
+ * `action` alone does not identify a webhook: GitHub reuses the same words
+ * across unrelated events. `created` is sent for an installation, a repository,
+ * a project card, an issue comment and more; `deleted` likewise. Dispatching on
+ * it alone made this router's job to *guess* which event it was looking at from
+ * the payload's shape — and one wrong guess writes or clears an org's GitHub
+ * App installation id. The event name is in the header; use it.
+ *
+ * The payload guards that remain answer a different question — "does this
+ * delivery carry the object the task needs" — and are not a substitute for the
+ * event name.
+ */
 const githubWebhookHandlers: Record<string, (data: WebhookEvent) => Promise<void>> = {
-  closed: async (data: WebhookEvent) => {
+  // Assignment repos are tracked as issues in the classroom's org.
+  'issues.closed': async (data: WebhookEvent) => {
     if ('issue' in data && data.issue) {
       await Tasks.repositoryAssignmentClosedHandlerTask.trigger(data);
     }
   },
 
-  member_added: async (data: WebhookEvent) => {
+  'issues.deleted': async (data: WebhookEvent) => {
+    if ('issue' in data && data.issue) {
+      await Tasks.repositoryAssignmentDeletedHandlerTask.trigger(data);
+    }
+  },
+
+  // A brand-new member of a classroom's GitHub org.
+  'organization.member_added': async (data: WebhookEvent) => {
     await Tasks.memberAddedHandlerTask.trigger(
       data as unknown as Parameters<typeof Tasks.memberAddedHandlerTask.trigger>[0]
     );
   },
 
-  created: async (data: WebhookEvent) => {
-    if (
-      !('repository' in data) &&
-      !('issues' in data) &&
-      'installation' in data &&
-      data.installation
-    ) {
+  'installation.created': async (data: WebhookEvent) => {
+    if ('installation' in data && data.installation) {
       await Tasks.newInstallationHandlerTask.trigger(
         data as unknown as Parameters<typeof Tasks.newInstallationHandlerTask.trigger>[0]
       );
     }
   },
 
-  deleted: async (data: WebhookEvent) => {
-    if ('issue' in data && data.issue) {
-      await Tasks.repositoryAssignmentDeletedHandlerTask.trigger(data);
-    }
-
-    if (
-      'installation' in data &&
-      data.installation &&
-      !('issue' in data) &&
-      !('repository' in data)
-    ) {
+  'installation.deleted': async (data: WebhookEvent) => {
+    if ('installation' in data && data.installation) {
       await Tasks.appUninstalledHandlerTask.trigger(
         data as unknown as Parameters<typeof Tasks.appUninstalledHandlerTask.trigger>[0]
+      );
+    }
+  },
+
+  // A suspended installation still exists but mints no tokens, so the org has
+  // to stop claiming it is connected — and `unsuspend` has to put the id back,
+  // or a suspend/unsuspend round trip silently leaves the org disconnected
+  // forever with nothing in the log to say why.
+  'installation.suspend': async (data: WebhookEvent) => {
+    if ('installation' in data && data.installation) {
+      await Tasks.appSuspendedHandlerTask.trigger(
+        data as unknown as Parameters<typeof Tasks.appSuspendedHandlerTask.trigger>[0]
+      );
+    }
+  },
+
+  'installation.unsuspend': async (data: WebhookEvent) => {
+    if ('installation' in data && data.installation) {
+      await Tasks.appUnsuspendedHandlerTask.trigger(
+        data as unknown as Parameters<typeof Tasks.appUnsuspendedHandlerTask.trigger>[0]
       );
     }
   },
@@ -200,16 +228,20 @@ export default async function githubRoutes(fastify: FastifyInstance): Promise<vo
     },
     handler: async function handler(request: FastifyRequest, reply: FastifyReply) {
       const data = request.body as WebhookEvent;
+      const event = request.headers['x-github-event'];
 
       // `push` has no `action` field, so the handler map below can never see
       // it — the event name lives in the header instead.
-      if (request.headers['x-github-event'] === 'push') {
+      if (event === 'push') {
         await handlePush(data as PushEventPayload);
         return reply.status(200).send({ success: true });
       }
 
       const action = 'action' in data ? data.action : undefined;
-      const handler = action ? githubWebhookHandlers[action] : undefined;
+      const handler =
+        typeof event === 'string' && action
+          ? githubWebhookHandlers[`${event}.${action}`]
+          : undefined;
 
       if (handler) {
         await handler(data);
