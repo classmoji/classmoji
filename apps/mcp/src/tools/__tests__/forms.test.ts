@@ -304,6 +304,26 @@ describe('forms tool definitions', () => {
       'staff_status',
     ]);
   });
+
+  /**
+   * A tool description is not free text — the client cuts it. Claude Code
+   * documents truncating at 2 KB, and the claude.ai connector is worse: it
+   * DROPS the tool. On 2026-09-10 form_response_create shipped with a
+   * 2,051-byte description and simply never appeared in the connector's tool
+   * list, while its nine siblings — all under 800 bytes — loaded fine.
+   *
+   * BYTES, not characters: a curly apostrophe costs three of them, so a
+   * description can pass a length check and still blow the limit on the wire.
+   * 1500 sits well under the cut and still leaves room above every tool on
+   * this server (the longest, staff_add, is ~1,280).
+   */
+  it('keeps every description well under the 2 KB a client will cut', () => {
+    const oversize = ALL_TOOLS.map(tool => ({
+      name: tool.name,
+      bytes: new TextEncoder().encode(tool.description).length,
+    })).filter(tool => tool.bytes > 1500);
+    expect(oversize).toEqual([]);
+  });
 });
 
 // ─── The Pro gate (in-handler, on reads too) ────────────────────────────────
