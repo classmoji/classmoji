@@ -2,7 +2,8 @@
  * Forms tools — the MCP face of the Classmoji Forms surface.
  *
  * list_forms / form_get / form_create / form_update / form_publish /
- * form_delete / list_form_responses / form_response_get / form_response_update.
+ * form_delete / list_form_responses / form_response_get / form_response_create /
+ * form_response_update.
  *
  * ROUTE-DERIVED TIER: the web surface is the forms subtree in apps/pages, gated
  * by `assertFormAdmin` (apps/pages/app/utils/formAuth.server.ts), which composes
@@ -102,6 +103,21 @@ const FORM_RULE_CODES: ReadonlySet<string> = new Set([
   'FORM_SLUG_RESERVED',
   'FORM_SLUG_UNAVAILABLE',
   'FORM_ROSTER_TOO_LARGE',
+  // …and the rules `formResponse.service` owns, reached by form_response_create.
+  // Same treatment for the same reason: each is a documented refusal a caller can
+  // act on — republish and retry (STALE), raise the cap (CAP_REACHED), publish the
+  // form (NOT_OPEN) — and its service message names the specific numbers. Kept as
+  // literals rather than imported symbols, exactly like the form-service codes
+  // above, so this file never pulls a module that opens a Prisma client.
+  'FORM_NOT_OPEN',
+  'FORM_CLOSED',
+  'FORM_CAP_REACHED',
+  'FORM_REVISION_STALE',
+  'FORM_ACCESS_MISMATCH',
+  'FORM_ALREADY_SUBMITTED',
+  'FORM_BATCH_INVALID',
+  'FORM_ANSWERS_INVALID',
+  'FORM_ANSWERS_TOO_LARGE',
 ]);
 
 /**
@@ -187,6 +203,8 @@ interface ResponseRow {
   revision_id: string;
   answers: unknown;
   resolved_context: unknown;
+  /** The staff user who typed this row in; null when the respondent filled it. */
+  added_by?: string | null;
   /** Present on the service row and deliberately never echoed. */
   draft_token?: string | null;
   email_normalized?: string;
@@ -268,6 +286,12 @@ function responseSummary(row: ResponseRow) {
     staff_status: row.staff_status ?? null,
     staff_note: row.staff_note ?? null,
     revision_id: row.revision_id,
+    // Who wrote the row, when it was not the respondent. Null is the ordinary
+    // case — somebody filled the form themselves — and a user id means staff
+    // typed it in with form_response_create. A reader comparing two responses
+    // has no other way to tell testimony from data entry: `revision_id` says
+    // "what the person saw", which for a staff-added row is not true of anyone.
+    added_by: row.added_by ?? null,
     answers: (row.answers ?? {}) as Record<string, unknown>,
     resolved_context: ClassmojiService.formTeam.withoutTargetEmails(row.resolved_context ?? null),
   };
@@ -964,6 +988,208 @@ export const formResponseGetTool: ToolDefinition<FormResponseGetArgs> = {
       definition,
       response: responseSummary(row),
     });
+  },
+};
+
+// ─── form_response_create ───────────────────────────────────────────────────
+
+/**
+ * Rows one call may carry.
+ *
+ * The literal, not the import: `CREATE_RESPONSES_MAX` is exported by
+ * `formResponse.service` but not re-exported by the `@classmoji/services`
+ * barrel, and reaching it through `ClassmojiService.formResponse` at module
+ * scope would make this schema depend on a service namespace being present
+ * before any handler runs. The service asserts the same bound itself and throws
+ * FORM_BATCH_INVALID, so the two cannot silently disagree in the dangerous
+ * direction — this one only ever refuses earlier.
+ */
+const CREATE_RESPONSES_MAX = 200;
+
+/** 2 MB across the whole batch; the contract's own per-response limit is 256 KiB. */
+const CREATE_RESPONSES_MAX_BYTES = 2 * 1024 * 1024;
+
+/**
+ * The report `formResponse.createResponses` returns, mirrored locally.
+ *
+ * Declared here rather than imported for the same reason `FormRow` and
+ * `ResponseRow` are: the barrel exports `ClassmojiService`, not the service
+ * modules' types. It is an allow-listed DTO the service builds field by field —
+ * it carries no `draft_token`, no `email_normalized` and no service row — which
+ * is why this is the one payload in this file returned whole.
+ */
+interface CreateResponsesReport {
+  outcome: 'dry_run' | 'committed' | 'rejected';
+  revision_id: string;
+  counts: { would_create: number; created: number; duplicate: number; invalid: number };
+  rows: Array<{
+    input_index: number;
+    email: string;
+    disposition: 'would_create' | 'created' | 'duplicate' | 'invalid';
+    response_id?: string;
+    existing_state?: string;
+    issues?: Array<{
+      code: string;
+      field_id?: string;
+      label?: string;
+      path: string;
+      message: string;
+    }>;
+  }>;
+}
+
+interface FormResponseCreateArgs {
+  classroom: string;
+  form_id: string;
+  revision_id?: string;
+  responses: Array<{
+    email: string;
+    name?: string;
+    answers: unknown;
+    submitted_at?: string;
+    staff_status?: string;
+    staff_note?: string;
+  }>;
+  dry_run?: boolean;
+}
+
+export const formResponseCreateTool: ToolDefinition<FormResponseCreateArgs> = {
+  name: 'form_response_create',
+  // destructive false: nothing is ever overwritten — an existing row for the same
+  // email is reported, not replaced. idempotent true: the same batch twice creates
+  // nothing the second time. openWorld false: no mail, nothing leaves the DB.
+  annotations: { destructive: false, idempotent: true, openWorld: false },
+  title: 'Add responses to a form',
+  description:
+    'Creates one or many responses on a PUBLIC form, exactly as if each respondent had filled it ' +
+    'in themselves — how a list of people who signed up somewhere else becomes rows on the form. ' +
+    'Staff only (owner or teacher); requires a Pro subscription. It is not an importer and knows ' +
+    'nothing about where the rows came from.\n' +
+    'ANSWERS ARE VALIDATED BY THE FILL PAGE’S OWN CONTRACT: keyed by field id, options by id, ' +
+    'required fields required, no coercion — "7" where a number belongs is a mistake, not a value ' +
+    'to fix up. Read the field and option ids from form_get. A row lacking a required answer is ' +
+    'the caller’s to supply, or make the field optional with form_update and form_publish first.\n' +
+    'NO EMAIL OF ANY KIND IS SENT and no magic link is minted: nobody is contacted.\n' +
+    'NEVER OVERWRITES. An address already on the form comes back as `duplicate` with the existing ' +
+    'row’s id and state, untouched; two rows in one call sharing an address are both refused. ALL ' +
+    'OR NOTHING on validation — one invalid row rejects the whole batch, writes nothing, and ' +
+    'reports every row.\n' +
+    'Respects response_cap: a batch that does not fit fails naming the cap, what is already taken ' +
+    'and the overflow — raise it with form_update. Allowed on OPEN and on CLOSED forms (adding to ' +
+    'a closed waitlist is the ordinary case); refused on a DRAFT form and on CLASSROOM-access ' +
+    'forms.\n' +
+    'RUN IT WITH dry_run: true FIRST — that validates every row, checks duplicates and the cap, ' +
+    'and writes nothing. Every created row records the acting staff user as `added_by`, so a ' +
+    'staff-typed row is never mistaken for the respondent’s own testimony.',
+  scope: 'write',
+  roles: FORMS_STAFF,
+  inputSchema: {
+    classroom: classroomArg,
+    form_id: formIdArg,
+    revision_id: z
+      .string()
+      .uuid()
+      .optional()
+      .describe(
+        'From form_get. When given, the form must still be on this revision or the call fails ' +
+          'with FORM_REVISION_STALE. Pass it on a commit that follows a dry run.'
+      ),
+    responses: z
+      .array(
+        z.object({
+          email: z
+            .string()
+            .email()
+            .describe('Respondent email; the identity key. One response per email per form.'),
+          name: z.string().min(1).max(200).optional(),
+          answers: z
+            .unknown()
+            .describe(
+              'Keyed by field id from form_get, contract-shaped: real numbers, real booleans, ' +
+                'option ids not labels. Validated exactly as the fill page validates.'
+            ),
+          submitted_at: z
+            .string()
+            .datetime()
+            .optional()
+            .describe(
+              'ISO 8601. Orders the responses list. Defaults to now. Future timestamps are ' +
+                'rejected.'
+            ),
+          staff_status: z.string().max(200).optional(),
+          staff_note: z.string().max(5000).optional(),
+        })
+      )
+      .min(1)
+      .max(CREATE_RESPONSES_MAX)
+      .describe('One to 200 responses. A single response is a batch of one.'),
+    dry_run: z
+      .boolean()
+      .optional()
+      .describe('Validate every row, check duplicates and the cap, write nothing. Run this first.'),
+  },
+  handler: async (args, ctx) => {
+    await assertFormsSurfaceEnabled(ctx);
+
+    // The aggregate cap. The raw zod shape the registry hands the SDK cannot
+    // carry a cross-field rule, so it is applied in-handler (the same place
+    // staff_add applies its OWNER-only confirm rule) — and before the form is
+    // read, so an oversized payload costs one string measurement, not a query.
+    if (JSON.stringify(args.responses).length > CREATE_RESPONSES_MAX_BYTES) {
+      throw new ToolError('invalid_params', 'Payload exceeds 2 MB');
+    }
+
+    // S1 first: `formResponse.service` carries no authorization by documented
+    // design, so the form id it is handed has to be one this classroom owns.
+    const form = await loadFormInClassroom(args.form_id, ctx);
+    const classroom = requireClassroomCtx(ctx);
+
+    // Field by field, in the service's own vocabulary — no caller argument is
+    // ever forwarded as an object. `addedBy` and the audit's actor come from
+    // the authorized context, never from input.
+    const report = (await withFormRules(() =>
+      ClassmojiService.formResponse.createResponses({
+        formId: form.id,
+        revisionId: args.revision_id,
+        responses: args.responses.map(row => ({
+          email: row.email,
+          name: row.name ?? null,
+          answers: row.answers,
+          submittedAt: row.submitted_at ?? null,
+          staffStatus: row.staff_status ?? null,
+          staffNote: row.staff_note ?? null,
+        })),
+        dryRun: args.dry_run ?? false,
+        addedBy: ctx.viewer.userId,
+        // The audit row is written INSIDE the service's transaction — up to two
+        // hundred rows commit with their audit or not at all — so this tool
+        // does NOT call writeAudit. A dry run and a rejected batch audit
+        // nothing, matching the sibling tools, which record no row when nothing
+        // changed. The names are still the web's `forms.*` vocabulary, tagged
+        // `via: 'mcp'`, exactly as every other tool here.
+        ...(args.dry_run
+          ? {}
+          : {
+              audit: {
+                user_id: ctx.viewer.userId,
+                classroom_id: classroom.classroomId,
+                role: classroom.role,
+                data: {
+                  tool: 'forms.responses.create',
+                  via: VIA_MCP,
+                  mcp_tool: 'form_response_create',
+                  form_slug: form.slug,
+                },
+              },
+            }),
+      })
+    )) as CreateResponsesReport;
+
+    // Returned whole, which no other payload in this file is: the report is
+    // already an allow-listed DTO the service assembles field by field — ids,
+    // dispositions, counts and issues — with no service row spread into it, so
+    // there is no `draft_token` or `email_normalized` to leak.
+    return ok({ success: report.outcome !== 'rejected', ...report });
   },
 };
 
