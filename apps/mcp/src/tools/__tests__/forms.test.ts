@@ -1,7 +1,7 @@
 /**
  * Unit tests for the forms tool batch — list_forms / form_get / form_create /
  * form_update / form_publish / form_delete / list_form_responses /
- * form_response_get / form_response_update.
+ * form_response_get / form_response_create / form_response_update.
  *
  * Security focus (the S1/S4 audit posture, applied to a surface that holds
  * applicant PII):
@@ -46,6 +46,7 @@ const mocks = vi.hoisted(() => ({
   responseListByFormId: vi.fn(),
   responseStatusLabels: vi.fn(),
   responseUpdateStaff: vi.fn(),
+  responseCreate: vi.fn(),
   withoutTargetEmails: vi.fn(),
   auditCreate: vi.fn(),
 }));
@@ -73,6 +74,7 @@ vi.mock('@classmoji/services', () => ({
       listByFormId: (...a: unknown[]) => mocks.responseListByFormId(...a),
       statusLabelSuggestions: (...a: unknown[]) => mocks.responseStatusLabels(...a),
       updateStaff: (...a: unknown[]) => mocks.responseUpdateStaff(...a),
+      createResponses: (...a: unknown[]) => mocks.responseCreate(...a),
     },
     audit: { create: (...a: unknown[]) => mocks.auditCreate(...a) },
     /**
@@ -99,6 +101,7 @@ const {
   formDeleteTool,
   listFormResponsesTool,
   formResponseGetTool,
+  formResponseCreateTool,
   formResponseUpdateTool,
 } = await import('../forms.ts');
 
@@ -111,6 +114,7 @@ const ALL_TOOLS: ToolDefinition<never>[] = [
   formDeleteTool,
   listFormResponsesTool,
   formResponseGetTool,
+  formResponseCreateTool,
   formResponseUpdateTool,
 ] as unknown as ToolDefinition<never>[];
 
@@ -182,6 +186,9 @@ const RESPONSE_ROW = {
   answers: { 'f-name': 'Maya Chen', 'f-why': 'I want to build things' },
   resolved_context: null,
   draft_token: 'SECRET-DRAFT-TOKEN',
+  // Staff typed this one in (form_response_create). Null on a row the
+  // respondent filled in themselves — the distinction the column exists for.
+  added_by: 'staff-7',
 };
 
 function parse(result: { content: Array<{ text: string }> }) {
@@ -260,6 +267,14 @@ describe('forms tool definitions', () => {
     // Setting the same triage label twice changes nothing.
     expect(formResponseUpdateTool.annotations?.idempotent).toBe(true);
     expect(formResponseUpdateTool.annotations?.destructive).toBe(false);
+    // form_response_create never overwrites an existing row (a repeat address
+    // is reported, not replaced), so the same batch twice creates nothing the
+    // second time — destructive false AND idempotent true are both honest.
+    expect(formResponseCreateTool.annotations).toEqual({
+      destructive: false,
+      idempotent: true,
+      openWorld: false,
+    });
     // No forms tool sends email or touches GitHub.
     for (const tool of ALL_TOOLS) {
       expect(toolAnnotations(tool).openWorldHint).toBe(false);
@@ -303,6 +318,7 @@ describe('Pro gating', () => {
     access: 'PUBLIC',
     confirm: true,
     staff_status: 'on roster',
+    responses: [{ email: 'maya@dartmouth.edu', answers: { 'f-name': 'Maya Chen' } }],
   };
 
   it('denies every tool — reads included — before any service call', async () => {
@@ -322,6 +338,7 @@ describe('Pro gating', () => {
       expect(mocks.formUpdate).not.toHaveBeenCalled();
       expect(mocks.formDelete).not.toHaveBeenCalled();
       expect(mocks.responseUpdateStaff).not.toHaveBeenCalled();
+      expect(mocks.responseCreate).not.toHaveBeenCalled();
     }
   });
 
@@ -348,6 +365,11 @@ describe('cross-classroom scoping (S1)', () => {
       formResponseUpdateTool as never,
       { response_id: 'resp-1', staff_status: 'on roster' },
     ],
+    [
+      'form_response_create',
+      formResponseCreateTool as never,
+      { responses: [{ email: 'maya@dartmouth.edu', answers: { 'f-name': 'Maya Chen' } }] },
+    ],
   ];
 
   it('refuses a form from another classroom, with no data and no writes', async () => {
@@ -371,6 +393,7 @@ describe('cross-classroom scoping (S1)', () => {
       expect(mocks.formPublish).not.toHaveBeenCalled();
       expect(mocks.formDelete).not.toHaveBeenCalled();
       expect(mocks.responseUpdateStaff).not.toHaveBeenCalled();
+      expect(mocks.responseCreate).not.toHaveBeenCalled();
     }
   });
 
@@ -467,6 +490,11 @@ describe('response allowlist', () => {
       expect(json).not.toContain('email_normalized');
       // …while the as-typed email a human reads survives.
       expect(json).toContain('Maya.Chen@dartmouth.edu');
+      // And so does the staff-entry marker: the allowlist ADDS `added_by`
+      // rather than dropping it, because a reader has no other way to tell a
+      // row staff typed in from the respondent's own testimony.
+      expect(json).toContain('added_by');
+      expect(json).toContain('staff-7');
     }
   });
 
@@ -1146,6 +1174,491 @@ describe('form_response_update', () => {
   });
 });
 
+// ─── form_response_create ───────────────────────────────────────────────────
+
+/**
+ * The one tool on this surface that WRITES a response.
+ *
+ * Everything else here either reads submissions or edits the two staff-only
+ * triage columns; this one puts words in a respondent's mouth, so the tests
+ * below pin the four things that keep that honest: the classroom gate runs
+ * before the authorization-free service is handed an id, the form id comes from
+ * the LOADED row rather than the argument, the acting user is stamped on every
+ * created row as `added_by`, and the batch is audited by the same transaction
+ * that writes it.
+ */
+describe('form_response_create', () => {
+  const BATCH = [{ email: 'maya@dartmouth.edu', answers: { 'f-name': 'Maya Chen' } }];
+
+  const COMMITTED = {
+    outcome: 'committed',
+    revision_id: 'rev-1',
+    counts: { would_create: 0, created: 1, duplicate: 0, invalid: 0 },
+    rows: [
+      {
+        input_index: 0,
+        email: 'maya@dartmouth.edu',
+        disposition: 'created',
+        response_id: 'resp-new',
+      },
+    ],
+  };
+
+  const call = (extra: Record<string, unknown> = {}) =>
+    formResponseCreateTool.handler(
+      { classroom: 'org/w26', form_id: 'form-1', responses: BATCH, ...extra } as never,
+      CTX
+    );
+
+  const responsesSchema = () => formResponseCreateTool.inputSchema.responses as z.ZodTypeAny;
+  const row = (i: number) => ({ email: `p${i}@dartmouth.edu`, answers: { 'f-name': `P${i}` } });
+
+  beforeEach(() => {
+    mocks.formFindById.mockResolvedValue(FORM_ROW);
+    mocks.responseCreate.mockResolvedValue(COMMITTED);
+  });
+
+  // ── Schema (the registry validates before the handler ever runs) ──────────
+
+  it('refuses an empty batch and anything past 200 rows', () => {
+    const schema = responsesSchema();
+    expect(schema.safeParse([]).success).toBe(false);
+    expect(schema.safeParse(Array.from({ length: 200 }, (_, i) => row(i))).success).toBe(true);
+    expect(schema.safeParse(Array.from({ length: 201 }, (_, i) => row(i))).success).toBe(false);
+  });
+
+  it('refuses a row whose email is not an address, or whose timestamp is not ISO', () => {
+    const schema = responsesSchema();
+    expect(schema.safeParse([{ email: 'maya at dartmouth', answers: {} }]).success).toBe(false);
+    expect(
+      schema.safeParse([{ email: 'maya@dartmouth.edu', answers: {}, submitted_at: 'August 21' }])
+        .success
+    ).toBe(false);
+    expect(
+      schema.safeParse([
+        { email: 'maya@dartmouth.edu', answers: {}, submitted_at: '2026-08-21T12:00:00.000Z' },
+      ]).success
+    ).toBe(true);
+  });
+
+  it('accepts a timestamp carrying an offset, and still refuses a date alone', () => {
+    const schema = responsesSchema();
+    const at = (submitted_at: string) =>
+      schema.safeParse([{ email: 'maya@dartmouth.edu', answers: {}, submitted_at }]).success;
+
+    // The service parses with `new Date`, which honours an offset — refusing
+    // one would make a caller convert a real signup time by hand.
+    expect(at('2026-08-21T12:00:00+02:00')).toBe(true);
+    expect(at('2026-08-21T08:00:00-04:00')).toBe(true);
+    // A queue position needs a time of day.
+    expect(at('2026-08-21')).toBe(false);
+  });
+
+  it('refuses a row with no answers at all (a schema error, not a rejected batch)', () => {
+    const schema = responsesSchema();
+    expect(schema.safeParse([{ email: 'maya@dartmouth.edu' }]).success).toBe(false);
+    expect(schema.safeParse([{ email: 'maya@dartmouth.edu', answers: null }]).success).toBe(false);
+    expect(schema.safeParse([{ email: 'maya@dartmouth.edu', answers: 'nope' }]).success).toBe(
+      false
+    );
+    // An object keyed by field id is what the fill page posts; the contract
+    // owns the values, so anything may sit under a key.
+    expect(
+      schema.safeParse([{ email: 'maya@dartmouth.edu', answers: { 'f-name': 7 } }]).success
+    ).toBe(true);
+    expect(schema.safeParse([{ email: 'maya@dartmouth.edu', answers: {} }]).success).toBe(true);
+  });
+
+  it('is a write tool, rate-limited well below the default bucket', () => {
+    expect(formResponseCreateTool.scope).toBe('write');
+    // One call writes up to 200 rows and holds the form's row lock while it
+    // does; the 20-burst / 30-per-minute default is more than that deserves.
+    expect(formResponseCreateTool.rateLimit).toEqual({ capacity: 10, refillPerSecond: 0.1 });
+  });
+
+  // ── Gates ────────────────────────────────────────────────────────────────
+
+  it('denies a non-Pro classroom before it reads or writes anything', async () => {
+    mocks.assertProTier.mockRejectedValue(proDenial());
+    const error = await call().catch(e => e);
+
+    expect(error).toBeInstanceOf(ToolError);
+    expect((error as ToolError).kind).toBe('forbidden');
+    expect(mocks.formFindById).not.toHaveBeenCalled();
+    expect(mocks.responseCreate).not.toHaveBeenCalled();
+  });
+
+  it('refuses a foreign form with the identical error an unknown id gets (S1)', async () => {
+    mocks.formFindById.mockResolvedValue(FOREIGN_FORM);
+    const foreign = await call().catch(e => e);
+
+    mocks.formFindById.mockResolvedValue(null);
+    const unknown = await call().catch(e => e);
+
+    expect((foreign as ToolError).kind).toBe('not_found');
+    expect((foreign as ToolError).message).toBe('Form not found in this classroom');
+    expect((unknown as ToolError).message).toBe((foreign as ToolError).message);
+    // The authorization-free service was never handed another classroom's id.
+    expect(mocks.responseCreate).not.toHaveBeenCalled();
+  });
+
+  it('refuses a payload over 2 MB before the form is even read', async () => {
+    const error = await call({
+      responses: [
+        { email: 'maya@dartmouth.edu', answers: { 'f-why': 'x'.repeat(2 * 1024 * 1024) } },
+      ],
+    }).catch(e => e);
+
+    expect(error).toBeInstanceOf(ToolError);
+    expect((error as ToolError).kind).toBe('invalid_params');
+    expect((error as ToolError).message).toBe('Payload exceeds 2 MB');
+    expect(mocks.formFindById).not.toHaveBeenCalled();
+    expect(mocks.responseCreate).not.toHaveBeenCalled();
+  });
+
+  it('measures the cap in BYTES, not characters', async () => {
+    // 1.2M characters of a two-byte character: under the cap by string length,
+    // well over it once encoded — which is what actually crosses the wire and
+    // lands in the column.
+    const twoByte = 'é'.repeat(1_200_000);
+    expect(twoByte.length).toBeLessThan(2 * 1024 * 1024);
+    expect(new TextEncoder().encode(twoByte).length).toBeGreaterThan(2 * 1024 * 1024);
+
+    const error = await call({
+      responses: [{ email: 'maya@dartmouth.edu', answers: { 'f-why': twoByte } }],
+    }).catch(e => e);
+
+    expect(error).toBeInstanceOf(ToolError);
+    expect((error as ToolError).message).toBe('Payload exceeds 2 MB');
+    expect(mocks.formFindById).not.toHaveBeenCalled();
+  });
+
+  // ── What the service is handed ───────────────────────────────────────────
+
+  it('takes formId from the LOADED form and addedBy from the viewer, never from args', async () => {
+    // The argument and the stored row deliberately disagree: only the loaded
+    // row has passed the classroom check, so only the loaded row's id may go on.
+    mocks.formFindById.mockResolvedValue({ ...FORM_ROW, id: 'form-canonical' });
+
+    await call();
+
+    const input = mocks.responseCreate.mock.calls[0][0] as Record<string, unknown>;
+    expect(input.formId).toBe('form-canonical');
+    expect(input.formId).not.toBe('form-1');
+    expect(input.addedBy).toBe('owner-1');
+  });
+
+  it('maps each row field by field into the service’s vocabulary', async () => {
+    await call({
+      revision_id: 'rev-1',
+      responses: [
+        {
+          email: 'maya@dartmouth.edu',
+          name: 'Maya Chen',
+          answers: { 'f-name': 'Maya Chen' },
+          submitted_at: '2026-08-21T12:00:00.000Z',
+          staff_status: 'waitlist',
+          staff_note: 'emailed 8/21',
+        },
+      ],
+    });
+
+    const input = mocks.responseCreate.mock.calls[0][0] as Record<string, unknown>;
+    expect(input.revisionId).toBe('rev-1');
+    expect(input.dryRun).toBe(false);
+    expect(input.responses).toEqual([
+      {
+        email: 'maya@dartmouth.edu',
+        name: 'Maya Chen',
+        answers: { 'f-name': 'Maya Chen' },
+        submittedAt: '2026-08-21T12:00:00.000Z',
+        staffStatus: 'waitlist',
+        staffNote: 'emailed 8/21',
+      },
+    ]);
+  });
+
+  it('nulls the optional fields a row omits, and forwards no argument object whole', async () => {
+    await call({ dry_run: undefined, extra_argument: 'ignored' });
+
+    const input = mocks.responseCreate.mock.calls[0][0] as Record<string, unknown>;
+    expect(input).not.toHaveProperty('extra_argument');
+    expect(input.revisionId).toBeUndefined();
+    expect(input.responses).toEqual([
+      {
+        email: 'maya@dartmouth.edu',
+        name: null,
+        answers: { 'f-name': 'Maya Chen' },
+        submittedAt: null,
+        staffStatus: null,
+        staffNote: null,
+      },
+    ]);
+  });
+
+  // ── Dry run vs commit ────────────────────────────────────────────────────
+
+  it('audits a dry run as a VIEW — counts only, never the addresses', async () => {
+    mocks.responseCreate.mockResolvedValue({
+      ...COMMITTED,
+      outcome: 'dry_run',
+      counts: { would_create: 1, created: 0, duplicate: 0, invalid: 0 },
+      rows: [{ input_index: 0, email: 'maya@dartmouth.edu', disposition: 'would_create' }],
+    });
+
+    const payload = parse(await call({ dry_run: true }));
+
+    const input = mocks.responseCreate.mock.calls[0][0] as Record<string, unknown>;
+    expect(input.dryRun).toBe(true);
+    // `audit` is a REQUIRED service parameter now, so the descriptor goes on
+    // every call; the service ignores it on a dry run.
+    expect(input.audit).toBeDefined();
+
+    // A dry run answers "is this person already on the form, and in what
+    // state" for every address supplied — a read of other people's
+    // submissions, recorded like every other one.
+    expect(mocks.auditCreate).toHaveBeenCalledTimes(1);
+    const row = mocks.auditCreate.mock.calls[0][0] as {
+      action: string;
+      resource_type: string;
+      resource_id: string;
+      data: Record<string, unknown>;
+    };
+    expect(row.action).toBe('VIEW');
+    expect(row.resource_type).toBe('FORMS');
+    expect(row.resource_id).toBe('form-1');
+    expect(row.data.dry_run).toBe(true);
+    expect(row.data.counts).toEqual({ would_create: 1, created: 0, duplicate: 0, invalid: 0 });
+    // The audit log is not a second copy of the applicant list.
+    expect(JSON.stringify(row.data)).not.toContain('maya@dartmouth.edu');
+
+    expect(payload.success).toBe(true);
+    expect(payload.outcome).toBe('dry_run');
+  });
+
+  it('audits a commit that created nothing as a VIEW too', async () => {
+    mocks.responseCreate.mockResolvedValue({
+      outcome: 'committed',
+      revision_id: 'rev-1',
+      counts: { would_create: 0, created: 0, duplicate: 1, invalid: 0 },
+      rows: [
+        {
+          input_index: 0,
+          email: 'maya@dartmouth.edu',
+          disposition: 'duplicate',
+          response_id: 'resp-1',
+          existing_state: 'SUBMITTED',
+        },
+      ],
+    });
+
+    await call();
+
+    // Nothing was written, so the service wrote no CREATE row — but the call
+    // still disclosed who is already on the form, which is the read this
+    // records.
+    expect(mocks.auditCreate).toHaveBeenCalledTimes(1);
+    const row = mocks.auditCreate.mock.calls[0][0] as {
+      action: string;
+      data: Record<string, unknown>;
+    };
+    expect(row.action).toBe('VIEW');
+    expect(row.data.dry_run).toBe(false);
+    expect(row.data.counts).toEqual({ would_create: 0, created: 0, duplicate: 1, invalid: 0 });
+    expect(JSON.stringify(row.data)).not.toContain('maya@dartmouth.edu');
+  });
+
+  it('audits nothing here when rows were actually created — the service did it', async () => {
+    await call();
+    expect(mocks.responseCreate.mock.calls[0][0]).toMatchObject({ dryRun: false });
+    // The CREATE row commits inside the transaction that writes the responses,
+    // so the tool must not write a second one of its own.
+    expect(mocks.auditCreate).not.toHaveBeenCalled();
+  });
+
+  it('does not audit a rejected batch — it returns before any database read', async () => {
+    mocks.responseCreate.mockResolvedValue({
+      outcome: 'rejected',
+      revision_id: 'rev-1',
+      counts: { would_create: 0, created: 0, duplicate: 0, invalid: 1 },
+      rows: [{ input_index: 0, email: 'maya@dartmouth.edu', disposition: 'invalid' }],
+    });
+
+    await call();
+    expect(mocks.auditCreate).not.toHaveBeenCalled();
+  });
+
+  it('hands the service a complete audit descriptor on a commit', async () => {
+    await call();
+
+    const input = mocks.responseCreate.mock.calls[0][0] as Record<string, unknown>;
+    expect(input.audit).toEqual({
+      user_id: 'owner-1',
+      classroom_id: 'class-1',
+      role: 'OWNER',
+      data: {
+        tool: 'forms.responses.create',
+        via: 'mcp',
+        mcp_tool: 'form_response_create',
+        form_slug: 'cs52-waitlist-mcp-test',
+      },
+    });
+    // The row commits inside the transaction that writes the responses, so the
+    // tool must not write a second one of its own.
+    expect(mocks.auditCreate).not.toHaveBeenCalled();
+  });
+
+  it('passes the descriptor on a dry run too — the service requires it', async () => {
+    mocks.responseCreate.mockResolvedValue({
+      ...COMMITTED,
+      outcome: 'dry_run',
+      counts: { would_create: 1, created: 0, duplicate: 0, invalid: 0 },
+      rows: [{ input_index: 0, email: 'maya@dartmouth.edu', disposition: 'would_create' }],
+    });
+
+    await call({ dry_run: true });
+
+    const input = mocks.responseCreate.mock.calls[0][0] as {
+      audit: { data: { tool: string } };
+    };
+    expect(input.audit.data.tool).toBe('forms.responses.create');
+  });
+
+  // ── The report ───────────────────────────────────────────────────────────
+
+  it('rebuilds the report key by key, and ships nothing the service adds later', async () => {
+    // The service's DTO gains a debugging field. It must NOT reach a client
+    // just because it exists — this payload is an allow-list, like every other
+    // one in this file.
+    mocks.responseCreate.mockResolvedValue({
+      ...COMMITTED,
+      internal_trace_id: 'trace-abc',
+      rows: [
+        {
+          ...COMMITTED.rows[0],
+          email_normalized: 'maya@dartmouth.edu',
+          draft_token: 'SECRET-DRAFT-TOKEN',
+        },
+      ],
+    });
+
+    const payload = parse(await call());
+    expect(payload).toEqual({ success: true, ...COMMITTED });
+    expect(payload).not.toHaveProperty('internal_trace_id');
+    expect(payload.rows[0]).not.toHaveProperty('email_normalized');
+    expect(payload.rows[0]).not.toHaveProperty('draft_token');
+    expect(Object.keys(payload.counts).sort()).toEqual([
+      'created',
+      'duplicate',
+      'invalid',
+      'would_create',
+    ]);
+  });
+
+  it('reports success false — and every row — when the batch was rejected', async () => {
+    const rejected = {
+      outcome: 'rejected',
+      revision_id: 'rev-1',
+      counts: { would_create: 0, created: 0, duplicate: 0, invalid: 1 },
+      rows: [
+        {
+          input_index: 0,
+          email: 'maya@dartmouth.edu',
+          disposition: 'invalid',
+          issues: [
+            {
+              code: 'invalid_type',
+              field_id: 'f-name',
+              label: 'Your name',
+              path: 'f-name',
+              message: 'Required',
+            },
+          ],
+        },
+      ],
+    };
+    mocks.responseCreate.mockResolvedValue(rejected);
+
+    const payload = parse(await call());
+    expect(payload).toEqual({ success: false, ...rejected });
+    // The per-row detail is the useful part of a refusal and must survive.
+    expect(payload.rows[0].issues[0].field_id).toBe('f-name');
+    expect(payload.rows[0].issues[0].label).toBe('Your name');
+  });
+
+  it('echoes a duplicate’s existing id and state without inventing a new row', async () => {
+    mocks.responseCreate.mockResolvedValue({
+      outcome: 'committed',
+      revision_id: 'rev-1',
+      counts: { would_create: 0, created: 0, duplicate: 1, invalid: 0 },
+      rows: [
+        {
+          input_index: 0,
+          email: 'maya@dartmouth.edu',
+          disposition: 'duplicate',
+          response_id: 'resp-1',
+          existing_state: 'PENDING_VERIFICATION',
+        },
+      ],
+    });
+
+    const payload = parse(await call());
+    expect(payload.rows[0].disposition).toBe('duplicate');
+    expect(payload.rows[0].response_id).toBe('resp-1');
+    expect(payload.rows[0].existing_state).toBe('PENDING_VERIFICATION');
+    expect(payload.counts.created).toBe(0);
+  });
+
+  // ── Service refusals ─────────────────────────────────────────────────────
+
+  it('turns each documented refusal into a ToolError carrying the service’s code', async () => {
+    // Exactly what `createResponses` can throw — FORM_NOT_FOUND is covered
+    // below, as the scoped not_found. The fill path's codes are deliberately
+    // NOT here: FORM_CLOSED cannot happen (a closed form is the ordinary
+    // case), FORM_ALREADY_SUBMITTED cannot (nothing is overwritten), and a bad
+    // answer set is a per-row `invalid` in the report, never an exception.
+    const codes = [
+      'FORM_ACCESS_MISMATCH',
+      'FORM_FIELD_ACCESS_VIOLATION',
+      'FORM_NOT_OPEN',
+      'FORM_BATCH_INVALID',
+      'FORM_REVISION_STALE',
+      'FORM_CAP_REACHED',
+    ];
+
+    for (const code of codes) {
+      mocks.responseCreate.mockRejectedValue(
+        Object.assign(new Error(`the service’s own words about ${code}`), { code })
+      );
+      const error = await call().catch(e => e);
+
+      expect(error, code).toBeInstanceOf(ToolError);
+      expect((error as ToolError).kind).toBe('invalid_params');
+      expect((error as ToolError).code).toBe(code);
+      // The message is what makes "raise the cap" or "republish" actionable.
+      expect((error as ToolError).message).toBe(`the service’s own words about ${code}`);
+    }
+  });
+
+  it('maps a form deleted mid-call to the uniform not_found', async () => {
+    mocks.responseCreate.mockRejectedValue(
+      Object.assign(new Error('Form form-1 not found'), { code: 'FORM_NOT_FOUND' })
+    );
+    const error = await call().catch(e => e);
+
+    expect((error as ToolError).kind).toBe('not_found');
+    expect((error as ToolError).message).toBe('Form not found in this classroom');
+  });
+
+  it('rethrows an unrecognized failure instead of calling it bad input', async () => {
+    mocks.responseCreate.mockRejectedValue(new Error('connection terminated unexpectedly'));
+    const error = await call().catch(e => e);
+
+    expect(error).not.toBeInstanceOf(ToolError);
+    expect((error as Error).message).toBe('connection terminated unexpectedly');
+  });
+});
+
 // ─── Audit family ───────────────────────────────────────────────────────────
 
 describe('audit naming', () => {
@@ -1205,6 +1718,44 @@ describe('audit naming', () => {
       'forms.responses.view',
       'forms.responses.staff_update',
     ]);
+  });
+
+  /**
+   * form_response_create is the one member of the family that does NOT call
+   * `writeAudit`: its row commits INSIDE the service transaction that writes up
+   * to two hundred responses, so a crashed audit cannot leave a form full of
+   * rows nobody can account for. There is therefore no `audit.create` call to
+   * inspect — the vocabulary is pinned where it is actually handed over, on the
+   * descriptor passed to the service, so this tool cannot drift out of `forms.*`
+   * either.
+   */
+  it('keeps form_response_create in the forms.* family via the service descriptor', async () => {
+    mocks.formFindById.mockResolvedValue(FORM_ROW);
+    mocks.responseCreate.mockResolvedValue({
+      outcome: 'committed',
+      revision_id: 'rev-1',
+      counts: { would_create: 0, created: 1, duplicate: 0, invalid: 0 },
+      rows: [],
+    });
+
+    await formResponseCreateTool.handler(
+      {
+        classroom: 'org/w26',
+        form_id: 'form-1',
+        responses: [{ email: 'maya@dartmouth.edu', answers: { 'f-name': 'Maya Chen' } }],
+      } as never,
+      CTX
+    );
+
+    const { audit } = mocks.responseCreate.mock.calls[0][0] as {
+      audit: { data: { tool: string; via: string; mcp_tool: string } };
+    };
+    expect(audit.data.tool.startsWith('forms.')).toBe(true);
+    expect(audit.data.tool).toBe('forms.responses.create');
+    expect(audit.data.via).toBe('mcp');
+    expect(audit.data.mcp_tool).toBe(formResponseCreateTool.name);
+    // Never twice: the service owns this row.
+    expect(mocks.auditCreate).not.toHaveBeenCalled();
   });
 
   it('does NOT audit the two non-PII reads', async () => {

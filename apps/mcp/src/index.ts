@@ -27,6 +27,16 @@ registerAllTools();
 
 const fastify = Fastify({
   logger: true,
+  /**
+   * Bigger than Fastify's 1 MiB default, because form_response_create accepts a
+   * batch of up to 2 MB and enforces that ceiling itself — with a per-row
+   * report the caller can act on. At the default the framework would refuse the
+   * request with a bare HTTP 413 before the MCP layer ever saw it, so the
+   * tool's own cap could never fire and the agent would get no usable reason.
+   * The Streamable HTTP transport is handed the ALREADY-PARSED body (see
+   * routes/mcp.ts), so this limit is the only one on the path.
+   */
+  bodyLimit: 4 * 1024 * 1024,
 });
 
 // S5 process-level safety nets: a stray detached promise rejection (e.g. the

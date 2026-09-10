@@ -70,6 +70,7 @@ import {
   formDeleteTool,
   listFormResponsesTool,
   formResponseGetTool,
+  formResponseCreateTool,
   formResponseUpdateTool,
 } from './forms.ts';
 import {
@@ -213,7 +214,9 @@ export function registerAllTools(): void {
   // requireClassroomStaff; each tool also re-checks Pro tier in-handler). The
   // response tools read applicant PII, so both of them write an audit VIEW row
   // the way the web responses loader does; form_delete cascades to every
-  // response and is confirm-gated.
+  // response and is confirm-gated. form_response_create writes responses on the
+  // respondents' behalf — no mail, never overwrites, and it audits inside the
+  // service transaction that writes the rows rather than after it.
   registerToolDefinition(listFormsTool);
   registerToolDefinition(formGetTool);
   registerToolDefinition(formCreateTool);
@@ -222,5 +225,6 @@ export function registerAllTools(): void {
   registerToolDefinition(formDeleteTool);
   registerToolDefinition(listFormResponsesTool);
   registerToolDefinition(formResponseGetTool);
+  registerToolDefinition(formResponseCreateTool);
   registerToolDefinition(formResponseUpdateTool);
 }

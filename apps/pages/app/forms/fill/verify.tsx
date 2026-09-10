@@ -35,7 +35,8 @@ import { themeFor, type CanvasTheme } from './publicForm.server.ts';
  * "Edit answers" mounts the SAME renderer the fill page uses, prefilled, and
  * resubmits with the token — `confirmSubmission` replaces the answers inside
  * the transaction that consumes it. A response that was already verified keeps
- * its original `verified_at`, so editing never costs a FIFO waitlist place.
+ * its original `verified_at`, and its place in a FIFO waitlist is `submitted_at`,
+ * which an edit does not move either.
  *
  * ── Cache ──────────────────────────────────────────────────────────────────
  * `no-store`, because this page serves one person's answers to a bearer-token

@@ -81,6 +81,8 @@ export const action = async ({
     submission_state: row.submissionState,
     staff_status: row.staffStatus,
     staff_note: row.staffNote,
+    added_by: row.addedBy,
+    added_by_name: row.addedByName,
     answers: row.answers,
     resolved_context: row.resolvedContext,
   }));

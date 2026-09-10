@@ -49,11 +49,22 @@ export interface ExportableResponse {
   submission_state: string;
   staff_status: string | null;
   staff_note: string | null;
+  /** The staff user who created the row; null when the respondent did. */
+  added_by?: string | null;
+  /** That user's display name, when it resolved. Falls back to the id. */
+  added_by_name?: string | null;
   answers: Record<string, unknown>;
   resolved_context: unknown;
 }
 
-/** Identity + metadata + triage, ahead of every answer column. */
+/**
+ * Identity + metadata + triage, ahead of every answer column.
+ *
+ * "Added by" sits LAST of the lead columns, immediately before the answers.
+ * Appending rather than inserting keeps every column an instructor's existing
+ * sheet, filter or import already points at exactly where it was; an empty cell
+ * is the ordinary case and means the person filled the form in themselves.
+ */
 const LEAD_HEADERS = [
   'Name',
   'Email',
@@ -62,6 +73,7 @@ const LEAD_HEADERS = [
   'Submission state',
   'Staff status',
   'Staff note',
+  'Added by',
 ];
 
 const leadCells = (response: ExportableResponse) => [
@@ -72,6 +84,9 @@ const leadCells = (response: ExportableResponse) => [
   response.submission_state,
   response.staff_status ?? '',
   response.staff_note ?? '',
+  // The name when we have one, the id when we do not (a deleted account still
+  // wrote the row), empty when nobody added it.
+  response.added_by ? (response.added_by_name ?? response.added_by) : '',
 ];
 
 /** Fields that contribute a column: everything that collects an answer. */
