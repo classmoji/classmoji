@@ -47,6 +47,28 @@ export interface ResponseRow {
   staffNote: string | null;
   /** The revision this response was filled against — the drawer renders it. */
   revisionId: string;
+  /**
+   * The staff user who created this row on the respondent's behalf. Null means
+   * the respondent submitted it themselves.
+   *
+   * On the surface because a staff-typed record and a respondent's own words
+   * are not the same kind of evidence, and nothing else on the row separates
+   * them: `revision_id` is documented as "what the person actually saw", which
+   * for a staff-added row is not true.
+   */
+  addedBy: string | null;
+  /**
+   * That staff user's display name — `name || login`, resolved once per load,
+   * and never their email address: this is shown to every other member of the
+   * teaching team and written into an exported CSV.
+   *
+   * Null when nobody added the row, when the account is gone, and when it
+   * simply carries neither a name nor a login. Each surface answers a null its
+   * own way: the chip says "Added by staff" because a uuid tells a reader
+   * scanning a table nothing, while the drawer and the CSV print the id, where
+   * an identifier you can look up beats no attribution at all.
+   */
+  addedByName: string | null;
   answers: Record<string, unknown>;
   resolvedContext: unknown;
   /**
@@ -140,30 +162,71 @@ export async function requireFormForResponses(
   };
 }
 
+/**
+ * Names for the staff accounts that added rows on somebody's behalf.
+ *
+ * ONE query for the distinct ids on the page, not one per row: a batch import
+ * is the whole reason `added_by` exists, so a form can easily carry two hundred
+ * rows added by the same person. A user whose account has since been deleted
+ * simply is not in the map, and the row falls back to its id.
+ *
+ * NAME OR LOGIN, AND THEN NOTHING — email is not in the chain and is not even
+ * selected. This string is rendered to every other member of the teaching team
+ * on the responses page and written into an exported CSV, and a colleague's
+ * address is not ours to publish just because their profile happens to be
+ * blank. Every other display-name fallback in the platform stops in the same
+ * place (`classroomForm.server.ts`, `form.service.ts`, `formTeamResolver.ts`),
+ * and a null is already handled everywhere this lands: the chip reads "Added by
+ * staff", the drawer and the CSV each print the id.
+ */
+async function addedByNames(ids: Array<string | null>): Promise<Map<string, string | null>> {
+  const distinct = [...new Set(ids.filter((id): id is string => Boolean(id)))];
+  if (distinct.length === 0) return new Map();
+
+  const users = await prisma.user.findMany({
+    where: { id: { in: distinct } },
+    select: { id: true, name: true, login: true },
+  });
+
+  return new Map(users.map(user => [user.id, user.name || user.login || null] as const));
+}
+
 /** Every response to the form, FIFO, serialized for the client. */
 export async function loadResponseRows(formId: string): Promise<ResponseRow[]> {
   const rows = await ClassmojiService.formResponse.listByFormId(formId);
-  return rows.map(toResponseRow);
+  const names = await addedByNames(rows.map(row => row.added_by));
+  return rows.map(row => toResponseRow(row, names));
 }
 
-export function toResponseRow(row: {
-  id: string;
-  name: string | null;
-  email: string;
-  user_id: string | null;
-  submitted_at: Date;
-  verified_at: Date | null;
-  created_at?: Date;
-  updated_at: Date;
-  submission_state: string;
-  staff_status: string | null;
-  staff_note: string | null;
-  revision_id: string;
-  answers: unknown;
-  resolved_context: unknown;
-  /** The newest send's delivery outcome, when the caller selected it. */
-  tokens?: Array<{ delivery_state: string | null; delivery_detail: string | null }>;
-}): ResponseRow {
+export function toResponseRow(
+  row: {
+    id: string;
+    name: string | null;
+    email: string;
+    user_id: string | null;
+    submitted_at: Date;
+    verified_at: Date | null;
+    created_at?: Date;
+    updated_at: Date;
+    submission_state: string;
+    staff_status: string | null;
+    staff_note: string | null;
+    revision_id: string;
+    answers: unknown;
+    resolved_context: unknown;
+    /** The staff user who typed this row in; null when the respondent did. */
+    added_by?: string | null;
+    /** The newest send's delivery outcome, when the caller selected it. */
+    tokens?: Array<{ delivery_state: string | null; delivery_detail: string | null }>;
+  },
+  /**
+   * id → display name, from `addedByNames`. Empty is fine, and so is a null
+   * value: every row falls back on its own.
+   */
+  names: Map<string, string | null> = new Map()
+): ResponseRow {
+  const addedBy = row.added_by ?? null;
+
   return {
     id: row.id,
     name: row.name,
@@ -180,6 +243,8 @@ export function toResponseRow(row: {
     staffStatus: row.staff_status,
     staffNote: row.staff_note,
     revisionId: row.revision_id,
+    addedBy,
+    addedByName: addedBy ? (names.get(addedBy) ?? null) : null,
     answers: (row.answers ?? {}) as Record<string, unknown>,
     resolvedContext: row.resolved_context ?? null,
     /**

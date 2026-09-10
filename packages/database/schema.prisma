@@ -139,8 +139,9 @@ enum FormStatus {
 
 /// PENDING_VERIFICATION is the public path's holding state: the answers are
 /// stored but count for nothing until the magic link is clicked. DRAFT is the
-/// server-side autosave row for identified fillers. Only SUBMITTED rows with a
-/// verified_at count toward the response cap and the FIFO ordering.
+/// server-side autosave row for identified fillers. The response cap counts
+/// SUBMITTED rows carrying a verified_at, and nothing else; FIFO order is a
+/// separate question, answered by `submitted_at` (see `listByFormId`).
 enum SubmissionState {
   DRAFT
   PENDING_VERIFICATION
@@ -323,7 +324,9 @@ model User {
   oauth_access_tokens           OauthAccessToken[]
   oauth_consents                OauthConsent[]
   forms_created                 Form[]
-  form_responses                FormResponse[]
+  form_responses                FormResponse[]            @relation("FormResponseRespondent")
+  /// Rows this user typed in on somebody else's behalf — see FormResponse.added_by.
+  form_responses_added          FormResponse[]            @relation("FormResponseAddedBy")
 
   @@unique([provider, provider_id])
   @@index([provider, login])
@@ -1672,6 +1675,17 @@ model FormResponse {
   /// fills. SetNull so a deleted account leaves the response (and its
   /// resolved_context name snapshot) intact.
   user_id          String?
+  /// The staff user who created this row on the respondent's behalf, via
+  /// formResponse.createResponses. Null means the respondent submitted it
+  /// themselves. SetNull so a departed staff account leaves the row intact.
+  ///
+  /// It is what keeps a staff-typed row from reading as respondent testimony.
+  /// `revision_id` is documented as "what the person actually saw", which is
+  /// not true of a row nobody filled in, and `verified_at` means a mailbox was
+  /// proven, which is not true either — both are set on a staff-added row
+  /// because the cap and the queue count exactly those. This column is how a
+  /// reader tells the two apart.
+  added_by         String?
   /// As typed, for display. `email_normalized` (lower/trim) is the identity key
   /// the partial unique index enforces.
   email            String
@@ -1687,8 +1701,11 @@ model FormResponse {
   resolved_context Json?
 
   submission_state SubmissionState @default(PENDING_VERIFICATION)
-  /// Magic-link confirmation time. Set once and preserved across later edits —
-  /// the cap and the FIFO ordering count from the FIRST verification.
+  /// Magic-link confirmation time. Set once and preserved across later edits.
+  /// The cap counts SUBMITTED rows that carry one; FIFO order is `submitted_at`
+  /// (see `listByFormId`), NOT this column — a staff-added row is verified at
+  /// the moment it is written and can still be filed at the time it was
+  /// actually received.
   verified_at      DateTime?
   /// Opaque cookie value keying an anonymous server-side partial (only when the
   /// form's save_partials is on). Kept until somebody deletes it — there is no
@@ -1707,7 +1724,11 @@ model FormResponse {
 
   form     Form             @relation(fields: [form_id], references: [id], onDelete: Cascade)
   revision FormRevision     @relation(fields: [revision_id], references: [id], onDelete: Cascade)
-  user     User?            @relation(fields: [user_id], references: [id], onDelete: SetNull)
+  // Two relations to User, so both are NAMED: `user` is the respondent (a
+  // classroom fill's session identity), `adder` is the staff member who typed
+  // the row in. Unnamed, Prisma cannot tell which back-relation is which.
+  user     User?            @relation("FormResponseRespondent", fields: [user_id], references: [id], onDelete: SetNull)
+  adder    User?            @relation("FormResponseAddedBy", fields: [added_by], references: [id], onDelete: SetNull)
   tokens   FormMagicToken[]
 
   // Identity uniqueness is per access mode and cannot be expressed in Prisma —
@@ -1715,6 +1736,7 @@ model FormResponse {
   //   (form_id, user_id)          WHERE user_id IS NOT NULL
   //   (form_id, email_normalized) WHERE user_id IS NULL
   @@index([form_id, submitted_at])
+  @@index([added_by])
   @@map("form_responses")
 }
 
