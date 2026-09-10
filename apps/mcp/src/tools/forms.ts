@@ -1068,33 +1068,26 @@ export const formResponseCreateTool: ToolDefinition<FormResponseCreateArgs> = {
   // nothing the second time. openWorld false: no mail, nothing leaves the DB.
   annotations: { destructive: false, idempotent: true, openWorld: false },
   title: 'Add responses to a form',
+  // Kept SHORT on purpose. A tool description over ~2 KB is dropped by the
+  // claude.ai connector — on 2026-09-10 this one shipped at 2,051 bytes and the
+  // tool simply never appeared in the client's list while its nine siblings
+  // loaded. Per-field detail belongs in the schema's `.describe()` strings, not
+  // here; forms.test.ts holds the byte guard.
   description:
-    'Creates one or many responses on a PUBLIC form, exactly as if each respondent had filled it ' +
-    'in themselves — how a list of people who signed up somewhere else becomes rows on the form. ' +
-    'Staff only (owner or teacher); requires a Pro subscription. It is not an importer and knows ' +
-    'nothing about where the rows came from.\n' +
-    'ANSWERS ARE VALIDATED BY THE FILL PAGE’S OWN CONTRACT: keyed by field id, options by id, ' +
-    'required fields required, no coercion — "7" where a number belongs is a mistake, not a value ' +
-    'to fix up. Read the field and option ids from form_get. A row lacking a required answer is ' +
-    'the caller’s to supply, or make the field optional with form_update and form_publish first.\n' +
-    'NO EMAIL OF ANY KIND IS SENT and no magic link is minted: nobody is contacted.\n' +
-    'NEVER OVERWRITES. An address already on the form comes back as `duplicate` with the existing ' +
-    'row’s id and state, untouched. Two rows in ONE call sharing an address are a caller error, ' +
-    'not a duplicate: both come back `invalid` and the whole batch is rejected. ALL OR NOTHING on ' +
-    'validation — one invalid row rejects the whole batch, writes nothing, and reports every ' +
-    'row.\n' +
-    'Respects response_cap: a batch that does not fit fails naming the cap, what is already taken ' +
-    'and the overflow — raise it with form_update. Allowed on OPEN and on CLOSED forms (adding to ' +
-    'a closed waitlist is the ordinary case); refused on a DRAFT form and on CLASSROOM-access ' +
-    'forms.\n' +
-    'RUN IT WITH dry_run: true FIRST — that validates every row, checks duplicates and the cap, ' +
-    'and writes nothing. Every created row records the acting staff user as `added_by`, so a ' +
-    'staff-typed row is never mistaken for the respondent’s own testimony.\n' +
-    'Every created row is stamped verified at creation time, which is what counts it toward the ' +
-    'cap — and means the person will NOT receive a courtesy verification email if they later type ' +
-    'the same address into the open form (they can still submit and get a link).\n' +
-    'THERE IS NO UNDO TOOL. Rows can be removed one at a time in the web responses view, so run ' +
-    'with dry_run first.',
+    'Creates one or many responses on a PUBLIC form as if each respondent filled it in. ' +
+    'Staff only (owner or teacher); requires Pro. ' +
+    "Answers are validated by the fill page's contract: required fields required, values " +
+    'contract-shaped (numbers, booleans, option ids); ids from form_get. ' +
+    'No email, no magic link. ' +
+    'An address already on the form is never overwritten: it returns as a duplicate with its ' +
+    'state. Two rows sharing an address in one call reject the batch. ' +
+    'All or nothing; run with dry_run first. ' +
+    'Respects response_cap for the batch (raise it with form_update). ' +
+    'Allowed on OPEN and CLOSED forms; refused on DRAFT and CLASSROOM-access. ' +
+    'Created rows record the staff user as added_by and are stamped verified: no courtesy ' +
+    'verification email if that address is later typed into the open form (they can still ' +
+    'submit and get a link). ' +
+    'No undo tool: remove rows one at a time in the web responses view.',
   scope: 'write',
   roles: FORMS_STAFF,
   // One call can write up to two hundred rows and holds the form's row lock the
