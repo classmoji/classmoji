@@ -58,9 +58,15 @@ export interface ResponseRow {
    */
   addedBy: string | null;
   /**
-   * That staff user's display name, resolved once per load. Null when nobody
-   * added the row, and null when the account no longer resolves to a name — the
-   * table and the CSV each fall back rather than printing a bare uuid.
+   * That staff user's display name — `name || login`, resolved once per load,
+   * and never their email address: this is shown to every other member of the
+   * teaching team and written into an exported CSV.
+   *
+   * Null when nobody added the row, when the account is gone, and when it
+   * simply carries neither a name nor a login. Each surface answers a null its
+   * own way: the chip says "Added by staff" because a uuid tells a reader
+   * scanning a table nothing, while the drawer and the CSV print the id, where
+   * an identifier you can look up beats no attribution at all.
    */
   addedByName: string | null;
   answers: Record<string, unknown>;
@@ -163,19 +169,26 @@ export async function requireFormForResponses(
  * is the whole reason `added_by` exists, so a form can easily carry two hundred
  * rows added by the same person. A user whose account has since been deleted
  * simply is not in the map, and the row falls back to its id.
+ *
+ * NAME OR LOGIN, AND THEN NOTHING — email is not in the chain and is not even
+ * selected. This string is rendered to every other member of the teaching team
+ * on the responses page and written into an exported CSV, and a colleague's
+ * address is not ours to publish just because their profile happens to be
+ * blank. Every other display-name fallback in the platform stops in the same
+ * place (`classroomForm.server.ts`, `form.service.ts`, `formTeamResolver.ts`),
+ * and a null is already handled everywhere this lands: the chip reads "Added by
+ * staff", the drawer and the CSV each print the id.
  */
-async function addedByNames(ids: Array<string | null>): Promise<Map<string, string>> {
+async function addedByNames(ids: Array<string | null>): Promise<Map<string, string | null>> {
   const distinct = [...new Set(ids.filter((id): id is string => Boolean(id)))];
   if (distinct.length === 0) return new Map();
 
   const users = await prisma.user.findMany({
     where: { id: { in: distinct } },
-    select: { id: true, name: true, login: true, email: true },
+    select: { id: true, name: true, login: true },
   });
 
-  return new Map(
-    users.map(user => [user.id, user.name || user.login || user.email || user.id] as const)
-  );
+  return new Map(users.map(user => [user.id, user.name || user.login || null] as const));
 }
 
 /** Every response to the form, FIFO, serialized for the client. */
@@ -206,8 +219,11 @@ export function toResponseRow(
     /** The newest send's delivery outcome, when the caller selected it. */
     tokens?: Array<{ delivery_state: string | null; delivery_detail: string | null }>;
   },
-  /** id → display name, from `addedByNames`. Empty is fine: every row falls back. */
-  names: Map<string, string> = new Map()
+  /**
+   * id → display name, from `addedByNames`. Empty is fine, and so is a null
+   * value: every row falls back on its own.
+   */
+  names: Map<string, string | null> = new Map()
 ): ResponseRow {
   const addedBy = row.added_by ?? null;
 
