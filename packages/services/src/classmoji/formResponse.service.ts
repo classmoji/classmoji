@@ -1,11 +1,15 @@
-import { createHash, randomBytes } from 'node:crypto';
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import getPrisma from '@classmoji/database';
 import {
   answersByteSize,
+  flattenFields,
   parseAnswers,
   requiresResolvedContext,
+  FIELD_TYPE_REGISTRY,
+  FORM_ANSWERS_INVALID,
   FORM_ANSWERS_TOO_LARGE,
   FORM_LIMITS,
+  type FormField,
   type ResolvedTargetRef,
 } from './formContract.ts';
 import {
@@ -18,7 +22,8 @@ import {
 } from './formTeamResolver.ts';
 import { escapeVars, pagesUrl } from '../emails/escape.ts';
 import { fieldsOf } from './form.service.ts';
-import type { Prisma, SubmissionState } from '@prisma/client';
+import { Prisma } from '@prisma/client';
+import type { Role, SubmissionState } from '@prisma/client';
 
 /**
  * Form Response Service
@@ -86,6 +91,15 @@ export const FORM_NOT_SUBMITTED_YET = 'FORM_NOT_SUBMITTED_YET';
  * send is an optimisation and never a requirement.
  */
 export const MAGIC_LINK_NOT_BOUND = 'MAGIC_LINK_NOT_BOUND';
+
+/**
+ * A staff-side batch that is empty or bigger than `CREATE_RESPONSES_MAX`.
+ *
+ * Not a form rule and not something a respondent can cause — it is a caller
+ * that built the wrong request, and it says so rather than borrowing a code
+ * that means something about the form.
+ */
+export const FORM_BATCH_INVALID = 'FORM_BATCH_INVALID';
 
 export const MAGIC_LINK_INVALID = 'MAGIC_LINK_INVALID';
 export const MAGIC_LINK_EXPIRED = 'MAGIC_LINK_EXPIRED';
@@ -1583,6 +1597,517 @@ export async function submitClassroom({
   });
 }
 
+// ─── Staff-created responses ────────────────────────────────────────────────
+
+/**
+ * Rows one `createResponses` call may carry.
+ *
+ * Two hundred, matching `roster_add_student`. The ceiling is about the
+ * transaction, not the arithmetic: every writer to this form — including every
+ * public submitter — waits behind the form's row lock while the batch inserts.
+ */
+export const CREATE_RESPONSES_MAX = 200;
+
+/** One row a caller wants written, before anything has looked at it. */
+export interface CreateResponseInput {
+  email: string;
+  name?: string | null;
+  /**
+   * Keyed by field uuid, exactly as the fill page posts them. Validated by the
+   * form contract and never coerced: `'7'` where a number belongs is a mistake,
+   * not a value to fix up.
+   */
+  answers: unknown;
+  /**
+   * When the response was actually received. Defaults to now, and is never
+   * accepted in the future. This is the FIFO position — see `listByFormId`.
+   */
+  submittedAt?: Date | string | null;
+  staffStatus?: string | null;
+  staffNote?: string | null;
+}
+
+/**
+ * One reason a row was refused, addressed at the field it is about.
+ *
+ * `field_id` AND `label`, because neither alone is enough: labels collide
+ * ("Name" twice on a long form) and a uuid that matches no field has no label
+ * at all. `path` is the zod path, which reaches inside a matrix or a group.
+ */
+export interface CreateResponseIssue {
+  code: string;
+  field_id?: string;
+  label?: string;
+  path: string;
+  message: string;
+}
+
+export type CreateResponseDisposition = 'would_create' | 'created' | 'duplicate' | 'invalid';
+
+export interface CreateResponseRow {
+  input_index: number;
+  email: string;
+  disposition: CreateResponseDisposition;
+  /** The EXISTING row's id on a duplicate; the NEW row's id on a created one. */
+  response_id?: string;
+  /** The state of the row already holding this address. Duplicates only. */
+  existing_state?: SubmissionState;
+  issues?: CreateResponseIssue[];
+}
+
+export interface CreateResponsesReport {
+  outcome: 'dry_run' | 'committed' | 'rejected';
+  /** The revision the answers were validated against, and that every row points at. */
+  revision_id: string;
+  counts: { would_create: number; created: number; duplicate: number; invalid: number };
+  rows: CreateResponseRow[];
+}
+
+/**
+ * The audit row to write, if the caller wants one — INSIDE the transaction.
+ *
+ * Every sibling tool audits after its write, and one row after one write is a
+ * fair trade. This writes up to two hundred, and a commit followed by a crashed
+ * audit would leave a form full of responses nobody can account for, plus a
+ * retry that reports every one of them as a duplicate. So it commits with them
+ * or not at all, which is why this takes a descriptor rather than calling
+ * `audit.service` (that one holds its own connection and its own dedup read).
+ */
+export interface CreateResponsesAudit {
+  user_id: string;
+  classroom_id: string;
+  role: Role;
+  /** Merged into the audit payload beneath the ids and counts written here. */
+  data?: Record<string, unknown>;
+}
+
+/** Enough to catch a pasted name or a missing @; the contract owns the rest. */
+const EMAIL_SHAPE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+const trimToNull = (value: string | null | undefined): string | null =>
+  value === null || value === undefined ? null : value.trim() || null;
+
+/** The field's label, when it has one a person would recognise. */
+const labelOf = (field: FormField): string | undefined =>
+  typeof field.label === 'string' ? field.label : undefined;
+
+/** The zod-issue shape `parseAnswers` attaches, without importing zod here. */
+interface ThrownIssue {
+  code?: string;
+  path?: Array<string | number>;
+  message?: string;
+}
+
+/** Everything one input row needs, carried beside the row it will report as. */
+interface PreparedRow {
+  report: CreateResponseRow;
+  emailNormalized: string;
+  emailTrimmed: string;
+  name: string | null;
+  answers?: Record<string, unknown>;
+  submittedAt?: Date;
+  staffStatus: string | null;
+  staffNote: string | null;
+}
+
+const countRows = (rows: CreateResponseRow[]) => ({
+  would_create: rows.filter(row => row.disposition === 'would_create').length,
+  created: rows.filter(row => row.disposition === 'created').length,
+  duplicate: rows.filter(row => row.disposition === 'duplicate').length,
+  invalid: rows.filter(row => row.disposition === 'invalid').length,
+});
+
+/**
+ * Write one or many responses on the respondents' behalf.
+ *
+ * ── What this is, and what it deliberately is not ──────────────────────────
+ * A form could only ever be FILLED. Every row in `form_responses` is there
+ * because a person typed it into the fill page, and staff holding a list of
+ * people who signed up somewhere else had no way to record them. This is that
+ * way, and it is not an importer: it knows nothing about where the rows came
+ * from and does nothing special for any of them.
+ *
+ * The answers are validated by exactly the contract the fill page runs —
+ * `parseAnswers`, strict, keyed by field uuid, options by id, no coercion.
+ * Required means required. A caller holding rows that lack a required answer
+ * supplies one or makes the field optional first; there is no lenient flag.
+ *
+ * ── No mail, no tokens ─────────────────────────────────────────────────────
+ * This never touches `mintLinkFor`, `composeLinkEmail` or `findLiveLink`, and
+ * returns no `emails`, which is the whole reason it is a sibling of
+ * `beginPublicSubmission` rather than a mode of it: token minting is welded
+ * into that path, and a staff data-entry pass must not mail two hundred people.
+ *
+ * ── `verified_at` is now, and never backdated ──────────────────────────────
+ * A staff-added row has to count toward the cap, and the cap counts SUBMITTED
+ * rows carrying a `verified_at`. Backdating it would claim a mailbox
+ * confirmation that never happened, on a date it did not happen. `submitted_at`
+ * — the FIFO position — is the caller's to set, which is where a real signup
+ * date belongs. Known side effect: a non-null `verified_at` suppresses the
+ * courtesy early link, so somebody staff added who later types their own
+ * address into the open form gets no pre-submit mail. They can still submit and
+ * receive one.
+ *
+ * `added_by` is what keeps all of this honest — see the column's own comment.
+ *
+ * ── Never overwrites ───────────────────────────────────────────────────────
+ * An address already on the form is reported as a duplicate with the existing
+ * row's id and state, and that row is left exactly as it was. A DRAFT or an
+ * unverified placeholder is NOT a submission, so reporting one as "already
+ * present" is a statement about what is there, not a claim that the person is
+ * covered. Two rows in one call sharing an address are both refused; there is
+ * no first-wins rule to guess wrong about.
+ *
+ * ── All or nothing ─────────────────────────────────────────────────────────
+ * One invalid row rejects the batch, reports every row, and writes nothing —
+ * `outcome: 'rejected'`, returned rather than thrown, because the report is the
+ * useful part.
+ *
+ * PUBLIC forms only. The email-uniqueness index is scoped `WHERE user_id IS
+ * NULL`, so a staff-added row on a CLASSROOM form would not collide with the
+ * same human's later signed-in submission — two rows for one person. That also
+ * excludes roster- and teammate-sourced field types for free, and both are
+ * asserted against the registry rather than special-cased by name.
+ *
+ * @throws FORM_NOT_FOUND, FORM_ACCESS_MISMATCH, FORM_NOT_OPEN,
+ *   FORM_BATCH_INVALID, FORM_REVISION_STALE, FORM_CAP_REACHED.
+ */
+export async function createResponses({
+  formId,
+  revisionId,
+  responses,
+  dryRun = false,
+  addedBy,
+  audit,
+}: {
+  formId: string;
+  /**
+   * Pin the revision. Asserted equal to the form's current one under the lock,
+   * so a dry run and the commit that follows it cannot straddle a republish
+   * that changed what the answers mean. Omitted means "the current one", which
+   * is reported back.
+   */
+  revisionId?: string;
+  responses: CreateResponseInput[];
+  dryRun?: boolean;
+  /** The staff user doing the typing. Written to `added_by` on every row. */
+  addedBy?: string | null;
+  audit?: CreateResponsesAudit;
+}): Promise<CreateResponsesReport> {
+  // ── Pre-flight, outside every lock ────────────────────────────────────────
+  const form = await getPrisma().form.findUnique({
+    where: { id: formId },
+    select: { id: true, access: true, status: true, current_revision_id: true },
+  });
+  if (!form) throw serviceError(FORM_NOT_FOUND, `Form ${formId} not found`);
+
+  if (form.access !== 'PUBLIC') {
+    throw serviceError(
+      FORM_ACCESS_MISMATCH,
+      `This form is ${form.access} — responses can only be created on a PUBLIC form.`
+    );
+  }
+  // OPEN and CLOSED are both fine: adding to a closed waitlist is the ordinary
+  // case, and the alternative — reopen, add, close — briefly exposes a live
+  // form. `assertAccepting` is deliberately NOT called. A form that was never
+  // published has no revision to validate against and nothing to add to.
+  if (form.status === 'DRAFT' || !form.current_revision_id) {
+    throw serviceError(FORM_NOT_OPEN, 'This form has not been published yet.');
+  }
+
+  if (responses.length < 1 || responses.length > CREATE_RESPONSES_MAX) {
+    throw serviceError(
+      FORM_BATCH_INVALID,
+      `A batch carries between 1 and ${CREATE_RESPONSES_MAX} responses (got ${responses.length}).`
+    );
+  }
+
+  const targetRevisionId = revisionId ?? form.current_revision_id;
+  const revision = await getPrisma().formRevision.findUnique({
+    where: { id: targetRevisionId },
+  });
+  if (!revision || revision.form_id !== formId) {
+    throw serviceError(FORM_REVISION_STALE, 'Unknown form revision.');
+  }
+  const fields = fieldsOf(revision.fields);
+
+  // Asserted, not assumed — the same backstop `confirmSubmission` keeps. Both
+  // of these are impossible on a PUBLIC form today (the contract refuses
+  // classroom-only types at save), and if that ever stops being true this fails
+  // loudly here instead of throwing FORM_REPEAT_CONTEXT_MISSING out of zod or,
+  // worse, writing a row against a schema nobody could have filled in.
+  if (requiresResolvedContext(fields)) {
+    throw serviceError(
+      FORM_ACCESS_MISMATCH,
+      'This form has per-respondent fields — its responses cannot be created on somebody else’s behalf.'
+    );
+  }
+  const classroomOnly = [
+    ...new Set(
+      flattenFields(fields)
+        .filter(field => FIELD_TYPE_REGISTRY[field.type]?.classroomOnly)
+        .map(field => field.type)
+    ),
+  ];
+  if (classroomOnly.length > 0) {
+    throw serviceError(
+      FORM_ACCESS_MISMATCH,
+      `Field type(s) ${classroomOnly.join(', ')} require Classroom access — responses to them cannot be created this way.`
+    );
+  }
+
+  // ── Every row validated before a lock is taken ────────────────────────────
+  const labels = new Map(flattenFields(fields).map(field => [field.id, labelOf(field)]));
+  const now = new Date();
+
+  const prepared: PreparedRow[] = responses.map((input, index) => {
+    const emailTrimmed = typeof input.email === 'string' ? input.email.trim() : '';
+    const row: PreparedRow = {
+      report: { input_index: index, email: emailTrimmed, disposition: 'would_create' },
+      emailNormalized: normalizeEmail(emailTrimmed),
+      emailTrimmed,
+      name: trimToNull(input.name),
+      staffStatus: trimToNull(input.staffStatus),
+      staffNote: trimToNull(input.staffNote),
+    };
+    const issues: CreateResponseIssue[] = [];
+
+    if (!EMAIL_SHAPE.test(emailTrimmed)) {
+      issues.push({
+        code: 'invalid_email',
+        path: 'email',
+        message: 'Not an email address.',
+      });
+    }
+
+    if (input.submittedAt !== undefined && input.submittedAt !== null) {
+      const at =
+        input.submittedAt instanceof Date ? input.submittedAt : new Date(input.submittedAt);
+      if (Number.isNaN(at.getTime())) {
+        issues.push({
+          code: 'invalid_datetime',
+          path: 'submitted_at',
+          message: 'Not a date.',
+        });
+      } else if (at.getTime() > now.getTime()) {
+        // Ties are fine; the future is not. `submitted_at` is the queue
+        // position, and a row dated tomorrow claims a place nobody held.
+        issues.push({
+          code: 'future_timestamp',
+          path: 'submitted_at',
+          message: 'A response cannot be received in the future.',
+        });
+      } else {
+        row.submittedAt = at;
+      }
+    }
+
+    try {
+      row.answers = parseAnswers(fields, input.answers);
+    } catch (error) {
+      const thrown = error as { code?: string; message?: string; issues?: ThrownIssue[] };
+      if (thrown.issues && thrown.issues.length > 0) {
+        for (const issue of thrown.issues) {
+          const first = issue.path?.[0];
+          const fieldId = typeof first === 'string' && labels.has(first) ? first : undefined;
+          const label = fieldId ? labels.get(fieldId) : undefined;
+          issues.push({
+            code: issue.code ?? FORM_ANSWERS_INVALID,
+            ...(fieldId ? { field_id: fieldId } : {}),
+            ...(label ? { label } : {}),
+            path: (issue.path ?? []).join('.'),
+            message: issue.message ?? 'Invalid.',
+          });
+        }
+      } else {
+        // FORM_ANSWERS_TOO_LARGE and anything else the contract raises without
+        // zod issues behind it — reported about the answer set as a whole.
+        issues.push({
+          code: thrown.code ?? FORM_ANSWERS_INVALID,
+          path: 'answers',
+          message: thrown.message ?? 'Invalid answers.',
+        });
+      }
+    }
+
+    if (issues.length > 0) {
+      row.report.disposition = 'invalid';
+      row.report.issues = issues;
+    }
+    return row;
+  });
+
+  // Two rows in one call for the same person. BOTH are refused: picking a
+  // winner would silently drop the other one's answers, and the caller is the
+  // only one who knows which is right.
+  const seen = new Map<string, number>();
+  for (const row of prepared) {
+    if (!row.emailNormalized) continue;
+    seen.set(row.emailNormalized, (seen.get(row.emailNormalized) ?? 0) + 1);
+  }
+  for (const row of prepared) {
+    if (row.report.disposition !== 'would_create') continue;
+    if ((seen.get(row.emailNormalized) ?? 0) < 2) continue;
+    row.report.disposition = 'duplicate';
+    row.report.issues = [
+      {
+        code: 'duplicate_in_input',
+        path: 'email',
+        message: 'This address appears more than once in the batch.',
+      },
+    ];
+  }
+
+  const reportRows = prepared.map(row => row.report);
+  const report = (outcome: CreateResponsesReport['outcome']): CreateResponsesReport => ({
+    outcome,
+    revision_id: targetRevisionId,
+    counts: countRows(reportRows),
+    rows: reportRows,
+  });
+
+  // One bad row rejects the batch. Returned, not thrown: the caller needs the
+  // per-row detail to fix its input, and an exception carries none of it.
+  // `would_create` here means "passed validation" — nothing was ever compared
+  // against the database, because nothing was written.
+  if (prepared.some(row => row.report.disposition === 'invalid')) {
+    return report('rejected');
+  }
+
+  return getPrisma().$transaction(
+    async tx => {
+      const locked = await lockForm(tx, formId);
+
+      // Re-checked under the lock, which is what actually makes any of it safe.
+      // `access` is not in the lock's SELECT and is frozen once a form leaves
+      // DRAFT, so it is read here beside it rather than raced for.
+      const live = await tx.form.findUniqueOrThrow({
+        where: { id: formId },
+        select: { access: true },
+      });
+      if (live.access !== 'PUBLIC') {
+        throw serviceError(
+          FORM_ACCESS_MISMATCH,
+          `This form is ${live.access} — responses can only be created on a PUBLIC form.`
+        );
+      }
+      if (locked.status === 'DRAFT' || !locked.current_revision_id) {
+        throw serviceError(FORM_NOT_OPEN, 'This form has not been published yet.');
+      }
+      // Covers both callers: one that pinned a revision, and one that took the
+      // current revision at pre-flight and would otherwise write answers
+      // validated against a definition a republish has since replaced.
+      assertRevisionCurrent(locked, targetRevisionId);
+
+      const pending = prepared.filter(row => row.report.disposition === 'would_create');
+
+      // ONE read for the whole batch. Select-then-insert is safe only because
+      // of the row lock above: every writer for this form is serialized, so the
+      // read cannot go stale before the insert. Catching P2002 and carrying on
+      // would be wrong inside a transaction anyway — Postgres 25P02 aborts it.
+      const existing = await tx.formResponse.findMany({
+        where: {
+          form_id: formId,
+          user_id: null,
+          email_normalized: { in: [...new Set(pending.map(row => row.emailNormalized))] },
+        },
+        select: { id: true, email_normalized: true, submission_state: true },
+      });
+      const held = new Map(existing.map(row => [row.email_normalized, row]));
+      for (const row of pending) {
+        const hit = held.get(row.emailNormalized);
+        if (!hit) continue;
+        row.report.disposition = 'duplicate';
+        row.report.response_id = hit.id;
+        row.report.existing_state = hit.submission_state;
+      }
+
+      const toCreate = prepared.filter(row => row.report.disposition === 'would_create');
+
+      // ONE count for the cap, and the arithmetic a batch needs:
+      // `assertCapAvailable` proves room for a single row and would admit two
+      // hundred into the last free slot.
+      if (locked.response_cap !== null && toCreate.length > 0) {
+        const occupied = await tx.formResponse.count({
+          where: { form_id: formId, submission_state: 'SUBMITTED', verified_at: { not: null } },
+        });
+        if (occupied + toCreate.length > locked.response_cap) {
+          const over = occupied + toCreate.length - locked.response_cap;
+          throw serviceError(
+            FORM_CAP_REACHED,
+            `This form's limit is ${locked.response_cap} responses; ${occupied} are taken and this batch adds ${toCreate.length}, which is ${over} over. Raise the cap or send fewer rows.`
+          );
+        }
+      }
+
+      // A dry run has now done every check a commit does — including the cap,
+      // which throws here exactly as it would on the real call — and written
+      // nothing.
+      if (dryRun) return report('dry_run');
+
+      if (toCreate.length > 0) {
+        const data: Prisma.FormResponseCreateManyInput[] = toCreate.map(row => {
+          // Minted here rather than by the database so the report can NAME the
+          // row it just made. No id is ever reported for a row that did not
+          // commit: this whole block is inside the transaction.
+          const id = randomUUID();
+          row.report.response_id = id;
+          row.report.disposition = 'created';
+          return {
+            id,
+            form_id: formId,
+            revision_id: targetRevisionId,
+            user_id: null,
+            email: row.emailTrimmed,
+            email_normalized: row.emailNormalized,
+            name: row.name,
+            answers: row.answers as Prisma.InputJsonValue,
+            submission_state: 'SUBMITTED',
+            submitted_at: row.submittedAt ?? now,
+            // Now, never the row's own timestamp — see the note above.
+            verified_at: now,
+            added_by: addedBy ?? null,
+            staff_status: row.staffStatus,
+            staff_note: row.staffNote,
+            // Neither belongs to a row nobody filled in: there is no browser
+            // holding a partial, and no teammate resolution behind it.
+            draft_token: null,
+            resolved_context: Prisma.DbNull,
+          };
+        });
+        await tx.formResponse.createMany({ data });
+      }
+
+      const committed = report('committed');
+
+      if (audit) {
+        await tx.auditLog.create({
+          data: {
+            user_id: audit.user_id,
+            classroom_id: audit.classroom_id,
+            role: audit.role,
+            action: 'CREATE',
+            resource_type: 'FORMS',
+            resource_id: formId,
+            data: {
+              ...(audit.data ?? {}),
+              form_id: formId,
+              revision_id: targetRevisionId,
+              counts: committed.counts,
+              created_ids: toCreate.map(row => row.report.response_id).filter(Boolean),
+            } as Prisma.InputJsonValue,
+          },
+        });
+      }
+
+      return committed;
+    },
+    // Generous enough for two hundred rows plus the audit; Prisma's default is
+    // five seconds, and every public submitter is queued behind this lock.
+    { timeout: 30_000 }
+  );
+}
+
 // ─── Drafts (server-side autosave) ──────────────────────────────────────────
 
 /**
@@ -1817,6 +2342,15 @@ const RESPONSE_SELECT = {
   resolved_context: true,
   submission_state: true,
   verified_at: true,
+  /**
+   * Who typed this row in, when it was not the respondent — STAFF ONLY, and
+   * read by every surface that shows a response list (the responses page, the
+   * MCP tool, the CSV export). Null means the person submitted it themselves.
+   *
+   * Deliberately absent from SELF_SELECT: a filler looking at their own record
+   * has no business knowing which staff account touched it.
+   */
+  added_by: true,
   staff_status: true,
   staff_note: true,
   submitted_at: true,
