@@ -313,10 +313,10 @@ function collectBlock(block: unknown, sink: Sink): void {
  *
  * `pageContent.service.ts:146-159` reads both: the `{ blocks, coverImage? }`
  * wrapper written today, and the bare blocks array written before the wrapper
- * existed. Both are live in cs52's content repo right now — 12 of its 13
- * BlockNote pages use the wrapper, one is still a bare array — so accepting
- * only the array (as the plan's signature suggested) would silently index
- * nothing for most pages.
+ * existed. Both shapes are live in production content repos right now — a
+ * surveyed course had 12 of its 13 BlockNote pages on the wrapper and one
+ * still a bare array — so accepting only the array (as the plan's signature
+ * suggested) would silently index nothing for most pages.
  */
 function toBlocks(json: unknown): unknown[] | null {
   let parsed: unknown = json;

@@ -11,7 +11,7 @@
       "content": [
         {
           "type": "text",
-          "text": "🚨 🚀 🔥 After reading through the assignment below, you should do a pre-lab step!",
+          "text": "🚨 🚀 🔥 After reading through the assignment below, you should do a pre-lab step!",
           "styles": {}
         }
       ],
@@ -28,7 +28,7 @@
       "content": [
         {
           "type": "text",
-          "text": "This is a large mini-project, so carefully planning ahead of time will help. You should do a pre-lab where you submit the following as a comment on the assignment Issue in GitHub. Tag your team TA in your comment so they can take a look and give you feedback. ",
+          "text": "This is a large mini-project, so carefully planning ahead of time will help. You should do a pre-lab where you submit the following as a comment on the assignment Issue in the workbench. Tag your team assistant in your comment so they can take a look and give you feedback. ",
           "styles": {}
         }
       ],
@@ -45,7 +45,7 @@
       "content": [
         {
           "type": "text",
-          "text": "Sketch of your components",
+          "text": "Sketch of your widget panels",
           "styles": {}
         }
       ],
@@ -62,7 +62,7 @@
       "content": [
         {
           "type": "text",
-          "text": "Sketch graph of the component nodes and how you envision data flow working.",
+          "text": "Sketch graph of the panel nodes and how you envision data flow working.",
           "styles": {}
         }
       ],
@@ -112,12 +112,12 @@
           "content": [
             {
               "type": "text",
-              "text": "Run the CURL commands and examine what they return. what field is missing from the ",
+              "text": "Run the sample requests and examine what they return. what field is missing from the ",
               "styles": {}
             },
             {
               "type": "text",
-              "text": "GET /posts/",
+              "text": "GET /widgets/",
               "styles": {
                 "code": true
               }
@@ -141,7 +141,7 @@
           "content": [
             {
               "type": "text",
-              "text": "what local states might you need in the component in which you will have edit functionality? (remember in this case you are ",
+              "text": "what local states might you need in the panel in which you will have edit functionality? (remember in this case you are ",
               "styles": {}
             },
             {
@@ -153,7 +153,7 @@
             },
             {
               "type": "text",
-              "text": " sending each character update to firebase, instead you are editing in memory and only on submit (or blur) are you sending data to the api.)",
+              "text": " sending each character update to the store, instead you are editing in memory and only on submit (or blur) are you sending data to the api.)",
               "styles": {}
             }
           ],
@@ -182,8 +182,8 @@
       "id": "d20c139f-8046-4b3c-af5d-f8ce6557fa59",
       "type": "pageLink",
       "props": {
-        "pageId": "3797f749-d384-425a-85d5-d5f519078e2c",
-        "pageTitle": "Lab 4:  Platform Frontend"
+        "pageId": "9f2b41c6-70ad-4d38-a0c1-2b6e5c8d4411",
+        "pageTitle": "Lab 4:  Widget Dashboard"
       },
       "children": []
     },

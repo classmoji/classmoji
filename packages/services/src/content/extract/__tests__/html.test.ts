@@ -103,18 +103,24 @@ describe('extractText — page-html', () => {
   });
 });
 
-describe('extractText — page-html, a real cs52 legacy page', () => {
-  it('extracts the prose and leaves the 400-line stylesheet behind', () => {
-    const raw = fixture('cs52-page-legacy.index.html');
-    const { ok, text, notes } = page(raw, 'Git Map');
+/**
+ * A whole `pages/<slug>/index.html` as `wrapHtmlContent` emits one: an inlined
+ * stylesheet that dwarfs the body, `.heading-block` wrappers around the
+ * headings, and prose carrying `<a>`, `<code>` and `<strong>` mid-sentence.
+ * Invented course, real file shape.
+ */
+describe('extractText — page-html, a whole legacy page', () => {
+  it('extracts the prose and leaves the inlined stylesheet behind', () => {
+    const raw = fixture('sample-page-legacy.index.html');
+    const { ok, text, notes } = page(raw, 'Widget Wiring');
 
     expect(ok).toBe(true);
-    expect(text.split('\n')[0]).toBe('Git Map');
-    expect(text).toContain('Git — Short Assignment');
+    expect(text.split('\n')[0]).toBe('Widget Wiring');
+    expect(text).toContain('Widget Wiring — Short Assignment');
     expect(text).toContain('To Turn In');
-    expect(text).toContain('How comfortable do you feel you are with git?');
+    expect(text).toContain('How comfortable do you feel you are with the widget toolchain?');
     // Inline markup rejoins into readable prose.
-    expect(text).toContain('Choose CS as your team!');
+    expect(text).toContain('Choose WIDGETS as your team!');
     // None of the stylesheet survives, and it is the bulk of the file.
     expect(text).not.toContain('font-family');
     expect(text).not.toContain('list-style-type');

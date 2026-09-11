@@ -217,27 +217,40 @@ describe('extractText — cross-references never enter the text', () => {
   });
 });
 
-describe('extractText — blocknote, real cs52 pages', () => {
-  it('pulls profile names out of a real columnList page', () => {
-    const { text } = blocknote(fixture('cs52-page-home.content.json'), 'Dartmouth CS52');
+/**
+ * Whole pages, in the shape a content repo stores them — the `{ blocks }`
+ * wrapper, the real prop names, the real nesting — for an invented course.
+ *
+ * `allBlocks.ts` holds the block table to its word one type at a time. These
+ * two prove the same walker survives a document laid out by a person: a page
+ * whose entire staff list is reachable only through `columnList → column →
+ * profile.props`, and a page whose one outbound link must leave its target
+ * behind in `references` and its label nowhere at all.
+ */
+describe('extractText — blocknote, whole pages', () => {
+  it('pulls profile names out of a columnList page', () => {
+    const { text } = blocknote(fixture('sample-page-home.content.json'), 'Intro to Widgets');
 
-    expect(text.split('\n')[0]).toBe('Dartmouth CS52');
+    expect(text.split('\n')[0]).toBe('Intro to Widgets');
     // Every one of these is a `profile` block nested two deep inside a
     // columnList: prop-carried text behind a children recursion.
-    expect(text).toContain('Tim Tregubov');
+    expect(text).toContain('Ada Lamplight');
     expect(text).toContain('Head Coach');
     expect(text).toContain('Teaching Assistant');
+    // Six profiles, three columns apiece across TWO columnLists: every one
+    // arrives, so the recursion runs on each list and not merely the first.
+    expect(text.match(/Teaching Assistant/g)).toHaveLength(5);
     // A heading that lives at the top level, to prove both paths run.
     expect(text).toContain('Staff Directory');
     expect(text).not.toContain('backgroundColor');
     expect(text).not.toContain('raw.githubusercontent.com');
   });
 
-  it('keeps a real pageLink target out of the text and in the references', () => {
-    const { text, references } = blocknote(fixture('cs52-page-prelab4.content.json'));
+  it('keeps a pageLink target out of the text and in the references', () => {
+    const { text, references } = blocknote(fixture('sample-page-prelab.content.json'));
 
-    expect(text).not.toContain('Lab 4:  Platform Frontend');
-    expect(references).toEqual([{ kind: 'page', id: '3797f749-d384-425a-85d5-d5f519078e2c' }]);
+    expect(text).not.toContain('Lab 4:  Widget Dashboard');
+    expect(references).toEqual([{ kind: 'page', id: '9f2b41c6-70ad-4d38-a0c1-2b6e5c8d4411' }]);
     expect(text.length).toBeGreaterThan(200);
   });
 });

@@ -4,8 +4,10 @@
  * Two shapes arrive here:
  *
  *   `pages/<slug>/index.html`  — legacy page bodies (inert once a page has been
- *                                opened in the BlockNote editor, but 38 of
- *                                cs52's 51 pages still have only this).
+ *                                opened in the BlockNote editor, but the
+ *                                majority of pages in a long-running course —
+ *                                38 of 51, in the one that was surveyed —
+ *                                still have only this).
  *   `slides/<slug>/index.html` — generated reveal.js decks.
  *
  * Structural, not regex. The three removals this file performs — speaker

@@ -139,18 +139,31 @@ describe('extractText — deck-html', () => {
   });
 });
 
-describe('extractText — deck-html, a real cs52 deck', () => {
-  it('separates a real instructor note from the slide bodies', () => {
-    const { ok, text, notes } = deck(fixture('cs52-deck.index.html'), 'Intro to Frontend Testing');
+/**
+ * A whole generated `slides/<slug>/index.html`: the slides.com block markup, a
+ * `<style>` override in the head, the Reveal bootstrap at the foot, and two
+ * asides — one of them the uppercase, single-quoted, mid-deck `notes extra`
+ * shape. Invented course, real file shape. The fixtures above isolate each of
+ * those hazards; this one has them all at once, the way a saved deck does.
+ */
+describe('extractText — deck-html, a whole generated deck', () => {
+  it('separates the instructor notes from the slide bodies', () => {
+    const { ok, text, notes } = deck(fixture('sample-deck.index.html'), 'Intro to Widget Testing');
 
     expect(ok).toBe(true);
-    expect(text.split('\n')[0]).toBe('Intro to Frontend Testing');
-    expect(text).toContain('your host for this adventure is Tim Tregubov');
-    expect(text).toContain('Frontend Testing');
+    expect(text.split('\n')[0]).toBe('Intro to Widget Testing');
+    expect(text).toContain('your host for this adventure is Ada Lamplight');
+    // Body text of a snippet block, distinct from the title, so the assertion
+    // cannot be satisfied by the prepended title alone.
+    expect(text).toContain('The Widget Bench');
     expect(text).toContain('survey results');
 
-    expect(notes).toContain('good mix of backgrounds and desires');
-    expect(text).not.toContain('good mix of backgrounds and desires');
+    // Both asides come out — the trailing `class="notes"` one AND the
+    // `<ASIDE class='notes extra'>` sitting mid-deck in the first section.
+    expect(notes).toContain('a good mix of backgrounds and goals');
+    expect(notes).toContain('these two slides ship together');
+    expect(text).not.toContain('a good mix of backgrounds and goals');
+    expect(text).not.toContain('these two slides ship together');
 
     // The head's <style> override block and the Reveal bootstrap are not prose.
     expect(text).not.toContain('pointer-events');

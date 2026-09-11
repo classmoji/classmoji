@@ -2,9 +2,10 @@
  * One BlockNote document containing every block type in this app's editor
  * schema (`apps/pages/app/components/editor/blocks/index.tsx:54-71`).
  *
- * Real cs52 content (the `.json` / `.html` files beside this one) proves the
- * extractor works on production documents, but no single real page uses all 21
- * types — so this fixture exists to hold the block table to its word.
+ * The whole-page fixtures beside this one (the `sample-*.json` / `sample-*.html`
+ * files) prove the extractor works on production-shaped documents, but no
+ * single authored page uses all 21 types — so this fixture exists to hold the
+ * block table to its word.
  *
  * Two families of sentinel:
  *   `*_TEXT` / `*_NAME` / `*_CAPTION` …  MUST reach the extracted text.
