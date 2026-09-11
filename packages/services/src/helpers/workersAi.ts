@@ -98,6 +98,47 @@ export const MAX_INPUT_TOKENS = 8192;
 /** The env var that overrides {@link MAX_INPUT_TOKENS}. */
 export const MAX_INPUT_TOKENS_ENV = 'CLOUDFLARE_WORKERS_AI_EMBED_MAX_TOKENS';
 
+/** Cloudflare's REST root. The embedding call is the only thing hung off it. */
+export const DEFAULT_BASE_URL = 'https://api.cloudflare.com/client/v4';
+
+/** The env var that overrides {@link DEFAULT_BASE_URL}. TEST/DEV ONLY. */
+export const BASE_URL_ENV = 'CLOUDFLARE_WORKERS_AI_BASE_URL';
+
+/**
+ * Where the embedding call is sent.
+ *
+ * The override exists for ONE reason: so a test can point this client at a
+ * local stub and exercise `content_search` end to end — through the real tool,
+ * the real registry and a real bearer token — on a machine that holds no
+ * Cloudflare credentials at all. Without it the only way to reach the search
+ * path is a live account, so the draft-filtering scenarios skip on every CI box
+ * and the security question they exist to answer goes unasked.
+ *
+ * It is NOT a deployment knob and it belongs in no production config: pointing
+ * the embedder at another host would send course text somewhere nobody audited,
+ * and the vectors it answered with would sit in a different space from every
+ * vector already stored. Unset is the only correct production value.
+ *
+ * A malformed or non-HTTP value falls back to the real root rather than
+ * throwing, for the same reason {@link maxInputTokens} does: a typo in a config
+ * should not take a save path down. It stays loud where it matters anyway — a
+ * test pointed at a broken URL reaches Cloudflare with a dummy token and gets a
+ * 401, not a false pass. A trailing slash is trimmed so the joined path never
+ * doubles one.
+ */
+export function workersAiBaseUrl(): string {
+  const raw = process.env[BASE_URL_ENV]?.trim();
+  if (!raw) return DEFAULT_BASE_URL;
+  let parsed: URL;
+  try {
+    parsed = new URL(raw);
+  } catch {
+    return DEFAULT_BASE_URL;
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return DEFAULT_BASE_URL;
+  return raw.replace(/\/+$/, '');
+}
+
 /**
  * The cap in force, which is {@link MAX_INPUT_TOKENS} unless the environment
  * raises or lowers it.
@@ -341,7 +382,7 @@ export async function embedTexts(
   let response: Response;
   try {
     response = await doFetch(
-      `https://api.cloudflare.com/client/v4/accounts/${accountId}/ai/run/${EMBEDDING_MODEL}`,
+      `${workersAiBaseUrl()}/accounts/${accountId}/ai/run/${EMBEDDING_MODEL}`,
       {
         method: 'POST',
         headers: {

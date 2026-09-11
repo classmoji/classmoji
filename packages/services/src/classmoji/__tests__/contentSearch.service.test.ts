@@ -37,6 +37,8 @@ import {
   ContentNotFoundError,
   EMBEDDING_DIMENSIONS,
   MAX_SEARCH_LIMIT,
+  DEFAULT_LIST_LIMIT,
+  MAX_LIST_LIMIT,
   type ContentViewerRole,
 } from '../contentSearch.service.ts';
 
@@ -192,6 +194,10 @@ const search = (role: ContentViewerRole, queryVector: number[], extra: object = 
   });
 
 const idsOf = (hits: Array<{ docId: string }>): string[] => hits.map(hit => hit.docId);
+
+/** `listContent`'s rows alone, for the assertions that are about visibility. */
+const listItems = async (args: Parameters<typeof listContent>[0]) =>
+  (await listContent(args)).items;
 
 // ─── Setup / teardown ──────────────────────────────────────────────────────
 
@@ -594,7 +600,7 @@ describe.skipIf(!RUN)('searchContent', () => {
 
 describe.skipIf(!RUN)('listContent', () => {
   it('returns live pages that were never indexed', async () => {
-    const entries = await listContent({ classroomId: ids.classroomA, role: STUDENT });
+    const entries = await listItems({ classroomId: ids.classroomA, role: STUDENT });
     const unindexed = entries.find(entry => entry.docId === ids.unindexedPage);
     expect(unindexed).toBeDefined();
     expect(unindexed?.indexed).toBe(false);
@@ -604,13 +610,13 @@ describe.skipIf(!RUN)('listContent', () => {
   });
 
   it('omits drafts for a student and marks them for staff', async () => {
-    const student = await listContent({ classroomId: ids.classroomA, role: STUDENT });
+    const student = await listItems({ classroomId: ids.classroomA, role: STUDENT });
     expect(idsOf(student)).not.toContain(ids.draftPage);
     expect(idsOf(student)).not.toContain(ids.draftDeck);
     expect(idsOf(student)).not.toContain(ids.draftPublicPage);
     expect(student.every(entry => entry.isDraft === null)).toBe(true);
 
-    const assistant = await listContent({ classroomId: ids.classroomA, role: ASSISTANT });
+    const assistant = await listItems({ classroomId: ids.classroomA, role: ASSISTANT });
     expect(idsOf(assistant)).toContain(ids.draftPage);
     expect(idsOf(assistant)).toContain(ids.draftDeck);
     expect(assistant.find(entry => entry.docId === ids.draftPage)?.isDraft).toBe(true);
@@ -618,26 +624,124 @@ describe.skipIf(!RUN)('listContent', () => {
   });
 
   it('lists a chunked file once and no files for a non-member', async () => {
-    const student = await listContent({ classroomId: ids.classroomA, role: STUDENT });
+    const student = await listItems({ classroomId: ids.classroomA, role: STUDENT });
     expect(student.filter(entry => entry.docId === FILE_DOC_ID)).toHaveLength(1);
 
-    const outsider = await listContent({ classroomId: ids.classroomA, role: OUTSIDER });
+    const outsider = await listItems({ classroomId: ids.classroomA, role: OUTSIDER });
     expect(idsOf(outsider)).toEqual([ids.publicPage]);
   });
 
   it('honours the kind filter', async () => {
-    const slides = await listContent({ classroomId: ids.classroomA, role: OWNER, kind: 'slide' });
+    const slides = await listItems({ classroomId: ids.classroomA, role: OWNER, kind: 'slide' });
     expect(slides.every(entry => entry.docKind === 'slide')).toBe(true);
     expect(idsOf(slides).sort()).toEqual([ids.deck, ids.draftDeck].sort());
 
-    const files = await listContent({ classroomId: ids.classroomA, role: OWNER, kind: 'file' });
+    const files = await listItems({ classroomId: ids.classroomA, role: OWNER, kind: 'file' });
     expect(idsOf(files)).toEqual([FILE_DOC_ID]);
   });
 
   it('never lists another classroom documents', async () => {
-    const entries = await listContent({ classroomId: ids.classroomA, role: OWNER });
+    const entries = await listItems({ classroomId: ids.classroomA, role: OWNER });
     expect(idsOf(entries)).not.toContain(ids.otherClassroomPage);
     expect(idsOf(entries)).not.toContain(OTHER_FILE_DOC_ID);
+  });
+});
+
+// ─── listContent paging ────────────────────────────────────────────────────
+
+describe.skipIf(!RUN)('listContent paging', () => {
+  const listAll = () => listContent({ classroomId: ids.classroomA, role: OWNER });
+
+  it('answers a whole small course in one complete page', async () => {
+    const page = await listAll();
+    // The fixture corpus is far under the default, so an uncapped call must
+    // report itself COMPLETE — `truncated` is the field a caller decides on.
+    expect(page.items.length).toBeGreaterThan(2);
+    expect(page.items.length).toBeLessThan(DEFAULT_LIST_LIMIT);
+    expect(page.truncated).toBe(false);
+    expect(page.nextOffset).toBeNull();
+  });
+
+  it('caps a page, flags it truncated, and walks the whole listing with nextOffset', async () => {
+    const all = await listAll();
+
+    const first = await listContent({ classroomId: ids.classroomA, role: OWNER, limit: 2 });
+    expect(first.items).toHaveLength(2);
+    expect(first.truncated).toBe(true);
+    expect(first.nextOffset).toBe(2);
+    // The probe row the statement fetched to answer "is there more?" is never
+    // handed out, and the page is the head of the same total order.
+    expect(idsOf(first.items)).toEqual(idsOf(all.items.slice(0, 2)));
+
+    const walked = [...first.items];
+    let offset = first.nextOffset;
+    let guard = 0;
+    while (offset !== null) {
+      expect((guard += 1), 'paging did not terminate').toBeLessThan(50);
+      const page = await listContent({
+        classroomId: ids.classroomA,
+        role: OWNER,
+        limit: 2,
+        offset,
+      });
+      walked.push(...page.items);
+      offset = page.nextOffset;
+    }
+    expect(idsOf(walked)).toEqual(idsOf(all.items));
+  });
+
+  it('reports an exact-fit page as complete, not as truncated', async () => {
+    const all = await listAll();
+    const exact = await listContent({
+      classroomId: ids.classroomA,
+      role: OWNER,
+      limit: all.items.length,
+    });
+    expect(idsOf(exact.items)).toEqual(idsOf(all.items));
+    expect(exact.truncated).toBe(false);
+    expect(exact.nextOffset).toBeNull();
+  });
+
+  it('clamps a hostile limit and a negative offset rather than failing', async () => {
+    const all = await listAll();
+    for (const limit of [0, -5, 1.9, 1e9, Number.NaN]) {
+      const page = await listContent({ classroomId: ids.classroomA, role: OWNER, limit });
+      expect(page.items.length, `limit ${limit}`).toBeGreaterThan(0);
+      expect(page.items.length, `limit ${limit}`).toBeLessThanOrEqual(MAX_LIST_LIMIT);
+    }
+    const negative = await listContent({ classroomId: ids.classroomA, role: OWNER, offset: -10 });
+    expect(idsOf(negative.items)).toEqual(idsOf(all.items));
+  });
+
+  it('pages past the end as an empty, complete listing', async () => {
+    const page = await listContent({ classroomId: ids.classroomA, role: OWNER, offset: 10_000 });
+    expect(page.items).toEqual([]);
+    expect(page.truncated).toBe(false);
+    expect(page.nextOffset).toBeNull();
+  });
+
+  it('applies the visibility rule BEFORE the window, on every page', async () => {
+    // A limit that forces many pages is the shape in which a "filter after the
+    // limit" bug would show: a draft would surface on some later page.
+    const seen: string[] = [];
+    let offset: number | null = 0;
+    let guard = 0;
+    while (offset !== null) {
+      expect((guard += 1), 'paging did not terminate').toBeLessThan(50);
+      const page: Awaited<ReturnType<typeof listContent>> = await listContent({
+        classroomId: ids.classroomA,
+        role: STUDENT,
+        limit: 1,
+        offset,
+      });
+      for (const entry of page.items) expect(entry.isDraft).toBeNull();
+      seen.push(...idsOf(page.items));
+      offset = page.nextOffset;
+    }
+    expect(seen).not.toContain(ids.draftPage);
+    expect(seen).not.toContain(ids.draftDeck);
+    expect(seen).not.toContain(ids.draftPublicPage);
+    expect(seen).toContain(ids.publishedPage);
   });
 });
 

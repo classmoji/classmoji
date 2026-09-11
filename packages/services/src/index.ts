@@ -125,6 +125,19 @@ export type {
 // `ClassmojiService.contentSearch` because the MCP tool layer consumes the
 // predicate and the argument types directly, and a second copy of "who may see
 // a draft" is exactly the drift this lane exists to prevent.
+//
+// CONSTRAINT ON `contentSearch.service.ts`, stated here because THIS block is
+// what enforces it: that module must never statically import `./content/extract`
+// (which pulls in cheerio) or `./helpers/workersAi`. This barrel is on the
+// startup path of every app in the monorepo — webapp, slides, admin, mcp,
+// hook-station, tasks — so anything it reaches transitively is paid for on
+// every cold boot, by processes that will never run a search. The module needs
+// neither today: it takes an already-embedded `queryVector` from its caller and
+// reads `text` straight back out of the index, so both stay on the WRITE side.
+// `workersAi` is dependency-free and costs nothing; `content/extract` pulls in
+// cheerio, which is why even `contentIndex.service` reaches it through a
+// dynamic `await import()`. If this module ever needs either, do the same —
+// a static edge here puts a parser into every app's boot.
 export {
   contentVisibility,
   canSeeDrafts,
@@ -139,6 +152,8 @@ export {
   SNIPPET_CHARS,
   DEFAULT_SEARCH_LIMIT,
   MAX_SEARCH_LIMIT,
+  DEFAULT_LIST_LIMIT,
+  MAX_LIST_LIMIT,
 } from './classmoji/contentSearch.service.ts';
 export type {
   ContentViewerRole,

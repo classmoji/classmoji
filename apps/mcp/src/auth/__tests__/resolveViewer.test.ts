@@ -11,27 +11,34 @@
  *   3. the `oauth_applications.disabled` kill switch (finding 16) — getMcpSession
  *      returns the TOKEN row only and never looks at the owning application, so
  *      disabling a client would revoke nothing unless resolveViewer checks it.
- *      Prisma is mocked for the same reason better-auth is: the behaviour under
- *      test is ours.
+ *      Prisma stands in for the same reason better-auth does: the behaviour
+ *      under test is ours.
+ *
+ * The Prisma stand-in is the DMMF-validating stub (P2-8), NOT a hand-written
+ * `vi.fn()`. A hand-written one answers whatever it is asked — including a
+ * `select` of a column `oauth_applications` does not have — so the kill-switch
+ * query could drift off the schema with this suite still green, which is the
+ * exact failure the stub was built to catch. Here the query is resolved against
+ * the generated client's own datamodel, so a renamed or misspelled column fails
+ * the test instead of production.
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { UnauthorizedError } from '../../mcp/errors.ts';
 
 const getMcpSession = vi.fn();
-const findUniqueApplication = vi.fn();
 
 vi.mock('@classmoji/auth/server', () => ({
   auth: { api: { getMcpSession: (...args: unknown[]) => getMcpSession(...args) } },
 }));
 
-vi.mock('@classmoji/database', () => ({
-  default: () => ({
-    oauthApplication: { findUnique: (...args: unknown[]) => findUniqueApplication(...args) },
-  }),
-}));
+vi.mock('@classmoji/database', async () =>
+  (await import('../../__tests__/prismaSchemaStub.ts')).databaseModuleMock()
+);
 
 const { resolveViewer } = await import('../resolveViewer.ts');
+const { prismaCallsFor, resetPrismaStub, setPrismaRows } =
+  await import('../../__tests__/prismaSchemaStub.ts');
 
 const HEADERS = new Headers({ authorization: 'Bearer whatever' });
 
@@ -45,11 +52,17 @@ function validRow(overrides: Record<string, unknown> = {}) {
   };
 }
 
+/** What `oauthApplication.findUnique` answers with for the rest of this test. */
+const applicationRow = (row: unknown) => setPrismaRows({ oauthApplication: { findUnique: row } });
+
+/** Every kill-switch lookup this test provoked, validated against the schema. */
+const applicationLookups = () => prismaCallsFor('oauthApplication', 'findUnique');
+
 beforeEach(() => {
   getMcpSession.mockReset();
-  findUniqueApplication.mockReset();
+  resetPrismaStub();
   // Default: the token's OAuth application exists and is enabled.
-  findUniqueApplication.mockResolvedValue({ disabled: false });
+  applicationRow({ disabled: false });
 });
 
 describe('resolveViewer', () => {
@@ -148,7 +161,7 @@ describe('resolveViewer', () => {
   describe('oauth_applications.disabled kill switch (finding 16)', () => {
     it('REFUSES a token whose OAuth application is disabled', async () => {
       getMcpSession.mockResolvedValue(validRow());
-      findUniqueApplication.mockResolvedValue({ disabled: true });
+      applicationRow({ disabled: true });
 
       await expect(resolveViewer(HEADERS)).rejects.toThrow(UnauthorizedError);
       await expect(resolveViewer(HEADERS)).rejects.toThrow(/client is disabled/i);
@@ -159,7 +172,11 @@ describe('resolveViewer', () => {
 
       await resolveViewer(HEADERS);
 
-      expect(findUniqueApplication).toHaveBeenCalledWith({
+      // The stub resolved `clientId` and `disabled` against the generated
+      // datamodel to get here: a column that no longer exists would have thrown
+      // rather than matched.
+      expect(applicationLookups()).toHaveLength(1);
+      expect(applicationLookups()[0].args).toEqual({
         where: { clientId: 'classmoji-ask-moji' },
         select: { disabled: true },
       });
@@ -167,14 +184,14 @@ describe('resolveViewer', () => {
 
     it('refuses a token whose application row has vanished', async () => {
       getMcpSession.mockResolvedValue(validRow());
-      findUniqueApplication.mockResolvedValue(null);
+      applicationRow(null);
 
       await expect(resolveViewer(HEADERS)).rejects.toThrow(UnauthorizedError);
     });
 
     it('accepts a nullish `disabled` (the column is Boolean? defaulting to false)', async () => {
       getMcpSession.mockResolvedValue(validRow());
-      findUniqueApplication.mockResolvedValue({ disabled: null });
+      applicationRow({ disabled: null });
 
       const viewer = await resolveViewer(HEADERS);
       expect(viewer.userId).toBe('user-1');
@@ -186,7 +203,7 @@ describe('resolveViewer', () => {
       );
 
       await expect(resolveViewer(HEADERS)).rejects.toThrow(UnauthorizedError);
-      expect(findUniqueApplication).not.toHaveBeenCalled();
+      expect(applicationLookups()).toHaveLength(0);
     });
   });
 });

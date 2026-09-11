@@ -52,6 +52,8 @@ import {
   listContent,
   searchContent,
   MAX_SEARCH_LIMIT,
+  DEFAULT_LIST_LIMIT,
+  MAX_LIST_LIMIT,
   type ContentDocKind,
   type ContentListEntry,
   type ContentSearchHit,
@@ -262,7 +264,15 @@ export const contentSearchTool: ToolDefinition<ContentSearchArgs> = {
 interface ContentListArgs {
   classroom: string;
   kind?: ContentDocKind;
+  limit?: number;
+  offset?: number;
 }
+
+// The listing window. The service clamps whatever arrives to the same bounds;
+// the zod schema names them so the model is refused at the same threshold the
+// service clamps at, never somewhere else.
+const LIST_DEFAULT_LIMIT = DEFAULT_LIST_LIMIT;
+const LIST_MAX_LIMIT = MAX_LIST_LIMIT;
 
 /** A listing row. `isDraft` is present only when staff; `indexed` is coverage. */
 function presentEntry(entry: ContentListEntry) {
@@ -286,21 +296,45 @@ export const contentListTool: ToolDefinition<ContentListArgs> = {
     'see, whether or not it has been indexed for search. Staff also see unpublished material. ' +
     'Each row reports `indexed`: false means content_search cannot reach that document yet, ' +
     'though content_get still can. Use this to find a document by name when a search comes back ' +
-    'empty.',
+    `empty. The listing is paged: at most \`limit\` rows come back (default ${LIST_DEFAULT_LIMIT}, ` +
+    `max ${LIST_MAX_LIMIT}) in a stable order. If \`truncated\` is true this is NOT the whole ` +
+    'catalogue — call again with `offset` set to the returned `next_offset` to continue, and do ' +
+    'not tell the user a document is absent on the strength of one page.',
   scope: 'read',
   roles: MEMBER,
   inputSchema: {
     classroom: classroomArg,
     kind: kindArg.optional(),
+    limit: z
+      .number()
+      .int()
+      .positive()
+      .max(LIST_MAX_LIMIT)
+      .optional()
+      .describe(`Max rows to return (default ${LIST_DEFAULT_LIMIT}, max ${LIST_MAX_LIMIT})`),
+    offset: z
+      .number()
+      .int()
+      .min(0)
+      .optional()
+      .describe('Rows to skip — pass the `next_offset` from a truncated listing'),
   },
   handler: async (args, ctx) => {
     const classroom = requireClassroomCtx(ctx);
-    const entries = await listContent({
+    const page = await listContent({
       classroomId: classroom.classroomId,
       role: classroom.role,
       ...(args.kind ? { kind: args.kind } : {}),
+      ...(args.limit ? { limit: args.limit } : {}),
+      ...(args.offset ? { offset: args.offset } : {}),
     });
-    return ok({ count: entries.length, items: entries.map(presentEntry) });
+    return ok({
+      count: page.items.length,
+      items: page.items.map(presentEntry),
+      truncated: page.truncated,
+      // Present only when there IS a next page, so its absence is unambiguous.
+      ...(page.nextOffset !== null ? { next_offset: page.nextOffset } : {}),
+    });
   },
 };
 

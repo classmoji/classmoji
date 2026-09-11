@@ -213,7 +213,29 @@ export const SNIPPET_CHARS = 400;
 export const DEFAULT_SEARCH_LIMIT = 5;
 export const MAX_SEARCH_LIMIT = 20;
 
+/**
+ * Row bounds for `listContent`, matching the `content_list` tool schema.
+ *
+ * Search is ranked, so five results is a sensible answer; a listing is an
+ * enumeration, and a caller looking for a document by name wants most of the
+ * course in one call. Hence a much wider default. The ceiling exists because
+ * the result is a tool payload a model reads in full: a large course has
+ * hundreds of pages, decks and bot-context notes, and handing all of them over
+ * at once spends a context window on a catalogue. Past the ceiling, callers
+ * page (see {@link ContentListPage}).
+ *
+ * `apps/mcp/src/tools/contentSearch.ts` restates these two numbers for its zod
+ * schema because `@classmoji/services` does not re-export them; THIS is the
+ * authority, and the service clamps whatever arrives regardless.
+ */
+export const DEFAULT_LIST_LIMIT = 100;
+export const MAX_LIST_LIMIT = 200;
+
 const DOC_KINDS: readonly ContentDocKind[] = ['page', 'slide', 'file'];
+
+/** Clamp a caller-supplied count into `[1, max]`, defaulting a missing one. */
+const cappedCount = (value: number | undefined, fallback: number, max: number): number =>
+  Math.min(Math.max(Math.trunc(value ?? fallback) || 0, 1), max);
 
 const assertClassroomId = (classroomId: string): void => {
   if (typeof classroomId !== 'string' || classroomId.length === 0) {
@@ -309,7 +331,7 @@ export async function searchContent({
 
   const visibility = contentVisibility(role);
   const literal = toVectorLiteral(queryVector);
-  const cappedLimit = Math.min(Math.max(Math.trunc(limit) || 0, 1), MAX_SEARCH_LIMIT);
+  const cappedLimit = cappedCount(limit, DEFAULT_SEARCH_LIMIT, MAX_SEARCH_LIMIT);
   const kindFilter = kind
     ? Prisma.sql`
         AND ci.doc_kind = ${kind}`
@@ -367,6 +389,28 @@ export interface ListContentArgs {
   classroomId: string;
   role: ContentViewerRole;
   kind?: ContentDocKind;
+  /** Rows to return. Clamped to `[1, MAX_LIST_LIMIT]`; default DEFAULT_LIST_LIMIT. */
+  limit?: number;
+  /** Rows to skip, for paging. Negative and fractional values floor to 0. */
+  offset?: number;
+}
+
+/**
+ * One page of a listing, and whether there is another behind it.
+ *
+ * `truncated` is the load-bearing field. A caller handed a bare array of
+ * exactly `limit` rows cannot tell a course with exactly that many documents
+ * from one with ten times as many, so a model would confidently report the
+ * first page as the whole catalogue — the same "an absence I cannot
+ * distinguish from a limit" failure `content_search`'s `unavailable` marker
+ * exists to prevent.
+ */
+export interface ContentListPage {
+  items: ContentListEntry[];
+  /** True when more rows matched than were returned. */
+  truncated: boolean;
+  /** The `offset` that continues this listing, or null when it is complete. */
+  nextOffset: number | null;
 }
 
 /**
@@ -381,14 +425,28 @@ export interface ListContentArgs {
  *
  * `file` entries are the exception: they have no live record, so the index is
  * the only place they exist.
+ *
+ * ── Paging ─────────────────────────────────────────────────────────────────
+ * Bounded, because the caller is a tool result a model reads in full. The
+ * statement asks for `limit + 1` rows and returns at most `limit` of them: one
+ * extra row is the cheapest possible answer to "is there more?", and it costs a
+ * row rather than the second full scan a `count(*)` would. `OFFSET` is safe to
+ * page on here because the ORDER BY below is total — `doc_kind`, then lowercased
+ * title, then `doc_id` — so no two rows tie and the window never shifts under a
+ * caller mid-listing unless the course itself changes.
  */
 export async function listContent({
   classroomId,
   role,
   kind,
-}: ListContentArgs): Promise<ContentListEntry[]> {
+  limit,
+  offset,
+}: ListContentArgs): Promise<ContentListPage> {
   assertClassroomId(classroomId);
   assertKind(kind);
+
+  const cappedLimit = cappedCount(limit, DEFAULT_LIST_LIMIT, MAX_LIST_LIMIT);
+  const cappedOffset = Math.max(Math.trunc(offset ?? 0) || 0, 0);
 
   const visibility = contentVisibility(role);
 
@@ -446,7 +504,7 @@ export async function listContent({
   const branches = { page: pageBranch, slide: slideBranch, file: fileBranch };
   const selected = kind ? [branches[kind]] : [branches.page, branches.slide, branches.file];
 
-  return getPrisma().$queryRaw<ContentListEntry[]>`
+  const rows = await getPrisma().$queryRaw<ContentListEntry[]>`
     SELECT entry.doc_kind   AS "docKind",
            entry.doc_id     AS "docId",
            entry.title      AS "title",
@@ -455,7 +513,16 @@ export async function listContent({
            entry.updated_at AS "updatedAt",
            entry.indexed    AS "indexed"
     FROM (${Prisma.join(selected, ' UNION ALL ')}) AS entry
-    ORDER BY entry.doc_kind, lower(entry.title), entry.doc_id`;
+    ORDER BY entry.doc_kind, lower(entry.title), entry.doc_id
+    LIMIT ${cappedLimit + 1} OFFSET ${cappedOffset}`;
+
+  const truncated = rows.length > cappedLimit;
+  return {
+    // The probe row is never handed out — it exists only to have been counted.
+    items: truncated ? rows.slice(0, cappedLimit) : rows,
+    truncated,
+    nextOffset: truncated ? cappedOffset + cappedLimit : null,
+  };
 }
 
 // ─── getContentText ────────────────────────────────────────────────────────

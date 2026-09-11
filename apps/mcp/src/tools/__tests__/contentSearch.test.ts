@@ -491,6 +491,76 @@ describe('content_list', () => {
     expect(params).toContain(CLASSROOM_ID);
     expect(params).not.toContain(OTHER_CLASSROOM_ID);
   });
+
+  // ── Paging ────────────────────────────────────────────────────────────────
+  //
+  // An uncapped listing hands a whole large course to a model in one payload.
+  // These pin the window that reaches SQL, and the `truncated` / `next_offset`
+  // a model needs to know it is not looking at the whole catalogue.
+
+  const listRow = (id: string) => ({ ...LIST_ROW, docId: id, title: `Doc ${id}` });
+
+  it('bounds an uncapped listing, and asks for one row past the window', async () => {
+    await call(contentListTool, { classroom: 'org/slug' }, STUDENT);
+    const params = paramsOf(lastStatement());
+    // limit + 1 is the probe row that answers "is there more?" without a count.
+    expect(params).toContain(101);
+    expect(params).toContain(0);
+  });
+
+  it('threads a caller-supplied limit and offset into the statement', async () => {
+    await call(contentListTool, { classroom: 'org/slug', limit: 25, offset: 50 }, STUDENT);
+    const params = paramsOf(lastStatement());
+    expect(params).toContain(26);
+    expect(params).toContain(50);
+  });
+
+  it('reports truncated with a next_offset, and never returns the probe row', async () => {
+    rawRows = [listRow('a'), listRow('b'), listRow('c')];
+
+    const payload = await call(contentListTool, { classroom: 'org/slug', limit: 2 }, STUDENT);
+
+    expect(payload.count).toBe(2);
+    expect((payload.items as Array<Record<string, unknown>>).map(item => item.id)).toEqual([
+      'a',
+      'b',
+    ]);
+    expect(payload.truncated).toBe(true);
+    expect(payload.next_offset).toBe(2);
+  });
+
+  it('omits next_offset entirely when the listing is complete', async () => {
+    rawRows = [listRow('a'), listRow('b')];
+
+    const payload = await call(contentListTool, { classroom: 'org/slug', limit: 2 }, STUDENT);
+
+    expect(payload.count).toBe(2);
+    expect(payload.truncated).toBe(false);
+    // Absent rather than null: "there is no next page" must not read as a page.
+    expect(Object.keys(payload)).not.toContain('next_offset');
+  });
+
+  it('declares the window in its schema and its description', () => {
+    const schema = contentListTool.inputSchema as unknown as Record<
+      string,
+      { safeParse(value: unknown): { success: boolean } }
+    >;
+    expect(Object.keys(schema)).toEqual(
+      expect.arrayContaining(['classroom', 'kind', 'limit', 'offset'])
+    );
+    const accepts = (key: string, value: unknown) => schema[key].safeParse(value).success;
+
+    expect(accepts('limit', 200)).toBe(true);
+    expect(accepts('limit', 201)).toBe(false);
+    expect(accepts('limit', 0)).toBe(false);
+    expect(accepts('offset', 0)).toBe(true);
+    expect(accepts('offset', -1)).toBe(false);
+    expect(accepts('offset', 1.5)).toBe(false);
+
+    // A model only pages if it is told the listing can be partial.
+    expect(contentListTool.description).toContain('truncated');
+    expect(contentListTool.description).toContain('next_offset');
+  });
 });
 
 // ─── content_get ────────────────────────────────────────────────────────────

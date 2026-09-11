@@ -26,7 +26,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
+  BASE_URL_ENV,
   CHARS_PER_TOKEN,
+  DEFAULT_BASE_URL,
   EMBEDDING_DIMENSIONS,
   MAX_BATCH_SIZE,
   MAX_INPUT_TOKENS,
@@ -36,6 +38,7 @@ import {
   estimateTokens,
   isWorkersAiConfigured,
   maxInputTokens,
+  workersAiBaseUrl,
 } from '../workersAi.ts';
 
 const TOKEN = 'super-secret-workers-ai-token';
@@ -79,6 +82,7 @@ afterEach(() => {
   delete process.env.CLOUDFLARE_ACCOUNT_ID;
   delete process.env.CLOUDFLARE_WORKERS_AI_TOKEN;
   delete process.env[MAX_INPUT_TOKENS_ENV];
+  delete process.env[BASE_URL_ENV];
 });
 
 describe('isWorkersAiConfigured', () => {
@@ -89,6 +93,28 @@ describe('isWorkersAiConfigured', () => {
     process.env.CLOUDFLARE_WORKERS_AI_TOKEN = TOKEN;
     delete process.env.CLOUDFLARE_ACCOUNT_ID;
     expect(isWorkersAiConfigured()).toBe(false);
+  });
+});
+
+describe('workersAiBaseUrl', () => {
+  it('is Cloudflare when the override is unset — the only correct production value', () => {
+    expect(workersAiBaseUrl()).toBe(DEFAULT_BASE_URL);
+    process.env[BASE_URL_ENV] = '   ';
+    expect(workersAiBaseUrl()).toBe(DEFAULT_BASE_URL);
+  });
+
+  it('takes an http(s) override, trailing slashes trimmed', () => {
+    process.env[BASE_URL_ENV] = 'http://127.0.0.1:9987/v4';
+    expect(workersAiBaseUrl()).toBe('http://127.0.0.1:9987/v4');
+    process.env[BASE_URL_ENV] = 'http://127.0.0.1:9987/v4//';
+    expect(workersAiBaseUrl()).toBe('http://127.0.0.1:9987/v4');
+  });
+
+  it('falls back to Cloudflare for anything unparseable or non-HTTP', () => {
+    for (const bad of ['not a url', '/relative/path', 'file:///etc/passwd', 'ftp://example.test']) {
+      process.env[BASE_URL_ENV] = bad;
+      expect(workersAiBaseUrl(), `override ${bad}`).toBe(DEFAULT_BASE_URL);
+    }
   });
 });
 
@@ -107,6 +133,32 @@ describe('the request', () => {
     // elsewhere in this repo and both of which 401 here.
     expect(init.headers.Authorization).toBe(`Bearer ${TOKEN}`);
     expect(init.headers['Content-Type']).toBe('application/json');
+  });
+
+  it('sends to the overridden root when one is set, path and auth unchanged', async () => {
+    // This is what lets tests/phase2-content.integration.test.ts exercise
+    // content_search through the real tool with no Cloudflare account.
+    process.env[BASE_URL_ENV] = 'http://127.0.0.1:9987/v4/';
+    const fetchImpl = stub(embeddings(1));
+
+    await embedTexts(['first'], { fetchImpl });
+
+    const [url, init] = calls(fetchImpl).calls[0];
+    expect(url).toBe(
+      'http://127.0.0.1:9987/v4/accounts/acct-1234/ai/run/@cf/qwen/qwen3-embedding-0.6b'
+    );
+    expect(init.headers.Authorization).toBe(`Bearer ${TOKEN}`);
+  });
+
+  it('ignores a malformed override rather than refusing to embed', async () => {
+    process.env[BASE_URL_ENV] = 'not a url';
+    const fetchImpl = stub(embeddings(1));
+
+    await embedTexts(['first'], { fetchImpl });
+
+    expect(calls(fetchImpl).calls[0][0]).toBe(
+      `${DEFAULT_BASE_URL}/accounts/acct-1234/ai/run/@cf/qwen/qwen3-embedding-0.6b`
+    );
   });
 
   it('sends the symmetric `text` form, never `queries`/`documents`', async () => {
