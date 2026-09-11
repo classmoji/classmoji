@@ -228,6 +228,9 @@ export async function loader({ params, request }: Route.LoaderArgs) {
     orgName: classroom.name,
     courseName: (settings as { course_name?: string })?.course_name,
     slidesUrl: process.env.SLIDES_URL || 'http://localhost:6500',
+    // The widget builds page links from this; it must come from the server
+    // because client code has no process.env.
+    pagesUrl: process.env.PAGES_URL || 'http://localhost:7100',
   });
 }
 
