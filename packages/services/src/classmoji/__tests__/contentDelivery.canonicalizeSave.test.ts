@@ -73,6 +73,19 @@ vi.mock('../contentAssets.service.ts', () => ({
   lookupContentTree: async () => null,
 }));
 
+/**
+ * The save paths below index the bytes they committed, fire-and-forget.
+ *
+ * This suite is about canonicalization, not about the indexer, and an
+ * un-stubbed `indexOneFile` outlives the test that started it: on a machine
+ * whose `.env` carries Workers AI credentials it runs the whole extract-and-
+ * embed pipeline against the partial Prisma client above, fails, and logs —
+ * all after this file's last assertion. `contentIndex.saveHooks.test.ts` is
+ * where that hook's own behaviour is proved; here it is noise, and noise that
+ * costs a real Cloudflare call.
+ */
+vi.mock('../contentIndex.service.ts', () => ({ indexOneFile: vi.fn(async () => undefined) }));
+
 const { canonicalizeAssetRef, resolveAssetUrl } = await import('../contentDelivery.service.ts');
 const { savePageContent } = await import('../pageContent.service.ts');
 const { saveDeck } = await import('../../slides/slideContent.service.ts');

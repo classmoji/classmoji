@@ -2,7 +2,7 @@ import { useRef, useEffect, useState, useCallback } from 'react';
 import { IconChevronRight, IconFileText, IconBook, IconHelp, IconFile } from '@tabler/icons-react';
 import ReactMarkdown from 'react-markdown';
 import rehypeHighlight from 'rehype-highlight';
-import { buildContentReferenceUrl } from '~/utils/contentReferenceUrl';
+import { buildContentReferenceUrl, normalizeAssistantText } from '~/utils/contentReferenceUrl';
 
 interface ChatMessage {
   id: string;
@@ -34,6 +34,7 @@ interface SyllabusBotChatProps {
   onReset: () => void;
   classroomSlug: string;
   slidesUrl: string;
+  pagesUrl: string;
   userLogin: string | null;
   courseName: string;
 }
@@ -119,6 +120,7 @@ const SyllabusBotChat = ({
   onAskSuggestedQuestion,
   classroomSlug,
   slidesUrl,
+  pagesUrl,
   courseName,
 }: SyllabusBotChatProps) => {
   const [inputValue, setInputValue] = useState('');
@@ -232,22 +234,28 @@ const SyllabusBotChat = ({
                       rehypePlugins={[rehypeHighlight]}
                       components={{
                         p: ({ children }) => <p>{children}</p>,
-                        a: ({ href, children }) => (
-                          <a href={href} target="_blank" rel="noopener noreferrer">{children}</a>
-                        ),
+                        a: ({ href, children }) =>
+                          // The model is told to cite by title and let the reference
+                          // chip carry the link; when it invents an href anyway, show
+                          // the title as text rather than a dead link.
+                          !href || href.startsWith('content://') || href === '#' ? (
+                            <span>{children}</span>
+                          ) : (
+                            <a href={href} target="_blank" rel="noopener noreferrer">{children}</a>
+                          ),
                         ul: ({ children }) => <ul>{children}</ul>,
                         ol: ({ children }) => <ol>{children}</ol>,
                         li: ({ children }) => <li>{children}</li>,
                       }}
                     >
-                      {text}
+                      {normalizeAssistantText(text)}
                     </ReactMarkdown>
 
                     {/* Content references -- only show after fully revealed */}
                     {revealedIds.has(msg.id) && msg.references && msg.references.length > 0 && (
                       <div className="askmoji-refs">
                         {msg.references.map((ref, idx) => {
-                          const url = buildContentReferenceUrl(ref, classroomSlug, slidesUrl);
+                          const url = buildContentReferenceUrl(ref, classroomSlug, slidesUrl, pagesUrl);
                           return (
                             <a
                               key={idx}

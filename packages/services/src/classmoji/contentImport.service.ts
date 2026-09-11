@@ -28,6 +28,7 @@ import {
   recordContentAssets,
 } from './contentAssets.service.ts';
 import { enqueueDeckThumbnail } from './deckThumbnail.service.ts';
+import { indexOneFile } from './contentIndex.service.ts';
 import { getGitProvider } from '../git/index.ts';
 import * as contentManifestService from './contentManifest.service.ts';
 import { createWithUniquePageSlug, ensureContentRepo, isPageSlugConflict } from './page.service.ts';
@@ -1158,6 +1159,8 @@ async function importPages({
   }));
 
   // ONE commit for all page files.
+  /** The shas that commit produced, so the index can stamp what it wrote. */
+  const committedShas = new Map<string, string>();
   try {
     const result = await ContentService.uploadBatch({
       gitOrganization: target.gitOrganization,
@@ -1166,6 +1169,7 @@ async function importPages({
       branch: 'main',
       message: commitMessage,
     });
+    for (const file of result.files) committedShas.set(file.path, file.sha);
     // Write-through: imported `content.json` is read through the asset map, and
     // an import is followed immediately by someone opening what they imported.
     // Without this the first views fall back to the contents API until the push
@@ -1174,6 +1178,21 @@ async function importPages({
   } catch (error: unknown) {
     warn('pages', `page content commit failed: ${errText(error)}`);
     return 0;
+  }
+
+  /**
+   * The rewritten bytes this import committed, by path — the index's source.
+   *
+   * Staged files are base64 all the way through (see `decodeStagedFiles`), so
+   * the text is decoded back out here rather than fetched from GitHub a second
+   * later. Text paths only: the binaries in the same batch are assets.
+   */
+  const importedBodies = new Map<string, string>();
+  for (const entry of written) {
+    for (const file of entry.files) {
+      if (!isTextContentPath(file.path)) continue;
+      importedBodies.set(file.path, Buffer.from(file.content, 'base64').toString('utf8'));
+    }
   }
 
   // DB rows AFTER the commit (GitHub-first, mirroring createPage).
@@ -1220,6 +1239,27 @@ async function importPages({
       );
       idMap[item.source.id] = row.id;
       created++;
+
+      // Feed the search index. Enqueued HERE rather than beside the
+      // `recordContentAssets` above for the same reason the deck thumbnail is:
+      // a `content_index` row is keyed on the page id, and the rows do not
+      // exist until this loop. `content.json` when the copy has one, the legacy
+      // `index.html` otherwise — the reader's precedence. Never awaited, and
+      // `indexOneFile` never rejects, so it cannot fail the import.
+      const jsonPath = `${item.targetContentPath}/content.json`;
+      const htmlPath = `${item.targetContentPath}/index.html`;
+      const indexPath = importedBodies.has(jsonPath) ? jsonPath : htmlPath;
+      const indexSha = committedShas.get(indexPath);
+      const indexBody = importedBodies.get(indexPath);
+      if (indexSha && indexBody !== undefined) {
+        void indexOneFile({
+          classroomId: target.classroomId,
+          path: indexPath,
+          sha: indexSha,
+          body: indexBody,
+          docHint: { kind: 'page', id: row.id, title: item.targetTitle },
+        });
+      }
     } catch (error: unknown) {
       // A slug collision must never be downgraded to a warning. The walker
       // above already absorbs every 23505 it can act on and exhausts into
@@ -1350,6 +1390,8 @@ async function importSlides({
 
   // ONE commit for all slide files (deck.json + generated index.html copied
   // verbatim — never regenerated).
+  /** The shas that commit produced, so the index can stamp what it wrote. */
+  const committedShas = new Map<string, string>();
   try {
     const result = await ContentService.uploadBatch({
       gitOrganization: target.gitOrganization,
@@ -1358,6 +1400,7 @@ async function importSlides({
       branch: 'main',
       message: commitMessage,
     });
+    for (const file of result.files) committedShas.set(file.path, file.sha);
     // Write-through, for the same reason as the page batch above: `deck.json`
     // and `index.html` are read through the map, and an imported deck is
     // usually opened straight away.
@@ -1365,6 +1408,13 @@ async function importSlides({
   } catch (error: unknown) {
     warn('slides', `slide content commit failed: ${errText(error)}`);
     return 0;
+  }
+
+  /** The artifacts this import committed, by path — see the page pass. */
+  const importedBodies = new Map<string, string>();
+  for (const file of files) {
+    if (!isTextContentPath(file.path)) continue;
+    importedBodies.set(file.path, Buffer.from(file.content, 'base64').toString('utf8'));
   }
 
   let created = 0;
@@ -1397,6 +1447,23 @@ async function importSlides({
       // everywhere else: not awaited, cannot fail the import. The task's own
       // queue meters a forty-deck import down to four browsers at a time.
       void enqueueDeckThumbnail(row.id, target.classroomId);
+
+      // And the search index, on the same terms and for the same reason the
+      // enqueue above is here: the row id does not exist any earlier. The
+      // artifact is what a reader sees, so `index.html` is the document —
+      // `deck.json` is its source and is not indexed.
+      const htmlPath = `${item.targetContentPath}/index.html`;
+      const htmlSha = committedShas.get(htmlPath);
+      const htmlBody = importedBodies.get(htmlPath);
+      if (htmlSha && htmlBody !== undefined) {
+        void indexOneFile({
+          classroomId: target.classroomId,
+          path: htmlPath,
+          sha: htmlSha,
+          body: htmlBody,
+          docHint: { kind: 'slide', id: row.id, title: item.targetTitle },
+        });
+      }
     } catch (error: unknown) {
       warn('slides', `DB row failed for "${item.targetTitle}": ${errText(error)}`);
     }

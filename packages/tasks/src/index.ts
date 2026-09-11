@@ -14,6 +14,7 @@ import * as importGithubClassroomTasks from './workflows/importGithubClassroom.t
 import * as classroomImportTasks from './workflows/classroomImport.ts';
 import * as customDomainTasks from './workflows/customDomains.ts';
 import * as contentAssetTasks from './workflows/contentAssets.ts';
+import * as contentIndexTasks from './workflows/contentIndexReconcile.ts';
 import * as deckThumbnailTasks from './workflows/deckThumbnail.ts';
 import * as instructorContactTasks from './workflows/instructorContacts.ts';
 
@@ -36,6 +37,7 @@ const Tasks = {
   ...classroomImportTasks,
   ...customDomainTasks,
   ...contentAssetTasks,
+  ...contentIndexTasks,
   ...deckThumbnailTasks,
   ...instructorContactTasks,
 };

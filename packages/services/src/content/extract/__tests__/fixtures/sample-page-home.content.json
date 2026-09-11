@@ -1,0 +1,576 @@
+{
+  "blocks": [
+    {
+      "id": "9e1c0a54-8a37-4f2a-bc11-6d7ea0f5c301",
+      "type": "paragraph",
+      "props": {
+        "backgroundColor": "default",
+        "textColor": "default",
+        "textAlignment": "left"
+      },
+      "content": [
+        {
+          "type": "text",
+          "text": "Welcome to ",
+          "styles": {}
+        },
+        {
+          "type": "text",
+          "text": "Intro to Widgets",
+          "styles": {
+            "bold": true
+          }
+        },
+        {
+          "type": "text",
+          "text": ", Spring 2031. Questions go to the ",
+          "styles": {}
+        },
+        {
+          "type": "link",
+          "href": "mailto:ada.lamplight@widgets.example.edu",
+          "content": [
+            {
+              "type": "text",
+              "text": "instructor",
+              "styles": {}
+            }
+          ]
+        },
+        {
+          "type": "text",
+          "text": " or to the workbench channel.",
+          "styles": {}
+        }
+      ],
+      "children": []
+    },
+    {
+      "id": "2b9f6d13-4c85-49ab-8e70-1f0d33a5c8e2",
+      "type": "heading",
+      "props": {
+        "backgroundColor": "default",
+        "textColor": "default",
+        "textAlignment": "left",
+        "isToggleable": false,
+        "level": 2
+      },
+      "content": [
+        {
+          "type": "text",
+          "text": "Course Overview",
+          "styles": {}
+        }
+      ],
+      "children": []
+    },
+    {
+      "id": "c7a4e910-5b62-4d17-93f6-8a2c0e4b71d5",
+      "type": "paragraph",
+      "props": {
+        "backgroundColor": "default",
+        "textColor": "default",
+        "textAlignment": "left"
+      },
+      "content": [
+        {
+          "type": "text",
+          "text": "We build one absurd widget a week and take it apart again the following Monday.",
+          "styles": {}
+        }
+      ],
+      "children": []
+    },
+    {
+      "id": "58d3b1f7-2e40-4c99-a6b8-e91d7c035f24",
+      "type": "paragraph",
+      "props": {
+        "backgroundColor": "default",
+        "textColor": "default",
+        "textAlignment": "left"
+      },
+      "content": [
+        {
+          "type": "text",
+          "text": "By the end of term, you will:",
+          "styles": {}
+        }
+      ],
+      "children": []
+    },
+    {
+      "id": "41e8c2a6-9d73-4b50-8f12-0c6a5e9d1b83",
+      "type": "bulletListItem",
+      "props": {
+        "backgroundColor": "default",
+        "textColor": "default",
+        "textAlignment": "left"
+      },
+      "content": [
+        {
+          "type": "text",
+          "text": "wire a widget panel from an empty repository",
+          "styles": {}
+        }
+      ],
+      "children": []
+    },
+    {
+      "id": "6f0b7d24-1a58-4e36-9c47-b2d80f1e6a95",
+      "type": "bulletListItem",
+      "props": {
+        "backgroundColor": "default",
+        "textColor": "default",
+        "textAlignment": "left"
+      },
+      "content": [
+        {
+          "type": "text",
+          "text": "read a schematic without flinching",
+          "styles": {}
+        }
+      ],
+      "children": []
+    },
+    {
+      "id": "a3c95e18-7f26-4d0b-b851-4e7c2a9f0d36",
+      "type": "bulletListItem",
+      "props": {
+        "backgroundColor": "default",
+        "textColor": "default",
+        "textAlignment": "left"
+      },
+      "content": [
+        {
+          "type": "text",
+          "text": "ship a working prototype to the ",
+          "styles": {}
+        },
+        {
+          "type": "link",
+          "href": "https://widgets.example.com/showcase",
+          "content": [
+            {
+              "type": "text",
+              "text": "end-of-term showcase",
+              "styles": {}
+            }
+          ]
+        }
+      ],
+      "children": []
+    },
+    {
+      "id": "d80f42b9-6c17-4a3e-95d2-7b1e8f0a4c63",
+      "type": "paragraph",
+      "props": {
+        "backgroundColor": "default",
+        "textColor": "default",
+        "textAlignment": "left"
+      },
+      "content": [],
+      "children": []
+    },
+    {
+      "id": "0a5e8c31-9b47-4d62-8f10-3c9d7a2e5b48",
+      "type": "heading",
+      "props": {
+        "backgroundColor": "default",
+        "textColor": "default",
+        "textAlignment": "left",
+        "isToggleable": false,
+        "level": 2
+      },
+      "content": [
+        {
+          "type": "text",
+          "text": "Waitlist",
+          "styles": {}
+        }
+      ],
+      "children": []
+    },
+    {
+      "id": "e4b71f09-8d35-4c26-a917-6f2b0d8e3a51",
+      "type": "paragraph",
+      "props": {
+        "backgroundColor": "default",
+        "textColor": "default",
+        "textAlignment": "left"
+      },
+      "content": [
+        {
+          "type": "text",
+          "text": "The room seats forty and the bench seats thirty, so ",
+          "styles": {}
+        },
+        {
+          "type": "link",
+          "href": "https://widgets.example.com/waitlist",
+          "content": [
+            {
+              "type": "text",
+              "text": "there is a waitlist",
+              "styles": {}
+            }
+          ]
+        },
+        {
+          "type": "text",
+          "text": ". Add yourself before the first Friday; we clear it in order.",
+          "styles": {}
+        }
+      ],
+      "children": []
+    },
+    {
+      "id": "b62d0a37-4e19-4b85-9c03-8a1f7d2e6c94",
+      "type": "heading",
+      "props": {
+        "backgroundColor": "default",
+        "textColor": "default",
+        "textAlignment": "left",
+        "isToggleable": false,
+        "level": 3
+      },
+      "content": [
+        {
+          "type": "text",
+          "text": "Class:",
+          "styles": {}
+        }
+      ],
+      "children": []
+    },
+    {
+      "id": "3f1c8b50-7a26-4d93-8e41-0b5d9c2a7f68",
+      "type": "paragraph",
+      "props": {
+        "backgroundColor": "default",
+        "textColor": "default",
+        "textAlignment": "left"
+      },
+      "content": [
+        {
+          "type": "text",
+          "text": "Tuesdays and Thursdays, 10:10–11:50, in the Widget Annex, room 3.",
+          "styles": {}
+        }
+      ],
+      "children": []
+    },
+    {
+      "id": "96e2c74b-1d80-4a35-b7f9-2c680e5a3d17",
+      "type": "heading",
+      "props": {
+        "backgroundColor": "default",
+        "textColor": "default",
+        "textAlignment": "left",
+        "isToggleable": false,
+        "level": 3
+      },
+      "content": [
+        {
+          "type": "text",
+          "text": "Office Hours and Contact",
+          "styles": {}
+        }
+      ],
+      "children": []
+    },
+    {
+      "id": "52a9f36d-8c04-4e71-9b28-6d3a1f0c7e85",
+      "type": "paragraph",
+      "props": {
+        "backgroundColor": "default",
+        "textColor": "default",
+        "textAlignment": "left"
+      },
+      "content": [
+        {
+          "type": "text",
+          "text": "Hours are posted on the schedule. Email the ",
+          "styles": {}
+        },
+        {
+          "type": "link",
+          "href": "mailto:widgets-staff@widgets.example.edu",
+          "content": [
+            {
+              "type": "text",
+              "text": "whole staff",
+              "styles": {}
+            }
+          ]
+        },
+        {
+          "type": "text",
+          "text": " rather than one person — someone is always awake.",
+          "styles": {}
+        }
+      ],
+      "children": []
+    },
+    {
+      "id": "8d40b1e6-5f92-4c78-a3b0-7e1c9d64a205",
+      "type": "heading",
+      "props": {
+        "backgroundColor": "default",
+        "textColor": "default",
+        "textAlignment": "left",
+        "isToggleable": false,
+        "level": 3
+      },
+      "content": [
+        {
+          "type": "text",
+          "text": "Staff Directory",
+          "styles": {}
+        }
+      ],
+      "children": []
+    },
+    {
+      "id": "1c7e5a92-0b46-4d38-8f51-9a2d6c0b3e74",
+      "type": "paragraph",
+      "props": {
+        "backgroundColor": "default",
+        "textColor": "default",
+        "textAlignment": "left"
+      },
+      "content": [],
+      "children": []
+    },
+    {
+      "id": "55423b05-2c85-43ab-bf79-2e4209eb2bf6",
+      "type": "columnList",
+      "props": {},
+      "children": [
+        {
+          "id": "cc1e170a-ebca-41e7-be8d-fc906f7463b1",
+          "type": "column",
+          "props": {
+            "width": 1
+          },
+          "children": [
+            {
+              "id": "57f79085-7993-4706-9dab-918153ddfd6d",
+              "type": "profile",
+              "props": {
+                "name": "Ada Lamplight",
+                "title": "Head Coach",
+                "imageUrl": "https://raw.githubusercontent.com/example-org/content-example-org-widgets-31s/main/pages/example-org/assets/1774259608918-ada-profile.jpg",
+                "links": ""
+              },
+              "children": []
+            }
+          ]
+        },
+        {
+          "id": "6216bdd4-3944-4f18-8d40-60818e1f4e09",
+          "type": "column",
+          "props": {
+            "width": 1
+          },
+          "children": [
+            {
+              "id": "5bf00165-4dba-435b-a94a-0edf7414da0f",
+              "type": "profile",
+              "props": {
+                "name": "Bo Quillfeather",
+                "title": "Teaching Assistant",
+                "imageUrl": "https://raw.githubusercontent.com/example-org/content-example-org-widgets-31s/main/pages/example-org/assets/1774259608918-bo-profile.jpeg",
+                "links": ""
+              },
+              "children": []
+            }
+          ]
+        },
+        {
+          "id": "9937a12f-8cdb-442d-999e-bb8c193130d7",
+          "type": "column",
+          "props": {
+            "width": 1
+          },
+          "children": [
+            {
+              "id": "7e3a0c48-6b19-4d52-9a87-1f0c5d2e6b93",
+              "type": "profile",
+              "props": {
+                "name": "Cyra Bellhop",
+                "title": "Teaching Assistant",
+                "imageUrl": "https://raw.githubusercontent.com/example-org/content-example-org-widgets-31s/main/pages/example-org/assets/1774259608918-cyra-profile.jpeg",
+                "links": ""
+              },
+              "children": []
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "4a8d2f61-3c70-4e95-b1d8-0e6a9c37f542",
+      "type": "paragraph",
+      "props": {
+        "backgroundColor": "default",
+        "textColor": "default",
+        "textAlignment": "left"
+      },
+      "content": [],
+      "children": []
+    },
+    {
+      "id": "c6346e9b-8cda-45ea-bd51-8330685d4639",
+      "type": "columnList",
+      "props": {},
+      "children": [
+        {
+          "id": "f0d7b234-9e61-4a08-b5c9-72e8a1d603f5",
+          "type": "column",
+          "props": {
+            "width": 1
+          },
+          "children": [
+            {
+              "id": "83b1e5c7-0a49-4d26-9f38-6c2b70d5a194",
+              "type": "profile",
+              "props": {
+                "name": "Dario Winch",
+                "title": "Teaching Assistant",
+                "imageUrl": "https://raw.githubusercontent.com/example-org/content-example-org-widgets-31s/main/pages/example-org/assets/1774259608918-dario-profile.jpg",
+                "links": ""
+              },
+              "children": []
+            }
+          ]
+        },
+        {
+          "id": "2e91c05a-8b47-4f13-9d60-5a3c7e08b214",
+          "type": "column",
+          "props": {
+            "width": 1
+          },
+          "children": [
+            {
+              "id": "c95f2a06-7d34-4e81-b062-1a8e4c93d570",
+              "type": "profile",
+              "props": {
+                "name": "Esme Ratchet",
+                "title": "Teaching Assistant",
+                "imageUrl": "https://raw.githubusercontent.com/example-org/content-example-org-widgets-31s/main/pages/example-org/assets/1774259608918-esme-profile.jpeg",
+                "links": ""
+              },
+              "children": []
+            }
+          ]
+        },
+        {
+          "id": "a7f34d90-1c85-4b62-8e07-3d95f2c60a8b",
+          "type": "column",
+          "props": {
+            "width": 1
+          },
+          "children": [
+            {
+              "id": "60d8a473-2f15-4c90-8b7e-9e0c53a1f286",
+              "type": "profile",
+              "props": {
+                "name": "Finn Goodsprocket",
+                "title": "Teaching Assistant",
+                "imageUrl": "https://raw.githubusercontent.com/example-org/content-example-org-widgets-31s/main/pages/example-org/assets/1774259608918-finn-profile.jpg",
+                "links": ""
+              },
+              "children": []
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "e18c603a-5d27-4f94-a0b6-8c3f1e72d059",
+      "type": "heading",
+      "props": {
+        "backgroundColor": "default",
+        "textColor": "default",
+        "textAlignment": "left",
+        "isToggleable": false,
+        "level": 2
+      },
+      "content": [
+        {
+          "type": "text",
+          "text": "Logistics",
+          "styles": {}
+        }
+      ],
+      "children": []
+    },
+    {
+      "id": "7b2f9d14-6a03-4e58-91c7-0d5e8a3b6f42",
+      "type": "bulletListItem",
+      "props": {
+        "backgroundColor": "default",
+        "textColor": "default",
+        "textAlignment": "left"
+      },
+      "content": [
+        {
+          "type": "text",
+          "text": "Grading, late passes and the regrade policy live in the ",
+          "styles": {}
+        },
+        {
+          "type": "link",
+          "href": "https://widgets.example.com/handbook",
+          "content": [
+            {
+              "type": "text",
+              "text": "course handbook",
+              "styles": {}
+            }
+          ]
+        },
+        {
+          "type": "text",
+          "text": ".",
+          "styles": {}
+        }
+      ],
+      "children": []
+    },
+    {
+      "id": "35a0c68e-9f41-4b27-8d93-2e7c1a50b6d8",
+      "type": "bulletListItem",
+      "props": {
+        "backgroundColor": "default",
+        "textColor": "default",
+        "textAlignment": "left"
+      },
+      "content": [
+        {
+          "type": "text",
+          "text": "Bring a laptop. Bring the small screwdriver. Do not bring the large screwdriver.",
+          "styles": {}
+        }
+      ],
+      "children": []
+    },
+    {
+      "id": "d2914f7b-0c68-4a35-9e17-5b8d3c60a729",
+      "type": "paragraph",
+      "props": {
+        "backgroundColor": "default",
+        "textColor": "default",
+        "textAlignment": "left"
+      },
+      "content": [
+        {
+          "type": "text",
+          "text": "Everything else — readings, labs, the whole schedule — hangs off this page.",
+          "styles": {}
+        }
+      ],
+      "children": []
+    }
+  ]
+}

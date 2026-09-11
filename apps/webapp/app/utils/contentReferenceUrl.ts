@@ -36,11 +36,18 @@ export function buildContentReferenceUrl(
   if (!reference || !classroomSlug) return null;
 
   const { referenceType, contentPath } = reference;
-  const defaultPagesUrl = pagesUrl || process.env.PAGES_URL || 'http://localhost:7100';
+  // This runs in the browser, where there is no process.env: the pages URL
+  // arrives from the server in the widget's init payload. Without it a page
+  // reference renders as text rather than a guessed link.
+  const defaultPagesUrl = pagesUrl || null;
 
   switch (referenceType) {
     case 'page': {
-      // contentPath is the page UUID from query_available_content
+      // contentPath is the page id from content_search / content_list
+      if (!defaultPagesUrl) {
+        console.warn('[contentReferenceUrl] pagesUrl not provided for page reference');
+        return null;
+      }
       return `${defaultPagesUrl}/${classroomSlug}/${contentPath}`;
     }
 
@@ -65,6 +72,7 @@ export function buildContentReferenceUrl(
       console.warn(
         `[contentReferenceUrl] Deprecated reference type: ${referenceType}, use 'page' instead`
       );
+      if (!defaultPagesUrl) return null;
       return `${defaultPagesUrl}/${classroomSlug}?path=${encodeURIComponent(contentPath)}`;
     }
 
@@ -122,4 +130,20 @@ export function processResponseReferences(
   // so we just clean up the response text here
 
   return processedText;
+}
+
+/**
+ * Strip the inline citation markup the model sometimes invents despite being
+ * told to cite by plain title. Seen in the wild:
+ *   <referenced_content id="…" type="page" title="T">T</referenced_content>
+ *   [page:T]
+ * Both collapse to the title. Real links come from the reference chips, never
+ * from the prose, so nothing is lost.
+ */
+export function normalizeAssistantText(text: string): string {
+  if (!text) return text;
+  return text
+    .replace(/<referenced_content\b[^>]*>([\s\S]*?)<\/referenced_content>/g, '$1')
+    .replace(/<referenced_content\b[^>]*\/>/g, '')
+    .replace(/\[(?:page|slide|slides|file):([^\]]+)\]/g, '$1');
 }
