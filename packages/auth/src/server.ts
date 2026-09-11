@@ -1,4 +1,5 @@
 import { betterAuth } from 'better-auth';
+import { APIError, createAuthMiddleware } from 'better-auth/api';
 import { prismaAdapter } from 'better-auth/adapters/prisma';
 import { admin, mcp } from 'better-auth/plugins';
 import getPrisma from '@classmoji/database';
@@ -16,6 +17,7 @@ import {
   COOKIE_PREFIX,
   sessionTokenFromCookieHeader,
 } from './secret.ts';
+import { ASK_MOJI_CLIENT_ID } from './mcpToken.ts';
 
 export { AUTH_SECRET, COOKIE_PREFIX };
 
@@ -298,6 +300,36 @@ async function getValidGitHubToken(userId: string): Promise<GitHubTokenResult | 
   return ClassmojiService.githubUserToken.getGitHubTokenForUser(userId);
 }
 
+/**
+ * The client id a `/mcp/token` request names — from the request body or from an
+ * HTTP Basic `Authorization` header, because better-auth accepts both
+ * (node_modules/better-auth/dist/plugins/mcp/index.mjs:240-259).
+ *
+ * Used only by the Ask Moji refusal hook below. Returns null when no client id
+ * is presented at all, which better-auth then refuses on its own (the refresh
+ * grant compares the stored row's clientId against it).
+ */
+function tokenRequestClientId(body: unknown, authorization: string | null): string | null {
+  let clientId: unknown;
+  if (typeof FormData !== 'undefined' && body instanceof FormData) {
+    clientId = body.get('client_id');
+  } else if (body && typeof body === 'object') {
+    clientId = (body as Record<string, unknown>).client_id;
+  }
+  if (typeof clientId === 'string' && clientId.length > 0) return clientId;
+
+  if (authorization?.startsWith('Basic ')) {
+    try {
+      const decoded = Buffer.from(authorization.slice('Basic '.length), 'base64').toString('utf8');
+      const [id] = decoded.split(':');
+      if (id) return id;
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
 export const auth = betterAuth({
   basePath: '/api/auth',
   baseURL: process.env.WEBAPP_URL,
@@ -477,6 +509,56 @@ export const auth = betterAuth({
       updatedAt: 'updated_at',
     },
   },
+  /**
+   * SECURITY (plan P1-2): the Ask Moji client never uses the token endpoint.
+   *
+   * Its access tokens are minted directly, one per chat turn, by
+   * `mintMcpAccessToken` (./mcpToken.ts) — there is no authorization-code
+   * exchange and no refresh. Leaving the grant reachable would be an
+   * escalation: better-auth's refresh grant
+   * (node_modules/better-auth/dist/plugins/mcp/index.mjs:262-309) verifies the
+   * refresh token and the client id and NEVER a client secret, so anyone
+   * holding a leaked one-hour Ask Moji bearer could trade it for an indefinitely
+   * renewable seven-day credential. The minted row already carries an
+   * already-expired refresh token; this is the explicit, client-specific
+   * refusal on top of it, so the protection does not rest on one column value.
+   *
+   * This hook runs before EVERY endpoint (better-auth gives user hooks a
+   * `() => true` matcher — dist/api/to-auth-endpoints.mjs:159-170), including
+   * hot in-process `auth.api.*` calls, so the non-matching path must stay a
+   * single string comparison.
+   */
+  hooks: {
+    before: createAuthMiddleware(async ctx => {
+      if (ctx.path !== '/mcp/token') return;
+
+      const authorization =
+        ctx.request?.headers.get('authorization') ?? ctx.headers?.get('authorization') ?? null;
+      if (tokenRequestClientId(ctx.body, authorization) !== ASK_MOJI_CLIENT_ID) return;
+
+      throw new APIError('UNAUTHORIZED', {
+        error: 'invalid_client',
+        error_description:
+          'This client does not use the token endpoint. Its access tokens are minted per request and cannot be refreshed.',
+      });
+    }),
+  },
+  /**
+   * SECURITY (plan P1-2): `/mcp/get-session` returns the ENTIRE
+   * `oauth_access_tokens` row for whatever bearer is presented — refresh token
+   * included, expiry unchecked (mcp/index.mjs:636-653). That turns any leaked
+   * access token into a read of the credential material behind it.
+   *
+   * `disabledPaths` 404s the path in better-auth's HTTP router
+   * (dist/api/index.mjs:154-157), which every app that mounts `auth.handler`
+   * goes through (apps/webapp/app/routes/api.auth.$.ts,
+   * apps/admin/app/routes/api.auth.$.ts). It does NOT affect in-process
+   * `auth.api.getMcpSession`, which bypasses the router — and that is the only
+   * caller we have: apps/mcp/src/auth/resolveViewer.ts:42. Nothing in the OAuth
+   * flow uses this endpoint; it exists for better-auth's own `withMcpAuth`
+   * helper, which we do not use.
+   */
+  disabledPaths: ['/mcp/get-session'],
   plugins: [
     admin({
       impersonationSessionDuration: 60 * 60, // 1 hour

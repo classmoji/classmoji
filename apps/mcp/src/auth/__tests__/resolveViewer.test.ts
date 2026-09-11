@@ -7,16 +7,28 @@
  *   1. expiry enforcement — better-auth 1.4.18 getMcpSession returns the raw
  *      oauth_access_tokens row WITHOUT checking accessTokenExpiresAt, so
  *      resolveViewer must reject expired rows itself;
- *   2. scope parsing — the row stores scopes as a space-delimited string.
+ *   2. scope parsing — the row stores scopes as a space-delimited string;
+ *   3. the `oauth_applications.disabled` kill switch (finding 16) — getMcpSession
+ *      returns the TOKEN row only and never looks at the owning application, so
+ *      disabling a client would revoke nothing unless resolveViewer checks it.
+ *      Prisma is mocked for the same reason better-auth is: the behaviour under
+ *      test is ours.
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { UnauthorizedError } from '../../mcp/errors.ts';
 
 const getMcpSession = vi.fn();
+const findUniqueApplication = vi.fn();
 
 vi.mock('@classmoji/auth/server', () => ({
   auth: { api: { getMcpSession: (...args: unknown[]) => getMcpSession(...args) } },
+}));
+
+vi.mock('@classmoji/database', () => ({
+  default: () => ({
+    oauthApplication: { findUnique: (...args: unknown[]) => findUniqueApplication(...args) },
+  }),
 }));
 
 const { resolveViewer } = await import('../resolveViewer.ts');
@@ -35,6 +47,9 @@ function validRow(overrides: Record<string, unknown> = {}) {
 
 beforeEach(() => {
   getMcpSession.mockReset();
+  findUniqueApplication.mockReset();
+  // Default: the token's OAuth application exists and is enabled.
+  findUniqueApplication.mockResolvedValue({ disabled: false });
 });
 
 describe('resolveViewer', () => {
@@ -125,9 +140,53 @@ describe('resolveViewer', () => {
     expect([...viewer.scopes].sort()).toEqual(['read', 'write']);
   });
 
-  it('normalizes a missing clientId to null', async () => {
+  it('rejects a row with no client id (fail closed — the kill switch keys on it)', async () => {
     getMcpSession.mockResolvedValue(validRow({ clientId: undefined }));
-    const viewer = await resolveViewer(HEADERS);
-    expect(viewer.clientId).toBeNull();
+    await expect(resolveViewer(HEADERS)).rejects.toThrow(/not bound to an oauth client/i);
+  });
+
+  describe('oauth_applications.disabled kill switch (finding 16)', () => {
+    it('REFUSES a token whose OAuth application is disabled', async () => {
+      getMcpSession.mockResolvedValue(validRow());
+      findUniqueApplication.mockResolvedValue({ disabled: true });
+
+      await expect(resolveViewer(HEADERS)).rejects.toThrow(UnauthorizedError);
+      await expect(resolveViewer(HEADERS)).rejects.toThrow(/client is disabled/i);
+    });
+
+    it('looks the application up by the client id on the token row itself', async () => {
+      getMcpSession.mockResolvedValue(validRow({ clientId: 'classmoji-ask-moji' }));
+
+      await resolveViewer(HEADERS);
+
+      expect(findUniqueApplication).toHaveBeenCalledWith({
+        where: { clientId: 'classmoji-ask-moji' },
+        select: { disabled: true },
+      });
+    });
+
+    it('refuses a token whose application row has vanished', async () => {
+      getMcpSession.mockResolvedValue(validRow());
+      findUniqueApplication.mockResolvedValue(null);
+
+      await expect(resolveViewer(HEADERS)).rejects.toThrow(UnauthorizedError);
+    });
+
+    it('accepts a nullish `disabled` (the column is Boolean? defaulting to false)', async () => {
+      getMcpSession.mockResolvedValue(validRow());
+      findUniqueApplication.mockResolvedValue({ disabled: null });
+
+      const viewer = await resolveViewer(HEADERS);
+      expect(viewer.userId).toBe('user-1');
+    });
+
+    it('does not reach the application lookup for an already-expired token', async () => {
+      getMcpSession.mockResolvedValue(
+        validRow({ accessTokenExpiresAt: new Date(Date.now() - 1_000) })
+      );
+
+      await expect(resolveViewer(HEADERS)).rejects.toThrow(UnauthorizedError);
+      expect(findUniqueApplication).not.toHaveBeenCalled();
+    });
   });
 });
