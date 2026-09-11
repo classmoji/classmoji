@@ -24,9 +24,6 @@ vi.mock('~/utils/routeAuth.server', () => ({
 
 vi.mock('~/services/aiAgentConnection.server', () => ({ sendRequest: vi.fn() }));
 vi.mock('~/utils/agentStreamManager', () => ({ default: {} }));
-vi.mock('~/routes/student.$class.quizzes/helpers.server', () => ({
-  getInstallationToken: vi.fn(),
-}));
 vi.mock('@classmoji/utils', () => ({ getContentRepoName: () => '' }));
 vi.mock('@classmoji/services', () => ({
   ClassmojiService: {

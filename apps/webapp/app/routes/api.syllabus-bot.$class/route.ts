@@ -40,6 +40,14 @@ const jsonResponse = (data: Record<string, unknown>, status = 200) =>
 const BOT_ROLES = ['OWNER', 'TEACHER', 'ASSISTANT', 'STUDENT'] as const;
 
 /**
+ * The one thing a failed turn says to the browser. Deliberately says nothing
+ * about WHY: see the catch in handleSendMessage. Matches the wording the init
+ * path already uses for its mint failure, so a user sees one voice from the
+ * feature rather than two.
+ */
+const SEND_MESSAGE_FAILED = 'Could not send your message. Please try again.';
+
+/**
  * Mint the MCP bearer this turn will carry (plan P1-3).
  *
  * EVERY turn, not just init. ai-agent builds its agent config once at init and
@@ -130,19 +138,38 @@ function presentationRole(raw: FormDataEntryValue | null, actualRole: string): s
 /**
  * Does this classroom have a content repo at all?
  *
- * Drives whether the widget offers content questions. `content_repo` is the
- * stored, user-editable repo name; the org-level helper is only a fallback for
- * legacy classrooms that predate it. This is a NAME lookup — no GitHub call, no
- * credential — and it is the only thing left of what used to be the clone
- * handoff.
+ * Drives whether the widget offers content questions. This is a NAME lookup — no
+ * GitHub call, no credential — and it is the only thing left of what used to be
+ * the clone handoff.
+ *
+ * THE PRECEDENCE IS LOAD-BEARING, in this exact order:
+ *
+ *   1. `settings.content_repo_name` — the legacy per-classroom override. A
+ *      classroom configured ONLY through it has a null `content_repo` and, quite
+ *      possibly, an org whose conventional repo does not exist. Dropping this
+ *      term (which the consolidation into one helper briefly did) tells those
+ *      classrooms they have no content: the widget stops offering content
+ *      questions even though the MCP would have answered them.
+ *   2. `classroom.content_repo` — the stored, user-editable repo name, and the
+ *      normal answer for anything configured since.
+ *   3. the org-level convention, for legacy classrooms that predate both.
+ *
+ * This is the same chain the old init path used when it decided whether to hand
+ * ai-agent a clone target, so the widget's answer does not change for any
+ * classroom that worked before the GitHub handoff was removed.
  */
-function hasContentRepoFor(classroom: {
-  content_repo?: string | null;
-  git_organization?: { login?: string | null } | null;
-}): boolean {
+function hasContentRepoFor(
+  classroom: {
+    content_repo?: string | null;
+    git_organization?: { login?: string | null } | null;
+  },
+  settings: { content_repo_name?: string | null } | null | undefined
+): boolean {
   const gitOrgLogin = classroom.git_organization?.login;
   return Boolean(
-    classroom.content_repo || (gitOrgLogin ? getContentRepoName({ login: gitOrgLogin }) : '')
+    settings?.content_repo_name ||
+    classroom.content_repo ||
+    (gitOrgLogin ? getContentRepoName({ login: gitOrgLogin }) : '')
   );
 }
 
@@ -195,7 +222,7 @@ export async function loader({ params, request }: Route.LoaderArgs) {
 
   return jsonResponse({
     enabled: settings?.syllabus_bot_enabled ?? false,
-    hasContentRepo: hasContentRepoFor(classroom),
+    hasContentRepo: hasContentRepoFor(classroom, settings),
     userRole: membership!.role,
     isInstructor,
     orgName: classroom.name,
@@ -334,7 +361,7 @@ async function handleInitConversation(request: Request, classSlug: string, formD
       // Computed HERE, not echoed back from ai-agent. ai-agent no longer
       // clones anything, so it has no idea whether a course has content; the
       // loader above answers the same question from the same fields.
-      hasContentRepo: hasContentRepoFor(classroom),
+      hasContentRepo: hasContentRepoFor(classroom, settings),
       suggestedQuestions: resultPayload.suggestedQuestions,
     });
   } catch (error: unknown) {
@@ -430,9 +457,21 @@ async function handleSendMessage(request: Request, classSlug: string, formData: 
 
     return jsonResponse({ success: true, messageId });
   } catch (error: unknown) {
+    // The DETAIL stays server-side. It used to be echoed to the browser
+    // verbatim, through both the JSON body and the SSE error event, which was
+    // already loose and became a real leak once this path started minting an MCP
+    // token: everything that can fail here — `mintMcpAccessToken`, Prisma, the
+    // ai-agent socket — throws messages written for an operator, carrying
+    // connection strings, internal hostnames, constraint and column names, and
+    // stack-shaped detail. A chat member is not the audience for any of it, and
+    // "what went wrong" is not something they can act on differently.
+    //
+    // Both exits get the same generic line, because the SSE channel reaches the
+    // same browser as the response body — fixing one and not the other would
+    // leave the leak open through the other door.
     console.error('[syllabus-bot] Send message failed:', error);
-    agentStreamManager.publishError(conversationId, error instanceof Error ? error : String(error));
-    return jsonResponse({ error: error instanceof Error ? error.message : String(error) }, 500);
+    agentStreamManager.publishError(conversationId, SEND_MESSAGE_FAILED);
+    return jsonResponse({ error: SEND_MESSAGE_FAILED }, 500);
   }
 }
 

@@ -50,9 +50,6 @@ vi.mock('~/services/aiAgentConnection.server', () => ({
 
 vi.mock('~/utils/agentStreamManager', () => ({ default: { publish: vi.fn() } }));
 vi.mock('@classmoji/utils', () => ({ getContentRepoName: () => 'content-x' }));
-vi.mock('~/routes/student.$class.quizzes/helpers.server', () => ({
-  getInstallationToken: vi.fn(),
-}));
 // Both are module-level imports of the route; the conversation lookup is
 // exercised properly in conversation-binding.test.ts, and the mint in
 // mcp-token.test.ts.

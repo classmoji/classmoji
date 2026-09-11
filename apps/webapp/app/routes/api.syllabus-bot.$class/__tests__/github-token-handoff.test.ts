@@ -197,17 +197,83 @@ describe('P3-3 — hasContentRepo is now the webapp’s answer, not ai-agent’s
     expect(body.hasContentRepo).toBe(true);
   });
 
-  it('reports false when the classroom has no content repo and no git org', async () => {
+  it('reports false when the classroom has no content repo, no git org and no legacy override', async () => {
     assertClassroomAccessMock.mockResolvedValue({
       userId: 'user-1',
       classroom: { id: 'c1', name: 'CS52', status: 'ACTIVE', git_organization: null },
       membership: { role: 'STUDENT' },
     });
+    // The shared fixture carries `content_repo_name`; a classroom with NOTHING
+    // configured has to have it cleared, or this asserts the wrong scenario.
+    getClassroomSettingsForServerMock.mockResolvedValue({ syllabus_bot_enabled: true });
 
     const res = await post({ _action: 'initConversation' });
     const body = (await res.json()) as { hasContentRepo: boolean };
 
     expect(body.hasContentRepo).toBe(false);
     expect(getContentRepoNameMock).not.toHaveBeenCalled();
+  });
+
+  /**
+   * THE PRECEDENCE REGRESSION (review finding 5a).
+   *
+   * Before the GitHub handoff was removed, the init path decided whether a
+   * classroom had content with `settings.content_repo_name || classroom.content_repo
+   * || <org fallback>`. Consolidating the two call sites into `hasContentRepoFor`
+   * silently dropped the first term. A classroom configured ONLY through the
+   * legacy override — null `content_repo`, and an org whose conventional repo
+   * does not exist — was then told it has no content, and the widget stopped
+   * offering content questions that the MCP would have answered.
+   *
+   * MUTATION: drop `settings?.content_repo_name ||` from hasContentRepoFor → both
+   * assertions below fail.
+   */
+  it('reports TRUE for a classroom configured only through the legacy settings override', async () => {
+    assertClassroomAccessMock.mockResolvedValue({
+      userId: 'user-1',
+      classroom: {
+        id: 'c1',
+        name: 'CS52',
+        status: 'ACTIVE',
+        content_repo: null, // nothing stored on the classroom
+        git_organization: null, // and no org to fall back to
+      },
+      membership: { role: 'STUDENT' },
+    });
+    getClassroomSettingsForServerMock.mockResolvedValue({
+      syllabus_bot_enabled: true,
+      content_repo_name: 'cs52-content-legacy',
+    });
+
+    const res = await post({ _action: 'initConversation' });
+    expect((await res.json()).hasContentRepo).toBe(true);
+  });
+
+  // The loader answers the same question and must answer it the same way — the
+  // widget reads it from here on mount and from init on open.
+  it('reports it the same way from the loader', async () => {
+    assertClassroomAccessMock.mockResolvedValue({
+      userId: 'user-1',
+      classroom: {
+        id: 'c1',
+        name: 'CS52',
+        status: 'ACTIVE',
+        content_repo: null,
+        git_organization: null,
+      },
+      membership: { role: 'STUDENT' },
+    });
+    getClassroomSettingsForServerMock.mockResolvedValue({
+      syllabus_bot_enabled: true,
+      content_repo_name: 'cs52-content-legacy',
+    });
+
+    const { loader } = await import('../route');
+    const res = (await loader({
+      params: { class: CLASS },
+      request: new Request(`http://x/api/syllabus-bot/${CLASS}`),
+    } as never)) as Response;
+
+    expect((await res.json()).hasContentRepo).toBe(true);
   });
 });

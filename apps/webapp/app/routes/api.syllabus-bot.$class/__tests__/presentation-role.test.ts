@@ -41,9 +41,6 @@ vi.mock('~/services/aiAgentConnection.server', () => ({
 }));
 vi.mock('~/utils/agentStreamManager', () => ({ default: { registerSession: vi.fn() } }));
 vi.mock('@classmoji/utils', () => ({ getContentRepoName: () => '' }));
-vi.mock('~/routes/student.$class.quizzes/helpers.server', () => ({
-  getInstallationToken: vi.fn(),
-}));
 vi.mock('@classmoji/auth/mcp-token', () => ({
   mintMcpAccessToken: vi.fn(async () => ({ accessToken: 'tok', expiresAt: new Date() })),
 }));

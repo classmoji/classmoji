@@ -59,9 +59,6 @@ vi.mock('~/utils/agentStreamManager', () => ({
 }));
 
 vi.mock('@classmoji/utils', () => ({ getContentRepoName: () => '' }));
-vi.mock('~/routes/student.$class.quizzes/helpers.server', () => ({
-  getInstallationToken: vi.fn(),
-}));
 
 vi.mock('@classmoji/auth/mcp-token', () => ({
   mintMcpAccessToken: (...a: unknown[]) => mintMcpAccessTokenMock(...a),
@@ -205,5 +202,91 @@ describe('syllabus bot MCP token — never logged', () => {
       )
       .join('\n');
     expect(logged).not.toContain('askmoji_deadbeef');
+  });
+});
+
+describe('syllabus bot — a failed turn tells the browser nothing about why', () => {
+  /**
+   * The send path used to answer `error.message` verbatim, in TWO places: the
+   * 500's JSON body and the SSE `error` event, both of which land in the same
+   * browser. That was already loose, and became a real leak once this path
+   * started minting an MCP token — `mintMcpAccessToken` reaches Prisma, so its
+   * failures carry connection strings, hostnames, and constraint and column
+   * names, and the ai-agent socket's carry internal URLs. None of it is
+   * actionable by a student in a chat widget.
+   *
+   * These tests are written against the SHAPE of the promise: whatever the
+   * underlying error said, none of its text appears in anything the browser
+   * receives, and the operator still gets the whole thing on the server.
+   *
+   * MUTATION: restore `error instanceof Error ? error.message : String(error)`
+   * in either exit → the matching test fails.
+   */
+  const LEAKY = 'ECONNREFUSED postgres://app:hunter2@10.0.0.7:5432/classmoji_prod';
+
+  let errorSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    errorSpy.mockRestore();
+  });
+
+  const streamManager = async () =>
+    (await import('~/utils/agentStreamManager')).default as unknown as {
+      publishError: { mock: { calls: unknown[][] } };
+    };
+
+  it('does not echo an MCP-mint failure into the response body', async () => {
+    mintMcpAccessTokenMock.mockRejectedValue(new Error(LEAKY));
+
+    const res = await post({ _action: 'sendMessage', conversationId: 'conv-mine', content: 'x' });
+    const body = (await res.json()) as { error: string };
+
+    expect(res.status).toBe(500);
+    expect(JSON.stringify(body)).not.toContain(LEAKY);
+    expect(JSON.stringify(body)).not.toContain('hunter2');
+    expect(JSON.stringify(body)).not.toContain('postgres://');
+    expect(body.error).toBe('Could not send your message. Please try again.');
+  });
+
+  it('does not echo an ai-agent failure into the response body either', async () => {
+    sendRequestMock.mockRejectedValue(new Error('connect ETIMEDOUT ai-agent.internal:8080'));
+
+    const res = await post({ _action: 'sendMessage', conversationId: 'conv-mine', content: 'x' });
+    const body = (await res.json()) as { error: string };
+
+    expect(res.status).toBe(500);
+    expect(JSON.stringify(body)).not.toContain('ai-agent.internal');
+    expect(JSON.stringify(body)).not.toContain('ETIMEDOUT');
+    expect(body.error).toBe('Could not send your message. Please try again.');
+  });
+
+  it('does not leak it through the SSE error event — the other door to the same browser', async () => {
+    mintMcpAccessTokenMock.mockRejectedValue(new Error(LEAKY));
+
+    await post({ _action: 'sendMessage', conversationId: 'conv-mine', content: 'x' });
+
+    const published = JSON.stringify((await streamManager()).publishError.mock.calls);
+    expect(published).not.toContain(LEAKY);
+    expect(published).not.toContain('hunter2');
+    expect(published).toContain('Could not send your message');
+  });
+
+  // The detail must not simply vanish — an operator still has to be able to
+  // debug the turn.
+  it('still logs the whole error server-side', async () => {
+    mintMcpAccessTokenMock.mockRejectedValue(new Error(LEAKY));
+
+    await post({ _action: 'sendMessage', conversationId: 'conv-mine', content: 'x' });
+
+    const logged = errorSpy.mock.calls
+      .map((args: unknown[]) =>
+        args.map(a => (a instanceof Error ? a.message : String(a))).join(' ')
+      )
+      .join('\n');
+    expect(logged).toContain(LEAKY);
   });
 });

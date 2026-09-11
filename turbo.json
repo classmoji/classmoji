@@ -99,6 +99,14 @@
     "db:dev": {},
     "test": {
       "cache": false,
+      // The webapp is the one workspace whose `test` script is Playwright rather
+      // than vitest (every other workspace's `test` IS its unit suite), so its
+      // vitest suites — including the Ask Moji auth/authz tests under
+      // app/routes/**/__tests__ — had no aggregate that reached them and ran only
+      // when someone remembered. This makes the root `npm run test` run them
+      // first: turbo resolves an unprefixed dependency within the SAME package,
+      // and simply skips it for the workspaces that define no such script.
+      "dependsOn": ["web:test:unit"],
       // turbo hands a task only the environment it has been told about, so an
       // E2E_* variable set on the command line simply does not reach Playwright
       // unless it is named here. The failure mode is quiet and expensive: the
@@ -131,6 +139,13 @@
     "web:test:ui": {
       "cache": false,
       "persistent": true
+    },
+    // Webapp vitest (apps/webapp `web:test:unit`). Uncached like the sibling test
+    // tasks, and with no outputs: vitest writes no artifact to restore, unlike
+    // Playwright's test-results/ and playwright-report/.
+    "web:test:unit": {
+      "cache": false,
+      "outputs": []
     },
     "typecheck": {
       "dependsOn": ["^typecheck"],
@@ -221,6 +236,7 @@
     "CLOUDFLARE_BROWSER_RENDERING_TOKEN",
     "CLOUDFLARE_WORKERS_AI_TOKEN",
     "CLOUDFLARE_WORKERS_AI_EMBED_MAX_TOKENS",
+    "CLOUDFLARE_WORKERS_AI_BASE_URL",
     "INFISICAL_CLIENT_ID",
     "INFISICAL_CLIENT_SECRET",
     "INFISICAL_PROJECT_ID",
