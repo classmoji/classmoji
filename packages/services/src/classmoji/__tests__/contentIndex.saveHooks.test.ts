@@ -19,7 +19,13 @@
  *   - a page CREATE indexes after the DB row exists, not from the low-level
  *     asset recorder that runs before it — a `content_index` row is keyed on
  *     the page id, and there is no id until `create()` returns;
- *   - none of it is awaited, and none of it can fail a save that has committed.
+ *   - none of it is awaited, and none of it can fail a save that has committed;
+ *   - ACCEPTING A PREVIEW indexes too. It is a publish — the bytes on main
+ *     change — but it never goes through `savePageContent` / `saveDeck`, so
+ *     neither of their hooks can fire for it. Left out, the index would keep
+ *     answering out of the pre-accept text of a page or a deck that has been
+ *     published, which is the one state the whole lane exists to prevent. The
+ *     bytes indexed are the MERGED ones, at the sha they were committed under.
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
@@ -51,6 +57,8 @@ const putMock = vi.fn();
 const getMetaMock = vi.fn();
 const uploadBatchMock = vi.fn();
 const deleteBranchMock = vi.fn();
+const mergeBranchMock = vi.fn();
+const compareBranchesMock = vi.fn();
 vi.mock('../../content/ContentService.ts', () => ({
   ContentService: {
     getContent: (...args: unknown[]) => getContentMock(...args),
@@ -59,6 +67,8 @@ vi.mock('../../content/ContentService.ts', () => ({
     uploadBatch: (...args: unknown[]) => uploadBatchMock(...args),
     deleteFolder: vi.fn(),
     deleteBranch: (...args: unknown[]) => deleteBranchMock(...args),
+    mergeBranch: (...args: unknown[]) => mergeBranchMock(...args),
+    compareBranches: (...args: unknown[]) => compareBranchesMock(...args),
   },
 }));
 
@@ -107,7 +117,9 @@ vi.mock('../contentIndex.service.ts', () => ({
   },
 }));
 
-const { savePageContent, previewBranchName } = await import('../pageContent.service.ts');
+const { savePageContent, acceptPreview, previewBranchName } =
+  await import('../pageContent.service.ts');
+const { acceptDeckPreview } = await import('../../slides/deckPreview.service.ts');
 const { createPage } = await import('../page.service.ts');
 const { saveDeck, previewBranchName: deckPreviewBranchName } =
   await import('../../slides/slideContent.service.ts');
@@ -159,6 +171,9 @@ beforeEach(() => {
   deleteBranchMock.mockRejectedValue(
     Object.assign(new Error('Reference does not exist'), { status: 422 })
   );
+  mergeBranchMock.mockResolvedValue({ merged: true, sha: 'merge-commit-1' });
+  // ahead_by 0: the preview branch is fully merged, so the accept deletes it.
+  compareBranchesMock.mockResolvedValue({ ahead_by: 0, merge_base_sha: 'base-sha' });
 
   classroomFindUniqueMock.mockResolvedValue(classroom);
   pageFindFirstMock.mockResolvedValue(null);
@@ -253,6 +268,95 @@ describe('a page create', () => {
       path: 'pages/imported-page/index.html',
       body: '<h1>Imported</h1>',
     });
+  });
+});
+
+describe('accepting a page preview', () => {
+  /** What the merge commit holds: a clean document needing no column repair. */
+  const MERGED_JSON = JSON.stringify({
+    blocks: [{ id: 'b1', type: 'paragraph', content: 'the accepted text' }],
+  });
+  const MERGED_SHA = 'merged-content-sha';
+
+  beforeEach(() => {
+    getContentMock.mockResolvedValue({ sha: MERGED_SHA, content: MERGED_JSON });
+  });
+
+  it('indexes the MERGED bytes at the merge’s sha', async () => {
+    const result = await acceptPreview(page);
+    await settle();
+
+    expect(result).toMatchObject({ merged: true, sha: MERGED_SHA });
+    expect(indexOneFileMock).toHaveBeenCalledTimes(1);
+    expect(indexOneFileMock.mock.calls[0][0]).toEqual({
+      classroomId: CLASSROOM_ID,
+      path: 'pages/lab-1/content.json',
+      // The sha the accept published, not the one the preview branch had.
+      sha: MERGED_SHA,
+      // The merged bytes themselves — the hook does not re-read them, which is
+      // what keeps it from indexing whatever main holds a second later.
+      body: MERGED_JSON,
+      docHint: { kind: 'page', id: 'page-1', title: 'Lab 1' },
+    });
+  });
+
+  it('indexes AFTER the asset row, same as a save', async () => {
+    await acceptPreview(page);
+    await settle();
+    expect(events.indexOf('record:pages/lab-1/content.json')).toBeLessThan(events.indexOf('index'));
+  });
+
+  it('indexes nothing when the merge did not happen', async () => {
+    // A git-level conflict hands off to the semantic fallback; nothing was
+    // published, so nothing may be indexed.
+    mergeBranchMock.mockResolvedValue({ merged: false });
+    compareBranchesMock.mockResolvedValue(null);
+    getContentMock.mockResolvedValue(null);
+
+    await acceptPreview(page).catch(() => undefined);
+    await settle();
+    expect(indexOneFileMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('accepting a deck preview', () => {
+  const MERGED_DECK = JSON.stringify({
+    version: 1,
+    theme: 'white',
+    codeTheme: 'github-dark',
+    slides: [{ id: 's1', html: '<h1>Accepted recursion</h1>' }],
+  });
+
+  beforeEach(() => {
+    getContentMock.mockResolvedValue({ sha: 'merged-deck-sha', content: MERGED_DECK });
+  });
+
+  it('indexes the REGENERATED artifact at the sha the batch wrote', async () => {
+    await acceptDeckPreview(slide);
+    await settle();
+
+    expect(indexOneFileMock).toHaveBeenCalledTimes(1);
+    const call = indexOneFileMock.mock.calls[0][0];
+    expect(call).toMatchObject({
+      classroomId: CLASSROOM_ID,
+      // index.html, not deck.json: the artifact is the document.
+      path: 'slides/lecture-1/index.html',
+      // From the regenerate's own uploadBatch result.
+      sha: 'sha-0',
+      docHint: { kind: 'slide', id: 'slide-1', title: 'Lecture 1' },
+    });
+    // The html the accept itself generated and committed.
+    expect(call.body).toContain('Accepted recursion');
+  });
+
+  it('indexes nothing when the artifact was never regenerated', async () => {
+    // Unreadable deck.json on main: no regenerate, no new artifact — and so
+    // nothing the index may claim was published.
+    getContentMock.mockResolvedValue({ sha: 'merged-deck-sha', content: 'not json' });
+
+    await acceptDeckPreview(slide);
+    await settle();
+    expect(indexOneFileMock).not.toHaveBeenCalled();
   });
 });
 

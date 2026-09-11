@@ -1,4 +1,4 @@
--- Semantic index over course content: one row and one vector per document.
+-- Semantic index over course content: one row and one vector per chunk.
 --
 -- CREATE EXTENSION is the first statement on purpose. Neon carries pgvector on
 -- every plan, but a local docker postgres does not unless the image provides it
@@ -11,10 +11,10 @@
 -- Bodies are still read through the delivery layer; a row here only decides
 -- what is findable, and losing the whole table costs a re-index, not content.
 --
--- PRIMARY KEY (classroom_id, doc_kind, doc_id) rather than the path, because
--- `pages.content_path` carries no unique constraint and is mutable — keying on
--- the record id is what makes the permission join in the search query an
--- equality on a primary key instead of a fuzzy path match.
+-- PRIMARY KEY (classroom_id, doc_kind, doc_id, chunk_ix) rather than the path,
+-- because `pages.content_path` carries no unique constraint and is mutable —
+-- keying on the record id is what makes the permission join in the search query
+-- an equality on a primary key instead of a fuzzy path match.
 --
 -- `doc_kind` is 'page' | 'slide' | 'file'. For 'page' and 'slide', `doc_id` is
 -- the `pages.id` / `slides.id` the row describes. For 'file', `doc_id` IS the
@@ -47,6 +47,42 @@
 --
 -- 1,024 dimensions is `@cf/qwen/qwen3-embedding-0.6b`, verified live, and is
 -- comfortably under pgvector's 2,000-dimension ceiling for the `vector` type.
+--
+-- ── WHY THE ROW IS A CHUNK AND NOT ALWAYS A DOCUMENT ────────────────────────
+-- The Workers AI embedding client enforces a maximum input size and REFUSES
+-- over-cap text rather than truncating it, which is the right default: a
+-- silently truncated document is an index that lies about what it contains.
+-- Measured against a real classroom's content repo, pages fit comfortably but
+-- roughly half of the larger slide decks do not. So the policy is one vector
+-- per document when it fits — the common case — and paragraph-boundary chunks,
+-- one row and one vector each, when it does not.
+--
+-- `chunk_ix` DEFAULT 0 and `chunk_count` DEFAULT 1 describe the unchunked case,
+-- so no writer has to think about chunking to be correct.
+--
+-- `chunk_count` is stamped on EVERY row of a document, not stored once. It is
+-- what lets the reconcile recognise a partially indexed document — rows exist,
+-- but fewer than `chunk_count` of them — from the rows themselves, without a
+-- second query or a separate per-document table. `title`, `source_path`,
+-- `source_sha`, `extract_version` and `embed_model` are likewise repeated per
+-- chunk: freshness is compared per row, and a row that could not say what
+-- produced it would need a join before it could be re-indexed.
+--
+-- CONSEQUENCE FOR THE SEARCH QUERY, stated here because the table cannot
+-- enforce it: a multi-chunk document can match on several of its chunks at
+-- once. The query must collapse those to one hit per document — DISTINCT ON
+-- (doc_kind, doc_id) ordered by distance, or an equivalent windowed rank — so a
+-- document appears once, represented by its best-matching chunk. De-duplication
+-- must happen BEFORE the LIMIT; applied after, one long deck could fill the
+-- entire result set with itself.
+--
+-- `chunk_ix` and `chunk_count` are declared LAST rather than beside `doc_id`,
+-- which is where the Prisma model lists them. This file squashes a CREATE and a
+-- follow-up ALTER that added them, and the ordinals the ALTER produced are the
+-- ones every database that ran the pair already has. Matching them here keeps a
+-- fresh database physically identical to an upgraded one. Column order is
+-- presentation only — Prisma diffs by name — so nothing else depends on it.
+
 CREATE EXTENSION IF NOT EXISTS vector;
 
 -- CreateTable
@@ -63,8 +99,10 @@ CREATE TABLE "content_index" (
     "embedding" vector(1024),
     "indexed_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updated_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "chunk_ix" INTEGER NOT NULL DEFAULT 0,
+    "chunk_count" INTEGER NOT NULL DEFAULT 1,
 
-    CONSTRAINT "content_index_pkey" PRIMARY KEY ("classroom_id","doc_kind","doc_id")
+    CONSTRAINT "content_index_pkey" PRIMARY KEY ("classroom_id","doc_kind","doc_id","chunk_ix")
 );
 
 -- THERE IS DELIBERATELY NO HNSW (OR IVFFLAT) INDEX HERE.

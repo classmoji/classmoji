@@ -1,4 +1,4 @@
-import { task, schedules, logger } from '@trigger.dev/sdk';
+import { schemaTask, schedules, logger } from '@trigger.dev/sdk';
 import { ClassmojiService } from '@classmoji/services';
 
 /**
@@ -31,10 +31,18 @@ import { ClassmojiService } from '@classmoji/services';
  * has to be answerable without reading a log for individual lines. So every
  * outcome is counted and bucketed by reason, and the whole thing is returned as
  * well as logged: `{ classrooms, eligible, indexed, skipped, failed,
- * orphansDeleted, byReason }`. `byReason.not_configured` equal to `eligible` is
- * the "no Workers AI token in this environment" shape; a rising
- * `byReason.sha_mismatch` is the delivery layer serving bytes the map does not
- * agree with.
+ * classroomErrors, orphansDeleted, byReason, byClassroom }`.
+ * `byReason.not_configured` equal to `eligible` is the "no Workers AI token in
+ * this environment" shape; a rising `byReason.sha_mismatch` is the delivery
+ * layer serving bytes the map does not agree with; a non-zero
+ * `byReason.assets_unavailable` is a classroom whose asset map never came back,
+ * whose `bot-context/` rows the sweep therefore declined to delete.
+ *
+ * `failed` counts DOCUMENTS and `classroomErrors` counts CLASSROOMS, separately
+ * — a fleet-wide `failed: 40` reads identically whether it is one dead repo or
+ * forty unlucky documents, and the gate has to tell those apart. `byClassroom`
+ * carries the same counters per classroom, each row with an `error` when that
+ * classroom was abandoned whole, so the culprit is named rather than inferred.
  *
  * ── Never throws ───────────────────────────────────────────────────────────
  * `reconcileContentIndex` counts a classroom's failure and moves to the next
@@ -62,6 +70,89 @@ export const contentIndexReconcileTask = schedules.task({
   },
 });
 
+export interface ContentIndexBackfillPayload {
+  classroomIds?: string[];
+  concurrency?: number;
+}
+
+/** Everything the payload may contain. Anything else is a typo, not an option. */
+const PAYLOAD_KEYS = ['classroomIds', 'concurrency'] as const;
+
+/** Canonical 8-4-4-4-12, any case. `Classroom.id` is a uuid in every row. */
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * How many documents may be in flight at once, ceiling included.
+ *
+ * Each one is a content fetch plus a Workers AI embed call, so concurrency here
+ * is concurrency against GitHub and Cloudflare. Eight is already past the point
+ * where a backfill starts competing with live traffic for the same rate limits;
+ * a typo'd `concurrency: 800` would take the fleet's content reads down with it.
+ */
+const MAX_CONCURRENCY = 8;
+
+const reject = (message: string): never => {
+  throw new Error(`[content-index-backfill] ${message}`);
+};
+
+/**
+ * Strict payload validation, run by `schemaTask` BEFORE `run`.
+ *
+ * Hand-written rather than a Zod schema for the same reason as
+ * `gitOrgInstallationRepair`: `@classmoji/tasks` does not depend on Zod and no
+ * sibling task pulls one in, and `schemaTask` accepts a plain validator.
+ *
+ * Unknown keys are a hard failure. This task's default is the WHOLE FLEET, so a
+ * payload the operator believed narrowed the run — `{ "classroomId": "…" }`,
+ * `{ "classroom_ids": [...] }` — must fail loudly rather than quietly mean
+ * "re-index everything" at whatever hour it was triggered.
+ */
+export const parseBackfillPayload = (input: unknown): ContentIndexBackfillPayload => {
+  if (input === undefined || input === null) return {};
+
+  if (typeof input !== 'object' || Array.isArray(input)) {
+    reject('payload must be an object');
+  }
+
+  const raw = input as Record<string, unknown>;
+  const unknown = Object.keys(raw).filter(
+    key => !(PAYLOAD_KEYS as readonly string[]).includes(key)
+  );
+  if (unknown.length > 0) {
+    reject(
+      `unknown payload key(s): ${unknown.join(', ')} — expected only ${PAYLOAD_KEYS.join(', ')}`
+    );
+  }
+
+  const payload: ContentIndexBackfillPayload = {};
+
+  if (raw.classroomIds !== undefined) {
+    if (!Array.isArray(raw.classroomIds) || raw.classroomIds.length === 0) {
+      reject('classroomIds must be a non-empty array of classroom uuids');
+    }
+    const ids = raw.classroomIds as unknown[];
+    if (ids.some(id => typeof id !== 'string' || !UUID.test(id))) {
+      reject('classroomIds must all be classroom uuids');
+    }
+    payload.classroomIds = ids as string[];
+  }
+
+  if (raw.concurrency !== undefined) {
+    const value = raw.concurrency;
+    if (
+      typeof value !== 'number' ||
+      !Number.isInteger(value) ||
+      value < 1 ||
+      value > MAX_CONCURRENCY
+    ) {
+      reject(`concurrency must be an integer between 1 and ${MAX_CONCURRENCY}`);
+    }
+    payload.concurrency = value as number;
+  }
+
+  return payload;
+};
+
 /**
  * The same run, aimed.
  *
@@ -70,9 +161,10 @@ export const contentIndexReconcileTask = schedules.task({
  * rather than tomorrow morning — and a scheduled task takes no payload. Same
  * engine, same report, so there is no second implementation to drift.
  */
-export const contentIndexBackfillTask = task({
+export const contentIndexBackfillTask = schemaTask({
   id: 'content-index-backfill',
-  run: async (payload: { classroomIds?: string[]; concurrency?: number }) => {
+  schema: parseBackfillPayload,
+  run: async (payload: ContentIndexBackfillPayload) => {
     const report = await ClassmojiService.contentIndex.reconcileContentIndex({
       ...(payload?.classroomIds ? { classroomIds: payload.classroomIds } : {}),
       ...(payload?.concurrency ? { concurrency: payload.concurrency } : {}),

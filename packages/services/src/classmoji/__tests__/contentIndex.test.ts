@@ -241,6 +241,7 @@ const fakePrisma = {
     findMany: async ({ where }: { where: { id: { in: string[] } } }) =>
       where.id.in.map(id => ({
         id,
+        slug: `slug-${id}`,
         content_key_version: 1,
         content_repo: 'content-test-org-cs101',
         content_delivery_enabled: false,
@@ -811,6 +812,80 @@ describe('planClassroomIndex', () => {
     expect(plan.items).toHaveLength(0);
     expect(plan.missingAssets).toBe(1);
   });
+
+  /**
+   * `file` documents have no DB row — the asset map IS their record — so an
+   * empty map and a repo with no files produce the identical empty live set.
+   * Deleting on that would wipe every `bot-context/` row a classroom has, on
+   * exactly the classrooms whose map failed to build.
+   */
+  describe('a `file` orphan against an empty asset map', () => {
+    const FILE_PATH = 'bot-context/faq.md';
+    const FILE_SHA = 'd'.repeat(40);
+
+    /** An indexed `bot-context/` file, and then a map that no longer names it. */
+    async function indexedFileThenEmptyMap(): Promise<void> {
+      assetShas.set(assetKey(CLASSROOM, FILE_PATH), FILE_SHA);
+      await indexOneFile({
+        classroomId: CLASSROOM,
+        path: FILE_PATH,
+        sha: FILE_SHA,
+        body: 'Office hours are Tuesdays.',
+      });
+      expect(rowsFor('file', FILE_PATH)).toHaveLength(1);
+      assetShas.clear();
+    }
+
+    it('is HELD when nothing rebuilt the map', async () => {
+      await indexedFileThenEmptyMap();
+
+      const plan = await planClassroomIndex(CLASSROOM);
+      expect(plan.orphans).toEqual([]);
+      expect(plan.heldFileOrphans).toBe(1);
+      expect(await deleteOrphans(CLASSROOM, plan.orphans)).toBe(0);
+      expect(rowsFor('file', FILE_PATH)).toHaveLength(1);
+    });
+
+    it('is DELETED when a sync in this run rebuilt the map and it is still empty', async () => {
+      await indexedFileThenEmptyMap();
+
+      // The genuine "the repo has no files any more" case: something just
+      // looked, and there is nothing there.
+      const plan = await planClassroomIndex(CLASSROOM, { assetsSynced: true });
+      expect(plan.orphans).toEqual([{ kind: 'file', id: FILE_PATH }]);
+      expect(plan.heldFileOrphans).toBe(0);
+      expect(await deleteOrphans(CLASSROOM, plan.orphans)).toBe(1);
+      expect(rowsFor('file', FILE_PATH)).toHaveLength(0);
+    });
+
+    it('holds only the `file` half — a deleted page still sweeps', async () => {
+      await indexOneFile({
+        classroomId: CLASSROOM,
+        path: PAGE_PATH,
+        sha: SHA,
+        body: '{"blocks":[]}',
+        docHint: { kind: 'page', id: PAGE_ID, title: 'Lab 1' },
+      });
+      await indexedFileThenEmptyMap();
+      // The page is gone from the DB, which the DB stated — no map required.
+      pageRows.length = 0;
+
+      const plan = await planClassroomIndex(CLASSROOM);
+      expect(plan.orphans).toEqual([{ kind: 'page', id: PAGE_ID }]);
+      expect(plan.heldFileOrphans).toBe(1);
+    });
+
+    it('holds nothing when the map simply has other files in it', async () => {
+      await indexedFileThenEmptyMap();
+      // A map that came back with SOMETHING is a map; the missing path is a
+      // real deletion, not an outage.
+      assetShas.set(assetKey(CLASSROOM, 'bot-context/syllabus.md'), 'e'.repeat(40));
+
+      const plan = await planClassroomIndex(CLASSROOM);
+      expect(plan.orphans).toEqual([{ kind: 'file', id: FILE_PATH }]);
+      expect(plan.heldFileOrphans).toBe(0);
+    });
+  });
 });
 
 describe('reconcileContentIndex', () => {
@@ -898,5 +973,168 @@ describe('reconcileContentIndex', () => {
     expect(report.classrooms).toBe(2);
     expect(report.byReason.classroom_error).toBe(1);
     expect(rowsFor('page', 'page-other')).toHaveLength(1);
+  });
+
+  /**
+   * The reconcile refreshes the map ITSELF rather than depending on the asset
+   * sweep's timing, and the order is the whole point: a classroom nobody has
+   * rendered has pages and an empty map, so planning before the sync would find
+   * nothing to do on exactly the classrooms the index is missing entirely.
+   */
+  it('syncs the asset map BEFORE planning, and indexes what the sync returned', async () => {
+    // No blob for anything, until the sync puts one there.
+    assetShas.clear();
+    const order: string[] = [];
+    const NEW_SHA = 'f'.repeat(40);
+
+    vi.doMock('../contentAssets.service.ts', () => ({
+      ensureContentAssets: async (classroomId: string) => {
+        order.push('sync');
+        assetShas.set(assetKey(classroomId, PAGE_PATH), NEW_SHA);
+        assetShas.set(assetKey(classroomId, 'bot-context/faq.md'), NEW_SHA);
+        return { mode: 'full', upserted: 2, deleted: 0, truncated: false };
+      },
+    }));
+
+    const watchedFetch = vi.fn(async (_classroom: unknown, path: string) => {
+      order.push(`fetch:${path}`);
+      return { text: '{"blocks":[]}', sha: assetShas.get(assetKey(CLASSROOM, path)) ?? null };
+    });
+
+    const report = await reconcileContentIndex({
+      fetchBody: watchedFetch,
+      classroomIds: [CLASSROOM],
+    });
+
+    // The sync ran first, and the plan it fed was built from its rows: two
+    // documents that did not exist for the planner a moment earlier.
+    expect(order[0]).toBe('sync');
+    expect(report.eligible).toBe(2);
+    expect(report.indexed).toBe(2);
+    expect(rowsFor('page', PAGE_ID)[0].source_sha).toBe(NEW_SHA);
+    expect(rowsFor('file', 'bot-context/faq.md')).toHaveLength(1);
+  });
+
+  describe('when the asset map is unavailable', () => {
+    const FILE_PATH = 'bot-context/faq.md';
+    const FILE_SHA = 'd'.repeat(40);
+
+    /** One indexed `bot-context/` file, then a map that returns nothing. */
+    async function indexedFileThenEmptyMap(): Promise<void> {
+      assetShas.set(assetKey(CLASSROOM, FILE_PATH), FILE_SHA);
+      await indexOneFile({
+        classroomId: CLASSROOM,
+        path: FILE_PATH,
+        sha: FILE_SHA,
+        body: 'Office hours are Tuesdays.',
+      });
+      assetShas.clear();
+    }
+
+    it('keeps the bot-context rows and says why', async () => {
+      await indexedFileThenEmptyMap();
+      // The default stub: `ensureContentAssets` returned null, which is what a
+      // GitHub outage and a classroom that has never synced both look like.
+      const report = await reconcileContentIndex({ fetchBody, classroomIds: [CLASSROOM] });
+
+      expect(report.orphansDeleted).toBe(0);
+      expect(report.byReason.assets_unavailable).toBe(1);
+      expect(rowsFor('file', FILE_PATH)).toHaveLength(1);
+    });
+
+    it('sweeps them once a sync has actually rebuilt the map', async () => {
+      await indexedFileThenEmptyMap();
+      vi.doMock('../contentAssets.service.ts', () => ({
+        ensureContentAssets: async () => ({
+          mode: 'full',
+          upserted: 0,
+          deleted: 3,
+          truncated: false,
+        }),
+      }));
+
+      const report = await reconcileContentIndex({ fetchBody, classroomIds: [CLASSROOM] });
+
+      expect(report.orphansDeleted).toBe(1);
+      expect(report.byReason.assets_unavailable).toBeUndefined();
+      expect(rowsFor('file', FILE_PATH)).toHaveLength(0);
+    });
+  });
+
+  describe('the per-classroom report', () => {
+    const OTHER = 'other-classroom';
+
+    beforeEach(() => {
+      pageRows.push({
+        id: 'page-other',
+        title: 'Other',
+        content_path: 'pages/other',
+        classroom_id: OTHER,
+      });
+      assetShas.set(assetKey(OTHER, 'pages/other/content.json'), 'b'.repeat(40));
+    });
+
+    it('carries one row per classroom, and they sum to the fleet totals', async () => {
+      const report = await reconcileContentIndex({
+        fetchBody,
+        classroomIds: [CLASSROOM, OTHER],
+      });
+
+      expect(report.byClassroom).toHaveLength(report.classrooms);
+      expect(report.byClassroom.map(row => row.classroomId)).toEqual([CLASSROOM, OTHER]);
+      expect(report.byClassroom[0]).toMatchObject({
+        classroomId: CLASSROOM,
+        slug: `slug-${CLASSROOM}`,
+        eligible: 1,
+        indexed: 1,
+      });
+      const summed = report.byClassroom.reduce((total, row) => total + row.indexed, 0);
+      expect(summed).toBe(report.indexed);
+    });
+
+    it('counts a dead classroom apart from a failed document, and names it', async () => {
+      // CLASSROOM dies whole; OTHER indexes cleanly.
+      const exploding = vi.fn(async (classroom: { id: string }, path: string) => {
+        if (classroom.id === CLASSROOM) throw new Error('repo deleted');
+        return { text: '{"blocks":[]}', sha: assetShas.get(assetKey(classroom.id, path)) ?? null };
+      });
+
+      const report = await reconcileContentIndex({
+        fetchBody: exploding,
+        classroomIds: [CLASSROOM, OTHER],
+      });
+
+      // The distinction the readiness gate needs: one classroom never got read,
+      // and NO document was looked at and rejected.
+      expect(report.classroomErrors).toBe(1);
+      expect(report.failed).toBe(0);
+      expect(report.byClassroom[0]).toMatchObject({
+        classroomId: CLASSROOM,
+        error: 'repo deleted',
+      });
+      expect(report.byClassroom[1].error).toBeUndefined();
+      expect(report.byClassroom[1].indexed).toBe(1);
+    });
+
+    it('keeps a per-document failure in `failed`, on its own classroom’s row', async () => {
+      // A body off the CDN tier, which names no sha: one document refused, the
+      // classroom itself perfectly healthy.
+      const cdn = vi.fn(async (classroom: { id: string }, path: string) =>
+        classroom.id === CLASSROOM
+          ? { text: '{"blocks":[]}', sha: null }
+          : { text: '{"blocks":[]}', sha: assetShas.get(assetKey(classroom.id, path)) ?? null }
+      );
+
+      const report = await reconcileContentIndex({
+        fetchBody: cdn,
+        classroomIds: [CLASSROOM, OTHER],
+      });
+
+      expect(report.failed).toBe(1);
+      expect(report.classroomErrors).toBe(0);
+      expect(report.byClassroom[0]).toMatchObject({ failed: 1, indexed: 0 });
+      expect(report.byClassroom[0].error).toBeUndefined();
+      expect(report.byClassroom[1]).toMatchObject({ failed: 0, indexed: 1 });
+    });
   });
 });

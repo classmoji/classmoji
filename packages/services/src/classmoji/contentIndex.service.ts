@@ -652,6 +652,26 @@ export interface ClassroomIndexPlan {
   orphans: IndexOrphan[];
   /** Documents with no blob in the asset map at all — nothing to fetch. */
   missingAssets: number;
+  /**
+   * `file` rows that LOOK orphaned but were left alone, because the asset map
+   * that would have proved it is empty and nothing just rebuilt it.
+   *
+   * Counted rather than deleted: see `assetsUnavailable` in the body.
+   */
+  heldFileOrphans: number;
+}
+
+export interface PlanClassroomIndexOptions {
+  /**
+   * True only when a FULL asset sync just completed for this classroom in this
+   * run — i.e. `ensureContentAssets` returned a result rather than null.
+   *
+   * It is the one thing that makes an EMPTY map trustworthy. `null` from that
+   * call is ambiguous by design (the map was already fresh, the classroom is
+   * not served by this layer, or the refresh failed), so an empty map under a
+   * null is "we do not know", not "this classroom has no files".
+   */
+  assetsSynced?: boolean;
 }
 
 /**
@@ -664,7 +684,10 @@ export interface ClassroomIndexPlan {
  * answer. Pages and slides are the source of truth for what documents exist —
  * the map only says which bytes they are made of.
  */
-export async function planClassroomIndex(classroomId: string): Promise<ClassroomIndexPlan> {
+export async function planClassroomIndex(
+  classroomId: string,
+  opts: PlanClassroomIndexOptions = {}
+): Promise<ClassroomIndexPlan> {
   const prisma = getPrisma();
 
   const [pages, slides, assets, stored] = await Promise.all([
@@ -745,14 +768,38 @@ export async function planClassroomIndex(classroomId: string): Promise<Classroom
     consider('file', asset.path, titleForFile(asset.path), asset.path);
   }
 
+  // THE ASYMMETRY THAT MAKES THE FILE SWEEP DANGEROUS.
+  //
+  // Pages and slides are enumerated from their own rows, so "no live document"
+  // is a fact the DB stated. `file` documents have no rows at all — the asset
+  // map IS their record — so for them "no live document" and "no map" produce
+  // the identical empty live set, and the sweep below cannot tell them apart.
+  //
+  // An empty map is a real state on the unhappy path: a classroom that has
+  // never fully synced, or one whose first sync failed. Sweeping on it would
+  // delete every indexed `bot-context/` row the previous runs wrote and leave
+  // Ask Moji answering out of a corpus that is missing the instructor's own
+  // notes until a later run re-indexes them.
+  //
+  // So an empty map only licenses deletion when a sync in THIS run just
+  // rebuilt it and still came back empty — which is the genuine "the repo has
+  // no files any more" case. Anything else holds the `file` half and says so.
+  // Pages and slides sweep normally either way; they never depended on the map.
+  const assetsUnavailable = assets.length === 0 && opts.assetsSynced !== true;
+
   const orphans: IndexOrphan[] = [];
+  let heldFileOrphans = 0;
   for (const key of byDoc.keys()) {
     if (live.has(key)) continue;
     const [kind, id] = key.split(DOC_KEY_SEP);
+    if (kind === 'file' && assetsUnavailable) {
+      heldFileOrphans += 1;
+      continue;
+    }
     orphans.push({ kind: kind as ContentDocKind, id });
   }
 
-  return { items, orphans, missingAssets };
+  return { items, orphans, missingAssets, heldFileOrphans };
 }
 
 /**
@@ -790,16 +837,53 @@ export interface ReconcileClassroom {
   content_delivery_enabled: boolean;
 }
 
+/**
+ * One classroom's slice of the run.
+ *
+ * The aggregate alone cannot answer the question the readiness gate actually
+ * asks — "is any ONE classroom broken?" — because a fleet-wide `failed: 40`
+ * reads identically whether it is one dead repo or forty unlucky documents
+ * spread evenly. So every classroom reports its own line, and the fleet totals
+ * are the sum of them.
+ */
+export interface ReconcileClassroomReport {
+  classroomId: string;
+  /** The slug, for reading the report without a second query. Null if unset. */
+  slug: string | null;
+  eligible: number;
+  indexed: number;
+  skipped: number;
+  /** Per-document failures within this classroom. */
+  failed: number;
+  orphansDeleted: number;
+  /**
+   * Present only when the classroom was abandoned WHOLE — its repo is gone, its
+   * App install was revoked, it hit a rate limit. Its counters are then
+   * whatever had accumulated before the throw, which is the useful reading.
+   */
+  error?: string;
+}
+
 export interface ReconcileReport {
   classrooms: number;
   /** Documents found to need work. */
   eligible: number;
   indexed: number;
   skipped: number;
+  /**
+   * Per-DOCUMENT failures, fleet-wide. A classroom that died whole is NOT in
+   * here — it is one `classroomErrors`, because "forty documents failed" and
+   * "one classroom never got read" are different incidents with different
+   * responses, and one counter holding both can express neither.
+   */
   failed: number;
+  /** Classrooms abandoned whole, each with an `error` on its `byClassroom` row. */
+  classroomErrors: number;
   orphansDeleted: number;
   /** Every non-clean outcome, counted by its reason. The readiness signal. */
   byReason: Record<string, number>;
+  /** One row per classroom the run looked at, in the order it looked. */
+  byClassroom: ReconcileClassroomReport[];
 }
 
 export interface ReconcileOptions {
@@ -860,7 +944,10 @@ async function mapWithLimit<T>(
  *
  * Never throws. One classroom's dead repo, revoked App install or rate limit
  * must not abandon the classrooms after it in the list, so every per-classroom
- * failure is counted and the run continues.
+ * failure is counted and the run continues — under `classroomErrors` and on
+ * that classroom's own `byClassroom` row, NOT under `failed`, which counts
+ * documents. The readiness gate has to tell "one classroom never got read"
+ * apart from "N documents did not index", and a single counter cannot.
  */
 export async function reconcileContentIndex(opts: ReconcileOptions = {}): Promise<ReconcileReport> {
   const prisma = getPrisma();
@@ -875,11 +962,13 @@ export async function reconcileContentIndex(opts: ReconcileOptions = {}): Promis
     indexed: 0,
     skipped: 0,
     failed: 0,
+    classroomErrors: 0,
     orphansDeleted: 0,
     byReason: {},
+    byClassroom: [],
   };
-  const count = (reason: string) => {
-    report.byReason[reason] = (report.byReason[reason] ?? 0) + 1;
+  const count = (reason: string, by = 1) => {
+    report.byReason[reason] = (report.byReason[reason] ?? 0) + by;
   };
 
   let classroomIds = opts.classroomIds;
@@ -903,6 +992,7 @@ export async function reconcileContentIndex(opts: ReconcileOptions = {}): Promis
     where: { id: { in: classroomIds } },
     select: {
       id: true,
+      slug: true,
       content_key_version: true,
       content_repo: true,
       content_delivery_enabled: true,
@@ -912,6 +1002,27 @@ export async function reconcileContentIndex(opts: ReconcileOptions = {}): Promis
 
   for (const row of classrooms) {
     report.classrooms += 1;
+    // Pushed before the first `continue`, so `byClassroom.length` always equals
+    // `classrooms` and a reader never has to work out which ones are missing.
+    const own: ReconcileClassroomReport = {
+      classroomId: row.id,
+      slug: row.slug ?? null,
+      eligible: 0,
+      indexed: 0,
+      skipped: 0,
+      failed: 0,
+      orphansDeleted: 0,
+    };
+    report.byClassroom.push(own);
+    /** Every counter moves in both places or in neither. */
+    const bump = (
+      field: 'eligible' | 'indexed' | 'skipped' | 'failed' | 'orphansDeleted',
+      by = 1
+    ) => {
+      report[field] += by;
+      own[field] += by;
+    };
+
     if (!row.content_repo || !row.git_organization?.login) {
       count('no_content_repo');
       continue;
@@ -931,27 +1042,34 @@ export async function reconcileContentIndex(opts: ReconcileOptions = {}): Promis
       // a cron that has decided it is not its business — so the refresh happens
       // here, on demand, rather than depending on another job's timing.
       const { ensureContentAssets } = await import('./contentAssets.service.ts');
-      await ensureContentAssets(row.id, { maxAgeMs: assetMaxAgeMs });
+      // The RESULT matters, not just the call: a non-null return is the only
+      // evidence the map was rebuilt in this run, and that is what licenses the
+      // orphan sweep to trust an empty map. See `planClassroomIndex`.
+      const synced = await ensureContentAssets(row.id, { maxAgeMs: assetMaxAgeMs });
 
-      const plan = await planClassroomIndex(row.id);
-      report.eligible += plan.items.length;
-      for (let missing = 0; missing < plan.missingAssets; missing += 1) {
-        report.skipped += 1;
-        count('no_asset');
+      const plan = await planClassroomIndex(row.id, { assetsSynced: synced !== null });
+      bump('eligible', plan.items.length);
+      if (plan.missingAssets > 0) {
+        bump('skipped', plan.missingAssets);
+        count('no_asset', plan.missingAssets);
       }
+      // Not a failure and not a skipped document — rows the sweep declined to
+      // delete because it could not prove they were dead. A number that stays
+      // above zero for a classroom means its asset map never came back.
+      if (plan.heldFileOrphans > 0) count('assets_unavailable', plan.heldFileOrphans);
 
-      report.orphansDeleted += await deleteOrphans(row.id, plan.orphans);
+      bump('orphansDeleted', await deleteOrphans(row.id, plan.orphans));
 
       if (!configured) {
-        report.skipped += plan.items.length;
-        for (const _item of plan.items) count('not_configured');
+        bump('skipped', plan.items.length);
+        count('not_configured', plan.items.length);
         continue;
       }
 
       await mapWithLimit(plan.items, concurrency, async item => {
         const body = await fetchBody(classroom, item.path);
         if (!body) {
-          report.failed += 1;
+          bump('failed');
           count('fetch');
           return;
         }
@@ -961,7 +1079,7 @@ export async function reconcileContentIndex(opts: ReconcileOptions = {}): Promis
         // them with, and stamping them anyway makes a wrong document look fresh
         // to every future run. Leave it for the next reconcile.
         if (body.sha === null || body.sha !== item.sha) {
-          report.failed += 1;
+          bump('failed');
           count('sha_mismatch');
           return;
         }
@@ -973,18 +1091,20 @@ export async function reconcileContentIndex(opts: ReconcileOptions = {}): Promis
           body: body.text,
           docHint: item.docHint,
         });
-        if (result.outcome === 'indexed') report.indexed += 1;
-        else if (result.outcome === 'skipped') report.skipped += 1;
-        else report.failed += 1;
+        if (result.outcome === 'indexed') bump('indexed');
+        else if (result.outcome === 'skipped') bump('skipped');
+        else bump('failed');
         if (result.reason) count(result.reason);
       });
     } catch (error: unknown) {
-      report.failed += 1;
+      // A classroom-level failure, counted apart from `failed` on purpose: this
+      // is "N documents were never even looked at", which is a different
+      // incident from "N documents were looked at and did not index".
+      const message = error instanceof Error ? error.message : String(error);
+      report.classroomErrors += 1;
+      own.error = message;
       count('classroom_error');
-      console.warn(
-        `[contentIndex] Reconcile failed for classroom ${row.id}:`,
-        error instanceof Error ? error.message : String(error)
-      );
+      console.warn(`[contentIndex] Reconcile failed for classroom ${row.id}:`, message);
     }
   }
 
