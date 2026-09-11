@@ -21,7 +21,6 @@ import { getContentRepoName } from '@classmoji/utils';
 import { sendRequest } from '~/services/aiAgentConnection.server';
 import agentStreamManager from '~/utils/agentStreamManager';
 import { v4 as uuidv4 } from 'uuid';
-import { getInstallationToken } from '~/routes/student.$class.quizzes/helpers.server';
 import { ClassmojiService } from '@classmoji/services';
 import { mintMcpAccessToken } from '@classmoji/auth/mcp-token';
 import getPrisma from '@classmoji/database';
@@ -129,6 +128,25 @@ function presentationRole(raw: FormDataEntryValue | null, actualRole: string): s
 }
 
 /**
+ * Does this classroom have a content repo at all?
+ *
+ * Drives whether the widget offers content questions. `content_repo` is the
+ * stored, user-editable repo name; the org-level helper is only a fallback for
+ * legacy classrooms that predate it. This is a NAME lookup — no GitHub call, no
+ * credential — and it is the only thing left of what used to be the clone
+ * handoff.
+ */
+function hasContentRepoFor(classroom: {
+  content_repo?: string | null;
+  git_organization?: { login?: string | null } | null;
+}): boolean {
+  const gitOrgLogin = classroom.git_organization?.login;
+  return Boolean(
+    classroom.content_repo || (gitOrgLogin ? getContentRepoName({ login: gitOrgLogin }) : '')
+  );
+}
+
+/**
  * GET loader - return org config for syllabus bot
  * Used to check if syllabus bot is enabled and get suggested questions
  */
@@ -175,15 +193,9 @@ export async function loader({ params, request }: Route.LoaderArgs) {
   const settings = await ClassmojiService.classroom.getClassroomSettingsForServer(classroom.id);
   const isInstructor = ['OWNER', 'TEACHER'].includes(membership!.role);
 
-  // content_repo is the stored, user-editable repo name; the org-level helper is
-  // only a fallback for legacy classrooms that predate it.
-  const gitOrgLogin = classroom.git_organization?.login;
-  const contentRepoName =
-    classroom.content_repo || (gitOrgLogin ? getContentRepoName({ login: gitOrgLogin }) : '');
-
   return jsonResponse({
     enabled: settings?.syllabus_bot_enabled ?? false,
-    hasContentRepo: Boolean(contentRepoName),
+    hasContentRepo: hasContentRepoFor(classroom),
     userRole: membership!.role,
     isInstructor,
     orgName: classroom.name,
@@ -280,32 +292,23 @@ async function handleInitConversation(request: Request, classSlug: string, formD
     mcpToken,
   };
 
-  // If content repo is configured, add clone info.
-  // Precedence: legacy settings override, then the classroom's stored
-  // content_repo, then the org-level fallback for legacy classrooms.
-  const gitOrgLoginForClone = classroom.git_organization?.login;
-  const contentRepoNameForClone =
-    settings?.content_repo_name ||
-    classroom.content_repo ||
-    (gitOrgLoginForClone ? getContentRepoName({ login: gitOrgLoginForClone }) : '');
-  if (contentRepoNameForClone && classroom.git_organization?.github_installation_id) {
-    try {
-      const accessToken = await getInstallationToken(classroom.git_organization);
-      Object.assign(payload, { contentRepoName: contentRepoNameForClone, accessToken });
-    } catch (error: unknown) {
-      console.warn(
-        '[syllabus-bot] Failed to get installation token:',
-        error instanceof Error ? error.message : String(error)
-      );
-      // Continue without content repo - bot will still work with database tools
-    }
-  }
+  // NO GITHUB CREDENTIAL LEAVES THIS ROUTE (plan P3-3).
+  //
+  // This used to mint the classroom's whole GitHub App installation token and
+  // hand it to ai-agent so the bot could clone the content repo. That single
+  // handoff carried four problems: a live GitHub credential on another
+  // service's filesystem, a clone that grew without bound, a draft leak (the
+  // repo answers every role identically), and a second content-query layer
+  // that drifted from the webapp's own rules at each migration. ai-agent now
+  // reads course content through the Classmoji MCP server using `mcpToken`
+  // above — the CALLER's own bearer, re-authorized per tool call — so there is
+  // nothing for this route to hand over.
 
   try {
     // Initialize conversation via signed ai-agent connection
     // ai-agent creates the conversation and generates the conversationId
     const result = await sendRequest('SYLLABUS_BOT_INIT', payload, {
-      timeout: 300000, // 5 min timeout for content repo cloning + exploration
+      timeout: 300000, // 5 min — ai-agent's MCP handshake plus first-turn latency
       responseTypes: ['SYLLABUS_BOT_READY'],
     });
 
@@ -315,7 +318,6 @@ async function handleInitConversation(request: Request, classSlug: string, formD
         payload: {
           conversationId: string;
           welcomeMessage: string;
-          hasContentRepo: boolean;
           suggestedQuestions?: string[];
         };
       }
@@ -329,7 +331,10 @@ async function handleInitConversation(request: Request, classSlug: string, formD
       success: true,
       conversationId, // Use ai-agent's ID
       welcomeMessage: resultPayload.welcomeMessage,
-      hasContentRepo: resultPayload.hasContentRepo,
+      // Computed HERE, not echoed back from ai-agent. ai-agent no longer
+      // clones anything, so it has no idea whether a course has content; the
+      // loader above answers the same question from the same fields.
+      hasContentRepo: hasContentRepoFor(classroom),
       suggestedQuestions: resultPayload.suggestedQuestions,
     });
   } catch (error: unknown) {
