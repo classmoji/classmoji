@@ -45,6 +45,7 @@ import {
   deckPreviewAcceptTool,
   deckPreviewDiscardTool,
 } from './deck.ts';
+import { contentSearchTool, contentListTool, contentGetTool } from './contentSearch.ts';
 import { tokenGrantTool } from './tokens.ts';
 import { extensionPurchaseTool } from './extensions.ts';
 import { repoCreateTool, repoPublishTool, repoUnpublishTool } from './repos.ts';
@@ -161,6 +162,17 @@ export function registerAllTools(): void {
   registerToolDefinition(quizUpdateTool);
   registerToolDefinition(quizPublishTool);
   registerToolDefinition(quizDeleteTool);
+
+  // Course content: semantic search, enumeration and full-text reads over the
+  // classroom's pages, decks and bot-context/ notes (MEMBER — every role,
+  // students included). Draft visibility is decided ONCE, in
+  // packages/services' contentSearch.service; these tools forward a role and
+  // implement no rule of their own. NOTE the divergence from list_pages, which
+  // keeps draft pages to OWNER/TEACHER: decision D2 gives assistants draft
+  // discovery here (plan §8.5).
+  registerToolDefinition(contentSearchTool);
+  registerToolDefinition(contentListTool);
+  registerToolDefinition(contentGetTool);
 
   // Tokens (OWNER)
   registerToolDefinition(tokenGrantTool);
