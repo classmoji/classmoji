@@ -301,6 +301,34 @@ async function getValidGitHubToken(userId: string): Promise<GitHubTokenResult | 
 }
 
 /**
+ * Coerce a presented `client_id` to the string better-auth will actually compare
+ * against, so this hook and the grant below can never read one request two ways.
+ *
+ * WHY NOT `typeof x === 'string'` (the obvious version, and a real bypass).
+ * better-auth compares `token.clientId !== client_id?.toString()`
+ * (node_modules/better-auth/dist/plugins/mcp/index.mjs:278) — `toString()`, not a
+ * type check. A JSON body is handed to the endpoint as parsed JSON
+ * (node_modules/better-call/dist/utils.mjs:25), so `{"client_id":
+ * ["classmoji-ask-moji"]}` arrives as a one-element ARRAY whose `toString()` is
+ * the bare client id. A string-only check here returns null, the refusal hook
+ * returns early, and better-auth then happily matches the row — the refresh grant
+ * this hook exists to close, reopened by a pair of brackets.
+ *
+ * So: normalize exactly as better-auth does. A value whose `toString()` is absent,
+ * throws, or is not a string can never equal the stored `clientId` either, so
+ * null (no refusal, and no match downstream) is the right answer for those.
+ */
+function normalizeClientId(value: unknown): string | null {
+  if (value === null || value === undefined) return null;
+  try {
+    const asString = (value as { toString?: () => unknown }).toString?.();
+    return typeof asString === 'string' && asString.length > 0 ? asString : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * The client id a `/mcp/token` request names — from the request body or from an
  * HTTP Basic `Authorization` header, because better-auth accepts both
  * (node_modules/better-auth/dist/plugins/mcp/index.mjs:240-259).
@@ -312,11 +340,19 @@ async function getValidGitHubToken(userId: string): Promise<GitHubTokenResult | 
 function tokenRequestClientId(body: unknown, authorization: string | null): string | null {
   let clientId: unknown;
   if (typeof FormData !== 'undefined' && body instanceof FormData) {
-    clientId = body.get('client_id');
+    // LAST wins, not first. better-auth flattens a FormData body with
+    // `Object.fromEntries(body.entries())` (mcp/index.mjs:234), which keeps the
+    // last value for a repeated key, while `FormData.get()` returns the first —
+    // so `client_id=innocent&client_id=classmoji-ask-moji` would have this hook
+    // reading one value and the grant reading the other.
+    for (const [key, value] of body.entries()) {
+      if (key === 'client_id') clientId = value;
+    }
   } else if (body && typeof body === 'object') {
     clientId = (body as Record<string, unknown>).client_id;
   }
-  if (typeof clientId === 'string' && clientId.length > 0) return clientId;
+  const fromBody = normalizeClientId(clientId);
+  if (fromBody) return fromBody;
 
   if (authorization?.startsWith('Basic ')) {
     try {

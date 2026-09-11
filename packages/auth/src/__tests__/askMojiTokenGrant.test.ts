@@ -186,6 +186,150 @@ describe('the Ask Moji client cannot use the token endpoint (refresh grant close
     expect(JSON.stringify(await res.json())).toMatch(/does not use the token endpoint/i);
   });
 
+  // The `typeof clientId === 'string'` bypass (defence-in-depth review finding).
+  //
+  // better-auth does not type-check the presented client id, it coerces it:
+  // `token.clientId !== client_id?.toString()` (mcp/index.mjs:278). A JSON body
+  // reaches the endpoint as parsed JSON, so a ONE-ELEMENT ARRAY stringifies to
+  // the bare client id and matches the stored row — while a string-only check in
+  // our hook sees a non-string, returns null, and waves it through.
+  //
+  // The seeded row here carries a LIVE refresh token on purpose: the
+  // already-expired-refresh layer in mintMcpAccessToken is switched off, so the
+  // only thing that can produce a 401 is the hook itself. If the hook lets this
+  // through, better-auth mints and the assertions below fail on all three counts.
+  //
+  // MUTATION: restore `if (typeof clientId === 'string' …)` in
+  // tokenRequestClientId → 200, a fresh 7-day refresh_token, mocks.created === 1.
+  it('REFUSES an ARRAY-valued client_id, which better-auth would stringify into a match', async () => {
+    mocks.rows.push({
+      id: 'tok-live',
+      accessToken: 'askmoji_leaked',
+      refreshToken: 'askmoji_leaked_refresh',
+      accessTokenExpiresAt: new Date(Date.now() + 3_600_000),
+      // NOT expired — the hook is the only defence left standing.
+      refreshTokenExpiresAt: new Date(Date.now() + 604_800_000),
+      clientId: ASK_MOJI_CLIENT_ID,
+      userId: 'user-1',
+      scopes: 'read',
+    });
+
+    const res = await auth.handler(
+      new Request(`${BASE}/mcp/token`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          grant_type: 'refresh_token',
+          refresh_token: 'askmoji_leaked_refresh',
+          client_id: [ASK_MOJI_CLIENT_ID],
+        }),
+      })
+    );
+
+    expect(res.status).toBe(401);
+    const body = await res.json();
+    expect(JSON.stringify(body)).toMatch(/does not use the token endpoint/i);
+    expect(JSON.stringify(body)).toMatch(/invalid_client/);
+    // Nothing was minted — the refusal happened before better-auth's grant ran.
+    expect(mocks.created).toHaveLength(0);
+  });
+
+  // The same coercion, one step further from a string: better-auth would compare
+  // against `String(…)` of whatever arrived, so a nested array flattens too.
+  it('REFUSES a nested-array client_id for the same reason', async () => {
+    mocks.rows.push({
+      id: 'tok-live-2',
+      accessToken: 'askmoji_leaked2',
+      refreshToken: 'askmoji_leaked_refresh2',
+      accessTokenExpiresAt: new Date(Date.now() + 3_600_000),
+      refreshTokenExpiresAt: new Date(Date.now() + 604_800_000),
+      clientId: ASK_MOJI_CLIENT_ID,
+      userId: 'user-1',
+      scopes: 'read',
+    });
+
+    const res = await auth.handler(
+      new Request(`${BASE}/mcp/token`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          grant_type: 'refresh_token',
+          refresh_token: 'askmoji_leaked_refresh2',
+          client_id: [[ASK_MOJI_CLIENT_ID]],
+        }),
+      })
+    );
+
+    expect(res.status).toBe(401);
+    expect(JSON.stringify(await res.json())).toMatch(/does not use the token endpoint/i);
+    expect(mocks.created).toHaveLength(0);
+  });
+
+  // A FormData body reaches the endpoint only through an in-process
+  // `auth.api.mcpToken({ body })` call, but better-auth flattens it with
+  // `Object.fromEntries(body.entries())` — LAST value wins — while
+  // `FormData.get()` returns the FIRST. Reading it the other way round would let
+  // a repeated key split the hook's view from the grant's.
+  //
+  // MUTATION: change the FormData loop back to `body.get('client_id')` → the
+  // hook reads 'innocent-client', returns early, and this throws nothing.
+  it('REFUSES a repeated FormData client_id whose LAST value names Ask Moji', async () => {
+    const form = new FormData();
+    form.append('grant_type', 'refresh_token');
+    form.append('refresh_token', 'askmoji_leaked_refresh');
+    form.append('client_id', 'innocent-client');
+    form.append('client_id', ASK_MOJI_CLIENT_ID);
+
+    // In-process, so the refusal arrives as a thrown APIError rather than a
+    // Response. Its payload is on `.body` (better-call puts the JSON body there;
+    // `.message` is empty because this APIError carries no `message` key).
+    const err = await auth.api
+      .mcpOAuthToken({
+        body: form as unknown as Record<string, unknown>,
+        headers: new Headers(),
+      })
+      .then(
+        () => null,
+        (e: unknown) => e as { status?: string; body?: Record<string, string> }
+      );
+
+    expect(err).not.toBeNull();
+    expect(err?.status).toBe('UNAUTHORIZED');
+    expect(err?.body?.error).toBe('invalid_client');
+    expect(err?.body?.error_description).toMatch(/does not use the token endpoint/i);
+    expect(mocks.created).toHaveLength(0);
+  });
+
+  // NEGATIVE CONTROL: an array-valued client id for ANOTHER client must still be
+  // left alone — the normalization must not turn the hook into a blanket refusal.
+  it('leaves an array-valued client_id for another client working', async () => {
+    mocks.rows.push({
+      id: 'tok-other',
+      accessToken: 'other_access',
+      refreshToken: 'other_refresh',
+      accessTokenExpiresAt: new Date(Date.now() + 3_600_000),
+      refreshTokenExpiresAt: new Date(Date.now() + 604_800_000),
+      clientId: OTHER_CLIENT_ID,
+      userId: 'user-2',
+      scopes: 'read write',
+    });
+
+    const res = await auth.handler(
+      new Request(`${BASE}/mcp/token`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          grant_type: 'refresh_token',
+          refresh_token: 'other_refresh',
+          client_id: [OTHER_CLIENT_ID],
+        }),
+      })
+    );
+
+    expect(res.status).toBe(200);
+    expect(mocks.created).toHaveLength(1);
+  });
+
   // NEGATIVE CONTROL: the refusal is client-specific. Break this and we have
   // not hardened Ask Moji, we have broken every other MCP client.
   it('leaves another client’s refresh grant working', async () => {

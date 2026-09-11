@@ -38,9 +38,18 @@ interface FakeTokenRow {
 
 const mocks = vi.hoisted(() => {
   const calls: string[] = [];
-  const state: { table: FakeTokenRow[]; onTransaction: (() => void) | null } = {
+  const state: {
+    table: FakeTokenRow[];
+    onTransaction: (() => void) | null;
+    /** What `oauthApplication.findUnique` reports after a P2002 — the row the winner wrote. */
+    application: Record<string, unknown> | null;
+    /** The options object `$transaction` was actually called with. */
+    transactionOptions: unknown;
+  } = {
     table: [],
     onTransaction: null,
+    application: { clientId: 'classmoji-ask-moji' },
+    transactionOptions: undefined,
   };
 
   const findFirst = vi.fn(({ where, orderBy }: any) => {
@@ -84,6 +93,9 @@ const mocks = vi.hoisted(() => {
   });
 
   const upsert = vi.fn((_args: any) => Promise.resolve({ clientId: 'classmoji-ask-moji' }));
+  const appFindUnique = vi.fn((_args: any) =>
+    Promise.resolve(state.application as Record<string, unknown> | null)
+  );
   const executeRaw = vi.fn((..._args: any[]) => Promise.resolve(1));
 
   const record =
@@ -99,10 +111,14 @@ const mocks = vi.hoisted(() => {
       create: record('create', create),
       deleteMany: record('deleteMany', deleteMany),
     },
-    oauthApplication: { upsert: record('upsert', upsert) },
+    oauthApplication: {
+      upsert: record('upsert', upsert),
+      findUnique: record('appFindUnique', appFindUnique),
+    },
     $executeRaw: record('$executeRaw', executeRaw),
-    $transaction: async (fn: (tx: unknown) => Promise<unknown>) => {
+    $transaction: async (fn: (tx: unknown) => Promise<unknown>, options?: unknown) => {
       calls.push('$transaction');
+      state.transactionOptions = options;
       // Hook for the concurrency test: a racing mint commits here, between the
       // fast-path read and the lock this transaction is about to take.
       state.onTransaction?.();
@@ -110,7 +126,17 @@ const mocks = vi.hoisted(() => {
     },
   };
 
-  return { calls, state, findFirst, create, deleteMany, upsert, executeRaw, client };
+  return {
+    calls,
+    state,
+    findFirst,
+    create,
+    deleteMany,
+    upsert,
+    appFindUnique,
+    executeRaw,
+    client,
+  };
 });
 
 vi.mock('@classmoji/database', () => ({ default: () => mocks.client }));
@@ -149,10 +175,16 @@ beforeEach(() => {
   mocks.calls.length = 0;
   mocks.state.table = [];
   mocks.state.onTransaction = null;
+  mocks.state.application = { clientId: 'classmoji-ask-moji' };
+  mocks.state.transactionOptions = undefined;
   mocks.findFirst.mockClear();
   mocks.create.mockClear();
   mocks.deleteMany.mockClear();
   mocks.upsert.mockClear();
+  mocks.upsert.mockImplementation((_args: any) =>
+    Promise.resolve({ clientId: 'classmoji-ask-moji' })
+  );
+  mocks.appFindUnique.mockClear();
   mocks.executeRaw.mockClear();
 });
 
@@ -384,5 +416,121 @@ describe('mintMcpAccessToken — concurrency', () => {
     expect(accessToken).toBe((racer as unknown as FakeTokenRow).accessToken);
     expect(mocks.create).not.toHaveBeenCalled();
     expect(mocks.state.table).toHaveLength(1);
+  });
+});
+
+describe('mintMcpAccessToken — the cross-user upsert race', () => {
+  /**
+   * The advisory lock is keyed per USER, so it does not serialize two DIFFERENT
+   * users against each other — and `oauth_applications` holds ONE row they both
+   * need. In a fresh environment that has never been seeded, two users' first
+   * turns can both read "no row" and both insert; the loser takes a P2002 on the
+   * unique `clientId`.
+   *
+   * That is a legitimate turn failing with a 500 on nothing but bad luck at first
+   * boot, and it is unreachable through the normal single-user path — which is
+   * exactly why it needs a test rather than a code read.
+   */
+  const p2002 = () => Object.assign(new Error('Unique constraint failed'), { code: 'P2002' });
+
+  // MUTATION: drop the try/catch around the upsert → this rejects with P2002.
+  it('survives a P2002 from a racing user and still mints', async () => {
+    mocks.upsert.mockRejectedValueOnce(p2002());
+
+    const { accessToken } = await mintMcpAccessToken(USER);
+
+    expect(accessToken).toBeTruthy();
+    expect(mocks.create).toHaveBeenCalledTimes(1);
+    expect(createdData().clientId).toBe('classmoji-ask-moji');
+  });
+
+  // MUTATION: swallow the P2002 without re-reading → this passes even when the
+  // row is genuinely absent, and the token gets created against a missing FK.
+  it('RE-READS the row rather than assuming the racer wrote it', async () => {
+    mocks.upsert.mockRejectedValueOnce(p2002());
+
+    await mintMcpAccessToken(USER);
+
+    expect(mocks.appFindUnique).toHaveBeenCalledTimes(1);
+    expect((mocks.appFindUnique.mock.calls[0][0] as any).where).toEqual({
+      clientId: 'classmoji-ask-moji',
+    });
+    // The recovery happens INSIDE the transaction, after the lock.
+    expect(mocks.calls).toEqual([
+      'findFirst',
+      '$transaction',
+      '$executeRaw',
+      'findFirst',
+      'upsert',
+      'appFindUnique',
+      'deleteMany',
+      'create',
+    ]);
+  });
+
+  // MUTATION: `if (!existing) throw error` → `if (false) throw error` (or drop
+  // the re-read's guard) → this passes and we mint against a row that is not
+  // there, turning a clear error into a foreign-key failure one statement later.
+  it('re-raises when the re-read finds nothing — the P2002 was some OTHER constraint', async () => {
+    mocks.upsert.mockRejectedValueOnce(p2002());
+    mocks.state.application = null;
+
+    await expect(mintMcpAccessToken(USER)).rejects.toMatchObject({ code: 'P2002' });
+    expect(mocks.create).not.toHaveBeenCalled();
+  });
+
+  // MUTATION: catch every error instead of only P2002 → this passes, and a real
+  // failure (a dead connection, a bad column) is silently minted over.
+  it('does NOT swallow a non-P2002 upsert failure', async () => {
+    mocks.upsert.mockRejectedValueOnce(new Error('connection terminated'));
+
+    await expect(mintMcpAccessToken(USER)).rejects.toThrow(/connection terminated/);
+    expect(mocks.appFindUnique).not.toHaveBeenCalled();
+    expect(mocks.create).not.toHaveBeenCalled();
+  });
+
+  it('never enters the recovery path when the upsert simply works', async () => {
+    await mintMcpAccessToken(USER);
+    expect(mocks.appFindUnique).not.toHaveBeenCalled();
+  });
+});
+
+describe('mintMcpAccessToken — the transaction is bounded explicitly', () => {
+  /**
+   * Prisma's defaults are maxWait 2s / timeout 5s. Inheriting them silently means
+   * the ceiling on how long a turn may sit in `pg_advisory_xact_lock` is whatever
+   * the Prisma version happens to ship — a real behaviour change arriving through
+   * a dependency bump rather than a decision.
+   *
+   * MUTATION: drop the second argument to `$transaction` → this fails.
+   */
+  it('passes explicit maxWait and timeout to $transaction', async () => {
+    await mintMcpAccessToken(USER);
+
+    expect(mocks.state.transactionOptions).toEqual({ maxWait: 5000, timeout: 10000 });
+  });
+
+  it('leaves the timeout above the maxWait — waiting for a connection must not eat the budget', async () => {
+    await mintMcpAccessToken(USER);
+
+    const { maxWait, timeout } = mocks.state.transactionOptions as {
+      maxWait: number;
+      timeout: number;
+    };
+    expect(timeout).toBeGreaterThan(maxWait);
+  });
+
+  // A timeout must FAIL CLOSED: the turn dies rather than proceeding without a
+  // token or reusing a previous turn's, which is the whole point of per-turn
+  // minting. Nothing may be returned on this path.
+  it('propagates a transaction timeout instead of degrading to no token', async () => {
+    const timeoutError = Object.assign(new Error('Transaction already closed'), { code: 'P2028' });
+    const original = mocks.client.$transaction;
+    mocks.client.$transaction = () => Promise.reject(timeoutError);
+    try {
+      await expect(mintMcpAccessToken(USER)).rejects.toMatchObject({ code: 'P2028' });
+    } finally {
+      mocks.client.$transaction = original;
+    }
   });
 });

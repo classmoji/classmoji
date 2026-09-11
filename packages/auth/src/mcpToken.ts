@@ -103,6 +103,40 @@ type MintClient = Pick<
 type MintTx = Omit<MintClient, '$transaction'>;
 
 /**
+ * Prisma's unique-constraint violation. Duck-typed on `code` rather than
+ * `instanceof Prisma.PrismaClientKnownRequestError` so this holds for whatever
+ * the generated client actually throws (the class identity differs between the
+ * library and binary query engines, and across a re-generate), and so the tests
+ * can drive it without constructing a real Prisma error.
+ */
+function isUniqueConstraintViolation(error: unknown): boolean {
+  return (
+    typeof error === 'object' && error !== null && (error as { code?: unknown }).code === 'P2002'
+  );
+}
+
+/**
+ * Prisma interactive-transaction limits, set explicitly instead of inheriting
+ * the defaults (maxWait 2s, timeout 5s).
+ *
+ * `maxWait` is how long this call waits for a connection from the pool before
+ * giving up; `timeout` is how long the transaction may run once it has one —
+ * which here means how long it may sit in `pg_advisory_xact_lock`. The lock is
+ * keyed per USER, so the only contention that can ever queue on it is one
+ * person's own concurrent turns: several tabs open on the same chat, or a
+ * conversation resumed in parallel. Each holder runs four short statements, so
+ * the realistic wait is milliseconds and these ceilings exist for the pathological
+ * case (a saturated pool, a stalled connection) rather than the normal one.
+ *
+ * Both FAIL CLOSED. A timeout throws out of `mintMcpAccessToken`, which
+ * apps/webapp/app/routes/api.syllabus-bot.$class/route.ts turns into a 500 for
+ * that turn. That is the intended outcome: the alternative — proceeding without a
+ * token, or reusing a previous turn's — is precisely what the per-turn mint
+ * exists to prevent. The turn is lost; the next one re-mints.
+ */
+const TRANSACTION_OPTIONS = { maxWait: 5000, timeout: 10000 } as const;
+
+/**
  * A stable 64-bit key for `pg_advisory_xact_lock`, derived from the client id and
  * the user id so two users never contend with each other.
  *
@@ -176,20 +210,47 @@ export async function mintMcpAccessToken(userId: string): Promise<MintedMcpToken
     // Idempotent. `update: {}` on purpose: if an operator has flipped
     // `disabled: true` as a kill switch (resolveViewer refuses a disabled
     // application), minting must not quietly turn Ask Moji back on.
-    await client.oauthApplication.upsert({
-      where: { clientId: ASK_MOJI_CLIENT_ID },
-      update: {},
-      create: {
-        name: 'Ask Moji',
-        clientId: ASK_MOJI_CLIENT_ID,
-        clientSecret: '', // never used — no authorization-code flow runs for this client
-        redirectUrls: '', // never used — no browser redirect
-        // NOT 'public'. Nothing reads this on the direct-mint path, but 'public'
-        // means "no client secret required" if the real flow is ever wired up.
-        type: 'confidential',
-        disabled: false,
-      },
-    });
+    //
+    // WHY THIS UPSERT CAN STILL RACE (and why the catch below is not paranoia).
+    // The advisory lock above is keyed per USER, which is what keeps one
+    // person's tabs from minting two tokens — but it deliberately does NOT
+    // serialize different users. This row is shared by all of them. In a fresh
+    // environment that has never seeded, TWO users' first-ever turns can reach
+    // this line at the same moment: Prisma's upsert is a read-then-write, both
+    // read "no row", both insert, and the loser takes a P2002 on the unique
+    // `clientId`. That would fail a legitimate turn with a 500 on nothing worse
+    // than bad luck at first boot.
+    //
+    // The row the loser failed to create is exactly the row it wanted, so
+    // re-read to confirm it is there and carry on. The re-read is not a
+    // formality: a P2002 from some OTHER unique constraint would leave no row,
+    // and that error must still surface.
+    try {
+      await client.oauthApplication.upsert({
+        where: { clientId: ASK_MOJI_CLIENT_ID },
+        update: {},
+        create: {
+          name: 'Ask Moji',
+          clientId: ASK_MOJI_CLIENT_ID,
+          clientSecret: '', // never used — no authorization-code flow runs for this client
+          redirectUrls: '', // never used — no browser redirect
+          // NOT 'public'. Nothing reads this on the direct-mint path, but 'public'
+          // means "no client secret required" if the real flow is ever wired up.
+          type: 'confidential',
+          disabled: false,
+        },
+      });
+    } catch (error: unknown) {
+      if (!isUniqueConstraintViolation(error)) throw error;
+      const existing = await client.oauthApplication.findUnique({
+        where: { clientId: ASK_MOJI_CLIENT_ID },
+      });
+      if (!existing) throw error;
+      // Someone else created it a moment ago. Note that we do NOT inspect
+      // `disabled` here, for the same reason `update: {}` above does not write
+      // it: whether the application is enabled is resolveViewer's call at use
+      // time, not this function's at mint time.
+    }
 
     const now = Date.now();
 
@@ -222,5 +283,5 @@ export async function mintMcpAccessToken(userId: string): Promise<MintedMcpToken
     });
 
     return { accessToken: created.accessToken, expiresAt: created.accessTokenExpiresAt };
-  });
+  }, TRANSACTION_OPTIONS);
 }
