@@ -27,6 +27,7 @@ import {
   type ResolveContext,
   type WarmContext,
 } from '../classmoji/contentDelivery.service.ts';
+import { indexOneFile } from '../classmoji/contentIndex.service.ts';
 
 // Structural type compatible with ContentService's (unexported) git org record.
 interface GitOrgRecord {
@@ -553,4 +554,27 @@ async function recordDeckFiles(
   // entirely for a preview branch — so no screenshot is ever taken of content
   // nobody has published.
   void enqueueDeckThumbnail(slide.id, classroomId);
+
+  // And feed the search index, from the artifact this commit just wrote.
+  //
+  // `index.html` rather than `deck.json`: the artifact is what a reader sees,
+  // it is regenerated from the deck on every save, and indexing both would put
+  // one deck in the corpus twice. Ungated for the same reason as the thumbnail
+  // above — the delivery switch decides how bytes are SERVED and has nothing to
+  // say about whether a deck is searchable.
+  //
+  // Only main-branch writes reach here, so no unaccepted preview is ever
+  // indexed. Never awaited; `indexOneFile` never rejects.
+  const htmlPath = `${slide.content_path}/index.html`;
+  const htmlSha = committed.find(file => file.path === htmlPath)?.sha;
+  const htmlBody = written.find(file => file.path === htmlPath)?.content;
+  if (slide.id && htmlSha && htmlBody !== undefined) {
+    void indexOneFile({
+      classroomId,
+      path: htmlPath,
+      sha: htmlSha,
+      body: htmlBody,
+      docHint: { kind: 'slide', id: slide.id, title: slide.title },
+    });
+  }
 }

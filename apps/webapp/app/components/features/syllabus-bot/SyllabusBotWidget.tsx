@@ -9,6 +9,7 @@ import './styles.css';
 interface SyllabusBotWidgetProps {
   classroomSlug: string;
   slidesUrl: string;
+  pagesUrl: string;
   userLogin: string | null;
   userRole: string;
   isOpen: boolean;
@@ -35,6 +36,7 @@ function getGenieOffset(panelEl: HTMLElement | null) {
 const SyllabusBotWidget = ({
   classroomSlug,
   slidesUrl,
+  pagesUrl,
   userLogin,
   userRole,
   isOpen,
@@ -205,6 +207,7 @@ const SyllabusBotWidget = ({
         onReset={handleReset}
         classroomSlug={classroomSlug}
         slidesUrl={slidesUrl}
+        pagesUrl={pagesUrl}
         userLogin={userLogin}
         courseName={displayName}
       />

@@ -4,6 +4,7 @@ import { ContentService } from '../content/ContentService.ts';
 import { getGitProvider } from '../git/index.ts';
 import { recordContentAssets, removeContentAssetFolder } from './contentAssets.service.ts';
 import { isContentDeliveryEnabled } from './contentDelivery.service.ts';
+import { indexOneFile } from './contentIndex.service.ts';
 import * as contentManifestService from './contentManifest.service.ts';
 import * as notificationService from './notification.service.ts';
 import { blankPageContentJson, previewBranchName } from './pageContent.service.ts';
@@ -408,16 +409,25 @@ export async function createPage({
   // where the author is watching.
   let written: Array<{ path: string; sha: string }> = [];
 
+  /**
+   * The TEXT bodies this create committed, by path.
+   *
+   * Kept so the search index can be fed from the bytes rather than fetched back
+   * out of GitHub a second later. Only the two text files go in — `files` on the
+   * import branch carries base64 for binary uploads, and those are not
+   * documents. See the index enqueue after the DB row below.
+   */
+  const bodies = new Map<string, string>();
+
   if (files.length > 0) {
     // Import flow: assets + index.html in a single batch commit.
     try {
+      const indexHtml = html ?? generatePageTemplate(title);
+      bodies.set(htmlPath, indexHtml);
       const result = await ContentService.uploadBatch({
         gitOrganization: ctx.classroom.git_organization!,
         repo: ctx.repoName,
-        files: [
-          ...files,
-          { path: htmlPath, content: html ?? generatePageTemplate(title), encoding: 'utf-8' },
-        ],
+        files: [...files, { path: htmlPath, content: indexHtml, encoding: 'utf-8' }],
         branch: 'main',
         message: commitMessage ?? `Import page: ${title}`,
       });
@@ -432,6 +442,7 @@ export async function createPage({
   } else if (html != null) {
     // Import/markdown flow without extra assets: single-file commit.
     try {
+      bodies.set(htmlPath, html);
       const result = await ContentService.put({
         gitOrganization: ctx.classroom.git_organization!,
         repo: ctx.repoName,
@@ -452,16 +463,16 @@ export async function createPage({
     // BlockNote content.json wrapper in ONE commit, so fresh pages are
     // json-first for the granular content tools from birth.
     try {
+      const indexHtml = generatePageTemplate(title);
+      const blankJson = blankPageContentJson();
+      bodies.set(htmlPath, indexHtml);
+      bodies.set(`${contentPath}/content.json`, blankJson);
       const result = await ContentService.uploadBatch({
         gitOrganization: ctx.classroom.git_organization!,
         repo: ctx.repoName,
         files: [
-          { path: htmlPath, content: generatePageTemplate(title), encoding: 'utf-8' },
-          {
-            path: `${contentPath}/content.json`,
-            content: blankPageContentJson(),
-            encoding: 'utf-8',
-          },
+          { path: htmlPath, content: indexHtml, encoding: 'utf-8' },
+          { path: `${contentPath}/content.json`, content: blankJson, encoding: 'utf-8' },
         ],
         branch: 'main',
         message: commitMessage ?? `Create page: ${title}`,
@@ -503,6 +514,31 @@ export async function createPage({
 
     // Update manifest after creating page
     await contentManifestService.saveManifest(ctx.classroom.id);
+
+    // Feed the search index, from the bytes this create committed.
+    //
+    // HERE rather than beside `recordContentAssets` above, which is where the
+    // low-level asset recorder sits: a `content_index` row is keyed on the PAGE
+    // id, and the page does not exist until `create()` returns. Enqueued from
+    // the asset recorder it would resolve nothing and index nothing, on the one
+    // path where a brand-new document most needs to become findable.
+    //
+    // `content.json` when the branch wrote one (every blank create does), the
+    // legacy `index.html` otherwise — the same precedence the reader uses.
+    // Not awaited; `indexOneFile` never rejects.
+    const jsonPath = `${contentPath}/content.json`;
+    const canonicalPath = bodies.has(jsonPath) ? jsonPath : htmlPath;
+    const canonicalSha = written.find(file => file.path === canonicalPath)?.sha;
+    const canonicalBody = bodies.get(canonicalPath);
+    if (canonicalSha && canonicalBody !== undefined) {
+      void indexOneFile({
+        classroomId: ctx.classroom.id,
+        path: canonicalPath,
+        sha: canonicalSha,
+        body: canonicalBody,
+        docHint: { kind: 'page', id: page.id, title },
+      });
+    }
 
     return page;
   } catch (dbError) {

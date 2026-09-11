@@ -1,7 +1,12 @@
 services:
   postgres:
     container_name: classmoji-postgres
-    image: postgres:16
+    # pgvector's official image, built on postgres:16 — same data directory,
+    # plus the `vector` extension the content_index migration needs.
+    # The -trixie tag matches the Debian/glibc of the stock postgres:16 image
+    # this replaced, so existing databases don't report a collation-version
+    # mismatch on every connection.
+    image: pgvector/pgvector:pg16-trixie
     # Increase max_connections for parallel devport testing (10 devports × ~20 connections each)
     command: postgres -c max_connections=500
     environment:

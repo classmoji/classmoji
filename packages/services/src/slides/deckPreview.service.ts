@@ -23,6 +23,7 @@ import { ContentService } from '../content/ContentService.ts';
 import { recordContentAssets } from '../classmoji/contentAssets.service.ts';
 import { warmContentText } from '../classmoji/contentDelivery.service.ts';
 import { enqueueDeckThumbnail } from '../classmoji/deckThumbnail.service.ts';
+import { indexOneFile } from '../classmoji/contentIndex.service.ts';
 import { generateDeckHtml, type DeckThemeUrls } from './deckHtml.ts';
 import {
   indexResolutions,
@@ -327,6 +328,13 @@ export async function acceptDeckPreview(
    */
   let htmlSha: string | null = null;
 
+  /**
+   * The artifact those bytes are, kept beside its sha for the same reason: the
+   * index writes from what was committed rather than re-reading it, and only
+   * the successful regenerate's html is the one that landed.
+   */
+  let htmlBody: string | null = null;
+
   // Render + commit the artifact, CAS-pinned on the deck.json sha it was
   // generated from: if a concurrent save moves deck.json, the write aborts
   // (DeckConflictError) instead of publishing a stale artifact.
@@ -353,6 +361,7 @@ export async function acceptDeckPreview(
       },
     });
     htmlSha = written.files.find(file => file.path === htmlPath)?.sha ?? null;
+    htmlBody = htmlSha ? html : null;
   };
 
   let mergedSha: string | null = null;
@@ -434,6 +443,21 @@ export async function acceptDeckPreview(
     // This path commits its own `index.html` rather than going through
     // `saveDeck`, so `recordDeckFiles`' enqueue never fires for it.
     void enqueueDeckThumbnail(slide.id, slide.classroom.id);
+
+    // And the search index, from the artifact the regenerate above committed.
+    // This path never goes through `saveDeck`, so `recordDeckFiles`' own index
+    // hook cannot fire for it — the accept is a publish, and a deck the index
+    // still holds at its pre-accept text answers questions out of a draft
+    // nobody accepted. Same contract as the two calls above.
+    if (slide.id && htmlSha && htmlBody !== null) {
+      void indexOneFile({
+        classroomId: slide.classroom.id,
+        path: htmlPath,
+        sha: htmlSha,
+        body: htmlBody,
+        docHint: { kind: 'slide', id: slide.id, title: slide.title },
+      });
+    }
   }
 
   // Concurrent-stacking guard: a stacking apply may have committed to the

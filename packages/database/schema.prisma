@@ -459,6 +459,7 @@ model Classroom {
   site                  ClassroomSite?
   forms                 Form[]
   content_assets        ContentAsset[]
+  content_index         ContentIndex[]
 
   // Logically redundant now that slug is globally unique, but retained: it is
   // the compound key live upserts select on (githubClassroomImport, example
@@ -1807,4 +1808,109 @@ model ContentAsset {
   /// upload-time row cannot pass for a completed sync.
   @@index([classroom_id, synced_at])
   @@map("content_assets")
+}
+
+/// One row per indexed document — or, for a document too large to embed in one
+/// call, one row per chunk of it — holding the plain text the extractor
+/// produced and its Workers AI embedding. The index is a CACHE over the content
+/// repo, never the content of record: bodies are still fetched through the
+/// delivery layer, and a row here only decides what is findable.
+///
+/// CHUNKING. The embedding client refuses input over its token cap rather than
+/// truncating it, so a document that does not fit is split at paragraph
+/// boundaries and each chunk gets its own row and its own vector. `chunk_ix` is
+/// 0 for a whole-document row and `chunk_count` is then 1 — the common case;
+/// pages essentially always fit, roughly half of the larger slide decks do not.
+/// `chunk_count` is stamped on every row so the reconcile can spot a partially
+/// indexed document (rows present, fewer than `chunk_count` of them) without a
+/// second query. `title`, `source_path`, `source_sha`, `extract_version` and
+/// `embed_model` are repeated on every chunk on purpose: the reconcile compares
+/// freshness per row, and a row that cannot answer "what produced me" would
+/// need a join to be re-indexed.
+///
+/// CONSEQUENCE FOR SEARCH: a multi-chunk document can match several times. The
+/// search query must collapse those to one hit per document — `DISTINCT ON
+/// (doc_kind, doc_id)` ordered by distance (or an equivalent windowed rank) so
+/// each document appears once, represented by its best-matching chunk. A LIMIT
+/// applied before that de-duplication would let one long deck fill the entire
+/// result set.
+///
+/// The vector column is `Unsupported`, so Prisma Client cannot see it — it
+/// cannot be selected, created or updated through the typed API, and it must be
+/// nullable. Every read and write of `embedding` is raw SQL. The scalar columns
+/// beside it are ordinary Prisma fields so the reconcile can compare freshness
+/// without dropping to raw SQL. Note that a raw upsert bypasses `@updatedAt`:
+/// a writer that touches the vector must set `updated_at` itself, since the DB
+/// default only fires on INSERT.
+///
+/// `doc_kind` is 'page' | 'slide' | 'file':
+///   - 'page'  → `doc_id` is `Page.id`
+///   - 'slide' → `doc_id` is `Slide.id`
+///   - 'file'  → `doc_id` IS the repo-relative path, because there is no row to
+///               point at. `bot-context/` files are searchable by decision and
+///               have no Page or Slide record; keying them on their own path is
+///               what lets them live in the same table as everything else.
+/// Keying the first two on the record id rather than the path is what makes the
+/// permission join in the search query an equality on a primary key —
+/// `Page.content_path` carries no unique constraint and is mutable.
+///
+/// Freshness is the triple (`source_sha`, `extract_version`, `embed_model`),
+/// not the sha alone. A sha match only proves the bytes are unchanged; it says
+/// nothing about a renamed title, a changed extractor, a different embedding
+/// model, or the same blob appearing at a new path. The reconcile re-indexes
+/// when any of the three differs, which is also how an extractor or model
+/// upgrade rolls out without a manual purge.
+///
+/// There is NO foreign key from `doc_id` to `Page`/`Slide` — it is polymorphic
+/// and, for 'file', points at nothing at all — so deleting a page cannot
+/// cascade here. Orphan rows are the nightly reconcile's job; the search query
+/// additionally requires the joined record to exist, so an orphan is
+/// unreachable even before the reconcile removes it. Only the Classroom FK
+/// cascades.
+model ContentIndex {
+  classroom_id    String
+  /// 'page' | 'slide' | 'file'
+  doc_kind        String
+  /// Page.id, Slide.id, or — for 'file' — the repo-relative path itself.
+  doc_id          String
+  /// 0 for a whole-document row; otherwise this chunk's ordinal within the
+  /// document, in reading order. Part of the primary key.
+  chunk_ix        Int                          @default(0)
+  /// How many chunks the source document produced (1 when it fit in one call).
+  /// Stamped on every chunk so the reconcile can detect a partial index.
+  chunk_count     Int                          @default(1)
+  /// The repo-relative file the text came from, e.g. `pages/lab-1/content.json`.
+  source_path     String
+  /// git blob sha of that file at index time.
+  source_sha      String
+  /// Version of the extractor that produced `text`. Bumped when extraction
+  /// changes shape; a mismatch re-indexes the document.
+  extract_version Int
+  /// The Workers AI model id the vector came from, e.g.
+  /// `@cf/qwen/qwen3-embedding-0.6b`. A mismatch re-indexes: vectors from two
+  /// models are not comparable, and the column is fixed at 1024 dimensions.
+  embed_model     String
+  title           String
+  /// The extracted text of this row: the whole document when `chunk_count` is
+  /// 1, otherwise just this chunk.
+  text            String
+  /// Workers AI @cf/qwen/qwen3-embedding-0.6b, 1024 dimensions. Nullable
+  /// because the row can be written before the embedding call succeeds, and
+  /// because Prisma requires `Unsupported` fields to be optional.
+  embedding       Unsupported("vector(1024)")?
+  indexed_at      DateTime                     @default(now())
+  updated_at      DateTime                     @default(now()) @updatedAt
+
+  classroom Classroom @relation(fields: [classroom_id], references: [id], onDelete: Cascade)
+
+  @@id([classroom_id, doc_kind, doc_id, chunk_ix])
+  /// The search query's only filter ahead of the exact vector scan. Corpora are
+  /// small (~72 documents per classroom at most, a few hundred rows once the
+  /// oversized decks are chunked), so this B-tree is what makes an exhaustive
+  /// `ORDER BY embedding <=> $1` cheap — see the migration for why there is no
+  /// approximate index.
+  @@index([classroom_id, doc_kind])
+  /// The reconcile's join back to `content_assets` to compare shas.
+  @@index([classroom_id, source_path])
+  @@map("content_index")
 }

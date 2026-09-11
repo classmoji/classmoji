@@ -11,13 +11,15 @@
   },
   "exports": {
     ".": "./src/index.ts",
+    "./content/extract": "./src/content/extract/index.ts",
     "./deck-thumbnail-contract": "./src/classmoji/deckThumbnail.contract.ts",
     "./flags": "./src/classmoji/repoAnalytics.flags.ts",
     "./form-contract": "./src/classmoji/formContract.ts",
     "./import-progress": "./src/classmoji/importProgress.ts",
     "./remove-user-payload": "./src/classmoji/removeUserPayload.ts",
     "./slides": "./src/slides/index.ts",
-    "./slides/ops": "./src/slides/deckOps.ts"
+    "./slides/ops": "./src/slides/deckOps.ts",
+    "./workers-ai": "./src/helpers/workersAi.ts"
   },
   "dependencies": {
     "@classmoji/content-signing": "*",

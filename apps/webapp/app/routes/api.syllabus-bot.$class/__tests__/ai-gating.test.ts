@@ -24,14 +24,19 @@ vi.mock('~/utils/routeAuth.server', () => ({
 
 vi.mock('~/services/aiAgentConnection.server', () => ({ sendRequest: vi.fn() }));
 vi.mock('~/utils/agentStreamManager', () => ({ default: {} }));
-vi.mock('~/routes/student.$class.quizzes/helpers.server', () => ({
-  getInstallationToken: vi.fn(),
-}));
 vi.mock('@classmoji/utils', () => ({ getContentRepoName: () => '' }));
 vi.mock('@classmoji/services', () => ({
   ClassmojiService: {
     classroom: { getClassroomSettingsForServer: vi.fn() },
   },
+}));
+// The route mints an MCP token and binds the conversation to its owner; neither
+// belongs in an AI-gating test, but both are module-level imports.
+vi.mock('@classmoji/auth/mcp-token', () => ({
+  mintMcpAccessToken: vi.fn(async () => ({ accessToken: 'tok', expiresAt: new Date() })),
+}));
+vi.mock('@classmoji/database', () => ({
+  default: () => ({ aIConversation: { findFirst: vi.fn(async () => null) } }),
 }));
 
 const { loader, action } = await import('../route.ts');
