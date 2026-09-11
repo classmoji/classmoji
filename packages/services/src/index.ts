@@ -119,6 +119,41 @@ export type {
   GradingReportRow,
 } from './classmoji/gitRepoAssignmentGrader.service.ts';
 
+// Course-content search: the permission-joined vector query behind the MCP's
+// `content_search` / `content_list` / `content_get`, plus the ONE draft-
+// visibility predicate they all share. Exported flat rather than only through
+// `ClassmojiService.contentSearch` because the MCP tool layer consumes the
+// predicate and the argument types directly, and a second copy of "who may see
+// a draft" is exactly the drift this lane exists to prevent.
+export {
+  contentVisibility,
+  canSeeDrafts,
+  isMemberRole,
+  searchContent,
+  listContent,
+  getContentText,
+  toVectorLiteral,
+  ContentNotFoundError,
+  CONTENT_STAFF_ROLES,
+  EMBEDDING_DIMENSIONS,
+  SNIPPET_CHARS,
+  DEFAULT_SEARCH_LIMIT,
+  MAX_SEARCH_LIMIT,
+} from './classmoji/contentSearch.service.ts';
+export type {
+  ContentViewerRole,
+  ContentDocKind,
+  ContentVisibility,
+  ContentVisibilityFlags,
+  ViewerFlags,
+  ContentSearchHit,
+  SearchContentArgs,
+  ContentListEntry,
+  ListContentArgs,
+  ContentDocumentText,
+  GetContentTextArgs,
+} from './classmoji/contentSearch.service.ts';
+
 // Instructor audience for the newsletter segment. The mail-provider mechanics
 // that act on the answer live in the scheduled task that consumes it.
 export {

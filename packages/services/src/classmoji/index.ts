@@ -73,6 +73,8 @@ import * as classroomInviteService from './classroomInvite.service.ts';
 import * as contentManifestService from './contentManifest.service.ts';
 import * as contentAssetsService from './contentAssets.service.ts';
 import * as contentDeliveryService from './contentDelivery.service.ts';
+import * as contentIndexService from './contentIndex.service.ts';
+import * as contentSearchService from './contentSearch.service.ts';
 import * as deckRenderTokenService from './deckRenderToken.service.ts';
 import * as deckThumbnailContract from './deckThumbnail.contract.ts';
 import * as deckThumbnailService from './deckThumbnail.service.ts';
@@ -135,6 +137,8 @@ const ClassmojiService = {
   contentManifest: contentManifestService,
   contentAssets: contentAssetsService,
   contentDelivery: contentDeliveryService,
+  contentIndex: contentIndexService,
+  contentSearch: contentSearchService,
   deckRenderToken: deckRenderTokenService,
   // One namespace, two files. They read as a single thing to a caller
   // (`deckThumbnail.thumbnailPathFor`, `deckThumbnail.enqueueDeckThumbnail`)
@@ -206,6 +210,8 @@ export {
   contentManifestService,
   contentAssetsService,
   contentDeliveryService,
+  contentIndexService,
+  contentSearchService,
   deckRenderTokenService,
   deckThumbnailContract,
   deckThumbnailService,

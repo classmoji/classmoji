@@ -13,6 +13,7 @@ import {
   type ResolveContext,
   type WarmContext,
 } from './contentDelivery.service.ts';
+import { indexOneFile } from './contentIndex.service.ts';
 import {
   dedupeMergedTreeIds,
   indexResolutions,
@@ -519,6 +520,32 @@ async function recordPageFile(
   // written, because the warm reads the sha back out of the map.
   const ctx = pageWarmContext(page);
   if (ctx) void warmContentText(ctx, [path]);
+
+  // And feed the search index off the same tail, from the bytes this save
+  // already has in hand.
+  //
+  // Deliberately NOT behind `pageWarmContext`, which refuses a classroom the
+  // delivery layer does not serve — `content_delivery_enabled` is on for about
+  // seven classrooms, so gating here would leave the index empty for nearly the
+  // whole fleet and make the nightly reconcile the only writer. Same reasoning
+  // as the thumbnail enqueue in `recordDeckFiles`.
+  //
+  // Same contract as the warm: after the row (the index re-reads the map's sha
+  // to detect a save that overtook it), never awaited, and `indexOneFile` never
+  // rejects, so an embedding failure cannot reach the person who hit save.
+  //
+  // Only when the bytes are actually here. The accept path calls this without
+  // them and indexes from the merged file itself.
+  const pageId = (page as { id?: unknown }).id;
+  if (content !== undefined && typeof pageId === 'string') {
+    void indexOneFile({
+      classroomId,
+      path,
+      sha,
+      body: content,
+      docHint: { kind: 'page', id: pageId, title: page.title },
+    });
+  }
 }
 
 /**
@@ -1496,6 +1523,8 @@ export async function acceptPreview(page: PageWithContentRepo): Promise<AcceptPr
     // and warms the file itself — so the write-through at the end of this block
     // must not run again for it.
     let repairedSha: string | null = null;
+    /** The merged bytes at `newSha`, kept so the index does not re-fetch them. */
+    let mergedContent: string | null = null;
     try {
       const mergedFile = await ContentService.getContent({
         gitOrganization,
@@ -1504,6 +1533,7 @@ export async function acceptPreview(page: PageWithContentRepo): Promise<AcceptPr
         ...(result.sha ? { ref: result.sha } : { skipCache: true }),
       });
       newSha = mergedFile?.sha ?? null;
+      mergedContent = mergedFile?.content ?? null;
 
       // A CLEAN git merge is not a valid document. Both sides can individually
       // satisfy the multi-column invariants and still merge into something no
@@ -1529,7 +1559,31 @@ export async function acceptPreview(page: PageWithContentRepo): Promise<AcceptPr
     // which is the same value. Without this, accepting a preview would publish
     // content the read side keeps serving the pre-accept version of until the
     // webhook lands.
-    if (newSha && newSha !== repairedSha) await recordPageFile(page, path, newSha);
+    if (newSha && newSha !== repairedSha) {
+      await recordPageFile(page, path, newSha);
+
+      // Accepting a preview publishes bytes the index has never seen, and this
+      // path never goes through `savePageContent` — so `recordPageFile`'s own
+      // hook cannot fire for it (it has no `content` to pass). The merged file
+      // read above IS those bytes at exactly `newSha`, so index from it.
+      // When the repair committed instead, `repairedSha` is set and that commit
+      // went through `savePageContent`, which already indexed it.
+      const pageId = (page as { id?: unknown }).id;
+      const acceptClassroomId = (page.classroom as { id?: unknown }).id;
+      if (
+        mergedContent !== null &&
+        typeof pageId === 'string' &&
+        typeof acceptClassroomId === 'string'
+      ) {
+        void indexOneFile({
+          classroomId: acceptClassroomId,
+          path,
+          sha: newSha,
+          body: mergedContent,
+          docHint: { kind: 'page', id: pageId, title: page.title },
+        });
+      }
+    }
 
     // Concurrent-stacking guard: a stacking apply may have committed to the
     // preview branch AFTER the merge snapshot GitHub used. If the branch now
