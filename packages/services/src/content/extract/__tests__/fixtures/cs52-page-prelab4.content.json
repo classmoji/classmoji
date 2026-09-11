@@ -1,0 +1,202 @@
+{
+  "blocks": [
+    {
+      "id": "006e78e1-ed33-4f59-ab8d-e5db677d8fc3",
+      "type": "paragraph",
+      "props": {
+        "backgroundColor": "default",
+        "textColor": "default",
+        "textAlignment": "left"
+      },
+      "content": [
+        {
+          "type": "text",
+          "text": "🚨 🚀 🔥 After reading through the assignment below, you should do a pre-lab step!",
+          "styles": {}
+        }
+      ],
+      "children": []
+    },
+    {
+      "id": "6b797861-a3ae-4fb3-b1e8-71480e5947fd",
+      "type": "paragraph",
+      "props": {
+        "backgroundColor": "default",
+        "textColor": "default",
+        "textAlignment": "left"
+      },
+      "content": [
+        {
+          "type": "text",
+          "text": "This is a large mini-project, so carefully planning ahead of time will help. You should do a pre-lab where you submit the following as a comment on the assignment Issue in GitHub. Tag your team TA in your comment so they can take a look and give you feedback. ",
+          "styles": {}
+        }
+      ],
+      "children": []
+    },
+    {
+      "id": "098e480d-9096-4573-8f8f-258273706118",
+      "type": "numberedListItem",
+      "props": {
+        "backgroundColor": "default",
+        "textColor": "default",
+        "textAlignment": "left"
+      },
+      "content": [
+        {
+          "type": "text",
+          "text": "Sketch of your components",
+          "styles": {}
+        }
+      ],
+      "children": []
+    },
+    {
+      "id": "f09f81d1-dc74-4bbb-9661-a0db6f9587ac",
+      "type": "numberedListItem",
+      "props": {
+        "backgroundColor": "default",
+        "textColor": "default",
+        "textAlignment": "left"
+      },
+      "content": [
+        {
+          "type": "text",
+          "text": "Sketch graph of the component nodes and how you envision data flow working.",
+          "styles": {}
+        }
+      ],
+      "children": []
+    },
+    {
+      "id": "4904b0af-0e5e-42f5-bcc5-1866dbbd3de4",
+      "type": "numberedListItem",
+      "props": {
+        "backgroundColor": "default",
+        "textColor": "default",
+        "textAlignment": "left"
+      },
+      "content": [
+        {
+          "type": "text",
+          "text": "Overview plan file if using an agent.",
+          "styles": {}
+        }
+      ],
+      "children": []
+    },
+    {
+      "id": "48c55729-3dcc-40af-8ff0-be9112e9cc9b",
+      "type": "numberedListItem",
+      "props": {
+        "backgroundColor": "default",
+        "textColor": "default",
+        "textAlignment": "left"
+      },
+      "content": [
+        {
+          "type": "text",
+          "text": "Answer the following questions in the comment:",
+          "styles": {}
+        }
+      ],
+      "children": [
+        {
+          "id": "177c095b-4008-4eea-81a8-4544fc94bf6c",
+          "type": "numberedListItem",
+          "props": {
+            "backgroundColor": "default",
+            "textColor": "default",
+            "textAlignment": "left"
+          },
+          "content": [
+            {
+              "type": "text",
+              "text": "Run the CURL commands and examine what they return. what field is missing from the ",
+              "styles": {}
+            },
+            {
+              "type": "text",
+              "text": "GET /posts/",
+              "styles": {
+                "code": true
+              }
+            },
+            {
+              "type": "text",
+              "text": " return?",
+              "styles": {}
+            }
+          ],
+          "children": []
+        },
+        {
+          "id": "058483ca-ec39-413e-bea8-2a53905baa79",
+          "type": "numberedListItem",
+          "props": {
+            "backgroundColor": "default",
+            "textColor": "default",
+            "textAlignment": "left"
+          },
+          "content": [
+            {
+              "type": "text",
+              "text": "what local states might you need in the component in which you will have edit functionality? (remember in this case you are ",
+              "styles": {}
+            },
+            {
+              "type": "text",
+              "text": "NOT",
+              "styles": {
+                "italic": true
+              }
+            },
+            {
+              "type": "text",
+              "text": " sending each character update to firebase, instead you are editing in memory and only on submit (or blur) are you sending data to the api.)",
+              "styles": {}
+            }
+          ],
+          "children": []
+        }
+      ]
+    },
+    {
+      "id": "ef50b7e9-b130-487f-b716-2138e6719404",
+      "type": "paragraph",
+      "props": {
+        "backgroundColor": "default",
+        "textColor": "default",
+        "textAlignment": "left"
+      },
+      "content": [
+        {
+          "type": "text",
+          "text": "Link to full assignment: ",
+          "styles": {}
+        }
+      ],
+      "children": []
+    },
+    {
+      "id": "d20c139f-8046-4b3c-af5d-f8ce6557fa59",
+      "type": "pageLink",
+      "props": {
+        "pageId": "3797f749-d384-425a-85d5-d5f519078e2c",
+        "pageTitle": "Lab 4:  Platform Frontend"
+      },
+      "children": []
+    },
+    {
+      "id": "78719124-7b71-4f1b-a45f-c884a204fa19",
+      "type": "paragraph",
+      "props": {
+        "backgroundColor": "default",
+        "textColor": "default",
+        "textAlignment": "left"
+      },
+      "content": [],
+      "children": []
+    }
+  ]
+}
