@@ -23,6 +23,8 @@ import agentStreamManager from '~/utils/agentStreamManager';
 import { v4 as uuidv4 } from 'uuid';
 import { getInstallationToken } from '~/routes/student.$class.quizzes/helpers.server';
 import { ClassmojiService } from '@classmoji/services';
+import { mintMcpAccessToken } from '@classmoji/auth/mcp-token';
+import getPrisma from '@classmoji/database';
 import type { Route } from './+types/route';
 
 // Helper to create JSON responses
@@ -31,6 +33,100 @@ const jsonResponse = (data: Record<string, unknown>, status = 200) =>
     status,
     headers: { 'Content-Type': 'application/json' },
   });
+
+/**
+ * The roles that may use the bot at all. One list, so the send/end/init gates
+ * and the conversation lookup below cannot drift apart.
+ */
+const BOT_ROLES = ['OWNER', 'TEACHER', 'ASSISTANT', 'STUDENT'] as const;
+
+/**
+ * Mint the MCP bearer this turn will carry (plan P1-3).
+ *
+ * EVERY turn, not just init. ai-agent builds its agent config once at init and
+ * reuses it for the life of the conversation, so a token embedded only at init
+ * would die an hour in and take a long conversation's tool access with it; the
+ * ai-agent side overwrites the stored header from this field on each turn. Every
+ * turn is a fresh, already-authenticated webapp request, so re-minting is free
+ * and `mintMcpAccessToken` reuses a live row rather than writing one per message.
+ *
+ * A mint failure FAILS THE TURN. There is deliberately no fallback to a previous
+ * turn's token: a stale header is exactly the thing the per-turn mint exists to
+ * prevent.
+ *
+ * NEVER LOG THE RESULT. `accessToken` is a bearer for the caller's whole MCP read
+ * surface; it travels only inside the HMAC-signed webapp -> ai-agent payload and
+ * never reaches the browser.
+ *
+ * `expiresAt` is sent as an ISO string rather than a `Date`: socket.io's JSON
+ * parser would flatten it to one anyway, and the HMAC both sides compute is taken
+ * over `JSON.stringify`, so sending the string is what actually crosses the wire
+ * in either case — spelling it out keeps the receiving end from having to guess.
+ */
+async function mintTurnMcpToken(userId: string): Promise<{
+  accessToken: string;
+  expiresAt: string;
+}> {
+  const { accessToken, expiresAt } = await mintMcpAccessToken(userId);
+  return { accessToken, expiresAt: expiresAt.toISOString() };
+}
+
+/**
+ * Resolve a client-supplied `conversationId` to a conversation that THIS caller
+ * owns, in THIS classroom (review finding 3).
+ *
+ * Authorizing the URL's classroom and then forwarding whatever conversation id
+ * the form carried is not enough: ai-agent looks the id up and mutates that
+ * conversation on the strength of the webapp's HMAC alone, which authenticates
+ * the webapp and says nothing about the end user's right to that particular
+ * conversation. Without this, any member who learns another member's
+ * conversation id can inject messages into it, replace the credential stored
+ * against it, or end it.
+ *
+ * All four predicates go into ONE query on purpose. A caller who names someone
+ * else's conversation, a conversation in a classroom they also belong to, or a
+ * quiz conversation gets exactly the same answer as a caller who names an id
+ * that does not exist — the response never distinguishes "no such conversation"
+ * from "not yours", so the id space cannot be probed.
+ */
+async function findOwnedConversation({
+  conversationId,
+  userId,
+  classroomId,
+}: {
+  conversationId: string;
+  userId: string;
+  classroomId: string;
+}) {
+  return getPrisma().aIConversation.findFirst({
+    where: {
+      id: conversationId,
+      user_id: userId,
+      classroom_id: classroomId,
+      type: 'SYLLABUS_BOT',
+    },
+    select: { id: true },
+  });
+}
+
+/** The one scoped not-found every conversation-binding failure returns. */
+const conversationNotFound = () => jsonResponse({ error: 'Conversation not found' }, 404);
+
+/**
+ * The client's "view as" role, validated against the Role enum.
+ *
+ * PRESENTATION ONLY. This value reaches the system prompt (tone, and which
+ * suggested questions ai-agent offers) and must never reach a permission
+ * decision: the gates above resolve the caller's real membership, and every MCP
+ * tool re-resolves the caller's real role for the classroom it names. Validating
+ * it here keeps an arbitrary client string out of the prompt; it is NOT a
+ * security control, because there is nothing security-shaped downstream of it.
+ */
+function presentationRole(raw: FormDataEntryValue | null, actualRole: string): string {
+  return typeof raw === 'string' && (BOT_ROLES as readonly string[]).includes(raw)
+    ? raw
+    : actualRole;
+}
 
 /**
  * GET loader - return org config for syllabus bot
@@ -43,7 +139,7 @@ export async function loader({ params, request }: Route.LoaderArgs) {
   const { classroom, membership } = await assertClassroomAccess({
     request,
     classroomSlug: classSlug,
-    allowedRoles: ['OWNER', 'TEACHER', 'ASSISTANT', 'STUDENT'],
+    allowedRoles: [...BOT_ROLES],
     resourceType: 'SYLLABUS_BOT',
     attemptedAction: 'check_config',
   });
@@ -128,7 +224,7 @@ async function handleInitConversation(request: Request, classSlug: string, formD
   const { userId, classroom, membership } = await assertClassroomAccess({
     request,
     classroomSlug: classSlug,
-    allowedRoles: ['OWNER', 'TEACHER', 'ASSISTANT', 'STUDENT'],
+    allowedRoles: [...BOT_ROLES],
     resourceType: 'SYLLABUS_BOT',
     attemptedAction: 'init_conversation',
   });
@@ -148,8 +244,9 @@ async function handleInitConversation(request: Request, classSlug: string, formD
   }
 
   // Use URL-based role context if provided, otherwise fall back to membership role
-  // This allows owners visiting /student/... to be treated as students
-  const contextRole = formData.get('userRole') || membership!.role;
+  // This allows owners visiting /student/... to be treated as students.
+  // Presentation only — see presentationRole(); it shapes the prompt, never a gate.
+  const contextRole = presentationRole(formData.get('userRole'), membership!.role);
 
   // Build org context for the bot
   const orgConfig = {
@@ -161,6 +258,17 @@ async function handleInitConversation(request: Request, classSlug: string, formD
     userRole: contextRole,
   };
 
+  // The MCP bearer this turn carries. Minted before anything is sent, so a mint
+  // failure fails the turn instead of opening a conversation that cannot read.
+  let mcpToken: { accessToken: string; expiresAt: string };
+  try {
+    mcpToken = await mintTurnMcpToken(userId.toString());
+  } catch (error: unknown) {
+    // Deliberately logs the failure, never the token.
+    console.error('[syllabus-bot] Failed to mint MCP token for init:', error);
+    return jsonResponse({ error: 'Could not start the assistant. Please try again.' }, 500);
+  }
+
   // Build payload for ai-agent (no conversationId - ai-agent generates it)
   const payload = {
     userId: userId.toString(),
@@ -169,6 +277,7 @@ async function handleInitConversation(request: Request, classSlug: string, formD
       anthropicApiKey: settings?.anthropic_api_key,
       model: settings?.syllabus_bot_model || settings?.llm_model,
     },
+    mcpToken,
   };
 
   // If content repo is configured, add clone info.
@@ -240,10 +349,14 @@ async function handleSendMessage(request: Request, classSlug: string, formData: 
   const content = formData.get('content') as string | null;
 
   // Verify user has access
-  const { classroom: smClassroom, membership: smMembership } = await assertClassroomAccess({
+  const {
+    userId,
+    classroom: smClassroom,
+    membership: smMembership,
+  } = await assertClassroomAccess({
     request,
     classroomSlug: classSlug,
-    allowedRoles: ['OWNER', 'TEACHER', 'ASSISTANT', 'STUDENT'],
+    allowedRoles: [...BOT_ROLES],
     resourceType: 'SYLLABUS_BOT',
     attemptedAction: 'send_message',
   });
@@ -261,6 +374,18 @@ async function handleSendMessage(request: Request, classSlug: string, formData: 
     return jsonResponse({ error: 'Missing conversationId or content' }, 400);
   }
 
+  // The conversation must belong to THIS user in THIS classroom before ai-agent
+  // is asked to touch it. Runs before any ai-agent call, so a rejected id buys
+  // no inference and leaves no transcript.
+  const conversation = await findOwnedConversation({
+    conversationId,
+    userId: userId.toString(),
+    classroomId: smClassroom.id,
+  });
+  if (!conversation) {
+    return conversationNotFound();
+  }
+
   try {
     const messageId = uuidv4();
 
@@ -270,10 +395,14 @@ async function handleSendMessage(request: Request, classSlug: string, formData: 
       agentStreamManager.publishStep(conversationId, step);
     };
 
+    // A FRESH token every turn — ai-agent overwrites its stored header from this
+    // field, so a conversation that outlives the one-hour TTL keeps working.
+    const mcpToken = await mintTurnMcpToken(userId.toString());
+
     // Send message via signed connection and wait for response
     const result = await sendRequest(
       'SYLLABUS_BOT_MESSAGE',
-      { conversationId, content, messageId },
+      { conversationId, content, messageId, mcpToken },
       {
         timeout: 300000, // 5 min timeout for LLM response + exploration
         responseTypes: ['SYLLABUS_BOT_RESPONSE'],
@@ -312,16 +441,28 @@ async function handleEndConversation(request: Request, classSlug: string, formDa
   const conversationId = formData.get('conversationId') as string | null;
 
   // Verify user has access
-  await assertClassroomAccess({
+  const { userId, classroom } = await assertClassroomAccess({
     request,
     classroomSlug: classSlug,
-    allowedRoles: ['OWNER', 'TEACHER', 'ASSISTANT', 'STUDENT'],
+    allowedRoles: [...BOT_ROLES],
     resourceType: 'SYLLABUS_BOT',
     attemptedAction: 'end_conversation',
   });
 
   if (!conversationId) {
     return jsonResponse({ error: 'Missing conversationId' }, 400);
+  }
+
+  // Same binding as sendMessage: terminating someone else's conversation is a
+  // mutation too, and this path is deliberately NOT Pro-gated, so it would
+  // otherwise be the cheapest way to reach another member's session.
+  const conversation = await findOwnedConversation({
+    conversationId,
+    userId: userId.toString(),
+    classroomId: classroom.id,
+  });
+  if (!conversation) {
+    return conversationNotFound();
   }
 
   try {
