@@ -1,5 +1,5 @@
 import getPrisma from '@classmoji/database';
-import { titleToIdentifier } from '@classmoji/utils';
+import { titleToIdentifier, resolveTemplateRef } from '@classmoji/utils';
 import type { AssignmentType, Prisma } from '@prisma/client';
 import * as notificationService from './notification.service.ts';
 
@@ -33,7 +33,8 @@ interface RepositoryFormValues {
   branch?: string | null;
 }
 
-interface RepositoryAssignmentUpdateInput extends Prisma.AssignmentUncheckedCreateWithoutRepositoryInput {
+interface RepositoryAssignmentUpdateInput
+  extends Prisma.AssignmentUncheckedCreateWithoutRepositoryInput {
   id?: string;
   title: string;
   linkedPageIds?: string[];
@@ -308,11 +309,18 @@ export const createFromForm = async (values: RepositoryFormValues) => {
 
   const classroom = await getPrisma().classroom.findUnique({
     where: { slug: classroomSlug },
+    include: { git_organization: { select: { login: true } } },
   });
 
   if (!classroom) {
     throw new Error('Classroom not found');
   }
+
+  // Store the template fully qualified. A bare name is a legitimate thing to
+  // type when the template sits in the classroom's own org, but it only reads
+  // as one here — every consumer downstream splits on `/`.
+  const templateRef = resolveTemplateRef(template, classroom.git_organization?.login);
+  const qualifiedTemplate = templateRef ? `${templateRef.owner}/${templateRef.repo}` : template;
 
   // Generate slug from title (set once, never updated)
   const slug = titleToIdentifier(title);
@@ -322,7 +330,7 @@ export const createFromForm = async (values: RepositoryFormValues) => {
       title,
       slug,
       type,
-      template,
+      template: qualifiedTemplate,
       weight: Number(weight ?? 100),
       classroom_id: classroom.id,
       ...(tag && { tag_id: tag }),
@@ -538,7 +546,9 @@ export const setPublished = async (id: string, isPublished: boolean, classroomId
         recipientUserIds: studentIds,
         resourceType: 'repository',
         resourceId: mod.id,
-        title: isPublished ? `Repository published: ${mod.title}` : `Repository unpublished: ${mod.title}`,
+        title: isPublished
+          ? `Repository published: ${mod.title}`
+          : `Repository unpublished: ${mod.title}`,
       });
     });
   }

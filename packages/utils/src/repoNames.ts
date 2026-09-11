@@ -101,3 +101,29 @@ export function suggestContentNamespace({
   }
   return slug;
 }
+
+/**
+ * Resolve a template repository reference to `owner/repo`.
+ *
+ * A bare name is what an instructor types when the template lives in their own
+ * classroom org, which is where templates almost always live. Splitting it on
+ * `/` regardless left the repo half undefined and produced clone URLs like
+ * `github.com/kotlin-quiz-app-task-1/undefined.git`, which failed once per
+ * student with nothing in the message pointing at the template field.
+ *
+ * Returns null when there is nothing usable, so callers can say which field is
+ * wrong instead of building a URL out of it.
+ */
+export function resolveTemplateRef(
+  template: string | null | undefined,
+  orgLogin: string | null | undefined
+): { owner: string; repo: string } | null {
+  const trimmed = (template ?? '').trim().replace(/^\/+|\/+$/g, '');
+  if (!trimmed) return null;
+
+  const [first, second] = trimmed.split('/');
+  if (second) return { owner: first!, repo: second };
+
+  const owner = (orgLogin ?? '').trim();
+  return owner ? { owner, repo: first! } : null;
+}
