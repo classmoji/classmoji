@@ -169,6 +169,40 @@ export type {
   GetContentTextArgs,
 } from './classmoji/contentSearch.service.ts';
 
+// PRODUCT DOCUMENTATION search: the second, classroom-independent corpus behind
+// the same three MCP tools under `scope: 'docs'`. Exported flat for the same
+// reason `contentSearch` is — the tool layer consumes the argument and result
+// types directly.
+//
+// THE SAME CONSTRAINT APPLIES, for the same reason: `docsSearch.service.ts`
+// must never statically import `./content/extract` (cheerio) or
+// `./helpers/workersAi`. It takes an already-embedded vector and reads `text`
+// straight back out of the index, so it needs neither.
+//
+// The WRITE side (`docsIndex.service.ts`) is deliberately NOT here. It reaches
+// the extractor and the embedding client, and only the Trigger task calls it —
+// through `ClassmojiService.docsIndex`.
+export {
+  searchDocs,
+  listDocs,
+  getDocText,
+  docsIndexIsEmpty,
+  DocsNotFoundError,
+  DEFAULT_DOCS_SEARCH_LIMIT,
+  MAX_DOCS_SEARCH_LIMIT,
+  DEFAULT_DOCS_LIST_LIMIT,
+  MAX_DOCS_LIST_LIMIT,
+  DOCS_SNIPPET_CHARS,
+} from './classmoji/docsSearch.service.ts';
+export type {
+  DocsSearchHit,
+  SearchDocsArgs,
+  DocsListEntry,
+  ListDocsArgs,
+  DocsListPage,
+  DocsDocumentText,
+} from './classmoji/docsSearch.service.ts';
+
 // Instructor audience for the newsletter segment. The mail-provider mechanics
 // that act on the answer live in the scheduled task that consumes it.
 export {

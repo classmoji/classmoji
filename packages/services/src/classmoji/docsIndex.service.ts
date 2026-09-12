@@ -133,11 +133,29 @@ export interface DocsReader {
   body(commit: string, relPath: string): Promise<string | null>;
 }
 
-/** A body read that failed in a way worth telling apart in the report. */
+/** How a body read failed, in the terms the report buckets by. */
+export type DocsBodyFailure = 'timeout' | 'rate_limited' | 'http_error' | 'network';
+
+/**
+ * A body read that failed in a way worth telling apart in the report.
+ *
+ * The field is assigned explicitly rather than declared as a constructor
+ * PARAMETER PROPERTY (`constructor(readonly reason: …)`). Five apps in this
+ * monorepo — mcp, hook-station, admin, slides, pages — run TypeScript through
+ * `node --experimental-strip-types`, which erases types but cannot SYNTHESIZE
+ * the assignment a parameter property implies, and refuses the file outright
+ * with `ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX`. Since this module hangs off
+ * `ClassmojiService`, which those apps import at boot, a parameter property
+ * here is a process that will not start — and neither `tsc`, vitest nor the
+ * vite build would have said so.
+ */
 export class DocsBodyError extends Error {
-  constructor(readonly reason: 'timeout' | 'rate_limited' | 'http_error' | 'network') {
+  readonly reason: DocsBodyFailure;
+
+  constructor(reason: DocsBodyFailure) {
     super(`docs body read failed: ${reason}`);
     this.name = 'DocsBodyError';
+    this.reason = reason;
   }
 }
 
