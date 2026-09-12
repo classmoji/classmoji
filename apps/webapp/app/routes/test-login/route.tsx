@@ -149,7 +149,7 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
 
     // Pre-record a skip for every survey question so the picker's one-off
     // prompt (a blocking overlay) never appears in front of a Playwright spec.
-    await getPrisma().userSurveyResponse.createMany({
+    await getPrisma().surveyResponse.createMany({
       data: SURVEY_QUESTIONS.map(q => ({
         user_id: user.id,
         question_key: q.key,
