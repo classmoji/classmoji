@@ -257,40 +257,43 @@ const SettingsGeneral = () => {
               </Form.Item>
 
               {/* School ID: editable, saved on its own (#343). Not a Form.Item,
-                  since unlike the read-only fields above it has its own state. */}
+                  since unlike the read-only fields above it has its own state.
+                  Same shape as Email: the action lives on the label row. */}
               <div className="mb-6">
-                <label className="block text-ink-1 font-medium text-sm mb-2" htmlFor="school-id">
-                  School ID
+                <label
+                  htmlFor="school-id"
+                  className="flex items-center gap-3 text-ink-1 font-medium text-sm mb-2"
+                >
+                  <span>School ID</span>
+                  {savingSchoolId ? (
+                    <span className="text-xs font-medium text-ink-3">Saving…</span>
+                  ) : schoolIdDirty ? (
+                    <button
+                      type="button"
+                      onClick={saveSchoolId}
+                      className="text-xs font-medium text-accent hover:underline cursor-pointer"
+                    >
+                      Save
+                    </button>
+                  ) : schoolIdFetcher.data?.schoolIdSaved ? (
+                    <span className="text-xs font-medium text-ink-3">Saved</span>
+                  ) : null}
                 </label>
-                <div className="flex gap-2">
-                  <Input
-                    id="school-id"
-                    prefix={<IconId size={16} className="text-gray-400" />}
-                    placeholder="Your student ID"
-                    maxLength={SCHOOL_ID_MAX_LENGTH}
-                    value={schoolId}
-                    onChange={e => setSchoolId(e.target.value)}
-                    onPressEnter={() => schoolIdDirty && saveSchoolId()}
-                    status={schoolIdFetcher.data?.error ? 'error' : undefined}
-                    className="h-12 rounded-md"
-                  />
-                  <Button
-                    className="h-12"
-                    type="primary"
-                    onClick={saveSchoolId}
-                    loading={savingSchoolId}
-                    disabled={!schoolIdDirty}
-                  >
-                    Save
-                  </Button>
-                </div>
+                <Input
+                  id="school-id"
+                  prefix={<IconId size={16} className="text-gray-400" />}
+                  placeholder="Your student ID"
+                  maxLength={SCHOOL_ID_MAX_LENGTH}
+                  value={schoolId}
+                  onChange={e => setSchoolId(e.target.value)}
+                  onPressEnter={() => schoolIdDirty && !savingSchoolId && saveSchoolId()}
+                  status={schoolIdFetcher.data?.error ? 'error' : undefined}
+                  className="h-12 rounded-md"
+                />
                 {schoolIdFetcher.data?.error && (
                   <p className="text-xs text-red-500 dark:text-red-400 mt-1">
                     {schoolIdFetcher.data.error}
                   </p>
-                )}
-                {schoolIdFetcher.data?.schoolIdSaved && !schoolIdDirty && (
-                  <p className="text-xs text-ink-3 mt-1">Saved.</p>
                 )}
               </div>
             </div>
