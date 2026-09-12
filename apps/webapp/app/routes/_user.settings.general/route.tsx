@@ -260,25 +260,23 @@ const SettingsGeneral = () => {
                   since unlike the read-only fields above it has its own state.
                   Same shape as Email: the action lives on the label row. */}
               <div className="mb-6">
-                <label
-                  htmlFor="school-id"
-                  className="flex items-center gap-3 text-ink-1 font-medium text-sm mb-2"
-                >
-                  <span>School ID</span>
-                  {savingSchoolId ? (
-                    <span className="text-xs font-medium text-ink-3">Saving…</span>
-                  ) : schoolIdDirty ? (
-                    <button
-                      type="button"
+                <div className="flex items-center justify-between mb-2 min-h-6">
+                  <label htmlFor="school-id" className="text-ink-1 font-medium text-sm">
+                    School ID
+                  </label>
+                  {schoolIdDirty || savingSchoolId ? (
+                    <Button
+                      size="small"
+                      type="primary"
                       onClick={saveSchoolId}
-                      className="text-xs font-medium text-accent hover:underline cursor-pointer"
+                      loading={savingSchoolId}
                     >
                       Save
-                    </button>
+                    </Button>
                   ) : schoolIdFetcher.data?.schoolIdSaved ? (
                     <span className="text-xs font-medium text-ink-3">Saved</span>
                   ) : null}
-                </label>
+                </div>
                 <Input
                   id="school-id"
                   prefix={<IconId size={16} className="text-gray-400" />}
