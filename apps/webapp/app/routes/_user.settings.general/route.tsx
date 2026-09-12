@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useFetcher } from 'react-router';
 import { Avatar, Form, Input, Card, Button, Alert } from 'antd';
-import { GithubOutlined, MailOutlined, UserOutlined } from '@ant-design/icons';
+import { GithubOutlined, MailOutlined, UserOutlined, LockOutlined } from '@ant-design/icons';
 import { IconId } from '@tabler/icons-react';
 
 import useStore from '~/store';
@@ -79,8 +79,17 @@ export const action = async ({ request }: Route.ActionArgs) => {
   return { error: 'Unknown action.' };
 };
 
-const readOnlyInput =
-  'h-12 bg-gray-50 border-gray-200 cursor-not-allowed rounded-md focus:border-gray-200 focus:shadow-none hover:border-gray-200';
+const readOnlyInput = 'h-12 rounded-md cursor-not-allowed';
+
+/** Field label with a muted "Read-only" marker beside it. */
+const ReadOnlyLabel = ({ children }: { children: string }) => (
+  <span className="flex items-center gap-3">
+    <span className="text-ink-1 font-medium text-sm">{children}</span>
+    <span className="inline-flex items-center gap-1 text-xs text-ink-3">
+      <LockOutlined /> Read-only
+    </span>
+  </span>
+);
 
 const SettingsGeneral = () => {
   const { user } = useStore();
@@ -208,12 +217,13 @@ const SettingsGeneral = () => {
           >
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
               <Form.Item
-                label={<span className="text-ink-1 font-medium text-sm">Full Name</span>}
+                label={<ReadOnlyLabel>Full Name</ReadOnlyLabel>}
                 name="name"
                 className="mb-6"
               >
                 <Input
                   readOnly
+                  variant="filled"
                   prefix={<UserOutlined className="text-gray-400" />}
                   className={readOnlyInput}
                 />
@@ -239,18 +249,20 @@ const SettingsGeneral = () => {
               >
                 <Input
                   readOnly
+                  variant="filled"
                   prefix={<MailOutlined className="text-gray-400" />}
                   className={readOnlyInput}
                 />
               </Form.Item>
 
               <Form.Item
-                label={<span className="text-ink-1 font-medium text-sm">GitHub Username</span>}
+                label={<ReadOnlyLabel>Github Username</ReadOnlyLabel>}
                 name="github_username"
                 className="mb-6"
               >
                 <Input
                   readOnly
+                  variant="filled"
                   prefix={<GithubOutlined className="text-gray-400" />}
                   className={readOnlyInput}
                 />
