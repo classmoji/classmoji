@@ -327,7 +327,7 @@ model User {
   form_responses                FormResponse[]            @relation("FormResponseRespondent")
   /// Rows this user typed in on somebody else's behalf — see FormResponse.added_by.
   form_responses_added          FormResponse[]            @relation("FormResponseAddedBy")
-  survey_responses              UserSurveyResponse[]
+  survey_responses              SurveyResponse[]
 
   @@unique([provider, provider_id])
   @@index([provider, login])
@@ -1568,7 +1568,7 @@ model NotificationPreference {
 /// question is a new `question_key`, not a migration. One answer per user per
 /// question; a skip is recorded too (answer = "skipped") so the prompt does not
 /// come back every login.
-model UserSurveyResponse {
+model SurveyResponse {
   id           String   @id @default(uuid())
   user_id      String
   question_key String
@@ -1586,7 +1586,7 @@ model UserSurveyResponse {
 
   @@unique([user_id, question_key])
   @@index([question_key, answer])
-  @@map("user_survey_responses")
+  @@map("survey_responses")
 }
 
 model ProcessedWebhookEvent {

@@ -1,6 +1,6 @@
 /**
  * Product questions the webapp asks a signed-in user once, on the classroom
- * picker. Answers are stored in `user_survey_responses`; this file is the only
+ * picker. Answers are stored in `survey_responses`; this file is the only
  * definition of what gets asked, so adding a question is a new entry here, not
  * a migration. Plain data, safe to import on the client.
  */
