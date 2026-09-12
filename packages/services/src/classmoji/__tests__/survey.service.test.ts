@@ -59,6 +59,7 @@ describe('deriveSurveyContext', () => {
 describe('pendingQuestions', () => {
   it('returns the catalog question when nothing is answered', async () => {
     responseFindMany.mockResolvedValue([]);
+    membershipFindMany.mockResolvedValue([]);
     const pending = await survey.pendingQuestions('u1');
     expect(pending.map(q => q.key)).toEqual(['referral_source']);
   });
@@ -70,6 +71,7 @@ describe('pendingQuestions', () => {
 
   it('shuffles options per user, keeps the catch-all last, and is stable for a user', async () => {
     responseFindMany.mockResolvedValue([]);
+    membershipFindMany.mockResolvedValue([]);
     const [a1] = await survey.pendingQuestions('user-a');
     const [a2] = await survey.pendingQuestions('user-a');
     const [b] = await survey.pendingQuestions('user-b');
@@ -82,10 +84,17 @@ describe('pendingQuestions', () => {
     expect([...values(a1)].sort()).toEqual([...values(b)].sort());
   });
 
-  it('does not look up memberships when no open question targets a role', async () => {
+  it('skips students for an instructor-audience question but still asks unknowns', async () => {
     responseFindMany.mockResolvedValue([]);
-    await survey.pendingQuestions('u1');
-    expect(membershipFindMany).not.toHaveBeenCalled();
+
+    membershipFindMany.mockResolvedValue([{ role: 'STUDENT' }]);
+    expect(await survey.pendingQuestions('u1')).toEqual([]);
+
+    membershipFindMany.mockResolvedValue([]);
+    expect((await survey.pendingQuestions('u1')).map(q => q.key)).toEqual(['referral_source']);
+
+    membershipFindMany.mockResolvedValue([{ role: 'OWNER' }]);
+    expect((await survey.pendingQuestions('u1')).map(q => q.key)).toEqual(['referral_source']);
   });
 });
 
