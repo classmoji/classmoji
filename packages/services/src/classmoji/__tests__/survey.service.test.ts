@@ -1,5 +1,5 @@
 /**
- * Unit tests for userSurvey.service — the one-off product questions asked on
+ * Unit tests for survey.service — the one-off product questions asked on
  * the classroom picker. Prisma is mocked; the tests pin the role signal that
  * `context` records, the audience filter, the catalog validation on write,
  * and that a skip is stored like any other answer (so the prompt stays gone).
@@ -14,14 +14,14 @@ const responseUpsert = vi.fn();
 vi.mock('@classmoji/database', () => ({
   default: () => ({
     classroomMembership: { findMany: (...a: unknown[]) => membershipFindMany(...a) },
-    userSurveyResponse: {
+    surveyResponse: {
       findMany: (...a: unknown[]) => responseFindMany(...a),
       upsert: (...a: unknown[]) => responseUpsert(...a),
     },
   }),
 }));
 
-const survey = await import('../userSurvey.service.ts');
+const survey = await import('../survey.service.ts');
 
 beforeEach(() => {
   membershipFindMany.mockReset();

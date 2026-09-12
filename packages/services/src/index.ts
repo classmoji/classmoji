@@ -184,7 +184,7 @@ export {
   deriveSurveyContext,
   SurveyValidationError,
   type SurveyContext,
-} from './classmoji/userSurvey.service.ts';
+} from './classmoji/survey.service.ts';
 
 // Fly certificate automation for class-site custom domains. Every method throws
 // a typed FlyCertError when the credentials are absent, so importing this in a

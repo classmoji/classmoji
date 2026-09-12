@@ -43,7 +43,7 @@ export const deriveSurveyContext = async (userId: string): Promise<SurveyContext
 export const pendingQuestions = async (userId: string): Promise<SurveyQuestion[]> => {
   if (SURVEY_QUESTIONS.length === 0) return [];
 
-  const answered = await getPrisma().userSurveyResponse.findMany({
+  const answered = await getPrisma().surveyResponse.findMany({
     where: { user_id: userId },
     select: { question_key: true },
   });
@@ -88,7 +88,7 @@ export const recordAnswer = async ({ userId, questionKey, answer, detail }: Reco
   const keptDetail = option?.detailPrompt && trimmed ? trimmed.slice(0, DETAIL_MAX) : null;
   const context = await deriveSurveyContext(userId);
 
-  return getPrisma().userSurveyResponse.upsert({
+  return getPrisma().surveyResponse.upsert({
     where: { user_id_question_key: { user_id: userId, question_key: questionKey } },
     create: {
       user_id: userId,
