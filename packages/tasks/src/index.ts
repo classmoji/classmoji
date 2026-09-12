@@ -15,6 +15,7 @@ import * as classroomImportTasks from './workflows/classroomImport.ts';
 import * as customDomainTasks from './workflows/customDomains.ts';
 import * as contentAssetTasks from './workflows/contentAssets.ts';
 import * as contentIndexTasks from './workflows/contentIndexReconcile.ts';
+import * as docsIndexTasks from './workflows/docsIndexReconcile.ts';
 import * as deckThumbnailTasks from './workflows/deckThumbnail.ts';
 import * as instructorContactTasks from './workflows/instructorContacts.ts';
 
@@ -38,6 +39,7 @@ const Tasks = {
   ...customDomainTasks,
   ...contentAssetTasks,
   ...contentIndexTasks,
+  ...docsIndexTasks,
   ...deckThumbnailTasks,
   ...instructorContactTasks,
 };
