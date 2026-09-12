@@ -10,7 +10,11 @@ import { getAuthSession } from '@classmoji/auth/server';
 import getPrisma from '@classmoji/database';
 import { generateId } from '@classmoji/utils';
 import { GitHubProvider, ClassmojiService, provisionExampleClassroom } from '@classmoji/services';
-import Tasks from '@classmoji/tasks';
+import {
+  sendEmailVerificationCode,
+  isEmailVerificationCodeValid,
+  consumeEmailVerificationCode,
+} from '~/utils/emailVerification.server';
 
 export const loader = async ({ request }: Route.LoaderArgs) => {
   const authData = await getAuthSession(request);
@@ -433,49 +437,22 @@ export const action = async ({ request }: Route.ActionArgs) => {
 
   // ── Send verification code ──────────────────────────────────────────────
   if (intent === 'send-code') {
-    const code = String(Math.floor(100000 + Math.random() * 900000));
-    await getPrisma().verification.deleteMany({ where: { identifier: formData.email } });
-    await getPrisma().verification.create({
-      data: {
-        identifier: formData.email,
-        value: code,
-        expires_at: new Date(Date.now() + 10 * 60 * 1000),
-      },
-    });
-    // Subject and markup live in the Resend template `verify-email`; source of
-    // truth for the HTML is packages/services/src/emails/templates/verify-email.html
-    await Tasks.sendEmailTask.trigger({
-      to: formData.email,
-      template: { id: 'verify-email', variables: { CODE: code } },
-    });
+    await sendEmailVerificationCode(formData.email);
     return { codeSent: true };
   }
 
   // ── Verify code inline ──────────────────────────────────────────────────
   if (intent === 'verify-code') {
-    const v = await getPrisma().verification.findFirst({
-      where: {
-        identifier: formData.email,
-        value: formData.code,
-        expires_at: { gt: new Date() },
-      },
-    });
-    if (!v) return { verifyError: 'Invalid or expired code. Try resending.' };
+    if (!(await isEmailVerificationCodeValid(formData.email, formData.code))) {
+      return { verifyError: 'Invalid or expired code. Try resending.' };
+    }
     return { verified: true };
   }
 
   // ── Register (re-validate + create user) ────────────────────────────────
-  const verification = await getPrisma().verification.findFirst({
-    where: {
-      identifier: formData.email,
-      value: formData.code,
-      expires_at: { gt: new Date() },
-    },
-  });
-  if (!verification) {
+  if (!(await consumeEmailVerificationCode(formData.email, formData.code))) {
     return { error: 'Verification code is invalid or expired. Please verify your email again.' };
   }
-  await getPrisma().verification.deleteMany({ where: { identifier: formData.email } });
 
   // Check if email is already in use by another user
   const existingUserWithEmail = await getPrisma().user.findFirst({

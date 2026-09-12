@@ -1,12 +1,84 @@
-import { useEffect } from 'react';
-import { Avatar, Form, Input, Card } from 'antd';
+import { useEffect, useState } from 'react';
+import { useFetcher } from 'react-router';
+import { Avatar, Form, Input, Card, Button, Alert } from 'antd';
 import { GithubOutlined, MailOutlined, UserOutlined } from '@ant-design/icons';
 
 import useStore from '~/store';
+import { requireAuth } from '@classmoji/auth/server';
+import getPrisma from '@classmoji/database';
+import { ClassmojiService } from '@classmoji/services';
+import {
+  sendEmailVerificationCode,
+  consumeEmailVerificationCode,
+} from '~/utils/emailVerification.server';
+import type { Route } from './+types/route';
+
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+/**
+ * Account email change. Two intents, both scoped to the signed-in user:
+ *  - send-code: mail a one-time code to the NEW address
+ *  - change-email: burn the code and write the address; ClassmojiService.user
+ *    .update then claims any classroom invite sent to it (#307), which is the
+ *    whole point — a student who mistyped their address at sign-up gets into
+ *    the classroom they were invited to.
+ * `provider_email` (the Github one) is never touched here.
+ */
+export const action = async ({ request }: Route.ActionArgs) => {
+  const { userId } = await requireAuth(request);
+  const body = (await request.json()) as { intent?: string; email?: unknown; code?: unknown };
+  const email = typeof body.email === 'string' ? body.email.trim() : '';
+
+  if (!EMAIL_RE.test(email)) {
+    return { error: 'Please enter a valid email address.' };
+  }
+
+  // Refuse an address another account already holds, before spending a code
+  // on it. Case-insensitive: `email` is unique as typed, but two casings of
+  // one mailbox are one mailbox.
+  const taken = await getPrisma().user.findFirst({
+    where: { email: { equals: email, mode: 'insensitive' }, NOT: { id: userId } },
+    select: { id: true },
+  });
+  if (taken) {
+    return { error: 'This email is already in use by another account.' };
+  }
+
+  if (body.intent === 'send-code') {
+    await sendEmailVerificationCode(email);
+    return { codeSent: true };
+  }
+
+  if (body.intent === 'change-email') {
+    const code = typeof body.code === 'string' ? body.code.trim() : '';
+    if (!(await consumeEmailVerificationCode(email, code))) {
+      return { error: 'Invalid or expired code. Try resending.' };
+    }
+    await ClassmojiService.user.update(userId, { email, emailVerified: true });
+    return { changed: true };
+  }
+
+  return { error: 'Unknown action.' };
+};
+
+const readOnlyInput =
+  'h-12 bg-gray-50 border-gray-200 cursor-not-allowed rounded-md focus:border-gray-200 focus:shadow-none hover:border-gray-200';
 
 const SettingsGeneral = () => {
   const { user } = useStore();
   const [form] = Form.useForm();
+
+  const codeFetcher = useFetcher<{ codeSent?: boolean; error?: string }>();
+  const saveFetcher = useFetcher<{ changed?: boolean; error?: string }>();
+  const [editing, setEditing] = useState(false);
+  const [newEmail, setNewEmail] = useState('');
+  const [code, setCode] = useState('');
+  const [changedTo, setChangedTo] = useState<string | null>(null);
+
+  const codeSent = codeFetcher.data?.codeSent === true;
+  const error = saveFetcher.data?.error ?? codeFetcher.data?.error;
+  const sending = codeFetcher.state !== 'idle';
+  const saving = saveFetcher.state !== 'idle';
 
   // Update form values when user data becomes available (after Zustand hydrates)
   useEffect(() => {
@@ -18,6 +90,32 @@ const SettingsGeneral = () => {
       });
     }
   }, [user, form]);
+
+  // Saved: close the editor. The root loader revalidates and the store picks up
+  // the new address; `changedTo` keeps the confirmation on screen meanwhile.
+  useEffect(() => {
+    if (saveFetcher.state === 'idle' && saveFetcher.data?.changed) {
+      setChangedTo(newEmail);
+      setEditing(false);
+      setNewEmail('');
+      setCode('');
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [saveFetcher.state, saveFetcher.data]);
+
+  const submit = (intent: 'send-code' | 'change-email') => {
+    const fetcher = intent === 'send-code' ? codeFetcher : saveFetcher;
+    fetcher.submit(
+      { intent, email: newEmail, code },
+      { method: 'POST', encType: 'application/json' }
+    );
+  };
+
+  const cancelEdit = () => {
+    setEditing(false);
+    setNewEmail('');
+    setCode('');
+  };
 
   return (
     <div className="w-2/3">
@@ -35,7 +133,9 @@ const SettingsGeneral = () => {
             />
           </div>
           <div className="flex-1">
-            <h3 className="text-lg font-semibold text-gray-800 dark:text-gray-100 mb-2">{user?.name || 'User Name'}</h3>
+            <h3 className="text-lg font-semibold text-gray-800 dark:text-gray-100 mb-2">
+              {user?.name || 'User Name'}
+            </h3>
             <p className="text-ink-2 text-base mb-3">{user?.email}</p>
             <div className="flex items-center gap-2 text-sm text-gray-500">
               <GithubOutlined className="text-gray-400" />
@@ -54,6 +154,18 @@ const SettingsGeneral = () => {
           >
             Profile Information
           </h4>
+
+          {changedTo && (
+            <Alert
+              type="success"
+              showIcon
+              closable
+              onClose={() => setChangedTo(null)}
+              className="mb-6"
+              message={`Email updated to ${changedTo}.`}
+              description="Any classroom invitations sent to this address have been added to your account."
+            />
+          )}
 
           <Form
             form={form}
@@ -74,19 +186,32 @@ const SettingsGeneral = () => {
                 <Input
                   readOnly
                   prefix={<UserOutlined className="text-gray-400" />}
-                  className="h-12 bg-gray-50 border-gray-200 cursor-not-allowed rounded-md focus:border-gray-200 focus:shadow-none hover:border-gray-200"
+                  className={readOnlyInput}
                 />
               </Form.Item>
 
               <Form.Item
-                label={<span className="text-ink-1 font-medium text-sm">Email Address</span>}
+                label={
+                  <span className="flex items-center gap-3">
+                    <span className="text-ink-1 font-medium text-sm">Email Address</span>
+                    {!editing && (
+                      <button
+                        type="button"
+                        onClick={() => setEditing(true)}
+                        className="text-xs font-medium text-accent hover:underline cursor-pointer"
+                      >
+                        Change
+                      </button>
+                    )}
+                  </span>
+                }
                 name="email"
                 className="mb-6"
               >
                 <Input
                   readOnly
                   prefix={<MailOutlined className="text-gray-400" />}
-                  className="h-12 bg-gray-50 border-gray-200 cursor-not-allowed rounded-md focus:border-gray-200 focus:shadow-none hover:border-gray-200"
+                  className={readOnlyInput}
                 />
               </Form.Item>
 
@@ -98,22 +223,87 @@ const SettingsGeneral = () => {
                 <Input
                   readOnly
                   prefix={<GithubOutlined className="text-gray-400" />}
-                  className="h-12 bg-gray-50 border-gray-200 cursor-not-allowed rounded-md focus:border-gray-200 focus:shadow-none hover:border-gray-200 max-w-md"
+                  className={`${readOnlyInput} max-w-md`}
                 />
               </Form.Item>
             </div>
+          </Form>
 
-            <div className="mt-8 p-4 bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded-lg">
-              <div className="flex items-start gap-3">
+          {editing && (
+            <div className="mb-8 p-5 rounded-lg border border-line bg-bg-1">
+              <p className="text-sm font-semibold text-ink-0 mb-1">Change email address</p>
+              <p className="text-sm text-ink-3 mb-4">
+                We will send a code to the new address to confirm it is yours. Classroom invitations
+                sent to that address are picked up automatically once it is verified.
+              </p>
+
+              {error && <Alert type="error" showIcon message={error} className="mb-4" />}
+
+              <div className="flex flex-col gap-3 max-w-md">
+                <div className="flex gap-2">
+                  <Input
+                    type="email"
+                    autoFocus
+                    prefix={<MailOutlined className="text-gray-400" />}
+                    placeholder="new.email@university.edu"
+                    value={newEmail}
+                    readOnly={codeSent}
+                    onChange={e => setNewEmail(e.target.value)}
+                    onPressEnter={() => !codeSent && newEmail && submit('send-code')}
+                  />
+                  {!codeSent && (
+                    <Button
+                      onClick={() => submit('send-code')}
+                      loading={sending}
+                      disabled={!newEmail}
+                    >
+                      Send code
+                    </Button>
+                  )}
+                </div>
+
+                {codeSent && (
+                  <div className="flex gap-2">
+                    <Input
+                      placeholder="6-digit code"
+                      maxLength={6}
+                      value={code}
+                      onChange={e => setCode(e.target.value)}
+                      onPressEnter={() => code && submit('change-email')}
+                    />
+                    <Button
+                      type="primary"
+                      onClick={() => submit('change-email')}
+                      loading={saving}
+                      disabled={code.length < 6}
+                    >
+                      Verify and save
+                    </Button>
+                    <Button type="text" onClick={() => submit('send-code')} loading={sending}>
+                      Resend
+                    </Button>
+                  </div>
+                )}
+
                 <div>
-                  <p className="text-yellow-800 font-medium mb-1 text-sm">Read-only Information</p>
-                  <p className="text-yellow-700 text-sm leading-relaxed">
-                    This information cannot be edited directly.
-                  </p>
+                  <Button type="text" size="small" onClick={cancelEdit}>
+                    Cancel
+                  </Button>
                 </div>
               </div>
             </div>
-          </Form>
+          )}
+
+          <div className="p-4 bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded-lg">
+            <div className="flex items-start gap-3">
+              <div>
+                <p className="text-yellow-800 font-medium mb-1 text-sm">From your Github account</p>
+                <p className="text-yellow-700 text-sm leading-relaxed">
+                  Your name and Github username come from Github and cannot be edited here.
+                </p>
+              </div>
+            </div>
+          </div>
         </div>
       </Card>
     </div>
