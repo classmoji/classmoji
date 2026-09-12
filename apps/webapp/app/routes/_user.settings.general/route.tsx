@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useFetcher } from 'react-router';
 import { Avatar, Input, Card, Button, Alert } from 'antd';
-import { GithubOutlined, MailOutlined, UserOutlined, LockOutlined } from '@ant-design/icons';
+import { GithubOutlined, MailOutlined, UserOutlined } from '@ant-design/icons';
 import { IconId } from '@tabler/icons-react';
 
 import useStore from '~/store';
@@ -102,10 +102,6 @@ const FieldRow = ({
     </div>
     {children}
   </div>
-);
-
-const ReadOnlyMarker = () => (
-  <LockOutlined className="text-xs text-ink-3" aria-label="Read-only" title="Read-only" />
 );
 
 const linkButton = 'text-xs font-medium text-accent hover:underline cursor-pointer';
@@ -217,7 +213,7 @@ const SettingsGeneral = () => {
           )}
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            <FieldRow htmlFor="account-name" label="Full Name" aside={<ReadOnlyMarker />}>
+            <FieldRow htmlFor="account-name" label="Full Name">
               <Input
                 id="account-name"
                 readOnly
@@ -249,7 +245,7 @@ const SettingsGeneral = () => {
               />
             </FieldRow>
 
-            <FieldRow htmlFor="account-login" label="Github Username" aside={<ReadOnlyMarker />}>
+            <FieldRow htmlFor="account-login" label="Github Username">
               <Input
                 id="account-login"
                 readOnly
