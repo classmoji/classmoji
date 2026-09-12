@@ -5,6 +5,7 @@ import { GithubOutlined, MailOutlined, UserOutlined } from '@ant-design/icons';
 import { IconId } from '@tabler/icons-react';
 
 import useStore from '~/store';
+import { useCallout } from '@classmoji/ui-components';
 import { requireAuth } from '@classmoji/auth/server';
 import getPrisma from '@classmoji/database';
 import { ClassmojiService } from '@classmoji/services';
@@ -111,9 +112,14 @@ const SettingsGeneral = () => {
 
   const codeFetcher = useFetcher<{ codeSent?: boolean; error?: string }>();
   const saveFetcher = useFetcher<{ changed?: boolean; error?: string }>();
+  const callout = useCallout();
   const schoolIdFetcher = useFetcher<{ schoolIdSaved?: boolean; error?: string }>();
   const [schoolId, setSchoolId] = useState('');
-  const schoolIdDirty = schoolId.trim() !== (user?.school_id ?? '');
+  // What the server holds. Seeded from the store, then set locally on save so
+  // the field reads as clean the moment the write lands, before the root
+  // loader has revalidated the store.
+  const [savedSchoolId, setSavedSchoolId] = useState<string | null>(null);
+  const schoolIdDirty = schoolId.trim() !== (savedSchoolId ?? user?.school_id ?? '');
   const savingSchoolId = schoolIdFetcher.state !== 'idle';
   const [editing, setEditing] = useState(false);
   const [newEmail, setNewEmail] = useState('');
@@ -129,6 +135,20 @@ const SettingsGeneral = () => {
   useEffect(() => {
     if (user) setSchoolId(user.school_id ?? '');
   }, [user]);
+
+  // Confirm a School ID save out loud; the inline state alone was too quiet.
+  useEffect(() => {
+    if (schoolIdFetcher.state !== 'idle' || !schoolIdFetcher.data?.schoolIdSaved) return;
+    const value = schoolId.trim();
+    setSavedSchoolId(value);
+    callout.show({
+      variant: 'success',
+      title: value ? `School ID saved as ${value}.` : 'School ID cleared.',
+      autoDismissMs: 4000,
+    });
+    // `callout` is stable per CalloutProvider; `schoolId` is read, not tracked.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [schoolIdFetcher.state, schoolIdFetcher.data]);
 
   // Saved: close the editor. The root loader revalidates and the store picks up
   // the new address; `changedTo` keeps the confirmation on screen meanwhile.
@@ -270,8 +290,6 @@ const SettingsGeneral = () => {
                   >
                     Save
                   </Button>
-                ) : schoolIdFetcher.data?.schoolIdSaved ? (
-                  <span className="text-xs font-medium text-ink-3">Saved</span>
                 ) : null
               }
             >
