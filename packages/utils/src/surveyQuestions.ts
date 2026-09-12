@@ -37,7 +37,9 @@ export const SURVEY_QUESTIONS: SurveyQuestion[] = [
   {
     key: 'referral_source',
     prompt: 'How did you hear about Classmoji?',
-    audience: 'all',
+    // Students overwhelmingly skip this (they are here because their instructor
+    // said so), so only people who are not yet a student anywhere get asked.
+    audience: 'instructor',
     options: [
       { value: 'colleague', emoji: '🗣️', label: 'A colleague or friend' },
       { value: 'instructor', emoji: '🎓', label: 'My instructor or a course' },
