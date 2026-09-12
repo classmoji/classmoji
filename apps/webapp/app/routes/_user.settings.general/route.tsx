@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useFetcher } from 'react-router';
-import { Avatar, Form, Input, Card, Button, Alert } from 'antd';
+import { Avatar, Input, Card, Button, Alert } from 'antd';
 import { GithubOutlined, MailOutlined, UserOutlined, LockOutlined } from '@ant-design/icons';
 import { IconId } from '@tabler/icons-react';
 
@@ -81,19 +81,39 @@ export const action = async ({ request }: Route.ActionArgs) => {
 
 const readOnlyInput = 'h-12 rounded-md cursor-not-allowed';
 
-/** Field label with a muted "Read-only" marker beside it. */
-const ReadOnlyLabel = ({ children }: { children: string }) => (
-  <span className="flex items-center gap-3">
-    <span className="text-ink-1 font-medium text-sm">{children}</span>
-    <span className="inline-flex items-center gap-1 text-xs text-ink-3">
-      <LockOutlined /> Read-only
-    </span>
+/** Label on the left, an action or marker on the right, input below. */
+const FieldRow = ({
+  htmlFor,
+  label,
+  aside,
+  children,
+}: {
+  htmlFor: string;
+  label: string;
+  aside?: React.ReactNode;
+  children: React.ReactNode;
+}) => (
+  <div className="mb-6">
+    <div className="flex items-center justify-between mb-2 min-h-6">
+      <label htmlFor={htmlFor} className="text-ink-1 font-medium text-sm">
+        {label}
+      </label>
+      {aside}
+    </div>
+    {children}
+  </div>
+);
+
+const ReadOnlyMarker = () => (
+  <span className="inline-flex items-center gap-1 text-xs text-ink-3">
+    <LockOutlined /> Read-only
   </span>
 );
 
+const linkButton = 'text-xs font-medium text-accent hover:underline cursor-pointer';
+
 const SettingsGeneral = () => {
   const { user } = useStore();
-  const [form] = Form.useForm();
 
   const codeFetcher = useFetcher<{ codeSent?: boolean; error?: string }>();
   const saveFetcher = useFetcher<{ changed?: boolean; error?: string }>();
@@ -111,16 +131,10 @@ const SettingsGeneral = () => {
   const sending = codeFetcher.state !== 'idle';
   const saving = saveFetcher.state !== 'idle';
 
-  // Update form values when user data becomes available (after Zustand hydrates)
+  // Seed the editable field once user data is in the store (after hydration).
   useEffect(() => {
-    if (user) {
-      form.setFieldsValue({
-        name: user.name,
-        github_username: user.login,
-      });
-      setSchoolId(user.school_id ?? '');
-    }
-  }, [user, form]);
+    if (user) setSchoolId(user.school_id ?? '');
+  }, [user]);
 
   // Saved: close the editor. The root loader revalidates and the store picks up
   // the new address; `changedTo` keeps the confirmation on screen meanwhile.
@@ -204,105 +218,87 @@ const SettingsGeneral = () => {
             />
           )}
 
-          <Form
-            form={form}
-            layout="vertical"
-            initialValues={{
-              name: user?.name,
-              github_username: user?.login,
-            }}
-            className="w-full"
-          >
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-              <Form.Item
-                label={<ReadOnlyLabel>Full Name</ReadOnlyLabel>}
-                name="name"
-                className="mb-6"
-              >
-                <Input
-                  readOnly
-                  variant="filled"
-                  prefix={<UserOutlined className="text-gray-400" />}
-                  className={readOnlyInput}
-                />
-              </Form.Item>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            <FieldRow htmlFor="account-name" label="Full Name" aside={<ReadOnlyMarker />}>
+              <Input
+                id="account-name"
+                readOnly
+                variant="filled"
+                value={user?.name ?? ''}
+                prefix={<UserOutlined className="text-gray-400" />}
+                className={readOnlyInput}
+              />
+            </FieldRow>
 
-              {/* Email: read-only box, with the change flow opened from the
-                  button on the label row (same layout as School ID below). */}
-              <div className="mb-6">
-                <div className="flex items-center justify-between mb-2 min-h-6">
-                  <label htmlFor="account-email" className="text-ink-1 font-medium text-sm">
-                    Email Address
-                  </label>
-                  {!editing && (
-                    <Button size="small" onClick={() => setEditing(true)}>
-                      Change
-                    </Button>
-                  )}
-                </div>
-                <Input
-                  id="account-email"
-                  readOnly
-                  variant="filled"
-                  value={user?.email ?? ''}
-                  prefix={<MailOutlined className="text-gray-400" />}
-                  className={readOnlyInput}
-                />
-              </div>
+            <FieldRow
+              htmlFor="account-email"
+              label="Email Address"
+              aside={
+                !editing && (
+                  <button type="button" onClick={() => setEditing(true)} className={linkButton}>
+                    Change
+                  </button>
+                )
+              }
+            >
+              <Input
+                id="account-email"
+                readOnly
+                variant="filled"
+                value={user?.email ?? ''}
+                prefix={<MailOutlined className="text-gray-400" />}
+                className={readOnlyInput}
+              />
+            </FieldRow>
 
-              <Form.Item
-                label={<ReadOnlyLabel>Github Username</ReadOnlyLabel>}
-                name="github_username"
-                className="mb-6"
-              >
-                <Input
-                  readOnly
-                  variant="filled"
-                  prefix={<GithubOutlined className="text-gray-400" />}
-                  className={readOnlyInput}
-                />
-              </Form.Item>
+            <FieldRow htmlFor="account-login" label="Github Username" aside={<ReadOnlyMarker />}>
+              <Input
+                id="account-login"
+                readOnly
+                variant="filled"
+                value={user?.login ?? ''}
+                prefix={<GithubOutlined className="text-gray-400" />}
+                className={readOnlyInput}
+              />
+            </FieldRow>
 
-              {/* School ID: editable, saved on its own (#343). Not a Form.Item,
-                  since unlike the read-only fields above it has its own state.
-                  Same shape as Email: the action lives on the label row. */}
-              <div className="mb-6">
-                <div className="flex items-center justify-between mb-2 min-h-6">
-                  <label htmlFor="school-id" className="text-ink-1 font-medium text-sm">
-                    School ID
-                  </label>
-                  {schoolIdDirty || savingSchoolId ? (
-                    <Button
-                      size="small"
-                      type="primary"
-                      onClick={saveSchoolId}
-                      loading={savingSchoolId}
-                    >
-                      Save
-                    </Button>
-                  ) : schoolIdFetcher.data?.schoolIdSaved ? (
-                    <span className="text-xs font-medium text-ink-3">Saved</span>
-                  ) : null}
-                </div>
-                <Input
-                  id="school-id"
-                  prefix={<IconId size={16} className="text-gray-400" />}
-                  placeholder="Your student ID"
-                  maxLength={SCHOOL_ID_MAX_LENGTH}
-                  value={schoolId}
-                  onChange={e => setSchoolId(e.target.value)}
-                  onPressEnter={() => schoolIdDirty && !savingSchoolId && saveSchoolId()}
-                  status={schoolIdFetcher.data?.error ? 'error' : undefined}
-                  className="h-12 rounded-md"
-                />
-                {schoolIdFetcher.data?.error && (
-                  <p className="text-xs text-red-500 dark:text-red-400 mt-1">
-                    {schoolIdFetcher.data.error}
-                  </p>
-                )}
-              </div>
-            </div>
-          </Form>
+            {/* School ID: the one plain editable field, saved on its own (#343). */}
+            <FieldRow
+              htmlFor="school-id"
+              label="School ID"
+              aside={
+                schoolIdDirty || savingSchoolId ? (
+                  <Button
+                    size="small"
+                    type="primary"
+                    onClick={saveSchoolId}
+                    loading={savingSchoolId}
+                  >
+                    Save
+                  </Button>
+                ) : schoolIdFetcher.data?.schoolIdSaved ? (
+                  <span className="text-xs font-medium text-ink-3">Saved</span>
+                ) : null
+              }
+            >
+              <Input
+                id="school-id"
+                prefix={<IconId size={16} className="text-gray-400" />}
+                placeholder="Your student ID"
+                maxLength={SCHOOL_ID_MAX_LENGTH}
+                value={schoolId}
+                onChange={e => setSchoolId(e.target.value)}
+                onPressEnter={() => schoolIdDirty && !savingSchoolId && saveSchoolId()}
+                status={schoolIdFetcher.data?.error ? 'error' : undefined}
+                className="h-12 rounded-md"
+              />
+              {schoolIdFetcher.data?.error && (
+                <p className="text-xs text-red-500 dark:text-red-400 mt-1">
+                  {schoolIdFetcher.data.error}
+                </p>
+              )}
+            </FieldRow>
+          </div>
 
           {editing && (
             <div className="mb-8 p-5 rounded-lg border border-line bg-bg-1">
