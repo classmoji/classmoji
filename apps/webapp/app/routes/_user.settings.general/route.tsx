@@ -116,7 +116,6 @@ const SettingsGeneral = () => {
     if (user) {
       form.setFieldsValue({
         name: user.name,
-        email: user.email,
         github_username: user.login,
       });
       setSchoolId(user.school_id ?? '');
@@ -210,7 +209,6 @@ const SettingsGeneral = () => {
             layout="vertical"
             initialValues={{
               name: user?.name,
-              email: user?.email,
               github_username: user?.login,
             }}
             className="w-full"
@@ -229,31 +227,28 @@ const SettingsGeneral = () => {
                 />
               </Form.Item>
 
-              <Form.Item
-                label={
-                  <span className="flex items-center gap-3">
-                    <span className="text-ink-1 font-medium text-sm">Email Address</span>
-                    {!editing && (
-                      <button
-                        type="button"
-                        onClick={() => setEditing(true)}
-                        className="text-xs font-medium text-accent hover:underline cursor-pointer"
-                      >
-                        Change
-                      </button>
-                    )}
-                  </span>
-                }
-                name="email"
-                className="mb-6"
-              >
+              {/* Email: read-only box, with the change flow opened from the
+                  button on the label row (same layout as School ID below). */}
+              <div className="mb-6">
+                <div className="flex items-center justify-between mb-2 min-h-6">
+                  <label htmlFor="account-email" className="text-ink-1 font-medium text-sm">
+                    Email Address
+                  </label>
+                  {!editing && (
+                    <Button size="small" onClick={() => setEditing(true)}>
+                      Change
+                    </Button>
+                  )}
+                </div>
                 <Input
+                  id="account-email"
                   readOnly
                   variant="filled"
+                  value={user?.email ?? ''}
                   prefix={<MailOutlined className="text-gray-400" />}
                   className={readOnlyInput}
                 />
-              </Form.Item>
+              </div>
 
               <Form.Item
                 label={<ReadOnlyLabel>Github Username</ReadOnlyLabel>}
