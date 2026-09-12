@@ -358,7 +358,16 @@ async function resolveDoc(
   return { kind: target.kind, id: row.id, title: row.title };
 }
 
-interface StoredChunk {
+/**
+ * One stored row, as {@link isFresh} needs to see it.
+ *
+ * Exported because `docsIndex.service.ts` reuses `isFresh` verbatim over a
+ * DIFFERENT table. The freshness rule is the same rule — the stamps match,
+ * every chunk is present, every chunk is embedded, and all of them agree on how
+ * many there are — and keeping it in one function is what stops the two corpora
+ * drifting apart on what "already indexed" means.
+ */
+export interface StoredChunk {
   chunk_ix: number;
   chunk_count: number;
   source_sha: string;
@@ -384,10 +393,19 @@ async function storedChunks(
 /**
  * Is what is stored already this document, completely?
  *
- * All four have to hold: the stamps match, every chunk 0..n-1 is present, every
- * one of them has a vector, and they agree on how many there are. A partial
- * index — the write that died between chunk 3 and chunk 4 — reads as stale, not
- * as fresh, which is what makes the reconcile able to finish it.
+ * All five have to hold: the stamps match, every chunk 0..n-1 is present, every
+ * one of them has a vector, they agree on how many there are, and there are no
+ * EXTRA rows beyond that count. A partial index — the write that died between
+ * chunk 3 and chunk 4 — reads as stale, not as fresh, which is what makes the
+ * reconcile able to finish it.
+ *
+ * The extra-row check is the one that was missing. A document that shrank from
+ * two chunks to one leaves row 1 behind; if a later write then stamped row 0
+ * with `chunk_count: 1` and the shrink delete did not run, rows 0 and 1 both
+ * declare a count of 1, every index in 0..0 is present, and this returned true
+ * — pronouncing a document fresh while a stale chunk of its previous version
+ * was still in the corpus, answering questions out of text the page no longer
+ * has. Both corpora read this function, so the fix lands for both.
  */
 export function isFresh(
   rows: StoredChunk[],
@@ -404,6 +422,9 @@ export function isFresh(
   }
   const expected = zero.chunk_count;
   if (!Number.isInteger(expected) || expected < 1) return false;
+  // Both tables key on (…, chunk_ix), so there are no duplicate indices to make
+  // this count lie: more rows than the stamp claims means a leftover tail.
+  if (rows.length !== expected) return false;
 
   const seen = new Set<number>();
   for (const row of rows) {

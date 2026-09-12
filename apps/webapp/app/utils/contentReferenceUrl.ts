@@ -7,8 +7,13 @@
  * Routes supported:
  * - {pagesUrl}/{classroomSlug}/{pageId} - External pages app URL
  * - {slidesUrl}/{slideId} - External slides URL
- * - /docs/{contentPath} - Platform documentation
+ * - https://classmoji.io/{slug} - Platform documentation
+ *
+ * A null return means NO LINK, and every caller must render text rather than a
+ * link when it gets one. Returning a best-effort URL instead would hand a user
+ * a confident chip that goes nowhere, which is worse than prose.
  */
+import { docsUrl } from '@classmoji/utils';
 
 /**
  * Build a URL for a content reference
@@ -62,8 +67,23 @@ export function buildContentReferenceUrl(
     }
 
     case 'platform_docs': {
-      // contentPath is a doc identifier like "quizzes", "assignments", "getting-started"
-      return `/docs/${contentPath}`;
+      // `contentPath` is the SLUG of a `kind: 'doc'` search hit — the page's
+      // path under classmoji.io, e.g. `docs/instructors/roster`.
+      //
+      // This used to build `/docs/${contentPath}`, which was wrong twice over:
+      // the origin is the marketing site and not the app, and with a full slug
+      // it produced `/docs/docs/instructors/roster`. `docsUrl` comes from
+      // `@classmoji/utils` — the SAME function the MCP uses for a hit's `url` —
+      // so the link the model cites and the chip the user clicks cannot
+      // disagree.
+      //
+      // It returns null for a malformed slug. That is a SHAPE guard, not an
+      // existence check: it blocks traversal and absolute paths, but
+      // `docs/instructors/made-up-feature` passes, and so does the
+      // `/docs/docs/instructors` typo the corpus itself contains. Only the
+      // index knows what exists, and a slug that came from a search hit already
+      // does.
+      return docsUrl(contentPath);
     }
 
     // Deprecated: Keep for backwards compatibility with old references
@@ -80,28 +100,6 @@ export function buildContentReferenceUrl(
       console.warn('[contentReferenceUrl] Unknown reference type:', referenceType);
       return null;
   }
-}
-
-/**
- * Render a content reference as a markdown link
- *
- * @param {Object} reference - Content reference from syllabus bot
- * @param {string} classroomSlug - Classroom slug for URL routing
- * @param {string|null} slidesUrl - External slides URL
- * @returns {string} - Markdown link or plain text
- */
-export function renderContentReferenceMarkdown(
-  reference: ContentReferenceInput,
-  classroomSlug: string,
-  slidesUrl: string | null = null
-) {
-  const url = buildContentReferenceUrl(reference, classroomSlug, slidesUrl);
-
-  if (!url) {
-    return reference.displayText || reference.contentPath;
-  }
-
-  return `[${reference.displayText}](${url})`;
 }
 
 /**

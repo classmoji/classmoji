@@ -1,0 +1,66 @@
+---
+title: Use your own domain
+description: Serve your class website on a domain you own, like cs52.me
+---
+
+:::note
+Connecting your own domain is a **Pro** feature. A class website on a `classmoji.io` subdomain is not.
+:::
+
+### Before you start
+
+You need three things: a class website already live on a subdomain, a domain (or a subdomain of one) that you control, and access to that domain's DNS records. A departmental domain and a course domain you bought yourself both work.
+
+### Add the domain
+
+Go to **Settings → Website** and find the **Custom domain** section. Enter the domain you want the site served on, such as `cs52.me` or `cs52.department.edu`, and save it.
+
+Classmoji then shows the DNS records to add. Nothing changes for your visitors until those records exist.
+
+### Point the domain at Classmoji
+
+There are two groups of records, and they answer two different questions.
+
+**Routing — add ONE of these, not both**
+
+| Option | When to use it |
+|--------|---------------|
+| **A (and AAAA) records** | Point the name straight at our addresses. Works anywhere, including at a root domain like `cs52.me` where a CNAME often cannot go. |
+| **CNAME record** | One record, and it follows us if our addresses ever change. Many DNS hosts refuse a CNAME at a root domain: there, use their ALIAS, ANAME or CNAME flattening record with the same value (Cloudflare flattens automatically). |
+
+Adding both is not extra insurance. A CNAME alongside an A record for the same name is an invalid zone, so pick the row that fits your DNS host and add only that one.
+
+**Proof of ownership — any one of these**
+
+| Record | Name |
+|--------|------|
+| **CNAME** | `_acme-challenge.{your domain}` |
+| **TXT** | `_fly-ownership.{your domain}` |
+
+If your routing choice included an AAAA record, it does double duty: it routes IPv6 traffic and proves ownership, so you can skip this group entirely. The page tells you when that applies.
+
+### Watch the certificate
+
+Classmoji requests the TLS certificate for you as soon as the records resolve. The status chip next to the domain reports where it is:
+
+| Chip | Meaning |
+|------|---------|
+| **No certificate yet** | The request has not started |
+| **Pending DNS** | We are still waiting on your records |
+| **Issuing** | Records found, certificate being issued |
+| **Active** | The certificate is live and the domain is served over HTTPS |
+
+DNS changes take anywhere from a few minutes to a few hours to propagate, depending on your host and the record's previous TTL. Nothing here needs babysitting: leave the tab, come back later.
+
+The domain is marked verified once the site has actually served a request on that hostname, which is a stronger signal than a record merely existing.
+
+### Disconnect a domain
+
+Use the disconnect button in the same section. The site stays reachable at its `classmoji.io` subdomain, so disconnecting takes the custom address down without taking the course site down.
+
+Disconnecting stays available even if a Pro subscription lapses. A domain you pointed at us is one you must always be able to point somewhere else.
+
+### What's next
+
+- [Publish a class website](/docs/instructors/class-sites)
+- [Build pages](/docs/instructors/pages)
