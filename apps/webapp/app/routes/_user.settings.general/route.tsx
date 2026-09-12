@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useFetcher } from 'react-router';
 import { Avatar, Form, Input, Card, Button, Alert } from 'antd';
 import { GithubOutlined, MailOutlined, UserOutlined } from '@ant-design/icons';
+import { IconId } from '@tabler/icons-react';
 
 import useStore from '~/store';
 import { requireAuth } from '@classmoji/auth/server';
@@ -11,13 +12,15 @@ import {
   sendEmailVerificationCode,
   consumeEmailVerificationCode,
 } from '~/utils/emailVerification.server';
+import { normalizeSchoolId, SCHOOL_ID_MAX_LENGTH } from '~/utils/schoolId';
 import type { Route } from './+types/route';
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 /**
- * Account email change. Two intents, both scoped to the signed-in user:
- *  - send-code: mail a one-time code to the NEW address
+ * Account edits, all scoped to the signed-in user's own row (#343):
+ *  - update-school-id: the contact detail set once at registration
+ *  - send-code: mail a one-time code to a NEW email address
  *  - change-email: burn the code and write the address; ClassmojiService.user
  *    .update then claims any classroom invite sent to it (#307), which is the
  *    whole point — a student who mistyped their address at sign-up gets into
@@ -26,7 +29,22 @@ const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
  */
 export const action = async ({ request }: Route.ActionArgs) => {
   const { userId } = await requireAuth(request);
-  const body = (await request.json()) as { intent?: string; email?: unknown; code?: unknown };
+  const body = (await request.json()) as {
+    intent?: string;
+    email?: unknown;
+    code?: unknown;
+    school_id?: unknown;
+  };
+
+  if (body.intent === 'update-school-id') {
+    const schoolId = normalizeSchoolId(body.school_id);
+    if (schoolId === undefined) {
+      return { error: `School ID must be ${SCHOOL_ID_MAX_LENGTH} characters or fewer.` };
+    }
+    await ClassmojiService.user.update(userId, { school_id: schoolId });
+    return { schoolIdSaved: true };
+  }
+
   const email = typeof body.email === 'string' ? body.email.trim() : '';
 
   if (!EMAIL_RE.test(email)) {
@@ -70,6 +88,10 @@ const SettingsGeneral = () => {
 
   const codeFetcher = useFetcher<{ codeSent?: boolean; error?: string }>();
   const saveFetcher = useFetcher<{ changed?: boolean; error?: string }>();
+  const schoolIdFetcher = useFetcher<{ schoolIdSaved?: boolean; error?: string }>();
+  const [schoolId, setSchoolId] = useState('');
+  const schoolIdDirty = schoolId.trim() !== (user?.school_id ?? '');
+  const savingSchoolId = schoolIdFetcher.state !== 'idle';
   const [editing, setEditing] = useState(false);
   const [newEmail, setNewEmail] = useState('');
   const [code, setCode] = useState('');
@@ -88,6 +110,7 @@ const SettingsGeneral = () => {
         email: user.email,
         github_username: user.login,
       });
+      setSchoolId(user.school_id ?? '');
     }
   }, [user, form]);
 
@@ -110,6 +133,12 @@ const SettingsGeneral = () => {
       { method: 'POST', encType: 'application/json' }
     );
   };
+
+  const saveSchoolId = () =>
+    schoolIdFetcher.submit(
+      { intent: 'update-school-id', school_id: schoolId },
+      { method: 'POST', encType: 'application/json' }
+    );
 
   const cancelEdit = () => {
     setEditing(false);
@@ -218,14 +247,52 @@ const SettingsGeneral = () => {
               <Form.Item
                 label={<span className="text-ink-1 font-medium text-sm">GitHub Username</span>}
                 name="github_username"
-                className="md:col-span-2 mb-6"
+                className="mb-6"
               >
                 <Input
                   readOnly
                   prefix={<GithubOutlined className="text-gray-400" />}
-                  className={`${readOnlyInput} max-w-md`}
+                  className={readOnlyInput}
                 />
               </Form.Item>
+
+              {/* School ID: editable, saved on its own (#343). Not a Form.Item,
+                  since unlike the read-only fields above it has its own state. */}
+              <div className="mb-6">
+                <label className="block text-ink-1 font-medium text-sm mb-2" htmlFor="school-id">
+                  School ID
+                </label>
+                <div className="flex gap-2">
+                  <Input
+                    id="school-id"
+                    prefix={<IconId size={16} className="text-gray-400" />}
+                    placeholder="Your student ID"
+                    maxLength={SCHOOL_ID_MAX_LENGTH}
+                    value={schoolId}
+                    onChange={e => setSchoolId(e.target.value)}
+                    onPressEnter={() => schoolIdDirty && saveSchoolId()}
+                    status={schoolIdFetcher.data?.error ? 'error' : undefined}
+                    className="h-12 rounded-md"
+                  />
+                  <Button
+                    className="h-12"
+                    type="primary"
+                    onClick={saveSchoolId}
+                    loading={savingSchoolId}
+                    disabled={!schoolIdDirty}
+                  >
+                    Save
+                  </Button>
+                </div>
+                {schoolIdFetcher.data?.error && (
+                  <p className="text-xs text-red-500 dark:text-red-400 mt-1">
+                    {schoolIdFetcher.data.error}
+                  </p>
+                )}
+                {schoolIdFetcher.data?.schoolIdSaved && !schoolIdDirty && (
+                  <p className="text-xs text-ink-3 mt-1">Saved.</p>
+                )}
+              </div>
             </div>
           </Form>
 

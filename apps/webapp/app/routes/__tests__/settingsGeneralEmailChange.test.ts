@@ -98,6 +98,24 @@ describe('settings.general action: change email', () => {
     expect(data).not.toHaveProperty('provider_email');
   });
 
+  it('saves a trimmed School ID on the signed-in user, and clears it when emptied', async () => {
+    expect(await post({ intent: 'update-school-id', school_id: '  F004567 ' })).toEqual({
+      schoolIdSaved: true,
+    });
+    expect(mocks.userUpdate).toHaveBeenCalledWith('me', { school_id: 'F004567' });
+
+    expect(await post({ intent: 'update-school-id', school_id: '   ' })).toEqual({
+      schoolIdSaved: true,
+    });
+    expect(mocks.userUpdate).toHaveBeenLastCalledWith('me', { school_id: null });
+  });
+
+  it('refuses an over-long School ID without writing', async () => {
+    const result = await post({ intent: 'update-school-id', school_id: 'x'.repeat(65) });
+    expect(result.error).toMatch(/64 characters/);
+    expect(mocks.userUpdate).not.toHaveBeenCalled();
+  });
+
   it('requires a session', async () => {
     mocks.requireAuth.mockRejectedValue(new Response(null, { status: 401 }));
     await expect(post({ intent: 'send-code', email: 'new@school.edu' })).rejects.toBeInstanceOf(

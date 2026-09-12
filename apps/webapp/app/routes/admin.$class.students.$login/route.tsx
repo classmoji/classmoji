@@ -7,6 +7,7 @@ import SingleStudentView from './SingleStudentView';
 import { groupByModule } from '~/utils/helpers.client';
 import { addAuditLog } from '~/utils/helpers';
 import { requireClassroomAdmin } from '~/utils/routeAuth.server';
+import { normalizeSchoolId } from '~/utils/schoolId';
 import type { Route } from './+types/route';
 
 export const loader = async ({ request, params }: Route.LoaderArgs) => {
@@ -93,6 +94,53 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
     letterGradeMappings,
     tokenBalance,
   };
+};
+
+/**
+ * Owner edits to a student's contact details. Today that is the School ID
+ * (#343): it lives on the User row, so this is the student's ID everywhere,
+ * not just in this classroom. Gated on ownership of THIS classroom and on the
+ * student being enrolled in it.
+ */
+export const action = async ({ request, params }: Route.ActionArgs) => {
+  const classSlug = params.class!;
+  const login = params.login!;
+
+  const { classroom } = await requireClassroomAdmin(request, classSlug, {
+    resourceType: 'STUDENT_ROSTER',
+    action: 'update_student',
+  });
+
+  const body = (await request.json()) as { intent?: string; school_id?: unknown };
+  if (body.intent !== 'update-school-id') {
+    return { error: 'Unknown action.' };
+  }
+
+  const enrollment = await ClassmojiService.classroomMembership.findStudentByLoginInClassroom(
+    classroom.id,
+    login
+  );
+  if (!enrollment) {
+    throw new Response('Student not found', { status: 404 });
+  }
+
+  const schoolId = normalizeSchoolId(body.school_id);
+  if (schoolId === undefined) {
+    return { error: 'School ID must be 64 characters or fewer.' };
+  }
+
+  await ClassmojiService.user.update(enrollment.user.id, { school_id: schoolId });
+
+  addAuditLog({
+    request,
+    params,
+    action: 'UPDATE',
+    resourceType: 'STUDENT_ROSTER',
+    resourceId: String(enrollment.user.id),
+    metadata: { field: 'school_id' },
+  });
+
+  return { ok: true };
 };
 
 const StudentView = ({ loaderData }: Route.ComponentProps) => {

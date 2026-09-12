@@ -1,4 +1,6 @@
-import { Tag, Table } from 'antd';
+import { Tag, Table, Input, Button } from 'antd';
+import { useFetcher } from 'react-router';
+import { useEffect, useState } from 'react';
 
 import {
   EmojisDisplay,
@@ -85,6 +87,72 @@ interface SingleStudentViewProps {
   assignmentsByRepository?: Record<string, StudentRepoAssignment[]>;
   classroom?: Record<string, unknown>;
 }
+
+/**
+ * The student's School ID, editable in place by the owner (#343). Posts to
+ * this drawer route's action; the loader revalidates and the header re-renders
+ * with the saved value. The ID is on the User row, so it is the student's ID
+ * in every classroom, not only this one.
+ */
+const SchoolIdField = ({ value }: { value: string | null }) => {
+  const fetcher = useFetcher<{ ok?: boolean; error?: string }>();
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(value ?? '');
+  const saving = fetcher.state !== 'idle';
+
+  useEffect(() => {
+    if (fetcher.state === 'idle' && fetcher.data?.ok) setEditing(false);
+  }, [fetcher.state, fetcher.data]);
+
+  const save = () =>
+    fetcher.submit(
+      { intent: 'update-school-id', school_id: draft },
+      { method: 'POST', encType: 'application/json' }
+    );
+
+  if (!editing) {
+    return (
+      <span className="inline-flex items-center gap-1.5">
+        <span>{value ? `ID: ${value}` : 'No school ID'}</span>
+        <button
+          type="button"
+          onClick={() => {
+            setDraft(value ?? '');
+            setEditing(true);
+          }}
+          className="text-xs font-medium text-accent hover:underline cursor-pointer"
+        >
+          Edit
+        </button>
+      </span>
+    );
+  }
+
+  return (
+    <span className="inline-flex items-center gap-1.5">
+      <Input
+        size="small"
+        autoFocus
+        maxLength={64}
+        placeholder="School ID"
+        value={draft}
+        onChange={e => setDraft(e.target.value)}
+        onPressEnter={save}
+        status={fetcher.data?.error ? 'error' : undefined}
+        className="w-40"
+      />
+      <Button size="small" type="primary" onClick={save} loading={saving}>
+        Save
+      </Button>
+      <Button size="small" type="text" onClick={() => setEditing(false)} disabled={saving}>
+        Cancel
+      </Button>
+      {fetcher.data?.error && (
+        <span className="text-xs text-red-500 dark:text-red-400">{fetcher.data.error}</span>
+      )}
+    </span>
+  );
+};
 
 const SingleStudentView = (props: SingleStudentViewProps) => {
   const {
@@ -323,12 +391,8 @@ const SingleStudentView = (props: SingleStudentViewProps) => {
           <h1 className="font-bold text-lg text-ink-0">{student?.name}</h1>
           <div className="flex items-center gap-2 text-sm text-ink-3">
             <span>@{student?.login}</span>
-            {student?.school_id && (
-              <>
-                <span className="text-ink-4">&middot;</span>
-                <span>ID: {student.school_id}</span>
-              </>
-            )}
+            <span className="text-ink-4">&middot;</span>
+            <SchoolIdField value={student?.school_id ?? null} />
           </div>
         </div>
       </div>
