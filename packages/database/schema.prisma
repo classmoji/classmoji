@@ -327,6 +327,7 @@ model User {
   form_responses                FormResponse[]            @relation("FormResponseRespondent")
   /// Rows this user typed in on somebody else's behalf — see FormResponse.added_by.
   form_responses_added          FormResponse[]            @relation("FormResponseAddedBy")
+  survey_responses              UserSurveyResponse[]
 
   @@unique([provider, provider_id])
   @@index([provider, login])
@@ -1559,6 +1560,33 @@ model NotificationPreference {
   user User @relation(fields: [user_id], references: [id], onDelete: Cascade)
 
   @@map("notification_preferences")
+}
+
+/// One user's answer to a product question asked in the webapp, such as
+/// "how did you hear about Classmoji?". The questions themselves live in code
+/// (apps/webapp survey config); this table only holds answers, so asking a new
+/// question is a new `question_key`, not a migration. One answer per user per
+/// question; a skip is recorded too (answer = "skipped") so the prompt does not
+/// come back every login.
+model UserSurveyResponse {
+  id           String   @id @default(uuid())
+  user_id      String
+  question_key String
+  /// One of the question's option values, or "skipped".
+  answer       String
+  /// Free text that accompanies an "other" answer.
+  detail       String?
+  /// Role signal at answer time: "instructor" | "student" | "unknown". Kept on
+  /// the row so segmenting later does not depend on reconstructing membership
+  /// history.
+  context      String
+  created_at   DateTime @default(now())
+
+  user User @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  @@unique([user_id, question_key])
+  @@index([question_key, answer])
+  @@map("user_survey_responses")
 }
 
 model ProcessedWebhookEvent {
