@@ -15,6 +15,7 @@ import {
   ensureClassroomTeam,
   notificationService,
   provisionExampleClassroom,
+  pendingSurveyQuestions,
 } from '@classmoji/services';
 import { ActionTypes, roleSettings } from '~/constants';
 import useStore from '~/store';
@@ -28,6 +29,7 @@ import {
   type LandingRole,
 } from '~/components/features/landing';
 import type { NotificationRole } from '~/components/features/notifications';
+import { SurveyPrompt } from '~/components/features/survey';
 
 interface SelectOrganizationMembership extends MembershipWithOrganization {
   has_accepted_invite: boolean;
@@ -126,7 +128,21 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
       }
     }
 
-    const { items, unreadCount } = await notificationService.getForBell(typedUser.id);
+    // Runs after the invite claim above so a freshly-claimed student membership
+    // counts toward the audience filter. Never asked during impersonation: a
+    // platform admin must not answer on the user's behalf.
+    const impersonating = !!(
+      authData.session as { session?: { impersonatedBy?: string | null } } | undefined
+    )?.session?.impersonatedBy;
+    const [{ items, unreadCount }, surveyQuestions] = await Promise.all([
+      notificationService.getForBell(typedUser.id),
+      impersonating
+        ? []
+        : pendingSurveyQuestions(typedUser.id).catch(error => {
+            console.error('Failed to load survey questions:', error);
+            return [];
+          }),
+    ]);
     const notifications = items.map(n => ({
       id: n.id,
       type: n.type,
@@ -155,6 +171,7 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
       notifications,
       unreadCount,
       membershipRoles,
+      surveyQuestions,
     };
   } else {
     return redirect('/registration');
@@ -252,7 +269,7 @@ function buildLandingClasses(memberships: SelectOrganizationMembership[]): Landi
 // ───────── component ─────────
 
 const SelectOrganization = ({ loaderData }: Route.ComponentProps) => {
-  const { memberships, notifications, unreadCount, membershipRoles } = loaderData;
+  const { memberships, notifications, unreadCount, membershipRoles, surveyQuestions } = loaderData;
   const { user } = useUser();
   const { classroom, setClassroom, startFullTour } = useStore();
   const { fetcher, notify } = useGlobalFetcher();
@@ -335,6 +352,9 @@ const SelectOrganization = ({ loaderData }: Route.ComponentProps) => {
 
   return (
     <>
+      {/* Asked once per user, before the first-sign-in tour (which waits on it). */}
+      {surveyQuestions.length > 0 && <SurveyPrompt questions={surveyQuestions} />}
+
       <Modal
         open={visible}
         onOk={() => acceptInvite(pendingClassroom ?? classroom)}

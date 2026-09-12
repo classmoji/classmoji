@@ -34,6 +34,7 @@ import * as gitRepoService from './gitRepo.service.ts';
 import * as subscriptionService from './subscription.service.ts';
 import * as entitlementService from './entitlement.service.ts';
 import * as instructorAudienceService from './instructorAudience.service.ts';
+import * as userSurveyService from './userSurvey.service.ts';
 export { ClassroomSettingsEntitlementError } from './classroom.service.ts';
 // Installation repair: the refusal every caller has to tell apart from "not
 // installed", plus the shapes its results come back in.
@@ -118,6 +119,7 @@ const ClassmojiService = {
   subscription: subscriptionService,
   entitlement: entitlementService,
   instructorAudience: instructorAudienceService,
+  userSurvey: userSurveyService,
   teamMembership: teamMembershipService,
   team: teamService,
   teamAdmin: teamAdminService,

@@ -176,6 +176,16 @@ export {
   type InstructorContact,
 } from './classmoji/instructorAudience.service.ts';
 
+// One-off product questions asked on the classroom picker. The catalog itself
+// is in @classmoji/utils so the client can render it.
+export {
+  pendingQuestions as pendingSurveyQuestions,
+  recordAnswer as recordSurveyAnswer,
+  deriveSurveyContext,
+  SurveyValidationError,
+  type SurveyContext,
+} from './classmoji/userSurvey.service.ts';
+
 // Fly certificate automation for class-site custom domains. Every method throws
 // a typed FlyCertError when the credentials are absent, so importing this in a
 // deployment that has none is safe.
