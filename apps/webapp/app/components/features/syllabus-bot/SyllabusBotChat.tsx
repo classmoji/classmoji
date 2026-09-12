@@ -1,8 +1,9 @@
 import { useRef, useEffect, useState, useCallback } from 'react';
-import { IconChevronRight, IconFileText, IconBook, IconHelp, IconFile } from '@tabler/icons-react';
+import { IconChevronRight } from '@tabler/icons-react';
 import ReactMarkdown from 'react-markdown';
 import rehypeHighlight from 'rehype-highlight';
-import { buildContentReferenceUrl, normalizeAssistantText } from '~/utils/contentReferenceUrl';
+import { normalizeAssistantText } from '~/utils/contentReferenceUrl';
+import ContentReferenceChips from './ContentReferenceChips';
 
 interface ChatMessage {
   id: string;
@@ -172,19 +173,6 @@ const SyllabusBotChat = ({
     });
   }, []);
 
-  const getReferenceIcon = (type: string) => {
-    switch (type) {
-      case 'page':
-        return <IconFileText size={13} />;
-      case 'slides':
-        return <IconBook size={13} />;
-      case 'platform_docs':
-        return <IconHelp size={13} />;
-      default:
-        return <IconFile size={13} />;
-    }
-  };
-
   const hasUserMessages = messages.some(m => m.role === 'user');
   const visibleMessages = messages.filter(m => !(m.id === 'welcome' && !hasUserMessages));
   const lastAssistantId = [...visibleMessages].reverse().find(m => m.role === 'assistant')?.id;
@@ -260,44 +248,13 @@ const SyllabusBotChat = ({
                     </ReactMarkdown>
 
                     {/* Content references -- only show after fully revealed */}
-                    {revealedIds.has(msg.id) && msg.references && msg.references.length > 0 && (
-                      <div className="askmoji-refs">
-                        {msg.references.map((ref, idx) => {
-                          const url = buildContentReferenceUrl(
-                            ref,
-                            classroomSlug,
-                            slidesUrl,
-                            pagesUrl
-                          );
-                          // A null url used to render `href={url || '#'}`, which
-                          // is a CLICKABLE DEAD LINK: focusable, styled exactly
-                          // like a working chip, and it navigates the page to
-                          // itself. A reference we cannot link to is a label, so
-                          // render a span -- same class, so it looks identical in
-                          // both themes, and no tabindex, so it is not reachable
-                          // by keyboard as something actionable.
-                          if (!url) {
-                            return (
-                              <span key={idx} className="askmoji-ref">
-                                {getReferenceIcon(ref.referenceType)}
-                                {ref.displayText}
-                              </span>
-                            );
-                          }
-                          return (
-                            <a
-                              key={idx}
-                              href={url}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="askmoji-ref"
-                            >
-                              {getReferenceIcon(ref.referenceType)}
-                              {ref.displayText}
-                            </a>
-                          );
-                        })}
-                      </div>
+                    {revealedIds.has(msg.id) && (
+                      <ContentReferenceChips
+                        references={msg.references ?? []}
+                        classroomSlug={classroomSlug}
+                        slidesUrl={slidesUrl}
+                        pagesUrl={pagesUrl}
+                      />
                     )}
                   </div>
                 )}

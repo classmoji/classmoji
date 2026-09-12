@@ -419,9 +419,18 @@ beforeAll(async () => {
     title: `Manage your roster ${ns}`,
     description: 'How to add students and teaching staff to your classroom',
     section: 'instructors',
+    // Long enough to clear `DOCS_SEARCH_MIN_CHARS`. `searchDocs` drops any
+    // chunk under 400 characters, which is what keeps the corpus's two
+    // section-index pages — a heading and a list of links — out of the results;
+    // a two-sentence fixture is indistinguishable from one of those.
     text:
       'Go to the Teaching Staff tab and click New staff member. Pick the role, enter their ' +
-      `Github username, and confirm. Set ${DOCS_CODE_SENTINEL} to enable AI features.`,
+      `Github username, and confirm. Set ${DOCS_CODE_SENTINEL} to enable AI features. ` +
+      'Roles add up rather than replace: granting someone a second role in the same class ' +
+      'leaves the first one alone, and they appear once per role they hold. Removing someone ' +
+      'takes away that one role and nothing else. An assistant grades the work assigned to ' +
+      'them and helps run the class; a teacher can do everything an owner can except delete ' +
+      'the classroom itself.',
     vector: basis(5),
   });
 });

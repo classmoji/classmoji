@@ -533,9 +533,22 @@ describe('the sweep', () => {
     expect(Array.isArray(bound)).toBe(true);
     expect(bound).toHaveLength(25);
     expect(bound).toContain('docs/instructors/roster');
-    // Last statement of the run: sweeping before the writes would delete a page
+    // LAST WRITE of the run: sweeping before the writes would delete a page
     // that this very run is about to re-create.
-    expect(calls.at(-2)?.sql).toContain('slug <> ALL');
+    //
+    // Asserted as "nothing after it writes", not as an offset from the end of
+    // `calls`. `calls.at(-2)` said the same thing right up until the run grew a
+    // read after the sweep (`belowSearchMin`), at which point it was an
+    // assertion about the advisory unlock and nobody would have known.
+    const sweepAt = calls.findIndex(call => call.sql.includes('slug <> ALL'));
+    expect(sweepAt).toBeGreaterThanOrEqual(0);
+    const after = calls.slice(sweepAt + 1).map(call => call.sql);
+    expect(after.some(sql => /INSERT INTO|DELETE FROM|UPDATE /.test(sql))).toBe(false);
+    // And what IS allowed to follow it: the short-page report, then the unlock.
+    expect(after.map(sql => sql.replace(/\s+/g, ' ').trim().slice(0, 24))).toEqual([
+      'SELECT slug FROM docs_in',
+      'SELECT pg_advisory_unloc',
+    ]);
   });
 });
 

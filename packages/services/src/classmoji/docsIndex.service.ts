@@ -69,6 +69,7 @@ import {
 } from '../helpers/workersAi.ts';
 import { chunkDocument, isFresh, type StoredChunk } from './contentIndex.service.ts';
 import { toVectorLiteral } from './contentSearch.service.ts';
+import { DOCS_SEARCH_MIN_CHARS } from './docsSearch.service.ts';
 
 /** Where the documentation lives. Public, and read without credentials. */
 export const DOCS_REPO = {
@@ -426,6 +427,22 @@ export interface DocsReconcileReport {
   byReason: Record<string, number>;
   bySlug: DocsReconcileRow[];
   /**
+   * Slugs indexed but UNREACHABLE BY SEARCH, because every chunk they have is
+   * shorter than `DOCS_SEARCH_MIN_CHARS`.
+   *
+   * The two section-index pages are expected to be here — that is the whole
+   * point of the threshold. Anything ELSE appearing is the signal: a real page
+   * that got short, or a page whose extraction quietly collapsed to a title, is
+   * otherwise a page that stops answering questions with nothing anywhere
+   * saying so. `content_list` and `content_get` still reach every one of them.
+   *
+   * Read from the TABLE after the sweep, not from the chunks this run happened
+   * to build: on a steady-state run every page is `skipped: fresh` and never
+   * re-chunked, and a list assembled from those would come back empty on
+   * exactly the runs where it matters.
+   */
+  belowSearchMin: string[];
+  /**
    * Set when the run stopped before doing any work.
    *
    * READINESS IS `!halted && !error && failed === 0`, not `!error` alone:
@@ -455,6 +472,7 @@ const emptyReport = (): DocsReconcileReport => ({
   deleted: 0,
   byReason: {},
   bySlug: [],
+  belowSearchMin: [],
 });
 
 // ─── Storage ────────────────────────────────────────────────────────────────
@@ -710,6 +728,19 @@ export async function reconcileDocsIndex(
     report.deleted = await prisma.$executeRaw`
       DELETE FROM docs_index WHERE slug <> ALL(${slugs}::text[])
     `;
+
+    // After the sweep, so it describes the corpus a search will actually see.
+    // `max(length(text))` and not `min`: a page is only unsearchable when EVERY
+    // chunk is below the line, because `searchDocs` filters chunks and a page
+    // with one long chunk is still reachable through it.
+    const short = await prisma.$queryRaw<Array<{ slug: string }>>`
+      SELECT slug
+      FROM docs_index
+      GROUP BY slug
+      HAVING max(length(text)) < ${DOCS_SEARCH_MIN_CHARS}::int
+      ORDER BY slug
+    `;
+    report.belowSearchMin = short.map(row => row.slug);
 
     return report;
   } catch (error) {

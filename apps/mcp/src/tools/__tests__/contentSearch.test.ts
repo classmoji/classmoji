@@ -92,6 +92,8 @@ const { prismaCalls, prismaCallsFor, resetPrismaStub, setPrismaRaw, setPrismaRow
   await import('../../__tests__/prismaSchemaStub.ts');
 const { EMBEDDING_DIMENSIONS, WorkersAiError } =
   await import('../../../../../packages/services/src/helpers/workersAi.ts');
+const { MAX_LIST_LIMIT, MAX_SEARCH_LIMIT } =
+  await import('../../../../../packages/services/src/classmoji/contentSearch.service.ts');
 
 // ─── Fixtures ───────────────────────────────────────────────────────────────
 
@@ -861,6 +863,65 @@ describe('scope selects the corpus, and the two never leak into each other', () 
     expect(payload.unavailable).toBe('embedding_not_configured');
     expect(String(payload.message)).toMatch(/not an empty result set/i);
     expect(allSql()).not.toContain('docs_index');
+  });
+
+  it('bounds BOTH scopes at the number the service actually clamps to', async () => {
+    // `content_search` and `content_list` each have ONE `limit` field covering
+    // both corpora, so each schema can name exactly one ceiling — the course
+    // one. The docs read service used to declare its own copy of every bound at
+    // the same five values and export them to nobody, which made "the schema
+    // refuses where the service clamps" true only by coincidence: editing the
+    // docs copy would have moved the clamp and left the refusal behind, with no
+    // test anywhere to notice. There is now ONE constant per bound.
+    const bound = (tool: typeof contentSearchTool | typeof contentListTool, value: unknown) =>
+      (
+        tool.inputSchema as unknown as Record<
+          string,
+          { safeParse(v: unknown): { success: boolean } }
+        >
+      ).limit.safeParse(value).success;
+
+    expect(bound(contentSearchTool, MAX_SEARCH_LIMIT)).toBe(true);
+    expect(bound(contentSearchTool, MAX_SEARCH_LIMIT + 1)).toBe(false);
+    expect(bound(contentListTool, MAX_LIST_LIMIT)).toBe(true);
+    expect(bound(contentListTool, MAX_LIST_LIMIT + 1)).toBe(false);
+
+    // And the ceiling the schema accepts reaches the docs statement UNCLAMPED,
+    // which is what makes the two thresholds the same number rather than two
+    // numbers that happen to agree.
+    answerRawBy([['docs_index', [DOCS_ROW]]]);
+    await call(
+      contentSearchTool,
+      { classroom: 'o/c', query: 'how do tokens work', scope: 'docs', limit: MAX_SEARCH_LIMIT },
+      STUDENT
+    );
+    expect(paramsOf(lastStatement())).toContain(MAX_SEARCH_LIMIT);
+
+    rawStatements = [];
+    answerRawBy([['content_index', [COURSE_ROW]]]);
+    await call(
+      contentSearchTool,
+      { classroom: 'o/c', query: 'late work', limit: MAX_SEARCH_LIMIT },
+      STUDENT
+    );
+    expect(paramsOf(lastStatement())).toContain(MAX_SEARCH_LIMIT);
+  });
+
+  it('leaves the docs service no second copy of a bound to drift from', () => {
+    // The negative space of the test above. A `MAX_DOCS_SEARCH_LIMIT` declared
+    // here again would compile, pass every other test, and silently reopen the
+    // gap the moment somebody changed its value.
+    const source = readFileSync(
+      path.resolve(
+        path.dirname(fileURLToPath(import.meta.url)),
+        '../../../../../packages/services/src/classmoji/docsSearch.service.ts'
+      ),
+      'utf8'
+    );
+    const declarations = source.match(/^export const [A-Z_]+/gm) ?? [];
+    // One export, and it is the search floor — not a bound the tool schema has
+    // to mirror.
+    expect(declarations).toEqual(['export const DOCS_SEARCH_MIN_CHARS']);
   });
 
   it("scope: 'docs' lists from docs_index, default lists from the course records", async () => {

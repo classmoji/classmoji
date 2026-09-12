@@ -43,8 +43,14 @@ if (RUN) {
 
 const getPrisma = (await import('@classmoji/database')).default;
 const { toVectorLiteral } = await import('../contentSearch.service.ts');
-const { DocsNotFoundError, docsIndexIsEmpty, getDocText, listDocs, searchDocs } =
-  await import('../docsSearch.service.ts');
+const {
+  DOCS_SEARCH_MIN_CHARS,
+  DocsNotFoundError,
+  docsIndexIsEmpty,
+  getDocText,
+  listDocs,
+  searchDocs,
+} = await import('../docsSearch.service.ts');
 const { EMBEDDING_DIMENSIONS } = await import('../../helpers/workersAi.ts');
 
 afterAll(async () => {
@@ -122,6 +128,34 @@ const NO_VECTOR = 'docs/self-hosting/docker';
 const LONG = 'docs/instructors/tokens';
 const LONG_TEXT = `Add tokens to a class. ${'Tokens buy a student extra hours on a deadline. '.repeat(40)}`;
 
+/**
+ * The NAVIGATION STUB and the page it stands in front of.
+ *
+ * `STUB` is the shape `DOCS_SEARCH_MIN_CHARS` exists for: a real corpus page
+ * (`docs/instructors` is 253 characters, `docs/students` 187) that is a heading
+ * and a list of link labels. It carries the same vector the query does, so it
+ * is STRICTLY nearer than anything else — which is exactly what happened
+ * against the live corpus, and why "the top hit" was a page of links.
+ * `DEADLINES` is the page that actually answers, one notch further away.
+ *
+ * Their lengths bracket the threshold on purpose: 200 and 600, either side of
+ * 400, mirroring the real gap between 253 and 537.
+ */
+const STUB = 'docs/instructors';
+const DEADLINES = 'docs/instructors/deadlines';
+const fill = (lead: string, length: number): string =>
+  `${lead} ${'Classmoji is a Git-native platform for CS courses. '.repeat(30)}`.slice(0, length);
+const STUB_TEXT = fill('For instructors. Roster. Grading. Tokens.', 200);
+const DEADLINES_TEXT = fill('Set a deadline on an assignment from the Assignments tab.', 600);
+
+/**
+ * A fixture body comfortably over the search floor, with its sentinel FIRST.
+ *
+ * First matters twice: `LEFT(text, SNIPPET_CHARS)` is the snippet, and the
+ * assertions below look for the sentinel in it.
+ */
+const body = (lead: string): string => fill(lead, 520);
+
 beforeAll(async () => {
   if (!RUN) return;
 
@@ -132,7 +166,7 @@ beforeAll(async () => {
     title: 'Manage your roster',
     description: 'How to add students and teaching staff',
     section: 'instructors',
-    text: 'Go to the Teaching Staff tab and click New staff member.',
+    text: body('Go to the Teaching Staff tab and click New staff member.'),
     vector: basis(0),
   });
 
@@ -145,7 +179,7 @@ beforeAll(async () => {
     chunkCount: 3,
     title: 'Grading',
     section: 'instructors',
-    text: 'GRADING-CHUNK-ZERO emoji mappings.',
+    text: body('GRADING-CHUNK-ZERO emoji mappings.'),
     vector: between(1, 0.2),
   });
   await insert({
@@ -154,7 +188,7 @@ beforeAll(async () => {
     chunkCount: 3,
     title: 'Grading',
     section: 'instructors',
-    text: 'GRADING-CHUNK-TWO releasing grades.',
+    text: body('GRADING-CHUNK-TWO releasing grades.'),
     vector: basis(1),
   });
   // Deliberately inserted OUT OF ORDER, after chunk 2, so `getDocText` has to
@@ -165,17 +199,35 @@ beforeAll(async () => {
     chunkCount: 3,
     title: 'Grading',
     section: 'instructors',
-    text: 'GRADING-CHUNK-ONE grading an assignment.',
+    text: body('GRADING-CHUNK-ONE grading an assignment.'),
     vector: between(1, 0.1),
   });
 
+  // TWO chunks at EXACTLY the same distance. This is the `chunk_ix` tiebreaker's
+  // fixture: with equal distances, `ORDER BY di.slug, distance` alone leaves
+  // which chunk survives `DISTINCT ON` to whatever order the sort happens to
+  // emit, and the page answers out of a paragraph nobody chose.
+  //
+  // Written in READING ORDER, which is not an arbitrary choice: `writePage`
+  // inserts `chunks.entries()` ascending, so this is the physical layout a real
+  // page has. Verified against this Postgres: with the `chunk_ix` key removed
+  // from the inner ORDER BY, this exact shape returns chunk 1.
   await insert({
     slug: TOKENS,
     chunkIx: 0,
-    chunkCount: 1,
+    chunkCount: 2,
     title: 'Use tokens',
     section: 'students',
-    text: 'Spend a token to extend a deadline.',
+    text: body('TOKENS-CHUNK-ZERO spend a token to extend a deadline.'),
+    vector: basis(2),
+  });
+  await insert({
+    slug: TOKENS,
+    chunkIx: 1,
+    chunkCount: 2,
+    title: 'Use tokens',
+    section: 'students',
+    text: body('TOKENS-CHUNK-ONE what happens when you run out.'),
     vector: basis(2),
   });
 
@@ -185,7 +237,7 @@ beforeAll(async () => {
     chunkCount: 1,
     title: 'Welcome to Classmoji Docs',
     section: null,
-    text: 'Classmoji is a Git-native platform for CS courses.',
+    text: body('Classmoji is a Git-native platform for CS courses.'),
     vector: basis(3),
   });
 
@@ -199,14 +251,37 @@ beforeAll(async () => {
     vector: basis(6),
   });
 
-  // A row with NO vector: written, but unsearchable.
+  // The navigation stub, and the page it stands in front of. The stub carries
+  // the query vector ITSELF, so it is nearer than anything else in the table.
+  await insert({
+    slug: STUB,
+    chunkIx: 0,
+    chunkCount: 1,
+    title: 'For instructors',
+    section: 'instructors',
+    text: STUB_TEXT,
+    vector: basis(7),
+  });
+  await insert({
+    slug: DEADLINES,
+    chunkIx: 0,
+    chunkCount: 1,
+    title: 'Set a deadline',
+    section: 'instructors',
+    text: DEADLINES_TEXT,
+    vector: between(7, 0.9),
+  });
+
+  // A row with NO vector: written, but unsearchable. LONG ENOUGH to clear the
+  // search floor, so the only thing keeping it out of results is the missing
+  // embedding and not its length.
   await insert({
     slug: NO_VECTOR,
     chunkIx: 0,
     chunkCount: 1,
     title: 'Docker',
     section: 'self-hosting',
-    text: 'UNEMBEDDED-SENTINEL run it with docker compose.',
+    text: body('UNEMBEDDED-SENTINEL run it with docker compose.'),
     vector: null,
   });
 });
@@ -241,9 +316,11 @@ describe.skipIf(!RUN)('searchDocs', () => {
     const hits = await searchDocs({ queryVector: basis(0), limit: 20 });
     expect(slugsOf(hits)).not.toContain(NO_VECTOR);
     expect(JSON.stringify(hits)).not.toContain('UNEMBEDDED-SENTINEL');
-    // Every embedded page came back, so the exclusion is the filter and not the
-    // limit.
-    expect(new Set(slugsOf(hits))).toEqual(new Set([ROSTER, GRADING, TOKENS, ROOT, LONG]));
+    // Every embedded page long enough to be searchable came back, so the
+    // exclusion is the filter and not the limit.
+    expect(new Set(slugsOf(hits))).toEqual(
+      new Set([ROSTER, GRADING, TOKENS, ROOT, LONG, DEADLINES])
+    );
   });
 
   it('de-dupes BEFORE the limit, so a chunked page cannot crowd the results out', async () => {
@@ -277,6 +354,65 @@ describe.skipIf(!RUN)('searchDocs', () => {
   it('refuses a query vector of the wrong width', async () => {
     await expect(searchDocs({ queryVector: [1, 2, 3] })).rejects.toThrow(/1024 dimensions/);
   });
+
+  it('DROPS a page shorter than the search floor even when it ranks FIRST', async () => {
+    // The stub carries the query vector itself, so by distance alone it is the
+    // top hit and nothing else can displace it. This is the live failure: "where
+    // do I add a TA" ranked `docs/instructors` — a list of link labels — above
+    // the page that answers.
+    expect(STUB_TEXT.length).toBeLessThan(DOCS_SEARCH_MIN_CHARS);
+    expect(DEADLINES_TEXT.length).toBeGreaterThan(DOCS_SEARCH_MIN_CHARS);
+
+    const hits = await searchDocs({ queryVector: basis(7), limit: 20 });
+    expect(slugsOf(hits)).not.toContain(STUB);
+    // And the page behind it is what a caller gets instead — first, because the
+    // stub is no longer standing in front of it.
+    expect(slugsOf(hits)[0]).toBe(DEADLINES);
+  });
+
+  it('the stub really is the nearer page — the floor is what removed it', async () => {
+    // Without this the test above passes for a stub that simply ranked badly.
+    // Cosine distance to its own basis vector is 0; `between(7, 0.9)` is 0.1
+    // away, so the ordering is arithmetic rather than an embedding's opinion.
+    const stub = await getPrisma().$queryRaw<Array<{ distance: number }>>`
+      SELECT (embedding <=> ${toVectorLiteral(basis(7))}::vector) AS distance
+      FROM docs_index WHERE slug = ${STUB}`;
+    const answer = await getPrisma().$queryRaw<Array<{ distance: number }>>`
+      SELECT (embedding <=> ${toVectorLiteral(basis(7))}::vector) AS distance
+      FROM docs_index WHERE slug = ${DEADLINES}`;
+    expect(Number(stub[0].distance)).toBeLessThan(Number(answer[0].distance));
+  });
+
+  it('a short page is still LISTED and still READABLE — the floor is search only', async () => {
+    // The stub is navigation, not a secret. `content_list` must still show it
+    // and `content_get` must still serve it, because the prompt tells the model
+    // to follow a stub's labels to the page behind them — which it can only do
+    // if it can look one up by title.
+    const page = await listDocs();
+    expect(page.items.map(item => item.slug)).toContain(STUB);
+    expect(page.items.find(item => item.slug === STUB)?.title).toBe('For instructors');
+
+    const document = await getDocText(STUB);
+    expect(document.text).toBe(STUB_TEXT);
+    expect(document.title).toBe('For instructors');
+  });
+
+  it('breaks an EQUAL-distance tie on the lower chunk_ix', async () => {
+    // Both of `TOKENS`'s chunks carry the same vector, so distance cannot decide
+    // between them and `DISTINCT ON (slug)` keeps exactly one. Without
+    // `chunk_ix` closing the inner ORDER BY, which one survives is whatever the
+    // sort emitted first — and a page that answers out of its opening paragraph
+    // today answers out of its second tomorrow, with nothing in the diff to
+    // explain it. On this Postgres, removing that key makes this fixture return
+    // chunk 1.
+    const hits = await searchDocs({ queryVector: basis(2), limit: 20 });
+    const tokens = hits.filter(hit => hit.slug === TOKENS);
+
+    expect(tokens).toHaveLength(1);
+    expect(tokens[0].chunkIx).toBe(0);
+    expect(tokens[0].snippet).toContain('TOKENS-CHUNK-ZERO');
+    expect(tokens[0].snippet).not.toContain('TOKENS-CHUNK-ONE');
+  });
 });
 
 describe.skipIf(!RUN)('listDocs', () => {
@@ -302,19 +438,23 @@ describe.skipIf(!RUN)('listDocs', () => {
       'instructors',
       'instructors',
       'instructors',
+      'instructors',
+      'instructors',
       'self-hosting',
       'students',
     ]);
-    // Alphabetical by LOWERCASED TITLE within a section — which for these three
-    // is deliberately the opposite of their slug order, so an ORDER BY that
-    // merely inherited the inner query's `ORDER BY slug` shows up here.
+    // Alphabetical by LOWERCASED TITLE within a section — which for the first
+    // three is deliberately the opposite of their slug order, so an ORDER BY
+    // that merely inherited the inner query's `ORDER BY slug` shows up here.
     const instructors = page.items.filter(item => item.section === 'instructors');
     expect(instructors.map(item => item.title)).toEqual([
       'Add tokens to a class',
+      'For instructors',
       'Grading',
       'Manage your roster',
+      'Set a deadline',
     ]);
-    expect(instructors.map(item => item.slug)).toEqual([LONG, GRADING, ROSTER]);
+    expect(instructors.map(item => item.slug)).toEqual([LONG, STUB, GRADING, ROSTER, DEADLINES]);
   });
 
   it('carries the canonical URL for every row', async () => {
@@ -329,19 +469,23 @@ describe.skipIf(!RUN)('listDocs', () => {
     expect(first.truncated).toBe(true);
     expect(first.nextOffset).toBe(2);
 
-    const second = await listDocs({ limit: 2, offset: first.nextOffset ?? 0 });
-    expect(second.items).toHaveLength(2);
-    expect(second.truncated).toBe(true);
+    // Walk the whole catalogue two at a time, following `nextOffset` the way a
+    // caller does, and stop only when the listing says it is complete.
+    const all: string[] = [...first.items.map(item => item.slug)];
+    let cursor = first.nextOffset;
+    let pages = 1;
+    while (cursor !== null) {
+      const next = await listDocs({ limit: 2, offset: cursor });
+      all.push(...next.items.map(item => item.slug));
+      cursor = next.nextOffset;
+      pages += 1;
+      expect(pages, 'paging did not terminate').toBeLessThan(20);
+    }
 
-    const third = await listDocs({ limit: 2, offset: second.nextOffset ?? 0 });
-    expect(third.items).toHaveLength(2);
-    expect(third.truncated).toBe(false);
-    expect(third.nextOffset).toBeNull();
-
+    expect(pages).toBe(4);
     // No page repeated, none skipped: the ORDER BY is total.
-    const all = [...first.items, ...second.items, ...third.items].map(item => item.slug);
     expect(new Set(all).size).toBe(all.length);
-    expect(all).toHaveLength(6);
+    expect(all).toHaveLength(8);
   });
 
   it('COMPLETES on its OWN default, which is not the search default of 5', async () => {
@@ -351,7 +495,7 @@ describe.skipIf(!RUN)('listDocs', () => {
     // "that is all of it". The real corpus is 25 pages against a default of
     // 100, for the same reason.
     const page = await listDocs();
-    expect(page.items).toHaveLength(6);
+    expect(page.items).toHaveLength(8);
     expect(page.truncated).toBe(false);
     expect(page.nextOffset).toBeNull();
   });

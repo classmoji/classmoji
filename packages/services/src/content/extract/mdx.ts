@@ -415,10 +415,17 @@ function stripJsx(body: string): { text: string } | { error: string } {
   let at = 0;
 
   while (at < body.length) {
-    // A block opens only where a line does: `<` mid-sentence is prose, and the
-    // corpus has no inline JSX.
-    const atLineStart = at === 0 || body[at - 1] === '\n';
-    if (!atLineStart || body[at] !== '<') {
+    // A block opens at the first NON-SPACE characters of a line: `<`
+    // mid-sentence is prose, and the corpus has no inline JSX.
+    //
+    // The indentation matters. Gating on `body[at - 1] === '\n'` — column zero
+    // only — means an indented component, the shape a nested list item or a
+    // `:::note` body produces, is never recognised as a component at all. It is
+    // copied out as prose, which silently defeats the whole fail-closed rule
+    // below: `  <NewThing prop="x" />` inside a list would reach the corpus as
+    // text instead of refusing the page, and a `<Screenshot>` indented the same
+    // way would spill `/>` and lose its alt.
+    if (!atFirstNonSpace(body, at) || body[at] !== '<') {
       out += body[at];
       at += 1;
       continue;
@@ -448,6 +455,18 @@ function stripJsx(body: string): { text: string } | { error: string } {
   return { text: out };
 }
 
+/**
+ * Is `at` the first character of its line that is not a space or a tab?
+ *
+ * Leading whitespace only — nothing else may intervene, so `text <Thing/>` and
+ * `- <Thing/>` are still prose and a bullet is not a licence to open a block.
+ */
+function atFirstNonSpace(body: string, at: number): boolean {
+  let back = at - 1;
+  while (back >= 0 && (body[back] === ' ' || body[back] === '\t')) back -= 1;
+  return back < 0 || body[back] === '\n';
+}
+
 /** The lines one component contributes, attributed, with its caption kept. */
 function harvest(component: string, tag: string): string {
   const rule = HARVEST[component];
@@ -470,6 +489,8 @@ const DIRECTIVE_MARKER = /^\s*:::[A-Za-z]*\s*$/;
 const THEMATIC_BREAK = /^\s*(?:-{3,}|\*{3,}|_{3,})\s*$/;
 /** A pipe-table row, header separator included. */
 const TABLE_ROW = /^\s*\|/;
+/** A bullet or an ordered-list marker at the head of a line. */
+const LIST_MARKER = /^\s*(?:[-*+]|\d+[.)])\s+/;
 
 /**
  * Markdown syntax → prose, one line at a time.
@@ -489,8 +510,14 @@ function markdownToText(body: string): string {
       if (DIRECTIVE_MARKER.test(line)) return '';
       if (THEMATIC_BREAK.test(line)) return '';
 
-      let out = line.replace(/^\s*#{1,6}\s+/, '');
-      out = out.replace(/^\s*(?:[-*+]|\d+[.)])\s+/, '');
+      // A HEADING IS NOT ALSO A LIST ITEM. Running both strips over the same
+      // line ate the ordinal of `## 1. Fork and clone the repo`: the heading
+      // rule left `1. Fork and clone the repo`, which the list rule then read
+      // as a numbered bullet. The five steps of the local-development guide all
+      // came out unnumbered, so "step 3" in the prose pointed at nothing and a
+      // model reassembling the order had to guess it.
+      const heading = /^\s*#{1,6}\s+/.exec(line);
+      let out = heading ? line.slice(heading[0].length) : line.replace(LIST_MARKER, '');
       out = stripEmphasis(out);
       out = collapseLinks(out);
       return out;

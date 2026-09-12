@@ -54,6 +54,7 @@ vi.mock('../../helpers/workersAi.ts', async importOriginal => {
 
 const getPrisma = (await import('@classmoji/database')).default;
 const { DOCS_EXTRACT_VERSION, reconcileDocsIndex } = await import('../docsIndex.service.ts');
+const { DOCS_SEARCH_MIN_CHARS } = await import('../docsSearch.service.ts');
 const { EMBEDDING_MODEL, EMBEDDING_DIMENSIONS } = await import('../../helpers/workersAi.ts');
 
 afterAll(async () => {
@@ -301,6 +302,76 @@ describe.skipIf(!RUN)('docsIndex writes (real Postgres)', () => {
     // Freshness is read out of the real row, so this is the proof that the
     // stamp written and the stamp compared are the same three values.
     expect(await rows()).toEqual(first);
+  });
+
+  it('NAMES every page too short for search to reach, and only those', async () => {
+    // `searchDocs` filters chunks below `DOCS_SEARCH_MIN_CHARS`, which is how
+    // the two section-index pages stop crowding out the pages that answer. The
+    // cost is that a page which gets short by accident stops being findable
+    // with nothing anywhere saying so — so the reconcile names them.
+    const long = 'Tokens buy a student extra hours on a deadline. '.repeat(20);
+    const short = 'Roster. Grading. Tokens.';
+    expect(long.length).toBeGreaterThan(DOCS_SEARCH_MIN_CHARS);
+
+    const report = await reconcileDocsIndex({
+      reader: reader(
+        [blob('docs/instructors/index.mdx', 'aaa'), blob('docs/instructors/tokens.mdx', 'bbb')],
+        {
+          'docs/instructors/index.mdx': mdx('For instructors', short),
+          'docs/instructors/tokens.mdx': mdx('Add tokens', long),
+        }
+      ),
+    });
+
+    expect(report.indexed).toBe(2);
+    expect(report.belowSearchMin).toEqual(['docs/instructors']);
+  });
+
+  it('reads belowSearchMin from the TABLE, so a fully FRESH run still reports it', async () => {
+    // The trap: computing it from the chunks a run happened to build gives an
+    // empty list on every steady-state night, because a fresh page is never
+    // re-chunked. Those are exactly the runs somebody would be reading.
+    const same = () =>
+      reader([blob('docs/instructors/index.mdx', 'aaa')], {
+        'docs/instructors/index.mdx': mdx('For instructors', 'Roster. Grading.'),
+      });
+
+    const first = await reconcileDocsIndex({ reader: same() });
+    expect(first.indexed).toBe(1);
+    expect(first.belowSearchMin).toEqual(['docs/instructors']);
+
+    const second = await reconcileDocsIndex({ reader: same() });
+    expect(second.indexed).toBe(0);
+    expect(second.byReason.fresh).toBe(1);
+    expect(second.belowSearchMin).toEqual(['docs/instructors']);
+  });
+
+  it('does not name a page that has ONE long chunk among short ones', async () => {
+    // The filter is per CHUNK, so a page is only unsearchable when every chunk
+    // it has is below the line. `min(length(text))` here would report a page
+    // search can reach perfectly well, and the signal would be noise within a
+    // week.
+    // 200 tokens x 3 chars = a 600-character chunk budget, so a 590-character
+    // paragraph and an eleven-character tail land in different chunks.
+    const restore = withEnv('CLOUDFLARE_WORKERS_AI_EMBED_MAX_TOKENS', '200');
+    try {
+      const long = 'Tokens buy a student extra hours on a deadline. '.repeat(13).slice(0, 590);
+      const report = await reconcileDocsIndex({
+        reader: reader([blob('docs/a.mdx', 'aaa')], {
+          'docs/a.mdx': mdx('A', `${long}\n\nShort tail.`),
+        }),
+      });
+      expect(report.indexed).toBe(1);
+      const stored = await rows();
+      expect(stored.length).toBeGreaterThan(1);
+      expect(Math.min(...stored.map(row => row.text.length))).toBeLessThan(DOCS_SEARCH_MIN_CHARS);
+      expect(Math.max(...stored.map(row => row.text.length))).toBeGreaterThan(
+        DOCS_SEARCH_MIN_CHARS
+      );
+      expect(report.belowSearchMin).toEqual([]);
+    } finally {
+      restore();
+    }
   });
 
   it('finishes a half-written document rather than calling it fresh', async () => {

@@ -88,6 +88,44 @@ describe('code survives verbatim, because it is protected before anything else r
     expect(textOf('self-hosting/environment-variables.mdx')).toContain('TRIGGER_SECRET_KEY');
   });
 
+  it('returns a fence BODY byte for byte, markdown syntax and all', () => {
+    // The four assertions above survive `protectCode` being deleted outright,
+    // because the emphasis rules already spare a lone `_` inside a word and a
+    // `**` with no partner. This one does not: every line here is a shape one
+    // of the markdown passes rewrites — `*stars*` and `_underscores_` are
+    // emphasis, `## not a heading` is a heading, `- not a bullet` is a bullet,
+    // `[not](a-link)` is a link. Inside a fence they are none of those, they
+    // are the file somebody is about to copy, and they must come back
+    // unchanged.
+    const fence = [
+      'echo *stars* and _underscores_',
+      '## not a heading',
+      '- not a bullet',
+      '[not](a-link)',
+      '',
+      '  indented  and  spaced',
+    ].join('\n');
+    const result = extractMdxText(
+      `---\ntitle: Fences\ndescription: d\n---\n\nBefore.\n\n\`\`\`bash\n${fence}\n\`\`\`\n\nAfter.\n`
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.text).toContain(fence);
+    // The prose around it still went through the markdown passes.
+    expect(result.text).toContain('Before.');
+    expect(result.text).toContain('After.');
+  });
+
+  it('leaves no backtick and no fence marker anywhere in the output', () => {
+    // The delimiters are scaffolding, not content: a reader copies the command,
+    // not the ``` around it, and an embedded ``` is three tokens of noise on
+    // every fenced page. Asserted across every fixture, and the corpus has 18
+    // fences and inline spans throughout, so this is not vacuous.
+    for (const fixture of ALL_FIXTURES) {
+      expect(textOf(fixture), `${fixture} still carries a backtick`).not.toContain('`');
+    }
+  });
+
   it('leaves the `{variable}` placeholders in code alone rather than reading them as JSX', () => {
     expect(textOf('instructors/custom-domains.mdx')).toContain('{your domain}');
   });
@@ -201,6 +239,24 @@ describe('markdown syntax becomes prose', () => {
     expect(text).not.toMatch(/^- /m);
   });
 
+  it('keeps a numbered heading’s ORDINAL — a heading is not also a list item', () => {
+    // `## 1. Fork and clone the repo`. The heading strip fires first and leaves
+    // `1. Fork and clone the repo`, which the list strip then reads as a
+    // numbered bullet and eats. All five steps of the local-development guide
+    // came out unnumbered, so the prose's "step 3" pointed at nothing.
+    const text = textOf('open-source/local-development/index.mdx');
+    expect(text).toContain('1. Fork and clone the repo');
+    expect(text).toContain('2. Configure environment variables');
+    expect(text).toContain('5. Full setup (optional)');
+    // And an ordinary numbered LIST still loses its marker.
+    const list = extractMdxText(
+      '---\ntitle: T\ndescription: d\n---\n\n1. First thing\n2. Second thing\n'
+    );
+    expect(list.ok).toBe(true);
+    expect(list.text).toContain('First thing');
+    expect(list.text).not.toContain('1. First thing');
+  });
+
   it('keeps the prose inside a ::: directive and drops only the markers', () => {
     const text = textOf('instructors/mcp-server.mdx');
     expect(text).not.toMatch(/^:::/m);
@@ -282,6 +338,48 @@ describe('an unfamiliar shape is a refusal, never a guess', () => {
     expect(result.ok).toBe(false);
     expect(result.error).toBe('unknown_component');
     expect(result.text).toBe('');
+  });
+
+  it('refuses an INDENTED unknown component, not just one in column zero', () => {
+    // The scanner used to open a block only where `body[at - 1] === '\n'`, so
+    // an indented component — a nested list item, a `:::note` body — was copied
+    // out as prose and never reached this refusal at all. A component nobody
+    // has decided about is a refusal wherever it sits on the line.
+    for (const body of [
+      '  <NewThing prop="x" />',
+      '\t<NewThing prop="x" />',
+      'Steps:\n\n- First:\n    <NewThing prop="x" />',
+    ]) {
+      const result = extractMdxText(withFrontmatter(body));
+      expect(result.ok, `"${body}" must refuse`).toBe(false);
+      expect(result.error).toBe('unknown_component');
+    }
+  });
+
+  it('CONSUMES an indented known component, alt and all', () => {
+    const result = extractMdxText(
+      withFrontmatter('Steps:\n\n- First:\n  <Screenshot alt="An indented picture" size="lg" />')
+    );
+    expect(result.ok).toBe(true);
+    expect(result.text).toContain('Screenshot: An indented picture');
+    // No debris: the whole tag went, not just its opening angle bracket.
+    expect(result.text).not.toContain('/>');
+    expect(result.text).not.toContain('size=');
+    expect(result.text).not.toContain('<Screenshot');
+  });
+
+  it('still treats a `<` that follows anything but WHITESPACE as prose', () => {
+    // "First non-space characters of a line" is the rule, not "anywhere on a
+    // line". A component name mid-sentence is prose the corpus is allowed to
+    // contain, and a bullet marker is not whitespace either — teaching this
+    // scanner where a list item's content begins is a markdown parser's job.
+    // That is not a silent hole: an unconsumed tag leaves `/>` behind, and the
+    // live-corpus sweep at the bottom of this file fails on `/>` in any page.
+    for (const body of ['Compare a <Screenshot alt="x" /> inline.', '- <Screenshot alt="x" />']) {
+      const result = extractMdxText(withFrontmatter(body));
+      expect(result.ok).toBe(true);
+      expect(result.text).toContain('<Screenshot alt="x" />');
+    }
   });
 
   it('refuses a paired JSX element, whose children are an open question', () => {

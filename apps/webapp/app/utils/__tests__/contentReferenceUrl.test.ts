@@ -86,59 +86,20 @@ describe('platform_docs references', () => {
   });
 });
 
-describe('a reference the widget cannot link to renders as TEXT, not a dead link', () => {
+describe('the chip the widget draws for a reference', () => {
   /**
-   * The component's CODE, with `//` comment lines removed.
+   * WHAT THIS BLOCK NO LONGER DOES.
    *
-   * The comments explain the dead-link bug by quoting it, so an assertion that
-   * the file no longer contains `href={url || '#'}` would fail on the sentence
-   * saying it used to.
+   * It used to grep `SyllabusBotChat.tsx` for `if (!url)` and a `<span>`, which
+   * is a test that the source contains a branch — not a test that a null-URL
+   * reference renders as a label. That markup now lives in
+   * `ContentReferenceChips`, and
+   * `components/features/syllabus-bot/__tests__/ContentReferenceChips.test.tsx`
+   * asserts it against the HTML React actually produces.
+   *
+   * What is left here is the one claim the render test cannot make: the chip's
+   * single class has to be correct in BOTH themes, which is a CSS fact.
    */
-  const chat = () =>
-    readFileSync(
-      new URL('../../components/features/syllabus-bot/SyllabusBotChat.tsx', import.meta.url),
-      'utf8'
-    )
-      .split('\n')
-      .filter(line => !/^\s*\/\//.test(line))
-      .join('\n');
-
-  it('no longer falls back to href="#"', () => {
-    // `href={url || '#'}` is a clickable dead link: focusable, styled exactly
-    // like a working chip, and it navigates the page to itself.
-    const source = chat();
-    expect(source).not.toMatch(/href=\{url \|\| '#'\}/);
-    expect(source).not.toMatch(/href="#"/);
-  });
-
-  it('renders a span for a null url, with the same chip class', () => {
-    const source = chat();
-    // Same class, so the two look identical — and the chip's colours come from
-    // panel-level CSS variables, so it is correct in light and dark without a
-    // second rule.
-    expect(source).toMatch(/if \(!url\) \{[\s\S]{0,200}<span key=\{idx\} className="askmoji-ref">/);
-  });
-
-  it('does not make that span keyboard-focusable or announce it as a link', () => {
-    // A <span> with no tabindex is not in the tab order at all, which is the
-    // whole point: it is a label, and nothing about it should say "activate me".
-    const source = chat();
-    const start = source.indexOf('if (!url)');
-    expect(start).toBeGreaterThan(-1);
-    const branch = source.slice(start, source.indexOf('}', source.indexOf('</span>', start)));
-    expect(branch).toContain('<span');
-    expect(branch).not.toMatch(/tabIndex/);
-    expect(branch).not.toMatch(/role=/);
-    expect(branch).not.toMatch(/onClick/);
-    expect(branch).not.toMatch(/href/);
-  });
-
-  it('keeps target=_blank only on the branch that HAS a url', () => {
-    const source = chat();
-    expect(source).not.toMatch(/target=\{url \? '_blank' : undefined\}/);
-    expect(source).toMatch(/href=\{url\}\s*\n\s*target="_blank"/);
-  });
-
   it('the chip class is themed by variables the panel redefines in dark mode', () => {
     const css = readFileSync(
       new URL('../../components/features/syllabus-bot/styles.css', import.meta.url),

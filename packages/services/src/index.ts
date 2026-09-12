@@ -188,11 +188,10 @@ export {
   getDocText,
   docsIndexIsEmpty,
   DocsNotFoundError,
-  DEFAULT_DOCS_SEARCH_LIMIT,
-  MAX_DOCS_SEARCH_LIMIT,
-  DEFAULT_DOCS_LIST_LIMIT,
-  MAX_DOCS_LIST_LIMIT,
-  DOCS_SNIPPET_CHARS,
+  // The limit/snippet bounds are NOT re-declared here: both scopes share the
+  // course lane's `SNIPPET_CHARS`/`*_SEARCH_LIMIT`/`*_LIST_LIMIT` above, so the
+  // tool schema's single `limit` field cannot drift from the service's clamp.
+  DOCS_SEARCH_MIN_CHARS,
 } from './classmoji/docsSearch.service.ts';
 export type {
   DocsSearchHit,

@@ -27,28 +27,68 @@
 
 import getPrisma from '@classmoji/database';
 import { docsUrl } from '@classmoji/utils';
-import { toVectorLiteral } from './contentSearch.service.ts';
-
-/** Result bounds for `searchDocs`, matching the `content_search` tool schema. */
-export const DEFAULT_DOCS_SEARCH_LIMIT = 5;
-export const MAX_DOCS_SEARCH_LIMIT = 20;
+import {
+  DEFAULT_LIST_LIMIT,
+  DEFAULT_SEARCH_LIMIT,
+  MAX_LIST_LIMIT,
+  MAX_SEARCH_LIMIT,
+  SNIPPET_CHARS,
+  toVectorLiteral,
+} from './contentSearch.service.ts';
 
 /**
- * Row bounds for `listDocs`, which are ITS OWN and not search's.
+ * ONE SET OF BOUNDS FOR BOTH CORPORA, imported rather than re-declared.
  *
- * Search is ranked, so five results is a sensible answer. A listing is an
- * enumeration, and a caller asking "what documentation is there?" wants the
- * table of contents, not the first five entries of it — the whole corpus is 25
- * pages, so the default comfortably covers it in one call. Clamping a listing
- * to the search cap of 20 would truncate the catalogue by five pages and set
- * `truncated`, which reads as "there is much more" rather than "there are five
- * more".
+ * `content_search` and `content_list` are ONE tool each with a `scope` argument
+ * and a SINGLE `limit` field, so each zod schema can name exactly one maximum.
+ * It names the course one. This module used to declare a docs-prefixed copy of
+ * each bound with the same value, export them all, and have nobody import them
+ * — which made "the schema refuses at the threshold the service clamps at" true
+ * only by coincidence. Editing the docs copy would have moved the clamp and
+ * left the refusal where it was, and nothing would have said so.
+ *
+ * The numbers are shared because the reasons are, bound by bound:
+ *   - search is ranked, so five results is an answer and twenty a generous
+ *     ceiling;
+ *   - a listing is an enumeration, and a caller asking "what documentation is
+ *     there?" wants the table of contents rather than its first five entries.
+ *     The docs corpus is 25 pages against a default of 100, so one call covers
+ *     it, and clamping a listing to search's 20 would set `truncated` on a
+ *     complete catalogue — which reads as "there is much more";
+ *   - a snippet is a pointer to a document the caller is told to read in full,
+ *     and 400 characters is enough to tell whether it is the right one.
+ *
+ * If the two lanes ever genuinely need different ceilings, the tool schema has
+ * to grow a per-scope refinement in the SAME change — which is the point of
+ * there being no second constant to quietly edit first.
  */
-export const DEFAULT_DOCS_LIST_LIMIT = 100;
-export const MAX_DOCS_LIST_LIMIT = 200;
 
-/** How much of a chunk a hit carries back. Same budget as the course lane. */
-export const DOCS_SNIPPET_CHARS = 400;
+/**
+ * The shortest chunk `searchDocs` will return. A FLOOR ON LENGTH, NOT ON SCORE.
+ *
+ * Two pages in the corpus are section indexes — `docs/instructors` (253
+ * characters) and `docs/students` (187) — and both are a heading plus a list of
+ * link labels. They carry every topic word in their section and answer nothing,
+ * so they embed close to any question about that section: across the twelve
+ * questions this was measured on they took 35% of the available top-five slots,
+ * pushing out the page that does answer.
+ *
+ * 400 sits in a GAP rather than on a guess. The corpus's chunk lengths jump
+ * straight from 253 to 537, so the threshold separates the two navigation stubs
+ * from the shortest real page with room on either side. That is also why this
+ * is a length rule and not a relevance threshold: a score floor needs
+ * calibration data nobody has, while "this page is a list of links" is a fact
+ * about the text.
+ *
+ * It applies to `searchDocs` ONLY. `listDocs` still enumerates the stubs,
+ * `getDocText` still serves them whole, and `docsIndexIsEmpty` still counts
+ * them — a page search cannot reach is still a page a model may be pointed at
+ * by name, and the prompt tells it to follow a stub's labels to the page behind
+ * them. `reconcileDocsIndex` reports every slug that falls below this line in
+ * `belowSearchMin`, so a page that is short by ACCIDENT is visible rather than
+ * silently unsearchable.
+ */
+export const DOCS_SEARCH_MIN_CHARS = 400;
 
 const cappedCount = (value: number | undefined, fallback: number, max: number): number =>
   Math.min(Math.max(Math.trunc(value ?? fallback) || 0, 1), max);
@@ -90,7 +130,13 @@ export interface SearchDocsArgs {
  * ranking happens.
  *
  * `WHERE embedding IS NOT NULL` keeps a row written before its embedding call
- * succeeded from sorting first by accident.
+ * succeeded from sorting first by accident, and
+ * `length(di.text) >= DOCS_SEARCH_MIN_CHARS` keeps the two navigation stubs out
+ * — see that constant for why the rule is length rather than score, and why it
+ * lives HERE and not in `listDocs`, `getDocText` or `docsIndexIsEmpty`. It sits
+ * in the INNER query on purpose: applied outside, a page whose best chunk is
+ * short would be dropped entirely instead of falling back to a longer chunk of
+ * the same page.
  *
  * There is no approximate index and no score floor. 25 rows make an exact scan
  * the cheapest correct plan, and a relevance threshold needs calibration data
@@ -99,10 +145,10 @@ export interface SearchDocsArgs {
  */
 export async function searchDocs({
   queryVector,
-  limit = DEFAULT_DOCS_SEARCH_LIMIT,
+  limit = DEFAULT_SEARCH_LIMIT,
 }: SearchDocsArgs): Promise<DocsSearchHit[]> {
   const literal = toVectorLiteral(queryVector);
-  const cappedLimit = cappedCount(limit, DEFAULT_DOCS_SEARCH_LIMIT, MAX_DOCS_SEARCH_LIMIT);
+  const cappedLimit = cappedCount(limit, DEFAULT_SEARCH_LIMIT, MAX_SEARCH_LIMIT);
 
   return getPrisma().$queryRaw<DocsSearchHit[]>`
     WITH q AS (SELECT ${literal}::vector AS v)
@@ -120,12 +166,13 @@ export async function searchDocs({
              di.title,
              di.description,
              di.section,
-             LEFT(di.text, ${DOCS_SNIPPET_CHARS}::int) AS snippet,
+             LEFT(di.text, ${SNIPPET_CHARS}::int) AS snippet,
              1 - (di.embedding <=> q.v) AS score,
              (di.embedding <=> q.v)     AS distance
       FROM docs_index di
       CROSS JOIN q
       WHERE di.embedding IS NOT NULL
+        AND length(di.text) >= ${DOCS_SEARCH_MIN_CHARS}::int
       ORDER BY di.slug, di.embedding <=> q.v, di.chunk_ix
     ) AS best
     ORDER BY best.distance ASC, best.slug
@@ -145,7 +192,7 @@ export interface DocsListEntry {
 }
 
 export interface ListDocsArgs {
-  /** Rows to return. Clamped to `[1, MAX_DOCS_LIST_LIMIT]`. */
+  /** Rows to return. Clamped to `[1, MAX_LIST_LIMIT]`. */
   limit?: number;
   /** Rows to skip. Negative and fractional values floor to 0. */
   offset?: number;
@@ -184,7 +231,7 @@ export interface DocsListPage {
  * there".
  */
 export async function listDocs({ limit, offset }: ListDocsArgs = {}): Promise<DocsListPage> {
-  const cappedLimit = cappedCount(limit, DEFAULT_DOCS_LIST_LIMIT, MAX_DOCS_LIST_LIMIT);
+  const cappedLimit = cappedCount(limit, DEFAULT_LIST_LIMIT, MAX_LIST_LIMIT);
   const cappedOffset = Math.max(Math.trunc(offset ?? 0) || 0, 0);
 
   const rows = await getPrisma().$queryRaw<Array<Omit<DocsListEntry, 'url'>>>`
