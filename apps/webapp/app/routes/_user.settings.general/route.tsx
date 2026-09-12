@@ -108,18 +108,14 @@ const FieldRow = ({
 const linkButton = 'text-xs font-medium text-accent hover:underline cursor-pointer';
 
 const SettingsGeneral = () => {
-  const { user } = useStore();
+  const { user, setUser } = useStore();
 
   const codeFetcher = useFetcher<{ codeSent?: boolean; error?: string }>();
   const saveFetcher = useFetcher<{ changed?: boolean; error?: string }>();
   const callout = useCallout();
   const schoolIdFetcher = useFetcher<{ schoolIdSaved?: boolean; error?: string }>();
   const [schoolId, setSchoolId] = useState('');
-  // What the server holds. Seeded from the store, then set locally on save so
-  // the field reads as clean the moment the write lands, before the root
-  // loader has revalidated the store.
-  const [savedSchoolId, setSavedSchoolId] = useState<string | null>(null);
-  const schoolIdDirty = schoolId.trim() !== (savedSchoolId ?? user?.school_id ?? '');
+  const schoolIdDirty = schoolId.trim() !== (user?.school_id ?? '');
   const savingSchoolId = schoolIdFetcher.state !== 'idle';
   const [editing, setEditing] = useState(false);
   const [newEmail, setNewEmail] = useState('');
@@ -136,11 +132,12 @@ const SettingsGeneral = () => {
     if (user) setSchoolId(user.school_id ?? '');
   }, [user]);
 
-  // Confirm a School ID save out loud; the inline state alone was too quiet.
+  // Confirm a School ID save out loud, and write it into the store so the
+  // field reads as clean at once rather than after the root loader refreshes.
   useEffect(() => {
     if (schoolIdFetcher.state !== 'idle' || !schoolIdFetcher.data?.schoolIdSaved) return;
     const value = schoolId.trim();
-    setSavedSchoolId(value);
+    if (user) setUser({ ...user, school_id: value || null });
     callout.show({
       variant: 'success',
       title: value ? `School ID saved as ${value}.` : 'School ID cleared.',
@@ -154,7 +151,9 @@ const SettingsGeneral = () => {
   // the new address; `changedTo` keeps the confirmation on screen meanwhile.
   useEffect(() => {
     if (saveFetcher.state === 'idle' && saveFetcher.data?.changed) {
-      setChangedTo(newEmail);
+      const email = newEmail.trim();
+      setChangedTo(email);
+      if (user) setUser({ ...user, email });
       setEditing(false);
       setNewEmail('');
       setCode('');
