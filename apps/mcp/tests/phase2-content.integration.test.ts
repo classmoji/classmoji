@@ -118,6 +118,10 @@ const stubEmbedding = (text: string): number[] => {
   if (lowered.includes('capstone') || lowered.includes('final project')) return basis(1); // draft
   if (lowered.includes('recursion')) return basis(2); // the deck
   if (lowered.includes('office hours')) return basis(3); // the bot-context note
+  // The DOCUMENTATION fixture. Deliberately a basis no course fixture carries,
+  // so a corpus leak in either direction shows up as a hit that should not
+  // exist rather than as a reordering.
+  if (lowered.includes('teaching assistant') || lowered.includes('add a ta')) return basis(5);
   return basis(4); // orthogonal to the entire fixture corpus
 };
 
@@ -204,6 +208,19 @@ const FOREIGN_SLUG = `p27-${ns}-b`;
 const CLASS_REF = `${ORG_LOGIN}/${CLASS_SLUG}`;
 const FOREIGN_REF = `${ORG_LOGIN}/${FOREIGN_SLUG}`;
 const FILE_DOC_ID = 'bot-context/office-hours.md';
+/**
+ * The documentation fixture.
+ *
+ * `docs_index` is GLOBAL — there is no classroom to hang it off and no cascade
+ * to clean it up — so the slug is namespaced with this run's uuid and teardown
+ * deletes exactly that prefix. Nothing pre-existing is read or written, and a
+ * developer's real docs rows (which this database may well hold) are left
+ * alone: they sit at distance 1 from the stub's basis vector while the fixture
+ * sits at 0, so they cannot change what the top hit is.
+ */
+const DOCS_SLUG = `docs/p27-${ns}/roster`;
+/** An identifier that must survive the extractor AND the round trip. */
+const DOCS_CODE_SENTINEL = 'AI_AGENT_SHARED_SECRET';
 const BOGUS_ID = '00000000-0000-4000-8000-00000000dead';
 
 const LOGINS = {
@@ -251,6 +268,32 @@ const insertIndexRow = async (args: {
       ${ids.classroom}, ${args.docKind}, ${args.docId}, 0, 1,
       ${args.sourcePath}, ${`sha-${ns}`}, 1, ${'@cf/qwen/qwen3-embedding-0.6b'},
       ${args.title}, ${args.text}, ${Prisma.sql`${toVectorLiteral(args.vector)}::vector`}
+    )`;
+};
+
+/**
+ * One documentation row.
+ *
+ * `docs_index` has no classroom column, no FK and no visibility columns — that
+ * is the point of the second corpus — so this writes a GLOBAL row and teardown
+ * removes it by its namespaced slug prefix.
+ */
+const insertDocsRow = async (args: {
+  slug: string;
+  title: string;
+  description: string;
+  section: string;
+  text: string;
+  vector: number[];
+}): Promise<void> => {
+  await getPrisma().$executeRaw`
+    INSERT INTO docs_index (
+      slug, chunk_ix, chunk_count, title, description, section, text,
+      source_sha, extract_version, embed_model, embedding
+    ) VALUES (
+      ${args.slug}, 0, 1, ${args.title}, ${args.description}, ${args.section}, ${args.text},
+      ${`sha-${ns}`}, 1, ${'@cf/qwen/qwen3-embedding-0.6b'},
+      ${Prisma.sql`${toVectorLiteral(args.vector)}::vector`}
     )`;
 };
 
@@ -370,6 +413,17 @@ beforeAll(async () => {
     vector: basis(3),
     sourcePath: FILE_DOC_ID,
   });
+
+  await insertDocsRow({
+    slug: DOCS_SLUG,
+    title: `Manage your roster ${ns}`,
+    description: 'How to add students and teaching staff to your classroom',
+    section: 'instructors',
+    text:
+      'Go to the Teaching Staff tab and click New staff member. Pick the role, enter their ' +
+      `Github username, and confirm. Set ${DOCS_CODE_SENTINEL} to enable AI features.`,
+    vector: basis(5),
+  });
 });
 
 afterAll(async () => {
@@ -381,6 +435,10 @@ afterAll(async () => {
   await deleteMintedTokens();
   if (ids.org) await prisma.gitOrganization.delete({ where: { id: ids.org } });
   await prisma.user.deleteMany({ where: { login: { in: Object.values(LOGINS) } } });
+  // `docs_index` is global and cascades from nothing, so it is deleted by this
+  // run's own slug prefix. A bare `DELETE FROM docs_index` would take a
+  // developer's real 25 documentation rows with it.
+  await prisma.$executeRaw`DELETE FROM docs_index WHERE slug LIKE ${`docs/p27-${ns}/%`}`;
 });
 
 /** Mint one read token per fixture identity against the running server. */
@@ -702,6 +760,114 @@ describe.skipIf(!RUN)('content_search — end to end against a stubbed embedder'
     expect(outcome.payload.unavailable).toBeUndefined();
     expect(outcome.payload.count).toBe(0);
     expect(outcome.payload.hits).toEqual([]);
+  });
+
+  // ── scope: 'docs' — the SECOND corpus, end to end ─────────────────────────
+
+  const searchDocsAs = (token: string, query: string) =>
+    callTool(token, 'content_search', { classroom: CLASS_REF, query, scope: 'docs', limit: 20 });
+
+  it('answers a documentation question for a STUDENT with a real, non-empty result', async () => {
+    const outcome = await searchDocsAs(tokens.student, 'where do I add a teaching assistant?');
+
+    expect(outcome.isError).toBe(false);
+    expect(outcome.payload.unavailable).toBeUndefined();
+    // NON-EMPTY, asserted on its own. "the two roles agree" is satisfied by two
+    // empty lists and by two identical errors, so agreement alone proves
+    // nothing about retrieval having worked.
+    expect(Number(outcome.payload.count)).toBeGreaterThan(0);
+    expect(idsIn(outcome, 'hits')[0]).toBe(DOCS_SLUG);
+
+    const hit = rowById(outcome, 'hits', DOCS_SLUG, 'the docs fixture must be the top hit');
+    expect(hit.kind).toBe('doc');
+    expect(hit.section).toBe('instructors');
+    expect(hit.url).toBe(`https://classmoji.io/${DOCS_SLUG}`);
+  });
+
+  it('gives a TEACHER exactly the same documentation, non-empty', async () => {
+    // Documentation is public and fleet-wide: unlike course content there is no
+    // role tier here at all, and that has to be shown on a result set that
+    // actually contains something.
+    const student = await searchDocsAs(tokens.student, 'where do I add a teaching assistant?');
+    const teacher = await searchDocsAs(tokens.teacher, 'where do I add a teaching assistant?');
+
+    expect(Number(student.payload.count)).toBeGreaterThan(0);
+    expect(Number(teacher.payload.count)).toBeGreaterThan(0);
+    expect(idsIn(teacher, 'hits')).toEqual(idsIn(student, 'hits'));
+    expect(idsIn(teacher, 'hits')).toContain(DOCS_SLUG);
+  });
+
+  it('keeps the two corpora apart in BOTH directions', async () => {
+    // A docs search must not reach this classroom's pages…
+    const docs = await searchDocsAs(tokens.teacher, 'where do I add a teaching assistant?');
+    const docsPayload = JSON.stringify(docs.payload);
+    expect(docsPayload).not.toContain(ids.publishedPage);
+    expect(docsPayload).not.toContain(ids.draftPage);
+    expect(docsPayload).not.toContain(FILE_DOC_ID);
+
+    // …and a course search must not reach the documentation.
+    const course = await callTool(tokens.teacher, 'content_search', {
+      classroom: CLASS_REF,
+      query: 'where do I add a teaching assistant?',
+      limit: 20,
+    });
+    expect(JSON.stringify(course.payload)).not.toContain(DOCS_SLUG);
+    expect(JSON.stringify(course.payload)).not.toContain(DOCS_CODE_SENTINEL);
+  });
+
+  it('reads a documentation page in full through content_get, code identifiers intact', async () => {
+    const outcome = await callTool(tokens.student, 'content_get', {
+      classroom: CLASS_REF,
+      kind: 'doc',
+      id: DOCS_SLUG,
+    });
+
+    expect(outcome.isError).toBe(false);
+    expect(outcome.payload.kind).toBe('doc');
+    expect(outcome.payload.id).toBe(DOCS_SLUG);
+    expect(outcome.payload.url).toBe(`https://classmoji.io/${DOCS_SLUG}`);
+    expect(String(outcome.payload.text)).toContain('New staff member');
+    // The whole extractor contract, checked at the far end of the pipe: an
+    // underscored identifier still reads as itself after indexing, storage and
+    // retrieval.
+    expect(String(outcome.payload.text)).toContain(DOCS_CODE_SENTINEL);
+  });
+
+  it('lists the documentation under scope: docs, with real URLs', async () => {
+    const outcome = await callTool(tokens.student, 'content_list', {
+      classroom: CLASS_REF,
+      scope: 'docs',
+      limit: 200,
+    });
+
+    expect(outcome.isError).toBe(false);
+    expect(idsIn(outcome, 'items')).toContain(DOCS_SLUG);
+    const row = rowById(outcome, 'items', DOCS_SLUG, 'the docs fixture must be listed');
+    expect(row.kind).toBe('doc');
+    expect(row.url).toBe(`https://classmoji.io/${DOCS_SLUG}`);
+  });
+
+  it("refuses `kind` together with scope: 'docs' rather than ignoring one", async () => {
+    const outcome = await callTool(tokens.student, 'content_search', {
+      classroom: CLASS_REF,
+      query: 'where do I add a teaching assistant?',
+      scope: 'docs',
+      kind: 'page',
+    });
+
+    expect(outcome.isError).toBe(true);
+    expect(JSON.stringify(outcome.payload)).toMatch(/invalid_params/);
+  });
+
+  it('refuses a NON-MEMBER a documentation search, exactly as it refuses a course one', async () => {
+    // Global corpus, not a global door. Membership in the supplied classroom is
+    // still what gets you in.
+    const outcome = await callTool(tokens.outsider, 'content_search', {
+      classroom: CLASS_REF,
+      query: 'where do I add a teaching assistant?',
+      scope: 'docs',
+    });
+    expectForbidden(outcome, "content_search scope:'docs' as a non-member", 'NOT_A_MEMBER');
   });
 
   it("still refuses a non-member with 'forbidden/NOT_A_MEMBER' before embedding anything", async () => {

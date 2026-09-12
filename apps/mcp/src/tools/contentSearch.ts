@@ -1,9 +1,28 @@
 /**
- * Course-content read tools — `content_search`, `content_list`, `content_get`.
+ * Content read tools — `content_search`, `content_list`, `content_get`.
  *
  * The retrieval surface Ask Moji answers out of (plan §5.7, P2-7). Three read
- * tools over one classroom's pages, slide decks and `bot-context/` notes: find
- * by meaning, enumerate, read one in full.
+ * tools: find by meaning, enumerate, read one in full.
+ *
+ * ── TWO CORPORA BEHIND THE SAME THREE TOOLS ────────────────────────────────
+ * `scope: 'course'` (the default) is this classroom's pages, slide decks and
+ * `bot-context/` notes — per classroom, permission-filtered, drafts included
+ * for staff. `scope: 'docs'` is the Classmoji PRODUCT DOCUMENTATION at
+ * classmoji.io: fleet-wide, public, identical for every caller, and answering
+ * "how does this platform work" rather than "what does this course require".
+ *
+ * They are one tool rather than six because the model's decision is which
+ * corpus to ask, not which tool to call — and because a second set of tools is
+ * a second set of descriptions to keep in step. They are two code paths rather
+ * than one table because everything below the surface differs: one has a
+ * visibility predicate and a live fallback, the other has neither and could not
+ * safely have either.
+ *
+ * NOTE that this input `scope` and each tool's `scope: 'read'` are unrelated.
+ * The latter is the OAuth scope a bearer token must carry. Nothing about
+ * `scope: 'docs'` widens who may call anything: all three tools stay
+ * `roles: MEMBER` against the supplied classroom, so documentation is global
+ * BEHIND a membership rather than anonymously readable.
  *
  * ── ONE PREDICATE, AND IT IS NOT HERE (decision D6) ────────────────────────
  * Nothing in this file decides who may see what. Every handler resolves the
@@ -28,9 +47,12 @@
  * ── What a caller gets back ────────────────────────────────────────────────
  * Only the SANITIZED extracted text the indexer stored (or, in the one fallback
  * below, the same extractor run live) — never raw repo bytes, never a deck's
- * speaker notes, never `pageLink`/`navGrid` labels. That sanitization is the
- * extractor's job (`@classmoji/services/content/extract`); this file's job is
- * to never route around it. Note the divergence from `page_content_get`
+ * speaker notes, never `pageLink`/`navGrid` labels, and for documentation never
+ * the `.mdx` source. That sanitization is the extractor's job
+ * (`@classmoji/services/content/extract`); this file's job is to never route
+ * around it — which is also why `scope: 'docs'` has NO live fallback: a
+ * fallback there would mean fetching a caller-supplied path from github.com on
+ * demand. Note the divergence from `page_content_get`
  * (`pageContent.ts`), which still reads GitHub through `ContentService` with no
  * such filtering — out of scope for this lane, flagged in the PR.
  *
@@ -47,17 +69,25 @@ import getPrisma from '@classmoji/database';
 import {
   ClassmojiService,
   ContentNotFoundError,
+  DocsNotFoundError,
   contentVisibility,
+  docsIndexIsEmpty,
   getContentText,
+  getDocText,
   listContent,
+  listDocs,
   searchContent,
+  searchDocs,
   MAX_SEARCH_LIMIT,
   DEFAULT_LIST_LIMIT,
   MAX_LIST_LIMIT,
   type ContentDocKind,
   type ContentListEntry,
   type ContentSearchHit,
+  type DocsListEntry,
+  type DocsSearchHit,
 } from '@classmoji/services';
+import { docsUrl } from '@classmoji/utils';
 import { WorkersAiError, embedTexts, isWorkersAiConfigured } from '@classmoji/services/workers-ai';
 import { ToolError } from '../mcp/errors.ts';
 import type { ToolContext, ToolDefinition } from '../mcp/registry.ts';
@@ -73,6 +103,79 @@ const kindArg = z
   .describe("Document kind: 'page', 'slide' (a deck), or 'file' (a bot-context/ note)");
 
 /**
+ * WHICH CORPUS to read. Not a permission.
+ *
+ * `scope: 'read'` on each tool below is the OAuth scope the bearer token must
+ * carry; this `scope` argument names one of two bodies of text. They share a
+ * word and nothing else, and conflating them is how a widening here would get
+ * read as a widening there. Membership in the supplied `classroom` is still
+ * required for both — what is global is the corpus, not the door.
+ *
+ *   'course' (default) — this classroom's pages, decks and bot-context notes.
+ *                        Per classroom, permission-filtered, may include drafts.
+ *   'docs'             — the Classmoji product documentation at classmoji.io.
+ *                        Fleet-wide, public, identical for every caller.
+ */
+const scopeArg = z
+  .enum(['course', 'docs'])
+  .describe(
+    "Which body of text to read: 'course' (default) for this classroom's own material, " +
+      "or 'docs' for the Classmoji product documentation at classmoji.io"
+  );
+
+type ContentScope = 'course' | 'docs';
+
+/**
+ * `content_get`'s kind union, kept SEPARATE from {@link kindArg}.
+ *
+ * Widening the shared `kindArg` to include `'doc'` would silently broaden
+ * `content_search` and `content_list` — both of which take `kind` as a FILTER
+ * over course content — and with them the live-fallback's assumption that every
+ * kind it is handed has a `pages`/`slides` row or is a repo path. A `'doc'`
+ * reaching that code is a `findFirst` on a slug. Two unions is two lines; one
+ * union is a silent broadening of three tools to fix one.
+ */
+const getKindArg = z
+  .enum(['page', 'slide', 'file', 'doc'])
+  .describe(
+    "Document kind: 'page', 'slide' (a deck), 'file' (a bot-context/ note), or " +
+      "'doc' (a Classmoji documentation page, from a scope: 'docs' search)"
+  );
+
+type ContentGetKind = ContentDocKind | 'doc';
+
+/**
+ * `kind` filters course content. It cannot filter documentation, which has no
+ * kinds — so the pair is refused rather than one of them quietly ignored.
+ *
+ * SILENTLY DROPPING AN ARGUMENT IS HOW A MODEL CONCLUDES A FILTER WAS APPLIED.
+ * Asked for "slides about tokens" and handed documentation pages with the
+ * `kind` ignored, it reports them as slides.
+ */
+function assertScopeAndKind(scope: ContentScope, kind: ContentDocKind | undefined): void {
+  if (scope === 'docs' && kind !== undefined) {
+    throw new ToolError(
+      'invalid_params',
+      "`kind` filters course content and has no meaning for scope: 'docs' — " +
+        'the documentation has no kinds. Drop `kind`, or drop `scope`.'
+    );
+  }
+}
+
+/**
+ * The marker a zero-hit documentation answer carries when the index was never
+ * built on this deployment.
+ *
+ * NOT "no search was run" — a search WAS run, against an empty table, and a
+ * message that says otherwise is simply false. What the caller needs to know is
+ * that the absence is an absence of INDEX, not of documentation.
+ */
+const DOCS_INDEX_EMPTY = 'docs_index_empty';
+const DOCS_INDEX_EMPTY_MESSAGE =
+  'The documentation index has not been built on this deployment — there is nothing to search ' +
+  'yet. This is not an empty result set.';
+
+/**
  * ONE refusal for every way `content_get` can fail to produce a document: no
  * such id, another classroom's id, an id this viewer may not see, and an id
  * with nothing readable behind it. Distinguishing them would turn the tool into
@@ -86,6 +189,7 @@ const contentNotFound = (): ToolError => scopedNotFound('Content');
 interface ContentSearchArgs {
   classroom: string;
   query: string;
+  scope?: ContentScope;
   kind?: ContentDocKind;
   limit?: number;
 }
@@ -98,7 +202,19 @@ interface ContentSearchArgs {
  * empty list. A model that cannot tell them apart will confidently report the
  * second when the truth is the first.
  */
-export type SearchUnavailable = 'embedding_not_configured' | 'embedding_failed';
+export type SearchUnavailable =
+  | 'embedding_not_configured'
+  | 'embedding_failed'
+  /**
+   * The documentation index is empty ON THIS DEPLOYMENT. Distinct from the two
+   * above: the embedding worked and the query ran — there is simply nothing in
+   * the table yet, because the backfill has not been run here. Reported as
+   * `unavailable` rather than as an empty result for the same reason as the
+   * others: "the docs do not cover that" and "documentation search has not been
+   * switched on" are different answers, and a model handed the same empty list
+   * for both will confidently give the first.
+   */
+  | 'docs_index_empty';
 
 type EmbeddedQuery = { ok: true; vector: number[] } | { ok: false; unavailable: SearchUnavailable };
 
@@ -154,6 +270,40 @@ function presentHit(hit: ContentSearchHit) {
   };
 }
 
+/** A documentation hit as the model sees it. */
+function presentDocsHit(hit: DocsSearchHit) {
+  return {
+    // `kind: 'doc'` is what content_get takes back, and what the prompt keys
+    // the `platform_docs` reference type off.
+    kind: 'doc' as const,
+    // The SLUG is the id. It is also the URL path, which is why there is no
+    // separate mapping and no way for the citation and the link to disagree.
+    id: hit.slug,
+    title: hit.title,
+    ...(hit.section ? { section: hit.section } : {}),
+    ...(hit.description ? { description: hit.description } : {}),
+    url: docsUrl(hit.slug),
+    chunk: hit.chunkIx,
+    snippet: hit.snippet,
+    score: Math.round(hit.score * 1e4) / 1e4,
+  };
+}
+
+/** A documentation listing row. */
+function presentDocsEntry(entry: DocsListEntry) {
+  return {
+    kind: 'doc' as const,
+    id: entry.slug,
+    title: entry.title,
+    ...(entry.section ? { section: entry.section } : {}),
+    ...(entry.description ? { description: entry.description } : {}),
+    url: entry.url,
+    updated_at: new Date(entry.updatedAt).toISOString(),
+    /** Listing reads the index, so anything listed is searchable. */
+    indexed: true,
+  };
+}
+
 /**
  * The retrieval-quality log line (plan §5.6, "instrumentation, from day one").
  *
@@ -164,21 +314,35 @@ function presentHit(hit: ContentSearchHit) {
 function logContentSearch(entry: {
   classroomId: string;
   role: string;
+  scope: ContentScope;
   queryChars: number;
   kind?: ContentDocKind;
   limit?: number;
-  hits: ContentSearchHit[];
+  /**
+   * ALREADY NORMALIZED to `{ kind, id }`, not `ContentSearchHit[]`.
+   *
+   * The two corpora return different row shapes (`docKind`/`docId` against
+   * `slug`), and a logger that took one of them would either need a second
+   * overload or would quietly log `undefined:undefined` for the other. The
+   * caller has the hit in hand and knows which it is; normalizing there is one
+   * line and cannot be wrong for half the calls.
+   */
+  hits: Array<{ kind: string; id: string }>;
   unavailable: SearchUnavailable | null;
 }): void {
   console.log(
     `[mcp] content_search ${JSON.stringify({
       classroom_id: entry.classroomId,
       role: entry.role,
+      // Which corpus was searched — the one dimension retrieval quality now has
+      // to be read along, since a docs miss and a course miss have different
+      // fixes.
+      scope: entry.scope,
       query_chars: entry.queryChars,
       kind: entry.kind ?? null,
       limit: entry.limit ?? null,
       result_count: entry.hits.length,
-      results: entry.hits.map(hit => `${hit.docKind}:${hit.docId}`),
+      results: entry.hits.map(hit => `${hit.kind}:${hit.id}`),
       unavailable: entry.unavailable,
     })}`
   );
@@ -186,14 +350,21 @@ function logContentSearch(entry: {
 
 export const contentSearchTool: ToolDefinition<ContentSearchArgs> = {
   name: 'content_search',
-  title: 'Search course content',
+  title: 'Search course content and Classmoji docs',
   description:
-    "Semantic search over this classroom's pages, slide decks and bot-context notes. Returns " +
-    'document ids, titles and snippets ranked by meaning rather than keywords — ask the question ' +
-    'the way a student would. Staff also reach unpublished material; students reach published ' +
-    'material only. Use content_get to read a result in full. If the response carries an ' +
-    '`unavailable` field, search itself could not run — that is NOT the same as "nothing found", ' +
-    'and it must not be reported to the user as an absence of course material.',
+    'Semantic search over one of two bodies of text, chosen with `scope`. ' +
+    "`scope: 'course'` (the default) searches THIS classroom's pages, slide decks and " +
+    'bot-context notes: staff also reach unpublished material, students reach published ' +
+    'material only. ' +
+    "`scope: 'docs'` searches the Classmoji PRODUCT DOCUMENTATION at classmoji.io — how the " +
+    'platform works, the same for every classroom — and returns `kind: "doc"` hits whose `id` is ' +
+    'the page slug and whose `url` is a real link you may cite. Use it for "how does X work in ' +
+    'Classmoji", and `course` for anything about this particular course. ' +
+    'Results are ranked by meaning rather than keywords, so ask the question the way a person ' +
+    'would. Read a result in full with content_get before answering from it. If the response ' +
+    'carries an `unavailable` field, search itself could not run or the index is not built — ' +
+    'that is NOT the same as "nothing found", and it must not be reported to the user as an ' +
+    'absence of material.',
   scope: 'read',
   roles: MEMBER,
   inputSchema: {
@@ -203,6 +374,7 @@ export const contentSearchTool: ToolDefinition<ContentSearchArgs> = {
       .min(2)
       .max(500)
       .describe('What to look for, in plain language (a question works well)'),
+    scope: scopeArg.optional(),
     kind: kindArg.optional(),
     limit: z
       .number()
@@ -214,18 +386,31 @@ export const contentSearchTool: ToolDefinition<ContentSearchArgs> = {
   },
   handler: async (args, ctx) => {
     const classroom = requireClassroomCtx(ctx);
+    const scope: ContentScope = args.scope ?? 'course';
+    assertScopeAndKind(scope, args.kind);
 
-    const embedded = await embedQuery(args.query);
-    if (!embedded.ok) {
+    const log = (
+      hits: Array<{ kind: string; id: string }>,
+      unavailable: SearchUnavailable | null
+    ): void =>
       logContentSearch({
         classroomId: classroom.classroomId,
         role: classroom.role,
+        scope,
         queryChars: args.query.length,
         kind: args.kind,
         limit: args.limit,
-        hits: [],
-        unavailable: embedded.unavailable,
+        hits,
+        unavailable,
       });
+
+    // ONE embedding path for both corpora: the same client, the same refusal
+    // classes, the same `embedding_*` markers. A docs search that failed to
+    // embed has to be as distinguishable from an empty one as a course search
+    // is, and a second code path here would be a second place to forget that.
+    const embedded = await embedQuery(args.query);
+    if (!embedded.ok) {
+      log([], embedded.unavailable);
       return ok({
         count: 0,
         hits: [],
@@ -237,6 +422,31 @@ export const contentSearchTool: ToolDefinition<ContentSearchArgs> = {
       });
     }
 
+    if (scope === 'docs') {
+      const hits = await searchDocs({
+        queryVector: embedded.vector,
+        ...(args.limit ? { limit: args.limit } : {}),
+      });
+
+      // Zero hits over a corpus that exists means the documentation genuinely
+      // does not cover it. Zero hits over a corpus that was never built means
+      // something else entirely, and only the index can tell them apart — so
+      // it is asked ONLY when there is an absence to explain.
+      if (hits.length === 0 && (await docsIndexIsEmpty())) {
+        log([], DOCS_INDEX_EMPTY);
+        return ok({
+          count: 0,
+          hits: [],
+          unavailable: DOCS_INDEX_EMPTY,
+          message: DOCS_INDEX_EMPTY_MESSAGE,
+        });
+      }
+
+      const presented = hits.map(presentDocsHit);
+      log(presented, null);
+      return ok({ count: presented.length, hits: presented });
+    }
+
     const hits = await searchContent({
       classroomId: classroom.classroomId,
       role: classroom.role,
@@ -245,15 +455,10 @@ export const contentSearchTool: ToolDefinition<ContentSearchArgs> = {
       ...(args.limit ? { limit: args.limit } : {}),
     });
 
-    logContentSearch({
-      classroomId: classroom.classroomId,
-      role: classroom.role,
-      queryChars: args.query.length,
-      kind: args.kind,
-      limit: args.limit,
-      hits,
-      unavailable: null,
-    });
+    log(
+      hits.map(hit => ({ kind: hit.docKind, id: hit.docId })),
+      null
+    );
 
     return ok({ count: hits.length, hits: hits.map(presentHit) });
   },
@@ -263,6 +468,7 @@ export const contentSearchTool: ToolDefinition<ContentSearchArgs> = {
 
 interface ContentListArgs {
   classroom: string;
+  scope?: ContentScope;
   kind?: ContentDocKind;
   limit?: number;
   offset?: number;
@@ -290,20 +496,27 @@ function presentEntry(entry: ContentListEntry) {
 
 export const contentListTool: ToolDefinition<ContentListArgs> = {
   name: 'content_list',
-  title: 'List course content',
+  title: 'List course content and Classmoji docs',
   description:
-    'Enumerates every page, slide deck and bot-context note in this classroom that the caller may ' +
-    'see, whether or not it has been indexed for search. Staff also see unpublished material. ' +
-    'Each row reports `indexed`: false means content_search cannot reach that document yet, ' +
-    'though content_get still can. Use this to find a document by name when a search comes back ' +
-    `empty. The listing is paged: at most \`limit\` rows come back (default ${LIST_DEFAULT_LIMIT}, ` +
-    `max ${LIST_MAX_LIMIT}) in a stable order. If \`truncated\` is true this is NOT the whole ` +
-    'catalogue — call again with `offset` set to the returned `next_offset` to continue, and do ' +
-    'not tell the user a document is absent on the strength of one page.',
+    'Enumerates one of two bodies of text, chosen with `scope`. ' +
+    "`scope: 'course'` (the default) lists every page, slide deck and bot-context note in THIS " +
+    'classroom the caller may see, whether or not it has been indexed for search; staff also ' +
+    'see unpublished material, and each row reports `indexed` — false means content_search ' +
+    'cannot reach that document yet, though content_get still can. ' +
+    '`scope: \'docs\'` lists the Classmoji product documentation at classmoji.io as `kind: "doc"` ' +
+    'rows with a real `url`; documentation exists only in the index, so a row that is listed is ' +
+    'a row search can reach, and an empty listing with an `unavailable` marker means the index ' +
+    'has not been built here rather than that there are no docs. ' +
+    'Use this to find something by name when a search comes back empty. The listing is paged: ' +
+    `at most \`limit\` rows come back (default ${DEFAULT_LIST_LIMIT}, max ${MAX_LIST_LIMIT}) in a ` +
+    'stable order. If `truncated` is true this is NOT the whole catalogue — call again with ' +
+    '`offset` set to the returned `next_offset` to continue, and do not tell the user something ' +
+    'is absent on the strength of one page.',
   scope: 'read',
   roles: MEMBER,
   inputSchema: {
     classroom: classroomArg,
+    scope: scopeArg.optional(),
     kind: kindArg.optional(),
     limit: z
       .number()
@@ -321,6 +534,36 @@ export const contentListTool: ToolDefinition<ContentListArgs> = {
   },
   handler: async (args, ctx) => {
     const classroom = requireClassroomCtx(ctx);
+    const scope: ContentScope = args.scope ?? 'course';
+    assertScopeAndKind(scope, args.kind);
+
+    if (scope === 'docs') {
+      const page = await listDocs({
+        ...(args.limit ? { limit: args.limit } : {}),
+        ...(args.offset ? { offset: args.offset } : {}),
+      });
+
+      // The same distinction search draws, drawn here too: an empty catalogue
+      // and a catalogue that was never built are different facts, and a model
+      // handed a bare `[]` for both will report the first.
+      if (page.items.length === 0 && (await docsIndexIsEmpty())) {
+        return ok({
+          count: 0,
+          items: [],
+          truncated: false,
+          unavailable: DOCS_INDEX_EMPTY,
+          message: DOCS_INDEX_EMPTY_MESSAGE,
+        });
+      }
+
+      return ok({
+        count: page.items.length,
+        items: page.items.map(presentDocsEntry),
+        truncated: page.truncated,
+        ...(page.nextOffset !== null ? { next_offset: page.nextOffset } : {}),
+      });
+    }
+
     const page = await listContent({
       classroomId: classroom.classroomId,
       role: classroom.role,
@@ -342,7 +585,7 @@ export const contentListTool: ToolDefinition<ContentListArgs> = {
 
 interface ContentGetArgs {
   classroom: string;
-  kind: ContentDocKind;
+  kind: ContentGetKind;
   id: string;
 }
 
@@ -475,25 +718,63 @@ async function readLiveDocument(
 
 export const contentGetTool: ToolDefinition<ContentGetArgs> = {
   name: 'content_get',
-  title: 'Read course content',
+  title: 'Read course content or a Classmoji doc',
   description:
-    'Returns the full plain text of one page, slide deck or bot-context note — the same text ' +
-    'content_search ranks, so ids from a search result can be passed straight in. Use it after ' +
-    'content_search or content_list to read a document a snippet only hinted at. Deck speaker ' +
-    'notes are never included.',
+    'Returns the full plain text of one document — the same text content_search ranks, so an ' +
+    'id and kind from a search or listing result can be passed straight back in. ' +
+    "For `kind: 'page' | 'slide' | 'file'` that is this classroom's own material (deck speaker " +
+    'notes are never included). ' +
+    "For `kind: 'doc'` it is a Classmoji product documentation page from classmoji.io: pass the " +
+    'page slug as `id`, and the response carries the canonical `url` you may cite. ' +
+    'Use it after content_search or content_list to read a document a snippet only hinted at.',
   scope: 'read',
   roles: MEMBER,
   inputSchema: {
     classroom: classroomArg,
-    kind: kindArg,
+    kind: getKindArg,
     id: z
       .string()
       .min(1)
       .max(400)
-      .describe("Document id from content_search or content_list (a repo path for kind 'file')"),
+      .describe(
+        "Document id from content_search or content_list (a repo path for kind 'file', a page " +
+          "slug such as 'docs/instructors/roster' for kind 'doc')"
+      ),
   },
   handler: async (args, ctx) => {
     const classroom = requireClassroomCtx(ctx);
+
+    if (args.kind === 'doc') {
+      try {
+        const document = await getDocText(args.id);
+        return ok({
+          kind: 'doc',
+          id: document.slug,
+          title: document.title,
+          ...(document.description ? { description: document.description } : {}),
+          ...(document.section ? { section: document.section } : {}),
+          url: document.url,
+          indexed: true,
+          chunk_count: document.chunkCount,
+          text: document.text,
+        });
+      } catch (error) {
+        if (!(error instanceof DocsNotFoundError)) throw error;
+        // Deliberately NOT `scopedNotFound('Content')`. That refusal is uniform
+        // on purpose, because distinguishing "no such id" from "another
+        // classroom's id" would turn course lookups into a probe a student
+        // could enumerate drafts with. Documentation is public and global:
+        // there is nothing to enumerate and no boundary to defend, so the
+        // refusal can say what actually happened.
+        //
+        // There is also NO LIVE FALLBACK here. The course lane falls back to
+        // reading the content repo because its index can legitimately lag a
+        // page somebody just saved. Documentation only exists in the index, so
+        // a fallback would mean fetching an arbitrary caller-supplied path from
+        // github.com on demand.
+        throw new ToolError('not_found', 'Documentation page not found');
+      }
+    }
 
     try {
       const document = await getContentText({
