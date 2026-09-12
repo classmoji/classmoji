@@ -25,6 +25,7 @@ import { Tour, Button } from 'antd';
 import type { TourProps } from 'antd';
 import { useUser } from '~/hooks';
 import useStore from '~/store';
+import { useSurveyPending } from '~/components/features/survey';
 import type { TourPhase } from '~/types';
 
 /** Target a landing `data-onboarding` element; null -> antd renders centered. */
@@ -143,6 +144,9 @@ export function OnboardingTour() {
   // active across /select-organization and /settings.
   const onAccountRoute = onLanding || location.pathname.startsWith('/settings');
   const active = tourPhase === 'landing' && onAccountRoute;
+  // The picker's one-off survey prompt goes first; the auto-start below waits
+  // until the loader stops sending questions, then fires on that re-render.
+  const surveyPending = useSurveyPending();
 
   // Initialize the landing tour exactly once on mount, two ways in (in order):
   //  - Resume: a landing tour was already running and you refreshed — pick it back
@@ -155,6 +159,9 @@ export function OnboardingTour() {
   useEffect(() => {
     if (initRef.current) return;
     if (!user || !onLanding || tourPhase !== 'idle') return;
+    // Two modals on top of each other looks broken; let the survey finish first.
+    // initRef stays unset, so this re-runs once the loader drops the question.
+    if (surveyPending) return;
     initRef.current = true;
 
     let saved: { phase?: TourPhase; step?: number } | null = null;
@@ -173,7 +180,16 @@ export function OnboardingTour() {
       startFullTour();
       fetcher.submit(null, { method: 'POST', action: '/api/onboarding/complete' });
     }
-  }, [user, onLanding, tourPhase, startFullTour, setTourPhase, setTourStep, fetcher]);
+  }, [
+    user,
+    onLanding,
+    tourPhase,
+    surveyPending,
+    startFullTour,
+    setTourPhase,
+    setTourStep,
+    fetcher,
+  ]);
 
   // Each step lives on a specific account route; navigate there when it opens.
   useEffect(() => {

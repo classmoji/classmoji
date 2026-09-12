@@ -3,6 +3,7 @@ import type { Route } from './+types/route';
 import { COOKIE_DOMAIN } from '@classmoji/auth/secret';
 import { GitHubProvider } from '@classmoji/services';
 import getPrisma from '@classmoji/database';
+import { SURVEY_QUESTIONS, SURVEY_SKIPPED } from '@classmoji/utils';
 
 /**
  * Role configuration for test login.
@@ -145,6 +146,18 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
     });
 
     console.log(`[test-login] Created session for ${user.login} (role=${role})`);
+
+    // Pre-record a skip for every survey question so the picker's one-off
+    // prompt (a blocking overlay) never appears in front of a Playwright spec.
+    await getPrisma().userSurveyResponse.createMany({
+      data: SURVEY_QUESTIONS.map(q => ({
+        user_id: user.id,
+        question_key: q.key,
+        answer: SURVEY_SKIPPED,
+        context: 'unknown',
+      })),
+      skipDuplicates: true,
+    });
 
     // Find the user's classroom membership matching the requested role
     // This allows us to redirect directly to the dashboard, bypassing /select-organization
