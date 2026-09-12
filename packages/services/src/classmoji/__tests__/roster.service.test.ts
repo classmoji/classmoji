@@ -78,6 +78,22 @@ describe('roster.addStudents', () => {
     expect(result.emails[1].payload.template.variables.CLASSROOM_NAME).toBe('CS1');
   });
 
+  it('sends invitees a link that carries their invited address', async () => {
+    // The link used to be the same for everyone, so a student who retyped a
+    // different address at sign-up never matched their invite (#343).
+    userFindMany.mockResolvedValue([]);
+
+    const result = await roster.addStudents({
+      classroomId: 'class-1',
+      students: [{ email: 'New.Student@x.edu', name: 'New' }],
+    });
+
+    const url = result.emails[0].payload.template.variables.APP_URL as string;
+    const outer = new URL(url.replace(/&amp;/g, '&'));
+    const target = outer.searchParams.get('redirect');
+    expect(target).toBe('/select-organization?invite_email=New.Student%40x.edu');
+  });
+
   it('escapes user-authored names before they become template variables', async () => {
     // Resend injects variables raw, so an unescaped teacher-typed name would
     // put live markup in the invitee's inbox.

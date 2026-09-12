@@ -183,15 +183,22 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
     return redirect('/select-organization');
   }
 
+  // From the roster invite link, via the picker (#343). Prefilled, not locked:
+  // the code step still proves whichever address they end up with.
+  const rawInvited = new URL(request.url).searchParams.get('email')?.trim() ?? '';
+  const invitedEmail =
+    rawInvited.length <= 254 && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(rawInvited) ? rawInvited : null;
+
   return {
     githubLogin: githubUser.login,
     githubId: String(githubUser.id),
     githubEmail: githubUser.email || null,
+    invitedEmail,
   };
 };
 
 const Registration = ({ loaderData }: Route.ComponentProps) => {
-  const { githubLogin, githubId, githubEmail } = loaderData;
+  const { githubLogin, githubId, githubEmail, invitedEmail } = loaderData;
   const fetcher = useFetcher();
   const codeFetcher = useFetcher();
   const verifyFetcher = useFetcher();
@@ -274,7 +281,7 @@ const Registration = ({ loaderData }: Route.ComponentProps) => {
             layout="vertical"
             onFinish={onFinish}
             size="middle"
-            initialValues={{ githubId, login: githubLogin }}
+            initialValues={{ githubId, login: githubLogin, email: invitedEmail ?? undefined }}
             disabled={isSubmitting}
           >
             <Form.Item label="GitHub ID" name="githubId" className="hidden">

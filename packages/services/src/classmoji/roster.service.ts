@@ -1,5 +1,5 @@
 import getPrisma from '@classmoji/database';
-import { appUrl, escapeVars } from '../emails/escape.ts';
+import { appUrl, escapeVars, inviteLandingUrl } from '../emails/escape.ts';
 import * as classroomService from './classroom.service.ts';
 import * as classroomMembershipService from './classroomMembership.service.ts';
 import * as classroomInviteService from './classroomInvite.service.ts';
@@ -122,7 +122,10 @@ export const addStudents = async ({
             variables: escapeVars({
               STUDENT_NAME: student.name || 'there',
               CLASSROOM_NAME: classroom.name,
-              APP_URL: appUrl(),
+              // Carries the invited address so sign-up can prefill it: the
+              // link used to be the same for everyone, and students retyping
+              // a different address at registration never got their invite.
+              APP_URL: inviteLandingUrl(student.email),
             }),
           },
         },

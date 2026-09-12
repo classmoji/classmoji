@@ -47,6 +47,17 @@ export const escapeVars = <T extends Record<string, string | number | null | und
 export const appUrl = (): string => process.env.WEBAPP_URL ?? 'https://app.classmoji.io';
 
 /**
+ * Where a roster invite sends someone: sign in, then land on the picker with
+ * the invited address in the URL. Registration prefills it, and the picker can
+ * tell a registered user their account uses a different address (#343). The
+ * inner target is a relative path, which is what `/?redirect=` accepts.
+ */
+export const inviteLandingUrl = (email: string): string => {
+  const target = `/select-organization?invite_email=${encodeURIComponent(email)}`;
+  return `${appUrl()}/?redirect=${encodeURIComponent(target)}`;
+};
+
+/**
  * The pages-service URL used in email links. Forms live in apps/pages, not the
  * webapp, so a form verification link points here — never at appUrl().
  */
