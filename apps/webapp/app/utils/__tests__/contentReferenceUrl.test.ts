@@ -17,13 +17,135 @@ describe('buildContentReferenceUrl', () => {
 
   it('still builds slide links from slidesUrl', () => {
     expect(
-      buildContentReferenceUrl({ referenceType: 'slides', contentPath: 'd1' }, 'cs52', 'https://slides.example')
+      buildContentReferenceUrl(
+        { referenceType: 'slides', contentPath: 'd1' },
+        'cs52',
+        'https://slides.example'
+      )
     ).toBe('https://slides.example/d1');
   });
 
   it('never reads process.env — this module runs in the browser', () => {
     const source = readFileSync(new URL('../contentReferenceUrl.ts', import.meta.url), 'utf8');
     expect(source).not.toMatch(/process\.env\./);
+  });
+});
+
+describe('platform_docs references', () => {
+  const docsRef = (contentPath: string) => ({
+    referenceType: 'platform_docs',
+    contentPath,
+    displayText: 'Manage your roster',
+  });
+
+  it('builds the canonical absolute URL from a doc slug', () => {
+    // NOT `/docs/${contentPath}`, which is what this used to do: the origin is
+    // the marketing site rather than the app, and a full slug produced
+    // `/docs/docs/instructors/roster`.
+    expect(buildContentReferenceUrl(docsRef('docs/instructors/roster'), 'cs52')).toBe(
+      'https://classmoji.io/docs/instructors/roster'
+    );
+  });
+
+  it.each([
+    ['docs', 'https://classmoji.io/docs'],
+    ['docs/instructors', 'https://classmoji.io/docs/instructors'],
+    [
+      'docs/open-source/local-development',
+      'https://classmoji.io/docs/open-source/local-development',
+    ],
+  ])('%s → %s', (slug, url) => {
+    expect(buildContentReferenceUrl(docsRef(slug), 'cs52')).toBe(url);
+  });
+
+  it('never guesses the origin from the page it is rendered on', () => {
+    // The widget runs inside the app, so a relative `/docs/...` would resolve
+    // against app.classmoji.io, where the documentation is not served.
+    const url = buildContentReferenceUrl(docsRef('docs/instructors/roster'), 'cs52');
+    expect(url?.startsWith('https://classmoji.io/')).toBe(true);
+  });
+
+  it.each([
+    ['quizzes', 'a bare doc name from the old /docs/{name} scheme'],
+    ['assignments', 'another bare name'],
+    ['docs/../admin', 'traversal'],
+    ['/docs/instructors/roster', 'an absolute path — a slug carries no leading slash'],
+    ['https://evil.example/docs', 'an absolute URL'],
+    ['', 'empty'],
+  ])('renders NO link for %s (%s)', slug => {
+    expect(buildContentReferenceUrl(docsRef(slug), 'cs52')).toBeNull();
+  });
+
+  it('needs no env var and no init payload, unlike page and slide links', () => {
+    // The docs origin is one public host for the whole fleet, so it is a
+    // constant rather than something plumbed through the widget's init payload
+    // — which is why this works with both URL arguments absent.
+    expect(buildContentReferenceUrl(docsRef('docs/instructors/roster'), 'cs52', null, null)).toBe(
+      'https://classmoji.io/docs/instructors/roster'
+    );
+  });
+});
+
+describe('a reference the widget cannot link to renders as TEXT, not a dead link', () => {
+  /**
+   * The component's CODE, with `//` comment lines removed.
+   *
+   * The comments explain the dead-link bug by quoting it, so an assertion that
+   * the file no longer contains `href={url || '#'}` would fail on the sentence
+   * saying it used to.
+   */
+  const chat = () =>
+    readFileSync(
+      new URL('../../components/features/syllabus-bot/SyllabusBotChat.tsx', import.meta.url),
+      'utf8'
+    )
+      .split('\n')
+      .filter(line => !/^\s*\/\//.test(line))
+      .join('\n');
+
+  it('no longer falls back to href="#"', () => {
+    // `href={url || '#'}` is a clickable dead link: focusable, styled exactly
+    // like a working chip, and it navigates the page to itself.
+    const source = chat();
+    expect(source).not.toMatch(/href=\{url \|\| '#'\}/);
+    expect(source).not.toMatch(/href="#"/);
+  });
+
+  it('renders a span for a null url, with the same chip class', () => {
+    const source = chat();
+    // Same class, so the two look identical — and the chip's colours come from
+    // panel-level CSS variables, so it is correct in light and dark without a
+    // second rule.
+    expect(source).toMatch(/if \(!url\) \{[\s\S]{0,200}<span key=\{idx\} className="askmoji-ref">/);
+  });
+
+  it('does not make that span keyboard-focusable or announce it as a link', () => {
+    // A <span> with no tabindex is not in the tab order at all, which is the
+    // whole point: it is a label, and nothing about it should say "activate me".
+    const source = chat();
+    const start = source.indexOf('if (!url)');
+    expect(start).toBeGreaterThan(-1);
+    const branch = source.slice(start, source.indexOf('}', source.indexOf('</span>', start)));
+    expect(branch).toContain('<span');
+    expect(branch).not.toMatch(/tabIndex/);
+    expect(branch).not.toMatch(/role=/);
+    expect(branch).not.toMatch(/onClick/);
+    expect(branch).not.toMatch(/href/);
+  });
+
+  it('keeps target=_blank only on the branch that HAS a url', () => {
+    const source = chat();
+    expect(source).not.toMatch(/target=\{url \? '_blank' : undefined\}/);
+    expect(source).toMatch(/href=\{url\}\s*\n\s*target="_blank"/);
+  });
+
+  it('the chip class is themed by variables the panel redefines in dark mode', () => {
+    const css = readFileSync(
+      new URL('../../components/features/syllabus-bot/styles.css', import.meta.url),
+      'utf8'
+    );
+    expect(css).toMatch(/\.askmoji-ref \{[\s\S]*?var\(--am-ref-bg\)/);
+    expect(css).toMatch(/\.dark \.askmoji-panel/);
   });
 });
 
@@ -37,9 +159,9 @@ describe('normalizeAssistantText', () => {
   });
 
   it('collapses [page:Title] to the title', () => {
-    expect(normalizeAssistantText('According to the [page:Course Schedule], Exam 2 is on Oct 22.')).toBe(
-      'According to the Course Schedule, Exam 2 is on Oct 22.'
-    );
+    expect(
+      normalizeAssistantText('According to the [page:Course Schedule], Exam 2 is on Oct 22.')
+    ).toBe('According to the Course Schedule, Exam 2 is on Oct 22.');
   });
 
   it('leaves ordinary markdown alone', () => {
