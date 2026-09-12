@@ -1942,3 +1942,68 @@ model ContentIndex {
   @@index([classroom_id, source_path])
   @@map("content_index")
 }
+
+/// Semantic index over the PRODUCT DOCUMENTATION — `classmoji.io/docs`, the
+/// `.mdx` files under `apps/site/src/content/docs` in the public monorepo.
+///
+/// A SECOND, CLASSROOM-INDEPENDENT CORPUS. `ContentIndex` above is per
+/// classroom and cascades with it; this table has no `classroom_id`, no FK and
+/// no visibility columns, because the documentation is one fleet-wide public
+/// website. That difference is the whole reason it is a separate table rather
+/// than a fourth `doc_kind`: a global row in a per-classroom table would have
+/// to opt out of every tenancy filter the search statements are built around.
+///
+/// `slug` IS the identity and IS the URL path: `docs/instructors/roster`
+/// renders at `https://classmoji.io/docs/instructors/roster`. Derived from the
+/// repo path minus `.mdx` and a trailing `/index`, so the id a search hit hands
+/// back is also the link the widget shows.
+///
+/// Freshness is the same triple as `content_index` —
+/// (source_sha, extract_version, embed_model) — and `isFresh` is literally the
+/// same function. `source_sha` is the git blob sha of the `.mdx` at index time.
+///
+/// Chunking is kept for the same three reasons it exists next door, even though
+/// every page fits in one chunk today (the largest is 7,976 characters against
+/// a 24,576-character budget that is itself env-overridable DOWNWARD):
+/// `chunk_count` is what lets `isFresh` spot a half-written document, the
+/// composite PK makes the upsert idempotent, and a page past the cap would
+/// otherwise be refused and silently never index.
+model DocsIndex {
+  /// The URL path under classmoji.io, e.g. `docs/instructors/roster`. No
+  /// leading slash, no `.mdx`, no trailing `/index`.
+  slug            String
+  /// 0 for a whole-document row; otherwise this chunk's ordinal in reading
+  /// order. Part of the primary key.
+  chunk_ix        Int                          @default(0)
+  /// How many chunks this page produced (1 when it fit in one call). Stamped on
+  /// every chunk so a partial write reads as stale rather than as complete.
+  chunk_count     Int                          @default(1)
+  /// Frontmatter `title`. Required — a page without one is refused by the
+  /// extractor rather than indexed under a guess.
+  title           String
+  /// Frontmatter `description`. Optional in principle; present on all 25 today.
+  description     String?
+  /// The top-level docs section, or null for a page directly under the root:
+  /// `instructors`, `students`, `self-hosting`, `open-source`, `introduction`.
+  section         String?
+  /// The extracted plain text of this row — the whole page when `chunk_count`
+  /// is 1, otherwise just this chunk.
+  text            String
+  /// git blob sha of the `.mdx` the text came from.
+  source_sha      String
+  /// Version of the MDX extractor that produced `text`. Bumping it re-indexes
+  /// every page on the next run, which is the recovery path for an extractor
+  /// bug.
+  extract_version Int
+  /// The Workers AI model id the vector came from. A mismatch re-indexes:
+  /// vectors from two models are not comparable.
+  embed_model     String
+  /// Workers AI @cf/qwen/qwen3-embedding-0.6b, 1024 dimensions. Nullable
+  /// because Prisma requires `Unsupported` fields to be optional, and because a
+  /// row can be written before the embedding call succeeds.
+  embedding       Unsupported("vector(1024)")?
+  updated_at      DateTime                     @default(now()) @updatedAt
+
+  @@id([slug, chunk_ix])
+  @@map("docs_index")
+}
