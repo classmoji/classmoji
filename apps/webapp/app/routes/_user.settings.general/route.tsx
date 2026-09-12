@@ -105,9 +105,7 @@ const FieldRow = ({
 );
 
 const ReadOnlyMarker = () => (
-  <span className="inline-flex items-center gap-1 text-xs text-ink-3">
-    <LockOutlined /> Read-only
-  </span>
+  <LockOutlined className="text-xs text-ink-3" aria-label="Read-only" title="Read-only" />
 );
 
 const linkButton = 'text-xs font-medium text-accent hover:underline cursor-pointer';
