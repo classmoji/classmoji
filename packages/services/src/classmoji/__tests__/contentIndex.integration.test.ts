@@ -325,6 +325,11 @@ describe.skipIf(!RUN)('contentIndex (integration)', () => {
       fetchBody: async (_classroom, path) => bodies[path] ?? null,
     });
     expect(second).toMatchObject({ eligible: 0, indexed: 0 });
+    // And zero is READABLE: `up_to_date` is what separates "both documents are
+    // already level with the repo" from "the planner found nothing at all",
+    // which are otherwise the same all-zero report.
+    expect(second.byReason.up_to_date).toBe(2);
+    expect(second.byClassroom[0].byReason.up_to_date).toBe(2);
   });
 
   it('sweeps a row whose document is gone', async () => {
