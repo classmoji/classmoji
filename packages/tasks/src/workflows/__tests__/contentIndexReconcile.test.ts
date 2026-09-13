@@ -67,24 +67,32 @@ const backfill = contentIndexBackfillTask as unknown as TaskConfig;
 const CLASS_A = '3f2504e0-4f89-41d3-9a0c-0305e82c3301';
 const CLASS_B = '9c858901-8a57-4791-81fe-4c455b099bc9';
 
+/**
+ * A whole report, shaped exactly as the service returns one — including the
+ * `up_to_date` reason and the per-classroom `byReason` split. The task returns
+ * it VERBATIM, so this fixture is also the contract: anything that starts
+ * enumerating fields on the way out drops one of these and the passthrough
+ * assertion below goes red.
+ */
 const REPORT = {
   classrooms: 2,
   eligible: 40,
   indexed: 38,
-  skipped: 1,
+  skipped: 2,
   failed: 1,
   classroomErrors: 1,
   orphansDeleted: 2,
-  byReason: { fresh: 1, sha_mismatch: 1, classroom_error: 1 },
+  byReason: { up_to_date: 120, sha_mismatch: 1, fetch: 1, classroom_error: 1 },
   byClassroom: [
     {
       classroomId: CLASS_A,
       slug: 'cs52-26w',
       eligible: 40,
       indexed: 38,
-      skipped: 1,
+      skipped: 2,
       failed: 1,
       orphansDeleted: 2,
+      byReason: { up_to_date: 120, sha_mismatch: 1, fetch: 1 },
     },
     {
       classroomId: CLASS_B,
@@ -94,6 +102,7 @@ const REPORT = {
       skipped: 0,
       failed: 0,
       orphansDeleted: 0,
+      byReason: { classroom_error: 1 },
       error: 'repo deleted',
     },
   ],
