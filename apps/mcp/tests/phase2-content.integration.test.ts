@@ -64,6 +64,18 @@ const { mintMcpAccessToken } = await import('@classmoji/auth/mcp-token');
 const DATABASE_URL = process.env.DATABASE_URL ?? '';
 const RUN = /@(localhost|127\.0\.0\.1)[:/]/.test(DATABASE_URL);
 
+/**
+ * Every suite in this file is prefixed with this, so `vitest -t phase2-content`
+ * selects the file's tests and nothing else.
+ *
+ * Without it that flag was a FALSE GREEN: `-t` matches the concatenated
+ * describe + test name, no describe here contained the string "phase2-content"
+ * — that is the FILE's name, which `-t` never looks at — so the pattern matched
+ * zero tests, vitest exited 0, and the runbook step read as a pass for a suite
+ * that had not run. Named suites are what `-t` can actually see.
+ */
+const SUITE = 'phase2-content';
+
 const WORKERS_AI_VARS = ['CLOUDFLARE_WORKERS_AI_TOKEN', 'CLOUDFLARE_ACCOUNT_ID'] as const;
 const HAS_WORKERS_AI = WORKERS_AI_VARS.every(name => Boolean(process.env[name]));
 
@@ -484,7 +496,7 @@ const rowById = (
 
 // ─── Without Workers AI credentials: the security matrix ────────────────────
 
-describe.skipIf(!RUN)('content tools — visibility (no embedding credentials)', () => {
+describe.skipIf(!RUN)(`${SUITE} — content tools — visibility (no embedding credentials)`, () => {
   beforeAll(async () => {
     restoreEnv = withoutWorkersAi();
     server = await startServer({ attempts: 2, retryDelayMs: 10_000 });
@@ -660,7 +672,7 @@ describe.skipIf(!RUN)('content tools — visibility (no embedding credentials)',
 
 // ─── With a stubbed embedder: search itself, credential-free ────────────────
 
-describe.skipIf(!RUN)('content_search — end to end against a stubbed embedder', () => {
+describe.skipIf(!RUN)(`${SUITE} — content_search end to end against a stubbed embedder`, () => {
   beforeAll(async () => {
     // The previous block's server holds the port and has no credentials.
     await server?.stop();
@@ -896,7 +908,7 @@ describe.skipIf(!RUN)('content_search — end to end against a stubbed embedder'
 
 // ─── With Workers AI credentials: the real endpoint ─────────────────────────
 
-describe.skipIf(!RUN || !HAS_WORKERS_AI)('content_search — through real retrieval', () => {
+describe.skipIf(!RUN || !HAS_WORKERS_AI)(`${SUITE} — content_search through real retrieval`, () => {
   beforeAll(async () => {
     // The previous block's server holds the port and is pointed at the stub.
     await server?.stop();
