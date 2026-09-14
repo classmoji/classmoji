@@ -174,9 +174,35 @@ test.describe('security headers', () => {
     expect(clause.length).toBeGreaterThan('frame-ancestors '.length);
   });
 
+  test('frame-ancestors admits the webapp, the pages host and the slide viewer', () => {
+    const previous = {
+      WEBAPP_URL: process.env.WEBAPP_URL,
+      PAGES_URL: process.env.PAGES_URL,
+      SLIDES_URL: process.env.SLIDES_URL,
+    };
+    process.env.WEBAPP_URL = 'https://app.example.test';
+    process.env.PAGES_URL = 'https://pages.example.test';
+    process.env.SLIDES_URL = 'https://slides.example.test/';
+    try {
+      const csp = siteHeaders({ request: anonymous() }).get('Content-Security-Policy') ?? '';
+      const clause = csp.split('; ').find(part => part.startsWith('frame-ancestors')) ?? '';
+      // Decks embed site pages, so the slide viewer must be able to frame them.
+      expect(clause).toBe(
+        'frame-ancestors https://app.example.test https://pages.example.test https://slides.example.test'
+      );
+    } finally {
+      for (const [key, value] of Object.entries(previous)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
+  });
+
   test('noindex is opt-in', () => {
     expect(siteHeaders({ request: anonymous() }).get('X-Robots-Tag')).toBeNull();
-    expect(siteHeaders({ request: anonymous(), noindex: true }).get('X-Robots-Tag')).toBe('noindex');
+    expect(siteHeaders({ request: anonymous(), noindex: true }).get('X-Robots-Tag')).toBe(
+      'noindex'
+    );
   });
 });
 
