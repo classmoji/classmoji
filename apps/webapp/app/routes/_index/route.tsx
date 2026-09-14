@@ -1,7 +1,8 @@
-import { redirect } from 'react-router';
+import { data, redirect } from 'react-router';
 
 import { Alert } from 'antd';
 import { auth } from '@classmoji/auth/server';
+import getPrisma from '@classmoji/database';
 import { isSafeRelativePath } from '@classmoji/auth/site-return';
 import { authClient } from '@classmoji/auth/client';
 import SignInPage from './SignInPage';
@@ -32,6 +33,29 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
   const session = await auth.api.getSession({ headers: request.headers });
 
   if (session?.user) {
+    // A session can outlive its user: the cookie cache serves it for up to a
+    // day after the row is gone (deleted account, dev DB reset). Sending that
+    // browser into the app loops it between here, the picker, and
+    // registration, so end the session instead and show the sign-in page.
+    const exists = await getPrisma().user.findUnique({
+      where: { id: session.user.id },
+      select: { id: true },
+    });
+    if (!exists) {
+      const signOut = await auth.api.signOut({ headers: request.headers, returnHeaders: true });
+      // Render sign-in directly with the cookie-clearing headers, rather than
+      // redirecting to ourselves and trusting the cookies to have cleared.
+      return data(
+        {
+          isDev: process.env.NODE_ENV === 'development',
+          multipleTokens: process.env.MULTIPLE_TOKENS === 'true',
+          setupComplete: false,
+          redirectPath,
+        },
+        { headers: signOut.headers }
+      );
+    }
+
     // Already signed in: honour the destination they were headed for, e.g. an
     // in-flight /site-return?token=… bounce.
     return redirect(redirectPath ?? '/select-organization');
