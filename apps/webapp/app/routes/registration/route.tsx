@@ -15,6 +15,7 @@ import {
   isEmailVerificationCodeValid,
   consumeEmailVerificationCode,
 } from '~/utils/emailVerification.server';
+import { verifyInviteToken, inviteTokenMatchesEmail } from '@classmoji/auth/invite-token';
 
 export const loader = async ({ request }: Route.LoaderArgs) => {
   const authData = await getAuthSession(request);
@@ -183,32 +184,44 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
     return redirect('/select-organization');
   }
 
-  // From the roster invite link, via the picker (#343). Prefilled, not locked:
-  // the code step still proves whichever address they end up with.
-  const rawInvited = new URL(request.url).searchParams.get('email')?.trim() ?? '';
-  const invitedEmail =
-    rawInvited.length <= 254 && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(rawInvited) ? rawInvited : null;
+  // From the roster invite link (#343). Opening that mail already proved the
+  // address, so the token stands in for the code — for that address only. A
+  // token that fails to verify is simply ignored and the code flow applies.
+  const inviteToken = new URL(request.url).searchParams.get('invite');
+  const invite = inviteToken ? verifyInviteToken(inviteToken) : null;
 
   return {
     githubLogin: githubUser.login,
     githubId: String(githubUser.id),
     githubEmail: githubUser.email || null,
-    invitedEmail,
+    invitedEmail: invite?.email ?? null,
+    inviteToken: invite ? inviteToken : null,
   };
 };
 
 const Registration = ({ loaderData }: Route.ComponentProps) => {
-  const { githubLogin, githubId, githubEmail, invitedEmail } = loaderData;
+  const { githubLogin, githubId, githubEmail, invitedEmail, inviteToken } = loaderData;
   const fetcher = useFetcher();
   const codeFetcher = useFetcher();
   const verifyFetcher = useFetcher();
   const navigate = useNavigate();
   const [form] = Form.useForm();
-  const [verifiedEmail, setVerifiedEmail] = useState(null);
+  // An invite token pre-verifies the invited address. Choosing a different
+  // address drops it, and the code flow takes over for the new one.
+  const [useInvite, setUseInvite] = useState(inviteToken !== null);
+  const [verifiedEmail, setVerifiedEmail] = useState<string | null>(
+    inviteToken ? invitedEmail : null
+  );
 
   const codeSent = codeFetcher.data?.codeSent === true;
   const emailVerified = verifyFetcher.data?.verified === true || verifiedEmail !== null;
   const verifyError = verifyFetcher.data?.verifyError;
+
+  const useDifferentEmail = () => {
+    setUseInvite(false);
+    setVerifiedEmail(null);
+    form.setFieldsValue({ email: '' });
+  };
 
   const isSubmitting = ['submitting', 'loading'].includes(fetcher.state);
   const actionError = fetcher.data?.error;
@@ -248,7 +261,7 @@ const Registration = ({ loaderData }: Route.ComponentProps) => {
 
   const onFinish = (values: Record<string, unknown>) => {
     fetcher.submit(
-      { ...values, githubEmail, intent: 'register' },
+      { ...values, githubEmail, intent: 'register', invite_token: useInvite ? inviteToken : null },
       {
         method: 'POST',
         encType: 'application/json',
@@ -318,6 +331,19 @@ const Registration = ({ loaderData }: Route.ComponentProps) => {
                 )}
               </Space.Compact>
             </Form.Item>
+
+            {useInvite && emailVerified && (
+              <p className="-mt-1 mb-4 text-xs text-gray-500">
+                Verified through your invitation.{' '}
+                <button
+                  type="button"
+                  onClick={useDifferentEmail}
+                  className="text-accent hover:underline cursor-pointer"
+                >
+                  Use a different email
+                </button>
+              </p>
+            )}
 
             {!emailVerified && codeSent && (
               <div className="mb-6">
@@ -457,7 +483,10 @@ export const action = async ({ request }: Route.ActionArgs) => {
   }
 
   // ── Register (re-validate + create user) ────────────────────────────────
-  if (!(await consumeEmailVerificationCode(formData.email, formData.code))) {
+  // Either a signed invite token for exactly this address, or a code.
+  const invite = formData.invite_token ? verifyInviteToken(formData.invite_token) : null;
+  const provenByInvite = invite !== null && inviteTokenMatchesEmail(invite, formData.email);
+  if (!provenByInvite && !(await consumeEmailVerificationCode(formData.email, formData.code))) {
     return { error: 'Verification code is invalid or expired. Please verify your email again.' };
   }
 

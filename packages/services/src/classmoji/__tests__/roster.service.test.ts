@@ -46,6 +46,7 @@ describe('roster.addStudents', () => {
 
     const result = await roster.addStudents({
       classroomId: 'class-1',
+      signInvite: email => `tok(${email})`,
       students: [
         { email: 'known@x.edu', name: 'K' },
         { email: 'new@x.edu', name: 'New' },
@@ -78,20 +79,21 @@ describe('roster.addStudents', () => {
     expect(result.emails[1].payload.template.variables.CLASSROOM_NAME).toBe('CS1');
   });
 
-  it('sends invitees a link that carries their invited address', async () => {
+  it('sends invitees a link that carries a signed token for their address', async () => {
     // The link used to be the same for everyone, so a student who retyped a
     // different address at sign-up never matched their invite (#343).
     userFindMany.mockResolvedValue([]);
 
     const result = await roster.addStudents({
       classroomId: 'class-1',
+      signInvite: email => `tok(${email})`,
       students: [{ email: 'New.Student@x.edu', name: 'New' }],
     });
 
     const url = result.emails[0].payload.template.variables.APP_URL as string;
     const outer = new URL(url.replace(/&amp;/g, '&'));
     const target = outer.searchParams.get('redirect');
-    expect(target).toBe('/select-organization?invite_email=New.Student%40x.edu');
+    expect(target).toBe('/select-organization?invite=tok(New.Student%40x.edu)');
   });
 
   it('escapes user-authored names before they become template variables', async () => {
@@ -101,6 +103,7 @@ describe('roster.addStudents', () => {
 
     const result = await roster.addStudents({
       classroomId: 'class-1',
+      signInvite: email => `tok(${email})`,
       students: [{ email: 'new@x.edu', name: '<b>Mallory</b>' }],
     });
 
@@ -115,6 +118,7 @@ describe('roster.addStudents', () => {
 
     const result = await roster.addStudents({
       classroomId: 'class-1',
+      signInvite: email => `tok(${email})`,
       students: [{ email: 'noname@x.edu' }],
     });
 
@@ -126,6 +130,7 @@ describe('roster.addStudents', () => {
 
     const result = await roster.addStudents({
       classroomId: 'class-1',
+      signInvite: email => `tok(${email})`,
       students: [{ email: 'A@X.edu' }],
     });
 
@@ -137,7 +142,11 @@ describe('roster.addStudents', () => {
   it('throws when the classroom does not exist', async () => {
     classroomFindById.mockResolvedValue(null);
     await expect(
-      roster.addStudents({ classroomId: 'nope', students: [{ email: 'a@x.edu' }] })
+      roster.addStudents({
+        classroomId: 'nope',
+        students: [{ email: 'a@x.edu' }],
+        signInvite: () => 'tok',
+      })
     ).rejects.toThrow(/classroom/);
   });
 });

@@ -237,11 +237,11 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
         if (!user && !isPublicRoute) {
           const params = new URLSearchParams();
           if (url.pathname !== '/') params.set('next', url.pathname);
-          // A roster invite link lands on the picker with the invited address;
-          // this redirect fires before that loader, so hand the address to
-          // registration here or the field is never prefilled (#343).
-          const inviteEmail = url.searchParams.get('invite_email');
-          if (inviteEmail) params.set('email', inviteEmail);
+          // A roster invite link lands on the picker with a signed invite token;
+          // this redirect fires before that loader, so hand the token to
+          // registration here or the address is never prefilled (#343).
+          const invite = url.searchParams.get('invite');
+          if (invite) params.set('invite', invite);
           const qs = params.toString();
           return redirect(`/registration${qs ? `?${qs}` : ''}`);
         }

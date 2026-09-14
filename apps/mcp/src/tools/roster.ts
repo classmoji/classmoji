@@ -23,6 +23,7 @@
  */
 
 import { buildRemoveUserPayload, ClassmojiService } from '@classmoji/services';
+import { signInviteToken } from '@classmoji/auth/invite-token';
 import Tasks from '@classmoji/tasks';
 import { tasks } from '@trigger.dev/sdk';
 import { z } from 'zod';
@@ -68,6 +69,7 @@ export const rosterAddStudentTool: ToolDefinition<RosterAddStudentArgs> = {
     const result = await ClassmojiService.roster.addStudents({
       classroomId: classroom.classroomId,
       students: args.students,
+      signInvite: email => signInviteToken({ email, classroomId: classroom.classroomId }),
     });
 
     // Audit BEFORE sending emails: addStudents has already committed the

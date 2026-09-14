@@ -5,6 +5,7 @@ import { useCallout } from '@classmoji/ui-components';
 
 import { useUser, useDisclosure, useGlobalFetcher } from '~/hooks';
 import { getAuthSession, clearRevokedToken } from '@classmoji/auth/server';
+import { verifyInviteToken } from '@classmoji/auth/invite-token';
 import { checkAuth } from '~/utils/helpers';
 import { hashHue } from '~/utils/hue';
 
@@ -44,13 +45,11 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
 
   if (!authData?.token && !authData?.userId) return redirect('/');
 
-  // Set by the roster invite link (#343). Bounded and shape-checked because it
-  // is user-controllable and goes back out in a redirect and on screen.
-  const rawInviteEmail = new URL(request.url).searchParams.get('invite_email')?.trim() ?? '';
-  const inviteEmail =
-    rawInviteEmail.length <= 254 && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(rawInviteEmail)
-      ? rawInviteEmail
-      : null;
+  // Set by the roster invite link (#343): a signed token naming the invited
+  // address. Anything that does not verify is treated as absent.
+  const inviteToken = new URL(request.url).searchParams.get('invite');
+  const invite = inviteToken ? verifyInviteToken(inviteToken) : null;
+  const inviteEmail = invite?.email ?? null;
 
   // Try to find user by ID first (avoids GitHub API call if user exists)
   let user = null;
@@ -59,9 +58,12 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
   }
 
   if (!user?.email) {
-    // Hand the invited address to registration so it is prefilled there.
+    // Hand the token to registration: it prefills the address and stands in
+    // for the verification code.
     return redirect(
-      inviteEmail ? `/registration?email=${encodeURIComponent(inviteEmail)}` : '/registration'
+      invite && inviteToken
+        ? `/registration?invite=${encodeURIComponent(inviteToken)}`
+        : '/registration'
     );
   }
 
@@ -346,7 +348,7 @@ const SelectOrganization = ({ loaderData }: Route.ComponentProps) => {
       action: { label: 'Change email', onClick: () => navigate('/settings/general') },
     });
     const next = new URLSearchParams(searchParams);
-    next.delete('invite_email');
+    next.delete('invite');
     setSearchParams(next, { replace: true });
     // `callout` is stable per CalloutProvider; see the removed-toast effect above.
     // eslint-disable-next-line react-hooks/exhaustive-deps

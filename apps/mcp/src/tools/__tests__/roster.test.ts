@@ -91,6 +91,7 @@ describe('roster_add_student', () => {
     expect(mocks.addStudents).toHaveBeenCalledWith({
       classroomId: 'class-1',
       students: ARGS.students,
+      signInvite: expect.any(Function),
     });
     // One batched request for the whole roster, not one per recipient.
     expect(mocks.batchTrigger).toHaveBeenCalledTimes(1);

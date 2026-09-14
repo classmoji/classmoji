@@ -44,9 +44,15 @@ export interface AddStudentsResult {
 export const addStudents = async ({
   classroomId,
   students,
+  signInvite,
 }: {
   classroomId: string;
   students: RosterStudentInput[];
+  /**
+   * Mints the signed token the invite link carries for an address. Injected
+   * because signing lives in @classmoji/auth, which depends on this package.
+   */
+  signInvite: (email: string) => string;
 }): Promise<AddStudentsResult> => {
   const classroom = await classroomService.findById(classroomId);
   if (!classroom) {
@@ -122,10 +128,11 @@ export const addStudents = async ({
             variables: escapeVars({
               STUDENT_NAME: student.name || 'there',
               CLASSROOM_NAME: classroom.name,
-              // Carries the invited address so sign-up can prefill it: the
-              // link used to be the same for everyone, and students retyping
-              // a different address at registration never got their invite.
-              APP_URL: inviteLandingUrl(student.email),
+              // Carries a signed token for the invited address, which sign-up
+              // accepts as proof of it: the link used to be the same for
+              // everyone, and students retyping a different address at
+              // registration never got their invite.
+              APP_URL: inviteLandingUrl(signInvite(student.email)),
             }),
           },
         },
