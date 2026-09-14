@@ -61,6 +61,17 @@ import {
   type OrderConflict,
 } from '~/components/preview/PreviewControls';
 
+/**
+ * The in-app URL for a file in a classroom's content repo. Everything the
+ * editor shows a user goes through the content proxy route (`/content/…`),
+ * never straight to GitHub: the proxy serves private repos and the content
+ * delivery layer, and fixes MIME types. A raw.githubusercontent.com link, which
+ * is what the ContentService hands back, is a broken image the moment the repo
+ * is private — which is how the "clean up unused images" thumbnails went blank.
+ */
+const contentProxyUrl = (orgLogin: string, repo: string, path: string) =>
+  `/content/${orgLogin}/${repo}/${path}`;
+
 // Loader to fetch slide metadata and content from database/GitHub
 export const loader = async ({
   params,
@@ -938,7 +949,7 @@ export const action = async ({
       return {
         intent: 'upload-image',
         success: true,
-        url: `/content/${gitOrgLogin}/${repo}/${result.path}`,
+        url: contentProxyUrl(gitOrgLogin, repo, result.path),
         path: result.path,
       };
     } catch (error: unknown) {
@@ -1510,12 +1521,14 @@ export const action = async ({
 
       let orphanedImages: Array<{ path: string; name: string; url: string }> = [];
       try {
-        orphanedImages = await ContentService.findOrphanedImages({
-          orgLogin: gitOrgLogin,
-          repo,
-          imagesFolder: `${slide.content_path}/images`,
-          htmlContent: result.html,
-        });
+        orphanedImages = (
+          await ContentService.findOrphanedImages({
+            orgLogin: gitOrgLogin,
+            repo,
+            imagesFolder: `${slide.content_path}/images`,
+            htmlContent: result.html,
+          })
+        ).map(image => ({ ...image, url: contentProxyUrl(gitOrgLogin, repo, image.path) }));
       } catch (err: unknown) {
         console.error('Failed to detect orphaned images:', err);
       }
@@ -1705,12 +1718,14 @@ export const action = async ({
     // Check for orphaned images after save
     let orphanedImages: Array<{ path: string; name: string; url: string }> = [];
     try {
-      orphanedImages = await ContentService.findOrphanedImages({
-        orgLogin: gitOrgLogin,
-        repo,
-        imagesFolder: `${slide.content_path}/images`,
-        htmlContent: saved.html,
-      });
+      orphanedImages = (
+        await ContentService.findOrphanedImages({
+          orgLogin: gitOrgLogin,
+          repo,
+          imagesFolder: `${slide.content_path}/images`,
+          htmlContent: saved.html,
+        })
+      ).map(image => ({ ...image, url: contentProxyUrl(gitOrgLogin, repo, image.path) }));
     } catch (err: unknown) {
       // Don't fail the save if orphan detection fails
       console.error('Failed to detect orphaned images:', err);

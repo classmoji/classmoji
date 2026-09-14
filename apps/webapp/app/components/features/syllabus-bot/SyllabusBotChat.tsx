@@ -1,8 +1,9 @@
 import { useRef, useEffect, useState, useCallback } from 'react';
-import { IconChevronRight, IconFileText, IconBook, IconHelp, IconFile } from '@tabler/icons-react';
+import { IconChevronRight } from '@tabler/icons-react';
 import ReactMarkdown from 'react-markdown';
 import rehypeHighlight from 'rehype-highlight';
-import { buildContentReferenceUrl, normalizeAssistantText } from '~/utils/contentReferenceUrl';
+import { normalizeAssistantText } from '~/utils/contentReferenceUrl';
+import ContentReferenceChips from './ContentReferenceChips';
 
 interface ChatMessage {
   id: string;
@@ -172,15 +173,6 @@ const SyllabusBotChat = ({
     });
   }, []);
 
-  const getReferenceIcon = (type: string) => {
-    switch (type) {
-      case 'page': return <IconFileText size={13} />;
-      case 'slides': return <IconBook size={13} />;
-      case 'platform_docs': return <IconHelp size={13} />;
-      default: return <IconFile size={13} />;
-    }
-  };
-
   const hasUserMessages = messages.some(m => m.role === 'user');
   const visibleMessages = messages.filter(m => !(m.id === 'welcome' && !hasUserMessages));
   const lastAssistantId = [...visibleMessages].reverse().find(m => m.role === 'assistant')?.id;
@@ -191,7 +183,9 @@ const SyllabusBotChat = ({
       <div className="askmoji-body" onClick={() => inputRef.current?.focus()}>
         {/* Course header */}
         <div className="askmoji-course-name">{courseName}</div>
-        <div className="askmoji-course-sub">Ask about assignments, deadlines, tokens, or the syllabus.</div>
+        <div className="askmoji-course-sub">
+          Ask about assignments, deadlines, tokens, or the syllabus.
+        </div>
 
         {/* Hints (empty state) */}
         {!hasUserMessages && suggestedQuestions.length > 0 && (
@@ -215,7 +209,7 @@ const SyllabusBotChat = ({
         )}
 
         {/* Messages */}
-        {visibleMessages.map((msg) => (
+        {visibleMessages.map(msg => (
           <div key={msg.id}>
             {msg.role === 'user' ? (
               <div className="askmoji-msg askmoji-msg--user">
@@ -228,7 +222,7 @@ const SyllabusBotChat = ({
                 isLatest={msg.id === lastAssistantId && !revealedIds.has(msg.id)}
                 onRevealDone={() => markRevealed(msg.id)}
               >
-                {(text) => (
+                {text => (
                   <div className="askmoji-msg askmoji-msg--moji">
                     <ReactMarkdown
                       rehypePlugins={[rehypeHighlight]}
@@ -241,7 +235,9 @@ const SyllabusBotChat = ({
                           !href || href.startsWith('content://') || href === '#' ? (
                             <span>{children}</span>
                           ) : (
-                            <a href={href} target="_blank" rel="noopener noreferrer">{children}</a>
+                            <a href={href} target="_blank" rel="noopener noreferrer">
+                              {children}
+                            </a>
                           ),
                         ul: ({ children }) => <ul>{children}</ul>,
                         ol: ({ children }) => <ol>{children}</ol>,
@@ -252,24 +248,13 @@ const SyllabusBotChat = ({
                     </ReactMarkdown>
 
                     {/* Content references -- only show after fully revealed */}
-                    {revealedIds.has(msg.id) && msg.references && msg.references.length > 0 && (
-                      <div className="askmoji-refs">
-                        {msg.references.map((ref, idx) => {
-                          const url = buildContentReferenceUrl(ref, classroomSlug, slidesUrl, pagesUrl);
-                          return (
-                            <a
-                              key={idx}
-                              href={url || '#'}
-                              target={url ? '_blank' : undefined}
-                              rel="noopener noreferrer"
-                              className="askmoji-ref"
-                            >
-                              {getReferenceIcon(ref.referenceType)}
-                              {ref.displayText}
-                            </a>
-                          );
-                        })}
-                      </div>
+                    {revealedIds.has(msg.id) && (
+                      <ContentReferenceChips
+                        references={msg.references ?? []}
+                        classroomSlug={classroomSlug}
+                        slidesUrl={slidesUrl}
+                        pagesUrl={pagesUrl}
+                      />
                     )}
                   </div>
                 )}

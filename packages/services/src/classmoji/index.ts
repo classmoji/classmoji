@@ -76,6 +76,8 @@ import * as contentAssetsService from './contentAssets.service.ts';
 import * as contentDeliveryService from './contentDelivery.service.ts';
 import * as contentIndexService from './contentIndex.service.ts';
 import * as contentSearchService from './contentSearch.service.ts';
+import * as docsIndexService from './docsIndex.service.ts';
+import * as docsSearchService from './docsSearch.service.ts';
 import * as deckRenderTokenService from './deckRenderToken.service.ts';
 import * as deckThumbnailContract from './deckThumbnail.contract.ts';
 import * as deckThumbnailService from './deckThumbnail.service.ts';
@@ -141,6 +143,12 @@ const ClassmojiService = {
   contentDelivery: contentDeliveryService,
   contentIndex: contentIndexService,
   contentSearch: contentSearchService,
+  // The PRODUCT DOCUMENTATION index — a second, classroom-independent corpus.
+  // Namespaced beside `contentIndex` rather than folded into it because it
+  // writes a different table with no `classroom_id`, and the one thing that
+  // must never happen is a global row reaching a per-classroom statement.
+  docsIndex: docsIndexService,
+  docsSearch: docsSearchService,
   deckRenderToken: deckRenderTokenService,
   // One namespace, two files. They read as a single thing to a caller
   // (`deckThumbnail.thumbnailPathFor`, `deckThumbnail.enqueueDeckThumbnail`)

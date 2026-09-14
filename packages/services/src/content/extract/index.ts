@@ -25,6 +25,16 @@ import { extractDeckHtmlText, extractPageHtmlText } from './html.ts';
 export type { ContentReference } from './blocknote.ts';
 export { KNOWN_BLOCK_TYPES } from './blocknote.ts';
 
+// The documentation extractor, re-exported through the SAME subpath so callers
+// need only one import specifier for "turn bytes into indexable text". It is
+// pure string work — no cheerio — but it rides this barrel because
+// `docsIndex.service.ts` reaches it by the same dynamic `await import()` the
+// course indexer uses, and a second subpath would be a second thing to keep in
+// step. `MDX_EXTRACT_VERSION` is the single version authority for the docs
+// corpus; nothing else may declare one.
+export { extractMdxText, MDX_EXTRACT_VERSION, KNOWN_MDX_COMPONENTS } from './mdx.ts';
+export type { ExtractedMdx } from './mdx.ts';
+
 export type ExtractSource =
   /**
    * `pages/<slug>/content.json`. Both stored shapes are accepted — the

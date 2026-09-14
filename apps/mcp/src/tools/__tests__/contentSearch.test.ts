@@ -27,9 +27,15 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Prisma } from '@prisma/client';
-import { beforeEach, describe, expect, it, vi, afterEach } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ToolError } from '../../mcp/errors.ts';
-import { toolAnnotations, type ToolContext, type ToolDefinition } from '../../mcp/registry.ts';
+import {
+  buildMcpServer,
+  registerToolDefinition,
+  toolAnnotations,
+  type ToolContext,
+  type ToolDefinition,
+} from '../../mcp/registry.ts';
 
 const mocks = vi.hoisted(() => ({
   embedTexts: vi.fn(),
@@ -63,8 +69,16 @@ vi.mock('@classmoji/services', async () => {
   const real = await vi.importActual<
     typeof import('../../../../../packages/services/src/classmoji/contentSearch.service.ts')
   >('../../../../../packages/services/src/classmoji/contentSearch.service.ts');
+  // The REAL docs read service too, for the same reason: what these tests are
+  // about is that the tool forwards to the right corpus and shapes the result,
+  // and a hand-written `searchDocs` stub would agree with a handler that built
+  // a nonsense statement.
+  const docs = await vi.importActual<
+    typeof import('../../../../../packages/services/src/classmoji/docsSearch.service.ts')
+  >('../../../../../packages/services/src/classmoji/docsSearch.service.ts');
   return {
     ...real,
+    ...docs,
     ClassmojiService: {
       contentDelivery: {
         fetchContentText: (...args: unknown[]) => mocks.fetchContentText(...args),
@@ -78,6 +92,8 @@ const { prismaCalls, prismaCallsFor, resetPrismaStub, setPrismaRaw, setPrismaRow
   await import('../../__tests__/prismaSchemaStub.ts');
 const { EMBEDDING_DIMENSIONS, WorkersAiError } =
   await import('../../../../../packages/services/src/helpers/workersAi.ts');
+const { MAX_LIST_LIMIT, MAX_SEARCH_LIMIT } =
+  await import('../../../../../packages/services/src/classmoji/contentSearch.service.ts');
 
 // ─── Fixtures ───────────────────────────────────────────────────────────────
 
@@ -721,5 +737,522 @@ describe('content_get', () => {
       0
     );
     expect(mocks.fetchContentText).not.toHaveBeenCalled();
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// TWO CORPORA BEHIND THE SAME THREE TOOLS
+//
+// The failure this block exists for is not "docs search does not work" — it is
+// the two lanes LEAKING into each other. A `scope: 'docs'` call that reaches
+// `searchContent` answers a platform question out of one classroom's material;
+// a default call that reaches `searchDocs` answers a course question out of the
+// product manual. Both are confident, plausible and wrong.
+// ═══════════════════════════════════════════════════════════════════════════
+
+/** Which raw statement a stubbed answer belongs to, keyed by a SQL fragment. */
+type RawAnswers = Array<[fragment: string, rows: unknown[]]>;
+
+/** Install a raw handler that dispatches on the statement's own text. */
+const answerRawBy = (answers: RawAnswers): void => {
+  setPrismaRaw((parts: unknown[]) => {
+    rawStatements.push(parts);
+    const sql = (parts as string[]).join(' ');
+    for (const [fragment, rows] of answers) if (sql.includes(fragment)) return rows;
+    return [];
+  });
+};
+
+const DOCS_ROW = {
+  slug: 'docs/instructors/roster',
+  chunkIx: 0,
+  title: 'Manage your roster',
+  description: 'How to add students and teaching staff',
+  section: 'instructors',
+  snippet: 'Go to the Teaching Staff tab and click New staff member.',
+  score: 0.91,
+};
+
+const COURSE_ROW = {
+  docKind: 'page' as const,
+  docId: PAGE_ID,
+  chunkIx: 0,
+  title: 'Course Policies',
+  snippet: 'Late work is accepted for 48 hours.',
+  score: 0.8,
+  isDraft: null,
+};
+
+/** Every raw statement issued, as one string, for "did it touch that table". */
+const allSql = (): string => rawStatements.map(parts => (parts as string[]).join(' ')).join('\n');
+
+describe('scope selects the corpus, and the two never leak into each other', () => {
+  it('defaults to the COURSE corpus and never touches docs_index', async () => {
+    answerRawBy([['content_index', [COURSE_ROW]]]);
+
+    const payload = await call(
+      contentSearchTool,
+      { classroom: 'o/c', query: 'late work' },
+      STUDENT
+    );
+
+    expect(payload.count).toBe(1);
+    expect((payload.hits as Array<Record<string, unknown>>)[0].kind).toBe('page');
+    expect(allSql()).toContain('content_index');
+    expect(allSql()).not.toContain('docs_index');
+  });
+
+  it("scope: 'docs' reads docs_index and never touches content_index", async () => {
+    answerRawBy([['docs_index', [DOCS_ROW]]]);
+
+    const payload = await call(
+      contentSearchTool,
+      { classroom: 'o/c', query: 'where do I add a TA', scope: 'docs' },
+      STUDENT
+    );
+
+    expect(payload.count).toBe(1);
+    expect(allSql()).toContain('docs_index');
+    expect(allSql()).not.toContain('content_index');
+  });
+
+  it("shapes a docs hit as kind 'doc' with the slug as id and a real url", async () => {
+    answerRawBy([['docs_index', [DOCS_ROW]]]);
+
+    const payload = await call(
+      contentSearchTool,
+      { classroom: 'o/c', query: 'where do I add a TA', scope: 'docs' },
+      STUDENT
+    );
+
+    const [hit] = payload.hits as Array<Record<string, unknown>>;
+    expect(hit.kind).toBe('doc');
+    expect(hit.id).toBe('docs/instructors/roster');
+    expect(hit.title).toBe('Manage your roster');
+    expect(hit.section).toBe('instructors');
+    // The id and the link are the same string by construction, so a citation
+    // and the chip under it cannot disagree.
+    expect(hit.url).toBe('https://classmoji.io/docs/instructors/roster');
+    expect(hit.snippet).toContain('Teaching Staff');
+    // No course-only fields leak across.
+    expect(Object.keys(hit)).not.toContain('isDraft');
+    expect(Object.keys(hit)).not.toContain('source_path');
+  });
+
+  it("scope: 'docs' still embeds the query exactly as the course lane does", async () => {
+    answerRawBy([['docs_index', [DOCS_ROW]]]);
+    await call(
+      contentSearchTool,
+      { classroom: 'o/c', query: 'how do tokens work', scope: 'docs' },
+      STUDENT
+    );
+    expect(mocks.embedTexts).toHaveBeenCalledWith(['how do tokens work']);
+  });
+
+  it('reports an embedding failure on the DOCS lane with the same marker', async () => {
+    // Not a docs-specific message: "retrieval is down" is the same fact in both
+    // corpora, and a second vocabulary for it is a second thing to get wrong.
+    mocks.isWorkersAiConfigured.mockReturnValue(false);
+
+    const payload = await call(
+      contentSearchTool,
+      { classroom: 'o/c', query: 'anything', scope: 'docs' },
+      STUDENT
+    );
+
+    expect(payload.unavailable).toBe('embedding_not_configured');
+    expect(String(payload.message)).toMatch(/not an empty result set/i);
+    expect(allSql()).not.toContain('docs_index');
+  });
+
+  it('bounds BOTH scopes at the number the service actually clamps to', async () => {
+    // `content_search` and `content_list` each have ONE `limit` field covering
+    // both corpora, so each schema can name exactly one ceiling — the course
+    // one. The docs read service used to declare its own copy of every bound at
+    // the same five values and export them to nobody, which made "the schema
+    // refuses where the service clamps" true only by coincidence: editing the
+    // docs copy would have moved the clamp and left the refusal behind, with no
+    // test anywhere to notice. There is now ONE constant per bound.
+    const bound = (tool: typeof contentSearchTool | typeof contentListTool, value: unknown) =>
+      (
+        tool.inputSchema as unknown as Record<
+          string,
+          { safeParse(v: unknown): { success: boolean } }
+        >
+      ).limit.safeParse(value).success;
+
+    expect(bound(contentSearchTool, MAX_SEARCH_LIMIT)).toBe(true);
+    expect(bound(contentSearchTool, MAX_SEARCH_LIMIT + 1)).toBe(false);
+    expect(bound(contentListTool, MAX_LIST_LIMIT)).toBe(true);
+    expect(bound(contentListTool, MAX_LIST_LIMIT + 1)).toBe(false);
+
+    // And the ceiling the schema accepts reaches the docs statement UNCLAMPED,
+    // which is what makes the two thresholds the same number rather than two
+    // numbers that happen to agree.
+    answerRawBy([['docs_index', [DOCS_ROW]]]);
+    await call(
+      contentSearchTool,
+      { classroom: 'o/c', query: 'how do tokens work', scope: 'docs', limit: MAX_SEARCH_LIMIT },
+      STUDENT
+    );
+    expect(paramsOf(lastStatement())).toContain(MAX_SEARCH_LIMIT);
+
+    rawStatements = [];
+    answerRawBy([['content_index', [COURSE_ROW]]]);
+    await call(
+      contentSearchTool,
+      { classroom: 'o/c', query: 'late work', limit: MAX_SEARCH_LIMIT },
+      STUDENT
+    );
+    expect(paramsOf(lastStatement())).toContain(MAX_SEARCH_LIMIT);
+  });
+
+  it('leaves the docs service no second copy of a bound to drift from', () => {
+    // The negative space of the test above. A `MAX_DOCS_SEARCH_LIMIT` declared
+    // here again would compile, pass every other test, and silently reopen the
+    // gap the moment somebody changed its value.
+    const source = readFileSync(
+      path.resolve(
+        path.dirname(fileURLToPath(import.meta.url)),
+        '../../../../../packages/services/src/classmoji/docsSearch.service.ts'
+      ),
+      'utf8'
+    );
+    const declarations = source.match(/^export const [A-Z_]+/gm) ?? [];
+    // One export, and it is the search floor — not a bound the tool schema has
+    // to mirror.
+    expect(declarations).toEqual(['export const DOCS_SEARCH_MIN_CHARS']);
+  });
+
+  it("scope: 'docs' lists from docs_index, default lists from the course records", async () => {
+    answerRawBy([['docs_index', [{ ...DOCS_ROW, updatedAt: new Date('2026-09-12T00:00:00Z') }]]]);
+    const docs = await call(contentListTool, { classroom: 'o/c', scope: 'docs' }, STUDENT);
+    expect((docs.items as Array<Record<string, unknown>>)[0].kind).toBe('doc');
+    expect((docs.items as Array<Record<string, unknown>>)[0].url).toBe(
+      'https://classmoji.io/docs/instructors/roster'
+    );
+
+    rawStatements = [];
+    answerRawBy([['pages', []]]);
+    await call(contentListTool, { classroom: 'o/c' }, STUDENT);
+    expect(allSql()).not.toContain('docs_index');
+  });
+});
+
+describe('kind and scope: docs are refused together, never silently reconciled', () => {
+  it.each([['page'], ['slide'], ['file']] as const)(
+    "refuses kind '%s' with scope: 'docs'",
+    async kind => {
+      const refusal = await refusalOf(() =>
+        call(
+          contentSearchTool,
+          { classroom: 'o/c', query: 'anything', scope: 'docs', kind },
+          STUDENT
+        )
+      );
+      expect(refusal.error).toBe('invalid_params');
+      expect(refusal.message).toMatch(/has no meaning for scope: 'docs'/);
+    }
+  );
+
+  it('refuses the pair on content_list too', async () => {
+    const refusal = await refusalOf(() =>
+      call(contentListTool, { classroom: 'o/c', scope: 'docs', kind: 'page' }, STUDENT)
+    );
+    expect(refusal.error).toBe('invalid_params');
+  });
+
+  it('refuses BEFORE running anything, so no statement is issued', async () => {
+    await refusalOf(() =>
+      call(
+        contentSearchTool,
+        { classroom: 'o/c', query: 'anything', scope: 'docs', kind: 'page' },
+        STUDENT
+      )
+    );
+    expect(mocks.embedTexts).not.toHaveBeenCalled();
+    expect(rawStatements).toHaveLength(0);
+  });
+
+  it('still accepts kind on the COURSE lane', async () => {
+    answerRawBy([['content_index', [COURSE_ROW]]]);
+    const payload = await call(
+      contentSearchTool,
+      { classroom: 'o/c', query: 'late work', kind: 'page' },
+      STUDENT
+    );
+    expect(payload.count).toBe(1);
+  });
+});
+
+describe('an unbuilt docs index is an UNAVAILABLE, not an empty result', () => {
+  it('carries the marker and a message that does not claim no search was run', async () => {
+    answerRawBy([
+      ['docs_index di', []],
+      ['NOT EXISTS', [{ empty: true }]],
+    ]);
+
+    const payload = await call(
+      contentSearchTool,
+      { classroom: 'o/c', query: 'anything', scope: 'docs' },
+      STUDENT
+    );
+
+    expect(payload.unavailable).toBe('docs_index_empty');
+    expect(payload.hits).toEqual([]);
+    expect(String(payload.message)).toMatch(/has not been built on this deployment/);
+    expect(String(payload.message)).toMatch(/not an empty result set/i);
+    // A search WAS run on this branch. Saying otherwise is simply false, and it
+    // is the sentence the course lane uses for a DIFFERENT state.
+    expect(String(payload.message)).not.toMatch(/no search was run/);
+  });
+
+  it('is never an error — the caller can still answer around it', async () => {
+    answerRawBy([
+      ['docs_index di', []],
+      ['NOT EXISTS', [{ empty: true }]],
+    ]);
+    await expect(
+      contentSearchTool.handler({ classroom: 'o/c', query: 'anything', scope: 'docs' }, STUDENT)
+    ).resolves.toBeDefined();
+  });
+
+  it('reports a genuinely empty ANSWER as empty when the index is populated', async () => {
+    answerRawBy([
+      ['docs_index di', []],
+      ['NOT EXISTS', [{ empty: false }]],
+    ]);
+
+    const payload = await call(
+      contentSearchTool,
+      { classroom: 'o/c', query: 'quantum tunnelling', scope: 'docs' },
+      STUDENT
+    );
+
+    expect(payload.count).toBe(0);
+    expect(payload.unavailable).toBeUndefined();
+    expect(payload.message).toBeUndefined();
+  });
+
+  it('does NOT ask whether the index is empty when there are hits', async () => {
+    // One statement, not two: the emptiness probe exists only to explain an
+    // absence, and running it on every successful search is a query per call
+    // for an answer nobody reads.
+    answerRawBy([['docs_index', [DOCS_ROW]]]);
+
+    await call(contentSearchTool, { classroom: 'o/c', query: 'roster', scope: 'docs' }, STUDENT);
+
+    expect(allSql()).not.toContain('NOT EXISTS');
+  });
+
+  it('marks an empty docs LISTING the same way', async () => {
+    answerRawBy([
+      ['docs_index di', []],
+      ['NOT EXISTS', [{ empty: true }]],
+    ]);
+    const payload = await call(contentListTool, { classroom: 'o/c', scope: 'docs' }, STUDENT);
+    expect(payload.unavailable).toBe('docs_index_empty');
+    expect(payload.items).toEqual([]);
+  });
+});
+
+describe('content_get with kind: doc', () => {
+  it('returns the page text, its canonical url, and no course-only fields', async () => {
+    answerRawBy([
+      [
+        'docs_index di',
+        [
+          {
+            slug: 'docs/instructors/roster',
+            title: 'Manage your roster',
+            description: 'How to add students',
+            section: 'instructors',
+            text: 'Go to the Teaching Staff tab and click New staff member.',
+            chunkCount: 1,
+            updatedAt: new Date('2026-09-12T00:00:00Z'),
+          },
+        ],
+      ],
+    ]);
+
+    const payload = await call(
+      contentGetTool,
+      { classroom: 'o/c', kind: 'doc', id: 'docs/instructors/roster' },
+      STUDENT
+    );
+
+    expect(payload.kind).toBe('doc');
+    expect(payload.id).toBe('docs/instructors/roster');
+    expect(payload.url).toBe('https://classmoji.io/docs/instructors/roster');
+    expect(String(payload.text)).toContain('Teaching Staff');
+    expect(Object.keys(payload)).not.toContain('source_path');
+    expect(Object.keys(payload)).not.toContain('isDraft');
+  });
+
+  it('refuses a missing page distinctly, because docs are public', async () => {
+    answerRawBy([['docs_index di', []]]);
+
+    const refusal = await refusalOf(() =>
+      call(contentGetTool, { classroom: 'o/c', kind: 'doc', id: 'docs/nope' }, STUDENT)
+    );
+
+    expect(refusal.error).toBe('not_found');
+    // NOT the uniform `scopedNotFound('Content')` wording. That one is uniform
+    // to stop a student enumerating drafts by watching which ids answer
+    // differently; documentation is global and public, so there is nothing to
+    // enumerate.
+    expect(refusal.message).toBe('Documentation page not found');
+    expect(refusal.message).not.toMatch(/in this classroom/);
+  });
+
+  it('never falls back to a live fetch for a doc', async () => {
+    answerRawBy([['docs_index di', []]]);
+    await refusalOf(() =>
+      call(contentGetTool, { classroom: 'o/c', kind: 'doc', id: 'docs/nope' }, STUDENT)
+    );
+    // The course lane reads the content repo when its index lags. Documentation
+    // exists ONLY in the index, so a fallback would be an on-demand fetch of a
+    // caller-supplied path from github.com.
+    expect(mocks.fetchContentText).not.toHaveBeenCalled();
+    // Keyed (model, method) — the stub's own signature. A single dotted string
+    // silently matches nothing, which is a passing assertion about nothing.
+    expect(prismaCallsFor('page', 'findFirst')).toHaveLength(0);
+    expect(prismaCallsFor('slide', 'findFirst')).toHaveLength(0);
+  });
+});
+
+describe('the instrumentation line carries the corpus, and still never the query', () => {
+  it("logs scope 'docs' and the doc ids, not the text asked for", async () => {
+    answerRawBy([['docs_index', [DOCS_ROW]]]);
+
+    await call(
+      contentSearchTool,
+      { classroom: 'o/c', query: 'where do I add a teaching assistant', scope: 'docs' },
+      STUDENT
+    );
+
+    const line = searchLog();
+    expect(line.scope).toBe('docs');
+    expect(line.result_count).toBe(1);
+    expect(line.results).toEqual(['doc:docs/instructors/roster']);
+    expect(line.query_chars).toBe('where do I add a teaching assistant'.length);
+    // The whole point of logging a LENGTH: what a student typed is not kept.
+    expect(loggedLines.join('\n')).not.toContain('teaching assistant');
+  });
+
+  it("logs scope 'course' by default, with the course ids", async () => {
+    answerRawBy([['content_index', [COURSE_ROW]]]);
+    await call(contentSearchTool, { classroom: 'o/c', query: 'late work' }, STUDENT);
+
+    const line = searchLog();
+    expect(line.scope).toBe('course');
+    expect(line.results).toEqual([`page:${PAGE_ID}`]);
+  });
+
+  it('logs the marker when the docs index is unbuilt', async () => {
+    answerRawBy([
+      ['docs_index di', []],
+      ['NOT EXISTS', [{ empty: true }]],
+    ]);
+    await call(contentSearchTool, { classroom: 'o/c', query: 'anything', scope: 'docs' }, STUDENT);
+
+    const line = searchLog();
+    expect(line.scope).toBe('docs');
+    expect(line.unavailable).toBe('docs_index_empty');
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// THE SCHEMAS AS A CLIENT ACTUALLY SEES THEM
+//
+// Everything above reads `contentSearchTool.inputSchema` — the object this file
+// exports. That is not what a model is handed. The registry converts the zod
+// raw shape to JSON Schema and publishes it over `tools/list`, and the SDK
+// validates every call against the converted copy. A zod shape that is correct
+// in TypeScript and unconvertible, or a tool the registry declines to register
+// at all, looks perfect to every assertion above and is invisible to a client.
+//
+// So this block registers the three REAL definitions and drives a REAL
+// McpServer over the SDK's in-memory transport, the same way registry.test.ts
+// does.
+// ═══════════════════════════════════════════════════════════════════════════
+
+describe('the schemas the registry publishes', () => {
+  let listed: Array<{ name: string; description?: string; inputSchema: Record<string, unknown> }>;
+
+  beforeAll(async () => {
+    const { Client } = await import('@modelcontextprotocol/sdk/client/index.js');
+    const { InMemoryTransport } = await import('@modelcontextprotocol/sdk/inMemory.js');
+
+    for (const tool of [contentSearchTool, contentListTool, contentGetTool]) {
+      registerToolDefinition(tool as unknown as ToolDefinition<never>);
+    }
+
+    const server = buildMcpServer({
+      userId: 'schema-viewer',
+      clientId: 'schema-test',
+      scopes: new Set(['read']),
+    } as never);
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: 'schema-test', version: '0.0.0' });
+    await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+
+    listed = (await client.listTools()).tools as typeof listed;
+  });
+
+  const toolNamed = (name: string) => {
+    const tool = listed.find(entry => entry.name === name);
+    expect(tool, `${name} must be registered`).toBeDefined();
+    return tool as (typeof listed)[number];
+  };
+
+  const propertiesOf = (name: string): Record<string, { enum?: string[] }> =>
+    (toolNamed(name).inputSchema.properties ?? {}) as Record<string, { enum?: string[] }>;
+
+  it('registers all three, so a schema that will not convert fails here', () => {
+    expect(listed.map(entry => entry.name)).toEqual(
+      expect.arrayContaining(['content_search', 'content_list', 'content_get'])
+    );
+  });
+
+  it('publishes the two corpus values on search and list', () => {
+    for (const name of ['content_search', 'content_list']) {
+      expect(propertiesOf(name).scope?.enum).toEqual(['course', 'docs']);
+    }
+  });
+
+  it("keeps `kind` on search and list at the three COURSE kinds — no 'doc'", () => {
+    // Widening the shared `kindArg` would make `kind: 'doc'` a legal FILTER on
+    // search and list, where it means nothing, and would carry the same
+    // widening into the live fallback.
+    for (const name of ['content_search', 'content_list']) {
+      expect(propertiesOf(name).kind?.enum).toEqual(['page', 'slide', 'file']);
+    }
+  });
+
+  it("gives content_get its own four-value kind, including 'doc'", () => {
+    expect(propertiesOf('content_get').kind?.enum).toEqual(['page', 'slide', 'file', 'doc']);
+  });
+
+  it('does NOT offer a scope argument on content_get', () => {
+    // `kind` already selects the corpus there; a second, redundant selector is
+    // a second thing for a model to get inconsistent with itself.
+    expect(propertiesOf('content_get').scope).toBeUndefined();
+  });
+
+  it('describes both corpora in every description, so the choice is not a guess', () => {
+    for (const name of ['content_search', 'content_list']) {
+      const description = String(toolNamed(name).description);
+      expect(description).toMatch(/classmoji\.io/);
+      expect(description).toMatch(/scope: 'docs'/);
+      expect(description).toMatch(/this classroom/i);
+    }
+    expect(String(toolNamed('content_get').description)).toMatch(/kind: 'doc'/);
+  });
+
+  it('still says an `unavailable` field is not an absence of material', () => {
+    expect(String(toolNamed('content_search').description)).toMatch(
+      /NOT the same as "nothing found"/
+    );
   });
 });

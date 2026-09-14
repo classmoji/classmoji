@@ -103,13 +103,31 @@ export function FormCanvas({
   );
 }
 
-/** The form's own title and description, above the fields. */
-export function FormHeader({ title, description }: { title: string; description?: string | null }) {
+/**
+ * The form's own title and description, above the fields.
+ *
+ * `whitespace-pre-line` because the builder edits the description in a
+ * textarea: a line break typed there should still be one here.
+ */
+export function FormHeader({
+  title,
+  description,
+  as: Heading = 'h1',
+}: {
+  title: string;
+  description?: string | null;
+  /** `h2` where the header is not the page's own, as in the builder's preview. */
+  as?: 'h1' | 'h2';
+}) {
   return (
     <header className="mb-7">
-      <h1 className="text-2xl font-bold tracking-tight text-gray-900 dark:text-white">{title}</h1>
+      <Heading className="text-2xl font-bold tracking-tight text-gray-900 dark:text-white">
+        {title}
+      </Heading>
       {description ? (
-        <p className="mt-2 text-sm text-gray-600 dark:text-gray-300">{description}</p>
+        <p className="mt-2 whitespace-pre-line text-sm text-gray-600 dark:text-gray-300">
+          {description}
+        </p>
       ) : null}
     </header>
   );
