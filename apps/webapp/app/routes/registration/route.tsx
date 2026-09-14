@@ -310,20 +310,29 @@ const Registration = ({ loaderData }: Route.ComponentProps) => {
                   {emailVerified && <CheckCircleFilled style={{ color: '#22c55e' }} />}
                 </span>
               }
-              name="email"
-              rules={[
-                { required: true, message: 'Please enter your school email' },
-                { type: 'email', message: 'Please enter a valid email address' },
-              ]}
+              required
               className="mb-3"
             >
+              {/* The field is its own Form.Item so the Input is the direct child
+                  and receives the form value. Wrapped in Space.Compact it did
+                  not: the value landed on Compact's div, so typing worked but a
+                  prefilled address (invite link) never showed. */}
               <Space.Compact style={{ width: '100%' }}>
-                <Input
-                  placeholder="your.email@university.edu"
-                  prefix={<MailOutlined className="text-gray-400" />}
-                  readOnly={emailVerified}
-                  className={emailVerified ? 'bg-gray-50' : ''}
-                />
+                <Form.Item
+                  name="email"
+                  noStyle
+                  rules={[
+                    { required: true, message: 'Please enter your school email' },
+                    { type: 'email', message: 'Please enter a valid email address' },
+                  ]}
+                >
+                  <Input
+                    placeholder="your.email@university.edu"
+                    prefix={<MailOutlined className="text-gray-400" />}
+                    readOnly={emailVerified}
+                    className={emailVerified ? 'bg-gray-50' : ''}
+                  />
+                </Form.Item>
                 {!emailVerified && (
                   <Button onClick={handleSendCode} loading={codeFetcher.state === 'submitting'}>
                     {codeSent ? 'Resend' : 'Send Code'}
