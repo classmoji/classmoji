@@ -103,3 +103,142 @@ export const collapseSchools = (
     .slice(0, limit);
   return personal ? [...schools, personal] : schools;
 };
+
+// ───────── countries ─────────
+
+/**
+ * Country-code TLDs to names. Not exhaustive; anything missing renders as the
+ * upper-cased code, which is still more useful than "Unknown".
+ */
+const CC_TLD: Record<string, string> = {
+  ar: 'Argentina',
+  at: 'Austria',
+  au: 'Australia',
+  be: 'Belgium',
+  br: 'Brazil',
+  ca: 'Canada',
+  ch: 'Switzerland',
+  cl: 'Chile',
+  cn: 'China',
+  co: 'Colombia',
+  cz: 'Czechia',
+  de: 'Germany',
+  dk: 'Denmark',
+  eg: 'Egypt',
+  es: 'Spain',
+  fi: 'Finland',
+  fr: 'France',
+  gh: 'Ghana',
+  gr: 'Greece',
+  hk: 'Hong Kong',
+  hu: 'Hungary',
+  id: 'Indonesia',
+  ie: 'Ireland',
+  il: 'Israel',
+  in: 'India',
+  it: 'Italy',
+  jp: 'Japan',
+  ke: 'Kenya',
+  kr: 'South Korea',
+  ma: 'Morocco',
+  mx: 'Mexico',
+  my: 'Malaysia',
+  ng: 'Nigeria',
+  nl: 'Netherlands',
+  no: 'Norway',
+  nz: 'New Zealand',
+  pe: 'Peru',
+  ph: 'Philippines',
+  pk: 'Pakistan',
+  pl: 'Poland',
+  pt: 'Portugal',
+  ro: 'Romania',
+  rw: 'Rwanda',
+  sa: 'Saudi Arabia',
+  se: 'Sweden',
+  sg: 'Singapore',
+  sn: 'Senegal',
+  th: 'Thailand',
+  tn: 'Tunisia',
+  tr: 'Turkey',
+  tw: 'Taiwan',
+  ua: 'Ukraine',
+  uk: 'United Kingdom',
+  us: 'United States',
+  vn: 'Vietnam',
+  za: 'South Africa',
+};
+
+/** US-administered generic TLDs: an .edu is a US school in practice. */
+const US_TLDS = new Set(['edu', 'gov', 'mil']);
+
+export const UNKNOWN_COUNTRY = 'Unknown';
+
+/** Best-effort country for a mail domain from its TLD alone. */
+export const countryForDomain = (domain: string): string => {
+  const tld = domain.trim().toLowerCase().split('.').filter(Boolean).at(-1) ?? '';
+  if (US_TLDS.has(tld)) return CC_TLD.us;
+  if (tld.length === 2) return CC_TLD[tld] ?? tld.toUpperCase();
+  return UNKNOWN_COUNTRY;
+};
+
+export interface CountryRow {
+  country: string;
+  users: number;
+  instructors: number;
+}
+
+/** Per-country totals, largest first, mailbox providers excluded, Unknown last. */
+export const rollupCountries = (
+  rows: Array<{ domain: string; users: number; instructors: number }>
+): CountryRow[] => {
+  const byCountry = new Map<string, CountryRow>();
+  for (const row of rows) {
+    const school = registrableDomain(row.domain);
+    if (!school || PERSONAL_DOMAINS.has(school)) continue;
+    const country = countryForDomain(school);
+    const acc = byCountry.get(country) ?? { country, users: 0, instructors: 0 };
+    acc.users += row.users;
+    acc.instructors += row.instructors;
+    byCountry.set(country, acc);
+  }
+  return [...byCountry.values()].sort((a, b) => {
+    if (a.country === UNKNOWN_COUNTRY) return 1;
+    if (b.country === UNKNOWN_COUNTRY) return -1;
+    return b.users - a.users || a.country.localeCompare(b.country);
+  });
+};
+
+// ───────── class sizes ─────────
+
+export const SIZE_BUCKETS = [
+  { label: '0', min: 0, max: 0 },
+  { label: '1–10', min: 1, max: 10 },
+  { label: '11–30', min: 11, max: 30 },
+  { label: '31–100', min: 31, max: 100 },
+  { label: '100+', min: 101, max: Infinity },
+] as const;
+
+/** Count classrooms per student-count bucket, in SIZE_BUCKETS order. */
+export const bucketClassSizes = (sizes: number[]): number[] =>
+  SIZE_BUCKETS.map(b => sizes.filter(n => n >= b.min && n <= b.max).length);
+
+// ───────── medians ─────────
+
+/** Median of a list, or null when empty. Interpolates between the two middles. */
+export const median = (values: number[]): number | null => {
+  if (values.length === 0) return null;
+  const sorted = [...values].sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+};
+
+/** "3.5h", "2d", "3w": a duration in hours as one short unit. */
+export const formatHours = (hours: number | null): string => {
+  if (hours === null) return '—';
+  if (hours < 1) return '<1h';
+  if (hours < 48) return `${Math.round(hours)}h`;
+  const days = hours / 24;
+  if (days < 21) return `${Math.round(days)}d`;
+  return `${Math.round(days / 7)}w`;
+};

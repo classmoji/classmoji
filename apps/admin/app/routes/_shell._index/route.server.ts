@@ -1,7 +1,18 @@
 import type { LoaderFunctionArgs } from 'react-router';
 
 import { prisma, requirePlatformAdmin } from '~/utils/db.server';
-import { buildWeeklyBins, countByWeek, collapseSchools, type SchoolRow } from '~/utils/dashboard';
+import {
+  buildWeeklyBins,
+  countByWeek,
+  collapseSchools,
+  rollupCountries,
+  countryForDomain,
+  bucketClassSizes,
+  median,
+  SIZE_BUCKETS,
+  type SchoolRow,
+  type CountryRow,
+} from '~/utils/dashboard';
 
 const WEEKS = 12;
 const TOP_SCHOOLS = 10;
@@ -63,7 +74,32 @@ export interface DashboardData {
     signups: number[];
     classrooms: number[];
   };
-  schools: SchoolRow[];
+  schools: Array<SchoolRow & { country: string }>;
+  countries: CountryRow[];
+  /** Active classrooms per student-count bucket, SIZE_BUCKETS order. */
+  classSizes: Array<{ label: string; count: number }>;
+  onboarding: {
+    /** Median hours from an instructor's signup to their first real classroom. */
+    hoursToFirstClassroom: number | null;
+    /** Median hours from a classroom's creation to its first assignment. */
+    hoursToFirstAssignment: number | null;
+    /** Students added to real classrooms in the last 30 days, and how many accepted the Github invite. */
+    studentsAdded30d: number;
+    studentsAccepted30d: number;
+    /** Email invites nobody has claimed yet, and how many are older than a week. */
+    invitesPending: number;
+    invitesStale: number;
+    /** Instructors with a session in the last 14 days, over all instructors. */
+    instructorsActive14d: number;
+  };
+  ai: {
+    conversations7d: number;
+    conversations30d: number;
+    classroomsUsingAi30d: number;
+    /** Weekly counts aligned with growth.weeks. */
+    conversations: number[];
+    quizAttempts: number[];
+  };
   /** Active classrooms using each feature, largest share first. */
   features: { total: number; rows: Array<{ key: string; label: string; count: number }> };
   largestClasses: Array<{ slug: string; name: string; org: string | null; students: number }>;
@@ -81,6 +117,10 @@ interface DomainCountRow {
   domain: string;
   users: bigint;
   instructors: bigint;
+}
+
+interface HoursRow {
+  hours: number;
 }
 
 export async function loadDashboard({ request }: LoaderFunctionArgs): Promise<DashboardData> {
@@ -110,6 +150,18 @@ export async function loadDashboard({ request }: LoaderFunctionArgs): Promise<Da
     recentUsers,
     recentClassrooms,
     featureCounts,
+    hoursToClassroomRows,
+    hoursToAssignmentRows,
+    studentsAdded30d,
+    studentsAccepted30d,
+    invitesPending,
+    invitesStale,
+    instructorsActive14d,
+    conversations7d,
+    conversations30d,
+    aiClassrooms30d,
+    conversationDates,
+    quizAttemptDates,
   ] = await Promise.all([
     prisma.user.count({ where: instructorWhere }),
     prisma.user.count({ where: studentWhere }),
@@ -153,6 +205,7 @@ export async function loadDashboard({ request }: LoaderFunctionArgs): Promise<Da
       select: {
         slug: true,
         name: true,
+        is_archived: true,
         git_organization: { select: { login: true } },
         _count: { select: { memberships: { where: { role: 'STUDENT' } } } },
       },
@@ -177,7 +230,69 @@ export async function loadDashboard({ request }: LoaderFunctionArgs): Promise<Da
     Promise.all(
       FEATURES.map(f => prisma.classroom.count({ where: { ...activeClassroom, ...f.where } }))
     ),
+    // Per instructor: signup to the first real classroom they own.
+    prisma.$queryRaw<HoursRow[]>`
+      SELECT EXTRACT(EPOCH FROM (min(c.created_at) - u.created_at)) / 3600 AS hours
+      FROM users u
+      JOIN classroom_memberships m ON m.user_id = u.id AND m.role = 'OWNER'
+      JOIN classrooms c ON c.id = m.classroom_id AND c.is_example = false
+      WHERE EXISTS (SELECT 1 FROM accounts a WHERE a.user_id = u.id)
+      GROUP BY u.id, u.created_at
+    `,
+    // Per classroom: creation to its first assignment.
+    prisma.$queryRaw<HoursRow[]>`
+      SELECT EXTRACT(EPOCH FROM (min(r.created_at) - c.created_at)) / 3600 AS hours
+      FROM classrooms c
+      JOIN repositories r ON r.classroom_id = c.id
+      WHERE c.is_example = false
+      GROUP BY c.id, c.created_at
+    `,
+    prisma.classroomMembership.count({
+      where: { role: 'STUDENT', classroom: realClassroom, created_at: { gte: d30 } },
+    }),
+    prisma.classroomMembership.count({
+      where: {
+        role: 'STUDENT',
+        classroom: realClassroom,
+        created_at: { gte: d30 },
+        has_accepted_invite: true,
+      },
+    }),
+    prisma.classroomInvite.count({ where: { classroom: realClassroom } }),
+    prisma.classroomInvite.count({
+      where: { classroom: realClassroom, created_at: { lt: d7 } },
+    }),
+    prisma.user.count({
+      where: { ...instructorWhere, sessions: { some: { updated_at: { gte: d14 } } } },
+    }),
+    prisma.aIConversation.count({
+      where: { classroom: realClassroom, started_at: { gte: d7 } },
+    }),
+    prisma.aIConversation.count({
+      where: { classroom: realClassroom, started_at: { gte: d30 } },
+    }),
+    prisma.aIConversation.groupBy({
+      by: ['classroom_id'],
+      where: { classroom: realClassroom, started_at: { gte: d30 } },
+    }),
+    prisma.aIConversation.findMany({
+      where: { classroom: realClassroom, started_at: { gte: windowStart } },
+      select: { started_at: true },
+    }),
+    prisma.quizAttempt.findMany({
+      where: { quiz: { classroom: realClassroom }, started_at: { gte: windowStart } },
+      select: { started_at: true },
+    }),
   ]);
+
+  const domainCounts = domainRows.map(r => ({
+    domain: r.domain,
+    users: Number(r.users),
+    instructors: Number(r.instructors),
+  }));
+  const sizeCounts = bucketClassSizes(
+    classesWithCounts.filter(c => !c.is_archived).map(c => c._count.memberships)
+  );
 
   const features = {
     total: activeClassrooms,
@@ -219,14 +334,34 @@ export async function loadDashboard({ request }: LoaderFunctionArgs): Promise<Da
         bins
       ),
     },
-    schools: collapseSchools(
-      domainRows.map(r => ({
-        domain: r.domain,
-        users: Number(r.users),
-        instructors: Number(r.instructors),
-      })),
-      TOP_SCHOOLS
-    ),
+    schools: collapseSchools(domainCounts, TOP_SCHOOLS).map(row => ({
+      ...row,
+      country: countryForDomain(row.school),
+    })),
+    countries: rollupCountries(domainCounts),
+    classSizes: SIZE_BUCKETS.map((b, i) => ({ label: b.label, count: sizeCounts[i] })),
+    onboarding: {
+      hoursToFirstClassroom: median(hoursToClassroomRows.map(r => Number(r.hours))),
+      hoursToFirstAssignment: median(hoursToAssignmentRows.map(r => Number(r.hours))),
+      studentsAdded30d,
+      studentsAccepted30d,
+      invitesPending,
+      invitesStale,
+      instructorsActive14d,
+    },
+    ai: {
+      conversations7d,
+      conversations30d,
+      classroomsUsingAi30d: aiClassrooms30d.length,
+      conversations: countByWeek(
+        conversationDates.map(c => c.started_at),
+        bins
+      ),
+      quizAttempts: countByWeek(
+        quizAttemptDates.map(q => q.started_at),
+        bins
+      ),
+    },
     features,
     largestClasses,
     recentUsers: recentUsers.map(u => ({

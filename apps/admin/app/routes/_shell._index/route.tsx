@@ -1,5 +1,6 @@
 import { Link, useLoaderData } from 'react-router';
 
+import { formatHours } from '~/utils/dashboard';
 import { loadDashboard, type DashboardData } from './route.server';
 
 export const loader = loadDashboard;
@@ -126,6 +127,36 @@ const WeeklyBars = ({ weeks, values }: { weeks: string[]; values: number[] }) =>
   );
 };
 
+/** Label, a proportional bar, and the number: one row of a horizontal bar list. */
+const BarRow = ({
+  label,
+  value,
+  max,
+  detail,
+}: {
+  label: string;
+  value: number;
+  max: number;
+  detail: string;
+}) => (
+  <li className="grid grid-cols-[8rem_1fr_auto] items-center gap-3 text-sm">
+    <span className="text-ink-1 truncate">{label}</span>
+    <span
+      className="h-2 rounded-full bg-line overflow-hidden"
+      role="img"
+      aria-label={`${label}: ${detail}`}
+    >
+      <span
+        className="block h-full rounded-full bg-accent"
+        style={{ width: `${max > 0 ? (100 * value) / max : 0}%` }}
+      />
+    </span>
+    <span className="text-xs text-ink-2 tabular-nums w-24 text-right">{detail}</span>
+  </li>
+);
+
+const pct = (n: number, d: number) => (d > 0 ? Math.round((100 * n) / d) : 0);
+
 const initials = (u: { name: string | null; login: string | null }) =>
   (u.name ?? u.login ?? '?')
     .split(/\s+/)
@@ -138,7 +169,20 @@ const initials = (u: { name: string | null; login: string | null }) =>
 
 const AdminDashboard = () => {
   const data = useLoaderData<DashboardData>();
-  const { tiles, growth, schools, features, largestClasses, recentUsers, recentClassrooms } = data;
+  const {
+    tiles,
+    growth,
+    schools,
+    countries,
+    classSizes,
+    onboarding,
+    ai,
+    features,
+    largestClasses,
+    recentUsers,
+    recentClassrooms,
+  } = data;
+  const maxSize = Math.max(...classSizes.map(b => b.count), 0);
   const total30 = growth.signups.reduce((a, b) => a + b, 0);
 
   return (
@@ -188,30 +232,15 @@ const AdminDashboard = () => {
           <Empty>No active classrooms yet.</Empty>
         ) : (
           <ul className="grid gap-x-8 gap-y-2 md:grid-cols-2">
-            {features.rows.map(f => {
-              const pct = Math.round((100 * f.count) / features.total);
-              return (
-                <li
-                  key={f.key}
-                  className="grid grid-cols-[8rem_1fr_auto] items-center gap-3 text-sm"
-                >
-                  <span className="text-ink-1 truncate">{f.label}</span>
-                  <span
-                    className="h-2 rounded-full bg-line overflow-hidden"
-                    role="img"
-                    aria-label={`${f.label}: ${pct}%`}
-                  >
-                    <span
-                      className="block h-full rounded-full bg-accent"
-                      style={{ width: `${pct}%` }}
-                    />
-                  </span>
-                  <span className="text-xs text-ink-2 tabular-nums w-20 text-right">
-                    {pct}% · {f.count}/{features.total}
-                  </span>
-                </li>
-              );
-            })}
+            {features.rows.map(f => (
+              <BarRow
+                key={f.key}
+                label={f.label}
+                value={f.count}
+                max={features.total}
+                detail={`${pct(f.count, features.total)}% · ${f.count}/${features.total}`}
+              />
+            ))}
           </ul>
         )}
       </Card>
@@ -225,6 +254,7 @@ const AdminDashboard = () => {
               <thead>
                 <tr className="text-left text-[11px] uppercase tracking-wider text-ink-4">
                   <TH>School</TH>
+                  <TH>Country</TH>
                   <TH right>Users</TH>
                   <TH right>Instructors</TH>
                 </tr>
@@ -233,6 +263,7 @@ const AdminDashboard = () => {
                 {schools.map(s => (
                   <tr key={s.school} className="border-t border-line">
                     <td className="py-2 pr-4 text-ink-0 font-medium">{s.school}</td>
+                    <td className="py-2 pr-4 text-ink-2 text-xs">{s.country}</td>
                     <td className="py-2 pl-4 text-right tabular-nums text-ink-1">{s.users}</td>
                     <td className="py-2 pl-4 text-right tabular-nums text-ink-1">
                       {s.instructors}
@@ -242,6 +273,114 @@ const AdminDashboard = () => {
               </tbody>
             </table>
           )}
+        </Card>
+
+        <Card title="Countries" aside="from email TLD; .edu counts as US">
+          {countries.length === 0 ? (
+            <Empty>No school emails yet.</Empty>
+          ) : (
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-left text-[11px] uppercase tracking-wider text-ink-4">
+                  <TH>Country</TH>
+                  <TH right>Users</TH>
+                  <TH right>Instructors</TH>
+                </tr>
+              </thead>
+              <tbody>
+                {countries.map(c => (
+                  <tr key={c.country} className="border-t border-line">
+                    <td className="py-2 pr-4 text-ink-0 font-medium">{c.country}</td>
+                    <td className="py-2 pl-4 text-right tabular-nums text-ink-1">{c.users}</td>
+                    <td className="py-2 pl-4 text-right tabular-nums text-ink-1">
+                      {c.instructors}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </Card>
+      </div>
+
+      <Card title="Onboarding" aside="how far people get, and how fast">
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+          <div>
+            <div className="text-[11px] uppercase tracking-wider text-ink-4">
+              Signup → first classroom
+            </div>
+            <div className="text-2xl font-semibold text-ink-0 tabular-nums mt-1">
+              {formatHours(onboarding.hoursToFirstClassroom)}
+            </div>
+            <div className="text-xs text-ink-3">median, per instructor</div>
+          </div>
+          <div>
+            <div className="text-[11px] uppercase tracking-wider text-ink-4">
+              Classroom → first assignment
+            </div>
+            <div className="text-2xl font-semibold text-ink-0 tabular-nums mt-1">
+              {formatHours(onboarding.hoursToFirstAssignment)}
+            </div>
+            <div className="text-xs text-ink-3">median, per classroom</div>
+          </div>
+          <div>
+            <div className="text-[11px] uppercase tracking-wider text-ink-4">
+              Students who finished joining
+            </div>
+            <div className="text-2xl font-semibold text-ink-0 tabular-nums mt-1">
+              {pct(onboarding.studentsAccepted30d, onboarding.studentsAdded30d)}%
+            </div>
+            <div className="text-xs text-ink-3">
+              {onboarding.studentsAccepted30d}/{onboarding.studentsAdded30d} added in 30 days
+              accepted the Github invite · {onboarding.invitesPending} email invites unclaimed
+              {onboarding.invitesStale > 0 ? ` (${onboarding.invitesStale} over a week old)` : ''}
+            </div>
+          </div>
+          <div>
+            <div className="text-[11px] uppercase tracking-wider text-ink-4">
+              Instructors active
+            </div>
+            <div className="text-2xl font-semibold text-ink-0 tabular-nums mt-1">
+              {pct(onboarding.instructorsActive14d, tiles.instructors)}%
+            </div>
+            <div className="text-xs text-ink-3">
+              {onboarding.instructorsActive14d}/{tiles.instructors} signed in within 14 days
+            </div>
+          </div>
+        </div>
+      </Card>
+
+      <Card
+        title="AI and quizzes"
+        aside={`${ai.conversations7d} conversations in 7 days · ${ai.conversations30d} in 30 · ${ai.classroomsUsingAi30d} classroom${ai.classroomsUsingAi30d === 1 ? '' : 's'} using Ask Moji`}
+      >
+        <div className="grid gap-6 md:grid-cols-2">
+          <div>
+            <div className="text-xs font-medium text-ink-2 mb-1">
+              Ask Moji conversations per week
+            </div>
+            <WeeklyBars weeks={growth.weeks} values={ai.conversations} />
+          </div>
+          <div>
+            <div className="text-xs font-medium text-ink-2 mb-1">Quiz attempts per week</div>
+            <WeeklyBars weeks={growth.weeks} values={ai.quizAttempts} />
+          </div>
+        </div>
+      </Card>
+
+      <div className="grid gap-4 lg:grid-cols-2">
+        <Card title="Class sizes" aside="active classrooms by students enrolled">
+          <ul className="space-y-2">
+            {classSizes.map(b => (
+              <BarRow
+                key={b.label}
+                label={`${b.label} students`}
+                value={b.count}
+                max={maxSize}
+                detail={`${b.count} class${b.count === 1 ? '' : 'es'}`}
+              />
+            ))}
+          </ul>
         </Card>
 
         <Card title="Largest classes" aside="by students enrolled">

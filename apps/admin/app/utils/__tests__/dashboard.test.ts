@@ -6,6 +6,12 @@ import {
   registrableDomain,
   collapseSchools,
   PERSONAL_EMAIL_LABEL,
+  countryForDomain,
+  rollupCountries,
+  bucketClassSizes,
+  median,
+  formatHours,
+  UNKNOWN_COUNTRY,
 } from '../dashboard.ts';
 
 const DAY = 24 * 60 * 60 * 1000;
@@ -75,5 +81,48 @@ describe('collapseSchools', () => {
     expect(collapseSchools([{ domain: 'x.edu', users: 1, instructors: 0 }], 5)).toEqual([
       { school: 'x.edu', users: 1, instructors: 0 },
     ]);
+  });
+});
+
+describe('countryForDomain / rollupCountries', () => {
+  it('reads the country off the TLD, treats .edu as US, and shrugs at .com', () => {
+    expect(countryForDomain('ulaval.ca')).toBe('Canada');
+    expect(countryForDomain('ox.ac.uk')).toBe('United Kingdom');
+    expect(countryForDomain('dartmouth.edu')).toBe('United States');
+    expect(countryForDomain('example.com')).toBe(UNKNOWN_COUNTRY);
+    expect(countryForDomain('school.xx')).toBe('XX');
+  });
+
+  it('rolls schools up by country, drops mailbox providers, keeps Unknown last', () => {
+    expect(
+      rollupCountries([
+        { domain: 'ift.ulaval.ca', users: 30, instructors: 2 },
+        { domain: 'mcgill.ca', users: 5, instructors: 1 },
+        { domain: 'dartmouth.edu', users: 40, instructors: 3 },
+        { domain: 'gmail.com', users: 99, instructors: 9 },
+        { domain: 'startup.com', users: 1, instructors: 0 },
+      ])
+    ).toEqual([
+      { country: 'United States', users: 40, instructors: 3 },
+      { country: 'Canada', users: 35, instructors: 3 },
+      { country: UNKNOWN_COUNTRY, users: 1, instructors: 0 },
+    ]);
+  });
+});
+
+describe('bucketClassSizes / median / formatHours', () => {
+  it('buckets sizes on the documented edges', () => {
+    expect(bucketClassSizes([0, 1, 10, 11, 30, 31, 100, 101, 500])).toEqual([1, 2, 2, 2, 2]);
+  });
+
+  it('computes medians and formats durations', () => {
+    expect(median([])).toBeNull();
+    expect(median([5])).toBe(5);
+    expect(median([1, 2, 3, 4])).toBe(2.5);
+    expect(formatHours(null)).toBe('—');
+    expect(formatHours(0.4)).toBe('<1h');
+    expect(formatHours(30)).toBe('30h');
+    expect(formatHours(24 * 5)).toBe('5d');
+    expect(formatHours(24 * 35)).toBe('5w');
   });
 });
