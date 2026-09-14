@@ -25,6 +25,25 @@ const instructorWhere = {
 const studentWhere = {
   classroom_memberships: { some: { role: 'STUDENT' as const, classroom: realClassroom } },
 };
+const activeClassroom = { ...realClassroom, is_archived: false } as const;
+
+/**
+ * "Uses X" = the classroom has at least one X. Cheap relation-existence
+ * counts, one per feature, all over the same active-classroom denominator.
+ */
+const FEATURES = [
+  { key: 'assignments', label: 'Assignments', where: { repositories: { some: {} } } },
+  { key: 'quizzes', label: 'Quizzes', where: { quizzes: { some: {} } } },
+  { key: 'pages', label: 'Pages', where: { pages: { some: {} } } },
+  { key: 'slides', label: 'Slides', where: { slides: { some: {} } } },
+  { key: 'forms', label: 'Forms', where: { forms: { some: {} } } },
+  { key: 'modules', label: 'Modules', where: { modules: { some: {} } } },
+  { key: 'teams', label: 'Teams', where: { teams: { some: {} } } },
+  { key: 'calendar', label: 'Calendar', where: { calendar_events: { some: {} } } },
+  { key: 'ai', label: 'Ask Moji (AI)', where: { ai_conversations: { some: {} } } },
+  { key: 'tokens', label: 'Tokens', where: { token_transactions: { some: {} } } },
+  { key: 'regrades', label: 'Regrade requests', where: { regrade_requests: { some: {} } } },
+] as const;
 
 export interface DashboardData {
   generatedAt: string;
@@ -45,6 +64,8 @@ export interface DashboardData {
     classrooms: number[];
   };
   schools: SchoolRow[];
+  /** Active classrooms using each feature, largest share first. */
+  features: { total: number; rows: Array<{ key: string; label: string; count: number }> };
   largestClasses: Array<{ slug: string; name: string; org: string | null; students: number }>;
   recentUsers: Array<{
     id: string;
@@ -88,10 +109,11 @@ export async function loadDashboard({ request }: LoaderFunctionArgs): Promise<Da
     classesWithCounts,
     recentUsers,
     recentClassrooms,
+    featureCounts,
   ] = await Promise.all([
     prisma.user.count({ where: instructorWhere }),
     prisma.user.count({ where: studentWhere }),
-    prisma.classroom.count({ where: { ...realClassroom, is_archived: false } }),
+    prisma.classroom.count({ where: activeClassroom }),
     prisma.classroom.count({ where: { ...realClassroom, is_archived: true } }),
     prisma.user.count({ where: { ...signedInUser, created_at: { gte: d7 } } }),
     prisma.user.count({ where: { ...signedInUser, created_at: { gte: d14, lt: d7 } } }),
@@ -152,7 +174,17 @@ export async function loadDashboard({ request }: LoaderFunctionArgs): Promise<Da
         git_organization: { select: { login: true } },
       },
     }),
+    Promise.all(
+      FEATURES.map(f => prisma.classroom.count({ where: { ...activeClassroom, ...f.where } }))
+    ),
   ]);
+
+  const features = {
+    total: activeClassrooms,
+    rows: FEATURES.map((f, i) => ({ key: f.key, label: f.label, count: featureCounts[i] })).sort(
+      (a, b) => b.count - a.count || a.label.localeCompare(b.label)
+    ),
+  };
 
   const largestClasses = classesWithCounts
     .map(c => ({
@@ -195,6 +227,7 @@ export async function loadDashboard({ request }: LoaderFunctionArgs): Promise<Da
       })),
       TOP_SCHOOLS
     ),
+    features,
     largestClasses,
     recentUsers: recentUsers.map(u => ({
       id: u.id,

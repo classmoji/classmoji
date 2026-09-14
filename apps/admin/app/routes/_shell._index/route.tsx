@@ -138,7 +138,7 @@ const initials = (u: { name: string | null; login: string | null }) =>
 
 const AdminDashboard = () => {
   const data = useLoaderData<DashboardData>();
-  const { tiles, growth, schools, largestClasses, recentUsers, recentClassrooms } = data;
+  const { tiles, growth, schools, features, largestClasses, recentUsers, recentClassrooms } = data;
   const total30 = growth.signups.reduce((a, b) => a + b, 0);
 
   return (
@@ -178,6 +178,42 @@ const AdminDashboard = () => {
             <WeeklyBars weeks={growth.weeks} values={growth.classrooms} />
           </div>
         </div>
+      </Card>
+
+      <Card
+        title="Feature usage"
+        aside={`share of ${features.total} active classroom${features.total === 1 ? '' : 's'}`}
+      >
+        {features.total === 0 ? (
+          <Empty>No active classrooms yet.</Empty>
+        ) : (
+          <ul className="grid gap-x-8 gap-y-2 md:grid-cols-2">
+            {features.rows.map(f => {
+              const pct = Math.round((100 * f.count) / features.total);
+              return (
+                <li
+                  key={f.key}
+                  className="grid grid-cols-[8rem_1fr_auto] items-center gap-3 text-sm"
+                >
+                  <span className="text-ink-1 truncate">{f.label}</span>
+                  <span
+                    className="h-2 rounded-full bg-line overflow-hidden"
+                    role="img"
+                    aria-label={`${f.label}: ${pct}%`}
+                  >
+                    <span
+                      className="block h-full rounded-full bg-accent"
+                      style={{ width: `${pct}%` }}
+                    />
+                  </span>
+                  <span className="text-xs text-ink-2 tabular-nums w-20 text-right">
+                    {pct}% · {f.count}/{features.total}
+                  </span>
+                </li>
+              );
+            })}
+          </ul>
+        )}
       </Card>
 
       <div className="grid gap-4 lg:grid-cols-2">
