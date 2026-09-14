@@ -235,8 +235,15 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
 
         // User authenticated with GitHub but not in our DB yet - redirect to registration
         if (!user && !isPublicRoute) {
-          const next = url.pathname !== '/' ? `?next=${encodeURIComponent(url.pathname)}` : '';
-          return redirect(`/registration${next}`);
+          const params = new URLSearchParams();
+          if (url.pathname !== '/') params.set('next', url.pathname);
+          // A roster invite link lands on the picker with a signed invite token;
+          // this redirect fires before that loader, so hand the token to
+          // registration here or the address is never prefilled (#343).
+          const invite = url.searchParams.get('invite');
+          if (invite) params.set('invite', invite);
+          const qs = params.toString();
+          return redirect(`/registration${qs ? `?${qs}` : ''}`);
         }
 
         if (user && subscription) {
