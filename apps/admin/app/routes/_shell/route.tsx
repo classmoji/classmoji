@@ -25,7 +25,8 @@ export async function loader({ request }: LoaderFunctionArgs) {
 }
 
 const TABS = [
-  { to: '/', label: 'Users', end: true },
+  { to: '/', label: 'Dashboard', end: true },
+  { to: '/users', label: 'Users', end: false },
   { to: '/classrooms', label: 'Classrooms', end: false },
   { to: '/content-delivery', label: 'Content delivery', end: false },
 ];
@@ -59,7 +60,7 @@ const AdminShell = () => {
           class switcher. This is a platform-wide tool and should not look like
           it is scoped to a classroom. */}
       <header className="border-b border-line bg-panel">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6">
+        <div className="px-4 sm:px-6">
           <div className="flex items-center justify-between gap-4 py-3">
             <div className="flex items-center gap-2.5 min-w-0">
               <span className="inline-flex items-center justify-center w-6 h-6 rounded-md bg-accent-soft text-accent-ink text-[11px] font-semibold shrink-0">
@@ -106,7 +107,7 @@ const AdminShell = () => {
         </div>
       </header>
 
-      <main className="max-w-7xl mx-auto px-4 sm:px-6 py-6">
+      <main className="px-4 sm:px-6 py-6">
         <Outlet />
       </main>
     </div>

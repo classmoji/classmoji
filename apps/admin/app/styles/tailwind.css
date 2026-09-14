@@ -24,6 +24,29 @@
   }
 }
 
+/* The shared tokens tint the page and hover surfaces blue (#eef2fb, #eef1f8),
+   which suits the classroom UI but not an admin console full of numbers. This
+   app reads as neutral gray instead: white panels on an off-white page, gray
+   hairlines and hover fills. Same tokens, overridden here; nothing else about
+   the design system changes, and dark mode keeps its (already neutral) values. */
+:root {
+  --bg-page: #fafafa;
+  --paper: #fafafa;
+  --nav-hover: #f4f4f5;
+  --line: #e4e4e7;
+  --line-cool: #e4e4e7;
+  --line-strong: #d4d4d8;
+}
+.dark {
+  --bg-page: #0a0a0a;
+  --paper: #0a0a0a;
+  --panel: #131316;
+  --nav-hover: #1c1c21;
+  --line: #27272a;
+  --line-cool: #27272a;
+  --line-strong: #3f3f46;
+}
+
 /* Root font-size drives every rem in the app — the single biggest reason the
    webapp looks the way it does. It is NOT in the shared package (the webapp
    sets it alongside a runtime override from the Tweaks panel, which this app
