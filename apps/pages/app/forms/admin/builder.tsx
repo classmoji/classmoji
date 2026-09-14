@@ -92,13 +92,9 @@ const DESCRIPTION_MAX = 5000;
 /**
  * A description as it should be stored: trimmed, and null once nothing is left,
  * so clearing the box removes the intro from the fill page instead of leaving
- * an empty paragraph behind. Anything that is not a string is treated as a
- * clear rather than reaching `.trim()`.
+ * an empty paragraph behind.
  */
-const descriptionOf = (value: unknown): string | null => {
-  const trimmed = typeof value === 'string' ? value.trim() : '';
-  return trimmed || null;
-};
+const descriptionOf = (value: string | null): string | null => value?.trim() || null;
 
 export const loader = async ({
   params,
@@ -247,6 +243,11 @@ export const action = async ({
       }
 
       case 'save-meta': {
+        // Refused rather than coerced: a malformed body must not silently wipe
+        // the intro every respondent reads.
+        if (body.description != null && typeof body.description !== 'string') {
+          return { error: 'A description must be text.' };
+        }
         const description =
           body.description !== undefined ? descriptionOf(body.description) : undefined;
         if (description && description.length > DESCRIPTION_MAX) {
@@ -306,6 +307,23 @@ export default function FormBuilder() {
   const [dirty, setDirty] = useState(false);
   const [title, setTitle] = useState(data.form.title);
   const [description, setDescription] = useState(data.form.description ?? '');
+
+  /**
+   * Adopt the stored title and description whenever the loader brings newer
+   * ones (an MCP edit, say, picked up by the revalidation after any save here)
+   * unless that box has focus, where the instructor's typing wins. Both save on
+   * blur, so an unfocused box holds no unsaved edit to lose. Without this each
+   * box kept its first value for the life of the page, and tabbing through it
+   * posted that stale text back over the newer one.
+   */
+  const titleFocused = useRef(false);
+  const descriptionFocused = useRef(false);
+  useEffect(() => {
+    if (!titleFocused.current) setTitle(data.form.title);
+  }, [data.form.title]);
+  useEffect(() => {
+    if (!descriptionFocused.current) setDescription(data.form.description ?? '');
+  }, [data.form.description]);
 
   /**
    * The close time, as local wall-clock text.
@@ -403,7 +421,9 @@ export default function FormBuilder() {
   // saving it on a live form changes the fill page at once, with no new version.
   const saveDescription = () => {
     const next = description.trim();
-    if (next === (data.form.description ?? '')) return;
+    // Trimmed on both sides: text stored untrimmed (the MCP does not trim) must
+    // not be rewritten, with an audit row, by someone merely tabbing through.
+    if (next === (data.form.description ?? '').trim()) return;
     post({ intent: 'save-meta', description: next || null });
   };
 
@@ -435,7 +455,13 @@ export default function FormBuilder() {
           <input
             value={title}
             onChange={event => setTitle(event.target.value)}
-            onBlur={saveTitle}
+            onFocus={() => {
+              titleFocused.current = true;
+            }}
+            onBlur={() => {
+              titleFocused.current = false;
+              saveTitle();
+            }}
             aria-label="Form title"
             className="block w-full max-w-lg border-none bg-transparent p-0 text-xl font-bold text-gray-900 focus:outline-none dark:text-white"
           />
@@ -447,12 +473,18 @@ export default function FormBuilder() {
           <textarea
             value={description}
             onChange={event => setDescription(event.target.value)}
-            onBlur={saveDescription}
+            onFocus={() => {
+              descriptionFocused.current = true;
+            }}
+            onBlur={() => {
+              descriptionFocused.current = false;
+              saveDescription();
+            }}
             aria-label="Form description"
             placeholder="Add a description, shown under the title"
             maxLength={DESCRIPTION_MAX}
             rows={2}
-            className="-mx-1 mt-1 block w-full max-w-lg resize-y rounded border border-transparent bg-transparent px-1 py-0.5 text-sm text-gray-600 placeholder:text-gray-400 hover:border-gray-200 focus:border-gray-300 focus:outline-none dark:text-gray-300 dark:placeholder:text-gray-500 dark:hover:border-gray-700 dark:focus:border-gray-600"
+            className="-mx-1 mt-1 block w-full max-w-lg resize-y rounded border border-transparent bg-transparent px-1 py-0.5 text-sm text-gray-600 placeholder:text-gray-400 hover:border-gray-200 focus:border-blue-500 focus:outline-none dark:text-gray-300 dark:placeholder:text-gray-500 dark:hover:border-gray-700 dark:focus:border-blue-400"
           />
           <div className="text-xs text-gray-400">
             /{data.form.slug}
@@ -770,7 +802,7 @@ export default function FormBuilder() {
           <div className="rounded-lg border border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-gray-800">
             {/* The fill page's own header, fed the unsaved values, so the
                 preview opens with what a respondent reads first. */}
-            <FormHeader title={title} description={description.trim() || null} />
+            <FormHeader title={title} description={description.trim() || null} as="h2" />
             <FormPreview fields={fields} />
           </div>
           <p className="mt-2 text-xs text-gray-400">

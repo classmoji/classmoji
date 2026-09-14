@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect, type Locator } from '@playwright/test';
 
 import {
   getClassroomIdBySlug,
@@ -41,6 +41,21 @@ const storedDescription = async () => {
     select: { description: true },
   });
   return form?.description;
+};
+
+/**
+ * Type into the box and leave it, retried until the value is STORED.
+ *
+ * The builder has no hydration marker, and a fill + blur that lands before
+ * hydration posts nothing. The box's own value cannot catch that: the
+ * server-rendered HTML may already hold it. The database is the only witness.
+ */
+const typeUntilStored = async (box: Locator, typed: string, stored: string | null) => {
+  await expect(async () => {
+    await box.fill(typed);
+    await box.blur();
+    await expect.poll(storedDescription, { timeout: 2_000 }).toBe(stored);
+  }).toPass({ timeout: 15_000 });
 };
 
 test.beforeAll(async () => {
@@ -100,16 +115,7 @@ test.describe('builder — the description', () => {
 
     const box = page.getByLabel('Form description');
 
-    // Retried until REACT holds the value, not merely the DOM: the builder has
-    // no hydration marker, and a fill that lands before hydration is replaced
-    // by the (empty) state on the next render. Same pattern as the Closes spec.
-    await expect(async () => {
-      await box.fill('  First line.\nSecond line.  ');
-      await box.blur();
-      await expect(box).toHaveValue('  First line.\nSecond line.  ');
-    }).toPass({ timeout: 15_000 });
-
-    await expect.poll(storedDescription).toBe('First line.\nSecond line.');
+    await typeUntilStored(box, '  First line.\nSecond line.  ', 'First line.\nSecond line.');
 
     // The live preview opens with the fill page's own header.
     await expect(page.getByRole('complementary').getByText('First line.')).toBeVisible();
@@ -126,9 +132,7 @@ test.describe('builder — the description', () => {
     await expect(page.getByText('Published as version 1')).toBeVisible();
 
     const box = page.getByLabel('Form description');
-    await box.fill('Edited while live.');
-    await box.blur();
-    await expect.poll(storedDescription).toBe('Edited while live.');
+    await typeUntilStored(box, 'Edited while live.', 'Edited while live.');
 
     // Still version 1: editing the intro did not cut a new revision.
     const prisma = await getTestPrisma();
@@ -153,9 +157,6 @@ test.describe('builder — the description', () => {
     const box = page.getByLabel('Form description');
     await expect(box).toHaveValue('Edited while live.');
 
-    await box.fill('   ');
-    await box.blur();
-
-    await expect.poll(storedDescription).toBeNull();
+    await typeUntilStored(box, '   ', null);
   });
 });

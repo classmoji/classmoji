@@ -473,8 +473,9 @@ export const formCreateTool: ToolDefinition<FormCreateArgs> = {
       .max(5000)
       .optional()
       .describe(
-        'Intro text respondents read under the title on the fill page. Write it for them; ' +
-          'notes for staff do not belong here'
+        'Intro text respondents read under the title on the fill page (students also see it ' +
+          'on the calendar entry for the close date). Write it for them; notes for staff do ' +
+          'not belong here'
       ),
     fields: fieldsArg.optional(),
   },
@@ -590,8 +591,9 @@ export const formUpdateTool: ToolDefinition<FormUpdateArgs> = {
       .nullable()
       .optional()
       .describe(
-        'Intro text respondents read under the title (not a note for staff). Editable on a ' +
-          'published form without a new version; null clears it'
+        'Intro text respondents read under the title, and students on the close-date ' +
+          'calendar entry (not a note for staff). Editable on a published form without a new ' +
+          'version; null clears it'
       ),
     access: accessArg.optional(),
     response_cap: z
