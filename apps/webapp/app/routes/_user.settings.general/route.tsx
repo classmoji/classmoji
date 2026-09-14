@@ -225,7 +225,8 @@ const SettingsGeneral = () => {
               showIcon
               closable
               onClose={() => setChangedTo(null)}
-              className="mb-6"
+              // Inline: antd's own margin rule outranks a Tailwind utility here.
+              style={{ marginBottom: 32 }}
               message={`Email updated to ${changedTo}.`}
               description="Any classroom invitations sent to this address have been added to your account."
             />
