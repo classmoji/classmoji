@@ -82,14 +82,15 @@ function schemeAndPort(): { scheme: string; port: string } {
 /**
  * Origins allowed to frame a site page (`frame-ancestors`).
  *
- * The webapp and the editor host embed site pages in preview panels. Tenant
- * origins are deliberately NOT included: `*.classmoji.io` would let any
- * instructor's site frame any other's, which is the setup for a clickjacking
- * proxy between two courses.
+ * The webapp and the editor host embed site pages in preview panels, and the
+ * slide viewer embeds them inside decks. Tenant origins are deliberately NOT
+ * included: `*.classmoji.io` would let any instructor's site frame any other's,
+ * which is the setup for a clickjacking proxy between two courses. The three
+ * hosts here are all ours.
  */
 export function frameAncestorOrigins(): string[] {
   const origins = new Set<string>();
-  for (const url of [webappUrl(), pagesUrl()]) {
+  for (const url of [webappUrl(), pagesUrl(), slidesUrl()]) {
     try {
       origins.add(new URL(url).origin);
     } catch {
