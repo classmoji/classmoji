@@ -472,7 +472,10 @@ export const formCreateTool: ToolDefinition<FormCreateArgs> = {
       .string()
       .max(5000)
       .optional()
-      .describe('Intro text shown above the fields on the fill page'),
+      .describe(
+        'Intro text respondents read under the title on the fill page. Write it for them; ' +
+          'notes for staff do not belong here'
+      ),
     fields: fieldsArg.optional(),
   },
   handler: async (args, ctx) => {
@@ -586,7 +589,10 @@ export const formUpdateTool: ToolDefinition<FormUpdateArgs> = {
       .max(5000)
       .nullable()
       .optional()
-      .describe('Intro text above the fields; null clears it'),
+      .describe(
+        'Intro text respondents read under the title (not a note for staff). Editable on a ' +
+          'published form without a new version; null clears it'
+      ),
     access: accessArg.optional(),
     response_cap: z
       .number()
