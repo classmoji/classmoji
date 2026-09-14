@@ -20,7 +20,18 @@ export const buildWeeklyBins = (now: Date, weeks: number): WeekBin[] => {
   return bins;
 };
 
-/** Count timestamps per bin. Anything outside the window is dropped. */
+/** `days` consecutive 24-hour bins ending now, oldest first. */
+export const buildDailyBins = (now: Date, days: number): WeekBin[] => {
+  const dayMs = 24 * 60 * 60 * 1000;
+  const bins: WeekBin[] = [];
+  for (let i = days - 1; i >= 0; i--) {
+    const end = new Date(now.getTime() - i * dayMs);
+    bins.push({ start: new Date(end.getTime() - dayMs), end });
+  }
+  return bins;
+};
+
+/** Count timestamps per bin (weekly or daily). Anything outside the window is dropped. */
 export const countByWeek = (timestamps: Date[], bins: WeekBin[]): number[] => {
   const counts = new Array<number>(bins.length).fill(0);
   for (const ts of timestamps) {

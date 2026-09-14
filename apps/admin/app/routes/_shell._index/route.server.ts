@@ -3,6 +3,7 @@ import type { LoaderFunctionArgs } from 'react-router';
 import { prisma, requirePlatformAdmin } from '~/utils/db.server';
 import {
   buildWeeklyBins,
+  buildDailyBins,
   countByWeek,
   collapseSchools,
   rollupCountries,
@@ -15,6 +16,7 @@ import {
 } from '~/utils/dashboard';
 
 const WEEKS = 12;
+const DAYS = 30;
 const TOP_SCHOOLS = 10;
 const TOP_CLASSES = 10;
 const RECENT = 5;
@@ -66,6 +68,8 @@ export interface DashboardData {
     signups7d: number;
     signupsPrev7d: number;
     signups30d: number;
+    signupsPrev30d: number;
+    classroomsCreated30d: number;
     activeToday: number;
   };
   growth: {
@@ -73,6 +77,10 @@ export interface DashboardData {
     weeks: string[];
     signups: number[];
     classrooms: number[];
+    /** ISO date of each of the last 30 days, oldest first, and per-day counts. */
+    days: string[];
+    dailySignups: number[];
+    dailyClassrooms: number[];
   };
   schools: Array<SchoolRow & { country: string }>;
   countries: CountryRow[];
@@ -131,7 +139,9 @@ export async function loadDashboard({ request }: LoaderFunctionArgs): Promise<Da
   const d7 = new Date(now.getTime() - 7 * DAY_MS);
   const d14 = new Date(now.getTime() - 14 * DAY_MS);
   const d30 = new Date(now.getTime() - 30 * DAY_MS);
+  const d60 = new Date(now.getTime() - 60 * DAY_MS);
   const bins = buildWeeklyBins(now, WEEKS);
+  const dayBins = buildDailyBins(now, DAYS);
   const windowStart = bins[0].start;
 
   const [
@@ -142,6 +152,8 @@ export async function loadDashboard({ request }: LoaderFunctionArgs): Promise<Da
     signups7d,
     signupsPrev7d,
     signups30d,
+    signupsPrev30d,
+    classroomsCreated30d,
     activeSessions,
     signupDates,
     classroomDates,
@@ -170,6 +182,8 @@ export async function loadDashboard({ request }: LoaderFunctionArgs): Promise<Da
     prisma.user.count({ where: { ...signedInUser, created_at: { gte: d7 } } }),
     prisma.user.count({ where: { ...signedInUser, created_at: { gte: d14, lt: d7 } } }),
     prisma.user.count({ where: { ...signedInUser, created_at: { gte: d30 } } }),
+    prisma.user.count({ where: { ...signedInUser, created_at: { gte: d60, lt: d30 } } }),
+    prisma.classroom.count({ where: { ...realClassroom, created_at: { gte: d30 } } }),
     // One row per person with a session touched in the last day.
     prisma.session.groupBy({ by: ['user_id'], where: { updated_at: { gte: d1 } } }),
     prisma.user.findMany({
@@ -321,6 +335,8 @@ export async function loadDashboard({ request }: LoaderFunctionArgs): Promise<Da
       signups7d,
       signupsPrev7d,
       signups30d,
+      signupsPrev30d,
+      classroomsCreated30d,
       activeToday: activeSessions.length,
     },
     growth: {
@@ -332,6 +348,15 @@ export async function loadDashboard({ request }: LoaderFunctionArgs): Promise<Da
       classrooms: countByWeek(
         classroomDates.map(c => c.created_at),
         bins
+      ),
+      days: dayBins.map(b => b.start.toISOString()),
+      dailySignups: countByWeek(
+        signupDates.map(u => u.created_at),
+        dayBins
+      ),
+      dailyClassrooms: countByWeek(
+        classroomDates.map(c => c.created_at),
+        dayBins
       ),
     },
     schools: collapseSchools(domainCounts, TOP_SCHOOLS).map(row => ({
