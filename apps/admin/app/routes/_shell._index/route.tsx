@@ -1,219 +1,312 @@
-import { useState } from 'react';
-import { Form, useLoaderData } from 'react-router';
-import { authClient } from '@classmoji/auth/client';
-import { IconSearch, IconUserShare } from '@tabler/icons-react';
-import { useDebouncedSearch } from '~/hooks/useDebouncedSearch';
-import { loadUsers } from './route.server';
-import type { AdminUserRow } from './route.server';
+import { Link, useLoaderData } from 'react-router';
 
-export const loader = loadUsers;
+import { loadDashboard, type DashboardData } from './route.server';
 
-export const meta = () => [{ title: 'Users · Classmoji Admin' }];
+export const loader = loadDashboard;
 
-/**
- * Breadcrumb telling the webapp's ImpersonationBanner to send "Stop viewing"
- * back here instead of to a classroom roster.
- *
- * A cookie rather than sessionStorage because the two apps are different
- * origins and web storage is origin-scoped. Domain matches the session cookie's
- * resolution so it travels exactly as far.
- */
-const ORIGIN_COOKIE = 'cm_impersonation_origin';
+export const meta = () => [{ title: 'Dashboard · Classmoji Admin' }];
 
-const setOriginCookie = (cookieDomain: string | null) => {
-  const parts = [
-    `${ORIGIN_COOKIE}=admin`,
-    'path=/',
-    // Matches better-auth's impersonationSessionDuration (1 hour), so the
-    // breadcrumb cannot outlive the session it describes.
-    'max-age=3600',
-    'samesite=lax',
-  ];
-  if (cookieDomain) parts.push(`domain=${cookieDomain}`);
-  if (window.location.protocol === 'https:') parts.push('secure');
-  document.cookie = parts.join('; ');
-};
+// ───────── pieces ─────────
 
-const initials = (row: AdminUserRow) =>
-  (row.name ?? row.login ?? row.email ?? '?').trim().charAt(0).toUpperCase();
+const Tile = ({ label, value, sub }: { label: string; value: number; sub?: React.ReactNode }) => (
+  <div className="rounded-2xl bg-panel ring-1 ring-line px-4 py-3">
+    <div className="text-[11px] uppercase tracking-wider text-ink-4">{label}</div>
+    <div className="text-2xl font-semibold text-ink-0 tabular-nums leading-tight mt-1">
+      {value.toLocaleString()}
+    </div>
+    {sub && <div className="text-xs text-ink-3 mt-0.5">{sub}</div>}
+  </div>
+);
 
-const AdminUsers = () => {
-  const { rows, total, query, truncated, limit, adminUserId, webappUrl, cookieDomain } =
-    useLoaderData<typeof loader>();
-  const { inputRef, onSearchChange, searching } = useDebouncedSearch(query);
-  const [pendingId, setPendingId] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  const impersonate = async (row: AdminUserRow) => {
-    setPendingId(row.id);
-    setError(null);
-    try {
-      const { error: authError } = await authClient.admin.impersonateUser({ userId: row.id });
-      if (authError) throw new Error(authError.message ?? 'Impersonation was refused.');
-
-      setOriginCookie(cookieDomain);
-      // Full navigation, not react-router navigate(): the webapp is a different
-      // origin. The session cookie better-auth just set travels with it.
-      window.location.href = webappUrl;
-    } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : 'Impersonation failed.');
-      setPendingId(null);
-    }
-  };
-
+/** "+3 vs previous 7 days", in words rather than color, so it reads in any theme. */
+const Delta = ({ now, before }: { now: number; before: number }) => {
+  const diff = now - before;
+  const sign = diff > 0 ? '+' : '';
   return (
-    <>
-      <div className="flex items-center justify-between gap-3 mt-2 mb-4">
-        <h1 className="text-lg font-semibold text-ink-1 shrink-0">Users</h1>
-        {/* Still a real GET form, so it works without JS and the query stays
-              in the URL (shareable, survives reload). The button is only a
-              no-JS fallback — with JS the debounced onChange submits. */}
-        <Form method="get" className="min-w-0" onChange={onSearchChange}>
-          <div className="relative min-w-0 sm:w-80">
-            <IconSearch
-              size={16}
-              className="absolute left-3 top-1/2 -translate-y-1/2 text-ink-4 pointer-events-none"
-            />
-            <input
-              ref={inputRef}
-              type="search"
-              name="q"
-              defaultValue={query}
-              placeholder="Search by username, name, or email…"
-              aria-label="Search users"
-              className="w-full rounded-md border border-line bg-panel pl-9 pr-8 py-1.5 text-sm text-ink-0 placeholder:text-ink-4 focus:outline-none focus:border-line-strong"
-            />
-            {searching ? (
-              <span
-                aria-hidden
-                // Tailwind's animate-spin, not the webapp's `.spin` — that
-                // class lives outside the shared components.css slice.
-                className="absolute right-3 top-1/2 -translate-y-1/2 w-3 h-3 rounded-full border-2 border-line-strong border-t-transparent animate-spin"
-              />
-            ) : null}
-            <noscript>
-              <button
-                type="submit"
-                className="ml-2 rounded-md bg-accent px-3 py-1.5 text-sm font-medium text-white"
-              >
-                Search
-              </button>
-            </noscript>
-          </div>
-        </Form>
-      </div>
-
-      {error ? (
-        <div className="mb-4 rounded-lg bg-peach-bg border border-peach-bord text-peach-ink px-4 py-2.5 text-sm">
-          {error}
-        </div>
-      ) : null}
-
-      <div className="rounded-2xl bg-panel ring-1 ring-line px-3 py-4 sm:px-4 min-h-[calc(100vh-14rem)]">
-        <div className="flex items-baseline justify-between mb-3 px-1">
-          <p className="text-xs text-ink-3">
-            {query ? `${total} matching “${query}”` : `${total} users`}
-            {truncated ? ` · showing first ${limit}` : ''}
-          </p>
-        </div>
-
-        {rows.length === 0 ? (
-          <div className="text-center py-12 text-gray-500">
-            <div className="font-medium">No users found</div>
-            <div className="text-sm">
-              {query ? 'Try a different search term.' : 'The database has no users yet.'}
-            </div>
-          </div>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="text-left text-[11px] uppercase tracking-wider text-ink-4">
-                  <th className="font-semibold py-2 pr-4">User</th>
-                  <th className="font-semibold py-2 pr-4">Classrooms</th>
-                  <th className="font-semibold py-2 pr-4">Joined</th>
-                  <th className="font-semibold py-2 w-px" />
-                </tr>
-              </thead>
-              <tbody>
-                {rows.map(row => {
-                  const isSelf = row.id === adminUserId;
-                  return (
-                    <tr key={row.id} className="border-t border-line row-hover">
-                      <td className="py-2.5 pr-4">
-                        <div className="flex items-center gap-2.5 min-w-0">
-                          {row.image ? (
-                            <img src={row.image} alt="" className="w-7 h-7 rounded-full shrink-0" />
-                          ) : (
-                            <span className="w-7 h-7 rounded-full shrink-0 bg-accent-soft text-accent-ink grid place-items-center text-[11px] font-semibold">
-                              {initials(row)}
-                            </span>
-                          )}
-                          <div className="min-w-0">
-                            <div className="text-ink-0 font-medium truncate">
-                              {row.name ?? row.login ?? '—'}
-                            </div>
-                            <div className="text-ink-3 text-xs truncate">
-                              {row.login ? `@${row.login}` : (row.email ?? row.id)}
-                            </div>
-                          </div>
-                        </div>
-                      </td>
-                      <td className="py-2.5 pr-4">
-                        {row.classrooms.length === 0 ? (
-                          <span className="text-ink-4">—</span>
-                        ) : (
-                          <div className="flex flex-wrap gap-1">
-                            {row.classrooms.slice(0, 3).map(c => (
-                              <span
-                                key={`${c.slug}-${c.role}`}
-                                title={`${c.name} · ${c.role}`}
-                                className="chip"
-                              >
-                                {c.slug}
-                              </span>
-                            ))}
-                            {row.classrooms.length > 3 ? (
-                              <span className="text-ink-4 text-xs self-center">
-                                +{row.classrooms.length - 3}
-                              </span>
-                            ) : null}
-                          </div>
-                        )}
-                      </td>
-                      <td className="py-2.5 pr-4 text-ink-3 whitespace-nowrap">
-                        {new Date(row.createdAt).toLocaleDateString()}
-                      </td>
-                      <td className="py-2.5">
-                        <button
-                          type="button"
-                          onClick={() => impersonate(row)}
-                          disabled={isSelf || pendingId !== null}
-                          title={
-                            isSelf
-                              ? 'This is you'
-                              : `Sign in to Classmoji as ${row.login ?? row.id}`
-                          }
-                          className="inline-flex items-center gap-1.5 whitespace-nowrap rounded-md border border-line px-2.5 py-1 text-xs font-medium text-ink-1 hover:bg-nav-hover disabled:opacity-40 disabled:hover:bg-transparent"
-                        >
-                          <IconUserShare size={14} />
-                          {pendingId === row.id ? 'Starting…' : 'Impersonate'}
-                        </button>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </div>
-
-      <p className="mt-3 text-xs text-ink-4">
-        Impersonation sessions expire after 1 hour. Use “Stop viewing” in the banner to return here.
-      </p>
-    </>
+    <span>
+      {sign}
+      {diff} vs previous 7 days
+    </span>
   );
 };
 
-export default AdminUsers;
+const Card = ({
+  title,
+  aside,
+  children,
+}: {
+  title: string;
+  aside?: React.ReactNode;
+  children: React.ReactNode;
+}) => (
+  <section className="rounded-2xl bg-panel ring-1 ring-line p-5 sm:p-6">
+    <div className="flex items-baseline justify-between gap-3 mb-3">
+      <h2 className="text-sm font-semibold text-ink-1">{title}</h2>
+      {aside && <div className="text-xs text-ink-3">{aside}</div>}
+    </div>
+    {children}
+  </section>
+);
+
+const Empty = ({ children }: { children: string }) => (
+  <p className="text-sm text-ink-3 py-6 text-center">{children}</p>
+);
+
+const TH = ({ children, right }: { children?: string; right?: boolean }) => (
+  <th className={`font-semibold py-2 ${right ? 'text-right pl-4' : 'pr-4'}`}>{children}</th>
+);
+
+const weekLabel = (iso: string) =>
+  new Date(iso).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+
+/**
+ * One series of weekly counts as thin bars on a baseline. Single series, so
+ * the card title is the legend; the current and peak weeks are labeled, every
+ * bar carries a tooltip. Heights are relative to this chart's own max, which
+ * is why signups and classrooms get separate charts rather than one axis.
+ */
+const WeeklyBars = ({ weeks, values }: { weeks: string[]; values: number[] }) => {
+  const W = 480;
+  const H = 96;
+  const PAD_TOP = 18;
+  const BASE = H - 16;
+  const gap = 2;
+  const barW = (W - gap * (values.length - 1)) / values.length;
+  const max = Math.max(1, ...values);
+  const peak = values.indexOf(Math.max(...values));
+  const last = values.length - 1;
+
+  return (
+    <svg
+      viewBox={`0 0 ${W} ${H}`}
+      className="w-full h-24"
+      role="img"
+      aria-label={`Weekly counts for the last ${values.length} weeks`}
+    >
+      <line x1={0} x2={W} y1={BASE} y2={BASE} stroke="var(--line)" strokeWidth={1} />
+      {values.map((v, i) => {
+        const h = v === 0 ? 0 : Math.max(2, ((BASE - PAD_TOP) * v) / max);
+        const x = i * (barW + gap);
+        const y = BASE - h;
+        const r = Math.min(4, barW / 2, h);
+        // Rounded at the data end only; square on the baseline.
+        const d =
+          h === 0
+            ? ''
+            : `M${x},${BASE} V${y + r} a${r},${r} 0 0 1 ${r},-${r} H${x + barW - r} a${r},${r} 0 0 1 ${r},${r} V${BASE} Z`;
+        const labeled = (i === last || i === peak) && v > 0;
+        return (
+          <g key={weeks[i]}>
+            <title>{`Week of ${weekLabel(weeks[i])}: ${v}`}</title>
+            {/* Hit target wider than the bar. */}
+            <rect x={x - gap / 2} y={0} width={barW + gap} height={H} fill="transparent" />
+            {d && <path d={d} fill="var(--accent)" opacity={i === last ? 1 : 0.7} />}
+            {labeled && (
+              <text
+                x={x + barW / 2}
+                y={y - 5}
+                textAnchor="middle"
+                fontSize={11}
+                fill="var(--ink-2)"
+                className="tabular-nums"
+              >
+                {v}
+              </text>
+            )}
+          </g>
+        );
+      })}
+      <text x={0} y={H - 3} fontSize={10} fill="var(--ink-4)">
+        {weekLabel(weeks[0])}
+      </text>
+      <text x={W} y={H - 3} fontSize={10} fill="var(--ink-4)" textAnchor="end">
+        this week
+      </text>
+    </svg>
+  );
+};
+
+const initials = (u: { name: string | null; login: string | null }) =>
+  (u.name ?? u.login ?? '?')
+    .split(/\s+/)
+    .map(p => p[0])
+    .join('')
+    .slice(0, 2)
+    .toUpperCase();
+
+// ───────── page ─────────
+
+const AdminDashboard = () => {
+  const data = useLoaderData<DashboardData>();
+  const { tiles, growth, schools, largestClasses, recentUsers, recentClassrooms } = data;
+  const total30 = growth.signups.reduce((a, b) => a + b, 0);
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-baseline justify-between gap-3">
+        <h1 className="text-lg font-semibold text-ink-1">Dashboard</h1>
+        <span className="text-xs text-ink-3">
+          As of {new Date(data.generatedAt).toLocaleTimeString([], { timeStyle: 'short' })}
+        </span>
+      </div>
+
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+        <Tile label="Instructors" value={tiles.instructors} sub="own a real classroom" />
+        <Tile label="Students" value={tiles.students} sub="enrolled somewhere" />
+        <Tile
+          label="Active classrooms"
+          value={tiles.activeClassrooms}
+          sub={`${tiles.archivedClassrooms} archived`}
+        />
+        <Tile
+          label="Signups, 7 days"
+          value={tiles.signups7d}
+          sub={<Delta now={tiles.signups7d} before={tiles.signupsPrev7d} />}
+        />
+        <Tile label="Signups, 30 days" value={tiles.signups30d} />
+        <Tile label="Active today" value={tiles.activeToday} sub="sessions in last 24h" />
+      </div>
+
+      <Card title="Growth" aside={`last ${growth.weeks.length} weeks · ${total30} signups`}>
+        <div className="grid gap-6 md:grid-cols-2">
+          <div>
+            <div className="text-xs font-medium text-ink-2 mb-1">Signups per week</div>
+            <WeeklyBars weeks={growth.weeks} values={growth.signups} />
+          </div>
+          <div>
+            <div className="text-xs font-medium text-ink-2 mb-1">Classrooms created per week</div>
+            <WeeklyBars weeks={growth.weeks} values={growth.classrooms} />
+          </div>
+        </div>
+      </Card>
+
+      <div className="grid gap-4 lg:grid-cols-2">
+        <Card title="Schools" aside="by account email domain">
+          {schools.length === 0 ? (
+            <Empty>No users with an email yet.</Empty>
+          ) : (
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-left text-[11px] uppercase tracking-wider text-ink-4">
+                  <TH>School</TH>
+                  <TH right>Users</TH>
+                  <TH right>Instructors</TH>
+                </tr>
+              </thead>
+              <tbody>
+                {schools.map(s => (
+                  <tr key={s.school} className="border-t border-line">
+                    <td className="py-2 pr-4 text-ink-0 font-medium">{s.school}</td>
+                    <td className="py-2 pl-4 text-right tabular-nums text-ink-1">{s.users}</td>
+                    <td className="py-2 pl-4 text-right tabular-nums text-ink-1">
+                      {s.instructors}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </Card>
+
+        <Card title="Largest classes" aside="by students enrolled">
+          {largestClasses.length === 0 ? (
+            <Empty>No classrooms yet.</Empty>
+          ) : (
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-left text-[11px] uppercase tracking-wider text-ink-4">
+                  <TH>Class</TH>
+                  <TH>Org</TH>
+                  <TH right>Students</TH>
+                </tr>
+              </thead>
+              <tbody>
+                {largestClasses.map(c => (
+                  <tr key={c.slug} className="border-t border-line row-hover">
+                    <td className="py-2 pr-4 min-w-0">
+                      <Link
+                        to={`/classrooms/${encodeURIComponent(c.slug)}`}
+                        className="text-ink-0 font-medium hover:underline"
+                      >
+                        {c.name}
+                      </Link>
+                      <div className="text-ink-3 text-xs truncate">{c.slug}</div>
+                    </td>
+                    <td className="py-2 pr-4 text-ink-2 text-xs">{c.org ?? '—'}</td>
+                    <td className="py-2 pl-4 text-right tabular-nums text-ink-1">{c.students}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </Card>
+      </div>
+
+      <div className="grid gap-4 lg:grid-cols-2">
+        <Card title="Recent signups">
+          {recentUsers.length === 0 ? (
+            <Empty>Nobody yet.</Empty>
+          ) : (
+            <ul className="divide-y divide-line">
+              {recentUsers.map(u => (
+                <li key={u.id} className="py-2 flex items-center gap-2.5 min-w-0">
+                  {u.image ? (
+                    <img src={u.image} alt="" className="w-7 h-7 rounded-full shrink-0" />
+                  ) : (
+                    <span className="w-7 h-7 rounded-full shrink-0 bg-accent-soft text-accent-ink grid place-items-center text-[11px] font-semibold">
+                      {initials(u)}
+                    </span>
+                  )}
+                  <div className="min-w-0 flex-1">
+                    <Link
+                      to={u.login ? `/users?q=${encodeURIComponent(u.login)}` : '/users'}
+                      className="text-ink-0 font-medium truncate block hover:underline"
+                    >
+                      {u.name ?? u.login ?? '—'}
+                    </Link>
+                    <div className="text-ink-3 text-xs truncate">
+                      {u.login ? `@${u.login}` : u.id}
+                    </div>
+                  </div>
+                  <span className="text-xs text-ink-3 tabular-nums shrink-0">
+                    {new Date(u.createdAt).toLocaleDateString()}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </Card>
+
+        <Card title="Recent classrooms">
+          {recentClassrooms.length === 0 ? (
+            <Empty>No classrooms yet.</Empty>
+          ) : (
+            <ul className="divide-y divide-line">
+              {recentClassrooms.map(c => (
+                <li key={c.slug} className="py-2 flex items-center gap-3 min-w-0">
+                  <div className="min-w-0 flex-1">
+                    <Link
+                      to={`/classrooms/${encodeURIComponent(c.slug)}`}
+                      className="text-ink-0 font-medium truncate block hover:underline"
+                    >
+                      {c.name}
+                    </Link>
+                    <div className="text-ink-3 text-xs truncate">
+                      {c.slug}
+                      {c.org ? ` · ${c.org}` : ''}
+                    </div>
+                  </div>
+                  <span className="text-xs text-ink-3 tabular-nums shrink-0">
+                    {new Date(c.createdAt).toLocaleDateString()}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </Card>
+      </div>
+    </div>
+  );
+};
+
+export default AdminDashboard;
