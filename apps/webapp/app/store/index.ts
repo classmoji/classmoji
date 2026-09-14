@@ -45,9 +45,12 @@ const createUserSlice = (set: SetState) => ({
       }
       return { classroom };
     }),
+  // Replace on any new object, not only on a new id: the row's fields change
+  // too (email, school_id from account settings), and comparing ids alone
+  // kept the old values on screen until a full reload.
   setUser: (user: AppUser | null) =>
     set((state: StoreState) => {
-      if (state.user?.id === user?.id) return state;
+      if (state.user === user) return state;
       return { user };
     }),
   setSubscription: (subscription: AppSubscription | null) =>

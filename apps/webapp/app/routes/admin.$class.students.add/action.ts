@@ -1,4 +1,5 @@
 import { ClassmojiService } from '@classmoji/services';
+import { signInviteToken } from '@classmoji/auth/invite-token';
 import Tasks from '@classmoji/tasks';
 import { requireClassroomAdmin, assertClassroomMutationAllowed } from '~/utils/routeAuth.server';
 import type { Route } from './+types/route';
@@ -21,6 +22,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
   // Shared with the MCP roster_add_student tool: the DB split + email
   // composition live in the service; the route triggers the returned emails.
   const result = await ClassmojiService.roster.addStudents({
+    signInvite: email => signInviteToken({ email, classroomId: classroom.id }),
     classroomId: classroom.id,
     students: data.students,
   });
