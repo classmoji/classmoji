@@ -21,6 +21,7 @@ import type { FormField } from '@classmoji/services/form-contract';
 import { ClassmojiService } from '~/utils/db.server.ts';
 import { assertFormAdmin, formMutationBlocked } from '~/utils/formAuth.server.ts';
 import FormPreview from '~/components/forms/FormPreview.tsx';
+import { FormHeader } from '~/components/forms/FormCanvas.tsx';
 import { ConfirmDialog } from '~/components/forms/ConfirmDialog.tsx';
 import FieldCard from '~/components/forms/builder/FieldCard.tsx';
 import { BackToClassroom } from '~/components/forms/BackToClassroom.tsx';
@@ -84,6 +85,16 @@ const toLocalInput = (iso: string): string => {
     `T${pad(when.getHours())}:${pad(when.getMinutes())}`
   );
 };
+
+/** The same cap the MCP tools put on a description. */
+const DESCRIPTION_MAX = 5000;
+
+/**
+ * A description as it should be stored: trimmed, and null once nothing is left,
+ * so clearing the box removes the intro from the fill page instead of leaving
+ * an empty paragraph behind.
+ */
+const descriptionOf = (value: string | null): string | null => value?.trim() || null;
 
 export const loader = async ({
   params,
@@ -171,6 +182,7 @@ export const action = async ({
     intent?: string;
     fields?: unknown;
     title?: string;
+    description?: string | null;
     access?: FormAccess;
     responseCap?: number | null;
     closesAt?: string | null;
@@ -231,8 +243,21 @@ export const action = async ({
       }
 
       case 'save-meta': {
+        // Refused rather than coerced: a malformed body must not silently wipe
+        // the intro every respondent reads.
+        if (body.description != null && typeof body.description !== 'string') {
+          return { error: 'A description must be text.' };
+        }
+        const description =
+          body.description !== undefined ? descriptionOf(body.description) : undefined;
+        if (description && description.length > DESCRIPTION_MAX) {
+          return {
+            error: `A description can be at most ${DESCRIPTION_MAX.toLocaleString('en-US')} characters.`,
+          };
+        }
         await ClassmojiService.form.update(form.id, {
           ...(body.title !== undefined ? { title: body.title } : {}),
+          ...(description !== undefined ? { description } : {}),
           ...(body.access !== undefined ? { access: body.access } : {}),
           ...(body.responseCap !== undefined ? { response_cap: body.responseCap } : {}),
           ...(body.closesAt !== undefined
@@ -281,6 +306,24 @@ export default function FormBuilder() {
   const [expanded, setExpanded] = useState<string | null>(null);
   const [dirty, setDirty] = useState(false);
   const [title, setTitle] = useState(data.form.title);
+  const [description, setDescription] = useState(data.form.description ?? '');
+
+  /**
+   * Adopt the stored title and description whenever the loader brings newer
+   * ones (an MCP edit, say, picked up by the revalidation after any save here)
+   * unless that box has focus, where the instructor's typing wins. Both save on
+   * blur, so an unfocused box holds no unsaved edit to lose. Without this each
+   * box kept its first value for the life of the page, and tabbing through it
+   * posted that stale text back over the newer one.
+   */
+  const titleFocused = useRef(false);
+  const descriptionFocused = useRef(false);
+  useEffect(() => {
+    if (!titleFocused.current) setTitle(data.form.title);
+  }, [data.form.title]);
+  useEffect(() => {
+    if (!descriptionFocused.current) setDescription(data.form.description ?? '');
+  }, [data.form.description]);
 
   /**
    * The close time, as local wall-clock text.
@@ -374,6 +417,16 @@ export default function FormBuilder() {
       post({ intent: 'save-meta', title: title.trim() });
   };
 
+  // Like the collection settings, the description is NOT part of a revision:
+  // saving it on a live form changes the fill page at once, with no new version.
+  const saveDescription = () => {
+    const next = description.trim();
+    // Trimmed on both sides: text stored untrimmed (the MCP does not trim) must
+    // not be rewritten, with an audit row, by someone merely tabbing through.
+    if (next === (data.form.description ?? '').trim()) return;
+    post({ intent: 'save-meta', description: next || null });
+  };
+
   const paletteNote = useMemo(
     () =>
       access === 'PUBLIC'
@@ -385,7 +438,10 @@ export default function FormBuilder() {
   return (
     <div className="mx-auto max-w-7xl px-6 py-8">
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-        <div className="min-w-0">
+        {/* `flex-1` so the column takes the row's free width: sized to its
+            content, the description box had nothing for `w-full` to fill and
+            wrapped a long intro every few words. `max-w-lg` still caps it. */}
+        <div className="min-w-0 flex-1">
           <div className="flex items-center gap-1.5 text-xs text-gray-400">
             <BackToClassroom href={data.classroomHome} name={data.classroomName} />
             <span className="text-gray-300 dark:text-gray-600">·</span>
@@ -399,9 +455,36 @@ export default function FormBuilder() {
           <input
             value={title}
             onChange={event => setTitle(event.target.value)}
-            onBlur={saveTitle}
+            onFocus={() => {
+              titleFocused.current = true;
+            }}
+            onBlur={() => {
+              titleFocused.current = false;
+              saveTitle();
+            }}
             aria-label="Form title"
             className="block w-full max-w-lg border-none bg-transparent p-0 text-xl font-bold text-gray-900 focus:outline-none dark:text-white"
+          />
+          {/* The intro respondents read under the title. Until this box existed
+              only the MCP tools could set it, so text written there sat on the
+              live form with nowhere in the builder to see or remove it.
+              `-mx-1 px-1` keeps the text aligned with the title while leaving
+              room for the hover/focus border. */}
+          <textarea
+            value={description}
+            onChange={event => setDescription(event.target.value)}
+            onFocus={() => {
+              descriptionFocused.current = true;
+            }}
+            onBlur={() => {
+              descriptionFocused.current = false;
+              saveDescription();
+            }}
+            aria-label="Form description"
+            placeholder="Add a description, shown under the title"
+            maxLength={DESCRIPTION_MAX}
+            rows={2}
+            className="-mx-1 mt-1 block w-full max-w-lg resize-y rounded border border-transparent bg-transparent px-1 py-0.5 text-sm text-gray-600 placeholder:text-gray-400 hover:border-gray-200 focus:border-blue-500 focus:outline-none dark:text-gray-300 dark:placeholder:text-gray-500 dark:hover:border-gray-700 dark:focus:border-blue-400"
           />
           <div className="text-xs text-gray-400">
             /{data.form.slug}
@@ -717,6 +800,9 @@ export default function FormBuilder() {
             Live preview
           </div>
           <div className="rounded-lg border border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-gray-800">
+            {/* The fill page's own header, fed the unsaved values, so the
+                preview opens with what a respondent reads first. */}
+            <FormHeader title={title} description={description.trim() || null} as="h2" />
             <FormPreview fields={fields} />
           </div>
           <p className="mt-2 text-xs text-gray-400">
