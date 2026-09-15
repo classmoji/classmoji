@@ -7,6 +7,7 @@ import {
   canonicalizeMany,
   fetchContentText,
   mappedAssetsBySha,
+  resolveAssetUrl,
   signBlobUrlForClassroom,
   textReadBudget,
   warmContentText,
@@ -580,15 +581,16 @@ async function recordPageFile(
  * a dangling URL. The upload already has the path, the sha and the size, so the
  * row is recorded from them rather than left to a webhook round trip.
  *
- * @returns `{ url, path, displayUrl }`. `path` is always the repo path.
- *   `displayUrl` is null when the delivery layer is off, and `url` is then the
- *   legacy absolute URL rather than the path.
+ * @returns `{ url, path, sha, displayUrl }`. `path` is always the repo path and
+ *   `sha` the blob sha the commit returned. `displayUrl` is null when the
+ *   delivery layer is off, and `url` is then the legacy absolute URL rather
+ *   than the path.
  */
 export async function uploadPageAsset(
   page: PageWithContentRepo,
   buffer: Buffer,
   filename: string
-): Promise<{ url: string; path: string; displayUrl: string | null }> {
+): Promise<{ url: string; path: string; sha: string; displayUrl: string | null }> {
   const { gitOrganization, repo } = contentRepoFor(page);
 
   // Asked, not assumed — the same reason the asset sync asks. A content repo on
@@ -621,7 +623,57 @@ export async function uploadPageAsset(
   const displayUrl = await signUploadedAsset(page, result.path, result.sha);
 
   // No signature means no reader can resolve a bare path — store the legacy URL.
-  return { url: displayUrl ? result.path : result.url, path: result.path, displayUrl };
+  return {
+    url: displayUrl ? result.path : result.url,
+    path: result.path,
+    sha: result.sha,
+    displayUrl,
+  };
+}
+
+/**
+ * The URL a WRITER can actually open one stored page-asset reference at, or null.
+ *
+ * With the delivery layer on, `content.json` stores a bare repo path — a key
+ * into the asset map, not an address. A browser can follow it because the page
+ * is rendered through a resolve pass; an API caller holding the stored string
+ * has nothing to follow. This mints that pass for a single reference at the
+ * `edit` tier, the same tier `uploadPageAsset` hands back for a file it just
+ * committed, since only someone who can edit the page ever asks.
+ *
+ * Null — not the reference echoed back — whenever the answer would still not be
+ * fetchable: the layer is off for this classroom or deployment, the classroom
+ * has no signing key version to mint under, or the resolver declined the
+ * reference (another repo's, or one the map has never seen). A caller needs to
+ * tell "here is where to look at it" from "there is nowhere to look at it", and
+ * a repo path returned as a URL reads as the former while behaving as the latter.
+ */
+export async function resolvePageAssetUrl(
+  page: PageWithContentRepo,
+  ref: string
+): Promise<string | null> {
+  if (!ref) return null;
+  // Strict where `pageResolveContext` defaults, for `pageWarmContext`'s reason:
+  // this call MINTS a signature and `content_key_version` goes into it, so
+  // signing at a version the readers are not on would hand back a URL the
+  // Worker refuses. A missing version means no URL rather than a wrong one.
+  if (typeof (page.classroom as { content_key_version?: unknown }).content_key_version !== 'number')
+    return null;
+  const ctx = pageResolveContext(page);
+  if (!ctx) return null;
+
+  try {
+    const resolved = await resolveAssetUrl(ctx, ref);
+    // A resolve that could not sign hands the reference straight back, so
+    // "is this absolute" is the same question as "did anything resolve".
+    return /^(?:https?:)?\/\//i.test(resolved) ? resolved : null;
+  } catch (error) {
+    console.warn(
+      '[pageContent] Could not resolve a page asset URL:',
+      error instanceof Error ? error.message : error
+    );
+    return null;
+  }
 }
 
 /**

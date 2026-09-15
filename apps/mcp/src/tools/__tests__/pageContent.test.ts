@@ -1,13 +1,16 @@
 /**
  * Unit tests for the page content tools (content-tools plan Phase 2, §9 P2):
  * page_content_outline / page_content_get / page_content_apply +
- * page_preview_accept / page_preview_discard.
+ * page_preview_accept / page_preview_discard, plus page_asset_upload /
+ * page_cover_set (issue #369).
  *
  * Focus: S1 scoping (cross-classroom → scopedNotFound, no GitHub touch), the
  * optimistic lock (stale sha → CONTENT_CONFLICT, never a clobber), preview
  * routing (draft→direct vs published→preview defaults, explicit overrides,
  * stacking onto an existing branch), legacy-HTML refusal + replace_all escape
- * hatch, and enriched audit rows.
+ * hatch, and enriched audit rows. For the cover pair: upload validation before
+ * any GitHub call, the stored-ref/display-url split, and the cover write going
+ * to the LIVE page rather than a preview branch.
  *
  * `@classmoji/services` is mocked, EXCEPT the pure pageContent helpers
  * (previewBranchName / ensureBlockIds / applyBlockOps) which are the real
@@ -21,6 +24,7 @@ import type { ToolContext } from '../../mcp/registry.ts';
 
 const mocks = vi.hoisted(() => ({
   pageFindById: vi.fn(),
+  pageQuickUpdate: vi.fn(),
   loadPageContent: vi.fn(),
   savePageContent: vi.fn(),
   getPreviewStatus: vi.fn(),
@@ -28,6 +32,8 @@ const mocks = vi.hoisted(() => ({
   acceptPreview: vi.fn(),
   resolvePreviewConflicts: vi.fn(),
   discardPreview: vi.fn(),
+  uploadPageAsset: vi.fn(),
+  resolvePageAssetUrl: vi.fn(),
   auditCreate: vi.fn(),
 }));
 
@@ -41,14 +47,25 @@ vi.mock('@classmoji/services', async () => {
   const pure = await vi.importActual<
     typeof import('../../../../../packages/services/src/classmoji/pageContent.service.ts')
   >('../../../../../packages/services/src/classmoji/pageContent.service.ts');
+  // Upload validation is pure and shared with ContentService — the tool must
+  // enforce the SAME 5 MB / extension rules, so use the real ones.
+  const files = await vi.importActual<
+    typeof import('../../../../../packages/services/src/content/utils/validateFile.ts')
+  >('../../../../../packages/services/src/content/utils/validateFile.ts');
   return {
+    validateFile: files.validateFile,
+    MAX_FILE_SIZE: files.MAX_FILE_SIZE,
     ClassmojiService: {
-      page: { findById: (...a: unknown[]) => mocks.pageFindById(...a) },
+      page: {
+        findById: (...a: unknown[]) => mocks.pageFindById(...a),
+        quickUpdate: (...a: unknown[]) => mocks.pageQuickUpdate(...a),
+      },
       pageContent: {
         // Real pure helpers — the tools' semantics depend on them.
         previewBranchName: pure.previewBranchName,
         ensureBlockIds: pure.ensureBlockIds,
         applyBlockOps: pure.applyBlockOps,
+        blankPageBlocks: pure.blankPageBlocks,
         // GitHub-touching helpers — mocked.
         loadPageContent: (...a: unknown[]) => mocks.loadPageContent(...a),
         savePageContent: (...a: unknown[]) => mocks.savePageContent(...a),
@@ -57,6 +74,8 @@ vi.mock('@classmoji/services', async () => {
         acceptPreview: (...a: unknown[]) => mocks.acceptPreview(...a),
         resolvePreviewConflicts: (...a: unknown[]) => mocks.resolvePreviewConflicts(...a),
         discardPreview: (...a: unknown[]) => mocks.discardPreview(...a),
+        uploadPageAsset: (...a: unknown[]) => mocks.uploadPageAsset(...a),
+        resolvePageAssetUrl: (...a: unknown[]) => mocks.resolvePageAssetUrl(...a),
       },
       audit: { create: (...a: unknown[]) => mocks.auditCreate(...a) },
     },
@@ -67,6 +86,8 @@ const {
   pageContentOutlineTool,
   pageContentGetTool,
   pageContentApplyTool,
+  pageAssetUploadTool,
+  pageCoverSetTool,
   pagePreviewAcceptTool,
   pagePreviewDiscardTool,
 } = await import('../pageContent.ts');
@@ -101,6 +122,13 @@ const PAGE = {
 };
 
 const DRAFT_PAGE = { ...PAGE, is_draft: true };
+
+/** A real 1×1 transparent PNG, base64 — valid alphabet, no line breaks. */
+const PNG_BASE64 =
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==';
+
+const STORED_COVER = { url: 'pages/syllabus/assets/1700000000000-hero.png', position: 30 };
+const SIGNED_COVER_URL = 'https://content.classmoji.io/c/class-1/blob-sha.png?sig=abc';
 
 const LONG_TEXT =
   'This heading text is deliberately far longer than the eighty character preview budget ' +
@@ -139,6 +167,16 @@ beforeEach(() => {
   mocks.savePageContent.mockResolvedValue({ sha: 'new-sha', commit: 'commit-sha' });
   mocks.ensurePreviewBranch.mockResolvedValue({ branch: PREVIEW_BRANCH, created: true });
   mocks.auditCreate.mockResolvedValue(undefined);
+  mocks.pageQuickUpdate.mockResolvedValue(undefined);
+  mocks.uploadPageAsset.mockResolvedValue({
+    url: 'pages/syllabus/assets/1700000000000-hero.png',
+    path: 'pages/syllabus/assets/1700000000000-hero.png',
+    sha: 'blob-sha',
+    displayUrl: 'https://content.classmoji.io/c/class-1/blob-sha.png?sig=abc',
+  });
+  mocks.resolvePageAssetUrl.mockResolvedValue(
+    'https://content.classmoji.io/c/class-1/blob-sha.png?sig=abc'
+  );
 });
 
 // ─── S1: cross-classroom pages are invisible to every tool ──────────────────
@@ -167,6 +205,27 @@ describe('S1 classroom scoping', () => {
         ),
     ],
     [
+      'page_asset_upload',
+      () =>
+        pageAssetUploadTool.handler(
+          {
+            classroom: 'org/x',
+            page_id: PAGE_ID,
+            filename: 'hero.png',
+            content_base64: PNG_BASE64,
+          },
+          CTX
+        ),
+    ],
+    [
+      'page_cover_set',
+      () =>
+        pageCoverSetTool.handler(
+          { classroom: 'org/x', page_id: PAGE_ID, url: 'pages/syllabus/assets/hero.png' },
+          CTX
+        ),
+    ],
+    [
       'page_preview_accept',
       () => pagePreviewAcceptTool.handler({ classroom: 'org/x', page_id: PAGE_ID }, CTX),
     ],
@@ -191,6 +250,7 @@ describe('S1 classroom scoping', () => {
         mocks.acceptPreview,
         mocks.discardPreview,
         mocks.ensurePreviewBranch,
+        mocks.uploadPageAsset,
         mocks.auditCreate,
       ]) {
         expect(fn).not.toHaveBeenCalled();
@@ -1074,5 +1134,370 @@ describe('page_preview_discard', () => {
       discarded: true,
       note: expect.stringMatching(/already gone/),
     });
+  });
+});
+
+// ─── Cover image on the read side ────────────────────────────────────────────
+
+describe('cover_image on reads', () => {
+  it('outline reports the stored ref AND a resolved display_url', async () => {
+    mocks.loadPageContent.mockResolvedValue({ ...jsonContent(), coverImage: STORED_COVER });
+
+    const payload = parse(
+      await pageContentOutlineTool.handler({ classroom: 'org/x', page_id: PAGE_ID }, CTX)
+    );
+
+    // has_cover_image stays for compatibility; cover_image is the useful one.
+    expect(payload.has_cover_image).toBe(true);
+    expect(payload.cover_image).toEqual({
+      url: STORED_COVER.url,
+      display_url: SIGNED_COVER_URL,
+      position: 30,
+    });
+    expect(mocks.resolvePageAssetUrl).toHaveBeenCalledWith(PAGE, STORED_COVER.url);
+  });
+
+  it('display_url is null when nothing can be signed — never the bare path', async () => {
+    mocks.loadPageContent.mockResolvedValue({ ...jsonContent(), coverImage: STORED_COVER });
+    mocks.resolvePageAssetUrl.mockResolvedValue(null);
+
+    const payload = parse(
+      await pageContentOutlineTool.handler({ classroom: 'org/x', page_id: PAGE_ID }, CTX)
+    );
+
+    expect(payload.cover_image).toEqual({
+      url: STORED_COVER.url,
+      display_url: null,
+      position: 30,
+    });
+  });
+
+  it('defaults a stored cover with no position to 50', async () => {
+    mocks.loadPageContent.mockResolvedValue({
+      ...jsonContent(),
+      coverImage: { url: STORED_COVER.url },
+    });
+
+    const payload = parse(
+      await pageContentOutlineTool.handler({ classroom: 'org/x', page_id: PAGE_ID }, CTX)
+    );
+
+    expect(payload.cover_image.position).toBe(50);
+  });
+
+  it('outline and get both report null when there is no cover', async () => {
+    const outline = parse(
+      await pageContentOutlineTool.handler({ classroom: 'org/x', page_id: PAGE_ID }, CTX)
+    );
+    const got = parse(
+      await pageContentGetTool.handler({ classroom: 'org/x', page_id: PAGE_ID }, CTX)
+    );
+
+    expect(outline.cover_image).toBeNull();
+    expect(got.cover_image).toBeNull();
+    expect(mocks.resolvePageAssetUrl).not.toHaveBeenCalled();
+  });
+
+  it('get carries cover_image on the block_ids path too', async () => {
+    mocks.loadPageContent.mockResolvedValue({ ...jsonContent(), coverImage: STORED_COVER });
+
+    const payload = parse(
+      await pageContentGetTool.handler(
+        { classroom: 'org/x', page_id: PAGE_ID, block_ids: ['h1'] },
+        CTX
+      )
+    );
+
+    expect(payload.blocks).toHaveLength(1);
+    expect(payload.cover_image).toMatchObject({ url: STORED_COVER.url, position: 30 });
+  });
+
+  it('a legacy HTML page reports cover_image null (nowhere to store one)', async () => {
+    mocks.loadPageContent.mockResolvedValue({
+      format: 'html',
+      blocks: '<h1>Legacy</h1>',
+      coverImage: null,
+      sha: 'html-sha',
+    });
+
+    const payload = parse(
+      await pageContentOutlineTool.handler({ classroom: 'org/x', page_id: PAGE_ID }, CTX)
+    );
+    expect(payload.cover_image).toBeNull();
+  });
+});
+
+// ─── page_asset_upload ───────────────────────────────────────────────────────
+
+describe('page_asset_upload', () => {
+  const upload = (args: Record<string, unknown> = {}) =>
+    pageAssetUploadTool.handler(
+      {
+        classroom: 'org/x',
+        page_id: PAGE_ID,
+        filename: 'hero.png',
+        content_base64: PNG_BASE64,
+        ...args,
+      } as never,
+      CTX
+    );
+
+  it('commits the decoded bytes and returns the STORED ref plus a display url', async () => {
+    const payload = parse(await upload());
+
+    const [page, buffer, filename] = mocks.uploadPageAsset.mock.calls[0];
+    expect(page).toBe(PAGE);
+    expect(Buffer.isBuffer(buffer)).toBe(true);
+    expect(buffer).toEqual(Buffer.from(PNG_BASE64, 'base64'));
+    expect(filename).toBe('hero.png');
+
+    expect(payload).toEqual({
+      success: true,
+      path: 'pages/syllabus/assets/1700000000000-hero.png',
+      url: 'pages/syllabus/assets/1700000000000-hero.png',
+      display_url: SIGNED_COVER_URL,
+      sha: 'blob-sha',
+      size: buffer.length,
+    });
+  });
+
+  it('audits the upload against the page', async () => {
+    await upload();
+
+    expect(mocks.auditCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        classroom_id: 'class-1',
+        resource_type: 'PAGES',
+        resource_id: PAGE_ID,
+        action: 'UPDATE',
+        data: expect.objectContaining({
+          tool: 'page_asset_upload',
+          path: 'pages/syllabus/assets/1700000000000-hero.png',
+          sha: 'blob-sha',
+        }),
+      })
+    );
+  });
+
+  it('accepts a whole data: URL, not just the payload', async () => {
+    await upload({ content_base64: `data:image/png;base64,${PNG_BASE64}` });
+
+    expect(mocks.uploadPageAsset.mock.calls[0][1]).toEqual(Buffer.from(PNG_BASE64, 'base64'));
+  });
+
+  it('refuses a disallowed extension BEFORE touching the repo', async () => {
+    await expect(upload({ filename: 'notes.txt' })).rejects.toMatchObject({
+      kind: 'invalid_params',
+      message: expect.stringContaining('Invalid file type'),
+    });
+    expect(mocks.uploadPageAsset).not.toHaveBeenCalled();
+    expect(mocks.auditCreate).not.toHaveBeenCalled();
+  });
+
+  it('refuses a file over the 5 MB cap, in bytes not characters', async () => {
+    const oversize = Buffer.alloc(5 * 1024 * 1024 + 1024).toString('base64');
+
+    await expect(upload({ content_base64: oversize })).rejects.toMatchObject({
+      kind: 'invalid_params',
+      message: expect.stringContaining('File too large'),
+    });
+    expect(mocks.uploadPageAsset).not.toHaveBeenCalled();
+
+    // The schema's character cap is what stops the same payload one layer up,
+    // before the bytes are ever decoded (handlers are called directly here).
+    expect(pageAssetUploadTool.inputSchema.content_base64.safeParse(oversize).success).toBe(false);
+    expect(pageAssetUploadTool.inputSchema.content_base64.safeParse(PNG_BASE64).success).toBe(true);
+  });
+
+  it('refuses garbage base64 rather than committing whatever decodes', async () => {
+    await expect(upload({ content_base64: 'not base64 at all!!' })).rejects.toMatchObject({
+      kind: 'invalid_params',
+      message: expect.stringContaining('not valid base64'),
+    });
+    expect(mocks.uploadPageAsset).not.toHaveBeenCalled();
+  });
+
+  it('refuses base64 that decodes to nothing', async () => {
+    await expect(upload({ content_base64: '' })).rejects.toMatchObject({
+      kind: 'invalid_params',
+      message: expect.stringContaining('zero bytes'),
+    });
+    expect(mocks.uploadPageAsset).not.toHaveBeenCalled();
+  });
+});
+
+// ─── page_cover_set ──────────────────────────────────────────────────────────
+
+describe('page_cover_set', () => {
+  const setCover = (args: Record<string, unknown>) =>
+    pageCoverSetTool.handler({ classroom: 'org/x', page_id: PAGE_ID, ...args } as never, CTX);
+
+  const savedCover = () => mocks.savePageContent.mock.calls[0][2].coverImage;
+
+  it('sets a cover, CAS-locked on the content sha, and stamps the page row', async () => {
+    const existingBlocks = DOC();
+    mocks.loadPageContent.mockResolvedValue(jsonContent(existingBlocks));
+
+    const payload = parse(await setCover({ url: STORED_COVER.url, position: 20 }));
+
+    const [page, blocks, options] = mocks.savePageContent.mock.calls[0];
+    expect(page).toBe(PAGE);
+    // Cover-only write: the blocks go back exactly as they were read — the same
+    // array object, not a re-derived copy with fresh ids.
+    expect(blocks).toBe(existingBlocks);
+    expect(options).toMatchObject({
+      coverImage: { url: STORED_COVER.url, position: 20 },
+      expectedSha: 'sha-1',
+    });
+    // Never a preview branch — a cover change is live, like the web editor's.
+    expect(options.branch).toBeUndefined();
+    expect(mocks.loadPageContent.mock.calls[0][1]).toMatchObject({ skipCache: true });
+
+    expect(mocks.pageQuickUpdate).toHaveBeenCalledWith(PAGE_ID, { updated_at: expect.any(Date) });
+    expect(payload).toMatchObject({
+      success: true,
+      new_sha: 'new-sha',
+      cover_image: { url: STORED_COVER.url, display_url: SIGNED_COVER_URL, position: 20 },
+    });
+  });
+
+  it('defaults a brand-new cover to position 50', async () => {
+    await setCover({ url: STORED_COVER.url });
+    expect(savedCover()).toEqual({ url: STORED_COVER.url, position: 50 });
+  });
+
+  it('keeps the current position when only the image changes', async () => {
+    mocks.loadPageContent.mockResolvedValue({ ...jsonContent(), coverImage: STORED_COVER });
+
+    await setCover({ url: 'pages/syllabus/assets/other.jpg' });
+
+    expect(savedCover()).toEqual({ url: 'pages/syllabus/assets/other.jpg', position: 30 });
+  });
+
+  it('repositions without a url, keeping the current image', async () => {
+    mocks.loadPageContent.mockResolvedValue({ ...jsonContent(), coverImage: STORED_COVER });
+
+    await setCover({ position: 80 });
+
+    expect(savedCover()).toEqual({ url: STORED_COVER.url, position: 80 });
+  });
+
+  it('removes the cover on url: null', async () => {
+    mocks.loadPageContent.mockResolvedValue({ ...jsonContent(), coverImage: STORED_COVER });
+
+    const payload = parse(await setCover({ url: null }));
+
+    expect(savedCover()).toBeNull();
+    expect(payload.cover_image).toBeNull();
+    expect(mocks.auditCreate.mock.calls[0][0].data).toMatchObject({
+      removed: true,
+      prior_url: STORED_COVER.url,
+    });
+  });
+
+  it('removing an absent cover is an idempotent no-op — no commit at all', async () => {
+    const payload = parse(await setCover({ url: null }));
+
+    expect(payload).toMatchObject({ success: true, cover_image: null, unchanged: true });
+    expect(mocks.savePageContent).not.toHaveBeenCalled();
+    expect(mocks.pageQuickUpdate).not.toHaveBeenCalled();
+    expect(mocks.auditCreate).not.toHaveBeenCalled();
+  });
+
+  it('refuses a call that expresses no change', async () => {
+    await expect(setCover({})).rejects.toMatchObject({ kind: 'invalid_params' });
+    expect(mocks.loadPageContent).not.toHaveBeenCalled();
+    expect(mocks.savePageContent).not.toHaveBeenCalled();
+  });
+
+  it('refuses to reposition a cover that does not exist', async () => {
+    await expect(setCover({ position: 80 })).rejects.toMatchObject({
+      kind: 'invalid_params',
+      message: expect.stringContaining('no cover image to reposition'),
+    });
+    expect(mocks.savePageContent).not.toHaveBeenCalled();
+  });
+
+  it('refuses a non-image ref even though uploads allow .pdf', async () => {
+    await expect(setCover({ url: 'pages/syllabus/assets/handout.pdf' })).rejects.toMatchObject({
+      kind: 'invalid_params',
+      message: expect.stringContaining('must be an image'),
+    });
+    expect(mocks.loadPageContent).not.toHaveBeenCalled();
+    expect(mocks.savePageContent).not.toHaveBeenCalled();
+  });
+
+  it('ignores a query string when judging the extension', async () => {
+    await setCover({ url: 'pages/syllabus/assets/hero.png?v=2' });
+    expect(savedCover()).toMatchObject({ url: 'pages/syllabus/assets/hero.png?v=2' });
+  });
+
+  it('refuses a legacy HTML page instead of dropping its content', async () => {
+    mocks.loadPageContent.mockResolvedValue({
+      format: 'html',
+      blocks: '<h1>Legacy</h1>',
+      coverImage: null,
+      sha: 'html-sha',
+    });
+
+    await expect(setCover({ url: STORED_COVER.url })).rejects.toMatchObject({
+      kind: 'invalid_params',
+      message: expect.stringContaining('legacy HTML'),
+    });
+    expect(mocks.savePageContent).not.toHaveBeenCalled();
+  });
+
+  it('creates content.json with blank blocks (and no sha lock) for a page with no file', async () => {
+    mocks.loadPageContent.mockResolvedValue({
+      format: 'none',
+      blocks: null,
+      coverImage: null,
+      sha: null,
+    });
+
+    await setCover({ url: STORED_COVER.url });
+
+    const [, blocks, options] = mocks.savePageContent.mock.calls[0];
+    expect(blocks).toEqual([expect.objectContaining({ type: 'paragraph' })]);
+    expect(options.expectedSha).toBeUndefined();
+  });
+
+  it('maps a 409 to CONTENT_CONFLICT and leaves the page row alone', async () => {
+    mocks.savePageContent.mockRejectedValue(Object.assign(new Error('conflict'), { status: 409 }));
+
+    await expect(setCover({ url: STORED_COVER.url })).rejects.toMatchObject({
+      kind: 'invalid_params',
+      code: 'CONTENT_CONFLICT',
+    });
+    expect(mocks.pageQuickUpdate).not.toHaveBeenCalled();
+    expect(mocks.auditCreate).not.toHaveBeenCalled();
+  });
+});
+
+// ─── Tool declarations ───────────────────────────────────────────────────────
+
+describe('page asset/cover tool declarations', () => {
+  const NEW_TOOLS = [pageAssetUploadTool, pageCoverSetTool];
+
+  it('declares the write scope and the OWNER/TEACHER tier', () => {
+    for (const tool of NEW_TOOLS) {
+      expect(tool.scope).toBe('write');
+      expect(tool.roles).toEqual(['OWNER', 'TEACHER']);
+      expect(tool.inputSchema).toHaveProperty('classroom');
+    }
+  });
+
+  it('annotates both as non-destructive but open-world (they commit to GitHub)', () => {
+    for (const tool of NEW_TOOLS) {
+      expect(tool.annotations).toMatchObject({ destructive: false, openWorld: true });
+    }
+    expect(pageCoverSetTool.annotations?.idempotent).toBe(true);
+  });
+
+  /** Same 1,500-byte ceiling forms.test.ts guards — the connector DROPS a tool over it. */
+  it('keeps both descriptions well under the 2 KB a client will cut', () => {
+    for (const tool of NEW_TOOLS) {
+      expect(new TextEncoder().encode(tool.description).length).toBeLessThan(1500);
+    }
   });
 });

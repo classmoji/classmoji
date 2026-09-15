@@ -1,7 +1,8 @@
 /**
  * Page CONTENT tools (content-tools plan Phase 2, §7):
  * page_content_outline / page_content_get / page_content_apply +
- * page_preview_accept / page_preview_discard.
+ * page_preview_accept / page_preview_discard, plus the asset/cover pair
+ * page_asset_upload / page_cover_set (issue #369).
  *
  * Token-efficient granular editing of BlockNote page content stored in the
  * per-classroom content repo (`pages/<slug>/content.json`): outline → get(ids)
@@ -15,12 +16,18 @@
  * same-block conflict returns a structured per-unit report instead of raw
  * conflict markers. Discard = branch delete, main untouched.
  *
+ * The cover image is the one thing here that does NOT go through a preview: it
+ * lives beside the blocks in content.json, and page_cover_set writes the live
+ * page directly, exactly as the web editor's cover control does — which is what
+ * keeps the service's mergeCover assumption ("MCP previews never touch the
+ * cover") true.
+ *
  * Tier: OWNER_TEACHER — true parity with web page editing (['OWNER','TEACHER']).
  * S1: every tool loads the page WITH its classroom chain and compares
  * classroom_id before touching GitHub (loadPageWithRepoInClassroom).
  */
 
-import { ClassmojiService } from '@classmoji/services';
+import { ClassmojiService, MAX_FILE_SIZE, validateFile } from '@classmoji/services';
 import type { Prisma } from '@prisma/client';
 import { z } from 'zod';
 import { ToolError } from '../mcp/errors.ts';
@@ -55,6 +62,47 @@ function contentConflict(at: 'main' | 'preview' = 'main'): ToolError {
       : 'Content changed since you read it — call page_content_get again for a fresh sha',
     'CONTENT_CONFLICT'
   );
+}
+
+// ─── Cover image ─────────────────────────────────────────────────────────────
+
+/** BlockNote's own default: the image centred in its band. */
+const DEFAULT_COVER_POSITION = 50;
+
+/**
+ * Extensions a cover may have. `validateFile` also allows `.pdf` — fine for a
+ * generic page asset, not for something rendered as a page's header image.
+ */
+const COVER_IMAGE_EXTENSIONS = ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg'];
+
+/** Lowercased file extension of a repo path or URL, query/fragment stripped. */
+function extensionOf(ref: string): string | null {
+  const path = ref.split(/[?#]/)[0] ?? '';
+  return path.toLowerCase().match(/\.[^./]+$/)?.[0] ?? null;
+}
+
+/**
+ * The cover as the read tools report it: the STORED reference, plus a
+ * display_url that can actually be opened.
+ *
+ * Both, never one: `url` is what lives in content.json and what a later
+ * page_cover_set should be handed back, while `display_url` is a signed,
+ * expiring address for looking at the image right now. Returning only the
+ * stored path would hand an agent a string it cannot fetch; returning only the
+ * signed URL would invite it to store one, which is exactly what the save-side
+ * canonicalization exists to prevent.
+ */
+async function coverPayload(
+  page: PageWithRepoRecord,
+  cover: { url?: unknown; position?: unknown } | null | undefined
+): Promise<{ url: string; display_url: string | null; position: number } | null> {
+  const url = typeof cover?.url === 'string' ? cover.url : '';
+  if (!url) return null;
+  return {
+    url,
+    display_url: await ClassmojiService.pageContent.resolvePageAssetUrl(page, url),
+    position: typeof cover?.position === 'number' ? cover.position : DEFAULT_COVER_POSITION,
+  };
 }
 
 /** A BlockNote block as the tools see it (opaque beyond id/type/children). */
@@ -200,8 +248,8 @@ export const pageContentOutlineTool: ToolDefinition<PageContentOutlineArgs> = {
   title: 'Outline page content',
   description:
     "Returns a compact outline of a page's BlockNote content: one entry per block " +
-    '(id, type, ≤80-char text preview, depth, children_count) plus the content sha and ' +
-    'pending-preview status. Start here, then fetch only the blocks you need with ' +
+    '(id, type, ≤80-char text preview, depth, children_count) plus the content sha, the ' +
+    'cover image and pending-preview status. Start here, then fetch only the blocks you need with ' +
     'page_content_get (block_ids) and edit them with page_content_apply — never round-trip ' +
     "whole documents. Pass at: 'preview' to outline the pending preview instead of main.",
   scope: 'read',
@@ -244,6 +292,7 @@ export const pageContentOutlineTool: ToolDefinition<PageContentOutlineArgs> = {
         ...(content.format === 'html' ? { sha_source: 'legacy_html' } : {}),
         block_count: 0,
         has_cover_image: false,
+        cover_image: null,
         preview: previewPayload(status),
         blocks: [],
         message:
@@ -266,6 +315,7 @@ export const pageContentOutlineTool: ToolDefinition<PageContentOutlineArgs> = {
       sha_source: 'content_json',
       block_count: outline.length,
       has_cover_image: Boolean(content.coverImage),
+      cover_image: await coverPayload(page, content.coverImage),
       preview: previewPayload(status),
       blocks: outline,
     });
@@ -321,6 +371,7 @@ export const pageContentGetTool: ToolDefinition<PageContentGetArgs> = {
         page_id: page.id,
         format: content.format === 'html' ? 'html' : 'none',
         sha: content.sha,
+        cover_image: null,
         ...(content.format === 'html' ? { sha_source: 'legacy_html', html: content.blocks } : {}),
         message:
           content.format === 'html'
@@ -333,6 +384,7 @@ export const pageContentGetTool: ToolDefinition<PageContentGetArgs> = {
       content.blocks as BlockNode[]
     ) as BlockNode[];
     const totalCount = countBlocks(blocks);
+    const cover = await coverPayload(page, content.coverImage);
 
     if (args.block_ids?.length) {
       const selected: BlockNode[] = [];
@@ -352,6 +404,7 @@ export const pageContentGetTool: ToolDefinition<PageContentGetArgs> = {
         sha: content.sha,
         sha_source: 'content_json',
         block_count: totalCount,
+        cover_image: cover,
         blocks: selected,
       });
     }
@@ -362,6 +415,7 @@ export const pageContentGetTool: ToolDefinition<PageContentGetArgs> = {
       sha: content.sha,
       sha_source: 'content_json',
       block_count: totalCount,
+      cover_image: cover,
       blocks,
       ...(totalCount >= 100
         ? {
@@ -838,6 +892,275 @@ export const pagePreviewDiscardTool: ToolDefinition<PagePreviewArgs> = {
       success: true,
       discarded: true,
       ...(result.existed ? {} : { note: 'Preview branch was already gone' }),
+    });
+  },
+};
+
+// ─── page_asset_upload ───────────────────────────────────────────────────────
+
+/**
+ * How long the base64 of a maximum-size file is. Base64 spends four characters
+ * on every three bytes, so the `validateFile` ceiling arrives about a third
+ * larger than the file it describes. Capping the STRING is what turns "too big"
+ * into an invalid_params the agent can read, instead of a transfer that runs to
+ * completion and is then refused by byte count — or, past Fastify's bodyLimit,
+ * a bare HTTP 413 with no MCP error in it at all.
+ */
+const MAX_CONTENT_BASE64_CHARS = Math.ceil(MAX_FILE_SIZE / 3) * 4;
+
+/** Strip an optional `data:<mime>;base64,` prefix — agents paste whole data URLs. */
+function stripDataUrlPrefix(value: string): string {
+  return value.replace(/^data:[^;,]*;base64,/i, '').trim();
+}
+
+/** Decode base64 strictly: Buffer.from ignores garbage, which would commit junk. */
+function decodeBase64(value: string): Buffer {
+  const base64 = stripDataUrlPrefix(value);
+  if (base64.length % 4 !== 0 || !/^[A-Za-z0-9+/]*={0,2}$/.test(base64)) {
+    throw new ToolError(
+      'invalid_params',
+      'content_base64 is not valid base64 — send the standard alphabet with no line breaks ' +
+        '(a whole data: URL is accepted too)'
+    );
+  }
+  const buffer = Buffer.from(base64, 'base64');
+  if (buffer.length === 0) {
+    throw new ToolError('invalid_params', 'content_base64 decoded to zero bytes');
+  }
+  return buffer;
+}
+
+interface PageAssetUploadArgs {
+  classroom: string;
+  page_id: string;
+  filename: string;
+  content_base64: string;
+}
+
+export const pageAssetUploadTool: ToolDefinition<PageAssetUploadArgs> = {
+  name: 'page_asset_upload',
+  annotations: { destructive: false, openWorld: true },
+  // Uploads commit binary to the content repo — bursts of five, then one every
+  // twenty seconds, rather than the default twenty.
+  rateLimit: { capacity: 5, refillPerSecond: 0.05 },
+  title: 'Upload a page asset',
+  description:
+    "Commits a file (image or PDF, ≤5 MB) into the page's assets folder in the classroom " +
+    'content repo and returns the reference to use for it. Store the returned `url` — pass it ' +
+    'to page_cover_set, or put it in an image block via page_content_apply. `display_url` is a ' +
+    'signed, expiring address for VIEWING the file; never store that one. Allowed extensions: ' +
+    '.png .jpg .jpeg .gif .webp .svg .pdf (page covers accept every one but .pdf).',
+  scope: 'write',
+  roles: OWNER_TEACHER,
+  inputSchema: {
+    classroom: z.string().describe("Classroom reference as 'org/slug'"),
+    page_id: z.string().uuid().describe('Page id'),
+    filename: z
+      .string()
+      .min(1)
+      .max(200)
+      .describe(
+        'Original filename WITH its extension — it decides the file type and is sanitized ' +
+          'and timestamp-prefixed before it is stored'
+      ),
+    content_base64: z
+      .string()
+      .min(1)
+      .max(MAX_CONTENT_BASE64_CHARS)
+      .describe('The file bytes, base64-encoded (≤5 MB decoded). A whole data: URL also works.'),
+  },
+  handler: async (args, ctx) => {
+    const page = await loadPageWithRepoInClassroom(args.page_id, ctx);
+    const buffer = decodeBase64(args.content_base64);
+
+    // The same check ContentService.upload runs, run BEFORE it: uploadPageAsset
+    // asks GitHub for the content repo's default branch first, so leaving this
+    // to the service would spend a round trip to learn the extension is wrong.
+    const validation = validateFile({ filename: args.filename, size: buffer.length });
+    if (!validation.valid) {
+      throw new ToolError('invalid_params', validation.error ?? 'Invalid file');
+    }
+
+    const uploaded = await ClassmojiService.pageContent.uploadPageAsset(
+      page,
+      buffer,
+      args.filename
+    );
+
+    await writeAudit(ctx, {
+      resource_type: 'PAGES',
+      resource_id: page.id,
+      action: 'UPDATE',
+      data: {
+        tool: 'page_asset_upload',
+        path: uploaded.path,
+        sha: uploaded.sha,
+        size: buffer.length,
+      } as Prisma.InputJsonValue,
+    });
+
+    return ok({
+      success: true,
+      path: uploaded.path,
+      url: uploaded.url,
+      display_url: uploaded.displayUrl,
+      sha: uploaded.sha,
+      size: buffer.length,
+    });
+  },
+};
+
+// ─── page_cover_set ──────────────────────────────────────────────────────────
+
+const COVER_LEGACY_GUIDANCE =
+  'This page still stores legacy HTML (index.html), which has nowhere to record a cover ' +
+  'image. Open it once in the web editor to migrate it to BlockNote, then try again.';
+
+interface PageCoverSetArgs {
+  classroom: string;
+  page_id: string;
+  url?: string | null;
+  position?: number;
+}
+
+export const pageCoverSetTool: ToolDefinition<PageCoverSetArgs> = {
+  name: 'page_cover_set',
+  annotations: { destructive: false, idempotent: true, openWorld: true },
+  title: "Set a page's cover image",
+  description:
+    "Sets, repositions, or removes a page's cover (header) image. Pass url to set it — use the " +
+    '`url` page_asset_upload returned, or one already on the page. Pass url: null to remove the ' +
+    'cover. Omit url and pass position alone to reposition the current image. position is the ' +
+    'vertical focal point, 0 (top) to 100 (bottom), default 50. Unlike page_content_apply this ' +
+    'always writes the LIVE page — never a preview branch — exactly as the web editor does, so ' +
+    'students see it immediately. A CONTENT_CONFLICT means the page content changed mid-write; ' +
+    'just call again.',
+  scope: 'write',
+  roles: OWNER_TEACHER,
+  inputSchema: {
+    classroom: z.string().describe("Classroom reference as 'org/slug'"),
+    page_id: z.string().uuid().describe('Page id'),
+    url: z
+      .string()
+      .min(1)
+      .nullable()
+      .optional()
+      .describe(
+        'Stored reference to the image (from page_asset_upload, or the cover_image.url a ' +
+          'content read returned). null removes the cover; omit it to keep the current image ' +
+          'and change only position. Must end in .png .jpg .jpeg .gif .webp or .svg'
+      ),
+    position: z
+      .number()
+      .int()
+      .min(0)
+      .max(100)
+      .optional()
+      .describe(
+        'Vertical focal point, 0 (top) to 100 (bottom). Omitted: keeps the current position, ' +
+          'or 50 for a page that had no cover'
+      ),
+  },
+  handler: async (args, ctx) => {
+    const page = await loadPageWithRepoInClassroom(args.page_id, ctx);
+
+    // Neither argument means no expressible intent — "set the cover to what it
+    // already is" is not one, and guessing at removal would be destructive.
+    if (args.url === undefined && args.position === undefined) {
+      throw new ToolError(
+        'invalid_params',
+        'Pass url to set or remove the cover, position to reposition it, or both'
+      );
+    }
+    if (typeof args.url === 'string') {
+      const ext = extensionOf(args.url);
+      if (!ext || !COVER_IMAGE_EXTENSIONS.includes(ext)) {
+        throw new ToolError(
+          'invalid_params',
+          `A cover must be an image — ${COVER_IMAGE_EXTENSIONS.join(', ')}, not '${args.url}'`
+        );
+      }
+    }
+
+    const content = await ClassmojiService.pageContent.loadPageContent(page, { skipCache: true });
+
+    // The web's savePageCoverImage migrates a legacy page through the React
+    // editor schema on the way past; that schema cannot be imported here, and
+    // writing content.json without it would silently drop the page's HTML.
+    if (content.format === 'html') {
+      throw new ToolError('invalid_params', COVER_LEGACY_GUIDANCE);
+    }
+
+    const current = content.coverImage;
+
+    // Removing a cover that isn't there changed nothing, and committing an
+    // identical content.json to say so would still bump the sha under every
+    // reader holding one. Idempotent, and free.
+    if (args.url === null && !current) {
+      return ok({
+        success: true,
+        cover_image: null,
+        unchanged: true,
+        note: 'This page had no cover image — nothing to remove',
+      });
+    }
+    if (args.url === undefined && !current) {
+      throw new ToolError(
+        'invalid_params',
+        'This page has no cover image to reposition — pass url to set one'
+      );
+    }
+
+    const nextCover =
+      args.url === null
+        ? null
+        : {
+            url: typeof args.url === 'string' ? args.url : (current?.url ?? ''),
+            position: args.position ?? current?.position ?? DEFAULT_COVER_POSITION,
+          };
+
+    // Cover-only write: the blocks go back exactly as they were read. A page
+    // with no content file yet gets the same blank paragraph the web editor
+    // creates, so a cover can be set before anything is written.
+    const blocks =
+      content.format === 'json' ? content.blocks : ClassmojiService.pageContent.blankPageBlocks();
+
+    let saved: { sha: string; commit: string };
+    try {
+      saved = await ClassmojiService.pageContent.savePageContent(page, blocks, {
+        coverImage: nextCover,
+        // Only content.json's own sha is a valid precondition, and a page with
+        // no file yet has none — passing one would 409 the very first write.
+        ...(content.format === 'json' && content.sha ? { expectedSha: content.sha } : {}),
+        message: `page_cover_set: ${page.title}`,
+      });
+    } catch (error) {
+      if ((error as { status?: number }).status === 409) throw contentConflict('main');
+      throw error;
+    }
+
+    // The page row itself is untouched by a content commit, so the list views
+    // that sort and stamp by updated_at would never notice. Same stamp the web
+    // route makes after its own cover write.
+    await ClassmojiService.page.quickUpdate(page.id, { updated_at: new Date() });
+
+    await writeAudit(ctx, {
+      resource_type: 'PAGES',
+      resource_id: page.id,
+      action: 'UPDATE',
+      data: {
+        tool: 'page_cover_set',
+        ...(nextCover ? { url: nextCover.url, position: nextCover.position } : { removed: true }),
+        ...(current ? { prior_url: current.url, prior_position: current.position } : {}),
+        new_sha: saved.sha,
+        commit_sha: saved.commit,
+      } as Prisma.InputJsonValue,
+    });
+
+    return ok({
+      success: true,
+      cover_image: await coverPayload(page, nextCover),
+      new_sha: saved.sha,
     });
   },
 };

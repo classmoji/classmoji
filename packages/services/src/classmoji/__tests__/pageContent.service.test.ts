@@ -64,6 +64,10 @@ vi.mock('../contentAssets.service.ts', () => ({
 // URL, which is what the upload assertions below are about.
 const fetchContentTextMock = vi.fn();
 const warmContentTextMock = vi.fn(async (..._args: unknown[]) => {});
+// Stubbed, unlike the two signing guards: `resolvePageAssetUrl` is a policy
+// wrapper — which classrooms may mint, and what counts as an answer — and
+// contentDelivery.resolve.test.ts owns the resolve itself.
+const resolveAssetUrlMock = vi.fn();
 vi.mock('../contentDelivery.service.ts', async () => {
   const actual = await vi.importActual<typeof import('../contentDelivery.service.ts')>(
     '../contentDelivery.service.ts'
@@ -78,6 +82,7 @@ vi.mock('../contentDelivery.service.ts', async () => {
     warmContentText: (...args: unknown[]) => warmContentTextMock(...args),
     mappedAssetsBySha: actual.mappedAssetsBySha,
     signBlobUrlForClassroom: actual.signBlobUrlForClassroom,
+    resolveAssetUrl: (...args: unknown[]) => resolveAssetUrlMock(...args),
   };
 });
 
@@ -85,6 +90,7 @@ const {
   loadPageContent,
   savePageContent,
   uploadPageAsset,
+  resolvePageAssetUrl,
   ensureBlockIds,
   applyBlockOps,
   normalizeBlockStructure,
@@ -648,6 +654,7 @@ describe('pageContent.uploadPageAsset', () => {
     expect(result).toEqual({
       url: RAW_URL,
       path: 'pages/syllabus/assets/a.png',
+      sha: 'c'.repeat(40),
       displayUrl: null,
     });
   });
@@ -721,6 +728,66 @@ describe('pageContent.uploadPageAsset', () => {
       sha: 'c'.repeat(40),
       size: 1,
     });
+  });
+});
+
+// ─── resolvePageAssetUrl ─────────────────────────────────────────────────────
+
+describe('pageContent.resolvePageAssetUrl', () => {
+  const SIGNED = 'https://cdn.classmoji.test/c/abc/def.png?p=edit&sig=x';
+  const REF = 'pages/syllabus/assets/a.png';
+
+  /** A classroom the resolver can mint for: id, key version, delivery on. */
+  const signablePage = {
+    ...page,
+    classroom: {
+      ...page.classroom,
+      id: '3f2504e0-4f89-41d3-9a0c-0305e82c3301',
+      content_key_version: 0,
+      content_delivery_enabled: true,
+    },
+  };
+
+  beforeEach(() => {
+    resolveAssetUrlMock.mockReset();
+    resolveAssetUrlMock.mockResolvedValue(SIGNED);
+  });
+
+  it('returns the signed URL for a stored repo path', async () => {
+    await expect(resolvePageAssetUrl(signablePage, REF)).resolves.toBe(SIGNED);
+    expect(resolveAssetUrlMock).toHaveBeenCalledWith(
+      expect.objectContaining({ tier: 'edit' }),
+      REF
+    );
+  });
+
+  it('returns null rather than echoing a path the resolver declined', async () => {
+    // A resolve that could not sign hands the reference straight back. Handing
+    // that on as a display URL would read as "open this" and behave as a 404.
+    resolveAssetUrlMock.mockResolvedValue(REF);
+
+    await expect(resolvePageAssetUrl(signablePage, REF)).resolves.toBeNull();
+  });
+
+  it('refuses to mint for a classroom with no key version, rather than signing at 0', async () => {
+    // The version goes INTO the signature, so guessing produces a URL the
+    // Worker refuses — indistinguishable from a broken image to the caller.
+    const noVersion = { ...page, classroom: { ...signablePage.classroom } };
+    delete (noVersion.classroom as { content_key_version?: unknown }).content_key_version;
+
+    await expect(resolvePageAssetUrl(noVersion, REF)).resolves.toBeNull();
+    expect(resolveAssetUrlMock).not.toHaveBeenCalled();
+  });
+
+  it('swallows a resolver failure — a cover read must not fail on a signing error', async () => {
+    resolveAssetUrlMock.mockRejectedValue(new Error('map unavailable'));
+
+    await expect(resolvePageAssetUrl(signablePage, REF)).resolves.toBeNull();
+  });
+
+  it('is a no-op on an empty reference', async () => {
+    await expect(resolvePageAssetUrl(signablePage, '')).resolves.toBeNull();
+    expect(resolveAssetUrlMock).not.toHaveBeenCalled();
   });
 });
 
