@@ -34,6 +34,7 @@ const mocks = vi.hoisted(() => ({
   discardPreview: vi.fn(),
   uploadPageAsset: vi.fn(),
   resolvePageAssetUrl: vi.fn(),
+  canonicalizePageCoverRef: vi.fn(),
   auditCreate: vi.fn(),
 }));
 
@@ -65,7 +66,6 @@ vi.mock('@classmoji/services', async () => {
         previewBranchName: pure.previewBranchName,
         ensureBlockIds: pure.ensureBlockIds,
         applyBlockOps: pure.applyBlockOps,
-        blankPageBlocks: pure.blankPageBlocks,
         // GitHub-touching helpers — mocked.
         loadPageContent: (...a: unknown[]) => mocks.loadPageContent(...a),
         savePageContent: (...a: unknown[]) => mocks.savePageContent(...a),
@@ -76,6 +76,7 @@ vi.mock('@classmoji/services', async () => {
         discardPreview: (...a: unknown[]) => mocks.discardPreview(...a),
         uploadPageAsset: (...a: unknown[]) => mocks.uploadPageAsset(...a),
         resolvePageAssetUrl: (...a: unknown[]) => mocks.resolvePageAssetUrl(...a),
+        canonicalizePageCoverRef: (...a: unknown[]) => mocks.canonicalizePageCoverRef(...a),
       },
       audit: { create: (...a: unknown[]) => mocks.auditCreate(...a) },
     },
@@ -164,7 +165,13 @@ beforeEach(() => {
   mocks.pageFindById.mockResolvedValue(PAGE);
   mocks.getPreviewStatus.mockResolvedValue({ exists: false });
   mocks.loadPageContent.mockResolvedValue(jsonContent());
-  mocks.savePageContent.mockResolvedValue({ sha: 'new-sha', commit: 'commit-sha' });
+  // The service returns the cover AS STORED; identity by default, overridden in
+  // the tests that care what canonicalization did to it.
+  mocks.savePageContent.mockImplementation(async (_page, _blocks, options) => ({
+    sha: 'new-sha',
+    commit: 'commit-sha',
+    coverImage: options?.coverImage ?? null,
+  }));
   mocks.ensurePreviewBranch.mockResolvedValue({ branch: PREVIEW_BRANCH, created: true });
   mocks.auditCreate.mockResolvedValue(undefined);
   mocks.pageQuickUpdate.mockResolvedValue(undefined);
@@ -177,6 +184,9 @@ beforeEach(() => {
   mocks.resolvePageAssetUrl.mockResolvedValue(
     'https://content.classmoji.io/c/class-1/blob-sha.png?sig=abc'
   );
+  // Default: the ref is already canonical and belongs to this classroom. The
+  // service owns the real decision; these tests own the tool's reaction to it.
+  mocks.canonicalizePageCoverRef.mockImplementation(async (_page, ref) => ref);
 });
 
 // ─── S1: cross-classroom pages are invisible to every tool ──────────────────
@@ -1285,6 +1295,24 @@ describe('page_asset_upload', () => {
     expect(mocks.uploadPageAsset.mock.calls[0][1]).toEqual(Buffer.from(PNG_BASE64, 'base64'));
   });
 
+  it('accepts 76-column wrapped base64 — encoders emit it and it is not payload', async () => {
+    const wrapped = (PNG_BASE64.match(/.{1,76}/g) ?? []).join('\n');
+
+    await upload({ content_base64: wrapped });
+
+    expect(mocks.uploadPageAsset.mock.calls[0][1]).toEqual(Buffer.from(PNG_BASE64, 'base64'));
+  });
+
+  it('the char cap leaves room for wrapping and a data: prefix on a legal 5 MB file', async () => {
+    // A 5 MB file is ~6.99 M base64 chars; wrapped at 76 columns it gains ~92 K
+    // newlines, and a data: prefix another 22. A cap set to the bare encoded
+    // length would refuse all three for being too big when none of them is.
+    const atCap = Buffer.alloc(5 * 1024 * 1024).toString('base64');
+    const wrapped = `data:image/png;base64,${(atCap.match(/.{1,76}/g) ?? []).join('\n')}`;
+
+    expect(pageAssetUploadTool.inputSchema.content_base64.safeParse(wrapped).success).toBe(true);
+  });
+
   it('refuses a disallowed extension BEFORE touching the repo', async () => {
     await expect(upload({ filename: 'notes.txt' })).rejects.toMatchObject({
       kind: 'invalid_params',
@@ -1303,16 +1331,28 @@ describe('page_asset_upload', () => {
     });
     expect(mocks.uploadPageAsset).not.toHaveBeenCalled();
 
-    // The schema's character cap is what stops the same payload one layer up,
-    // before the bytes are ever decoded (handlers are called directly here).
-    expect(pageAssetUploadTool.inputSchema.content_base64.safeParse(oversize).success).toBe(false);
+    // The schema's character cap is the outer sanity ceiling, well above the
+    // real one — it is what stops an absurd payload before the bytes are ever
+    // decoded (handlers are called directly here, so it does not run).
+    const absurd = Buffer.alloc(6 * 1024 * 1024).toString('base64');
+    expect(pageAssetUploadTool.inputSchema.content_base64.safeParse(absurd).success).toBe(false);
     expect(pageAssetUploadTool.inputSchema.content_base64.safeParse(PNG_BASE64).success).toBe(true);
   });
 
   it('refuses garbage base64 rather than committing whatever decodes', async () => {
-    await expect(upload({ content_base64: 'not base64 at all!!' })).rejects.toMatchObject({
+    const error = await upload({ content_base64: 'not base64 at all!!' }).catch((e: unknown) => e);
+
+    expect(error).toMatchObject({ kind: 'invalid_params' });
+    expect((error as Error).message).toContain('not valid base64');
+    // The padding rule is the one an agent gets wrong silently, so say it.
+    expect((error as Error).message).toContain('multiple of 4');
+    expect(mocks.uploadPageAsset).not.toHaveBeenCalled();
+  });
+
+  it('refuses unpadded base64 rather than decoding a truncated file', async () => {
+    await expect(upload({ content_base64: PNG_BASE64.replace(/=+$/, '') })).rejects.toMatchObject({
       kind: 'invalid_params',
-      message: expect.stringContaining('not valid base64'),
+      message: expect.stringContaining('multiple of 4'),
     });
     expect(mocks.uploadPageAsset).not.toHaveBeenCalled();
   });
@@ -1427,9 +1467,18 @@ describe('page_cover_set', () => {
     expect(mocks.savePageContent).not.toHaveBeenCalled();
   });
 
-  it('ignores a query string when judging the extension', async () => {
-    await setCover({ url: 'pages/syllabus/assets/hero.png?v=2' });
-    expect(savedCover()).toMatchObject({ url: 'pages/syllabus/assets/hero.png?v=2' });
+  it('names the in-band fix in the legacy refusal, not only the web editor', async () => {
+    mocks.loadPageContent.mockResolvedValue({
+      format: 'html',
+      blocks: '<h1>Legacy</h1>',
+      coverImage: null,
+      sha: 'html-sha',
+    });
+
+    const error = await setCover({ url: STORED_COVER.url }).catch((e: unknown) => e);
+
+    expect((error as Error).message).toContain('page_content_apply replace_all');
+    expect((error as Error).message).toContain('web editor');
   });
 
   it('refuses a legacy HTML page instead of dropping its content', async () => {
@@ -1447,7 +1496,11 @@ describe('page_cover_set', () => {
     expect(mocks.savePageContent).not.toHaveBeenCalled();
   });
 
-  it('creates content.json with blank blocks (and no sha lock) for a page with no file', async () => {
+  it('refuses a page with no readable content.json rather than writing blank blocks', async () => {
+    // THE regression this guards: loadPageContent returns format 'none' for any
+    // unreadable read, a GitHub 5xx included — not only for a genuinely empty
+    // page. Writing blocks here would replace a live document with one empty
+    // paragraph, and with no sha to lock on there would be no CAS to stop it.
     mocks.loadPageContent.mockResolvedValue({
       format: 'none',
       blocks: null,
@@ -1455,20 +1508,109 @@ describe('page_cover_set', () => {
       sha: null,
     });
 
+    await expect(setCover({ url: STORED_COVER.url })).rejects.toMatchObject({
+      kind: 'invalid_params',
+      message: expect.stringContaining('page_content_apply replace_all'),
+    });
+    expect(mocks.savePageContent).not.toHaveBeenCalled();
+    expect(mocks.pageQuickUpdate).not.toHaveBeenCalled();
+  });
+
+  it('refuses a json read that came back without a sha (nothing to lock on)', async () => {
+    mocks.loadPageContent.mockResolvedValue({ ...jsonContent(), sha: null });
+
+    await expect(setCover({ url: STORED_COVER.url })).rejects.toMatchObject({
+      kind: 'invalid_params',
+    });
+    expect(mocks.savePageContent).not.toHaveBeenCalled();
+  });
+
+  it('every write is CAS-locked — no call ever omits expectedSha', async () => {
+    mocks.loadPageContent.mockResolvedValue({ ...jsonContent(), coverImage: STORED_COVER });
+
+    await setCover({ url: 'pages/syllabus/assets/other.jpg' });
+    await setCover({ position: 12 });
+    await setCover({ url: null });
+
+    expect(mocks.savePageContent).toHaveBeenCalledTimes(3);
+    for (const [, , options] of mocks.savePageContent.mock.calls) {
+      expect(options.expectedSha).toBe('sha-1');
+    }
+  });
+
+  it('canonicalises the ref and echoes what was STORED, not what was passed', async () => {
+    // An agent hands back the signed display_url it was shown. Storing that
+    // would freeze one viewer's tier and expiry into content.json.
+    const signed = 'https://content.classmoji.io/c/class-1/blob-sha.png?sig=abc';
+    mocks.canonicalizePageCoverRef.mockResolvedValue(STORED_COVER.url);
+
+    const payload = parse(await setCover({ url: signed }));
+
+    expect(mocks.canonicalizePageCoverRef).toHaveBeenCalledWith(PAGE, signed);
+    expect(savedCover()).toEqual({ url: STORED_COVER.url, position: 50 });
+    expect(payload.cover_image.url).toBe(STORED_COVER.url);
+  });
+
+  it('refuses a ref the service will not claim for this classroom', async () => {
+    // An external host in a cover beacons every class-site visitor, so a
+    // prompt-injected agent must not be able to point one there.
+    mocks.canonicalizePageCoverRef.mockResolvedValue(null);
+
+    await expect(setCover({ url: 'https://evil.example.com/tracker.png' })).rejects.toMatchObject({
+      kind: 'invalid_params',
+      message: expect.stringContaining('page_asset_upload'),
+    });
+    expect(mocks.savePageContent).not.toHaveBeenCalled();
+    expect(mocks.pageQuickUpdate).not.toHaveBeenCalled();
+    expect(mocks.auditCreate).not.toHaveBeenCalled();
+  });
+
+  it('setting the cover it already has is a no-op — no commit, no stamp', async () => {
+    mocks.loadPageContent.mockResolvedValue({ ...jsonContent(), coverImage: STORED_COVER });
+
+    const payload = parse(
+      await setCover({ url: STORED_COVER.url, position: STORED_COVER.position })
+    );
+
+    expect(payload).toMatchObject({ success: true, unchanged: true });
+    expect(payload.cover_image).toMatchObject({ url: STORED_COVER.url, position: 30 });
+    expect(mocks.savePageContent).not.toHaveBeenCalled();
+    expect(mocks.pageQuickUpdate).not.toHaveBeenCalled();
+    expect(mocks.auditCreate).not.toHaveBeenCalled();
+  });
+
+  it('the no-op compares the CANONICAL ref, so a signed url for the same file is one', async () => {
+    mocks.loadPageContent.mockResolvedValue({ ...jsonContent(), coverImage: STORED_COVER });
+    mocks.canonicalizePageCoverRef.mockResolvedValue(STORED_COVER.url);
+
+    const payload = parse(
+      await setCover({ url: 'https://content.classmoji.io/c/class-1/blob-sha.png?sig=abc' })
+    );
+
+    expect(payload.unchanged).toBe(true);
+    expect(mocks.savePageContent).not.toHaveBeenCalled();
+  });
+
+  it('audits before stamping, so a stamp failure cannot lose the audit row', async () => {
+    const order: string[] = [];
+    mocks.auditCreate.mockImplementation(async () => void order.push('audit'));
+    mocks.pageQuickUpdate.mockImplementation(async () => void order.push('stamp'));
+
     await setCover({ url: STORED_COVER.url });
 
-    const [, blocks, options] = mocks.savePageContent.mock.calls[0];
-    expect(blocks).toEqual([expect.objectContaining({ type: 'paragraph' })]);
-    expect(options.expectedSha).toBeUndefined();
+    expect(order).toEqual(['audit', 'stamp']);
   });
 
   it('maps a 409 to CONTENT_CONFLICT and leaves the page row alone', async () => {
     mocks.savePageContent.mockRejectedValue(Object.assign(new Error('conflict'), { status: 409 }));
 
-    await expect(setCover({ url: STORED_COVER.url })).rejects.toMatchObject({
-      kind: 'invalid_params',
-      code: 'CONTENT_CONFLICT',
-    });
+    const error = await setCover({ url: STORED_COVER.url }).catch((e: unknown) => e);
+
+    expect(error).toMatchObject({ kind: 'invalid_params', code: 'CONTENT_CONFLICT' });
+    // This tool takes no sha, so page_content_apply's "re-read for a fresh one"
+    // would send the agent after an argument that does not exist.
+    expect((error as Error).message).toContain('call page_cover_set again');
+    expect((error as Error).message).not.toContain('page_content_get');
     expect(mocks.pageQuickUpdate).not.toHaveBeenCalled();
     expect(mocks.auditCreate).not.toHaveBeenCalled();
   });

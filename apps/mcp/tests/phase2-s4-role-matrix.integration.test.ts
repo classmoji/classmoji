@@ -934,6 +934,32 @@ describe('page tools', () => {
       since: suiteStart,
     });
 
+    // Assets + cover sit on the same OWNER+TEACHER tier as the rest of page
+    // editing. Only the denials are asserted here: the happy paths commit to a
+    // real content repo, which this synthetic page does not have.
+    expectForbidden(
+      await callTool(ta, 'page_asset_upload', {
+        classroom: DEV_REF,
+        page_id: tierPageId,
+        filename: 'nope.png',
+        // A real 1x1 PNG — the gate must refuse before the bytes matter.
+        content_base64:
+          'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==',
+      }),
+      'page_asset_upload as assistant',
+      'INSUFFICIENT_ROLE'
+    );
+
+    expectForbidden(
+      await callTool(ta, 'page_cover_set', {
+        classroom: DEV_REF,
+        page_id: tierPageId,
+        url: 'pages/tier/assets/nope.png',
+      }),
+      'page_cover_set as assistant',
+      'INSUFFICIENT_ROLE'
+    );
+
     expectForbidden(
       await callTool(ta, 'page_delete', { classroom: DEV_REF, page_id: tierPageId }),
       'page_delete as assistant',

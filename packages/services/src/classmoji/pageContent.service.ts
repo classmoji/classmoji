@@ -4,11 +4,14 @@ import { collectBlockAssetRefs, mapBlockAssetRefs } from '@classmoji/utils';
 import { ContentService } from '../content/ContentService.ts';
 import { recordContentAsset, resolveContentBranch } from './contentAssets.service.ts';
 import {
+  canonicalizeAssetRef,
   canonicalizeMany,
   fetchContentText,
   mappedAssetsBySha,
+  parseMissingUrl,
   resolveAssetUrl,
   signBlobUrlForClassroom,
+  toRepoPath,
   textReadBudget,
   warmContentText,
   type ResolveContext,
@@ -391,7 +394,11 @@ async function canonicalizePageCover(
  *   status 409 (propagated from ContentService.put).
  * @param options.message - Commit message (default `Update page: <title>`).
  * @param options.branch - Branch to commit to (default: repo default branch).
- * @returns The new file sha and commit sha.
+ * @returns The new file sha, the commit sha, and the coverImage AS STORED —
+ *   canonicalized, and resolved to the existing one when the caller omitted it.
+ *   Returned rather than left for the caller to reconstruct because a caller
+ *   that echoes its own input describes a document that may not exist: hand it
+ *   a signed URL and the store holds a repo path.
  */
 export async function savePageContent(
   page: PageWithContentRepo,
@@ -407,7 +414,7 @@ export async function savePageContent(
     message?: string;
     branch?: string;
   } = {}
-): Promise<{ sha: string; commit: string }> {
+): Promise<{ sha: string; commit: string; coverImage: PageCoverImage | null }> {
   const { gitOrganization, repo } = contentRepoFor(page);
   const path = `${page.content_path}/content.json`;
 
@@ -487,7 +494,9 @@ export async function savePageContent(
     await recordPageFile(page, path, result.sha, content);
   }
 
-  return result;
+  // `wrapper.coverImage` is the written truth: canonicalized above, and filled
+  // in from the existing file when the caller passed nothing.
+  return { ...result, coverImage: wrapper.coverImage ?? null };
 }
 
 /**
@@ -641,22 +650,30 @@ export async function uploadPageAsset(
  * `edit` tier, the same tier `uploadPageAsset` hands back for a file it just
  * committed, since only someone who can edit the page ever asks.
  *
- * Null — not the reference echoed back — whenever the answer would still not be
- * fetchable: the layer is off for this classroom or deployment, the classroom
- * has no signing key version to mint under, or the resolver declined the
- * reference (another repo's, or one the map has never seen). A caller needs to
- * tell "here is where to look at it" from "there is nowhere to look at it", and
- * a repo path returned as a URL reads as the former while behaving as the latter.
+ * Null — never a URL that is going to 404 — in all four ways this can fail to
+ * produce a real address. The caller needs to tell "here is where to look at
+ * it" from "there is nowhere to look at it", and anything else returned here
+ * reads as the former while behaving as the latter:
+ *
+ *   1. The resolver handed the reference back UNCHANGED. That is its answer for
+ *      "the layer is off" and for a reference it will not claim (an external
+ *      host, or a pinned raw.githubusercontent URL) — and for those the string
+ *      may well be absolute, so "does it start with https" is the wrong test.
+ *   2. It returned the `/missing/` placeholder, which is a deterministic 404 by
+ *      construction: the map has never heard of this reference.
+ *   3. Nothing could be signed at all (no context for this classroom).
+ *   4. The resolve threw. A cover READ must not fail because of a signing error.
  */
 export async function resolvePageAssetUrl(
   page: PageWithContentRepo,
   ref: string
 ): Promise<string | null> {
   if (!ref) return null;
-  // Strict where `pageResolveContext` defaults, for `pageWarmContext`'s reason:
-  // this call MINTS a signature and `content_key_version` goes into it, so
-  // signing at a version the readers are not on would hand back a URL the
-  // Worker refuses. A missing version means no URL rather than a wrong one.
+  // Defence in depth rather than policy: `content_key_version` is `Int
+  // @default(0)`, so a page row loaded from Prisma always carries a number.
+  // The version goes INTO the signature, so a caller that assembled a page
+  // object by hand and left it off should get no URL rather than one minted at
+  // a version the readers are not on.
   if (typeof (page.classroom as { content_key_version?: unknown }).content_key_version !== 'number')
     return null;
   const ctx = pageResolveContext(page);
@@ -664,9 +681,9 @@ export async function resolvePageAssetUrl(
 
   try {
     const resolved = await resolveAssetUrl(ctx, ref);
-    // A resolve that could not sign hands the reference straight back, so
-    // "is this absolute" is the same question as "did anything resolve".
-    return /^(?:https?:)?\/\//i.test(resolved) ? resolved : null;
+    if (resolved === ref) return null;
+    if (parseMissingUrl(ctx, resolved) !== null) return null;
+    return resolved;
   } catch (error) {
     console.warn(
       '[pageContent] Could not resolve a page asset URL:',
@@ -674,6 +691,56 @@ export async function resolvePageAssetUrl(
     );
     return null;
   }
+}
+
+/**
+ * The form a cover reference must be STORED in, or null when it may not be stored.
+ *
+ * Two jobs, and they belong together because the second depends on the first.
+ *
+ * Canonicalize: an agent hands back whatever it was shown, and what it was
+ * shown is a signed, expiring `display_url`. Freezing one of those into
+ * content.json is the exact failure the save-side canonicalization exists to
+ * prevent — it pins one viewer's tier and one expiry into the document. This
+ * undoes it, and undoes a `/missing/` placeholder the same way.
+ *
+ * Then refuse anything that does not name a file in THIS classroom's content
+ * repo — an external host, another classroom's delivery URL, a `..` escape, a
+ * root-relative path, a leftover scheme. Deliberately stricter than the web
+ * editor's cover control, which stores whatever URL it is given: a cover is
+ * rendered on the public class site, so an agent talked into pointing one at an
+ * attacker's host would beacon every visitor, and an agent is a great deal
+ * easier to talk into it than a person clicking an upload button.
+ *
+ * Null is "refuse", not "leave it alone" — the one caller turns it into an
+ * invalid_params naming `page_asset_upload`.
+ */
+export async function canonicalizePageCoverRef(
+  page: PageWithContentRepo,
+  ref: string
+): Promise<string | null> {
+  const ctx = pageResolveContext(page);
+  if (!ctx || !ref) return null;
+
+  let canonical = ref;
+  try {
+    canonical = await canonicalizeAssetRef(ctx, ref);
+  } catch (error) {
+    // A lookup failure must not be read as "this reference is fine": the
+    // un-canonicalized string could be a signed URL, and storing one is the
+    // thing this exists to stop.
+    console.warn(
+      '[pageContent] Could not canonicalize a cover reference:',
+      error instanceof Error ? error.message : error
+    );
+    return null;
+  }
+
+  // `toRepoPath` is the ownership question. Its ANSWER is discarded on purpose:
+  // the canonical form is what the rest of the stack stores and compares, and
+  // for a classroom with delivery off that is the legacy absolute URL
+  // `uploadPageAsset` returned, not the path this would reduce it to.
+  return toRepoPath(ctx, canonical) === null ? null : canonical;
 }
 
 /**

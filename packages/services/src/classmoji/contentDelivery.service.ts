@@ -527,8 +527,14 @@ export async function signBlobUrlForClassroom(
  * A protocol-bearing reference that is not one of ours is rejected before the
  * relative branch can claim it; without that check `https://example.com/a.png`
  * would be looked up as the repo path `https://example.com/a.png`.
+ *
+ * Exported because it is also the sharpest available answer to "may this
+ * classroom STORE this reference?" — `page_cover_set` refuses anything it
+ * returns null for (see `canonicalizePageCoverRef`). `isOwnAssetRef` is the
+ * looser cousin, deliberately: it also claims signed URLs and `/missing/`
+ * placeholders, which are fine to recognize and wrong to write down.
  */
-function toRepoPath(ctx: ResolveContext, ref: string): string | null {
+export function toRepoPath(ctx: ResolveContext, ref: string): string | null {
   if (typeof ref !== 'string' || ref.length === 0) return null;
 
   const own = extractOwnRepoPath(
@@ -632,7 +638,7 @@ function missingUrl(origin: string, classroomId: string, ref: string): string {
 const MISSING_URL =
   /^https?:\/\/[^/]+\/c\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\/missing\/([^/?#]+)$/i;
 
-function parseMissingUrl(ctx: ResolveContext, ref: string): string | null {
+export function parseMissingUrl(ctx: ResolveContext, ref: string): string | null {
   const match = MISSING_URL.exec(ref);
   if (!match || match[1].toLowerCase() !== ctx.classroom.id.toLowerCase()) return null;
   try {

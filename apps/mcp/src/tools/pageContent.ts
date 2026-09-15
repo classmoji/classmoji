@@ -899,28 +899,40 @@ export const pagePreviewDiscardTool: ToolDefinition<PagePreviewArgs> = {
 // ─── page_asset_upload ───────────────────────────────────────────────────────
 
 /**
- * How long the base64 of a maximum-size file is. Base64 spends four characters
- * on every three bytes, so the `validateFile` ceiling arrives about a third
- * larger than the file it describes. Capping the STRING is what turns "too big"
- * into an invalid_params the agent can read, instead of a transfer that runs to
- * completion and is then refused by byte count — or, past Fastify's bodyLimit,
- * a bare HTTP 413 with no MCP error in it at all.
+ * The outer cap on the `content_base64` STRING, generous on purpose.
+ *
+ * Base64 spends four characters on every three bytes, so a maximum-size file
+ * arrives about a third larger than it is. The slack on top covers the two
+ * things a caller legitimately sends that are not payload: a
+ * `data:<mime>;base64,` prefix, and the line breaks of 76-column wrapping
+ * (~2.6% of a 6.7 MB body). Without it a perfectly legal 5 MB image, wrapped or
+ * sent as a data URL, would be refused for being too big when it is not.
+ *
+ * So this is a sanity ceiling, not the limit: the real one is `validateFile` on
+ * the DECODED bytes, which is the number the error message quotes. Its job is
+ * to turn an absurd payload into an invalid_params the agent can read, instead
+ * of a transfer that runs to completion — or, past Fastify's bodyLimit, a bare
+ * HTTP 413 with no MCP error in it at all.
  */
-const MAX_CONTENT_BASE64_CHARS = Math.ceil(MAX_FILE_SIZE / 3) * 4;
+const MAX_CONTENT_BASE64_CHARS = Math.ceil(MAX_FILE_SIZE / 3) * 4 + 256 * 1024;
 
-/** Strip an optional `data:<mime>;base64,` prefix — agents paste whole data URLs. */
-function stripDataUrlPrefix(value: string): string {
-  return value.replace(/^data:[^;,]*;base64,/i, '').trim();
+/**
+ * Whitespace and an optional `data:<mime>;base64,` wrapper are transport, not
+ * payload. Encoders wrap at 76 columns and agents paste whole data URLs; both
+ * are the caller being ordinary, and neither changes a byte of the file.
+ */
+function unwrapBase64(value: string): string {
+  return value.replace(/\s+/g, '').replace(/^data:[^;,]*;base64,/i, '');
 }
 
 /** Decode base64 strictly: Buffer.from ignores garbage, which would commit junk. */
 function decodeBase64(value: string): Buffer {
-  const base64 = stripDataUrlPrefix(value);
+  const base64 = unwrapBase64(value);
   if (base64.length % 4 !== 0 || !/^[A-Za-z0-9+/]*={0,2}$/.test(base64)) {
     throw new ToolError(
       'invalid_params',
-      'content_base64 is not valid base64 — send the standard alphabet with no line breaks ' +
-        '(a whole data: URL is accepted too)'
+      'content_base64 is not valid base64 — send the standard alphabet, padded to a multiple ' +
+        'of 4 with "=" (line breaks and a whole data: URL wrapper are fine)'
     );
   }
   const buffer = Buffer.from(base64, 'base64');
@@ -967,7 +979,10 @@ export const pageAssetUploadTool: ToolDefinition<PageAssetUploadArgs> = {
       .string()
       .min(1)
       .max(MAX_CONTENT_BASE64_CHARS)
-      .describe('The file bytes, base64-encoded (≤5 MB decoded). A whole data: URL also works.'),
+      .describe(
+        'The file bytes, base64-encoded and "="-padded (≤5 MB decoded). Line breaks and a ' +
+          'whole data: URL wrapper are both accepted.'
+      ),
   },
   handler: async (args, ctx) => {
     const page = await loadPageWithRepoInClassroom(args.page_id, ctx);
@@ -1012,9 +1027,35 @@ export const pageAssetUploadTool: ToolDefinition<PageAssetUploadArgs> = {
 
 // ─── page_cover_set ──────────────────────────────────────────────────────────
 
+/**
+ * Both "this page cannot hold a cover yet" cases point at the same in-band fix,
+ * because an agent that is told only to "open the web editor" is told to stop.
+ * A `replace_all` op through page_content_apply writes a fresh content.json,
+ * which is what a cover lives in.
+ */
+const COVER_NO_CONTENT_GUIDANCE =
+  'This page has no content.json yet, so there is nowhere to record a cover image. Add blocks ' +
+  'first with a page_content_apply replace_all op, then set the cover.';
+
 const COVER_LEGACY_GUIDANCE =
-  'This page still stores legacy HTML (index.html), which has nowhere to record a cover ' +
-  'image. Open it once in the web editor to migrate it to BlockNote, then try again.';
+  'This page still stores legacy HTML (index.html), which has nowhere to record a cover image. ' +
+  'Either open it once in the web editor to migrate it to BlockNote losslessly, or replace it ' +
+  'in place with a page_content_apply replace_all op carrying fresh BlockNote blocks.';
+
+/**
+ * CONTENT_CONFLICT for a tool that takes no sha. page_content_apply's version
+ * tells the caller to re-read for a fresh one; that advice is nonsense here,
+ * where the lock is read inside the call, and following it would send an agent
+ * hunting for an argument that does not exist.
+ */
+function coverConflict(): ToolError {
+  return new ToolError(
+    'invalid_params',
+    'The page content changed underneath this cover write, so nothing was committed — ' +
+      'call page_cover_set again',
+    'CONTENT_CONFLICT'
+  );
+}
 
 interface PageCoverSetArgs {
   classroom: string;
@@ -1028,13 +1069,13 @@ export const pageCoverSetTool: ToolDefinition<PageCoverSetArgs> = {
   annotations: { destructive: false, idempotent: true, openWorld: true },
   title: "Set a page's cover image",
   description:
-    "Sets, repositions, or removes a page's cover (header) image. Pass url to set it — use the " +
-    '`url` page_asset_upload returned, or one already on the page. Pass url: null to remove the ' +
-    'cover. Omit url and pass position alone to reposition the current image. position is the ' +
-    'vertical focal point, 0 (top) to 100 (bottom), default 50. Unlike page_content_apply this ' +
-    'always writes the LIVE page — never a preview branch — exactly as the web editor does, so ' +
-    'students see it immediately. A CONTENT_CONFLICT means the page content changed mid-write; ' +
-    'just call again.',
+    "Sets, repositions, or removes a page's cover (header) image. The cover must be an asset in " +
+    "this classroom's own content repo — upload one with page_asset_upload and pass the `url` it " +
+    'returns, or reuse the cover_image.url a content read gave you. External image URLs are ' +
+    'refused. Pass url: null to remove the cover; omit url and pass position alone to reposition ' +
+    'the current image. position is the vertical focal point, 0 (top) to 100 (bottom), default ' +
+    '50. Unlike page_content_apply this always writes the LIVE page — never a preview branch — ' +
+    'exactly as the web editor does, so students see it immediately.',
   scope: 'write',
   roles: OWNER_TEACHER,
   inputSchema: {
@@ -1046,9 +1087,10 @@ export const pageCoverSetTool: ToolDefinition<PageCoverSetArgs> = {
       .nullable()
       .optional()
       .describe(
-        'Stored reference to the image (from page_asset_upload, or the cover_image.url a ' +
-          'content read returned). null removes the cover; omit it to keep the current image ' +
-          'and change only position. Must end in .png .jpg .jpeg .gif .webp or .svg'
+        "Reference to an image in this classroom's content repo (from page_asset_upload, or " +
+          'the cover_image.url a content read returned). null removes the cover; omit it to ' +
+          'keep the current image and change only position. Must end in .png .jpg .jpeg .gif ' +
+          '.webp or .svg'
       ),
     position: z
       .number()
@@ -1090,6 +1132,15 @@ export const pageCoverSetTool: ToolDefinition<PageCoverSetArgs> = {
     if (content.format === 'html') {
       throw new ToolError('invalid_params', COVER_LEGACY_GUIDANCE);
     }
+    // 'none' is NOT "this page is empty": loadPageContent returns it for any
+    // unreadable read, a GitHub 5xx and a secondary rate limit included. This
+    // tool writes the blocks back, so treating that as an empty page would
+    // replace a live document with one blank paragraph — and, having no sha to
+    // lock on, it would do it without the CAS that would otherwise refuse. A
+    // cover write never creates the file it edits.
+    if (content.format !== 'json' || !content.sha) {
+      throw new ToolError('invalid_params', COVER_NO_CONTENT_GUIDANCE);
+    }
 
     const current = content.coverImage;
 
@@ -1111,55 +1162,90 @@ export const pageCoverSetTool: ToolDefinition<PageCoverSetArgs> = {
       );
     }
 
-    const nextCover =
-      args.url === null
-        ? null
-        : {
-            url: typeof args.url === 'string' ? args.url : (current?.url ?? ''),
-            position: args.position ?? current?.position ?? DEFAULT_COVER_POSITION,
-          };
+    // Omitted position keeps what the page has, so swapping the image alone
+    // does not silently re-centre a cover somebody had positioned. A stored
+    // cover with no position reads as 50, which is what a content read reports
+    // for it too.
+    const currentPosition = current?.position ?? DEFAULT_COVER_POSITION;
+    const nextPosition = args.position ?? currentPosition;
 
-    // Cover-only write: the blocks go back exactly as they were read. A page
-    // with no content file yet gets the same blank paragraph the web editor
-    // creates, so a cover can be set before anything is written.
-    const blocks =
-      content.format === 'json' ? content.blocks : ClassmojiService.pageContent.blankPageBlocks();
+    // What a caller hands back is whatever it was last shown, and what it was
+    // shown is a signed display_url. Canonicalizing here (rather than leaving
+    // it to the save) is what makes the ownership check below meaningful and
+    // the no-op comparison honest — both need the STORED form, not the input.
+    let nextUrl = current?.url ?? '';
+    if (typeof args.url === 'string') {
+      const canonical = await ClassmojiService.pageContent.canonicalizePageCoverRef(page, args.url);
+      if (canonical === null) {
+        throw new ToolError(
+          'invalid_params',
+          `A cover must be an image in this classroom's content repo — upload one with ` +
+            `page_asset_upload. '${args.url}' does not name one.`
+        );
+      }
+      nextUrl = canonical;
+    }
 
-    let saved: { sha: string; commit: string };
+    const nextCover = args.url === null ? null : { url: nextUrl, position: nextPosition };
+
+    // Asking for the cover the page already has is a legitimate call — a retry,
+    // or an agent re-asserting state it cannot see. Committing it would bump
+    // content.json's sha and stamp the page for no change at all.
+    if (nextCover && current && current.url === nextCover.url && currentPosition === nextPosition) {
+      return ok({
+        success: true,
+        cover_image: await coverPayload(page, current),
+        unchanged: true,
+        note: 'This page already had exactly this cover image and position',
+      });
+    }
+
+    let saved: {
+      sha: string;
+      commit: string;
+      coverImage: { url: string; position: number } | null;
+    };
     try {
-      saved = await ClassmojiService.pageContent.savePageContent(page, blocks, {
+      saved = await ClassmojiService.pageContent.savePageContent(page, content.blocks, {
         coverImage: nextCover,
-        // Only content.json's own sha is a valid precondition, and a page with
-        // no file yet has none — passing one would 409 the very first write.
-        ...(content.format === 'json' && content.sha ? { expectedSha: content.sha } : {}),
+        // Cover-only write: the blocks go back exactly as they were read, under
+        // the sha they were read at.
+        expectedSha: content.sha,
         message: `page_cover_set: ${page.title}`,
       });
     } catch (error) {
-      if ((error as { status?: number }).status === 409) throw contentConflict('main');
+      if ((error as { status?: number }).status === 409) throw coverConflict();
       throw error;
     }
 
-    // The page row itself is untouched by a content commit, so the list views
-    // that sort and stamp by updated_at would never notice. Same stamp the web
-    // route makes after its own cover write.
-    await ClassmojiService.page.quickUpdate(page.id, { updated_at: new Date() });
-
+    // Audit BEFORE the stamp: the commit has already landed, and the row that
+    // records who made it must not be lost to a failure in the cosmetic step
+    // that follows.
     await writeAudit(ctx, {
       resource_type: 'PAGES',
       resource_id: page.id,
       action: 'UPDATE',
       data: {
         tool: 'page_cover_set',
-        ...(nextCover ? { url: nextCover.url, position: nextCover.position } : { removed: true }),
+        ...(saved.coverImage
+          ? { url: saved.coverImage.url, position: saved.coverImage.position }
+          : { removed: true }),
         ...(current ? { prior_url: current.url, prior_position: current.position } : {}),
         new_sha: saved.sha,
         commit_sha: saved.commit,
       } as Prisma.InputJsonValue,
     });
 
+    // The page row itself is untouched by a content commit, so the list views
+    // that sort and stamp by updated_at would never notice. Same stamp the web
+    // route makes after its own cover write.
+    await ClassmojiService.page.quickUpdate(page.id, { updated_at: new Date() });
+
+    // The cover AS STORED, not as asked for — they differ whenever the caller
+    // passed a signed URL back.
     return ok({
       success: true,
-      cover_image: await coverPayload(page, nextCover),
+      cover_image: await coverPayload(page, saved.coverImage),
       new_sha: saved.sha,
     });
   },
