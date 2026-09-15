@@ -8,6 +8,7 @@
 
 import { describe, expect, it } from 'vitest';
 import {
+  stripDeckRuntimeAttrs,
   stripRuntimeSectionAttrs,
   stripRuntimeStyleProps,
   RUNTIME_SECTION_ATTRS,
@@ -37,6 +38,27 @@ describe('stripRuntimeStyleProps', () => {
     expect(stripRuntimeStyleProps('top-margin: 1px; margin-top: 2px;')).toBe(
       'top-margin: 1px; margin-top: 2px;'
     );
+    expect(stripRuntimeStyleProps('margin-left: 3px; left: 40px;')).toBe('margin-left: 3px;');
+  });
+
+  it("drops the print view's computed left", () => {
+    // printview.js:109-110 writes left + top while laying out print pages.
+    expect(stripRuntimeStyleProps('left: 40px; top: 12px;')).toBeNull();
+  });
+
+  it('never splits inside url(data:…;base64,…) or a quoted value', () => {
+    const dataUri = 'background: url(data:image/png;base64,iVBORw0KGgo=); top: 3px;';
+    expect(stripRuntimeStyleProps(dataUri)).toBe(
+      'background: url(data:image/png;base64,iVBORw0KGgo=);'
+    );
+
+    const quoted = 'background-image: url("a;b.png"); top: 3px;';
+    expect(stripRuntimeStyleProps(quoted)).toBe('background-image: url("a;b.png");');
+  });
+
+  it('round-trips a declaration list byte-identically minus the stripped props', () => {
+    const authored = 'background: url(data:image/svg+xml;utf8,<svg/>); color: rgb(1, 2, 3);';
+    expect(stripRuntimeStyleProps(`display: block; ${authored} top: 9px;`)).toBe(authored);
   });
 });
 
@@ -106,6 +128,16 @@ describe('applyDeckOps — runtime attrs never persist', () => {
     expect(out.slides[0].attrs).toBeUndefined();
   });
 
+  it('keeps a data-URI background intact while stripping the paint around it', () => {
+    // deck_apply is a NEW surface for the style splitter — a naive split on
+    // every ';' would inject a space into the base64 payload.
+    const style = 'background: url(data:image/png;base64,iVBORw0KGgo=);';
+    const { deck: out } = applyDeckOps(deck(), [
+      { op: 'update', id: 'a', attrs: { style: `top: 350px; ${style}` } },
+    ]);
+    expect(out.slides[0].attrs).toEqual({ style });
+  });
+
   it('strips them on inserted slides and stack containers too', () => {
     const { deck: out } = applyDeckOps(deck(), [
       {
@@ -123,5 +155,37 @@ describe('applyDeckOps — runtime attrs never persist', () => {
     expect(out.slides[1].attrs).toEqual({ style: 'color: red;' });
     expect(out.slides[2].attrs).toBeUndefined();
     expect(out.slides[2].children![0].attrs).toBeUndefined();
+  });
+});
+
+describe('stripDeckRuntimeAttrs', () => {
+  const stale: DeckJson = {
+    version: 1,
+    theme: 'white',
+    codeTheme: 'github',
+    slides: [
+      { id: 'a', html: '<p>a</p>', attrs: { style: 'top: 350px; margin: 0;' } },
+      {
+        id: 'b',
+        attrs: { class: 'stack has-dark-background', style: 'top: 0px;' },
+        children: [{ id: 'c', html: '<p>c</p>', attrs: { 'data-index-v': '1' } }],
+      },
+    ],
+  };
+
+  it('cleans every slide, stack containers and their children included', () => {
+    expect(stripDeckRuntimeAttrs(stale).slides).toEqual([
+      { id: 'a', html: '<p>a</p>', attrs: { style: 'margin: 0;' } },
+      { id: 'b', children: [{ id: 'c', html: '<p>c</p>' }] },
+    ]);
+  });
+
+  it('carries deck-level meta through untouched and never mutates the input', () => {
+    const before = JSON.stringify(stale);
+    const out = stripDeckRuntimeAttrs(stale);
+    expect(out.theme).toBe('white');
+    expect(out.codeTheme).toBe('github');
+    expect(out.version).toBe(1);
+    expect(JSON.stringify(stale)).toBe(before);
   });
 });

@@ -17,6 +17,7 @@ import {
   type ParseOptions,
 } from './deckHtml.ts';
 import type { DeckJson } from './deckTypes.ts';
+import { stripDeckRuntimeAttrs } from './deckRuntimeAttrs.ts';
 import { canonicalizeDeckAssets } from './deckAssets.ts';
 import { recordContentAssets, resolveContentBranch } from '../classmoji/contentAssets.service.ts';
 import { enqueueDeckThumbnail } from '../classmoji/deckThumbnail.service.ts';
@@ -157,7 +158,15 @@ export async function loadDeck(
         'deck.json has an unsupported shape (expected version 1 with slides)'
       );
     }
-    return { deck, sha: deckFile.sha, sha_source: 'deck' };
+    // Decks committed before issue #361 carry Reveal's runtime paint
+    // (`attrs.style: "top: 350px;"`, the contrast class, …). Clean it on the
+    // way in so no consumer can carry it forward: an accepted preview would
+    // otherwise re-write stale paint into an already-clean main (the merge
+    // engine takes the winning side verbatim), an ops save would preserve it
+    // on every slide the user did not touch, and deck_get would echo it back
+    // to an agent. The legacy index.html branch below is already clean —
+    // parseDeckHtml strips on parse.
+    return { deck: stripDeckRuntimeAttrs(deck), sha: deckFile.sha, sha_source: 'deck' };
   }
 
   const htmlFile = await ContentService.getContent({
@@ -349,6 +358,10 @@ export async function saveDeck({
   // choke point every writer passes — the editor, deck_apply over MCP, the
   // importer — so it is the only place the invariant can actually be promised.
   deck = await canonicalizeDeckForSave(slide, deck);
+  // Same reasoning, the other half of the boundary: Reveal's runtime paint
+  // never reaches a commit, whatever the caller handed us (issue #361). Both
+  // the deck.json body and the regenerated index.html below come from this.
+  deck = stripDeckRuntimeAttrs(deck);
 
   const isPreviewBranch = branch != null && branch.startsWith(PREVIEW_BRANCH_PREFIX);
   // ASSUMED `main`, where `uploadPageAsset` ASKS — and the asymmetry is

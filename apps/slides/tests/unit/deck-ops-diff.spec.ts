@@ -332,6 +332,21 @@ test.describe('cleanSectionAttrs — Reveal runtime paint', () => {
       { class: 'present stack mine', hidden: '', 'aria-hidden': 'true' },
       { class: 'mine' },
     ],
+    [
+      'the themed-background contrast class goes',
+      { class: 'has-dark-background mine' },
+      { class: 'mine' },
+    ],
+    [
+      "the print view's computed left goes with top, margin-left stays",
+      { style: 'left: 40px; top: 12px; margin-left: 8px;' },
+      { style: 'margin-left: 8px;' },
+    ],
+    [
+      'a data-URI background survives the declaration split',
+      { style: 'top: 3px; background: url(data:image/png;base64,iVBORw0KGgo=);' },
+      { style: 'background: url(data:image/png;base64,iVBORw0KGgo=);' },
+    ],
   ];
 
   for (const [name, input, expected] of fixtures) {

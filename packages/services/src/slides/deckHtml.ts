@@ -26,7 +26,7 @@ import { randomBytes } from 'node:crypto';
 // stripped by both parsers so `attrs` is deterministic between saves (plan §2,
 // issue #361). The list lives in deckRuntimeAttrs.ts, the browser-safe module
 // the slides client imports so the two strippers can never drift.
-import { stripRuntimeSectionAttrs } from './deckRuntimeAttrs.ts';
+import { splitStyleDeclarations, stripRuntimeSectionAttrs } from './deckRuntimeAttrs.ts';
 import type { DeckConfig, DeckExtraCss, DeckJson, DeckSlide } from './deckTypes.ts';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -842,40 +842,6 @@ function canonicalCssValue(rawValue: string): string {
 
   // eslint-disable-next-line no-control-regex -- restoring the \u0000-delimited placeholders
   return value.replace(/\u0000(\d+)\u0000/g, (_m, i: string) => protectedParts[Number(i)]);
-}
-
-/** Split a style attr on top-level `;` (quotes and parens respected). */
-function splitStyleDeclarations(style: string): string[] {
-  const parts: string[] = [];
-  let current = '';
-  let quote: '"' | "'" | null = null;
-  let depth = 0;
-  for (let i = 0; i < style.length; i++) {
-    const ch = style[i];
-    if (quote) {
-      current += ch;
-      if (ch === '\\' && i + 1 < style.length) {
-        current += style[++i];
-      } else if (ch === quote) {
-        quote = null;
-      }
-      continue;
-    }
-    if (ch === '"' || ch === "'") {
-      quote = ch;
-    } else if (ch === '(') {
-      depth++;
-    } else if (ch === ')') {
-      depth = Math.max(0, depth - 1);
-    } else if (ch === ';' && depth === 0) {
-      parts.push(current);
-      current = '';
-      continue;
-    }
-    current += ch;
-  }
-  if (current.trim() !== '') parts.push(current);
-  return parts;
 }
 
 /**

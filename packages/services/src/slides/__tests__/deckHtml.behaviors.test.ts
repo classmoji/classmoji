@@ -68,6 +68,46 @@ describe('parseSlidesFragment', () => {
     expect(result.slides[1].children![0].attrs).toBeUndefined();
   });
 
+  it('strips the contrast class every themed background earns', () => {
+    // backgrounds.js getContrastClass adds one of these under any themed
+    // background — otherwise every themed deck gains a class on first save
+    // and flips it whenever the theme changes.
+    const result = parseSlidesFragment(
+      '<div class="slides"><section data-cm-id="frag0001" ' +
+        'class="has-dark-background mine" data-background-color="#123456"><h2>A</h2></section>' +
+        '<section data-cm-id="frag0002" class="has-light-background"><h2>B</h2></section></div>'
+    );
+    expect(result.slides[0].attrs).toEqual({
+      class: 'mine',
+      'data-background-color': '#123456',
+    });
+    expect(result.slides[1].attrs).toBeUndefined();
+  });
+
+  it("strips the print view's computed left alongside top, keeping margin-left", () => {
+    const result = parseSlidesFragment(
+      '<div class="slides"><section data-cm-id="frag0001" ' +
+        'style="left: 40px; top: 12px; margin-left: 8px;"><h2>A</h2></section></div>'
+    );
+    expect(result.slides[0].attrs).toEqual({ style: 'margin-left: 8px;' });
+  });
+
+  it('preserves section attribute ORDER through the cruft strip (parse → generate)', () => {
+    const parsed = parseSlidesFragment(
+      '<div class="slides"><section data-cm-id="ord00001" data-transition="fade" ' +
+        'style="display: block; top: 350px; color: red;" data-background-color="#123456">' +
+        '<h2>A</h2></section></div>'
+    );
+    const html = generateDeckHtml(
+      { version: 1, theme: parsed.theme, codeTheme: parsed.codeTheme, slides: parsed.slides },
+      { title: 'T' }
+    );
+    expect(html).toContain(
+      '<section data-cm-id="ord00001" data-transition="fade" style="color: red;" ' +
+        'data-background-color="#123456">'
+    );
+  });
+
   it("strips Reveal's runtime section attributes and keeps the author-set ones", () => {
     const result = parseSlidesFragment(
       '<div class="slides"><section data-cm-id="frag0001" data-fragment="1" ' +

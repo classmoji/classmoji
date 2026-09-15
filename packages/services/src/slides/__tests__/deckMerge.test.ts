@@ -900,7 +900,7 @@ describe('merge3Units — stored Reveal runtime layout', () => {
     expect(result.autoMerged).toBe(1);
   });
 
-  it('sides differing ONLY in the computed top (or its absence) are unchanged — base is kept', () => {
+  it('sides differing ONLY in the computed top (or its absence) are unchanged — base rides verbatim', () => {
     const base = deck([slide('a', '<p>a</p>', { attrs: { style: 'top: 350px;' } })]);
     const ours = deck([slide('a', '<p>a</p>', { attrs: { style: 'top: 12px;' } })]);
     const theirs = deck([slide('a', '<p>a</p>')]);
@@ -909,7 +909,16 @@ describe('merge3Units — stored Reveal runtime layout', () => {
 
     expect(result.conflicts).toEqual([]);
     expect(result.autoMerged).toBe(0);
+    // The merge engine is PURE and carries an unchanged unit from base
+    // verbatim — including a stale `top` a pre-#361 deck still holds. That is
+    // deliberate: this layer decides sameness, it does not clean. The cleaning
+    // contract lives at the content boundaries (slideContent.service loadDeck
+    // and saveDeck strip every slide), so in the real flow all three sides
+    // arrive clean and nothing stale can be committed either way. Both halves
+    // are needed: the tolerance here stops the phantom conflict, the boundary
+    // strip stops the phantom write.
     expect(byId(result.merged, 'a')).toEqual(base.slides[0]);
+    expect(byId(result.merged, 'a').attrs).toEqual({ style: 'top: 350px;' });
   });
 
   it('a genuine style edit alongside the runtime top still conflicts', () => {
