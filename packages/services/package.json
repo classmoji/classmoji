@@ -19,6 +19,7 @@
     "./remove-user-payload": "./src/classmoji/removeUserPayload.ts",
     "./slides": "./src/slides/index.ts",
     "./slides/ops": "./src/slides/deckOps.ts",
+    "./slides/runtime-attrs": "./src/slides/deckRuntimeAttrs.ts",
     "./workers-ai": "./src/helpers/workersAi.ts"
   },
   "dependencies": {

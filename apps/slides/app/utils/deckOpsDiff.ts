@@ -25,8 +25,12 @@
  * The attribute cleanup here mirrors the server parser's runtime-cruft strip
  * (packages/services/src/slides/deckHtml.ts stripRuntimeCruft): update-op
  * attrs land verbatim in deck.json, so the client must clean exactly what
- * parseSlidesFragment would have cleaned.
+ * parseSlidesFragment would have cleaned. The strip list is no longer
+ * duplicated — both sides call stripRuntimeSectionAttrs from the browser-safe
+ * @classmoji/services/slides/runtime-attrs module.
  */
+
+import { stripRuntimeSectionAttrs } from '@classmoji/services/slides/runtime-attrs';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -86,16 +90,6 @@ const MAX_INSERT_GROUP = 20;
 const MAX_OPS = 400;
 
 // ─── Extraction (DOM layer) ──────────────────────────────────────────────────
-
-/** Runtime paint the Reveal viewer/editor leaves on sections (server list). */
-const CRUFT_CLASSES = new Set([
-  'editing-mode',
-  'slide-hidden',
-  'stack',
-  'present',
-  'past',
-  'future',
-]);
 
 /** Mirror of getCurrentContent's cleanup, applied to BOTH diff sides. */
 function cleanupContainer(container: Element): void {
@@ -160,35 +154,19 @@ function cleanupContainer(container: Element): void {
 
 /**
  * Cleaned attribute record for a section — mirrors the server parser's
- * stripRuntimeCruft + attr snapshot (data-cm-id/data-hidden excluded, event
- * handlers dropped, cruft classes filtered, display style stripped).
+ * stripRuntimeCruft + attr snapshot: data-cm-id/data-hidden excluded, event
+ * handlers dropped, then the SHARED normalizer (runtime classes, Reveal's
+ * computed `top`/`display` style, the data-index-* family, hidden/aria-hidden).
  */
-function cleanSectionAttrs(el: Element): Record<string, string> {
-  const attrs: Record<string, string> = {};
+export function cleanSectionAttrs(el: Element): Record<string, string> {
+  const raw: Record<string, string> = {};
   for (const attr of Array.from(el.attributes)) {
     const name = attr.name;
-    const value = attr.value;
     if (name === 'data-cm-id' || name === 'data-hidden') continue;
     if (/^on/i.test(name)) continue; // event handlers never persist
-    if (name === 'aria-hidden' || name === 'hidden') continue; // runtime paint
-    if (name === 'class') {
-      const kept = value.split(/\s+/).filter(c => c !== '' && !CRUFT_CLASSES.has(c));
-      if (kept.length > 0) attrs['class'] = kept.join(' ');
-      continue;
-    }
-    if (name === 'style') {
-      // Remove just the `display` property, keep other inline styles —
-      // EXACT server join format: 'p1; p2;'.
-      const props = value
-        .split(';')
-        .map(p => p.trim())
-        .filter(p => p !== '' && !/^display\s*:/i.test(p));
-      if (props.length > 0) attrs['style'] = props.join('; ') + ';';
-      continue;
-    }
-    attrs[name] = value;
+    raw[name] = attr.value;
   }
-  return attrs;
+  return stripRuntimeSectionAttrs(raw);
 }
 
 /** One section element → DiffSection; null on inexpressible nesting. */

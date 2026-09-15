@@ -21,6 +21,12 @@ import * as cheerio from 'cheerio';
 import type { Cheerio, CheerioAPI } from 'cheerio';
 import type { AnyNode, Element } from 'domhandler';
 import { randomBytes } from 'node:crypto';
+// Runtime paint the Reveal viewer / editor leaves on sections — the classes,
+// the computed `top` / `display` style, the `data-index-*` family — is
+// stripped by both parsers so `attrs` is deterministic between saves (plan §2,
+// issue #361). The list lives in deckRuntimeAttrs.ts, the browser-safe module
+// the slides client imports so the two strippers can never drift.
+import { stripRuntimeSectionAttrs } from './deckRuntimeAttrs.ts';
 import type { DeckConfig, DeckExtraCss, DeckJson, DeckSlide } from './deckTypes.ts';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -62,19 +68,6 @@ const ATTR_NAME_RE = /^[a-zA-Z][\w:-]*$/;
  * script handlers. `style` stays (legitimately used).
  */
 const EVENT_ATTR_RE = /^on/i;
-
-/**
- * Runtime paint the Reveal viewer / editor leaves on sections. Stripped by
- * both parsers so `attrs` is deterministic between saves (plan §2).
- */
-const CRUFT_CLASSES = new Set([
-  'editing-mode',
-  'slide-hidden',
-  'stack',
-  'present',
-  'past',
-  'future',
-]);
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Errors
@@ -370,32 +363,22 @@ function stripFragmentRuntimeClasses($root: Cheerio<AnyNode>): void {
   $root.find('.fragment').removeClass('visible').removeClass('current-fragment');
 }
 
-/** Strip runtime paint from a section element (plan §2 cruft list). */
+/**
+ * Strip runtime paint from a section element (plan §2 cruft list) — the
+ * element-level wrapper around the shared record normalizer, so the parser and
+ * the editor's client-side diff can never drift apart.
+ */
 function stripRuntimeCruft($el: Cheerio<Element>): void {
   stripFragmentRuntimeClasses($el);
-  const cls = $el.attr('class');
-  if (cls != null) {
-    const kept = cls.split(/\s+/).filter(c => c !== '' && !CRUFT_CLASSES.has(c));
-    if (kept.length > 0) {
-      $el.attr('class', kept.join(' '));
-    } else {
-      $el.removeAttr('class');
-    }
+  const el = $el[0];
+  if (!el) return;
+  const before = el.attribs ?? {};
+  const after = stripRuntimeSectionAttrs(before);
+  for (const name of Object.keys(before)) {
+    if (!(name in after)) $el.removeAttr(name);
   }
-  $el.removeAttr('aria-hidden');
-  $el.removeAttr('hidden');
-  const style = $el.attr('style');
-  if (style != null) {
-    // Remove just the `display` property, keep other inline styles.
-    const props = style
-      .split(';')
-      .map(p => p.trim())
-      .filter(p => p !== '' && !/^display\s*:/i.test(p));
-    if (props.length > 0) {
-      $el.attr('style', props.join('; ') + ';');
-    } else {
-      $el.removeAttr('style');
-    }
+  for (const [name, value] of Object.entries(after)) {
+    if (before[name] !== value) $el.attr(name, value);
   }
 }
 

@@ -13,7 +13,9 @@
  */
 
 import { test, expect } from '@playwright/test';
+import { stripRuntimeSectionAttrs } from '@classmoji/services/slides/runtime-attrs';
 import {
+  cleanSectionAttrs,
   diffDeckSnapshots,
   type DeckSnapshot,
   type DiffSection,
@@ -288,5 +290,67 @@ test.describe('anomalies → null (whole-doc fallback)', () => {
       { op: 'move', id: 'c1', position: { at: 'start' } },
       { op: 'delete', id: 'st' },
     ]);
+  });
+});
+
+// ─── Section attribute cleanup (issue #361) ──────────────────────────────────
+//
+// cleanSectionAttrs feeds update-op attrs straight into deck.json, so it must
+// strip EXACTLY what the server parser strips. Both sides now call the shared
+// stripRuntimeSectionAttrs; these fixtures pin the two together, and the
+// import itself proves the helper resolves from the client bundle's package.
+
+test.describe('cleanSectionAttrs — Reveal runtime paint', () => {
+  /** Minimal stand-in for a section element: cleanSectionAttrs reads only .attributes. */
+  function sectionEl(attrs: Record<string, string>): Element {
+    return {
+      attributes: Object.entries(attrs).map(([name, value]) => ({ name, value })),
+    } as unknown as Element;
+  }
+
+  const fixtures: Array<[string, Record<string, string>, Record<string, string>]> = [
+    [
+      'the computed top goes, the author-set style stays',
+      { style: 'display: block; top: 350px; margin: 0;' },
+      { style: 'margin: 0;' },
+    ],
+    ['a style holding only the computed top disappears', { style: 'top: 0px;' }, {}],
+    [
+      'runtime data attributes go, author-set ones stay',
+      {
+        'data-fragment': '1',
+        'data-previous-indexv': '2',
+        'data-index-h': '0',
+        'data-index-v': '1',
+        'data-start-indexv': '1',
+        'data-background-color': '#123456',
+      },
+      { 'data-start-indexv': '1', 'data-background-color': '#123456' },
+    ],
+    [
+      'runtime classes and hidden/aria-hidden go',
+      { class: 'present stack mine', hidden: '', 'aria-hidden': 'true' },
+      { class: 'mine' },
+    ],
+  ];
+
+  for (const [name, input, expected] of fixtures) {
+    test(`${name} — client and server strippers agree`, () => {
+      expect(cleanSectionAttrs(sectionEl(input))).toEqual(expected);
+      expect(stripRuntimeSectionAttrs(input)).toEqual(expected);
+    });
+  }
+
+  test('identity attrs and event handlers stay the client stripper’s own business', () => {
+    expect(
+      cleanSectionAttrs(
+        sectionEl({
+          'data-cm-id': 'abc12345',
+          'data-hidden': 'true',
+          onclick: 'alert(1)',
+          'data-transition': 'fade',
+        })
+      )
+    ).toEqual({ 'data-transition': 'fade' });
   });
 });
