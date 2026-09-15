@@ -64,6 +64,11 @@ vi.mock('../contentAssets.service.ts', () => ({
 // URL, which is what the upload assertions below are about.
 const fetchContentTextMock = vi.fn();
 const warmContentTextMock = vi.fn(async (..._args: unknown[]) => {});
+// Stubbed, unlike the two signing guards: `resolvePageAssetUrl` is a policy
+// wrapper — which classrooms may mint, and what counts as an answer — and
+// contentDelivery.resolve.test.ts owns the resolve itself.
+const resolveAssetUrlMock = vi.fn();
+const canonicalizeAssetRefMock = vi.fn();
 vi.mock('../contentDelivery.service.ts', async () => {
   const actual = await vi.importActual<typeof import('../contentDelivery.service.ts')>(
     '../contentDelivery.service.ts'
@@ -78,6 +83,13 @@ vi.mock('../contentDelivery.service.ts', async () => {
     warmContentText: (...args: unknown[]) => warmContentTextMock(...args),
     mappedAssetsBySha: actual.mappedAssetsBySha,
     signBlobUrlForClassroom: actual.signBlobUrlForClassroom,
+    resolveAssetUrl: (...args: unknown[]) => resolveAssetUrlMock(...args),
+    canonicalizeAssetRef: (...args: unknown[]) => canonicalizeAssetRefMock(...args),
+    // Real: the placeholder check is a pure shape test, and it is one of the
+    // decisions `resolvePageAssetUrl` is made of. Stubbing it would leave
+    // nothing under test. (`canonicalizePageCoverRef`'s own path rule is
+    // module-private and runs for real either way.)
+    parseMissingUrl: actual.parseMissingUrl,
   };
 });
 
@@ -85,6 +97,8 @@ const {
   loadPageContent,
   savePageContent,
   uploadPageAsset,
+  resolvePageAssetUrl,
+  canonicalizePageCoverRef,
   ensureBlockIds,
   applyBlockOps,
   normalizeBlockStructure,
@@ -233,7 +247,9 @@ describe('pageContent.savePageContent', () => {
 
     expect(writtenWrapper()).toEqual({ blocks, coverImage: cover });
     expect(callArg(putMock).message).toBe('Update page: Syllabus');
-    expect(result).toEqual({ sha: 'new-sha', commit: 'commit-1' });
+    // The cover comes back as STORED — here, the one the re-read preserved,
+    // which the caller never passed in and so could not have echoed itself.
+    expect(result).toEqual({ sha: 'new-sha', commit: 'commit-1', coverImage: cover });
   });
 
   it('omits the coverImage key when omitted and no existing file has one', async () => {
@@ -510,7 +526,7 @@ describe('pageContent.savePageContent write-through', () => {
     // The commit stands; the next sync picks it up.
     const result = await savePageContent(page, blocks, { coverImage: null });
 
-    expect(result).toEqual({ sha: 'new-sha', commit: 'commit-1' });
+    expect(result).toEqual({ sha: 'new-sha', commit: 'commit-1', coverImage: null });
     expect(recordContentAssetMock).not.toHaveBeenCalled();
   });
 });
@@ -648,6 +664,7 @@ describe('pageContent.uploadPageAsset', () => {
     expect(result).toEqual({
       url: RAW_URL,
       path: 'pages/syllabus/assets/a.png',
+      sha: 'c'.repeat(40),
       displayUrl: null,
     });
   });
@@ -721,6 +738,193 @@ describe('pageContent.uploadPageAsset', () => {
       sha: 'c'.repeat(40),
       size: 1,
     });
+  });
+});
+
+// ─── resolvePageAssetUrl ─────────────────────────────────────────────────────
+
+describe('pageContent.resolvePageAssetUrl', () => {
+  const SIGNED = 'https://cdn.classmoji.test/c/abc/def.png?p=edit&sig=x';
+  const REF = 'pages/syllabus/assets/a.png';
+
+  /** A classroom the resolver can mint for: id, key version, delivery on. */
+  const signablePage = {
+    ...page,
+    classroom: {
+      ...page.classroom,
+      id: '3f2504e0-4f89-41d3-9a0c-0305e82c3301',
+      content_key_version: 0,
+      content_delivery_enabled: true,
+    },
+  };
+
+  beforeEach(() => {
+    resolveAssetUrlMock.mockReset();
+    resolveAssetUrlMock.mockResolvedValue(SIGNED);
+  });
+
+  it('returns the signed URL for a stored repo path', async () => {
+    await expect(resolvePageAssetUrl(signablePage, REF)).resolves.toBe(SIGNED);
+    expect(resolveAssetUrlMock).toHaveBeenCalledWith(
+      expect.objectContaining({ tier: 'edit' }),
+      REF
+    );
+  });
+
+  it('returns null rather than echoing a path the resolver declined', async () => {
+    // A resolve that could not sign hands the reference straight back. Handing
+    // that on as a display URL would read as "open this" and behave as a 404.
+    resolveAssetUrlMock.mockResolvedValue(REF);
+
+    await expect(resolvePageAssetUrl(signablePage, REF)).resolves.toBeNull();
+  });
+
+  it('returns null for the /missing/ placeholder — a deterministic 404', async () => {
+    // The map has never heard of the reference. The placeholder is a URL, and
+    // an absolute one, so any "does it look like a URL" test would pass it on
+    // as somewhere to look at an image that is not there.
+    resolveAssetUrlMock.mockResolvedValue(
+      `https://cdn.classmoji.test/c/${signablePage.classroom.id}/missing/${encodeURIComponent(REF)}`
+    );
+
+    await expect(resolvePageAssetUrl(signablePage, REF)).resolves.toBeNull();
+  });
+
+  it('returns null for an absolute reference the resolver refused to claim', async () => {
+    // A pinned raw.githubusercontent URL comes back unchanged. It is absolute,
+    // so only the identity check catches it.
+    const pinned =
+      'https://raw.githubusercontent.com/other-org/other-repo/main/pages/x/assets/a.png';
+    resolveAssetUrlMock.mockImplementation(async (_ctx: unknown, ref: string) => ref);
+
+    await expect(resolvePageAssetUrl(signablePage, pinned)).resolves.toBeNull();
+  });
+
+  it('does not mint for a hand-assembled page with no key version', async () => {
+    // Defence in depth rather than policy: `content_key_version` is `Int
+    // @default(0)`, so a row loaded from Prisma always carries a number. A page
+    // object built by hand may not, and the version goes INTO the signature.
+    const noVersion = { ...page, classroom: { ...signablePage.classroom } };
+    delete (noVersion.classroom as { content_key_version?: unknown }).content_key_version;
+
+    await expect(resolvePageAssetUrl(noVersion, REF)).resolves.toBeNull();
+    expect(resolveAssetUrlMock).not.toHaveBeenCalled();
+  });
+});
+
+// ─── canonicalizePageCoverRef ────────────────────────────────────────────────
+
+describe('pageContent.canonicalizePageCoverRef', () => {
+  const REF = 'pages/syllabus/assets/a.png';
+  const CLASSROOM_ID = '3f2504e0-4f89-41d3-9a0c-0305e82c3301';
+
+  const signablePage = {
+    ...page,
+    classroom: {
+      ...page.classroom,
+      id: CLASSROOM_ID,
+      content_key_version: 0,
+      content_delivery_enabled: true,
+    },
+  };
+
+  beforeEach(() => {
+    canonicalizeAssetRefMock.mockReset();
+    // Default: nothing to undo. The signed-URL case overrides it.
+    canonicalizeAssetRefMock.mockImplementation(async (_ctx: unknown, ref: string) => ref);
+  });
+
+  it('accepts a repo-relative path unchanged', async () => {
+    await expect(canonicalizePageCoverRef(signablePage, REF)).resolves.toBe(REF);
+  });
+
+  it('undoes a signed URL, so a pasted display_url is stored as its path', async () => {
+    canonicalizeAssetRefMock.mockResolvedValue(REF);
+
+    await expect(
+      canonicalizePageCoverRef(signablePage, 'https://cdn.classmoji.test/c/x/y.png?sig=abc')
+    ).resolves.toBe(REF);
+  });
+
+  it("keeps this classroom's own repo URL as a URL (what an unsigned upload stores)", async () => {
+    // Delivery off: `uploadPageAsset` hands back the legacy absolute URL, and
+    // page_cover_set has to be able to store exactly that.
+    const raw =
+      'https://raw.githubusercontent.com/test-org/content-test-org-cs101/main/pages/syllabus/assets/a.png';
+
+    await expect(canonicalizePageCoverRef(signablePage, raw)).resolves.toBe(raw);
+  });
+
+  it("accepts this classroom's signed URL, via the canonicalization above", async () => {
+    canonicalizeAssetRefMock.mockResolvedValue(REF);
+
+    await expect(
+      canonicalizePageCoverRef(signablePage, `https://cdn.classmoji.test/c/${CLASSROOM_ID}/a.png`)
+    ).resolves.toBe(REF);
+  });
+
+  /**
+   * The three own-repo URL shapes all reduce to "whatever follows the prefix",
+   * and `extractOwnRepoPath` answers "is this URL ours" without asking whether
+   * the path inside it stays inside the repo. So each shape has to be held to
+   * the same segment rule a bare path is, or a reference that resolves to
+   * nothing — or to somebody else's repo — gets written into content.json.
+   */
+  it.each([
+    [
+      'a parent escape inside a raw URL',
+      'https://raw.githubusercontent.com/test-org/content-test-org-cs101/main/../../../other/repo/main/x.png',
+    ],
+    [
+      'a parent escape inside a github.io URL',
+      'https://test-org.github.io/content-test-org-cs101/../../other/x.png',
+    ],
+    [
+      'a parent escape inside a /content proxy URL',
+      '/content/test-org/content-test-org-cs101/../../other/x.png',
+    ],
+    [
+      'a percent-encoded parent escape inside a raw URL',
+      'https://raw.githubusercontent.com/test-org/content-test-org-cs101/main/%2e%2e/%2e%2e/x.png',
+    ],
+    ['a percent-encoded parent escape in a bare path', 'pages/%2e%2e/a.png'],
+    ['a double-encoded escape in a bare path', 'pages/%252e%252e/a.png'],
+    ['a query string', 'pages/syllabus/assets/a.png?v=2'],
+    ['a fragment', 'pages/syllabus/assets/a.png#frag'],
+    ['a backslash', 'pages\\syllabus\\a.png'],
+    ['a doubled slash', 'pages//assets/a.png'],
+    ['a bare dot segment', 'pages/./assets/a.png'],
+    ['an external host', 'https://evil.example.com/tracker.png'],
+    ["another org's repo", 'https://raw.githubusercontent.com/other/other/main/a.png'],
+    ['a protocol-relative URL', '//evil.example.com/a.png'],
+    ['a root-relative path', '/etc/passwd.png'],
+    ['a parent-directory escape', '../../../secrets/a.png'],
+    ['a scheme leftover', 'data:image/png;base64,AAAA'],
+  ])('refuses %s', async (_label, ref) => {
+    await expect(canonicalizePageCoverRef(signablePage, ref)).resolves.toBeNull();
+  });
+
+  it('refuses rather than passing the raw string through when canonicalization throws', async () => {
+    // A lookup failure must not read as "this reference is fine": the
+    // un-canonicalized string could be a signed URL.
+    canonicalizeAssetRefMock.mockRejectedValue(new Error('map unavailable'));
+
+    await expect(canonicalizePageCoverRef(signablePage, REF)).resolves.toBeNull();
+  });
+
+  it('refuses an empty reference', async () => {
+    await expect(canonicalizePageCoverRef(signablePage, '')).resolves.toBeNull();
+  });
+
+  it('swallows a resolver failure — a cover read must not fail on a signing error', async () => {
+    resolveAssetUrlMock.mockRejectedValue(new Error('map unavailable'));
+
+    await expect(resolvePageAssetUrl(signablePage, REF)).resolves.toBeNull();
+  });
+
+  it('is a no-op on an empty reference', async () => {
+    await expect(resolvePageAssetUrl(signablePage, '')).resolves.toBeNull();
+    expect(resolveAssetUrlMock).not.toHaveBeenCalled();
   });
 });
 
