@@ -85,11 +85,11 @@ vi.mock('../contentDelivery.service.ts', async () => {
     signBlobUrlForClassroom: actual.signBlobUrlForClassroom,
     resolveAssetUrl: (...args: unknown[]) => resolveAssetUrlMock(...args),
     canonicalizeAssetRef: (...args: unknown[]) => canonicalizeAssetRefMock(...args),
-    // Real: these two are pure shape checks, and they are exactly the decisions
-    // `resolvePageAssetUrl` and `canonicalizePageCoverRef` are made of. Stubbing
-    // them would leave nothing under test.
+    // Real: the placeholder check is a pure shape test, and it is one of the
+    // decisions `resolvePageAssetUrl` is made of. Stubbing it would leave
+    // nothing under test. (`canonicalizePageCoverRef`'s own path rule is
+    // module-private and runs for real either way.)
     parseMissingUrl: actual.parseMissingUrl,
-    toRepoPath: actual.toRepoPath,
   };
 });
 
@@ -855,7 +855,45 @@ describe('pageContent.canonicalizePageCoverRef', () => {
     await expect(canonicalizePageCoverRef(signablePage, raw)).resolves.toBe(raw);
   });
 
+  it("accepts this classroom's signed URL, via the canonicalization above", async () => {
+    canonicalizeAssetRefMock.mockResolvedValue(REF);
+
+    await expect(
+      canonicalizePageCoverRef(signablePage, `https://cdn.classmoji.test/c/${CLASSROOM_ID}/a.png`)
+    ).resolves.toBe(REF);
+  });
+
+  /**
+   * The three own-repo URL shapes all reduce to "whatever follows the prefix",
+   * and `extractOwnRepoPath` answers "is this URL ours" without asking whether
+   * the path inside it stays inside the repo. So each shape has to be held to
+   * the same segment rule a bare path is, or a reference that resolves to
+   * nothing — or to somebody else's repo — gets written into content.json.
+   */
   it.each([
+    [
+      'a parent escape inside a raw URL',
+      'https://raw.githubusercontent.com/test-org/content-test-org-cs101/main/../../../other/repo/main/x.png',
+    ],
+    [
+      'a parent escape inside a github.io URL',
+      'https://test-org.github.io/content-test-org-cs101/../../other/x.png',
+    ],
+    [
+      'a parent escape inside a /content proxy URL',
+      '/content/test-org/content-test-org-cs101/../../other/x.png',
+    ],
+    [
+      'a percent-encoded parent escape inside a raw URL',
+      'https://raw.githubusercontent.com/test-org/content-test-org-cs101/main/%2e%2e/%2e%2e/x.png',
+    ],
+    ['a percent-encoded parent escape in a bare path', 'pages/%2e%2e/a.png'],
+    ['a double-encoded escape in a bare path', 'pages/%252e%252e/a.png'],
+    ['a query string', 'pages/syllabus/assets/a.png?v=2'],
+    ['a fragment', 'pages/syllabus/assets/a.png#frag'],
+    ['a backslash', 'pages\\syllabus\\a.png'],
+    ['a doubled slash', 'pages//assets/a.png'],
+    ['a bare dot segment', 'pages/./assets/a.png'],
     ['an external host', 'https://evil.example.com/tracker.png'],
     ["another org's repo", 'https://raw.githubusercontent.com/other/other/main/a.png'],
     ['a protocol-relative URL', '//evil.example.com/a.png'],

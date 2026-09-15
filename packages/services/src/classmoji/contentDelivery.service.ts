@@ -528,13 +528,13 @@ export async function signBlobUrlForClassroom(
  * relative branch can claim it; without that check `https://example.com/a.png`
  * would be looked up as the repo path `https://example.com/a.png`.
  *
- * Exported because it is also the sharpest available answer to "may this
- * classroom STORE this reference?" — `page_cover_set` refuses anything it
- * returns null for (see `canonicalizePageCoverRef`). `isOwnAssetRef` is the
- * looser cousin, deliberately: it also claims signed URLs and `/missing/`
- * placeholders, which are fine to recognize and wrong to write down.
+ * NOT an answer to "may this be STORED": the own-repo-URL branch returns
+ * `extractOwnRepoPath`'s path without the segment checks the relative branch
+ * gets, so a `..` inside an own-repo URL passes. A caller deciding what to
+ * write down wants `canonicalizePageCoverRef`'s rule, which holds both shapes
+ * to the same one.
  */
-export function toRepoPath(ctx: ResolveContext, ref: string): string | null {
+function toRepoPath(ctx: ResolveContext, ref: string): string | null {
   if (typeof ref !== 'string' || ref.length === 0) return null;
 
   const own = extractOwnRepoPath(

@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { collectBlockAssetRefs, mapBlockAssetRefs } from '@classmoji/utils';
 import { ContentService } from '../content/ContentService.ts';
 import { recordContentAsset, resolveContentBranch } from './contentAssets.service.ts';
+import { extractOwnRepoPath } from './contentRefs.ts';
 import {
   canonicalizeAssetRef,
   canonicalizeMany,
@@ -11,7 +12,6 @@ import {
   parseMissingUrl,
   resolveAssetUrl,
   signBlobUrlForClassroom,
-  toRepoPath,
   textReadBudget,
   warmContentText,
   type ResolveContext,
@@ -704,13 +704,12 @@ export async function resolvePageAssetUrl(
  * prevent — it pins one viewer's tier and one expiry into the document. This
  * undoes it, and undoes a `/missing/` placeholder the same way.
  *
- * Then refuse anything that does not name a file in THIS classroom's content
- * repo — an external host, another classroom's delivery URL, a `..` escape, a
- * root-relative path, a leftover scheme. Deliberately stricter than the web
- * editor's cover control, which stores whatever URL it is given: a cover is
- * rendered on the public class site, so an agent talked into pointing one at an
- * attacker's host would beacon every visitor, and an agent is a great deal
- * easier to talk into it than a person clicking an upload button.
+ * Then require what is left to name ONE file in THIS classroom's content repo,
+ * by the plain-path rule in `namesAPlainRepoFile` below. Deliberately stricter
+ * than the web editor's cover control, which stores whatever URL it is given: a
+ * cover is rendered on the public class site, and an agent acting on text it
+ * read somewhere is a great deal easier to point at the wrong host than a
+ * person clicking an upload button.
  *
  * Null is "refuse", not "leave it alone" — the one caller turns it into an
  * invalid_params naming `page_asset_upload`.
@@ -736,11 +735,68 @@ export async function canonicalizePageCoverRef(
     return null;
   }
 
-  // `toRepoPath` is the ownership question. Its ANSWER is discarded on purpose:
-  // the canonical form is what the rest of the stack stores and compares, and
-  // for a classroom with delivery off that is the legacy absolute URL
-  // `uploadPageAsset` returned, not the path this would reduce it to.
-  return toRepoPath(ctx, canonical) === null ? null : canonical;
+  return namesAPlainRepoFile(ctx, canonical) ? canonical : null;
+}
+
+/**
+ * Does this canonical reference name one plain file in this classroom's repo?
+ *
+ * Two shapes are legitimate here and only two. A repo-relative path, which is
+ * what an upload stores once the delivery layer is on; and an absolute URL into
+ * this classroom's own repo, which is what an upload stores when it is off —
+ * that one has to keep working, or `page_asset_upload` and `page_cover_set`
+ * would not compose for a classroom that has not been opted in.
+ *
+ * Both are reduced to the path they name and held to the same rule, because
+ * `extractOwnRepoPath` answers "is this URL ours" and NOT "is the path inside it
+ * sane": it hands back whatever sits after the branch segment, so
+ * `…/<repo>/main/../../../elsewhere/x.png` is a match whose path walks straight
+ * back out of the repo. `toRepoPath` does not settle it either — it returns
+ * that answer unchanged, running its own segment checks only on the relative
+ * branch. Left alone, a reference like that is stored verbatim and resolves to
+ * nothing.
+ *
+ * The rule, on the ONCE-decoded path: no scheme, no leading `/`, and no `?`,
+ * `#`, `%` or backslash anywhere, then every segment non-empty and neither `.`
+ * nor `..`. Refusing `%` AFTER one decode is what stops a second layer of
+ * encoding (`%252e%252e`) from arriving as `%2e%2e` and being written down;
+ * nothing legitimate carries one, because `sanitizeFilename` reduces every
+ * uploaded name to letters, digits and dashes. A query or fragment is refused
+ * rather than trimmed for the reason `..` is: a stored reference is a key into
+ * the asset map, and a key with a tail on it matches nothing.
+ */
+function namesAPlainRepoFile(ctx: ResolveContext, ref: string): boolean {
+  // The URL branch. `extractOwnRepoPath` has already stripped any `?`/`#` and
+  // percent-decoded once, so its output goes to the check as it comes.
+  const ownPath = extractOwnRepoPath(
+    ref,
+    ctx.classroom.git_organization.login,
+    ctx.classroom.content_repo
+  );
+  if (ownPath !== null) return isPlainRepoPath(ownPath);
+
+  // The relative branch: decode once ourselves, then the same check. Anything
+  // that is neither shape — an external host, another classroom's delivery URL,
+  // a `data:` — fails on its scheme.
+  return isPlainRepoPath(decodeOnce(ref));
+}
+
+/** One percent-decode, leaving a malformed escape alone (the check refuses it). */
+function decodeOnce(value: string): string {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
+}
+
+/** See `namesAPlainRepoFile` for why each clause is here. */
+function isPlainRepoPath(path: string): boolean {
+  if (!path) return false;
+  if (/^[a-z][a-z0-9+.-]*:/i.test(path)) return false;
+  if (path.startsWith('/')) return false;
+  if (/[?#%\\]/.test(path)) return false;
+  return path.split('/').every(segment => segment !== '' && segment !== '.' && segment !== '..');
 }
 
 /**
