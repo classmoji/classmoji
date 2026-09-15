@@ -338,9 +338,9 @@ test.describe('cleanSectionAttrs — Reveal runtime paint', () => {
       { class: 'mine' },
     ],
     [
-      "the print view's computed left goes with top, margin-left stays",
-      { style: 'left: 40px; top: 12px; margin-left: 8px;' },
-      { style: 'margin-left: 8px;' },
+      "only normal-view layout goes — the print view's left and width stay",
+      { style: 'left: 40px; top: 12px; width: 960px;' },
+      { style: 'left: 40px; width: 960px;' },
     ],
     [
       'a data-URI background survives the declaration split',

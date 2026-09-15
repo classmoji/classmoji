@@ -38,12 +38,17 @@ describe('stripRuntimeStyleProps', () => {
     expect(stripRuntimeStyleProps('top-margin: 1px; margin-top: 2px;')).toBe(
       'top-margin: 1px; margin-top: 2px;'
     );
-    expect(stripRuntimeStyleProps('margin-left: 3px; left: 40px;')).toBe('margin-left: 3px;');
+    expect(stripRuntimeStyleProps('margin-top: 3px; top: 40px;')).toBe('margin-top: 3px;');
   });
 
-  it("drops the print view's computed left", () => {
-    // printview.js:109-110 writes left + top while laying out print pages.
-    expect(stripRuntimeStyleProps('left: 40px; top: 12px;')).toBeNull();
+  it("keeps the print view's left and width — only normal-view layout is stripped", () => {
+    // printview.js:109-111 writes left + top + width onto its CLONED sections,
+    // but the print view is unreachable from an editor save and `width` is
+    // author-meaningful, so the rule stays "strip what normal-view layout
+    // writes" (display, top).
+    expect(stripRuntimeStyleProps('left: 40px; top: 12px; width: 960px;')).toBe(
+      'left: 40px; width: 960px;'
+    );
   });
 
   it('never splits inside url(data:…;base64,…) or a quoted value', () => {

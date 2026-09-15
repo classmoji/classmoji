@@ -16,8 +16,6 @@
  *    `layout()`, js/reveal.js:832-857) — a viewport-dependent pixel value, and
  *    a literal `0px` on vertical-stack containers. Both editor and viewer set
  *    `center: true`, so every serialized deck picked this up.
- *  - `style.left` + `style.top` while laying out the print view
- *    (js/controllers/printview.js:109-110).
  *  - `style.display` (`none` / `block`) as slides come in and out of view.
  *  - `data-fragment` (js/controllers/fragments.js), `data-previous-indexv`
  *    (js/reveal.js `setPreviousVerticalIndex`), and `data-index-h` /
@@ -29,8 +27,12 @@
  *
  * Author-set neighbours that must SURVIVE: `data-start-indexv`,
  * `data-fragment-index`, `data-background-*`, `data-transition`, and every
- * style property other than the three above (`margin`, `margin-left`,
- * colours, …).
+ * style property other than the two above (`margin`, `margin-top`, colours, …).
+ *
+ * The rule is deliberately "strip what NORMAL-view layout writes". The print
+ * view (js/controllers/printview.js:109-111) also writes `left`, `top` and
+ * `width` onto its cloned sections, but it is unreachable from an editor save,
+ * and `width` is author-meaningful on a section — so `left` and `width` stay.
  */
 
 import type { DeckJson, DeckSlide } from './deckTypes.ts';
@@ -61,7 +63,7 @@ export const RUNTIME_SECTION_ATTRS: ReadonlySet<string> = new Set([
 ]);
 
 /** Inline style properties Reveal computes at runtime — never authored. */
-const RUNTIME_STYLE_PROP_RE = /^(?:display|top|left)\s*:/i;
+const RUNTIME_STYLE_PROP_RE = /^(?:display|top)\s*:/i;
 
 /**
  * Split a style attr on TOP-LEVEL `;` — quotes and parens respected, so

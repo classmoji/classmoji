@@ -84,12 +84,12 @@ describe('parseSlidesFragment', () => {
     expect(result.slides[1].attrs).toBeUndefined();
   });
 
-  it("strips the print view's computed left alongside top, keeping margin-left", () => {
+  it("strips only normal-view layout — the print view's left and width survive", () => {
     const result = parseSlidesFragment(
       '<div class="slides"><section data-cm-id="frag0001" ' +
-        'style="left: 40px; top: 12px; margin-left: 8px;"><h2>A</h2></section></div>'
+        'style="left: 40px; top: 12px; width: 960px;"><h2>A</h2></section></div>'
     );
-    expect(result.slides[0].attrs).toEqual({ style: 'margin-left: 8px;' });
+    expect(result.slides[0].attrs).toEqual({ style: 'left: 40px; width: 960px;' });
   });
 
   it('preserves section attribute ORDER through the cruft strip (parse → generate)', () => {

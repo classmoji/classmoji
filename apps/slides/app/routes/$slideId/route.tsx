@@ -238,8 +238,11 @@ export const loader = async ({
       const loaded = await loadDeck(slide, { skipCache: true });
       if (loaded.sha_source === 'deck') {
         // deck.json exists: render server-side with the SAME generator +
-        // theme-URL resolution the save path uses, so this document is
-        // identical to the index.html artifact the last save committed.
+        // theme-URL resolution the save path uses, so this document matches
+        // the index.html artifact the last save committed — exactly, unless
+        // that save predates the runtime-paint strip (#361), in which case
+        // this render is the cleaned one and the stored artifact catches up
+        // on the next save.
         // Theme links are signed even in edit mode: they live in <head> and
         // the editor posts back only the <div class="slides"> fragment, so
         // they can never round-trip into a stored document. Image URLs are
