@@ -202,7 +202,7 @@ export default function SlidesAdmin({ loaderData }: Route.ComponentProps) {
           href={`${slidesUrl}/${record.id}`}
           target="_blank"
           rel="noopener noreferrer"
-          className="font-medium !text-gray-600 dark:text-gray-100 hover:text-blue-600 dark:hover:text-blue-400"
+          className="font-medium !text-gray-600 dark:!text-gray-100 hover:!text-blue-600 dark:hover:!text-blue-400"
         >
           {title}
         </a>
