@@ -21,6 +21,7 @@
 
 import { z } from 'zod';
 import { BUILTIN_THEMES, mintSlideId, normalizeSlideHtml } from './deckHtml.ts';
+import { stripRuntimeSectionAttrs } from './deckRuntimeAttrs.ts';
 import type { DeckJson, DeckSlide } from './deckTypes.ts';
 
 // Re-exported so op-engine callers can catch the SAME class instance the
@@ -274,10 +275,13 @@ export function applyDeckOps(
           else delete target.slide.hidden;
         }
         if (op.attrs !== undefined) {
-          if (op.attrs == null || Object.keys(op.attrs).length === 0) {
+          // Reveal's runtime paint never persists, even when an agent hands
+          // back verbatim what deck_get returned (issue #361).
+          const attrs = op.attrs == null ? {} : stripRuntimeSectionAttrs(op.attrs);
+          if (Object.keys(attrs).length === 0) {
             delete target.slide.attrs;
           } else {
-            target.slide.attrs = { ...op.attrs };
+            target.slide.attrs = attrs;
           }
         }
         applied.push({ op: 'update', id: op.id });
@@ -338,7 +342,8 @@ export function applyDeckOps(
             leaf.notes = normalizeSlideHtml(spec.notes);
           }
           if (spec.hidden) leaf.hidden = true;
-          if (spec.attrs && Object.keys(spec.attrs).length > 0) leaf.attrs = { ...spec.attrs };
+          const attrs = stripRuntimeSectionAttrs(spec.attrs ?? {});
+          if (Object.keys(attrs).length > 0) leaf.attrs = attrs;
           return leaf;
         };
         const childIdsByContainer: Record<string, string[]> = {};
@@ -350,8 +355,9 @@ export function applyDeckOps(
               container.notes = normalizeSlideHtml(spec.notes);
             }
             if (spec.hidden) container.hidden = true;
-            if (spec.attrs && Object.keys(spec.attrs).length > 0) {
-              container.attrs = { ...spec.attrs };
+            const containerAttrs = stripRuntimeSectionAttrs(spec.attrs ?? {});
+            if (Object.keys(containerAttrs).length > 0) {
+              container.attrs = containerAttrs;
             }
             childIdsByContainer[container.id] = container.children.map(c => c.id);
             return container;
