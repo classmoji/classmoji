@@ -7,7 +7,9 @@ import { InfisicalSDK } from '@infisical/sdk';
 
 export default defineConfig({
   project: process.env.TRIGGER_PROJECT_ID || 'proj_ijxcrutouxchmrbjmkkk',
-  runtime: 'node',
+  // Pinned: bare 'node' meant Trigger's default image (Node 21), which is
+  // going away, and it did not match the Node 22 the repo runs everywhere else.
+  runtime: 'node-22',
   logLevel: 'log',
   machine: 'small-2x',
   maxDuration: 900,
