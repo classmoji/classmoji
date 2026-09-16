@@ -56,6 +56,7 @@ import {
   type MergeChoice,
 } from '../content/merge3.ts';
 import { browserCanonicalAttrValue, browserCanonicalHtmlSig } from './deckHtml.ts';
+import { stripRuntimeSectionAttrs } from './deckRuntimeAttrs.ts';
 import type { DeckJson, DeckSlide } from './deckTypes.ts';
 
 export { PreviewResolutionError, indexResolutions } from '../content/merge3.ts';
@@ -216,7 +217,11 @@ const isContainer = (slide: DeckSlide | undefined): boolean => (slide?.children?
  */
 function contentSig(slide: DeckSlide | undefined): string {
   if (!slide) return 'absent';
-  const unitAttrs = slide.attrs ?? {};
+  // Reveal's runtime paint (`style: "top: 350px;"` and friends) is stripped on
+  // the way in now, but decks saved before issue #361 still carry it. Strip it
+  // here too so a stale base vs a freshly-cleaned side reads as UNCHANGED —
+  // the first post-fix save must not register as a phantom edit or conflict.
+  const unitAttrs = stripRuntimeSectionAttrs(slide.attrs ?? {});
   const attrs = Object.keys(unitAttrs)
     .sort()
     .map(key => [key, browserCanonicalAttrValue(key, unitAttrs[key])]);

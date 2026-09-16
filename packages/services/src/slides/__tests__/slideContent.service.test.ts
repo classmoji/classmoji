@@ -350,3 +350,102 @@ describe('loadDeck', () => {
     await expect(loadDeck(slide)).rejects.toThrow('Slide content not found');
   });
 });
+
+// ─── Reveal runtime paint at the content boundaries (issue #361) ─────────────
+//
+// Decks committed before the strip landed carry reveal.js layout()'s computed
+// `top` (and the contrast class backgrounds.js adds). Both boundaries clean
+// it, so no consumer can carry it forward and no commit can re-bake it.
+
+describe('runtime paint is stripped at the load/save boundaries', () => {
+  /** A deck as it sits in a pre-fix repo: paint on a leaf, a stack, and a child. */
+  const staleDeck: DeckJson = {
+    version: 1,
+    theme: 'white',
+    codeTheme: 'github',
+    slides: [
+      {
+        id: 'aaaa1111',
+        html: '<h1>Hi</h1>',
+        attrs: {
+          style: 'top: 350px; background-color: red;',
+          class: 'present has-dark-background mine',
+          'data-index-h': '0',
+          'data-background-color': '#123456',
+        },
+      },
+      {
+        id: 'bbbb2222',
+        attrs: { style: 'top: 0px;', class: 'stack' },
+        children: [{ id: 'cccc3333', html: '<h2>Child</h2>', attrs: { style: 'top: 12px;' } }],
+      },
+    ],
+  };
+
+  const cleanedSlides = [
+    {
+      id: 'aaaa1111',
+      html: '<h1>Hi</h1>',
+      attrs: {
+        style: 'background-color: red;',
+        class: 'mine',
+        'data-background-color': '#123456',
+      },
+    },
+    {
+      id: 'bbbb2222',
+      children: [{ id: 'cccc3333', html: '<h2>Child</h2>' }],
+    },
+  ];
+
+  it('loadDeck cleans a stored deck.json, stacks and children included', async () => {
+    getContentMock.mockImplementation(({ path }: { path: string }) =>
+      Promise.resolve(
+        path === DECK_PATH ? { content: JSON.stringify(staleDeck), sha: 'deck-sha' } : null
+      )
+    );
+
+    const result = await loadDeck(slide, { skipCache: true });
+
+    expect(result.deck.slides).toEqual(cleanedSlides);
+    expect(JSON.stringify(result.deck)).not.toContain('top:');
+    expect(result.sha).toBe('deck-sha');
+  });
+
+  it('saveDeck commits a clean deck.json and index.html even when handed a stale deck', async () => {
+    getMetaMock.mockResolvedValue({ sha: 'expected-sha', size: 10 });
+
+    await saveDeck({
+      slide,
+      deck: staleDeck,
+      expectedSha: 'expected-sha',
+      shaSource: 'deck',
+      message: 'update deck',
+    });
+
+    const call = uploadBatchMock.mock.calls[0][0];
+    const committedDeck = JSON.parse(call.files[0].content) as DeckJson;
+    expect(committedDeck.slides).toEqual(cleanedSlides);
+    expect(call.files[0].content).not.toContain('top:');
+    expect(call.files[0].content).not.toContain('has-dark-background');
+    // index.html is regenerated from the SAME cleaned deck.
+    expect(call.files[1].content).not.toContain('top: 350px');
+    expect(call.files[1].content).not.toContain('has-dark-background');
+    expect(call.files[1].content).toContain('background-color: red;');
+  });
+
+  it('leaves the caller’s deck untouched (pure)', async () => {
+    getMetaMock.mockResolvedValue({ sha: 'expected-sha', size: 10 });
+    const before = JSON.stringify(staleDeck);
+
+    await saveDeck({
+      slide,
+      deck: staleDeck,
+      expectedSha: 'expected-sha',
+      shaSource: 'deck',
+      message: 'm',
+    });
+
+    expect(JSON.stringify(staleDeck)).toBe(before);
+  });
+});
