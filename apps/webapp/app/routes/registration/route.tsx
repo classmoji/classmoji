@@ -9,7 +9,7 @@ import { Logo } from '@classmoji/ui-components';
 import { getAuthSession } from '@classmoji/auth/server';
 import getPrisma from '@classmoji/database';
 import { generateId } from '@classmoji/utils';
-import { GitHubProvider, ClassmojiService, provisionExampleClassroom } from '@classmoji/services';
+import { GitHubProvider, ClassmojiService } from '@classmoji/services';
 import {
   sendEmailVerificationCode,
   isEmailVerificationCodeValid,
@@ -572,13 +572,9 @@ export const action = async ({ request }: Route.ActionArgs) => {
   // stranded (#307).
   await ClassmojiService.classroomInvite.claimPendingInvites(user.id);
 
-  // Give every brand-new user a populated "Example Course" sandbox to explore
-  // (the in-classroom onboarding tour runs here). Never let this break signup.
-  try {
-    await provisionExampleClassroom({ ownerUserId: user.id, ownerLogin: formData.login });
-  } catch (err) {
-    console.error('Failed to provision example classroom:', err);
-  }
+  // The "Example Course" sandbox is no longer provisioned here: it is created
+  // on demand when someone starts the tour (POST /api/example-classroom).
+  // Most accounts are students, who never needed one.
 
   return redirect('/select-organization');
 };
