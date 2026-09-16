@@ -252,7 +252,12 @@ export {
 } from './autograding/callbackToken.ts';
 
 // Example-classroom provisioning (server-only; touches Prisma)
-export { provisionExampleClassroom } from './classmoji/exampleClassroom.service.ts';
+export {
+  provisionExampleClassroom,
+  deleteAbandonedExampleClassrooms,
+  ABANDONED_EXAMPLE_AGE_DAYS,
+  type ExampleCleanupReport,
+} from './classmoji/exampleClassroom.service.ts';
 
 // Classroom slug rules: normalization, deterministic collision candidates, and
 // the constraint-and-retry wrapper every slug-creating path goes through

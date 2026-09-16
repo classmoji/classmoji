@@ -15,7 +15,6 @@ import {
   getGitProvider,
   ensureClassroomTeam,
   notificationService,
-  provisionExampleClassroom,
   pendingSurveyQuestions,
 } from '@classmoji/services';
 import { ActionTypes, roleSettings } from '~/constants';
@@ -113,32 +112,6 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
       }
     } catch (error) {
       console.error('Failed to claim pending classroom invites:', error);
-    }
-
-    // `?? []` because the claim above may have swapped in a refreshed user, which
-    // costs TypeScript the narrowing the initial assignment gave it.
-    const hasExampleClassroom = (typedUser.memberships ?? []).some(
-      m => (m.organization as { is_example?: boolean }).is_example === true
-    );
-    if (!hasExampleClassroom && typedUser.login) {
-      try {
-        const exampleClassroom = await provisionExampleClassroom({
-          ownerUserId: typedUser.id,
-          ownerLogin: typedUser.login,
-        });
-        if (exampleClassroom) {
-          const refreshedUser = await ClassmojiService.user.findById(typedUser.id, {
-            includeMemberships: true,
-          });
-          if (refreshedUser) {
-            user = refreshedUser;
-            typedUser = user as AppUser;
-            typedUser.memberships = (typedUser.memberships ?? []) as SelectOrganizationMembership[];
-          }
-        }
-      } catch (error) {
-        console.error('Failed to provision example classroom:', error);
-      }
     }
 
     // Runs after the invite claim above so a freshly-claimed student membership
@@ -394,9 +367,8 @@ const SelectOrganization = ({ loaderData }: Route.ComponentProps) => {
   // The Example Course is hidden from the grid and the org switcher; the
   // "Take a tour" button is the only way it's reached. Clicking it starts the
   // guided sequence: the landing tour runs here, then hands off into the Example
-  // Course for the instructor and student tours, then returns here.
-  const exampleClass =
-    classes.find(c => c.is_example && c.role === 'OWNER') ?? classes.find(c => c.is_example);
+  // Course (provisioned on demand at that point) for the instructor and student
+  // tours, then returns here.
   const onTakeTour = () => startFullTour();
 
   return (
@@ -446,7 +418,7 @@ const SelectOrganization = ({ loaderData }: Route.ComponentProps) => {
         classes={classes.filter(c => !c.is_example)}
         onOpenClass={onOpenClass}
         onTakeTour={onTakeTour}
-        tourAvailable={!!exampleClass}
+        tourAvailable
         notifications={notifications}
         unreadCount={unreadCount}
         membershipRoles={membershipRoles}

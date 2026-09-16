@@ -19,7 +19,7 @@
  * Copy is sourced from https://classmoji.io/docs and matches the current flow.
  */
 
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { useFetcher, useLocation, useNavigate } from 'react-router';
 import { Tour, Button } from 'antd';
 import type { TourProps } from 'antd';
@@ -129,6 +129,7 @@ export function OnboardingTour() {
   const location = useLocation();
   const navigate = useNavigate();
   const fetcher = useFetcher();
+  const sandboxFetcher = useFetcher<{ slug?: string; error?: string }>();
 
   const tourPhase = useStore(s => s.tourPhase);
   const tourStep = useStore(s => s.tourStep);
@@ -222,21 +223,39 @@ export function OnboardingTour() {
     return () => window.clearInterval(id);
   }, [active, tourStep, location.pathname]);
 
-  // Slug of the hidden Example Course (the user owns it).
-  const exampleSlug =
+  // Slug of the hidden Example Course, if the user already has one.
+  const existingSlug =
     user?.memberships?.find(
       m => (m.organization as { is_example?: boolean }).is_example && m.role === 'OWNER'
     )?.organization?.login ?? null;
 
-  const finishLanding = () => {
-    if (exampleSlug) {
+  const enterSandbox = useCallback(
+    (slug: string) => {
       setTourStep(0); // instructor tour starts at its first step
       setTourPhase('instructor');
-      navigate(`/admin/${exampleSlug}/dashboard`);
-    } else {
-      endTour();
+      navigate(`/admin/${slug}/dashboard`);
+    },
+    [navigate, setTourPhase, setTourStep]
+  );
+
+  // The sandbox is provisioned here, on demand, rather than for every new
+  // account: this is the first moment anyone actually needs it. Existing one
+  // → straight in; otherwise POST and enter once the slug comes back.
+  const provisioning = sandboxFetcher.state !== 'idle';
+  const finishLanding = useCallback(() => {
+    if (provisioning) return;
+    if (existingSlug) {
+      enterSandbox(existingSlug);
+      return;
     }
-  };
+    sandboxFetcher.submit(null, { method: 'POST', action: '/api/example-classroom' });
+  }, [provisioning, existingSlug, enterSandbox, sandboxFetcher]);
+
+  useEffect(() => {
+    if (sandboxFetcher.state !== 'idle' || !sandboxFetcher.data) return;
+    if (sandboxFetcher.data.slug) enterSandbox(sandboxFetcher.data.slug);
+    else endTour();
+  }, [sandboxFetcher.state, sandboxFetcher.data, enterSandbox, endTour]);
 
   // The final landing step leads into the class tour, so replace the default
   // "Finish" with an explicit choice. NOTE: antd only honors the Tour-level
@@ -250,7 +269,8 @@ export function OnboardingTour() {
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== 'ArrowRight' && e.key !== 'ArrowLeft') return;
       const el = document.activeElement as HTMLElement | null;
-      if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable)) return;
+      if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable))
+        return;
       e.preventDefault();
       if (e.key === 'ArrowLeft') {
         if (tourStep > 0) setTourStep(tourStep - 1);
@@ -315,8 +335,8 @@ export function OnboardingTour() {
             <Button size="small" onClick={endTour}>
               Skip for now
             </Button>
-            <Button size="small" type="primary" onClick={finishLanding}>
-              Let’s go!
+            <Button size="small" type="primary" onClick={finishLanding} loading={provisioning}>
+              {provisioning ? 'Setting up your example course…' : 'Let’s go!'}
             </Button>
           </div>
         ) : (
