@@ -37,10 +37,34 @@ const EXAMPLE_ORG = {
 };
 
 const DEMO_PEOPLE = [
-  { login: 'example-ta', name: 'Avery (TA)', email: 'ta@example.classmoji', provider_id: 'ex-10000001', role: 'ASSISTANT' as const },
-  { login: 'example-student-1', name: 'Sam Rivera', email: 's1@example.classmoji', provider_id: 'ex-10000002', role: 'STUDENT' as const },
-  { login: 'example-student-2', name: 'Priya Shah', email: 's2@example.classmoji', provider_id: 'ex-10000003', role: 'STUDENT' as const },
-  { login: 'example-student-3', name: 'Diego Costa', email: 's3@example.classmoji', provider_id: 'ex-10000004', role: 'STUDENT' as const },
+  {
+    login: 'example-ta',
+    name: 'Avery (TA)',
+    email: 'ta@example.classmoji',
+    provider_id: 'ex-10000001',
+    role: 'ASSISTANT' as const,
+  },
+  {
+    login: 'example-student-1',
+    name: 'Sam Rivera',
+    email: 's1@example.classmoji',
+    provider_id: 'ex-10000002',
+    role: 'STUDENT' as const,
+  },
+  {
+    login: 'example-student-2',
+    name: 'Priya Shah',
+    email: 's2@example.classmoji',
+    provider_id: 'ex-10000003',
+    role: 'STUDENT' as const,
+  },
+  {
+    login: 'example-student-3',
+    name: 'Diego Costa',
+    email: 's3@example.classmoji',
+    provider_id: 'ex-10000004',
+    role: 'STUDENT' as const,
+  },
 ];
 
 const EMOJI_SCALE = [
@@ -69,10 +93,17 @@ export async function provisionExampleClassroom(params: {
   // and shared across every sandbox, so it lives outside the per-classroom tx.
   const org = await prisma.gitOrganization.upsert({
     where: {
-      provider_provider_id: { provider: EXAMPLE_ORG.provider, provider_id: EXAMPLE_ORG.provider_id },
+      provider_provider_id: {
+        provider: EXAMPLE_ORG.provider,
+        provider_id: EXAMPLE_ORG.provider_id,
+      },
     },
     update: {},
-    create: { provider: EXAMPLE_ORG.provider, provider_id: EXAMPLE_ORG.provider_id, login: EXAMPLE_ORG.login },
+    create: {
+      provider: EXAMPLE_ORG.provider,
+      provider_id: EXAMPLE_ORG.provider_id,
+      login: EXAMPLE_ORG.login,
+    },
   });
 
   const slug = `example-${ownerLogin}`.toLowerCase();
@@ -146,10 +177,20 @@ function buildExampleSandbox(args: {
       // shows one card per role, and the in-classroom tour adapts to whichever
       // view they open.
       await tx.classroomMembership.create({
-        data: { classroom_id: classroom.id, user_id: ownerUserId, role: 'OWNER', has_accepted_invite: true },
+        data: {
+          classroom_id: classroom.id,
+          user_id: ownerUserId,
+          role: 'OWNER',
+          has_accepted_invite: true,
+        },
       });
       await tx.classroomMembership.create({
-        data: { classroom_id: classroom.id, user_id: ownerUserId, role: 'STUDENT', has_accepted_invite: true },
+        data: {
+          classroom_id: classroom.id,
+          user_id: ownerUserId,
+          role: 'STUDENT',
+          has_accepted_invite: true,
+        },
       });
 
       // Shared demo personas + their memberships in this classroom.
@@ -171,7 +212,12 @@ function buildExampleSandbox(args: {
           },
         });
         await tx.classroomMembership.create({
-          data: { classroom_id: classroom.id, user_id: user.id, role: p.role, has_accepted_invite: true },
+          data: {
+            classroom_id: classroom.id,
+            user_id: user.id,
+            role: p.role,
+            has_accepted_invite: true,
+          },
         });
         if (p.role === 'ASSISTANT') taUser = user;
         else studentUsers.push({ id: user.id, login: p.login });
@@ -209,7 +255,9 @@ function buildExampleSandbox(args: {
 
       // Grade scales.
       for (const m of EMOJI_SCALE) {
-        await tx.emojiMapping.create({ data: { classroom_id: classroom.id, ...m, extra_tokens: 0 } });
+        await tx.emojiMapping.create({
+          data: { classroom_id: classroom.id, ...m, extra_tokens: 0 },
+        });
       }
       for (const lg of LETTER_SCALE) {
         await tx.letterGradeMapping.create({ data: { classroom_id: classroom.id, ...lg } });
@@ -246,7 +294,11 @@ function buildExampleSandbox(args: {
         if (i === 0) firstGitRepoAssignment = gitRepoAssignment;
 
         await tx.assignmentGrade.create({
-          data: { git_repo_assignment_id: gitRepoAssignment.id, grader_id: taUser?.id ?? null, emoji },
+          data: {
+            git_repo_assignment_id: gitRepoAssignment.id,
+            grader_id: taUser?.id ?? null,
+            emoji,
+          },
         });
         await tx.tokenTransaction.create({
           data: {
@@ -318,9 +370,19 @@ function buildExampleSandbox(args: {
 
       // A few calendar events over the coming days.
       const calendarDefs = [
-        { title: 'Week 1 Lecture', event_type: 'LECTURE' as const, offsetDays: 1, location: 'Room 101' },
+        {
+          title: 'Week 1 Lecture',
+          event_type: 'LECTURE' as const,
+          offsetDays: 1,
+          location: 'Room 101',
+        },
         { title: 'Week 1 Lab', event_type: 'LAB' as const, offsetDays: 2, location: 'Room 101' },
-        { title: 'TA Office Hours', event_type: 'OFFICE_HOURS' as const, offsetDays: 3, location: 'Online' },
+        {
+          title: 'TA Office Hours',
+          event_type: 'OFFICE_HOURS' as const,
+          offsetDays: 3,
+          location: 'Online',
+        },
       ];
       for (const ev of calendarDefs) {
         const start = new Date(Date.now() + ev.offsetDays * 24 * 60 * 60 * 1000);
@@ -357,4 +419,66 @@ function buildExampleSandbox(args: {
     },
     { maxWait: 10000, timeout: 30000 }
   );
+}
+
+// ───────── cleanup ─────────
+
+/**
+ * How long an untouched sandbox lives. Provisioning is idempotent and on
+ * demand, so deleting one costs the owner nothing but a second or two the
+ * next time they click "Take a tour".
+ */
+export const ABANDONED_EXAMPLE_AGE_DAYS = 30;
+
+export interface ExampleCleanupReport {
+  /** Sandboxes old enough to be considered. */
+  candidates: number;
+  /** Of those, deleted: nobody finished the tour in them and nothing was ever done in them. */
+  deleted: number;
+  /** Of those, kept: a completed tour or at least one audit-logged action. */
+  kept: number;
+}
+
+/**
+ * Delete example classrooms nobody used.
+ *
+ * "Used" is either signal the sandbox can carry: the owner finished the
+ * in-classroom tour there (`tour_completed_at` on their OWNER membership), or
+ * any action was audit-logged against it. A sandbox with neither, older than
+ * the cutoff, is the one that was provisioned and never opened. The row delete
+ * cascades through memberships, repositories, git repos, grades, and audit
+ * rows, exactly as the danger-zone delete does for a real classroom; there is
+ * no Github side to clean because the sandbox org has no installation.
+ */
+export async function deleteAbandonedExampleClassrooms(
+  options: { olderThanDays?: number; now?: Date } = {}
+): Promise<ExampleCleanupReport> {
+  const days = options.olderThanDays ?? ABANDONED_EXAMPLE_AGE_DAYS;
+  const now = options.now ?? new Date();
+  const cutoff = new Date(now.getTime() - days * 24 * 60 * 60 * 1000);
+  const prisma = getPrisma();
+
+  const candidates = await prisma.classroom.findMany({
+    where: { is_example: true, created_at: { lt: cutoff } },
+    select: {
+      id: true,
+      memberships: { where: { role: 'OWNER' }, select: { tour_completed_at: true } },
+      _count: { select: { audit_logs: true } },
+    },
+  });
+
+  const abandoned = candidates
+    .filter(c => c.memberships.every(m => m.tour_completed_at === null))
+    .filter(c => c._count.audit_logs === 0)
+    .map(c => c.id);
+
+  if (abandoned.length > 0) {
+    await prisma.classroom.deleteMany({ where: { id: { in: abandoned }, is_example: true } });
+  }
+
+  return {
+    candidates: candidates.length,
+    deleted: abandoned.length,
+    kept: candidates.length - abandoned.length,
+  };
 }

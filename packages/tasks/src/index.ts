@@ -18,6 +18,7 @@ import * as contentIndexTasks from './workflows/contentIndexReconcile.ts';
 import * as docsIndexTasks from './workflows/docsIndexReconcile.ts';
 import * as deckThumbnailTasks from './workflows/deckThumbnail.ts';
 import * as instructorContactTasks from './workflows/instructorContacts.ts';
+import * as exampleClassroomCleanupTasks from './workflows/exampleClassroomCleanup.ts';
 
 // comment to trigger a build
 
@@ -42,6 +43,7 @@ const Tasks = {
   ...docsIndexTasks,
   ...deckThumbnailTasks,
   ...instructorContactTasks,
+  ...exampleClassroomCleanupTasks,
 };
 
 export default Tasks;
