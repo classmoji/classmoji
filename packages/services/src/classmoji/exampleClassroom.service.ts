@@ -428,7 +428,7 @@ function buildExampleSandbox(args: {
  * demand, so deleting one costs the owner nothing but a second or two the
  * next time they click "Take a tour".
  */
-export const ABANDONED_EXAMPLE_AGE_DAYS = 30;
+export const ABANDONED_EXAMPLE_AGE_DAYS = 7;
 
 export interface ExampleCleanupReport {
   /** Sandboxes old enough to be considered. */
