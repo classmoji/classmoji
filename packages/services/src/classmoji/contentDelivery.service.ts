@@ -527,6 +527,12 @@ export async function signBlobUrlForClassroom(
  * A protocol-bearing reference that is not one of ours is rejected before the
  * relative branch can claim it; without that check `https://example.com/a.png`
  * would be looked up as the repo path `https://example.com/a.png`.
+ *
+ * NOT an answer to "may this be STORED": the own-repo-URL branch returns
+ * `extractOwnRepoPath`'s path without the segment checks the relative branch
+ * gets, so a `..` inside an own-repo URL passes. A caller deciding what to
+ * write down wants `canonicalizePageCoverRef`'s rule, which holds both shapes
+ * to the same one.
  */
 function toRepoPath(ctx: ResolveContext, ref: string): string | null {
   if (typeof ref !== 'string' || ref.length === 0) return null;
@@ -632,7 +638,7 @@ function missingUrl(origin: string, classroomId: string, ref: string): string {
 const MISSING_URL =
   /^https?:\/\/[^/]+\/c\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\/missing\/([^/?#]+)$/i;
 
-function parseMissingUrl(ctx: ResolveContext, ref: string): string | null {
+export function parseMissingUrl(ctx: ResolveContext, ref: string): string | null {
   const match = MISSING_URL.exec(ref);
   if (!match || match[1].toLowerCase() !== ctx.classroom.id.toLowerCase()) return null;
   try {

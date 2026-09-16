@@ -34,6 +34,8 @@ import {
   pageContentOutlineTool,
   pageContentGetTool,
   pageContentApplyTool,
+  pageAssetUploadTool,
+  pageCoverSetTool,
   pagePreviewAcceptTool,
   pagePreviewDiscardTool,
 } from './pageContent.ts';
@@ -140,6 +142,11 @@ export function registerAllTools(): void {
   registerToolDefinition(pageContentApplyTool);
   registerToolDefinition(pagePreviewAcceptTool);
   registerToolDefinition(pagePreviewDiscardTool);
+
+  // Page assets + cover image. Both write the LIVE page, never a preview
+  // branch — the same boundary the web editor draws around cover changes.
+  registerToolDefinition(pageAssetUploadTool);
+  registerToolDefinition(pageCoverSetTool);
 
   // Slides: list (all roles, students published-only) + metadata CRUD
   // (TEACHING_TEAM with the web's creator/allow_team_edit sub-gate)

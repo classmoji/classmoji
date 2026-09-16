@@ -3,10 +3,14 @@ import { z } from 'zod';
 import { collectBlockAssetRefs, mapBlockAssetRefs } from '@classmoji/utils';
 import { ContentService } from '../content/ContentService.ts';
 import { recordContentAsset, resolveContentBranch } from './contentAssets.service.ts';
+import { extractOwnRepoPath } from './contentRefs.ts';
 import {
+  canonicalizeAssetRef,
   canonicalizeMany,
   fetchContentText,
   mappedAssetsBySha,
+  parseMissingUrl,
+  resolveAssetUrl,
   signBlobUrlForClassroom,
   textReadBudget,
   warmContentText,
@@ -390,7 +394,11 @@ async function canonicalizePageCover(
  *   status 409 (propagated from ContentService.put).
  * @param options.message - Commit message (default `Update page: <title>`).
  * @param options.branch - Branch to commit to (default: repo default branch).
- * @returns The new file sha and commit sha.
+ * @returns The new file sha, the commit sha, and the coverImage AS STORED —
+ *   canonicalized, and resolved to the existing one when the caller omitted it.
+ *   Returned rather than left for the caller to reconstruct because a caller
+ *   that echoes its own input describes a document that may not exist: hand it
+ *   a signed URL and the store holds a repo path.
  */
 export async function savePageContent(
   page: PageWithContentRepo,
@@ -406,7 +414,7 @@ export async function savePageContent(
     message?: string;
     branch?: string;
   } = {}
-): Promise<{ sha: string; commit: string }> {
+): Promise<{ sha: string; commit: string; coverImage: PageCoverImage | null }> {
   const { gitOrganization, repo } = contentRepoFor(page);
   const path = `${page.content_path}/content.json`;
 
@@ -486,7 +494,9 @@ export async function savePageContent(
     await recordPageFile(page, path, result.sha, content);
   }
 
-  return result;
+  // `wrapper.coverImage` is the written truth: canonicalized above, and filled
+  // in from the existing file when the caller passed nothing.
+  return { ...result, coverImage: wrapper.coverImage ?? null };
 }
 
 /**
@@ -580,15 +590,16 @@ async function recordPageFile(
  * a dangling URL. The upload already has the path, the sha and the size, so the
  * row is recorded from them rather than left to a webhook round trip.
  *
- * @returns `{ url, path, displayUrl }`. `path` is always the repo path.
- *   `displayUrl` is null when the delivery layer is off, and `url` is then the
- *   legacy absolute URL rather than the path.
+ * @returns `{ url, path, sha, displayUrl }`. `path` is always the repo path and
+ *   `sha` the blob sha the commit returned. `displayUrl` is null when the
+ *   delivery layer is off, and `url` is then the legacy absolute URL rather
+ *   than the path.
  */
 export async function uploadPageAsset(
   page: PageWithContentRepo,
   buffer: Buffer,
   filename: string
-): Promise<{ url: string; path: string; displayUrl: string | null }> {
+): Promise<{ url: string; path: string; sha: string; displayUrl: string | null }> {
   const { gitOrganization, repo } = contentRepoFor(page);
 
   // Asked, not assumed — the same reason the asset sync asks. A content repo on
@@ -621,7 +632,171 @@ export async function uploadPageAsset(
   const displayUrl = await signUploadedAsset(page, result.path, result.sha);
 
   // No signature means no reader can resolve a bare path — store the legacy URL.
-  return { url: displayUrl ? result.path : result.url, path: result.path, displayUrl };
+  return {
+    url: displayUrl ? result.path : result.url,
+    path: result.path,
+    sha: result.sha,
+    displayUrl,
+  };
+}
+
+/**
+ * The URL a WRITER can actually open one stored page-asset reference at, or null.
+ *
+ * With the delivery layer on, `content.json` stores a bare repo path — a key
+ * into the asset map, not an address. A browser can follow it because the page
+ * is rendered through a resolve pass; an API caller holding the stored string
+ * has nothing to follow. This mints that pass for a single reference at the
+ * `edit` tier, the same tier `uploadPageAsset` hands back for a file it just
+ * committed, since only someone who can edit the page ever asks.
+ *
+ * Null — never a URL that is going to 404 — in all four ways this can fail to
+ * produce a real address. The caller needs to tell "here is where to look at
+ * it" from "there is nowhere to look at it", and anything else returned here
+ * reads as the former while behaving as the latter:
+ *
+ *   1. The resolver handed the reference back UNCHANGED. That is its answer for
+ *      "the layer is off" and for a reference it will not claim (an external
+ *      host, or a pinned raw.githubusercontent URL) — and for those the string
+ *      may well be absolute, so "does it start with https" is the wrong test.
+ *   2. It returned the `/missing/` placeholder, which is a deterministic 404 by
+ *      construction: the map has never heard of this reference.
+ *   3. Nothing could be signed at all (no context for this classroom).
+ *   4. The resolve threw. A cover READ must not fail because of a signing error.
+ */
+export async function resolvePageAssetUrl(
+  page: PageWithContentRepo,
+  ref: string
+): Promise<string | null> {
+  if (!ref) return null;
+  // Defence in depth rather than policy: `content_key_version` is `Int
+  // @default(0)`, so a page row loaded from Prisma always carries a number.
+  // The version goes INTO the signature, so a caller that assembled a page
+  // object by hand and left it off should get no URL rather than one minted at
+  // a version the readers are not on.
+  if (typeof (page.classroom as { content_key_version?: unknown }).content_key_version !== 'number')
+    return null;
+  const ctx = pageResolveContext(page);
+  if (!ctx) return null;
+
+  try {
+    const resolved = await resolveAssetUrl(ctx, ref);
+    if (resolved === ref) return null;
+    if (parseMissingUrl(ctx, resolved) !== null) return null;
+    return resolved;
+  } catch (error) {
+    console.warn(
+      '[pageContent] Could not resolve a page asset URL:',
+      error instanceof Error ? error.message : error
+    );
+    return null;
+  }
+}
+
+/**
+ * The form a cover reference must be STORED in, or null when it may not be stored.
+ *
+ * Two jobs, and they belong together because the second depends on the first.
+ *
+ * Canonicalize: an agent hands back whatever it was shown, and what it was
+ * shown is a signed, expiring `display_url`. Freezing one of those into
+ * content.json is the exact failure the save-side canonicalization exists to
+ * prevent — it pins one viewer's tier and one expiry into the document. This
+ * undoes it, and undoes a `/missing/` placeholder the same way.
+ *
+ * Then require what is left to name ONE file in THIS classroom's content repo,
+ * by the plain-path rule in `namesAPlainRepoFile` below. Deliberately stricter
+ * than the web editor's cover control, which stores whatever URL it is given: a
+ * cover is rendered on the public class site, and an agent acting on text it
+ * read somewhere is a great deal easier to point at the wrong host than a
+ * person clicking an upload button.
+ *
+ * Null is "refuse", not "leave it alone" — the one caller turns it into an
+ * invalid_params naming `page_asset_upload`.
+ */
+export async function canonicalizePageCoverRef(
+  page: PageWithContentRepo,
+  ref: string
+): Promise<string | null> {
+  const ctx = pageResolveContext(page);
+  if (!ctx || !ref) return null;
+
+  let canonical = ref;
+  try {
+    canonical = await canonicalizeAssetRef(ctx, ref);
+  } catch (error) {
+    // A lookup failure must not be read as "this reference is fine": the
+    // un-canonicalized string could be a signed URL, and storing one is the
+    // thing this exists to stop.
+    console.warn(
+      '[pageContent] Could not canonicalize a cover reference:',
+      error instanceof Error ? error.message : error
+    );
+    return null;
+  }
+
+  return namesAPlainRepoFile(ctx, canonical) ? canonical : null;
+}
+
+/**
+ * Does this canonical reference name one plain file in this classroom's repo?
+ *
+ * Two shapes are legitimate here and only two. A repo-relative path, which is
+ * what an upload stores once the delivery layer is on; and an absolute URL into
+ * this classroom's own repo, which is what an upload stores when it is off —
+ * that one has to keep working, or `page_asset_upload` and `page_cover_set`
+ * would not compose for a classroom that has not been opted in.
+ *
+ * Both are reduced to the path they name and held to the same rule, because
+ * `extractOwnRepoPath` answers "is this URL ours" and NOT "is the path inside it
+ * sane": it hands back whatever sits after the branch segment, so
+ * `…/<repo>/main/../../../elsewhere/x.png` is a match whose path walks straight
+ * back out of the repo. `toRepoPath` does not settle it either — it returns
+ * that answer unchanged, running its own segment checks only on the relative
+ * branch. Left alone, a reference like that is stored verbatim and resolves to
+ * nothing.
+ *
+ * The rule, on the ONCE-decoded path: no scheme, no leading `/`, and no `?`,
+ * `#`, `%` or backslash anywhere, then every segment non-empty and neither `.`
+ * nor `..`. Refusing `%` AFTER one decode is what stops a second layer of
+ * encoding (`%252e%252e`) from arriving as `%2e%2e` and being written down;
+ * nothing legitimate carries one, because `sanitizeFilename` reduces every
+ * uploaded name to letters, digits and dashes. A query or fragment is refused
+ * rather than trimmed for the reason `..` is: a stored reference is a key into
+ * the asset map, and a key with a tail on it matches nothing.
+ */
+function namesAPlainRepoFile(ctx: ResolveContext, ref: string): boolean {
+  // The URL branch. `extractOwnRepoPath` has already stripped any `?`/`#` and
+  // percent-decoded once, so its output goes to the check as it comes.
+  const ownPath = extractOwnRepoPath(
+    ref,
+    ctx.classroom.git_organization.login,
+    ctx.classroom.content_repo
+  );
+  if (ownPath !== null) return isPlainRepoPath(ownPath);
+
+  // The relative branch: decode once ourselves, then the same check. Anything
+  // that is neither shape — an external host, another classroom's delivery URL,
+  // a `data:` — fails on its scheme.
+  return isPlainRepoPath(decodeOnce(ref));
+}
+
+/** One percent-decode, leaving a malformed escape alone (the check refuses it). */
+function decodeOnce(value: string): string {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
+}
+
+/** See `namesAPlainRepoFile` for why each clause is here. */
+function isPlainRepoPath(path: string): boolean {
+  if (!path) return false;
+  if (/^[a-z][a-z0-9+.-]*:/i.test(path)) return false;
+  if (path.startsWith('/')) return false;
+  if (/[?#%\\]/.test(path)) return false;
+  return path.split('/').every(segment => segment !== '' && segment !== '.' && segment !== '..');
 }
 
 /**
