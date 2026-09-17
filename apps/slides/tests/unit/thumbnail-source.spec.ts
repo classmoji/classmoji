@@ -326,3 +326,68 @@ test.describe('the render token travels in a host-scoped cookie', () => {
     expect(SERVER_SOURCE).not.toContain('cm_render');
   });
 });
+
+/**
+ * The public-CDN fallback, and the question that picks it.
+ *
+ * The screenshot caller holds a render token and nothing else. A stored
+ * `/content/{org}/{repo}/…` reference goes to a session-gated proxy, so every
+ * reference that leaves this route unsigned comes back 403 inside the frame —
+ * a card with holes where the pictures are, and no theme CSS to lay out what is
+ * left. The route's answer is to take the public Pages tier whenever it cannot
+ * sign.
+ *
+ * "Cannot sign" used to be readable off `content_delivery_enabled`. It is not
+ * any more: the column defaults to true, so a classroom whose org has no App
+ * installation is gated ON over a map nothing will ever fill, and the resolvers
+ * correctly hand the stored reference straight back. Keyed on the flag, this
+ * route arranged the whole render around signatures that were never coming.
+ */
+test.describe('it branches on deliverability, not on the delivery flag', () => {
+  test('the delivery context is gated on canDeliverContent', () => {
+    // The loader needs a database, so the branch is pinned structurally: the
+    // context is built only behind the deliverability question, and the two
+    // resolver calls below still fork on that same context.
+    expect(ROUTE_SOURCE).toContain(
+      'ClassmojiService.contentDelivery.canDeliverContent(slide.classroom)'
+    );
+    expect(ROUTE_SOURCE).toContain('await resolveDeckAssetsPublic(generated, gitOrgLogin, repo)');
+    expect(ROUTE_SOURCE).toContain('publicDeckThemeUrls(signedThemeUrls, gitOrgLogin, repo)');
+  });
+
+  test('the classroom is read with the installation id the question needs', () => {
+    // `canDeliverContent` reads `git_organization.github_installation_id`. A
+    // select that dropped it would answer "not deliverable" for every classroom
+    // and quietly put every deck on the public tier — including the private
+    // repos that have nothing there to serve.
+    expect(ROUTE_SOURCE).toContain(
+      'include: { classroom: { include: { git_organization: true } } }'
+    );
+  });
+
+  test('the gated-ON classroom with no installation cannot be delivered', () => {
+    const classroom = {
+      content_delivery_enabled: true,
+      content_repo: 'content-cs101',
+      git_organization: { login: 'dartmouth-cs', provider: 'GITHUB' },
+    };
+
+    // With an installation it is servable and the render signs its references.
+    expect(
+      ClassmojiService.contentDelivery.canDeliverContent({
+        ...classroom,
+        git_organization: { ...classroom.git_organization, github_installation_id: '12345678' },
+      })
+    ).toBe(true);
+
+    // Without one — a GitHub Classroom import, or any example classroom's mock
+    // org — the flag still says yes and nothing can be signed. This is the case
+    // the public tier exists for, and the one the old flag check missed.
+    expect(
+      ClassmojiService.contentDelivery.canDeliverContent({
+        ...classroom,
+        git_organization: { ...classroom.git_organization, github_installation_id: null },
+      })
+    ).toBe(false);
+  });
+});

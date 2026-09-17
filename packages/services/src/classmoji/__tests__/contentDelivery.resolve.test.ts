@@ -26,7 +26,11 @@ const lookupContentAssets = vi.fn();
 const lookupContentTree = vi.fn();
 
 vi.mock('@classmoji/database', () => ({ default: () => ({}) }));
-vi.mock('../contentAssets.service.ts', () => ({
+vi.mock('../contentAssets.service.ts', async importActual => ({
+  // The map's reads are stubbed; `isDeliverableClassroom` is not. It is a pure
+  // predicate over a row this file supplies, and a stub of it would be this
+  // file asserting its own copy of the rule rather than the one that ships.
+  ...(await importActual<typeof import('../contentAssets.service.ts')>()),
   ensureContentAssetsOutcome: (...args: unknown[]) => ensureContentAssetsOutcome(...args),
   lookupContentAsset: (...args: unknown[]) => lookupContentAsset(...args),
   lookupContentAssetBySha: (...args: unknown[]) => lookupContentAssetBySha(...args),
@@ -35,6 +39,7 @@ vi.mock('../contentAssets.service.ts', () => ({
 }));
 
 const {
+  canDeliverContent,
   canonicalizeAssetRef,
   isContentDeliveryConfigured,
   isContentDeliveryEnabled,
@@ -551,6 +556,71 @@ describe('the per-classroom gate', () => {
     expect(await resolveAssetUrl(offCtx, REPO_PATH)).toBe(REPO_PATH);
     expect(await resolveAssetUrl(offCtx, RAW_URL)).toBe(RAW_URL);
     expect(await resolveAssetUrl(offCtx, PROXY_URL)).toBe(PROXY_URL);
+  });
+
+  /**
+   * `canDeliverContent` — the question a caller CHOOSING a path has to ask.
+   *
+   * The flag and "will this come back signed" were the same answer only while
+   * the flag was opt-in. It defaults to true now, so a classroom can be gated
+   * ON over an org with no App installation: nothing can be signed, the
+   * resolvers hand the stored reference straight back, and a caller that read
+   * the flag as a promise arranged its render around URLs that never arrive.
+   * Both halves therefore have to hold, and each one alone has to fail.
+   */
+  describe('canDeliverContent', () => {
+    const SERVED = {
+      content_delivery_enabled: true,
+      content_repo: 'content-cs101',
+      git_organization: {
+        login: 'dartmouth-cs',
+        provider: 'GITHUB',
+        github_installation_id: '12345678',
+      },
+    };
+
+    it('is true only where the layer is switched on AND can serve', () => {
+      expect(canDeliverContent(SERVED)).toBe(true);
+    });
+
+    it('is false for the gated-ON classroom whose org has no installation', () => {
+      // The shape this whole change is about: a GitHub Classroom import, or any
+      // example classroom's mock org. The flag says yes and the token cannot be
+      // minted, so a caller keying on the flag alone gets this one backwards.
+      const noInstallation = {
+        ...SERVED,
+        git_organization: { ...SERVED.git_organization, github_installation_id: null },
+      };
+
+      expect(canDeliverContent(noInstallation)).toBe(false);
+      // …and the flag on its own still says yes, which is exactly the trap.
+      expect(isContentDeliveryEnabled(noInstallation)).toBe(true);
+    });
+
+    it('is false when the flag is off, however servable the classroom is', () => {
+      expect(canDeliverContent({ ...SERVED, content_delivery_enabled: false })).toBe(false);
+      expect(canDeliverContent({ ...SERVED, content_delivery_enabled: null })).toBe(false);
+    });
+
+    it('is false for a classroom with no content repo, and for a non-GitHub org', () => {
+      expect(canDeliverContent({ ...SERVED, content_repo: null })).toBe(false);
+      expect(
+        canDeliverContent({
+          ...SERVED,
+          git_organization: { ...SERVED.git_organization, provider: 'GITLAB' },
+        })
+      ).toBe(false);
+      expect(canDeliverContent({ ...SERVED, git_organization: null })).toBe(false);
+    });
+
+    it('reads an unasked-for column as no — the degrading direction', () => {
+      // A caller that selected a narrow slice and forgot the installation id
+      // falls back to a legacy URL, which works. The opposite mistake renders a
+      // `/missing/` placeholder the Worker answers 404.
+      expect(canDeliverContent({ content_delivery_enabled: true })).toBe(false);
+      expect(canDeliverContent(null)).toBe(false);
+      expect(canDeliverContent(undefined)).toBe(false);
+    });
   });
 
   it('is the same answer the env-off path gives — byte for byte', async () => {

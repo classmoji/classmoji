@@ -12,6 +12,8 @@ import {
 import { ContentService } from '../content/ContentService.ts';
 import {
   ensureContentAssetsOutcome,
+  isDeliverableClassroom,
+  type DeliverableClassroom,
   lookupContentAsset,
   lookupContentAssetBySha,
   lookupContentAssets,
@@ -182,6 +184,32 @@ export function isContentDeliveryEnabled(
   classroom: { content_delivery_enabled?: boolean | null } | null | undefined
 ): boolean {
   return classroom?.content_delivery_enabled === true;
+}
+
+/**
+ * Will this classroom's references actually come back SIGNED?
+ *
+ * The flag above answers "was this classroom opted in", which used to be the
+ * same question and is not any more. Since `content_delivery_enabled` defaults
+ * to true, a classroom can be gated ON and still be one the layer cannot serve
+ * — an org with no App installation cannot mint a content token, so the map
+ * stays empty, `mapIsTrustworthy` is false, and every resolver hands back the
+ * STORED reference instead of a signed URL. That fallback is deliberate and it
+ * works; what breaks is a caller that read the flag as a promise and arranged
+ * the rest of the render around signatures that never arrive.
+ *
+ * So: `isContentDeliveryEnabled` to decide whether the layer is ALLOWED to act
+ * on a classroom (the rollout gate — the resolvers' own first line), and this
+ * to decide what the OUTPUT of that act is going to look like. A caller picking
+ * between the delivery path and a legacy one wants this one.
+ */
+export function canDeliverContent(
+  classroom:
+    | ({ content_delivery_enabled?: boolean | null } & DeliverableClassroom)
+    | null
+    | undefined
+): boolean {
+  return isContentDeliveryEnabled(classroom) && isDeliverableClassroom(classroom);
 }
 
 /**
