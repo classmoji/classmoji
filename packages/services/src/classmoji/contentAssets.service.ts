@@ -158,6 +158,40 @@ async function resolveClassroom(classroomId: string): Promise<ResolvedClassroom>
  * map instead of spending three doomed API calls to discover the same thing.
  */
 function isDeliverable(classroom: ClassroomRecord): classroom is NonNullable<ClassroomRecord> {
+  return isDeliverableClassroom(classroom);
+}
+
+/**
+ * The fields the answer is made of — nothing more.
+ *
+ * Structural rather than the Prisma row, because the callers that most need to
+ * ask are not holding a whole one. A route that selected a narrow slice of the
+ * classroom for its own reasons still gets the same rule, and a caller that
+ * FORGOT to select the installation id reads as not deliverable — the direction
+ * that degrades to a legacy URL rather than the one that asserts a `/missing/`
+ * placeholder.
+ */
+export interface DeliverableClassroom {
+  content_repo?: string | null;
+  git_organization?: {
+    login?: string | null;
+    provider?: string | null;
+    github_installation_id?: string | null;
+  } | null;
+}
+
+/**
+ * `isDeliverable` for callers outside this module. @see isDeliverable
+ *
+ * Exported because `content_delivery_enabled` stopped meaning "signable" the
+ * moment it began defaulting to true: a classroom can be gated ON and still be
+ * one this layer cannot serve. Any caller branching on the flag to decide
+ * whether a reference is going to come back SIGNED has to ask this too, or it
+ * plans a render around URLs the resolvers will never mint.
+ */
+export function isDeliverableClassroom(
+  classroom: DeliverableClassroom | null | undefined
+): boolean {
   return Boolean(
     classroom?.content_repo &&
     classroom.git_organization?.login &&

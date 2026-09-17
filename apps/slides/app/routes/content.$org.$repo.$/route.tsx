@@ -53,6 +53,14 @@ interface ContentRouteMembership {
     git_organization?: {
       login: string;
       settings?: Record<string, string> | null;
+      // The other two thirds of `isDeliverableClassroom`. Carried because the
+      // binary branch below has to know whether the delivery layer can SERVE
+      // this classroom, not merely whether it was opted in — two answers that
+      // parted company when `content_delivery_enabled` began defaulting to
+      // true. Every branch that sets `matched` reads the row with
+      // `git_organization` included, so this costs no extra query.
+      provider?: string | null;
+      github_installation_id?: string | null;
     } | null;
   } | null;
 }
@@ -249,15 +257,23 @@ export const loader = async ({
   // ladder — the delivery layer hands those out as signed URLs at render time,
   // so nothing new arrives here for them.
   const binary = isBinaryFile(path);
-  // Binary keeps CDN-first for a classroom the layer is NOT switched on for.
-  // Every image and font of every deck in such a classroom comes through here,
-  // and those bytes never change once uploaded — so a few minutes of CDN
-  // staleness is free where an authenticated read per image spends the org
-  // installation's shared limit. An opted-in classroom serves its assets as
-  // signed URLs and barely reaches this route at all, so API-first is right
-  // there. Unknown classroom reads as "not opted in": the safe direction is
-  // the one that cannot exhaust a rate limit.
-  const preferCdn = matched?.content_delivery_enabled !== true;
+  // Binary keeps CDN-first for a classroom the layer does not SERVE. Every
+  // image and font of every deck in such a classroom comes through here, and
+  // those bytes never change once uploaded — so a few minutes of CDN staleness
+  // is free where an authenticated read per image spends the org installation's
+  // shared limit. A served classroom hands its assets out as signed URLs and
+  // barely reaches this route at all, so API-first is right there. Unknown
+  // classroom reads as "not served": the safe direction is the one that cannot
+  // exhaust a rate limit.
+  //
+  // The question is `canDeliverContent`, not the flag. A classroom gated ON
+  // whose org has no App installation is the worst case for API-first and the
+  // one the flag alone gets wrong: it cannot mint a token, so its refs are never
+  // signed and ALL of its binaries land here — and then each one attempts a
+  // Contents-API read and a Git-Blobs read that can only throw "GitHub provider
+  // requires github_installation_id", logging both failures per asset per
+  // request, before reaching the CDN tier that was always going to answer.
+  const preferCdn = !ClassmojiService.contentDelivery.canDeliverContent(matched);
   const result = binary
     ? await fetchContent({ org, repo, path, binary, preferCdn })
     : await fetchProxyText(matched, org, repo, path);
