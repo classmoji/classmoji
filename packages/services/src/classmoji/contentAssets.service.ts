@@ -147,12 +147,22 @@ async function resolveClassroom(classroomId: string): Promise<ResolvedClassroom>
  * GitHubProvider, and the base-class stubs throw. A predicate over an
  * already-loaded row rather than its own query, so a caller reads the classroom
  * once and both this and `toResolvedClassroom` work from that one read.
+ *
+ * `github_installation_id` is part of the question, not a detail of it. Without
+ * one, `getGitProvider` throws "GitHub provider requires github_installation_id"
+ * before a single byte is read, so a sync could only ever fail — and it is not
+ * a rare shape: a GitHub Classroom import leaves the id null, and
+ * `exampleClassroom.service.ts` creates its shared mock org with a null id ON
+ * PURPOSE. Checking it here is free (the row is already loaded, installation id
+ * included) and it is what lets `ensureContentAssets` report an untrustworthy
+ * map instead of spending three doomed API calls to discover the same thing.
  */
 function isDeliverable(classroom: ClassroomRecord): classroom is NonNullable<ClassroomRecord> {
   return Boolean(
     classroom?.content_repo &&
     classroom.git_organization?.login &&
-    classroom.git_organization.provider === 'GITHUB'
+    classroom.git_organization.provider === 'GITHUB' &&
+    classroom.git_organization.github_installation_id
   );
 }
 
@@ -661,8 +671,33 @@ export async function syncContentAssetsForRepo(
  */
 export async function ensureContentAssets(
   classroomId: string,
-  { maxAgeMs }: { maxAgeMs: number }
+  opts: { maxAgeMs: number }
 ): Promise<SyncContentAssetsResult | null> {
+  return (await ensureContentAssetsOutcome(classroomId, opts)).result;
+}
+
+/**
+ * What a MISS in this classroom's map is worth, alongside the sync itself.
+ *
+ * `ensureContentAssets` collapses four different outcomes into the same null,
+ * which is all a caller that only wants the map refreshed needs. A caller that
+ * has to INTERPRET a missing row needs the distinction, because the miss branch
+ * is not neutral: a resolver that believes the map hands back a `/missing/`
+ * placeholder, and a resolver that does not hands back the stored legacy
+ * reference. Getting that backwards on a classroom whose map is empty turns
+ * every image on the page into a 404.
+ *
+ * `mapIsTrustworthy` is false exactly when a miss cannot be believed — the
+ * classroom is not served by this layer at all (no repo, not GitHub, or no App
+ * installation), the row could not be read, or the map has NEVER completed a
+ * full sync and the attempt to give it one just failed. It stays true for a
+ * classroom that synced before and merely failed to refresh: that map is stale,
+ * not fictional, and staleness degrades safely.
+ */
+export async function ensureContentAssetsOutcome(
+  classroomId: string,
+  { maxAgeMs }: { maxAgeMs: number }
+): Promise<EnsureContentAssetsOutcome> {
   // One refresh per classroom at a time, per process.
   //
   // The stamp that makes this cheap is written at the END of a sync, so N
@@ -688,12 +723,20 @@ export async function ensureContentAssets(
  * classroom at once is harmless — `fullSync` is one transaction and idempotent —
  * and a real lock would need a table nobody wants to operate.
  */
-const ensuring = new Map<string, Promise<SyncContentAssetsResult | null>>();
+const ensuring = new Map<string, Promise<EnsureContentAssetsOutcome>>();
+
+/** @see ensureContentAssetsOutcome */
+export interface EnsureContentAssetsOutcome {
+  /** The sync this call ran, or null when none was needed or none could run. */
+  result: SyncContentAssetsResult | null;
+  /** Can a missing row be read as "the repo does not have this file"? */
+  mapIsTrustworthy: boolean;
+}
 
 async function ensureOnce(
   classroomId: string,
   maxAgeMs: number
-): Promise<SyncContentAssetsResult | null> {
+): Promise<EnsureContentAssetsOutcome> {
   // THIS FUNCTION DOES NOT THROW. It is the one entry point meant to sit on a
   // render path, so every way it can fail has to degrade to "the page renders
   // through the legacy path" — which is exactly what it did before any of this
@@ -715,10 +758,12 @@ async function ensureOnce(
     classroom = await loadClassroomRaw(classroomId);
   } catch (error: unknown) {
     console.warn(`[contentAssets] Could not load classroom ${classroomId}; serving stale:`, error);
-    return null;
+    return { result: null, mapIsTrustworthy: false };
   }
   if (!isDeliverable(classroom)) {
-    return null;
+    // Nothing will ever fill this map, so nothing may be concluded from its
+    // emptiness. The resolvers read this as "hand back the stored reference".
+    return { result: null, mapIsTrustworthy: false };
   }
 
   // Read off the CLASSROOM, not off the newest row. The rows cannot answer this
@@ -733,7 +778,7 @@ async function ensureOnce(
   const lastFullSync = classroom.content_assets_synced_at;
 
   if (lastFullSync && Date.now() - lastFullSync.getTime() < maxAgeMs) {
-    return null;
+    return { result: null, mapIsTrustworthy: true };
   }
 
   try {
@@ -741,10 +786,13 @@ async function ensureOnce(
     //   predictable and not this caller's problem: the previous map is still in
     //   the table and still usable, so a failed refresh should cost staleness,
     //   never a broken page. Caught here and only here.
-    return await fullSync(toResolvedClassroom(classroom, classroomId));
+    const result = await fullSync(toResolvedClassroom(classroom, classroomId));
+    return { result, mapIsTrustworthy: true };
   } catch (error: unknown) {
     console.warn(`[contentAssets] sync failed for ${classroomId}; serving stale/legacy:`, error);
-    return null;
+    // A map that synced before is stale; one that never has is empty, and an
+    // empty map cannot be allowed to answer "no" to every reference on the page.
+    return { result: null, mapIsTrustworthy: Boolean(lastFullSync) };
   }
 }
 

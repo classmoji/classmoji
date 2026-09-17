@@ -414,9 +414,9 @@ model Classroom {
   // say whether this DEPLOYMENT can sign; this says whether this CLASSROOM
   // should. Both must be true before a URL is rewritten, and either being false
   // gives the identical legacy behaviour (the resolvers pass references
-  // through). Defaults false so a deploy into an env that already carries the
-  // signing secrets changes nothing until a classroom is opted in.
-  content_delivery_enabled     Boolean         @default(false)
+  // through). Defaults true: new classrooms get the delivery layer, and an env
+  // without the signing secrets still behaves exactly as it did before.
+  content_delivery_enabled     Boolean         @default(true)
   // When the asset map was last rebuilt FROM THE REPO'S TREE — a full sync, and
   // only a full sync. This is what `ensureContentAssets` measures its 24h
   // refresh against, deliberately NOT the newest `content_assets.synced_at`:

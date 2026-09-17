@@ -19,7 +19,7 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
-const ensureContentAssets = vi.fn();
+const ensureContentAssetsOutcome = vi.fn();
 const lookupContentAsset = vi.fn();
 const lookupContentAssetBySha = vi.fn();
 const lookupContentAssets = vi.fn();
@@ -27,7 +27,7 @@ const lookupContentTree = vi.fn();
 
 vi.mock('@classmoji/database', () => ({ default: () => ({}) }));
 vi.mock('../contentAssets.service.ts', () => ({
-  ensureContentAssets: (...args: unknown[]) => ensureContentAssets(...args),
+  ensureContentAssetsOutcome: (...args: unknown[]) => ensureContentAssetsOutcome(...args),
   lookupContentAsset: (...args: unknown[]) => lookupContentAsset(...args),
   lookupContentAssetBySha: (...args: unknown[]) => lookupContentAssetBySha(...args),
   lookupContentAssets: (...args: unknown[]) => lookupContentAssets(...args),
@@ -90,7 +90,7 @@ function unconfigure(): void {
 beforeEach(() => {
   vi.clearAllMocks();
   vi.spyOn(console, 'warn').mockImplementation(() => {});
-  ensureContentAssets.mockResolvedValue(null);
+  ensureContentAssetsOutcome.mockResolvedValue({ result: null, mapIsTrustworthy: true });
   lookupContentAsset.mockResolvedValue({ sha: BLOB_SHA, type: 'blob', size: 1234 });
   // The batch form answers for whatever paths it is handed, so a test only has
   // to override it when it wants a path to be MISSING from the map.
@@ -295,7 +295,7 @@ describe('with the delivery layer switched off', () => {
     expect(many.get(REPO_PATH)).toBe(REPO_PATH);
     expect(many.get(RAW_URL)).toBe(RAW_URL);
 
-    expect(ensureContentAssets).not.toHaveBeenCalled();
+    expect(ensureContentAssetsOutcome).not.toHaveBeenCalled();
     expect(lookupContentAsset).not.toHaveBeenCalled();
     expect(lookupContentAssets).not.toHaveBeenCalled();
   });
@@ -305,8 +305,8 @@ describe('resolveMany', () => {
   it('refreshes the map ONCE for the batch, and reads it in ONE query', async () => {
     const map = await resolveMany(ctx, [REPO_PATH, RAW_URL, 'https://example.com/x.png']);
 
-    expect(ensureContentAssets).toHaveBeenCalledTimes(1);
-    expect(ensureContentAssets).toHaveBeenCalledWith(CLASSROOM_ID, {
+    expect(ensureContentAssetsOutcome).toHaveBeenCalledTimes(1);
+    expect(ensureContentAssetsOutcome).toHaveBeenCalledWith(CLASSROOM_ID, {
       maxAgeMs: 24 * 60 * 60 * 1000,
     });
 
@@ -367,7 +367,7 @@ describe('resolveMany', () => {
   });
 
   it('survives a map refresh that throws — a stale map still renders', async () => {
-    ensureContentAssets.mockRejectedValue(new Error('GitHub is down'));
+    ensureContentAssetsOutcome.mockRejectedValue(new Error('GitHub is down'));
     const map = await resolveMany(ctx, [REPO_PATH]);
     expect(parseContentUrl(map.get(REPO_PATH)!)).toMatchObject({ sha: BLOB_SHA });
   });
@@ -444,14 +444,14 @@ describe('resolveSrcSets', () => {
 
     expect(sets.size).toBe(0);
     expect(lookupContentAssets).not.toHaveBeenCalled();
-    expect(ensureContentAssets).not.toHaveBeenCalled();
+    expect(ensureContentAssetsOutcome).not.toHaveBeenCalled();
   });
 
   it('looks the whole batch up once, not once per image', async () => {
     await resolveSrcSets(ctx, ['pages/a/one.png', 'pages/a/two.jpg', 'pages/a/three.webp']);
 
     expect(lookupContentAssets).toHaveBeenCalledTimes(1);
-    expect(ensureContentAssets).toHaveBeenCalledTimes(1);
+    expect(ensureContentAssetsOutcome).toHaveBeenCalledTimes(1);
   });
 
   it('is empty for a classroom that has not been opted in', async () => {
@@ -571,7 +571,7 @@ describe('the per-classroom gate', () => {
 
     // Not one ensure, not one lookup: refusing early is what keeps a classroom
     // that has not been opted in off the delivery layer's query path entirely.
-    expect(ensureContentAssets).not.toHaveBeenCalled();
+    expect(ensureContentAssetsOutcome).not.toHaveBeenCalled();
     expect(lookupContentAsset).not.toHaveBeenCalled();
     expect(lookupContentAssets).not.toHaveBeenCalled();
     expect(lookupContentTree).not.toHaveBeenCalled();
@@ -625,7 +625,7 @@ describe('resolveDelivery', () => {
   it('holds the whole batch to one ensure and one map read', async () => {
     await resolveDelivery(ctx, ['pages/a/one.png', 'pages/a/two.jpg', RAW_URL], { srcSets: true });
 
-    expect(ensureContentAssets).toHaveBeenCalledTimes(1);
+    expect(ensureContentAssetsOutcome).toHaveBeenCalledTimes(1);
     expect(lookupContentAssets).toHaveBeenCalledTimes(1);
   });
 
@@ -733,9 +733,9 @@ describe('canonicalizing the derived URLs that are not blob signatures', () => {
  * classrooms that have one, and the pre-delivery behaviour for the rest.
  */
 describe('a map refresh that runs out of time', () => {
-  /** `ensureContentAssets` that never answers — GitHub gone quiet, not down. */
+  /** `ensureContentAssetsOutcome` that never answers — GitHub gone quiet, not down. */
   function hangTheRefresh(): void {
-    ensureContentAssets.mockImplementation(() => new Promise(() => {}));
+    ensureContentAssetsOutcome.mockImplementation(() => new Promise(() => {}));
   }
 
   /**
@@ -798,7 +798,7 @@ describe('a map refresh that runs out of time', () => {
   });
 
   it('placeholders as before once the refresh completes', async () => {
-    // The control. `ensureContentAssets` resolves (the beforeEach default), so
+    // The control. `ensureContentAssetsOutcome` resolves (the beforeEach default), so
     // the map's "no" is trustworthy and a miss is a real miss.
     lookupContentAssets.mockResolvedValue(new Map());
 
@@ -807,5 +807,52 @@ describe('a map refresh that runs out of time', () => {
     expect(map.get(REPO_PATH)).toBe(
       `${ORIGIN}/c/${CLASSROOM_ID}/missing/${encodeURIComponent(REPO_PATH)}`
     );
+  });
+});
+
+/**
+ * The same degradation, reached without any timeout at all.
+ *
+ * A refresh that CANNOT run finishes instantly, so the deadline above never
+ * fires and, before `mapIsTrustworthy` existed, the empty map's "no" was taken
+ * at face value. `content_delivery_enabled` now defaults to true, which makes
+ * that the ordinary shape rather than a corner: a GitHub Classroom import
+ * leaves `github_installation_id` null, and every example classroom is backed
+ * by a mock org that has none by design. Those classrooms are gated ON with a
+ * map nothing will ever fill.
+ */
+describe('a classroom the delivery layer cannot serve', () => {
+  /** What `ensureContentAssetsOutcome` answers for an org with no installation. */
+  function untrustworthyMap(): void {
+    ensureContentAssetsOutcome.mockResolvedValue({ result: null, mapIsTrustworthy: false });
+  }
+
+  it('hands back the stored reference rather than a 404 placeholder', async () => {
+    untrustworthyMap();
+    lookupContentAssets.mockResolvedValue(new Map());
+
+    const map = await resolveMany(ctx, [REPO_PATH, PAGES_URL]);
+
+    expect(map.get(REPO_PATH)).toBe(REPO_PATH);
+    expect(map.get(PAGES_URL)).toBe(PAGES_URL);
+    for (const value of map.values()) expect(value).not.toContain('/missing/');
+  });
+
+  it('does the same for the single-reference resolver', async () => {
+    untrustworthyMap();
+    lookupContentAsset.mockResolvedValue(null);
+
+    await expect(resolveAssetUrl(ctx, REPO_PATH)).resolves.toBe(REPO_PATH);
+  });
+
+  it('still signs any row the map does happen to have', async () => {
+    // Scoped to misses, exactly as the timeout case is: an org whose
+    // installation was removed after a sync keeps serving what it already
+    // mapped, and only unmapped refs fall back.
+    untrustworthyMap();
+
+    const url = await resolveAssetUrl(ctx, REPO_PATH);
+
+    expect(parseContentUrl(url)).toMatchObject({ sha: BLOB_SHA });
   });
 });

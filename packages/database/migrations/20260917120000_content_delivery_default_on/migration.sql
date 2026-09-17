@@ -1,0 +1,11 @@
+-- Content delivery is now ON by default for NEW classrooms.
+--
+-- The rollout that `20260905000001_content_delivery_enabled` set up is done:
+-- the delivery layer is the normal path, not the opt-in one, so a classroom
+-- created from here on gets it without anyone flipping a switch.
+--
+-- DEFAULT ONLY — no backfill, on purpose. Existing rows were set by hand on
+-- 2026-09-17: 221 classrooms in orgs that have a GitHub app installation were
+-- turned on, and 441 in orgs with no installation were deliberately left off.
+-- A backfill here would undo that second decision.
+ALTER TABLE "classrooms" ALTER COLUMN "content_delivery_enabled" SET DEFAULT true;
