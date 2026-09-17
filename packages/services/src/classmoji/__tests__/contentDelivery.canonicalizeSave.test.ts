@@ -56,7 +56,7 @@ vi.mock('../../content/ContentService.ts', () => ({
 }));
 
 vi.mock('../contentAssets.service.ts', () => ({
-  ensureContentAssets: async () => null,
+  ensureContentAssetsOutcome: async () => ({ result: null, mapIsTrustworthy: true }),
   recordContentAsset: async () => null,
   recordContentAssets: async () => null,
   lookupContentAsset: async (_id: string, path: string) => ({

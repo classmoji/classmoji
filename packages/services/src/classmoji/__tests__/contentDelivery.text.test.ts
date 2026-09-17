@@ -20,13 +20,13 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
-const ensureContentAssets = vi.fn();
+const ensureContentAssetsOutcome = vi.fn();
 const lookupContentAsset = vi.fn();
 const getContent = vi.fn();
 
 vi.mock('@classmoji/database', () => ({ default: () => ({}) }));
 vi.mock('../contentAssets.service.ts', () => ({
-  ensureContentAssets: (...args: unknown[]) => ensureContentAssets(...args),
+  ensureContentAssetsOutcome: (...args: unknown[]) => ensureContentAssetsOutcome(...args),
   lookupContentAsset: (...args: unknown[]) => lookupContentAsset(...args),
   lookupContentAssetBySha: vi.fn(),
   lookupContentAssets: vi.fn(),
@@ -83,7 +83,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   vi.spyOn(console, 'warn').mockImplementation(() => {});
   vi.spyOn(console, 'debug').mockImplementation(() => {});
-  ensureContentAssets.mockResolvedValue(null);
+  ensureContentAssetsOutcome.mockResolvedValue({ result: null, mapIsTrustworthy: true });
   lookupContentAsset.mockResolvedValue({ sha: DECK_SHA, type: 'blob', size: 4096 });
   getContent.mockResolvedValue({ content: 'api-bytes', sha: 'b'.repeat(40) });
   process.env.CONTENT_DELIVERY_ORIGIN = ORIGIN;
@@ -147,7 +147,7 @@ describe('fetchContentText through the Worker', () => {
   it('refreshes a stale asset map before looking a path up', async () => {
     stubFetch({});
     await fetchContentText(ctx, DECK_PATH);
-    expect(ensureContentAssets).toHaveBeenCalledWith(CLASSROOM_ID, expect.anything());
+    expect(ensureContentAssetsOutcome).toHaveBeenCalledWith(CLASSROOM_ID, expect.anything());
   });
 });
 
