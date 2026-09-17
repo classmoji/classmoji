@@ -11,7 +11,9 @@ import {
 } from '@classmoji/content-signing';
 import { ContentService } from '../content/ContentService.ts';
 import {
-  ensureContentAssets,
+  ensureContentAssetsOutcome,
+  isDeliverableClassroom,
+  type DeliverableClassroom,
   lookupContentAsset,
   lookupContentAssetBySha,
   lookupContentAssets,
@@ -182,6 +184,32 @@ export function isContentDeliveryEnabled(
   classroom: { content_delivery_enabled?: boolean | null } | null | undefined
 ): boolean {
   return classroom?.content_delivery_enabled === true;
+}
+
+/**
+ * Will this classroom's references actually come back SIGNED?
+ *
+ * The flag above answers "was this classroom opted in", which used to be the
+ * same question and is not any more. Since `content_delivery_enabled` defaults
+ * to true, a classroom can be gated ON and still be one the layer cannot serve
+ * — an org with no App installation cannot mint a content token, so the map
+ * stays empty, `mapIsTrustworthy` is false, and every resolver hands back the
+ * STORED reference instead of a signed URL. That fallback is deliberate and it
+ * works; what breaks is a caller that read the flag as a promise and arranged
+ * the rest of the render around signatures that never arrive.
+ *
+ * So: `isContentDeliveryEnabled` to decide whether the layer is ALLOWED to act
+ * on a classroom (the rollout gate — the resolvers' own first line), and this
+ * to decide what the OUTPUT of that act is going to look like. A caller picking
+ * between the delivery path and a legacy one wants this one.
+ */
+export function canDeliverContent(
+  classroom:
+    | ({ content_delivery_enabled?: boolean | null } & DeliverableClassroom)
+    | null
+    | undefined
+): boolean {
+  return isContentDeliveryEnabled(classroom) && isDeliverableClassroom(classroom);
 }
 
 /**
@@ -1785,15 +1813,23 @@ export function isOwnAssetRef(ctx: ResolveContext, ref: string): boolean {
  * `ensureContentAssets` reaches GitHub on a miss, and GitHub is allowed to be
  * down. A failed sync means the map stays as it is — stale, or empty — and the
  * refs that cannot be resolved fall back on their own.
+ *
+ * @returns whether a MISS in the map may be believed. See
+ *          `ensureContentAssetsOutcome`, and `ensureMapBounded` for why the
+ *          answer is load-bearing rather than informational.
  */
-async function ensureMap(classroomId: string): Promise<void> {
+async function ensureMap(classroomId: string): Promise<boolean> {
   try {
-    await ensureContentAssets(classroomId, { maxAgeMs: ENSURE_MAX_AGE_MS });
+    const { mapIsTrustworthy } = await ensureContentAssetsOutcome(classroomId, {
+      maxAgeMs: ENSURE_MAX_AGE_MS,
+    });
+    return mapIsTrustworthy;
   } catch (error) {
     console.warn(
       `[contentDelivery] Asset map refresh failed for classroom ${classroomId}:`,
       error instanceof Error ? error.message : error
     );
+    return false;
   }
 }
 
@@ -1818,12 +1854,22 @@ async function ensureMap(classroomId: string): Promise<void> {
  * classroom whose map is known-good and genuinely does not have the file.
  *
  * For a classroom that has never fully synced, the map is empty — every ref
- * misses. Today the refresh runs to completion and fills it before the lookup,
- * so that case never arises. Add a timeout without adding this flag and the
- * cold classroom becomes the WORST case rather than a degraded one: the refresh
- * gives up, the empty map answers "no" to everything, and the whole page
- * renders `/missing/` placeholders that no later sync can repair — strictly
- * worse than the legacy URLs it used to show.
+ * misses. Add a timeout without adding this flag and the cold classroom becomes
+ * the WORST case rather than a degraded one: the refresh gives up, the empty
+ * map answers "no" to everything, and the whole page renders `/missing/`
+ * placeholders that no later sync can repair — strictly worse than the legacy
+ * URLs it used to show.
+ *
+ * The refresh running to completion is NOT enough to rule that out, which is
+ * why `ensureMap` now answers the question rather than the deadline answering
+ * it by proxy. `ensureContentAssets` never throws, so a classroom the layer
+ * cannot serve at all — no content repo, not GitHub, or an org with no App
+ * installation — "completes" instantly with an empty map. That is the common
+ * shape, not a corner: a GitHub Classroom import leaves
+ * `github_installation_id` null, and every example classroom is backed by a
+ * mock org that has none by design. Since `content_delivery_enabled` defaults
+ * to true, those classrooms are gated ON, and before this flag carried the
+ * cold-map case they rendered a 404 placeholder for every single image.
  *
  * So `false` means "we do not know", and every caller reads it as such: fall
  * back to the stored reference, which is a legacy URL that still works for the
@@ -1834,20 +1880,17 @@ async function ensureMap(classroomId: string): Promise<void> {
  * `false` covers a timed-out refresh on a WARM classroom too, where the row
  * really might be absent. That is deliberate: the honest answer there is also
  * "we do not know", and a stored ref degrades where a placeholder asserts.
- * `content_assets_synced_at` is not read to narrow it further — that is another
- * database round trip on the render path to sharpen a case that already
- * degrades safely.
  *
- * @returns `true` when the map is as fresh as this render is going to get it —
- *          either the refresh completed or none was needed. `false` only when
- *          the refresh ran out of time.
+ * @returns `true` when the map is as fresh as this render is going to get it
+ *          AND a miss in it may be believed. `false` when the refresh ran out
+ *          of time, or when the map is one no sync has ever filled.
  */
 async function ensureMapBounded(classroomId: string): Promise<boolean> {
   try {
-    // `ensureMap` swallows its own failures, so the only thing that can reject
-    // here is the deadline.
-    await withDeadline(ensureMap(classroomId), ENSURE_MAP_TIMEOUT_MS, 'map refresh');
-    return true;
+    // `ensureMap` swallows its own failures, so the only thing that can REJECT
+    // here is the deadline — but it also returns false for the cold classroom
+    // no sync will ever fill, which is the other half of "we do not know".
+    return await withDeadline(ensureMap(classroomId), ENSURE_MAP_TIMEOUT_MS, 'map refresh');
   } catch (error) {
     console.warn(
       `[contentDelivery] Map refresh gave up for classroom ${classroomId}:`,

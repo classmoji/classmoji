@@ -79,6 +79,7 @@ const {
   syncContentAssetsForRepo,
   lookupContentAssetsBySha,
   ensureContentAssets,
+  ensureContentAssetsOutcome,
   recordContentAsset,
   removeContentAssets,
   removeContentAssetFolder,
@@ -98,7 +99,14 @@ const CLASSROOM = {
   content_assets_synced_at: null as Date | null,
   // The commit the map is level with; null = never synced, no chain to gap.
   content_assets_synced_commit: null as string | null,
-  git_organization: { id: 'org-1', provider: 'GITHUB', login: 'dartmouth-cs' },
+  git_organization: {
+    id: 'org-1',
+    provider: 'GITHUB',
+    login: 'dartmouth-cs',
+    // Part of `isDeliverable`: with no installation the App cannot mint a token,
+    // so a sync could only ever fail. See the null-installation cases below.
+    github_installation_id: '12345678' as string | null,
+  },
 };
 
 /** A classroom whose last FULL sync finished `ms` ago. */
@@ -868,6 +876,98 @@ describe('contentAssets.service', () => {
       await ensureContentAssets('class-1', { maxAgeMs: 60_000 });
 
       expect(classroomFindUnique).toHaveBeenCalledTimes(1);
+    });
+
+    it('no-ops for a GitHub org with no App installation, without calling GitHub', async () => {
+      // The shape `content_delivery_enabled @default(true)` made ordinary: a
+      // GitHub Classroom import leaves `github_installation_id` null, and every
+      // example classroom is backed by a mock org that has none BY DESIGN. The
+      // App cannot mint a token for such an org, so `getGitProvider` throws
+      // before a byte is read — three doomed API calls per render if this were
+      // caught rather than checked.
+      classroomFindUnique.mockResolvedValue({
+        ...CLASSROOM,
+        git_organization: { ...CLASSROOM.git_organization, github_installation_id: null },
+      });
+
+      await expect(ensureContentAssets('class-1', { maxAgeMs: 60_000 })).resolves.toBeNull();
+      expect(getTree).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('ensureContentAssetsOutcome', () => {
+    const DAY = 24 * 60 * 60 * 1000;
+
+    // `mapIsTrustworthy` is what the resolvers read to decide whether a MISSING
+    // row means "the repo does not have this file" (serve a /missing/
+    // placeholder) or "we do not know" (serve the stored legacy reference).
+    // Getting it wrong on an empty map turns every image on the page into a 404.
+
+    it('does not trust an empty map when the org has no App installation', async () => {
+      classroomFindUnique.mockResolvedValue({
+        ...CLASSROOM,
+        git_organization: { ...CLASSROOM.git_organization, github_installation_id: null },
+      });
+
+      await expect(
+        ensureContentAssetsOutcome('class-1', { maxAgeMs: 60_000 })
+      ).resolves.toEqual({ result: null, mapIsTrustworthy: false });
+    });
+
+    it('does not trust the map of a classroom the layer cannot serve at all', async () => {
+      classroomFindUnique.mockResolvedValue({
+        ...CLASSROOM,
+        git_organization: { ...CLASSROOM.git_organization, provider: 'GITLAB' },
+      });
+
+      await expect(
+        ensureContentAssetsOutcome('class-1', { maxAgeMs: 60_000 })
+      ).resolves.toEqual({ result: null, mapIsTrustworthy: false });
+    });
+
+    it('trusts the map after a full sync completes', async () => {
+      getTree.mockResolvedValue({ sha: 'r', truncated: false, entries: [] });
+
+      const outcome = await ensureContentAssetsOutcome('class-1', { maxAgeMs: 60_000 });
+
+      expect(outcome.mapIsTrustworthy).toBe(true);
+      expect(outcome.result?.mode).toBe('full');
+    });
+
+    it('trusts a fresh map that needed no sync', async () => {
+      classroomFindUnique.mockResolvedValue(syncedAgo(1_000));
+
+      await expect(ensureContentAssetsOutcome('class-1', { maxAgeMs: DAY })).resolves.toEqual({
+        result: null,
+        mapIsTrustworthy: true,
+      });
+      expect(getTree).not.toHaveBeenCalled();
+    });
+
+    it('still trusts a STALE map whose refresh failed — stale is not fictional', async () => {
+      classroomFindUnique.mockResolvedValue(syncedAgo(2 * DAY));
+      getTree.mockRejectedValue(new Error('API rate limit exceeded'));
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+      await expect(ensureContentAssetsOutcome('class-1', { maxAgeMs: DAY })).resolves.toEqual({
+        result: null,
+        mapIsTrustworthy: true,
+      });
+      warn.mockRestore();
+    });
+
+    it('does NOT trust a never-synced map whose first sync failed', async () => {
+      // The asymmetry with the case above is the whole point: there is no
+      // previous map to be stale, so every reference on the page would miss.
+      classroomFindUnique.mockResolvedValue({ ...CLASSROOM, content_assets_synced_at: null });
+      getTree.mockRejectedValue(new Error('API rate limit exceeded'));
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+      await expect(ensureContentAssetsOutcome('class-1', { maxAgeMs: DAY })).resolves.toEqual({
+        result: null,
+        mapIsTrustworthy: false,
+      });
+      warn.mockRestore();
     });
   });
 

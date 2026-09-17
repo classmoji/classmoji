@@ -303,8 +303,10 @@ put it in `apps/content/`, not the repo root.
 
 #### 4. Turn the flag on for one classroom
 
-`content_delivery_enabled` defaults to false, per classroom, and the env check
-above is separate from it. Both have to be true. Locally, flip it directly:
+`content_delivery_enabled` defaults to true for classrooms created after
+2026-09-17, but an older row — the seed pack's classroom included — can still be
+false, and the env check above is separate from the column either way. Both have
+to be true. Locally, flip it directly:
 
 The pack's default local classroom is `classmoji-dev-winter-2025` — the one
 `npm run db:seed` creates — so that is the slug to flip unless you set
@@ -589,5 +591,7 @@ Once, in this order:
    on: `Classroom.content_delivery_enabled`, which staff toggle in the admin app
    under `/content-delivery`.
 
-   That toggle is the rollout. Turn on one classroom, watch its logs, and widen
-   from there — it is the last step, never the first.
+   That toggle WAS the rollout: turn on one classroom, watch its logs, widen
+   from there. That rollout finished on 2026-09-17, and the column now defaults
+   to true, so a classroom created from here on arrives switched on and the
+   toggle is only for turning one back off.

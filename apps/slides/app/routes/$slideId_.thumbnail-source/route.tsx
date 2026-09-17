@@ -45,10 +45,16 @@
  * Asset URLs are signed at the deck's own visibility tier (`month` public,
  * `week` otherwise), never `edit`: the delivery pass here is a READ like any
  * other, and `deckAccessFor`'s reasoning applies unchanged. For a classroom the
- * delivery layer is NOT on for there is nothing to sign, and the stored
+ * delivery layer cannot SERVE there is nothing to sign, and the stored
  * `/content/…` references point at a session-gated proxy this caller cannot
  * satisfy — so those are rewritten to the public Pages CDN instead (see the
  * loader). Either way the render input needs no session.
+ *
+ * "Cannot serve" is wider than "switched off". A classroom is served only where
+ * the layer is on AND the org can mint a content token; gated on with a null
+ * `github_installation_id`, the resolvers hand back the stored reference rather
+ * than a signed URL, so the render must take the public tier there too. The
+ * loader asks `canDeliverContent`, never the flag alone.
  */
 
 import getPrisma from '@classmoji/database';
@@ -332,20 +338,36 @@ export const loader = async ({
   // non-viewer surface. `canEdit: false` is not a formality: `edit` mints
   // `no-store` URLs on a 4h exact TTL, which is the wrong bucket for an image
   // whose whole purpose is to be cached hard once it is committed.
-  const deliveryCtx = deckDeliveryContext(slide, gitOrgLogin, repo, {
-    canEdit: false,
-    isPublic: Boolean(slide.is_public),
-  });
+  //
+  // Gated on DELIVERABILITY, not on the classroom's flag — `deckDeliveryContext`
+  // asks the flag, and the flag is no longer the same question. See the note
+  // below for what a context built over an unservable classroom would cost here.
+  const deliveryCtx = ClassmojiService.contentDelivery.canDeliverContent(slide.classroom)
+    ? deckDeliveryContext(slide, gitOrgLogin, repo, {
+        canEdit: false,
+        isPublic: Boolean(slide.is_public),
+      })
+    : null;
 
   // ── The half of this that is NOT about signatures ──────────────────────────
   // A deck stores its images and its shared-theme links as `/content/{org}/
   // {repo}/…`, and that route resolves the caller's MEMBERSHIP before it fetches
   // a byte. The caller here has no membership and no session — it holds a render
-  // token and nothing else. Where the delivery layer is on, every one of those
-  // references leaves as a signed URL and the proxy is never asked; where it is
-  // off, `deckDeliveryContext` returns null, the references would go out
+  // token and nothing else. Where the delivery layer can actually SERVE the
+  // classroom, every one of those references leaves as a signed URL and the
+  // proxy is never asked; where it cannot, the references would go out
   // unchanged, and each one would be refused inside the screenshot — an image of
-  // a deck with holes where its pictures are.
+  // a deck with holes where its pictures are, and no theme CSS to lay out what
+  // is left.
+  //
+  // "Can serve" is not "is switched on", which is why the context above asks
+  // `canDeliverContent` rather than letting `deckDeliveryContext`'s flag check
+  // stand alone. `content_delivery_enabled` defaults to true now, so a classroom
+  // whose org has no App installation is gated ON over a map nothing will ever
+  // fill: the resolvers correctly refuse to sign and hand the STORED `/content/…`
+  // reference straight back — the one URL this caller cannot fetch. The flag
+  // said yes, the render was arranged around signatures, and every picture came
+  // back a 403.
   //
   // So a null context takes the public CDN tier instead: the same one the proxy
   // itself already prefers for exactly these classrooms, built by the same

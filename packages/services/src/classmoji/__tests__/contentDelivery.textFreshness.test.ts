@@ -42,7 +42,7 @@ const rows = new Map<string, { sha: string; type: string; size: number }>();
 const key = (classroomId: string, path: string) => `${classroomId}:${path}`;
 
 vi.mock('../contentAssets.service.ts', () => ({
-  ensureContentAssets: async () => null,
+  ensureContentAssetsOutcome: async () => ({ result: null, mapIsTrustworthy: true }),
   recordContentAsset: async (
     classroomId: string,
     entry: { path: string; sha: string; size?: number }
