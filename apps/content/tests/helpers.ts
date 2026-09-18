@@ -1,6 +1,7 @@
 import {
   blobCanonicalString,
   deriveKey,
+  encodeDownloadFilename,
   hostOf,
   nowSeconds,
   signBlobUrl,
@@ -264,6 +265,8 @@ export async function signedBlobUrl(options: {
   /** Pin the expiry (grace/expiry tests). Otherwise the package buckets it. */
   exp?: number;
   transform?: Transform;
+  /** Raw display filename for a save-to-disk URL; the package encodes it. */
+  dl?: string;
   master?: string;
   /** Origin the URL is minted for. Defaults to the origin it will be fetched from. */
   origin?: string;
@@ -280,11 +283,14 @@ export async function signedBlobUrl(options: {
     return signBlobUrl(
       origin,
       { master, classroomId, keyVersion, tier },
-      { sha: options.sha, ext: options.ext, transform: options.transform }
+      { sha: options.sha, ext: options.ext, transform: options.transform, dl: options.dl }
     );
   }
 
   const exp = options.exp ?? futureExp();
+  // The canonical string carries the ENCODED name, so the hand-rolled branch
+  // encodes through the package rather than spelling base64url out itself.
+  const dl = options.dl === undefined ? undefined : encodeDownloadFilename(options.dl);
   const canonical = blobCanonicalString({
     host: options.signedHost ?? hostOf(origin),
     classroomId,
@@ -294,12 +300,14 @@ export async function signedBlobUrl(options: {
     keyVersion,
     exp,
     transform: options.transform,
+    dl,
   });
   const sig = await signCanonicalString(master, classroomId, keyVersion, canonical);
 
   const query = [`p=${tier}`, `v=${keyVersion}`, `exp=${exp}`, `sig=${sig}`];
   if (options.transform?.w !== undefined) query.push(`w=${options.transform.w}`);
   if (options.transform?.fmt !== undefined) query.push(`fmt=${options.transform.fmt}`);
+  if (dl !== undefined) query.push(`dl=${dl}`);
   return `${origin}/c/${classroomId}/blob/${options.sha}.${options.ext}?${query.join('&')}`;
 }
 

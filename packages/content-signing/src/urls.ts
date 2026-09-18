@@ -15,12 +15,19 @@ import {
   toBase64Url,
 } from './canonical.ts';
 import { deriveKey, signCanonical } from './derive.ts';
+import { encodeDownloadFilename, normalizeDownloadFilename } from './downloads.ts';
 import type { SigningContext, Transform, TransformFormat, TransformWidth } from './types.ts';
 
 export interface BlobRef {
   sha: string;
   ext: string;
   transform?: Transform;
+  /**
+   * RAW display filename for a save-to-disk URL (`Übung 1.pdf`, not base64).
+   * Signing normalizes and encodes it; leave it off and the URL is byte-for-byte
+   * the one this package has always minted.
+   */
+  dl?: string;
 }
 
 export interface ThemeRef {
@@ -61,10 +68,12 @@ function assertContext(ctx: SigningContext): number {
 }
 
 /**
- * `{origin}/c/{classroomId}/blob/{sha}.{ext}?p&v&exp&sig[&w][&fmt]`
+ * `{origin}/c/{classroomId}/blob/{sha}.{ext}?p&v&exp&sig[&w][&fmt][&dl]`
  *
  * Transform params are inside the signature, so a client cannot widen or
- * re-encode an image it was not handed. So is the origin's host.
+ * re-encode an image it was not handed. So is the origin's host, and so is `dl`
+ * — the name a download is saved under is not something a link can be edited to
+ * change.
  */
 export async function signBlobUrl(
   origin: string,
@@ -84,6 +93,17 @@ export async function signBlobUrl(
   }
   assertTransform(ref.transform);
 
+  // Refused at mint rather than sanitized: the caller knows which file this is
+  // and can say so, where the verifier could only serve a name nobody chose.
+  let dl: string | undefined;
+  if (ref.dl !== undefined) {
+    const filename = normalizeDownloadFilename(ref.dl);
+    if (filename === null) {
+      throw new TypeError(`content-signing: unusable download filename (got ${String(ref.dl)})`);
+    }
+    dl = encodeDownloadFilename(filename);
+  }
+
   const exp = bucketExpiry(ctx.tier, ctx.classroomId, now);
   const canonical = blobCanonicalString({
     host,
@@ -94,6 +114,7 @@ export async function signBlobUrl(
     keyVersion: ctx.keyVersion,
     exp,
     transform: ref.transform,
+    dl,
   });
 
   const key = await deriveKey(ctx.master, ctx.classroomId, ctx.keyVersion);
@@ -102,6 +123,9 @@ export async function signBlobUrl(
   const query = [`p=${ctx.tier}`, `v=${ctx.keyVersion}`, `exp=${exp}`, `sig=${sig}`];
   if (ref.transform?.w !== undefined) query.push(`w=${ref.transform.w}`);
   if (ref.transform?.fmt !== undefined) query.push(`fmt=${ref.transform.fmt}`);
+  // base64url needs no escaping, so the query is still assembled by hand — the
+  // URL a caller gets back is the exact string the signature was taken over.
+  if (dl !== undefined) query.push(`dl=${dl}`);
 
   return `${base}/c/${ctx.classroomId}/blob/${ref.sha}.${ref.ext}?${query.join('&')}`;
 }

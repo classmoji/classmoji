@@ -1,5 +1,6 @@
 import {
   SHORT_CACHE_CONTROL,
+  asDownload,
   blobHeaders,
   blobKey,
   contentHeaders,
@@ -680,7 +681,29 @@ async function serveVariant(
   });
 }
 
+/**
+ * Serve one verified blob URL.
+ *
+ * `verified.downloadFilename` is present only when the URL carried a signed
+ * `dl`, and its presence is the whole download decision: the bytes, the R2 key,
+ * the range handling and the origin pull are identical either way, and only the
+ * headers on the way out differ (see `asDownload`). Wrapping the finished
+ * response is what makes that true for every path below — including a 206 and a
+ * HEAD answered from R2 metadata — without any of them knowing about downloads.
+ */
 export async function serveBlob(
+  env: Env,
+  ctx: ExecutionContext,
+  request: Request,
+  verified: VerifiedBlob
+): Promise<Response> {
+  const response = await serveVerifiedBlob(env, ctx, request, verified);
+  return verified.downloadFilename === undefined
+    ? response
+    : asDownload(response, verified.downloadFilename);
+}
+
+async function serveVerifiedBlob(
   env: Env,
   ctx: ExecutionContext,
   request: Request,

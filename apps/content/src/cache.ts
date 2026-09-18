@@ -5,6 +5,7 @@
  * that reference the same blob share one cached object. Access is decided by
  * the signature, not by the key.
  */
+import { contentDispositionFor } from './verify.ts';
 
 export function blobKey(sha: string): string {
   return `blobs/${sha}`;
@@ -42,6 +43,19 @@ export const CORS_HEADERS: Readonly<Record<string, string>> = {
 export const CONTENT_SECURITY_POLICY = "default-src 'none'; sandbox";
 
 /**
+ * The same sandbox, with the one capability a download needs.
+ *
+ * A bare `sandbox` blocks downloads as well as script, so a URL the browser is
+ * meant to SAVE has to say `allow-downloads` or Chrome quietly drops the
+ * navigation and the student gets nothing. Nothing else is granted: still no
+ * script, still an opaque origin, still `default-src 'none'`.
+ *
+ * It is applied ONLY to a response whose verified URL carried a download
+ * filename. Every other reply keeps the strict policy above, byte for byte.
+ */
+export const DOWNLOAD_CONTENT_SECURITY_POLICY = "default-src 'none'; sandbox allow-downloads";
+
+/**
  * Applied to every response leaving the Worker: CORS, nosniff, the sandboxing
  * CSP, and a hard guarantee that no cookie is ever set on a content domain.
  */
@@ -69,6 +83,43 @@ export function withoutBody(response: Response): Response {
     status: response.status,
     statusText: response.statusText,
     headers: response.headers,
+  });
+}
+
+/**
+ * Turn an already-built content response into a save-to-disk one.
+ *
+ * ONE place, deliberately, rather than a `Content-Disposition` threaded through
+ * every branch that builds headers. Each of those branches — the R2 hit, the
+ * 206, the origin tee, the HEAD answered from metadata, the image variant —
+ * ends up here, so a path added later cannot forget the header, and the ones
+ * that are not downloads are not touched at all.
+ *
+ * Three things change, and only for these responses:
+ *
+ *   - `Content-Disposition`, built per request from the filename the SIGNATURE
+ *     carried. It is never stored in R2: `blobs/{sha}` holds bytes that every
+ *     classroom referencing them shares, and a name belongs to a slide row, not
+ *     to a sha.
+ *   - the CSP, which has to allow the download it is being asked to perform.
+ *   - `Cache-Control: no-store`, because the filename is per-URL while the bytes
+ *     are per-sha. A shared cache keeping this reply would serve one classroom's
+ *     filename to the next reader of the same blob. R2 is unaffected — the write
+ *     back there is keyed by sha and carries no disposition.
+ *
+ * Errors are left alone: a 403, a 416 or a 502 is a JSON body, and attaching a
+ * filename to it would tell the browser to save the refusal.
+ */
+export function asDownload(response: Response, filename: string): Response {
+  if (!response.ok) return response;
+  const headers = new Headers(response.headers);
+  headers.set('Content-Disposition', contentDispositionFor(filename));
+  headers.set('Content-Security-Policy', DOWNLOAD_CONTENT_SECURITY_POLICY);
+  headers.set('Cache-Control', 'no-store');
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
   });
 }
 

@@ -25,16 +25,22 @@ A tier is named for its window because that is all it decides. It is **not**
 access control — the signature is; a tier only sets how long an already-minted
 URL lives and whether a cache may keep it.
 
-| Tier    | Expiry                        | Grace on verify | Cache-Control                          |
-| ------- | ----------------------------- | --------------- | -------------------------------------- |
-| `month` | end of the current 30d bucket | 6h              | `public, max-age={exp-now}, immutable` |
-| `week`  | end of the current 7d bucket  | 6h              | `public, max-age={exp-now}, immutable` |
-| `edit`  | exact `now + 4h`              | 5m              | `no-store`                             |
+| Tier       | Expiry                        | Grace on verify | Cache-Control                          |
+| ---------- | ----------------------------- | --------------- | -------------------------------------- |
+| `month`    | end of the current 30d bucket | 6h              | `public, max-age={exp-now}, immutable` |
+| `week`     | end of the current 7d bucket  | 6h              | `public, max-age={exp-now}, immutable` |
+| `edit`     | exact `now + 4h`              | 5m              | `no-store`                             |
+| `download` | exact `now + 10m`             | 30s             | `no-store`                             |
 
 The caller picks the tier; this package only validates that `p` is one of the
-three. In the apps that choice follows the content's visibility — `edit` for a
+four. In the apps that choice follows the content's visibility — `edit` for a
 viewer who can edit, `month` for content that is public, `week` otherwise — so
 the same file rendered on two different surfaces mints the same URL.
+
+`download` is the exception to that rule: it is minted for ONE viewer at the
+moment they click a save-to-disk link and followed immediately, so it gets the
+shortest window there is. It is not bucketed and never cacheable — see
+**Download filenames** below for why the response cannot be stored.
 
 **Renamed 2026-09-05.** These were `public`, `enrolled` and `draft`, names that
 read like permissions they never were. `p` is a field of the canonical string,
@@ -68,9 +74,10 @@ Blob — images and any single file:
 ```
 {origin}/c/{classroomId}/blob/{sha}.{ext}?p={tier}&v={keyVersion}&exp={unix}&sig={b64url}
                                           [&w={800|1600|2560}][&fmt={webp|avif|auto}]
+                                          [&dl={b64url filename}]
 ```
 
-The query is an exact allowlist: `p, v, exp, sig, w, fmt`, each at most once.
+The query is an exact allowlist: `p, v, exp, sig, w, fmt, dl`, each at most once.
 Any other key, or any repeat, is `malformed` — everything in the query is signed,
 so anything else is by definition unsigned.
 
@@ -100,9 +107,16 @@ fails with `unsupported-version` rather than `malformed`.
 `sig` is HMAC-SHA256 over the string, with the derived key, base64url, unpadded.
 
 ```
-cm1|blob|{host}|{classroomId}|{sha}|{ext}|{p}|{v}|{exp}|{w or ''}|{fmt or ''}
+cm1|blob|{host}|{classroomId}|{sha}|{ext}|{p}|{v}|{exp}|{w or ''}|{fmt or ''}[|dl|{dl}]
 cm1|theme|{host}|{classroomId}|{theme}|{treeSha}|{p}|{v}|{exp}
 ```
+
+The `|dl|{dl}` suffix is present **only** when the URL carries a download
+filename, and `{dl}` is the base64url-ENCODED name. A URL without one produces
+the eleven-field string it always did, with no trailing pipe — a twelfth field,
+even an empty one, would invalidate every signature already in a browser, a
+cache, or a rendered page. The literal `dl` marker keeps the two namespaces
+apart, so no downloadless URL can collide with a download one.
 
 `host` is the lowercased `URL.host`, **port included**, so a URL minted for one
 host cannot be replayed against another. The **scheme is deliberately not
@@ -116,6 +130,48 @@ known tier, `v`/`exp` not non-negative safe integers, `w` not one of the three
 widths, or `fmt` not one of the three formats.
 
 Signature comparison runs inside `crypto.subtle.verify` — never string equality.
+
+## Download filenames
+
+A blob URL names a sha, not a file. `blobs/{sha}` is shared by every classroom
+that references those bytes, so the name a student should see cannot live with
+the object — it travels in the URL, inside the signature, as `dl`.
+
+```ts
+const ctx = { master, classroomId, keyVersion, tier: 'download' as const };
+// `dl` is the RAW name: signing normalizes it, validates it and encodes it.
+const url = await signBlobUrl(origin, ctx, { sha, ext: 'pdf', dl: 'Übung 1.pdf' });
+
+const result = await verifyBlobUrl(master, url);
+if (result.ok && result.downloadFilename) {
+  headers.set('Content-Disposition', contentDispositionFor(result.downloadFilename));
+}
+```
+
+`normalizeDownloadFilename` is the one definition of an acceptable name, used on
+both sides. It keeps only the basename (so `C:\Users\ada\deck.pdf` works),
+normalizes to NFC (macOS sends NFD), and caps the result at 200 UTF-8 **bytes**,
+truncating the base and never the extension. It refuses empty names, control
+characters (a newline would be a second HTTP header), and bidi controls
+(`harmless\u202Efdp.exe` renders as `harmlessexe.pdf`), as well as leading or
+trailing whitespace and dots. `encodeDownloadFilename` refuses to encode
+anything that call would have changed, so encode and decode are exact inverses.
+
+The verification order is the guarantee: the canonical string carries the
+encoded value **exactly as it arrived**, the HMAC is checked over that, and only
+then is the name decoded — with `fatal: true` UTF-8 and a round-trip through the
+normalizer, so a name that would not have been signed is refused even when the
+signature verifies. Decode failure is `malformed`, tampering is `bad-signature`.
+
+`contentDispositionFor` emits both RFC 6266 forms: a quoted ASCII `filename`
+(non-ASCII becomes `_`, quotes and backslashes are escaped) and the RFC 8187
+`filename*=UTF-8''…` every modern client prefers.
+
+`cacheControlFor` returns `no-store` for the `download` tier, and a server
+serving one of these must not let the response be stored under any tier: the
+bytes are shared per sha while the filename is per URL, so a shared cache
+keeping this reply would hand one classroom's filename to the next reader of the
+same blob.
 
 ## Usage
 

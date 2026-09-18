@@ -17,12 +17,12 @@ export const SCHEME_SEGMENTS: Readonly<Record<string, string>> = { c: CANONICAL_
 export const SCHEME_SEGMENT_PATTERN = /^c[0-9]*$/;
 
 /** Every tier, shortest lifetime first. See `Tier` in types.ts. */
-export const TIERS: readonly Tier[] = ['edit', 'week', 'month'];
+export const TIERS: readonly Tier[] = ['download', 'edit', 'week', 'month'];
 export const TRANSFORM_WIDTHS: readonly TransformWidth[] = [800, 1600, 2560];
 export const TRANSFORM_FORMATS: readonly TransformFormat[] = ['webp', 'avif', 'auto'];
 
 /** Query keys a blob URL may carry. Anything else is unsigned, so it is refused. */
-export const BLOB_QUERY_KEYS: readonly string[] = ['p', 'v', 'exp', 'sig', 'w', 'fmt'];
+export const BLOB_QUERY_KEYS: readonly string[] = ['p', 'v', 'exp', 'sig', 'w', 'fmt', 'dl'];
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const GIT_SHA_PATTERN = /^[0-9a-f]{40}$/;
@@ -144,6 +144,12 @@ export interface BlobCanonicalFields {
   keyVersion: number;
   exp: number;
   transform?: Transform;
+  /**
+   * The ENCODED (base64url) download filename, or undefined when the URL is not
+   * a download. Never the raw name: the verifier holds only what arrived in the
+   * query, and it must be able to build this string before it decodes anything.
+   */
+  dl?: string;
 }
 
 export interface ThemeCanonicalFields {
@@ -156,12 +162,22 @@ export interface ThemeCanonicalFields {
   exp: number;
 }
 
-/** `cm1|blob|{host}|{classroomId}|{sha}|{ext}|{p}|{v}|{exp}|{w or ''}|{fmt or ''}` */
+/**
+ * `cm1|blob|{host}|{classroomId}|{sha}|{ext}|{p}|{v}|{exp}|{w or ''}|{fmt or ''}`
+ * and, ONLY for a download URL, `|dl|{dl}` appended to it.
+ *
+ * The suffix is appended rather than slotted in as a twelfth field, and that is
+ * the whole design: a URL with no `dl` must produce the string it produced
+ * before downloads existed — eleven fields, no trailing pipe — or every
+ * signature already in a browser, a cache, or a rendered page stops verifying.
+ * The `dl` marker inside the suffix keeps the two namespaces apart, so a
+ * downloadless URL can never collide with a download one.
+ */
 export function blobCanonicalString(fields: BlobCanonicalFields): string {
-  const { host, classroomId, sha, ext, tier, keyVersion, exp, transform } = fields;
+  const { host, classroomId, sha, ext, tier, keyVersion, exp, transform, dl } = fields;
   const w = transform?.w === undefined ? '' : String(transform.w);
   const fmt = transform?.fmt ?? '';
-  return [
+  const base = [
     CANONICAL_VERSION,
     'blob',
     host,
@@ -174,6 +190,7 @@ export function blobCanonicalString(fields: BlobCanonicalFields): string {
     w,
     fmt,
   ].join('|');
+  return dl === undefined ? base : `${base}|dl|${dl}`;
 }
 
 export interface RenderCanonicalFields {
