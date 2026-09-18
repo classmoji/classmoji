@@ -38,11 +38,21 @@ import { ClassmojiService } from '@classmoji/services';
  * `byReason.assets_unavailable` is a classroom whose asset map never came back,
  * whose `bot-context/` rows the sweep therefore declined to delete.
  *
+ * `byReason.up_to_date` is the HEALTHY one, and the reason an all-zero run is
+ * readable at all: documents the planner found already level with the repo are
+ * not eligible work, so without a reason of their own a fully indexed fleet and
+ * a fleet whose planner came back empty report the identical nothing.
+ *
  * `failed` counts DOCUMENTS and `classroomErrors` counts CLASSROOMS, separately
  * — a fleet-wide `failed: 40` reads identically whether it is one dead repo or
- * forty unlucky documents, and the gate has to tell those apart. `byClassroom`
- * carries the same counters per classroom, each row with an `error` when that
- * classroom was abandoned whole, so the culprit is named rather than inferred.
+ * forty unlucky documents, and the gate has to tell those apart. A sha mismatch
+ * is neither: it counts under `skipped`, because a CDN-served classroom answers
+ * without an object id as a matter of course and would otherwise keep `failed`
+ * permanently non-zero while perfectly healthy. `byClassroom` carries the same
+ * counters AND the same reason tally per classroom, each row with an `error`
+ * when that classroom was abandoned whole, so the culprit is named rather than
+ * inferred — one classroom mismatching on every document and three hundred each
+ * racing the map once are the same fleet number and different incidents.
  *
  * ── Never throws ───────────────────────────────────────────────────────────
  * `reconcileContentIndex` counts a classroom's failure and moves to the next

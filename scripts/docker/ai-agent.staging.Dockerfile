@@ -40,6 +40,30 @@ RUN NODE_OPTIONS=--max-old-space-size=1024 npm ci --legacy-peer-deps --no-audit 
 COPY packages/database/schema.prisma packages/database/
 RUN ./node_modules/.bin/prisma generate --schema packages/database/schema.prisma
 
+# Drop everything the runtime stage does not run. This has to come AFTER
+# `prisma generate`, because the prisma CLI is a devDependency.
+#
+# Nothing in the runtime needs a dev dependency: CMD is a plain `node`, not tsx,
+# and apps/ai-agent/fly.toml has no release_command (only apps/webapp runs
+# `prisma migrate deploy`, from its own image).
+RUN npm prune --omit=dev
+
+# The Agent SDK resolves its native executable through per-platform optional
+# dependencies. None of them declares a `libc` field, so npm installs BOTH the
+# glibc and the musl linux build (~210 MB each) — and on Alpine the glibc one
+# cannot even relocate its symbols, so it is pure ballast. Drop every non-musl
+# linux native, for whichever arch this image is built on, but only where the
+# musl sibling is actually present so a surprise can never leave the SDK with no
+# binary at all.
+RUN if [ -f /etc/alpine-release ]; then \
+      find . -type d -path '*/node_modules/@anthropic-ai/claude-agent-sdk-linux-*' \
+        ! -name '*-musl' -prune -print \
+      | while IFS= read -r dir; do \
+          if [ -d "${dir}-musl" ]; then echo "removing wrong-libc native: ${dir}"; rm -rf "${dir}"; \
+          else echo "keeping ${dir}: no musl sibling to fall back on"; fi; \
+        done; \
+    fi
+
 COPY . .
 
 

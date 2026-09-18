@@ -48,6 +48,18 @@ const BOT_ROLES = ['OWNER', 'TEACHER', 'ASSISTANT', 'STUDENT'] as const;
 const SEND_MESSAGE_FAILED = 'Could not send your message. Please try again.';
 
 /**
+ * The same promise for the other two exits.
+ *
+ * `handleSendMessage` was cleaned up and these two were left echoing
+ * `error.message` verbatim. They reach the same browser and fail for the same
+ * reasons — Prisma, the MCP mint, the ai-agent socket — so they carried the
+ * same connection strings, internal hostnames and constraint names. The detail
+ * still goes to console.error, where the operator is.
+ */
+const INIT_FAILED = 'Could not start the assistant. Please try again.';
+const END_CONVERSATION_FAILED = 'Could not end the conversation. Please try again.';
+
+/**
  * Mint the MCP bearer this turn will carry (plan P1-3).
  *
  * EVERY turn, not just init. ai-agent builds its agent config once at init and
@@ -308,7 +320,7 @@ async function handleInitConversation(request: Request, classSlug: string, formD
   } catch (error: unknown) {
     // Deliberately logs the failure, never the token.
     console.error('[syllabus-bot] Failed to mint MCP token for init:', error);
-    return jsonResponse({ error: 'Could not start the assistant. Please try again.' }, 500);
+    return jsonResponse({ error: INIT_FAILED }, 500);
   }
 
   // Build payload for ai-agent (no conversationId - ai-agent generates it)
@@ -368,8 +380,9 @@ async function handleInitConversation(request: Request, classSlug: string, formD
       suggestedQuestions: resultPayload.suggestedQuestions,
     });
   } catch (error: unknown) {
+    // Detail to the operator, not to the browser (see INIT_FAILED).
     console.error('[syllabus-bot] Init failed:', error);
-    return jsonResponse({ error: error instanceof Error ? error.message : String(error) }, 500);
+    return jsonResponse({ error: INIT_FAILED }, 500);
   }
 }
 
@@ -528,7 +541,8 @@ async function handleEndConversation(request: Request, classSlug: string, formDa
 
     return jsonResponse({ success: true });
   } catch (error: unknown) {
+    // Detail to the operator, not to the browser (see END_CONVERSATION_FAILED).
     console.error('[syllabus-bot] End conversation failed:', error);
-    return jsonResponse({ error: error instanceof Error ? error.message : String(error) }, 500);
+    return jsonResponse({ error: END_CONVERSATION_FAILED }, 500);
   }
 }

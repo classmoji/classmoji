@@ -275,6 +275,66 @@ describe('syllabus bot — a failed turn tells the browser nothing about why', (
     expect(published).toContain('Could not send your message');
   });
 
+  // The send path was fixed first and the other two exits were left behind:
+  // init and endConversation went on answering `error.message` verbatim, to the
+  // same browser, from the same Prisma / socket failures. Whatever this route
+  // promises about detail, it has to promise at every door.
+
+  it('does not echo an init failure into the response body', async () => {
+    // The ai-agent socket, not the mint — the mint has its own earlier catch,
+    // so this is the outer catch that was still echoing.
+    sendRequestMock.mockRejectedValue(new Error('connect ETIMEDOUT ai-agent.internal:8080'));
+
+    const res = await post({ _action: 'initConversation' });
+    const body = (await res.json()) as { error: string };
+
+    expect(res.status).toBe(500);
+    expect(JSON.stringify(body)).not.toContain('ai-agent.internal');
+    expect(JSON.stringify(body)).not.toContain('ETIMEDOUT');
+    expect(body.error).toBe('Could not start the assistant. Please try again.');
+  });
+
+  it('gives the init mint failure the same wording, so there is one voice', async () => {
+    mintMcpAccessTokenMock.mockRejectedValue(new Error(LEAKY));
+
+    const res = await post({ _action: 'initConversation' });
+    const body = (await res.json()) as { error: string };
+
+    expect(res.status).toBe(500);
+    expect(JSON.stringify(body)).not.toContain('hunter2');
+    expect(body.error).toBe('Could not start the assistant. Please try again.');
+  });
+
+  it('does not echo an endConversation failure into the response body', async () => {
+    sendRequestMock.mockRejectedValue(new Error(LEAKY));
+
+    const res = await post({ _action: 'endConversation', conversationId: 'conv-mine' });
+    const body = (await res.json()) as { error: string };
+
+    expect(res.status).toBe(500);
+    expect(JSON.stringify(body)).not.toContain(LEAKY);
+    expect(JSON.stringify(body)).not.toContain('hunter2');
+    expect(JSON.stringify(body)).not.toContain('postgres://');
+    expect(body.error).toBe('Could not end the conversation. Please try again.');
+  });
+
+  it('still logs the init and end failures server-side', async () => {
+    sendRequestMock.mockRejectedValue(new Error(LEAKY));
+
+    await post({ _action: 'initConversation' });
+    await post({ _action: 'endConversation', conversationId: 'conv-mine' });
+
+    const logged = errorSpy.mock.calls
+      .map((args: unknown[]) =>
+        args.map(a => (a instanceof Error ? a.message : String(a))).join(' ')
+      )
+      .join('\n');
+    expect(logged).toContain('[syllabus-bot] Init failed:');
+    expect(logged).toContain('[syllabus-bot] End conversation failed:');
+    // Twice, once per exit — the operator loses nothing.
+    expect(logged.split(LEAKY)).toHaveLength(3);
+  });
+
   // The detail must not simply vanish — an operator still has to be able to
   // debug the turn.
   it('still logs the whole error server-side', async () => {
