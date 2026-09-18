@@ -44,7 +44,12 @@ import {
   gitBlobSha,
 } from '~/utils/deckDelivery.server';
 import { displayDeckContent, settleSaveRefresh } from '~/utils/deckViewContent';
-import { deckOnlyMessage, nonDeckHeaders, slideLinkRedirect } from '~/utils/slideKind';
+import {
+  deckOnlyMessage,
+  nonDeckHeaders,
+  slideFileUnavailable,
+  slideLinkRedirect,
+} from '~/utils/slideKind';
 import RevealSlides, { type RevealSlidesHandle } from '~/components/RevealSlides';
 import SlideToolbar from '~/components/SlideToolbar';
 import SlideNotesPanel from '~/components/SlideNotesPanel';
@@ -163,7 +168,9 @@ export const loader = async ({
     }
 
     console.warn(`[slides] No download for file slide ${slideId}: ${signed.reason}`);
-    throw new Response('This slide has no file to download.', { status: 404 });
+    // The same builder `/{slideId}/download` refuses with, so the two surfaces
+    // give one answer — headers included.
+    throw slideFileUnavailable();
   }
 
   // Get git org login for GitHub API and content URLs

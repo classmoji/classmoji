@@ -104,7 +104,9 @@ export const loader = async ({
   }
 
   return {
-    slide,
+    // The speaker view needs the id to open its socket; the rest of the row has
+    // no business in a page payload.
+    slide: { id: slide.id },
     slideContent,
     contentError,
   };

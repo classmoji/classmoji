@@ -9,6 +9,9 @@
  * that declares nothing, or declares a comfortable size and then sends far
  * more, must still be cut off — which is why the byte count while reading is a
  * separate gate and not an optimisation of the first one.
+ *
+ * The slot limit at the bottom is the other half of the same problem: the size
+ * cap bounds ONE upload, and says nothing about ten of them arriving together.
  */
 
 import { test, expect } from '@playwright/test';
@@ -19,9 +22,16 @@ import {
   declaredBodyBytes,
   declaredBodyTooLarge,
   readLimitedBody,
+  readLimitedChunks,
   readLimitedFormData,
   uploadBodyLimit,
 } from '../../app/utils/uploadLimit.ts';
+import {
+  MAX_CONCURRENT_UPLOADS,
+  acquireUploadSlot,
+  releaseUploadSlot,
+  uploadsInFlight,
+} from '../../app/utils/uploadConcurrency.server.ts';
 
 /** A stream that hands over `count` chunks of `size` bytes. */
 function streamOf(count: number, size: number): ReadableStream<Uint8Array> {
@@ -117,5 +127,57 @@ test.describe('reading with a limit', () => {
     const error = new UploadTooLargeError(75);
     expect(error.status).toBe(413);
     expect(error.code).toBe('UPLOAD_TOO_LARGE');
+  });
+});
+
+test.describe('reading without joining', () => {
+  test('hands back the chunks as they arrived', async () => {
+    // A 75 MB upload is large enough that every avoidable copy is another
+    // 75 MB held at the same moment, so the form-data path streams these into
+    // the parser rather than concatenating them first.
+    const { chunks, size } = await readLimitedChunks(streamOf(4, 25), 100);
+    expect(chunks).toHaveLength(4);
+    expect(size).toBe(100);
+  });
+
+  test('keeps nothing once it has decided to refuse', async () => {
+    await expect(readLimitedChunks(streamOf(100, 10), 25)).rejects.toBeInstanceOf(
+      UploadTooLargeError
+    );
+  });
+});
+
+test.describe('the concurrency limit', () => {
+  test('hands out a fixed number of slots and then says no', () => {
+    const taken: boolean[] = [];
+    for (let i = 0; i < MAX_CONCURRENT_UPLOADS; i += 1) taken.push(acquireUploadSlot());
+    expect(taken.every(Boolean)).toBe(true);
+    expect(uploadsInFlight()).toBe(MAX_CONCURRENT_UPLOADS);
+
+    // The one over the line is refused rather than queued: a queued upload
+    // holds its socket open for as long as the ones ahead of it take, which is
+    // the same resource problem one step later.
+    expect(acquireUploadSlot()).toBe(false);
+
+    for (let i = 0; i < MAX_CONCURRENT_UPLOADS; i += 1) releaseUploadSlot();
+    expect(uploadsInFlight()).toBe(0);
+  });
+
+  test('a release frees exactly one slot', () => {
+    for (let i = 0; i < MAX_CONCURRENT_UPLOADS; i += 1) acquireUploadSlot();
+    expect(acquireUploadSlot()).toBe(false);
+
+    releaseUploadSlot();
+    expect(acquireUploadSlot()).toBe(true);
+
+    for (let i = 0; i < MAX_CONCURRENT_UPLOADS; i += 1) releaseUploadSlot();
+  });
+
+  test('never counts below zero, whatever a caller does', () => {
+    // A `finally` that runs twice, or one that runs after an acquire returned
+    // false, must not leave the process with more slots than it has.
+    releaseUploadSlot();
+    releaseUploadSlot();
+    expect(uploadsInFlight()).toBe(0);
   });
 });

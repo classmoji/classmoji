@@ -71,16 +71,21 @@ export function declaredBodyTooLarge(headers: Headers, maxBytes: number): boolea
 }
 
 /**
- * Read a request body, giving up as soon as it exceeds `maxBytes`.
+ * Read a body into its chunks, giving up as soon as it exceeds `maxBytes`.
+ *
+ * The chunks are handed back AS THEY ARRIVED rather than joined, because a
+ * 75 MB upload is large enough that every avoidable copy of it is a second
+ * 75 MB of heap held at the same moment. The callers below each consume the
+ * list in the way that costs them least.
  *
  * The stream is cancelled rather than drained on refusal, so the sender is told
  * to stop instead of being allowed to finish sending 10 GB into a buffer we
  * have already decided to throw away.
  */
-export async function readLimitedBody(
+export async function readLimitedChunks(
   body: ReadableStream<Uint8Array>,
   maxBytes: number
-): Promise<Uint8Array<ArrayBuffer>> {
+): Promise<{ chunks: Uint8Array[]; size: number }> {
   const reader = body.getReader();
   const chunks: Uint8Array[] = [];
   let seen = 0;
@@ -92,6 +97,9 @@ export async function readLimitedBody(
       if (!value) continue;
       seen += value.byteLength;
       if (seen > maxBytes) {
+        // Drop what was kept before throwing: the caller never sees this list,
+        // and the error can travel a long way up before anything is collected.
+        chunks.length = 0;
         throw new UploadTooLargeError(maxBytes);
       }
       chunks.push(value);
@@ -103,13 +111,46 @@ export async function readLimitedBody(
     reader.releaseLock();
   }
 
-  const joined = new Uint8Array(seen);
+  return { chunks, size: seen };
+}
+
+/**
+ * The same read, joined into one buffer for a caller that needs contiguous
+ * bytes. `readLimitedFormData` deliberately does NOT use this — see there.
+ */
+export async function readLimitedBody(
+  body: ReadableStream<Uint8Array>,
+  maxBytes: number
+): Promise<Uint8Array<ArrayBuffer>> {
+  const { chunks, size } = await readLimitedChunks(body, maxBytes);
+
+  const joined = new Uint8Array(size);
   let at = 0;
-  for (const chunk of chunks) {
+  // `shift` rather than `for…of`: each chunk is released the moment it has been
+  // copied, so the peak is the joined buffer plus what is still waiting rather
+  // than two whole copies of the body.
+  for (let chunk = chunks.shift(); chunk; chunk = chunks.shift()) {
     joined.set(chunk, at);
     at += chunk.byteLength;
   }
   return joined;
+}
+
+/** A stream over an already-read chunk list, releasing each one as it goes. */
+function streamOfChunks(chunks: Uint8Array[]): ReadableStream<Uint8Array> {
+  return new ReadableStream<Uint8Array>({
+    pull(controller) {
+      const next = chunks.shift();
+      if (!next) {
+        controller.close();
+        return;
+      }
+      controller.enqueue(next);
+    },
+    cancel() {
+      chunks.length = 0;
+    },
+  });
 }
 
 /**
@@ -120,6 +161,12 @@ export async function readLimitedBody(
  * original (now wrong) `Content-Length` with it, and neither quirk is worth
  * inheriting when the multipart parser only ever wanted the bytes and the
  * boundary.
+ *
+ * The `Response` is built around a STREAM of the chunks we kept, not a
+ * concatenation of them. The parser assembles its own contiguous copy either
+ * way; handing it a joined buffer as well would mean holding two whole copies
+ * of a 75 MB upload at once, on top of the file part the parser then produces.
+ * Draining the list releases our references as the parser takes them.
  *
  * Throws `UploadTooLargeError` for an over-cap body. Everything else — a
  * truncated part, a missing boundary — comes out of the parser unchanged.
@@ -135,9 +182,9 @@ export async function readLimitedFormData(request: Request, maxBytes: number): P
   // same one either way.
   if (!body) return request.formData();
 
-  const bytes = await readLimitedBody(body, maxBytes);
+  const { chunks } = await readLimitedChunks(body, maxBytes);
   const contentType = request.headers.get('content-type');
-  return new Response(bytes, {
+  return new Response(streamOfChunks(chunks), {
     headers: contentType ? { 'Content-Type': contentType } : {},
   }).formData();
 }

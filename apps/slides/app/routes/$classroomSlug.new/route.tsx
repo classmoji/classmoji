@@ -27,7 +27,9 @@
  * assistants. It now runs BEFORE the request body is read, which it could not
  * do while the classroom was identified from a form field — it comes from the
  * URL, so a stranger's 75 MB upload is refused on the session, not after it has
- * been buffered. See `~/utils/uploadLimit` for the size gates themselves.
+ * been buffered. See `~/utils/uploadLimit` for the size gates themselves, and
+ * `~/utils/uploadConcurrency.server` for how many uploads this process holds at
+ * once (a cap on ONE upload says nothing about ten of them arriving together).
  */
 
 import { useCallback, useMemo, useRef, useState, type FormEvent } from 'react';
@@ -44,9 +46,18 @@ import {
 } from '@classmoji/services/slides';
 import { webappClassUrl } from '~/utils/webappLinks';
 import { UploadTooLargeError, readLimitedFormData, uploadBodyLimit } from '~/utils/uploadLimit';
+import {
+  UPLOAD_BUSY_MESSAGE,
+  UPLOAD_RETRY_AFTER_SECONDS,
+  acquireUploadSlot,
+  releaseUploadSlot,
+} from '~/utils/uploadConcurrency.server';
 
 /** The four things the picker offers. `import` is a link, not a form. */
 type SlideSource = 'blank' | 'file' | 'link';
+
+/** The three the FORM posts, named once so the action can refuse anything else. */
+const SLIDE_SOURCES: readonly SlideSource[] = ['blank', 'file', 'link'];
 
 export const loader = async ({
   params,
@@ -130,6 +141,20 @@ function messageFor(error: unknown, fallback: string): string {
   return error instanceof Error ? error.message : fallback;
 }
 
+/**
+ * Does this submission carry a file?
+ *
+ * Only the upload form posts multipart; the blank-deck and link forms are a
+ * few hundred bytes of url-encoded fields. The distinction decides whether the
+ * request has to take an upload slot, and a small form should not be refused
+ * because two big uploads are in flight.
+ */
+function isMultipartUpload(request: Request): boolean {
+  return (request.headers.get('content-type') ?? '')
+    .toLowerCase()
+    .startsWith('multipart/form-data');
+}
+
 export const action = async ({
   request,
   params,
@@ -146,6 +171,38 @@ export const action = async ({
     resourceType: 'SLIDE_CONTENT',
   });
 
+  if (!isMultipartUpload(request)) {
+    return createFromForm({ request, classroomSlug, userId, membership });
+  }
+
+  // One slot per upload in flight, given back in the `finally` below. The size
+  // cap bounds one upload; this bounds how many of them this process is holding
+  // at once. See `~/utils/uploadConcurrency.server`.
+  if (!acquireUploadSlot()) {
+    return data(
+      { error: UPLOAD_BUSY_MESSAGE, source: 'file' as SlideSource },
+      { status: 503, headers: { 'Retry-After': String(UPLOAD_RETRY_AFTER_SECONDS) } }
+    );
+  }
+  try {
+    return await createFromForm({ request, classroomSlug, userId, membership });
+  } finally {
+    releaseUploadSlot();
+  }
+};
+
+/** Everything the action does once it has a caller who is allowed to do it. */
+async function createFromForm({
+  request,
+  classroomSlug,
+  userId,
+  membership,
+}: {
+  request: Request;
+  classroomSlug: string;
+  userId: string;
+  membership: { role?: string | null } | null | undefined;
+}) {
   // `Content-Length` is checked before the body is touched, and the bytes are
   // counted as they arrive, so a lying or absent header cannot get past it.
   let formData: FormData;
@@ -159,8 +216,16 @@ export const action = async ({
     throw error;
   }
 
-  const rawSource = String(formData.get('source') ?? 'blank');
-  const source: SlideSource = rawSource === 'file' || rawSource === 'link' ? rawSource : 'blank';
+  // The picker's choice, and it has to BE one of the three. An unrecognised
+  // value used to fall through to "blank", so a submission that meant to upload
+  // a file — or one whose field never arrived — quietly created an empty deck
+  // instead and reported success. Every form on this screen posts the field, so
+  // anything else is a submission we cannot honour and should say so about.
+  const rawSource = formData.get('source');
+  if (typeof rawSource !== 'string' || !SLIDE_SOURCES.includes(rawSource as SlideSource)) {
+    return failure('Choose how these slides should start.', 'blank');
+  }
+  const source = rawSource as SlideSource;
   const title = (formData.get('title') as string | null)?.trim();
 
   if (!title) {
@@ -211,6 +276,8 @@ export const action = async ({
         title,
         createdBy: userId,
         filename: file.name,
+        // `Buffer.from(ArrayBuffer)` is a VIEW over the same memory, not a
+        // second copy of it — `arrayBuffer()` above is the one allocation.
         file: Buffer.from(await file.arrayBuffer()),
       });
       return redirect(slidesListUrl);
@@ -257,7 +324,7 @@ export const action = async ({
     console.error('Failed to create slide:', error);
     return failure(messageFor(error, 'Failed to create slide'), 'blank');
   }
-};
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // UI

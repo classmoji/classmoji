@@ -25,8 +25,15 @@ import {
   slideFileService,
   validateSlideFile,
 } from '@classmoji/services/slides';
+import { assertSlideInClassroom, assertSlideKind } from '~/utils/slideRouteGuards';
 import { webappClassUrl } from '~/utils/webappLinks';
 import { UploadTooLargeError, readLimitedFormData, uploadBodyLimit } from '~/utils/uploadLimit';
+import {
+  UPLOAD_BUSY_MESSAGE,
+  UPLOAD_RETRY_AFTER_SECONDS,
+  acquireUploadSlot,
+  releaseUploadSlot,
+} from '~/utils/uploadConcurrency.server';
 
 /** Load the slide, prove the caller may edit it, and prove it is a file slide. */
 async function authorizeFileSlide(request: Request, classroomSlug: string, slideId: string) {
@@ -45,16 +52,11 @@ async function authorizeFileSlide(request: Request, classroomSlug: string, slide
     accessType: 'edit',
   });
 
-  // The slug in the URL must be the slide's own classroom — otherwise a staff
-  // member of classroom A could reach classroom B's slide through A's path and
-  // land back on A's list wondering what they just changed.
-  if (slide.classroom?.slug !== classroomSlug) {
-    throw new Response('Slide does not belong to this classroom', { status: 403 });
-  }
-
-  if (slide.kind !== 'FILE') {
-    throw new Response('This slide has no file to replace.', { status: 404 });
-  }
+  // The slug in the URL must be the slide's own classroom, and the slide must
+  // be one this screen can act on. Both live in `~/utils/slideRouteGuards`,
+  // beside the edit-link screen's identical pair.
+  assertSlideInClassroom(slide, classroomSlug);
+  assertSlideKind(slide, 'FILE', 'This slide has no file to replace.');
 
   return { slide, membership };
 }
@@ -115,6 +117,34 @@ export const action = async ({
   // who is not allowed to make it.
   const { membership } = await authorizeFileSlide(request, classroomSlug, slideId);
 
+  // Every submission here carries a file, so this takes a slot unconditionally.
+  // The cap in `~/utils/uploadLimit` bounds one upload; this bounds how many of
+  // them the process is holding at the same moment.
+  if (!acquireUploadSlot()) {
+    return data(
+      { error: UPLOAD_BUSY_MESSAGE },
+      { status: 503, headers: { 'Retry-After': String(UPLOAD_RETRY_AFTER_SECONDS) } }
+    );
+  }
+  try {
+    return await replaceFromForm({ request, classroomSlug, slideId, membership });
+  } finally {
+    releaseUploadSlot();
+  }
+};
+
+/** The upload itself, once the caller has been admitted and holds a slot. */
+async function replaceFromForm({
+  request,
+  classroomSlug,
+  slideId,
+  membership,
+}: {
+  request: Request;
+  classroomSlug: string;
+  slideId: string;
+  membership: { role?: string | null } | null | undefined;
+}) {
   let formData: FormData;
   try {
     formData = await readLimitedFormData(request, uploadBodyLimit(SLIDE_FILE_MAX_BYTES));
@@ -140,6 +170,8 @@ export const action = async ({
     await slideFileService.replaceSlideFile({
       slideId,
       filename: file.name,
+      // `Buffer.from(ArrayBuffer)` is a VIEW over the same memory, not a second
+      // copy of it — `arrayBuffer()` above is the one allocation.
       file: Buffer.from(await file.arrayBuffer()),
     });
   } catch (error: unknown) {
@@ -160,7 +192,7 @@ export const action = async ({
       'slides'
     )
   );
-};
+}
 
 const FIELD_CLASS =
   'w-full rounded-[10px] border border-[var(--line-2)] bg-[var(--panel)] px-3 py-2 text-sm ' +

@@ -11,22 +11,58 @@
  * 3. Start processZipImport async with onProgress callback
  * 4. Return importId immediately (client uses this for SSE subscription)
  * 5. When import completes, the 'done' event includes the actual slideId
+ *
+ * ## What is checked before the body is read
+ *
+ * The classroom arrives as a FORM FIELD (the import page posts a FormData built
+ * from its own form), so the per-classroom gate cannot run until the body has
+ * been parsed. Two things can, and do:
+ *
+ *   - a SESSION. An anonymous caller is refused before 150 MB are buffered;
+ *     the classroom gate below still decides whether this particular signed-in
+ *     user may import into this particular classroom.
+ *   - the SIZE, through `readLimitedFormData`. `request.formData()` trusts the
+ *     sender to stop; that counts the bytes as they arrive and cancels the
+ *     stream the moment they cross the cap, so a missing or lying
+ *     `Content-Length` cannot over-buffer.
  */
 
 import { randomUUID } from 'crypto';
 import getPrisma from '@classmoji/database';
 import { ClassmojiService } from '@classmoji/services';
-import { requireClassroomStaff } from '@classmoji/auth/server';
+import { getAuthSession, requireClassroomStaff } from '@classmoji/auth/server';
 import { cloudinaryVideoSelection } from '@classmoji/utils';
 import { processZipImport } from '~/utils/slidesComImporter.server';
 import { isCloudinaryConfigured } from '~/utils/cloudinaryService.server';
 import { importStreamManager } from '~/utils/importStreamManager';
+import { UploadTooLargeError, readLimitedFormData, uploadBodyLimit } from '~/utils/uploadLimit';
 
 // Max file size for ZIP uploads (in bytes)
 const MAX_FILE_SIZE = 150 * 1024 * 1024; // 150MB
 
 export const action = async ({ request }: { request: Request }) => {
-  const formData = await request.formData();
+  // A session first — the cheapest thing that can be checked without the body,
+  // and the one that keeps a stranger from spending 150 MB of this process.
+  // Same answer as the classroom gate below, so which of the two refused is not
+  // something an unauthenticated caller can tell apart.
+  const authData = await getAuthSession(request);
+  if (!authData) {
+    return Response.json({ error: 'Unauthorized' }, { status: 403 });
+  }
+
+  let formData: FormData;
+  try {
+    formData = await readLimitedFormData(request, uploadBodyLimit(MAX_FILE_SIZE));
+  } catch (error: unknown) {
+    if (error instanceof UploadTooLargeError) {
+      const maxMB = MAX_FILE_SIZE / 1024 / 1024;
+      return Response.json(
+        { error: `ZIP file is too large. Maximum size is ${maxMB}MB.` },
+        { status: 413 }
+      );
+    }
+    throw error;
+  }
 
   const zipFile = formData.get('zip');
   const title = formData.get('title') as string | null;
@@ -105,10 +141,7 @@ export const action = async ({ request }: { request: Request }) => {
 
   const contentNamespace = classroom.content_namespace;
   if (!contentNamespace) {
-    return Response.json(
-      { error: 'Classroom content namespace not configured' },
-      { status: 400 }
-    );
+    return Response.json({ error: 'Classroom content namespace not configured' }, { status: 400 });
   }
 
   // Cloudinary video hosting is a Pro feature — Cloudinary bills per account,

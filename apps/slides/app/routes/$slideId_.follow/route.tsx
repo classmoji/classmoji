@@ -120,7 +120,15 @@ export const loader = async ({
   }
 
   return {
-    slide,
+    // Only the two fields the follower's screen draws.
+    //
+    // This object is rendered into the HTML of whoever holds the share code,
+    // and the row it used to carry holds `multiplex_secret` — the credential
+    // that DRIVES a presentation — next to every other column of `Slide`. The
+    // component has always been careful not to hand the secret to
+    // `RevealPresenter`; the loader is where it must not arrive in the first
+    // place.
+    slide: { id: slide.id, multiplex_id: slide.multiplex_id },
     contentUrl,
     slideContent,
     contentError,

@@ -98,7 +98,13 @@ export const loader = async ({
   }
 
   return {
-    slide,
+    // What the presenter's screen drives the deck with, and nothing else. The
+    // secret belongs HERE and only here — `/follow` gets the id alone.
+    slide: {
+      id: slide.id,
+      multiplex_id: slide.multiplex_id,
+      multiplex_secret: slide.multiplex_secret,
+    },
     contentUrl,
     slideContent,
     contentError,

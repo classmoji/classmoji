@@ -45,6 +45,26 @@ export function nonDeckHeaders(extra: Record<string, string> = {}): Headers {
 }
 
 /**
+ * A short plain-text answer — every refusal below is one.
+ *
+ * `nosniff` alongside the content type because these are served from the SLIDES
+ * origin, where a session cookie is in scope: it tells the browser to take
+ * `text/plain` at its word rather than deciding for itself that a body which
+ * happens to start with a tag is a document to render. The message is ours and
+ * never contains one, but the guarantee should come from the header rather than
+ * from remembering that every caller passes a fixed sentence.
+ */
+export function slideTextResponse(body: string, status: number): Response {
+  return new Response(body, {
+    status,
+    headers: nonDeckHeaders({
+      'Content-Type': 'text/plain; charset=utf-8',
+      'X-Content-Type-Options': 'nosniff',
+    }),
+  });
+}
+
+/**
  * The shape `slideFileService.openSlideFile` hands back.
  *
  * Restated structurally rather than imported so this module stays free of
@@ -64,6 +84,19 @@ export type SlideFileDeliveryLike =
 
 /** The sentence a viewer gets when a slide's file or link cannot be served. */
 export const SLIDE_SOURCE_UNAVAILABLE = 'This slide has no file to download.';
+
+/**
+ * "There is no file behind this slide."
+ *
+ * One function rather than a literal per caller: `/{slideId}/download` gives
+ * this answer for a deck, for a link and for a file whose document cannot be
+ * resolved, and two of those are "this is not a file slide" while the third is
+ * "it is, and something is wrong". Byte-identical answers are what keep the
+ * three from being told apart.
+ */
+export function slideFileUnavailable(): Response {
+  return slideTextResponse(SLIDE_SOURCE_UNAVAILABLE, 404);
+}
 
 /**
  * Turn a delivery decision into the response the browser gets.
@@ -105,10 +138,7 @@ export function slideFileResponse(delivery: SlideFileDeliveryLike): Response {
     });
   }
 
-  return new Response(SLIDE_SOURCE_UNAVAILABLE, {
-    status: 404,
-    headers: nonDeckHeaders({ 'Content-Type': 'text/plain; charset=utf-8' }),
-  });
+  return slideFileUnavailable();
 }
 
 /**
@@ -128,10 +158,7 @@ export function slideFileResponse(delivery: SlideFileDeliveryLike): Response {
  */
 export function slideLinkRedirect(url: string | null | undefined): Response {
   if (!url) {
-    throw new Response('This slide has no link to open.', {
-      status: 404,
-      headers: nonDeckHeaders({ 'Content-Type': 'text/plain; charset=utf-8' }),
-    });
+    throw slideTextResponse('This slide has no link to open.', 404);
   }
   return new Response(null, {
     status: 302,
@@ -178,8 +205,5 @@ export function deckOnlyMessage(kind: string | null | undefined, operation: stri
  * the page is not there.
  */
 export function deckOnlyRefusal(kind: string | null | undefined, operation: string): Response {
-  return new Response(deckOnlyMessage(kind, operation), {
-    status: 404,
-    headers: nonDeckHeaders({ 'Content-Type': 'text/plain; charset=utf-8' }),
-  });
+  return slideTextResponse(deckOnlyMessage(kind, operation), 404);
 }

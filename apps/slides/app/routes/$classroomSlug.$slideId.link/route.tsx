@@ -16,6 +16,7 @@ import { useLoaderData, useNavigation, Form, redirect, useActionData, data } fro
 import getPrisma from '@classmoji/database';
 import { assertSlideAccess } from '@classmoji/auth/server';
 import { SlideKindError, slideFileService, validateSlideLinkUrl } from '@classmoji/services/slides';
+import { assertSlideInClassroom, assertSlideKind } from '~/utils/slideRouteGuards';
 import { webappClassUrl } from '~/utils/webappLinks';
 
 /** Load the slide, prove the caller may edit it, and prove it is a link slide. */
@@ -33,13 +34,9 @@ async function authorizeLinkSlide(request: Request, classroomSlug: string, slide
     accessType: 'edit',
   });
 
-  if (slide.classroom?.slug !== classroomSlug) {
-    throw new Response('Slide does not belong to this classroom', { status: 403 });
-  }
-
-  if (slide.kind !== 'LINK') {
-    throw new Response('This slide has no link to edit.', { status: 404 });
-  }
+  // The same two checks the replace screen makes, from the same module.
+  assertSlideInClassroom(slide, classroomSlug);
+  assertSlideKind(slide, 'LINK', 'This slide has no link to edit.');
 
   return { slide, membership };
 }

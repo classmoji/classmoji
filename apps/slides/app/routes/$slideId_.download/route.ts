@@ -25,7 +25,7 @@
 import getPrisma from '@classmoji/database';
 import { assertSlideAccess } from '@classmoji/auth/server';
 import { slideFileService } from '@classmoji/services/slides';
-import { slideFileResponse } from '~/utils/slideKind';
+import { slideFileResponse, slideFileUnavailable } from '~/utils/slideKind';
 
 export const loader = async ({
   params,
@@ -53,11 +53,10 @@ export const loader = async ({
   // A deck is read at `/{slideId}`, not downloaded, and a link has no bytes at
   // all. `openSlideFile` says the same thing ('not_a_file'), but saying it here
   // keeps the 404 from depending on a refusal reason that exists for logging.
+  // The same builder as every other refusal on this path, so a deck, a link and
+  // a file with nothing behind it are byte-identical answers.
   if (slide.kind !== 'FILE') {
-    return new Response('This slide has no file to download.', {
-      status: 404,
-      headers: { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store' },
-    });
+    return slideFileUnavailable();
   }
 
   const delivery = await slideFileService.openSlideFile(slide);
