@@ -1,3 +1,4 @@
+import { useEffect } from 'react';
 import { useFetcher } from 'react-router';
 import { Table, Button, Tag, Select, Switch, Tooltip } from 'antd';
 import {
@@ -8,17 +9,31 @@ import {
   IconWorld,
   IconEdit,
   IconNotes,
+  IconDownload,
+  IconExternalLink,
+  IconPencil,
+  IconReplace,
 } from '@tabler/icons-react';
 import getPrisma from '@classmoji/database';
+import { useCallout } from '@classmoji/ui-components';
 import {
   addClassroomAuditLog,
   assertClassroomAccess,
   assertClassroomMutationAllowed,
 } from '~/utils/helpers';
-import { ClassmojiService } from '@classmoji/services';
+import { ClassmojiService, isDeckSlide, slideKindLabel, slideLinkHost } from '@classmoji/services';
 import { TableActionButtons, RecentViewers } from '~/components';
+import { SlideActionLink, SlideKindChip } from '~/components/features/slides';
 import type { Route } from './+types/route';
 
+/**
+ * A row of this list.
+ *
+ * `kindLabel` and `linkHost` are computed in the loader rather than here:
+ * `slideKindLabel` and `slideLinkHost` live in the services barrel, and using
+ * them in component code would pull Prisma and the deck parser into the client
+ * bundle. The component only ever compares `kind` against a plain string.
+ */
 interface Slide {
   id: string;
   title: string;
@@ -26,7 +41,9 @@ interface Slide {
   is_public: boolean;
   allow_team_edit: boolean;
   show_speaker_notes: boolean;
-  updated_at: string;
+  kind: 'DECK' | 'FILE' | 'LINK';
+  kindLabel: string;
+  linkHost: string | null;
 }
 
 export const loader = async ({ request, params }: Route.LoaderArgs) => {
@@ -40,11 +57,43 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
     attemptedAction: 'view_slides',
   });
 
-  // Get all slides for this classroom
+  // Get all slides for this classroom.
+  //
+  // Explicit `select`, for the reason the student list already states: a Slide
+  // row carries multiplex_id / multiplex_secret, which are live presentation
+  // credentials rather than list data. The source_* columns come along because
+  // the chip below is derived from them.
   const slides = await getPrisma().slide.findMany({
     where: { classroom_id: classroom.id },
+    select: {
+      id: true,
+      title: true,
+      is_draft: true,
+      is_public: true,
+      allow_team_edit: true,
+      show_speaker_notes: true,
+      kind: true,
+      source_filename: true,
+      source_path: true,
+      source_url: true,
+    },
     orderBy: { updated_at: 'desc' },
   });
+
+  // The kind chip and the link's destination host are resolved HERE, server
+  // side, so the table renders plain strings and the services barrel stays out
+  // of the client bundle.
+  const rows = slides.map(slide => ({
+    id: slide.id,
+    title: slide.title,
+    is_draft: slide.is_draft,
+    is_public: slide.is_public,
+    allow_team_edit: slide.allow_team_edit,
+    show_speaker_notes: slide.show_speaker_notes,
+    kind: slide.kind,
+    kindLabel: slideKindLabel(slide),
+    linkHost: slideLinkHost(slide.source_url),
+  }));
 
   // Fetch recent viewers for all slides in one query (with total counts and roles for admin UI)
   const resourcePaths = slides.map(slide => `slides/${slide.id}`);
@@ -58,7 +107,7 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
   const slideViewers = Object.fromEntries(slideViewersMap);
 
   return {
-    slides,
+    slides: rows,
     org: classroom,
     slidesUrl: process.env.SLIDES_URL || 'http://localhost:6500',
     slideViewers,
@@ -148,7 +197,26 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
   }
 
   // Handle boolean toggles (allow_team_edit, show_speaker_notes)
+  //
+  // Both are deck-only: team editing is about the deck editor and speaker notes
+  // are a reveal.js concept, so neither means anything for an uploaded file or
+  // a link. The switches are disabled for those kinds in the table, and this is
+  // the half that actually enforces it — a disabled control is a hint, not a
+  // gate, and `slideService.updateSlide` refuses the same pair with a
+  // SlideKindError. Checking the kind first keeps the refusal a plain result
+  // the list can show, rather than a thrown 409 that takes over the page.
   if (field === 'allow_team_edit' || field === 'show_speaker_notes') {
+    const target = await getPrisma().slide.findFirst({
+      where: { id: slideId, classroom_id: classroom.id },
+      select: { kind: true },
+    });
+    if (!target) {
+      return { error: 'Slide not found' };
+    }
+    if (!isDeckSlide(target)) {
+      return { error: 'Team editing and speaker notes only apply to slide decks.' };
+    }
+
     const enabled = value === 'true';
     return updateSlideInClassroom(
       { [field]: enabled },
@@ -185,10 +253,48 @@ function _StatusBadge({ status }: { status: 'draft' | 'private' | 'public' }) {
 export default function SlidesAdmin({ loaderData }: Route.ComponentProps) {
   const { slides, org, slidesUrl, slideViewers } = loaderData;
   const fetcher = useFetcher();
+  const callout = useCallout();
+
+  // The action RETURNS its refusals rather than throwing them, so they have to
+  // be shown here or they are invisible: the control simply springs back on the
+  // next revalidation and nothing says why. Same pattern as the pages list.
+  useEffect(() => {
+    if (fetcher.state === 'idle' && fetcher.data?.error) {
+      callout.show({ variant: 'error', title: fetcher.data.error, autoDismissMs: 4000 });
+    }
+    // `callout` is stable per CalloutProvider, so it is not a dep.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fetcher.state, fetcher.data]);
 
   // Handle field updates
   const updateSlideField = (slideId: string, field: string, value: string | boolean) => {
     fetcher.submit({ slideId, field, value: String(value) }, { method: 'post' });
+  };
+
+  /**
+   * A switch that only means something for a deck.
+   *
+   * Disabled AND explained for a file or a link: a control that simply refuses
+   * to move reads as a bug. The server refuses the same write regardless of
+   * what the browser sends.
+   */
+  const deckOnlySwitch = (record: Slide, field: 'allow_team_edit' | 'show_speaker_notes') => {
+    const control = (
+      <Switch
+        size="small"
+        disabled={record.kind !== 'DECK'}
+        checked={record[field]}
+        onChange={checked => updateSlideField(record.id, field, checked)}
+      />
+    );
+    if (record.kind === 'DECK') return control;
+    // antd needs a wrapper to hear the hover: a disabled control fires no
+    // pointer events of its own.
+    return (
+      <Tooltip title="Only applies to decks">
+        <span className="inline-flex">{control}</span>
+      </Tooltip>
+    );
   };
 
   const columns = [
@@ -197,15 +303,29 @@ export default function SlidesAdmin({ loaderData }: Route.ComponentProps) {
       dataIndex: 'title',
       key: 'title',
       width: 250,
+      // The chip says what the row IS, because the title's link no longer does
+      // one thing: it opens a deck, downloads a file, or leaves for another
+      // site. A link's destination host rides underneath for the same reason —
+      // where the click lands is the one thing a bare title cannot say.
       render: (title: string, record: Slide) => (
-        <a
-          href={`${slidesUrl}/${record.id}`}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="font-medium !text-gray-600 dark:!text-gray-100 hover:!text-blue-600 dark:hover:!text-blue-400"
-        >
-          {title}
-        </a>
+        <div className="flex flex-col gap-0.5">
+          <div className="flex items-center gap-2">
+            <SlideKindChip label={record.kindLabel} />
+            <a
+              href={`${slidesUrl}/${record.id}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="font-medium !text-gray-600 dark:!text-gray-100 hover:!text-blue-600 dark:hover:!text-blue-400"
+            >
+              {title}
+            </a>
+          </div>
+          {record.linkHost && (
+            <span className="text-xs text-ink-3 truncate" title={record.linkHost}>
+              {record.linkHost}
+            </span>
+          )}
+        </div>
       ),
     },
     {
@@ -279,13 +399,7 @@ export default function SlidesAdmin({ loaderData }: Route.ComponentProps) {
       key: 'allow_team_edit',
       width: 100,
       align: 'center',
-      render: (_: unknown, record: Slide) => (
-        <Switch
-          size="small"
-          checked={record.allow_team_edit}
-          onChange={checked => updateSlideField(record.id, 'allow_team_edit', checked)}
-        />
-      ),
+      render: (_: unknown, record: Slide) => deckOnlySwitch(record, 'allow_team_edit'),
     },
     {
       title: (
@@ -299,36 +413,80 @@ export default function SlidesAdmin({ loaderData }: Route.ComponentProps) {
       key: 'show_speaker_notes',
       width: 80,
       align: 'center',
-      render: (_: unknown, record: Slide) => (
-        <Switch
-          size="small"
-          checked={record.show_speaker_notes}
-          onChange={checked => updateSlideField(record.id, 'show_speaker_notes', checked)}
-        />
-      ),
+      render: (_: unknown, record: Slide) => deckOnlySwitch(record, 'show_speaker_notes'),
     },
     {
       title: 'Actions',
       key: 'actions',
-      width: 200,
-      render: (_: unknown, record: Slide) => (
-        <TableActionButtons
-          onView={() => window.open(`${slidesUrl}/${record.id}`, '_blank')}
-          onEdit={() => window.open(`${slidesUrl}/${record.id}?mode=edit`, '_blank')}
-          onDelete={() => window.open(`${slidesUrl}/${org.slug}/${record.id}/delete`, '_blank')}
-          skipDeleteConfirm
-        >
-          <a
-            href={`${slidesUrl}/${record.id}/present`}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="flex items-center gap-1 !text-gray-600 hover:!text-gray-800 dark:!text-gray-300 dark:hover:!text-gray-100 no-underline cursor-pointer"
+      width: 220,
+      /**
+       * What you can DO with a row depends on what the row is.
+       *
+       * Delete is the one action all three share, and it keeps going to the
+       * slides app's own confirmation screen (hence `skipDeleteConfirm`: the
+       * confirmation is over there, not in a popconfirm here).
+       *
+       * A file and a link have no editor and nothing to present, so neither
+       * offers Edit or Present — the slides app refuses both server-side for a
+       * non-deck, and an affordance that leads to a refusal is worse than no
+       * affordance. `${slidesUrl}/${id}` is still the one address for every
+       * kind; it downloads a file and redirects a link.
+       */
+      render: (_: unknown, record: Slide) => {
+        const deleteSlide = () =>
+          window.open(`${slidesUrl}/${org.slug}/${record.id}/delete`, '_blank');
+
+        if (record.kind === 'FILE') {
+          return (
+            <TableActionButtons onDelete={deleteSlide} skipDeleteConfirm>
+              <SlideActionLink href={`${slidesUrl}/${record.id}`} icon={<IconDownload size={16} />}>
+                Download
+              </SlideActionLink>
+              <SlideActionLink
+                href={`${slidesUrl}/${org.slug}/${record.id}/replace`}
+                icon={<IconReplace size={16} />}
+              >
+                Replace
+              </SlideActionLink>
+            </TableActionButtons>
+          );
+        }
+
+        if (record.kind === 'LINK') {
+          return (
+            <TableActionButtons onDelete={deleteSlide} skipDeleteConfirm>
+              <SlideActionLink
+                href={`${slidesUrl}/${record.id}`}
+                icon={<IconExternalLink size={16} />}
+              >
+                Open
+              </SlideActionLink>
+              <SlideActionLink
+                href={`${slidesUrl}/${org.slug}/${record.id}/link`}
+                icon={<IconPencil size={16} />}
+              >
+                Edit link
+              </SlideActionLink>
+            </TableActionButtons>
+          );
+        }
+
+        return (
+          <TableActionButtons
+            onView={() => window.open(`${slidesUrl}/${record.id}`, '_blank')}
+            onEdit={() => window.open(`${slidesUrl}/${record.id}?mode=edit`, '_blank')}
+            onDelete={deleteSlide}
+            skipDeleteConfirm
           >
-            <IconPresentation size={16} />
-            <span>Present</span>
-          </a>
-        </TableActionButtons>
-      ),
+            <SlideActionLink
+              href={`${slidesUrl}/${record.id}/present`}
+              icon={<IconPresentation size={16} />}
+            >
+              Present
+            </SlideActionLink>
+          </TableActionButtons>
+        );
+      },
     },
   ];
 
@@ -337,20 +495,16 @@ export default function SlidesAdmin({ loaderData }: Route.ComponentProps) {
       <div className="flex items-center justify-between gap-3 mt-2 mb-4">
         <h1 className="text-lg font-semibold text-ink-1">Slides</h1>
         <div className="flex items-center gap-3">
-          <Button
-            onClick={() => {
-              const url = `${slidesUrl}/import?class=${org.slug}`;
-              window.open(url, '_blank');
-            }}
-          >
-            Import from Slides.com
-          </Button>
+          {/* One button, because there is now one screen behind it: the slides
+              app's New Slide page is the source picker — start a blank deck,
+              upload a file, paste a link, or import a Slides.com export, which
+              is where the second button used to go. */}
           <Button
             type="primary"
             icon={<IconPlus size={16} />}
             onClick={() => window.open(`${slidesUrl}/${org.slug}/new`, '_blank')}
           >
-            Create Slide
+            New Slide
           </Button>
         </div>
       </div>
@@ -372,7 +526,7 @@ export default function SlidesAdmin({ loaderData }: Route.ComponentProps) {
             emptyText: (
               <div className="text-center py-12 text-gray-500">
                 <div className="font-medium">No slides created yet</div>
-                <div className="text-sm">Create your first slide deck to get started!</div>
+                <div className="text-sm">Start a deck, upload a file, or add a link.</div>
               </div>
             ),
           }}
