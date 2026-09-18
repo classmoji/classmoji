@@ -28,6 +28,7 @@ vi.mock('../../content/ContentService.ts', () => ({
 
 const { loadDeck, saveDeck, DeckConflictError, previewBranchName, PREVIEW_BRANCH_PREFIX } =
   await import('../slideContent.service.ts');
+const { SlideKindError } = await import('../slideSource.ts');
 const { DeckParseError } = await import('../deckHtml.ts');
 
 const gitOrganization = { provider: 'GITHUB', login: 'test-org' };
@@ -447,5 +448,33 @@ describe('runtime paint is stripped at the load/save boundaries', () => {
     });
 
     expect(JSON.stringify(staleDeck)).toBe(before);
+  });
+});
+
+describe('saveDeck — the kind gate', () => {
+  it('refuses a slide that is not a deck, before anything is read or written', async () => {
+    // A FILE slide's folder holds the uploaded document and a LINK slide's
+    // folder holds nothing. Writing deck.json and index.html into either would
+    // make it LOOK like a deck to the thumbnail task, the search index and the
+    // class site — all of which key off exactly those two files.
+    for (const kind of ['FILE', 'LINK']) {
+      await expect(saveDeck({ slide: { ...slide, kind }, deck, message: 'nope' })).rejects.toThrow(
+        SlideKindError
+      );
+    }
+    expect(uploadBatchMock).not.toHaveBeenCalled();
+    expect(getMetaMock).not.toHaveBeenCalled();
+  });
+
+  it('lets a deck, and a target with no kind at all, straight through', async () => {
+    // `createSlide` and the importer build a target by hand with no `kind`, and
+    // both are creating decks — so absent must read as DECK.
+    getMetaMock.mockResolvedValue({ sha: 'expected-sha', size: 10 });
+    await expect(
+      saveDeck({ slide: { ...slide, kind: 'DECK' }, deck, message: 'ok' })
+    ).resolves.toMatchObject({ commit: 'commit-1' });
+    await expect(saveDeck({ slide, deck, message: 'ok' })).resolves.toMatchObject({
+      commit: 'commit-1',
+    });
   });
 });

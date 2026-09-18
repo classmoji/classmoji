@@ -55,6 +55,8 @@
  *    publishing an older document under a newer sha's name.
  */
 
+import { createHash } from 'node:crypto';
+
 import { Prisma } from '@prisma/client';
 import getPrisma from '@classmoji/database';
 
@@ -638,6 +640,196 @@ export async function indexOneFile(args: IndexOneFileArgs): Promise<IndexResult>
   }
 }
 
+// ─── Slides that are not decks ───────────────────────────────────────────────
+
+/**
+ * A FILE or LINK slide, as the index sees it.
+ *
+ * The fields are the row's, and that is the whole difference from every other
+ * document in this file: a deck, a page and a `bot-context/` note are all made
+ * of BYTES in the content repo, and the index reads them. A file slide's bytes
+ * are a PDF — embedding them would produce a vector of binary noise that ranks
+ * against real questions — and a link slide has no bytes at all. What they DO
+ * have is a title, a filename and a destination, which is what a student
+ * searching for "the week 3 handout" is actually looking for.
+ */
+export interface SlideMetadataDoc {
+  id: string;
+  title: string;
+  kind: string;
+  content_path: string;
+  source_path?: string | null;
+  source_filename?: string | null;
+  source_url?: string | null;
+}
+
+/**
+ * The text a non-deck slide is embedded as.
+ *
+ * Pure, and exported, because it is also what decides FRESHNESS: the stamp is a
+ * hash of this string, so any change to the title, the filename or the link
+ * re-indexes the document and nothing else does.
+ *
+ * Deliberately plain. There is no prose to extract, so the document is the
+ * facts a reader would use to recognize it — and a sentence naming the kind
+ * ("Downloadable file", "External link") so a search for "slides pdf" has
+ * something to match beyond the filename's extension.
+ */
+export function slideMetadataText(slide: SlideMetadataDoc): string {
+  const lines = [slide.title];
+
+  if (slide.kind === 'FILE') {
+    const name = slide.source_filename ?? (slide.source_path ?? '').split('/').pop() ?? '';
+    const extension = name.includes('.') ? name.slice(name.lastIndexOf('.') + 1).toUpperCase() : '';
+    lines.push(
+      ['Downloadable file', name ? `: ${name}` : '', extension ? ` (${extension})` : ''].join('')
+    );
+  } else if (slide.kind === 'LINK') {
+    const url = slide.source_url ?? '';
+    let host = '';
+    try {
+      host = url ? new URL(url).hostname : '';
+    } catch {
+      host = '';
+    }
+    lines.push(['External link', url ? `: ${url}` : '', host ? ` (${host})` : ''].join(''));
+  }
+
+  return lines.filter(Boolean).join('\n');
+}
+
+/**
+ * The freshness stamp for a metadata document.
+ *
+ * `source_sha` is NOT NULL and every reader of this table treats it as "which
+ * version of the source produced this row". A non-deck slide has no blob sha to
+ * put there — a link has no file, and a file's blob sha does not move when the
+ * title does — so the stamp is a hash of the exact text that was embedded. Same
+ * shape as a git sha (40 hex) so nothing downstream has to special-case it, and
+ * it changes if and only if the document changed.
+ */
+export function slideMetadataSha(text: string): string {
+  return createHash('sha1').update(text, 'utf8').digest('hex');
+}
+
+/**
+ * Index one FILE or LINK slide from its row.
+ *
+ * NEVER REJECTS, exactly like `indexOneFile`, and for the same reason: the
+ * reconcile holds it inside a bounded worker and an unhandled rejection there
+ * would take a fleet-wide run down over one row.
+ *
+ * ## Why it is not `indexOneFile`
+ *
+ * Two of that function's steps are wrong here and one is actively harmful.
+ * `classifyPath` would refuse the path (a `.pdf` under `slides/` is not an
+ * indexable document, and it must stay that way — the BYTES must never be
+ * embedded). And its write re-reads the asset map inside the transaction to
+ * make sure the bytes it embedded are still current: for a metadata document
+ * that check compares a text hash against a blob sha, always differs, and would
+ * abort every single write as `superseded`. There is no race for it to guard
+ * anyway — the text came from the row, not from a network read that could have
+ * gone stale while an embedding ran.
+ */
+export async function indexSlideMetadata(args: {
+  classroomId: string;
+  slide: SlideMetadataDoc;
+}): Promise<IndexResult> {
+  const { classroomId, slide } = args;
+
+  try {
+    if (!isWorkersAiConfigured()) return { outcome: 'skipped', reason: 'not_configured' };
+    if (slide.kind !== 'FILE' && slide.kind !== 'LINK') {
+      return { outcome: 'skipped', reason: 'not_indexable' };
+    }
+    if (!classroomId || !slide.id) return { outcome: 'skipped', reason: 'incomplete_args' };
+
+    const docText = slideMetadataText(slide);
+    if (!docText.trim()) return { outcome: 'skipped', reason: 'empty' };
+
+    const sha = slideMetadataSha(docText);
+    const stamp = {
+      sourceSha: sha,
+      extractVersion: EXTRACT_VERSION,
+      embedModel: EMBEDDING_MODEL,
+    };
+    if (isFresh(await storedChunks(classroomId, 'slide', slide.id), stamp)) {
+      return { outcome: 'skipped', reason: 'fresh' };
+    }
+
+    // One chunk in every realistic case — a title and a line — but chunked
+    // through the same splitter anyway, so a 3,000-character title cannot
+    // produce an over-cap embed call that this path alone would hit.
+    const chunks = chunkDocument(docText, slide.title);
+    if (chunks.length === 0) return { outcome: 'skipped', reason: 'empty' };
+
+    const embedded = await embedChunks(chunks);
+    if (!embedded.ok) {
+      console.warn(
+        `[contentIndex] Embedding refused slide ${slide.id} (classroom ${classroomId}): ${embedded.reason}`
+      );
+      return { outcome: 'failed', reason: embedded.reason };
+    }
+
+    // `source_path` is the FILE's document, or the LINK's own folder — the
+    // column is NOT NULL and names where this document came from, and for a
+    // link the folder is the only honest answer (nothing is committed there).
+    const sourcePath = slide.source_path || slide.content_path;
+    const chunkCount = chunks.length;
+    // Bound rather than inlined into the SQL. `doc_kind` is a parameter in
+    // every other statement against this table, and a literal here would be one
+    // more shape for a reader (and for a test fake) to know about.
+    const docKind: ContentDocKind = 'slide';
+
+    await getPrisma().$transaction(async tx => {
+      for (const [index, text] of chunks.entries()) {
+        const vector = toVectorLiteral(embedded.vectors[index]);
+        await tx.$executeRaw`
+          INSERT INTO content_index
+            (classroom_id, doc_kind, doc_id, chunk_ix, chunk_count, source_path,
+             source_sha, extract_version, embed_model, title, text, embedding,
+             indexed_at, updated_at)
+          VALUES
+            (${classroomId}, ${docKind}, ${slide.id}, ${index}::int, ${chunkCount}::int, ${sourcePath},
+             ${sha}, ${EXTRACT_VERSION}::int, ${EMBEDDING_MODEL}, ${slide.title}, ${text},
+             ${vector}::vector, NOW(), NOW())
+          ON CONFLICT (classroom_id, doc_kind, doc_id, chunk_ix) DO UPDATE SET
+            chunk_count     = EXCLUDED.chunk_count,
+            source_path     = EXCLUDED.source_path,
+            source_sha      = EXCLUDED.source_sha,
+            extract_version = EXCLUDED.extract_version,
+            embed_model     = EXCLUDED.embed_model,
+            title           = EXCLUDED.title,
+            text            = EXCLUDED.text,
+            embedding       = EXCLUDED.embedding,
+            indexed_at      = NOW(),
+            updated_at      = NOW()
+        `;
+      }
+
+      // The shrink tail, for the same reason `indexOneFile` deletes one: a deck
+      // that BECAME a file leaves forty chunks of its old text behind, every
+      // one of them still answering questions out of a document that no longer
+      // exists at that id.
+      await tx.$executeRaw`
+        DELETE FROM content_index
+        WHERE classroom_id = ${classroomId}
+          AND doc_kind = ${docKind}
+          AND doc_id = ${slide.id}
+          AND chunk_ix >= ${chunkCount}::int
+      `;
+    });
+
+    return { outcome: 'indexed', chunks: chunkCount };
+  } catch (error: unknown) {
+    console.warn(
+      `[contentIndex] Could not index slide ${args.slide.id} (classroom ${classroomId}):`,
+      error instanceof Error ? error.message : String(error)
+    );
+    return { outcome: 'failed', reason: 'error' };
+  }
+}
+
 // ─── Reconcile ───────────────────────────────────────────────────────────────
 
 /** One document the reconcile has decided needs indexing. */
@@ -670,6 +862,15 @@ const docKey = (kind: string, id: string): string => `${kind}${DOC_KEY_SEP}${id}
 
 export interface ClassroomIndexPlan {
   items: IndexWorkItem[];
+  /**
+   * FILE and LINK slides, indexed from their ROWS rather than from bytes.
+   *
+   * A separate list because they need no fetch: `items` all pass through
+   * `fetchBody` before `indexOneFile`, and these have nothing to fetch. Keeping
+   * them apart is also what stops a file slide's PDF from ever being handed to
+   * the extractor by a future caller that loops over `items`.
+   */
+  metadataItems: SlideMetadataDoc[];
   orphans: IndexOrphan[];
   /** Documents with no blob in the asset map at all — nothing to fetch. */
   missingAssets: number;
@@ -718,7 +919,19 @@ export async function planClassroomIndex(
     }),
     prisma.slide.findMany({
       where: { classroom_id: classroomId },
-      select: { id: true, title: true, content_path: true },
+      select: {
+        id: true,
+        title: true,
+        content_path: true,
+        // The kind decides which half of the plan a slide lands in, and the
+        // source_* columns ARE the document for the two kinds that have no
+        // bytes to read. Selecting them here is what lets the plan be built
+        // from one query instead of a second pass per non-deck slide.
+        kind: true,
+        source_path: true,
+        source_filename: true,
+        source_url: true,
+      },
     }),
     prisma.contentAsset.findMany({
       where: { classroom_id: classroomId, type: 'blob' },
@@ -742,6 +955,7 @@ export async function planClassroomIndex(
   }
 
   const items: IndexWorkItem[] = [];
+  const metadataItems: SlideMetadataDoc[] = [];
   const live = new Set<string>();
   let missingAssets = 0;
 
@@ -777,6 +991,30 @@ export async function planClassroomIndex(
   }
 
   for (const slide of slides) {
+    // A FILE or a LINK has no `index.html` and never will. Routing it through
+    // `consider` would count it as a MISSING ASSET on every single run — the
+    // counter the readiness gate watches — and report a fleet of perfectly
+    // healthy uploads as an un-indexable backlog. Its document is its row.
+    if (slide.kind === 'FILE' || slide.kind === 'LINK') {
+      live.add(docKey('slide', slide.id));
+      const doc: SlideMetadataDoc = {
+        id: slide.id,
+        title: slide.title,
+        kind: slide.kind,
+        content_path: slide.content_path,
+        source_path: slide.source_path,
+        source_filename: slide.source_filename,
+        source_url: slide.source_url,
+      };
+      const rows = byDoc.get(docKey('slide', slide.id)) ?? [];
+      const fresh = isFresh(rows, {
+        sourceSha: slideMetadataSha(slideMetadataText(doc)),
+        extractVersion: EXTRACT_VERSION,
+        embedModel: EMBEDDING_MODEL,
+      });
+      if (!fresh) metadataItems.push(doc);
+      continue;
+    }
     const html = `${slide.content_path}/index.html`;
     consider('slide', slide.id, slide.title, shaByPath.has(html) ? html : null);
   }
@@ -820,7 +1058,7 @@ export async function planClassroomIndex(
     orphans.push({ kind: kind as ContentDocKind, id });
   }
 
-  return { items, orphans, missingAssets, heldFileOrphans };
+  return { items, metadataItems, orphans, missingAssets, heldFileOrphans };
 }
 
 /**
@@ -1069,7 +1307,7 @@ export async function reconcileContentIndex(opts: ReconcileOptions = {}): Promis
       const synced = await ensureContentAssets(row.id, { maxAgeMs: assetMaxAgeMs });
 
       const plan = await planClassroomIndex(row.id, { assetsSynced: synced !== null });
-      bump('eligible', plan.items.length);
+      bump('eligible', plan.items.length + plan.metadataItems.length);
       if (plan.missingAssets > 0) {
         bump('skipped', plan.missingAssets);
         count('no_asset', plan.missingAssets);
@@ -1082,9 +1320,23 @@ export async function reconcileContentIndex(opts: ReconcileOptions = {}): Promis
       bump('orphansDeleted', await deleteOrphans(row.id, plan.orphans));
 
       if (!configured) {
-        bump('skipped', plan.items.length);
-        count('not_configured', plan.items.length);
+        const eligible = plan.items.length + plan.metadataItems.length;
+        bump('skipped', eligible);
+        count('not_configured', eligible);
         continue;
+      }
+
+      // The row-backed documents first, and outside `mapWithLimit`: each one is
+      // an embed call and nothing else — no fetch to overlap — so the
+      // concurrency that exists to keep four network reads in flight buys
+      // nothing here, and a classroom's handful of file and link slides is a
+      // handful of calls.
+      for (const doc of plan.metadataItems) {
+        const result = await indexSlideMetadata({ classroomId: row.id, slide: doc });
+        if (result.outcome === 'indexed') bump('indexed');
+        else if (result.outcome === 'skipped') bump('skipped');
+        else bump('failed');
+        if (result.reason) count(result.reason);
       }
 
       await mapWithLimit(plan.items, concurrency, async item => {

@@ -1,5 +1,7 @@
 import getPrisma from '@classmoji/database';
 import {
+  contentDispositionFor,
+  normalizeDownloadFilename,
   parseContentUrl,
   signBlobUrl,
   signSrcSet,
@@ -541,6 +543,137 @@ export async function signBlobUrlForClassroom(
       ...(req.transform ? { transform: req.transform } : {}),
     })
   );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Downloads — the FILE slide's URL
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * The two filename primitives, re-exported from the signer.
+ *
+ * `no-restricted-imports` allows exactly this file to reach
+ * `@classmoji/content-signing`, and that rule is about MINTING — it exists so a
+ * signature can only be made where the asset-map proof is checked. Neither of
+ * these signs anything: one validates a display name before it is stored, the
+ * other formats a `Content-Disposition` header. They are re-exported rather
+ * than duplicated because the alternative is a second copy of "which filenames
+ * are legal" in the services package, and the Worker and the app MUST agree on
+ * that byte for byte — the Worker replays the name the app signed.
+ *
+ * `contentDispositionFor` is here for the legacy path in particular: a
+ * classroom the delivery layer does not serve has its file streamed by the app
+ * itself, and that response has to carry the same header the Worker would have.
+ */
+export { contentDispositionFor, normalizeDownloadFilename };
+
+/**
+ * The lifetime a download URL is minted for. Ten minutes, `no-store`, and no
+ * edge bucket — see `TIER_POLICY` in @classmoji/content-signing.
+ */
+const DOWNLOAD_TIER: ResolveTier = 'download';
+
+/** Why a FILE slide has no signed download URL. Each maps to a different fallback. */
+export type SlideDownloadRefusal =
+  /** Not a FILE slide at all — a deck or a link. Nothing to download. */
+  | 'not_a_file'
+  /** A FILE row with no `source_path`. Broken data, not a delivery problem. */
+  | 'no_source'
+  /** The layer is off for this deployment or this classroom. Stream it instead. */
+  | 'delivery_off'
+  /** The map has no blob row for the path — an unsynced or unreadable repo. */
+  | 'not_in_map'
+  /** The signer refused (wrong classroom, a tree row, an ext it will not take). */
+  | 'unsignable';
+
+export type SlideDownloadResult =
+  | { ok: true; url: string; filename: string }
+  | { ok: false; reason: SlideDownloadRefusal };
+
+/** The slide fields a download needs. A row satisfies it; so does a narrow select. */
+export interface DownloadableSlide {
+  kind?: string | null;
+  source_path?: string | null;
+  source_filename?: string | null;
+}
+
+/**
+ * A FILE slide → the signed URL its viewer should be redirected to.
+ *
+ * ## The tier
+ *
+ * Always `'download'`, never `tierFor`. The other tiers pick a cache lifetime
+ * for a subresource a page embeds; this one names a whole response a human
+ * asked for, and its policy (ten minutes, `no-store`, `sandbox
+ * allow-downloads`) is about the browser that is about to save a file, not
+ * about how long an image may sit at the edge. A download URL that lived a week
+ * would be a week-long unauthenticated handle to a document, passed on in a
+ * chat window long after the student who was handed it dropped the course.
+ *
+ * ## The filename
+ *
+ * `dl` is the ORIGINAL name, signed INTO the URL, so the Worker can answer
+ * `Content-Disposition` from it per request without ever storing a name beside
+ * the bytes — R2 keys are sha-only and shared across classrooms, so a stored
+ * filename would be one classroom's name on another classroom's download. A
+ * name the signer will not take is dropped rather than refused: a download
+ * whose file arrives under its sha is worse than one under a tidy name, and
+ * both are better than no download at all.
+ *
+ * ## When it says no
+ *
+ * `delivery_off` is the answer that matters, and it is a normal state rather
+ * than an error: a classroom whose gate is off (or a deployment with no signing
+ * secret) has no Worker to redirect to. Decks handle exactly this by reading
+ * their bytes through GitHub and serving them from the app
+ * (`fetchContentText`'s API/CDN ladder); the equivalent for a FILE is
+ * `slideFile.readSlideFileBytes`, which the slides route streams with the same
+ * `Content-Disposition` this URL would have carried. Every other refusal is a
+ * fault worth a 404, not a fallback.
+ */
+export async function resolveSlideDownloadUrl(
+  classroom: ResolveClassroom,
+  slide: DownloadableSlide
+): Promise<SlideDownloadResult> {
+  if (slide.kind !== 'FILE') return { ok: false, reason: 'not_a_file' };
+
+  const path = slide.source_path ? normalizeRepoRelative(slide.source_path) : null;
+  if (!path) return { ok: false, reason: 'no_source' };
+
+  const env = deliveryEnvFor({ classroom, tier: DOWNLOAD_TIER });
+  if (!env) return { ok: false, reason: 'delivery_off' };
+
+  // Same backstop every resolver uses: a map nobody has refreshed in a day is
+  // refreshed here rather than left to answer from memory. The verdict is not
+  // read — unlike an image reference there is no placeholder to degrade to, so
+  // a miss below is a refusal either way.
+  await ensureMapBounded(classroom.id);
+
+  const asset = await mappedAssetByPath(classroom.id, path);
+  if (!asset || asset.type !== 'blob') return { ok: false, reason: 'not_in_map' };
+
+  const ext = extensionOf(asset.path);
+  if (!ext) return { ok: false, reason: 'unsignable' };
+
+  const filename = slide.source_filename ? normalizeDownloadFilename(slide.source_filename) : null;
+
+  const url = await mintSigned(
+    classroom,
+    env,
+    asset,
+    DOWNLOAD_TIER,
+    'blob',
+    undefined,
+    (origin, signing) =>
+      signBlobUrl(origin, signing, {
+        sha: asset.sha,
+        ext,
+        ...(filename ? { dl: filename } : {}),
+      })
+  );
+  if (!url) return { ok: false, reason: 'unsignable' };
+
+  return { ok: true, url, filename: filename ?? `${asset.sha}.${ext}` };
 }
 
 /**

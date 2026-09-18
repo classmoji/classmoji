@@ -1225,21 +1225,34 @@ model QuizAttempt {
 // CONTENT (Slides, Pages, Calendar)
 // ============================================================================
 
+/// What a Slide row actually IS. DECK is the reveal.js deck this table has
+/// always held; FILE is an uploaded document (PDF/PPT/PPTX/KEY) students
+/// download; LINK is an external https URL a viewer is redirected to. All three
+/// share one id and one `${SLIDES_URL}/${id}` link, which is why this is a
+/// column rather than three tables — every module item, calendar link, resource
+/// link and public-site reference keeps pointing at the same place.
+enum SlideKind {
+  DECK
+  FILE
+  LINK
+}
+
 model Slide {
-  id                 String   @id @default(uuid())
+  id                 String    @id @default(uuid())
   classroom_id       String
   title              String
   slug               String
   content_path       String
+  kind               SlideKind @default(DECK)
   multiplex_id       String?
   multiplex_secret   String?
-  is_public          Boolean  @default(false)
-  is_draft           Boolean  @default(true)
-  allow_team_edit    Boolean  @default(false)
-  show_speaker_notes Boolean  @default(false)
+  is_public          Boolean   @default(false)
+  is_draft           Boolean   @default(true)
+  allow_team_edit    Boolean   @default(false)
+  show_speaker_notes Boolean   @default(false)
   created_by         String
-  created_at         DateTime @default(now())
-  updated_at         DateTime @default(now()) @updatedAt
+  created_at         DateTime  @default(now())
+  updated_at         DateTime  @default(now()) @updatedAt
 
   // Stored card image for the slides index. `thumbnail_path` is repo-relative
   // (`slides/<slug>/thumbnail.webp`), never a URL — signatures expire and the
@@ -1253,6 +1266,25 @@ model Slide {
   thumbnail_path         String?
   thumbnail_rendered_sha String?
   thumbnail_rendered_at  DateTime?
+
+  // Where a non-DECK slide's content actually is. All five are NULL for a DECK
+  // and that is the only state a deck ever has.
+  //
+  // FILE: `source_path` is the repo-relative path of the uploaded document
+  // (`slides/<slug>/<storage-name>`), never a URL — the download URL is signed
+  // per request from the blob sha the asset map holds, exactly as a deck's
+  // thumbnail is. `source_filename` is the ORIGINAL display name the browser
+  // saves it under (validated by `normalizeDownloadFilename` before it is
+  // stored), which is why it is kept apart from the sanitized ASCII storage
+  // name at the tail of `source_path`.
+  //
+  // LINK: `source_url` is the absolute https destination. Classmoji controls
+  // who sees the link, not who can open what is on the other end.
+  source_path     String?
+  source_filename String?
+  source_mime     String?
+  source_size     Int?
+  source_url      String?
 
   classroom          Classroom                @relation(fields: [classroom_id], references: [id], onDelete: Cascade)
   creator            User                     @relation(fields: [created_by], references: [id])

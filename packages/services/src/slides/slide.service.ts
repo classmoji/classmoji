@@ -17,6 +17,7 @@ import * as contentManifestService from '../classmoji/contentManifest.service.ts
 import { ensureContentRepo } from '../classmoji/page.service.ts';
 import { mintSlideId, type IdGenerator } from './deckHtml.ts';
 import { previewBranchName, saveDeck } from './slideContent.service.ts';
+import { isDeckSlide, SlideKindError } from './slideSource.ts';
 import type { DeckJson } from './deckTypes.ts';
 
 const THEMES_FOLDER = '.slidesthemes';
@@ -97,8 +98,25 @@ export interface SlideMetadataUpdate {
  * Metadata-only update (page.service.quickUpdate's slide twin). Title changes
  * do NOT touch slug/content_path — those are set once at creation (renaming
  * the content folder would break the CDN URL and any student links).
+ *
+ * Two of the five fields are DECK-ONLY and are refused for a file or a link.
+ * `allow_team_edit` grants write access to an editor a non-deck has no route to
+ * open, and `show_speaker_notes` describes notes only a deck can carry — so
+ * both would be settings that read as active and do nothing, which is the shape
+ * a permission bug hides in. The UI disables the toggles; this is what makes
+ * that refusal real rather than cosmetic.
  */
 export async function updateSlide(slideId: string, data: SlideMetadataUpdate) {
+  if (data.allow_team_edit !== undefined || data.show_speaker_notes !== undefined) {
+    const current = await getPrisma().slide.findUnique({
+      where: { id: slideId },
+      select: { kind: true },
+    });
+    if (current && !isDeckSlide(current)) {
+      throw new SlideKindError('Team editing and speaker notes are deck-only settings.');
+    }
+  }
+
   const slide = await getPrisma().slide.update({
     where: { id: slideId },
     data: { ...data, updated_at: new Date() },
@@ -253,21 +271,22 @@ export function buildEditorDeck({
 }
 
 /**
- * Orchestrated slide creation: content-path collision check → ensure the
- * shared content repo exists → starter deck via saveDeck (deck.json +
- * index.html in one commit) → DB row → manifest refresh.
+ * Everything a new slide of ANY kind has to settle before a byte is written:
+ * the classroom is real and has a content repo, the title yields a slug, and
+ * nothing already owns that slug or content path.
+ *
+ * Shared by `createSlide` (deck), `createFileSlide` and `createLinkSlide`,
+ * because the collision refusal is the part that MUST NOT drift: slug carries a
+ * `[classroom_id, slug]` unique constraint and drives the content path, so a
+ * kind that skipped this check could overwrite another slide's folder on GitHub
+ * before the DB told it no.
  */
-export async function createSlide({
+export async function prepareSlideCreate({
   classroomId,
   title,
-  createdBy,
-  idGen,
 }: {
   classroomId: string;
   title: string;
-  createdBy: string;
-  /** Injectable for tests. */
-  idGen?: IdGenerator;
 }) {
   const classroom = await getPrisma().classroom.findUnique({
     where: { id: classroomId },
@@ -308,14 +327,47 @@ export async function createSlide({
     );
   }
 
+  // `orgLogin`/`repo` are the checks above, in a form the caller can use: the
+  // narrowing TypeScript did inside this function does not survive the return.
+  return {
+    classroom,
+    orgLogin: classroom.git_organization.login,
+    repo: classroom.content_repo,
+    slug,
+    contentPath,
+  };
+}
+
+/**
+ * Orchestrated slide creation: content-path collision check → ensure the
+ * shared content repo exists → starter deck via saveDeck (deck.json +
+ * index.html in one commit) → DB row → manifest refresh.
+ */
+export async function createSlide({
+  classroomId,
+  title,
+  createdBy,
+  idGen,
+}: {
+  classroomId: string;
+  title: string;
+  createdBy: string;
+  /** Injectable for tests. */
+  idGen?: IdGenerator;
+}) {
+  const { classroom, orgLogin, repo, slug, contentPath } = await prepareSlideCreate({
+    classroomId,
+    title,
+  });
+
   await ensureContentRepo(classroomId);
 
   // Slug-reuse retarget guard: a preview branch left over from a previously
   // deleted deck at the same content path would make this new deck appear to
   // have pending (stale) edits — clear it before the first write.
   await deletePreviewBranchBestEffort({
-    orgLogin: classroom.git_organization.login,
-    repo: classroom.content_repo,
+    orgLogin,
+    repo,
     contentPath,
     context: 'stale preview from a reused slug, cleared before create',
   });
@@ -538,42 +590,57 @@ export async function deleteSlide({
   }
 
   const repoName = slide.classroom.content_repo;
+  const isDeck = isDeckSlide(slide);
+  // A LINK owns nothing in the repo — no folder was ever created for it, so
+  // every GitHub call below would be a request whose only possible answer is a
+  // 404 logged as an error on an otherwise clean delete.
+  const ownsRepoContent = slide.kind !== 'LINK';
 
-  // Check if this slide uses a shared theme (deck.json-first).
-  const themeName = await readSharedThemeName({
-    orgLogin: gitOrgLogin,
-    repo: repoName,
-    contentPath: slide.content_path,
-  });
+  // Check if this slide uses a shared theme (deck.json-first). Decks only: a
+  // theme is something a deck's `deck.json` names, and a file slide's folder
+  // has no deck.json to read.
+  const themeName = isDeck
+    ? await readSharedThemeName({
+        orgLogin: gitOrgLogin,
+        repo: repoName,
+        contentPath: slide.content_path,
+      })
+    : null;
   let themeDeleted = false;
   let otherSlidesUsingTheme = 0;
 
   // Delete the slide content folder from GitHub.
-  try {
-    await ContentService.deleteFolder({
-      orgLogin: gitOrgLogin,
-      repo: repoName,
-      path: slide.content_path,
-      message: `Delete slide: ${slide.title}`,
-    });
-  } catch (error: unknown) {
-    console.error('Failed to delete slide content from GitHub:', error);
-    // Continue with database deletion even if GitHub fails.
+  if (ownsRepoContent) {
+    try {
+      await ContentService.deleteFolder({
+        orgLogin: gitOrgLogin,
+        repo: repoName,
+        path: slide.content_path,
+        message: `Delete slide: ${slide.title}`,
+      });
+    } catch (error: unknown) {
+      console.error('Failed to delete slide content from GitHub:', error);
+      // Continue with database deletion even if GitHub fails.
+    }
   }
 
   // Forget the map rows too. Blobs are content-addressed and immutable, so a
-  // surviving row keeps serving the deleted deck's last index.html out of R2 —
-  // a deleted deck that still presents, until the next sweep.
+  // surviving row keeps serving the deleted deck's last index.html — or the
+  // deleted FILE slide's document — out of R2, addressable by anyone still
+  // holding a signed URL, until the next sweep.
   await removeContentAssetFolder(slide.classroom_id, slide.content_path);
 
   // Drop any pending preview branch alongside the folder — a stale
   // preview/<content_path> ref would retarget a future deck reusing the slug.
-  await deletePreviewBranchBestEffort({
-    orgLogin: gitOrgLogin,
-    repo: repoName,
-    contentPath: slide.content_path,
-    context: 'slide deleted',
-  });
+  // Deck-only: nothing else ever opens a preview branch.
+  if (isDeck) {
+    await deletePreviewBranchBestEffort({
+      orgLogin: gitOrgLogin,
+      repo: repoName,
+      contentPath: slide.content_path,
+      context: 'slide deleted',
+    });
+  }
 
   // Cloudinary cleanup via the app-provided callback.
   if (onDeleteVideos) {
@@ -635,11 +702,15 @@ export async function getSlideDeleteInfo(slideId: string) {
 
   const repoName = slide.classroom.content_repo;
 
-  const themeName = await readSharedThemeName({
-    orgLogin: gitOrgLogin,
-    repo: repoName,
-    contentPath: slide.content_path,
-  });
+  // Only a deck can be on a shared theme, so only a deck's delete dialog has a
+  // theme question to ask.
+  const themeName = isDeckSlide(slide)
+    ? await readSharedThemeName({
+        orgLogin: gitOrgLogin,
+        repo: repoName,
+        contentPath: slide.content_path,
+      })
+    : null;
   if (!themeName) {
     return { slide, themeName: null };
   }

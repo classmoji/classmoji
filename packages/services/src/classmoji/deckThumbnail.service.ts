@@ -159,8 +159,11 @@ export async function enqueueClassroomThumbnails(
   if (!classroomId) return;
 
   try {
+    // DECKs only. A file or a link has no rendered document to photograph, and
+    // asking for one would spend a Browser Run slot to reach the task's own
+    // `not-a-deck` refusal — per non-deck slide, on every theme edit.
     const slides = await getPrisma().slide.findMany({
-      where: { classroom_id: classroomId },
+      where: { classroom_id: classroomId, kind: 'DECK' },
       select: { id: true },
     });
 

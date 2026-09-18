@@ -50,8 +50,17 @@ const indexRows: IndexRow[] = [];
 const assetShas = new Map<string, string>();
 const pageRows: Array<{ id: string; title: string; content_path: string; classroom_id: string }> =
   [];
-const slideRows: Array<{ id: string; title: string; content_path: string; classroom_id: string }> =
-  [];
+const slideRows: Array<{
+  id: string;
+  title: string;
+  content_path: string;
+  classroom_id: string;
+  // Absent on a deck fixture, exactly as `kind: 'DECK'` reads everywhere else.
+  kind?: string;
+  source_path?: string | null;
+  source_filename?: string | null;
+  source_url?: string | null;
+}> = [];
 
 /** Every raw statement the service ran, for the assertions that count them. */
 const statements: string[] = [];
@@ -293,9 +302,12 @@ const {
   classifyPath,
   deleteOrphans,
   indexOneFile,
+  indexSlideMetadata,
   isFresh,
   planClassroomIndex,
   reconcileContentIndex,
+  slideMetadataSha,
+  slideMetadataText,
   splitIntoPieces,
 } = await import('../contentIndex.service.ts');
 const { EMBEDDING_MODEL } = await import('../../helpers/workersAi.ts');
@@ -1136,5 +1148,155 @@ describe('reconcileContentIndex', () => {
       expect(report.byClassroom[0].error).toBeUndefined();
       expect(report.byClassroom[1]).toMatchObject({ failed: 0, indexed: 1 });
     });
+  });
+});
+
+// ─── Slides that are not decks ───────────────────────────────────────────────
+
+/**
+ * A FILE or LINK slide has no `index.html`, and the index used to have exactly
+ * one way of describing a slide. Left alone, every uploaded PDF and every
+ * linked URL would be counted as a document whose bytes are missing — on every
+ * run, forever — and would be unfindable in search while being reported as a
+ * backlog.
+ *
+ * What these tests hold: the two kinds are indexed from their ROWS, their bytes
+ * are never read, they are not `missingAssets`, and they are not orphans.
+ */
+describe('non-deck slides', () => {
+  const FILE_SLIDE = 'slide-file-1';
+  const LINK_SLIDE = 'slide-link-1';
+
+  const addFileSlide = () =>
+    slideRows.push({
+      id: FILE_SLIDE,
+      title: 'Lecture 1',
+      content_path: 'slides/lecture-1',
+      classroom_id: CLASSROOM,
+      kind: 'FILE',
+      source_path: 'slides/lecture-1/lecture-1.pdf',
+      source_filename: 'Lecture 1 — Intro.pdf',
+    });
+
+  const addLinkSlide = () =>
+    slideRows.push({
+      id: LINK_SLIDE,
+      title: 'Reading list',
+      content_path: 'slides/reading-list',
+      classroom_id: CLASSROOM,
+      kind: 'LINK',
+      source_url: 'https://example.com/reading',
+    });
+
+  it('describes a file by its name and a link by its host', () => {
+    const fileText = slideMetadataText({
+      id: FILE_SLIDE,
+      title: 'Lecture 1',
+      kind: 'FILE',
+      content_path: 'slides/lecture-1',
+      source_path: 'slides/lecture-1/lecture-1.pdf',
+      source_filename: 'Lecture 1 — Intro.pdf',
+    });
+    expect(fileText).toContain('Lecture 1');
+    expect(fileText).toContain('Lecture 1 — Intro.pdf');
+    expect(fileText).toContain('(PDF)');
+
+    const linkText = slideMetadataText({
+      id: LINK_SLIDE,
+      title: 'Reading list',
+      kind: 'LINK',
+      content_path: 'slides/reading-list',
+      source_url: 'https://example.com/reading',
+    });
+    expect(linkText).toContain('https://example.com/reading');
+    expect(linkText).toContain('(example.com)');
+  });
+
+  it('stamps a metadata document with a hash of the text it embedded', async () => {
+    addFileSlide();
+    const doc = {
+      id: FILE_SLIDE,
+      title: 'Lecture 1',
+      kind: 'FILE',
+      content_path: 'slides/lecture-1',
+      source_path: 'slides/lecture-1/lecture-1.pdf',
+      source_filename: 'Lecture 1 — Intro.pdf',
+    };
+
+    const result = await indexSlideMetadata({ classroomId: CLASSROOM, slide: doc });
+    expect(result).toMatchObject({ outcome: 'indexed', chunks: 1 });
+
+    const [row] = rowsFor('slide', FILE_SLIDE);
+    expect(row.source_sha).toBe(slideMetadataSha(slideMetadataText(doc)));
+    // The DOCUMENT's path, not a hash of one: the column says where this came
+    // from, and for a file that is the uploaded document.
+    expect(row.source_path).toBe('slides/lecture-1/lecture-1.pdf');
+    // And the bytes were never touched — no extractor, no fetch.
+    expect(extractTextMock).not.toHaveBeenCalled();
+
+    // Re-running is a no-op until something in the row changes.
+    expect(await indexSlideMetadata({ classroomId: CLASSROOM, slide: doc })).toMatchObject({
+      outcome: 'skipped',
+      reason: 'fresh',
+    });
+    expect(
+      await indexSlideMetadata({
+        classroomId: CLASSROOM,
+        slide: { ...doc, title: 'Lecture 1 (revised)' },
+      })
+    ).toMatchObject({ outcome: 'indexed' });
+  });
+
+  it('files a link slide with no source path under its own folder', async () => {
+    addLinkSlide();
+    await indexSlideMetadata({
+      classroomId: CLASSROOM,
+      slide: {
+        id: LINK_SLIDE,
+        title: 'Reading list',
+        kind: 'LINK',
+        content_path: 'slides/reading-list',
+        source_url: 'https://example.com/reading',
+      },
+    });
+    expect(rowsFor('slide', LINK_SLIDE)[0].source_path).toBe('slides/reading-list');
+  });
+
+  it('plans them as metadata work, not as missing assets', async () => {
+    addFileSlide();
+    addLinkSlide();
+
+    const plan = await planClassroomIndex(CLASSROOM);
+    expect(plan.metadataItems.map(doc => doc.id).sort()).toEqual([FILE_SLIDE, LINK_SLIDE].sort());
+    // The page fixture is the only byte-backed document in this classroom.
+    expect(plan.items.map(item => item.docHint.id)).toEqual([PAGE_ID]);
+    // THE POINT: neither one is a document whose bytes could not be found.
+    expect(plan.missingAssets).toBe(0);
+  });
+
+  it('drops them from the plan once they are indexed, and never orphans them', async () => {
+    addFileSlide();
+    const [doc] = (await planClassroomIndex(CLASSROOM)).metadataItems;
+    await indexSlideMetadata({ classroomId: CLASSROOM, slide: doc });
+
+    const plan = await planClassroomIndex(CLASSROOM);
+    expect(plan.metadataItems).toHaveLength(0);
+    // The row is live — sweeping it would delete a perfectly good document.
+    expect(plan.orphans).toHaveLength(0);
+  });
+
+  it('indexes them in a reconcile without ever asking for bytes', async () => {
+    addFileSlide();
+    addLinkSlide();
+    const fetchBody = vi.fn(async () => ({ text: '{"blocks":[]}', sha: SHA }));
+
+    const report = await reconcileContentIndex({ classroomIds: [CLASSROOM], fetchBody });
+
+    // One page (fetched) plus two row-backed slides (not fetched).
+    expect(report.eligible).toBe(3);
+    expect(report.indexed).toBe(3);
+    expect(fetchBody).toHaveBeenCalledTimes(1);
+    expect(rowsFor('slide', FILE_SLIDE)).toHaveLength(1);
+    expect(rowsFor('slide', LINK_SLIDE)).toHaveLength(1);
   });
 });
