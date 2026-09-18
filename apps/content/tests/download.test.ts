@@ -329,7 +329,11 @@ describe('download delivery', () => {
     );
   });
 
-  it('is available on any tier — the filename decides, not the window', async () => {
+  it('is honoured on any tier — the filename decides, not the window', async () => {
+    // The signer refuses to MINT this (a save-to-disk link has no business
+    // being immutable for a week), so the fixture hand-signs it. The Worker's
+    // side of that split is what this pins: a valid signature is served, and
+    // the filename is what turns the reply into an attachment.
     const { response } = await fetchBlob(cachedFile(), {
       sha: BLOB_SHA,
       ext: 'pdf',

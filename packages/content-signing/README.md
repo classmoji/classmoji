@@ -140,6 +140,8 @@ the object — it travels in the URL, inside the signature, as `dl`.
 ```ts
 const ctx = { master, classroomId, keyVersion, tier: 'download' as const };
 // `dl` is the RAW name: signing normalizes it, validates it and encodes it.
+// It requires the `download` tier — any other is a TypeError, because a
+// save-to-disk link has no business being immutable for a week.
 const url = await signBlobUrl(origin, ctx, { sha, ext: 'pdf', dl: 'Übung 1.pdf' });
 
 const result = await verifyBlobUrl(master, url);
@@ -154,18 +156,27 @@ normalizes to NFC (macOS sends NFD), and caps the result at 200 UTF-8 **bytes**,
 truncating the base and never the extension. It refuses empty names, control
 characters (a newline would be a second HTTP header), and bidi controls
 (`harmless\u202Efdp.exe` renders as `harmlessexe.pdf`), as well as leading or
-trailing whitespace and dots. `encodeDownloadFilename` refuses to encode
-anything that call would have changed, so encode and decode are exact inverses.
+trailing whitespace and dots. It refuses the other invisible format characters
+too — general category Cf, plus U+2028 and U+2029 — because a zero-width space
+or a BOM makes two different names render identically. ZWJ (U+200D) is the one
+exemption: it holds a family or profession emoji together, and it joins
+glyphs rather than reordering or hiding them. `encodeDownloadFilename` refuses
+to encode anything that call would have changed, so encode and decode are exact
+inverses.
 
 The verification order is the guarantee: the canonical string carries the
-encoded value **exactly as it arrived**, the HMAC is checked over that, and only
-then is the name decoded — with `fatal: true` UTF-8 and a round-trip through the
+encoded value **as the query carried it** (the parser percent-decodes, which a
+base64url value is unaffected by), the HMAC is checked over that, and only then
+is the name decoded — with `fatal: true` UTF-8 and a round-trip through the
 normalizer, so a name that would not have been signed is refused even when the
 signature verifies. Decode failure is `malformed`, tampering is `bad-signature`.
 
 `contentDispositionFor` emits both RFC 6266 forms: a quoted ASCII `filename`
-(non-ASCII becomes `_`, quotes and backslashes are escaped) and the RFC 8187
-`filename*=UTF-8''…` every modern client prefers.
+(non-ASCII and a literal `%` become `_`, quotes and backslashes are escaped)
+and the RFC 8187 `filename*=UTF-8''…` every modern client prefers. `%` is
+collapsed in the fallback on RFC 6266 App. D's advice: some clients
+percent-decode the quoted form, so a literal `a%2Fb.pdf` left there would be
+saved as the path `a/b.pdf`.
 
 `cacheControlFor` returns `no-store` for the `download` tier, and a server
 serving one of these must not let the response be stored under any tier: the

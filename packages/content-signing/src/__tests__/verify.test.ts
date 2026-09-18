@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest';
 
 import { TIER_POLICY, bucketExpiry } from '../bucket.ts';
-import { toBase64Url, utf8 } from '../canonical.ts';
-import { clearKeyCache } from '../derive.ts';
+import { blobCanonicalString, toBase64Url, utf8 } from '../canonical.ts';
+import { clearKeyCache, deriveKey, signCanonical } from '../derive.ts';
+import { encodeDownloadFilename } from '../downloads.ts';
 import { signBlobUrl, signThemeBase } from '../urls.ts';
 import type { Tier } from '../types.ts';
 import {
@@ -36,8 +37,32 @@ const blob = (tier: Tier, transform?: { w?: 800 | 1600 | 2560; fmt?: 'webp' | 'a
   signBlobUrl(ORIGIN, ctx(tier), { sha: SHA, ext: 'png', transform });
 
 /** A save-to-disk URL: the `download` tier plus the filename it carries. */
-const download = (dl: string, tier: Tier = 'download') =>
-  signBlobUrl(ORIGIN, ctx(tier), { sha: SHA, ext: 'pdf', dl });
+const download = (dl: string) => signBlobUrl(ORIGIN, ctx('download'), { sha: SHA, ext: 'pdf', dl });
+
+/**
+ * The same URL on a longer-lived tier — which `signBlobUrl` refuses to mint.
+ *
+ * That refusal is a MINT-side rule, so proving the verifier is unaffected takes
+ * a signature the mint path would not produce. Everything security-relevant is
+ * still the package's: its canonical string, its key derivation, its HMAC.
+ */
+async function downloadOnTier(dl: string, tier: Tier): Promise<string> {
+  const encoded = encodeDownloadFilename(dl);
+  const exp = bucketExpiry(tier, CLASSROOM_A, NOW);
+  const canonical = blobCanonicalString({
+    host: HOST,
+    classroomId: CLASSROOM_A,
+    sha: SHA,
+    ext: 'pdf',
+    tier,
+    keyVersion: 0,
+    exp,
+    dl: encoded,
+  });
+  const key = await deriveKey(MASTER, CLASSROOM_A, 0);
+  const sig = toBase64Url(await signCanonical(key, canonical));
+  return `${ORIGIN}/c/${CLASSROOM_A}/blob/${SHA}.pdf?p=${tier}&v=0&exp=${exp}&sig=${sig}&dl=${encoded}`;
+}
 
 /**
  * base64url of ANY string, including the ones `encodeDownloadFilename` refuses.
@@ -356,8 +381,12 @@ describe('download URLs', () => {
     expect(result.ok && result.downloadFilename).toBe('a|dl|b.pdf');
   });
 
-  it('is available on any tier, not just download', async () => {
-    const result = await verifyBlobUrl(MASTER, await download('deck.pdf', 'week'), NOW);
+  it('verifies a dl on any tier, because only minting is restricted', async () => {
+    // `signBlobUrl` will not mint this (a save-to-disk link has no business
+    // being immutable for a week), but the verifier must keep honouring every
+    // URL that carries a valid signature — including ones already in browsers
+    // from before that rule existed.
+    const result = await verifyBlobUrl(MASTER, await downloadOnTier('deck.pdf', 'week'), NOW);
     expect(result.ok && result.tier).toBe('week');
     expect(result.ok && result.downloadFilename).toBe('deck.pdf');
   });

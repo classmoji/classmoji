@@ -178,11 +178,17 @@ function parseBlob(url: URL, host: string, classroomId: string, segments: string
   const transform = parseTransform(url);
   if (transform === null) return fail('malformed');
 
-  // Taken VERBATIM, and bounded but not decoded: the canonical string covers
-  // the encoded value as it arrived, so the signature is checked over the
-  // client's bytes rather than over something this parse made of them. The
-  // bound is the only thing weighed here, because nothing longer could have
-  // been signed and there is no reason to hash an unbounded string.
+  // Bounded, and never base64-decoded: the canonical string covers this value,
+  // so the signature is checked over what the query carried rather than over a
+  // filename this parse made of it.
+  //
+  // `searchParams.get` does percent-decode, so it is the DECODED spelling that
+  // lands here — and that is fine, because it is the same rule on both sides.
+  // base64url has nothing worth escaping, so `%5A...` decodes to exactly the
+  // characters the signer signed and verifies identically; an escape that
+  // decodes to anything else simply produces a canonical string this key never
+  // signed. The bound is the only thing weighed, because nothing longer could
+  // have been signed and there is no reason to hash an unbounded string.
   const rawDownload = url.searchParams.get('dl');
   if (rawDownload !== null) {
     if (rawDownload.length === 0 || rawDownload.length > MAX_ENCODED_DOWNLOAD_FILENAME) {

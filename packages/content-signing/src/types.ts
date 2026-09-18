@@ -120,9 +120,11 @@ export interface ParsedBlobUrl {
   sig: string;
   transform?: Transform;
   /**
-   * The `dl` param exactly as it arrived — still base64url, never decoded. The
-   * canonical string covers this raw value, so the signature is checked over
-   * what the client sent rather than over something we made of it first.
+   * The `dl` param as the query carried it — still base64url, never base64-
+   * decoded (percent-decoding is the query parser's, and base64url has nothing
+   * worth escaping). The canonical string covers this value, so the signature
+   * is checked over what the client sent rather than over a filename we made of
+   * it first.
    */
   dl?: string;
 }

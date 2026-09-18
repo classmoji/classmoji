@@ -38,6 +38,34 @@ function isBidiControl(code: number): boolean {
   return (code >= 0x202a && code <= 0x202e) || (code >= 0x2066 && code <= 0x2069);
 }
 
+/** The joiner inside every multi-person and profession emoji. Deliberately allowed. */
+const ZWJ = '\u200d';
+
+/**
+ * Format characters (general category Cf), plus the two separators that are
+ * line breaks under another name (U+2028 is Zl, U+2029 is Zp).
+ *
+ * Every one of them is invisible, which is the problem: `deck\u200b.pdf` and
+ * `deck.pdf` are different names that render identically in a save dialog and
+ * in a directory listing, and `\ufeff` or `\u00ad` can hide inside an extension
+ * the same way. The bidi controls the explicit check above names are Cf too, so
+ * this subsumes them — that check is kept because the attack it describes is
+ * worth spelling out, not because it is the only thing catching them.
+ *
+ * ZWJ (U+200D) is Cf and is EXEMPT on purpose: it is what holds `👩‍🏫.png`
+ * together, so refusing it would reject names instructors legitimately type. It
+ * joins adjacent glyphs rather than reordering or concealing them, so it buys a
+ * forger nothing the visible characters do not already give. Variation
+ * selectors (U+FE0F and friends) are Mn rather than Cf and never reach here.
+ *
+ * `\p{Cf}` needs the `u` flag; both targets — workerd and Node 22 — are V8.
+ */
+const INVISIBLE_FORMAT = /[\p{Cf}\u2028\u2029]/u;
+
+function isInvisibleFormat(char: string): boolean {
+  return char !== ZWJ && INVISIBLE_FORMAT.test(char);
+}
+
 /** C0 controls and DEL — a newline here would be a second HTTP header. */
 function isControl(code: number): boolean {
   return code < 0x20 || code === 0x7f;
@@ -103,7 +131,9 @@ function truncateToBytes(value: string, limit: number): string {
  *
  * What it refuses: empty, control characters (a newline would be a second HTTP
  * header), path separators, bidi controls (`x.fdp\u202eexe` renders as
- * `x.exe`), and leading or trailing whitespace or dots (`.bashrc`, `deck.`).
+ * `x.exe`), the other invisible format characters (a zero-width space or a BOM
+ * makes two different names look like one), and leading or trailing whitespace
+ * or dots (`.bashrc`, `deck.`). ZWJ is the one exception — see `ZWJ` above.
  */
 export function normalizeDownloadFilename(name: string): string | null {
   if (typeof name !== 'string') return null;
@@ -116,7 +146,7 @@ export function normalizeDownloadFilename(name: string): string | null {
   if (hasEdgeJunk(base)) return null;
   for (const char of base) {
     const code = char.codePointAt(0) ?? 0;
-    if (isControl(code) || isBidiControl(code)) return null;
+    if (isControl(code) || isBidiControl(code) || isInvisibleFormat(char)) return null;
     // Unreachable after the basename cut above, and kept anyway: this is the
     // invariant the header formatter relies on, not an incidental consequence.
     if (char === '/' || char === '\\') return null;
@@ -212,12 +242,19 @@ function percentEncode(value: string): string {
  * ignore `filename*`. Quotes and backslashes are escaped as quoted-pairs, which
  * is what stops a name ending the quoted string early and appending parameters
  * of its own.
+ *
+ * `%` collapses too, though it is perfectly ordinary ASCII: RFC 6266 App. D
+ * advises against it here because some clients percent-decode the quoted form,
+ * which would turn a literal `a%2Fb.pdf` into the path `a/b.pdf`. It is only
+ * the fallback that loses it — `filename*` carries the real name, with the `%`
+ * encoded as `%25`.
  */
 function asciiFallback(name: string): string {
   let out = '';
   for (const char of name) {
     const code = char.codePointAt(0) ?? 0;
     if (char === '"' || char === '\\') out += `\\${char}`;
+    else if (char === '%') out += '_';
     else if (code >= 0x20 && code < 0x7f) out += char;
     else out += '_';
   }

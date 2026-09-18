@@ -264,6 +264,17 @@ describe('signBlobUrl', () => {
     }
   });
 
+  it('refuses a dl on any tier but download', async () => {
+    // A save-to-disk link is for one viewer and one save; a `week` or `month`
+    // URL is immutable for days and shared by everyone who holds it. The
+    // verifier stays permissive on purpose — this is a mint-side rule only.
+    for (const tier of ['month', 'week', 'edit'] as const) {
+      await expect(
+        signBlobUrl(ORIGIN, ctx(tier), { sha: SHA, ext: 'pdf', dl: 'deck.pdf' })
+      ).rejects.toThrow(TypeError);
+    }
+  });
+
   it('is byte-identical to a downloadless URL when no dl is given', async () => {
     // The whole compatibility story in one assertion: adding the feature must
     // not move a single byte of a URL that does not use it.

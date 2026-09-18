@@ -68,6 +68,44 @@ describe('normalizeDownloadFilename', () => {
     }
   });
 
+  it('refuses the other invisible format characters', () => {
+    // General category Cf, plus the two separators that are line breaks under
+    // another name. All of them let two different names render identically:
+    // `deck\u200b.pdf` is indistinguishable from `deck.pdf` in a save dialog.
+    for (const name of [
+      'deck\u200b.pdf', // zero width space
+      'deck\u200c.pdf', // zero width non-joiner
+      'deck\u200e.pdf', // left-to-right mark
+      'deck\u200f.pdf', // right-to-left mark
+      'deck\u061c.pdf', // arabic letter mark
+      'deck\ufeff.pdf', // BOM / zero width no-break space
+      'deck\u00ad.pdf', // soft hyphen
+      'deck\u180e.pdf', // mongolian vowel separator
+      'deck\u2060.pdf', // word joiner
+      'deck\u2064.pdf', // invisible plus
+      'deck\u2028.pdf', // line separator
+      'deck\u2029.pdf', // paragraph separator
+    ]) {
+      expect(normalizeDownloadFilename(name)).toBeNull();
+    }
+  });
+
+  it('allows ZWJ, because it is what holds an emoji together', () => {
+    // U+200D is Cf like the rest, and is exempt on purpose: refusing it would
+    // reject `👩‍🏫 syllabus.pdf`, a name an instructor legitimately typed. It
+    // joins adjacent glyphs rather than reordering or hiding them. Variation
+    // selectors are Mn rather than Cf, so they were never in question.
+    for (const name of [
+      '\u{1F469}\u200D\u{1F3EB} syllabus.pdf',
+      '\u{1F468}\u200D\u{1F469}\u200D\u{1F467}.png',
+      '❤️ deck.pdf',
+    ]) {
+      expect(normalizeDownloadFilename(name)).toBe(name);
+      // Idempotent, which is what the decoder's round-trip check rests on.
+      expect(decodeDownloadFilename(encodeDownloadFilename(name))).toBe(name);
+    }
+  });
+
   it('refuses edge whitespace and dots rather than trimming them', () => {
     for (const name of [
       ' deck.pdf',
@@ -186,6 +224,8 @@ describe('encodeDownloadFilename / decodeDownloadFilename', () => {
       '.bashrc',
       'deck\n.pdf',
       'harmless\u202efdp.exe',
+      'deck\u200b.pdf',
+      'deck\ufeff.pdf',
       'U\u0308bung.pdf',
       `${'a'.repeat(400)}.pdf`,
     ]) {
@@ -240,6 +280,20 @@ describe('contentDispositionFor', () => {
     expect(contentDispositionFor('a!#$&+-.^_`|~z.pdf')).toContain(
       `filename*=UTF-8''a!#$&+-.^_\`|~z.pdf`
     );
+  });
+
+  it('collapses a literal percent in the quoted fallback', () => {
+    // RFC 6266 App. D: some clients percent-decode the quoted form, so a
+    // literal `a%2Fb.pdf` left intact there would be saved as the path
+    // `a/b.pdf`. `filename*` still carries the real name, `%` and all.
+    expect(contentDispositionFor('a%2Fb.pdf')).toBe(
+      `attachment; filename="a_2Fb.pdf"; filename*=UTF-8''a%252Fb.pdf`
+    );
+    expect(contentDispositionFor('100%.pdf')).toBe(
+      `attachment; filename="100_.pdf"; filename*=UTF-8''100%25.pdf`
+    );
+    // And the name is perfectly legal — it is only the fallback that loses it.
+    expect(normalizeDownloadFilename('a%2Fb.pdf')).toBe('a%2Fb.pdf');
   });
 
   it('escapes a quote or a backslash so the quoted string cannot be ended early', () => {

@@ -25,7 +25,8 @@ export interface BlobRef {
   /**
    * RAW display filename for a save-to-disk URL (`Übung 1.pdf`, not base64).
    * Signing normalizes and encodes it; leave it off and the URL is byte-for-byte
-   * the one this package has always minted.
+   * the one this package has always minted. Requires the `download` tier — any
+   * other is a TypeError.
    */
   dl?: string;
 }
@@ -73,7 +74,7 @@ function assertContext(ctx: SigningContext): number {
  * Transform params are inside the signature, so a client cannot widen or
  * re-encode an image it was not handed. So is the origin's host, and so is `dl`
  * — the name a download is saved under is not something a link can be edited to
- * change.
+ * change. `dl` is `download`-tier only; see the guard below.
  */
 export async function signBlobUrl(
   origin: string,
@@ -97,6 +98,17 @@ export async function signBlobUrl(
   // and can say so, where the verifier could only serve a name nobody chose.
   let dl: string | undefined;
   if (ref.dl !== undefined) {
+    // A save-to-disk link is handed to ONE viewer for ONE save, which is what
+    // the `download` tier's ten minutes and `no-store` are for. A `dl` on
+    // `week` or `month` would put a per-viewer filename on a URL that is
+    // immutable for days, so it is refused here rather than left to the caller
+    // to remember. Only minting is restricted: the verifier keeps accepting
+    // whatever was validly signed, including URLs minted before this rule.
+    if (ctx.tier !== 'download') {
+      throw new TypeError(
+        `content-signing: a dl filename requires the download tier (got ${ctx.tier})`
+      );
+    }
     const filename = normalizeDownloadFilename(ref.dl);
     if (filename === null) {
       throw new TypeError(`content-signing: unusable download filename (got ${String(ref.dl)})`);

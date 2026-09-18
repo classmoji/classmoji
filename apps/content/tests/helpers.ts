@@ -279,7 +279,16 @@ export async function signedBlobUrl(options: {
   const keyVersion = options.keyVersion ?? 1;
   const master = options.master ?? MASTER;
 
-  if (options.exp === undefined && options.signedHost === undefined) {
+  // `signBlobUrl` refuses a `dl` on any tier but `download`, so a fixture that
+  // wants that combination — the Worker still has to honour one that was
+  // validly signed — drops to the hand-rolled branch along with the pinned-expiry
+  // and forged-host cases.
+  const mintable =
+    options.exp === undefined &&
+    options.signedHost === undefined &&
+    (options.dl === undefined || tier === 'download');
+
+  if (mintable) {
     return signBlobUrl(
       origin,
       { master, classroomId, keyVersion, tier },
