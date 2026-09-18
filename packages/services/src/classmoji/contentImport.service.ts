@@ -937,12 +937,21 @@ export async function resolveShaPaths(
  * Best effort on the index — a chained reference is repointed only on a
  * positive answer, so a failed lookup costs residuals, never a wrong rewrite,
  * and an import must not fail over a reference it could not tidy up.
+ *
+ * `extraPaths` is for a file this pass will write but has not staged the bytes
+ * of: a FILE slide's document is read and committed one at a time, after this
+ * runs, and without its target path here a deck linking to it would be the one
+ * reference the copy left pointing at the source repo.
  */
 async function buildTargetPathIndex<Source>(
   targetClassroomId: string,
-  staged: StagedItem<Source>[]
+  staged: StagedItem<Source>[],
+  extraPaths: readonly string[] = []
 ): Promise<(path: string) => boolean> {
-  const incoming = new Set(staged.flatMap(item => item.files.map(({ file }) => file.path)));
+  const incoming = new Set([
+    ...staged.flatMap(item => item.files.map(({ file }) => file.path)),
+    ...extraPaths,
+  ]);
   let existing: ReadonlySet<string>;
   try {
     existing = await listContentAssetPaths(targetClassroomId);
@@ -1359,6 +1368,92 @@ async function importPages({
 
 type SourceSlide = Prisma.SlideGetPayload<Record<string, never>>;
 
+/**
+ * Read and commit every staged FILE slide's document — one read, one commit,
+ * one slide at a time — and report the ones that did not make it.
+ *
+ * ## Why these are not in the deck batch
+ *
+ * Two reasons, and both are about a slide document being a different ORDER of
+ * thing from a deck. A deck is a `deck.json` and an `index.html`: kilobytes,
+ * text, and dozens of them add up to a normal commit. A slide document is a
+ * lecture PDF or a Keynote, up to the 75 MB the upload policy allows, staged
+ * base64 (a third larger again) — so a term of them in one list is hundreds of
+ * megabytes held in this process before a single byte goes out, and one course
+ * with a video-heavy Keynote in it was enough to put the whole slide phase at
+ * risk. Reading them here, one at a time, means the peak is ONE document
+ * however many the classroom has.
+ *
+ * The second reason is blast radius. `uploadBatch` is one commit: an oversized
+ * or unreadable document in the list failed the commit, and the failure took
+ * every deck in the same batch with it — an import that copied nothing because
+ * of one file. A commit per document cannot do that. A document that will not
+ * come across is warned about and its slide is skipped, and the decks are
+ * already committed and safe by the time this runs.
+ *
+ * @returns the SOURCE ids whose row must not be created.
+ */
+async function commitSlideDocuments({
+  source,
+  target,
+  staged,
+  commitMessage,
+  warn,
+}: {
+  source: RepoContext;
+  target: RepoContext;
+  staged: StagedItem<SourceSlide>[];
+  commitMessage: string;
+  warn: WarnFn;
+}): Promise<Set<string>> {
+  const abandoned = new Set<string>();
+
+  for (const item of staged) {
+    if (item.source.kind !== 'FILE') continue;
+
+    let files: BatchFile[];
+    try {
+      files = await collectSlideFile({
+        source,
+        slide: item.source,
+        targetContentPath: item.targetContentPath,
+        warn,
+      });
+    } catch (error: unknown) {
+      warn('slides', `skipped "${item.targetTitle}" — read failed: ${errText(error)}`);
+      abandoned.add(item.source.id);
+      continue;
+    }
+    // `collectSlideFile` has already said why (no source_path, too large,
+    // unreadable). A FILE row with no document is worse than no row.
+    if (files.length === 0) {
+      abandoned.add(item.source.id);
+      continue;
+    }
+
+    try {
+      const result = await ContentService.uploadBatch({
+        gitOrganization: target.gitOrganization,
+        repo: target.repo,
+        files,
+        branch: 'main',
+        message: commitMessage,
+      });
+      // A FILE slide needs the write-through harder than a deck does: its
+      // download URL is signed FROM the asset map, so a document the map does
+      // not know about is a slide nobody can download until the next sync.
+      await recordContentAssets(target.classroomId, result.files);
+    } catch (error: unknown) {
+      warn('slides', `skipped "${item.targetTitle}" — file commit failed: ${errText(error)}`);
+      abandoned.add(item.source.id);
+    }
+    // `files` goes out of scope here, and with it the only reference to this
+    // document's bytes — which is the whole point of reading one at a time.
+  }
+
+  return abandoned;
+}
+
 async function importSlides({
   source,
   target,
@@ -1396,6 +1491,15 @@ async function importSlides({
   const takenSlugs = new Set(targetSlides.map(s => s.slug));
 
   const staged: StagedItem<SourceSlide>[] = [];
+  /**
+   * Where each FILE slide's document WILL land, known before it is read.
+   *
+   * The bytes are not staged (see below), so these paths would otherwise be
+   * absent from the "will the target hold this?" index that gates the
+   * chained-import rewrite — and a deck linking to a sibling slide's handout
+   * would be the one reference this copy left pointing at the source repo.
+   */
+  const fileSlidePaths: string[] = [];
   let consumed = 0;
 
   for (const slide of sourceSlides) {
@@ -1420,20 +1524,21 @@ async function importSlides({
       //  - FILE is ONE document, read through the blobs API rather than the
       //    folder walk, because the walk skips anything over 1 MB and a slide
       //    file is almost always over 1 MB. Skipping it there would create a
-      //    row pointing at a document that was never copied.
+      //    row pointing at a document that was never copied. Its bytes are NOT
+      //    staged here — see `commitSlideDocuments`, which reads and commits
+      //    them one at a time so a course of lecture PDFs is never held in
+      //    memory all at once, and so one unreadable document cannot take the
+      //    deck batch down with it.
       let files: BatchFile[];
       if (slide.kind === 'LINK') {
         files = [];
       } else if (slide.kind === 'FILE') {
-        try {
-          files = await collectSlideFile({ source, slide, targetContentPath, warn });
-        } catch (error: unknown) {
-          warn('slides', `skipped "${slide.title}" — read failed: ${errText(error)}`);
-          continue;
+        files = [];
+        if (slide.source_path) {
+          fileSlidePaths.push(
+            remapFilePath(slide.source_path, slide.content_path, targetContentPath)
+          );
         }
-        // `collectSlideFile` has already said why (no source_path, too large,
-        // unreadable). A FILE row with no document is worse than no row.
-        if (files.length === 0) continue;
       } else {
         try {
           files = await collectFolderFiles({
@@ -1473,7 +1578,7 @@ async function importSlides({
   // index.html are rewritten in lockstep, keeping the pair consistent).
   const shaPaths = await resolveShaPaths(source.classroomId, stagedTexts(staged));
   // Same gate as the page pass — see buildTargetPathIndex.
-  const targetHasPath = await buildTargetPathIndex(target.classroomId, staged);
+  const targetHasPath = await buildTargetPathIndex(target.classroomId, staged, fileSlidePaths);
 
   const files = staged.flatMap(item =>
     rewriteDecodedFiles(item.files, {
@@ -1489,8 +1594,10 @@ async function importSlides({
     })
   );
 
-  // ONE commit for all slide files (deck.json + generated index.html copied
-  // verbatim — never regenerated; a FILE slide's document copied byte for byte).
+  // ONE commit for all DECK files (deck.json + generated index.html copied
+  // verbatim — never regenerated). The FILE slides' documents are NOT in here:
+  // they are committed one at a time below, so a 60 MB Keynote that cannot be
+  // read or written cannot take a term's worth of decks down with it.
   /** The shas that commit produced, so the index can stamp what it wrote. */
   const committedShas = new Map<string, string>();
   // An import of nothing but LINK slides has rows to create and no bytes to
@@ -1508,15 +1615,21 @@ async function importSlides({
       for (const file of result.files) committedShas.set(file.path, file.sha);
       // Write-through, for the same reason as the page batch above: `deck.json`
       // and `index.html` are read through the map, and an imported deck is
-      // usually opened straight away. A FILE slide needs it even harder — its
-      // download URL is signed FROM the map, so a row that is not there yet is
-      // a slide nobody can download until the next sync.
+      // usually opened straight away.
       await recordContentAssets(target.classroomId, result.files);
     } catch (error: unknown) {
       warn('slides', `slide content commit failed: ${errText(error)}`);
       return 0;
     }
   }
+
+  const abandoned = await commitSlideDocuments({
+    source,
+    target,
+    staged,
+    commitMessage,
+    warn,
+  });
 
   /** The artifacts this import committed, by path — see the page pass. */
   const importedBodies = new Map<string, string>();
@@ -1527,6 +1640,9 @@ async function importSlides({
 
   let created = 0;
   for (const item of staged) {
+    // Its document did not make it, and `commitSlideDocuments` has already said
+    // why. A FILE row pointing at a document nobody wrote is worse than no row.
+    if (abandoned.has(item.source.id)) continue;
     try {
       const row = await getPrisma().slide.create({
         data: {

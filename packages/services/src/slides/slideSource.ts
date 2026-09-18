@@ -159,6 +159,57 @@ export function slideFileStorageName(filename: string, fallbackBase: string): st
   return (RESERVED_SLIDE_FILENAMES as readonly string[]).includes(name) ? null : name;
 }
 
+/** Why a stored FILE row's document will not be read or signed. Null = it will. */
+export type SlideFileSourceProblem =
+  /** The row has no `source_path` at all. Broken data, not a policy refusal. */
+  | 'no_source'
+  /** `source_path` names something outside the slide's own `content_path/`. */
+  | 'escapes_folder'
+  /** The recorded size is past the policy cap this file's first line states. */
+  | 'too_large';
+
+/**
+ * Is this row's document one we will serve? Containment and size, from the row.
+ *
+ * Self-defence, not validation: every write path already sanitizes the storage
+ * name and checks the cap, so a row that fails here is one no create or replace
+ * in this codebase could have produced. It is checked again on the READ because
+ * the two are separated by a database — a hand-edited row, a restored backup or
+ * a future writer that forgot the rule would otherwise turn `source_path` into
+ * a caller-supplied path that the download signs and the GitHub reader fetches.
+ *
+ * `slides/lecture-1/../../.env` is the shape that matters: a path that is not
+ * strictly UNDER `${content_path}/` is not this slide's to hand out, whatever
+ * the row says. The size check is the same idea one step further — a row
+ * claiming 400 MB is either wrong or a document nobody agreed to serve, and
+ * reading it would be a 400 MB buffer in this process either way.
+ */
+export function slideFileSourceProblem(slide: {
+  content_path?: string | null;
+  source_path?: string | null;
+  source_size?: number | null;
+}): SlideFileSourceProblem | null {
+  const path = typeof slide.source_path === 'string' ? slide.source_path : '';
+  if (!path) return 'no_source';
+
+  const folder = typeof slide.content_path === 'string' ? slide.content_path : '';
+  const prefix = `${folder.replace(/\/+$/, '')}/`;
+  if (!folder || !path.startsWith(prefix) || path.length === prefix.length) {
+    return 'escapes_folder';
+  }
+  // `..` anywhere, not just at the front: the prefix test above is satisfied by
+  // `slides/lecture-1/../../secret`, which climbs straight back out of it.
+  const tail = path.slice(prefix.length).split('/');
+  if (tail.some(segment => segment === '' || segment === '.' || segment === '..')) {
+    return 'escapes_folder';
+  }
+
+  if (typeof slide.source_size === 'number' && slide.source_size > SLIDE_FILE_MAX_BYTES) {
+    return 'too_large';
+  }
+  return null;
+}
+
 export type SlideLinkValidation =
   | { ok: true; url: string; host: string }
   | { ok: false; error: string };
@@ -211,6 +262,20 @@ export function validateSlideLinkUrl(raw: string): SlideLinkValidation {
   if (!parsed.hostname) {
     return { ok: false, error: 'That link has no website in it.' };
   }
+
+  // `https://.` and `https://a..b` parse cleanly — `URL` takes any non-empty
+  // authority — and resolve nowhere. One TRAILING dot is the exception: it is
+  // the legal absolute-root form of a name, so it is stripped rather than
+  // refused, which also stops `example.com.` being stored as a second spelling
+  // of a host we already have. Everything else with an empty label is a link
+  // that cannot load, and storing it would put a dead destination behind a
+  // slide nobody can tell is dead until they click it. An IP literal has no
+  // empty labels and passes — deliberately; see the note above.
+  const hostname = parsed.hostname.endsWith('.') ? parsed.hostname.slice(0, -1) : parsed.hostname;
+  if (!hostname || hostname.split('.').some(label => label.length === 0)) {
+    return { ok: false, error: 'That link has no website in it.' };
+  }
+  if (hostname !== parsed.hostname) parsed.hostname = hostname;
 
   const url = parsed.toString();
   if (url.length > SLIDE_LINK_MAX_LENGTH) {

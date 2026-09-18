@@ -31,6 +31,55 @@ interface SlideQueryOptions {
 /** Error `code` set when a new slide's derived content path is already taken. */
 export const SLIDE_CONTENT_PATH_CONFLICT = 'SLIDE_CONTENT_PATH_CONFLICT';
 
+/**
+ * The unique index a colliding slide slug violates, and the field set Prisma
+ * reports for it.
+ *
+ * `slides` carries ONE composite unique — [classroom_id, slug] — so a bare
+ * `code === 'P2002'` test would be right today and wrong the moment a second
+ * one is added. Matching is EXACT on the field set, the same shape (and for the
+ * same reasons) as `isPageSlugConflict` in page.service.ts: Prisma does not pin
+ * `meta.target`, which arrives as an array of field names, the raw constraint
+ * name, or that name inside a one-element array depending on driver and version.
+ */
+const SLIDE_SLUG_INDEX_NAME = 'slides_classroom_id_slug_key';
+const SLIDE_SLUG_FIELD_SET = 'classroom_id,slug';
+
+/** Is this error a unique violation on the slide (classroom_id, slug) index? */
+export function isSlideSlugConflict(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false;
+  if ((error as { code?: unknown }).code !== 'P2002') return false;
+
+  const raw = (error as { meta?: { target?: unknown } }).meta?.target;
+  const tokens = (Array.isArray(raw) ? raw : typeof raw === 'string' ? raw.split(',') : [])
+    .map(token => String(token).trim().toLowerCase())
+    .filter(Boolean);
+  if (tokens.length === 0) return false;
+  if (tokens.length === 1 && tokens[0] === SLIDE_SLUG_INDEX_NAME) return true;
+  return [...tokens].sort().join(',') === SLIDE_SLUG_FIELD_SET;
+}
+
+/**
+ * The one refusal a taken content path gets, wherever it is discovered.
+ *
+ * `prepareSlideCreate` finds it with a read, and the insert finds it with a
+ * unique violation when two creates race past that read — a real window, since
+ * the read and the write are not one transaction and a deck create does a
+ * GitHub round trip in between. Both must say the same thing: the routes, the
+ * MCP tool and the slides app all branch on this `code`, and a raw P2002
+ * reaching them is an opaque 500 for what is a retitle-and-retry.
+ */
+export function slideContentPathConflict(contentPath: string, existingTitle?: string): Error {
+  return Object.assign(
+    new Error(
+      `A slide already uses the content path '${contentPath}'` +
+        (existingTitle ? ` (existing slide: "${existingTitle}")` : '') +
+        '. Choose a title that maps to a different URL path.'
+    ),
+    { code: SLIDE_CONTENT_PATH_CONFLICT }
+  );
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Lookup
 // ─────────────────────────────────────────────────────────────────────────────
@@ -319,12 +368,7 @@ export async function prepareSlideCreate({
     },
   });
   if (collision) {
-    throw Object.assign(
-      new Error(
-        `A slide deck already uses the content path '${contentPath}' (existing deck: "${collision.title}"). Choose a title that maps to a different URL path.`
-      ),
-      { code: SLIDE_CONTENT_PATH_CONFLICT }
-    );
+    throw slideContentPathConflict(contentPath, collision.title);
   }
 
   // `orgLogin`/`repo` are the checks above, in a form the caller can use: the
@@ -379,15 +423,26 @@ export async function createSlide({
     message: `Create slides: ${title}`,
   });
 
-  const slide = await getPrisma().slide.create({
-    data: {
-      title,
-      slug,
-      content_path: contentPath,
-      classroom_id: classroomId,
-      created_by: createdBy,
-    },
-  });
+  // The collision check above is a READ, and the write is a separate statement
+  // with a GitHub commit in between — a second create for the same title that
+  // started in that window passed the same read and is inserting too. One of
+  // them loses on the unique index, and it has to lose with the refusal the
+  // read would have given it rather than a raw P2002.
+  let slide;
+  try {
+    slide = await getPrisma().slide.create({
+      data: {
+        title,
+        slug,
+        content_path: contentPath,
+        classroom_id: classroomId,
+        created_by: createdBy,
+      },
+    });
+  } catch (error: unknown) {
+    if (isSlideSlugConflict(error)) throw slideContentPathConflict(contentPath);
+    throw error;
+  }
 
   // Update manifest after creating the slide (non-fatal on failure).
   try {

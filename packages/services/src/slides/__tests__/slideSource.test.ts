@@ -17,6 +17,7 @@ import {
   assertFileSlide,
   isDeckSlide,
   slideFileExtension,
+  slideFileSourceProblem,
   slideFileStorageName,
   slideKindLabel,
   slideLinkHost,
@@ -148,6 +149,95 @@ describe('validateSlideLinkUrl', () => {
 
   it('refuses a link past the length cap', () => {
     expect(validateSlideLinkUrl(`https://example.com/${'a'.repeat(3000)}`).ok).toBe(false);
+  });
+
+  it('refuses a host that is not a host', () => {
+    // `URL` takes any non-empty authority, so all of these parse — and none of
+    // them resolve anywhere. Stored, each is a slide that looks fine in the
+    // list and dead-ends the first student who clicks it.
+    for (const raw of [
+      'https://.',
+      'https://./deck',
+      'https://..',
+      'https://a..b/deck',
+      'https://.example.com/deck',
+    ]) {
+      expect(validateSlideLinkUrl(raw).ok).toBe(false);
+    }
+  });
+
+  it('strips one trailing dot rather than storing a second spelling of a host', () => {
+    // `example.com.` is the legal absolute-root form of `example.com`, not a
+    // different site — keeping both would put two chips and two stored links on
+    // one destination.
+    expect(validateSlideLinkUrl('https://Example.com./deck')).toEqual({
+      ok: true,
+      url: 'https://example.com/deck',
+      host: 'example.com',
+    });
+  });
+
+  it('still takes an IP literal, which is deliberate', () => {
+    // Nothing here ever FETCHES the destination — the browser is redirected to
+    // it — so a private address is a link that will not load, not an SSRF.
+    expect(validateSlideLinkUrl('https://10.0.0.5/deck').ok).toBe(true);
+    expect(validateSlideLinkUrl('https://[::1]/deck').ok).toBe(true);
+    expect(validateSlideLinkUrl('https://localhost/deck').ok).toBe(true);
+  });
+});
+
+/**
+ * The read-time guard on a stored FILE row.
+ *
+ * No write path in this codebase can produce a row that fails here — the
+ * storage name is sanitized ASCII and the cap is enforced before a byte is
+ * committed. It is checked anyway because the write and the read are separated
+ * by a database, and on the read side `source_path` is what gets signed into a
+ * public URL and handed to the git blobs API.
+ */
+describe('slideFileSourceProblem', () => {
+  const slide = {
+    content_path: 'slides/lecture-1',
+    source_path: 'slides/lecture-1/lecture-1.pdf',
+    source_size: 2048,
+  };
+
+  it('passes the row every upload path writes', () => {
+    expect(slideFileSourceProblem(slide)).toBeNull();
+    // Nested under the folder is still under the folder.
+    expect(
+      slideFileSourceProblem({ ...slide, source_path: 'slides/lecture-1/a/b.pdf' })
+    ).toBeNull();
+    // Size is optional — a legacy row with none is not a row to refuse.
+    expect(slideFileSourceProblem({ ...slide, source_size: null })).toBeNull();
+    expect(slideFileSourceProblem({ ...slide, source_size: SLIDE_FILE_MAX_BYTES })).toBeNull();
+  });
+
+  it('names a row with no document at all', () => {
+    expect(slideFileSourceProblem({ ...slide, source_path: null })).toBe('no_source');
+    expect(slideFileSourceProblem({ ...slide, source_path: '' })).toBe('no_source');
+  });
+
+  it('refuses anything that is not strictly inside the slide’s own folder', () => {
+    for (const source_path of [
+      'slides/other/lecture.pdf',
+      'slides/lecture-1/../../.env',
+      'slides/lecture-1/./a.pdf',
+      'slides/lecture-10/a.pdf', // prefix of the folder name, not the folder
+      'slides/lecture-1', // the folder itself
+      'slides/lecture-1/',
+      '.env',
+    ]) {
+      expect(slideFileSourceProblem({ ...slide, source_path })).toBe('escapes_folder');
+    }
+    // A row with no folder to check against cannot be checked, so it fails.
+    expect(slideFileSourceProblem({ ...slide, content_path: null })).toBe('escapes_folder');
+  });
+
+  it('refuses a row claiming more bytes than an upload may carry', () => {
+    expect(slideFileSourceProblem({ ...slide, source_size: SLIDE_FILE_MAX_BYTES + 1 })).toBe(
+      'too_large'
+    );
   });
 });
 

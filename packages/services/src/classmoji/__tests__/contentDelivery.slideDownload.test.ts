@@ -50,6 +50,7 @@ const classroom = {
 
 const fileSlide = {
   kind: 'FILE',
+  content_path: 'slides/lecture-1',
   source_path: SOURCE_PATH,
   source_filename: 'Lecture 1 — Intro.pdf',
 };
@@ -149,10 +150,48 @@ describe('resolveSlideDownloadUrl', () => {
       ok: false,
       reason: 'no_source',
     });
-    // A traversal in the column never becomes a lookup.
-    expect(
-      await resolveSlideDownloadUrl(classroom, { ...fileSlide, source_path: '../secrets.pdf' })
-    ).toEqual({ ok: false, reason: 'no_source' });
     expect(lookupContentAsset).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * Containment and size, checked on the READ.
+ *
+ * Every write path sanitizes the storage name and enforces the cap, so none of
+ * these rows can come out of this codebase. They are refused anyway because the
+ * write and the read are separated by a database: a hand-edited row, a restored
+ * backup or a future writer that forgot the rule would otherwise turn
+ * `source_path` into a path this function signs a public, ten-minute URL for.
+ */
+describe('resolveSlideDownloadUrl: a row that cannot be trusted', () => {
+  it('refuses a document outside the slide’s own folder, without a lookup', async () => {
+    for (const source_path of [
+      'slides/other-deck/deck.json',
+      'slides/lecture-1/../../.env',
+      'slides/lecture-1x/a.pdf', // prefix match, different folder
+      'slides/lecture-1', // the folder itself, not a file in it
+      'slides/lecture-1/',
+    ]) {
+      expect(await resolveSlideDownloadUrl(classroom, { ...fileSlide, source_path })).toEqual({
+        ok: false,
+        reason: 'source_rejected',
+      });
+    }
+    expect(lookupContentAsset).not.toHaveBeenCalled();
+  });
+
+  it('refuses a row claiming more bytes than the upload cap allows', async () => {
+    expect(
+      await resolveSlideDownloadUrl(classroom, { ...fileSlide, source_size: 400 * 1024 * 1024 })
+    ).toEqual({ ok: false, reason: 'source_rejected' });
+    expect(lookupContentAsset).not.toHaveBeenCalled();
+  });
+
+  it('still signs a row whose size is at the cap', async () => {
+    const result = await resolveSlideDownloadUrl(classroom, {
+      ...fileSlide,
+      source_size: 75 * 1024 * 1024,
+    });
+    expect(result.ok).toBe(true);
   });
 });

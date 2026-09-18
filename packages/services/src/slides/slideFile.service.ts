@@ -29,7 +29,12 @@
 
 import getPrisma from '@classmoji/database';
 import { ContentService } from '../content/ContentService.ts';
-import { recordContentAssets, removeContentAssets } from '../classmoji/contentAssets.service.ts';
+import {
+  isDeliverableClassroom,
+  recordContentAssets,
+  removeContentAssets,
+  type DeliverableClassroom,
+} from '../classmoji/contentAssets.service.ts';
 import * as contentManifestService from '../classmoji/contentManifest.service.ts';
 import { ensureContentRepo } from '../classmoji/page.service.ts';
 import {
@@ -39,11 +44,16 @@ import {
   type SlideDownloadRefusal,
   type SlideDownloadResult,
 } from '../classmoji/contentDelivery.service.ts';
-import { prepareSlideCreate } from './slide.service.ts';
+import {
+  isSlideSlugConflict,
+  prepareSlideCreate,
+  slideContentPathConflict,
+} from './slide.service.ts';
 import type { SlideContentTarget } from './slideContent.service.ts';
 import {
   assertFileSlide,
   assertLinkSlide,
+  slideFileSourceProblem,
   slideFileStorageName,
   validateSlideFile,
   validateSlideLinkUrl,
@@ -69,6 +79,26 @@ export class SlideSourceError extends Error {
  * the same two questions for both kinds.
  */
 export interface SlideFileTarget extends SlideContentTarget {
+  /**
+   * Narrower than the deck engine's, and required where that one is optional.
+   *
+   * `content_key_version` and `content_delivery_enabled` decide which key signs
+   * a download and whether one is signed at all, and they used to be defaulted
+   * here (`?? 0`, `=== true`) for a caller that did not select them. That is
+   * exactly the silent failure `ResolveClassroom` in contentDelivery.service.ts
+   * made impossible on purpose: the difference between "the gate is off" and
+   * "the caller forgot to ask" is the difference between a safe rollout and a
+   * classroom served with the wrong key version. Typed as required so the
+   * compiler names every builder, and checked again at runtime by
+   * `slideDownloadUrl` — because a `select` list is not something tsc verified.
+   */
+  classroom?:
+    | (NonNullable<SlideContentTarget['classroom']> & {
+        id: string;
+        content_key_version: number;
+        content_delivery_enabled: boolean;
+      })
+    | null;
   source_path?: string | null;
   source_filename?: string | null;
   source_mime?: string | null;
@@ -132,24 +162,48 @@ export async function createFileSlide({
     message: `Add slide file: ${title}`,
   });
 
-  await recordContentAssets(classroomId, [
-    { path: sourcePath, sha: commit.sha, size: file.length },
-  ]);
-
-  const slide = await getPrisma().slide.create({
-    data: {
-      title,
-      slug,
-      content_path: contentPath,
-      classroom_id: classroomId,
-      created_by: createdBy,
-      kind: 'FILE',
-      source_path: sourcePath,
-      source_filename: displayFilename(filename, storageName),
-      source_mime: validation.mime,
-      source_size: file.length,
-    },
+  // BEFORE the row, and fatal when it fails: the download URL is signed from
+  // the map, so a slide whose row exists and whose map row does not is an
+  // upload that reported success and 404s (`not_in_map`) until the next sync
+  // sweeps the path in — up to a day later. Refusing here leaves an orphan blob
+  // in the repo instead, which costs repo size and is fixed by uploading again.
+  await recordSlideFileAsset(classroom, {
+    path: sourcePath,
+    sha: commit.sha,
+    size: file.length,
   });
+
+  let slide;
+  try {
+    slide = await getPrisma().slide.create({
+      data: {
+        title,
+        slug,
+        content_path: contentPath,
+        classroom_id: classroomId,
+        created_by: createdBy,
+        kind: 'FILE',
+        source_path: sourcePath,
+        source_filename: displayFilename(filename, storageName),
+        source_mime: validation.mime,
+        source_size: file.length,
+      },
+    });
+  } catch (error: unknown) {
+    // The collision check in `prepareSlideCreate` is a read, and the commit
+    // above sits between it and this insert — a second create for the same
+    // title started in that window passed the same read. The loser gets the
+    // refusal the read would have given it, and its upload is cleaned up.
+    if (!isSlideSlugConflict(error)) throw error;
+    await discardLostUpload({
+      classroomId,
+      gitOrganization: classroom.git_organization,
+      repo,
+      path: sourcePath,
+      title,
+    });
+    throw slideContentPathConflict(contentPath);
+  }
 
   await refreshManifest(classroomId, 'slide file creation');
 
@@ -183,17 +237,25 @@ export async function createLinkSlide({
 
   const { slug, contentPath } = await prepareSlideCreate({ classroomId, title });
 
-  const slide = await getPrisma().slide.create({
-    data: {
-      title,
-      slug,
-      content_path: contentPath,
-      classroom_id: classroomId,
-      created_by: createdBy,
-      kind: 'LINK',
-      source_url: link.url,
-    },
-  });
+  // Same race as the other two creates, with nothing to clean up: a link that
+  // lost the slug wrote no file. See `createSlide` for the window itself.
+  let slide;
+  try {
+    slide = await getPrisma().slide.create({
+      data: {
+        title,
+        slug,
+        content_path: contentPath,
+        classroom_id: classroomId,
+        created_by: createdBy,
+        kind: 'LINK',
+        source_url: link.url,
+      },
+    });
+  } catch (error: unknown) {
+    if (isSlideSlugConflict(error)) throw slideContentPathConflict(contentPath);
+    throw error;
+  }
 
   await refreshManifest(classroomId, 'link slide creation');
 
@@ -258,9 +320,15 @@ export async function replaceSlideFile({
     message: `Replace slide file: ${slide.title}`,
   });
 
-  await recordContentAssets(slide.classroom_id, [
-    { path: sourcePath, sha: commit.sha, size: file.length },
-  ]);
+  // BEFORE the row moves, and fatal when it fails — the same rule as the
+  // create, one step stronger here: a replace whose map row did not land would
+  // point the slide at a document nobody can download, and the document it was
+  // serving a second ago is still there and still fine. Failing keeps it.
+  await recordSlideFileAsset(slide.classroom, {
+    path: sourcePath,
+    sha: commit.sha,
+    size: file.length,
+  });
 
   const updated = await getPrisma().slide.update({
     where: { id: slideId },
@@ -331,18 +399,31 @@ export async function slideDownloadUrl(slide: SlideFileTarget): Promise<SlideDow
   if (!classroom?.id || !classroom.content_repo || !login) {
     return { ok: false, reason: 'delivery_off' };
   }
+  // The two the type now demands, asked again at the boundary. A row built by a
+  // `select` the compiler never saw can still arrive without them, and the
+  // defaults that used to stand in here (`?? 0`, `=== true`) turned that into a
+  // signature made with the wrong key version, or a silently disabled gate.
+  // Neither is a state to guess at, so it is a refusal with its own name.
+  if (
+    typeof classroom.content_key_version !== 'number' ||
+    typeof classroom.content_delivery_enabled !== 'boolean'
+  ) {
+    return { ok: false, reason: 'incomplete_classroom' };
+  }
   return resolveSlideDownloadUrl(
     {
       id: classroom.id,
-      content_key_version: classroom.content_key_version ?? 0,
+      content_key_version: classroom.content_key_version,
       content_repo: classroom.content_repo,
-      content_delivery_enabled: classroom.content_delivery_enabled === true,
+      content_delivery_enabled: classroom.content_delivery_enabled,
       git_organization: { login },
     },
     {
       kind: slide.kind ?? 'DECK',
+      content_path: slide.content_path,
       source_path: slide.source_path ?? null,
       source_filename: slide.source_filename ?? null,
+      source_size: slide.source_size ?? null,
     }
   );
 }
@@ -367,6 +448,16 @@ export async function readSlideFileBytes(
   const repo = slide.classroom?.content_repo;
   const path = slide.source_path;
   if (!gitOrganization?.login || !repo || !path) return null;
+
+  // The same self-defence the signed path applies, for the reader that has no
+  // signer in front of it: this one hands `source_path` straight to the git
+  // blobs API, so a row naming a path outside the slide's own folder would read
+  // any file in the content repo, and a row claiming 400 MB would buffer it.
+  const problem = slideFileSourceProblem(slide);
+  if (problem) {
+    console.warn(`[slideFile] Refusing to read ${path} for slide ${slide.id}: ${problem}`);
+    return null;
+  }
 
   const file = await ContentService.getLargeContent({
     gitOrganization,
@@ -466,6 +557,81 @@ function downloadNameFor(slide: SlideFileTarget): string {
 function displayFilename(filename: string, storageName: string): string {
   const tail = filename.split(/[/\\]/).pop() ?? '';
   return normalizeDownloadFilename(tail) ?? storageName;
+}
+
+/**
+ * Write the asset-map row for a just-committed slide document, or refuse.
+ *
+ * `recordContentAssets` never throws and answers `false` for two very different
+ * things: a classroom the delivery layer cannot serve (no GitHub installation —
+ * there is no map to write to and never was) and a write that actually failed.
+ * Both call sites used to discard that answer, which made the second one
+ * invisible: the commit landed, the row landed, and the download 404'd with
+ * `not_in_map` until the next sync — up to twenty-four hours of a slide that
+ * looks uploaded and cannot be opened.
+ *
+ * So the deliverable case is asked FIRST, with the shared predicate, and only
+ * the remaining `false` is treated as a fault. One retry, because the thing it
+ * most often is is a transient database blip and the write is an idempotent
+ * upsert; then it throws, and the caller has ordered itself so that throwing
+ * leaves no row pointing at an unsignable file.
+ */
+async function recordSlideFileAsset(
+  classroom: DeliverableClassroom & { id: string },
+  entry: { path: string; sha: string; size: number }
+): Promise<void> {
+  if (!isDeliverableClassroom(classroom)) return;
+  if (await recordContentAssets(classroom.id, [entry])) return;
+  if (await recordContentAssets(classroom.id, [entry])) return;
+  throw new Error(
+    `Could not record ${entry.path} in the content asset map — the upload was not completed. ` +
+      'Try again in a moment.'
+  );
+}
+
+/**
+ * Best-effort removal of a document whose slide row never landed.
+ *
+ * Only ever reached after a slug conflict, which means some OTHER slide now
+ * owns this folder — and, if the create that won uploaded a file with the same
+ * name, this exact path. Deleting it then would take the winner's document out
+ * from under it, so the rows are asked who owns the path and anything but
+ * "nobody" leaves the blob where it is. A leftover blob costs repo size;
+ * deleting the wrong one costs a lecture. The whole thing is wrapped, because a
+ * failed cleanup must not replace the conflict the caller is about to report.
+ */
+async function discardLostUpload({
+  classroomId,
+  gitOrganization,
+  repo,
+  path,
+  title,
+}: {
+  classroomId: string;
+  gitOrganization: NonNullable<NonNullable<SlideContentTarget['classroom']>['git_organization']>;
+  repo: string;
+  path: string;
+  title: string;
+}): Promise<void> {
+  try {
+    const owner = await getPrisma().slide.findFirst({
+      where: { classroom_id: classroomId, source_path: path },
+      select: { id: true },
+    });
+    if (owner) {
+      console.warn(`[slideFile] Left ${path} in place — slide ${owner.id} now owns it.`);
+      return;
+    }
+    await ContentService.delete({
+      gitOrganization,
+      repo,
+      path,
+      message: `Remove abandoned slide file: ${title}`,
+    });
+    await removeContentAssets(classroomId, [path]);
+  } catch (error: unknown) {
+    console.error('[slideFile] Could not remove the abandoned slide file:', error);
+  }
 }
 
 /** The single-file commit both write paths share. */

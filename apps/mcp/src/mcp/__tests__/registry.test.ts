@@ -116,6 +116,41 @@ beforeAll(() => {
     },
   });
 
+  registerToolDefinition<{ code?: string }>({
+    name: 't_service_refusal',
+    title: 'Service refusal',
+    description: 'handler throws a coded service error (SlideKindError-shaped)',
+    scope: 'read',
+    roles: null,
+    inputSchema: { code: z.string().optional() },
+    handler: async args => {
+      // The shape `SlideKindError` / `SlideSourceError` actually arrive in:
+      // an Error with a machine-readable `code` and a sentence meant for the
+      // caller. Matched structurally by the registry, so the real classes do
+      // not have to be imported (and the deck engine with them).
+      throw Object.assign(
+        new Error('Editing deck content is only available for slide decks (this slide is a file).'),
+        { code: args.code ?? 'SLIDE_KIND_MISMATCH', status: 409, name: 'SlideKindError' }
+      );
+    },
+  });
+
+  registerToolDefinition({
+    name: 't_wrapped_refusal',
+    title: 'Wrapped service refusal',
+    description: 'handler throws an error whose CAUSE carries the coded refusal',
+    scope: 'read',
+    roles: null,
+    inputSchema: {},
+    handler: async () => {
+      throw new Error('slide_update failed', {
+        cause: Object.assign(new Error('Team editing and speaker notes are deck-only settings.'), {
+          code: 'SLIDE_KIND_MISMATCH',
+        }),
+      });
+    },
+  });
+
   registerToolDefinition({
     name: 't_limited',
     title: 'Limited',
@@ -511,5 +546,54 @@ describe('async error wrapping (S5)', () => {
     const raw = JSON.stringify(result);
     expect(raw).not.toContain('secret internal detail');
     expect(raw).not.toContain('hunter2');
+  });
+});
+
+/**
+ * A service REFUSAL is not an internal fault.
+ *
+ * `SlideKindError` ('SLIDE_KIND_MISMATCH', 409) is thrown when a deck tool — or
+ * `slide_update`'s deck-only toggles — is aimed at a FILE or LINK slide, and
+ * `SlideSourceError` ('SLIDE_SOURCE_REJECTED') when an upload or a link is
+ * refused by policy. Both carry a sentence written for the caller, and both
+ * came back as `internal` / "Internal server error": an opaque 500 for
+ * something the caller could have fixed by reading it. The generic wrapper
+ * stays exactly as it is for everything else — that is what keeps a database
+ * password out of a tool result.
+ */
+describe('coded service refusals are reported, not swallowed (S5)', () => {
+  it('maps a slide-kind mismatch to invalid_params, message and code intact', async () => {
+    const client = await connectClient(makeViewer(['read']));
+
+    const parsed = parseErrorResult(await callTool(client, 't_service_refusal'));
+    expect(parsed.error).toBe('invalid_params');
+    expect(parsed.code).toBe('SLIDE_KIND_MISMATCH');
+    expect(parsed.message).toContain('only available for slide decks');
+  });
+
+  it('maps a rejected slide source the same way', async () => {
+    const client = await connectClient(makeViewer(['read']));
+
+    const parsed = parseErrorResult(
+      await callTool(client, 't_service_refusal', { code: 'SLIDE_SOURCE_REJECTED' })
+    );
+    expect(parsed.error).toBe('invalid_params');
+    expect(parsed.code).toBe('SLIDE_SOURCE_REJECTED');
+  });
+
+  it('finds the refusal when a service wrapped it as a cause', async () => {
+    const client = await connectClient(makeViewer(['read']));
+
+    const parsed = parseErrorResult(await callTool(client, 't_wrapped_refusal'));
+    expect(parsed.error).toBe('invalid_params');
+    expect(parsed.code).toBe('SLIDE_KIND_MISMATCH');
+  });
+
+  it('still hides an error whose code means nothing to this server', async () => {
+    const client = await connectClient(makeViewer(['read']));
+
+    const parsed = parseErrorResult(await callTool(client, 't_service_refusal', { code: 'P2002' }));
+    expect(parsed.error).toBe('internal');
+    expect(parsed.message).toBe('Internal server error');
   });
 });

@@ -23,6 +23,8 @@ import {
   lookupContentTree,
 } from './contentAssets.service.ts';
 import { extractOwnRepoPath } from './contentRefs.ts';
+// The pure slide-source policy — no Prisma, no GitHub, no cycle back to here.
+import { slideFileSourceProblem } from '../slides/slideSource.ts';
 
 /** Where shared slide themes live in a content repo. Mirrors contentAssets. */
 const THEMES_FOLDER = '.slidesthemes';
@@ -118,6 +120,16 @@ export async function bumpContentKeyVersion(
 
 /** Signature lifetime a render mints URLs for. See @classmoji/content-signing. */
 export type ResolveTier = Tier;
+
+/**
+ * The tiers a VIEW can be signed at — every tier but `download`. `tierFor`
+ * returns this rather than `ResolveTier` so a surface that renders content
+ * (the pages app's asset resolver, the class site) keeps an exhaustive
+ * three-way union and never has to say what it would do with a save-to-disk
+ * URL it can never be handed. `download` is minted in exactly one place,
+ * `resolveSlideDownloadUrl`, and never chosen by visibility.
+ */
+export type ViewTier = Exclude<Tier, 'download'>;
 
 /** The classroom fields a resolve needs. Narrow on purpose — no secrets. */
 export interface ResolveClassroom {
@@ -269,7 +281,7 @@ export function tierFor({
   canEdit: boolean;
   preview?: boolean;
   isPublic?: boolean;
-}): ResolveTier {
+}): ViewTier {
   if (canEdit || preview) return 'edit';
   if (isPublic) return 'month';
   return 'week';
@@ -579,8 +591,21 @@ export type SlideDownloadRefusal =
   | 'not_a_file'
   /** A FILE row with no `source_path`. Broken data, not a delivery problem. */
   | 'no_source'
+  /**
+   * `source_path` is outside the slide's own folder, or `source_size` is past
+   * the upload cap. A row no write path in this codebase could have produced,
+   * so it is refused rather than signed — see `slideFileSourceProblem`.
+   */
+  | 'source_rejected'
   /** The layer is off for this deployment or this classroom. Stream it instead. */
   | 'delivery_off'
+  /**
+   * A required classroom field was missing at runtime — a `select` that left
+   * out `content_key_version` or `content_delivery_enabled`. Distinct from
+   * `delivery_off` on purpose: "the caller did not say" is a bug in the
+   * caller, and defaulting it would sign with the wrong key or skip the gate.
+   */
+  | 'incomplete_classroom'
   /** The map has no blob row for the path — an unsynced or unreadable repo. */
   | 'not_in_map'
   /** The signer refused (wrong classroom, a tree row, an ext it will not take). */
@@ -593,8 +618,15 @@ export type SlideDownloadResult =
 /** The slide fields a download needs. A row satisfies it; so does a narrow select. */
 export interface DownloadableSlide {
   kind?: string | null;
+  /**
+   * The slide's own folder. Required, because it is what `source_path` is
+   * checked AGAINST: a download is this slide handing out its own document,
+   * and a path that is not under this folder is not that.
+   */
+  content_path: string;
   source_path?: string | null;
   source_filename?: string | null;
+  source_size?: number | null;
 }
 
 /**
@@ -636,6 +668,15 @@ export async function resolveSlideDownloadUrl(
   slide: DownloadableSlide
 ): Promise<SlideDownloadResult> {
   if (slide.kind !== 'FILE') return { ok: false, reason: 'not_a_file' };
+
+  // Self-defence before anything is looked up, let alone signed: the row's
+  // `source_path` must be the slide's OWN document and the size it claims must
+  // be one the upload policy would have taken. Neither can be false for a row
+  // this codebase wrote — which is exactly why a row where it IS false is not
+  // one to sign a ten-minute public URL for. See `slideFileSourceProblem`.
+  const problem = slideFileSourceProblem(slide);
+  if (problem)
+    return { ok: false, reason: problem === 'no_source' ? 'no_source' : 'source_rejected' };
 
   const path = slide.source_path ? normalizeRepoRelative(slide.source_path) : null;
   if (!path) return { ok: false, reason: 'no_source' };

@@ -270,3 +270,129 @@ describe('importing slides of every kind', () => {
     expect(indexOneFile).toHaveBeenCalledTimes(1);
   });
 });
+
+/**
+ * A slide document is a different ORDER of thing from a deck, and the commit
+ * has to treat it as one.
+ *
+ * A deck is kilobytes of text; a lecture PDF or a Keynote is up to the 75 MB
+ * the upload policy allows, staged base64 and a third larger again. Putting
+ * them in the deck batch meant a term of decks rode on whether every document
+ * in the same run could be read and written — one 60 MB file and the commit
+ * failed, taking every deck with it — and it meant the whole course's documents
+ * sat in memory at once before a single byte went out.
+ */
+describe('a file slide’s document gets its own commit', () => {
+  const secondFile = {
+    ...fileSlide,
+    id: 'src-file-2',
+    title: 'Lecture 2',
+    slug: 'lecture-2',
+    content_path: 'slides/lecture-2',
+    source_path: 'slides/lecture-2/lecture-2.pdf',
+  };
+
+  /** Every `uploadBatch` call's paths, in the order they were committed. */
+  const commits = () =>
+    uploadBatch.mock.calls.map(([args]) =>
+      (args as { files: Array<{ path: string }> }).files.map(file => file.path)
+    );
+
+  it('keeps the documents out of the deck batch, one commit each', async () => {
+    sourceRows([deckSlide, fileSlide, secondFile]);
+
+    const summary = await run();
+
+    expect(summary.slides).toBe(3);
+    expect(commits()).toEqual([
+      // The decks, together, first — and nothing else in with them.
+      ['slides/week-1/index.html'],
+      ['slides/lecture-1/lecture-1.pdf'],
+      ['slides/lecture-2/lecture-2.pdf'],
+    ]);
+  });
+
+  it('loses only the slide whose document will not commit', async () => {
+    sourceRows([deckSlide, fileSlide, secondFile]);
+    // The first document's commit fails; everything else is fine.
+    uploadBatch.mockImplementation(async ({ files }: { files: Array<{ path: string }> }) => {
+      if (files.some(file => file.path === 'slides/lecture-1/lecture-1.pdf')) {
+        throw new Error('413 Payload Too Large');
+      }
+      return {
+        commit: 'c1',
+        filesUploaded: files.length,
+        files: files.map((file, index) => ({ path: file.path, sha: `sha-${index}` })),
+      };
+    });
+
+    const summary = await run();
+
+    // The deck and the other document came across; only Lecture 1 did not.
+    expect(summary.slides).toBe(2);
+    expect(createdRows().map(row => row.title)).toEqual(['Week 1', 'Lecture 2']);
+    expect(summary.warnings.join(' ')).toContain('Lecture 1');
+    // And it is a warning, not a dead slide: no row points at the document
+    // that was never written.
+    expect(enqueueDeckThumbnail).toHaveBeenCalledTimes(1);
+  });
+
+  it('reads one document at a time, after the decks are already safe', async () => {
+    sourceRows([deckSlide, fileSlide, secondFile]);
+    const order: string[] = [];
+    getLargeContent.mockImplementation(async ({ path }: { path: string }) => {
+      order.push(`read:${path}`);
+      return { content: 'JVBERi0xLjc=', sha: 'a'.repeat(40) };
+    });
+    uploadBatch.mockImplementation(async ({ files }: { files: Array<{ path: string }> }) => {
+      order.push(`commit:${files.map(file => file.path).join(',')}`);
+      return {
+        commit: 'c1',
+        filesUploaded: files.length,
+        files: files.map((file, index) => ({ path: file.path, sha: `sha-${index}` })),
+      };
+    });
+
+    await run();
+
+    // Never two documents in memory at once: each read is followed by its own
+    // commit, and the deck batch is out of the way before the first read.
+    expect(order).toEqual([
+      'commit:slides/week-1/index.html',
+      'read:slides/lecture-1/lecture-1.pdf',
+      'commit:slides/lecture-1/lecture-1.pdf',
+      'read:slides/lecture-2/lecture-2.pdf',
+      'commit:slides/lecture-2/lecture-2.pdf',
+    ]);
+  });
+
+  it('does not touch the deck batch when a document is unreadable', async () => {
+    sourceRows([deckSlide, fileSlide]);
+    getMeta.mockImplementation(async ({ path }: { path: string }) =>
+      path.endsWith('.pdf') ? null : { sha: 'a'.repeat(40), size: 64 }
+    );
+
+    const summary = await run();
+
+    expect(summary.slides).toBe(1);
+    expect(createdRows().map(row => row.kind)).toEqual(['DECK']);
+    expect(commits()).toEqual([['slides/week-1/index.html']]);
+  });
+});
+
+describe('the old single-batch behaviour, now split', () => {
+  it('still fails the whole slide pass when the DECK commit fails', async () => {
+    // Unchanged on purpose: decks are copied verbatim as a set and a partial
+    // one is a half-imported course. Only the documents were pulled out.
+    sourceRows([deckSlide, fileSlide]);
+    uploadBatch.mockRejectedValueOnce(new Error('GitHub is having a day'));
+
+    const summary = await run();
+
+    expect(summary.slides).toBe(0);
+    expect(slideCreate).not.toHaveBeenCalled();
+    expect(summary.warnings.join(' ')).toContain('slide content commit failed');
+    // And it stopped there — no document was read or written afterwards.
+    expect(getLargeContent).not.toHaveBeenCalled();
+  });
+});

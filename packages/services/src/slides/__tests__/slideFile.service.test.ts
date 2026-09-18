@@ -73,10 +73,12 @@ vi.mock('../../content/ContentService.ts', () => ({
 
 const ensureContentAssetsOutcome = vi.fn(async () => ({ mapIsTrustworthy: true }));
 const lookupContentAsset = vi.fn();
-const recordContentAssets = vi.fn(async (_id: string, entries: Array<{ path: string }>) => {
+/** Named so `beforeEach` can put it back — `clearAllMocks` keeps implementations. */
+const recordContentAssetsOk = async (_id: string, entries: Array<{ path: string }>) => {
   events.push(`record:${entries.map(entry => entry.path).join(',')}`);
   return true;
-});
+};
+const recordContentAssets = vi.fn(recordContentAssetsOk);
 const removeContentAssets = vi.fn(async (_id: string, paths: string[]) => {
   events.push(`forget:${paths.join(',')}`);
   return true;
@@ -156,6 +158,7 @@ beforeEach(() => {
   }));
   ensureContentAssetsOutcome.mockResolvedValue({ mapIsTrustworthy: true });
   lookupContentAsset.mockResolvedValue({ sha: 'b'.repeat(40), type: 'blob', size: PDF.length });
+  recordContentAssets.mockImplementation(recordContentAssetsOk);
   vi.spyOn(console, 'warn').mockImplementation(() => {});
   vi.spyOn(console, 'error').mockImplementation(() => {});
 });
@@ -213,6 +216,136 @@ describe('createFileSlide', () => {
     expect(ensureContentRepo).not.toHaveBeenCalled();
   });
 
+  it('fails the upload — and writes no row — when the asset map will not take it', async () => {
+    // The download URL is signed FROM the map. A row whose map row is missing
+    // is an upload that reported success and 404s (`not_in_map`) until the next
+    // sync, which is up to a day away. Better to say the upload failed.
+    recordContentAssets.mockResolvedValue(false);
+
+    await expect(
+      createFileSlide({
+        classroomId: CLASSROOM_ID,
+        title: 'Lecture 1',
+        createdBy: 'user-1',
+        filename: 'a.pdf',
+        file: PDF,
+      })
+    ).rejects.toThrow(/asset map/i);
+
+    // Retried once before giving up, and the row never happened.
+    expect(recordContentAssets).toHaveBeenCalledTimes(2);
+    expect(slideCreate).not.toHaveBeenCalled();
+  });
+
+  it('retries the map write once, and carries on when the retry lands', async () => {
+    recordContentAssets.mockResolvedValueOnce(false);
+
+    await expect(
+      createFileSlide({
+        classroomId: CLASSROOM_ID,
+        title: 'Lecture 1',
+        createdBy: 'user-1',
+        filename: 'a.pdf',
+        file: PDF,
+      })
+    ).resolves.toMatchObject({ path: 'slides/lecture-1/a.pdf' });
+    expect(slideCreate).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not treat a classroom with no map as a failed write', async () => {
+    // `recordContentAssets` answers `false` for a classroom the delivery layer
+    // cannot serve as well as for a write that failed, and the first is an
+    // ordinary state: no installation id means there is no map to write to.
+    classroomFindUnique.mockResolvedValue({
+      ...classroom,
+      git_organization: { ...gitOrganization, github_installation_id: null },
+    });
+    recordContentAssets.mockResolvedValue(false);
+
+    await expect(
+      createFileSlide({
+        classroomId: CLASSROOM_ID,
+        title: 'Lecture 1',
+        createdBy: 'user-1',
+        filename: 'a.pdf',
+        file: PDF,
+      })
+    ).resolves.toMatchObject({ path: 'slides/lecture-1/a.pdf' });
+    expect(recordContentAssets).not.toHaveBeenCalled();
+  });
+
+  it('turns a lost create race into the conflict, and cleans up its own upload', async () => {
+    // Two creates for the same title both passed the findFirst check; this one
+    // lost on the unique index. The caller must see the refusal the check would
+    // have given it, not a raw P2002.
+    slideFindFirst.mockResolvedValueOnce(null).mockResolvedValueOnce(null);
+    slideCreate.mockRejectedValueOnce(
+      Object.assign(new Error('Unique constraint failed'), {
+        code: 'P2002',
+        meta: { target: ['classroom_id', 'slug'] },
+      })
+    );
+
+    await expect(
+      createFileSlide({
+        classroomId: CLASSROOM_ID,
+        title: 'Lecture 1',
+        createdBy: 'user-1',
+        filename: 'a.pdf',
+        file: PDF,
+      })
+    ).rejects.toMatchObject({ code: 'SLIDE_CONTENT_PATH_CONFLICT' });
+
+    // Nobody owns the path, so the abandoned document goes.
+    expect(events).toContain('delete:slides/lecture-1/a.pdf');
+    expect(events).toContain('forget:slides/lecture-1/a.pdf');
+  });
+
+  it('leaves the blob alone when the winner uploaded to the same path', async () => {
+    // The race that matters: both uploads chose the same storage name, so the
+    // path this create wrote is the path the WINNER's row now points at.
+    // Deleting "our" file would delete their lecture.
+    slideFindFirst.mockResolvedValueOnce(null).mockResolvedValueOnce({ id: 'winning-slide' });
+    slideCreate.mockRejectedValueOnce(
+      Object.assign(new Error('Unique constraint failed'), {
+        code: 'P2002',
+        meta: { target: ['classroom_id', 'slug'] },
+      })
+    );
+
+    await expect(
+      createFileSlide({
+        classroomId: CLASSROOM_ID,
+        title: 'Lecture 1',
+        createdBy: 'user-1',
+        filename: 'a.pdf',
+        file: PDF,
+      })
+    ).rejects.toMatchObject({ code: 'SLIDE_CONTENT_PATH_CONFLICT' });
+
+    expect(deleteFile).not.toHaveBeenCalled();
+    expect(removeContentAssets).not.toHaveBeenCalled();
+  });
+
+  it('rethrows a unique violation that is not the slug one', async () => {
+    slideCreate.mockRejectedValueOnce(
+      Object.assign(new Error('Unique constraint failed'), {
+        code: 'P2002',
+        meta: { target: ['id'] },
+      })
+    );
+    await expect(
+      createFileSlide({
+        classroomId: CLASSROOM_ID,
+        title: 'Lecture 1',
+        createdBy: 'user-1',
+        filename: 'a.pdf',
+        file: PDF,
+      })
+    ).rejects.toMatchObject({ code: 'P2002' });
+    expect(deleteFile).not.toHaveBeenCalled();
+  });
+
   it('refuses a slug collision before touching GitHub', async () => {
     // The content path is derived from the slug, so an unchecked create would
     // write INTO the existing slide's folder.
@@ -248,6 +381,23 @@ describe('createLinkSlide', () => {
     // No commit, no repo provisioning — a link is a row.
     expect(events).toEqual(['manifest']);
     expect(ensureContentRepo).not.toHaveBeenCalled();
+  });
+
+  it('turns a lost create race into the conflict', async () => {
+    slideCreate.mockRejectedValueOnce(
+      Object.assign(new Error('Unique constraint failed'), {
+        code: 'P2002',
+        meta: { target: ['classroom_id', 'slug'] },
+      })
+    );
+    await expect(
+      createLinkSlide({
+        classroomId: CLASSROOM_ID,
+        title: 'Reading list',
+        createdBy: 'user-1',
+        url: 'https://example.com/reading',
+      })
+    ).rejects.toMatchObject({ code: 'SLIDE_CONTENT_PATH_CONFLICT' });
   });
 
   it('refuses a link that is not plain https', async () => {
@@ -319,6 +469,20 @@ describe('replaceSlideFile', () => {
     await expect(
       replaceSlideFile({ slideId: 'slide-1', filename: 'Week 2.pdf', file: PDF })
     ).resolves.toMatchObject({ path: 'slides/lecture-1/week-2.pdf' });
+  });
+
+  it('keeps serving the old document when the asset map will not take the new one', async () => {
+    slideFindUnique.mockResolvedValue(existing);
+    recordContentAssets.mockResolvedValue(false);
+
+    await expect(
+      replaceSlideFile({ slideId: 'slide-1', filename: 'Week 2.pdf', file: PDF })
+    ).rejects.toThrow(/asset map/i);
+
+    // The row never moved and the old file is still there — the slide is
+    // exactly as it was, which is the point of failing before the update.
+    expect(slideUpdate).not.toHaveBeenCalled();
+    expect(deleteFile).not.toHaveBeenCalled();
   });
 
   it('refuses a slide that is not a file', async () => {
@@ -403,5 +567,54 @@ describe('opening a file slide', () => {
     expect(
       await slideDownloadUrl({ ...slide, classroom: { ...classroom, content_repo: null } })
     ).toEqual({ ok: false, reason: 'delivery_off' });
+  });
+
+  it('refuses, rather than defaulting, a classroom that arrived incomplete', async () => {
+    // A `select` that left the two delivery columns out. Defaulting them (the
+    // old `?? 0` / `=== true`) signs with the wrong key version or silently
+    // switches the gate off, and neither is visible from the outside.
+    for (const missing of [
+      { content_key_version: undefined },
+      { content_delivery_enabled: undefined },
+    ]) {
+      expect(
+        await slideDownloadUrl({
+          ...slide,
+          classroom: { ...classroom, ...missing } as unknown as typeof classroom,
+        })
+      ).toEqual({ ok: false, reason: 'incomplete_classroom' });
+    }
+    // And an incomplete context is NOT a reason to stream the bytes instead —
+    // that fallback belongs to `delivery_off` alone.
+    expect(
+      await openSlideFile({
+        ...slide,
+        classroom: { ...classroom, content_key_version: undefined } as unknown as typeof classroom,
+      })
+    ).toEqual({ mode: 'unavailable', reason: 'incomplete_classroom' });
+    expect(getLargeContent).not.toHaveBeenCalled();
+  });
+
+  it('will not read a document that is not inside the slide’s own folder', async () => {
+    // `readSlideFileBytes` hands `source_path` straight to the git blobs API,
+    // so a row naming a path outside the folder would read any file in the
+    // content repo. No write path can produce one; the reader refuses it anyway.
+    const bytes = await readSlideFileBytes({
+      ...slide,
+      source_path: 'slides/other-deck/deck.json',
+      classroom: { ...classroom, content_delivery_enabled: false },
+    });
+    expect(bytes).toBeNull();
+    expect(getLargeContent).not.toHaveBeenCalled();
+  });
+
+  it('will not read a document whose row claims more bytes than the cap', async () => {
+    const bytes = await readSlideFileBytes({
+      ...slide,
+      source_size: 400 * 1024 * 1024,
+      classroom: { ...classroom, content_delivery_enabled: false },
+    });
+    expect(bytes).toBeNull();
+    expect(getLargeContent).not.toHaveBeenCalled();
   });
 });
