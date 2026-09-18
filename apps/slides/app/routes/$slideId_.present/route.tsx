@@ -2,6 +2,7 @@ import { useMemo } from 'react';
 import { useLoaderData } from 'react-router';
 import getPrisma from '@classmoji/database';
 import { assertSlideAccess } from '@classmoji/auth/server';
+import { isDeckSlide } from '@classmoji/services/slides';
 import { SandpackRenderer } from '@classmoji/ui-components/sandpack';
 import RevealPresenter from '~/components/RevealPresenter';
 import {
@@ -10,6 +11,7 @@ import {
   readDeckText,
   resolveDeckDelivery,
 } from '~/utils/deckDelivery.server';
+import { deckOnlyRefusal } from '~/utils/slideKind';
 
 export const loader = async ({
   params,
@@ -43,6 +45,14 @@ export const loader = async ({
     slide,
     accessType: 'present',
   });
+
+  // Deck-only surface. A file or a link has no slides to present, and every line
+  // below reads an `index.html` those kinds never committed. Refused AFTER the
+  // access gate above, so this answers no question about a slide the caller
+  // could not already see.
+  if (!isDeckSlide(slide)) {
+    throw deckOnlyRefusal(slide.kind, 'present');
+  }
 
   // Get git org login for content URLs
   const gitOrgLogin = slide.classroom?.git_organization?.login;

@@ -61,6 +61,7 @@ import getPrisma from '@classmoji/database';
 import { ClassmojiService } from '@classmoji/services';
 import {
   generateDeckHtml,
+  isDeckSlide,
   loadDeck,
   type DeckJson,
   type DeckSlide,
@@ -293,6 +294,17 @@ export const loader = async ({
     // in it. See `refusalDetail` for why the distinction is worth making.
     console.warn(
       `[thumbnail-source] Refused a render for ${slideId}: ${refusalDetail(slide, verification)}`
+    );
+    throw renderRefusal();
+  }
+
+  // A file or a link has no deck to photograph. The render task no longer
+  // enqueues those, but a token minted before a kind change — or a hand-made
+  // request — must take the SAME bare refusal a bad token does, rather than a
+  // 500 out of `loadDeck` carrying a stack to an unauthenticated caller.
+  if (!isDeckSlide(slide)) {
+    console.warn(
+      `[thumbnail-source] Refused a render for ${slideId}: slide kind is ${String(slide.kind)}`
     );
     throw renderRefusal();
   }

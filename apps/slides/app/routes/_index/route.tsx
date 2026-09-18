@@ -5,10 +5,11 @@ import getPrisma from '@classmoji/database';
 import { getAuthSession, assertSlideAccess } from '@classmoji/auth/server';
 import { ClassmojiService } from '@classmoji/services';
 import { ContentService } from '@classmoji/content';
-import { slideService } from '@classmoji/services/slides';
+import { isDeckSlide, slideService } from '@classmoji/services/slides';
 import { deleteSlideVideos } from '~/utils/cloudinaryService.server';
 import { resolveDeckThumbnailUrls } from '~/utils/deckDelivery.server';
 import { enqueueDeckThumbnail } from '~/utils/deckThumbnailEnqueue.server';
+import { deckOnlyMessage, isDeckKind } from '~/utils/slideKind';
 
 export const loader = async ({ request }: { request: Request }) => {
   // 1. Require authentication
@@ -180,6 +181,7 @@ export const action = async ({ request }: { request: Request }) => {
       where: { id: slideId },
       select: {
         id: true,
+        kind: true,
         classroom_id: true,
         thumbnail_path: true,
         thumbnail_rendered_at: true,
@@ -187,6 +189,10 @@ export const action = async ({ request }: { request: Request }) => {
     });
     // Already has one: the client's copy of the loader data is simply behind.
     if (!slide || slide.thumbnail_path) return { intent: 'thumbnail', outcome: 'rate-limited' };
+    // A file or a link has no deck to screenshot. The render task refuses these
+    // too, but that refusal costs a queued run and a Browser Run slot; this one
+    // costs a comparison. Same shape as every other refusal here.
+    if (slide.kind !== 'DECK') return { intent: 'thumbnail', outcome: 'rate-limited' };
 
     return { intent: 'thumbnail', outcome: await enqueueDeckThumbnail(slide) };
   }
@@ -265,6 +271,16 @@ export const action = async ({ request }: { request: Request }) => {
 
       if (!slide) {
         return { error: 'Slide not found' };
+      }
+
+      // Deck-only. Everything below is written for a deck: it copies the folder,
+      // rewrites the paths inside `index.html`/`deck.json`, and creates a row
+      // with NO `kind` or `source_*` — which for a file slide would mean a DECK
+      // row pointing at a folder that holds a PDF and no document to render.
+      // Duplicating a file or a link is a real feature; it is just not this one,
+      // and shipping it half-done would leave broken slides behind.
+      if (!isDeckSlide(slide)) {
+        return { error: deckOnlyMessage(slide.kind, 'duplicate') };
       }
 
       const gitOrganization = slide.classroom?.git_organization;
@@ -738,27 +754,31 @@ export default function SlidesIndex() {
 
                 {/* Action buttons - shown on hover */}
                 <div className="absolute top-2 left-2 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                  <Tooltip title="Edit">
-                    <Link
-                      to={`/${slide.id}?mode=edit&returnUrl=${encodeURIComponent('/')}`}
-                      className="p-1.5 bg-white/90 dark:bg-gray-800/90 text-gray-600 hover:text-blue-600 dark:text-gray-300 dark:hover:text-blue-400 rounded-md transition-colors shadow-sm"
-                      onClick={e => e.stopPropagation()}
-                    >
-                      <svg
-                        className="w-4 h-4"
-                        fill="none"
-                        stroke="currentColor"
-                        viewBox="0 0 24 24"
+                  {/* Deck-only: `?mode=edit` on a file or a link never opens the
+                      editor — that URL is a download or an offsite redirect. */}
+                  {isDeckKind(slide.kind) && (
+                    <Tooltip title="Edit">
+                      <Link
+                        to={`/${slide.id}?mode=edit&returnUrl=${encodeURIComponent('/')}`}
+                        className="p-1.5 bg-white/90 dark:bg-gray-800/90 text-gray-600 hover:text-blue-600 dark:text-gray-300 dark:hover:text-blue-400 rounded-md transition-colors shadow-sm"
+                        onClick={e => e.stopPropagation()}
                       >
-                        <path
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                          strokeWidth={2}
-                          d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"
-                        />
-                      </svg>
-                    </Link>
-                  </Tooltip>
+                        <svg
+                          className="w-4 h-4"
+                          fill="none"
+                          stroke="currentColor"
+                          viewBox="0 0 24 24"
+                        >
+                          <path
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                            strokeWidth={2}
+                            d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"
+                          />
+                        </svg>
+                      </Link>
+                    </Tooltip>
+                  )}
                   <Tooltip title="Rename">
                     <button
                       className="p-1.5 bg-white/90 dark:bg-gray-800/90 text-gray-600 hover:text-blue-600 dark:text-gray-300 dark:hover:text-blue-400 rounded-md transition-colors shadow-sm"
@@ -783,31 +803,35 @@ export default function SlidesIndex() {
                       </svg>
                     </button>
                   </Tooltip>
-                  <Tooltip title="Duplicate">
-                    <button
-                      className="p-1.5 bg-white/90 dark:bg-gray-800/90 text-gray-600 hover:text-green-600 dark:text-gray-300 dark:hover:text-green-400 rounded-md transition-colors shadow-sm disabled:opacity-50"
-                      onClick={e => {
-                        e.stopPropagation();
-                        e.preventDefault();
-                        handleDuplicate(slide);
-                      }}
-                      disabled={progressModal.open}
-                    >
-                      <svg
-                        className="w-4 h-4"
-                        fill="none"
-                        stroke="currentColor"
-                        viewBox="0 0 24 24"
+                  {/* Deck-only: the duplicate path copies a deck's folder and
+                      rewrites the paths inside it. The action refuses the rest. */}
+                  {isDeckKind(slide.kind) && (
+                    <Tooltip title="Duplicate">
+                      <button
+                        className="p-1.5 bg-white/90 dark:bg-gray-800/90 text-gray-600 hover:text-green-600 dark:text-gray-300 dark:hover:text-green-400 rounded-md transition-colors shadow-sm disabled:opacity-50"
+                        onClick={e => {
+                          e.stopPropagation();
+                          e.preventDefault();
+                          handleDuplicate(slide);
+                        }}
+                        disabled={progressModal.open}
                       >
-                        <path
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                          strokeWidth={2}
-                          d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"
-                        />
-                      </svg>
-                    </button>
-                  </Tooltip>
+                        <svg
+                          className="w-4 h-4"
+                          fill="none"
+                          stroke="currentColor"
+                          viewBox="0 0 24 24"
+                        >
+                          <path
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                            strokeWidth={2}
+                            d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"
+                          />
+                        </svg>
+                      </button>
+                    </Tooltip>
+                  )}
                   <Popconfirm
                     title="Delete slide"
                     description={`Are you sure you want to delete "${slide.title}"?`}

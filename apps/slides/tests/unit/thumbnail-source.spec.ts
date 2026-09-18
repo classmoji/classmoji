@@ -130,11 +130,13 @@ test.describe('an unknown slide, a bad token and a deck with no content are one 
     // caller exactly which slide ids exist.
     expect(ROUTE_SOURCE).toContain('if (!slide || !verification.ok)');
 
-    // TWO throw sites now: the missing-content case is caught further down,
-    // once the token has already been verified. What must stay at ONE is the
-    // BUILDER — a second `status: 403` literal is how the answers start to
-    // differ, and the difference is an oracle for which decks have content.
-    expect(ROUTE_SOURCE.match(/throw renderRefusal\(\)/g)).toHaveLength(2);
+    // THREE throw sites now: the two below the token check are the
+    // missing-content case and the not-a-deck case, both caught once the token
+    // has already been verified. What must stay at ONE is the BUILDER — a
+    // second `status: 403` literal is how the answers start to differ, and the
+    // difference is an oracle for which decks exist, have content, or are decks
+    // at all.
+    expect(ROUTE_SOURCE.match(/throw renderRefusal\(\)/g)).toHaveLength(3);
     expect(ROUTE_SOURCE.match(/status: 403/g)).toHaveLength(1);
   });
 
@@ -159,7 +161,9 @@ test.describe('an unknown slide, a bad token and a deck with no content are one 
     // The path and the reason go to the SERVER log; the caller gets the same
     // bare `Forbidden`, from the same builder.
     expect(ROUTE_SOURCE).toContain('no content at ${slide.content_path}');
-    expect(ROUTE_SOURCE.match(/console\.warn\(/g)).toHaveLength(2);
+    // Three logged refusals, one per throw site: bad token / unknown slide,
+    // a slide that is not a deck, and a deck with no content.
+    expect(ROUTE_SOURCE.match(/console\.warn\(/g)).toHaveLength(3);
     expect(ROUTE_SOURCE).not.toContain("new Response('Slide content not found'");
   });
 

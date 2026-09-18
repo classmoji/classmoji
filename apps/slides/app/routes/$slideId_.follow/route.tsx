@@ -2,6 +2,7 @@ import { useMemo } from 'react';
 import { useLoaderData } from 'react-router';
 import getPrisma from '@classmoji/database';
 import { assertSlideAccess } from '@classmoji/auth/server';
+import { isDeckSlide } from '@classmoji/services/slides';
 import { SandpackRenderer } from '@classmoji/ui-components/sandpack';
 import RevealPresenter from '~/components/RevealPresenter';
 import {
@@ -11,6 +12,7 @@ import {
   readDeckText,
   resolveDeckDelivery,
 } from '~/utils/deckDelivery.server';
+import { deckOnlyRefusal } from '~/utils/slideKind';
 
 /**
  * Follow route - Audience sync view
@@ -56,6 +58,14 @@ export const loader = async ({
     accessType: 'view',
     shareCode,
   });
+
+  // Deck-only surface. A file or a link has no slides to follow, and every line
+  // below reads an `index.html` those kinds never committed. Refused AFTER the
+  // access gate above, so this answers no question about a slide the caller
+  // could not already see.
+  if (!isDeckSlide(slide)) {
+    throw deckOnlyRefusal(slide.kind, 'follow');
+  }
 
   // Determine if this is public access (shareCode or public slide)
   const isPublicAccess = accessGrantedVia === 'public' || accessGrantedVia === 'shareCode';

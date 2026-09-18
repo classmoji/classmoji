@@ -15,6 +15,7 @@ import {
   discardDeckPreview,
   generateDeckHtml,
   getDeckPreviewStatus,
+  isDeckSlide,
   loadDeck,
   parseSlidesFragment,
   previewBranchName,
@@ -22,6 +23,7 @@ import {
   saveDeck,
   saveDeckFromOps,
   saveDeckWithMerge,
+  slideFileService,
   slideService,
   type DeckJson,
   type DeckShaSource,
@@ -42,6 +44,7 @@ import {
   gitBlobSha,
 } from '~/utils/deckDelivery.server';
 import { displayDeckContent, settleSaveRefresh } from '~/utils/deckViewContent';
+import { deckOnlyMessage, nonDeckHeaders, slideLinkRedirect } from '~/utils/slideKind';
 import RevealSlides, { type RevealSlidesHandle } from '~/components/RevealSlides';
 import SlideToolbar from '~/components/SlideToolbar';
 import SlideNotesPanel from '~/components/SlideNotesPanel';
@@ -121,6 +124,46 @@ export const loader = async ({
         viewedAsRole: membership?.role || null,
       });
     });
+  }
+
+  // ── Not a deck ─────────────────────────────────────────────────────────────
+  // A FILE slide is a download and a LINK slide is a redirect, and both are
+  // decided HERE: after `assertSlideAccess` has admitted this viewer (draft,
+  // private-with-membership, share code and public all behave exactly as they
+  // do for a deck) and before a single line of the deck machinery below, which
+  // would 400 a link for having no git organization and serve a deck's
+  // `index.html` that a file slide never had.
+  //
+  // `?mode=edit` gets no special case on purpose. Every kind takes this branch
+  // before `mode` is consulted, which is what guarantees the reveal.js editor
+  // cannot be opened on something that is not a deck.
+  if (!isDeckSlide(slide)) {
+    if (slide.kind === 'LINK') {
+      return slideLinkRedirect(slide.source_url);
+    }
+
+    // The signed URL only — NOT `openSlideFile`, which would read the whole
+    // document out of GitHub just to find out it has somewhere better to send
+    // the viewer. When there is no delivery layer to sign against, the bytes
+    // are served by `/{slideId}/download`, which is a resource route precisely
+    // because a route with a component cannot return raw bytes: React Router
+    // parses a non-redirect Response from a loader into route data.
+    const signed = await slideFileService.slideDownloadUrl(slide);
+    if (signed.ok) {
+      return new Response(null, {
+        status: 302,
+        headers: nonDeckHeaders({ Location: signed.url }),
+      });
+    }
+    if (signed.reason === 'delivery_off') {
+      return new Response(null, {
+        status: 302,
+        headers: nonDeckHeaders({ Location: `/${encodeURIComponent(slideId)}/download` }),
+      });
+    }
+
+    console.warn(`[slides] No download for file slide ${slideId}: ${signed.reason}`);
+    throw new Response('This slide has no file to download.', { status: 404 });
   }
 
   // Get git org login for GitHub API and content URLs
@@ -611,6 +654,23 @@ export const action = async ({
     slide,
     accessType: 'edit',
   });
+
+  // This action is the DECK EDITOR's action, whole and entire: themes,
+  // snippets, deck images, the deck read, the preview branch — and the
+  // visibility toggle that lives in the deck toolbar beside them. Every one of
+  // those either writes into a folder that now holds a PDF, or fails three
+  // calls deep in GitHub for a link whose classroom has no content repo at all.
+  //
+  // Nothing in this app posts here for a non-deck slide: the toolbar that
+  // submits these only renders on a deck, and a file or a link is a redirect
+  // long before the viewer is built. Visibility for those kinds is set from the
+  // webapp's own slides list, against its own action and its own gate. So this
+  // is a server-side backstop against a hand-made POST rather than a path a
+  // person can reach — which is exactly why it is a flat refusal and not a
+  // per-intent list that would have to be kept in step with one.
+  if (!isDeckSlide(slide)) {
+    return data({ error: deckOnlyMessage(slide.kind, 'edit here') }, { status: 409 });
+  }
 
   // Get git organization for GitHub API and content URLs
   const gitOrganization = slide.classroom?.git_organization;
