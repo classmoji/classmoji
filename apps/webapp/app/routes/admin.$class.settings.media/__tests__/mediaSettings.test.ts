@@ -25,6 +25,7 @@ const mocks = vi.hoisted(() => ({
   findMediaRow: vi.fn(),
   toMediaRecord: vi.fn(),
   mediaDownloadUrl: vi.fn(),
+  canDeliverContent: vi.fn(),
   userFindMany: vi.fn(),
 }));
 
@@ -48,6 +49,7 @@ vi.mock('@classmoji/services', () => ({
     },
     contentDelivery: {
       mediaDownloadUrl: (...a: unknown[]) => mocks.mediaDownloadUrl(...a),
+      canDeliverContent: (...a: unknown[]) => mocks.canDeliverContent(...a),
     },
   },
 }));
@@ -102,6 +104,7 @@ beforeEach(() => {
   });
   mocks.listMedia.mockResolvedValue([record()]);
   mocks.isMediaConfigured.mockReturnValue(true);
+  mocks.canDeliverContent.mockReturnValue(true);
   mocks.userFindMany.mockResolvedValue([{ id: 'user-1', name: 'Tim', login: 'tregubov' }]);
 });
 
@@ -206,6 +209,27 @@ describe('loader', () => {
 
     expect(data.configured).toBe(false);
     // Reading is plain SQL; only adding needs R2.
+    expect(data.items).toHaveLength(1);
+  });
+
+  it('asks the delivery layer itself whether this class could be served', async () => {
+    // The same predicate `createUpload` refuses on, against the same classroom
+    // — otherwise the button and the refusal drift apart and an owner spends a
+    // 2 GB upload finding out.
+    const data = await loader(args(get()));
+
+    expect(mocks.canDeliverContent).toHaveBeenCalledWith(CLASSROOM);
+    expect(data.canDeliver).toBe(true);
+  });
+
+  it('reports a class the layer cannot sign for, with the list intact', async () => {
+    mocks.canDeliverContent.mockReturnValue(false);
+
+    const data = await loader(args(get()));
+
+    expect(data.canDeliver).toBe(false);
+    // Nothing new can be added; what is already there still shows.
+    expect(data.configured).toBe(true);
     expect(data.items).toHaveLength(1);
   });
 });

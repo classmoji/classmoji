@@ -128,7 +128,12 @@ const UsageMeter = ({
 };
 
 export default function MediaSettings({ loaderData }: Route.ComponentProps) {
-  const { classroomId, configured, usage, proQuotaBytes, items } = loaderData;
+  const { classroomId, configured, canDeliver, usage, proQuotaBytes, items } = loaderData;
+  // Every precondition the service checks before it will open an upload. The
+  // button is hidden rather than disabled when one of them fails: there is a
+  // line below saying which, and a dead control with no explanation beside it
+  // is the version that gets clicked anyway.
+  const canUpload = configured && usage.isPro && canDeliver;
   const { revalidate } = useRevalidator();
 
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -268,7 +273,7 @@ export default function MediaSettings({ loaderData }: Route.ComponentProps) {
             Video, audio, documents and archives that are too big for the content repository.
           </p>
         </div>
-        {configured && usage.isPro && (
+        {canUpload && (
           <Button
             type="primary"
             icon={<IconUpload size={16} />}
@@ -293,6 +298,14 @@ export default function MediaSettings({ loaderData }: Route.ComponentProps) {
       {usage.isPro && !configured && (
         <p className="mb-5 rounded-xl bg-amber-bg px-4 py-3 text-sm text-amber-ink ring-1 ring-amber-bord">
           Media storage is not configured in this environment, so nothing new can be uploaded here.
+        </p>
+      )}
+
+      {usage.isPro && configured && !canDeliver && (
+        // The deployment is fine and the classroom is on Pro; it is this class
+        // that has nowhere to serve from, which is a state an owner can fix.
+        <p className="mb-5 rounded-xl bg-amber-bg px-4 py-3 text-sm text-amber-ink ring-1 ring-amber-bord">
+          Media can&rsquo;t be served for this class yet — content delivery isn&rsquo;t active.
         </p>
       )}
 

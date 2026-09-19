@@ -30,10 +30,40 @@ export interface MediaListItem {
   createdAt: string;
 }
 
+/**
+ * The classroom fields this page reads — its id, plus everything
+ * `canDeliverContent` decides on.
+ *
+ * Structural rather than the Prisma row for the same reason the delivery layer's
+ * own predicate is: a caller holding a narrow slice still gets the same rule,
+ * and one that forgot a field reads as NOT deliverable, which is the direction
+ * that hides an upload button rather than offering one that cannot work.
+ */
+export interface MediaPageClassroom {
+  id: string;
+  content_delivery_enabled?: boolean | null;
+  content_repo?: string | null;
+  git_organization?: {
+    login?: string | null;
+    provider?: string | null;
+    github_installation_id?: string | null;
+  } | null;
+}
+
 export interface MediaPageData {
   classroomId: string;
   /** False when the deployment has no R2 credentials: no uploads, and we say so. */
   configured: boolean;
+  /**
+   * Whether this classroom's references would actually come back SIGNED.
+   *
+   * The service refuses `createUpload` with `DELIVERY_REQUIRED` for a classroom
+   * the delivery layer cannot sign for — media has no legacy serving path, so
+   * the bytes would render as a `/missing/` placeholder and nothing else. The
+   * page asks the same question so the refusal arrives before the file picker
+   * rather than after a 2 GB upload.
+   */
+  canDeliver: boolean;
   usage: MediaUsage;
   /**
    * What Pro would give this classroom. Sent from the loader rather than read
@@ -90,7 +120,7 @@ async function uploaderNames(userIds: string[]): Promise<Map<string, string>> {
  * show an owner what it is holding rather than an empty page. `configured` only
  * decides whether anything new can be added.
  */
-export async function loadMediaPage(classroom: { id: string }): Promise<MediaPageData> {
+export async function loadMediaPage(classroom: MediaPageClassroom): Promise<MediaPageData> {
   const [usage, records] = await Promise.all([
     ClassmojiService.media.usage(classroom),
     ClassmojiService.media.listMedia(classroom),
@@ -101,6 +131,10 @@ export async function loadMediaPage(classroom: { id: string }): Promise<MediaPag
   return {
     classroomId: classroom.id,
     configured: ClassmojiService.media.isMediaConfigured(),
+    // The delivery layer's own predicate, not a copy of it: the service refuses
+    // an upload on exactly this answer, so the button and the refusal cannot
+    // drift apart.
+    canDeliver: ClassmojiService.contentDelivery.canDeliverContent(classroom),
     usage,
     proQuotaBytes: ClassmojiService.media.PRO_QUOTA_BYTES,
     items: records.map(record => ({
