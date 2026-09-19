@@ -674,6 +674,24 @@ async function readLiveDocument(
   // from, applied to the row we just loaded. Not a second implementation of it.
   if (!contentVisibility(classroom.role).allows(record)) return null;
 
+  // A FILE or LINK slide has no `index.html` to read: its content is an
+  // uploaded document (a PDF, whose bytes are not text anyone should be handed)
+  // or an external URL. Falling through to the candidate paths below would find
+  // nothing and answer "not found" for a slide `content_search` has just listed
+  // — an answer that reads as an authorization decision and is not one. The
+  // document it gets instead is the SAME string the index embeds for those
+  // kinds, so the live answer and the indexed answer cannot drift apart.
+  //
+  // Past the visibility check, deliberately: the rule above is the one gate,
+  // and it applies here exactly as it does to a deck.
+  if (kind === 'slide' && 'kind' in record && record.kind !== 'DECK') {
+    return {
+      title: record.title,
+      sourcePath: record.source_path ?? record.content_path,
+      text: ClassmojiService.contentIndex.slideMetadataText(record),
+    };
+  }
+
   const deliveryClassroom = record.classroom;
   if (!deliveryClassroom?.git_organization?.login) {
     // A classroom with no git organization cannot be read from at all. Past the

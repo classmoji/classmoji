@@ -7,6 +7,7 @@ import {
   hostOf,
   themeCanonicalString,
 } from '../canonical.ts';
+import { encodeDownloadFilename } from '../downloads.ts';
 import { signBlobUrl, signSrcSet, signThemeBase } from '../urls.ts';
 import { parseContentUrl } from '../verify.ts';
 import { CLASSROOM_A, HOST, NOW, ORIGIN, SHA, TREE_SHA, ctx } from './fixtures.ts';
@@ -58,6 +59,76 @@ describe('canonical strings', () => {
         transform: { w: 1600, fmt: 'avif' },
       })
     ).toBe(`cm1|blob|${HOST}|${CLASSROOM_A}|${SHA}|png|edit|0|1767225600|1600|avif`);
+  });
+
+  it('leaves the blob shape BYTE-FOR-BYTE alone when there is no dl', () => {
+    // The literal string, spelled out rather than built: eleven fields and NO
+    // trailing pipe. Every signature ever minted — in a browser, in a cache, in
+    // a rendered page — was taken over this exact shape, and a twelfth field
+    // (even an empty one) would invalidate all of them at once.
+    const legacy = blobCanonicalString({
+      host: 'cdn.classmoji.test',
+      classroomId: '11111111-2222-4333-8444-555555555555',
+      sha: '0123456789abcdef0123456789abcdef01234567',
+      ext: 'png',
+      tier: 'month',
+      keyVersion: 3,
+      exp: 1767225600,
+    });
+    expect(legacy).toBe(
+      'cm1|blob|cdn.classmoji.test|11111111-2222-4333-8444-555555555555|' +
+        '0123456789abcdef0123456789abcdef01234567|png|month|3|1767225600||'
+    );
+    expect(legacy.split('|').length).toBe(11);
+    expect(legacy.endsWith('||')).toBe(true);
+    expect(legacy).not.toContain('|dl|');
+
+    // Passing the field explicitly as undefined is the same as leaving it off —
+    // the mint path does exactly that for every non-download URL.
+    expect(
+      blobCanonicalString({
+        host: HOST,
+        classroomId: CLASSROOM_A,
+        sha: SHA,
+        ext: 'png',
+        tier: 'month',
+        keyVersion: 3,
+        exp: 1767225600,
+        dl: undefined,
+      })
+    ).toBe(`cm1|blob|${HOST}|${CLASSROOM_A}|${SHA}|png|month|3|1767225600||`);
+  });
+
+  it('appends a dl suffix, so the two namespaces cannot collide', () => {
+    const dl = encodeDownloadFilename('deck.pdf');
+    expect(
+      blobCanonicalString({
+        host: HOST,
+        classroomId: CLASSROOM_A,
+        sha: SHA,
+        ext: 'pdf',
+        tier: 'download',
+        keyVersion: 0,
+        exp: 1767225600,
+        dl,
+      })
+    ).toBe(`cm1|blob|${HOST}|${CLASSROOM_A}|${SHA}|pdf|download|0|1767225600|||dl|${dl}`);
+
+    // Transform fields keep their slots, so a download of an image variant is
+    // still one unambiguous string.
+    expect(
+      blobCanonicalString({
+        host: HOST,
+        classroomId: CLASSROOM_A,
+        sha: SHA,
+        ext: 'png',
+        tier: 'download',
+        keyVersion: 0,
+        exp: 1767225600,
+        transform: { w: 800, fmt: 'webp' },
+        dl,
+      })
+    ).toBe(`cm1|blob|${HOST}|${CLASSROOM_A}|${SHA}|png|download|0|1767225600|800|webp|dl|${dl}`);
   });
 
   it('pins the theme shape', () => {
@@ -156,6 +227,83 @@ describe('signBlobUrl', () => {
     expect(new URL(asJson).searchParams.get('sig')).not.toBe(
       new URL(asHtml).searchParams.get('sig')
     );
+  });
+
+  it('carries an encoded dl, last and unescaped', async () => {
+    const url = await signBlobUrl(ORIGIN, ctx('download'), {
+      sha: SHA,
+      ext: 'pdf',
+      dl: 'Übung 1.pdf',
+    });
+    const encoded = encodeDownloadFilename('Übung 1.pdf');
+
+    // Spelled out rather than read back through `searchParams`: the signature
+    // covers the string, so what matters is the literal query that was signed.
+    expect(url.endsWith(`&dl=${encoded}`)).toBe(true);
+    expect(url).not.toContain('%');
+    expect(new URL(url).searchParams.get('dl')).toBe(encoded);
+    expect(new URL(url).searchParams.get('p')).toBe('download');
+  });
+
+  it('normalizes the filename before signing it', async () => {
+    // What a browser hands an upload — a full path, in NFD on macOS — is signed
+    // as the basename in NFC, so the verifier's round-trip check holds.
+    const url = await signBlobUrl(ORIGIN, ctx('download'), {
+      sha: SHA,
+      ext: 'pdf',
+      dl: 'talks/week3/Übung.pdf',
+    });
+    expect(new URL(url).searchParams.get('dl')).toBe(encodeDownloadFilename('Übung.pdf'));
+  });
+
+  it('refuses to mint a URL for a filename it would not serve back', async () => {
+    for (const dl of ['', ' deck.pdf', '.bashrc', 'deck\n.pdf', 'harmless‮fdp.exe']) {
+      await expect(
+        signBlobUrl(ORIGIN, ctx('download'), { sha: SHA, ext: 'pdf', dl })
+      ).rejects.toThrow(TypeError);
+    }
+  });
+
+  it('refuses a dl on any tier but download', async () => {
+    // A save-to-disk link is for one viewer and one save; a `week` or `month`
+    // URL is immutable for days and shared by everyone who holds it. The
+    // verifier stays permissive on purpose — this is a mint-side rule only.
+    for (const tier of ['month', 'week', 'edit'] as const) {
+      await expect(
+        signBlobUrl(ORIGIN, ctx(tier), { sha: SHA, ext: 'pdf', dl: 'deck.pdf' })
+      ).rejects.toThrow(TypeError);
+    }
+  });
+
+  it('is byte-identical to a downloadless URL when no dl is given', async () => {
+    // The whole compatibility story in one assertion: adding the feature must
+    // not move a single byte of a URL that does not use it.
+    const plain = await signBlobUrl(ORIGIN, ctx('month'), { sha: SHA, ext: 'pdf' });
+    const explicitlyAbsent = await signBlobUrl(ORIGIN, ctx('month'), {
+      sha: SHA,
+      ext: 'pdf',
+      dl: undefined,
+    });
+    expect(explicitlyAbsent).toBe(plain);
+    expect(plain).not.toContain('dl=');
+    expect([...new URL(plain).searchParams.keys()]).toEqual(['p', 'v', 'exp', 'sig']);
+  });
+
+  it('gives one blob a different signature with and without a dl', async () => {
+    const withDl = await signBlobUrl(ORIGIN, ctx('download'), {
+      sha: SHA,
+      ext: 'pdf',
+      dl: 'deck.pdf',
+    });
+    const withoutDl = await signBlobUrl(ORIGIN, ctx('download'), { sha: SHA, ext: 'pdf' });
+    expect(new URL(withDl).searchParams.get('sig')).not.toBe(
+      new URL(withoutDl).searchParams.get('sig')
+    );
+  });
+
+  it('gives the download tier an exact ten-minute expiry', async () => {
+    const url = await signBlobUrl(ORIGIN, ctx('download'), { sha: SHA, ext: 'pdf' });
+    expect(new URL(url).searchParams.get('exp')).toBe(String(NOW + 600));
   });
 
   it('rejects a nonsense now or keyVersion at mint', async () => {

@@ -5,10 +5,60 @@ import getPrisma from '@classmoji/database';
 import { getAuthSession, assertSlideAccess } from '@classmoji/auth/server';
 import { ClassmojiService } from '@classmoji/services';
 import { ContentService } from '@classmoji/content';
-import { slideService } from '@classmoji/services/slides';
+import { isDeckSlide, slideService } from '@classmoji/services/slides';
 import { deleteSlideVideos } from '~/utils/cloudinaryService.server';
 import { resolveDeckThumbnailUrls } from '~/utils/deckDelivery.server';
 import { enqueueDeckThumbnail } from '~/utils/deckThumbnailEnqueue.server';
+import { deckOnlyMessage, isDeckKind } from '~/utils/slideKind';
+
+/**
+ * What ONE card is built from — the whole of what this page sends the browser.
+ *
+ * The loader used to spread the Prisma row (`...slide`) into its payload, so
+ * every column of `Slide` was serialized into the HTML: the multiplex id and
+ * secret that let a client drive a presentation, and now a file slide's repo
+ * path and a link slide's destination as well. The cards draw a title, a kind,
+ * a draft badge, a classroom and a linked repository's name, so that is the
+ * list — anything a card starts showing gets added here deliberately.
+ */
+interface SlideCard {
+  id: string;
+  title: string;
+  kind: string;
+  is_draft: boolean;
+  classroom: { slug: string; name: string; content_namespace: string | null } | null;
+  repositoryTitle: string | null;
+  thumbnailUrl: string | null;
+}
+
+/** The one place a slide row becomes a card. Used by the loader and by duplicate. */
+function toSlideCard(
+  slide: {
+    id: string;
+    title: string;
+    kind?: string | null;
+    is_draft: boolean;
+    classroom?: { slug: string; name: string; content_namespace?: string | null } | null;
+    links?: Array<{ repository?: { title?: string | null } | null }> | null;
+  },
+  thumbnailUrl: string | null = null
+): SlideCard {
+  return {
+    id: slide.id,
+    title: slide.title,
+    kind: slide.kind ?? 'DECK',
+    is_draft: slide.is_draft,
+    classroom: slide.classroom
+      ? {
+          slug: slide.classroom.slug,
+          name: slide.classroom.name,
+          content_namespace: slide.classroom.content_namespace ?? null,
+        }
+      : null,
+    repositoryTitle: slide.links?.[0]?.repository?.title ?? null,
+    thumbnailUrl,
+  };
+}
 
 export const loader = async ({ request }: { request: Request }) => {
   // 1. Require authentication
@@ -49,7 +99,7 @@ export const loader = async ({ request }: { request: Request }) => {
   // If user has no classroom memberships, return empty
   if (whereConditions.length === 0) {
     return {
-      slides: [],
+      slides: [] as SlideCard[],
       webappUrl: process.env.WEBAPP_URL || 'http://localhost:3000',
     };
   }
@@ -94,17 +144,7 @@ export const loader = async ({ request }: { request: Request }) => {
   const thumbnails = await resolveDeckThumbnailUrls(recentSlides);
 
   return {
-    slides: recentSlides.map(({ classroom, ...slide }) => ({
-      ...slide,
-      classroom: classroom
-        ? {
-            slug: classroom.slug,
-            name: classroom.name,
-            content_namespace: classroom.content_namespace,
-          }
-        : null,
-      thumbnailUrl: thumbnails.get(slide.id) ?? null,
-    })),
+    slides: recentSlides.map(slide => toSlideCard(slide, thumbnails.get(slide.id) ?? null)),
     webappUrl: process.env.WEBAPP_URL || 'http://localhost:3000',
   };
 };
@@ -180,6 +220,7 @@ export const action = async ({ request }: { request: Request }) => {
       where: { id: slideId },
       select: {
         id: true,
+        kind: true,
         classroom_id: true,
         thumbnail_path: true,
         thumbnail_rendered_at: true,
@@ -187,6 +228,10 @@ export const action = async ({ request }: { request: Request }) => {
     });
     // Already has one: the client's copy of the loader data is simply behind.
     if (!slide || slide.thumbnail_path) return { intent: 'thumbnail', outcome: 'rate-limited' };
+    // A file or a link has no deck to screenshot. The render task refuses these
+    // too, but that refusal costs a queued run and a Browser Run slot; this one
+    // costs a comparison. Same shape as every other refusal here.
+    if (slide.kind !== 'DECK') return { intent: 'thumbnail', outcome: 'rate-limited' };
 
     return { intent: 'thumbnail', outcome: await enqueueDeckThumbnail(slide) };
   }
@@ -265,6 +310,16 @@ export const action = async ({ request }: { request: Request }) => {
 
       if (!slide) {
         return { error: 'Slide not found' };
+      }
+
+      // Deck-only. Everything below is written for a deck: it copies the folder,
+      // rewrites the paths inside `index.html`/`deck.json`, and creates a row
+      // with NO `kind` or `source_*` — which for a file slide would mean a DECK
+      // row pointing at a folder that holds a PDF and no document to render.
+      // Duplicating a file or a link is a real feature; it is just not this one,
+      // and shipping it half-done would leave broken slides behind.
+      if (!isDeckSlide(slide)) {
+        return { error: deckOnlyMessage(slide.kind, 'duplicate') };
       }
 
       const gitOrganization = slide.classroom?.git_organization;
@@ -424,7 +479,7 @@ export const action = async ({ request }: { request: Request }) => {
         },
         include: {
           classroom: {
-            select: { slug: true, name: true },
+            select: { slug: true, name: true, content_namespace: true },
           },
           links: {
             include: { repository: true },
@@ -445,7 +500,9 @@ export const action = async ({ request }: { request: Request }) => {
       // Update the content manifest
       await ClassmojiService.contentManifest.saveManifest(slide.classroom_id);
 
-      return { success: true, intent: 'duplicate', newSlide };
+      // Through the same mapper the loader uses: the client prepends this to
+      // the list it already holds, so it has to be a card and nothing more.
+      return { success: true, intent: 'duplicate', newSlide: toSlideCard(newSlide) };
     } catch (error: unknown) {
       console.error('Failed to duplicate slide:', error);
       const message = error instanceof Error ? error.message : 'Failed to duplicate slide';
@@ -700,7 +757,17 @@ export default function SlidesIndex() {
                 className="relative group bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 hover:border-gray-300 dark:hover:border-gray-600 transition-colors overflow-hidden"
               >
                 {/* Slide Preview */}
-                <Link to={`/${slide.id}?returnUrl=${encodeURIComponent('/')}`} className="block">
+                {/* `reloadDocument` for everything that is not a deck. For
+                    those kinds `/{slideId}` is a 302 — to a signed download or
+                    to somebody else's site — and a classroom with no delivery
+                    layer is sent to `/{slideId}/download`, a RESOURCE route
+                    with nothing for the client router to render. A full
+                    document navigation is what makes the browser follow it. */}
+                <Link
+                  to={`/${slide.id}?returnUrl=${encodeURIComponent('/')}`}
+                  reloadDocument={!isDeckKind(slide.kind)}
+                  className="block"
+                >
                   <div className="aspect-video bg-gray-100 dark:bg-gray-700 overflow-hidden relative">
                     <DeckThumbnail
                       slide={slide}
@@ -723,12 +790,17 @@ export default function SlidesIndex() {
 
                 {/* Card Content */}
                 <div className="p-4">
-                  <Link to={`/${slide.id}?returnUrl=${encodeURIComponent('/')}`} className="block">
+                  {/* Same reason as the picture above it. */}
+                  <Link
+                    to={`/${slide.id}?returnUrl=${encodeURIComponent('/')}`}
+                    reloadDocument={!isDeckKind(slide.kind)}
+                    className="block"
+                  >
                     <h3 className="font-medium text-gray-900 dark:text-white truncate">
                       {slide.title}
                     </h3>
                     <p className="mt-1 text-sm text-gray-500 dark:text-gray-400 truncate">
-                      {slide.links?.[0]?.repository?.title || '—'}
+                      {slide.repositoryTitle || '—'}
                     </p>
                     <div className="mt-2 text-xs text-gray-400 dark:text-gray-500">
                       {slide.classroom?.content_namespace}
@@ -738,27 +810,31 @@ export default function SlidesIndex() {
 
                 {/* Action buttons - shown on hover */}
                 <div className="absolute top-2 left-2 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                  <Tooltip title="Edit">
-                    <Link
-                      to={`/${slide.id}?mode=edit&returnUrl=${encodeURIComponent('/')}`}
-                      className="p-1.5 bg-white/90 dark:bg-gray-800/90 text-gray-600 hover:text-blue-600 dark:text-gray-300 dark:hover:text-blue-400 rounded-md transition-colors shadow-sm"
-                      onClick={e => e.stopPropagation()}
-                    >
-                      <svg
-                        className="w-4 h-4"
-                        fill="none"
-                        stroke="currentColor"
-                        viewBox="0 0 24 24"
+                  {/* Deck-only: `?mode=edit` on a file or a link never opens the
+                      editor — that URL is a download or an offsite redirect. */}
+                  {isDeckKind(slide.kind) && (
+                    <Tooltip title="Edit">
+                      <Link
+                        to={`/${slide.id}?mode=edit&returnUrl=${encodeURIComponent('/')}`}
+                        className="p-1.5 bg-white/90 dark:bg-gray-800/90 text-gray-600 hover:text-blue-600 dark:text-gray-300 dark:hover:text-blue-400 rounded-md transition-colors shadow-sm"
+                        onClick={e => e.stopPropagation()}
                       >
-                        <path
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                          strokeWidth={2}
-                          d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"
-                        />
-                      </svg>
-                    </Link>
-                  </Tooltip>
+                        <svg
+                          className="w-4 h-4"
+                          fill="none"
+                          stroke="currentColor"
+                          viewBox="0 0 24 24"
+                        >
+                          <path
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                            strokeWidth={2}
+                            d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"
+                          />
+                        </svg>
+                      </Link>
+                    </Tooltip>
+                  )}
                   <Tooltip title="Rename">
                     <button
                       className="p-1.5 bg-white/90 dark:bg-gray-800/90 text-gray-600 hover:text-blue-600 dark:text-gray-300 dark:hover:text-blue-400 rounded-md transition-colors shadow-sm"
@@ -783,31 +859,35 @@ export default function SlidesIndex() {
                       </svg>
                     </button>
                   </Tooltip>
-                  <Tooltip title="Duplicate">
-                    <button
-                      className="p-1.5 bg-white/90 dark:bg-gray-800/90 text-gray-600 hover:text-green-600 dark:text-gray-300 dark:hover:text-green-400 rounded-md transition-colors shadow-sm disabled:opacity-50"
-                      onClick={e => {
-                        e.stopPropagation();
-                        e.preventDefault();
-                        handleDuplicate(slide);
-                      }}
-                      disabled={progressModal.open}
-                    >
-                      <svg
-                        className="w-4 h-4"
-                        fill="none"
-                        stroke="currentColor"
-                        viewBox="0 0 24 24"
+                  {/* Deck-only: the duplicate path copies a deck's folder and
+                      rewrites the paths inside it. The action refuses the rest. */}
+                  {isDeckKind(slide.kind) && (
+                    <Tooltip title="Duplicate">
+                      <button
+                        className="p-1.5 bg-white/90 dark:bg-gray-800/90 text-gray-600 hover:text-green-600 dark:text-gray-300 dark:hover:text-green-400 rounded-md transition-colors shadow-sm disabled:opacity-50"
+                        onClick={e => {
+                          e.stopPropagation();
+                          e.preventDefault();
+                          handleDuplicate(slide);
+                        }}
+                        disabled={progressModal.open}
                       >
-                        <path
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                          strokeWidth={2}
-                          d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"
-                        />
-                      </svg>
-                    </button>
-                  </Tooltip>
+                        <svg
+                          className="w-4 h-4"
+                          fill="none"
+                          stroke="currentColor"
+                          viewBox="0 0 24 24"
+                        >
+                          <path
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                            strokeWidth={2}
+                            d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"
+                          />
+                        </svg>
+                      </button>
+                    </Tooltip>
+                  )}
                   <Popconfirm
                     title="Delete slide"
                     description={`Are you sure you want to delete "${slide.title}"?`}

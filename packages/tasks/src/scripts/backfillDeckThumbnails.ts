@@ -94,6 +94,10 @@ async function backfillDeckThumbnails({ dryRun, classroomSlug }: Options): Promi
 
   const slides = await getPrisma().slide.findMany({
     where: {
+      // Decks only. A FILE or LINK slide has no `index.html` to photograph, so
+      // every one queued here would be a browser started to render nothing —
+      // the task itself refuses them, and this is where they stop being queued.
+      kind: 'DECK',
       classroom: {
         content_repo: { not: '' },
         git_organization: { provider: 'GITHUB' },

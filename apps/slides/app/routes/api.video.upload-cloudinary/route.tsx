@@ -16,9 +16,11 @@
 import { v2 as cloudinary } from 'cloudinary';
 import getPrisma from '@classmoji/database';
 import { ClassmojiService } from '@classmoji/services';
+import { isDeckSlide } from '@classmoji/services/slides';
 import { ContentService } from '@classmoji/content';
 import { assertSlideAccess } from '@classmoji/auth/server';
 import { fetchContent, getMimeType } from '~/utils/contentProxy';
+import { deckOnlyMessage } from '~/utils/slideKind';
 
 export const action = async ({ request }: { request: Request }) => {
   const formData = await request.formData();
@@ -60,6 +62,17 @@ export const action = async ({ request }: { request: Request }) => {
       slide,
       accessType: 'edit',
     });
+
+    // Deck-only. The video being moved to Cloudinary is one this route then
+    // DELETES from the content repo, and on a file slide the only thing in that
+    // folder is the document students download. Refused before the tier lookup
+    // and long before the delete.
+    if (!isDeckSlide(slide)) {
+      return new Response(JSON.stringify({ error: deckOnlyMessage(slide.kind, 'edit here') }), {
+        status: 409,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }
 
     // Cloudinary video hosting is a Pro feature — Cloudinary bills per account.
     //

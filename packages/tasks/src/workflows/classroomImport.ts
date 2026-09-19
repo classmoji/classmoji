@@ -506,7 +506,7 @@ export const importContentTask = task({
       });
     }
     if (wantSlides) {
-      counts.slides = await importSlideRows({ prisma, job, writer });
+      counts.slides = await importSlideRows({ prisma, job, writer, copied: clone.copied });
     }
 
     // Rebuilt wholesale from the TARGET's rows — the source's manifest was
@@ -687,19 +687,47 @@ export async function importPageRows({
 }
 
 /**
- * Slide-deck equivalent of importPageRows. Takes no repo coordinates: a deck
- * carries no URL-bearing column of its own (its asset URLs live inside
+ * Slide equivalent of importPageRows. Takes no repo coordinates: a slide
+ * carries no URL-bearing column of its own (a deck's asset URLs live inside
  * deck.json, which the push already rewrote), and `slug` is copied verbatim
  * because it IS the content path segment.
+ *
+ * ## Why `kind` and the source columns have to come along
+ *
+ * Because the whole of a non-deck slide is in them. A FILE slide is a row
+ * naming an uploaded document and a LINK slide is a row naming a URL — neither
+ * has an `index.html` behind it — so a copy that wrote only the columns a deck
+ * uses would land every one of them as an empty DECK: a slide that opens to a
+ * blank reveal.js frame, with the document orphaned in the repo and the link
+ * simply gone. The columns are copied VERBATIM, `source_path` included, because
+ * unlike the per-file importer this path pushes the source tree unchanged and
+ * never dedupes a slug: the document is at the same path in the target repo
+ * that it was at in the source one.
+ *
+ * ## And why a FILE slide can still be skipped
+ *
+ * The clone is pruned (a slides-only import drops `pages/`) and a source repo
+ * can be missing the document its row names. `copied` is what the push actually
+ * put in the target, so a FILE row whose document is not in it would point at a
+ * path that does not exist — a download that 404s, which is worse than a slide
+ * that was never copied and said so. Same rule as `collectSlideFile` on the
+ * per-file path: warn, create no row.
  */
-async function importSlideRows({
+export async function importSlideRows({
   prisma,
   job,
   writer,
+  copied,
 }: {
   prisma: PrismaClient;
   job: LoadedImportJob;
   writer: ProgressWriter;
+  /**
+   * Every repo path the clone pushed. A FILE slide's document must be in it.
+   * Absent means the caller cannot say, and a FILE row is created on trust —
+   * the push either carried the whole tree or the caller returned before here.
+   */
+  copied?: ReadonlySet<string>;
 }): Promise<number> {
   const sourceSlides = await prisma.slide.findMany({
     where: { classroom_id: job.source_classroom_id },
@@ -715,6 +743,20 @@ async function importSlideRows({
   for (const slide of sourceSlides) {
     if (already.has(slide.id)) continue;
     try {
+      // A FILE row is only worth creating if its document came across. The
+      // path is not remapped on this route — the tree was pushed as it stood —
+      // so the row's own `source_path` is what the target holds it under.
+      if (slide.kind === 'FILE') {
+        const missing = !slide.source_path || (copied ? !copied.has(slide.source_path) : false);
+        if (missing) {
+          warnings.push(
+            `slides: skipped "${slide.title}" — its file (${slide.source_path ?? 'no path'}) ` +
+              'is not in the copied content repository'
+          );
+          continue;
+        }
+      }
+
       const row = await prisma.slide.create({
         data: {
           classroom_id: job.classroom_id,
@@ -726,6 +768,15 @@ async function importSlideRows({
           is_public: false,
           allow_team_edit: slide.allow_team_edit,
           show_speaker_notes: slide.show_speaker_notes,
+          // The kind, and with it whatever that kind is made of. Verbatim: this
+          // route pushes the source tree unchanged and never dedupes a slug, so
+          // the document is at the path the row already names.
+          kind: slide.kind,
+          source_path: slide.source_path,
+          source_filename: slide.source_filename,
+          source_mime: slide.source_mime,
+          source_size: slide.source_size,
+          source_url: slide.source_url,
         },
       });
       writer.mergeIdMaps({ slides: { [slide.id]: row.id } });

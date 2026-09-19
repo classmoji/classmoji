@@ -7,7 +7,7 @@
  * It knows no business rules, holds no session, and knows nothing about a
  * classroom beyond the id in the URL.
  *
- *   GET /c/{classroomId}/blob/{sha}.{ext}?p=&v=&exp=&sig=[&w=&fmt=]
+ *   GET /c/{classroomId}/blob/{sha}.{ext}?p=&v=&exp=&sig=[&w=&fmt=][&dl=]
  *   GET /c/{classroomId}/theme/{theme}/{treeSha}/{p}.{v}.{exp}.{sig}/{relPath}
  *   GET /healthz
  *   OPTIONS *

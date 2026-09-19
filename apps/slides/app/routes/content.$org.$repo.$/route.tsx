@@ -28,6 +28,12 @@
  * - The slide exists and is_public=true
  * - The requested content matches the slide's content repo
  *
+ * Both of those authorize a PATH against a REPO. That holds for deck assets,
+ * which have no visibility of their own, and not for the document behind a FILE
+ * slide, which does — so a path that is a file slide's `source_path` is handed
+ * to that slide's own view gate and, on success, redirected to `/{slideId}`
+ * rather than served from here. See `~/utils/slideDocumentAccess`.
+ *
  * PERFORMANCE: Classroom memberships are cached for 8 hours to avoid
  * hitting the database on every asset request (CSS, fonts, images, etc.).
  *
@@ -39,8 +45,10 @@
  */
 
 import { fetchContent, getMimeType, isBinaryFile } from '~/utils/contentProxy';
-import { getAuthSession } from '@classmoji/auth/server';
+import { isWithinContentPath, slideDocumentDecision } from '~/utils/slideDocumentAccess';
+import { assertSlideAccess, getAuthSession } from '@classmoji/auth/server';
 import { ClassmojiService } from '@classmoji/services';
+import { SLIDE_FILE_EXTENSIONS } from '@classmoji/services/slides';
 import { getContentRepoName } from '@classmoji/utils';
 import getPrisma from '@classmoji/database';
 
@@ -67,6 +75,17 @@ interface ContentRouteMembership {
 
 /** The classroom this request was authorized against, for the text read below. */
 type MatchedClassroom = NonNullable<ContentRouteMembership['classroom']>;
+
+/**
+ * The ONE refusal this route gives.
+ *
+ * Every path a caller may not have is answered with the same status and the
+ * same sentence, built in one place. Two `new Response('Forbidden…')` literals
+ * drift, and the drift is an oracle for which paths exist.
+ */
+function forbidden(): Response {
+  return new Response('Forbidden - no access to this content', { status: 403 });
+}
 
 // In-memory cache for user classroom memberships
 // Avoids DB hit on every asset request (CSS, fonts, images, etc.)
@@ -169,6 +188,11 @@ export const loader = async ({
   // Kept from whichever branch granted access: the text read below needs the
   // classroom's id and cache version to sign, and its org/repo to fall back.
   let matched: MatchedClassroom | null = null;
+  // Every classroom this request was authorized AGAINST — not just the one the
+  // text read signs under. The membership branch can match several classrooms
+  // sharing one content repo, and the file-slide rule below has to look in all
+  // of them, because the document belongs to whichever one holds it.
+  let authorizedClassroomIds: string[] = [];
 
   // Path 1: Authenticated user - check classroom memberships
   if (authData) {
@@ -193,6 +217,9 @@ export const loader = async ({
       return repo === expectedRepo; // EXACT match only
     });
     hasAccess = matches.length > 0;
+    authorizedClassroomIds = matches
+      .map((m: ContentRouteMembership) => m.classroom?.id)
+      .filter((id: string | undefined): id is string => typeof id === 'string');
 
     // ONE match, or none — never "the first of several".
     //
@@ -232,13 +259,18 @@ export const loader = async ({
 
         if (repo === expectedRepo) {
           // For public slides, allow access to content in the slide's content_path
-          // or to shared theme assets (.slidesthemes folder)
-          const isSlideContent = path.startsWith(slide.content_path);
+          // or to shared theme assets (.slidesthemes folder).
+          //
+          // The folder check is separator-aware: a bare prefix match on
+          // `slides/week-1` also covers `slides/week-10/…`, and instructors
+          // number their slugs exactly that way.
+          const isSlideContent = isWithinContentPath(path, slide.content_path);
           const isSharedAsset = path.startsWith('.slidesthemes/');
 
           if (isSlideContent || isSharedAsset) {
             hasAccess = true;
             matched = slide.classroom;
+            authorizedClassroomIds = slide.classroom.id ? [slide.classroom.id] : [];
           }
         }
       }
@@ -246,8 +278,50 @@ export const loader = async ({
   }
 
   if (!hasAccess) {
-    throw new Response('Forbidden - no access to this content', { status: 403 });
+    throw forbidden();
   }
+
+  // 3. An uploaded FILE slide's document is not one of this route's assets.
+  //
+  // The branches above authorize a PATH against a REPO, which is the right rule
+  // for a deck: its `index.html`, its images and the shared themes are assets OF
+  // the deck and carry no visibility of their own. A file slide's document does.
+  // It lives in the same repo, at `slides/<slug>/<name>.pdf`, and the slide row
+  // beside it holds the draft/private/public setting that `/{slideId}` enforces.
+  // So when the requested path IS a file slide's `source_path`, that slide's own
+  // view gate decides — the same `assertSlideAccess` call, at the same tier.
+  //
+  // On success the caller is sent to `/{slideId}` rather than served from here:
+  // that route names the download, mints a short-lived signed URL where the
+  // delivery layer is on, and marks the answer `no-store`. This one serves bytes
+  // inline under `Cache-Control: public`, which is right for a font and wrong
+  // for a document. On refusal the answer is the route's ordinary one, so a
+  // path that exists and a path that does not read identically.
+  const documentDecision = await slideDocumentDecision({
+    path,
+    classroomIds: authorizedClassroomIds,
+    // The filter that keeps this off the hot path: every font, stylesheet and
+    // image this route serves fails it before a query is made.
+    extensions: SLIDE_FILE_EXTENSIONS,
+    findFileSlides: (classroomIds, sourcePath) =>
+      getPrisma().slide.findMany({
+        where: {
+          classroom_id: { in: [...classroomIds] },
+          kind: 'FILE',
+          source_path: sourcePath,
+        },
+        include: { classroom: { include: { git_organization: true } } },
+      }),
+    assertView: fileSlide =>
+      assertSlideAccess({
+        request,
+        slideId: fileSlide.id,
+        slide: fileSlide,
+        accessType: 'view',
+      }),
+  });
+  if (documentDecision.outcome === 'redirect') return documentDecision.response;
+  if (documentDecision.outcome === 'refuse') throw forbidden();
 
   // 4. Proceed with fetch.
   //

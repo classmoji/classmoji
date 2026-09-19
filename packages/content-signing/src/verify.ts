@@ -17,6 +17,7 @@ import {
   themeCanonicalString,
 } from './canonical.ts';
 import { deriveKey, verifyCanonical } from './derive.ts';
+import { MAX_ENCODED_DOWNLOAD_FILENAME, decodeDownloadFilename } from './downloads.ts';
 import type {
   BlobVerification,
   KeySlot,
@@ -177,8 +178,27 @@ function parseBlob(url: URL, host: string, classroomId: string, segments: string
   const transform = parseTransform(url);
   if (transform === null) return fail('malformed');
 
+  // Bounded, and never base64-decoded: the canonical string covers this value,
+  // so the signature is checked over what the query carried rather than over a
+  // filename this parse made of it.
+  //
+  // `searchParams.get` does percent-decode, so it is the DECODED spelling that
+  // lands here — and that is fine, because it is the same rule on both sides.
+  // base64url has nothing worth escaping, so `%5A...` decodes to exactly the
+  // characters the signer signed and verifies identically; an escape that
+  // decodes to anything else simply produces a canonical string this key never
+  // signed. The bound is the only thing weighed, because nothing longer could
+  // have been signed and there is no reason to hash an unbounded string.
+  const rawDownload = url.searchParams.get('dl');
+  if (rawDownload !== null) {
+    if (rawDownload.length === 0 || rawDownload.length > MAX_ENCODED_DOWNLOAD_FILENAME) {
+      return fail('malformed');
+    }
+  }
+
   const value: ParsedBlobUrl = { kind: 'blob', host, classroomId, sha, ext, ...policy };
   if (transform) value.transform = transform;
+  if (rawDownload !== null) value.dl = rawDownload;
   return { ok: true, value };
 }
 
@@ -318,12 +338,24 @@ async function verifyParsedBlob(
     keyVersion: parsed.keyVersion,
     exp: parsed.exp,
     transform: parsed.transform,
+    dl: parsed.dl,
   });
   const keySlot = await checkSignature(masters, parsed, canonical, signature);
   if (!keySlot) return fail('bad-signature');
 
   const expiry = expiryFailure(parsed.tier, parsed.exp, now);
   if (!expiry) return fail('expired');
+
+  // Only now, with the signature already checked, is the filename decoded:
+  // these are bytes WE minted, not bytes a caller chose. A failure here means a
+  // URL that verified carries a name that cannot be, which is malformed rather
+  // than forged — and unreachable unless the signing key itself has leaked.
+  let downloadFilename: string | undefined;
+  if (parsed.dl !== undefined) {
+    const decoded = decodeDownloadFilename(parsed.dl);
+    if (decoded === null) return fail('malformed');
+    downloadFilename = decoded;
+  }
 
   const verified: BlobVerification = {
     ok: true,
@@ -338,6 +370,7 @@ async function verifyParsedBlob(
     keySlot,
   };
   if (parsed.transform) verified.transform = parsed.transform;
+  if (downloadFilename !== undefined) verified.downloadFilename = downloadFilename;
   return verified;
 }
 
@@ -422,16 +455,22 @@ export async function verifyContentUrl(
 }
 
 /**
- * `edit` URLs are never stored anywhere. Everything else is immutable for the
- * life of its signature: the content is sha-addressed and the expiry is baked
- * into the URL, so a cache entry can live exactly that long.
+ * `edit` and `download` URLs are never stored anywhere. Everything else is
+ * immutable for the life of its signature: the content is sha-addressed and the
+ * expiry is baked into the URL, so a cache entry can live exactly that long.
+ *
+ * `download` is `no-store` for a different reason than `edit` is: the response
+ * carries a `Content-Disposition` built from THIS URL's `dl`, and the bytes
+ * under a sha are shared by every classroom that references them. A shared
+ * cache keeping one viewer's filename against those bytes would hand it to the
+ * next viewer of the same blob.
  *
  * Past `exp` - i.e. inside grace - the URL is still being served but must not
  * be pinned as immutable, so it gets a short positive TTL instead. A zero
  * max-age would send every cache back to the origin at once.
  */
 export function cacheControlFor(tier: Tier, exp: number, now: number): string {
-  if (tier === 'edit') return 'no-store';
+  if (tier === 'edit' || tier === 'download') return 'no-store';
   const maxAge = Math.floor(exp) - Math.floor(now);
   if (maxAge <= 0) return 'public, max-age=60';
   return `public, max-age=${maxAge}, immutable`;

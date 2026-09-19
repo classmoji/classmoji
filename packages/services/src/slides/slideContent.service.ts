@@ -18,6 +18,7 @@ import {
 } from './deckHtml.ts';
 import type { DeckJson } from './deckTypes.ts';
 import { stripDeckRuntimeAttrs } from './deckRuntimeAttrs.ts';
+import { assertDeckSlide } from './slideSource.ts';
 import { canonicalizeDeckAssets } from './deckAssets.ts';
 import { recordContentAssets, resolveContentBranch } from '../classmoji/contentAssets.service.ts';
 import { enqueueDeckThumbnail } from '../classmoji/deckThumbnail.service.ts';
@@ -49,6 +50,14 @@ export interface SlideContentTarget {
   id?: string;
   title: string;
   content_path: string;
+  /**
+   * `Slide.kind`. Optional because the two callers that build a target by hand
+   * — `createSlide` before the row exists, the importer's synthetic target —
+   * have no row to read it from, and both are decks. Absent therefore reads as
+   * DECK; every caller holding a real row carries the column, and that is where
+   * `assertDeckSlide` refuses a file or a link.
+   */
+  kind?: string | null;
   classroom?: {
     /** Stored content repo name — never re-derived from org + namespace. */
     content_repo: string | null;
@@ -348,6 +357,16 @@ export async function saveDeck({
   branch,
   themeUrls,
 }: SaveDeckArgs): Promise<SaveDeckResult> {
+  // The kind gate, before the repo context and before a single byte is
+  // serialized. A FILE slide's folder holds the uploaded document and a LINK
+  // slide's folder holds nothing at all; writing `deck.json` and `index.html`
+  // into either would not just be wrong, it would make the slide LOOK like a
+  // deck to every path that keys off those two files — the thumbnail task, the
+  // search index, the class site. This is the choke point every writer passes
+  // (the editor, MCP `deck_apply`, the merge and ops save paths, the importer),
+  // so it is the only place the refusal has to exist.
+  assertDeckSlide(slide, 'Saving deck content');
+
   const { gitOrganization, repo } = resolveSlideRepoContext(slide);
   const deckPath = `${slide.content_path}/deck.json`;
   const htmlPath = `${slide.content_path}/index.html`;

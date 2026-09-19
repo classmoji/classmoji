@@ -290,8 +290,10 @@ describe('enqueueClassroomThumbnails', () => {
     for (const [index, id] of DECK_IDS.entries()) {
       expect(triggerMock.mock.calls[index][1]).toEqual({ slideId: id, force: true });
     }
+    // DECKs only: a file or a link has no document to photograph, and asking
+    // would spend a browser slot per non-deck slide on every theme edit.
     expect(slideFindMany).toHaveBeenCalledWith(
-      expect.objectContaining({ where: { classroom_id: CLASSROOM_ID } })
+      expect.objectContaining({ where: { classroom_id: CLASSROOM_ID, kind: 'DECK' } })
     );
   });
 

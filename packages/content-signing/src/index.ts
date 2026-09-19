@@ -33,6 +33,15 @@ export {
 export type { RenderCanonicalFields } from './canonical.ts';
 
 export {
+  MAX_DOWNLOAD_FILENAME_BYTES,
+  MAX_ENCODED_DOWNLOAD_FILENAME,
+  contentDispositionFor,
+  decodeDownloadFilename,
+  encodeDownloadFilename,
+  normalizeDownloadFilename,
+} from './downloads.ts';
+
+export {
   MIN_REMAINING_SECONDS,
   TIER_POLICY,
   bucketExpiry,

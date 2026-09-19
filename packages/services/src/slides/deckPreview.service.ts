@@ -25,6 +25,7 @@ import { warmContentText } from '../classmoji/contentDelivery.service.ts';
 import { enqueueDeckThumbnail } from '../classmoji/deckThumbnail.service.ts';
 import { indexOneFile } from '../classmoji/contentIndex.service.ts';
 import { generateDeckHtml, type DeckThemeUrls } from './deckHtml.ts';
+import { assertDeckSlide } from './slideSource.ts';
 import {
   indexResolutions,
   merge3Units,
@@ -95,6 +96,7 @@ export async function getDeckPreviewStatus(slide: SlideContentTarget): Promise<D
 export async function ensureDeckPreviewBranch(
   slide: SlideContentTarget
 ): Promise<{ branch: string; created: boolean }> {
+  assertDeckSlide(slide, 'Previewing deck edits');
   const { gitOrganization, repo } = resolveSlideRepoContext(slide);
   const branch = previewBranchName(slide.content_path);
 
@@ -273,6 +275,7 @@ export async function acceptDeckPreview(
     resolveThemeUrls?: (deck: DeckJson) => Promise<DeckThemeUrls | undefined>;
   } = {}
 ): Promise<AcceptDeckPreviewResult> {
+  assertDeckSlide(slide, 'Accepting a deck preview');
   const { gitOrganization, repo } = resolveSlideRepoContext(slide);
   const branch = previewBranchName(slide.content_path);
   const deckPath = `${slide.content_path}/deck.json`;
@@ -839,6 +842,7 @@ export async function resolveDeckPreviewConflicts(
     expectedTheirsSha?: string;
   }
 ): Promise<ResolveDeckPreviewResult> {
+  assertDeckSlide(slide, 'Resolving deck preview conflicts');
   if (!resolutions?.length) {
     throw new PreviewResolutionError(
       'No resolutions supplied — pass one {id, choose} per conflict',
@@ -957,6 +961,7 @@ export async function resolveDeckPreviewConflicts(
 export async function discardDeckPreview(
   slide: SlideContentTarget
 ): Promise<{ discarded: true; existed: boolean }> {
+  assertDeckSlide(slide, 'Discarding a deck preview');
   const { gitOrganization, repo } = resolveSlideRepoContext(slide);
   const branch = previewBranchName(slide.content_path);
 

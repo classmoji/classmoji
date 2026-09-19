@@ -44,6 +44,7 @@ import {
   type MergeResolution,
 } from './deckMerge.ts';
 import { applyDeckOps, DeckOpError, type DeckOp } from './deckOps.ts';
+import { assertDeckSlide } from './slideSource.ts';
 import {
   DeckConflictError,
   resolveSlideRepoContext,
@@ -203,6 +204,7 @@ export async function saveDeckWithMerge({
   message,
   resolveThemeUrls,
 }: SaveDeckMergeArgs): Promise<SaveDeckMergeResult> {
+  assertDeckSlide(slide, 'Saving deck content');
   const ctx = resolveSlideRepoContext(slide);
   const deckPath = `${slide.content_path}/deck.json`;
 
@@ -434,6 +436,7 @@ export async function saveDeckFromOps({
   message,
   resolveThemeUrls,
 }: SaveDeckFromOpsArgs): Promise<SaveDeckMergeResult> {
+  assertDeckSlide(slide, 'Applying deck operations');
   const ctx = resolveSlideRepoContext(slide);
   const deckPath = `${slide.content_path}/deck.json`;
 

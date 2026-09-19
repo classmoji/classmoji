@@ -23,6 +23,40 @@ export {
 } from './content/utils/validateFile.ts';
 export { getMimeType, isBinaryFile, isImageFile } from './content/utils/contentType.ts';
 
+// Slide SOURCE policy — what a FILE or LINK slide is allowed to be.
+//
+// Exported from the ROOT barrel although it lives under `src/slides/`, which is
+// otherwise the cheerio-bearing deck engine's territory. `slideSource.ts` has
+// no imports at all: it is constants, a link validator and three kind guards,
+// and the webapp needs every one of them to render a kind chip, validate a link
+// in an action and refuse a deck-only toggle. Importing the FILE itself (not
+// the `./slides` barrel) is what keeps the parser out of the webapp's graph —
+// see the constraint note above `contentSearch`, which is the same rule.
+export {
+  RESERVED_SLIDE_FILENAMES,
+  SLIDE_FILE_EXTENSIONS,
+  SLIDE_FILE_MAX_BYTES,
+  SLIDE_FILE_MAX_LABEL,
+  SLIDE_FILE_MIME,
+  SLIDE_LINK_MAX_LENGTH,
+  SlideKindError,
+  assertDeckSlide,
+  assertFileSlide,
+  assertLinkSlide,
+  isDeckSlide,
+  slideFileExtension,
+  slideFileStorageName,
+  slideKindLabel,
+  slideLinkHost,
+  validateSlideFile,
+  validateSlideLinkUrl,
+} from './slides/slideSource.ts';
+export type {
+  SlideFileExtension,
+  SlideFileValidation,
+  SlideLinkValidation,
+} from './slides/slideSource.ts';
+
 // Git provider abstraction layer
 export {
   GitProvider,

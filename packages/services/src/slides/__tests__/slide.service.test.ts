@@ -268,6 +268,37 @@ describe('createSlide', () => {
     expect(slideCreateMock).not.toHaveBeenCalled();
   });
 
+  it('turns a lost create race into the same conflict the check would have given', async () => {
+    // The collision check is a read and the insert is a separate statement,
+    // with a GitHub commit in between — a second create for the same title
+    // started in that window passes the same read and one of them loses on the
+    // unique index. A raw P2002 reaching the route is an opaque 500 for what
+    // is, to the user, retitle-and-retry.
+    slideCreateMock.mockRejectedValueOnce(
+      Object.assign(new Error('Unique constraint failed on the fields: (`classroom_id`,`slug`)'), {
+        code: 'P2002',
+        meta: { target: ['classroom_id', 'slug'] },
+      })
+    );
+
+    await expect(
+      createSlide({ classroomId: 'class-1', title: 'Intro: Web!', createdBy: 'user-1' })
+    ).rejects.toMatchObject({ code: SLIDE_CONTENT_PATH_CONFLICT });
+  });
+
+  it('passes a P2002 that is NOT the slug index straight through', async () => {
+    // `slides` carries one composite unique today. A different violation is a
+    // different problem, and dressing it up as a content-path conflict would
+    // send the user off renaming a slide that is not the trouble.
+    slideCreateMock.mockRejectedValueOnce(
+      Object.assign(new Error('Unique constraint failed'), { code: 'P2002', meta: { target: [] } })
+    );
+
+    await expect(
+      createSlide({ classroomId: 'class-1', title: 'Intro: Web!', createdBy: 'user-1' })
+    ).rejects.toMatchObject({ code: 'P2002' });
+  });
+
   it('rejects titles that normalize to an empty slug', async () => {
     await expect(
       createSlide({ classroomId: 'class-1', title: '!!!', createdBy: 'user-1' })
