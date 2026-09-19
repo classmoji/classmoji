@@ -192,6 +192,21 @@ describe('POST /api/media/uploads', () => {
     expect(mocks.assertClassroomAccess).not.toHaveBeenCalled();
   });
 
+  it('calls a missing or unusable size a bad request, not a file too large', async () => {
+    // 413 is what the client shows as "your file is over the limit", which is
+    // not what a body with no size in it means.
+    for (const sizeBytes of [undefined, 'big', Number.NaN, Number.POSITIVE_INFINITY]) {
+      const response = await createAction(
+        args(
+          post('/api/media/uploads', { classroomId: CLASSROOM_ID, filename: 'a.mp4', sizeBytes })
+        )
+      );
+      expect(response.status, String(sizeBytes)).toBe(400);
+      await expect(response.json()).resolves.toMatchObject({ error: 'BAD_REQUEST' });
+    }
+    expect(mocks.createUpload).not.toHaveBeenCalled();
+  });
+
   it('refuses a body that is too large to be one of ours', async () => {
     const request = new Request('https://app.test/api/media/uploads', {
       method: 'POST',

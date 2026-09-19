@@ -35,6 +35,14 @@ export const action = async ({ request }: Route.ActionArgs) => {
       return mediaError('BAD_REQUEST', 400, { message: 'classroomId and filename are required.' });
     }
 
+    // A body with no size, or one carrying NaN/Infinity, is a MALFORMED
+    // request, not a file that is too large — and 413 is what the upload client
+    // shows the uploader as "your file is over the limit". Refusing it here
+    // keeps the service's FILE_TOO_LARGE meaning one thing.
+    if (!Number.isFinite(sizeBytes)) {
+      return mediaError('BAD_REQUEST', 400, { message: 'sizeBytes must be a number of bytes.' });
+    }
+
     const { userId, classroom } = await requireMediaAccess(request, classroomId, 'create_upload');
 
     const options =
