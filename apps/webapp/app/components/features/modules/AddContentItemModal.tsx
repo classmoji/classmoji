@@ -19,6 +19,8 @@ interface AddContentItemModalProps {
   /** What the module already holds, so the picker can leave it out. */
   items: ModuleItemLike[];
   candidates: CandidateContent;
+  /** Fix the kind (the caller already asked which kind to add). */
+  presetType?: ContentItemType;
 }
 
 /**
@@ -32,6 +34,7 @@ const AddContentItemModal = ({
   moduleId,
   items,
   candidates,
+  presetType,
 }: AddContentItemModalProps) => {
   const fetcher = useFetcher<{ success?: string; error?: string }>();
   const [type, setType] = useState<ContentItemType>('PAGE');
@@ -40,10 +43,10 @@ const AddContentItemModal = ({
 
   useEffect(() => {
     if (open) {
-      setType('PAGE');
+      setType(presetType ?? 'PAGE');
       setTargetId(undefined);
     }
-  }, [open]);
+  }, [open, presetType]);
 
   // Close once an add settles successfully.
   useEffect(() => {
@@ -64,7 +67,11 @@ const AddContentItemModal = ({
     <Modal
       open={open}
       onCancel={onClose}
-      title="Add item to module"
+      title={
+        presetType
+          ? `Add ${TYPE_META[presetType].label.toLowerCase()} to module`
+          : 'Add item to module'
+      }
       okText="Add"
       onOk={add}
       okButtonProps={{ disabled: !targetId }}
@@ -77,6 +84,7 @@ const AddContentItemModal = ({
       <div className="flex flex-col gap-3 mt-2">
         <Segmented
           block
+          disabled={!!presetType}
           value={type}
           onChange={value => {
             setType(value as ContentItemType);
