@@ -85,7 +85,7 @@ const StudentModuleCard = ({
           {leaves.length === 0 ? (
             <p className="py-3 text-sm text-ink-3">Nothing here yet.</p>
           ) : (
-            <ul className="flex flex-col divide-y divide-line">
+            <ul className="flex flex-col">
               {leaves.map(node => {
                 const { label, icon: RowIcon } = kindOf(node);
                 const titleText = typeof node.name === 'string' ? node.name : '';

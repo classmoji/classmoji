@@ -386,7 +386,7 @@ const ModuleCard = ({
             </button>
           )}
 
-          <ul className="flex flex-col divide-y divide-line">
+          <ul className="flex flex-col">
             {module.repositories.map(r => (
               <ItemRow
                 key={`repo-${r.id}`}
