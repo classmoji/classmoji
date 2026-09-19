@@ -370,6 +370,7 @@ describe('uploadMultipart — server error codes', () => {
   it.each([
     [503, 'NOT_CONFIGURED'],
     [403, 'PRO_REQUIRED'],
+    [409, 'DELIVERY_REQUIRED'],
     [413, 'FILE_TOO_LARGE'],
     [422, 'KIND_NOT_ALLOWED'],
   ])('surfaces %i as %s, and has nothing to clean up', async (status, code) => {
@@ -380,6 +381,16 @@ describe('uploadMultipart — server error codes', () => {
     ).rejects.toMatchObject({ code, status });
 
     expect(server.of('DELETE')).toHaveLength(0);
+  });
+
+  it('reads a 409 by its body code, not by the status table', async () => {
+    // Four refusals share 409, so the status alone would call every one of them
+    // QUOTA_EXCEEDED and the dialog would tell an owner to delete something.
+    makeServer({ create: () => json(409, { error: 'DELIVERY_REQUIRED' }) });
+
+    await expect(
+      uploadMultipart({ file: videoFile(), classroomId: 'class-1', endpoints: { base: BASE } })
+    ).rejects.toMatchObject({ code: 'DELIVERY_REQUIRED', status: 409 });
   });
 
   it('carries the numbers with QUOTA_EXCEEDED so the dialog can say how much is left', async () => {
@@ -405,15 +416,18 @@ describe('uploadMultipart — server error codes', () => {
     });
   });
 
-  it('surfaces SIZE_MISMATCH from complete and cleans up after it', async () => {
-    const server = makeServer({ complete: () => json(409, { error: 'SIZE_MISMATCH' }) });
+  it.each(['SIZE_MISMATCH', 'VERIFY_FAILED'])(
+    'surfaces %s from complete and cleans up after it',
+    async code => {
+      const server = makeServer({ complete: () => json(409, { error: code }) });
 
-    await expect(
-      uploadMultipart({ file: videoFile(), classroomId: 'class-1', endpoints: { base: BASE } })
-    ).rejects.toMatchObject({ code: 'SIZE_MISMATCH' });
+      await expect(
+        uploadMultipart({ file: videoFile(), classroomId: 'class-1', endpoints: { base: BASE } })
+      ).rejects.toMatchObject({ code });
 
-    expect(server.of('DELETE')).toHaveLength(1);
-  });
+      expect(server.of('DELETE')).toHaveLength(1);
+    }
+  );
 
   it('falls back to NETWORK when the server answers with no usable body', async () => {
     makeServer({ create: () => new Response('<html>gateway</html>', { status: 502 }) });

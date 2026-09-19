@@ -60,6 +60,11 @@ export type MultipartUploadErrorCode =
   | 'NOT_CONFIGURED'
   /** The classroom is not on Pro. */
   | 'PRO_REQUIRED'
+  /**
+   * This classroom cannot serve content yet, so an upload would have nowhere to
+   * be played from. Not a deployment problem — `NOT_CONFIGURED` is that one.
+   */
+  | 'DELIVERY_REQUIRED'
   /** Over the per-classroom quota; `usedBytes`/`quotaBytes` say by how much. */
   | 'QUOTA_EXCEEDED'
   /** Over the per-file ceiling. */
@@ -68,6 +73,8 @@ export type MultipartUploadErrorCode =
   | 'KIND_NOT_ALLOWED'
   /** What arrived at R2 was not the size the client declared. */
   | 'SIZE_MISMATCH'
+  /** The assembled object could not be read back, so it was discarded. */
+  | 'VERIFY_FAILED'
   /** The upload row is gone, or no longer in a state that accepts parts. */
   | 'NOT_FOUND'
   | 'BAD_STATE'
@@ -152,7 +159,15 @@ interface SignedPart {
 
 const DEFAULT_BASE = '/api/media';
 
-/** Status → code, for a server that answered with a bare status and no body. */
+/**
+ * Status → code, for a server that answered with a bare status and no body.
+ *
+ * A fallback and only that. Four of our refusals share 409 —
+ * `QUOTA_EXCEEDED`, `DELIVERY_REQUIRED`, `SIZE_MISMATCH`, `BAD_STATE` — so the
+ * status alone cannot tell them apart and `errorFromResponse` reads the body's
+ * `error` FIRST. What sits here for 409 is the likeliest of the four for a
+ * bodyless answer, not a decision.
+ */
 const STATUS_CODES: Record<number, MultipartUploadErrorCode> = {
   403: 'PRO_REQUIRED',
   404: 'NOT_FOUND',
@@ -162,13 +177,16 @@ const STATUS_CODES: Record<number, MultipartUploadErrorCode> = {
   503: 'NOT_CONFIGURED',
 };
 
+/** Every code the routes send. One missing here is silently read as its status. */
 const KNOWN_CODES = new Set<string>([
   'NOT_CONFIGURED',
   'PRO_REQUIRED',
+  'DELIVERY_REQUIRED',
   'QUOTA_EXCEEDED',
   'FILE_TOO_LARGE',
   'KIND_NOT_ALLOWED',
   'SIZE_MISMATCH',
+  'VERIFY_FAILED',
   'NOT_FOUND',
   'BAD_STATE',
 ]);

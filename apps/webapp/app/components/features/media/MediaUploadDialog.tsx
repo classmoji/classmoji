@@ -41,13 +41,22 @@ interface MediaUploadDialogProps {
   onUploaded: (result: MultipartUploadResult) => void;
 }
 
-/** Codes come from the service; the wording is this dialog's job. */
-function messageFor(error: MultipartUploadError, quota: QuotaSummary): string {
+/**
+ * Codes come from the service; the wording is this dialog's job.
+ *
+ * Exported so the mapping can be asserted directly: every case here is a
+ * sentence an uploader reads at the one moment their upload has failed, and a
+ * code that fell through to the default would read as a network problem when it
+ * is nothing of the kind.
+ */
+export function messageFor(error: MultipartUploadError, quota: QuotaSummary): string {
   switch (error.code) {
     case 'NOT_CONFIGURED':
       return 'Media storage is not configured in this environment.';
     case 'PRO_REQUIRED':
       return 'Uploading media needs a Pro classroom.';
+    case 'DELIVERY_REQUIRED':
+      return "This class isn't set up to serve content yet, so media can't be uploaded.";
     case 'QUOTA_EXCEEDED': {
       const used = error.usedBytes ?? quota.usedBytes;
       const total = error.quotaBytes ?? quota.quotaBytes;
@@ -59,6 +68,8 @@ function messageFor(error: MultipartUploadError, quota: QuotaSummary): string {
       return "That file type can't be uploaded.";
     case 'SIZE_MISMATCH':
       return 'The upload did not arrive intact and was discarded. Please try again.';
+    case 'VERIFY_FAILED':
+      return "The upload couldn't be verified. Try again.";
     case 'NOT_FOUND':
     case 'BAD_STATE':
       return 'This upload is no longer valid. Please start it again.';
