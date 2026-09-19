@@ -278,6 +278,25 @@ describe('media ranges', () => {
     expect(media.gets).toEqual([]);
   });
 
+  it.each([
+    // A suffix range is the one shape a player uses to read a trailing index —
+    // an MP4 with its `moov` atom at the end is unplayable without it.
+    ['a suffix range', 'bytes=-500', 206, `bytes 3596-4095/${VIDEO.length}`],
+    // RFC 7233 §3.1: a garbled spec is not a claim about the object, so it is
+    // ignored rather than refused — a full 200, never a 416.
+    ['a malformed spec', 'bytes=abc', 200, null],
+    // Legal to ask for, legal to refuse. A multipart/byteranges body is a lot
+    // of machinery for a request shape nothing in the fleet sends.
+    ['a multi-range request', 'bytes=0-99, 200-299', 200, null],
+  ] as const)('answers %s correctly', async (_label, range, status, contentRange) => {
+    const media = mediaBucket();
+    const { response } = await fetchMedia(media, { variant: 'orig.mp4' }, { headers: { range } });
+
+    expect(response.status).toBe(status);
+    expect(response.headers.get('Content-Range')).toBe(contentRange);
+    expect(await response.text()).toBe(status === 206 ? VIDEO.slice(-500) : VIDEO);
+  });
+
   it('404s a range for an object that is not there', async () => {
     vi.spyOn(console, 'warn').mockImplementation(() => {});
     const { response } = await fetchMedia(
