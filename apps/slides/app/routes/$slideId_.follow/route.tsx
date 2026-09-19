@@ -2,6 +2,7 @@ import { useMemo } from 'react';
 import { useLoaderData } from 'react-router';
 import getPrisma from '@classmoji/database';
 import { assertSlideAccess } from '@classmoji/auth/server';
+import { isDeckSlide } from '@classmoji/services/slides';
 import { SandpackRenderer } from '@classmoji/ui-components/sandpack';
 import RevealPresenter from '~/components/RevealPresenter';
 import {
@@ -11,6 +12,7 @@ import {
   readDeckText,
   resolveDeckDelivery,
 } from '~/utils/deckDelivery.server';
+import { deckOnlyRefusal } from '~/utils/slideKind';
 
 /**
  * Follow route - Audience sync view
@@ -56,6 +58,14 @@ export const loader = async ({
     accessType: 'view',
     shareCode,
   });
+
+  // Deck-only surface. A file or a link has no slides to follow, and every line
+  // below reads an `index.html` those kinds never committed. Refused AFTER the
+  // access gate above, so this answers no question about a slide the caller
+  // could not already see.
+  if (!isDeckSlide(slide)) {
+    throw deckOnlyRefusal(slide.kind, 'follow');
+  }
 
   // Determine if this is public access (shareCode or public slide)
   const isPublicAccess = accessGrantedVia === 'public' || accessGrantedVia === 'shareCode';
@@ -110,7 +120,15 @@ export const loader = async ({
   }
 
   return {
-    slide,
+    // Only the two fields the follower's screen draws.
+    //
+    // This object is rendered into the HTML of whoever holds the share code,
+    // and the row it used to carry holds `multiplex_secret` — the credential
+    // that DRIVES a presentation — next to every other column of `Slide`. The
+    // component has always been careful not to hand the secret to
+    // `RevealPresenter`; the loader is where it must not arrive in the first
+    // place.
+    slide: { id: slide.id, multiplex_id: slide.multiplex_id },
     contentUrl,
     slideContent,
     contentError,

@@ -14,8 +14,11 @@
   "observability": {
     "enabled": true
   },
-  // Workers Caching sits in front of the Worker; the Cache-Control we emit
-  // (no-store for `edit`, immutable otherwise) is what decides what it keeps.
+  // Workers Caching sits in front of the Worker; the Cache-Control we emit is
+  // what decides what it keeps: no-store for `edit` and for the `download`
+  // tier, no-store again on any reply the signature turned into an attachment
+  // (the filename is per-URL while the bytes are per-sha, so a shared cache
+  // must not hold one), immutable otherwise.
   "cache": {
     "enabled": true
   },

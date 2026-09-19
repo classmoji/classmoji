@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 
 import { TIER_POLICY, bucketExpiry } from '../bucket.ts';
-import { clearKeyCache } from '../derive.ts';
+import { blobCanonicalString, toBase64Url, utf8 } from '../canonical.ts';
+import { clearKeyCache, deriveKey, signCanonical } from '../derive.ts';
+import { encodeDownloadFilename } from '../downloads.ts';
 import { signBlobUrl, signThemeBase } from '../urls.ts';
 import type { Tier } from '../types.ts';
 import {
@@ -29,10 +31,44 @@ import {
   withoutParam,
 } from './fixtures.ts';
 
-const TIERS: Tier[] = ['month', 'week', 'edit'];
+const TIERS: Tier[] = ['month', 'week', 'edit', 'download'];
 
 const blob = (tier: Tier, transform?: { w?: 800 | 1600 | 2560; fmt?: 'webp' | 'avif' | 'auto' }) =>
   signBlobUrl(ORIGIN, ctx(tier), { sha: SHA, ext: 'png', transform });
+
+/** A save-to-disk URL: the `download` tier plus the filename it carries. */
+const download = (dl: string) => signBlobUrl(ORIGIN, ctx('download'), { sha: SHA, ext: 'pdf', dl });
+
+/**
+ * The same URL on a longer-lived tier — which `signBlobUrl` refuses to mint.
+ *
+ * That refusal is a MINT-side rule, so proving the verifier is unaffected takes
+ * a signature the mint path would not produce. Everything security-relevant is
+ * still the package's: its canonical string, its key derivation, its HMAC.
+ */
+async function downloadOnTier(dl: string, tier: Tier): Promise<string> {
+  const encoded = encodeDownloadFilename(dl);
+  const exp = bucketExpiry(tier, CLASSROOM_A, NOW);
+  const canonical = blobCanonicalString({
+    host: HOST,
+    classroomId: CLASSROOM_A,
+    sha: SHA,
+    ext: 'pdf',
+    tier,
+    keyVersion: 0,
+    exp,
+    dl: encoded,
+  });
+  const key = await deriveKey(MASTER, CLASSROOM_A, 0);
+  const sig = toBase64Url(await signCanonical(key, canonical));
+  return `${ORIGIN}/c/${CLASSROOM_A}/blob/${SHA}.pdf?p=${tier}&v=0&exp=${exp}&sig=${sig}&dl=${encoded}`;
+}
+
+/**
+ * base64url of ANY string, including the ones `encodeDownloadFilename` refuses.
+ * A forger is not bound by the mint path's validation, so neither is the test.
+ */
+const encodedName = (value: string) => toBase64Url(utf8(value));
 
 const themeBase = (tier: Tier) =>
   signThemeBase(ORIGIN, ctx(tier), { theme: 'cosmo-dark', treeSha: TREE_SHA });
@@ -293,6 +329,151 @@ describe('tamper vectors', () => {
       ok: false,
       reason: 'malformed',
     });
+  });
+});
+
+describe('download URLs', () => {
+  it('hands back the decoded filename on a verified URL', async () => {
+    const url = await download('Übung 1.pdf');
+    const result = await verifyBlobUrl(MASTER, url, NOW);
+    expect(result).toEqual({
+      ok: true,
+      kind: 'blob',
+      classroomId: CLASSROOM_A,
+      sha: SHA,
+      ext: 'pdf',
+      tier: 'download',
+      keyVersion: 0,
+      exp: NOW + 600,
+      downloadFilename: 'Übung 1.pdf',
+      inGrace: false,
+      keySlot: 'current',
+    });
+  });
+
+  it('says nothing about a download on a URL that is not one', async () => {
+    // `downloadFilename` is absent rather than empty: its PRESENCE is what tells
+    // a server to answer with an attachment.
+    const result = await verifyBlobUrl(MASTER, await blob('month'), NOW);
+    expect(result.ok && 'downloadFilename' in result).toBe(false);
+  });
+
+  it('round-trips names a header would otherwise mangle', async () => {
+    for (const name of [
+      'deck.pdf',
+      'Week 3 — Recursion.pptx',
+      '课程安排.pdf',
+      '🎓 graduation.key',
+      'prof\'s "final" deck.pdf',
+      'a|b.pdf',
+    ]) {
+      const result = await verifyBlobUrl(MASTER, await download(name), NOW);
+      expect(result.ok && result.downloadFilename).toBe(name);
+    }
+  });
+
+  it('does not let a pipe in the filename forge a canonical field', async () => {
+    // The name is base64url in the URL and in the canonical string, so the one
+    // character that separates canonical fields can never appear in one.
+    const url = await download('a|dl|b.pdf');
+    expect(url).not.toContain('|');
+    const result = await verifyBlobUrl(MASTER, url, NOW);
+    expect(result.ok && result.downloadFilename).toBe('a|dl|b.pdf');
+  });
+
+  it('verifies a dl on any tier, because only minting is restricted', async () => {
+    // `signBlobUrl` will not mint this (a save-to-disk link has no business
+    // being immutable for a week), but the verifier must keep honouring every
+    // URL that carries a valid signature — including ones already in browsers
+    // from before that rule existed.
+    const result = await verifyBlobUrl(MASTER, await downloadOnTier('deck.pdf', 'week'), NOW);
+    expect(result.ok && result.tier).toBe('week');
+    expect(result.ok && result.downloadFilename).toBe('deck.pdf');
+  });
+
+  it('rejects a swapped filename', async () => {
+    const url = await download('deck.pdf');
+    const swapped = withParam(url, 'dl', encodedName('exam-answers.pdf'));
+    expect(await verifyBlobUrl(MASTER, swapped, NOW)).toEqual({
+      ok: false,
+      reason: 'bad-signature',
+    });
+  });
+
+  it('rejects a stripped or emptied filename', async () => {
+    const url = await download('deck.pdf');
+    // Both are a canonical string this key never signed - the suffix is either
+    // there in full or not there at all.
+    expect(await verifyBlobUrl(MASTER, withoutParam(url, 'dl'), NOW)).toEqual({
+      ok: false,
+      reason: 'bad-signature',
+    });
+    expect(await verifyBlobUrl(MASTER, withParam(url, 'dl', ''), NOW)).toEqual({
+      ok: false,
+      reason: 'malformed',
+    });
+  });
+
+  it('rejects a dl bolted onto a URL that never had one', async () => {
+    const url = await blob('month');
+    expect(await verifyBlobUrl(MASTER, `${url}&dl=${encodedName('payroll.pdf')}`, NOW)).toEqual({
+      ok: false,
+      reason: 'bad-signature',
+    });
+  });
+
+  it('rejects a repeated dl, where `get` would only see the first', async () => {
+    const url = await download('deck.pdf');
+    expect(await verifyBlobUrl(MASTER, `${url}&dl=${encodedName('evil.exe')}`, NOW)).toEqual({
+      ok: false,
+      reason: 'malformed',
+    });
+  });
+
+  it('refuses an unbounded dl before it hashes anything', async () => {
+    const url = await download('deck.pdf');
+    expect(await verifyBlobUrl(MASTER, withParam(url, 'dl', 'a'.repeat(5000)), NOW)).toEqual({
+      ok: false,
+      reason: 'malformed',
+    });
+  });
+
+  it('never decodes a filename a signature did not cover', async () => {
+    // The order is the guarantee: HMAC first over the RAW value, decode second.
+    // A path, a traversal, a control character - none of them get as far as the
+    // decoder, and none of them are reported as anything but a forgery.
+    for (const forged of ['../../etc/passwd', 'a\nContent-Disposition: x', '.bashrc']) {
+      const tampered = withParam(await download('deck.pdf'), 'dl', encodedName(forged));
+      expect(await verifyBlobUrl(MASTER, tampered, NOW)).toEqual({
+        ok: false,
+        reason: 'bad-signature',
+      });
+    }
+  });
+
+  it('keeps the download tier to ten minutes and thirty seconds of grace', async () => {
+    const url = await download('deck.pdf');
+    const exp = NOW + 600;
+    expect(TIER_POLICY.download.ttlSeconds).toBe(600);
+    expect(TIER_POLICY.download.graceSeconds).toBe(30);
+
+    const atExpiry = await verifyBlobUrl(MASTER, url, exp);
+    expect(atExpiry.ok && atExpiry.inGrace).toBe(false);
+
+    const inGrace = await verifyBlobUrl(MASTER, url, exp + 30);
+    expect(inGrace.ok).toBe(true);
+    if (inGrace.ok) expect(inGrace.inGrace).toBe(true);
+
+    expect(await verifyBlobUrl(MASTER, url, exp + 31)).toEqual({ ok: false, reason: 'expired' });
+    // An edit tier's 5 minutes would have covered this; download must not.
+    expect(await verifyBlobUrl(MASTER, url, exp + 300)).toEqual({ ok: false, reason: 'expired' });
+  });
+
+  it('never lets a download response be stored', async () => {
+    // The bytes are shared by sha across classrooms, and the filename is not:
+    // one viewer's `Content-Disposition` must not be cached against them.
+    expect(cacheControlFor('download', NOW + 600, NOW)).toBe('no-store');
+    expect(cacheControlFor('download', NOW - 10, NOW)).toBe('no-store');
   });
 });
 

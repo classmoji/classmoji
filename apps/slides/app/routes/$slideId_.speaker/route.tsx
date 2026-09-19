@@ -1,6 +1,7 @@
 import { useLoaderData } from 'react-router';
 import getPrisma from '@classmoji/database';
 import { assertSlideAccess } from '@classmoji/auth/server';
+import { isDeckSlide } from '@classmoji/services/slides';
 import SpeakerView from '~/components/SpeakerView';
 import {
   deckAccessFor,
@@ -8,6 +9,7 @@ import {
   readDeckText,
   resolveDeckAssets,
 } from '~/utils/deckDelivery.server';
+import { deckOnlyRefusal } from '~/utils/slideKind';
 
 /**
  * Speaker route - Remote speaker notes view
@@ -50,6 +52,14 @@ export const loader = async ({
     slide,
     accessType: 'speakerNotes',
   });
+
+  // Deck-only surface. A file or a link has no slides to show notes for, and every line
+  // below reads an `index.html` those kinds never committed. Refused AFTER the
+  // access gate above, so this answers no question about a slide the caller
+  // could not already see.
+  if (!isDeckSlide(slide)) {
+    throw deckOnlyRefusal(slide.kind, 'show notes for');
+  }
 
   // Get git org login for content URLs
   const gitOrgLogin = slide.classroom?.git_organization?.login;
@@ -94,7 +104,9 @@ export const loader = async ({
   }
 
   return {
-    slide,
+    // The speaker view needs the id to open its socket; the rest of the row has
+    // no business in a page payload.
+    slide: { id: slide.id },
     slideContent,
     contentError,
   };

@@ -21,6 +21,11 @@ export interface TierPolicy {
 }
 
 export const TIER_POLICY: Readonly<Record<Tier, TierPolicy>> = {
+  // Not bucketed, and deliberately the shortest window there is: a download URL
+  // is minted for one viewer at the moment they click, and the browser follows
+  // the redirect immediately. Ten minutes covers a slow hand and a resumed
+  // transfer; thirty seconds of grace covers clock skew and nothing else.
+  download: { bucketSeconds: null, ttlSeconds: 10 * 60, graceSeconds: 30 },
   edit: { bucketSeconds: null, ttlSeconds: 4 * HOUR, graceSeconds: 5 * 60 },
   week: { bucketSeconds: 7 * DAY, ttlSeconds: null, graceSeconds: 6 * HOUR },
   month: { bucketSeconds: 30 * DAY, ttlSeconds: null, graceSeconds: 6 * HOUR },

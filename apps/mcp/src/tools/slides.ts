@@ -196,18 +196,20 @@ interface SlideUpdateArgs {
 export const slideUpdateTool: ToolDefinition<SlideUpdateArgs> = {
   name: 'slide_update',
   annotations: { destructive: false, openWorld: false },
-  title: 'Update slide deck metadata',
+  title: 'Update slide metadata',
   description:
-    "Updates a slide deck's metadata: title, draft/published state, public visibility, " +
-    'team-edit permission, and speaker-notes visibility. Deck CONTENT is edited with ' +
+    "Updates a slide's metadata: title, draft/published state, public visibility, team-edit " +
+    'permission, and speaker-notes visibility. Works for every kind of slide (a reveal.js ' +
+    'deck, an uploaded file, a link), EXCEPT allow_team_edit and show_speaker_notes, which ' +
+    'are deck-only and are refused for a file or a link. Deck CONTENT is edited with ' +
     'deck_apply, not here. Title changes keep the slug and content path (set once at ' +
-    'creation). OWNER/TEACHER may update any deck; an ASSISTANT only decks they created or ' +
-    'decks with allow_team_edit.',
+    'creation). OWNER/TEACHER may update any slide; an ASSISTANT only slides they created or ' +
+    'slides with allow_team_edit.',
   scope: 'write',
   roles: TEACHING_TEAM,
   inputSchema: {
     classroom: z.string().describe("Classroom reference as 'org/slug'"),
-    slide_id: z.string().uuid().describe('Slide deck id'),
+    slide_id: z.string().uuid().describe('Slide id (any kind)'),
     title: z
       .string()
       .min(1)
@@ -222,11 +224,11 @@ export const slideUpdateTool: ToolDefinition<SlideUpdateArgs> = {
     allow_team_edit: z
       .boolean()
       .optional()
-      .describe('Allow any assistant on the teaching team to edit this deck'),
+      .describe('Allow any assistant on the teaching team to edit this deck (decks only)'),
     show_speaker_notes: z
       .boolean()
       .optional()
-      .describe('Show speaker notes to anyone who can view (staff always see them)'),
+      .describe('Show speaker notes to anyone who can view (decks only; staff always see them)'),
   },
   handler: async (args, ctx) => {
     const slide = await loadSlideInClassroom(args.slide_id, ctx);

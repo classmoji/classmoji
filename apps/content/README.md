@@ -16,28 +16,31 @@ browser ──signed URL──▶ Worker ──hit──▶ R2
 ## Routes
 
 ```
-GET /c/{classroomId}/blob/{sha}.{ext}?p=&v=&exp=&sig=[&w=&fmt=]
+GET /c/{classroomId}/blob/{sha}.{ext}?p=&v=&exp=&sig=[&w=&fmt=][&dl=]
 GET /c/{classroomId}/theme/{theme}/{treeSha}/{p}.{v}.{exp}.{sig}/{relPath}
 GET /healthz
 OPTIONS *
 ```
 
-`p` is the tier (`month` | `week` | `edit`), `v` the key version, `exp` a
-unix-seconds expiry, `sig` the base64url HMAC. `w` (800 | 1600 | 2560) and `fmt`
-(webp | avif | auto) request an image variant and are part of the signed string,
-so they cannot be swapped.
+`p` is the tier (`month` | `week` | `edit` | `download`), `v` the key version,
+`exp` a unix-seconds expiry, `sig` the base64url HMAC. `w` (800 | 1600 | 2560)
+and `fmt` (webp | avif | auto) request an image variant, and `dl` is a
+base64url display filename that turns the reply into a download — all of them
+are part of the signed string, so none can be swapped.
 
 **The request host is signed too** — lowercased, port included, immediately
 after the scheme in the canonical string:
 
 ```
-cm1|blob|{host}|{classroomId}|{sha}|{ext}|{p}|{v}|{exp}|{w or ''}|{fmt or ''}
+cm1|blob|{host}|{classroomId}|{sha}|{ext}|{p}|{v}|{exp}|{w or ''}|{fmt or ''}[|dl|{dl}]
 cm1|theme|{host}|{classroomId}|{theme}|{treeSha}|{p}|{v}|{exp}
 ```
 
 so a URL minted for one delivery origin cannot be replayed against another.
-Blob query params are allowlisted to exactly `p, v, exp, sig, w, fmt` — any
-other key, or any repeated key, is malformed. Theme URLs must carry no query
+Blob query params are allowlisted to exactly `p, v, exp, sig, w, fmt, dl` — any
+other key, or any repeated key, is malformed. The `|dl|{dl}` suffix appears only
+on a download URL; without one the canonical string is the eleven-field one it
+has always been, so no existing signature moves. Theme URLs must carry no query
 string at all, and a theme path segment that is empty, `.`, `..`, or still
 percent-encoded after one decode is refused.
 
@@ -56,6 +59,7 @@ decides:
 | `edit` | exact `now + 4h`, 5m grace | `no-store` | the viewer can edit, or an explicit staff read of a preview branch |
 | `week` | end of the classroom's current 7d bucket, 6h grace | `public, max-age={exp-now}, immutable` | everything else — the ordinary members-only read |
 | `month` | end of the classroom's current 30d bucket, 6h grace | `public, max-age={exp-now}, immutable` | the content itself is public (`Page.is_public`, or a deck's) |
+| `download` | exact `now + 10m`, 30s grace | `no-store` | one viewer clicked a save-to-disk link (see **Downloads**) |
 
 **A tier is not access control — the signature is.** It picks a lifetime and a
 cacheability for a URL that has already been minted for someone who was allowed
@@ -78,6 +82,33 @@ classroom's key version) is what stops new URLs being minted under the old key.
 canonical string, so a URL minted before that date verifies against nothing and
 403s with `bad-signature`. Nothing is in production, so this only ever bit
 staging.
+
+### Downloads
+
+A blob URL carrying a signed `dl` is served as an attachment. `dl` is the
+base64url display filename, and the signature covers it, so a link cannot be
+edited to change the name a file is saved under.
+
+Only three headers differ, and only on these responses:
+
+- `Content-Disposition`, built PER REQUEST from the verified name — both RFC
+  6266 forms, the quoted ASCII fallback and `filename*=UTF-8''…`. It is applied
+  on every delivery path: an R2 hit, a 206, an origin pull, a HEAD answered from
+  metadata.
+- `Content-Security-Policy: default-src 'none'; sandbox allow-downloads`. A bare
+  `sandbox` blocks the download itself, and nothing else is granted.
+- `Cache-Control: no-store`.
+
+**The filename never reaches R2.** `blobs/{sha}` is content-addressed and shared
+across classrooms, so a name stored against those bytes would be handed to the
+next reader of the same blob — which is also why the response must not be stored
+at the edge. The R2 write itself is unaffected: the same bytes land under the
+same key, and the next download of that file is a cache hit.
+
+A refusal is never a download: a 403, a 416 or a 502 keeps the strict CSP and
+carries no `Content-Disposition`. And `pptx` is deliberately absent from the
+type map below — `application/octet-stream` plus a filename is exactly what a
+save-to-disk reply should be.
 
 ### Text blobs
 
@@ -139,13 +170,15 @@ an image gets, and exactly the `no-store` on `edit`.
   cache, and the place to strip metadata is upload. The Images *binding*
   exposes no `metadata` option to change that; it exists only on the `cf.image`
   fetch API.
-- **The `edit` tier is `no-store`,** everything else `public, max-age=…, immutable`
-  for as long as its signature lives. A just-expired signature is still honoured
-  inside its tier's grace window (6h for `month` and `week`, 5m for `edit`).
+- **The `edit` and `download` tiers are `no-store`,** everything else
+  `public, max-age=…, immutable` for as long as its signature lives. A
+  just-expired signature is still honoured inside its tier's grace window (6h
+  for `month` and `week`, 5m for `edit`, 30s for `download`).
 - **Every response** carries CORS (`*`, `GET, HEAD, OPTIONS`, exposing
   `Content-Type, Content-Length, ETag`), `X-Content-Type-Options: nosniff`, and
-  `Content-Security-Policy: default-src 'none'; sandbox`. A `Set-Cookie` can
-  never leave this Worker. The CSP matters because production serves from
+  `Content-Security-Policy: default-src 'none'; sandbox` — with
+  `allow-downloads` appended on a download reply, and on nothing else. A
+  `Set-Cookie` can never leave this Worker. The CSP matters because production serves from
   `content.classmoji.io`, inside the app's `.classmoji.io` session-cookie
   domain: without `sandbox`, an SVG carrying inline script and opened as a
   top-level navigation would execute there. Subresource use (`<img>`, `<link>`,

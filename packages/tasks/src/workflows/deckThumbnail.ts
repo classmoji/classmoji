@@ -222,6 +222,16 @@ export const deckThumbnailRender = task({
     });
     if (!slide) return { status: 'skipped', reason: 'slide-not-found' };
 
+    // A FILE or a LINK slide has no `index.html` and never will. The enqueue
+    // paths already filter to decks, so reaching here means a run that was
+    // queued before the slide changed hands or a payload someone built by hand;
+    // either way there is nothing to photograph, and the alternative is a
+    // browser booted against a route that can only refuse.
+    if (slide.kind !== 'DECK') {
+      logger.info('Slide is not a deck; nothing to screenshot', { slideId, kind: slide.kind });
+      return { status: 'skipped', reason: 'not-a-deck' };
+    }
+
     const gitOrganization = slide.classroom?.git_organization ?? null;
     const repo = slide.classroom?.content_repo ?? null;
     if (!gitOrganization?.login || !repo) {

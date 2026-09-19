@@ -1,9 +1,27 @@
 import { Table, Tag } from 'antd';
-import { IconEyeOff } from '@tabler/icons-react';
+import { IconDownload, IconExternalLink, IconEyeOff } from '@tabler/icons-react';
 import getPrisma from '@classmoji/database';
+import { slideKindLabel, slideLinkHost } from '@classmoji/services';
 import type { Route } from './+types/route';
 import { assertClassroomAccess } from '~/utils/helpers';
 import { TableActionButtons } from '~/components';
+import { SlideActionLink, SlideKindChip } from '~/components/features/slides';
+
+/**
+ * A row of this list.
+ *
+ * `kindLabel` and `linkHost` are resolved in the loader: the helpers that
+ * produce them live in the services barrel, and calling them from component
+ * code would drag Prisma and the deck parser into the client bundle.
+ */
+interface SlideRow {
+  id: string;
+  title: string;
+  is_draft: boolean;
+  kind: 'DECK' | 'FILE' | 'LINK';
+  kindLabel: string;
+  linkHost: string | null;
+}
 
 export const loader = async ({ request, params }: Route.LoaderArgs) => {
   const { class: classSlug } = params;
@@ -39,14 +57,32 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
     },
     // Explicit: a Slide row carries multiplex_id / multiplex_secret, which are
     // live presentation credentials rather than list data. Send only what the
-    // table below renders.
-    select: { id: true, title: true, is_draft: true },
+    // table below renders — plus the source_* columns the kind chip is derived
+    // from, which say nothing a viewer of the slide cannot already see.
+    select: {
+      id: true,
+      title: true,
+      is_draft: true,
+      kind: true,
+      source_filename: true,
+      source_path: true,
+      source_url: true,
+    },
     orderBy: { updated_at: 'desc' },
   });
 
   return {
     classSlug,
-    slides,
+    // The chip's word and a link's destination host are computed server side,
+    // so the table renders plain strings.
+    slides: slides.map(slide => ({
+      id: slide.id,
+      title: slide.title,
+      is_draft: slide.is_draft,
+      kind: slide.kind,
+      kindLabel: slideKindLabel(slide),
+      linkHost: slideLinkHost(slide.source_url),
+    })),
     slidesUrl: process.env.SLIDES_URL || 'http://localhost:6500',
   };
 };
@@ -63,14 +99,26 @@ export default function StudentSlides({ loaderData }: Route.ComponentProps) {
       // students), so the badge marks the deck as a colleague's unpublished
       // work — matching how the admin list labels the same state. It is a
       // label, not a control: changing a deck's status stays on the admin page.
-      render: (title: string, record: { is_draft: boolean }) => (
-        <div className="flex items-center gap-2">
-          <span className="font-medium">{title}</span>
-          {record.is_draft && (
-            <Tag color="default" className="flex items-center gap-1 w-fit m-0">
-              <IconEyeOff size={12} />
-              Draft
-            </Tag>
+      //
+      // The kind chip is the same one the admin list draws, and for the same
+      // reason: opening a row downloads a file or leaves for another site as
+      // often as it opens a deck, and the title alone cannot say which.
+      render: (title: string, record: SlideRow) => (
+        <div className="flex flex-col gap-0.5">
+          <div className="flex items-center gap-2">
+            <SlideKindChip label={record.kindLabel} />
+            <span className="font-medium">{title}</span>
+            {record.is_draft && (
+              <Tag color="default" className="flex items-center gap-1 w-fit m-0">
+                <IconEyeOff size={12} />
+                Draft
+              </Tag>
+            )}
+          </div>
+          {record.linkHost && (
+            <span className="text-xs text-ink-3 truncate" title={record.linkHost}>
+              {record.linkHost}
+            </span>
           )}
         </div>
       ),
@@ -84,9 +132,35 @@ export default function StudentSlides({ loaderData }: Route.ComponentProps) {
     {
       title: 'Actions',
       key: 'actions',
-      render: (_: unknown, record: { id: string }) => (
-        <TableActionButtons onView={() => window.open(`${slidesUrl}/${record.id}`, '_blank')} />
-      ),
+      // One address for every kind — `${slidesUrl}/${id}` opens a deck,
+      // downloads a file and redirects a link — but the word on the control
+      // says which of those is about to happen. "View" on a row that silently
+      // starts a download is a small lie.
+      render: (_: unknown, record: SlideRow) => {
+        const href = `${slidesUrl}/${record.id}`;
+
+        if (record.kind === 'FILE') {
+          return (
+            <TableActionButtons>
+              <SlideActionLink href={href} icon={<IconDownload size={17} />}>
+                Download
+              </SlideActionLink>
+            </TableActionButtons>
+          );
+        }
+
+        if (record.kind === 'LINK') {
+          return (
+            <TableActionButtons>
+              <SlideActionLink href={href} icon={<IconExternalLink size={17} />}>
+                Open
+              </SlideActionLink>
+            </TableActionButtons>
+          );
+        }
+
+        return <TableActionButtons onView={() => window.open(href, '_blank')} />;
+      },
     },
   ];
 

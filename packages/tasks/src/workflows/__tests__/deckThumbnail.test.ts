@@ -119,6 +119,8 @@ function slideRow(overrides: Record<string, unknown> = {}) {
     slug: 'week-01-intro',
     title: 'Week 01 — Intro',
     content_path: 'slides/week-01-intro',
+    // Every real row carries it, and only one value has a document to render.
+    kind: 'DECK',
     is_public: false,
     thumbnail_path: null,
     thumbnail_rendered_sha: null,
@@ -542,6 +544,20 @@ describe('skips rather than fails when it cannot run at all', () => {
   it('skips a slide that no longer exists', async () => {
     findUnique.mockResolvedValue(null);
     await expect(run()).resolves.toEqual({ status: 'skipped', reason: 'slide-not-found' });
+  });
+
+  it('skips a slide that is not a deck', async () => {
+    // A file or a link has no `index.html` and never will. The enqueue paths
+    // filter to decks, so this is the backstop for a run queued before the
+    // slide changed hands — and it comes BEFORE the token mint and the browser,
+    // because the alternative is a render that can only time out.
+    for (const kind of ['FILE', 'LINK']) {
+      findUnique.mockResolvedValue(slideRow({ kind }));
+      await expect(run()).resolves.toEqual({ status: 'skipped', reason: 'not-a-deck' });
+    }
+    expect(signDeckRenderToken).not.toHaveBeenCalled();
+    expect(screenshotToBase64).not.toHaveBeenCalled();
+    expect(uploadBatch).not.toHaveBeenCalled();
   });
 
   it('skips a classroom with no content repo', async () => {

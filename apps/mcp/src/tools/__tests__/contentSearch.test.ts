@@ -76,6 +76,12 @@ vi.mock('@classmoji/services', async () => {
   const docs = await vi.importActual<
     typeof import('../../../../../packages/services/src/classmoji/docsSearch.service.ts')
   >('../../../../../packages/services/src/classmoji/docsSearch.service.ts');
+  // And the REAL metadata-document builder, on the same principle: a FILE or
+  // LINK slide read live must come back as the SAME string the indexer embeds
+  // for it, and a hand-written stub here would agree with any answer at all.
+  const index = await vi.importActual<
+    typeof import('../../../../../packages/services/src/classmoji/contentIndex.service.ts')
+  >('../../../../../packages/services/src/classmoji/contentIndex.service.ts');
   return {
     ...real,
     ...docs,
@@ -83,6 +89,7 @@ vi.mock('@classmoji/services', async () => {
       contentDelivery: {
         fetchContentText: (...args: unknown[]) => mocks.fetchContentText(...args),
       },
+      contentIndex: { slideMetadataText: index.slideMetadataText },
     },
   };
 });
@@ -721,6 +728,104 @@ describe('content_get', () => {
     expect(payload.text).toContain('Base case first.');
     expect(payload.text).not.toContain('answer key');
     expect(JSON.stringify(payload)).not.toContain('answer key');
+  });
+
+  it('answers a FILE slide with its metadata rather than "not found"', async () => {
+    // The live read looks for an `index.html` a file slide has never had. Left
+    // to fall through, `content_get` refused a slide `content_search` had just
+    // listed — a refusal that reads as an authorization decision and is not.
+    rawRows = [];
+    setPrismaRows({
+      slide: {
+        findFirst: () =>
+          pageRecord({
+            id: DECK_ID,
+            title: 'Lecture 1',
+            content_path: 'slides/lecture-1',
+            is_draft: false,
+            kind: 'FILE',
+            source_path: 'slides/lecture-1/lecture-1.pdf',
+            source_filename: 'Lecture 1 — Intro.pdf',
+          }),
+      },
+    });
+
+    const payload = await call(
+      contentGetTool,
+      { classroom: 'org/slug', kind: 'slide', id: DECK_ID },
+      STUDENT
+    );
+
+    expect(payload.indexed).toBe(false);
+    expect(payload.title).toBe('Lecture 1');
+    expect(payload.source_path).toBe('slides/lecture-1/lecture-1.pdf');
+    // The same document the indexer embeds: the title, and what the file is.
+    expect(payload.text).toContain('Lecture 1');
+    expect(payload.text).toContain('Downloadable file');
+    expect(payload.text).toContain('Lecture 1 — Intro.pdf');
+    // Nothing was fetched: there is no artifact to read.
+    expect(mocks.fetchContentText).not.toHaveBeenCalled();
+  });
+
+  it('answers a LINK slide with its destination', async () => {
+    rawRows = [];
+    setPrismaRows({
+      slide: {
+        findFirst: () =>
+          pageRecord({
+            id: DECK_ID,
+            title: 'Reading list',
+            content_path: 'slides/reading-list',
+            is_draft: false,
+            kind: 'LINK',
+            source_url: 'https://example.com/reading',
+          }),
+      },
+    });
+
+    const payload = await call(
+      contentGetTool,
+      { classroom: 'org/slug', kind: 'slide', id: DECK_ID },
+      STUDENT
+    );
+
+    expect(payload.text).toContain('External link');
+    expect(payload.text).toContain('example.com');
+    expect(payload.source_path).toBe('slides/reading-list');
+    expect(mocks.fetchContentText).not.toHaveBeenCalled();
+  });
+
+  it('holds a non-deck slide to the SAME visibility rule as a deck', async () => {
+    // The metadata answer sits AFTER the predicate, not beside it: a draft file
+    // slide is as invisible to a student as a draft deck, and refused with the
+    // same words a nonexistent id gets.
+    rawRows = [];
+    setPrismaRows({
+      slide: {
+        findFirst: () =>
+          pageRecord({
+            id: DECK_ID,
+            title: 'Unreleased handout',
+            content_path: 'slides/unreleased-handout',
+            is_draft: true,
+            kind: 'FILE',
+            source_path: 'slides/unreleased-handout/handout.pdf',
+          }),
+      },
+    });
+
+    const refusal = await refusalOf(() =>
+      contentGetTool.handler({ classroom: 'org/slug', kind: 'slide', id: DECK_ID }, STUDENT)
+    );
+    expect(refusal.error).toBe('not_found');
+
+    // And staff, who may see drafts, get it.
+    const payload = await call(
+      contentGetTool,
+      { classroom: 'org/slug', kind: 'slide', id: DECK_ID },
+      TEACHER
+    );
+    expect(payload.text).toContain('Unreleased handout');
   });
 
   it("has no live fallback for a 'file' document — the index is its only record", async () => {

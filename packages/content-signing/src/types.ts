@@ -5,6 +5,9 @@
  * the cacheability of a URL that has already been minted for a viewer who was
  * allowed to have it:
  *
+ *   - `download` — an exact 10m TTL, 30 seconds of grace, `no-store`. A URL
+ *                  handed to ONE viewer's browser for ONE save-to-disk, so it
+ *                  is the shortest window that survives a redirect.
  *   - `edit`  — an exact 4h TTL, 5 minutes of grace, `no-store`. The editor's
  *               403-and-revalidate flow, and the only tier a writer is in.
  *   - `week`  — a 7-day bucket, 6h of grace, `immutable`.
@@ -13,7 +16,7 @@
  * Bucketed tiers are staggered per classroom, so every URL minted for one file
  * inside one bucket is byte-identical and therefore cacheable.
  */
-export type Tier = 'edit' | 'week' | 'month';
+export type Tier = 'download' | 'edit' | 'week' | 'month';
 
 /** Widths the image pipeline is allowed to render. */
 export type TransformWidth = 800 | 1600 | 2560;
@@ -76,6 +79,13 @@ export type BlobVerification =
       keyVersion: number;
       exp: number;
       transform?: Transform;
+      /**
+       * The DECODED display filename, present only when the URL carried `dl`.
+       * Its presence is what tells a server to answer with an attachment; the
+       * value itself has already been through `normalizeDownloadFilename`, so
+       * it is a single path-free segment with no control characters in it.
+       */
+      downloadFilename?: string;
       inGrace: boolean;
       keySlot: KeySlot;
     }
@@ -109,6 +119,14 @@ export interface ParsedBlobUrl {
   exp: number;
   sig: string;
   transform?: Transform;
+  /**
+   * The `dl` param as the query carried it — still base64url, never base64-
+   * decoded (percent-decoding is the query parser's, and base64url has nothing
+   * worth escaping). The canonical string covers this value, so the signature
+   * is checked over what the client sent rather than over a filename we made of
+   * it first.
+   */
+  dl?: string;
 }
 
 /** Raw fields lifted out of a theme URL, before any cryptographic check. */
