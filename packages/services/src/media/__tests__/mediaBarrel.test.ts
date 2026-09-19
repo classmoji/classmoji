@@ -22,7 +22,9 @@ describe('the lazy write half', () => {
     vi.doMock('../media.service.ts', () => {
       loads += 1;
       if (loads === 1) throw new Error('chunk load failed');
-      return { usage: async () => ({ usedBytes: 0, quotaBytes: 0, perFileBytes: 0, isPro: false }) };
+      return {
+        usage: async () => ({ usedBytes: 0, quotaBytes: 0, perFileBytes: 0, isPro: false }),
+      };
     });
 
     const media = await import('../index.ts');

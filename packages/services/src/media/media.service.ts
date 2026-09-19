@@ -642,9 +642,7 @@ async function verifiedSize(client: S3Client, bucket: string, key: string): Prom
       if (typeof head.ContentLength === 'number' && Number.isFinite(head.ContentLength)) {
         return head.ContentLength;
       }
-      console.warn(
-        `[media] Read back ${key} with no size (attempt ${attempt}/${HEAD_ATTEMPTS})`
-      );
+      console.warn(`[media] Read back ${key} with no size (attempt ${attempt}/${HEAD_ATTEMPTS})`);
     } catch (error) {
       console.warn(
         `[media] Could not read back ${key} (attempt ${attempt}/${HEAD_ATTEMPTS}):`,
