@@ -121,19 +121,41 @@ export async function readJsonBody(request: Request): Promise<Record<string, unk
   }
 }
 
-/** Teaching-team edit access on a classroom the caller named. */
+/**
+ * Teaching-team edit access on a classroom the caller named.
+ *
+ * `maskDenialAs404` turns the access gate's refusal into the same 404 an
+ * unknown media id gets. Only the ACCESS check is masked: the audit row is
+ * still written (`assertClassroomAccess` writes it before it throws), and the
+ * locked/unpublished refusal below is left alone, because that one can only
+ * reach somebody who is already on the classroom's teaching team and so
+ * answers a question they could have asked anyway — while an owner told "no
+ * such media object" about their own locked classroom would go looking for a
+ * file nobody deleted.
+ */
 export async function requireMediaAccess(
   request: Request,
   classroomId: string,
-  attemptedAction: string
+  attemptedAction: string,
+  { maskDenialAs404 = false }: { maskDenialAs404?: boolean } = {}
 ): Promise<{ userId: string; classroom: { id: string } }> {
-  const { classroom, userId, membership } = await assertClassroomAccess({
-    request,
-    classroomId,
-    allowedRoles: [...MEDIA_EDIT_ROLES],
-    resourceType: 'MEDIA',
-    attemptedAction,
-  });
+  let granted;
+  try {
+    granted = await assertClassroomAccess({
+      request,
+      classroomId,
+      allowedRoles: [...MEDIA_EDIT_ROLES],
+      resourceType: 'MEDIA',
+      attemptedAction,
+    });
+  } catch (error) {
+    if (maskDenialAs404 && error instanceof Response && error.status === 403) {
+      throw mediaError('NOT_FOUND', 404, { message: 'No such media object.' });
+    }
+    throw error;
+  }
+
+  const { classroom, userId, membership } = granted;
   assertClassroomMutationAllowed({ status: classroom.status, role: membership!.role });
   return { userId, classroom: { id: classroom.id } };
 }
@@ -143,16 +165,21 @@ export async function requireMediaAccess(
  *
  * `parts`, `complete` and `delete` are addressed by media id alone — the upload
  * client holds nothing else by then — so the classroom has to be read off the
- * row before there is anything to authorize against. Two things keep that from
- * being a way to ask which ids exist:
+ * row before there is anything to authorize against. Three things keep that
+ * from being a way to ask which ids exist:
  *
  *   - the session is required FIRST, so an anonymous caller gets 401 for every
  *     id, real or not, and learns nothing;
- *   - a signed-in caller who is not on the classroom's teaching team gets the
- *     ordinary 403, with the audit row `assertClassroomAccess` always writes.
+ *   - an id belonging to a classroom the caller cannot edit answers the SAME
+ *     404 as an id that was never issued. These three routes therefore have no
+ *     reply that means "this exists, elsewhere" — which a 403 would have been.
+ *     The audit row is still written, so a real attempt is still visible to us;
+ *   - the id is a v4 UUID, so the set cannot be walked in the first place.
  *
- * The id is a v4 UUID, so "does this one exist" is not a question that can be
- * asked by enumeration in the first place.
+ * `listMedia` and the resolver reach the same place by a different road: they
+ * put `classroom_id` in the WHERE clause, so a foreign row is never in hand to
+ * be rejected. Here the row has to be read to find the classroom at all, so the
+ * equivalence is restored afterwards instead.
  */
 export async function requireMediaAccessForObject(
   request: Request,
@@ -167,7 +194,9 @@ export async function requireMediaAccessForObject(
   });
   if (!row) throw mediaError('NOT_FOUND', 404, { message: 'No such media object.' });
 
-  return requireMediaAccess(request, row.classroom_id, attemptedAction);
+  return requireMediaAccess(request, row.classroom_id, attemptedAction, {
+    maskDenialAs404: true,
+  });
 }
 
 /** A path param that has to be a media id, or the 404 that refuses it. */

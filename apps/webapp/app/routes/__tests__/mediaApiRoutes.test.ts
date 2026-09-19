@@ -365,3 +365,104 @@ describe('DELETE /api/media/:mediaId', () => {
     expect(response.status).toBe(405);
   });
 });
+
+/**
+ * The three id-addressed routes must have no reply that means "this exists,
+ * elsewhere". A 403 was exactly that reply: it told a signed-in stranger that
+ * the uuid they had named was a real object in somebody else's classroom,
+ * which is the one fact the id alone was not supposed to be able to buy.
+ */
+describe('an id in a classroom the caller cannot edit', () => {
+  const FOREIGN_CLASSROOM = '99999999-8888-4777-8666-555555555555';
+
+  /** The gate's own refusal: text/plain 403, after the audit row is written. */
+  const denied = () => new Response('Access denied', { status: 403 });
+
+  beforeEach(() => {
+    mocks.findUnique.mockResolvedValue({ classroom_id: FOREIGN_CLASSROOM });
+    mocks.assertClassroomAccess.mockRejectedValue(denied());
+  });
+
+  it.each([
+    [
+      'parts',
+      () =>
+        partsAction(
+          args(post(`/api/media/uploads/${MEDIA_ID}/parts`, { partNumbers: [1] }), {
+            mediaId: MEDIA_ID,
+          })
+        ),
+    ],
+    [
+      'complete',
+      () =>
+        completeAction(
+          args(
+            post(`/api/media/uploads/${MEDIA_ID}/complete`, {
+              parts: [{ partNumber: 1, etag: '"a"' }],
+            }),
+            {
+              mediaId: MEDIA_ID,
+            }
+          )
+        ),
+    ],
+    [
+      'delete',
+      () =>
+        deleteAction(args(post(`/api/media/${MEDIA_ID}`, null, 'DELETE'), { mediaId: MEDIA_ID })),
+    ],
+  ])('answers %s with the same 404 an unknown id gets', async (_name, call) => {
+    const response = await call();
+
+    expect(response.status).toBe(404);
+    await expect(response.json()).resolves.toMatchObject({ error: 'NOT_FOUND' });
+    // The service was never reached, so nothing was aborted or deleted either.
+    expect(mocks.signParts).not.toHaveBeenCalled();
+    expect(mocks.completeUpload).not.toHaveBeenCalled();
+    expect(mocks.deleteMedia).not.toHaveBeenCalled();
+  });
+
+  it('is byte-identical to the answer for an id that was never issued', async () => {
+    const foreign = await deleteAction(
+      args(post(`/api/media/${MEDIA_ID}`, null, 'DELETE'), { mediaId: MEDIA_ID })
+    );
+
+    mocks.findUnique.mockResolvedValue(null);
+    const unknown = await deleteAction(
+      args(post(`/api/media/${MEDIA_ID}`, null, 'DELETE'), { mediaId: MEDIA_ID })
+    );
+
+    expect(foreign.status).toBe(unknown.status);
+    await expect(foreign.text()).resolves.toBe(await unknown.text());
+  });
+
+  it('still writes the audit row, so a real attempt is not invisible to us', async () => {
+    await deleteAction(args(post(`/api/media/${MEDIA_ID}`, null, 'DELETE'), { mediaId: MEDIA_ID }));
+
+    // `assertClassroomAccess` writes it before it throws; masking the status
+    // must not mean skipping the call that records the attempt.
+    expect(mocks.assertClassroomAccess).toHaveBeenCalledWith(
+      expect.objectContaining({ classroomId: FOREIGN_CLASSROOM, attemptedAction: 'delete_media' })
+    );
+  });
+
+  it('leaves the locked-classroom refusal alone, since that one reveals nothing', async () => {
+    // A member of the classroom, refused for a reason they can act on: telling
+    // them "no such media object" would send them hunting a deleted file.
+    mocks.assertClassroomAccess.mockResolvedValue({
+      userId: 'user-1',
+      classroom: { id: FOREIGN_CLASSROOM, status: 'LOCKED' },
+      membership: { role: 'TEACHER' },
+    });
+    mocks.assertClassroomMutationAllowed.mockImplementation(() => {
+      throw new Response(JSON.stringify({ error: 'CLASSROOM_LOCKED' }), { status: 403 });
+    });
+
+    const response = await deleteAction(
+      args(post(`/api/media/${MEDIA_ID}`, null, 'DELETE'), { mediaId: MEDIA_ID })
+    );
+
+    expect(response.status).toBe(403);
+  });
+});
