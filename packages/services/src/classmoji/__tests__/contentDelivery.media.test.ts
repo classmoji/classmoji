@@ -46,6 +46,7 @@ const {
   resolveMediaPoster,
 } = await import('../contentDelivery.service.ts');
 const { verifyContentUrl } = await import('@classmoji/content-signing');
+type MediaRecord = import('../../media/mediaLookup.ts').MediaRecord;
 
 const ORIGIN = 'https://cdn.classmoji.test';
 const MASTER = 'test-master-secret';
@@ -65,21 +66,21 @@ const ctx = {
   tier: 'week' as const,
 };
 
-function record(overrides: Record<string, unknown> = {}) {
+function record(overrides: Partial<MediaRecord> = {}): MediaRecord {
   return {
     id: MEDIA_ID,
     classroomId: CLASSROOM_ID,
-    kind: 'VIDEO',
+    kind: 'VIDEO' as const,
     filename: 'Lecture 1.mp4',
     ext: 'mp4',
     contentType: 'video/mp4',
     sizeBytes: 1000,
-    status: 'READY',
+    status: 'READY' as const,
     uploadedBy: 'user-1',
     optimise: true,
     keepOriginal: true,
     allowDownload: false,
-    processing: 'NONE',
+    processing: 'NONE' as const,
     processingError: null,
     renditionKey: null,
     renditionBytes: null,
