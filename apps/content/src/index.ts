@@ -8,13 +8,18 @@
  * classroom beyond the id in the URL.
  *
  *   GET /c/{classroomId}/blob/{sha}.{ext}?p=&v=&exp=&sig=[&w=&fmt=][&dl=]
+ *   GET /c/{classroomId}/media/{mediaId}/{variant}?p=&v=&exp=&sig=[&dl=]
  *   GET /c/{classroomId}/theme/{theme}/{treeSha}/{p}.{v}.{exp}.{sig}/{relPath}
  *   GET /healthz
  *   OPTIONS *
+ *
+ * The media route is the one shape with no origin behind it: those bytes are
+ * only ever in R2, so a miss there is a 404 rather than a pull.
  */
 import { serveBlob } from './blob.ts';
 import { errorResponse, jsonResponse, preflightResponse, withoutBody } from './cache.ts';
 import { isConfigured, signingSecrets, type Env } from './env.ts';
+import { serveMedia } from './media.ts';
 import { OriginError } from './origins/types.ts';
 import { serveTheme } from './theme.ts';
 import { isClassroomId, parseContentUrl, verifyContentUrl } from './verify.ts';
@@ -158,9 +163,9 @@ async function handle(request: Request, env: Env, ctx: ExecutionContext): Promis
   }
 
   try {
-    return verified.kind === 'blob'
-      ? await serveBlob(env, ctx, request, verified)
-      : await serveTheme(env, ctx, verified, request);
+    if (verified.kind === 'blob') return await serveBlob(env, ctx, request, verified);
+    if (verified.kind === 'media') return await serveMedia(env, request, verified);
+    return await serveTheme(env, ctx, verified, request);
   } catch (error) {
     if (error instanceof OriginError) {
       console.warn('[content] origin error:', error.message);
