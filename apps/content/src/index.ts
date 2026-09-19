@@ -18,7 +18,7 @@
  */
 import { serveBlob } from './blob.ts';
 import { errorResponse, jsonResponse, preflightResponse, withoutBody } from './cache.ts';
-import { isConfigured, signingSecrets, type Env } from './env.ts';
+import { hasMediaBinding, isConfigured, signingSecrets, type Env } from './env.ts';
 import { serveMedia } from './media.ts';
 import { OriginError } from './origins/types.ts';
 import { serveTheme } from './theme.ts';
@@ -105,8 +105,18 @@ async function handle(request: Request, env: Env, ctx: ExecutionContext): Promis
   const url = new URL(request.url);
 
   if (url.pathname === '/healthz') {
+    // `media` is reported beside `configured` rather than folded into it: the
+    // MEDIA bucket is only the media route's concern, so losing it must not
+    // read as "this Worker serves nothing". It is a binding name, not a secret
+    // — whether a bucket is attached tells an anonymous caller nothing it could
+    // not learn by asking for a media URL.
     return jsonResponse(
-      { ok: true, environment: env.ENVIRONMENT ?? 'unknown', configured: isConfigured(env) },
+      {
+        ok: true,
+        environment: env.ENVIRONMENT ?? 'unknown',
+        configured: isConfigured(env),
+        media: hasMediaBinding(env),
+      },
       200
     );
   }

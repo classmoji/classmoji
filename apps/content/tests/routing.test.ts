@@ -65,8 +65,31 @@ describe('routing', () => {
     });
     const response = await worker.fetch(new Request(`${ORIGIN}/healthz`), env, fakeContext());
     expect(response.status).toBe(200);
-    expect(await response.json()).toEqual({ ok: true, environment: 'test', configured: false });
+    expect(await response.json()).toEqual({
+      ok: true,
+      environment: 'test',
+      configured: false,
+      media: true,
+    });
     expect(response.headers.get('Cache-Control')).toBe('no-store');
+  });
+
+  it('reports a missing MEDIA binding on /healthz without failing the rest', async () => {
+    // Blob and theme delivery do not touch that bucket, so `configured` stays
+    // true: the only thing that is broken is the media route, and this is where
+    // it is visible before a student finds it.
+    const response = await worker.fetch(
+      new Request(`${ORIGIN}/healthz`),
+      fakeEnv({ MEDIA: undefined as unknown as R2Bucket }),
+      fakeContext()
+    );
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({
+      ok: true,
+      environment: 'test',
+      configured: true,
+      media: false,
+    });
   });
 
   it('never says on /healthz whether a previous signing key is set', async () => {
@@ -81,7 +104,12 @@ describe('routing', () => {
     // way here" is not something an anonymous request gets to learn.
     const body = await rotating.text();
     expect(body).toBe(await settled.text());
-    expect(JSON.parse(body)).toEqual({ ok: true, environment: 'test', configured: true });
+    expect(JSON.parse(body)).toEqual({
+      ok: true,
+      environment: 'test',
+      configured: true,
+      media: true,
+    });
     expect(body.toLowerCase()).not.toContain('previous');
   });
 

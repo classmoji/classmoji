@@ -48,6 +48,23 @@ export function isConfigured(env: Env): boolean {
 }
 
 /**
+ * Whether the MEDIA bucket is actually bound.
+ *
+ * Deliberately NOT part of `isConfigured`. Blob and theme delivery do not touch
+ * that bucket, and a deploy that lost only the media binding must keep serving
+ * them rather than 503ing the whole Worker. What it must not do is fail as a
+ * generic 500 from the router's catch, which says nothing an operator can act
+ * on — so the media route checks this itself and `/healthz` reports it, which
+ * is the one place a missing binding can be seen before a student finds it.
+ *
+ * The type says `R2Bucket` because `wrangler.jsonc` declares the binding; this
+ * is about the deploy where that declaration did not make it to the runtime.
+ */
+export function hasMediaBinding(env: Env): boolean {
+  return Boolean(env.MEDIA);
+}
+
+/**
  * Master secrets to verify against, current first.
  *
  * A whitespace-only value counts as unset. A cleared previous-key slot can

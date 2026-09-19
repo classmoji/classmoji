@@ -12,6 +12,7 @@ import worker, { clearRotationLog } from '../src/index.ts';
 import { clearOriginCache } from '../src/token.ts';
 import { nowSeconds } from '../src/verify.ts';
 import {
+  BLOB_SHA,
   CLASSROOM,
   MEDIA_ID,
   MISSING_MEDIA_ID,
@@ -19,6 +20,7 @@ import {
   fakeBucket,
   fakeContext,
   fakeEnv,
+  signedBlobUrl,
   signedMediaUrl,
 } from './helpers.ts';
 
@@ -379,6 +381,41 @@ describe('media refusals', () => {
 
     expect(response.status).toBe(403);
     expect(await response.json()).toEqual({ error: 'malformed' });
+  });
+
+  it('503s a verified media URL when the MEDIA binding is missing', async () => {
+    // The URL is perfectly good; the deploy is not. Without this the route
+    // would read `undefined.head` and surface as `500 internal error`, which
+    // sends an operator looking at the signing code instead of the binding.
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const { response } = await fetchMedia(
+      mediaBucket(),
+      { variant: 'orig.mp4' },
+      {},
+      { MEDIA: undefined }
+    );
+
+    expect(response.status).toBe(503);
+    expect(await response.json()).toEqual({ error: 'media not configured' });
+    expect(response.headers.get('Cache-Control')).toBe('no-store');
+    expect(warn).toHaveBeenCalledWith('[content] media binding missing');
+  });
+
+  it('still serves blobs when only the MEDIA binding is missing', async () => {
+    // `isConfigured` deliberately does not cover MEDIA: one lost binding must
+    // not take the other two shapes down with it.
+    const cache = fakeBucket({ [`blobs/${BLOB_SHA}`]: { body: 'png-bytes' } });
+    const response = await worker.fetch(
+      new Request(await signedBlobUrl({ sha: BLOB_SHA, ext: 'png' })),
+      fakeEnv({
+        CACHE: cache as unknown as R2Bucket,
+        MEDIA: undefined as unknown as R2Bucket,
+      }),
+      fakeContext()
+    );
+
+    expect(response.status).toBe(200);
+    expect(await response.text()).toBe('png-bytes');
   });
 
   it('405s a write to a media URL', async () => {
