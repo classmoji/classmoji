@@ -31,3 +31,67 @@
     border-color: var(--color-gray-200, currentcolor);
   }
 }
+
+/* =============================================================================
+   PENDING-SUBMISSION MOTION
+   Backs `~/components/Spinner` and the upload panel in `~/components/FormPending`.
+
+   These rules sit OUTSIDE every cascade layer on purpose. Tailwind v4 emits its
+   utilities inside `@layer utilities`, and unlayered declarations beat layered
+   ones whatever their specificity — so the reduced-motion rule below reliably
+   overrides `animate-spin` without an `!important` or a doubled-up selector.
+   ============================================================================= */
+
+/* Indeterminate progress: a short bar sweeping the full width. Nothing here
+   claims to know how far along the upload is, because nothing does — the commit
+   to GitHub after the bytes land is an unknown share of the wait. */
+.cm-progress-indeterminate {
+  position: relative;
+  overflow: hidden;
+}
+
+.cm-progress-indeterminate::after {
+  content: '';
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 40%;
+  border-radius: inherit;
+  background: var(--accent);
+  animation: cm-progress-sweep 1.5s ease-in-out infinite;
+}
+
+@keyframes cm-progress-sweep {
+  from {
+    /* Percentages are of the bar's OWN width: -100% parks it just off the left
+       edge, 250% carries it just past the right edge of a 2.5x-wider track. */
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(250%);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  /* No rotation. A slow fade keeps the spinner legible as "busy" for anyone who
+     reads it that way, and the label beside it says so in words regardless. */
+  .cm-spinner {
+    animation: cm-spinner-fade 2s ease-in-out infinite;
+  }
+
+  /* A static, filled track: still clearly "in progress", with nothing moving. */
+  .cm-progress-indeterminate::after {
+    animation: none;
+    width: 100%;
+    opacity: 0.55;
+  }
+}
+
+@keyframes cm-spinner-fade {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.4;
+  }
+}

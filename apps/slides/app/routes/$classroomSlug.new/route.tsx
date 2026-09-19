@@ -52,6 +52,12 @@ import {
   acquireUploadSlot,
   releaseUploadSlot,
 } from '~/utils/uploadConcurrency.server';
+import {
+  PendingCancelLink,
+  PendingSubmitButton,
+  UploadPendingPanel,
+} from '~/components/FormPending';
+import { isSubmissionPending } from '~/utils/pendingSubmission';
 
 /** The four things the picker offers. `import` is a link, not a form. */
 type SlideSource = 'blank' | 'file' | 'link';
@@ -351,16 +357,20 @@ function SourceOption({
   selected,
   onSelect,
   href,
+  disabled,
 }: {
   title: string;
   description: string;
   selected?: boolean;
   onSelect?: () => void;
   href?: string;
+  /** Frozen while a submission is in flight, so the form cannot change under it. */
+  disabled?: boolean;
 }) {
   const base =
     'block w-full text-left rounded-xl border px-4 py-3 transition-colors cursor-pointer ' +
-    'focus:outline-none focus-visible:border-[var(--accent)]';
+    'focus:outline-none focus-visible:border-[var(--accent)] ' +
+    'disabled:cursor-not-allowed disabled:opacity-50';
   const tone = selected
     ? 'border-[var(--accent)] bg-[var(--accent-soft)]'
     : 'border-[var(--line)] bg-[var(--panel)] hover:border-[var(--line-strong)]';
@@ -378,15 +388,29 @@ function SourceOption({
   );
 
   if (href) {
+    // The import card is a link, not a picker choice, so it gets the same
+    // three-part treatment as the Cancel links: inert, untabbable, announced.
     return (
-      <a href={href} className={`${base} ${tone}`}>
+      <a
+        href={href}
+        className={`${base} ${tone}${disabled ? ' pointer-events-none opacity-50' : ''}`}
+        aria-disabled={disabled || undefined}
+        tabIndex={disabled ? -1 : undefined}
+        onClick={disabled ? event => event.preventDefault() : undefined}
+      >
         {body}
       </a>
     );
   }
 
   return (
-    <button type="button" onClick={onSelect} aria-pressed={selected} className={`${base} ${tone}`}>
+    <button
+      type="button"
+      onClick={onSelect}
+      aria-pressed={selected}
+      disabled={disabled}
+      className={`${base} ${tone}`}
+    >
       {body}
     </button>
   );
@@ -403,9 +427,17 @@ export default function NewSlidePage() {
   const [source, setSource] = useState<SlideSource>(actionData?.source ?? 'blank');
   const [fileError, setFileError] = useState<string | null>(null);
   const [linkError, setLinkError] = useState<string | null>(null);
+  // Name and size for the upload panel, captured when the file is chosen: the
+  // input is disabled mid-flight, and `files` is not readable from a disabled
+  // control in every browser.
+  const [chosenFile, setChosenFile] = useState<{ name: string; size: number } | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
-  const isSubmitting = navigation.state === 'submitting';
+  // True for the whole round trip, not just the bytes going up — see
+  // `~/utils/pendingSubmission`. Only one of the three forms is mounted at a
+  // time, so this is unambiguously about the one on screen; an error settling
+  // flips it back to false, which is what hands the form back.
+  const isSubmitting = isSubmissionPending(navigation);
   const serverError = actionData?.error && actionData.source === source ? actionData.error : null;
 
   const extensionList = useMemo(
@@ -465,9 +497,11 @@ export default function NewSlidePage() {
               Add slides to {classroomName || classroomSlug}
             </p>
           </div>
-          <a href={slidesListUrl} className="btn btn-ghost">
-            Cancel
-          </a>
+          <PendingCancelLink
+            href={slidesListUrl}
+            pending={isSubmitting}
+            className="btn btn-ghost"
+          />
         </div>
 
         {/* Source picker */}
@@ -481,23 +515,27 @@ export default function NewSlidePage() {
               description="A new deck you write in the editor"
               selected={source === 'blank'}
               onSelect={() => setSource('blank')}
+              disabled={isSubmitting}
             />
             <SourceOption
               title="Upload a file"
               description={`PDF, PowerPoint or Keynote, up to ${upload.maxMb} MB`}
               selected={source === 'file'}
               onSelect={() => setSource('file')}
+              disabled={isSubmitting}
             />
             <SourceOption
               title="Link a URL"
               description="Point at slides that live somewhere else"
               selected={source === 'link'}
               onSelect={() => setSource('link')}
+              disabled={isSubmitting}
             />
             <SourceOption
               title="Slides.com export"
               description="Import a .zip exported from slides.com"
               href={importUrl}
+              disabled={isSubmitting}
             />
           </div>
         </div>
@@ -527,7 +565,8 @@ export default function NewSlidePage() {
                   name="title"
                   required
                   placeholder="e.g., Introduction to JavaScript"
-                  className={FIELD_CLASS}
+                  disabled={isSubmitting}
+                  className={`${FIELD_CLASS} disabled:cursor-not-allowed disabled:opacity-60`}
                 />
               </div>
 
@@ -546,12 +585,10 @@ export default function NewSlidePage() {
               </div>
 
               <div className="flex justify-end gap-2">
-                <a href={slidesListUrl} className="btn">
-                  Cancel
-                </a>
-                <button type="submit" disabled={isSubmitting} className="btn btn-primary">
-                  {isSubmitting ? 'Creating…' : 'Create deck'}
-                </button>
+                <PendingCancelLink href={slidesListUrl} pending={isSubmitting} />
+                <PendingSubmitButton pending={isSubmitting} pendingLabel="Creating…">
+                  Create deck
+                </PendingSubmitButton>
               </div>
             </Form>
           )}
@@ -570,7 +607,8 @@ export default function NewSlidePage() {
                   name="title"
                   required
                   placeholder="e.g., Week 3 Lecture"
-                  className={FIELD_CLASS}
+                  disabled={isSubmitting}
+                  className={`${FIELD_CLASS} disabled:cursor-not-allowed disabled:opacity-60`}
                 />
               </div>
 
@@ -584,8 +622,13 @@ export default function NewSlidePage() {
                   type="file"
                   name="file"
                   accept={upload.accept}
-                  onChange={event => setFileError(checkFile(event.target.files?.[0] ?? null))}
-                  className={`${FIELD_CLASS} file:mr-3 file:rounded-md file:border-0 file:bg-[var(--accent-soft)] file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-[var(--accent-ink)]`}
+                  disabled={isSubmitting}
+                  onChange={event => {
+                    const picked = event.target.files?.[0] ?? null;
+                    setChosenFile(picked ? { name: picked.name, size: picked.size } : null);
+                    setFileError(checkFile(picked));
+                  }}
+                  className={`${FIELD_CLASS} file:mr-3 file:rounded-md file:border-0 file:bg-[var(--accent-soft)] file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-[var(--accent-ink)] disabled:cursor-not-allowed disabled:opacity-60`}
                 />
                 {fileError && (
                   <p role="alert" className="mt-2 text-xs font-medium text-[var(--rose-ink)]">
@@ -596,15 +639,15 @@ export default function NewSlidePage() {
                   Students download the file under its original name. PDF, PowerPoint or Keynote, up
                   to {upload.maxMb} MB.
                 </p>
+
+                {isSubmitting && <UploadPendingPanel file={chosenFile} />}
               </div>
 
               <div className="flex justify-end gap-2">
-                <a href={slidesListUrl} className="btn">
-                  Cancel
-                </a>
-                <button type="submit" disabled={isSubmitting} className="btn btn-primary">
-                  {isSubmitting ? 'Uploading…' : 'Upload file'}
-                </button>
+                <PendingCancelLink href={slidesListUrl} pending={isSubmitting} />
+                <PendingSubmitButton pending={isSubmitting} pendingLabel="Uploading…">
+                  Upload file
+                </PendingSubmitButton>
               </div>
             </Form>
           )}
@@ -623,7 +666,8 @@ export default function NewSlidePage() {
                   name="title"
                   required
                   placeholder="e.g., Guest Lecture Slides"
-                  className={FIELD_CLASS}
+                  disabled={isSubmitting}
+                  className={`${FIELD_CLASS} disabled:cursor-not-allowed disabled:opacity-60`}
                 />
               </div>
 
@@ -639,7 +683,8 @@ export default function NewSlidePage() {
                   inputMode="url"
                   placeholder="https://example.com/slides"
                   onChange={() => setLinkError(null)}
-                  className={FIELD_CLASS}
+                  disabled={isSubmitting}
+                  className={`${FIELD_CLASS} disabled:cursor-not-allowed disabled:opacity-60`}
                 />
                 {linkError && (
                   <p role="alert" className="mt-2 text-xs font-medium text-[var(--rose-ink)]">
@@ -653,12 +698,10 @@ export default function NewSlidePage() {
               </div>
 
               <div className="flex justify-end gap-2">
-                <a href={slidesListUrl} className="btn">
-                  Cancel
-                </a>
-                <button type="submit" disabled={isSubmitting} className="btn btn-primary">
-                  {isSubmitting ? 'Saving…' : 'Add link'}
-                </button>
+                <PendingCancelLink href={slidesListUrl} pending={isSubmitting} />
+                <PendingSubmitButton pending={isSubmitting} pendingLabel="Saving…">
+                  Add link
+                </PendingSubmitButton>
               </div>
             </Form>
           )}

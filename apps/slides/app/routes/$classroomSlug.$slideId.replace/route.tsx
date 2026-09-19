@@ -34,6 +34,12 @@ import {
   acquireUploadSlot,
   releaseUploadSlot,
 } from '~/utils/uploadConcurrency.server';
+import {
+  PendingCancelLink,
+  PendingSubmitButton,
+  UploadPendingPanel,
+} from '~/components/FormPending';
+import { isSubmissionPending } from '~/utils/pendingSubmission';
 
 /** Load the slide, prove the caller may edit it, and prove it is a file slide. */
 async function authorizeFileSlide(request: Request, classroomSlug: string, slideId: string) {
@@ -205,9 +211,16 @@ export default function ReplaceSlideFilePage() {
   const navigation = useNavigation();
   const actionData = useActionData() as { error?: string } | undefined;
   const [fileError, setFileError] = useState<string | null>(null);
+  // Name and size for the status panel, captured when the file is chosen. The
+  // input itself is disabled mid-flight and `files` is not readable from a
+  // disabled control in every browser, so the values are kept here instead.
+  const [chosenFile, setChosenFile] = useState<{ name: string; size: number } | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
-  const isSubmitting = navigation.state === 'submitting';
+  // True for the whole round trip, not just the bytes going up — see
+  // `~/utils/pendingSubmission`. An error settling flips it back to false,
+  // which is what clears the panel and hands the form back.
+  const isSubmitting = isSubmissionPending(navigation);
 
   const checkFile = useCallback(
     (file: File | null | undefined): string | null => {
@@ -242,9 +255,11 @@ export default function ReplaceSlideFilePage() {
               {slide.title} · {classroomName || classroomSlug}
             </p>
           </div>
-          <a href={slidesListUrl} className="btn btn-ghost">
-            Cancel
-          </a>
+          <PendingCancelLink
+            href={slidesListUrl}
+            pending={isSubmitting}
+            className="btn btn-ghost"
+          />
         </div>
 
         <div className="card p-5 sm:p-6">
@@ -276,8 +291,13 @@ export default function ReplaceSlideFilePage() {
               type="file"
               name="file"
               accept={upload.accept}
-              onChange={event => setFileError(checkFile(event.target.files?.[0] ?? null))}
-              className={`${FIELD_CLASS} file:mr-3 file:rounded-md file:border-0 file:bg-[var(--accent-soft)] file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-[var(--accent-ink)]`}
+              disabled={isSubmitting}
+              onChange={event => {
+                const picked = event.target.files?.[0] ?? null;
+                setChosenFile(picked ? { name: picked.name, size: picked.size } : null);
+                setFileError(checkFile(picked));
+              }}
+              className={`${FIELD_CLASS} file:mr-3 file:rounded-md file:border-0 file:bg-[var(--accent-soft)] file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-[var(--accent-ink)] disabled:cursor-not-allowed disabled:opacity-60`}
             />
             {fileError && (
               <p role="alert" className="mt-2 text-xs font-medium text-[var(--rose-ink)]">
@@ -290,13 +310,13 @@ export default function ReplaceSlideFilePage() {
               {upload.maxMb} MB.
             </p>
 
+            {isSubmitting && <UploadPendingPanel file={chosenFile} />}
+
             <div className="mt-6 flex justify-end gap-2">
-              <a href={slidesListUrl} className="btn">
-                Cancel
-              </a>
-              <button type="submit" disabled={isSubmitting} className="btn btn-primary">
-                {isSubmitting ? 'Uploading…' : 'Replace file'}
-              </button>
+              <PendingCancelLink href={slidesListUrl} pending={isSubmitting} />
+              <PendingSubmitButton pending={isSubmitting} pendingLabel="Uploading…">
+                Replace file
+              </PendingSubmitButton>
             </div>
           </Form>
         </div>
