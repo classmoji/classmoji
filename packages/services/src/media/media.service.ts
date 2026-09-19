@@ -8,6 +8,7 @@ import {
   UploadPartCommand,
 } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
+import { randomUUID } from 'node:crypto';
 import getPrisma from '@classmoji/database';
 import { getProStateForClassroomId } from '../classmoji/subscription.service.ts';
 import { MediaError } from './MediaError.ts';
@@ -283,6 +284,13 @@ export async function createUpload({
   const keepOriginal = isVideo && optimise ? options.keepOriginal !== false : true;
   const allowDownload = isVideo ? options.allowDownload === true : false;
 
+  // The id is minted HERE rather than by the database, so the R2 key can be
+  // built — and validated — before anything is written. `mediaKey` asserts
+  // every part of the string it produces, and a refusal after the INSERT would
+  // leave a reservation the classroom pays for with no upload behind it.
+  const mediaId = randomUUID();
+  const key = mediaKey(classroom.id, mediaId, `orig.${classified.ext}`);
+
   // The sum and the insert it authorizes must see the same state, so they run
   // in ONE transaction behind a row lock on the classroom. Two uploads opened a
   // millisecond apart serialize on that lock and the second one counts the
@@ -292,7 +300,7 @@ export async function createUpload({
   // Nothing slow is inside: no R2 call, no subscription lookup. The lock is
   // held for one SELECT and one INSERT, because it blocks every other upload
   // this classroom is opening.
-  const row = (await getPrisma().$transaction(async tx => {
+  await getPrisma().$transaction(async tx => {
     await tx.$queryRaw`SELECT id FROM classrooms WHERE id = ${classroom.id} FOR UPDATE`;
 
     const rows = (await tx.mediaObject.findMany({
@@ -310,6 +318,7 @@ export async function createUpload({
 
     return tx.mediaObject.create({
       data: {
+        id: mediaId,
         classroom_id: classroom.id,
         kind: classified.kind,
         filename,
@@ -322,9 +331,7 @@ export async function createUpload({
         allow_download: allowDownload,
       },
     });
-  })) as MediaRow;
-
-  const key = mediaKey(classroom.id, row.id, `orig.${classified.ext}`);
+  });
 
   let uploadId: string | undefined;
   try {
@@ -337,22 +344,22 @@ export async function createUpload({
     );
     uploadId = created.UploadId;
   } catch (error) {
-    await getPrisma().mediaObject.delete({ where: { id: row.id } });
+    await getPrisma().mediaObject.delete({ where: { id: mediaId } });
     throw error;
   }
 
   if (!uploadId) {
-    await getPrisma().mediaObject.delete({ where: { id: row.id } });
+    await getPrisma().mediaObject.delete({ where: { id: mediaId } });
     throw new MediaError('BAD_STATE', 'R2 did not return an upload id');
   }
 
   await getPrisma().mediaObject.update({
-    where: { id: row.id },
+    where: { id: mediaId },
     data: { upload_id: uploadId },
   });
 
   return {
-    mediaId: row.id,
+    mediaId,
     uploadId,
     contentType: classified.contentType,
     partSize: PART_SIZE_BYTES,

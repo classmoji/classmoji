@@ -247,8 +247,16 @@ describe('listMedia', () => {
 });
 
 describe('createUpload', () => {
+  /** The id the service minted for this create — it is not the DB's any more. */
+  const reservedId = (): string =>
+    prisma.mediaObject.create.mock.calls[0][0].data.id as unknown as string;
+
   beforeEach(() => {
-    prisma.mediaObject.create.mockResolvedValue(row({ status: 'UPLOADING' }));
+    // Echo the id back, as Postgres would: the key was built from it before
+    // the row existed, so a fixture with a different id would hide a mismatch.
+    prisma.mediaObject.create.mockImplementation(async ({ data }: { data: object }) =>
+      row({ status: 'UPLOADING', ...data })
+    );
     sendImpl.mockResolvedValue({ UploadId: 'upload-1' });
   });
 
@@ -261,23 +269,44 @@ describe('createUpload', () => {
     });
 
     expect(created).toMatchObject({
-      mediaId: MEDIA_ID,
+      mediaId: reservedId(),
       uploadId: 'upload-1',
       contentType: 'video/mp4',
       partSize: PART_SIZE_BYTES,
       partCount: 4,
     });
+    expect(created.mediaId).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
+    );
 
     const create = sent.find(call => call.name === 'CreateMultipartUpload');
     expect(create?.input).toMatchObject({
       Bucket: 'classmoji-media-test',
-      Key: ORIG_KEY,
+      Key: `m/${CLASSROOM_ID}/${created.mediaId}/orig.mp4`,
       ContentType: 'video/mp4',
     });
     expect(prisma.mediaObject.update).toHaveBeenCalledWith({
-      where: { id: MEDIA_ID },
+      where: { id: created.mediaId },
       data: { upload_id: 'upload-1' },
     });
+  });
+
+  it('builds the key before it reserves anything', async () => {
+    // `mediaKey` validates every part of the string it makes. If that refusal
+    // landed after the INSERT, the classroom would hold a reservation for a
+    // day with no upload behind it.
+    await expect(
+      createUpload({
+        classroom: { id: 'not-a-classroom-id' },
+        userId: 'u',
+        filename: 'a.mp4',
+        sizeBytes: 10,
+      })
+    ).rejects.toThrow();
+
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+    expect(prisma.mediaObject.create).not.toHaveBeenCalled();
+    expect(sent).toHaveLength(0);
   });
 
   it('refuses in order: configured, kind, Pro, per-file, quota', async () => {
@@ -428,7 +457,7 @@ describe('createUpload', () => {
       createUpload({ classroom, userId: 'u', filename: 'a.mp4', sizeBytes: 10 })
     ).rejects.toThrow('r2 is down');
     // Otherwise the classroom pays for a reservation with nothing behind it.
-    expect(prisma.mediaObject.delete).toHaveBeenCalledWith({ where: { id: MEDIA_ID } });
+    expect(prisma.mediaObject.delete).toHaveBeenCalledWith({ where: { id: reservedId() } });
   });
 });
 
