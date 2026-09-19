@@ -17,6 +17,7 @@ import {
   meterReading,
   orderForDisplay,
 } from '~/components/features/media/mediaState';
+import { readJsonBody } from '~/utils/mediaApi.server';
 import { requireClassroomAdmin } from '~/utils/routeAuth.server';
 import { loadMediaPage, type MediaListItem } from './mediaPage.server';
 import type { Route } from './+types/route';
@@ -59,6 +60,11 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
  * Failure comes back as `{ error }` with a 200 on purpose: a fetcher treats a
  * 4xx as a thrown error and takes the whole page to the error boundary, and
  * "that file could not be prepared" belongs beside the row, not instead of it.
+ * That is about the answers this action DECIDES. A body that is not one of ours
+ * at all — unparseable, or large enough to be an attempt to make the server
+ * allocate — is refused by `readJsonBody` before there is a row to answer
+ * about; `request.json()` has no size limit of its own, which is why it is not
+ * used here.
  */
 export const action = async ({ params, request }: Route.ActionArgs) => {
   const classSlug = params.class!;
@@ -68,7 +74,7 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
     action: 'download_media',
   });
 
-  const body = (await request.json()) as { mediaId?: unknown };
+  const body = await readJsonBody(request);
   const mediaId = typeof body.mediaId === 'string' ? body.mediaId : '';
 
   // Scoped to the classroom by the query itself, so an id from elsewhere is
