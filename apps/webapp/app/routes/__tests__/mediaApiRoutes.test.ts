@@ -195,8 +195,9 @@ describe('POST /api/media/uploads', () => {
 
   it('calls a missing or unusable size a bad request, not a file too large', async () => {
     // 413 is what the client shows as "your file is over the limit", which is
-    // not what a body with no size in it means.
-    for (const sizeBytes of [undefined, 'big', Number.NaN, Number.POSITIVE_INFINITY]) {
+    // not what a body with no size in it means. Zero and negatives are the same
+    // kind of nonsense: there is no file that is -1 bytes.
+    for (const sizeBytes of [undefined, 'big', Number.NaN, Number.POSITIVE_INFINITY, 0, -1]) {
       const response = await createAction(
         args(
           post('/api/media/uploads', { classroomId: CLASSROOM_ID, filename: 'a.mp4', sizeBytes })
