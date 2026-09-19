@@ -39,6 +39,8 @@ export {
 } from './canonical.ts';
 export type { MediaCanonicalFields, RenderCanonicalFields } from './canonical.ts';
 
+export { contentTypeForMediaExt } from './mediaTypes.ts';
+
 export {
   MAX_DOWNLOAD_FILENAME_BYTES,
   MAX_ENCODED_DOWNLOAD_FILENAME,

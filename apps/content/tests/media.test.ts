@@ -136,10 +136,15 @@ describe('media delivery', () => {
     ['web.mp4', 'video/mp4'],
     ['poster.webp', 'image/webp'],
     ['orig.pdf', 'application/pdf'],
-    ['orig.zip', 'application/octet-stream'],
+    // The three the general web table does not know: an `orig.{ext}` falls back
+    // to the MEDIA store's own table, the same one the upload assigned from.
+    ['orig.mov', 'video/quicktime'],
+    ['orig.mp3', 'audio/mpeg'],
+    ['orig.zip', 'application/zip'],
+    ['orig.xyz', 'application/octet-stream'],
   ])('falls back to the %s variant for the content type', async (variant, expected) => {
     // An object stored without an httpMetadata type — the variant names what it
-    // is, and an extension with no mapping is an opaque download.
+    // is, and an extension neither table knows is an opaque download.
     const media = fakeBucket({ [key(variant)]: { body: VIDEO, contentType: undefined } });
     const { response } = await fetchMedia(media, { variant });
 

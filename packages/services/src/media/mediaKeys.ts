@@ -1,4 +1,4 @@
-import { isMediaVariant, mediaKey } from '@classmoji/content-signing';
+import { contentTypeForMediaExt, isMediaVariant, mediaKey } from '@classmoji/content-signing';
 
 /**
  * The R2 key shape, re-exported from the signing package.
@@ -16,6 +16,14 @@ import { isMediaVariant, mediaKey } from '@classmoji/content-signing';
  * client and its transitive AWS dependencies into their import graph.
  */
 export { isMediaVariant, mediaKey };
+
+/**
+ * The stored/served content type for an extension, from the same table the
+ * Worker falls back to. Re-exported here rather than imported directly by
+ * `mediaKinds.ts` for the reason above: this module is the media folder's one
+ * door onto the signing package.
+ */
+export { contentTypeForMediaExt };
 
 /**
  * The `orig` variant for an extension, or null when it is not one the variant
