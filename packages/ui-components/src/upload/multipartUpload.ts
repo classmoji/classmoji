@@ -440,5 +440,3 @@ export async function uploadMultipart({
     throw error;
   }
 }
-
-export const __testing = { URL_BATCH_SIZE, PART_CONCURRENCY, RETRY_BACKOFF_MS, EXPIRY_SKEW_MS };
