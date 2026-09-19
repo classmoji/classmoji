@@ -59,8 +59,6 @@ interface RepositoriesTableProps {
    * `/admin/:class/repos` so the same action serves it.
    */
   actionBase?: string;
-  /** Hide the Module column when every row is already known to share one. */
-  showModuleColumn?: boolean;
   /** Render without the floating card, for use inside another panel. */
   bare?: boolean;
 }
@@ -99,7 +97,6 @@ ActionLink.displayName = 'ActionLink';
 const RepositoriesTable = ({
   repositories,
   actionBase = '',
-  showModuleColumn = true,
   bare = false,
 }: RepositoriesTableProps) => {
   // Controlled expansion so the folder icon can react to expanded state.
@@ -257,16 +254,6 @@ const RepositoriesTable = ({
       ),
     },
     {
-      title: 'Module',
-      key: 'module',
-      width: 180,
-      ellipsis: true,
-      render: (_: unknown, record: TreeNode) =>
-        record.kind === 'repository' ? (
-          <span className="text-ink-2">{record.repository?.module?.title ?? '—'}</span>
-        ) : null,
-    },
-    {
       // Grading weight lives on assignments; repositories carry none.
       title: 'Weight (%)',
       key: 'weight',
@@ -354,7 +341,7 @@ const RepositoriesTable = ({
       }
     >
       <Table
-        columns={columns.filter(c => c.key !== 'module' || showModuleColumn)}
+        columns={columns}
         dataSource={treeData}
         rowKey="key"
         rowHoverable={false}

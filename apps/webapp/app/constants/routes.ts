@@ -31,7 +31,7 @@ export const routeCategories = {
     label: 'Content',
     // Pages is LAST on purpose: it is the class's reading surface (its front
     // page, docked), not a task list, so it sits after the coursework entries.
-    items: ['modules', 'assignments', 'repositories', 'slides', 'quizzes', 'forms', 'pages'],
+    items: ['modules', 'repositories', 'assignments', 'slides', 'quizzes', 'forms', 'pages'],
   },
   assessment: {
     label: 'Assessment',
@@ -80,10 +80,8 @@ export const routes = {
     link: '/repos',
     label: 'Repositories',
     icon: IconFileText,
-    // Modules are the owner's root: repositories are managed from a module's
-    // Repositories tab, so the standalone list is a read-only view for the
-    // teaching team. Students have no repositories screen either.
-    roles: ['TEACHER', 'ASSISTANT'],
+    // Students have no repositories screen; their coursework lives in Modules.
+    roles: ['OWNER', 'TEACHER', 'ASSISTANT'],
     category: 'content',
   },
   assignments: {

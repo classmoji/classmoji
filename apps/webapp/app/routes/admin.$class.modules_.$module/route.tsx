@@ -162,7 +162,6 @@ const ModuleDetail = ({ loaderData }: Route.ComponentProps) => {
               module.repositories as Parameters<typeof RepositoriesTable>[0]['repositories']
             }
             actionBase={`/admin/${classSlug}/repos`}
-            showModuleColumn={false}
             bare
           />
           <TriggerProgress
