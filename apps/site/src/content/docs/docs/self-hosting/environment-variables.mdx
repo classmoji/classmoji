@@ -62,8 +62,14 @@ AI features (quizzes, syllabus bot, prompt assistant) run on **Anthropic Claude*
 
 ### Media
 
+Large files (video, audio, big PDFs) go to a Cloudflare R2 bucket rather than into a classroom's content repo. The four `MEDIA_R2_*` variables are optional and all-or-nothing: with any of them unset, media upload is hidden in the UI and the media API routes return 503.
+
 | Name | Required | Default | Description |
 |------|----------|---------|-------------|
+| `MEDIA_R2_ACCOUNT_ID` | No | | Cloudflare account the media bucket lives in. Used to build the R2 S3 endpoint. |
+| `MEDIA_R2_ACCESS_KEY_ID` | No | | Access key of an R2 API token scoped to the media bucket (object read/write). |
+| `MEDIA_R2_SECRET_ACCESS_KEY` | No | | Secret of that R2 API token. It never leaves the server: uploads are presigned and the browser writes straight to R2. |
+| `MEDIA_R2_BUCKET` | No | | Name of the R2 bucket media objects are written to. |
 | `CLOUDINARY_CLOUD_NAME` | No | | Cloudinary cloud name for image and media uploads. |
 | `CLOUDINARY_API_KEY` | No | | Cloudinary API key for signed uploads. |
 | `CLOUDINARY_API_SECRET` | No | | Cloudinary API secret for signed uploads. |
