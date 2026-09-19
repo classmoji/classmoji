@@ -89,7 +89,8 @@ const IconMore = ({ label }: { label: string }) => (
 
 /**
  * Every item in a module renders through this one row, whatever its kind:
- * icon, title, kind tag, status pill, Edit, and a menu holding the rest.
+ * icon, "Kind: title" (kind in bold), status pill, Edit, and a menu holding
+ * the rest.
  */
 const ItemRow = ({
   icon: RowIcon,
@@ -104,7 +105,7 @@ const ItemRow = ({
   icon: Icon;
   title: string;
   onTitleClick?: () => void;
-  kind: { label: string; color?: string };
+  kind: string;
   published: boolean;
   onEdit: () => void;
   menuItems: MenuProps['items'];
@@ -118,14 +119,15 @@ const ItemRow = ({
         onClick={onTitleClick}
         className="min-w-0 flex-1 truncate text-left text-ink-1 hover:underline"
       >
+        <span className="font-semibold mr-2">{kind}:</span>
         {title}
       </button>
     ) : (
-      <span className="min-w-0 flex-1 truncate text-ink-1">{title}</span>
+      <span className="min-w-0 flex-1 truncate text-ink-1">
+        <span className="font-semibold mr-2">{kind}:</span>
+        {title}
+      </span>
     )}
-    <Tag color={kind.color} className="m-0 shrink-0">
-      {kind.label}
-    </Tag>
     <Tag color={published ? 'green' : 'orange'} className="m-0 shrink-0 font-medium">
       {published ? 'Published' : 'Draft'}
     </Tag>
@@ -391,7 +393,7 @@ const ModuleCard = ({
                 icon={IconFolder}
                 title={r.title}
                 onTitleClick={() => repoActions.viewRepository(r)}
-                kind={{ label: 'Repo', color: ASSIGNMENT_TYPE_META.REPO.color }}
+                kind="Repository"
                 published={r.is_published}
                 onEdit={() => repoActions.editRepository(r)}
                 menuItems={[
@@ -427,10 +429,7 @@ const ModuleCard = ({
                 key={`assignment-${a.id}`}
                 icon={a.type === 'QUIZ' ? IconHelpCircle : IconForms}
                 title={a.title}
-                kind={{
-                  label: ASSIGNMENT_TYPE_META[a.type]?.label ?? a.type,
-                  color: ASSIGNMENT_TYPE_META[a.type]?.color,
-                }}
+                kind={ASSIGNMENT_TYPE_META[a.type]?.label ?? a.type}
                 published={a.is_published}
                 onEdit={() => openAssignmentModal(undefined, a)}
                 menuItems={[removeItem]}
@@ -459,7 +458,7 @@ const ModuleCard = ({
                   key={`item-${item.id}`}
                   icon={meta.icon}
                   title={label}
-                  kind={{ label: meta.label }}
+                  kind={meta.label}
                   published={published}
                   onEdit={edit}
                   menuItems={[
