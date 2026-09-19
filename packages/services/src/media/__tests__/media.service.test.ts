@@ -677,6 +677,54 @@ describe('deleteMedia', () => {
     });
   });
 
+  it('tombstones the row before it touches a single object', async () => {
+    // The order is the invariant: a half-done delete must leave an orphan in
+    // the bucket, never a READY row whose bytes are gone.
+    prisma.mediaObject.findFirst.mockResolvedValue(row());
+    const order: string[] = [];
+    prisma.mediaObject.updateMany.mockImplementation(async () => {
+      order.push('tombstone');
+      return { count: 1 };
+    });
+    sendImpl.mockImplementation(async (name: string) => {
+      order.push(name);
+      return {};
+    });
+
+    await deleteMedia({ classroom, mediaId: MEDIA_ID });
+    expect(order[0]).toBe('tombstone');
+  });
+
+  it('keeps deleting the other keys when one delete fails', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    prisma.mediaObject.findFirst.mockResolvedValue(row());
+    sendImpl.mockImplementationOnce(async () => {
+      throw new Error('r2 said no');
+    });
+
+    await expect(deleteMedia({ classroom, mediaId: MEDIA_ID })).resolves.toMatchObject({
+      mediaId: MEDIA_ID,
+    });
+
+    // All three were attempted, the row is still a tombstone, and the failure
+    // was reported rather than swallowed silently.
+    expect(sent.filter(call => call.name === 'DeleteObject')).toHaveLength(3);
+    expect(prisma.mediaObject.updateMany.mock.calls.at(-1)?.[0].data).toMatchObject({
+      status: 'DELETED',
+    });
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('Could not delete'), 'r2 said no');
+  });
+
+  it('tells the loser of a double delete that the object is gone', async () => {
+    prisma.mediaObject.findFirst.mockResolvedValue(row());
+    prisma.mediaObject.updateMany.mockResolvedValue({ count: 0 });
+
+    await expect(deleteMedia({ classroom, mediaId: MEDIA_ID })).rejects.toMatchObject({
+      code: 'NOT_FOUND',
+    });
+    expect(sent).toHaveLength(0);
+  });
+
   it('aborts first when the upload is still open', async () => {
     // Without the abort, R2 holds the uploaded parts until its own 7-day expiry.
     prisma.mediaObject.findFirst.mockResolvedValue(row({ status: 'UPLOADING', upload_id: 'up-1' }));

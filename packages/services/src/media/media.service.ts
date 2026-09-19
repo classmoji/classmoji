@@ -414,6 +414,33 @@ async function abortQuietly(
 }
 
 /**
+ * Delete objects one key at a time, and never let one failure stop the rest.
+ *
+ * Every caller here has ALREADY tombstoned the row, which is the ordering that
+ * matters: a row that still says READY while its bytes are gone renders as a
+ * broken file forever, where a tombstoned row whose bytes survive is an orphan
+ * in the bucket — invisible, uncharged, and findable later. So a failed delete
+ * is logged and the next key is tried, rather than throwing and leaving the
+ * remaining two untouched.
+ */
+async function deleteObjectsQuietly(
+  client: S3Client,
+  bucket: string,
+  keys: string[]
+): Promise<void> {
+  for (const key of keys) {
+    try {
+      await client.send(new DeleteObjectCommand({ Bucket: bucket, Key: key }));
+    } catch (error) {
+      console.warn(
+        `[media] Could not delete ${key}:`,
+        error instanceof Error ? error.message : error
+      );
+    }
+  }
+}
+
+/**
  * Tombstone a row, but ONLY from the status the caller believed it was in.
  *
  * Every tombstone here is written after something else failed, and a failure
@@ -562,8 +589,9 @@ export async function completeUpload({
   const declared = Number(row.size_bytes);
 
   if (actual === null || actual !== declared) {
-    await client.send(new DeleteObjectCommand({ Bucket: bucket, Key: key }));
+    // Row first, then the bytes: see `deleteObjectsQuietly`.
     await markDeleted(row.id, 'UPLOADING');
+    await deleteObjectsQuietly(client, bucket, [key]);
     if (actual === null) {
       throw new MediaError(
         'VERIFY_FAILED',
@@ -619,7 +647,7 @@ export async function abortUpload({
 }
 
 /**
- * Remove a media object: the R2 objects, then the row.
+ * Remove a media object: the row's tombstone, then the R2 objects.
  *
  * Hard-deleted from R2, with no retention window and nothing scheduled — there
  * is no undo, and the row's DELETED status is a tombstone for the references
@@ -651,6 +679,15 @@ export async function deleteMedia({
 
   const origKey = mediaKey(classroom.id, row.id, `orig.${row.ext}`);
 
+  // The tombstone goes FIRST. It is the one write that decides what every
+  // reader sees, and an R2 delete that fails halfway must not be able to leave
+  // a READY row pointing at bytes that are gone — a permanently broken file in
+  // every page that referenced it. Conditional, so a delete racing another one
+  // does not double-tombstone: the loser is told the object is already gone.
+  if (!(await markDeleted(row.id, ['UPLOADING', 'READY']))) {
+    throw new MediaError('NOT_FOUND', 'No such media object');
+  }
+
   if (row.status === 'UPLOADING' && row.upload_id) {
     await abortQuietly(client, bucket, origKey, row.upload_id);
   }
@@ -659,16 +696,11 @@ export async function deleteMedia({
   // REQUIRES a checksum, and the modern ones the SDK sends by default are not
   // reliably supported by S3-compatible stores. Three round trips for at most
   // three keys is not worth the compatibility risk.
-  const keys = [
+  await deleteObjectsQuietly(client, bucket, [
     origKey,
     mediaKey(classroom.id, row.id, 'web.mp4'),
     mediaKey(classroom.id, row.id, 'poster.webp'),
-  ];
-  for (const key of keys) {
-    await client.send(new DeleteObjectCommand({ Bucket: bucket, Key: key }));
-  }
-
-  await markDeleted(row.id, ['UPLOADING', 'READY']);
+  ]);
 
   return { mediaId: row.id };
 }
