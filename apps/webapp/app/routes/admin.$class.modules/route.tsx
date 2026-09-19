@@ -31,6 +31,7 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
   return {
     modules,
     candidates,
+    slidesUrl: process.env.SLIDES_URL || 'http://localhost:6500',
     // A quiz or form binds to at most one assignment in the classroom.
     boundQuizIds: allAssignments.map(a => a.quiz_id).filter(Boolean) as string[],
     boundFormIds: allAssignments.map(a => a.form_id).filter(Boolean) as string[],
@@ -171,7 +172,7 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
  * assignments and content in place. Nothing needs the module detail page.
  */
 const ModulesIndex = ({ loaderData }: Route.ComponentProps) => {
-  const { modules, candidates, boundQuizIds, boundFormIds } = loaderData;
+  const { modules, candidates, slidesUrl, boundQuizIds, boundFormIds } = loaderData;
   const { class: classSlug } = useParams();
   const [query, setQuery] = useState('');
   const [formOpen, setFormOpen] = useState(false);
@@ -231,6 +232,7 @@ const ModulesIndex = ({ loaderData }: Route.ComponentProps) => {
             module={m}
             index={cards.indexOf(m)}
             classSlug={classSlug!}
+            slidesUrl={slidesUrl}
             expanded={!collapsed.has(m.id)}
             onToggle={() => toggle(m.id)}
             candidates={candidates}

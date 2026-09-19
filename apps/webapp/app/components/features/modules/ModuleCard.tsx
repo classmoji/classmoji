@@ -1,8 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useFetcher, useNavigate } from 'react-router';
-import { Button, Dropdown, Popconfirm, Switch, Tag, Tooltip } from 'antd';
+import { App, Dropdown, Switch, Tag, Tooltip } from 'antd';
 import type { MenuProps } from 'antd';
-import dayjs from 'dayjs';
 import {
   IconArrowDown,
   IconArrowUp,
@@ -10,6 +9,7 @@ import {
   IconChevronRight,
   IconCloudUpload,
   IconDotsVertical,
+  IconEyeOff,
   IconFileText,
   IconFolder,
   IconForms,
@@ -20,6 +20,7 @@ import {
   IconRefresh,
   IconTrash,
   IconWorld,
+  type Icon,
 } from '@tabler/icons-react';
 
 import ModuleFormModal, {
@@ -29,7 +30,6 @@ import AssignmentFormModal, {
   type AssignmentKind,
 } from '~/components/features/assignments/AssignmentFormModal';
 import {
-  assignmentTarget,
   ASSIGNMENT_TYPE_META,
   type AssignmentRowData,
 } from '~/components/features/assignments/AssignmentsTable';
@@ -68,61 +68,13 @@ interface ModuleCardProps {
   module: ModuleCardData;
   index: number;
   classSlug: string;
+  slidesUrl: string;
   expanded: boolean;
   onToggle: () => void;
   candidates: CandidateContent;
   boundQuizIds: Set<string>;
   boundFormIds: Set<string>;
 }
-
-const prettyType = (type: string) => type.charAt(0) + type.slice(1).toLowerCase();
-
-const StatusPill = ({ published }: { published: boolean }) => (
-  <Tag color={published ? 'green' : 'orange'} className="m-0 shrink-0 font-medium">
-    {published ? 'Published' : 'Draft'}
-  </Tag>
-);
-
-/** The dashed "+ Add …" row that ends the list, as on Coursera. */
-const AddRow = ({ label, tour }: { label: string; tour?: string }) => (
-  <button
-    type="button"
-    data-tour={tour}
-    className="flex w-full items-center gap-3 py-2 text-sm text-ink-3 hover:text-ink-1"
-  >
-    <span className="h-px flex-1 border-t border-dashed border-line" />
-    <span className="inline-flex items-center gap-1 whitespace-nowrap">
-      <IconPlus size={14} />
-      {label}
-    </span>
-    <span className="h-px flex-1 border-t border-dashed border-line" />
-  </button>
-);
-
-const ActionLink = ({
-  onClick,
-  danger,
-  children,
-}: {
-  onClick: () => void;
-  danger?: boolean;
-  children: React.ReactNode;
-}) => (
-  <button
-    type="button"
-    onClick={e => {
-      e.stopPropagation();
-      onClick();
-    }}
-    className={`inline-flex items-center gap-1 text-sm font-medium ${
-      danger
-        ? 'text-rose-600 hover:text-rose-700 dark:text-rose-400'
-        : 'text-sky-600 hover:text-sky-700 dark:text-sky-400'
-    }`}
-  >
-    {children}
-  </button>
-);
 
 const IconMore = ({ label }: { label: string }) => (
   <button
@@ -135,21 +87,82 @@ const IconMore = ({ label }: { label: string }) => (
   </button>
 );
 
-/** Muted metadata between the title and the status pill. */
-const Meta = ({ children }: { children: React.ReactNode }) => (
-  <span className="hidden sm:inline text-xs text-ink-3 whitespace-nowrap">{children}</span>
+/**
+ * Every item in a module renders through this one row, whatever its kind:
+ * icon, title, kind tag, status pill, Edit, and a menu holding the rest.
+ */
+const ItemRow = ({
+  icon: RowIcon,
+  title,
+  onTitleClick,
+  kind,
+  published,
+  onEdit,
+  menuItems,
+  onMenuClick,
+}: {
+  icon: Icon;
+  title: string;
+  onTitleClick?: () => void;
+  kind: { label: string; color?: string };
+  published: boolean;
+  onEdit: () => void;
+  menuItems: MenuProps['items'];
+  onMenuClick: (key: string) => void;
+}) => (
+  <li className="flex items-center gap-3 py-2.5">
+    <RowIcon size={18} className="text-gray-400 shrink-0" />
+    {onTitleClick ? (
+      <button
+        type="button"
+        onClick={onTitleClick}
+        className="min-w-0 flex-1 truncate text-left text-ink-1 hover:underline"
+      >
+        {title}
+      </button>
+    ) : (
+      <span className="min-w-0 flex-1 truncate text-ink-1">{title}</span>
+    )}
+    <Tag color={kind.color} className="m-0 shrink-0">
+      {kind.label}
+    </Tag>
+    <Tag color={published ? 'green' : 'orange'} className="m-0 shrink-0 font-medium">
+      {published ? 'Published' : 'Draft'}
+    </Tag>
+    <button
+      type="button"
+      onClick={onEdit}
+      className="text-sm font-medium text-sky-600 hover:text-sky-700 dark:text-sky-400"
+    >
+      Edit
+    </button>
+    <Dropdown
+      trigger={['click']}
+      placement="bottomRight"
+      menu={{
+        items: menuItems,
+        onClick: ({ key, domEvent }) => {
+          domEvent.stopPropagation();
+          onMenuClick(String(key));
+        },
+      }}
+    >
+      <IconMore label={`Actions: ${title}`} />
+    </Dropdown>
+  </li>
 );
 
 /**
  * One module, as an expandable card that shows and manages everything it
  * holds in one flat list: repositories, quiz and form assignments, pages and
  * slides. One "Add item" row asks which kind to add. The issues inside a
- * repository are managed on the repository itself, not here.
+ * repository are managed on the repository itself.
  */
 const ModuleCard = ({
   module,
   index,
   classSlug,
+  slidesUrl,
   expanded,
   onToggle,
   candidates,
@@ -157,6 +170,7 @@ const ModuleCard = ({
   boundFormIds,
 }: ModuleCardProps) => {
   const navigate = useNavigate();
+  const { modal } = App.useApp();
   const moduleFetcher = useFetcher<{ success?: string; error?: string }>();
   const assignmentFetcher = useFetcher<{ success?: string; error?: string }>();
   const repoActions = useRepositoryActions(`/admin/${classSlug}/repos`);
@@ -199,11 +213,29 @@ const ModuleCard = ({
     post('reorderItems', { moduleId: module.id, orderedItemIds: ordered });
   };
 
-  const deleteAssignment = (a: AssignmentRowData) =>
-    assignmentFetcher.submit(JSON.stringify({ id: a.id }), {
-      method: 'post',
-      action: `/admin/${classSlug}/assignments?/delete`,
-      encType: 'application/json',
+  const removeAssignment = (a: AssignmentRowData) =>
+    modal.confirm({
+      title: 'Remove from module',
+      content: 'This removes the assignment. The quiz or form itself is kept.',
+      okText: 'Remove',
+      okButtonProps: { danger: true },
+      cancelText: 'Cancel',
+      onOk: () =>
+        assignmentFetcher.submit(JSON.stringify({ id: a.id }), {
+          method: 'post',
+          action: `/admin/${classSlug}/assignments?/delete`,
+          encType: 'application/json',
+        }),
+    });
+
+  const removeContentItem = (moduleItemId: string) =>
+    modal.confirm({
+      title: 'Remove from module',
+      content: 'This removes the item from this module. The item itself is kept.',
+      okText: 'Remove',
+      okButtonProps: { danger: true },
+      cancelText: 'Cancel',
+      onOk: () => post('removeItem', { moduleItemId }),
     });
 
   const openAssignmentModal = (
@@ -277,6 +309,13 @@ const ModuleCard = ({
     }
   };
 
+  const removeItem = {
+    key: 'remove',
+    label: 'Remove from module',
+    danger: true,
+    icon: <IconTrash size={15} />,
+  };
+
   return (
     <div
       className="rounded-2xl bg-panel ring-1 ring-line"
@@ -298,9 +337,9 @@ const ModuleCard = ({
         <span className="w-6 text-right tabular-nums text-ink-3 font-semibold">{index + 1}</span>
         <span className="h-5 border-l border-line" />
         <span className="min-w-0 flex-1 truncate font-semibold text-ink-1">{module.title}</span>
-        <Meta>
+        <span className="hidden sm:inline text-xs text-ink-3 whitespace-nowrap">
           {itemCount} item{itemCount === 1 ? '' : 's'}
-        </Meta>
+        </span>
         {module.is_public && module.is_published && (
           <Tooltip title="Shown on the course website">
             <IconWorld size={16} className="text-sky-500 shrink-0" />
@@ -346,127 +385,105 @@ const ModuleCard = ({
           )}
 
           <ul className="flex flex-col divide-y divide-line">
-            {/* Repositories */}
             {module.repositories.map(r => (
-              <li key={`repo-${r.id}`} className="flex items-center gap-3 py-2.5">
-                <IconFolder size={18} className="text-gray-400 shrink-0" />
-                <button
-                  type="button"
-                  onClick={() => repoActions.viewRepository(r)}
-                  className="min-w-0 flex-1 truncate text-left text-ink-1 hover:underline"
-                >
-                  {r.title}
-                </button>
-                <Tag color={ASSIGNMENT_TYPE_META.REPO.color} className="m-0 shrink-0">
-                  Repo
-                </Tag>
-                <Meta>{prettyType(r.type)}</Meta>
-                <StatusPill published={r.is_published} />
-                <div className="flex items-center gap-3 whitespace-nowrap">
-                  <ActionLink onClick={() => repoActions.editRepository(r)}>Edit</ActionLink>
-                  {r.is_published ? (
-                    <ActionLink onClick={() => repoActions.confirmSync(r.id)}>
-                      <IconRefresh size={14} />
-                      Sync
-                    </ActionLink>
-                  ) : (
-                    <ActionLink onClick={() => repoActions.confirmPublish(r.id)}>
-                      <IconCloudUpload size={14} />
-                      Publish
-                    </ActionLink>
-                  )}
-                </div>
-              </li>
+              <ItemRow
+                key={`repo-${r.id}`}
+                icon={IconFolder}
+                title={r.title}
+                onTitleClick={() => repoActions.viewRepository(r)}
+                kind={{ label: 'Repo', color: ASSIGNMENT_TYPE_META.REPO.color }}
+                published={r.is_published}
+                onEdit={() => repoActions.editRepository(r)}
+                menuItems={[
+                  r.is_published
+                    ? { key: 'sync', label: 'Sync student repos', icon: <IconRefresh size={15} /> }
+                    : {
+                        key: 'publish',
+                        label: 'Publish to students',
+                        icon: <IconCloudUpload size={15} />,
+                      },
+                  ...(r.is_published
+                    ? [{ key: 'unpublish', label: 'Unpublish', icon: <IconEyeOff size={15} /> }]
+                    : []),
+                  { type: 'divider' as const },
+                  {
+                    key: 'delete',
+                    label: 'Delete repository',
+                    danger: true,
+                    icon: <IconTrash size={15} />,
+                  },
+                ]}
+                onMenuClick={key => {
+                  if (key === 'sync') repoActions.confirmSync(r.id);
+                  if (key === 'publish') repoActions.confirmPublish(r.id);
+                  if (key === 'unpublish') repoActions.confirmUnpublish(r.id);
+                  if (key === 'delete') repoActions.confirmDelete(r.id);
+                }}
+              />
             ))}
 
-            {/* Quiz and form assignments */}
-            {standaloneAssignments.map(a => {
-              const meta = ASSIGNMENT_TYPE_META[a.type];
-              const KindIcon = a.type === 'QUIZ' ? IconHelpCircle : IconForms;
-              const target = assignmentTarget(a);
-              return (
-                <li key={`assignment-${a.id}`} className="flex items-center gap-3 py-2.5">
-                  <KindIcon size={18} className="text-gray-400 shrink-0" />
-                  <span className="min-w-0 flex-1 truncate text-ink-1">
-                    {a.title}
-                    {target && target !== a.title && (
-                      <span className="text-ink-3"> · {target}</span>
-                    )}
-                  </span>
-                  {a.is_extra_credit && (
-                    <Tag color="green" bordered={false} className="m-0 text-xs">
-                      EC
-                    </Tag>
-                  )}
-                  <Tag color={meta?.color} className="m-0 shrink-0">
-                    {meta?.label ?? a.type}
-                  </Tag>
-                  <Meta>
-                    {a.weight}% ·{' '}
-                    {a.student_deadline
-                      ? `due ${dayjs(a.student_deadline).format('MMM D')}`
-                      : 'no due date'}
-                  </Meta>
-                  <StatusPill published={a.is_published} />
-                  <div className="flex items-center gap-3 whitespace-nowrap">
-                    <ActionLink onClick={() => openAssignmentModal(undefined, a)}>Edit</ActionLink>
-                    <Popconfirm
-                      title="Remove from module"
-                      description="This removes the assignment. The quiz or form itself is kept."
-                      okText="Remove"
-                      okButtonProps={{ danger: true }}
-                      cancelText="Cancel"
-                      onConfirm={() => deleteAssignment(a)}
-                    >
-                      <Button type="text" size="small" danger icon={<IconTrash size={15} />} />
-                    </Popconfirm>
-                  </div>
-                </li>
-              );
-            })}
+            {standaloneAssignments.map(a => (
+              <ItemRow
+                key={`assignment-${a.id}`}
+                icon={a.type === 'QUIZ' ? IconHelpCircle : IconForms}
+                title={a.title}
+                kind={{
+                  label: ASSIGNMENT_TYPE_META[a.type]?.label ?? a.type,
+                  color: ASSIGNMENT_TYPE_META[a.type]?.color,
+                }}
+                published={a.is_published}
+                onEdit={() => openAssignmentModal(undefined, a)}
+                menuItems={[removeItem]}
+                onMenuClick={key => {
+                  if (key === 'remove') removeAssignment(a);
+                }}
+              />
+            ))}
 
-            {/* Pages and slides, in reading order */}
             {contentItems.map((item, itemIndex) => {
               const meta = TYPE_META[item.item_type];
-              const ItemIcon = meta.icon;
-              const { label, published, note } = describeItem(item);
+              const { label, published } = describeItem(item);
+              const edit = () => {
+                if (item.item_type === 'PAGE' && item.page) {
+                  navigate(`/admin/${classSlug}/pages/${item.page.id}`);
+                } else if (item.item_type === 'SLIDE' && item.slide) {
+                  window.open(`${slidesUrl}/${item.slide.id}`, '_blank');
+                } else if (item.item_type === 'QUIZ') {
+                  navigate(`/admin/${classSlug}/quizzes`);
+                } else if (item.item_type === 'FORM') {
+                  navigate(`/admin/${classSlug}/forms`);
+                }
+              };
               return (
-                <li key={`item-${item.id}`} className="flex items-center gap-3 py-2">
-                  <ItemIcon size={18} className="text-gray-400 shrink-0" />
-                  <span className="min-w-0 flex-1 truncate text-ink-1">{label}</span>
-                  {note && <Meta>{note}</Meta>}
-                  <Tag className="m-0 shrink-0">{meta.label}</Tag>
-                  <StatusPill published={published} />
-                  <div className="flex items-center gap-1 whitespace-nowrap">
-                    <button
-                      type="button"
-                      aria-label="Move up"
-                      disabled={itemIndex === 0 || busy}
-                      onClick={() => move(itemIndex, -1)}
-                      className="text-gray-400 hover:text-ink-1 disabled:opacity-30 disabled:hover:text-gray-400"
-                    >
-                      <IconArrowUp size={15} />
-                    </button>
-                    <button
-                      type="button"
-                      aria-label="Move down"
-                      disabled={itemIndex === contentItems.length - 1 || busy}
-                      onClick={() => move(itemIndex, 1)}
-                      className="text-gray-400 hover:text-ink-1 disabled:opacity-30 disabled:hover:text-gray-400"
-                    >
-                      <IconArrowDown size={15} />
-                    </button>
-                    <Popconfirm
-                      title="Remove from module"
-                      description="This removes the item from this module. The item itself is kept."
-                      okText="Remove"
-                      cancelText="Cancel"
-                      onConfirm={() => post('removeItem', { moduleItemId: item.id })}
-                    >
-                      <Button type="text" size="small" danger icon={<IconTrash size={15} />} />
-                    </Popconfirm>
-                  </div>
-                </li>
+                <ItemRow
+                  key={`item-${item.id}`}
+                  icon={meta.icon}
+                  title={label}
+                  kind={{ label: meta.label }}
+                  published={published}
+                  onEdit={edit}
+                  menuItems={[
+                    {
+                      key: 'up',
+                      label: 'Move up',
+                      icon: <IconArrowUp size={15} />,
+                      disabled: itemIndex === 0 || busy,
+                    },
+                    {
+                      key: 'down',
+                      label: 'Move down',
+                      icon: <IconArrowDown size={15} />,
+                      disabled: itemIndex === contentItems.length - 1 || busy,
+                    },
+                    { type: 'divider' as const },
+                    removeItem,
+                  ]}
+                  onMenuClick={key => {
+                    if (key === 'up') move(itemIndex, -1);
+                    if (key === 'down') move(itemIndex, 1);
+                    if (key === 'remove') removeContentItem(item.id);
+                  }}
+                />
               );
             })}
           </ul>
@@ -476,9 +493,18 @@ const ModuleCard = ({
             placement="bottom"
             menu={{ items: addItemMenu, onClick: onAddItem }}
           >
-            <div>
-              <AddRow label="Add item" tour={index === 0 ? 'repos-new' : undefined} />
-            </div>
+            <button
+              type="button"
+              data-tour={index === 0 ? 'repos-new' : undefined}
+              className="flex w-full items-center gap-3 py-2 text-sm text-ink-3 hover:text-ink-1"
+            >
+              <span className="h-px flex-1 border-t border-dashed border-line" />
+              <span className="inline-flex items-center gap-1 whitespace-nowrap">
+                <IconPlus size={14} />
+                Add item
+              </span>
+              <span className="h-px flex-1 border-t border-dashed border-line" />
+            </button>
           </Dropdown>
         </div>
       )}
