@@ -109,7 +109,7 @@ const StudentModuleCard = ({
                 return (
                   <li
                     key={node.key}
-                    className="flex items-center gap-3 py-2.5 px-2 -mx-2 rounded-lg transition-colors hover:bg-stone-50 dark:hover:bg-neutral-800"
+                    className="flex items-center gap-3 py-2.5 px-2 -mx-2 rounded-lg cursor-pointer transition-colors hover:bg-stone-50 dark:hover:bg-neutral-800"
                   >
                     <RowIcon size={18} className="text-gray-400 shrink-0" />
                     <span className="min-w-0 flex-1 truncate text-ink-1">

@@ -111,7 +111,7 @@ const ItemRow = ({
   menuItems: MenuProps['items'];
   onMenuClick: (key: string) => void;
 }) => (
-  <li className="flex items-center gap-3 py-2.5 px-2 -mx-2 rounded-lg transition-colors hover:bg-stone-50 dark:hover:bg-neutral-800">
+  <li className="flex items-center gap-3 py-2.5 px-2 -mx-2 rounded-lg cursor-pointer transition-colors hover:bg-stone-50 dark:hover:bg-neutral-800">
     <RowIcon size={18} className="text-gray-400 shrink-0" />
     {onTitleClick ? (
       <button
