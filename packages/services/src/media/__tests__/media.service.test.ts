@@ -56,6 +56,7 @@ const prisma = {
     findFirst: vi.fn(),
     create: vi.fn(),
     update: vi.fn(),
+    updateMany: vi.fn(),
     delete: vi.fn(),
   },
 };
@@ -138,6 +139,7 @@ beforeEach(() => {
   prisma.mediaObject.update.mockImplementation(async ({ data }: { data: object }) =>
     row({ ...data })
   );
+  prisma.mediaObject.updateMany.mockResolvedValue({ count: 1 });
   getProStateForClassroomId.mockResolvedValue({ isPro: true });
   configure();
 });
@@ -485,8 +487,9 @@ describe('completeUpload', () => {
     ).rejects.toMatchObject({ code: 'SIZE_MISMATCH' });
 
     expect(sent.find(call => call.name === 'DeleteObject')?.input).toMatchObject({ Key: ORIG_KEY });
-    expect(prisma.mediaObject.update.mock.calls.at(-1)?.[0].data).toMatchObject({
-      status: 'DELETED',
+    expect(prisma.mediaObject.updateMany.mock.calls.at(-1)?.[0]).toMatchObject({
+      where: { id: MEDIA_ID, status: 'UPLOADING' },
+      data: expect.objectContaining({ status: 'DELETED' }),
     });
   });
 
@@ -501,9 +504,79 @@ describe('completeUpload', () => {
     ).rejects.toThrow('bad part');
 
     expect(sent.some(call => call.name === 'AbortMultipartUpload')).toBe(true);
-    expect(prisma.mediaObject.update.mock.calls.at(-1)?.[0].data).toMatchObject({
-      status: 'DELETED',
+    expect(prisma.mediaObject.updateMany.mock.calls.at(-1)?.[0]).toMatchObject({
+      where: { id: MEDIA_ID, status: 'UPLOADING' },
+      data: expect.objectContaining({ status: 'DELETED' }),
     });
+  });
+
+  it('cannot un-READY a row another call already finished', async () => {
+    // The lost-response retry: `complete` runs twice, the first one assembles
+    // the object and marks the row READY, and R2 answers the second with
+    // NoSuchUpload because there is no multipart left. The second call's
+    // cleanup must not land on the row the first one finished.
+    const state = { status: 'UPLOADING' };
+    prisma.mediaObject.findFirst.mockImplementation(async () =>
+      // A stale read is what makes this a race at all: both calls believe the
+      // row is still open.
+      row({ status: 'UPLOADING', upload_id: 'up-1', size_bytes: BigInt(4096) })
+    );
+    prisma.mediaObject.update.mockImplementation(async ({ data }: { data: { status: string } }) => {
+      state.status = data.status;
+      return row({ ...data });
+    });
+    prisma.mediaObject.updateMany.mockImplementation(
+      async ({ where }: { where: { status: string } }) => {
+        if (where.status !== state.status) return { count: 0 };
+        state.status = 'DELETED';
+        return { count: 1 };
+      }
+    );
+
+    let completes = 0;
+    sendImpl.mockImplementation(async (name: string) => {
+      if (name === 'CompleteMultipartUpload' && ++completes > 1) {
+        throw new Error('NoSuchUpload');
+      }
+      return name === 'HeadObject' ? { ContentLength: 4096 } : {};
+    });
+
+    await completeUpload({
+      classroom,
+      mediaId: MEDIA_ID,
+      parts: [{ partNumber: 1, etag: '"a"' }],
+    });
+    expect(state.status).toBe('READY');
+
+    await expect(
+      completeUpload({ classroom, mediaId: MEDIA_ID, parts: [{ partNumber: 1, etag: '"a"' }] })
+    ).rejects.toThrow('NoSuchUpload');
+
+    // The file exists and is being served; the second call's conclusion about
+    // it was out of date.
+    expect(state.status).toBe('READY');
+  });
+
+  it('answers a second complete with a refusal, not a second assembly', async () => {
+    const state = { status: 'UPLOADING' };
+    prisma.mediaObject.findFirst.mockImplementation(async () =>
+      row({ status: state.status, upload_id: state.status === 'UPLOADING' ? 'up-1' : null })
+    );
+    prisma.mediaObject.update.mockImplementation(async ({ data }: { data: { status: string } }) => {
+      state.status = data.status;
+      return row({ ...data });
+    });
+    sendImpl.mockImplementation(async (name: string) =>
+      name === 'HeadObject' ? { ContentLength: 1000 } : {}
+    );
+
+    await completeUpload({ classroom, mediaId: MEDIA_ID, parts: [{ partNumber: 1, etag: '"a"' }] });
+    await expect(
+      completeUpload({ classroom, mediaId: MEDIA_ID, parts: [{ partNumber: 1, etag: '"a"' }] })
+    ).rejects.toMatchObject({ code: 'BAD_STATE' });
+
+    expect(state.status).toBe('READY');
+    expect(prisma.mediaObject.updateMany).not.toHaveBeenCalled();
   });
 
   it('refuses an empty parts list before touching R2', async () => {
@@ -527,8 +600,10 @@ describe('abortUpload', () => {
         input: { Bucket: 'classmoji-media-test', Key: ORIG_KEY, UploadId: 'up-1' },
       },
     ]);
-    expect(prisma.mediaObject.update.mock.calls.at(-1)?.[0].data).toMatchObject({
-      status: 'DELETED',
+    // Only from UPLOADING: a complete that won the race must not be undone.
+    expect(prisma.mediaObject.updateMany.mock.calls.at(-1)?.[0]).toMatchObject({
+      where: { id: MEDIA_ID, status: 'UPLOADING' },
+      data: expect.objectContaining({ status: 'DELETED' }),
     });
   });
 
@@ -554,8 +629,9 @@ describe('deleteMedia', () => {
       `m/${CLASSROOM_ID}/${MEDIA_ID}/web.mp4`,
       `m/${CLASSROOM_ID}/${MEDIA_ID}/poster.webp`,
     ]);
-    expect(prisma.mediaObject.update.mock.calls.at(-1)?.[0].data).toMatchObject({
-      status: 'DELETED',
+    expect(prisma.mediaObject.updateMany.mock.calls.at(-1)?.[0]).toMatchObject({
+      where: { id: MEDIA_ID, status: { in: ['UPLOADING', 'READY'] } },
+      data: expect.objectContaining({ status: 'DELETED' }),
     });
   });
 

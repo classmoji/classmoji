@@ -20,6 +20,7 @@ import {
   type MediaClassroom,
   type MediaRecord,
   type MediaRow,
+  type MediaStatus,
 } from './mediaLookup.ts';
 import {
   MAX_PARTS_PER_SIGN,
@@ -412,11 +413,32 @@ async function abortQuietly(
   }
 }
 
-async function markDeleted(mediaId: string): Promise<void> {
-  await getPrisma().mediaObject.update({
-    where: { id: mediaId },
+/**
+ * Tombstone a row, but ONLY from the status the caller believed it was in.
+ *
+ * Every tombstone here is written after something else failed, and a failure
+ * path is exactly where a stale view of the row is likely: a `complete` whose
+ * response was lost is retried, R2 answers the second one `NoSuchUpload`
+ * because the first one finished the object, and an unconditional write would
+ * then un-READY a file that exists and is being served. `updateMany` with the
+ * expected status in the WHERE makes that a no-op instead — the row moved on,
+ * so this call's conclusion about it is out of date and must not land.
+ *
+ * Returns whether it landed, so a caller that cares can tell "I tombstoned it"
+ * from "somebody else got there first".
+ */
+async function markDeleted(
+  mediaId: string,
+  expected: MediaStatus | MediaStatus[]
+): Promise<boolean> {
+  const { count } = await getPrisma().mediaObject.updateMany({
+    where: {
+      id: mediaId,
+      status: Array.isArray(expected) ? { in: expected } : expected,
+    },
     data: { status: 'DELETED', deleted_at: new Date(), upload_id: null },
   });
+  return count > 0;
 }
 
 /**
@@ -498,7 +520,7 @@ export async function completeUpload({
     );
   } catch (error) {
     await abortQuietly(client, bucket, key, uploadId);
-    await markDeleted(row.id);
+    await markDeleted(row.id, 'UPLOADING');
     throw error;
   }
 
@@ -508,7 +530,7 @@ export async function completeUpload({
 
   if (actual !== declared) {
     await client.send(new DeleteObjectCommand({ Bucket: bucket, Key: key }));
-    await markDeleted(row.id);
+    await markDeleted(row.id, 'UPLOADING');
     throw new MediaError('SIZE_MISMATCH', `Uploaded ${actual} bytes but ${declared} were declared`);
   }
 
@@ -549,7 +571,10 @@ export async function abortUpload({
 
   const key = mediaKey(classroom.id, row.id, `orig.${row.ext}`);
   await abortQuietly(client, bucket, key, row.upload_id);
-  await markDeleted(row.id);
+  // Only from UPLOADING: a `complete` that won the race while this abort was in
+  // flight has already made the row READY, and cancelling an upload must never
+  // be able to delete the file that upload produced.
+  await markDeleted(row.id, 'UPLOADING');
 
   return { mediaId: row.id };
 }
@@ -604,7 +629,7 @@ export async function deleteMedia({
     await client.send(new DeleteObjectCommand({ Bucket: bucket, Key: key }));
   }
 
-  await markDeleted(row.id);
+  await markDeleted(row.id, ['UPLOADING', 'READY']);
 
   return { mediaId: row.id };
 }
