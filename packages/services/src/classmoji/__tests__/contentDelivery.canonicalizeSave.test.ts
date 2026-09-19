@@ -86,6 +86,23 @@ vi.mock('../contentAssets.service.ts', () => ({
  */
 vi.mock('../contentIndex.service.ts', () => ({ indexOneFile: vi.fn(async () => undefined) }));
 
+// The same goes for the other two fire-and-forget hooks a save launches.
+// `warmContentText` finds the blob the stub above answers with, signs it and
+// `fetch`es a fake origin; `enqueueDeckThumbnail` calls `tasks.trigger` with no
+// Trigger environment. Both fail, and both report that at `console.debug` —
+// which vitest hides but still ships to the runner as an RPC. Whichever one
+// lands after this file's last `afterEach` races the worker's shutdown and
+// surfaces as `EnvironmentTeardownError: Closing rpc while "onUserConsoleLog"
+// was pending`, attributed to this file. The warm lives in the module under
+// test, so it is overridden on top of the real module rather than replacing it.
+vi.mock('../contentDelivery.service.ts', async importOriginal => ({
+  ...(await importOriginal<typeof import('../contentDelivery.service.ts')>()),
+  warmContentText: vi.fn(async () => undefined),
+}));
+vi.mock('../deckThumbnail.service.ts', () => ({
+  enqueueDeckThumbnail: vi.fn(async () => undefined),
+}));
+
 const { canonicalizeAssetRef, resolveAssetUrl } = await import('../contentDelivery.service.ts');
 const { savePageContent } = await import('../pageContent.service.ts');
 const { saveDeck } = await import('../../slides/slideContent.service.ts');

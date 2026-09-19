@@ -160,7 +160,11 @@ beforeEach(() => {
   vi.spyOn(console, 'debug').mockImplementation(() => {});
 
   indexOneFileMock.mockResolvedValue({ outcome: 'indexed', chunks: 1 });
-  getContentMock.mockRejectedValue(new Error('not found'));
+  // "The file isn't there" is a NULL, not a throw: ContentService.getContent
+  // returns null for a 404 and reserves rejections for reads that failed. The
+  // save path tells those apart now — a failed cover re-read stops the save —
+  // so a rejecting stand-in here would be testing an answer GitHub never gives.
+  getContentMock.mockResolvedValue(null);
   getMetaMock.mockResolvedValue(null);
   putMock.mockResolvedValue({ sha: 'new-sha', commit: 'commit-1' });
   uploadBatchMock.mockImplementation(async ({ files }: { files: Array<{ path: string }> }) => ({
