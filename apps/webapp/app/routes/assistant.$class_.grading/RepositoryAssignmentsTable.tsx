@@ -18,7 +18,6 @@ import {
   type EligibleStudent,
 } from '~/components/features/analytics';
 import { openRepositoryAssignmentInGithub } from '~/utils/helpers.client';
-import { emojis } from '@classmoji/utils';
 import dayjs from 'dayjs';
 import useStore from '~/store';
 import {
@@ -28,6 +27,7 @@ import {
   Countdown,
   TableActionButtons,
   EmojisDisplay,
+  Emoji,
 } from '~/components';
 
 interface GradeEntry {
@@ -322,6 +322,16 @@ const RepositoryAssignmentsTable = ({
     // When switching data sources, reset page implicitly via key (Table handles this)
   }, [showMyAssignments]);
 
+  // The classroom's own grade emojis drive the Grade filter. The prop is either
+  // a { emoji: grade } record or the full mapping rows, depending on the loader.
+  const gradeEmojiKeys = useMemo(
+    () =>
+      Array.isArray(emojiMappings)
+        ? emojiMappings.map(m => m.emoji)
+        : Object.keys(emojiMappings ?? {}),
+    [emojiMappings]
+  );
+
   const columns = [
     {
       title: 'Owner',
@@ -359,8 +369,8 @@ const RepositoryAssignmentsTable = ({
       filters:
         active === 'all'
           ? [
-              ...Object.keys(emojis).map(key => ({
-                text: emojis[key].emoji,
+              ...gradeEmojiKeys.map(key => ({
+                text: <Emoji emoji={key} fontSize={16} />,
                 value: key,
               })),
               { text: 'No Grade', value: 'NO_GRADE' },

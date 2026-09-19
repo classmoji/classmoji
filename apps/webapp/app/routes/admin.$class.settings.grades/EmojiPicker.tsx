@@ -2,12 +2,42 @@ import data from '@emoji-mart/data';
 import Picker from '@emoji-mart/react';
 import { useState } from 'react';
 import { useClickAway } from '@uidotdev/usehooks';
+import { SCORE_EMOJI_VALUES, scoreEmojiId, scoreEmojiDataUri } from '@classmoji/utils';
 import { Emoji } from '~/components';
 
 interface EmojiPickerProps {
   setEmoji: (emojiId: string) => void;
   emoji: string | null;
 }
+
+// The built-in 0–100 grade badges as an emoji-mart custom category. emoji-mart
+// keys the selection by `id`, which is the `score-N` shortcode the mapping stores.
+const SCORE_CATEGORY = [
+  {
+    id: 'scores',
+    name: 'Grade scores',
+    emojis: SCORE_EMOJI_VALUES.map(value => ({
+      id: scoreEmojiId(value),
+      name: `Score ${value}`,
+      keywords: ['score', 'grade', 'percent', String(value)],
+      skins: [{ src: scoreEmojiDataUri(value) }],
+    })),
+  },
+];
+
+// Scores first, then emoji-mart's default order.
+const CATEGORY_ORDER = [
+  'scores',
+  'frequent',
+  'people',
+  'nature',
+  'foods',
+  'activity',
+  'places',
+  'objects',
+  'symbols',
+  'flags',
+];
 
 const EmojiPicker = ({ setEmoji, emoji }: EmojiPickerProps) => {
   const [isOpen, setIsOpen] = useState(false);
@@ -43,7 +73,12 @@ const EmojiPicker = ({ setEmoji, emoji }: EmojiPickerProps) => {
           className="absolute top-11 z-10 shadow-lg rounded-xl overflow-hidden"
           ref={ref as React.RefObject<HTMLDivElement>}
         >
-          <Picker data={data} onEmojiSelect={handleEmojiSelect} />
+          <Picker
+            data={data}
+            custom={SCORE_CATEGORY}
+            categories={CATEGORY_ORDER}
+            onEmojiSelect={handleEmojiSelect}
+          />
         </div>
       )}
     </div>

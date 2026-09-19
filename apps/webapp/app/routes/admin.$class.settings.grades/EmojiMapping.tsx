@@ -164,6 +164,19 @@ const EmojiMapping = ({ emojiMappings, orphanedEmojis }: EmojiMappingProps) => {
     );
   };
 
+  const populateScoreScale = () => {
+    notify('Adding the 0–100 grade scale...');
+
+    fetcher!.submit(
+      {},
+      {
+        action: '?/populateScoreScaleMappings',
+        method: 'POST',
+        encType: 'application/json',
+      }
+    );
+  };
+
   const emojiMappingColumns = [
     {
       title: 'Emoji',
@@ -367,15 +380,26 @@ const EmojiMapping = ({ emojiMappings, orphanedEmojis }: EmojiMappingProps) => {
                 {emojiMappings?.length || 0}
               </span>
             </div>
-            <Popconfirm
-              title="Reset to defaults?"
-              description="This will remove all existing mappings and add the default ones."
-              onConfirm={populateDefaults}
-              okText="Yes, reset"
-              cancelText="Cancel"
-            >
-              <Button size="small">Populate Defaults</Button>
-            </Popconfirm>
+            <div className="flex items-center gap-2">
+              <Popconfirm
+                title="Reset to defaults?"
+                description="This will remove all existing mappings and add the default ones."
+                onConfirm={populateDefaults}
+                okText="Yes, reset"
+                cancelText="Cancel"
+              >
+                <Button size="small">Populate Defaults</Button>
+              </Popconfirm>
+              <Popconfirm
+                title="Use the 0–100 scale?"
+                description="Replaces all existing mappings with 21 score emojis (0, 5, 10 … 100)."
+                onConfirm={populateScoreScale}
+                okText="Yes, replace"
+                cancelText="Cancel"
+              >
+                <Button size="small">Populate 0–100 scale</Button>
+              </Popconfirm>
+            </div>
           </div>
           <div className="flex flex-wrap items-end gap-3">
             <EmojiPicker setEmoji={setEmoji} emoji={emoji} />

@@ -119,7 +119,7 @@ const EmojiGrader = ({ repositoryAssignment, emojiMappings }: EmojiGraderProps) 
         data-testid={`emoji-grade-option-${key}`}
         data-selected={isSelected ? 'true' : 'false'}
         aria-pressed={isSelected}
-        className="inline-flex"
+        className="inline-flex shrink-0"
         animate={isPopped ? { scale: [1, 1.35, 0.92, 1] } : { scale: 1 }}
         transition={isPopped ? { duration: 0.4, ease: EASE_OUT_QUINT } : { duration: 0 }}
         onAnimationComplete={() => {
@@ -168,9 +168,11 @@ const EmojiGrader = ({ repositoryAssignment, emojiMappings }: EmojiGraderProps) 
               reducedMotion ? { duration: 0.12 } : { ...POP_SPRING, opacity: { duration: 0.15 } }
             }
             style={{ transformOrigin: 'top right' }}
-            className="absolute py-3 px-4 border border-stone-200 dark:border-neutral-700 bg-white dark:bg-neutral-900 rounded-md shadow-sm top-0 right-0 z-10"
+            className="absolute w-max py-3 px-4 border border-stone-200 dark:border-neutral-700 bg-white dark:bg-neutral-900 rounded-md shadow-sm top-0 right-0 z-10"
           >
-            <div className="flex gap-2 z-10">{emojiList}</div>
+            {/* Wraps so a 21-step score scale lands as three rows of seven instead of
+                one squeezed row; the five-emoji default still fits on one line. */}
+            <div className="flex flex-wrap gap-2 z-10 max-w-[23rem]">{emojiList}</div>
           </motion.div>
         )}
       </AnimatePresence>
