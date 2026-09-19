@@ -21,6 +21,17 @@ export {
   DEFAULT_FILES,
 } from './Sandpack/index.ts';
 
+// Media upload client — also reachable as `@classmoji/ui-components/upload`,
+// which is what a browser bundle should import.
+export { uploadMultipart, MultipartUploadError } from './upload/index.ts';
+export type {
+  MediaUploadOptions,
+  MultipartUploadArgs,
+  MultipartUploadErrorCode,
+  MultipartUploadProgress,
+  MultipartUploadResult,
+} from './upload/index.ts';
+
 // Design-system primitives (Phase 2 redesign)
 export { Card } from './Card/index.ts';
 export type { CardProps } from './Card/index.ts';
