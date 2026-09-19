@@ -18,6 +18,8 @@ import { assertSlideAccess } from '@classmoji/auth/server';
 import { SlideKindError, slideFileService, validateSlideLinkUrl } from '@classmoji/services/slides';
 import { assertSlideInClassroom, assertSlideKind } from '~/utils/slideRouteGuards';
 import { webappClassUrl } from '~/utils/webappLinks';
+import { PendingCancelLink, PendingSubmitButton } from '~/components/FormPending';
+import { isSubmissionPending } from '~/utils/pendingSubmission';
 
 /** Load the slide, prove the caller may edit it, and prove it is a link slide. */
 async function authorizeLinkSlide(request: Request, classroomSlug: string, slideId: string) {
@@ -120,7 +122,10 @@ export default function EditSlideLinkPage() {
   const actionData = useActionData() as { error?: string } | undefined;
   const [linkError, setLinkError] = useState<string | null>(null);
 
-  const isSubmitting = navigation.state === 'submitting';
+  // True for the whole round trip, not just the upload half — see
+  // `~/utils/pendingSubmission`. Goes false again the moment an error settles,
+  // which is what hands the form back.
+  const isSubmitting = isSubmissionPending(navigation);
 
   const onSubmit = (event: FormEvent<HTMLFormElement>) => {
     const raw = String(new FormData(event.currentTarget).get('url') ?? '').trim();
@@ -144,9 +149,11 @@ export default function EditSlideLinkPage() {
               {slide.title} · {classroomName || classroomSlug}
             </p>
           </div>
-          <a href={slidesListUrl} className="btn btn-ghost">
-            Cancel
-          </a>
+          <PendingCancelLink
+            href={slidesListUrl}
+            pending={isSubmitting}
+            className="btn btn-ghost"
+          />
         </div>
 
         <div className="card p-5 sm:p-6">
@@ -172,7 +179,8 @@ export default function EditSlideLinkPage() {
               defaultValue={slide.url ?? ''}
               placeholder="https://example.com/slides"
               onChange={() => setLinkError(null)}
-              className={FIELD_CLASS}
+              disabled={isSubmitting}
+              className={`${FIELD_CLASS} disabled:cursor-not-allowed disabled:opacity-60`}
             />
             {linkError && (
               <p role="alert" className="mt-2 text-xs font-medium text-[var(--rose-ink)]">
@@ -185,12 +193,10 @@ export default function EditSlideLinkPage() {
             </p>
 
             <div className="mt-6 flex justify-end gap-2">
-              <a href={slidesListUrl} className="btn">
-                Cancel
-              </a>
-              <button type="submit" disabled={isSubmitting} className="btn btn-primary">
-                {isSubmitting ? 'Saving…' : 'Save link'}
-              </button>
+              <PendingCancelLink href={slidesListUrl} pending={isSubmitting} />
+              <PendingSubmitButton pending={isSubmitting} pendingLabel="Saving…">
+                Save link
+              </PendingSubmitButton>
             </div>
           </Form>
         </div>
