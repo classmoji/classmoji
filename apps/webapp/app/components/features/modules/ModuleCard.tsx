@@ -117,7 +117,7 @@ const ItemRow = ({
       <button
         type="button"
         onClick={onTitleClick}
-        className="min-w-0 flex-1 truncate text-left text-ink-1 hover:underline"
+        className="min-w-0 flex-1 truncate text-left text-ink-1"
       >
         <span className="font-semibold mr-2">{kind}:</span>
         {title}
