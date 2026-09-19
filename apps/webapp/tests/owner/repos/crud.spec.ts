@@ -275,8 +275,8 @@ test.describe('Assignment Management (within Repository form modal)', () => {
 
     // Modal title + Assignments section + Add control.
     await expect(modal.getByText('Edit repository', { exact: true })).toBeVisible();
-    await expect(modal.getByText('Assignments', { exact: true })).toBeVisible();
-    await expect(modal.getByRole('button', { name: /Add assignment/i })).toBeVisible();
+    await expect(modal.getByText('Issues', { exact: true })).toBeVisible();
+    await expect(modal.getByRole('button', { name: /Add issue/i })).toBeVisible();
 
     // Assignments table columns.
     await expect(modal.getByRole('columnheader', { name: 'Title' })).toBeVisible();
@@ -300,18 +300,18 @@ test.describe('Assignment form (nested modal)', () => {
   const openAdd = async (page: import('@playwright/test').Page) => {
     const repoModal = page.locator('.ant-modal-content').first();
     await expect(repoModal).toBeVisible({ timeout: 5000 });
-    await repoModal.getByRole('button', { name: /Add assignment/i }).click();
-    await expect(page.getByText('Create New Assignment')).toBeVisible({ timeout: 5000 });
+    await repoModal.getByRole('button', { name: /Add issue/i }).click();
+    await expect(page.getByText('New issue').first()).toBeVisible({ timeout: 5000 });
   };
 
   test('can open the add assignment modal', async ({ authenticatedPage: page }) => {
     await openAdd(page);
-    await expect(page.getByText('New assignment', { exact: true })).toBeVisible();
+    await expect(page.getByText('New issue', { exact: true }).first()).toBeVisible();
   });
 
   test('add assignment modal shows required fields', async ({ authenticatedPage: page }) => {
     await openAdd(page);
-    await expect(page.getByText('Assignment Title')).toBeVisible();
+    await expect(page.getByText('Issue title')).toBeVisible();
     await expect(page.getByText('Weight').first()).toBeVisible();
     await expect(page.getByText('Tokens per Hour')).toBeVisible();
   });
@@ -329,7 +329,7 @@ test.describe('Assignment form (nested modal)', () => {
   test('add assignment modal has save and discard buttons', async ({ authenticatedPage: page }) => {
     await openAdd(page);
     const nested = page.locator('.ant-modal-content').last();
-    await expect(nested.getByRole('button', { name: 'Add assignment' })).toBeVisible();
+    await expect(nested.getByRole('button', { name: 'Add issue' })).toBeVisible();
     await expect(nested.getByRole('button', { name: 'Discard' })).toBeVisible();
   });
 
@@ -337,7 +337,7 @@ test.describe('Assignment form (nested modal)', () => {
     await openAdd(page);
     const nested = page.locator('.ant-modal-content').last();
     await nested.getByRole('button', { name: 'Discard' }).click();
-    await expect(page.getByText('Create New Assignment')).not.toBeVisible({ timeout: 5000 });
+    await expect(page.getByText('New issue').first()).not.toBeVisible({ timeout: 5000 });
   });
 
   test('can open the edit assignment modal', async ({ authenticatedPage: page }) => {
@@ -348,7 +348,7 @@ test.describe('Assignment form (nested modal)', () => {
     await expect(row).toBeVisible({ timeout: 5000 });
     await row.getByRole('button', { name: 'Edit' }).click();
 
-    await expect(page.getByText('Edit Assignment: Hello World Part 1')).toBeVisible({
+    await expect(page.getByText('Edit issue: Hello World Part 1')).toBeVisible({
       timeout: 10000,
     });
   });
@@ -359,7 +359,7 @@ test.describe('Assignment form (nested modal)', () => {
 
     const row = repoModal.getByRole('row').filter({ hasText: 'Hello World Part 1' }).first();
     await row.getByRole('button', { name: 'Edit' }).click();
-    await expect(page.getByText('Edit Assignment: Hello World Part 1')).toBeVisible({
+    await expect(page.getByText('Edit issue: Hello World Part 1')).toBeVisible({
       timeout: 10000,
     });
 

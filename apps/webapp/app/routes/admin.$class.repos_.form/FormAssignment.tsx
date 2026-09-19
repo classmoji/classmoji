@@ -61,11 +61,9 @@ const FormAssignment = ({
         <div className="flex justify-between items-start">
           <div>
             <h4 className="text-base font-semibold text-gray-900 mb-1">
-              {assignment?.title ? `Edit Assignment: ${assignment.title}` : 'Create New Assignment'}
+              {assignment?.title ? `Edit issue: ${assignment.title}` : 'New issue'}
             </h4>
-            <p className="text-sm text-gray-600">
-              Configure the assignment details and grading parameters
-            </p>
+            <p className="text-sm text-gray-600">Set the issue’s title, weight, and deadlines</p>
           </div>
 
           {templateAssignments?.length > 0 && (
@@ -116,10 +114,10 @@ const FormAssignment = ({
             className="mb-4"
           />
 
-          <Form.Item label={<span className="font-medium">Assignment Title</span>} className="mb-4">
+          <Form.Item label={<span className="font-medium">Issue title</span>} className="mb-4">
             <Input
               required
-              placeholder="Enter descriptive assignment title"
+              placeholder="Enter a descriptive issue title"
               value={assignment.title}
               onChange={e => setAssignmentValue('title', e.currentTarget.value)}
             />

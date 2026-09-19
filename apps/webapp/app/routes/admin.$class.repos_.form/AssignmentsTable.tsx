@@ -127,8 +127,8 @@ const AssignmentsTable = ({
             </Button>
 
             <Popconfirm
-              title="Delete assignment"
-              description="Are you sure to delete this assignment?"
+              title="Delete issue"
+              description="Are you sure you want to delete this issue?"
               onConfirm={() => removeAssignment(record.id)}
               onCancel={() => {}}
               okText="Yes"

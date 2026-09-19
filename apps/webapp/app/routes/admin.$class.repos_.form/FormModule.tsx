@@ -710,19 +710,19 @@ const FormModule = ({
           <Card className="shadow-xs mb-6">
             <div className="flex justify-between items-start mb-4">
               <SectionHeader
-                title="Assignments"
-                subtitle="Define the assignments that will be used for grading"
+                title="Issues"
+                subtitle="The GitHub issues students complete in this repository; each one is graded"
                 size="md"
               />
 
-              <Tooltip title="Add new assignment">
+              <Tooltip title="Add a new issue">
                 <Button
                   data-tour="repos-form-add-assignment"
                   type="primary"
                   icon={<PlusOutlined />}
                   onClick={openIssueModal}
                 >
-                  Add assignment
+                  Add issue
                 </Button>
               </Tooltip>
             </div>
@@ -847,7 +847,7 @@ const FormModule = ({
                 <div className="flex items-center justify-between gap-3 px-5 py-3 bg-stone-50 dark:bg-neutral-800/60 border-b border-line">
                   <div className="flex flex-col">
                     <span className="text-sm font-semibold text-ink-0">
-                      {isEditingAssignment ? 'Edit assignment' : 'New assignment'}
+                      {isEditingAssignment ? 'Edit issue' : 'New issue'}
                     </span>
                     <span className="text-xs font-normal text-ink-3">
                       Set title, deadline, weight, and any linked resources.
@@ -929,7 +929,7 @@ const FormModule = ({
                       resetAssignment();
                     }}
                   >
-                    {isEditingAssignment ? 'Save changes' : 'Add assignment'}
+                    {isEditingAssignment ? 'Save changes' : 'Add issue'}
                   </Button>
                 </div>
               </>
