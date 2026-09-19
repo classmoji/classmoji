@@ -10,7 +10,6 @@ import {
   IconChevronRight,
   IconCloudUpload,
   IconDotsVertical,
-  IconEyeOff,
   IconFileText,
   IconFolder,
   IconForms,
@@ -254,16 +253,6 @@ const ModuleCard = ({
     if (key === 'delete') post('delete', { id: module.id });
   };
 
-  const repoMenu = (published: boolean): MenuProps['items'] => [
-    ...(published
-      ? [
-          { key: 'unpublish', label: 'Unpublish', icon: <IconEyeOff size={15} /> },
-          { type: 'divider' as const },
-        ]
-      : []),
-    { key: 'delete', label: 'Delete', danger: true, icon: <IconTrash size={15} /> },
-  ];
-
   // "Add item" asks which kind. A repository goes to the repository form; a
   // quiz or form links an existing one as an assignment; a page or slide deck
   // is placed in the module's reading order.
@@ -389,20 +378,6 @@ const ModuleCard = ({
                       Publish
                     </ActionLink>
                   )}
-                  <Dropdown
-                    trigger={['click']}
-                    placement="bottomRight"
-                    menu={{
-                      items: repoMenu(r.is_published),
-                      onClick: ({ key, domEvent }) => {
-                        domEvent.stopPropagation();
-                        if (key === 'unpublish') repoActions.confirmUnpublish(r.id);
-                        if (key === 'delete') repoActions.confirmDelete(r.id);
-                      },
-                    }}
-                  >
-                    <IconMore label={`Repository actions: ${r.title}`} />
-                  </Dropdown>
                 </div>
               </li>
             ))}
