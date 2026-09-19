@@ -120,6 +120,10 @@ describe('student assignments loader — git_repo guard', () => {
     // is flagged gradesReleased; the ungraded OPEN row is not.
     const graded = data.rows.find(r => r.assignmentTitle === 'HW1')!;
     expect(graded.grades).toEqual([{ id: 'g-1', emoji: '⭐' }]);
+    // The row is how a student reaches their repo now that the student
+    // Repositories screen is gone, so both GitHub links are pinned.
+    expect(graded.repoUrl).toBe('https://github.com/test-org/repo-1');
+    expect(graded.issueUrl).toBe('https://github.com/test-org/repo-1/issues/1');
     expect(graded.gradesReleased).toBe(true);
     const ungraded = data.rows.find(r => r.assignmentTitle === 'HW2')!;
     expect(ungraded.gradesReleased).toBe(false);
