@@ -86,6 +86,11 @@ import * as gitRepoAnalyticsService from './repoAnalytics.service.ts';
 import * as dashboardService from './dashboard.service.ts';
 import * as taDashboardService from './taDashboard.service.ts';
 import * as notificationService from './notification.service.ts';
+// Lives outside classmoji/ because it is a store rather than a classroom
+// entity: no GitHub, no content repo, and the only Prisma table it touches is
+// its own. Registered here because every app reaches services through
+// ClassmojiService.
+import * as mediaService from '../media/index.ts';
 
 const ClassmojiService = {
   // All services namespaced for consistency
@@ -160,6 +165,7 @@ const ClassmojiService = {
   dashboard: dashboardService,
   taDashboard: taDashboardService,
   notification: notificationService,
+  media: mediaService,
   // Alias for AI conversation functions (delegates to quizAttempt)
   aiConversation: {
     addMessage: quizAttemptService.addMessage,
@@ -230,4 +236,5 @@ export {
   dashboardService,
   taDashboardService,
   notificationService,
+  mediaService,
 };

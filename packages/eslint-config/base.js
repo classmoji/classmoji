@@ -26,6 +26,11 @@ import pluginPrettier from 'eslint-plugin-prettier';
  *     a deck id rather than a sha, with no asset map to check against;
  *   - `apps/content/src/verify.ts` — the Worker's VERIFY seam, allowlisted in
  *     that app's own config; it re-exports the package and mints nothing;
+ *   - `media/mediaKeys.ts` — the R2 KEY shape, which is in the signing package
+ *     only because the Worker has to build the identical key from the URL it
+ *     verified. It mints nothing, and every other media module reaches the
+ *     helpers through it, so the gate below is still the only place a media
+ *     URL is signed;
  *   - tests, which have to reach the primitives to prove the gate's output.
  *
  * Globs are tail-matched (`**\/classmoji/...`) because flat-config `files`
@@ -42,6 +47,7 @@ const CONTENT_SIGNING = {
 const CONTENT_SIGNING_ALLOWED = [
   '**/classmoji/contentDelivery.service.ts',
   '**/classmoji/deckRenderToken.service.ts',
+  '**/media/mediaKeys.ts',
   '**/__tests__/**/*.{js,jsx,ts,tsx}',
   '**/tests/**/*.{js,jsx,ts,tsx}',
   '**/*.test.{js,jsx,ts,tsx}',
