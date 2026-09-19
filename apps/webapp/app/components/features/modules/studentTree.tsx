@@ -1,4 +1,4 @@
-import { Tag } from 'antd';
+import { Button, Tag } from 'antd';
 import { Link } from 'react-router';
 import Emoji from '~/components/ui/display/Emoji';
 import {
@@ -271,14 +271,9 @@ export const buildRepositoryNode = (
   const done = assignments.filter(a => raByAssignmentId[String(a.id)]?.status === 'CLOSED').length;
 
   const repositoryAction = repositoryUrl ? (
-    <a
-      href={repositoryUrl}
-      target="_blank"
-      rel="noreferrer"
-      className="text-sm font-medium text-sky-600 hover:text-sky-700 dark:text-sky-400"
-    >
+    <Button size="small" href={repositoryUrl} target="_blank" rel="noreferrer">
       View
-    </a>
+    </Button>
   ) : null;
 
   // A self-formed group repo is the one case where the row's job is to send the
@@ -290,11 +285,8 @@ export const buildRepositoryNode = (
     : null;
   const selfFormedAction =
     selfFormed && teamHref && !(selfFormed.deadlinePassed && !selfFormed.hasTeam) ? (
-      <Link
-        to={teamHref}
-        className="text-sm font-medium text-sky-600 hover:text-sky-700 dark:text-sky-400"
-      >
-        {selfFormed.hasTeam ? 'View team' : 'Form a team'}
+      <Link to={teamHref}>
+        <Button size="small">{selfFormed.hasTeam ? 'View team' : 'Form a team'}</Button>
       </Link>
     ) : null;
   // Only when there is no submission count to show, which is the state a repo

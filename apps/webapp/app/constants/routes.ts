@@ -107,7 +107,7 @@ export const routes = {
     // docked (the Option C reader). The sidebar no longer hangs one entry per
     // page — CommonLayout hides this whole entry from non-owners when the
     // class has no readable pages, the same way Modules hides.
-    roles: ['OWNER', 'TEACHER', 'ASSISTANT', 'STUDENT'],
+    roles: ['OWNER', 'TEACHER', 'ASSISTANT'],
     category: 'content',
   },
   forms: {
