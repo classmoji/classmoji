@@ -258,6 +258,19 @@ describe('canonicalizeAssetRef', () => {
     await expect(canonicalizeAssetRef(ctx, foreign)).resolves.toBe(foreign);
   });
 
+  it('leaves a media URL on somebody else host alone', async () => {
+    // The path shape is public. Claiming it from any host would rewrite an
+    // author's external link into a reference to one of OUR objects.
+    const elsewhere = `https://not-ours.example/c/${CLASSROOM_ID}/media/${MEDIA_ID}/orig.mp4?p=week&v=1&exp=1&sig=x`;
+    await expect(canonicalizeAssetRef(ctx, elsewhere)).resolves.toBe(elsewhere);
+  });
+
+  it('leaves even our own URL alone when the deployment mints none', async () => {
+    const url = `${ORIGIN}/c/${CLASSROOM_ID}/media/${MEDIA_ID}/orig.mp4?p=week&v=1&exp=1&sig=x`;
+    delete process.env.CONTENT_DELIVERY_ORIGIN;
+    await expect(canonicalizeAssetRef(ctx, url)).resolves.toBe(url);
+  });
+
   it('restores the reference out of a /missing/ placeholder', async () => {
     const placeholder = `${ORIGIN}/c/${CLASSROOM_ID}/missing/${encodeURIComponent(REF)}`;
     await expect(canonicalizeAssetRef(ctx, placeholder)).resolves.toBe(REF);

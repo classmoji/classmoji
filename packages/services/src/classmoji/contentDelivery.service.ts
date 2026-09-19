@@ -893,9 +893,43 @@ export function parseMediaRef(ref: string): string | null {
 const MEDIA_URL =
   /^https?:\/\/[^/]+\/c\/([0-9a-f-]{36})\/media\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\/[^/?#]+(?:\?|$)/i;
 
+/**
+ * Is this host the one this deployment mints delivery URLs on?
+ *
+ * "Ours" has to mean the HOST as well as the path: the shape above is a public
+ * URL grammar and any site can serve a path that matches it. A save that
+ * accepted `https://somewhere-else.example/c/{thisClassroom}/media/{id}/…`
+ * would rewrite an author's external link into a reference to one of this
+ * classroom's own objects — a silent edit of their content, driven by a string
+ * somebody else chose.
+ *
+ * Env rather than `deliveryEnvFor`, for `canonicalizeAssetRef`'s reason: this
+ * path only ever REMOVES a derived URL, so it has to keep working for a
+ * classroom whose flag has since been switched off. A deployment with no origin
+ * at all mints nothing, so no host is ours and every string is left alone.
+ */
+function isOwnDeliveryHost(host: string | null | undefined): boolean {
+  const origin = process.env.CONTENT_DELIVERY_ORIGIN;
+  if (!origin || !host) return false;
+  try {
+    return new URL(origin).host.toLowerCase() === host.toLowerCase();
+  } catch {
+    return false;
+  }
+}
+
 function parseMediaUrl(ctx: ResolveContext, ref: string): string | null {
   const match = MEDIA_URL.exec(ref);
   if (!match || match[1].toLowerCase() !== ctx.classroom.id.toLowerCase()) return null;
+
+  let host: string;
+  try {
+    host = new URL(ref).host;
+  } catch {
+    return null;
+  }
+  if (!isOwnDeliveryHost(host)) return null;
+
   return match[2].toLowerCase();
 }
 
@@ -2151,8 +2185,12 @@ export async function canonicalizeAssetRef(ctx: ResolveContext, urlOrRef: string
 
   // Belt to the shape match above. Only reachable for one of OUR media URLs the
   // regex did not claim, and it must not fall through to the blob branch, which
-  // would read `parsed.sha` off a shape that has none.
-  if (parsed.kind === 'media') return mediaRef(parsed.mediaId);
+  // would read `parsed.sha` off a shape that has none. The host check is the
+  // same one `parseMediaUrl` makes: this parse is structural and would accept
+  // the shape from any host at all.
+  if (parsed.kind === 'media') {
+    return isOwnDeliveryHost(parsed.host) ? mediaRef(parsed.mediaId) : urlOrRef;
+  }
 
   // A signed THEME url reaches storage through a deck's `<link href>` or an
   // inline `url()`, and it expires exactly like a blob url does. Its repo path
