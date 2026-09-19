@@ -542,8 +542,9 @@ describe('completeUpload', () => {
     expect(prisma.mediaObject.update.mock.calls.at(-1)?.[0].data).toMatchObject({
       status: 'READY',
       upload_id: null,
-      // The row asked to be optimised, so the phase-2 job has something to pick up.
-      processing: 'PENDING',
+      // NONE even though the row asked to be optimised: P1 queues nothing, and
+      // PENDING with no job behind it is a row that processes forever.
+      processing: 'NONE',
     });
   });
 

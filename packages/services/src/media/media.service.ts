@@ -109,6 +109,11 @@ const PART_URL_TTL_SECONDS = 15 * 60;
  * rows with `optimise` set, which is why the seam exists now: `completeUpload`
  * is the only moment that knows an object has just become real, and adding the
  * call later would mean editing the function rather than filling this in.
+ *
+ * Setting `processing` to PENDING belongs HERE, in the same step that enqueues
+ * the job — not in `completeUpload`. PENDING is a claim that something is
+ * queued, and a row that carries it with no job behind it shows as forever
+ * processing on the admin page.
  */
 export async function onMediaReady(_row: MediaRecord): Promise<void> {
   // Phase 2: enqueue media-video-process for VIDEO rows with `optimise`.
@@ -654,7 +659,12 @@ export async function completeUpload({
       status: 'READY',
       ready_at: new Date(),
       upload_id: null,
-      processing: row.optimise ? 'PENDING' : 'NONE',
+      // NONE, even for a row that asked to be optimised. PENDING means "a job
+      // is queued", and in P1 there is no job — a row parked in PENDING is one
+      // the admin page shows as processing forever and one a later sweep would
+      // have to unstick. P2's `onMediaReady` sets PENDING at the moment it
+      // enqueues, which is the only moment the claim is true.
+      processing: 'NONE',
     },
   })) as MediaRow;
 
