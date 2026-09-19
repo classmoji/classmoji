@@ -280,7 +280,7 @@ describe('createUpload', () => {
     });
   });
 
-  it('refuses in order: configured, kind, per-file, Pro, quota', async () => {
+  it('refuses in order: configured, kind, Pro, per-file, quota', async () => {
     unconfigure();
     await expect(
       createUpload({ classroom, userId: 'u', filename: 'a.mp4', sizeBytes: 1 })
@@ -291,18 +291,22 @@ describe('createUpload', () => {
       createUpload({ classroom, userId: 'u', filename: 'a.html', sizeBytes: 1 })
     ).rejects.toMatchObject({ code: 'KIND_NOT_ALLOWED' });
 
+    // Pro comes BEFORE the numbers, so a free classroom hears PRO_REQUIRED even
+    // for a file that is also too big — "you cannot store media" is the useful
+    // half of that answer.
+    getProStateForClassroomId.mockResolvedValue({ isPro: false });
+    await expect(
+      createUpload({ classroom, userId: 'u', filename: 'a.mp4', sizeBytes: PER_FILE_MAX_BYTES + 1 })
+    ).rejects.toMatchObject({ code: 'PRO_REQUIRED' });
+
+    getProStateForClassroomId.mockResolvedValue({ isPro: true });
     await expect(
       createUpload({ classroom, userId: 'u', filename: 'a.mp4', sizeBytes: PER_FILE_MAX_BYTES + 1 })
     ).rejects.toMatchObject({ code: 'FILE_TOO_LARGE' });
 
-    // A free classroom hears PRO_REQUIRED, never "you are 1 byte over 0".
-    getProStateForClassroomId.mockResolvedValue({ isPro: false });
-    await expect(
-      createUpload({ classroom, userId: 'u', filename: 'a.mp4', sizeBytes: 1 })
-    ).rejects.toMatchObject({ code: 'PRO_REQUIRED' });
-
     // Nothing was written or opened on any of those paths.
     expect(prisma.mediaObject.create).not.toHaveBeenCalled();
+    expect(prisma.$transaction).not.toHaveBeenCalled();
     expect(sent).toHaveLength(0);
   });
 

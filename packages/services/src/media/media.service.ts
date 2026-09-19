@@ -249,18 +249,21 @@ export async function createUpload({
     throw new MediaError('KIND_NOT_ALLOWED', `Files of this type cannot be uploaded: ${filename}`);
   }
 
+  // Pro before the numbers: a classroom that cannot store media at all should
+  // hear that, not a sentence about a file being over a limit it would still be
+  // over at one byte.
+  const { isPro } = await getProStateForClassroomId(classroom.id);
+  if (!isPro) {
+    throw new MediaError('PRO_REQUIRED', 'Media storage requires a Pro subscription');
+  }
+  const quotaBytes = quotaBytesFor(isPro);
+
   if (!Number.isSafeInteger(sizeBytes) || sizeBytes <= 0) {
     throw new MediaError('FILE_TOO_LARGE', 'A file size in bytes is required');
   }
   if (sizeBytes > PER_FILE_MAX_BYTES) {
     throw new MediaError('FILE_TOO_LARGE', 'This file is larger than the per-file limit');
   }
-
-  const { isPro } = await getProStateForClassroomId(classroom.id);
-  if (!isPro) {
-    throw new MediaError('PRO_REQUIRED', 'Media storage requires a Pro subscription');
-  }
-  const quotaBytes = quotaBytesFor(isPro);
 
   // Video-only options. For any other kind they are stored at their defaults
   // and nothing reads them, so an uploader cannot mark a PDF for transcoding.
