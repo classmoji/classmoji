@@ -1,6 +1,7 @@
 import { graceFor, nowSeconds } from './bucket.ts';
 import {
   BLOB_QUERY_KEYS,
+  MEDIA_QUERY_KEYS,
   SCHEME_SEGMENTS,
   SCHEME_SEGMENT_PATTERN,
   blobCanonicalString,
@@ -9,11 +10,14 @@ import {
   isExt,
   isGitSha,
   isKeyVersion,
+  isMediaId,
+  isMediaVariant,
   isTheme,
   isTier,
   isTransformFormat,
   isTransformWidth,
   isUnixSeconds,
+  mediaCanonicalString,
   themeCanonicalString,
 } from './canonical.ts';
 import { deriveKey, verifyCanonical } from './derive.ts';
@@ -22,8 +26,10 @@ import type {
   BlobVerification,
   KeySlot,
   MasterSecrets,
+  MediaVerification,
   ParsedBlobUrl,
   ParsedContentUrl,
+  ParsedMediaUrl,
   ParsedThemeUrl,
   ThemeVerification,
   Tier,
@@ -154,6 +160,28 @@ export function normalizeRelPath(segments: string[]): string | null {
   return decoded.join('/');
 }
 
+/**
+ * Whether a `dl` param is one we are willing to hash — absent, or bounded.
+ *
+ * Bounded, and never base64-decoded: the canonical string covers this value, so
+ * the signature is checked over what the query carried rather than over a
+ * filename this parse made of it.
+ *
+ * `searchParams.get` does percent-decode, so it is the DECODED spelling that
+ * lands here — and that is fine, because it is the same rule on both sides.
+ * base64url has nothing worth escaping, so `%5A...` decodes to exactly the
+ * characters the signer signed and verifies identically; an escape that decodes
+ * to anything else simply produces a canonical string this key never signed.
+ * The bound is the only thing weighed, because nothing longer could have been
+ * signed and there is no reason to hash an unbounded string.
+ *
+ * One rule for both shapes that carry a filename, blob and media alike.
+ */
+function downloadParamOk(raw: string | null): boolean {
+  if (raw === null) return true;
+  return raw.length > 0 && raw.length <= MAX_ENCODED_DOWNLOAD_FILENAME;
+}
+
 function parseBlob(url: URL, host: string, classroomId: string, segments: string[]): ParseResult {
   if (segments.length !== 4) return fail('malformed');
   if (!queryKeysOk(url, BLOB_QUERY_KEYS)) return fail('malformed');
@@ -178,26 +206,44 @@ function parseBlob(url: URL, host: string, classroomId: string, segments: string
   const transform = parseTransform(url);
   if (transform === null) return fail('malformed');
 
-  // Bounded, and never base64-decoded: the canonical string covers this value,
-  // so the signature is checked over what the query carried rather than over a
-  // filename this parse made of it.
-  //
-  // `searchParams.get` does percent-decode, so it is the DECODED spelling that
-  // lands here — and that is fine, because it is the same rule on both sides.
-  // base64url has nothing worth escaping, so `%5A...` decodes to exactly the
-  // characters the signer signed and verifies identically; an escape that
-  // decodes to anything else simply produces a canonical string this key never
-  // signed. The bound is the only thing weighed, because nothing longer could
-  // have been signed and there is no reason to hash an unbounded string.
   const rawDownload = url.searchParams.get('dl');
-  if (rawDownload !== null) {
-    if (rawDownload.length === 0 || rawDownload.length > MAX_ENCODED_DOWNLOAD_FILENAME) {
-      return fail('malformed');
-    }
-  }
+  if (!downloadParamOk(rawDownload)) return fail('malformed');
 
   const value: ParsedBlobUrl = { kind: 'blob', host, classroomId, sha, ext, ...policy };
   if (transform) value.transform = transform;
+  if (rawDownload !== null) value.dl = rawDownload;
+  return { ok: true, value };
+}
+
+/**
+ * `/c/{classroomId}/media/{mediaId}/{variant}` — exactly five segments.
+ *
+ * The variant is a closed list rather than a filename, so there is nothing to
+ * normalize and no path to traverse: it is checked as it arrived, and the same
+ * string is what `mediaKey` later appends to the R2 prefix.
+ */
+function parseMedia(url: URL, host: string, classroomId: string, segments: string[]): ParseResult {
+  if (segments.length !== 5) return fail('malformed');
+  if (!queryKeysOk(url, MEDIA_QUERY_KEYS)) return fail('malformed');
+
+  const mediaId = decodeSegment(segments[3]);
+  if (mediaId === null || !isMediaId(mediaId)) return fail('malformed');
+
+  const variant = decodeSegment(segments[4]);
+  if (variant === null || !isMediaVariant(variant)) return fail('malformed');
+
+  const policy = readPolicy(
+    url.searchParams.get('p'),
+    url.searchParams.get('v'),
+    url.searchParams.get('exp'),
+    url.searchParams.get('sig')
+  );
+  if (!policy) return fail('malformed');
+
+  const rawDownload = url.searchParams.get('dl');
+  if (!downloadParamOk(rawDownload)) return fail('malformed');
+
+  const value: ParsedMediaUrl = { kind: 'media', host, classroomId, mediaId, variant, ...policy };
   if (rawDownload !== null) value.dl = rawDownload;
   return { ok: true, value };
 }
@@ -254,6 +300,7 @@ function parseInternal(url: string | URL): ParseResult {
 
   if (segments[2] === 'blob') return parseBlob(parsedUrl, host, classroomId, segments);
   if (segments[2] === 'theme') return parseTheme(parsedUrl, host, classroomId, segments);
+  if (segments[2] === 'media') return parseMedia(parsedUrl, host, classroomId, segments);
   return fail('malformed');
 }
 
@@ -374,6 +421,55 @@ async function verifyParsedBlob(
   return verified;
 }
 
+async function verifyParsedMedia(
+  masters: readonly string[],
+  parsed: ParsedMediaUrl,
+  now: number
+): Promise<MediaVerification> {
+  const signature = fromBase64Url(parsed.sig);
+  if (!signature) return fail('malformed');
+
+  const canonical = mediaCanonicalString({
+    host: parsed.host,
+    classroomId: parsed.classroomId,
+    mediaId: parsed.mediaId,
+    variant: parsed.variant,
+    tier: parsed.tier,
+    keyVersion: parsed.keyVersion,
+    exp: parsed.exp,
+    dl: parsed.dl,
+  });
+  const keySlot = await checkSignature(masters, parsed, canonical, signature);
+  if (!keySlot) return fail('bad-signature');
+
+  const expiry = expiryFailure(parsed.tier, parsed.exp, now);
+  if (!expiry) return fail('expired');
+
+  // Only now, with the signature already checked, is the filename decoded —
+  // for the same reason as on the blob path: these are bytes WE minted.
+  let downloadFilename: string | undefined;
+  if (parsed.dl !== undefined) {
+    const decoded = decodeDownloadFilename(parsed.dl);
+    if (decoded === null) return fail('malformed');
+    downloadFilename = decoded;
+  }
+
+  const verified: MediaVerification = {
+    ok: true,
+    kind: 'media',
+    classroomId: parsed.classroomId,
+    mediaId: parsed.mediaId,
+    variant: parsed.variant,
+    tier: parsed.tier,
+    keyVersion: parsed.keyVersion,
+    exp: parsed.exp,
+    inGrace: expiry.inGrace,
+    keySlot,
+  };
+  if (downloadFilename !== undefined) verified.downloadFilename = downloadFilename;
+  return verified;
+}
+
 async function verifyParsedTheme(
   masters: readonly string[],
   parsed: ParsedThemeUrl,
@@ -441,17 +537,35 @@ export async function verifyThemeUrl(
   return verifyParsedTheme(masters, parsed.value, now);
 }
 
+export async function verifyMediaUrl(
+  master: MasterSecrets,
+  url: string | URL,
+  now: number = nowSeconds()
+): Promise<MediaVerification> {
+  const masters = masterList(master);
+  const parsed = parseInternal(url);
+  if (!parsed.ok) return fail(parsed.reason);
+  if (parsed.value.kind !== 'media') return fail('malformed');
+  return verifyParsedMedia(masters, parsed.value, now);
+}
+
+/**
+ * Whichever shape the URL is. The `kind` on the result is what a caller
+ * switches on — a Worker route, for instance — and a caller that only ever
+ * wants one shape should use the single-kind function instead, which refuses
+ * the others outright.
+ */
 export async function verifyContentUrl(
   master: MasterSecrets,
   url: string | URL,
   now: number = nowSeconds()
-): Promise<BlobVerification | ThemeVerification> {
+): Promise<BlobVerification | ThemeVerification | MediaVerification> {
   const masters = masterList(master);
   const parsed = parseInternal(url);
   if (!parsed.ok) return fail(parsed.reason);
-  return parsed.value.kind === 'blob'
-    ? verifyParsedBlob(masters, parsed.value, now)
-    : verifyParsedTheme(masters, parsed.value, now);
+  if (parsed.value.kind === 'blob') return verifyParsedBlob(masters, parsed.value, now);
+  if (parsed.value.kind === 'media') return verifyParsedMedia(masters, parsed.value, now);
+  return verifyParsedTheme(masters, parsed.value, now);
 }
 
 /**

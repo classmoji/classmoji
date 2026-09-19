@@ -3,6 +3,8 @@ import {
   TRANSFORM_WIDTHS,
   assertClassroomId,
   assertKeyVersion,
+  assertMediaId,
+  assertMediaVariant,
   assertNow,
   assertTier,
   assertTransform,
@@ -11,12 +13,13 @@ import {
   isExt,
   isGitSha,
   isTheme,
+  mediaCanonicalString,
   themeCanonicalString,
   toBase64Url,
 } from './canonical.ts';
 import { deriveKey, signCanonical } from './derive.ts';
 import { encodeDownloadFilename, normalizeDownloadFilename } from './downloads.ts';
-import type { SigningContext, Transform, TransformFormat, TransformWidth } from './types.ts';
+import type { SigningContext, Tier, Transform, TransformFormat, TransformWidth } from './types.ts';
 
 export interface BlobRef {
   sha: string;
@@ -34,6 +37,15 @@ export interface BlobRef {
 export interface ThemeRef {
   theme: string;
   treeSha: string;
+}
+
+export interface MediaRef {
+  /** The `MediaObject` row's uuid. */
+  mediaId: string;
+  /** `orig.{ext}`, `web.mp4` or `poster.webp`. The app picks it from the row. */
+  variant: string;
+  /** RAW display filename for a save-to-disk URL. See `BlobRef.dl`. */
+  dl?: string;
 }
 
 export interface SrcSetRef {
@@ -69,6 +81,34 @@ function assertContext(ctx: SigningContext): number {
 }
 
 /**
+ * The ENCODED `dl` param for a save-to-disk URL, or undefined when there is none.
+ *
+ * Refused at mint rather than sanitized: the caller knows which file this is
+ * and can say so, where the verifier could only serve a name nobody chose.
+ *
+ * A save-to-disk link is handed to ONE viewer for ONE save, which is what the
+ * `download` tier's ten minutes and `no-store` are for. A `dl` on `week` or
+ * `month` would put a per-viewer filename on a URL that is immutable for days,
+ * so it is refused here rather than left to the caller to remember. Only
+ * minting is restricted: the verifier keeps accepting whatever was validly
+ * signed, including URLs minted before this rule.
+ *
+ * One rule for both shapes, so a blob download and a media download cannot
+ * drift on what a filename may be.
+ */
+function downloadParam(tier: Tier, dl: string | undefined): string | undefined {
+  if (dl === undefined) return undefined;
+  if (tier !== 'download') {
+    throw new TypeError(`content-signing: a dl filename requires the download tier (got ${tier})`);
+  }
+  const filename = normalizeDownloadFilename(dl);
+  if (filename === null) {
+    throw new TypeError(`content-signing: unusable download filename (got ${String(dl)})`);
+  }
+  return encodeDownloadFilename(filename);
+}
+
+/**
  * `{origin}/c/{classroomId}/blob/{sha}.{ext}?p&v&exp&sig[&w][&fmt][&dl]`
  *
  * Transform params are inside the signature, so a client cannot widen or
@@ -94,27 +134,7 @@ export async function signBlobUrl(
   }
   assertTransform(ref.transform);
 
-  // Refused at mint rather than sanitized: the caller knows which file this is
-  // and can say so, where the verifier could only serve a name nobody chose.
-  let dl: string | undefined;
-  if (ref.dl !== undefined) {
-    // A save-to-disk link is handed to ONE viewer for ONE save, which is what
-    // the `download` tier's ten minutes and `no-store` are for. A `dl` on
-    // `week` or `month` would put a per-viewer filename on a URL that is
-    // immutable for days, so it is refused here rather than left to the caller
-    // to remember. Only minting is restricted: the verifier keeps accepting
-    // whatever was validly signed, including URLs minted before this rule.
-    if (ctx.tier !== 'download') {
-      throw new TypeError(
-        `content-signing: a dl filename requires the download tier (got ${ctx.tier})`
-      );
-    }
-    const filename = normalizeDownloadFilename(ref.dl);
-    if (filename === null) {
-      throw new TypeError(`content-signing: unusable download filename (got ${String(ref.dl)})`);
-    }
-    dl = encodeDownloadFilename(filename);
-  }
+  const dl = downloadParam(ctx.tier, ref.dl);
 
   const exp = bucketExpiry(ctx.tier, ctx.classroomId, now);
   const canonical = blobCanonicalString({
@@ -140,6 +160,52 @@ export async function signBlobUrl(
   if (dl !== undefined) query.push(`dl=${dl}`);
 
   return `${base}/c/${ctx.classroomId}/blob/${ref.sha}.${ref.ext}?${query.join('&')}`;
+}
+
+/**
+ * `{origin}/c/{classroomId}/media/{mediaId}/{variant}?p&v&exp&sig[&dl]`
+ *
+ * `signBlobUrl` with the path swapped: the same tiers, the same bucketed
+ * expiry, the same per-classroom derived key and the same `dl` rule. What
+ * differs is what the URL addresses — a row in the media bucket rather than a
+ * git blob — and that media is never transformed, so there is no `w`/`fmt`.
+ *
+ * Which variant to sign is the app's decision (the rendition once the P2 job
+ * has produced one, the original until then); the Worker holds no state about
+ * it and a new variant is simply a new URL.
+ */
+export async function signMediaUrl(
+  origin: string,
+  ctx: SigningContext,
+  ref: MediaRef
+): Promise<string> {
+  const base = normalizeOrigin(origin);
+  const host = hostOf(base);
+  const now = assertContext(ctx);
+  assertMediaId(ref.mediaId);
+  assertMediaVariant(ref.variant);
+
+  const dl = downloadParam(ctx.tier, ref.dl);
+
+  const exp = bucketExpiry(ctx.tier, ctx.classroomId, now);
+  const canonical = mediaCanonicalString({
+    host,
+    classroomId: ctx.classroomId,
+    mediaId: ref.mediaId,
+    variant: ref.variant,
+    tier: ctx.tier,
+    keyVersion: ctx.keyVersion,
+    exp,
+    dl,
+  });
+
+  const key = await deriveKey(ctx.master, ctx.classroomId, ctx.keyVersion);
+  const sig = toBase64Url(await signCanonical(key, canonical));
+
+  const query = [`p=${ctx.tier}`, `v=${ctx.keyVersion}`, `exp=${exp}`, `sig=${sig}`];
+  if (dl !== undefined) query.push(`dl=${dl}`);
+
+  return `${base}/c/${ctx.classroomId}/media/${ref.mediaId}/${ref.variant}?${query.join('&')}`;
 }
 
 /**
