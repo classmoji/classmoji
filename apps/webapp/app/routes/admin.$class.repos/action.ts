@@ -62,37 +62,5 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
 
       return result;
     },
-
-    async findUnenrolledStudents() {
-      const students = await ClassmojiService.classroomMembership.findUsersByRole(
-        classroom.id,
-        'STUDENT'
-      );
-      const student_ids = students.map(({ id }) => id);
-      const repositories = await ClassmojiService.gitRepo.findMany({
-        classroom_id: classroom.id,
-      });
-
-      const repositoriesToRemove: string[] = [];
-
-      const unenrolledStudents = new Map();
-
-      repositories.forEach(repo => {
-        if (!repo.student) return;
-        if (!student_ids.includes(repo.student.id)) {
-          unenrolledStudents.set(repo.student.id, repo.student);
-          repositoriesToRemove.push(repo.name);
-        }
-      });
-
-      return {
-        success:
-          unenrolledStudents.size > 0
-            ? 'Unenrolled students found'
-            : 'No unenrolled students found',
-        students: Array.from(unenrolledStudents.values()),
-        repositories: repositoriesToRemove,
-      };
-    },
   });
 };

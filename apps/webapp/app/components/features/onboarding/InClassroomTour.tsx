@@ -108,14 +108,6 @@ const OWNER_STEPS: FeatureStep[] = [
       'Save everything to create the repository with its assignments and linked content.',
   },
   {
-    link: '/repos',
-    selector: '[data-tour="repos-cleanup"]',
-    placement: 'bottom',
-    title: 'Cleanup repos',
-    description:
-      'Finds students no longer on your roster so you can remove their leftover repos; nothing is deleted until you confirm.',
-  },
-  {
     link: '/students',
     title: 'Your roster',
     description:
