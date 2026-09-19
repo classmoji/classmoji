@@ -12,14 +12,13 @@ import { withServerBlockNoteLock } from './render.server.ts';
  * That helper is right for the editor and wrong here, for two reasons that
  * both end in a bad cached response:
  *
- *  1. It **swallows every GitHub failure**. A rate limit, a 5xx, or a revoked
- *     App installation is caught, logged, and returned as `format: 'none'` —
- *     indistinguishable from "this page has no content yet". On the editor
- *     that is a blank page you can retry. On a public site it is a blank page
- *     served with `Cache-Control: public, max-age=60`, so one bad minute of
- *     GitHub gets pinned in front of every reader. Here, a 404 means empty and
- *     anything else throws `SiteContentUnavailableError`, which the route
- *     turns into a 503 with `no-store`.
+ *  1. A failed read needs its own **typed** answer here. Both paths now agree
+ *     that only a 404 means empty — `loadPageContent` rejects on anything else
+ *     rather than reporting `format: 'none'` — but a public site has to turn
+ *     that into a 503 with `no-store`, because a blank page served with
+ *     `Cache-Control: public, max-age=60` pins one bad minute of GitHub in
+ *     front of every reader. `SiteContentUnavailableError` carries the status
+ *     the route needs to do that; a bare rejection does not.
  *
  *  2. It has **no cache-TTL control**. Site reads want a 5-minute TTL (the
  *     content changes when an instructor saves, and a public reader can wait);

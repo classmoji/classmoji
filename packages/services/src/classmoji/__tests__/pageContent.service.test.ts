@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 // pageContent.service is the page-content read/write path extracted from
 // apps/pages' content.server.ts (Phase 1 of the content-tools plan):
@@ -128,10 +128,25 @@ type CallArg = Record<string, unknown>;
 const callArg = (mock: ReturnType<typeof vi.fn>, n = 0) => mock.mock.calls[n][0] as CallArg;
 const writtenWrapper = () => JSON.parse(callArg(putMock).content as string);
 
+/** Restores the console spy installed below. */
+let restoreConsoleError: () => void;
+
 beforeEach(() => {
   vi.clearAllMocks();
   recordedRows.clear();
   putMock.mockResolvedValue({ sha: 'new-sha', commit: 'commit-1' });
+
+  // Several tests here drive the read/parse failure paths on purpose, and those
+  // paths log by design. Silenced so the suite output stays readable — and,
+  // less obviously, so vitest is not still shipping console lines to the main
+  // thread when the worker closes, which it reports as an EnvironmentTeardown
+  // error and which turns a green run into a non-zero exit.
+  const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+  restoreConsoleError = () => spy.mockRestore();
+});
+
+afterEach(() => {
+  restoreConsoleError();
 });
 
 // ─── loadPageContent ─────────────────────────────────────────────────────────
@@ -189,12 +204,35 @@ describe('pageContent.loadPageContent', () => {
     expect(result.sha).toBe('sha-html');
   });
 
-  it('returns format none with a null sha when neither file exists', async () => {
+  it('returns format none with a null sha when neither file exists (404 on both)', async () => {
     getContentMock.mockResolvedValue(null);
 
     const result = await loadPageContent(page);
 
     expect(result).toEqual({ format: 'none', blocks: null, coverImage: null, sha: null });
+    expect(getContentMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('rejects when the content.json read FAILS, rather than reporting format none', async () => {
+    // getContent answers null for a 404 and throws for everything else. 'none'
+    // is the cue every writer takes to create the file, so an unreadable read
+    // must not arrive dressed as an absent one — and must not fall through to
+    // the HTML probe either, which would make the answer depend on a second
+    // read of the same unreachable repo.
+    getContentMock.mockRejectedValueOnce(Object.assign(new Error('Server Error'), { status: 503 }));
+
+    await expect(loadPageContent(page, { skipCache: true })).rejects.toMatchObject({
+      status: 503,
+    });
+    expect(getContentMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects when the index.html fallback read fails (404 on content.json)', async () => {
+    getContentMock
+      .mockResolvedValueOnce(null) // content.json 404
+      .mockRejectedValueOnce(Object.assign(new Error('rate limited'), { status: 403 }));
+
+    await expect(loadPageContent(page)).rejects.toMatchObject({ status: 403 });
   });
 
   it('passes skipCache through to both reads', async () => {
@@ -252,11 +290,48 @@ describe('pageContent.savePageContent', () => {
     expect(result).toEqual({ sha: 'new-sha', commit: 'commit-1', coverImage: cover });
   });
 
-  it('omits the coverImage key when omitted and no existing file has one', async () => {
+  it('omits the coverImage key when omitted and no existing file has one (404)', async () => {
     getContentMock.mockResolvedValueOnce(null);
 
     await savePageContent(page, blocks);
 
+    // A 404 is the one answer that may leave the key off: there is no file to
+    // preserve a cover from, so the save goes through without it.
+    expect(putMock).toHaveBeenCalledTimes(1);
+    expect(writtenWrapper()).toEqual({ blocks });
+  });
+
+  it('a FAILED cover re-read stops the save rather than dropping the key', async () => {
+    // The wrapper omits coverImage when it is undefined, so continuing here
+    // would write a cover-less document over a page that may well have one —
+    // on nothing more than a GitHub blip. Same rule as the load path.
+    getContentMock.mockRejectedValueOnce(Object.assign(new Error('Server Error'), { status: 503 }));
+
+    await expect(savePageContent(page, blocks)).rejects.toMatchObject({ status: 503 });
+    expect(putMock).not.toHaveBeenCalled();
+  });
+
+  it('an UNPARSEABLE existing file does NOT stop the save — that save is the repair', async () => {
+    // A corrupt content.json loads as 'html' or 'none', so the editor reaches
+    // this save with no json sha and it is the only way back short of git. A
+    // file we cannot parse has no cover to preserve either way, so the key is
+    // dropped and the write goes through.
+    getContentMock.mockResolvedValueOnce({ content: '{not json', sha: 'old-sha' });
+
+    await savePageContent(page, blocks);
+
+    expect(putMock).toHaveBeenCalledTimes(1);
+    expect(writtenWrapper()).toEqual({ blocks });
+  });
+
+  it('an explicit coverImage skips the re-read, so a caller can still rewrite the file', async () => {
+    // The escape hatch out of the refusal above: passing the cover (or null)
+    // says what to store, so no read is needed to find out.
+    getContentMock.mockRejectedValue(Object.assign(new Error('Server Error'), { status: 503 }));
+
+    await savePageContent(page, blocks, { coverImage: null });
+
+    expect(getContentMock).not.toHaveBeenCalled();
     expect(writtenWrapper()).toEqual({ blocks });
   });
 

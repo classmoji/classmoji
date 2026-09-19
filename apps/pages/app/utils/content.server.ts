@@ -82,6 +82,11 @@ export async function savePageContent(
  * 60s cache and the write is CAS'd on the read's sha, so a cover-image change
  * can never revert content edits that landed in between (throws status 409
  * instead; callers surface "page changed — try again").
+ *
+ * The blank-blocks branch below is reached only for a page that genuinely has
+ * no content file: the read rejects when it cannot reach the repo rather than
+ * reporting a live page as having none, so nothing here starts a whole-file
+ * rewrite from an empty document on a failed read.
  */
 export async function savePageCoverImage(
   page: PageForContent,

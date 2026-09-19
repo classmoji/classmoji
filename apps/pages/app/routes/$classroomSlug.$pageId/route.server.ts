@@ -153,7 +153,9 @@ export const loader = async ({
     // Migrate HTML to BlockNote JSON for viewing
     viewerContent = await migrateHtmlToBlockNote(content as string, schema);
   } else {
-    // Empty page
+    // Empty page — and only that: 'none' now means both files 404'd, so an
+    // unreadable content repo rejects out of the loader to the error boundary
+    // instead of rendering (and handing the editor) a live page as blank.
     viewerContent = [{ type: 'paragraph', content: [] }];
   }
 
@@ -467,7 +469,8 @@ export const action = async ({
           // If the file EXISTS, this is a stale pre-token client bundle (or the
           // file appeared since the editor loaded, e.g. an MCP apply): reject
           // rather than silently clobber. Fresh existence check — the 60s cache
-          // must not vouch for absence.
+          // must not vouch for absence, and neither may an unreadable repo: a
+          // read that fails rejects here and the save never runs.
           const existing = await loadPageContent(actionPage, { skipCache: true });
           if (existing.format === 'json') {
             return Response.json(
@@ -628,9 +631,18 @@ export const action = async ({
         // We know the merged sha — wait (bounded) until reads serve it.
         if (result.sha) {
           for (let attempt = 0; attempt < 5; attempt++) {
-            const fresh = await ClassmojiService.pageContent.loadPageContent(actionPage, {
-              skipCache: true,
-            });
+            let fresh;
+            try {
+              fresh = await ClassmojiService.pageContent.loadPageContent(actionPage, {
+                skipCache: true,
+              });
+            } catch (err) {
+              // The merge is already committed and this read only decides how
+              // long to wait before redirecting. A repo we cannot read here
+              // must not turn an accept that SUCCEEDED into an error response.
+              console.error('[pages] Settle check failed after preview accept:', err);
+              break;
+            }
             if (fresh.sha === result.sha) break;
             await new Promise(r => setTimeout(r, 700));
           }
