@@ -83,6 +83,13 @@ import { r2Client } from './r2Client.ts';
  * window passes, so nothing has to sweep; R2 aborts the abandoned multipart
  * itself at 7 days.
  *
+ * ## Pro is checked when an upload is OPENED, and nowhere else
+ *
+ * `signParts`, `completeUpload` and `deleteMedia` deliberately do not re-check
+ * it: a subscription that lapses mid-upload blocks the NEXT upload, it does not
+ * strand the one in flight or lock the uploader out of deleting what they
+ * already have (decision, 2026-09-19).
+ *
  * ## BigInt at the boundary
  *
  * `size_bytes` and `rendition_bytes` are BIGINT, so Prisma hands back `bigint`,
