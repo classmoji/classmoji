@@ -153,12 +153,28 @@ export function reservationCutoff(now: number = Date.now()): Date {
  */
 export async function liveRows(classroomId: string): Promise<MediaRow[]> {
   return (await getPrisma().mediaObject.findMany({
-    where: {
-      classroom_id: classroomId,
-      OR: [{ status: 'READY' }, { status: 'UPLOADING', created_at: { gte: reservationCutoff() } }],
-    },
+    where: liveRowsWhere(classroomId),
     orderBy: { created_at: 'desc' },
   })) as MediaRow[];
+}
+
+/**
+ * The WHERE clause behind `liveRows`, on its own.
+ *
+ * Exported because the quota's check-and-insert runs the same read inside a
+ * transaction, against the transaction's client rather than the global one —
+ * and "which rows cost a classroom something" must be one definition, not two
+ * that drift. The cutoff is read per call, so each one is relative to its own
+ * `now`.
+ */
+export function liveRowsWhere(classroomId: string) {
+  return {
+    classroom_id: classroomId,
+    OR: [
+      { status: 'READY' as const },
+      { status: 'UPLOADING' as const, created_at: { gte: reservationCutoff() } },
+    ],
+  };
 }
 
 /**

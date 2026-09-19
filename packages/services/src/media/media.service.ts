@@ -8,7 +8,13 @@ import {
   UploadPartCommand,
 } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
+import { randomUUID } from 'node:crypto';
 import getPrisma from '@classmoji/database';
+// The delivery layer's own predicate, not a copy of it: "can this classroom's
+// references be signed" has one definition and media must not grow a second.
+// No cycle — contentDelivery reaches media through `mediaLookup.ts`, which
+// imports nothing from here.
+import { canDeliverContent } from '../classmoji/contentDelivery.service.ts';
 import { getProStateForClassroomId } from '../classmoji/subscription.service.ts';
 import { MediaError } from './MediaError.ts';
 import { mediaKey } from './mediaKeys.ts';
@@ -16,10 +22,12 @@ import { classifyFilename } from './mediaKinds.ts';
 import {
   findMediaRow,
   liveRows,
+  liveRowsWhere,
   toMediaRecord,
   type MediaClassroom,
   type MediaRecord,
   type MediaRow,
+  type MediaStatus,
 } from './mediaLookup.ts';
 import {
   MAX_PARTS_PER_SIGN,
@@ -28,7 +36,8 @@ import {
   partCountFor,
   quotaBytesFor,
 } from './mediaQuota.ts';
-import { mediaBucket, r2Client } from './r2Client.ts';
+import { mediaBucket } from './mediaConfig.ts';
+import { r2Client } from './r2Client.ts';
 
 /**
  * The media store: a classroom's large files, in R2 rather than in git.
@@ -53,13 +62,33 @@ import { mediaBucket, r2Client } from './r2Client.ts';
  * honest rather than advisory: a client that declares 10 MB and uploads 2 GB
  * has its upload aborted and its row removed.
  *
- * ## The row is created first, and that is the quota
+ * ## The reservation is a row, and it is written under a lock
  *
- * An UPLOADING row younger than 24 hours counts against the classroom's quota.
- * Without that, two uploads started a second apart both see the same free space
- * and both fit. With it, the second one is refused — and an upload that is
- * abandoned rather than aborted stops counting when the window passes, so
- * nothing has to sweep. R2 aborts the abandoned multipart itself at 7 days.
+ * An UPLOADING row younger than 24 hours counts against the classroom's quota,
+ * so the reservation exists from the moment the upload is opened rather than
+ * from the moment it finishes. That alone is not enough: two uploads opened a
+ * millisecond apart would each read the free space the other had not yet
+ * reserved. So `createUpload` takes a row lock on the classroom
+ * (`SELECT … FOR UPDATE`) and does the SUM and the INSERT inside that one
+ * transaction — the second upload waits, re-reads, and is refused.
+ *
+ * What the lock covers is exactly that: this classroom's own concurrent
+ * creates. It is deliberately not held across the Pro lookup or any R2 call,
+ * because a slow bucket must not block every upload in a course.
+ *
+ * What it does NOT promise is that the bytes match: the quota is honest about
+ * what was DECLARED, and a client that declares 10 MB and writes 2 GB is caught
+ * by `completeUpload`'s size check before the row is ever READY. An upload that
+ * is abandoned rather than aborted simply stops counting when the 24-hour
+ * window passes, so nothing has to sweep; R2 aborts the abandoned multipart
+ * itself at 7 days.
+ *
+ * ## Pro is checked when an upload is OPENED, and nowhere else
+ *
+ * `signParts`, `completeUpload` and `deleteMedia` deliberately do not re-check
+ * it: a subscription that lapses mid-upload blocks the NEXT upload, it does not
+ * strand the one in flight or lock the uploader out of deleting what they
+ * already have (decision, 2026-09-19).
  *
  * ## BigInt at the boundary
  *
@@ -93,6 +122,11 @@ const PART_URL_TTL_SECONDS = 15 * 60;
  * rows with `optimise` set, which is why the seam exists now: `completeUpload`
  * is the only moment that knows an object has just become real, and adding the
  * call later would mean editing the function rather than filling this in.
+ *
+ * Setting `processing` to PENDING belongs HERE, in the same step that enqueues
+ * the job — not in `completeUpload`. PENDING is a claim that something is
+ * queued, and a row that carries it with no job behind it shows as forever
+ * processing on the admin page.
  */
 export async function onMediaReady(_row: MediaRecord): Promise<void> {
   // Phase 2: enqueue media-video-process for VIDEO rows with `optimise`.
@@ -188,11 +222,16 @@ function requireClient(): { client: S3Client; bucket: string } {
  *   2. kind — decided from the extension, which also fixes the content type;
  *   3. Pro — before the numbers, so a free classroom is told it needs Pro
  *      rather than that it is 2 GB over a quota of zero;
- *   4. per-file ceiling — independent of how much room is left;
- *   5. quota — last, because it is the only one that depends on other rows.
+ *   4. delivery — a classroom whose references cannot be signed has nowhere to
+ *      serve the object from, and finding that out after the bytes have moved
+ *      is the expensive way to learn it;
+ *   5. per-file ceiling — independent of how much room is left;
+ *   6. quota — last, because it is the only one that depends on other rows.
  *
  * The row is written BEFORE the multipart is opened, and that is what the quota
- * reserves against. If `CreateMultipartUpload` then fails there is a row with no
+ * reserves against. The quota SUM and that INSERT share one transaction behind
+ * a `FOR UPDATE` lock on the classroom, so concurrent creates serialize; see
+ * the file header. If `CreateMultipartUpload` then fails there is a row with no
  * upload behind it; it is deleted here, and were that delete to fail too the
  * row ages out of the reservation window on its own.
  *
@@ -231,6 +270,37 @@ export async function createUpload({
     throw new MediaError('KIND_NOT_ALLOWED', `Files of this type cannot be uploaded: ${filename}`);
   }
 
+  // Pro before the numbers: a classroom that cannot store media at all should
+  // hear that, not a sentence about a file being over a limit it would still be
+  // over at one byte.
+  const { isPro } = await getProStateForClassroomId(classroom.id);
+  if (!isPro) {
+    throw new MediaError('PRO_REQUIRED', 'Media storage requires a Pro subscription');
+  }
+  const quotaBytes = quotaBytesFor(isPro);
+
+  // Media is SERVED only through the delivery Worker — there is no legacy path
+  // for a `media://` reference the way there is for a repo path, so a classroom
+  // the layer cannot sign for would store bytes that render as a `/missing/`
+  // placeholder and nothing else. Refused at the door rather than discovered
+  // after a 2 GB upload.
+  const deliverable = await getPrisma().classroom.findUnique({
+    where: { id: classroom.id },
+    select: {
+      content_delivery_enabled: true,
+      content_repo: true,
+      git_organization: {
+        select: { login: true, provider: true, github_installation_id: true },
+      },
+    },
+  });
+  if (!canDeliverContent(deliverable)) {
+    throw new MediaError(
+      'DELIVERY_REQUIRED',
+      'Media uploads need content delivery, which this class cannot use yet'
+    );
+  }
+
   if (!Number.isSafeInteger(sizeBytes) || sizeBytes <= 0) {
     throw new MediaError('FILE_TOO_LARGE', 'A file size in bytes is required');
   }
@@ -238,40 +308,67 @@ export async function createUpload({
     throw new MediaError('FILE_TOO_LARGE', 'This file is larger than the per-file limit');
   }
 
-  const current = await usage(classroom);
-  if (!current.isPro) {
-    throw new MediaError('PRO_REQUIRED', 'Media storage requires a Pro subscription');
-  }
-  if (current.usedBytes + sizeBytes > current.quotaBytes) {
-    throw new MediaError('QUOTA_EXCEEDED', 'This file would put the class over its storage quota', {
-      usedBytes: current.usedBytes,
-      quotaBytes: current.quotaBytes,
-    });
-  }
-
   // Video-only options. For any other kind they are stored at their defaults
   // and nothing reads them, so an uploader cannot mark a PDF for transcoding.
+  //
+  // `keepOriginal` is forced true whenever `optimise` is off, and that is not a
+  // default but an invariant: dropping the original is only meaningful once a
+  // rendition has replaced it, so "do not transcode, and delete the only copy"
+  // is a request to delete the file. The dialog disables the checkbox for the
+  // same reason; this is the end that has to hold when something else asks.
   const isVideo = classified.kind === 'VIDEO';
   const optimise = isVideo ? options.optimise !== false : false;
-  const keepOriginal = isVideo ? options.keepOriginal !== false : true;
+  const keepOriginal = isVideo && optimise ? options.keepOriginal !== false : true;
   const allowDownload = isVideo ? options.allowDownload === true : false;
 
-  const row = (await getPrisma().mediaObject.create({
-    data: {
-      classroom_id: classroom.id,
-      kind: classified.kind,
-      filename,
-      ext: classified.ext,
-      content_type: classified.contentType,
-      size_bytes: BigInt(sizeBytes),
-      uploaded_by: userId,
-      optimise,
-      keep_original: keepOriginal,
-      allow_download: allowDownload,
-    },
-  })) as MediaRow;
+  // The id is minted HERE rather than by the database, so the R2 key can be
+  // built — and validated — before anything is written. `mediaKey` asserts
+  // every part of the string it produces, and a refusal after the INSERT would
+  // leave a reservation the classroom pays for with no upload behind it.
+  const mediaId = randomUUID();
+  const key = mediaKey(classroom.id, mediaId, `orig.${classified.ext}`);
 
-  const key = mediaKey(classroom.id, row.id, `orig.${classified.ext}`);
+  // The sum and the insert it authorizes must see the same state, so they run
+  // in ONE transaction behind a row lock on the classroom. Two uploads opened a
+  // millisecond apart serialize on that lock and the second one counts the
+  // reservation the first one left behind; without it they both read the same
+  // free space and both fit into it.
+  //
+  // Nothing slow is inside: no R2 call, no subscription lookup. The lock is
+  // held for one SELECT and one INSERT, because it blocks every other upload
+  // this classroom is opening.
+  await getPrisma().$transaction(async tx => {
+    await tx.$queryRaw`SELECT id FROM classrooms WHERE id = ${classroom.id} FOR UPDATE`;
+
+    const rows = (await tx.mediaObject.findMany({
+      where: liveRowsWhere(classroom.id),
+    })) as MediaRow[];
+    const usedBytes = rows.reduce((total, live) => total + billedBytes(live), 0);
+
+    if (usedBytes + sizeBytes > quotaBytes) {
+      throw new MediaError(
+        'QUOTA_EXCEEDED',
+        'This file would put the class over its storage quota',
+        { usedBytes, quotaBytes }
+      );
+    }
+
+    return tx.mediaObject.create({
+      data: {
+        id: mediaId,
+        classroom_id: classroom.id,
+        kind: classified.kind,
+        filename,
+        ext: classified.ext,
+        content_type: classified.contentType,
+        size_bytes: BigInt(sizeBytes),
+        uploaded_by: userId,
+        optimise,
+        keep_original: keepOriginal,
+        allow_download: allowDownload,
+      },
+    });
+  });
 
   let uploadId: string | undefined;
   try {
@@ -284,22 +381,22 @@ export async function createUpload({
     );
     uploadId = created.UploadId;
   } catch (error) {
-    await getPrisma().mediaObject.delete({ where: { id: row.id } });
+    await getPrisma().mediaObject.delete({ where: { id: mediaId } });
     throw error;
   }
 
   if (!uploadId) {
-    await getPrisma().mediaObject.delete({ where: { id: row.id } });
+    await getPrisma().mediaObject.delete({ where: { id: mediaId } });
     throw new MediaError('BAD_STATE', 'R2 did not return an upload id');
   }
 
   await getPrisma().mediaObject.update({
-    where: { id: row.id },
+    where: { id: mediaId },
     data: { upload_id: uploadId },
   });
 
   return {
-    mediaId: row.id,
+    mediaId,
     uploadId,
     contentType: classified.contentType,
     partSize: PART_SIZE_BYTES,
@@ -333,6 +430,16 @@ async function uploadingRow(
  * has expired, and a URL never used was signing work nobody wanted. Fifteen
  * minutes is long enough for a slow part and short enough that a leaked URL is
  * a write to one part of one object for a quarter of an hour.
+ *
+ * ## A part number is bounded by the DECLARED size, not by S3's ceiling
+ *
+ * The declaration is what the quota reserved against, and `partCountFor` is
+ * exactly how many 32 MiB parts that many bytes take. Signing part 500 of a
+ * 1 MB upload would hand out a write for bytes the reservation never covered:
+ * `completeUpload` would catch the resulting object at `HeadObject` and delete
+ * it, but only after the parts had been stored. Refusing here is the cheaper
+ * and more honest half of the same rule — a client asking for a part its own
+ * file cannot have is confused about its own upload.
  */
 export async function signParts({
   classroom,
@@ -346,14 +453,21 @@ export async function signParts({
   const { client, bucket } = requireClient();
   const row = await uploadingRow(classroom, mediaId);
 
-  const wanted = [...new Set(partNumbers)].filter(
-    part => Number.isSafeInteger(part) && part >= 1 && part <= 10000
-  );
+  const wanted = [...new Set(partNumbers)];
   if (wanted.length === 0 || wanted.length > MAX_PARTS_PER_SIGN) {
     throw new MediaError(
       'BAD_STATE',
       `Ask for between 1 and ${MAX_PARTS_PER_SIGN} part numbers at a time`
     );
+  }
+
+  // Every part this file can have, and no more: a 1 MB upload has one part, so
+  // part 2 is not "past the end", it is a request to write bytes nothing
+  // reserved. Refused rather than filtered out, so a client with an off-by-one
+  // hears about it instead of silently getting a shorter list back.
+  const lastPart = partCountFor(Number(row.size_bytes));
+  if (wanted.some(part => !Number.isSafeInteger(part) || part < 1 || part > lastPart)) {
+    throw new MediaError('BAD_STATE', `Part numbers for this upload run from 1 to ${lastPart}`);
   }
 
   const key = mediaKey(classroom.id, row.id, `orig.${row.ext}`);
@@ -395,11 +509,59 @@ async function abortQuietly(
   }
 }
 
-async function markDeleted(mediaId: string): Promise<void> {
-  await getPrisma().mediaObject.update({
-    where: { id: mediaId },
+/**
+ * Delete objects one key at a time, and never let one failure stop the rest.
+ *
+ * Every caller here has ALREADY tombstoned the row, which is the ordering that
+ * matters: a row that still says READY while its bytes are gone renders as a
+ * broken file forever, where a tombstoned row whose bytes survive is an orphan
+ * in the bucket — invisible, uncharged, and findable later. So a failed delete
+ * is logged and the next key is tried, rather than throwing and leaving the
+ * remaining two untouched.
+ */
+async function deleteObjectsQuietly(
+  client: S3Client,
+  bucket: string,
+  keys: string[]
+): Promise<void> {
+  for (const key of keys) {
+    try {
+      await client.send(new DeleteObjectCommand({ Bucket: bucket, Key: key }));
+    } catch (error) {
+      console.warn(
+        `[media] Could not delete ${key}:`,
+        error instanceof Error ? error.message : error
+      );
+    }
+  }
+}
+
+/**
+ * Tombstone a row, but ONLY from the status the caller believed it was in.
+ *
+ * Every tombstone here is written after something else failed, and a failure
+ * path is exactly where a stale view of the row is likely: a `complete` whose
+ * response was lost is retried, R2 answers the second one `NoSuchUpload`
+ * because the first one finished the object, and an unconditional write would
+ * then un-READY a file that exists and is being served. `updateMany` with the
+ * expected status in the WHERE makes that a no-op instead — the row moved on,
+ * so this call's conclusion about it is out of date and must not land.
+ *
+ * Returns whether it landed, so a caller that cares can tell "I tombstoned it"
+ * from "somebody else got there first".
+ */
+async function markDeleted(
+  mediaId: string,
+  expected: MediaStatus | MediaStatus[]
+): Promise<boolean> {
+  const { count } = await getPrisma().mediaObject.updateMany({
+    where: {
+      id: mediaId,
+      status: Array.isArray(expected) ? { in: expected } : expected,
+    },
     data: { status: 'DELETED', deleted_at: new Date(), upload_id: null },
   });
+  return count > 0;
 }
 
 /**
@@ -412,6 +574,13 @@ async function markDeleted(mediaId: string): Promise<void> {
  * was made against a false premise — so the object is deleted, the row is
  * marked DELETED, and the caller is told. Not rounded down to a warning: a
  * client that can overrun its declaration can fill the bucket.
+ *
+ * A `HeadObject` that FAILS is the same outcome, not a lesser one. Letting the
+ * error escape would leave a verified-by-nobody object in the bucket behind an
+ * UPLOADING row that ages out of the quota in a day — bytes paid for, billed to
+ * no one, reachable by nothing. One retry (R2 is briefly-unavailable far more
+ * often than it is wrong), and then the object is discarded exactly as a
+ * mismatch is.
  *
  * ## The ETag contract, in one direction
  *
@@ -433,6 +602,33 @@ async function markDeleted(mediaId: string): Promise<void> {
 function normalizeEtag(etag: string): string {
   const trimmed = etag.trim();
   return trimmed.startsWith('"') && trimmed.endsWith('"') ? trimmed : `"${trimmed}"`;
+}
+
+/** How many times the size check asks R2 before giving up on the object. */
+const HEAD_ATTEMPTS = 2;
+
+/**
+ * The assembled object's size, or null when R2 would not say.
+ *
+ * Retried once and no more: the failure this covers is a blip between the
+ * complete and the head, and a request that fails twice in a row is not one
+ * more attempt away from succeeding. Null rather than a throw, because the
+ * caller's answer to "I cannot verify this" is the same cleanup as "this is the
+ * wrong size" and the difference belongs in the error code, not in control flow.
+ */
+async function verifiedSize(client: S3Client, bucket: string, key: string): Promise<number | null> {
+  for (let attempt = 1; attempt <= HEAD_ATTEMPTS; attempt += 1) {
+    try {
+      const head = await client.send(new HeadObjectCommand({ Bucket: bucket, Key: key }));
+      return Number(head.ContentLength ?? -1);
+    } catch (error) {
+      console.warn(
+        `[media] Could not read back ${key} (attempt ${attempt}/${HEAD_ATTEMPTS}):`,
+        error instanceof Error ? error.message : error
+      );
+    }
+  }
+  return null;
 }
 
 export async function completeUpload({
@@ -481,17 +677,23 @@ export async function completeUpload({
     );
   } catch (error) {
     await abortQuietly(client, bucket, key, uploadId);
-    await markDeleted(row.id);
+    await markDeleted(row.id, 'UPLOADING');
     throw error;
   }
 
-  const head = await client.send(new HeadObjectCommand({ Bucket: bucket, Key: key }));
-  const actual = Number(head.ContentLength ?? -1);
+  const actual = await verifiedSize(client, bucket, key);
   const declared = Number(row.size_bytes);
 
-  if (actual !== declared) {
-    await client.send(new DeleteObjectCommand({ Bucket: bucket, Key: key }));
-    await markDeleted(row.id);
+  if (actual === null || actual !== declared) {
+    // Row first, then the bytes: see `deleteObjectsQuietly`.
+    await markDeleted(row.id, 'UPLOADING');
+    await deleteObjectsQuietly(client, bucket, [key]);
+    if (actual === null) {
+      throw new MediaError(
+        'VERIFY_FAILED',
+        'The upload could not be verified and has been discarded; please try again'
+      );
+    }
     throw new MediaError('SIZE_MISMATCH', `Uploaded ${actual} bytes but ${declared} were declared`);
   }
 
@@ -501,7 +703,12 @@ export async function completeUpload({
       status: 'READY',
       ready_at: new Date(),
       upload_id: null,
-      processing: row.optimise ? 'PENDING' : 'NONE',
+      // NONE, even for a row that asked to be optimised. PENDING means "a job
+      // is queued", and in P1 there is no job — a row parked in PENDING is one
+      // the admin page shows as processing forever and one a later sweep would
+      // have to unstick. P2's `onMediaReady` sets PENDING at the moment it
+      // enqueues, which is the only moment the claim is true.
+      processing: 'NONE',
     },
   })) as MediaRow;
 
@@ -532,13 +739,16 @@ export async function abortUpload({
 
   const key = mediaKey(classroom.id, row.id, `orig.${row.ext}`);
   await abortQuietly(client, bucket, key, row.upload_id);
-  await markDeleted(row.id);
+  // Only from UPLOADING: a `complete` that won the race while this abort was in
+  // flight has already made the row READY, and cancelling an upload must never
+  // be able to delete the file that upload produced.
+  await markDeleted(row.id, 'UPLOADING');
 
   return { mediaId: row.id };
 }
 
 /**
- * Remove a media object: the R2 objects, then the row.
+ * Remove a media object: the row's tombstone, then the R2 objects.
  *
  * Hard-deleted from R2, with no retention window and nothing scheduled — there
  * is no undo, and the row's DELETED status is a tombstone for the references
@@ -570,6 +780,15 @@ export async function deleteMedia({
 
   const origKey = mediaKey(classroom.id, row.id, `orig.${row.ext}`);
 
+  // The tombstone goes FIRST. It is the one write that decides what every
+  // reader sees, and an R2 delete that fails halfway must not be able to leave
+  // a READY row pointing at bytes that are gone — a permanently broken file in
+  // every page that referenced it. Conditional, so a delete racing another one
+  // does not double-tombstone: the loser is told the object is already gone.
+  if (!(await markDeleted(row.id, ['UPLOADING', 'READY']))) {
+    throw new MediaError('NOT_FOUND', 'No such media object');
+  }
+
   if (row.status === 'UPLOADING' && row.upload_id) {
     await abortQuietly(client, bucket, origKey, row.upload_id);
   }
@@ -578,16 +797,11 @@ export async function deleteMedia({
   // REQUIRES a checksum, and the modern ones the SDK sends by default are not
   // reliably supported by S3-compatible stores. Three round trips for at most
   // three keys is not worth the compatibility risk.
-  const keys = [
+  await deleteObjectsQuietly(client, bucket, [
     origKey,
     mediaKey(classroom.id, row.id, 'web.mp4'),
     mediaKey(classroom.id, row.id, 'poster.webp'),
-  ];
-  for (const key of keys) {
-    await client.send(new DeleteObjectCommand({ Bucket: bucket, Key: key }));
-  }
-
-  await markDeleted(row.id);
+  ]);
 
   return { mediaId: row.id };
 }

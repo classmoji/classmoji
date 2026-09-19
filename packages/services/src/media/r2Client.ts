@@ -1,4 +1,5 @@
 import { S3Client } from '@aws-sdk/client-s3';
+import { mediaEnv } from './mediaConfig.ts';
 
 /**
  * The S3 seam onto Cloudflare R2.
@@ -7,39 +8,14 @@ import { S3Client } from '@aws-sdk/client-s3';
  * changes: the endpoint is the account's own `r2.cloudflarestorage.com` host,
  * and the region is the literal string `auto` because R2 has no regions.
  *
- * ## Why this is the only file that knows the credentials exist
+ * ## This file is the AWS SDK boundary
  *
- * `isMediaConfigured()` is the switch every entry point checks first, and it is
- * deliberately all-or-nothing: three of four env vars is not a degraded mode,
- * it is a misconfiguration that would fail at the first request with an opaque
- * signature error instead of an honest "media is not configured here". Unset is
- * the normal state for a contributor's laptop and for any deployment that has
- * not been given a bucket — the media routes answer 503 and the UI says so.
+ * It is the only module in `src/media/` that imports `@aws-sdk/client-s3`
+ * besides `media.service.ts`, and both are reachable ONLY through the barrel's
+ * lazy write half. The question "is media configured here" lives next door in
+ * `mediaConfig.ts` precisely so that a page render can ask it without dragging
+ * the SDK into its bundle — see `index.ts`.
  */
-
-/** Every env var the client needs. All four, or none of it works. */
-function env(): {
-  accountId: string;
-  accessKeyId: string;
-  secretAccessKey: string;
-  bucket: string;
-} | null {
-  const accountId = process.env.MEDIA_R2_ACCOUNT_ID;
-  const accessKeyId = process.env.MEDIA_R2_ACCESS_KEY_ID;
-  const secretAccessKey = process.env.MEDIA_R2_SECRET_ACCESS_KEY;
-  const bucket = process.env.MEDIA_R2_BUCKET;
-  if (!accountId || !accessKeyId || !secretAccessKey || !bucket) return null;
-  return { accountId, accessKeyId, secretAccessKey, bucket };
-}
-
-export function isMediaConfigured(): boolean {
-  return env() !== null;
-}
-
-/** The bucket this deployment writes to, or null when unconfigured. */
-export function mediaBucket(): string | null {
-  return env()?.bucket ?? null;
-}
 
 /**
  * One client per process, rebuilt when the credentials change.
@@ -52,7 +28,7 @@ export function mediaBucket(): string | null {
 let cached: { key: string; client: S3Client } | null = null;
 
 export function r2Client(): S3Client | null {
-  const settings = env();
+  const settings = mediaEnv();
   if (!settings) {
     cached = null;
     return null;

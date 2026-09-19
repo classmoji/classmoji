@@ -19,6 +19,12 @@ export type MediaErrorCode =
   | 'KIND_NOT_ALLOWED'
   /** The classroom's owner has no active PRO subscription. */
   | 'PRO_REQUIRED'
+  /**
+   * The classroom cannot serve content through the delivery layer, so an
+   * uploaded object would have no URL anyone could load. Distinct from
+   * `NOT_CONFIGURED`: the deployment is fine, this classroom is not ready.
+   */
+  | 'DELIVERY_REQUIRED'
   /** One file past the per-file ceiling, regardless of how much quota is free. */
   | 'FILE_TOO_LARGE'
   /** This file would put the classroom over its quota. Carries the numbers. */
@@ -28,7 +34,14 @@ export type MediaErrorCode =
   /** The row is not in the status this operation needs (completing a READY row). */
   | 'BAD_STATE'
   /** The object R2 assembled is not the size that was declared and reserved. */
-  | 'SIZE_MISMATCH';
+  | 'SIZE_MISMATCH'
+  /**
+   * The assembled object could not be read back, so its size was never checked.
+   * Treated exactly like a mismatch — the object is discarded rather than kept
+   * unverified — and distinct only so the client can say "try again" instead of
+   * "your file was the wrong size".
+   */
+  | 'VERIFY_FAILED';
 
 export class MediaError extends Error {
   readonly code: MediaErrorCode;

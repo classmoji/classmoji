@@ -182,14 +182,22 @@ describe('resolveAssetUrl', () => {
     expect(lookupContentAsset).not.toHaveBeenCalled();
   });
 
-  it('hands the reference back untouched when delivery is off', async () => {
+  it('is the placeholder, not the raw reference, when delivery is off', async () => {
+    // Unlike a repo path, `media://…` has no legacy form: the bytes live in R2
+    // behind a signature and there is no proxy. Echoing it would put a scheme
+    // no browser understands into `src`, and a save could commit it back.
     await expect(
       resolveAssetUrl(
         { ...ctx, classroom: { ...ctx.classroom, content_delivery_enabled: false } },
         REF
       )
-    ).resolves.toBe(REF);
+    ).resolves.toBe(`${ORIGIN}/c/${CLASSROOM_ID}/missing/${encodeURIComponent(REF)}`);
     expect(lookupReadyMedia).not.toHaveBeenCalled();
+  });
+
+  it('gives the reference back when the deployment can form no URL at all', async () => {
+    delete process.env.CONTENT_DELIVERY_ORIGIN;
+    await expect(resolveAssetUrl(ctx, REF)).resolves.toBe(REF);
   });
 });
 
@@ -241,6 +249,16 @@ describe('resolveDelivery', () => {
     const { urls } = await resolveDelivery(ctx, [REF]);
     expect(urls.get(REF)).toBe(`${ORIGIN}/c/${CLASSROOM_ID}/missing/${encodeURIComponent(REF)}`);
   });
+
+  it('placeholders a media ref with delivery off, and leaves the rest alone', async () => {
+    const off = { ...ctx, classroom: { ...ctx.classroom, content_delivery_enabled: false } };
+    const { urls } = await resolveDelivery(off, [REF, 'pages/lab-1/hero.png']);
+
+    expect(urls.get(REF)).toBe(`${ORIGIN}/c/${CLASSROOM_ID}/missing/${encodeURIComponent(REF)}`);
+    // A repo path still has a legacy meaning, so it comes back as itself.
+    expect(urls.get('pages/lab-1/hero.png')).toBe('pages/lab-1/hero.png');
+    expect(lookupReadyMedia).not.toHaveBeenCalled();
+  });
 });
 
 describe('canonicalizeAssetRef', () => {
@@ -256,6 +274,19 @@ describe('canonicalizeAssetRef', () => {
   it('leaves another classroom media URL alone', async () => {
     const foreign = `${ORIGIN}/c/${OTHER_CLASSROOM}/media/${MEDIA_ID}/orig.mp4?p=week&v=1&exp=1&sig=x`;
     await expect(canonicalizeAssetRef(ctx, foreign)).resolves.toBe(foreign);
+  });
+
+  it('leaves a media URL on somebody else host alone', async () => {
+    // The path shape is public. Claiming it from any host would rewrite an
+    // author's external link into a reference to one of OUR objects.
+    const elsewhere = `https://not-ours.example/c/${CLASSROOM_ID}/media/${MEDIA_ID}/orig.mp4?p=week&v=1&exp=1&sig=x`;
+    await expect(canonicalizeAssetRef(ctx, elsewhere)).resolves.toBe(elsewhere);
+  });
+
+  it('leaves even our own URL alone when the deployment mints none', async () => {
+    const url = `${ORIGIN}/c/${CLASSROOM_ID}/media/${MEDIA_ID}/orig.mp4?p=week&v=1&exp=1&sig=x`;
+    delete process.env.CONTENT_DELIVERY_ORIGIN;
+    await expect(canonicalizeAssetRef(ctx, url)).resolves.toBe(url);
   });
 
   it('restores the reference out of a /missing/ placeholder', async () => {

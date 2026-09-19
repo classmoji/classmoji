@@ -893,9 +893,43 @@ export function parseMediaRef(ref: string): string | null {
 const MEDIA_URL =
   /^https?:\/\/[^/]+\/c\/([0-9a-f-]{36})\/media\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\/[^/?#]+(?:\?|$)/i;
 
+/**
+ * Is this host the one this deployment mints delivery URLs on?
+ *
+ * "Ours" has to mean the HOST as well as the path: the shape above is a public
+ * URL grammar and any site can serve a path that matches it. A save that
+ * accepted `https://somewhere-else.example/c/{thisClassroom}/media/{id}/…`
+ * would rewrite an author's external link into a reference to one of this
+ * classroom's own objects — a silent edit of their content, driven by a string
+ * somebody else chose.
+ *
+ * Env rather than `deliveryEnvFor`, for `canonicalizeAssetRef`'s reason: this
+ * path only ever REMOVES a derived URL, so it has to keep working for a
+ * classroom whose flag has since been switched off. A deployment with no origin
+ * at all mints nothing, so no host is ours and every string is left alone.
+ */
+function isOwnDeliveryHost(host: string | null | undefined): boolean {
+  const origin = process.env.CONTENT_DELIVERY_ORIGIN;
+  if (!origin || !host) return false;
+  try {
+    return new URL(origin).host.toLowerCase() === host.toLowerCase();
+  } catch {
+    return false;
+  }
+}
+
 function parseMediaUrl(ctx: ResolveContext, ref: string): string | null {
   const match = MEDIA_URL.exec(ref);
   if (!match || match[1].toLowerCase() !== ctx.classroom.id.toLowerCase()) return null;
+
+  let host: string;
+  try {
+    host = new URL(ref).host;
+  } catch {
+    return null;
+  }
+  if (!isOwnDeliveryHost(host)) return null;
+
   return match[2].toLowerCase();
 }
 
@@ -965,6 +999,32 @@ async function mintMedia(
  * to say about media. A page of nothing but media refs costs one query and no
  * GitHub call at all.
  */
+/**
+ * What a `media://` reference resolves to when the layer is NOT acting.
+ *
+ * Every other kind of reference has an answer without the delivery layer: a
+ * repo path is a path, a legacy absolute URL is a URL, and handing either back
+ * unchanged renders the same file it always did. A media reference has no such
+ * fallback — the bytes are in R2, reachable only through a signed URL, and
+ * there is no proxy, no legacy route and no public object. So echoing the
+ * `media://…` string puts a scheme no browser understands into `src`, and a
+ * save that does not canonicalize would commit that back into the document.
+ *
+ * The placeholder is the honest answer: the same deterministic `/missing/` URL
+ * a deleted or unknown object gets, which `parseMissingUrl` turns back into the
+ * reference on the way to storage, so nothing is lost and a later render — once
+ * the flag is on again — resolves it properly.
+ *
+ * A deployment with no origin at all can form no URL, so there the reference
+ * does come back unchanged; there is nothing better, and nothing is being
+ * served on that deployment either way.
+ */
+function unresolvedMediaUrl(ctx: ResolveContext, ref: string): string {
+  const origin = process.env.CONTENT_DELIVERY_ORIGIN;
+  if (!origin) return ref;
+  return missingUrl(origin, ctx.classroom.id, ref);
+}
+
 async function resolveMediaRefs(
   ctx: ResolveContext,
   env: { origin: string; master: string },
@@ -1138,7 +1198,9 @@ export async function resolveAssetUrl(
   opts: { transform?: ResolveTransform } = {}
 ): Promise<string> {
   const env = deliveryEnvFor(ctx);
-  if (!env) return ref;
+  // A media reference has no legacy form to fall back to. See
+  // `unresolvedMediaUrl`.
+  if (!env) return parseMediaRef(ref) ? unresolvedMediaUrl(ctx, ref) : ref;
 
   // Media first, and BEFORE the map check: a media reference has nothing to do
   // with the content repo's tree, so resolving one must not pull a GitHub sync
@@ -1328,7 +1390,11 @@ export async function resolveDelivery(
 
   const env = deliveryEnvFor(ctx);
   if (!env) {
-    for (const ref of unique) urls.set(ref, ref);
+    // Same rule as `resolveAssetUrl`: everything else resolves to itself, and a
+    // media reference resolves to the placeholder. See `unresolvedMediaUrl`.
+    for (const ref of unique) {
+      urls.set(ref, parseMediaRef(ref) ? unresolvedMediaUrl(ctx, ref) : ref);
+    }
     return { urls, srcSets };
   }
 
@@ -2151,8 +2217,12 @@ export async function canonicalizeAssetRef(ctx: ResolveContext, urlOrRef: string
 
   // Belt to the shape match above. Only reachable for one of OUR media URLs the
   // regex did not claim, and it must not fall through to the blob branch, which
-  // would read `parsed.sha` off a shape that has none.
-  if (parsed.kind === 'media') return mediaRef(parsed.mediaId);
+  // would read `parsed.sha` off a shape that has none. The host check is the
+  // same one `parseMediaUrl` makes: this parse is structural and would accept
+  // the shape from any host at all.
+  if (parsed.kind === 'media') {
+    return isOwnDeliveryHost(parsed.host) ? mediaRef(parsed.mediaId) : urlOrRef;
+  }
 
   // A signed THEME url reaches storage through a deck's `<link href>` or an
   // inline `url()`, and it expires exactly like a blob url does. Its repo path
