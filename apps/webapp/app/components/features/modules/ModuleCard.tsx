@@ -360,10 +360,7 @@ const ModuleCard = ({
                 <Tag color={ASSIGNMENT_TYPE_META.REPO.color} className="m-0 shrink-0">
                   Repo
                 </Tag>
-                <Meta>
-                  {prettyType(r.type)} · {r._count.git_repos} student repo
-                  {r._count.git_repos === 1 ? '' : 's'}
-                </Meta>
+                <Meta>{prettyType(r.type)}</Meta>
                 <StatusPill published={r.is_published} />
                 <div className="flex items-center gap-3 whitespace-nowrap">
                   <ActionLink onClick={() => repoActions.editRepository(r)}>Edit</ActionLink>
