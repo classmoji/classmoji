@@ -338,7 +338,10 @@ describe('createUpload', () => {
 
 describe('signParts', () => {
   beforeEach(() => {
-    prisma.mediaObject.findFirst.mockResolvedValue(row({ status: 'UPLOADING', upload_id: 'up-1' }));
+    // Two parts' worth of declared bytes, so asking for part 2 is legitimate.
+    prisma.mediaObject.findFirst.mockResolvedValue(
+      row({ status: 'UPLOADING', upload_id: 'up-1', size_bytes: BigInt(PART_SIZE_BYTES + 1) })
+    );
   });
 
   it('presigns each part against this object, with an expiry the client can see', async () => {
@@ -386,6 +389,26 @@ describe('signParts', () => {
     await expect(
       signParts({ classroom, mediaId: MEDIA_ID, partNumbers: [0, 10001, -1] })
     ).rejects.toMatchObject({ code: 'BAD_STATE' });
+  });
+
+  it('refuses a part number the declared size cannot have', async () => {
+    // 1 MB is one part. Part 2 is not the end of this file, it is bytes the
+    // quota reservation never covered — and a signed URL for it is a write.
+    prisma.mediaObject.findFirst.mockResolvedValue(
+      row({ status: 'UPLOADING', upload_id: 'up-1', size_bytes: BigInt(1024 * 1024) })
+    );
+
+    await expect(
+      signParts({ classroom, mediaId: MEDIA_ID, partNumbers: [2] })
+    ).rejects.toMatchObject({ code: 'BAD_STATE' });
+    // Nothing was signed on the refused batch, not even the valid members.
+    await expect(
+      signParts({ classroom, mediaId: MEDIA_ID, partNumbers: [1, 2] })
+    ).rejects.toMatchObject({ code: 'BAD_STATE' });
+    expect(getSignedUrl).not.toHaveBeenCalled();
+
+    const { urls } = await signParts({ classroom, mediaId: MEDIA_ID, partNumbers: [1] });
+    expect(urls).toHaveLength(1);
   });
 });
 

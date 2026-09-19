@@ -333,6 +333,16 @@ async function uploadingRow(
  * has expired, and a URL never used was signing work nobody wanted. Fifteen
  * minutes is long enough for a slow part and short enough that a leaked URL is
  * a write to one part of one object for a quarter of an hour.
+ *
+ * ## A part number is bounded by the DECLARED size, not by S3's ceiling
+ *
+ * The declaration is what the quota reserved against, and `partCountFor` is
+ * exactly how many 32 MiB parts that many bytes take. Signing part 500 of a
+ * 1 MB upload would hand out a write for bytes the reservation never covered:
+ * `completeUpload` would catch the resulting object at `HeadObject` and delete
+ * it, but only after the parts had been stored. Refusing here is the cheaper
+ * and more honest half of the same rule — a client asking for a part its own
+ * file cannot have is confused about its own upload.
  */
 export async function signParts({
   classroom,
@@ -346,14 +356,21 @@ export async function signParts({
   const { client, bucket } = requireClient();
   const row = await uploadingRow(classroom, mediaId);
 
-  const wanted = [...new Set(partNumbers)].filter(
-    part => Number.isSafeInteger(part) && part >= 1 && part <= 10000
-  );
+  const wanted = [...new Set(partNumbers)];
   if (wanted.length === 0 || wanted.length > MAX_PARTS_PER_SIGN) {
     throw new MediaError(
       'BAD_STATE',
       `Ask for between 1 and ${MAX_PARTS_PER_SIGN} part numbers at a time`
     );
+  }
+
+  // Every part this file can have, and no more: a 1 MB upload has one part, so
+  // part 2 is not "past the end", it is a request to write bytes nothing
+  // reserved. Refused rather than filtered out, so a client with an off-by-one
+  // hears about it instead of silently getting a shorter list back.
+  const lastPart = partCountFor(Number(row.size_bytes));
+  if (wanted.some(part => !Number.isSafeInteger(part) || part < 1 || part > lastPart)) {
+    throw new MediaError('BAD_STATE', `Part numbers for this upload run from 1 to ${lastPart}`);
   }
 
   const key = mediaKey(classroom.id, row.id, `orig.${row.ext}`);
