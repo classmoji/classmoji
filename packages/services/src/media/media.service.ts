@@ -10,6 +10,11 @@ import {
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { randomUUID } from 'node:crypto';
 import getPrisma from '@classmoji/database';
+// The delivery layer's own predicate, not a copy of it: "can this classroom's
+// references be signed" has one definition and media must not grow a second.
+// No cycle — contentDelivery reaches media through `mediaLookup.ts`, which
+// imports nothing from here.
+import { canDeliverContent } from '../classmoji/contentDelivery.service.ts';
 import { getProStateForClassroomId } from '../classmoji/subscription.service.ts';
 import { MediaError } from './MediaError.ts';
 import { mediaKey } from './mediaKeys.ts';
@@ -210,8 +215,11 @@ function requireClient(): { client: S3Client; bucket: string } {
  *   2. kind — decided from the extension, which also fixes the content type;
  *   3. Pro — before the numbers, so a free classroom is told it needs Pro
  *      rather than that it is 2 GB over a quota of zero;
- *   4. per-file ceiling — independent of how much room is left;
- *   5. quota — last, because it is the only one that depends on other rows.
+ *   4. delivery — a classroom whose references cannot be signed has nowhere to
+ *      serve the object from, and finding that out after the bytes have moved
+ *      is the expensive way to learn it;
+ *   5. per-file ceiling — independent of how much room is left;
+ *   6. quota — last, because it is the only one that depends on other rows.
  *
  * The row is written BEFORE the multipart is opened, and that is what the quota
  * reserves against. The quota SUM and that INSERT share one transaction behind
@@ -263,6 +271,28 @@ export async function createUpload({
     throw new MediaError('PRO_REQUIRED', 'Media storage requires a Pro subscription');
   }
   const quotaBytes = quotaBytesFor(isPro);
+
+  // Media is SERVED only through the delivery Worker — there is no legacy path
+  // for a `media://` reference the way there is for a repo path, so a classroom
+  // the layer cannot sign for would store bytes that render as a `/missing/`
+  // placeholder and nothing else. Refused at the door rather than discovered
+  // after a 2 GB upload.
+  const deliverable = await getPrisma().classroom.findUnique({
+    where: { id: classroom.id },
+    select: {
+      content_delivery_enabled: true,
+      content_repo: true,
+      git_organization: {
+        select: { login: true, provider: true, github_installation_id: true },
+      },
+    },
+  });
+  if (!canDeliverContent(deliverable)) {
+    throw new MediaError(
+      'DELIVERY_REQUIRED',
+      'Media uploads need content delivery, which this class cannot use yet'
+    );
+  }
 
   if (!Number.isSafeInteger(sizeBytes) || sizeBytes <= 0) {
     throw new MediaError('FILE_TOO_LARGE', 'A file size in bytes is required');

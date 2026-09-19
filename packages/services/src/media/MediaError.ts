@@ -19,6 +19,12 @@ export type MediaErrorCode =
   | 'KIND_NOT_ALLOWED'
   /** The classroom's owner has no active PRO subscription. */
   | 'PRO_REQUIRED'
+  /**
+   * The classroom cannot serve content through the delivery layer, so an
+   * uploaded object would have no URL anyone could load. Distinct from
+   * `NOT_CONFIGURED`: the deployment is fine, this classroom is not ready.
+   */
+  | 'DELIVERY_REQUIRED'
   /** One file past the per-file ceiling, regardless of how much quota is free. */
   | 'FILE_TOO_LARGE'
   /** This file would put the classroom over its quota. Carries the numbers. */

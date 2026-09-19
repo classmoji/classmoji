@@ -155,6 +155,7 @@ describe('POST /api/media/uploads', () => {
     const cases: [string, number][] = [
       ['NOT_CONFIGURED', 503],
       ['PRO_REQUIRED', 403],
+      ['DELIVERY_REQUIRED', 409],
       ['FILE_TOO_LARGE', 413],
       ['KIND_NOT_ALLOWED', 422],
       ['NOT_FOUND', 404],

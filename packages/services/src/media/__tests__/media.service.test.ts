@@ -69,6 +69,9 @@ const prisma = {
     updateMany: vi.fn(),
     delete: vi.fn(),
   },
+  classroom: {
+    findUnique: vi.fn(),
+  },
   $queryRaw: vi.fn(),
   $transaction: vi.fn(),
 };
@@ -167,6 +170,18 @@ beforeEach(() => {
     }
   );
   getProStateForClassroomId.mockResolvedValue({ isPro: true });
+  // A classroom whose references the delivery layer can actually sign. Media
+  // has no legacy serving path, so this is a precondition for uploading.
+  prisma.classroom.findUnique.mockReset();
+  prisma.classroom.findUnique.mockResolvedValue({
+    content_delivery_enabled: true,
+    content_repo: 'content-dartmouth-cs52-cs52-25s',
+    git_organization: {
+      login: 'dartmouth-cs52',
+      provider: 'GITHUB',
+      github_installation_id: '12345',
+    },
+  });
   configure();
 });
 
@@ -289,6 +304,29 @@ describe('createUpload', () => {
       where: { id: created.mediaId },
       data: { upload_id: 'upload-1' },
     });
+  });
+
+  it('refuses a classroom whose content cannot be delivered', async () => {
+    // Uploading into a classroom the Worker cannot sign for would store bytes
+    // that render as a /missing/ placeholder and nothing else.
+    for (const classroomRow of [
+      null,
+      { content_delivery_enabled: false, content_repo: 'r', git_organization: null },
+      {
+        content_delivery_enabled: true,
+        content_repo: 'r',
+        // The org never finished installing the GitHub App.
+        git_organization: { login: 'o', provider: 'GITHUB', github_installation_id: null },
+      },
+    ]) {
+      prisma.classroom.findUnique.mockResolvedValue(classroomRow);
+      await expect(
+        createUpload({ classroom, userId: 'u', filename: 'a.mp4', sizeBytes: 10 })
+      ).rejects.toMatchObject({ code: 'DELIVERY_REQUIRED' });
+    }
+
+    expect(prisma.mediaObject.create).not.toHaveBeenCalled();
+    expect(sent).toHaveLength(0);
   });
 
   it('builds the key before it reserves anything', async () => {

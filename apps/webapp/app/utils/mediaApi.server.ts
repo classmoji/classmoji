@@ -64,6 +64,10 @@ export function mediaError(
 const STATUS_FOR: Record<string, number> = {
   NOT_CONFIGURED: 503,
   PRO_REQUIRED: 403,
+  // The deployment is fine; this CLASSROOM cannot serve content yet, which is
+  // a state the caller can change — 409, not the 503 that means "come back
+  // when an operator has fixed the server".
+  DELIVERY_REQUIRED: 409,
   FILE_TOO_LARGE: 413,
   KIND_NOT_ALLOWED: 422,
   QUOTA_EXCEEDED: 409,
