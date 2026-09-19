@@ -448,8 +448,8 @@ async function canonicalizePageCover(
  * @param blocks - BlockNote document blocks array
  * @param options.coverImage - Cover image metadata; `undefined` (omitted)
  *   preserves the existing coverImage via a fresh re-read, `null` removes it.
- *   A re-read that cannot be made or cannot be parsed REJECTS rather than
- *   writing without the key — see the re-read below for why.
+ *   A re-read that cannot be MADE rejects rather than writing without the key;
+ *   one whose file will not parse proceeds without it — see the re-read below.
  * @param options.expectedSha - Optimistic-lock sha; mismatch → error with
  *   status 409 (propagated from ContentService.put).
  * @param options.message - Commit message (default `Update page: <title>`).
@@ -487,13 +487,21 @@ export async function savePageContent(
   // When coverImage isn't explicitly provided, read the existing JSON to
   // preserve it (fresh read — a stale cached coverImage must not resurrect).
   //
-  // Only ABSENCE may leave it undefined, which is the same rule the load path
-  // runs on. A 404 means there is no file to preserve a cover from, so the
-  // wrapper is written without the key. A read that FAILS, or a file we cannot
-  // parse, says nothing about whether this page has a cover — and the wrapper
-  // below omits the key when `coverImage` is undefined, so continuing would
-  // drop a live cover on a guess. Both stop the save instead: no write, and the
-  // caller sees the read error.
+  // A read that FAILS stops the save. A 404 means there is no file to preserve
+  // a cover from, so the wrapper is simply written without the key; anything
+  // else says nothing about whether this page has a cover, and the wrapper
+  // below omits the key when `coverImage` is undefined — so continuing on a
+  // blip would drop a live cover on a guess. Same rule as the load path, where
+  // only a 404 counts as absence.
+  //
+  // A file we cannot PARSE is the deliberate exception: it has no cover we can
+  // preserve, and the save proceeds so the editor can repair it. That matters
+  // because a corrupt content.json loads as 'html' or 'none' (loadPageContent's
+  // parse failure falls through to the HTML probe), so the editor arrives here
+  // with no json sha and this save is the only way back short of git —
+  // refusing would leave the instructor unable to fix the page at all. The
+  // cover goes with the file it was stored in, and both the load and the line
+  // below record why.
   //
   // A caller that genuinely wants this file rewritten regardless passes
   // `coverImage` explicitly (`null` to remove it), which skips the re-read —
@@ -509,19 +517,17 @@ export async function savePageContent(
       label: 'cover re-read',
     });
     if (existing?.content) {
-      let parsed: unknown;
       try {
-        parsed = JSON.parse(existing.content);
+        const parsed: unknown = JSON.parse(existing.content);
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+          const existingCover = (parsed as { coverImage?: PageCoverImage }).coverImage;
+          if (existingCover) coverImage = existingCover;
+        }
       } catch (err) {
         console.error(
           `[pageContent.savePageContent] cover re-read parse failed for ${repo}/${path}:`,
           err
         );
-        throw err;
-      }
-      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-        const existingCover = (parsed as { coverImage?: PageCoverImage }).coverImage;
-        if (existingCover) coverImage = existingCover;
       }
     }
   }

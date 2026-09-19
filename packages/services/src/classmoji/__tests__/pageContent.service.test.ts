@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 // pageContent.service is the page-content read/write path extracted from
 // apps/pages' content.server.ts (Phase 1 of the content-tools plan):
@@ -128,10 +128,25 @@ type CallArg = Record<string, unknown>;
 const callArg = (mock: ReturnType<typeof vi.fn>, n = 0) => mock.mock.calls[n][0] as CallArg;
 const writtenWrapper = () => JSON.parse(callArg(putMock).content as string);
 
+/** Restores the console spy installed below. */
+let restoreConsoleError: () => void;
+
 beforeEach(() => {
   vi.clearAllMocks();
   recordedRows.clear();
   putMock.mockResolvedValue({ sha: 'new-sha', commit: 'commit-1' });
+
+  // Several tests here drive the read/parse failure paths on purpose, and those
+  // paths log by design. Silenced so the suite output stays readable — and,
+  // less obviously, so vitest is not still shipping console lines to the main
+  // thread when the worker closes, which it reports as an EnvironmentTeardown
+  // error and which turns a green run into a non-zero exit.
+  const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+  restoreConsoleError = () => spy.mockRestore();
+});
+
+afterEach(() => {
+  restoreConsoleError();
 });
 
 // ─── loadPageContent ─────────────────────────────────────────────────────────
@@ -296,15 +311,21 @@ describe('pageContent.savePageContent', () => {
     expect(putMock).not.toHaveBeenCalled();
   });
 
-  it('an UNPARSEABLE existing file stops the save too (the cover is unknown, not absent)', async () => {
+  it('an UNPARSEABLE existing file does NOT stop the save — that save is the repair', async () => {
+    // A corrupt content.json loads as 'html' or 'none', so the editor reaches
+    // this save with no json sha and it is the only way back short of git. A
+    // file we cannot parse has no cover to preserve either way, so the key is
+    // dropped and the write goes through.
     getContentMock.mockResolvedValueOnce({ content: '{not json', sha: 'old-sha' });
 
-    await expect(savePageContent(page, blocks)).rejects.toThrow(SyntaxError);
-    expect(putMock).not.toHaveBeenCalled();
+    await savePageContent(page, blocks);
+
+    expect(putMock).toHaveBeenCalledTimes(1);
+    expect(writtenWrapper()).toEqual({ blocks });
   });
 
   it('an explicit coverImage skips the re-read, so a caller can still rewrite the file', async () => {
-    // The escape hatch for both refusals above: passing the cover (or null)
+    // The escape hatch out of the refusal above: passing the cover (or null)
     // says what to store, so no read is needed to find out.
     getContentMock.mockRejectedValue(Object.assign(new Error('Server Error'), { status: 503 }));
 
