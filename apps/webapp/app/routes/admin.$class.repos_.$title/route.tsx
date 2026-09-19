@@ -71,8 +71,6 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
 
   const emojiMappings = await ClassmojiService.emojiMapping.findByClassroomId(classroom.id);
   const settings = await ClassmojiService.classroom.getClassroomSettingsForServer(classroom.id);
-  const students = await ClassmojiService.classroomMembership.findStudents(classroom.id);
-  const teams = await ClassmojiService.team.findByClassroomId(classroom.id);
 
   // Linked pages = pages linked to the repository unit + to any of its assignments.
   // PageLink rows carry `.page` (the Page) when includePages is set on the query.
@@ -118,8 +116,6 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
     emojiMappings,
     settings,
     classroom,
-    studentsCount: students.length,
-    teamsCount: teams.length,
     linkedPages,
     autogradingTestCount,
   };
@@ -133,8 +129,6 @@ const SingleRepository = ({ loaderData }: Route.ComponentProps) => {
     emojiMappings,
     settings,
     classroom,
-    studentsCount,
-    teamsCount,
     linkedPages,
     autogradingTestCount,
   } = loaderData;
@@ -343,10 +337,6 @@ const SingleRepository = ({ loaderData }: Route.ComponentProps) => {
       <SummaryCards
         repository={repository as Parameters<typeof SummaryCards>[0]['repository']}
         repos={repos as Parameters<typeof SummaryCards>[0]['repos']}
-        studentsCount={studentsCount}
-        teamsCount={teamsCount}
-        emojiMappings={emojiMappings as Parameters<typeof SummaryCards>[0]['emojiMappings']}
-        settings={settings as Parameters<typeof SummaryCards>[0]['settings']}
       />
 
       <FolderTabs items={tabItems} defaultActiveKey="grades" panelClassName="min-h-[300px]" />
