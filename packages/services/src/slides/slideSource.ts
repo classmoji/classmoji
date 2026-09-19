@@ -20,16 +20,76 @@
  * `MAX_FILE_SIZE` (5 MB) and `ALLOWED_EXTENSIONS` in
  * `content/utils/validateFile.ts` govern the images and PDFs dropped into a
  * page or a deck, and `ContentService.upload` enforces them on every caller.
- * A slide FILE is a different thing with a different ceiling (75 MB, decided
- * with Tim) and a narrower list, and widening the shared globals to fit it
- * would silently raise the cap for every image upload in the product. So this
- * policy is separate, and the slide upload path commits through
- * `ContentService.uploadBatch` — which does no validation of its own — after
- * checking it HERE, explicitly.
+ * A slide FILE is a different thing with a different ceiling (35 MB, which is
+ * GitHub's number — see the constant) and a narrower list, and widening the
+ * shared globals to fit it would silently raise the cap for every image upload
+ * in the product. So this policy is separate, and the slide upload path commits
+ * through `ContentService.uploadBatch` — which does no validation of its own —
+ * after checking it HERE, explicitly.
  */
 
-/** 75 MB. Above this an upload is refused before a byte is committed. */
-export const SLIDE_FILE_MAX_BYTES = 75 * 1024 * 1024;
+/**
+ * 35 MB. Above this an upload is refused before a byte is committed.
+ *
+ * The number is GitHub's, not a policy call. A file slide is committed by
+ * `ContentService.uploadBatch`, which creates the blob with
+ * `POST /repos/{owner}/{repo}/git/blobs` — the whole file base64-encoded inside
+ * a JSON body. GitHub refuses a request body of roughly 50 MB or more with
+ * "Sorry, your input was too large to process", and base64 makes a file a third
+ * larger on the way out, so what bounds an upload is the file AFTER encoding.
+ *
+ * Measured on staging against a real content repo, 2026-09-19: 30 MB and 35 MB
+ * (46.7 MB encoded) both committed, in 50–70 s; 40 MB (53.3 MB encoded), 50 MB
+ * and 74 MB were all refused. This constant said 75 MB until that run — a
+ * promise the transport could never have kept, for any file over ~37 MB.
+ *
+ * It is a transport ceiling and not a judgement about lecture slides, so it
+ * goes away when file slides move to media storage in phase 2. Everything a
+ * person reads comes from `SLIDE_FILE_MAX_LABEL` below, so changing the one
+ * number here changes the product.
+ */
+export const SLIDE_FILE_MAX_BYTES = 35 * 1024 * 1024;
+
+/**
+ * The cap as a person reads it — `35 MB` — for every sentence that quotes it.
+ *
+ * Derived rather than written out, because the number shows up in the two
+ * upload forms' copy, in their client-side check, in the 413 each route
+ * answers and in the refusal below: a cap that moves in some of those places
+ * and not the rest is a form promising what the server will not take.
+ */
+export const SLIDE_FILE_MAX_LABEL = `${Math.round(SLIDE_FILE_MAX_BYTES / (1024 * 1024))} MB`;
+
+/** What an instructor is told when GitHub refuses the commit as too large. */
+export const SLIDE_FILE_TOO_LARGE_MESSAGE =
+  `This file is too large for Classmoji to store (limit ${SLIDE_FILE_MAX_LABEL}). ` +
+  'Try exporting a smaller PDF — compressing images usually does it.';
+
+/**
+ * Is this GitHub refusing a blob because the request body was too big?
+ *
+ * The other half of the cap above, and here for the same reason the cap is: one
+ * of them is the size we refuse ourselves, the other is the refusal that proves
+ * the number. It still touches no GitHub client — it reads `status` and
+ * `message` off whatever was thrown, so `slideFile.service.ts` and
+ * `contentImport.service.ts` can both use it without either of them reaching
+ * for the deck engine.
+ *
+ * What it buys is the sentence. GitHub's own ends "Consider creating the blob
+ * in a local clone of the repository and then pushing it to GitHub" — advice
+ * nobody uploading through this product can act on, and not something to put in
+ * front of an instructor verbatim.
+ *
+ * 413 on its own is unambiguous. 422 is not — it is also the status behind
+ * "not a fast forward" and every other Git Data validation failure — so it
+ * counts only together with the message that came with it.
+ */
+export function isCommitTooLargeRefusal(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false;
+  const { status, message } = error as { status?: unknown; message?: unknown };
+  if (status === 413) return true;
+  return status === 422 && typeof message === 'string' && /too large/i.test(message);
+}
 
 /** The only extensions a FILE slide may carry. Lowercase, no leading dot. */
 export const SLIDE_FILE_EXTENSIONS = ['pdf', 'ppt', 'pptx', 'key'] as const;
@@ -120,7 +180,7 @@ export function validateSlideFile({
   if (size > SLIDE_FILE_MAX_BYTES) {
     return {
       valid: false,
-      error: `That file is too large. The limit is ${Math.round(SLIDE_FILE_MAX_BYTES / (1024 * 1024))} MB.`,
+      error: `That file is too large. The limit is ${SLIDE_FILE_MAX_LABEL}.`,
     };
   }
   return { valid: true, extension, mime: SLIDE_FILE_MIME[extension] };

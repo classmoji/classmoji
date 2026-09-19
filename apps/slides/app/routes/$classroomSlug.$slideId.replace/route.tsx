@@ -21,6 +21,7 @@ import { assertSlideAccess } from '@classmoji/auth/server';
 import {
   SLIDE_FILE_EXTENSIONS,
   SLIDE_FILE_MAX_BYTES,
+  SLIDE_FILE_MAX_LABEL,
   SlideKindError,
   slideFileService,
   validateSlideFile,
@@ -99,7 +100,7 @@ export const loader = async ({
     // is what this avoids.
     upload: {
       maxBytes: SLIDE_FILE_MAX_BYTES,
-      maxMb: Math.round(SLIDE_FILE_MAX_BYTES / (1024 * 1024)),
+      maxLabel: SLIDE_FILE_MAX_LABEL,
       extensions: [...SLIDE_FILE_EXTENSIONS] as string[],
       accept: SLIDE_FILE_EXTENSIONS.map(ext => `.${ext}`).join(','),
     },
@@ -119,7 +120,7 @@ export const action = async ({
   }
 
   // Its own authorization check, ahead of the body: the loader's gate is not a
-  // mutation boundary, and a 75 MB upload should never be buffered for someone
+  // mutation boundary, and a 35 MB upload should never be buffered for someone
   // who is not allowed to make it.
   const { membership } = await authorizeFileSlide(request, classroomSlug, slideId);
 
@@ -156,8 +157,10 @@ async function replaceFromForm({
     formData = await readLimitedFormData(request, uploadBodyLimit(SLIDE_FILE_MAX_BYTES));
   } catch (error: unknown) {
     if (error instanceof UploadTooLargeError) {
-      const maxMb = Math.round(SLIDE_FILE_MAX_BYTES / (1024 * 1024));
-      return data({ error: `That file is too large. The limit is ${maxMb} MB.` }, { status: 413 });
+      return data(
+        { error: `That file is too large. The limit is ${SLIDE_FILE_MAX_LABEL}.` },
+        { status: 413 }
+      );
     }
     throw error;
   }
@@ -182,12 +185,20 @@ async function replaceFromForm({
     });
   } catch (error: unknown) {
     console.error('Failed to replace slide file:', error);
-    const status =
-      error instanceof slideFileService.SlideSourceError || error instanceof SlideKindError
-        ? error.status
-        : 500;
-    const message = error instanceof Error ? error.message : 'Failed to replace the slide file';
-    return data({ error: message }, { status });
+    // Only OUR refusals carry a sentence written for an instructor. Anything
+    // else is an upstream fault — a GitHub 500, a dropped connection — whose
+    // message is for the log above, not for the form: it names repos, API
+    // paths and remedies (`git push`) that mean nothing on this screen.
+    const ours =
+      error instanceof slideFileService.SlideSourceError || error instanceof SlideKindError;
+    return data(
+      {
+        error: ours
+          ? error.message
+          : "Couldn't save the file to the course repository. Please try again.",
+      },
+      { status: ours ? error.status : 500 }
+    );
   }
 
   return redirect(
@@ -232,11 +243,11 @@ export default function ReplaceSlideFilePage() {
       }
       if (file.size === 0) return 'That file is empty.';
       if (file.size > upload.maxBytes) {
-        return `That file is too large. The limit is ${upload.maxMb} MB.`;
+        return `That file is too large. The limit is ${upload.maxLabel}.`;
       }
       return null;
     },
-    [upload.extensions, upload.maxBytes, upload.maxMb]
+    [upload.extensions, upload.maxBytes, upload.maxLabel]
   );
 
   const onSubmit = (event: FormEvent<HTMLFormElement>) => {
@@ -307,7 +318,7 @@ export default function ReplaceSlideFilePage() {
             <p className="mt-2 text-xs leading-relaxed text-[var(--ink-3)]">
               The slide keeps its link, so anything already pointing at it stays pointing at it.
               Students download the file under its original name. PDF, PowerPoint or Keynote, up to{' '}
-              {upload.maxMb} MB.
+              {upload.maxLabel}.
             </p>
 
             {isSubmitting && <UploadPendingPanel file={chosenFile} />}

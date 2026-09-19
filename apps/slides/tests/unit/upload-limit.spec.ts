@@ -72,7 +72,7 @@ test.describe('the declared size', () => {
 
 test.describe('the transport cap', () => {
   test('leaves room for the multipart envelope around the file', () => {
-    expect(uploadBodyLimit(75 * 1024 * 1024)).toBe(75 * 1024 * 1024 + MULTIPART_OVERHEAD_BYTES);
+    expect(uploadBodyLimit(35 * 1024 * 1024)).toBe(35 * 1024 * 1024 + MULTIPART_OVERHEAD_BYTES);
   });
 });
 
@@ -132,8 +132,8 @@ test.describe('reading with a limit', () => {
 
 test.describe('reading without joining', () => {
   test('hands back the chunks as they arrived', async () => {
-    // A 75 MB upload is large enough that every avoidable copy is another
-    // 75 MB held at the same moment, so the form-data path streams these into
+    // A 35 MB upload is large enough that every avoidable copy is another
+    // 35 MB held at the same moment, so the form-data path streams these into
     // the parser rather than concatenating them first.
     const { chunks, size } = await readLimitedChunks(streamOf(4, 25), 100);
     expect(chunks).toHaveLength(4);

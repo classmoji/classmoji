@@ -123,7 +123,7 @@ const {
   slideDownloadUrl,
   SlideSourceError,
 } = await import('../slideFile.service.ts');
-const { SlideKindError } = await import('../slideSource.ts');
+const { SlideKindError, SLIDE_FILE_TOO_LARGE_MESSAGE } = await import('../slideSource.ts');
 
 const CLASSROOM_ID = '3f2504e0-4f89-41d3-9a0c-0305e82c3301';
 const gitOrganization = {
@@ -140,6 +140,17 @@ const classroom = {
 };
 
 const PDF = Buffer.from('%PDF-1.7 pretend');
+
+/** GitHub's own refusal for an over-sized blob body, verbatim (2026-09-19). */
+const githubTooLarge = () =>
+  Object.assign(
+    new Error(
+      'Sorry, your input was too large to process. Consider creating the blob in a local clone ' +
+        'of the repository and then pushing it to GitHub. - ' +
+        'https://docs.github.com/rest/git/blobs#create-a-blob'
+    ),
+    { status: 422 }
+  );
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -361,6 +372,47 @@ describe('createFileSlide', () => {
     ).rejects.toMatchObject({ code: 'SLIDE_CONTENT_PATH_CONFLICT' });
     expect(uploadBatch).not.toHaveBeenCalled();
   });
+
+  it("turns GitHub's blob refusal into a sentence about the file", async () => {
+    // The size gate sits under where this starts happening, so it is the
+    // backstop rather than the everyday path — but when it fires, what the
+    // instructor sees must not be GitHub's advice to push from a local clone.
+    uploadBatch.mockRejectedValueOnce(githubTooLarge());
+
+    await expect(
+      createFileSlide({
+        classroomId: CLASSROOM_ID,
+        title: 'Lecture 1',
+        createdBy: 'user-1',
+        filename: 'a.pdf',
+        file: PDF,
+      })
+    ).rejects.toMatchObject({
+      code: 'SLIDE_SOURCE_REJECTED',
+      status: 400,
+      message: SLIDE_FILE_TOO_LARGE_MESSAGE,
+    });
+
+    // Nothing was recorded or written for an upload that never landed.
+    expect(recordContentAssets).not.toHaveBeenCalled();
+    expect(slideCreate).not.toHaveBeenCalled();
+  });
+
+  it('lets every other commit failure stay a 500', async () => {
+    // A GitHub outage is not something the author can fix by shrinking a PDF,
+    // and dressing it up as a policy refusal would send them off to do that.
+    uploadBatch.mockRejectedValueOnce(Object.assign(new Error('Server Error'), { status: 500 }));
+
+    await expect(
+      createFileSlide({
+        classroomId: CLASSROOM_ID,
+        title: 'Lecture 1',
+        createdBy: 'user-1',
+        filename: 'a.pdf',
+        file: PDF,
+      })
+    ).rejects.toMatchObject({ status: 500, message: 'Server Error' });
+  });
 });
 
 describe('createLinkSlide', () => {
@@ -426,6 +478,23 @@ describe('replaceSlideFile', () => {
     source_path: 'slides/lecture-1/old.pdf',
     classroom,
   };
+
+  it("turns GitHub's blob refusal into a sentence about the file", async () => {
+    slideFindUnique.mockResolvedValue(existing);
+    uploadBatch.mockRejectedValueOnce(githubTooLarge());
+
+    await expect(
+      replaceSlideFile({ slideId: 'slide-1', filename: 'Week 2.pdf', file: PDF })
+    ).rejects.toMatchObject({
+      code: 'SLIDE_SOURCE_REJECTED',
+      status: 400,
+      message: SLIDE_FILE_TOO_LARGE_MESSAGE,
+    });
+
+    // The slide is still serving what it was serving: nothing moved.
+    expect(slideUpdate).not.toHaveBeenCalled();
+    expect(deleteFile).not.toHaveBeenCalled();
+  });
 
   it('commits, repoints the row, and only then removes the old document', async () => {
     slideFindUnique.mockResolvedValue(existing);
@@ -542,7 +611,7 @@ describe('opening a file slide', () => {
   it('says so, rather than streaming, when the file is missing from the map', async () => {
     lookupContentAsset.mockResolvedValue(null);
     expect(await openSlideFile(slide)).toEqual({ mode: 'unavailable', reason: 'not_in_map' });
-    // A missing row is a real fault; reading 75 MB from GitHub would hide it.
+    // A missing row is a real fault; reading 35 MB from GitHub would hide it.
     expect(getLargeContent).not.toHaveBeenCalled();
   });
 

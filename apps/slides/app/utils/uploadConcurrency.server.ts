@@ -3,7 +3,7 @@
  * at a time.
  *
  * The size cap in `./uploadLimit` bounds ONE upload. It says nothing about ten
- * of them arriving together, and a slide file is allowed to be 75 MB: the
+ * of them arriving together, and a slide file is allowed to be 35 MB: the
  * multipart parser assembles the body, produces the file part from it and the
  * action then hands the bytes to the service, so a single upload is worth
  * several times the file on the heap while it is in flight. A handful at once

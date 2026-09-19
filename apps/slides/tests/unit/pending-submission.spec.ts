@@ -12,7 +12,7 @@
  *      false again the moment the navigation settles, or an error leaves the
  *      screen stuck behind a spinner that will never stop.
  *   2. A file's size is quoted in the same units as the limit it is measured
- *      against. Showing "78.6 MB" beside a 75 MB cap the file actually fits
+ *      against. Showing "36.7 MB" beside a 35 MB cap the file actually fits
  *      under is a bug report waiting to happen.
  */
 
@@ -84,8 +84,8 @@ test.describe('formatBytes', () => {
   });
 
   test('the upload cap itself reads as the number the form promises', () => {
-    // SLIDE_FILE_MAX_BYTES is 75 MB; a file at the cap must not read as 78.6.
-    expect(formatBytes(75 * 1024 * 1024)).toBe('75.0 MB');
+    // SLIDE_FILE_MAX_BYTES is 35 MiB; a file at the cap must not read as 36.7.
+    expect(formatBytes(35 * 1024 * 1024)).toBe('35.0 MB');
   });
 
   test('nonsense in, empty string out — never "NaN MB" in the panel', () => {

@@ -2,7 +2,7 @@
  * Pending-state pieces shared by the slide create / replace / edit-link forms.
  *
  * All three screens post a plain React Router `<Form>` and wait on the server.
- * Two of those waits are long — a file slide streams up to 75 MB and then
+ * Two of those waits are long — a file slide streams up to 35 MB and then
  * commits it to a GitHub repo — and until now the only sign of life was the
  * submit button's label changing, which reads as a frozen page.
  *
@@ -26,7 +26,7 @@ import { formatBytes } from '~/utils/pendingSubmission';
  * The primary submit for a form that waits on the server.
  *
  * While pending it shows the spinner beside `pendingLabel` and is `disabled`,
- * which is what actually prevents a second submission — a 75 MB upload fired
+ * which is what actually prevents a second submission — a 35 MB upload fired
  * twice is two commits racing for the same content path.
  */
 export function PendingSubmitButton({

@@ -15,7 +15,7 @@ export type NavigationLike = {
  * Is a form submission still in flight?
  *
  * `submitting` is the upload itself — React Router sets it the moment it starts
- * the fetch, and holds it until the action answers, which for a 75 MB file is
+ * the fetch, and holds it until the action answers, which for a 35 MB file is
  * the whole wait. It is not the whole story though: once the action returns,
  * the navigation drops to `loading` while loaders revalidate or a redirect is
  * followed, and the form is still not usable then. `formMethod` is what tells
@@ -37,7 +37,7 @@ export function isSubmissionPending(navigation: NavigationLike): boolean {
  * A byte count a person can read: `41.2 MB`, `812.0 KB`, `0 B`.
  *
  * Binary units (1 KB = 1024 B), matching `SLIDE_FILE_MAX_BYTES` and the "up to
- * 75 MB" the form promises — quoting a file in decimal MB next to a limit
+ * 35 MB" the form promises — quoting a file in decimal MB next to a limit
  * measured in binary ones is how a file that fits looks like one that doesn't.
  * Whole bytes below 1 KB, one decimal above it.
  */
