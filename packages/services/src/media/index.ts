@@ -59,6 +59,7 @@ export {
   deleteMedia,
   listMedia,
   onMediaReady,
+  signParts,
   usage,
 } from './media.service.ts';
 export type { MediaOptions, MediaUsage } from './media.service.ts';
