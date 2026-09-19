@@ -425,20 +425,9 @@ const AssignmentTable = ({ assignments: repositories }: AssignmentTableProps) =>
           );
         }
 
-        // assignment — edited through its parent repository's form
-        return (
-          <div className="flex items-center gap-x-4 whitespace-nowrap">
-            <ActionLink
-              onClick={() =>
-                navigate(`/admin/${classSlug}/repos/form?title=${record.repositoryTitle}`, {
-                  state: { assignment: record.repository },
-                })
-              }
-            >
-              Edit
-            </ActionLink>
-          </div>
-        );
+        // assignment — edited through its parent repository's form, so the
+        // row carries no actions of its own
+        return null;
       },
     },
   ];
