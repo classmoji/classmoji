@@ -608,6 +608,16 @@ function normalizeEtag(etag: string): string {
 const HEAD_ATTEMPTS = 2;
 
 /**
+ * The pause between the two size checks.
+ *
+ * The retry is for a blip, and a blip needs a moment to pass: a second
+ * `HeadObject` issued in the same tick as the first asks the same overloaded
+ * node the same question and gets the same answer. Short enough that a user
+ * waiting on `complete` does not notice, long enough to be a different moment.
+ */
+const HEAD_RETRY_DELAY_MS = 250;
+
+/**
  * The assembled object's size, or null when R2 would not say.
  *
  * Retried once and no more: the failure this covers is a blip between the
@@ -615,12 +625,26 @@ const HEAD_ATTEMPTS = 2;
  * more attempt away from succeeding. Null rather than a throw, because the
  * caller's answer to "I cannot verify this" is the same cleanup as "this is the
  * wrong size" and the difference belongs in the error code, not in control flow.
+ *
+ * A reply with NO `ContentLength` is one of those failures, not a size. It used
+ * to become `-1`, which is a number, so the caller compared it to the declared
+ * bytes and reported SIZE_MISMATCH — "you uploaded -1 bytes" — for an object
+ * nobody had managed to measure. Unverified is unverified: it falls through to
+ * the retry and then to null, and the caller says VERIFY_FAILED.
  */
 async function verifiedSize(client: S3Client, bucket: string, key: string): Promise<number | null> {
   for (let attempt = 1; attempt <= HEAD_ATTEMPTS; attempt += 1) {
+    if (attempt > 1) {
+      await new Promise(resolve => setTimeout(resolve, HEAD_RETRY_DELAY_MS));
+    }
     try {
       const head = await client.send(new HeadObjectCommand({ Bucket: bucket, Key: key }));
-      return Number(head.ContentLength ?? -1);
+      if (typeof head.ContentLength === 'number' && Number.isFinite(head.ContentLength)) {
+        return head.ContentLength;
+      }
+      console.warn(
+        `[media] Read back ${key} with no size (attempt ${attempt}/${HEAD_ATTEMPTS})`
+      );
     } catch (error) {
       console.warn(
         `[media] Could not read back ${key} (attempt ${attempt}/${HEAD_ATTEMPTS}):`,

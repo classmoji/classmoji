@@ -187,8 +187,30 @@ beforeEach(() => {
 
 afterEach(() => {
   unconfigure();
+  vi.useRealTimers();
   vi.restoreAllMocks();
 });
+
+/**
+ * Drive a call that has to sit through the size check's retry pause, without
+ * sitting through it.
+ *
+ * The pause is the point of the retry — a second `HeadObject` in the same tick
+ * asks the same overloaded node the same question — so the tests that reach the
+ * second attempt step time forward instead of waiting. Repeated advances rather
+ * than one: the timer is only scheduled once the first attempt has failed, so
+ * the loop has to hand control back to the promise chain in between.
+ */
+async function settleThroughRetry<T>(promise: Promise<T>): Promise<T> {
+  const settled = promise.then(
+    value => () => value,
+    (error: unknown) => () => {
+      throw error;
+    }
+  );
+  for (let i = 0; i < 5; i += 1) await vi.advanceTimersByTimeAsync(1_000);
+  return (await settled)();
+}
 
 describe('usage', () => {
   it('sums a READY row at its original size', async () => {
@@ -655,21 +677,30 @@ describe('completeUpload', () => {
     });
   });
 
-  it('retries the size check once before giving up on it', async () => {
+  it('retries the size check once, after a pause, before giving up on it', async () => {
+    vi.useFakeTimers();
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
     let heads = 0;
+    const at: number[] = [];
     sendImpl.mockImplementation(async (name: string) => {
       if (name !== 'HeadObject') return {};
+      at.push(Date.now());
       if (++heads === 1) throw new Error('503 slow down');
       return { ContentLength: 4096 };
     });
 
-    const result = await completeUpload({
-      classroom,
-      mediaId: MEDIA_ID,
-      parts: [{ partNumber: 1, etag: '"a"' }],
-    });
+    const result = await settleThroughRetry(
+      completeUpload({
+        classroom,
+        mediaId: MEDIA_ID,
+        parts: [{ partNumber: 1, etag: '"a"' }],
+      })
+    );
 
     expect(heads).toBe(2);
+    // Not in the same tick: a second head issued immediately asks the same
+    // overloaded node the same question.
+    expect(at[1] - at[0]).toBeGreaterThanOrEqual(250);
     expect(result).toMatchObject({ mediaId: MEDIA_ID });
     expect(prisma.mediaObject.update.mock.calls.at(-1)?.[0].data).toMatchObject({
       status: 'READY',
@@ -679,6 +710,7 @@ describe('completeUpload', () => {
   it('discards an object it could not read back at all', async () => {
     // Unverified bytes in the bucket behind a row that ages out of the quota is
     // the one outcome worse than a refusal.
+    vi.useFakeTimers();
     vi.spyOn(console, 'warn').mockImplementation(() => {});
     sendImpl.mockImplementation(async (name: string) => {
       if (name === 'HeadObject') throw new Error('r2 is down');
@@ -686,7 +718,9 @@ describe('completeUpload', () => {
     });
 
     await expect(
-      completeUpload({ classroom, mediaId: MEDIA_ID, parts: [{ partNumber: 1, etag: '"a"' }] })
+      settleThroughRetry(
+        completeUpload({ classroom, mediaId: MEDIA_ID, parts: [{ partNumber: 1, etag: '"a"' }] })
+      )
     ).rejects.toMatchObject({ code: 'VERIFY_FAILED' });
 
     expect(sent.filter(call => call.name === 'HeadObject')).toHaveLength(2);
@@ -695,6 +729,34 @@ describe('completeUpload', () => {
       where: { id: MEDIA_ID, status: 'UPLOADING' },
       data: expect.objectContaining({ status: 'DELETED' }),
     });
+  });
+
+  it('calls a reply with no size unverified, never a size of -1', async () => {
+    // `Number(undefined ?? -1)` is a number, so the caller compared -1 to the
+    // declared bytes and reported SIZE_MISMATCH — "you uploaded -1 bytes" — for
+    // an object nobody had managed to measure.
+    vi.useFakeTimers();
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    for (const ContentLength of [undefined, null]) {
+      sent.length = 0;
+      sendImpl.mockImplementation(async (name: string) =>
+        name === 'HeadObject' ? { ContentLength } : {}
+      );
+
+      await expect(
+        settleThroughRetry(
+          completeUpload({ classroom, mediaId: MEDIA_ID, parts: [{ partNumber: 1, etag: '"a"' }] })
+        ),
+        String(ContentLength)
+      ).rejects.toMatchObject({ code: 'VERIFY_FAILED' });
+
+      // Same cleanup as any other unverified object: row first, then the bytes.
+      expect(sent.filter(call => call.name === 'HeadObject')).toHaveLength(2);
+      expect(sent.find(call => call.name === 'DeleteObject')?.input).toMatchObject({
+        Key: ORIG_KEY,
+      });
+    }
   });
 
   it('aborts and tombstones when the assembly itself fails', async () => {
