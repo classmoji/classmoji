@@ -13,8 +13,11 @@ import { describe, it, expect } from 'vitest';
 
 import {
   SLIDE_FILE_MAX_BYTES,
+  SLIDE_FILE_MAX_LABEL,
+  SLIDE_FILE_TOO_LARGE_MESSAGE,
   assertDeckSlide,
   assertFileSlide,
+  isCommitTooLargeRefusal,
   isDeckSlide,
   slideFileExtension,
   slideFileSourceProblem,
@@ -71,11 +74,59 @@ describe('validateSlideFile', () => {
   });
 
   it('is not the shared 5 MB image policy', () => {
-    // The whole reason this module exists: a 40 MB lecture PDF is a normal
+    // The whole reason this module exists: a 20 MB lecture PDF is a normal
     // upload here and would be refused by `validateFile.ts`.
-    expect(validateSlideFile({ filename: 'lecture.pdf', size: 40 * 1024 * 1024 })).toMatchObject({
+    expect(validateSlideFile({ filename: 'lecture.pdf', size: 20 * 1024 * 1024 })).toMatchObject({
       valid: true,
     });
+  });
+
+  it('quotes the cap from the one label the forms also quote', () => {
+    // The form copy, the client-side check and this refusal all read
+    // `SLIDE_FILE_MAX_LABEL`, so a cap that moves cannot move in only one of
+    // them — which is how a form comes to promise what the server will refuse.
+    const refusal = validateSlideFile({ filename: 'a.pdf', size: SLIDE_FILE_MAX_BYTES + 1 });
+    expect(refusal).toEqual({
+      valid: false,
+      error: `That file is too large. The limit is ${SLIDE_FILE_MAX_LABEL}.`,
+    });
+    expect(SLIDE_FILE_MAX_LABEL).toBe('35 MB');
+  });
+});
+
+describe('isCommitTooLargeRefusal', () => {
+  it('recognises the blobs-API refusal GitHub actually sends', () => {
+    // Verbatim from a 40 MB upload against a real content repo, 2026-09-19 —
+    // this is the string, URL and all, that must never reach the form.
+    expect(
+      isCommitTooLargeRefusal({
+        status: 422,
+        message:
+          'Sorry, your input was too large to process. Consider creating the blob in a local ' +
+          'clone of the repository and then pushing it to GitHub. - ' +
+          'https://docs.github.com/rest/git/blobs#create-a-blob',
+      })
+    ).toBe(true);
+    // 413 needs no message to be unambiguous.
+    expect(isCommitTooLargeRefusal({ status: 413 })).toBe(true);
+  });
+
+  it('leaves every other 422 alone', () => {
+    // 422 is also how a ref race comes back, and a race is retried rather than
+    // reported to the author as a file that is too big.
+    expect(isCommitTooLargeRefusal({ status: 422, message: 'Update is not a fast forward' })).toBe(
+      false
+    );
+    expect(isCommitTooLargeRefusal({ status: 500, message: 'too large' })).toBe(false);
+    expect(isCommitTooLargeRefusal(new Error('too large'))).toBe(false);
+    expect(isCommitTooLargeRefusal(null)).toBe(false);
+    expect(isCommitTooLargeRefusal('too large')).toBe(false);
+  });
+
+  it('names the cap in the sentence the instructor gets', () => {
+    expect(SLIDE_FILE_TOO_LARGE_MESSAGE).toContain(SLIDE_FILE_MAX_LABEL);
+    // Nothing of GitHub's own advice survives into it.
+    expect(SLIDE_FILE_TOO_LARGE_MESSAGE).not.toMatch(/local clone|github\.com/i);
   });
 });
 

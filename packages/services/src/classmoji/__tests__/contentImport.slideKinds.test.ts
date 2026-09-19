@@ -80,6 +80,7 @@ vi.mock('../contentIndex.service.ts', () => ({
 }));
 
 const { importClassroomContent } = await import('../contentImport.service.ts');
+const { SLIDE_FILE_TOO_LARGE_MESSAGE } = await import('../../slides/slideSource.ts');
 
 const gitOrganization = { id: 'org-1', provider: 'GITHUB', login: 'test-org' };
 
@@ -275,7 +276,7 @@ describe('importing slides of every kind', () => {
  * A slide document is a different ORDER of thing from a deck, and the commit
  * has to treat it as one.
  *
- * A deck is kilobytes of text; a lecture PDF or a Keynote is up to the 75 MB
+ * A deck is kilobytes of text; a lecture PDF or a Keynote is up to the 35 MB
  * the upload policy allows, staged base64 and a third larger again. Putting
  * them in the deck batch meant a term of decks rode on whether every document
  * in the same run could be read and written — one 60 MB file and the commit
@@ -335,6 +336,29 @@ describe('a file slide’s document gets its own commit', () => {
     // And it is a warning, not a dead slide: no row points at the document
     // that was never written.
     expect(enqueueDeckThumbnail).toHaveBeenCalledTimes(1);
+  });
+
+  it("warns in our words when GitHub refuses the document, not in GitHub's", async () => {
+    sourceRows([fileSlide]);
+    uploadBatch.mockRejectedValueOnce(
+      Object.assign(
+        new Error(
+          'Sorry, your input was too large to process. Consider creating the blob in a local ' +
+            'clone of the repository and then pushing it to GitHub. - ' +
+            'https://docs.github.com/rest/git/blobs#create-a-blob'
+        ),
+        { status: 422 }
+      )
+    );
+
+    const summary = await run();
+
+    const warnings = summary.warnings.join(' ');
+    expect(warnings).toContain('Lecture 1');
+    expect(warnings).toContain(SLIDE_FILE_TOO_LARGE_MESSAGE);
+    // The instructor is not told to push from a local clone of a repository
+    // they have never seen.
+    expect(warnings).not.toMatch(/local clone/i);
   });
 
   it('reads one document at a time, after the decks are already safe', async () => {

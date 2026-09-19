@@ -74,8 +74,8 @@ export function declaredBodyTooLarge(headers: Headers, maxBytes: number): boolea
  * Read a body into its chunks, giving up as soon as it exceeds `maxBytes`.
  *
  * The chunks are handed back AS THEY ARRIVED rather than joined, because a
- * 75 MB upload is large enough that every avoidable copy of it is a second
- * 75 MB of heap held at the same moment. The callers below each consume the
+ * 35 MB upload is large enough that every avoidable copy of it is a second
+ * 35 MB of heap held at the same moment. The callers below each consume the
  * list in the way that costs them least.
  *
  * The stream is cancelled rather than drained on refusal, so the sender is told
@@ -165,7 +165,7 @@ function streamOfChunks(chunks: Uint8Array[]): ReadableStream<Uint8Array> {
  * The `Response` is built around a STREAM of the chunks we kept, not a
  * concatenation of them. The parser assembles its own contiguous copy either
  * way; handing it a joined buffer as well would mean holding two whole copies
- * of a 75 MB upload at once, on top of the file part the parser then produces.
+ * of a 35 MB upload at once, on top of the file part the parser then produces.
  * Draining the list releases our references as the parser takes them.
  *
  * Throws `UploadTooLargeError` for an over-cap body. Everything else — a

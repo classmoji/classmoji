@@ -34,7 +34,11 @@ import * as contentManifestService from './contentManifest.service.ts';
 import { createWithUniquePageSlug, ensureContentRepo, isPageSlugConflict } from './page.service.ts';
 // The slide FILE policy, from the module that has no cheerio in it — importing
 // the `./slides` barrel here would pull the deck engine into the import task.
-import { SLIDE_FILE_MAX_BYTES } from '../slides/slideSource.ts';
+import {
+  SLIDE_FILE_MAX_BYTES,
+  SLIDE_FILE_TOO_LARGE_MESSAGE,
+  isCommitTooLargeRefusal,
+} from '../slides/slideSource.ts';
 import type { Prisma } from '@prisma/client';
 
 // GitHub Contents API caps single-file reads at 1MB; larger files return no
@@ -816,7 +820,7 @@ async function collectFolderFiles({
  *
  * Separate from `collectFolderFiles` for one reason that decides everything
  * else: that walk skips any file over 1 MB, and a slide file is a lecture PDF
- * or a Keynote — almost always over 1 MB, up to the 75 MB policy cap. A copy
+ * or a Keynote — almost always over 1 MB, up to the 35 MB policy cap. A copy
  * that dropped it would leave a FILE row whose `source_path` names a document
  * nobody ever wrote, which is a broken slide rather than a missing image.
  *
@@ -827,7 +831,7 @@ async function collectFolderFiles({
  *
  * MEMORY, stated plainly: the body is staged base64 in memory alongside every
  * other file in the run, so a course of large decks is a large import. The cap
- * that bounds ONE of them is the same 75 MB the upload enforces; nothing bounds
+ * that bounds ONE of them is the same 35 MB the upload enforces; nothing bounds
  * the sum, and an import of a dozen half-full decks is the case to watch.
  *
  * Returns an empty list — never throws — for every reason a file cannot be
@@ -1377,7 +1381,7 @@ type SourceSlide = Prisma.SlideGetPayload<Record<string, never>>;
  * Two reasons, and both are about a slide document being a different ORDER of
  * thing from a deck. A deck is a `deck.json` and an `index.html`: kilobytes,
  * text, and dozens of them add up to a normal commit. A slide document is a
- * lecture PDF or a Keynote, up to the 75 MB the upload policy allows, staged
+ * lecture PDF or a Keynote, up to the 35 MB the upload policy allows, staged
  * base64 (a third larger again) — so a term of them in one list is hundreds of
  * megabytes held in this process before a single byte goes out, and one course
  * with a video-heavy Keynote in it was enough to put the whole slide phase at
@@ -1444,7 +1448,15 @@ async function commitSlideDocuments({
       // not know about is a slide nobody can download until the next sync.
       await recordContentAssets(target.classroomId, result.files);
     } catch (error: unknown) {
-      warn('slides', `skipped "${item.targetTitle}" — file commit failed: ${errText(error)}`);
+      // A document GitHub will not take is the one failure here with a cause
+      // the instructor can see from the outside, so it is named as such rather
+      // than passed through — GitHub's own sentence tells them to push from a
+      // local clone, which is not a thing an import can offer.
+      if (isCommitTooLargeRefusal(error)) {
+        warn('slides', `skipped "${item.targetTitle}" — ${SLIDE_FILE_TOO_LARGE_MESSAGE}`);
+      } else {
+        warn('slides', `skipped "${item.targetTitle}" — file commit failed: ${errText(error)}`);
+      }
       abandoned.add(item.source.id);
     }
     // `files` goes out of scope here, and with it the only reference to this

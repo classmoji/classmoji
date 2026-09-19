@@ -20,7 +20,7 @@
  *
  * `ContentService.upload` validates against the SHARED policy in
  * `validateFile.ts` — 5 MB, and an extension list built for page images — and
- * would refuse a 40 MB lecture PDF. `uploadBatch` validates nothing, which is
+ * would refuse a 30 MB lecture PDF. `uploadBatch` validates nothing, which is
  * why every call below runs `validateSlideFile` explicitly first. It is also
  * the path that routes a >1 MB body through the Git blobs API, which is
  * mandatory here: the Contents API caps at 1 MB and a slide file is usually
@@ -51,8 +51,10 @@ import {
 } from './slide.service.ts';
 import type { SlideContentTarget } from './slideContent.service.ts';
 import {
+  SLIDE_FILE_TOO_LARGE_MESSAGE,
   assertFileSlide,
   assertLinkSlide,
+  isCommitTooLargeRefusal,
   slideFileSourceProblem,
   slideFileStorageName,
   validateSlideFile,
@@ -501,7 +503,7 @@ export type SlideFileDelivery =
  * "this classroom has no Worker", which is a configuration state, not a fault.
  * `not_in_map`, `no_source` and `unsignable` mean the file itself is missing or
  * unaddressable, and reading it from GitHub would be papering over a real
- * problem with a 75 MB request.
+ * problem with a 30 MB request.
  */
 export async function openSlideFile(slide: SlideFileTarget): Promise<SlideFileDelivery> {
   if (slide.kind !== 'FILE') return { mode: 'unavailable', reason: 'not_a_file' };
@@ -634,7 +636,16 @@ async function discardLostUpload({
   }
 }
 
-/** The single-file commit both write paths share. */
+/**
+ * The single-file commit both write paths share.
+ *
+ * The refusal both of them can actually hit is translated HERE rather than in
+ * the two callers, because it belongs to the transport: `uploadBatch` posts the
+ * file base64 in a JSON body, and GitHub answers a body past its limit with a
+ * message that names a local clone. Raising it as a `SlideSourceError` puts it
+ * on the form as a 400 the author can do something about, and keeps GitHub's
+ * own sentence in the server log where it belongs.
+ */
 async function commitSlideFile({
   gitOrganization,
   repo,
@@ -648,13 +659,20 @@ async function commitSlideFile({
   file: Buffer;
   message: string;
 }): Promise<{ sha: string; commit: string }> {
-  const result = await ContentService.uploadBatch({
-    gitOrganization,
-    repo,
-    files: [{ path, content: file.toString('base64'), encoding: 'base64' }],
-    branch: 'main',
-    message,
-  });
+  let result;
+  try {
+    result = await ContentService.uploadBatch({
+      gitOrganization,
+      repo,
+      files: [{ path, content: file.toString('base64'), encoding: 'base64' }],
+      branch: 'main',
+      message,
+    });
+  } catch (error: unknown) {
+    if (!isCommitTooLargeRefusal(error)) throw error;
+    console.error(`[slideFile] GitHub refused ${path} (${file.length} bytes) as too large:`, error);
+    throw new SlideSourceError(SLIDE_FILE_TOO_LARGE_MESSAGE);
+  }
 
   const sha = result.files.find(entry => entry.path === path)?.sha;
   if (!sha) throw new Error('uploadBatch did not return a sha for the slide file');

@@ -32,6 +32,7 @@ vi.mock('../contentAssets.service.ts', async importActual => ({
 }));
 
 const { resolveSlideDownloadUrl } = await import('../contentDelivery.service.ts');
+const { SLIDE_FILE_MAX_BYTES } = await import('../../slides/slideSource.ts');
 const { verifyContentUrl } = await import('@classmoji/content-signing');
 
 const ORIGIN = 'https://cdn.classmoji.test';
@@ -190,7 +191,7 @@ describe('resolveSlideDownloadUrl: a row that cannot be trusted', () => {
   it('still signs a row whose size is at the cap', async () => {
     const result = await resolveSlideDownloadUrl(classroom, {
       ...fileSlide,
-      source_size: 75 * 1024 * 1024,
+      source_size: SLIDE_FILE_MAX_BYTES,
     });
     expect(result.ok).toBe(true);
   });
