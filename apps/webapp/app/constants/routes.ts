@@ -88,7 +88,7 @@ export const routes = {
     link: '/assignments',
     label: 'Assignments',
     icon: IconClipboardList,
-    roles: ['OWNER', 'STUDENT'],
+    roles: ['STUDENT'],
     category: 'content',
   },
   slides: {
