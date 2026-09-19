@@ -180,7 +180,9 @@ describe('reorderItems', () => {
     await reorderItems('mod1', ['b', 'a', 'c']);
 
     expect(itemFindMany).toHaveBeenCalledWith({
-      where: { module_id: 'mod1' },
+      // Legacy REPOSITORY items are hidden from the content list and keep
+      // their positions; only content items take part in the exact-set check.
+      where: { module_id: 'mod1', item_type: { not: 'REPOSITORY' } },
       select: { id: true },
     });
     expect(itemUpdate).toHaveBeenNthCalledWith(1, {

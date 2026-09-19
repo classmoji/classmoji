@@ -238,6 +238,22 @@ export const findByClassroomSlugAndModuleSlug = async (
   };
 };
 
+/**
+ * Every module in a classroom with everything each one owns, in display
+ * order, for the admin Modules page (one expandable card per module).
+ */
+export const listModuleContentsForClassroom = async (classroomId: string) => {
+  const modules = await getPrisma().module.findMany({
+    where: { classroom_id: classroomId },
+    include: DETAIL_INCLUDE,
+    orderBy: [{ position: 'asc' }, { created_at: 'asc' }],
+  });
+  return modules.map(m => ({
+    ...m,
+    items: m.items.filter(item => isItemTargetInClassroom(item, classroomId)),
+  }));
+};
+
 export const findById = async (id: string) => {
   return getPrisma().module.findUnique({ where: { id }, include: DETAIL_INCLUDE });
 };
@@ -514,8 +530,11 @@ export const reorderItems = async (
   const prisma = getPrisma();
   if (classroomId) await assertModuleInClassroom(moduleId, classroomId);
 
+  // Legacy REPOSITORY items are hidden from the admin content list (the
+  // module's repositories are shown from Repository.module_id instead), so the
+  // caller orders only the content items; those rows keep their positions.
   const existingItems = await prisma.moduleItem.findMany({
-    where: { module_id: moduleId },
+    where: { module_id: moduleId, item_type: { not: 'REPOSITORY' } },
     select: { id: true },
   });
   const existingIds = new Set(existingItems.map(item => item.id));

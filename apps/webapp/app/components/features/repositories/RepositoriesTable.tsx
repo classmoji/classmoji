@@ -1,7 +1,6 @@
 import { forwardRef, useMemo, useState } from 'react';
-import { App, Dropdown, Table, Tag } from 'antd';
+import { Dropdown, Table, Tag } from 'antd';
 import type { MenuProps } from 'antd';
-import { useNavigate, useParams } from 'react-router';
 import {
   IconChevronDown,
   IconChevronUp,
@@ -15,9 +14,7 @@ import {
   IconTrash,
 } from '@tabler/icons-react';
 
-import { ActionTypes } from '~/constants';
-import LocalStorage from '~/utils/localStorage';
-import { useGlobalFetcher } from '~/hooks';
+import { useRepositoryActions } from './useRepositoryActions';
 
 // An Assignment belongs to a Repository (origin schema: Assignment.repository_id).
 interface AssignmentRow {
@@ -105,11 +102,6 @@ const RepositoriesTable = ({
   showModuleColumn = true,
   bare = false,
 }: RepositoriesTableProps) => {
-  const navigate = useNavigate();
-  const { class: classSlug } = useParams();
-  const { fetcher, notify } = useGlobalFetcher();
-  const { modal } = App.useApp();
-
   // Controlled expansion so the folder icon can react to expanded state.
   // Default to fully expanded so the structure is visible.
   const allExpandableKeys = useMemo(() => {
@@ -127,109 +119,25 @@ const RepositoriesTable = ({
     [allExpandableKeys, collapsedKeys]
   );
 
-  // ---- repository-level actions (reuse existing list action.ts named actions) ----
-  const publishRepository = (id: string) => {
-    fetcher!.submit(
-      { assignment_id: id },
-      {
-        method: 'post',
-        action: `${actionBase}?/publish`,
-        encType: 'application/json',
-      }
-    );
-    LocalStorage.forceRefreshRepos();
-  };
-
-  const syncRepository = (id: string) => {
-    fetcher!.submit(
-      { assignment_id: id },
-      {
-        method: 'post',
-        action: `${actionBase}?/sync`,
-        encType: 'application/json',
-      }
-    );
-    LocalStorage.forceRefreshRepos();
-  };
-
-  const unpublishRepository = (id: string) => {
-    fetcher!.submit(
-      { assignment_id: id },
-      {
-        method: 'post',
-        action: `${actionBase}?/unpublish`,
-        encType: 'application/json',
-      }
-    );
-  };
-
-  const deleteRepository = (id: string) => {
-    notify(ActionTypes.DELETE_ASSIGNMENT, 'Deleting repository...');
-    fetcher!.submit(
-      { assignment_id: id },
-      {
-        method: 'delete',
-        action: `${actionBase}?/delete`,
-        encType: 'application/json',
-      }
-    );
-    LocalStorage.forceRefreshRepos();
-  };
-
-  const viewRepository = (record: RepositoryRow) =>
-    navigate(`/admin/${classSlug}/repos/${record.title}`, {
-      state: { assignment: record },
-    });
-  const editRepository = (record: RepositoryRow) =>
-    navigate(`/admin/${classSlug}/repos/form?title=${record.title}`, {
-      state: { assignment: record },
-    });
-
-  // ---- overflow ("⋯") menu: secondary + destructive actions, kept clear of
-  // the inline View/Edit links. Confirmations use modal.confirm since antd
-  // Popconfirm doesn't compose inside a Dropdown menu item.
-  const confirmSync = (id: string) =>
-    modal.confirm({
-      title: 'Sync repository',
-      content: 'This updates all student repositories with the latest changes.',
-      okText: 'Sync',
-      cancelText: 'Cancel',
-      onOk: () => syncRepository(id),
-    });
-
-  const confirmPublish = (id: string) =>
-    modal.confirm({
-      title: 'Publish repository',
-      content: 'This makes the repository available to all students.',
-      okText: 'Publish',
-      cancelText: 'Cancel',
-      onOk: () => publishRepository(id),
-    });
-
-  const confirmUnpublish = (id: string) =>
-    modal.confirm({
-      title: 'Unpublish repository',
-      content: 'This hides the repository from students. Repositories are not deleted.',
-      okText: 'Unpublish',
-      cancelText: 'Cancel',
-      onOk: () => unpublishRepository(id),
-    });
-
-  const confirmDelete = (id: string) =>
-    modal.confirm({
-      title: 'Delete repository',
-      content: 'This permanently deletes the repository and its assignments.',
-      okText: 'Delete',
-      okButtonProps: { danger: true },
-      cancelText: 'Cancel',
-      onOk: () => deleteRepository(id),
-    });
+  // Publish / sync / unpublish / delete + navigation, shared with the module
+  // cards so the two surfaces cannot drift.
+  const {
+    viewRepository,
+    editRepository,
+    confirmPublish,
+    confirmSync,
+    confirmUnpublish,
+    confirmDelete,
+  } = useRepositoryActions(actionBase);
 
   // The primary action (Publish / Sync) is surfaced as an inline button; the
   // overflow menu keeps only secondary + destructive actions.
   const repoMenuItems = (r: RepositoryRow): MenuProps['items'] => [
     ...(r.is_published
-      ? [{ key: 'unpublish', label: 'Unpublish', icon: <IconEyeOff size={15} /> }, { type: 'divider' as const }]
+      ? [
+          { key: 'unpublish', label: 'Unpublish', icon: <IconEyeOff size={15} /> },
+          { type: 'divider' as const },
+        ]
       : []),
     { key: 'delete', label: 'Delete', danger: true, icon: <IconTrash size={15} /> },
   ];
@@ -390,12 +298,18 @@ const RepositoriesTable = ({
               <ActionLink onClick={() => viewRepository(r)}>View</ActionLink>
               <ActionLink onClick={() => editRepository(r)}>Edit</ActionLink>
               {r.is_published ? (
-                <ActionLink className="inline-flex items-center gap-x-1" onClick={() => confirmSync(r.id)}>
+                <ActionLink
+                  className="inline-flex items-center gap-x-1"
+                  onClick={() => confirmSync(r.id)}
+                >
                   <IconRefresh size={15} />
                   Sync
                 </ActionLink>
               ) : (
-                <ActionLink className="inline-flex items-center gap-x-1" onClick={() => confirmPublish(r.id)}>
+                <ActionLink
+                  className="inline-flex items-center gap-x-1"
+                  onClick={() => confirmPublish(r.id)}
+                >
                   <IconCloudUpload size={15} />
                   Publish
                 </ActionLink>

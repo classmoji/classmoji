@@ -1,27 +1,21 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { data, useFetcher, useNavigate, useParams } from 'react-router';
-import { Button, Tag, Popconfirm, Modal, Select, Segmented, Switch, Tooltip } from 'antd';
+import { Button, Tag, Popconfirm, Switch, Tooltip } from 'antd';
 import {
   IconChevronLeft,
   IconStack2,
   IconPencil,
   IconTrash,
-  IconFileText,
-  IconFolder,
-  IconForms,
-  IconPresentation,
-  IconHelpCircle,
   IconArrowUp,
   IconArrowDown,
   IconPlus,
-  type Icon,
 } from '@tabler/icons-react';
 
 import { ClassmojiService } from '@classmoji/services';
-import type { FormAccess, FormStatus, ModuleItemType } from '@prisma/client';
 import { TriggerProgress } from '~/components';
 import FolderTabs from '~/components/ui/FolderTabs';
-import { formatCloseDate } from '~/components/features/modules/ReadOnlyModulesTree';
+import AddContentItemModal from '~/components/features/modules/AddContentItemModal';
+import { TYPE_META, describeItem } from '~/components/features/modules/moduleItemMeta';
 import RepositoriesTable from '~/components/features/repositories/RepositoriesTable';
 import AssignmentsTable, {
   type AssignmentRowData,
@@ -67,108 +61,6 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
   };
 };
 
-type ModuleItem = Route.ComponentProps['loaderData']['module']['items'][number];
-
-/** The item types the "Add item" picker offers. Repositories join a module
- * through Repository.module_id (the Repositories tab), not as an item. */
-type ContentItemType = Exclude<ModuleItemType, 'REPOSITORY'>;
-
-/**
- * Compile-time exhaustiveness guard for the switches over ModuleItemType below,
- * mirroring the one in module.service. Adding a value to the enum without
- * teaching every switch about it becomes a type error here rather than an item
- * that silently renders as "Unknown" / unpublished / unaddable.
- */
-const unhandledItemType = (type: never): never => {
-  throw new Error(`Unhandled ModuleItemType: ${String(type)}`);
-};
-
-const TYPE_META: Record<ModuleItemType, { label: string; icon: Icon }> = {
-  PAGE: { label: 'Page', icon: IconFileText },
-  // Legacy rows only; not offered by the picker.
-  REPOSITORY: { label: 'Repository', icon: IconFolder },
-  QUIZ: { label: 'Quiz', icon: IconHelpCircle },
-  SLIDE: { label: 'Slides', icon: IconPresentation },
-  FORM: { label: 'Form', icon: IconForms },
-};
-
-const CONTENT_TYPES: ContentItemType[] = ['PAGE', 'SLIDE', 'QUIZ', 'FORM'];
-
-// A form's two lifecycle axes, as an instructor reads them. Both are exhaustive
-// Records over their enums, so adding a status or an access mode fails to
-// compile here rather than rendering the raw enum name.
-const FORM_STATUS_TEXT: Record<FormStatus, string> = {
-  DRAFT: 'Draft',
-  OPEN: 'Open',
-  CLOSED: 'Closed',
-};
-const FORM_ACCESS_TEXT: Record<FormAccess, string> = {
-  PUBLIC: 'Public',
-  CLASSROOM: 'Classroom',
-};
-
-/** "Public · Open · closes Jan 12, 5:00 PM" — access, status, then the deadline. */
-const formSummary = (form: {
-  status: FormStatus;
-  access: FormAccess;
-  closes_at: Date | string | null;
-}): string =>
-  [
-    FORM_ACCESS_TEXT[form.access],
-    FORM_STATUS_TEXT[form.status],
-    ...(form.closes_at ? [`closes ${formatCloseDate(form.closes_at)}`] : []),
-  ].join(' · ');
-
-const itemLabel = (item: ModuleItem): string => {
-  switch (item.item_type) {
-    case 'PAGE':
-      return item.page?.title ?? '(deleted page)';
-    case 'REPOSITORY':
-      return item.repository?.title ?? '(deleted repository)';
-    case 'QUIZ':
-      return item.quiz?.name ?? '(deleted quiz)';
-    case 'SLIDE':
-      return item.slide?.title ?? '(deleted slides)';
-    case 'FORM':
-      return item.form?.title ?? '(deleted form)';
-    default:
-      return unhandledItemType(item.item_type);
-  }
-};
-
-// Display label + student-visibility for an item. Keep this client-safe: route
-// components cannot call server services without pulling Node-only code into
-// the browser bundle.
-//
-// `note` is the optional muted line after the title. Only forms use it today:
-// a form carries two axes the other types don't (who may open it, and when it
-// stops accepting answers), and neither is recoverable from the Published pill.
-const describeItem = (item: ModuleItem): { label: string; published: boolean; note?: string } => {
-  switch (item.item_type) {
-    case 'PAGE':
-      return { label: itemLabel(item), published: !!item.page && !item.page.is_draft };
-    case 'REPOSITORY':
-      return {
-        label: itemLabel(item),
-        published: !!item.repository && item.repository.is_published,
-      };
-    case 'QUIZ':
-      return { label: itemLabel(item), published: !!item.quiz && item.quiz.status !== 'DRAFT' };
-    case 'SLIDE':
-      return { label: itemLabel(item), published: !!item.slide && !item.slide.is_draft };
-    // Matches isItemPublished in module.service: a CLOSED form is still shown
-    // to students (reading "Closed"); only a DRAFT is hidden.
-    case 'FORM':
-      return {
-        label: itemLabel(item),
-        published: !!item.form && item.form.status !== 'DRAFT',
-        note: item.form ? formSummary(item.form) : undefined,
-      };
-    default:
-      return unhandledItemType(item.item_type);
-  }
-};
-
 const ModuleDetail = ({ loaderData }: Route.ComponentProps) => {
   const { module, candidates, boundQuizIds, boundFormIds } = loaderData;
   const { class: classSlug } = useParams();
@@ -181,12 +73,11 @@ const ModuleDetail = ({ loaderData }: Route.ComponentProps) => {
 
   const [editOpen, setEditOpen] = useState(false);
   const [addOpen, setAddOpen] = useState(false);
-  const [addType, setAddType] = useState<ContentItemType>('PAGE');
-  const [addTargetId, setAddTargetId] = useState<string | undefined>();
   const [assignmentModalOpen, setAssignmentModalOpen] = useState(false);
   const [editingAssignment, setEditingAssignment] = useState<AssignmentRowData | null>(null);
 
-  const items = module.items;
+  // Legacy REPOSITORY items duplicate the Repositories tab; hide them.
+  const items = module.items.filter(i => i.item_type !== 'REPOSITORY');
   const busy = itemFetcher.state !== 'idle';
 
   // Return to the list once the module is deleted.
@@ -196,26 +87,12 @@ const ModuleDetail = ({ loaderData }: Route.ComponentProps) => {
     }
   }, [deleteFetcher.state, deleteFetcher.data, classSlug, navigate]);
 
-  // Close + reset the add modal once an add settles successfully.
-  useEffect(() => {
-    if (itemFetcher.state === 'idle' && itemFetcher.data?.success && addOpen) {
-      setAddOpen(false);
-      setAddTargetId(undefined);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [itemFetcher.state, itemFetcher.data]);
-
   const post = (action: string, payload: Record<string, unknown>) =>
     itemFetcher.submit(JSON.stringify(payload), {
       method: 'post',
       action: `/admin/${classSlug}/modules?/${action}`,
       encType: 'application/json',
     });
-
-  const addItem = () => {
-    if (!addTargetId) return;
-    post('addItem', { moduleId: module.id, itemType: addType, targetId: addTargetId });
-  };
 
   const removeItem = (moduleItemId: string) => post('removeItem', { moduleItemId });
 
@@ -245,54 +122,18 @@ const ModuleDetail = ({ loaderData }: Route.ComponentProps) => {
       encType: 'application/json',
     });
 
-  // Target ids already in this module, so the picker can exclude them.
-  const addedIds = useMemo(
-    () => ({
-      PAGE: new Set(items.filter(i => i.item_type === 'PAGE').map(i => i.page_id)),
-      QUIZ: new Set(items.filter(i => i.item_type === 'QUIZ').map(i => i.quiz_id)),
-      SLIDE: new Set(items.filter(i => i.item_type === 'SLIDE').map(i => i.slide_id)),
-      FORM: new Set(items.filter(i => i.item_type === 'FORM').map(i => i.form_id)),
-    }),
-    [items]
-  );
-
-  const candidateOptions = (type: ContentItemType) => {
-    switch (type) {
-      case 'PAGE':
-        return candidates.pages
-          .filter(p => !addedIds.PAGE.has(p.id))
-          .map(p => ({ value: p.id, label: p.title }));
-      case 'QUIZ':
-        return candidates.quizzes
-          .filter(q => !addedIds.QUIZ.has(q.id))
-          .map(q => ({ value: q.id, label: q.name }));
-      case 'SLIDE':
-        return candidates.slides
-          .filter(s => !addedIds.SLIDE.has(s.id))
-          .map(s => ({ value: s.id, label: s.title }));
-      // A DRAFT form is addable on purpose — an instructor builds the module
-      // before opening the form — so the option says so rather than hiding it.
-      // The suffix stays plain text because the Select filters on `label`
-      // (optionFilterProp), which a JSX pill would break.
-      case 'FORM':
-        return candidates.forms
-          .filter(f => !addedIds.FORM.has(f.id))
-          .map(f => ({
-            value: f.id,
-            label: `${f.title} — ${FORM_ACCESS_TEXT[f.access]} · ${FORM_STATUS_TEXT[f.status]}`,
-          }));
-      default:
-        return unhandledItemType(type);
-    }
-  };
-
   const editModule: ModuleFormModule = {
     id: module.id,
     title: module.title,
     description: module.description,
   };
 
-  const moduleRef = { id: module.id, title: module.title, slug: module.slug, position: module.position };
+  const moduleRef = {
+    id: module.id,
+    title: module.title,
+    slug: module.slug,
+    position: module.position,
+  };
   const assignmentRows: AssignmentRowData[] = module.assignments.map(a => ({
     ...(a as unknown as AssignmentRowData),
     module: moduleRef,
@@ -317,7 +158,9 @@ const ModuleDetail = ({ loaderData }: Route.ComponentProps) => {
       children: (
         <>
           <RepositoriesTable
-            repositories={module.repositories as Parameters<typeof RepositoriesTable>[0]['repositories']}
+            repositories={
+              module.repositories as Parameters<typeof RepositoriesTable>[0]['repositories']
+            }
             actionBase={`/admin/${classSlug}/repos`}
             showModuleColumn={false}
             bare
@@ -499,7 +342,9 @@ const ModuleDetail = ({ loaderData }: Route.ComponentProps) => {
       </div>
 
       {deleteFetcher.data?.error && (
-        <div className="mb-4 text-sm text-rose-600 dark:text-rose-400">{deleteFetcher.data.error}</div>
+        <div className="mb-4 text-sm text-rose-600 dark:text-rose-400">
+          {deleteFetcher.data.error}
+        </div>
       )}
 
       {module.description && (
@@ -526,39 +371,14 @@ const ModuleDetail = ({ loaderData }: Route.ComponentProps) => {
         assignment={editingAssignment}
       />
 
-      <Modal
+      <AddContentItemModal
         open={addOpen}
-        onCancel={() => setAddOpen(false)}
-        title="Add item to module"
-        okText="Add"
-        onOk={addItem}
-        okButtonProps={{ disabled: !addTargetId }}
-        confirmLoading={busy}
-        cancelButtonProps={{ disabled: busy }}
-      >
-        <div className="flex flex-col gap-3 mt-2">
-          <Segmented
-            block
-            value={addType}
-            onChange={value => {
-              setAddType(value as ContentItemType);
-              setAddTargetId(undefined);
-            }}
-            options={CONTENT_TYPES.map(t => ({ value: t, label: TYPE_META[t].label }))}
-          />
-          <Select
-            showSearch
-            allowClear
-            className="w-full"
-            placeholder={`Select a ${TYPE_META[addType].label.toLowerCase()}…`}
-            optionFilterProp="label"
-            value={addTargetId}
-            onChange={setAddTargetId}
-            options={candidateOptions(addType)}
-            notFoundContent="Nothing available to add"
-          />
-        </div>
-      </Modal>
+        onClose={() => setAddOpen(false)}
+        classSlug={classSlug!}
+        moduleId={module.id}
+        items={items}
+        candidates={candidates}
+      />
     </div>
   );
 };
