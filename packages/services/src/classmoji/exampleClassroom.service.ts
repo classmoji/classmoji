@@ -7,7 +7,7 @@
  *  - is parameterized by the owner,
  *  - lives under a single shared mock GitOrganization whose
  *    `github_installation_id` is NULL, so GitHub-touching views (repositories,
- *    teams, repo-health, syllabus bot) short-circuit to clean empty states
+ *    teams, syllabus bot) short-circuit to clean empty states
  *    instead of attempting real API calls,
  *  - marks the classroom `is_example` (which is what auto-starts the tour), and
  *  - namespaces repository provider ids by owner login so they stay globally

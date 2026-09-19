@@ -632,12 +632,10 @@ const CommonLayout = ({
             pathname.includes('/tokens') ||
             pathname.includes('/teams') ||
             pathname.includes('/grading') ||
-            pathname.includes('/repo-health') ||
             pathname.includes('/submissions/') ||
             pathname.match(/\/slides(\/|$)/) ||
             pathname.match(/\/pages(\/|$)/) ||
-            pathname.match(/\/grades(\/|$)/) ||
-            pathname.match(/\/gitrepos(\/|$)/)
+            pathname.match(/\/grades(\/|$)/)
               ? ''
               : 'bg-panel rounded-2xl ring-1 ring-line'
           }`}

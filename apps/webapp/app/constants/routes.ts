@@ -10,7 +10,6 @@ import {
   IconSettings,
   IconUsersGroup,
   IconNumber,
-  IconBrandGithub,
   IconCoin,
   IconRotate,
   IconRobot,
@@ -20,7 +19,6 @@ import {
   IconLink,
   IconChecklist,
   IconClipboardList,
-  IconHeartRateMonitor,
   IconStack2,
   IconLifebuoy,
 } from '@tabler/icons-react';
@@ -42,10 +40,6 @@ export const routeCategories = {
   people: {
     label: 'People',
     items: ['students', 'teams', 'staff'],
-  },
-  integrations: {
-    label: 'Integrations',
-    items: ['gitrepos', 'repo-health'],
   },
   settings: {
     label: 'Settings',
@@ -186,22 +180,6 @@ export const routes = {
     // re-exports the admin loader (read only — no action lives there).
     roles: ['OWNER', 'TEACHER', 'ASSISTANT'],
     category: 'people',
-  },
-
-  // Integrations
-  gitrepos: {
-    link: '/gitrepos',
-    label: 'GitHub Repos',
-    icon: IconBrandGithub,
-    roles: ['OWNER'],
-    category: 'integrations',
-  },
-  'repo-health': {
-    link: '/repo-health',
-    label: 'Repo Health',
-    icon: IconHeartRateMonitor,
-    roles: ['OWNER'],
-    category: 'integrations',
   },
 
   // Assessment (continued)

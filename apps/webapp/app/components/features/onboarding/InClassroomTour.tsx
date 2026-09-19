@@ -326,25 +326,6 @@ const OWNER_STEPS: FeatureStep[] = [
     description: 'Click to create the page in your content repo and save it to the course.',
   },
   {
-    link: '/gitrepos',
-    title: 'GitHub repos',
-    description:
-      'This page mirrors every student and team repository created from your published coursework, pulled from your GitHub organization, so you can jump to any repo and confirm copies were created. This example course uses mock data with no real GitHub org, so the list here is empty.',
-  },
-  {
-    link: '/gitrepos',
-    selector: '[data-tour="gitrepos-refresh"]',
-    placement: 'bottom',
-    title: 'Refresh repositories',
-    description: 'Pull the latest repository list from your linked GitHub organization.',
-  },
-  {
-    link: '/repo-health',
-    title: 'Repo health',
-    description:
-      'Repo health surfaces patterns across student repositories, including commit timelines, contributor breakdowns, and flags for unusual activity, which helps you spot students who are stuck. Because this example course has no real repos, this view is empty here.',
-  },
-  {
     link: '/settings/general',
     selector: '[data-tour="settings-tab-general"]',
     placement: 'bottom',
