@@ -2,6 +2,14 @@
 export interface Env {
   /** R2 bucket used as the content cache. */
   CACHE: R2Bucket;
+  /**
+   * R2 bucket holding large media uploads — the PRIMARY copy, not a cache.
+   *
+   * Nothing in this Worker ever writes to it: the app uploads over the S3 API
+   * and this side only reads. An object missing from here is a 404 and not a
+   * cache miss, because there is no origin behind it to pull from.
+   */
+  MEDIA: R2Bucket;
   /** Cloudflare Images binding, used for width/format variants. */
   IMAGES: ImagesBinding;
   /** Webapp endpoint that mints short-lived GitHub installation tokens. */
