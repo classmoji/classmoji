@@ -29,6 +29,9 @@ const realFetch = globalThis.fetch;
 /** A classroom that is not the one the fixtures sign for. */
 const OTHER_CLASSROOM = 'c1a55c0d-0000-4000-8000-000000000002';
 
+/** The same media id with its first character percent-escaped. */
+const ENCODED_MEDIA_ID = `%${MEDIA_ID.charCodeAt(0).toString(16)}${MEDIA_ID.slice(1)}`;
+
 const STRICT_CSP = "default-src 'none'; sandbox";
 const DOWNLOAD_CSP = "default-src 'none'; sandbox allow-downloads";
 
@@ -362,6 +365,35 @@ describe('media refusals', () => {
 
     expect(response.status).toBe(403);
     expect(media.gets).toEqual([]);
+  });
+
+  it.each([
+    ['an encoded dot in the variant', (url: string) => url.replace('orig.mp4', 'orig%2Emp4')],
+    ['an encoded letter in the variant', (url: string) => url.replace('orig.mp4', '%6Frig.mp4')],
+    ['an encoded digit in the media id', (url: string) => url.replace(MEDIA_ID, ENCODED_MEDIA_ID)],
+  ])('403s %s — one URL has one spelling', async (_label, rewrite) => {
+    // The signature covers the DECODED value, so every escaped spelling of a
+    // media path would otherwise verify against the same signature: one signed
+    // URL, an unbounded family of cache keys and log lines.
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const media = mediaBucket();
+    const url = rewrite(await signedMediaUrl({ variant: 'orig.mp4' }));
+    const response = await worker.fetch(
+      new Request(url),
+      fakeEnv({ MEDIA: media as unknown as R2Bucket }),
+      fakeContext()
+    );
+
+    expect(response.status).toBe(403);
+    expect(await response.json()).toEqual({ error: 'malformed' });
+    expect(media.gets).toEqual([]);
+    expect(media.heads).toEqual([]);
+  });
+
+  it('still serves the canonical spelling of that same URL', async () => {
+    // The other half of the rule: nothing a legitimate caller sends changes.
+    const { response } = await fetchMedia(mediaBucket(), { variant: 'orig.mp4' });
+    expect(response.status).toBe(200);
   });
 
   it('403s an expired media URL', async () => {

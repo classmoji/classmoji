@@ -196,6 +196,26 @@ describe('routing', () => {
     expect(await response.json()).toEqual({ error: 'malformed' });
   });
 
+  it('403s a blob URL whose path is escaped rather than spelled out', async () => {
+    // `{sha}.{ext}` is hex and a short alphanumeric run — nothing in it needs
+    // escaping, so `%70ng` is not another path, it is another spelling of this
+    // one, and one signature must not authorise a family of them.
+    const bucket = fakeBucket({ [`blobs/${BLOB_SHA}`]: { body: 'png-bytes' } });
+    const url = (await signedBlobUrl({ sha: BLOB_SHA, ext: 'png' })).replace(
+      `${BLOB_SHA}.png`,
+      `${BLOB_SHA}.%70ng`
+    );
+    const response = await worker.fetch(
+      new Request(url),
+      fakeEnv({ CACHE: bucket as unknown as R2Bucket }),
+      fakeContext()
+    );
+
+    expect(response.status).toBe(403);
+    expect(await response.json()).toEqual({ error: 'malformed' });
+    expect(bucket.gets).toEqual([]);
+  });
+
   it("404s the resolver's dangling-reference URL rather than 403ing it", async () => {
     // The app mints /c/{classroomId}/missing/{encodedRepoPath} for a reference
     // it cannot resolve. A deleted file is not a tampered URL.
