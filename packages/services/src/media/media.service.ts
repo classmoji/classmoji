@@ -267,9 +267,15 @@ export async function createUpload({
 
   // Video-only options. For any other kind they are stored at their defaults
   // and nothing reads them, so an uploader cannot mark a PDF for transcoding.
+  //
+  // `keepOriginal` is forced true whenever `optimise` is off, and that is not a
+  // default but an invariant: dropping the original is only meaningful once a
+  // rendition has replaced it, so "do not transcode, and delete the only copy"
+  // is a request to delete the file. The dialog disables the checkbox for the
+  // same reason; this is the end that has to hold when something else asks.
   const isVideo = classified.kind === 'VIDEO';
   const optimise = isVideo ? options.optimise !== false : false;
-  const keepOriginal = isVideo ? options.keepOriginal !== false : true;
+  const keepOriginal = isVideo && optimise ? options.keepOriginal !== false : true;
   const allowDownload = isVideo ? options.allowDownload === true : false;
 
   // The sum and the insert it authorizes must see the same state, so they run

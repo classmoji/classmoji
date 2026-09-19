@@ -392,6 +392,36 @@ describe('createUpload', () => {
     });
   });
 
+  it('keeps the original whenever there will be no rendition to replace it', async () => {
+    // "Do not transcode, and delete the only copy" is a request to delete the
+    // file, so the second half cannot be honoured on its own.
+    await createUpload({
+      classroom,
+      userId: 'u',
+      filename: 'a.mp4',
+      sizeBytes: 10,
+      options: { optimise: false, keepOriginal: false },
+    });
+    expect(prisma.mediaObject.create.mock.calls[0][0].data).toMatchObject({
+      optimise: false,
+      keep_original: true,
+    });
+
+    // With optimise on, the uploader's choice stands.
+    prisma.mediaObject.create.mockClear();
+    await createUpload({
+      classroom,
+      userId: 'u',
+      filename: 'a.mp4',
+      sizeBytes: 10,
+      options: { optimise: true, keepOriginal: false },
+    });
+    expect(prisma.mediaObject.create.mock.calls[0][0].data).toMatchObject({
+      optimise: true,
+      keep_original: false,
+    });
+  });
+
   it('drops the reserving row when R2 will not open the upload', async () => {
     sendImpl.mockRejectedValue(new Error('r2 is down'));
     await expect(
