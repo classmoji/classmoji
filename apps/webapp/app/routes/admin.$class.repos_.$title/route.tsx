@@ -1,12 +1,5 @@
 import { Tabs, Switch, Card, Tag, Button, Tooltip } from 'antd';
-import {
-  IconFolder,
-  IconChevronLeft,
-  IconList,
-  IconTable,
-  IconPlus,
-  IconRobot,
-} from '@tabler/icons-react';
+import { IconFolder, IconChevronLeft, IconList, IconTable, IconRobot } from '@tabler/icons-react';
 import { useParams, useRevalidator, useNavigate, Outlet } from 'react-router';
 import { useState } from 'react';
 
@@ -19,7 +12,6 @@ import AssignmentTable from './AssignmentTable';
 import { action } from './action';
 import SummaryCards from './SummaryCards';
 import ModuleTable from './ModuleTable';
-import AssignmentsTab from './AssignmentsTab';
 import LinkedPages, { type LinkedPage } from './LinkedPages';
 import { requireClassroomAdmin } from '~/utils/routeAuth.server';
 import type { Route } from './+types/route';
@@ -79,8 +71,6 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
 
   const emojiMappings = await ClassmojiService.emojiMapping.findByClassroomId(classroom.id);
   const settings = await ClassmojiService.classroom.getClassroomSettingsForServer(classroom.id);
-  const students = await ClassmojiService.classroomMembership.findStudents(classroom.id);
-  const teams = await ClassmojiService.team.findByClassroomId(classroom.id);
 
   // Linked pages = pages linked to the repository unit + to any of its assignments.
   // PageLink rows carry `.page` (the Page) when includePages is set on the query.
@@ -126,8 +116,6 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
     emojiMappings,
     settings,
     classroom,
-    studentsCount: students.length,
-    teamsCount: teams.length,
     linkedPages,
     autogradingTestCount,
   };
@@ -141,8 +129,6 @@ const SingleRepository = ({ loaderData }: Route.ComponentProps) => {
     emojiMappings,
     settings,
     classroom,
-    studentsCount,
-    teamsCount,
     linkedPages,
     autogradingTestCount,
   } = loaderData;
@@ -290,35 +276,12 @@ const SingleRepository = ({ loaderData }: Route.ComponentProps) => {
       />
     );
 
-  // Grades first — it's where faculty go most often.
   const tabItems = [
     {
       key: 'grades',
       label: 'Grades',
       extra: gradesToggle,
       children: gradesContent,
-    },
-    {
-      key: 'assignments',
-      label: 'Assignments',
-      extra: (
-        <Button
-          icon={<IconPlus size={16} />}
-          onClick={() => navigate(`/admin/${classSlug}/repos/form?title=${repository!.title}`)}
-        >
-          New assignment
-        </Button>
-      ),
-      children: (
-        <AssignmentsTab
-          classSlug={classSlug}
-          repositoryId={repository!.id}
-          repositoryTitle={repository!.title}
-          assignments={
-            repository!.assignments as Parameters<typeof AssignmentsTab>[0]['assignments']
-          }
-        />
-      ),
     },
   ];
 
@@ -374,10 +337,6 @@ const SingleRepository = ({ loaderData }: Route.ComponentProps) => {
       <SummaryCards
         repository={repository as Parameters<typeof SummaryCards>[0]['repository']}
         repos={repos as Parameters<typeof SummaryCards>[0]['repos']}
-        studentsCount={studentsCount}
-        teamsCount={teamsCount}
-        emojiMappings={emojiMappings as Parameters<typeof SummaryCards>[0]['emojiMappings']}
-        settings={settings as Parameters<typeof SummaryCards>[0]['settings']}
       />
 
       <FolderTabs items={tabItems} defaultActiveKey="grades" panelClassName="min-h-[300px]" />

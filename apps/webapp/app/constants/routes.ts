@@ -10,17 +10,14 @@ import {
   IconSettings,
   IconUsersGroup,
   IconNumber,
-  IconBrandGithub,
   IconCoin,
   IconRotate,
   IconRobot,
   IconPresentation,
   IconBook,
   IconCalendar,
-  IconLink,
   IconChecklist,
   IconClipboardList,
-  IconHeartRateMonitor,
   IconStack2,
   IconLifebuoy,
   IconForms,
@@ -43,10 +40,6 @@ export const routeCategories = {
   people: {
     label: 'People',
     items: ['students', 'teams', 'staff'],
-  },
-  integrations: {
-    label: 'Integrations',
-    items: ['gitrepos', 'repo-health'],
   },
   settings: {
     label: 'Settings',
@@ -87,7 +80,8 @@ export const routes = {
     link: '/repos',
     label: 'Repositories',
     icon: IconFileText,
-    roles: ['OWNER', 'TEACHER', 'ASSISTANT', 'STUDENT'],
+    // Students have no repositories screen; their coursework lives in Modules.
+    roles: ['OWNER', 'TEACHER', 'ASSISTANT'],
     category: 'content',
   },
   assignments: {
@@ -126,13 +120,6 @@ export const routes = {
     // student forms list in v1.
     roles: ['OWNER', 'TEACHER'],
     isProTier: true,
-    category: 'content',
-  },
-  resources: {
-    link: '/resources',
-    label: 'Link Resources',
-    icon: IconLink,
-    roles: ['OWNER', 'TEACHER'],
     category: 'content',
   },
 
@@ -199,22 +186,6 @@ export const routes = {
     // re-exports the admin loader (read only — no action lives there).
     roles: ['OWNER', 'TEACHER', 'ASSISTANT'],
     category: 'people',
-  },
-
-  // Integrations
-  gitrepos: {
-    link: '/gitrepos',
-    label: 'GitHub Repos',
-    icon: IconBrandGithub,
-    roles: ['OWNER'],
-    category: 'integrations',
-  },
-  'repo-health': {
-    link: '/repo-health',
-    label: 'Repo Health',
-    icon: IconHeartRateMonitor,
-    roles: ['OWNER'],
-    category: 'integrations',
   },
 
   // Assessment (continued)

@@ -1,9 +1,7 @@
 import { task } from '@trigger.dev/sdk';
 import { appUrl, ClassmojiService, escapeVars } from '@classmoji/services';
 import { sendBatchEmailTask, sendEmailTask } from './email.ts';
-import { emojiShortcodes } from '@classmoji/utils';
-
-const emojiMap: Record<string, string> = emojiShortcodes;
+import { getEmojiSymbol } from '@classmoji/utils';
 
 interface GitRepoAssignmentGraderRecord {
   grader: {
@@ -95,7 +93,7 @@ export const requestRegradeTask = task({
               STUDENT_LOGIN: student.login,
               ASSIGNMENT_TITLE: gitRepoAssignment.assignment.title,
               ISSUE_URL: issueUrl,
-              PREVIOUS_GRADE: previous_grade.map(grade => emojiMap[grade] || grade).join(' '),
+              PREVIOUS_GRADE: previous_grade.map(grade => getEmojiSymbol(grade)).join(' '),
               STUDENT_COMMENT: student_comment || 'None',
             }),
           },

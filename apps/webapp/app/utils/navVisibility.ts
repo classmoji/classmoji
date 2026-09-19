@@ -7,7 +7,6 @@
 export interface NavVisibility {
   showModules: boolean;
   showPages: boolean;
-  showRepos: boolean;
   /**
    * Whether the classroom actually has any modules (published for students,
    * any for staff). The Modules nav item is hidden from non-owners when false,
@@ -26,7 +25,6 @@ export interface NavVisibility {
 export const DEFAULT_NAV_VISIBILITY: NavVisibility = {
   showModules: true,
   showPages: true,
-  showRepos: true,
   hasModules: true,
   hasPages: true,
 };
@@ -34,9 +32,8 @@ export const DEFAULT_NAV_VISIBILITY: NavVisibility = {
 // Settings arrive loosely typed (sanitized to Record<string, unknown>), so the
 // flags are read defensively while preserving the schema defaults.
 export const navVisibilityFromSettings = (
-  settings?: { show_modules?: unknown; show_pages?: unknown; show_repos?: unknown } | null
+  settings?: { show_modules?: unknown; show_pages?: unknown } | null
 ): NavVisibility => ({
   showModules: settings?.show_modules !== false,
   showPages: settings?.show_pages !== false,
-  showRepos: settings?.show_repos !== false,
 });

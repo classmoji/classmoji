@@ -7,7 +7,9 @@ import { requireStudentAccess } from '~/utils/helpers';
  * Student classroom index route - redirects to configured default page
  *
  * Handles redirect logic for `/student/{classSlug}` to the classroom's
- * configured default landing page (dashboard, repositories, or a specific page).
+ * configured default landing page (dashboard or a specific page). A stored
+ * `repositories` value from before that screen was removed falls through to
+ * the dashboard like any other unknown value.
  */
 export const loader = async ({ params, request }: Route.LoaderArgs) => {
   let classroom;
@@ -31,11 +33,6 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
   // Dashboard is the ultimate fallback
   if (defaultPage === 'dashboard') {
     return redirect('dashboard');
-  }
-
-  // Repositories route
-  if (defaultPage === 'repositories') {
-    return redirect('repos');
   }
 
   // Specific page - verify it exists and is visible to students

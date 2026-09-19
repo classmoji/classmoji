@@ -38,7 +38,6 @@ test.describe('Repository List', () => {
   }) => {
     // Header controls (owner-only).
     await expect(page.getByRole('button', { name: /New repository/i })).toBeVisible();
-    await expect(page.getByRole('button', { name: /Cleanup repos/i })).toBeVisible();
 
     // Table columns.
     const table = page.locator('table').first();

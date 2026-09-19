@@ -77,9 +77,15 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
       .filter(ra => ra.assignment?.is_published !== false)
       .map(ra => {
         const status = classifyStatus(ra);
+        // The student's (or their team's) own copy of the repository. With the
+        // student Repositories screen gone, this row is where they reach it.
+        const repoUrl =
+          gitOrgLogin && ra.git_repo?.name
+            ? `https://github.com/${gitOrgLogin}/${ra.git_repo.name}`
+            : null;
         const issueUrl =
-          gitOrgLogin && ra.git_repo?.name && ra.provider_issue_number
-            ? `https://github.com/${gitOrgLogin}/${ra.git_repo.name}/issues/${ra.provider_issue_number}`
+          repoUrl && ra.provider_issue_number
+            ? `${repoUrl}/issues/${ra.provider_issue_number}`
             : null;
         const gradersSummary = (ra.graders ?? [])
           .map(g => g.grader?.name)
@@ -110,6 +116,7 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
           studentDeadline: ra.assignment?.student_deadline
             ? new Date(ra.assignment.student_deadline).toISOString()
             : null,
+          repoUrl,
           issueUrl,
           grades: (ra.grades ?? []).map(g => ({ id: g.id, emoji: g.emoji })),
           gradersSummary,

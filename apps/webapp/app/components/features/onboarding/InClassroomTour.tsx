@@ -108,21 +108,6 @@ const OWNER_STEPS: FeatureStep[] = [
       'Save everything to create the repository with its assignments and linked content.',
   },
   {
-    link: '/repos',
-    selector: '[data-tour="repos-cleanup"]',
-    placement: 'bottom',
-    title: 'Cleanup repos',
-    description:
-      'Finds students no longer on your roster so you can remove their leftover repos; nothing is deleted until you confirm.',
-  },
-  {
-    link: '/repos',
-    selector: '[data-tour="repos-link-resources"]',
-    placement: 'bottom',
-    title: 'Link resources',
-    description: 'Attach pages, slides, or other resources to your repositories.',
-  },
-  {
     link: '/students',
     title: 'Your roster',
     description:
@@ -326,25 +311,6 @@ const OWNER_STEPS: FeatureStep[] = [
     description: 'Click to create the page in your content repo and save it to the course.',
   },
   {
-    link: '/gitrepos',
-    title: 'GitHub repos',
-    description:
-      'This page mirrors every student and team repository created from your published coursework, pulled from your GitHub organization, so you can jump to any repo and confirm copies were created. This example course uses mock data with no real GitHub org, so the list here is empty.',
-  },
-  {
-    link: '/gitrepos',
-    selector: '[data-tour="gitrepos-refresh"]',
-    placement: 'bottom',
-    title: 'Refresh repositories',
-    description: 'Pull the latest repository list from your linked GitHub organization.',
-  },
-  {
-    link: '/repo-health',
-    title: 'Repo health',
-    description:
-      'Repo health surfaces patterns across student repositories, including commit timelines, contributor breakdowns, and flags for unusual activity, which helps you spot students who are stuck. Because this example course has no real repos, this view is empty here.',
-  },
-  {
     link: '/settings/general',
     selector: '[data-tour="settings-tab-general"]',
     placement: 'bottom',
@@ -446,20 +412,6 @@ const STUDENT_STEPS: FeatureStep[] = [
     placement: 'top',
     title: 'Activity tabs',
     description: 'Switch between your recent feedback, team, and regrade activity.',
-  },
-  {
-    link: '/repos',
-    title: 'Your repositories',
-    description:
-      'Repositories are the units of coursework in the class, like labs, projects, and problem sets. Each one is your own GitHub repository, and the assignments inside it are GitHub issues you complete in that repo.',
-  },
-  {
-    link: '/repos',
-    selector: '[data-tour="repos-toggle"]',
-    placement: 'bottom',
-    title: 'Inside a repository',
-    description:
-      'Each repository is one of your coursework repos. Expand it to see its assignments and the resources your instructor attached, track how far along you are, then open the repo to start working.',
   },
   {
     link: '/assignments',

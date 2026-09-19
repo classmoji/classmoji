@@ -1,5 +1,5 @@
 import { Typography } from 'antd';
-import { getEmojiSymbol } from '@classmoji/utils';
+import Emoji from '~/components/ui/display/Emoji';
 
 const { Text } = Typography;
 
@@ -21,12 +21,10 @@ interface ProgressDividerProps {
 }
 
 function ProgressDivider({ emoji, briefFeedback, questionNum, isDarkMode }: ProgressDividerProps) {
-  const emojiSymbol = getEmojiSymbol(emoji) || emoji;
-
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
       <Text style={{ color: isDarkMode ? '#d1d5db' : '#374151' }}>
-        completed question {questionNum}: {emojiSymbol}
+        completed question {questionNum}: <Emoji emoji={emoji} fontSize={16} />
       </Text>
       {briefFeedback && (
         <Text style={{ color: isDarkMode ? '#9ca3af' : '#666' }}>{briefFeedback}</Text>
