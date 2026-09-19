@@ -50,6 +50,16 @@ vi.mock('@aws-sdk/s3-request-presigner', () => ({
   getSignedUrl: (...args: unknown[]) => getSignedUrl(...args),
 }));
 
+/**
+ * How deep inside `$transaction` the call currently running is.
+ *
+ * The quota's whole correctness claim is that the sum and the insert happen in
+ * ONE transaction, which is not something the return value can show — so the
+ * fake transaction raises this while the callback runs and the tests assert on
+ * it.
+ */
+let txDepth = 0;
+
 const prisma = {
   mediaObject: {
     findMany: vi.fn(),
@@ -59,6 +69,8 @@ const prisma = {
     updateMany: vi.fn(),
     delete: vi.fn(),
   },
+  $queryRaw: vi.fn(),
+  $transaction: vi.fn(),
 };
 vi.mock('@classmoji/database', () => ({ default: () => prisma }));
 
@@ -140,6 +152,20 @@ beforeEach(() => {
     row({ ...data })
   );
   prisma.mediaObject.updateMany.mockResolvedValue({ count: 1 });
+  txDepth = 0;
+  prisma.$queryRaw.mockReset();
+  prisma.$queryRaw.mockResolvedValue([{ id: CLASSROOM_ID }]);
+  prisma.$transaction.mockReset();
+  prisma.$transaction.mockImplementation(
+    async (run: (tx: typeof prisma) => Promise<unknown>): Promise<unknown> => {
+      txDepth += 1;
+      try {
+        return await run(prisma);
+      } finally {
+        txDepth -= 1;
+      }
+    }
+  );
   getProStateForClassroomId.mockResolvedValue({ isPro: true });
   configure();
 });
@@ -300,6 +326,40 @@ describe('createUpload', () => {
     await expect(
       createUpload({ classroom, userId: 'u', filename: 'a.mp4', sizeBytes: GIB })
     ).rejects.toMatchObject({ code: 'QUOTA_EXCEEDED' });
+  });
+
+  it('locks the classroom, sums and inserts inside ONE transaction', async () => {
+    // Ageing the reservation out only works if nothing can slip between the
+    // sum and the insert — which is a claim about WHERE the calls happen, not
+    // about what they return.
+    const where: string[] = [];
+    prisma.mediaObject.findMany.mockImplementation(async () => {
+      where.push(txDepth > 0 ? 'sum inside' : 'sum outside');
+      return [];
+    });
+    prisma.mediaObject.create.mockImplementation(async () => {
+      where.push(txDepth > 0 ? 'insert inside' : 'insert outside');
+      return row({ status: 'UPLOADING' });
+    });
+
+    await createUpload({ classroom, userId: 'u', filename: 'a.mp4', sizeBytes: 10 });
+
+    expect(where).toEqual(['sum inside', 'insert inside']);
+
+    // The lock itself, taken first and on this classroom's row.
+    const [strings, ...values] = prisma.$queryRaw.mock.calls[0] as [string[], ...unknown[]];
+    expect(strings.join('?')).toContain('FOR UPDATE');
+    expect(values).toEqual([CLASSROOM_ID]);
+    expect(prisma.$queryRaw.mock.invocationCallOrder[0]).toBeLessThan(
+      prisma.mediaObject.findMany.mock.invocationCallOrder[0]
+    );
+
+    // R2 is NOT inside: the lock blocks every other upload in the classroom.
+    expect(sent.every(call => call.name === 'CreateMultipartUpload')).toBe(true);
+    expect(prisma.$transaction.mock.invocationCallOrder[0]).toBeLessThan(
+      // The multipart is opened after the transaction has committed.
+      prisma.mediaObject.update.mock.invocationCallOrder[0]
+    );
   });
 
   it('defaults a video to optimise + keep original, and forces them off elsewhere', async () => {

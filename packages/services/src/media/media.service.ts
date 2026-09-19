@@ -16,6 +16,7 @@ import { classifyFilename } from './mediaKinds.ts';
 import {
   findMediaRow,
   liveRows,
+  liveRowsWhere,
   toMediaRecord,
   type MediaClassroom,
   type MediaRecord,
@@ -54,13 +55,26 @@ import { mediaBucket, r2Client } from './r2Client.ts';
  * honest rather than advisory: a client that declares 10 MB and uploads 2 GB
  * has its upload aborted and its row removed.
  *
- * ## The row is created first, and that is the quota
+ * ## The reservation is a row, and it is written under a lock
  *
- * An UPLOADING row younger than 24 hours counts against the classroom's quota.
- * Without that, two uploads started a second apart both see the same free space
- * and both fit. With it, the second one is refused — and an upload that is
- * abandoned rather than aborted stops counting when the window passes, so
- * nothing has to sweep. R2 aborts the abandoned multipart itself at 7 days.
+ * An UPLOADING row younger than 24 hours counts against the classroom's quota,
+ * so the reservation exists from the moment the upload is opened rather than
+ * from the moment it finishes. That alone is not enough: two uploads opened a
+ * millisecond apart would each read the free space the other had not yet
+ * reserved. So `createUpload` takes a row lock on the classroom
+ * (`SELECT … FOR UPDATE`) and does the SUM and the INSERT inside that one
+ * transaction — the second upload waits, re-reads, and is refused.
+ *
+ * What the lock covers is exactly that: this classroom's own concurrent
+ * creates. It is deliberately not held across the Pro lookup or any R2 call,
+ * because a slow bucket must not block every upload in a course.
+ *
+ * What it does NOT promise is that the bytes match: the quota is honest about
+ * what was DECLARED, and a client that declares 10 MB and writes 2 GB is caught
+ * by `completeUpload`'s size check before the row is ever READY. An upload that
+ * is abandoned rather than aborted simply stops counting when the 24-hour
+ * window passes, so nothing has to sweep; R2 aborts the abandoned multipart
+ * itself at 7 days.
  *
  * ## BigInt at the boundary
  *
@@ -193,7 +207,9 @@ function requireClient(): { client: S3Client; bucket: string } {
  *   5. quota — last, because it is the only one that depends on other rows.
  *
  * The row is written BEFORE the multipart is opened, and that is what the quota
- * reserves against. If `CreateMultipartUpload` then fails there is a row with no
+ * reserves against. The quota SUM and that INSERT share one transaction behind
+ * a `FOR UPDATE` lock on the classroom, so concurrent creates serialize; see
+ * the file header. If `CreateMultipartUpload` then fails there is a row with no
  * upload behind it; it is deleted here, and were that delete to fail too the
  * row ages out of the reservation window on its own.
  *
@@ -239,16 +255,11 @@ export async function createUpload({
     throw new MediaError('FILE_TOO_LARGE', 'This file is larger than the per-file limit');
   }
 
-  const current = await usage(classroom);
-  if (!current.isPro) {
+  const { isPro } = await getProStateForClassroomId(classroom.id);
+  if (!isPro) {
     throw new MediaError('PRO_REQUIRED', 'Media storage requires a Pro subscription');
   }
-  if (current.usedBytes + sizeBytes > current.quotaBytes) {
-    throw new MediaError('QUOTA_EXCEEDED', 'This file would put the class over its storage quota', {
-      usedBytes: current.usedBytes,
-      quotaBytes: current.quotaBytes,
-    });
-  }
+  const quotaBytes = quotaBytesFor(isPro);
 
   // Video-only options. For any other kind they are stored at their defaults
   // and nothing reads them, so an uploader cannot mark a PDF for transcoding.
@@ -257,19 +268,45 @@ export async function createUpload({
   const keepOriginal = isVideo ? options.keepOriginal !== false : true;
   const allowDownload = isVideo ? options.allowDownload === true : false;
 
-  const row = (await getPrisma().mediaObject.create({
-    data: {
-      classroom_id: classroom.id,
-      kind: classified.kind,
-      filename,
-      ext: classified.ext,
-      content_type: classified.contentType,
-      size_bytes: BigInt(sizeBytes),
-      uploaded_by: userId,
-      optimise,
-      keep_original: keepOriginal,
-      allow_download: allowDownload,
-    },
+  // The sum and the insert it authorizes must see the same state, so they run
+  // in ONE transaction behind a row lock on the classroom. Two uploads opened a
+  // millisecond apart serialize on that lock and the second one counts the
+  // reservation the first one left behind; without it they both read the same
+  // free space and both fit into it.
+  //
+  // Nothing slow is inside: no R2 call, no subscription lookup. The lock is
+  // held for one SELECT and one INSERT, because it blocks every other upload
+  // this classroom is opening.
+  const row = (await getPrisma().$transaction(async tx => {
+    await tx.$queryRaw`SELECT id FROM classrooms WHERE id = ${classroom.id} FOR UPDATE`;
+
+    const rows = (await tx.mediaObject.findMany({
+      where: liveRowsWhere(classroom.id),
+    })) as MediaRow[];
+    const usedBytes = rows.reduce((total, live) => total + billedBytes(live), 0);
+
+    if (usedBytes + sizeBytes > quotaBytes) {
+      throw new MediaError(
+        'QUOTA_EXCEEDED',
+        'This file would put the class over its storage quota',
+        { usedBytes, quotaBytes }
+      );
+    }
+
+    return tx.mediaObject.create({
+      data: {
+        classroom_id: classroom.id,
+        kind: classified.kind,
+        filename,
+        ext: classified.ext,
+        content_type: classified.contentType,
+        size_bytes: BigInt(sizeBytes),
+        uploaded_by: userId,
+        optimise,
+        keep_original: keepOriginal,
+        allow_download: allowDownload,
+      },
+    });
   })) as MediaRow;
 
   const key = mediaKey(classroom.id, row.id, `orig.${classified.ext}`);
