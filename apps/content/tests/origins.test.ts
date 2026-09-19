@@ -7,6 +7,7 @@ import {
   deliveryStrategy,
   type OriginAdapter,
 } from '../src/origins/types.ts';
+import { CLASSROOM, MEDIA_ID, fakeBucket, fakeEnv } from './helpers.ts';
 
 const realFetch = globalThis.fetch;
 
@@ -116,10 +117,50 @@ describe('deliveryStrategy', () => {
 });
 
 describe('MediaOrigin', () => {
-  it('is a declared seam, not a working backend', async () => {
-    const media = new MediaOrigin();
-    await expect(media.fetchBlob({ ...ref, sha: 'x' })).rejects.toThrow('not implemented');
-    await expect(media.fetchTree({ ...ref, treeSha: 'x' })).rejects.toThrow('not implemented');
-    await expect(media.presign({ ...ref, sha: 'x' })).rejects.toThrow('not implemented');
+  const mediaRef = { classroomId: CLASSROOM, mediaId: MEDIA_ID, variant: 'orig.mp4' };
+  const KEY = `m/${CLASSROOM}/${MEDIA_ID}/orig.mp4`;
+
+  it('never redirects', () => {
+    // A presigned R2 URL would leave `finalizeHeaders` behind — no CORS, no
+    // nosniff, no CSP — and hand the browser a URL we no longer control.
+    expect(new MediaOrigin().canPresign).toBe(false);
+  });
+
+  it('reads the classroom-scoped key, and reports the stored type', async () => {
+    const bucket = fakeBucket({ [KEY]: { body: 'bytes', contentType: 'video/mp4' } });
+    const env = fakeEnv({ MEDIA: bucket as unknown as R2Bucket });
+
+    const head = await new MediaOrigin().head(env, mediaRef);
+    expect(head?.contentType).toBe('video/mp4');
+    expect(head?.object.size).toBe('bytes'.length);
+    expect(bucket.heads).toEqual([KEY]);
+
+    const body = await new MediaOrigin().get(env, mediaRef);
+    expect(body?.contentType).toBe('video/mp4');
+    expect(bucket.gets).toEqual([KEY]);
+  });
+
+  it('falls back to the variant when the object has no stored type', async () => {
+    const bucket = fakeBucket({
+      [`m/${CLASSROOM}/${MEDIA_ID}/poster.webp`]: { body: 'bytes' },
+    });
+    const env = fakeEnv({ MEDIA: bucket as unknown as R2Bucket });
+
+    const head = await new MediaOrigin().head(env, { ...mediaRef, variant: 'poster.webp' });
+    expect(head?.contentType).toBe('image/webp');
+  });
+
+  it('passes a range straight to R2', async () => {
+    const bucket = fakeBucket({ [KEY]: { body: 'abcdefghij', contentType: 'video/mp4' } });
+    const env = fakeEnv({ MEDIA: bucket as unknown as R2Bucket });
+
+    await new MediaOrigin().get(env, mediaRef, { offset: 2, length: 3 });
+    expect(bucket.ranges).toEqual([{ key: KEY, range: { offset: 2, length: 3 } }]);
+  });
+
+  it('answers null for an object that is not there — there is no origin behind it', async () => {
+    const env = fakeEnv({ MEDIA: fakeBucket() as unknown as R2Bucket });
+    expect(await new MediaOrigin().head(env, mediaRef)).toBeNull();
+    expect(await new MediaOrigin().get(env, mediaRef)).toBeNull();
   });
 });
