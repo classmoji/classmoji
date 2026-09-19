@@ -28,7 +28,14 @@ export type MediaErrorCode =
   /** The row is not in the status this operation needs (completing a READY row). */
   | 'BAD_STATE'
   /** The object R2 assembled is not the size that was declared and reserved. */
-  | 'SIZE_MISMATCH';
+  | 'SIZE_MISMATCH'
+  /**
+   * The assembled object could not be read back, so its size was never checked.
+   * Treated exactly like a mismatch — the object is discarded rather than kept
+   * unverified — and distinct only so the client can say "try again" instead of
+   * "your file was the wrong size".
+   */
+  | 'VERIFY_FAILED';
 
 export class MediaError extends Error {
   readonly code: MediaErrorCode;

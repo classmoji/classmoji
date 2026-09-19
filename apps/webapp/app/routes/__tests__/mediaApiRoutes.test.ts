@@ -160,6 +160,7 @@ describe('POST /api/media/uploads', () => {
       ['NOT_FOUND', 404],
       ['BAD_STATE', 409],
       ['SIZE_MISMATCH', 409],
+      ['VERIFY_FAILED', 409],
     ];
 
     for (const [code, status] of cases) {

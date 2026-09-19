@@ -56,9 +56,10 @@ export function mediaError(
 /**
  * Which status each refusal is, in one table.
  *
- * `BAD_STATE` and `SIZE_MISMATCH` are both 409 and that is deliberate: both
- * mean "the object is not in the state this call assumes", and the distinct
- * `error` code in the body is what tells them apart for anyone who cares.
+ * `BAD_STATE`, `SIZE_MISMATCH` and `VERIFY_FAILED` are all 409 and that is
+ * deliberate: each means "the object is not in the state this call assumes",
+ * and the distinct `error` code in the body is what tells them apart for anyone
+ * who cares.
  */
 const STATUS_FOR: Record<string, number> = {
   NOT_CONFIGURED: 503,
@@ -69,6 +70,7 @@ const STATUS_FOR: Record<string, number> = {
   NOT_FOUND: 404,
   BAD_STATE: 409,
   SIZE_MISMATCH: 409,
+  VERIFY_FAILED: 409,
 };
 
 /**

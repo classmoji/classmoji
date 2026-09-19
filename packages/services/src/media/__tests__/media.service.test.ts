@@ -493,6 +493,48 @@ describe('completeUpload', () => {
     });
   });
 
+  it('retries the size check once before giving up on it', async () => {
+    let heads = 0;
+    sendImpl.mockImplementation(async (name: string) => {
+      if (name !== 'HeadObject') return {};
+      if (++heads === 1) throw new Error('503 slow down');
+      return { ContentLength: 4096 };
+    });
+
+    const result = await completeUpload({
+      classroom,
+      mediaId: MEDIA_ID,
+      parts: [{ partNumber: 1, etag: '"a"' }],
+    });
+
+    expect(heads).toBe(2);
+    expect(result).toMatchObject({ mediaId: MEDIA_ID });
+    expect(prisma.mediaObject.update.mock.calls.at(-1)?.[0].data).toMatchObject({
+      status: 'READY',
+    });
+  });
+
+  it('discards an object it could not read back at all', async () => {
+    // Unverified bytes in the bucket behind a row that ages out of the quota is
+    // the one outcome worse than a refusal.
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    sendImpl.mockImplementation(async (name: string) => {
+      if (name === 'HeadObject') throw new Error('r2 is down');
+      return {};
+    });
+
+    await expect(
+      completeUpload({ classroom, mediaId: MEDIA_ID, parts: [{ partNumber: 1, etag: '"a"' }] })
+    ).rejects.toMatchObject({ code: 'VERIFY_FAILED' });
+
+    expect(sent.filter(call => call.name === 'HeadObject')).toHaveLength(2);
+    expect(sent.find(call => call.name === 'DeleteObject')?.input).toMatchObject({ Key: ORIG_KEY });
+    expect(prisma.mediaObject.updateMany.mock.calls.at(-1)?.[0]).toMatchObject({
+      where: { id: MEDIA_ID, status: 'UPLOADING' },
+      data: expect.objectContaining({ status: 'DELETED' }),
+    });
+  });
+
   it('aborts and tombstones when the assembly itself fails', async () => {
     sendImpl.mockImplementation(async (name: string) => {
       if (name === 'CompleteMultipartUpload') throw new Error('bad part');

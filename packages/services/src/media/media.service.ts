@@ -452,6 +452,13 @@ async function markDeleted(
  * marked DELETED, and the caller is told. Not rounded down to a warning: a
  * client that can overrun its declaration can fill the bucket.
  *
+ * A `HeadObject` that FAILS is the same outcome, not a lesser one. Letting the
+ * error escape would leave a verified-by-nobody object in the bucket behind an
+ * UPLOADING row that ages out of the quota in a day — bytes paid for, billed to
+ * no one, reachable by nothing. One retry (R2 is briefly-unavailable far more
+ * often than it is wrong), and then the object is discarded exactly as a
+ * mismatch is.
+ *
  * ## The ETag contract, in one direction
  *
  * S3 returns a part's ETag QUOTED (`"a1b2…"`), `CompleteMultipartUpload` wants
@@ -472,6 +479,33 @@ async function markDeleted(
 function normalizeEtag(etag: string): string {
   const trimmed = etag.trim();
   return trimmed.startsWith('"') && trimmed.endsWith('"') ? trimmed : `"${trimmed}"`;
+}
+
+/** How many times the size check asks R2 before giving up on the object. */
+const HEAD_ATTEMPTS = 2;
+
+/**
+ * The assembled object's size, or null when R2 would not say.
+ *
+ * Retried once and no more: the failure this covers is a blip between the
+ * complete and the head, and a request that fails twice in a row is not one
+ * more attempt away from succeeding. Null rather than a throw, because the
+ * caller's answer to "I cannot verify this" is the same cleanup as "this is the
+ * wrong size" and the difference belongs in the error code, not in control flow.
+ */
+async function verifiedSize(client: S3Client, bucket: string, key: string): Promise<number | null> {
+  for (let attempt = 1; attempt <= HEAD_ATTEMPTS; attempt += 1) {
+    try {
+      const head = await client.send(new HeadObjectCommand({ Bucket: bucket, Key: key }));
+      return Number(head.ContentLength ?? -1);
+    } catch (error) {
+      console.warn(
+        `[media] Could not read back ${key} (attempt ${attempt}/${HEAD_ATTEMPTS}):`,
+        error instanceof Error ? error.message : error
+      );
+    }
+  }
+  return null;
 }
 
 export async function completeUpload({
@@ -524,13 +558,18 @@ export async function completeUpload({
     throw error;
   }
 
-  const head = await client.send(new HeadObjectCommand({ Bucket: bucket, Key: key }));
-  const actual = Number(head.ContentLength ?? -1);
+  const actual = await verifiedSize(client, bucket, key);
   const declared = Number(row.size_bytes);
 
-  if (actual !== declared) {
+  if (actual === null || actual !== declared) {
     await client.send(new DeleteObjectCommand({ Bucket: bucket, Key: key }));
     await markDeleted(row.id, 'UPLOADING');
+    if (actual === null) {
+      throw new MediaError(
+        'VERIFY_FAILED',
+        'The upload could not be verified and has been discarded; please try again'
+      );
+    }
     throw new MediaError('SIZE_MISMATCH', `Uploaded ${actual} bytes but ${declared} were declared`);
   }
 
