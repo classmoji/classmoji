@@ -15,12 +15,18 @@ import {
 } from '../../helpers/prisma.helpers';
 
 /**
- * The admin module builder: a module is an ordered list of mixed items, with a
- * student-visibility toggle. These specs drive the UI and assert the resulting
- * state in the DB (ModuleItem rows + Module.is_published).
+ * The admin module page: a module owns repositories and assignments (its
+ * Repositories / Assignments tabs) and an ordered list of content items
+ * (the Content tab), with a student-visibility toggle. These specs drive the
+ * UI and assert the resulting state in the DB.
  */
 
 const MODULE_PATH = (org: string, slug: string) => `/admin/${org}/modules/${slug}`;
+
+/** The ordered content list lives on its own tab. */
+const openContentTab = async (page: import('@playwright/test').Page) => {
+  await page.getByRole('button', { name: 'Content', exact: true }).click();
+};
 
 test.describe('Owner builds a module', () => {
   test('toggling "Visible to students" flips Module.is_published in the DB', async ({
@@ -52,15 +58,22 @@ test.describe('Owner builds a module', () => {
     testOrg,
   }) => {
     const classroom = await getClassroomBySlug(TEST_CLASSROOM);
-    const repoA = await seedRepositoryWithAssignment(classroom.id, 'qa-mod-repo-a');
-    const repoB = await seedRepositoryWithAssignment(classroom.id, 'qa-mod-repo-b');
+    const formA = await seedForm(classroom.id, 'qa-mod-form-a', {
+      status: 'OPEN',
+      access: 'PUBLIC',
+    });
+    const formB = await seedForm(classroom.id, 'qa-mod-form-b', {
+      status: 'OPEN',
+      access: 'PUBLIC',
+    });
     const mod = await seedModule(classroom.id, 'qa-reorder-module', { isPublished: false });
-    const itemA = await addModuleItem(mod.moduleId, 'REPOSITORY', repoA.repositoryId, 0);
-    const itemB = await addModuleItem(mod.moduleId, 'REPOSITORY', repoB.repositoryId, 1);
+    const itemA = await addModuleItem(mod.moduleId, 'FORM', formA.formId, 0);
+    const itemB = await addModuleItem(mod.moduleId, 'FORM', formB.formId, 1);
 
     try {
       await page.goto(MODULE_PATH(testOrg, 'qa-reorder-module'));
       await waitForDataLoad(page);
+      await openContentTab(page);
 
       // Initially [A, B].
       expect(await getModuleItemOrder(mod.moduleId)).toEqual([itemA.id, itemB.id]);
@@ -71,8 +84,8 @@ test.describe('Owner builds a module', () => {
       await expect.poll(async () => getModuleItemOrder(mod.moduleId)).toEqual([itemB.id, itemA.id]);
     } finally {
       await deleteModuleById(mod.moduleId);
-      await deleteRepositoryById(repoA.repositoryId);
-      await deleteRepositoryById(repoB.repositoryId);
+      await deleteFormById(formA.formId);
+      await deleteFormById(formB.formId);
     }
   });
 
@@ -99,6 +112,7 @@ test.describe('Owner builds a module', () => {
     try {
       await page.goto(MODULE_PATH(testOrg, 'zz-builder-form-module'));
       await waitForDataLoad(page);
+      await openContentTab(page);
 
       // The item row: its type Tag, and the form-only note carrying the two
       // axes the Published pill cannot express (who may open it, and when it
@@ -131,33 +145,55 @@ test.describe('Owner builds a module', () => {
     }
   });
 
-  test('adding a repository item creates a ModuleItem row', async ({
+  test('a repository seeded into the module is listed under its Repositories tab', async ({
     authenticatedPage: page,
     testOrg,
   }) => {
     const classroom = await getClassroomBySlug(TEST_CLASSROOM);
-    const repo = await seedRepositoryWithAssignment(classroom.id, 'qa-add-item-repo');
-    const mod = await seedModule(classroom.id, 'qa-add-item-module', { isPublished: false });
+    const mod = await seedModule(classroom.id, 'qa-repo-tab-module', { isPublished: false });
+    const repo = await seedRepositoryWithAssignment(classroom.id, 'qa-repo-tab-repo', {
+      moduleId: mod.moduleId,
+    });
 
     try {
-      await page.goto(MODULE_PATH(testOrg, 'qa-add-item-module'));
+      await page.goto(MODULE_PATH(testOrg, 'qa-repo-tab-module'));
       await waitForDataLoad(page);
 
-      await page.getByRole('button', { name: 'Add item' }).click();
-      // Pick the Repository type, then the seeded repo. The Segmented control's
-      // radio <input> is a zero-size, transparent overlay — not clickable — so
-      // the visible label (which carries a title attribute) is what's driven.
-      // The combobox is scoped to the dialog: the sidebar has one too.
-      const dialog = page.getByRole('dialog', { name: 'Add item to module' });
-      await dialog.getByTitle('Repository', { exact: true }).click();
-      await dialog.getByRole('combobox').click();
-      await page.getByTitle('qa-add-item-repo', { exact: true }).click();
-      await page.getByRole('button', { name: 'Add', exact: true }).click();
+      // Repositories is the default tab: the seeded repo and its assignment
+      // (the child row) are both there, with the assignment's weight.
+      await expect(page.getByText('qa-repo-tab-repo', { exact: true })).toBeVisible();
+      await expect(page.getByText(repo.assignmentTitle, { exact: true })).toBeVisible();
 
-      await expect.poll(async () => (await getModuleItemOrder(mod.moduleId)).length).toBe(1);
+      // The Assignments tab lists the same assignment flat, typed as a Repo one.
+      await page.getByRole('button', { name: 'Assignments', exact: true }).click();
+      const row = page.getByRole('row').filter({ hasText: repo.assignmentTitle });
+      await expect(row.getByText('Repo', { exact: true })).toBeVisible();
+    } finally {
+      await deleteRepositoryById(repo.repositoryId);
+      await deleteModuleById(mod.moduleId);
+    }
+  });
+
+  test('New repository from a module opens the form with that module preselected', async ({
+    authenticatedPage: page,
+    testOrg,
+  }) => {
+    const classroom = await getClassroomBySlug(TEST_CLASSROOM);
+    const mod = await seedModule(classroom.id, 'qa-new-repo-module', { isPublished: false });
+
+    try {
+      await page.goto(MODULE_PATH(testOrg, 'qa-new-repo-module'));
+      await waitForDataLoad(page);
+
+      await page.getByRole('button', { name: 'New repository' }).click();
+      await expect(page).toHaveURL(new RegExp(`/repos/form\\?module=${mod.moduleId}`));
+
+      // The picker is locked to the module the form was opened from.
+      const modulePicker = page.getByRole('combobox', { name: 'Module' });
+      await expect(modulePicker).toBeDisabled();
+      await expect(page.getByText('qa-new-repo-module', { exact: true }).first()).toBeVisible();
     } finally {
       await deleteModuleById(mod.moduleId);
-      await deleteRepositoryById(repo.repositoryId);
     }
   });
 });

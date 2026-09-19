@@ -173,6 +173,17 @@ export async function seedRepositoryWithAssignment(
   };
 }
 
+/** Read an Assignment's grading fields by id. Returns null when absent. */
+export async function getAssignmentById(
+  id: string
+): Promise<{ id: string; title: string; weight: number; is_extra_credit: boolean } | null> {
+  const prisma = getTestPrisma();
+  return prisma.assignment.findUnique({
+    where: { id },
+    select: { id: true, title: true, weight: true, is_extra_credit: true },
+  });
+}
+
 /**
  * Remove a Repository (and its cascading assignments / git repos) by id.
  * Safe to call in cleanup even if already deleted.

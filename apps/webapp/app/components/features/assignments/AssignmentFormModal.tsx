@@ -112,7 +112,16 @@ const AssignmentFormModal = ({
       default:
         return [];
     }
-  }, [kind, selectedModuleId, repositoriesByModule, quizzes, forms, boundQuizIds, boundFormIds, assignment]);
+  }, [
+    kind,
+    selectedModuleId,
+    repositoriesByModule,
+    quizzes,
+    forms,
+    boundQuizIds,
+    boundFormIds,
+    assignment,
+  ]);
 
   const emptyTargetHint = {
     REPO: 'This module has no repositories yet. Create one from the module page first.',
@@ -135,7 +144,9 @@ const AssignmentFormModal = ({
     if (isEdit) {
       payload.id = assignment!.id;
     } else {
-      payload.module_id = values.module_id;
+      // validateFields only returns rendered fields; when the module picker
+      // is hidden the module comes from the page that opened the modal.
+      payload.module_id = values.module_id ?? moduleId;
       payload.type = kind;
       payload.repository_id = kind === 'REPO' ? values.target_id : null;
       payload.quiz_id = kind === 'QUIZ' ? values.target_id : null;
@@ -217,7 +228,11 @@ const AssignmentFormModal = ({
           />
         </Form.Item>
 
-        <Form.Item name="title" label="Title" rules={[{ required: true, message: 'Enter a title' }]}>
+        <Form.Item
+          name="title"
+          label="Title"
+          rules={[{ required: true, message: 'Enter a title' }]}
+        >
           <Input placeholder="Lab 3: Linked lists" />
         </Form.Item>
 

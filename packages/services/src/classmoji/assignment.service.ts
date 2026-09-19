@@ -448,6 +448,11 @@ const toDate = (value: Date | string | null | undefined): Date | null | undefine
  */
 export const createInClassroom = async (classroomId: string, input: AssignmentWriteInput) => {
   const prisma = getPrisma();
+  // Prisma drops an undefined id from a `where`, which would turn this scoped
+  // lookup into "any module in the classroom". Refuse up front.
+  if (typeof input.module_id !== 'string' || !input.module_id) {
+    throw new Error('A module is required');
+  }
   const module = await prisma.module.findFirst({
     where: { id: input.module_id, classroom_id: classroomId },
     select: { id: true },
