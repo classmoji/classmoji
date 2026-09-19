@@ -6,10 +6,10 @@ import { contentTypeForMediaExt, isMediaVariant, mediaKey } from '@classmoji/con
  * It lives there because the WORKER has to build the identical key from the URL
  * path it just verified, and the app has to build it to write the object — two
  * codebases, one string, and a drift between them is a 404 nobody can explain.
- * It is not a signer: nothing here takes a secret or produces a signature,
- * which is why this module (and only this module, inside the media folder) is
- * allowed past the `no-restricted-imports` rule. Everything else in
- * `src/media/` reaches the helpers through here.
+ * Nothing here takes a secret or produces a signature, so none of it is behind
+ * the `no-restricted-imports` gate, which names the signing exports alone.
+ * Everything else in `src/media/` still reaches these helpers through here, so
+ * there is one place to look for what the two sides have agreed on.
  *
  * Its own file so the media modules that only READ — the delivery resolver's
  * lookup, the record shape — can have the key grammar without pulling the S3
