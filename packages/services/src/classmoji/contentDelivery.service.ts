@@ -999,6 +999,32 @@ async function mintMedia(
  * to say about media. A page of nothing but media refs costs one query and no
  * GitHub call at all.
  */
+/**
+ * What a `media://` reference resolves to when the layer is NOT acting.
+ *
+ * Every other kind of reference has an answer without the delivery layer: a
+ * repo path is a path, a legacy absolute URL is a URL, and handing either back
+ * unchanged renders the same file it always did. A media reference has no such
+ * fallback — the bytes are in R2, reachable only through a signed URL, and
+ * there is no proxy, no legacy route and no public object. So echoing the
+ * `media://…` string puts a scheme no browser understands into `src`, and a
+ * save that does not canonicalize would commit that back into the document.
+ *
+ * The placeholder is the honest answer: the same deterministic `/missing/` URL
+ * a deleted or unknown object gets, which `parseMissingUrl` turns back into the
+ * reference on the way to storage, so nothing is lost and a later render — once
+ * the flag is on again — resolves it properly.
+ *
+ * A deployment with no origin at all can form no URL, so there the reference
+ * does come back unchanged; there is nothing better, and nothing is being
+ * served on that deployment either way.
+ */
+function unresolvedMediaUrl(ctx: ResolveContext, ref: string): string {
+  const origin = process.env.CONTENT_DELIVERY_ORIGIN;
+  if (!origin) return ref;
+  return missingUrl(origin, ctx.classroom.id, ref);
+}
+
 async function resolveMediaRefs(
   ctx: ResolveContext,
   env: { origin: string; master: string },
@@ -1172,7 +1198,9 @@ export async function resolveAssetUrl(
   opts: { transform?: ResolveTransform } = {}
 ): Promise<string> {
   const env = deliveryEnvFor(ctx);
-  if (!env) return ref;
+  // A media reference has no legacy form to fall back to. See
+  // `unresolvedMediaUrl`.
+  if (!env) return parseMediaRef(ref) ? unresolvedMediaUrl(ctx, ref) : ref;
 
   // Media first, and BEFORE the map check: a media reference has nothing to do
   // with the content repo's tree, so resolving one must not pull a GitHub sync
@@ -1362,7 +1390,11 @@ export async function resolveDelivery(
 
   const env = deliveryEnvFor(ctx);
   if (!env) {
-    for (const ref of unique) urls.set(ref, ref);
+    // Same rule as `resolveAssetUrl`: everything else resolves to itself, and a
+    // media reference resolves to the placeholder. See `unresolvedMediaUrl`.
+    for (const ref of unique) {
+      urls.set(ref, parseMediaRef(ref) ? unresolvedMediaUrl(ctx, ref) : ref);
+    }
     return { urls, srcSets };
   }
 
