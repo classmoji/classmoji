@@ -518,6 +518,9 @@ export const pageContentApplyTool: ToolDefinition<PageContentApplyArgs> = {
 
     // Legacy HTML (or missing) content: granular ops are meaningless — only a
     // fresh replace_all is allowed (it writes a brand-new content.json).
+    // "Missing" is strictly a 404 on both files: an unreadable read rejects out
+    // of loadPageContent, so the sha-less create below is reachable only for a
+    // page that really has no content file, never for one we could not read.
     if (content.format !== 'json' && args.ops.some(op => op.op !== 'replace_all')) {
       throw new ToolError('invalid_params', LEGACY_GUIDANCE);
     }
@@ -1132,12 +1135,11 @@ export const pageCoverSetTool: ToolDefinition<PageCoverSetArgs> = {
     if (content.format === 'html') {
       throw new ToolError('invalid_params', COVER_LEGACY_GUIDANCE);
     }
-    // 'none' is NOT "this page is empty": loadPageContent returns it for any
-    // unreadable read, a GitHub 5xx and a secondary rate limit included. This
-    // tool writes the blocks back, so treating that as an empty page would
-    // replace a live document with one blank paragraph — and, having no sha to
-    // lock on, it would do it without the CAS that would otherwise refuse. A
-    // cover write never creates the file it edits.
+    // 'none' means the page has no content file — an unreadable read rejects
+    // before it gets here. This tool writes the blocks back, so it refuses that
+    // case too: a page with nothing to read from has no sha to lock on, and
+    // would be given one blank paragraph and a CAS-less write. A cover write
+    // never creates the file it edits.
     if (content.format !== 'json' || !content.sha) {
       throw new ToolError('invalid_params', COVER_NO_CONTENT_GUIDANCE);
     }

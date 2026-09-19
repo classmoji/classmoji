@@ -189,12 +189,35 @@ describe('pageContent.loadPageContent', () => {
     expect(result.sha).toBe('sha-html');
   });
 
-  it('returns format none with a null sha when neither file exists', async () => {
+  it('returns format none with a null sha when neither file exists (404 on both)', async () => {
     getContentMock.mockResolvedValue(null);
 
     const result = await loadPageContent(page);
 
     expect(result).toEqual({ format: 'none', blocks: null, coverImage: null, sha: null });
+    expect(getContentMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('rejects when the content.json read FAILS, rather than reporting format none', async () => {
+    // getContent answers null for a 404 and throws for everything else. 'none'
+    // is the cue every writer takes to create the file, so an unreadable read
+    // must not arrive dressed as an absent one — and must not fall through to
+    // the HTML probe either, which would make the answer depend on a second
+    // read of the same unreachable repo.
+    getContentMock.mockRejectedValueOnce(Object.assign(new Error('Server Error'), { status: 503 }));
+
+    await expect(loadPageContent(page, { skipCache: true })).rejects.toMatchObject({
+      status: 503,
+    });
+    expect(getContentMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects when the index.html fallback read fails (404 on content.json)', async () => {
+    getContentMock
+      .mockResolvedValueOnce(null) // content.json 404
+      .mockRejectedValueOnce(Object.assign(new Error('rate limited'), { status: 403 }));
+
+    await expect(loadPageContent(page)).rejects.toMatchObject({ status: 403 });
   });
 
   it('passes skipCache through to both reads', async () => {

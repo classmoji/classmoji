@@ -676,6 +676,35 @@ describe('page_content_apply', () => {
     expect(mocks.auditCreate).not.toHaveBeenCalled();
   });
 
+  it('a failed content read errors out — a replace_all does not write over it', async () => {
+    // The read rejects rather than answering format 'none' (pageContent
+    // service), and replace_all is the one op a non-json read admits: it would
+    // otherwise create content.json from the payload, with no sha to lock on.
+    mocks.loadPageContent.mockRejectedValue(
+      Object.assign(new Error('Server Error'), { status: 503 })
+    );
+
+    await expect(
+      pageContentApplyTool.handler(
+        {
+          ...APPLY_ARGS,
+          commit: 'direct' as const,
+          ops: [
+            {
+              op: 'replace_all' as const,
+              blocks: [{ type: 'paragraph', content: [{ type: 'text', text: 'Fresh' }] }],
+            },
+          ],
+        },
+        CTX
+      )
+    ).rejects.toMatchObject({ message: expect.stringContaining('Server Error') });
+
+    expect(mocks.savePageContent).not.toHaveBeenCalled();
+    expect(mocks.ensurePreviewBranch).not.toHaveBeenCalled();
+    expect(mocks.auditCreate).not.toHaveBeenCalled();
+  });
+
   it('a 422 when content DID exist is not swallowed as a conflict', async () => {
     mocks.savePageContent.mockRejectedValue(
       Object.assign(new Error('Validation Failed'), { status: 422 })
