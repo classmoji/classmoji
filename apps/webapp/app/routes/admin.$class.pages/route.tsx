@@ -267,7 +267,7 @@ export default function AdminPages({ loaderData }: Route.ComponentProps) {
       render: (title: string, record: PageRecord) => (
         <Link
           to={`/${rolePrefix}/${classSlug}/pages/${record.id}`}
-          className="font-medium !text-gray-600 dark:text-gray-100 hover:text-gray-900 dark:hover:text-gray-100"
+          className="font-medium !text-gray-600 dark:!text-gray-100 hover:!text-gray-900 dark:hover:!text-white"
         >
           {title}
         </Link>

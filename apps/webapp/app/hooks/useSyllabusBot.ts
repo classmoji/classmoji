@@ -40,6 +40,10 @@ export function useSyllabusBot({ classroomSlug, userRole }: UseSyllabusBotOption
   const [hasContentRepo, setHasContentRepo] = useState(false);
 
   const eventSourceRef = useRef<EventSource | null>(null);
+  // Answers only ever arrive over SSE, so "is the stream up?" is a precondition
+  // for sending, not a cosmetic detail. Tracked in a ref because sendMessage
+  // must read it at call time without re-subscribing on every change.
+  const streamAliveRef = useRef(false);
 
   /**
    * Initialize a new syllabus bot conversation
@@ -104,7 +108,11 @@ export function useSyllabusBot({ classroomSlug, userRole }: UseSyllabusBotOption
 
       const eventSource = new EventSource(`/api/syllabus-bot/stream/${convId}`);
       eventSourceRef.current = eventSource;
-      eventSource.addEventListener('connected', () => {});
+      streamAliveRef.current = false;
+
+      eventSource.addEventListener('connected', () => {
+        streamAliveRef.current = true;
+      });
 
       eventSource.addEventListener('assistant_response', event => {
         const data = JSON.parse(event.data);
@@ -129,18 +137,42 @@ export function useSyllabusBot({ classroomSlug, userRole }: UseSyllabusBotOption
         setMessages(prev => [...prev, newMessage]);
       });
 
+      // Two unrelated failures arrive on this one listener: a server-sent
+      // `event: error` (carries a JSON payload) and a transport failure
+      // (carries nothing). They need different handling.
       eventSource.addEventListener('error', event => {
         const messageEvent = event as MessageEvent;
-        const data = messageEvent.data ? JSON.parse(messageEvent.data) : {};
-        setError(data.error || 'Connection error');
-        setIsStreaming(false);
+
+        if (messageEvent.data) {
+          let payload: { error?: string } = {};
+          try {
+            payload = JSON.parse(messageEvent.data);
+          } catch {
+            // A non-JSON body is still a failure — just don't take the
+            // listener down on the way to reporting it.
+          }
+          setError(payload.error || 'The course assistant hit an error.');
+          setIsStreaming(false);
+          return;
+        }
+
+        // Transport failure. EventSource retries transient drops on its own,
+        // so only CLOSED is terminal — and that is exactly the case where no
+        // answer can ever arrive, so the composer has to be released instead
+        // of sitting disabled forever.
+        if (eventSource.readyState === EventSource.CLOSED) {
+          streamAliveRef.current = false;
+          setError(
+            'Lost the connection to the course assistant. Start a new conversation to retry.'
+          );
+          setIsStreaming(false);
+        }
       });
 
       eventSource.addEventListener('done', () => {
+        streamAliveRef.current = false;
         eventSource.close();
       });
-
-      eventSource.onerror = () => {};
     },
     [classroomSlug]
   );
@@ -151,6 +183,15 @@ export function useSyllabusBot({ classroomSlug, userRole }: UseSyllabusBotOption
   const sendMessage = useCallback(
     async (content: string) => {
       if (!conversationId || !content.trim()) return;
+
+      // The POST only acknowledges receipt; the reply comes back over SSE. If
+      // that stream is down, sending would set isStreaming with nothing left
+      // that could ever clear it — which is what left the input permanently
+      // disabled instead of showing a failure.
+      if (!streamAliveRef.current) {
+        setError('Not connected to the course assistant. Start a new conversation to retry.');
+        return;
+      }
 
       setIsStreaming(true);
       setError(null);
@@ -211,6 +252,7 @@ export function useSyllabusBot({ classroomSlug, userRole }: UseSyllabusBotOption
       eventSourceRef.current.close();
       eventSourceRef.current = null;
     }
+    streamAliveRef.current = false;
 
     try {
       const formData = new FormData();

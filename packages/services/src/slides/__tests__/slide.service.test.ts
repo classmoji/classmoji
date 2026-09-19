@@ -15,9 +15,13 @@ const slideDeleteMock = vi.fn();
 const slideUpdateMock = vi.fn();
 const gitOrgFindFirstMock = vi.fn();
 
+const classroomFindManyMock = vi.fn();
 vi.mock('@classmoji/database', () => ({
   default: () => ({
-    classroom: { findUnique: (...args: unknown[]) => classroomFindUniqueMock(...args) },
+    classroom: {
+      findUnique: (...args: unknown[]) => classroomFindUniqueMock(...args),
+      findMany: (...args: unknown[]) => classroomFindManyMock(...args),
+    },
     slide: {
       findUnique: (...args: unknown[]) => slideFindUniqueMock(...args),
       findFirst: (...args: unknown[]) => slideFindFirstMock(...args),
@@ -27,6 +31,8 @@ vi.mock('@classmoji/database', () => ({
       update: (...args: unknown[]) => slideUpdateMock(...args),
     },
     gitOrganization: { findFirst: (...args: unknown[]) => gitOrgFindFirstMock(...args) },
+    // The shared-theme delete asks which classrooms share the repo, so it can
+    // clear each one's rows for the folder it just removed.
   }),
 }));
 
@@ -54,6 +60,15 @@ vi.mock('../../classmoji/contentManifest.service.ts', () => ({
 const ensureContentRepoMock = vi.fn();
 vi.mock('../../classmoji/page.service.ts', () => ({
   ensureContentRepo: (...args: unknown[]) => ensureContentRepoMock(...args),
+}));
+
+// A delete has to forget the map rows too: blobs are content-addressed and
+// immutable, so a row that outlives its folder keeps serving the deleted deck's
+// last index.html out of R2.
+const removeContentAssetFolderMock = vi.fn();
+vi.mock('../../classmoji/contentAssets.service.ts', () => ({
+  removeContentAssetFolder: (...args: unknown[]) => removeContentAssetFolderMock(...args),
+  recordContentAssets: vi.fn(),
 }));
 
 const {
@@ -92,6 +107,8 @@ function seededIdGen(): () => string {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // Repo→classrooms lookup for the shared-theme delete's map cleanup.
+  classroomFindManyMock.mockResolvedValue([]);
   classroomFindUniqueMock.mockResolvedValue(classroom);
   slideFindFirstMock.mockResolvedValue(null);
   ensureContentRepoMock.mockResolvedValue({ repoName: 'content-test-org-26w' });
@@ -249,6 +266,37 @@ describe('createSlide', () => {
     expect(ensureContentRepoMock).not.toHaveBeenCalled();
     expect(uploadBatchMock).not.toHaveBeenCalled();
     expect(slideCreateMock).not.toHaveBeenCalled();
+  });
+
+  it('turns a lost create race into the same conflict the check would have given', async () => {
+    // The collision check is a read and the insert is a separate statement,
+    // with a GitHub commit in between — a second create for the same title
+    // started in that window passes the same read and one of them loses on the
+    // unique index. A raw P2002 reaching the route is an opaque 500 for what
+    // is, to the user, retitle-and-retry.
+    slideCreateMock.mockRejectedValueOnce(
+      Object.assign(new Error('Unique constraint failed on the fields: (`classroom_id`,`slug`)'), {
+        code: 'P2002',
+        meta: { target: ['classroom_id', 'slug'] },
+      })
+    );
+
+    await expect(
+      createSlide({ classroomId: 'class-1', title: 'Intro: Web!', createdBy: 'user-1' })
+    ).rejects.toMatchObject({ code: SLIDE_CONTENT_PATH_CONFLICT });
+  });
+
+  it('passes a P2002 that is NOT the slug index straight through', async () => {
+    // `slides` carries one composite unique today. A different violation is a
+    // different problem, and dressing it up as a content-path conflict would
+    // send the user off renaming a slide that is not the trouble.
+    slideCreateMock.mockRejectedValueOnce(
+      Object.assign(new Error('Unique constraint failed'), { code: 'P2002', meta: { target: [] } })
+    );
+
+    await expect(
+      createSlide({ classroomId: 'class-1', title: 'Intro: Web!', createdBy: 'user-1' })
+    ).rejects.toMatchObject({ code: 'P2002' });
   });
 
   it('rejects titles that normalize to an empty slug', async () => {

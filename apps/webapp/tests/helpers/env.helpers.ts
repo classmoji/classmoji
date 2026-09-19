@@ -5,9 +5,22 @@ export interface DevContext {
   webappUrl: string;
   apiUrl: string;
   quizAgentUrl: string;
+  /**
+   * The pages app's origin. The webapp does not serve pages, slides or forms
+   * itself — it only LINKS to them — so any spec asserting one of those hrefs
+   * has to know the same origin the webapp's loader read out of PAGES_URL.
+   */
+  pagesUrl: string;
   databaseUrl: string;
   devportName: string;
 }
+
+/**
+ * The pages-app origin the running webapp is linking to. Mirrors the loaders'
+ * own `process.env.PAGES_URL || 'http://localhost:7100'` default so a spec and
+ * the server it drives can never disagree about the expected href.
+ */
+const PAGES_URL_DEFAULT = 'http://localhost:7100';
 
 /**
  * Read environment configuration from .dev-context file
@@ -41,6 +54,7 @@ export function getDevContext(): DevContext {
     const webappMatch = content.match(/Webapp:\s+(https?:\/\/[^\s]+)/);
     const apiMatch = content.match(/API:\s+(http:\/\/localhost:\d+)/);
     const quizAgentMatch = content.match(/Quiz Agent:\s+(http:\/\/localhost:\d+)/);
+    const pagesMatch = content.match(/Pages:\s+(https?:\/\/[^\s]+)/);
     const dbMatch = content.match(/URL:\s+(postgresql:\/\/[^\s]+)/);
     const devportMatch = content.match(/DEVPORT_NAME=(\S+)/);
 
@@ -48,6 +62,9 @@ export function getDevContext(): DevContext {
       webappUrl: webappMatch?.[1] || process.env.WEBAPP_URL || 'http://localhost:3000',
       apiUrl: apiMatch?.[1] || process.env.API_URL || 'http://localhost:5000',
       quizAgentUrl: quizAgentMatch?.[1] || process.env.QUIZ_AGENT_URL || 'http://localhost:6000',
+      // .dev-context first: a devport moves the pages app off 7100, and the
+      // webapp process was started from that same file's ports.
+      pagesUrl: pagesMatch?.[1] || process.env.PAGES_URL || PAGES_URL_DEFAULT,
       databaseUrl: dbMatch?.[1] || process.env.DATABASE_URL || '',
       devportName: devportMatch?.[1] || 'default',
     };
@@ -58,6 +75,7 @@ export function getDevContext(): DevContext {
     webappUrl: process.env.WEBAPP_URL || 'http://localhost:3000',
     apiUrl: process.env.API_URL || 'http://localhost:5000',
     quizAgentUrl: process.env.QUIZ_AGENT_URL || 'http://localhost:6000',
+    pagesUrl: process.env.PAGES_URL || PAGES_URL_DEFAULT,
     databaseUrl: process.env.DATABASE_URL || '',
     devportName: process.env.DEVPORT_NAME || 'ci',
   };
@@ -68,6 +86,14 @@ export function getDevContext(): DevContext {
  */
 export function getBaseUrl(): string {
   return getDevContext().webappUrl;
+}
+
+/**
+ * The pages-app origin, for specs that assert a cross-app href the webapp
+ * renders (a page, or a form at `{pagesUrl}/{class}/forms/{slug}`).
+ */
+export function getPagesUrl(): string {
+  return getDevContext().pagesUrl;
 }
 
 /**

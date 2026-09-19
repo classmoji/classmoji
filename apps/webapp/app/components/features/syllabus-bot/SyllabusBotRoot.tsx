@@ -8,6 +8,7 @@ import useStore from '~/store';
 interface SyllabusBotConfig {
   enabled: boolean;
   slidesUrl?: string;
+  pagesUrl?: string;
   orgName?: string;
   courseName?: string;
 }
@@ -86,6 +87,7 @@ const SyllabusBotRoot = () => {
       key={`${currentClassroom}-${currentRole}`}
       classroomSlug={currentClassroom}
       slidesUrl={config.slidesUrl ?? ''}
+      pagesUrl={config.pagesUrl ?? ''}
       userLogin={user?.login ?? null}
       userRole={currentRole ?? ''}
       isOpen={isAskMojiOpen}

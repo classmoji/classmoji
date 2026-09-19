@@ -34,6 +34,14 @@ primary_region = 'iad'
   HOST = "0.0.0.0"
   PORT = "8080"
 
+# shared-cpu-2x, not 1x. A shared vCPU gets a 6.25% baseline quota plus a
+# 500-second burst credit bucket; the pooled quota scales with vCPU count, so
+# two vCPUs double the baseline to 12.5%. On 2026-08-27 the 1x machine drained
+# its bucket to zero during class hours, went to 75% steal, and served 221x 503
+# over two hours. Mean CPU is only 1-2% of a core — the failure mode is bursts
+# against a too-small baseline, not sustained load, so the fix is headroom in
+# the quota rather than a bigger machine.
 [[vm]]
   memory = '1gb'
-  cpus = 1
+  cpu_kind = 'shared'
+  cpus = 2

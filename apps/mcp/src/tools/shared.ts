@@ -42,6 +42,15 @@ export const OWNER_ONLY = ['OWNER'] as const;
  * minus STUDENT, which has no write surface.
  */
 export const QUIZ_STAFF = ['OWNER', 'TEACHER', 'ASSISTANT'] as const;
+/**
+ * Forms surface: apps/pages' `assertFormAdmin`
+ * (apps/pages/app/utils/formAuth.server.ts) composes `requireClassroomStaff`,
+ * which is OWNER | TEACHER — deliberately WITHOUT ASSISTANT, since form
+ * responses are applicant PII and the triage columns are a staff workflow.
+ * Same tier as OWNER_TEACHER; named separately so the forms batch documents
+ * which route it was derived from.
+ */
+export const FORMS_STAFF = OWNER_TEACHER;
 
 // ─── Results & errors ────────────────────────────────────────────────────────
 

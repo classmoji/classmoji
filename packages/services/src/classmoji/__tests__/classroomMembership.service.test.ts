@@ -316,7 +316,7 @@ describe('findStudentByLoginInClassroom', () => {
         id: true,
         comment: true,
         letter_grade: true,
-        user: { select: { id: true, name: true, login: true, image: true } },
+        user: { select: { id: true, name: true, login: true, image: true, school_id: true } },
       },
     });
   });

@@ -12,7 +12,10 @@ export function buildManifest(baseUrl: string, name: string) {
     name: name.toLowerCase(),
     url: baseUrl,
     hook_attributes: { url: webhookUrl, active: true },
-    default_events: ['issues', 'organization'],
+    // `push` feeds the content-asset map: hook-station syncs a classroom's
+    // path → SHA map when its content repo is pushed to. Only NEW installs get
+    // this from the manifest — the live App is already subscribed.
+    default_events: ['issues', 'organization', 'push'],
     redirect_url: `${baseUrl}/setup/callback`,
     callback_urls: [`${baseUrl}/api/auth/callback/github`],
     setup_url: `${baseUrl}/login/callback`,

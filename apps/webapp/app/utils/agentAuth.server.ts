@@ -56,14 +56,36 @@ export function signPayload(payload: Record<string, unknown>) {
 }
 
 /**
- * Remove auth metadata from payload (for safe logging)
+ * Every payload field that must never reach a log line. Kept as one list so the
+ * next credential added to a webapp -> ai-agent payload has an obvious place to
+ * be declared, instead of being remembered at each call site.
  *
- * @param {Object} payload - Payload with potential _auth field
- * @returns {Object} - Payload without _auth
+ *  - `_auth`     the HMAC signature and timestamp this module attaches.
+ *  - `mcpToken`  the per-turn MCP bearer minted by `mintMcpAccessToken`
+ *                (packages/auth/src/mcpToken.ts) and carried on every syllabus-bot
+ *                payload. `{ accessToken, expiresAt }` — `accessToken` is a live
+ *                bearer for the caller's whole MCP read surface for the next hour.
+ *                Stripping only `_auth` left it in: the helper's entire promise is
+ *                "safe to log", so a payload that still carries a working
+ *                credential after passing through here is worse than no helper at
+ *                all, because the call site believes it is sanitized.
+ */
+const SENSITIVE_PAYLOAD_FIELDS = ['_auth', 'mcpToken'] as const;
+
+/**
+ * Remove auth metadata and credentials from a payload, for safe logging.
+ *
+ * Drops the whole field rather than redacting inside it: an `mcpToken` gains a
+ * field one day and a redactor that walked its keys would quietly start passing
+ * the new one through.
+ *
+ * @param {Object} payload - Payload with potential `_auth` / `mcpToken` fields
+ * @returns {Object} - Payload with every field in SENSITIVE_PAYLOAD_FIELDS removed
  */
 export function stripAuthFromPayload(payload: Record<string, unknown> | null | undefined) {
   if (!payload) return payload;
 
-  const { _auth, ...rest } = payload;
+  const rest: Record<string, unknown> = { ...payload };
+  for (const field of SENSITIVE_PAYLOAD_FIELDS) delete rest[field];
   return rest;
 }

@@ -873,3 +873,61 @@ describe('merge3Units — hygiene', () => {
     expect(ours.slides[0].html).toBe('<p>edit</p>');
   });
 });
+
+// ─── Reveal runtime-layout tolerance (issue #361) ────────────────────────────
+//
+// Decks saved before the strip landed carry reveal.js layout()'s computed
+// `top` in attrs.style. The signature normalizes it away so the first
+// post-fix save reads as "nothing changed" rather than a phantom edit.
+
+describe('merge3Units — stored Reveal runtime layout', () => {
+  it('a stale base `top` vs a cleaned ours is UNCHANGED, and a real theirs edit merges clean', () => {
+    const base = deck([
+      slide('a', '<p>a</p>', { attrs: { style: 'top: 350px; margin: 0;' } }),
+      slide('b'),
+    ]);
+    // ours = the deck re-saved by a post-fix editor: identical minus `top`.
+    const ours = deck([slide('a', '<p>a</p>', { attrs: { style: 'margin: 0;' } }), slide('b')]);
+    const theirs = deck([
+      slide('a', '<p>a EDITED</p>', { attrs: { style: 'top: 350px; margin: 0;' } }),
+      slide('b'),
+    ]);
+
+    const result = merge3Units(base, ours, theirs);
+
+    expect(result.conflicts).toEqual([]);
+    expect(byId(result.merged, 'a').html).toBe('<p>a EDITED</p>');
+    expect(result.autoMerged).toBe(1);
+  });
+
+  it('sides differing ONLY in the computed top (or its absence) are unchanged — base rides verbatim', () => {
+    const base = deck([slide('a', '<p>a</p>', { attrs: { style: 'top: 350px;' } })]);
+    const ours = deck([slide('a', '<p>a</p>', { attrs: { style: 'top: 12px;' } })]);
+    const theirs = deck([slide('a', '<p>a</p>')]);
+
+    const result = merge3Units(base, ours, theirs);
+
+    expect(result.conflicts).toEqual([]);
+    expect(result.autoMerged).toBe(0);
+    // The merge engine is PURE and carries an unchanged unit from base
+    // verbatim — including a stale `top` a pre-#361 deck still holds. That is
+    // deliberate: this layer decides sameness, it does not clean. The cleaning
+    // contract lives at the content boundaries (slideContent.service loadDeck
+    // and saveDeck strip every slide), so in the real flow all three sides
+    // arrive clean and nothing stale can be committed either way. Both halves
+    // are needed: the tolerance here stops the phantom conflict, the boundary
+    // strip stops the phantom write.
+    expect(byId(result.merged, 'a')).toEqual(base.slides[0]);
+    expect(byId(result.merged, 'a').attrs).toEqual({ style: 'top: 350px;' });
+  });
+
+  it('a genuine style edit alongside the runtime top still conflicts', () => {
+    const base = deck([slide('a', '<p>a</p>', { attrs: { style: 'top: 350px; margin: 0;' } })]);
+    const ours = deck([slide('a', '<p>a</p>', { attrs: { style: 'margin: 10px;' } })]);
+    const theirs = deck([slide('a', '<p>a</p>', { attrs: { style: 'top: 4px; margin: 20px;' } })]);
+
+    const result = merge3Units(base, ours, theirs);
+
+    expect(result.conflicts).toMatchObject([{ id: 'a', reason: 'content' }]);
+  });
+});

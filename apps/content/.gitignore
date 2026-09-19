@@ -1,0 +1,9 @@
+.wrangler/
+dist/
+worker-configuration.d.ts
+
+# Local secrets for `wrangler dev`. README.md has called this file git-ignored
+# since it was written, and it was not — the signing secret and the token
+# endpoint's bearer were one `git add apps/content` away from the history.
+.dev.vars
+.dev.vars.*

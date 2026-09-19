@@ -2,17 +2,25 @@
  * Unit tests for the quizzes resource Pro gate (finding A3) and the calendar
  * resource's allowlist shaping (finding U5).
  *
- * A3 (SUPERSEDED — kept as the history of why this looks the way it does):
+ * A3 (SUPERSEDED TWICE — kept as the history of why this looks the way it does):
  * assertProTier used to resolve the subscription by BARE slug, guarded by a
  * re-resolution that refused when the slug landed on a different classroom than
  * the caller was authorized for. The premise was that slugs were unique only
  * per git org; they have been GLOBALLY unique since the
  * 20260818103726_classroom_slug_global_unique migration, so the guard could
- * never fire. The gate now takes the AUTHORIZED `classroomId` straight from the
- * tool context and asks `subscription.getProStateForClassroomId`, which is also
- * the single owner of the `ends_at` activity test. The tests below pin what
- * actually matters now: the gate keys on the authorized id and never on the
- * URI's slug, and a lapsed PRO row does not open it.
+ * never fire, and the gate was rewritten to take the authorized `classroomId`.
+ * That version was this app's OWN copy of a platform-wide rule; it is now
+ * retired. `@classmoji/auth/server`'s lifted `assertProTier` is the single
+ * implementation (webapp, apps/pages' forms subtree, this server), and
+ * ../../authz/proTier.ts only translates its thrown 403 Response into a
+ * ToolError. What "Pro" means — tier plus the `ends_at` activity test — is
+ * pinned once, in packages/auth/src/__tests__/proTier.test.ts.
+ *
+ * So the tests below pin what is still THIS app's to get right: the gate is
+ * asked about the AUTHORIZED classroom (its slug, off the resolved context) and
+ * never about the URI's slug; a 403 becomes a `forbidden` ToolError before any
+ * quiz data is read; and a NON-Response failure is not laundered into
+ * "you need Pro".
  *
  * U5: calendar.getClassroomCalendar rows spread `...event`, carrying the raw
  * pageLinks/slideLinks include (UNFILTERED — draft page/slide titles) plus
@@ -28,17 +36,19 @@ import { ToolError } from '../../mcp/errors.ts';
 import type { ToolContext } from '../../mcp/registry.ts';
 
 const findBySlug = vi.fn();
-const getProStateForClassroomId = vi.fn();
+const assertProTier = vi.fn();
 const findByClassroom = vi.fn();
 const getQuizzesForStudent = vi.fn();
 const getClassroomCalendar = vi.fn();
 
+/** The lifted platform gate the wrapper delegates to (see the module note). */
+vi.mock('@classmoji/auth/server', () => ({
+  assertProTier: (...a: unknown[]) => assertProTier(...a),
+}));
+
 vi.mock('@classmoji/services', () => ({
   ClassmojiService: {
     classroom: { findBySlug: (...a: unknown[]) => findBySlug(...a) },
-    subscription: {
-      getProStateForClassroomId: (...a: unknown[]) => getProStateForClassroomId(...a),
-    },
     quiz: {
       findByClassroom: (...a: unknown[]) => findByClassroom(...a),
       getQuizzesForStudent: (...a: unknown[]) => getQuizzesForStudent(...a),
@@ -51,7 +61,11 @@ const { calendarResource, quizzesResource } = await import('../content.ts');
 
 const VARS = { org: 'twin-org', slug: 'winter-2025' };
 
-/** ToolContext for an OWNER authorized in classroom `class-1`. */
+/**
+ * ToolContext for an OWNER authorized in classroom `class-1`, whose OWN slug is
+ * `authorized-slug` — deliberately different from the URI's `winter-2025`, so
+ * "gates on the authorized classroom, never on the URI" is a sharp assertion.
+ */
 function ownerCtx(settings: Record<string, unknown> = {}): ToolContext {
   return {
     viewer: { userId: 'owner-1', clientId: 'c', scopes: new Set(['read']) },
@@ -60,7 +74,7 @@ function ownerCtx(settings: Record<string, unknown> = {}): ToolContext {
       role: 'OWNER',
       status: 'ACTIVE',
       membership: { id: 'm-1', role: 'OWNER' },
-      classroom: { settings },
+      classroom: { slug: 'authorized-slug', settings },
     },
   } as unknown as ToolContext;
 }
@@ -81,23 +95,18 @@ function studentCtx(): ToolContext {
 
 beforeEach(() => {
   findBySlug.mockReset();
-  getProStateForClassroomId.mockReset();
+  assertProTier.mockReset();
+  assertProTier.mockResolvedValue(undefined);
   findByClassroom.mockReset();
   getQuizzesForStudent.mockReset();
   getClassroomCalendar.mockReset();
 });
 
 describe('quizzes resource Pro gate (A3)', () => {
-  it('gates on the AUTHORIZED classroom id, never on the URI slug', async () => {
-    // The URI names `winter-2025`; the authorized context names `class-1`. The
-    // gate must ask about class-1 and must not re-resolve the slug at all —
-    // that round trip was the twin guard, and it is gone.
-    getProStateForClassroomId.mockResolvedValue({
-      tier: 'PRO',
-      isActive: true,
-      isPro: true,
-      subscription: { id: 'sub-pro' },
-    });
+  it('gates on the AUTHORIZED classroom, never on the URI slug', async () => {
+    // The URI names `winter-2025`; the authorized context's own slug is
+    // `authorized-slug`. The gate must be asked about the latter, and the
+    // resource must not re-resolve the URI's slug at all.
     findByClassroom.mockResolvedValue([
       { id: 'q1', name: 'Quiz 1', status: 'PUBLISHED', weight: 1, question_count: 3 },
     ]);
@@ -108,22 +117,19 @@ describe('quizzes resource Pro gate (A3)', () => {
       new URL('classmoji://x')
     )) as { quizzes: Array<{ id: string }> };
 
-    expect(getProStateForClassroomId).toHaveBeenCalledWith('class-1');
+    expect(assertProTier).toHaveBeenCalledWith('authorized-slug');
+    expect(assertProTier).not.toHaveBeenCalledWith('winter-2025');
     expect(findBySlug).not.toHaveBeenCalled();
     expect(findByClassroom).toHaveBeenCalledWith('class-1', expect.anything());
     expect(result.quizzes.map(q => q.id)).toEqual(['q1']);
   });
 
-  it('REFUSES a lapsed PRO row before touching any quiz data', async () => {
-    // {tier:'PRO', ends_at: past} is a real shape: the Stripe handlers stamp
-    // `ends_at` rather than rewriting `tier`. A tier-only check serves it
-    // forever; `isPro` folds the activity test in.
-    getProStateForClassroomId.mockResolvedValue({
-      tier: 'PRO',
-      isActive: false,
-      isPro: false,
-      subscription: { id: 'sub-lapsed' },
-    });
+  it('turns the gate’s 403 into a forbidden ToolError before touching quiz data', async () => {
+    // The lifted helper's refusal shape. Whether the row was FREE or a lapsed
+    // {tier:'PRO', ends_at: past} is decided there, not here.
+    assertProTier.mockRejectedValue(
+      new Response('This feature requires a Pro subscription', { status: 403 })
+    );
 
     const err = await quizzesResource
       .handler(VARS, ownerCtx({ quizzes_enabled: true }), new URL('classmoji://x'))
@@ -131,23 +137,22 @@ describe('quizzes resource Pro gate (A3)', () => {
 
     expect(err).toBeInstanceOf(ToolError);
     expect((err as ToolError).kind).toBe('forbidden');
+    expect((err as ToolError).message).toBe('This feature requires a Pro subscription');
     expect(findByClassroom).not.toHaveBeenCalled();
   });
 
-  it('REFUSES a FREE classroom', async () => {
-    getProStateForClassroomId.mockResolvedValue({
-      tier: 'FREE',
-      isActive: false,
-      isPro: false,
-      subscription: null,
-    });
+  it('does NOT launder a non-Response failure into "you need Pro"', async () => {
+    // A database outage inside the gate must surface as itself. Translating
+    // every throw into `forbidden` would tell an owner their subscription had
+    // lapsed when it had not.
+    assertProTier.mockRejectedValue(new Error('connection reset'));
 
     const err = await quizzesResource
       .handler(VARS, ownerCtx({ quizzes_enabled: true }), new URL('classmoji://x'))
       .catch(e => e);
 
-    expect(err).toBeInstanceOf(ToolError);
-    expect((err as ToolError).kind).toBe('forbidden');
+    expect(err).not.toBeInstanceOf(ToolError);
+    expect((err as Error).message).toBe('connection reset');
     expect(findByClassroom).not.toHaveBeenCalled();
   });
 });

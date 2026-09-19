@@ -1,0 +1,75 @@
+---
+title: Environment variables
+description: All environment variables required to run Classmoji
+---
+
+### Core
+
+| Name | Required | Default | Description |
+|------|----------|---------|-------------|
+| `DATABASE_URL` | Yes | | PostgreSQL connection string for the Classmoji database. |
+| `BETTER_AUTH_SECRET` | Yes | | Secret used to sign auth sessions and tokens. Generate with `openssl rand -base64 32`. |
+| `WEBAPP_URL` | Yes | | Public base URL of the main web app (e.g. `http://localhost:3000`). |
+| `SLIDES_URL` | Yes | | Public base URL of the slides service. |
+| `PAGES_URL` | Yes | | Public base URL of the pages service. |
+
+### Github integration
+
+| Name | Required | Default | Description |
+|------|----------|---------|-------------|
+| `GITHUB_APP_NAME` | No | | Slug of your Github App, used to build install and authorization links. |
+| `GITHUB_APP_ID` | No | | Numeric ID of your Github App. |
+| `GITHUB_CLIENT_ID` | No | | OAuth client ID for Github sign-in. |
+| `GITHUB_CLIENT_SECRET` | No | | OAuth client secret for Github sign-in. |
+| `GITHUB_WEBHOOK_SECRET` | No | | Secret used to verify incoming Github webhook signatures. Generate with `openssl rand -base64 32`. |
+| `GITHUB_PRIVATE_KEY_BASE64` | No | | Base64-encoded private key for your Github App, used to authenticate API requests. |
+
+### AI features
+
+AI features (quizzes, syllabus bot, prompt assistant) run on **Anthropic Claude**. They are optional: when `AI_AGENT_URL` and `AI_AGENT_SHARED_SECRET` are unset, AI features are hidden and the related API routes return 503.
+
+| Name | Required | Default | Description |
+|------|----------|---------|-------------|
+| `AI_AGENT_URL` | No | | URL of the AI agent service. Enables AI features when set with the shared secret. |
+| `AI_AGENT_SHARED_SECRET` | No | | Shared secret used to authenticate the webapp to the AI agent. |
+| `ANTHROPIC_API_KEY` | No | | Anthropic API key the AI agent uses to call Claude. |
+| `LLM_MODEL` | No | `claude-sonnet-4-5` | Claude model used for quiz and chat evaluation. |
+| `EXPLORATION_MODEL` | No | `claude-haiku-4-5` | Claude model used for code-aware quiz repository exploration. |
+| `EXPLORATION_MODE` | No | | Controls the code-aware exploration behavior for quizzes. |
+| `OPENAI_API_KEY` | No | | Reserved. Not used by any current feature. |
+| `LLM_PROVIDER` | No | | Reserved. Only Anthropic/Claude is wired today. |
+
+### Payments
+
+| Name | Required | Default | Description |
+|------|----------|---------|-------------|
+| `STRIPE_SECRET_KEY` | No | | Stripe secret API key for subscription checkout and billing. |
+| `STRIPE_WEBHOOK_SECRET` | No | | Secret used to verify incoming Stripe webhook signatures. |
+
+### Email
+
+| Name | Required | Default | Description |
+|------|----------|---------|-------------|
+| `EMAIL` | No | | Address used as the sender for outgoing email. |
+| `EMAIL_PASSWORD` | No | | Password (or app password) for the sending email account. |
+
+### Background jobs
+
+| Name | Required | Default | Description |
+|------|----------|---------|-------------|
+| `TRIGGER_API_URL` | No | | Base URL of the Trigger.dev API. Leave unset to use Trigger.dev cloud. |
+| `TRIGGER_SECRET_KEY` | No | | Trigger.dev secret key used to authenticate background job runs. |
+
+### Media
+
+| Name | Required | Default | Description |
+|------|----------|---------|-------------|
+| `CLOUDINARY_CLOUD_NAME` | No | | Cloudinary cloud name for image and media uploads. |
+| `CLOUDINARY_API_KEY` | No | | Cloudinary API key for signed uploads. |
+| `CLOUDINARY_API_SECRET` | No | | Cloudinary API secret for signed uploads. |
+
+### Other
+
+| Name | Required | Default | Description |
+|------|----------|---------|-------------|
+| `CALENDAR_SECRET` | No | | Secret used to sign calendar feed (iCal) URLs. Generate with `openssl rand -base64 32`. |

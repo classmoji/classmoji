@@ -52,6 +52,9 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
       null, // userId not needed for assistant
       true, // includeRawLinks for editing UI
       true // includeUnpublished to see draft/unpublished assignments
+      // canManageForms deliberately left at its false default: the forms
+      // responses view is OWNER|TEACHER only, so an assistant's form-close
+      // event links to the form itself rather than to a 403.
     );
   } catch (error: unknown) {
     console.error(

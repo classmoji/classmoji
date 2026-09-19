@@ -14,13 +14,16 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => ({
   send: vi.fn(),
   batchSend: vi.fn(),
+  updateMany: vi.fn(),
+  update: vi.fn(),
+  warn: vi.fn(),
 }));
 
 // `task()` normally returns a wrapped trigger handle; return the config itself
 // so the test can invoke `run` directly.
 vi.mock('@trigger.dev/sdk', () => ({
   task: (config: unknown) => config,
-  logger: { info: vi.fn(), error: vi.fn(), warn: vi.fn() },
+  logger: { info: vi.fn(), error: vi.fn(), warn: (...a: unknown[]) => mocks.warn(...a) },
 }));
 
 vi.mock('resend', () => ({
@@ -28,6 +31,23 @@ vi.mock('resend', () => ({
     emails = { send: (...a: unknown[]) => mocks.send(...a) };
     batch = { send: (...a: unknown[]) => mocks.batchSend(...a) };
   },
+}));
+
+/**
+ * Prisma, for the two write-backs onto `form_magic_tokens`.
+ *
+ * Mocked rather than run against a database because what is worth pinning here
+ * is the SHAPE of the write — which row, guarded by what — not that Postgres
+ * can store a string. The reuse rule that consumes this column is proved
+ * end-to-end against real Postgres in the services integration suite.
+ */
+vi.mock('@classmoji/database', () => ({
+  default: () => ({
+    formMagicToken: {
+      updateMany: (...a: unknown[]) => mocks.updateMany(...a),
+      update: (...a: unknown[]) => mocks.update(...a),
+    },
+  }),
 }));
 
 const { sendEmailTask, sendBatchEmailTask } = await import('../email.ts');
@@ -40,6 +60,14 @@ const run = (input: unknown) =>
     input,
     CTX
   );
+
+/** Invoke the task's final-failure hook exactly as Trigger.dev would. */
+const fail = (input: unknown, error: unknown) =>
+  (
+    sendEmailTask as unknown as {
+      onFailure: (a: { payload: unknown; error: unknown }) => Promise<void>;
+    }
+  ).onFailure({ payload: input, error });
 
 describe('sendEmailTask', () => {
   beforeEach(() => {
@@ -160,6 +188,102 @@ describe('sendEmailTask', () => {
     // 429s during a roster import. The per-task override is the guard.
     const { retry } = sendEmailTask as unknown as { retry: { maxAttempts: number } };
     expect(retry.maxAttempts).toBeGreaterThan(1);
+  });
+});
+
+/**
+ * ── The send that never happened ────────────────────────────────────────────
+ *
+ * A verification mail is dispatched fire-and-forget, so the page that asked for
+ * it has already answered the browser by the time Resend refuses. Nothing on
+ * the request path can learn that the send failed — which meant a failed send
+ * left a token looking pristine, and the reuse rule then concluded "a live link
+ * already covers this address" and sent nothing, forever.
+ *
+ * `onFailure` is the hook that closes it, and the hook matters: it fires ONCE,
+ * after the retries are exhausted. Recording the failure inline in `run` would
+ * mark a token dead while attempt two was about to deliver it.
+ */
+describe('sendEmailTask.onFailure', () => {
+  const TOKEN = 'tok_9f3c';
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.updateMany.mockResolvedValue({ count: 1 });
+  });
+
+  it('marks the token FAILED with the reason, so reuse cannot hand it back', async () => {
+    await fail(
+      { ...PAYLOAD, formMagicTokenId: TOKEN },
+      new Error('Resend send failed: Template not found')
+    );
+
+    expect(mocks.updateMany).toHaveBeenCalledTimes(1);
+    const [args] = mocks.updateMany.mock.calls[0];
+    expect(args.where.id).toBe(TOKEN);
+    expect(args.data.delivery_state).toBe('FAILED');
+    expect(args.data.delivery_detail).toContain('Template not found');
+  });
+
+  it('refuses to claim FAILED for a message Resend already accepted', async () => {
+    // The interlock. A token carrying a provider id was accepted, so the mail
+    // is out in the world whatever became of the run afterwards — telling the
+    // person it is not coming would be false, and would spend a fresh link
+    // mailing them a duplicate.
+    await fail({ ...PAYLOAD, formMagicTokenId: TOKEN }, new Error('boom'));
+
+    expect(mocks.updateMany.mock.calls[0][0].where.provider_message_id).toBeNull();
+  });
+
+  it('finds the token id through the wrapped { payload } shape too', async () => {
+    // `batchTrigger` call sites pass the batch-item shape. Reading `payload`
+    // directly here would silently never find `formMagicTokenId` and the whole
+    // fix would be a no-op for those.
+    await fail({ payload: { ...PAYLOAD, formMagicTokenId: TOKEN } }, new Error('boom'));
+
+    expect(mocks.updateMany.mock.calls[0][0].where.id).toBe(TOKEN);
+  });
+
+  it('writes nothing for a send that carries no token', async () => {
+    // Most mail in this system is not a form link. A failure there has no row
+    // to write to and must not invent one.
+    await fail(PAYLOAD, new Error('boom'));
+
+    expect(mocks.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('truncates the reason, which renders in the staff drawer', async () => {
+    await fail({ ...PAYLOAD, formMagicTokenId: TOKEN }, new Error('x'.repeat(5_000)));
+
+    expect(mocks.updateMany.mock.calls[0][0].data.delivery_detail.length).toBeLessThanOrEqual(200);
+  });
+
+  it('records something even when the error is not an Error', async () => {
+    await fail({ ...PAYLOAD, formMagicTokenId: TOKEN }, undefined);
+
+    expect(mocks.updateMany.mock.calls[0][0].data.delivery_detail).toBeTruthy();
+  });
+
+  it('swallows a database fault rather than masking the original failure', async () => {
+    // The run has already failed for a real reason. A bookkeeping error thrown
+    // out of here would replace that reason in the dashboard with a Prisma
+    // complaint, and there is nothing left to retry into.
+    mocks.updateMany.mockRejectedValue(new Error('connection reset'));
+
+    await expect(
+      fail({ ...PAYLOAD, formMagicTokenId: TOKEN }, new Error('boom'))
+    ).resolves.toBeUndefined();
+    expect(mocks.warn).toHaveBeenCalled();
+  });
+
+  it('is registered as a hook, not called from run — so retries are not pre-empted', async () => {
+    // A failing attempt must leave the token untouched: four more attempts may
+    // yet deliver it, and a token marked FAILED in between would mint a second
+    // link for a message that is still going out.
+    mocks.send.mockResolvedValue({ data: null, error: { message: 'rate limited' } });
+
+    await expect(run({ ...PAYLOAD, formMagicTokenId: TOKEN })).rejects.toThrow('rate limited');
+    expect(mocks.updateMany).not.toHaveBeenCalled();
   });
 });
 

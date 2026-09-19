@@ -1,5 +1,6 @@
 import { createReactBlockSpec } from '@blocknote/react';
 import { IconWorld } from '@tabler/icons-react';
+import { useResolvedFileUrl } from './useResolvedFileUrl.ts';
 
 export const Embed = createReactBlockSpec(
   {
@@ -11,8 +12,19 @@ export const Embed = createReactBlockSpec(
     content: 'none',
   },
   {
-    render: props => {
+    // A NAMED function so React (and the hooks lint) sees a component — the
+    // hook below is only legal inside one.
+    render: function EmbedRenderer(props) {
       const { url } = props.block.props;
+
+      // The block stores a reference; this is the URL to frame it from. An
+      // embed is usually a foreign page (a Google Doc, a CodeSandbox) and those
+      // are never in the display map, so they come back untouched — but an
+      // embed can just as easily name a PDF in the content repo, and that one
+      // was being handed to the iframe as a bare repo path: a 404 resolved
+      // against the pages origin. BlockNote calls `resolveFileUrl` for its own
+      // file blocks only, so a custom block has to make the call itself.
+      const resolvedUrl = useResolvedFileUrl(url, props.editor.resolveFileUrl);
 
       return (
         <div contentEditable={false}>
@@ -53,7 +65,7 @@ export const Embed = createReactBlockSpec(
               }}
             >
               <iframe
-                src={url}
+                src={resolvedUrl}
                 style={{
                   position: 'absolute',
                   top: 0,

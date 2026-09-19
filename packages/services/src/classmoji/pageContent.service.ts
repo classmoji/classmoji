@@ -1,6 +1,23 @@
 import { createHash } from 'node:crypto';
 import { z } from 'zod';
+import { collectBlockAssetRefs, mapBlockAssetRefs } from '@classmoji/utils';
 import { ContentService } from '../content/ContentService.ts';
+import { recordContentAsset, resolveContentBranch } from './contentAssets.service.ts';
+import { extractOwnRepoPath } from './contentRefs.ts';
+import {
+  canonicalizeAssetRef,
+  canonicalizeMany,
+  fetchContentText,
+  mappedAssetsBySha,
+  parseMissingUrl,
+  resolveAssetUrl,
+  signBlobUrlForClassroom,
+  textReadBudget,
+  warmContentText,
+  type ResolveContext,
+  type WarmContext,
+} from './contentDelivery.service.ts';
+import { indexOneFile } from './contentIndex.service.ts';
 import {
   dedupeMergedTreeIds,
   indexResolutions,
@@ -41,6 +58,8 @@ export interface PageWithContentRepo {
   classroom: {
     /** Stored content repo name — never re-derived from org + namespace. */
     content_repo: string;
+    /** This classroom's content-delivery switch (see contentDelivery.service). */
+    content_delivery_enabled?: boolean;
     git_organization?: {
       provider: string;
       login: string;
@@ -67,6 +86,9 @@ interface BlockNode {
   [key: string]: unknown;
 }
 
+/** Singleton preview branch per page: `preview/<content_path>`. */
+export const PAGE_PREVIEW_BRANCH_PREFIX = 'preview/';
+
 // ─── Repo resolution ─────────────────────────────────────────────────────────
 
 function contentRepoFor(page: PageWithContentRepo) {
@@ -83,33 +105,103 @@ function contentRepoFor(page: PageWithContentRepo) {
 // ─── Load / save ─────────────────────────────────────────────────────────────
 
 /**
+ * One read of one content file, with ABSENT and UNREADABLE kept apart.
+ *
+ * `ContentService.getContent` answers null for a 404 and THROWS for everything
+ * else — a 5xx, a secondary rate limit, a network error, a revoked
+ * installation. Folding those two into one answer is what made `format: 'none'`
+ * ambiguous, and 'none' is the cue every writer takes to create the file: it
+ * starts from a blank document and, having no sha, commits it with no
+ * optimistic lock.
+ *
+ * So the log line stays exactly where it was and the error keeps going. Only a
+ * 404 — a null — may be read as absence.
+ *
+ * `caller` is in the log prefix rather than hard-coded because the save path's
+ * cover re-read wants the same rule (see `savePageContent`), and a failure
+ * there filed under `loadPageContent` would send whoever reads the log to the
+ * wrong function.
+ */
+async function readContentFile({
+  gitOrganization,
+  repo,
+  path,
+  ref,
+  skipCache,
+  caller,
+  label,
+}: {
+  gitOrganization: NonNullable<PageWithContentRepo['classroom']['git_organization']>;
+  repo: string;
+  path: string;
+  ref?: string;
+  skipCache: boolean;
+  caller: 'loadPageContent' | 'savePageContent';
+  label: string;
+}): Promise<{ content: string; sha: string } | null> {
+  try {
+    return await ContentService.getContent({
+      gitOrganization,
+      repo,
+      path,
+      ...(ref ? { ref } : {}),
+      skipCache,
+    });
+  } catch (err) {
+    console.error(`[pageContent.${caller}] ${label} fetch failed for ${repo}/${path}:`, err);
+    throw err;
+  }
+}
+
+/**
  * Load page content from the content repo.
  * Tries `content.json` first (BlockNote — `{ blocks, coverImage? }` wrapper or
  * legacy bare blocks array), falls back to `index.html` (legacy HTML).
+ *
+ * `format: 'none'` means BOTH files are absent — a 404 from each read — and
+ * nothing else. Any other read failure REJECTS (see `readContentFile`). A
+ * caller that would rather render something than fail catches at its own call
+ * site, where it knows whether it is about to write.
  *
  * @param page - Page with classroom.git_organization
  * @param options.skipCache - Bypass the 60s ContentService cache (sha-bearing
  *   reads that will be used as expectedSha MUST pass true).
  * @param options.ref - Git ref (branch/sha) to read from — e.g. the page's
  *   preview branch. Ref-bearing reads always bypass the cache.
+ * @param options.viaWorker - Read by SHA through the delivery layer
+ *   (`fetchContentText`) rather than straight from GitHub. For RENDER reads: a
+ *   save is visible the moment it returns, and a page view costs no GitHub call
+ *   at all. Ignored when `ref` is set — a preview branch has no map rows to
+ *   sign against, which is also why the editor's own load leaves this off.
  */
 export async function loadPageContent(
   page: PageWithContentRepo,
-  { skipCache = false, ref }: { skipCache?: boolean; ref?: string } = {}
+  {
+    skipCache = false,
+    ref,
+    viaWorker = false,
+  }: { skipCache?: boolean; ref?: string; viaWorker?: boolean } = {}
 ): Promise<PageContentResult> {
   const { gitOrganization, repo } = contentRepoFor(page);
 
-  // Try JSON first (BlockNote format)
-  try {
-    const jsonResult = await ContentService.getContent({
-      gitOrganization,
-      repo,
-      path: `${page.content_path}/content.json`,
-      ...(ref ? { ref } : {}),
-      skipCache,
-    });
+  if (viaWorker && !ref) {
+    const viaMap = await loadPageContentViaWorker(page);
+    if (viaMap) return viaMap;
+  }
 
-    if (jsonResult?.content) {
+  // Try JSON first (BlockNote format)
+  const jsonResult = await readContentFile({
+    gitOrganization,
+    repo,
+    path: `${page.content_path}/content.json`,
+    ref,
+    skipCache,
+    caller: 'loadPageContent',
+    label: 'JSON',
+  });
+
+  if (jsonResult?.content) {
+    try {
       const parsed = JSON.parse(jsonResult.content);
 
       // New format: { blocks, coverImage? } wrapper
@@ -129,40 +221,223 @@ export async function loadPageContent(
         coverImage: null,
         sha: jsonResult.sha,
       };
+    } catch (err) {
+      // A file we READ but cannot parse still falls through to the HTML probe,
+      // exactly as the map-first path does — a corrupt content.json must not
+      // hide a legacy index.html. Unreadability is the other case, and it threw
+      // above rather than reaching here.
+      console.error(
+        `[pageContent.loadPageContent] JSON parse failed for ${repo}/${page.content_path}/content.json:`,
+        err
+      );
     }
-  } catch (err) {
-    console.error(
-      `[pageContent.loadPageContent] JSON fetch failed for ${repo}/${page.content_path}/content.json:`,
-      err
-    );
   }
 
   // Fallback: HTML (legacy format)
-  try {
-    const htmlResult = await ContentService.getContent({
-      gitOrganization,
-      repo,
-      path: `${page.content_path}/index.html`,
-      ...(ref ? { ref } : {}),
-      skipCache,
-    });
+  const htmlResult = await readContentFile({
+    gitOrganization,
+    repo,
+    path: `${page.content_path}/index.html`,
+    ref,
+    skipCache,
+    caller: 'loadPageContent',
+    label: 'HTML',
+  });
 
-    if (htmlResult?.content) {
-      return {
-        format: 'html',
-        blocks: htmlResult.content,
-        coverImage: null,
-        sha: htmlResult.sha,
-      };
-    }
-  } catch (err) {
-    console.error(
-      `[pageContent.loadPageContent] HTML fetch failed for ${repo}/${page.content_path}/index.html:`,
-      err
-    );
+  if (htmlResult?.content) {
+    return {
+      format: 'html',
+      blocks: htmlResult.content,
+      coverImage: null,
+      sha: htmlResult.sha,
+    };
   }
 
   return { format: 'none', blocks: null, coverImage: null, sha: null };
+}
+
+/**
+ * The map-first form of the load above: same precedence, same shapes.
+ *
+ * Null means "the delivery layer had nothing to say" — the classroom is not
+ * opted in, the deployment cannot sign, or the map has no row for either file.
+ * The caller then runs its ordinary GitHub read, so this is purely an
+ * accelerator that can never be the reason a page fails to load. It is not the
+ * reason one reads as EMPTY either: every failure in here is a miss rather than
+ * an answer, and the GitHub read behind it is the one that tells a page with no
+ * content file from a content file that could not be read.
+ *
+ * `workerOnly`, and it matters: `fetchContentText` would otherwise run its own
+ * API-then-CDN fallback, and the caller's GitHub read is sitting right behind
+ * this call — so every map miss would pay TWO contents-API reads and a CDN
+ * fetch to answer one page. The caller's read is also the better of the two:
+ * it carries the full `gitOrganization` record, where the fallback can only
+ * pass a login and re-resolve it as GitHub.
+ */
+async function loadPageContentViaWorker(
+  page: PageWithContentRepo
+): Promise<PageContentResult | null> {
+  const ctx = pageResolveContext(page);
+  if (!ctx) return null;
+
+  // One circuit for both probes: if the Worker is unreachable, the second probe
+  // must not pay the timeout again to learn the same thing.
+  const budget = textReadBudget();
+  const opts = { label: 'page', fallback: 'none', budget } as const;
+  const json = await fetchContentText(ctx, `${page.content_path}/content.json`, opts);
+  if (json) {
+    try {
+      const parsed = JSON.parse(json.text);
+      // Two stored shapes: the `{ blocks, coverImage? }` wrapper, and a bare
+      // blocks array from before the wrapper existed.
+      if (parsed && !Array.isArray(parsed) && Array.isArray(parsed.blocks)) {
+        return {
+          format: 'json',
+          blocks: parsed.blocks,
+          coverImage: parsed.coverImage || null,
+          sha: json.sha,
+        };
+      }
+      return { format: 'json', blocks: parsed, coverImage: null, sha: json.sha };
+    } catch {
+      // Malformed JSON falls through to the HTML probe, exactly as the GitHub
+      // path does — a corrupt content.json must not hide a legacy index.html.
+    }
+  }
+
+  const html = await fetchContentText(ctx, `${page.content_path}/index.html`, opts);
+  if (html) return { format: 'html', blocks: html.text, coverImage: null, sha: html.sha };
+
+  return null;
+}
+
+// ─── Canonicalize on save ────────────────────────────────────────────────────
+
+/**
+ * A signed URL must never reach `content.json`. This is where that is enforced.
+ *
+ * The pages app already canonicalizes in its route layer, and that is the right
+ * place for it — it is closest to the browser that handed the URL back. But it
+ * is not the only door into a save any more: `page_content_apply` reaches
+ * `savePageContentFromOps` straight from MCP, an import writes through
+ * `savePageContent`, and any future caller gets no route layer at all. A
+ * backstop in the service is what makes the invariant a property of the WRITE
+ * rather than a property of one caller.
+ *
+ * Applying it twice is a no-op by construction: the second pass sees repo paths,
+ * `parseContentUrl` declines them, and they come back unchanged. That is what
+ * lets the route keep its own pass without either of them having to know about
+ * the other.
+ *
+ * The tier is `edit` and it does not matter, and neither does the key version
+ * this defaults to 0: canonicalization only ever REMOVES a signature and never
+ * mints one, so nothing in the context except the classroom id is read. A
+ * caller that MINTS one wants `pageWarmContext`, which will not default what it
+ * is about to sign with.
+ */
+function pageResolveContext(page: PageWithContentRepo): ResolveContext | null {
+  const classroom = page.classroom as {
+    id?: unknown;
+    content_key_version?: unknown;
+    content_delivery_enabled?: unknown;
+    content_repo?: unknown;
+  };
+  const login = page.classroom.git_organization?.login;
+  if (typeof classroom.id !== 'string' || !login || typeof classroom.content_repo !== 'string') {
+    return null;
+  }
+  return {
+    classroom: {
+      id: classroom.id,
+      content_key_version:
+        typeof classroom.content_key_version === 'number' ? classroom.content_key_version : 0,
+      content_repo: classroom.content_repo,
+      content_delivery_enabled: classroom.content_delivery_enabled === true,
+      git_organization: { login },
+    },
+    tier: 'edit',
+  };
+}
+
+/**
+ * The classroom context a page's WARM signs with, or null.
+ *
+ * Strict where `pageResolveContext` defaults, and for one reason: a warm MINTS
+ * a signature and `content_key_version` goes into it, so warming at a version
+ * the readers are not using fills a cache entry nobody will ever ask for. It
+ * would log a 200 and change nothing, invisibly. A missing version therefore
+ * means no warm rather than a warm at version 0.
+ *
+ * The `unknown` casts are this file's existing shape — `PageWithContentRepo`
+ * types the classroom loosely — so the checks below are what stand in for the
+ * compiler here. `WarmContext` requiring both fields is what makes them
+ * unavoidable: neither can be quietly defaulted on the way in.
+ */
+function pageWarmContext(page: PageWithContentRepo): WarmContext | null {
+  const classroom = page.classroom as {
+    id?: unknown;
+    content_key_version?: unknown;
+    content_delivery_enabled?: unknown;
+  };
+  if (typeof classroom.id !== 'string') return null;
+  if (typeof classroom.content_key_version !== 'number') return null;
+  return {
+    classroom: {
+      id: classroom.id,
+      content_key_version: classroom.content_key_version,
+      // `=== true`, as on the read path: "the caller did not say" reads as off.
+      content_delivery_enabled: classroom.content_delivery_enabled === true,
+    },
+  };
+}
+
+/**
+ * Replace every signed URL of ours in a block tree with the path behind it.
+ *
+ * Returns the input by identity when there is nothing to change, so a document
+ * with no assets — the common case — costs one tree walk and no allocation.
+ * A failure here is swallowed: the asset map lives in Postgres, and a database
+ * hiccup must not turn a save into a lost edit. The worst case is the state we
+ * were already in before this existed.
+ */
+async function canonicalizePageBlocks<T>(page: PageWithContentRepo, blocks: T): Promise<T> {
+  const ctx = pageResolveContext(page);
+  if (!ctx) return blocks;
+
+  const refs = [...new Set(collectBlockAssetRefs(blocks))];
+  if (refs.length === 0) return blocks;
+
+  try {
+    const canonical = await canonicalizeMany(ctx, refs);
+    return mapBlockAssetRefs(blocks, ref => canonical.get(ref) ?? ref);
+  } catch (error) {
+    console.warn(
+      '[pageContent] Could not canonicalize asset refs on save:',
+      error instanceof Error ? error.message : error
+    );
+    return blocks;
+  }
+}
+
+/** The same pass over the cover image, which lives beside the blocks, not in them. */
+async function canonicalizePageCover(
+  page: PageWithContentRepo,
+  cover: PageCoverImage | null | undefined
+): Promise<PageCoverImage | null | undefined> {
+  const ctx = pageResolveContext(page);
+  if (!ctx || !cover?.url) return cover;
+
+  try {
+    const canonical = await canonicalizeMany(ctx, [cover.url]);
+    const url = canonical.get(cover.url) ?? cover.url;
+    return url === cover.url ? cover : { ...cover, url };
+  } catch (error) {
+    console.warn(
+      '[pageContent] Could not canonicalize the cover image on save:',
+      error instanceof Error ? error.message : error
+    );
+    return cover;
+  }
 }
 
 /**
@@ -173,11 +448,17 @@ export async function loadPageContent(
  * @param blocks - BlockNote document blocks array
  * @param options.coverImage - Cover image metadata; `undefined` (omitted)
  *   preserves the existing coverImage via a fresh re-read, `null` removes it.
+ *   A re-read that cannot be MADE rejects rather than writing without the key;
+ *   one whose file will not parse proceeds without it — see the re-read below.
  * @param options.expectedSha - Optimistic-lock sha; mismatch → error with
  *   status 409 (propagated from ContentService.put).
  * @param options.message - Commit message (default `Update page: <title>`).
  * @param options.branch - Branch to commit to (default: repo default branch).
- * @returns The new file sha and commit sha.
+ * @returns The new file sha, the commit sha, and the coverImage AS STORED —
+ *   canonicalized, and resolved to the existing one when the caller omitted it.
+ *   Returned rather than left for the caller to reconstruct because a caller
+ *   that echoes its own input describes a document that may not exist: hand it
+ *   a signed URL and the store holds a repo path.
  */
 export async function savePageContent(
   page: PageWithContentRepo,
@@ -193,29 +474,61 @@ export async function savePageContent(
     message?: string;
     branch?: string;
   } = {}
-): Promise<{ sha: string; commit: string }> {
+): Promise<{ sha: string; commit: string; coverImage: PageCoverImage | null }> {
   const { gitOrganization, repo } = contentRepoFor(page);
   const path = `${page.content_path}/content.json`;
 
+  // The backstop, before anything is serialized. A signed URL in here would be
+  // frozen into the document — one viewer's tier, one expiring signature, and a
+  // reference that stops following its file.
+  blocks = await canonicalizePageBlocks(page, blocks);
+  coverImage = await canonicalizePageCover(page, coverImage);
+
   // When coverImage isn't explicitly provided, read the existing JSON to
   // preserve it (fresh read — a stale cached coverImage must not resurrect).
+  //
+  // A read that FAILS stops the save. A 404 means there is no file to preserve
+  // a cover from, so the wrapper is simply written without the key; anything
+  // else says nothing about whether this page has a cover, and the wrapper
+  // below omits the key when `coverImage` is undefined — so continuing on a
+  // blip would drop a live cover on a guess. Same rule as the load path, where
+  // only a 404 counts as absence.
+  //
+  // A file we cannot PARSE is the deliberate exception: it has no cover we can
+  // preserve, and the save proceeds so the editor can repair it. That matters
+  // because a corrupt content.json loads as 'html' or 'none' (loadPageContent's
+  // parse failure falls through to the HTML probe), so the editor arrives here
+  // with no json sha and this save is the only way back short of git —
+  // refusing would leave the instructor unable to fix the page at all. The
+  // cover goes with the file it was stored in, and both the load and the line
+  // below record why.
+  //
+  // A caller that genuinely wants this file rewritten regardless passes
+  // `coverImage` explicitly (`null` to remove it), which skips the re-read —
+  // that is what the merge paths and `savePageCoverImage` already do.
   if (coverImage === undefined) {
-    try {
-      const existing = await ContentService.getContent({
-        gitOrganization,
-        repo,
-        path,
-        ...(branch ? { ref: branch } : {}),
-        skipCache: true,
-      });
-      if (existing?.content) {
-        const parsed = JSON.parse(existing.content);
-        if (parsed && !Array.isArray(parsed) && parsed.coverImage) {
-          coverImage = parsed.coverImage;
+    const existing = await readContentFile({
+      gitOrganization,
+      repo,
+      path,
+      ...(branch ? { ref: branch } : {}),
+      skipCache: true,
+      caller: 'savePageContent',
+      label: 'cover re-read',
+    });
+    if (existing?.content) {
+      try {
+        const parsed: unknown = JSON.parse(existing.content);
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+          const existingCover = (parsed as { coverImage?: PageCoverImage }).coverImage;
+          if (existingCover) coverImage = existingCover;
         }
+      } catch (err) {
+        console.error(
+          `[pageContent.savePageContent] cover re-read parse failed for ${repo}/${path}:`,
+          err
+        );
       }
-    } catch {
-      // No existing file — coverImage stays undefined (won't be in wrapper)
     }
   }
 
@@ -223,20 +536,112 @@ export async function savePageContent(
   // absence both serialize as no key, matching what pre-merge saves produced —
   // a semantic accept must not sprinkle `"coverImage": null` into documents
   // that never had one. Reads treat a missing key and null identically.
-  const wrapper: { blocks: unknown; coverImage?: PageCoverImage } = { blocks };
+  // Last gate before the bytes hit the repo, so a caller that forgets to
+  // normalize still cannot commit an unopenable document. Idempotent, so the
+  // paths that already normalized pay only a structural walk.
+  //
+  // Two writers reach content.json WITHOUT coming through here, and neither is
+  // covered by this line: acceptPreview's clean git merge (handled explicitly,
+  // see repairMergedContent) and contentImport's byte-for-byte page copy, which
+  // never parses the blocks — a broken page in a source classroom still
+  // propagates to every classroom that imports it.
+  const wrapper: { blocks: unknown; coverImage?: PageCoverImage } = {
+    blocks: Array.isArray(blocks) ? normalizeBlockStructure(blocks) : blocks,
+  };
   if (coverImage != null) {
     wrapper.coverImage = coverImage;
   }
 
-  return ContentService.put({
+  const content = JSON.stringify(wrapper, null, 2);
+  const result = await ContentService.put({
     gitOrganization,
     repo,
     path,
-    content: JSON.stringify(wrapper, null, 2),
+    content,
     message: message ?? `Update page: ${page.title}`,
     ...(expectedSha ? { expectedSha } : {}),
     ...(branch ? { branch } : {}),
   });
+
+  // Write-through: `content.json` is READ through the map now (see
+  // `fetchContentText`), so a row that is one save behind is not a stale cache,
+  // it is the previous version of the page on a student's screen. The contents
+  // API just told us the new blob sha; recording it here is what makes the save
+  // visible the moment it returns, rather than when the push webhook lands.
+  //
+  // Default branch only. A preview branch is not in the map, and recording its
+  // sha would publish an unaccepted draft to every reader.
+  //
+  // The test is on the PREFIX, not on `branch` being absent, and deliberately
+  // so — it matches `saveDeck`'s. No caller passes `branch: 'main'` today, but
+  // one that did would otherwise write the default branch and silently lose its
+  // map row, which is exactly the stale read this path exists to close.
+  if (!branch || !branch.startsWith(PAGE_PREVIEW_BRANCH_PREFIX)) {
+    await recordPageFile(page, path, result.sha, content);
+  }
+
+  // `wrapper.coverImage` is the written truth: canonicalized above, and filled
+  // in from the existing file when the caller passed nothing.
+  return { ...result, coverImage: wrapper.coverImage ?? null };
+}
+
+/**
+ * Put a just-committed page file into the asset map.
+ *
+ * Never throws — `recordContentAsset` swallows its own failures, and this adds
+ * the one branch it cannot: a page assembled without its classroom id has
+ * nothing to key a row on. The commit still stands; the next sync picks it up.
+ */
+async function recordPageFile(
+  page: PageWithContentRepo,
+  path: string,
+  sha: string,
+  content?: string
+): Promise<void> {
+  const classroomId = (page.classroom as { id?: unknown }).id;
+  if (typeof classroomId !== 'string') return;
+  await recordContentAsset(classroomId, {
+    path,
+    sha,
+    // The real byte length, but only where the writer actually has the bytes.
+    // A row is a cache of what the repo holds; handing it a size it does not
+    // know would overwrite a good one an earlier sync had measured.
+    ...(content === undefined ? {} : { size: Buffer.byteLength(content) }),
+  });
+
+  // The cold pull, moved off the first reader and onto the save's tail.
+  // Deliberately not awaited: a page save must return as soon as the commit and
+  // the row are done, and a cache fill that is still running (or has already
+  // failed) changes nothing about whether the save succeeded. AFTER the row is
+  // written, because the warm reads the sha back out of the map.
+  const ctx = pageWarmContext(page);
+  if (ctx) void warmContentText(ctx, [path]);
+
+  // And feed the search index off the same tail, from the bytes this save
+  // already has in hand.
+  //
+  // Deliberately NOT behind `pageWarmContext`, which refuses a classroom the
+  // delivery layer does not serve — `content_delivery_enabled` is on for about
+  // seven classrooms, so gating here would leave the index empty for nearly the
+  // whole fleet and make the nightly reconcile the only writer. Same reasoning
+  // as the thumbnail enqueue in `recordDeckFiles`.
+  //
+  // Same contract as the warm: after the row (the index re-reads the map's sha
+  // to detect a save that overtook it), never awaited, and `indexOneFile` never
+  // rejects, so an embedding failure cannot reach the person who hit save.
+  //
+  // Only when the bytes are actually here. The accept path calls this without
+  // them and indexes from the merged file itself.
+  const pageId = (page as { id?: unknown }).id;
+  if (content !== undefined && typeof pageId === 'string') {
+    void indexOneFile({
+      classroomId,
+      path,
+      sha,
+      body: content,
+      docHint: { kind: 'page', id: pageId, title: page.title },
+    });
+  }
 }
 
 /**
@@ -244,14 +649,50 @@ export async function savePageContent(
  * Takes a Buffer — callers converting from a Web API File do the
  * File→Buffer adaptation app-side.
  *
- * @returns `{ url, path }` — raw.githubusercontent.com URL for immediate use.
+ * ## Why `url` is a repo path — but only when something can read one
+ *
+ * What goes INTO the document should be the reference — `pages/lab-1/assets/
+ * x.png` — because that is the only form that keeps following the file: it
+ * survives a re-upload, a cache bust, and a viewer in a different tier.
+ * `displayUrl` is the signed URL for showing the image right now, deliberately
+ * a separate field so a caller cannot store one by accident.
+ *
+ * That only holds while the delivery layer is CONFIGURED, because it is the
+ * only thing that knows how to turn a bare path back into something a browser
+ * can fetch. Unconfigured, there is no read-side translation anywhere — editor,
+ * viewer, or class site — so storing a path would make every upload a 404 the
+ * moment it is saved. So when nothing can be signed, `url` stays the legacy
+ * absolute URL, exactly as it was before this existed. Switching the layer on
+ * changes what NEW uploads store; the old absolute URLs keep resolving through
+ * case 2 of the resolver.
+ *
+ * `displayUrl` is signed DIRECTLY from the sha the upload just returned rather
+ * than looked up in the asset map, because the push webhook that would put a
+ * row there has not fired yet — a map lookup here would reliably miss.
+ *
+ * Which is also why the row is written HERE. `displayUrl` only covers the
+ * editor's own preview; the moment the page is saved and re-rendered, the
+ * stored path goes through the map like any other, and a miss there renders as
+ * a dangling URL. The upload already has the path, the sha and the size, so the
+ * row is recorded from them rather than left to a webhook round trip.
+ *
+ * @returns `{ url, path, sha, displayUrl }`. `path` is always the repo path and
+ *   `sha` the blob sha the commit returned. `displayUrl` is null when the
+ *   delivery layer is off, and `url` is then the legacy absolute URL rather
+ *   than the path.
  */
 export async function uploadPageAsset(
   page: PageWithContentRepo,
   buffer: Buffer,
   filename: string
-): Promise<{ url: string; path: string }> {
+): Promise<{ url: string; path: string; sha: string; displayUrl: string | null }> {
   const { gitOrganization, repo } = contentRepoFor(page);
+
+  // Asked, not assumed — the same reason the asset sync asks. A content repo on
+  // `master` would otherwise take every upload onto a branch nobody renders
+  // from, and the map would then sign URLs for a blob the default branch has
+  // never held.
+  const branch = await resolveContentBranch(gitOrganization, gitOrganization.login, repo);
 
   const result = await ContentService.upload({
     gitOrganization,
@@ -259,11 +700,257 @@ export async function uploadPageAsset(
     folder: `${page.content_path}/assets`,
     file: buffer,
     filename,
-    branch: 'main',
+    branch,
     message: `Upload asset for ${page.title || 'page'}`,
   });
 
-  return { url: result.url, path: result.path };
+  const classroomId = (page.classroom as { id?: unknown }).id;
+  if (typeof classroomId === 'string') {
+    // Never throws, and its failure is not this caller's problem: the file is
+    // already in the repo, and the next sync writes the same row.
+    await recordContentAsset(classroomId, {
+      path: result.path,
+      sha: result.sha,
+      size: buffer.length,
+    });
+  }
+
+  const displayUrl = await signUploadedAsset(page, result.path, result.sha);
+
+  // No signature means no reader can resolve a bare path — store the legacy URL.
+  return {
+    url: displayUrl ? result.path : result.url,
+    path: result.path,
+    sha: result.sha,
+    displayUrl,
+  };
+}
+
+/**
+ * The URL a WRITER can actually open one stored page-asset reference at, or null.
+ *
+ * With the delivery layer on, `content.json` stores a bare repo path — a key
+ * into the asset map, not an address. A browser can follow it because the page
+ * is rendered through a resolve pass; an API caller holding the stored string
+ * has nothing to follow. This mints that pass for a single reference at the
+ * `edit` tier, the same tier `uploadPageAsset` hands back for a file it just
+ * committed, since only someone who can edit the page ever asks.
+ *
+ * Null — never a URL that is going to 404 — in all four ways this can fail to
+ * produce a real address. The caller needs to tell "here is where to look at
+ * it" from "there is nowhere to look at it", and anything else returned here
+ * reads as the former while behaving as the latter:
+ *
+ *   1. The resolver handed the reference back UNCHANGED. That is its answer for
+ *      "the layer is off" and for a reference it will not claim (an external
+ *      host, or a pinned raw.githubusercontent URL) — and for those the string
+ *      may well be absolute, so "does it start with https" is the wrong test.
+ *   2. It returned the `/missing/` placeholder, which is a deterministic 404 by
+ *      construction: the map has never heard of this reference.
+ *   3. Nothing could be signed at all (no context for this classroom).
+ *   4. The resolve threw. A cover READ must not fail because of a signing error.
+ */
+export async function resolvePageAssetUrl(
+  page: PageWithContentRepo,
+  ref: string
+): Promise<string | null> {
+  if (!ref) return null;
+  // Defence in depth rather than policy: `content_key_version` is `Int
+  // @default(0)`, so a page row loaded from Prisma always carries a number.
+  // The version goes INTO the signature, so a caller that assembled a page
+  // object by hand and left it off should get no URL rather than one minted at
+  // a version the readers are not on.
+  if (typeof (page.classroom as { content_key_version?: unknown }).content_key_version !== 'number')
+    return null;
+  const ctx = pageResolveContext(page);
+  if (!ctx) return null;
+
+  try {
+    const resolved = await resolveAssetUrl(ctx, ref);
+    if (resolved === ref) return null;
+    if (parseMissingUrl(ctx, resolved) !== null) return null;
+    return resolved;
+  } catch (error) {
+    console.warn(
+      '[pageContent] Could not resolve a page asset URL:',
+      error instanceof Error ? error.message : error
+    );
+    return null;
+  }
+}
+
+/**
+ * The form a cover reference must be STORED in, or null when it may not be stored.
+ *
+ * Two jobs, and they belong together because the second depends on the first.
+ *
+ * Canonicalize: an agent hands back whatever it was shown, and what it was
+ * shown is a signed, expiring `display_url`. Freezing one of those into
+ * content.json is the exact failure the save-side canonicalization exists to
+ * prevent — it pins one viewer's tier and one expiry into the document. This
+ * undoes it, and undoes a `/missing/` placeholder the same way.
+ *
+ * Then require what is left to name ONE file in THIS classroom's content repo,
+ * by the plain-path rule in `namesAPlainRepoFile` below. Deliberately stricter
+ * than the web editor's cover control, which stores whatever URL it is given: a
+ * cover is rendered on the public class site, and an agent acting on text it
+ * read somewhere is a great deal easier to point at the wrong host than a
+ * person clicking an upload button.
+ *
+ * Null is "refuse", not "leave it alone" — the one caller turns it into an
+ * invalid_params naming `page_asset_upload`.
+ */
+export async function canonicalizePageCoverRef(
+  page: PageWithContentRepo,
+  ref: string
+): Promise<string | null> {
+  const ctx = pageResolveContext(page);
+  if (!ctx || !ref) return null;
+
+  let canonical = ref;
+  try {
+    canonical = await canonicalizeAssetRef(ctx, ref);
+  } catch (error) {
+    // A lookup failure must not be read as "this reference is fine": the
+    // un-canonicalized string could be a signed URL, and storing one is the
+    // thing this exists to stop.
+    console.warn(
+      '[pageContent] Could not canonicalize a cover reference:',
+      error instanceof Error ? error.message : error
+    );
+    return null;
+  }
+
+  return namesAPlainRepoFile(ctx, canonical) ? canonical : null;
+}
+
+/**
+ * Does this canonical reference name one plain file in this classroom's repo?
+ *
+ * Two shapes are legitimate here and only two. A repo-relative path, which is
+ * what an upload stores once the delivery layer is on; and an absolute URL into
+ * this classroom's own repo, which is what an upload stores when it is off —
+ * that one has to keep working, or `page_asset_upload` and `page_cover_set`
+ * would not compose for a classroom that has not been opted in.
+ *
+ * Both are reduced to the path they name and held to the same rule, because
+ * `extractOwnRepoPath` answers "is this URL ours" and NOT "is the path inside it
+ * sane": it hands back whatever sits after the branch segment, so
+ * `…/<repo>/main/../../../elsewhere/x.png` is a match whose path walks straight
+ * back out of the repo. `toRepoPath` does not settle it either — it returns
+ * that answer unchanged, running its own segment checks only on the relative
+ * branch. Left alone, a reference like that is stored verbatim and resolves to
+ * nothing.
+ *
+ * The rule, on the ONCE-decoded path: no scheme, no leading `/`, and no `?`,
+ * `#`, `%` or backslash anywhere, then every segment non-empty and neither `.`
+ * nor `..`. Refusing `%` AFTER one decode is what stops a second layer of
+ * encoding (`%252e%252e`) from arriving as `%2e%2e` and being written down;
+ * nothing legitimate carries one, because `sanitizeFilename` reduces every
+ * uploaded name to letters, digits and dashes. A query or fragment is refused
+ * rather than trimmed for the reason `..` is: a stored reference is a key into
+ * the asset map, and a key with a tail on it matches nothing.
+ */
+function namesAPlainRepoFile(ctx: ResolveContext, ref: string): boolean {
+  // The URL branch. `extractOwnRepoPath` has already stripped any `?`/`#` and
+  // percent-decoded once, so its output goes to the check as it comes.
+  const ownPath = extractOwnRepoPath(
+    ref,
+    ctx.classroom.git_organization.login,
+    ctx.classroom.content_repo
+  );
+  if (ownPath !== null) return isPlainRepoPath(ownPath);
+
+  // The relative branch: decode once ourselves, then the same check. Anything
+  // that is neither shape — an external host, another classroom's delivery URL,
+  // a `data:` — fails on its scheme.
+  return isPlainRepoPath(decodeOnce(ref));
+}
+
+/** One percent-decode, leaving a malformed escape alone (the check refuses it). */
+function decodeOnce(value: string): string {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
+}
+
+/** See `namesAPlainRepoFile` for why each clause is here. */
+function isPlainRepoPath(path: string): boolean {
+  if (!path) return false;
+  if (/^[a-z][a-z0-9+.-]*:/i.test(path)) return false;
+  if (path.startsWith('/')) return false;
+  if (/[?#%\\]/.test(path)) return false;
+  return path.split('/').every(segment => segment !== '' && segment !== '.' && segment !== '..');
+}
+
+/**
+ * Sign a just-uploaded blob at the `edit` tier, or null if that is not possible.
+ *
+ * `edit` because only a writer ever sees this URL, and a writer is by definition
+ * looking at content that may be about to change. Every failure path returns
+ * null: an upload
+ * that succeeded must not be reported as failed because a URL could not be
+ * minted for it.
+ *
+ * Gated on the classroom's own switch as well as the env, because this is the
+ * one signing call that changes what gets STORED: `uploadPageAsset` writes the
+ * bare repo path when a display URL came back and the legacy absolute URL when
+ * it did not. A classroom the readers do not resolve for must keep getting the
+ * legacy URL, or every upload into it would save as a path nothing can read.
+ *
+ * ## The one call site that carries a sha in from outside the map
+ *
+ * Every other signature in the app is minted from a row the resolver just read
+ * by PATH for this classroom. This one starts from the sha a GitHub commit
+ * returned, which is not proof of anything the map knows — so it looks the sha
+ * up (`mappedAssetsBySha`) and signs only what comes back.
+ *
+ * That lookup is not ceremony. `recordContentAsset` above is allowed to decline
+ * — a classroom on a non-GitHub provider, one with no content repo, or a write
+ * that simply failed — and before this check a decline still produced a signed
+ * URL, which then made `uploadPageAsset` store the BARE REPO PATH for a file
+ * with no map row: an upload that saved as a reference no reader can resolve
+ * and no later sync repairs. Refusing here restores the legacy absolute URL for
+ * exactly those uploads, which is the answer that keeps working.
+ */
+async function signUploadedAsset(
+  page: PageWithContentRepo,
+  path: string,
+  sha: string
+): Promise<string | null> {
+  const origin = process.env.CONTENT_DELIVERY_ORIGIN;
+  const master = process.env.CONTENT_SIGNING_SECRET;
+  if (!origin || !master) return null;
+
+  const classroom = page.classroom as {
+    id?: unknown;
+    content_key_version?: unknown;
+    content_delivery_enabled?: unknown;
+  };
+  if (classroom.content_delivery_enabled !== true) return null;
+  if (typeof classroom.id !== 'string') return null;
+
+  const name = path.slice(path.lastIndexOf('/') + 1);
+  const dot = name.lastIndexOf('.');
+  if (dot <= 0 || dot === name.length - 1) return null;
+
+  const asset = (await mappedAssetsBySha(classroom.id, [sha])).get(sha);
+  // The row the upload just wrote is missing, so there is nothing to prove this
+  // classroom's claim on these bytes. `mappedAssetsBySha` logs the refusal; the
+  // caller stores the legacy absolute URL, which still resolves.
+  if (!asset) return null;
+
+  return signBlobUrlForClassroom(
+    {
+      id: classroom.id,
+      content_key_version:
+        typeof classroom.content_key_version === 'number' ? classroom.content_key_version : 0,
+    },
+    { origin, master },
+    { asset, ext: name.slice(dot + 1).toLowerCase(), tier: 'edit' }
+  );
 }
 
 // ─── Blank page content ──────────────────────────────────────────────────────
@@ -526,6 +1213,215 @@ function insertBlocksAt(
   }
 }
 
+// ─── Structural normalization (multi-column invariants) ──────────────────────
+//
+// `columnList` / `column` (@blocknote/xl-multi-column) are the only blocks in
+// the page schema whose ProseMirror content expressions constrain their
+// CHILDREN: `columnList` is `"column column+"` (every child a column, minimum
+// two) and `column` is `"blockContainer+"` (at least one child, and every child
+// an ordinary content block — a `columnList` is a `bnBlock`, NOT a
+// `blockContainer`, so a row nested directly in a column is as fatal as a row
+// with one column). Everything else accepts whatever children it is handed,
+// which is why the op vocabulary can otherwise stay schema-agnostic.
+//
+// That gap is not theoretical. A `delete` op naming a column splices it out
+// with no idea it was the second-to-last one; an `insert` positioned `after` a
+// paragraph that happens to live inside a column lands a whole row inside that
+// column. Either document serializes and commits perfectly happily — and then
+// throws "Error creating document from blocks passed as `initialContent`" for
+// EVERY reader, because
+// ProseMirror refuses to build a doc that violates the schema. The viewer and
+// the editor share that failure, so a page broken this way cannot be repaired
+// in the editor either; the only way back is a re-commit from outside. That
+// asymmetry is why the invariant is enforced on the way IN rather than left to
+// render-time tolerance.
+
+const COLUMN_LIST_TYPE = 'columnList';
+const COLUMN_TYPE = 'column';
+
+/** A structural repair made on the way into a commit. */
+export interface BlockStructureRepair {
+  kind:
+    | 'column_list_unwrapped'
+    | 'column_list_child_wrapped'
+    | 'empty_column_filled'
+    | 'stray_column_unwrapped'
+    | 'nested_column_list_lifted';
+  /** Id of the offending block, when it had one. */
+  id?: string;
+}
+
+function emptyParagraph(): BlockNode {
+  // Same shape blankPageBlocks persists: a repair writes to the repo, and a
+  // props-less paragraph would materialize with populated props on the next
+  // editor load, making the following save report a block nobody edited as
+  // changed. Ids are minted by normalizeBlockStructure once repairs settle.
+  return { type: 'paragraph', props: { ...STANDARD_BLOCK_PROPS }, content: [], children: [] };
+}
+
+function repairAt(block: BlockNode, kind: BlockStructureRepair['kind']): BlockStructureRepair {
+  return { kind, ...(typeof block.id === 'string' && block.id ? { id: block.id } : {}) };
+}
+
+/**
+ * Restore the multi-column invariants, in place (callers pass clones).
+ *
+ * - a `columnList` nested inside a `column` is LIFTED OUT, re-parented as the
+ *   next sibling of the row that contained it. Wrapping it in a column of its
+ *   own would satisfy the arity rule and still leave the document unopenable,
+ *   and unwrapping it would merge two authored layouts into one column; only
+ *   lifting keeps the rows distinct and the reading order intact
+ * - a `column` with no children gets an empty paragraph, so emptying one slot
+ *   of a row keeps the row rather than killing the document
+ * - a non-column child of a `columnList` is wrapped in its own column, which
+ *   keeps it exactly where it was authored — unless it is itself a row, which
+ *   is lifted rather than wrapped
+ * - a `columnList` left with fewer than two columns is unwrapped: its columns'
+ *   children take its place, in order. This matches what the editor does when
+ *   you delete the second-to-last column — the content returns to full width
+ *   instead of growing a blank column nobody asked for
+ * - a `column` outside any `columnList` is unwrapped the same way
+ *
+ * Content is never dropped: every unwrap splices the children up in place, and
+ * every lift re-parents the row rather than flattening it.
+ */
+function repairColumnStructure(
+  blocks: BlockNode[],
+  insideColumnList: boolean,
+  onRepair?: (repair: BlockStructureRepair) => void
+): void {
+  for (let i = 0; i < blocks.length; i++) {
+    const block = blocks[i];
+    if (!block || typeof block !== 'object') continue;
+
+    // Depth first: a child columnList must already be valid (or gone) before
+    // this level decides what its own children are.
+    if (Array.isArray(block.children)) {
+      repairColumnStructure(block.children, block.type === COLUMN_LIST_TYPE, onRepair);
+    }
+
+    if (block.type === COLUMN_TYPE) {
+      if (!insideColumnList) {
+        const lifted = Array.isArray(block.children) ? block.children : [];
+        blocks.splice(i, 1, ...lifted);
+        onRepair?.(repairAt(block, 'stray_column_unwrapped'));
+        i += lifted.length - 1;
+      } else if (!Array.isArray(block.children) || block.children.length === 0) {
+        block.children = [emptyParagraph()];
+        onRepair?.(repairAt(block, 'empty_column_filled'));
+      }
+      continue;
+    }
+
+    if (block.type !== COLUMN_LIST_TYPE) continue;
+
+    const kids = Array.isArray(block.children) ? block.children : [];
+
+    // Rows pulled out of this one, re-parented as its siblings below. The
+    // children were already normalized on the way down, so anything still
+    // shaped like a row here is a row that belongs one level up.
+    const liftedRows: BlockNode[] = [];
+    // Wrap repairs are held rather than reported: see the unwrap branch.
+    const wrapRepairs: BlockStructureRepair[] = [];
+    const columns: BlockNode[] = [];
+
+    for (const kid of kids) {
+      // A row directly inside a row. Wrapping it in a column of its own would
+      // satisfy the arity rule and STILL be unopenable — `column` is
+      // `blockContainer+` and a `columnList` is not one — so the wrap would
+      // report a repair that fixed nothing. Lift it instead.
+      if (kid?.type === COLUMN_LIST_TYPE) {
+        liftedRows.push(kid);
+        onRepair?.(repairAt(kid, 'nested_column_list_lifted'));
+        continue;
+      }
+
+      if (kid?.type === COLUMN_TYPE) {
+        // Same violation one level down, and the likelier one: an `insert`
+        // positioned after a paragraph that lives in a column puts the whole
+        // row inside that column.
+        const grandkids = Array.isArray(kid.children) ? kid.children : [];
+        const kept = grandkids.filter(grandkid => {
+          if (grandkid?.type !== COLUMN_LIST_TYPE) return true;
+          liftedRows.push(grandkid);
+          onRepair?.(repairAt(grandkid, 'nested_column_list_lifted'));
+          return false;
+        });
+        if (kept.length !== grandkids.length) kid.children = kept;
+
+        // The arity rule already ran on the way down, so a column the lift
+        // just emptied has to be refilled HERE or it reaches the repo childless.
+        if (!Array.isArray(kid.children) || kid.children.length === 0) {
+          kid.children = [emptyParagraph()];
+          onRepair?.(repairAt(kid, 'empty_column_filled'));
+        }
+        columns.push(kid);
+        continue;
+      }
+
+      // An ordinary stray becomes a column of its own so the row keeps its
+      // authored order. The stray's id, not the row's: the caller is being told
+      // to go look at something, and the row alone doesn't say which block moved.
+      wrapRepairs.push(repairAt(kid ?? block, 'column_list_child_wrapped'));
+      columns.push({
+        type: COLUMN_TYPE,
+        props: { width: 1 },
+        children: [kid ?? emptyParagraph()],
+      });
+    }
+
+    if (columns.length >= 2) {
+      block.children = columns;
+      // The row survived, so the wrap is visible in the finished document.
+      for (const repair of wrapRepairs) onRepair?.(repair);
+      if (liftedRows.length > 0) {
+        blocks.splice(i + 1, 0, ...liftedRows);
+        i += liftedRows.length; // already normalized — don't walk them again
+      }
+      continue;
+    }
+
+    // One column (or none) left — unwrap, keeping the content in place, and
+    // drop the wrap reports: the row they were made for is gone, so the
+    // finished document holds no trace of them and naming one would send a
+    // caller looking for a column that does not exist. The unwrap below is the
+    // repair that actually happened.
+    const lifted = columns.flatMap(column =>
+      Array.isArray(column.children) ? column.children : []
+    );
+    blocks.splice(i, 1, ...lifted, ...liftedRows);
+    onRepair?.(repairAt(block, 'column_list_unwrapped'));
+    i += lifted.length + liftedRows.length - 1;
+  }
+}
+
+/**
+ * Return a document that BlockNote can actually open: same blocks, with the
+ * multi-column invariants restored (see `repairColumnStructure`). Pure and
+ * idempotent — a document that is already valid is returned structurally
+ * unchanged, so it is safe to call on every path that produces one.
+ */
+export function normalizeBlockStructure<T = unknown>(
+  blocks: T[],
+  { onRepair }: { onRepair?: (repair: BlockStructureRepair) => void } = {}
+): T[] {
+  const copy = structuredClone(blocks) as unknown as BlockNode[];
+
+  let repaired = false;
+  repairColumnStructure(copy, false, repair => {
+    repaired = true;
+    onRepair?.(repair);
+  });
+
+  // A repair invents blocks (the filler paragraph, the wrapping column) and
+  // they must not reach the repo id-less: only the MCP path runs ensureBlockIds
+  // afterwards, and apps/pages never id-fills on read, so BlockNote would mint
+  // a random id client-side and the next ops-shaped save would name a block the
+  // stored document doesn't have. Gated on an actual repair to keep the
+  // documented promise that a valid document comes back unchanged.
+  return (repaired ? ensureBlockIds(copy) : copy) as unknown as T[];
+}
+
 /**
  * Apply a sequence of block operations to a document. Pure — returns a new
  * blocks array, input untouched. Ops are applied sequentially, so later ops
@@ -551,7 +1447,13 @@ function insertBlocksAt(
 export function applyBlockOps(
   blocks: unknown[],
   ops: BlockOp[],
-  { onIdRemint }: { onIdRemint?: (remint: BlockIdRemint) => void } = {}
+  {
+    onIdRemint,
+    onStructureRepair,
+  }: {
+    onIdRemint?: (remint: BlockIdRemint) => void;
+    onStructureRepair?: (repair: BlockStructureRepair) => void;
+  } = {}
 ): unknown[] {
   let doc = structuredClone(blocks) as BlockNode[];
 
@@ -617,7 +1519,13 @@ export function applyBlockOps(
     }
   }
 
-  return doc;
+  // Ops are structural, not schema-aware: a delete that empties a columnList
+  // below two columns applies cleanly and yields a document no reader can
+  // open. Repair before the result escapes, so what callers report and what
+  // gets committed are the same document.
+  return normalizeBlockStructure(doc, {
+    ...(onStructureRepair ? { onRepair: onStructureRepair } : {}),
+  });
 }
 
 // ─── Preview branches (plan §3b) ─────────────────────────────────────────────
@@ -630,7 +1538,7 @@ export function applyBlockOps(
 
 /** The singleton preview branch for a content path (e.g. `preview/pages/syllabus`). */
 export function previewBranchName(contentPath: string): string {
-  return `preview/${contentPath}`;
+  return `${PAGE_PREVIEW_BRANCH_PREFIX}${contentPath}`;
 }
 
 export interface PreviewStatus {
@@ -807,6 +1715,50 @@ function extractBlocks(content: string | null | undefined): BlockNode[] {
  * top-level blocks (base = merge-base version, ours = main, theirs = preview)
  * so the caller can resolve semantically and re-apply.
  */
+/**
+ * Normalize a document GitHub's merge API just produced, committing a repair
+ * only when one was actually needed.
+ *
+ * @param mergedFile - the post-merge content.json read (content + blob sha).
+ * @returns the sha of the repair commit, or null when nothing needed fixing.
+ */
+async function repairMergedContent(
+  page: PageWithContentRepo,
+  mergedFile: { content?: string | null; sha?: string | null } | null,
+  mergedSha: string | null
+): Promise<string | null> {
+  const blocks = mergedFile?.content ? parseBlocksStrict(mergedFile.content) : null;
+  // Unparseable content.json is not this function's problem to solve — the
+  // merge stands and the existing conflict/reload flows already cover it.
+  if (!blocks) return null;
+
+  let repaired = false;
+  const normalized = normalizeBlockStructure(blocks, {
+    onRepair: () => {
+      repaired = true;
+    },
+  });
+  if (!repaired) return null;
+
+  try {
+    const saved = await savePageContent(page, normalized, {
+      coverImage: extractCover(mergedFile?.content),
+      // CAS on the blob the merge produced: if anything landed in between,
+      // that write went through savePageContent and was normalized itself, so
+      // losing this race leaves a valid document either way.
+      ...(mergedSha ? { expectedSha: mergedSha } : {}),
+      message: `Accept preview (repaired column layout): ${page.title}`,
+    });
+    return saved.sha;
+  } catch (error: unknown) {
+    console.warn(
+      `[pageContent.acceptPreview] Could not commit the post-merge column repair for ${page.content_path}:`,
+      error instanceof Error ? error.message : String(error)
+    );
+    return null;
+  }
+}
+
 export async function acceptPreview(page: PageWithContentRepo): Promise<AcceptPreviewResult> {
   const { gitOrganization, repo } = contentRepoFor(page);
   const branch = previewBranchName(page.content_path);
@@ -827,6 +1779,13 @@ export async function acceptPreview(page: PageWithContentRepo): Promise<AcceptPr
     // ref immune to GitHub's eventually-consistent branch reads. 204 no-op
     // merges have no merge commit; fall back to a fresh main read.
     let newSha: string | null = null;
+    // Set only when the repair below actually committed. That commit went
+    // through savePageContent, which records the row (with the real byte size)
+    // and warms the file itself — so the write-through at the end of this block
+    // must not run again for it.
+    let repairedSha: string | null = null;
+    /** The merged bytes at `newSha`, kept so the index does not re-fetch them. */
+    let mergedContent: string | null = null;
     try {
       const mergedFile = await ContentService.getContent({
         gitOrganization,
@@ -835,12 +1794,56 @@ export async function acceptPreview(page: PageWithContentRepo): Promise<AcceptPr
         ...(result.sha ? { ref: result.sha } : { skipCache: true }),
       });
       newSha = mergedFile?.sha ?? null;
+      mergedContent = mergedFile?.content ?? null;
+
+      // A CLEAN git merge is not a valid document. Both sides can individually
+      // satisfy the multi-column invariants and still merge into something no
+      // reader can open: deleting two different columns from the same row is
+      // two non-overlapping hunks in a pretty-printed content.json, so git
+      // merges them without a conflict and never runs the semantic fallback.
+      // This is the default route for a published page (applies land on the
+      // preview branch), so it is the likeliest way the invariant gets broken,
+      // not an exotic one. Repair on top of the merge commit.
+      repairedSha = await repairMergedContent(page, mergedFile, newSha);
+      if (repairedSha) newSha = repairedSha;
     } catch (error: unknown) {
       // Advisory only — the merge itself stands.
       console.warn(
         `[pageContent.acceptPreview] Could not read merged content.json sha for ${repo}/${path}:`,
         error instanceof Error ? error.message : String(error)
       );
+    }
+
+    // Write-through, same as an ordinary save. A git-level merge produces a
+    // commit nobody in this process wrote, so there is no put() result to take
+    // a sha from — but the read above already fetched it at the merge commit,
+    // which is the same value. Without this, accepting a preview would publish
+    // content the read side keeps serving the pre-accept version of until the
+    // webhook lands.
+    if (newSha && newSha !== repairedSha) {
+      await recordPageFile(page, path, newSha);
+
+      // Accepting a preview publishes bytes the index has never seen, and this
+      // path never goes through `savePageContent` — so `recordPageFile`'s own
+      // hook cannot fire for it (it has no `content` to pass). The merged file
+      // read above IS those bytes at exactly `newSha`, so index from it.
+      // When the repair committed instead, `repairedSha` is set and that commit
+      // went through `savePageContent`, which already indexed it.
+      const pageId = (page as { id?: unknown }).id;
+      const acceptClassroomId = (page.classroom as { id?: unknown }).id;
+      if (
+        mergedContent !== null &&
+        typeof pageId === 'string' &&
+        typeof acceptClassroomId === 'string'
+      ) {
+        void indexOneFile({
+          classroomId: acceptClassroomId,
+          path,
+          sha: newSha,
+          body: mergedContent,
+          docHint: { kind: 'page', id: pageId, title: page.title },
+        });
+      }
     }
 
     // Concurrent-stacking guard: a stacking apply may have committed to the
@@ -1476,6 +2479,13 @@ async function runSaveMerge(
   const { gitOrganization, repo } = contentRepoFor(page);
   const path = `${page.content_path}/content.json`;
 
+  // `theirs` is the only side that came from a browser (or from an MCP caller),
+  // so it is the only side that can be carrying a signed URL. `ours` was just
+  // read from the repo and `base` from a commit — both are already canonical.
+  // Done once, outside the CAS retry loop: a retry re-reads main, it does not
+  // re-receive the posted document.
+  theirs = await canonicalizePageBlocks(page, theirs);
+
   const chosen = resolutions ? indexResolutions(resolutions) : null;
 
   for (let attempt = 0; attempt < 2; attempt++) {
@@ -1568,8 +2578,14 @@ async function runSaveMerge(
           ? `Update page (merged): ${page.title}`
           : `Update page: ${page.title}`);
 
+    // Both sides can be individually valid and still merge into a document
+    // that isn't (each deletes a different column of the same three-column
+    // row). Normalize once, so the commit and the document handed back to the
+    // client are the same blocks — the client adopts what main now holds.
+    const merged = normalizeBlockStructure(merge.merged);
+
     try {
-      const saved = await savePageContent(page, merge.merged, {
+      const saved = await savePageContent(page, merged, {
         // Preserve main's CURRENT cover explicitly (the editor save carries no
         // cover; passing it avoids savePageContent's extra preserve re-read).
         coverImage: extractCover(ours.content),
@@ -1580,7 +2596,7 @@ async function runSaveMerge(
         merged: true,
         sha: saved.sha,
         commit: saved.commit,
-        document: merge.merged,
+        document: merged,
         auto_merged: merge.autoMerged,
         concurrent,
       };

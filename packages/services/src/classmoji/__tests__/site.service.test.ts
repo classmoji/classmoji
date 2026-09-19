@@ -878,6 +878,156 @@ describe('site.listPublicModulesForViewer', () => {
     await expect(listPublicModulesForViewer('class-1', 'STUDENT')).resolves.toEqual([]);
   });
 
+  // ── forms ────────────────────────────────────────────────────────────────
+  //
+  // A form is the one item type whose PUBLIC visibility is not a boolean flag
+  // on the row but its `access` column, and whose deadline lives under a
+  // different name (`closes_at`). Both are easy to get half-right, so the
+  // states are pinned separately rather than folded into one fixture.
+
+  const formItem = (
+    id: string,
+    form: { status: string; access: string; closes_at?: Date | null }
+  ) => ({
+    id,
+    item_type: 'FORM',
+    form: {
+      id: `f-${id}`,
+      title: 'Project Preferences',
+      slug: 'project-preferences',
+      closes_at: null,
+      ...form,
+    },
+  });
+
+  it('loads a form with its two visibility flags and its closing date, nothing more', async () => {
+    // The narrow select, asserted at its source. A form's title and slug DO
+    // reach an anonymous request — they have to, to build a PUBLIC form's link
+    // — so the guarantee here is the other direction: no field list, no
+    // revision and no response count ever enters the process on this path.
+    moduleFindMany.mockResolvedValue([]);
+    await listPublicModulesForViewer('class-1', null);
+
+    const include = moduleFindMany.mock.calls[0][0].include.items.include;
+    expect(include.form.select).toEqual({
+      id: true,
+      title: true,
+      slug: true,
+      status: true,
+      access: true,
+      closes_at: true,
+    });
+  });
+
+  it('gives an anonymous visitor an OPEN + PUBLIC form as a real item', async () => {
+    // A PUBLIC form is already a link anyone may open and fill without signing
+    // in. `access: PUBLIC` is the author's opt-in, exactly as `is_public` is
+    // for a page, so naming it on the public site publishes nothing new.
+    const closes = new Date('2026-09-13T03:59:00Z');
+    moduleFindMany.mockResolvedValue([
+      {
+        id: 'mod-forms',
+        title: 'Sign-ups',
+        items: [formItem('i-f', { status: 'OPEN', access: 'PUBLIC', closes_at: closes })],
+      },
+    ]);
+
+    const result = await listPublicModulesForViewer('class-1', null);
+    expect(result[0].items[0]).toMatchObject({
+      kind: 'visible',
+      id: 'i-f',
+      form: { title: 'Project Preferences', slug: 'project-preferences', closes_at: closes },
+    });
+  });
+
+  it('redacts an OPEN + CLASSROOM form to a placeholder carrying its closes_at', async () => {
+    // Published (so the course's rhythm shows) but members-only (so its title
+    // must not). `closes_at` IS a form's due date, and a date is not a content
+    // identifier — "something is due Sep 12" says the course has a rhythm.
+    const closes = new Date('2026-09-13T03:59:00Z');
+    moduleFindMany.mockResolvedValue([
+      {
+        id: 'mod-forms',
+        title: 'Sign-ups',
+        items: [formItem('i-f', { status: 'OPEN', access: 'CLASSROOM', closes_at: closes })],
+      },
+    ]);
+
+    const result = await listPublicModulesForViewer('class-1', null);
+    // toEqual, not toMatchObject: the point is that the title and slug the
+    // include loaded are ABSENT from what the anonymous renderer receives.
+    expect(result[0].items[0]).toEqual({
+      kind: 'placeholder',
+      id: 'i-f',
+      item_type: 'FORM',
+      due_at: closes,
+    });
+  });
+
+  it('keeps a CLOSED form visible, and a CLOSED + PUBLIC one still openable', async () => {
+    // A closed form is not an unpublished one: students should still see the
+    // thing they were asked to fill in, reading honestly as "Closed".
+    moduleFindMany.mockResolvedValue([
+      {
+        id: 'mod-forms',
+        title: 'Sign-ups',
+        items: [
+          formItem('i-pub', { status: 'CLOSED', access: 'PUBLIC' }),
+          formItem('i-cls', { status: 'CLOSED', access: 'CLASSROOM' }),
+        ],
+      },
+    ]);
+
+    const result = await listPublicModulesForViewer('class-1', null);
+    expect(result[0].items.map(item => [item.id, item.kind])).toEqual([
+      ['i-pub', 'visible'],
+      ['i-cls', 'placeholder'],
+    ]);
+  });
+
+  it('gives an anonymous visitor NO row at all for a DRAFT form, whatever its access', async () => {
+    // Not even a placeholder, and PUBLIC does not rescue it: a draft form is
+    // invisible to enrolled students too, so a locked row here would advertise
+    // unreleased work to the open web — worse than the leak this prevents.
+    moduleFindMany.mockResolvedValue([
+      {
+        id: 'mod-forms',
+        title: 'Sign-ups',
+        items: [
+          formItem('i-draft-pub', {
+            status: 'DRAFT',
+            access: 'PUBLIC',
+            closes_at: new Date('2026-09-13T03:59:00Z'),
+          }),
+          formItem('i-draft-cls', { status: 'DRAFT', access: 'CLASSROOM' }),
+        ],
+      },
+    ]);
+
+    const result = await listPublicModulesForViewer('class-1', null);
+    expect(result).toEqual([
+      expect.objectContaining({ id: 'mod-forms', title: 'Sign-ups', items: [] }),
+    ]);
+  });
+
+  it('shows a MEMBER every non-draft form in full, access notwithstanding', async () => {
+    // `access` is a rule about the anonymous web. A signed-in student sees the
+    // CLASSROOM form they were actually asked to fill in — with its title.
+    moduleFindMany.mockResolvedValue([
+      {
+        id: 'mod-forms',
+        title: 'Sign-ups',
+        items: [
+          formItem('i-cls', { status: 'OPEN', access: 'CLASSROOM' }),
+          formItem('i-draft', { status: 'DRAFT', access: 'PUBLIC' }),
+        ],
+      },
+    ]);
+
+    const result = await listPublicModulesForViewer('class-1', 'STUDENT');
+    expect(result[0].items.map(item => [item.id, item.kind])).toEqual([['i-cls', 'visible']]);
+  });
+
   it('keeps an empty public module as a bare title for an anonymous visitor', async () => {
     moduleFindMany.mockResolvedValue([{ id: 'mod-4', title: 'Week 3', items: [] }]);
     await expect(listPublicModulesForViewer('class-1', null)).resolves.toEqual([

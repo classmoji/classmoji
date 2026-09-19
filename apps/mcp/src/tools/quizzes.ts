@@ -9,8 +9,9 @@
  * TWO EXTRA GATES run in-handler, because the registry pipeline (scope → rate
  * limit → role → mutation gate) does not know about them:
  *   1. Pro tier — the web action calls assertProTier before dispatching any
- *      quiz mutation. We call the SAME helper the quizzes read resource uses
- *      (resources/content.ts), so read and write cannot drift apart.
+ *      quiz mutation. We call the SAME helper (authz/proTier.ts, a thin
+ *      translation of @classmoji/auth's lifted assertProTier) that the quizzes
+ *      read resource uses, so read, write and the webapp cannot drift apart.
  *   2. quizzes_enabled — read from the request's already-resolved, sanitized
  *      classroom settings. The web app checks this in the LOADER only, not in
  *      the action; MCP is deliberately stricter, so a classroom that has turned
@@ -35,7 +36,7 @@ import { ClassmojiService } from '@classmoji/services';
 import { z } from 'zod';
 import { ToolError } from '../mcp/errors.ts';
 import type { ToolContext, ToolDefinition } from '../mcp/registry.ts';
-import { assertProTier } from '../resources/content.ts';
+import { assertProTier } from '../authz/proTier.ts';
 import { sanitizedSettings } from '../resources/shape.ts';
 import {
   loadQuizInClassroom,
@@ -54,7 +55,7 @@ import {
  * values the quizzes read resource gates on, with no extra query.
  */
 async function assertQuizSurfaceEnabled(ctx: ToolContext): Promise<void> {
-  await assertProTier(requireClassroomCtx(ctx).classroomId);
+  await assertProTier(ctx);
   if (sanitizedSettings(ctx).quizzes_enabled === false) {
     throw new ToolError('forbidden', 'Quizzes are disabled for this classroom');
   }

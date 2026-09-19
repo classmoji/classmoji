@@ -496,10 +496,17 @@ export const importContentTask = task({
 
     const counts = { pages: 0, slides: 0 };
     if (wantPages) {
-      counts.pages = await importPageRows({ prisma, job, writer, source, target });
+      counts.pages = await importPageRows({
+        prisma,
+        job,
+        writer,
+        source,
+        target,
+        copied: clone.copied,
+      });
     }
     if (wantSlides) {
-      counts.slides = await importSlideRows({ prisma, job, writer });
+      counts.slides = await importSlideRows({ prisma, job, writer, copied: clone.copied });
     }
 
     // Rebuilt wholesale from the TARGET's rows — the source's manifest was
@@ -565,12 +572,21 @@ export async function importPageRows({
   writer,
   source,
   target,
+  copied,
 }: {
   prisma: PrismaClient;
   job: LoadedImportJob;
   writer: ProgressWriter;
   source: { orgLogin: string; repo: string };
   target: { orgLogin: string; repo: string };
+  /**
+   * Every repo path the clone pushed — what `header_image_url` is checked
+   * against for the chained-import rewrite. The tree and the rows have to
+   * answer "did that file come along?" the same way, so this is the SAME set
+   * the clone gated its own file rewrites on. Absent simply means no chained
+   * rewriting on this column.
+   */
+  copied?: ReadonlySet<string>;
 }): Promise<number> {
   const { rewriteContentUrls } = ClassmojiService.contentImport;
   const { createWithUniquePageSlug, isPageSlugConflict } = ClassmojiService.page;
@@ -585,6 +601,12 @@ export async function importPageRows({
   let done = already.size;
   let created = 0;
   const warnings: string[] = [];
+  // Chained header-image references left alone because the file is not in the
+  // copy. Reported once for the whole pass, never once per page.
+  let uncopiedRefs = 0;
+  const onUncopiedRef = (): void => {
+    uncopiedRefs++;
+  };
   for (const page of sourcePages) {
     // Resume: this page's row already exists from an earlier attempt. It still
     // counts as done — it IS imported — and it is not warned about.
@@ -616,6 +638,13 @@ export async function importPageRows({
                   targetLogin: target.orgLogin,
                   targetRepo: target.repo,
                   targetPath: '',
+                  // A header image is a reference like any other, and a page
+                  // whose classroom arrived by import can hold one naming the
+                  // repo two hops back. Without these it is the one reference
+                  // the copy leaves behind — the tree got rewritten, the row
+                  // did not.
+                  ...(copied ? { targetHasPath: (p: string) => copied.has(p) } : {}),
+                  onUncopiedRef,
                 })
               : page.header_image_url,
             header_image_position: page.header_image_position,
@@ -642,24 +671,63 @@ export async function importPageRows({
     }
   }
 
+  if (uncopiedRefs > 0) {
+    logger.warn('content import: uncopied header image references', {
+      refs: uncopiedRefs,
+      org: source.orgLogin,
+    });
+    warnings.push(
+      `pages: left ${uncopiedRefs} header image reference(s) into another ${source.orgLogin} ` +
+        `repository untouched — those files are not in this copy`
+    );
+  }
+
   writer.addWarnings(warnings);
   return created;
 }
 
 /**
- * Slide-deck equivalent of importPageRows. Takes no repo coordinates: a deck
- * carries no URL-bearing column of its own (its asset URLs live inside
+ * Slide equivalent of importPageRows. Takes no repo coordinates: a slide
+ * carries no URL-bearing column of its own (a deck's asset URLs live inside
  * deck.json, which the push already rewrote), and `slug` is copied verbatim
  * because it IS the content path segment.
+ *
+ * ## Why `kind` and the source columns have to come along
+ *
+ * Because the whole of a non-deck slide is in them. A FILE slide is a row
+ * naming an uploaded document and a LINK slide is a row naming a URL — neither
+ * has an `index.html` behind it — so a copy that wrote only the columns a deck
+ * uses would land every one of them as an empty DECK: a slide that opens to a
+ * blank reveal.js frame, with the document orphaned in the repo and the link
+ * simply gone. The columns are copied VERBATIM, `source_path` included, because
+ * unlike the per-file importer this path pushes the source tree unchanged and
+ * never dedupes a slug: the document is at the same path in the target repo
+ * that it was at in the source one.
+ *
+ * ## And why a FILE slide can still be skipped
+ *
+ * The clone is pruned (a slides-only import drops `pages/`) and a source repo
+ * can be missing the document its row names. `copied` is what the push actually
+ * put in the target, so a FILE row whose document is not in it would point at a
+ * path that does not exist — a download that 404s, which is worse than a slide
+ * that was never copied and said so. Same rule as `collectSlideFile` on the
+ * per-file path: warn, create no row.
  */
-async function importSlideRows({
+export async function importSlideRows({
   prisma,
   job,
   writer,
+  copied,
 }: {
   prisma: PrismaClient;
   job: LoadedImportJob;
   writer: ProgressWriter;
+  /**
+   * Every repo path the clone pushed. A FILE slide's document must be in it.
+   * Absent means the caller cannot say, and a FILE row is created on trust —
+   * the push either carried the whole tree or the caller returned before here.
+   */
+  copied?: ReadonlySet<string>;
 }): Promise<number> {
   const sourceSlides = await prisma.slide.findMany({
     where: { classroom_id: job.source_classroom_id },
@@ -675,6 +743,20 @@ async function importSlideRows({
   for (const slide of sourceSlides) {
     if (already.has(slide.id)) continue;
     try {
+      // A FILE row is only worth creating if its document came across. The
+      // path is not remapped on this route — the tree was pushed as it stood —
+      // so the row's own `source_path` is what the target holds it under.
+      if (slide.kind === 'FILE') {
+        const missing = !slide.source_path || (copied ? !copied.has(slide.source_path) : false);
+        if (missing) {
+          warnings.push(
+            `slides: skipped "${slide.title}" — its file (${slide.source_path ?? 'no path'}) ` +
+              'is not in the copied content repository'
+          );
+          continue;
+        }
+      }
+
       const row = await prisma.slide.create({
         data: {
           classroom_id: job.classroom_id,
@@ -686,6 +768,15 @@ async function importSlideRows({
           is_public: false,
           allow_team_edit: slide.allow_team_edit,
           show_speaker_notes: slide.show_speaker_notes,
+          // The kind, and with it whatever that kind is made of. Verbatim: this
+          // route pushes the source tree unchanged and never dedupes a slug, so
+          // the document is at the path the row already names.
+          kind: slide.kind,
+          source_path: slide.source_path,
+          source_filename: slide.source_filename,
+          source_mime: slide.source_mime,
+          source_size: slide.source_size,
+          source_url: slide.source_url,
         },
       });
       writer.mergeIdMaps({ slides: { [slide.id]: row.id } });

@@ -187,19 +187,70 @@ export function listResourceDefinitions(): ResourceDefinition[] {
   return [...resourceDefinitions.values()];
 }
 
+/**
+ * Service errors that are a CALLER mistake, by their machine-readable `code`.
+ *
+ * A service throws these at a request that cannot be honoured — a deck
+ * operation aimed at an uploaded file, an upload the slide policy will not take
+ * — and without this every one of them came back as `internal` / "Internal
+ * server error": an opaque 500 for something the caller could have fixed by
+ * reading the sentence the service already wrote. The message is safe to
+ * forward precisely because these are refusals rather than faults; they name a
+ * rule, never an internal.
+ *
+ * Matched on `code` rather than `instanceof` on purpose. The alternative is
+ * importing the error classes out of `@classmoji/services/slides`, which pulls
+ * the deck engine (and cheerio) into this process's startup graph for the sake
+ * of two string comparisons, and it would not survive an error arriving across
+ * a boundary that reconstructs it structurally.
+ */
+const CALLER_ERROR_CODES = new Map<string, ToolErrorKind>([
+  // A deck tool, or slide_update's deck-only toggles, aimed at a FILE/LINK.
+  ['SLIDE_KIND_MISMATCH', 'invalid_params'],
+  // An upload or a link the slide source policy refuses.
+  ['SLIDE_SOURCE_REJECTED', 'invalid_params'],
+]);
+
+/**
+ * The first known caller-error code on the error or its `cause` chain.
+ *
+ * The chain is walked because a service may wrap — the same reasoning as
+ * `hasErrorCode` in tools/slides.ts, which is what the tools themselves use for
+ * codes they handle individually.
+ */
+function callerErrorOf(error: unknown): { kind: ToolErrorKind; code: string } | null {
+  let current: unknown = error;
+  while (current instanceof Error) {
+    const code = (current as { code?: unknown }).code;
+    if (typeof code === 'string') {
+      const kind = CALLER_ERROR_CODES.get(code);
+      if (kind) return { kind, code };
+    }
+    current = current.cause;
+  }
+  return null;
+}
+
 /** Serialize a caught error into a structured isError tool result (S5). */
 function toErrorResult(error: unknown, toolName: string): ToolResult {
-  if (error instanceof ToolError) {
+  // A service refusal carrying a known code is reported as the ToolError it
+  // should have been, rather than swallowed as an internal fault.
+  const caller = error instanceof ToolError ? null : callerErrorOf(error);
+  const failure = caller
+    ? new ToolError(caller.kind, (error as Error).message, caller.code)
+    : error;
+
+  if (failure instanceof ToolError) {
     return {
       isError: true,
       content: [
         {
           type: 'text',
           text: JSON.stringify({
-            error: error.kind,
-            ...(error.code ? { code: error.code } : {}),
-            message: error.message,
-            ...(error.data ?? {}),
+            error: failure.kind,
+            ...(failure.code ? { code: failure.code } : {}),
+            message: failure.message,
+            ...(failure.data ?? {}),
           }),
         },
       ],

@@ -23,6 +23,40 @@ export {
 } from './content/utils/validateFile.ts';
 export { getMimeType, isBinaryFile, isImageFile } from './content/utils/contentType.ts';
 
+// Slide SOURCE policy — what a FILE or LINK slide is allowed to be.
+//
+// Exported from the ROOT barrel although it lives under `src/slides/`, which is
+// otherwise the cheerio-bearing deck engine's territory. `slideSource.ts` has
+// no imports at all: it is constants, a link validator and three kind guards,
+// and the webapp needs every one of them to render a kind chip, validate a link
+// in an action and refuse a deck-only toggle. Importing the FILE itself (not
+// the `./slides` barrel) is what keeps the parser out of the webapp's graph —
+// see the constraint note above `contentSearch`, which is the same rule.
+export {
+  RESERVED_SLIDE_FILENAMES,
+  SLIDE_FILE_EXTENSIONS,
+  SLIDE_FILE_MAX_BYTES,
+  SLIDE_FILE_MAX_LABEL,
+  SLIDE_FILE_MIME,
+  SLIDE_LINK_MAX_LENGTH,
+  SlideKindError,
+  assertDeckSlide,
+  assertFileSlide,
+  assertLinkSlide,
+  isDeckSlide,
+  slideFileExtension,
+  slideFileStorageName,
+  slideKindLabel,
+  slideLinkHost,
+  validateSlideFile,
+  validateSlideLinkUrl,
+} from './slides/slideSource.ts';
+export type {
+  SlideFileExtension,
+  SlideFileValidation,
+  SlideLinkValidation,
+} from './slides/slideSource.ts';
+
 // Git provider abstraction layer
 export {
   GitProvider,
@@ -51,6 +85,27 @@ export {
 } from './classmoji/index.ts';
 
 export { ClassmojiService, HelperService, StripeService, FlyCertService, MarkdownImporter };
+
+// GitHub App installation repair, shared by the "Check again" action, the
+// create-classroom guard, the uninstall webhook and the operator sweep task.
+export {
+  GitHubRateLimitedError,
+  validateInstallationIdentity,
+  lookupInstallationForOrg,
+  listAppInstallations,
+  claimInstallationIfNull,
+  clearInstallationIfMatches,
+  repairInstallation,
+} from './classmoji/gitOrganization.service.ts';
+export type {
+  InstallationLike,
+  InstallationAccountLike,
+  InstallationRejection,
+  InstallationValidation,
+  InstallationLookup,
+  RepairInstallationResult,
+  RepairInstallationOptions,
+} from './classmoji/gitOrganization.service.ts';
 
 // Admin service result/error shapes shared by the web routes and the MCP tools.
 export { StaffServiceError } from './classmoji/staff.service.ts';
@@ -98,6 +153,106 @@ export type {
   GradingReportRow,
 } from './classmoji/gitRepoAssignmentGrader.service.ts';
 
+// Course-content search: the permission-joined vector query behind the MCP's
+// `content_search` / `content_list` / `content_get`, plus the ONE draft-
+// visibility predicate they all share. Exported flat rather than only through
+// `ClassmojiService.contentSearch` because the MCP tool layer consumes the
+// predicate and the argument types directly, and a second copy of "who may see
+// a draft" is exactly the drift this lane exists to prevent.
+//
+// CONSTRAINT ON `contentSearch.service.ts`, stated here because THIS block is
+// what enforces it: that module must never statically import `./content/extract`
+// (which pulls in cheerio) or `./helpers/workersAi`. This barrel is on the
+// startup path of every app in the monorepo — webapp, slides, admin, mcp,
+// hook-station, tasks — so anything it reaches transitively is paid for on
+// every cold boot, by processes that will never run a search. The module needs
+// neither today: it takes an already-embedded `queryVector` from its caller and
+// reads `text` straight back out of the index, so both stay on the WRITE side.
+// `workersAi` is dependency-free and costs nothing; `content/extract` pulls in
+// cheerio, which is why even `contentIndex.service` reaches it through a
+// dynamic `await import()`. If this module ever needs either, do the same —
+// a static edge here puts a parser into every app's boot.
+export {
+  contentVisibility,
+  canSeeDrafts,
+  isMemberRole,
+  searchContent,
+  listContent,
+  getContentText,
+  toVectorLiteral,
+  ContentNotFoundError,
+  CONTENT_STAFF_ROLES,
+  EMBEDDING_DIMENSIONS,
+  SNIPPET_CHARS,
+  DEFAULT_SEARCH_LIMIT,
+  MAX_SEARCH_LIMIT,
+  DEFAULT_LIST_LIMIT,
+  MAX_LIST_LIMIT,
+} from './classmoji/contentSearch.service.ts';
+export type {
+  ContentViewerRole,
+  ContentDocKind,
+  ContentVisibility,
+  ContentVisibilityFlags,
+  ViewerFlags,
+  ContentSearchHit,
+  SearchContentArgs,
+  ContentListEntry,
+  ListContentArgs,
+  ContentDocumentText,
+  GetContentTextArgs,
+} from './classmoji/contentSearch.service.ts';
+
+// PRODUCT DOCUMENTATION search: the second, classroom-independent corpus behind
+// the same three MCP tools under `scope: 'docs'`. Exported flat for the same
+// reason `contentSearch` is — the tool layer consumes the argument and result
+// types directly.
+//
+// THE SAME CONSTRAINT APPLIES, for the same reason: `docsSearch.service.ts`
+// must never statically import `./content/extract` (cheerio) or
+// `./helpers/workersAi`. It takes an already-embedded vector and reads `text`
+// straight back out of the index, so it needs neither.
+//
+// The WRITE side (`docsIndex.service.ts`) is deliberately NOT here. It reaches
+// the extractor and the embedding client, and only the Trigger task calls it —
+// through `ClassmojiService.docsIndex`.
+export {
+  searchDocs,
+  listDocs,
+  getDocText,
+  docsIndexIsEmpty,
+  DocsNotFoundError,
+  // The limit/snippet bounds are NOT re-declared here: both scopes share the
+  // course lane's `SNIPPET_CHARS`/`*_SEARCH_LIMIT`/`*_LIST_LIMIT` above, so the
+  // tool schema's single `limit` field cannot drift from the service's clamp.
+  DOCS_SEARCH_MIN_CHARS,
+} from './classmoji/docsSearch.service.ts';
+export type {
+  DocsSearchHit,
+  SearchDocsArgs,
+  DocsListEntry,
+  ListDocsArgs,
+  DocsListPage,
+  DocsDocumentText,
+} from './classmoji/docsSearch.service.ts';
+
+// Instructor audience for the newsletter segment. The mail-provider mechanics
+// that act on the answer live in the scheduled task that consumes it.
+export {
+  listInstructorContacts,
+  type InstructorContact,
+} from './classmoji/instructorAudience.service.ts';
+
+// One-off product questions asked on the classroom picker. The catalog itself
+// is in @classmoji/utils so the client can render it.
+export {
+  pendingQuestions as pendingSurveyQuestions,
+  recordAnswer as recordSurveyAnswer,
+  deriveSurveyContext,
+  SurveyValidationError,
+  type SurveyContext,
+} from './classmoji/survey.service.ts';
+
 // Fly certificate automation for class-site custom domains. Every method throws
 // a typed FlyCertError when the credentials are absent, so importing this in a
 // deployment that has none is safe.
@@ -131,7 +286,12 @@ export {
 } from './autograding/callbackToken.ts';
 
 // Example-classroom provisioning (server-only; touches Prisma)
-export { provisionExampleClassroom } from './classmoji/exampleClassroom.service.ts';
+export {
+  provisionExampleClassroom,
+  deleteAbandonedExampleClassrooms,
+  ABANDONED_EXAMPLE_AGE_DAYS,
+  type ExampleCleanupReport,
+} from './classmoji/exampleClassroom.service.ts';
 
 // Classroom slug rules: normalization, deterministic collision candidates, and
 // the constraint-and-retry wrapper every slug-creating path goes through

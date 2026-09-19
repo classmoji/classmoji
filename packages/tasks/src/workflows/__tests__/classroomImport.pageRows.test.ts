@@ -201,3 +201,78 @@ describe('importPageRows', () => {
     expect(writer.warnings).toEqual([]);
   });
 });
+
+/**
+ * `header_image_url` is the one reference that does NOT live in the pushed
+ * tree, so the clone's own rewrite pass never sees it. Without the copied-path
+ * set and the residual counter reaching this column, a header image that a
+ * chained import left pointing two repos back stayed pointing there — the tree
+ * repaired, the row not.
+ */
+describe('importPageRows: header_image_url rewriting', () => {
+  const withHeader = { ...sourcePage('src-1', 'Lab 1'), header_image_url: 'pages/lab-1/hero.png' };
+
+  beforeEach(() => {
+    mocks.pageFindMany.mockResolvedValue([withHeader]);
+  });
+
+  it('hands the rewriter the clone’s copied set and a residual counter', async () => {
+    const writer = makeWriter();
+    const copied = new Set(['pages/lab-1/hero.png']);
+
+    await importPageRows({
+      prisma: prisma as unknown as Args['prisma'],
+      job: job as unknown as Args['job'],
+      writer: writer as unknown as Args['writer'],
+      source: REPO,
+      target: REPO,
+      copied,
+    });
+
+    const [ref, ctx] = mocks.rewriteContentUrls.mock.calls[0] as [
+      string,
+      { targetHasPath?: (p: string) => boolean; onUncopiedRef?: (r: string) => void },
+    ];
+    expect(ref).toBe('pages/lab-1/hero.png');
+    // The SAME answer the clone gated its file rewrites on, not a fresh guess.
+    expect(ctx.targetHasPath?.('pages/lab-1/hero.png')).toBe(true);
+    expect(ctx.targetHasPath?.('pages/lab-9/gone.png')).toBe(false);
+    expect(typeof ctx.onUncopiedRef).toBe('function');
+  });
+
+  it('reports uncopied header references ONCE, not once per page', async () => {
+    mocks.pageFindMany.mockResolvedValue([
+      withHeader,
+      { ...sourcePage('src-2', 'Lab 2'), header_image_url: 'pages/lab-2/hero.png' },
+    ]);
+    // Stand in for the real rewriter leaving a chained reference alone.
+    mocks.rewriteContentUrls.mockImplementation((...a: unknown[]) => {
+      (a[1] as { onUncopiedRef?: (r: string) => void }).onUncopiedRef?.('ref');
+      return a[0];
+    });
+    const writer = makeWriter();
+
+    await importPageRows({
+      prisma: prisma as unknown as Args['prisma'],
+      job: job as unknown as Args['job'],
+      writer: writer as unknown as Args['writer'],
+      source: REPO,
+      target: REPO,
+      copied: new Set<string>(),
+    });
+
+    const residual = writer.warnings.filter(w => w.includes('header image reference'));
+    expect(residual).toHaveLength(1);
+    expect(residual[0]).toContain('left 2 header image reference(s)');
+  });
+
+  it('omits the predicate entirely when no copied set is given', async () => {
+    // No set means the caller cannot say what the copy carries, and the
+    // rewriter must then do no chained rewriting at all rather than guess.
+    const writer = makeWriter();
+    await run(writer);
+
+    const [, ctx] = mocks.rewriteContentUrls.mock.calls[0] as [string, { targetHasPath?: unknown }];
+    expect(ctx.targetHasPath).toBeUndefined();
+  });
+});

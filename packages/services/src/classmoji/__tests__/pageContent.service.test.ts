@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 // pageContent.service is the page-content read/write path extracted from
 // apps/pages' content.server.ts (Phase 1 of the content-tools plan):
@@ -27,12 +27,81 @@ vi.mock('../../content/ContentService.ts', () => ({
   },
 }));
 
+// The asset map row is written at upload time rather than left to the push
+// webhook — see recordContentAsset. Mocked here so this suite keeps pinning the
+// GitHub interactions and nothing reaches Prisma.
+//
+// The rows a record actually WROTE are kept, because an upload signs only what
+// the map can vouch for: `signUploadedAsset` looks its sha back up rather than
+// trusting the commit response that produced it. A mock that recorded nothing
+// would be a classroom whose map has no row — a refusal, not a signature.
+const recordContentAssetMock = vi.fn();
+const resolveContentBranchMock = vi.fn();
+const recordedRows = new Map<string, string>();
+vi.mock('../contentAssets.service.ts', () => ({
+  recordContentAsset: async (classroomId: string, entry: { path: string; sha: string }) => {
+    const ok = await recordContentAssetMock(classroomId, entry);
+    if (ok) recordedRows.set(`${classroomId}|${entry.sha}`, entry.path);
+    return ok;
+  },
+  resolveContentBranch: (...args: unknown[]) => resolveContentBranchMock(...args),
+  lookupContentAssetsBySha: async (classroomId: string, shas: string[]) =>
+    new Map(
+      shas.flatMap(sha => {
+        const path = recordedRows.get(`${classroomId}|${sha}`);
+        return path ? ([[sha, path]] as Array<[string, string]>) : [];
+      })
+    ),
+}));
+
+// The map-first read (`viaWorker`). Mocked at the module seam so this suite
+// stays about page-content shapes; contentDelivery.text.test.ts owns the read
+// itself. `canonicalizeMany` is passed through unchanged — the save path calls
+// it and this suite is not testing canonicalization.
+//
+// The two signing-guard exports are the REAL ones. Stubbing them would stub out
+// the very check that decides whether an upload stores a repo path or a legacy
+// URL, which is what the upload assertions below are about.
+const fetchContentTextMock = vi.fn();
+const warmContentTextMock = vi.fn(async (..._args: unknown[]) => {});
+// Stubbed, unlike the two signing guards: `resolvePageAssetUrl` is a policy
+// wrapper — which classrooms may mint, and what counts as an answer — and
+// contentDelivery.resolve.test.ts owns the resolve itself.
+const resolveAssetUrlMock = vi.fn();
+const canonicalizeAssetRefMock = vi.fn();
+vi.mock('../contentDelivery.service.ts', async () => {
+  const actual = await vi.importActual<typeof import('../contentDelivery.service.ts')>(
+    '../contentDelivery.service.ts'
+  );
+  return {
+    fetchContentText: (...args: unknown[]) => fetchContentTextMock(...args),
+    // Real, not a stub: the two probes sharing ONE budget object is the thing
+    // being asserted, and a mock that handed out a fresh object each call would
+    // make that assertion vacuous.
+    textReadBudget: () => ({ workerUnavailable: false }),
+    canonicalizeMany: async (_ctx: unknown, refs: string[]) => new Map(refs.map(r => [r, r])),
+    warmContentText: (...args: unknown[]) => warmContentTextMock(...args),
+    mappedAssetsBySha: actual.mappedAssetsBySha,
+    signBlobUrlForClassroom: actual.signBlobUrlForClassroom,
+    resolveAssetUrl: (...args: unknown[]) => resolveAssetUrlMock(...args),
+    canonicalizeAssetRef: (...args: unknown[]) => canonicalizeAssetRefMock(...args),
+    // Real: the placeholder check is a pure shape test, and it is one of the
+    // decisions `resolvePageAssetUrl` is made of. Stubbing it would leave
+    // nothing under test. (`canonicalizePageCoverRef`'s own path rule is
+    // module-private and runs for real either way.)
+    parseMissingUrl: actual.parseMissingUrl,
+  };
+});
+
 const {
   loadPageContent,
   savePageContent,
   uploadPageAsset,
+  resolvePageAssetUrl,
+  canonicalizePageCoverRef,
   ensureBlockIds,
   applyBlockOps,
+  normalizeBlockStructure,
   blankPageBlocks,
   blankPageContentJson,
   BlockOpError,
@@ -59,9 +128,25 @@ type CallArg = Record<string, unknown>;
 const callArg = (mock: ReturnType<typeof vi.fn>, n = 0) => mock.mock.calls[n][0] as CallArg;
 const writtenWrapper = () => JSON.parse(callArg(putMock).content as string);
 
+/** Restores the console spy installed below. */
+let restoreConsoleError: () => void;
+
 beforeEach(() => {
   vi.clearAllMocks();
+  recordedRows.clear();
   putMock.mockResolvedValue({ sha: 'new-sha', commit: 'commit-1' });
+
+  // Several tests here drive the read/parse failure paths on purpose, and those
+  // paths log by design. Silenced so the suite output stays readable — and,
+  // less obviously, so vitest is not still shipping console lines to the main
+  // thread when the worker closes, which it reports as an EnvironmentTeardown
+  // error and which turns a green run into a non-zero exit.
+  const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+  restoreConsoleError = () => spy.mockRestore();
+});
+
+afterEach(() => {
+  restoreConsoleError();
 });
 
 // ─── loadPageContent ─────────────────────────────────────────────────────────
@@ -119,12 +204,35 @@ describe('pageContent.loadPageContent', () => {
     expect(result.sha).toBe('sha-html');
   });
 
-  it('returns format none with a null sha when neither file exists', async () => {
+  it('returns format none with a null sha when neither file exists (404 on both)', async () => {
     getContentMock.mockResolvedValue(null);
 
     const result = await loadPageContent(page);
 
     expect(result).toEqual({ format: 'none', blocks: null, coverImage: null, sha: null });
+    expect(getContentMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('rejects when the content.json read FAILS, rather than reporting format none', async () => {
+    // getContent answers null for a 404 and throws for everything else. 'none'
+    // is the cue every writer takes to create the file, so an unreadable read
+    // must not arrive dressed as an absent one — and must not fall through to
+    // the HTML probe either, which would make the answer depend on a second
+    // read of the same unreachable repo.
+    getContentMock.mockRejectedValueOnce(Object.assign(new Error('Server Error'), { status: 503 }));
+
+    await expect(loadPageContent(page, { skipCache: true })).rejects.toMatchObject({
+      status: 503,
+    });
+    expect(getContentMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects when the index.html fallback read fails (404 on content.json)', async () => {
+    getContentMock
+      .mockResolvedValueOnce(null) // content.json 404
+      .mockRejectedValueOnce(Object.assign(new Error('rate limited'), { status: 403 }));
+
+    await expect(loadPageContent(page)).rejects.toMatchObject({ status: 403 });
   });
 
   it('passes skipCache through to both reads', async () => {
@@ -177,14 +285,53 @@ describe('pageContent.savePageContent', () => {
 
     expect(writtenWrapper()).toEqual({ blocks, coverImage: cover });
     expect(callArg(putMock).message).toBe('Update page: Syllabus');
-    expect(result).toEqual({ sha: 'new-sha', commit: 'commit-1' });
+    // The cover comes back as STORED — here, the one the re-read preserved,
+    // which the caller never passed in and so could not have echoed itself.
+    expect(result).toEqual({ sha: 'new-sha', commit: 'commit-1', coverImage: cover });
   });
 
-  it('omits the coverImage key when omitted and no existing file has one', async () => {
+  it('omits the coverImage key when omitted and no existing file has one (404)', async () => {
     getContentMock.mockResolvedValueOnce(null);
 
     await savePageContent(page, blocks);
 
+    // A 404 is the one answer that may leave the key off: there is no file to
+    // preserve a cover from, so the save goes through without it.
+    expect(putMock).toHaveBeenCalledTimes(1);
+    expect(writtenWrapper()).toEqual({ blocks });
+  });
+
+  it('a FAILED cover re-read stops the save rather than dropping the key', async () => {
+    // The wrapper omits coverImage when it is undefined, so continuing here
+    // would write a cover-less document over a page that may well have one —
+    // on nothing more than a GitHub blip. Same rule as the load path.
+    getContentMock.mockRejectedValueOnce(Object.assign(new Error('Server Error'), { status: 503 }));
+
+    await expect(savePageContent(page, blocks)).rejects.toMatchObject({ status: 503 });
+    expect(putMock).not.toHaveBeenCalled();
+  });
+
+  it('an UNPARSEABLE existing file does NOT stop the save — that save is the repair', async () => {
+    // A corrupt content.json loads as 'html' or 'none', so the editor reaches
+    // this save with no json sha and it is the only way back short of git. A
+    // file we cannot parse has no cover to preserve either way, so the key is
+    // dropped and the write goes through.
+    getContentMock.mockResolvedValueOnce({ content: '{not json', sha: 'old-sha' });
+
+    await savePageContent(page, blocks);
+
+    expect(putMock).toHaveBeenCalledTimes(1);
+    expect(writtenWrapper()).toEqual({ blocks });
+  });
+
+  it('an explicit coverImage skips the re-read, so a caller can still rewrite the file', async () => {
+    // The escape hatch out of the refusal above: passing the cover (or null)
+    // says what to store, so no read is needed to find out.
+    getContentMock.mockRejectedValue(Object.assign(new Error('Server Error'), { status: 503 }));
+
+    await savePageContent(page, blocks, { coverImage: null });
+
+    expect(getContentMock).not.toHaveBeenCalled();
     expect(writtenWrapper()).toEqual({ blocks });
   });
 
@@ -246,18 +393,295 @@ describe('pageContent.savePageContent', () => {
   });
 });
 
+// ─── loadPageContent via the delivery layer ──────────────────────────────────
+
+describe('pageContent.loadPageContent viaWorker', () => {
+  // The map-first read only has a context to work with when the page carries
+  // its classroom id and repo — the resolver's own requirement.
+  const keyedPage = {
+    ...page,
+    classroom: { ...page.classroom, id: '3f2504e0-4f89-41d3-9a0c-0305e82c3301' },
+  };
+
+  beforeEach(() => {
+    fetchContentTextMock.mockResolvedValue(null);
+  });
+
+  it('reads content.json through the map, and never touches GitHub on a hit', async () => {
+    // The whole point: a page view costs no GitHub call, and the sha the map
+    // signed is the sha the reader gets.
+    fetchContentTextMock.mockResolvedValueOnce({
+      text: JSON.stringify({ blocks: [{ id: 'b1' }], coverImage: cover }),
+      sha: 'map-sha',
+      source: 'worker',
+    });
+
+    const result = await loadPageContent(keyedPage, { viaWorker: true });
+
+    expect(result).toEqual({
+      format: 'json',
+      blocks: [{ id: 'b1' }],
+      coverImage: cover,
+      sha: 'map-sha',
+    });
+    expect(getContentMock).not.toHaveBeenCalled();
+  });
+
+  it('falls through to index.html for a legacy page', async () => {
+    fetchContentTextMock
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce({ text: '<h1>Legacy</h1>', sha: 'html-sha', source: 'worker' });
+
+    const result = await loadPageContent(keyedPage, { viaWorker: true });
+
+    expect(result).toEqual({
+      format: 'html',
+      blocks: '<h1>Legacy</h1>',
+      coverImage: null,
+      sha: 'html-sha',
+    });
+  });
+
+  it('falls back to the GitHub read when the map has nothing', async () => {
+    // The layer is an accelerator, never the reason a page fails to load.
+    getContentMock.mockResolvedValueOnce({
+      content: JSON.stringify({ blocks: [], coverImage: null }),
+      sha: 'github-sha',
+    });
+
+    const result = await loadPageContent(keyedPage, { viaWorker: true });
+
+    expect(result.sha).toBe('github-sha');
+  });
+
+  it('asks the map only, so a miss does not read GitHub twice', async () => {
+    // `fetchContentText` has its own API-then-CDN ladder, and the caller's own
+    // GitHub read is sitting right behind this one — without fallback:'none'
+    // every map miss would pay two contents-API reads and a CDN fetch for one
+    // page. Both probes also share one circuit breaker, so an unreachable
+    // Worker costs one timeout for the render rather than one per file.
+    getContentMock.mockResolvedValue(null);
+
+    await loadPageContent(keyedPage, { viaWorker: true });
+
+    for (const call of fetchContentTextMock.mock.calls) {
+      expect(call[2]).toMatchObject({ fallback: 'none' });
+    }
+    // content.json + index.html, from the caller's read — not four.
+    expect(getContentMock).toHaveBeenCalledTimes(2);
+    // One budget object, shared by both probes.
+    const budgets = fetchContentTextMock.mock.calls.map(
+      call => (call[2] as { budget: unknown }).budget
+    );
+    expect(budgets[0]).toBe(budgets[1]);
+  });
+
+  it('is ignored for a preview-branch read', async () => {
+    // Preview branches have no map rows at all; signing against one would serve
+    // main's bytes under a preview URL.
+    getContentMock.mockResolvedValueOnce({ content: '{"blocks":[]}', sha: 'branch-sha' });
+
+    await loadPageContent(keyedPage, { viaWorker: true, ref: 'preview/pages/syllabus' });
+
+    expect(fetchContentTextMock).not.toHaveBeenCalled();
+    expect(callArg(getContentMock).ref).toBe('preview/pages/syllabus');
+  });
+});
+
+// ─── savePageContent write-through ───────────────────────────────────────────
+
+describe('pageContent.savePageContent write-through', () => {
+  const blocks = [{ id: 'b1', type: 'paragraph', content: [] }];
+  // The fixture above deliberately has no classroom id (several callers have
+  // none); this one does, because the map row is keyed on it — and it carries
+  // the key version and the switch too, because every real save path selects
+  // the whole classroom row and the WARM signs with both.
+  const keyedPage = {
+    ...page,
+    classroom: {
+      ...page.classroom,
+      id: 'class-1',
+      content_key_version: 3,
+      content_delivery_enabled: true,
+    },
+  };
+
+  beforeEach(() => {
+    recordContentAssetMock.mockResolvedValue(true);
+  });
+
+  it('records content.json at the sha the commit returned', async () => {
+    // This is what makes a save VISIBLE. content.json is read through the map
+    // now, so a row one save behind is the previous version of the page on a
+    // student's screen — not merely a stale cache.
+    await savePageContent(keyedPage, blocks, { coverImage: null });
+
+    expect(recordContentAssetMock).toHaveBeenCalledWith('class-1', {
+      path: 'pages/syllabus/content.json',
+      sha: 'new-sha',
+      // The real byte length of what was committed — a writer that has the
+      // bytes must not hand the map a size it made up, because `size ?? 0`
+      // would overwrite one an earlier sync actually measured.
+      size: Buffer.byteLength(callArg(putMock).content as string),
+    });
+  });
+
+  it('warms the file it just wrote, for the classroom it wrote it to', async () => {
+    // The row alone is not enough: the sha is new, so the Worker has never
+    // pulled it, and whoever opens the page next would pay the cold origin
+    // pull. The save hands the warmer exactly the path it committed.
+    await savePageContent(keyedPage, blocks, { coverImage: null });
+
+    expect(warmContentTextMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        classroom: expect.objectContaining({
+          id: 'class-1',
+          // The version the warm SIGNS with, carried through rather than
+          // defaulted. Warming at a version readers are not using fills an
+          // entry nobody asks for, reports a 200, and helps no one.
+          content_key_version: 3,
+          content_delivery_enabled: true,
+        }),
+      }),
+      ['pages/syllabus/content.json']
+    );
+  });
+
+  it('declines the warm rather than signing with a key version it was not given', async () => {
+    // The guard behind `WarmContext`. Every real save path selects the whole
+    // classroom row, so this is a future `select:` narrowing — and the failure
+    // it prevents is silent: a warm at version 0 succeeds, logs a 200, and
+    // fills a cache entry no reader will ever ask for. The row is still
+    // recorded; only the optimization is skipped.
+    const { content_key_version: _dropped, ...classroom } = keyedPage.classroom;
+
+    await savePageContent({ ...keyedPage, classroom }, blocks, { coverImage: null });
+
+    expect(recordContentAssetMock).toHaveBeenCalled();
+    expect(warmContentTextMock).not.toHaveBeenCalled();
+  });
+
+  it('does not warm a preview-branch save', async () => {
+    // A preview branch has no map rows, so there is no sha to warm — and
+    // warming one would be a request for an unpublished draft.
+    await savePageContent(keyedPage, blocks, {
+      coverImage: null,
+      branch: 'preview/pages/syllabus',
+    });
+
+    expect(warmContentTextMock).not.toHaveBeenCalled();
+  });
+
+  it('still records a save aimed explicitly at the default branch', async () => {
+    // The guard tests the `preview/` prefix rather than the absence of a
+    // branch: a caller naming main would otherwise write it and silently lose
+    // the map row, which is the stale read this whole path exists to close.
+    getContentMock.mockResolvedValueOnce(null);
+
+    await savePageContent(keyedPage, blocks, { branch: 'main' });
+
+    expect(recordContentAssetMock).toHaveBeenCalledWith(
+      'class-1',
+      expect.objectContaining({ path: 'pages/syllabus/content.json', sha: 'new-sha' })
+    );
+  });
+
+  it('records nothing for a preview-branch save', async () => {
+    // A preview branch is not in the map. Recording its sha would publish an
+    // unaccepted draft to every reader.
+    getContentMock.mockResolvedValueOnce(null);
+
+    await savePageContent(keyedPage, blocks, { branch: 'preview/pages/syllabus' });
+
+    expect(recordContentAssetMock).not.toHaveBeenCalled();
+  });
+
+  it('still returns the save when the map write cannot be keyed', async () => {
+    // A page assembled without its classroom id has nothing to key a row on.
+    // The commit stands; the next sync picks it up.
+    const result = await savePageContent(page, blocks, { coverImage: null });
+
+    expect(result).toEqual({ sha: 'new-sha', commit: 'commit-1', coverImage: null });
+    expect(recordContentAssetMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('pageContent.savePageContent — structural gate', () => {
+  // The claim this makes true: a caller that forgets to normalize still cannot
+  // commit a document BlockNote refuses to open.
+  const oneColumnRow = [
+    {
+      id: 'row',
+      type: 'columnList',
+      props: {},
+      children: [
+        {
+          id: 'col',
+          type: 'column',
+          props: { width: 1 },
+          children: [{ id: 'kept', type: 'paragraph', content: [] }],
+        },
+      ],
+    },
+  ];
+
+  it('repairs a one-column row on the way into the commit', async () => {
+    await savePageContent(page, oneColumnRow, { coverImage: null });
+
+    const committed = writtenWrapper().blocks;
+    expect(committed.map((b: { id: string; type: string }) => b.type)).toEqual(['paragraph']);
+    expect(committed.map((b: { id: string }) => b.id)).toEqual(['kept']);
+  });
+
+  it('leaves a valid document byte-identical', async () => {
+    const valid = [
+      {
+        id: 'row',
+        type: 'columnList',
+        props: {},
+        children: ['a', 'b'].map(k => ({
+          id: `col-${k}`,
+          type: 'column',
+          props: { width: 1 },
+          children: [{ id: `p-${k}`, type: 'paragraph', content: [] }],
+        })),
+      },
+    ];
+
+    await savePageContent(page, valid, { coverImage: null });
+
+    expect(writtenWrapper().blocks).toEqual(valid);
+  });
+
+  it('passes a non-array through untouched (legacy/degenerate payloads)', async () => {
+    await savePageContent(page, null, { coverImage: null });
+    expect(writtenWrapper()).toEqual({ blocks: null });
+  });
+});
+
 // ─── uploadPageAsset ─────────────────────────────────────────────────────────
 
 describe('pageContent.uploadPageAsset', () => {
-  it('uploads a Buffer into the page assets folder and returns url + path', async () => {
+  const RAW_URL =
+    'https://raw.githubusercontent.com/test-org/content-test-org-cs101/main/pages/syllabus/assets/a.png';
+
+  beforeEach(() => {
     uploadMock.mockResolvedValue({
-      url: 'https://raw.githubusercontent.com/test-org/content-test-org-cs101/main/pages/syllabus/assets/a.png',
+      url: RAW_URL,
       path: 'pages/syllabus/assets/a.png',
-      sha: 'asset-sha',
+      // A real 40-hex blob sha — the signer refuses anything else.
+      sha: 'c'.repeat(40),
     });
+    recordContentAssetMock.mockResolvedValue(true);
+    resolveContentBranchMock.mockResolvedValue('main');
+    delete process.env.CONTENT_DELIVERY_ORIGIN;
+    delete process.env.CONTENT_SIGNING_SECRET;
+  });
+
+  it('uploads a Buffer into the page assets folder', async () => {
     const buffer = Buffer.from('image-bytes');
 
-    const result = await uploadPageAsset(page, buffer, 'a.png');
+    await uploadPageAsset(page, buffer, 'a.png');
 
     const arg = callArg(uploadMock);
     expect(arg.repo).toBe('content-test-org-cs101');
@@ -265,10 +689,317 @@ describe('pageContent.uploadPageAsset', () => {
     expect(arg.file).toBe(buffer);
     expect(arg.filename).toBe('a.png');
     expect(arg.branch).toBe('main');
+  });
+
+  it('commits to the repo default branch rather than a hardcoded main', async () => {
+    // A course imported from an older org is on `master`. Committing to `main`
+    // there either creates a branch nobody renders from or is refused outright,
+    // and the asset map would then hold a blob the served branch never had.
+    resolveContentBranchMock.mockResolvedValue('master');
+
+    await uploadPageAsset(page, Buffer.from('x'), 'a.png');
+
+    expect(resolveContentBranchMock).toHaveBeenCalledWith(
+      gitOrganization,
+      'test-org',
+      'content-test-org-cs101'
+    );
+    expect(callArg(uploadMock).branch).toBe('master');
+  });
+
+  it('stores the REPO PATH once the delivery layer can sign it', async () => {
+    process.env.CONTENT_DELIVERY_ORIGIN = 'https://cdn.classmoji.test';
+    process.env.CONTENT_SIGNING_SECRET = 'test-master-secret';
+    const classroomPage = {
+      ...page,
+      classroom: {
+        ...page.classroom,
+        id: '3f2504e0-4f89-41d3-9a0c-0305e82c3301',
+        content_delivery_enabled: true,
+      },
+    };
+
+    const result = await uploadPageAsset(classroomPage, Buffer.from('x'), 'a.png');
+
+    // The path is what keeps following the file across re-uploads and bumps.
+    expect(result.url).toBe('pages/syllabus/assets/a.png');
+    expect(result.path).toBe('pages/syllabus/assets/a.png');
+    // Display is a separate field precisely so it cannot be stored by accident.
+    expect(result.displayUrl).toContain('https://cdn.classmoji.test/c/');
+    expect(result.displayUrl).toContain('p=edit');
+    expect(result.displayUrl).not.toBe(result.url);
+  });
+
+  it('falls back to the legacy absolute URL when nothing can sign', async () => {
+    // THE regression this guards: unconfigured, no surface — editor, viewer or
+    // class site — knows how to turn a bare path into a fetchable URL, so
+    // storing one would make every upload a 404 the moment it is saved.
+    const result = await uploadPageAsset(page, Buffer.from('x'), 'a.png');
+
     expect(result).toEqual({
-      url: 'https://raw.githubusercontent.com/test-org/content-test-org-cs101/main/pages/syllabus/assets/a.png',
+      url: RAW_URL,
       path: 'pages/syllabus/assets/a.png',
+      sha: 'c'.repeat(40),
+      displayUrl: null,
     });
+  });
+
+  it('records the uploaded blob in the asset map before returning', async () => {
+    // THE regression this guards: without the row, the save stores a repo path
+    // the next render cannot resolve, and the viewer gets the resolver's
+    // "dangling" URL until a push webhook or the 24-hour refresh catches up.
+    const classroomPage = {
+      ...page,
+      classroom: { ...page.classroom, id: '3f2504e0-4f89-41d3-9a0c-0305e82c3301' },
+    };
+    const buffer = Buffer.from('image-bytes');
+
+    await uploadPageAsset(classroomPage, buffer, 'a.png');
+
+    expect(recordContentAssetMock).toHaveBeenCalledWith('3f2504e0-4f89-41d3-9a0c-0305e82c3301', {
+      path: 'pages/syllabus/assets/a.png',
+      sha: 'c'.repeat(40),
+      size: buffer.length,
+    });
+  });
+
+  it('skips the map write when there is no classroom id to key it on', async () => {
+    await uploadPageAsset(page, Buffer.from('x'), 'a.png');
+
+    expect(recordContentAssetMock).not.toHaveBeenCalled();
+  });
+
+  it('falls back the same way when the classroom has no id to sign against', async () => {
+    process.env.CONTENT_DELIVERY_ORIGIN = 'https://cdn.classmoji.test';
+    process.env.CONTENT_SIGNING_SECRET = 'test-master-secret';
+
+    // `page.classroom` here carries no id — signing is impossible, so this must
+    // degrade exactly like the unconfigured case rather than store a dead path.
+    const result = await uploadPageAsset(
+      { ...page, classroom: { ...page.classroom, content_delivery_enabled: true } },
+      Buffer.from('x'),
+      'a.png'
+    );
+
+    expect(result.url).toBe(RAW_URL);
+    expect(result.displayUrl).toBeNull();
+  });
+
+  it('stores the legacy URL for a classroom that has not been opted in', async () => {
+    // THE case that makes shipping this safe: production already carries both
+    // env vars, so the ENV says yes here. The classroom's own flag is what
+    // holds the line, and an upload into a classroom that is still off has to
+    // store exactly what it stored yesterday — a URL the legacy readers resolve.
+    process.env.CONTENT_DELIVERY_ORIGIN = 'https://cdn.classmoji.test';
+    process.env.CONTENT_SIGNING_SECRET = 'test-master-secret';
+    const classroomPage = {
+      ...page,
+      classroom: {
+        ...page.classroom,
+        id: '3f2504e0-4f89-41d3-9a0c-0305e82c3301',
+        content_delivery_enabled: false,
+      },
+    };
+
+    const result = await uploadPageAsset(classroomPage, Buffer.from('x'), 'a.png');
+
+    expect(result.url).toBe(RAW_URL);
+    expect(result.displayUrl).toBeNull();
+    // The map row is still written. It is harmless while the flag is off and it
+    // is what makes flipping the switch take effect on the very next render
+    // instead of waiting for a push webhook.
+    expect(recordContentAssetMock).toHaveBeenCalledWith('3f2504e0-4f89-41d3-9a0c-0305e82c3301', {
+      path: 'pages/syllabus/assets/a.png',
+      sha: 'c'.repeat(40),
+      size: 1,
+    });
+  });
+});
+
+// ─── resolvePageAssetUrl ─────────────────────────────────────────────────────
+
+describe('pageContent.resolvePageAssetUrl', () => {
+  const SIGNED = 'https://cdn.classmoji.test/c/abc/def.png?p=edit&sig=x';
+  const REF = 'pages/syllabus/assets/a.png';
+
+  /** A classroom the resolver can mint for: id, key version, delivery on. */
+  const signablePage = {
+    ...page,
+    classroom: {
+      ...page.classroom,
+      id: '3f2504e0-4f89-41d3-9a0c-0305e82c3301',
+      content_key_version: 0,
+      content_delivery_enabled: true,
+    },
+  };
+
+  beforeEach(() => {
+    resolveAssetUrlMock.mockReset();
+    resolveAssetUrlMock.mockResolvedValue(SIGNED);
+  });
+
+  it('returns the signed URL for a stored repo path', async () => {
+    await expect(resolvePageAssetUrl(signablePage, REF)).resolves.toBe(SIGNED);
+    expect(resolveAssetUrlMock).toHaveBeenCalledWith(
+      expect.objectContaining({ tier: 'edit' }),
+      REF
+    );
+  });
+
+  it('returns null rather than echoing a path the resolver declined', async () => {
+    // A resolve that could not sign hands the reference straight back. Handing
+    // that on as a display URL would read as "open this" and behave as a 404.
+    resolveAssetUrlMock.mockResolvedValue(REF);
+
+    await expect(resolvePageAssetUrl(signablePage, REF)).resolves.toBeNull();
+  });
+
+  it('returns null for the /missing/ placeholder — a deterministic 404', async () => {
+    // The map has never heard of the reference. The placeholder is a URL, and
+    // an absolute one, so any "does it look like a URL" test would pass it on
+    // as somewhere to look at an image that is not there.
+    resolveAssetUrlMock.mockResolvedValue(
+      `https://cdn.classmoji.test/c/${signablePage.classroom.id}/missing/${encodeURIComponent(REF)}`
+    );
+
+    await expect(resolvePageAssetUrl(signablePage, REF)).resolves.toBeNull();
+  });
+
+  it('returns null for an absolute reference the resolver refused to claim', async () => {
+    // A pinned raw.githubusercontent URL comes back unchanged. It is absolute,
+    // so only the identity check catches it.
+    const pinned =
+      'https://raw.githubusercontent.com/other-org/other-repo/main/pages/x/assets/a.png';
+    resolveAssetUrlMock.mockImplementation(async (_ctx: unknown, ref: string) => ref);
+
+    await expect(resolvePageAssetUrl(signablePage, pinned)).resolves.toBeNull();
+  });
+
+  it('does not mint for a hand-assembled page with no key version', async () => {
+    // Defence in depth rather than policy: `content_key_version` is `Int
+    // @default(0)`, so a row loaded from Prisma always carries a number. A page
+    // object built by hand may not, and the version goes INTO the signature.
+    const noVersion = { ...page, classroom: { ...signablePage.classroom } };
+    delete (noVersion.classroom as { content_key_version?: unknown }).content_key_version;
+
+    await expect(resolvePageAssetUrl(noVersion, REF)).resolves.toBeNull();
+    expect(resolveAssetUrlMock).not.toHaveBeenCalled();
+  });
+});
+
+// ─── canonicalizePageCoverRef ────────────────────────────────────────────────
+
+describe('pageContent.canonicalizePageCoverRef', () => {
+  const REF = 'pages/syllabus/assets/a.png';
+  const CLASSROOM_ID = '3f2504e0-4f89-41d3-9a0c-0305e82c3301';
+
+  const signablePage = {
+    ...page,
+    classroom: {
+      ...page.classroom,
+      id: CLASSROOM_ID,
+      content_key_version: 0,
+      content_delivery_enabled: true,
+    },
+  };
+
+  beforeEach(() => {
+    canonicalizeAssetRefMock.mockReset();
+    // Default: nothing to undo. The signed-URL case overrides it.
+    canonicalizeAssetRefMock.mockImplementation(async (_ctx: unknown, ref: string) => ref);
+  });
+
+  it('accepts a repo-relative path unchanged', async () => {
+    await expect(canonicalizePageCoverRef(signablePage, REF)).resolves.toBe(REF);
+  });
+
+  it('undoes a signed URL, so a pasted display_url is stored as its path', async () => {
+    canonicalizeAssetRefMock.mockResolvedValue(REF);
+
+    await expect(
+      canonicalizePageCoverRef(signablePage, 'https://cdn.classmoji.test/c/x/y.png?sig=abc')
+    ).resolves.toBe(REF);
+  });
+
+  it("keeps this classroom's own repo URL as a URL (what an unsigned upload stores)", async () => {
+    // Delivery off: `uploadPageAsset` hands back the legacy absolute URL, and
+    // page_cover_set has to be able to store exactly that.
+    const raw =
+      'https://raw.githubusercontent.com/test-org/content-test-org-cs101/main/pages/syllabus/assets/a.png';
+
+    await expect(canonicalizePageCoverRef(signablePage, raw)).resolves.toBe(raw);
+  });
+
+  it("accepts this classroom's signed URL, via the canonicalization above", async () => {
+    canonicalizeAssetRefMock.mockResolvedValue(REF);
+
+    await expect(
+      canonicalizePageCoverRef(signablePage, `https://cdn.classmoji.test/c/${CLASSROOM_ID}/a.png`)
+    ).resolves.toBe(REF);
+  });
+
+  /**
+   * The three own-repo URL shapes all reduce to "whatever follows the prefix",
+   * and `extractOwnRepoPath` answers "is this URL ours" without asking whether
+   * the path inside it stays inside the repo. So each shape has to be held to
+   * the same segment rule a bare path is, or a reference that resolves to
+   * nothing — or to somebody else's repo — gets written into content.json.
+   */
+  it.each([
+    [
+      'a parent escape inside a raw URL',
+      'https://raw.githubusercontent.com/test-org/content-test-org-cs101/main/../../../other/repo/main/x.png',
+    ],
+    [
+      'a parent escape inside a github.io URL',
+      'https://test-org.github.io/content-test-org-cs101/../../other/x.png',
+    ],
+    [
+      'a parent escape inside a /content proxy URL',
+      '/content/test-org/content-test-org-cs101/../../other/x.png',
+    ],
+    [
+      'a percent-encoded parent escape inside a raw URL',
+      'https://raw.githubusercontent.com/test-org/content-test-org-cs101/main/%2e%2e/%2e%2e/x.png',
+    ],
+    ['a percent-encoded parent escape in a bare path', 'pages/%2e%2e/a.png'],
+    ['a double-encoded escape in a bare path', 'pages/%252e%252e/a.png'],
+    ['a query string', 'pages/syllabus/assets/a.png?v=2'],
+    ['a fragment', 'pages/syllabus/assets/a.png#frag'],
+    ['a backslash', 'pages\\syllabus\\a.png'],
+    ['a doubled slash', 'pages//assets/a.png'],
+    ['a bare dot segment', 'pages/./assets/a.png'],
+    ['an external host', 'https://evil.example.com/tracker.png'],
+    ["another org's repo", 'https://raw.githubusercontent.com/other/other/main/a.png'],
+    ['a protocol-relative URL', '//evil.example.com/a.png'],
+    ['a root-relative path', '/etc/passwd.png'],
+    ['a parent-directory escape', '../../../secrets/a.png'],
+    ['a scheme leftover', 'data:image/png;base64,AAAA'],
+  ])('refuses %s', async (_label, ref) => {
+    await expect(canonicalizePageCoverRef(signablePage, ref)).resolves.toBeNull();
+  });
+
+  it('refuses rather than passing the raw string through when canonicalization throws', async () => {
+    // A lookup failure must not read as "this reference is fine": the
+    // un-canonicalized string could be a signed URL.
+    canonicalizeAssetRefMock.mockRejectedValue(new Error('map unavailable'));
+
+    await expect(canonicalizePageCoverRef(signablePage, REF)).resolves.toBeNull();
+  });
+
+  it('refuses an empty reference', async () => {
+    await expect(canonicalizePageCoverRef(signablePage, '')).resolves.toBeNull();
+  });
+
+  it('swallows a resolver failure — a cover read must not fail on a signing error', async () => {
+    resolveAssetUrlMock.mockRejectedValue(new Error('map unavailable'));
+
+    await expect(resolvePageAssetUrl(signablePage, REF)).resolves.toBeNull();
+  });
+
+  it('is a no-op on an empty reference', async () => {
+    await expect(resolvePageAssetUrl(signablePage, '')).resolves.toBeNull();
+    expect(resolveAssetUrlMock).not.toHaveBeenCalled();
   });
 });
 
@@ -591,6 +1322,416 @@ describe('pageContent.applyBlockOps', () => {
   });
 });
 
+// ─── normalizeBlockStructure ─────────────────────────────────────────────────
+
+// A `columnList` is `"column column+"` in BlockNote's ProseMirror schema and a
+// `column` is `"blockContainer+"`. A document that breaks either commits fine
+// and then throws "Error creating document from blocks passed as
+// `initialContent`" in every viewer AND the editor, so it can only be fixed by
+// a re-commit from outside — the reason these are repaired on write.
+
+describe('pageContent.normalizeBlockStructure', () => {
+  const column = (id: string, childId: string) => ({
+    id,
+    type: 'column',
+    props: { width: 1 },
+    children: [{ id: childId, type: 'paragraph', content: [] }],
+  });
+
+  const row = (id: string, columns: unknown[]) => ({
+    id,
+    type: 'columnList',
+    props: {},
+    children: columns,
+  });
+
+  const types = (blocks: unknown[]) => (blocks as Array<{ type: string }>).map(b => b.type);
+  const ids = (blocks: unknown[]) => (blocks as Array<{ id: string }>).map(b => b.id);
+
+  it('leaves a valid document structurally untouched', () => {
+    const doc = [row('r', [column('c1', 'p1'), column('c2', 'p2')])];
+    expect(normalizeBlockStructure(doc)).toEqual(doc);
+  });
+
+  it('is pure — the input is not mutated', () => {
+    const doc = [row('r', [column('c1', 'p1')])];
+    const snapshot = structuredClone(doc);
+    normalizeBlockStructure(doc);
+    expect(doc).toEqual(snapshot);
+  });
+
+  it('unwraps a columnList left with a single column, keeping the content', () => {
+    const result = normalizeBlockStructure([
+      { id: 'before', type: 'paragraph', content: [] },
+      row('r', [column('c1', 'p1')]),
+      { id: 'after', type: 'paragraph', content: [] },
+    ]);
+
+    expect(ids(result)).toEqual(['before', 'p1', 'after']);
+  });
+
+  it('drops a columnList with no columns at all', () => {
+    const result = normalizeBlockStructure([
+      row('r', []),
+      { id: 'keep', type: 'paragraph', content: [] },
+    ]);
+
+    expect(ids(result)).toEqual(['keep']);
+  });
+
+  it('wraps a non-column child of a columnList in its own column, in place', () => {
+    const result = normalizeBlockStructure([
+      row('r', [
+        column('c1', 'p1'),
+        { id: 'stray', type: 'paragraph', content: [] },
+        column('c2', 'p2'),
+      ]),
+    ]) as Array<{ children: Array<{ type: string; children: Array<{ id: string }> }> }>;
+
+    expect(types(result[0].children)).toEqual(['column', 'column', 'column']);
+    expect(result[0].children[1].children[0].id).toBe('stray');
+
+    const repairs: Array<{ kind: string; id?: string }> = [];
+    normalizeBlockStructure(
+      [
+        row('r', [
+          column('c1', 'p1'),
+          { id: 'stray', type: 'paragraph', content: [] },
+          column('c2', 'p2'),
+        ]),
+      ],
+      { onRepair: r => repairs.push(r) }
+    );
+    // The stray's id, not the row's — the caller is being pointed at a block.
+    expect(repairs).toEqual([{ kind: 'column_list_child_wrapped', id: 'stray' }]);
+  });
+
+  it('gives an emptied column a paragraph rather than killing the row', () => {
+    const result = normalizeBlockStructure([
+      row('r', [
+        column('c1', 'p1'),
+        { id: 'c2', type: 'column', props: { width: 1 }, children: [] },
+      ]),
+    ]) as Array<{ children: Array<{ children: Array<{ type: string; id?: string }> }> }>;
+
+    expect(types(result[0].children as unknown[])).toEqual(['column', 'column']);
+    expect(result[0].children[1].children).toMatchObject([
+      {
+        type: 'paragraph',
+        props: { textColor: 'default', backgroundColor: 'default', textAlignment: 'left' },
+        content: [],
+        children: [],
+      },
+    ]);
+    // Repairs invent blocks; they must not reach the repo without an id.
+    expect(result[0].children[1].children[0].id).toEqual(expect.any(String));
+  });
+
+  it('unwraps a column that is not inside a columnList', () => {
+    const result = normalizeBlockStructure([column('stray', 'p1')]);
+    expect(ids(result)).toEqual(['p1']);
+  });
+
+  it('repairs nested rows depth-first', () => {
+    const inner = row('inner', [column('ic1', 'ip1')]);
+    const result = normalizeBlockStructure([
+      row('outer', [
+        { id: 'oc1', type: 'column', props: { width: 1 }, children: [inner] },
+        column('oc2', 'op2'),
+      ]),
+    ]) as Array<{ children: Array<{ children: Array<{ id: string }> }> }>;
+
+    // The inner one-column row collapses into its content; the outer row,
+    // still two columns wide, survives.
+    expect(result[0].children[0].children.map(b => b.id)).toEqual(['ip1']);
+    expect(types(result as unknown[])).toEqual(['columnList']);
+  });
+
+  // ── A column may hold only ordinary content ───────────────────────────────
+  //
+  // The third schema violation, and the one arity alone never catches: a
+  // `column` is `blockContainer+` and a `columnList` is a `bnBlock`, not a
+  // blockContainer. A row nested inside a column throws exactly the same
+  // "Error creating document from blocks passed as `initialContent`".
+
+  it('lifts a row nested inside a column out to sit after its row', () => {
+    // Both rows are individually valid — arity has nothing to complain about —
+    // and the document is still unopenable.
+    const inner = row('inner', [column('ic1', 'ip1'), column('ic2', 'ip2')]);
+    const repairs: Array<{ kind: string; id?: string }> = [];
+
+    const result = normalizeBlockStructure(
+      [
+        row('outer', [
+          { id: 'oc1', type: 'column', props: { width: 1 }, children: [inner] },
+          column('oc2', 'op2'),
+        ]),
+        { id: 'after', type: 'paragraph', content: [] },
+      ],
+      { onRepair: r => repairs.push(r) }
+    ) as Array<{
+      id: string;
+      type: string;
+      children?: Array<{ children: Array<{ id: string; type: string }> }>;
+    }>;
+
+    // The inner row is re-parented as the outer row's NEXT sibling — after the
+    // row it came out of, before whatever followed it.
+    expect(ids(result)).toEqual(['outer', 'inner', 'after']);
+    expect(types(result)).toEqual(['columnList', 'columnList', 'paragraph']);
+    // Lifted, not flattened: the inner row keeps both its columns.
+    expect((result[1].children ?? []).map(c => c.children.map(b => b.id))).toEqual([
+      ['ip1'],
+      ['ip2'],
+    ]);
+    // The lift emptied oc1, so the arity rule refills it — composed, not
+    // sequenced by luck: the empty check already ran on the way down.
+    expect((result[0].children ?? [])[0].children.map(b => b.type)).toEqual(['paragraph']);
+    expect(repairs).toEqual([
+      { kind: 'nested_column_list_lifted', id: 'inner' },
+      { kind: 'empty_column_filled', id: 'oc1' },
+    ]);
+  });
+
+  it('lifts a row parked directly in a row rather than wrapping it in a column', () => {
+    // Wrapping would satisfy `column column+` and still be unopenable, while
+    // reporting a repair that fixed nothing.
+    const repairs: Array<{ kind: string; id?: string }> = [];
+
+    const result = normalizeBlockStructure(
+      [
+        row('outer', [
+          column('oc1', 'op1'),
+          row('inner', [column('ic1', 'ip1'), column('ic2', 'ip2')]),
+        ]),
+      ],
+      { onRepair: r => repairs.push(r) }
+    ) as Array<{ id: string; type: string }>;
+
+    // Lifting leaves the outer row a single column, so it unwraps in turn —
+    // the two rules compose rather than fighting.
+    expect(ids(result)).toEqual(['op1', 'inner']);
+    expect(types(result)).toEqual(['paragraph', 'columnList']);
+    expect(repairs).toEqual([
+      { kind: 'nested_column_list_lifted', id: 'inner' },
+      { kind: 'column_list_unwrapped', id: 'outer' },
+    ]);
+  });
+
+  it('lifting is idempotent — a second pass repairs nothing', () => {
+    const once = normalizeBlockStructure([
+      row('outer', [
+        {
+          id: 'oc1',
+          type: 'column',
+          props: { width: 1 },
+          children: [row('inner', [column('ic1', 'ip1'), column('ic2', 'ip2')])],
+        },
+        column('oc2', 'op2'),
+      ]),
+    ]);
+
+    const repairs: Array<{ kind: string }> = [];
+    expect(normalizeBlockStructure(once, { onRepair: r => repairs.push(r) })).toEqual(once);
+    expect(repairs).toEqual([]);
+  });
+
+  it('leaves a valid document with deep, nesting-free columns byte-identical', () => {
+    // The promise the gate makes to every write path: calling it costs a walk,
+    // never a diff. A column may nest ordinary blocks as deep as it likes.
+    const doc = [
+      row('r', [
+        {
+          id: 'c1',
+          type: 'column',
+          props: { width: 1 },
+          children: [
+            {
+              id: 'list',
+              type: 'bulletListItem',
+              props: {},
+              content: [],
+              children: [
+                { id: 'sub', type: 'bulletListItem', props: {}, content: [], children: [] },
+              ],
+            },
+          ],
+        },
+        column('c2', 'p2'),
+      ]),
+      { id: 'tail', type: 'paragraph', content: [] },
+    ];
+
+    expect(JSON.stringify(normalizeBlockStructure(doc))).toBe(JSON.stringify(doc));
+  });
+
+  it('does not report a wrap the finished document holds no trace of', () => {
+    // A single stray in a row: it gets wrapped, then the one-column row unwraps
+    // and the wrap is gone. Reporting it would send a caller looking for a
+    // column that does not exist.
+    const repairs: Array<{ kind: string; id?: string }> = [];
+
+    const result = normalizeBlockStructure(
+      [row('r', [{ id: 'stray', type: 'paragraph', content: [] }])],
+      {
+        onRepair: r => repairs.push(r),
+      }
+    );
+
+    expect(ids(result)).toEqual(['stray']);
+    expect(repairs).toEqual([{ kind: 'column_list_unwrapped', id: 'r' }]);
+  });
+
+  it('is idempotent', () => {
+    const once = normalizeBlockStructure([row('r', [column('c1', 'p1')])]);
+    expect(normalizeBlockStructure(once)).toEqual(once);
+  });
+
+  it('reports each repair through onRepair', () => {
+    const repairs: Array<{ kind: string; id?: string }> = [];
+    normalizeBlockStructure([row('r', [column('c1', 'p1')])], {
+      onRepair: repair => repairs.push(repair),
+    });
+
+    expect(repairs).toEqual([{ kind: 'column_list_unwrapped', id: 'r' }]);
+  });
+});
+
+describe('pageContent.applyBlockOps — column invariants', () => {
+  // The live failure: an agent deleted two of three columns from a staff row,
+  // the commit succeeded, and every reader of the page threw on load.
+  const staffRow = () => [
+    {
+      id: 'row',
+      type: 'columnList',
+      props: {},
+      children: ['a', 'b', 'c'].map(key => ({
+        id: `col-${key}`,
+        type: 'column',
+        props: { width: 1 },
+        children: [{ id: `profile-${key}`, type: 'profile', props: { name: key }, children: [] }],
+      })),
+    },
+  ];
+
+  it('a delete that would leave one column unwraps the row instead', () => {
+    const result = applyBlockOps(staffRow(), [
+      { op: 'delete', id: 'col-b' },
+      { op: 'delete', id: 'col-c' },
+    ]) as Array<{ id: string; type: string }>;
+
+    expect(result.map(b => b.type)).toEqual(['profile']);
+    expect(result.map(b => b.id)).toEqual(['profile-a']);
+  });
+
+  it('a delete down to two columns leaves the row alone', () => {
+    const result = applyBlockOps(staffRow(), [{ op: 'delete', id: 'col-c' }]) as Array<{
+      type: string;
+      children: unknown[];
+    }>;
+
+    expect(result[0].type).toBe('columnList');
+    expect(result[0].children).toHaveLength(2);
+  });
+
+  it('reports the repair through onStructureRepair', () => {
+    const repairs: Array<{ kind: string; id?: string }> = [];
+    applyBlockOps(
+      staffRow(),
+      [
+        { op: 'delete', id: 'col-b' },
+        { op: 'delete', id: 'col-c' },
+      ],
+      { onStructureRepair: repair => repairs.push(repair) }
+    );
+
+    expect(repairs).toEqual([{ kind: 'column_list_unwrapped', id: 'row' }]);
+  });
+
+  it('an insert positioned beside a column is wrapped into a column of its own', () => {
+    const result = applyBlockOps(staffRow(), [
+      {
+        op: 'insert',
+        blocks: [{ id: 'note', type: 'paragraph', content: [] }],
+        position: { after: 'col-a' },
+      },
+    ]) as Array<{ children: Array<{ type: string; children: Array<{ id: string }> }> }>;
+
+    expect(result[0].children.map(c => c.type)).toEqual(['column', 'column', 'column', 'column']);
+    expect(result[0].children[1].children[0].id).toBe('note');
+  });
+
+  it('an insert that lands a whole row inside a column lifts it back out', () => {
+    // The MCP shape of the bug: `after: 'profile-a'` names a block INSIDE a
+    // column, so the inserted row becomes that column's child. Arity is
+    // satisfied on both rows and the page is still unopenable.
+    const repairs: Array<{ kind: string; id?: string }> = [];
+
+    const result = applyBlockOps(
+      staffRow(),
+      [
+        {
+          op: 'insert',
+          blocks: [
+            {
+              id: 'inner',
+              type: 'columnList',
+              props: {},
+              children: ['x', 'y'].map(key => ({
+                id: `icol-${key}`,
+                type: 'column',
+                props: { width: 1 },
+                children: [{ id: `ip-${key}`, type: 'paragraph', content: [] }],
+              })),
+            },
+          ],
+          position: { after: 'profile-a' },
+        },
+      ],
+      { onStructureRepair: repair => repairs.push(repair) }
+    ) as Array<{ id: string; type: string; children: Array<{ children: Array<{ id: string }> }> }>;
+
+    // The staff row is untouched and the inserted row follows it.
+    expect(result.map(b => b.type)).toEqual(['columnList', 'columnList']);
+    expect(result.map(b => b.id)).toEqual(['row', 'inner']);
+    expect(result[0].children.map(c => c.children.map(b => b.id))).toEqual([
+      ['profile-a'],
+      ['profile-b'],
+      ['profile-c'],
+    ]);
+    // Reported, because the layout is not the one the caller asked for.
+    expect(repairs).toEqual([{ kind: 'nested_column_list_lifted', id: 'inner' }]);
+  });
+
+  it('replace_all carrying a one-column row is repaired too', () => {
+    const result = applyBlockOps(
+      [{ id: 'x', type: 'paragraph', content: [] }],
+      [
+        {
+          op: 'replace_all',
+          blocks: [
+            {
+              id: 'row',
+              type: 'columnList',
+              props: {},
+              children: [
+                {
+                  id: 'only',
+                  type: 'column',
+                  props: { width: 1 },
+                  children: [{ id: 'p', type: 'paragraph', content: [] }],
+                },
+              ],
+            },
+          ],
+        },
+      ]
+    ) as Array<{ id: string }>;
+
+    expect(result.map(b => b.id)).toEqual(['p']);
+  });
+});
+
 // ─── preview branches (plan §3b) ─────────────────────────────────────────────
 
 const PREVIEW_BRANCH = 'preview/pages/syllabus';
@@ -744,6 +1885,131 @@ describe('pageContent.acceptPreview', () => {
       merge_base_sha: 'main-head',
       commits: [],
     });
+
+  // The incident class, reached through the path git merges CLEANLY: two sides
+  // each delete a different column of the same three-column row, neither side
+  // is invalid on its own, and the hunks don't overlap — so there is no 409 and
+  // the semantic fallback never runs. Without a post-merge check, main lands a
+  // one-column row and the page becomes unopenable in viewer AND editor.
+  const mergedOneColumnRow = JSON.stringify({
+    blocks: [
+      {
+        id: 'row',
+        type: 'columnList',
+        props: {},
+        children: [
+          {
+            id: 'col-a',
+            type: 'column',
+            props: { width: 1 },
+            children: [{ id: 'profile-a', type: 'profile', props: {}, children: [] }],
+          },
+        ],
+      },
+    ],
+  });
+
+  it('clean merge: repairs a column layout the merge broke, reporting the repair sha', async () => {
+    mergeBranchMock.mockResolvedValue({ merged: true, sha: 'merge-sha' });
+    deleteBranchMock.mockResolvedValue({ deleted: true });
+    getContentMock.mockResolvedValue({ content: mergedOneColumnRow, sha: 'merged-blob-sha' });
+    putMock.mockResolvedValue({ sha: 'repaired-blob-sha', commit: 'repair-commit' });
+    branchFullyMerged();
+
+    const result = await acceptPreview(page);
+
+    // The row is gone; the profile it held survives at the top level.
+    const committed = writtenWrapper().blocks;
+    expect(committed.map((b: { type: string }) => b.type)).toEqual(['profile']);
+    expect(committed.map((b: { id: string }) => b.id)).toEqual(['profile-a']);
+
+    // CAS'd on the blob the merge produced, and the caller is handed the sha of
+    // the REPAIR — the merge's own blob sha is already stale.
+    expect(callArg(putMock)).toMatchObject({ expectedSha: 'merged-blob-sha' });
+    expect(result).toEqual({ merged: true, sha: 'repaired-blob-sha' });
+  });
+
+  it('clean merge: records the repaired file once, not twice', async () => {
+    // The repair commit goes through savePageContent, which writes the map row
+    // (with the real byte size) and warms the file. Recording again here would
+    // overwrite that row with a sizeless one and pay a second warm for a sha
+    // the Worker is already pulling.
+    const keyedPage = {
+      ...page,
+      classroom: {
+        ...page.classroom,
+        id: 'class-1',
+        content_key_version: 3,
+        content_delivery_enabled: true,
+      },
+    };
+    recordContentAssetMock.mockResolvedValue(true);
+    mergeBranchMock.mockResolvedValue({ merged: true, sha: 'merge-sha' });
+    deleteBranchMock.mockResolvedValue({ deleted: true });
+    getContentMock.mockResolvedValue({ content: mergedOneColumnRow, sha: 'merged-blob-sha' });
+    putMock.mockResolvedValue({ sha: 'repaired-blob-sha', commit: 'repair-commit' });
+    branchFullyMerged();
+
+    await acceptPreview(keyedPage);
+
+    expect(recordContentAssetMock).toHaveBeenCalledTimes(1);
+    expect(recordContentAssetMock).toHaveBeenCalledWith(
+      'class-1',
+      expect.objectContaining({
+        path: 'pages/syllabus/content.json',
+        sha: 'repaired-blob-sha',
+        size: Buffer.byteLength(callArg(putMock).content as string),
+      })
+    );
+    expect(warmContentTextMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('clean merge: still records the merge itself when no repair was needed', async () => {
+    // The guard is on sha EQUALITY, not on "a repair was attempted" — a merge
+    // nobody had to fix still has to be written through, or accepting a preview
+    // serves the pre-accept version until the push webhook lands.
+    const keyedPage = { ...page, classroom: { ...page.classroom, id: 'class-1' } };
+    recordContentAssetMock.mockResolvedValue(true);
+    mergeBranchMock.mockResolvedValue({ merged: true, sha: 'merge-sha' });
+    deleteBranchMock.mockResolvedValue({ deleted: true });
+    getContentMock.mockResolvedValue({ content: '{"blocks":[]}', sha: 'merged-blob-sha' });
+    branchFullyMerged();
+
+    await acceptPreview(keyedPage);
+
+    expect(putMock).not.toHaveBeenCalled();
+    expect(recordContentAssetMock).toHaveBeenCalledExactlyOnceWith(
+      'class-1',
+      expect.objectContaining({ path: 'pages/syllabus/content.json', sha: 'merged-blob-sha' })
+    );
+  });
+
+  it('clean merge: writes nothing when the merged document is already valid', async () => {
+    mergeBranchMock.mockResolvedValue({ merged: true, sha: 'merge-sha' });
+    deleteBranchMock.mockResolvedValue({ deleted: true });
+    getContentMock.mockResolvedValue({ content: '{"blocks":[]}', sha: 'merged-blob-sha' });
+    branchFullyMerged();
+
+    const result = await acceptPreview(page);
+
+    expect(putMock).not.toHaveBeenCalled();
+    expect(result).toEqual({ merged: true, sha: 'merged-blob-sha' });
+  });
+
+  it('clean merge: a failed repair commit leaves the merge standing', async () => {
+    mergeBranchMock.mockResolvedValue({ merged: true, sha: 'merge-sha' });
+    deleteBranchMock.mockResolvedValue({ deleted: true });
+    getContentMock.mockResolvedValue({ content: mergedOneColumnRow, sha: 'merged-blob-sha' });
+    // A racing writer took the sha — that write went through savePageContent
+    // and was normalized itself, so the document ends up valid either way.
+    putMock.mockRejectedValue(Object.assign(new Error('conflict'), { status: 409 }));
+    branchFullyMerged();
+
+    const result = await acceptPreview(page);
+
+    expect(result).toEqual({ merged: true, sha: 'merged-blob-sha' });
+    expect(deleteBranchMock).toHaveBeenCalled();
+  });
 
   it('clean merge: merges main←preview, deletes the branch, returns the content BLOB sha', async () => {
     mergeBranchMock.mockResolvedValue({ merged: true, sha: 'merge-sha' });

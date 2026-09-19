@@ -50,7 +50,9 @@ export interface ServerHandle {
   stop: () => Promise<void>;
 }
 
-async function spawnOnce(): Promise<{ proc: ChildProcess; output: () => string }> {
+async function spawnOnce(
+  extraEnv: Record<string, string> = {}
+): Promise<{ proc: ChildProcess; output: () => string }> {
   let output = '';
   const proc = spawn(process.execPath, ['--experimental-strip-types', 'src/index.ts'], {
     cwd: APP_DIR,
@@ -61,6 +63,9 @@ async function spawnOnce(): Promise<{ proc: ChildProcess; output: () => string }
       MCP_PORT: String(PORT),
       MCP_PUBLIC_URL: BASE,
       WEBAPP_URL: 'http://localhost:3000',
+      // LAST, so a caller can override anything above — including credentials
+      // the runner's own environment happens to carry.
+      ...extraEnv,
     },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
@@ -93,6 +98,18 @@ async function killServer(proc: ChildProcess): Promise<void> {
   if (proc.exitCode === null) proc.kill('SIGKILL');
 }
 
+export interface StartServerOptions {
+  attempts?: number;
+  retryDelayMs?: number;
+  /**
+   * Environment for the spawned server, layered over the runner's own. This is
+   * how a suite hands the server a configuration the TEST process must not
+   * share — a stubbed Workers AI root, say, which the test process itself must
+   * stay free of so the unconfigured-search case stays reachable.
+   */
+  env?: Record<string, string>;
+}
+
 /**
  * Spawn the MCP server and wait for /health. A sibling agent is editing
  * apps/mcp/src/tools/** concurrently, so a startup crash may be a transient
@@ -101,10 +118,11 @@ async function killServer(proc: ChildProcess): Promise<void> {
 export async function startServer({
   attempts = 3,
   retryDelayMs = 75_000,
-} = {}): Promise<ServerHandle> {
+  env = {},
+}: StartServerOptions = {}): Promise<ServerHandle> {
   let lastError: unknown;
   for (let attempt = 1; attempt <= attempts; attempt++) {
-    const { proc, output } = await spawnOnce();
+    const { proc, output } = await spawnOnce(env);
     try {
       await waitForHealth(proc, output);
       return {

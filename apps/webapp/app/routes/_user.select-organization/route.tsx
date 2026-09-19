@@ -5,6 +5,7 @@ import { useCallout } from '@classmoji/ui-components';
 
 import { useUser, useDisclosure, useGlobalFetcher } from '~/hooks';
 import { getAuthSession, clearRevokedToken } from '@classmoji/auth/server';
+import { verifyInviteToken } from '@classmoji/auth/invite-token';
 import { checkAuth } from '~/utils/helpers';
 import { hashHue } from '~/utils/hue';
 
@@ -14,7 +15,7 @@ import {
   getGitProvider,
   ensureClassroomTeam,
   notificationService,
-  provisionExampleClassroom,
+  pendingSurveyQuestions,
 } from '@classmoji/services';
 import { ActionTypes, roleSettings } from '~/constants';
 import useStore from '~/store';
@@ -28,6 +29,7 @@ import {
   type LandingRole,
 } from '~/components/features/landing';
 import type { NotificationRole } from '~/components/features/notifications';
+import { SurveyPrompt } from '~/components/features/survey';
 
 interface SelectOrganizationMembership extends MembershipWithOrganization {
   has_accepted_invite: boolean;
@@ -42,6 +44,12 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
 
   if (!authData?.token && !authData?.userId) return redirect('/');
 
+  // Set by the roster invite link (#343): a signed token naming the invited
+  // address. Anything that does not verify is treated as absent.
+  const inviteToken = new URL(request.url).searchParams.get('invite');
+  const invite = inviteToken ? verifyInviteToken(inviteToken) : null;
+  const inviteEmail = invite?.email ?? null;
+
   // Try to find user by ID first (avoids GitHub API call if user exists)
   let user = null;
   if (authData?.userId) {
@@ -49,7 +57,13 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
   }
 
   if (!user?.email) {
-    return redirect('/registration');
+    // Hand the token to registration: it prefills the address and stands in
+    // for the verification code.
+    return redirect(
+      invite && inviteToken
+        ? `/registration?invite=${encodeURIComponent(inviteToken)}`
+        : '/registration'
+    );
   }
 
   // If not found by ID, fall back to GitHub API lookup
@@ -79,31 +93,42 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
     // landing screen can show them in the Archived section.
     typedUser.memberships = (typedUser.memberships ?? []) as SelectOrganizationMembership[];
 
-    const hasExampleClassroom = typedUser.memberships.some(
-      m => (m.organization as { is_example?: boolean }).is_example === true
-    );
-    if (!hasExampleClassroom && typedUser.login) {
-      try {
-        const exampleClassroom = await provisionExampleClassroom({
-          ownerUserId: typedUser.id,
-          ownerLogin: typedUser.login,
+    // Claim any classroom invite addressed to this user before the page renders.
+    // This is the post-login seam: it is the default OAuth callbackURL, `email`
+    // is guaranteed above, and the claim is idempotent — so a student invited at
+    // an address they did not register with is picked up on their next sign-in
+    // instead of being stranded forever (#307). Never let it block the picker.
+    try {
+      const { claimed } = await ClassmojiService.classroomInvite.claimPendingInvites(typedUser.id);
+      if (claimed > 0) {
+        const refreshedUser = await ClassmojiService.user.findById(typedUser.id, {
+          includeMemberships: true,
         });
-        if (exampleClassroom) {
-          const refreshedUser = await ClassmojiService.user.findById(typedUser.id, {
-            includeMemberships: true,
-          });
-          if (refreshedUser) {
-            user = refreshedUser;
-            typedUser = user as AppUser;
-            typedUser.memberships = (typedUser.memberships ?? []) as SelectOrganizationMembership[];
-          }
+        if (refreshedUser) {
+          user = refreshedUser;
+          typedUser = user as AppUser;
+          typedUser.memberships = (typedUser.memberships ?? []) as SelectOrganizationMembership[];
         }
-      } catch (error) {
-        console.error('Failed to provision example classroom:', error);
       }
+    } catch (error) {
+      console.error('Failed to claim pending classroom invites:', error);
     }
 
-    const { items, unreadCount } = await notificationService.getForBell(typedUser.id);
+    // Runs after the invite claim above so a freshly-claimed student membership
+    // counts toward the audience filter. Never asked during impersonation: a
+    // platform admin must not answer on the user's behalf.
+    const impersonating = !!(
+      authData.session as { session?: { impersonatedBy?: string | null } } | undefined
+    )?.session?.impersonatedBy;
+    const [{ items, unreadCount }, surveyQuestions] = await Promise.all([
+      notificationService.getForBell(typedUser.id),
+      impersonating
+        ? []
+        : pendingSurveyQuestions(typedUser.id).catch(error => {
+            console.error('Failed to load survey questions:', error);
+            return [];
+          }),
+    ]);
     const notifications = items.map(n => ({
       id: n.id,
       type: n.type,
@@ -125,6 +150,15 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
       }
     }
 
+    // A registered user arriving from an invite link whose address is not one
+    // of theirs: the invite will not claim, so tell them why and where to fix it.
+    const sameAddress = (a: string | null | undefined) =>
+      !!a && !!inviteEmail && a.toLowerCase() === inviteEmail.toLowerCase();
+    const inviteEmailMismatch =
+      inviteEmail && !sameAddress(typedUser.email) && !sameAddress(typedUser.provider_email)
+        ? inviteEmail
+        : null;
+
     return {
       user,
       memberships: typedUser.memberships as SelectOrganizationMembership[],
@@ -132,6 +166,8 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
       notifications,
       unreadCount,
       membershipRoles,
+      surveyQuestions,
+      inviteEmailMismatch,
     };
   } else {
     return redirect('/registration');
@@ -229,7 +265,14 @@ function buildLandingClasses(memberships: SelectOrganizationMembership[]): Landi
 // ───────── component ─────────
 
 const SelectOrganization = ({ loaderData }: Route.ComponentProps) => {
-  const { memberships, notifications, unreadCount, membershipRoles } = loaderData;
+  const {
+    memberships,
+    notifications,
+    unreadCount,
+    membershipRoles,
+    surveyQuestions,
+    inviteEmailMismatch,
+  } = loaderData;
   const { user } = useUser();
   const { classroom, setClassroom, startFullTour } = useStore();
   const { fetcher, notify } = useGlobalFetcher();
@@ -264,6 +307,25 @@ const SelectOrganization = ({ loaderData }: Route.ComponentProps) => {
     // `callout` is stable per CalloutProvider (memoized handle), so it is not a dep.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchParams, setSearchParams]);
+
+  // Invite link for an address this account does not have (#343). Shown once,
+  // then the param is dropped so a refresh does not repeat it.
+  useEffect(() => {
+    if (!inviteEmailMismatch) return;
+    callout.show({
+      variant: 'info',
+      title: `This invitation was sent to ${inviteEmailMismatch}.`,
+      message:
+        'Your account uses a different email, so the classroom cannot be added yet. Change your email in settings to the invited address and it will be picked up.',
+      persistent: true,
+      action: { label: 'Change email', onClick: () => navigate('/settings/general') },
+    });
+    const next = new URLSearchParams(searchParams);
+    next.delete('invite');
+    setSearchParams(next, { replace: true });
+    // `callout` is stable per CalloutProvider; see the removed-toast effect above.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [inviteEmailMismatch]);
 
   const memberList = memberships as SelectOrganizationMembership[];
   const classes = useMemo(() => buildLandingClasses(memberList), [memberList]);
@@ -305,13 +367,15 @@ const SelectOrganization = ({ loaderData }: Route.ComponentProps) => {
   // The Example Course is hidden from the grid and the org switcher; the
   // "Take a tour" button is the only way it's reached. Clicking it starts the
   // guided sequence: the landing tour runs here, then hands off into the Example
-  // Course for the instructor and student tours, then returns here.
-  const exampleClass =
-    classes.find(c => c.is_example && c.role === 'OWNER') ?? classes.find(c => c.is_example);
+  // Course (provisioned on demand at that point) for the instructor and student
+  // tours, then returns here.
   const onTakeTour = () => startFullTour();
 
   return (
     <>
+      {/* Asked once per user, before the first-sign-in tour (which waits on it). */}
+      {surveyQuestions.length > 0 && <SurveyPrompt questions={surveyQuestions} />}
+
       <Modal
         open={visible}
         onOk={() => acceptInvite(pendingClassroom ?? classroom)}
@@ -354,7 +418,7 @@ const SelectOrganization = ({ loaderData }: Route.ComponentProps) => {
         classes={classes.filter(c => !c.is_example)}
         onOpenClass={onOpenClass}
         onTakeTour={onTakeTour}
-        tourAvailable={!!exampleClass}
+        tourAvailable
         notifications={notifications}
         unreadCount={unreadCount}
         membershipRoles={membershipRoles}

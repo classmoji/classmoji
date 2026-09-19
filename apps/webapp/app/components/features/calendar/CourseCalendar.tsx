@@ -37,6 +37,24 @@ const EVENT_TYPES = ['OFFICE_HOURS', 'LECTURE', 'LAB', 'ASSESSMENT', 'DEADLINE']
 // Draggable event component
 import type { CalendarEvent } from './utils';
 
+/**
+ * Form-close items are deadlines for rendering, filtering and ICS export, but
+ * they must never be dragged: the deadline-drop handler parses an assignment id
+ * out of the event id and there is no assignment behind a form. A form's close
+ * date is changed in the form builder.
+ */
+const isDragLocked = (event: CalendarEvent) => Boolean(event.is_form_close);
+
+/** Whether this event can be picked up at all, given the handlers in scope. */
+const canDragEvent = (
+  event: CalendarEvent,
+  canDragDeadlines: boolean,
+  onEventDrop: unknown
+): boolean => {
+  if (isDragLocked(event)) return false;
+  return event.is_deadline ? canDragDeadlines : Boolean(onEventDrop);
+};
+
 interface DraggableEventProps {
   event: CalendarEvent;
   children: React.ReactNode;
@@ -262,6 +280,8 @@ const CourseCalendar = ({
 
     // Check if this is a deadline drop or regular event drop
     const isDeadline = draggedEvent.is_deadline;
+    // Belt and braces: the draggable is already disabled for form closes.
+    if (isDragLocked(draggedEvent)) return;
     if (isDeadline && !onDeadlineDrop) return;
     if (!isDeadline && !onEventDrop) return;
 
@@ -378,7 +398,7 @@ const CourseCalendar = ({
                               : event.id || idx
                           }
                           event={event}
-                          disabled={event.is_deadline ? !canDragDeadlines : !onEventDrop}
+                          disabled={!canDragEvent(event, canDragDeadlines, onEventDrop)}
                         >
                           <div
                             onClick={e => {
@@ -386,13 +406,13 @@ const CourseCalendar = ({
                               onEventClick?.(event);
                             }}
                             className={`text-xs px-2 py-1 rounded transition-opacity truncate flex items-center gap-1 ${
-                              (event.is_deadline && canDragDeadlines) ||
-                              (!event.is_deadline && onEventDrop)
+                              canDragEvent(event, canDragDeadlines, onEventDrop)
                                 ? 'cursor-grab active:cursor-grabbing'
                                 : 'cursor-pointer'
                             } hover:opacity-80 ${getEventTypeLightBg(event.event_type)} ${getEventTypeDarkText(event.event_type)} ${event.is_unpublished ? 'border border-dashed border-yellow-500' : ''}`}
                             title={
-                              event.is_deadline && canDragDeadlines
+                              event.is_deadline &&
+                              canDragEvent(event, canDragDeadlines, onEventDrop)
                                 ? 'Drag to change deadline'
                                 : undefined
                             }
@@ -493,7 +513,7 @@ const CourseCalendar = ({
                           : event.id || idx
                       }
                       event={event}
-                      disabled={event.is_deadline ? !canDragDeadlines : !onEventDrop}
+                      disabled={!canDragEvent(event, canDragDeadlines, onEventDrop)}
                     >
                       <div
                         onClick={e => {
@@ -501,13 +521,12 @@ const CourseCalendar = ({
                           onEventClick?.(event);
                         }}
                         className={`text-xs px-1.5 py-0.5 rounded truncate hover:opacity-80 flex items-center gap-1 ${
-                          (event.is_deadline && canDragDeadlines) ||
-                          (!event.is_deadline && onEventDrop)
+                          canDragEvent(event, canDragDeadlines, onEventDrop)
                             ? 'cursor-grab active:cursor-grabbing'
                             : 'cursor-pointer'
                         } ${getEventTypeLightBg(event.event_type)} ${getEventTypeDarkText(event.event_type)} ${event.is_unpublished ? 'border border-dashed border-yellow-500' : ''}`}
                         title={
-                          event.is_deadline && canDragDeadlines
+                          event.is_deadline && canDragEvent(event, canDragDeadlines, onEventDrop)
                             ? 'Drag to change deadline'
                             : undefined
                         }
@@ -522,9 +541,7 @@ const CourseCalendar = ({
                     </DraggableEvent>
                   ))}
                   {allDayEvents.length > 3 && (
-                    <div className="text-xs text-ink-3 px-1">
-                      +{allDayEvents.length - 3} more
-                    </div>
+                    <div className="text-xs text-ink-3 px-1">+{allDayEvents.length - 3} more</div>
                   )}
                 </div>
               </DroppableCell>
@@ -649,10 +666,9 @@ const CourseCalendar = ({
                                 : event.id || idx
                             }
                             event={event}
-                            disabled={event.is_deadline ? !canDragDeadlines : !onEventDrop}
+                            disabled={!canDragEvent(event, canDragDeadlines, onEventDrop)}
                             className={`absolute left-1 right-1 pointer-events-auto ${
-                              (event.is_deadline && canDragDeadlines) ||
-                              (!event.is_deadline && onEventDrop)
+                              canDragEvent(event, canDragDeadlines, onEventDrop)
                                 ? 'cursor-grab active:cursor-grabbing'
                                 : ''
                             }`}
@@ -747,9 +763,7 @@ const CourseCalendar = ({
             <h2 className="ml-2 text-base sm:text-lg font-semibold text-ink-0 tracking-tight">
               {getMonthName(currentDate)} {getYear(currentDate)}
               {view === 'week' && (
-                <span className="ml-2 text-sm font-normal text-ink-3">
-                  {getWeekRangeText()}
-                </span>
+                <span className="ml-2 text-sm font-normal text-ink-3">{getWeekRangeText()}</span>
               )}
             </h2>
           </div>
@@ -759,9 +773,7 @@ const CourseCalendar = ({
               type="button"
               onClick={() => setView('week')}
               className={`px-3.5 py-1 text-xs font-medium rounded-full transition-all ${
-                view === 'week'
-                  ? 'bg-white dark:bg-neutral-700 text-ink-0 shadow-sm'
-                  : 'text-ink-3'
+                view === 'week' ? 'bg-white dark:bg-neutral-700 text-ink-0 shadow-sm' : 'text-ink-3'
               }`}
             >
               Week

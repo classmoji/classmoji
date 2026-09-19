@@ -21,9 +21,24 @@
 
 import getPrisma from '@classmoji/database';
 import { ContentService } from '../content/ContentService.ts';
+import { contentProxyBase, isCommitRef, pagesContentBase, splitRawRef } from './contentRefs.ts';
+import {
+  listContentAssetPaths,
+  lookupContentAssetsBySha,
+  recordContentAssets,
+} from './contentAssets.service.ts';
+import { enqueueDeckThumbnail } from './deckThumbnail.service.ts';
+import { indexOneFile } from './contentIndex.service.ts';
 import { getGitProvider } from '../git/index.ts';
 import * as contentManifestService from './contentManifest.service.ts';
 import { createWithUniquePageSlug, ensureContentRepo, isPageSlugConflict } from './page.service.ts';
+// The slide FILE policy, from the module that has no cheerio in it — importing
+// the `./slides` barrel here would pull the deck engine into the import task.
+import {
+  SLIDE_FILE_MAX_BYTES,
+  SLIDE_FILE_TOO_LARGE_MESSAGE,
+  isCommitTooLargeRefusal,
+} from '../slides/slideSource.ts';
 import type { Prisma } from '@prisma/client';
 
 // GitHub Contents API caps single-file reads at 1MB; larger files return no
@@ -145,31 +160,514 @@ export interface UrlRewriteContext {
   targetRepo: string;
   /** This item's folder in the target repo (may carry a dedupe suffix). */
   targetPath: string;
+  /**
+   * Signed-blob sha → the SOURCE repo path holding it, from the source
+   * classroom's asset map. The only way back from `/c/{id}/blob/{sha}.{ext}`,
+   * which names content and not location. Absent shas are left verbatim and
+   * warned about — see `rewriteSignedUrls`.
+   */
+  shaPaths?: ReadonlyMap<string, string>;
+  /** Where an unresolvable signed URL is reported. Defaults to console.warn. */
+  onWarn?: (detail: string) => void;
+  /**
+   * Will the TARGET repo hold this path once the copy lands? Answers for the
+   * files this copy is writing PLUS whatever the target already had.
+   *
+   * This is the whole gate on the chained-import rewrite below: a reference
+   * into another repo of the SOURCE org is repointed only when the file it
+   * names actually came along. Absent (the default) means no chained rewriting
+   * happens at all, which is exactly the behaviour that predates it.
+   */
+  targetHasPath?: (path: string) => boolean;
+  /**
+   * Called once per chained reference left untouched because its file is not
+   * in the copy. Callers count these and report the total ONCE per import — a
+   * course can carry hundreds, and one warning each would bury everything else.
+   */
+  onUncopiedRef?: (ref: string) => void;
+}
+
+const RAW_HOST = 'https://raw.githubusercontent.com';
+
+/** `.slidesthemes/{theme}` — where a signed theme URL's bytes actually live. */
+const THEMES_FOLDER = '.slidesthemes';
+
+/**
+ * Every reference shape the app has ever stored, and what a copy must do to it.
+ *
+ * Content is authored across years and surfaces, so one page's `content.json`
+ * can hold all of these at once:
+ *
+ *   1. `raw.githubusercontent.com/{login}/{repo}/{branch}/{path}` — on ANY
+ *      branch, not just `main`; a repo whose default is `master`, or content
+ *      hand-authored against a working branch, writes something else.
+ *   2. `{login}.github.io/{repo}/{path}` — the Pages CDN.
+ *   3. `/content/{login}/{repo}/{path}` — the slides app's same-origin proxy.
+ *   4. A BARE repo path (`pages/lab-1/assets/d.png`) — what pages store now
+ *      that the delivery layer signs at render time, so it is the shape most
+ *      new content is in.
+ *   5. One of OUR signed URLs — `/c/{classroomId}/blob/…`, `/theme/…`,
+ *      `/missing/…`.
+ *   6. Any of shapes 1-3 naming a DIFFERENT repo of the SAME org — what a repo
+ *      that was ITSELF created by an earlier import still holds. See below.
+ *
+ * The first four are the same thing with different prefixes: swap the source
+ * repo's prefix for the target's. The fifth cannot be copied at all. A signed
+ * URL is bound to the SOURCE classroom's id and key version, and the imported
+ * copy renders under a different classroom — so copying one verbatim produces a
+ * link that is not stale, it is permanently unauthorized, and the image is gone
+ * the moment anyone loads the page. They are turned back into repo paths
+ * instead, and the target classroom signs them itself on its next render.
+ *
+ * Order matters. Signed URLs resolve to bare SOURCE paths first, so the
+ * item-specific folder rewrite below then carries them onto the target's
+ * (possibly dedupe-suffixed) folder like any other bare path. Within each
+ * shape the item-specific rewrite runs before the repo-general one, which
+ * catches cross-item references — those keep their original folder, correct
+ * whenever that item was imported un-renamed; a renamed cross-referenced item
+ * is a documented residual.
+ *
+ * CHAINED IMPORTS (shape 6). An import's source can itself be an import's
+ * target, and a copy carries its references along verbatim. Content that went
+ * A → B → C arrives at C still naming repo A, two hops back — which the passes
+ * above do not touch, because A is not the immediate source. The FILES came
+ * along at every hop and sit in C under the same relative path; only the
+ * reference is stale. That is not a cosmetic residual: C's delivery layer
+ * cannot sign another classroom's repo, and the legacy proxy answers 403 to
+ * anyone who is not a member of A's classroom, so every one of those images is
+ * simply gone. (Prod, 2026-09-07: `dartmouth-cs98-26f`, imported from
+ * `content-27w`, itself imported from `content-dartmouth-cs98-26w`, whose decks
+ * all still pointed at the 26W repo.)
+ *
+ * So a reference into ANY repo of the SOURCE org is a candidate, rewritten
+ * exactly like an immediate-source one — item-specific folder first, then
+ * repo-general — but ONLY when the file it names actually came along:
+ * `targetHasPath` must say the path is in this copy or already in the target
+ * repo. THE FILE MUST EXIST. A reference whose file did not come along is left
+ * exactly as it was — repointing it would replace a broken link with a
+ * confidently wrong one — and is reported through `onUncopiedRef` so the
+ * import can say how many it left. The org is never widened: a repo under a
+ * DIFFERENT login belongs to someone else and is untouched, file or no file.
+ *
+ * RESIDUALS this does not fix, and cannot from here:
+ *
+ *   - A recovered `/theme/` reference becomes `.slidesthemes/{name}`, which is
+ *     outside any item's `sourcePath` and so is carried across unchanged. It
+ *     resolves only if the TARGET repo already has a theme by that name —
+ *     shared themes are per-repo and an import copies pages and decks, not the
+ *     `.slidesthemes/` folder. A deck importing onto a repo without that theme
+ *     falls back to its own CSS, which is visible and fixable; inventing a
+ *     theme copy here would not be.
+ *   - A cross-item bare path (`pages/lab-9/…`) keeps its folder, for the same
+ *     reason and with the same caveat as the URL shapes above.
+ *   - A chained reference whose file is NOT in the copy: counted, reported, and
+ *     left alone, because nothing here can conjure the bytes.
+ *   - The chained gate is PATH EXISTENCE, not content identity. It asks whether
+ *     the target holds a file at that path, never whether it is the SAME file.
+ *     For content that arrived by import — the case this exists for — the two
+ *     coincide, because the copy is what put the path there. For a HAND-authored
+ *     cross-repo reference that happens to collide with a path the copy carries,
+ *     they do not: it is repointed at a different file with the same name. The
+ *     alternative is comparing shas across two repos on the rewrite path, and
+ *     landing a same-named asset where a 403 used to be is the better end of
+ *     that trade.
+ */
+export function rewriteContentUrls(text: string, ctx: UrlRewriteContext): string {
+  const rawSourcePrefix = `${RAW_HOST}/${ctx.sourceLogin}/${ctx.sourceRepo}/`;
+  const rawTargetPrefix = `${RAW_HOST}/${ctx.targetLogin}/${ctx.targetRepo}/`;
+
+  const withPaths = rewriteSignedUrls(text, ctx);
+
+  // Branch-agnostic: the branch segment is consumed positionally and carried
+  // across unchanged. Normalizing it would mean guessing the TARGET repo's
+  // default branch, which nothing here knows, and `main` is exactly the guess
+  // that broke this in the first place.
+  const prefixed = rewriteRawUrls(withPaths, rawSourcePrefix, rawTargetPrefix, ctx);
+
+  const bases: [string, string][] = [
+    [
+      pagesContentBase(ctx.sourceLogin, ctx.sourceRepo),
+      pagesContentBase(ctx.targetLogin, ctx.targetRepo),
+    ],
+    [
+      contentProxyBase(ctx.sourceLogin, ctx.sourceRepo),
+      contentProxyBase(ctx.targetLogin, ctx.targetRepo),
+    ],
+  ];
+
+  const rewritten = bases.reduce(
+    (acc, [sourceBase, targetBase]) =>
+      acc
+        .replaceAll(`${sourceBase}/${ctx.sourcePath}/`, `${targetBase}/${ctx.targetPath}/`)
+        .replaceAll(`${sourceBase}/`, `${targetBase}/`),
+    prefixed
+  );
+
+  // AFTER the immediate-source passes, so anything they own is already gone —
+  // and so a target-repo URL they just produced is never reconsidered here.
+  const chained = rewriteChainedRepoUrls(rewritten, ctx);
+
+  return rewriteBarePaths(chained, ctx);
+}
+
+/** A repo name inside a URL: one path segment, no URL or markup delimiter. */
+const REPO_SEGMENT = `[^/,\\s"'()<>]+`;
+
+/**
+ * Everything after the repo, up to the first delimiter.
+ *
+ * A COMMA ends it. `srcset` and `data-background-video` hold comma-separated
+ * lists of these references, and a class that swallowed the comma would match
+ * the whole list as one reference — a path no existence check can recognise, so
+ * every entry after the first would be left behind AND counted as a residual.
+ * Repo paths do not carry commas; lists of them do.
+ */
+const URL_TAIL = `[^,\\s"'()<>]*`;
+
+/**
+ * Shape 6: the same three URL shapes, naming another repo of the SOURCE org.
+ *
+ * Every rewrite is gated on `targetHasPath` — see the shape-6 paragraph above
+ * for why a reference whose file did not come along has to be left alone. With
+ * no predicate this pass does nothing at all, which is how every caller that
+ * has not opted in keeps its old behaviour.
+ *
+ * The SOURCE repo is skipped because the passes above already owned it, and the
+ * TARGET repo is skipped because a reference already pointing at the target is
+ * either their output or correct as it stands — reinterpreting it would make
+ * this pass' behaviour depend on whether the two classrooms happen to share an
+ * org, which is exactly the kind of asymmetry that hides bugs.
+ */
+function rewriteChainedRepoUrls(text: string, ctx: UrlRewriteContext): string {
+  if (!ctx.targetHasPath) return text;
+
+  const rawPattern = new RegExp(
+    `${escapeRegExp(`${RAW_HOST}/${ctx.sourceLogin}/`)}(${REPO_SEGMENT})/(${URL_TAIL})`,
+    'g'
+  );
+  const withRaw = text.replace(rawPattern, (match, repo: string, rest: string) => {
+    if (!isChainedRepo(repo, ctx)) return match;
+    // Same ref handling as the immediate-source raw pass: the ref is consumed
+    // positionally (it may be `refs/heads/main`), and a commit-pinned URL names
+    // history the target repo does not have, so it is never repointed.
+    const split = splitRawRef(rest);
+    if (!split || isCommitRef(split.ref)) return match;
+    const [path, tail] = splitPathTail(split.path);
+    if (!path) return match;
+    const mapped = mapCopiedPath(path, ctx);
+    if (mapped === null) return reportUncopied(match, ctx);
+    return `${RAW_HOST}/${ctx.targetLogin}/${ctx.targetRepo}/${split.ref}/${mapped}${tail}`;
+  });
+
+  // The CDN shape carries its own host, so it is unambiguous wherever it sits.
+  const withPagesCdn = rewriteChainedPlain(
+    withRaw,
+    `https://${ctx.sourceLogin}.github.io`,
+    pagesContentBase(ctx.targetLogin, ctx.targetRepo),
+    ctx
+  );
+
+  // The proxy shape is a root-relative path and has to be ANCHORED on a value
+  // boundary, like `rewriteBarePaths`. Unanchored it matches the tail of any
+  // URL that happens to contain the same segments — a foreign
+  // `https://example.com/content/{login}/anything/…` is somebody else's path,
+  // not our proxy, and rewriting it would point it at our repo.
+  //
+  // `,` and `;` ARE boundaries here, unconditionally, where `rewriteBarePaths`
+  // allows them only within one repo. The two are anchoring different things:
+  // a bare path is a folder name anyone's query string may contain, while
+  // `/content/{sourceLogin}/{repo}/` names our proxy and this org. What the
+  // comma buys is the same either way — `srcset` and comma-separated video
+  // lists put one immediately before a reference.
+  return rewriteChainedPlain(
+    withPagesCdn,
+    `/content/${ctx.sourceLogin}`,
+    contentProxyBase(ctx.targetLogin, ctx.targetRepo),
+    ctx,
+    `(^|["'(,;\\s>])`
+  );
 }
 
 /**
- * Rewrite absolute source-repo URLs inside copied text content so imported
- * pages/decks reference THEIR OWN copied assets instead of the source repo —
- * without this, deleting the source classroom (with GitHub cleanup) 404s every
- * image in the imported content. Handles both URL shapes the app emits:
- * raw.githubusercontent.com and the {login}.github.io Pages CDN.
- *
- * Order matters: the item-specific folder rewrite runs first (it may carry a
- * dedupe suffix), then the repo-general rewrite catches cross-item references
- * (which keep their original folder path — correct whenever that item was
- * imported un-renamed; a renamed cross-referenced item is a documented
- * residual).
+ * The two ref-less shapes (Pages CDN, content proxy), which are a base, a repo
+ * segment and a path — so one implementation covers both.
  */
-export function rewriteContentUrls(text: string, ctx: UrlRewriteContext): string {
-  const rawSource = `https://raw.githubusercontent.com/${ctx.sourceLogin}/${ctx.sourceRepo}/main`;
-  const rawTarget = `https://raw.githubusercontent.com/${ctx.targetLogin}/${ctx.targetRepo}/main`;
-  const pagesSource = `https://${ctx.sourceLogin}.github.io/${ctx.sourceRepo}`;
-  const pagesTarget = `https://${ctx.targetLogin}.github.io/${ctx.targetRepo}`;
-  return text
-    .replaceAll(`${rawSource}/${ctx.sourcePath}/`, `${rawTarget}/${ctx.targetPath}/`)
-    .replaceAll(`${rawSource}/`, `${rawTarget}/`)
-    .replaceAll(`${pagesSource}/${ctx.sourcePath}/`, `${pagesTarget}/${ctx.targetPath}/`)
-    .replaceAll(`${pagesSource}/`, `${pagesTarget}/`);
+function rewriteChainedPlain(
+  text: string,
+  sourceOrgBase: string,
+  targetBase: string,
+  ctx: UrlRewriteContext,
+  lead = '()'
+): string {
+  const pattern = new RegExp(
+    `${lead}${escapeRegExp(sourceOrgBase)}/(${REPO_SEGMENT})/(${URL_TAIL})`,
+    'g'
+  );
+  return text.replace(pattern, (match, before: string, repo: string, rest: string) => {
+    if (!isChainedRepo(repo, ctx)) return match;
+    const [path, tail] = splitPathTail(rest);
+    // `…/{repo}/` with nothing after it names no file. It is a base, not a
+    // reference — leave it, and do NOT count it as a residual.
+    if (!path) return match;
+    const mapped = mapCopiedPath(path, ctx);
+    if (mapped === null) return reportUncopied(match, ctx);
+    return `${before}${targetBase}/${mapped}${tail}`;
+  });
+}
+
+/**
+ * The folder names a content repo keeps at its root. None of them is a repo.
+ *
+ * A malformed reference that dropped its repo segment — `/content/{login}/
+ * slides/intro/x.png` — otherwise parses as repo `slides` with the folder
+ * eaten, and the leftover `intro/x.png` is a path no import ever meant.
+ */
+const CONTENT_ROOTS = new Set(['pages', 'slides', THEMES_FOLDER]);
+
+/** Another repo of the source org — neither the immediate source nor the target. */
+function isChainedRepo(repo: string, ctx: UrlRewriteContext): boolean {
+  if (repo === ctx.sourceRepo || CONTENT_ROOTS.has(repo)) return false;
+  return !(ctx.sourceLogin === ctx.targetLogin && repo === ctx.targetRepo);
+}
+
+/**
+ * A path in some other repo of the org → where it lands in the TARGET, or null
+ * when the copy does not carry it.
+ *
+ * Item-specific first, repo-general second — the same order every other shape
+ * uses. Existence is checked on the DECODED path (the map holds repo paths, not
+ * percent-encoded URL segments) while the rewritten reference keeps the URL's
+ * own encoding: the prefixes being swapped are slugs, which never carry an
+ * escape.
+ */
+function mapCopiedPath(rawPath: string, ctx: UrlRewriteContext): string | null {
+  const has = ctx.targetHasPath;
+  if (!has || !rawPath) return null;
+
+  const itemPrefix = ctx.sourcePath ? `${ctx.sourcePath}/` : '';
+  if (itemPrefix && rawPath.startsWith(itemPrefix)) {
+    const candidate = `${ctx.targetPath}/${rawPath.slice(itemPrefix.length)}`;
+    if (has(decodePathOnce(candidate))) return candidate;
+  }
+  return has(decodePathOnce(rawPath)) ? rawPath : null;
+}
+
+/** Leave a chained reference exactly as it was, and say that it was left. */
+function reportUncopied(match: string, ctx: UrlRewriteContext): string {
+  ctx.onUncopiedRef?.(match);
+  return match;
+}
+
+/**
+ * The raw shape, on whatever ref the reference happens to name.
+ *
+ * The ref is whatever `splitRawRef` says it is — including the fully-qualified
+ * `refs/heads/main` that GitHub's own Raw button emits, which is why this does
+ * not just take the first segment. Getting that wrong is not cosmetic: `refs`
+ * would be read as the branch, the item folder would never be recognized, and
+ * the copied page would point at `…/{target}/heads/main/pages/lab-1/…` — a path
+ * that exists in no repo at all.
+ *
+ * A COMMIT-pinned URL is left entirely alone, repo swap included. It asks for
+ * one exact historical revision, and that commit exists only in the SOURCE
+ * repo — a fresh import's target has none of its history. Pointing it at the
+ * target guarantees a 404, where leaving it at least resolves for as long as
+ * the source repo is around.
+ */
+function rewriteRawUrls(
+  text: string,
+  sourcePrefix: string,
+  targetPrefix: string,
+  ctx: UrlRewriteContext
+): string {
+  // Everything after the repo, up to the first delimiter, so surrounding markup
+  // or JSON is never swallowed; `splitRawRef` then separates ref from path.
+  const pattern = new RegExp(`${escapeRegExp(sourcePrefix)}([^\\s"'()<>]*)`, 'g');
+  const itemPrefix = ctx.sourcePath ? `${ctx.sourcePath}/` : '';
+
+  return text.replace(pattern, (match, rest: string) => {
+    const split = splitRawRef(rest);
+    if (!split || isCommitRef(split.ref)) return match;
+
+    const mapped =
+      itemPrefix && split.path.startsWith(itemPrefix)
+        ? `${ctx.targetPath}/${split.path.slice(itemPrefix.length)}`
+        : split.path;
+    return `${targetPrefix}${split.ref}/${mapped}`;
+  });
+}
+
+/**
+ * A bare repo path under THIS item's folder → the same path under the target's.
+ *
+ * Anchored on a value boundary — a quote, a bracket, whitespace, start of text
+ * — and never mid-string. A blanket replace would reach inside an unrelated
+ * org's absolute URL that happens to contain the same folder name and corrupt
+ * it, and the absolute shapes above have already handled every occurrence that
+ * legitimately belongs to this repo.
+ *
+ * Skipped when the item's folder does not move: a whole-repo clone copies every
+ * path unchanged and passes an empty `sourcePath`, where a prefix rewrite is
+ * meaningless.
+ *
+ * `,` and `;` are boundaries ONLY when the copy stays inside ONE repo — the
+ * deck duplicate. What excluding them guards against is a FOREIGN url's query
+ * string (`https://images.example.com/resize?src=pages/lab-1/a.png`), and that
+ * hazard needs the reference to belong to some other repo; where source and
+ * target ARE the same repo, every path that matches is this repo's. What they
+ * buy there is not hypothetical: `srcset="…/a.png 1x,…/b.png 2x"`,
+ * `data-background-video="a.mp4,b.webm"` and `url(&quot;…&quot;)` each put a
+ * comma or a semicolon immediately before a path, and without them every entry
+ * after the first keeps pointing at the ORIGINAL deck's folder.
+ */
+function rewriteBarePaths(text: string, ctx: UrlRewriteContext): string {
+  if (!ctx.sourcePath || ctx.sourcePath === ctx.targetPath) return text;
+
+  const sameRepo = ctx.sourceLogin === ctx.targetLogin && ctx.sourceRepo === ctx.targetRepo;
+  // `=` is deliberately NOT a boundary in either mode: a foreign URL's query
+  // string (`?src=pages/lab-1/a.png`) must never be rewritten inside a link
+  // this copy has no business touching.
+  const boundary = sameRepo ? `["'(,;\\s>]` : `["'(\\s>]`;
+  const pattern = new RegExp(`(^|${boundary})${escapeRegExp(ctx.sourcePath)}/`, 'g');
+  return text.replace(pattern, (_match, lead: string) => `${lead}${ctx.targetPath}/`);
+}
+
+/**
+ * `/c/{classroomId}/{blob|theme|missing}/…` — the shapes OUR delivery layer
+ * emits, matched by path rather than by host because the origin is deployment
+ * configuration and staging, production and local all differ.
+ *
+ * The classroom-id class assumes a UUID (hex and dashes). `Classroom.id` is
+ * `@default(uuid())` and has been since the model existed; if that ever changes
+ * to a slug or a cuid, this stops matching and signed URLs start being copied
+ * verbatim again — silently, since a non-match is indistinguishable from
+ * ordinary text.
+ */
+const SIGNED_URL_PATTERN =
+  /(?:https?:\/\/[^\s"'()<>]+)?\/c\/[0-9a-fA-F-]{8,36}\/(blob|theme|missing)\/([^\s"'()<>]*)/g;
+
+/** The signed-blob shas a piece of text references, for a map lookup. */
+export function collectSignedBlobShas(text: string): string[] {
+  const shas = new Set<string>();
+  for (const [, kind, tail] of text.matchAll(SIGNED_URL_PATTERN)) {
+    if (kind !== 'blob') continue;
+    const sha = blobShaOf(tail);
+    if (sha) shas.add(sha);
+  }
+  return [...shas];
+}
+
+/**
+ * Turn our own signed URLs back into bare SOURCE repo paths.
+ *
+ * Each kind knows a different amount about where its bytes live:
+ *
+ *   `missing` carries the original reference verbatim in its path — it is the
+ *   resolver saying "I could not find this", so the ref it could not find is
+ *   right there and needs only decoding.
+ *
+ *   `theme` names the theme, and a theme always lives at `.slidesthemes/{name}`
+ *   — derivable with no lookup at all.
+ *
+ *   `blob` names CONTENT, not location: a sha and an extension, deliberately,
+ *   because that is what lets the edge cache it forever. Only the source
+ *   classroom's asset map can say which path held it, so an unresolvable sha is
+ *   left exactly as it was and warned about. Leaving it is the lesser harm:
+ *   the URL is already broken in the copy, and inventing a path would put a
+ *   confidently wrong reference into content nobody will think to check.
+ */
+function rewriteSignedUrls(text: string, ctx: UrlRewriteContext): string {
+  const warn = ctx.onWarn ?? ((detail: string) => console.warn(`[contentImport] ${detail}`));
+
+  return text.replace(SIGNED_URL_PATTERN, (match, kind: string, tail: string) => {
+    if (kind === 'missing') {
+      return decodePathOnce(stripQuery(tail)) || match;
+    }
+
+    if (kind === 'theme') {
+      // `{theme}/{treeSha}/{policy}/{rest}` — the first segment is the theme,
+      // the next two are addressing and authorization, and anything after them
+      // is the path inside the folder.
+      const [theme, , , ...rest] = stripQuery(tail).split('/');
+      if (!theme) return match;
+      const inside = rest.filter(Boolean).join('/');
+      return inside ? `${THEMES_FOLDER}/${theme}/${inside}` : `${THEMES_FOLDER}/${theme}`;
+    }
+
+    const sha = blobShaOf(tail);
+    const path = sha ? ctx.shaPaths?.get(sha) : undefined;
+    if (path) return path;
+
+    warn(
+      `left a signed URL unrewritten — the source classroom's asset map has no path for ` +
+        `${sha ?? 'an unreadable sha'}; the imported copy will not load it`
+    );
+    return match;
+  });
+}
+
+/** `{sha}.{ext}` (plus any query) → the sha, or null if it is not one. */
+function blobShaOf(tail: string): string | null {
+  const name = stripQuery(tail).split('/')[0] ?? '';
+  const sha = name.slice(0, name.indexOf('.') === -1 ? name.length : name.indexOf('.'));
+  return /^[0-9a-f]{40}$/i.test(sha) ? sha.toLowerCase() : null;
+}
+
+function stripQuery(value: string): string {
+  return splitPathTail(value)[0];
+}
+
+/** `path?query#hash` → the path and the tail, so a rewrite can re-attach it. */
+function splitPathTail(value: string): [string, string] {
+  const cut = value.search(/[?#]/);
+  return cut === -1 ? [value, ''] : [value.slice(0, cut), value.slice(cut)];
+}
+
+function decodePathOnce(value: string): string {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/**
+ * A staged write alongside its decoded text, so the utf8 round trip happens
+ * once.
+ *
+ * The import needs to READ every text file before it rewrites any of them — the
+ * signed-blob shas across the whole batch are resolved in a single query — and
+ * decoding in both passes meant base64-decoding a course's entire content
+ * twice. `text` is null for binaries, which are never decoded at all: their
+ * bytes are not valid utf8 and a round trip would replace them with U+FFFD.
+ */
+export interface DecodedFile {
+  file: BatchFile;
+  text: string | null;
+}
+
+/** Decode the text files of a staged batch; binaries carry a null text. */
+export function decodeStagedFiles(files: BatchFile[]): DecodedFile[] {
+  return files.map(file => ({
+    file,
+    text: isTextContentPath(file.path)
+      ? Buffer.from(file.content, 'base64').toString('utf8')
+      : null,
+  }));
+}
+
+/** Rewrite already-decoded staged files; binaries pass through untouched. */
+export function rewriteDecodedFiles(decoded: DecodedFile[], ctx: UrlRewriteContext): BatchFile[] {
+  return decoded.map(({ file, text }) => {
+    if (text === null) return file;
+    const rewritten = rewriteContentUrls(text, ctx);
+    if (rewritten === text) return file;
+    return { ...file, content: Buffer.from(rewritten, 'utf8').toString('base64') };
+  });
 }
 
 /**
@@ -177,13 +675,7 @@ export function rewriteContentUrls(text: string, ctx: UrlRewriteContext): string
  * (base64-decoded, rewritten, re-encoded); binaries pass through untouched.
  */
 export function rewriteStagedFiles(files: BatchFile[], ctx: UrlRewriteContext): BatchFile[] {
-  return files.map(file => {
-    if (!isTextContentPath(file.path)) return file;
-    const decoded = Buffer.from(file.content, 'base64').toString('utf8');
-    const rewritten = rewriteContentUrls(decoded, ctx);
-    if (rewritten === decoded) return file;
-    return { ...file, content: Buffer.from(rewritten, 'utf8').toString('base64') };
-  });
+  return rewriteDecodedFiles(decodeStagedFiles(files), ctx);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -323,13 +815,161 @@ async function collectFolderFiles({
   return collected;
 }
 
+/**
+ * Read the ONE document behind a FILE slide, remapped onto the target folder.
+ *
+ * Separate from `collectFolderFiles` for one reason that decides everything
+ * else: that walk skips any file over 1 MB, and a slide file is a lecture PDF
+ * or a Keynote — almost always over 1 MB, up to the 35 MB policy cap. A copy
+ * that dropped it would leave a FILE row whose `source_path` names a document
+ * nobody ever wrote, which is a broken slide rather than a missing image.
+ *
+ * So it reads through the Git blobs API (`getLargeContent`, 100 MB ceiling)
+ * rather than the Contents API, and it reads exactly `source_path` — not the
+ * folder — because a FILE slide's folder holds one thing and a walk would be a
+ * listing call to learn what the column already says.
+ *
+ * MEMORY, stated plainly: the body is staged base64 in memory alongside every
+ * other file in the run, so a course of large decks is a large import. The cap
+ * that bounds ONE of them is the same 35 MB the upload enforces; nothing bounds
+ * the sum, and an import of a dozen half-full decks is the case to watch.
+ *
+ * Returns an empty list — never throws — for every reason a file cannot be
+ * copied, each one warned: the row has no path, the document is over the cap,
+ * or the read came back empty.
+ */
+async function collectSlideFile({
+  source,
+  slide,
+  targetContentPath,
+  warn,
+}: {
+  source: RepoContext;
+  slide: SourceSlide;
+  targetContentPath: string;
+  warn: WarnFn;
+}): Promise<BatchFile[]> {
+  const sourcePath = slide.source_path;
+  if (!sourcePath) {
+    warn('slides', `skipped "${slide.title}" — file slide has no source path`);
+    return [];
+  }
+
+  const meta = await ContentService.getMeta({
+    gitOrganization: source.gitOrganization,
+    repo: source.repo,
+    path: sourcePath,
+    ref: 'main',
+  });
+  if (!meta) {
+    warn('slides', `skipped "${slide.title}" — no file at ${sourcePath}`);
+    return [];
+  }
+  if (meta.size > SLIDE_FILE_MAX_BYTES) {
+    warn('slides', `skipped "${slide.title}" — ${sourcePath} is ${meta.size} bytes`);
+    return [];
+  }
+
+  const file = await ContentService.getLargeContent({
+    gitOrganization: source.gitOrganization,
+    repo: source.repo,
+    path: sourcePath,
+  });
+  if (!file) {
+    warn('slides', `skipped "${slide.title}" — could not read ${sourcePath}`);
+    return [];
+  }
+
+  return [
+    {
+      path: remapFilePath(sourcePath, slide.content_path, targetContentPath),
+      content: file.content,
+      encoding: 'base64',
+    },
+  ];
+}
+
 /** A source content row staged for import after its files were read. */
 interface StagedItem<Source> {
   source: Source;
-  files: BatchFile[];
+  files: DecodedFile[];
   targetTitle: string;
   targetSlug: string;
   targetContentPath: string;
+}
+
+/**
+ * Resolve every signed-blob sha an import references back to SOURCE repo paths,
+ * in one query for the whole run.
+ *
+ * A signed URL names content (a sha), not location, so the only way to recover
+ * a path is the source classroom's own asset map. Resolved here, in the import,
+ * because the rewriter itself is pure — it is called from a Trigger task and
+ * from a local clone helper, neither of which should acquire a database.
+ *
+ * ONE query, for the whole batch, once. Per-sha lookups inside the staging loop
+ * made this a round trip per image per page, on the code path whose entire job
+ * is copying a course's worth of images.
+ *
+ * Best effort throughout: a sha the map has never heard of simply stays out of
+ * the map, and the rewriter leaves that URL alone and warns. An import must not
+ * fail over a reference it could not tidy up.
+ */
+export async function resolveShaPaths(
+  classroomId: string,
+  texts: string[]
+): Promise<ReadonlyMap<string, string>> {
+  const shas = [...new Set(texts.flatMap(text => collectSignedBlobShas(text)))];
+  if (shas.length === 0) return new Map();
+
+  try {
+    return await lookupContentAssetsBySha(classroomId, shas);
+  } catch {
+    return new Map();
+  }
+}
+
+/**
+ * "Will the target repo hold this path?", for one import pass.
+ *
+ * The union of what this pass is about to write (staged paths are already
+ * TARGET-shaped — `collectFolderFiles` remaps them on read) and what the target
+ * classroom already had. Both halves matter: the first covers the ordinary
+ * chained import, the second a second import into a classroom that has content
+ * already, including the slides pass seeing the pages this run just committed.
+ *
+ * Best effort on the index — a chained reference is repointed only on a
+ * positive answer, so a failed lookup costs residuals, never a wrong rewrite,
+ * and an import must not fail over a reference it could not tidy up.
+ *
+ * `extraPaths` is for a file this pass will write but has not staged the bytes
+ * of: a FILE slide's document is read and committed one at a time, after this
+ * runs, and without its target path here a deck linking to it would be the one
+ * reference the copy left pointing at the source repo.
+ */
+async function buildTargetPathIndex<Source>(
+  targetClassroomId: string,
+  staged: StagedItem<Source>[],
+  extraPaths: readonly string[] = []
+): Promise<(path: string) => boolean> {
+  const incoming = new Set([
+    ...staged.flatMap(item => item.files.map(({ file }) => file.path)),
+    ...extraPaths,
+  ]);
+  let existing: ReadonlySet<string>;
+  try {
+    existing = await listContentAssetPaths(targetClassroomId);
+  } catch {
+    existing = new Set<string>();
+  }
+  return (path: string) => incoming.has(path) || existing.has(path);
+}
+
+/** Every decoded text a staged item carries, for the sha sweep. */
+function stagedTexts<Source>(items: StagedItem<Source>[]): string[] {
+  return items.flatMap(item =>
+    item.files.map(file => file.text).filter((text): text is string => text !== null)
+  );
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -407,6 +1047,15 @@ export const importClassroomContent = async (
   const commitMessage = `Import content from ${source.slug}`;
   let createdAny = false;
 
+  // Chained references left alone because their file is not in the copy.
+  // Counted across BOTH passes and reported once at the end: a course can carry
+  // hundreds of them, and one warning each would push everything else out of
+  // the capped warning list.
+  let uncopiedRefs = 0;
+  const onUncopiedRef = (): void => {
+    uncopiedRefs++;
+  };
+
   // ── Pages ──
   if (wantPages) {
     try {
@@ -418,6 +1067,7 @@ export const importClassroomContent = async (
         warn,
         idMap: summary.page_id_map,
         onProgress: opts.onProgress,
+        onUncopiedRef,
       });
       summary.pages = created;
       if (created > 0) createdAny = true;
@@ -443,12 +1093,24 @@ export const importClassroomContent = async (
         warn,
         idMap: summary.slide_id_map,
         onProgress: opts.onProgress,
+        onUncopiedRef,
       });
       summary.slides = created;
       if (created > 0) createdAny = true;
     } catch (error: unknown) {
       warn('slides', `slide import failed: ${errText(error)}`);
     }
+  }
+
+  // One line for the whole import, so the residuals are visible without being
+  // deafening. They are broken links either way; what this says is that the
+  // import saw them and declined to guess.
+  if (uncopiedRefs > 0) {
+    const detail =
+      `left ${uncopiedRefs} reference(s) into another ${source.login} repository untouched — ` +
+      `those files are not in this copy, so repointing them would have invented a path`;
+    console.warn(`[contentImport] ${detail}`);
+    warn('content', detail);
   }
 
   // ── Manifest refresh (once, non-fatal — mirrors create/delete flows) ──
@@ -477,6 +1139,7 @@ async function importPages({
   warn,
   idMap,
   onProgress,
+  onUncopiedRef,
 }: {
   source: RepoContext;
   target: RepoContext;
@@ -485,6 +1148,7 @@ async function importPages({
   warn: WarnFn;
   idMap: Record<string, string>;
   onProgress?: ContentProgressFn;
+  onUncopiedRef?: (ref: string) => void;
 }): Promise<number> {
   const sourcePages = await getPrisma().page.findMany({
     where: { classroom_id: source.classroomId },
@@ -539,17 +1203,16 @@ async function importPages({
         warn('pages', `skipped "${page.title}" — no files at ${page.content_path}`);
         continue;
       }
-      // Repoint absolute source-repo asset URLs at the copied files — otherwise
-      // deleting the source classroom (with GitHub cleanup) 404s every image.
-      files = rewriteStagedFiles(files, {
-        sourceLogin: source.login,
-        sourceRepo: source.repo,
-        sourcePath: page.content_path,
-        targetLogin: target.login,
-        targetRepo: target.repo,
-        targetPath: targetContentPath,
+      // Staged DECODED and un-rewritten. The rewrite needs the signed-blob
+      // shas of the whole batch resolved first, and that is one query for the
+      // run rather than one per page — see resolveShaPaths.
+      staged.push({
+        source: page,
+        files: decodeStagedFiles(files),
+        targetTitle,
+        targetSlug,
+        targetContentPath,
       });
-      staged.push({ source: page, files, targetTitle, targetSlug, targetContentPath });
     } finally {
       consumed++;
       emitProgress(onProgress, { kind: 'pages', done: consumed, total });
@@ -558,18 +1221,68 @@ async function importPages({
 
   if (staged.length === 0) return 0;
 
+  // Repoint source-repo asset references at the copied files — otherwise
+  // deleting the source classroom (with GitHub cleanup) 404s every image. The
+  // header images go into the same sweep: they are stored on the row rather
+  // than in the files, but they are the same repo and the same shapes.
+  const shaPaths = await resolveShaPaths(source.classroomId, [
+    ...stagedTexts(staged),
+    ...staged.map(item => item.source.header_image_url ?? ''),
+  ]);
+  // Gates the chained-import rewrite: a reference into another repo of the
+  // source org is repointed only if that file is actually here.
+  const targetHasPath = await buildTargetPathIndex(target.classroomId, staged);
+
+  const written = staged.map(item => ({
+    item,
+    files: rewriteDecodedFiles(item.files, {
+      sourceLogin: source.login,
+      sourceRepo: source.repo,
+      sourcePath: item.source.content_path,
+      targetLogin: target.login,
+      targetRepo: target.repo,
+      targetPath: item.targetContentPath,
+      shaPaths,
+      targetHasPath,
+      onUncopiedRef,
+    }),
+  }));
+
   // ONE commit for all page files.
+  /** The shas that commit produced, so the index can stamp what it wrote. */
+  const committedShas = new Map<string, string>();
   try {
-    await ContentService.uploadBatch({
+    const result = await ContentService.uploadBatch({
       gitOrganization: target.gitOrganization,
       repo: target.repo,
-      files: staged.flatMap(s => s.files),
+      files: written.flatMap(w => w.files),
       branch: 'main',
       message: commitMessage,
     });
+    for (const file of result.files) committedShas.set(file.path, file.sha);
+    // Write-through: imported `content.json` is read through the asset map, and
+    // an import is followed immediately by someone opening what they imported.
+    // Without this the first views fall back to the contents API until the push
+    // webhook lands — correct, but a GitHub call per view for no reason.
+    await recordContentAssets(target.classroomId, result.files);
   } catch (error: unknown) {
     warn('pages', `page content commit failed: ${errText(error)}`);
     return 0;
+  }
+
+  /**
+   * The rewritten bytes this import committed, by path — the index's source.
+   *
+   * Staged files are base64 all the way through (see `decodeStagedFiles`), so
+   * the text is decoded back out here rather than fetched from GitHub a second
+   * later. Text paths only: the binaries in the same batch are assets.
+   */
+  const importedBodies = new Map<string, string>();
+  for (const entry of written) {
+    for (const file of entry.files) {
+      if (!isTextContentPath(file.path)) continue;
+      importedBodies.set(file.path, Buffer.from(file.content, 'base64').toString('utf8'));
+    }
   }
 
   // DB rows AFTER the commit (GitHub-first, mirroring createPage).
@@ -605,6 +1318,9 @@ async function importPages({
                   targetLogin: target.login,
                   targetRepo: target.repo,
                   targetPath: item.targetContentPath,
+                  shaPaths,
+                  targetHasPath,
+                  onUncopiedRef,
                 })
               : item.source.header_image_url,
             header_image_position: item.source.header_image_position,
@@ -613,6 +1329,27 @@ async function importPages({
       );
       idMap[item.source.id] = row.id;
       created++;
+
+      // Feed the search index. Enqueued HERE rather than beside the
+      // `recordContentAssets` above for the same reason the deck thumbnail is:
+      // a `content_index` row is keyed on the page id, and the rows do not
+      // exist until this loop. `content.json` when the copy has one, the legacy
+      // `index.html` otherwise — the reader's precedence. Never awaited, and
+      // `indexOneFile` never rejects, so it cannot fail the import.
+      const jsonPath = `${item.targetContentPath}/content.json`;
+      const htmlPath = `${item.targetContentPath}/index.html`;
+      const indexPath = importedBodies.has(jsonPath) ? jsonPath : htmlPath;
+      const indexSha = committedShas.get(indexPath);
+      const indexBody = importedBodies.get(indexPath);
+      if (indexSha && indexBody !== undefined) {
+        void indexOneFile({
+          classroomId: target.classroomId,
+          path: indexPath,
+          sha: indexSha,
+          body: indexBody,
+          docHint: { kind: 'page', id: row.id, title: item.targetTitle },
+        });
+      }
     } catch (error: unknown) {
       // A slug collision must never be downgraded to a warning. The walker
       // above already absorbs every 23505 it can act on and exhausts into
@@ -635,6 +1372,100 @@ async function importPages({
 
 type SourceSlide = Prisma.SlideGetPayload<Record<string, never>>;
 
+/**
+ * Read and commit every staged FILE slide's document — one read, one commit,
+ * one slide at a time — and report the ones that did not make it.
+ *
+ * ## Why these are not in the deck batch
+ *
+ * Two reasons, and both are about a slide document being a different ORDER of
+ * thing from a deck. A deck is a `deck.json` and an `index.html`: kilobytes,
+ * text, and dozens of them add up to a normal commit. A slide document is a
+ * lecture PDF or a Keynote, up to the 35 MB the upload policy allows, staged
+ * base64 (a third larger again) — so a term of them in one list is hundreds of
+ * megabytes held in this process before a single byte goes out, and one course
+ * with a video-heavy Keynote in it was enough to put the whole slide phase at
+ * risk. Reading them here, one at a time, means the peak is ONE document
+ * however many the classroom has.
+ *
+ * The second reason is blast radius. `uploadBatch` is one commit: an oversized
+ * or unreadable document in the list failed the commit, and the failure took
+ * every deck in the same batch with it — an import that copied nothing because
+ * of one file. A commit per document cannot do that. A document that will not
+ * come across is warned about and its slide is skipped, and the decks are
+ * already committed and safe by the time this runs.
+ *
+ * @returns the SOURCE ids whose row must not be created.
+ */
+async function commitSlideDocuments({
+  source,
+  target,
+  staged,
+  commitMessage,
+  warn,
+}: {
+  source: RepoContext;
+  target: RepoContext;
+  staged: StagedItem<SourceSlide>[];
+  commitMessage: string;
+  warn: WarnFn;
+}): Promise<Set<string>> {
+  const abandoned = new Set<string>();
+
+  for (const item of staged) {
+    if (item.source.kind !== 'FILE') continue;
+
+    let files: BatchFile[];
+    try {
+      files = await collectSlideFile({
+        source,
+        slide: item.source,
+        targetContentPath: item.targetContentPath,
+        warn,
+      });
+    } catch (error: unknown) {
+      warn('slides', `skipped "${item.targetTitle}" — read failed: ${errText(error)}`);
+      abandoned.add(item.source.id);
+      continue;
+    }
+    // `collectSlideFile` has already said why (no source_path, too large,
+    // unreadable). A FILE row with no document is worse than no row.
+    if (files.length === 0) {
+      abandoned.add(item.source.id);
+      continue;
+    }
+
+    try {
+      const result = await ContentService.uploadBatch({
+        gitOrganization: target.gitOrganization,
+        repo: target.repo,
+        files,
+        branch: 'main',
+        message: commitMessage,
+      });
+      // A FILE slide needs the write-through harder than a deck does: its
+      // download URL is signed FROM the asset map, so a document the map does
+      // not know about is a slide nobody can download until the next sync.
+      await recordContentAssets(target.classroomId, result.files);
+    } catch (error: unknown) {
+      // A document GitHub will not take is the one failure here with a cause
+      // the instructor can see from the outside, so it is named as such rather
+      // than passed through — GitHub's own sentence tells them to push from a
+      // local clone, which is not a thing an import can offer.
+      if (isCommitTooLargeRefusal(error)) {
+        warn('slides', `skipped "${item.targetTitle}" — ${SLIDE_FILE_TOO_LARGE_MESSAGE}`);
+      } else {
+        warn('slides', `skipped "${item.targetTitle}" — file commit failed: ${errText(error)}`);
+      }
+      abandoned.add(item.source.id);
+    }
+    // `files` goes out of scope here, and with it the only reference to this
+    // document's bytes — which is the whole point of reading one at a time.
+  }
+
+  return abandoned;
+}
+
 async function importSlides({
   source,
   target,
@@ -643,6 +1474,7 @@ async function importSlides({
   warn,
   idMap,
   onProgress,
+  onUncopiedRef,
 }: {
   source: RepoContext;
   target: RepoContext;
@@ -651,6 +1483,7 @@ async function importSlides({
   warn: WarnFn;
   idMap: Record<string, string>;
   onProgress?: ContentProgressFn;
+  onUncopiedRef?: (ref: string) => void;
 }): Promise<number> {
   const sourceSlides = await getPrisma().slide.findMany({
     where: { classroom_id: source.classroomId },
@@ -670,6 +1503,15 @@ async function importSlides({
   const takenSlugs = new Set(targetSlides.map(s => s.slug));
 
   const staged: StagedItem<SourceSlide>[] = [];
+  /**
+   * Where each FILE slide's document WILL land, known before it is read.
+   *
+   * The bytes are not staged (see below), so these paths would otherwise be
+   * absent from the "will the target hold this?" index that gates the
+   * chained-import rewrite — and a deck linking to a sibling slide's handout
+   * would be the one reference this copy left pointing at the source repo.
+   */
+  const fileSlidePaths: string[] = [];
   let consumed = 0;
 
   for (const slide of sourceSlides) {
@@ -685,36 +1527,53 @@ async function importSlides({
       takenSlugs.add(targetSlug);
       const targetContentPath = `slides/${targetSlug}`;
 
+      // What gets COPIED depends on the kind, and only DECK is the old path.
+      //
+      //  - LINK carries no files at all. Staging it with an empty list is the
+      //    point: the "no files" refusal below used to be a correct shortcut
+      //    for a deck whose folder was missing, and applied to a link it would
+      //    drop every one of them from the import in silence.
+      //  - FILE is ONE document, read through the blobs API rather than the
+      //    folder walk, because the walk skips anything over 1 MB and a slide
+      //    file is almost always over 1 MB. Skipping it there would create a
+      //    row pointing at a document that was never copied. Its bytes are NOT
+      //    staged here — see `commitSlideDocuments`, which reads and commits
+      //    them one at a time so a course of lecture PDFs is never held in
+      //    memory all at once, and so one unreadable document cannot take the
+      //    deck batch down with it.
       let files: BatchFile[];
-      try {
-        files = await collectFolderFiles({
-          source,
-          sourcePath: slide.content_path,
-          targetPath: targetContentPath,
-          scope: 'slides',
-          warn,
-        });
-      } catch (error: unknown) {
-        warn('slides', `skipped "${slide.title}" — read failed: ${errText(error)}`);
-        continue;
+      if (slide.kind === 'LINK') {
+        files = [];
+      } else if (slide.kind === 'FILE') {
+        files = [];
+        if (slide.source_path) {
+          fileSlidePaths.push(
+            remapFilePath(slide.source_path, slide.content_path, targetContentPath)
+          );
+        }
+      } else {
+        try {
+          files = await collectFolderFiles({
+            source,
+            sourcePath: slide.content_path,
+            targetPath: targetContentPath,
+            scope: 'slides',
+            warn,
+          });
+        } catch (error: unknown) {
+          warn('slides', `skipped "${slide.title}" — read failed: ${errText(error)}`);
+          continue;
+        }
+        if (files.length === 0) {
+          warn('slides', `skipped "${slide.title}" — no files at ${slide.content_path}`);
+          continue;
+        }
       }
-      if (files.length === 0) {
-        warn('slides', `skipped "${slide.title}" — no files at ${slide.content_path}`);
-        continue;
-      }
-      // Repoint absolute source-repo asset URLs at the copied files (deck.json +
-      // index.html are rewritten in lockstep, keeping the pair consistent).
-      files = rewriteStagedFiles(files, {
-        sourceLogin: source.login,
-        sourceRepo: source.repo,
-        sourcePath: slide.content_path,
-        targetLogin: target.login,
-        targetRepo: target.repo,
-        targetPath: targetContentPath,
-      });
+      // Staged DECODED and un-rewritten — the whole batch's signed-blob shas
+      // resolve in one query below, not one per deck.
       staged.push({
         source: slide,
-        files,
+        files: decodeStagedFiles(files),
         targetTitle: slide.title,
         targetSlug,
         targetContentPath,
@@ -727,23 +1586,75 @@ async function importSlides({
 
   if (staged.length === 0) return 0;
 
-  // ONE commit for all slide files (deck.json + generated index.html copied
-  // verbatim — never regenerated).
-  try {
-    await ContentService.uploadBatch({
-      gitOrganization: target.gitOrganization,
-      repo: target.repo,
-      files: staged.flatMap(s => s.files),
-      branch: 'main',
-      message: commitMessage,
-    });
-  } catch (error: unknown) {
-    warn('slides', `slide content commit failed: ${errText(error)}`);
-    return 0;
+  // Repoint source-repo asset references at the copied files (deck.json +
+  // index.html are rewritten in lockstep, keeping the pair consistent).
+  const shaPaths = await resolveShaPaths(source.classroomId, stagedTexts(staged));
+  // Same gate as the page pass — see buildTargetPathIndex.
+  const targetHasPath = await buildTargetPathIndex(target.classroomId, staged, fileSlidePaths);
+
+  const files = staged.flatMap(item =>
+    rewriteDecodedFiles(item.files, {
+      sourceLogin: source.login,
+      sourceRepo: source.repo,
+      sourcePath: item.source.content_path,
+      targetLogin: target.login,
+      targetRepo: target.repo,
+      targetPath: item.targetContentPath,
+      shaPaths,
+      targetHasPath,
+      onUncopiedRef,
+    })
+  );
+
+  // ONE commit for all DECK files (deck.json + generated index.html copied
+  // verbatim — never regenerated). The FILE slides' documents are NOT in here:
+  // they are committed one at a time below, so a 60 MB Keynote that cannot be
+  // read or written cannot take a term's worth of decks down with it.
+  /** The shas that commit produced, so the index can stamp what it wrote. */
+  const committedShas = new Map<string, string>();
+  // An import of nothing but LINK slides has rows to create and no bytes to
+  // commit. `uploadBatch` refuses an empty list (correctly — for every other
+  // caller that is a bug), so the commit is skipped rather than attempted.
+  if (files.length > 0) {
+    try {
+      const result = await ContentService.uploadBatch({
+        gitOrganization: target.gitOrganization,
+        repo: target.repo,
+        files,
+        branch: 'main',
+        message: commitMessage,
+      });
+      for (const file of result.files) committedShas.set(file.path, file.sha);
+      // Write-through, for the same reason as the page batch above: `deck.json`
+      // and `index.html` are read through the map, and an imported deck is
+      // usually opened straight away.
+      await recordContentAssets(target.classroomId, result.files);
+    } catch (error: unknown) {
+      warn('slides', `slide content commit failed: ${errText(error)}`);
+      return 0;
+    }
+  }
+
+  const abandoned = await commitSlideDocuments({
+    source,
+    target,
+    staged,
+    commitMessage,
+    warn,
+  });
+
+  /** The artifacts this import committed, by path — see the page pass. */
+  const importedBodies = new Map<string, string>();
+  for (const file of files) {
+    if (!isTextContentPath(file.path)) continue;
+    importedBodies.set(file.path, Buffer.from(file.content, 'base64').toString('utf8'));
   }
 
   let created = 0;
   for (const item of staged) {
+    // Its document did not make it, and `commitSlideDocuments` has already said
+    // why. A FILE row pointing at a document nobody wrote is worse than no row.
+    if (abandoned.has(item.source.id)) continue;
     try {
       const row = await getPrisma().slide.create({
         data: {
@@ -756,10 +1667,71 @@ async function importSlides({
           is_public: false,
           allow_team_edit: item.source.allow_team_edit,
           show_speaker_notes: item.source.show_speaker_notes,
+          // The kind, and with it whatever that kind is made of. A copy that
+          // dropped these would turn every uploaded file and every link into an
+          // empty deck — a row whose `content_path` names a folder holding
+          // either the wrong thing or nothing at all.
+          kind: item.source.kind,
+          ...(item.source.kind === 'FILE'
+            ? {
+                // REMAPPED, not copied. The slug is deduplicated when the
+                // target already has one by that name, and the document moved
+                // with it: a verbatim `source_path` would point into the
+                // SOURCE classroom's folder, which this classroom's asset map
+                // has no row for and therefore cannot sign.
+                source_path: item.source.source_path
+                  ? remapFilePath(
+                      item.source.source_path,
+                      item.source.content_path,
+                      item.targetContentPath
+                    )
+                  : null,
+                source_filename: item.source.source_filename,
+                source_mime: item.source.source_mime,
+                source_size: item.source.source_size,
+              }
+            : {}),
+          ...(item.source.kind === 'LINK' ? { source_url: item.source.source_url } : {}),
         } satisfies Prisma.SlideUncheckedCreateInput,
       });
       idMap[item.source.id] = row.id;
       created++;
+
+      // Both of the tails below are DECK-only, because both are about a
+      // rendered `index.html` that a file or a link does not have: there is
+      // nothing to photograph, and nothing to extract text from. The nightly
+      // content-index reconcile indexes those two kinds from their DB metadata
+      // instead (see `planClassroomIndex`).
+      if (item.source.kind !== 'DECK') continue;
+
+      // An imported deck's files are copied verbatim, thumbnail included if the
+      // source had one — but that WebP is a picture of the SOURCE deck's assets
+      // at the source repo's URLs, and this import has just rewritten every one
+      // of those references. Re-render rather than inherit.
+      //
+      // Enqueued here rather than beside the `recordContentAssets` above (which
+      // is where the plan pointed) for the plain reason that the payload needs a
+      // slide id, and the rows do not exist until this loop. Same contract as
+      // everywhere else: not awaited, cannot fail the import. The task's own
+      // queue meters a forty-deck import down to four browsers at a time.
+      void enqueueDeckThumbnail(row.id, target.classroomId);
+
+      // And the search index, on the same terms and for the same reason the
+      // enqueue above is here: the row id does not exist any earlier. The
+      // artifact is what a reader sees, so `index.html` is the document —
+      // `deck.json` is its source and is not indexed.
+      const htmlPath = `${item.targetContentPath}/index.html`;
+      const htmlSha = committedShas.get(htmlPath);
+      const htmlBody = importedBodies.get(htmlPath);
+      if (htmlSha && htmlBody !== undefined) {
+        void indexOneFile({
+          classroomId: target.classroomId,
+          path: htmlPath,
+          sha: htmlSha,
+          body: htmlBody,
+          docHint: { kind: 'slide', id: row.id, title: item.targetTitle },
+        });
+      }
     } catch (error: unknown) {
       warn('slides', `DB row failed for "${item.targetTitle}": ${errText(error)}`);
     }

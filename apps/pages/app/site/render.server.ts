@@ -5,7 +5,11 @@ import { ServerBlockNoteEditor } from '@blocknote/server-util';
 import { JSDOM as UntypedJSDOM } from 'jsdom';
 
 import { redactDocumentForViewer } from './redact.server.ts';
-import { createViewerSchema, type PageLinkResolver } from './viewerSchema.server.ts';
+import {
+  createViewerSchema,
+  type PageLinkResolver,
+  type SiteSrcSets,
+} from './viewerSchema.server.ts';
 
 /** The only part of jsdom's surface this module touches. */
 type DomFactory = new (html?: string) => { window: { document: Document } };
@@ -157,6 +161,16 @@ export type RenderSitePageOptions = {
    * decided never links somewhere that 404s.
    */
   showSchedule?: boolean;
+  /**
+   * `{ signedUrl: srcset }` for this page's images.
+   *
+   * Handed to the SCHEMA rather than applied to the rendered HTML afterwards.
+   * A post-pass could only match on `src` and could not see `previewWidth`,
+   * which lives in the block's props and is the only thing that says how wide
+   * the image will actually be laid out — and a `srcset` whose `sizes` is a
+   * guess is how a 400px image downloads a 2560px rendition.
+   */
+  srcSets?: SiteSrcSets;
 };
 
 /** BlockNote's own wrappers, in the order the client viewer nests them. */
@@ -179,6 +193,7 @@ export async function renderSitePage({
   blocks,
   resolveLink,
   showSchedule,
+  srcSets,
 }: RenderSitePageOptions): Promise<RenderedPage> {
   // Redact BEFORE serializing: BlockNote writes block props onto the wrapper
   // as data-* attributes, so a hidden page's title would ship in the HTML even
@@ -191,7 +206,7 @@ export async function renderSitePage({
     html = await withServerBlockNoteLock(async () => {
       // The schema is per-render because its link resolution is per-viewer.
       const editor = ServerBlockNoteEditor.create({
-        schema: createViewerSchema(resolveLink, { showSchedule }),
+        schema: createViewerSchema(resolveLink, { showSchedule, ...(srcSets ? { srcSets } : {}) }),
       });
 
       // `editor.isEditable` is `true` inside ServerBlockNoteEditor and setting
@@ -322,9 +337,18 @@ export function addHeadingAnchors(html: string): {
  * `bn-root` / `bn-container` / `bn-mantine` on the outside and
  * `ProseMirror bn-editor bn-default-styles` on the inside is the official
  * recipe for rendering serialized BlockNote HTML with the editor's stylesheet,
- * and it is the reason this feature ships ZERO custom block CSS: every block's
- * appearance comes from `@blocknote/mantine/style.css` plus the app's existing
- * overrides, which is also what makes the site look identical to the editor.
+ * and it is the reason this feature ships almost no custom block CSS: every
+ * block's appearance comes from `@blocknote/mantine/style.css` plus the app's
+ * existing overrides.
+ *
+ * That recipe carries every override keyed on a BlockNote class — but NOT the
+ * ones scoped to `.page-editor`, a class only the editor and the in-app viewer
+ * put on their wrapper. Headings are what proved it: their sizes lived under
+ * `.page-editor`, so a site page fell through to BlockNote's 3em/2em/1.3em and
+ * published a 48px H1 where the editor showed 30px (#288). The scale now lives
+ * unscoped in `blocknote-overrides.css`, as `--level`. Before assuming this
+ * wrapper makes the site identical to the editor, check whether the rule you
+ * care about is `.page-editor`-scoped; if it is, it does not ship here.
  *
  * The colour scheme is fixed to `light` server-side. BlockNote's theme is an
  * attribute, not a media query, and the document's dark-mode script toggles a

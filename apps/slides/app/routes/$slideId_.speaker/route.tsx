@@ -1,8 +1,15 @@
 import { useLoaderData } from 'react-router';
 import getPrisma from '@classmoji/database';
 import { assertSlideAccess } from '@classmoji/auth/server';
+import { isDeckSlide } from '@classmoji/services/slides';
 import SpeakerView from '~/components/SpeakerView';
-import { fetchContent } from '~/utils/contentProxy';
+import {
+  deckAccessFor,
+  deckDeliveryContext,
+  readDeckText,
+  resolveDeckAssets,
+} from '~/utils/deckDelivery.server';
+import { deckOnlyRefusal } from '~/utils/slideKind';
 
 /**
  * Speaker route - Remote speaker notes view
@@ -39,12 +46,20 @@ export const loader = async ({
   }
 
   // Authorization: require speakerNotes access (staff, or viewers when show_speaker_notes=true)
-  await assertSlideAccess({
+  const { canEdit } = await assertSlideAccess({
     request,
     slideId,
     slide,
     accessType: 'speakerNotes',
   });
+
+  // Deck-only surface. A file or a link has no slides to show notes for, and every line
+  // below reads an `index.html` those kinds never committed. Refused AFTER the
+  // access gate above, so this answers no question about a slide the caller
+  // could not already see.
+  if (!isDeckSlide(slide)) {
+    throw deckOnlyRefusal(slide.kind, 'show notes for');
+  }
 
   // Get git org login for content URLs
   const gitOrgLogin = slide.classroom?.git_organization?.login;
@@ -56,27 +71,42 @@ export const loader = async ({
   const repo = slide.classroom.content_repo;
   const filePath = `${slide.content_path}/index.html`;
 
-  // Fetch content using shared utility (CDN first, API fallback)
+  // Read the deck by SHA through the delivery layer — the same read the
+  // presenter makes, and for the same reason: this view is opened alongside a
+  // live presentation, where showing the pre-save deck is worse than useless.
   let slideContent: string | null = null;
   let contentError: string | null = null;
 
-  const contentResult = await fetchContent({
-    org: gitOrgLogin,
-    repo,
-    path: filePath,
-  });
+  const contentResult = await readDeckText(slide, gitOrgLogin, repo, filePath, 'speaker');
 
   if (contentResult) {
+    // Sign the deck's references BEFORE the fragment is cut out: the speaker
+    // view renders these slides too, and a raw `/content/...` ref is dead the
+    // moment the content repo goes private. Assets only — this view keeps the
+    // `.slides` fragment and throws the document's <head> away, so resolving a
+    // theme base here would be a lookup for an answer nobody reads.
+    //
+    // `canEdit` is passed because `assertSlideAccess` answered it, and is then
+    // IGNORED by `deckAccessFor` for this surface: the speaker view is a read
+    // surface that stays open for a whole lecture, so it takes the deck's
+    // visibility rather than the 4h `edit` bucket.
+    const html = await resolveDeckAssets(
+      contentResult.content,
+      deckDeliveryContext(slide, gitOrgLogin, repo, deckAccessFor('speaker', { canEdit }, slide))
+    );
+
     // Parse the HTML to extract just the slides content
     const parser = await import('cheerio');
-    const $ = parser.load(contentResult.content);
+    const $ = parser.load(html ?? '');
     slideContent = $('.slides').html();
   } else {
     contentError = 'Failed to load slide content';
   }
 
   return {
-    slide,
+    // The speaker view needs the id to open its socket; the rest of the row has
+    // no business in a page payload.
+    slide: { id: slide.id },
     slideContent,
     contentError,
   };

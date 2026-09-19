@@ -20,13 +20,21 @@ const TagSection = ({ tags }: TagSectionProps) => {
   const callout = useCallout();
 
   const createTag = () => {
-    if (tags.find((tag: Tag) => tag.name === name)) {
+    // Compare and submit the trimmed name — the action trims too, so an untrimmed
+    // check here would wave through a duplicate and then silently create nothing.
+    const trimmedName = name.trim();
+    if (!trimmedName) {
+      callout.show({ variant: 'error', title: 'Please enter a tag name' });
+      return;
+    }
+
+    if (tags.find((tag: Tag) => tag.name === trimmedName)) {
       callout.show({ variant: 'error', title: 'Tag already exists' });
       return;
     }
 
     fetcher!.submit(
-      { name },
+      { name: trimmedName },
       { action: '?/createTag', method: 'POST', encType: 'application/json' }
     );
 

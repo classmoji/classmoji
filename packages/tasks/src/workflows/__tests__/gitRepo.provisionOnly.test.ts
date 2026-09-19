@@ -66,6 +66,19 @@ vi.mock('@classmoji/services', () => ({
 
 vi.mock('@classmoji/utils', () => ({
   titleToIdentifier: (title: string) => title.toLowerCase().replace(/\s+/g, '-'),
+  // The real resolver: the task's template handling is part of what these
+  // fixtures exercise, so a stub would pin the stub.
+  resolveTemplateRef: (
+    template: string | null | undefined,
+    orgLogin: string | null | undefined
+  ) => {
+    const trimmed = (template ?? '').trim().replace(/^\/+|\/+$/g, '');
+    if (!trimmed) return null;
+    const [first, second] = trimmed.split('/');
+    if (second) return { owner: first, repo: second };
+    const owner = (orgLogin ?? '').trim();
+    return owner ? { owner, repo: first } : null;
+  },
 }));
 
 vi.mock('../gitRepoAssignment.ts', () => ({

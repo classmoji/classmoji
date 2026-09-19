@@ -17,7 +17,14 @@ on:
 # from the DB, so these never hit GitHub. BETTER_AUTH_SECRET / GITHUB_WEBHOOK_SECRET
 # only need to be stable, not real.
 env:
-  DATABASE_URL: postgresql://classmoji:classmoji@localhost:5433/classmoji
+  # `classmoji_ci`, not `classmoji`. The forms integration suites refuse to run
+  # against a database NAMED `classmoji`, because that is what a devport
+  # worktree's `.env` still points at — writing fixtures there would land in a
+  # developer's real dev data. The guard is `/\/classmoji(\?|$)/`, so on the
+  # throwaway CI container those three files were silently SKIPPING: the whole
+  # forms service layer looked covered and was not being run at all. A distinct
+  # name is what makes them execute here while the safety property holds.
+  DATABASE_URL: postgresql://classmoji:classmoji@localhost:5433/classmoji_ci
   BETTER_AUTH_SECRET: test-secret-not-for-prod
   ENABLE_TEST_LOGIN: 'true'
   NODE_ENV: development
@@ -51,7 +58,9 @@ jobs:
         env:
           POSTGRES_USER: classmoji
           POSTGRES_PASSWORD: classmoji
-          POSTGRES_DB: classmoji
+          # Must match the database named in DATABASE_URL above — see the note
+          # there for why it is not simply `classmoji`.
+          POSTGRES_DB: classmoji_ci
         ports:
           - 5433:5432
         options: >-
@@ -98,6 +107,14 @@ jobs:
 
       - name: Run services unit tests (Vitest)
         working-directory: packages/services
+        run: npx vitest run
+
+      # The MCP tool suites — the forms batch alone is ~46 tests covering the
+      # role gate, the Pro gate, cross-classroom scoping, and the response
+      # allowlist that keeps `draft_token` out of every payload. None of it ran
+      # in CI before this step existed.
+      - name: Run MCP unit tests (Vitest)
+        working-directory: apps/mcp
         run: npx vitest run
 
       - name: Start webapp (prod build, test-login enabled)

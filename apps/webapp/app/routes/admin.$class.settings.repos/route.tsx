@@ -1,8 +1,10 @@
 import { Select, Switch, Alert } from 'antd';
+import { useParams } from 'react-router';
 import { useNotifiedFetcher } from '~/hooks';
 
 import { assertClassroomAccess, assertClassroomMutationAllowed } from '~/utils/helpers';
 import { getGitProvider } from '@classmoji/services';
+import InstallAppBanner from '~/components/features/InstallAppBanner';
 import type { Route } from './+types/route';
 
 export const loader = async ({ params, request }: Route.LoaderArgs) => {
@@ -18,10 +20,23 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
   });
 
   const gitOrgLogin = classroom.git_organization?.login ?? null;
+
+  // Everything the install banner needs, on EVERY branch below. The page's
+  // "the App isn't installed" message was already correct and already dead:
+  // it named the fix and offered no way to run it. Same fields, same condition
+  // as the dashboard, so an owner meets one repair path rather than two.
+  const install = {
+    appInstalled: Boolean(classroom.git_organization?.github_installation_id),
+    isExample: classroom.is_example,
+    gitProvider: classroom.git_organization?.provider ?? null,
+    githubAppName: process.env.GITHUB_APP_NAME,
+  };
+
   if (!gitOrgLogin) {
     return {
       githubOrganization: null,
       gitOrgLogin: null,
+      ...install,
       error: 'This classroom is not connected to a GitHub organization.',
     };
   }
@@ -30,6 +45,7 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
     return {
       githubOrganization: null,
       gitOrgLogin,
+      ...install,
       error: `The Classmoji GitHub App isn't installed on "${gitOrgLogin}". Install it to manage repository settings.`,
     };
   }
@@ -37,7 +53,7 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
   try {
     const gitProvider = getGitProvider(classroom.git_organization);
     const githubOrganization = await gitProvider.getOrganization(gitOrgLogin);
-    return { githubOrganization, gitOrgLogin, error: null };
+    return { githubOrganization, gitOrgLogin, ...install, error: null };
   } catch (err: unknown) {
     const status =
       err && typeof err === 'object' && 'status' in err
@@ -48,6 +64,7 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
     return {
       githubOrganization: null,
       gitOrgLogin,
+      ...install,
       error:
         status === 404
           ? `GitHub couldn't find the "${gitOrgLogin}" organization or the Classmoji App installation. The App may have been uninstalled or the org renamed.`
@@ -75,13 +92,37 @@ const Section = ({
 );
 
 const SettingsRepos = ({ loaderData }: Route.ComponentProps) => {
-  const { githubOrganization, error } = loaderData;
+  const {
+    githubOrganization,
+    error,
+    gitOrgLogin,
+    appInstalled,
+    isExample,
+    gitProvider,
+    githubAppName,
+  } = loaderData;
+  const { class: classSlug } = useParams();
   const { fetcher } = useNotifiedFetcher();
+
+  const showInstallBanner =
+    !appInstalled && !isExample && Boolean(gitOrgLogin) && gitProvider === 'GITHUB';
 
   if (error || !githubOrganization) {
     return (
-      <div className="pt-4">
-        <Alert message={error ?? 'Repository settings unavailable.'} type="warning" showIcon />
+      <div className="flex flex-col gap-4 pt-4">
+        {showInstallBanner && (
+          <InstallAppBanner
+            orgLogin={gitOrgLogin!}
+            githubAppName={githubAppName}
+            classSlug={classSlug!}
+          />
+        )}
+        {/* Suppressed behind the banner: the banner says the same thing and
+            offers the fix, so showing both repeats the diagnosis in vaguer
+            words underneath the cure. */}
+        {!showInstallBanner && (
+          <Alert message={error ?? 'Repository settings unavailable.'} type="warning" showIcon />
+        )}
       </div>
     );
   }

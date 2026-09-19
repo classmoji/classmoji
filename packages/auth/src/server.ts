@@ -1,4 +1,5 @@
 import { betterAuth } from 'better-auth';
+import { APIError, createAuthMiddleware } from 'better-auth/api';
 import { prismaAdapter } from 'better-auth/adapters/prisma';
 import { admin, mcp } from 'better-auth/plugins';
 import getPrisma from '@classmoji/database';
@@ -16,6 +17,7 @@ import {
   COOKIE_PREFIX,
   sessionTokenFromCookieHeader,
 } from './secret.ts';
+import { ASK_MOJI_CLIENT_ID } from './mcpToken.ts';
 
 export { AUTH_SECRET, COOKIE_PREFIX };
 
@@ -298,6 +300,72 @@ async function getValidGitHubToken(userId: string): Promise<GitHubTokenResult | 
   return ClassmojiService.githubUserToken.getGitHubTokenForUser(userId);
 }
 
+/**
+ * Coerce a presented `client_id` to the string better-auth will actually compare
+ * against, so this hook and the grant below can never read one request two ways.
+ *
+ * WHY NOT `typeof x === 'string'` (the obvious version, and a real bypass).
+ * better-auth compares `token.clientId !== client_id?.toString()`
+ * (node_modules/better-auth/dist/plugins/mcp/index.mjs:278) — `toString()`, not a
+ * type check. A JSON body is handed to the endpoint as parsed JSON
+ * (node_modules/better-call/dist/utils.mjs:25), so `{"client_id":
+ * ["classmoji-ask-moji"]}` arrives as a one-element ARRAY whose `toString()` is
+ * the bare client id. A string-only check here returns null, the refusal hook
+ * returns early, and better-auth then happily matches the row — the refresh grant
+ * this hook exists to close, reopened by a pair of brackets.
+ *
+ * So: normalize exactly as better-auth does. A value whose `toString()` is absent,
+ * throws, or is not a string can never equal the stored `clientId` either, so
+ * null (no refusal, and no match downstream) is the right answer for those.
+ */
+function normalizeClientId(value: unknown): string | null {
+  if (value === null || value === undefined) return null;
+  try {
+    const asString = (value as { toString?: () => unknown }).toString?.();
+    return typeof asString === 'string' && asString.length > 0 ? asString : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The client id a `/mcp/token` request names — from the request body or from an
+ * HTTP Basic `Authorization` header, because better-auth accepts both
+ * (node_modules/better-auth/dist/plugins/mcp/index.mjs:240-259).
+ *
+ * Used only by the Ask Moji refusal hook below. Returns null when no client id
+ * is presented at all, which better-auth then refuses on its own (the refresh
+ * grant compares the stored row's clientId against it).
+ */
+function tokenRequestClientId(body: unknown, authorization: string | null): string | null {
+  let clientId: unknown;
+  if (typeof FormData !== 'undefined' && body instanceof FormData) {
+    // LAST wins, not first. better-auth flattens a FormData body with
+    // `Object.fromEntries(body.entries())` (mcp/index.mjs:234), which keeps the
+    // last value for a repeated key, while `FormData.get()` returns the first —
+    // so `client_id=innocent&client_id=classmoji-ask-moji` would have this hook
+    // reading one value and the grant reading the other.
+    for (const [key, value] of body.entries()) {
+      if (key === 'client_id') clientId = value;
+    }
+  } else if (body && typeof body === 'object') {
+    clientId = (body as Record<string, unknown>).client_id;
+  }
+  const fromBody = normalizeClientId(clientId);
+  if (fromBody) return fromBody;
+
+  if (authorization?.startsWith('Basic ')) {
+    try {
+      const decoded = Buffer.from(authorization.slice('Basic '.length), 'base64').toString('utf8');
+      const [id] = decoded.split(':');
+      if (id) return id;
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
 export const auth = betterAuth({
   basePath: '/api/auth',
   baseURL: process.env.WEBAPP_URL,
@@ -309,8 +377,8 @@ export const auth = betterAuth({
   // baseURL — so this preserves existing behaviour for webapp/mcp/slides/pages
   // and only adds the admin origin. Tenant/course-site hosts are deliberately
   // NOT here: they are never auth trust origins (see ./siteReturnToken.ts).
-  trustedOrigins: [process.env.WEBAPP_URL, process.env.ADMIN_URL].filter(
-    (o): o is string => Boolean(o)
+  trustedOrigins: [process.env.WEBAPP_URL, process.env.ADMIN_URL].filter((o): o is string =>
+    Boolean(o)
   ),
   secret: AUTH_SECRET,
   database: prismaAdapter(getPrisma(), {
@@ -477,6 +545,56 @@ export const auth = betterAuth({
       updatedAt: 'updated_at',
     },
   },
+  /**
+   * SECURITY (plan P1-2): the Ask Moji client never uses the token endpoint.
+   *
+   * Its access tokens are minted directly, one per chat turn, by
+   * `mintMcpAccessToken` (./mcpToken.ts) — there is no authorization-code
+   * exchange and no refresh. Leaving the grant reachable would be an
+   * escalation: better-auth's refresh grant
+   * (node_modules/better-auth/dist/plugins/mcp/index.mjs:262-309) verifies the
+   * refresh token and the client id and NEVER a client secret, so anyone
+   * holding a leaked one-hour Ask Moji bearer could trade it for an indefinitely
+   * renewable seven-day credential. The minted row already carries an
+   * already-expired refresh token; this is the explicit, client-specific
+   * refusal on top of it, so the protection does not rest on one column value.
+   *
+   * This hook runs before EVERY endpoint (better-auth gives user hooks a
+   * `() => true` matcher — dist/api/to-auth-endpoints.mjs:159-170), including
+   * hot in-process `auth.api.*` calls, so the non-matching path must stay a
+   * single string comparison.
+   */
+  hooks: {
+    before: createAuthMiddleware(async ctx => {
+      if (ctx.path !== '/mcp/token') return;
+
+      const authorization =
+        ctx.request?.headers.get('authorization') ?? ctx.headers?.get('authorization') ?? null;
+      if (tokenRequestClientId(ctx.body, authorization) !== ASK_MOJI_CLIENT_ID) return;
+
+      throw new APIError('UNAUTHORIZED', {
+        error: 'invalid_client',
+        error_description:
+          'This client does not use the token endpoint. Its access tokens are minted per request and cannot be refreshed.',
+      });
+    }),
+  },
+  /**
+   * SECURITY (plan P1-2): `/mcp/get-session` returns the ENTIRE
+   * `oauth_access_tokens` row for whatever bearer is presented — refresh token
+   * included, expiry unchecked (mcp/index.mjs:636-653). That turns any leaked
+   * access token into a read of the credential material behind it.
+   *
+   * `disabledPaths` 404s the path in better-auth's HTTP router
+   * (dist/api/index.mjs:154-157), which every app that mounts `auth.handler`
+   * goes through (apps/webapp/app/routes/api.auth.$.ts,
+   * apps/admin/app/routes/api.auth.$.ts). It does NOT affect in-process
+   * `auth.api.getMcpSession`, which bypasses the router — and that is the only
+   * caller we have: apps/mcp/src/auth/resolveViewer.ts:42. Nothing in the OAuth
+   * flow uses this endpoint; it exists for better-auth's own `withMcpAuth`
+   * helper, which we do not use.
+   */
+  disabledPaths: ['/mcp/get-session'],
   plugins: [
     admin({
       impersonationSessionDuration: 60 * 60, // 1 hour
@@ -1029,6 +1147,42 @@ export async function requireStudentAccess(
     metadata: options.metadata,
   });
 }
+
+/**
+ * Throws a 403 Response unless the classroom holds an active PRO subscription.
+ * Use after a classroom access check in loaders/actions that gate pro-only
+ * features (quizzes, the website settings tab, forms).
+ *
+ * The tier decision itself lives in `subscription.getProStateForClassroomId` —
+ * this is only the HTTP shell around it. The `ends_at` test used to be inlined
+ * here and hand-copied into the MCP server and `useSubscription`, which is
+ * exactly how a lapsed `{tier:'PRO', ends_at: <past>}` row could keep a feature
+ * open in one surface after it had closed in another. It also resolved the
+ * owner as `memberships[0]`, so a multi-owner classroom's tier depended on row
+ * order.
+ *
+ * Takes a SLUG: slugs are globally unique (schema.prisma, `slug String
+ * @unique`), so this resolves to exactly one classroom. A slug nobody holds is
+ * a 403 rather than a 404 — this always runs after an access check that already
+ * proved the classroom exists, so the only way here is a race, and refusing is
+ * the safe end of it.
+ *
+ * LIVES HERE, not in the webapp: apps/pages gates the forms subtree with the
+ * same rule, and apps/mcp still hand-mirrors this decision (its own batch will
+ * retire that copy). `apps/webapp/app/utils/helpers.ts` re-exports this name, so
+ * every existing webapp call site — and every test that mocks `~/utils/helpers`
+ * — is unchanged.
+ */
+export const assertProTier = async (classroomSlug: string) => {
+  const classroom = await ClassmojiService.classroom.findBySlug(classroomSlug);
+  const proState = classroom
+    ? await ClassmojiService.subscription.getProStateForClassroomId(classroom.id)
+    : null;
+
+  if (!proState?.isPro) {
+    throw new Response('This feature requires a Pro subscription', { status: 403 });
+  }
+};
 
 // Pure decision logic lives in ./predicates.ts (side-effect-free, shared
 // with apps/mcp); this module keeps the webapp's Response-throwing wrappers.

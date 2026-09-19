@@ -21,6 +21,12 @@ import * as cheerio from 'cheerio';
 import type { Cheerio, CheerioAPI } from 'cheerio';
 import type { AnyNode, Element } from 'domhandler';
 import { randomBytes } from 'node:crypto';
+// Runtime paint the Reveal viewer / editor leaves on sections — the classes,
+// the computed `top` / `display` style, the `data-index-*` family — is
+// stripped by both parsers so `attrs` is deterministic between saves (plan §2,
+// issue #361). The list lives in deckRuntimeAttrs.ts, the browser-safe module
+// the slides client imports so the two strippers can never drift.
+import { splitStyleDeclarations, stripRuntimeSectionAttrs } from './deckRuntimeAttrs.ts';
 import type { DeckConfig, DeckExtraCss, DeckJson, DeckSlide } from './deckTypes.ts';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -62,19 +68,6 @@ const ATTR_NAME_RE = /^[a-zA-Z][\w:-]*$/;
  * script handlers. `style` stays (legitimately used).
  */
 const EVENT_ATTR_RE = /^on/i;
-
-/**
- * Runtime paint the Reveal viewer / editor leaves on sections. Stripped by
- * both parsers so `attrs` is deterministic between saves (plan §2).
- */
-const CRUFT_CLASSES = new Set([
-  'editing-mode',
-  'slide-hidden',
-  'stack',
-  'present',
-  'past',
-  'future',
-]);
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Errors
@@ -370,32 +363,22 @@ function stripFragmentRuntimeClasses($root: Cheerio<AnyNode>): void {
   $root.find('.fragment').removeClass('visible').removeClass('current-fragment');
 }
 
-/** Strip runtime paint from a section element (plan §2 cruft list). */
+/**
+ * Strip runtime paint from a section element (plan §2 cruft list) — the
+ * element-level wrapper around the shared record normalizer, so the parser and
+ * the editor's client-side diff can never drift apart.
+ */
 function stripRuntimeCruft($el: Cheerio<Element>): void {
   stripFragmentRuntimeClasses($el);
-  const cls = $el.attr('class');
-  if (cls != null) {
-    const kept = cls.split(/\s+/).filter(c => c !== '' && !CRUFT_CLASSES.has(c));
-    if (kept.length > 0) {
-      $el.attr('class', kept.join(' '));
-    } else {
-      $el.removeAttr('class');
-    }
+  const el = $el[0];
+  if (!el) return;
+  const before = el.attribs ?? {};
+  const after = stripRuntimeSectionAttrs(before);
+  for (const name of Object.keys(before)) {
+    if (!(name in after)) $el.removeAttr(name);
   }
-  $el.removeAttr('aria-hidden');
-  $el.removeAttr('hidden');
-  const style = $el.attr('style');
-  if (style != null) {
-    // Remove just the `display` property, keep other inline styles.
-    const props = style
-      .split(';')
-      .map(p => p.trim())
-      .filter(p => p !== '' && !/^display\s*:/i.test(p));
-    if (props.length > 0) {
-      $el.attr('style', props.join('; ') + ';');
-    } else {
-      $el.removeAttr('style');
-    }
+  for (const [name, value] of Object.entries(after)) {
+    if (before[name] !== value) $el.attr(name, value);
   }
 }
 
@@ -494,6 +477,11 @@ interface LinkCandidate {
 }
 
 const REVEAL_CORE_RE = /reveal\.js@[^/]+\/dist\/reveal(?:\.min)?\.css/;
+
+/** A signed delivery theme folder: `/c/{classroomId}/theme/{name}/{treeSha}/...`. */
+const DELIVERY_THEME_HREF =
+  /\/c\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\/theme\//;
+
 const BUILTIN_THEME_RE = /reveal\.js@[^/]+\/dist\/theme\/([\w-]+?)(?:\.min)?\.css/;
 // Recognizes BOTH highlight.js styles AND the reveal plugin path (the starter
 // links monokai via `reveal.js@*/plugin/highlight/monokai.css`).
@@ -591,7 +579,15 @@ export function parseDeckHtml(html: string, opts: ParseOptions = {}): ParsedDeck
         return;
       }
       // Shared-theme assets are regenerated from caller-resolved themeUrls.
-      if (declared.startsWith('shared:') && href.includes(`${THEMES_FOLDER}/`)) {
+      // Both shapes count: the content-proxy path, and a signed delivery theme
+      // folder (`/c/{classroomId}/theme/...`), which carries no `.slidesthemes/`
+      // segment at all. Missing the second would park an expiring signed URL in
+      // `extraCss` — a stored signature, which is the one thing the delivery
+      // layer exists to prevent.
+      if (
+        declared.startsWith('shared:') &&
+        (href.includes(`${THEMES_FOLDER}/`) || DELIVERY_THEME_HREF.test(href))
+      ) {
         return;
       }
       // Custom-theme file link (when the generator emitted one) — regenerated.
@@ -846,40 +842,6 @@ function canonicalCssValue(rawValue: string): string {
 
   // eslint-disable-next-line no-control-regex -- restoring the \u0000-delimited placeholders
   return value.replace(/\u0000(\d+)\u0000/g, (_m, i: string) => protectedParts[Number(i)]);
-}
-
-/** Split a style attr on top-level `;` (quotes and parens respected). */
-function splitStyleDeclarations(style: string): string[] {
-  const parts: string[] = [];
-  let current = '';
-  let quote: '"' | "'" | null = null;
-  let depth = 0;
-  for (let i = 0; i < style.length; i++) {
-    const ch = style[i];
-    if (quote) {
-      current += ch;
-      if (ch === '\\' && i + 1 < style.length) {
-        current += style[++i];
-      } else if (ch === quote) {
-        quote = null;
-      }
-      continue;
-    }
-    if (ch === '"' || ch === "'") {
-      quote = ch;
-    } else if (ch === '(') {
-      depth++;
-    } else if (ch === ')') {
-      depth = Math.max(0, depth - 1);
-    } else if (ch === ';' && depth === 0) {
-      parts.push(current);
-      current = '';
-      continue;
-    }
-    current += ch;
-  }
-  if (current.trim() !== '') parts.push(current);
-  return parts;
 }
 
 /**

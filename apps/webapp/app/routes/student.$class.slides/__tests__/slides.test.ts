@@ -27,10 +27,27 @@ vi.mock('@classmoji/database', () => ({
   default: () => ({ slide: { findMany: (...a: unknown[]) => mocks.findMany(...a) } }),
 }));
 
+/**
+ * The kind helpers are pure and covered in `packages/services`; they stand in
+ * here only so this file can assert the wiring — that the loader resolves the
+ * chip's word and a link's host server side and hands the table plain strings,
+ * rather than importing the services barrel (and Prisma with it) into component
+ * code.
+ */
+vi.mock('@classmoji/services', () => ({
+  slideKindLabel: (slide: { kind?: string | null }) =>
+    slide.kind === 'LINK' ? 'link' : slide.kind === 'FILE' ? 'pdf' : 'deck',
+  slideLinkHost: (url?: string | null) => (url ? new URL(url).hostname : null),
+}));
+
 // The loader is what is under test; the view layer only needs to be importable.
 vi.mock('~/components', () => ({ TableActionButtons: () => null }));
 vi.mock('antd', () => ({ Table: () => null, Tag: () => null }));
-vi.mock('@tabler/icons-react', () => ({ IconEyeOff: () => null }));
+vi.mock('@tabler/icons-react', () => ({
+  IconDownload: () => null,
+  IconExternalLink: () => null,
+  IconEyeOff: () => null,
+}));
 
 const studentRoute = await import('../route.tsx');
 const assistantRoute = await import('../../assistant.$class_.slides/route.tsx');
@@ -38,8 +55,15 @@ const assistantRoute = await import('../../assistant.$class_.slides/route.tsx');
 const CLASS_SLUG = 'cs52-26f';
 const CLASSROOM = { id: 'class-1', slug: CLASS_SLUG, status: 'ACTIVE' };
 
-const PUBLISHED_DECK = { id: 'deck-1', title: 'Recursion', is_draft: false };
-const DRAFT_DECK = { id: 'deck-2', title: 'Work in progress', is_draft: true };
+const PUBLISHED_DECK = { id: 'deck-1', title: 'Recursion', is_draft: false, kind: 'DECK' };
+const DRAFT_DECK = { id: 'deck-2', title: 'Work in progress', is_draft: true, kind: 'DECK' };
+
+/** The row as the table receives it: the DB columns plus the two derived ones. */
+const asRow = (slide: { id: string; title: string; is_draft: boolean; kind: string }) => ({
+  ...slide,
+  kindLabel: 'deck',
+  linkHost: null,
+});
 
 const loaderArgs = (prefix: string) =>
   ({
@@ -102,7 +126,7 @@ describe('slides loader — drafts follow the view tier', () => {
       // Asserted on the query, not the mocked rows: the filter is the policy.
       expect(whereClause()).toEqual({ classroom_id: 'class-1' });
       expect('is_draft' in whereClause()).toBe(false);
-      expect(data.slides).toContainEqual(DRAFT_DECK);
+      expect(data.slides).toContainEqual(asRow(DRAFT_DECK));
     }
   );
 
@@ -142,7 +166,18 @@ describe('slides loader — payload shape', () => {
 
     await studentRoute.loader(loaderArgs('student'));
 
-    expect(selectClause()).toEqual({ id: true, title: true, is_draft: true });
+    // The source_* columns are here for the kind chip and the link host, both
+    // of which are computed below; they say nothing a viewer of the slide
+    // cannot already see.
+    expect(selectClause()).toEqual({
+      id: true,
+      title: true,
+      is_draft: true,
+      kind: true,
+      source_filename: true,
+      source_path: true,
+      source_url: true,
+    });
   });
 
   it('never asks for the multiplex credentials', async () => {
@@ -161,7 +196,38 @@ describe('slides loader — payload shape', () => {
 
     await studentRoute.loader(loaderArgs('assistant'));
 
-    expect(selectClause()).toEqual({ id: true, title: true, is_draft: true });
+    expect(selectClause()).toEqual({
+      id: true,
+      title: true,
+      is_draft: true,
+      kind: true,
+      source_filename: true,
+      source_path: true,
+      source_url: true,
+    });
+  });
+
+  it('resolves the kind chip and the link host for every row, server side', async () => {
+    grant('STUDENT');
+    mocks.findMany.mockResolvedValue([
+      PUBLISHED_DECK,
+      { id: 'file-1', title: 'Syllabus', is_draft: false, kind: 'FILE', source_url: null },
+      {
+        id: 'link-1',
+        title: 'Reading',
+        is_draft: false,
+        kind: 'LINK',
+        source_url: 'https://docs.example.edu/reading',
+      },
+    ]);
+
+    const data = await studentRoute.loader(loaderArgs('student'));
+
+    expect(data.slides.map(s => [s.kindLabel, s.linkHost])).toEqual([
+      ['deck', null],
+      ['pdf', null],
+      ['link', 'docs.example.edu'],
+    ]);
   });
 });
 

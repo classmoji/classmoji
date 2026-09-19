@@ -4,6 +4,16 @@ import { io } from 'socket.io-client';
 import { IconUsers } from '@tabler/icons-react';
 import QRCodeOverlay from './QRCodeOverlay';
 
+/**
+ * A signed delivery theme folder: `/c/{classroomId}/theme/{name}/{treeSha}/...`.
+ *
+ * Matched by SHAPE rather than against the delivery origin, which is a server
+ * env var — shipping it to the browser only to compare a prefix would be a
+ * config surface for no gain.
+ */
+const DELIVERY_THEME_HREF =
+  /\/c\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\/theme\//;
+
 // Configure marked for speaker notes (simple, safe rendering)
 marked.setOptions({
   breaks: true, // Convert \n to <br>
@@ -236,8 +246,15 @@ export default function RevealPresenter({
       const sharedLinks: HTMLLinkElement[] = [];
       headLinks.forEach(link => {
         const href = link.getAttribute('href');
-        // Include content proxy URLs (shared theme CSS) but not CDN URLs
-        if (href && href.includes('/content/') && href.includes('.slidesthemes/')) {
+        // Keep the deck's own theme CSS, drop third-party CDN links. Two shapes
+        // qualify: the legacy content proxy, and a signed delivery theme folder
+        // (`/c/{classroomId}/theme/...`), matched by shape so the presenter does
+        // not need the delivery origin shipped to the browser.
+        if (
+          href &&
+          ((href.includes('/content/') && href.includes('.slidesthemes/')) ||
+            DELIVERY_THEME_HREF.test(href))
+        ) {
           const newLink = document.createElement('link');
           newLink.rel = 'stylesheet';
           newLink.href = href;

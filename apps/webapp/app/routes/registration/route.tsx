@@ -9,8 +9,13 @@ import { Logo } from '@classmoji/ui-components';
 import { getAuthSession } from '@classmoji/auth/server';
 import getPrisma from '@classmoji/database';
 import { generateId } from '@classmoji/utils';
-import { GitHubProvider, ClassmojiService, provisionExampleClassroom } from '@classmoji/services';
-import Tasks from '@classmoji/tasks';
+import { GitHubProvider, ClassmojiService } from '@classmoji/services';
+import {
+  sendEmailVerificationCode,
+  isEmailVerificationCodeValid,
+  consumeEmailVerificationCode,
+} from '~/utils/emailVerification.server';
+import { verifyInviteToken, inviteTokenMatchesEmail } from '@classmoji/auth/invite-token';
 
 export const loader = async ({ request }: Route.LoaderArgs) => {
   const authData = await getAuthSession(request);
@@ -179,25 +184,44 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
     return redirect('/select-organization');
   }
 
+  // From the roster invite link (#343). Opening that mail already proved the
+  // address, so the token stands in for the code — for that address only. A
+  // token that fails to verify is simply ignored and the code flow applies.
+  const inviteToken = new URL(request.url).searchParams.get('invite');
+  const invite = inviteToken ? verifyInviteToken(inviteToken) : null;
+
   return {
     githubLogin: githubUser.login,
     githubId: String(githubUser.id),
     githubEmail: githubUser.email || null,
+    invitedEmail: invite?.email ?? null,
+    inviteToken: invite ? inviteToken : null,
   };
 };
 
 const Registration = ({ loaderData }: Route.ComponentProps) => {
-  const { githubLogin, githubId, githubEmail } = loaderData;
+  const { githubLogin, githubId, githubEmail, invitedEmail, inviteToken } = loaderData;
   const fetcher = useFetcher();
   const codeFetcher = useFetcher();
   const verifyFetcher = useFetcher();
   const navigate = useNavigate();
   const [form] = Form.useForm();
-  const [verifiedEmail, setVerifiedEmail] = useState(null);
+  // An invite token pre-verifies the invited address. Choosing a different
+  // address drops it, and the code flow takes over for the new one.
+  const [useInvite, setUseInvite] = useState(inviteToken !== null);
+  const [verifiedEmail, setVerifiedEmail] = useState<string | null>(
+    inviteToken ? invitedEmail : null
+  );
 
   const codeSent = codeFetcher.data?.codeSent === true;
   const emailVerified = verifyFetcher.data?.verified === true || verifiedEmail !== null;
   const verifyError = verifyFetcher.data?.verifyError;
+
+  const useDifferentEmail = () => {
+    setUseInvite(false);
+    setVerifiedEmail(null);
+    form.setFieldsValue({ email: '' });
+  };
 
   const isSubmitting = ['submitting', 'loading'].includes(fetcher.state);
   const actionError = fetcher.data?.error;
@@ -237,7 +261,7 @@ const Registration = ({ loaderData }: Route.ComponentProps) => {
 
   const onFinish = (values: Record<string, unknown>) => {
     fetcher.submit(
-      { ...values, githubEmail, intent: 'register' },
+      { ...values, githubEmail, intent: 'register', invite_token: useInvite ? inviteToken : null },
       {
         method: 'POST',
         encType: 'application/json',
@@ -270,7 +294,7 @@ const Registration = ({ loaderData }: Route.ComponentProps) => {
             layout="vertical"
             onFinish={onFinish}
             size="middle"
-            initialValues={{ githubId, login: githubLogin }}
+            initialValues={{ githubId, login: githubLogin, email: invitedEmail ?? undefined }}
             disabled={isSubmitting}
           >
             <Form.Item label="GitHub ID" name="githubId" className="hidden">
@@ -286,20 +310,29 @@ const Registration = ({ loaderData }: Route.ComponentProps) => {
                   {emailVerified && <CheckCircleFilled style={{ color: '#22c55e' }} />}
                 </span>
               }
-              name="email"
-              rules={[
-                { required: true, message: 'Please enter your school email' },
-                { type: 'email', message: 'Please enter a valid email address' },
-              ]}
+              required
               className="mb-3"
             >
+              {/* The field is its own Form.Item so the Input is the direct child
+                  and receives the form value. Wrapped in Space.Compact it did
+                  not: the value landed on Compact's div, so typing worked but a
+                  prefilled address (invite link) never showed. */}
               <Space.Compact style={{ width: '100%' }}>
-                <Input
-                  placeholder="your.email@university.edu"
-                  prefix={<MailOutlined className="text-gray-400" />}
-                  readOnly={emailVerified}
-                  className={emailVerified ? 'bg-gray-50' : ''}
-                />
+                <Form.Item
+                  name="email"
+                  noStyle
+                  rules={[
+                    { required: true, message: 'Please enter your school email' },
+                    { type: 'email', message: 'Please enter a valid email address' },
+                  ]}
+                >
+                  <Input
+                    placeholder="your.email@university.edu"
+                    prefix={<MailOutlined className="text-gray-400" />}
+                    readOnly={emailVerified}
+                    className={emailVerified ? 'bg-gray-50' : ''}
+                  />
+                </Form.Item>
                 {!emailVerified && (
                   <Button onClick={handleSendCode} loading={codeFetcher.state === 'submitting'}>
                     {codeSent ? 'Resend' : 'Send Code'}
@@ -307,6 +340,19 @@ const Registration = ({ loaderData }: Route.ComponentProps) => {
                 )}
               </Space.Compact>
             </Form.Item>
+
+            {useInvite && emailVerified && (
+              <p className="-mt-1 mb-4 text-xs text-gray-500">
+                Verified through your invitation.{' '}
+                <button
+                  type="button"
+                  onClick={useDifferentEmail}
+                  className="text-accent hover:underline cursor-pointer"
+                >
+                  Use a different email
+                </button>
+              </p>
+            )}
 
             {!emailVerified && codeSent && (
               <div className="mb-6">
@@ -433,49 +479,25 @@ export const action = async ({ request }: Route.ActionArgs) => {
 
   // ── Send verification code ──────────────────────────────────────────────
   if (intent === 'send-code') {
-    const code = String(Math.floor(100000 + Math.random() * 900000));
-    await getPrisma().verification.deleteMany({ where: { identifier: formData.email } });
-    await getPrisma().verification.create({
-      data: {
-        identifier: formData.email,
-        value: code,
-        expires_at: new Date(Date.now() + 10 * 60 * 1000),
-      },
-    });
-    // Subject and markup live in the Resend template `verify-email`; source of
-    // truth for the HTML is packages/services/src/emails/templates/verify-email.html
-    await Tasks.sendEmailTask.trigger({
-      to: formData.email,
-      template: { id: 'verify-email', variables: { CODE: code } },
-    });
+    await sendEmailVerificationCode(formData.email);
     return { codeSent: true };
   }
 
   // ── Verify code inline ──────────────────────────────────────────────────
   if (intent === 'verify-code') {
-    const v = await getPrisma().verification.findFirst({
-      where: {
-        identifier: formData.email,
-        value: formData.code,
-        expires_at: { gt: new Date() },
-      },
-    });
-    if (!v) return { verifyError: 'Invalid or expired code. Try resending.' };
+    if (!(await isEmailVerificationCodeValid(formData.email, formData.code))) {
+      return { verifyError: 'Invalid or expired code. Try resending.' };
+    }
     return { verified: true };
   }
 
   // ── Register (re-validate + create user) ────────────────────────────────
-  const verification = await getPrisma().verification.findFirst({
-    where: {
-      identifier: formData.email,
-      value: formData.code,
-      expires_at: { gt: new Date() },
-    },
-  });
-  if (!verification) {
+  // Either a signed invite token for exactly this address, or a code.
+  const invite = formData.invite_token ? verifyInviteToken(formData.invite_token) : null;
+  const provenByInvite = invite !== null && inviteTokenMatchesEmail(invite, formData.email);
+  if (!provenByInvite && !(await consumeEmailVerificationCode(formData.email, formData.code))) {
     return { error: 'Verification code is invalid or expired. Please verify your email again.' };
   }
-  await getPrisma().verification.deleteMany({ where: { identifier: formData.email } });
 
   // Check if email is already in use by another user
   const existingUserWithEmail = await getPrisma().user.findFirst({
@@ -502,6 +524,12 @@ export const action = async ({ request }: Route.ActionArgs) => {
       name: formData.name,
       email: formData.email,
       school_id: formData.school_id || null,
+      // `provider_email` is otherwise written on create only, so a returning
+      // user keeps whatever better-auth stored at first sign-in. The invite
+      // claim below reads the stored row rather than this form, so a stale
+      // value here silently costs the student their invite. Conditional: a
+      // profile whose email went private must not null out what we hold.
+      ...(formData.githubEmail ? { provider_email: formData.githubEmail } : {}),
     },
     create: {
       provider: 'GITHUB',
@@ -538,31 +566,15 @@ export const action = async ({ request }: Route.ActionArgs) => {
     data: { user_id: user.id },
   });
 
-  // Claim any pending classroom invites — match against the school email the student entered
-  // AND the email on their GitHub account, since instructors invite by either.
-  const invites = await ClassmojiService.classroomInvite.findInvitesByAnyEmail([
-    formData.email,
-    formData.githubEmail,
-  ]);
-  if (invites.length > 0) {
-    for (const invite of invites) {
-      await ClassmojiService.classroomMembership.create({
-        classroom_id: invite.classroom_id,
-        user_id: user.id,
-        role: 'STUDENT',
-        has_accepted_invite: false,
-      });
-    }
-    await ClassmojiService.classroomInvite.deleteManyInvites(invites.map(i => i.id));
-  }
+  // Claim any pending classroom invites addressed to either email we now hold
+  // for this user. The same call runs on login and on an email change, so a
+  // student invited at an address they did not register with is no longer
+  // stranded (#307).
+  await ClassmojiService.classroomInvite.claimPendingInvites(user.id);
 
-  // Give every brand-new user a populated "Example Course" sandbox to explore
-  // (the in-classroom onboarding tour runs here). Never let this break signup.
-  try {
-    await provisionExampleClassroom({ ownerUserId: user.id, ownerLogin: formData.login });
-  } catch (err) {
-    console.error('Failed to provision example classroom:', err);
-  }
+  // The "Example Course" sandbox is no longer provisioned here: it is created
+  // on demand when someone starts the tour (POST /api/example-classroom).
+  // Most accounts are students, who never needed one.
 
   return redirect('/select-organization');
 };

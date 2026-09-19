@@ -160,12 +160,23 @@ export async function processZipImport({
     await new Promise(resolve => setTimeout(resolve, 2000));
   }
 
-  // Try to enable GitHub Pages (idempotent)
-  try {
-    await gitProvider.enableGitHubPages(org, repoName);
-  } catch (pagesError: unknown) {
-    const message = pagesError instanceof Error ? pagesError.message : String(pagesError);
-    console.warn(`Could not auto-enable GitHub Pages: ${message}`);
+  // Try to enable GitHub Pages (idempotent) — but NOT for a classroom already
+  // served by the signed-content Worker. Its content repo is on its way to
+  // private (or already there), and switching the public github.io site back on
+  // over a private repo is the leak the Pages-off helper exists to close. Same
+  // guard as page.service.ensureContentRepoExists; gate-off classrooms are
+  // untouched, because github.io is still how their images are served.
+  if (ClassmojiService.contentDelivery.isContentDeliveryEnabled(classroom)) {
+    console.warn(
+      `Not enabling GitHub Pages for ${org}/${repoName}: content delivery is on for this classroom`
+    );
+  } else {
+    try {
+      await gitProvider.enableGitHubPages(org, repoName);
+    } catch (pagesError: unknown) {
+      const message = pagesError instanceof Error ? pagesError.message : String(pagesError);
+      console.warn(`Could not auto-enable GitHub Pages: ${message}`);
+    }
   }
 
   // 7. Collect files for batch upload
@@ -346,6 +357,7 @@ export async function processZipImport({
         bodyClasses: finalBodyClasses,
         customThemeCss: customThemeCss?.trim() || undefined,
         libFiles,
+        classroomId: classroom.id,
         onProgress: ({
           current,
           total,
@@ -814,7 +826,7 @@ export async function processZipImport({
   // 13. Batch upload all files in single commit
   onProgress({ type: 'step', step: 'uploading_github', current: 0, total: files.length });
   try {
-    await ContentService.uploadBatch({
+    const result = await ContentService.uploadBatch({
       orgLogin: org,
       repo: repoName,
       files,
@@ -823,6 +835,10 @@ export async function processZipImport({
         onProgress({ type: 'step', step: 'uploading_github', current, total, filename });
       },
     });
+    // Write-through: an imported deck is opened the moment the import finishes,
+    // and its index.html is read through the asset map. Without this the first
+    // views fall back to the contents API until the push webhook lands.
+    await ClassmojiService.contentAssets.recordContentAssets(classroom.id, result.files);
   } catch (uploadError: unknown) {
     console.log(uploadError);
     // If upload fails, clean up slide record and Cloudinary videos
@@ -831,6 +847,20 @@ export async function processZipImport({
     const message = uploadError instanceof Error ? uploadError.message : String(uploadError);
     throw new Error(`Failed to upload files: ${message}`);
   }
+
+  // And a card for it. A slides.com import commits its own `index.html` rather
+  // than going through `saveDeck`, so `recordDeckFiles`' enqueue never fires for
+  // it — this is the only place the deck becomes visible.
+  //
+  // OUTSIDE the rollback block above, deliberately. `void` only detaches a
+  // returned promise; anything that throws SYNCHRONOUSLY on the way to that
+  // promise — a module that failed to initialise, so the property access itself
+  // throws — is a plain exception at the call site. Inside the try, that
+  // exception would be caught as an "upload failure", run
+  // `cleanupFailedImport()`, and DELETE a deck whose files are already committed
+  // in GitHub, over a card image. Out here the worst case is an unhandled
+  // rejection nobody is waiting on.
+  void ClassmojiService.deckThumbnail.enqueueDeckThumbnail(slide.id, classroom.id);
 
   // 14. Refresh the classroom content manifest so the imported deck shows up
   // (content-tools plan §5.4 — imports previously never refreshed the

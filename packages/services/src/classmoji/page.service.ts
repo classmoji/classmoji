@@ -2,6 +2,9 @@ import getPrisma from '@classmoji/database';
 import { titleToIdentifier, RESERVED_PAGE_SLUGS } from '@classmoji/utils';
 import { ContentService } from '../content/ContentService.ts';
 import { getGitProvider } from '../git/index.ts';
+import { recordContentAssets, removeContentAssetFolder } from './contentAssets.service.ts';
+import { isContentDeliveryEnabled } from './contentDelivery.service.ts';
+import { indexOneFile } from './contentIndex.service.ts';
 import * as contentManifestService from './contentManifest.service.ts';
 import * as notificationService from './notification.service.ts';
 import { blankPageContentJson, previewBranchName } from './pageContent.service.ts';
@@ -292,6 +295,23 @@ async function ensureContentRepoExists({ classroom, gitOrgLogin, repoName }: Con
     }
   }
 
+  // GitHub Pages is the LEGACY delivery path, and turning it on for a
+  // classroom already served by the signed-content Worker actively fights the
+  // cutover: an operator runs the Pages-off helper and flips the repo private,
+  // and then the next page or slide anyone creates here would switch the PUBLIC
+  // github.io site back on over a private repo — the exact leak the helper
+  // exists to close, with nobody in the loop to see it.
+  //
+  // Gate-OFF classrooms are deliberately untouched. github.io is still how
+  // their images are served; retiring that for everyone is the Phase 4
+  // teardown, not this.
+  if (isContentDeliveryEnabled(classroom)) {
+    console.warn(
+      `[page.service] Not enabling GitHub Pages for ${gitOrgLogin}/${repoName}: content delivery is on for this classroom`
+    );
+    return;
+  }
+
   // Always try to enable GitHub Pages (idempotent - skips if already enabled)
   try {
     await gitProvider.enableGitHubPages(gitOrgLogin, repoName);
@@ -382,19 +402,36 @@ export async function createPage({
 
   const htmlPath = `${contentPath}/index.html`;
 
+  // Every branch below records what it committed. `content.json` and
+  // `index.html` are READ through the asset map now (see `fetchContentText`),
+  // so a page created without rows is a page that renders as empty until the
+  // push webhook lands — a fresh page, blank for a minute, on the one surface
+  // where the author is watching.
+  let written: Array<{ path: string; sha: string }> = [];
+
+  /**
+   * The TEXT bodies this create committed, by path.
+   *
+   * Kept so the search index can be fed from the bytes rather than fetched back
+   * out of GitHub a second later. Only the two text files go in — `files` on the
+   * import branch carries base64 for binary uploads, and those are not
+   * documents. See the index enqueue after the DB row below.
+   */
+  const bodies = new Map<string, string>();
+
   if (files.length > 0) {
     // Import flow: assets + index.html in a single batch commit.
     try {
-      await ContentService.uploadBatch({
+      const indexHtml = html ?? generatePageTemplate(title);
+      bodies.set(htmlPath, indexHtml);
+      const result = await ContentService.uploadBatch({
         gitOrganization: ctx.classroom.git_organization!,
         repo: ctx.repoName,
-        files: [
-          ...files,
-          { path: htmlPath, content: html ?? generatePageTemplate(title), encoding: 'utf-8' },
-        ],
+        files: [...files, { path: htmlPath, content: indexHtml, encoding: 'utf-8' }],
         branch: 'main',
         message: commitMessage ?? `Import page: ${title}`,
       });
+      written = result.files;
     } catch (uploadError) {
       console.error('Failed to upload files to GitHub:', uploadError);
       throw new Error(
@@ -405,13 +442,15 @@ export async function createPage({
   } else if (html != null) {
     // Import/markdown flow without extra assets: single-file commit.
     try {
-      await ContentService.put({
+      bodies.set(htmlPath, html);
+      const result = await ContentService.put({
         gitOrganization: ctx.classroom.git_organization!,
         repo: ctx.repoName,
         path: htmlPath,
         content: html,
         message: commitMessage ?? `Create page: ${title}`,
       });
+      written = [{ path: htmlPath, sha: result.sha }];
     } catch (uploadError) {
       console.error('Failed to upload file to GitHub:', uploadError);
       throw new Error(
@@ -424,20 +463,21 @@ export async function createPage({
     // BlockNote content.json wrapper in ONE commit, so fresh pages are
     // json-first for the granular content tools from birth.
     try {
-      await ContentService.uploadBatch({
+      const indexHtml = generatePageTemplate(title);
+      const blankJson = blankPageContentJson();
+      bodies.set(htmlPath, indexHtml);
+      bodies.set(`${contentPath}/content.json`, blankJson);
+      const result = await ContentService.uploadBatch({
         gitOrganization: ctx.classroom.git_organization!,
         repo: ctx.repoName,
         files: [
-          { path: htmlPath, content: generatePageTemplate(title), encoding: 'utf-8' },
-          {
-            path: `${contentPath}/content.json`,
-            content: blankPageContentJson(),
-            encoding: 'utf-8',
-          },
+          { path: htmlPath, content: indexHtml, encoding: 'utf-8' },
+          { path: `${contentPath}/content.json`, content: blankJson, encoding: 'utf-8' },
         ],
         branch: 'main',
         message: commitMessage ?? `Create page: ${title}`,
       });
+      written = result.files;
     } catch (uploadError) {
       console.error('Failed to upload files to GitHub:', uploadError);
       throw new Error(
@@ -446,6 +486,18 @@ export async function createPage({
       );
     }
   }
+
+  // Never throws, and its failure is not this caller's problem: the files are
+  // already committed, and the next sync writes the same rows.
+  //
+  // No sizes: the import branch's `files` carry base64 for binary uploads, so a
+  // byte length taken here would be the encoding's, not the file's — and a
+  // wrong size overwrites a right one a tree sync measured. Omitted rather than
+  // guessed; the next full sync fills the column in.
+  await recordContentAssets(
+    ctx.classroom.id,
+    written.map(file => ({ path: file.path, sha: file.sha }))
+  );
 
   try {
     const page = await create({
@@ -462,6 +514,31 @@ export async function createPage({
 
     // Update manifest after creating page
     await contentManifestService.saveManifest(ctx.classroom.id);
+
+    // Feed the search index, from the bytes this create committed.
+    //
+    // HERE rather than beside `recordContentAssets` above, which is where the
+    // low-level asset recorder sits: a `content_index` row is keyed on the PAGE
+    // id, and the page does not exist until `create()` returns. Enqueued from
+    // the asset recorder it would resolve nothing and index nothing, on the one
+    // path where a brand-new document most needs to become findable.
+    //
+    // `content.json` when the branch wrote one (every blank create does), the
+    // legacy `index.html` otherwise — the same precedence the reader uses.
+    // Not awaited; `indexOneFile` never rejects.
+    const jsonPath = `${contentPath}/content.json`;
+    const canonicalPath = bodies.has(jsonPath) ? jsonPath : htmlPath;
+    const canonicalSha = written.find(file => file.path === canonicalPath)?.sha;
+    const canonicalBody = bodies.get(canonicalPath);
+    if (canonicalSha && canonicalBody !== undefined) {
+      void indexOneFile({
+        classroomId: ctx.classroom.id,
+        path: canonicalPath,
+        sha: canonicalSha,
+        body: canonicalBody,
+        docHint: { kind: 'page', id: page.id, title },
+      });
+    }
 
     return page;
   } catch (dbError) {
@@ -725,6 +802,11 @@ export async function deletePage(pageId: string) {
       console.error('Failed to delete page content from GitHub:', error);
       // Continue with database deletion even if GitHub fails
     }
+
+    // Forget the map rows too. The blobs are content-addressed and immutable,
+    // so a surviving row keeps serving the deleted page's last bytes out of R2
+    // — a deleted page that still renders, until the next sweep.
+    await removeContentAssetFolder(classroomId, page.content_path);
 
     // Drop any pending preview branch alongside the folder — a stale
     // preview/<content_path> ref would retarget a future page reusing the slug.

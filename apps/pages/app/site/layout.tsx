@@ -105,13 +105,37 @@ const SiteLayout = () => {
  *
  * A missing subdomain and a switched-off site render the same 404 shape on
  * purpose: telling a stranger "this subdomain exists but is disabled" is an
- * enumeration oracle over every course we host.
+ * enumeration oracle over every course we host. That merge is between those
+ * TWO, and only those two.
+ *
+ * A bad path on a site that resolved is the third case, and it is safe to name:
+ * this boundary only renders it after the layout's own loader has already
+ * resolved the tenant, so the site is known to exist and to be switched on
+ * before the sentence is written. Saying "there's no page at this address"
+ * there discloses nothing a visitor could not learn by loading the home page,
+ * and telling them "there's no site here" while they are looking at the site's
+ * own chrome is simply wrong. `no-page` is thrown by page.tsx, schedule.tsx and
+ * not-found.tsx; `missing` stays reserved for the hostname that resolves to
+ * nothing.
  */
 export function ErrorBoundary() {
   const error = useRouteError();
 
   if (isRouteErrorResponse(error)) {
     if (error.status === 404) {
+      if (error.data === 'no-page') {
+        return (
+          <SiteNotice
+            title="There's no page at this address"
+            message="Nothing on this course site lives at that address. Check the link, or start from the site's home page."
+            // Relative on purpose: the same markup is served from the
+            // subdomain and from a verified custom domain, and an absolute
+            // origin would send half the visitors to the other hostname.
+            action={{ href: '/', label: 'Go to the site home' }}
+          />
+        );
+      }
+
       const unavailable = error.data === 'unavailable';
       return (
         <SiteNotice

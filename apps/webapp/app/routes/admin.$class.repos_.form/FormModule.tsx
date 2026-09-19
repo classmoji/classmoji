@@ -1,7 +1,7 @@
 import _ from 'lodash';
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 
-import { useRevalidator } from 'react-router';
+import { useFetcher, useRevalidator } from 'react-router';
 import { useCallout } from '@classmoji/ui-components';
 import { useForm, type Control, type FieldValues } from 'react-hook-form';
 import { FormItem } from 'react-hook-form-antd';
@@ -149,6 +149,25 @@ const FormModule = ({
       []
     ).map(test => ({ ...test }))
   );
+  // Inline team-tag creation, so a group assignment doesn't send the instructor
+  // off to Settings → Team mid-form.
+  const tagFetcher = useFetcher<{ tag?: TagRef; error?: string }>();
+  const [isNewTagOpen, setIsNewTagOpen] = useState(false);
+  const [newTagName, setNewTagName] = useState('');
+  const [createdTags, setCreatedTags] = useState<TagRef[]>([]);
+  const isCreatingTag = tagFetcher.state !== 'idle';
+
+  // Loader revalidation lands after the fetcher resolves, so render tags we just
+  // created ourselves too — selecting an id the Select has no option for would
+  // leave the field looking empty.
+  const tagOptions = useMemo(() => {
+    const merged = [...tags];
+    createdTags.forEach(createdTag => {
+      if (!merged.some(existing => existing.id === createdTag.id)) merged.push(createdTag);
+    });
+    return merged;
+  }, [tags, createdTags]);
+
   const [agOpened, { open: openAgModal, close: closeAgModal }] = useDisclosure();
   const [editingTest, setEditingTest] = useState<AutogradingTestData>(emptyAutogradingTest());
   const [editingTestIndex, setEditingTestIndex] = useState<number | null>(null);
@@ -238,14 +257,63 @@ const FormModule = ({
 
   const assignments = watch('assignments');
   const type = watch('type');
+  const teamFormationMode = watch('team_formation_mode');
   const isExtraCredit = watch('is_extra_credit');
 
+  const closeNewTag = () => {
+    setIsNewTagOpen(false);
+    setNewTagName('');
+  };
+
+  const createTag = () => {
+    const name = newTagName.trim();
+    if (!name) {
+      callout.show({ variant: 'error', title: 'Please enter a tag name.' });
+      return;
+    }
+
+    tagFetcher.submit(
+      { name },
+      { action: '?/createTag', method: 'POST', encType: 'application/json' }
+    );
+  };
+
+  // Select the tag once it comes back. The action upserts, so re-entering an
+  // existing name simply selects that tag.
+  useEffect(() => {
+    if (tagFetcher.state !== 'idle' || !tagFetcher.data) return;
+
+    const { tag: createdTag, error } = tagFetcher.data;
+    if (error) {
+      callout.show({ variant: 'error', title: error });
+      return;
+    }
+    if (!createdTag) return;
+
+    setCreatedTags(prev =>
+      prev.some(existing => existing.id === createdTag.id) ? prev : [...prev, createdTag]
+    );
+    // shouldValidate re-runs the resolver, clearing 'Tag is required for
+    // instructor-assigned teams.' if it was already showing.
+    setValue('tag', createdTag.id, { shouldValidate: true, shouldDirty: true });
+    closeNewTag();
+  }, [tagFetcher.state, tagFetcher.data]);
+
+  // Don't leave a half-typed tag behind when the mode that shows the field changes.
+  useEffect(() => {
+    closeNewTag();
+  }, [type, teamFormationMode]);
+
+  // Keyed on the id, not the object: a loader revalidation hands back a new
+  // `repository` for the same record, and re-running this would stomp an unsaved
+  // template pick with the persisted one.
   useEffect(() => {
     if (repository) setValue('template', repository.template);
-    return () => {
-      resetAssignmentsToRemove();
-    };
-  }, [repository]);
+  }, [repository?.id]);
+
+  // Queued assignment deletions live in the store until the form is submitted, so
+  // only drop them when the form itself goes away — never on a re-render.
+  useEffect(() => () => resetAssignmentsToRemove(), []);
 
   // Close drawer after successful submission and revalidate parent route
   useEffect(() => {
@@ -509,10 +577,70 @@ const FormModule = ({
                   <InputNumber min={2} style={{ width: '100%' }} placeholder="e.g., 4" />
                 </FormItem>
 
-                {watch('team_formation_mode') === 'INSTRUCTOR' && (
-                  <FormItem control={control} name="tag" label="Team Tag">
+                {teamFormationMode === 'INSTRUCTOR' && (
+                  // The affordance rides in the item's `extra` slot so antd owns
+                  // the spacing: it sizes the block below the control to fit both
+                  // this and the validation message, in every combination.
+                  <FormItem
+                    control={control}
+                    name="tag"
+                    label="Team Tag"
+                    extra={
+                      isNewTagOpen ? (
+                        <div className="mt-2 flex items-center gap-2">
+                          <Input
+                            size="small"
+                            autoFocus
+                            aria-label="New team tag name"
+                            value={newTagName}
+                            onChange={e => setNewTagName(e.target.value)}
+                            onKeyDown={e => {
+                              // Enter creates the tag rather than submitting the
+                              // repository form; Escape backs out of the input.
+                              if (e.key === 'Enter') {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                createTag();
+                              } else if (e.key === 'Escape') {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                closeNewTag();
+                              }
+                            }}
+                            placeholder="New tag name"
+                            disabled={isCreatingTag}
+                          />
+                          <Button
+                            type="primary"
+                            size="small"
+                            onClick={createTag}
+                            loading={isCreatingTag}
+                          >
+                            Create
+                          </Button>
+                          <Button
+                            type="text"
+                            size="small"
+                            className="!text-ink-2 hover:enabled:!text-ink-1"
+                            onClick={closeNewTag}
+                            disabled={isCreatingTag}
+                          >
+                            Cancel
+                          </Button>
+                        </div>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => setIsNewTagOpen(true)}
+                          className="mt-1 text-xs text-ink-3 hover:text-ink-1 transition-colors"
+                        >
+                          + New tag
+                        </button>
+                      )
+                    }
+                  >
                     <Select className="w-full" placeholder="Select a team tag">
-                      {tags.map((tag: TagRef) => (
+                      {tagOptions.map((tag: TagRef) => (
                         <Select.Option key={tag.id} value={tag.id}>
                           #{tag.name}
                         </Select.Option>
@@ -521,7 +649,7 @@ const FormModule = ({
                   </FormItem>
                 )}
 
-                {watch('team_formation_mode') === 'SELF_FORMED' && (
+                {teamFormationMode === 'SELF_FORMED' && (
                   <FormItem
                     control={control}
                     name="team_formation_deadline"

@@ -1,4 +1,5 @@
 import dayjs from 'dayjs';
+import { Tag } from 'antd';
 import { motion, useReducedMotion } from 'framer-motion';
 import { IconBrandGithub, IconCheck } from '@tabler/icons-react';
 import { EmojisDisplay } from '~/components';
@@ -9,6 +10,8 @@ interface AssignmentCardAssignment {
   title: string;
   grades_released?: boolean;
   student_deadline?: string | Date | null;
+  // Only ever false on the teaching-team view, which fetches drafts too.
+  is_published?: boolean;
   pages?: Array<{ page: { id: string; title: string } }>;
   slides?: Array<{ slide: { id: string; title: string } }>;
 }
@@ -81,6 +84,14 @@ const AssignmentCard = ({
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 flex-wrap">
             <h4 className="font-medium text-ink-0">{assignment.title}</h4>
+            {/* Staff-only: the loader that feeds this view fetches drafts, so
+                say which rows students cannot see yet. `!me-0` drops antd's own
+                8px marginInlineEnd, which would stack on the row's gap-2. */}
+            {assignment.is_published === false && (
+              <Tag color="orange" className="!me-0">
+                Draft
+              </Tag>
+            )}
             {statusPill &&
               (statusPill.tone === 'submitted' ? (
                 <motion.span

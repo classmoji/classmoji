@@ -60,7 +60,10 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
             },
             orderBy: { student_deadline: 'asc' },
           },
+          // Pages and slides are both filtered to published content here, so
+          // the spotlight counts the same set whichever resource type it lists.
           pages: {
+            where: { page: { is_draft: false } },
             include: { page: { select: { id: true, title: true } } },
             orderBy: { order: 'asc' },
           },
@@ -148,7 +151,11 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
     // Team: first SELF_FORMED repository where student is on a team, otherwise prompt
     let team: TeamSummary | null = null;
     let needsTeam: SelfFormedNeedsTeam | null = null;
-    const selfFormedModules = repositories.filter(m => m.team_formation_mode === 'SELF_FORMED');
+    // Both halves of the gate, matching the team route, which 400s on a repo
+    // that is SELF_FORMED but not GROUP.
+    const selfFormedModules = repositories.filter(
+      m => m.type === 'GROUP' && m.team_formation_mode === 'SELF_FORMED'
+    );
     for (const m of selfFormedModules) {
       if (!m.slug) continue;
       const tag = await ClassmojiService.organizationTag.findByClassroomIdAndName(

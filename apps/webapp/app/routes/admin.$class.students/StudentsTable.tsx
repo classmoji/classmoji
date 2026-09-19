@@ -1,5 +1,5 @@
 import { useLocation, useNavigate, useParams } from 'react-router';
-import { Table, Tag, Popconfirm } from 'antd';
+import { Table, Tag, Popconfirm, Tooltip } from 'antd';
 import { IconUserSearch, IconTrash } from '@tabler/icons-react';
 import { useState } from 'react';
 
@@ -18,6 +18,10 @@ interface Student {
   school_id?: string | null;
   has_accepted_invite: boolean;
   _isInvite?: boolean;
+  /** Invites only, OWNER only: does any account use this address? */
+  _hasAccount?: boolean;
+  /** Invites only, OWNER only: when the invite was issued. */
+  _invitedAt?: string | Date | null;
   [key: string]: unknown;
 }
 
@@ -162,11 +166,38 @@ const StudentsTable = ({ students, query, isOwner, canManage }: StudentsTablePro
       key: 'has_accepted_invite',
       width: 110,
       render: (_: unknown, student: Student) => {
-        return student.has_accepted_invite ? (
-          <Tag color="green" className="font-semibold">
-            Active
-          </Tag>
-        ) : (
+        if (student.has_accepted_invite) {
+          return (
+            <Tag color="green" className="font-semibold">
+              Active
+            </Tag>
+          );
+        }
+        // An invite nobody can claim looks identical to one that is merely
+        // waiting, which is what let a mistyped address sit pending for six
+        // days in production. `_hasAccount` is false only when no account uses
+        // this address under either email we hold, so the invite cannot resolve
+        // itself no matter how many times that person signs in.
+        if (student._isInvite && student._hasAccount === false) {
+          const days = student._invitedAt
+            ? Math.floor(
+                (Date.now() - new Date(student._invitedAt).getTime()) / (1000 * 60 * 60 * 24)
+              )
+            : null;
+          return (
+            <Tooltip
+              title={
+                'No Classmoji account uses this address, so this invite cannot be claimed. ' +
+                'Check the address, or ask the student which one they signed up with.'
+              }
+            >
+              <Tag color="red" className="font-semibold">
+                No account{days !== null && days > 0 ? ` · ${days}d` : ''}
+              </Tag>
+            </Tooltip>
+          );
+        }
+        return (
           <Tag color="orange" className="font-semibold">
             Pending
           </Tag>

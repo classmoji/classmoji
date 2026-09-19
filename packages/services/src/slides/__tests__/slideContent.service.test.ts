@@ -28,6 +28,7 @@ vi.mock('../../content/ContentService.ts', () => ({
 
 const { loadDeck, saveDeck, DeckConflictError, previewBranchName, PREVIEW_BRANCH_PREFIX } =
   await import('../slideContent.service.ts');
+const { SlideKindError } = await import('../slideSource.ts');
 const { DeckParseError } = await import('../deckHtml.ts');
 
 const gitOrganization = { provider: 'GITHUB', login: 'test-org' };
@@ -348,5 +349,132 @@ describe('loadDeck', () => {
   it('throws when neither deck.json nor index.html exists', async () => {
     getContentMock.mockResolvedValue(null);
     await expect(loadDeck(slide)).rejects.toThrow('Slide content not found');
+  });
+});
+
+// ─── Reveal runtime paint at the content boundaries (issue #361) ─────────────
+//
+// Decks committed before the strip landed carry reveal.js layout()'s computed
+// `top` (and the contrast class backgrounds.js adds). Both boundaries clean
+// it, so no consumer can carry it forward and no commit can re-bake it.
+
+describe('runtime paint is stripped at the load/save boundaries', () => {
+  /** A deck as it sits in a pre-fix repo: paint on a leaf, a stack, and a child. */
+  const staleDeck: DeckJson = {
+    version: 1,
+    theme: 'white',
+    codeTheme: 'github',
+    slides: [
+      {
+        id: 'aaaa1111',
+        html: '<h1>Hi</h1>',
+        attrs: {
+          style: 'top: 350px; background-color: red;',
+          class: 'present has-dark-background mine',
+          'data-index-h': '0',
+          'data-background-color': '#123456',
+        },
+      },
+      {
+        id: 'bbbb2222',
+        attrs: { style: 'top: 0px;', class: 'stack' },
+        children: [{ id: 'cccc3333', html: '<h2>Child</h2>', attrs: { style: 'top: 12px;' } }],
+      },
+    ],
+  };
+
+  const cleanedSlides = [
+    {
+      id: 'aaaa1111',
+      html: '<h1>Hi</h1>',
+      attrs: {
+        style: 'background-color: red;',
+        class: 'mine',
+        'data-background-color': '#123456',
+      },
+    },
+    {
+      id: 'bbbb2222',
+      children: [{ id: 'cccc3333', html: '<h2>Child</h2>' }],
+    },
+  ];
+
+  it('loadDeck cleans a stored deck.json, stacks and children included', async () => {
+    getContentMock.mockImplementation(({ path }: { path: string }) =>
+      Promise.resolve(
+        path === DECK_PATH ? { content: JSON.stringify(staleDeck), sha: 'deck-sha' } : null
+      )
+    );
+
+    const result = await loadDeck(slide, { skipCache: true });
+
+    expect(result.deck.slides).toEqual(cleanedSlides);
+    expect(JSON.stringify(result.deck)).not.toContain('top:');
+    expect(result.sha).toBe('deck-sha');
+  });
+
+  it('saveDeck commits a clean deck.json and index.html even when handed a stale deck', async () => {
+    getMetaMock.mockResolvedValue({ sha: 'expected-sha', size: 10 });
+
+    await saveDeck({
+      slide,
+      deck: staleDeck,
+      expectedSha: 'expected-sha',
+      shaSource: 'deck',
+      message: 'update deck',
+    });
+
+    const call = uploadBatchMock.mock.calls[0][0];
+    const committedDeck = JSON.parse(call.files[0].content) as DeckJson;
+    expect(committedDeck.slides).toEqual(cleanedSlides);
+    expect(call.files[0].content).not.toContain('top:');
+    expect(call.files[0].content).not.toContain('has-dark-background');
+    // index.html is regenerated from the SAME cleaned deck.
+    expect(call.files[1].content).not.toContain('top: 350px');
+    expect(call.files[1].content).not.toContain('has-dark-background');
+    expect(call.files[1].content).toContain('background-color: red;');
+  });
+
+  it('leaves the caller’s deck untouched (pure)', async () => {
+    getMetaMock.mockResolvedValue({ sha: 'expected-sha', size: 10 });
+    const before = JSON.stringify(staleDeck);
+
+    await saveDeck({
+      slide,
+      deck: staleDeck,
+      expectedSha: 'expected-sha',
+      shaSource: 'deck',
+      message: 'm',
+    });
+
+    expect(JSON.stringify(staleDeck)).toBe(before);
+  });
+});
+
+describe('saveDeck — the kind gate', () => {
+  it('refuses a slide that is not a deck, before anything is read or written', async () => {
+    // A FILE slide's folder holds the uploaded document and a LINK slide's
+    // folder holds nothing. Writing deck.json and index.html into either would
+    // make it LOOK like a deck to the thumbnail task, the search index and the
+    // class site — all of which key off exactly those two files.
+    for (const kind of ['FILE', 'LINK']) {
+      await expect(saveDeck({ slide: { ...slide, kind }, deck, message: 'nope' })).rejects.toThrow(
+        SlideKindError
+      );
+    }
+    expect(uploadBatchMock).not.toHaveBeenCalled();
+    expect(getMetaMock).not.toHaveBeenCalled();
+  });
+
+  it('lets a deck, and a target with no kind at all, straight through', async () => {
+    // `createSlide` and the importer build a target by hand with no `kind`, and
+    // both are creating decks — so absent must read as DECK.
+    getMetaMock.mockResolvedValue({ sha: 'expected-sha', size: 10 });
+    await expect(
+      saveDeck({ slide: { ...slide, kind: 'DECK' }, deck, message: 'ok' })
+    ).resolves.toMatchObject({ commit: 'commit-1' });
+    await expect(saveDeck({ slide, deck, message: 'ok' })).resolves.toMatchObject({
+      commit: 'commit-1',
+    });
   });
 });

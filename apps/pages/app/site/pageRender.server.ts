@@ -10,6 +10,8 @@ import {
   type SitePageIndexEntry,
 } from './tenant.server.ts';
 import type { PageLinkResolver } from './viewerSchema.server.ts';
+import { collectBlockAssetRefs, mapBlockAssetRefs } from '@classmoji/utils';
+import { assetResolveContext } from '~/utils/assetRefs.server.ts';
 
 /**
  * The shared "render one page of this site" path.
@@ -112,11 +114,29 @@ export async function renderPageForViewer(
     throw error;
   }
 
+  // Render-time URL resolution. The lifetime comes from the PAGE's visibility,
+  // through the same `tierFor` the pages app calls — not from the fact that
+  // this is the class site. A public page is `month` here and `month` in the
+  // app, which is what makes the two URLs identical inside a bucket; a
+  // members-only page reached by a signed-in member is `week` on both, so its
+  // URLs expire on the shorter bucket rather than borrowing the lifetime meant
+  // for anonymous readers. Nothing on this surface can edit, so `canEdit` is
+  // pinned false. The rewrite runs on a CLONE — `loadSitePageContent` caches
+  // its blocks for five minutes, and writing signed URLs into that cache would
+  // hand the next reader this reader's (expiring, tier-specific) URLs.
+  const assetCtx = assetResolveContext(
+    context.site.classroom as unknown as Parameters<typeof assetResolveContext>[0],
+    ClassmojiService.contentDelivery.tierFor({ canEdit: false, isPublic: page.is_public })
+  );
+  const { blocks: resolvedBlocks, srcSets } = await resolveSiteAssets(assetCtx, content.blocks);
+
   let rendered;
   try {
     rendered = await renderSitePage({
-      blocks: content.blocks,
+      blocks: resolvedBlocks,
       resolveLink,
+      // Keyed by the signed URL, because the blocks now hold signed URLs.
+      srcSets,
       // The site's setting, not the viewer's: `/schedule` 404s for everyone
       // when it is off, so a directory tile pointing at it is dropped.
       showSchedule: context.site.show_schedule === true,
@@ -131,17 +151,91 @@ export async function renderPageForViewer(
 
   // Cover image: the JSON wrapper's metadata wins, with the legacy DB columns
   // as a fallback for pages saved before covers moved into content.json.
-  const coverImage =
+  const rawCover =
     content.coverImage ||
     (page.header_image_url
       ? { url: page.header_image_url, position: page.header_image_position ?? 50 }
       : null);
+
+  // The cover is markup this app renders itself, so it takes the signed URL
+  // directly rather than going through the block rewrite — but under the same
+  // guard: this is the anonymous, cached path, and a database hiccup resolving
+  // one image must degrade to the stored reference, not 500 the site.
+  const coverImage = await resolveSiteCover(assetCtx, rawCover);
 
   return {
     title: page.title || 'Untitled',
     html: siteArticleWrapper(rendered.html),
     coverImage,
   };
+}
+
+/**
+ * Resolve a document's asset references for the public site.
+ *
+ * Failure is not fatal: a resolve that throws leaves the ORIGINAL blocks, which
+ * render through the legacy URLs. A site that shows images from the old path is
+ * strictly better than a 503, and this is the one surface with anonymous
+ * readers and a shared cache in front of it.
+ */
+async function resolveSiteAssets(
+  ctx: ReturnType<typeof assetResolveContext>,
+  blocks: unknown[]
+): Promise<{ blocks: unknown[]; srcSets: Record<string, string> }> {
+  if (!ctx) return { blocks, srcSets: {} };
+
+  const refs = collectBlockAssetRefs(blocks);
+  if (refs.length === 0) return { blocks, srcSets: {} };
+
+  try {
+    // ONE pass: the URLs and the candidate lists come out of the same map read
+    // under the same clock, so the `src` a block ends up with is exactly the
+    // key its candidate list is filed under.
+    const { urls, srcSets } = await ClassmojiService.contentDelivery.resolveDelivery(ctx, refs, {
+      srcSets: true,
+    });
+    const bySignedUrl: Record<string, string> = {};
+    for (const set of srcSets.values()) bySignedUrl[set.src] = set.srcset;
+    return {
+      blocks: mapBlockAssetRefs(blocks, ref => urls.get(ref) ?? ref),
+      srcSets: bySignedUrl,
+    };
+  } catch (error) {
+    console.warn('[site] asset resolution failed, rendering stored refs:', error);
+    return { blocks, srcSets: {} };
+  }
+}
+
+/**
+ * Resolve the cover image, or leave it exactly as stored.
+ *
+ * Same contract as `resolveSiteAssets`, for the same reason — these are the two
+ * resolves on the anonymous path, and neither is worth a 503.
+ */
+async function resolveSiteCover(
+  ctx: ReturnType<typeof assetResolveContext>,
+  cover: { url: string; position?: number } | null
+): Promise<{ url: string; position?: number } | null> {
+  if (!ctx || !cover?.url) return cover;
+
+  try {
+    return {
+      ...cover,
+      // A single capped rendition, not a candidate list. The cover is painted
+      // as a CSS `background-image`, where `srcset` does not exist — so the
+      // only lever is the URL itself, and an instructor's untouched camera
+      // JPEG at the top of a public page is the single heaviest thing a class
+      // site serves. 2560 is the widest rung the pipeline offers, still an
+      // honest full-bleed banner on a retina display, and `fmt=auto` takes the
+      // WebP/AVIF saving on top.
+      url: await ClassmojiService.contentDelivery.resolveAssetUrl(ctx, cover.url, {
+        transform: { w: 2560, fmt: 'auto' },
+      }),
+    };
+  } catch (error) {
+    console.warn('[site] cover resolution failed, rendering the stored ref:', error);
+    return cover;
+  }
 }
 
 function serviceUnavailable(request: Request): Response {

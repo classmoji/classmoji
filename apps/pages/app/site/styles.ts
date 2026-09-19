@@ -79,6 +79,21 @@ export const SITE_STYLES = `
   .page-header-image { height: 18rem; }
 }
 
+/* --- headings: deliberately absent ------------------------------------ */
+
+/* Headings are NOT restated here, and adding them would be a regression.
+
+   They used to be the same bug the cover band above fixes: sizes scoped to
+   .page-editor, which a site page does not have, so the site published a 48px
+   H1 against the editor's 30px (#288). The fix went the other way -- the scale
+   now lives UNSCOPED in app/styles/blocknote-overrides.css as BlockNote's own
+   --level custom property, which ships to every surface via root.tsx, so the
+   editor, the in-app viewer and this page read one definition.
+
+   If a heading looks wrong on a site page, fix it there, not here. A rule in
+   this file would fork the scale again and only the site would move.
+   site-render.spec.ts asserts this section stays empty of heading sizes. */
+
 /* --- page link -------------------------------------------------------- */
 
 /* The editor draws a pageLink as a bordered row around a SPAN, so its

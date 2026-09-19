@@ -12,7 +12,9 @@
     "./predicates": "./src/predicates.ts",
     "./oauth-redirect": "./src/oauthRedirect.ts",
     "./secret": "./src/secret.ts",
-    "./site-return": "./src/siteReturnToken.ts"
+    "./mcp-token": "./src/mcpToken.ts",
+    "./site-return": "./src/siteReturnToken.ts",
+    "./invite-token": "./src/inviteToken.ts"
   },
   "dependencies": {
     "@classmoji/database": "*",

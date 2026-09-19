@@ -25,6 +25,7 @@ const mocks = vi.hoisted(() => ({
   findUsersByRole: vi.fn(),
   findInvitesByClassroomId: vi.fn(),
   deleteInvite: vi.fn(),
+  findRegisteredEmails: vi.fn(),
   taskTrigger: vi.fn(),
   waitForRunCompletion: vi.fn(),
 }));
@@ -42,6 +43,7 @@ vi.mock('@classmoji/services', () => ({
       findInvitesByClassroomId: (...a: unknown[]) => mocks.findInvitesByClassroomId(...a),
       deleteInvite: (...a: unknown[]) => mocks.deleteInvite(...a),
     },
+    user: { findRegisteredEmails: (...a: unknown[]) => mocks.findRegisteredEmails(...a) },
   },
 }));
 
@@ -101,6 +103,7 @@ const INVITE_ROW = {
   student_name: 'Grace Hopper',
   school_email: 'grace@school.test',
   classroom_id: 'class-1',
+  created_at: new Date('2026-09-01T00:00:00Z'),
 };
 
 const OWNER_ONLY_FIELDS = [
@@ -134,6 +137,50 @@ beforeEach(() => {
   mocks.taskTrigger.mockResolvedValue({ id: 'run-1' });
   mocks.waitForRunCompletion.mockResolvedValue(undefined);
   mocks.deleteInvite.mockResolvedValue(undefined);
+  mocks.findRegisteredEmails.mockResolvedValue(new Set<string>());
+});
+
+// ─── Loader: an invite nobody can claim is distinguishable from a patient one ─
+
+describe('pending invites report whether any account uses the address', () => {
+  it('flags an invited address that belongs to no account', async () => {
+    grantLoader('OWNER');
+    mocks.findRegisteredEmails.mockResolvedValue(new Set<string>());
+
+    const invite = (await loader(loaderArgs())).invitations[0];
+
+    // The state that used to be invisible: this invite cannot resolve itself on
+    // any number of logins, because there is no account to match it against.
+    expect(invite.has_account).toBe(false);
+    expect(invite.invited_at).toBeDefined();
+  });
+
+  it('does not flag an address that an account already uses', async () => {
+    grantLoader('OWNER');
+    mocks.findRegisteredEmails.mockResolvedValue(new Set(['grace@school.test']));
+
+    expect((await loader(loaderArgs())).invitations[0].has_account).toBe(true);
+  });
+
+  it('compares case-insensitively, since the address is stored as typed', async () => {
+    grantLoader('OWNER');
+    mocks.findInvitesByClassroomId.mockResolvedValue([
+      { ...INVITE_ROW, school_email: '  Grace@School.test ' },
+    ]);
+    mocks.findRegisteredEmails.mockResolvedValue(new Set(['grace@school.test']));
+
+    expect((await loader(loaderArgs())).invitations[0].has_account).toBe(true);
+  });
+
+  it('is withheld from non-owners, like the address it is derived from', async () => {
+    grantLoader('TEACHER');
+
+    const invite = (await loader(loaderArgs())).invitations[0];
+
+    expect(invite).not.toHaveProperty('has_account');
+    expect(invite).not.toHaveProperty('school_email');
+    expect(mocks.findRegisteredEmails).not.toHaveBeenCalled();
+  });
 });
 
 function grantLoader(role: 'OWNER' | 'TEACHER' | 'ASSISTANT') {

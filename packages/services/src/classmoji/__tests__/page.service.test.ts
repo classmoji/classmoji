@@ -56,6 +56,16 @@ vi.mock('../contentManifest.service.ts', () => ({
   saveManifest: (...args: unknown[]) => saveManifestMock(...args),
 }));
 
+// The asset map. A created page's index.html and content.json are READ through
+// it (fetchContentText), so a create that does not record its shas is a page
+// that renders empty until the push webhook lands.
+const recordContentAssetsMock = vi.fn();
+const removeContentAssetFolderMock = vi.fn();
+vi.mock('../contentAssets.service.ts', () => ({
+  recordContentAssets: (...args: unknown[]) => recordContentAssetsMock(...args),
+  removeContentAssetFolder: (...args: unknown[]) => removeContentAssetFolderMock(...args),
+}));
+
 vi.mock('../notification.service.ts', () => ({
   runSafely: vi.fn(),
   getStudentsInClassroom: vi.fn(),
@@ -96,7 +106,14 @@ describe('page.createPage', () => {
     pageFindFirstMock.mockResolvedValue(null); // no content-path collision
     repositoryExistsMock.mockResolvedValue(true);
     putMock.mockResolvedValue({ sha: 'abc', commit: 'c1' });
-    uploadBatchMock.mockResolvedValue({ commit: 'c2', filesUploaded: 2 });
+    // `files` is part of uploadBatch's real return shape — each file's blob
+    // sha, which is exactly what the write-through records.
+    uploadBatchMock.mockImplementation(async ({ files }: { files: Array<{ path: string }> }) => ({
+      commit: 'c2',
+      filesUploaded: files.length,
+      files: files.map((file, index) => ({ path: file.path, sha: `sha-${index}` })),
+    }));
+    recordContentAssetsMock.mockResolvedValue(true);
     pageCreateMock.mockImplementation((args: { data: Record<string, unknown> }) => ({
       id: 'page-1',
       ...args.data,
@@ -209,7 +226,7 @@ describe('page.createPage', () => {
     expect(repositoryExistsMock).not.toHaveBeenCalled();
   });
 
-  it('creates the content repo (and enables Pages) when missing', async () => {
+  it('creates the content repo (and enables Pages) when missing and delivery is off', async () => {
     repositoryExistsMock.mockResolvedValue(false);
     vi.useFakeTimers();
     const pending = createPage({
@@ -227,6 +244,28 @@ describe('page.createPage', () => {
       'Course content for Test Class'
     );
     expect(enableGitHubPagesMock).toHaveBeenCalledWith('test-org', 'content-test-org-cs101');
+  });
+
+  // The cutover invariant. A classroom served by the signed-content Worker is
+  // on its way to a PRIVATE content repo; switching the public github.io site
+  // back on there is the leak the Pages-off helper exists to close, and a page
+  // create is the likeliest thing to do it. The repo is still created — only
+  // Pages is withheld.
+  it('does NOT enable Pages when content delivery is on for the classroom', async () => {
+    classroomFindUniqueMock.mockResolvedValue({ ...classroom, content_delivery_enabled: true });
+    repositoryExistsMock.mockResolvedValue(false);
+    vi.useFakeTimers();
+    const pending = createPage({
+      classroomId: 'class-1',
+      title: 'First Page',
+      createdBy: 'user-1',
+    });
+    await vi.runAllTimersAsync();
+    await pending;
+    vi.useRealTimers();
+
+    expect(createPublicRepositoryMock).toHaveBeenCalled();
+    expect(enableGitHubPagesMock).not.toHaveBeenCalled();
   });
 
   it('propagates route-identical errors for missing org config', async () => {
@@ -350,6 +389,31 @@ describe('page.createPage', () => {
     expect(((failure as Error).cause as { code?: string })?.code).toBe('P2002');
     expect(saveManifestMock).not.toHaveBeenCalled();
   });
+
+  it('records both created files in the asset map', async () => {
+    // index.html and content.json are READ through the map (fetchContentText),
+    // so a create that skips this is a brand-new page that renders empty until
+    // the push webhook lands — on the one surface where the author is watching.
+    await createPage({ classroomId: 'class-1', title: 'My New Page', createdBy: 'user-1' });
+
+    expect(recordContentAssetsMock).toHaveBeenCalledWith('class-1', [
+      { path: 'pages/my-new-page/index.html', sha: 'sha-0' },
+      { path: 'pages/my-new-page/content.json', sha: 'sha-1' },
+    ]);
+  });
+
+  it('records the single-file create too', async () => {
+    await createPage({
+      classroomId: 'class-1',
+      title: 'Imported',
+      createdBy: 'user-1',
+      html: '<h1>Imported</h1>',
+    });
+
+    expect(recordContentAssetsMock).toHaveBeenCalledWith('class-1', [
+      { path: 'pages/imported/index.html', sha: 'abc' },
+    ]);
+  });
 });
 
 describe('page.deletePage', () => {
@@ -393,6 +457,11 @@ describe('page.deletePage', () => {
     );
     expect(pageDeleteMock).toHaveBeenCalledWith({ where: { id: 'page-1' } });
     expect(saveManifestMock).toHaveBeenCalledWith('class-1');
+    // …and the map rows. Blobs are content-addressed and immutable, so a row
+    // that outlives the folder keeps serving the deleted page's last
+    // content.json out of R2 — a deleted page that still renders, until the
+    // next full sync sweeps it.
+    expect(removeContentAssetFolderMock).toHaveBeenCalledWith('class-1', 'pages/doomed');
     expect(result.success).toBe(true);
   });
 
@@ -417,11 +486,20 @@ describe('page.ensureContentRepo', () => {
     repositoryExistsMock.mockResolvedValue(true);
   });
 
-  it('returns the repo name and always tries to enable Pages', async () => {
+  it('returns the repo name and tries to enable Pages while delivery is off', async () => {
     const result = await ensureContentRepo('class-1');
     expect(result).toEqual({ repoName: 'content-test-org-cs101' });
     expect(createPublicRepositoryMock).not.toHaveBeenCalled();
     expect(enableGitHubPagesMock).toHaveBeenCalledTimes(1);
+  });
+
+  // Same guard reached through the other entry point — this is the one every
+  // slide create, batch page import and classroom import goes through.
+  it('does NOT enable Pages when content delivery is on for the classroom', async () => {
+    classroomFindUniqueMock.mockResolvedValue({ ...classroom, content_delivery_enabled: true });
+    const result = await ensureContentRepo('class-1');
+    expect(result).toEqual({ repoName: 'content-test-org-cs101' });
+    expect(enableGitHubPagesMock).not.toHaveBeenCalled();
   });
 
   it('throws the route-identical message when repo creation fails', async () => {

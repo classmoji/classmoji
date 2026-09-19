@@ -57,8 +57,79 @@
   color: #ff6b6b !important;
 }
 
-/* Heading sizes - Notion style (H1: 30px, H2: 24px, H3: 20px) */
-/* More specific selectors to override inline styles */
+/* Heading scale — ONE definition, every surface.
+   Notion style: H1 30px, H2 24px, H3 20px, H4-H6 16px.
+
+   These sizes used to exist only under `.page-editor` (below), the class the
+   editor and the in-app viewer wrap content in. A server-rendered class-site
+   page has no `.page-editor` — it serves BlockNote's markup under
+   `.site-article` — so the overrides never matched and the site fell through to
+   BlockNote's own em ladder off a 16px base: 3em/2em/1.3em, or 48/32/20.8px.
+   An author who opened a section with a 30px H1 published a 48px one, and
+   nothing in the editor said so. See issue #288.
+
+   Setting `--level` rather than `font-size` feeds BlockNote's OWN hook. It is
+   read by exactly one declaration in the whole @blocknote CSS surface —
+   `.bn-block-outer:not([data-prev-type]) > .bn-block >
+   .bn-block-content[data-content-type=heading] { font-size: var(--level) }` —
+   so there are no side channels, and because `.bn-default-styles h1..h6` is
+   `font-size: inherit`, one declaration sizes both the block box and the
+   heading tag. Sizing the tag instead would leave a phantom 48px on the
+   wrapper for the next `em`-based rule to trip over.
+
+   No `!important` anywhere: we supply the input rather than compete with the
+   output. Every rule here is (0,3,0) against BlockNote's (0,1,0)/(0,2,0), so it
+   wins on specificity and never on stylesheet order — which matters, because
+   this file ships TWICE (root.tsx imports it, tailwind.css @imports it again).
+
+   An H1 carries NO `data-level` attribute: BlockNote omits a prop equal to its
+   default and heading's default level is 1 (which is why its own CSS has a bare
+   `[data-content-type=heading]` rule with no `[data-level="1"]` twin).
+   `:not([data-level])` is the H1 rule — do not "simplify" it away. */
+.bn-block-content[data-content-type="heading"]:not([data-level]),
+.bn-block-content[data-content-type="heading"][data-level="1"] {
+  --level: 30px;
+}
+
+.bn-block-content[data-content-type="heading"][data-level="2"] {
+  --level: 24px;
+}
+
+.bn-block-content[data-content-type="heading"][data-level="3"] {
+  --level: 20px;
+}
+
+.bn-block-content[data-content-type="heading"][data-level="4"] {
+  --level: 16px;
+}
+
+.bn-block-content[data-content-type="heading"][data-level="5"] {
+  --level: 16px;
+}
+
+.bn-block-content[data-content-type="heading"][data-level="6"] {
+  --level: 16px;
+}
+
+/* Stated rather than left to BlockNote's own heading rule, which is gated on
+   `.bn-block-outer:not([data-prev-type])` and so drops out for the frame a
+   block is changing type. The 1.3 was editor-only, living in PageEditor's
+   inline <style>, which is why site and in-app-viewer headings inherited
+   BlockNote's 1.5 instead. */
+.bn-block-content[data-content-type="heading"] {
+  font-weight: 700;
+  line-height: 1.3;
+}
+
+/* The editor's own copy of the scale above. It is still load-bearing HERE:
+   PageEditor's inline `<style>` pins `.page-editor .bn-block-content` to
+   `16px !important`, which defeats `font-size: var(--level)` on the wrapper, so
+   the editor is sized by these tag-level rules rather than by `--level`. They
+   must agree with the `--level` values above — site-render.spec.ts fails until
+   they do. Removing the pin so `--level` governs the editor too is a separate,
+   riskier change: `.bn-inline-content` IS the heading tag, so a broadened
+   selector that forgets to exclude headings collapses every one of them to
+   16px, silently. */
 .page-editor .bn-editor h1,
 .page-editor .bn-block-content h1 {
   font-size: 30px !important;

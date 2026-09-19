@@ -164,7 +164,7 @@ const PagePeekProvider = ({
                 aria-modal="true"
                 aria-label={state.title || 'Page preview'}
                 tabIndex={-1}
-                className={`absolute inset-y-0 right-0 flex w-[min(720px,90vw)] flex-col overflow-hidden rounded-l-2xl bg-white shadow-2xl outline-none ring-1 ring-stone-200 transition-transform duration-200 ease-out motion-reduce:transition-none dark:bg-neutral-900 dark:ring-neutral-800 ${
+                className={`absolute inset-y-0 right-0 flex w-[min(90vw,max(720px,50vw))] flex-col overflow-hidden rounded-l-2xl bg-white shadow-2xl outline-none ring-1 ring-stone-200 transition-transform duration-200 ease-out motion-reduce:transition-none dark:bg-neutral-900 dark:ring-neutral-800 ${
                   entered ? 'translate-x-0' : 'translate-x-full'
                 }`}
               >

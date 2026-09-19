@@ -5,6 +5,7 @@ import * as autogradeTasks from './workflows/autograde.ts';
 import * as emailTasks from './workflows/email.ts';
 import * as extensionTasks from './workflows/extension.ts';
 import * as installationTasks from './workflows/installation.ts';
+import * as gitOrgInstallationRepairTasks from './workflows/gitOrgInstallationRepair.ts';
 import * as tokenTasks from './workflows/token.ts';
 import * as contributionTasks from './workflows/contribution.ts';
 import * as repoAnalyticsTasks from './workflows/repoAnalytics.ts';
@@ -12,6 +13,12 @@ import * as notificationTasks from './workflows/notifications.ts';
 import * as importGithubClassroomTasks from './workflows/importGithubClassroom.ts';
 import * as classroomImportTasks from './workflows/classroomImport.ts';
 import * as customDomainTasks from './workflows/customDomains.ts';
+import * as contentAssetTasks from './workflows/contentAssets.ts';
+import * as contentIndexTasks from './workflows/contentIndexReconcile.ts';
+import * as docsIndexTasks from './workflows/docsIndexReconcile.ts';
+import * as deckThumbnailTasks from './workflows/deckThumbnail.ts';
+import * as instructorContactTasks from './workflows/instructorContacts.ts';
+import * as exampleClassroomCleanupTasks from './workflows/exampleClassroomCleanup.ts';
 
 // comment to trigger a build
 
@@ -23,6 +30,7 @@ const Tasks = {
   ...emailTasks,
   ...extensionTasks,
   ...installationTasks,
+  ...gitOrgInstallationRepairTasks,
   ...tokenTasks,
   ...contributionTasks,
   ...repoAnalyticsTasks,
@@ -30,6 +38,12 @@ const Tasks = {
   ...importGithubClassroomTasks,
   ...classroomImportTasks,
   ...customDomainTasks,
+  ...contentAssetTasks,
+  ...contentIndexTasks,
+  ...docsIndexTasks,
+  ...deckThumbnailTasks,
+  ...instructorContactTasks,
+  ...exampleClassroomCleanupTasks,
 };
 
 export default Tasks;

@@ -29,6 +29,21 @@ const ITEM_TYPE_LABEL: Record<ModuleItemType, string> = {
   SLIDE: 'Slides',
   REPOSITORY: 'Assignment',
   QUIZ: 'Quiz',
+  FORM: 'Form',
+};
+
+/**
+ * Compile-time exhaustiveness guard for the switch over ModuleItemType below.
+ *
+ * Reachable only by adding a value to the enum and not teaching `toLinkRow`
+ * about it — which is a type error at build, not a runtime event: the column is
+ * a Postgres enum, so no row can carry a type this build does not know. That is
+ * why throwing is safe on a page that must not 500. The alternative, the silent
+ * `return null` this replaced, would have rendered a new item type as "target
+ * row vanished" and dropped it off the public schedule with no signal anywhere.
+ */
+const unhandledItemType = (type: never): never => {
+  throw new Error(`Unhandled ModuleItemType: ${String(type)}`);
 };
 
 /**
@@ -68,6 +83,13 @@ export type ScheduleItem =
       slide?: { id: string; title: string } | null;
       repository?: { id: string; title: string } | null;
       quiz?: { id: string; name: string } | null;
+      /**
+       * Only ever populated for a form the service already ruled publicly
+       * visible (OPEN/CLOSED **and** `access: PUBLIC`) or for a member. A
+       * CLASSROOM form arrives as a placeholder and never reaches this branch,
+       * so its title cannot be printed from here.
+       */
+      form?: { id: string; title: string; slug: string; closes_at: Date | string | null } | null;
     }
   | {
       kind: 'placeholder';
@@ -86,6 +108,22 @@ export type ScheduleLinkRow = {
   typeLabel: string;
   /** Leaves this site — gets `rel="noopener noreferrer"` and a ↗ marker. */
   external: boolean;
+  /**
+   * Preformatted deadline, or null when the row has none to show.
+   *
+   * Only FORM fills this in today, and the asymmetry is deliberate rather than
+   * an omission. A row that is a LINK has already been judged openable by this
+   * viewer, and for a form that means `access: PUBLIC` — the close date is on
+   * the far end of the link anyway, and "RSVP by Sep 12" is the whole reason a
+   * prospective student would follow it. A repo or a quiz link is only ever
+   * shown to a MEMBER, who reads its real deadline in the app; printing a
+   * second copy here would be a second place for it to go stale.
+   *
+   * Declared on the type rather than left optional so it is one shape in the
+   * component and one assertion in a spec — a key that is sometimes absent is a
+   * key nobody remembers to render.
+   */
+  due: string | null;
 };
 
 /** A row standing in for an item this visitor may not open. Carries no identity. */
@@ -113,6 +151,20 @@ export type ScheduleTargets = {
   slidesUrl: string;
   /** The viewer's in-app classroom base, e.g. `https://app.example/student/cs52`. */
   appBase: string;
+  /**
+   * The classroom's forms base on the CANONICAL pages host, e.g.
+   * `https://pages.example/cs52/forms`.
+   *
+   * Absolute, and not the site-relative `/{classroomSlug}/forms/{slug}` the
+   * route table declares, because those two paths are on different hosts. The
+   * fill route is served from the canonical pages host; a class site is served
+   * from `{subdomain}.{SITE_BASE_DOMAIN}`, where `server/siteHost.ts` rewrites
+   * EVERY path into `/_site/{subdomain}/…` before React Router sees it. A
+   * relative href would therefore arrive as `/_site/cs52/cs52/forms/waitlist`,
+   * match no route, and 404 — the one link on this page whose entire job is to
+   * open for a stranger. Hence absolute, and hence `external: true`.
+   */
+  formsBase: string;
   /**
    * The course's IANA zone (`classroom_sites.timezone`), or null for none set.
    *
@@ -158,49 +210,81 @@ function formatDue(dueAt: Date | string | null, zone: string | null): string | n
   }
 }
 
-function toLinkRow(item: Extract<ScheduleItem, { kind: 'visible' }>, targets: ScheduleTargets) {
+/**
+ * One visible item as a link row, or null when its target row vanished between
+ * the service's include and here — dropped rather than rendered as a
+ * placeholder, because a placeholder is a promise that something is there and
+ * nothing is.
+ *
+ * A switch over the type with a `never` default, rather than the if-chain this
+ * replaced. The chain conflated two very different nulls: "the target row is
+ * gone" and "nobody taught this function about this item type". The second is
+ * now a build error.
+ */
+function toLinkRow(
+  item: Extract<ScheduleItem, { kind: 'visible' }>,
+  targets: ScheduleTargets
+): ScheduleLinkRow | null {
   const label = (value: string | undefined) => value || 'Untitled';
 
-  if (item.item_type === 'PAGE' && item.page) {
-    return {
-      kind: 'link' as const,
-      label: label(item.page.title),
-      href: targets.pagePath(item.page),
-      typeLabel: ITEM_TYPE_LABEL.PAGE,
-      external: false,
-    };
+  switch (item.item_type) {
+    case 'PAGE':
+      if (!item.page) return null;
+      return {
+        kind: 'link',
+        label: label(item.page.title),
+        href: targets.pagePath(item.page),
+        typeLabel: ITEM_TYPE_LABEL.PAGE,
+        external: false,
+        due: null,
+      };
+    case 'SLIDE':
+      if (!item.slide) return null;
+      return {
+        kind: 'link',
+        label: label(item.slide.title),
+        href: `${targets.slidesUrl}/${item.slide.id}`,
+        typeLabel: ITEM_TYPE_LABEL.SLIDE,
+        external: true,
+        due: null,
+      };
+    case 'REPOSITORY':
+      if (!item.repository) return null;
+      return {
+        kind: 'link',
+        label: label(item.repository.title),
+        href: `${targets.appBase}/repos`,
+        typeLabel: ITEM_TYPE_LABEL.REPOSITORY,
+        external: true,
+        due: null,
+      };
+    case 'QUIZ':
+      if (!item.quiz) return null;
+      return {
+        kind: 'link',
+        label: label(item.quiz.name),
+        href: `${targets.appBase}/quizzes`,
+        typeLabel: ITEM_TYPE_LABEL.QUIZ,
+        external: true,
+        due: null,
+      };
+    case 'FORM':
+      if (!item.form) return null;
+      return {
+        kind: 'link',
+        label: label(item.form.title),
+        // Absolute, on the canonical pages host — see `formsBase`.
+        href: `${targets.formsBase}/${item.form.slug}`,
+        typeLabel: ITEM_TYPE_LABEL.FORM,
+        external: true,
+        // The one link row that carries a date. A form reaching this branch is
+        // one this viewer may open, so its closing date is already on the far
+        // side of the link; showing it here is what makes the row actionable.
+        due: formatDue(item.form.closes_at, targets.timezone),
+      };
+    default:
+      return unhandledItemType(item.item_type);
   }
-  if (item.item_type === 'SLIDE' && item.slide) {
-    return {
-      kind: 'link' as const,
-      label: label(item.slide.title),
-      href: `${targets.slidesUrl}/${item.slide.id}`,
-      typeLabel: ITEM_TYPE_LABEL.SLIDE,
-      external: true,
-    };
-  }
-  if (item.item_type === 'REPOSITORY' && item.repository) {
-    return {
-      kind: 'link' as const,
-      label: label(item.repository.title),
-      href: `${targets.appBase}/repos`,
-      typeLabel: ITEM_TYPE_LABEL.REPOSITORY,
-      external: true,
-    };
-  }
-  if (item.item_type === 'QUIZ' && item.quiz) {
-    return {
-      kind: 'link' as const,
-      label: label(item.quiz.name),
-      href: `${targets.appBase}/quizzes`,
-      typeLabel: ITEM_TYPE_LABEL.QUIZ,
-      external: true,
-    };
-  }
-  // A visible item whose target row vanished between the include and here.
-  // Dropped rather than rendered as a placeholder: a placeholder is a promise
-  // that something is there, and nothing is.
-  return null;
 }
 
 /**

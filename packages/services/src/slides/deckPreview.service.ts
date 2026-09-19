@@ -20,7 +20,12 @@
 
 import getPrisma from '@classmoji/database';
 import { ContentService } from '../content/ContentService.ts';
+import { recordContentAssets } from '../classmoji/contentAssets.service.ts';
+import { warmContentText } from '../classmoji/contentDelivery.service.ts';
+import { enqueueDeckThumbnail } from '../classmoji/deckThumbnail.service.ts';
+import { indexOneFile } from '../classmoji/contentIndex.service.ts';
 import { generateDeckHtml, type DeckThemeUrls } from './deckHtml.ts';
+import { assertDeckSlide } from './slideSource.ts';
 import {
   indexResolutions,
   merge3Units,
@@ -31,6 +36,7 @@ import {
 } from './deckMerge.ts';
 import {
   DeckConflictError,
+  deckWarmContext,
   previewBranchName,
   resolveSlideRepoContext,
   saveDeck,
@@ -90,6 +96,7 @@ export async function getDeckPreviewStatus(slide: SlideContentTarget): Promise<D
 export async function ensureDeckPreviewBranch(
   slide: SlideContentTarget
 ): Promise<{ branch: string; created: boolean }> {
+  assertDeckSlide(slide, 'Previewing deck edits');
   const { gitOrganization, repo } = resolveSlideRepoContext(slide);
   const branch = previewBranchName(slide.content_path);
 
@@ -268,6 +275,7 @@ export async function acceptDeckPreview(
     resolveThemeUrls?: (deck: DeckJson) => Promise<DeckThemeUrls | undefined>;
   } = {}
 ): Promise<AcceptDeckPreviewResult> {
+  assertDeckSlide(slide, 'Accepting a deck preview');
   const { gitOrganization, repo } = resolveSlideRepoContext(slide);
   const branch = previewBranchName(slide.content_path);
   const deckPath = `${slide.content_path}/deck.json`;
@@ -314,6 +322,22 @@ export async function acceptDeckPreview(
     return null;
   };
 
+  /**
+   * index.html's sha from whichever regenerate actually landed, or null.
+   *
+   * Written by `regenerateFrom` rather than returned from it because the retry
+   * path below calls it twice and only the successful call's sha is the one the
+   * map should hold.
+   */
+  let htmlSha: string | null = null;
+
+  /**
+   * The artifact those bytes are, kept beside its sha for the same reason: the
+   * index writes from what was committed rather than re-reading it, and only
+   * the successful regenerate's html is the one that landed.
+   */
+  let htmlBody: string | null = null;
+
   // Render + commit the artifact, CAS-pinned on the deck.json sha it was
   // generated from: if a concurrent save moves deck.json, the write aborts
   // (DeckConflictError) instead of publishing a stale artifact.
@@ -324,7 +348,7 @@ export async function acceptDeckPreview(
       themeUrls,
       includeNotes: true,
     });
-    await ContentService.uploadBatch({
+    const written = await ContentService.uploadBatch({
       gitOrganization,
       repo,
       files: [{ path: htmlPath, content: html, encoding: 'utf-8' as const }],
@@ -339,6 +363,8 @@ export async function acceptDeckPreview(
         }
       },
     });
+    htmlSha = written.files.find(file => file.path === htmlPath)?.sha ?? null;
+    htmlBody = htmlSha ? html : null;
   };
 
   let mergedSha: string | null = null;
@@ -387,6 +413,54 @@ export async function acceptDeckPreview(
     // Preview never wrote deck.json (nothing but the branch point) — the
     // merge was a no-op for content; there is nothing to regenerate.
     console.warn(`[deckPreview] No deck.json on main after merge for ${deckPath}`);
+  }
+
+  // Write-through. A git merge produces a commit nobody in this process wrote,
+  // so there is no put() result to take shas from — but both are already in
+  // hand: `mergedSha` came from reading deck.json at the merge commit, and
+  // `htmlSha` from the regenerate's own batch. Without this, accepting a
+  // preview would publish a deck that `/present` keeps serving the pre-accept
+  // version of until the push webhook lands.
+  if (slide.classroom?.id) {
+    const written: Array<{ path: string; sha: string }> = [];
+    if (mergedSha) written.push({ path: deckPath, sha: mergedSha });
+    if (htmlSha) written.push({ path: htmlPath, sha: htmlSha });
+    await recordContentAssets(slide.classroom.id, written);
+
+    // Accepting a preview publishes shas the Worker has never seen, exactly as
+    // an ordinary save does — and the person who accepts is usually the person
+    // who opens the deck a second later. Warm them off the accept's tail rather
+    // than making that first read pay the cold origin pull. Not awaited: the
+    // merge has landed and the rows are written, so nothing here may fail or
+    // delay the accept.
+    const ctx = deckWarmContext(slide);
+    if (ctx)
+      void warmContentText(
+        ctx,
+        written.map(file => file.path)
+      );
+
+    // Accepting a preview is a publish: the deck on main is now different from
+    // the one the current card was taken of. Enqueue on the same terms as the
+    // warm — after the rows, never awaited, never able to fail the accept.
+    // This path commits its own `index.html` rather than going through
+    // `saveDeck`, so `recordDeckFiles`' enqueue never fires for it.
+    void enqueueDeckThumbnail(slide.id, slide.classroom.id);
+
+    // And the search index, from the artifact the regenerate above committed.
+    // This path never goes through `saveDeck`, so `recordDeckFiles`' own index
+    // hook cannot fire for it — the accept is a publish, and a deck the index
+    // still holds at its pre-accept text answers questions out of a draft
+    // nobody accepted. Same contract as the two calls above.
+    if (slide.id && htmlSha && htmlBody !== null) {
+      void indexOneFile({
+        classroomId: slide.classroom.id,
+        path: htmlPath,
+        sha: htmlSha,
+        body: htmlBody,
+        docHint: { kind: 'slide', id: slide.id, title: slide.title },
+      });
+    }
   }
 
   // Concurrent-stacking guard: a stacking apply may have committed to the
@@ -768,6 +842,7 @@ export async function resolveDeckPreviewConflicts(
     expectedTheirsSha?: string;
   }
 ): Promise<ResolveDeckPreviewResult> {
+  assertDeckSlide(slide, 'Resolving deck preview conflicts');
   if (!resolutions?.length) {
     throw new PreviewResolutionError(
       'No resolutions supplied — pass one {id, choose} per conflict',
@@ -886,6 +961,7 @@ export async function resolveDeckPreviewConflicts(
 export async function discardDeckPreview(
   slide: SlideContentTarget
 ): Promise<{ discarded: true; existed: boolean }> {
+  assertDeckSlide(slide, 'Discarding a deck preview');
   const { gitOrganization, repo } = resolveSlideRepoContext(slide);
   const branch = previewBranchName(slide.content_path);
 

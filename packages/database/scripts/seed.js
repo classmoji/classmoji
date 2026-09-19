@@ -339,6 +339,33 @@ async function main() {
     students: studentUsers.slice(0, 2),
   });
 
+  // ── Ask Moji OAuth client ───────────────────────────────────────────────
+  // Ask Moji calls the MCP with a per-user bearer token minted directly by
+  // `mintMcpAccessToken` (packages/auth/src/mcpToken.ts). `oauth_access_tokens
+  // .client_id` is an FK to this row, and `Viewer.clientId` is how the MCP tells
+  // an Ask Moji call from a Claude.ai-connector call.
+  //
+  // Only `client_id` is load-bearing: no authorization-code flow ever runs for
+  // this client, so the secret and the redirect URLs stay empty. `type` is
+  // 'confidential' rather than 'public' because 'public' would mean "no client
+  // secret required" if anyone ever wired the real flow up.
+  //
+  // `disabled` is the operator kill switch — flipping it to true revokes every
+  // Ask Moji token at once (apps/mcp/src/auth/resolveViewer.ts). The mint helper
+  // upserts with `update: {}` so re-minting never flips it back.
+  const askMojiClient = await prisma.oauthApplication.upsert({
+    where: { clientId: 'classmoji-ask-moji' },
+    update: {},
+    create: {
+      name: 'Ask Moji',
+      clientId: 'classmoji-ask-moji',
+      clientSecret: '',
+      redirectUrls: '',
+      type: 'confidential',
+      disabled: false,
+    },
+  });
+
   // ── Foreign classroom ───────────────────────────────────────────────────
   // classmoji-other-class: none of the test identities are members — exercises
   // "not a member" denials and S1 cross-classroom UUID rejection
@@ -358,6 +385,7 @@ async function main() {
   console.log(
     `   Foreign:     ${otherClassroom.slug} (own owner/student — no test-identity members)`
   );
+  console.log(`   OAuth app:   ${askMojiClient.clientId} (Ask Moji → MCP, enabled)`);
   console.log(`\nSign in via GitHub OAuth → auto-join as OWNER + ASSISTANT + STUDENT.`);
   console.log(`Your student data (graded Part 1 + open Part 2) is created on first login.`);
 }

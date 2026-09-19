@@ -18,25 +18,6 @@ export const createManyInvites = async (
 };
 
 /**
- * Find all invites by school email
- * Used during registration to auto-claim invites for a student
- * @param {string} schoolEmail - Student's school email
- * @returns {Promise<Object[]>}
- */
-export const findInvitesByEmail = async (
-  schoolEmail: string
-): Promise<Prisma.ClassroomInviteGetPayload<{ include: { classroom: true } }>[]> => {
-  return getPrisma().classroomInvite.findMany({
-    where: {
-      school_email: { equals: schoolEmail, mode: 'insensitive' },
-    },
-    include: {
-      classroom: true,
-    },
-  });
-};
-
-/**
  * Find invites matching any of the given emails (case-insensitive).
  * Used during registration to claim invites issued to either the student's
  * school email or the email on their GitHub profile.
@@ -96,4 +77,68 @@ export const deleteManyInvites = async (ids: string[]): Promise<{ count: number 
   return getPrisma().classroomInvite.deleteMany({
     where: { id: { in: ids } },
   });
+};
+
+/**
+ * Claim every pending invite addressed to this user, under either address we
+ * hold for them (`email` and `provider_email`).
+ *
+ * Called on login and whenever an email changes, NOT only at registration. An
+ * invite issued to an address the student did not register with used to strand
+ * them permanently: the single claim path ran once and never again, so the
+ * membership was never created and the invite sat pending forever, with nothing
+ * surfacing the failure to either party.
+ *
+ * Idempotent by construction, because both callers run repeatedly:
+ * `createMany({ skipDuplicates: true })` against the
+ * `(classroom_id, user_id, role)` unique key. A plain `create` throws P2002 the
+ * second time, which is exactly what the registration loop used to do.
+ *
+ * The membership write and the invite delete share one transaction, so an
+ * invite is never consumed without the membership landing.
+ *
+ * Deliberately does NOT filter by classroom status, matching `roster.addStudents`,
+ * which enrols an existing user with no status check either — one rule for how a
+ * student lands on a roster, whether or not they already had an account.
+ *
+ * Be precise about what that means, because the obvious reassurance is wrong:
+ * `canEnterClassroom` only refuses UNPUBLISHED, so an ARCHIVED classroom's invite
+ * really does resolve, and the student gets a card in the Archived section. That
+ * is the same card `addStudents` would have given them.
+ */
+export const claimPendingInvites = async (
+  userId: string
+): Promise<{ claimed: number; classroomIds: string[] }> => {
+  const prisma = getPrisma();
+
+  const user = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { email: true, provider_email: true },
+  });
+  if (!user) return { claimed: 0, classroomIds: [] };
+
+  const invites = await findInvitesByAnyEmail([user.email, user.provider_email]);
+  if (invites.length === 0) return { claimed: 0, classroomIds: [] };
+
+  // One membership per classroom even if the same classroom invited both of the
+  // user's addresses, or the same address under two casings — `school_email` is
+  // stored as typed and its unique key is case-sensitive.
+  const classroomIds = Array.from(new Set(invites.map(invite => invite.classroom_id)));
+
+  await prisma.$transaction([
+    prisma.classroomMembership.createMany({
+      data: classroomIds.map(classroom_id => ({
+        classroom_id,
+        user_id: userId,
+        role: 'STUDENT' as const,
+        has_accepted_invite: false,
+      })),
+      skipDuplicates: true,
+    }),
+    prisma.classroomInvite.deleteMany({
+      where: { id: { in: invites.map(invite => invite.id) } },
+    }),
+  ]);
+
+  return { claimed: classroomIds.length, classroomIds };
 };

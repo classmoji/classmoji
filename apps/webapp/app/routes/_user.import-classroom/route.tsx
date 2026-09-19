@@ -18,6 +18,10 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
   if (!authData) return redirect('/');
   return {
     triggerConfigured: Boolean(process.env.TRIGGER_SECRET_KEY || process.env.TRIGGER_ACCESS_TOKEN),
+    // The import is deliberately GitHub-free, so a freshly imported classroom's
+    // org routinely has no App installation. The completion screen offers to
+    // install one, which needs the app's name to build the popup URL.
+    githubAppName: process.env.GITHUB_APP_NAME,
   };
 };
 
@@ -37,7 +41,7 @@ interface ImportActionData {
 const ImportClassroom = ({ loaderData }: Route.ComponentProps) => {
   const navigate = useNavigate();
   const fetcher = useFetcher<ImportActionData>();
-  const { triggerConfigured } = loaderData;
+  const { triggerConfigured, githubAppName } = loaderData;
 
   const [currentStep, setCurrentStep] = useState(0);
   const [classrooms, setClassrooms] = useState<ListedClassroom[]>([]);
@@ -123,6 +127,7 @@ const ImportClassroom = ({ loaderData }: Route.ComponentProps) => {
             sessionId={session.id}
             expected={session.expected}
             single={session.single}
+            githubAppName={githubAppName}
           />
         )}
 

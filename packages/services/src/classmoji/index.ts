@@ -19,6 +19,9 @@ import * as assignmentGradeService from './assignmentGrade.service.ts';
 import * as auditService from './audit.service.ts';
 import * as calendarService from './calendar.service.ts';
 import * as icsGeneratorService from './icsGenerator.service.ts';
+import * as formService from './form.service.ts';
+import * as formResponseService from './formResponse.service.ts';
+import * as formTeamResolverService from './formTeamResolver.ts';
 import * as pageService from './page.service.ts';
 import * as pageContentService from './pageContent.service.ts';
 import * as siteService from './site.service.ts';
@@ -30,7 +33,29 @@ import * as regradeRequestService from './regradeRequest.service.ts';
 import * as gitRepoService from './gitRepo.service.ts';
 import * as subscriptionService from './subscription.service.ts';
 import * as entitlementService from './entitlement.service.ts';
+import * as instructorAudienceService from './instructorAudience.service.ts';
+import * as surveyService from './survey.service.ts';
 export { ClassroomSettingsEntitlementError } from './classroom.service.ts';
+// Installation repair: the refusal every caller has to tell apart from "not
+// installed", plus the shapes its results come back in.
+export {
+  GitHubRateLimitedError,
+  validateInstallationIdentity,
+  lookupInstallationForOrg,
+  listAppInstallations,
+  claimInstallationIfNull,
+  clearInstallationIfMatches,
+  repairInstallation,
+} from './gitOrganization.service.ts';
+export type {
+  InstallationLike,
+  InstallationAccountLike,
+  InstallationRejection,
+  InstallationValidation,
+  InstallationLookup,
+  RepairInstallationResult,
+  RepairInstallationOptions,
+} from './gitOrganization.service.ts';
 import * as teamMembershipService from './teamMembership.service.ts';
 import * as teamService from './team.service.ts';
 import * as teamTagService from './teamTag.service.ts';
@@ -47,6 +72,15 @@ import * as githubClassroomApiService from './githubClassroomApi.service.ts';
 import * as githubUserTokenService from './githubUserToken.service.ts';
 import * as classroomInviteService from './classroomInvite.service.ts';
 import * as contentManifestService from './contentManifest.service.ts';
+import * as contentAssetsService from './contentAssets.service.ts';
+import * as contentDeliveryService from './contentDelivery.service.ts';
+import * as contentIndexService from './contentIndex.service.ts';
+import * as contentSearchService from './contentSearch.service.ts';
+import * as docsIndexService from './docsIndex.service.ts';
+import * as docsSearchService from './docsSearch.service.ts';
+import * as deckRenderTokenService from './deckRenderToken.service.ts';
+import * as deckThumbnailContract from './deckThumbnail.contract.ts';
+import * as deckThumbnailService from './deckThumbnail.service.ts';
 import * as resourceViewService from './resourceView.service.ts';
 import * as gitRepoAnalyticsService from './repoAnalytics.service.ts';
 import * as dashboardService from './dashboard.service.ts';
@@ -72,6 +106,9 @@ const ClassmojiService = {
   audit: auditService,
   calendar: calendarService,
   icsGenerator: icsGeneratorService,
+  form: formService,
+  formResponse: formResponseService,
+  formTeam: formTeamResolverService,
   page: pageService,
   pageContent: pageContentService,
   site: siteService,
@@ -83,6 +120,8 @@ const ClassmojiService = {
   gitRepo: gitRepoService,
   subscription: subscriptionService,
   entitlement: entitlementService,
+  instructorAudience: instructorAudienceService,
+  survey: surveyService,
   teamMembership: teamMembershipService,
   team: teamService,
   teamAdmin: teamAdminService,
@@ -100,6 +139,22 @@ const ClassmojiService = {
   githubUserToken: githubUserTokenService,
   classroomInvite: classroomInviteService,
   contentManifest: contentManifestService,
+  contentAssets: contentAssetsService,
+  contentDelivery: contentDeliveryService,
+  contentIndex: contentIndexService,
+  contentSearch: contentSearchService,
+  // The PRODUCT DOCUMENTATION index — a second, classroom-independent corpus.
+  // Namespaced beside `contentIndex` rather than folded into it because it
+  // writes a different table with no `classroom_id`, and the one thing that
+  // must never happen is a global row reaching a per-classroom statement.
+  docsIndex: docsIndexService,
+  docsSearch: docsSearchService,
+  deckRenderToken: deckRenderTokenService,
+  // One namespace, two files. They read as a single thing to a caller
+  // (`deckThumbnail.thumbnailPathFor`, `deckThumbnail.enqueueDeckThumbnail`)
+  // and are split only because the contract half is imported by the slides
+  // render route and must stay free of the Trigger.dev client.
+  deckThumbnail: { ...deckThumbnailContract, ...deckThumbnailService },
   resourceView: resourceViewService,
   repoAnalytics: gitRepoAnalyticsService,
   dashboard: dashboardService,
@@ -132,6 +187,9 @@ export {
   auditService,
   calendarService,
   icsGeneratorService,
+  formService,
+  formResponseService,
+  formTeamResolverService,
   pageService,
   pageContentService,
   siteService,
@@ -160,6 +218,13 @@ export {
   githubUserTokenService,
   classroomInviteService,
   contentManifestService,
+  contentAssetsService,
+  contentDeliveryService,
+  contentIndexService,
+  contentSearchService,
+  deckRenderTokenService,
+  deckThumbnailContract,
+  deckThumbnailService,
   resourceViewService,
   gitRepoAnalyticsService,
   dashboardService,

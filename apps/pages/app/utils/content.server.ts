@@ -39,10 +39,14 @@ interface PageContentResult {
  * @param options.ref - Git ref to read from (e.g. the page's preview branch).
  * @param options.skipCache - Bypass the 60s ContentService cache (sha-bearing
  *   reads that seed an expectedSha MUST pass true).
+ * @param options.viaWorker - Read by SHA through the delivery layer. For
+ *   RENDER reads only: it makes a save visible the moment it returns and costs
+ *   no GitHub call, but a preview branch has no map rows and the editor's own
+ *   load must see the branch it will write to.
  */
 export async function loadPageContent(
   page: PageForContent,
-  options: { ref?: string; skipCache?: boolean } = {}
+  options: { ref?: string; skipCache?: boolean; viaWorker?: boolean } = {}
 ): Promise<PageContentResult> {
   const { format, blocks, coverImage, sha } = await ClassmojiService.pageContent.loadPageContent(
     page,
@@ -78,6 +82,11 @@ export async function savePageContent(
  * 60s cache and the write is CAS'd on the read's sha, so a cover-image change
  * can never revert content edits that landed in between (throws status 409
  * instead; callers surface "page changed — try again").
+ *
+ * The blank-blocks branch below is reached only for a page that genuinely has
+ * no content file: the read rejects when it cannot reach the repo rather than
+ * reporting a live page as having none, so nothing here starts a whole-file
+ * rewrite from an empty document on a failed read.
  */
 export async function savePageCoverImage(
   page: PageForContent,
@@ -112,11 +121,15 @@ export async function savePageCoverImage(
 /**
  * Upload a file to the page's assets folder on GitHub.
  * Converts the Web API File to a Node.js Buffer for the service.
+ *
+ * `url` and `path` are both the repo path — the reference to STORE. `displayUrl`
+ * is the signed URL to show it with right now, and is null when the delivery
+ * layer is not configured.
  */
 export async function uploadPageAsset(
   page: PageForContent,
   file: File
-): Promise<{ url: string; path: string }> {
+): Promise<{ url: string; path: string; displayUrl: string | null }> {
   const buffer = Buffer.from(await file.arrayBuffer());
   return ClassmojiService.pageContent.uploadPageAsset(page, buffer, file.name);
 }

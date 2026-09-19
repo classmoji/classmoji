@@ -7,15 +7,26 @@ interface ModuleWriteInput {
   description?: string | null;
 }
 
+/**
+ * Compile-time exhaustiveness guard for the switches over ModuleItemType below.
+ * Adding a value to the enum without teaching every switch about it becomes a
+ * type error here; if one is ever reached at runtime it throws rather than
+ * silently rendering the item as "not published" / "not in this classroom".
+ */
+const unhandledItemType = (type: never): never => {
+  throw new Error(`Unhandled ModuleItemType: ${String(type)}`);
+};
+
 /** ModuleItemType → the nullable target column it populates on ModuleItem. */
 const ITEM_TYPE_COLUMN: Record<
   ModuleItemType,
-  'page_id' | 'repository_id' | 'quiz_id' | 'slide_id'
+  'page_id' | 'repository_id' | 'quiz_id' | 'slide_id' | 'form_id'
 > = {
   PAGE: 'page_id',
   REPOSITORY: 'repository_id',
   QUIZ: 'quiz_id',
   SLIDE: 'slide_id',
+  FORM: 'form_id',
 };
 
 // Items carry their full target plus, for repositories, the nested assignments
@@ -25,6 +36,7 @@ const ITEM_INCLUDE = {
   page: true,
   slide: true,
   quiz: true,
+  form: true,
   repository: {
     include: {
       assignments: { orderBy: { title: 'asc' } },
@@ -54,6 +66,7 @@ export type ModuleItemVisibility = {
   slide?: { is_draft: boolean; is_public: boolean } | null;
   repository?: { is_published: boolean } | null;
   quiz?: { status: string } | null;
+  form?: { status: string; access: string } | null;
 };
 
 /**
@@ -71,8 +84,13 @@ export const isItemPublished = (item: ModuleItemVisibility): boolean => {
       return !!item.repository && item.repository.is_published;
     case 'QUIZ':
       return !!item.quiz && item.quiz.status !== 'DRAFT';
+    // A CLOSED form stays visible on purpose: students should still see the
+    // thing they were asked to fill in, reading honestly as "Closed". Only a
+    // DRAFT — never published, no revision to render — is hidden.
+    case 'FORM':
+      return !!item.form && item.form.status !== 'DRAFT';
     default:
-      return false;
+      return unhandledItemType(item.item_type);
   }
 };
 
@@ -85,6 +103,10 @@ export const isItemPublished = (item: ModuleItemVisibility): boolean => {
  *   - REPOSITORY and QUIZ are never shown, published or not, because the title
  *     alone leaks the assignment ("Final Project: Raytracer", "Quiz 3:
  *     Pointers") before the course wants it public.
+ *   - FORM additionally requires `access: PUBLIC`. A PUBLIC form is already a
+ *     link anyone may open and fill without signing in — `access` is the
+ *     author's opt-in, exactly as `is_public` is for a page or slide. A
+ *     CLASSROOM form is members-only and is never named on the public site.
  *
  * This is a predicate about the ITEM, not about whether a row appears. The
  * public schedule reads it together with isItemPublished and renders a typed,
@@ -100,11 +122,13 @@ export const isItemPubliclyVisible = (item: ModuleItemVisibility): boolean => {
       return !!item.page && !item.page.is_draft && item.page.is_public;
     case 'SLIDE':
       return !!item.slide && !item.slide.is_draft && item.slide.is_public;
+    case 'FORM':
+      return !!item.form && item.form.status !== 'DRAFT' && item.form.access === 'PUBLIC';
     case 'REPOSITORY':
     case 'QUIZ':
       return false;
     default:
-      return false;
+      return unhandledItemType(item.item_type);
   }
 };
 
@@ -118,8 +142,10 @@ const isItemTargetInClassroom = (item: ModuleItemWithTargets, classroomId: strin
       return item.repository?.classroom_id === classroomId;
     case 'QUIZ':
       return item.quiz?.classroom_id === classroomId;
+    case 'FORM':
+      return item.form?.classroom_id === classroomId;
     default:
-      return false;
+      return unhandledItemType(item.item_type);
   }
 };
 
@@ -230,12 +256,15 @@ export const hasModulesForClassroom = async (
 };
 
 /**
- * The four content types a module item can point at, with the minimal fields
+ * The five content types a module item can point at, with the minimal fields
  * the admin "add item" picker needs (id, label, and publish state for a pill).
+ * Forms additionally carry `access` and `closes_at`, which the picker shows so
+ * the instructor can tell a members-only form from a public one and see the
+ * close date that will render as the item's due date.
  */
 export const getCandidateContent = async (classroomId: string) => {
   const prisma = getPrisma();
-  const [repositories, pages, slides, quizzes] = await Promise.all([
+  const [repositories, pages, slides, quizzes, forms] = await Promise.all([
     prisma.repository.findMany({
       where: { classroom_id: classroomId },
       select: { id: true, title: true, is_published: true },
@@ -256,8 +285,13 @@ export const getCandidateContent = async (classroomId: string) => {
       select: { id: true, name: true, status: true },
       orderBy: { name: 'asc' },
     }),
+    prisma.form.findMany({
+      where: { classroom_id: classroomId },
+      select: { id: true, title: true, slug: true, status: true, access: true, closes_at: true },
+      orderBy: { title: 'asc' },
+    }),
   ]);
-  return { repositories, pages, slides, quizzes };
+  return { repositories, pages, slides, quizzes, forms };
 };
 
 export const create = async (classroomId: string, input: ModuleWriteInput) => {
@@ -321,6 +355,14 @@ const assertTargetInClassroom = async (
         select,
       });
       break;
+    case ModuleItemType.FORM:
+      target = await prisma.form.findFirst({
+        where: { id: targetId, classroom_id: classroomId },
+        select,
+      });
+      break;
+    default:
+      return unhandledItemType(type);
   }
 
   if (!target) throw new Error('Module item target not found in classroom');
@@ -337,7 +379,7 @@ export const updateForClassroom = async (
 
 export const deleteById = async (id: string, classroomId?: string) => {
   if (classroomId) await assertModuleInClassroom(id, classroomId);
-  // ModuleItem rows cascade; the underlying pages/repos/quizzes/slides remain.
+  // ModuleItem rows cascade; the underlying pages/repos/quizzes/slides/forms remain.
   return getPrisma().module.delete({ where: { id } });
 };
 
@@ -449,4 +491,5 @@ export const MODULE_ITEM_TYPES: ModuleItemType[] = [
   ModuleItemType.REPOSITORY,
   ModuleItemType.QUIZ,
   ModuleItemType.SLIDE,
+  ModuleItemType.FORM,
 ];

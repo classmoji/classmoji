@@ -5,6 +5,7 @@ import { fileURLToPath } from 'url';
 // PrismaClient eagerly at module import, so the runtime import MUST happen
 // after DATABASE_URL is resolved (see getTestPrisma's dynamic import).
 import type getPrismaType from '@classmoji/database';
+import { assertWritableDatabase } from '../../../../tests/content-delivery/databaseGuard';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -34,11 +35,38 @@ export async function getTestPrisma(): Promise<TestPrisma> {
     const url = databaseUrlFromDevContext();
     if (url) process.env.DATABASE_URL = url;
   }
+  // Every suite that reaches the database goes through here, and several of
+  // them write: sessions are minted, fixtures are created, classroom columns
+  // are flipped. Which database that lands in is decided by whatever
+  // DATABASE_URL happened to be exported — a value that is routinely pointed at
+  // a deployed environment for an afternoon's debugging and not put back. The
+  // guard is on the resolved host, so intent (E2E_TARGET, NODE_ENV) cannot vouch
+  // for connectivity.
+  assertWritableDatabase('open a test database connection');
   if (!cached) {
     const { default: getPrisma } = await import('@classmoji/database');
     cached = getPrisma();
   }
   return cached;
+}
+
+/**
+ * The service layer, loaded the way `getTestPrisma` loads the client.
+ *
+ * `@classmoji/services` re-exports `@classmoji/database`, which constructs its
+ * PrismaClient at module scope — so the dynamic import must happen AFTER
+ * DATABASE_URL has been resolved from `.dev-context`. A static import at the
+ * top of a spec would connect to whatever DATABASE_URL was set when Playwright
+ * started, which on a devport is the wrong database.
+ *
+ * Use this when the assertion should go through the same function the app goes
+ * through (`listByFormId` rather than a hand-written `findMany`): the point of
+ * the check is then the service's behaviour, not the table's contents.
+ */
+export async function getTestServices() {
+  await getTestPrisma();
+  const { ClassmojiService } = await import('@classmoji/services');
+  return ClassmojiService;
 }
 
 export interface PageRow {

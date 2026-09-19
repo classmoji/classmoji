@@ -16,7 +16,7 @@ import { useElementSelection } from '../ElementSelectionContext';
  */
 
 export default function VideoProperties({ element }: { element: HTMLVideoElement }) {
-  const { onContentChange, onSaveContent } = useElementSelection();
+  const { onContentChange, onSaveContent, isPro } = useElementSelection();
 
   // State for all properties
   const [url, setUrl] = useState(() => element?.src || '');
@@ -121,6 +121,9 @@ export default function VideoProperties({ element }: { element: HTMLVideoElement
   // Upload to Cloudinary for optimized CDN delivery
   const handleUploadToCloudinary = useCallback(async () => {
     if (!element?.src) return;
+    // The button is hidden for non-Pro classrooms; this only matters if a
+    // stale render slips through. The route refuses it either way.
+    if (!isPro) return;
 
     // Get slide ID from the URL path
     const pathParts = window.location.pathname.split('/');
@@ -173,7 +176,7 @@ export default function VideoProperties({ element }: { element: HTMLVideoElement
     } finally {
       setUploading(false);
     }
-  }, [element, onContentChange]);
+  }, [element, isPro, onContentChange, onSaveContent]);
 
   // Check if video is already on Cloudinary
   const isCloudinaryUrl = url?.includes('cloudinary.com');
@@ -210,7 +213,13 @@ export default function VideoProperties({ element }: { element: HTMLVideoElement
               <span>Hosted on Cloudinary CDN</span>
             </div>
           ) : (
-            url && (
+            // Pro-only: Cloudinary bills per account. A classroom that is not
+            // Pro is not offered the upload at all — the route refuses it too.
+            // The "already hosted" branch above stays visible either way, so a
+            // classroom that has since dropped to free can still see and manage
+            // videos it uploaded while it was Pro.
+            url &&
+            isPro && (
               <Button
                 icon={<CloudUploadOutlined />}
                 onClick={handleUploadToCloudinary}
@@ -223,8 +232,10 @@ export default function VideoProperties({ element }: { element: HTMLVideoElement
             )
           )}
           {!isCloudinaryUrl && url && (
-            <p className="text-xs text-gray-400 mt-1">
-              Optimize for web delivery & format compatibility
+            <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+              {isPro
+                ? 'Optimize for web delivery & format compatibility'
+                : 'Cloudinary video hosting is a Pro feature.'}
             </p>
           )}
         </div>

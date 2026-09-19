@@ -121,6 +121,33 @@ enum ClassroomStatus {
   UNPUBLISHED
 }
 
+/// Who may fill a form, and therefore which identity semantics its responses
+/// carry. PUBLIC = anyone with the link; identity is an email address proven by
+/// a magic link. CLASSROOM = signed-in members only; identity is the session's
+/// user. Frozen once a form leaves DRAFT — flipping mid-collection would mix
+/// two identity semantics into one response set.
+enum FormAccess {
+  PUBLIC
+  CLASSROOM
+}
+
+enum FormStatus {
+  DRAFT
+  OPEN
+  CLOSED
+}
+
+/// PENDING_VERIFICATION is the public path's holding state: the answers are
+/// stored but count for nothing until the magic link is clicked. DRAFT is the
+/// server-side autosave row for identified fillers. The response cap counts
+/// SUBMITTED rows carrying a verified_at, and nothing else; FIFO order is a
+/// separate question, answered by `submitted_at` (see `listByFormId`).
+enum SubmissionState {
+  DRAFT
+  PENDING_VERIFICATION
+  SUBMITTED
+}
+
 // ============================================================================
 // BETTERAUTH TABLES
 // ============================================================================
@@ -296,6 +323,11 @@ model User {
   oauth_applications            OauthApplication[]
   oauth_access_tokens           OauthAccessToken[]
   oauth_consents                OauthConsent[]
+  forms_created                 Form[]
+  form_responses                FormResponse[]            @relation("FormResponseRespondent")
+  /// Rows this user typed in on somebody else's behalf — see FormResponse.added_by.
+  form_responses_added          FormResponse[]            @relation("FormResponseAddedBy")
+  survey_responses              SurveyResponse[]
 
   @@unique([provider, provider_id])
   @@index([provider, login])
@@ -343,37 +375,65 @@ model GitOrganization {
 }
 
 model Classroom {
-  id                  String          @id @default(uuid())
+  id                           String          @id @default(uuid())
   // GLOBALLY unique. The slug is the sole key in every app URL — /admin/:class,
   // /student/:class, the ICS calendar feed, and the autograde callback — and
   // none of them carry an org segment, so a slug reused across orgs resolves to
   // the wrong classroom. e.g. "cs101-fall-2025".
-  slug                String          @unique
-  git_org_id          String
-  name                String
+  slug                         String          @unique
+  git_org_id                   String
+  name                         String
   // Internal identifier only. Historically the content repo name was derived
   // as content-{orgLogin}-{content_namespace}; it no longer names any repo.
-  content_namespace   String
+  content_namespace            String
   // The GitHub repo (in git_organization) holding this classroom's pages &
   // slides content. STORED and fully user-editable — never re-derived. Set at
   // creation for every classroom; defaults to `content-{content_namespace}`.
   // NOT the same as ClassroomSettings.content_repo_name, which is a legacy
   // ORG-level content repo override (`content-{login}`) for a DIFFERENT repo.
-  content_repo        String
+  content_repo                 String
   // GitHub Classroom course id, set on import; null for classrooms created
   // directly in Classmoji. Unique because one GitHub Classroom course maps to at
   // most one Classmoji classroom, which makes it the stable idempotency key for
   // re-imports — the slug can be suffixed on collision, so it can't be.
   // (Postgres allows many NULLs under a unique index, which is the semantics we
   // want: existing imported rows stay null and never collide.)
-  github_classroom_id Int?            @unique
-  status              ClassroomStatus @default(ACTIVE)
-  is_archived         Boolean         @default(false)
+  github_classroom_id          Int?            @unique
+  status                       ClassroomStatus @default(ACTIVE)
+  is_archived                  Boolean         @default(false)
   // True for the auto-provisioned per-user "Example Course" sandbox used by the
   // in-classroom onboarding tour. Backed by a mock GitOrganization (no live GitHub).
-  is_example          Boolean         @default(false)
-  created_at          DateTime        @default(now())
-  updated_at          DateTime        @default(now()) @updatedAt
+  is_example                   Boolean         @default(false)
+  // Edge-cache bust for this classroom's content. Every signed content URL
+  // carries it, so bumping it changes ALL of them at once and the CDN misses
+  // on every asset until it refills. Old URLs STILL VERIFY — this is not a
+  // revocation, and nothing already handed out stops working; it only stops
+  // being the URL the app links to.
+  content_key_version          Int             @default(0)
+  // Per-classroom switch for the signed content delivery layer. The env vars
+  // say whether this DEPLOYMENT can sign; this says whether this CLASSROOM
+  // should. Both must be true before a URL is rewritten, and either being false
+  // gives the identical legacy behaviour (the resolvers pass references
+  // through). Defaults true: new classrooms get the delivery layer, and an env
+  // without the signing secrets still behaves exactly as it did before.
+  content_delivery_enabled     Boolean         @default(true)
+  // When the asset map was last rebuilt FROM THE REPO'S TREE — a full sync, and
+  // only a full sync. This is what `ensureContentAssets` measures its 24h
+  // refresh against, deliberately NOT the newest `content_assets.synced_at`:
+  // incremental webhook applies and upload-time writes both stamp rows `now`,
+  // so reading the rows would let a single upload make a stale map look fresh
+  // and suppress the daily repair for another day. Null means never synced.
+  content_assets_synced_at     DateTime?
+  // The content-repo commit the map was last brought level with: the head commit
+  // a full sync read the tree at, or the `after` sha an incremental apply
+  // landed. This is how a DROPPED push webhook becomes visible — the next push
+  // names the commit it built on, and if that is not this value then something
+  // changed the repo the map never saw, so the run escalates to a full tree read
+  // rather than applying a diff against a state we do not have. Null means never
+  // synced: no chain yet, so nothing to have a gap in.
+  content_assets_synced_commit String?
+  created_at                   DateTime        @default(now())
+  updated_at                   DateTime        @default(now()) @updatedAt
 
   git_organization      GitOrganization       @relation(fields: [git_org_id], references: [id], onDelete: Cascade)
   settings              ClassroomSettings?
@@ -398,6 +458,9 @@ model Classroom {
   notifications         Notification[]
   import_job            ImportJob?
   site                  ClassroomSite?
+  forms                 Form[]
+  content_assets        ContentAsset[]
+  content_index         ContentIndex[]
 
   // Logically redundant now that slug is globally unique, but retained: it is
   // the compound key live upserts select on (githubClassroomImport, example
@@ -452,22 +515,22 @@ model ClassroomSettings {
 // There is deliberately NO nav column: site navigation is authored content (a
 // "Page directory" block on a page), not configuration.
 model ClassroomSite {
-  id           String @id @default(uuid())
-  classroom_id String @unique
+  id                        String    @id @default(uuid())
+  classroom_id              String    @unique
   // A single lowercase DNS label — validated by SUBDOMAIN_REGEX in
   // packages/utils/src/subdomains.ts and by a CHECK constraint in the
   // add_classroom_sites migration (the two must stay byte-identical). Labels in
   // RESERVED_SUBDOMAINS are refused in the service layer, not by the DB: the
   // list is product policy and changes without a migration.
-  subdomain    String @unique
+  subdomain                 String    @unique
   // A site can only be enabled once home_page_id is set — enforced in
   // site.service (HOME_PAGE_REQUIRED), not by the DB, because it is a
   // cross-column rule the FK cannot express.
-  is_enabled   Boolean @default(false)
+  is_enabled                Boolean   @default(false)
   // SetNull, not Cascade: deleting the home page must take the site offline for
   // repair, never delete the site row (and with it the claimed subdomain).
-  home_page_id String?
-  show_schedule Boolean @default(true)
+  home_page_id              String?
+  show_schedule             Boolean   @default(true)
   // The IANA zone the PUBLIC schedule renders deadlines in, e.g.
   // `America/New_York`. Null = fall back to UTC, and the schedule then LABELS
   // the date as UTC rather than printing a bare, ambiguous one.
@@ -483,7 +546,7 @@ model ClassroomSite {
   // database gains and renames zones without a migration, so the authority has
   // to be the runtime's own tz data (same reasoning as RESERVED_SUBDOMAINS).
   // The CHECK in add_site_timezone is a shape floor only.
-  timezone     String?
+  timezone                  String?
   // An instructor-owned hostname (PRO only) that serves this same site, stored
   // as a bare lowercase domain with no scheme, port or trailing dot — the exact
   // shape a Host header normalizes to, because that is what it is compared
@@ -492,7 +555,7 @@ model ClassroomSite {
   // CHECK in the add_custom_domains migration; the platform-domain and
   // reserved-suffix refusals live in site.service (product policy, no
   // migration when it changes).
-  custom_domain String? @unique
+  custom_domain             String?   @unique
   // Set the first time this claim actually SERVES over its own hostname — a
   // completed TLS handshake on a cert we asked Fly to issue is the ownership
   // proof. Per CLAIM, not per hostname: cleared whenever custom_domain is
@@ -500,8 +563,8 @@ model ClassroomSite {
   // hand the next claimant an already-verified domain. Gates the canonical/
   // og:url flip, never the serving decision itself.
   custom_domain_verified_at DateTime?
-  created_at    DateTime @default(now())
-  updated_at    DateTime @default(now()) @updatedAt
+  created_at                DateTime  @default(now())
+  updated_at                DateTime  @default(now()) @updatedAt
 
   classroom Classroom @relation(fields: [classroom_id], references: [id], onDelete: Cascade)
   home_page Page?     @relation("SiteHomePage", fields: [home_page_id], references: [id], onDelete: SetNull)
@@ -664,9 +727,10 @@ enum ModuleItemType {
   REPOSITORY
   QUIZ
   SLIDE
+  FORM
 }
 
-// A single ordered entry in a Module's content list. Exactly one of the four
+// A single ordered entry in a Module's content list. Exactly one of the five
 // *_id fields is set (enforced in the service layer + a CHECK migration).
 // An item may appear in multiple modules, but not twice in the same module.
 model ModuleItem {
@@ -678,6 +742,7 @@ model ModuleItem {
   repository_id String?
   quiz_id       String?
   slide_id      String?
+  form_id       String?
   created_at    DateTime       @default(now())
   updated_at    DateTime       @default(now()) @updatedAt
 
@@ -686,11 +751,13 @@ model ModuleItem {
   repository Repository? @relation(fields: [repository_id], references: [id], onDelete: Cascade)
   quiz       Quiz?       @relation(fields: [quiz_id], references: [id], onDelete: Cascade)
   slide      Slide?      @relation(fields: [slide_id], references: [id], onDelete: Cascade)
+  form       Form?       @relation(fields: [form_id], references: [id], onDelete: Cascade)
 
   @@unique([module_id, page_id])
   @@unique([module_id, repository_id])
   @@unique([module_id, quiz_id])
   @@unique([module_id, slide_id])
+  @@unique([module_id, form_id])
   @@index([module_id])
   @@map("module_items")
 }
@@ -1158,21 +1225,66 @@ model QuizAttempt {
 // CONTENT (Slides, Pages, Calendar)
 // ============================================================================
 
+/// What a Slide row actually IS. DECK is the reveal.js deck this table has
+/// always held; FILE is an uploaded document (PDF/PPT/PPTX/KEY) students
+/// download; LINK is an external https URL a viewer is redirected to. All three
+/// share one id and one `${SLIDES_URL}/${id}` link, which is why this is a
+/// column rather than three tables — every module item, calendar link, resource
+/// link and public-site reference keeps pointing at the same place.
+enum SlideKind {
+  DECK
+  FILE
+  LINK
+}
+
 model Slide {
-  id                 String   @id @default(uuid())
+  id                 String    @id @default(uuid())
   classroom_id       String
   title              String
   slug               String
   content_path       String
+  kind               SlideKind @default(DECK)
   multiplex_id       String?
   multiplex_secret   String?
-  is_public          Boolean  @default(false)
-  is_draft           Boolean  @default(true)
-  allow_team_edit    Boolean  @default(false)
-  show_speaker_notes Boolean  @default(false)
+  is_public          Boolean   @default(false)
+  is_draft           Boolean   @default(true)
+  allow_team_edit    Boolean   @default(false)
+  show_speaker_notes Boolean   @default(false)
   created_by         String
-  created_at         DateTime @default(now())
-  updated_at         DateTime @default(now()) @updatedAt
+  created_at         DateTime  @default(now())
+  updated_at         DateTime  @default(now()) @updatedAt
+
+  // Stored card image for the slides index. `thumbnail_path` is repo-relative
+  // (`slides/<slug>/thumbnail.webp`), never a URL — signatures expire and the
+  // same file is addressed differently depending on the classroom's delivery
+  // gate. `thumbnail_rendered_sha` is the blob sha of the index.html the
+  // picture was taken of, and skipping a render when it still matches is what
+  // keeps a save that did not change slide one from committing a new WebP.
+  // `thumbnail_rendered_at` is the LAST RENDER ATTEMPT — success OR failure —
+  // because the index rate-limits its on-view enqueue against it, and a deck
+  // whose renders keep failing must not be re-asked for on every page load.
+  thumbnail_path         String?
+  thumbnail_rendered_sha String?
+  thumbnail_rendered_at  DateTime?
+
+  // Where a non-DECK slide's content actually is. All five are NULL for a DECK
+  // and that is the only state a deck ever has.
+  //
+  // FILE: `source_path` is the repo-relative path of the uploaded document
+  // (`slides/<slug>/<storage-name>`), never a URL — the download URL is signed
+  // per request from the blob sha the asset map holds, exactly as a deck's
+  // thumbnail is. `source_filename` is the ORIGINAL display name the browser
+  // saves it under (validated by `normalizeDownloadFilename` before it is
+  // stored), which is why it is kept apart from the sanitized ASCII storage
+  // name at the tail of `source_path`.
+  //
+  // LINK: `source_url` is the absolute https destination. Classmoji controls
+  // who sees the link, not who can open what is on the other end.
+  source_path     String?
+  source_filename String?
+  source_mime     String?
+  source_size     Int?
+  source_url      String?
 
   classroom          Classroom                @relation(fields: [classroom_id], references: [id], onDelete: Cascade)
   creator            User                     @relation(fields: [created_by], references: [id])
@@ -1482,6 +1594,33 @@ model NotificationPreference {
   @@map("notification_preferences")
 }
 
+/// One user's answer to a product question asked in the webapp, such as
+/// "how did you hear about Classmoji?". The questions themselves live in code
+/// (apps/webapp survey config); this table only holds answers, so asking a new
+/// question is a new `question_key`, not a migration. One answer per user per
+/// question; a skip is recorded too (answer = "skipped") so the prompt does not
+/// come back every login.
+model SurveyResponse {
+  id           String   @id @default(uuid())
+  user_id      String
+  question_key String
+  /// One of the question's option values, or "skipped".
+  answer       String
+  /// Free text that accompanies an "other" answer.
+  detail       String?
+  /// Role signal at answer time: "instructor" | "student" | "unknown". Kept on
+  /// the row so segmenting later does not depend on reconstructing membership
+  /// history.
+  context      String
+  created_at   DateTime @default(now())
+
+  user User @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  @@unique([user_id, question_key])
+  @@index([question_key, answer])
+  @@map("survey_responses")
+}
+
 model ProcessedWebhookEvent {
   event_id     String   @id
   source       String
@@ -1489,4 +1628,414 @@ model ProcessedWebhookEvent {
 
   @@index([source, processed_at])
   @@map("processed_webhook_events")
+}
+
+// ============================================================================
+// FORMS
+// ============================================================================
+// Unlike pages and slides, a form's DEFINITION lives in Postgres, not in the
+// classroom's GitHub content repo: responses foreign-key to the exact revision
+// they were filled against, and a Git-backed content.json cannot participate in
+// that transaction. Definitions are immutable revisions, so editing a live form
+// never orphans the answers already collected.
+
+model Form {
+  id                  String     @id @default(uuid())
+  classroom_id        String
+  title               String
+  /// The form's address: `/{class}/forms/{slug}`. Derived from the title at
+  /// create and immutable once the form is published — a slug already in
+  /// circulation must not break. Reserved words (edit/responses/new) are
+  /// rejected in form.service, not here.
+  slug                String
+  description         String?
+  /// Frozen once status leaves DRAFT (enforced in form.service).
+  access              FormAccess @default(PUBLIC)
+  status              FormStatus @default(DRAFT)
+  /// The builder's working copy of the field list, in the same shape a
+  /// FormRevision stores. Revisions are immutable and are foreign-keyed by the
+  /// responses filled against them, so an in-progress edit cannot live in one —
+  /// it lives here until `publish` snapshots it into revision N+1.
+  draft_fields        Json?
+  /// The revision the fill page renders. Null until first publish. Deliberately
+  /// a plain column and NOT a relation: a FK here plus FormRevision.form_id
+  /// would be a cycle, and the pointer is only ever set to a revision of this
+  /// same form (form.service is the only writer).
+  current_revision_id String?
+  /// Max VERIFIED responses. Null = uncapped. Enforced atomically under a row
+  /// lock on this form, counting only submission_state SUBMITTED rows.
+  response_cap        Int?
+  closes_at           DateTime?
+  /// A filler may replace their existing response until the form closes. The
+  /// per-mode partial unique indexes hold either way: one row per identity,
+  /// overwritten rather than duplicated.
+  allow_multiple      Boolean    @default(false)
+  /// Public fills always store a server-side row (they must, to be verified).
+  /// This governs anonymous DRAFT autosave: off → localStorage only, on →
+  /// drafts persist server-side keyed by draft_token, with an on-form
+  /// disclosure. Kept indefinitely — nothing expires form responses.
+  ///
+  /// There is deliberately no cleanup job. A handful of half-started entries
+  /// costs nothing, staff rather like seeing them, and a sweep is a scheduled
+  /// task plus a retention constant plus tests to guard a problem nobody has.
+  /// If volume ever becomes one, that is the moment to design for it.
+  ///
+  /// ON by default. Losing a half-filled form to a closed tab is the ordinary
+  /// disaster, and localStorage does not survive a different device, a private
+  /// window, or cleared site data. An instructor who would rather not hold
+  /// partial answers can turn it off per form.
+  save_partials       Boolean    @default(true)
+  confirmation_email  Boolean    @default(false)
+  created_by          String
+  created_at          DateTime   @default(now())
+  updated_at          DateTime   @default(now()) @updatedAt
+
+  classroom    Classroom      @relation(fields: [classroom_id], references: [id], onDelete: Cascade)
+  creator      User           @relation(fields: [created_by], references: [id])
+  revisions    FormRevision[]
+  responses    FormResponse[]
+  module_items ModuleItem[]
+
+  @@unique([classroom_id, slug])
+  @@index([classroom_id])
+  @@map("forms")
+}
+
+/// An immutable snapshot of a form's field list. Replaces per-response
+/// definition snapshots: every response points at the revision it rendered
+/// against, so one row holds the schema for all of them.
+model FormRevision {
+  id      String @id @default(uuid())
+  form_id String
+  version Int
+  /// The versioned definition contract (see formContract.ts) — a field list,
+  /// every field carrying a uuid `id` that answers key on. Tier-1 option
+  /// sources (roster, teaching team) are MATERIALIZED to {id,label} here at
+  /// publish; Tier-2 (teammates) resolve per respondent at render and are
+  /// never stored in a revision.
+  fields  Json
+
+  created_at DateTime @default(now())
+
+  form      Form           @relation(fields: [form_id], references: [id], onDelete: Cascade)
+  responses FormResponse[]
+
+  @@unique([form_id, version])
+  @@map("form_revisions")
+}
+
+model FormResponse {
+  id               String  @id @default(uuid())
+  form_id          String
+  /// What the person actually saw. Cascade rather than Prisma's default
+  /// Restrict: deleting a form cascades to both revisions and responses, and
+  /// under Restrict that delete order is a coin flip. No path ever deletes a
+  /// revision on its own.
+  revision_id      String
+  /// Null for anonymous public submissions; the session user for classroom
+  /// fills. SetNull so a deleted account leaves the response (and its
+  /// resolved_context name snapshot) intact.
+  user_id          String?
+  /// The staff user who created this row on the respondent's behalf, via
+  /// formResponse.createResponses. Null means the respondent submitted it
+  /// themselves. SetNull so a departed staff account leaves the row intact.
+  ///
+  /// It is what keeps a staff-typed row from reading as respondent testimony.
+  /// `revision_id` is documented as "what the person actually saw", which is
+  /// not true of a row nobody filled in, and `verified_at` means a mailbox was
+  /// proven, which is not true either — both are set on a staff-added row
+  /// because the cap and the queue count exactly those. This column is how a
+  /// reader tells the two apart.
+  added_by         String?
+  /// As typed, for display. `email_normalized` (lower/trim) is the identity key
+  /// the partial unique index enforces.
+  email            String
+  email_normalized String
+  name             String?
+  /// { [fieldUuid]: value }. Repeat groups nest exactly one level:
+  /// { [groupUuid]: { [targetUserId]: { [fieldUuid]: value } } }.
+  answers          Json
+  /// Per-respondent Tier-2 snapshot: the resolved team, its scope, and the
+  /// review targets [{ user_id, name, login, removed }]. Names are snapshotted
+  /// so roster churn and account deletion never orphan a peer review — never
+  /// re-joined against the live roster.
+  resolved_context Json?
+
+  submission_state SubmissionState @default(PENDING_VERIFICATION)
+  /// Magic-link confirmation time. Set once and preserved across later edits.
+  /// The cap counts SUBMITTED rows that carry one; FIFO order is `submitted_at`
+  /// (see `listByFormId`), NOT this column — a staff-added row is verified at
+  /// the moment it is written and can still be filed at the time it was
+  /// actually received.
+  verified_at      DateTime?
+  /// Opaque cookie value keying an anonymous server-side partial (only when the
+  /// form's save_partials is on). Kept until somebody deletes it — there is no
+  /// expiry sweep.
+  draft_token      String?         @unique
+  /// Staff-only free-text triage label ("responded to", "on roster", …).
+  /// Suggestions come from the labels already used on the same form. Never
+  /// visible to the filler on any surface, including the magic-link review page.
+  staff_status     String?
+  /// Staff-only note living with the submission. Same visibility rule.
+  staff_note       String?
+
+  submitted_at DateTime @default(now())
+  created_at   DateTime @default(now())
+  updated_at   DateTime @default(now()) @updatedAt
+
+  form     Form             @relation(fields: [form_id], references: [id], onDelete: Cascade)
+  revision FormRevision     @relation(fields: [revision_id], references: [id], onDelete: Cascade)
+  // Two relations to User, so both are NAMED: `user` is the respondent (a
+  // classroom fill's session identity), `adder` is the staff member who typed
+  // the row in. Unnamed, Prisma cannot tell which back-relation is which.
+  user     User?            @relation("FormResponseRespondent", fields: [user_id], references: [id], onDelete: SetNull)
+  adder    User?            @relation("FormResponseAddedBy", fields: [added_by], references: [id], onDelete: SetNull)
+  tokens   FormMagicToken[]
+
+  // Identity uniqueness is per access mode and cannot be expressed in Prisma —
+  // two PARTIAL unique indexes are added by raw SQL in the migration:
+  //   (form_id, user_id)          WHERE user_id IS NOT NULL
+  //   (form_id, email_normalized) WHERE user_id IS NULL
+  @@index([form_id, submitted_at])
+  @@index([added_by])
+  @@map("form_responses")
+}
+
+/// Single-use, short-lived verify/edit links for public submissions. The raw
+/// token is emailed and never stored; only its sha256 hex digest lives here.
+/// `created_at` also drives the per-response send cooldown.
+model FormMagicToken {
+  id          String    @id @default(uuid())
+  response_id String
+  token_hash  String    @unique
+  expires_at  DateTime
+  used_at     DateTime?
+  created_at  DateTime  @default(now())
+
+  /// What the mail provider called the message this token was sent in.
+  ///
+  /// One token is one send, which is what makes this row the natural place to
+  /// correlate a bounce back to a response: the provider's webhook knows only a
+  /// message id, and without this it can say "something bounced" and nothing
+  /// more. Nullable because it is written AFTER the send returns — the send is
+  /// dispatched through Trigger.dev, so the id exists only inside that run —
+  /// and because every send made before this column existed has none.
+  provider_message_id String?
+  /// How delivery went, as the provider last reported it: 'SENT', 'DELIVERED',
+  /// 'BOUNCED', 'DELAYED', 'COMPLAINED'. A plain string rather than an enum
+  /// because the set belongs to the provider, and an unfamiliar event type
+  /// should become a value we ignore rather than a migration that blocks a
+  /// webhook.
+  delivery_state      String?
+  /// The provider's stated reason, for the staff row. Never shown to a filler.
+  delivery_detail     String?
+
+  response FormResponse @relation(fields: [response_id], references: [id], onDelete: Cascade)
+
+  @@index([response_id])
+  /// The webhook's only lookup key: a bounce arrives naming a message, and this
+  /// is what turns that into a response. NOT unique — a provider retry carries
+  /// the same id, and a duplicate must be a no-op rather than an error.
+  @@index([provider_message_id])
+  @@map("form_magic_tokens")
+}
+
+/// Path → git object map for a classroom's content repo, refreshed from push
+/// webhooks and a TTL sweep. Read once per page render to turn a repo path
+/// into a content-addressed, signed URL. Blob rows are files; tree rows are
+/// directories (theme folders are served by their tree SHA).
+model ContentAsset {
+  classroom_id String
+  path         String
+  sha          String
+  type         String // 'blob' | 'tree'
+  size         Int      @default(0)
+  synced_at    DateTime
+
+  classroom Classroom @relation(fields: [classroom_id], references: [id], onDelete: Cascade)
+
+  @@id([classroom_id, path])
+  @@index([classroom_id, type])
+  /// Reverse lookup: given the sha out of a signed URL, find a path that holds
+  /// it. The editor does this on save so a stored block keeps the repo path
+  /// rather than freezing a signed URL into the content. Any matching row will
+  /// do — content-addressed means every path with this sha is byte-identical.
+  @@index([classroom_id, sha])
+  /// The full sync's sweep: after stamping every row it wrote with one
+  /// `synced_at`, it deletes this classroom's rows still below that stamp —
+  /// the paths that have left the repo. Freshness is NOT read from here;
+  /// `Classroom.content_assets_synced_at` holds that, so an incremental or
+  /// upload-time row cannot pass for a completed sync.
+  @@index([classroom_id, synced_at])
+  @@map("content_assets")
+}
+
+/// One row per indexed document — or, for a document too large to embed in one
+/// call, one row per chunk of it — holding the plain text the extractor
+/// produced and its Workers AI embedding. The index is a CACHE over the content
+/// repo, never the content of record: bodies are still fetched through the
+/// delivery layer, and a row here only decides what is findable.
+///
+/// CHUNKING. The embedding client refuses input over its token cap rather than
+/// truncating it, so a document that does not fit is split at paragraph
+/// boundaries and each chunk gets its own row and its own vector. `chunk_ix` is
+/// 0 for a whole-document row and `chunk_count` is then 1 — the common case;
+/// pages essentially always fit, roughly half of the larger slide decks do not.
+/// `chunk_count` is stamped on every row so the reconcile can spot a partially
+/// indexed document (rows present, fewer than `chunk_count` of them) without a
+/// second query. `title`, `source_path`, `source_sha`, `extract_version` and
+/// `embed_model` are repeated on every chunk on purpose: the reconcile compares
+/// freshness per row, and a row that cannot answer "what produced me" would
+/// need a join to be re-indexed.
+///
+/// CONSEQUENCE FOR SEARCH: a multi-chunk document can match several times. The
+/// search query must collapse those to one hit per document — `DISTINCT ON
+/// (doc_kind, doc_id)` ordered by distance (or an equivalent windowed rank) so
+/// each document appears once, represented by its best-matching chunk. A LIMIT
+/// applied before that de-duplication would let one long deck fill the entire
+/// result set.
+///
+/// The vector column is `Unsupported`, so Prisma Client cannot see it — it
+/// cannot be selected, created or updated through the typed API, and it must be
+/// nullable. Every read and write of `embedding` is raw SQL. The scalar columns
+/// beside it are ordinary Prisma fields so the reconcile can compare freshness
+/// without dropping to raw SQL. Note that a raw upsert bypasses `@updatedAt`:
+/// a writer that touches the vector must set `updated_at` itself, since the DB
+/// default only fires on INSERT.
+///
+/// `doc_kind` is 'page' | 'slide' | 'file':
+///   - 'page'  → `doc_id` is `Page.id`
+///   - 'slide' → `doc_id` is `Slide.id`
+///   - 'file'  → `doc_id` IS the repo-relative path, because there is no row to
+///               point at. `bot-context/` files are searchable by decision and
+///               have no Page or Slide record; keying them on their own path is
+///               what lets them live in the same table as everything else.
+/// Keying the first two on the record id rather than the path is what makes the
+/// permission join in the search query an equality on a primary key —
+/// `Page.content_path` carries no unique constraint and is mutable.
+///
+/// Freshness is the triple (`source_sha`, `extract_version`, `embed_model`),
+/// not the sha alone. A sha match only proves the bytes are unchanged; it says
+/// nothing about a renamed title, a changed extractor, a different embedding
+/// model, or the same blob appearing at a new path. The reconcile re-indexes
+/// when any of the three differs, which is also how an extractor or model
+/// upgrade rolls out without a manual purge.
+///
+/// There is NO foreign key from `doc_id` to `Page`/`Slide` — it is polymorphic
+/// and, for 'file', points at nothing at all — so deleting a page cannot
+/// cascade here. Orphan rows are the nightly reconcile's job; the search query
+/// additionally requires the joined record to exist, so an orphan is
+/// unreachable even before the reconcile removes it. Only the Classroom FK
+/// cascades.
+model ContentIndex {
+  classroom_id    String
+  /// 'page' | 'slide' | 'file'
+  doc_kind        String
+  /// Page.id, Slide.id, or — for 'file' — the repo-relative path itself.
+  doc_id          String
+  /// 0 for a whole-document row; otherwise this chunk's ordinal within the
+  /// document, in reading order. Part of the primary key.
+  chunk_ix        Int                          @default(0)
+  /// How many chunks the source document produced (1 when it fit in one call).
+  /// Stamped on every chunk so the reconcile can detect a partial index.
+  chunk_count     Int                          @default(1)
+  /// The repo-relative file the text came from, e.g. `pages/lab-1/content.json`.
+  source_path     String
+  /// git blob sha of that file at index time.
+  source_sha      String
+  /// Version of the extractor that produced `text`. Bumped when extraction
+  /// changes shape; a mismatch re-indexes the document.
+  extract_version Int
+  /// The Workers AI model id the vector came from, e.g.
+  /// `@cf/qwen/qwen3-embedding-0.6b`. A mismatch re-indexes: vectors from two
+  /// models are not comparable, and the column is fixed at 1024 dimensions.
+  embed_model     String
+  title           String
+  /// The extracted text of this row: the whole document when `chunk_count` is
+  /// 1, otherwise just this chunk.
+  text            String
+  /// Workers AI @cf/qwen/qwen3-embedding-0.6b, 1024 dimensions. Nullable
+  /// because the row can be written before the embedding call succeeds, and
+  /// because Prisma requires `Unsupported` fields to be optional.
+  embedding       Unsupported("vector(1024)")?
+  indexed_at      DateTime                     @default(now())
+  updated_at      DateTime                     @default(now()) @updatedAt
+
+  classroom Classroom @relation(fields: [classroom_id], references: [id], onDelete: Cascade)
+
+  @@id([classroom_id, doc_kind, doc_id, chunk_ix])
+  /// The search query's only filter ahead of the exact vector scan. Corpora are
+  /// small (~72 documents per classroom at most, a few hundred rows once the
+  /// oversized decks are chunked), so this B-tree is what makes an exhaustive
+  /// `ORDER BY embedding <=> $1` cheap — see the migration for why there is no
+  /// approximate index.
+  @@index([classroom_id, doc_kind])
+  /// The reconcile's join back to `content_assets` to compare shas.
+  @@index([classroom_id, source_path])
+  @@map("content_index")
+}
+
+/// Semantic index over the PRODUCT DOCUMENTATION — `classmoji.io/docs`, the
+/// `.mdx` files under `apps/site/src/content/docs` in the public monorepo.
+///
+/// A SECOND, CLASSROOM-INDEPENDENT CORPUS. `ContentIndex` above is per
+/// classroom and cascades with it; this table has no `classroom_id`, no FK and
+/// no visibility columns, because the documentation is one fleet-wide public
+/// website. That difference is the whole reason it is a separate table rather
+/// than a fourth `doc_kind`: a global row in a per-classroom table would have
+/// to opt out of every tenancy filter the search statements are built around.
+///
+/// `slug` IS the identity and IS the URL path: `docs/instructors/roster`
+/// renders at `https://classmoji.io/docs/instructors/roster`. Derived from the
+/// repo path minus `.mdx` and a trailing `/index`, so the id a search hit hands
+/// back is also the link the widget shows.
+///
+/// Freshness is the same triple as `content_index` —
+/// (source_sha, extract_version, embed_model) — and `isFresh` is literally the
+/// same function. `source_sha` is the git blob sha of the `.mdx` at index time.
+///
+/// Chunking is kept for the same three reasons it exists next door, even though
+/// every page fits in one chunk today (the largest is 7,976 characters against
+/// a 24,576-character budget that is itself env-overridable DOWNWARD):
+/// `chunk_count` is what lets `isFresh` spot a half-written document, the
+/// composite PK makes the upsert idempotent, and a page past the cap would
+/// otherwise be refused and silently never index.
+model DocsIndex {
+  /// The URL path under classmoji.io, e.g. `docs/instructors/roster`. No
+  /// leading slash, no `.mdx`, no trailing `/index`.
+  slug            String
+  /// 0 for a whole-document row; otherwise this chunk's ordinal in reading
+  /// order. Part of the primary key.
+  chunk_ix        Int                          @default(0)
+  /// How many chunks this page produced (1 when it fit in one call). Stamped on
+  /// every chunk so a partial write reads as stale rather than as complete.
+  chunk_count     Int                          @default(1)
+  /// Frontmatter `title`. Required — a page without one is refused by the
+  /// extractor rather than indexed under a guess.
+  title           String
+  /// Frontmatter `description`. Optional in principle; present on all 25 today.
+  description     String?
+  /// The top-level docs section, or null for a page directly under the root:
+  /// `instructors`, `students`, `self-hosting`, `open-source`, `introduction`.
+  section         String?
+  /// The extracted plain text of this row — the whole page when `chunk_count`
+  /// is 1, otherwise just this chunk.
+  text            String
+  /// git blob sha of the `.mdx` the text came from.
+  source_sha      String
+  /// Version of the MDX extractor that produced `text`. Bumping it re-indexes
+  /// every page on the next run, which is the recovery path for an extractor
+  /// bug.
+  extract_version Int
+  /// The Workers AI model id the vector came from. A mismatch re-indexes:
+  /// vectors from two models are not comparable.
+  embed_model     String
+  /// Workers AI @cf/qwen/qwen3-embedding-0.6b, 1024 dimensions. Nullable
+  /// because Prisma requires `Unsupported` fields to be optional, and because a
+  /// row can be written before the embedding call succeeds.
+  embedding       Unsupported("vector(1024)")?
+  updated_at      DateTime                     @default(now()) @updatedAt
+
+  @@id([slug, chunk_ix])
+  @@map("docs_index")
 }

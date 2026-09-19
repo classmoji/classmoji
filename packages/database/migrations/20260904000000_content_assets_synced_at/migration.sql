@@ -1,0 +1,26 @@
+-- When a classroom's asset map was last rebuilt from the content repo's TREE.
+--
+-- The freshness of the map used to be read as MAX(content_assets.synced_at) for
+-- the classroom, and that conflated two different writes. A full sync stamps
+-- every row it wrote and then sweeps everything below the stamp, so its stamp
+-- means "the whole map was rebuilt from the repo". An incremental webhook apply
+-- — and, since uploads record their own row, a single teacher dropping one
+-- image into the editor — also stamps rows `now`, and means nothing of the
+-- kind. Reading the rows therefore let ONE upload make an arbitrarily stale map
+-- look fresh for another 24 hours: on a classroom whose push webhook is not
+-- arriving, pushed files kept rendering as dangling URLs and deleted files were
+-- never swept, for as long as anyone kept uploading.
+--
+-- So the freshness stamp moves off the rows and onto the classroom, where only
+-- a full sync writes it. The 24-hour refresh exists precisely to repair dropped
+-- webhooks, so it has to fire daily no matter how much incremental traffic
+-- there was; one tree read per classroom per day is not a cost worth optimizing
+-- away with a value that cannot distinguish a repair from a single upload.
+--
+-- NULLABLE with no default, and deliberately no backfill: NULL reads as "never
+-- fully synced", which makes every existing classroom sync once on its next
+-- render or nightly pass. That is the correct state to start from — it is also
+-- exactly what these classrooms looked like before any of this existed — and it
+-- is self-healing, where backfilling now() would suppress the first repair on
+-- every classroom in the table.
+ALTER TABLE "classrooms" ADD COLUMN "content_assets_synced_at" TIMESTAMP(3);

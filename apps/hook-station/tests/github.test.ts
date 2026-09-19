@@ -12,6 +12,8 @@ const triggers = {
   newInstall: vi.fn().mockResolvedValue(undefined),
   deleted: vi.fn().mockResolvedValue(undefined),
   appUninstalled: vi.fn().mockResolvedValue(undefined),
+  appSuspended: vi.fn().mockResolvedValue(undefined),
+  appUnsuspended: vi.fn().mockResolvedValue(undefined),
 };
 
 vi.mock('@classmoji/tasks', () => ({
@@ -21,6 +23,8 @@ vi.mock('@classmoji/tasks', () => ({
     newInstallationHandlerTask: { trigger: triggers.newInstall },
     repositoryAssignmentDeletedHandlerTask: { trigger: triggers.deleted },
     appUninstalledHandlerTask: { trigger: triggers.appUninstalled },
+    appSuspendedHandlerTask: { trigger: triggers.appSuspended },
+    appUnsuspendedHandlerTask: { trigger: triggers.appUnsuspended },
   },
 }));
 
@@ -29,6 +33,16 @@ const sign = (body: string): string => {
   hmac.update(body);
   return `sha256=${hmac.digest('hex')}`;
 };
+
+/**
+ * Deliveries are identified by event name AND action, so every fixture below
+ * has to send the header a real GitHub delivery would.
+ */
+const headersFor = (event: string, body: string): Record<string, string> => ({
+  'x-hub-signature-256': sign(body),
+  'x-github-event': event,
+  'content-type': 'application/json',
+});
 
 const buildApp = async (): Promise<FastifyInstance> => {
   const app = Fastify();
@@ -55,6 +69,7 @@ describe('github webhook route', () => {
     const res = await app.inject({
       method: 'POST',
       url: '/webhooks/callback/github',
+      headers: { 'x-github-event': 'issues' },
       payload: { action: 'closed' },
     });
     expect(res.statusCode).toBe(401);
@@ -65,7 +80,7 @@ describe('github webhook route', () => {
     const res = await app.inject({
       method: 'POST',
       url: '/webhooks/callback/github',
-      headers: { 'x-hub-signature-256': 'sha256=deadbeef' },
+      headers: { 'x-hub-signature-256': 'sha256=deadbeef', 'x-github-event': 'issues' },
       payload,
     });
     expect(res.statusCode).toBe(401);
@@ -77,7 +92,7 @@ describe('github webhook route', () => {
     const res = await app.inject({
       method: 'POST',
       url: '/webhooks/callback/github',
-      headers: { 'x-hub-signature-256': sign(body), 'content-type': 'application/json' },
+      headers: headersFor('issues', body),
       payload: body,
     });
     expect(res.statusCode).toBe(200);
@@ -97,40 +112,70 @@ describe('github webhook route', () => {
     const res = await app.inject({
       method: 'POST',
       url: '/webhooks/callback/github',
-      headers: { 'x-hub-signature-256': sign(body), 'content-type': 'application/json' },
+      headers: headersFor('issues', body),
       payload: body,
     });
     expect(res.statusCode).toBe(200);
     expect(triggers.closed).not.toHaveBeenCalled();
   });
 
-  it('triggers memberAdded for member_added action', async () => {
+  it('does not trigger closed handler for a pull_request close', async () => {
+    // `pull_request.closed` shares the action word but carries no issue and is
+    // not an assignment repo event.
+    const payload = { action: 'closed', pull_request: { id: 1, number: 7 } };
+    const body = JSON.stringify(payload);
+    const res = await app.inject({
+      method: 'POST',
+      url: '/webhooks/callback/github',
+      headers: headersFor('pull_request', body),
+      payload: body,
+    });
+    expect(res.statusCode).toBe(200);
+    expect(triggers.closed).not.toHaveBeenCalled();
+  });
+
+  it('triggers memberAdded for organization.member_added', async () => {
     const payload = { action: 'member_added', member: { login: 'alice' } };
     const body = JSON.stringify(payload);
     const res = await app.inject({
       method: 'POST',
       url: '/webhooks/callback/github',
-      headers: { 'x-hub-signature-256': sign(body), 'content-type': 'application/json' },
+      headers: headersFor('organization', body),
       payload: body,
     });
     expect(res.statusCode).toBe(200);
     expect(triggers.memberAdded).toHaveBeenCalledTimes(1);
   });
 
-  it('triggers newInstallation when created carries an installation but no repository/issues', async () => {
+  it('does not trigger memberAdded for team.member_added', async () => {
+    const payload = { action: 'member_added', member: { login: 'alice' } };
+    const body = JSON.stringify(payload);
+    const res = await app.inject({
+      method: 'POST',
+      url: '/webhooks/callback/github',
+      headers: headersFor('team', body),
+      payload: body,
+    });
+    expect(res.statusCode).toBe(200);
+    expect(triggers.memberAdded).not.toHaveBeenCalled();
+  });
+
+  it('triggers newInstallation for installation.created', async () => {
     const payload = { action: 'created', installation: { id: 99 } };
     const body = JSON.stringify(payload);
     const res = await app.inject({
       method: 'POST',
       url: '/webhooks/callback/github',
-      headers: { 'x-hub-signature-256': sign(body), 'content-type': 'application/json' },
+      headers: headersFor('installation', body),
       payload: body,
     });
     expect(res.statusCode).toBe(200);
     expect(triggers.newInstall).toHaveBeenCalledTimes(1);
   });
 
-  it('does not trigger newInstallation when created carries a repository', async () => {
+  it('does not trigger newInstallation for a created action on another event', async () => {
+    // GitHub reuses `created` across events (repository, project_card, issue
+    // comment, …). Only the `installation` event may write an installation id.
     const payload = {
       action: 'created',
       installation: { id: 99 },
@@ -140,20 +185,33 @@ describe('github webhook route', () => {
     const res = await app.inject({
       method: 'POST',
       url: '/webhooks/callback/github',
-      headers: { 'x-hub-signature-256': sign(body), 'content-type': 'application/json' },
+      headers: headersFor('repository', body),
       payload: body,
     });
     expect(res.statusCode).toBe(200);
     expect(triggers.newInstall).not.toHaveBeenCalled();
   });
 
-  it('triggers appUninstalled for deleted+installation without issue/repository', async () => {
+  it('does not trigger newInstallation for installation_repositories.added', async () => {
+    const payload = { action: 'added', installation: { id: 99 } };
+    const body = JSON.stringify(payload);
+    const res = await app.inject({
+      method: 'POST',
+      url: '/webhooks/callback/github',
+      headers: headersFor('installation_repositories', body),
+      payload: body,
+    });
+    expect(res.statusCode).toBe(200);
+    expect(triggers.newInstall).not.toHaveBeenCalled();
+  });
+
+  it('triggers appUninstalled for installation.deleted', async () => {
     const payload = { action: 'deleted', installation: { id: 99 } };
     const body = JSON.stringify(payload);
     const res = await app.inject({
       method: 'POST',
       url: '/webhooks/callback/github',
-      headers: { 'x-hub-signature-256': sign(body), 'content-type': 'application/json' },
+      headers: headersFor('installation', body),
       payload: body,
     });
     expect(res.statusCode).toBe(200);
@@ -161,21 +219,107 @@ describe('github webhook route', () => {
     expect(triggers.deleted).not.toHaveBeenCalled();
   });
 
-  it('triggers repositoryAssignmentDeleted for deleted+issue', async () => {
+  it('does not trigger appUninstalled for a deleted action on another event', async () => {
+    const payload = { action: 'deleted', installation: { id: 99 }, repository: { id: 1 } };
+    const body = JSON.stringify(payload);
+    const res = await app.inject({
+      method: 'POST',
+      url: '/webhooks/callback/github',
+      headers: headersFor('repository', body),
+      payload: body,
+    });
+    expect(res.statusCode).toBe(200);
+    expect(triggers.appUninstalled).not.toHaveBeenCalled();
+  });
+
+  it('triggers appSuspended for installation.suspend', async () => {
+    // A suspended installation mints no tokens, so the org has to stop
+    // claiming it is connected — the same clear an uninstall does.
+    const payload = { action: 'suspend', installation: { id: 99 } };
+    const body = JSON.stringify(payload);
+    const res = await app.inject({
+      method: 'POST',
+      url: '/webhooks/callback/github',
+      headers: headersFor('installation', body),
+      payload: body,
+    });
+    expect(res.statusCode).toBe(200);
+    expect(triggers.appSuspended).toHaveBeenCalledTimes(1);
+    expect(triggers.appUninstalled).not.toHaveBeenCalled();
+    expect(triggers.newInstall).not.toHaveBeenCalled();
+  });
+
+  it('triggers appUnsuspended for installation.unsuspend', async () => {
+    const payload = { action: 'unsuspend', installation: { id: 99 } };
+    const body = JSON.stringify(payload);
+    const res = await app.inject({
+      method: 'POST',
+      url: '/webhooks/callback/github',
+      headers: headersFor('installation', body),
+      payload: body,
+    });
+    expect(res.statusCode).toBe(200);
+    expect(triggers.appUnsuspended).toHaveBeenCalledTimes(1);
+    expect(triggers.appSuspended).not.toHaveBeenCalled();
+  });
+
+  it('does not trigger the suspend handlers for another event', async () => {
+    // `suspend`/`unsuspend` are also sent for `member`, so the event name is
+    // what decides — never the action word on its own.
+    const payload = { action: 'suspend', installation: { id: 99 }, member: { login: 'alice' } };
+    const body = JSON.stringify(payload);
+    const res = await app.inject({
+      method: 'POST',
+      url: '/webhooks/callback/github',
+      headers: headersFor('member', body),
+      payload: body,
+    });
+    expect(res.statusCode).toBe(200);
+    expect(triggers.appSuspended).not.toHaveBeenCalled();
+  });
+
+  it('does not trigger the suspend handler when the payload carries no installation', async () => {
+    const payload = { action: 'suspend' };
+    const body = JSON.stringify(payload);
+    const res = await app.inject({
+      method: 'POST',
+      url: '/webhooks/callback/github',
+      headers: headersFor('installation', body),
+      payload: body,
+    });
+    expect(res.statusCode).toBe(200);
+    expect(triggers.appSuspended).not.toHaveBeenCalled();
+  });
+
+  it('triggers repositoryAssignmentDeleted for issues.deleted', async () => {
     const payload = { action: 'deleted', issue: { id: 1 } };
     const body = JSON.stringify(payload);
     const res = await app.inject({
       method: 'POST',
       url: '/webhooks/callback/github',
-      headers: { 'x-hub-signature-256': sign(body), 'content-type': 'application/json' },
+      headers: headersFor('issues', body),
       payload: body,
     });
     expect(res.statusCode).toBe(200);
     expect(triggers.deleted).toHaveBeenCalledTimes(1);
+    expect(triggers.appUninstalled).not.toHaveBeenCalled();
   });
 
   it('returns 200 with success but no trigger for unknown action', async () => {
     const payload = { action: 'totally_unknown_action_xyz' };
+    const body = JSON.stringify(payload);
+    const res = await app.inject({
+      method: 'POST',
+      url: '/webhooks/callback/github',
+      headers: headersFor('issues', body),
+      payload: body,
+    });
+    expect(res.statusCode).toBe(200);
+    expect(Object.values(triggers).every(t => t.mock.calls.length === 0)).toBe(true);
+  });
+
+  it('returns 200 with success but no trigger when the event header is absent', async () => {
+    const payload = { action: 'closed', issue: { id: 1, number: 7 } };
     const body = JSON.stringify(payload);
     const res = await app.inject({
       method: 'POST',
@@ -195,7 +339,7 @@ describe('github webhook route', () => {
       const res = await app.inject({
         method: 'POST',
         url: '/webhooks/callback/github',
-        headers: { 'x-hub-signature-256': sign(rawBody), 'content-type': 'application/json' },
+        headers: headersFor('issues', rawBody),
         payload: rawBody,
       });
       expect(res.statusCode).toBe(200);
@@ -210,6 +354,7 @@ describe('github webhook route', () => {
         url: '/webhooks/callback/github',
         headers: {
           'x-hub-signature-256': sign(reSerialized),
+          'x-github-event': 'issues',
           'content-type': 'application/json',
         },
         payload: rawBody,
@@ -219,14 +364,17 @@ describe('github webhook route', () => {
     });
 
     it('accepts a signature over a non-ASCII (multibyte UTF-8) raw body', async () => {
-      const payload = { action: 'closed', issue: { id: 1, number: 7, title: 'café — 日本語 — 🎓' } };
+      const payload = {
+        action: 'closed',
+        issue: { id: 1, number: 7, title: 'café — 日本語 — 🎓' },
+      };
       const rawBody = JSON.stringify(payload);
       expect(Buffer.byteLength(rawBody, 'utf8')).toBeGreaterThan(rawBody.length);
 
       const res = await app.inject({
         method: 'POST',
         url: '/webhooks/callback/github',
-        headers: { 'x-hub-signature-256': sign(rawBody), 'content-type': 'application/json' },
+        headers: headersFor('issues', rawBody),
         payload: rawBody,
       });
       expect(res.statusCode).toBe(200);
@@ -238,7 +386,7 @@ describe('github webhook route', () => {
       const res = await app.inject({
         method: 'POST',
         url: '/webhooks/callback/github',
-        headers: { 'content-type': 'application/json' },
+        headers: { 'x-github-event': 'issues', 'content-type': 'application/json' },
         payload: rawBody,
       });
       expect(res.statusCode).toBe(401);
@@ -253,6 +401,7 @@ describe('github webhook route', () => {
         headers: {
           'x-hub-signature-256':
             'sha256=0000000000000000000000000000000000000000000000000000000000000000',
+          'x-github-event': 'issues',
           'content-type': 'application/json',
         },
         payload: rawBody,
@@ -267,7 +416,7 @@ describe('github webhook route', () => {
       const res = await app.inject({
         method: 'POST',
         url: '/webhooks/callback/github',
-        headers: { 'x-hub-signature-256': 'sha256=deadbeef' },
+        headers: { 'x-hub-signature-256': 'sha256=deadbeef', 'x-github-event': 'issues' },
       });
       expect(res.statusCode).toBe(401);
       expect(triggers.closed).not.toHaveBeenCalled();

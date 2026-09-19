@@ -106,6 +106,8 @@ interface ElementSelectionProviderProps {
   onDeleteTheme?: (id: string) => void;
   customThemes?: SlideCustomTheme[];
   sharedThemes?: SlideSharedTheme[];
+  /** Whether the slide's classroom is on the Pro tier (gates Cloudinary video hosting). */
+  isPro?: boolean;
 }
 
 /** Value provided by the ElementSelectionContext */
@@ -131,6 +133,15 @@ export interface ElementSelectionContextValue {
   onDeleteTheme?: (id: string) => void;
   customThemes: SlideCustomTheme[];
   sharedThemes: SlideSharedTheme[];
+  /**
+   * Whether the slide's classroom is on the Pro tier. Read by VideoProperties
+   * to decide whether to offer Cloudinary upload. Presentation only — the
+   * api.video.upload-cloudinary route re-decides on every request.
+   *
+   * Defaults to false, so a provider that forgets to pass it hides the paid
+   * feature rather than offering an upload the server will refuse.
+   */
+  isPro: boolean;
 }
 
 const ElementSelectionContext = createContext<ElementSelectionContextValue | null>(null);
@@ -277,6 +288,7 @@ export function ElementSelectionProvider({
   onDeleteTheme,
   customThemes = [],
   sharedThemes = [],
+  isPro = false,
 }: ElementSelectionProviderProps) {
   const [selectedElement, setSelectedElement] = useState<HTMLElement | null>(null);
   const [elementType, setElementType] = useState<SlideElementType>(null);
@@ -627,6 +639,8 @@ export function ElementSelectionProvider({
     customThemes,
     // Shared themes (folder-based themes from slides.com imports)
     sharedThemes,
+    // Plan tier — gates the Cloudinary upload button in VideoProperties
+    isPro,
   };
 
   return (

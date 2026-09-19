@@ -921,3 +921,54 @@ describe('getBlobContent', () => {
     ).rejects.toThrow('Server error');
   });
 });
+
+/**
+ * copyFolder reports the DESTINATION paths it wrote, recursively.
+ *
+ * The count alone was never enough: the deck duplicate has to decide whether a
+ * reference into another repo names a file the copy actually carries, and that
+ * question is asked per path. A recursion that counted subdirectories but
+ * dropped their paths would answer "not copied" for every nested asset and
+ * leave the whole images folder pointing at the original deck.
+ */
+describe('copyFolder', () => {
+  it('returns every destination path it wrote, nested folders included', async () => {
+    const repo = 'copyfolder-paths';
+    requestMock.mockImplementation(async (route: string, params: RequestParams) => {
+      if (route === 'GET /repos/{owner}/{repo}/contents/{path}') {
+        switch (params.path) {
+          case 'slides/intro':
+            return {
+              data: [
+                { name: 'index.html', path: 'slides/intro/index.html', type: 'file', sha: 'a' },
+                { name: 'images', path: 'slides/intro/images', type: 'dir', sha: 'b' },
+              ],
+            };
+          case 'slides/intro/images':
+            return {
+              data: [{ name: 'x.png', path: 'slides/intro/images/x.png', type: 'file', sha: 'c' }],
+            };
+          default:
+            return { data: { content: 'Ym9keQ==', sha: 'blob' } };
+        }
+      }
+      if (route === 'PUT /repos/{owner}/{repo}/contents/{path}') {
+        return { data: { content: { sha: 'written' }, commit: { sha: 'commit' } } };
+      }
+      throw new Error(`unexpected route ${route}`);
+    });
+
+    const result = await ContentService.copyFolder({
+      gitOrganization,
+      repo,
+      sourcePath: 'slides/intro',
+      destPath: 'slides/intro-copy',
+    });
+
+    expect(result.copied).toBe(2);
+    expect([...result.paths].sort()).toEqual([
+      'slides/intro-copy/images/x.png',
+      'slides/intro-copy/index.html',
+    ]);
+  });
+});

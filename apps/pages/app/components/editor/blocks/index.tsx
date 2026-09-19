@@ -25,6 +25,7 @@ import { Embed } from './EmbedBlock.tsx';
 import { Video } from './VideoBlock.tsx';
 import { PageLink } from './PageLinkBlock.tsx';
 import { NavGrid } from './NavGridBlock.tsx';
+import { ResponsiveImage } from './ImageBlock.tsx';
 
 /**
  * BlockNote schema with all built-in + custom block specs.
@@ -38,11 +39,15 @@ import { NavGrid } from './NavGridBlock.tsx';
  * Custom blocks (8): callout, terminal, profile, divider, embed, video, pageLink,
  * navGrid
  */
-// Remove audio, video, and codeBlock from default blocks
+// Remove audio, video, codeBlock and image from default blocks. The first three
+// are replaced or dropped outright; `image` is replaced by the same block with
+// responsive candidates (see ImageBlock.tsx) — the attributes have to be on the
+// element before it is inserted, so they have to come from the render.
 const {
   audio: _audio,
   video: _defaultVideo,
   codeBlock: _defaultCodeBlock,
+  image: _defaultImage,
   ...filteredDefaultBlockSpecs
 } = defaultBlockSpecs;
 
@@ -51,6 +56,8 @@ export const schema = BlockNoteSchema.create({
     ...filteredDefaultBlockSpecs,
     // Override default code block with syntax highlighting
     codeBlock: createCodeBlockSpec(codeBlockOptions),
+    // Same block, same wrapper, same parse — plus srcset/sizes at render time.
+    image: ResponsiveImage(),
     ...multiColumnSchema.blockSpecs,
     callout: Callout(),
     terminal: Terminal(),

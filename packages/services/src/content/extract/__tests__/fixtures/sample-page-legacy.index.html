@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+      font-size: 16px;
+      line-height: 1.6;
+      max-width: 85%;
+      margin: 0 auto;
+      padding: 2rem;
+      color: #333;
+    }
+    h1, h2, h3, h4, h5, h6 {
+      font-weight: 600;
+      margin-bottom: 0;
+    }
+    h1 {
+      font-size: 2em;
+      margin-top: 2rem;
+      background-color: #FBF3DB;
+      padding: 0.5rem 0.75rem;
+      border-radius: 4px;
+      display: inline-block;
+    }
+    h2 {
+      font-size: 1.5em;
+      margin-top: 1.5rem;
+      background-color: #DDEBF1;
+      padding: 0.4rem 0.6rem;
+      border-radius: 4px;
+      display: inline-block;
+    }
+    h3 { font-size: 1.25em; margin-top: 1rem; }
+    /* Heading block wrappers */
+    .heading-block { margin: 0; padding: 0; }
+    .heading-block h1, .heading-block h2, .heading-block h3 { margin-top: 0; }
+    .h1-block { margin-top: 2rem; }
+    .h2-block { margin-top: 1.5rem; }
+    .h3-block { margin-top: 1rem; }
+    p { margin-bottom: 1em; font-size: 16px; }
+    ul, ol {
+      margin-bottom: 1em;
+      padding-left: 1.5em;
+      list-style-position: outside;
+    }
+    ul { list-style-type: disc; }
+    ol { list-style-type: decimal; }
+    li {
+      margin-bottom: 0.25em;
+      display: list-item;
+      font-size: 16px;
+    }
+    ul ul, ol ul { list-style-type: circle; }
+    ul ul ul, ol ul ul { list-style-type: square; }
+    ol ol { list-style-type: lower-alpha; }
+    ol ol ol { list-style-type: lower-roman; }
+    code {
+      color: #111827;
+      background: #f3f4f6;
+      border-radius: 3px;
+      padding: 0.1rem 0.3rem;
+      font-size: 0.9em;
+    }
+    pre {
+      background: #f5f5f5;
+      border-radius: 6px;
+      padding: 1rem;
+      overflow-x: auto;
+    }
+    pre code {
+      background: none;
+      padding: 0;
+    }
+    blockquote {
+      border-left: 3px solid #e1e4e8;
+      margin-left: 0;
+      padding-left: 1rem;
+      color: #57606a;
+    }
+    a { color: #0969da; }
+    a:hover { text-decoration: underline; }
+    table {
+      border-collapse: collapse;
+      margin-bottom: 1em;
+      width: 100%;
+    }
+    th, td {
+      border: 1px solid #e1e4e8;
+      padding: 0.4rem 0.6rem;
+      text-align: left;
+    }
+    thead th { background: #f6f8fa; }
+    .profile-card {
+      display: flex;
+      gap: 0.75rem;
+      align-items: center;
+      margin-bottom: 1em;
+    }
+    .profile-card img {
+      width: 56px;
+      height: 56px;
+      border-radius: 50%;
+      object-fit: cover;
+    }
+    .profile-card em {
+      display: block;
+      font-size: 14px;
+      font-style: normal;
+      color: #6b7280;
+      margin-top: 0.25rem;
+    }
+    .embed-container {
+      position: relative;
+      padding-bottom: 56.25%;
+      height: 0;
+      overflow: hidden;
+      margin-bottom: 1em;
+      border-radius: 6px;
+      border: 1px solid #e1e4e8;
+    }
+    .embed-container iframe {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+    }
+    .columns {
+      display: grid;
+      gap: 1.5rem;
+      margin-bottom: 1em;
+    }
+    .columns[data-columns="2"] {
+      grid-template-columns: repeat(2, 1fr);
+    }
+    .columns[data-columns="3"] {
+      grid-template-columns: repeat(3, 1fr);
+    }
+    .columns[data-columns="4"] {
+      grid-template-columns: repeat(4, 1fr);
+    }
+    .column {
+      min-height: 50px;
+    }
+    @media (max-width: 768px) {
+      .columns {
+        grid-template-columns: 1fr !important;
+      }
+    }
+  </style>
+</head>
+<body>
+<div class="heading-block h1-block"><h1>Widget Wiring — Short Assignment</h1></div>
+<p>First things first. Join the shared workbench by clicking on <a href="https://classroom.example.com/a/ZIxXcRKd">this workbench invite link</a>! Choose <code>WIDGETS</code> as your team!  There is only 1. We are all wiring the same board</p>
+<p>Did you accept the invitation to the <code>https://github.com/example-org</code> organization via the invite link provided? When prompted please join the <strong>WIDGETS</strong> group! Otherwise you won’t have permissions on the repo to do anything with it.</p>
+<p>Once you accept the assignment see the <a href="https://github.com/example-org/widget-board/blob/main/README.md">README.md</a> for instructions.</p>
+<p>If you need help, post in the #sa-widget-wiring channel.</p>
+<div class="heading-block h3-block"><h3>To Turn In</h3></div>
+<ol start="1"><li>comment on the related issue in the practice repo in the workbench.</li><li>URLs to your successfully closed pull requests (you can find your pull requests <a href="https://github.com/example-org/widget-board/pulls?q=is%3Apr+is%3Aclosed">here</a>). Its ok and normal to have several of these, you don’t have to have gotten it right the first time. Requirements:<ul><li>your <a href="https://docs.example.com/why-are-my-commits-linked-to-the-wrong-user">account name and email are correctly set</a></li><li>you made a branch and did a pull request that was successfully merged into <strong>example-org/widget-board:main</strong></li><li>your widget marker appears on the board page: <a href="http://board.widgets.example.com">http://board.widgets.example.com</a></li><li>and your marker is clickable and shows your maker page</li></ul></li><li>A short answer response to:<ul><li>How comfortable do you feel you are with the widget toolchain?</li><li>Is there anything about the wiring flow you’d like covered in more detail?</li></ul></li></ol>
+</body>
+</html>

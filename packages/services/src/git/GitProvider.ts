@@ -31,6 +31,16 @@ export interface GitProject {
   url: string;
 }
 
+/** A repository's live Pages configuration; `null` from a reader means none. */
+export interface RepoPagesInfo {
+  htmlUrl: string | null;
+  status: string | null;
+  /** 'legacy' (branch source) or 'workflow' (Actions source). */
+  buildType: string | null;
+  sourceBranch: string | null;
+  sourcePath: string | null;
+}
+
 export class GitProvider {
   credentials: unknown;
 
@@ -48,6 +58,19 @@ export class GitProvider {
 
   async getCurrentUser(token: string): Promise<unknown> {
     throw new Error('getCurrentUser() must be implemented by subclass');
+  }
+
+  /**
+   * Mint a short-lived token for this installation, with its expiry.
+   *
+   * Distinct from `getAccessToken` only in that the caller is handing the token
+   * to somebody else and needs to know how long it stays good for.
+   */
+  async getInstallationToken(scope?: {
+    repositories?: string[];
+    permissions?: Record<string, string>;
+  }): Promise<{ token: string; expiresAt: string }> {
+    throw new Error('getInstallationToken() must be implemented by subclass');
   }
 
   // ─── Repository ────────────────────────────────────────────────────────────
@@ -76,8 +99,40 @@ export class GitProvider {
   }
 
   // ─── Branches & PRs ────────────────────────────────────────────────────────
+  /**
+   * The branch a repository serves as its head — `main` for most, `master` for
+   * anything created before GitHub changed the default, and whatever the owner
+   * renamed it to otherwise.
+   *
+   * Anything that reads a repo's CURRENT content has to ask rather than assume.
+   * A hardcoded `main` against a `master` repo does not read stale content, it
+   * reads nothing at all: the tree call 404s and the classroom ends up with no
+   * asset map, which is exactly the failure the map exists to prevent.
+   */
+  async getDefaultBranch(org: string, repo: string): Promise<string> {
+    throw new Error('getDefaultBranch() must be implemented by subclass');
+  }
+
   async getLatestCommitSHA(org: string, repo: string, branch?: string): Promise<string> {
     throw new Error('getLatestCommitSHA() must be implemented by subclass');
+  }
+
+  /**
+   * List every path in a repository and the git object behind it.
+   * `truncated` is the provider saying the listing was cut short — the entries
+   * that did arrive are still valid.
+   */
+  async getTree(
+    org: string,
+    repo: string,
+    ref: string,
+    recursive?: boolean
+  ): Promise<{
+    sha: string;
+    truncated: boolean;
+    entries: { path: string; sha: string; type: string; size?: number }[];
+  }> {
+    throw new Error('getTree() must be implemented by subclass');
   }
 
   async listCommits(

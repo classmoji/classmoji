@@ -33,7 +33,7 @@
  */
 
 import getPrisma from '@classmoji/database';
-import { ContentService } from '@classmoji/services';
+import { ClassmojiService, ContentService } from '@classmoji/services';
 import { DeckParseError, parseDeckHtml } from '@classmoji/services/slides';
 
 // Small inter-item pause so a large classroom doesn't hammer the GitHub API —
@@ -274,13 +274,23 @@ async function migrateSlidesToDeck(options: CliOptions): Promise<void> {
           continue;
         }
         try {
-          await ContentService.put({
+          const written = await ContentService.put({
             gitOrganization,
             repo,
             path: deckPath,
             content: deckJson,
             message: 'Migrate deck to deck.json',
             createOnly: true,
+          });
+
+          // Record the row like any other save — `deck.json` is read through
+          // the asset map, and a migration that skipped this would leave every
+          // deck it converted falling back to the contents API until the push
+          // webhook caught up. Never throws.
+          await ClassmojiService.contentAssets.recordContentAsset(classroom.id, {
+            path: deckPath,
+            sha: written.sha,
+            size: Buffer.byteLength(deckJson),
           });
         } catch (writeError: unknown) {
           const status = (writeError as { status?: number }).status;

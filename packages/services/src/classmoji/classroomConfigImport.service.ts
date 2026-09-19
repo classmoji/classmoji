@@ -302,6 +302,16 @@ export interface SourceModuleItemShape {
 }
 
 /**
+ * Compile-time exhaustiveness guard for the switch over ModuleItemType below.
+ * Adding a value to the enum without deciding what the importer does with it is
+ * a type error here; reaching it at runtime throws rather than silently
+ * dropping the item and counting it as "resource not imported".
+ */
+const unhandledModuleItemType = (type: never): never => {
+  throw new Error(`Unhandled ModuleItemType in remapModuleItem: ${String(type)}`);
+};
+
+/**
  * A ModuleItem remapped onto target resource ids, ready to be written under a
  * new module. Exactly one *_id is non-null (the one matching item_type).
  */
@@ -318,8 +328,22 @@ export interface RemappedItem {
  * Pure helper: remap a source ModuleItem's resource reference onto the target
  * ids. Returns null when the referenced resource was not imported (missing map
  * entry, or a null source id for the item's type) — the caller SKIPS such
- * items. The ModuleItemType enum is PAGE/REPOSITORY/QUIZ/SLIDE only; every item
- * references an imported resource, so there is no verbatim/no-remap case.
+ * items. Every item references an imported resource, so there is no
+ * verbatim/no-remap case.
+ *
+ * FORM is deliberately a null case rather than a mapping: forms are not part of
+ * the classroom config bundle at all — nothing exports them and `idMaps` has no
+ * `forms` entry to remap through — so a FORM module item is DROPPED on import,
+ * exactly as an unmapped page is. When forms join the bundle, add `forms` to
+ * ModuleImportIdMaps, `form_id` to SourceModuleItemShape/RemappedItem, and turn
+ * this case into the mapping its siblings already are.
+ *
+ * The `default` throws instead of returning null. That reversal is the point:
+ * the old `default: return null` is precisely how a FORM item would have been
+ * silently swallowed by an importer nobody remembered to teach, and the next
+ * ModuleItemType would go the same way. `never` makes it a compile error the
+ * day the enum grows, and a loud one if a row ever carries a type this build
+ * does not know.
  *
  * @param {SourceModuleItemShape} item - Source module item
  * @param {ModuleImportIdMaps} idMaps - Source→target resource id maps
@@ -359,8 +383,12 @@ export function remapModuleItem(
       if (!mapped) return null;
       return { ...base, slide_id: mapped };
     }
-    default:
+    case ModuleItemType.FORM:
+      // Not in the config bundle yet — see the note above. Dropped, not thrown:
+      // a source classroom that happens to hold a form must still import.
       return null;
+    default:
+      return unhandledModuleItemType(item.item_type);
   }
 }
 

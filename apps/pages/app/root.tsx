@@ -6,6 +6,7 @@ import {
   ScrollRestoration,
   redirect,
   useLocation,
+  isRouteErrorResponse,
   useRouteError,
   useLoaderData,
   useRouteLoaderData,
@@ -15,6 +16,7 @@ import { ToastContainer } from 'react-toastify';
 import { MantineProvider } from '@mantine/core';
 
 import { prisma, getAuthSession } from '~/utils/db.server.ts';
+import { classifyFormsPath } from '~/utils/formsPaths.ts';
 import useStore from '~/store';
 
 /**
@@ -88,9 +90,44 @@ export const loader = async ({ request }: { request: Request }) => {
     return { user: null, isSite: false };
   }
 
+  // Forms are classified BEFORE the page-view branch, because `/{class}/forms`
+  // has the shape that branch matches and would otherwise be looked up as a
+  // Page id of 'forms' — a query that can only ever miss, on a code path whose
+  // public/private answer has nothing to do with forms.
+  //
+  // This does NOT weaken the gate. Admin forms paths (the list, the new-form
+  // drawer, the builder, and every shape this classifier does not recognize)
+  // fall through to the standard `getAuthSession` check below and are still
+  // redirected to the webapp login when there is no session. Only the PUBLIC
+  // fill surfaces — `/{class}/forms/{slug}` and its `/verify` page — are
+  // exempted, because a waitlist link must open for a stranger.
+  //
+  // The exemption makes the route-level gates load-bearing rather than
+  // belt-and-braces: for the exempted shapes this loader is no longer a second
+  // wall, so `assertFormAdmin` in every forms loader AND action is the only
+  // thing between anonymous and admin data. See app/utils/formsPaths.ts for the
+  // full rule and its fail-closed default.
+  const formsRoute = classifyFormsPath(url.pathname);
+
+  if (formsRoute === 'public') {
+    // Best-effort session, exactly like the public-page branch: a signed-in
+    // member filling a public form should still see themselves in the chrome.
+    const authData = await getAuthSession(request).catch(() => null);
+    let user = null;
+    if (authData) {
+      user = await prisma.user
+        .findUnique({
+          where: { id: authData.userId },
+          include: { classroom_memberships: { include: { classroom: true } } },
+        })
+        .catch(() => null);
+    }
+    return { user, isPublicAccess: true, isSite: false };
+  }
+
   // Check if this is a page view route (/:classroomSlug/:pageId pattern)
   // Allow public pages to be viewed without authentication
-  const pageViewMatch = url.pathname.match(/^\/([^/]+)\/([^/]+)$/);
+  const pageViewMatch = formsRoute === null ? url.pathname.match(/^\/([^/]+)\/([^/]+)$/) : null;
 
   if (pageViewMatch) {
     const [, , pageId] = pageViewMatch;
@@ -193,8 +230,19 @@ const DARK_MODE_SCRIPT = `
  * If it is exactly 'dark' or 'light' we honour it and DO NOT attach the
  * prefers-color-scheme listener, so the embedded reader matches the app even
  * when the app theme differs from the OS. With no such param (the canonical
- * pages host, opened directly) this is byte-for-byte the OS-driven behavior of
+ * pages host, opened directly) this is the OS-driven behavior of
  * `DARK_MODE_SCRIPT`. Class sites never carry the param and keep `DARK_MODE_SCRIPT`.
+ *
+ * FORCED LIGHT IS A POSITIVE MARKER. `?theme=light` adds a `light` class as well
+ * as removing `dark`, because "no dark class" cannot be told apart from "nobody
+ * expressed a preference" — and something has to be able to tell, or a rule
+ * keyed on `prefers-color-scheme` darkens a deliberately-light embed on a
+ * dark-mode machine. The forms canvas is the rule that needs it today (see
+ * `components/forms/FormCanvas.tsx`); every Tailwind `dark:` utility in this app
+ * is in the same position, compiling to a media query for want of a
+ * `@custom-variant dark`. Only this branch sets `light`, and this branch returns
+ * before the OS listener is attached, so `light` and `dark` are never both
+ * present.
  */
 const APP_DARK_MODE_SCRIPT = `
               (function() {
@@ -202,9 +250,11 @@ const APP_DARK_MODE_SCRIPT = `
                   var forced = new URLSearchParams(window.location.search).get('theme');
                   if (forced === 'dark' || forced === 'light') {
                     if (forced === 'dark') {
+                      document.documentElement.classList.remove('light');
                       document.documentElement.classList.add('dark');
                     } else {
                       document.documentElement.classList.remove('dark');
+                      document.documentElement.classList.add('light');
                     }
                     return;
                   }
@@ -344,9 +394,22 @@ const Root = () => {
 
 // Error boundary
 export function ErrorBoundary() {
-  const error = useRouteError() as { message?: string; stack?: string } | undefined;
+  const routeError = useRouteError();
+  const error = routeError as { message?: string; stack?: string } | undefined;
   const location = useLocation();
   const isDevelopment = import.meta.env.MODE === 'development';
+
+  /**
+   * A 404 is a bad address, not a broken server, and telling someone to "try
+   * again in a moment" is advice that can never work — it reads as an outage we
+   * are about to fix.
+   *
+   * Every site route now throws its own 404 into the class-site layout's
+   * boundary (see `site/not-found.tsx`), so this is the BACKSTOP for whatever
+   * still reaches the root: a 404 thrown above the layout, or one on the editor
+   * app's own tree.
+   */
+  const isNotFound = isRouteErrorResponse(routeError) && routeError.status === 404;
 
   // The loader may be what threw, so the site flag is derived from the URL
   // rather than loader data.
@@ -363,10 +426,14 @@ export function ErrorBoundary() {
         <body className="bg-gray-50 dark:bg-[#191919]">
           <div className="min-h-screen flex flex-col items-center justify-center px-4">
             <h1 className="text-2xl font-bold text-gray-900 dark:text-white mb-2">
-              This page is unavailable
+              {isNotFound ? 'Not found' : 'This page is unavailable'}
             </h1>
             <p className="text-gray-600 dark:text-gray-400">
-              {isDevelopment ? error?.message : 'Try again in a moment.'}
+              {isNotFound
+                ? 'That address does not match anything on this site.'
+                : isDevelopment
+                  ? error?.message
+                  : 'Try again in a moment.'}
             </p>
             {isDevelopment && error?.stack && (
               <pre className="mt-4 p-4 bg-gray-100 rounded-md text-xs overflow-auto max-w-2xl">
@@ -391,18 +458,26 @@ export function ErrorBoundary() {
         <div className="min-h-screen flex flex-col items-center justify-center px-4">
           <div className="text-6xl mb-4 text-center">📄</div>
           <h1 className="text-2xl font-bold text-gray-900 dark:text-white mb-2">
-            Something went wrong
+            {isNotFound ? 'Not found' : 'Something went wrong'}
           </h1>
           <p className="text-gray-600 dark:text-gray-400 mb-4">
-            {isDevelopment ? error?.message : 'Please try refreshing the page.'}
+            {isNotFound
+              ? 'That address does not match anything here.'
+              : isDevelopment
+                ? error?.message
+                : 'Please try refreshing the page.'}
           </p>
           <div className="flex gap-4">
-            <button
-              onClick={() => window.location.reload()}
-              className="px-4 py-2 bg-black text-white rounded-md hover:bg-gray-800"
-            >
-              Refresh
-            </button>
+            {/* Reloading a 404 reproduces the 404. Only the way back out is
+                worth offering. */}
+            {isNotFound ? null : (
+              <button
+                onClick={() => window.location.reload()}
+                className="px-4 py-2 bg-black text-white rounded-md hover:bg-gray-800"
+              >
+                Refresh
+              </button>
+            )}
             <button
               onClick={() => window.history.back()}
               className="px-4 py-2 border border-gray-300 rounded-md hover:bg-gray-50"

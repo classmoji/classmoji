@@ -15,6 +15,7 @@ export default [
         '@classmoji/utils',
         '@classmoji/tasks',
         'better-auth',
+        'better-auth/api',
         'better-auth/react',
         'better-auth/client/plugins',
         'better-auth/client',

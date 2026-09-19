@@ -34,6 +34,8 @@ import {
   pageContentOutlineTool,
   pageContentGetTool,
   pageContentApplyTool,
+  pageAssetUploadTool,
+  pageCoverSetTool,
   pagePreviewAcceptTool,
   pagePreviewDiscardTool,
 } from './pageContent.ts';
@@ -45,6 +47,7 @@ import {
   deckPreviewAcceptTool,
   deckPreviewDiscardTool,
 } from './deck.ts';
+import { contentSearchTool, contentListTool, contentGetTool } from './contentSearch.ts';
 import { tokenGrantTool } from './tokens.ts';
 import { extensionPurchaseTool } from './extensions.ts';
 import { repoCreateTool, repoPublishTool, repoUnpublishTool } from './repos.ts';
@@ -61,6 +64,18 @@ import {
   resourceLinkRemoveTool,
   resourceLinksListTool,
 } from './resourceLinks.ts';
+import {
+  listFormsTool,
+  formGetTool,
+  formCreateTool,
+  formUpdateTool,
+  formPublishTool,
+  formDeleteTool,
+  listFormResponsesTool,
+  formResponseGetTool,
+  formResponseCreateTool,
+  formResponseUpdateTool,
+} from './forms.ts';
 import {
   teamCreateTool,
   teamDeleteTool,
@@ -128,6 +143,11 @@ export function registerAllTools(): void {
   registerToolDefinition(pagePreviewAcceptTool);
   registerToolDefinition(pagePreviewDiscardTool);
 
+  // Page assets + cover image. Both write the LIVE page, never a preview
+  // branch — the same boundary the web editor draws around cover changes.
+  registerToolDefinition(pageAssetUploadTool);
+  registerToolDefinition(pageCoverSetTool);
+
   // Slides: list (all roles, students published-only) + metadata CRUD
   // (TEACHING_TEAM with the web's creator/allow_team_edit sub-gate)
   registerToolDefinition(listSlidesTool);
@@ -149,6 +169,17 @@ export function registerAllTools(): void {
   registerToolDefinition(quizUpdateTool);
   registerToolDefinition(quizPublishTool);
   registerToolDefinition(quizDeleteTool);
+
+  // Course content: semantic search, enumeration and full-text reads over the
+  // classroom's pages, decks and bot-context/ notes (MEMBER — every role,
+  // students included). Draft visibility is decided ONCE, in
+  // packages/services' contentSearch.service; these tools forward a role and
+  // implement no rule of their own. NOTE the divergence from list_pages, which
+  // keeps draft pages to OWNER/TEACHER: decision D2 gives assistants draft
+  // discovery here (plan §8.5).
+  registerToolDefinition(contentSearchTool);
+  registerToolDefinition(contentListTool);
+  registerToolDefinition(contentGetTool);
 
   // Tokens (OWNER)
   registerToolDefinition(tokenGrantTool);
@@ -197,4 +228,22 @@ export function registerAllTools(): void {
   registerToolDefinition(teamMemberRemoveTool);
   registerToolDefinition(teamTagAddTool);
   registerToolDefinition(teamTagRemoveTool);
+
+  // Forms (OWNER+TEACHER — the tier apps/pages' assertFormAdmin composes from
+  // requireClassroomStaff; each tool also re-checks Pro tier in-handler). The
+  // response tools read applicant PII, so both of them write an audit VIEW row
+  // the way the web responses loader does; form_delete cascades to every
+  // response and is confirm-gated. form_response_create writes responses on the
+  // respondents' behalf — no mail, never overwrites, and it audits inside the
+  // service transaction that writes the rows rather than after it.
+  registerToolDefinition(listFormsTool);
+  registerToolDefinition(formGetTool);
+  registerToolDefinition(formCreateTool);
+  registerToolDefinition(formUpdateTool);
+  registerToolDefinition(formPublishTool);
+  registerToolDefinition(formDeleteTool);
+  registerToolDefinition(listFormResponsesTool);
+  registerToolDefinition(formResponseGetTool);
+  registerToolDefinition(formResponseCreateTool);
+  registerToolDefinition(formResponseUpdateTool);
 }

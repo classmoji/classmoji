@@ -17,6 +17,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => ({
   assertClassroomAccess: vi.fn(),
   assertClassroomMutationAllowed: vi.fn(),
+  findFirst: vi.fn(),
   findMany: vi.fn(),
   update: vi.fn(),
   updateMany: vi.fn(),
@@ -33,6 +34,7 @@ vi.mock('~/utils/helpers', () => ({
 vi.mock('@classmoji/database', () => ({
   default: () => ({
     slide: {
+      findFirst: (...a: unknown[]) => mocks.findFirst(...a),
       findMany: (...a: unknown[]) => mocks.findMany(...a),
       update: (...a: unknown[]) => mocks.update(...a),
       updateMany: (...a: unknown[]) => mocks.updateMany(...a),
@@ -40,15 +42,27 @@ vi.mock('@classmoji/database', () => ({
   }),
 }));
 
+/**
+ * `slideKindLabel` / `slideLinkHost` / `isDeckSlide` are pure helpers whose own
+ * behaviour is covered in `packages/services`. Here they stand in only so this
+ * file can assert the WIRING: that the loader hands each row to them and passes
+ * the answers through, and that the action's deck-only guard asks the right
+ * question of the right row.
+ */
 vi.mock('@classmoji/services', () => ({
   ClassmojiService: {
     resourceView: {
       getRecentViewersForPaths: (...a: unknown[]) => mocks.getRecentViewersForPaths(...a),
     },
   },
+  isDeckSlide: (slide: { kind?: string | null } | null) => !slide?.kind || slide.kind === 'DECK',
+  slideKindLabel: (slide: { kind?: string | null }) =>
+    slide.kind === 'LINK' ? 'link' : slide.kind === 'FILE' ? 'pdf' : 'deck',
+  slideLinkHost: (url?: string | null) => (url ? new URL(url).hostname : null),
 }));
 
 // The loader/action are what is under test; the view layer only needs to import.
+vi.mock('@classmoji/ui-components', () => ({ useCallout: () => ({ show: vi.fn() }) }));
 vi.mock('~/components', () => ({ TableActionButtons: () => null, RecentViewers: () => null }));
 vi.mock('antd', () => ({
   Table: () => null,
@@ -66,6 +80,10 @@ vi.mock('@tabler/icons-react', () => ({
   IconWorld: () => null,
   IconEdit: () => null,
   IconNotes: () => null,
+  IconDownload: () => null,
+  IconExternalLink: () => null,
+  IconPencil: () => null,
+  IconReplace: () => null,
 }));
 vi.mock('react-router', () => ({ useFetcher: () => ({ submit: vi.fn() }) }));
 
@@ -102,6 +120,9 @@ beforeEach(() => {
   });
   mocks.findMany.mockResolvedValue([]);
   mocks.getRecentViewersForPaths.mockResolvedValue(new Map());
+  // The deck-only toggles look the slide's kind up first; unless a test says
+  // otherwise the target is an ordinary deck.
+  mocks.findFirst.mockResolvedValue({ kind: 'DECK' });
   // One row matched = the deck really is in this classroom.
   mocks.updateMany.mockResolvedValue({ count: 1 });
 });
@@ -155,6 +176,10 @@ describe('slides action — a deck id from another classroom', () => {
   beforeEach(() => {
     // The classroom_id half of the where matches nothing.
     mocks.updateMany.mockResolvedValue({ count: 0 });
+    // The kind lookup is left answering deliberately, so the toggle path still
+    // reaches a write and the assertion below has one to inspect. That the
+    // lookup is itself classroom-bound is covered separately.
+    mocks.findFirst.mockResolvedValue({ kind: 'DECK' });
   });
 
   it.each([
@@ -294,6 +319,84 @@ describe('slides action — audit rows', () => {
   });
 });
 
+// ─── Team edit and speaker notes are deck-only, server side ──────────────────
+
+/**
+ * A slide is not always a deck any more: it can be an uploaded file students
+ * download or a link they are redirected to. Team editing is about the deck
+ * editor and speaker notes are a reveal.js concept, so neither applies to
+ * those, and `slideService.updateSlide` refuses the pair with a SlideKindError.
+ *
+ * The table disables both switches for a non-deck, but a disabled control is a
+ * hint — this is the half that enforces it. The refusal is a returned result
+ * rather than a throw so the list can show it; a thrown 409 would take over the
+ * page through the root error boundary.
+ */
+describe('slides action — deck-only toggles', () => {
+  it.each([['allow_team_edit'], ['show_speaker_notes']] as const)(
+    'refuses %s on a FILE slide without writing',
+    async field => {
+      mocks.findFirst.mockResolvedValue({ kind: 'FILE' });
+
+      const result = await route.action(actionArgs({ slideId: OWN_SLIDE, field, value: 'true' }));
+
+      expect(result).toEqual({
+        error: 'Team editing and speaker notes only apply to slide decks.',
+      });
+      expect(mocks.updateMany).not.toHaveBeenCalled();
+      expect(mocks.addClassroomAuditLog).not.toHaveBeenCalled();
+    }
+  );
+
+  it('refuses the toggles on a LINK slide too', async () => {
+    mocks.findFirst.mockResolvedValue({ kind: 'LINK' });
+
+    const result = await route.action(
+      actionArgs({ slideId: OWN_SLIDE, field: 'allow_team_edit', value: 'true' })
+    );
+
+    expect(result).toEqual({
+      error: 'Team editing and speaker notes only apply to slide decks.',
+    });
+    expect(mocks.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('asks for the kind of a slide in THIS classroom', async () => {
+    await route.action(
+      actionArgs({ slideId: OWN_SLIDE, field: 'show_speaker_notes', value: 'true' })
+    );
+
+    expect(mocks.findFirst).toHaveBeenCalledWith({
+      where: { id: OWN_SLIDE, classroom_id: 'class-1' },
+      select: { kind: true },
+    });
+  });
+
+  it('reports not-found when the kind lookup matches nothing in this classroom', async () => {
+    mocks.findFirst.mockResolvedValue(null);
+
+    const result = await route.action(
+      actionArgs({ slideId: FOREIGN_SLIDE, field: 'allow_team_edit', value: 'true' })
+    );
+
+    expect(result).toEqual({ error: 'Slide not found' });
+    expect(mocks.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('leaves status fully usable on a FILE slide', async () => {
+    // Draft/private/public is what decides who can see a slide, whatever kind
+    // it is. Only the two deck settings are narrowed.
+    mocks.findFirst.mockResolvedValue({ kind: 'FILE' });
+
+    const result = await route.action(
+      actionArgs({ slideId: OWN_SLIDE, field: 'status', value: 'public' })
+    );
+
+    expect(result).toEqual({ success: true });
+    expect(writeData()).toEqual({ is_draft: false, is_public: true });
+  });
+});
+
 // ─── The loader is scoped the same way ───────────────────────────────────────
 
 describe('slides loader', () => {
@@ -306,5 +409,44 @@ describe('slides loader', () => {
     expect(mocks.findMany).toHaveBeenCalledWith(
       expect.objectContaining({ where: { classroom_id: 'class-1' } })
     );
+  });
+
+  it('never asks for the multiplex credentials', async () => {
+    // A Slide row carries multiplex_id / multiplex_secret — live presentation
+    // capabilities, not list data — so the list selects explicitly.
+    await route.loader({
+      params: { class: CLASS_SLUG },
+      request: new Request(`http://localhost/admin/${CLASS_SLUG}/slides`),
+    } as unknown as Parameters<typeof route.loader>[0]);
+
+    const select = mocks.findMany.mock.calls[0][0].select as Record<string, unknown>;
+    expect(select).not.toHaveProperty('multiplex_id');
+    expect(select).not.toHaveProperty('multiplex_secret');
+  });
+
+  it('resolves the kind chip and the link host for every row, server side', async () => {
+    // The helpers live in the services barrel; calling them from component code
+    // would pull Prisma and the deck parser into the client bundle.
+    mocks.findMany.mockResolvedValue([
+      { id: 'deck-1', title: 'Recursion', kind: 'DECK', source_url: null },
+      { id: 'file-1', title: 'Syllabus', kind: 'FILE', source_url: null },
+      {
+        id: 'link-1',
+        title: 'Reading',
+        kind: 'LINK',
+        source_url: 'https://docs.example.edu/reading',
+      },
+    ]);
+
+    const data = await route.loader({
+      params: { class: CLASS_SLUG },
+      request: new Request(`http://localhost/admin/${CLASS_SLUG}/slides`),
+    } as unknown as Parameters<typeof route.loader>[0]);
+
+    expect(data.slides.map(s => [s.kindLabel, s.linkHost])).toEqual([
+      ['deck', null],
+      ['pdf', null],
+      ['link', 'docs.example.edu'],
+    ]);
   });
 });

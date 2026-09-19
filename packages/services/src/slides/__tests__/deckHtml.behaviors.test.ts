@@ -46,10 +46,80 @@ describe('parseSlidesFragment', () => {
   it('strips runtime cruft exactly like the document parser', () => {
     const result = parseSlidesFragment(
       '<div class="slides" data-theme="white" data-code-theme="github">' +
-        '<section class="present editing-mode" aria-hidden="true" style="display: block; margin: 0;" data-cm-id="frag9999"><h2>A</h2></section>' +
+        '<section class="present editing-mode" aria-hidden="true" style="display: block; top: 350px; margin: 0;" data-cm-id="frag9999"><h2>A</h2></section>' +
         '</div>'
     );
     expect(result.slides[0].attrs).toEqual({ style: 'margin: 0;' });
+  });
+
+  it("drops the style attribute entirely when Reveal's computed top was all it held", () => {
+    // reveal.js layout() writes style.top on EVERY section when center:true —
+    // a viewport-dependent value on leaves, a literal 0px on stacks (#361).
+    const result = parseSlidesFragment(
+      '<div class="slides">' +
+        '<section data-cm-id="frag0001" style="top: 350px;"><h2>A</h2></section>' +
+        '<section data-cm-id="frag0002" class="stack" style="top: 0px;">' +
+        '<section data-cm-id="frag0003" style="top: 12.5px"><h2>B</h2></section>' +
+        '</section>' +
+        '</div>'
+    );
+    expect(result.slides[0].attrs).toBeUndefined();
+    expect(result.slides[1].attrs).toBeUndefined();
+    expect(result.slides[1].children![0].attrs).toBeUndefined();
+  });
+
+  it('strips the contrast class every themed background earns', () => {
+    // backgrounds.js getContrastClass adds one of these under any themed
+    // background — otherwise every themed deck gains a class on first save
+    // and flips it whenever the theme changes.
+    const result = parseSlidesFragment(
+      '<div class="slides"><section data-cm-id="frag0001" ' +
+        'class="has-dark-background mine" data-background-color="#123456"><h2>A</h2></section>' +
+        '<section data-cm-id="frag0002" class="has-light-background"><h2>B</h2></section></div>'
+    );
+    expect(result.slides[0].attrs).toEqual({
+      class: 'mine',
+      'data-background-color': '#123456',
+    });
+    expect(result.slides[1].attrs).toBeUndefined();
+  });
+
+  it("strips only normal-view layout — the print view's left and width survive", () => {
+    const result = parseSlidesFragment(
+      '<div class="slides"><section data-cm-id="frag0001" ' +
+        'style="left: 40px; top: 12px; width: 960px;"><h2>A</h2></section></div>'
+    );
+    expect(result.slides[0].attrs).toEqual({ style: 'left: 40px; width: 960px;' });
+  });
+
+  it('preserves section attribute ORDER through the cruft strip (parse → generate)', () => {
+    const parsed = parseSlidesFragment(
+      '<div class="slides"><section data-cm-id="ord00001" data-transition="fade" ' +
+        'style="display: block; top: 350px; color: red;" data-background-color="#123456">' +
+        '<h2>A</h2></section></div>'
+    );
+    const html = generateDeckHtml(
+      { version: 1, theme: parsed.theme, codeTheme: parsed.codeTheme, slides: parsed.slides },
+      { title: 'T' }
+    );
+    expect(html).toContain(
+      '<section data-cm-id="ord00001" data-transition="fade" style="color: red;" ' +
+        'data-background-color="#123456">'
+    );
+  });
+
+  it("strips Reveal's runtime section attributes and keeps the author-set ones", () => {
+    const result = parseSlidesFragment(
+      '<div class="slides"><section data-cm-id="frag0001" data-fragment="1" ' +
+        'data-previous-indexv="2" data-index-h="3" data-index-v="4" ' +
+        'data-start-indexv="1" data-background-color="#123456" ' +
+        'data-transition="fade"><h2>A</h2></section></div>'
+    );
+    expect(result.slides[0].attrs).toEqual({
+      'data-start-indexv': '1',
+      'data-background-color': '#123456',
+      'data-transition': 'fade',
+    });
   });
 
   it('strips event-handler attributes from sections (converging with the generator)', () => {

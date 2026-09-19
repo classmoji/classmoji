@@ -92,8 +92,11 @@ function parseClaudeVersion(modelId: string): number {
  * Format Claude model ID into a readable label
  */
 function formatClaudeModelName(modelId: string): string {
-  // Manual mapping for known models with marketing names
-  // Add new models here as they're released
+  // DISPLAY ONLY. This map is reached from one place — labelling an id the
+  // Anthropic API itself returned without a `display_name` — so nothing in it
+  // can put a model in front of an instructor to pick. Retired ids stay here on
+  // purpose: they render a name rather than a raw id if one ever turns up in a
+  // stored setting. Do NOT copy ids from here into the selectable list below.
   const knownModels: Record<string, string> = {
     // Claude 3.5 generation
     'claude-3-5-sonnet-20241022': 'Claude 3.5 Sonnet (Oct 2024)',
@@ -177,16 +180,23 @@ function formatClaudeModelName(modelId: string): string {
 }
 
 /**
- * Fallback Anthropic models list (used if API call fails)
+ * Fallback Anthropic models list (used if the API call fails or there is no key)
+ *
+ * SELECTABLE. This is what the quiz settings dropdown
+ * (apps/webapp/app/routes/admin.$class.settings.quizzes) offers an instructor to
+ * save against their classroom whenever the live models call cannot answer, so
+ * every entry must be a model the API still serves — picking a retired id writes
+ * a setting that 404s on the next quiz, long after the person who chose it has
+ * left the page. Every id that used to be here (Claude 3 Opus/Sonnet/Haiku,
+ * Claude 3.5 Sonnet/Haiku) has since been retired by Anthropic; the two below
+ * are the repo's own declared defaults from .env.example (LLM_MODEL and
+ * EXPLORATION_MODEL), which is the only list this file can keep current without
+ * guessing at ids.
  */
 function getFallbackAnthropicModels(): Model[] {
   return [
-    { value: 'claude-sonnet-4-20250514', label: 'Claude Sonnet 4' },
-    { value: 'claude-3-5-sonnet-20241022', label: 'Claude 3.5 Sonnet (Oct 2024)' },
-    { value: 'claude-3-5-haiku-20241022', label: 'Claude 3.5 Haiku (Oct 2024)' },
-    { value: 'claude-3-opus-20240229', label: 'Claude 3 Opus' },
-    { value: 'claude-3-sonnet-20240229', label: 'Claude 3 Sonnet' },
-    { value: 'claude-3-haiku-20240307', label: 'Claude 3 Haiku' },
+    { value: 'claude-sonnet-4-5-20250929', label: 'Claude Sonnet 4.5' },
+    { value: 'claude-haiku-4-5-20251001', label: 'Claude Haiku 4.5' },
   ];
 }
 

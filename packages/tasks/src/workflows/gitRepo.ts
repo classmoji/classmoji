@@ -9,7 +9,7 @@ import {
   getGitProvider,
   ensureClassroomTeam,
 } from '@classmoji/services';
-import { titleToIdentifier } from '@classmoji/utils';
+import { titleToIdentifier, resolveTemplateRef } from '@classmoji/utils';
 import { createGithubRepositoryAssignmentTask } from './gitRepoAssignment.ts';
 import { updateRepository, type UpdateRepositoryPayload } from '../helpers/updateRepository.ts';
 import { createRepository, type CreateRepositoryPayload } from '../helpers/createRepository.ts';
@@ -159,7 +159,18 @@ export const createRepositoriesTask = task({
       throw new Error(`Unable to load repository or classroom for ${org}/${assignmentTitle}`);
     }
 
-    const [templateOwner, templateRepo] = repository.template.split('/');
+    // A template stored without an owner belongs to the classroom's own org,
+    // which is where templates live. Splitting blindly used to leave the repo
+    // half undefined and fail once per student on a URL that named no field.
+    const templateRef = resolveTemplateRef(repository.template, classroom.git_organization.login);
+    if (!templateRef) {
+      throw new Error(
+        `Assignment "${repository.title}" has no usable template repository ` +
+          `(template is "${repository.template ?? ''}"). Set it to owner/repo, ` +
+          `or to a repository in ${classroom.git_organization.login}.`
+      );
+    }
+    const { owner: templateOwner, repo: templateRepo } = templateRef;
     const students: StudentRecord[] = await ClassmojiService.classroomMembership.findUsersByRole(
       classroom.id,
       'STUDENT'

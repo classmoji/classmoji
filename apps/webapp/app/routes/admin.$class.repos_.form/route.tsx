@@ -1,5 +1,6 @@
 import { namedAction } from 'remix-utils/named-action';
 import { useNavigate, useParams } from 'react-router';
+import type { ShouldRevalidateFunctionArgs } from 'react-router';
 import { IconChevronLeft, IconFolder } from '@tabler/icons-react';
 
 import { requireClassroomAdmin, assertClassroomMutationAllowed } from '~/utils/routeAuth.server';
@@ -70,6 +71,23 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
     slides,
     hasReposWithProjects,
   };
+};
+
+// Inline tag creation mints one tag the form already renders locally (FormModule
+// merges the action's tag into the Select's options), so re-running this loader
+// buys nothing — and it costs: a fresh `repository` object would disturb edits the
+// instructor hasn't saved yet, and the whole heavy load (GitHub-backed repository,
+// pages, slides) would run behind the Create button. Skip it for that one named
+// action; everything else keeps the default behaviour.
+export const shouldRevalidate = ({
+  formAction,
+  defaultShouldRevalidate,
+}: ShouldRevalidateFunctionArgs) => {
+  if (formAction && new URL(formAction, 'http://localhost').searchParams.has('/createTag')) {
+    return false;
+  }
+
+  return defaultShouldRevalidate;
 };
 
 const ModuleForm = ({ loaderData }: Route.ComponentProps) => {
@@ -292,6 +310,21 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
   };
 
   return namedAction(request, {
+    // Lets an instructor add a team tag from the group-assignment form without
+    // leaving for Settings → Team. Upsert, so re-typing an existing name hands
+    // back that tag instead of tripping the [classroom_id, name] unique index.
+    async createTag() {
+      const name = typeof data.name === 'string' ? data.name.trim() : '';
+      if (!name) return { error: 'Please enter a tag name.' };
+
+      try {
+        const createdTag = await ClassmojiService.organizationTag.upsert(classroom.id, name);
+        return { tag: { id: createdTag.id, name: createdTag.name } };
+      } catch (error: unknown) {
+        console.error('Tag create error:', error);
+        return { error: 'Failed to create tag. Please try again.' };
+      }
+    },
     async create() {
       try {
         const createdModule = await ClassmojiService.repository.create({

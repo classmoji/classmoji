@@ -1,13 +1,26 @@
+import { Tag } from 'antd';
 import { IconFileText, IconPresentation } from '@tabler/icons-react';
 import { PageLink } from '~/components/features/pages';
 
+// Draft resources are chipped where they are listed, the way `resourceLeaves`
+// already chips a DRAFT form. For slides, `is_draft` is only ever true on the
+// teaching-team view, whose loader fetches drafts; a page is chipped by the same
+// rule wherever a caller lists one that is draft.
 interface LinkedPage {
-  page: { id: string; title: string };
+  page: { id: string; title: string; is_draft?: boolean };
 }
 
 interface LinkedSlide {
-  slide: { id: string; title: string };
+  slide: { id: string; title: string; is_draft?: boolean };
 }
+
+// Rendered inside the link so the chip travels with the item it labels, rather
+// than floating loose in the surrounding `gap-4` row.
+const DraftTag = () => (
+  <Tag color="orange" className="!ms-1 !me-0">
+    Draft
+  </Tag>
+);
 
 interface ResourceLinksProps {
   pages?: LinkedPage[];
@@ -34,7 +47,7 @@ const ResourceLinks = ({
   return (
     <div className="flex flex-wrap gap-4 mt-2">
       {hasPages &&
-        pages!.map(({ page }: { page: { id: string; title: string } }) => (
+        pages!.map(({ page }: LinkedPage) => (
           <PageLink
             key={page.id}
             pageId={page.id}
@@ -44,10 +57,11 @@ const ResourceLinks = ({
           >
             <IconFileText size={16} className="text-ink-3" />
             {page.title}
+            {page.is_draft === true && <DraftTag />}
           </PageLink>
         ))}
       {hasSlides &&
-        slides!.map(({ slide }: { slide: { id: string; title: string } }) => (
+        slides!.map(({ slide }: LinkedSlide) => (
           <a
             key={slide.id}
             href={`${slidesUrl}/${slide.id}`}
@@ -57,6 +71,7 @@ const ResourceLinks = ({
           >
             <IconPresentation size={16} className="text-ink-3" />
             {slide.title}
+            {slide.is_draft === true && <DraftTag />}
           </a>
         ))}
     </div>

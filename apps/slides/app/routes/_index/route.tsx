@@ -1,12 +1,64 @@
-import { useState, useEffect } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useLoaderData, Link, useFetcher } from 'react-router';
 import { Popconfirm, Modal, Input, Tooltip, Spin, message } from 'antd';
 import getPrisma from '@classmoji/database';
 import { getAuthSession, assertSlideAccess } from '@classmoji/auth/server';
 import { ClassmojiService } from '@classmoji/services';
 import { ContentService } from '@classmoji/content';
-import { slideService } from '@classmoji/services/slides';
+import { isDeckSlide, slideService } from '@classmoji/services/slides';
 import { deleteSlideVideos } from '~/utils/cloudinaryService.server';
+import { resolveDeckThumbnailUrls } from '~/utils/deckDelivery.server';
+import { enqueueDeckThumbnail } from '~/utils/deckThumbnailEnqueue.server';
+import { deckOnlyMessage, isDeckKind } from '~/utils/slideKind';
+
+/**
+ * What ONE card is built from — the whole of what this page sends the browser.
+ *
+ * The loader used to spread the Prisma row (`...slide`) into its payload, so
+ * every column of `Slide` was serialized into the HTML: the multiplex id and
+ * secret that let a client drive a presentation, and now a file slide's repo
+ * path and a link slide's destination as well. The cards draw a title, a kind,
+ * a draft badge, a classroom and a linked repository's name, so that is the
+ * list — anything a card starts showing gets added here deliberately.
+ */
+interface SlideCard {
+  id: string;
+  title: string;
+  kind: string;
+  is_draft: boolean;
+  classroom: { slug: string; name: string; content_namespace: string | null } | null;
+  repositoryTitle: string | null;
+  thumbnailUrl: string | null;
+}
+
+/** The one place a slide row becomes a card. Used by the loader and by duplicate. */
+function toSlideCard(
+  slide: {
+    id: string;
+    title: string;
+    kind?: string | null;
+    is_draft: boolean;
+    classroom?: { slug: string; name: string; content_namespace?: string | null } | null;
+    links?: Array<{ repository?: { title?: string | null } | null }> | null;
+  },
+  thumbnailUrl: string | null = null
+): SlideCard {
+  return {
+    id: slide.id,
+    title: slide.title,
+    kind: slide.kind ?? 'DECK',
+    is_draft: slide.is_draft,
+    classroom: slide.classroom
+      ? {
+          slug: slide.classroom.slug,
+          name: slide.classroom.name,
+          content_namespace: slide.classroom.content_namespace ?? null,
+        }
+      : null,
+    repositoryTitle: slide.links?.[0]?.repository?.title ?? null,
+    thumbnailUrl,
+  };
+}
 
 export const loader = async ({ request }: { request: Request }) => {
   // 1. Require authentication
@@ -47,12 +99,18 @@ export const loader = async ({ request }: { request: Request }) => {
   // If user has no classroom memberships, return empty
   if (whereConditions.length === 0) {
     return {
-      slides: [],
+      slides: [] as SlideCard[],
       webappUrl: process.env.WEBAPP_URL || 'http://localhost:3000',
     };
   }
 
   // 5. Fetch slides with role-based filtering
+  //
+  // The classroom now carries what a THUMBNAIL URL is resolved from as well as
+  // what the card prints: the repo the image lives in, the key version its
+  // signature is derived under, and whether the delivery layer is on for this
+  // classroom at all. None of that reaches the client — it is stripped below,
+  // so the shape the component sees is exactly what it was.
   const recentSlides = await getPrisma().slide.findMany({
     where: { OR: whereConditions },
     take: 20,
@@ -60,9 +118,14 @@ export const loader = async ({ request }: { request: Request }) => {
     include: {
       classroom: {
         select: {
+          id: true,
           slug: true,
           name: true,
           content_namespace: true,
+          content_repo: true,
+          content_key_version: true,
+          content_delivery_enabled: true,
+          git_organization: { select: { login: true } },
         },
       },
       links: {
@@ -74,8 +137,14 @@ export const loader = async ({ request }: { request: Request }) => {
     },
   });
 
+  // ONE delivery call per classroom and tier — not one per deck, and none at
+  // all for a deck that has never been rendered. This is the whole of the
+  // per-deck work the index does now: it used to do none here and all of it
+  // twenty times over, once inside each iframe's own `$slideId` loader.
+  const thumbnails = await resolveDeckThumbnailUrls(recentSlides);
+
   return {
-    slides: recentSlides,
+    slides: recentSlides.map(slide => toSlideCard(slide, thumbnails.get(slide.id) ?? null)),
     webappUrl: process.env.WEBAPP_URL || 'http://localhost:3000',
   };
 };
@@ -121,6 +190,50 @@ export const action = async ({ request }: { request: Request }) => {
       const message = error instanceof Error ? error.message : 'Failed to delete slide';
       return { error: message };
     }
+  }
+
+  // A card scrolled into view with no stored thumbnail. Nobody is waiting on
+  // the answer and nothing is shown either way — the placeholder stays until a
+  // render lands and the next load picks it up.
+  if (intent === 'thumbnail') {
+    const slideId = formData.get('slideId') as string | null;
+    if (!slideId) return { intent: 'thumbnail', outcome: 'invalid' };
+
+    // A SESSION first. This endpoint spends a render — a booted browser, a
+    // commit into a content repo — and the loader that produces the placeholder
+    // cards it answers for is behind a session already. Anonymous callers get
+    // the same `rate-limited` shape as everything else here rather than a 401,
+    // because a distinguishable refusal is an oracle for which slide ids exist.
+    if (!authData) return { intent: 'thumbnail', outcome: 'rate-limited' };
+
+    // Then the same gate the card's own link is behind: a viewer may ask for a
+    // picture of a deck they may open, and nothing else. A refusal answers the
+    // same shape as a rate-limited request — this endpoint tells a caller
+    // nothing about decks it cannot see.
+    try {
+      await assertSlideAccess({ request, slideId, accessType: 'view' });
+    } catch {
+      return { intent: 'thumbnail', outcome: 'rate-limited' };
+    }
+
+    const slide = await getPrisma().slide.findUnique({
+      where: { id: slideId },
+      select: {
+        id: true,
+        kind: true,
+        classroom_id: true,
+        thumbnail_path: true,
+        thumbnail_rendered_at: true,
+      },
+    });
+    // Already has one: the client's copy of the loader data is simply behind.
+    if (!slide || slide.thumbnail_path) return { intent: 'thumbnail', outcome: 'rate-limited' };
+    // A file or a link has no deck to screenshot. The render task refuses these
+    // too, but that refusal costs a queued run and a Browser Run slot; this one
+    // costs a comparison. Same shape as every other refusal here.
+    if (slide.kind !== 'DECK') return { intent: 'thumbnail', outcome: 'rate-limited' };
+
+    return { intent: 'thumbnail', outcome: await enqueueDeckThumbnail(slide) };
   }
 
   if (intent === 'rename') {
@@ -199,6 +312,16 @@ export const action = async ({ request }: { request: Request }) => {
         return { error: 'Slide not found' };
       }
 
+      // Deck-only. Everything below is written for a deck: it copies the folder,
+      // rewrites the paths inside `index.html`/`deck.json`, and creates a row
+      // with NO `kind` or `source_*` — which for a file slide would mean a DECK
+      // row pointing at a folder that holds a PDF and no document to render.
+      // Duplicating a file or a link is a real feature; it is just not this one,
+      // and shipping it half-done would leave broken slides behind.
+      if (!isDeckSlide(slide)) {
+        return { error: deckOnlyMessage(slide.kind, 'duplicate') };
+      }
+
       const gitOrganization = slide.classroom?.git_organization;
       if (!gitOrganization?.login) {
         return { error: 'Git organization not configured for this classroom' };
@@ -210,7 +333,7 @@ export const action = async ({ request }: { request: Request }) => {
       const newContentPath = `slides/${newSlug}`;
 
       // Copy content folder in GitHub
-      await ContentService.copyFolder({
+      const copy = await ContentService.copyFolder({
         gitOrganization,
         repo,
         sourcePath: slide.content_path,
@@ -218,54 +341,127 @@ export const action = async ({ request }: { request: Request }) => {
         message: `Duplicate slides: ${slide.title}`,
       });
 
-      // Rewrite content paths in the copied index.html
-      // Images and other assets reference the old content_path in their URLs
-      // e.g., /content/{org}/{repo}/{old_content_path}/images/...
+      // The two texts that carry references: the generated index.html and, for
+      // deck-first slides, deck.json. 404-tolerant — a legacy deck has no
+      // deck.json, and getContent returns null.
       const indexPath = `${newContentPath}/index.html`;
-      const indexFile = await ContentService.getContent({
-        gitOrganization,
-        repo,
-        path: indexPath,
-        skipCache: true,
-      });
+      const deckPath = `${newContentPath}/deck.json`;
+      const [indexFile, deckFile] = await Promise.all([
+        ContentService.getContent({ gitOrganization, repo, path: indexPath, skipCache: true }),
+        ContentService.getContent({ gitOrganization, repo, path: deckPath, skipCache: true }),
+      ]);
 
-      if (indexFile?.content && slide.content_path !== newContentPath) {
-        const updatedContent = indexFile.content.replaceAll(slide.content_path, newContentPath);
-
-        if (updatedContent !== indexFile.content) {
-          await ContentService.put({
-            gitOrganization,
-            repo,
-            path: indexPath,
-            content: updatedContent,
-            message: `Rewrite content paths for duplicated slides: ${slide.title}`,
-          });
-        }
+      // Repoint the copy's references at the copy, through the SAME rewriter
+      // the classroom import uses. Not a blind `replaceAll` of the old folder
+      // name: that reaches inside a URL belonging to another repo — or another
+      // org — and rewrites the matching segment there, turning a reference that
+      // at least resolved into one that names a folder existing nowhere.
+      //
+      // The repo is the same on both sides, so ordinarily only the item folder
+      // moves. The exception is a CHAINED reference: a deck that arrived here
+      // by import still names the repo it came from, and `copyFolder` has just
+      // put those files in the new folder — so those are repointed at this
+      // repo, and only where the file is actually in the copy.
+      //
+      // `shaPaths` comes along for the ride so the rewriter can turn any signed
+      // URL in the source deck back into the repo path it names — the stored
+      // form, which the deck loader signs again at render — instead of leaving
+      // it to expire in the copy and warning about every one.
+      const copiedPaths = new Set(copy.paths);
+      // The copy is ADDITIVE — the rest of the repo is still there — so the
+      // classroom's asset index answers for everything `copyFolder` did not
+      // just write. Without it a chained reference to another deck that IS in
+      // this repo would be read as broken and counted as a residual.
+      let existingPaths: ReadonlySet<string>;
+      try {
+        existingPaths = await ClassmojiService.contentAssets.listContentAssetPaths(
+          slide.classroom_id
+        );
+      } catch {
+        existingPaths = new Set<string>();
       }
 
-      // Apply the same content-path rewrite to the copied deck.json (the
-      // source of truth for deck-first slides). 404-tolerant: legacy decks
-      // have no deck.json yet — getContent returns null and we skip.
-      const deckPath = `${newContentPath}/deck.json`;
-      const deckFile = await ContentService.getContent({
-        gitOrganization,
-        repo,
-        path: deckPath,
-        skipCache: true,
-      });
+      let uncopiedRefs = 0;
+      let unresolvedSignedRefs = 0;
+      const shaPaths = await ClassmojiService.contentImport.resolveShaPaths(slide.classroom_id, [
+        indexFile?.content ?? '',
+        deckFile?.content ?? '',
+      ]);
+      const rewriteCtx = {
+        sourceLogin: gitOrganization.login,
+        sourceRepo: repo,
+        sourcePath: slide.content_path,
+        targetLogin: gitOrganization.login,
+        targetRepo: repo,
+        targetPath: newContentPath,
+        shaPaths,
+        targetHasPath: (candidate: string) =>
+          copiedPaths.has(candidate) || existingPaths.has(candidate),
+        onUncopiedRef: () => {
+          uncopiedRefs++;
+        },
+        // Counted, not logged one by one — and deliberately not through the
+        // rewriter's own wording, which is written for an IMPORT. A duplicate
+        // stays in the same classroom, so a signed URL it could not turn back
+        // into a repo path still resolves; it is simply frozen at today's key
+        // version instead of following the file.
+        onWarn: () => {
+          unresolvedSignedRefs++;
+        },
+      };
 
-      if (deckFile?.content && slide.content_path !== newContentPath) {
-        const updatedDeck = deckFile.content.replaceAll(slide.content_path, newContentPath);
+      // Both rewrites below record what they wrote. index.html and deck.json
+      // are READ through the asset map now (fetchContentText), and the copy's
+      // paths are new, so the map has no row for them until the push webhook
+      // lands.
+      //
+      // Only what the REWRITES write, though: `copyFolder` above is what puts
+      // the files there, and it reports no shas, so a deck whose content had no
+      // self-referencing paths to rewrite gets no rows here. That is a missing
+      // row, not a wrong one — the read falls back to the contents API and
+      // serves the right bytes — so it costs one GitHub call per view until the
+      // webhook arrives rather than showing the wrong deck.
+      const written: Array<{ path: string; sha: string }> = [];
 
-        if (updatedDeck !== deckFile.content) {
-          await ContentService.put({
-            gitOrganization,
-            repo,
-            path: deckPath,
-            content: updatedDeck,
-            message: `Rewrite content paths for duplicated slides: ${slide.title}`,
-          });
-        }
+      for (const [path, file] of [
+        [indexPath, indexFile],
+        [deckPath, deckFile],
+      ] as const) {
+        if (!file?.content || slide.content_path === newContentPath) continue;
+        const updated = ClassmojiService.contentImport.rewriteContentUrls(file.content, rewriteCtx);
+        if (updated === file.content) continue;
+
+        const result = await ContentService.put({
+          gitOrganization,
+          repo,
+          path,
+          content: updated,
+          message: `Rewrite content paths for duplicated slides: ${slide.title}`,
+        });
+        written.push({ path, sha: result.sha });
+      }
+
+      // One line for the duplicate, not one per reference. These are links that
+      // were already pointing at another repo and whose files did not come
+      // along; repointing them would have invented a path.
+      if (uncopiedRefs > 0) {
+        console.warn(
+          `[slides.duplicate] left ${uncopiedRefs} reference(s) into another ${gitOrganization.login} ` +
+            `repository untouched in "${slide.title}" — those files are not in this copy`
+        );
+      }
+      if (unresolvedSignedRefs > 0) {
+        console.warn(
+          `[slides.duplicate] kept ${unresolvedSignedRefs} signed URL(s) verbatim in ` +
+            `"${slide.title}" — the classroom's asset map has no path for them, so the copy ` +
+            `holds a frozen URL rather than a reference that follows the file`
+        );
+      }
+
+      // Never throws: the copy is already committed, and the next sync writes
+      // the same rows.
+      if (slide.classroom_id) {
+        await ClassmojiService.contentAssets.recordContentAssets(slide.classroom_id, written);
       }
 
       // Create new database record
@@ -283,7 +479,7 @@ export const action = async ({ request }: { request: Request }) => {
         },
         include: {
           classroom: {
-            select: { slug: true, name: true },
+            select: { slug: true, name: true, content_namespace: true },
           },
           links: {
             include: { repository: true },
@@ -292,10 +488,21 @@ export const action = async ({ request }: { request: Request }) => {
         },
       });
 
+      // A copy is a new deck with new content at a new path, and no thumbnail —
+      // `copyFolder` above copies the SOURCE's `thumbnail.webp` into the new
+      // folder, but nothing points the new row at it and its picture is of the
+      // deck before the path rewrites. Enqueue a real one.
+      //
+      // Same contract as every other enqueue: after the row lands, never
+      // awaited, and unable to fail a duplication that has already committed.
+      void ClassmojiService.deckThumbnail.enqueueDeckThumbnail(newSlide.id, slide.classroom_id);
+
       // Update the content manifest
       await ClassmojiService.contentManifest.saveManifest(slide.classroom_id);
 
-      return { success: true, intent: 'duplicate', newSlide };
+      // Through the same mapper the loader uses: the client prepends this to
+      // the list it already holds, so it has to be a card and nothing more.
+      return { success: true, intent: 'duplicate', newSlide: toSlideCard(newSlide) };
     } catch (error: unknown) {
       console.error('Failed to duplicate slide:', error);
       const message = error instanceof Error ? error.message : 'Failed to duplicate slide';
@@ -305,6 +512,113 @@ export const action = async ({ request }: { request: Request }) => {
 
   return { error: 'Unknown action' };
 };
+
+/**
+ * How many missing thumbnails ONE page load may ask to have rendered.
+ *
+ * The per-deck window in `deckThumbnailEnqueue.server` is the real cap; this is
+ * the blast radius of a single load, so a staff index full of decks nobody has
+ * saved since this shipped trickles rather than firing twenty at once. The
+ * backfill script is the tool for "render all of them".
+ */
+const MAX_THUMBNAIL_ENQUEUES = 5;
+
+/**
+ * The placeholder's colour, from the classroom rather than the deck.
+ *
+ * A card with no image still has to be TELLABLE from its neighbours at a glance,
+ * and the useful grouping on this page is by course — the badge already prints
+ * the classroom slug. Deterministic, so the same class is the same colour on
+ * every load and between users; there is no stored accent colour to read.
+ */
+const PLACEHOLDER_ACCENTS = [
+  'bg-sky-100 text-sky-900 dark:bg-sky-950 dark:text-sky-200',
+  'bg-emerald-100 text-emerald-900 dark:bg-emerald-950 dark:text-emerald-200',
+  'bg-amber-100 text-amber-900 dark:bg-amber-950 dark:text-amber-200',
+  'bg-violet-100 text-violet-900 dark:bg-violet-950 dark:text-violet-200',
+  'bg-rose-100 text-rose-900 dark:bg-rose-950 dark:text-rose-200',
+  'bg-cyan-100 text-cyan-900 dark:bg-cyan-950 dark:text-cyan-200',
+];
+
+function placeholderAccent(seed: string | null | undefined): string {
+  if (!seed) return PLACEHOLDER_ACCENTS[0];
+  let hash = 0;
+  for (let i = 0; i < seed.length; i += 1) hash = (hash * 31 + seed.charCodeAt(i)) >>> 0;
+  return PLACEHOLDER_ACCENTS[hash % PLACEHOLDER_ACCENTS.length];
+}
+
+/**
+ * One card's picture: the stored image, or a placeholder that asks for one.
+ *
+ * This used to be a live `<iframe src="/{id}?preview=true">` — a full
+ * authenticated document request per deck, booting Reveal.js inside a
+ * 0.2-scaled frame, twenty of them on a staff index. The real cost was never
+ * the deck text: it was the unguarded shared-theme preload behind each one
+ * (a Prisma read, an installation-token mint and three authenticated GitHub
+ * calls per frame) plus a subscription-tier query per card. A stored image
+ * deletes both without either code path being touched.
+ *
+ * The observer exists only for decks with NO image. It fires once, disconnects,
+ * and asks the server; the answer changes nothing on screen, because a render
+ * takes seconds and commits to git. The next load has the picture.
+ */
+function DeckThumbnail({
+  slide,
+  accentSeed,
+  onNeedsRender,
+}: {
+  slide: { id: string; title: string; thumbnailUrl?: string | null };
+  accentSeed: string | null | undefined;
+  onNeedsRender: (slideId: string) => void;
+}) {
+  const ref = useRef<HTMLDivElement | null>(null);
+  const accent = placeholderAccent(accentSeed);
+
+  useEffect(() => {
+    if (slide.thumbnailUrl) return;
+    const el = ref.current;
+    if (!el || typeof IntersectionObserver === 'undefined') return;
+
+    const observer = new IntersectionObserver(
+      entries => {
+        for (const entry of entries) {
+          if (!entry.isIntersecting) continue;
+          observer.disconnect();
+          onNeedsRender(slide.id);
+        }
+      },
+      // A little ahead of the fold: the picture is for the NEXT load either
+      // way, so asking slightly early costs nothing and asking late wastes the
+      // scroll that would have justified it.
+      { rootMargin: '200px' }
+    );
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [slide.id, slide.thumbnailUrl, onNeedsRender]);
+
+  if (slide.thumbnailUrl) {
+    return (
+      <img
+        src={slide.thumbnailUrl}
+        // Decorative: the deck's title is the card's own <h3>, right below this,
+        // and a screen reader announcing it twice is worse than not at all.
+        alt=""
+        loading="lazy"
+        decoding="async"
+        className="w-full h-full object-cover"
+      />
+    );
+  }
+
+  return (
+    <div
+      ref={ref}
+      className={`w-full h-full flex items-center justify-center px-6 text-center ${accent}`}
+    >
+      <span className="text-sm font-medium line-clamp-3">{slide.title}</span>
+    </div>
+  );
+}
 
 export default function SlidesIndex() {
   const { slides: initialSlides, webappUrl } = useLoaderData<typeof loader>();
@@ -320,6 +634,34 @@ export default function SlidesIndex() {
     slideTitle: string;
   }>({ open: false, action: null, slideTitle: '' });
   const fetcher = useFetcher();
+
+  /**
+   * Thumbnail requests go out as a bare `fetch`, NOT through a fetcher.
+   *
+   * Two reasons, both about not disturbing the page. A fetcher submission
+   * revalidates the loader when it settles, and five of those would re-run the
+   * whole index query for a result that cannot have changed yet. And a single
+   * fetcher aborts its own in-flight request when it is submitted again, so
+   * five enqueues down one fetcher would be one enqueue and four cancellations.
+   *
+   * `?index` because this posts to the INDEX route's action, not the root
+   * layout's.
+   */
+  const requestedThumbnails = useRef<Set<string>>(new Set());
+  const thumbnailBudget = useRef(MAX_THUMBNAIL_ENQUEUES);
+  const requestThumbnail = useCallback((slideId: string) => {
+    if (requestedThumbnails.current.has(slideId)) return;
+    if (thumbnailBudget.current <= 0) return;
+    requestedThumbnails.current.add(slideId);
+    thumbnailBudget.current -= 1;
+
+    const body = new FormData();
+    body.append('intent', 'thumbnail');
+    body.append('slideId', slideId);
+    // Nothing is awaited and nothing is shown: the render lands in git seconds
+    // from now, and the next load of this page is what picks it up.
+    void fetch('/?index', { method: 'POST', body }).catch(() => {});
+  }, []);
 
   // Handle action responses
   useEffect(() => {
@@ -415,13 +757,22 @@ export default function SlidesIndex() {
                 className="relative group bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 hover:border-gray-300 dark:hover:border-gray-600 transition-colors overflow-hidden"
               >
                 {/* Slide Preview */}
-                <Link to={`/${slide.id}?returnUrl=${encodeURIComponent('/')}`} className="block">
+                {/* `reloadDocument` for everything that is not a deck. For
+                    those kinds `/{slideId}` is a 302 — to a signed download or
+                    to somebody else's site — and a classroom with no delivery
+                    layer is sent to `/{slideId}/download`, a RESOURCE route
+                    with nothing for the client router to render. A full
+                    document navigation is what makes the browser follow it. */}
+                <Link
+                  to={`/${slide.id}?returnUrl=${encodeURIComponent('/')}`}
+                  reloadDocument={!isDeckKind(slide.kind)}
+                  className="block"
+                >
                   <div className="aspect-video bg-gray-100 dark:bg-gray-700 overflow-hidden relative">
-                    <iframe
-                      src={`/${slide.id}?preview=true`}
-                      className="w-[500%] h-[500%] origin-top-left scale-[0.2] pointer-events-none border-0"
-                      title={`Preview of ${slide.title}`}
-                      loading="lazy"
+                    <DeckThumbnail
+                      slide={slide}
+                      accentSeed={slide.classroom?.slug || slide.classroom?.name}
+                      onNeedsRender={requestThumbnail}
                     />
                     {/* Badges overlay */}
                     <div className="absolute top-2 right-2 flex flex-col items-end gap-1">
@@ -439,12 +790,17 @@ export default function SlidesIndex() {
 
                 {/* Card Content */}
                 <div className="p-4">
-                  <Link to={`/${slide.id}?returnUrl=${encodeURIComponent('/')}`} className="block">
+                  {/* Same reason as the picture above it. */}
+                  <Link
+                    to={`/${slide.id}?returnUrl=${encodeURIComponent('/')}`}
+                    reloadDocument={!isDeckKind(slide.kind)}
+                    className="block"
+                  >
                     <h3 className="font-medium text-gray-900 dark:text-white truncate">
                       {slide.title}
                     </h3>
                     <p className="mt-1 text-sm text-gray-500 dark:text-gray-400 truncate">
-                      {slide.links?.[0]?.repository?.title || '—'}
+                      {slide.repositoryTitle || '—'}
                     </p>
                     <div className="mt-2 text-xs text-gray-400 dark:text-gray-500">
                       {slide.classroom?.content_namespace}
@@ -454,27 +810,31 @@ export default function SlidesIndex() {
 
                 {/* Action buttons - shown on hover */}
                 <div className="absolute top-2 left-2 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                  <Tooltip title="Edit">
-                    <Link
-                      to={`/${slide.id}?mode=edit&returnUrl=${encodeURIComponent('/')}`}
-                      className="p-1.5 bg-white/90 dark:bg-gray-800/90 text-gray-600 hover:text-blue-600 dark:text-gray-300 dark:hover:text-blue-400 rounded-md transition-colors shadow-sm"
-                      onClick={e => e.stopPropagation()}
-                    >
-                      <svg
-                        className="w-4 h-4"
-                        fill="none"
-                        stroke="currentColor"
-                        viewBox="0 0 24 24"
+                  {/* Deck-only: `?mode=edit` on a file or a link never opens the
+                      editor — that URL is a download or an offsite redirect. */}
+                  {isDeckKind(slide.kind) && (
+                    <Tooltip title="Edit">
+                      <Link
+                        to={`/${slide.id}?mode=edit&returnUrl=${encodeURIComponent('/')}`}
+                        className="p-1.5 bg-white/90 dark:bg-gray-800/90 text-gray-600 hover:text-blue-600 dark:text-gray-300 dark:hover:text-blue-400 rounded-md transition-colors shadow-sm"
+                        onClick={e => e.stopPropagation()}
                       >
-                        <path
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                          strokeWidth={2}
-                          d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"
-                        />
-                      </svg>
-                    </Link>
-                  </Tooltip>
+                        <svg
+                          className="w-4 h-4"
+                          fill="none"
+                          stroke="currentColor"
+                          viewBox="0 0 24 24"
+                        >
+                          <path
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                            strokeWidth={2}
+                            d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"
+                          />
+                        </svg>
+                      </Link>
+                    </Tooltip>
+                  )}
                   <Tooltip title="Rename">
                     <button
                       className="p-1.5 bg-white/90 dark:bg-gray-800/90 text-gray-600 hover:text-blue-600 dark:text-gray-300 dark:hover:text-blue-400 rounded-md transition-colors shadow-sm"
@@ -499,31 +859,35 @@ export default function SlidesIndex() {
                       </svg>
                     </button>
                   </Tooltip>
-                  <Tooltip title="Duplicate">
-                    <button
-                      className="p-1.5 bg-white/90 dark:bg-gray-800/90 text-gray-600 hover:text-green-600 dark:text-gray-300 dark:hover:text-green-400 rounded-md transition-colors shadow-sm disabled:opacity-50"
-                      onClick={e => {
-                        e.stopPropagation();
-                        e.preventDefault();
-                        handleDuplicate(slide);
-                      }}
-                      disabled={progressModal.open}
-                    >
-                      <svg
-                        className="w-4 h-4"
-                        fill="none"
-                        stroke="currentColor"
-                        viewBox="0 0 24 24"
+                  {/* Deck-only: the duplicate path copies a deck's folder and
+                      rewrites the paths inside it. The action refuses the rest. */}
+                  {isDeckKind(slide.kind) && (
+                    <Tooltip title="Duplicate">
+                      <button
+                        className="p-1.5 bg-white/90 dark:bg-gray-800/90 text-gray-600 hover:text-green-600 dark:text-gray-300 dark:hover:text-green-400 rounded-md transition-colors shadow-sm disabled:opacity-50"
+                        onClick={e => {
+                          e.stopPropagation();
+                          e.preventDefault();
+                          handleDuplicate(slide);
+                        }}
+                        disabled={progressModal.open}
                       >
-                        <path
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                          strokeWidth={2}
-                          d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"
-                        />
-                      </svg>
-                    </button>
-                  </Tooltip>
+                        <svg
+                          className="w-4 h-4"
+                          fill="none"
+                          stroke="currentColor"
+                          viewBox="0 0 24 24"
+                        >
+                          <path
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                            strokeWidth={2}
+                            d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"
+                          />
+                        </svg>
+                      </button>
+                    </Tooltip>
+                  )}
                   <Popconfirm
                     title="Delete slide"
                     description={`Are you sure you want to delete "${slide.title}"?`}

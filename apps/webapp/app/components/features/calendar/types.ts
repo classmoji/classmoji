@@ -35,6 +35,15 @@ export interface CalendarEventWithLinks {
   event_type: string;
   occurrence_date?: string | null;
   is_deadline?: boolean;
+  /**
+   * A synthesized form-close item. It is a deadline for rendering, filtering and
+   * ICS export, but it has no assignment behind it — so it is never draggable,
+   * and it links to the form rather than to a GitHub issue.
+   */
+  is_form_close?: boolean;
+  form_url?: string | null;
+  form_status?: string | null;
+  form_access?: string | null;
   is_unpublished?: boolean;
   meeting_link?: string | null;
   location?: string | null;

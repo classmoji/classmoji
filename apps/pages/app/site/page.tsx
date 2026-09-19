@@ -45,7 +45,12 @@ export const loader = async (args: LoaderFunctionArgs) => {
   )) as SitePageRow | null;
 
   if (!page || page.is_draft) {
-    throw new Response('missing', {
+    // `no-page`, not `missing`: the layout resolved this site before this
+    // loader ran, so the visitor is on a course website that exists and is
+    // switched on — they just followed a link to nothing. `missing` is reserved
+    // for a hostname that resolves to no site at all, which is a different
+    // sentence to read (see the layout's ErrorBoundary).
+    throw new Response('no-page', {
       status: 404,
       headers: siteHeaders({ request, cacheable: false, noindex: true }),
     });

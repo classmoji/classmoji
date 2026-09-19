@@ -28,8 +28,20 @@ const mocks = vi.hoisted(() => ({
   quizDelete: vi.fn(),
   quizFindById: vi.fn(),
   repositoryFindById: vi.fn(),
-  getProState: vi.fn(),
+  assertProTier: vi.fn(),
   auditCreate: vi.fn(),
+}));
+
+/**
+ * The Pro gate is no longer decided in this app: authz/proTier.ts translates
+ * `@classmoji/auth/server`'s lifted `assertProTier`, which throws a 403
+ * Response. Mocking THAT is what pins the wrapper's contract — a thrown
+ * Response becomes a forbidden ToolError, and the gate runs before any mutation.
+ * What "Pro" means (tier + ends_at) is pinned once, in
+ * packages/auth/src/__tests__/proTier.test.ts.
+ */
+vi.mock('@classmoji/auth/server', () => ({
+  assertProTier: (...a: unknown[]) => mocks.assertProTier(...a),
 }));
 
 vi.mock('@classmoji/services', () => ({
@@ -42,9 +54,6 @@ vi.mock('@classmoji/services', () => ({
       findById: (...a: unknown[]) => mocks.quizFindById(...a),
     },
     repository: { findById: (...a: unknown[]) => mocks.repositoryFindById(...a) },
-    // Reached through the shared assertProTier helper exported by
-    // resources/content.ts (one Pro-tier definition for reads AND writes).
-    subscription: { getProStateForClassroomId: (...a: unknown[]) => mocks.getProState(...a) },
     audit: { create: (...a: unknown[]) => mocks.auditCreate(...a) },
   },
 }));
@@ -61,7 +70,8 @@ function ctxWithSettings(settings: Record<string, unknown>): ToolContext {
       role: 'OWNER',
       status: 'ACTIVE',
       membership: { id: 'm-1', role: 'OWNER' },
-      classroom: { settings },
+      // The Pro wrapper reads the AUTHORIZED classroom's slug off this object.
+      classroom: { slug: 'w26', settings },
     },
   } as unknown as ToolContext;
 }
@@ -89,7 +99,7 @@ function parse(result: { content: Array<{ text: string }> }) {
 beforeEach(() => {
   for (const m of Object.values(mocks)) m.mockReset();
   mocks.auditCreate.mockResolvedValue(undefined);
-  mocks.getProState.mockResolvedValue({ isPro: true });
+  mocks.assertProTier.mockResolvedValue(undefined);
 });
 
 describe('quiz_create', () => {
@@ -152,7 +162,9 @@ describe('quiz_create', () => {
   });
 
   it('denies a classroom without a Pro subscription before mutating', async () => {
-    mocks.getProState.mockResolvedValue({ isPro: false });
+    mocks.assertProTier.mockRejectedValue(
+      new Response('This feature requires a Pro subscription', { status: 403 })
+    );
     await expect(quizCreateTool.handler(ARGS, CTX)).rejects.toMatchObject({ kind: 'forbidden' });
     expect(mocks.quizCreate).not.toHaveBeenCalled();
   });
@@ -304,7 +316,9 @@ describe('quiz_update', () => {
   });
 
   it('denies when the quiz surface is off (Pro / quizzes_enabled) before loading', async () => {
-    mocks.getProState.mockResolvedValue({ isPro: false });
+    mocks.assertProTier.mockRejectedValue(
+      new Response('This feature requires a Pro subscription', { status: 403 })
+    );
     await expect(quizUpdateTool.handler(ARGS, CTX)).rejects.toMatchObject({ kind: 'forbidden' });
     expect(mocks.quizFindById).not.toHaveBeenCalled();
   });
@@ -405,7 +419,9 @@ describe('quiz_delete', () => {
   });
 
   it('denies without a Pro subscription before loading the quiz', async () => {
-    mocks.getProState.mockResolvedValue({ isPro: false });
+    mocks.assertProTier.mockRejectedValue(
+      new Response('This feature requires a Pro subscription', { status: 403 })
+    );
     await expect(quizDeleteTool.handler(ARGS, CTX)).rejects.toMatchObject({ kind: 'forbidden' });
     expect(mocks.quizFindById).not.toHaveBeenCalled();
     expect(mocks.quizDelete).not.toHaveBeenCalled();

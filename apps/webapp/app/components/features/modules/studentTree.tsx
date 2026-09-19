@@ -1,4 +1,5 @@
 import { Tag } from 'antd';
+import { Link } from 'react-router';
 import Emoji from '~/components/ui/display/Emoji';
 import {
   type ModuleTreeNode,
@@ -41,7 +42,30 @@ export interface StudentTreeCtx {
   studentRepoByRepositoryId?: Record<string, { name: string }>;
   /** The viewer's latest autograding result per repository unit, keyed by id. */
   autogradingByRepositoryId?: Record<string, AutogradingResultData>;
+  /**
+   * Self-formed group repos on this page, keyed by repository id, with the
+   * viewer's team state. Present only where the loader resolved it; a repo
+   * missing from this map renders exactly as it always did.
+   */
+  selfFormedByRepositoryId?: Record<
+    string,
+    { slug: string; hasTeam: boolean; deadlinePassed: boolean }
+  >;
+  /**
+   * Whether the viewer is teaching staff, taken from the membership the route's
+   * gate returned — never inferred from `rolePrefix`, which is only the URL the
+   * viewer happened to arrive on.
+   *
+   * Staff loaders fetch unpublished content; student loaders filter it out. This
+   * flag decides only whether a "Draft" chip is drawn, and it defaults to false
+   * so a caller that never sets it cannot label anything. It is presentation —
+   * WHAT a viewer receives is settled in the loader, not here.
+   */
+  isStaff?: boolean;
 }
+
+/** Marks content students cannot see yet. Matches the module row's own chip. */
+const DRAFT_TAG = <Tag color="orange">Draft</Tag>;
 
 export const submittedPill = (status?: string) => {
   const submitted = status === 'CLOSED';
@@ -59,15 +83,23 @@ export const submittedPill = (status?: string) => {
 };
 
 /**
- * Turn a node's linked pages / slides / quizzes into read-only resource leaves.
- * Delegates to the shared {@link buildResourceLeaves}, supplying the student
- * quizzes route as the quiz href.
+ * Turn a node's linked pages / slides / quizzes / forms into read-only resource
+ * leaves. Delegates to the shared {@link buildResourceLeaves}, supplying the
+ * student quizzes route as the quiz href.
  */
 export const resourceLeaves = (
   input: {
-    pages?: Array<{ page: { id: string; title: string } }>;
-    slides?: Array<{ slide: { id: string; title: string } }>;
-    quizzes?: Array<{ id: string; name: string }>;
+    pages?: Array<{ page: { id: string; title: string; is_draft?: boolean } }>;
+    slides?: Array<{ slide: { id: string; title: string; is_draft?: boolean } }>;
+    quizzes?: Array<{ id: string; name: string; status?: string }>;
+    forms?: Array<{
+      id: string;
+      title: string;
+      slug: string;
+      status: string;
+      access: string;
+      closes_at: Date | string | null;
+    }>;
   },
   level: number,
   keyPrefix: string,
@@ -113,6 +145,10 @@ export const buildRepositoryNode = (
       weightText: a.weight != null ? `${a.weight}%` : undefined,
       statusNode: (
         <div className="flex items-center gap-2 flex-wrap">
+          {/* Staff-only, and gated on the flag rather than on the data: a
+              student payload carries is_published too (always true, the loader
+              filtered on it), so the flag is what keeps this off their tree. */}
+          {ctx.isStaff === true && a.is_published === false && DRAFT_TAG}
           {submittedPill(ra?.status)}
           {showGrades && (
             <span className="inline-flex items-center gap-1 whitespace-nowrap">
@@ -220,12 +256,55 @@ export const buildRepositoryNode = (
   const sourceRepoUrl = repository.template
     ? repoGithubUrl(repository.template, ctx.gitOrgLogin)
     : null;
-  const repositoryUrl = directRepoUrl ?? ownRepoUrl ?? sourceRepoUrl;
+  // The template fallback is deliberately NOT offered on a self-formed row: a
+  // student with no team has no repo of their own, and a "View" pointing at the
+  // instructor's template is how they end up committing and filing issues on
+  // it. Their own team repo still links normally once it exists.
+  const selfFormed = ctx.selfFormedByRepositoryId?.[String(repository.id)];
+  const repositoryUrl = selfFormed
+    ? (directRepoUrl ?? ownRepoUrl)
+    : (directRepoUrl ?? ownRepoUrl ?? sourceRepoUrl);
 
   const autogradingResult = ctx.autogradingByRepositoryId?.[String(repository.id)];
 
   const total = assignments.length;
   const done = assignments.filter(a => raByAssignmentId[String(a.id)]?.status === 'CLOSED').length;
+
+  const repositoryAction = repositoryUrl ? (
+    <a
+      href={repositoryUrl}
+      target="_blank"
+      rel="noreferrer"
+      className="text-sm font-medium text-sky-600 hover:text-sky-700 dark:text-sky-400"
+    >
+      View
+    </a>
+  ) : null;
+
+  // A self-formed group repo is the one case where the row's job is to send the
+  // viewer somewhere in the app rather than to GitHub: until they are on a team
+  // there is no repo to open, and the team page was previously reachable only
+  // by a link the instructor pasted by hand (#313).
+  const teamHref = selfFormed
+    ? `/${ctx.rolePrefix ?? 'student'}/${ctx.classSlug}/repos/${selfFormed.slug}/team`
+    : null;
+  const selfFormedAction =
+    selfFormed && teamHref && !(selfFormed.deadlinePassed && !selfFormed.hasTeam) ? (
+      <Link
+        to={teamHref}
+        className="text-sm font-medium text-sky-600 hover:text-sky-700 dark:text-sky-400"
+      >
+        {selfFormed.hasTeam ? 'View team' : 'Form a team'}
+      </Link>
+    ) : null;
+  // Only when there is no submission count to show, which is the state a repo
+  // awaiting a team is always in.
+  const selfFormedStatus =
+    selfFormed && !selfFormed.hasTeam ? (
+      <span className="text-xs font-medium text-ink-3">
+        {selfFormed.deadlinePassed ? 'Team formation closed' : 'No team yet'}
+      </span>
+    ) : null;
 
   return {
     key: `repository-${repository.id}`,
@@ -244,23 +323,15 @@ export const buildRepositoryNode = (
           repoName={directRepo?.name}
         />
       ) : null,
-    actionNode:
-      baseLevel === 0 && repositoryUrl ? (
-        <a
-          href={repositoryUrl}
-          target="_blank"
-          rel="noreferrer"
-          className="text-sm font-medium text-sky-600 hover:text-sky-700 dark:text-sky-400"
-        >
-          View
-        </a>
-      ) : null,
+    actionNode: baseLevel === 0 ? (selfFormedAction ?? repositoryAction) : null,
     statusNode:
       total > 0 ? (
         <span className="text-xs font-medium text-ink-2 tabular-nums">
           {done}/{total} submitted
         </span>
-      ) : null,
+      ) : (
+        selfFormedStatus
+      ),
     children: repositoryChildren,
   };
 };

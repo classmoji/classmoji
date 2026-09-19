@@ -54,6 +54,16 @@ export default defineConfig({
             },
             { label: 'Build pages', slug: 'docs/instructors/pages' },
             { label: 'Build modules', slug: 'docs/instructors/modules' },
+            {
+              label: 'Class website',
+              slug: 'docs/instructors/class-sites',
+              badge: { text: 'New', variant: 'tip' },
+            },
+            {
+              label: 'Custom domain',
+              slug: 'docs/instructors/custom-domains',
+              badge: { text: 'New', variant: 'tip' },
+            },
             { label: 'Grade assignments', slug: 'docs/instructors/grading' },
             { label: 'Configure tokens', slug: 'docs/instructors/tokens' },
             {

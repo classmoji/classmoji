@@ -61,8 +61,20 @@ describe('isItemPublished', () => {
     );
   });
 
+  it('hides a DRAFT form but keeps an OPEN or CLOSED one', () => {
+    const form = (status: string) =>
+      isItemPublished({ item_type: 'FORM', form: { status, access: 'CLASSROOM' } } as never);
+    expect(form('DRAFT')).toBe(false);
+    expect(form('OPEN')).toBe(true);
+    // CLOSED stays visible on purpose: students should still see the thing they
+    // were asked to fill in, reading honestly as "Closed". Only DRAFT — never
+    // published, no revision to render — is hidden.
+    expect(form('CLOSED')).toBe(true);
+  });
+
   it('hides an item whose target is missing', () => {
     expect(isItemPublished({ item_type: 'SLIDE', slide: null } as never)).toBe(false);
+    expect(isItemPublished({ item_type: 'FORM', form: null } as never)).toBe(false);
   });
 });
 
@@ -94,6 +106,23 @@ describe('isItemPubliclyVisible', () => {
     expect(
       isItemPubliclyVisible({ item_type: 'QUIZ', quiz: { status: 'PUBLISHED' } } as never)
     ).toBe(false);
+  });
+
+  it('requires access PUBLIC on top of non-draft, for a form', () => {
+    // `access` is a form's `is_public`: a PUBLIC form is already a link anyone
+    // may open and fill without signing in, so naming it on the public site
+    // publishes nothing new. A CLASSROOM form is members-only and is never
+    // named there, however published — it becomes a placeholder instead.
+    const form = (status: string, access: string) =>
+      isItemPubliclyVisible({ item_type: 'FORM', form: { status, access } } as never);
+
+    expect(form('OPEN', 'PUBLIC')).toBe(true);
+    expect(form('CLOSED', 'PUBLIC')).toBe(true);
+    expect(form('OPEN', 'CLASSROOM')).toBe(false);
+    expect(form('CLOSED', 'CLASSROOM')).toBe(false);
+    // PUBLIC does not rescue a draft: it is invisible to enrolled students too.
+    expect(form('DRAFT', 'PUBLIC')).toBe(false);
+    expect(isItemPubliclyVisible({ item_type: 'FORM', form: null } as never)).toBe(false);
   });
 });
 
