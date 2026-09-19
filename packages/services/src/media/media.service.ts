@@ -786,6 +786,12 @@ export async function abortUpload({
  * would leave bytes nobody can see and nobody is billed for. R2 answers a
  * delete of a missing key with success.
  *
+ * The rendition and the poster are deleted at the key the ROW names, and only
+ * fall back to the conventional `web.mp4`/`poster.webp` when the column is
+ * null. The job records where it put them; assuming the name instead would work
+ * right up until the job ever writes one somewhere else, and then the bytes
+ * would survive the row that was billed for them, invisible and unreclaimable.
+ *
  * Deleting an UPLOADING row aborts its multipart first: without that, R2 holds
  * the uploaded parts until its own 7-day expiry.
  */
@@ -823,8 +829,8 @@ export async function deleteMedia({
   // three keys is not worth the compatibility risk.
   await deleteObjectsQuietly(client, bucket, [
     origKey,
-    mediaKey(classroom.id, row.id, 'web.mp4'),
-    mediaKey(classroom.id, row.id, 'poster.webp'),
+    row.rendition_key ?? mediaKey(classroom.id, row.id, 'web.mp4'),
+    row.poster_key ?? mediaKey(classroom.id, row.id, 'poster.webp'),
   ]);
 
   return { mediaId: row.id };

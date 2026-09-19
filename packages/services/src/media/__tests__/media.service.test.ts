@@ -901,6 +901,27 @@ describe('deleteMedia', () => {
     });
   });
 
+  it('deletes the rendition and poster the row NAMES, not the names it assumes', async () => {
+    // The job records where it put them. Assuming `web.mp4` works right up
+    // until it writes one somewhere else, and then the bytes outlive the row
+    // that was billed for them.
+    prisma.mediaObject.findFirst.mockResolvedValue(
+      row({
+        rendition_key: `m/${CLASSROOM_ID}/${MEDIA_ID}/web-720.mp4`,
+        rendition_bytes: BigInt(100),
+        poster_key: `m/${CLASSROOM_ID}/${MEDIA_ID}/poster-00001.webp`,
+      })
+    );
+
+    await deleteMedia({ classroom, mediaId: MEDIA_ID });
+
+    expect(sent.map(call => call.input.Key)).toEqual([
+      ORIG_KEY,
+      `m/${CLASSROOM_ID}/${MEDIA_ID}/web-720.mp4`,
+      `m/${CLASSROOM_ID}/${MEDIA_ID}/poster-00001.webp`,
+    ]);
+  });
+
   it('tombstones the row before it touches a single object', async () => {
     // The order is the invariant: a half-done delete must leave an orphan in
     // the bucket, never a READY row whose bytes are gone.
