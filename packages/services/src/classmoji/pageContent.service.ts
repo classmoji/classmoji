@@ -115,7 +115,12 @@ function contentRepoFor(page: PageWithContentRepo) {
  * optimistic lock.
  *
  * So the log line stays exactly where it was and the error keeps going. Only a
- * 404 — a null — may fall through to the next format.
+ * 404 — a null — may be read as absence.
+ *
+ * `caller` is in the log prefix rather than hard-coded because the save path's
+ * cover re-read wants the same rule (see `savePageContent`), and a failure
+ * there filed under `loadPageContent` would send whoever reads the log to the
+ * wrong function.
  */
 async function readContentFile({
   gitOrganization,
@@ -123,6 +128,7 @@ async function readContentFile({
   path,
   ref,
   skipCache,
+  caller,
   label,
 }: {
   gitOrganization: NonNullable<PageWithContentRepo['classroom']['git_organization']>;
@@ -130,7 +136,8 @@ async function readContentFile({
   path: string;
   ref?: string;
   skipCache: boolean;
-  label: 'JSON' | 'HTML';
+  caller: 'loadPageContent' | 'savePageContent';
+  label: string;
 }): Promise<{ content: string; sha: string } | null> {
   try {
     return await ContentService.getContent({
@@ -141,7 +148,7 @@ async function readContentFile({
       skipCache,
     });
   } catch (err) {
-    console.error(`[pageContent.loadPageContent] ${label} fetch failed for ${repo}/${path}:`, err);
+    console.error(`[pageContent.${caller}] ${label} fetch failed for ${repo}/${path}:`, err);
     throw err;
   }
 }
@@ -189,6 +196,7 @@ export async function loadPageContent(
     path: `${page.content_path}/content.json`,
     ref,
     skipCache,
+    caller: 'loadPageContent',
     label: 'JSON',
   });
 
@@ -232,6 +240,7 @@ export async function loadPageContent(
     path: `${page.content_path}/index.html`,
     ref,
     skipCache,
+    caller: 'loadPageContent',
     label: 'HTML',
   });
 
@@ -439,6 +448,8 @@ async function canonicalizePageCover(
  * @param blocks - BlockNote document blocks array
  * @param options.coverImage - Cover image metadata; `undefined` (omitted)
  *   preserves the existing coverImage via a fresh re-read, `null` removes it.
+ *   A re-read that cannot be made or cannot be parsed REJECTS rather than
+ *   writing without the key — see the re-read below for why.
  * @param options.expectedSha - Optimistic-lock sha; mismatch → error with
  *   status 409 (propagated from ContentService.put).
  * @param options.message - Commit message (default `Update page: <title>`).
@@ -475,23 +486,43 @@ export async function savePageContent(
 
   // When coverImage isn't explicitly provided, read the existing JSON to
   // preserve it (fresh read — a stale cached coverImage must not resurrect).
+  //
+  // Only ABSENCE may leave it undefined, which is the same rule the load path
+  // runs on. A 404 means there is no file to preserve a cover from, so the
+  // wrapper is written without the key. A read that FAILS, or a file we cannot
+  // parse, says nothing about whether this page has a cover — and the wrapper
+  // below omits the key when `coverImage` is undefined, so continuing would
+  // drop a live cover on a guess. Both stop the save instead: no write, and the
+  // caller sees the read error.
+  //
+  // A caller that genuinely wants this file rewritten regardless passes
+  // `coverImage` explicitly (`null` to remove it), which skips the re-read —
+  // that is what the merge paths and `savePageCoverImage` already do.
   if (coverImage === undefined) {
-    try {
-      const existing = await ContentService.getContent({
-        gitOrganization,
-        repo,
-        path,
-        ...(branch ? { ref: branch } : {}),
-        skipCache: true,
-      });
-      if (existing?.content) {
-        const parsed = JSON.parse(existing.content);
-        if (parsed && !Array.isArray(parsed) && parsed.coverImage) {
-          coverImage = parsed.coverImage;
-        }
+    const existing = await readContentFile({
+      gitOrganization,
+      repo,
+      path,
+      ...(branch ? { ref: branch } : {}),
+      skipCache: true,
+      caller: 'savePageContent',
+      label: 'cover re-read',
+    });
+    if (existing?.content) {
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(existing.content);
+      } catch (err) {
+        console.error(
+          `[pageContent.savePageContent] cover re-read parse failed for ${repo}/${path}:`,
+          err
+        );
+        throw err;
       }
-    } catch {
-      // No existing file — coverImage stays undefined (won't be in wrapper)
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        const existingCover = (parsed as { coverImage?: PageCoverImage }).coverImage;
+        if (existingCover) coverImage = existingCover;
+      }
     }
   }
 

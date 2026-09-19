@@ -275,11 +275,42 @@ describe('pageContent.savePageContent', () => {
     expect(result).toEqual({ sha: 'new-sha', commit: 'commit-1', coverImage: cover });
   });
 
-  it('omits the coverImage key when omitted and no existing file has one', async () => {
+  it('omits the coverImage key when omitted and no existing file has one (404)', async () => {
     getContentMock.mockResolvedValueOnce(null);
 
     await savePageContent(page, blocks);
 
+    // A 404 is the one answer that may leave the key off: there is no file to
+    // preserve a cover from, so the save goes through without it.
+    expect(putMock).toHaveBeenCalledTimes(1);
+    expect(writtenWrapper()).toEqual({ blocks });
+  });
+
+  it('a FAILED cover re-read stops the save rather than dropping the key', async () => {
+    // The wrapper omits coverImage when it is undefined, so continuing here
+    // would write a cover-less document over a page that may well have one —
+    // on nothing more than a GitHub blip. Same rule as the load path.
+    getContentMock.mockRejectedValueOnce(Object.assign(new Error('Server Error'), { status: 503 }));
+
+    await expect(savePageContent(page, blocks)).rejects.toMatchObject({ status: 503 });
+    expect(putMock).not.toHaveBeenCalled();
+  });
+
+  it('an UNPARSEABLE existing file stops the save too (the cover is unknown, not absent)', async () => {
+    getContentMock.mockResolvedValueOnce({ content: '{not json', sha: 'old-sha' });
+
+    await expect(savePageContent(page, blocks)).rejects.toThrow(SyntaxError);
+    expect(putMock).not.toHaveBeenCalled();
+  });
+
+  it('an explicit coverImage skips the re-read, so a caller can still rewrite the file', async () => {
+    // The escape hatch for both refusals above: passing the cover (or null)
+    // says what to store, so no read is needed to find out.
+    getContentMock.mockRejectedValue(Object.assign(new Error('Server Error'), { status: 503 }));
+
+    await savePageContent(page, blocks, { coverImage: null });
+
+    expect(getContentMock).not.toHaveBeenCalled();
     expect(writtenWrapper()).toEqual({ blocks });
   });
 
