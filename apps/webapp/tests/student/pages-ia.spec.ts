@@ -15,9 +15,11 @@ import { TEST_CLASSROOM, getDevContext } from '../helpers/env.helpers';
  *   - show_in_student_menu ON for two pages (through the app's own authorized
  *     endpoint), so "the per-page sidebar entries are gone" is a claim about
  *     real data rather than about an empty table;
- *   - one page linked to a repository, so the repos tree has something to
+ *   - one page linked to a repository, so the modules tree has something to
  *     peek. The link row is written directly: the only UI that edits links is
- *     the repository form, whose action reconciles the whole repository.
+ *     the repository form, whose action reconciles the whole repository. The
+ *     repository must also sit in a published module for the tree to list it,
+ *     so a fixture module is created when the classroom has none.
  */
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -28,6 +30,7 @@ let owner: APIRequestContext;
 let menuPageIds: string[] = [];
 let linkedPageId = '';
 let repositoryId = '';
+let fixtureModuleId = '';
 let homePageTitle = '';
 
 const setMenuFlag = (pageId: string, value: boolean) =>
@@ -84,6 +87,25 @@ test.beforeAll(async () => {
       linkedPageId = '';
     }
   }
+
+  if (linkedPageId && repositoryId) {
+    const listed = await prisma.moduleItem.findFirst({
+      where: { repository_id: repositoryId, module: { is_published: true } },
+      select: { id: true },
+    });
+    if (!listed) {
+      const fixtureModule = await prisma.module.create({
+        data: {
+          classroom_id: classroom.id,
+          title: 'Pages IA peek fixture',
+          is_published: true,
+          items: { create: { item_type: 'REPOSITORY', repository_id: repositoryId } },
+        },
+        select: { id: true },
+      });
+      fixtureModuleId = fixtureModule.id;
+    }
+  }
 });
 
 test.afterAll(async () => {
@@ -94,6 +116,7 @@ test.afterAll(async () => {
       where: { page_id: linkedPageId, repository_id: repositoryId },
     });
   }
+  if (fixtureModuleId) await prisma.module.delete({ where: { id: fixtureModuleId } });
   await owner.dispose();
 });
 
@@ -132,7 +155,7 @@ test.describe('Sidebar compression', () => {
     const order = await nav
       .locator('[data-tour-nav]')
       .evaluateAll(nodes => nodes.map(n => n.getAttribute('data-tour-nav')));
-    const contentLinks = ['/modules', '/repos', '/assignments', '/slides', '/quizzes', '/pages'];
+    const contentLinks = ['/modules', '/assignments', '/slides', '/quizzes', '/pages'];
     const present = order.filter(link => contentLinks.includes(link!));
     expect(present[present.length - 1]).toBe('/pages');
   });
@@ -202,15 +225,15 @@ test.describe('Peek drawer', () => {
   test.skip(() => !linkedPageId, 'No repository page link could be created');
 
   const openPeek = async (page: Page) => {
-    await page.goto(`/student/${TEST_CLASSROOM}/repos`);
+    await page.goto(`/student/${TEST_CLASSROOM}/modules`);
     const trigger = page.locator(`[data-cm-page-link="${linkedPageId}"]`).first();
     await expect(trigger).toBeVisible({ timeout: 20000 });
     await trigger.click();
     await expect(page.locator('[data-cm-page-peek]')).toBeVisible();
   };
 
-  test('opens over the repositories view without changing the URL', async ({ page }) => {
-    await page.goto(`/student/${TEST_CLASSROOM}/repos`);
+  test('opens over the modules view without changing the URL', async ({ page }) => {
+    await page.goto(`/student/${TEST_CLASSROOM}/modules`);
     const before = page.url();
 
     await openPeek(page);
@@ -436,7 +459,7 @@ test.describe('Appearance', () => {
       test.skip(!linkedPageId, 'No repository page link could be created');
       await page.emulateMedia({ colorScheme: oppositeOs });
       await setTheme(page, theme);
-      await page.goto(`/student/${TEST_CLASSROOM}/repos`);
+      await page.goto(`/student/${TEST_CLASSROOM}/modules`);
       const trigger = page.locator(`[data-cm-page-link="${linkedPageId}"]`).first();
       await expect(trigger).toBeVisible({ timeout: 20000 });
       await trigger.click();

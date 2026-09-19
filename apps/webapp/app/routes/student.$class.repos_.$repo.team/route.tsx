@@ -341,10 +341,10 @@ const StudentTeamPage = ({ loaderData }: Route.ComponentProps) => {
   return (
     <div className="max-w-4xl mx-auto">
       <Link
-        to={`/student/${classSlug}/repos`}
+        to={`/student/${classSlug}/dashboard`}
         className="text-blue-600 hover:underline mb-4 inline-block"
       >
-        ← Back to Repositories
+        ← Back to dashboard
       </Link>
 
       <div className="flex items-center justify-between gap-3 mt-2 mb-4">

@@ -32,29 +32,6 @@ test.describe('Access Control: owner repositories page exposes instructor contro
   });
 });
 
-test.describe('Access Control: student repositories page hides instructor controls', () => {
-  test.use({ storageState: './tests/.auth/student.json' });
-
-  test.beforeEach(async ({ authenticatedPage: page }) => {
-    await page.goto(`/student/${TEST_CLASSROOM}/repos`);
-    await waitForDataLoad(page, {
-      anchor: page.getByRole('heading', { name: 'Repositories', level: 1 }),
-    });
-  });
-
-  test('a student does not see any "New repository" create button on their repositories page', async ({
-    authenticatedPage: page,
-  }) => {
-    // Confirm the student page rendered before asserting absence of controls.
-    await expect(
-      page.getByRole('heading', { name: 'Repositories', level: 1 })
-    ).toBeVisible();
-
-    const createButton = page.getByRole('button', { name: 'New repository' });
-    await expect(createButton).toHaveCount(0);
-  });
-});
-
 test.describe('Access Control: a student cannot reach owner-only routes', () => {
   test.use({ storageState: './tests/.auth/student.json' });
 

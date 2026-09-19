@@ -2,10 +2,13 @@
  * Unit tests pinning WHO sees unpublished repositories, assignments and
  * attached resources.
  *
- * There are two repos loaders whose Prisma calls look almost identical:
+ * There are two repository-fetching loaders whose Prisma calls look almost
+ * identical:
  *
- *   - student.$class.repos  — filters `is_published: true` at the repository
+ *   - student.$class.modules — filters `is_published: true` at the repository
  *     AND assignment level. This is what keeps drafts off the student surface.
+ *     (The separate student repositories screen that used to do the same is
+ *     gone; Modules is the student surface now.)
  *   - assistant.$class_.repos — filters NOTHING. The teaching team is meant to
  *     see the classroom as it actually is (a teacher prepping next term has
  *     nothing but drafts), with drafts badged in the view instead of hidden.
@@ -73,7 +76,6 @@ vi.mock('~/components/features/modules/studentTree', () => ({
   buildRepositoryNode: () => ({}),
   resourceLeaves: () => [],
 }));
-vi.mock('../student.$class.repos/ModuleAccordion', () => ({ default: () => null }));
 
 const CLASS_SLUG = 'cs52-26f';
 const CLASSROOM = { id: 'class-1', slug: CLASS_SLUG, status: 'ACTIVE', settings: {} };
@@ -177,16 +179,6 @@ beforeEach(() => {
       items: [{ id: 'i1', item_type: 'REPOSITORY', repository_id: 'r1' }],
     },
   ]);
-});
-
-describe('the student repos loader hides everything unpublished', () => {
-  it('filters is_published at BOTH the repository and the assignment level', async () => {
-    await runLoader('student.$class.repos', `/student/${CLASS_SLUG}/repos`);
-
-    const query = repositoryQuery();
-    expect(query.where.is_published).toBe(true);
-    expect(query.include.assignments.where).toEqual({ is_published: true });
-  });
 });
 
 describe('the staff repos loader hides nothing', () => {

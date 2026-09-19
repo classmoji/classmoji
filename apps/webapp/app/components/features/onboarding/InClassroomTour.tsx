@@ -414,20 +414,6 @@ const STUDENT_STEPS: FeatureStep[] = [
     description: 'Switch between your recent feedback, team, and regrade activity.',
   },
   {
-    link: '/repos',
-    title: 'Your repositories',
-    description:
-      'Repositories are the units of coursework in the class, like labs, projects, and problem sets. Each one is your own GitHub repository, and the assignments inside it are GitHub issues you complete in that repo.',
-  },
-  {
-    link: '/repos',
-    selector: '[data-tour="repos-toggle"]',
-    placement: 'bottom',
-    title: 'Inside a repository',
-    description:
-      'Each repository is one of your coursework repos. Expand it to see its assignments and the resources your instructor attached, track how far along you are, then open the repo to start working.',
-  },
-  {
     link: '/assignments',
     title: 'Assignments',
     description:

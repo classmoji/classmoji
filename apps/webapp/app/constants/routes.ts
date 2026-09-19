@@ -80,7 +80,8 @@ export const routes = {
     link: '/repos',
     label: 'Repositories',
     icon: IconFileText,
-    roles: ['OWNER', 'TEACHER', 'ASSISTANT', 'STUDENT'],
+    // Students have no repositories screen; their coursework lives in Modules.
+    roles: ['OWNER', 'TEACHER', 'ASSISTANT'],
     category: 'content',
   },
   assignments: {

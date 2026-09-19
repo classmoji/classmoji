@@ -710,7 +710,7 @@ export async function deleteFormById(id: string): Promise<void> {
 /** Upsert the three student-navigation visibility toggles for a classroom. */
 export async function setClassroomNavVisibility(
   classroomSlug: string,
-  flags: { showModules?: boolean; showPages?: boolean; showRepos?: boolean }
+  flags: { showModules?: boolean; showPages?: boolean }
 ): Promise<void> {
   const prisma = getTestPrisma();
   const classroom = await prisma.classroom.findFirst({
@@ -722,7 +722,6 @@ export async function setClassroomNavVisibility(
   const data = {
     ...(flags.showModules !== undefined ? { show_modules: flags.showModules } : {}),
     ...(flags.showPages !== undefined ? { show_pages: flags.showPages } : {}),
-    ...(flags.showRepos !== undefined ? { show_repos: flags.showRepos } : {}),
   };
 
   await prisma.classroomSettings.upsert({

@@ -53,7 +53,6 @@ interface NavItem {
 interface NavVisibility {
   showModules?: boolean;
   showPages?: boolean;
-  showRepos?: boolean;
   /** Whether the class has any modules; hides the empty Modules tab from non-owners. */
   hasModules?: boolean;
   /** Whether the class has any published page; hides the empty Pages tab likewise. */
@@ -137,13 +136,12 @@ const CommonLayout = ({
 
   // Effective student-nav visibility: prefer the fresh value from the layout
   // loader (navVisibility), fall back to the store. Defaults match the schema
-  // (modules, pages, repos all on).
+  // (modules and pages both on).
   const storeSettings = classroom?.settings as
-    | { show_modules?: boolean; show_pages?: boolean; show_repos?: boolean }
+    | { show_modules?: boolean; show_pages?: boolean }
     | undefined;
   const showModules = navVisibility?.showModules ?? storeSettings?.show_modules ?? true;
   const showPages = navVisibility?.showPages ?? storeSettings?.show_pages ?? true;
-  const showRepos = navVisibility?.showRepos ?? storeSettings?.show_repos ?? true;
   // Hide the Modules tab from non-owners when the class has no modules, so profs
   // who never use the feature don't show students an empty tab. Defaults true
   // when unknown (store fallback / pre-loader render) to avoid hiding wrongly.
@@ -244,14 +242,10 @@ const CommonLayout = ({
     // them; students/assistants only when the instructor enables them. Modules
     // also hides when the class has none, so the tab never shows up empty.
     if (item.link === '/modules' && role !== 'OWNER' && (!showModules || !hasModules)) return null;
-    if (item.link === '/repos' && role !== 'OWNER' && !showRepos) return null;
     // `show_pages` used to gate the group of per-page links; it now gates the
     // one Pages entry that replaced them.
     if (item.link === '/pages' && role !== 'OWNER' && (!showPages || !hasPages)) return null;
 
-    // Repos keeps its own label now that students have a real Modules tab.
-    // (Previously the repos section was framed as "Modules" for students, which
-    // now collides with the actual Modules tab.)
     const displayLabel = item.label;
 
     return (
@@ -311,7 +305,6 @@ const CommonLayout = ({
 
     // Student navigation visibility toggles (OWNER always retains access).
     if (item.link === '/modules' && role !== 'OWNER' && (!showModules || !hasModules)) return false;
-    if (item.link === '/repos' && role !== 'OWNER' && !showRepos) return false;
     if (item.link === '/pages' && role !== 'OWNER' && (!showPages || !hasPages)) return false;
 
     return true;
