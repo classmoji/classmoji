@@ -23,6 +23,10 @@ export interface AssignmentFormModalProps {
   boundFormIds: Set<string>;
   /** Editing an existing assignment; null creates a new one. */
   assignment: AssignmentRowData | null;
+  /** Fix the kind on create (the caller already asked which kind). */
+  presetKind?: AssignmentKind;
+  /** Preselect the repository for a new REPO assignment (an issue in that repo). */
+  presetRepositoryId?: string;
 }
 
 interface FormValues {
@@ -59,6 +63,8 @@ const AssignmentFormModal = ({
   boundQuizIds,
   boundFormIds,
   assignment,
+  presetKind,
+  presetRepositoryId,
 }: AssignmentFormModalProps) => {
   const fetcher = useFetcher<{ success?: string; error?: string }>();
   const [form] = Form.useForm<FormValues>();
@@ -70,13 +76,17 @@ const AssignmentFormModal = ({
   // Reset the form each time the modal opens for a different target.
   useEffect(() => {
     if (!open) return;
-    const nextKind = (assignment?.type as AssignmentKind) ?? 'REPO';
+    const nextKind = (assignment?.type as AssignmentKind) ?? presetKind ?? 'REPO';
     setKind(nextKind);
     setSelectedModuleId(assignment?.module.id ?? moduleId);
     form.setFieldsValue({
       module_id: assignment?.module.id ?? moduleId,
       type: nextKind,
-      target_id: assignment?.repository?.id ?? assignment?.quiz?.id ?? assignment?.form?.id,
+      target_id:
+        assignment?.repository?.id ??
+        assignment?.quiz?.id ??
+        assignment?.form?.id ??
+        (nextKind === 'REPO' ? presetRepositoryId : undefined),
       title: assignment?.title ?? '',
       weight: assignment?.weight ?? 100,
       is_extra_credit: assignment?.is_extra_credit ?? false,
@@ -86,7 +96,7 @@ const AssignmentFormModal = ({
       tokens_per_hour: assignment?.tokens_per_hour ?? 0,
       description: assignment?.description ?? '',
     });
-  }, [open, assignment, moduleId, form]);
+  }, [open, assignment, moduleId, form, presetKind, presetRepositoryId]);
 
   // Close once a submit settles successfully.
   useEffect(() => {
@@ -163,7 +173,13 @@ const AssignmentFormModal = ({
     <Modal
       open={open}
       onCancel={onClose}
-      title={isEdit ? `Edit assignment: ${assignment?.title}` : 'New assignment'}
+      title={
+        isEdit
+          ? `Edit assignment: ${assignment?.title}`
+          : kind === 'REPO' && presetRepositoryId
+            ? 'New issue in this repository'
+            : `New ${ASSIGNMENT_TYPE_META[kind].label.toLowerCase()} assignment`
+      }
       okText={isEdit ? 'Save' : 'Create'}
       onOk={submit}
       confirmLoading={busy}
@@ -198,7 +214,7 @@ const AssignmentFormModal = ({
         <Form.Item label="Type" name="type">
           <Segmented
             block
-            disabled={isEdit}
+            disabled={isEdit || !!presetKind}
             options={(Object.keys(ASSIGNMENT_TYPE_META) as AssignmentKind[]).map(t => ({
               value: t,
               label: ASSIGNMENT_TYPE_META[t].label,
