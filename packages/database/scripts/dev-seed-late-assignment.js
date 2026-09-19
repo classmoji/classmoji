@@ -21,6 +21,8 @@ async function main() {
     where: { repository_id_title: { repository_id: repository.id, title: 'Late Lab' } },
     update: { student_deadline: deadline, tokens_per_hour: 5 },
     create: {
+      module_id: repository.module_id,
+      type: 'REPO',
       repository_id: repository.id,
       title: 'Late Lab',
       weight: 50,

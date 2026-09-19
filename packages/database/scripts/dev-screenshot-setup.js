@@ -92,6 +92,11 @@ async function main() {
     },
   });
   if (repo) {
+    await prisma.repository.update({ where: { id: repo.id }, data: { module_id: week1.id } });
+    await prisma.assignment.updateMany({
+      where: { repository_id: repo.id },
+      data: { module_id: week1.id },
+    });
     const existingItem = await prisma.moduleItem.findFirst({
       where: { module_id: week1.id, repository_id: repo.id },
     });

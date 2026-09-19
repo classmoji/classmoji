@@ -62,12 +62,36 @@ export async function getClassroomBySlug(
 export async function getRepositoryByTitle(
   classroomId: string,
   title: string
-): Promise<{ id: string; title: string; is_published: boolean; weight: number } | null> {
+): Promise<{ id: string; title: string; is_published: boolean; module_id: string } | null> {
   const prisma = getTestPrisma();
   return prisma.repository.findUnique({
     where: { classroom_id_title: { classroom_id: classroomId, title } },
-    select: { id: true, title: true, is_published: true, weight: true },
+    select: { id: true, title: true, is_published: true, module_id: true },
   });
+}
+
+/**
+ * Find or create the Module a seeded repository lives in. Repositories must
+ * belong to exactly one module, so every repository seeder goes through here.
+ * Defaults to one shared, published module per classroom.
+ */
+export async function ensureSeedModule(
+  classroomId: string,
+  title = 'QA Seed Module'
+): Promise<{ moduleId: string }> {
+  const prisma = getTestPrisma();
+  const module = await prisma.module.upsert({
+    where: { classroom_id_title: { classroom_id: classroomId, title } },
+    update: {},
+    create: {
+      classroom_id: classroomId,
+      title,
+      slug: title.toLowerCase().replace(/\s+/g, '-'),
+      is_published: true,
+    },
+    select: { id: true },
+  });
+  return { moduleId: module.id };
 }
 
 /**
@@ -85,6 +109,7 @@ export async function getRepositoryPublishedState(id: string): Promise<boolean> 
 
 export interface SeededRepository {
   repositoryId: string;
+  moduleId: string;
   title: string;
   assignmentId: string;
   assignmentTitle: string;
@@ -98,10 +123,17 @@ export interface SeededRepository {
 export async function seedRepositoryWithAssignment(
   classroomId: string,
   title: string,
-  options: { isPublished?: boolean; weight?: number; assignmentTitle?: string } = {}
+  options: {
+    isPublished?: boolean;
+    /** Grading weight of the seeded ASSIGNMENT (weight lives on assignments now). */
+    weight?: number;
+    assignmentTitle?: string;
+    moduleId?: string;
+  } = {}
 ): Promise<SeededRepository> {
   const prisma = getTestPrisma();
   const { isPublished = true, weight = 5, assignmentTitle = `${title} Part 1` } = options;
+  const moduleId = options.moduleId ?? (await ensureSeedModule(classroomId)).moduleId;
 
   await prisma.repository
     .delete({ where: { classroom_id_title: { classroom_id: classroomId, title } } })
@@ -110,18 +142,20 @@ export async function seedRepositoryWithAssignment(
   const repository = await prisma.repository.create({
     data: {
       classroom_id: classroomId,
+      module_id: moduleId,
       title,
       slug: title,
       template: 'dev-org/test-template',
-      weight,
       type: 'INDIVIDUAL',
       is_published: isPublished,
       assignments: {
         create: [
           {
+            module_id: moduleId,
+            type: 'REPO',
             title: assignmentTitle,
             slug: assignmentTitle.toLowerCase().replace(/\s+/g, '-'),
-            weight: 100,
+            weight,
             is_published: isPublished,
           },
         ],
@@ -132,6 +166,7 @@ export async function seedRepositoryWithAssignment(
 
   return {
     repositoryId: repository.id,
+    moduleId,
     title: repository.title,
     assignmentId: repository.assignments[0].id,
     assignmentTitle: repository.assignments[0].title,
@@ -164,10 +199,11 @@ export async function seedStudentSubmission(
   classroomId: string,
   studentId: string,
   title: string,
-  options: { status?: 'OPEN' | 'CLOSED'; gradesReleased?: boolean } = {}
+  options: { status?: 'OPEN' | 'CLOSED'; gradesReleased?: boolean; moduleId?: string } = {}
 ): Promise<SeededStudentSubmission> {
   const prisma = getTestPrisma();
   const { status = 'OPEN', gradesReleased = false } = options;
+  const moduleId = options.moduleId ?? (await ensureSeedModule(classroomId)).moduleId;
 
   await prisma.repository
     .delete({ where: { classroom_id_title: { classroom_id: classroomId, title } } })
@@ -176,18 +212,20 @@ export async function seedStudentSubmission(
   const repository = await prisma.repository.create({
     data: {
       classroom_id: classroomId,
+      module_id: moduleId,
       title,
       slug: title,
       template: 'dev-org/test-template',
-      weight: 5,
       type: 'INDIVIDUAL',
       is_published: true,
       assignments: {
         create: [
           {
+            module_id: moduleId,
+            type: 'REPO',
             title: `${title} Assignment`,
             slug: `${title}-assignment`,
-            weight: 100,
+            weight: 5,
             is_published: true,
             grades_released: gradesReleased,
           },
@@ -224,6 +262,7 @@ export async function seedStudentSubmission(
 
   return {
     repositoryId: repository.id,
+    moduleId,
     title: repository.title,
     assignmentId: assignment.id,
     assignmentTitle: assignment.title,

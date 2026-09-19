@@ -81,6 +81,7 @@ export const cloneTag = async (
 export const cloneAssignment = async (
   sourceAssignmentId: string,
   targetRepositoryId: string,
+  targetModuleId: string,
   options: { stripDeadlines?: boolean } = {},
   tx: RepositoryImportClient = getPrisma()
 ) => {
@@ -95,9 +96,12 @@ export const cloneAssignment = async (
   }
 
   const assignmentCreateData: unknown = {
+    module_id: targetModuleId,
+    type: 'REPO',
     repository_id: targetRepositoryId,
     title: sourceAssignment.title,
     weight: sourceAssignment.weight,
+    is_extra_credit: sourceAssignment.is_extra_credit,
     is_published: false,
     description: sourceAssignment.description || '',
     tokens_per_hour: sourceAssignment.tokens_per_hour || 0,
@@ -165,6 +169,32 @@ export const cloneQuiz = async (
 };
 
 /**
+ * Find or create the target classroom's counterpart of a source module, by
+ * title. Position/description are copied on create; an existing module of the
+ * same title is reused so repeated imports do not multiply modules. Created
+ * unpublished: importing never publishes anything by itself.
+ */
+export const ensureTargetModule = async (
+  sourceModule: { title: string; slug: string | null; description: string | null; position: number },
+  targetClassroomId: string,
+  tx: RepositoryImportClient = getPrisma()
+) => {
+  return tx.module.upsert({
+    where: { classroom_id_title: { classroom_id: targetClassroomId, title: sourceModule.title } },
+    create: {
+      classroom_id: targetClassroomId,
+      title: sourceModule.title,
+      slug: sourceModule.slug,
+      description: sourceModule.description,
+      position: sourceModule.position,
+      is_published: false,
+    },
+    update: {},
+    select: { id: true },
+  });
+};
+
+/**
  * Clone a repository to a target classroom
  * @param {string} sourceRepositoryId - Source repository ID
  * @param {string} targetClassroomId - Target classroom ID
@@ -182,6 +212,8 @@ export const cloneModule = async (
     includeAssignments?: boolean;
     includeQuizzes?: boolean;
     stripDeadlines?: boolean;
+    /** Module in the target classroom to place the clone in. Created from the source's module when omitted. */
+    targetModuleId?: string;
   } = {},
   tx: RepositoryImportClient = getPrisma()
 ) => {
@@ -193,6 +225,7 @@ export const cloneModule = async (
       assignments: true,
       quizzes: true,
       tag: true,
+      module: true,
     },
   });
 
@@ -207,20 +240,24 @@ export const cloneModule = async (
     targetTagId = clonedTag.id;
   }
 
+  // Every repository lives in a module: reuse the caller's, or find/create the
+  // target classroom's counterpart of the source module by title.
+  const targetModuleId =
+    options.targetModuleId ??
+    (await ensureTargetModule(sourceModule.module, targetClassroomId, tx)).id;
+
   // Create the repository
   const newModule = await tx.repository.create({
     data: {
       classroom_id: targetClassroomId,
+      module_id: targetModuleId,
       title: titleToIdentifier(sourceModule.title),
       slug: sourceModule.slug,
       template: sourceModule.template,
       description: sourceModule.description,
       is_published: false,
-      weight: sourceModule.weight,
       type: sourceModule.type,
       tag_id: targetTagId,
-      is_extra_credit: sourceModule.is_extra_credit,
-      drop_lowest_count: sourceModule.drop_lowest_count,
       team_formation_mode: sourceModule.team_formation_mode,
       team_formation_deadline: sourceModule.team_formation_deadline,
       max_team_size: sourceModule.max_team_size,
@@ -236,6 +273,7 @@ export const cloneModule = async (
     idMaps: {
       repositories: Record<string, string>;
       quizzes: Record<string, string>;
+      modules: Record<string, string>;
     };
   } = {
     repository: newModule,
@@ -245,6 +283,8 @@ export const cloneModule = async (
       // Source repository id → newly cloned repository id.
       repositories: { [sourceRepositoryId]: newModule.id },
       quizzes: {},
+      // Source module id → the target module the clone landed in.
+      modules: { [sourceModule.module_id]: targetModuleId },
     },
   };
 
@@ -254,6 +294,7 @@ export const cloneModule = async (
       const clonedAssignment = await cloneAssignment(
         assignment.id,
         newModule.id,
+        targetModuleId,
         { stripDeadlines },
         tx
       );
@@ -309,6 +350,7 @@ export const cloneModulesWithRelations = async (
       idMaps: {
         repositories: Record<string, string>;
         quizzes: Record<string, string>;
+        modules: Record<string, string>;
       };
     } = {
       repositories: [],
@@ -318,6 +360,7 @@ export const cloneModulesWithRelations = async (
       idMaps: {
         repositories: {},
         quizzes: {},
+        modules: {},
       },
     };
 
@@ -347,6 +390,7 @@ export const cloneModulesWithRelations = async (
       results.quizzes.push(...cloneResult.quizzes);
       Object.assign(results.idMaps.repositories, cloneResult.idMaps.repositories);
       Object.assign(results.idMaps.quizzes, cloneResult.idMaps.quizzes);
+      Object.assign(results.idMaps.modules, cloneResult.idMaps.modules);
       emitProgress(onProgress, { done: index + 1, total });
     }
 
@@ -367,8 +411,7 @@ export const getModulesForImport = async (classroomId: string) => {
       title: true,
       template: true,
       type: true,
-      weight: true,
-      is_extra_credit: true,
+      module: { select: { id: true, title: true } },
       _count: {
         select: {
           assignments: true,

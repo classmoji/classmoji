@@ -1,6 +1,6 @@
 import getPrisma from '@classmoji/database';
 import { titleToIdentifier, resolveTemplateRef } from '@classmoji/utils';
-import type { AssignmentType, Prisma } from '@prisma/client';
+import type { RepositoryType, Prisma } from '@prisma/client';
 import * as notificationService from './notification.service.ts';
 
 interface RepositoryQueryOptions {
@@ -23,11 +23,11 @@ type RepositoryCreateInput = Prisma.RepositoryUncheckedCreateInput & {
 
 interface RepositoryFormValues {
   title: string;
-  type: AssignmentType;
+  type: RepositoryType;
   template: string;
   classroomSlug: string;
+  module_id: string;
   assignments: RepositoryAssignmentInput[];
-  weight?: number | string | null;
   tag?: string | null;
   tokens_per_hour?: number;
   branch?: string | null;
@@ -51,9 +51,9 @@ type RepositoryUpdateValues = {
   assignments?: RepositoryAssignmentUpdateInput[];
   assignmentsToRemove?: Array<{ id: string }>;
   tag?: string | null;
-  weight?: number | string | null;
   team_formation_deadline?: Date | string | null;
-  type?: AssignmentType;
+  type?: RepositoryType;
+  module_id?: string;
   [key: string]: unknown;
 };
 
@@ -256,7 +256,8 @@ export const create = async (data: RepositoryCreateInput) => {
   // Generate slug from title (set once, never updated)
   const slug = titleToIdentifier(repositoryData.title);
 
-  // Filter out non-Prisma fields from assignments and add slugs
+  // Filter out non-Prisma fields from assignments and add slugs. Assignments
+  // created through their repository are REPO assignments in the same module.
   const cleanedAssignments = assignments?.map((assignment: RepositoryAssignmentInput) => {
     const {
       linkedPageIds: _linkedPageIds,
@@ -267,6 +268,8 @@ export const create = async (data: RepositoryCreateInput) => {
     } = assignment;
     return {
       ...assignmentData,
+      module_id: repositoryData.module_id,
+      type: 'REPO' as const,
       slug: titleToIdentifier(assignmentData.title),
     };
   });
@@ -275,7 +278,6 @@ export const create = async (data: RepositoryCreateInput) => {
     data: {
       ...repositoryData,
       slug,
-      weight: Number(repositoryData.weight ?? 100),
       ...(cleanedAssignments && {
         assignments: {
           create: cleanedAssignments,
@@ -295,17 +297,8 @@ export const create = async (data: RepositoryCreateInput) => {
  * @returns {Promise<Object>}
  */
 export const createFromForm = async (values: RepositoryFormValues) => {
-  const {
-    title,
-    type,
-    template,
-    classroomSlug,
-    assignments,
-    weight,
-    tag,
-    tokens_per_hour,
-    branch,
-  } = values;
+  const { title, type, template, classroomSlug, module_id, assignments, tag, tokens_per_hour, branch } =
+    values;
 
   const classroom = await getPrisma().classroom.findUnique({
     where: { slug: classroomSlug },
@@ -331,12 +324,14 @@ export const createFromForm = async (values: RepositoryFormValues) => {
       slug,
       type,
       template: qualifiedTemplate,
-      weight: Number(weight ?? 100),
       classroom_id: classroom.id,
+      module_id,
       ...(tag && { tag_id: tag }),
       assignments: {
         create: assignments.map((a: RepositoryAssignmentInput) => ({
           ...a,
+          module_id,
+          type: 'REPO' as const,
           slug: titleToIdentifier(a.title),
           tokens_per_hour: tokens_per_hour || 0,
           branch: branch || null,
@@ -404,7 +399,7 @@ export const update = async (
  * @returns {Promise<Object>}
  */
 export const updateWithAssignments = async (values: RepositoryUpdateValues) => {
-  const { id, assignments, assignmentsToRemove, tag, weight, ...updateData } = values;
+  const { id, assignments, assignmentsToRemove, tag, ...updateData } = values;
 
   // Coerce repository-level dates
   if (updateData.team_formation_deadline && !(updateData.team_formation_deadline instanceof Date)) {
@@ -413,15 +408,23 @@ export const updateWithAssignments = async (values: RepositoryUpdateValues) => {
 
   const repositoryUpdateData = {
     ...(updateData as Prisma.RepositoryUncheckedUpdateInput),
-    weight: Number(weight ?? 100),
     ...(updateData.type === 'GROUP' && tag && { tag_id: tag }),
   } satisfies Prisma.RepositoryUncheckedUpdateInput;
 
   // Update repository
-  await getPrisma().repository.update({
+  const repository = await getPrisma().repository.update({
     where: { id },
     data: repositoryUpdateData,
+    select: { module_id: true },
   });
+
+  // REPO assignments follow their repository between modules.
+  if (updateData.module_id) {
+    await getPrisma().assignment.updateMany({
+      where: { repository_id: id },
+      data: { module_id: repository.module_id },
+    });
+  }
 
   // Delete removed assignments
   if (assignmentsToRemove?.length) {
@@ -462,6 +465,8 @@ export const updateWithAssignments = async (values: RepositoryUpdateValues) => {
           ...(assignmentMutationData as Prisma.AssignmentUncheckedCreateWithoutRepositoryInput),
           slug: titleToIdentifier(assignment.title),
           repository_id: id,
+          module_id: repository.module_id,
+          type: 'REPO',
         },
       });
     }

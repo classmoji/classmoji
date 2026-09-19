@@ -23,9 +23,6 @@ interface StudentRepositoryClassroomContext {
 interface RepositoryModuleSummary extends GradeModule {
   id: string;
   title: string;
-  weight: number;
-  is_extra_credit: boolean;
-  drop_lowest_count: number;
   type: string;
 }
 
@@ -33,6 +30,8 @@ interface GitRepoAssignmentRelation extends GradeRepositoryAssignment {
   assignment: {
     id: string;
     weight: number;
+    is_extra_credit?: boolean;
+    type?: string;
   };
   [key: string]: unknown;
 }
@@ -306,9 +305,6 @@ export const findRepositoriesPerStudent = async (classroom: StudentRepositoryCla
         ? {
             id: repo.repository.id,
             title: repo.repository.title,
-            weight: repo.repository.weight,
-            is_extra_credit: repo.repository.is_extra_credit,
-            drop_lowest_count: repo.repository.drop_lowest_count,
             type: repo.repository.type,
           }
         : null,

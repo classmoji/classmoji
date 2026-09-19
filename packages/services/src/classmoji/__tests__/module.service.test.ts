@@ -147,11 +147,18 @@ describe('addItem', () => {
     itemFindFirst.mockResolvedValue(null);
     itemCreate.mockResolvedValue({ id: 'mi1' });
 
-    await addItem('mod1', 'REPOSITORY', 'repo1');
+    await addItem('mod1', 'QUIZ', 'quiz1');
 
     expect(itemCreate).toHaveBeenCalledWith({
-      data: { module_id: 'mod1', item_type: 'REPOSITORY', position: 0, repository_id: 'repo1' },
+      data: { module_id: 'mod1', item_type: 'QUIZ', position: 0, quiz_id: 'quiz1' },
     });
+  });
+
+  it('refuses REPOSITORY: repositories join a module through Repository.module_id', async () => {
+    await expect(addItem('mod1', 'REPOSITORY' as never, 'repo1')).rejects.toThrow(
+      'Repositories belong to a module through their module'
+    );
+    expect(itemCreate).not.toHaveBeenCalled();
   });
 
   it('appends after the last item and maps type to the right column', async () => {

@@ -34,6 +34,14 @@ async function main() {
 
   let pos = 0;
   for (const repo of repos) {
+    // A repository belongs to exactly one module; re-home it (and its
+    // assignments) under Week 1. Its migration-synthesized module stays behind
+    // empty, which is fine for a dev screenshot.
+    await prisma.repository.update({ where: { id: repo.id }, data: { module_id: week1.id } });
+    await prisma.assignment.updateMany({
+      where: { repository_id: repo.id },
+      data: { module_id: week1.id },
+    });
     const existing = await prisma.moduleItem.findFirst({
       where: { module_id: week1.id, repository_id: repo.id },
     });

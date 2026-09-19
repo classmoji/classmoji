@@ -290,7 +290,7 @@ export const getGradingProgress = async (classroomSlug: string) => {
   let totalNum = await getPrisma().gitRepoAssignment.count({
     where: {
       git_repo: { classroom: { slug: classroomSlug } },
-      assignment: { repository: { is_extra_credit: false } },
+      assignment: { is_extra_credit: false },
     },
   });
 
@@ -299,7 +299,7 @@ export const getGradingProgress = async (classroomSlug: string) => {
     where: {
       status: 'CLOSED',
       git_repo: { classroom: { slug: classroomSlug } },
-      assignment: { repository: { is_extra_credit: true } },
+      assignment: { is_extra_credit: true },
     },
   });
 
@@ -308,7 +308,7 @@ export const getGradingProgress = async (classroomSlug: string) => {
   let numUngraded = await getPrisma().gitRepoAssignment.count({
     where: {
       git_repo: { classroom: { slug: classroomSlug } },
-      assignment: { repository: { is_extra_credit: false } },
+      assignment: { is_extra_credit: false },
       grades: { none: {} },
     },
   });
@@ -318,7 +318,7 @@ export const getGradingProgress = async (classroomSlug: string) => {
     where: {
       status: 'CLOSED',
       git_repo: { classroom: { slug: classroomSlug } },
-      assignment: { repository: { is_extra_credit: true } },
+      assignment: { is_extra_credit: true },
       grades: { none: {} },
     },
   });
@@ -339,7 +339,7 @@ export const getCompletionProgress = async (classroomSlug: string) => {
   const totalNum = await getPrisma().gitRepoAssignment.count({
     where: {
       git_repo: { classroom: { slug: classroomSlug } },
-      assignment: { repository: { is_extra_credit: false } },
+      assignment: { is_extra_credit: false },
     },
   });
 
@@ -347,7 +347,7 @@ export const getCompletionProgress = async (classroomSlug: string) => {
     where: {
       status: 'CLOSED',
       git_repo: { classroom: { slug: classroomSlug } },
-      assignment: { repository: { is_extra_credit: false } },
+      assignment: { is_extra_credit: false },
     },
   });
 

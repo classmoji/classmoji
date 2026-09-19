@@ -260,9 +260,9 @@ export const getStudentsForAssignment = async (
 ): Promise<{ classroomId: string; studentIds: string[] }> => {
   const assignment = await getPrisma().assignment.findUnique({
     where: { id: assignmentId },
-    select: { repository: { select: { classroom_id: true } } },
+    select: { module: { select: { classroom_id: true } } },
   });
-  const classroomId = assignment?.repository.classroom_id ?? '';
+  const classroomId = assignment?.module.classroom_id ?? '';
   if (!classroomId) return { classroomId: '', studentIds: [] };
   return { classroomId, studentIds: await getStudentsInClassroom(classroomId) };
 };

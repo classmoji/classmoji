@@ -389,7 +389,8 @@ export async function assignmentHealth(classroomId: string): Promise<AssignmentH
 
   const [assignments, studentCountRow, emojiMap] = await Promise.all([
     prisma.assignment.findMany({
-      where: { repository: { classroom_id: classroomId } },
+      // Only REPO assignments have submissions to measure.
+      where: { module: { classroom_id: classroomId }, type: 'REPO' },
       select: {
         id: true,
         title: true,
@@ -613,7 +614,7 @@ export async function deadlinePressure(classroomId: string): Promise<DeadlinePre
 
   const assignments = await prisma.assignment.findMany({
     where: {
-      repository: { classroom_id: classroomId },
+      module: { classroom_id: classroomId },
       student_deadline: { gte: now, lte: in7 },
     },
     select: { id: true, title: true, student_deadline: true },

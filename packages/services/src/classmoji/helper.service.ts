@@ -65,10 +65,8 @@ export const findClassroomGradingProgressPerAssignment = async (classroomId: str
   let numberOfAssignments = await getPrisma().gitRepoAssignment.groupBy({
     where: {
       assignment: {
-        repository: {
-          classroom_id: classroomId,
-          is_extra_credit: false,
-        },
+        module: { classroom_id: classroomId },
+        is_extra_credit: false,
       },
     },
     by: ['assignment_id'],
@@ -79,10 +77,8 @@ export const findClassroomGradingProgressPerAssignment = async (classroomId: str
     where: {
       status: 'CLOSED',
       assignment: {
-        repository: {
-          classroom_id: classroomId,
-          is_extra_credit: true,
-        },
+        module: { classroom_id: classroomId },
+        is_extra_credit: true,
       },
     },
     by: ['assignment_id'],
@@ -94,10 +90,8 @@ export const findClassroomGradingProgressPerAssignment = async (classroomId: str
   let gradedAssignments = await getPrisma().gitRepoAssignment.groupBy({
     where: {
       assignment: {
-        repository: {
-          classroom_id: classroomId,
-          is_extra_credit: false,
-        },
+        module: { classroom_id: classroomId },
+        is_extra_credit: false,
       },
       grades: {
         some: {},
@@ -111,10 +105,8 @@ export const findClassroomGradingProgressPerAssignment = async (classroomId: str
     where: {
       status: 'CLOSED',
       assignment: {
-        repository: {
-          classroom_id: classroomId,
-          is_extra_credit: true,
-        },
+        module: { classroom_id: classroomId },
+        is_extra_credit: true,
       },
       grades: {
         some: {},
