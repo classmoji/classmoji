@@ -77,7 +77,7 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
       orderBy: { title: 'asc' },
     }),
     getPrisma().assignment.findMany({
-      where: { repository: { classroom_id: classroom.id }, is_published: true },
+      where: { module: { classroom_id: classroom.id }, is_published: true },
       select: { id: true, title: true, repository: { select: { title: true, slug: true } } },
       orderBy: { title: 'asc' },
     }),

@@ -14,7 +14,6 @@ import { ActionTypes } from '~/constants';
 import { useCallout } from '@classmoji/ui-components';
 import { useGlobalFetcher } from '~/hooks';
 import { openRepositoryAssignmentInGithub } from '~/utils/helpers.client';
-import { isRepositoryAssignmentDropped } from '@classmoji/utils';
 import ImportedBadge from './ImportedBadge';
 import AutogradingResultPill from '~/components/features/AutogradingResultPill';
 import { type AutogradingResultData } from '~/components/features/AutogradingResultCard';
@@ -254,19 +253,7 @@ const AssignmentTable = ({
       width: 110,
       render: (_: unknown, record: Repo) => {
         const repoAssignment = getRepoAssignment(record);
-
-        // Check if this assignment is dropped for this student
-        const dropped = isRepositoryAssignmentDropped(
-          repoAssignment?.id as string,
-          record.assignments || [],
-          emojiMappings as unknown as Record<string, number>,
-          settings as unknown as Parameters<typeof isRepositoryAssignmentDropped>[3],
-          assignment
-        );
-
-        return (
-          <RepositoryAssignmentStatus repositoryAssignment={repoAssignment} isDropped={dropped} />
-        );
+        return <RepositoryAssignmentStatus repositoryAssignment={repoAssignment} />;
       },
     },
     {

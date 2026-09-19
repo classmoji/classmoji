@@ -44,10 +44,8 @@ interface RepositoryAssignment {
 
 interface RepositoryData {
   type: string;
-  weight: number;
   is_published: boolean;
-  is_extra_credit?: boolean;
-  drop_lowest_count?: number;
+  module?: { title: string } | null;
   assignments?: RepositoryAssignment[];
 }
 
@@ -104,7 +102,7 @@ const SummaryCards = ({ repository, repos }: SummaryCardsProps) => {
             </Tag>
           }
         />
-        <StatItem label="Weight" value={`${repository.weight}%`} />
+        <StatItem label="Module" value={repository.module?.title ?? '—'} />
         <StatItem label="Repositories" value={repoCount} />
         <StatItem
           label="Due date"

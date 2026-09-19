@@ -1,5 +1,16 @@
 import { useEffect, useRef } from 'react';
-import { Button, Input, InputNumber, Form, DatePicker, Select, Popover, Card, Alert } from 'antd';
+import {
+  Button,
+  Checkbox,
+  Input,
+  InputNumber,
+  Form,
+  DatePicker,
+  Select,
+  Popover,
+  Card,
+  Alert,
+} from 'antd';
 import { IconTemplate } from '@tabler/icons-react';
 import dayjs from 'dayjs';
 
@@ -154,6 +165,16 @@ const FormAssignment = ({
               />
             </Form.Item>
           </div>
+
+          <Checkbox
+            checked={!!assignment.is_extra_credit}
+            onChange={e => setAssignmentValue('is_extra_credit', e.target.checked)}
+          >
+            <span className="text-sm">
+              <span className="font-semibold text-green-600">Extra credit</span>: counts toward the
+              course grade without adding to its denominator
+            </span>
+          </Checkbox>
         </Card>
 
         {/* Deadlines */}

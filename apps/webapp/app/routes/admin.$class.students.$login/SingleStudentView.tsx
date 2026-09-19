@@ -16,7 +16,6 @@ import {
   calculateNumericGrade,
   calculateRepositoryGrade,
   calculateGrades,
-  isRepositoryAssignmentDropped,
   type OrganizationSettings,
   type LetterGradeMappingEntry,
 } from '@classmoji/utils';
@@ -38,8 +37,6 @@ interface StudentRepository {
   id: string;
   title: string;
   type: string;
-  weight: number;
-  is_extra_credit: boolean;
 }
 
 interface StudentRepoAssignment {
@@ -209,12 +206,6 @@ const SingleStudentView = (props: SingleStudentViewProps) => {
       ),
     },
     {
-      title: 'Weight',
-      dataIndex: 'weight',
-      key: 'weight',
-      render: (weight: number) => <span className="font-medium text-ink-0">{weight}%</span>,
-    },
-    {
       title: 'Repository Grade',
       key: 'repositoryGrade',
       render: (_: unknown, repository: StudentRepository) => {
@@ -222,17 +213,10 @@ const SingleStudentView = (props: SingleStudentViewProps) => {
         const grade = calculateRepositoryGrade(
           repositoryAssignments,
           emojiMappings as Record<string, number>,
-          settings as OrganizationSettings,
-          repository
+          settings as OrganizationSettings
         );
 
         if (grade === -1) return <Tag color="red">No Grade</Tag>;
-
-        if (repository.is_extra_credit) {
-          return (
-            <span className="font-bold text-green-600">+ {(grade * repository.weight) / 100}</span>
-          );
-        }
 
         return <span className="font-bold text-ink-0">{grade}</span>;
       },
@@ -300,16 +284,7 @@ const SingleStudentView = (props: SingleStudentViewProps) => {
       key: 'status',
       width: 110,
       render: (repoAssignment: StudentRepoAssignment) => {
-        const dropped = isRepositoryAssignmentDropped(
-          repoAssignment?.id,
-          allRepositoryAssignments,
-          emojiMappings as Record<string, number>,
-          settings as OrganizationSettings,
-          moduleAssignment
-        );
-        return (
-          <RepositoryAssignmentStatus repositoryAssignment={repoAssignment} isDropped={dropped} />
-        );
+        return <RepositoryAssignmentStatus repositoryAssignment={repoAssignment} />;
       },
     },
     {

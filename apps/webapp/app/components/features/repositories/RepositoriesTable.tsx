@@ -12,11 +12,9 @@ import {
   IconFolder,
   IconFolderOpen,
   IconRefresh,
-  IconStarFilled,
   IconTrash,
 } from '@tabler/icons-react';
 
-import { EditableCell } from '~/components';
 import { ActionTypes } from '~/constants';
 import LocalStorage from '~/utils/localStorage';
 import { useGlobalFetcher } from '~/hooks';
@@ -26,6 +24,7 @@ interface AssignmentRow {
   id: string;
   title: string;
   weight: number;
+  is_extra_credit?: boolean;
   is_published: boolean;
 }
 
@@ -36,9 +35,8 @@ interface RepositoryRow {
   id: string;
   title: string;
   type: string;
-  weight: number;
   is_published: boolean;
-  is_extra_credit?: boolean;
+  module?: { id: string; title: string; slug: string | null } | null;
   assignments?: AssignmentRow[];
 }
 
@@ -56,9 +54,18 @@ interface TreeNode {
   children?: TreeNode[];
 }
 
-interface AssignmentTableProps {
-  // Origin's route passes the (filtered) list of repositories under this prop name.
-  assignments: RepositoryRow[];
+interface RepositoriesTableProps {
+  repositories: RepositoryRow[];
+  /**
+   * Route whose action handles publish/sync/unpublish/delete. Defaults to the
+   * current route (the repositories list); the module page passes
+   * `/admin/:class/repos` so the same action serves it.
+   */
+  actionBase?: string;
+  /** Hide the Module column when every row is already known to share one. */
+  showModuleColumn?: boolean;
+  /** Render without the floating card, for use inside another panel. */
+  bare?: boolean;
 }
 
 const prettyType = (type?: string) => (type ? type.charAt(0) + type.slice(1).toLowerCase() : '');
@@ -92,7 +99,12 @@ const ActionLink = forwardRef<
 ));
 ActionLink.displayName = 'ActionLink';
 
-const AssignmentTable = ({ assignments: repositories }: AssignmentTableProps) => {
+const RepositoriesTable = ({
+  repositories,
+  actionBase = '',
+  showModuleColumn = true,
+  bare = false,
+}: RepositoriesTableProps) => {
   const navigate = useNavigate();
   const { class: classSlug } = useParams();
   const { fetcher, notify } = useGlobalFetcher();
@@ -116,23 +128,12 @@ const AssignmentTable = ({ assignments: repositories }: AssignmentTableProps) =>
   );
 
   // ---- repository-level actions (reuse existing list action.ts named actions) ----
-  const handleUpdateWeight = (repositoryId: string, weight: number) => {
-    fetcher!.submit(
-      { assignment_id: repositoryId, weight },
-      {
-        method: 'post',
-        action: '?/updateAssignment',
-        encType: 'application/json',
-      }
-    );
-  };
-
   const publishRepository = (id: string) => {
     fetcher!.submit(
       { assignment_id: id },
       {
         method: 'post',
-        action: '?/publish',
+        action: `${actionBase}?/publish`,
         encType: 'application/json',
       }
     );
@@ -144,7 +145,7 @@ const AssignmentTable = ({ assignments: repositories }: AssignmentTableProps) =>
       { assignment_id: id },
       {
         method: 'post',
-        action: '?/sync',
+        action: `${actionBase}?/sync`,
         encType: 'application/json',
       }
     );
@@ -156,7 +157,7 @@ const AssignmentTable = ({ assignments: repositories }: AssignmentTableProps) =>
       { assignment_id: id },
       {
         method: 'post',
-        action: '?/unpublish',
+        action: `${actionBase}?/unpublish`,
         encType: 'application/json',
       }
     );
@@ -168,7 +169,7 @@ const AssignmentTable = ({ assignments: repositories }: AssignmentTableProps) =>
       { assignment_id: id },
       {
         method: 'delete',
-        action: '?/delete',
+        action: `${actionBase}?/delete`,
         encType: 'application/json',
       }
     );
@@ -252,6 +253,7 @@ const AssignmentTable = ({ assignments: repositories }: AssignmentTableProps) =>
       repositoryType: r.type,
       weight: a.weight,
       is_published: a.is_published,
+      is_extra_credit: a.is_extra_credit,
       assignment: a,
     }));
 
@@ -261,17 +263,11 @@ const AssignmentTable = ({ assignments: repositories }: AssignmentTableProps) =>
       name: r.title,
       repositoryTitle: r.title,
       repositoryType: r.type,
-      weight: r.weight,
       is_published: r.is_published,
-      is_extra_credit: r.is_extra_credit,
       repository: r,
       children,
     };
   });
-
-  // Total reflects the repository weights shown on the top-level rows (these are
-  // the values meant to sum to 100% across the class).
-  const totalWeight = repositories.reduce((acc, r) => acc + (r.weight ?? 0), 0);
 
   const columns = [
     {
@@ -335,11 +331,10 @@ const AssignmentTable = ({ assignments: repositories }: AssignmentTableProps) =>
             >
               {record.name}
             </span>
-            {record.kind === 'repository' && record.is_extra_credit && (
-              <span className="inline-flex items-center gap-1 rounded-full bg-amber-400/10 px-2 py-1 text-xs font-medium leading-none text-amber-700/90 dark:text-amber-300/90">
-                <IconStarFilled size={11} className="-mt-px shrink-0 text-amber-500/80" />
-                Extra credit
-              </span>
+            {record.kind === 'assignment' && record.is_extra_credit && (
+              <Tag color="green" bordered={false} className="text-xs m-0">
+                EC
+              </Tag>
             )}
           </div>
         );
@@ -354,20 +349,24 @@ const AssignmentTable = ({ assignments: repositories }: AssignmentTableProps) =>
       ),
     },
     {
+      title: 'Module',
+      key: 'module',
+      width: 180,
+      ellipsis: true,
+      render: (_: unknown, record: TreeNode) =>
+        record.kind === 'repository' ? (
+          <span className="text-ink-2">{record.repository?.module?.title ?? '—'}</span>
+        ) : null,
+    },
+    {
+      // Grading weight lives on assignments; repositories carry none.
       title: 'Weight (%)',
       key: 'weight',
       width: 110,
       render: (_: unknown, record: TreeNode) =>
-        record.kind === 'repository' ? (
-          <EditableCell
-            record={{ id: record.repository!.id, weight: record.weight ?? 0 }}
-            dataIndex="weight"
-            onUpdate={(recordId, value) => handleUpdateWeight(recordId as string, value as number)}
-            format="number"
-          />
-        ) : (
+        record.kind === 'assignment' ? (
           <span className="text-ink-2">{record.weight ?? 0} %</span>
-        ),
+        ) : null,
     },
     {
       title: 'Status',
@@ -433,9 +432,15 @@ const AssignmentTable = ({ assignments: repositories }: AssignmentTableProps) =>
   ];
 
   return (
-    <div className="rounded-2xl overflow-hidden bg-panel ring-1 ring-line min-h-[calc(100vh-10rem)] p-5 sm:p-6">
+    <div
+      className={
+        bare
+          ? ''
+          : 'rounded-2xl overflow-hidden bg-panel ring-1 ring-line min-h-[calc(100vh-10rem)] p-5 sm:p-6'
+      }
+    >
       <Table
-        columns={columns}
+        columns={columns.filter(c => c.key !== 'module' || showModuleColumn)}
         dataSource={treeData}
         rowKey="key"
         rowHoverable={false}
@@ -454,21 +459,6 @@ const AssignmentTable = ({ assignments: repositories }: AssignmentTableProps) =>
           showSizeChanger: true,
           showTotal: (total, range) => `${range[0]}-${range[1]} of ${total} repositories`,
         }}
-        summary={() => (
-          <Table.Summary.Row>
-            <Table.Summary.Cell index={0} className="font-semibold">
-              Total
-            </Table.Summary.Cell>
-            <Table.Summary.Cell index={1}></Table.Summary.Cell>
-            <Table.Summary.Cell index={2} className="font-bold">
-              <span className={totalWeight === 100 ? 'text-green-600' : 'text-red-600'}>
-                {totalWeight}%
-              </span>
-            </Table.Summary.Cell>
-            <Table.Summary.Cell index={3}></Table.Summary.Cell>
-            <Table.Summary.Cell index={4}></Table.Summary.Cell>
-          </Table.Summary.Row>
-        )}
         locale={{
           emptyText: (
             <div className="text-center py-12 text-gray-500">
@@ -482,4 +472,4 @@ const AssignmentTable = ({ assignments: repositories }: AssignmentTableProps) =>
   );
 };
 
-export default AssignmentTable;
+export default RepositoriesTable;

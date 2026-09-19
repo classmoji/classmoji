@@ -20,7 +20,18 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
 
   const url = new URL(request.url);
   const moduleTitle = url.searchParams.get('title');
+  // `?module=` (id or slug) binds a new repository to the module page that
+  // opened the form; the picker is locked to it.
+  const moduleParam = url.searchParams.get('module');
   const tags = await ClassmojiService.organizationTag.findByClassroomId(classroom.id);
+  const modules = (await ClassmojiService.module.findByClassroomSlug(classSlug!)).map(m => ({
+    id: m.id,
+    title: m.title,
+    slug: m.slug,
+  }));
+  const moduleFromQuery = moduleParam
+    ? (modules.find(m => m.id === moduleParam || m.slug === moduleParam) ?? null)
+    : null;
 
   let repository = null;
   let hasReposWithProjects = false;
@@ -67,6 +78,8 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
     isNew: !repository,
     tags,
     classroom,
+    modules,
+    moduleFromQuery,
     pages,
     slides,
     hasReposWithProjects,
@@ -91,10 +104,33 @@ export const shouldRevalidate = ({
 };
 
 const ModuleForm = ({ loaderData }: Route.ComponentProps) => {
-  const { repository, isNew, tags, classroom, pages, slides, hasReposWithProjects } = loaderData;
+  const {
+    repository,
+    isNew,
+    tags,
+    classroom,
+    modules,
+    moduleFromQuery,
+    pages,
+    slides,
+    hasReposWithProjects,
+  } = loaderData;
   const navigate = useNavigate();
   const { class: classSlug } = useParams();
-  const goToRepos = () => navigate(`/admin/${classSlug}/repos`);
+  // The form is reached from a module page (new repo, or editing one of its
+  // repos), so the breadcrumb and back link lead there. Falls back to the
+  // secondary repositories list when no module is known.
+  const parentModule =
+    moduleFromQuery ??
+    (repository?.module
+      ? { id: repository.module.id, title: repository.module.title, slug: repository.module.slug }
+      : null);
+  const goBack = () =>
+    navigate(
+      parentModule
+        ? `/admin/${classSlug}/modules/${parentModule.slug ?? parentModule.id}`
+        : `/admin/${classSlug}/repos`
+    );
   // FormModule calls `close` on Discard and after a successful save.
   const close = () => navigate(-1);
 
@@ -104,16 +140,32 @@ const ModuleForm = ({ loaderData }: Route.ComponentProps) => {
       <div className="flex items-center gap-2 text-ink-2 mt-2 mb-4">
         <button
           type="button"
-          onClick={goToRepos}
+          onClick={goBack}
           className="hover:text-ink-1"
-          aria-label="Back to repositories"
+          aria-label={parentModule ? 'Back to module' : 'Back to repositories'}
         >
           <IconChevronLeft size={18} />
         </button>
         <IconFolder size={18} className="text-gray-400" />
-        <button type="button" onClick={goToRepos} className="hover:text-ink-1">
-          Repositories
-        </button>
+        {parentModule ? (
+          <>
+            <button
+              type="button"
+              onClick={() => navigate(`/admin/${classSlug}/modules`)}
+              className="hover:text-ink-1"
+            >
+              Modules
+            </button>
+            <span className="text-ink-3">/</span>
+            <button type="button" onClick={goBack} className="hover:text-ink-1">
+              {parentModule.title}
+            </button>
+          </>
+        ) : (
+          <button type="button" onClick={goBack} className="hover:text-ink-1">
+            Repositories
+          </button>
+        )}
         <span className="text-ink-3">/</span>
         <span className="font-semibold text-ink-1">
           {isNew ? 'New repository' : (repository?.title ?? 'Edit repository')}
@@ -124,6 +176,8 @@ const ModuleForm = ({ loaderData }: Route.ComponentProps) => {
         repository={repository as Parameters<typeof FormModule>[0]['repository']}
         isNew={isNew}
         close={close}
+        modules={modules}
+        moduleFromQuery={moduleFromQuery}
         tags={tags}
         classroom={classroom as Parameters<typeof FormModule>[0]['classroom']}
         pages={pages}
@@ -309,6 +363,16 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
     await ClassmojiService.contentManifest.saveManifest(classroom.id);
   };
 
+  // The module a repository lands in must be this classroom's. Checked for
+  // both create and update, since the picker can move a repository.
+  const assertModuleInClassroom = async () => {
+    if (!moduleData.module_id) throw new Error('A repository needs a module');
+    const module = await ClassmojiService.module.findById(moduleData.module_id);
+    if (!module || module.classroom_id !== classroom.id) {
+      throw new Error('Module not found in classroom');
+    }
+  };
+
   return namedAction(request, {
     // Lets an instructor add a team tag from the group-assignment form without
     // leaving for Settings → Team. Upsert, so re-typing an existing name hands
@@ -327,6 +391,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
     },
     async create() {
       try {
+        await assertModuleInClassroom();
         const createdModule = await ClassmojiService.repository.create({
           ...moduleData,
           classroom_id: classroom.id,
@@ -359,6 +424,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
     },
     async update() {
       try {
+        await assertModuleInClassroom();
         await ClassmojiService.repository.updateWithAssignments({
           ...moduleData,
           tag,

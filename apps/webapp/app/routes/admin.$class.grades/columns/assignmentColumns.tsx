@@ -1,13 +1,7 @@
-import {
-  applyLatePenalty,
-  calculateNumericGrade,
-  calculateRepositoryGrade,
-  getDroppedRepositoryAssignments,
-  isRepositoryAssignmentDropped,
-} from '@classmoji/utils';
-import type { GitRepoAssignment, OrganizationSettings, GradeEntry } from '@classmoji/utils';
+import { calculateAssignmentGrade } from '@classmoji/utils';
+import type { GitRepoAssignment, OrganizationSettings } from '@classmoji/utils';
 import { EmojisDisplay, GradeBadge } from '~/components';
-import { Tag, Tooltip } from 'antd';
+import { Tag } from 'antd';
 import type { TableProps } from 'antd';
 
 type EmojiMappings = Record<string, number>;
@@ -16,35 +10,29 @@ type ViewMode = string;
 /** Extended GitRepoAssignment with fields used in the grades table */
 interface GradeRepoAssignment extends GitRepoAssignment {
   assignment_id: string | number;
-  assignment: GitRepoAssignment['assignment'] & { title?: string };
+  assignment: GitRepoAssignment['assignment'] & { id?: string | number; title?: string };
 }
 
-interface ModuleData {
-  id: string | number;
+/** A module, as the gradebook loader hands it over: one column group. */
+export interface GradebookModule {
+  id: string;
   title: string;
-  weight: number;
-  is_published: boolean;
-  is_extra_credit?: boolean;
-  assignments: AssignmentData[];
+  position: number;
 }
 
-interface AssignmentData {
-  id: string | number;
+/** A published assignment, flat, with the module it belongs to. */
+export interface GradebookAssignment {
+  id: string;
   title: string;
   weight: number;
-}
-
-interface ModuleInfo {
-  id: string | number;
-  title: string;
-  weight: number;
-  is_extra_credit?: boolean;
-  drop_lowest_count?: number;
+  is_extra_credit: boolean;
+  type: string;
+  module_id: string;
+  repository_id?: string | null;
 }
 
 interface StudentGitRepo {
   repository_id: string | number;
-  repository: ModuleInfo;
   assignments: GradeRepoAssignment[];
 }
 
@@ -52,314 +40,163 @@ interface StudentRecord {
   git_repos: StudentGitRepo[];
 }
 
+/** The student's submission row for an assignment, wherever its git repo sits. */
+const findSubmission = (student: StudentRecord, assignmentId: string) => {
+  for (const repo of student.git_repos) {
+    const found = repo.assignments?.find(
+      (ra: GradeRepoAssignment) => String(ra.assignment_id ?? ra.assignment?.id) === assignmentId
+    );
+    if (found) return found;
+  }
+  return undefined;
+};
+
 /**
- * Calculates the grade for a specific repository assignment with late penalties applied
+ * Weighted mean of a student's graded submissions in one module. Extra credit
+ * is kept out of the mean and reported separately so the collapsed module
+ * column can show it as "+x", the way the course grade treats it.
  */
-const calculateRepositoryAssignmentGrade = (
-  repoAssignment: GitRepoAssignment,
+const moduleSummary = (
+  student: StudentRecord,
+  assignments: GradebookAssignment[],
   emojiMappings: EmojiMappings,
   settings: OrganizationSettings
 ) => {
-  if (!repoAssignment?.grades?.length) return null;
+  let weighted = 0;
+  let totalWeight = 0;
+  let extraCredit = 0;
+  const grades: GitRepoAssignment['grades'] = [];
 
-  const emojiGrades = repoAssignment.grades.map(({ emoji }: GradeEntry) => emoji);
-  const numericGrade = calculateNumericGrade(emojiGrades, emojiMappings);
-
-  return applyLatePenalty(numericGrade, repoAssignment, settings);
-};
-
-/**
- * Renders the grade display based on view mode
- */
-const renderGradeCell = (
-  repoAssignment: GitRepoAssignment | undefined,
-  view: ViewMode,
-  emojiMappings: EmojiMappings,
-  settings: OrganizationSettings,
-  isDropped = false
-) => {
-  if (!repoAssignment) {
-    return <span className="text-red-500 italic">None</span>;
+  for (const assignment of assignments) {
+    const submission = findSubmission(student, assignment.id);
+    if (!submission) continue;
+    grades.push(...(submission.grades ?? []));
+    const grade = calculateAssignmentGrade(submission, emojiMappings, settings);
+    if (grade === null) continue;
+    if (assignment.is_extra_credit) {
+      extraCredit += (grade * assignment.weight) / 100;
+    } else {
+      weighted += grade * assignment.weight;
+      totalWeight += assignment.weight;
+    }
   }
-
-  const numericGrade = calculateRepositoryAssignmentGrade(repoAssignment, emojiMappings, settings);
-
-  if (numericGrade === null) {
-    return <span className="text-red-500 italic">None</span>;
-  }
-
-  const gradeDisplay =
-    view === 'Numeric' ? (
-      <span className="font-medium">{numericGrade}</span>
-    ) : (
-      <EmojisDisplay grades={repoAssignment.grades || []} />
-    );
-
-  if (isDropped) {
-    return (
-      <div className="flex items-center gap-2">
-        {gradeDisplay}
-        <Tag color="blue" bordered={false} className="text-xs">
-          Dropped
-        </Tag>
-      </div>
-    );
-  }
-
-  return gradeDisplay;
-};
-
-/**
- * Creates column definitions for individual assignments within a repository
- */
-const createRepositoryAssignmentColumns = (
-  repository: ModuleData,
-  view: ViewMode,
-  emojiMappings: EmojiMappings,
-  settings: OrganizationSettings,
-  showAssignments: boolean
-) => {
-  if (!showAssignments) return [];
-
-  return (repository.assignments || []).map((assignment: AssignmentData) => ({
-    title: `${assignment.title} (${assignment.weight}%)`,
-    dataIndex: assignment.title,
-    hidden: !showAssignments,
-    width: 140,
-    ellipsis: true,
-    sorter: (a: StudentRecord, b: StudentRecord) => {
-      const repoA = a.git_repos.find(repo => repo.repository_id === repository.id);
-      const repoB = b.git_repos.find(repo => repo.repository_id === repository.id);
-
-      const repoAssignmentA = repoA?.assignments?.find(
-        (ra: GradeRepoAssignment) => ra.assignment_id === assignment.id
-      );
-      const repoAssignmentB = repoB?.assignments?.find(
-        (ra: GradeRepoAssignment) => ra.assignment_id === assignment.id
-      );
-
-      const gradeA = repoAssignmentA
-        ? calculateRepositoryAssignmentGrade(repoAssignmentA, emojiMappings, settings)
-        : -1;
-      const gradeB = repoAssignmentB
-        ? calculateRepositoryAssignmentGrade(repoAssignmentB, emojiMappings, settings)
-        : -1;
-
-      return (gradeA ?? -1) - (gradeB ?? -1);
-    },
-    render: (_: unknown, student: StudentRecord) => {
-      const studentRepo = student.git_repos.find(repo => repo.repository_id === repository.id);
-
-      if (!studentRepo) {
-        return <span className="text-red-500 italic">None</span>;
-      }
-
-      const repoAssignment = studentRepo.assignments?.find(
-        (ra: GradeRepoAssignment) => ra.assignment_id === assignment.id
-      );
-
-      // Check if this assignment is dropped for this student
-      const dropped = repoAssignment
-        ? isRepositoryAssignmentDropped(
-            repoAssignment.id,
-            studentRepo.assignments,
-            emojiMappings,
-            settings,
-            studentRepo.repository
-          )
-        : false;
-
-      return renderGradeCell(repoAssignment, view, emojiMappings, settings, dropped);
-    },
-  }));
-};
-
-/**
- * Creates the total/average column for a repository
- */
-const createModuleTotalColumn = (
-  repository: ModuleData,
-  emojiMappings: EmojiMappings,
-  settings: OrganizationSettings,
-  showAssignments: boolean
-) => {
-  if (!showAssignments) return null;
 
   return {
-    title: 'Average',
-    hidden: !showAssignments,
-    width: 120,
-    ellipsis: true,
-    sorter: (a: StudentRecord, b: StudentRecord) => {
-      const repoA = a.git_repos.find(repo => repo.repository_id === repository.id);
-      const repoB = b.git_repos.find(repo => repo.repository_id === repository.id);
-
-      const gradeA = repoA
-        ? calculateRepositoryGrade(repoA.assignments, emojiMappings, settings, repoA.repository)
-        : -1;
-      const gradeB = repoB
-        ? calculateRepositoryGrade(repoB.assignments, emojiMappings, settings, repoB.repository)
-        : -1;
-
-      return gradeA - gradeB;
-    },
-    render: (_: unknown, student: StudentRecord) => {
-      const studentRepo = student.git_repos.find(repo => repo.repository_id === repository.id);
-
-      if (!studentRepo) {
-        return <span className="text-red-500 italic">None</span>;
-      }
-
-      const grade = calculateRepositoryGrade(
-        studentRepo.assignments,
-        emojiMappings,
-        settings,
-        studentRepo.repository
-      );
-
-      if (grade < 0) return null;
-
-      // Get dropped assignments for this student
-      const droppedAssignmentIds = getDroppedRepositoryAssignments(
-        studentRepo.assignments,
-        emojiMappings,
-        settings,
-        studentRepo.repository
-      );
-      const hasDroppedAssignments = droppedAssignmentIds.length > 0;
-
-      return (
-        <div className="flex items-center gap-2">
-          <GradeBadge grade={grade} />
-          {hasDroppedAssignments && (
-            <Tooltip
-              title={
-                <div>
-                  <div className="font-semibold mb-1">
-                    {droppedAssignmentIds.length} assignment
-                    {droppedAssignmentIds.length > 1 ? 's' : ''} dropped (lowest score
-                    {droppedAssignmentIds.length > 1 ? 's' : ''})
-                  </div>
-                  <div className="text-xs">
-                    {droppedAssignmentIds.map(id => {
-                      const repoAssignment = studentRepo.assignments?.find(
-                        (ra: GradeRepoAssignment) => ra.id === id
-                      );
-                      return (
-                        <div key={id}>
-                          • {repoAssignment?.assignment?.title || 'Unknown assignment'}
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
-              }
-            >
-              <Tag color="purple" bordered={false} className="text-xs">
-                {droppedAssignmentIds.length} dropped
-              </Tag>
-            </Tooltip>
-          )}
-        </div>
-      );
-    },
+    mean: totalWeight > 0 ? Math.round((weighted / totalWeight) * 10) / 10 : null,
+    extraCredit,
+    grades,
   };
 };
 
-/**
- * Creates column definitions for all repositories
- */
+const NONE = <span className="text-red-500 italic">None</span>;
 
+/** Renders the grade display for one submission based on view mode */
+const renderGradeCell = (
+  submission: GitRepoAssignment | undefined,
+  view: ViewMode,
+  emojiMappings: EmojiMappings,
+  settings: OrganizationSettings
+) => {
+  if (!submission) return NONE;
+
+  const numericGrade = calculateAssignmentGrade(submission, emojiMappings, settings);
+  if (numericGrade === null) return NONE;
+
+  return view === 'Numeric' ? (
+    <span className="font-medium">{numericGrade}</span>
+  ) : (
+    <EmojisDisplay grades={submission.grades || []} />
+  );
+};
+
+/** One column per assignment inside a module group */
+const createModuleAssignmentColumns = (
+  assignments: GradebookAssignment[],
+  view: ViewMode,
+  emojiMappings: EmojiMappings,
+  settings: OrganizationSettings
+) =>
+  assignments.map(assignment => ({
+    title: (
+      <span className="inline-flex items-center gap-1">
+        {assignment.title} ({assignment.weight}%)
+        {assignment.is_extra_credit && (
+          <Tag color="green" bordered={false} className="text-xs m-0">
+            EC
+          </Tag>
+        )}
+      </span>
+    ),
+    key: `assignment-${assignment.id}`,
+    width: 140,
+    ellipsis: true,
+    sorter: (a: StudentRecord, b: StudentRecord) => {
+      const subA = findSubmission(a, assignment.id);
+      const subB = findSubmission(b, assignment.id);
+      const gradeA = subA ? calculateAssignmentGrade(subA, emojiMappings, settings) : null;
+      const gradeB = subB ? calculateAssignmentGrade(subB, emojiMappings, settings) : null;
+      return (gradeA ?? -1) - (gradeB ?? -1);
+    },
+    render: (_: unknown, student: StudentRecord) =>
+      renderGradeCell(findSubmission(student, assignment.id), view, emojiMappings, settings),
+  }));
+
+/**
+ * Column groups for the gradebook: one group per module (only modules with at
+ * least one published REPO assignment), one child column per assignment.
+ * Collapsed, the group column shows the module's weighted mean (or every
+ * emoji in the Emoji view); expanded, it shows the per-assignment columns.
+ */
 export const createAssignmentColumns = (
-  repositories: ModuleData[],
+  modules: GradebookModule[],
+  assignments: GradebookAssignment[],
   view: ViewMode,
   showAssignments: boolean,
   emojiMappings: EmojiMappings,
   settings: OrganizationSettings
 ): TableProps<StudentRecord>['columns'] => {
-  return repositories
-    .filter((repository: ModuleData) => repository.is_published)
-    .map((repository: ModuleData) => {
-      const assignmentColumns = createRepositoryAssignmentColumns(
-        repository,
-        view,
-        emojiMappings,
-        settings,
-        showAssignments
-      );
+  // Quiz/form assignments are structural only for now: they carry no grade.
+  const graded = assignments.filter(a => a.type === 'REPO');
 
-      const totalColumn = createModuleTotalColumn(repository, emojiMappings, settings, showAssignments);
+  return [...modules]
+    .sort((a, b) => a.position - b.position)
+    .map(module => ({ module, assignments: graded.filter(a => a.module_id === module.id) }))
+    .filter(({ assignments: moduleAssignments }) => moduleAssignments.length > 0)
+    .map(({ module, assignments: moduleAssignments }) => ({
+      title: <span className="font-semibold">{module.title}</span>,
+      key: `module-${module.id}`,
+      align: 'left' as const,
+      hidden: false,
+      ellipsis: true,
+      width: 140,
+      children: showAssignments
+        ? createModuleAssignmentColumns(moduleAssignments, view, emojiMappings, settings)
+        : [],
+      sorter: (a: StudentRecord, b: StudentRecord) => {
+        const sumA = moduleSummary(a, moduleAssignments, emojiMappings, settings);
+        const sumB = moduleSummary(b, moduleAssignments, emojiMappings, settings);
+        return (sumA.mean ?? -1) + sumA.extraCredit - ((sumB.mean ?? -1) + sumB.extraCredit);
+      },
+      render: (_: unknown, student: StudentRecord) => {
+        const summary = moduleSummary(student, moduleAssignments, emojiMappings, settings);
 
-      return {
-        title: (
-          <span className="font-semibold">
-            {repository.title} ({repository.weight}%)
-          </span>
-        ),
-        align: 'left' as const,
-        hidden: false,
-        ellipsis: true,
-        width: 140,
-        children: showAssignments
-          ? [...assignmentColumns, ...(totalColumn ? [totalColumn] : [])]
-          : [],
-        sorter: (a: StudentRecord, b: StudentRecord) => {
-          const repoA = a.git_repos.find(repo => repo.repository_id === repository.id);
-          const repoB = b.git_repos.find(repo => repo.repository_id === repository.id);
-
-          let gradeA = repoA
-            ? calculateRepositoryGrade(repoA.assignments, emojiMappings, settings, repoA.repository)
-            : -1;
-          let gradeB = repoB
-            ? calculateRepositoryGrade(repoB.assignments, emojiMappings, settings, repoB.repository)
-            : -1;
-
-          if (repository.is_extra_credit) {
-            gradeA = gradeA >= 0 ? gradeA * (repository.weight / 100) : -1;
-            gradeB = gradeB >= 0 ? gradeB * (repository.weight / 100) : -1;
-          }
-
-          return gradeA - gradeB;
-        },
-        render: (_: unknown, student: StudentRecord) => {
-          const studentRepo = student.git_repos.find(repo => repo.repository_id === repository.id);
-
-          if (!studentRepo) {
+        if (view === 'Emoji') {
+          if (summary.grades.length === 0) {
             return <span className="text-gray-500 italic">None</span>;
           }
+          return <EmojisDisplay grades={summary.grades} />;
+        }
 
-          if (view === 'Emoji') {
-            const allGrades =
-              studentRepo.assignments?.flatMap((a: GradeRepoAssignment) => a.grades || []) || [];
-            if (allGrades.length === 0) {
-              return <span className="text-gray-500 italic">None</span>;
-            }
-            return <EmojisDisplay grades={allGrades} />;
-          }
+        if (summary.mean === null && summary.extraCredit === 0) return null;
 
-          let grade = calculateRepositoryGrade(
-            studentRepo.assignments,
-            emojiMappings,
-            settings,
-            studentRepo.repository
-          );
-
-          if (repository.is_extra_credit) {
-            grade = grade * (repository.weight / 100);
-          }
-
-          if (grade < 0) return null;
-
-          return (
-            <span className="font-medium">
-              {repository.is_extra_credit ? (
-                <span className="text-green-600">+{grade.toFixed(1)}</span>
-              ) : (
-                <GradeBadge grade={grade} />
-              )}
-            </span>
-          );
-        },
-      };
-    });
+        return (
+          <span className="inline-flex items-center gap-2 font-medium">
+            {summary.mean !== null && <GradeBadge grade={summary.mean} />}
+            {summary.extraCredit > 0 && (
+              <span className="text-green-600">+{summary.extraCredit.toFixed(1)}</span>
+            )}
+          </span>
+        );
+      },
+    }));
 };

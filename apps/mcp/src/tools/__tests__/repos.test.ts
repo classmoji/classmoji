@@ -21,6 +21,7 @@ const mocks = vi.hoisted(() => ({
   findUsersByRole: vi.fn(),
   findTeamsByTag: vi.fn(),
   findGitReposByRepository: vi.fn(),
+  moduleFindById: vi.fn(),
 }));
 
 vi.mock('@classmoji/services', () => ({
@@ -36,6 +37,7 @@ vi.mock('@classmoji/services', () => ({
     },
     classroomMembership: { findUsersByRole: (...a: unknown[]) => mocks.findUsersByRole(...a) },
     gitRepo: { findByRepository: (...a: unknown[]) => mocks.findGitReposByRepository(...a) },
+    module: { findById: (...a: unknown[]) => mocks.moduleFindById(...a) },
     contentManifest: { saveManifest: (...a: unknown[]) => mocks.saveManifest(...a) },
     audit: { create: (...a: unknown[]) => mocks.auditCreate(...a) },
   },
@@ -71,18 +73,26 @@ beforeEach(() => {
   for (const m of Object.values(mocks)) m.mockReset();
   mocks.saveManifest.mockResolvedValue(undefined);
   mocks.auditCreate.mockResolvedValue(undefined);
+  mocks.moduleFindById.mockResolvedValue({ id: MODULE_ID, classroom_id: 'class-1' });
   mocks.repositoryCreate.mockResolvedValue({
     id: 'repo-new',
     title: 'Lab 1',
     slug: 'lab-1',
     type: 'INDIVIDUAL',
+    module_id: MODULE_ID,
     is_published: false,
-    weight: 100,
   });
 });
 
+const MODULE_ID = '22222222-2222-4222-8222-222222222222';
+
 describe('repo_create', () => {
-  const BASE = { classroom: 'org/cs1-w26', title: 'Lab 1', template: 'lab1-template' };
+  const BASE = {
+    classroom: 'org/cs1-w26',
+    module_id: MODULE_ID,
+    title: 'Lab 1',
+    template: 'lab1-template',
+  };
 
   it('creates an unpublished container from ctx classroom, refreshes manifest, NO provisioning', async () => {
     const payload = parse(await repoCreateTool.handler(BASE, CTX));
@@ -90,14 +100,26 @@ describe('repo_create', () => {
     expect(payload.repository.id).toBe('repo-new');
     expect(payload.repository.is_published).toBe(false);
 
-    const data = mocks.repositoryCreate.mock.calls[0][0] as { classroom_id: string; type: string };
+    const data = mocks.repositoryCreate.mock.calls[0][0] as {
+      classroom_id: string;
+      module_id: string;
+      type: string;
+    };
     expect(data.classroom_id).toBe('class-1'); // from ctx, not input
+    expect(data.module_id).toBe(MODULE_ID);
     expect(data.type).toBe('INDIVIDUAL');
+    expect(payload.repository.module_id).toBe(MODULE_ID);
 
     expect(mocks.saveManifest).toHaveBeenCalledWith('class-1');
     // The key isolation guarantee: creating a container must NOT provision repos.
     expect(mocks.createRepositoriesTrigger).not.toHaveBeenCalled();
     expect((mocks.auditCreate.mock.calls[0][0] as { action: string }).action).toBe('CREATE');
+  });
+
+  it('refuses a module that belongs to another classroom (S1)', async () => {
+    mocks.moduleFindById.mockResolvedValue({ id: MODULE_ID, classroom_id: 'class-2' });
+    await expect(repoCreateTool.handler(BASE, CTX)).rejects.toMatchObject({ kind: 'not_found' });
+    expect(mocks.repositoryCreate).not.toHaveBeenCalled();
   });
 
   it('rejects a GROUP + instructor-assigned container with no tag_id', async () => {
@@ -125,8 +147,8 @@ describe('repo_create', () => {
       title: 'Group Lab',
       slug: 'group-lab',
       type: 'GROUP',
+      module_id: MODULE_ID,
       is_published: false,
-      weight: 100,
     });
 
     await repoCreateTool.handler(

@@ -131,6 +131,8 @@ beforeAll(async () => {
 
   const tierAssignment = await prisma.assignment.create({
     data: {
+      module_id: fx.devRepository.module_id,
+      type: 'REPO',
       repository_id: fx.devRepository.id,
       title: S4_TITLES.assignment,
       weight: 10,

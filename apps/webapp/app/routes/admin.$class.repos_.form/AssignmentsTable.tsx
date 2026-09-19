@@ -9,6 +9,7 @@ interface FormAssignmentRecord {
   id: string | number | null;
   title: string;
   weight: number;
+  is_extra_credit?: boolean;
   tokens_per_hour: number;
   release_at: unknown;
   student_deadline: unknown;
@@ -48,11 +49,17 @@ const AssignmentsTable = ({
     },
     {
       title: 'Weight',
-      dataIndex: 'weight',
       key: 'weight',
-      render: (weight: number) => {
-        return `${weight}%`;
-      },
+      render: (_: unknown, record: FormAssignmentRecord) => (
+        <span className="inline-flex items-center gap-1">
+          {record.weight}%
+          {record.is_extra_credit && (
+            <Tag color="green" bordered={false} className="text-xs m-0">
+              EC
+            </Tag>
+          )}
+        </span>
+      ),
     },
     {
       title: 'Tokens',

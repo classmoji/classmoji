@@ -23,12 +23,8 @@ export const schema = z
     tag: z.string().nullable().optional(), // Initially optional
     template: z.string().min(1, { message: 'A template repository must be selected.' }).default(''),
     organization: z.string().min(1),
-    weight: z.number({ invalid_type_error: 'Weight must be a number' }).default(0),
-    is_extra_credit: z.boolean().default(false),
-    drop_lowest_count: z
-      .number({ invalid_type_error: 'Drop lowest count must be a number' })
-      .min(0)
-      .default(0),
+    // Every repository lives in exactly one module.
+    module_id: z.string().min(1, { message: 'Choose a module for this repository.' }),
     description: z.string().nullable().optional(),
     team_formation_mode: z.enum(['INSTRUCTOR', 'SELF_FORMED']).nullable().optional(),
     team_formation_deadline: dayjsSchema,
@@ -40,7 +36,8 @@ export const schema = z
         z.object({
           id: z.union([z.string(), z.number()]).optional(),
           title: z.string().min(1, { message: 'Assignment title must not be empty.' }),
-          weight: z.number().min(1, { message: 'Assignment weight must be at least 1.' }),
+          weight: z.number().min(0, { message: 'Assignment weight cannot be negative.' }),
+          is_extra_credit: z.boolean().default(false),
           tokens_per_hour: z.number(),
           description: z.string().nullable(),
           student_deadline: dayjsSchema,

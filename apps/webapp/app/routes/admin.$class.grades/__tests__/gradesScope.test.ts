@@ -31,6 +31,7 @@ const mocks = vi.hoisted(() => ({
   findByClassroomId: vi.fn(),
   findEmojiMappings: vi.fn(),
   findByClassroomSlug: vi.fn(),
+  listForClassroom: vi.fn(),
   findRepositoriesPerStudent: vi.fn(),
   getClassroomSettingsForServer: vi.fn(),
   findLetterGradeMappings: vi.fn(),
@@ -62,7 +63,8 @@ vi.mock('@classmoji/services', () => ({
       findByClassroomId: (...a: unknown[]) => mocks.findByClassroomId(...a),
     },
     emojiMapping: { findByClassroomId: (...a: unknown[]) => mocks.findEmojiMappings(...a) },
-    repository: { findByClassroomSlug: (...a: unknown[]) => mocks.findByClassroomSlug(...a) },
+    module: { findByClassroomSlug: (...a: unknown[]) => mocks.findByClassroomSlug(...a) },
+    assignment: { listForClassroom: (...a: unknown[]) => mocks.listForClassroom(...a) },
     user: {
       findRepositoriesPerStudent: (...a: unknown[]) => mocks.findRepositoriesPerStudent(...a),
     },
@@ -171,6 +173,7 @@ beforeEach(() => {
   mocks.findByClassroomId.mockResolvedValue([MEMBERSHIP_ROW]);
   mocks.findEmojiMappings.mockResolvedValue({});
   mocks.findByClassroomSlug.mockResolvedValue([]);
+  mocks.listForClassroom.mockResolvedValue([]);
   mocks.getClassroomSettingsForServer.mockResolvedValue({
     late_penalty_points_per_hour: 2,
     show_grades_to_students: true,

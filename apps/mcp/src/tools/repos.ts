@@ -268,13 +268,11 @@ export const repoUnpublishTool: ToolDefinition<RepoUnpublishArgs> = {
 
 interface RepoCreateArgs {
   classroom: string;
+  module_id: string;
   title: string;
   template: string;
   type?: 'INDIVIDUAL' | 'GROUP';
-  weight?: number;
   description?: string;
-  is_extra_credit?: boolean;
-  drop_lowest_count?: number;
   tag_id?: string;
   team_formation_mode?: 'INSTRUCTOR' | 'SELF_FORMED';
   team_formation_deadline?: string;
@@ -291,15 +289,17 @@ export const repoCreateTool: ToolDefinition<RepoCreateArgs> = {
   annotations: { destructive: false, openWorld: true },
   title: 'Create an assignment container (repo)',
   description:
-    'Creates an UNPUBLISHED assignment container (a "repo"/lab) in the classroom. Owner only. No ' +
-    'student git repos are created — the container starts empty and hidden; add assignments with ' +
-    'assignment_create, then provision student repos with repo_publish. For a GROUP repo with ' +
-    'instructor-assigned teams, pass tag_id (a team tag in this classroom). Refreshes the ' +
-    "classroom's content manifest on GitHub (best-effort).",
+    'Creates an UNPUBLISHED assignment container (a "repo"/lab) inside a module of the classroom. ' +
+    'Owner only. No student git repos are created — the container starts empty and hidden; add ' +
+    'assignments with assignment_create, then provision student repos with repo_publish. Grading ' +
+    'weight lives on assignments, not the repo. For a GROUP repo with instructor-assigned teams, ' +
+    "pass tag_id (a team tag in this classroom). Refreshes the classroom's content manifest on " +
+    'GitHub (best-effort).',
   scope: 'write',
   roles: OWNER_ONLY,
   inputSchema: {
     classroom: z.string().describe("Classroom reference as 'org/slug'"),
+    module_id: z.string().uuid().describe('Module the repo belongs to (see list_modules)'),
     title: z.string().min(1).max(200).describe('Repo/lab title (unique per classroom)'),
     template: z
       .string()
@@ -310,15 +310,7 @@ export const repoCreateTool: ToolDefinition<RepoCreateArgs> = {
       .enum(['INDIVIDUAL', 'GROUP'])
       .optional()
       .describe('Individual or group repo (default INDIVIDUAL)'),
-    weight: z.number().int().min(0).max(10000).optional().describe('Grading weight (default 100)'),
     description: z.string().max(2000).optional(),
-    is_extra_credit: z.boolean().optional().describe('default false'),
-    drop_lowest_count: z
-      .number()
-      .int()
-      .min(0)
-      .optional()
-      .describe('Drop the N lowest assignments (default 0)'),
     tag_id: z
       .string()
       .uuid()
@@ -342,7 +334,13 @@ export const repoCreateTool: ToolDefinition<RepoCreateArgs> = {
     const type = args.type ?? 'INDIVIDUAL';
     const teamMode = args.team_formation_mode ?? 'INSTRUCTOR';
 
-    // S1 for the one cross-record reference: a supplied tag must belong to THIS
+    // S1: the module the repo lands in must belong to THIS classroom.
+    const module = await ClassmojiService.module.findById(args.module_id);
+    if (!module || module.classroom_id !== classroom.classroomId) {
+      throw scopedNotFound('Module');
+    }
+
+    // S1 for the other cross-record reference: a supplied tag must belong to THIS
     // classroom (Tag has no findById — validate via the classroom-scoped list).
     if (args.tag_id) {
       const tags = await ClassmojiService.organizationTag.findByClassroomId(classroom.classroomId);
@@ -364,15 +362,11 @@ export const repoCreateTool: ToolDefinition<RepoCreateArgs> = {
       created = await ClassmojiService.repository.create({
         // classroom_id is ALWAYS the authorized classroom, never request input.
         classroom_id: classroom.classroomId,
+        module_id: module.id,
         title: args.title,
         template: args.template,
         type,
-        ...(args.weight !== undefined ? { weight: args.weight } : {}),
         ...(args.description !== undefined ? { description: args.description } : {}),
-        ...(args.is_extra_credit !== undefined ? { is_extra_credit: args.is_extra_credit } : {}),
-        ...(args.drop_lowest_count !== undefined
-          ? { drop_lowest_count: args.drop_lowest_count }
-          : {}),
         ...(args.tag_id !== undefined ? { tag_id: args.tag_id } : {}),
         ...(type === 'GROUP'
           ? {
@@ -408,7 +402,7 @@ export const repoCreateTool: ToolDefinition<RepoCreateArgs> = {
       resource_type: 'REPOSITORIES',
       resource_id: created.id,
       action: 'CREATE',
-      data: { tool: 'repo_create', title: args.title, type },
+      data: { tool: 'repo_create', title: args.title, type, module_id: module.id },
     });
 
     return ok({
@@ -418,8 +412,8 @@ export const repoCreateTool: ToolDefinition<RepoCreateArgs> = {
         title: created.title,
         slug: created.slug,
         type: created.type,
+        module_id: created.module_id,
         is_published: created.is_published,
-        weight: created.weight,
       },
     });
   },

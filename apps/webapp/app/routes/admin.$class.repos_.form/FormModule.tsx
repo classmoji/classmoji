@@ -14,7 +14,6 @@ import {
   Tooltip,
   Modal,
   Alert,
-  Checkbox,
   Card,
   DatePicker,
 } from 'antd';
@@ -66,20 +65,19 @@ interface ModuleData {
   template?: string;
   type?: string;
   tag_id?: string | null;
-  is_extra_credit?: boolean;
+  module_id?: string;
   is_published?: boolean;
-  drop_lowest_count?: number;
   description?: string;
   team_formation_mode?: string;
   team_formation_deadline?: string | null;
   max_team_size?: number | null;
   project_template_id?: string | null;
   project_template_title?: string | null;
-  weight?: number;
   assignments: Array<{
     id?: string;
     title: string;
     weight: number;
+    is_extra_credit?: boolean;
     tokens_per_hour: number;
     description: string | null;
     student_deadline?: string | null;
@@ -92,9 +90,18 @@ interface ModuleData {
   slides?: Array<{ slide?: SlideRef }>;
 }
 
+interface ModuleOption {
+  id: string;
+  title: string;
+}
+
 interface FormModuleProps {
   isNew: boolean;
   repository: ModuleData | null;
+  /** The classroom's modules, for the module picker. */
+  modules: ModuleOption[];
+  /** Module preselected by the page that opened the form (locks the picker). */
+  moduleFromQuery?: ModuleOption | null;
   close: () => void;
   tags: TagRef[];
   classroom: { slug: string; settings: Record<string, unknown>; [key: string]: unknown };
@@ -109,6 +116,8 @@ const FormModule = ({
   close,
   tags,
   classroom,
+  modules,
+  moduleFromQuery = null,
   pages = [],
   slides = [],
   hasReposWithProjects = false,
@@ -203,8 +212,7 @@ const FormModule = ({
     template: repository?.template,
     type: repository?.type,
     tag: repository?.tag_id,
-    is_extra_credit: repository?.is_extra_credit,
-    drop_lowest_count: repository?.drop_lowest_count ?? 0,
+    module_id: repository?.module_id ?? moduleFromQuery?.id,
     description: repository?.description || '',
     team_formation_mode: repository?.team_formation_mode || 'INSTRUCTOR',
     team_formation_deadline: repository?.team_formation_deadline
@@ -219,6 +227,7 @@ const FormModule = ({
         student_deadline: assignment.student_deadline ? dayjs(assignment.student_deadline) : null,
         grader_deadline: assignment.grader_deadline ? dayjs(assignment.grader_deadline) : null,
         release_at: assignment.release_at ? dayjs(assignment.release_at) : null,
+        is_extra_credit: assignment.is_extra_credit ?? false,
         linkedPageIds:
           assignment.pages?.map((link: { page?: PageRef }) => link.page?.id).filter(Boolean) || [],
         linkedSlideIds:
@@ -227,15 +236,13 @@ const FormModule = ({
       };
     }),
     organization: classroom?.slug,
-    weight: repository?.weight,
   };
 
   const newFormUpdateValues = {
     organization: classroom?.slug,
     type: 'INDIVIDUAL',
+    module_id: moduleFromQuery?.id ?? (modules.length === 1 ? modules[0].id : undefined),
     assignments: [],
-    weight: 0,
-    drop_lowest_count: 0,
     description: '',
     team_formation_mode: 'INSTRUCTOR',
     team_formation_deadline: null,
@@ -258,7 +265,6 @@ const FormModule = ({
   const assignments = watch('assignments');
   const type = watch('type');
   const teamFormationMode = watch('team_formation_mode');
-  const isExtraCredit = watch('is_extra_credit');
 
   const closeNewTag = () => {
     setIsNewTagOpen(false);
@@ -515,43 +521,16 @@ const FormModule = ({
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <FormItem control={control} name="weight" label="Weight">
-                <InputNumber
-                  addonAfter="%"
-                  max={100}
-                  min={0}
+              <FormItem control={control} name="module_id" label="Module">
+                <Select
+                  data-tour="repos-form-module"
                   className="w-full"
-                  placeholder="Enter weight percentage"
+                  placeholder="Choose a module"
+                  disabled={!!moduleFromQuery}
+                  showSearch
+                  optionFilterProp="label"
+                  options={modules.map(m => ({ value: m.id, label: m.title }))}
                 />
-              </FormItem>
-
-              <FormItem
-                control={control}
-                name="drop_lowest_count"
-                label={
-                  <Tooltip title="Number of lowest-scoring assignments to drop from this repository's grade calculation">
-                    <span>Drop Lowest Assignments</span>
-                  </Tooltip>
-                }
-              >
-                <InputNumber
-                  min={0}
-                  className="w-full"
-                  placeholder="Number of assignments to drop"
-                  style={{ width: '100%' }}
-                />
-              </FormItem>
-            </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 -mt-4">
-              <FormItem control={control} name="is_extra_credit">
-                <Checkbox checked={isExtraCredit}>
-                  <span className="text-sm">
-                    This is an{' '}
-                    <span className="font-semibold text-green-600 text-sm">extra credit</span>{' '}
-                    repository
-                  </span>
-                </Checkbox>
               </FormItem>
             </div>
           </Card>

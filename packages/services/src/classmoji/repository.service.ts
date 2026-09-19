@@ -69,6 +69,7 @@ export const findById = async (id: string) => {
       assignments: true,
       classroom: true,
       tag: true,
+      module: { select: { id: true, title: true, slug: true } },
     },
   });
 };
@@ -90,6 +91,7 @@ export const findByClassroomAndTitle = async (classroomId: string, title: string
     include: {
       assignments: true,
       tag: true,
+      module: { select: { id: true, title: true, slug: true } },
     },
   });
 };
@@ -131,6 +133,7 @@ export const findBySlugAndTitle = async (
             }
           : false,
       tag: true,
+      module: { select: { id: true, title: true, slug: true } },
       quizzes: options.includeQuizzes === true,
       pages: options.includePages === true ? { include: { page: true } } : false,
       slides: options.includeSlides === true ? { include: { slide: true } } : false,
@@ -173,6 +176,7 @@ export const findByClassroomSlugAndModuleSlug = async (
             }
           : false,
       tag: true,
+      module: { select: { id: true, title: true, slug: true } },
       quizzes: options.includeQuizzes === true,
       pages: options.includePages === true ? { include: { page: true } } : false,
       slides: options.includeSlides === true ? { include: { slide: true } } : false,
@@ -191,6 +195,7 @@ export const findByClassroomId = async (classroomId: string) => {
     include: {
       assignments: true,
       tag: true,
+      module: { select: { id: true, title: true, slug: true } },
     },
     orderBy: { title: 'asc' },
   });
@@ -212,6 +217,7 @@ export const findByClassroomSlug = async (
     include: {
       assignments: true,
       tag: true,
+      module: { select: { id: true, title: true, slug: true } },
     },
     orderBy: { title: 'asc' },
   });
@@ -233,6 +239,7 @@ export const findPublished = async (classroomId: string) => {
         where: { is_published: true },
       },
       tag: true,
+      module: { select: { id: true, title: true, slug: true } },
     },
     orderBy: { title: 'asc' },
   });
@@ -287,6 +294,7 @@ export const create = async (data: RepositoryCreateInput) => {
     include: {
       assignments: true,
       tag: true,
+      module: { select: { id: true, title: true, slug: true } },
     },
   });
 };
@@ -341,6 +349,7 @@ export const createFromForm = async (values: RepositoryFormValues) => {
     include: {
       assignments: true,
       tag: true,
+      module: { select: { id: true, title: true, slug: true } },
     },
   });
 };
@@ -389,6 +398,7 @@ export const update = async (
     include: {
       assignments: true,
       tag: true,
+      module: { select: { id: true, title: true, slug: true } },
     },
   });
 };
@@ -477,6 +487,7 @@ export const updateWithAssignments = async (values: RepositoryUpdateValues) => {
     include: {
       assignments: true,
       tag: true,
+      module: { select: { id: true, title: true, slug: true } },
     },
   });
 };
@@ -588,7 +599,35 @@ export const findWithStudentStatus = async (classroomId: string, studentId: stri
         },
       },
       tag: true,
+      module: { select: { id: true, title: true, slug: true } },
     },
     orderBy: { title: 'asc' },
   });
+};
+
+/**
+ * The repositories of one module (the module page's Repositories tab), each
+ * with its assignments and how many student git repos it has provisioned.
+ */
+export const findByModuleId = async (moduleId: string, classroomId: string) => {
+  return getPrisma().repository.findMany({
+    where: { module_id: moduleId, classroom_id: classroomId },
+    include: {
+      assignments: { orderBy: [{ student_deadline: 'asc' }, { title: 'asc' }] },
+      tag: true,
+      module: { select: { id: true, title: true, slug: true } },
+      _count: { select: { git_repos: true } },
+    },
+    orderBy: { title: 'asc' },
+  });
+};
+
+/** Prove a repository belongs to the classroom, or throw. */
+export const assertInClassroom = async (repositoryId: string, classroomId: string) => {
+  const repository = await getPrisma().repository.findFirst({
+    where: { id: repositoryId, classroom_id: classroomId },
+    select: { id: true, module_id: true },
+  });
+  if (!repository) throw new Error('Repository not found in classroom');
+  return repository;
 };

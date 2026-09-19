@@ -319,7 +319,7 @@ export interface Fixtures {
   /** 'Other Assignment 1' in the foreign classroom (S1 target). */
   foreignAssignment: { id: string };
   /** 'hello-world' container in dev (module-item target). */
-  devRepository: { id: string };
+  devRepository: { id: string; module_id: string };
   /** 'other-hello-world' container in the foreign classroom (S1 item target). */
   foreignRepository: { id: string };
 }
@@ -382,7 +382,7 @@ export async function loadFixtures(): Promise<Fixtures> {
   });
   const devRepository = await prisma.repository.findFirstOrThrow({
     where: { classroom_id: dev.id, title: 'hello-world' },
-    select: { id: true },
+    select: { id: true, module_id: true },
   });
   const foreignRepository = await prisma.repository.findFirstOrThrow({
     where: { classroom_id: foreign.id, title: 'other-hello-world' },

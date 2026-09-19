@@ -64,12 +64,19 @@ describe('assignment_create', () => {
   };
 
   it('creates under a verified parent container and audits CREATE', async () => {
-    mocks.repositoryFindById.mockResolvedValue({ id: 'repo-1', classroom_id: 'class-1' });
+    mocks.repositoryFindById.mockResolvedValue({
+      id: 'repo-1',
+      classroom_id: 'class-1',
+      module_id: 'mod-1',
+    });
     mocks.assignmentCreate.mockResolvedValue({
       id: 'asg-new',
       title: 'Lab 3',
+      module_id: 'mod-1',
+      type: 'REPO',
       repository_id: 'repo-1',
       weight: 50,
+      is_extra_credit: false,
       is_published: false,
       student_deadline: new Date('2026-07-20T23:59:00-04:00'),
     });
@@ -78,12 +85,17 @@ describe('assignment_create', () => {
     expect(payload.success).toBe(true);
     expect(payload.assignment.id).toBe('asg-new');
 
-    // repository_id passed to create is the VERIFIED parent's id.
+    // repository_id passed to create is the VERIFIED parent's id, and the
+    // assignment lands in that parent's module as a REPO assignment.
     const data = mocks.assignmentCreate.mock.calls[0][0] as {
       repository_id: string;
+      module_id: string;
+      type: string;
       title: string;
     };
     expect(data.repository_id).toBe('repo-1');
+    expect(data.module_id).toBe('mod-1');
+    expect(data.type).toBe('REPO');
     expect(data.title).toBe('Lab 3');
     expect(mocks.auditCreate).toHaveBeenCalledTimes(1);
     expect((mocks.auditCreate.mock.calls[0][0] as { action: string }).action).toBe('CREATE');

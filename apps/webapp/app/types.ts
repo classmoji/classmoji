@@ -145,6 +145,7 @@ export interface AssignmentFormData {
   id: string | null;
   title: string;
   weight: number;
+  is_extra_credit: boolean;
   description: string;
   student_deadline: string | null;
   release_at: string | null;

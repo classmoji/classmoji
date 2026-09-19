@@ -238,8 +238,11 @@ export const moduleItemAddTool: ToolDefinition<ModuleItemAddArgs> = {
     module_id: z.string().uuid().describe('Module id'),
     item_type: z
       .enum(['PAGE', 'REPOSITORY', 'QUIZ', 'SLIDE', 'FORM'])
-      .describe('What kind of content the item links'),
-    target_id: z.string().uuid().describe('Id of the page/repository/quiz/slide/form to link'),
+      .describe(
+        'What kind of content the item links. REPOSITORY is no longer an item: a repository ' +
+          'belongs to a module through repo_create module_id.'
+      ),
+    target_id: z.string().uuid().describe('Id of the page/quiz/slide/form to link'),
   },
   handler: async (args, ctx) => {
     const classroom = requireClassroomCtx(ctx);
@@ -251,10 +254,19 @@ export const moduleItemAddTool: ToolDefinition<ModuleItemAddArgs> = {
     // unchanged for a free-tier classroom.
     if (args.item_type === 'FORM') await assertProTier(ctx);
 
+    // Repositories join a module through Repository.module_id (repo_create),
+    // not as a content item. Refused before any lookup.
+    if (args.item_type === 'REPOSITORY') {
+      throw new ToolError(
+        'invalid_params',
+        'Repositories belong to a module through repo_create module_id, not as a module item.'
+      );
+    }
+
     try {
       const item = await ClassmojiService.module.addItem(
         args.module_id,
-        args.item_type as ModuleItemType,
+        args.item_type as Exclude<ModuleItemType, 'REPOSITORY'>,
         args.target_id,
         classroom.classroomId
       );

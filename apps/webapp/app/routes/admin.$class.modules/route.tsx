@@ -110,7 +110,9 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
       try {
         await ClassmojiService.module.addItem(
           data.moduleId!,
-          data.itemType!,
+          // Repositories join a module through Repository.module_id, not as
+          // an item; the service refuses REPOSITORY at runtime as well.
+          data.itemType! as Exclude<ModuleItemType, 'REPOSITORY'>,
           data.targetId!,
           classroom.id
         );
@@ -235,7 +237,27 @@ const ModulesIndex = ({ loaderData }: Route.ComponentProps) => {
       ),
     },
     {
-      title: 'Items',
+      title: 'Repos',
+      key: 'repositories',
+      width: 90,
+      align: 'center' as const,
+      render: (_: unknown, m: ModuleRow) => (
+        <Tag color={m._count.repositories > 0 ? 'geekblue' : undefined}>
+          {m._count.repositories}
+        </Tag>
+      ),
+    },
+    {
+      title: 'Assignments',
+      key: 'assignments',
+      width: 120,
+      align: 'center' as const,
+      render: (_: unknown, m: ModuleRow) => (
+        <Tag color={m._count.assignments > 0 ? 'purple' : undefined}>{m._count.assignments}</Tag>
+      ),
+    },
+    {
+      title: 'Content',
       key: 'items',
       width: 100,
       align: 'center' as const,
@@ -317,8 +339,8 @@ const ModulesIndex = ({ loaderData }: Route.ComponentProps) => {
               <div className="text-center py-12 text-gray-500">
                 <div className="font-medium">No modules yet</div>
                 <div className="text-sm">
-                  Group pages, repositories, quizzes and slides into a module to organize your
-                  course.
+                  A module is a unit of your course. Create one, then add repositories,
+                  assignments, pages, slides, quizzes and forms to it.
                 </div>
               </div>
             ),

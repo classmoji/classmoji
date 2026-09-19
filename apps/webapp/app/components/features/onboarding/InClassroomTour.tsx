@@ -63,18 +63,24 @@ const OWNER_STEPS: FeatureStep[] = [
     description: 'Switch between per-assignment grading progress and TA grading activity.',
   },
   {
-    link: '/repos',
-    title: 'Repositories',
+    link: '/modules',
+    title: 'Modules',
     description:
-      'Repositories are the units of coursework in your class, such as a lab, a project, or a weekly problem set. Each one is created from a GitHub template repository, and when you publish it Classmoji copies that repo to every student, or every team for group work.',
+      'Modules are the units of your course, such as a week, a topic, or a project. Each module holds repositories, assignments, pages, slides, quizzes and forms. This example course has one module, Week 1: Hello World.',
   },
   {
-    link: '/repos',
+    link: '/modules/week-1-hello-world',
+    title: 'Inside a module',
+    description:
+      'A module page has three tabs. Repositories are GitHub template repos that Classmoji copies to every student, or every team for group work, when you publish them. Assignments are the graded units: an issue in a repo, a quiz, or a form, each with a weight and due date. Content is the reading order of pages and slides.',
+  },
+  {
+    link: '/modules/week-1-hello-world',
     selector: '[data-tour="repos-new"]',
     placement: 'bottom',
     title: 'Create a repository',
     description:
-      'Use New repository to add a unit of work from a template. The assignments inside become GitHub issues that Classmoji opens in each student’s copy of the repo, and you control release dates, due dates, and weighting per assignment.',
+      'Use New repository to add a template repo to this module. The assignments you add inside it become GitHub issues that Classmoji opens in each student’s copy of the repo, and you control release dates, due dates, and weighting per assignment.',
   },
   {
     link: '/repos/form',

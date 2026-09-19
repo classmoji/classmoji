@@ -28,7 +28,10 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
 
   const promises = {
     emojiMappings: ClassmojiService.emojiMapping.findByClassroomId(classroom.id),
-    repositories: ClassmojiService.repository.findByClassroomSlug(classSlug!),
+    // Column groups: one per module, in module order.
+    modules: ClassmojiService.module.findByClassroomSlug(classSlug!).then(modules =>
+      modules.map(m => ({ id: m.id, title: m.title, position: m.position }))
+    ),
     // Everything below is serialised to the browser, so each source is
     // projected down to the fields the table renders. The services return whole
     // `User` and `ClassroomMembership` rows — which carry contact details, the
@@ -72,6 +75,21 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
           letter_grade: m.letter_grade,
         }))
       ),
+    // The columns: every published assignment, flat, naming its module.
+    // Grading weight lives here now, not on the repository.
+    assignments: ClassmojiService.assignment
+      .listForClassroom(classroom.id, { publishedOnly: true })
+      .then(assignments =>
+        assignments.map(a => ({
+          id: a.id,
+          title: a.title,
+          weight: a.weight,
+          is_extra_credit: a.is_extra_credit,
+          type: a.type,
+          module_id: a.module_id,
+          repository_id: a.repository_id,
+        }))
+      ),
   };
 
   addAuditLog({
@@ -108,12 +126,14 @@ const Grades = ({ loaderData }: Route.ComponentProps) => {
             resolvedSettings,
             resolvedLetterGradeMappings,
             resolvedMemberships,
+            resolvedAssignments,
           ]) => (
             <GradesTable
               emojiMappings={
                 resolvedEmojiMappings as Parameters<typeof GradesTable>[0]['emojiMappings']
               }
-              repositories={resolvedModules as Parameters<typeof GradesTable>[0]['repositories']}
+              modules={resolvedModules as Parameters<typeof GradesTable>[0]['modules']}
+              assignments={resolvedAssignments as Parameters<typeof GradesTable>[0]['assignments']}
               students={
                 resolvedStudents as unknown as Parameters<typeof GradesTable>[0]['students']
               }

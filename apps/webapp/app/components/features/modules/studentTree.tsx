@@ -314,7 +314,6 @@ export const buildRepositoryNode = (
     level: baseLevel,
     name: repository.title,
     typeText: repositoryType,
-    weightText: repository.weight != null ? `${repository.weight}%` : undefined,
     autogradingNode:
       baseLevel === 0 && autogradingResult ? (
         <AutogradingResultPill

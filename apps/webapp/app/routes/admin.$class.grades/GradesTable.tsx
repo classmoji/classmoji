@@ -6,21 +6,16 @@ import { mean, median } from 'simple-statistics';
 
 import { UserThumbnailView, TableActionButtons } from '~/components';
 import GradeSettings from './GradeSettings';
-import { createAssignmentColumns } from './columns/assignmentColumns';
+import {
+  createAssignmentColumns,
+  type GradebookAssignment,
+  type GradebookModule,
+} from './columns/assignmentColumns';
 import { createStudentGradeColumns } from './columns/studentGradeColumns';
 import { calculateStudentFinalGrade } from '@classmoji/utils';
 import type { TableProps } from 'antd';
 import type { GitRepo, OrganizationSettings, LetterGradeMappingEntry } from '@classmoji/utils';
 import { useGlobalFetcher, useDarkMode } from '~/hooks';
-
-interface ModuleData {
-  id: string | number;
-  title: string;
-  weight: number;
-  is_published: boolean;
-  is_extra_credit?: boolean;
-  assignments: Array<{ id: string | number; title: string; weight: number }>;
-}
 
 /**
  * A gradebook row as it leaves the loader.
@@ -54,7 +49,10 @@ type EmojiMappings = Record<string, number>;
 
 interface GradesTableProps {
   emojiMappings: EmojiMappings;
-  repositories: ModuleData[];
+  /** Column groups, in module order. */
+  modules: GradebookModule[];
+  /** Published assignments, flat; each names its module. */
+  assignments: GradebookAssignment[];
   students: Student[];
   settings: OrganizationSettings;
   letterGradeMappings: LetterGradeMappingEntry[];
@@ -64,7 +62,8 @@ interface GradesTableProps {
 const GradesTable = (props: GradesTableProps) => {
   const {
     emojiMappings,
-    repositories: assignments,
+    modules,
+    assignments,
     students,
     settings,
     letterGradeMappings: initialLetterGradeMappings,
@@ -128,6 +127,7 @@ const GradesTable = (props: GradesTableProps) => {
   };
 
   const assignmentColumns = createAssignmentColumns(
+    modules || [],
     assignments || [],
     view,
     showIssues,
@@ -294,7 +294,7 @@ const GradesTable = (props: GradesTableProps) => {
               onChange={() => setShowIssues(!showIssues)}
               data-tour="grades-show-assignments"
             >
-              Show Assignments
+              Expand modules into assignments
             </Checkbox>
             <Checkbox
               checked={showComments}

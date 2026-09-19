@@ -67,7 +67,7 @@ export const assignmentUpdateTool: ToolDefinition<AssignmentUpdateArgs> = {
       .datetime({ offset: true })
       .optional()
       .describe('New student deadline (ISO 8601, e.g. 2026-07-20T23:59:00-04:00)'),
-    weight: z.number().int().positive().max(10000).optional().describe('Grading weight'),
+    weight: z.number().positive().max(10000).optional().describe('Grading weight'),
     grades_released: z
       .boolean()
       .optional()
@@ -128,6 +128,7 @@ interface AssignmentCreateArgs {
   repository_id: string;
   title: string;
   weight?: number;
+  is_extra_credit?: boolean;
   description?: string;
   student_deadline?: string;
   grader_deadline?: string;
@@ -151,13 +152,11 @@ export const assignmentCreateTool: ToolDefinition<AssignmentCreateArgs> = {
     classroom: z.string().describe("Classroom reference as 'org/slug'"),
     repository_id: z.string().uuid().describe('Parent repo (assignment container) id'),
     title: z.string().min(1).max(200).describe('Assignment title (unique per repository)'),
-    weight: z
-      .number()
-      .int()
-      .positive()
-      .max(10000)
+    weight: z.number().positive().max(10000).optional().describe('Grading weight (default 100)'),
+    is_extra_credit: z
+      .boolean()
       .optional()
-      .describe('Grading weight (default 100)'),
+      .describe('Extra credit: adds to the course grade without adding to its denominator'),
     description: z.string().max(10000).optional(),
     student_deadline: z
       .string()
@@ -188,10 +187,15 @@ export const assignmentCreateTool: ToolDefinition<AssignmentCreateArgs> = {
     // parent's repository_id — never from request input.
     const repository = await loadRepositoryInClassroom(args.repository_id, ctx);
 
+    // A REPO assignment lives in its repository's module; the tool creates
+    // REPO assignments only (quiz/form assignments are a later phase).
     const data: Prisma.AssignmentUncheckedCreateInput = {
+      module_id: repository.module_id,
+      type: 'REPO',
       repository_id: repository.id,
       title: args.title,
       ...(args.weight !== undefined ? { weight: args.weight } : {}),
+      ...(args.is_extra_credit !== undefined ? { is_extra_credit: args.is_extra_credit } : {}),
       ...(args.description !== undefined ? { description: args.description } : {}),
       ...(args.student_deadline !== undefined
         ? { student_deadline: new Date(args.student_deadline) }
@@ -229,8 +233,11 @@ export const assignmentCreateTool: ToolDefinition<AssignmentCreateArgs> = {
       assignment: {
         id: created.id,
         title: created.title,
+        module_id: created.module_id,
+        type: created.type,
         repository_id: created.repository_id,
         weight: created.weight,
+        is_extra_credit: created.is_extra_credit,
         is_published: created.is_published,
         student_deadline: created.student_deadline?.toISOString() ?? null,
       },

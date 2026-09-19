@@ -51,16 +51,5 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
       return res;
     },
 
-    async updateAssignment() {
-      const { weight } = data;
-
-      const result = await ClassmojiService.repository.update(
-        assignmentId,
-        { weight },
-        classroom.id
-      );
-
-      return result;
-    },
   });
 };

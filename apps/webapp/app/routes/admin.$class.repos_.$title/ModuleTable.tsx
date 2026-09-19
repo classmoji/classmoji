@@ -80,14 +80,8 @@ const ModuleTable = ({ repository, repos, emojiMappings, settings, org }: Module
       key: 'grade',
       width: 200,
       render: (_: unknown, repo: ModuleTableRepo) => {
-        // For repository-level view, use a default assignment config (no extra credit, no drop lowest)
-        const moduleAssignment = { is_extra_credit: false, drop_lowest_count: 0, weight: 0 };
-        const grade = calculateRepositoryGrade(
-          repo.assignments,
-          emojiMappings,
-          settings,
-          moduleAssignment
-        );
+        // Weighted mean of this student's graded submissions in the repo.
+        const grade = calculateRepositoryGrade(repo.assignments, emojiMappings, settings);
 
         if (grade < 0) return null;
 

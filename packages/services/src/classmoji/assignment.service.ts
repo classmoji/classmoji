@@ -21,11 +21,14 @@ export const findById = async (id: string) => {
   return getPrisma().assignment.findUnique({
     where: { id },
     include: {
+      module: true,
       repository: {
         include: {
           classroom: true,
         },
       },
+      quiz: true,
+      form: true,
       git_repo_assignments: true,
     },
   });

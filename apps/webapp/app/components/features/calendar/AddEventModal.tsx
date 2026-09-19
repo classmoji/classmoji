@@ -39,7 +39,8 @@ interface SlideOption {
 interface AssignmentOption {
   id: string;
   title: string;
-  repository?: { title: string };
+  /** Null for quiz/form assignments, which have no repository. */
+  repository?: { title: string } | null;
 }
 
 export interface AddEventDefaults {

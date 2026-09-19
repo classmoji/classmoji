@@ -4,7 +4,8 @@ interface RepoAssignmentForGithub {
 }
 
 interface RepoAssignmentWithModule {
-  assignment: { id: string; repository_id?: string };
+  /** repository_id is null for quiz/form assignments, which have no repo. */
+  assignment: { id: string; repository_id?: string | null };
 }
 
 export const openRepositoryAssignmentInGithub = (
@@ -47,7 +48,7 @@ export const groupByAssignment = (data: RepoAssignmentWithModule[]) => {
 
 export const groupByModule = (data: RepoAssignmentWithModule[]) => {
   return data.reduce((acc: Record<string, RepoAssignmentWithModule[]>, item) => {
-    const repositoryId = item.assignment.repository_id!;
+    const repositoryId = item.assignment.repository_id ?? 'none';
 
     if (!acc[repositoryId]) {
       acc[repositoryId] = [];

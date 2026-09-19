@@ -81,7 +81,8 @@ interface CalendarResource {
 interface CalendarAssignment {
   id: string;
   title: string;
-  repository?: { title: string };
+  /** Null for quiz/form assignments, which have no repository. */
+  repository?: { title: string } | null;
 }
 
 interface EventFormValues {

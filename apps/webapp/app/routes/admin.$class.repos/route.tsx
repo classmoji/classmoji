@@ -1,7 +1,7 @@
 import { NavLink, useLocation, Outlet } from 'react-router';
 import { useState } from 'react';
 
-import AssignmentTable from './AssignmentsTable';
+import RepositoriesTable from '~/components/features/repositories/RepositoriesTable';
 import { SearchInput, ButtonNew, RequireRole, TriggerProgress } from '~/components';
 import { useGlobalFetcher } from '~/hooks';
 import { ClassmojiService } from '@classmoji/services';
@@ -71,8 +71,8 @@ const AdminAssignments = ({ loaderData }: Route.ComponentProps) => {
           />
         )}
 
-        <AssignmentTable
-          assignments={repositories.filter((repository: { title: string }) =>
+        <RepositoriesTable
+          repositories={repositories.filter((repository: { title: string }) =>
             repository.title.toLowerCase().includes(query.toLowerCase())
           )}
         />

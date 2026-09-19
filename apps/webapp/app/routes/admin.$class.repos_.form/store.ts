@@ -5,6 +5,7 @@ const defaultAssignment: AssignmentFormData = {
   id: null,
   title: '',
   weight: 100,
+  is_extra_credit: false,
   description: '',
   student_deadline: null,
   release_at: null,

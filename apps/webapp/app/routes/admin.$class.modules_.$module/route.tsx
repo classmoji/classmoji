@@ -19,7 +19,14 @@ import {
 
 import { ClassmojiService } from '@classmoji/services';
 import type { FormAccess, FormStatus, ModuleItemType } from '@prisma/client';
+import { TriggerProgress } from '~/components';
+import FolderTabs from '~/components/ui/FolderTabs';
 import { formatCloseDate } from '~/components/features/modules/ReadOnlyModulesTree';
+import RepositoriesTable from '~/components/features/repositories/RepositoriesTable';
+import AssignmentsTable, {
+  type AssignmentRowData,
+} from '~/components/features/assignments/AssignmentsTable';
+import AssignmentFormModal from '~/components/features/assignments/AssignmentFormModal';
 import { requireClassroomAdmin } from '~/utils/routeAuth.server';
 import ModuleFormModal, { type ModuleFormModule } from '../admin.$class.modules/ModuleFormModal';
 import type { Route } from './+types/route';
@@ -32,20 +39,39 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
     action: 'view_modules',
   });
 
-  // The module and the picker's candidate content are independent — fetch in parallel.
+  const found = await ClassmojiService.module.findByClassroomSlugAndModuleSlug(
+    classSlug!,
+    moduleSlug!
+  );
+  if (!found) {
+    throw data('Module not found', { status: 404 });
+  }
+
+  // The module with everything it owns, plus the pickers' candidate content.
   const [module, candidates] = await Promise.all([
-    ClassmojiService.module.findByClassroomSlugAndModuleSlug(classSlug!, moduleSlug!),
+    ClassmojiService.module.listModuleContents(found.id, classroom.id),
     ClassmojiService.module.getCandidateContent(classroom.id),
   ]);
-
   if (!module) {
     throw data('Module not found', { status: 404 });
   }
 
-  return { module, candidates };
+  // Quiz/form ids bound anywhere in the classroom (each binds to one assignment).
+  const bound = await ClassmojiService.assignment.listForClassroom(classroom.id);
+
+  return {
+    module,
+    candidates,
+    boundQuizIds: bound.map(a => a.quiz_id).filter(Boolean) as string[],
+    boundFormIds: bound.map(a => a.form_id).filter(Boolean) as string[],
+  };
 };
 
 type ModuleItem = Route.ComponentProps['loaderData']['module']['items'][number];
+
+/** The item types the "Add item" picker offers. Repositories join a module
+ * through Repository.module_id (the Repositories tab), not as an item. */
+type ContentItemType = Exclude<ModuleItemType, 'REPOSITORY'>;
 
 /**
  * Compile-time exhaustiveness guard for the switches over ModuleItemType below,
@@ -59,11 +85,14 @@ const unhandledItemType = (type: never): never => {
 
 const TYPE_META: Record<ModuleItemType, { label: string; icon: Icon }> = {
   PAGE: { label: 'Page', icon: IconFileText },
+  // Legacy rows only; not offered by the picker.
   REPOSITORY: { label: 'Repository', icon: IconFolder },
   QUIZ: { label: 'Quiz', icon: IconHelpCircle },
   SLIDE: { label: 'Slides', icon: IconPresentation },
   FORM: { label: 'Form', icon: IconForms },
 };
+
+const CONTENT_TYPES: ContentItemType[] = ['PAGE', 'SLIDE', 'QUIZ', 'FORM'];
 
 // A form's two lifecycle axes, as an instructor reads them. Both are exhaustive
 // Records over their enums, so adding a status or an access mode fails to
@@ -141,18 +170,21 @@ const describeItem = (item: ModuleItem): { label: string; published: boolean; no
 };
 
 const ModuleDetail = ({ loaderData }: Route.ComponentProps) => {
-  const { module, candidates } = loaderData;
+  const { module, candidates, boundQuizIds, boundFormIds } = loaderData;
   const { class: classSlug } = useParams();
   const navigate = useNavigate();
 
   // Navigates away after delete; item ops revalidate in place.
   const deleteFetcher = useFetcher<{ success?: string; error?: string }>();
   const itemFetcher = useFetcher<{ success?: string; error?: string }>();
+  const assignmentFetcher = useFetcher<{ success?: string; error?: string }>();
 
   const [editOpen, setEditOpen] = useState(false);
   const [addOpen, setAddOpen] = useState(false);
-  const [addType, setAddType] = useState<ModuleItemType>('PAGE');
+  const [addType, setAddType] = useState<ContentItemType>('PAGE');
   const [addTargetId, setAddTargetId] = useState<string | undefined>();
+  const [assignmentModalOpen, setAssignmentModalOpen] = useState(false);
+  const [editingAssignment, setEditingAssignment] = useState<AssignmentRowData | null>(null);
 
   const items = module.items;
   const busy = itemFetcher.state !== 'idle';
@@ -206,13 +238,17 @@ const ModuleDetail = ({ loaderData }: Route.ComponentProps) => {
       encType: 'application/json',
     });
 
+  const deleteAssignment = (a: AssignmentRowData) =>
+    assignmentFetcher.submit(JSON.stringify({ id: a.id }), {
+      method: 'post',
+      action: `/admin/${classSlug}/assignments?/delete`,
+      encType: 'application/json',
+    });
+
   // Target ids already in this module, so the picker can exclude them.
   const addedIds = useMemo(
     () => ({
       PAGE: new Set(items.filter(i => i.item_type === 'PAGE').map(i => i.page_id)),
-      REPOSITORY: new Set(
-        items.filter(i => i.item_type === 'REPOSITORY').map(i => i.repository_id)
-      ),
       QUIZ: new Set(items.filter(i => i.item_type === 'QUIZ').map(i => i.quiz_id)),
       SLIDE: new Set(items.filter(i => i.item_type === 'SLIDE').map(i => i.slide_id)),
       FORM: new Set(items.filter(i => i.item_type === 'FORM').map(i => i.form_id)),
@@ -220,16 +256,12 @@ const ModuleDetail = ({ loaderData }: Route.ComponentProps) => {
     [items]
   );
 
-  const candidateOptions = (type: ModuleItemType) => {
+  const candidateOptions = (type: ContentItemType) => {
     switch (type) {
       case 'PAGE':
         return candidates.pages
           .filter(p => !addedIds.PAGE.has(p.id))
           .map(p => ({ value: p.id, label: p.title }));
-      case 'REPOSITORY':
-        return candidates.repositories
-          .filter(r => !addedIds.REPOSITORY.has(r.id))
-          .map(r => ({ value: r.id, label: r.title }));
       case 'QUIZ':
         return candidates.quizzes
           .filter(q => !addedIds.QUIZ.has(q.id))
@@ -260,81 +292,92 @@ const ModuleDetail = ({ loaderData }: Route.ComponentProps) => {
     description: module.description,
   };
 
-  return (
-    <div className="min-h-full relative">
-      {/* Header */}
-      <div className="flex items-center justify-between mt-2 mb-4 gap-3 flex-wrap">
-        <div className="flex items-center gap-2 text-ink-2">
-          <button
-            type="button"
-            onClick={() => navigate(`/admin/${classSlug}/modules`)}
-            className="hover:text-ink-1"
-            aria-label="Back to modules"
-          >
-            <IconChevronLeft size={18} />
-          </button>
-          <IconStack2 size={18} className="text-gray-400" />
-          <button
-            type="button"
-            onClick={() => navigate(`/admin/${classSlug}/modules`)}
-            className="hover:text-ink-1"
-          >
-            Modules
-          </button>
-          <span className="text-ink-3">/</span>
-          <span className="font-semibold text-ink-1">{module.title}</span>
-        </div>
+  const moduleRef = { id: module.id, title: module.title, slug: module.slug, position: module.position };
+  const assignmentRows: AssignmentRowData[] = module.assignments.map(a => ({
+    ...(a as unknown as AssignmentRowData),
+    module: moduleRef,
+  }));
+  const repositoriesByModule = {
+    [module.id]: module.repositories.map(r => ({ id: r.id, title: r.title })),
+  };
 
-        <div className="flex items-center gap-4">
-          <Tooltip title="When on, students see this module (published items only).">
-            <label className="flex items-center gap-2 text-sm text-ink-2 cursor-pointer">
-              <Switch
-                size="small"
-                checked={module.is_published}
-                onChange={setPublished}
-                loading={busy}
-              />
-              Visible to students
-            </label>
-          </Tooltip>
-          <Button icon={<IconPencil size={16} />} onClick={() => setEditOpen(true)}>
-            Edit
-          </Button>
-          <Popconfirm
-            title="Delete module"
-            description="This removes the module. Its items (pages, repositories, quizzes, slides, forms) are kept."
-            okText="Delete"
-            okButtonProps={{ danger: true }}
-            cancelText="Cancel"
-            onConfirm={deleteModule}
-          >
-            <Button danger icon={<IconTrash size={16} />}>
-              Delete
-            </Button>
-          </Popconfirm>
-        </div>
-      </div>
-
-      {module.description && (
-        <div className="rounded-2xl bg-panel ring-1 ring-line p-5 sm:p-6 mb-4 text-sm text-ink-2 whitespace-pre-wrap">
-          {module.description}
-        </div>
-      )}
-
-      {/* Ordered content list */}
-      <div className="rounded-2xl bg-panel ring-1 ring-line p-5 sm:p-6">
-        <div className="flex items-center justify-between mb-3">
-          <h2 className="text-sm font-semibold text-ink-1">Content</h2>
-          <Button size="small" icon={<IconPlus size={15} />} onClick={() => setAddOpen(true)}>
-            Add item
-          </Button>
-        </div>
-
-        {items.length === 0 ? (
+  const tabItems = [
+    {
+      key: 'repositories',
+      label: 'Repositories',
+      extra: (
+        <Button
+          icon={<IconPlus size={16} />}
+          data-tour="repos-new"
+          onClick={() => navigate(`/admin/${classSlug}/repos/form?module=${module.id}`)}
+        >
+          New repository
+        </Button>
+      ),
+      children: (
+        <>
+          <RepositoriesTable
+            repositories={module.repositories as Parameters<typeof RepositoriesTable>[0]['repositories']}
+            actionBase={`/admin/${classSlug}/repos`}
+            showModuleColumn={false}
+            bare
+          />
+          <TriggerProgress
+            operation="PUBLISH_OR_SYNC_ASSIGNMENT"
+            validIdentifiers={[
+              'gh-create_git_repo',
+              'cf-create_git_repo',
+              'gh-create_git_repo_assignment',
+              'cf-create_git_repo_assignment',
+              'gh-add_collaborator_to_repo',
+            ]}
+          />
+        </>
+      ),
+    },
+    {
+      key: 'assignments',
+      label: 'Assignments',
+      extra: (
+        <Button
+          icon={<IconPlus size={16} />}
+          onClick={() => {
+            setEditingAssignment(null);
+            setAssignmentModalOpen(true);
+          }}
+        >
+          New assignment
+        </Button>
+      ),
+      children: (
+        <AssignmentsTable
+          assignments={assignmentRows}
+          classSlug={classSlug!}
+          showModuleColumn={false}
+          onEdit={a => {
+            setEditingAssignment(a);
+            setAssignmentModalOpen(true);
+          }}
+          onDelete={deleteAssignment}
+          busy={assignmentFetcher.state !== 'idle'}
+          emptyText="No assignments in this module yet"
+        />
+      ),
+    },
+    {
+      key: 'content',
+      label: 'Content',
+      extra: (
+        <Button icon={<IconPlus size={16} />} onClick={() => setAddOpen(true)}>
+          Add item
+        </Button>
+      ),
+      children:
+        items.length === 0 ? (
           <div className="text-center py-10 text-gray-500">
-            <div className="font-medium">No items in this module</div>
+            <div className="font-medium">No content in this module</div>
             <div className="text-sm">
-              Use “Add item” to place pages, repositories, quizzes, slides or forms in order.
+              Use “Add item” to place pages, slides, quizzes or forms in reading order.
             </div>
           </div>
         ) : (
@@ -390,10 +433,98 @@ const ModuleDetail = ({ loaderData }: Route.ComponentProps) => {
               );
             })}
           </ul>
-        )}
+        ),
+    },
+  ];
+
+  const ownsCoursework = module.repositories.length > 0 || module.assignments.length > 0;
+
+  return (
+    <div className="min-h-full relative">
+      {/* Header */}
+      <div className="flex items-center justify-between mt-2 mb-4 gap-3 flex-wrap">
+        <div className="flex items-center gap-2 text-ink-2">
+          <button
+            type="button"
+            onClick={() => navigate(`/admin/${classSlug}/modules`)}
+            className="hover:text-ink-1"
+            aria-label="Back to modules"
+          >
+            <IconChevronLeft size={18} />
+          </button>
+          <IconStack2 size={18} className="text-gray-400" />
+          <button
+            type="button"
+            onClick={() => navigate(`/admin/${classSlug}/modules`)}
+            className="hover:text-ink-1"
+          >
+            Modules
+          </button>
+          <span className="text-ink-3">/</span>
+          <span className="font-semibold text-ink-1">{module.title}</span>
+        </div>
+
+        <div className="flex items-center gap-4">
+          <Tooltip title="When on, students see this module (published items only).">
+            <label className="flex items-center gap-2 text-sm text-ink-2 cursor-pointer">
+              <Switch
+                size="small"
+                checked={module.is_published}
+                onChange={setPublished}
+                loading={busy}
+              />
+              Visible to students
+            </label>
+          </Tooltip>
+          <Button icon={<IconPencil size={16} />} onClick={() => setEditOpen(true)}>
+            Edit
+          </Button>
+          <Popconfirm
+            title="Delete module"
+            description={
+              ownsCoursework
+                ? 'Move or delete its repositories and assignments first; a module that still owns coursework cannot be deleted.'
+                : 'This removes the module. Its content items (pages, quizzes, slides, forms) are kept.'
+            }
+            okText="Delete"
+            okButtonProps={{ danger: true, disabled: ownsCoursework }}
+            cancelText="Cancel"
+            onConfirm={deleteModule}
+          >
+            <Button danger icon={<IconTrash size={16} />}>
+              Delete
+            </Button>
+          </Popconfirm>
+        </div>
       </div>
 
+      {deleteFetcher.data?.error && (
+        <div className="mb-4 text-sm text-rose-600 dark:text-rose-400">{deleteFetcher.data.error}</div>
+      )}
+
+      {module.description && (
+        <div className="rounded-2xl bg-panel ring-1 ring-line p-5 sm:p-6 mb-4 text-sm text-ink-2 whitespace-pre-wrap">
+          {module.description}
+        </div>
+      )}
+
+      <FolderTabs items={tabItems} defaultActiveKey="repositories" panelClassName="min-h-[300px]" />
+
       <ModuleFormModal open={editOpen} module={editModule} onClose={() => setEditOpen(false)} />
+
+      <AssignmentFormModal
+        open={assignmentModalOpen}
+        onClose={() => setAssignmentModalOpen(false)}
+        classSlug={classSlug!}
+        moduleId={module.id}
+        modules={[moduleRef]}
+        repositoriesByModule={repositoriesByModule}
+        quizzes={candidates.quizzes}
+        forms={candidates.forms}
+        boundQuizIds={new Set(boundQuizIds)}
+        boundFormIds={new Set(boundFormIds)}
+        assignment={editingAssignment}
+      />
 
       <Modal
         open={addOpen}
@@ -410,13 +541,10 @@ const ModuleDetail = ({ loaderData }: Route.ComponentProps) => {
             block
             value={addType}
             onChange={value => {
-              setAddType(value as ModuleItemType);
+              setAddType(value as ContentItemType);
               setAddTargetId(undefined);
             }}
-            options={(Object.keys(TYPE_META) as ModuleItemType[]).map(t => ({
-              value: t,
-              label: TYPE_META[t].label,
-            }))}
+            options={CONTENT_TYPES.map(t => ({ value: t, label: TYPE_META[t].label }))}
           />
           <Select
             showSearch
