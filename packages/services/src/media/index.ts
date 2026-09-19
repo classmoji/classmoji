@@ -77,10 +77,20 @@ type MediaWrites = typeof import('./media.service.ts');
  *
  * The promise is cached rather than the module, so two uploads racing on a cold
  * process share one load instead of starting two.
+ *
+ * A REJECTION is not remembered. A dynamic import can fail for reasons that
+ * have nothing to do with the module — a chunk that did not arrive, a disk that
+ * blinked — and a cached rejected promise would answer every upload for the
+ * rest of the process with a failure that one retry would have fixed. Clearing
+ * the cache on the way out costs a second resolution in the only case where the
+ * first one was worth nothing.
  */
 let writes: Promise<MediaWrites> | null = null;
 function mediaWrites(): Promise<MediaWrites> {
-  writes ??= import('./media.service.ts');
+  writes ??= import('./media.service.ts').catch(error => {
+    writes = null;
+    throw error;
+  });
   return writes;
 }
 
