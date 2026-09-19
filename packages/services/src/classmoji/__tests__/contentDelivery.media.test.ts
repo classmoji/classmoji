@@ -354,6 +354,24 @@ describe('mediaDownloadUrl', () => {
     ).resolves.not.toBeNull();
   });
 
+  it('falls back to the id when the stored name cannot be a filename', async () => {
+    // Without a `dl` the response carries no attachment disposition, so the
+    // browser navigates to the file and Download plays the video instead.
+    const url = await mediaDownloadUrl({
+      classroom: ctx.classroom,
+      record: record({ filename: '///' }),
+      forStudent: false,
+    });
+
+    expect(url).not.toBeNull();
+    const verified = await verifyContentUrl(MASTER, url!);
+    expect(verified).toMatchObject({
+      ok: true,
+      kind: 'media',
+      downloadFilename: `${MEDIA_ID}.mp4`,
+    });
+  });
+
   it('hands over the rendition once the original is gone', async () => {
     const url = await mediaDownloadUrl({
       classroom: ctx.classroom,

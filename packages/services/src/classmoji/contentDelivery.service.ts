@@ -1112,9 +1112,15 @@ export async function mediaDownloadUrl({
   // The original is gone once the rendition replaced it, so that is what there
   // is to hand over. Same rule the player uses, for the one row where it differs.
   const variant = record.originalDeletedAt ? 'web.mp4' : `orig.${record.ext}`;
-  const filename = normalizeDownloadFilename(record.filename);
 
-  return mintMedia(ctx, env, record, variant, DOWNLOAD_TIER, undefined, filename ?? undefined);
+  // A name that does not survive normalization (all-bidi, all-separator, far
+  // too long) must not cost the URL its `dl` — without it the response carries
+  // no `Content-Disposition: attachment`, so the browser NAVIGATES to the file
+  // and a click on Download plays a video instead of saving it. The id and the
+  // extension are both already validated, so this fallback always normalizes.
+  const filename = normalizeDownloadFilename(record.filename) ?? `${record.id}.${record.ext}`;
+
+  return mintMedia(ctx, env, record, variant, DOWNLOAD_TIER, undefined, filename);
 }
 
 /**
