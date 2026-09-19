@@ -1,7 +1,7 @@
 import { NavLink, useLocation, Outlet, useParams } from 'react-router';
 import { Button, Modal, Checkbox } from 'antd';
 import { useState, useEffect } from 'react';
-import { IconCopyX, IconLink } from '@tabler/icons-react';
+import { IconCopyX } from '@tabler/icons-react';
 
 import AssignmentTable from './AssignmentsTable';
 import {
@@ -129,9 +129,6 @@ const AdminAssignments = ({ loaderData }: Route.ComponentProps) => {
             >
               Cleanup repos
             </Button>
-            <NavLink to={`/admin/${classSlug}/resources`} data-tour="repos-link-resources">
-              <Button icon={<IconLink size={16} />}>Link Resources</Button>
-            </NavLink>
             <NavLink to={`${pathname}/form`} data-tour="repos-new">
               <ButtonNew>New repository</ButtonNew>
             </NavLink>

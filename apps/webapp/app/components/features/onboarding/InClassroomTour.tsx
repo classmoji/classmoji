@@ -116,13 +116,6 @@ const OWNER_STEPS: FeatureStep[] = [
       'Finds students no longer on your roster so you can remove their leftover repos; nothing is deleted until you confirm.',
   },
   {
-    link: '/repos',
-    selector: '[data-tour="repos-link-resources"]',
-    placement: 'bottom',
-    title: 'Link resources',
-    description: 'Attach pages, slides, or other resources to your repositories.',
-  },
-  {
     link: '/students',
     title: 'Your roster',
     description:

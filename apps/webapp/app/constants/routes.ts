@@ -16,7 +16,6 @@ import {
   IconPresentation,
   IconBook,
   IconCalendar,
-  IconLink,
   IconChecklist,
   IconClipboardList,
   IconStack2,
@@ -120,13 +119,6 @@ export const routes = {
     // student forms list in v1.
     roles: ['OWNER', 'TEACHER'],
     isProTier: true,
-    category: 'content',
-  },
-  resources: {
-    link: '/resources',
-    label: 'Link Resources',
-    icon: IconLink,
-    roles: ['OWNER', 'TEACHER'],
     category: 'content',
   },
 
