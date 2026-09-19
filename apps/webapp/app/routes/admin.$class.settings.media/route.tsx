@@ -147,20 +147,30 @@ export default function MediaSettings({ loaderData }: Route.ComponentProps) {
   const [downloadingId, setDownloadingId] = useState<string | null>(null);
 
   const download = useFetcher<{ url?: string; error?: string }>();
-  // Each mint is a different URL, so the last one consumed is enough to stop
-  // an unrelated re-render from starting the same download twice.
-  const consumed = useRef<string | null>(null);
+  /**
+   * Which CLICK a result belongs to, and which click has been acted on.
+   *
+   * The effect below has to fire once per download and stay quiet on every
+   * other re-render, and the URL cannot be what tells those apart: a signature
+   * carries a one-second timestamp, so two clicks on the same row inside the
+   * same second mint the same string and the second download was swallowed. A
+   * counter is the same guard without that collision.
+   */
+  const clicks = useRef(0);
+  const consumed = useRef(0);
 
   useEffect(() => {
     const result = download.data;
     if (!result || download.state !== 'idle') return;
+    if (consumed.current === clicks.current) return;
+    consumed.current = clicks.current;
+
     setDownloadingId(null);
     if (result.error) {
       setNotice(result.error);
       return;
     }
-    if (result.url && consumed.current !== result.url) {
-      consumed.current = result.url;
+    if (result.url) {
       // The response carries `Content-Disposition: attachment`, so the browser
       // downloads and stays on this page rather than navigating to it.
       window.location.assign(result.url);
@@ -169,7 +179,11 @@ export default function MediaSettings({ loaderData }: Route.ComponentProps) {
 
   const startDownload = useCallback(
     (mediaId: string) => {
+      // One mint at a time. A second click while the first is in flight would
+      // spend another signature and land on the same file.
+      if (download.state !== 'idle') return;
       setNotice(null);
+      clicks.current += 1;
       setDownloadingId(mediaId);
       download.submit({ mediaId }, { method: 'post', encType: 'application/json' });
     },
