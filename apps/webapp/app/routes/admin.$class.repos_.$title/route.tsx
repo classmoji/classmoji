@@ -1,12 +1,5 @@
 import { Tabs, Switch, Card, Tag, Button, Tooltip } from 'antd';
-import {
-  IconFolder,
-  IconChevronLeft,
-  IconList,
-  IconTable,
-  IconPlus,
-  IconRobot,
-} from '@tabler/icons-react';
+import { IconFolder, IconChevronLeft, IconList, IconTable, IconRobot } from '@tabler/icons-react';
 import { useParams, useRevalidator, useNavigate, Outlet } from 'react-router';
 import { useState } from 'react';
 
@@ -19,7 +12,6 @@ import AssignmentTable from './AssignmentTable';
 import { action } from './action';
 import SummaryCards from './SummaryCards';
 import ModuleTable from './ModuleTable';
-import AssignmentsTab from './AssignmentsTab';
 import LinkedPages, { type LinkedPage } from './LinkedPages';
 import { requireClassroomAdmin } from '~/utils/routeAuth.server';
 import type { Route } from './+types/route';
@@ -290,35 +282,12 @@ const SingleRepository = ({ loaderData }: Route.ComponentProps) => {
       />
     );
 
-  // Grades first — it's where faculty go most often.
   const tabItems = [
     {
       key: 'grades',
       label: 'Grades',
       extra: gradesToggle,
       children: gradesContent,
-    },
-    {
-      key: 'assignments',
-      label: 'Assignments',
-      extra: (
-        <Button
-          icon={<IconPlus size={16} />}
-          onClick={() => navigate(`/admin/${classSlug}/repos/form?title=${repository!.title}`)}
-        >
-          New assignment
-        </Button>
-      ),
-      children: (
-        <AssignmentsTab
-          classSlug={classSlug}
-          repositoryId={repository!.id}
-          repositoryTitle={repository!.title}
-          assignments={
-            repository!.assignments as Parameters<typeof AssignmentsTab>[0]['assignments']
-          }
-        />
-      ),
     },
   ];
 

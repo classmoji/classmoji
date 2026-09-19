@@ -1,6 +1,6 @@
 import { namedAction } from 'remix-utils/named-action';
 import { calculateContributions } from './helpers';
-import { HelperService, ClassmojiService } from '@classmoji/services';
+import { HelperService } from '@classmoji/services';
 import { requireClassroomAdmin, assertClassroomMutationAllowed } from '~/utils/routeAuth.server';
 import { ActionTypes } from '~/constants';
 import { tasks } from '@trigger.dev/sdk/v3';
@@ -69,39 +69,6 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
       return {
         action: ActionTypes.REMOVE_GRADER,
         success: 'Grader removed',
-      };
-    },
-
-    async releaseNow() {
-      // Release a repository's assignment(s) immediately instead of waiting for
-      // the daily release cron. `assignmentId` releases one; omitting it
-      // releases every not-yet-released assignment in the repository.
-      const repositoryId = data.repositoryId as string;
-      const assignmentIds = data.assignmentId ? [data.assignmentId as string] : undefined;
-      const repository = repositoryId
-        ? await ClassmojiService.repository.findById(repositoryId)
-        : null;
-
-      if (!repository || repository.classroom_id !== classroom.id) {
-        return {
-          action: 'RELEASE_NOW',
-          error: 'Repository not found for this classroom.',
-        };
-      }
-
-      // Stamp release_at=now first so the student release gate passes once the
-      // task marks them published.
-      await ClassmojiService.assignment.setReleaseNow(repositoryId, assignmentIds);
-
-      const handle = await tasks.trigger('release_git_repo_assignments_now', {
-        repositoryId,
-        assignmentIds,
-      });
-
-      return {
-        action: 'RELEASE_NOW',
-        success: assignmentIds ? 'Releasing assignment…' : 'Releasing assignments…',
-        taskId: handle.id,
       };
     },
 
