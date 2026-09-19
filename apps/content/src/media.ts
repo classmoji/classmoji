@@ -18,7 +18,7 @@
  * two paths share their POLICY (range.ts, cache.ts) and share nothing else.
  */
 import { asDownload, blobHeaders, errorResponse } from './cache.ts';
-import type { Env } from './env.ts';
+import { hasMediaBinding, type Env } from './env.ts';
 import { MediaOrigin, type MediaObjectRef } from './origins/media.ts';
 import {
   contentRangeHeader,
@@ -104,6 +104,16 @@ export async function serveMedia(
   request: Request,
   verified: VerifiedMedia
 ): Promise<Response> {
+  // A deploy that lost the MEDIA binding would otherwise read `undefined.head`
+  // and land in the router's catch as `500 internal error` — the one shape that
+  // says nothing about what is wrong. 503 is the truth (this route is not
+  // configured, the URL is fine), and the warn line names the binding so the
+  // fix is the deploy rather than a hunt through the signing code.
+  if (!hasMediaBinding(env)) {
+    console.warn('[content] media binding missing');
+    return errorResponse(503, 'media not configured');
+  }
+
   const response = await serveVerifiedMedia(env, request, verified);
   return verified.downloadFilename === undefined || verified.tier !== 'download'
     ? response

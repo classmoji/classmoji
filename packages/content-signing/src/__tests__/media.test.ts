@@ -14,6 +14,7 @@ import { bucketExpiry, graceFor } from '../bucket.ts';
 import { mediaCanonicalString, mediaKey, toBase64Url } from '../canonical.ts';
 import { deriveKey, signCanonical } from '../derive.ts';
 import { encodeDownloadFilename } from '../downloads.ts';
+import { contentTypeForMediaExt } from '../mediaTypes.ts';
 import type { Tier } from '../types.ts';
 import { signBlobUrl, signMediaUrl, signThemeBase } from '../urls.ts';
 import {
@@ -98,6 +99,24 @@ describe('mediaKey', () => {
     expect(() => mediaKey(CLASSROOM_A, MEDIA_ID, 'orig.mov/../web.mp4')).toThrow(TypeError);
     expect(() => mediaKey(CLASSROOM_A, MEDIA_ID, 'orig.')).toThrow(TypeError);
     expect(() => mediaKey(CLASSROOM_A, MEDIA_ID, 'orig.thisistoolong')).toThrow(TypeError);
+  });
+});
+
+describe('contentTypeForMediaExt', () => {
+  it('answers the type the media store assigns, case-insensitively', () => {
+    // One table, read by the app when it stores an object and by the Worker
+    // when it has to say what an object is without a stored type.
+    expect(contentTypeForMediaExt('mov')).toBe('video/quicktime');
+    expect(contentTypeForMediaExt('MP3')).toBe('audio/mpeg');
+    expect(contentTypeForMediaExt('zip')).toBe('application/zip');
+    expect(contentTypeForMediaExt('key')).toBe('application/zip');
+    expect(contentTypeForMediaExt('jpeg')).toBe('image/jpeg');
+  });
+
+  it('has no type for anything a browser could be talked into executing', () => {
+    for (const ext of ['html', 'htm', 'svg', 'js', 'mjs', 'xml', 'exe', '']) {
+      expect(contentTypeForMediaExt(ext)).toBeNull();
+    }
   });
 });
 

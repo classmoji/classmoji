@@ -14,7 +14,7 @@
  */
 import { contentTypeForPath } from '../content-type.ts';
 import type { Env } from '../env.ts';
-import { mediaKey } from '../verify.ts';
+import { contentTypeForMediaExt, mediaKey } from '../verify.ts';
 
 /** Which object: one variant of one media row in one classroom. */
 export interface MediaObjectRef {
@@ -48,10 +48,23 @@ export interface MediaBody extends MediaHead {
  * mapping for is an opaque download. Together with `nosniff` and the sandboxing
  * CSP (see cache.ts) that is what keeps an uploaded document from ever being
  * run as something else.
+ *
+ * An `orig.{ext}` is resolved against the MEDIA store's own table first — the
+ * same one the app assigned the stored type from — so a fallback answers what
+ * the upload would have answered. `content-type.ts` is the general web table
+ * and knows nothing of `mov`, `mp3` or `zip`, which are precisely the
+ * extensions a fallback is reached for. Only when neither knows the extension
+ * is the object an opaque download.
  */
+const ORIG_PREFIX = 'orig.';
+
 function contentTypeOf(object: R2Object, variant: string): string {
   const stored = object.httpMetadata?.contentType;
   if (typeof stored === 'string' && stored.trim().length > 0) return stored;
+  if (variant.startsWith(ORIG_PREFIX)) {
+    const mediaType = contentTypeForMediaExt(variant.slice(ORIG_PREFIX.length));
+    if (mediaType !== null) return mediaType;
+  }
   return contentTypeForPath(variant);
 }
 

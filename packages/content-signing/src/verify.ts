@@ -64,6 +64,27 @@ function decodeSegment(segment: string): string | null {
   }
 }
 
+/**
+ * The segment decoded, but only if it was spelled canonically to begin with.
+ *
+ * A signature covers the DECODED value, so `orig.mov`, `orig%2Emov` and
+ * `%6Frig.mov` would otherwise all verify against the same signature — one
+ * signed URL with an unbounded family of spellings, each a distinct cache key
+ * at every layer between here and the browser, and each a distinct string in a
+ * log line. Requiring the two to match collapses that family back to one URL.
+ *
+ * Applied to the segments that are grammar rather than filename: a blob's
+ * `{sha}.{ext}`, a media id, a media variant. Every one of those is drawn from
+ * a closed alphabet (hex, uuid, a short variant list) with nothing in it that
+ * needs escaping, so the rule costs nothing a legitimate caller can spend. The
+ * theme path is deliberately NOT subject to it — its `relPath` carries real
+ * filenames, and a space in one is a percent-escape that has to survive.
+ */
+function canonicalSegment(segment: string): string | null {
+  const decoded = decodeSegment(segment);
+  return decoded === segment ? decoded : null;
+}
+
 function parseNonNegativeInt(value: string | null): number | null {
   if (value === null || !/^(0|[1-9][0-9]*)$/.test(value)) return null;
   const parsed = Number(value);
@@ -186,7 +207,10 @@ function parseBlob(url: URL, host: string, classroomId: string, segments: string
   if (segments.length !== 4) return fail('malformed');
   if (!queryKeysOk(url, BLOB_QUERY_KEYS)) return fail('malformed');
 
-  const file = decodeSegment(segments[3]);
+  // `{sha}.{ext}` is hex and a short lowercase alphanumeric run: there is
+  // nothing in it to escape, so an escape in it is a second spelling of a URL
+  // that already has one.
+  const file = canonicalSegment(segments[3]);
   if (file === null) return fail('malformed');
   const dot = file.lastIndexOf('.');
   if (dot <= 0 || dot === file.length - 1) return fail('malformed');
@@ -221,15 +245,19 @@ function parseBlob(url: URL, host: string, classroomId: string, segments: string
  * The variant is a closed list rather than a filename, so there is nothing to
  * normalize and no path to traverse: it is checked as it arrived, and the same
  * string is what `mediaKey` later appends to the R2 prefix.
+ *
+ * Both segments must also be spelled canonically — a uuid and a variant have no
+ * character that needs escaping, so `%6Frig.mov` is not a media URL, it is a
+ * second spelling of one. See `canonicalSegment`.
  */
 function parseMedia(url: URL, host: string, classroomId: string, segments: string[]): ParseResult {
   if (segments.length !== 5) return fail('malformed');
   if (!queryKeysOk(url, MEDIA_QUERY_KEYS)) return fail('malformed');
 
-  const mediaId = decodeSegment(segments[3]);
+  const mediaId = canonicalSegment(segments[3]);
   if (mediaId === null || !isMediaId(mediaId)) return fail('malformed');
 
-  const variant = decodeSegment(segments[4]);
+  const variant = canonicalSegment(segments[4]);
   if (variant === null || !isMediaVariant(variant)) return fail('malformed');
 
   const policy = readPolicy(

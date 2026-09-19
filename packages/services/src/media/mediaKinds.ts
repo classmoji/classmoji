@@ -13,72 +13,50 @@
  * Images are on the list even though small ones belong in the content repo:
  * the 5 MB page-asset cap is a git limit, and an instructor with a 40 MB scan
  * needs somewhere to put it. Nothing routes an image here automatically.
+ *
+ * The extension → content-type mapping itself is NOT here. It lives in
+ * `@classmoji/content-signing` (reached through `mediaKeys.ts`, this folder's
+ * one door onto that package) because the Worker needs the identical table to
+ * fall back on when an object carries no stored type. What stays here is the
+ * policy this module owns: which extensions are accepted at all, and which kind
+ * each one belongs to.
  */
+
+import { contentTypeForMediaExt } from './mediaKeys.ts';
 
 export type MediaKind = 'VIDEO' | 'AUDIO' | 'DOCUMENT' | 'ARCHIVE' | 'IMAGE';
 
 interface KindSpec {
   kind: MediaKind;
-  /** ext → the content type the object is stored and served with. */
-  types: Readonly<Record<string, string>>;
+  /** The extensions this kind accepts, lowercase and dotless. */
+  exts: readonly string[];
 }
 
 /**
  * The allowlist, grouped by kind. Extensions are lowercase and dotless — the
  * same shape `mediaKey`'s `orig.{ext}` variant needs.
- *
- * `key` (Keynote) is `application/zip` because that is what a .key bundle
- * actually is; Apple registers no distinct type and inventing one would only
- * confuse the browsers that do content-type-based downloads.
  */
 export const MEDIA_KINDS: readonly KindSpec[] = [
-  {
-    kind: 'VIDEO',
-    types: {
-      mp4: 'video/mp4',
-      webm: 'video/webm',
-      mov: 'video/quicktime',
-      m4v: 'video/x-m4v',
-    },
-  },
-  {
-    kind: 'AUDIO',
-    types: {
-      mp3: 'audio/mpeg',
-      m4a: 'audio/mp4',
-      wav: 'audio/wav',
-    },
-  },
-  {
-    kind: 'DOCUMENT',
-    types: {
-      pdf: 'application/pdf',
-      ppt: 'application/vnd.ms-powerpoint',
-      pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
-      key: 'application/zip',
-    },
-  },
-  {
-    kind: 'ARCHIVE',
-    types: { zip: 'application/zip' },
-  },
-  {
-    kind: 'IMAGE',
-    types: {
-      png: 'image/png',
-      jpg: 'image/jpeg',
-      jpeg: 'image/jpeg',
-      webp: 'image/webp',
-      gif: 'image/gif',
-    },
-  },
+  { kind: 'VIDEO', exts: ['mp4', 'webm', 'mov', 'm4v'] },
+  { kind: 'AUDIO', exts: ['mp3', 'm4a', 'wav'] },
+  { kind: 'DOCUMENT', exts: ['pdf', 'ppt', 'pptx', 'key'] },
+  { kind: 'ARCHIVE', exts: ['zip'] },
+  { kind: 'IMAGE', exts: ['png', 'jpg', 'jpeg', 'webp', 'gif'] },
 ];
 
 const BY_EXT = new Map<string, { kind: MediaKind; contentType: string }>(
   MEDIA_KINDS.flatMap(spec =>
-    Object.entries(spec.types).map(
-      ([ext, contentType]) => [ext, { kind: spec.kind, contentType }] as const
-    )
+    spec.exts.map(ext => {
+      const contentType = contentTypeForMediaExt(ext);
+      // An allowlisted extension with no type would be served as an opaque
+      // download by a store that had just promised to know what it was. The
+      // two lists are meant to be the same set, so a drift fails at import
+      // rather than at an upload months later.
+      if (contentType === null) {
+        throw new TypeError(`media: no content type for allowlisted extension .${ext}`);
+      }
+      return [ext, { kind: spec.kind, contentType }] as const;
+    })
   )
 );
 

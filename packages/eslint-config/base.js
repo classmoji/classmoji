@@ -20,17 +20,27 @@ import pluginPrettier from 'eslint-plugin-prettier';
  * gate, so this makes reaching for them a lint error rather than a code review
  * someone has to remember to do.
  *
- * The allowlist is deliberately tiny:
+ * ## What is restricted, and what is not
+ *
+ * The rule names the MINTING exports rather than the package, because only
+ * those bypass the gate: `signBlobUrl`, `signSrcSet`, `signThemeBase`,
+ * `signMediaUrl` and `signRenderToken` produce a signature, and `deriveKey` and
+ * `signCanonical` are the primitives they produce it with.
+ *
+ * Everything else in the package is grammar that both sides have to agree on —
+ * `mediaKey`, `isMediaVariant`, `contentTypeForMediaExt`, the canonical-string
+ * builders, the verifiers — and it is importable anywhere. A file-level
+ * exemption for a module that only wanted the key shape used to be the way
+ * those were reached, and it exempted that module from the signers too.
+ *
+ * The allowlist is therefore down to the three files that legitimately MINT,
+ * plus tests:
  *   - `contentDelivery.service.ts` — the gate itself;
  *   - `deckRenderToken.service.ts` — render tokens, a different signature over
  *     a deck id rather than a sha, with no asset map to check against;
  *   - `apps/content/src/verify.ts` — the Worker's VERIFY seam, allowlisted in
- *     that app's own config; it re-exports the package and mints nothing;
- *   - `media/mediaKeys.ts` — the R2 KEY shape, which is in the signing package
- *     only because the Worker has to build the identical key from the URL it
- *     verified. It mints nothing, and every other media module reaches the
- *     helpers through it, so the gate below is still the only place a media
- *     URL is signed;
+ *     that app's own config; it re-exports the package and mints nothing, but
+ *     `export *` carries the signer names along with the rest;
  *   - tests, which have to reach the primitives to prove the gate's output.
  *
  * Globs are tail-matched (`**\/classmoji/...`) because flat-config `files`
@@ -38,16 +48,26 @@ import pluginPrettier from 'eslint-plugin-prettier';
  */
 const CONTENT_SIGNING = {
   name: '@classmoji/content-signing',
+  importNames: [
+    'signBlobUrl',
+    'signSrcSet',
+    'signThemeBase',
+    'signMediaUrl',
+    'signRenderToken',
+    'signCanonical',
+    'deriveKey',
+  ],
   message:
     'Sign through ClassmojiService.contentDelivery instead. Every blob URL must be minted ' +
     "inside contentDelivery.service.ts, which requires proof the sha is in that classroom's " +
-    'asset map — importing the signers directly bypasses that check.',
+    'asset map — importing the signers directly bypasses that check. The rest of the package ' +
+    '(mediaKey, isMediaVariant, contentTypeForMediaExt, the canonical builders, the verifiers) ' +
+    'is importable anywhere.',
 };
 
 const CONTENT_SIGNING_ALLOWED = [
   '**/classmoji/contentDelivery.service.ts',
   '**/classmoji/deckRenderToken.service.ts',
-  '**/media/mediaKeys.ts',
   '**/__tests__/**/*.{js,jsx,ts,tsx}',
   '**/tests/**/*.{js,jsx,ts,tsx}',
   '**/*.test.{js,jsx,ts,tsx}',

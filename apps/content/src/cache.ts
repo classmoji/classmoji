@@ -27,8 +27,12 @@ export const CORS_HEADERS: Readonly<Record<string, string>> = {
   // `Range` is in the allowed list above, so the range headers belong in this
   // one: a cross-origin reader that cannot see `Content-Range` or
   // `Accept-Ranges` cannot tell a 206 apart from a truncated 200.
+  //
+  // `Content-Disposition` for the same reason: a download URL's whole payload
+  // is a filename this Worker computed, and a script that fetches one and
+  // cannot read the header has to invent a name for the file it saves.
   'Access-Control-Expose-Headers':
-    'Content-Type, Content-Length, ETag, Accept-Ranges, Content-Range',
+    'Content-Type, Content-Length, ETag, Accept-Ranges, Content-Range, Content-Disposition',
   'Access-Control-Max-Age': '86400',
 };
 

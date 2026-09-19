@@ -182,7 +182,17 @@ The content type is the one the upload recorded (`httpMetadata`), falling back
 to the variant's own extension, and never a sniff of the bytes. That is the
 reverse of the blob rule for the reverse reason: a media key names ONE row in
 ONE classroom and its type was assigned server-side from an allowlist, where a
-`blobs/{sha}` key is shared by every classroom holding those bytes.
+`blobs/{sha}` key is shared by every classroom holding those bytes. The fallback
+reads `contentTypeForMediaExt` in `@classmoji/content-signing` — the same table
+the app assigned the stored type from, so the two cannot drift.
+
+**Deleting media does not revoke URLs already minted for it.** A signed URL is
+self-contained: it carries its own tier, expiry and key version, and it is
+checked against the key rather than against a row, so a `week` or `month` URL
+handed out before the delete keeps *verifying* until it expires. What changes is
+the answer — the object is gone, so the reply is a 404 instead of bytes. This is
+the same property a blob URL has (see the tiers above), and the mitigation is
+the same one: the tier's lifetime. Nothing revokes an issued URL early.
 
 ## Behaviour worth knowing
 
@@ -638,16 +648,22 @@ Once, in this order:
 
 1. **R2 read on the Cloudflare API token** — already done. The token in
    `CLOUDFLARE_API_TOKEN` needs Workers Scripts edit *and* R2 read, or the
-   deploy fails validating the `CACHE` binding rather than at request time.
+   deploy fails validating the `CACHE` and `MEDIA` bindings rather than at
+   request time.
 
-   The bucket itself already exists too: `classmoji-content-cache-prod` and
-   `classmoji-content-cache-stg` were both created on 2026-09-03. Nothing to do
-   here — but a fresh account would need it before the first deploy, because
-   wrangler binds an existing bucket and never creates one:
+   The cache buckets already exist: `classmoji-content-cache-prod` and
+   `classmoji-content-cache-stg` were both created on 2026-09-03. The media
+   buckets — `classmoji-media-prod` and `classmoji-media-stg` — are bound as
+   `MEDIA` beside `CACHE` and must exist before the first deploy of this
+   Worker, because wrangler binds an existing bucket and never creates one:
 
    ```sh
    npx wrangler r2 bucket create classmoji-content-cache-prod
+   npx wrangler r2 bucket create classmoji-media-prod
    ```
+
+   The app writes to the media bucket over the S3 API and this Worker only
+   reads from it, so both sides have to name the same bucket per environment.
 2. **Push to `main`.** The workflow deploys `classmoji-content` and then pushes
    `CONTENT_SIGNING_SECRET` and `CONTENT_WORKER_SHARED_SECRET` from Infisical
    `prod`. Both must already exist under `/content-worker` there — the job

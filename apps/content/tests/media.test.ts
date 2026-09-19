@@ -12,6 +12,7 @@ import worker, { clearRotationLog } from '../src/index.ts';
 import { clearOriginCache } from '../src/token.ts';
 import { nowSeconds } from '../src/verify.ts';
 import {
+  BLOB_SHA,
   CLASSROOM,
   MEDIA_ID,
   MISSING_MEDIA_ID,
@@ -19,6 +20,7 @@ import {
   fakeBucket,
   fakeContext,
   fakeEnv,
+  signedBlobUrl,
   signedMediaUrl,
 } from './helpers.ts';
 
@@ -26,6 +28,9 @@ const realFetch = globalThis.fetch;
 
 /** A classroom that is not the one the fixtures sign for. */
 const OTHER_CLASSROOM = 'c1a55c0d-0000-4000-8000-000000000002';
+
+/** The same media id with its first character percent-escaped. */
+const ENCODED_MEDIA_ID = `%${MEDIA_ID.charCodeAt(0).toString(16)}${MEDIA_ID.slice(1)}`;
 
 const STRICT_CSP = "default-src 'none'; sandbox";
 const DOWNLOAD_CSP = "default-src 'none'; sandbox allow-downloads";
@@ -134,10 +139,15 @@ describe('media delivery', () => {
     ['web.mp4', 'video/mp4'],
     ['poster.webp', 'image/webp'],
     ['orig.pdf', 'application/pdf'],
-    ['orig.zip', 'application/octet-stream'],
+    // The three the general web table does not know: an `orig.{ext}` falls back
+    // to the MEDIA store's own table, the same one the upload assigned from.
+    ['orig.mov', 'video/quicktime'],
+    ['orig.mp3', 'audio/mpeg'],
+    ['orig.zip', 'application/zip'],
+    ['orig.xyz', 'application/octet-stream'],
   ])('falls back to the %s variant for the content type', async (variant, expected) => {
     // An object stored without an httpMetadata type — the variant names what it
-    // is, and an extension with no mapping is an opaque download.
+    // is, and an extension neither table knows is an opaque download.
     const media = fakeBucket({ [key(variant)]: { body: VIDEO, contentType: undefined } });
     const { response } = await fetchMedia(media, { variant });
 
@@ -268,6 +278,25 @@ describe('media ranges', () => {
     expect(media.gets).toEqual([]);
   });
 
+  it.each([
+    // A suffix range is the one shape a player uses to read a trailing index —
+    // an MP4 with its `moov` atom at the end is unplayable without it.
+    ['a suffix range', 'bytes=-500', 206, `bytes 3596-4095/${VIDEO.length}`],
+    // RFC 7233 §3.1: a garbled spec is not a claim about the object, so it is
+    // ignored rather than refused — a full 200, never a 416.
+    ['a malformed spec', 'bytes=abc', 200, null],
+    // Legal to ask for, legal to refuse. A multipart/byteranges body is a lot
+    // of machinery for a request shape nothing in the fleet sends.
+    ['a multi-range request', 'bytes=0-99, 200-299', 200, null],
+  ] as const)('answers %s correctly', async (_label, range, status, contentRange) => {
+    const media = mediaBucket();
+    const { response } = await fetchMedia(media, { variant: 'orig.mp4' }, { headers: { range } });
+
+    expect(response.status).toBe(status);
+    expect(response.headers.get('Content-Range')).toBe(contentRange);
+    expect(await response.text()).toBe(status === 206 ? VIDEO.slice(-500) : VIDEO);
+  });
+
   it('404s a range for an object that is not there', async () => {
     vi.spyOn(console, 'warn').mockImplementation(() => {});
     const { response } = await fetchMedia(
@@ -357,6 +386,35 @@ describe('media refusals', () => {
     expect(media.gets).toEqual([]);
   });
 
+  it.each([
+    ['an encoded dot in the variant', (url: string) => url.replace('orig.mp4', 'orig%2Emp4')],
+    ['an encoded letter in the variant', (url: string) => url.replace('orig.mp4', '%6Frig.mp4')],
+    ['an encoded digit in the media id', (url: string) => url.replace(MEDIA_ID, ENCODED_MEDIA_ID)],
+  ])('403s %s — one URL has one spelling', async (_label, rewrite) => {
+    // The signature covers the DECODED value, so every escaped spelling of a
+    // media path would otherwise verify against the same signature: one signed
+    // URL, an unbounded family of cache keys and log lines.
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const media = mediaBucket();
+    const url = rewrite(await signedMediaUrl({ variant: 'orig.mp4' }));
+    const response = await worker.fetch(
+      new Request(url),
+      fakeEnv({ MEDIA: media as unknown as R2Bucket }),
+      fakeContext()
+    );
+
+    expect(response.status).toBe(403);
+    expect(await response.json()).toEqual({ error: 'malformed' });
+    expect(media.gets).toEqual([]);
+    expect(media.heads).toEqual([]);
+  });
+
+  it('still serves the canonical spelling of that same URL', async () => {
+    // The other half of the rule: nothing a legitimate caller sends changes.
+    const { response } = await fetchMedia(mediaBucket(), { variant: 'orig.mp4' });
+    expect(response.status).toBe(200);
+  });
+
   it('403s an expired media URL', async () => {
     vi.spyOn(console, 'warn').mockImplementation(() => {});
     const { response } = await fetchMedia(mediaBucket(), {
@@ -379,6 +437,41 @@ describe('media refusals', () => {
 
     expect(response.status).toBe(403);
     expect(await response.json()).toEqual({ error: 'malformed' });
+  });
+
+  it('503s a verified media URL when the MEDIA binding is missing', async () => {
+    // The URL is perfectly good; the deploy is not. Without this the route
+    // would read `undefined.head` and surface as `500 internal error`, which
+    // sends an operator looking at the signing code instead of the binding.
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const { response } = await fetchMedia(
+      mediaBucket(),
+      { variant: 'orig.mp4' },
+      {},
+      { MEDIA: undefined }
+    );
+
+    expect(response.status).toBe(503);
+    expect(await response.json()).toEqual({ error: 'media not configured' });
+    expect(response.headers.get('Cache-Control')).toBe('no-store');
+    expect(warn).toHaveBeenCalledWith('[content] media binding missing');
+  });
+
+  it('still serves blobs when only the MEDIA binding is missing', async () => {
+    // `isConfigured` deliberately does not cover MEDIA: one lost binding must
+    // not take the other two shapes down with it.
+    const cache = fakeBucket({ [`blobs/${BLOB_SHA}`]: { body: 'png-bytes' } });
+    const response = await worker.fetch(
+      new Request(await signedBlobUrl({ sha: BLOB_SHA, ext: 'png' })),
+      fakeEnv({
+        CACHE: cache as unknown as R2Bucket,
+        MEDIA: undefined as unknown as R2Bucket,
+      }),
+      fakeContext()
+    );
+
+    expect(response.status).toBe(200);
+    expect(await response.text()).toBe('png-bytes');
   });
 
   it('405s a write to a media URL', async () => {

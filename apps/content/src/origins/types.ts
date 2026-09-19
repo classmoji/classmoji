@@ -69,8 +69,11 @@ export interface OriginAdapter {
 
 /**
  * Choose a delivery strategy. Blob size is not known ahead of the fetch today,
- * so callers pass `undefined` and always proxy; the branch exists for the media
- * origin, which will know sizes.
+ * so callers pass `undefined` and always proxy; the branch is the seam for an
+ * origin that knows sizes and can hand out a direct URL for a large object.
+ *
+ * Not the media origin, which knows sizes and still proxies every byte: a
+ * presigned R2 URL would leave `finalizeHeaders` behind. See `origins/media.ts`.
  */
 export function deliveryStrategy(origin: OriginAdapter, size?: number): 'proxy' | 'presign' {
   if (size === undefined) return 'proxy';
