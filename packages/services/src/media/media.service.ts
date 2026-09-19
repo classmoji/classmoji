@@ -30,7 +30,8 @@ import {
   partCountFor,
   quotaBytesFor,
 } from './mediaQuota.ts';
-import { mediaBucket, r2Client } from './r2Client.ts';
+import { mediaBucket } from './mediaConfig.ts';
+import { r2Client } from './r2Client.ts';
 
 /**
  * The media store: a classroom's large files, in R2 rather than in git.
