@@ -17,6 +17,7 @@ browser ──signed URL──▶ Worker ──hit──▶ R2
 
 ```
 GET /c/{classroomId}/blob/{sha}.{ext}?p=&v=&exp=&sig=[&w=&fmt=][&dl=]
+GET /c/{classroomId}/media/{mediaId}/{variant}?p=&v=&exp=&sig=[&dl=]
 GET /c/{classroomId}/theme/{theme}/{treeSha}/{p}.{v}.{exp}.{sig}/{relPath}
 GET /healthz
 OPTIONS *
@@ -33,6 +34,7 @@ after the scheme in the canonical string:
 
 ```
 cm1|blob|{host}|{classroomId}|{sha}|{ext}|{p}|{v}|{exp}|{w or ''}|{fmt or ''}[|dl|{dl}]
+cm1|media|{host}|{classroomId}|{mediaId}|{variant}|{p}|{v}|{exp}[|dl|{dl}]
 cm1|theme|{host}|{classroomId}|{theme}|{treeSha}|{p}|{v}|{exp}
 ```
 
@@ -147,14 +149,51 @@ mistake) is served untransformed from `blobs/{sha}`: the transform gate is
 lifetimes are decided by the tier alone, so text gets exactly the `immutable`
 an image gets, and exactly the `no-store` on `edit`.
 
+### Media
+
+Large uploads — lecture video, audio, pdfs, archives — live in a SECOND bucket,
+`MEDIA`, at `m/{classroomId}/{mediaId}/{variant}`. It is not a cache: it holds
+the only copy of what an instructor uploaded, written by the app over the S3 API
+and only ever read here. That difference is the whole route.
+
+- **No origin.** An object that is not in the bucket is a `404 not found`, never
+  a 502 and never a pull — there is nothing behind it to be unavailable.
+- **No cache fill.** The content cache is not read, not written, not touched on
+  this path, and this Worker never writes to `MEDIA` at all.
+- **No redirect.** `MediaOrigin.canPresign` is false. A presigned R2 URL would
+  leave `finalizeHeaders` behind — no CORS, no nosniff, no CSP — and hand the
+  browser a URL this Worker no longer controls.
+- **No transform.** A media URL carrying `w` or `fmt` is malformed: the query
+  allowlist is exactly `p, v, exp, sig, dl`.
+
+`{variant}` is one of `orig.{ext}` (ext ≤ 8 lowercase alphanumerics), `web.mp4`
+(the streaming rendition) or `poster.webp` — a closed list, because the same
+string is both a URL segment and the tail of an R2 key. WHICH variant to serve
+is decided at signing time by the app, from the media row; the Worker holds no
+state about it, so a new rendition is simply a new URL.
+
+Everything else is the blob answer verbatim: `Accept-Ranges`, a 206 for a seek
+resolved by R2's own ranged read, a 416 carrying `bytes */{size}` past the end,
+HEAD from metadata alone, the tier's cache-control, and an attachment when the
+signature carried a `dl` — on the `download` tier and nowhere else, because that
+is the only tier a per-viewer filename may ride.
+
+The content type is the one the upload recorded (`httpMetadata`), falling back
+to the variant's own extension, and never a sniff of the bytes. That is the
+reverse of the blob rule for the reverse reason: a media key names ONE row in
+ONE classroom and its type was assigned server-side from an allowlist, where a
+`blobs/{sha}` key is shared by every classroom holding those bytes.
+
 ## Behaviour worth knowing
 
 - **Bytes stream.** A miss is piped to the browser while a tee'd copy goes to R2
   under `ctx.waitUntil`. Only image transforms and tree listings materialize.
-- **R2 keys are content-addressed.** `blobs/{sha}`, variants at
+- **Cache keys are content-addressed.** `blobs/{sha}`, variants at
   `blobs/{sha}/w{width}.{format}`, tree listings at `trees/{treeSha}.json`. No
   classroom appears in a key: two classrooms referencing the same blob share one
-  object, and access is decided by the signature rather than the key.
+  object, and access is decided by the signature rather than the key. Media is
+  the deliberate exception — a different bucket, and classroom-scoped, because
+  quota and delete are per classroom.
 - **`fmt=auto` negotiates on `Accept`** — avif when the browser offers it, else
   webp — and the *stored* variant is keyed by the concrete format, so no viewer
   is ever handed a format it cannot decode.
@@ -200,6 +239,7 @@ an image gets, and exactly the `no-store` on `edit`.
 | Name | Kind | Notes |
 | --- | --- | --- |
 | `CACHE` | R2 bucket | `classmoji-content-cache-stg` / `-prod` |
+| `MEDIA` | R2 bucket | `classmoji-media-stg` / `-prod` — large uploads, read-only from here and never a cache |
 | `IMAGES` | Images binding | width/format variants |
 | `CONTENT_TOKEN_ENDPOINT` | var | webapp endpoint that mints installation tokens |
 | `ENVIRONMENT` | var | `staging` / `production` |
@@ -435,6 +475,17 @@ refetches it from GitHub and writes it back. It is *not* scoped to a classroom �
 one object serves every classroom referencing that sha, which is the point of a
 content-addressed key.
 
+The media bucket is the opposite on both counts. Its keys are classroom-scoped,
+
+```
+m/{classroomId}/{mediaId}/orig.{ext}     # the original, as uploaded
+m/{classroomId}/{mediaId}/web.mp4        # the streaming rendition
+m/{classroomId}/{mediaId}/poster.webp    # the poster frame
+```
+
+and there is nothing behind them: deleting one of these objects destroys the
+file. Media is deleted through the app, which removes the row as well.
+
 ### "Reset content cache" busts the edge, not R2
 
 The per-classroom button in the app bumps the classroom's key version, so every
@@ -456,6 +507,7 @@ Logs** (`classmoji-content-staging` or `classmoji-content`), with
 | `[content] 403 {reason} classroom=… path=… p=… v=…` | refused: `bad-signature`, `expired`, `malformed`, `unsupported-version`. Never carries `sig` or a query string |
 | `[content] key=previous classroom=… path=… p=… v=…` | served, but the signature only verified against `CONTENT_SIGNING_SECRET_PREVIOUS`. Expected during a rotation. Logged once per classroom and key version per isolate, so it counts classrooms, not requests |
 | `[content] 404 missing classroom=… path=…` | the app minted a `/missing/` URL: a reference that resolves to no blob (deleted, renamed, or a directory). Not an attack — a content bug |
+| `[content] 404 media classroom=… media=… variant=…` | a signed media URL whose object is not in the bucket: deleted, or an upload that never completed. There is no origin to fall back to |
 | `[content] origin blob {sha}: {status}` | GitHub refused the blob; the client got a 502 |
 | `[content] origin error: …` / `[content] unhandled error: …` | 502 / 500 |
 | `[content] image transform failed (w=…, fmt=…)` | Images could not do it; the original was served on `max-age=60` |

@@ -73,6 +73,16 @@
           // cannot land in the staging or production cache.
           "binding": "CACHE",
           "bucket_name": "classmoji-content-cache-dev"
+        },
+        {
+          // MEDIA is NOT a cache. It holds the only copy of an instructor's
+          // uploads, written by the app over the S3 API and only ever read
+          // here — so it is bound per environment exactly like CACHE, and for
+          // a sharper reason: a staging Worker reaching the production media
+          // bucket would be reading real lecture video. `classmoji-media-dev`
+          // does not exist in Cloudflare; the local simulator makes it.
+          "binding": "MEDIA",
+          "bucket_name": "classmoji-media-dev"
         }
       ],
       "images": {
@@ -103,6 +113,10 @@
         {
           "binding": "CACHE",
           "bucket_name": "classmoji-content-cache-stg"
+        },
+        {
+          "binding": "MEDIA",
+          "bucket_name": "classmoji-media-stg"
         }
       ],
       "images": {
@@ -138,6 +152,10 @@
         {
           "binding": "CACHE",
           "bucket_name": "classmoji-content-cache-prod"
+        },
+        {
+          "binding": "MEDIA",
+          "bucket_name": "classmoji-media-prod"
         }
       ],
       "images": {

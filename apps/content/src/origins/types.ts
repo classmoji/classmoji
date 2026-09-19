@@ -1,8 +1,10 @@
 /**
- * Origin adapters: where bytes come from when R2 misses.
+ * Origin adapters: where bytes come from when the CACHE bucket misses.
  *
- * The Worker knows nothing about a classroom's storage beyond this interface,
- * so a second backend (large media) can be added without touching the router.
+ * Everything here describes a REMOTE origin reached with a repo and a
+ * short-lived installation token — which is GitHub, and only GitHub. The media
+ * bucket is not behind this seam: it is not a miss path, it has no repo and no
+ * token, and `origins/media.ts` says so in its own shape.
  */
 
 export interface OriginRef {
