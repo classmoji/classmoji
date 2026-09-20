@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { ConfigProvider, Input, Popover, Segmented, Select, Switch, Table, Tooltip } from 'antd';
+import { ConfigProvider, Input, Popover, Segmented, Select, Table, Tooltip } from 'antd';
 import type { TableProps } from 'antd';
 import { IconAdjustmentsHorizontal, IconSearch } from '@tabler/icons-react';
 import { Link, useLocation, useParams } from 'react-router';
@@ -19,7 +19,7 @@ import type {
   LetterGradeMappingEntry,
   OrganizationSettings,
 } from '@classmoji/utils';
-import { useDarkMode, useGlobalFetcher } from '~/hooks';
+import { useDarkMode } from '~/hooks';
 
 /**
  * A gradebook row as it leaves the loader. A CLOSED shape on purpose: the
@@ -143,12 +143,9 @@ const GradesTable = (props: GradesTableProps) => {
   const [view, setView] = useState<View>('Score');
   const [rowFilter, setRowFilter] = useState<RowFilter>('all');
   const [searchQuery, setSearchQuery] = useState('');
-  // Release switches flip at once; the loader catches up on revalidation.
-  const [released, setReleased] = useState<Record<string, boolean>>({});
   const { class: classSlug } = useParams();
   const rolePrefix = useLocation().pathname.split('/')[1];
   const base = `/${rolePrefix}/${classSlug}`;
-  const { fetcher } = useGlobalFetcher();
   const { isDarkMode } = useDarkMode();
 
   // Repo assignments carry grades; quiz and form assignments do not yet, so
@@ -199,15 +196,6 @@ const GradesTable = (props: GradesTableProps) => {
       const sub = findSubmission(s, assignmentId);
       return n + (isSubmitted(sub) && !isGraded(sub) ? 1 : 0);
     }, 0);
-
-  const toggleRelease = (assignment: GradebookAssignment, value: boolean) => {
-    setReleased(prev => ({ ...prev, [assignment.id]: value }));
-    fetcher!.submit(JSON.stringify({ assignment_id: assignment.id, grades_released: value }), {
-      method: 'post',
-      action: `/api/gitRepoAssignment/${classSlug}?/updateGradeRelease`,
-      encType: 'application/json',
-    });
-  };
 
   const changeLetterGradeMapping = (letterGrade: string, grade: number) =>
     setLetterGradeMappings(
@@ -266,7 +254,7 @@ const GradesTable = (props: GradesTableProps) => {
     return (
       <Link
         to={href}
-        className={`flex items-center justify-center min-h-9 -m-2 p-2 rounded-md text-ink-1 hover:ring-1 hover:ring-line ${tint}`}
+        className={`flex items-center min-h-9 -m-2 p-2 rounded-md text-ink-1 hover:ring-1 hover:ring-line ${tint}`}
       >
         {body}
       </Link>
@@ -352,7 +340,6 @@ const GradesTable = (props: GradesTableProps) => {
         ? dayjs(assignment.student_deadline).format('MMM D')
         : null;
       const pending = toGradeCount(assignment.id);
-      const isReleased = released[assignment.id] ?? Boolean(assignment.grades_released);
       return {
         title: (
           <div className="flex flex-col gap-0.5 min-w-0">
@@ -370,35 +357,15 @@ const GradesTable = (props: GradesTableProps) => {
               {assignment.weight}%{assignment.is_extra_credit ? ' EC' : ''}
               {due ? ` · due ${due}` : ''}
             </span>
-            <span className="flex items-center gap-2 pt-0.5">
-              <Tooltip
-                title={isReleased ? 'Students can see these grades' : 'Grades hidden from students'}
-              >
-                <span
-                  className="inline-flex items-center gap-1 text-[11px] font-semibold"
-                  onClick={e => e.stopPropagation()}
-                  role="presentation"
-                >
-                  <Switch
-                    size="small"
-                    checked={isReleased}
-                    onChange={value => toggleRelease(assignment, value)}
-                    aria-label={`Grades released for ${assignment.title}`}
-                  />
-                  <span
-                    className={isReleased ? 'text-green-700 dark:text-green-300' : 'text-ink-3'}
-                  >
-                    {isReleased ? 'Released' : 'Hidden'}
-                  </span>
-                </span>
-              </Tooltip>
-              {pending > 0 && <Chip tone="blue">{pending} to grade</Chip>}
-            </span>
+            {pending > 0 && (
+              <span className="pt-0.5">
+                <Chip tone="blue">{pending} to grade</Chip>
+              </span>
+            )}
           </div>
         ),
         key: `a-${assignment.id}`,
         width: 170,
-        align: 'center' as const,
         sorter: (a: Student, b: Student) =>
           (gradeOf(a, assignment.id) ?? -1) - (gradeOf(b, assignment.id) ?? -1),
         render: (_: unknown, student: Student) => renderCell(student, assignment),
@@ -425,7 +392,7 @@ const GradesTable = (props: GradesTableProps) => {
               .map(s => gradeOf(s, a.id))
               .filter((g): g is number => g !== null);
             return (
-              <Table.Summary.Cell key={a.id} index={i + 2} align="center">
+              <Table.Summary.Cell key={a.id} index={i + 2}>
                 <span className="text-xs text-ink-2 tabular-nums">
                   {grades.length ? mean(grades).toFixed(1) : '–'}
                 </span>
