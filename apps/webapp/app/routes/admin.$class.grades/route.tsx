@@ -28,10 +28,10 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
 
   const promises = {
     emojiMappings: ClassmojiService.emojiMapping.findByClassroomId(classroom.id),
-    // Column groups: one per module, in module order.
-    modules: ClassmojiService.module.findByClassroomSlug(classSlug!).then(modules =>
-      modules.map(m => ({ id: m.id, title: m.title, position: m.position }))
-    ),
+    // Modules, for the payload the tests pin; the grid itself does not group.
+    modules: ClassmojiService.module
+      .findByClassroomSlug(classSlug!)
+      .then(modules => modules.map(m => ({ id: m.id, title: m.title, position: m.position }))),
     // Everything below is serialised to the browser, so each source is
     // projected down to the fields the table renders. The services return whole
     // `User` and `ClassroomMembership` rows — which carry contact details, the
@@ -75,8 +75,8 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
           letter_grade: m.letter_grade,
         }))
       ),
-    // The columns: every published assignment, flat, naming its module.
-    // Grading weight lives here now, not on the repository.
+    // The columns: every published assignment, flat, in deadline order; the
+    // module is a caption, never a grouping. Grading weight lives here.
     assignments: ClassmojiService.assignment
       .listForClassroom(classroom.id, { publishedOnly: true })
       .then(assignments =>
@@ -87,7 +87,11 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
           is_extra_credit: a.is_extra_credit,
           type: a.type,
           module_id: a.module_id,
+          module_title: a.module?.title,
           repository_id: a.repository_id,
+          student_deadline: a.student_deadline,
+          submission_mode: a.submission_mode,
+          grades_released: a.grades_released,
         }))
       ),
   };

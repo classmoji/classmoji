@@ -200,23 +200,17 @@ const OWNER_STEPS: FeatureStep[] = [
     link: '/grades',
     selector: '[data-tour="grades-view-toggle"]',
     placement: 'bottom',
-    title: 'Emoji grading',
+    title: 'Score, emoji or letter',
     description:
-      'Classmoji grades with emojis instead of bare numbers, and each emoji maps to a numeric value from 0 to 100 that you set in settings. A submission’s grade is the average of the emoji values you apply. Use this toggle to read the gradebook as expressive emoji or as the exact numbers behind them.',
+      'Each emoji maps to a numeric value from 0 to 100 that you set in settings, and a submission’s grade is the average of the emojis it received. Read the gradebook as the numbers, the emojis behind them, or the letter each number earns.',
   },
   {
     link: '/grades',
-    selector: '[data-tour="grades-show-assignments"]',
+    selector: '[data-tour="grades-filter"]',
     placement: 'bottom',
-    title: 'Show assignments',
-    description: 'Expand each module into its individual assignment grade columns.',
-  },
-  {
-    link: '/grades',
-    selector: '[data-tour="grades-show-comments"]',
-    placement: 'bottom',
-    title: 'Show comments',
-    description: 'Reveal the per-student comment column alongside grades.',
+    title: 'Who needs attention',
+    description:
+      'Narrow the rows to students with something waiting to be graded, a missing submission, or a late one. Cells are tinted the same way, and clicking a cell opens that student on the assignment page, where grading happens.',
   },
   {
     link: '/grades',

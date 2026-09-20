@@ -2,7 +2,15 @@ import { Button, Dropdown, Switch, Tag, Tooltip } from 'antd';
 import type { MenuProps } from 'antd';
 import dayjs from 'dayjs';
 import { IconChevronLeft, IconDotsVertical, IconRobot } from '@tabler/icons-react';
-import { Link, Outlet, redirect, useLocation, useNavigate, useRevalidator } from 'react-router';
+import {
+  Link,
+  Outlet,
+  redirect,
+  useLocation,
+  useNavigate,
+  useRevalidator,
+  useSearchParams,
+} from 'react-router';
 import { useMemo, useState } from 'react';
 import { namedAction } from 'remix-utils/named-action';
 
@@ -187,7 +195,9 @@ const AssignmentPage = ({ loaderData }: Route.ComponentProps) => {
   const { pathname } = useLocation();
   const { revalidate } = useRevalidator();
   const [editing, setEditing] = useState(false);
-  const [query, setQuery] = useState('');
+  // The gradebook links here with ?q=<login> to land on one student's row.
+  const [searchParams] = useSearchParams();
+  const [query, setQuery] = useState(searchParams.get('q') ?? '');
   const [filter, setFilter] = useState<SubmissionFilter>('all');
 
   const repository = assignment.repository!;
