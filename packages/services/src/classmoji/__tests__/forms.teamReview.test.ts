@@ -107,17 +107,6 @@ describe.skipIf(!RUN)('forms team review', () => {
     return team.id;
   };
 
-  // Every repository lives in a module; one shared module per suite run.
-  const ensureModule = async () => {
-    const module = await prisma.module.upsert({
-      where: { classroom_id_title: { classroom_id: classroomId, title: `Module ${suite}` } },
-      create: { classroom_id: classroomId, title: `Module ${suite}`, slug: `module-${suite}` },
-      update: {},
-      select: { id: true },
-    });
-    return module.id;
-  };
-
   const makeRepository = async ({
     title,
     slug,
@@ -131,7 +120,6 @@ describe.skipIf(!RUN)('forms team review', () => {
       await prisma.repository.create({
         data: {
           classroom_id: classroomId,
-          module_id: await ensureModule(),
           title: `${title} ${suite}`,
           slug,
           template: 'template',

@@ -3,8 +3,8 @@
  * lifecycle). Both fire ZERO external effects (pure DB — no GitHub, no
  * Trigger.dev, no email), so only the service boundary is mocked.
  *
- * The security-critical assertions: create re-verifies the PARENT container's
- * classroom (S1) and NEVER trusts a request classroom_id; delete re-verifies
+ * The security-critical assertions: create re-verifies BOTH the module and the
+ * repository's classroom (S1) and NEVER trusts a request classroom_id; delete re-verifies
  * the assignment's own classroom; both refuse cross-classroom targets with the
  * uniform scopedNotFound.
  */
@@ -13,6 +13,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ToolContext } from '../../mcp/registry.ts';
 
 const mocks = vi.hoisted(() => ({
+  moduleFindById: vi.fn(),
   repositoryFindById: vi.fn(),
   assignmentFindById: vi.fn(),
   assignmentCreate: vi.fn(),
@@ -22,6 +23,7 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock('@classmoji/services', () => ({
   ClassmojiService: {
+    module: { findById: (...a: unknown[]) => mocks.moduleFindById(...a) },
     repository: { findById: (...a: unknown[]) => mocks.repositoryFindById(...a) },
     assignment: {
       findById: (...a: unknown[]) => mocks.assignmentFindById(...a),
@@ -52,23 +54,21 @@ function parse(result: { content: Array<{ text: string }> }) {
 beforeEach(() => {
   for (const m of Object.values(mocks)) m.mockReset();
   mocks.auditCreate.mockResolvedValue(undefined);
+  mocks.moduleFindById.mockResolvedValue({ id: 'mod-1', classroom_id: 'class-1' });
 });
 
 describe('assignment_create', () => {
   const ARGS = {
     classroom: 'org/winter-2025',
+    module_id: 'mod-1',
     repository_id: 'repo-1',
     title: 'Lab 3',
     weight: 50,
     student_deadline: '2026-07-20T23:59:00-04:00',
   };
 
-  it('creates under a verified parent container and audits CREATE', async () => {
-    mocks.repositoryFindById.mockResolvedValue({
-      id: 'repo-1',
-      classroom_id: 'class-1',
-      module_id: 'mod-1',
-    });
+  it('creates in a verified module through a verified repository and audits CREATE', async () => {
+    mocks.repositoryFindById.mockResolvedValue({ id: 'repo-1', classroom_id: 'class-1' });
     mocks.assignmentCreate.mockResolvedValue({
       id: 'asg-new',
       title: 'Lab 3',
@@ -85,8 +85,8 @@ describe('assignment_create', () => {
     expect(payload.success).toBe(true);
     expect(payload.assignment.id).toBe('asg-new');
 
-    // repository_id passed to create is the VERIFIED parent's id, and the
-    // assignment lands in that parent's module as a REPO assignment.
+    // repository_id and module_id passed to create are the VERIFIED ids, and
+    // the assignment is a REPO assignment.
     const data = mocks.assignmentCreate.mock.calls[0][0] as {
       repository_id: string;
       module_id: string;
@@ -99,6 +99,16 @@ describe('assignment_create', () => {
     expect(data.title).toBe('Lab 3');
     expect(mocks.auditCreate).toHaveBeenCalledTimes(1);
     expect((mocks.auditCreate.mock.calls[0][0] as { action: string }).action).toBe('CREATE');
+  });
+
+  it('refuses a module that belongs to another classroom (S1)', async () => {
+    mocks.moduleFindById.mockResolvedValue({ id: 'mod-1', classroom_id: 'OTHER-class' });
+    mocks.repositoryFindById.mockResolvedValue({ id: 'repo-1', classroom_id: 'class-1' });
+    await expect(assignmentCreateTool.handler(ARGS, CTX)).rejects.toMatchObject({
+      kind: 'not_found',
+    });
+    expect(mocks.assignmentCreate).not.toHaveBeenCalled();
+    expect(mocks.auditCreate).not.toHaveBeenCalled();
   });
 
   it('refuses a parent container in another classroom (S1) and never creates', async () => {

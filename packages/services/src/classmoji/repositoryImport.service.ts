@@ -175,7 +175,12 @@ export const cloneQuiz = async (
  * unpublished: importing never publishes anything by itself.
  */
 export const ensureTargetModule = async (
-  sourceModule: { title: string; slug: string | null; description: string | null; position: number },
+  sourceModule: {
+    title: string;
+    slug: string | null;
+    description: string | null;
+    position: number;
+  },
   targetClassroomId: string,
   tx: RepositoryImportClient = getPrisma()
 ) => {
@@ -212,7 +217,7 @@ export const cloneModule = async (
     includeAssignments?: boolean;
     includeQuizzes?: boolean;
     stripDeadlines?: boolean;
-    /** Module in the target classroom to place the clone in. Created from the source's module when omitted. */
+    /** Module in the target classroom for the cloned assignments. Created from each source assignment's module when omitted. */
     targetModuleId?: string;
   } = {},
   tx: RepositoryImportClient = getPrisma()
@@ -222,10 +227,9 @@ export const cloneModule = async (
   const sourceModule = await tx.repository.findUnique({
     where: { id: sourceRepositoryId },
     include: {
-      assignments: true,
+      assignments: { include: { module: true } },
       quizzes: true,
       tag: true,
-      module: true,
     },
   });
 
@@ -240,17 +244,30 @@ export const cloneModule = async (
     targetTagId = clonedTag.id;
   }
 
-  // Every repository lives in a module: reuse the caller's, or find/create the
-  // target classroom's counterpart of the source module by title.
-  const targetModuleId =
-    options.targetModuleId ??
-    (await ensureTargetModule(sourceModule.module, targetClassroomId, tx)).id;
+  // A repository has no module; its assignments do. Reuse the caller's target
+  // module, or find/create the target classroom's counterpart of each source
+  // assignment's module by title.
+  const moduleIdMap: Record<string, string> = {};
+  const targetModuleFor = async (sourceAssignmentModule: {
+    id: string;
+    title: string;
+    slug: string | null;
+    description: string | null;
+    position: number;
+  }) => {
+    if (options.targetModuleId) return options.targetModuleId;
+    if (!moduleIdMap[sourceAssignmentModule.id]) {
+      moduleIdMap[sourceAssignmentModule.id] = (
+        await ensureTargetModule(sourceAssignmentModule, targetClassroomId, tx)
+      ).id;
+    }
+    return moduleIdMap[sourceAssignmentModule.id];
+  };
 
   // Create the repository
   const newModule = await tx.repository.create({
     data: {
       classroom_id: targetClassroomId,
-      module_id: targetModuleId,
       title: titleToIdentifier(sourceModule.title),
       slug: sourceModule.slug,
       template: sourceModule.template,
@@ -283,14 +300,16 @@ export const cloneModule = async (
       // Source repository id → newly cloned repository id.
       repositories: { [sourceRepositoryId]: newModule.id },
       quizzes: {},
-      // Source module id → the target module the clone landed in.
-      modules: { [sourceModule.module_id]: targetModuleId },
+      // Source module id → the target module its cloned assignments landed in.
+      modules: moduleIdMap,
     },
   };
 
   // Clone assignments
   if (includeAssignments && sourceModule.assignments.length > 0) {
     for (const assignment of sourceModule.assignments) {
+      const targetModuleId = await targetModuleFor(assignment.module);
+      if (options.targetModuleId) moduleIdMap[assignment.module.id] = options.targetModuleId;
       const clonedAssignment = await cloneAssignment(
         assignment.id,
         newModule.id,
@@ -411,7 +430,6 @@ export const getModulesForImport = async (classroomId: string) => {
       title: true,
       template: true,
       type: true,
-      module: { select: { id: true, title: true } },
       _count: {
         select: {
           assignments: true,

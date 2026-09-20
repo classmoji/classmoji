@@ -268,7 +268,6 @@ export const repoUnpublishTool: ToolDefinition<RepoUnpublishArgs> = {
 
 interface RepoCreateArgs {
   classroom: string;
-  module_id: string;
   title: string;
   template: string;
   type?: 'INDIVIDUAL' | 'GROUP';
@@ -289,17 +288,17 @@ export const repoCreateTool: ToolDefinition<RepoCreateArgs> = {
   annotations: { destructive: false, openWorld: true },
   title: 'Create an assignment container (repo)',
   description:
-    'Creates an UNPUBLISHED assignment container (a "repo"/lab) inside a module of the classroom. ' +
-    'Owner only. No student git repos are created — the container starts empty and hidden; add ' +
-    'assignments with assignment_create, then provision student repos with repo_publish. Grading ' +
-    'weight lives on assignments, not the repo. For a GROUP repo with instructor-assigned teams, ' +
+    'Creates an UNPUBLISHED repository (a GitHub template students are provisioned from). ' +
+    'Owner only. A repository has no module: it is the submission target of REPO assignments, ' +
+    'which live in modules. No student git repos are created — the repo starts hidden; attach ' +
+    'assignments with assignment_create (module_id + repository_id), then provision student repos ' +
+    'with repo_publish. Grading weight lives on assignments, not the repo. For a GROUP repo with instructor-assigned teams, ' +
     "pass tag_id (a team tag in this classroom). Refreshes the classroom's content manifest on " +
     'GitHub (best-effort).',
   scope: 'write',
   roles: OWNER_ONLY,
   inputSchema: {
     classroom: z.string().describe("Classroom reference as 'org/slug'"),
-    module_id: z.string().uuid().describe('Module the repo belongs to (see list_modules)'),
     title: z.string().min(1).max(200).describe('Repo/lab title (unique per classroom)'),
     template: z
       .string()
@@ -334,12 +333,6 @@ export const repoCreateTool: ToolDefinition<RepoCreateArgs> = {
     const type = args.type ?? 'INDIVIDUAL';
     const teamMode = args.team_formation_mode ?? 'INSTRUCTOR';
 
-    // S1: the module the repo lands in must belong to THIS classroom.
-    const module = await ClassmojiService.module.findById(args.module_id);
-    if (!module || module.classroom_id !== classroom.classroomId) {
-      throw scopedNotFound('Module');
-    }
-
     // S1 for the other cross-record reference: a supplied tag must belong to THIS
     // classroom (Tag has no findById — validate via the classroom-scoped list).
     if (args.tag_id) {
@@ -362,7 +355,6 @@ export const repoCreateTool: ToolDefinition<RepoCreateArgs> = {
       created = await ClassmojiService.repository.create({
         // classroom_id is ALWAYS the authorized classroom, never request input.
         classroom_id: classroom.classroomId,
-        module_id: module.id,
         title: args.title,
         template: args.template,
         type,
@@ -402,7 +394,7 @@ export const repoCreateTool: ToolDefinition<RepoCreateArgs> = {
       resource_type: 'REPOSITORIES',
       resource_id: created.id,
       action: 'CREATE',
-      data: { tool: 'repo_create', title: args.title, type, module_id: module.id },
+      data: { tool: 'repo_create', title: args.title, type },
     });
 
     return ok({
@@ -412,7 +404,6 @@ export const repoCreateTool: ToolDefinition<RepoCreateArgs> = {
         title: created.title,
         slug: created.slug,
         type: created.type,
-        module_id: created.module_id,
         is_published: created.is_published,
       },
     });

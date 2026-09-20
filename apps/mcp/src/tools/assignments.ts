@@ -29,6 +29,8 @@ import {
   ok,
   OWNER_ONLY,
   OWNER_TEACHER,
+  requireClassroomCtx,
+  scopedNotFound,
   writeAudit,
 } from './shared.ts';
 
@@ -125,6 +127,7 @@ export const assignmentUpdateTool: ToolDefinition<AssignmentUpdateArgs> = {
 
 interface AssignmentCreateArgs {
   classroom: string;
+  module_id: string;
   repository_id: string;
   title: string;
   weight?: number;
@@ -142,15 +145,19 @@ export const assignmentCreateTool: ToolDefinition<AssignmentCreateArgs> = {
   annotations: { destructive: false },
   title: 'Create an assignment',
   description:
-    'Creates an assignment (a due-dated, gradeable slice of a repo/lab) under an existing ' +
-    'repository (assignment container). Owner only. Creating it does NOT provision anything on ' +
+    'Creates a REPO assignment (due-dated, gradeable) in a module, submitting through an ' +
+    'existing repository (see list_repos). Owner only. Creating it does NOT provision anything on ' +
     'GitHub — the assignment reaches students only when its repo is published (repo_publish) or ' +
     'the next release runs. Created as a draft unless is_published is set.',
   scope: 'write',
   roles: OWNER_ONLY,
   inputSchema: {
     classroom: z.string().describe("Classroom reference as 'org/slug'"),
-    repository_id: z.string().uuid().describe('Parent repo (assignment container) id'),
+    module_id: z.string().uuid().describe('Module the assignment belongs to (see list_modules)'),
+    repository_id: z
+      .string()
+      .uuid()
+      .describe('Repository students submit through (see list_repos)'),
     title: z.string().min(1).max(200).describe('Assignment title (unique per repository)'),
     weight: z.number().positive().max(10000).optional().describe('Grading weight (default 100)'),
     is_extra_credit: z
@@ -182,15 +189,20 @@ export const assignmentCreateTool: ToolDefinition<AssignmentCreateArgs> = {
     is_published: z.boolean().optional().describe('Publish immediately (default false = draft)'),
   },
   handler: async (args, ctx) => {
-    // S1: the assignment row does not exist yet, so re-verify ownership of the
-    // PARENT container. classroom_id on the new row derives from the verified
-    // parent's repository_id — never from request input.
+    // S1: the assignment row does not exist yet, so verify BOTH cross-record
+    // references belong to this classroom: the module it lives in and the
+    // repository it submits through. Never trust request input for scope.
+    const classroom = requireClassroomCtx(ctx);
+    const module = await ClassmojiService.module.findById(args.module_id);
+    if (!module || module.classroom_id !== classroom.classroomId) {
+      throw scopedNotFound('Module');
+    }
     const repository = await loadRepositoryInClassroom(args.repository_id, ctx);
 
-    // A REPO assignment lives in its repository's module; the tool creates
-    // REPO assignments only (quiz/form assignments are a later phase).
+    // The tool creates REPO assignments only (quiz/form assignments are a
+    // later phase).
     const data: Prisma.AssignmentUncheckedCreateInput = {
-      module_id: repository.module_id,
+      module_id: module.id,
       type: 'REPO',
       repository_id: repository.id,
       title: args.title,

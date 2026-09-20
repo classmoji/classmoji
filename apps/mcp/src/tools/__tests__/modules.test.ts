@@ -269,7 +269,7 @@ describe('cross-classroom scoping (S1)', () => {
     expect(mocks.auditCreate).not.toHaveBeenCalled();
   });
 
-  it('refuses REPOSITORY before any lookup: repos join a module through repo_create', async () => {
+  it('refuses REPOSITORY before any lookup: repos are attached to assignments', async () => {
     const error = await moduleItemAddTool
       .handler(
         {
@@ -282,7 +282,7 @@ describe('cross-classroom scoping (S1)', () => {
       )
       .catch(e => e);
     expect((error as ToolError).kind).toBe('invalid_params');
-    expect((error as ToolError).message).toContain('repo_create');
+    expect((error as ToolError).message).toContain('assignment_create');
     expect(mocks.moduleAddItem).not.toHaveBeenCalled();
     expect(mocks.auditCreate).not.toHaveBeenCalled();
   });

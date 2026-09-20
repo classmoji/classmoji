@@ -8,9 +8,10 @@ interface ModuleWriteInput {
 }
 
 /**
- * The item types a module's ordered content list still carries. Repositories
- * belong to a module through `Repository.module_id` (and assignments through
- * `Assignment.module_id`), not through an item row; see the legacy block below.
+ * The item types a module's ordered content list still carries. Assignments
+ * belong to a module through `Assignment.module_id`, not through an item row;
+ * a repository is storage a REPO assignment points at and is not a module
+ * member at all. See the legacy block below.
  */
 export type ContentItemType = Exclude<ModuleItemType, 'REPOSITORY'>;
 
@@ -37,8 +38,8 @@ const ITEM_TYPE_COLUMN: Record<
 };
 
 // Items carry their full target. Legacy REPOSITORY rows still resolve their
-// repository (with publish state) so ordering and visibility keep working;
-// the rich repository shape now lives on `DETAIL_INCLUDE.repositories`.
+// repository (with publish state) so the visibility predicates keep working;
+// the UI no longer renders them.
 const ITEM_INCLUDE = {
   page: true,
   slide: true,
@@ -47,27 +48,20 @@ const ITEM_INCLUDE = {
   repository: true,
 } satisfies Prisma.ModuleItemInclude;
 
-// A module's own coursework: the repositories that belong to it (with their
-// assignments and attached resources, the shape the read-only tree needs) and
-// its assignments of every kind, each with its target resolved.
-const REPOSITORY_INCLUDE = {
-  assignments: { orderBy: [{ student_deadline: 'asc' }, { title: 'asc' }] },
-  pages: { include: { page: true }, orderBy: { order: 'asc' } },
-  slides: { include: { slide: true }, orderBy: { order: 'asc' } },
-  quizzes: true,
-  _count: { select: { git_repos: true } },
-} satisfies Prisma.RepositoryInclude;
-
+// A module's own coursework: its assignments of every kind, each with its
+// target resolved (the repository a REPO assignment submits through, the
+// quiz, or the form) and the pages / slide decks attached to it.
 const ASSIGNMENT_INCLUDE = {
   repository: { select: { id: true, title: true, slug: true, type: true, is_published: true } },
   quiz: { select: { id: true, name: true, status: true } },
   form: { select: { id: true, title: true, slug: true, status: true } },
+  pages: { include: { page: true }, orderBy: { order: 'asc' } },
+  slides: { include: { slide: true }, orderBy: { order: 'asc' } },
   _count: { select: { git_repo_assignments: true } },
 } satisfies Prisma.AssignmentInclude;
 
 const DETAIL_INCLUDE = {
   items: { orderBy: { position: 'asc' }, include: ITEM_INCLUDE },
-  repositories: { include: REPOSITORY_INCLUDE, orderBy: { title: 'asc' } },
   assignments: {
     include: ASSIGNMENT_INCLUDE,
     orderBy: [{ student_deadline: { sort: 'asc', nulls: 'last' } }, { title: 'asc' }],
@@ -190,15 +184,15 @@ export const findByClassroomSlug = async (classroomSlug: string) => {
 
   return getPrisma().module.findMany({
     where: { classroom_id: classroomId },
-    include: { _count: { select: { items: true, repositories: true, assignments: true } } },
+    include: { _count: { select: { items: true, assignments: true } } },
     orderBy: [{ position: 'asc' }, { created_at: 'asc' }],
   });
 };
 
 /**
  * One module with everything it owns, for the admin module page: its
- * repositories (with assignments and attached resources), its assignments of
- * every kind, and its ordered content items scoped to the classroom.
+ * assignments of every kind (targets resolved) and its ordered content items
+ * scoped to the classroom.
  */
 export const listModuleContents = async (moduleId: string, classroomId: string) => {
   const module = await getPrisma().module.findFirst({
@@ -286,15 +280,15 @@ export const listForClassroom = async (
 
   if (includeUnpublished) return modulesWithScopedItems;
 
-  // Drop items, repositories and assignments that are not published.
-  // Module-level publish is already filtered in the query above.
+  // Drop items and assignments that are not published. A REPO assignment also
+  // needs its repository published: until then no student repo exists to
+  // submit through. Module-level publish is already filtered in the query.
   return modulesWithScopedItems.map(m => ({
     ...m,
     items: m.items.filter(isItemPublished),
-    repositories: (m.repositories ?? [])
-      .filter(r => r.is_published)
-      .map(r => ({ ...r, assignments: (r.assignments ?? []).filter(a => a.is_published) })),
-    assignments: (m.assignments ?? []).filter(a => a.is_published),
+    assignments: (m.assignments ?? []).filter(
+      a => a.is_published && (a.type !== 'REPO' || a.repository?.is_published === true)
+    ),
   }));
 };
 
@@ -432,15 +426,14 @@ export const updateForClassroom = async (
 
 export const deleteById = async (id: string, classroomId?: string) => {
   if (classroomId) await assertModuleInClassroom(id, classroomId);
-  // A module that still owns coursework cannot go: its repositories carry
-  // student git repos, grades and regrades (the FK is RESTRICT for that
-  // reason), and its assignments would cascade away. Move or delete them first.
+  // A module that still owns assignments cannot go: deleting it would cascade
+  // into their submissions, grades and regrades. Move or delete them first.
   const owned = await getPrisma().module.findUnique({
     where: { id },
-    select: { _count: { select: { repositories: true, assignments: true } } },
+    select: { _count: { select: { assignments: true } } },
   });
-  if (owned && (owned._count.repositories > 0 || owned._count.assignments > 0)) {
-    throw new Error('Module still has repositories or assignments');
+  if (owned && owned._count.assignments > 0) {
+    throw new Error('Module still has assignments');
   }
   // ModuleItem rows cascade; the underlying pages/quizzes/slides/forms remain.
   return getPrisma().module.delete({ where: { id } });
@@ -472,8 +465,8 @@ export const setPublic = async (id: string, isPublic: boolean, classroomId?: str
 /**
  * Append a content item of the given type to a module (at max position + 1).
  * The unique (module, target) constraint prevents adding the same item twice.
- * REPOSITORY is not a content item any more: a repository joins a module
- * through `Repository.module_id` (see the legacy block at the bottom).
+ * REPOSITORY is not a content item any more: a repository reaches a module
+ * only through a REPO assignment (see the legacy block at the bottom).
  */
 export const addItem = async (
   moduleId: string,
@@ -483,7 +476,7 @@ export const addItem = async (
 ) => {
   const prisma = getPrisma();
   if (!CONTENT_ITEM_TYPES.includes(type)) {
-    throw new Error('Repositories belong to a module through their module, not as an item');
+    throw new Error('Repositories are attached to assignments, not placed in modules as items');
   }
   if (classroomId) {
     await assertModuleInClassroom(moduleId, classroomId);
@@ -530,8 +523,7 @@ export const reorderItems = async (
   const prisma = getPrisma();
   if (classroomId) await assertModuleInClassroom(moduleId, classroomId);
 
-  // Legacy REPOSITORY items are hidden from the admin content list (the
-  // module's repositories are shown from Repository.module_id instead), so the
+  // Legacy REPOSITORY items are hidden from the admin content list, so the
   // caller orders only the content items; those rows keep their positions.
   const existingItems = await prisma.moduleItem.findMany({
     where: { module_id: moduleId, item_type: { not: 'REPOSITORY' } },
@@ -564,11 +556,12 @@ export const CONTENT_ITEM_TYPES: ContentItemType[] = [
 ];
 
 // ── Legacy REPOSITORY items ──────────────────────────────────────────────────
-// `ModuleItemType.REPOSITORY` rows predate `Repository.module_id`. They are
-// kept read-only (the migration made `item.module_id == repository.module_id`
-// hold) so existing ordering renders; nothing writes new ones, `addItem`
-// refuses the type, and the visibility predicates above still resolve them
-// from the repository's own publish flag. Dropping the enum value is a later
-// cleanup once the module page no longer reads them.
+// `ModuleItemType.REPOSITORY` rows predate typed assignments. They are kept
+// read-only and no UI renders them; nothing writes new ones, `addItem` refuses
+// the type, and the visibility predicates above still resolve them from the
+// repository's own publish flag. Dropping the enum value is a later cleanup.
 /** @deprecated Use CONTENT_ITEM_TYPES; REPOSITORY is read-only. */
-export const MODULE_ITEM_TYPES: ModuleItemType[] = [...CONTENT_ITEM_TYPES, ModuleItemType.REPOSITORY];
+export const MODULE_ITEM_TYPES: ModuleItemType[] = [
+  ...CONTENT_ITEM_TYPES,
+  ModuleItemType.REPOSITORY,
+];

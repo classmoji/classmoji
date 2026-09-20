@@ -315,11 +315,11 @@ export interface Fixtures {
   /** fake-student-3's individual submission (has a seeded 🔴 grade). */
   student3Gra: { id: string };
   /** 'Hello World Part 1' in dev — grades_released=true in the seed. */
-  releasedAssignment: { id: string; title: string };
+  releasedAssignment: { id: string; title: string; module_id: string };
   /** 'Other Assignment 1' in the foreign classroom (S1 target). */
   foreignAssignment: { id: string };
   /** 'hello-world' container in dev (module-item target). */
-  devRepository: { id: string; module_id: string };
+  devRepository: { id: string };
   /** 'other-hello-world' container in the foreign classroom (S1 item target). */
   foreignRepository: { id: string };
 }
@@ -374,7 +374,7 @@ export async function loadFixtures(): Promise<Fixtures> {
 
   const releasedAssignment = await prisma.assignment.findFirstOrThrow({
     where: { title: 'Hello World Part 1', repository: { classroom_id: dev.id } },
-    select: { id: true, title: true },
+    select: { id: true, title: true, module_id: true },
   });
   const foreignAssignment = await prisma.assignment.findFirstOrThrow({
     where: { title: 'Other Assignment 1', repository: { classroom_id: foreign.id } },
@@ -382,7 +382,7 @@ export async function loadFixtures(): Promise<Fixtures> {
   });
   const devRepository = await prisma.repository.findFirstOrThrow({
     where: { classroom_id: dev.id, title: 'hello-world' },
-    select: { id: true, module_id: true },
+    select: { id: true },
   });
   const foreignRepository = await prisma.repository.findFirstOrThrow({
     where: { classroom_id: foreign.id, title: 'other-hello-world' },

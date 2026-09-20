@@ -223,8 +223,8 @@ function buildExampleSandbox(args: {
         else studentUsers.push({ id: user.id, login: p.login });
       }
 
-      // Module -> repository + two assignments (Part 1 graded + released,
-      // Part 2 awaiting grading).
+      // Module -> two assignments submitting through one repository (Part 1
+      // graded + released, Part 2 awaiting grading).
       const courseModule = await tx.module.create({
         data: {
           classroom_id: classroom.id,
@@ -237,20 +237,10 @@ function buildExampleSandbox(args: {
       const courseRepository = await tx.repository.create({
         data: {
           classroom_id: classroom.id,
-          module_id: courseModule.id,
           title: 'hello-world',
           template: 'classmoji-examples/hello-world-template',
           type: 'INDIVIDUAL',
           is_published: true,
-        },
-      });
-      // Legacy REPOSITORY module item, kept for ordering on the module page.
-      await tx.moduleItem.create({
-        data: {
-          module_id: courseModule.id,
-          item_type: 'REPOSITORY',
-          repository_id: courseRepository.id,
-          position: 0,
         },
       });
       const assignment1 = await tx.assignment.create({

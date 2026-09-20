@@ -239,8 +239,8 @@ export const moduleItemAddTool: ToolDefinition<ModuleItemAddArgs> = {
     item_type: z
       .enum(['PAGE', 'REPOSITORY', 'QUIZ', 'SLIDE', 'FORM'])
       .describe(
-        'What kind of content the item links. REPOSITORY is no longer an item: a repository ' +
-          'belongs to a module through repo_create module_id.'
+        'What kind of content the item links. REPOSITORY is no longer an item: repositories ' +
+          'are attached to assignments (assignment_create with repository_id).'
       ),
     target_id: z.string().uuid().describe('Id of the page/quiz/slide/form to link'),
   },
@@ -254,12 +254,12 @@ export const moduleItemAddTool: ToolDefinition<ModuleItemAddArgs> = {
     // unchanged for a free-tier classroom.
     if (args.item_type === 'FORM') await assertProTier(ctx);
 
-    // Repositories join a module through Repository.module_id (repo_create),
-    // not as a content item. Refused before any lookup.
+    // Repositories are attached to assignments, not placed in modules as
+    // content items. Refused before any lookup.
     if (args.item_type === 'REPOSITORY') {
       throw new ToolError(
         'invalid_params',
-        'Repositories belong to a module through repo_create module_id, not as a module item.'
+        'Repositories are attached to assignments; use assignment_create with repository_id.'
       );
     }
 

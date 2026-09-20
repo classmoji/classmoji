@@ -154,9 +154,9 @@ describe('addItem', () => {
     });
   });
 
-  it('refuses REPOSITORY: repositories join a module through Repository.module_id', async () => {
+  it('refuses REPOSITORY: repositories are attached to assignments, not modules', async () => {
     await expect(addItem('mod1', 'REPOSITORY' as never, 'repo1')).rejects.toThrow(
-      'Repositories belong to a module through their module'
+      'Repositories are attached to assignments'
     );
     expect(itemCreate).not.toHaveBeenCalled();
   });

@@ -267,9 +267,9 @@ export type AssignmentTargetType = 'REPO' | 'QUIZ' | 'FORM';
 
 /**
  * Exactly one target, matching the kind. Mirrors the assignments_type_target
- * CHECK so a caller gets a readable error instead of a constraint violation,
- * and adds the cross-row rule the CHECK cannot express: a REPO assignment's
- * module is its repository's module.
+ * CHECK so a caller gets a readable error instead of a constraint violation.
+ * A repository is storage a REPO assignment points at, not a module member,
+ * so assignments in different modules may share one repository.
  */
 const validateTarget = async (data: Prisma.AssignmentUncheckedCreateInput) => {
   const type = (data.type ?? 'REPO') as AssignmentTargetType;
@@ -291,12 +291,9 @@ const validateTarget = async (data: Prisma.AssignmentUncheckedCreateInput) => {
   if (type === 'REPO') {
     const repository = await getPrisma().repository.findUnique({
       where: { id: targets.repository_id! },
-      select: { module_id: true },
+      select: { id: true },
     });
     if (!repository) throw new Error('Repository not found');
-    if (repository.module_id !== data.module_id) {
-      throw new Error('Assignment repository must belong to the same module');
-    }
   }
   return type;
 };
@@ -436,7 +433,65 @@ export interface AssignmentWriteInput {
   release_at?: Date | string | null;
   tokens_per_hour?: number;
   grades_released?: boolean;
+  /** Pages / slide decks attached to the assignment; replaces the current set when given. */
+  page_ids?: string[];
+  slide_ids?: string[];
 }
+
+/**
+ * Replace the pages / slide decks linked to an assignment. Links the caller
+ * leaves out are removed; links already present are kept (no churn on the
+ * `order` column).
+ */
+const syncContentLinks = async (
+  assignmentId: string,
+  pageIds: string[] | undefined,
+  slideIds: string[] | undefined
+) => {
+  const prisma = getPrisma();
+  if (pageIds) {
+    const current = (
+      await prisma.pageLink.findMany({
+        where: { assignment_id: assignmentId },
+        select: { page_id: true },
+      })
+    ).map(l => l.page_id);
+    const toAdd = pageIds.filter(id => !current.includes(id));
+    const toRemove = current.filter(id => !pageIds.includes(id));
+    if (toAdd.length) {
+      await prisma.pageLink.createMany({
+        data: toAdd.map(page_id => ({ page_id, assignment_id: assignmentId })),
+        skipDuplicates: true,
+      });
+    }
+    if (toRemove.length) {
+      await prisma.pageLink.deleteMany({
+        where: { assignment_id: assignmentId, page_id: { in: toRemove } },
+      });
+    }
+  }
+  if (slideIds) {
+    const current = (
+      await prisma.slideLink.findMany({
+        where: { assignment_id: assignmentId },
+        select: { slide_id: true },
+      })
+    ).map(l => l.slide_id);
+    const toAdd = slideIds.filter(id => !current.includes(id));
+    const toRemove = current.filter(id => !slideIds.includes(id));
+    if (toAdd.length) {
+      await prisma.slideLink.createMany({
+        data: toAdd.map(slide_id => ({ slide_id, assignment_id: assignmentId })),
+        skipDuplicates: true,
+      });
+    }
+    if (toRemove.length) {
+      await prisma.slideLink.deleteMany({
+        where: { assignment_id: assignmentId, slide_id: { in: toRemove } },
+      });
+    }
+  }
+};
 
 const toDate = (value: Date | string | null | undefined): Date | null | undefined =>
   value === undefined ? undefined : value === null ? null : new Date(value);
@@ -481,7 +536,7 @@ export const createInClassroom = async (classroomId: string, input: AssignmentWr
     if (!form) throw new Error('Form not found in classroom');
   }
 
-  return create({
+  const created = await create({
     module_id: input.module_id,
     type: input.type,
     repository_id: input.repository_id ?? null,
@@ -498,6 +553,8 @@ export const createInClassroom = async (classroomId: string, input: AssignmentWr
     tokens_per_hour: input.tokens_per_hour ?? 0,
     grades_released: input.grades_released ?? false,
   });
+  await syncContentLinks(created.id, input.page_ids, input.slide_ids);
+  return created;
 };
 
 /**
@@ -508,7 +565,9 @@ export const createInClassroom = async (classroomId: string, input: AssignmentWr
 export const updateInClassroom = async (
   id: string,
   classroomId: string,
-  input: Partial<Omit<AssignmentWriteInput, 'module_id' | 'type' | 'repository_id' | 'quiz_id' | 'form_id'>>
+  input: Partial<
+    Omit<AssignmentWriteInput, 'module_id' | 'type' | 'repository_id' | 'quiz_id' | 'form_id'>
+  >
 ) => {
   const prisma = getPrisma();
   const previous = await prisma.assignment.findFirst({
@@ -534,6 +593,7 @@ export const updateInClassroom = async (
     data,
     include: { module: true, repository: true, quiz: true, form: true },
   });
+  await syncContentLinks(id, input.page_ids, input.slide_ids);
 
   await notifyAfterUpdate(id, data, previous, updated);
 

@@ -63,7 +63,6 @@ interface RepositoryRow {
   slug?: string | null;
   description?: string | null;
   is_published: boolean;
-  module_id: string;
   type: string;
   team_formation_mode?: string | null;
   max_team_size?: number | null;
@@ -121,7 +120,6 @@ export const reposResource: ResourceDefinition = {
           slug: r.slug ?? null,
           description: r.description ?? null,
           type: r.type,
-          module_id: r.module_id,
           is_published: r.is_published,
           team_formation_mode: r.team_formation_mode ?? null,
           max_team_size: r.max_team_size ?? null,
@@ -164,7 +162,6 @@ export const reposResource: ResourceDefinition = {
           slug: r.slug ?? null,
           description: r.description ?? null,
           type: r.type,
-          module_id: r.module_id,
           assignments: r.assignments.map(a => {
             const mine = byAssignment.get(a.id);
             return {

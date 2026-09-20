@@ -475,7 +475,6 @@ async function importClassroomAttempt(args: {
           where: { classroom_id_title: { classroom_id: classroom.id, title: a.title } },
           create: {
             classroom_id: classroom.id,
-            module_id: importModule.id,
             title: a.title,
             slug: a.slug || null,
             template: a.starterRepoFullName,
@@ -498,7 +497,7 @@ async function importClassroomAttempt(args: {
         if (!existingAssignment) {
           await tx.assignment.create({
             data: {
-              module_id: repository.module_id,
+              module_id: importModule.id,
               type: 'REPO',
               repository_id: repository.id,
               title: a.title,
