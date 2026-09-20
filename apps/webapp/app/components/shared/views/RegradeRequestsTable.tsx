@@ -1,14 +1,9 @@
 import { Table, Button, Tag } from 'antd';
 import { useNavigate, useParams } from 'react-router';
 import { useGlobalFetcher, useRole } from '~/hooks';
-import {
-  Emoji,
-  EmojiGrader,
-  TableActionButtons,
-  UserThumbnailView,
-  EmojisDisplay,
-} from '~/components';
+import { Emoji, EmojiGrader, TableActionButtons, UserThumbnailView } from '~/components';
 import { openRepositoryAssignmentInGithub } from '~/utils/helpers.client';
+import GradeBadges from '~/components/features/grading/GradeBadges';
 
 interface RegradeGrade {
   id: string;
@@ -107,7 +102,7 @@ const RegradeRequestsTable = ({ requests, emojiMappings, org }: RegradeRequestsT
       width: 120,
       render: (repositoryAssignment: RegradeRequest['git_repo_assignment']) => (
         <div className="flex justify-center">
-          <EmojisDisplay grades={repositoryAssignment?.grades} />
+          <GradeBadges grades={repositoryAssignment?.grades} emojiMappings={emojiMappings ?? {}} />
         </div>
       ),
     },

@@ -3,7 +3,6 @@ import { useFetcher } from 'react-router';
 import { useEffect, useState } from 'react';
 
 import {
-  EmojisDisplay,
   TableActionButtons,
   EmojiGrader,
   RepositoryAssignmentStatus,
@@ -19,6 +18,7 @@ import {
   type OrganizationSettings,
   type LetterGradeMappingEntry,
 } from '@classmoji/utils';
+import GradeBadges from '~/components/features/grading/GradeBadges';
 
 interface StudentGrade {
   id: string;
@@ -248,7 +248,9 @@ const SingleStudentView = (props: SingleStudentViewProps) => {
       width: 110,
       render: (grades: StudentGrade[]) => {
         if (!grades.length) return <span className="text-ink-3 italic">No grades yet</span>;
-        return <EmojisDisplay grades={grades} />;
+        return (
+          <GradeBadges grades={grades} emojiMappings={emojiMappings as Record<string, unknown>} />
+        );
       },
     },
     {

@@ -26,9 +26,9 @@ import {
   SearchInput,
   Countdown,
   TableActionButtons,
-  EmojisDisplay,
   Emoji,
 } from '~/components';
+import GradeBadges from '~/components/features/grading/GradeBadges';
 
 interface GradeEntry {
   id: string;
@@ -380,7 +380,9 @@ const RepositoryAssignmentsTable = ({
         if (value === 'NO_GRADE') return !record.grades.length;
         return record.grades.some((grade: GradeEntry) => grade.emoji === value);
       },
-      render: (grades: GradeEntry[]) => <EmojisDisplay grades={grades} />,
+      render: (grades: GradeEntry[]) => (
+        <GradeBadges grades={grades} emojiMappings={emojiMappings as Record<string, unknown>} />
+      ),
     },
     {
       title: 'Status',
@@ -495,9 +497,7 @@ const RepositoryAssignmentsTable = ({
   return (
     <div className="flex flex-col">
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mt-2 mb-4 sm:min-h-8">
-        <h1 className="text-base font-semibold leading-8 text-ink-2">
-          Grading
-        </h1>
+        <h1 className="text-base font-semibold leading-8 text-ink-2">Grading</h1>
 
         <div className="flex flex-wrap items-center gap-3">
           <label className="flex items-center gap-2 text-xs text-gray-600 dark:text-gray-300 whitespace-nowrap">
@@ -547,9 +547,7 @@ const RepositoryAssignmentsTable = ({
             >
               {tab.label}
               <span
-                className={`ml-2 text-xs tabular-nums ${
-                  isActive ? 'text-ink-3' : 'text-ink-4'
-                }`}
+                className={`ml-2 text-xs tabular-nums ${isActive ? 'text-ink-3' : 'text-ink-4'}`}
               >
                 {count}
               </span>
@@ -566,12 +564,8 @@ const RepositoryAssignmentsTable = ({
               <div className="flex-1 flex flex-col items-center justify-center text-center gap-3">
                 <Icon size={36} strokeWidth={1.5} className="text-ink-4" />
                 <div>
-                  <div className="text-sm font-semibold text-ink-1">
-                    {title}
-                  </div>
-                  {subtitle && (
-                    <div className="mt-1 text-xs text-ink-3">{subtitle}</div>
-                  )}
+                  <div className="text-sm font-semibold text-ink-1">{title}</div>
+                  {subtitle && <div className="mt-1 text-xs text-ink-3">{subtitle}</div>}
                 </div>
               </div>
             );

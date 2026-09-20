@@ -15,6 +15,7 @@ interface Grade {
   emoji: string;
   grader_id?: string | null;
   grader?: { id?: string; name: string | null } | null;
+  created_at?: string | Date;
   token_transaction?: {
     amount: number;
   } | null;
@@ -129,9 +130,13 @@ const EmojiGrader = ({ repositoryAssignment, emojiMappings }: EmojiGraderProps) 
     .sort((a, b) => a - b);
   // The signed-in grader's own score on this row, if any. Other graders'
   // scores show in the badge list beside this control and are not editable here.
-  const myScoreGrade = repositoryAssignment.grades?.find(
-    g => (g.grader_id ?? g.grader?.id) === user?.id && parseScoreEmoji(g.emoji) !== null
-  );
+  // Rows graded before "one score per grader" may hold several; the newest
+  // is the one the field edits, and a new score replaces all of them.
+  const myScoreGrade = (repositoryAssignment.grades ?? [])
+    .filter(g => (g.grader_id ?? g.grader?.id) === user?.id && parseScoreEmoji(g.emoji) !== null)
+    .sort(
+      (a, b) => new Date(b.created_at ?? 0).getTime() - new Date(a.created_at ?? 0).getTime()
+    )[0];
   const myScore = myScoreGrade ? parseScoreEmoji(myScoreGrade.emoji) : null;
   const [draft, setDraft] = useState(myScore === null ? '' : String(myScore));
   const [scoreError, setScoreError] = useState<string | null>(null);

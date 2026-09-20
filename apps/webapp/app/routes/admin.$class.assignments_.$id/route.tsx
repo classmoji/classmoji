@@ -201,14 +201,19 @@ const AssignmentPage = ({ loaderData }: Route.ComponentProps) => {
     let submitted = 0;
     let late = 0;
     let graded = 0;
+    let ungraded = 0;
     for (const repo of rows) {
       const s = repo.submission;
       if (!s) continue;
+      const hasGrades = (s.grades?.length ?? 0) > 0;
       if (s.status === 'CLOSED') submitted += 1;
       if (s.is_late && !s.is_late_override) late += 1;
-      if ((s.grades?.length ?? 0) > 0) graded += 1;
+      if (hasGrades) graded += 1;
+      // Waiting on a grader: submitted and not yet graded. An unsubmitted
+      // row is not "ungraded", it is missing (its own tile and filter).
+      if (s.status === 'CLOSED' && !hasGrades) ungraded += 1;
     }
-    return { submitted, late, graded, ungraded: submitted - graded };
+    return { submitted, late, graded, ungraded };
   }, [rows]);
 
   const visible = useMemo(() => {
@@ -393,7 +398,7 @@ const AssignmentPage = ({ loaderData }: Route.ComponentProps) => {
           value={
             <>
               {stats.graded}{' '}
-              <span className="text-sm font-medium text-ink-3">of {stats.submitted}</span>
+              <span className="text-sm font-medium text-ink-3">of {rows.length}</span>
             </>
           }
         />

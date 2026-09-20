@@ -6,7 +6,6 @@ import {
   UserThumbnailView,
   TeamThumbnailView,
   RepositoryAssignmentStatus,
-  EmojisDisplay,
   TableActionButtons,
   EmojiGrader,
   LateOverrideButton,
@@ -18,6 +17,7 @@ import { useGlobalFetcher } from '~/hooks';
 import { openRepositoryAssignmentInGithub } from '~/utils/helpers.client';
 import type { AssignmentRowData } from '~/components/features/assignments/AssignmentsTable';
 import ImportedBadge from './ImportedBadge';
+import GradeBadges from '~/components/features/grading/GradeBadges';
 import AutogradingResultPill from '~/components/features/AutogradingResultPill';
 import { type AutogradingResultData } from '~/components/features/AutogradingResultCard';
 
@@ -325,7 +325,7 @@ const SubmissionsTable = ({
         s.teamId = repo.team_id;
         return (
           <div className="flex items-center gap-2">
-            <EmojisDisplay grades={s.grades} />
+            <GradeBadges grades={s.grades} emojiMappings={emojiMappings} />
             <TableActionButtons
               onView={() =>
                 // The row IS the git repo; hand the helper its name explicitly.
