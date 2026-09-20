@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { forwardRef, useEffect, useState } from 'react';
 import { useFetcher, useNavigate } from 'react-router';
 import { App, Dropdown, Switch, Tag, Tooltip } from 'antd';
 import type { MenuProps } from 'antd';
@@ -65,16 +65,28 @@ interface ModuleCardProps {
   boundFormIds: Set<string>;
 }
 
-const IconMore = ({ label }: { label: string }) => (
+// antd's Dropdown clones its trigger child to attach its own onClick and ref,
+// so the button must forward both; a bare component that ignores them never
+// opens the menu. The click still stops at the row so the card doesn't toggle.
+const IconMore = forwardRef<
+  HTMLButtonElement,
+  { label: string } & React.ButtonHTMLAttributes<HTMLButtonElement>
+>(({ label, onClick, className: _className, ...rest }, ref) => (
   <button
+    {...rest}
+    ref={ref}
     type="button"
     aria-label={label}
-    onClick={e => e.stopPropagation()}
+    onClick={e => {
+      e.stopPropagation();
+      onClick?.(e);
+    }}
     className="inline-flex h-7 w-7 items-center justify-center rounded-md text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-600 dark:hover:bg-neutral-800 dark:hover:text-gray-200"
   >
     <IconDotsVertical size={16} />
   </button>
-);
+));
+IconMore.displayName = 'IconMore';
 
 /** A small heading that splits the card's rows into Assignments and Content. */
 const GroupHeading = ({ children }: { children: string }) => (
