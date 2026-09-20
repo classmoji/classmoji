@@ -38,10 +38,15 @@ export const HOUR_FLOOR = 6;
 
 /**
  * Shortest block the grid draws, in hours. One number for both views: the
- * student grid used to clamp at 0.75h and the staff grid at 0.5h, which made
- * the same 30-minute event two different heights depending on who looked.
+ * student grid clamped at 0.75h and the staff grid at 0.5h, which made the same
+ * 30-minute event two different heights depending on who looked.
+ *
+ * 0.75h is the survivor, not 0.5h, because it is the one that fits: a block
+ * carries a title line and a time line, and neither view's content fits in a
+ * 0.5h box. The student block subtracts 4px from its height on top of that, so
+ * a half-hour event was drawing ~47px of content into a 30px box.
  */
-export const MIN_DURATION_HOURS = 0.5;
+export const MIN_DURATION_HOURS = 0.75;
 
 /** The hours rendered in a window, e.g. `[8, 9, … 22]` for the default one. */
 export const hoursInWindow = (

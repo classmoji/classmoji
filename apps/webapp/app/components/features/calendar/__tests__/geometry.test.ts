@@ -30,7 +30,9 @@ describe('window constants', () => {
   });
 
   it('keeps one minimum-duration clamp and one row height', () => {
-    expect(MIN_DURATION_HOURS).toBe(0.5);
+    // 0.75h, not 0.5h: a block draws a title line and a time line, and the
+    // student block subtracts another 4px, so 0.5h clipped its own content.
+    expect(MIN_DURATION_HOURS).toBe(0.75);
     expect(HOUR_HEIGHT_REM).toBe(4);
     expect(HOUR_FLOOR).toBe(6);
   });
@@ -78,10 +80,12 @@ describe('remForHours / topForHour / heightForDuration', () => {
   it('clamps a short block to the minimum duration', () => {
     expect(heightForDuration(1)).toBe('4rem');
     expect(heightForDuration(1.5)).toBe('6rem');
-    expect(heightForDuration(0.5)).toBe('2rem');
-    expect(heightForDuration(0.25)).toBe('2rem');
-    expect(heightForDuration(0)).toBe('2rem');
-    expect(heightForDuration(-3)).toBe('2rem');
+    expect(heightForDuration(0.75)).toBe('3rem');
+    // A half-hour event is drawn at the 0.75h minimum, in both views.
+    expect(heightForDuration(0.5)).toBe('3rem');
+    expect(heightForDuration(0.25)).toBe('3rem');
+    expect(heightForDuration(0)).toBe('3rem');
+    expect(heightForDuration(-3)).toBe('3rem');
   });
 });
 
@@ -151,6 +155,21 @@ describe('droppable ids', () => {
     expect(parsed!.view).toBe('week');
     expect(parsed!.date.getDate()).toBe(5);
     expect(parsed!.view === 'week' && parsed!.hour).toBe(14);
+  });
+
+  it('parses the hours at both ends of a full-day window', () => {
+    // Midnight and 11 PM only exist once the window widens, but the id format
+    // has to carry them, and "00" must not be mistaken for a missing hour.
+    expect(parseDropId('week-2026-01-05-00')).toMatchObject({ view: 'week', hour: 0 });
+    expect(parseDropId('week-2026-01-05-23')).toMatchObject({ view: 'week', hour: 23 });
+
+    const midnight = parseDropId(weekDropId(dec31, 0));
+    expect(midnight).toMatchObject({ view: 'week', hour: 0 });
+    expect(midnight!.date.getDate()).toBe(31);
+
+    const lateEvening = parseDropId(weekDropId(jan5, 23));
+    expect(lateEvening).toMatchObject({ view: 'week', hour: 23 });
+    expect(lateEvening!.date.getDate()).toBe(5);
   });
 
   it('parses the exact strings the grid produced before geometry.ts existed', () => {
