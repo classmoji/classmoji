@@ -419,9 +419,9 @@ export const repositoryAssignmentReopenedHandlerTask = task({
 
 /**
  * A push to a student repo's default branch is the submission for every
- * published REPO-mode assignment that submits through it. The latest push is
- * the submission time until the row is graded; after that it is frozen, so a
- * README tweak after grading cannot turn an on-time submission late. A
+ * published REPO-mode assignment that submits through it. As in GitHub
+ * Classroom, the last push before the deadline (plus bought extension hours)
+ * is the submission; later pushes do not count, graded rows are frozen, and a
  * late-delivered older webhook never moves the time backwards.
  */
 export const repositoryPushHandlerTask = task({

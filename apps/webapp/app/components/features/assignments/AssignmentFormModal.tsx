@@ -289,7 +289,9 @@ const AssignmentFormModal = ({
             >
               <Radio value="REPO">
                 Push to the repository{' '}
-                <span className="text-ink-3">— the latest push is the submission</span>
+                <span className="text-ink-3">
+                  — the last push before the deadline is the submission
+                </span>
               </Radio>
               <Radio value="ISSUE">
                 Close a GitHub issue{' '}

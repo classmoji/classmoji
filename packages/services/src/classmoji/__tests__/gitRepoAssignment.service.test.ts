@@ -176,26 +176,49 @@ describe('recordPush', () => {
 
   const pushedAt = new Date('2026-09-20T12:00:00.000Z');
 
+  const candidate = (id: string, deadline: Date | null, hours: number[] = []) => ({
+    id,
+    assignment: { student_deadline: deadline },
+    token_transactions: hours.map(h => ({ hours_purchased: h })),
+  });
+
   it('marks only ungraded, published REPO-mode rows submitted, never moving the time backwards', async () => {
-    findManyMock.mockResolvedValue([{ id: 'ra-1' }, { id: 'ra-2' }]);
+    findManyMock.mockResolvedValue([candidate('ra-1', null), candidate('ra-2', null)]);
     updateManyMock.mockResolvedValue({ count: 2 });
 
     const touched = await recordPush('gitrepo-1', pushedAt);
 
-    expect(findManyMock).toHaveBeenCalledWith({
-      where: {
-        git_repo_id: 'gitrepo-1',
-        assignment: { type: 'REPO', submission_mode: 'REPO', is_published: true },
-        grades: { none: {} },
-        OR: [{ closed_at: null }, { closed_at: { lt: pushedAt } }],
-      },
-      select: { id: true },
+    expect(findManyMock.mock.calls[0][0].where).toEqual({
+      git_repo_id: 'gitrepo-1',
+      assignment: { type: 'REPO', submission_mode: 'REPO', is_published: true },
+      grades: { none: {} },
+      OR: [{ closed_at: null }, { closed_at: { lt: pushedAt } }],
     });
     expect(updateManyMock).toHaveBeenCalledWith({
       where: { id: { in: ['ra-1', 'ra-2'] } },
       data: { status: 'CLOSED', closed_at: pushedAt },
     });
     expect(touched).toEqual([{ id: 'ra-1' }, { id: 'ra-2' }]);
+  });
+
+  it('freezes the submission at the deadline, extended by purchased hours (GitHub Classroom rule)', async () => {
+    const hourBefore = new Date(pushedAt.getTime() - 3_600_000);
+    const threeHoursBefore = new Date(pushedAt.getTime() - 3 * 3_600_000);
+    findManyMock.mockResolvedValue([
+      candidate('past-deadline', hourBefore),
+      candidate('within-extension', threeHoursBefore, [2, 2]),
+      candidate('extension-too-short', threeHoursBefore, [1]),
+      candidate('no-deadline', null),
+    ]);
+    updateManyMock.mockResolvedValue({ count: 2 });
+
+    const touched = await recordPush('gitrepo-1', pushedAt);
+
+    expect(updateManyMock).toHaveBeenCalledWith({
+      where: { id: { in: ['within-extension', 'no-deadline'] } },
+      data: { status: 'CLOSED', closed_at: pushedAt },
+    });
+    expect(touched).toEqual([{ id: 'within-extension' }, { id: 'no-deadline' }]);
   });
 
   it('writes nothing when no row qualifies', async () => {

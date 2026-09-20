@@ -254,9 +254,13 @@ export const create = async (data: GitRepoAssignmentCreateData) => {
 
 /**
  * A push to a student repo is the submission for every published REPO-mode
- * assignment that submits through it. The latest push is the submission time
- * until the row has grades; then it is frozen. A late-delivered older webhook
- * never moves the time backwards. Returns the rows that changed.
+ * assignment that submits through it, the way GitHub Classroom treated repos:
+ * the latest push BEFORE the deadline is the submission, and the deadline
+ * freezes it. Extension hours the student bought with tokens push their
+ * deadline out by that many hours. A push after that is not a submission at
+ * all (the row stays as it was), a row with grades is frozen too, and a
+ * late-delivered older webhook never moves the time backwards. Returns the
+ * rows that changed.
  */
 export const recordPush = async (gitRepoId: string, pushedAt: Date) => {
   const prisma = getPrisma();
@@ -267,14 +271,28 @@ export const recordPush = async (gitRepoId: string, pushedAt: Date) => {
       grades: { none: {} },
       OR: [{ closed_at: null }, { closed_at: { lt: pushedAt } }],
     },
-    select: { id: true },
+    select: {
+      id: true,
+      assignment: { select: { student_deadline: true } },
+      token_transactions: { where: { type: 'PURCHASE' }, select: { hours_purchased: true } },
+    },
   });
-  if (candidates.length === 0) return [];
+  const open = candidates.filter(c => {
+    const deadline = c.assignment.student_deadline;
+    if (!deadline) return true;
+    const extensionHours = c.token_transactions.reduce(
+      (sum, t) => sum + (t.hours_purchased ?? 0),
+      0
+    );
+    const cutoff = new Date(deadline).getTime() + extensionHours * 3_600_000;
+    return pushedAt.getTime() <= cutoff;
+  });
+  if (open.length === 0) return [];
   await prisma.gitRepoAssignment.updateMany({
-    where: { id: { in: candidates.map(c => c.id) } },
+    where: { id: { in: open.map(c => c.id) } },
     data: { status: 'CLOSED', closed_at: pushedAt },
   });
-  return candidates;
+  return open.map(c => ({ id: c.id }));
 };
 
 /**
