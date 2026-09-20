@@ -19,7 +19,7 @@ import CalendarDragLayer, {
   DroppableCell,
   canDragEvent,
 } from './CalendarDragLayer';
-import { hourRange } from './geometry';
+import { hourRange, selectionRange } from './geometry';
 import { useCalendarNavigation, useEventsByDate } from './useCalendarNavigation';
 import { isSameDay } from './utils';
 import type { RenderCell, RenderEvent } from './gridRenderProps';
@@ -91,13 +91,10 @@ const CourseCalendar = ({
       setDragSelect(null);
       if (!onRangeSelect) return;
 
-      const start = new Date(date);
-      start.setHours(Math.min(anchorHour, hoverHour), 0, 0, 0);
-      const end = new Date(date);
-      // Clamped at 24: selecting the 11 PM row ends the range at the NEXT
-      // day's midnight, which is what `setHours(24)` builds and what the add
-      // modal's `buildEventWindow` rebuilds when it rolls an end past midnight.
-      end.setHours(Math.min(Math.max(anchorHour, hoverHour) + 1, 24), 0, 0, 0);
+      // The 24-hour clamp lives in `geometry` with the rest of the window
+      // arithmetic, so the boundary the 11 PM row created can be asserted
+      // without a pointer.
+      const { start, end } = selectionRange(date, anchorHour, hoverHour);
       onRangeSelect(start, end);
     };
 

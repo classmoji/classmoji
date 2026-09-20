@@ -279,6 +279,32 @@ export const hourRange = (events: readonly TimedItem[]): HourWindow => {
 };
 
 /**
+ * The time range a drag across hour cells picks out, from the first and last
+ * cell the pointer touched. A plain click touches one cell and yields an hour.
+ *
+ * Clamped at 24, which is how selecting the 11 PM row ends at the NEXT day's
+ * midnight rather than at an hour 24 that does not exist: `setHours(24)` rolls
+ * the date, and the add modal's `buildEventWindow` rolls it back the same way
+ * when it rebuilds the range from the form. The service refuses anything whose
+ * end is not after its start, so this has to come out the right way round.
+ *
+ * Pure, and exported so that boundary can be asserted without a pointer.
+ */
+export const selectionRange = (
+  date: Date,
+  anchorHour: number,
+  hoverHour: number
+): { start: Date; end: Date } => {
+  const start = new Date(date);
+  start.setHours(Math.min(anchorHour, hoverHour), 0, 0, 0);
+
+  const end = new Date(date);
+  end.setHours(Math.min(Math.max(anchorHour, hoverHour) + 1, 24), 0, 0, 0);
+
+  return { start, end };
+};
+
+/**
  * Whether an item belongs in the all-day strip rather than in the hour grid.
  *
  * ONE bound, the window the grid is actually drawing: an event that fits

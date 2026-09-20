@@ -22,6 +22,7 @@ import {
   monthDropId,
   parseDropId,
   remForHours,
+  selectionRange,
   topForHour,
   weekDropId,
 } from '../geometry';
@@ -366,6 +367,45 @@ describe('hourRange', () => {
       startHour: DEFAULT_START_HOUR,
       endHour: DEFAULT_END_HOUR,
     });
+  });
+});
+
+describe('selectionRange', () => {
+  const TUESDAY = new Date(2026, 8, 22);
+
+  it('turns one touched cell into an hour', () => {
+    const { start, end } = selectionRange(TUESDAY, 10, 10);
+    expect(start.getHours()).toBe(10);
+    expect(end.getHours()).toBe(11);
+    expect(end.getTime()).toBeGreaterThan(start.getTime());
+  });
+
+  it('reads a drag in either direction', () => {
+    const down = selectionRange(TUESDAY, 10, 13);
+    const up = selectionRange(TUESDAY, 13, 10);
+    expect(down).toEqual(up);
+    expect(down.start.getHours()).toBe(10);
+    expect(down.end.getHours()).toBe(14);
+  });
+
+  it('ends a selection of the LAST row at the next day’s midnight', () => {
+    // The 11 PM row only exists once the window widens, and an hour 24 does
+    // not. `setHours(24)` rolls the date, which is exactly the range the add
+    // modal rebuilds with `buildEventWindow` and the service accepts.
+    const { start, end } = selectionRange(TUESDAY, 23, 23);
+
+    expect(start.getDate()).toBe(22);
+    expect(start.getHours()).toBe(23);
+    expect(end.getDate()).toBe(23);
+    expect(end.getHours()).toBe(0);
+    expect(end.getTime()).toBeGreaterThan(start.getTime());
+  });
+
+  it('keeps a drag that ENDS on the last row valid too', () => {
+    const { start, end } = selectionRange(TUESDAY, 21, 23);
+    expect(start.getHours()).toBe(21);
+    expect(end.getDate()).toBe(23);
+    expect(end.getTime() - start.getTime()).toBe(3 * 60 * 60 * 1000);
   });
 });
 
