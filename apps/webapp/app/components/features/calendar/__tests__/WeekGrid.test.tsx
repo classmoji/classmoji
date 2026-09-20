@@ -629,8 +629,12 @@ describe('WeekGrid — linked resources on a block', () => {
 
     expect(html).toContain('class="absolute inset-0 w-full cursor-pointer');
     expect(html).toContain('pointer-events-none');
-    // …and the chips themselves are still pressable.
-    expect(html).toContain('pointer-events-auto');
+
+    // …and the CHIP asks for the pointer back, on its own element. Asserted
+    // that way round because the deadline pill is pointer-active too, so a
+    // loose search for the utility passed while every chip in the grid had
+    // quietly become unclickable.
+    expect(html).toMatch(/class="[^"]*pointer-events-auto[^"]*"[^>]*aria-label="Open page One"/);
   });
 
   it('draws the chips under the meta row, not pinned to the block’s floor', () => {

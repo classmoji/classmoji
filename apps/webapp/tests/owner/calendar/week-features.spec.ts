@@ -46,6 +46,19 @@ const todayAt = (hour: number, minute: number): Date => {
   return date;
 };
 
+/**
+ * The chip on THIS spec's block, not any chip on the week.
+ *
+ * Scoped through the block's own container: a chip is a sibling of the event's
+ * button inside it, so "the block whose text is our title" narrows to one
+ * column and one event even if another run left a second linked event behind.
+ */
+const chipOn = (page: Page, eventTitle: string, name: string) =>
+  page
+    .locator('div.absolute.left-1.right-1')
+    .filter({ hasText: eventTitle })
+    .getByRole('link', { name });
+
 test.beforeAll(async () => {
   const prisma = getTestPrisma();
   const classroom = await getClassroomBySlug(TEST_CLASSROOM);
@@ -68,11 +81,16 @@ test.beforeAll(async () => {
   if (!anyEvent)
     throw new Error('No calendar events to borrow a creator from. Run `npm run db:seed`.');
 
-  const deck = await prisma.slide.findFirst({
+  // The FIRST published deck; the student spec takes the second, so an
+  // aborted run that leaves one event behind cannot make the other file's
+  // chip locator ambiguous.
+  const decks = await prisma.slide.findMany({
     where: { classroom_id: classroom.id, is_draft: false },
     select: { id: true, title: true },
     orderBy: { title: 'asc' },
+    take: 2,
   });
+  const deck = decks[0];
   if (!deck) throw new Error('Need a published slide deck. Run `npm run db:seed`.');
   deckTitle = deck.title;
 
@@ -150,7 +168,7 @@ test.describe('Owner Week View — linked resources', () => {
   }) => {
     await openWeek(page, testOrg);
     await expect(page.getByText(EVENT_TITLE).first()).toBeVisible();
-    await expect(page.getByRole('link', { name: `Open slide deck ${deckTitle}` })).toBeVisible();
+    await expect(chipOn(page, EVENT_TITLE, `Open slide deck ${deckTitle}`)).toBeVisible();
   });
 
   test('clicking the chip opens the deck, not the event modal', async ({
@@ -159,7 +177,7 @@ test.describe('Owner Week View — linked resources', () => {
   }) => {
     await openWeek(page, testOrg);
 
-    const chip = page.getByRole('link', { name: `Open slide deck ${deckTitle}` });
+    const chip = chipOn(page, EVENT_TITLE, `Open slide deck ${deckTitle}`);
     // Where it goes is asserted on the anchor itself; whether a new tab is
     // reported as a popup depends on `rel="noopener"` and is not the point.
     await expect(chip).toHaveAttribute('target', '_blank');

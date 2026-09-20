@@ -258,6 +258,16 @@ describe('ResourceLink', () => {
     expect(html).toContain('truncate');
   });
 
+  it('makes a chip pointer-active, in every branch', () => {
+    // A week block hands its whole area to the event's button and makes the
+    // column over it transparent to the pointer, so a chip is pressable only
+    // because it asks to be. Without this the chips render, and nothing
+    // happens when you click one.
+    for (const resource of [page, deck, assignment]) {
+      expect(render(resource, STAFF, 'chip')).toContain('pointer-events-auto');
+    }
+  });
+
   it('climbs out of the utility layer for a chip’s colour, as the month line does', () => {
     // antd injects an UNLAYERED `a { color: … }`, which beats a layered
     // Tailwind utility whatever the specificity.

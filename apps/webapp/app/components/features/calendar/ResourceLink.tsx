@@ -270,9 +270,12 @@ const VARIANT_CLASS: Record<ResourceLinkVariant, string> = {
     'flex items-center gap-1 pl-2 pr-1 w-full min-w-0 text-xs text-ink-2! no-underline! rounded ' +
     'hover:text-ink-0! hover:underline! transition-colors ' +
     'focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent',
+  // `pointer-events-auto` is load-bearing: a week block hands its whole area
+  // to the event's button and makes the column over it transparent to the
+  // pointer, so a chip is only pressable because it asks to be.
   chip:
-    'inline-flex items-center gap-1 min-w-0 max-w-full rounded px-1 py-px leading-none ' +
-    'text-[0.6875rem] text-ink-2! no-underline! bg-white/70 dark:bg-neutral-900/40 ' +
+    'pointer-events-auto inline-flex items-center gap-1 min-w-0 max-w-full rounded px-1 py-px ' +
+    'leading-none text-[0.6875rem] text-ink-2! no-underline! bg-white/70 dark:bg-neutral-900/40 ' +
     'hover:text-ink-0! hover:bg-white dark:hover:bg-neutral-900/80 transition-colors ' +
     'focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent',
 };
@@ -288,7 +291,9 @@ const ICON_SIZE: Record<ResourceLinkVariant, number> = { list: 18, row: 12, chip
 const WRAPPER_CLASS: Record<ResourceLinkVariant, string> = {
   list: 'block min-w-0',
   row: 'block min-w-0',
-  chip: 'inline-flex min-w-0 max-w-full',
+  // Pointer-active for the same reason the chip itself is: the wrapper is what
+  // carries the stop-propagation handlers, so it has to be hit first.
+  chip: 'pointer-events-auto inline-flex min-w-0 max-w-full',
 };
 
 export interface ResourceLinkProps {
