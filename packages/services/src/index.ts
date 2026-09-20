@@ -328,6 +328,9 @@ export type {
 export { aggregateForTeam } from './classmoji/repoAnalytics.service.ts';
 export type { TeamAggregate, TeamRepoSnapshot } from './classmoji/repoAnalytics.service.ts';
 
+// Calendar payload shape (the item type `getClassroomCalendar` returns).
+export type { ClassroomCalendarItem } from './classmoji/calendar.service.ts';
+
 // Email helpers. Resend injects template variables raw, so every
 // user-controlled value must be escaped before it becomes one.
 export { appUrl, escapeHtml, escapeVars } from './emails/escape.ts';

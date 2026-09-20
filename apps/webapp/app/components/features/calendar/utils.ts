@@ -2,28 +2,10 @@
  * Calendar utility functions for date manipulation and event processing
  */
 
+import type { CalendarEventWithLinks } from './types';
+
 /** A value that can be converted to a Date via `new Date(value)` */
 type DateInput = Date | string | number;
-
-export interface CalendarEvent {
-  id?: string;
-  title?: string;
-  start_time: string;
-  end_time: string;
-  event_type: string;
-  occurrence_date?: string | null;
-  is_deadline?: boolean;
-  /**
-   * A synthesized form-close item. A deadline for rendering, filtering and ICS
-   * export, but with no assignment behind it — so it is never draggable.
-   */
-  is_form_close?: boolean;
-  form_url?: string | null;
-  form_status?: string | null;
-  form_access?: string | null;
-  is_unpublished?: boolean;
-  [key: string]: unknown;
-}
 
 interface RecurrenceRule {
   days: string[];
@@ -224,10 +206,10 @@ export const getEventGridPosition = (
 /**
  * Group events by date
  */
-export const groupEventsByDate = (events: CalendarEvent[]) => {
-  const grouped: Record<string, CalendarEvent[]> = {};
+export const groupEventsByDate = (events: CalendarEventWithLinks[]) => {
+  const grouped: Record<string, CalendarEventWithLinks[]> = {};
 
-  events.forEach((event: CalendarEvent) => {
+  events.forEach((event: CalendarEventWithLinks) => {
     const date = new Date(event.start_time);
     date.setHours(0, 0, 0, 0);
     const key = date.toISOString();
@@ -244,7 +226,7 @@ export const groupEventsByDate = (events: CalendarEvent[]) => {
 /**
  * Sort events by start time
  */
-export const sortEventsByTime = (events: CalendarEvent[]) => {
+export const sortEventsByTime = (events: CalendarEventWithLinks[]) => {
   return [...events].sort(
     (a, b) => new Date(a.start_time).getTime() - new Date(b.start_time).getTime()
   );
@@ -253,7 +235,7 @@ export const sortEventsByTime = (events: CalendarEvent[]) => {
 /**
  * Check if event is happening now
  */
-export const isEventNow = (event: CalendarEvent) => {
+export const isEventNow = (event: CalendarEventWithLinks) => {
   const now = new Date();
   const start = new Date(event.start_time);
   const end = new Date(event.end_time);
@@ -263,7 +245,7 @@ export const isEventNow = (event: CalendarEvent) => {
 /**
  * Check if event is upcoming (within next 24 hours)
  */
-export const isEventUpcoming = (event: CalendarEvent) => {
+export const isEventUpcoming = (event: CalendarEventWithLinks) => {
   const now = new Date();
   const start = new Date(event.start_time);
   const tomorrow = new Date(now.getTime() + 24 * 60 * 60 * 1000);
@@ -273,7 +255,7 @@ export const isEventUpcoming = (event: CalendarEvent) => {
 /**
  * Get duration in minutes
  */
-export const getEventDuration = (event: CalendarEvent) => {
+export const getEventDuration = (event: CalendarEventWithLinks) => {
   const start = new Date(event.start_time);
   const end = new Date(event.end_time);
   return Math.round((new Date(end).getTime() - new Date(start).getTime()) / (1000 * 60));
@@ -324,9 +306,9 @@ export const getTimeSlots = (startHour = 0, endHour = 24) => {
 /**
  * Filter events by type
  */
-export const filterEventsByType = (events: CalendarEvent[], types: string[]) => {
+export const filterEventsByType = (events: CalendarEventWithLinks[], types: string[]) => {
   if (!types || types.length === 0) return events;
-  return events.filter((event: CalendarEvent) => types.includes(event.event_type));
+  return events.filter((event: CalendarEventWithLinks) => types.includes(event.event_type));
 };
 
 /**

@@ -2,14 +2,21 @@ import { Link } from 'react-router';
 import dayjs, { type Dayjs } from 'dayjs';
 import { IconArrowRight } from '@tabler/icons-react';
 import { getEventTypeLightBg, getEventTypeDarkText } from '~/components/features/calendar/utils';
+import type { CalendarEventWithLinks } from '~/components/features/calendar/types';
 
-export interface WeekEvent {
+/**
+ * The card needs four fields, and it needs id/title to be PRESENT — the
+ * dashboard loader maps them through String(...) and the card keys its rows on
+ * id. So it picks the fields whose shape has to agree with the shared calendar
+ * type and keeps its own, stricter, contract for the rest. event_type stays
+ * nullable because the loader passes a missing type through as null rather
+ * than inventing one.
+ */
+export type WeekEvent = Pick<CalendarEventWithLinks, 'start_time' | 'is_deadline'> & {
   id: string;
   title: string;
-  start_time: string | Date;
   event_type?: string | null;
-  is_deadline?: boolean;
-}
+};
 
 interface WeeklyCalendarCardProps {
   events: WeekEvent[];

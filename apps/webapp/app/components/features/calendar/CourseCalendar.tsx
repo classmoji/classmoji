@@ -34,8 +34,7 @@ import {
 
 const EVENT_TYPES = ['OFFICE_HOURS', 'LECTURE', 'LAB', 'ASSESSMENT', 'DEADLINE'];
 
-// Draggable event component
-import type { CalendarEvent } from './utils';
+import type { CalendarEventWithLinks } from './types';
 
 /**
  * Form-close items are deadlines for rendering, filtering and ICS export, but
@@ -43,11 +42,11 @@ import type { CalendarEvent } from './utils';
  * out of the event id and there is no assignment behind a form. A form's close
  * date is changed in the form builder.
  */
-const isDragLocked = (event: CalendarEvent) => Boolean(event.is_form_close);
+const isDragLocked = (event: CalendarEventWithLinks) => Boolean(event.is_form_close);
 
 /** Whether this event can be picked up at all, given the handlers in scope. */
 const canDragEvent = (
-  event: CalendarEvent,
+  event: CalendarEventWithLinks,
   canDragDeadlines: boolean,
   onEventDrop: unknown
 ): boolean => {
@@ -56,7 +55,7 @@ const canDragEvent = (
 };
 
 interface DraggableEventProps {
-  event: CalendarEvent;
+  event: CalendarEventWithLinks;
   children: React.ReactNode;
   disabled?: boolean;
   className?: string;
@@ -128,11 +127,11 @@ const DroppableCell = ({
 };
 
 interface CourseCalendarProps {
-  events: CalendarEvent[];
-  onEventClick?: ((event: CalendarEvent) => void) | null;
+  events: CalendarEventWithLinks[];
+  onEventClick?: ((event: CalendarEventWithLinks) => void) | null;
   onCellClick?: ((date: Date) => void) | null;
-  onEventDrop?: ((event: CalendarEvent, newStart: Date, newEnd: Date) => void) | null;
-  onDeadlineDrop?: ((event: CalendarEvent, newStart: Date) => void) | null;
+  onEventDrop?: ((event: CalendarEventWithLinks, newStart: Date, newEnd: Date) => void) | null;
+  onDeadlineDrop?: ((event: CalendarEventWithLinks, newStart: Date) => void) | null;
   onMonthChange?: ((year: number, month: number) => void) | null;
   /** Week view: drag across hour cells to pick a time range (click = 1 hour). */
   onRangeSelect?: ((start: Date, end: Date) => void) | null;
@@ -156,7 +155,7 @@ const CourseCalendar = ({
     defaultValue: 'week',
   }); // 'month' or 'week'
   const [selectedTypes, setSelectedTypes] = useState<string[]>([]);
-  const [activeEvent, setActiveEvent] = useState<CalendarEvent | null>(null);
+  const [activeEvent, setActiveEvent] = useState<CalendarEventWithLinks | null>(null);
   const [draggedWidth, setDraggedWidth] = useState<number | null>(null);
   const [currentTime, setCurrentTime] = useState(new Date());
   // Week-view drag-to-select: anchor is the cell where the drag started,
@@ -253,12 +252,12 @@ const CourseCalendar = ({
 
   const getEventsForDate = (date: Date) => {
     const key = new Date(date.getFullYear(), date.getMonth(), date.getDate()).toISOString();
-    const dayEvents = (eventsByDate as Record<string, CalendarEvent[]>)[key] || [];
+    const dayEvents = (eventsByDate as Record<string, CalendarEventWithLinks[]>)[key] || [];
     return sortEventsByTime(dayEvents);
   };
 
   const handleDragStart = (event: DragStartEvent) => {
-    const draggedEvent = event.active.data.current?.event as CalendarEvent | undefined;
+    const draggedEvent = event.active.data.current?.event as CalendarEventWithLinks | undefined;
     if (draggedEvent) {
       setActiveEvent(draggedEvent);
       // Capture the width of the dragged element
@@ -275,7 +274,7 @@ const CourseCalendar = ({
 
     if (!event.over) return;
 
-    const draggedEvent = event.active.data.current!.event as CalendarEvent;
+    const draggedEvent = event.active.data.current!.event as CalendarEventWithLinks;
     const dropId = String(event.over.id);
 
     // Check if this is a deadline drop or regular event drop
@@ -444,7 +443,7 @@ const CourseCalendar = ({
     }
 
     // Helper to check if event should be in all-day section (deadlines or outside 8AM-10PM)
-    const isAllDayOrOutsideHours = (event: CalendarEvent) => {
+    const isAllDayOrOutsideHours = (event: CalendarEventWithLinks) => {
       if (event.is_deadline) return true;
       const startHour = new Date(event.start_time).getHours();
       const endHour = new Date(event.end_time).getHours();
