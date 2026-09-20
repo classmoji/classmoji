@@ -1,4 +1,4 @@
-import { Button, Dropdown, Table, Tooltip } from 'antd';
+import { Button, Dropdown, Popover, Table, Tooltip } from 'antd';
 import type { MenuProps } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import dayjs from 'dayjs';
@@ -306,26 +306,40 @@ const SubmissionsTable = ({
       title: 'Graders',
       key: 'graders',
       width: 200,
-      onCell: () => ({ style: { padding: '0px' } }),
       render: (_: unknown, repo) => {
         const s = repo.submission;
         if (!s) return null;
-        if (!canManageGraders) {
-          const names = (s.graders ?? []).map(g => g.grader.name || g.grader.login).join(', ');
-          return <div className="pl-4 py-2 text-sm text-ink-2">{names || '—'}</div>;
-        }
+        const names = (s.graders ?? []).map(g => g.grader.name || g.grader.login).join(', ');
+        if (!canManageGraders) return <span className="text-sm text-ink-2">{names || '—'}</span>;
+        // The names as text; the picker opens on demand in a popover.
         return (
-          <div className="pl-4 pt-1.5">
-            <MultiSelect
-              defaultValue={s.graders
-                ?.map(g => g.grader.login)
-                .filter((v): v is string => v != null)}
-              options={assistants
-                .map(a => ({ label: a.name || '', value: a.login || '' }))
-                .sort((a, b) => (a.label || '').localeCompare(b.label || ''))}
-              onSelect={(login: string) => graderHandler(login, repo, 'ADD')}
-              onDeselect={(login: string) => graderHandler(login, repo, 'REMOVE')}
-            />
+          <div className="flex items-center gap-3 whitespace-nowrap">
+            {names && <span className="text-sm text-ink-1 truncate max-w-40">{names}</span>}
+            <Popover
+              trigger="click"
+              placement="bottomLeft"
+              content={
+                <div className="w-64">
+                  <MultiSelect
+                    defaultValue={s.graders
+                      ?.map(g => g.grader.login)
+                      .filter((v): v is string => v != null)}
+                    options={assistants
+                      .map(a => ({ label: a.name || '', value: a.login || '' }))
+                      .sort((a, b) => (a.label || '').localeCompare(b.label || ''))}
+                    onSelect={(login: string) => graderHandler(login, repo, 'ADD')}
+                    onDeselect={(login: string) => graderHandler(login, repo, 'REMOVE')}
+                  />
+                </div>
+              }
+            >
+              <button
+                type="button"
+                className="text-sm font-medium text-ink-2 hover:text-ink-1 hover:underline underline-offset-2"
+              >
+                {names ? 'Change' : 'Assign'}
+              </button>
+            </Popover>
           </div>
         );
       },
