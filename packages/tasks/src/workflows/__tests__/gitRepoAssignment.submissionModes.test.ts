@@ -4,7 +4,9 @@
  * ISSUE mode (the original behaviour) opens a GitHub issue per student repo
  * and keys the submission row on it. REPO mode opens nothing: the submission
  * row is created straight away and the push webhook fills in the rest. These
- * tests pin that REPO mode never reaches GitHub, that a REPO-mode row carries
+ * tests pin that REPO mode never reaches GitHub from the task (the service
+ * reads the commit history for work that predates the assignment), that a
+ * REPO-mode row carries
  * no issue fields, and that a push records the submission through the
  * service and refreshes analytics for the rows it touched.
  */
@@ -15,6 +17,7 @@ const mocks = vi.hoisted(() => ({
   findFirstGitRepoAssignment: vi.fn(),
   createGitRepoAssignment: vi.fn(),
   recordPush: vi.fn(),
+  recordExistingPush: vi.fn(),
   getGitProvider: vi.fn(),
   tasksTrigger: vi.fn(),
   dbTriggerAndWait: vi.fn(),
@@ -37,6 +40,7 @@ vi.mock('@classmoji/services', () => ({
       findFirst: (...a: unknown[]) => mocks.findFirstGitRepoAssignment(...a),
       create: (...a: unknown[]) => mocks.createGitRepoAssignment(...a),
       recordPush: (...a: unknown[]) => mocks.recordPush(...a),
+      recordExistingPush: (...a: unknown[]) => mocks.recordExistingPush(...a),
     },
   },
   HelperService: {},
@@ -73,7 +77,7 @@ beforeEach(() => {
 });
 
 describe('gh-create_git_repo_assignment in REPO mode', () => {
-  it('creates the submission row without touching GitHub or the project board', async () => {
+  it('creates the submission row without touching GitHub from the task', async () => {
     await runTask(workflows.createGithubRepositoryAssignmentTask, {
       repoName: 'lab-1-alice',
       assignment: { id: 'a-1', title: 'Lab 1', submission_mode: 'REPO' },
@@ -87,6 +91,39 @@ describe('gh-create_git_repo_assignment in REPO mode', () => {
     expect(payload).toMatchObject({ assignment: { id: 'a-1' }, studentRepo: STUDENT_REPO });
     expect(payload).not.toHaveProperty('id');
     expect(payload).not.toHaveProperty('issueNumber');
+  });
+
+  it('asks the service to count a push that predates the assignment', async () => {
+    // The guard sees nothing first; after the DB task the row exists.
+    mocks.findFirstGitRepoAssignment
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce({ id: 'ra-new' });
+
+    await runTask(workflows.createGithubRepositoryAssignmentTask, {
+      repoName: 'lab-1-alice',
+      assignment: { id: 'a-1', title: 'Lab 1', submission_mode: 'REPO' },
+      studentRepo: STUDENT_REPO,
+      organization: ORG,
+    });
+
+    expect(mocks.recordExistingPush).toHaveBeenCalledWith('ra-new');
+  });
+
+  it('a history read failure leaves the row for the next push instead of failing the release', async () => {
+    mocks.findFirstGitRepoAssignment
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce({ id: 'ra-new' });
+    mocks.recordExistingPush.mockRejectedValue(new Error('rate limited'));
+
+    await expect(
+      runTask(workflows.createGithubRepositoryAssignmentTask, {
+        repoName: 'lab-1-alice',
+        assignment: { id: 'a-1', title: 'Lab 1', submission_mode: 'REPO' },
+        studentRepo: STUDENT_REPO,
+        organization: ORG,
+      })
+    ).resolves.toBeUndefined();
+    expect(mocks.dbTriggerAndWait).toHaveBeenCalledTimes(1);
   });
 
   it('still respects the idempotency guard', async () => {

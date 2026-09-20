@@ -6,6 +6,7 @@
  */
 import getPrisma from '@classmoji/database';
 import type { GitProvider, IssueStatus, Prisma } from '@prisma/client';
+import { getGitProvider } from '../git/index.ts';
 
 interface GitRepoAssignmentCreateData extends Omit<
   Prisma.GitRepoAssignmentUncheckedCreateInput,
@@ -293,6 +294,61 @@ export const recordPush = async (gitRepoId: string, pushedAt: Date) => {
     data: { status: 'CLOSED', closed_at: pushedAt },
   });
   return open.map(c => ({ id: c.id }));
+};
+
+/** How long after the student repo was created a commit must land to count as the student's own push. */
+const TEMPLATE_COMMIT_GRACE_MS = 2 * 60_000;
+
+/**
+ * A push-mode submission row created for a repo that already holds work: the
+ * student's latest push before the deadline counts as their submission,
+ * exactly as one arriving through the webhook would. Reads the repo's recent
+ * commits and skips what is not the student's: bot commits (autograding
+ * workflow pushes) and anything within a couple of minutes of the repo's
+ * creation, which is the template being copied in. Only fills an empty
+ * `closed_at`; a push after the deadline leaves the row unsubmitted, as the
+ * webhook path does. Returns the time recorded, or null.
+ */
+export const recordExistingPush = async (gitRepoAssignmentId: string) => {
+  const prisma = getPrisma();
+  const row = await prisma.gitRepoAssignment.findUnique({
+    where: { id: gitRepoAssignmentId },
+    select: {
+      id: true,
+      closed_at: true,
+      assignment: { select: { submission_mode: true, student_deadline: true } },
+      git_repo: {
+        select: {
+          name: true,
+          created_at: true,
+          classroom: { select: { git_organization: true } },
+        },
+      },
+    },
+  });
+  if (!row || row.closed_at || row.assignment.submission_mode !== 'REPO') return null;
+  const gitOrg = row.git_repo.classroom.git_organization;
+  if (!gitOrg?.login) return null;
+
+  const commits = await getGitProvider(gitOrg).listCommits(gitOrg.login, row.git_repo.name, {
+    maxCommits: 10,
+  });
+  const notBefore = new Date(row.git_repo.created_at).getTime() + TEMPLATE_COMMIT_GRACE_MS;
+  const own = commits.find(c => {
+    if (c.author_login?.endsWith('[bot]')) return false;
+    return new Date(c.ts).getTime() > notBefore;
+  });
+  if (!own) return null;
+  const pushedAt = new Date(own.ts);
+
+  const deadline = row.assignment.student_deadline;
+  if (deadline && pushedAt.getTime() > new Date(deadline).getTime()) return null;
+
+  const result = await prisma.gitRepoAssignment.updateMany({
+    where: { id: row.id, closed_at: null },
+    data: { status: 'CLOSED', closed_at: pushedAt },
+  });
+  return result.count > 0 ? pushedAt : null;
 };
 
 /**

@@ -9,13 +9,13 @@
  * REPO-mode assignment with one OPEN submission row per existing student repo.
  * Those students may well have pushed already; Classmoji only learns about
  * pushes from the webhook from now on. This script asks GitHub for each such
- * repo's latest default-branch commit and, when there is one, marks the row
- * submitted at that commit's time. Rows that already have a closed_at are
+ * repo's recent commits and, when the student has pushed (template and bot
+ * commits do not count) before the deadline, marks the row submitted then. Rows that already have a closed_at are
  * left alone. Idempotent.
  */
 
 import getPrisma from '@classmoji/database';
-import { getGitProvider } from '@classmoji/services';
+import { ClassmojiService } from '@classmoji/services';
 
 process.on('unhandledRejection', reason => {
   console.error('[backfill] Unhandled rejection:', reason);
@@ -45,37 +45,22 @@ async function main(): Promise<void> {
 
   let updated = 0;
   for (const row of rows) {
-    const gitOrg = row.git_repo.classroom.git_organization;
-    if (!gitOrg?.login) {
-      console.warn(`[backfill] ${row.id}: classroom has no git organization, skipped`);
-      continue;
-    }
     try {
-      const provider = getGitProvider(gitOrg);
-      const commits = await provider.listCommits(gitOrg.login, row.git_repo.name, {
-        maxCommits: 1,
-      });
-      const latest = commits[0];
-      if (!latest) {
-        console.log(`[backfill] ${row.id} (${row.git_repo.name}): no commits yet`);
-        continue;
-      }
-      const closedAt = new Date(latest.ts);
-      console.log(
-        `[backfill] ${row.id} (${row.git_repo.name}): last push ${closedAt.toISOString()}`
-      );
       if (APPLY) {
-        await prisma.gitRepoAssignment.update({
-          where: { id: row.id },
-          data: { status: 'CLOSED', closed_at: closedAt },
-        });
-        updated += 1;
+        const at = await ClassmojiService.gitRepoAssignment.recordExistingPush(row.id);
+        if (at) {
+          updated += 1;
+          console.log(`[backfill] ${row.id} (${row.git_repo.name}): submitted ${at.toISOString()}`);
+        } else {
+          console.log(`[backfill] ${row.id} (${row.git_repo.name}): no student push before the deadline`);
+        }
+      } else {
+        console.log(`[backfill] ${row.id} (${row.git_repo.name}): would check the repo history`);
       }
-    } catch (err) {
-      console.error(`[backfill] ${row.id} (${row.git_repo.name}) failed:`, err);
+    } catch (error) {
+      console.warn(`[backfill] ${row.id}: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
-
   console.log(
     APPLY
       ? `[backfill] marked ${updated} submission(s)`

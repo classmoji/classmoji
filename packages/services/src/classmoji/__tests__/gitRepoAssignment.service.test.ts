@@ -4,6 +4,8 @@ const countMock = vi.fn();
 const findManyMock = vi.fn();
 const upsertMock = vi.fn();
 const updateManyMock = vi.fn();
+const findUniqueMock = vi.fn();
+const listCommitsMock = vi.fn();
 
 vi.mock('@classmoji/database', () => ({
   default: () => ({
@@ -12,11 +14,18 @@ vi.mock('@classmoji/database', () => ({
       findMany: findManyMock,
       upsert: upsertMock,
       updateMany: updateManyMock,
+      findUnique: findUniqueMock,
     },
   }),
 }));
 
-const { create, getLatePercentage, recordPush } = await import('../gitRepoAssignment.service.ts');
+vi.mock('../../git/index.ts', () => ({
+  getGitProvider: () => ({ listCommits: (...a: unknown[]) => listCommitsMock(...a) }),
+}));
+
+const { create, getLatePercentage, recordPush, recordExistingPush } = await import(
+  '../gitRepoAssignment.service.ts'
+);
 
 type Row = {
   closed_at: Date | null;
@@ -226,5 +235,67 @@ describe('recordPush', () => {
 
     expect(await recordPush('gitrepo-1', pushedAt)).toEqual([]);
     expect(updateManyMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('recordExistingPush', () => {
+  beforeEach(() => {
+    findUniqueMock.mockReset();
+    updateManyMock.mockReset();
+    listCommitsMock.mockReset();
+    updateManyMock.mockResolvedValue({ count: 1 });
+  });
+
+  const created = new Date('2026-09-01T10:00:00.000Z');
+  const rowFor = (deadline: Date | null, mode = 'REPO', closed: Date | null = null) => ({
+    id: 'ra-1',
+    closed_at: closed,
+    assignment: { submission_mode: mode, student_deadline: deadline },
+    git_repo: {
+      name: 'lab-1-alice',
+      created_at: created,
+      classroom: { git_organization: { login: 'acme', provider: 'GITHUB' } },
+    },
+  });
+  const commit = (ts: string, author: string | null = 'alice') => ({ ts, author_login: author });
+
+  it("stamps the student's latest push as the submission", async () => {
+    findUniqueMock.mockResolvedValue(rowFor(new Date('2026-09-30T00:00:00.000Z')));
+    listCommitsMock.mockResolvedValue([commit('2026-09-18T10:00:00.000Z')]);
+
+    const at = await recordExistingPush('ra-1');
+
+    expect(at).toEqual(new Date('2026-09-18T10:00:00.000Z'));
+    expect(updateManyMock).toHaveBeenCalledWith({
+      where: { id: 'ra-1', closed_at: null },
+      data: { status: 'CLOSED', closed_at: new Date('2026-09-18T10:00:00.000Z') },
+    });
+  });
+
+  it('ignores the template commit made when the repo was created, and bot commits', async () => {
+    findUniqueMock.mockResolvedValue(rowFor(null));
+    listCommitsMock.mockResolvedValue([
+      commit('2026-09-18T10:00:00.000Z', 'classmoji[bot]'),
+      commit('2026-09-01T10:00:30.000Z'),
+    ]);
+
+    expect(await recordExistingPush('ra-1')).toBeNull();
+    expect(updateManyMock).not.toHaveBeenCalled();
+  });
+
+  it('leaves a push after the deadline unsubmitted, as the webhook would', async () => {
+    findUniqueMock.mockResolvedValue(rowFor(new Date('2026-09-10T00:00:00.000Z')));
+    listCommitsMock.mockResolvedValue([commit('2026-09-18T10:00:00.000Z')]);
+
+    expect(await recordExistingPush('ra-1')).toBeNull();
+    expect(updateManyMock).not.toHaveBeenCalled();
+  });
+
+  it('does nothing for an issue-mode row or one already submitted', async () => {
+    findUniqueMock.mockResolvedValueOnce(rowFor(null, 'ISSUE'));
+    expect(await recordExistingPush('ra-1')).toBeNull();
+    findUniqueMock.mockResolvedValueOnce(rowFor(null, 'REPO', new Date()));
+    expect(await recordExistingPush('ra-1')).toBeNull();
+    expect(listCommitsMock).not.toHaveBeenCalled();
   });
 });

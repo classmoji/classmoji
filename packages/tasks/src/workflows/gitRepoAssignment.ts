@@ -239,6 +239,22 @@ export const createGithubRepositoryAssignmentTask = task({
         { assignment, studentRepo },
         { tags: ctx.run.tags, concurrencyKey: organization.login }
       );
+      // The repo may already hold work: an assignment added to a repository
+      // students have been pushing to for weeks. The webhook only sees pushes
+      // from now on, so the latest commit stands in for the missed push.
+      try {
+        const row = await ClassmojiService.gitRepoAssignment.findFirst({
+          assignment_id: assignment.id,
+          git_repo_id: studentRepo.id,
+        });
+        if (row) await ClassmojiService.gitRepoAssignment.recordExistingPush(row.id);
+      } catch (error) {
+        logger.warn('Could not read the repo history for an existing push; the next push will count', {
+          repoName,
+          assignmentId: assignment.id,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
       return;
     }
 
