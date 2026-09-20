@@ -406,5 +406,64 @@ describe('calendar resource allowlist shaping (U5)', () => {
     expect(deadline.pages).toEqual([{ id: 'p1', title: 'HW 1 Guide' }]);
     // Admin-styling flag is staff-only.
     expect(deadline).not.toHaveProperty('is_unpublished');
+    // A deadline links nothing, so there is nothing to star.
+    expect(deadline.featured_resource).toBeNull();
+  });
+
+  describe('the starred resource', () => {
+    const starring = (featured: Record<string, unknown> | null) => [
+      { ...RAW_EVENT, featured_resource: featured },
+    ];
+
+    const shape = async (ctx: ReturnType<typeof studentCtx>) =>
+      (
+        (await calendarResource.handler({ org: 'o', slug: 's' }, ctx, new URL('classmoji://x'))) as {
+          events: Array<Record<string, unknown>>;
+        }
+      ).events[0];
+
+    it('is null when the event has none', async () => {
+      getClassroomCalendar.mockResolvedValue(starring(null));
+
+      expect((await shape(studentCtx())).featured_resource).toBeNull();
+    });
+
+    it('names it for a student, without a publication flag', async () => {
+      getClassroomCalendar.mockResolvedValue(
+        starring({ kind: 'page', id: 'p-pub', title: 'Published Page', is_draft: false })
+      );
+
+      expect((await shape(studentCtx())).featured_resource).toEqual({
+        kind: 'page',
+        id: 'p-pub',
+        title: 'Published Page',
+      });
+    });
+
+    it('names it for staff, with the flag that says the class cannot see it', async () => {
+      getClassroomCalendar.mockResolvedValue(
+        starring({ kind: 'slide', id: 's-draft', title: 'Draft Deck', is_draft: true })
+      );
+
+      expect((await shape(ownerCtx())).featured_resource).toEqual({
+        kind: 'slide',
+        id: 's-draft',
+        title: 'Draft Deck',
+        is_draft: true,
+      });
+    });
+
+    it('withholds a draft one from a student even if the service sends it', async () => {
+      // The service already answers null there. This is the second,
+      // independent pass — the same belt this file applies to the display
+      // arrays above.
+      getClassroomCalendar.mockResolvedValue(
+        starring({ kind: 'page', id: 'p-draft', title: 'SECRET Draft Page', is_draft: true })
+      );
+
+      const event = await shape(studentCtx());
+      expect(event.featured_resource).toBeNull();
+      expect(JSON.stringify(event)).not.toContain('SECRET');
+    });
   });
 });
