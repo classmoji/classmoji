@@ -43,6 +43,85 @@ export const buildEventWindow = (
 };
 
 /**
+ * The React key for one rendered occurrence.
+ *
+ * A recurring event surfaces once per date under a single id, so `event.id`
+ * alone collides across a week and React reuses the wrong node. The key is the
+ * pair that is actually unique: the id and the occurrence it was expanded for.
+ * `index` is the last resort for an item with no id at all (nothing the service
+ * sends is like that today).
+ */
+export const eventKey = (event: CalendarEventWithLinks, index: number): string => {
+  const id = event.id ?? `index-${index}`;
+  if (!event.occurrence_date) return String(id);
+  return `${id}-${new Date(event.occurrence_date).toISOString()}`;
+};
+
+/** `SUN` … `SAT`, the day-name row both grids draw. */
+export const DAY_LABELS = ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'];
+
+/** The calendar header's primary label, e.g. `September 2026`. */
+export const formatMonthYear = (date: DateInput) =>
+  `${getMonthName(date)} ${new Date(date).getFullYear()}`;
+
+/**
+ * The calendar header's secondary label in week view: the day range, without
+ * repeating the month the primary label already carries (`20 – 26`), unless the
+ * week straddles two months (`Sep 27 – Oct 3`).
+ */
+export const formatDayRange = (start: DateInput, end: DateInput) => {
+  const from = new Date(start);
+  const to = new Date(end);
+  if (from.getMonth() === to.getMonth() && from.getFullYear() === to.getFullYear()) {
+    return `${from.getDate()} – ${to.getDate()}`;
+  }
+  return `${getMonthName(from).slice(0, 3)} ${from.getDate()} – ${getMonthName(to).slice(0, 3)} ${to.getDate()}`;
+};
+
+/**
+ * A time range with the meridiem written once when both ends share it —
+ * `2:10 – 3:15 PM`, but `11:30 AM – 12:30 PM` when they do not.
+ *
+ * A week block now carries the time and the room on ONE line, and
+ * `2:10 PM - 3:15 PM` spends a third of that line saying PM twice. The digits
+ * are left exactly as `Intl` wrote them — it separates the meridiem with a
+ * narrow no-break space, not an ordinary one — and only the first meridiem is
+ * taken off.
+ */
+export const formatTimeRange = (start: DateInput, end: DateInput) => {
+  const from = new Date(start);
+  const to = new Date(end);
+  const fromText = formatTime(from);
+  const sameHalfOfDay = from.getHours() < 12 === to.getHours() < 12;
+  return `${sameHalfOfDay ? fromText.replace(/\s*[AP]M$/i, '') : fromText} – ${formatTime(to)}`;
+};
+
+/**
+ * One day, named the way a control that acts on it has to name it — `Tue Sep
+ * 22`. `formatDate`'s `Tue 22` is enough beside a calendar a reader can see; it
+ * is not enough in a button's accessible name, which is announced on its own.
+ */
+export const formatDayLabel = (date: DateInput) => {
+  const d = new Date(date);
+  return `${getShortDayName(d)} ${getMonthName(d).slice(0, 3)} ${d.getDate()}`;
+};
+
+/**
+ * A clock time with the minutes dropped when they are zero — `9 AM`, `11:59 PM`.
+ * What a deadline chip and the now badge show, where `formatTime`'s `9:00 AM`
+ * is more digits than a chip has room for.
+ */
+export const formatShortTime = (date: DateInput) => {
+  const d = new Date(date);
+  const hours = d.getHours() % 12 || 12;
+  const minutes = d.getMinutes();
+  const suffix = d.getHours() < 12 ? 'AM' : 'PM';
+  return minutes === 0
+    ? `${hours} ${suffix}`
+    : `${hours}:${String(minutes).padStart(2, '0')} ${suffix}`;
+};
+
+/**
  * Get day name from date (lowercase)
  */
 export const getDayName = (date: Date) => {

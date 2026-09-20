@@ -22,11 +22,13 @@ test.describe('Calendar Display', () => {
     await expect(page.getByRole('button', { name: 'Add Event' })).toBeVisible();
   });
 
-  test('Month view renders the Sun–Sat day-name header row', async ({
+  // Staff and students now render one grid, and its day names are the
+  // student's: uppercase and letter-spaced, in both views.
+  test('Month view renders the SUN–SAT day-name header row', async ({
     authenticatedPage: page,
   }) => {
     await page.getByRole('button', { name: 'Month' }).click();
-    for (const day of ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']) {
+    for (const day of ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT']) {
       await expect(page.getByText(day, { exact: true }).first()).toBeVisible();
     }
   });
@@ -39,6 +41,18 @@ test.describe('Calendar Display', () => {
     ];
     const label = `${monthNames[now.getMonth()]} ${now.getFullYear()}`;
     await expect(page.getByRole('heading', { level: 2, name: new RegExp(label) })).toBeVisible();
+  });
+
+  test('Week view adds the day range beside the month', async ({ authenticatedPage: page }) => {
+    await page.getByRole('button', { name: 'Week', exact: true }).click();
+    // `September 2026` then `20 – 26` (or `Sep 27 – Oct 3` across a boundary).
+    // Asserted on the en dash rather than on today's numbers, which move.
+    await expect(
+      page
+        .locator('header')
+        .filter({ has: page.locator('[data-tour="calendar-view-toggle"]') })
+        .getByRole('heading', { level: 2 })
+    ).toContainText('–');
   });
 });
 

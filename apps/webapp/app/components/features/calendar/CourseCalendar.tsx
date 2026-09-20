@@ -1,139 +1,28 @@
-import { useState, useMemo, useEffect } from 'react';
-import useLocalStorageState from 'use-local-storage-state';
-import { IconChevronLeft, IconChevronRight } from '@tabler/icons-react';
-import {
-  DndContext,
-  DragOverlay,
-  useDraggable,
-  useDroppable,
-  PointerSensor,
-  useSensor,
-  useSensors,
-  type DragStartEvent,
-  type DragEndEvent,
-} from '@dnd-kit/core';
-import EventCard from './EventCard';
-import {
-  getMonthDates,
-  getWeekDates,
-  getMonthName,
-  getYear,
-  addMonths,
-  addWeeks,
-  isToday,
-  isCurrentMonth,
-  groupEventsByDate,
-  sortEventsByTime,
-  filterEventsByType,
-  getShortDayName,
-  getEventTypeLightBg,
-  getEventTypeDarkText,
-  getEventTypeDotColor,
-  getEventTypeLabel,
-} from './utils';
-import {
-  formatHourLabel,
-  heightForDuration,
-  hoursInWindow,
-  monthDropId,
-  parseDropId,
-  remForHours,
-  topForHour,
-  weekDropId,
-} from './geometry';
-import type { CalendarEventWithLinks } from './types';
-
-const EVENT_TYPES = ['OFFICE_HOURS', 'LECTURE', 'LAB', 'ASSESSMENT', 'DEADLINE'];
-
 /**
- * Form-close items are deadlines for rendering, filtering and ICS export, but
- * they must never be dragged: the deadline-drop handler parses an assignment id
- * out of the event id and there is no assignment behind a form. A form's close
- * date is changed in the form builder.
+ * The staff calendar: the shared shell and grids, plus the drag layer and the
+ * drag-to-select rectangle that only staff get.
+ *
+ * Everything visible here is shared with the student calendar
+ * (`StudentCalendarView`) — instructors assume a class sees what they see, and
+ * the two views had drifted into different row heights, different day headers,
+ * different labels and different block contents. What is left in this file is
+ * exactly the authoring behaviour: drag an event to move it, drag across empty
+ * hours to create one.
  */
-const isDragLocked = (event: CalendarEventWithLinks) => Boolean(event.is_form_close);
 
-/** Whether this event can be picked up at all, given the handlers in scope. */
-const canDragEvent = (
-  event: CalendarEventWithLinks,
-  canDragDeadlines: boolean,
-  onEventDrop: unknown
-): boolean => {
-  if (isDragLocked(event)) return false;
-  return event.is_deadline ? canDragDeadlines : Boolean(onEventDrop);
-};
-
-interface DraggableEventProps {
-  event: CalendarEventWithLinks;
-  children: React.ReactNode;
-  disabled?: boolean;
-  className?: string;
-  style?: React.CSSProperties;
-}
-
-const DraggableEvent = ({
-  event,
-  children,
-  disabled,
-  className = '',
-  style = {},
-}: DraggableEventProps) => {
-  // For recurring events, include occurrence_date in ID to make each occurrence unique
-  const eventId = event.occurrence_date
-    ? `event-${event.id}-${new Date(event.occurrence_date).toISOString().split('T')[0]}`
-    : `event-${event.id}`;
-
-  const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
-    id: eventId,
-    data: { event }, // Wrap in object to preserve it
-    disabled,
-  });
-
-  return (
-    <div
-      ref={setNodeRef}
-      {...listeners}
-      {...attributes}
-      className={className}
-      style={{ ...style, opacity: isDragging ? 0.5 : 1 }}
-    >
-      {children}
-    </div>
-  );
-};
-
-// Droppable cell component
-interface DroppableCellProps {
-  id: string;
-  children?: React.ReactNode;
-  className: string;
-  style?: React.CSSProperties;
-  onMouseDown?: (e: React.MouseEvent) => void;
-  onMouseEnter?: () => void;
-}
-
-const DroppableCell = ({
-  id,
-  children,
-  className,
-  style,
-  onMouseDown,
-  onMouseEnter,
-}: DroppableCellProps) => {
-  const { setNodeRef, isOver } = useDroppable({ id });
-
-  return (
-    <div
-      ref={setNodeRef}
-      className={`${className} ${isOver ? '!bg-blue-50 dark:!bg-blue-900/20' : ''}`}
-      style={style}
-      onMouseDown={onMouseDown}
-      onMouseEnter={onMouseEnter}
-    >
-      {children}
-    </div>
-  );
-};
+import { useCallback, useEffect, useState } from 'react';
+import CalendarShell, { CalendarTypeFilter } from './CalendarShell';
+import WeekGrid from './WeekGrid';
+import MonthGrid from './MonthGrid';
+import CalendarDragLayer, {
+  DraggableEvent,
+  DroppableCell,
+  canDragEvent,
+} from './CalendarDragLayer';
+import { useCalendarNavigation, useEventsByDate } from './useCalendarNavigation';
+import { isSameDay } from './utils';
+import type { RenderCell, RenderEvent } from './gridRenderProps';
+import type { CalendarEventWithLinks } from './types';
 
 interface CourseCalendarProps {
   events: CalendarEventWithLinks[];
@@ -143,8 +32,15 @@ interface CourseCalendarProps {
   onMonthChange?: ((year: number, month: number) => void) | null;
   /** Week view: drag across hour cells to pick a time range (click = 1 hour). */
   onRangeSelect?: ((start: Date, end: Date) => void) | null;
-  showCreator?: boolean;
   canDragDeadlines?: boolean;
+}
+
+/** The hour cells covered by an in-progress drag-to-select, on one day. */
+interface DragSelection {
+  dayIndex: number;
+  date: Date;
+  anchorHour: number;
+  hoverHour: number;
 }
 
 const CourseCalendar = ({
@@ -154,683 +50,146 @@ const CourseCalendar = ({
   onDeadlineDrop,
   onMonthChange,
   onRangeSelect,
-  showCreator = false,
   canDragDeadlines = false,
 }: CourseCalendarProps) => {
-  const [currentDate, setCurrentDate] = useState(new Date());
-  const [view, setView] = useLocalStorageState('classmoji-calendar-view', {
-    defaultValue: 'week',
-  }); // 'month' or 'week'
-  const [selectedTypes, setSelectedTypes] = useState<string[]>([]);
-  const [activeEvent, setActiveEvent] = useState<CalendarEventWithLinks | null>(null);
-  const [draggedWidth, setDraggedWidth] = useState<number | null>(null);
-  const [currentTime, setCurrentTime] = useState(new Date());
-  // Week-view drag-to-select: anchor is the cell where the drag started,
-  // hover tracks the cell under the pointer (same day column only).
-  const [dragSelect, setDragSelect] = useState<{
-    dayIdx: number;
-    anchorHour: number;
-    hoverHour: number;
-  } | null>(null);
+  const nav = useCalendarNavigation(onMonthChange);
+  const eventsFor = useEventsByDate(events, nav.selectedTypes);
 
-  // Configure sensors for better drag behavior
-  const sensors = useSensors(
-    useSensor(PointerSensor, {
-      activationConstraint: {
-        distance: 3, // 3px movement required before drag starts
-      },
-    })
-  );
+  // Drag-to-select is plain mouse state, not dnd-kit: it picks a range of empty
+  // cells rather than moving anything, and routing it through the drag library
+  // would put dnd-kit between every click and the grid.
+  const [dragSelect, setDragSelect] = useState<DragSelection | null>(null);
 
-  // Filter events
-  const filteredEvents = useMemo(() => {
-    return filterEventsByType(events, selectedTypes);
-  }, [events, selectedTypes]);
-
-  // Group events by date
-  const eventsByDate = useMemo(() => {
-    return groupEventsByDate(filteredEvents);
-  }, [filteredEvents]);
-
-  // Get dates for current view
-  const dates = useMemo(() => {
-    return view === 'month' ? getMonthDates(currentDate) : getWeekDates(currentDate);
-  }, [currentDate, view]);
-
-  // Update current time every minute for the time indicator
-  useEffect(() => {
-    const interval = setInterval(() => {
-      setCurrentTime(new Date());
-    }, 60000);
-
-    return () => clearInterval(interval);
-  }, []);
-
-  // Finish a drag-to-select on mouseup anywhere (the pointer may leave the
-  // grid mid-drag). A plain click yields a one-hour range.
+  // Finish on mouseup ANYWHERE — the pointer often leaves the grid mid-drag.
+  // A plain click yields a one-hour range.
   useEffect(() => {
     if (!dragSelect) return;
 
     const handleMouseUp = () => {
-      const { dayIdx, anchorHour, hoverHour } = dragSelect;
+      const { date, anchorHour, hoverHour } = dragSelect;
       setDragSelect(null);
+      if (!onRangeSelect) return;
 
-      const day = dates[dayIdx];
-      if (!day || !onRangeSelect) return;
-
-      const startHour = Math.min(anchorHour, hoverHour);
-      const endHour = Math.max(anchorHour, hoverHour) + 1;
-      const start = new Date(day);
-      start.setHours(startHour, 0, 0, 0);
-      const end = new Date(day);
-      end.setHours(endHour, 0, 0, 0);
+      const start = new Date(date);
+      start.setHours(Math.min(anchorHour, hoverHour), 0, 0, 0);
+      const end = new Date(date);
+      end.setHours(Math.max(anchorHour, hoverHour) + 1, 0, 0, 0);
       onRangeSelect(start, end);
     };
 
     window.addEventListener('mouseup', handleMouseUp);
     return () => window.removeEventListener('mouseup', handleMouseUp);
-  }, [dragSelect, dates, onRangeSelect]);
+  }, [dragSelect, onRangeSelect]);
 
-  const handlePrevious = () => {
-    const newDate = view === 'month' ? addMonths(currentDate, -1) : addWeeks(currentDate, -1);
-    setCurrentDate(newDate);
-    // Fetch events after state update (side effects should be outside setState)
-    if (onMonthChange) {
-      onMonthChange(newDate.getFullYear(), newDate.getMonth());
-    }
-  };
+  const handleEventClick = useCallback(
+    (event: CalendarEventWithLinks) => onEventClick?.(event),
+    [onEventClick]
+  );
 
-  const handleNext = () => {
-    const newDate = view === 'month' ? addMonths(currentDate, 1) : addWeeks(currentDate, 1);
-    setCurrentDate(newDate);
-    // Fetch events after state update (side effects should be outside setState)
-    if (onMonthChange) {
-      onMonthChange(newDate.getFullYear(), newDate.getMonth());
-    }
-  };
-
-  const handleToday = () => {
-    const today = new Date();
-    setCurrentDate(today);
-    if (onMonthChange) {
-      onMonthChange(today.getFullYear(), today.getMonth());
-    }
-  };
-
-  const getEventsForDate = (date: Date) => {
-    const key = new Date(date.getFullYear(), date.getMonth(), date.getDate()).toISOString();
-    const dayEvents = (eventsByDate as Record<string, CalendarEventWithLinks[]>)[key] || [];
-    return sortEventsByTime(dayEvents);
-  };
-
-  const handleDragStart = (event: DragStartEvent) => {
-    const draggedEvent = event.active.data.current?.event as CalendarEventWithLinks | undefined;
-    if (draggedEvent) {
-      setActiveEvent(draggedEvent);
-      // Capture the width of the dragged element
-      const initialRect = event.active.rect.current?.initial;
-      if (initialRect?.width) {
-        setDraggedWidth(initialRect.width);
-      }
-    }
-  };
-
-  const handleDragEnd = (event: DragEndEvent) => {
-    setActiveEvent(null);
-    setDraggedWidth(null);
-
-    if (!event.over) return;
-
-    const draggedEvent = event.active.data.current!.event as CalendarEventWithLinks;
-    const dropId = String(event.over.id);
-
-    // Check if this is a deadline drop or regular event drop
-    const isDeadline = draggedEvent.is_deadline;
-    // Belt and braces: the draggable is already disabled for form closes.
-    if (isDragLocked(draggedEvent)) return;
-    if (isDeadline && !onDeadlineDrop) return;
-    if (!isDeadline && !onEventDrop) return;
-
-    // The two id formats and this parser live together in geometry.ts, so a
-    // change to one cannot leave the other behind.
-    const target = parseDropId(dropId);
-    if (!target) return;
-
-    const newStartTime = new Date(target.date);
-    if (target.view === 'week') {
-      // The hour in a week drop id is an ABSOLUTE clock hour, never a row index.
-      newStartTime.setHours(target.hour, 0, 0, 0);
-    } else {
-      // A month cell moves the date and keeps the event's time of day.
-      const originalStart = new Date(draggedEvent.start_time);
-      newStartTime.setHours(originalStart.getHours(), originalStart.getMinutes(), 0, 0);
-    }
-
-    if (isDeadline) {
-      onDeadlineDrop!(draggedEvent, newStartTime);
-      return;
-    }
-
-    const duration =
-      new Date(draggedEvent.end_time).getTime() - new Date(draggedEvent.start_time).getTime();
-    onEventDrop!(draggedEvent, newStartTime, new Date(newStartTime.getTime() + duration));
-  };
-
-  const handleDragCancel = () => {
-    setActiveEvent(null);
-    setDraggedWidth(null);
-  };
-
-  const renderMonthView = () => {
-    const weeks = [];
-    for (let i = 0; i < dates.length; i += 7) {
-      weeks.push(dates.slice(i, i + 7));
-    }
+  const renderEvent: RenderEvent = ({ event, placement, className, style, children }) => {
+    const draggable = canDragEvent(event, canDragDeadlines, onEventDrop);
+    const cursor = draggable
+      ? 'cursor-grab active:cursor-grabbing'
+      : placement === 'week'
+        ? ''
+        : 'cursor-pointer';
 
     return (
-      // Keep day cells legible on phones: hold a minimum width and let the
-      // calendar scroll horizontally instead of squishing columns to nothing.
-      <div className="min-w-[44rem]">
-        {/* Header - Days of week */}
-        <div className="grid grid-cols-7 border-b border-line">
-          {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map(day => (
-            <div
-              key={day}
-              className="p-2 text-center text-xs font-medium text-ink-3 uppercase tracking-wider"
-            >
-              {day}
-            </div>
-          ))}
-        </div>
-
-        {/* Calendar grid */}
-        <div>
-          {weeks.map((week, weekIdx) => (
-            <div
-              key={weekIdx}
-              className="grid grid-cols-7 border-b border-gray-200 dark:border-neutral-700 last:border-b-0"
-            >
-              {week.map((date, dayIdx) => {
-                const dayEvents = getEventsForDate(date);
-                const isInCurrentMonth = isCurrentMonth(date, currentDate);
-                const isTodayDate = isToday(date);
-                const dropId = monthDropId(date);
-
-                return (
-                  <DroppableCell
-                    key={dayIdx}
-                    id={dropId}
-                    className={`min-h-[120px] p-2 border-r border-gray-200 dark:border-neutral-700 last:border-r-0 transition-colors overflow-hidden ${
-                      !isInCurrentMonth ? 'bg-gray-50/50 dark:bg-neutral-900/50' : ''
-                    }`}
-                  >
-                    {/* Date number */}
-                    <div className="flex items-center justify-end mb-1">
-                      <span
-                        className={`text-sm font-medium flex items-center justify-center w-7 h-7 rounded-full ${
-                          isTodayDate
-                            ? 'bg-secondary text-white'
-                            : isInCurrentMonth
-                              ? 'text-ink-0'
-                              : 'text-gray-400 dark:text-gray-600'
-                        }`}
-                      >
-                        {date.getDate()}
-                      </span>
-                    </div>
-
-                    {/* Events */}
-                    <div className="space-y-1">
-                      {dayEvents.map((event, idx) => (
-                        <DraggableEvent
-                          key={
-                            event.occurrence_date
-                              ? `${event.id}-${new Date(event.occurrence_date).toISOString()}`
-                              : event.id || idx
-                          }
-                          event={event}
-                          disabled={!canDragEvent(event, canDragDeadlines, onEventDrop)}
-                        >
-                          <div
-                            onClick={e => {
-                              e.stopPropagation();
-                              onEventClick?.(event);
-                            }}
-                            className={`text-xs px-2 py-1 rounded transition-opacity truncate flex items-center gap-1 ${
-                              canDragEvent(event, canDragDeadlines, onEventDrop)
-                                ? 'cursor-grab active:cursor-grabbing'
-                                : 'cursor-pointer'
-                            } hover:opacity-80 ${getEventTypeLightBg(event.event_type)} ${getEventTypeDarkText(event.event_type)} ${event.is_unpublished ? 'border border-dashed border-yellow-500' : ''}`}
-                            title={
-                              event.is_deadline &&
-                              canDragEvent(event, canDragDeadlines, onEventDrop)
-                                ? 'Drag to change deadline'
-                                : undefined
-                            }
-                          >
-                            <span className="font-medium truncate">{event.title}</span>
-                            {event.is_unpublished && (
-                              <span className="shrink-0 text-xs px-1 rounded bg-yellow-200 dark:bg-yellow-800 text-yellow-800 dark:text-yellow-200">
-                                Draft
-                              </span>
-                            )}
-                          </div>
-                        </DraggableEvent>
-                      ))}
-                    </div>
-                  </DroppableCell>
-                );
-              })}
-            </div>
-          ))}
-        </div>
-      </div>
+      <DraggableEvent
+        event={event}
+        disabled={!draggable}
+        className={`${className} ${cursor}`}
+        style={style}
+        // A deadline chip looks like every other chip, so say what dragging it
+        // would do. Only where it IS draggable, and not on a week block, whose
+        // card already fills the space a tooltip would cover.
+        title={
+          draggable && event.is_deadline && placement !== 'week'
+            ? 'Drag to change deadline'
+            : undefined
+        }
+      >
+        {children}
+      </DraggableEvent>
     );
   };
 
-  const renderWeekView = () => {
-    const timeSlots = hoursInWindow();
-    const nowHourFloat = currentTime.getHours() + currentTime.getMinutes() / 60;
-
-    // Helper to check if event should be in all-day section (deadlines or outside 8AM-10PM)
-    const isAllDayOrOutsideHours = (event: CalendarEventWithLinks) => {
-      if (event.is_deadline) return true;
-      const startHour = new Date(event.start_time).getHours();
-      const endHour = new Date(event.end_time).getHours();
-      // Event is outside visible hours if it starts before 8AM or after 10PM
-      return startHour < 8 || startHour >= 22 || endHour < 8;
-    };
+  const renderCell: RenderCell = ({ dropId, date, hour, dayIndex, className, style, children }) => {
+    const isHourCell = hour !== undefined && dayIndex !== undefined;
+    const isInSelection =
+      isHourCell &&
+      dragSelect !== null &&
+      dragSelect.dayIndex === dayIndex &&
+      hour >= Math.min(dragSelect.anchorHour, dragSelect.hoverHour) &&
+      hour <= Math.max(dragSelect.anchorHour, dragSelect.hoverHour);
 
     return (
-      // Min width keeps the 7 day columns + time gutter readable on phones; the
-      // outer wrapper scrolls horizontally rather than collapsing columns.
-      <div className="min-w-[48rem]">
-        {/* Header */}
-        <div
-          className="grid border-b border-line"
-          style={{ gridTemplateColumns: '4rem 1fr 1fr 1fr 1fr 1fr 1fr 1fr' }}
-        >
-          <div className="p-2 border-r border-gray-200 dark:border-neutral-700" />
-          {dates.map((date, idx) => {
-            const isTodayDate = isToday(date);
-            return (
-              <div
-                key={idx}
-                className="p-3 border-r border-gray-200 dark:border-neutral-700 last:border-r-0 text-center"
-              >
-                <div
-                  className={`text-xs font-medium uppercase tracking-wider ${isTodayDate ? 'text-secondary' : 'text-ink-3'}`}
-                >
-                  {getShortDayName(date)}
-                </div>
-                <div
-                  className={`text-lg font-semibold mt-1 ${
-                    isTodayDate ? 'text-secondary' : 'text-ink-0'
-                  }`}
-                >
-                  {date.getDate()}
-                </div>
-              </div>
-            );
-          })}
-        </div>
-
-        {/* All-day / Deadlines row */}
-        <div
-          className="grid border-b border-gray-200 dark:border-neutral-700"
-          style={{ gridTemplateColumns: '4rem 1fr 1fr 1fr 1fr 1fr 1fr 1fr' }}
-        >
-          <div className="px-1 py-1.5 border-r border-gray-200 dark:border-neutral-700 text-xs text-ink-3 bg-gray-50/50 dark:bg-neutral-800/30">
-            All day
-          </div>
-          {dates.map((date, dayIdx) => {
-            const dayEvents = getEventsForDate(date);
-            const allDayEvents = dayEvents.filter(isAllDayOrOutsideHours);
-            const allDayDropId = monthDropId(date);
-            return (
-              <DroppableCell
-                key={dayIdx}
-                id={allDayDropId}
-                className="px-1 py-1 border-r border-gray-200 dark:border-neutral-700 last:border-r-0 min-h-[2rem] overflow-hidden bg-gray-50/50 dark:bg-neutral-800/30"
-              >
-                <div className="space-y-0.5">
-                  {allDayEvents.slice(0, 3).map((event, idx) => (
-                    <DraggableEvent
-                      key={
-                        event.occurrence_date
-                          ? `${event.id}-${new Date(event.occurrence_date).toISOString()}`
-                          : event.id || idx
-                      }
-                      event={event}
-                      disabled={!canDragEvent(event, canDragDeadlines, onEventDrop)}
-                    >
-                      <div
-                        onClick={e => {
-                          e.stopPropagation();
-                          onEventClick?.(event);
-                        }}
-                        className={`text-xs px-1.5 py-0.5 rounded truncate hover:opacity-80 flex items-center gap-1 ${
-                          canDragEvent(event, canDragDeadlines, onEventDrop)
-                            ? 'cursor-grab active:cursor-grabbing'
-                            : 'cursor-pointer'
-                        } ${getEventTypeLightBg(event.event_type)} ${getEventTypeDarkText(event.event_type)} ${event.is_unpublished ? 'border border-dashed border-yellow-500' : ''}`}
-                        title={
-                          event.is_deadline && canDragEvent(event, canDragDeadlines, onEventDrop)
-                            ? 'Drag to change deadline'
-                            : undefined
-                        }
-                      >
-                        <span className="font-medium truncate">{event.title}</span>
-                        {event.is_unpublished && (
-                          <span className="shrink-0 text-xs px-1 rounded bg-yellow-200 dark:bg-yellow-800 text-yellow-800 dark:text-yellow-200">
-                            Draft
-                          </span>
-                        )}
-                      </div>
-                    </DraggableEvent>
-                  ))}
-                  {allDayEvents.length > 3 && (
-                    <div className="text-xs text-ink-3 px-1">+{allDayEvents.length - 3} more</div>
-                  )}
-                </div>
-              </DroppableCell>
-            );
-          })}
-        </div>
-
-        {/* Grid — horizontal scroll is handled by the shared outer wrapper so the
-            header, all-day row, and time grid stay column-aligned when scrolled. */}
-        <div className="relative">
-          {/* Current time line across all columns */}
-          {currentTime.getHours() >= 8 && currentTime.getHours() < 22 && (
-            <div
-              className="absolute left-0 right-0 pointer-events-none z-10"
-              style={{
-                top: topForHour(nowHourFloat),
-              }}
-            >
-              <div className="h-px opacity-30" style={{ backgroundColor: 'var(--accent)' }} />
-            </div>
-          )}
-          <div className="grid" style={{ gridTemplateColumns: '4rem 1fr 1fr 1fr 1fr 1fr 1fr 1fr' }}>
-            {/* Time column */}
-            <div className="border-r border-gray-200 dark:border-neutral-700 relative">
-              {timeSlots.map(hour => (
-                <div
-                  key={hour}
-                  className="px-1 py-1 text-xs text-ink-3 border-b border-gray-200 dark:border-neutral-700 text-right"
-                  style={{ height: remForHours(1) }}
-                >
-                  {formatHourLabel(hour)}
-                </div>
-              ))}
-              {/* Current time badge */}
-              {currentTime.getHours() >= 8 && currentTime.getHours() < 22 && (
-                <div
-                  className="absolute left-0.5 right-0.5 pointer-events-none z-20"
-                  style={{
-                    top: topForHour(nowHourFloat),
-                    transform: 'translateY(-50%)',
-                  }}
-                >
-                  <div
-                    className="text-white text-xs font-medium px-1 py-0.5 rounded-full text-center"
-                    style={{ backgroundColor: 'var(--accent)' }}
-                  >
-                    {currentTime.getHours() % 12 || 12}:
-                    {String(currentTime.getMinutes()).padStart(2, '0')}
-                  </div>
-                </div>
-              )}
-            </div>
-
-            {/* Day columns */}
-            {dates.map((date, dayIdx) => {
-              const dayEvents = getEventsForDate(date);
-              return (
-                <div
-                  key={dayIdx}
-                  className="border-r border-gray-200 dark:border-neutral-700 last:border-r-0 relative"
-                >
-                  {timeSlots.map(hour => {
-                    const dropId = weekDropId(date, hour);
-                    const isInSelection =
-                      dragSelect !== null &&
-                      dragSelect.dayIdx === dayIdx &&
-                      hour >= Math.min(dragSelect.anchorHour, dragSelect.hoverHour) &&
-                      hour <= Math.max(dragSelect.anchorHour, dragSelect.hoverHour);
-                    return (
-                      <DroppableCell
-                        key={hour}
-                        id={dropId}
-                        className={`border-b border-gray-200 dark:border-neutral-700 cursor-pointer transition-colors hover:bg-nav-hover/50 ${
-                          isInSelection ? '!bg-blue-100/70 dark:!bg-blue-900/40' : ''
-                        }`}
-                        style={{ height: remForHours(1) }}
-                        onMouseDown={
-                          onRangeSelect
-                            ? e => {
-                                if (e.button !== 0) return;
-                                e.preventDefault(); // no text selection while dragging
-                                setDragSelect({ dayIdx, anchorHour: hour, hoverHour: hour });
-                              }
-                            : undefined
-                        }
-                        onMouseEnter={
-                          dragSelect && dragSelect.dayIdx === dayIdx
-                            ? () => setDragSelect(s => (s ? { ...s, hoverHour: hour } : s))
-                            : undefined
-                        }
-                      />
-                    );
-                  })}
-                  {/* Events overlay - only show timed events (not all-day/deadlines) */}
-                  <div className="absolute inset-0 pointer-events-none">
-                    {dayEvents
-                      .filter(e => !isAllDayOrOutsideHours(e))
-                      .map((event, idx) => {
-                        const startTime = new Date(event.start_time);
-                        const endTime = new Date(event.end_time);
-                        const startHour = startTime.getHours() + startTime.getMinutes() / 60;
-                        const duration =
-                          (endTime.getTime() - startTime.getTime()) / (1000 * 60 * 60);
-
-                        return (
-                          <DraggableEvent
-                            key={
-                              event.occurrence_date
-                                ? `${event.id}-${new Date(event.occurrence_date).toISOString()}`
-                                : event.id || idx
-                            }
-                            event={event}
-                            disabled={!canDragEvent(event, canDragDeadlines, onEventDrop)}
-                            className={`absolute left-1 right-1 pointer-events-auto ${
-                              canDragEvent(event, canDragDeadlines, onEventDrop)
-                                ? 'cursor-grab active:cursor-grabbing'
-                                : ''
-                            }`}
-                            style={{
-                              top: topForHour(startHour),
-                              height: heightForDuration(duration),
-                            }}
-                          >
-                            <EventCard
-                              event={event}
-                              onClick={onEventClick ?? undefined}
-                              showCreator={showCreator}
-                              compact={true}
-                            />
-                          </DraggableEvent>
-                        );
-                      })}
-                  </div>
-                  {/* Current time indicator */}
-                  {isToday(date) && currentTime.getHours() >= 8 && currentTime.getHours() < 22 && (
-                    <div
-                      className="absolute left-0 right-0 pointer-events-none z-20 flex items-center"
-                      style={{
-                        top: topForHour(nowHourFloat),
-                        transform: 'translateY(-50%)',
-                      }}
-                    >
-                      <div
-                        className="w-3 h-3 rounded-full -ml-1.5 shrink-0"
-                        style={{ backgroundColor: 'var(--accent)' }}
-                      />
-                      <div className="flex-1 h-0.5" style={{ backgroundColor: 'var(--accent)' }} />
-                    </div>
-                  )}
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      </div>
+      <DroppableCell
+        id={dropId}
+        className={`${className} ${
+          isHourCell && onRangeSelect ? 'cursor-pointer hover:bg-nav-hover/50' : ''
+        } ${isInSelection ? '!bg-blue-100/70 dark:!bg-blue-900/40' : ''}`}
+        style={style}
+        onMouseDown={
+          isHourCell && onRangeSelect
+            ? e => {
+                if (e.button !== 0) return;
+                e.preventDefault(); // no text selection while dragging
+                setDragSelect({ dayIndex, date, anchorHour: hour, hoverHour: hour });
+              }
+            : undefined
+        }
+        onMouseEnter={
+          isHourCell && dragSelect && isSameDay(dragSelect.date, date)
+            ? () => setDragSelect(s => (s ? { ...s, hoverHour: hour } : s))
+            : undefined
+        }
+      >
+        {children}
+      </DroppableCell>
     );
-  };
-
-  // Get week range for display
-  const getWeekRangeText = () => {
-    if (view !== 'week' || dates.length === 0) return '';
-    const startDate = dates[0];
-    const endDate = dates[dates.length - 1];
-    const startMonth = getMonthName(startDate);
-    const endMonth = getMonthName(endDate);
-
-    if (startMonth === endMonth) {
-      return `${startDate.getDate()} - ${endDate.getDate()}`;
-    }
-    return `${startMonth.slice(0, 3)} ${startDate.getDate()} - ${endMonth.slice(0, 3)} ${endDate.getDate()}`;
   };
 
   return (
-    <DndContext
-      sensors={sensors}
-      onDragStart={handleDragStart}
-      onDragEnd={handleDragEnd}
-      onDragCancel={handleDragCancel}
-    >
-      <section className="rounded-2xl bg-panel ring-1 ring-line overflow-hidden min-h-[calc(100vh-10rem)]">
-        {/* Header: nav + range label + view toggle */}
-        <header className="flex flex-wrap items-center justify-between gap-3 px-5 sm:px-6 pt-5 sm:pt-6 pb-4">
-          <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={handlePrevious}
-              aria-label="Previous"
-              className="p-1.5 rounded-full text-gray-500 hover:text-gray-900 dark:text-gray-400 dark:hover:text-gray-100 hover:bg-nav-hover transition-colors"
-            >
-              <IconChevronLeft size={18} />
-            </button>
-            <button
-              type="button"
-              onClick={handleToday}
-              className="px-2.5 py-1 text-xs font-medium text-gray-600 dark:text-gray-300 rounded-full hover:bg-nav-hover transition-colors"
-            >
-              Today
-            </button>
-            <button
-              type="button"
-              onClick={handleNext}
-              aria-label="Next"
-              className="p-1.5 rounded-full text-gray-500 hover:text-gray-900 dark:text-gray-400 dark:hover:text-gray-100 hover:bg-nav-hover transition-colors"
-            >
-              <IconChevronRight size={18} />
-            </button>
-            <h2 className="ml-2 text-base sm:text-lg font-semibold text-ink-0 tracking-tight">
-              {getMonthName(currentDate)} {getYear(currentDate)}
-              {view === 'week' && (
-                <span className="ml-2 text-sm font-normal text-ink-3">{getWeekRangeText()}</span>
-              )}
-            </h2>
-          </div>
-
-          <div className="flex items-center bg-nav-hover rounded-full p-0.5">
-            <button
-              type="button"
-              onClick={() => setView('week')}
-              className={`px-3.5 py-1 text-xs font-medium rounded-full transition-all ${
-                view === 'week' ? 'bg-white dark:bg-neutral-700 text-ink-0 shadow-sm' : 'text-ink-3'
-              }`}
-            >
-              Week
-            </button>
-            <button
-              type="button"
-              onClick={() => setView('month')}
-              className={`px-3.5 py-1 text-xs font-medium rounded-full transition-all ${
-                view === 'month'
-                  ? 'bg-white dark:bg-neutral-700 text-ink-0 shadow-sm'
-                  : 'text-ink-3'
-              }`}
-            >
-              Month
-            </button>
-          </div>
-        </header>
-
-        {/* Event type filters */}
-        <div className="flex flex-wrap items-center gap-x-3 gap-y-2 px-5 sm:px-6 pb-3 text-xs text-gray-600 dark:text-gray-300">
-          {EVENT_TYPES.map(type => {
-            const isActive = selectedTypes.length === 0 || selectedTypes.includes(type);
-            return (
-              <button
-                key={type}
-                type="button"
-                onClick={() => {
-                  if (selectedTypes.includes(type)) {
-                    setSelectedTypes(selectedTypes.filter(t => t !== type));
-                  } else {
-                    setSelectedTypes([...selectedTypes, type]);
-                  }
-                }}
-                className={`inline-flex items-center gap-1.5 transition-opacity ${
-                  isActive ? '' : 'opacity-40'
-                }`}
-              >
-                <span className={`w-2 h-2 rounded-full ${getEventTypeDotColor(type)}`} />
-                {getEventTypeLabel(type)}
-              </button>
-            );
-          })}
-        </div>
-
-        <div className="border-t border-line overflow-x-auto">
-          {view === 'month' ? renderMonthView() : renderWeekView()}
-        </div>
-      </section>
-
-      <DragOverlay
-        dropAnimation={{
-          duration: 200,
-          easing: 'cubic-bezier(0.18, 0.67, 0.6, 1.22)',
-        }}
+    <CalendarDragLayer view={nav.view} onEventDrop={onEventDrop} onDeadlineDrop={onDeadlineDrop}>
+      <CalendarShell
+        currentDate={nav.currentDate}
+        weekDates={nav.weekDates}
+        view={nav.view}
+        onViewChange={nav.setView}
+        onPrevious={nav.goPrevious}
+        onNext={nav.goNext}
+        onToday={nav.goToday}
+        legend={
+          <CalendarTypeFilter selectedTypes={nav.selectedTypes} onToggleType={nav.toggleType} />
+        }
       >
-        {activeEvent ? (
-          view === 'month' ? (
-            <div
-              className={`text-xs px-2 py-1 rounded shadow-lg opacity-90 ${getEventTypeLightBg(activeEvent.event_type)} ${getEventTypeDarkText(activeEvent.event_type)}`}
-              style={{
-                width: draggedWidth || 'auto',
-                cursor: 'grabbing',
-              }}
-            >
-              <span className="truncate font-medium">{activeEvent.title}</span>
-            </div>
-          ) : (
-            <div
-              className="opacity-90 shadow-2xl"
-              style={{
-                width: draggedWidth || 'auto',
-                cursor: 'grabbing',
-              }}
-            >
-              <EventCard event={activeEvent} showCreator={showCreator} compact={true} />
-            </div>
-          )
-        ) : null}
-      </DragOverlay>
-    </DndContext>
+        {nav.view === 'month' ? (
+          <MonthGrid
+            dates={nav.monthDates}
+            currentDate={nav.currentDate}
+            now={nav.now}
+            eventsFor={eventsFor}
+            onEventClick={handleEventClick}
+            onShowMore={nav.focusDay}
+            renderEvent={renderEvent}
+            renderCell={renderCell}
+          />
+        ) : (
+          <WeekGrid
+            dates={nav.weekDates}
+            now={nav.now}
+            eventsFor={eventsFor}
+            onEventClick={handleEventClick}
+            // The strip is the only drop target that keeps an event's time of
+            // day, so staff who can drop need it even on an empty week.
+            alwaysShowAllDay={Boolean(onEventDrop || onDeadlineDrop)}
+            renderEvent={renderEvent}
+            renderCell={renderCell}
+          />
+        )}
+      </CalendarShell>
+    </CalendarDragLayer>
   );
 };
 

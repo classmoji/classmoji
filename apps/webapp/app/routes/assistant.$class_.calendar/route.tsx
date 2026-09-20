@@ -528,7 +528,6 @@ const AssistantCalendar = ({ loaderData }: Route.ComponentProps) => {
         onEventDrop={handleEventDrop}
         onMonthChange={handleMonthChange}
         onRangeSelect={handleRangeSelect}
-        showCreator={true}
       />
 
       <AddEventModal

@@ -10,7 +10,7 @@ import CalendarSubscriptionCard from '~/components/features/calendar/CalendarSub
 import EventCard from '~/components/features/calendar/EventCard';
 import EventLinks from '~/components/features/calendar/EventLinks';
 import type { CalendarEventWithLinks } from '~/components/features/calendar/types';
-import StudentCalendarView from './StudentCalendarView';
+import StudentCalendarView from '~/components/features/calendar/StudentCalendarView';
 
 export const loader = async ({ request, params }: Route.LoaderArgs) => {
   const { class: classSlug } = params;

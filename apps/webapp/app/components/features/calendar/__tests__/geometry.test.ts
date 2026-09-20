@@ -4,11 +4,15 @@ import {
   DEFAULT_START_HOUR,
   HOUR_FLOOR,
   HOUR_HEIGHT_REM,
+  META_ROW_MIN_HOURS,
   MIN_DURATION_HOURS,
+  fitsMetaRow,
   formatHourLabel,
   heightForDuration,
   hourLabelParts,
   hoursInWindow,
+  isOutsideWindow,
+  isTightBlock,
   monthDropId,
   parseDropId,
   remForHours,
@@ -192,5 +196,90 @@ describe('droppable ids', () => {
     expect(parseDropId('')).toBeNull();
     expect(parseDropId('month-abcd-01-05')).toBeNull();
     expect(parseDropId('MONTH-2026-01-05')).toBeNull();
+  });
+});
+
+describe('isOutsideWindow', () => {
+  const event = (startHour: number, startMinute: number, endHour: number, endMinute = 0) => ({
+    start_time: new Date(2026, 8, 22, startHour, startMinute).toISOString(),
+    end_time: new Date(2026, 8, 22, endHour, endMinute).toISOString(),
+  });
+
+  it('keeps an event inside the rendered hours in the grid', () => {
+    expect(isOutsideWindow(event(10, 0, 11))).toBe(false);
+    expect(isOutsideWindow(event(8, 0, 9))).toBe(false);
+    expect(isOutsideWindow(event(21, 30, 22, 30))).toBe(false);
+  });
+
+  it('sends every deadline to the strip, whatever time it is', () => {
+    expect(isOutsideWindow({ ...event(10, 0, 11), is_deadline: true })).toBe(true);
+  });
+
+  it('sends an event that starts before the window to the strip', () => {
+    // 7:45 AM: the staff grid compared whole hours (7 < 8, out) and the student
+    // grid compared floats (7.75 < 8, out) — they agreed here but not on 8:00
+    // vs 8:30 boundaries, which is why there is now one implementation.
+    expect(isOutsideWindow(event(7, 45, 9))).toBe(true);
+    expect(isOutsideWindow(event(6, 0, 7))).toBe(true);
+  });
+
+  it('sends an event that starts in the last row to the strip', () => {
+    // A 10 PM row IS rendered; an event starting in it is still exiled. That is
+    // the bound both grids drew, kept exactly so this refactor moves nothing.
+    expect(isOutsideWindow(event(22, 0, 23))).toBe(true);
+    expect(isOutsideWindow(event(23, 30, 23, 45))).toBe(true);
+  });
+
+  it('sends an event that has already finished by 8 AM to the strip', () => {
+    expect(isOutsideWindow(event(6, 0, 8))).toBe(true);
+  });
+
+  it('takes an explicit window when a caller has one', () => {
+    expect(isOutsideWindow(event(7, 0, 8), 6, 22)).toBe(false);
+  });
+});
+
+describe('fitsMetaRow', () => {
+  it('gives a 50-minute block its second line', () => {
+    // The x-hour is the most common short slot here, and it is the length the
+    // threshold was placed to keep: 3.333rem of block, less 0.25 of gap and
+    // 0.5 of `py-1`, leaves 2.583rem for 2.375rem of content.
+    expect(fitsMetaRow(50 / 60)).toBe(true);
+    expect(fitsMetaRow(1)).toBe(true);
+    expect(fitsMetaRow(1.5)).toBe(true);
+  });
+
+  it('withholds it from a 45-minute block', () => {
+    // 3rem, less the gap and the roomier `p-2` it keeps, leaves 1.75rem: the
+    // title and half of the row, which is worse than no row at all.
+    expect(fitsMetaRow(0.75)).toBe(false);
+    expect(fitsMetaRow(0.5)).toBe(false);
+  });
+
+  it('measures the block that will be DRAWN, not the raw duration', () => {
+    // Everything shorter than the clamp draws at the clamp — still under the
+    // threshold, but the rule goes through the same clamp the height does
+    // rather than second-guessing it.
+    expect(fitsMetaRow(0.1)).toBe(false);
+    expect(META_ROW_MIN_HOURS).toBeGreaterThan(MIN_DURATION_HOURS);
+    expect(META_ROW_MIN_HOURS).toBeLessThan(50 / 60);
+  });
+});
+
+describe('isTightBlock', () => {
+  it('tightens the padding of anything under an hour', () => {
+    expect(isTightBlock(50 / 60)).toBe(true);
+    expect(isTightBlock(0.75)).toBe(true);
+  });
+
+  it('leaves an hour or more alone', () => {
+    expect(isTightBlock(1)).toBe(false);
+    expect(isTightBlock(2)).toBe(false);
+  });
+
+  it('is where the room for a 50-minute meta row comes from', () => {
+    // The two rules meet here: a block can be short enough to need the tighter
+    // padding AND long enough to keep its row. That window is the x-hour.
+    expect(isTightBlock(50 / 60) && fitsMetaRow(50 / 60)).toBe(true);
   });
 });

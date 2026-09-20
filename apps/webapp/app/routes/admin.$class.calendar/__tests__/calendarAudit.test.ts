@@ -73,8 +73,13 @@ vi.mock('@classmoji/database', () => ({
 // Every calendar module the route imports AT RUNTIME belongs in the list below,
 // or importing the route drags a React component tree (and antd) into this node
 // test. Type-only imports need no entry — the transform erases them — which is
-// why `calendar/types` and the modal's form types are absent, and `geometry.ts`
-// is reached only through CourseCalendar, which is mocked here.
+// why `calendar/types` and the modal's form types are absent.
+//
+// The shared calendar parts — CalendarShell, WeekGrid, MonthGrid, AllDayStrip,
+// NowIndicator, EventChip, geometry, useCalendarNavigation and the drag
+// layer — need no entries of their own: the route reaches every one of them
+// through CourseCalendar, which is mocked here. An entry is needed the day the
+// route imports one of them DIRECTLY.
 vi.mock('@classmoji/ui-components', () => ({ useCallout: () => ({ show: vi.fn() }) }));
 vi.mock('~/utils/calendar.server', () => ({
   buildCalendarUrl: () => 'webcal://example.test/cal.ics',
