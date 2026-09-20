@@ -398,7 +398,7 @@ const SubmissionsTable = ({
                 })
               }
             >
-              GitHub
+              View
             </button>
             {rare.length > 0 && (
               <Dropdown
