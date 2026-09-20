@@ -55,23 +55,33 @@ export const MIN_DURATION_HOURS = 0.75;
  */
 export const TIGHT_BLOCK_MAX_HOURS = 1;
 
-/** Whether a block of `hours` needs the tighter vertical padding. */
-export const isTightBlock = (hours: number): boolean =>
-  Math.max(hours, MIN_DURATION_HOURS) < TIGHT_BLOCK_MAX_HOURS;
+/**
+ * Whether a block of `hours` needs the tighter vertical padding.
+ *
+ * A block that will draw CHIPS buys the room for them the way a 50-minute
+ * block buys its meta row — out of its padding — right up to the length where
+ * it is tall enough to wrap them and has room to spare. Which is why the chip
+ * tier is decided BEFORE the padding, and the padding before the budget.
+ */
+export const isTightBlock = (hours: number, showsChips = false): boolean =>
+  Math.max(hours, MIN_DURATION_HOURS) < (showsChips ? CHIP_WRAP_MIN_HOURS : TIGHT_BLOCK_MAX_HOURS);
 
 /**
  * The shortest block with room under its title for the meta row (the time and
  * the room). Below it the row is not drawn at all, rather than drawn and sliced
  * in half by the card's clip.
  *
- * 48 minutes, which is where the arithmetic puts it. Every length involved is
- * in `rem`, so write R for the root font size and count in rem: a block is
- * `hours × 4`, less the 0.25 gap the grid leaves under it and the 0.5 of
- * `py-1`; the content is a 1.25 title, a 0.125 gap and a 1 meta row = 2.375.
+ * 48 minutes. Every length involved is in `rem`, so write R for the root font
+ * size and count in rem: a block is `hours × 4`, less the 0.25 gap the grid
+ * leaves under it and the 0.5 of `py-1`; the content is a 1.1607 title, a
+ * 0.125 gap and a 0.9167 meta row = 2.2024.
  *
- *   50 min (0.833h): 3.333 − 0.75 = 2.583 ≥ 2.375 — fits, with 0.2 to spare
- *   48 min (0.8h)  : 3.2   − 0.75 = 2.45  ≥ 2.375 — fits
- *   45 min (0.75h) : 3     − 0.25 − 1 (it keeps `p-2`) = 1.75 < 2.375 — title only
+ *   50 min (0.833h): 3.333 − 0.75 = 2.583 ≥ 2.2024 — fits, with 0.38 to spare
+ *   48 min (0.8h)  : 3.2   − 0.75 = 2.45  ≥ 2.2024 — fits
+ *   45 min (0.75h) : 3     − 0.75 = 2.25  ≥ 2.2024 — fits by 0.05, which is
+ *                    inside the noise of a font's own metrics; it stays a
+ *                    title-only block rather than one whose second line is
+ *                    decided by the typeface the reader happens to have.
  *
  * Both sides of every one of those comparisons are multiples of R, so the
  * answer is the same at a 14px, 17px or 20px root: the rows, the padding and
@@ -104,14 +114,47 @@ export const CHIP_LINE_MIN_HOURS = 1;
 export const CHIP_WRAP_MIN_HOURS = 1.75;
 
 /**
- * One chip line, in rem: the chip's own box plus the gap above it. One chip
- * per line — a day column is about 107px at the week view's minimum width, and
- * two chips side by side there leave each of them room for an icon and a
- * letter. A whole line is what makes a chip worth reading, and it is also what
- * makes `+N` exact: the count of hidden resources has to be decided from the
- * block's height, never from a measured width.
+ * The shortest block that shows its time·room row AND a chip line.
+ *
+ * 63 minutes. In rem, at the tight padding such a block uses, its content box
+ * is `hours × 4 − 0.25 (the grid's gap under the block) − 0.5 (`py-1`)`, and
+ * what it has to hold is a 1.1607 title, a 0.125 row gap, a 0.9167 meta row
+ * and a 1.0625 chip — 3.2649 in all. The first chip line pays no gap of its
+ * own: the chip container's negative top margin reclaims exactly the padding
+ * the rows above it end with.
+ *
+ *   60 min (1h)    : 4     − 0.75 = 3.25   < 3.2649 — the chip takes the row
+ *   63 min (1.05h) : 4.2   − 0.75 = 3.45   ≥ 3.2649 — both, with room to spare
+ *   65 min (1.083h): 4.333 − 0.75 = 3.583  ≥ 3.2649 — both
+ *
+ * The 65-minute class is the commonest block in the product, and losing its
+ * time row the moment a deck was linked to it was the wrong trade. 63 rather
+ * than the 62 the arithmetic alone allows, so the commonest case is decided by
+ * a clear margin rather than by a float comparison against its own length.
  */
-export const CHIP_LINE_REM = 1.125;
+export const META_WITH_CHIP_MIN_HOURS = 1.05;
+
+/**
+ * A chip's own box, and the gap between two of them — measured off the built
+ * CSS rather than guessed, because a chip that carries a Draft pill is the
+ * tallest one and it is the one that has to fit.
+ *
+ * One chip per line: a day column is about 107px at the week view's minimum
+ * width, and two chips side by side there leave each of them room for an icon
+ * and a letter. A whole line is what makes a chip worth reading, and it is
+ * also what makes `+N` exact — the count of hidden resources has to come from
+ * the block's height, never from a measured width.
+ */
+export const CHIP_BOX_REM = 1.0625;
+export const CHIP_GAP_REM = 0.125;
+
+/** The room `n` chip lines take: n boxes and the gaps BETWEEN them, no more. */
+export const chipAreaRem = (lines: number): number =>
+  lines <= 0 ? 0 : lines * CHIP_BOX_REM + (lines - 1) * CHIP_GAP_REM;
+
+/** How many whole chip lines fit in `room` rem. */
+const chipLinesIn = (room: number): number =>
+  Math.max(0, Math.floor((room + CHIP_GAP_REM) / (CHIP_BOX_REM + CHIP_GAP_REM)));
 
 /** The gap the grid leaves under a block (`pb-1`), inside its measured height. */
 const BLOCK_GAP_REM = 0.25;
@@ -119,8 +162,8 @@ const BLOCK_GAP_REM = 0.25;
 const BLOCK_PADDING_REM = 1;
 const TIGHT_BLOCK_PADDING_REM = 0.5;
 /** The title line, the meta row, and the gap between stacked rows. */
-const TITLE_ROW_REM = 1.25;
-const META_ROW_REM = 1;
+const TITLE_ROW_REM = 1.1607;
+const META_ROW_REM = 0.9167;
 const ROW_GAP_REM = 0.125;
 
 /**
@@ -147,13 +190,10 @@ export interface BlockLayout {
 
 export const blockLayout = (hours: number, resourceCount = 0): BlockLayout => {
   const drawn = Math.max(hours, MIN_DURATION_HOURS);
-  const tight = isTightBlock(hours);
-  const content =
-    drawn * HOUR_HEIGHT_REM - BLOCK_GAP_REM - (tight ? TIGHT_BLOCK_PADDING_REM : BLOCK_PADDING_REM);
 
-  // How many chip lines this block's DURATION entitles it to, before asking
-  // whether they fit: none under an hour, one up to 105 minutes, and as many
-  // as there is room for above that.
+  // The tier comes FIRST, from the duration alone: how many chip lines this
+  // block is entitled to, before asking whether they fit. None under an hour,
+  // one up to 105 minutes, and as many as there is room for above that.
   const allowed =
     resourceCount === 0
       ? 0
@@ -163,26 +203,31 @@ export const blockLayout = (hours: number, resourceCount = 0): BlockLayout => {
           ? 1
           : 0;
 
-  const linesIn = (room: number) => Math.max(0, Math.floor(room / CHIP_LINE_REM));
+  // …then the padding, which a block showing chips buys them room out of…
+  const tight = isTightBlock(hours, allowed > 0);
+  const content =
+    drawn * HOUR_HEIGHT_REM - BLOCK_GAP_REM - (tight ? TIGHT_BLOCK_PADDING_REM : BLOCK_PADDING_REM);
+
+  // …and only then the budget.
   const afterTitle = content - TITLE_ROW_REM;
+  const afterMeta = afterTitle - ROW_GAP_REM - META_ROW_REM;
+  const canShowMeta = fitsMetaRow(hours);
 
-  let showMeta = fitsMetaRow(hours);
-  let chipLines = Math.min(
-    allowed,
-    linesIn(showMeta ? afterTitle - META_ROW_REM - ROW_GAP_REM : afterTitle)
-  );
+  if (allowed === 0) return { tight, showMeta: canShowMeta, chipLines: 0 };
 
-  // An hour-long block has room for a title and one more row, not two — and
-  // the row it is asked for here is the chip line. The meta row gives way:
-  // WHEN an event happens is already legible from where its block sits in the
-  // grid, while the deck attached to it is visible nowhere else in week view.
-  // Only ever a trade, never a loss: a block with nothing linked keeps its row.
-  if (allowed > 0 && chipLines === 0 && showMeta) {
-    showMeta = false;
-    chipLines = Math.min(allowed, linesIn(afterTitle));
+  // Both, whenever the block is long enough for both.
+  if (canShowMeta && drawn >= META_WITH_CHIP_MIN_HOURS) {
+    const lines = Math.min(allowed, chipLinesIn(afterMeta));
+    if (lines > 0) return { tight, showMeta: true, chipLines: lines };
   }
 
-  return { tight, showMeta, chipLines };
+  // Otherwise the chip line takes the meta row's place. WHEN an event happens
+  // is still legible from where its block sits in the grid — and from the
+  // block's accessible name, which carries the time either way — while the
+  // deck attached to it is visible nowhere else in week view. A trade, never
+  // a loss: if no chip line fits either, the row stays.
+  const lines = Math.min(allowed, chipLinesIn(afterTitle));
+  return { tight, showMeta: lines === 0 && canShowMeta, chipLines: lines };
 };
 
 /**

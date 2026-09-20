@@ -1,7 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import {
+  CHIP_BOX_REM,
+  CHIP_GAP_REM,
   CHIP_LINE_MIN_HOURS,
   CHIP_WRAP_MIN_HOURS,
+  META_WITH_CHIP_MIN_HOURS,
+  chipAreaRem,
   DEFAULT_END_HOUR,
   DEFAULT_START_HOUR,
   HOUR_FLOOR,
@@ -441,19 +445,45 @@ describe('blockLayout', () => {
     expect(blockLayout(CHIP_WRAP_MIN_HOURS, 5).chipLines).toBeGreaterThan(1);
   });
 
-  it('gives a 65-minute block one chip line, paid for by its meta row', () => {
-    // An hour-long block has room for a title and ONE more row. The chip wins:
-    // when the event happens is already legible from where its block sits.
-    const layout = blockLayout(65 / 60, 3);
-    expect(layout.chipLines).toBe(1);
-    expect(layout.showMeta).toBe(false);
+  it('gives the 65-minute class its time row AND a chip line', () => {
+    // The commonest block in the product. It keeps both by dropping to the
+    // tight padding; losing the time the moment a deck was linked to it was
+    // the wrong trade.
+    for (const resourceCount of [1, 2, 3]) {
+      const layout = blockLayout(65 / 60, resourceCount);
+      expect(layout.showMeta).toBe(true);
+      expect(layout.chipLines).toBe(1);
+      expect(layout.tight).toBe(true);
+    }
+  });
+
+  it('keeps both from 63 minutes up, and trades below that', () => {
+    expect(blockLayout(META_WITH_CHIP_MIN_HOURS, 2)).toMatchObject({
+      showMeta: true,
+      chipLines: 1,
+    });
+    // 60–62 minutes is where the two genuinely do not both fit. The chip wins:
+    // when the event happens is still legible from where its block sits in the
+    // grid, and the time is in the block's accessible name either way.
+    expect(blockLayout(1, 2)).toMatchObject({ showMeta: false, chipLines: 1 });
+    expect(blockLayout(62 / 60, 2)).toMatchObject({ showMeta: false, chipLines: 1 });
   });
 
   it('keeps the meta row on that same block when nothing is linked to it', () => {
-    // The row is TRADED for a chip line, never simply dropped.
+    // The row is TRADED for a chip line, never simply dropped — and with no
+    // chips to pay for, the block keeps the roomier padding too.
     const layout = blockLayout(65 / 60, 0);
     expect(layout.chipLines).toBe(0);
     expect(layout.showMeta).toBe(true);
+    expect(layout.tight).toBe(false);
+  });
+
+  it('budgets chip lines by the boxes they draw, with no gap above the first', () => {
+    // The chip container's negative top margin reclaims exactly the padding
+    // the rows above it end with, so n lines cost n boxes and n−1 gaps.
+    expect(chipAreaRem(0)).toBe(0);
+    expect(chipAreaRem(1)).toBeCloseTo(CHIP_BOX_REM, 5);
+    expect(chipAreaRem(3)).toBeCloseTo(3 * CHIP_BOX_REM + 2 * CHIP_GAP_REM, 5);
   });
 
   it('gives a 50-minute block the icon cluster and keeps its meta row', () => {

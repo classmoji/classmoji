@@ -446,7 +446,9 @@ describe('WeekGrid — linked resources on a block', () => {
     expect(html).toContain('title="Four, Five"');
   });
 
-  it('gives a 65-minute block one chip and a count, and no time row', () => {
+  it('gives the 65-minute class its time row, a chip and a count', () => {
+    // The commonest block in the product keeps all three, by dropping to the
+    // tight padding.
     const html = render([linked(65, { ...deck, ...pages('Reading') })], TUESDAY, weekOf(TUESDAY), {
       ...LINKS,
       endHour: 24,
@@ -454,14 +456,48 @@ describe('WeekGrid — linked resources on a block', () => {
 
     expect(html).toContain('>Reading<');
     expect(html).toContain('+1');
-    // The block has room for a title and ONE more row. The chip takes it: when
-    // the event happens is already legible from where the block sits.
+    expect(html).toMatch(/10:00\s*–\s*11:05\s*AM/);
+    expect(html).toContain('px-2 py-1');
+  });
+
+  it('keeps that time row with two resources on the block as well', () => {
+    const html = render([linked(65, pages('Reading', 'Notes'))], TUESDAY, weekOf(TUESDAY), {
+      ...LINKS,
+      endHour: 24,
+    });
+
+    expect(html).toMatch(/10:00\s*–\s*11:05\s*AM/);
+    expect(html).toContain('>Reading<');
+    expect(html).toContain('+1');
+  });
+
+  it('keeps a chip carrying a Draft pill inside that same block', () => {
+    // A draft chip is the TALLEST chip, and it is the one the budget is
+    // measured against — so it is the one that has to fit beside the time row.
+    const html = render(
+      [linked(65, { pages: [{ page: { id: 'p-draft', title: 'Unfinished', is_draft: true } }] })],
+      TUESDAY,
+      weekOf(TUESDAY),
+      { ...LINKS, endHour: 24 }
+    );
+
+    expect(html).toContain('>Unfinished<');
+    expect(html).toContain('Draft');
+    expect(html).toMatch(/10:00\s*–\s*11:05\s*AM/);
+  });
+
+  it('still trades the time row away at 60 minutes', () => {
+    // Where the two genuinely do not both fit, the chip wins.
+    const html = render([linked(60, pages('Reading', 'Notes'))], TUESDAY, weekOf(TUESDAY), LINKS);
+    expect(html).toContain('>Reading<');
     expect(html).not.toMatch(/10:00\s*–/);
   });
 
   it('keeps the time row on a 65-minute block with nothing linked to it', () => {
     const html = render([linked(65, {})], TUESDAY, weekOf(TUESDAY), { ...LINKS, endHour: 24 });
     expect(html).toMatch(/10:00\s*–\s*11:05\s*AM/);
+    // Nothing to pay for, so it keeps the roomier padding.
+    expect(html).not.toContain('px-2 py-1');
   });
 
   it('gives a 50-minute block an icon cluster instead of chips', () => {
@@ -489,14 +525,59 @@ describe('WeekGrid — linked resources on a block', () => {
     expect(html).not.toMatch(/10:00\s*–/);
   });
 
-  it('counts the links in the block button’s accessible name', () => {
-    // The chips are separate controls and the cluster is decorative, so this
-    // is the only place a short block says it has anything attached.
-    const html = render([linked(50, { ...deck, ...homework })], TUESDAY, weekOf(TUESDAY), LINKS);
-    expect(html).toContain('2 linked resources');
+  it('names the block: what, when and where, then what is attached', () => {
+    // The chips are separate controls and the cluster and `+N` are decorative,
+    // so this is the only place a block says it has anything attached — and
+    // the only place a 60-minute block that traded its time row still says
+    // when it happens.
+    const clicky = { ...LINKS, onEventClick: () => {} };
 
-    const one = render([linked(50, deck)], TUESDAY, weekOf(TUESDAY), LINKS);
-    expect(one).toContain('1 linked resource');
+    const short = render([linked(50, { ...deck, ...homework })], TUESDAY, weekOf(TUESDAY), clicky);
+    expect(short).toContain(
+      'aria-label="Week 1 Lecture, 10:00 – 10:50 AM · ECSC 116, 2 linked resources"'
+    );
+
+    const one = render([linked(50, deck)], TUESDAY, weekOf(TUESDAY), clicky);
+    expect(one).toContain('1 linked resource"');
+
+    // A 60-minute block draws no time row; it still says the time.
+    const traded = render(
+      [linked(60, pages('Reading', 'Notes'))],
+      TUESDAY,
+      weekOf(TUESDAY),
+      clicky
+    );
+    expect(traded).not.toMatch(/10:00\s*–\s*11:00\s*AM<\/span>/);
+    expect(traded).toContain(
+      'aria-label="Week 1 Lecture, 10:00 – 11:00 AM · ECSC 116, 2 linked resources"'
+    );
+
+    // Nothing attached, nothing said about it, and never a leading comma.
+    const bare = render([lecture], TUESDAY, weekOf(TUESDAY), clicky);
+    expect(bare).toContain('aria-label="Week 1 Lecture, 10:00 – 11:00 AM · ECSC 116"');
+  });
+
+  it('hands the whole block to the event button, chips excepted', () => {
+    // The chip container used to swallow clicks across the full width of the
+    // column — a third of a 65-minute block, nearly half of a two-hour one —
+    // where the block dragged but would not open.
+    const html = render([linked(120, pages('One', 'Two'))], TUESDAY, weekOf(TUESDAY), {
+      ...LINKS,
+      onEventClick: () => {},
+    });
+
+    expect(html).toContain('class="absolute inset-0 w-full cursor-pointer');
+    expect(html).toContain('pointer-events-none');
+    // …and the chips themselves are still pressable.
+    expect(html).toContain('pointer-events-auto');
+  });
+
+  it('draws the chips under the meta row, not pinned to the block’s floor', () => {
+    // A tall block used to leave a band of colour between its time row and its
+    // chips. Nothing in the column grows: the rows stack from the top.
+    const html = render([linked(120, pages('One'))], TUESDAY, weekOf(TUESDAY), LINKS);
+    expect(html).not.toContain('flex-1 min-h-0 overflow-hidden"><div class="p-2');
+    expect(html).toContain('justify-start items-stretch');
   });
 
   it('puts the starred resource first, with a star, as the month cell does', () => {
