@@ -155,14 +155,20 @@ describe('MonthGrid — the starred resource', () => {
   it('wears the muted style rather than the global link colour, whatever the element', () => {
     // Without this the /admin anchor inherited the app's green while the peek
     // button inherited nothing, and one line read as two different things.
+    //
+    // The `!` is load-bearing and is asserted as part of the class: antd
+    // injects an UNLAYERED `a { color: colorLink }`, and Tailwind v4 utilities
+    // live in `@layer utilities`, which loses to unlayered CSS whatever the
+    // specificity. The colour this actually computes to is checked in the
+    // browser, by tests/owner/calendar/event-modals.spec.ts.
     for (const featured of [
       { kind: 'page' as const, id: 'p-1', title: 'A', is_draft: false },
       { kind: 'slide' as const, id: 's-1', title: 'B', is_draft: false },
       { kind: 'assignment' as const, id: 'a-1', title: 'C', is_draft: false },
     ]) {
       const html = renderStarred(featured);
-      expect(html).toContain('text-ink-2');
-      expect(html).toContain('hover:text-ink-0');
+      expect(html).toContain('text-ink-2!');
+      expect(html).toContain('hover:text-ink-0!');
     }
   });
 

@@ -251,6 +251,15 @@ test.describe('Starring a linked resource', () => {
       { timeout: 10000 }
     );
 
+    // …in the muted colour, not the app's green link colour. antd injects an
+    // unlayered `a { color: colorLink }` that a Tailwind utility loses to on
+    // layer order alone, so this asserts the COMPUTED value rather than the
+    // class that is supposed to produce it.
+    await expect(page.getByRole('link', { name: `Open page ${linked.title}` }).first()).toHaveCSS(
+      'color',
+      'rgb(91, 95, 105)'
+    );
+
     // Reopening finds the star where it was left.
     await page.getByRole('button', { name: 'Week 1 Lecture' }).first().click();
     const reopened = await waitForModal(page, /Edit event/i);

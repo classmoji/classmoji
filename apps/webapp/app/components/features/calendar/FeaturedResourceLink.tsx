@@ -63,12 +63,24 @@ const KIND_NOUN = {
  * Indented under the chip, one line, truncated — a month cell clips overflow.
  *
  * Muted on purpose: the chip above is the event, this is a footnote to it.
- * Stated once and handed to all three branches, so an anchor cannot drift back
- * to the global link colour.
+ * Stated once and handed to all three branches, so they cannot drift apart.
+ *
+ * ── WHY THE COLOUR AND UNDERLINE ARE `!important` ───────────────────────────
+ * antd's `genLinkStyle` injects a bare `a { color: colorLink; text-decoration:
+ * … }` (plus an `a:hover`) into the document, and `colorLink` is this app's
+ * accent green. It is UNLAYERED, while Tailwind v4 puts its utilities in
+ * `@layer utilities` — and unlayered CSS beats layered CSS whatever the
+ * specificity, so a plain `text-ink-2` on an `<a>` lost to a bare type
+ * selector. The `!` modifier is what climbs back out of the layer.
+ *
+ * Only the anchor branch is under that rule, but the marker stays on the
+ * shared class: three branches that must look identical should not be styled
+ * three different ways, and nothing competes for these properties on the
+ * button branch.
  */
 const ROW_CLASS =
-  'flex items-center gap-1 pl-2 pr-1 w-full min-w-0 text-xs text-ink-2 no-underline rounded ' +
-  'hover:text-ink-0 hover:underline transition-colors ' +
+  'flex items-center gap-1 pl-2 pr-1 w-full min-w-0 text-xs text-ink-2! no-underline! rounded ' +
+  'hover:text-ink-0! hover:underline! transition-colors ' +
   'focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent';
 
 const FeaturedResourceLink = ({
