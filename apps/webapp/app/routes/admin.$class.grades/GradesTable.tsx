@@ -87,6 +87,7 @@ type Submission = GitRepoAssignment & {
 
 type EmojiMappings = Record<string, number>;
 type RowFilter = 'all' | 'ungraded' | 'missing' | 'late';
+const TYPE_ORDER: Record<string, number> = { REPO: 0, QUIZ: 1, FORM: 2 };
 
 interface GradesTableProps {
   emojiMappings: EmojiMappings;
@@ -156,15 +157,32 @@ const GradesTable = (props: GradesTableProps) => {
   const base = `/${rolePrefix}/${classSlug}`;
   const { isDarkMode } = useDarkMode();
 
-  // Every published assignment is a column, in deadline order, undated last.
+  // Every published assignment is a column: grouped by type (repositories,
+  // quizzes, forms), and within a group in deadline order, undated last.
   const columnsSpec = useMemo(
     () =>
       [...assignments].sort((x, y) => {
+        const tx = TYPE_ORDER[x.type] ?? 9;
+        const ty = TYPE_ORDER[y.type] ?? 9;
+        if (tx !== ty) return tx - ty;
         const dx = x.student_deadline ? new Date(x.student_deadline).getTime() : Infinity;
         const dy = y.student_deadline ? new Date(y.student_deadline).getTime() : Infinity;
         return dx - dy || x.title.localeCompare(y.title);
       }),
     [assignments]
+  );
+  const groups = useMemo(
+    () =>
+      (
+        [
+          { type: 'REPO', title: 'Repositories' },
+          { type: 'QUIZ', title: 'Quizzes' },
+          { type: 'FORM', title: 'Forms' },
+        ] as const
+      )
+        .map(g => ({ ...g, items: columnsSpec.filter(a => a.type === g.type) }))
+        .filter(g => g.items.length > 0),
+    [columnsSpec]
   );
 
   const finalOf = (s: Student) => calculateStudentFinalGrade(s.git_repos, emojiMappings, settings);
@@ -291,6 +309,53 @@ const GradesTable = (props: GradesTableProps) => {
     );
   };
 
+  const assignmentColumn = (assignment: GradebookAssignment) => {
+    const due = assignment.student_deadline
+      ? dayjs(assignment.student_deadline).format('MMM D')
+      : null;
+    const pending = assignment.type === 'REPO' ? toGradeCount(assignment.id) : 0;
+    return {
+      title: (
+        <div className="flex flex-col gap-0.5 min-w-0">
+          <Link
+            to={`${base}/assignments/${assignment.id}`}
+            className="truncate text-ink-1 hover:underline underline-offset-2"
+            title={assignment.title}
+          >
+            {assignment.title}
+          </Link>
+          <span className="text-[11px] font-medium text-ink-4 truncate">
+            {assignment.module_title}
+          </span>
+          <span className="text-[11px] font-medium text-ink-3">
+            {assignment.weight}%{assignment.is_extra_credit ? ' EC' : ''}
+            {due ? ` · due ${due}` : ''}
+          </span>
+          {pending > 0 && (
+            <span className="pt-0.5">
+              <Chip tone="blue">{pending} to grade</Chip>
+            </span>
+          )}
+        </div>
+      ),
+      key: `a-${assignment.id}`,
+      width: 170,
+      sorter: (a: Student, b: Student) => {
+        if (assignment.type === 'QUIZ') {
+          const qa = activity.quiz[assignment.id]?.[a.id]?.score ?? -1;
+          const qb = activity.quiz[assignment.id]?.[b.id]?.score ?? -1;
+          return qa - qb;
+        }
+        if (assignment.type === 'FORM') {
+          const fa = activity.form[assignment.id]?.[a.id]?.submitted ? 1 : 0;
+          const fb = activity.form[assignment.id]?.[b.id]?.submitted ? 1 : 0;
+          return fa - fb;
+        }
+        return (gradeOf(a, assignment.id) ?? -1) - (gradeOf(b, assignment.id) ?? -1);
+      },
+      render: (_: unknown, student: Student) => renderCell(student, assignment),
+    };
+  };
   const columns: TableProps<Student>['columns'] = [
     {
       title: (
@@ -312,17 +377,23 @@ const GradesTable = (props: GradesTableProps) => {
         </Link>
       ),
     },
+    ...groups.map(group => ({
+      title: <span className="font-semibold">{group.title}</span>,
+      key: `group-${group.type}`,
+      className: 'border-l border-line',
+      children: group.items.map(assignment => assignmentColumn(assignment)),
+    })),
     {
       title: (
         <div className="flex flex-col gap-0.5">
           <span>Total</span>
-          <span className="text-[11px] font-medium text-ink-3">weighted · letter</span>
+          <span className="text-[11px] font-medium text-ink-3">weighted score</span>
         </div>
       ),
       key: 'total',
-      fixed: 'left',
-      width: 150,
-      className: 'border-r border-line',
+      fixed: 'right',
+      width: 120,
+      className: 'border-l border-line',
       sorter: (a, b) => finalOf(a) - finalOf(b),
       defaultSortOrder: 'descend',
       render: (_: unknown, student) => {
@@ -330,91 +401,61 @@ const GradesTable = (props: GradesTableProps) => {
         if (!(final >= 0)) return <span className="text-ink-4">–</span>;
         const raw = rawOf(student);
         const individual = individualOf(student);
-        const override = membershipOf(student)?.letter_grade ?? null;
-        const computed =
-          letterGradeMappings.length > 0 ? calculateLetterGrade(final, letterGradeMappings) : null;
-        const letter = override ?? computed;
         const tip = (
           <div className="text-xs flex flex-col gap-0.5">
             <span>Before late penalties: {Math.round(raw * 10) / 10}</span>
             <span>
               Individual work only: {individual >= 0 ? Math.round(individual * 10) / 10 : '–'}
             </span>
-            {override && (
-              <span>Letter overridden on the student report (computed {computed ?? '–'})</span>
-            )}
           </div>
         );
         return (
           <Tooltip title={tip}>
-            <span className="inline-flex items-center gap-2">
-              <span className="font-bold tabular-nums">{Math.round(final * 10) / 10}</span>
-              {letter && (
-                <span
-                  className={`px-1.5 py-0.5 rounded text-[11px] font-bold ${
-                    override
-                      ? 'bg-amber-50 text-amber-700 dark:bg-amber-950/40 dark:text-amber-300'
-                      : 'bg-green-50 text-green-700 dark:bg-green-950/40 dark:text-green-300'
-                  }`}
-                >
-                  {letter}
-                </span>
-              )}
+            <span className="font-bold tabular-nums">{Math.round(final * 10) / 10}</span>
+          </Tooltip>
+        );
+      },
+    },
+    {
+      title: (
+        <div className="flex flex-col gap-0.5">
+          <span>Letter</span>
+          <span className="text-[11px] font-medium text-ink-3">from breakpoints</span>
+        </div>
+      ),
+      key: 'letter',
+      fixed: 'right',
+      width: 100,
+      render: (_: unknown, student) => {
+        const final = finalOf(student);
+        const override = membershipOf(student)?.letter_grade ?? null;
+        const computed =
+          final >= 0 && letterGradeMappings.length > 0
+            ? calculateLetterGrade(final, letterGradeMappings)
+            : null;
+        const letter = override ?? computed;
+        if (!letter) return <span className="text-ink-4">–</span>;
+        return (
+          <Tooltip
+            title={
+              override
+                ? `Overridden on the student report (computed ${computed ?? '–'})`
+                : undefined
+            }
+          >
+            <span
+              className={`px-1.5 py-0.5 rounded text-[11px] font-bold ${
+                override
+                  ? 'bg-amber-50 text-amber-700 dark:bg-amber-950/40 dark:text-amber-300'
+                  : 'bg-green-50 text-green-700 dark:bg-green-950/40 dark:text-green-300'
+              }`}
+            >
+              {letter}
             </span>
           </Tooltip>
         );
       },
     },
-    ...columnsSpec.map(assignment => {
-      const due = assignment.student_deadline
-        ? dayjs(assignment.student_deadline).format('MMM D')
-        : null;
-      const pending = assignment.type === 'REPO' ? toGradeCount(assignment.id) : 0;
-      return {
-        title: (
-          <div className="flex flex-col gap-0.5 min-w-0">
-            <Link
-              to={`${base}/assignments/${assignment.id}`}
-              className="truncate text-ink-1 hover:underline underline-offset-2"
-              title={assignment.title}
-            >
-              {assignment.title}
-            </Link>
-            <span className="text-[11px] font-medium text-ink-4 truncate">
-              {assignment.module_title}
-              {assignment.type !== 'REPO'
-                ? ` · ${assignment.type === 'QUIZ' ? 'quiz' : 'form'}`
-                : ''}
-            </span>
-            <span className="text-[11px] font-medium text-ink-3">
-              {assignment.weight}%{assignment.is_extra_credit ? ' EC' : ''}
-              {due ? ` · due ${due}` : ''}
-            </span>
-            {pending > 0 && (
-              <span className="pt-0.5">
-                <Chip tone="blue">{pending} to grade</Chip>
-              </span>
-            )}
-          </div>
-        ),
-        key: `a-${assignment.id}`,
-        width: 170,
-        sorter: (a: Student, b: Student) => {
-          if (assignment.type === 'QUIZ') {
-            const qa = activity.quiz[assignment.id]?.[a.id]?.score ?? -1;
-            const qb = activity.quiz[assignment.id]?.[b.id]?.score ?? -1;
-            return qa - qb;
-          }
-          if (assignment.type === 'FORM') {
-            const fa = activity.form[assignment.id]?.[a.id]?.submitted ? 1 : 0;
-            const fb = activity.form[assignment.id]?.[b.id]?.submitted ? 1 : 0;
-            return fa - fb;
-          }
-          return (gradeOf(a, assignment.id) ?? -1) - (gradeOf(b, assignment.id) ?? -1);
-        },
-        render: (_: unknown, student: Student) => renderCell(student, assignment),
-      };
-    }),
   ];
 
   const summary = (pageData: readonly Student[]) => {
@@ -426,11 +467,6 @@ const GradesTable = (props: GradesTableProps) => {
           <Table.Summary.Cell index={0}>
             <span className="text-xs font-semibold text-ink-3">Class</span>
           </Table.Summary.Cell>
-          <Table.Summary.Cell index={1}>
-            <span className="text-xs text-ink-2 whitespace-nowrap">
-              mean {mean(finals).toFixed(1)} · median {median(finals).toFixed(1)}
-            </span>
-          </Table.Summary.Cell>
           {columnsSpec.map((a, i) => {
             const grades =
               a.type === 'REPO'
@@ -441,13 +477,21 @@ const GradesTable = (props: GradesTableProps) => {
                       .filter((g): g is number => g !== null)
                   : [];
             return (
-              <Table.Summary.Cell key={a.id} index={i + 2}>
+              <Table.Summary.Cell key={a.id} index={i + 1}>
                 <span className="text-xs text-ink-2 tabular-nums">
                   {grades.length ? mean(grades).toFixed(1) : '–'}
                 </span>
               </Table.Summary.Cell>
             );
           })}
+          <Table.Summary.Cell index={columnsSpec.length + 1}>
+            <span className="text-xs text-ink-2 whitespace-nowrap">
+              mean {mean(finals).toFixed(1)}
+              <br />
+              median {median(finals).toFixed(1)}
+            </span>
+          </Table.Summary.Cell>
+          <Table.Summary.Cell index={columnsSpec.length + 2}></Table.Summary.Cell>
         </Table.Summary.Row>
       </Table.Summary>
     );
@@ -529,7 +573,7 @@ const GradesTable = (props: GradesTableProps) => {
             size="small"
             bordered
             sticky
-            scroll={{ x: 370 + columnsSpec.length * 170 }}
+            scroll={{ x: 440 + columnsSpec.length * 170 }}
             pagination={{
               pageSize: 50,
               showSizeChanger: true,
