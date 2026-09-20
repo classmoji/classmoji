@@ -88,16 +88,27 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
     events = [];
   }
 
-  // Fetch available resources for linking (all published content)
+  // What the modals offer to link.
+  //
+  // Draft pages and decks are IN, tagged as drafts in the picker. An instructor
+  // builds next week's page before publishing it and links it to the lecture
+  // then; leaving them out meant the one thing they wanted to attach was the
+  // one thing missing from the list — and a draft already linked came back as a
+  // bare uuid, because the tag had no option to take a title from.
+  //
+  // Only staff reach this loader (OWNER, TEACHER, ASSISTANT), and the calendar
+  // they are already served shows the same drafts with the same Draft pill.
+  // Assignments stay published-only: unpublished ones have no student-facing
+  // page to link to at all.
   const [pages, slides, assignments] = await Promise.all([
     getPrisma().page.findMany({
-      where: { classroom_id: classroom.id, is_draft: false },
-      select: { id: true, title: true },
+      where: { classroom_id: classroom.id },
+      select: { id: true, title: true, is_draft: true },
       orderBy: { title: 'asc' },
     }),
     getPrisma().slide.findMany({
-      where: { classroom_id: classroom.id, is_draft: false },
-      select: { id: true, title: true },
+      where: { classroom_id: classroom.id },
+      select: { id: true, title: true, is_draft: true },
       orderBy: { title: 'asc' },
     }),
     getPrisma().assignment.findMany({

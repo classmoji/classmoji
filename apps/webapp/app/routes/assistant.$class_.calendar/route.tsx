@@ -80,16 +80,19 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
     events = [];
   }
 
-  // Fetch available resources for linking (all published content)
+  // What the modals offer to link. Draft pages and decks are in, tagged as
+  // drafts — the same list the admin calendar offers, for the same reasons, and
+  // to the same set of roles: assistants already SEE those drafts on the
+  // calendar this loader builds. Assignments stay published-only.
   const [pages, slides, assignments] = await Promise.all([
     getPrisma().page.findMany({
-      where: { classroom_id: classroom.id, is_draft: false },
-      select: { id: true, title: true },
+      where: { classroom_id: classroom.id },
+      select: { id: true, title: true, is_draft: true },
       orderBy: { title: 'asc' },
     }),
     getPrisma().slide.findMany({
-      where: { classroom_id: classroom.id, is_draft: false },
-      select: { id: true, title: true },
+      where: { classroom_id: classroom.id },
+      select: { id: true, title: true, is_draft: true },
       orderBy: { title: 'asc' },
     }),
     getPrisma().assignment.findMany({
