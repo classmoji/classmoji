@@ -14,6 +14,8 @@ export interface AssignmentRowData {
   id: string;
   title: string;
   type: string;
+  /** REPO assignments: ISSUE (close an issue) or REPO (a push submits). */
+  submission_mode?: 'ISSUE' | 'REPO' | string;
   weight: number;
   is_extra_credit: boolean;
   is_published: boolean;
@@ -32,6 +34,13 @@ export interface AssignmentRowData {
   slides?: Array<{ slide: { id: string } }>;
   _count?: { git_repo_assignments: number };
 }
+
+/** "Repo · push" / "Repo · issue" for REPO assignments, the plain type otherwise. */
+export const assignmentTypeLabel = (a: AssignmentRowData): string => {
+  const base = ASSIGNMENT_TYPE_META[a.type]?.label ?? a.type;
+  if (a.type !== 'REPO') return base;
+  return `${base} · ${a.submission_mode === 'REPO' ? 'push' : 'issue'}`;
+};
 
 export const ASSIGNMENT_TYPE_META: Record<string, { label: string; icon: Icon; color: string }> = {
   REPO: { label: 'Repo', icon: IconFolder, color: 'geekblue' },
@@ -96,10 +105,10 @@ const AssignmentsTable = ({
     {
       title: 'Type',
       key: 'type',
-      width: 90,
+      width: 120,
       render: (_: unknown, a: AssignmentRowData) => {
         const meta = ASSIGNMENT_TYPE_META[a.type];
-        return meta ? <Tag color={meta.color}>{meta.label}</Tag> : <Tag>{a.type}</Tag>;
+        return <Tag color={meta?.color}>{assignmentTypeLabel(a)}</Tag>;
       },
     },
     {

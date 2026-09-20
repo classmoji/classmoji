@@ -196,3 +196,39 @@ describe('student assignments loader — git_repo guard', () => {
     expect(data.rows.find(r => r.assignmentTitle === 'Done')!.numLateHours).toBe(0);
   });
 });
+
+describe('REPO-mode assignments (a push is the submission)', () => {
+  it('links to the repo, not an issue, and reports late hours from the push time', async () => {
+    const deadline = new Date(Date.now() - 6 * 60 * 60 * 1000);
+    // Pushed 2h1m after the deadline -> 3 late hours (ceil), even though the row is CLOSED.
+    const pushedAt = new Date(deadline.getTime() + 2 * 60 * 60 * 1000 + 60_000);
+    findAllMock.mockResolvedValue([
+      {
+        id: 'ra-push',
+        assignment_id: 'a-push',
+        status: 'CLOSED',
+        closed_at: pushedAt.toISOString(),
+        provider_issue_number: null,
+        is_late_override: false,
+        assignment: {
+          title: 'Push Lab',
+          is_published: true,
+          grades_released: false,
+          submission_mode: 'REPO',
+          student_deadline: deadline.toISOString(),
+          tokens_per_hour: 2,
+        },
+        git_repo: { name: 'repo-push', repository: { title: 'Push Repo', type: 'INDIVIDUAL' } },
+        grades: [],
+        token_transactions: [],
+      },
+    ]);
+
+    const data = await (await loader(loaderArgs())).data;
+    const row = data.rows.find(r => r.assignmentTitle === 'Push Lab')!;
+
+    expect(row.issueUrl).toBeNull();
+    expect(row.repoUrl).toMatch(/\/repo-push$/);
+    expect(row.numLateHours).toBe(3);
+  });
+});

@@ -64,7 +64,7 @@ interface RepoAssignment {
   assignment: AssignmentInfo;
   grades: GradeEntry[];
   git_repo: RepositoryInfo;
-  provider_issue_number?: number;
+  provider_issue_number?: number | null;
 }
 
 interface ModuleItem {

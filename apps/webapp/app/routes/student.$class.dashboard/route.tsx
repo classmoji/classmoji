@@ -86,7 +86,8 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
       ClassmojiService.helper
         .findAllAssignmentsForStudent(userId, classSlug)
         .catch(
-          () => [] as Awaited<ReturnType<typeof ClassmojiService.helper.findAllAssignmentsForStudent>>
+          () =>
+            [] as Awaited<ReturnType<typeof ClassmojiService.helper.findAllAssignmentsForStudent>>
         ),
     ]);
 
@@ -109,7 +110,8 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
       .filter(x => x.deadlineMs >= now)
       .sort((a, b) => a.deadlineMs - b.deadlineMs);
 
-    const spotlightId = upcomingByModule[0]?.moduleId ?? repositories[repositories.length - 1]?.id ?? null;
+    const spotlightId =
+      upcomingByModule[0]?.moduleId ?? repositories[repositories.length - 1]?.id ?? null;
     const spotlightSrc = spotlightId
       ? (repositories.find(m => m.id === spotlightId) ?? null)
       : (repositories[repositories.length - 1] ?? null);
@@ -142,9 +144,12 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
         closedAt: ra.closed_at,
         graders: (ra.graders ?? []).map(g => ({ id: g.grader.id, name: g.grader.name })),
         grades: (ra.grades ?? []).map(g => ({ id: g.id, emoji: g.emoji })),
+        // The issue in ISSUE mode, the repo itself in REPO mode.
         issueUrl:
           gitOrgLogin && ra.git_repo?.name
-            ? `https://github.com/${gitOrgLogin}/${ra.git_repo.name}/issues/${ra.provider_issue_number}`
+            ? ra.provider_issue_number != null
+              ? `https://github.com/${gitOrgLogin}/${ra.git_repo.name}/issues/${ra.provider_issue_number}`
+              : `https://github.com/${gitOrgLogin}/${ra.git_repo.name}`
             : null,
       }));
 
@@ -220,9 +225,7 @@ const StudentDashboard = ({ loaderData }: Route.ComponentProps) => {
 
   return (
     <div className="min-h-full">
-      <h1 className="mt-2 mb-4 text-lg font-semibold text-ink-1">
-        Dashboard
-      </h1>
+      <h1 className="mt-2 mb-4 text-lg font-semibold text-ink-1">Dashboard</h1>
 
       <Suspense fallback={<Skeleton active paragraph={{ rows: 8 }} />}>
         <Await resolve={data} errorElement={null}>

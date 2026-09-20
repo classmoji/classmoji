@@ -50,7 +50,7 @@ interface ModuleDef {
 interface RepoAssignmentEntry {
   id: string;
   assignment_id: string;
-  provider_issue_number: number;
+  provider_issue_number: number | null;
   status?: string;
   num_late_hours?: number;
   extension_hours?: number;
@@ -288,7 +288,7 @@ const AssignmentTable = ({
               />
             );
           }
-          return <p className="text-red-500 text-sm">No Github issue found</p>;
+          return <p className="text-red-500 text-sm">No submission yet</p>;
         }
 
         repoAssignment.repository = record;

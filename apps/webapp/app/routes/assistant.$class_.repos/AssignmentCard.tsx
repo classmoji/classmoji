@@ -74,8 +74,11 @@ const AssignmentCard = ({
   const statusPill = getStatusPill(repoAssignment);
   const showGrades = assignment.grades_released && (repoAssignment?.grades?.length ?? 0) > 0;
 
+  // The issue in ISSUE mode, the repo itself in REPO mode.
   const githubIssueUrl = repoAssignment?.repository?.classroom?.git_organization?.login
-    ? `https://github.com/${repoAssignment.repository.classroom.git_organization.login}/${repoAssignment.repository.name}/issues/${repoAssignment.provider_issue_number}`
+    ? repoAssignment.provider_issue_number != null
+      ? `https://github.com/${repoAssignment.repository.classroom.git_organization.login}/${repoAssignment.repository.name}/issues/${repoAssignment.provider_issue_number}`
+      : `https://github.com/${repoAssignment.repository.classroom.git_organization.login}/${repoAssignment.repository.name}`
     : null;
 
   return (

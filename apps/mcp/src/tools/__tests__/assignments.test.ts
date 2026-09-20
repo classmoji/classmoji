@@ -96,9 +96,28 @@ describe('assignment_create', () => {
     expect(data.repository_id).toBe('repo-1');
     expect(data.module_id).toBe('mod-1');
     expect(data.type).toBe('REPO');
+    // A push is the submission unless the caller asks for issues.
+    expect((data as { submission_mode?: string }).submission_mode).toBe('REPO');
     expect(data.title).toBe('Lab 3');
     expect(mocks.auditCreate).toHaveBeenCalledTimes(1);
     expect((mocks.auditCreate.mock.calls[0][0] as { action: string }).action).toBe('CREATE');
+  });
+
+  it('passes an explicit ISSUE submission mode through', async () => {
+    mocks.repositoryFindById.mockResolvedValue({ id: 'repo-1', classroom_id: 'class-1' });
+    mocks.assignmentCreate.mockResolvedValue({
+      id: 'asg-2',
+      title: 'Lab 3',
+      submission_mode: 'ISSUE',
+    });
+
+    const payload = parse(
+      await assignmentCreateTool.handler({ ...ARGS, submission_mode: 'ISSUE' }, CTX)
+    );
+    expect(payload.assignment.submission_mode).toBe('ISSUE');
+    expect(
+      (mocks.assignmentCreate.mock.calls[0][0] as { submission_mode?: string }).submission_mode
+    ).toBe('ISSUE');
   });
 
   it('refuses a module that belongs to another classroom (S1)', async () => {

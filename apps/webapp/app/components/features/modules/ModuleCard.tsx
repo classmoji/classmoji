@@ -346,6 +346,10 @@ const ModuleCard = ({
 
   const assignmentNote = (a: AssignmentRowData) => {
     const target = assignmentTarget(a);
+    // A REPO assignment names its repo and how students submit through it.
+    if (a.type === 'REPO' && target) {
+      return `${target} · ${a.submission_mode === 'REPO' ? 'push' : 'issue'}`;
+    }
     return target && target !== a.title ? target : (ASSIGNMENT_TYPE_META[a.type]?.label ?? null);
   };
   const deleteAssignmentItem = {

@@ -1,11 +1,22 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useFetcher } from 'react-router';
-import { Checkbox, DatePicker, Form, Input, InputNumber, Modal, Segmented, Select } from 'antd';
+import {
+  Checkbox,
+  DatePicker,
+  Form,
+  Input,
+  InputNumber,
+  Modal,
+  Radio,
+  Segmented,
+  Select,
+} from 'antd';
 import dayjs, { type Dayjs } from 'dayjs';
 
 import { ASSIGNMENT_TYPE_META, type AssignmentRowData } from './AssignmentsTable';
 
 export type AssignmentKind = 'REPO' | 'QUIZ' | 'FORM';
+export type SubmissionMode = 'ISSUE' | 'REPO';
 
 export interface AssignmentFormModalProps {
   open: boolean;
@@ -35,6 +46,7 @@ export interface AssignmentFormModalProps {
 interface FormValues {
   module_id?: string;
   type: AssignmentKind;
+  submission_mode: SubmissionMode;
   target_id?: string;
   title: string;
   weight: number;
@@ -76,7 +88,11 @@ const AssignmentFormModal = ({
   const fetcher = useFetcher<{ success?: string; error?: string }>();
   const [form] = Form.useForm<FormValues>();
   const [kind, setKind] = useState<AssignmentKind>('REPO');
+  const [mode, setMode] = useState<SubmissionMode>('REPO');
   const isEdit = !!assignment;
+  // The mode is frozen once any student has a submission row: flipping it
+  // would strand issues already opened, or rows that expect none.
+  const modeLocked = isEdit && (assignment?._count?.git_repo_assignments ?? 0) > 0;
   const busy = fetcher.state !== 'idle';
 
   // Reset the form each time the modal opens for a different target.
@@ -84,9 +100,14 @@ const AssignmentFormModal = ({
     if (!open) return;
     const nextKind = (assignment?.type as AssignmentKind) ?? presetKind ?? 'REPO';
     setKind(nextKind);
+    // New assignments default to "a push is the submission"; existing ones
+    // keep whatever they were created with.
+    const nextMode: SubmissionMode = assignment?.submission_mode === 'ISSUE' ? 'ISSUE' : 'REPO';
+    setMode(assignment ? nextMode : 'REPO');
     form.setFieldsValue({
       module_id: assignment?.module.id ?? moduleId,
       type: nextKind,
+      submission_mode: assignment ? nextMode : 'REPO',
       target_id:
         assignment?.repository?.id ??
         assignment?.quiz?.id ??
@@ -161,7 +182,9 @@ const AssignmentFormModal = ({
     };
     if (isEdit) {
       payload.id = assignment!.id;
+      if (kind === 'REPO' && !modeLocked) payload.submission_mode = mode;
     } else {
+      payload.submission_mode = kind === 'REPO' ? mode : 'ISSUE';
       // validateFields only returns rendered fields; when the module picker
       // is hidden the module comes from the page that opened the modal.
       payload.module_id = values.module_id ?? moduleId;
@@ -230,7 +253,7 @@ const AssignmentFormModal = ({
           extra={
             kind === 'REPO' && !isEdit ? (
               <>
-                Students submit through an issue Classmoji opens in their copy of this repository.{' '}
+                Each student gets their own copy of this repository when it is published.{' '}
                 <a href={newRepositoryHref} target="_blank" rel="noreferrer">
                   New repository
                 </a>
@@ -248,6 +271,33 @@ const AssignmentFormModal = ({
             notFoundContent={<span className="text-sm text-ink-3">{emptyTargetHint}</span>}
           />
         </Form.Item>
+
+        {kind === 'REPO' && (
+          <Form.Item
+            name="submission_mode"
+            label="Submission"
+            extra={
+              modeLocked
+                ? 'Fixed: students already have submission rows for this assignment.'
+                : undefined
+            }
+          >
+            <Radio.Group
+              disabled={modeLocked}
+              onChange={e => setMode(e.target.value as SubmissionMode)}
+              className="flex flex-col gap-1"
+            >
+              <Radio value="REPO">
+                Push to the repository{' '}
+                <span className="text-ink-3">— the latest push is the submission</span>
+              </Radio>
+              <Radio value="ISSUE">
+                Close a GitHub issue{' '}
+                <span className="text-ink-3">— Classmoji opens one in each student repo</span>
+              </Radio>
+            </Radio.Group>
+          </Form.Item>
+        )}
 
         <Form.Item
           name="title"
@@ -288,8 +338,12 @@ const AssignmentFormModal = ({
         {kind === 'REPO' && (
           <Form.Item
             name="description"
-            label="Description"
-            extra="Becomes the body of the issue created in each student repository."
+            label={mode === 'ISSUE' ? 'Issue body' : 'Instructions'}
+            extra={
+              mode === 'ISSUE'
+                ? 'Becomes the body of the issue created in each student repository.'
+                : 'Shown to students with the assignment.'
+            }
           >
             <Input.TextArea rows={4} />
           </Form.Item>

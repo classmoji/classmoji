@@ -42,7 +42,7 @@ interface StudentRepository {
 interface StudentRepoAssignment {
   id: string;
   assignment_id: string;
-  provider_issue_number: number;
+  provider_issue_number: number | null;
   assignment: StudentAssignment;
   grades: StudentGrade[];
   is_late: boolean;

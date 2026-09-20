@@ -119,17 +119,20 @@ const EventLinks = ({
           </a>
         ))}
 
-      {/* Assignments - GitHub issue for students with repo, repositories page otherwise */}
+      {/* Assignments - the student's GitHub issue (ISSUE mode) or repo (REPO mode), repositories page otherwise */}
       {hasAssignments &&
         (event.assignments ?? []).map(({ assignment, repository }) => {
-          // Check if user has a repo assignment with a GitHub issue
+          // Check if user has a submission row with a repo on GitHub
           const repoAssignment = repoAssignmentsByAssignmentId[assignment.id];
-          const hasGitHubIssue =
-            repoAssignment?.provider_issue_number && gitOrgLogin && repoAssignment.repository?.name;
+          const hasGitHubIssue = repoAssignment && gitOrgLogin && repoAssignment.repository?.name;
 
           if (hasGitHubIssue) {
-            // Link directly to student's GitHub issue (external)
-            const githubIssueUrl = `https://github.com/${gitOrgLogin}/${repoAssignment!.repository!.name}/issues/${repoAssignment!.provider_issue_number}`;
+            // Link directly to the student's issue, or their repo when no issue exists (external)
+            const repoUrl = `https://github.com/${gitOrgLogin}/${repoAssignment!.repository!.name}`;
+            const githubIssueUrl =
+              repoAssignment!.provider_issue_number != null
+                ? `${repoUrl}/issues/${repoAssignment!.provider_issue_number}`
+                : repoUrl;
             return (
               <a
                 key={assignment.id}

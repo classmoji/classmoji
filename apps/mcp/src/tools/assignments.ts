@@ -129,6 +129,7 @@ interface AssignmentCreateArgs {
   classroom: string;
   module_id: string;
   repository_id: string;
+  submission_mode?: 'ISSUE' | 'REPO';
   title: string;
   weight?: number;
   is_extra_credit?: boolean;
@@ -146,7 +147,9 @@ export const assignmentCreateTool: ToolDefinition<AssignmentCreateArgs> = {
   title: 'Create an assignment',
   description:
     'Creates a REPO assignment (due-dated, gradeable) in a module, submitting through an ' +
-    'existing repository (see list_repos). Owner only. Creating it does NOT provision anything on ' +
+    'existing repository (see list_repos). submission_mode REPO (default): a push to the student ' +
+    'repo is the submission, no issue is opened. ISSUE: Classmoji opens a GitHub issue in each ' +
+    'student repo and closing it submits. Owner only. Creating it does NOT provision anything on ' +
     'GitHub — the assignment reaches students only when its repo is published (repo_publish) or ' +
     'the next release runs. Created as a draft unless is_published is set.',
   scope: 'write',
@@ -158,6 +161,10 @@ export const assignmentCreateTool: ToolDefinition<AssignmentCreateArgs> = {
       .string()
       .uuid()
       .describe('Repository students submit through (see list_repos)'),
+    submission_mode: z
+      .enum(['ISSUE', 'REPO'])
+      .optional()
+      .describe('REPO (default): a push submits. ISSUE: closing a GitHub issue submits.'),
     title: z.string().min(1).max(200).describe('Assignment title (unique per repository)'),
     weight: z.number().positive().max(10000).optional().describe('Grading weight (default 100)'),
     is_extra_credit: z
@@ -204,6 +211,7 @@ export const assignmentCreateTool: ToolDefinition<AssignmentCreateArgs> = {
     const data: Prisma.AssignmentUncheckedCreateInput = {
       module_id: module.id,
       type: 'REPO',
+      submission_mode: args.submission_mode ?? 'REPO',
       repository_id: repository.id,
       title: args.title,
       ...(args.weight !== undefined ? { weight: args.weight } : {}),
@@ -237,7 +245,12 @@ export const assignmentCreateTool: ToolDefinition<AssignmentCreateArgs> = {
       resource_type: 'ASSIGNMENT',
       resource_id: created.id,
       action: 'CREATE',
-      data: { tool: 'assignment_create', repository_id: repository.id, title: args.title },
+      data: {
+        tool: 'assignment_create',
+        repository_id: repository.id,
+        title: args.title,
+        submission_mode: args.submission_mode ?? 'REPO',
+      },
     });
 
     return ok({
@@ -247,6 +260,7 @@ export const assignmentCreateTool: ToolDefinition<AssignmentCreateArgs> = {
         title: created.title,
         module_id: created.module_id,
         type: created.type,
+        submission_mode: created.submission_mode,
         repository_id: created.repository_id,
         weight: created.weight,
         is_extra_credit: created.is_extra_credit,
@@ -270,8 +284,9 @@ export const assignmentDeleteTool: ToolDefinition<AssignmentDeleteArgs> = {
     'Permanently deletes an assignment. Owner only. THIS CANNOT BE UNDONE and cascades: it ' +
     'deletes every student/team submission for this assignment along with all their grades, ' +
     'grader assignments, regrade requests, token transactions, and analytics, plus its ' +
-    'page/slide/calendar links. It does NOT remove the GitHub issues already created in student ' +
-    'repos (they are orphaned), and it does NOT reconcile student token balances.',
+    'page/slide/calendar links. For an ISSUE-mode assignment it does NOT remove the GitHub issues ' +
+    'already created in student repos (they are orphaned), and it does NOT reconcile student ' +
+    'token balances.',
   scope: 'write',
   roles: OWNER_ONLY,
   inputSchema: {

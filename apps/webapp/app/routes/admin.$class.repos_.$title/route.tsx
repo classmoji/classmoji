@@ -339,7 +339,9 @@ const SingleRepository = ({ loaderData }: Route.ComponentProps) => {
         repos={repos as Parameters<typeof SummaryCards>[0]['repos']}
       />
 
-      <FolderTabs items={tabItems} defaultActiveKey="grades" panelClassName="min-h-[300px]" />
+      <div className="mt-8">
+        <FolderTabs items={tabItems} defaultActiveKey="grades" panelClassName="min-h-[300px]" />
+      </div>
 
       <LinkedPages classSlug={classSlug} pages={linkedPages} />
 
