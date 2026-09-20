@@ -396,8 +396,8 @@ const GradesTable = (props: GradesTableProps) => {
 
   return (
     <div className="min-h-full min-w-0">
-      <div className="flex items-center justify-between gap-3 mt-2 mb-4 flex-wrap">
-        <div className="flex items-center gap-3">
+      <div className="flex items-center justify-between gap-3 mt-2 mb-4">
+        <div className="flex items-center gap-3 shrink-0">
           <h1 className="text-base font-semibold text-gray-600 dark:text-gray-400">Grades</h1>
           {(searchQuery || rowFilter !== 'all') && (
             <span className="text-xs text-ink-3 bg-nav-hover px-2.5 py-1 rounded-full">
@@ -405,19 +405,19 @@ const GradesTable = (props: GradesTableProps) => {
             </span>
           )}
         </div>
-        <div className="flex items-center gap-3 flex-wrap justify-end">
+        <div className="flex items-center gap-3 justify-end min-w-0">
           <Input
             placeholder="Search students"
             prefix={<IconSearch size={16} />}
             value={searchQuery}
             onChange={e => setSearchQuery(e.target.value)}
-            className="w-56"
+            className="w-52"
             data-tour="grades-search"
           />
           <Select<RowFilter>
             value={rowFilter}
             onChange={setRowFilter}
-            className="min-w-52"
+            className="w-52"
             data-tour="grades-filter"
             options={[
               { value: 'all', label: 'Everyone' },
