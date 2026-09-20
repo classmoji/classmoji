@@ -1,6 +1,6 @@
 import { Button, Input, Select, Tag, Tooltip } from 'antd';
 import dayjs from 'dayjs';
-import { IconBrandGithub, IconChevronLeft } from '@tabler/icons-react';
+import { IconChevronLeft } from '@tabler/icons-react';
 import { Link, useFetcher, useLocation, useNavigate } from 'react-router';
 import { useEffect, useMemo, useState } from 'react';
 
@@ -384,17 +384,24 @@ const StudentReport = ({ loaderData }: Route.ComponentProps) => {
   // No letter cutoffs configured means no letter to show, not an F.
   const shownLetter = letters.length > 0 ? (membership.letter_grade ?? computedLetter) : null;
 
-  // One flat list in deadline order; an assignment stands on its own, and its
-  // module is a caption on the line, not a grouping.
-  const ordered = useMemo(
-    () =>
-      [...assignments].sort((x, y) => {
-        const dx = x.student_deadline ? new Date(x.student_deadline).getTime() : Infinity;
-        const dy = y.student_deadline ? new Date(y.student_deadline).getTime() : Infinity;
-        return dx - dy || x.title.localeCompare(y.title);
-      }),
-    [assignments]
-  );
+  // Grouped by what the student did (repo, quiz, form), each group in
+  // deadline order. An assignment stands on its own; its module is a caption.
+  const sections = useMemo(() => {
+    const byDeadline = (x: Assignment, y: Assignment) => {
+      const dx = x.student_deadline ? new Date(x.student_deadline).getTime() : Infinity;
+      const dy = y.student_deadline ? new Date(y.student_deadline).getTime() : Infinity;
+      return dx - dy || x.title.localeCompare(y.title);
+    };
+    return (
+      [
+        { key: 'REPO', title: 'Repositories' },
+        { key: 'QUIZ', title: 'Quizzes' },
+        { key: 'FORM', title: 'Forms' },
+      ] as const
+    )
+      .map(g => ({ ...g, items: assignments.filter(a => a.type === g.key).sort(byDeadline) }))
+      .filter(g => g.items.length > 0);
+  }, [assignments]);
 
   const saveNote = () =>
     noteFetcher.submit(
@@ -413,14 +420,14 @@ const StudentReport = ({ loaderData }: Route.ComponentProps) => {
     const due = fmt(a.student_deadline);
     const parts: string[] = [];
     parts.push(a.module.title);
-    if (a.type === 'REPO') parts.push(`Repo · ${a.submission_mode === 'REPO' ? 'push' : 'issue'}`);
-    else parts.push(meta?.label ?? a.type);
+    if (a.type === 'REPO') parts.push(a.submission_mode === 'REPO' ? 'push' : 'issue');
     parts.push(`${a.weight}%${a.is_extra_credit ? ' extra credit' : ''}`);
     if (due) parts.push(`due ${due}`);
 
     let status: React.ReactNode = null;
     let actions: React.ReactNode = null;
     let grade: React.ReactNode = <span className="text-sm text-ink-3">–</span>;
+    let view: React.ReactNode = null;
     let href = `${base}/assignments/${a.id}`;
 
     if (a.type === 'REPO') {
@@ -480,19 +487,6 @@ const StudentReport = ({ loaderData }: Route.ComponentProps) => {
           : null;
         actions = (
           <div className="flex items-center gap-2">
-            {repoUrl && (
-              <Tooltip title="Open on GitHub">
-                <a
-                  href={repoUrl}
-                  target="_blank"
-                  rel="noreferrer"
-                  aria-label="Open on GitHub"
-                  className="inline-flex h-7 w-7 items-center justify-center rounded-md text-ink-3 hover:text-ink-1 hover:bg-stone-100 dark:hover:bg-neutral-800"
-                >
-                  <IconBrandGithub size={16} />
-                </a>
-              </Tooltip>
-            )}
             {(ra.is_late || ra.is_late_override) && (
               <LateOverrideButton
                 repositoryAssignment={
@@ -510,6 +504,16 @@ const StudentReport = ({ loaderData }: Route.ComponentProps) => {
             )}
           </div>
         );
+        view = repoUrl ? (
+          <a
+            href={repoUrl}
+            target="_blank"
+            rel="noreferrer"
+            className="inline-flex items-center h-7 px-2.5 rounded-md ring-1 ring-line bg-panel text-xs font-medium text-ink-2 hover:text-ink-1 hover:bg-stone-50 dark:hover:bg-neutral-800"
+          >
+            View
+          </a>
+        ) : null;
       }
     } else if (a.type === 'QUIZ') {
       const q = quizStatus[a.id];
@@ -554,6 +558,7 @@ const StudentReport = ({ loaderData }: Route.ComponentProps) => {
         <div className="flex-1" />
         {actions}
         <div className="w-40 flex justify-end">{grade}</div>
+        <div className="w-14 flex justify-end">{view}</div>
       </li>
     );
   };
@@ -665,13 +670,19 @@ const StudentReport = ({ loaderData }: Route.ComponentProps) => {
       </div>
 
       <div className="flex flex-col gap-2 mb-5">
-        {ordered.length === 0 ? (
+        {sections.length === 0 && (
           <div className="text-center py-12 text-gray-500">
             <div className="font-medium">No published assignments yet</div>
           </div>
-        ) : (
-          <ul className="flex flex-col gap-2">{ordered.map(renderLine)}</ul>
         )}
+        {sections.map(section => (
+          <div key={section.key} className="flex flex-col gap-2">
+            <h2 className="text-xs font-semibold uppercase tracking-wide text-ink-3 pt-3 pb-1">
+              {section.title}
+            </h2>
+            <ul className="flex flex-col gap-2">{section.items.map(renderLine)}</ul>
+          </div>
+        ))}
       </div>
 
       <div className="rounded-2xl bg-panel ring-1 ring-line px-4 py-3 flex flex-col gap-2">
