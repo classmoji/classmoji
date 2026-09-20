@@ -1252,37 +1252,67 @@ export const updateEventWithScope = async (
       const dayBeforeOccurrence = new Date(occurrenceDate);
       dayBeforeOccurrence.setDate(dayBeforeOccurrence.getDate() - 1);
 
-      // Update original event to end before this occurrence
-      await getPrisma().calendarEvent.update({
-        where: { id: eventId },
-        data: {
-          recurrence_rule: {
-            ...toInputJsonObject(event.recurrence_rule),
-            until: dayBeforeOccurrence.toISOString(),
+      // Links are stored per occurrence date, so the split has to divide them
+      // too: everything from this date on belongs to the new event, and the
+      // dates before it stay behind. Link rows are date-only, so the boundary
+      // is compared at midnight UTC — the same normalisation the writes use.
+      const splitFrom = normalizeDate(occurrenceDate);
+
+      return getPrisma().$transaction(async tx => {
+        // Update original event to end before this occurrence
+        await tx.calendarEvent.update({
+          where: { id: eventId },
+          data: {
+            recurrence_rule: {
+              ...toInputJsonObject(event.recurrence_rule),
+              until: dayBeforeOccurrence.toISOString(),
+            },
           },
-        },
-      });
+        });
 
-      // Create new event starting from this occurrence
-      const newEvent = await getPrisma().calendarEvent.create({
-        data: {
-          classroom_id: event.classroom_id,
-          created_by: event.created_by,
-          event_type: eventData.event_type || event.event_type,
-          title: eventData.title || event.title,
-          description: eventData.description ?? event.description,
-          start_time: eventData.start_time ? toDate(eventData.start_time) : event.start_time,
-          end_time: eventData.end_time ? toDate(eventData.end_time) : event.end_time,
-          location: eventData.location ?? event.location,
-          meeting_link: eventData.meeting_link ?? event.meeting_link,
-          is_recurring: eventData.is_recurring ?? event.is_recurring,
-          recurrence_rule: toNullableJsonInput(
-            eventData.recurrence_rule ?? toInputJsonObject(event.recurrence_rule)
-          ),
-        },
-      });
+        // Create new event starting from this occurrence
+        const newEvent = await tx.calendarEvent.create({
+          data: {
+            classroom_id: event.classroom_id,
+            created_by: event.created_by,
+            event_type: eventData.event_type || event.event_type,
+            title: eventData.title || event.title,
+            description: eventData.description ?? event.description,
+            start_time: eventData.start_time ? toDate(eventData.start_time) : event.start_time,
+            end_time: eventData.end_time ? toDate(eventData.end_time) : event.end_time,
+            location: eventData.location ?? event.location,
+            meeting_link: eventData.meeting_link ?? event.meeting_link,
+            is_recurring: eventData.is_recurring ?? event.is_recurring,
+            recurrence_rule: toNullableJsonInput(
+              eventData.recurrence_rule ?? toInputJsonObject(event.recurrence_rule)
+            ),
+          },
+        });
 
-      return newEvent;
+        // A NULL occurrence_date never matches `gte`, so the undated bucket
+        // stays with the original event — which is where a non-recurring
+        // event's links live.
+        const laterOccurrences = {
+          event_id: eventId,
+          occurrence_date: { gte: splitFrom },
+        };
+        const moveToNewEvent = { event_id: newEvent.id };
+
+        await tx.calendarEventPageLink.updateMany({
+          where: laterOccurrences,
+          data: moveToNewEvent,
+        });
+        await tx.calendarEventSlideLink.updateMany({
+          where: laterOccurrences,
+          data: moveToNewEvent,
+        });
+        await tx.calendarEventAssignmentLink.updateMany({
+          where: laterOccurrences,
+          data: moveToNewEvent,
+        });
+
+        return newEvent;
+      });
     }
 
     case 'all': {
@@ -1365,22 +1395,36 @@ export const deleteEventWithScope = async (
       const dayBeforeOccurrence = new Date(occurrenceDate);
       dayBeforeOccurrence.setDate(dayBeforeOccurrence.getDate() - 1);
 
-      // Also delete any overrides on or after this date
-      await getPrisma().calendarEventOverride.deleteMany({
-        where: {
-          event_id: eventId,
-          date: { gte: occurrenceDate },
-        },
-      });
+      // The occurrences from this date on are gone, so their per-date links go
+      // with them; date-only rows compare at midnight UTC. The undated bucket
+      // (NULL occurrence_date) is not matched by `gte` and stays.
+      const laterOccurrences = {
+        event_id: eventId,
+        occurrence_date: { gte: normalizeDate(occurrenceDate) },
+      };
 
-      return getPrisma().calendarEvent.update({
-        where: { id: eventId },
-        data: {
-          recurrence_rule: {
-            ...toInputJsonObject(event.recurrence_rule),
-            until: dayBeforeOccurrence.toISOString(),
+      return getPrisma().$transaction(async tx => {
+        // Also delete any overrides on or after this date
+        await tx.calendarEventOverride.deleteMany({
+          where: {
+            event_id: eventId,
+            date: { gte: occurrenceDate },
           },
-        },
+        });
+
+        await tx.calendarEventPageLink.deleteMany({ where: laterOccurrences });
+        await tx.calendarEventSlideLink.deleteMany({ where: laterOccurrences });
+        await tx.calendarEventAssignmentLink.deleteMany({ where: laterOccurrences });
+
+        return tx.calendarEvent.update({
+          where: { id: eventId },
+          data: {
+            recurrence_rule: {
+              ...toInputJsonObject(event.recurrence_rule),
+              until: dayBeforeOccurrence.toISOString(),
+            },
+          },
+        });
       });
     }
 

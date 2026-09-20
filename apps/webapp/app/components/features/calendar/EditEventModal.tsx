@@ -25,18 +25,9 @@ import dayjs from 'dayjs';
 import { buildEventWindow, getEventTypeDotColor, getEventTypeLabel } from './utils';
 import EventLinks from './EventLinks';
 import type { CalendarEventWithLinks } from './types';
+import { buildScopedEventData, EDIT_SCOPES, filterLinksForOccurrence } from './eventScope';
 
 const { TextArea } = Input;
-
-const isSameDateDay = (date1: string | Date, date2: string | Date) => {
-  const d1 = new Date(date1);
-  const d2 = new Date(date2);
-  return (
-    d1.getUTCFullYear() === d2.getUTCFullYear() &&
-    d1.getUTCMonth() === d2.getUTCMonth() &&
-    d1.getUTCDate() === d2.getUTCDate()
-  );
-};
 
 const ALL_EVENT_TYPES = ['OFFICE_HOURS', 'LECTURE', 'LAB', 'ASSESSMENT'];
 
@@ -49,12 +40,6 @@ const DAYS_OF_WEEK = [
   { value: 'saturday', label: 'Sat' },
   { value: 'sunday', label: 'Sun' },
 ];
-
-const EDIT_SCOPES = {
-  THIS_ONLY: 'this_only',
-  THIS_AND_FUTURE: 'this_and_future',
-  ALL: 'all',
-};
 
 interface CalendarResource {
   id: string;
@@ -188,18 +173,19 @@ const EditEventModal = ({
       });
 
       const occurrenceDate = event.occurrence_date || event.start_time;
-      const filterLinksForOccurrence = <T extends { occurrence_date?: string | Date | null }>(
-        links: T[] | undefined
-      ) => {
-        if (!links) return [];
-        return links.filter(
-          link => !link.occurrence_date || isSameDateDay(link.occurrence_date, occurrenceDate)
-        );
-      };
+      const isRecurring = Boolean(event.is_recurring);
 
-      const pageLinks = filterLinksForOccurrence(event._rawPageLinks);
-      const slideLinks = filterLinksForOccurrence(event._rawSlideLinks);
-      const assignmentLinks = filterLinksForOccurrence(event._rawAssignmentLinks);
+      const pageLinks = filterLinksForOccurrence(event._rawPageLinks, occurrenceDate, isRecurring);
+      const slideLinks = filterLinksForOccurrence(
+        event._rawSlideLinks,
+        occurrenceDate,
+        isRecurring
+      );
+      const assignmentLinks = filterLinksForOccurrence(
+        event._rawAssignmentLinks,
+        occurrenceDate,
+        isRecurring
+      );
 
       setLinkedPageIds(pageLinks.map(l => l.page_id));
       setLinkedSlideIds(slideLinks.map(l => l.slide_id));
@@ -246,16 +232,20 @@ const EditEventModal = ({
   const handleSubmit = async () => {
     try {
       const values = await form.validateFields();
-      const eventData = buildEventData(values);
 
       if (isRecurringOccurrence) {
-        setPendingFormData(eventData);
+        // Links are per-occurrence, and only the 'this_only' scope has an
+        // occurrence to attach them to. Build the pending data WITHOUT them and
+        // let handleScopeConfirm add them for that one scope — carrying them in
+        // here would send link arrays with an 'all' or 'this and future' edit,
+        // which stores them against no date at all.
+        setPendingFormData(buildEventData(values, false));
         setScopeAction('edit');
         setShowScopeModal(true);
         return;
       }
 
-      await onSubmit(eventData);
+      await onSubmit(buildEventData(values));
     } catch (error: unknown) {
       console.error('Form validation failed:', error);
     }
@@ -264,26 +254,16 @@ const EditEventModal = ({
   const handleScopeConfirm = async () => {
     if (!event) return;
     if (scopeAction === 'edit' && pendingFormData) {
-      const includeLinks = editScope === EDIT_SCOPES.THIS_ONLY;
-      const dataToSubmit = includeLinks
-        ? {
-            ...pendingFormData,
-            linkedPageIds,
-            linkedSlideIds,
-            linkedAssignmentIds,
-            editScope,
-            occurrenceDate: event.occurrence_date
-              ? new Date(event.occurrence_date).toISOString()
-              : null,
-          }
-        : {
-            ...pendingFormData,
-            editScope,
-            occurrenceDate: event.occurrence_date
-              ? new Date(event.occurrence_date).toISOString()
-              : null,
-          };
-      await onSubmit(dataToSubmit);
+      // `pendingFormData` was built WITHOUT links; buildScopedEventData adds
+      // them back for the one scope that has an occurrence to store them under.
+      await onSubmit(
+        buildScopedEventData(
+          pendingFormData,
+          editScope,
+          event.occurrence_date ? new Date(event.occurrence_date).toISOString() : null,
+          { linkedPageIds, linkedSlideIds, linkedAssignmentIds }
+        )
+      );
     } else if (scopeAction === 'delete' && event.id) {
       await onDelete(event.id, {
         editScope,
