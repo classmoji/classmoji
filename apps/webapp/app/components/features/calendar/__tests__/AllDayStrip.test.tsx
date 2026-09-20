@@ -19,14 +19,26 @@ const deadline = (n: number): CalendarEventWithLinks => ({
   is_deadline: true,
 });
 
-const render = (items: CalendarEventWithLinks[]): string =>
+const render = (items: CalendarEventWithLinks[], alwaysShow = false): string =>
   renderToStaticMarkup(
-    <AllDayStrip dates={WEEK} itemsFor={date => (date.getDate() === 22 ? items : [])} />
+    <AllDayStrip
+      dates={WEEK}
+      itemsFor={date => (date.getDate() === 22 ? items : [])}
+      alwaysShow={alwaysShow}
+    />
   );
 
 describe('AllDayStrip', () => {
   it('renders nothing at all when no day has an item', () => {
     expect(render([])).toBe('');
+  });
+
+  it('stays on screen for a caller that can drop onto it', () => {
+    // Staff: this is the only drop target that moves an event to another day
+    // and keeps its time of day, so an empty week still needs the row.
+    const html = render([], true);
+    expect(html).toContain('All day');
+    expect(html.match(/min-h-\[2\.25rem\]/g)).toHaveLength(7);
   });
 
   it('caps a day at three chips and offers the rest as a button', () => {
@@ -36,6 +48,9 @@ describe('AllDayStrip', () => {
     // Dead text in both calendars before; here it opens the day in place,
     // because this row only exists in the view it would otherwise navigate to.
     expect(html).toContain('+1 more</button>');
+    // It is a toggle, so it says both what it will do and which day it is on.
+    expect(html).toContain('aria-expanded="false"');
+    expect(html).toContain('aria-label="Show 1 more item on Tue Sep 22"');
   });
 
   it('says when a deadline is due', () => {

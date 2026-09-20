@@ -8,7 +8,7 @@
 
 import { Fragment } from 'react';
 import { monthDropId } from './geometry';
-import { DAY_LABELS, eventKey, isCurrentMonth, isToday } from './utils';
+import { DAY_LABELS, eventKey, formatDayLabel, isCurrentMonth, isSameDay } from './utils';
 import EventChip from './EventChip';
 import { defaultRenderCell, defaultRenderEvent } from './gridRenderProps';
 import type { RenderCell, RenderEvent } from './gridRenderProps';
@@ -22,6 +22,13 @@ interface MonthGridProps {
   dates: Date[];
   /** Which month is "this" one; the padding days are drawn back. */
   currentDate: Date;
+  /**
+   * Which day gets the today pill. It comes from the navigation hook's ticker
+   * rather than from a fresh `new Date()` here, so the whole calendar agrees
+   * about what "today" is within one render — and moves to the next day at the
+   * same moment the week grid does.
+   */
+  now: Date;
   eventsFor: (date: Date) => CalendarEventWithLinks[];
   onEventClick?: (event: CalendarEventWithLinks) => void;
   /**
@@ -37,6 +44,7 @@ interface MonthGridProps {
 const MonthGrid = ({
   dates,
   currentDate,
+  now,
   eventsFor,
   onEventClick,
   onShowMore,
@@ -67,7 +75,7 @@ const MonthGrid = ({
             {week.map(date => {
               const dayEvents = eventsFor(date);
               const inMonth = isCurrentMonth(date, currentDate);
-              const isDayToday = isToday(date);
+              const isDayToday = isSameDay(date, now);
               const visible = dayEvents.slice(0, MONTH_CELL_CAP);
               const overflow = dayEvents.length - visible.length;
               const dropId = monthDropId(date);
@@ -112,8 +120,14 @@ const MonthGrid = ({
                             (onShowMore ? (
                               <button
                                 type="button"
+                                // "+2 more" is enough beside the cell it sits
+                                // in; announced on its own it names neither
+                                // what it shows nor which day it belongs to.
+                                aria-label={`Show ${overflow} more ${
+                                  overflow === 1 ? 'event' : 'events'
+                                } on ${formatDayLabel(date)}`}
                                 onClick={() => onShowMore(date)}
-                                className="text-xs text-ink-3 hover:text-ink-1 text-left pl-1 rounded focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-accent"
+                                className="text-xs text-ink-3 hover:text-ink-1 text-left pl-1 rounded focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent"
                               >
                                 +{overflow} more
                               </button>

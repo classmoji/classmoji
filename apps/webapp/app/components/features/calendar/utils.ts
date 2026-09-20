@@ -79,6 +79,16 @@ export const formatDayRange = (start: DateInput, end: DateInput) => {
 };
 
 /**
+ * One day, named the way a control that acts on it has to name it — `Tue Sep
+ * 22`. `formatDate`'s `Tue 22` is enough beside a calendar a reader can see; it
+ * is not enough in a button's accessible name, which is announced on its own.
+ */
+export const formatDayLabel = (date: DateInput) => {
+  const d = new Date(date);
+  return `${getShortDayName(d)} ${getMonthName(d).slice(0, 3)} ${d.getDate()}`;
+};
+
+/**
  * A clock time with the minutes dropped when they are zero — `9 AM`, `11:59 PM`.
  * What a deadline chip and the now badge show, where `formatTime`'s `9:00 AM`
  * is more digits than a chip has room for.

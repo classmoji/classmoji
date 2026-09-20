@@ -9,11 +9,11 @@
  * out of the student bundle.
  */
 
-import { Fragment } from 'react';
+import { Fragment, useEffect, useState } from 'react';
 import {
   WEEK_GRID_COLUMNS,
+  formatHourLabel,
   heightForDuration,
-  hourLabelParts,
   hoursInWindow,
   isOutsideWindow,
   monthDropId,
@@ -36,7 +36,13 @@ interface WeekGridProps {
   now: Date;
   eventsFor: (date: Date) => CalendarEventWithLinks[];
   onEventClick?: (event: CalendarEventWithLinks) => void;
-  showCreator?: boolean;
+  /**
+   * Keep the all-day strip on screen even on a week with nothing in it. Staff
+   * only: the strip is the one drop target that moves an event to another day
+   * WITHOUT rewriting its time (an hour cell snaps to the hour), so hiding it
+   * when empty took that move away on exactly the weeks where it is needed.
+   */
+  alwaysShowAllDay?: boolean;
   renderEvent?: RenderEvent;
   renderCell?: RenderCell;
 }
@@ -46,7 +52,7 @@ const WeekGrid = ({
   now,
   eventsFor,
   onEventClick,
-  showCreator = false,
+  alwaysShowAllDay = false,
   renderEvent = defaultRenderEvent,
   renderCell = defaultRenderCell,
 }: WeekGridProps) => {
@@ -54,10 +60,20 @@ const WeekGrid = ({
   const nowHourFloat = now.getHours() + now.getMinutes() / 60;
   const nowTop = topForHour(nowHourFloat);
 
-  // Every piece of the now indicator hangs off this one check. The staff grid
-  // gated only the per-column line, so its full-width rule and its gutter badge
-  // drew on whatever week you had paged to.
+  /**
+   * The now indicator is client-only. Rendered on the server it would draw the
+   * SERVER's clock — a different minute, and for a reader in another timezone a
+   * different hour or day — which is both a hydration mismatch on the badge's
+   * text and a visible jump as it corrects itself.
+   */
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => setMounted(true), []);
+
+  // Every piece of the indicator hangs off this one check. The staff grid gated
+  // only the per-column line, so its full-width rule and its gutter badge drew
+  // on whatever week you had paged to.
   const showNow =
+    mounted &&
     dates.some(date => isSameDay(date, now)) &&
     nowHourFloat >= hours[0] &&
     nowHourFloat <= hours[hours.length - 1] + 1;
@@ -92,6 +108,7 @@ const WeekGrid = ({
         dates={dates}
         itemsFor={date => eventsFor(date).filter(event => isOutsideWindow(event))}
         onEventClick={onEventClick}
+        alwaysShow={alwaysShowAllDay}
         renderEvent={renderEvent}
         renderCell={renderCell}
       />
@@ -100,21 +117,18 @@ const WeekGrid = ({
         {showNow && <NowRule top={nowTop} />}
         <div className="grid" style={{ gridTemplateColumns: WEEK_GRID_COLUMNS }}>
           {/* Hour gutter: the labels are absolutely placed so they sit ON the
-              hour line rather than inside the row below it. */}
+              hour line rather than inside the row below it. One line each —
+              `8 AM`, not a stacked `8` over `AM`. */}
           <div className="relative" style={{ height: remForHours(hours.length) }}>
-            {hours.map(hour => {
-              const { hour: label, suffix } = hourLabelParts(hour);
-              return (
-                <div
-                  key={hour}
-                  className="absolute right-3 text-xs font-medium text-ink-4 flex flex-col items-end leading-tight"
-                  style={{ top: `calc(${topForHour(hour)} + 4px)` }}
-                >
-                  <span>{label}</span>
-                  <span>{suffix}</span>
-                </div>
-              );
-            })}
+            {hours.map(hour => (
+              <div
+                key={hour}
+                className="absolute right-3 text-xs font-medium text-ink-4 leading-tight whitespace-nowrap"
+                style={{ top: `calc(${topForHour(hour)} + 4px)` }}
+              >
+                {formatHourLabel(hour)}
+              </div>
+            ))}
             {showNow && <NowBadge now={now} top={nowTop} />}
           </div>
 
@@ -149,19 +163,18 @@ const WeekGrid = ({
                         {renderEvent({
                           event,
                           placement: 'week',
-                          className: 'absolute left-1 right-1 pointer-events-auto',
+                          // The block's height is the event's duration; `pb-1`
+                          // is inside it (border-box), so the card fills the
+                          // duration minus a hairline and two back-to-back
+                          // events do not touch. The gap lives here rather than
+                          // in `heightForDuration`, which is the geometry the
+                          // drop targets are measured against.
+                          className: 'absolute left-1 right-1 pb-1 pointer-events-auto',
                           style: {
                             top: topForHour(startHour),
                             height: heightForDuration(durationHours),
                           },
-                          children: (
-                            <EventCard
-                              event={event}
-                              onClick={onEventClick}
-                              showCreator={showCreator}
-                              compact
-                            />
-                          ),
+                          children: <EventCard event={event} onClick={onEventClick} compact />,
                         })}
                       </Fragment>
                     );

@@ -43,6 +43,7 @@ const StudentCalendarView = ({ events, onEventClick, onMonthChange }: StudentCal
         <MonthGrid
           dates={nav.monthDates}
           currentDate={nav.currentDate}
+          now={nav.now}
           eventsFor={eventsFor}
           onEventClick={onEventClick}
           onShowMore={nav.focusDay}

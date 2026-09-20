@@ -674,7 +674,6 @@ const AdminCalendar = ({ loaderData }: Route.ComponentProps) => {
         canDragDeadlines={isAdmin}
         onMonthChange={handleMonthChange}
         onRangeSelect={canEdit ? handleRangeSelect : null}
-        showCreator={true}
       />
 
       {canEdit && (

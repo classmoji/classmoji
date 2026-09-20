@@ -4,12 +4,14 @@
  *
  * It disappears when the week has nothing to put in it (the student
  * behaviour) — the staff grid always reserved the row, so most weeks carried an
- * empty band across the top of the calendar.
+ * empty band across the top of the calendar. A caller that can DROP onto the
+ * row keeps it with `alwaysShow`: for them the empty row is a target, not a
+ * gap.
  */
 
 import { Fragment, useState } from 'react';
 import { WEEK_GRID_COLUMNS, monthDropId } from './geometry';
-import { eventKey, formatShortTime } from './utils';
+import { eventKey, formatDayLabel, formatShortTime } from './utils';
 import EventChip from './EventChip';
 import { defaultRenderCell, defaultRenderEvent } from './gridRenderProps';
 import type { RenderCell, RenderEvent } from './gridRenderProps';
@@ -24,6 +26,15 @@ interface AllDayStripProps {
   /** The all-day items for one day, already filtered and sorted. */
   itemsFor: (date: Date) => CalendarEventWithLinks[];
   onEventClick?: (event: CalendarEventWithLinks) => void;
+  /**
+   * Keep the row on screen even when the week has nothing for it. Staff pass
+   * this: the strip is their only drop target that changes an event's DAY
+   * without changing its time of day (an hour cell snaps to the hour), and a
+   * row that vanishes when empty is missing on exactly the weeks where that
+   * move is wanted. Students keep the row hidden — for them it is an empty band
+   * with nothing to do.
+   */
+  alwaysShow?: boolean;
   renderEvent?: RenderEvent;
   renderCell?: RenderCell;
 }
@@ -44,6 +55,7 @@ const AllDayStrip = ({
   dates,
   itemsFor,
   onEventClick,
+  alwaysShow = false,
   renderEvent = defaultRenderEvent,
   renderCell = defaultRenderCell,
 }: AllDayStripProps) => {
@@ -54,7 +66,7 @@ const AllDayStrip = ({
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
 
   const perDay = dates.map(itemsFor);
-  if (perDay.every(items => items.length === 0)) return null;
+  if (!alwaysShow && perDay.every(items => items.length === 0)) return null;
 
   return (
     <div
@@ -65,8 +77,10 @@ const AllDayStrip = ({
       {dates.map((date, dayIdx) => {
         const items = perDay[dayIdx];
         const dropId = monthDropId(date);
-        const visible = expanded[dropId] ? items : items.slice(0, ALL_DAY_CAP);
+        const isExpanded = expanded[dropId] === true;
+        const visible = isExpanded ? items : items.slice(0, ALL_DAY_CAP);
         const overflow = items.length - visible.length;
+        const hidden = items.length - ALL_DAY_CAP;
 
         return (
           <Fragment key={dropId}>
@@ -94,13 +108,24 @@ const AllDayStrip = ({
                       })}
                     </Fragment>
                   ))}
-                  {overflow > 0 && (
+                  {hidden > 0 && (
+                    // One control, both ways: it stays after it has opened the
+                    // day, so `aria-expanded` describes something a reader can
+                    // actually toggle back.
                     <button
                       type="button"
-                      onClick={() => setExpanded(state => ({ ...state, [dropId]: true }))}
-                      className="text-xs text-ink-3 hover:text-ink-1 text-left px-1 rounded focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-accent"
+                      aria-expanded={isExpanded}
+                      aria-label={
+                        isExpanded
+                          ? `Show fewer items on ${formatDayLabel(date)}`
+                          : `Show ${overflow} more ${
+                              overflow === 1 ? 'item' : 'items'
+                            } on ${formatDayLabel(date)}`
+                      }
+                      onClick={() => setExpanded(state => ({ ...state, [dropId]: !isExpanded }))}
+                      className="text-xs text-ink-3 hover:text-ink-1 text-left px-1 rounded focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent"
                     >
-                      +{overflow} more
+                      {isExpanded ? 'Show fewer' : `+${overflow} more`}
                     </button>
                   )}
                 </div>

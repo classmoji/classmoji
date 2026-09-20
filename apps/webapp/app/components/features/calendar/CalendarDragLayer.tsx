@@ -52,6 +52,13 @@ interface DraggableEventProps {
   disabled?: boolean;
   className?: string;
   style?: CSSProperties;
+  /**
+   * A pointer hint for what dragging this block would do. It sits on the
+   * wrapper rather than on the block because the grids hand this layer a block
+   * that is already built — and a `title` on an ancestor is what the browser
+   * shows over its descendants anyway.
+   */
+  title?: string;
 }
 
 /**
@@ -70,6 +77,7 @@ export const DraggableEvent = ({
   disabled,
   className = '',
   style = {},
+  title,
 }: DraggableEventProps) => {
   const { listeners, setNodeRef, isDragging } = useDraggable({
     // One id per OCCURRENCE: a recurring event surfaces many times under one id.
@@ -82,6 +90,7 @@ export const DraggableEvent = ({
     <div
       ref={setNodeRef}
       {...listeners}
+      title={title}
       className={className}
       style={{ ...style, opacity: isDragging ? 0.5 : 1 }}
     >
@@ -125,7 +134,6 @@ export const DroppableCell = ({
 interface CalendarDragLayerProps {
   /** Which grid is on screen — it decides what the drag overlay looks like. */
   view: CalendarView;
-  showCreator?: boolean;
   onEventDrop?: ((event: CalendarEventWithLinks, newStart: Date, newEnd: Date) => void) | null;
   onDeadlineDrop?: ((event: CalendarEventWithLinks, newStart: Date) => void) | null;
   children: ReactNode;
@@ -133,7 +141,6 @@ interface CalendarDragLayerProps {
 
 const CalendarDragLayer = ({
   view,
-  showCreator = false,
   onEventDrop,
   onDeadlineDrop,
   children,
@@ -226,7 +233,7 @@ const CalendarDragLayer = ({
               className="opacity-90 shadow-2xl"
               style={{ width: draggedWidth || 'auto', cursor: 'grabbing' }}
             >
-              <EventCard event={activeEvent} showCreator={showCreator} compact />
+              <EventCard event={activeEvent} compact />
             </div>
           )
         ) : null}

@@ -32,7 +32,6 @@ interface CourseCalendarProps {
   onMonthChange?: ((year: number, month: number) => void) | null;
   /** Week view: drag across hour cells to pick a time range (click = 1 hour). */
   onRangeSelect?: ((start: Date, end: Date) => void) | null;
-  showCreator?: boolean;
   canDragDeadlines?: boolean;
 }
 
@@ -51,7 +50,6 @@ const CourseCalendar = ({
   onDeadlineDrop,
   onMonthChange,
   onRangeSelect,
-  showCreator = false,
   canDragDeadlines = false,
 }: CourseCalendarProps) => {
   const nav = useCalendarNavigation(onMonthChange);
@@ -102,6 +100,14 @@ const CourseCalendar = ({
         disabled={!draggable}
         className={`${className} ${cursor}`}
         style={style}
+        // A deadline chip looks like every other chip, so say what dragging it
+        // would do. Only where it IS draggable, and not on a week block, whose
+        // card already fills the space a tooltip would cover.
+        title={
+          draggable && event.is_deadline && placement !== 'week'
+            ? 'Drag to change deadline'
+            : undefined
+        }
       >
         {children}
       </DraggableEvent>
@@ -145,12 +151,7 @@ const CourseCalendar = ({
   };
 
   return (
-    <CalendarDragLayer
-      view={nav.view}
-      showCreator={showCreator}
-      onEventDrop={onEventDrop}
-      onDeadlineDrop={onDeadlineDrop}
-    >
+    <CalendarDragLayer view={nav.view} onEventDrop={onEventDrop} onDeadlineDrop={onDeadlineDrop}>
       <CalendarShell
         currentDate={nav.currentDate}
         weekDates={nav.weekDates}
@@ -167,6 +168,7 @@ const CourseCalendar = ({
           <MonthGrid
             dates={nav.monthDates}
             currentDate={nav.currentDate}
+            now={nav.now}
             eventsFor={eventsFor}
             onEventClick={handleEventClick}
             onShowMore={nav.focusDay}
@@ -179,7 +181,9 @@ const CourseCalendar = ({
             now={nav.now}
             eventsFor={eventsFor}
             onEventClick={handleEventClick}
-            showCreator={showCreator}
+            // The strip is the only drop target that keeps an event's time of
+            // day, so staff who can drop need it even on an empty week.
+            alwaysShowAllDay={Boolean(onEventDrop || onDeadlineDrop)}
             renderEvent={renderEvent}
             renderCell={renderCell}
           />

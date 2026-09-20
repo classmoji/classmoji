@@ -36,14 +36,12 @@ const event = (title: string, hour: number): CalendarEventWithLinks => ({
   event_type: 'LECTURE',
 });
 
-const render = (
-  events: CalendarEventWithLinks[],
-  onShowMore?: (date: Date) => void
-): string =>
+const render = (events: CalendarEventWithLinks[], onShowMore?: (date: Date) => void): string =>
   renderToStaticMarkup(
     <MonthGrid
       dates={monthDates()}
       currentDate={SEPTEMBER}
+      now={SEPTEMBER}
       eventsFor={date => (date.getDate() === 15 && date.getMonth() === 8 ? events : [])}
       onShowMore={onShowMore}
     />
@@ -75,6 +73,15 @@ describe('MonthGrid', () => {
     // The overflow count is a control, not prose: it opens that day in week
     // view. It was a <span> in the student grid and a <div> in the staff one.
     expect(html).toContain('+2 more</button>');
+    // "+2 more" says nothing on its own, which is how it is announced.
+    expect(html).toContain('aria-label="Show 2 more events on Tue Sep 15"');
+  });
+
+  it('puts the day on the today pill the hook says it is, not a fresh clock', () => {
+    // `now` is a prop so the whole calendar agrees within one render — and so
+    // this assertion does not depend on the day the suite runs.
+    const html = render([]);
+    expect(html).toContain('background-color:var(--accent)">15</span>');
   });
 
   it('leaves the overflow count as text when there is nowhere to send the reader', () => {
