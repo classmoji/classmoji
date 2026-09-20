@@ -100,7 +100,7 @@ const CalendarShell = ({
 }: CalendarShellProps) => (
   <section className="rounded-2xl bg-panel ring-1 ring-line overflow-hidden min-h-[calc(100vh-10rem)]">
     <header className="flex flex-wrap items-center justify-between gap-3 px-5 sm:px-6 pt-5 sm:pt-6 pb-4">
-      <div className="flex items-center gap-2">
+      <div className="flex items-center gap-2 min-w-0">
         <button type="button" onClick={onPrevious} aria-label="Previous" className={navButtonClass}>
           <IconChevronLeft size={18} />
         </button>
@@ -114,11 +114,14 @@ const CalendarShell = ({
         <button type="button" onClick={onNext} aria-label="Next" className={navButtonClass}>
           <IconChevronRight size={18} />
         </button>
-        <h2 className="ml-2 text-base sm:text-lg font-semibold text-ink-0 tracking-tight">
+        {/* `min-w-0` + `truncate`: a week that straddles two months spells both
+            of them out (`Sep 27 – Oct 3`), which overflows the header at 390px
+            unless the heading is allowed to shrink. */}
+        <h2 className="ml-2 min-w-0 truncate text-base sm:text-lg font-semibold text-ink-0 tracking-tight">
           {formatMonthYear(currentDate)}
           {view === 'week' && weekDates.length > 0 && (
             <span className="ml-2 text-sm font-normal text-ink-3">
-              {formatDayRange(weekDates[0], weekDates[weekDates.length - 1])}
+              · {formatDayRange(weekDates[0], weekDates[weekDates.length - 1])}
             </span>
           )}
         </h2>

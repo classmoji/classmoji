@@ -48,7 +48,10 @@ const EventChip = ({ event, onClick, subtitle, title, className = '' }: EventChi
       <button
         type="button"
         onClick={() => onClick?.(event)}
-        className="block w-full text-left px-1.5 py-1 rounded-md min-w-0 hover:opacity-80 transition-opacity focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-accent"
+        // An inset outline, not a ring: the chip fills a month cell that clips
+        // its overflow, so anything drawn outside the button's own box would be
+        // painted into that clip and never seen.
+        className="block w-full text-left px-1.5 py-1 rounded-md min-w-0 hover:opacity-80 transition-opacity focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent"
       >
         <span className="flex items-center gap-1 min-w-0">
           <span className="text-xs font-medium leading-tight truncate">{event.title}</span>

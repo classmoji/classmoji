@@ -35,8 +35,22 @@ const EventCard = ({ event, onClick, showCreator = false, compact = false }: Eve
   const duration = getEventDuration(event);
   const padding = compact ? 'p-2' : 'p-3';
 
+  /**
+   * A compact card fills the block the grid sized for it, so a two-hour event
+   * draws two hours tall and a 45-minute one stops before the next block. It
+   * was content-height, which made every block the same size whatever its
+   * duration — harmless while only the staff grid used it, a regression for
+   * students the moment both views shared it.
+   *
+   * `min-h-0` on the flex child is what lets `overflow-hidden` actually clip:
+   * a flex item's default `min-height: auto` refuses to shrink below its
+   * content, so the text would push out of the bottom of the card instead.
+   */
+  const fill = compact ? 'h-full flex flex-col min-h-0' : '';
+  const fillChild = compact ? 'flex-1 min-h-0 overflow-hidden' : '';
+
   const body: ReactNode = (
-    <div className="space-y-1.5">
+    <div className={`space-y-1.5 ${compact ? 'min-h-0' : ''}`}>
       {/* Title */}
       <div
         className={`font-medium ${getEventTypeDarkText(event.event_type)} ${
@@ -53,7 +67,7 @@ const EventCard = ({ event, onClick, showCreator = false, compact = false }: Eve
 
       {/* Time */}
       <div className="flex items-center gap-1.5 text-xs text-ink-2">
-        <ClockCircleOutlined className="text-gray-400" />
+        <ClockCircleOutlined aria-hidden className="text-gray-400" />
         <span className="truncate">
           {formatTime(event.start_time)} - {formatTime(event.end_time)}
         </span>
@@ -65,12 +79,12 @@ const EventCard = ({ event, onClick, showCreator = false, compact = false }: Eve
         <div className="flex items-center gap-1.5 text-xs text-ink-2">
           {event.meeting_link ? (
             <>
-              <VideoCameraOutlined className="text-blue-500" />
+              <VideoCameraOutlined aria-hidden className="text-blue-500" />
               <span className="text-blue-600 dark:text-blue-400">Virtual</span>
             </>
           ) : event.location ? (
             <>
-              <EnvironmentOutlined className="text-gray-400" />
+              <EnvironmentOutlined aria-hidden className="text-gray-400" />
               <span className="truncate">{event.location}</span>
             </>
           ) : null}
@@ -83,7 +97,7 @@ const EventCard = ({ event, onClick, showCreator = false, compact = false }: Eve
           {/* Location */}
           {event.location && (
             <div className="flex items-center gap-1.5 text-xs text-ink-2">
-              <EnvironmentOutlined className="text-gray-400" />
+              <EnvironmentOutlined aria-hidden className="text-gray-400" />
               <span className="truncate">{event.location}</span>
             </div>
           )}
@@ -91,7 +105,7 @@ const EventCard = ({ event, onClick, showCreator = false, compact = false }: Eve
           {/* Meeting Link */}
           {event.meeting_link && (
             <div className="flex items-center gap-1.5 text-xs text-blue-600 dark:text-blue-400">
-              <VideoCameraOutlined />
+              <VideoCameraOutlined aria-hidden />
               <span>Virtual meeting</span>
             </div>
           )}
@@ -155,18 +169,22 @@ const EventCard = ({ event, onClick, showCreator = false, compact = false }: Eve
         border ${getEventTypeBorderColor(event.event_type)} border-l-4
         rounded-r-md shadow-sm hover:shadow-md overflow-hidden
         ${isHappeningNow ? 'ring-2 ring-blue-500/50 ring-offset-1' : ''}
+        ${fill}
       `}
     >
       {onClick ? (
         <button
           type="button"
           onClick={() => onClick(event)}
-          className={`block w-full text-left cursor-pointer ${padding} focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-accent`}
+          // The ring is drawn INSIDE the button: it fills a card that clips its
+          // overflow, so an outset ring — or an outline at a positive
+          // offset — is painted straight into the clip and never seen.
+          className={`block w-full text-left cursor-pointer ${padding} ${fillChild} focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent`}
         >
           {body}
         </button>
       ) : (
-        <div className={padding}>{body}</div>
+        <div className={`${padding} ${fillChild}`}>{body}</div>
       )}
     </div>
   );
