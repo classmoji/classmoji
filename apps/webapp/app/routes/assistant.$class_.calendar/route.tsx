@@ -416,7 +416,11 @@ const AssistantCalendar = ({ loaderData }: Route.ComponentProps) => {
     const eventPayload: Record<string, unknown> = { ...eventData };
     if (event.is_recurring && event.occurrence_date) {
       eventPayload.editScope = 'this_only';
-      eventPayload.occurrenceDate = event.occurrence_date;
+      // Normalised, not passed through: `occurrence_date` arrives as a real
+      // Date over single fetch, and this only survived `JSON.stringify` because
+      // Date has a `toJSON`. The edit modal already sends an ISO string here,
+      // so the action sees one shape either way.
+      eventPayload.occurrenceDate = new Date(event.occurrence_date).toISOString();
     }
 
     const formData = new FormData();
