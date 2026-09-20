@@ -280,7 +280,7 @@ const SubmissionsTable = ({
         repo.submission ? (
           <RepositoryAssignmentStatus repositoryAssignment={repo.submission} />
         ) : (
-          <Tooltip title="Sync the repository to create this student's submission row">
+          <Tooltip title="Sync the repository from the Repositories page to create this student's submission row">
             <span className="text-sm text-ink-3">Not released</span>
           </Tooltip>
         ),

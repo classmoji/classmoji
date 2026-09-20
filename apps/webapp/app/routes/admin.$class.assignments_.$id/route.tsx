@@ -242,18 +242,6 @@ const AssignmentPage = ({ loaderData }: Route.ComponentProps) => {
     postApi('autograde', { repositoryId: repository.id, classroomSlug: classSlug });
   };
 
-  const handleSync = () => {
-    notify(ActionTypes.SYNC_ASSIGNMENT, 'Syncing repository…');
-    fetcher!.submit(
-      { assignment_id: repository.id },
-      {
-        action: `/admin/${classSlug}/repos?/sync`,
-        method: 'post',
-        encType: 'application/json',
-      }
-    );
-  };
-
   const moreItems: MenuProps['items'] = [
     {
       key: 'autograde',
@@ -366,9 +354,6 @@ const AssignmentPage = ({ loaderData }: Route.ComponentProps) => {
                 Grades released
               </label>
             </Tooltip>
-            <Tooltip title="Create the missing student repositories and submission rows">
-              <Button onClick={handleSync}>Sync repository</Button>
-            </Tooltip>
             {isAdmin && (
               <Button
                 onClick={() => navigate(`${pathname.replace(/\/$/, '')}/assign-graders`)}
@@ -475,17 +460,6 @@ const AssignmentPage = ({ loaderData }: Route.ComponentProps) => {
         assignment={assignment as unknown as AssignmentRowData}
       />
 
-      <TriggerProgress
-        operation="PUBLISH_OR_SYNC_ASSIGNMENT"
-        validIdentifiers={[
-          'gh-create_git_repo',
-          'cf-create_git_repo',
-          'gh-create_git_repo_assignment',
-          'cf-create_git_repo_assignment',
-          'gh-add_collaborator_to_repo',
-        ]}
-        callback={() => setTimeout(() => revalidate(), 100)}
-      />
       <TriggerProgress
         operation="AUTOGRADE"
         validIdentifiers={['dispatch_autograde_workflow', 'gh-commit_autograde_workflow']}

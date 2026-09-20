@@ -430,7 +430,6 @@ test.describe('Assignment page - overview & actions', () => {
   test('has the header controls', async ({ authenticatedPage: page }) => {
     await expect(page.getByText('Grades released')).toBeVisible();
     await expect(page.getByRole('switch').first()).toBeVisible();
-    await expect(page.getByRole('button', { name: 'Sync repository' })).toBeVisible();
     await expect(page.getByRole('button', { name: 'Edit assignment' })).toBeVisible();
   });
 
