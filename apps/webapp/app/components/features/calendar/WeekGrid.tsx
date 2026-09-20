@@ -118,11 +118,14 @@ const WeekGrid = ({
   // Every piece of the indicator hangs off this one check. The staff grid gated
   // only the per-column line, so its full-width rule and its gutter badge drew
   // on whatever week you had paged to.
+  // `< endHour`, not `<=`: the end is EXCLUSIVE, and at exactly the end the
+  // line would be drawn on the grid's bottom edge — a rule below the last row
+  // rather than an indicator inside it.
   const showNow =
     mounted &&
     dates.some(date => isSameDay(date, now)) &&
-    nowHourFloat >= hours[0] &&
-    nowHourFloat <= hours[hours.length - 1] + 1;
+    nowHourFloat >= startHour &&
+    nowHourFloat < endHour;
 
   return (
     // Min width keeps the seven columns and the gutter readable on phones; the
@@ -189,14 +192,21 @@ const WeekGrid = ({
             );
             return (
               <div key={monthDropId(date)} className="relative border-l border-line">
-                {hours.map(hour => (
+                {hours.map((hour, hourIdx) => (
                   <Fragment key={hour}>
                     {renderCell({
                       dropId: weekDropId(date, hour),
                       date,
                       hour,
                       dayIndex: dayIdx,
-                      className: 'border-b border-line last:border-b-0 transition-colors',
+                      // The last row closes with the grid's own edge rather
+                      // than a rule of its own. `last:border-b-0` said that
+                      // and never did it: the cells are not the column's last
+                      // children — the deadline, block and pill layers come
+                      // after them — so the variant never matched.
+                      className: `${
+                        hourIdx === hours.length - 1 ? '' : 'border-b border-line'
+                      } transition-colors`,
                       style: { height: remForHours(1) },
                     })}
                   </Fragment>

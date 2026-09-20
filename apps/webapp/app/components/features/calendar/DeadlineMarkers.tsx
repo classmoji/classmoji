@@ -22,26 +22,56 @@
  * the one the staff drag layer picks up.
  */
 
+import { HOUR_HEIGHT_REM } from './geometry';
 import { formatShortTime } from './utils';
 import type { CalendarEventWithLinks } from './types';
 
-/** Deadlines due at the same minute, which share one line and stack their pills. */
-export interface DeadlineGroup {
+/** One deadline, and where ITS line goes. */
+export interface DeadlineMark {
+  event: CalendarEventWithLinks;
   /** The clock hour the line sits at, minutes as a fraction. */
   hourFloat: number;
   /** That hour as an offset from the top of the grid. */
   top: string;
-  /** Whether the pills hang above the line — see `DeadlinePills`. */
-  above: boolean;
-  items: CalendarEventWithLinks[];
 }
 
 /**
- * How much room a stack of pills wants above its line, in hours of grid. One
- * pill is about 1.25rem and an hour row is 4rem, so this is a little over one
- * pill — enough that the commonest case, one pill, always clears the top edge.
+ * Deadlines whose pills would otherwise land on top of each other, drawn as
+ * one anchored stack. Their LINES stay where they each belong.
  */
-const PILL_CLEARANCE_HOURS = 0.375;
+export interface DeadlineGroup {
+  /** The earliest due time in the stack — where the stack is anchored. */
+  hourFloat: number;
+  top: string;
+  /** Whether the pills hang above the anchor — see `DeadlinePills`. */
+  above: boolean;
+  items: DeadlineMark[];
+}
+
+/**
+ * A pill's own box and the gap between two stacked ones, in rem. Rounded up
+ * from what the built CSS draws (0.65rem of type, `py-0.5`, a hairline
+ * border), because being generous here costs nothing and being short of it
+ * puts a pill through the all-day strip.
+ */
+const PILL_BOX_REM = 1.25;
+const PILL_STACK_GAP_REM = 0.125;
+
+/**
+ * How much room a stack of `count` pills needs above its anchor, in hours of
+ * grid. It has to scale with the stack: two deadlines five minutes apart are
+ * one stack two pills tall, and clearance for one of them would hang the
+ * other into the all-day strip.
+ */
+export const pillClearanceHours = (count: number): number =>
+  (count * PILL_BOX_REM + Math.max(0, count - 1) * PILL_STACK_GAP_REM) / HOUR_HEIGHT_REM;
+
+/**
+ * How close two due times have to be for their pills to collide — one pill
+ * height, in hours of grid. Deadlines at 11:55 and 11:59 PM are four minutes
+ * apart and would be drawn one on top of the other.
+ */
+const PILL_MERGE_HOURS = PILL_BOX_REM / HOUR_HEIGHT_REM;
 
 /**
  * The title as a deadline pill says it: `Due: Lab 3` is three words of chrome
@@ -54,7 +84,14 @@ export const deadlineTitle = (event: CalendarEventWithLinks): string =>
   (event.title ?? '').replace(/^Due:\s*/i, '');
 
 /**
- * The deadlines of ONE day that have a line to draw, grouped by due time.
+ * The deadlines of ONE day that have a line to draw, with the ones whose pills
+ * would collide gathered into a single stack.
+ *
+ * Grouping used to be by exact minute, which only caught the case where two
+ * assignments were due at the same instant — 11:55 and 11:59 PM are four
+ * minutes apart and were drawn one pill on top of the other. Anything within a
+ * pill's height of the one before it joins its stack; each keeps its own line,
+ * and each pill still says its own time.
  *
  * Anything due outside the rendered hours is left out: it keeps its all-day
  * chip, which is the honest answer — a line at an hour the grid does not draw
@@ -68,7 +105,7 @@ export const deadlineGroups = (
   endHourExclusive: number,
   topFor: (hourFloat: number) => string
 ): DeadlineGroup[] => {
-  const byHour = new Map<number, CalendarEventWithLinks[]>();
+  const marks: DeadlineMark[] = [];
 
   for (const event of events) {
     if (!event.is_deadline) continue;
@@ -78,27 +115,40 @@ export const deadlineGroups = (
     const hourFloat = due.getHours() + due.getMinutes() / 60;
     if (hourFloat < startHour || hourFloat >= endHourExclusive) continue;
 
-    const group = byHour.get(hourFloat);
-    if (group) group.push(event);
-    else byHour.set(hourFloat, [event]);
+    marks.push({ event, hourFloat, top: topFor(hourFloat) });
   }
 
-  return [...byHour.entries()]
-    .sort(([a], [b]) => a - b)
-    .map(([hourFloat, items]) => ({
-      hourFloat,
-      top: topFor(hourFloat),
-      // Above the line, except where "above" is not the grid: a deadline due
-      // in the first minutes of the first rendered hour would hang its pill
-      // over the all-day strip, which holds that same deadline's chip.
-      above: hourFloat - startHour >= PILL_CLEARANCE_HOURS,
-      items,
-    }));
+  marks.sort((a, b) => a.hourFloat - b.hourFloat);
+
+  const groups: DeadlineGroup[] = [];
+  for (const mark of marks) {
+    const open = groups[groups.length - 1];
+    // Measured from the stack's ANCHOR, not from the previous pill: three
+    // deadlines a minute apart are one stack, not a chain that walks down the
+    // column a pill at a time.
+    if (open && mark.hourFloat - open.hourFloat < PILL_MERGE_HOURS) {
+      open.items.push(mark);
+      continue;
+    }
+    groups.push({ hourFloat: mark.hourFloat, top: mark.top, above: true, items: [mark] });
+  }
+
+  return groups.map(group => ({
+    ...group,
+    // Above the anchor, except where "above" is not the grid: a stack near the
+    // first rendered hour would hang over the all-day strip, which holds those
+    // same deadlines' chips. The taller the stack, the more room it needs.
+    above: group.hourFloat - startHour >= pillClearanceHours(group.items.length),
+  }));
 };
 
+/** Every line to draw, in the order they fall. */
+export const deadlineMarks = (groups: readonly DeadlineGroup[]): DeadlineMark[] =>
+  groups.flatMap(group => group.items);
+
 /** A stable key for one deadline within its day. */
-const itemKey = (event: CalendarEventWithLinks, index: number): string =>
-  `${event.id ?? 'deadline'}-${index}`;
+const itemKey = (mark: DeadlineMark, index: number): string =>
+  `${mark.event.id ?? 'deadline'}-${index}`;
 
 interface DeadlineLayerProps {
   groups: DeadlineGroup[];
@@ -114,17 +164,18 @@ interface DeadlineLayerProps {
  */
 export const DeadlineLines = ({ groups }: DeadlineLayerProps) => (
   <div className="absolute inset-0 pointer-events-none" aria-hidden="true">
-    {groups.map(group =>
-      group.items.map((item, index) => (
-        <div
-          key={itemKey(item, index)}
-          className={`absolute left-0 right-0 border-t-2 border-rose-500/80 dark:border-rose-400/70 ${
-            item.is_unpublished ? 'border-dashed' : ''
-          }`}
-          style={{ top: group.top }}
-        />
-      ))
-    )}
+    {deadlineMarks(groups).map((mark, index) => (
+      <div
+        key={itemKey(mark, index)}
+        className={`absolute left-0 right-0 border-t-2 border-rose-500/80 dark:border-rose-400/70 ${
+          mark.event.is_unpublished ? 'border-dashed' : ''
+        }`}
+        // Each line at its OWN time, even where the pills above them merged
+        // into one stack: the line is the answer to "when", and moving it
+        // would make it the wrong answer.
+        style={{ top: mark.top }}
+      />
+    ))}
   </div>
 );
 
@@ -143,40 +194,48 @@ interface DeadlinePillsProps extends DeadlineLayerProps {
  * line is the time you still have.
  *
  * The one exception is the top edge, where "above" is not the grid at all but
- * the all-day strip — which holds that same deadline's chip. A deadline due in
- * the first minutes of the first rendered hour hangs its pill below its line
- * instead.
+ * the all-day strip — which holds those same deadlines' chips. A stack near
+ * the first rendered hour hangs below its line instead, and how near is
+ * "near" scales with how tall the stack is.
  *
- * Two deadlines at the same time stack rather than overlap: the group is one
- * anchored column, so the second pill lands beside the first rather than on it.
+ * Deadlines close enough for their pills to collide are ONE anchored column,
+ * so the second lands above the first rather than on it, each still saying its
+ * own time.
+ *
+ * Capped at 70% of the column and pinned to its right edge. A pill sits over
+ * whatever the block beneath it is drawing, and the case that matters is a
+ * block that ends exactly at the due time: since the chips now stack from the
+ * top of their block rather than its floor, they are nowhere near that edge on
+ * every tier but a completely full one — and at 70% the left of the column,
+ * where a chip's icon and the start of its title are, stays clear.
  */
 export const DeadlinePills = ({ groups, onEventClick }: DeadlinePillsProps) => (
   <div className="absolute inset-0 pointer-events-none">
     {groups.map(group => (
       <div
         key={group.hourFloat}
-        className="absolute left-1 right-1 flex flex-col items-end gap-0.5"
+        className="absolute left-0 right-0.5 flex flex-col items-end gap-0.5"
         style={{
           top: group.top,
           transform: group.above ? 'translateY(-100%)' : undefined,
         }}
       >
-        {group.items.map((item, index) => {
-          const title = deadlineTitle(item);
-          const time = formatShortTime(item.start_time);
+        {group.items.map((mark, index) => {
+          const title = deadlineTitle(mark.event);
+          const time = formatShortTime(mark.event.start_time);
           const label = `${time} · ${title}`;
 
           return (
             <button
-              key={itemKey(item, index)}
+              key={itemKey(mark, index)}
               type="button"
-              onClick={() => onEventClick?.(item)}
+              onClick={() => onEventClick?.(mark.event)}
               // The column is narrow enough that most of these truncate, so
               // the whole label stays reachable on hover and, for a screen
               // reader, in a name that says what kind of thing this is.
               title={label}
               aria-label={`Deadline: ${title}, due ${time}`}
-              className="pointer-events-auto max-w-full truncate rounded-full border border-rose-300 dark:border-rose-700/70 bg-rose-100 dark:bg-rose-900/60 px-1.5 py-0.5 text-[0.65rem] font-medium leading-none text-rose-800 dark:text-rose-200 shadow-sm hover:bg-rose-200 dark:hover:bg-rose-900 focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-accent"
+              className="pointer-events-auto max-w-[70%] truncate rounded-full border border-rose-300 dark:border-rose-700/70 bg-rose-100 dark:bg-rose-900/60 px-1.5 py-0.5 text-[0.65rem] font-medium leading-none text-rose-800 dark:text-rose-200 shadow-sm hover:bg-rose-200 dark:hover:bg-rose-900 focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-accent"
             >
               {label}
             </button>

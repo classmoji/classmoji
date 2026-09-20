@@ -227,6 +227,17 @@ describe('WeekGrid — the rendered window', () => {
     expect(html).not.toContain('>0 AM<');
   });
 
+  it('closes the last row with the grid’s edge, not a rule of its own', () => {
+    // `last:border-b-0` said that and never did it: an hour cell is not the
+    // column's last child, because the deadline, block and pill layers come
+    // after it.
+    const html = render([], TUESDAY);
+    expect(html).not.toContain('last:border-b-0');
+    // 15 rows, 14 of them with a bottom border, per day column plus nothing
+    // in the gutter.
+    expect((html.match(/border-b border-line transition-colors/g) ?? []).length).toBe(14 * 7);
+  });
+
   it('opens upward to an early start and rebases everything on it', () => {
     const html = render([], TUESDAY, weekOf(TUESDAY), { startHour: 6 });
     expect(html).toContain('>6 AM<');
@@ -355,6 +366,56 @@ describe('WeekGrid — deadline lines', () => {
     // first instead of on top of it.
     expect(html.match(/transform:translateY\(-100%\)/g) ?? []).toHaveLength(1);
     expect(html).toContain('flex flex-col items-end gap-0.5');
+  });
+
+  it('merges pills that would collide, and leaves their LINES where they fall', () => {
+    // 11:55 and 11:59 PM are four minutes apart — under a pill's height, so
+    // grouping by the exact minute drew one label on top of the other.
+    const earlier: CalendarEventWithLinks = {
+      ...deadline,
+      id: 'deadline-1155',
+      title: 'Due: Reading Response',
+      start_time: new Date(2026, 8, 23, 23, 55).toISOString(),
+      end_time: new Date(2026, 8, 23, 23, 55).toISOString(),
+    };
+    const html = render([earlier, deadline], TUESDAY, weekOf(TUESDAY), { endHour: 24 });
+
+    // One stack…
+    expect(html.match(/transform:translateY\(-100%\)/g) ?? []).toHaveLength(1);
+    // …two pills, each still saying its own time…
+    expect(html).toContain('11:55 PM · Reading Response');
+    expect(html).toContain('11:59 PM · Short Assignment 1');
+    // …and two lines, at the two times they are actually due: (23:55 − 8) and
+    // (23:59 − 8) hours of grid, at 4rem each.
+    expect(html).toContain(`top:${((23 + 55 / 60 - 8) * 4).toString()}rem`);
+    expect(html).toContain(`top:${((23 + 59 / 60 - 8) * 4).toString()}rem`);
+  });
+
+  it('keeps a merged stack out of the all-day strip at the top of the grid', () => {
+    // 8:25 in an 8 AM window is a comfortable drop for ONE pill and not for
+    // two, so the clearance has to scale with the stack.
+    const at825 = (id: string, title: string): CalendarEventWithLinks => ({
+      ...deadline,
+      id,
+      title,
+      start_time: new Date(2026, 8, 23, 8, 25).toISOString(),
+      end_time: new Date(2026, 8, 23, 8, 25).toISOString(),
+    });
+
+    const alone = render([at825('d-1', 'Due: Quiz')], TUESDAY);
+    expect(alone).toContain('transform:translateY(-100%)');
+
+    const stacked = render([at825('d-1', 'Due: Quiz'), at825('d-2', 'Due: Survey')], TUESDAY);
+    expect(stacked).toContain('8:25 AM · Quiz');
+    expect(stacked).toContain('8:25 AM · Survey');
+    expect(stacked).not.toContain('transform:translateY(-100%)');
+  });
+
+  it('keeps a pill narrow enough to leave the left of the column readable', () => {
+    // It is drawn over whatever the block beneath it holds, and the left of a
+    // chip — its icon and the start of its title — has to survive that.
+    const html = render([deadline], TUESDAY, weekOf(TUESDAY), { endHour: 24 });
+    expect(html).toContain('max-w-[70%]');
   });
 
   it('gives a form close its own wording, unchanged', () => {

@@ -32,7 +32,9 @@ export const DEFAULT_END_HOUR = 23;
 
 /**
  * The earliest hour a computed range is allowed to widen up to. A 6 AM event
- * pulls the grid up to 6 AM; a 3 AM one does not drag it to 3 AM.
+ * pulls the grid up to 6 AM; a 3 AM one does not move it at all — it would
+ * start before the first row whatever the window did, so it keeps its all-day
+ * chip and the grid keeps its shape.
  */
 export const HOUR_FLOOR = 6;
 
@@ -317,7 +319,12 @@ export const hourRange = (events: readonly TimedItem[]): HourWindow => {
     const endFloat = crossesMidnight(event) ? 24 : clockHour(end);
 
     endHour = Math.max(endHour, Math.ceil(endFloat));
-    startHour = Math.min(startHour, Math.max(HOUR_FLOOR, Math.floor(startFloat)));
+
+    // Only an event that would be DRAWN widens the window upward. One clamped
+    // to the floor instead — a 3 AM outlier — still starts before the first
+    // row, so it stays in the all-day strip either way, and opening the grid
+    // for it bought two empty rows at the top of every week of that month.
+    if (startFloat >= HOUR_FLOOR) startHour = Math.min(startHour, Math.floor(startFloat));
   }
 
   return { startHour, endHour: Math.min(endHour, 24) };

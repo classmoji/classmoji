@@ -346,9 +346,19 @@ describe('hourRange', () => {
 
   it('widens up to an early event, and no further than the floor', () => {
     expect(hourRange([timed(7, 8.5)]).startHour).toBe(7);
-    expect(hourRange([timed(6.5, 8)]).startHour).toBe(6);
-    // A 3 AM outlier opens the grid to the floor and stops there.
-    expect(hourRange([timed(3, 4)]).startHour).toBe(HOUR_FLOOR);
+    expect(hourRange([timed(HOUR_FLOOR, 8)]).startHour).toBe(HOUR_FLOOR);
+    expect(hourRange([timed(6.5, 8)]).startHour).toBe(HOUR_FLOOR);
+  });
+
+  it('does not move at all for an event that starts before the floor', () => {
+    // It would begin above the first row whatever the window did, so it keeps
+    // its all-day chip either way — and opening the grid to the floor for it
+    // bought two empty rows at the top of every week of that month.
+    expect(hourRange([timed(3, 4)]).startHour).toBe(DEFAULT_START_HOUR);
+    expect(hourRange([timed(5.5, 7)]).startHour).toBe(DEFAULT_START_HOUR);
+    // …and one that starts before the floor but runs into the day still
+    // widens DOWNWARD, because its end is drawn.
+    expect(hourRange([timed(3, 4)]).endHour).toBe(DEFAULT_END_HOUR);
   });
 
   it('takes the widest answer across the whole set', () => {
