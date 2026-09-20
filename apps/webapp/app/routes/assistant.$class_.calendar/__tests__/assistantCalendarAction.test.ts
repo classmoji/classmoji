@@ -193,6 +193,47 @@ describe('the office-hours limit holds on update', () => {
   });
 });
 
+describe('resource links follow the scope here too', () => {
+  it.each(['all', 'this_and_future'])('ignores link keys sent with a %s edit', async scope => {
+    mocks.updateEventWithScope.mockResolvedValue({ id: 'event-2' });
+
+    await submit({
+      intent: 'update',
+      eventId: 'event-1',
+      eventData: JSON.stringify({
+        title: 'Office hours',
+        editScope: scope,
+        occurrenceDate: '2026-09-28T00:00:00.000Z',
+        linkedPageIds: ['p-1'],
+      }),
+    });
+
+    expect(mocks.updateEventLinks).not.toHaveBeenCalled();
+  });
+
+  it('writes them for a this-only edit, against the event the service returned', async () => {
+    mocks.updateEventWithScope.mockResolvedValue({ id: 'event-2' });
+
+    await submit({
+      intent: 'update',
+      eventId: 'event-1',
+      eventData: JSON.stringify({
+        title: 'Office hours',
+        editScope: 'this_only',
+        occurrenceDate: '2026-09-28T00:00:00.000Z',
+        linkedPageIds: ['p-1'],
+      }),
+    });
+
+    expect(mocks.updateEventLinks).toHaveBeenCalledWith(
+      'event-2',
+      'class-1',
+      { pageIds: ['p-1'], slideIds: [], assignmentIds: [] },
+      new Date('2026-09-28T00:00:00.000Z')
+    );
+  });
+});
+
 describe('an event still has to be this assistant’s own, in this classroom', () => {
   it('refuses another classroom’s event', async () => {
     mocks.getEventById.mockResolvedValue(ownOfficeHours({ classroom_id: 'other-class' }));

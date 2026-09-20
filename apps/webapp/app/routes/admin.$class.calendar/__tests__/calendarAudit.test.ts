@@ -292,10 +292,11 @@ describe('calendar action — which event a link write lands on', () => {
     );
   });
 
-  it('follows a this-and-future split onto the event the service returned', async () => {
-    // That scope ENDS this event and starts a new one from this date on. A
-    // link write aimed at the old id would attach the resources to a series
-    // that no longer covers the date they were chosen for.
+  it.each(['all', 'this_and_future'])('ignores link keys sent with a %s edit', async scope => {
+    // Those scopes name no occurrence, and a link written without one lands in
+    // the undated bucket that a recurring event's occurrences never read: it
+    // would look like saving the links and behave like discarding them. The
+    // modal no longer sends them, and the action would not write them if it did.
     mocks.updateEventWithScope.mockResolvedValue({ id: 'event-2' });
 
     await submit({
@@ -303,7 +304,30 @@ describe('calendar action — which event a link write lands on', () => {
       eventId: 'event-1',
       eventData: JSON.stringify({
         title: 'Lecture 3',
-        editScope: 'this_and_future',
+        editScope: scope,
+        occurrenceDate: '2026-09-28T00:00:00.000Z',
+        linkedPageIds: ['p-1'],
+        linkedSlideIds: [],
+        linkedAssignmentIds: [],
+      }),
+    });
+
+    expect(mocks.updateEventLinks).not.toHaveBeenCalled();
+    // The rest of the edit still goes through.
+    expect(mocks.updateEventWithScope).toHaveBeenCalled();
+  });
+
+  it('follows a split onto the returned event when a link write does happen', async () => {
+    // 'this_only' is the scope that carries links. The id still has to be the
+    // one the service wrote, since a scoped call is what returns it.
+    mocks.updateEventWithScope.mockResolvedValue({ id: 'event-2' });
+
+    await submit({
+      intent: 'update',
+      eventId: 'event-1',
+      eventData: JSON.stringify({
+        title: 'Lecture 3',
+        editScope: 'this_only',
         occurrenceDate: '2026-09-28T00:00:00.000Z',
         linkedPageIds: ['p-1'],
       }),
@@ -313,7 +337,7 @@ describe('calendar action — which event a link write lands on', () => {
       'event-2',
       'class-1',
       expect.anything(),
-      null
+      new Date('2026-09-28T00:00:00.000Z')
     );
   });
 

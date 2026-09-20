@@ -233,11 +233,17 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
         await ClassmojiService.calendar.updateEvent(eventId as string, updateData);
       }
 
-      // Handle resource links update (only allowed with 'this_only' scope for recurring events)
+      // Resource links belong to ONE occurrence date, and only a 'this_only'
+      // edit names one. A series-wide edit's link keys are ignored rather than
+      // written to the undated bucket, which a recurring event's occurrences
+      // never read — writing there would look like saving them and behave like
+      // discarding them.
+      const scopeCarriesLinks = !editScope || editScope === 'this_only';
       const hasLinkUpdates =
-        linkedPageIds !== undefined ||
-        linkedSlideIds !== undefined ||
-        linkedAssignmentIds !== undefined;
+        scopeCarriesLinks &&
+        (linkedPageIds !== undefined ||
+          linkedSlideIds !== undefined ||
+          linkedAssignmentIds !== undefined);
       if (hasLinkUpdates) {
         const linkOccurrenceDate =
           editScope === 'this_only' && occurrenceDate ? new Date(occurrenceDate) : null;
