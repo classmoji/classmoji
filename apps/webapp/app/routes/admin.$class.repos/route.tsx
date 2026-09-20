@@ -71,6 +71,16 @@ const AdminAssignments = ({ loaderData }: Route.ComponentProps) => {
           />
         )}
 
+        <TriggerProgress
+          operation="AUTOGRADE"
+          validIdentifiers={['dispatch_autograde_workflow', 'gh-commit_autograde_workflow']}
+        />
+        <TriggerProgress operation="UPDATE_REPOS" validIdentifiers={['update_git_repo']} />
+        <TriggerProgress
+          operation="CALCULATE_REPO_CONTRIBUTIONS"
+          validIdentifiers={['calculate_repo_contributions']}
+        />
+
         <RepositoriesTable
           repositories={repositories.filter((repository: { title: string }) =>
             repository.title.toLowerCase().includes(query.toLowerCase())

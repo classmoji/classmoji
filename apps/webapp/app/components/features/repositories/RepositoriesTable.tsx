@@ -1,5 +1,6 @@
 import { forwardRef, useState } from 'react';
 import { Dropdown, Table, Tag } from 'antd';
+import { Link, useParams } from 'react-router';
 import type { MenuProps } from 'antd';
 import {
   IconChevronDown,
@@ -8,6 +9,10 @@ import {
   IconDotsVertical,
   IconEyeOff,
   IconFileText,
+  IconGitPullRequest,
+  IconPencil,
+  IconRobot,
+  IconUsersGroup,
   IconFolder,
   IconFolderOpen,
   IconRefresh,
@@ -20,6 +25,8 @@ import { useRepositoryActions } from './useRepositoryActions';
 interface AssignmentRow {
   id: string;
   title: string;
+  /** REPO assignments: ISSUE (close an issue) or REPO (a push submits). */
+  submission_mode?: string;
   weight: number;
   is_extra_credit?: boolean;
   is_published: boolean;
@@ -104,9 +111,12 @@ const RepositoriesTable = ({
 
   // Publish / sync / unpublish / delete + navigation, shared with the module
   // cards so the two surfaces cannot drift.
+  const { class: classSlug } = useParams();
   const {
-    viewRepository,
     editRepository,
+    updateRepositories,
+    autograde,
+    calculateContributions,
     confirmPublish,
     confirmSync,
     confirmUnpublish,
@@ -114,19 +124,45 @@ const RepositoriesTable = ({
   } = useRepositoryActions(actionBase);
 
   // The primary action (Publish / Sync) is surfaced as an inline button; the
-  // overflow menu keeps only secondary + destructive actions.
+  // overflow menu holds everything else about the repo. There is no detail
+  // page any more: grading happens on each assignment's own page.
   const repoMenuItems = (r: RepositoryRow): MenuProps['items'] => [
+    { key: 'edit', label: 'Edit repository', icon: <IconPencil size={15} /> },
     ...(r.is_published
       ? [
-          { key: 'unpublish', label: 'Unpublish', icon: <IconEyeOff size={15} /> },
+          { key: 'autograde', label: 'Autograde', icon: <IconRobot size={15} /> },
+          {
+            key: 'update',
+            label: 'Update student repositories',
+            icon: <IconGitPullRequest size={15} />,
+          },
+          ...(r.type === 'GROUP'
+            ? [
+                {
+                  key: 'contributions',
+                  label: 'Calculate contributions',
+                  icon: <IconUsersGroup size={15} />,
+                },
+              ]
+            : []),
           { type: 'divider' as const },
+          { key: 'unpublish', label: 'Unpublish', icon: <IconEyeOff size={15} /> },
         ]
       : []),
+    { type: 'divider' as const },
     { key: 'delete', label: 'Delete', danger: true, icon: <IconTrash size={15} /> },
   ];
 
   const onRepoMenuClick = (r: RepositoryRow, key: string) => {
     switch (key) {
+      case 'edit':
+        return editRepository(r);
+      case 'autograde':
+        return autograde(r);
+      case 'update':
+        return updateRepositories(r);
+      case 'contributions':
+        return calculateContributions(r);
       case 'unpublish':
         return confirmUnpublish(r.id);
       case 'delete':
@@ -214,11 +250,22 @@ const RepositoriesTable = ({
               <IconFileText size={16} className="text-gray-400 shrink-0" />
             )}
 
-            <span
-              className={record.kind === 'repository' ? 'font-semibold text-ink-1' : 'text-ink-1'}
-            >
-              {record.name}
-            </span>
+            {record.kind === 'assignment' ? (
+              <Link
+                to={`/admin/${classSlug}/assignments/${record.assignment!.id}`}
+                className="text-ink-1 hover:underline underline-offset-2"
+                onClick={e => e.stopPropagation()}
+              >
+                {record.name}
+              </Link>
+            ) : (
+              <span className="font-semibold text-ink-1">{record.name}</span>
+            )}
+            {record.kind === 'assignment' && (
+              <span className="text-xs text-ink-3">
+                {record.assignment?.submission_mode === 'REPO' ? 'push' : 'issue'}
+              </span>
+            )}
             {record.kind === 'assignment' && record.is_extra_credit && (
               <Tag color="green" bordered={false} className="text-xs m-0">
                 EC
@@ -265,7 +312,6 @@ const RepositoriesTable = ({
           const r = record.repository!;
           return (
             <div className="flex items-center gap-x-4 whitespace-nowrap">
-              <ActionLink onClick={() => viewRepository(r)}>View</ActionLink>
               <ActionLink onClick={() => editRepository(r)}>Edit</ActionLink>
               {r.is_published ? (
                 <ActionLink
@@ -308,8 +354,7 @@ const RepositoriesTable = ({
           );
         }
 
-        // assignment — edited through its parent repository's form, so the
-        // row carries no actions of its own
+        // assignment: opens its own page (the name is the link)
         return null;
       },
     },

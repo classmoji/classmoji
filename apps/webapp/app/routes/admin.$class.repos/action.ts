@@ -2,6 +2,7 @@ import { namedAction } from 'remix-utils/named-action';
 
 import { ClassmojiService } from '@classmoji/services';
 import { publishAssignment, syncAssignment } from './helpers';
+import { calculateContributions } from './contributions';
 import { ActionTypes } from '~/constants';
 import { requireClassroomAdmin, assertClassroomMutationAllowed } from '~/utils/routeAuth.server';
 import type { Route } from './+types/route';
@@ -51,5 +52,9 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
       return res;
     },
 
+    // Group repos only: fan out one contribution-stats task per team repo.
+    async calculateContributions() {
+      return calculateContributions({ id: assignmentId }, classSlug);
+    },
   });
 };

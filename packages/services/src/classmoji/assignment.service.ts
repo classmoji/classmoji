@@ -105,7 +105,9 @@ const LIST_INCLUDE = {
   pages: { select: { page: { select: { id: true } } } },
   slides: { select: { slide: { select: { id: true } } } },
   module: { select: { id: true, title: true, slug: true, position: true } },
-  repository: { select: { id: true, title: true, slug: true, type: true, is_published: true } },
+  repository: {
+    select: { id: true, title: true, slug: true, type: true, template: true, is_published: true },
+  },
   quiz: { select: { id: true, name: true, status: true } },
   form: { select: { id: true, title: true, slug: true, status: true } },
   _count: { select: { git_repo_assignments: true } },
@@ -132,6 +134,17 @@ export const listForClassroom = async (
     },
     include: LIST_INCLUDE,
     orderBy: LIST_ORDER,
+  });
+};
+
+/**
+ * One assignment, with the same module/target shape the lists carry, or null
+ * when it is not in this classroom. Feeds the assignment page.
+ */
+export const findByIdInClassroom = async (id: string, classroomId: string) => {
+  return getPrisma().assignment.findFirst({
+    where: { id, module: { classroom_id: classroomId } },
+    include: LIST_INCLUDE,
   });
 };
 

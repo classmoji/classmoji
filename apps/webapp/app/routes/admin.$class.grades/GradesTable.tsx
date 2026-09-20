@@ -132,7 +132,8 @@ const GradesTable = (props: GradesTableProps) => {
     view,
     showIssues,
     emojiMappings,
-    settings
+    settings,
+    id => `/${rolePrefix}/${classSlug}/assignments/${id}`
   );
 
   const studentGradeColumns = createStudentGradeColumns(

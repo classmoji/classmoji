@@ -93,7 +93,16 @@ const AssignmentsTable = ({
       render: (_: unknown, a: AssignmentRowData) => (
         <div className="flex items-center gap-2 min-w-0">
           <IconFileText size={16} className="text-gray-400 shrink-0" />
-          <span className="text-ink-1 truncate">{a.title}</span>
+          {a.type === 'REPO' ? (
+            <Link
+              to={`/admin/${classSlug}/assignments/${a.id}`}
+              className="text-ink-1 truncate hover:underline underline-offset-2"
+            >
+              {a.title}
+            </Link>
+          ) : (
+            <span className="text-ink-1 truncate">{a.title}</span>
+          )}
           {a.is_extra_credit && (
             <Tag color="green" bordered={false} className="text-xs m-0 shrink-0">
               EC

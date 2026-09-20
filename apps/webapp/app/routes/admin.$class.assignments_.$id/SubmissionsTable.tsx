@@ -16,6 +16,7 @@ import { ActionTypes } from '~/constants';
 import { useCallout } from '@classmoji/ui-components';
 import { useGlobalFetcher } from '~/hooks';
 import { openRepositoryAssignmentInGithub } from '~/utils/helpers.client';
+import type { AssignmentRowData } from '~/components/features/assignments/AssignmentsTable';
 import ImportedBadge from './ImportedBadge';
 import AutogradingResultPill from '~/components/features/AutogradingResultPill';
 import { type AutogradingResultData } from '~/components/features/AutogradingResultCard';
@@ -30,14 +31,8 @@ interface AssignmentGraderRef {
   [key: string]: unknown;
 }
 
-/** An assignment that submits through this repository. */
-export interface SubmissionsAssignment {
-  id: string;
-  title: string;
-  submission_mode?: 'ISSUE' | 'REPO' | string;
-}
-
-interface RepoAssignmentEntry {
+/** This assignment's submission row on one student repo. */
+export interface SubmissionRow {
   id: string;
   assignment_id: string;
   provider_issue_number: number | null;
@@ -70,7 +65,7 @@ export interface SubmissionsRepo {
     [key: string]: unknown;
   } | null;
   team?: { avatar_url: string; name: string; slug: string; [key: string]: unknown } | null;
-  assignments?: RepoAssignmentEntry[];
+  submission: SubmissionRow | null;
   project_number?: number | null;
   metadata?: unknown;
   autograding_result?: AutogradingResultData | null;
@@ -84,74 +79,87 @@ interface Assistant {
   [key: string]: unknown;
 }
 
+export type SubmissionFilter = 'all' | 'ungraded' | 'late' | 'missing' | 'mine';
+
+/** Whether a row passes the toolbar filter. Exported so the page can count. */
+export const matchesFilter = (repo: SubmissionsRepo, filter: SubmissionFilter, userId: string) => {
+  const s = repo.submission;
+  switch (filter) {
+    case 'ungraded':
+      return s?.status === 'CLOSED' && (s.grades?.length ?? 0) === 0;
+    case 'late':
+      return Boolean(s?.is_late) && !s?.is_late_override;
+    case 'missing':
+      return !s || s.status !== 'CLOSED';
+    case 'mine':
+      return Boolean(s?.graders?.some(g => g.grader.id === userId));
+    default:
+      return true;
+  }
+};
+
 interface SubmissionsTableProps {
   repositoryType: string;
-  assignments: SubmissionsAssignment[];
+  assignment: AssignmentRowData;
   repos: SubmissionsRepo[];
   assistants: Assistant[];
   emojiMappings: Record<string, unknown>;
   org: string;
+  canManageGraders: boolean;
+  /** Unfiltered row count, for the footer. */
+  total: number;
 }
 
 /**
- * The repository's student (or team) copies, one row each, with one column
- * group per assignment that submits through it: Submission, Graders, Grade.
- * A push-mode professor with one assignment reads it as a roster; an
- * issue-mode professor with five reads the same table five groups wide.
+ * The roster for one assignment: every student (or team) repo once, with this
+ * assignment's submission state, graders and grade.
  */
 const SubmissionsTable = ({
   repositoryType,
-  assignments,
+  assignment,
   repos,
   assistants,
   emojiMappings,
   org,
+  canManageGraders,
+  total,
 }: SubmissionsTableProps) => {
   const { fetcher, notify } = useGlobalFetcher();
   const callout = useCallout();
 
   const isIndividual = repositoryType === 'INDIVIDUAL';
+  const isPushMode = assignment.submission_mode === 'REPO';
   // Only surface the "Imported" column when at least one repo carries imported data.
   const anyImported = repos.some(r => r.metadata != null && typeof r.metadata === 'object');
 
-  const rowFor = (repo: SubmissionsRepo, assignmentId: string) =>
-    repo.assignments?.find(a => a.assignment_id === assignmentId);
-
-  // The newest commit any submission row of this repo has seen. Until the
-  // commit stats have been fetched, a push-mode row's submission time is the
-  // push the webhook recorded, so it stands in.
+  // The newest commit this repo has seen. Until the commit stats have been
+  // fetched, a push-mode row's submission time is the push the webhook
+  // recorded, so it stands in.
   const lastPush = (repo: SubmissionsRepo) => {
+    const s = repo.submission;
+    const candidates = [s?.analytics_snapshot?.last_commit_at, isPushMode ? s?.closed_at : null];
     let latest: number | null = null;
-    for (const ra of repo.assignments ?? []) {
-      const candidates = [
-        ra.analytics_snapshot?.last_commit_at,
-        ra.assignment?.submission_mode === 'REPO' ? ra.closed_at : null,
-      ];
-      for (const at of candidates) {
-        if (!at) continue;
-        const t = new Date(at).getTime();
-        if (latest === null || t > latest) latest = t;
-      }
+    for (const at of candidates) {
+      if (!at) continue;
+      const t = new Date(at).getTime();
+      if (latest === null || t > latest) latest = t;
     }
     return latest === null ? null : new Date(latest);
   };
 
   const graderHandler = (
     graderLogin: string,
-    assignmentId: string,
     record: SubmissionsRepo,
     action: 'ADD' | 'REMOVE'
   ) => {
-    const repoAssignment = rowFor(record, assignmentId);
-    if (!repoAssignment) return;
+    const submission = record.submission;
+    if (!submission) return;
 
     // Resolve the grader's id without assuming the pool holds them. On a REMOVAL
-    // the authority is the assignment's own grader list: someone already
-    // assigned may no longer be selectable (their grader flag was cleared since,
-    // or they were assigned in bulk). On an ADD it is the pool the options came
-    // from. Both actions need the id — it keys the membership row they write.
+    // the authority is the row's own grader list: someone already assigned may
+    // no longer be selectable. On an ADD it is the pool the options came from.
     const graderId =
-      repoAssignment.graders?.find(g => g.grader.login === graderLogin)?.grader.id ??
+      submission.graders?.find(g => g.grader.login === graderLogin)?.grader.id ??
       assistants.find(a => a.login === graderLogin)?.id;
     if (!graderId) {
       callout.show({ variant: 'error', title: `Could not resolve the grader ${graderLogin}` });
@@ -166,8 +174,8 @@ const SubmissionsTable = ({
     fetcher!.submit(
       {
         repoName: record.name,
-        githubIssueNumber: repoAssignment.provider_issue_number,
-        repoAssignmentId: repoAssignment.id,
+        githubIssueNumber: submission.provider_issue_number,
+        repoAssignmentId: submission.id,
         graderId,
         graderLogin,
       },
@@ -179,7 +187,7 @@ const SubmissionsTable = ({
     );
   };
 
-  const fixedColumns: ColumnsType<SubmissionsRepo> = [
+  const columns: ColumnsType<SubmissionsRepo> = [
     {
       title: isIndividual ? 'Student' : 'Team',
       key: 'member',
@@ -190,7 +198,7 @@ const SubmissionsTable = ({
           repo.student ? (
             <UserThumbnailView user={repo.student} />
           ) : (
-            <span className="text-sm text-ink-3">Invite pending</span>
+            <span className="text-sm text-ink-3">No student</span>
           )
         ) : repo.team ? (
           <TeamThumbnailView team={repo.team} />
@@ -241,7 +249,7 @@ const SubmissionsTable = ({
         return at ? (
           <span className="text-ink-2">{dayjs(at).format('MMM D, h:mm A')}</span>
         ) : (
-          <span className="text-ink-3">—</span>
+          <span className="text-ink-3">No push yet</span>
         );
       },
     },
@@ -265,115 +273,113 @@ const SubmissionsTable = ({
           },
         ]
       : []),
-  ];
-
-  const assignmentColumns: ColumnsType<SubmissionsRepo> = assignments.map(assignment => ({
-    title: (
-      <span className="inline-flex items-center gap-2">
-        <span className="text-ink-1">{assignment.title}</span>
-        <span className="text-xs font-normal text-ink-3">
-          {assignment.submission_mode === 'REPO' ? 'push' : 'issue'}
-        </span>
-      </span>
-    ),
-    key: `a-${assignment.id}`,
-    className: 'border-l border-line',
-    children: [
-      {
-        title: 'Submission',
-        key: `s-${assignment.id}`,
-        width: 150,
-        className: 'border-l border-line',
-        render: (_: unknown, repo: SubmissionsRepo) => {
-          const ra = rowFor(repo, assignment.id);
-          return ra ? (
-            <RepositoryAssignmentStatus repositoryAssignment={ra} />
-          ) : (
-            <span className="text-sm text-ink-3">No submission yet</span>
-          );
-        },
+    {
+      title: 'Submission',
+      key: 'submission',
+      width: 160,
+      className: 'border-l border-line',
+      render: (_: unknown, repo) =>
+        repo.submission ? (
+          <RepositoryAssignmentStatus repositoryAssignment={repo.submission} />
+        ) : (
+          <Tooltip title="Sync the repository to create this student's submission row">
+            <span className="text-sm text-ink-3">Not released</span>
+          </Tooltip>
+        ),
+    },
+    {
+      title: 'Graders',
+      key: 'graders',
+      width: 200,
+      onCell: () => ({ style: { padding: '0px' } }),
+      render: (_: unknown, repo) => {
+        const s = repo.submission;
+        if (!s) return null;
+        if (!canManageGraders) {
+          const names = (s.graders ?? []).map(g => g.grader.name || g.grader.login).join(', ');
+          return <div className="pl-4 py-2 text-sm text-ink-2">{names || '—'}</div>;
+        }
+        return (
+          <div className="pl-4 pt-1.5">
+            <MultiSelect
+              defaultValue={s.graders
+                ?.map(g => g.grader.login)
+                .filter((v): v is string => v != null)}
+              options={assistants
+                .map(a => ({ label: a.name || '', value: a.login || '' }))
+                .sort((a, b) => (a.label || '').localeCompare(b.label || ''))}
+              onSelect={(login: string) => graderHandler(login, repo, 'ADD')}
+              onDeselect={(login: string) => graderHandler(login, repo, 'REMOVE')}
+            />
+          </div>
+        );
       },
-      {
-        title: 'Graders',
-        key: `g-${assignment.id}`,
-        width: 200,
-        onCell: () => ({ style: { padding: '0px' } }),
-        render: (_: unknown, repo: SubmissionsRepo) => {
-          const ra = rowFor(repo, assignment.id);
-          if (!ra) return null;
-          return (
-            <div className="pl-4 pt-1.5">
-              <MultiSelect
-                defaultValue={ra.graders
-                  ?.map(g => g.grader.login)
-                  .filter((v): v is string => v != null)}
-                options={assistants
-                  .map(a => ({ label: a.name || '', value: a.login || '' }))
-                  .sort((a, b) => (a.label || '').localeCompare(b.label || ''))}
-                onSelect={(login: string) => graderHandler(login, assignment.id, repo, 'ADD')}
-                onDeselect={(login: string) => graderHandler(login, assignment.id, repo, 'REMOVE')}
-              />
-            </div>
-          );
-        },
-      },
-      {
-        title: 'Grade',
-        key: `gr-${assignment.id}`,
-        width: 240,
-        render: (_: unknown, repo: SubmissionsRepo) => {
-          const ra = rowFor(repo, assignment.id);
-          if (!ra) return null;
-          ra.repository = repo;
-          ra.studentId = repo.student_id;
-          ra.teamId = repo.team_id;
-          return (
-            <div className="flex items-center gap-2">
-              <EmojisDisplay grades={ra.grades} />
-              <TableActionButtons
-                onView={() =>
-                  // The row IS the git repo; hand the helper its name explicitly.
-                  openRepositoryAssignmentInGithub(org, {
-                    git_repo: { name: repo.name },
-                    provider_issue_number: ra.provider_issue_number,
-                  })
+    },
+    {
+      title: 'Grade',
+      key: 'grade',
+      width: 240,
+      render: (_: unknown, repo) => {
+        const s = repo.submission;
+        if (!s) return null;
+        s.repository = repo;
+        s.studentId = repo.student_id;
+        s.teamId = repo.team_id;
+        return (
+          <div className="flex items-center gap-2">
+            <EmojisDisplay grades={s.grades} />
+            <TableActionButtons
+              onView={() =>
+                // The row IS the git repo; hand the helper its name explicitly.
+                openRepositoryAssignmentInGithub(org, {
+                  git_repo: { name: repo.name },
+                  provider_issue_number: s.provider_issue_number,
+                })
+              }
+              hideViewText
+            >
+              <EmojiGrader
+                repositoryAssignment={
+                  s as Parameters<typeof EmojiGrader>[0]['repositoryAssignment']
                 }
-                hideViewText
-              >
-                <EmojiGrader
-                  repositoryAssignment={
-                    ra as Parameters<typeof EmojiGrader>[0]['repositoryAssignment']
-                  }
-                  emojiMappings={emojiMappings}
-                />
-                <LateOverrideButton
-                  repositoryAssignment={
-                    ra as unknown as Parameters<
-                      typeof LateOverrideButton
-                    >[0]['repositoryAssignment']
-                  }
-                />
-              </TableActionButtons>
-            </div>
-          );
-        },
+                emojiMappings={emojiMappings}
+              />
+              <LateOverrideButton
+                repositoryAssignment={
+                  s as unknown as Parameters<typeof LateOverrideButton>[0]['repositoryAssignment']
+                }
+              />
+            </TableActionButtons>
+          </div>
+        );
       },
-    ],
-  }));
+    },
+  ];
 
   return (
     <Table<SubmissionsRepo>
       dataSource={repos}
       rowKey="id"
-      columns={[...fixedColumns, ...assignmentColumns]}
+      columns={columns}
       rowHoverable={false}
       scroll={{ x: 'max-content' }}
       pagination={{ pageSize: 100, hideOnSinglePage: true }}
+      footer={() => (
+        <span className="text-xs text-ink-3">
+          Showing {repos.length} of {total} {isIndividual ? 'students' : 'teams'}
+        </span>
+      )}
       locale={{
         emptyText: (
           <div className="text-center py-12 text-gray-500">
-            <div className="font-medium">No student repositories yet</div>
-            <div className="text-sm">Publish the repository to create one per student.</div>
+            <div className="font-medium">
+              {total === 0 ? 'No student repositories yet' : 'Nothing matches this filter'}
+            </div>
+            <div className="text-sm">
+              {total === 0
+                ? 'Publish the repository to create one per student.'
+                : 'Pick another filter or clear the search.'}
+            </div>
           </div>
         ),
       }}

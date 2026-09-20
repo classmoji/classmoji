@@ -328,20 +328,17 @@ const ModuleCard = ({
   };
   // What the assignment submits through, unless that is just its own title
   // again (a quiz assignment usually carries the quiz's name); then the kind.
-  // Where a click on an assignment row goes: the repository page (whose
-  // assignment tabs hold the student issues and grading) for a repo
-  // assignment, otherwise the list its quiz/form is managed on. An assignment
-  // with no target yet just opens the editor.
   // The form's page in the forms app (builder + responses); the admin splat
   // route hands off to it. Falls back to the Forms list for a form with no slug.
   const formHref = (a: AssignmentRowData) =>
     `/admin/${classSlug}/forms${a.form?.slug ? `/${encodeURIComponent(a.form.slug)}` : ''}`;
 
-  // Clicking an assignment row shows its submissions: the repository page
-  // (student repos and grades), the quiz's attempts, or the form's responses.
+  // Clicking an assignment row shows its submissions: the assignment page
+  // (one roster with submission state and grades), the quiz's attempts, or
+  // the form's responses.
   const openAssignment = (a: AssignmentRowData) => {
-    if (a.type === 'REPO' && a.repository?.title) {
-      navigate(`/admin/${classSlug}/repos/${encodeURIComponent(a.repository.title)}`);
+    if (a.type === 'REPO' && a.repository) {
+      navigate(`/admin/${classSlug}/assignments/${a.id}`);
     } else if (a.type === 'QUIZ' && a.quiz) {
       navigate(`/admin/${classSlug}/quizzes/${a.quiz.id}`);
     } else if (a.type === 'FORM') {

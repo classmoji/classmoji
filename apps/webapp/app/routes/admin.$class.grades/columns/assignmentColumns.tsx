@@ -2,6 +2,7 @@ import { calculateAssignmentGrade } from '@classmoji/utils';
 import type { GitRepoAssignment, OrganizationSettings } from '@classmoji/utils';
 import { EmojisDisplay, GradeBadge } from '~/components';
 import { Tag } from 'antd';
+import { Link } from 'react-router';
 import type { TableProps } from 'antd';
 
 type EmojiMappings = Record<string, number>;
@@ -114,12 +115,23 @@ const createModuleAssignmentColumns = (
   assignments: GradebookAssignment[],
   view: ViewMode,
   emojiMappings: EmojiMappings,
-  settings: OrganizationSettings
+  settings: OrganizationSettings,
+  assignmentHref?: (assignmentId: string) => string
 ) =>
   assignments.map(assignment => ({
     title: (
       <span className="inline-flex items-center gap-1">
-        {assignment.title} ({assignment.weight}%)
+        {assignmentHref ? (
+          <Link
+            to={assignmentHref(String(assignment.id))}
+            className="hover:underline underline-offset-2"
+          >
+            {assignment.title}
+          </Link>
+        ) : (
+          assignment.title
+        )}{' '}
+        ({assignment.weight}%)
         {assignment.is_extra_credit && (
           <Tag color="green" bordered={false} className="text-xs m-0">
             EC
@@ -153,7 +165,9 @@ export const createAssignmentColumns = (
   view: ViewMode,
   showAssignments: boolean,
   emojiMappings: EmojiMappings,
-  settings: OrganizationSettings
+  settings: OrganizationSettings,
+  /** Where an assignment's header links (its page); none = plain text. */
+  assignmentHref?: (assignmentId: string) => string
 ): TableProps<StudentRecord>['columns'] => {
   // Quiz/form assignments are structural only for now: they carry no grade.
   const graded = assignments.filter(a => a.type === 'REPO');
@@ -170,7 +184,13 @@ export const createAssignmentColumns = (
       ellipsis: true,
       width: 140,
       children: showAssignments
-        ? createModuleAssignmentColumns(moduleAssignments, view, emojiMappings, settings)
+        ? createModuleAssignmentColumns(
+            moduleAssignments,
+            view,
+            emojiMappings,
+            settings,
+            assignmentHref
+          )
         : [],
       sorter: (a: StudentRecord, b: StudentRecord) => {
         const sumA = moduleSummary(a, moduleAssignments, emojiMappings, settings);
