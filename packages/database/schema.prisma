@@ -1425,6 +1425,13 @@ model CalendarEventPageLink {
   page_id         String
   occurrence_date DateTime? @db.Date // Date-only to avoid timezone issues
   order           Int       @default(0)
+  // The one linked resource the MONTH view shows under this event on this date.
+  // At most one row across ALL THREE link tables may carry it for a given
+  // (event, occurrence_date): the write locks the parent event row and sets it
+  // on exactly one created row. The per-table partial unique indexes added by
+  // the calendar_link_featured migration are the backstop within each table —
+  // Prisma cannot express a partial index, so they live only in that SQL.
+  featured        Boolean   @default(false)
   created_at      DateTime  @default(now())
 
   event CalendarEvent @relation(fields: [event_id], references: [id], onDelete: Cascade)
@@ -1443,6 +1450,8 @@ model CalendarEventSlideLink {
   slide_id        String
   occurrence_date DateTime? @db.Date
   order           Int       @default(0)
+  // See CalendarEventPageLink.featured — same column, same one-per-date rule.
+  featured        Boolean   @default(false)
   created_at      DateTime  @default(now())
 
   event CalendarEvent @relation(fields: [event_id], references: [id], onDelete: Cascade)
@@ -1460,6 +1469,8 @@ model CalendarEventAssignmentLink {
   assignment_id   String
   occurrence_date DateTime? @db.Date
   order           Int       @default(0)
+  // See CalendarEventPageLink.featured — same column, same one-per-date rule.
+  featured        Boolean   @default(false)
   created_at      DateTime  @default(now())
 
   event      CalendarEvent @relation(fields: [event_id], references: [id], onDelete: Cascade)
