@@ -22,7 +22,7 @@ import {
   IconTrash,
 } from '@tabler/icons-react';
 import dayjs from 'dayjs';
-import { getEventTypeDotColor, getEventTypeLabel } from './utils';
+import { buildEventWindow, getEventTypeDotColor, getEventTypeLabel } from './utils';
 import EventLinks from './EventLinks';
 import type { CalendarEventWithLinks } from './types';
 
@@ -129,11 +129,7 @@ const InlineRow = ({
   children: React.ReactNode;
 }) => (
   <div className="flex items-start gap-3 py-1.5">
-    <Icon
-      size={18}
-      strokeWidth={1.75}
-      className="shrink-0 mt-2.5 text-ink-4"
-    />
+    <Icon size={18} strokeWidth={1.75} className="shrink-0 mt-2.5 text-ink-4" />
     <div className="flex-1 min-w-0">{children}</div>
   </div>
 );
@@ -212,21 +208,18 @@ const EditEventModal = ({
   }, [event, form]);
 
   const buildEventData = (values: EventFormValues, includeLinks = true) => {
-    const startDate = values.date.toDate();
-    const endDate = values.date.toDate();
-
-    const startTime = values.start_time.toDate();
-    const endTime = values.end_time.toDate();
-
-    startDate.setHours(startTime.getHours(), startTime.getMinutes(), 0, 0);
-    endDate.setHours(endTime.getHours(), endTime.getMinutes(), 0, 0);
+    const { start, end } = buildEventWindow(
+      values.date.toDate(),
+      values.start_time.toDate(),
+      values.end_time.toDate()
+    );
 
     const eventData: EventFormData = {
       event_type: values.event_type,
       title: values.title,
       description: values.description || null,
-      start_time: startDate.toISOString(),
-      end_time: endDate.toISOString(),
+      start_time: start.toISOString(),
+      end_time: end.toISOString(),
       location: values.location || null,
       meeting_link: values.meeting_link || null,
       is_recurring: isRecurring,

@@ -270,6 +270,46 @@ interface DeadlineRepositoryAssignment {
   };
 }
 
+/**
+ * An event was asked to end at or before it starts.
+ *
+ * Thrown by the create/update entry points so a caller can turn it into a
+ * message the user actually sees. A caller that does not catch it gets a 500,
+ * which is the safe direction: the write is refused either way.
+ */
+export class CalendarTimeRangeError extends Error {
+  readonly reason = 'end_before_start';
+
+  constructor(message: string = 'End time must be after the start time') {
+    super(message);
+    this.name = 'CalendarTimeRangeError';
+  }
+}
+
+/**
+ * An event must end strictly after it starts; a zero-length or inverted range
+ * is refused.
+ *
+ * Only checked when BOTH edges are supplied, which is recurrence-independent.
+ * A single moved edge is deliberately NOT compared against the stored row: for
+ * a recurring series the stored `start_time`/`end_time` are the TEMPLATE's
+ * absolute datetimes (dated at the series start), not this occurrence's, so the
+ * comparison would refuse valid edits. calendar_event_update in apps/mcp draws
+ * the same line, for the same reason.
+ */
+const assertEndAfterStart = (
+  start: DateInput | null | undefined,
+  end: DateInput | null | undefined
+): void => {
+  if (start === undefined || start === null || end === undefined || end === null) return;
+
+  const startMs = new Date(start).getTime();
+  const endMs = new Date(end).getTime();
+  if (Number.isNaN(startMs) || Number.isNaN(endMs) || endMs <= startMs) {
+    throw new CalendarTimeRangeError();
+  }
+};
+
 const isJsonObject = (
   value: Prisma.JsonValue | Prisma.InputJsonValue | null | undefined
 ): value is Prisma.JsonObject =>
@@ -1069,6 +1109,8 @@ export const createEvent = async (
     recurrence_rule,
   } = eventData;
 
+  assertEndAfterStart(start_time, end_time);
+
   return getPrisma().calendarEvent.create({
     data: {
       classroom_id: classroomId,
@@ -1110,6 +1152,8 @@ export const updateEvent = async (eventId: string, eventData: CalendarEventUpdat
     is_recurring,
     recurrence_rule,
   } = eventData;
+
+  assertEndAfterStart(start_time, end_time);
 
   return getPrisma().calendarEvent.update({
     where: { id: eventId },
@@ -1159,6 +1203,8 @@ export const updateEventWithScope = async (
   editScope: CalendarEditScope,
   occurrenceDate: Date
 ) => {
+  assertEndAfterStart(eventData.start_time, eventData.end_time);
+
   const event = await getPrisma().calendarEvent.findUnique({
     where: { id: eventId },
     include: { overrides: true },

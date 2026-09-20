@@ -82,6 +82,7 @@ export {
   gitRepoAssignmentService,
   notificationService,
   ClassroomSettingsEntitlementError,
+  CalendarTimeRangeError,
 } from './classmoji/index.ts';
 
 export { ClassmojiService, HelperService, StripeService, FlyCertService, MarkdownImporter };

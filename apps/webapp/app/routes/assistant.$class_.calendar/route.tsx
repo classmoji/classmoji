@@ -5,7 +5,7 @@ import dayjs from 'dayjs';
 import invariant from 'tiny-invariant';
 import { data, useFetcher, useParams } from 'react-router';
 import type { Route } from './+types/route';
-import { ClassmojiService } from '@classmoji/services';
+import { CalendarTimeRangeError, ClassmojiService } from '@classmoji/services';
 import { useCallout } from '@classmoji/ui-components';
 import getPrisma from '@classmoji/database';
 import { assertClassroomAccess, assertClassroomMutationAllowed } from '~/utils/helpers';
@@ -135,7 +135,17 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
 
     const { linkedPageIds, linkedSlideIds, linkedAssignmentIds, ...createData } = eventData;
 
-    const newEvent = await ClassmojiService.calendar.createEvent(classroom.id, userId, createData);
+    let newEvent;
+    try {
+      newEvent = await ClassmojiService.calendar.createEvent(classroom.id, userId, createData);
+    } catch (error: unknown) {
+      // A refused time range is the user's to fix, so it comes back as a
+      // message the fetcher shows rather than as a 500.
+      if (error instanceof CalendarTimeRangeError) {
+        return data({ success: false, error: error.message }, { status: 400 });
+      }
+      throw error;
+    }
 
     // If links were provided (non-recurring events only), add them
     const hasLinks = linkedPageIds?.length || linkedSlideIds?.length || linkedAssignmentIds?.length;
@@ -194,13 +204,18 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
         ...updateData
       } = eventData;
 
+      // A 'this_and_future' edit SPLITS the series: the service ends the old
+      // event and returns a NEW one carrying the occurrences from this date on.
+      // Any link write below has to land on that event, not on the old id.
+      let linkTargetId = eventId as string;
       if (editScope && occurrenceDate) {
-        await ClassmojiService.calendar.updateEventWithScope(
+        const scoped = await ClassmojiService.calendar.updateEventWithScope(
           eventId as string,
           updateData,
           editScope,
           new Date(occurrenceDate)
         );
+        linkTargetId = scoped?.id ?? linkTargetId;
       } else {
         await ClassmojiService.calendar.updateEvent(eventId as string, updateData);
       }
@@ -215,7 +230,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
           editScope === 'this_only' && occurrenceDate ? new Date(occurrenceDate) : null;
 
         await ClassmojiService.calendar.updateEventLinks(
-          eventId as string,
+          linkTargetId,
           classroom.id,
           {
             pageIds: linkedPageIds || [],
@@ -228,6 +243,10 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
 
       return data({ success: true });
     } catch (error: unknown) {
+      // A refused time range is the user's to fix, not a server fault.
+      if (error instanceof CalendarTimeRangeError) {
+        return data({ success: false, error: error.message }, { status: 400 });
+      }
       console.error('Update event error:', error);
       return data(
         { success: false, error: error instanceof Error ? error.message : 'Unknown error' },

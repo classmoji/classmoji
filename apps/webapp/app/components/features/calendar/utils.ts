@@ -8,6 +8,33 @@ import type { CalendarEventWithLinks } from './types';
 type DateInput = Date | string | number;
 
 /**
+ * Build an event's start and end instants from one calendar date and two clock
+ * times — what both event modals collect.
+ *
+ * The end time is stamped onto the SAME date as the start, so a pairing like
+ * 11 PM → 12 AM would describe an event that finishes before it begins. That
+ * combination means the next day, so the end rolls forward one date. Pure, so
+ * the rule can be tested on its own.
+ */
+export const buildEventWindow = (
+  date: Date,
+  startTime: Date,
+  endTime: Date
+): { start: Date; end: Date } => {
+  const start = new Date(date);
+  start.setHours(startTime.getHours(), startTime.getMinutes(), 0, 0);
+
+  const end = new Date(date);
+  end.setHours(endTime.getHours(), endTime.getMinutes(), 0, 0);
+
+  if (end.getTime() <= start.getTime()) {
+    end.setDate(end.getDate() + 1);
+  }
+
+  return { start, end };
+};
+
+/**
  * Get day name from date (lowercase)
  */
 export const getDayName = (date: Date) => {

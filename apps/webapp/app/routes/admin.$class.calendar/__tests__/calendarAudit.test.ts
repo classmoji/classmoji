@@ -1,5 +1,6 @@
 /**
- * Unit tests for the admin calendar action's audit rows.
+ * Unit tests for the admin calendar action: the audit row every write leaves,
+ * which event a link write lands on, and how a refusal reaches the user.
  *
  * Calendar writes are the ones most likely to be disputed after the fact — a
  * moved deadline or a deleted lecture changes what a whole class is expected to
@@ -35,7 +36,24 @@ vi.mock('~/utils/helpers', () => ({
   addClassroomAuditLog: (...a: unknown[]) => mocks.addClassroomAuditLog(...a),
 }));
 
+/**
+ * The refusal the service raises for a backwards time range, as a real class:
+ * the action tells it apart from any other failure with `instanceof`, so a
+ * plain Error here would make that test pass for the wrong reason. What the
+ * service actually throws is pinned in its own suite
+ * (packages/services/…/calendar.editScope.test.ts).
+ */
+const { CalendarTimeRangeError } = vi.hoisted(() => ({
+  CalendarTimeRangeError: class CalendarTimeRangeError extends Error {
+    constructor(message = 'End time must be after the start time') {
+      super(message);
+      this.name = 'CalendarTimeRangeError';
+    }
+  },
+}));
+
 vi.mock('@classmoji/services', () => ({
+  CalendarTimeRangeError,
   ClassmojiService: {
     calendar: {
       createEvent: (...a: unknown[]) => mocks.createEvent(...a),
@@ -263,6 +281,119 @@ describe('calendar action — audit rows', () => {
  * entirely until the check moved onto `isAdmin`, which the update, delete and
  * deadline branches already consulted.
  */
+describe('calendar action — which event a link write lands on', () => {
+  it('writes the links against the occurrence being edited', async () => {
+    await submit({
+      intent: 'update',
+      eventId: 'event-1',
+      eventData: JSON.stringify({
+        title: 'Lecture 3',
+        editScope: 'this_only',
+        occurrenceDate: '2026-09-28T00:00:00.000Z',
+        linkedPageIds: ['p-1'],
+        linkedSlideIds: [],
+        linkedAssignmentIds: [],
+      }),
+    });
+
+    expect(mocks.updateEventLinks).toHaveBeenCalledWith(
+      'event-1',
+      'class-1',
+      { pageIds: ['p-1'], slideIds: [], assignmentIds: [] },
+      new Date('2026-09-28T00:00:00.000Z')
+    );
+  });
+
+  it('follows a this-and-future split onto the event the service returned', async () => {
+    // That scope ENDS this event and starts a new one from this date on. A
+    // link write aimed at the old id would attach the resources to a series
+    // that no longer covers the date they were chosen for.
+    mocks.updateEventWithScope.mockResolvedValue({ id: 'event-2' });
+
+    await submit({
+      intent: 'update',
+      eventId: 'event-1',
+      eventData: JSON.stringify({
+        title: 'Lecture 3',
+        editScope: 'this_and_future',
+        occurrenceDate: '2026-09-28T00:00:00.000Z',
+        linkedPageIds: ['p-1'],
+      }),
+    });
+
+    expect(mocks.updateEventLinks).toHaveBeenCalledWith(
+      'event-2',
+      'class-1',
+      expect.anything(),
+      null
+    );
+  });
+
+  it('writes no links at all when the edit carried none', async () => {
+    // The modal sends the link arrays only for a 'this only' edit, and the
+    // action keys off their presence — so a series-wide edit must leave every
+    // date's links exactly as they were.
+    mocks.updateEventWithScope.mockResolvedValue({ id: 'event-1' });
+
+    await submit({
+      intent: 'update',
+      eventId: 'event-1',
+      eventData: JSON.stringify({
+        title: 'Renamed',
+        editScope: 'all',
+        occurrenceDate: '2026-09-28T00:00:00.000Z',
+      }),
+    });
+
+    expect(mocks.updateEventLinks).not.toHaveBeenCalled();
+  });
+});
+
+describe('calendar action — a refused time range reaches the user', () => {
+  it('answers a create with the message, not a 500', async () => {
+    mocks.createEvent.mockRejectedValue(new CalendarTimeRangeError());
+
+    const response = (await submit({
+      intent: 'create',
+      eventData: JSON.stringify({ title: 'Backwards', event_type: 'LECTURE' }),
+    })) as { data?: { error?: string }; init?: { status?: number } };
+
+    expect(response.init?.status).toBe(400);
+    expect(response.data?.error).toBe('End time must be after the start time');
+    // Nothing was written, so nothing is claimed in the log.
+    expect(mocks.addClassroomAuditLog).not.toHaveBeenCalled();
+  });
+
+  it('answers an update the same way, and writes no links after it', async () => {
+    mocks.updateEvent.mockRejectedValue(new CalendarTimeRangeError());
+
+    const response = (await submit({
+      intent: 'update',
+      eventId: 'event-1',
+      eventData: JSON.stringify({ title: 'Backwards', linkedPageIds: ['p-1'] }),
+    })) as { data?: { error?: string }; init?: { status?: number } };
+
+    expect(response.init?.status).toBe(400);
+    expect(response.data?.error).toBe('End time must be after the start time');
+    expect(mocks.updateEventLinks).not.toHaveBeenCalled();
+    expect(mocks.addClassroomAuditLog).not.toHaveBeenCalled();
+  });
+
+  it('still lets any other failure surface as itself', async () => {
+    // Laundering every failure into a friendly message would tell a user to fix
+    // their times when the database was down.
+    mocks.updateEvent.mockRejectedValue(new Error('connection reset'));
+
+    await expect(
+      submit({
+        intent: 'update',
+        eventId: 'event-1',
+        eventData: JSON.stringify({ title: 'Whatever' }),
+      })
+    ).rejects.toThrow('connection reset');
+  });
+});
+
 describe('calendar action — the assistant event-type limit follows the role', () => {
   const asAssistant = () =>
     mocks.assertClassroomAccess.mockResolvedValue({
