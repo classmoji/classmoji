@@ -1,3 +1,4 @@
+import { Fragment } from 'react';
 import { Tag } from 'antd';
 import { IconChevronDown, IconChevronRight, type Icon } from '@tabler/icons-react';
 
@@ -38,6 +39,15 @@ const kindOf = (node: ModuleTreeNode): { label: string; icon: Icon } => {
       return { label: 'Page', icon: TYPE_META.PAGE.icon };
   }
 };
+
+/** Which heading a leaf sits under: repos, quizzes and forms are assignments. */
+const groupOf = (node: ModuleTreeNode): 'Assignments' | 'Content' =>
+  node.kind === 'repository' ||
+  node.kind === 'repo' ||
+  node.resourceIcon === 'quiz' ||
+  node.resourceIcon === 'form'
+    ? 'Assignments'
+    : 'Content';
 
 /**
  * The student's (and the teaching team's preview) view of one module: the same
@@ -86,7 +96,14 @@ const StudentModuleCard = ({
             <p className="py-3 text-sm text-ink-3">Nothing here yet.</p>
           ) : (
             <ul className="flex flex-col">
-              {leaves.map(node => {
+              {leaves.map((node, i) => {
+                const group = groupOf(node);
+                const heading =
+                  i === 0 || groupOf(leaves[i - 1]) !== group ? (
+                    <li className="pt-5 pb-1.5 text-xs font-semibold uppercase tracking-wide text-ink-3 first:pt-3">
+                      {group}
+                    </li>
+                  ) : null;
                 const { label, icon: RowIcon } = kindOf(node);
                 const titleText = typeof node.name === 'string' ? node.name : '';
                 // The whole row is the link: pages peek in place, everything
@@ -98,34 +115,37 @@ const StudentModuleCard = ({
                       ? () => window.open(node.href, '_blank', 'noreferrer')
                       : undefined;
                 return (
-                  <li key={node.key}>
-                    <div
-                      role={open ? 'link' : undefined}
-                      tabIndex={open ? 0 : undefined}
-                      onClick={open}
-                      onKeyDown={e => {
-                        if (open && (e.key === 'Enter' || e.key === ' ')) {
-                          e.preventDefault();
-                          open();
-                        }
-                      }}
-                      className={`flex items-center gap-3 py-2.5 px-2 -mx-2 rounded-lg transition-colors ${
-                        open ? 'cursor-pointer hover:bg-stone-50 dark:hover:bg-neutral-800' : ''
-                      }`}
-                    >
-                      <RowIcon size={18} className="text-gray-400 shrink-0" />
-                      <span className="min-w-0 flex-1 truncate text-ink-1">
-                        <span className="font-semibold mr-2">{label}:</span>
-                        {node.name}
-                      </span>
-                      {node.statusNode}
-                      {node.actionNode && (
-                        <span role="presentation" onClick={e => e.stopPropagation()}>
-                          {node.actionNode}
+                  <Fragment key={node.key}>
+                    {heading}
+                    <li>
+                      <div
+                        role={open ? 'link' : undefined}
+                        tabIndex={open ? 0 : undefined}
+                        onClick={open}
+                        onKeyDown={e => {
+                          if (open && (e.key === 'Enter' || e.key === ' ')) {
+                            e.preventDefault();
+                            open();
+                          }
+                        }}
+                        className={`flex items-center gap-3 py-2.5 px-2 -mx-2 rounded-lg transition-colors ${
+                          open ? 'cursor-pointer hover:bg-stone-50 dark:hover:bg-neutral-800' : ''
+                        }`}
+                      >
+                        <RowIcon size={18} className="text-gray-400 shrink-0" />
+                        <span className="min-w-0 flex-1 truncate text-ink-1">
+                          <span className="font-semibold mr-2">{label}:</span>
+                          {node.name}
                         </span>
-                      )}
-                    </div>
-                  </li>
+                        {node.statusNode}
+                        {node.actionNode && (
+                          <span role="presentation" onClick={e => e.stopPropagation()}>
+                            {node.actionNode}
+                          </span>
+                        )}
+                      </div>
+                    </li>
+                  </Fragment>
                 );
               })}
             </ul>

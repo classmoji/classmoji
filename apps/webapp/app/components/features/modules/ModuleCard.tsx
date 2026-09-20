@@ -87,6 +87,13 @@ const IconMore = ({ label }: { label: string }) => (
   </button>
 );
 
+/** A small heading that splits the card's rows into Assignments and Content. */
+const GroupHeading = ({ children }: { children: string }) => (
+  <li className="pt-5 pb-1.5 text-xs font-semibold uppercase tracking-wide text-ink-3 first:pt-3">
+    {children}
+  </li>
+);
+
 /**
  * Every item in a module renders through this one row, whatever its kind:
  * icon, "Kind: title" (kind in bold), status pill, Edit, and a menu holding
@@ -398,6 +405,9 @@ const ModuleCard = ({
           )}
 
           <ul className="flex flex-col">
+            {module.repositories.length + standaloneAssignments.length > 0 && (
+              <GroupHeading>Assignments</GroupHeading>
+            )}
             {module.repositories.map(r => (
               <ItemRow
                 key={`repo-${r.id}`}
@@ -450,6 +460,7 @@ const ModuleCard = ({
               />
             ))}
 
+            {contentItems.length > 0 && <GroupHeading>Content</GroupHeading>}
             {contentItems.map((item, itemIndex) => {
               const meta = TYPE_META[item.item_type];
               const { label, published } = describeItem(item);
