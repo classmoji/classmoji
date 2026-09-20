@@ -5,7 +5,15 @@ import dayjs from 'dayjs';
 import invariant from 'tiny-invariant';
 import { data, useFetcher, useParams } from 'react-router';
 import type { Route } from './+types/route';
-import { CalendarTimeRangeError, ClassmojiService } from '@classmoji/services';
+import { ClassmojiService } from '@classmoji/services';
+// Pure write policy, imported straight from its own module: the decisions the
+// admin action and the MCP calendar tools apply too.
+import {
+  ASSISTANT_EVENT_TYPE_MESSAGE,
+  assistantMayChangeEventType,
+  assistantMayCreateEventType,
+  isCalendarTimeRangeError,
+} from '@classmoji/services/calendar-policy';
 import { useCallout } from '@classmoji/ui-components';
 import getPrisma from '@classmoji/database';
 import { assertClassroomAccess, assertClassroomMutationAllowed } from '~/utils/helpers';
@@ -126,11 +134,8 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
     const eventData = JSON.parse(formData.get('eventData') as string);
 
     // Assistants can only create Office Hours events
-    if (eventData.event_type !== 'OFFICE_HOURS') {
-      return data(
-        { success: false, error: 'Assistants can only create Office Hours events' },
-        { status: 403 }
-      );
+    if (!assistantMayCreateEventType(eventData.event_type)) {
+      return data({ success: false, error: ASSISTANT_EVENT_TYPE_MESSAGE }, { status: 403 });
     }
 
     const { linkedPageIds, linkedSlideIds, linkedAssignmentIds, ...createData } = eventData;
@@ -141,8 +146,8 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
     } catch (error: unknown) {
       // A refused time range is the user's to fix, so it comes back as a
       // message the fetcher shows rather than as a 500.
-      if (error instanceof CalendarTimeRangeError) {
-        return data({ success: false, error: error.message }, { status: 400 });
+      if (isCalendarTimeRangeError(error)) {
+        return data({ success: false, error: (error as Error).message }, { status: 400 });
       }
       throw error;
     }
@@ -244,8 +249,8 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
       return data({ success: true });
     } catch (error: unknown) {
       // A refused time range is the user's to fix, not a server fault.
-      if (error instanceof CalendarTimeRangeError) {
-        return data({ success: false, error: error.message }, { status: 400 });
+      if (isCalendarTimeRangeError(error)) {
+        return data({ success: false, error: (error as Error).message }, { status: 400 });
       }
       console.error('Update event error:', error);
       return data(

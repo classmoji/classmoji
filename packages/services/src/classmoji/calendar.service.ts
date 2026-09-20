@@ -2,6 +2,7 @@ import getPrisma from '@classmoji/database';
 import { Prisma } from '@prisma/client';
 import type { EventType } from '@prisma/client';
 import { pagesUrl } from '../emails/escape.ts';
+import { CalendarTimeRangeError } from './calendarPolicy.ts';
 
 type DateInput = Date | string;
 type CalendarEditScope = 'this_only' | 'this_and_future' | 'all';
@@ -271,20 +272,19 @@ interface DeadlineRepositoryAssignment {
 }
 
 /**
- * An event was asked to end at or before it starts.
- *
- * Thrown by the create/update entry points so a caller can turn it into a
- * message the user actually sees. A caller that does not catch it gets a 500,
- * which is the safe direction: the write is refused either way.
+ * The write policy lives in a dependency-free module so the three surfaces that
+ * enforce it — both web calendar actions and the MCP tools — can import the
+ * real decision rather than a copy. Re-exported here because this is where
+ * callers already look for it.
  */
-export class CalendarTimeRangeError extends Error {
-  readonly reason = 'end_before_start';
-
-  constructor(message: string = 'End time must be after the start time') {
-    super(message);
-    this.name = 'CalendarTimeRangeError';
-  }
-}
+export {
+  ASSISTANT_EVENT_TYPE,
+  ASSISTANT_EVENT_TYPE_MESSAGE,
+  assistantMayChangeEventType,
+  assistantMayCreateEventType,
+  CalendarTimeRangeError,
+  isCalendarTimeRangeError,
+} from './calendarPolicy.ts';
 
 /**
  * An event must end strictly after it starts; a zero-length or inverted range

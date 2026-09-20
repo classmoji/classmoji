@@ -4,7 +4,15 @@ import { PlusOutlined } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import invariant from 'tiny-invariant';
 import { data, useFetcher, useLocation, useParams } from 'react-router';
-import { CalendarTimeRangeError, ClassmojiService } from '@classmoji/services';
+import { ClassmojiService } from '@classmoji/services';
+// Pure write policy, imported straight from its own module: the decisions the
+// assistant action and the MCP calendar tools apply too.
+import {
+  ASSISTANT_EVENT_TYPE_MESSAGE,
+  assistantMayChangeEventType,
+  assistantMayCreateEventType,
+  isCalendarTimeRangeError,
+} from '@classmoji/services/calendar-policy';
 import { useCallout } from '@classmoji/ui-components';
 import getPrisma from '@classmoji/database';
 import {
@@ -170,11 +178,8 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
     // role. `isAdmin` already guards update/delete/update_deadline below;
     // create was the one branch that skipped it, and it is the branch where the
     // policy actually applies.
-    if (!isAdmin && createData.event_type !== 'OFFICE_HOURS') {
-      return data(
-        { success: false, error: 'Assistants can only create Office Hours events' },
-        { status: 403 }
-      );
+    if (!isAdmin && !assistantMayCreateEventType(createData.event_type)) {
+      return data({ success: false, error: ASSISTANT_EVENT_TYPE_MESSAGE }, { status: 403 });
     }
 
     let newEvent;
@@ -183,8 +188,8 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
     } catch (error: unknown) {
       // A refused time range is the user's to fix, so it comes back as a
       // message the fetcher shows rather than as a 500.
-      if (error instanceof CalendarTimeRangeError) {
-        return data({ success: false, error: error.message }, { status: 400 });
+      if (isCalendarTimeRangeError(error)) {
+        return data({ success: false, error: (error as Error).message }, { status: 400 });
       }
       throw error;
     }
@@ -270,8 +275,8 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
         await ClassmojiService.calendar.updateEvent(eventId as string, updateData);
       }
     } catch (error: unknown) {
-      if (error instanceof CalendarTimeRangeError) {
-        return data({ success: false, error: error.message }, { status: 400 });
+      if (isCalendarTimeRangeError(error)) {
+        return data({ success: false, error: (error as Error).message }, { status: 400 });
       }
       throw error;
     }

@@ -22,6 +22,13 @@
  */
 
 import { ClassmojiService } from '@classmoji/services';
+// Pure write policy, imported straight from its own module: the decisions both
+// web calendar actions apply too.
+import {
+  ASSISTANT_EVENT_TYPE_MESSAGE,
+  assistantMayChangeEventType,
+  assistantMayCreateEventType,
+} from '@classmoji/services/calendar-policy';
 import type { EventType, Prisma } from '@prisma/client';
 import { z } from 'zod';
 import { ToolError } from '../mcp/errors.ts';
@@ -66,6 +73,20 @@ async function assertCanModifyEvent(ctx: ToolContext, createdBy: string): Promis
     'Assistants can only modify calendar events they created',
     'INSUFFICIENT_ROLE'
   );
+}
+
+/**
+ * The office-hours limit on assistants, applied to a write through this server.
+ *
+ * The web calendar enforces the same policy in both of its actions; the
+ * decision itself lives in @classmoji/services so the three cannot drift apart.
+ * Same holdsRole reasoning as above — a multi-role OWNER/TEACHER whose gate
+ * resolved as ASSISTANT is not an assistant for this purpose.
+ */
+async function assertEventTypeAllowed(ctx: ToolContext, allowed: boolean): Promise<void> {
+  if (allowed) return;
+  if (await holdsRole(ctx, ['OWNER', 'TEACHER'])) return;
+  throw new ToolError('forbidden', ASSISTANT_EVENT_TYPE_MESSAGE, 'INSUFFICIENT_ROLE');
 }
 
 /** Resolve the recurring-vs-scope rules shared by update and delete. */
@@ -139,6 +160,7 @@ export const calendarEventCreateTool: ToolDefinition<CalendarEventCreateArgs> = 
       throw new ToolError('invalid_params', 'recurrence_rule is required when is_recurring');
     }
     assertEndAfterStart(new Date(args.start_time), new Date(args.end_time));
+    await assertEventTypeAllowed(ctx, assistantMayCreateEventType(args.event_type));
 
     const event = await ClassmojiService.calendar.createEvent(
       classroom.classroomId,

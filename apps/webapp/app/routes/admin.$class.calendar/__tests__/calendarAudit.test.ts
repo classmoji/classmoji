@@ -36,24 +36,12 @@ vi.mock('~/utils/helpers', () => ({
   addClassroomAuditLog: (...a: unknown[]) => mocks.addClassroomAuditLog(...a),
 }));
 
-/**
- * The refusal the service raises for a backwards time range, as a real class:
- * the action tells it apart from any other failure with `instanceof`, so a
- * plain Error here would make that test pass for the wrong reason. What the
- * service actually throws is pinned in its own suite
- * (packages/services/…/calendar.editScope.test.ts).
- */
-const { CalendarTimeRangeError } = vi.hoisted(() => ({
-  CalendarTimeRangeError: class CalendarTimeRangeError extends Error {
-    constructor(message = 'End time must be after the start time') {
-      super(message);
-      this.name = 'CalendarTimeRangeError';
-    }
-  },
-}));
+// The write policy is NOT mocked: it is a dependency-free module, so the action
+// runs the real decision here and these tests cannot pass against a copy of it.
+const { CalendarTimeRangeError, ASSISTANT_EVENT_TYPE_MESSAGE } =
+  await import('@classmoji/services/calendar-policy');
 
 vi.mock('@classmoji/services', () => ({
-  CalendarTimeRangeError,
   ClassmojiService: {
     calendar: {
       createEvent: (...a: unknown[]) => mocks.createEvent(...a),
