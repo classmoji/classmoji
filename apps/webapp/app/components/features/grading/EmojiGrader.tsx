@@ -1,7 +1,6 @@
 import { useEffect, useState } from 'react';
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion';
 import { useClickAway } from '@uidotdev/usehooks';
-import { IconMoodHappy } from '@tabler/icons-react';
 import { isScoreScheme, parseScoreEmoji, scoreEmojiId } from '@classmoji/utils';
 import { useGlobalFetcher, useUser } from '~/hooks';
 
@@ -254,14 +253,14 @@ const EmojiGrader = ({ repositoryAssignment, emojiMappings }: EmojiGraderProps) 
 
   return (
     <div className="relative" ref={ref}>
-      <div
+      <button
+        type="button"
         data-testid="emoji-grade-trigger"
         onClick={() => setShow(true)}
-        className="flex items-center gap-1 text-gray-600 hover:text-gray-800 dark:text-gray-300 dark:hover:text-gray-100 cursor-pointer"
+        className="text-sm font-medium text-ink-2 hover:text-ink-1 hover:underline underline-offset-2 cursor-pointer"
       >
-        <IconMoodHappy size={16} />
-        <span>Grade</span>
-      </div>
+        Grade
+      </button>
       <AnimatePresence>
         {show && (
           <motion.div

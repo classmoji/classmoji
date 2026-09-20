@@ -1,19 +1,25 @@
-import { Button, Table, Tooltip } from 'antd';
+import { Button, Dropdown, Table, Tooltip } from 'antd';
+import type { MenuProps } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import dayjs from 'dayjs';
-import { IconBrandGithub, IconLayoutKanban } from '@tabler/icons-react';
+import {
+  IconBrandGithub,
+  IconDotsVertical,
+  IconLayoutKanban,
+  IconShieldFilled,
+  IconShieldPlus,
+} from '@tabler/icons-react';
 import {
   UserThumbnailView,
   TeamThumbnailView,
   RepositoryAssignmentStatus,
-  TableActionButtons,
   EmojiGrader,
-  LateOverrideButton,
   MultiSelect,
 } from '~/components';
 import { ActionTypes } from '~/constants';
 import { useCallout } from '@classmoji/ui-components';
 import { useGlobalFetcher } from '~/hooks';
+import useStore from '~/store';
 import { openRepositoryAssignmentInGithub } from '~/utils/helpers.client';
 import { isScoreScheme } from '@classmoji/utils';
 import type { AssignmentRowData } from '~/components/features/assignments/AssignmentsTable';
@@ -124,6 +130,7 @@ const SubmissionsTable = ({
   total,
 }: SubmissionsTableProps) => {
   const { fetcher, notify } = useGlobalFetcher();
+  const { classroom } = useStore();
   const callout = useCallout();
 
   const isIndividual = repositoryType === 'INDIVIDUAL';
@@ -344,29 +351,71 @@ const SubmissionsTable = ({
     {
       title: 'Actions',
       key: 'actions',
-      width: 110,
+      width: 200,
       className: 'border-l border-line',
       render: (_: unknown, repo) => {
         const s = repo.submission;
         if (!s) return null;
-        return (
-          <TableActionButtons
-            onView={() =>
-              // The row IS the git repo; hand the helper its name explicitly.
-              openRepositoryAssignmentInGithub(org, {
-                git_repo: { name: repo.name },
-                provider_issue_number: s.provider_issue_number,
-              })
-            }
-            hideViewText
-          >
-            {!numericScale && grader(s)}
-            <LateOverrideButton
-              repositoryAssignment={
-                s as unknown as Parameters<typeof LateOverrideButton>[0]['repositoryAssignment']
+        const late = Boolean(s.is_late);
+        const waived = Boolean(s.is_late_override);
+        const rare: MenuProps['items'] = [];
+        if (late || waived) {
+          rare.push({
+            key: 'late',
+            label: waived ? 'Restore late penalty' : 'Waive late penalty',
+            icon: waived ? <IconShieldFilled size={15} /> : <IconShieldPlus size={15} />,
+          });
+        }
+        const onRare: MenuProps['onClick'] = ({ key }) => {
+          if (key === 'late') {
+            notify(
+              ActionTypes.UPDATE_LATE_OVERRIDE,
+              waived ? 'Restoring late penalty' : 'Waiving late penalty'
+            );
+            fetcher!.submit(
+              { git_repo_assignment_id: s.id, is_late_override: !waived },
+              {
+                method: 'post',
+                action: `/api/gitRepoAssignment/${classroom?.slug}?action=updateLateOverride`,
+                encType: 'application/json',
               }
-            />
-          </TableActionButtons>
+            );
+          }
+        };
+        const link =
+          'text-sm font-medium text-ink-2 hover:text-ink-1 hover:underline underline-offset-2 whitespace-nowrap';
+        return (
+          <div className="flex items-center gap-4 whitespace-nowrap">
+            {!numericScale && grader(s)}
+            <button
+              type="button"
+              className={link}
+              onClick={() =>
+                // The row IS the git repo; hand the helper its name explicitly.
+                openRepositoryAssignmentInGithub(org, {
+                  git_repo: { name: repo.name },
+                  provider_issue_number: s.provider_issue_number,
+                })
+              }
+            >
+              GitHub
+            </button>
+            {rare.length > 0 && (
+              <Dropdown
+                trigger={['click']}
+                placement="bottomRight"
+                menu={{ items: rare, onClick: onRare }}
+              >
+                <button
+                  type="button"
+                  aria-label="More actions"
+                  className="inline-flex h-7 w-7 items-center justify-center rounded-md text-gray-400 hover:bg-gray-100 hover:text-gray-600 dark:hover:bg-neutral-800 dark:hover:text-gray-200"
+                >
+                  <IconDotsVertical size={17} />
+                </button>
+              </Dropdown>
+            )}
+          </div>
         );
       },
     },
