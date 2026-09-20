@@ -392,19 +392,58 @@ const ModuleCard = ({
       {expanded && (
         <div className="border-t border-line px-4 sm:px-5 pb-3">
           {error && <div className="mt-3 text-sm text-rose-600 dark:text-rose-400">{error}</div>}
-          {module.description ? (
+          {module.description && (
             <p className="mt-3 mb-1 text-sm text-ink-2 whitespace-pre-wrap">{module.description}</p>
-          ) : (
-            <button
-              type="button"
-              onClick={() => setEditOpen(true)}
-              className="mt-3 mb-1 text-sm text-ink-3 hover:text-ink-1"
-            >
-              Add module description
-            </button>
           )}
 
           <ul className="flex flex-col">
+            {contentItems.length > 0 && <GroupHeading>Content</GroupHeading>}
+            {contentItems.map((item, itemIndex) => {
+              const meta = TYPE_META[item.item_type];
+              const { label, published } = describeItem(item);
+              const edit = () => {
+                if (item.item_type === 'PAGE' && item.page) {
+                  navigate(`/admin/${classSlug}/pages/${item.page.id}`);
+                } else if (item.item_type === 'SLIDE' && item.slide) {
+                  window.open(`${slidesUrl}/${item.slide.id}`, '_blank');
+                } else if (item.item_type === 'QUIZ') {
+                  navigate(`/admin/${classSlug}/quizzes`);
+                } else if (item.item_type === 'FORM') {
+                  navigate(`/admin/${classSlug}/forms`);
+                }
+              };
+              return (
+                <ItemRow
+                  key={`item-${item.id}`}
+                  icon={meta.icon}
+                  title={label}
+                  kind={meta.label}
+                  published={published}
+                  onEdit={edit}
+                  menuItems={[
+                    {
+                      key: 'up',
+                      label: 'Move up',
+                      icon: <IconArrowUp size={15} />,
+                      disabled: itemIndex === 0 || busy,
+                    },
+                    {
+                      key: 'down',
+                      label: 'Move down',
+                      icon: <IconArrowDown size={15} />,
+                      disabled: itemIndex === contentItems.length - 1 || busy,
+                    },
+                    { type: 'divider' as const },
+                    removeItem,
+                  ]}
+                  onMenuClick={key => {
+                    if (key === 'up') move(itemIndex, -1);
+                    if (key === 'down') move(itemIndex, 1);
+                    if (key === 'remove') removeContentItem(item.id);
+                  }}
+                />
+              );
+            })}
             {module.repositories.length + standaloneAssignments.length > 0 && (
               <GroupHeading>Assignments</GroupHeading>
             )}
@@ -459,54 +498,6 @@ const ModuleCard = ({
                 }}
               />
             ))}
-
-            {contentItems.length > 0 && <GroupHeading>Content</GroupHeading>}
-            {contentItems.map((item, itemIndex) => {
-              const meta = TYPE_META[item.item_type];
-              const { label, published } = describeItem(item);
-              const edit = () => {
-                if (item.item_type === 'PAGE' && item.page) {
-                  navigate(`/admin/${classSlug}/pages/${item.page.id}`);
-                } else if (item.item_type === 'SLIDE' && item.slide) {
-                  window.open(`${slidesUrl}/${item.slide.id}`, '_blank');
-                } else if (item.item_type === 'QUIZ') {
-                  navigate(`/admin/${classSlug}/quizzes`);
-                } else if (item.item_type === 'FORM') {
-                  navigate(`/admin/${classSlug}/forms`);
-                }
-              };
-              return (
-                <ItemRow
-                  key={`item-${item.id}`}
-                  icon={meta.icon}
-                  title={label}
-                  kind={meta.label}
-                  published={published}
-                  onEdit={edit}
-                  menuItems={[
-                    {
-                      key: 'up',
-                      label: 'Move up',
-                      icon: <IconArrowUp size={15} />,
-                      disabled: itemIndex === 0 || busy,
-                    },
-                    {
-                      key: 'down',
-                      label: 'Move down',
-                      icon: <IconArrowDown size={15} />,
-                      disabled: itemIndex === contentItems.length - 1 || busy,
-                    },
-                    { type: 'divider' as const },
-                    removeItem,
-                  ]}
-                  onMenuClick={key => {
-                    if (key === 'up') move(itemIndex, -1);
-                    if (key === 'down') move(itemIndex, 1);
-                    if (key === 'remove') removeContentItem(item.id);
-                  }}
-                />
-              );
-            })}
           </ul>
 
           <Dropdown

@@ -64,6 +64,11 @@ const StudentModuleCard = ({
   isStaff,
 }: StudentModuleCardProps) => {
   const peek = usePagePeek();
+  // Content reads first, then what is due; each group keeps the module's order.
+  const ordered = [
+    ...leaves.filter(n => groupOf(n) === 'Content'),
+    ...leaves.filter(n => groupOf(n) === 'Assignments'),
+  ];
   return (
     <div className="rounded-2xl bg-panel ring-1 ring-line" data-testid={`module-card-${module.id}`}>
       <div
@@ -96,10 +101,10 @@ const StudentModuleCard = ({
             <p className="py-3 text-sm text-ink-3">Nothing here yet.</p>
           ) : (
             <ul className="flex flex-col">
-              {leaves.map((node, i) => {
+              {ordered.map((node, i) => {
                 const group = groupOf(node);
                 const heading =
-                  i === 0 || groupOf(leaves[i - 1]) !== group ? (
+                  i === 0 || groupOf(ordered[i - 1]) !== group ? (
                     <li className="pt-5 pb-1.5 text-xs font-semibold uppercase tracking-wide text-ink-3 first:pt-3">
                       {group}
                     </li>
