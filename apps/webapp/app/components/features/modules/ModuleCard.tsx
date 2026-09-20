@@ -292,15 +292,26 @@ const ModuleCard = ({
   // is placed in the module's reading order.
   const addItemMenu: MenuProps['items'] = [
     {
-      key: 'REPO',
-      icon: <IconFolder size={15} />,
-      label: 'Repository — a GitHub template copied to every student',
+      type: 'group',
+      label: 'Assignments',
+      children: [
+        {
+          key: 'REPO',
+          icon: <IconFolder size={15} />,
+          label: 'Repository — a GitHub template copied to every student',
+        },
+        { key: 'QUIZ', icon: <IconHelpCircle size={15} />, label: 'Quiz — link an existing quiz' },
+        { key: 'FORM', icon: <IconForms size={15} />, label: 'Form — link an existing form' },
+      ],
     },
-    { key: 'QUIZ', icon: <IconHelpCircle size={15} />, label: 'Quiz — link an existing quiz' },
-    { key: 'FORM', icon: <IconForms size={15} />, label: 'Form — link an existing form' },
-    { type: 'divider' },
-    { key: 'PAGE', icon: <IconFileText size={15} />, label: 'Page' },
-    { key: 'SLIDE', icon: <IconPresentation size={15} />, label: 'Slides' },
+    {
+      type: 'group',
+      label: 'Content',
+      children: [
+        { key: 'PAGE', icon: <IconFileText size={15} />, label: 'Page' },
+        { key: 'SLIDE', icon: <IconPresentation size={15} />, label: 'Slides' },
+      ],
+    },
   ];
   const onAddItem: MenuProps['onClick'] = ({ key }) => {
     if (key === 'REPO') navigate(`/admin/${classSlug}/repos/form?module=${module.id}`);
