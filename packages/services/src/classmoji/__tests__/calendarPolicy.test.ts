@@ -76,7 +76,11 @@ describe('which linked resource gets the star', () => {
 
   const cases: Array<[string, FeaturedLinkRef | null | undefined, FeaturedLinkRef | null]> = [
     ['a page that is being linked', { kind: 'page', id: 'page-b' }, { kind: 'page', id: 'page-b' }],
-    ['a deck that is being linked', { kind: 'slide', id: 'deck-a' }, { kind: 'slide', id: 'deck-a' }],
+    [
+      'a deck that is being linked',
+      { kind: 'slide', id: 'deck-a' },
+      { kind: 'slide', id: 'deck-a' },
+    ],
     [
       'an assignment that is being linked',
       { kind: 'assignment', id: 'hw-a' },

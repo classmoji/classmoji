@@ -20,9 +20,20 @@ interface StudentCalendarViewProps {
   events: CalendarEventWithLinks[];
   onEventClick?: (event: CalendarEventWithLinks) => void;
   onMonthChange?: (year: number, month: number) => void;
+  /** Where a starred resource under a month chip points — see MonthGrid. */
+  classSlug?: string;
+  pagesUrl?: string;
+  slidesUrl?: string;
 }
 
-const StudentCalendarView = ({ events, onEventClick, onMonthChange }: StudentCalendarViewProps) => {
+const StudentCalendarView = ({
+  events,
+  onEventClick,
+  onMonthChange,
+  classSlug,
+  pagesUrl,
+  slidesUrl,
+}: StudentCalendarViewProps) => {
   const nav = useCalendarNavigation(onMonthChange);
   const eventsFor = useEventsByDate(events, nav.selectedTypes);
 
@@ -47,6 +58,10 @@ const StudentCalendarView = ({ events, onEventClick, onMonthChange }: StudentCal
           eventsFor={eventsFor}
           onEventClick={onEventClick}
           onShowMore={nav.focusDay}
+          classSlug={classSlug}
+          rolePrefix="student"
+          pagesUrl={pagesUrl}
+          slidesUrl={slidesUrl}
         />
       ) : (
         <WeekGrid

@@ -124,6 +124,9 @@ const StudentCalendar = ({ loaderData }: Route.ComponentProps) => {
           events={events}
           onEventClick={handleEventClick}
           onMonthChange={handleMonthChange}
+          classSlug={classSlug}
+          pagesUrl={pagesUrl}
+          slidesUrl={slidesUrl}
         />
       </div>
 

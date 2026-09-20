@@ -175,9 +175,23 @@ interface LinkTagRenderOptions {
   onToggleFeatured: (ref: FeaturedRef) => void;
 }
 
-export const createLinkTagRender =
-  ({ kind, meta, featured, onToggleFeatured }: LinkTagRenderOptions) =>
-  ({ label, value, disabled, closable, onClose, isMaxTag }: CustomTagProps): ReactElement => {
+export const createLinkTagRender = ({
+  kind,
+  meta,
+  featured,
+  onToggleFeatured,
+}: LinkTagRenderOptions) =>
+  // Named rather than anonymous: antd CALLS this to get an element, it does not
+  // mount it as a component, but it returns JSX and eslint cannot tell the
+  // difference without a name to go on.
+  function renderLinkTag({
+    label,
+    value,
+    disabled,
+    closable,
+    onClose,
+    isMaxTag,
+  }: CustomTagProps): ReactElement {
     // antd collapses the overflow into one "+N" pseudo-tag. It stands for
     // several links rather than naming one, so there is nothing to star or
     // unlink on it.

@@ -161,13 +161,10 @@ describe('updateEventLinks — the star', () => {
     // survived, so the same id cannot come back in through the star.
     page.findMany.mockResolvedValue([{ id: 'p-1' }]);
 
-    await updateEventLinks(
-      'event-1',
-      'class-1',
-      { pageIds: ['p-1', 'p-elsewhere'] },
-      null,
-      { kind: 'page', id: 'p-elsewhere' }
-    );
+    await updateEventLinks('event-1', 'class-1', { pageIds: ['p-1', 'p-elsewhere'] }, null, {
+      kind: 'page',
+      id: 'p-elsewhere',
+    });
 
     expect(written(calendarEventPageLink.createMany, 'page_id')).toEqual({ 'p-1': false });
   });

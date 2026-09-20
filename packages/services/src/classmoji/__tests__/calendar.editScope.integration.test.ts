@@ -294,10 +294,12 @@ describe.skipIf(!RUN)('scoped calendar edits (integration)', () => {
 
     /** The other page's link row on this event, whatever date it sits on. */
     const otherLinkId = async (eventId: string) =>
-      (await prisma.calendarEventPageLink.findFirstOrThrow({
-        where: { event_id: eventId, page_id: otherPageId },
-        select: { id: true },
-      })).id;
+      (
+        await prisma.calendarEventPageLink.findFirstOrThrow({
+          where: { event_id: eventId, page_id: otherPageId },
+          select: { id: true },
+        })
+      ).id;
 
     it('refuses a second starred row on the same date, whatever writes it', async () => {
       // The service never writes two. The rule is one per date, and the

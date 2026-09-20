@@ -417,7 +417,11 @@ describe('calendar resource allowlist shaping (U5)', () => {
 
     const shape = async (ctx: ReturnType<typeof studentCtx>) =>
       (
-        (await calendarResource.handler({ org: 'o', slug: 's' }, ctx, new URL('classmoji://x'))) as {
+        (await calendarResource.handler(
+          { org: 'o', slug: 's' },
+          ctx,
+          new URL('classmoji://x')
+        )) as {
           events: Array<Record<string, unknown>>;
         }
       ).events[0];

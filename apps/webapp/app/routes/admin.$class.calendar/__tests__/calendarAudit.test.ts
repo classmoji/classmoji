@@ -422,26 +422,29 @@ describe('calendar action — the starred link', () => {
     expect(featuredArg()).toEqual({ kind: 'slide', id: 's-1' });
   });
 
-  it.each(['all', 'this_and_future'])('is ignored with a %s edit, as the links are', async scope => {
-    // A star is stored on a link row. A scope that has no occurrence to save a
-    // link against has nowhere to put a star either.
-    mocks.updateEventWithScope.mockResolvedValue({ id: 'event-2' });
+  it.each(['all', 'this_and_future'])(
+    'is ignored with a %s edit, as the links are',
+    async scope => {
+      // A star is stored on a link row. A scope that has no occurrence to save a
+      // link against has nowhere to put a star either.
+      mocks.updateEventWithScope.mockResolvedValue({ id: 'event-2' });
 
-    await submit({
-      intent: 'update',
-      eventId: 'event-1',
-      eventData: JSON.stringify({
-        title: 'Lecture 3',
-        editScope: scope,
-        occurrenceDate: '2026-09-28T00:00:00.000Z',
-        linkedPageIds: ['p-1'],
-        featuredKind: 'page',
-        featuredId: 'p-1',
-      }),
-    });
+      await submit({
+        intent: 'update',
+        eventId: 'event-1',
+        eventData: JSON.stringify({
+          title: 'Lecture 3',
+          editScope: scope,
+          occurrenceDate: '2026-09-28T00:00:00.000Z',
+          linkedPageIds: ['p-1'],
+          featuredKind: 'page',
+          featuredId: 'p-1',
+        }),
+      });
 
-    expect(mocks.updateEventLinks).not.toHaveBeenCalled();
-  });
+      expect(mocks.updateEventLinks).not.toHaveBeenCalled();
+    }
+  );
 
   it('is dropped when it names a kind the calendar does not have', async () => {
     await submit({

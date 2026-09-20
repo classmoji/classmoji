@@ -138,10 +138,7 @@ export const resolveFeaturedLink = (
  * have. `resolveFeaturedLink` then decides whether that ref survives contact
  * with the ids actually being linked.
  */
-export const toFeaturedLinkRef = (
-  kind: unknown,
-  id: unknown
-): FeaturedLinkRef | null =>
+export const toFeaturedLinkRef = (kind: unknown, id: unknown): FeaturedLinkRef | null =>
   typeof id === 'string' &&
   id !== '' &&
   typeof kind === 'string' &&
