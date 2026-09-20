@@ -11,6 +11,7 @@ import {
   getEventTypeLightBg,
   getEventTypeDarkText,
 } from './utils';
+import { fitsMetaRow, isTightBlock } from './geometry';
 import type { CalendarEventWithLinks } from './types';
 
 /** Types whose block says where it is. A deadline has no room. */
@@ -22,12 +23,16 @@ interface EventCardProps {
   showCreator?: boolean;
   compact?: boolean;
   /**
-   * Compact only: whether the block is tall enough for the meta row under the
-   * title. The caller decides with `geometry.fitsMetaRow`, because it is the
-   * one that knows how tall it made the block. Default true — the drag overlay
-   * and anything else without a slot to fit has nothing to clip against.
+   * Compact only: how many hours tall the slot is that this card has to fit
+   * into. It decides two things — whether there is room under the title for the
+   * meta row, and whether the card has to buy that room out of its vertical
+   * padding — and `geometry` answers both from the duration, never from a
+   * measured height.
+   *
+   * Left out, the card has no slot to fit: the modal and the drag overlay size
+   * themselves, so they draw everything at the roomier padding.
    */
-  showMeta?: boolean;
+  blockHours?: number;
 }
 
 /**
@@ -46,11 +51,16 @@ const EventCard = ({
   onClick,
   showCreator = false,
   compact = false,
-  showMeta = true,
+  blockHours,
 }: EventCardProps) => {
   const isHappeningNow = isEventNow(event);
   const duration = getEventDuration(event);
-  const padding = compact ? 'p-2' : 'p-3';
+
+  // Both answers come from the one number, so the row and the padding that
+  // makes room for it can never disagree about how tall the block is.
+  const showMeta = blockHours === undefined || fitsMetaRow(blockHours);
+  const tight = blockHours !== undefined && isTightBlock(blockHours);
+  const padding = compact ? (tight ? 'px-2 py-1' : 'p-2') : 'p-3';
 
   /**
    * Where the event is, for the compact block: the word Virtual for a meeting

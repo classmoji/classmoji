@@ -12,7 +12,6 @@
 import { Fragment, useEffect, useState } from 'react';
 import {
   WEEK_GRID_COLUMNS,
-  fitsMetaRow,
   formatHourLabel,
   heightForDuration,
   hoursInWindow,
@@ -181,8 +180,8 @@ const WeekGrid = ({
                               onClick={onEventClick}
                               compact
                               // The grid sized the block, so the grid is what
-                              // knows whether a second line fits inside it.
-                              showMeta={fitsMetaRow(durationHours)}
+                              // tells the card how much room it has to work in.
+                              blockHours={durationHours}
                             />
                           ),
                         })}

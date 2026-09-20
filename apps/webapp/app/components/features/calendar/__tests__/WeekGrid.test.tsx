@@ -105,6 +105,22 @@ describe('WeekGrid', () => {
     expect(html).toContain('·');
   });
 
+  it('keeps the meta row on a 50-minute x-hour, and pays for it in padding', () => {
+    // The most common short slot here. It keeps its row by dropping to `py-1`;
+    // at `p-2` the row would not have fitted.
+    const xHour: CalendarEventWithLinks = {
+      ...lecture,
+      id: 'evt-x-hour',
+      title: 'x-hour',
+      end_time: new Date(2026, 8, 22, 10, 50).toISOString(),
+    };
+    const html = render([xHour], TUESDAY);
+
+    expect(html).toMatch(/10:00\s*–\s*10:50\s*AM/);
+    expect(html).toContain('ECSC 116');
+    expect(html).toContain('px-2 py-1');
+  });
+
   it('drops the meta row from a block too short to hold it', () => {
     const short: CalendarEventWithLinks = {
       ...lecture,
@@ -118,6 +134,11 @@ describe('WeekGrid', () => {
     expect(html).toContain('Quick sync');
     expect(html).not.toContain('ECSC 116');
     expect(html).not.toMatch(/10:00\s*–/);
+  });
+
+  it('leaves an hour-long block at the roomier padding', () => {
+    const html = render([lecture], TUESDAY);
+    expect(html).not.toContain('px-2 py-1');
   });
 
   it('sizes a block by its duration and leaves a gap under it', () => {

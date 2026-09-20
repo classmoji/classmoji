@@ -12,6 +12,7 @@ import {
   hourLabelParts,
   hoursInWindow,
   isOutsideWindow,
+  isTightBlock,
   monthDropId,
   parseDropId,
   remForHours,
@@ -239,23 +240,46 @@ describe('isOutsideWindow', () => {
 });
 
 describe('fitsMetaRow', () => {
-  it('gives an hour-long block its second line', () => {
+  it('gives a 50-minute block its second line', () => {
+    // The x-hour is the most common short slot here, and it is the length the
+    // threshold was placed to keep: 3.333rem of block, less 0.25 of gap and
+    // 0.5 of `py-1`, leaves 2.583rem for 2.375rem of content.
+    expect(fitsMetaRow(50 / 60)).toBe(true);
     expect(fitsMetaRow(1)).toBe(true);
     expect(fitsMetaRow(1.5)).toBe(true);
   });
 
-  it('withholds it from anything shorter', () => {
-    // A 45-minute block is 3rem: room for the title and half of the row below
-    // it, which is worse than no row at all.
+  it('withholds it from a 45-minute block', () => {
+    // 3rem, less the gap and the roomier `p-2` it keeps, leaves 1.75rem: the
+    // title and half of the row, which is worse than no row at all.
     expect(fitsMetaRow(0.75)).toBe(false);
     expect(fitsMetaRow(0.5)).toBe(false);
   });
 
   it('measures the block that will be DRAWN, not the raw duration', () => {
-    // Everything shorter than the clamp draws at the clamp — still under an
-    // hour, so still no row, but the rule goes through the same clamp the
-    // height does rather than second-guessing it.
+    // Everything shorter than the clamp draws at the clamp — still under the
+    // threshold, but the rule goes through the same clamp the height does
+    // rather than second-guessing it.
     expect(fitsMetaRow(0.1)).toBe(false);
     expect(META_ROW_MIN_HOURS).toBeGreaterThan(MIN_DURATION_HOURS);
+    expect(META_ROW_MIN_HOURS).toBeLessThan(50 / 60);
+  });
+});
+
+describe('isTightBlock', () => {
+  it('tightens the padding of anything under an hour', () => {
+    expect(isTightBlock(50 / 60)).toBe(true);
+    expect(isTightBlock(0.75)).toBe(true);
+  });
+
+  it('leaves an hour or more alone', () => {
+    expect(isTightBlock(1)).toBe(false);
+    expect(isTightBlock(2)).toBe(false);
+  });
+
+  it('is where the room for a 50-minute meta row comes from', () => {
+    // The two rules meet here: a block can be short enough to need the tighter
+    // padding AND long enough to keep its row. That window is the x-hour.
+    expect(isTightBlock(50 / 60) && fitsMetaRow(50 / 60)).toBe(true);
   });
 });
