@@ -15,10 +15,6 @@
  *   timestamp in the schema.
  * - "Active" student: has a QuizAttempt in the last 14 days OR a gitRepo
  *   whose GitRepoAnalyticsSnapshot.last_commit_at is in the last 14 days.
- * - "Hardest question" drilling requires parsing QuizAttempt.question_results_json
- *   which does not have a stable cross-quiz question identifier today. We
- *   return an empty array and flag this in the task report. avgFocusPct is
- *   computable from the existing columns.
  */
 
 import getPrisma from '@classmoji/database';
@@ -562,77 +558,4 @@ export async function taOps(classroomId: string): Promise<TaOpsRow[]> {
       gradeDistributionMean,
     };
   });
-}
-
-// 4. Quiz analytics
-
-export interface QuizAnalytics {
-  hardestQuestions: Array<{ questionId: string; prompt: string; correctRate: number }>;
-  avgFocusPct: number | null;
-}
-
-export async function quizAnalytics(classroomId: string): Promise<QuizAnalytics> {
-  const prisma = getPrisma();
-
-  const attempts = await prisma.quizAttempt.findMany({
-    where: { quiz: { classroom_id: classroomId } },
-    select: {
-      total_duration_ms: true,
-      unfocused_duration_ms: true,
-    },
-  });
-
-  const focusValues: number[] = [];
-  for (const a of attempts) {
-    const total = a.total_duration_ms ?? 0;
-    const unfocused = a.unfocused_duration_ms ?? 0;
-    if (total > 0) {
-      const pct = 1 - unfocused / total;
-      if (pct >= 0 && pct <= 1) focusValues.push(pct);
-    }
-  }
-  const avgFocusPct =
-    focusValues.length > 0 ? focusValues.reduce((a, b) => a + b, 0) / focusValues.length : null;
-
-  // "Hardest question" requires a stable per-question identifier across
-  // attempts; QuizAttempt.question_results_json does not guarantee that today.
-  // Return empty array for now (documented limitation).
-  return { hardestQuestions: [], avgFocusPct };
-}
-
-// 5. Deadline pressure
-
-export interface DeadlinePressureBucket {
-  date: string;
-  assignments: Array<{ id: string; title: string; dueAt: string }>;
-}
-
-export async function deadlinePressure(classroomId: string): Promise<DeadlinePressureBucket[]> {
-  const prisma = getPrisma();
-  const now = new Date();
-  const in7 = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
-
-  const assignments = await prisma.assignment.findMany({
-    where: {
-      module: { classroom_id: classroomId },
-      student_deadline: { gte: now, lte: in7 },
-    },
-    select: { id: true, title: true, student_deadline: true },
-    orderBy: { student_deadline: 'asc' },
-  });
-
-  const buckets = new Map<string, DeadlinePressureBucket>();
-  for (const a of assignments) {
-    if (!a.student_deadline) continue;
-    const date = a.student_deadline.toISOString().slice(0, 10);
-    const bucket = buckets.get(date) ?? { date, assignments: [] };
-    bucket.assignments.push({
-      id: a.id,
-      title: a.title,
-      dueAt: a.student_deadline.toISOString(),
-    });
-    buckets.set(date, bucket);
-  }
-
-  return Array.from(buckets.values()).sort((a, b) => a.date.localeCompare(b.date));
 }

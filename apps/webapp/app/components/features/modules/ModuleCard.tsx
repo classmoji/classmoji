@@ -99,6 +99,7 @@ const GroupHeading = ({ children }: { children: string }) => (
  * Every item in a module renders through this one row, whatever its kind:
  * icon, "Kind: title" (kind in bold), an optional muted note (the target an
  * assignment submits through), status pill, Edit, and a menu holding the rest.
+ * Clicking the label area opens the item (`onOpen`).
  */
 const ItemRow = ({
   icon: RowIcon,
@@ -106,6 +107,7 @@ const ItemRow = ({
   note,
   kind,
   published,
+  onOpen,
   onEdit,
   menuItems,
   onMenuClick,
@@ -115,17 +117,26 @@ const ItemRow = ({
   note?: string | null;
   kind: string;
   published: boolean;
+  onOpen: () => void;
   onEdit: () => void;
   menuItems: MenuProps['items'];
   onMenuClick: (key: string) => void;
 }) => (
-  <li className="flex items-center gap-3 py-2.5 px-2 -mx-2 rounded-lg cursor-pointer transition-colors hover:bg-stone-50 dark:hover:bg-neutral-800">
-    <RowIcon size={18} className="text-gray-400 shrink-0" />
-    <span className="min-w-0 flex-1 truncate text-ink-1">
-      <span className="font-semibold mr-2">{kind}:</span>
-      {title}
-      {note && <span className="ml-2 text-xs text-ink-3">{note}</span>}
-    </span>
+  <li className="flex items-center gap-3 py-2.5 px-2 -mx-2 rounded-lg transition-colors hover:bg-stone-50 dark:hover:bg-neutral-800">
+    {/* A real button, so the row opens from the keyboard too. It spans the
+        label area; the pill, Edit and the menu sit beside it. */}
+    <button
+      type="button"
+      onClick={onOpen}
+      className="flex min-w-0 flex-1 items-center gap-3 text-left cursor-pointer"
+    >
+      <RowIcon size={18} className="text-gray-400 shrink-0" />
+      <span className="min-w-0 flex-1 truncate text-ink-1">
+        <span className="font-semibold mr-2">{kind}:</span>
+        {title}
+        {note && <span className="ml-2 text-xs text-ink-3">{note}</span>}
+      </span>
+    </button>
     <Tag color={published ? 'green' : 'orange'} className="m-0 shrink-0 font-medium">
       {published ? 'Published' : 'Draft'}
     </Tag>
@@ -317,6 +328,22 @@ const ModuleCard = ({
   };
   // What the assignment submits through, unless that is just its own title
   // again (a quiz assignment usually carries the quiz's name); then the kind.
+  // Where a click on an assignment row goes: the repository page (whose
+  // assignment tabs hold the student issues and grading) for a repo
+  // assignment, otherwise the list its quiz/form is managed on. An assignment
+  // with no target yet just opens the editor.
+  const openAssignment = (a: AssignmentRowData) => {
+    if (a.type === 'REPO' && a.repository?.title) {
+      navigate(`/admin/${classSlug}/repos/${encodeURIComponent(a.repository.title)}`);
+    } else if (a.type === 'QUIZ') {
+      navigate(`/admin/${classSlug}/quizzes`);
+    } else if (a.type === 'FORM') {
+      navigate(`/admin/${classSlug}/forms`);
+    } else {
+      openAssignmentModal(undefined, a);
+    }
+  };
+
   const assignmentNote = (a: AssignmentRowData) => {
     const target = assignmentTarget(a);
     return target && target !== a.title ? target : (ASSIGNMENT_TYPE_META[a.type]?.label ?? null);
@@ -411,6 +438,7 @@ const ModuleCard = ({
                   title={label}
                   kind={meta.label}
                   published={published}
+                  onOpen={edit}
                   onEdit={edit}
                   menuItems={[
                     {
@@ -445,6 +473,7 @@ const ModuleCard = ({
                 note={assignmentNote(a)}
                 kind="Assignment"
                 published={a.is_published}
+                onOpen={() => openAssignment(a)}
                 onEdit={() => openAssignmentModal(undefined, a)}
                 menuItems={[deleteAssignmentItem]}
                 onMenuClick={key => {

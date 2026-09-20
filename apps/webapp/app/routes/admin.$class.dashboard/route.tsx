@@ -13,13 +13,7 @@ import InstallAppBanner from '~/components/features/InstallAppBanner';
 import SubmissionChart from './SubmissionChart';
 import Leaderboard from './Leaderboard';
 import GradingTabsCard from './GradingTabsCard';
-import {
-  AssignmentHeatmap,
-  TAOpsTable,
-  AtRiskStudents,
-  QuizAnalytics,
-  DeadlinePressure,
-} from '~/components/features/dashboard';
+import { AssignmentHeatmap, TAOpsTable, AtRiskStudents } from '~/components/features/dashboard';
 import type { Route } from './+types/route';
 
 export const loader = async ({ params, request }: Route.LoaderArgs) => {
@@ -99,8 +93,6 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
     ClassmojiService.dashboard.assignmentHealth(classroom.id),
     ClassmojiService.dashboard.taOps(classroom.id),
     ClassmojiService.dashboard.cohortOverview(classroom.id),
-    ClassmojiService.dashboard.quizAnalytics(classroom.id),
-    ClassmojiService.dashboard.deadlinePressure(classroom.id),
   ]).catch(() => null);
 
   return {
@@ -403,7 +395,7 @@ const AdminDashboard = ({ loaderData }: Route.ComponentProps) => {
         <Await resolve={analytics} errorElement={null}>
           {result => {
             if (!result) return null;
-            const [assignments, taOps, cohort, quiz, deadlines] = result;
+            const [assignments, taOps, cohort] = result;
             return (
               <>
                 <AssignmentHeatmap rows={assignments} />
@@ -414,11 +406,6 @@ const AdminDashboard = ({ loaderData }: Route.ComponentProps) => {
                     atRiskCount={cohort.atRiskCount}
                     students={cohort.atRiskStudents}
                   />
-                </div>
-
-                <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-                  <QuizAnalytics data={quiz} />
-                  <DeadlinePressure buckets={deadlines} />
                 </div>
               </>
             );

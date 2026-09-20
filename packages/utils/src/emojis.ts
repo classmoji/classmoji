@@ -108,8 +108,8 @@ export const parseScoreEmoji = (key: string): number | null => {
 export const scoreEmojiSvg = (value: number): string => {
   // Three digits need a smaller face; both get a little tracking so the digits
   // do not touch.
-  const fontSize = value >= 100 ? 27 : 35;
-  const letterSpacing = value >= 100 ? 1.5 : 2.5;
+  const fontSize = value >= 100 ? 20 : 26;
+  const letterSpacing = value >= 100 ? 1 : 1.5;
   return (
     '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">' +
     '<defs><linearGradient id="g" x1="0" y1="0" x2="0" y2="1">' +

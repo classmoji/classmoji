@@ -64,6 +64,15 @@ enum IssueStatus {
   CLOSED
 }
 
+// How a REPO assignment is submitted. ISSUE: Classmoji opens one GitHub issue
+// per student repo and closing it submits. REPO: no issue; any push to the
+// student repo's default branch submits, and the latest push (until graded)
+// is the submission time. Both grade on the same GitRepoAssignment row.
+enum SubmissionMode {
+  ISSUE
+  REPO
+}
+
 enum QuizStatus {
   DRAFT
   PUBLISHED
@@ -809,6 +818,8 @@ model Assignment {
   id               String         @id @default(uuid())
   module_id        String
   type             AssignmentType
+  // Meaningful for type = REPO only; quiz/form assignments keep the default.
+  submission_mode  SubmissionMode @default(ISSUE)
   repository_id    String?
   quiz_id          String?        @unique
   form_id          String?        @unique
@@ -939,11 +950,14 @@ model AutogradingResult {
   @@map("autograding_results")
 }
 
+// One student's (or team's) submission for one assignment. In ISSUE mode the
+// row is the GitHub issue in their repo (id = issue id, provider_id = issue
+// id); in REPO mode there is no issue and both provider fields are null.
 model GitRepoAssignment {
   id                    String      @id @default(uuid())
   provider              GitProvider
-  provider_id           String // GitHub issue ID
-  provider_issue_number Int // Issue #number
+  provider_id           String? // GitHub issue ID (ISSUE mode only)
+  provider_issue_number Int? // Issue #number (ISSUE mode only)
   git_repo_id           String
   assignment_id         String
   status                IssueStatus @default(OPEN)
@@ -961,6 +975,7 @@ model GitRepoAssignment {
   analytics_snapshot GitRepoAnalyticsSnapshot?
 
   @@unique([provider, provider_id])
+  @@unique([git_repo_id, assignment_id])
   @@index([git_repo_id])
   @@index([assignment_id])
   @@map("git_repo_assignments")

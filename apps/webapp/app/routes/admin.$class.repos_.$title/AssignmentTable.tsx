@@ -314,14 +314,13 @@ const AssignmentTable = ({
             )}
             <TableActionButtons
               onView={() => {
-                openRepositoryAssignmentInGithub(
-                  org,
-                  repoAssignment as {
-                    repository: { name: string; [key: string]: unknown };
-                    provider_issue_number: number;
-                    [key: string]: unknown;
-                  }
-                );
+                // The row IS the git repo; the assignment entry under it does not
+                // carry a `git_repo` back-reference, which is what the helper
+                // reads, so hand it the name explicitly.
+                openRepositoryAssignmentInGithub(org, {
+                  git_repo: { name: record.name },
+                  provider_issue_number: repoAssignment.provider_issue_number,
+                });
               }}
               hideViewText
             >
