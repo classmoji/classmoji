@@ -384,19 +384,17 @@ const StudentReport = ({ loaderData }: Route.ComponentProps) => {
   // No letter cutoffs configured means no letter to show, not an F.
   const shownLetter = letters.length > 0 ? (membership.letter_grade ?? computedLetter) : null;
 
-  // Module sections in module order; only assignments the student can see.
-  const sections = useMemo(() => {
-    const groups: Record<string, { title: string; position: number; items: Assignment[] }> = {};
-    for (const a of assignments) {
-      groups[a.module.id] ??= {
-        title: a.module.title,
-        position: a.module.position ?? 0,
-        items: [],
-      };
-      groups[a.module.id].items.push(a);
-    }
-    return Object.values(groups).sort((x, y) => x.position - y.position);
-  }, [assignments]);
+  // One flat list in deadline order; an assignment stands on its own, and its
+  // module is a caption on the line, not a grouping.
+  const ordered = useMemo(
+    () =>
+      [...assignments].sort((x, y) => {
+        const dx = x.student_deadline ? new Date(x.student_deadline).getTime() : Infinity;
+        const dy = y.student_deadline ? new Date(y.student_deadline).getTime() : Infinity;
+        return dx - dy || x.title.localeCompare(y.title);
+      }),
+    [assignments]
+  );
 
   const saveNote = () =>
     noteFetcher.submit(
@@ -414,6 +412,7 @@ const StudentReport = ({ loaderData }: Route.ComponentProps) => {
     const Icon = meta?.icon;
     const due = fmt(a.student_deadline);
     const parts: string[] = [];
+    parts.push(a.module.title);
     if (a.type === 'REPO') parts.push(`Repo · ${a.submission_mode === 'REPO' ? 'push' : 'issue'}`);
     else parts.push(meta?.label ?? a.type);
     parts.push(`${a.weight}%${a.is_extra_credit ? ' extra credit' : ''}`);
@@ -666,19 +665,13 @@ const StudentReport = ({ loaderData }: Route.ComponentProps) => {
       </div>
 
       <div className="flex flex-col gap-2 mb-5">
-        {sections.length === 0 && (
+        {ordered.length === 0 ? (
           <div className="text-center py-12 text-gray-500">
             <div className="font-medium">No published assignments yet</div>
           </div>
+        ) : (
+          <ul className="flex flex-col gap-2">{ordered.map(renderLine)}</ul>
         )}
-        {sections.map(section => (
-          <div key={section.title} className="flex flex-col gap-2">
-            <h2 className="text-xs font-semibold uppercase tracking-wide text-ink-3 pt-3 pb-1">
-              {section.title}
-            </h2>
-            <ul className="flex flex-col gap-2">{section.items.map(renderLine)}</ul>
-          </div>
-        ))}
       </div>
 
       <div className="rounded-2xl bg-panel ring-1 ring-line px-4 py-3 flex flex-col gap-2">
