@@ -76,3 +76,104 @@ export const assistantMayChangeEventType = (
   requested === null ||
   requested === ASSISTANT_EVENT_TYPE ||
   requested === current;
+
+/** The edit scope that owns ONE occurrence, and therefore its links. */
+export const EDIT_SCOPE_THIS_ONLY = 'this_only';
+
+/**
+ * Does an edit at this scope have an occurrence to save links — and the star —
+ * against?
+ *
+ * Only 'this_only' does, and so does a save that names no scope at all: a
+ * non-recurring event has a single occurrence, which is the one being edited.
+ * 'all' and 'this and future' address the SERIES, and a link saved from one of
+ * those lands in the undated bucket that a recurring event's occurrences never
+ * read — it would look like saving the links and behave like discarding them.
+ *
+ * Both web actions and the edit modal ask this. They used to carry three
+ * hand-written copies of the same expression, which is exactly the kind of rule
+ * that drifts in one place and is noticed in production.
+ */
+export const scopeCarriesLinks = (editScope?: string | null): boolean =>
+  !editScope || editScope === EDIT_SCOPE_THIS_ONLY;
+
+/** The three things a calendar event can link to, and therefore can star. */
+export const FEATURED_LINK_KINDS = ['page', 'slide', 'assignment'] as const;
+
+export type FeaturedLinkKind = (typeof FEATURED_LINK_KINDS)[number];
+
+/** Which linked resource the month view shows under this event, on this date. */
+export interface FeaturedLinkRef {
+  kind: FeaturedLinkKind;
+  id: string;
+}
+
+/** The ids a write has already proved belong to this classroom. */
+export interface ValidatedLinkIds {
+  pageIds: string[];
+  slideIds: string[];
+  assignmentIds: string[];
+}
+
+/**
+ * Which of the resources being linked — if any — gets the star.
+ *
+ * The answer is a FILTER, not a check: a star is a display preference, and a
+ * star naming something that is not being linked is simply not a star. That
+ * happens for ordinary reasons (a stale form field, an id the user unlinked in
+ * the same save) and for hostile ones (an id from another classroom, which the
+ * caller has already dropped from the validated lists below). Refusing the
+ * whole write over it would lose the user's real edit to protect a decoration;
+ * dropping the star silently keeps the links and shows nothing under the event,
+ * which is the calendar's own default.
+ *
+ * The id must appear in the list for ITS OWN KIND. Ids are uuids, so a page id
+ * will not be found among assignments by accident — but the kind is what the
+ * caller asserted, and honouring it elsewhere would star a row the user did not
+ * point at.
+ */
+export const resolveFeaturedLink = (
+  featured: FeaturedLinkRef | null | undefined,
+  validated: ValidatedLinkIds
+): FeaturedLinkRef | null => {
+  if (!featured || typeof featured.id !== 'string' || featured.id === '') return null;
+  if (!FEATURED_LINK_KINDS.includes(featured.kind)) return null;
+
+  const ids =
+    featured.kind === 'page'
+      ? validated.pageIds
+      : featured.kind === 'slide'
+        ? validated.slideIds
+        : validated.assignmentIds;
+
+  return ids.includes(featured.id) ? { kind: featured.kind, id: featured.id } : null;
+};
+
+/**
+ * Read a star out of the two loose fields a form payload carries it in.
+ *
+ * The web actions receive `featuredKind`/`featuredId` as whatever JSON held —
+ * a caller can send anything — so this is where they become a ref or nothing.
+ * It answers null generously: no id, no kind, a kind the calendar does not
+ * have. `resolveFeaturedLink` then decides whether that ref survives contact
+ * with the ids actually being linked.
+ */
+export const toFeaturedLinkRef = (kind: unknown, id: unknown): FeaturedLinkRef | null =>
+  typeof id === 'string' &&
+  id !== '' &&
+  typeof kind === 'string' &&
+  (FEATURED_LINK_KINDS as readonly string[]).includes(kind)
+    ? { kind: kind as FeaturedLinkKind, id }
+    : null;
+
+/**
+ * Does THIS row get `featured: true`?
+ *
+ * Asked once per row being created, against the already-resolved answer above,
+ * so exactly one row across the three tables can come out true.
+ */
+export const isFeaturedLinkRow = (
+  resolved: FeaturedLinkRef | null,
+  kind: FeaturedLinkKind,
+  id: string
+): boolean => resolved !== null && resolved.kind === kind && resolved.id === id;

@@ -293,7 +293,8 @@ describe('calendar action — which event a link write lands on', () => {
       'event-1',
       'class-1',
       { pageIds: ['p-1'], slideIds: [], assignmentIds: [] },
-      new Date('2026-09-28T00:00:00.000Z')
+      new Date('2026-09-28T00:00:00.000Z'),
+      null
     );
   });
 
@@ -342,7 +343,8 @@ describe('calendar action — which event a link write lands on', () => {
       'event-2',
       'class-1',
       expect.anything(),
-      new Date('2026-09-28T00:00:00.000Z')
+      new Date('2026-09-28T00:00:00.000Z'),
+      null
     );
   });
 
@@ -363,6 +365,133 @@ describe('calendar action — which event a link write lands on', () => {
     });
 
     expect(mocks.updateEventLinks).not.toHaveBeenCalled();
+  });
+});
+
+describe('calendar action — the starred link', () => {
+  /** The `featured` argument of the single updateEventLinks call. */
+  const featuredArg = () => mocks.updateEventLinks.mock.calls[0][4];
+
+  it('travels to the link write on a create', async () => {
+    await submit({
+      intent: 'create',
+      eventData: JSON.stringify({
+        title: 'Lecture 4',
+        event_type: 'LECTURE',
+        linkedPageIds: ['p-1'],
+        featuredKind: 'page',
+        featuredId: 'p-1',
+      }),
+    });
+
+    expect(featuredArg()).toEqual({ kind: 'page', id: 'p-1' });
+  });
+
+  it('never reaches createEvent, which knows nothing about links', async () => {
+    await submit({
+      intent: 'create',
+      eventData: JSON.stringify({
+        title: 'Lecture 4',
+        event_type: 'LECTURE',
+        linkedPageIds: ['p-1'],
+        featuredKind: 'page',
+        featuredId: 'p-1',
+      }),
+    });
+
+    const createData = mocks.createEvent.mock.calls[0][2] as Record<string, unknown>;
+    expect(createData).not.toHaveProperty('featuredKind');
+    expect(createData).not.toHaveProperty('featuredId');
+    expect(createData).not.toHaveProperty('linkedPageIds');
+  });
+
+  it('travels with a this_only edit', async () => {
+    await submit({
+      intent: 'update',
+      eventId: 'event-1',
+      eventData: JSON.stringify({
+        title: 'Lecture 3',
+        editScope: 'this_only',
+        occurrenceDate: '2026-09-28T00:00:00.000Z',
+        linkedSlideIds: ['s-1'],
+        featuredKind: 'slide',
+        featuredId: 's-1',
+      }),
+    });
+
+    expect(featuredArg()).toEqual({ kind: 'slide', id: 's-1' });
+  });
+
+  it.each(['all', 'this_and_future'])(
+    'is ignored with a %s edit, as the links are',
+    async scope => {
+      // A star is stored on a link row. A scope that has no occurrence to save a
+      // link against has nowhere to put a star either.
+      mocks.updateEventWithScope.mockResolvedValue({ id: 'event-2' });
+
+      await submit({
+        intent: 'update',
+        eventId: 'event-1',
+        eventData: JSON.stringify({
+          title: 'Lecture 3',
+          editScope: scope,
+          occurrenceDate: '2026-09-28T00:00:00.000Z',
+          linkedPageIds: ['p-1'],
+          featuredKind: 'page',
+          featuredId: 'p-1',
+        }),
+      });
+
+      expect(mocks.updateEventLinks).not.toHaveBeenCalled();
+    }
+  );
+
+  it('is dropped when it names a kind the calendar does not have', async () => {
+    await submit({
+      intent: 'update',
+      eventId: 'event-1',
+      eventData: JSON.stringify({
+        title: 'Lecture 3',
+        linkedPageIds: ['p-1'],
+        featuredKind: 'quiz',
+        featuredId: 'q-1',
+      }),
+    });
+
+    expect(featuredArg()).toBeNull();
+  });
+
+  it('is not claimed among the fields an update changed', async () => {
+    // The audit row lists which columns of the EVENT moved. A star is not one
+    // of them, and neither are the link ids beside it.
+    await submit({
+      intent: 'update',
+      eventId: 'event-1',
+      eventData: JSON.stringify({
+        title: 'Lecture 3',
+        linkedPageIds: ['p-1'],
+        featuredKind: 'page',
+        featuredId: 'p-1',
+      }),
+    });
+
+    expect(auditEntry().metadata.fields).toEqual(['title']);
+  });
+
+  it('never reaches updateEvent either', async () => {
+    await submit({
+      intent: 'update',
+      eventId: 'event-1',
+      eventData: JSON.stringify({
+        title: 'Lecture 3',
+        linkedPageIds: ['p-1'],
+        featuredKind: 'page',
+        featuredId: 'p-1',
+      }),
+    });
+
+    const updateData = mocks.updateEvent.mock.calls[0][1] as Record<string, unknown>;
+    expect(Object.keys(updateData)).toEqual(['title']);
   });
 });
 

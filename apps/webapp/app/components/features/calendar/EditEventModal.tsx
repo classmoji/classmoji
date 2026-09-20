@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import {
   Modal,
   Form,
@@ -30,7 +30,18 @@ import {
   EDIT_SCOPES,
   filterLinksForOccurrence,
   isExpandedOccurrence,
+  linkSelectionChanged,
+  type EventLinkIds,
 } from './eventScope';
+import {
+  buildLinkOptions,
+  createLinkTagRender,
+  eventLinkMeta,
+  mergeLinkMeta,
+  renderLinkOption,
+  useFeaturedLink,
+  type FeaturedRef,
+} from './linkTagRender';
 
 const { TextArea } = Input;
 
@@ -49,11 +60,15 @@ const DAYS_OF_WEEK = [
 interface CalendarResource {
   id: string;
   title: string;
+  /** Staff pickers offer drafts, marked as such. See the calendar loaders. */
+  is_draft?: boolean;
 }
 
 interface CalendarAssignment {
   id: string;
   title: string;
+  /** Always published today — the loaders do not offer unpublished ones. */
+  is_draft?: boolean;
   repository?: { title: string };
 }
 
@@ -83,6 +98,14 @@ interface EventFormData {
   linkedPageIds?: string[];
   linkedSlideIds?: string[];
   linkedAssignmentIds?: string[];
+  /**
+   * Which of those links the month view shows under the event. Two flat fields
+   * rather than an object because they travel with the link ids through the
+   * same form payload, and are dropped by the same rule when a scope cannot
+   * hold links.
+   */
+  featuredKind?: string | null;
+  featuredId?: string | null;
 }
 
 /** What a recurring delete carries back to the route. */
@@ -153,6 +176,46 @@ const EditEventModal = ({
   const [linkedSlideIds, setLinkedSlideIds] = useState<string[]>([]);
   const [linkedAssignmentIds, setLinkedAssignmentIds] = useState<string[]>([]);
 
+  // One star across all three pickers — see useFeaturedLink.
+  const { featured, setFeatured, toggleFeatured, keepFeaturedWithin } = useFeaturedLink();
+
+  /**
+   * What the pickers held when this occurrence was loaded.
+   *
+   * Only used to decide whether the scope dialog owes the user a warning: a
+   * series-wide edit cannot carry link or star changes, and saying nothing
+   * makes that look like a successful save.
+   */
+  const [prefilledLinks, setPrefilledLinks] = useState<EventLinkIds>({
+    linkedPageIds: [],
+    linkedSlideIds: [],
+    linkedAssignmentIds: [],
+    featuredKind: null,
+    featuredId: null,
+  });
+
+  const pagePicker = useMemo(() => buildLinkOptions(pages), [pages]);
+  const slidePicker = useMemo(() => buildLinkOptions(slides), [slides]);
+  const assignmentPicker = useMemo(
+    () =>
+      buildLinkOptions(assignments, a =>
+        a.repository?.title ? `${a.repository.title}: ${a.title}` : a.title
+      ),
+    [assignments]
+  );
+
+  // A chip has to be able to name a resource the pickers no longer offer — an
+  // assignment linked while published and unpublished since, say. The event
+  // itself carries the title; a live option still wins where there is one.
+  const chipMeta = useMemo(() => {
+    const fromEvent = eventLinkMeta(event ?? {});
+    return {
+      page: mergeLinkMeta(fromEvent.page, pagePicker.meta),
+      slide: mergeLinkMeta(fromEvent.slide, slidePicker.meta),
+      assignment: mergeLinkMeta(fromEvent.assignment, assignmentPicker.meta),
+    };
+  }, [event, pagePicker.meta, slidePicker.meta, assignmentPicker.meta]);
+
   const isRecurringOccurrence = event?.is_recurring && event?.occurrence_date;
 
   useEffect(() => {
@@ -196,8 +259,41 @@ const EditEventModal = ({
       setLinkedPageIds(pageLinks.map(l => l.page_id));
       setLinkedSlideIds(slideLinks.map(l => l.slide_id));
       setLinkedAssignmentIds(assignmentLinks.map(l => l.assignment_id));
+
+      // The star is prefilled from the same occurrence-filtered rows the
+      // pickers are, so it can only land on a chip that is actually on screen.
+      // At most one row carries it, and the database holds that; the order
+      // below only decides what a hand-written row would look like.
+      const starredPage = pageLinks.find(l => l.featured);
+      const starredSlide = slideLinks.find(l => l.featured);
+      const starredAssignment = assignmentLinks.find(l => l.featured);
+      const starred: FeaturedRef | null = starredPage
+        ? { kind: 'page', id: starredPage.page_id }
+        : starredSlide
+          ? { kind: 'slide', id: starredSlide.slide_id }
+          : starredAssignment
+            ? { kind: 'assignment', id: starredAssignment.assignment_id }
+            : null;
+      setFeatured(starred);
+      setPrefilledLinks({
+        linkedPageIds: pageLinks.map(l => l.page_id),
+        linkedSlideIds: slideLinks.map(l => l.slide_id),
+        linkedAssignmentIds: assignmentLinks.map(l => l.assignment_id),
+        featuredKind: starred?.kind ?? null,
+        featuredId: starred?.id ?? null,
+      });
     }
-  }, [event, form]);
+  }, [event, form, setFeatured]);
+
+  /** The current picker state, in the shape the scope helpers compare. */
+  const currentLinks: EventLinkIds = {
+    linkedPageIds,
+    linkedSlideIds,
+    linkedAssignmentIds,
+    featuredKind: featured?.kind ?? null,
+    featuredId: featured?.id ?? null,
+  };
+  const linksTouched = linkSelectionChanged(currentLinks, prefilledLinks);
 
   const buildEventData = (values: EventFormValues, includeLinks = true) => {
     const { start, end } = buildEventWindow(
@@ -230,6 +326,8 @@ const EditEventModal = ({
       eventData.linkedPageIds = linkedPageIds;
       eventData.linkedSlideIds = linkedSlideIds;
       eventData.linkedAssignmentIds = linkedAssignmentIds;
+      eventData.featuredKind = featured?.kind ?? null;
+      eventData.featuredId = featured?.id ?? null;
     }
 
     return eventData;
@@ -267,7 +365,7 @@ const EditEventModal = ({
           pendingFormData,
           editScope,
           event.occurrence_date ? new Date(event.occurrence_date).toISOString() : null,
-          { linkedPageIds, linkedSlideIds, linkedAssignmentIds }
+          currentLinks
         )
       );
     } else if (scopeAction === 'delete' && event.id) {
@@ -513,9 +611,24 @@ const EditEventModal = ({
                     <Select
                       mode="multiple"
                       placeholder="Link pages"
+                      // The placeholder is a span in antd, not an input
+                      // attribute, so a spec cannot find this picker by it.
+                      // Prefixed per modal: both are mounted at once, and an
+                      // unprefixed id would match two elements.
+                      data-testid="edit-calendar-link-pages"
                       value={linkedPageIds}
-                      onChange={setLinkedPageIds}
-                      options={pages.map(p => ({ value: p.id, label: p.title }))}
+                      onChange={ids => {
+                        setLinkedPageIds(ids);
+                        keepFeaturedWithin('page', ids);
+                      }}
+                      options={pagePicker.options}
+                      optionRender={renderLinkOption}
+                      tagRender={createLinkTagRender({
+                        kind: 'page',
+                        meta: chipMeta.page,
+                        featured,
+                        onToggleFeatured: toggleFeatured,
+                      })}
                       optionFilterProp="label"
                       allowClear
                       className="w-full"
@@ -525,9 +638,22 @@ const EditEventModal = ({
                     <Select
                       mode="multiple"
                       placeholder="Link slide decks"
+                      // The placeholder is a span in antd, not an input attribute,
+                      // so a spec cannot find this picker by it.
+                      data-testid="edit-calendar-link-slides"
                       value={linkedSlideIds}
-                      onChange={setLinkedSlideIds}
-                      options={slides.map(s => ({ value: s.id, label: s.title }))}
+                      onChange={ids => {
+                        setLinkedSlideIds(ids);
+                        keepFeaturedWithin('slide', ids);
+                      }}
+                      options={slidePicker.options}
+                      optionRender={renderLinkOption}
+                      tagRender={createLinkTagRender({
+                        kind: 'slide',
+                        meta: chipMeta.slide,
+                        featured,
+                        onToggleFeatured: toggleFeatured,
+                      })}
                       optionFilterProp="label"
                       allowClear
                       className="w-full"
@@ -537,12 +663,22 @@ const EditEventModal = ({
                     <Select
                       mode="multiple"
                       placeholder="Link assignments"
+                      // The placeholder is a span in antd, not an input attribute,
+                      // so a spec cannot find this picker by it.
+                      data-testid="edit-calendar-link-assignments"
                       value={linkedAssignmentIds}
-                      onChange={setLinkedAssignmentIds}
-                      options={assignments.map(a => ({
-                        value: a.id,
-                        label: a.repository?.title ? `${a.repository.title}: ${a.title}` : a.title,
-                      }))}
+                      onChange={ids => {
+                        setLinkedAssignmentIds(ids);
+                        keepFeaturedWithin('assignment', ids);
+                      }}
+                      options={assignmentPicker.options}
+                      optionRender={renderLinkOption}
+                      tagRender={createLinkTagRender({
+                        kind: 'assignment',
+                        meta: chipMeta.assignment,
+                        featured,
+                        onToggleFeatured: toggleFeatured,
+                      })}
                       optionFilterProp="label"
                       allowClear
                       className="w-full"
@@ -609,6 +745,19 @@ const EditEventModal = ({
             <Radio value={EDIT_SCOPES.THIS_AND_FUTURE}>This and future events</Radio>
             <Radio value={EDIT_SCOPES.ALL}>All events in series</Radio>
           </Radio.Group>
+
+          {/*
+            A link and its star belong to ONE date, so the two series-wide
+            scopes cannot carry them and the save drops them without a word.
+            Said here, beside the choice that decides it, and only when there
+            is something to lose.
+          */}
+          {scopeAction === 'edit' && linksTouched && (
+            <p className="mt-3 flex items-start gap-2 text-xs text-[#8a5b3a] dark:text-amber-200">
+              <IconInfoCircle size={14} className="shrink-0 mt-0.5" />
+              Link and star changes apply to this event only.
+            </p>
+          )}
         </div>
       </Modal>
     </Modal>

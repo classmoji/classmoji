@@ -33,6 +33,14 @@ interface CourseCalendarProps {
   /** Week view: drag across hour cells to pick a time range (click = 1 hour). */
   onRangeSelect?: ((start: Date, end: Date) => void) | null;
   canDragDeadlines?: boolean;
+  /**
+   * Where a starred resource under a month chip points. Passed straight to the
+   * month grid; the calendar itself does not read them.
+   */
+  classSlug?: string;
+  rolePrefix?: string;
+  pagesUrl?: string;
+  slidesUrl?: string;
 }
 
 /** The hour cells covered by an in-progress drag-to-select, on one day. */
@@ -51,6 +59,10 @@ const CourseCalendar = ({
   onMonthChange,
   onRangeSelect,
   canDragDeadlines = false,
+  classSlug,
+  rolePrefix,
+  pagesUrl,
+  slidesUrl,
 }: CourseCalendarProps) => {
   const nav = useCalendarNavigation(onMonthChange);
   const eventsFor = useEventsByDate(events, nav.selectedTypes);
@@ -174,6 +186,10 @@ const CourseCalendar = ({
             onShowMore={nav.focusDay}
             renderEvent={renderEvent}
             renderCell={renderCell}
+            classSlug={classSlug}
+            rolePrefix={rolePrefix}
+            pagesUrl={pagesUrl}
+            slidesUrl={slidesUrl}
           />
         ) : (
           <WeekGrid

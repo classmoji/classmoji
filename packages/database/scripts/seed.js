@@ -289,8 +289,29 @@ async function main() {
     { title: 'Week 1 Lab', event_type: 'LAB', offsetDays: 2, location: 'Room 101' },
     { title: 'TA Office Hours', event_type: 'OFFICE_HOURS', offsetDays: 3, location: 'Online' },
   ];
+  /**
+   * A day close to today that is still inside THIS month.
+   *
+   * The calendar opens on the current month, so an event a couple of days out
+   * falls off the screen entirely once "a couple of days out" crosses into the
+   * next one — on the 30th, every spec that clicks "Week 1 Lecture" fails, and
+   * only on that day. Stepping backwards when the forward date would leave the
+   * month keeps the event near today AND in the grid the calendar loads.
+   */
+  const nearbyDayInThisMonth = offsetDays => {
+    const today = new Date();
+    const forward = new Date(today);
+    forward.setDate(today.getDate() + offsetDays);
+    if (forward.getMonth() === today.getMonth()) return forward;
+
+    const backward = new Date(today);
+    backward.setDate(today.getDate() - offsetDays);
+    // Only a month shorter than the offsets could fail both ways, and none is.
+    return backward.getMonth() === today.getMonth() ? backward : today;
+  };
+
   for (const ev of calendarDefs) {
-    const start = new Date(Date.now() + ev.offsetDays * 24 * 60 * 60 * 1000);
+    const start = nearbyDayInThisMonth(ev.offsetDays);
     start.setHours(10, 0, 0, 0);
     const end = new Date(start.getTime() + 90 * 60 * 1000);
 

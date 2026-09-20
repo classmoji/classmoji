@@ -12,6 +12,8 @@ import {
   assistantMayChangeEventType,
   assistantMayCreateEventType,
   isCalendarTimeRangeError,
+  scopeCarriesLinks,
+  toFeaturedLinkRef,
 } from '@classmoji/services/calendar-policy';
 import { useCallout } from '@classmoji/ui-components';
 import getPrisma from '@classmoji/database';
@@ -88,16 +90,27 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
     events = [];
   }
 
-  // Fetch available resources for linking (all published content)
+  // What the modals offer to link.
+  //
+  // Draft pages and decks are IN, tagged as drafts in the picker. An instructor
+  // builds next week's page before publishing it and links it to the lecture
+  // then; leaving them out meant the one thing they wanted to attach was the
+  // one thing missing from the list — and a draft already linked came back as a
+  // bare uuid, because the tag had no option to take a title from.
+  //
+  // Only staff reach this loader (OWNER, TEACHER, ASSISTANT), and the calendar
+  // they are already served shows the same drafts with the same Draft pill.
+  // Assignments stay published-only: unpublished ones have no student-facing
+  // page to link to at all.
   const [pages, slides, assignments] = await Promise.all([
     getPrisma().page.findMany({
-      where: { classroom_id: classroom.id, is_draft: false },
-      select: { id: true, title: true },
+      where: { classroom_id: classroom.id },
+      select: { id: true, title: true, is_draft: true },
       orderBy: { title: 'asc' },
     }),
     getPrisma().slide.findMany({
-      where: { classroom_id: classroom.id, is_draft: false },
-      select: { id: true, title: true },
+      where: { classroom_id: classroom.id },
+      select: { id: true, title: true, is_draft: true },
       orderBy: { title: 'asc' },
     }),
     getPrisma().assignment.findMany({
@@ -169,7 +182,17 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
 
   if (intent === 'create') {
     const eventData = JSON.parse(formData.get('eventData') as string);
-    const { linkedPageIds, linkedSlideIds, linkedAssignmentIds, ...createData } = eventData;
+    // `featuredKind`/`featuredId` come out with the link ids and for the same
+    // reason: they describe the LINKS, not the event, and createEvent would
+    // reject columns it has never heard of.
+    const {
+      linkedPageIds,
+      linkedSlideIds,
+      linkedAssignmentIds,
+      featuredKind,
+      featuredId,
+      ...createData
+    } = eventData;
 
     // Assistants may only add office hours. The sibling /assistant variant of
     // this page enforces that, but the gate above admits ASSISTANT here too and
@@ -205,8 +228,9 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
           slideIds: linkedSlideIds || [],
           assignmentIds: linkedAssignmentIds || [],
         },
-        null
-      ); // null occurrence_date for non-recurring events
+        null, // null occurrence_date for non-recurring events
+        toFeaturedLinkRef(featuredKind, featuredId)
+      );
     }
 
     await audit('CREATE', 'CALENDAR', newEvent.id, {
@@ -255,6 +279,8 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
       linkedPageIds,
       linkedSlideIds,
       linkedAssignmentIds,
+      featuredKind,
+      featuredId,
       ...updateData
     } = eventData;
 
@@ -293,9 +319,9 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
     // links, so its link keys are ignored rather than written to the undated
     // bucket, which a recurring event's occurrences never read — writing there
     // would look like saving them and behave like discarding them.
-    const scopeCarriesLinks = !editScope || editScope === 'this_only';
+    // One rule, shared with the modal and the sibling action.
     const hasLinkUpdates =
-      scopeCarriesLinks &&
+      scopeCarriesLinks(editScope) &&
       (linkedPageIds !== undefined ||
         linkedSlideIds !== undefined ||
         linkedAssignmentIds !== undefined);
@@ -311,7 +337,10 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
           slideIds: linkedSlideIds || [],
           assignmentIds: linkedAssignmentIds || [],
         },
-        linkOccurrenceDate
+        linkOccurrenceDate,
+        // Ignored wherever the link keys are: a star with no date to sit on is
+        // as meaningless as a link with none.
+        toFeaturedLinkRef(featuredKind, featuredId)
       );
     }
 
@@ -674,6 +703,10 @@ const AdminCalendar = ({ loaderData }: Route.ComponentProps) => {
         canDragDeadlines={isAdmin}
         onMonthChange={handleMonthChange}
         onRangeSelect={canEdit ? handleRangeSelect : null}
+        classSlug={classSlug}
+        rolePrefix={rolePrefix}
+        pagesUrl={pagesUrl}
+        slidesUrl={slidesUrl}
       />
 
       {canEdit && (

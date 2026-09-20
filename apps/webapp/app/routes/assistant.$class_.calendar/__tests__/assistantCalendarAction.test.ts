@@ -229,8 +229,45 @@ describe('resource links follow the scope here too', () => {
       'event-2',
       'class-1',
       { pageIds: ['p-1'], slideIds: [], assignmentIds: [] },
-      new Date('2026-09-28T00:00:00.000Z')
+      new Date('2026-09-28T00:00:00.000Z'),
+      null
     );
+  });
+
+  it('carries the starred link to the same write', async () => {
+    mocks.updateEventWithScope.mockResolvedValue({ id: 'event-2' });
+
+    await submit({
+      intent: 'update',
+      eventId: 'event-1',
+      eventData: JSON.stringify({
+        title: 'Office hours',
+        editScope: 'this_only',
+        occurrenceDate: '2026-09-28T00:00:00.000Z',
+        linkedPageIds: ['p-1'],
+        featuredKind: 'page',
+        featuredId: 'p-1',
+      }),
+    });
+
+    expect(mocks.updateEventLinks.mock.calls[0][4]).toEqual({ kind: 'page', id: 'p-1' });
+  });
+
+  it('keeps the star out of the event write, as it keeps the link ids out', async () => {
+    await submit({
+      intent: 'update',
+      eventId: 'event-1',
+      eventData: JSON.stringify({
+        title: 'Office hours',
+        linkedPageIds: ['p-1'],
+        featuredKind: 'page',
+        featuredId: 'p-1',
+      }),
+    });
+
+    expect(Object.keys(mocks.updateEvent.mock.calls[0][1] as Record<string, unknown>)).toEqual([
+      'title',
+    ]);
   });
 });
 

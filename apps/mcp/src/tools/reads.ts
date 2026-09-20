@@ -254,7 +254,8 @@ export const listCalendarTool = mirrorResourceTool({
   description:
     'Calendar events for the current month — recurring events expanded, assignment deadlines ' +
     'merged in. Use list_calendar_range for another window. Any member; staff reads also include ' +
-    'linked draft pages/decks and links to unpublished assignments, flagged as such.',
+    'linked draft pages/decks and links to unpublished assignments, flagged as such. ' +
+    '`featured_resource` is the one link the month view shows under an event, or null.',
 });
 
 export const listCalendarRangeTool = mirrorResourceTool({
@@ -265,7 +266,8 @@ export const listCalendarRangeTool = mirrorResourceTool({
     'Calendar events for an explicit date range. `start` and `end` are ISO dates ' +
     '(YYYY-MM-DD, e.g. 2026-07-01 / 2026-08-31), start before end. Recurring events expanded, ' +
     'deadlines merged. Any member; staff reads also include linked draft pages/decks and links ' +
-    'to unpublished assignments, flagged as such.',
+    'to unpublished assignments, flagged as such. `featured_resource` is the one link the month ' +
+    'view shows under an event, or null.',
   extraInput: {
     start: z.string().describe('Range start, ISO date YYYY-MM-DD'),
     end: z.string().describe('Range end, ISO date YYYY-MM-DD (must be after start)'),

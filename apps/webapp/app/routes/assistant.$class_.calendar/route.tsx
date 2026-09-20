@@ -13,6 +13,8 @@ import {
   assistantMayChangeEventType,
   assistantMayCreateEventType,
   isCalendarTimeRangeError,
+  scopeCarriesLinks,
+  toFeaturedLinkRef,
 } from '@classmoji/services/calendar-policy';
 import { useCallout } from '@classmoji/ui-components';
 import getPrisma from '@classmoji/database';
@@ -80,16 +82,19 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
     events = [];
   }
 
-  // Fetch available resources for linking (all published content)
+  // What the modals offer to link. Draft pages and decks are in, tagged as
+  // drafts — the same list the admin calendar offers, for the same reasons, and
+  // to the same set of roles: assistants already SEE those drafts on the
+  // calendar this loader builds. Assignments stay published-only.
   const [pages, slides, assignments] = await Promise.all([
     getPrisma().page.findMany({
-      where: { classroom_id: classroom.id, is_draft: false },
-      select: { id: true, title: true },
+      where: { classroom_id: classroom.id },
+      select: { id: true, title: true, is_draft: true },
       orderBy: { title: 'asc' },
     }),
     getPrisma().slide.findMany({
-      where: { classroom_id: classroom.id, is_draft: false },
-      select: { id: true, title: true },
+      where: { classroom_id: classroom.id },
+      select: { id: true, title: true, is_draft: true },
       orderBy: { title: 'asc' },
     }),
     getPrisma().assignment.findMany({
@@ -138,7 +143,16 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
       return data({ success: false, error: ASSISTANT_EVENT_TYPE_MESSAGE }, { status: 403 });
     }
 
-    const { linkedPageIds, linkedSlideIds, linkedAssignmentIds, ...createData } = eventData;
+    // `featuredKind`/`featuredId` come out with the link ids and for the same
+    // reason: they describe the LINKS, not the event.
+    const {
+      linkedPageIds,
+      linkedSlideIds,
+      linkedAssignmentIds,
+      featuredKind,
+      featuredId,
+      ...createData
+    } = eventData;
 
     let newEvent;
     try {
@@ -163,7 +177,8 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
           slideIds: linkedSlideIds || [],
           assignmentIds: linkedAssignmentIds || [],
         },
-        null
+        null,
+        toFeaturedLinkRef(featuredKind, featuredId)
       );
     }
 
@@ -206,6 +221,8 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
         linkedPageIds,
         linkedSlideIds,
         linkedAssignmentIds,
+        featuredKind,
+        featuredId,
         ...updateData
       } = eventData;
 
@@ -238,9 +255,9 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
       // written to the undated bucket, which a recurring event's occurrences
       // never read — writing there would look like saving them and behave like
       // discarding them.
-      const scopeCarriesLinks = !editScope || editScope === 'this_only';
+      // One rule, shared with the modal and the sibling action.
       const hasLinkUpdates =
-        scopeCarriesLinks &&
+        scopeCarriesLinks(editScope) &&
         (linkedPageIds !== undefined ||
           linkedSlideIds !== undefined ||
           linkedAssignmentIds !== undefined);
@@ -256,7 +273,10 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
             slideIds: linkedSlideIds || [],
             assignmentIds: linkedAssignmentIds || [],
           },
-          linkOccurrenceDate
+          linkOccurrenceDate,
+          // Ignored wherever the link keys are: a star with no date to sit on
+          // is as meaningless as a link with none.
+          toFeaturedLinkRef(featuredKind, featuredId)
         );
       }
 
@@ -528,6 +548,10 @@ const AssistantCalendar = ({ loaderData }: Route.ComponentProps) => {
         onEventDrop={handleEventDrop}
         onMonthChange={handleMonthChange}
         onRangeSelect={handleRangeSelect}
+        classSlug={classSlug}
+        rolePrefix="assistant"
+        pagesUrl={pagesUrl}
+        slidesUrl={slidesUrl}
       />
 
       <AddEventModal

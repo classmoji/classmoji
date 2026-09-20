@@ -25,6 +25,40 @@ export interface CalendarEventCreator {
   login?: string | null;
 }
 
+/**
+ * Which resource the MONTH view shows under this event, already decided by the
+ * service for the viewer being answered.
+ *
+ * Null for a deadline or a form close — synthesized items with nothing linked,
+ * let alone starred. Null is ALSO what a student gets when the starred resource
+ * is a draft: they are shown nothing rather than told something is being kept
+ * from them, which is exactly what an event nobody starred looks like.
+ *
+ * `is_draft` is what the Draft treatment reads, and only staff are ever handed
+ * a true one. On an assignment it covers the pair the link list marks together:
+ * an unpublished assignment, or one in an unpublished repository.
+ */
+export interface CalendarFeaturedResource {
+  kind: 'page' | 'slide' | 'assignment';
+  id: string;
+  title: string;
+  is_draft: boolean;
+}
+
+/**
+ * Is THIS raw link row the starred one?
+ *
+ * Only on the `_raw*Links` rows, which exist solely so the edit modal can
+ * prefill one date's pickers. The DISPLAY arrays deliberately do not carry it:
+ * which link is starred is answered once, by `featured_resource`, already
+ * resolved for this viewer.
+ *
+ * Optional, unlike `is_draft`, and for the opposite reason: an absent star
+ * reads as `undefined`, which is falsy, which means "not starred" — the quiet,
+ * correct default. Nothing is hidden by forgetting it.
+ */
+type MaybeFeatured = { featured?: boolean };
+
 export interface CalendarLinkedPage {
   page: {
     id: string;
@@ -75,17 +109,17 @@ export interface CalendarLinkedAssignment {
  * occurrence. `occurrence_date` arrives as a real `Date` over single fetch and
  * as a string from anything that has round-tripped through JSON.
  */
-export interface CalendarRawPageLink {
+export interface CalendarRawPageLink extends MaybeFeatured {
   page_id: string;
   occurrence_date?: string | Date | null;
 }
 
-export interface CalendarRawSlideLink {
+export interface CalendarRawSlideLink extends MaybeFeatured {
   slide_id: string;
   occurrence_date?: string | Date | null;
 }
 
-export interface CalendarRawAssignmentLink {
+export interface CalendarRawAssignmentLink extends MaybeFeatured {
   assignment_id: string;
   occurrence_date?: string | Date | null;
 }
@@ -131,6 +165,8 @@ export interface CalendarEventWithLinks {
   pages?: CalendarLinkedPage[] | null;
   slides?: CalendarLinkedSlide[] | null;
   assignments?: CalendarLinkedAssignment[] | null;
+  /** The one linked resource the month view draws under this event, if any. */
+  featured_resource?: CalendarFeaturedResource | null;
   github_issue_url?: string | null;
   _rawPageLinks?: CalendarRawPageLink[];
   _rawSlideLinks?: CalendarRawSlideLink[];

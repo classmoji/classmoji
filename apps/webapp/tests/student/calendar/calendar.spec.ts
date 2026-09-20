@@ -1,6 +1,8 @@
 import type { Locator, Page } from '@playwright/test';
 import { test, expect } from '../../fixtures/auth.fixture';
 import { waitForDataLoad, waitForModal } from '../../helpers/wait.helpers';
+import { getTestPrisma, getClassroomBySlug } from '../../helpers/prisma.helpers';
+import { TEST_CLASSROOM } from '../../helpers/env.helpers';
 
 /**
  * Calendar at /student/$class/calendar.
@@ -60,8 +62,18 @@ test.describe('Student Calendar Display', () => {
     await page.getByRole('button', { name: 'Month', exact: true }).click();
     const now = new Date();
     const monthNames = [
-      'January', 'February', 'March', 'April', 'May', 'June',
-      'July', 'August', 'September', 'October', 'November', 'December',
+      'January',
+      'February',
+      'March',
+      'April',
+      'May',
+      'June',
+      'July',
+      'August',
+      'September',
+      'October',
+      'November',
+      'December',
     ];
     const label = `${monthNames[now.getMonth()]} ${now.getFullYear()}`;
     await expect(rangeLabel(page)).toHaveText(new RegExp(label));
@@ -185,5 +197,83 @@ test.describe('Student Calendar Event Detail', () => {
     await expect(modal.getByRole('button', { name: 'Save changes' })).toHaveCount(0);
     await expect(modal.getByRole('button', { name: /Delete/ })).toHaveCount(0);
     await expect(page.getByText('Edit event', { exact: true })).toHaveCount(0);
+  });
+});
+
+/**
+ * The starred resource under a month chip.
+ *
+ * The link and its star are written straight to the database rather than
+ * through the staff UI: this spec is about what a STUDENT is served, and it
+ * should not depend on another suite having run first. The rows are removed
+ * afterwards.
+ */
+test.describe('Student Calendar Starred Resource', () => {
+  let eventId: string;
+  let pageTitle: string;
+
+  test.beforeAll(async () => {
+    const prisma = getTestPrisma();
+    const classroom = await getClassroomBySlug(TEST_CLASSROOM);
+    const now = new Date();
+
+    const event = await prisma.calendarEvent.findFirst({
+      where: {
+        classroom_id: classroom.id,
+        title: 'Week 1 Lecture',
+        start_time: { gte: new Date(now.getFullYear(), now.getMonth(), 1) },
+      },
+      orderBy: { start_time: 'asc' },
+      select: { id: true },
+    });
+    if (!event) throw new Error('No "Week 1 Lecture" in the current month. Run `npm run db:seed`.');
+    eventId = event.id;
+
+    const published = await prisma.page.findFirst({
+      where: { classroom_id: classroom.id, is_draft: false },
+      select: { id: true, title: true },
+      orderBy: { title: 'asc' },
+    });
+    if (!published) throw new Error('Need a published page. Run `npm run db:seed`.');
+    pageTitle = published.title;
+
+    // Idempotent on purpose. A row left behind by an interrupted run now trips
+    // the partial unique index on (event_id) WHERE featured, so the setup has
+    // to clear the event's links before it writes its own rather than assume a
+    // clean table.
+    await prisma.calendarEventPageLink.deleteMany({ where: { event_id: eventId } });
+
+    // A non-recurring event keeps its links in the undated bucket.
+    await prisma.calendarEventPageLink.create({
+      data: {
+        event_id: eventId,
+        page_id: published.id,
+        occurrence_date: null,
+        featured: true,
+      },
+    });
+  });
+
+  test.afterAll(async () => {
+    if (eventId) {
+      await getTestPrisma().calendarEventPageLink.deleteMany({ where: { event_id: eventId } });
+    }
+  });
+
+  test('month view shows the starred page under the event', async ({
+    authenticatedPage: page,
+    testOrg,
+  }) => {
+    await openCalendar(page, testOrg);
+    await page.getByRole('button', { name: 'Month', exact: true }).click();
+
+    await expect(page.getByText('Week 1 Lecture').first()).toBeVisible();
+    // A published page, so a student is shown it — and it is a control, not a
+    // label. A BUTTON rather than a link: the student shell mounts the page
+    // peek provider, so `PageLink` opens the drawer instead of a new tab. The
+    // staff calendar, which has no provider, renders the same line as an <a>.
+    await expect(
+      page.getByRole('button', { name: `Open page ${pageTitle}` }).first()
+    ).toBeVisible();
   });
 });

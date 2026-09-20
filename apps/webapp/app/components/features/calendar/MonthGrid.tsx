@@ -10,6 +10,7 @@ import { Fragment } from 'react';
 import { monthDropId } from './geometry';
 import { DAY_LABELS, eventKey, formatDayLabel, isCurrentMonth, isSameDay } from './utils';
 import EventChip from './EventChip';
+import FeaturedResourceLink from './FeaturedResourceLink';
 import { defaultRenderCell, defaultRenderEvent } from './gridRenderProps';
 import type { RenderCell, RenderEvent } from './gridRenderProps';
 import type { CalendarEventWithLinks } from './types';
@@ -39,6 +40,18 @@ interface MonthGridProps {
   onShowMore?: (date: Date) => void;
   renderEvent?: RenderEvent;
   renderCell?: RenderCell;
+  /**
+   * Where the starred resource under an event chip points. Threaded from the
+   * route through the calendar container, because the month grid itself knows
+   * nothing about which classroom or which role is looking at it.
+   *
+   * Left out, the starred line still renders — it simply links the way the link
+   * list does when a caller gives it no bases.
+   */
+  classSlug?: string;
+  rolePrefix?: string;
+  pagesUrl?: string;
+  slidesUrl?: string;
 }
 
 const MonthGrid = ({
@@ -50,6 +63,10 @@ const MonthGrid = ({
   onShowMore,
   renderEvent = defaultRenderEvent,
   renderCell = defaultRenderCell,
+  classSlug,
+  rolePrefix,
+  pagesUrl,
+  slidesUrl,
 }: MonthGridProps) => {
   const weeks: Date[][] = [];
   for (let i = 0; i < dates.length; i += 7) weeks.push(dates.slice(i, i + 7));
@@ -107,14 +124,29 @@ const MonthGrid = ({
 
                         <div className="flex flex-col gap-1 min-w-0">
                           {visible.map((event, idx) => (
-                            <Fragment key={eventKey(event, idx)}>
+                            // The starred resource is a SIBLING of the block,
+                            // outside whatever the caller wrapped it in: a link
+                            // cannot live inside the event's button, and out
+                            // here the staff calendar's drag layer never sees
+                            // it at all.
+                            <div key={eventKey(event, idx)} className="flex flex-col min-w-0">
                               {renderEvent({
                                 event,
                                 placement: 'month',
                                 className: 'min-w-0',
                                 children: <EventChip event={event} onClick={onEventClick} />,
                               })}
-                            </Fragment>
+                              {event.featured_resource && (
+                                <FeaturedResourceLink
+                                  featured={event.featured_resource}
+                                  event={event}
+                                  classSlug={classSlug}
+                                  rolePrefix={rolePrefix}
+                                  pagesUrl={pagesUrl}
+                                  slidesUrl={slidesUrl}
+                                />
+                              )}
+                            </div>
                           ))}
                           {overflow > 0 &&
                             (onShowMore ? (

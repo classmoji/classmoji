@@ -13,6 +13,7 @@ import {
   filterLinksForOccurrence,
   isExpandedOccurrence,
   scopeCarriesLinks,
+  linkSelectionChanged,
 } from '../eventScope';
 
 const BASE = { title: 'Lecture 3', start_time: '2026-09-21T14:00:00.000Z' };
@@ -126,5 +127,50 @@ describe('which items count as an expanded occurrence', () => {
     );
 
     expect(kept.map(l => l.page_id)).toEqual(['p-undated']);
+  });
+});
+
+describe('has the user touched the links or the star?', () => {
+  const PREFILL = {
+    linkedPageIds: ['p-1', 'p-2'],
+    linkedSlideIds: [],
+    linkedAssignmentIds: ['a-1'],
+    featuredKind: 'page',
+    featuredId: 'p-1',
+  };
+
+  it('says no when nothing moved', () => {
+    expect(linkSelectionChanged({ ...PREFILL }, PREFILL)).toBe(false);
+  });
+
+  it('treats a missing star and an explicit null as the same nothing', () => {
+    // The prefill writes null; a modal that never had one may send neither.
+    expect(
+      linkSelectionChanged(
+        { linkedPageIds: [], linkedSlideIds: [], linkedAssignmentIds: [] },
+        {
+          linkedPageIds: [],
+          linkedSlideIds: [],
+          linkedAssignmentIds: [],
+          featuredKind: null,
+          featuredId: null,
+        }
+      )
+    ).toBe(false);
+  });
+
+  it('notices a link added, removed or reordered', () => {
+    // Order is stored on the row, so a reshuffle is a real change.
+    expect(linkSelectionChanged({ ...PREFILL, linkedPageIds: ['p-1'] }, PREFILL)).toBe(true);
+    expect(linkSelectionChanged({ ...PREFILL, linkedSlideIds: ['s-1'] }, PREFILL)).toBe(true);
+    expect(linkSelectionChanged({ ...PREFILL, linkedPageIds: ['p-2', 'p-1'] }, PREFILL)).toBe(true);
+  });
+
+  it('notices the star moving, clearing or changing kind', () => {
+    expect(linkSelectionChanged({ ...PREFILL, featuredId: 'p-2' }, PREFILL)).toBe(true);
+    expect(
+      linkSelectionChanged({ ...PREFILL, featuredKind: null, featuredId: null }, PREFILL)
+    ).toBe(true);
+    expect(linkSelectionChanged({ ...PREFILL, featuredKind: 'slide' }, PREFILL)).toBe(true);
   });
 });

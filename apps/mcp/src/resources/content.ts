@@ -322,6 +322,21 @@ interface CalendarLinkedAssignment {
   } | null;
 }
 
+/**
+ * The one linked resource the web calendar draws under an event in month view.
+ *
+ * The service has already decided it for the viewer being answered — a student
+ * whose event stars a draft gets null, not a withheld title — and the shaping
+ * below applies the staff-only rule a second time, as it does to every other
+ * piece of linked content here.
+ */
+interface CalendarFeaturedResource {
+  kind: string;
+  id: string;
+  title?: string | null;
+  is_draft?: boolean;
+}
+
 /** Union row shape: expanded CalendarEvents + synthesized deadline items. */
 interface CalendarRow {
   id: string;
@@ -344,6 +359,7 @@ interface CalendarRow {
   pages?: CalendarLinkedPage[];
   slides?: CalendarLinkedSlide[];
   assignments?: CalendarLinkedAssignment[];
+  featured_resource?: CalendarFeaturedResource | null;
 }
 
 /**
@@ -362,6 +378,11 @@ interface CalendarRow {
  * the class cannot see it yet — the web calendar marks those with a Draft pill
  * for the same reason. A student's rows carry no such content, so the flags
  * would be a constant `false` there and are left off.
+ *
+ * `featured_resource` — which ONE of those links the web calendar shows under
+ * the event in month view — is emitted for both, in the form the viewer's own
+ * calendar would draw: null where nothing is starred, and null for a student
+ * whose event stars something they may not see.
  */
 function shapeCalendarRow(row: CalendarRow, staff: boolean) {
   const pages = (row.pages ?? [])
@@ -408,6 +429,20 @@ function shapeCalendarRow(row: CalendarRow, staff: boolean) {
       : []
   );
 
+  // The starred resource follows the same two rules as the arrays above: the
+  // staff-only filter is re-applied here, and the publication flag travels only
+  // with a staff payload, where it is what marks the Draft treatment.
+  const featured = row.featured_resource;
+  const featured_resource =
+    featured && (staff || featured.is_draft !== true)
+      ? {
+          kind: featured.kind,
+          id: featured.id,
+          title: featured.title ?? null,
+          ...(staff ? { is_draft: featured.is_draft === true } : {}),
+        }
+      : null;
+
   return {
     id: row.id,
     event_type: row.event_type,
@@ -435,6 +470,7 @@ function shapeCalendarRow(row: CalendarRow, staff: boolean) {
     pages,
     slides,
     assignments,
+    featured_resource,
   };
 }
 

@@ -125,6 +125,16 @@ describe('calendar service → client event shape', () => {
   it('delivers the creator id the staff routes gate editing on', () => {
     expectTypeOf<ExpandedItem['created_by']>().toExtend<CalendarEventWithLinks['created_by']>();
   });
+
+  it('delivers a starred resource the month view can draw, on EVERY kind of item', () => {
+    // The synthetic items answer `null` rather than leaving the key off:
+    // neither carries an index signature, so a grid reading
+    // `featured_resource` across the union needs it declared on every variant.
+    expectTypeOf<ExpandedItem['featured_resource']>().toExtend<
+      CalendarEventWithLinks['featured_resource']
+    >();
+    expectTypeOf<SyntheticItem['featured_resource']>().toEqualTypeOf<null>();
+  });
 });
 
 describe('client event shape → calendar service', () => {
