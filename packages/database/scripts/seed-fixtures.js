@@ -67,10 +67,9 @@ export async function seedTeamWithGroupRepo(prisma, { classroom, students }) {
 
   const repository = await prisma.repository.upsert({
     where: { classroom_id_title: { classroom_id: classroom.id, title: 'group-project' } },
-    update: { module_id: module.id },
+    update: {},
     create: {
       classroom_id: classroom.id,
-      module_id: module.id,
       title: 'group-project',
       template: 'dev-org/group-project-template',
       type: 'GROUP',
@@ -230,10 +229,9 @@ export async function seedForeignClassroom(prisma, { org }) {
 
   const repository = await prisma.repository.upsert({
     where: { classroom_id_title: { classroom_id: classroom.id, title: 'other-hello-world' } },
-    update: { module_id: module.id },
+    update: {},
     create: {
       classroom_id: classroom.id,
-      module_id: module.id,
       title: 'other-hello-world',
       template: 'dev-org/hello-world-template',
       type: 'INDIVIDUAL',

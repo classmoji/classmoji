@@ -674,12 +674,12 @@ model ImportJob {
 // ============================================================================
 
 // The GitHub provisioning unit: a template that becomes one git repo per
-// student or team. Lives inside exactly one Module. Grading weight lives on
-// the Assignments, not here.
+// student or team. A repository has no module of its own: it is the storage a
+// REPO assignment points at, and one repository can serve assignments in
+// several modules. Grading weight lives on the Assignments, not here.
 model Repository {
   id                      String             @id @default(uuid())
   classroom_id            String
-  module_id               String
   title                   String
   slug                    String? // Set once on creation from title, never updated
   template                String // Template repo name
@@ -696,9 +696,6 @@ model Repository {
   updated_at              DateTime           @default(now()) @updatedAt
 
   classroom         Classroom         @relation(fields: [classroom_id], references: [id], onDelete: Cascade)
-  // Restrict: deleting a module must never cascade into student git repos,
-  // grades and regrades. The service refuses to delete a non-empty module.
-  module            Module            @relation(fields: [module_id], references: [id], onDelete: Restrict)
   tag               Tag?              @relation(fields: [tag_id], references: [id])
   assignments       Assignment[]
   git_repos         GitRepo[]
@@ -710,14 +707,14 @@ model Repository {
 
   @@unique([classroom_id, title])
   @@index([classroom_id])
-  @@index([module_id])
   @@map("repositories")
 }
 
-// A Module is the root unit of coursework: it owns repositories and
-// assignments (via their module_id) and carries an ordered list of content
-// items (pages, slides, quizzes, forms) on ModuleItem. Modules have no weight;
-// grading weight lives on Assignment.
+// A Module is the root unit of coursework: it owns assignments (via their
+// module_id) and carries an ordered list of content items (pages, slides,
+// quizzes, forms) on ModuleItem. Repositories are classroom-level storage that
+// REPO assignments point at. Modules have no weight; grading weight lives on
+// Assignment.
 model Module {
   id           String   @id @default(uuid())
   classroom_id String
@@ -733,10 +730,9 @@ model Module {
   created_at   DateTime @default(now())
   updated_at   DateTime @default(now()) @updatedAt
 
-  classroom    Classroom    @relation(fields: [classroom_id], references: [id], onDelete: Cascade)
-  items        ModuleItem[]
-  repositories Repository[]
-  assignments  Assignment[]
+  classroom   Classroom    @relation(fields: [classroom_id], references: [id], onDelete: Cascade)
+  items       ModuleItem[]
+  assignments Assignment[]
 
   @@unique([classroom_id, title])
   @@index([classroom_id])
@@ -745,8 +741,9 @@ model Module {
 
 enum ModuleItemType {
   PAGE
-  // Deprecated: a repository belongs to a module through Repository.module_id.
-  // Rows of this type are kept read-only for ordering; no new ones are written.
+  // Deprecated legacy pointer: it no longer implies ownership (a repository
+  // reaches a module only through its assignments). Rows are kept read-only;
+  // no new ones are written and the UI ignores them.
   REPOSITORY
   QUIZ
   SLIDE

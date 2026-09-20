@@ -6,7 +6,6 @@
 -- been reviewed. After this the previous app version no longer runs.
 -- ============================================================================
 
-ALTER TABLE "repositories" ALTER COLUMN "module_id" SET NOT NULL;
 ALTER TABLE "assignments"  ALTER COLUMN "module_id" SET NOT NULL;
 
 -- Callers must say what kind of assignment they are creating.

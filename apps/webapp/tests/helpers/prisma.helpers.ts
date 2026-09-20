@@ -62,18 +62,18 @@ export async function getClassroomBySlug(
 export async function getRepositoryByTitle(
   classroomId: string,
   title: string
-): Promise<{ id: string; title: string; is_published: boolean; module_id: string } | null> {
+): Promise<{ id: string; title: string; is_published: boolean } | null> {
   const prisma = getTestPrisma();
   return prisma.repository.findUnique({
     where: { classroom_id_title: { classroom_id: classroomId, title } },
-    select: { id: true, title: true, is_published: true, module_id: true },
+    select: { id: true, title: true, is_published: true },
   });
 }
 
 /**
- * Find or create the Module a seeded repository lives in. Repositories must
- * belong to exactly one module, so every repository seeder goes through here.
- * Defaults to one shared, published module per classroom.
+ * Find or create the Module a seeded assignment lives in. Every assignment
+ * belongs to exactly one module, so every seeder that creates one goes
+ * through here. Defaults to one shared, published module per classroom.
  */
 export async function ensureSeedModule(
   classroomId: string,
@@ -142,7 +142,6 @@ export async function seedRepositoryWithAssignment(
   const repository = await prisma.repository.create({
     data: {
       classroom_id: classroomId,
-      module_id: moduleId,
       title,
       slug: title,
       template: 'dev-org/test-template',
@@ -223,7 +222,6 @@ export async function seedStudentSubmission(
   const repository = await prisma.repository.create({
     data: {
       classroom_id: classroomId,
-      module_id: moduleId,
       title,
       slug: title,
       template: 'dev-org/test-template',

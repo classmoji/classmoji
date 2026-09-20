@@ -137,7 +137,7 @@ async function main() {
     if (u.role === 'STUDENT') studentUsers.push(user);
   }
 
-  // ── Module → Repository + Assignments ───────────────────────────────────
+  // ── Module → Assignments (each pointing at a Repository) ────────────────
   const module = await prisma.module.upsert({
     where: { classroom_id_title: { classroom_id: classroom.id, title: 'Week 1: Hello World' } },
     update: { is_published: true },
@@ -152,26 +152,15 @@ async function main() {
 
   const repository = await prisma.repository.upsert({
     where: { classroom_id_title: { classroom_id: classroom.id, title: 'hello-world' } },
-    update: { module_id: module.id },
+    update: {},
     create: {
       classroom_id: classroom.id,
-      module_id: module.id,
       title: 'hello-world',
       template: 'dev-org/hello-world-template',
       type: 'INDIVIDUAL',
       is_published: true,
     },
   });
-  // Legacy REPOSITORY module item, kept for ordering on the module page.
-  const existingItem = await prisma.moduleItem.findFirst({
-    where: { module_id: module.id, repository_id: repository.id },
-  });
-  if (!existingItem) {
-    await prisma.moduleItem.create({
-      data: { module_id: module.id, item_type: 'REPOSITORY', repository_id: repository.id, position: 0 },
-    });
-  }
-
   const assignments = [];
   for (const [i, title] of ['Hello World Part 1', 'Hello World Part 2'].entries()) {
     const a = await prisma.assignment.upsert({

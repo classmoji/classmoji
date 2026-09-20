@@ -1,11 +1,12 @@
 -- ============================================================================
 -- Coursework model, phase 1 of 2: ADDITIVE + BACKFILL.
 --
--- Module becomes the root unit of coursework. Every Repository now belongs to
--- exactly one Module (repositories.module_id); every Assignment belongs to a
--- Module and has a kind (assignments.type = REPO | QUIZ | FORM). Grading
--- weight moves off Repository onto Assignment, flattened so that every
--- student's course grade is unchanged (see step 8). Drop-lowest is removed.
+-- Module becomes the root unit of coursework. Every Assignment belongs to a
+-- Module and has a kind (assignments.type = REPO | QUIZ | FORM). A Repository
+-- has no module of its own: it is storage that a REPO assignment points at,
+-- so one repository can serve assignments in several modules. Grading weight
+-- moves off Repository onto Assignment, flattened so that every student's
+-- course grade is unchanged (see step 5). Drop-lowest is removed.
 --
 -- This migration leaves the old repository columns in place, so the previous
 -- app version keeps running against the result. The companion migration
@@ -50,8 +51,6 @@ ALTER TYPE "AssignmentType" RENAME TO "RepositoryType";
 CREATE TYPE "AssignmentType" AS ENUM ('REPO', 'QUIZ', 'FORM');
 
 -- 2. New columns, nullable / defaulted for now.
-ALTER TABLE "repositories" ADD COLUMN "module_id" TEXT;
-
 ALTER TABLE "assignments"
   ADD COLUMN "module_id"       TEXT,
   ADD COLUMN "type"            "AssignmentType" NOT NULL DEFAULT 'REPO',
@@ -65,42 +64,42 @@ ALTER TABLE "assignments"
   ALTER COLUMN "weight" TYPE DOUBLE PRECISION USING "weight"::double precision,
   ALTER COLUMN "weight" SET DEFAULT 100;
 
--- 3. repositories.module_id from module_items: a repository that sits in
---    several modules keeps the canonical one = lowest (position, created_at, id).
-UPDATE "repositories" r
-SET "module_id" = pick."module_id"
-FROM (
-  SELECT DISTINCT ON (mi."repository_id") mi."repository_id", mi."module_id"
-  FROM "module_items" mi
-  JOIN "modules" m ON m."id" = mi."module_id"
-  WHERE mi."repository_id" IS NOT NULL
-  ORDER BY mi."repository_id", m."position" ASC, m."created_at" ASC, m."id" ASC
-) pick
-WHERE pick."repository_id" = r."id";
+-- 3. Which module each repository's existing assignments move into. The
+--    mapping lives only for this transaction: a repository that sits in
+--    several modules (legacy REPOSITORY module_items) hands its assignments
+--    to the canonical one = lowest (position, created_at, id). The legacy
+--    module_items rows are left as they are; the UI no longer reads them.
+CREATE TEMP TABLE "repo_module" (
+  "repository_id" TEXT PRIMARY KEY,
+  "module_id"     TEXT NOT NULL
+) ON COMMIT DROP;
 
--- 3b. Report, then remove, the non-canonical REPOSITORY items so that
---     module_items(REPOSITORY).module_id == repositories.module_id holds.
+INSERT INTO "repo_module" ("repository_id", "module_id")
+SELECT DISTINCT ON (mi."repository_id") mi."repository_id", mi."module_id"
+FROM "module_items" mi
+JOIN "modules" m ON m."id" = mi."module_id"
+WHERE mi."repository_id" IS NOT NULL
+ORDER BY mi."repository_id", m."position" ASC, m."created_at" ASC, m."id" ASC;
+
+-- 3b. Report the repositories that sat in more than one module, so the owner
+--     knows where their assignments went.
 INSERT INTO "coursework_migration_report" ("id", "kind", "classroom_id", "subject_id", "details")
 SELECT gen_random_uuid()::text, 'repository_in_multiple_modules', m."classroom_id", mi."repository_id",
        jsonb_build_object('module_item_id', mi."id",
                           'module_id', mi."module_id",
                           'module_title', m."title",
                           'position', mi."position",
-                          'canonical_module_id', r."module_id")
+                          'canonical_module_id', rm."module_id")
 FROM "module_items" mi
 JOIN "modules" m ON m."id" = mi."module_id"
-JOIN "repositories" r ON r."id" = mi."repository_id"
-WHERE mi."repository_id" IS NOT NULL AND mi."module_id" <> r."module_id";
+JOIN "repo_module" rm ON rm."repository_id" = mi."repository_id"
+WHERE mi."repository_id" IS NOT NULL AND mi."module_id" <> rm."module_id";
 
-DELETE FROM "module_items" mi
-USING "repositories" r
-WHERE mi."repository_id" = r."id" AND mi."module_id" <> r."module_id";
-
--- 4. Orphan repositories (no module): one synthesized module each, titled
---    after the repository (" (n)" suffix on collision), appended to the
---    classroom's module order, is_published mirrored, slug derived the way
---    titleToIdentifier() does it. Also writes the REPOSITORY module_item so
---    the existing module page keeps listing it.
+-- 4. Repositories with assignments but no module: one synthesized module
+--    each, titled after the repository (" (n)" suffix on collision), appended
+--    to the classroom's module order, is_published mirrored, slug derived the
+--    way titleToIdentifier() does it. A repository with no assignments needs
+--    no module; it stays reachable on the Repositories page.
 DO $$
 DECLARE
   r RECORD;
@@ -112,7 +111,8 @@ BEGIN
   FOR r IN
     SELECT rp."id", rp."classroom_id", rp."title", rp."is_published"
     FROM "repositories" rp
-    WHERE rp."module_id" IS NULL
+    WHERE NOT EXISTS (SELECT 1 FROM "repo_module" rm WHERE rm."repository_id" = rp."id")
+      AND EXISTS (SELECT 1 FROM "assignments" a WHERE a."repository_id" = rp."id")
     ORDER BY rp."classroom_id", rp."created_at", rp."id"
   LOOP
     candidate := r."title";
@@ -135,10 +135,7 @@ BEGIN
               regexp_replace(lower(candidate), '[^a-z0-9 -]', '', 'g'), ' +', '-', 'g'), '-+', '-', 'g')),
             next_pos, r."is_published", false, now(), now());
 
-    INSERT INTO "module_items" ("id", "module_id", "item_type", "position", "repository_id")
-    VALUES (gen_random_uuid()::text, new_module_id, 'REPOSITORY', 0, r."id");
-
-    UPDATE "repositories" SET "module_id" = new_module_id WHERE "id" = r."id";
+    INSERT INTO "repo_module" ("repository_id", "module_id") VALUES (r."id", new_module_id);
 
     INSERT INTO "coursework_migration_report" ("id", "kind", "classroom_id", "subject_id", "details")
     VALUES (gen_random_uuid()::text, 'orphan_module_synthesized', r."classroom_id", r."id",
@@ -168,12 +165,26 @@ SET "weight" = CASE
                  ELSE r."weight"::double precision * a."weight" / s."sum_w"
                END,
     "is_extra_credit" = r."is_extra_credit",
-    "module_id"       = r."module_id",
+    "module_id"       = rm."module_id",
     "type"            = 'REPO'
 FROM "repositories" r,
+     "repo_module" rm,
      (SELECT "repository_id", sum("weight")::double precision AS "sum_w"
       FROM "assignments" GROUP BY "repository_id") s
-WHERE a."repository_id" = r."id" AND s."repository_id" = a."repository_id";
+WHERE a."repository_id" = r."id"
+  AND rm."repository_id" = r."id"
+  AND s."repository_id" = a."repository_id";
+
+-- 5b. Every assignment must have found a module by now. Fail loudly here
+--     rather than at the NOT NULL in the companion migration.
+DO $$
+DECLARE missing INT;
+BEGIN
+  SELECT count(*) INTO missing FROM "assignments" WHERE "module_id" IS NULL;
+  IF missing > 0 THEN
+    RAISE EXCEPTION 'coursework phase 1: % assignment(s) have no module after backfill', missing;
+  END IF;
+END $$;
 
 -- 6. Reports for the owner.
 INSERT INTO "coursework_migration_report" ("id", "kind", "classroom_id", "subject_id", "details")
@@ -207,7 +218,7 @@ INSERT INTO "coursework_migration_report" ("id", "kind", "classroom_id", "subjec
 SELECT gen_random_uuid()::text, 'summary', NULL, NULL, jsonb_build_object(
   'repositories',                (SELECT count(*) FROM "repositories"),
   'orphans_synthesized',         (SELECT count(*) FROM "coursework_migration_report" WHERE "kind" = 'orphan_module_synthesized'),
-  'multi_module_items_removed',  (SELECT count(*) FROM "coursework_migration_report" WHERE "kind" = 'repository_in_multiple_modules'),
+  'repositories_in_multiple_modules', (SELECT count(DISTINCT "subject_id") FROM "coursework_migration_report" WHERE "kind" = 'repository_in_multiple_modules'),
   'drop_lowest_classrooms',      (SELECT count(DISTINCT "classroom_id") FROM "coursework_migration_report" WHERE "kind" = 'drop_lowest_lost'),
   'drop_lowest_repositories',    (SELECT count(*) FROM "coursework_migration_report" WHERE "kind" = 'drop_lowest_lost'),
   'zero_weight_sum_repositories',(SELECT count(*) FROM "coursework_migration_report" WHERE "kind" = 'zero_weight_sum_repository'),
@@ -217,13 +228,10 @@ SELECT gen_random_uuid()::text, 'summary', NULL, NULL, jsonb_build_object(
 
 -- 7. Indexes + FKs, named as Prisma names them. Adding the FKs here validates
 --    the backfill inside this transaction.
-CREATE INDEX "repositories_module_id_idx" ON "repositories"("module_id");
 CREATE INDEX "assignments_module_id_idx"  ON "assignments"("module_id");
 CREATE UNIQUE INDEX "assignments_quiz_id_key" ON "assignments"("quiz_id");
 CREATE UNIQUE INDEX "assignments_form_id_key" ON "assignments"("form_id");
 
-ALTER TABLE "repositories" ADD CONSTRAINT "repositories_module_id_fkey"
-  FOREIGN KEY ("module_id") REFERENCES "modules"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 ALTER TABLE "assignments" ADD CONSTRAINT "assignments_module_id_fkey"
   FOREIGN KEY ("module_id") REFERENCES "modules"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 ALTER TABLE "assignments" ADD CONSTRAINT "assignments_quiz_id_fkey"
