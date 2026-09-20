@@ -1,4 +1,4 @@
-import { Button, Dropdown, Popover, Table, Tooltip } from 'antd';
+import { Button, Checkbox, Dropdown, Popover, Table, Tooltip } from 'antd';
 import type { MenuProps } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import dayjs from 'dayjs';
@@ -14,7 +14,6 @@ import {
   TeamThumbnailView,
   RepositoryAssignmentStatus,
   EmojiGrader,
-  MultiSelect,
 } from '~/components';
 import { ActionTypes } from '~/constants';
 import { useCallout } from '@classmoji/ui-components';
@@ -311,7 +310,13 @@ const SubmissionsTable = ({
         if (!s) return null;
         const names = (s.graders ?? []).map(g => g.grader.name || g.grader.login).join(', ');
         if (!canManageGraders) return <span className="text-sm text-ink-2">{names || '—'}</span>;
-        // The names as text; the picker opens on demand in a popover.
+        // The names as text; one click on the link opens the checkbox list.
+        const assigned = new Set(
+          (s.graders ?? []).map(g => g.grader.login).filter((v): v is string => v != null)
+        );
+        const choices = assistants
+          .map(a => ({ label: a.name || a.login || '', value: a.login || '' }))
+          .sort((a, b) => a.label.localeCompare(b.label));
         return (
           <div className="flex items-center gap-3 whitespace-nowrap">
             {names && <span className="text-sm text-ink-1 truncate max-w-40">{names}</span>}
@@ -319,17 +324,21 @@ const SubmissionsTable = ({
               trigger="click"
               placement="bottomLeft"
               content={
-                <div className="w-64">
-                  <MultiSelect
-                    defaultValue={s.graders
-                      ?.map(g => g.grader.login)
-                      .filter((v): v is string => v != null)}
-                    options={assistants
-                      .map(a => ({ label: a.name || '', value: a.login || '' }))
-                      .sort((a, b) => (a.label || '').localeCompare(b.label || ''))}
-                    onSelect={(login: string) => graderHandler(login, repo, 'ADD')}
-                    onDeselect={(login: string) => graderHandler(login, repo, 'REMOVE')}
-                  />
+                <div className="flex flex-col gap-2 min-w-44 py-1">
+                  {choices.length === 0 && (
+                    <span className="text-sm text-ink-3">No graders on the staff yet</span>
+                  )}
+                  {choices.map(c => (
+                    <Checkbox
+                      key={c.value}
+                      checked={assigned.has(c.value)}
+                      onChange={e =>
+                        graderHandler(c.value, repo, e.target.checked ? 'ADD' : 'REMOVE')
+                      }
+                    >
+                      {c.label}
+                    </Checkbox>
+                  ))}
                 </div>
               }
             >
