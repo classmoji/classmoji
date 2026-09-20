@@ -79,10 +79,10 @@ interface Assistant {
   [key: string]: unknown;
 }
 
-export type SubmissionFilter = 'all' | 'ungraded' | 'late' | 'missing' | 'mine';
+export type SubmissionFilter = 'all' | 'ungraded' | 'late' | 'missing';
 
 /** Whether a row passes the toolbar filter. Exported so the page can count. */
-export const matchesFilter = (repo: SubmissionsRepo, filter: SubmissionFilter, userId: string) => {
+export const matchesFilter = (repo: SubmissionsRepo, filter: SubmissionFilter) => {
   const s = repo.submission;
   switch (filter) {
     case 'ungraded':
@@ -91,8 +91,6 @@ export const matchesFilter = (repo: SubmissionsRepo, filter: SubmissionFilter, u
       return Boolean(s?.is_late) && !s?.is_late_override;
     case 'missing':
       return !s || s.status !== 'CLOSED';
-    case 'mine':
-      return Boolean(s?.graders?.some(g => g.grader.id === userId));
     default:
       return true;
   }

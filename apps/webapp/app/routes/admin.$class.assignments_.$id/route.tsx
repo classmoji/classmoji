@@ -35,7 +35,7 @@ import type { Route } from './+types/route';
 export const loader = async ({ params, request }: Route.LoaderArgs) => {
   const { class: classSlug, id } = params;
 
-  const { classroom, userId } = await requireClassroomTeachingTeam(request, classSlug!, {
+  const { classroom } = await requireClassroomTeachingTeam(request, classSlug!, {
     resourceType: 'ASSIGNMENTS',
     action: 'view_assignment',
   });
@@ -91,7 +91,6 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
     assistants: graderPool.filter(({ is_grader }) => is_grader),
     emojiMappings,
     classroom,
-    userId,
     rolePrefix,
     autogradingTestCount: autogradingTests.length,
     studentCount: students.length,
@@ -157,7 +156,6 @@ const FILTERS: Array<{ key: SubmissionFilter; label: string }> = [
   { key: 'ungraded', label: 'Ungraded' },
   { key: 'late', label: 'Late' },
   { key: 'missing', label: 'Not submitted' },
-  { key: 'mine', label: 'Mine to grade' },
 ];
 
 const Stat = ({ label, value, tone }: { label: string; value: React.ReactNode; tone?: string }) => (
@@ -174,7 +172,6 @@ const AssignmentPage = ({ loaderData }: Route.ComponentProps) => {
     assistants,
     emojiMappings,
     classroom,
-    userId,
     rolePrefix,
     autogradingTestCount,
     studentCount,
@@ -217,14 +214,14 @@ const AssignmentPage = ({ loaderData }: Route.ComponentProps) => {
   const visible = useMemo(() => {
     const q = query.trim().toLowerCase();
     return rows.filter(repo => {
-      if (!matchesFilter(repo, filter, userId)) return false;
+      if (!matchesFilter(repo, filter)) return false;
       if (!q) return true;
       const who = isIndividual
         ? `${repo.student?.name ?? ''} ${repo.student?.login ?? ''}`
         : (repo.team?.name ?? '');
       return `${who} ${repo.name}`.toLowerCase().includes(q);
     });
-  }, [rows, filter, query, userId, isIndividual]);
+  }, [rows, filter, query, isIndividual]);
 
   // Scope the loading state to the autograde request (the fetcher is shared).
   const isAutograding =

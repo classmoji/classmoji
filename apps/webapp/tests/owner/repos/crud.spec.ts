@@ -442,7 +442,7 @@ test.describe('Assignment page - overview & actions', () => {
 
   test('offers the submission filters', async ({ authenticatedPage: page }) => {
     const filters = page.getByRole('tablist', { name: 'Filter submissions' });
-    for (const name of ['All', 'Ungraded', 'Late', 'Not submitted', 'Mine to grade']) {
+    for (const name of ['All', 'Ungraded', 'Late', 'Not submitted']) {
       await expect(filters.getByRole('tab', { name })).toBeVisible();
     }
   });
