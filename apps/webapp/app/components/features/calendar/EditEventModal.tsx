@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import {
   Modal,
   Form,
@@ -31,6 +31,13 @@ import {
   filterLinksForOccurrence,
   isExpandedOccurrence,
 } from './eventScope';
+import {
+  buildLinkOptions,
+  createLinkTagRender,
+  renderLinkOption,
+  useFeaturedLink,
+  type FeaturedRef,
+} from './linkTagRender';
 
 const { TextArea } = Input;
 
@@ -49,11 +56,15 @@ const DAYS_OF_WEEK = [
 interface CalendarResource {
   id: string;
   title: string;
+  /** Staff pickers offer drafts, marked as such. See the calendar loaders. */
+  is_draft?: boolean;
 }
 
 interface CalendarAssignment {
   id: string;
   title: string;
+  /** Always published today — the loaders do not offer unpublished ones. */
+  is_draft?: boolean;
   repository?: { title: string };
 }
 
@@ -83,6 +94,14 @@ interface EventFormData {
   linkedPageIds?: string[];
   linkedSlideIds?: string[];
   linkedAssignmentIds?: string[];
+  /**
+   * Which of those links the month view shows under the event. Two flat fields
+   * rather than an object because they travel with the link ids through the
+   * same form payload, and are dropped by the same rule when a scope cannot
+   * hold links.
+   */
+  featuredKind?: string | null;
+  featuredId?: string | null;
 }
 
 /** What a recurring delete carries back to the route. */
@@ -153,6 +172,19 @@ const EditEventModal = ({
   const [linkedSlideIds, setLinkedSlideIds] = useState<string[]>([]);
   const [linkedAssignmentIds, setLinkedAssignmentIds] = useState<string[]>([]);
 
+  // One star across all three pickers — see useFeaturedLink.
+  const { featured, setFeatured, toggleFeatured, keepFeaturedWithin } = useFeaturedLink();
+
+  const pagePicker = useMemo(() => buildLinkOptions(pages), [pages]);
+  const slidePicker = useMemo(() => buildLinkOptions(slides), [slides]);
+  const assignmentPicker = useMemo(
+    () =>
+      buildLinkOptions(assignments, a =>
+        a.repository?.title ? `${a.repository.title}: ${a.title}` : a.title
+      ),
+    [assignments]
+  );
+
   const isRecurringOccurrence = event?.is_recurring && event?.occurrence_date;
 
   useEffect(() => {
@@ -196,8 +228,24 @@ const EditEventModal = ({
       setLinkedPageIds(pageLinks.map(l => l.page_id));
       setLinkedSlideIds(slideLinks.map(l => l.slide_id));
       setLinkedAssignmentIds(assignmentLinks.map(l => l.assignment_id));
+
+      // The star is prefilled from the same occurrence-filtered rows the
+      // pickers are, so it can only land on a chip that is actually on screen.
+      // At most one row carries it, and the database holds that; the order
+      // below only decides what a hand-written row would look like.
+      const starredPage = pageLinks.find(l => l.featured);
+      const starredSlide = slideLinks.find(l => l.featured);
+      const starredAssignment = assignmentLinks.find(l => l.featured);
+      const starred: FeaturedRef | null = starredPage
+        ? { kind: 'page', id: starredPage.page_id }
+        : starredSlide
+          ? { kind: 'slide', id: starredSlide.slide_id }
+          : starredAssignment
+            ? { kind: 'assignment', id: starredAssignment.assignment_id }
+            : null;
+      setFeatured(starred);
     }
-  }, [event, form]);
+  }, [event, form, setFeatured]);
 
   const buildEventData = (values: EventFormValues, includeLinks = true) => {
     const { start, end } = buildEventWindow(
@@ -230,6 +278,8 @@ const EditEventModal = ({
       eventData.linkedPageIds = linkedPageIds;
       eventData.linkedSlideIds = linkedSlideIds;
       eventData.linkedAssignmentIds = linkedAssignmentIds;
+      eventData.featuredKind = featured?.kind ?? null;
+      eventData.featuredId = featured?.id ?? null;
     }
 
     return eventData;
@@ -267,7 +317,13 @@ const EditEventModal = ({
           pendingFormData,
           editScope,
           event.occurrence_date ? new Date(event.occurrence_date).toISOString() : null,
-          { linkedPageIds, linkedSlideIds, linkedAssignmentIds }
+          {
+            linkedPageIds,
+            linkedSlideIds,
+            linkedAssignmentIds,
+            featuredKind: featured?.kind ?? null,
+            featuredId: featured?.id ?? null,
+          }
         )
       );
     } else if (scopeAction === 'delete' && event.id) {
@@ -514,8 +570,18 @@ const EditEventModal = ({
                       mode="multiple"
                       placeholder="Link pages"
                       value={linkedPageIds}
-                      onChange={setLinkedPageIds}
-                      options={pages.map(p => ({ value: p.id, label: p.title }))}
+                      onChange={ids => {
+                        setLinkedPageIds(ids);
+                        keepFeaturedWithin('page', ids);
+                      }}
+                      options={pagePicker.options}
+                      optionRender={renderLinkOption}
+                      tagRender={createLinkTagRender({
+                        kind: 'page',
+                        meta: pagePicker.meta,
+                        featured,
+                        onToggleFeatured: toggleFeatured,
+                      })}
                       optionFilterProp="label"
                       allowClear
                       className="w-full"
@@ -526,8 +592,18 @@ const EditEventModal = ({
                       mode="multiple"
                       placeholder="Link slide decks"
                       value={linkedSlideIds}
-                      onChange={setLinkedSlideIds}
-                      options={slides.map(s => ({ value: s.id, label: s.title }))}
+                      onChange={ids => {
+                        setLinkedSlideIds(ids);
+                        keepFeaturedWithin('slide', ids);
+                      }}
+                      options={slidePicker.options}
+                      optionRender={renderLinkOption}
+                      tagRender={createLinkTagRender({
+                        kind: 'slide',
+                        meta: slidePicker.meta,
+                        featured,
+                        onToggleFeatured: toggleFeatured,
+                      })}
                       optionFilterProp="label"
                       allowClear
                       className="w-full"
@@ -538,11 +614,18 @@ const EditEventModal = ({
                       mode="multiple"
                       placeholder="Link assignments"
                       value={linkedAssignmentIds}
-                      onChange={setLinkedAssignmentIds}
-                      options={assignments.map(a => ({
-                        value: a.id,
-                        label: a.repository?.title ? `${a.repository.title}: ${a.title}` : a.title,
-                      }))}
+                      onChange={ids => {
+                        setLinkedAssignmentIds(ids);
+                        keepFeaturedWithin('assignment', ids);
+                      }}
+                      options={assignmentPicker.options}
+                      optionRender={renderLinkOption}
+                      tagRender={createLinkTagRender({
+                        kind: 'assignment',
+                        meta: assignmentPicker.meta,
+                        featured,
+                        onToggleFeatured: toggleFeatured,
+                      })}
                       optionFilterProp="label"
                       allowClear
                       className="w-full"

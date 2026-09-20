@@ -130,6 +130,26 @@ export const resolveFeaturedLink = (
 };
 
 /**
+ * Read a star out of the two loose fields a form payload carries it in.
+ *
+ * The web actions receive `featuredKind`/`featuredId` as whatever JSON held —
+ * a caller can send anything — so this is where they become a ref or nothing.
+ * It answers null generously: no id, no kind, a kind the calendar does not
+ * have. `resolveFeaturedLink` then decides whether that ref survives contact
+ * with the ids actually being linked.
+ */
+export const toFeaturedLinkRef = (
+  kind: unknown,
+  id: unknown
+): FeaturedLinkRef | null =>
+  typeof id === 'string' &&
+  id !== '' &&
+  typeof kind === 'string' &&
+  (FEATURED_LINK_KINDS as readonly string[]).includes(kind)
+    ? { kind: kind as FeaturedLinkKind, id }
+    : null;
+
+/**
  * Does THIS row get `featured: true`?
  *
  * Asked once per row being created, against the already-resolved answer above,

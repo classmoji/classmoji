@@ -29,11 +29,19 @@ export type CalendarEditScope = (typeof EDIT_SCOPES)[keyof typeof EDIT_SCOPES];
 export const isExpandedOccurrence = (event: { occurrence_date?: string | Date | null }): boolean =>
   Boolean(event.occurrence_date);
 
-/** The link ids the three pickers hold. */
+/**
+ * The link ids the three pickers hold — and which one of them is starred.
+ *
+ * The star travels with the ids because it obeys the same rule: it is a column
+ * on a link row, so it exists only where those rows do. A scope with no
+ * occurrence to save links against has nowhere to put a star either.
+ */
 export interface EventLinkIds {
   linkedPageIds: string[];
   linkedSlideIds: string[];
   linkedAssignmentIds: string[];
+  featuredKind?: string | null;
+  featuredId?: string | null;
 }
 
 /** Compare two values as calendar DAYS, in UTC — link dates are date-only. */
@@ -80,7 +88,8 @@ export const filterLinksForOccurrence = <T extends { occurrence_date?: string | 
  *
  * Only 'this_only' does. 'all' and 'this and future' address the series, and a
  * link saved from one of those lands in the undated bucket, which a recurring
- * event's occurrences do not read — the links would simply disappear.
+ * event's occurrences do not read — the links would simply disappear. The star
+ * is a column on one of those rows, so it goes exactly where they go.
  */
 export const scopeCarriesLinks = (editScope: string): boolean =>
   editScope === EDIT_SCOPES.THIS_ONLY;

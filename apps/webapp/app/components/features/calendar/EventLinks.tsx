@@ -7,6 +7,7 @@ import {
   IconClipboardList,
 } from '@tabler/icons-react';
 import type { CalendarEventWithLinks } from './types';
+import DraftPill from './DraftPill';
 import { PageLink, usePagePeek } from '~/components/features/pages';
 
 interface RepositoryAssignmentLinkInfo {
@@ -15,20 +16,6 @@ interface RepositoryAssignmentLinkInfo {
     name: string;
   } | null;
 }
-
-/**
- * Marks linked content that is not published yet.
- *
- * Only staff are sent such a link at all — the calendar service leaves draft
- * pages, draft decks and unpublished assignments out of a student's payload —
- * so this says "your class cannot see this one". Same treatment the calendar
- * already gives an unpublished deadline (see EventCard).
- */
-const DraftPill = () => (
-  <span className="text-xs px-1.5 py-0.5 rounded bg-yellow-100 dark:bg-yellow-900/30 text-yellow-700 dark:text-yellow-400 font-normal">
-    Draft
-  </span>
-);
 
 interface EventLinksProps {
   event: CalendarEventWithLinks;

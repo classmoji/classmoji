@@ -12,6 +12,7 @@ import {
   assistantMayChangeEventType,
   assistantMayCreateEventType,
   isCalendarTimeRangeError,
+  toFeaturedLinkRef,
 } from '@classmoji/services/calendar-policy';
 import { useCallout } from '@classmoji/ui-components';
 import getPrisma from '@classmoji/database';
@@ -180,7 +181,17 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
 
   if (intent === 'create') {
     const eventData = JSON.parse(formData.get('eventData') as string);
-    const { linkedPageIds, linkedSlideIds, linkedAssignmentIds, ...createData } = eventData;
+    // `featuredKind`/`featuredId` come out with the link ids and for the same
+    // reason: they describe the LINKS, not the event, and createEvent would
+    // reject columns it has never heard of.
+    const {
+      linkedPageIds,
+      linkedSlideIds,
+      linkedAssignmentIds,
+      featuredKind,
+      featuredId,
+      ...createData
+    } = eventData;
 
     // Assistants may only add office hours. The sibling /assistant variant of
     // this page enforces that, but the gate above admits ASSISTANT here too and
@@ -216,8 +227,9 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
           slideIds: linkedSlideIds || [],
           assignmentIds: linkedAssignmentIds || [],
         },
-        null
-      ); // null occurrence_date for non-recurring events
+        null, // null occurrence_date for non-recurring events
+        toFeaturedLinkRef(featuredKind, featuredId)
+      );
     }
 
     await audit('CREATE', 'CALENDAR', newEvent.id, {
@@ -266,6 +278,8 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
       linkedPageIds,
       linkedSlideIds,
       linkedAssignmentIds,
+      featuredKind,
+      featuredId,
       ...updateData
     } = eventData;
 
@@ -322,7 +336,10 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
           slideIds: linkedSlideIds || [],
           assignmentIds: linkedAssignmentIds || [],
         },
-        linkOccurrenceDate
+        linkOccurrenceDate,
+        // Ignored wherever the link keys are: a star with no date to sit on is
+        // as meaningless as a link with none.
+        toFeaturedLinkRef(featuredKind, featuredId)
       );
     }
 

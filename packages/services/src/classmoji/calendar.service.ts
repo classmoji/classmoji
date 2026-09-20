@@ -341,6 +341,7 @@ export {
   isCalendarTimeRangeError,
   isFeaturedLinkRow,
   resolveFeaturedLink,
+  toFeaturedLinkRef,
 } from './calendarPolicy.ts';
 export type { FeaturedLinkKind, FeaturedLinkRef } from './calendarPolicy.ts';
 
