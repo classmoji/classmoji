@@ -332,11 +332,24 @@ const ModuleCard = ({
   // assignment tabs hold the student issues and grading) for a repo
   // assignment, otherwise the list its quiz/form is managed on. An assignment
   // with no target yet just opens the editor.
+  // Clicking an assignment row shows its submissions: the repository page
+  // (student repos and grades), the quiz's attempts, or the form's responses.
   const openAssignment = (a: AssignmentRowData) => {
     if (a.type === 'REPO' && a.repository?.title) {
       navigate(`/admin/${classSlug}/repos/${encodeURIComponent(a.repository.title)}`);
     } else if (a.type === 'QUIZ' && a.quiz) {
-      // Straight into the quiz editor, not the list.
+      navigate(`/admin/${classSlug}/quizzes/${a.quiz.id}`);
+    } else if (a.type === 'FORM') {
+      navigate(`/admin/${classSlug}/forms`);
+    } else {
+      openAssignmentModal(undefined, a);
+    }
+  };
+
+  // "Edit" edits the thing itself: the quiz in its editor, the form in its
+  // builder; a REPO assignment is its own settings (deadline, weight, issue).
+  const editAssignment = (a: AssignmentRowData) => {
+    if (a.type === 'QUIZ' && a.quiz) {
       navigate(`/admin/${classSlug}/quizzes/form?quizId=${a.quiz.id}`);
     } else if (a.type === 'FORM') {
       navigate(`/admin/${classSlug}/forms`);
@@ -358,6 +371,13 @@ const ModuleCard = ({
     label: 'Delete assignment',
     danger: true,
     icon: <IconTrash size={15} />,
+  };
+  // Weight, deadlines and release for a quiz or form assignment live on the
+  // assignment, not on the quiz/form Edit opens.
+  const assignmentSettingsItem = {
+    key: 'settings',
+    label: 'Assignment settings',
+    icon: <IconPencil size={15} />,
   };
 
   return (
@@ -479,9 +499,14 @@ const ModuleCard = ({
                 kind="Assignment"
                 published={a.is_published}
                 onOpen={() => openAssignment(a)}
-                onEdit={() => openAssignmentModal(undefined, a)}
-                menuItems={[deleteAssignmentItem]}
+                onEdit={() => editAssignment(a)}
+                menuItems={
+                  a.type === 'REPO'
+                    ? [deleteAssignmentItem]
+                    : [assignmentSettingsItem, { type: 'divider' as const }, deleteAssignmentItem]
+                }
                 onMenuClick={key => {
+                  if (key === 'settings') openAssignmentModal(undefined, a);
                   if (key === 'remove') removeAssignment(a);
                 }}
               />
