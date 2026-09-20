@@ -290,6 +290,37 @@ test.describe('Starring a linked resource', () => {
     await expect(firstStar).toHaveAttribute('aria-pressed', 'false');
   });
 
+  test('the star is reachable and operable from the keyboard', async ({
+    authenticatedPage: page,
+    testOrg,
+  }) => {
+    // The chip's controls sit BEFORE the search input inside antd's selector,
+    // so shift-tabbing out of the input walks back through them. Enter has to
+    // reach the button rather than being eaten by the Select.
+    const [linked] = await publishedPages();
+    await page.goto(`/admin/${testOrg}/calendar`);
+    await waitForDataLoad(page);
+    await page.getByRole('button', { name: 'Month', exact: true }).click();
+
+    await page.getByRole('button', { name: 'Week 1 Lecture' }).first().click();
+    const modal = await waitForModal(page, /Edit event/i);
+    await linkPage(page, modal, linked.title);
+    await page.keyboard.press('Escape');
+
+    const star = modal.getByRole('button', { name: `Show ${linked.title} in month view` });
+    // Backwards out of the search input: the unlink control, then the star.
+    await page.keyboard.press('Shift+Tab');
+    await page.keyboard.press('Shift+Tab');
+    await expect(star).toBeFocused();
+
+    await page.keyboard.press('Enter');
+    await expect(star).toHaveAttribute('aria-pressed', 'true');
+    await expect(page.locator('.ant-select-dropdown:visible')).toHaveCount(0);
+
+    await page.keyboard.press(' ');
+    await expect(star).toHaveAttribute('aria-pressed', 'false');
+  });
+
   test('clicking a star does not open the picker dropdown', async ({
     authenticatedPage: page,
     testOrg,
