@@ -237,6 +237,9 @@ const CommonLayout = ({
 
     // Hide slides if disabled in classroom settings
     if (item.link === '/slides' && classroom?.settings?.slides_enabled === false) return null;
+    // Students find decks inside their modules; the flat list is only for a
+    // class that has no modules to hold them.
+    if (item.link === '/slides' && role === 'STUDENT' && hasModules) return null;
 
     // Student navigation visibility toggles. OWNER always sees these to manage
     // them; students/assistants only when the instructor enables them. Modules
@@ -302,6 +305,7 @@ const CommonLayout = ({
     if (item.link === '/quizzes' && !isProTier && !isDemoClassroom) return false;
     if (item.link === '/quizzes' && classroom?.settings?.quizzes_enabled === false) return false;
     if (item.link === '/quizzes' && !aiAgentAvailable) return false;
+    if (item.link === '/slides' && role === 'STUDENT' && hasModules) return false;
 
     // Student navigation visibility toggles (OWNER always retains access).
     if (item.link === '/modules' && role !== 'OWNER' && (!showModules || !hasModules)) return false;

@@ -95,6 +95,9 @@ export const routes = {
     link: '/slides',
     label: 'Slides',
     icon: IconPresentation,
+    // Students reach decks through their module. The entry stays in their
+    // list only for a classroom with no modules, where CommonLayout shows it
+    // so the decks are not stranded; otherwise it hides for STUDENT.
     roles: ['OWNER', 'TEACHER', 'ASSISTANT', 'STUDENT'],
     category: 'content',
   },
@@ -128,7 +131,9 @@ export const routes = {
     link: '/quizzes',
     label: 'Quizzes',
     icon: IconRobot,
-    roles: ['OWNER', 'TEACHER', 'STUDENT', 'ASSISTANT'],
+    // Staff management list. A student reaches a quiz from its module or the
+    // Assignments page, where a quiz assignment sits with its deadline.
+    roles: ['OWNER', 'TEACHER', 'ASSISTANT'],
     isProTier: true,
     category: 'assessment',
   },
