@@ -24,8 +24,20 @@ export interface CalendarLinkedPage {
   page: {
     id: string;
     title: string;
-    /** Staff may be shown draft pages, tagged as such; students never receive them. */
-    is_draft?: boolean;
+    /**
+     * Staff may be shown draft pages, tagged as such; students never receive
+     * them. REQUIRED on purpose: this field gates what a viewer is allowed to
+     * see, and an optional one fails open — a producer that forgets it reads as
+     * `undefined`, which is falsy, which means "published".
+     *
+     * The CalendarEvent link path selects it. The assignment-deadline path does
+     * not yet (`calendar.service.ts` selects only id/title for a deadline's
+     * linked pages, while selecting `is_draft` for its slides), so a deadline
+     * item's linked pages arrive without it. That select is a later fix;
+     * requiring it here is what makes the omission visible instead of silently
+     * reading as "not a draft".
+     */
+    is_draft: boolean;
   };
 }
 
@@ -33,7 +45,8 @@ export interface CalendarLinkedSlide {
   slide: {
     id: string;
     title: string;
-    is_draft?: boolean;
+    /** Required for the same reason as the page's — see above. */
+    is_draft: boolean;
   };
 }
 
@@ -81,6 +94,11 @@ export interface CalendarEventWithLinks {
   end_time: string | Date;
   event_type: string;
   occurrence_date?: string | Date | null;
+  /**
+   * Trusted, not checked. The service stores this as `Prisma.JsonValue` and
+   * hands it over unvalidated, so this shape is what the modals WRITE, not a
+   * guarantee about what a given row holds. Read defensively.
+   */
   recurrence_rule?: { days?: string[]; until?: string | null } | null;
   is_deadline?: boolean;
   /**
