@@ -31,8 +31,17 @@ export interface DeadlineGroup {
   hourFloat: number;
   /** That hour as an offset from the top of the grid. */
   top: string;
+  /** Whether the pills hang above the line — see `DeadlinePills`. */
+  above: boolean;
   items: CalendarEventWithLinks[];
 }
+
+/**
+ * How much room a stack of pills wants above its line, in hours of grid. One
+ * pill is about 1.25rem and an hour row is 4rem, so this is a little over one
+ * pill — enough that the commonest case, one pill, always clears the top edge.
+ */
+const PILL_CLEARANCE_HOURS = 0.375;
 
 /**
  * The title as a deadline pill says it: `Due: Lab 3` is three words of chrome
@@ -76,7 +85,15 @@ export const deadlineGroups = (
 
   return [...byHour.entries()]
     .sort(([a], [b]) => a - b)
-    .map(([hourFloat, items]) => ({ hourFloat, top: topFor(hourFloat), items }));
+    .map(([hourFloat, items]) => ({
+      hourFloat,
+      top: topFor(hourFloat),
+      // Above the line, except where "above" is not the grid: a deadline due
+      // in the first minutes of the first rendered hour would hang its pill
+      // over the all-day strip, which holds that same deadline's chip.
+      above: hourFloat - startHour >= PILL_CLEARANCE_HOURS,
+      items,
+    }));
 };
 
 /** A stable key for one deadline within its day. */
@@ -118,15 +135,20 @@ interface DeadlinePillsProps extends DeadlineLayerProps {
 /**
  * The labels, in front of the event blocks and right-aligned in the column.
  *
- * ALWAYS above the line, never below it. The commonest deadline in a course is
- * due at 11:59 PM, whose line is the last thing in the grid — a pill below it
- * would be drawn outside the calendar — and a rule that flips near the bottom
- * edge would draw the same deadline differently depending on how late the rest
- * of the week runs. Above also reads correctly on its own: everything above
- * the line is the time you still have.
+ * Above the line, not below it. The commonest deadline in a course is due at
+ * 11:59 PM, whose line is the last thing in the grid — a pill below it would
+ * be drawn outside the calendar — and a rule that flipped near the BOTTOM edge
+ * would draw the same deadline differently depending on how late the rest of
+ * the week ran. Above also reads correctly on its own: everything above the
+ * line is the time you still have.
+ *
+ * The one exception is the top edge, where "above" is not the grid at all but
+ * the all-day strip — which holds that same deadline's chip. A deadline due in
+ * the first minutes of the first rendered hour hangs its pill below its line
+ * instead.
  *
  * Two deadlines at the same time stack rather than overlap: the group is one
- * bottom-anchored column, so the second pill lands above the first.
+ * anchored column, so the second pill lands beside the first rather than on it.
  */
 export const DeadlinePills = ({ groups, onEventClick }: DeadlinePillsProps) => (
   <div className="absolute inset-0 pointer-events-none">
@@ -134,7 +156,10 @@ export const DeadlinePills = ({ groups, onEventClick }: DeadlinePillsProps) => (
       <div
         key={group.hourFloat}
         className="absolute left-1 right-1 flex flex-col items-end gap-0.5"
-        style={{ top: group.top, transform: 'translateY(-100%)' }}
+        style={{
+          top: group.top,
+          transform: group.above ? 'translateY(-100%)' : undefined,
+        }}
       >
         {group.items.map((item, index) => {
           const title = deadlineTitle(item);

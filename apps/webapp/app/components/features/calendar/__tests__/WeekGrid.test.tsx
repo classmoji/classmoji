@@ -290,6 +290,22 @@ describe('WeekGrid — deadline lines', () => {
     expect(html).toContain('transform:translateY(-100%)');
   });
 
+  it('hangs a pill BELOW its line at the very top of the grid', () => {
+    // Above the first row is not the grid: it is the all-day strip, which
+    // holds this same deadline's chip.
+    const earlyBird: CalendarEventWithLinks = {
+      ...deadline,
+      id: 'deadline-8am',
+      title: 'Due: Morning Quiz',
+      start_time: new Date(2026, 8, 23, 8, 0).toISOString(),
+      end_time: new Date(2026, 8, 23, 8, 0).toISOString(),
+    };
+    const html = render([earlyBird], TUESDAY);
+
+    expect(html).toContain('8 AM · Morning Quiz');
+    expect(html).not.toContain('transform:translateY(-100%)');
+  });
+
   it('dashes the line of an unpublished deadline, and only that one', () => {
     const published = render([deadline], TUESDAY, weekOf(TUESDAY), { endHour: 24 });
     expect(published).not.toContain('border-dashed');
