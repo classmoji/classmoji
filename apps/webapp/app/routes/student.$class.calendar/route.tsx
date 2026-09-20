@@ -58,16 +58,26 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
     events = [];
   }
 
-  // Get user's repository assignments for assignment link navigation
-  // This allows linking directly to GitHub issues for assignments
+  // The reader's own repository assignments, which turn a linked assignment
+  // into a link to THEIR GitHub issue.
   const repoAssignments = await ClassmojiService.gitRepoAssignment.findForUser({
     git_repo: { student_id: userId, classroom_id: classroom!.id },
   });
 
-  // Build map of assignment_id -> repository assignment (with repo info)
-  const repoAssignmentsByAssignmentId: Record<string, (typeof repoAssignments)[number]> = {};
+  // Built field by field rather than by handing the row over. `findForUser`
+  // returns the whole graph — grades, graders, token transactions, the
+  // classroom, the student — and the calendar reads exactly two things off it:
+  // the issue number and the repository's name. Spreading the row put all the
+  // rest into the page's payload for anyone who opened the network tab.
+  const repoAssignmentsByAssignmentId: Record<
+    string,
+    { provider_issue_number: number; git_repo: { name: string } }
+  > = {};
   repoAssignments.forEach(ra => {
-    repoAssignmentsByAssignmentId[ra.assignment_id] = ra;
+    repoAssignmentsByAssignmentId[ra.assignment_id] = {
+      provider_issue_number: ra.provider_issue_number,
+      git_repo: { name: ra.git_repo.name },
+    };
   });
 
   // Build subscription URL

@@ -36,11 +36,34 @@ const isFile = (path: string): boolean => {
   }
 };
 
-/** A relative specifier as a path on disk, or null if it is a bare package. */
+/** Where `~/…` points: the webapp's `app` directory, as tsconfig maps it. */
+const APP_DIR = resolve(CALENDAR_DIR, '..', '..', '..');
+
+/** Whether a specifier is one the app resolves itself rather than a package. */
+const isLocalSpecifier = (specifier: string): boolean =>
+  specifier.startsWith('.') || specifier.startsWith('~/');
+
+/**
+ * A relative or aliased specifier as a path on disk, or null if it is a bare
+ * package.
+ *
+ * `~/…` has to RESOLVE, not be waved through as a package. The calendar
+ * reaches the page-peek components that way, and while the walk stopped at the
+ * first alias, a `~/components/features/calendar/CalendarDragLayer` anywhere
+ * downstream would have passed this file in silence.
+ */
 const resolveLocal = (fromFile: string, specifier: string): string | null => {
-  if (!specifier.startsWith('.')) return null;
-  const base = resolve(dirname(fromFile), specifier);
-  const candidates = [base, `${base}.ts`, `${base}.tsx`, join(base, 'index.ts')];
+  if (!isLocalSpecifier(specifier)) return null;
+  const base = specifier.startsWith('~/')
+    ? resolve(APP_DIR, specifier.slice(2))
+    : resolve(dirname(fromFile), specifier);
+  const candidates = [
+    base,
+    `${base}.ts`,
+    `${base}.tsx`,
+    join(base, 'index.ts'),
+    join(base, 'index.tsx'),
+  ];
   return candidates.find(isFile) ?? null;
 };
 
@@ -58,7 +81,10 @@ const walk = (entry: string): { files: Set<string>; packages: Set<string> } => {
     for (const specifier of specifiersIn(readFileSync(file, 'utf8'))) {
       const local = resolveLocal(file, specifier);
       if (local) queue.push(local);
-      else if (!specifier.startsWith('.')) packages.add(specifier);
+      // A specifier the app WOULD resolve and this walk could not is recorded
+      // as it was written, so an unresolvable `~/…` cannot hide behind the
+      // fact that nothing followed it.
+      else packages.add(specifier);
     }
   }
 
@@ -68,6 +94,7 @@ const walk = (entry: string): { files: Set<string>; packages: Set<string> } => {
 describe('the student calendar module graph', () => {
   const { files, packages } = walk(ENTRY);
   const named = [...files].map(file => relative(CALENDAR_DIR, file)).sort();
+  const specifiers = [...packages];
 
   it('reaches the shared grids, so this test is actually walking something', () => {
     expect(named).toContain('StudentCalendarView.tsx');
@@ -77,13 +104,25 @@ describe('the student calendar module graph', () => {
     expect(named).toContain('EventCard.tsx');
   });
 
+  it('follows the ~ alias, so nothing hides behind it', () => {
+    // The calendar reaches the page-peek components through `~/…`; while that
+    // was treated as a bare package the walk stopped there, and anything the
+    // peek drawer reached was outside this test's reach too.
+    expect(named).toContain('../pages/index.ts');
+    expect(named).toContain('../pages/PagePeekProvider.tsx');
+    expect(specifiers.filter(name => name.startsWith('~/'))).toEqual([]);
+  });
+
   it('never reaches the drag layer', () => {
     expect(named).not.toContain('CalendarDragLayer.tsx');
+    // By any spelling: a `~/components/features/calendar/CalendarDragLayer`
+    // that this walk could not resolve would show up here instead.
+    expect(specifiers.filter(name => name.includes('CalendarDragLayer'))).toEqual([]);
+    expect(named.filter(name => name.includes('CalendarDragLayer'))).toEqual([]);
   });
 
   it('never reaches @dnd-kit, by any path', () => {
-    const dnd = [...packages].filter(name => name.startsWith('@dnd-kit'));
-    expect(dnd).toEqual([]);
+    expect(specifiers.filter(name => name.includes('@dnd-kit'))).toEqual([]);
   });
 });
 
