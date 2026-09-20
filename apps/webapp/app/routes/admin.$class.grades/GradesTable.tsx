@@ -1,6 +1,6 @@
 import { useState, useMemo } from 'react';
 import { Table, Checkbox, ConfigProvider, Segmented, Popover, Input } from 'antd';
-import { IconAdjustmentsHorizontal, IconMessagePlus, IconSearch } from '@tabler/icons-react';
+import { IconAdjustmentsHorizontal, IconSearch } from '@tabler/icons-react';
 import { useParams, useNavigate, useLocation } from 'react-router';
 import { mean, median } from 'simple-statistics';
 
@@ -168,27 +168,12 @@ const GradesTable = (props: GradesTableProps) => {
         return (
           <div className="pl-2">
             <TableActionButtons
-              // The student detail drawer is owner-only and exists under the
-              // /admin prefix alone, so the link is offered there alone rather
-              // than pointing a teacher at a screen that would refuse them.
-              onView={
-                rolePrefix === 'admin'
-                  ? () => {
-                      navigate(`/admin/${classSlug}/students/${student.login}`);
-                    }
-                  : undefined
-              }
-            >
-              <button
-                className="cursor-pointer hover:text-blue-600"
-                onClick={() => {
-                  navigate(`/${rolePrefix}/${classSlug}/grades/${student.login}`);
-                }}
-                title="Add comment"
-              >
-                <IconMessagePlus size={16} />
-              </button>
-            </TableActionButtons>
+              // The one-student report: every assignment, late hours, the letter
+              // override and the staff note on one page. Served under /admin
+              // and /teacher alike.
+              onView={() => navigate(`/${rolePrefix}/${classSlug}/students/${student.login}`)}
+              hideViewText
+            />
           </div>
         );
       },
