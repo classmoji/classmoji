@@ -26,6 +26,7 @@ import type { AppUser, MembershipWithOrganization } from '~/types';
 // (student/assistant) are never reduced. Keyed by `route.link`.
 const OWNER_CORE_LINKS = new Set([
   '/dashboard',
+  '/calendar',
   '/repos',
   '/pages',
   '/students',

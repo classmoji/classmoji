@@ -13,7 +13,10 @@ import { buildCalendarUrl, getCalendarDateRange } from '~/utils/calendar.server'
 import CourseCalendar from '~/components/features/calendar/CourseCalendar';
 import CalendarSubscriptionCard from '~/components/features/calendar/CalendarSubscriptionCard';
 import AddEventModal, { type AddEventDefaults } from '~/components/features/calendar/AddEventModal';
-import EditEventModal, { type EventFormData } from '~/components/features/calendar/EditEventModal';
+import EditEventModal, {
+  type EventDeleteOptions,
+  type EventFormData,
+} from '~/components/features/calendar/EditEventModal';
 import EventCard from '~/components/features/calendar/EventCard';
 import EventLinks from '~/components/features/calendar/EventLinks';
 import type { CalendarEventWithLinks } from '~/components/features/calendar/types';
@@ -351,13 +354,13 @@ const AssistantCalendar = ({ loaderData }: Route.ComponentProps) => {
 
     const formData = new FormData();
     formData.append('intent', 'update');
-    formData.append('eventId', selectedEvent.id as string);
+    formData.append('eventId', selectedEvent.id);
     formData.append('eventData', JSON.stringify(eventData));
 
     fetcher.submit(formData, { method: 'POST' });
   };
 
-  const handleDeleteEvent = (eventId: string, options: Record<string, unknown> | null = null) => {
+  const handleDeleteEvent = (eventId: string, options?: EventDeleteOptions) => {
     const formData = new FormData();
     formData.append('intent', 'delete');
     formData.append('eventId', eventId);
@@ -374,6 +377,9 @@ const AssistantCalendar = ({ loaderData }: Route.ComponentProps) => {
       callout.show({ variant: 'error', title: 'You can only move your own events' });
       return;
     }
+    // A persisted event always has an id; the shared type leaves it optional
+    // because synthesized items (deadlines, form closes) build theirs.
+    if (!event.id) return;
 
     // Optimistically update events immediately for smooth UI
     const updatedEvents = (events as CalendarEventWithLinks[]).map((e: CalendarEventWithLinks) => {
@@ -382,8 +388,7 @@ const AssistantCalendar = ({ loaderData }: Route.ComponentProps) => {
         ((!e.occurrence_date && !event.occurrence_date) ||
           (e.occurrence_date &&
             event.occurrence_date &&
-            new Date(e.occurrence_date as string).getTime() ===
-              new Date(event.occurrence_date as string).getTime()));
+            new Date(e.occurrence_date).getTime() === new Date(event.occurrence_date).getTime()));
 
       if (isSameEvent) {
         return {
@@ -411,12 +416,16 @@ const AssistantCalendar = ({ loaderData }: Route.ComponentProps) => {
     const eventPayload: Record<string, unknown> = { ...eventData };
     if (event.is_recurring && event.occurrence_date) {
       eventPayload.editScope = 'this_only';
-      eventPayload.occurrenceDate = event.occurrence_date;
+      // Normalised, not passed through: `occurrence_date` arrives as a real
+      // Date over single fetch, and this only survived `JSON.stringify` because
+      // Date has a `toJSON`. The edit modal already sends an ISO string here,
+      // so the action sees one shape either way.
+      eventPayload.occurrenceDate = new Date(event.occurrence_date).toISOString();
     }
 
     const formData = new FormData();
     formData.append('intent', 'update');
-    formData.append('eventId', event.id as string);
+    formData.append('eventId', event.id);
     formData.append('eventData', JSON.stringify(eventPayload));
 
     fetcher.submit(formData, { method: 'POST' });
@@ -496,13 +505,13 @@ const AssistantCalendar = ({ loaderData }: Route.ComponentProps) => {
 
       <EditEventModal
         open={editModalOpen}
-        event={selectedEvent as Parameters<typeof EditEventModal>[0]['event']}
+        event={selectedEvent}
         onClose={() => {
           setEditModalOpen(false);
           setSelectedEvent(null);
         }}
-        onSubmit={handleUpdateEvent as Parameters<typeof EditEventModal>[0]['onSubmit']}
-        onDelete={handleDeleteEvent as Parameters<typeof EditEventModal>[0]['onDelete']}
+        onSubmit={handleUpdateEvent}
+        onDelete={handleDeleteEvent}
         loading={loading}
         allowedEventTypes={['OFFICE_HOURS']}
         classSlug={classSlug!}

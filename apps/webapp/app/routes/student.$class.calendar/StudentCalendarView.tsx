@@ -17,20 +17,31 @@ import {
   isToday,
 } from '~/components/features/calendar/utils';
 import type { CalendarEventWithLinks } from '~/components/features/calendar/types';
+import {
+  DEFAULT_START_HOUR,
+  heightForDuration,
+  hourLabelParts,
+  hoursInWindow,
+  remForHours,
+  topForHour,
+} from '~/components/features/calendar/geometry';
 
-const HOUR_HEIGHT_PX = 64; // h-16
-const DAY_START_HOUR = 8;
-const DAY_END_HOUR = 22; // exclusive upper bound for positioning; last label is 9 PM
-const HOURS: number[] = [];
-for (let h = DAY_START_HOUR; h <= DAY_END_HOUR; h++) HOURS.push(h);
+/**
+ * The rendered window: 8 AM through the 10 PM row. Heights are rem, so a row is
+ * 68px at the app's 17px root and follows the reader's UI font size elsewhere.
+ */
+const HOURS = hoursInWindow();
+
+/**
+ * Upper bound (inclusive) for "is this event inside the grid?" and for showing
+ * the now-line. It is NOT the end of the rendered window: the grid draws a
+ * 10 PM row, but an event starting in that row is still sent to the all-day
+ * strip. Unifying the two is a later change; keeping the old bound here leaves
+ * this view's visible window exactly as it was.
+ */
+const DAY_END_HOUR = 22;
 
 const DAY_LABELS = ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'];
-
-const formatHourLabel = (hour: number) => {
-  const h12 = hour % 12 || 12;
-  const suffix = hour < 12 ? 'AM' : 'PM';
-  return { h: h12, suffix };
-};
 
 const isOutsideWindow = (event: CalendarEventWithLinks) => {
   if (event.is_deadline) return true;
@@ -38,7 +49,9 @@ const isOutsideWindow = (event: CalendarEventWithLinks) => {
   const end = new Date(event.end_time);
   const startHour = start.getHours() + start.getMinutes() / 60;
   const endHour = end.getHours() + end.getMinutes() / 60;
-  return startHour < DAY_START_HOUR || startHour >= DAY_END_HOUR || endHour <= DAY_START_HOUR;
+  return (
+    startHour < DEFAULT_START_HOUR || startHour >= DAY_END_HOUR || endHour <= DEFAULT_START_HOUR
+  );
 };
 
 interface StudentCalendarViewProps {
@@ -131,8 +144,8 @@ const StudentCalendarView = ({ events, onEventClick, onMonthChange }: StudentCal
     const todayIsInWeek = weekDates.some(d => isSameDay(d, now));
     const nowHourFloat = now.getHours() + now.getMinutes() / 60;
     const showTimeLine =
-      todayIsInWeek && nowHourFloat >= DAY_START_HOUR && nowHourFloat <= DAY_END_HOUR;
-    const timeLineTop = (nowHourFloat - DAY_START_HOUR) * HOUR_HEIGHT_PX;
+      todayIsInWeek && nowHourFloat >= DEFAULT_START_HOUR && nowHourFloat <= DAY_END_HOUR;
+    const timeLineTop = topForHour(nowHourFloat);
 
     const hasAnyAllDay = weekDates.some(d => getEventsForDate(d).some(e => isOutsideWindow(e)));
 
@@ -210,18 +223,18 @@ const StudentCalendarView = ({ events, onEventClick, onMonthChange }: StudentCal
           className="relative grid"
           style={{
             gridTemplateColumns: '4rem repeat(7, minmax(0, 1fr))',
-            height: `${HOURS.length * HOUR_HEIGHT_PX}px`,
+            height: remForHours(HOURS.length),
           }}
         >
           {/* Hour labels + horizontal rules */}
           <div className="relative">
-            {HOURS.map((hour, i) => {
-              const { h, suffix } = formatHourLabel(hour);
+            {HOURS.map(hour => {
+              const { hour: h, suffix } = hourLabelParts(hour);
               return (
                 <div
                   key={hour}
                   className="absolute right-3 text-xs font-medium text-ink-4 flex flex-col items-end leading-tight"
-                  style={{ top: `${i * HOUR_HEIGHT_PX + 4}px` }}
+                  style={{ top: `calc(${topForHour(hour)} + 4px)` }}
                 >
                   <span>{h}</span>
                   <span>{suffix}</span>
@@ -240,7 +253,7 @@ const StudentCalendarView = ({ events, onEventClick, onMonthChange }: StudentCal
                 <div
                   key={hour}
                   className="absolute left-0 right-0 border-t border-line"
-                  style={{ top: `${i * HOUR_HEIGHT_PX}px` }}
+                  style={{ top: topForHour(hour) }}
                 />
               )
             )}
@@ -259,13 +272,8 @@ const StudentCalendarView = ({ events, onEventClick, onMonthChange }: StudentCal
                 {dayEvents.map(event => {
                   const start = new Date(event.start_time);
                   const end = new Date(event.end_time);
-                  const startFrac = start.getHours() + start.getMinutes() / 60 - DAY_START_HOUR;
-                  const durationHours = Math.max(
-                    0.75,
-                    (end.getTime() - start.getTime()) / (1000 * 60 * 60)
-                  );
-                  const top = startFrac * HOUR_HEIGHT_PX;
-                  const height = durationHours * HOUR_HEIGHT_PX - 4;
+                  const startHour = start.getHours() + start.getMinutes() / 60;
+                  const durationHours = (end.getTime() - start.getTime()) / (1000 * 60 * 60);
                   const type = event.event_type ?? 'OTHER';
                   return (
                     <button
@@ -273,7 +281,11 @@ const StudentCalendarView = ({ events, onEventClick, onMonthChange }: StudentCal
                       type="button"
                       onClick={() => onEventClick?.(event)}
                       className={`absolute left-2 right-2 rounded-lg px-2.5 py-1.5 text-left overflow-hidden transition-all hover:shadow-sm focus:outline-hidden focus:ring-2 focus:ring-violet-400/50 ${getEventTypeLightBg(type)} ${getEventTypeDarkText(type)}`}
-                      style={{ top: `${top}px`, height: `${height}px` }}
+                      style={{
+                        top: topForHour(startHour),
+                        // 4px keeps consecutive blocks from touching.
+                        height: `calc(${heightForDuration(durationHours)} - 4px)`,
+                      }}
                     >
                       <div className="text-sm font-semibold leading-tight truncate">
                         {event.title}
@@ -289,7 +301,7 @@ const StudentCalendarView = ({ events, onEventClick, onMonthChange }: StudentCal
                 {isDayToday && showTimeLine && (
                   <div
                     className="absolute left-0 right-0 pointer-events-none z-20 flex items-center"
-                    style={{ top: `${timeLineTop}px` }}
+                    style={{ top: timeLineTop }}
                   >
                     <div
                       className="w-2 h-2 rounded-full -ml-1 shrink-0"

@@ -24,6 +24,7 @@ import {
 import dayjs from 'dayjs';
 import { getEventTypeDotColor, getEventTypeLabel } from './utils';
 import EventLinks from './EventLinks';
+import type { CalendarEventWithLinks } from './types';
 
 const { TextArea } = Input;
 
@@ -54,24 +55,6 @@ const EDIT_SCOPES = {
   THIS_AND_FUTURE: 'this_and_future',
   ALL: 'all',
 };
-
-interface CalendarEvent {
-  id: string;
-  event_type: string;
-  title: string;
-  description?: string | null;
-  start_time: string;
-  end_time: string;
-  location?: string | null;
-  meeting_link?: string | null;
-  is_recurring?: boolean;
-  occurrence_date?: string | null;
-  recurrence_rule?: { days?: string[]; until?: string | null } | null;
-  _rawPageLinks?: Array<{ page_id: string; occurrence_date?: string | null }>;
-  _rawSlideLinks?: Array<{ slide_id: string; occurrence_date?: string | null }>;
-  _rawAssignmentLinks?: Array<{ assignment_id: string; occurrence_date?: string | null }>;
-  [key: string]: unknown;
-}
 
 interface CalendarResource {
   id: string;
@@ -112,12 +95,21 @@ interface EventFormData {
   linkedAssignmentIds?: string[];
 }
 
+/** What a recurring delete carries back to the route. */
+interface EventDeleteOptions {
+  editScope: string;
+  occurrenceDate: string | null;
+}
+
 interface EditEventModalProps {
   open: boolean;
-  event: CalendarEvent | null;
+  event: CalendarEventWithLinks | null;
   onClose: () => void;
-  onSubmit: (data: EventFormData) => Promise<void>;
-  onDelete: (id: string, opts?: Record<string, unknown>) => Promise<void>;
+  // The routes' handlers submit through a fetcher and return nothing; awaiting a
+  // plain `undefined` is harmless, and demanding a Promise here is what forced
+  // every call site to cast.
+  onSubmit: (data: EventFormData) => void | Promise<void>;
+  onDelete: (id: string, opts?: EventDeleteOptions) => void | Promise<void>;
   loading?: boolean;
   allowedEventTypes?: string[];
   classSlug: string;
@@ -200,7 +192,7 @@ const EditEventModal = ({
       });
 
       const occurrenceDate = event.occurrence_date || event.start_time;
-      const filterLinksForOccurrence = <T extends { occurrence_date?: string | null }>(
+      const filterLinksForOccurrence = <T extends { occurrence_date?: string | Date | null }>(
         links: T[] | undefined
       ) => {
         if (!links) return [];
@@ -299,7 +291,7 @@ const EditEventModal = ({
               : null,
           };
       await onSubmit(dataToSubmit);
-    } else if (scopeAction === 'delete') {
+    } else if (scopeAction === 'delete' && event.id) {
       await onDelete(event.id, {
         editScope,
         occurrenceDate: event.occurrence_date
@@ -320,6 +312,9 @@ const EditEventModal = ({
       return;
     }
 
+    // Only an unsaved event lacks an id, and one of those cannot reach this
+    // modal — but the shared type allows it, so say so rather than assert.
+    if (!event.id) return;
     await onDelete(event.id);
   };
 
@@ -642,4 +637,4 @@ const EditEventModal = ({
 };
 
 export default EditEventModal;
-export type { EventFormData };
+export type { EventFormData, EventDeleteOptions };

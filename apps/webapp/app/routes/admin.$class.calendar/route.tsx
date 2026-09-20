@@ -15,10 +15,13 @@ import {
 import { buildCalendarUrl, getCalendarDateRange } from '~/utils/calendar.server';
 import type { Route } from './+types/route';
 import CourseCalendar from '~/components/features/calendar/CourseCalendar';
-import type { CalendarEvent } from '~/components/features/calendar/utils';
+import type { CalendarEventWithLinks } from '~/components/features/calendar/types';
 import CalendarSubscriptionCard from '~/components/features/calendar/CalendarSubscriptionCard';
 import AddEventModal, { type AddEventDefaults } from '~/components/features/calendar/AddEventModal';
-import EditEventModal, { type EventFormData } from '~/components/features/calendar/EditEventModal';
+import EditEventModal, {
+  type EventDeleteOptions,
+  type EventFormData,
+} from '~/components/features/calendar/EditEventModal';
 import EventCard from '~/components/features/calendar/EventCard';
 import EventLinks from '~/components/features/calendar/EventLinks';
 
@@ -366,7 +369,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
       student_deadline: new Date(newDeadline as string),
     });
 
-    // An Assignment, not a CalendarEvent — so this uses the resource_type the
+    // An Assignment, not a CalendarEventWithLinks — so this uses the resource_type the
     // MCP assignment tools write, keyed on the assignment id. Both ends of the
     // move are recorded: "the deadline changed" is not a useful audit row.
     await audit('UPDATE', 'ASSIGNMENT', assignmentId, {
@@ -381,24 +384,6 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
 
   throw new Response('Invalid intent', { status: 400 });
 };
-
-// CalendarEvent type used locally - compatible with EditEventModal's CalendarEvent
-interface CalendarEventLocal {
-  id: string;
-  title: string;
-  event_type: string;
-  start_time: string;
-  end_time: string;
-  location?: string | null;
-  meeting_link?: string | null;
-  description?: string | null;
-  recurrence_rule?: string | { days?: string[]; until?: string | null } | null;
-  created_by: number | string;
-  is_recurring?: boolean;
-  is_deadline?: boolean;
-  occurrence_date?: string | null;
-  [key: string]: unknown;
-}
 
 const AdminCalendar = ({ loaderData }: Route.ComponentProps) => {
   const {
@@ -425,9 +410,9 @@ const AdminCalendar = ({ loaderData }: Route.ComponentProps) => {
   const [addModalOpen, setAddModalOpen] = useState(false);
   const [addEventDefaults, setAddEventDefaults] = useState<AddEventDefaults | null>(null);
   const [editModalOpen, setEditModalOpen] = useState(false);
-  const [selectedEvent, setSelectedEvent] = useState<CalendarEvent | null>(null);
+  const [selectedEvent, setSelectedEvent] = useState<CalendarEventWithLinks | null>(null);
   const [viewModalOpen, setViewModalOpen] = useState(false);
-  const [optimisticEvents, setOptimisticEvents] = useState<CalendarEventLocal[] | null>(null);
+  const [optimisticEvents, setOptimisticEvents] = useState<CalendarEventWithLinks[] | null>(null);
 
   // Track current view month/year for refreshing after mutations
   const today = new Date();
@@ -481,10 +466,7 @@ const AdminCalendar = ({ loaderData }: Route.ComponentProps) => {
     fetcher.submit(formData, { method: 'POST' });
   };
 
-  const handleDeleteEvent = (
-    eventId: string,
-    options: { editScope?: string; occurrenceDate?: string } | null = null
-  ) => {
+  const handleDeleteEvent = (eventId: string, options?: EventDeleteOptions) => {
     const formData = new FormData();
     formData.append('intent', 'delete');
     formData.append('eventId', eventId);
@@ -495,7 +477,7 @@ const AdminCalendar = ({ loaderData }: Route.ComponentProps) => {
     fetcher.submit(formData, { method: 'POST' });
   };
 
-  const handleEventDrop = (event: CalendarEvent, newStartTime: Date, newEndTime: Date) => {
+  const handleEventDrop = (event: CalendarEventWithLinks, newStartTime: Date, newEndTime: Date) => {
     // OWNER/TEACHER can drag any event, others can only drag their own.
     // IDs are UUID strings, so compare as strings (Number(uuid) is NaN, which
     // would make this always false and block users from moving their own events).
@@ -507,7 +489,7 @@ const AdminCalendar = ({ loaderData }: Route.ComponentProps) => {
     }
 
     // Optimistically update events immediately for smooth UI
-    const updatedEvents = events.map((e: CalendarEventLocal) => {
+    const updatedEvents = events.map((e: CalendarEventWithLinks) => {
       const isSameEvent =
         e.id === event.id &&
         ((!e.occurrence_date && !event.occurrence_date) ||
@@ -541,7 +523,11 @@ const AdminCalendar = ({ loaderData }: Route.ComponentProps) => {
     const eventPayload: Record<string, unknown> = { ...eventData };
     if (event.is_recurring && event.occurrence_date) {
       eventPayload.editScope = 'this_only';
-      eventPayload.occurrenceDate = event.occurrence_date;
+      // Normalised, not passed through: `occurrence_date` arrives as a real
+      // Date over single fetch, and this only survived `JSON.stringify` because
+      // Date has a `toJSON`. The edit modal already sends an ISO string here,
+      // so the action sees one shape either way.
+      eventPayload.occurrenceDate = new Date(event.occurrence_date).toISOString();
     }
 
     const formData = new FormData();
@@ -552,7 +538,7 @@ const AdminCalendar = ({ loaderData }: Route.ComponentProps) => {
     fetcher.submit(formData, { method: 'POST' });
   };
 
-  const handleDeadlineDrop = (deadline: CalendarEvent, newDateTime: Date) => {
+  const handleDeadlineDrop = (deadline: CalendarEventWithLinks, newDateTime: Date) => {
     // Form-close items are deadlines too, but there is no assignment behind them
     // and the id below would not parse. CourseCalendar already refuses to drag
     // them; this is the second lock.
@@ -562,7 +548,7 @@ const AdminCalendar = ({ loaderData }: Route.ComponentProps) => {
     const assignmentId = deadline.id!.replace('deadline-', '');
 
     // Optimistically update events immediately for smooth UI
-    const updatedEvents = events.map((e: CalendarEventLocal) => {
+    const updatedEvents = events.map((e: CalendarEventWithLinks) => {
       if (e.id === deadline.id) {
         return {
           ...e,
@@ -592,7 +578,7 @@ const AdminCalendar = ({ loaderData }: Route.ComponentProps) => {
     setAddModalOpen(true);
   };
 
-  const handleEventClick = (event: CalendarEvent) => {
+  const handleEventClick = (event: CalendarEventWithLinks) => {
     // OWNER/TEACHER can edit any event, others can only edit their own.
     // IDs are UUID strings, so compare as strings (Number(uuid) is NaN).
     const canEditEvent = isAdmin || String(event.created_by) === String(userId);
@@ -665,17 +651,13 @@ const AdminCalendar = ({ loaderData }: Route.ComponentProps) => {
 
           <EditEventModal
             open={editModalOpen}
-            event={
-              selectedEvent as Record<string, unknown> as Parameters<
-                typeof EditEventModal
-              >[0]['event']
-            }
+            event={selectedEvent}
             onClose={() => {
               setEditModalOpen(false);
               setSelectedEvent(null);
             }}
-            onSubmit={handleUpdateEvent as Parameters<typeof EditEventModal>[0]['onSubmit']}
-            onDelete={handleDeleteEvent as Parameters<typeof EditEventModal>[0]['onDelete']}
+            onSubmit={handleUpdateEvent}
+            onDelete={handleDeleteEvent}
             loading={loading}
             classSlug={classSlug!}
             rolePrefix={rolePrefix}

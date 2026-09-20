@@ -630,6 +630,18 @@ export const getClassroomCalendar = async (
 };
 
 /**
+ * One item as the calendar hands it to a caller: an expanded CalendarEvent
+ * occurrence, a synthesized assignment deadline, or a synthesized form close.
+ *
+ * Derived from the function rather than written out, so it cannot describe a
+ * payload the service no longer returns. The webapp keeps its own client-side
+ * shape (`CalendarEventWithLinks`) — importing this one into a component would
+ * pull the service graph into the browser bundle — and a type-level conformance
+ * test in the webapp checks the two still agree where they must.
+ */
+export type ClassroomCalendarItem = Awaited<ReturnType<typeof getClassroomCalendar>>[number];
+
+/**
  * Get form close dates as calendar items.
  *
  * Mirrors getDeadlinesForRange: no CalendarEvent rows are written, the items are

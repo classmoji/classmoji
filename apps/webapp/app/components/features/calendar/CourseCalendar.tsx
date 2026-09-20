@@ -31,11 +31,19 @@ import {
   getEventTypeDotColor,
   getEventTypeLabel,
 } from './utils';
+import {
+  formatHourLabel,
+  heightForDuration,
+  hoursInWindow,
+  monthDropId,
+  parseDropId,
+  remForHours,
+  topForHour,
+  weekDropId,
+} from './geometry';
+import type { CalendarEventWithLinks } from './types';
 
 const EVENT_TYPES = ['OFFICE_HOURS', 'LECTURE', 'LAB', 'ASSESSMENT', 'DEADLINE'];
-
-// Draggable event component
-import type { CalendarEvent } from './utils';
 
 /**
  * Form-close items are deadlines for rendering, filtering and ICS export, but
@@ -43,11 +51,11 @@ import type { CalendarEvent } from './utils';
  * out of the event id and there is no assignment behind a form. A form's close
  * date is changed in the form builder.
  */
-const isDragLocked = (event: CalendarEvent) => Boolean(event.is_form_close);
+const isDragLocked = (event: CalendarEventWithLinks) => Boolean(event.is_form_close);
 
 /** Whether this event can be picked up at all, given the handlers in scope. */
 const canDragEvent = (
-  event: CalendarEvent,
+  event: CalendarEventWithLinks,
   canDragDeadlines: boolean,
   onEventDrop: unknown
 ): boolean => {
@@ -56,7 +64,7 @@ const canDragEvent = (
 };
 
 interface DraggableEventProps {
-  event: CalendarEvent;
+  event: CalendarEventWithLinks;
   children: React.ReactNode;
   disabled?: boolean;
   className?: string;
@@ -99,7 +107,7 @@ interface DroppableCellProps {
   id: string;
   children?: React.ReactNode;
   className: string;
-  onClick?: () => void;
+  style?: React.CSSProperties;
   onMouseDown?: (e: React.MouseEvent) => void;
   onMouseEnter?: () => void;
 }
@@ -108,7 +116,7 @@ const DroppableCell = ({
   id,
   children,
   className,
-  onClick,
+  style,
   onMouseDown,
   onMouseEnter,
 }: DroppableCellProps) => {
@@ -118,7 +126,7 @@ const DroppableCell = ({
     <div
       ref={setNodeRef}
       className={`${className} ${isOver ? '!bg-blue-50 dark:!bg-blue-900/20' : ''}`}
-      onClick={onClick}
+      style={style}
       onMouseDown={onMouseDown}
       onMouseEnter={onMouseEnter}
     >
@@ -128,11 +136,10 @@ const DroppableCell = ({
 };
 
 interface CourseCalendarProps {
-  events: CalendarEvent[];
-  onEventClick?: ((event: CalendarEvent) => void) | null;
-  onCellClick?: ((date: Date) => void) | null;
-  onEventDrop?: ((event: CalendarEvent, newStart: Date, newEnd: Date) => void) | null;
-  onDeadlineDrop?: ((event: CalendarEvent, newStart: Date) => void) | null;
+  events: CalendarEventWithLinks[];
+  onEventClick?: ((event: CalendarEventWithLinks) => void) | null;
+  onEventDrop?: ((event: CalendarEventWithLinks, newStart: Date, newEnd: Date) => void) | null;
+  onDeadlineDrop?: ((event: CalendarEventWithLinks, newStart: Date) => void) | null;
   onMonthChange?: ((year: number, month: number) => void) | null;
   /** Week view: drag across hour cells to pick a time range (click = 1 hour). */
   onRangeSelect?: ((start: Date, end: Date) => void) | null;
@@ -143,7 +150,6 @@ interface CourseCalendarProps {
 const CourseCalendar = ({
   events,
   onEventClick,
-  onCellClick,
   onEventDrop,
   onDeadlineDrop,
   onMonthChange,
@@ -156,7 +162,7 @@ const CourseCalendar = ({
     defaultValue: 'week',
   }); // 'month' or 'week'
   const [selectedTypes, setSelectedTypes] = useState<string[]>([]);
-  const [activeEvent, setActiveEvent] = useState<CalendarEvent | null>(null);
+  const [activeEvent, setActiveEvent] = useState<CalendarEventWithLinks | null>(null);
   const [draggedWidth, setDraggedWidth] = useState<number | null>(null);
   const [currentTime, setCurrentTime] = useState(new Date());
   // Week-view drag-to-select: anchor is the cell where the drag started,
@@ -253,12 +259,12 @@ const CourseCalendar = ({
 
   const getEventsForDate = (date: Date) => {
     const key = new Date(date.getFullYear(), date.getMonth(), date.getDate()).toISOString();
-    const dayEvents = (eventsByDate as Record<string, CalendarEvent[]>)[key] || [];
+    const dayEvents = (eventsByDate as Record<string, CalendarEventWithLinks[]>)[key] || [];
     return sortEventsByTime(dayEvents);
   };
 
   const handleDragStart = (event: DragStartEvent) => {
-    const draggedEvent = event.active.data.current?.event as CalendarEvent | undefined;
+    const draggedEvent = event.active.data.current?.event as CalendarEventWithLinks | undefined;
     if (draggedEvent) {
       setActiveEvent(draggedEvent);
       // Capture the width of the dragged element
@@ -275,7 +281,7 @@ const CourseCalendar = ({
 
     if (!event.over) return;
 
-    const draggedEvent = event.active.data.current!.event as CalendarEvent;
+    const draggedEvent = event.active.data.current!.event as CalendarEventWithLinks;
     const dropId = String(event.over.id);
 
     // Check if this is a deadline drop or regular event drop
@@ -285,41 +291,29 @@ const CourseCalendar = ({
     if (isDeadline && !onDeadlineDrop) return;
     if (!isDeadline && !onEventDrop) return;
 
-    // Parse drop location from ID
-    // Format: "month-YYYY-MM-DD" or "week-YYYY-MM-DD-HH"
-    const parts = dropId.split('-');
+    // The two id formats and this parser live together in geometry.ts, so a
+    // change to one cannot leave the other behind.
+    const target = parseDropId(dropId);
+    if (!target) return;
 
-    if (parts[0] === 'month') {
-      // Month view drop
-      const dropDate = new Date(parseInt(parts[1]), parseInt(parts[2]) - 1, parseInt(parts[3]));
+    const newStartTime = new Date(target.date);
+    if (target.view === 'week') {
+      // The hour in a week drop id is an ABSOLUTE clock hour, never a row index.
+      newStartTime.setHours(target.hour, 0, 0, 0);
+    } else {
+      // A month cell moves the date and keeps the event's time of day.
       const originalStart = new Date(draggedEvent.start_time);
-      const newStartTime = new Date(dropDate);
       newStartTime.setHours(originalStart.getHours(), originalStart.getMinutes(), 0, 0);
-
-      if (isDeadline) {
-        onDeadlineDrop!(draggedEvent, newStartTime);
-      } else {
-        const duration =
-          new Date(draggedEvent.end_time).getTime() - new Date(draggedEvent.start_time).getTime();
-        const newEndTime = new Date(newStartTime.getTime() + duration);
-        onEventDrop!(draggedEvent, newStartTime, newEndTime);
-      }
-    } else if (parts[0] === 'week') {
-      // Week view drop
-      const dropDate = new Date(parseInt(parts[1]), parseInt(parts[2]) - 1, parseInt(parts[3]));
-      const dropHour = parseInt(parts[4]);
-      const newStartTime = new Date(dropDate);
-      newStartTime.setHours(dropHour, 0, 0, 0);
-
-      if (isDeadline) {
-        onDeadlineDrop!(draggedEvent, newStartTime);
-      } else {
-        const duration =
-          new Date(draggedEvent.end_time).getTime() - new Date(draggedEvent.start_time).getTime();
-        const newEndTime = new Date(newStartTime.getTime() + duration);
-        onEventDrop!(draggedEvent, newStartTime, newEndTime);
-      }
     }
+
+    if (isDeadline) {
+      onDeadlineDrop!(draggedEvent, newStartTime);
+      return;
+    }
+
+    const duration =
+      new Date(draggedEvent.end_time).getTime() - new Date(draggedEvent.start_time).getTime();
+    onEventDrop!(draggedEvent, newStartTime, new Date(newStartTime.getTime() + duration));
   };
 
   const handleDragCancel = () => {
@@ -360,18 +354,15 @@ const CourseCalendar = ({
                 const dayEvents = getEventsForDate(date);
                 const isInCurrentMonth = isCurrentMonth(date, currentDate);
                 const isTodayDate = isToday(date);
-                const dropId = `month-${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+                const dropId = monthDropId(date);
 
                 return (
                   <DroppableCell
                     key={dayIdx}
                     id={dropId}
                     className={`min-h-[120px] p-2 border-r border-gray-200 dark:border-neutral-700 last:border-r-0 transition-colors overflow-hidden ${
-                      onCellClick
-                        ? 'cursor-pointer hover:bg-gray-50 dark:hover:bg-neutral-800/50'
-                        : ''
-                    } ${!isInCurrentMonth ? 'bg-gray-50/50 dark:bg-neutral-900/50' : ''}`}
-                    onClick={() => onCellClick?.(date)}
+                      !isInCurrentMonth ? 'bg-gray-50/50 dark:bg-neutral-900/50' : ''
+                    }`}
                   >
                     {/* Date number */}
                     <div className="flex items-center justify-end mb-1">
@@ -438,13 +429,11 @@ const CourseCalendar = ({
   };
 
   const renderWeekView = () => {
-    const timeSlots: number[] = [];
-    for (let hour = 8; hour <= 22; hour++) {
-      timeSlots.push(hour);
-    }
+    const timeSlots = hoursInWindow();
+    const nowHourFloat = currentTime.getHours() + currentTime.getMinutes() / 60;
 
     // Helper to check if event should be in all-day section (deadlines or outside 8AM-10PM)
-    const isAllDayOrOutsideHours = (event: CalendarEvent) => {
+    const isAllDayOrOutsideHours = (event: CalendarEventWithLinks) => {
       if (event.is_deadline) return true;
       const startHour = new Date(event.start_time).getHours();
       const endHour = new Date(event.end_time).getHours();
@@ -497,7 +486,7 @@ const CourseCalendar = ({
           {dates.map((date, dayIdx) => {
             const dayEvents = getEventsForDate(date);
             const allDayEvents = dayEvents.filter(isAllDayOrOutsideHours);
-            const allDayDropId = `month-${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+            const allDayDropId = monthDropId(date);
             return (
               <DroppableCell
                 key={dayIdx}
@@ -557,7 +546,7 @@ const CourseCalendar = ({
             <div
               className="absolute left-0 right-0 pointer-events-none z-10"
               style={{
-                top: `${(currentTime.getHours() + currentTime.getMinutes() / 60 - 8) * 4}rem`,
+                top: topForHour(nowHourFloat),
               }}
             >
               <div className="h-px opacity-30" style={{ backgroundColor: 'var(--accent)' }} />
@@ -569,9 +558,10 @@ const CourseCalendar = ({
               {timeSlots.map(hour => (
                 <div
                   key={hour}
-                  className="h-16 px-1 py-1 text-xs text-ink-3 border-b border-gray-200 dark:border-neutral-700 text-right"
+                  className="px-1 py-1 text-xs text-ink-3 border-b border-gray-200 dark:border-neutral-700 text-right"
+                  style={{ height: remForHours(1) }}
                 >
-                  {hour < 12 ? `${hour} AM` : hour === 12 ? '12 PM' : `${hour - 12} PM`}
+                  {formatHourLabel(hour)}
                 </div>
               ))}
               {/* Current time badge */}
@@ -579,7 +569,7 @@ const CourseCalendar = ({
                 <div
                   className="absolute left-0.5 right-0.5 pointer-events-none z-20"
                   style={{
-                    top: `${(currentTime.getHours() + currentTime.getMinutes() / 60 - 8) * 4}rem`,
+                    top: topForHour(nowHourFloat),
                     transform: 'translateY(-50%)',
                   }}
                 >
@@ -603,7 +593,7 @@ const CourseCalendar = ({
                   className="border-r border-gray-200 dark:border-neutral-700 last:border-r-0 relative"
                 >
                   {timeSlots.map(hour => {
-                    const dropId = `week-${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}-${String(hour).padStart(2, '0')}`;
+                    const dropId = weekDropId(date, hour);
                     const isInSelection =
                       dragSelect !== null &&
                       dragSelect.dayIdx === dayIdx &&
@@ -613,9 +603,10 @@ const CourseCalendar = ({
                       <DroppableCell
                         key={hour}
                         id={dropId}
-                        className={`h-16 border-b border-gray-200 dark:border-neutral-700 cursor-pointer transition-colors hover:bg-nav-hover/50 ${
+                        className={`border-b border-gray-200 dark:border-neutral-700 cursor-pointer transition-colors hover:bg-nav-hover/50 ${
                           isInSelection ? '!bg-blue-100/70 dark:!bg-blue-900/40' : ''
                         }`}
+                        style={{ height: remForHours(1) }}
                         onMouseDown={
                           onRangeSelect
                             ? e => {
@@ -630,11 +621,6 @@ const CourseCalendar = ({
                             ? () => setDragSelect(s => (s ? { ...s, hoverHour: hour } : s))
                             : undefined
                         }
-                        onClick={() => {
-                          const cellDate = new Date(date);
-                          cellDate.setHours(hour, 0, 0, 0);
-                          onCellClick?.(cellDate);
-                        }}
                       />
                     );
                   })}
@@ -646,17 +632,8 @@ const CourseCalendar = ({
                         const startTime = new Date(event.start_time);
                         const endTime = new Date(event.end_time);
                         const startHour = startTime.getHours() + startTime.getMinutes() / 60;
-                        let duration =
-                          (new Date(endTime).getTime() - new Date(startTime).getTime()) /
-                          (1000 * 60 * 60);
-
-                        // Ensure minimum height for short events
-                        if (duration < 0.5) {
-                          duration = 0.5; // Minimum 30 minutes display height
-                        }
-
-                        // Offset by 8 AM start time
-                        const offsetHour = startHour - 8;
+                        const duration =
+                          (endTime.getTime() - startTime.getTime()) / (1000 * 60 * 60);
 
                         return (
                           <DraggableEvent
@@ -673,8 +650,8 @@ const CourseCalendar = ({
                                 : ''
                             }`}
                             style={{
-                              top: `${offsetHour * 4}rem`,
-                              height: `${duration * 4}rem`,
+                              top: topForHour(startHour),
+                              height: heightForDuration(duration),
                             }}
                           >
                             <EventCard
@@ -692,7 +669,7 @@ const CourseCalendar = ({
                     <div
                       className="absolute left-0 right-0 pointer-events-none z-20 flex items-center"
                       style={{
-                        top: `${(currentTime.getHours() + currentTime.getMinutes() / 60 - 8) * 4}rem`,
+                        top: topForHour(nowHourFloat),
                         transform: 'translateY(-50%)',
                       }}
                     >
