@@ -90,7 +90,7 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
     forStudent: false,
   });
 
-  return url ? { url } : { error: 'Downloads are not configured for this classroom.' };
+  return url ? { url } : { error: 'Downloads need content delivery, which is not set up here.' };
 };
 
 /** used / quota, and the bar that turns red before an owner is surprised. */

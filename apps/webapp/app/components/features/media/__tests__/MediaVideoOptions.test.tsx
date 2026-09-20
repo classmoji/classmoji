@@ -46,7 +46,7 @@ describe('which options are shown', () => {
     const html = render('lecture.mp4');
 
     expect(html).toContain('works in every browser');
-    expect(html).toContain('count towards your storage');
+    expect(html).toContain('Only the original counts towards your storage');
     expect(html).toContain('Teaching staff can always download');
   });
 });

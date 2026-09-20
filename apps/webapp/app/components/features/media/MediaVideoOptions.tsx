@@ -85,7 +85,7 @@ export const MediaVideoOptions = ({
         id="media-keep-original"
         label="Keep the original"
         // Ticked and locked when there is no optimised copy to keep it beside.
-        help="Store the file you uploaded as well as the optimised copy. Both count towards your storage."
+        help="Store the file you uploaded alongside the optimised copy. Only the original counts towards your storage."
         checked={value.keepOriginal}
         disabled={disabled || !canDropOriginal(value)}
         onChange={next => onChange('keepOriginal', next)}
