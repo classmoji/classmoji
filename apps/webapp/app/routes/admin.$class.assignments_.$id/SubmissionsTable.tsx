@@ -316,7 +316,7 @@ const SubmissionsTable = ({
     {
       title: 'Grade',
       key: 'grade',
-      width: 240,
+      width: 220,
       render: (_: unknown, repo) => {
         const s = repo.submission;
         if (!s) return null;
@@ -324,31 +324,41 @@ const SubmissionsTable = ({
         s.studentId = repo.student_id;
         s.teamId = repo.team_id;
         return (
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-4">
             <GradeBadges grades={s.grades} emojiMappings={emojiMappings} />
-            <TableActionButtons
-              onView={() =>
-                // The row IS the git repo; hand the helper its name explicitly.
-                openRepositoryAssignmentInGithub(org, {
-                  git_repo: { name: repo.name },
-                  provider_issue_number: s.provider_issue_number,
-                })
-              }
-              hideViewText
-            >
-              <EmojiGrader
-                repositoryAssignment={
-                  s as Parameters<typeof EmojiGrader>[0]['repositoryAssignment']
-                }
-                emojiMappings={emojiMappings}
-              />
-              <LateOverrideButton
-                repositoryAssignment={
-                  s as unknown as Parameters<typeof LateOverrideButton>[0]['repositoryAssignment']
-                }
-              />
-            </TableActionButtons>
+            <EmojiGrader
+              repositoryAssignment={s as Parameters<typeof EmojiGrader>[0]['repositoryAssignment']}
+              emojiMappings={emojiMappings}
+            />
           </div>
+        );
+      },
+    },
+    {
+      title: 'Actions',
+      key: 'actions',
+      width: 110,
+      className: 'border-l border-line',
+      render: (_: unknown, repo) => {
+        const s = repo.submission;
+        if (!s) return null;
+        return (
+          <TableActionButtons
+            onView={() =>
+              // The row IS the git repo; hand the helper its name explicitly.
+              openRepositoryAssignmentInGithub(org, {
+                git_repo: { name: repo.name },
+                provider_issue_number: s.provider_issue_number,
+              })
+            }
+            hideViewText
+          >
+            <LateOverrideButton
+              repositoryAssignment={
+                s as unknown as Parameters<typeof LateOverrideButton>[0]['repositoryAssignment']
+              }
+            />
+          </TableActionButtons>
         );
       },
     },
