@@ -11,6 +11,7 @@ import {
   buildScopedEventData,
   EDIT_SCOPES,
   filterLinksForOccurrence,
+  isExpandedOccurrence,
   scopeCarriesLinks,
 } from '../eventScope';
 
@@ -91,5 +92,39 @@ describe('which stored links prefill the pickers', () => {
       )
     ).toHaveLength(1);
     expect(filterLinksForOccurrence(undefined, OCCURRENCE, true)).toEqual([]);
+  });
+});
+
+describe('which items count as an expanded occurrence', () => {
+  it('reads the occurrence date, not the recurring flag', () => {
+    expect(isExpandedOccurrence({ occurrence_date: '2026-09-21T00:00:00.000Z' })).toBe(true);
+    expect(isExpandedOccurrence({ occurrence_date: new Date('2026-09-21') })).toBe(true);
+    expect(isExpandedOccurrence({ occurrence_date: null })).toBe(false);
+    expect(isExpandedOccurrence({})).toBe(false);
+  });
+
+  it('keeps the undated links of an event flagged recurring with no days', () => {
+    // The row that made this worth extracting: `is_recurring` is true, but the
+    // rule names no days, so the calendar cannot expand it — it shows the event
+    // once, off its own date, reading the undated links. Keying the picker off
+    // the flag would hide them, and saving would then delete them.
+    const dayless = {
+      is_recurring: true,
+      recurrence_rule: { days: [] },
+      occurrence_date: null,
+      start_time: '2026-09-21T14:00:00.000Z',
+    };
+    const links = [
+      { page_id: 'p-undated', occurrence_date: null },
+      { page_id: 'p-dated', occurrence_date: '2026-09-28T00:00:00.000Z' },
+    ];
+
+    const kept = filterLinksForOccurrence(
+      links,
+      dayless.occurrence_date || dayless.start_time,
+      isExpandedOccurrence(dayless)
+    );
+
+    expect(kept.map(l => l.page_id)).toEqual(['p-undated']);
   });
 });

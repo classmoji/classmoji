@@ -25,7 +25,12 @@ import dayjs from 'dayjs';
 import { buildEventWindow, getEventTypeDotColor, getEventTypeLabel } from './utils';
 import EventLinks from './EventLinks';
 import type { CalendarEventWithLinks } from './types';
-import { buildScopedEventData, EDIT_SCOPES, filterLinksForOccurrence } from './eventScope';
+import {
+  buildScopedEventData,
+  EDIT_SCOPES,
+  filterLinksForOccurrence,
+  isExpandedOccurrence,
+} from './eventScope';
 
 const { TextArea } = Input;
 
@@ -173,18 +178,19 @@ const EditEventModal = ({
       });
 
       const occurrenceDate = event.occurrence_date || event.start_time;
-      const isRecurring = Boolean(event.is_recurring);
+      // How the calendar read this item's links — see isExpandedOccurrence.
+      const isOccurrence = isExpandedOccurrence(event);
 
-      const pageLinks = filterLinksForOccurrence(event._rawPageLinks, occurrenceDate, isRecurring);
+      const pageLinks = filterLinksForOccurrence(event._rawPageLinks, occurrenceDate, isOccurrence);
       const slideLinks = filterLinksForOccurrence(
         event._rawSlideLinks,
         occurrenceDate,
-        isRecurring
+        isOccurrence
       );
       const assignmentLinks = filterLinksForOccurrence(
         event._rawAssignmentLinks,
         occurrenceDate,
-        isRecurring
+        isOccurrence
       );
 
       setLinkedPageIds(pageLinks.map(l => l.page_id));

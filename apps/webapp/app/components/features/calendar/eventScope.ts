@@ -16,6 +16,19 @@ export const EDIT_SCOPES = {
 
 export type CalendarEditScope = (typeof EDIT_SCOPES)[keyof typeof EDIT_SCOPES];
 
+/**
+ * Was this item EXPANDED as a recurring occurrence?
+ *
+ * The question everything below actually turns on, and it is answered by
+ * `occurrence_date`, not by `is_recurring`. The calendar sets that date only on
+ * rows it expanded date by date; an event flagged recurring whose rule names no
+ * days has none to expand, so it is shown once, off its own date, reading its
+ * undated links. Reading the flag instead would hide those links in the picker
+ * and then delete them on save.
+ */
+export const isExpandedOccurrence = (event: { occurrence_date?: string | Date | null }): boolean =>
+  Boolean(event.occurrence_date);
+
 /** The link ids the three pickers hold. */
 export interface EventLinkIds {
   linkedPageIds: string[];
@@ -39,21 +52,26 @@ export const isSameDateDay = (date1: string | Date, date2: string | Date) => {
  *
  * The same rule the calendar service reads by, so the pickers show exactly what
  * the event detail shows:
- *   - RECURRING: the links dated to this occurrence, and nothing else. An
+ *   - an EXPANDED OCCURRENCE takes the links dated to it, and nothing else. An
  *     undated link predates the event becoming recurring and the service
  *     ignores it; showing it here would offer the user a link the calendar does
  *     not display, and re-save it onto this date.
- *   - NOT recurring: the undated links (the event's own), plus any dated link
- *     that happens to fall on its date.
+ *   - anything else takes the undated links (the event's own), plus any dated
+ *     link that happens to fall on its date.
+ *
+ * `isOccurrence` is the item's `occurrence_date`, NOT its `is_recurring` flag.
+ * The service sets that date only on rows it expanded date by date, and an
+ * event flagged recurring whose rule names no days is not one of them — it is
+ * shown once, off its own date, reading its undated links.
  */
 export const filterLinksForOccurrence = <T extends { occurrence_date?: string | Date | null }>(
   links: T[] | undefined,
   occurrenceDate: string | Date,
-  isRecurring: boolean
+  isOccurrence: boolean
 ): T[] => {
   if (!links) return [];
   return links.filter(link =>
-    link.occurrence_date ? isSameDateDay(link.occurrence_date, occurrenceDate) : !isRecurring
+    link.occurrence_date ? isSameDateDay(link.occurrence_date, occurrenceDate) : !isOccurrence
   );
 };
 
