@@ -211,7 +211,9 @@ describe('calendar resource allowlist shaping (U5)', () => {
     for (const internal of ['pageLinks', 'slideLinks', 'assignmentLinks', 'overrides']) {
       expect(event).not.toHaveProperty(internal);
     }
-    // …while the published display content survives.
+    // …while the published display content survives, with no publication
+    // flags on it: nothing a student receives here is unpublished, so the flag
+    // would be a constant.
     expect(event.pages).toEqual([{ id: 'p-pub', title: 'Published Page' }]);
     expect(event.title).toBe('Lecture 1');
     expect(event.creator).toEqual({ id: 'owner-1', name: 'Prof', login: 'prof' });
@@ -311,6 +313,65 @@ describe('calendar resource allowlist shaping (U5)', () => {
 
     expect(result.events[0].pages.map(p => p.id)).toEqual(['p-pub']);
     expect(JSON.stringify(result)).not.toContain('SECRET');
+  });
+
+  it('gives staff the flags that say what the class cannot see yet', async () => {
+    // A title on its own does not tell a teacher the page is still a draft.
+    // The web calendar marks those with a Draft pill; a read through here has
+    // to carry the same fact, or the tool shows staff content they cannot tell
+    // apart from published material.
+    getClassroomCalendar.mockResolvedValue([
+      {
+        ...RAW_EVENT,
+        pages: [
+          { page: { id: 'p-draft', title: 'Draft Page', is_draft: true } },
+          { page: { id: 'p-pub', title: 'Published Page', is_draft: false } },
+        ],
+        slides: [{ slide: { id: 's-draft', title: 'Draft Deck', is_draft: true } }],
+        assignments: [
+          {
+            assignment: { id: 'a-1', title: 'HW 1', slug: 'hw-1', is_published: false },
+            repository: { id: 'r-1', title: 'Homework', slug: 'hw', is_published: true },
+          },
+        ],
+      },
+    ]);
+
+    const result = (await calendarResource.handler(
+      { org: 'o', slug: 's' },
+      ownerCtx(),
+      new URL('classmoji://x')
+    )) as {
+      events: Array<{
+        pages: Array<Record<string, unknown>>;
+        slides: Array<Record<string, unknown>>;
+        assignments: Array<{
+          assignment: Record<string, unknown>;
+          repository: Record<string, unknown> | null;
+        }>;
+      }>;
+    };
+
+    const [event] = result.events;
+    expect(event.pages).toEqual([
+      { id: 'p-draft', title: 'Draft Page', is_draft: true },
+      { id: 'p-pub', title: 'Published Page', is_draft: false },
+    ]);
+    expect(event.slides).toEqual([{ id: 's-draft', title: 'Draft Deck', is_draft: true }]);
+    expect(event.assignments[0].assignment).toMatchObject({ id: 'a-1', is_published: false });
+    expect(event.assignments[0].repository).toMatchObject({ id: 'r-1', is_published: true });
+  });
+
+  it('leaves those flags off a student payload', async () => {
+    getClassroomCalendar.mockResolvedValue([RAW_EVENT]);
+
+    const result = (await calendarResource.handler(
+      { org: 'o', slug: 's' },
+      studentCtx(),
+      new URL('classmoji://x')
+    )) as { events: Array<{ pages: Array<Record<string, unknown>> }> };
+
+    expect('is_draft' in result.events[0].pages[0]).toBe(false);
   });
 
   it('keeps deadline fields on the allowlist and shapes deadline rows too', async () => {

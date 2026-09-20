@@ -356,6 +356,12 @@ interface CalendarRow {
  * staff-only rule to the linked content it emits, so a row that arrives with a
  * draft page, a draft deck or an unpublished assignment on it still does not
  * reach a student through here.
+ *
+ * A staff payload keeps the publication flags alongside the titles. Staff are
+ * shown unpublished linked content, and a title on its own does not say that
+ * the class cannot see it yet — the web calendar marks those with a Draft pill
+ * for the same reason. A student's rows carry no such content, so the flags
+ * would be a constant `false` there and are left off.
  */
 function shapeCalendarRow(row: CalendarRow, staff: boolean) {
   const pages = (row.pages ?? [])
@@ -363,13 +369,21 @@ function shapeCalendarRow(row: CalendarRow, staff: boolean) {
     .filter((p): p is NonNullable<CalendarLinkedPage['page']> =>
       Boolean(p && (staff || p.is_draft !== true))
     )
-    .map(p => ({ id: p.id, title: p.title ?? null }));
+    .map(p => ({
+      id: p.id,
+      title: p.title ?? null,
+      ...(staff ? { is_draft: p.is_draft === true } : {}),
+    }));
   const slides = (row.slides ?? [])
     .map(l => l.slide)
     .filter((s): s is NonNullable<CalendarLinkedSlide['slide']> =>
       Boolean(s && (staff || s.is_draft !== true))
     )
-    .map(s => ({ id: s.id, title: s.title ?? null }));
+    .map(s => ({
+      id: s.id,
+      title: s.title ?? null,
+      ...(staff ? { is_draft: s.is_draft === true } : {}),
+    }));
   const assignments = (row.assignments ?? []).flatMap(l =>
     l.assignment &&
     (staff || (l.assignment.is_published !== false && l.repository?.is_published !== false))
@@ -379,12 +393,14 @@ function shapeCalendarRow(row: CalendarRow, staff: boolean) {
               id: l.assignment.id,
               title: l.assignment.title ?? null,
               slug: l.assignment.slug ?? null,
+              ...(staff ? { is_published: l.assignment.is_published !== false } : {}),
             },
             repository: l.repository
               ? {
                   id: l.repository.id,
                   title: l.repository.title ?? null,
                   slug: l.repository.slug ?? null,
+                  ...(staff ? { is_published: l.repository.is_published !== false } : {}),
                 }
               : null,
           },
