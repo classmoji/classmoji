@@ -224,6 +224,20 @@ describe('getClassroomCalendar — the display payload', () => {
     );
   });
 
+  it('leaves the star off the display entries — featured_resource is the one answer', async () => {
+    // A per-entry flag would be a second copy of a fact `featured_resource`
+    // already states, unread by any surface, and sent to students too.
+    const event = await firstEvent(null, true, true, { canSeeDrafts: true });
+
+    for (const entry of [
+      ...(event.pages as Array<Record<string, unknown>>),
+      ...(event.slides as Array<Record<string, unknown>>),
+      ...(event.assignments as Array<Record<string, unknown>>),
+    ]) {
+      expect('featured' in entry).toBe(false);
+    }
+  });
+
   it('echoes the raw link rows back only when the caller asks for them', async () => {
     const event = await firstEvent(null, true, true, { canSeeDrafts: true });
 
@@ -252,10 +266,10 @@ describe('getClassroomCalendar — a caller who may not see unpublished content'
     const event = await firstEvent(null, false, false);
 
     expect(event.pages).toEqual([
-      { page: { id: 'p-pub', title: 'Published page', is_draft: false }, featured: false },
+      { page: { id: 'p-pub', title: 'Published page', is_draft: false } },
     ]);
     expect(event.slides).toEqual([
-      { slide: { id: 's-pub', title: 'Published deck', is_draft: false }, featured: false },
+      { slide: { id: 's-pub', title: 'Published deck', is_draft: false } },
     ]);
   });
 
@@ -296,12 +310,12 @@ describe('getClassroomCalendar — a caller who may see unpublished content', ()
     const event = await asStaff();
 
     expect(event.pages).toEqual([
-      { page: { id: 'p-pub', title: 'Published page', is_draft: false }, featured: false },
-      { page: { id: 'p-draft', title: DRAFT_PAGE_TITLE, is_draft: true }, featured: false },
+      { page: { id: 'p-pub', title: 'Published page', is_draft: false } },
+      { page: { id: 'p-draft', title: DRAFT_PAGE_TITLE, is_draft: true } },
     ]);
     expect(event.slides).toEqual([
-      { slide: { id: 's-pub', title: 'Published deck', is_draft: false }, featured: false },
-      { slide: { id: 's-draft', title: DRAFT_DECK_TITLE, is_draft: true }, featured: false },
+      { slide: { id: 's-pub', title: 'Published deck', is_draft: false } },
+      { slide: { id: 's-draft', title: DRAFT_DECK_TITLE, is_draft: true } },
     ]);
   });
 
@@ -344,7 +358,7 @@ describe('getClassroomCalendar — links follow their occurrence', () => {
     const event = await firstEvent(null, false, true, { canSeeDrafts: true });
 
     expect(event.pages).toEqual([
-      { page: { id: 'p-this', title: 'This week only', is_draft: false }, featured: false },
+      { page: { id: 'p-this', title: 'This week only', is_draft: false } },
     ]);
   });
 
@@ -397,7 +411,7 @@ describe('getClassroomCalendar — deadline items', () => {
     })) as unknown as Array<Record<string, unknown>>;
 
     expect(deadline.pages).toEqual([
-      { page: { id: 'p-guide', title: 'HW 1 guide', is_draft: false }, featured: false },
+      { page: { id: 'p-guide', title: 'HW 1 guide', is_draft: false } },
     ]);
     // The stored link row's own columns stay behind.
     expect(JSON.stringify(deadline.pages)).not.toContain('assignment_id');
@@ -558,6 +572,71 @@ describe('getClassroomCalendar — the starred resource', () => {
       expect(payload).not.toContain(DRAFT_PAGE_TITLE);
       expect(payload).not.toContain('p-draft');
     });
+  });
+
+  describe('when the starred assignment is not published', () => {
+    const starringUnpublished = (over: Record<string, unknown>) =>
+      calendarEventFindMany.mockResolvedValue([
+        storedEvent({
+          pageLinks: [pageLink('p-pub', 'Published page', false)],
+          slideLinks: [],
+          assignmentLinks: [assignmentLink('a-star', UNPUBLISHED_ASSIGNMENT_TITLE, over)],
+        }),
+      ]);
+
+    const cases: Array<[string, Record<string, unknown>]> = [
+      ['the assignment itself is unpublished', { is_published: false, featured: true }],
+      [
+        'its repository is unpublished',
+        { repo_published: false, repo_title: UNPUBLISHED_REPO_TITLE, featured: true },
+      ],
+    ];
+
+    it.each(cases)('staff are shown it flagged as a draft when %s', async (_name, over) => {
+      starringUnpublished(over);
+
+      expect(await featuredOf(null, false, true, { canSeeDrafts: true })).toMatchObject({
+        kind: 'assignment',
+        id: 'a-star',
+        is_draft: true,
+      });
+    });
+
+    it.each(cases)('a student gets nothing, and no trace of it, when %s', async (_name, over) => {
+      starringUnpublished(over);
+
+      const items = await getClassroomCalendar('class-1', START, END, null, false, false);
+      const payload = JSON.stringify(items);
+
+      expect((items[0] as unknown as Record<string, unknown>).featured_resource).toBeNull();
+      expect(payload).not.toContain('WITHHELD');
+      expect(payload).not.toContain(UNPUBLISHED_ASSIGNMENT_TITLE);
+      expect(payload).not.toContain(UNPUBLISHED_REPO_TITLE);
+      expect(payload).not.toContain('a-star');
+    });
+  });
+
+  it('ignores a star dated to another occurrence of the same series', async () => {
+    // The links are filtered to the occurrence BEFORE the star is read, so a
+    // deck starred for next Monday is not this Monday's — and this Monday,
+    // having no star of its own, shows nothing.
+    calendarEventFindMany.mockResolvedValue([
+      storedEvent({
+        is_recurring: true,
+        recurrence_rule: { days: ['monday'] },
+        pageLinks: [
+          pageLink('p-this', 'This week only', false, OCCURRENCE, false),
+          pageLink('p-next', OTHER_DATE_PAGE_TITLE, false, LATER_OCCURRENCE, true),
+        ],
+        slideLinks: [],
+        assignmentLinks: [],
+      }),
+    ]);
+
+    const event = await firstEvent(null, false, true, { canSeeDrafts: true });
+
+    expect(event.featured_resource).toBeNull();
+    expect(JSON.stringify(event)).not.toContain(OTHER_DATE_PAGE_TITLE);
   });
 
   it('prefers the dated star when an event surfaces both buckets', async () => {

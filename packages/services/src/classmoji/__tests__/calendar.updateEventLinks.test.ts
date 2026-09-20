@@ -44,6 +44,8 @@ const { updateEventLinks } = await import('../calendar.service.ts');
 beforeEach(() => {
   vi.clearAllMocks();
   calendarEvent.findFirst.mockResolvedValue({ id: 'event-1' });
+  // The lock doubles as the existence check, so it answers with the row.
+  $queryRaw.mockResolvedValue([{ id: 'event-1' }]);
   page.findMany.mockResolvedValue([{ id: 'p-1' }]);
   slide.findMany.mockResolvedValue([]);
   assignment.findMany.mockResolvedValue([]);
@@ -72,6 +74,31 @@ describe('updateEventLinks — the event has to be in this classroom', () => {
     expect(client.$transaction).not.toHaveBeenCalled();
     expect(calendarEventPageLink.deleteMany).not.toHaveBeenCalled();
     expect(calendarEventPageLink.createMany).not.toHaveBeenCalled();
+  });
+
+  it('asks again under the lock, so a delete mid-flight is a refusal not a 500', async () => {
+    // The findFirst above happens before the transaction opens. An event
+    // deleted in that window used to leave the inserts to fail on a foreign
+    // key, which reached the user as a constraint error.
+    $queryRaw.mockResolvedValue([]);
+
+    await expect(
+      updateEventLinks('event-1', 'class-1', { pageIds: ['p-1'] })
+    ).rejects.toThrow('Calendar event not found in this classroom');
+
+    expect(calendarEventPageLink.deleteMany).not.toHaveBeenCalled();
+    expect(calendarEventPageLink.createMany).not.toHaveBeenCalled();
+  });
+
+  it('locks the row with the classroom condition, not by id alone', async () => {
+    // Locking by id alone would take the lock on another classroom's event
+    // before noticing it was not ours.
+    await updateEventLinks('event-1', 'class-1', { pageIds: ['p-1'] });
+
+    const [strings, ...values] = $queryRaw.mock.calls[0] as [string[], ...unknown[]];
+    expect(strings.join('?')).toContain('FOR UPDATE');
+    expect(strings.join('?')).toContain('classroom_id');
+    expect(values).toEqual(['event-1', 'class-1']);
   });
 
   it('refuses an empty link set just the same', async () => {

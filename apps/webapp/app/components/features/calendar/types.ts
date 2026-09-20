@@ -46,15 +46,20 @@ export interface CalendarFeaturedResource {
 }
 
 /**
- * Is THIS linked chip the starred one?
+ * Is THIS raw link row the starred one?
  *
- * Optional, unlike `is_draft` beside it, and for the opposite reason: an absent
- * star reads as `undefined`, which is falsy, which means "not starred" — the
- * quiet, correct default. Nothing is hidden by forgetting it.
+ * Only on the `_raw*Links` rows, which exist solely so the edit modal can
+ * prefill one date's pickers. The DISPLAY arrays deliberately do not carry it:
+ * which link is starred is answered once, by `featured_resource`, already
+ * resolved for this viewer.
+ *
+ * Optional, unlike `is_draft`, and for the opposite reason: an absent star
+ * reads as `undefined`, which is falsy, which means "not starred" — the quiet,
+ * correct default. Nothing is hidden by forgetting it.
  */
 type MaybeFeatured = { featured?: boolean };
 
-export interface CalendarLinkedPage extends MaybeFeatured {
+export interface CalendarLinkedPage {
   page: {
     id: string;
     title: string;
@@ -71,7 +76,7 @@ export interface CalendarLinkedPage extends MaybeFeatured {
   };
 }
 
-export interface CalendarLinkedSlide extends MaybeFeatured {
+export interface CalendarLinkedSlide {
   slide: {
     id: string;
     title: string;
@@ -80,7 +85,7 @@ export interface CalendarLinkedSlide extends MaybeFeatured {
   };
 }
 
-export interface CalendarLinkedAssignment extends MaybeFeatured {
+export interface CalendarLinkedAssignment {
   assignment: {
     id: string;
     title: string;

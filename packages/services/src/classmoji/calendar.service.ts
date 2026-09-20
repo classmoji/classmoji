@@ -60,15 +60,20 @@ interface CalendarAssignmentLink extends OccurrenceLink {
   } | null;
 }
 
-/** A linked page as the calendar DISPLAYS it. */
+/**
+ * A linked page as the calendar DISPLAYS it.
+ *
+ * No `featured` here on purpose. Which link is starred is answered once, by
+ * `featured_resource` — already resolved for this viewer — and the display
+ * arrays carry only what a surface actually renders. A per-entry flag would be
+ * a second, unread copy of the same fact, sent to students as well.
+ */
 interface CalendarDisplayPage {
   page: {
     id: string;
     title: string;
     is_draft: boolean;
   };
-  /** Starred for the month view. See `CalendarFeaturedResource`. */
-  featured: boolean;
 }
 
 /** A linked deck as the calendar DISPLAYS it. */
@@ -78,7 +83,6 @@ interface CalendarDisplaySlide {
     title: string;
     is_draft: boolean;
   };
-  featured: boolean;
 }
 
 /** A linked assignment as the calendar DISPLAYS it, with its repository. */
@@ -95,7 +99,6 @@ interface CalendarDisplayAssignment {
     slug: string | null;
     is_published: boolean;
   } | null;
-  featured: boolean;
 }
 
 interface CalendarDisplayLinks {
@@ -337,10 +340,12 @@ export {
   assistantMayChangeEventType,
   assistantMayCreateEventType,
   CalendarTimeRangeError,
+  EDIT_SCOPE_THIS_ONLY,
   FEATURED_LINK_KINDS,
   isCalendarTimeRangeError,
   isFeaturedLinkRow,
   resolveFeaturedLink,
+  scopeCarriesLinks,
   toFeaturedLinkRef,
 } from './calendarPolicy.ts';
 export type { FeaturedLinkKind, FeaturedLinkRef } from './calendarPolicy.ts';
@@ -520,12 +525,7 @@ const mapLinksToDisplayFormat = (
         dated: Boolean(l.occurrence_date),
       });
     }
-    return [
-      {
-        page: { id: l.page.id, title: l.page.title, is_draft: l.page.is_draft },
-        featured: l.featured,
-      },
-    ];
+    return [{ page: { id: l.page.id, title: l.page.title, is_draft: l.page.is_draft } }];
   });
 
   const slides = (slideLinks || []).flatMap(l => {
@@ -539,12 +539,7 @@ const mapLinksToDisplayFormat = (
         dated: Boolean(l.occurrence_date),
       });
     }
-    return [
-      {
-        slide: { id: l.slide.id, title: l.slide.title, is_draft: l.slide.is_draft },
-        featured: l.featured,
-      },
-    ];
+    return [{ slide: { id: l.slide.id, title: l.slide.title, is_draft: l.slide.is_draft } }];
   });
 
   // An assignment link follows the publication state of BOTH the assignment and
@@ -584,7 +579,6 @@ const mapLinksToDisplayFormat = (
               is_published: assignment.repository.is_published,
             }
           : null,
-        featured: l.featured,
       },
     ];
   });
@@ -1203,26 +1197,11 @@ export const getDeadlinesForRange = async (
       // Built entry by entry, like the event-link leg: the stored link row
       // carries columns (ids, ordering, timestamps) the calendar never renders.
       pages: assignment.pages.flatMap(l =>
-        l.page
-          ? [
-              {
-                page: { id: l.page.id, title: l.page.title, is_draft: l.page.is_draft },
-                // An assignment's own pages are not calendar links, so there is
-                // no star to carry: the column lives on the CalendarEvent link
-                // rows, which these are not.
-                featured: false,
-              },
-            ]
-          : []
+        l.page ? [{ page: { id: l.page.id, title: l.page.title, is_draft: l.page.is_draft } }] : []
       ),
       slides: assignment.slides.flatMap(l =>
         l.slide
-          ? [
-              {
-                slide: { id: l.slide.id, title: l.slide.title, is_draft: l.slide.is_draft },
-                featured: false,
-              },
-            ]
+          ? [{ slide: { id: l.slide.id, title: l.slide.title, is_draft: l.slide.is_draft } }]
           : []
       ),
       featured_resource: null,
@@ -1711,6 +1690,11 @@ export const updateEventLinks = async (
   // linked. Without this the id checks below would happily rewrite another
   // classroom's event — deleting its links for that date and writing this
   // classroom's in their place — for anyone holding an id.
+  //
+  // This is the EARLY refusal: it fails before the validation queries and
+  // before a transaction is opened. The authoritative check is the same
+  // question asked again under the row lock inside the transaction, which is
+  // where a concurrent delete would otherwise slip through.
   const target = await getPrisma().calendarEvent.findFirst({
     where: { id: eventId, classroom_id: classroomId },
     select: { id: true },
@@ -1762,17 +1746,34 @@ export const updateEventLinks = async (
   });
 
   return getPrisma().$transaction(async tx => {
-    // Take the parent event's row lock BEFORE anything else in here.
+    // Take the parent event's row lock BEFORE anything else in here, and take
+    // it as the real existence check.
     //
-    // At most one link row per (event, date) may be starred, and that rule
-    // spans three tables, so no unique index can hold it on its own (the
-    // partial indexes the migration adds only cover one table each). Under Read
-    // Committed two concurrent saves of the same event would not see each
-    // other's uncommitted rows and could each insert a star into a different
-    // table. Locking the event row first makes them queue: the second save
-    // starts after the first has committed and deleted-and-rewritten the date's
-    // links, so it is rewriting a state it can see.
-    await tx.$queryRaw`SELECT id FROM calendar_events WHERE id = ${eventId} FOR UPDATE`;
+    // Two jobs, one statement. The first is the star: at most one link row per
+    // (event, date) may carry it, and that rule spans three tables, so no
+    // unique index can hold it on its own (the partial indexes the migration
+    // adds only cover one table each). Under Read Committed two concurrent
+    // saves of the same event would not see each other's uncommitted rows and
+    // could each insert a star into a different table. Locking the event row
+    // first makes them queue: the second save starts after the first has
+    // committed and rewritten the date's links, so it rewrites a state it can
+    // see.
+    //
+    // The second is the gap between the findFirst above and this transaction.
+    // An event deleted in that window — or moved to another classroom — left
+    // the inserts below to fail on a foreign key, which reaches the user as a
+    // 500 about a constraint. Asking here, under the lock, with the SAME
+    // classroom condition, turns that race into the refusal the caller already
+    // handles.
+    const locked = await tx.$queryRaw<Array<{ id: string }>>`
+      SELECT id FROM calendar_events
+      WHERE id = ${eventId} AND classroom_id = ${classroomId}
+      FOR UPDATE
+    `;
+
+    if (locked.length === 0) {
+      throw new Error('Calendar event not found in this classroom');
+    }
 
     // Delete existing links for this event/occurrence combination
     await tx.calendarEventPageLink.deleteMany({

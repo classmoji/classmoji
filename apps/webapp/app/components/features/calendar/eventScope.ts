@@ -8,6 +8,18 @@
  * to that occurrence.
  */
 
+import { scopeCarriesLinks } from '@classmoji/services/calendar-policy';
+
+/**
+ * Re-exported so a modal reads one name. The RULE lives in the write-policy
+ * module, which both web actions import too — a fourth hand-written copy of
+ * `editScope === 'this_only'` is exactly what this replaces.
+ *
+ * Safe for the browser: that module is dependency-free by design, and this file
+ * is reached only from the staff edit modal.
+ */
+export { scopeCarriesLinks };
+
 export const EDIT_SCOPES = {
   THIS_ONLY: 'this_only',
   THIS_AND_FUTURE: 'this_and_future',
@@ -82,17 +94,6 @@ export const filterLinksForOccurrence = <T extends { occurrence_date?: string | 
     link.occurrence_date ? isSameDateDay(link.occurrence_date, occurrenceDate) : !isOccurrence
   );
 };
-
-/**
- * Whether an edit at this scope has an occurrence to save links against.
- *
- * Only 'this_only' does. 'all' and 'this and future' address the series, and a
- * link saved from one of those lands in the undated bucket, which a recurring
- * event's occurrences do not read — the links would simply disappear. The star
- * is a column on one of those rows, so it goes exactly where they go.
- */
-export const scopeCarriesLinks = (editScope: string): boolean =>
-  editScope === EDIT_SCOPES.THIS_ONLY;
 
 /**
  * The payload a scoped edit submits: the form's own fields, the scope, the

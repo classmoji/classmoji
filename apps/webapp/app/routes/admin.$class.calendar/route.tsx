@@ -12,6 +12,7 @@ import {
   assistantMayChangeEventType,
   assistantMayCreateEventType,
   isCalendarTimeRangeError,
+  scopeCarriesLinks,
   toFeaturedLinkRef,
 } from '@classmoji/services/calendar-policy';
 import { useCallout } from '@classmoji/ui-components';
@@ -318,9 +319,9 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
     // links, so its link keys are ignored rather than written to the undated
     // bucket, which a recurring event's occurrences never read — writing there
     // would look like saving them and behave like discarding them.
-    const scopeCarriesLinks = !editScope || editScope === 'this_only';
+    // One rule, shared with the modal and the sibling action.
     const hasLinkUpdates =
-      scopeCarriesLinks &&
+      scopeCarriesLinks(editScope) &&
       (linkedPageIds !== undefined ||
         linkedSlideIds !== undefined ||
         linkedAssignmentIds !== undefined);
