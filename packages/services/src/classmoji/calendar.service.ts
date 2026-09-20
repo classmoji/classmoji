@@ -1252,10 +1252,13 @@ export const updateEventWithScope = async (
       const dayBeforeOccurrence = new Date(occurrenceDate);
       dayBeforeOccurrence.setDate(dayBeforeOccurrence.getDate() - 1);
 
-      // Links are stored per occurrence date, so the split has to divide them
-      // too: everything from this date on belongs to the new event, and the
-      // dates before it stay behind. Link rows are date-only, so the boundary
-      // is compared at midnight UTC — the same normalisation the writes use.
+      // Links and overrides are both stored per occurrence date, so the split
+      // has to divide them too: everything from this date on belongs to the new
+      // event, and the dates before it stay behind. One boundary for both, at
+      // midnight UTC — the normalisation the link writes already use, and the
+      // one an override needs as well, since an override's `date` carries the
+      // occurrence's time of day and would fall the wrong side of a bare
+      // instant comparison.
       const splitFrom = normalizeDate(occurrenceDate);
 
       return getPrisma().$transaction(async tx => {
@@ -1308,6 +1311,14 @@ export const updateEventWithScope = async (
         });
         await tx.calendarEventAssignmentLink.updateMany({
           where: laterOccurrences,
+          data: moveToNewEvent,
+        });
+
+        // The overrides for those dates go with them. Left behind they would
+        // hang off a series that no longer reaches their date — invisible, and
+        // a cancelled occurrence would quietly come back on the new event.
+        await tx.calendarEventOverride.updateMany({
+          where: { event_id: eventId, date: { gte: splitFrom } },
           data: moveToNewEvent,
         });
 
@@ -1395,12 +1406,15 @@ export const deleteEventWithScope = async (
       const dayBeforeOccurrence = new Date(occurrenceDate);
       dayBeforeOccurrence.setDate(dayBeforeOccurrence.getDate() - 1);
 
-      // The occurrences from this date on are gone, so their per-date links go
-      // with them; date-only rows compare at midnight UTC. The undated bucket
-      // (NULL occurrence_date) is not matched by `gte` and stays.
+      // The occurrences from this date on are gone, so their per-date rows go
+      // with them. One boundary at midnight UTC for links AND overrides: an
+      // override's `date` carries the occurrence's time of day, so comparing it
+      // against the bare instant would spare the ones earlier in the same day.
+      // The undated bucket (NULL occurrence_date) is not matched by `gte`.
+      const deleteFrom = normalizeDate(occurrenceDate);
       const laterOccurrences = {
         event_id: eventId,
-        occurrence_date: { gte: normalizeDate(occurrenceDate) },
+        occurrence_date: { gte: deleteFrom },
       };
 
       return getPrisma().$transaction(async tx => {
@@ -1408,7 +1422,7 @@ export const deleteEventWithScope = async (
         await tx.calendarEventOverride.deleteMany({
           where: {
             event_id: eventId,
-            date: { gte: occurrenceDate },
+            date: { gte: deleteFrom },
           },
         });
 

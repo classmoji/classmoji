@@ -5,8 +5,9 @@
  * Links are stored against one occurrence date, so a scope that changes WHICH
  * event owns a date has to take that date's links with it:
  *   - 'this and future' ends the old event and starts a new one from this date
- *     on. Every link dated on or after the split belongs to the new event; the
- *     dates before it, and the undated bucket, stay behind.
+ *     on. Every link dated on or after the split belongs to the new event, and
+ *     so does every override on those dates; the dates before it, and the
+ *     undated bucket, stay behind.
  *   - deleting 'this and future' removes those occurrences, so their links go
  *     too rather than outliving the dates they hang on.
  *   - 'this only' and 'all' leave the link tables alone: they change an
@@ -28,6 +29,7 @@ const calendarEvent = {
 const calendarEventOverride = {
   create: vi.fn(),
   update: vi.fn(),
+  updateMany: vi.fn(),
   deleteMany: vi.fn(),
 };
 const linkTable = () => ({ updateMany: vi.fn(), deleteMany: vi.fn(), createMany: vi.fn() });
@@ -97,6 +99,18 @@ describe('updateEventWithScope — this and future', () => {
     }
   });
 
+  it('hands the overrides for those dates over too', async () => {
+    // An override left on the old event hangs off a series that no longer
+    // reaches its date: invisible, and a cancelled occurrence would quietly
+    // come back on the new event.
+    await updateEventWithScope('event-1', {}, 'this_and_future', OCCURRENCE);
+
+    expect(calendarEventOverride.updateMany).toHaveBeenCalledWith({
+      where: { event_id: 'event-1', date: { gte: SPLIT_BOUNDARY } },
+      data: { event_id: 'event-2' },
+    });
+  });
+
   it('does the split in one transaction', async () => {
     // Half a split is worse than none: an ended series whose later links still
     // point at it shows the resources on no date at all.
@@ -153,8 +167,19 @@ describe('deleteEventWithScope — this and future', () => {
         where: { event_id: 'event-1', occurrence_date: { gte: SPLIT_BOUNDARY } },
       });
     }
-    expect(calendarEventOverride.deleteMany).toHaveBeenCalled();
     expect(client.$transaction).toHaveBeenCalledTimes(1);
+  });
+
+  it('measures the overrides from the same boundary as the links', async () => {
+    // An override's `date` carries the occurrence's time of day. Compared
+    // against the bare instant the caller passed (13:00 here), an override
+    // stored earlier the same morning would survive a delete that removed its
+    // occurrence — so both are measured from midnight UTC.
+    await deleteEventWithScope('event-1', 'this_and_future', OCCURRENCE);
+
+    expect(calendarEventOverride.deleteMany).toHaveBeenCalledWith({
+      where: { event_id: 'event-1', date: { gte: SPLIT_BOUNDARY } },
+    });
   });
 
   it('leaves the link rows alone when only this occurrence is cancelled', async () => {

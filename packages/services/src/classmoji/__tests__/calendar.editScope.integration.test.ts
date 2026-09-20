@@ -2,10 +2,13 @@
  * Scoped edits against a REAL Postgres.
  *
  * What cannot be mocked, and is therefore the whole point of this file: link
- * rows store `occurrence_date` as a DATE, and the split compares it against a
- * JavaScript Date at midnight UTC. Whether `>=` puts the boundary date on the
- * new event or leaves it behind is decided by the driver and the column type,
- * not by the service — a fake Prisma would agree with whatever we wrote.
+ * rows store `occurrence_date` as a DATE and overrides store `date` as a
+ * full timestamp, and the split compares both against a JavaScript Date at
+ * midnight UTC. Whether `>=` puts the boundary date on the new event or leaves
+ * it behind is decided by the driver and the column types, not by the service —
+ * a fake Prisma would agree with whatever we wrote. The override half matters
+ * twice over: its stored value carries the occurrence's TIME of day, so the
+ * boundary has to be the date, not the instant the caller happened to pass.
  *
  * SAFETY: every fixture is namespaced with a fresh uuid and torn down in
  * afterAll by deleting the git organization (which cascades classroom →
@@ -108,6 +111,31 @@ describe.skipIf(!RUN)('scoped calendar edits (integration)', () => {
     return event.id;
   };
 
+  /**
+   * An override on a given date, with a time on it — as the calendar writes
+   * one, since an occurrence's date carries the series' time of day.
+   */
+  const addOverride = async (eventId: string, date: Date, hour = 9) => {
+    const at = new Date(date);
+    at.setUTCHours(hour, 0, 0, 0);
+    return prisma.calendarEventOverride.create({
+      data: { event_id: eventId, date: at, is_cancelled: true },
+    });
+  };
+
+  /** Which dates each event owns an override on, as ISO date strings. */
+  const overrideDatesByEvent = async (eventIds: string[]) => {
+    const rows = await prisma.calendarEventOverride.findMany({
+      where: { event_id: { in: eventIds } },
+      select: { event_id: true, date: true },
+      orderBy: { date: 'asc' },
+    });
+    const byEvent: Record<string, string[]> = {};
+    for (const id of eventIds) byEvent[id] = [];
+    for (const row of rows) byEvent[row.event_id].push(row.date.toISOString().slice(0, 10));
+    return byEvent;
+  };
+
   /** Which dates each event owns a page link on, as ISO date strings. */
   const linkDatesByEvent = async (eventIds: string[]) => {
     const rows = await prisma.calendarEventPageLink.findMany({
@@ -140,6 +168,26 @@ describe.skipIf(!RUN)('scoped calendar edits (integration)', () => {
     expect(byEvent[newEvent.id]).toEqual(['2026-09-28', '2026-10-05']);
   });
 
+  it('hands the overrides on those dates over too', async () => {
+    const originalId = await makeSeries();
+    // Deliberately EARLIER in the day than the split instant a caller passes,
+    // which is what a bare instant comparison would miss.
+    await addOverride(originalId, FIRST, 9);
+    await addOverride(originalId, SPLIT, 9);
+    await addOverride(originalId, THIRD, 9);
+
+    const newEvent = await calendarService.updateEventWithScope(
+      originalId,
+      {},
+      'this_and_future',
+      new Date('2026-09-28T13:00:00.000Z')
+    );
+
+    const byEvent = await overrideDatesByEvent([originalId, newEvent.id]);
+    expect(byEvent[originalId]).toEqual(['2026-09-21']);
+    expect(byEvent[newEvent.id]).toEqual(['2026-09-28', '2026-10-05']);
+  });
+
   it('leaves the undated bucket with the original event', async () => {
     // A link written with no occurrence date belongs to the event itself, not
     // to a date, so a split has no date to decide it by.
@@ -166,6 +214,21 @@ describe.skipIf(!RUN)('scoped calendar edits (integration)', () => {
     await calendarService.deleteEventWithScope(originalId, 'this_and_future', SPLIT);
 
     const byEvent = await linkDatesByEvent([originalId]);
+    expect(byEvent[originalId]).toEqual(['2026-09-21']);
+  });
+
+  it('removes the overrides on those dates as well, measured from the same boundary', async () => {
+    const originalId = await makeSeries();
+    await addOverride(originalId, FIRST, 9);
+    await addOverride(originalId, SPLIT, 9);
+
+    await calendarService.deleteEventWithScope(
+      originalId,
+      'this_and_future',
+      new Date('2026-09-28T13:00:00.000Z')
+    );
+
+    const byEvent = await overrideDatesByEvent([originalId]);
     expect(byEvent[originalId]).toEqual(['2026-09-21']);
   });
 
