@@ -28,7 +28,7 @@ export interface AssignmentRowData {
   module: { id: string; title: string; slug: string | null; position?: number };
   repository?: { id: string; title: string } | null;
   quiz?: { id: string; name: string } | null;
-  form?: { id: string; title: string } | null;
+  form?: { id: string; title: string; slug?: string | null } | null;
   /** Pages / slide decks attached to the assignment (PageLink / SlideLink rows). */
   pages?: Array<{ page: { id: string } }>;
   slides?: Array<{ slide: { id: string } }>;
