@@ -58,6 +58,14 @@ export interface GradebookAssignment {
   student_deadline?: string | Date | null;
   submission_mode?: string;
   grades_released?: boolean;
+  quiz_id?: string | null;
+  form_id?: string | null;
+}
+
+/** Per-student state for quiz and form assignments, keyed by assignment id then user id. */
+export interface GradebookActivity {
+  quiz: Record<string, Record<string, { completed: boolean; score: number | null }>>;
+  form: Record<string, Record<string, { submitted: boolean }>>;
 }
 
 /** Kept for the loader's payload; the grid no longer groups by module. */
@@ -88,6 +96,7 @@ interface GradesTableProps {
   settings: OrganizationSettings;
   letterGradeMappings: LetterGradeMappingEntry[];
   memberships: Membership[];
+  activity?: GradebookActivity;
 }
 
 /** The student's submission row for an assignment, wherever its git repo sits. */
@@ -137,6 +146,7 @@ const GradesTable = (props: GradesTableProps) => {
     settings,
     letterGradeMappings: initialLetterGradeMappings,
     memberships,
+    activity = { quiz: {}, form: {} },
   } = props;
   const [letterGradeMappings, setLetterGradeMappings] = useState(initialLetterGradeMappings);
   const [rowFilter, setRowFilter] = useState<RowFilter>('all');
@@ -146,17 +156,14 @@ const GradesTable = (props: GradesTableProps) => {
   const base = `/${rolePrefix}/${classSlug}`;
   const { isDarkMode } = useDarkMode();
 
-  // Repo assignments carry grades; quiz and form assignments do not yet, so
-  // they would be columns of dashes. In deadline order, undated last.
+  // Every published assignment is a column, in deadline order, undated last.
   const columnsSpec = useMemo(
     () =>
-      assignments
-        .filter(a => a.type === 'REPO')
-        .sort((x, y) => {
-          const dx = x.student_deadline ? new Date(x.student_deadline).getTime() : Infinity;
-          const dy = y.student_deadline ? new Date(y.student_deadline).getTime() : Infinity;
-          return dx - dy || x.title.localeCompare(y.title);
-        }),
+      [...assignments].sort((x, y) => {
+        const dx = x.student_deadline ? new Date(x.student_deadline).getTime() : Infinity;
+        const dy = y.student_deadline ? new Date(y.student_deadline).getTime() : Infinity;
+        return dx - dy || x.title.localeCompare(y.title);
+      }),
     [assignments]
   );
 
@@ -181,7 +188,9 @@ const GradesTable = (props: GradesTableProps) => {
         if (!hay.includes(q)) return false;
       }
       if (rowFilter === 'all') return true;
-      const subs = columnsSpec.map(a => findSubmission(student, a.id));
+      const subs = columnsSpec
+        .filter(a => a.type === 'REPO')
+        .map(a => findSubmission(student, a.id));
       if (rowFilter === 'ungraded') return subs.some(s => isSubmitted(s) && !isGraded(s));
       if (rowFilter === 'missing') return subs.some(s => s?.should_be_zero);
       if (rowFilter === 'late') return subs.some(s => isLate(s));
@@ -203,6 +212,37 @@ const GradesTable = (props: GradesTableProps) => {
     );
 
   const renderCell = (student: Student, assignment: GradebookAssignment) => {
+    if (assignment.type === 'QUIZ') {
+      const q = activity.quiz[assignment.id]?.[student.id];
+      const href = assignment.quiz_id ? `${base}/quizzes/${assignment.quiz_id}` : null;
+      const body = !q ? (
+        <Chip tone="grey">Not attempted</Chip>
+      ) : !q.completed ? (
+        <Chip tone="blue">In progress</Chip>
+      ) : (
+        <span className="font-semibold tabular-nums">
+          {q.score === null ? 'Completed' : Math.round(q.score * 10) / 10}
+        </span>
+      );
+      return href ? (
+        <Link
+          to={href}
+          className="flex items-center min-h-9 -m-2 p-2 rounded-md text-ink-1 hover:ring-1 hover:ring-line"
+        >
+          {body}
+        </Link>
+      ) : (
+        body
+      );
+    }
+    if (assignment.type === 'FORM') {
+      const f = activity.form[assignment.id]?.[student.id];
+      return f?.submitted ? (
+        <Chip tone="grey">Responded</Chip>
+      ) : (
+        <Chip tone="grey">No response</Chip>
+      );
+    }
     const sub = findSubmission(student, assignment.id);
     const href = `${base}/assignments/${assignment.id}${
       student.login ? `?q=${encodeURIComponent(student.login)}` : ''
@@ -329,7 +369,7 @@ const GradesTable = (props: GradesTableProps) => {
       const due = assignment.student_deadline
         ? dayjs(assignment.student_deadline).format('MMM D')
         : null;
-      const pending = toGradeCount(assignment.id);
+      const pending = assignment.type === 'REPO' ? toGradeCount(assignment.id) : 0;
       return {
         title: (
           <div className="flex flex-col gap-0.5 min-w-0">
@@ -342,6 +382,9 @@ const GradesTable = (props: GradesTableProps) => {
             </Link>
             <span className="text-[11px] font-medium text-ink-4 truncate">
               {assignment.module_title}
+              {assignment.type !== 'REPO'
+                ? ` · ${assignment.type === 'QUIZ' ? 'quiz' : 'form'}`
+                : ''}
             </span>
             <span className="text-[11px] font-medium text-ink-3">
               {assignment.weight}%{assignment.is_extra_credit ? ' EC' : ''}
@@ -356,8 +399,19 @@ const GradesTable = (props: GradesTableProps) => {
         ),
         key: `a-${assignment.id}`,
         width: 170,
-        sorter: (a: Student, b: Student) =>
-          (gradeOf(a, assignment.id) ?? -1) - (gradeOf(b, assignment.id) ?? -1),
+        sorter: (a: Student, b: Student) => {
+          if (assignment.type === 'QUIZ') {
+            const qa = activity.quiz[assignment.id]?.[a.id]?.score ?? -1;
+            const qb = activity.quiz[assignment.id]?.[b.id]?.score ?? -1;
+            return qa - qb;
+          }
+          if (assignment.type === 'FORM') {
+            const fa = activity.form[assignment.id]?.[a.id]?.submitted ? 1 : 0;
+            const fb = activity.form[assignment.id]?.[b.id]?.submitted ? 1 : 0;
+            return fa - fb;
+          }
+          return (gradeOf(a, assignment.id) ?? -1) - (gradeOf(b, assignment.id) ?? -1);
+        },
         render: (_: unknown, student: Student) => renderCell(student, assignment),
       };
     }),
@@ -378,9 +432,14 @@ const GradesTable = (props: GradesTableProps) => {
             </span>
           </Table.Summary.Cell>
           {columnsSpec.map((a, i) => {
-            const grades = pageData
-              .map(s => gradeOf(s, a.id))
-              .filter((g): g is number => g !== null);
+            const grades =
+              a.type === 'REPO'
+                ? pageData.map(s => gradeOf(s, a.id)).filter((g): g is number => g !== null)
+                : a.type === 'QUIZ'
+                  ? pageData
+                      .map(s => activity.quiz[a.id]?.[s.id]?.score ?? null)
+                      .filter((g): g is number => g !== null)
+                  : [];
             return (
               <Table.Summary.Cell key={a.id} index={i + 2}>
                 <span className="text-xs text-ink-2 tabular-nums">

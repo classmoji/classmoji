@@ -89,12 +89,48 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
           module_id: a.module_id,
           module_title: a.module?.title,
           repository_id: a.repository_id,
+          quiz_id: a.quiz_id,
+          form_id: a.form_id,
           student_deadline: a.student_deadline,
           submission_mode: a.submission_mode,
           grades_released: a.grades_released,
         }))
       ),
   };
+
+  // Quiz and form assignments have no submission row; their per-student state
+  // comes from attempts and responses, one query per assignment, keyed by
+  // assignment id then user id.
+  const activity = promises.assignments.then(async assignments => {
+    const quiz: Record<string, Record<string, { completed: boolean; score: number | null }>> = {};
+    const form: Record<string, Record<string, { submitted: boolean }>> = {};
+    await Promise.all(
+      assignments.map(async a => {
+        if (a.type === 'QUIZ' && a.quiz_id) {
+          const attempts = await ClassmojiService.quizAttempt.findByQuiz(a.quiz_id);
+          quiz[a.id] = {};
+          for (const attempt of attempts) {
+            // Newest first, so the first one seen per student wins.
+            quiz[a.id][attempt.user_id] ??= {
+              completed: Boolean(attempt.completed_at),
+              score: attempt.score ?? null,
+            };
+          }
+        } else if (a.type === 'FORM' && a.form_id) {
+          const responses = await ClassmojiService.formResponse.listByFormId(a.form_id);
+          form[a.id] = {};
+          for (const r of responses) {
+            if (!r.user_id) continue;
+            const submitted = r.submission_state === 'SUBMITTED';
+            form[a.id][r.user_id] = {
+              submitted: submitted || form[a.id][r.user_id]?.submitted || false,
+            };
+          }
+        }
+      })
+    );
+    return { quiz, form };
+  });
 
   addAuditLog({
     request,
@@ -104,7 +140,7 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
   });
 
   return {
-    allData: Promise.all(Object.values(promises)),
+    allData: Promise.all([...Object.values(promises), activity]),
   };
 };
 
@@ -131,6 +167,7 @@ const Grades = ({ loaderData }: Route.ComponentProps) => {
             resolvedLetterGradeMappings,
             resolvedMemberships,
             resolvedAssignments,
+            resolvedActivity,
           ]) => (
             <GradesTable
               emojiMappings={
@@ -148,6 +185,7 @@ const Grades = ({ loaderData }: Route.ComponentProps) => {
                 >[0]['letterGradeMappings']
               }
               memberships={resolvedMemberships as Parameters<typeof GradesTable>[0]['memberships']}
+              activity={resolvedActivity as Parameters<typeof GradesTable>[0]['activity']}
             />
           )}
         </Await>
