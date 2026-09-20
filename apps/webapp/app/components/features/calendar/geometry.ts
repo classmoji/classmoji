@@ -51,6 +51,25 @@ export const HOUR_FLOOR = 6;
 export const MIN_DURATION_HOURS = 0.75;
 
 /**
+ * The shortest block with room under its title for the meta row (the time and
+ * the room). Below it the row is not drawn at all, rather than drawn and sliced
+ * in half by the card's clip.
+ *
+ * Why an hour, measured at the app's 17px root: a block is `hours × 4rem`, less
+ * the 4px gap the grid leaves under it and the card's 17px of padding. An hour
+ * leaves ~47px for a 21px title, a 2px gap and a 17px meta row — about 6px of
+ * slack. Three quarters of an hour leaves 30px, which fits the title and half
+ * of the row. It keys off DURATION rather than measured pixels on purpose: the
+ * hour height follows the reader's UI font size, so both sides of the
+ * comparison scale together and no layout pass is needed to decide.
+ */
+export const META_ROW_MIN_HOURS = 1;
+
+/** Whether a block of `hours` has room for its meta row. */
+export const fitsMetaRow = (hours: number): boolean =>
+  Math.max(hours, MIN_DURATION_HOURS) >= META_ROW_MIN_HOURS;
+
+/**
  * The CSS grid template both week surfaces use: a fixed time gutter plus seven
  * equal day columns. `minmax(0, 1fr)` rather than a bare `1fr` — `1fr` has an
  * `auto` minimum, so one long unbroken title widens its column and knocks the

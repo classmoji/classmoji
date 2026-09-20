@@ -79,6 +79,24 @@ export const formatDayRange = (start: DateInput, end: DateInput) => {
 };
 
 /**
+ * A time range with the meridiem written once when both ends share it —
+ * `2:10 – 3:15 PM`, but `11:30 AM – 12:30 PM` when they do not.
+ *
+ * A week block now carries the time and the room on ONE line, and
+ * `2:10 PM - 3:15 PM` spends a third of that line saying PM twice. The digits
+ * are left exactly as `Intl` wrote them — it separates the meridiem with a
+ * narrow no-break space, not an ordinary one — and only the first meridiem is
+ * taken off.
+ */
+export const formatTimeRange = (start: DateInput, end: DateInput) => {
+  const from = new Date(start);
+  const to = new Date(end);
+  const fromText = formatTime(from);
+  const sameHalfOfDay = from.getHours() < 12 === to.getHours() < 12;
+  return `${sameHalfOfDay ? fromText.replace(/\s*[AP]M$/i, '') : fromText} – ${formatTime(to)}`;
+};
+
+/**
  * One day, named the way a control that acts on it has to name it — `Tue Sep
  * 22`. `formatDate`'s `Tue 22` is enough beside a calendar a reader can see; it
  * is not enough in a button's accessible name, which is announced on its own.

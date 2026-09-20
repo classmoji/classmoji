@@ -8,7 +8,13 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { eventKey, formatDayRange, formatMonthYear, formatShortTime } from '../utils';
+import {
+  eventKey,
+  formatDayRange,
+  formatMonthYear,
+  formatShortTime,
+  formatTimeRange,
+} from '../utils';
 
 describe('formatMonthYear', () => {
   it('is the month and the full year', () => {
@@ -44,6 +50,26 @@ describe('formatShortTime', () => {
   it('prints midnight and noon as 12, never as 0', () => {
     expect(formatShortTime(new Date(2026, 8, 20, 0, 0))).toBe('12 AM');
     expect(formatShortTime(new Date(2026, 8, 20, 12, 30))).toBe('12:30 PM');
+  });
+});
+
+describe('formatTimeRange', () => {
+  const on = (h: number, m: number) => new Date(2026, 8, 22, h, m);
+
+  it('writes the meridiem once when both ends share it', () => {
+    // The block has ONE line for the time and the room; `2:10 PM - 3:15 PM`
+    // spends a third of it saying PM twice.
+    expect(formatTimeRange(on(14, 10), on(15, 15))).toMatch(/^2:10\s*–\s*3:15\s*PM$/);
+    expect(formatTimeRange(on(10, 0), on(11, 0))).toMatch(/^10:00\s*–\s*11:00\s*AM$/);
+  });
+
+  it('keeps both when they differ', () => {
+    expect(formatTimeRange(on(11, 30), on(12, 30))).toMatch(/^11:30\s*AM\s*–\s*12:30\s*PM$/);
+  });
+
+  it('treats noon as PM and midnight as AM', () => {
+    expect(formatTimeRange(on(12, 0), on(13, 0))).toMatch(/^12:00\s*–\s*1:00\s*PM$/);
+    expect(formatTimeRange(on(23, 0), on(0, 30))).toMatch(/^11:00\s*PM\s*–\s*12:30\s*AM$/);
   });
 });
 

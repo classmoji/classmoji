@@ -2,6 +2,7 @@ import type { ReactNode } from 'react';
 import { ClockCircleOutlined, EnvironmentOutlined, VideoCameraOutlined } from '@ant-design/icons';
 import {
   formatTime,
+  formatTimeRange,
   getEventTypeBorderColor,
   getEventTypeLabel,
   getEventDuration,
@@ -12,11 +13,21 @@ import {
 } from './utils';
 import type { CalendarEventWithLinks } from './types';
 
+/** Types whose block says where it is. A deadline has no room. */
+const TYPES_WITH_A_ROOM = ['OFFICE_HOURS', 'LECTURE', 'LAB'];
+
 interface EventCardProps {
   event: CalendarEventWithLinks;
   onClick?: (event: CalendarEventWithLinks) => void;
   showCreator?: boolean;
   compact?: boolean;
+  /**
+   * Compact only: whether the block is tall enough for the meta row under the
+   * title. The caller decides with `geometry.fitsMetaRow`, because it is the
+   * one that knows how tall it made the block. Default true — the drag overlay
+   * and anything else without a slot to fit has nothing to clip against.
+   */
+  showMeta?: boolean;
 }
 
 /**
@@ -30,10 +41,30 @@ interface EventCardProps {
  * inside a button is not renderable. With no `onClick` — the modal, the drag
  * overlay — there is nothing to press, so no button is rendered at all.
  */
-const EventCard = ({ event, onClick, showCreator = false, compact = false }: EventCardProps) => {
+const EventCard = ({
+  event,
+  onClick,
+  showCreator = false,
+  compact = false,
+  showMeta = true,
+}: EventCardProps) => {
   const isHappeningNow = isEventNow(event);
   const duration = getEventDuration(event);
   const padding = compact ? 'p-2' : 'p-3';
+
+  /**
+   * Where the event is, for the compact block: the word Virtual for a meeting
+   * link, otherwise the room — and only for the types that HAVE a room. A
+   * deadline or an assessment says nothing here.
+   */
+  const place = TYPES_WITH_A_ROOM.includes(event.event_type)
+    ? event.meeting_link
+      ? 'Virtual'
+      : (event.location ?? null)
+    : null;
+  const metaText = `${formatTimeRange(event.start_time, event.end_time)}${
+    place ? ` · ${place}` : ''
+  }`;
 
   /**
    * A compact card fills the block the grid sized for it, so a two-hour event
@@ -50,7 +81,9 @@ const EventCard = ({ event, onClick, showCreator = false, compact = false }: Eve
   const fillChild = compact ? 'flex-1 min-h-0 overflow-hidden' : '';
 
   const body: ReactNode = (
-    <div className={`space-y-1.5 ${compact ? 'min-h-0' : ''}`}>
+    // A tighter gap in a block than in the modal: at an hour tall, the two
+    // lines and the space between them have about 6px to spare.
+    <div className={compact ? 'space-y-0.5 min-h-0' : 'space-y-1.5'}>
       {/* Title */}
       <div
         className={`font-medium ${getEventTypeDarkText(event.event_type)} ${
@@ -65,29 +98,39 @@ const EventCard = ({ event, onClick, showCreator = false, compact = false }: Eve
         )}
       </div>
 
-      {/* Time */}
-      <div className="flex items-center gap-1.5 text-xs text-ink-2">
-        <ClockCircleOutlined aria-hidden className="text-gray-400" />
-        <span className="truncate">
-          {formatTime(event.start_time)} - {formatTime(event.end_time)}
-        </span>
-        {!compact && <span className="text-ink-4">• {formatDuration(duration)}</span>}
-      </div>
+      {/* Compact: when and where, on one line. They were two lines, and a class
+          of 65 minutes has room for one — so the second was sliced in half at
+          the bottom edge of the block. The whole line is one truncating span,
+          with the full text on hover for whatever the column was too narrow to
+          show. */}
+      {compact && showMeta && (
+        <div className="flex items-center gap-1.5 text-xs text-ink-2 min-w-0">
+          <ClockCircleOutlined aria-hidden className="text-gray-400 shrink-0" />
+          <span className="truncate" title={metaText}>
+            {formatTimeRange(event.start_time, event.end_time)}
+            {place && (
+              <>
+                {' · '}
+                <span
+                  className={event.meeting_link ? 'text-blue-600 dark:text-blue-400' : undefined}
+                >
+                  {place}
+                </span>
+              </>
+            )}
+          </span>
+        </div>
+      )}
 
-      {/* Location/Virtual for compact view (office hours, lectures and labs) */}
-      {compact && ['OFFICE_HOURS', 'LECTURE', 'LAB'].includes(event.event_type) && (
+      {/* Full: a row each, and how long the event runs. Unchanged — the modal
+          has the room the block does not. */}
+      {!compact && (
         <div className="flex items-center gap-1.5 text-xs text-ink-2">
-          {event.meeting_link ? (
-            <>
-              <VideoCameraOutlined aria-hidden className="text-blue-500" />
-              <span className="text-blue-600 dark:text-blue-400">Virtual</span>
-            </>
-          ) : event.location ? (
-            <>
-              <EnvironmentOutlined aria-hidden className="text-gray-400" />
-              <span className="truncate">{event.location}</span>
-            </>
-          ) : null}
+          <ClockCircleOutlined aria-hidden className="text-gray-400" />
+          <span className="truncate">
+            {formatTime(event.start_time)} - {formatTime(event.end_time)}
+          </span>
+          <span className="text-ink-4">• {formatDuration(duration)}</span>
         </div>
       )}
 

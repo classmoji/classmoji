@@ -98,8 +98,26 @@ describe('WeekGrid', () => {
     const html = render([lecture], TUESDAY);
     expect(html).toContain('Week 1 Lecture');
     expect(html).toContain('ECSC 116');
-    // Students only ever saw a start time here.
-    expect(html).toMatch(/10:00\s*AM\s*-\s*11:00\s*AM/);
+    // Students only ever saw a start time here. The time and the room share
+    // ONE row, with the meridiem written once — two rows did not fit in the
+    // blocks the grid draws, and the second was sliced in half.
+    expect(html).toMatch(/10:00\s*–\s*11:00\s*AM/);
+    expect(html).toContain('·');
+  });
+
+  it('drops the meta row from a block too short to hold it', () => {
+    const short: CalendarEventWithLinks = {
+      ...lecture,
+      id: 'evt-short',
+      title: 'Quick sync',
+      end_time: new Date(2026, 8, 22, 10, 45).toISOString(),
+    };
+    const html = render([short], TUESDAY);
+
+    // Title only, rather than a title and the top half of a second line.
+    expect(html).toContain('Quick sync');
+    expect(html).not.toContain('ECSC 116');
+    expect(html).not.toMatch(/10:00\s*–/);
   });
 
   it('sizes a block by its duration and leaves a gap under it', () => {

@@ -4,7 +4,9 @@ import {
   DEFAULT_START_HOUR,
   HOUR_FLOOR,
   HOUR_HEIGHT_REM,
+  META_ROW_MIN_HOURS,
   MIN_DURATION_HOURS,
+  fitsMetaRow,
   formatHourLabel,
   heightForDuration,
   hourLabelParts,
@@ -233,5 +235,27 @@ describe('isOutsideWindow', () => {
 
   it('takes an explicit window when a caller has one', () => {
     expect(isOutsideWindow(event(7, 0, 8), 6, 22)).toBe(false);
+  });
+});
+
+describe('fitsMetaRow', () => {
+  it('gives an hour-long block its second line', () => {
+    expect(fitsMetaRow(1)).toBe(true);
+    expect(fitsMetaRow(1.5)).toBe(true);
+  });
+
+  it('withholds it from anything shorter', () => {
+    // A 45-minute block is 3rem: room for the title and half of the row below
+    // it, which is worse than no row at all.
+    expect(fitsMetaRow(0.75)).toBe(false);
+    expect(fitsMetaRow(0.5)).toBe(false);
+  });
+
+  it('measures the block that will be DRAWN, not the raw duration', () => {
+    // Everything shorter than the clamp draws at the clamp — still under an
+    // hour, so still no row, but the rule goes through the same clamp the
+    // height does rather than second-guessing it.
+    expect(fitsMetaRow(0.1)).toBe(false);
+    expect(META_ROW_MIN_HOURS).toBeGreaterThan(MIN_DURATION_HOURS);
   });
 });
