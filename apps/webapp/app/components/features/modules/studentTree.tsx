@@ -270,12 +270,6 @@ export const buildRepositoryNode = (
   const total = assignments.length;
   const done = assignments.filter(a => raByAssignmentId[String(a.id)]?.status === 'CLOSED').length;
 
-  const repositoryAction = repositoryUrl ? (
-    <Button size="small" href={repositoryUrl} target="_blank" rel="noreferrer">
-      View
-    </Button>
-  ) : null;
-
   // A self-formed group repo is the one case where the row's job is to send the
   // viewer somewhere in the app rather than to GitHub: until they are on a team
   // there is no repo to open, and the team page was previously reachable only
@@ -314,7 +308,9 @@ export const buildRepositoryNode = (
           repoName={directRepo?.name}
         />
       ) : null,
-    actionNode: baseLevel === 0 ? (selfFormedAction ?? repositoryAction) : null,
+    // The row itself opens the repo; only the team action needs a button.
+    href: repositoryUrl ?? undefined,
+    actionNode: baseLevel === 0 ? selfFormedAction : null,
     statusNode:
       total > 0 ? (
         <span className="text-xs font-medium text-ink-2 tabular-nums">

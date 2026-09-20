@@ -1,4 +1,4 @@
-import { Button, Tag } from 'antd';
+import { Tag } from 'antd';
 import { IconChevronDown, IconChevronRight, type Icon } from '@tabler/icons-react';
 
 import { usePagePeek } from '~/components/features/pages';
@@ -89,35 +89,42 @@ const StudentModuleCard = ({
               {leaves.map(node => {
                 const { label, icon: RowIcon } = kindOf(node);
                 const titleText = typeof node.name === 'string' ? node.name : '';
-                // Every row gets the same plain title and the same "View" button;
-                // repository rows bring their own action (View / Form a team).
-                const view = node.actionNode ? (
-                  node.actionNode
-                ) : node.pageId && peek ? (
-                  // Pages peek in place; everything else opens its own app.
-                  <Button
-                    size="small"
-                    onClick={() => peek.openPeek({ pageId: node.pageId!, title: titleText })}
-                  >
-                    View
-                  </Button>
-                ) : node.href ? (
-                  <Button size="small" href={node.href} target="_blank" rel="noreferrer">
-                    View
-                  </Button>
-                ) : null;
+                // The whole row is the link: pages peek in place, everything
+                // else opens its own app. Repository rows keep their team action.
+                const open =
+                  node.pageId && peek
+                    ? () => peek.openPeek({ pageId: node.pageId!, title: titleText })
+                    : node.href
+                      ? () => window.open(node.href, '_blank', 'noreferrer')
+                      : undefined;
                 return (
-                  <li
-                    key={node.key}
-                    className="flex items-center gap-3 py-2.5 px-2 -mx-2 rounded-lg cursor-pointer transition-colors hover:bg-stone-50 dark:hover:bg-neutral-800"
-                  >
-                    <RowIcon size={18} className="text-gray-400 shrink-0" />
-                    <span className="min-w-0 flex-1 truncate text-ink-1">
-                      <span className="font-semibold mr-2">{label}:</span>
-                      {node.name}
-                    </span>
-                    {node.statusNode}
-                    {view}
+                  <li key={node.key}>
+                    <div
+                      role={open ? 'link' : undefined}
+                      tabIndex={open ? 0 : undefined}
+                      onClick={open}
+                      onKeyDown={e => {
+                        if (open && (e.key === 'Enter' || e.key === ' ')) {
+                          e.preventDefault();
+                          open();
+                        }
+                      }}
+                      className={`flex items-center gap-3 py-2.5 px-2 -mx-2 rounded-lg transition-colors ${
+                        open ? 'cursor-pointer hover:bg-stone-50 dark:hover:bg-neutral-800' : ''
+                      }`}
+                    >
+                      <RowIcon size={18} className="text-gray-400 shrink-0" />
+                      <span className="min-w-0 flex-1 truncate text-ink-1">
+                        <span className="font-semibold mr-2">{label}:</span>
+                        {node.name}
+                      </span>
+                      {node.statusNode}
+                      {node.actionNode && (
+                        <span role="presentation" onClick={e => e.stopPropagation()}>
+                          {node.actionNode}
+                        </span>
+                      )}
+                    </div>
                   </li>
                 );
               })}
