@@ -243,6 +243,10 @@ export const calendarEventUpdateTool: ToolDefinition<CalendarEventUpdateArgs> = 
   handler: async (args, ctx) => {
     const event = await loadCalendarEventInClassroom(args.event_id, ctx);
     await assertCanModifyEvent(ctx, event.created_by);
+    await assertEventTypeAllowed(
+      ctx,
+      assistantMayChangeEventType(args.event_type, event.event_type)
+    );
 
     const updates = {
       ...(args.title !== undefined ? { title: args.title } : {}),

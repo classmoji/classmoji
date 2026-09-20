@@ -415,6 +415,69 @@ describe('calendar action — the assistant event-type limit follows the role', 
     expect(auditEntry()).toMatchObject({ action: 'CREATE', resourceType: 'CALENDAR' });
   });
 
+  it('refuses an assistant retyping their office hours as a lecture', async () => {
+    // The create limit is worth nothing on its own: add office hours, then
+    // change the type. Same policy, same message, on the update path.
+    asAssistant();
+    mocks.getEventById.mockResolvedValue({
+      id: 'event-1',
+      classroom_id: 'class-1',
+      created_by: 'ta-1',
+      event_type: 'OFFICE_HOURS',
+      title: 'Office hours',
+    });
+
+    const response = (await submit({
+      intent: 'update',
+      eventId: 'event-1',
+      eventData: JSON.stringify({ title: 'Office hours', event_type: 'LECTURE' }),
+    })) as { data?: { error?: string }; init?: { status?: number } };
+
+    expect(response.init?.status).toBe(403);
+    expect(response.data?.error).toBe(ASSISTANT_EVENT_TYPE_MESSAGE);
+    expect(mocks.updateEvent).not.toHaveBeenCalled();
+    expect(mocks.addClassroomAuditLog).not.toHaveBeenCalled();
+  });
+
+  it('still lets an assistant edit the time of their office hours', async () => {
+    // The refusal is about the TYPE. Re-sending the one the event already has
+    // is not a change, and must not block an ordinary edit.
+    asAssistant();
+    mocks.getEventById.mockResolvedValue({
+      id: 'event-1',
+      classroom_id: 'class-1',
+      created_by: 'ta-1',
+      event_type: 'OFFICE_HOURS',
+      title: 'Office hours',
+    });
+
+    await submit({
+      intent: 'update',
+      eventId: 'event-1',
+      eventData: JSON.stringify({ title: 'Office hours', event_type: 'OFFICE_HOURS' }),
+    });
+
+    expect(mocks.updateEvent).toHaveBeenCalled();
+  });
+
+  it('does not stop an OWNER retyping an event', async () => {
+    mocks.getEventById.mockResolvedValue({
+      id: 'event-1',
+      classroom_id: 'class-1',
+      created_by: 'owner-1',
+      event_type: 'OFFICE_HOURS',
+      title: 'Office hours',
+    });
+
+    await submit({
+      intent: 'update',
+      eventId: 'event-1',
+      eventData: JSON.stringify({ title: 'Now a lecture', event_type: 'LECTURE' }),
+    });
+
+    expect(mocks.updateEvent).toHaveBeenCalled();
+  });
+
   it.each(['OWNER', 'TEACHER'])('does not limit a %s to office hours', async role => {
     mocks.assertClassroomAccess.mockResolvedValue({
       userId: 'staff-1',

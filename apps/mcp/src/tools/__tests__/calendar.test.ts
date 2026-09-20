@@ -21,6 +21,7 @@ const mocks = vi.hoisted(() => ({
   updateEvent: vi.fn(),
   updateEventWithScope: vi.fn(),
   auditCreate: vi.fn(),
+  findByClassroomAndUser: vi.fn(),
 }));
 
 vi.mock('@classmoji/services', () => ({
@@ -32,8 +33,17 @@ vi.mock('@classmoji/services', () => ({
       updateEventWithScope: (...a: unknown[]) => mocks.updateEventWithScope(...a),
     },
     audit: { create: (...a: unknown[]) => mocks.auditCreate(...a) },
+    // holdsRole falls back to this when the context's own role is not in the
+    // list it was asked about.
+    classroomMembership: {
+      findByClassroomAndUser: (...a: unknown[]) => mocks.findByClassroomAndUser(...a),
+    },
   },
 }));
+
+// The write policy is NOT mocked: it is a dependency-free module, so these
+// tests exercise the same decision the web calendar actions apply.
+const { ASSISTANT_EVENT_TYPE_MESSAGE } = await import('@classmoji/services/calendar-policy');
 
 const { calendarEventCreateTool, calendarEventUpdateTool } = await import('../calendar.ts');
 
@@ -64,11 +74,38 @@ function parse(result: { content: Array<{ text: string }> }) {
   return JSON.parse(result.content[0].text);
 }
 
+/** An ASSISTANT holding no other role in this classroom. */
+const ASSISTANT_CTX: ToolContext = {
+  viewer: { userId: 'ta-1', clientId: 'c', scopes: new Set(['read', 'write']) },
+  classroom: {
+    classroomId: 'class-1',
+    role: 'ASSISTANT',
+    status: 'ACTIVE',
+    membership: { id: 'm-2', role: 'ASSISTANT' },
+    classroom: { settings: {} },
+  },
+} as unknown as ToolContext;
+
+/** That assistant's own office-hours event. */
+const OWN_OFFICE_HOURS = {
+  id: 'event-3',
+  classroom_id: 'class-1',
+  created_by: 'ta-1',
+  title: 'Office hours',
+  event_type: 'OFFICE_HOURS',
+  is_recurring: false,
+  recurrence_rule: null,
+  start_time: new Date('2026-07-20T10:00:00-04:00'),
+  end_time: new Date('2026-07-20T11:00:00-04:00'),
+};
+
 beforeEach(() => {
   for (const m of Object.values(mocks)) m.mockReset();
   mocks.getEventById.mockResolvedValue(RECURRING_EVENT);
   mocks.updateEventWithScope.mockResolvedValue(RECURRING_EVENT);
   mocks.auditCreate.mockResolvedValue(undefined);
+  // No second membership unless a test says otherwise.
+  mocks.findByClassroomAndUser.mockResolvedValue(null);
 });
 
 // ─── F5: end_time must be after start_time ──────────────────────────────────
@@ -245,5 +282,95 @@ describe('calendar_event_update recurrence preservation (U2)', () => {
     expect(mocks.updateEventWithScope).toHaveBeenCalledTimes(1);
     const updates = mocks.updateEventWithScope.mock.calls[0][1] as Record<string, unknown>;
     expect(updates).toEqual({ location: 'Room 42' });
+  });
+});
+
+// ─── The office-hours limit on assistants ───────────────────────────────────
+
+/**
+ * The same policy both web calendar actions apply, enforced here too: this
+ * server is a third way in, and a limit that only one of three doors checks is
+ * not a limit. The decision itself is pinned in
+ * packages/services/…/calendarPolicy.test.ts.
+ */
+describe('assistants and event types', () => {
+  it('refuses an assistant creating anything but office hours', async () => {
+    await expect(
+      calendarEventCreateTool.handler(
+        {
+          ...CREATE_BASE,
+          start_time: '2026-07-20T10:00:00-04:00',
+          end_time: '2026-07-20T11:00:00-04:00',
+        },
+        ASSISTANT_CTX
+      )
+    ).rejects.toMatchObject({ kind: 'forbidden', message: ASSISTANT_EVENT_TYPE_MESSAGE });
+
+    expect(mocks.createEvent).not.toHaveBeenCalled();
+  });
+
+  it('lets an assistant create office hours', async () => {
+    mocks.createEvent.mockResolvedValue(OWN_OFFICE_HOURS);
+
+    await calendarEventCreateTool.handler(
+      {
+        ...CREATE_BASE,
+        event_type: 'OFFICE_HOURS',
+        start_time: '2026-07-20T10:00:00-04:00',
+        end_time: '2026-07-20T11:00:00-04:00',
+      },
+      ASSISTANT_CTX
+    );
+
+    expect(mocks.createEvent).toHaveBeenCalledTimes(1);
+  });
+
+  it('refuses an assistant retyping their office hours', async () => {
+    mocks.getEventById.mockResolvedValue(OWN_OFFICE_HOURS);
+
+    await expect(
+      calendarEventUpdateTool.handler(
+        { classroom: 'org/winter-2025', event_id: OWN_OFFICE_HOURS.id, event_type: 'LECTURE' },
+        ASSISTANT_CTX
+      )
+    ).rejects.toMatchObject({ kind: 'forbidden', message: ASSISTANT_EVENT_TYPE_MESSAGE });
+
+    expect(mocks.updateEvent).not.toHaveBeenCalled();
+  });
+
+  it('lets an assistant edit their office hours without touching the type', async () => {
+    mocks.getEventById.mockResolvedValue(OWN_OFFICE_HOURS);
+
+    await calendarEventUpdateTool.handler(
+      { classroom: 'org/winter-2025', event_id: OWN_OFFICE_HOURS.id, location: 'ECSC 004' },
+      ASSISTANT_CTX
+    );
+
+    expect(mocks.updateEvent).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not limit an OWNER', async () => {
+    mocks.getEventById.mockResolvedValue({ ...OWN_OFFICE_HOURS, created_by: 'owner-1' });
+
+    await calendarEventUpdateTool.handler(
+      { classroom: 'org/winter-2025', event_id: OWN_OFFICE_HOURS.id, event_type: 'LECTURE' },
+      CTX
+    );
+
+    expect(mocks.updateEvent).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not limit someone who ALSO holds a teacher membership', async () => {
+    // holdsRole, not the context's resolved role: a multi-role user whose gate
+    // happened to resolve as ASSISTANT is not an assistant for this purpose.
+    mocks.getEventById.mockResolvedValue(OWN_OFFICE_HOURS);
+    mocks.findByClassroomAndUser.mockResolvedValue({ id: 'm-9', role: 'TEACHER' });
+
+    await calendarEventUpdateTool.handler(
+      { classroom: 'org/winter-2025', event_id: OWN_OFFICE_HOURS.id, event_type: 'LECTURE' },
+      ASSISTANT_CTX
+    );
+
+    expect(mocks.updateEvent).toHaveBeenCalledTimes(1);
   });
 });

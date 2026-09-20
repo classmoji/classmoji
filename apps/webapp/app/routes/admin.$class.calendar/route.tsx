@@ -258,6 +258,13 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
       ...updateData
     } = eventData;
 
+    // The office-hours limit holds on update too, or it is only as strong as
+    // the create form: an assistant could add office hours and then retype the
+    // event as a lecture.
+    if (!isAdmin && !assistantMayChangeEventType(updateData.event_type, event.event_type)) {
+      return data({ success: false, error: ASSISTANT_EVENT_TYPE_MESSAGE }, { status: 403 });
+    }
+
     // A 'this_and_future' edit SPLITS the series: the service ends the old
     // event and returns a NEW one carrying the occurrences from this date on.
     // Any link write below has to land on that event, not on the old id.
