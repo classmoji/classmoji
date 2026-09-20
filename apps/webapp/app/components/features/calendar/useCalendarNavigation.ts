@@ -42,6 +42,15 @@ const NOW_TICK_MS = 60_000;
 export const stepDate = (date: Date, view: CalendarView, delta: number): Date =>
   view === 'month' ? addMonths(date, delta) : addWeeks(date, delta);
 
+/**
+ * The selection after one click on the legend. Pure, and exported so the rule
+ * can be asserted on its own: an EMPTY list means "no filter, show everything",
+ * so turning the only chosen type back off has to empty the list rather than
+ * leave it holding the other four.
+ */
+export const toggleTypeIn = (types: string[], type: string): string[] =>
+  types.includes(type) ? types.filter(t => t !== type) : [...types, type];
+
 export interface CalendarNavigation {
   /** The date the header is labelled for, and the week/month the grids draw. */
   currentDate: Date;
@@ -109,9 +118,7 @@ export const useCalendarNavigation = (
   );
 
   const toggleType = useCallback((type: string) => {
-    setSelectedTypes(types =>
-      types.includes(type) ? types.filter(t => t !== type) : [...types, type]
-    );
+    setSelectedTypes(types => toggleTypeIn(types, type));
   }, []);
 
   const weekDates = useMemo(() => getWeekDates(currentDate), [currentDate]);
