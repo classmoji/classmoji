@@ -29,7 +29,9 @@ test.describe('Repository List', () => {
     await waitForDataLoad(page);
   });
 
-  test('displays repository list page with correct heading', async ({ authenticatedPage: page }) => {
+  test('displays repository list page with correct heading', async ({
+    authenticatedPage: page,
+  }) => {
     await expect(page.getByRole('heading', { name: 'Repositories' })).toBeVisible();
   });
 
@@ -44,17 +46,29 @@ test.describe('Repository List', () => {
     await expect(table).toBeVisible();
     // antd renders a measurement copy of the header row, so each column title
     // appears twice — assert the first (visible) columnheader of each.
-    await expect(page.getByRole('columnheader', { name: 'Repository', exact: true }).first()).toBeVisible();
-    await expect(page.getByRole('columnheader', { name: 'Type', exact: true }).first()).toBeVisible();
-    await expect(page.getByRole('columnheader', { name: 'Weight (%)', exact: true }).first()).toBeVisible();
-    await expect(page.getByRole('columnheader', { name: 'Status', exact: true }).first()).toBeVisible();
+    await expect(
+      page.getByRole('columnheader', { name: 'Repository', exact: true }).first()
+    ).toBeVisible();
+    await expect(
+      page.getByRole('columnheader', { name: 'Type', exact: true }).first()
+    ).toBeVisible();
+    await expect(
+      page.getByRole('columnheader', { name: 'Weight (%)', exact: true }).first()
+    ).toBeVisible();
+    await expect(
+      page.getByRole('columnheader', { name: 'Status', exact: true }).first()
+    ).toBeVisible();
 
     // Seeded row + its Individual type tag.
-    await expect(repositoryRow(page, SEED_REPO).getByText(SEED_REPO, { exact: true })).toBeVisible();
+    await expect(
+      repositoryRow(page, SEED_REPO).getByText(SEED_REPO, { exact: true })
+    ).toBeVisible();
     await expect(page.getByText('Individual').first()).toBeVisible();
   });
 
-  test('shows the Published status tag for the seeded repo', async ({ authenticatedPage: page }) => {
+  test('shows the Published status tag for the seeded repo', async ({
+    authenticatedPage: page,
+  }) => {
     const row = repositoryRow(page, SEED_REPO);
     await expect(row.getByText('Published')).toBeVisible();
   });
@@ -137,14 +151,20 @@ test.describe('Repository Detail View', () => {
     await expect(page.getByText(SEED_REPO).first()).toBeVisible();
   });
 
-  test('repository detail page shows assignment tabs', async ({ authenticatedPage: page, testOrg }) => {
+  test('repository detail page lists its assignments and a column group per assignment', async ({
+    authenticatedPage: page,
+    testOrg,
+  }) => {
     await page.goto(`/admin/${testOrg}/repos/${SEED_REPO}`);
     await waitForDataLoad(page);
 
-    // The per-assignment tabs live under the "Grades" folder tab.
-    await page.getByRole('button', { name: 'Grades', exact: true }).click();
-    await expect(page.getByRole('tablist')).toBeVisible({ timeout: 5000 });
-    await expect(page.getByRole('tab', { name: /Hello World Part 1/i })).toBeVisible();
+    await expect(page.getByText('Assignments through this repo')).toBeVisible();
+    await expect(page.getByText('Hello World Part 1', { exact: true }).first()).toBeVisible();
+    // Each assignment heads a Submission / Graders / Grade column group.
+    await expect(page.getByRole('columnheader', { name: 'Submission' }).first()).toBeVisible();
+    await expect(
+      page.getByRole('columnheader', { name: 'Grade', exact: true }).first()
+    ).toBeVisible();
   });
 });
 
@@ -160,7 +180,9 @@ test.describe('Repository Actions', () => {
     await repoRow.getByRole('button', { name: 'Edit', exact: true }).click();
 
     await page.waitForURL(new RegExp(`/repos/form\\?title=${SEED_REPO}`), { timeout: 10000 });
-    await expect(page.locator('.ant-modal-content').getByText('Edit repository', { exact: true })).toBeVisible();
+    await expect(
+      page.locator('.ant-modal-content').getByText('Edit repository', { exact: true })
+    ).toBeVisible();
   });
 
   test('published repository shows Sync and Unpublish controls', async ({
@@ -234,7 +256,10 @@ test.describe('Repository Navigation', () => {
 });
 
 test.describe('Repository Weight Display', () => {
-  test('weight cell shows the seeded weight value', async ({ authenticatedPage: page, testOrg }) => {
+  test('weight cell shows the seeded weight value', async ({
+    authenticatedPage: page,
+    testOrg,
+  }) => {
     const classroom = await getClassroomBySlug(TEST_CLASSROOM);
     const title = `qa-weight-${Date.now()}`;
     // EditableCell renders the weight as "5 %".
@@ -367,7 +392,9 @@ test.describe('Assignment form (nested modal)', () => {
     await expect(titleInput).toHaveValue('Hello World Part 1');
   });
 
-  test('repository form modal has Update and Discard buttons', async ({ authenticatedPage: page }) => {
+  test('repository form modal has Update and Discard buttons', async ({
+    authenticatedPage: page,
+  }) => {
     const repoModal = page.locator('.ant-modal-content').first();
     await expect(repoModal).toBeVisible({ timeout: 5000 });
     await expect(repoModal.getByRole('button', { name: /Update repository/i })).toBeVisible();
@@ -385,19 +412,19 @@ test.describe('Repository Detail - Overview & Actions', () => {
     await expect(page.getByText(SEED_REPO).first()).toBeVisible();
   });
 
-  test('shows assignment tabs', async ({ authenticatedPage: page }) => {
-    // Per-assignment tabs live under the "Grades" folder tab.
-    await page.getByRole('button', { name: 'Grades', exact: true }).click();
-    await expect(page.getByRole('tablist')).toBeVisible({ timeout: 5000 });
-    await expect(page.getByRole('tab', { name: /Hello World Part 1/i })).toBeVisible();
+  test('lists the assignments that submit through the repo', async ({
+    authenticatedPage: page,
+  }) => {
+    await expect(page.getByText('Assignments through this repo')).toBeVisible();
+    await expect(page.getByText('Hello World Part 1', { exact: true }).first()).toBeVisible();
+    await expect(page.getByText(/submitted$/).first()).toBeVisible();
   });
 
-  test('shows the Repository Overview card', async ({ authenticatedPage: page }) => {
-    await expect(page.getByText('Repository overview', { exact: true })).toBeVisible();
-  });
-
-  test('shows the Assignments Overview card', async ({ authenticatedPage: page }) => {
-    await expect(page.getByText('Assignments overview', { exact: true })).toBeVisible();
+  test('shows the meta line with template, type and repo count', async ({
+    authenticatedPage: page,
+  }) => {
+    await expect(page.getByText('Template', { exact: false }).first()).toBeVisible();
+    await expect(page.getByText('Student repos', { exact: false })).toBeVisible();
   });
 
   test('has an Actions dropdown', async ({ authenticatedPage: page }) => {
@@ -409,16 +436,8 @@ test.describe('Repository Detail - Overview & Actions', () => {
     await expect(page.getByText('Edit repository')).toBeVisible();
   });
 
-  test('shows the Grade Management card for the selected assignment', async ({
-    authenticatedPage: page,
-  }) => {
-    // Grade Management lives under the "Grades" folder tab.
-    await page.getByRole('button', { name: 'Grades', exact: true }).click();
-    await expect(page.getByText('Grade Management')).toBeVisible();
-  });
-
-  test('shows the grade visibility tag (Hidden/Released)', async ({ authenticatedPage: page }) => {
-    await page.getByRole('button', { name: 'Grades', exact: true }).click();
-    await expect(page.getByText(/Hidden|Released/).first()).toBeVisible();
+  test('offers a grades-released switch per assignment', async ({ authenticatedPage: page }) => {
+    await expect(page.getByText('Grades released').first()).toBeVisible();
+    await expect(page.getByRole('switch').first()).toBeVisible();
   });
 });
