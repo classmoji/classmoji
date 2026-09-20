@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
-import { AnimatePresence, motion, useReducedMotion } from 'framer-motion';
-import { useClickAway } from '@uidotdev/usehooks';
+import { motion, useReducedMotion } from 'framer-motion';
+import { Popover } from 'antd';
 import { isScoreScheme, parseScoreEmoji, scoreEmojiId } from '@classmoji/utils';
 import { useGlobalFetcher, useUser } from '~/hooks';
 
@@ -52,10 +52,6 @@ const EmojiGrader = ({ repositoryAssignment, emojiMappings }: EmojiGraderProps) 
   const { fetcher, notify } = useGlobalFetcher();
   const { user } = useUser();
   const { classroom } = useStore();
-
-  const ref = useClickAway(() => {
-    setShow(false);
-  }) as React.RefObject<HTMLDivElement>;
 
   const assignGrade = (emoji: string) => {
     setPoppedKey(emoji);
@@ -252,33 +248,26 @@ const EmojiGrader = ({ repositoryAssignment, emojiMappings }: EmojiGraderProps) 
   });
 
   return (
-    <div className="relative" ref={ref}>
+    <Popover
+      trigger="click"
+      open={show}
+      onOpenChange={setShow}
+      placement="top"
+      overlayInnerStyle={{ padding: '10px 12px' }}
+      content={
+        <div data-testid="emoji-grade-popover" className="flex flex-wrap gap-2 max-w-[23rem]">
+          {emojiList}
+        </div>
+      }
+    >
       <button
         type="button"
         data-testid="emoji-grade-trigger"
-        onClick={() => setShow(true)}
         className="text-sm font-medium text-ink-2 hover:text-ink-1 hover:underline underline-offset-2 cursor-pointer"
       >
         Grade
       </button>
-      <AnimatePresence>
-        {show && (
-          <motion.div
-            data-testid="emoji-grade-popover"
-            initial={reducedMotion ? { opacity: 0, y: -65 } : { opacity: 0, scale: 0.85, y: -55 }}
-            animate={reducedMotion ? { opacity: 1, y: -65 } : { opacity: 1, scale: 1, y: -65 }}
-            exit={reducedMotion ? { opacity: 0, y: -65 } : { opacity: 0, scale: 0.9, y: -55 }}
-            transition={
-              reducedMotion ? { duration: 0.12 } : { ...POP_SPRING, opacity: { duration: 0.15 } }
-            }
-            style={{ transformOrigin: 'top right' }}
-            className="absolute w-max py-3 px-4 border border-stone-200 dark:border-neutral-700 bg-white dark:bg-neutral-900 rounded-md shadow-sm top-0 right-0 z-10"
-          >
-            <div className="flex flex-wrap gap-2 z-10 max-w-[23rem]">{emojiList}</div>
-          </motion.div>
-        )}
-      </AnimatePresence>
-    </div>
+    </Popover>
   );
 };
 

@@ -12,6 +12,7 @@ import {
   calculateAssignmentGrade,
   calculateLetterGrade,
   calculateStudentFinalGrade,
+  isScoreScheme,
 } from '@classmoji/utils';
 import type {
   GitRepo,
@@ -19,7 +20,8 @@ import type {
   LetterGradeMappingEntry,
   OrganizationSettings,
 } from '@classmoji/utils';
-import { useDarkMode } from '~/hooks';
+import { useDarkMode, useUser } from '~/hooks';
+import EmojiGrader from '~/components/features/grading/EmojiGrader';
 
 /**
  * A gradebook row as it leaves the loader. A CLOSED shape on purpose: the
@@ -101,17 +103,30 @@ interface GradesTableProps {
 }
 
 /** The student's submission row for an assignment, wherever its git repo sits. */
-const findSubmission = (student: Student, assignmentId: string): Submission | undefined => {
-  for (const repo of student.git_repos) {
+type StudentGitRepo = GitRepo & {
+  id?: string;
+  name?: string;
+  student_id?: string | null;
+  team_id?: string | null;
+};
+
+const findSubmissionWithRepo = (
+  student: Student,
+  assignmentId: string
+): { sub: Submission; repo: StudentGitRepo } | undefined => {
+  for (const repo of student.git_repos as StudentGitRepo[]) {
     const found = (repo.assignments as Submission[] | undefined)?.find(
       ra =>
         String(ra.assignment_id ?? (ra.assignment as { id?: string } | undefined)?.id) ===
         assignmentId
     );
-    if (found) return found;
+    if (found) return { sub: found, repo };
   }
   return undefined;
 };
+
+const findSubmission = (student: Student, assignmentId: string): Submission | undefined =>
+  findSubmissionWithRepo(student, assignmentId)?.sub;
 
 const isGraded = (s: Submission | undefined) => Boolean(s && (s.grades?.length ?? 0) > 0);
 const isLate = (s: Submission | undefined) => Boolean(s?.is_late && !s.is_late_override);
@@ -154,6 +169,11 @@ const GradesTable = (props: GradesTableProps) => {
   const [searchQuery, setSearchQuery] = useState('');
   const { class: classSlug } = useParams();
   const rolePrefix = useLocation().pathname.split('/')[1];
+  const { user } = useUser();
+  const viewerId = user?.id;
+  const numericScale = isScoreScheme(Object.keys(emojiMappings));
+  // Owners and teachers reach this page; both may grade.
+  const canGrade = true;
   const base = `/${rolePrefix}/${classSlug}`;
   const { isDarkMode } = useDarkMode();
 
@@ -261,7 +281,8 @@ const GradesTable = (props: GradesTableProps) => {
         <Chip tone="grey">No response</Chip>
       );
     }
-    const sub = findSubmission(student, assignment.id);
+    const hit = findSubmissionWithRepo(student, assignment.id);
+    const sub = hit?.sub;
     const href = `${base}/assignments/${assignment.id}${
       student.login ? `?q=${encodeURIComponent(student.login)}` : ''
     }`;
@@ -272,11 +293,17 @@ const GradesTable = (props: GradesTableProps) => {
       body = <span className="text-ink-4">–</span>;
     } else if (isGraded(sub)) {
       const numeric = calculateAssignmentGrade(sub, emojiMappings, settings);
-      body = (
-        <span className="font-semibold tabular-nums">
-          {numeric === null ? '–' : Math.round(numeric * 10) / 10}
-        </span>
+      // On a numeric scale the score field IS the grade; the number would
+      // repeat it, so it only shows when other graders contributed too.
+      const others = (sub.grades ?? []).filter(
+        g => (g as { grader_id?: string | null }).grader_id !== viewerId
       );
+      body =
+        numericScale && others.length === 0 ? null : (
+          <span className="font-semibold tabular-nums">
+            {numeric === null ? '–' : Math.round(numeric * 10) / 10}
+          </span>
+        );
       if (isLate(sub)) tint = 'bg-amber-50 dark:bg-amber-950/30';
       if (sub.is_late_override)
         body = (
@@ -299,13 +326,36 @@ const GradesTable = (props: GradesTableProps) => {
       body = <Chip tone="grey">Not submitted</Chip>;
     }
 
+    // Grade right here: the score field on a numeric scale, the picker on an
+    // emoji scale. Same control, same API as the assignment page.
+    const control =
+      hit && canGrade ? (
+        <EmojiGrader
+          repositoryAssignment={{
+            id: sub!.id,
+            assignment_id: assignment.id,
+            studentId: hit.repo.student_id ?? undefined,
+            teamId: hit.repo.team_id ?? undefined,
+            grades: (sub!.grades ?? []) as Parameters<
+              typeof EmojiGrader
+            >[0]['repositoryAssignment']['grades'],
+            repository: { name: hit.repo.name ?? null },
+          }}
+          emojiMappings={emojiMappings as Record<string, unknown>}
+        />
+      ) : null;
+
     return (
-      <Link
-        to={href}
-        className={`flex items-center min-h-9 -m-2 p-2 rounded-md text-ink-1 hover:ring-1 hover:ring-line ${tint}`}
+      <div
+        className={`flex items-center justify-between gap-2 min-h-9 -m-2 p-2 rounded-md ${tint}`}
       >
-        {body}
-      </Link>
+        {body && (
+          <Link to={href} className="text-ink-1 hover:underline underline-offset-2">
+            {body}
+          </Link>
+        )}
+        {control}
+      </div>
     );
   };
 
