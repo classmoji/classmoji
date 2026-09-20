@@ -55,7 +55,11 @@ const WeeklyCalendarCard = ({ events, weekStart, classSlug }: WeeklyCalendarCard
   const today = dayjs().startOf('day');
   const grid = groupByDay(events, start);
 
-  const weekNumber = Math.ceil(start.diff(start.startOf('month'), 'day') / 7) + 1;
+  // The date range, and only the date range. The card used to lead with
+  // "Week 6:", counted from the start of the MONTH rather than the term — so it
+  // reset to "Week 1" partway through, named a week nobody in the class would
+  // recognise, and wrapped the heading onto two lines saying it. Nothing in the
+  // schema records when a term starts, so there is no week number to be right.
   const sameMonth = start.month() === end.month();
   const rangeLabel = sameMonth
     ? `${start.format('MMMM D')}–${end.format('D')}`
@@ -65,7 +69,7 @@ const WeeklyCalendarCard = ({ events, weekStart, classSlug }: WeeklyCalendarCard
     <section className="rounded-2xl bg-panel ring-1 ring-line overflow-hidden">
       <header className="flex items-center justify-between gap-3 px-5 sm:px-6 pt-5 sm:pt-6 pb-4">
         <h2 className="text-base sm:text-lg font-semibold text-ink-0 tracking-tight">
-          Week {weekNumber}: {rangeLabel}
+          {rangeLabel}
         </h2>
         <Link
           to={`/student/${classSlug}/calendar`}
