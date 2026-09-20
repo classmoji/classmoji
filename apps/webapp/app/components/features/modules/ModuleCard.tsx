@@ -335,8 +335,9 @@ const ModuleCard = ({
   const openAssignment = (a: AssignmentRowData) => {
     if (a.type === 'REPO' && a.repository?.title) {
       navigate(`/admin/${classSlug}/repos/${encodeURIComponent(a.repository.title)}`);
-    } else if (a.type === 'QUIZ') {
-      navigate(`/admin/${classSlug}/quizzes`);
+    } else if (a.type === 'QUIZ' && a.quiz) {
+      // Straight into the quiz editor, not the list.
+      navigate(`/admin/${classSlug}/quizzes/form?quizId=${a.quiz.id}`);
     } else if (a.type === 'FORM') {
       navigate(`/admin/${classSlug}/forms`);
     } else {
