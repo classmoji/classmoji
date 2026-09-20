@@ -16,6 +16,9 @@ import {
   IconTrash,
   IconWorld,
   type Icon,
+  IconFolder,
+  IconHelpCircle,
+  IconForms,
 } from '@tabler/icons-react';
 
 import ModuleFormModal, {
@@ -297,10 +300,12 @@ const ModuleCard = ({
       label: 'Assignments',
       children: [
         {
-          key: 'ASSIGNMENT',
-          icon: <IconClipboardList size={15} />,
-          label: 'Assignment — submitted through a repository, a quiz or a form',
+          key: 'ASSIGNMENT_REPO',
+          icon: <IconFolder size={15} />,
+          label: 'Repository assignment',
         },
+        { key: 'ASSIGNMENT_QUIZ', icon: <IconHelpCircle size={15} />, label: 'Quiz assignment' },
+        { key: 'ASSIGNMENT_FORM', icon: <IconForms size={15} />, label: 'Form assignment' },
       ],
     },
     {
@@ -313,7 +318,9 @@ const ModuleCard = ({
     },
   ];
   const onAddItem: MenuProps['onClick'] = ({ key }) => {
-    if (key === 'ASSIGNMENT') openAssignmentModal(undefined);
+    if (key === 'ASSIGNMENT_REPO') openAssignmentModal('REPO');
+    else if (key === 'ASSIGNMENT_QUIZ') openAssignmentModal('QUIZ');
+    else if (key === 'ASSIGNMENT_FORM') openAssignmentModal('FORM');
     else {
       setContentType(key as ContentItemType);
       setContentOpen(true);

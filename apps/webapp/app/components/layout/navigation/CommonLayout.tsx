@@ -20,14 +20,14 @@ import ImportProgressBanner, {
 import type { AppUser, MembershipWithOrganization } from '~/types';
 
 // Lean owner navigation. New/imported instructors land in a small core that
-// maps to the GitHub-Classroom mental model (roster + repos + grades) plus the
-// class's public reading surface (Pages); the rest of the platform stays one
+// maps to the GitHub-Classroom mental model (roster + repos + grades) plus
+// Modules, where the coursework is organised; the rest of the platform stays one
 // click away behind the "Show all features" toggle. Other roles
 // (student/assistant) are never reduced. Keyed by `route.link`.
 const OWNER_CORE_LINKS = new Set([
   '/dashboard',
+  '/modules',
   '/repos',
-  '/pages',
   '/students',
   '/teams',
   '/staff',
