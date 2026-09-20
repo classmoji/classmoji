@@ -1,15 +1,21 @@
 import { describe, expect, it } from 'vitest';
 import {
+  CHIP_LINE_MIN_HOURS,
+  CHIP_WRAP_MIN_HOURS,
   DEFAULT_END_HOUR,
   DEFAULT_START_HOUR,
   HOUR_FLOOR,
   HOUR_HEIGHT_REM,
   META_ROW_MIN_HOURS,
   MIN_DURATION_HOURS,
+  blockLayout,
+  crossesMidnight,
   fitsMetaRow,
   formatHourLabel,
+  heightForBlock,
   heightForDuration,
   hourLabelParts,
+  hourRange,
   hoursInWindow,
   isOutsideWindow,
   isTightBlock,
@@ -223,19 +229,210 @@ describe('isOutsideWindow', () => {
     expect(isOutsideWindow(event(6, 0, 7))).toBe(true);
   });
 
-  it('sends an event that starts in the last row to the strip', () => {
-    // A 10 PM row IS rendered; an event starting in it is still exiled. That is
-    // the bound both grids drew, kept exactly so this refactor moves nothing.
-    expect(isOutsideWindow(event(22, 0, 23))).toBe(true);
+  it('keeps an event that starts in the LAST rendered row in the grid', () => {
+    // There is one bound now, and it is the window the grid draws. A 10:30 PM
+    // class used to be exiled to the strip above a 10 PM row with room for it.
+    expect(isOutsideWindow(event(22, 0, 23))).toBe(false);
+    expect(isOutsideWindow(event(22, 30, 23))).toBe(false);
+  });
+
+  it('sends an event that starts past the end of the window to the strip', () => {
+    // 11 PM is outside the DEFAULT window; it is inside a window that a late
+    // event has widened, which is what `hourRange` is for.
     expect(isOutsideWindow(event(23, 30, 23, 45))).toBe(true);
+    expect(isOutsideWindow(event(23, 30, 23, 45), 8, 24)).toBe(false);
   });
 
   it('sends an event that has already finished by 8 AM to the strip', () => {
     expect(isOutsideWindow(event(6, 0, 8))).toBe(true);
   });
 
+  it('sends a zero-length or inverted timed event to the strip', () => {
+    // Otherwise it is drawn at the minimum-duration clamp, which says the
+    // event runs for 45 minutes when nothing says it runs at all.
+    expect(isOutsideWindow(event(10, 0, 10))).toBe(true);
+    expect(isOutsideWindow(event(11, 0, 10))).toBe(true);
+  });
+
+  it('draws an event that crosses midnight, rather than exiling it', () => {
+    // Its end reads as hour 0.5 — EARLIER than its start — so every
+    // comparison between the two clock times has to ask about the day first.
+    const crossing = {
+      start_time: new Date(2026, 8, 22, 23, 0).toISOString(),
+      end_time: new Date(2026, 8, 23, 0, 30).toISOString(),
+    };
+    expect(crossesMidnight(crossing)).toBe(true);
+    expect(isOutsideWindow(crossing, 8, 24)).toBe(false);
+  });
+
   it('takes an explicit window when a caller has one', () => {
     expect(isOutsideWindow(event(7, 0, 8), 6, 22)).toBe(false);
+  });
+});
+
+describe('crossesMidnight', () => {
+  const at = (day: number, hour: number, minute = 0) => new Date(2026, 8, day, hour, minute);
+
+  it('is false for an event that starts and ends on one local day', () => {
+    expect(crossesMidnight({ start_time: at(22, 9), end_time: at(22, 10, 30) })).toBe(false);
+    // 11:59 PM is still the same day.
+    expect(crossesMidnight({ start_time: at(22, 23), end_time: at(22, 23, 59) })).toBe(false);
+  });
+
+  it('is true the moment the end lands on the next day', () => {
+    expect(crossesMidnight({ start_time: at(22, 23), end_time: at(23, 0) })).toBe(true);
+    expect(crossesMidnight({ start_time: at(22, 20), end_time: at(23, 2) })).toBe(true);
+  });
+
+  it('says no rather than guessing when a date cannot be read', () => {
+    expect(crossesMidnight({ start_time: 'nonsense', end_time: at(23, 0) })).toBe(false);
+  });
+});
+
+describe('hourRange', () => {
+  const timed = (startHour: number, endHour: number, day = 22) => ({
+    start_time: new Date(2026, 8, day, Math.trunc(startHour), (startHour % 1) * 60).toISOString(),
+    end_time: new Date(2026, 8, day, Math.trunc(endHour), (endHour % 1) * 60).toISOString(),
+  });
+  const due = (hour: number, minute = 0, day = 22) => ({
+    is_deadline: true,
+    start_time: new Date(2026, 8, day, hour, minute).toISOString(),
+    end_time: new Date(2026, 8, day, hour, minute).toISOString(),
+  });
+
+  it('falls back to the default window when there is nothing to fit', () => {
+    expect(hourRange([])).toEqual({ startHour: DEFAULT_START_HOUR, endHour: DEFAULT_END_HOUR });
+  });
+
+  it('leaves the window alone for a day that already fits inside it', () => {
+    expect(hourRange([timed(10, 11.5), timed(14, 16)])).toEqual({ startHour: 8, endHour: 23 });
+  });
+
+  it('widens down to midnight for an 11:59 PM deadline', () => {
+    // The whole point: the due line needs the 11 PM row to exist.
+    expect(hourRange([due(23, 59)])).toEqual({ startHour: 8, endHour: 24 });
+  });
+
+  it('gives a deadline the row it falls IN, not the one after it', () => {
+    expect(hourRange([due(14)]).endHour).toBe(23);
+    expect(hourRange([due(23)]).endHour).toBe(24);
+  });
+
+  it('never widens UP for a deadline', () => {
+    // A 2 AM due time keeps its all-day chip and gets no line. Opening the
+    // grid to the floor for it would buy two hours of empty night.
+    expect(hourRange([due(2)])).toEqual({ startHour: 8, endHour: 23 });
+    expect(hourRange([due(0, 0)])).toEqual({ startHour: 8, endHour: 23 });
+  });
+
+  it('widens down to cover the end of a late event', () => {
+    expect(hourRange([timed(21, 22.5)]).endHour).toBe(23);
+    expect(hourRange([timed(22, 23.5)]).endHour).toBe(24);
+    expect(hourRange([timed(22, 23)]).endHour).toBe(23);
+  });
+
+  it('gives an event that runs past midnight the rest of the day', () => {
+    const crossing = {
+      start_time: new Date(2026, 8, 22, 23, 0).toISOString(),
+      end_time: new Date(2026, 8, 23, 1, 0).toISOString(),
+    };
+    expect(hourRange([crossing]).endHour).toBe(24);
+  });
+
+  it('widens up to an early event, and no further than the floor', () => {
+    expect(hourRange([timed(7, 8.5)]).startHour).toBe(7);
+    expect(hourRange([timed(6.5, 8)]).startHour).toBe(6);
+    // A 3 AM outlier opens the grid to the floor and stops there.
+    expect(hourRange([timed(3, 4)]).startHour).toBe(HOUR_FLOOR);
+  });
+
+  it('takes the widest answer across the whole set', () => {
+    expect(hourRange([timed(7, 8), timed(10, 11), due(23, 59), timed(14, 15)])).toEqual({
+      startHour: 7,
+      endHour: 24,
+    });
+  });
+
+  it('never runs past 24', () => {
+    const crossing = {
+      start_time: new Date(2026, 8, 22, 23, 30).toISOString(),
+      end_time: new Date(2026, 8, 24, 9, 0).toISOString(),
+    };
+    expect(hourRange([crossing, due(23, 59)]).endHour).toBe(24);
+  });
+
+  it('skips an item whose dates cannot be read', () => {
+    expect(hourRange([{ start_time: 'nonsense', end_time: 'nonsense' }])).toEqual({
+      startHour: DEFAULT_START_HOUR,
+      endHour: DEFAULT_END_HOUR,
+    });
+  });
+});
+
+describe('heightForBlock', () => {
+  it('measures an ordinary block exactly as heightForDuration does', () => {
+    expect(heightForBlock(10, 1, 23)).toBe('4rem');
+    expect(heightForBlock(10, 0.5, 23)).toBe('3rem');
+  });
+
+  it('clips a block at the bottom edge of the window', () => {
+    // 11:30 PM for 15 minutes: the minimum-duration clamp would otherwise hang
+    // half a block below the calendar.
+    expect(heightForBlock(23.5, 0.25, 24)).toBe('2rem');
+    // 11 PM → 12:30 AM, clipped to the hours that are actually drawn.
+    expect(heightForBlock(23, 1.5, 24)).toBe('4rem');
+  });
+
+  it('never goes negative', () => {
+    expect(heightForBlock(24, 1, 24)).toBe('0rem');
+  });
+});
+
+describe('blockLayout', () => {
+  it('gives a two-hour block its meta row and several chip lines', () => {
+    const layout = blockLayout(2, 5);
+    expect(layout.showMeta).toBe(true);
+    expect(layout.chipLines).toBe(3);
+    expect(layout.tight).toBe(false);
+  });
+
+  it('starts wrapping chips at 105 minutes', () => {
+    expect(blockLayout(104 / 60, 5).chipLines).toBe(1);
+    expect(blockLayout(CHIP_WRAP_MIN_HOURS, 5).chipLines).toBeGreaterThan(1);
+  });
+
+  it('gives a 65-minute block one chip line, paid for by its meta row', () => {
+    // An hour-long block has room for a title and ONE more row. The chip wins:
+    // when the event happens is already legible from where its block sits.
+    const layout = blockLayout(65 / 60, 3);
+    expect(layout.chipLines).toBe(1);
+    expect(layout.showMeta).toBe(false);
+  });
+
+  it('keeps the meta row on that same block when nothing is linked to it', () => {
+    // The row is TRADED for a chip line, never simply dropped.
+    const layout = blockLayout(65 / 60, 0);
+    expect(layout.chipLines).toBe(0);
+    expect(layout.showMeta).toBe(true);
+  });
+
+  it('gives a 50-minute block the icon cluster and keeps its meta row', () => {
+    const layout = blockLayout(50 / 60, 3);
+    expect(layout.chipLines).toBe(0);
+    expect(layout.showMeta).toBe(true);
+    expect(layout.tight).toBe(true);
+  });
+
+  it('gives a 45-minute block nothing but its title and the cluster', () => {
+    const layout = blockLayout(45 / 60, 3);
+    expect(layout.chipLines).toBe(0);
+    expect(layout.showMeta).toBe(false);
+  });
+
+  it('hands an hour-long block exactly one chip line', () => {
+    expect(blockLayout(CHIP_LINE_MIN_HOURS, 1).chipLines).toBe(1);
+    // And the tier below it none, however many resources there are.
+    expect(blockLayout(CHIP_LINE_MIN_HOURS - 0.01, 9).chipLines).toBe(0);
   });
 });
 
