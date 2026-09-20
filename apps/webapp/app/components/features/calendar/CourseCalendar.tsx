@@ -37,13 +37,13 @@ import {
   hoursInWindow,
   monthDropId,
   parseDropId,
+  remForHours,
   topForHour,
   weekDropId,
 } from './geometry';
+import type { CalendarEventWithLinks } from './types';
 
 const EVENT_TYPES = ['OFFICE_HOURS', 'LECTURE', 'LAB', 'ASSESSMENT', 'DEADLINE'];
-
-import type { CalendarEventWithLinks } from './types';
 
 /**
  * Form-close items are deadlines for rendering, filtering and ICS export, but
@@ -107,6 +107,7 @@ interface DroppableCellProps {
   id: string;
   children?: React.ReactNode;
   className: string;
+  style?: React.CSSProperties;
   onMouseDown?: (e: React.MouseEvent) => void;
   onMouseEnter?: () => void;
 }
@@ -115,6 +116,7 @@ const DroppableCell = ({
   id,
   children,
   className,
+  style,
   onMouseDown,
   onMouseEnter,
 }: DroppableCellProps) => {
@@ -124,6 +126,7 @@ const DroppableCell = ({
     <div
       ref={setNodeRef}
       className={`${className} ${isOver ? '!bg-blue-50 dark:!bg-blue-900/20' : ''}`}
+      style={style}
       onMouseDown={onMouseDown}
       onMouseEnter={onMouseEnter}
     >
@@ -555,7 +558,8 @@ const CourseCalendar = ({
               {timeSlots.map(hour => (
                 <div
                   key={hour}
-                  className="h-16 px-1 py-1 text-xs text-ink-3 border-b border-gray-200 dark:border-neutral-700 text-right"
+                  className="px-1 py-1 text-xs text-ink-3 border-b border-gray-200 dark:border-neutral-700 text-right"
+                  style={{ height: remForHours(1) }}
                 >
                   {formatHourLabel(hour)}
                 </div>
@@ -599,9 +603,10 @@ const CourseCalendar = ({
                       <DroppableCell
                         key={hour}
                         id={dropId}
-                        className={`h-16 border-b border-gray-200 dark:border-neutral-700 cursor-pointer transition-colors hover:bg-nav-hover/50 ${
+                        className={`border-b border-gray-200 dark:border-neutral-700 cursor-pointer transition-colors hover:bg-nav-hover/50 ${
                           isInSelection ? '!bg-blue-100/70 dark:!bg-blue-900/40' : ''
                         }`}
+                        style={{ height: remForHours(1) }}
                         onMouseDown={
                           onRangeSelect
                             ? e => {
