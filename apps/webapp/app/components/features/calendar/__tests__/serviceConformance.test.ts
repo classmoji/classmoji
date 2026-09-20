@@ -8,10 +8,20 @@
  * included — into the browser bundle. That freedom is also the risk, so this
  * file pins the places where the two shapes must agree.
  *
- * It lives in a TEST file, not in a component: the imports below are
- * `import type`, so nothing here exists at runtime, and the assertions are
- * checked by `tsc --noEmit` (the webapp tsconfig includes `app/**`) as well as
- * by vitest.
+ * It lives in a TEST file, not in a component: every import below is
+ * `import type`, so nothing here reaches the bundle.
+ *
+ * WHAT ACTUALLY CHECKS IT: `npm run typecheck` — `tsc --noEmit` over `app/**`,
+ * which this file is inside. That is the SOLE gate. `expectTypeOf` is a
+ * compile-time construct: vitest collects this file and runs the `it` bodies,
+ * but at runtime the assertions do nothing, so a green `web:test:unit` says
+ * nothing about them.
+ *
+ * Vitest CAN check them, via `test.typecheck` over `.test-d.ts` files. That was
+ * tried and rejected: vitest's typechecker runs tsc over the whole project, so
+ * it reports the pre-existing, unrelated `useGitProvider` error in
+ * `RequireGitProvider.tsx` as an unhandled error and fails `web:test:unit`,
+ * and it takes the suite from ~8s to ~29s. Reconsider once that error is gone.
  *
  * Only relationships that are TRUE today are asserted. Where the shapes do not
  * line up yet, the gap is named in a comment rather than papered over.
@@ -66,21 +76,20 @@ describe('calendar service → client event shape', () => {
     // `page_id`/`slide_id`/`assignment_id` columns the modal actually reads, so
     // whole-row assignability cannot be asserted until the service builds its
     // display payload explicitly.
-    type RawPageOccurrence = NonNullable<ExpandedItem['_rawPageLinks']>[number]['occurrence_date'];
-    type ClientRawPageOccurrence = NonNullable<
-      CalendarEventWithLinks['_rawPageLinks']
-    >[number]['occurrence_date'];
-    expectTypeOf<RawPageOccurrence>().toExtend<ClientRawPageOccurrence>();
+    // Each kind is compared against ITS OWN client type — the three raw-link
+    // types are separate declarations, so checking all three against the page's
+    // would pass even if the slide or assignment one drifted.
+    type OccurrenceOf<T> = T extends { occurrence_date?: infer O } ? O : never;
 
-    type RawSlideOccurrence = NonNullable<
-      ExpandedItem['_rawSlideLinks']
-    >[number]['occurrence_date'];
-    expectTypeOf<RawSlideOccurrence>().toExtend<ClientRawPageOccurrence>();
-
-    type RawAssignmentOccurrence = NonNullable<
-      ExpandedItem['_rawAssignmentLinks']
-    >[number]['occurrence_date'];
-    expectTypeOf<RawAssignmentOccurrence>().toExtend<ClientRawPageOccurrence>();
+    expectTypeOf<OccurrenceOf<NonNullable<ExpandedItem['_rawPageLinks']>[number]>>().toExtend<
+      OccurrenceOf<NonNullable<CalendarEventWithLinks['_rawPageLinks']>[number]>
+    >();
+    expectTypeOf<OccurrenceOf<NonNullable<ExpandedItem['_rawSlideLinks']>[number]>>().toExtend<
+      OccurrenceOf<NonNullable<CalendarEventWithLinks['_rawSlideLinks']>[number]>
+    >();
+    expectTypeOf<OccurrenceOf<NonNullable<ExpandedItem['_rawAssignmentLinks']>[number]>>().toExtend<
+      OccurrenceOf<NonNullable<CalendarEventWithLinks['_rawAssignmentLinks']>[number]>
+    >();
   });
 
   it('delivers linked page/slide rows whose non-null form the client type accepts', () => {
