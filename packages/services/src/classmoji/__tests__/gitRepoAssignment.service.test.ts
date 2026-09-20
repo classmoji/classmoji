@@ -125,7 +125,7 @@ describe('getLatePercentage', () => {
 });
 
 describe('create', () => {
-  it('upserts by provider issue id so retries return the existing assignment', async () => {
+  it('upserts by (git repo, assignment) so retries return the existing row, adopting the issue', async () => {
     upsertMock.mockResolvedValue({ id: 'repo-assignment-1' });
 
     await create({
@@ -139,9 +139,9 @@ describe('create', () => {
 
     expect(upsertMock).toHaveBeenCalledWith({
       where: {
-        provider_provider_id: {
-          provider: 'GITHUB',
-          provider_id: 'github-issue-id',
+        git_repo_id_assignment_id: {
+          git_repo_id: 'git-repo-1',
+          assignment_id: 'assignment-1',
         },
       },
       create: {
@@ -152,11 +152,11 @@ describe('create', () => {
         provider_id: 'github-issue-id',
         provider_issue_number: 12,
       },
+      // The row's id is never rewritten; only the issue fields may be adopted.
       update: {
-        assignment_id: 'assignment-1',
-        git_repo_id: 'git-repo-1',
-        provider_issue_number: 12,
         provider: 'GITHUB',
+        provider_id: 'github-issue-id',
+        provider_issue_number: 12,
       },
       include: {
         assignment: true,

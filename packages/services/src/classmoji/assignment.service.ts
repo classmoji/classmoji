@@ -420,9 +420,13 @@ const notifyAfterUpdate = async (
 };
 
 /** Input for the classroom-scoped write helpers below. */
+export type SubmissionModeInput = 'ISSUE' | 'REPO';
+
 export interface AssignmentWriteInput {
   module_id: string;
   type: AssignmentTargetType;
+  /** REPO assignments only: ISSUE (close an issue) or REPO (a push submits). */
+  submission_mode?: SubmissionModeInput;
   repository_id?: string | null;
   quiz_id?: string | null;
   form_id?: string | null;
@@ -542,6 +546,7 @@ export const createInClassroom = async (classroomId: string, input: AssignmentWr
   const created = await create({
     module_id: input.module_id,
     type: input.type,
+    submission_mode: input.type === 'REPO' ? (input.submission_mode ?? 'ISSUE') : 'ISSUE',
     repository_id: input.repository_id ?? null,
     quiz_id: input.quiz_id ?? null,
     form_id: input.form_id ?? null,
@@ -575,11 +580,27 @@ export const updateInClassroom = async (
   const prisma = getPrisma();
   const previous = await prisma.assignment.findFirst({
     where: { id, module: { classroom_id: classroomId } },
-    select: { id: true, student_deadline: true, grades_released: true },
+    select: {
+      id: true,
+      type: true,
+      submission_mode: true,
+      student_deadline: true,
+      grades_released: true,
+      _count: { select: { git_repo_assignments: true } },
+    },
   });
   if (!previous) throw new Error('Assignment not found in classroom');
 
   const data: Prisma.AssignmentUncheckedUpdateInput = {};
+  // The mode may change only while no submission row exists: flipping it
+  // afterwards would strand issues already opened, or rows that expect none.
+  if (input.submission_mode !== undefined && input.submission_mode !== previous.submission_mode) {
+    if (previous.type !== 'REPO') throw new Error('Only REPO assignments have a submission mode');
+    if (previous._count.git_repo_assignments > 0) {
+      throw new Error('Submission mode cannot change once students have submission rows');
+    }
+    data.submission_mode = input.submission_mode;
+  }
   if (input.title !== undefined) data.title = input.title;
   if (input.weight !== undefined) data.weight = Number(input.weight);
   if (input.is_extra_credit !== undefined) data.is_extra_credit = input.is_extra_credit;

@@ -224,11 +224,14 @@ export const findForUser = async (query: Prisma.GitRepoAssignmentWhereInput) => 
 export const create = async (data: GitRepoAssignmentCreateData) => {
   const provider = data.provider as GitProvider;
 
+  // One row per (student repo, assignment) in either submission mode. A retry
+  // that adopted an existing GitHub issue may fill in the issue fields; the
+  // row's id is never rewritten.
   return getPrisma().gitRepoAssignment.upsert({
     where: {
-      provider_provider_id: {
-        provider,
-        provider_id: data.provider_id,
+      git_repo_id_assignment_id: {
+        git_repo_id: data.git_repo_id,
+        assignment_id: data.assignment_id,
       },
     },
     create: {
@@ -236,16 +239,42 @@ export const create = async (data: GitRepoAssignmentCreateData) => {
       provider,
     },
     update: {
-      assignment_id: data.assignment_id,
-      git_repo_id: data.git_repo_id,
-      provider_issue_number: data.provider_issue_number,
-      provider: data.provider as GitProvider,
+      provider,
+      ...(data.provider_id != null ? { provider_id: data.provider_id } : {}),
+      ...(data.provider_issue_number != null
+        ? { provider_issue_number: data.provider_issue_number }
+        : {}),
     },
     include: {
       assignment: true,
       git_repo: true,
     },
   });
+};
+
+/**
+ * A push to a student repo is the submission for every published REPO-mode
+ * assignment that submits through it. The latest push is the submission time
+ * until the row has grades; then it is frozen. A late-delivered older webhook
+ * never moves the time backwards. Returns the rows that changed.
+ */
+export const recordPush = async (gitRepoId: string, pushedAt: Date) => {
+  const prisma = getPrisma();
+  const candidates = await prisma.gitRepoAssignment.findMany({
+    where: {
+      git_repo_id: gitRepoId,
+      assignment: { type: 'REPO', submission_mode: 'REPO', is_published: true },
+      grades: { none: {} },
+      OR: [{ closed_at: null }, { closed_at: { lt: pushedAt } }],
+    },
+    select: { id: true },
+  });
+  if (candidates.length === 0) return [];
+  await prisma.gitRepoAssignment.updateMany({
+    where: { id: { in: candidates.map(c => c.id) } },
+    data: { status: 'CLOSED', closed_at: pushedAt },
+  });
+  return candidates;
 };
 
 /**

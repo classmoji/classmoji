@@ -35,6 +35,12 @@ const githubWebhookHandlers: Record<string, (data: WebhookEvent) => Promise<void
     }
   },
 
+  'issues.reopened': async (data: WebhookEvent) => {
+    if ('issue' in data && data.issue) {
+      await Tasks.repositoryAssignmentReopenedHandlerTask.trigger(data);
+    }
+  },
+
   'issues.deleted': async (data: WebhookEvent) => {
     if ('issue' in data && data.issue) {
       await Tasks.repositoryAssignmentDeletedHandlerTask.trigger(data);
@@ -104,16 +110,21 @@ interface PushCommit {
 interface PushEventPayload {
   ref?: string;
   forced?: boolean;
+  /** True when the push deleted the ref (then `after` is all zeros). */
+  deleted?: boolean;
   /** The commit the branch pointed at BEFORE this push. */
   before?: string;
   /** The commit it points at now. */
   after?: string;
   commits?: PushCommit[];
   repository?: {
+    /** GitHub's numeric repository id; GitRepo.provider_id holds it as a string. */
+    id?: number | string;
     name?: string;
     default_branch?: string;
     owner?: { login?: string; name?: string };
   };
+  sender?: { login?: string; type?: string };
 }
 
 type PathStatus = 'added' | 'modified' | 'removed';
@@ -150,17 +161,21 @@ function aggregateChanges(commits: PushCommit[]): {
 }
 
 /**
- * A push to a classroom's CONTENT repo refreshes that classroom's asset map.
+ * A push is two things, checked in the order they are likely.
  *
- * This runs on every push the App can see, and the overwhelming majority of
- * those are student assignment repos pushing constantly — so the fast exits
- * come first, and a push that isn't a content repo costs one indexed read and
- * nothing else. No classroom simply means "not ours to care about", which is
- * the normal case and never an error.
+ * To a STUDENT repo (the overwhelming majority of pushes the App sees) it is
+ * the submission for every published REPO-mode assignment that submits
+ * through that repo. The time recorded is the delivery time, never the
+ * commit's own timestamp, which is the author's clock and trivially
+ * back-dated. Branch deletions and pushes by bots are ignored: Classmoji's
+ * own autograde workflow commits to every student repo whenever tests change,
+ * and those must not count as anyone submitting.
  *
- * Only the repo's DEFAULT branch is synced: the map describes what pages
- * render from, and pages render from the default branch. A push to a feature
- * branch changes nothing anybody can see.
+ * To a classroom's CONTENT repo it refreshes that classroom's asset map. No
+ * classroom simply means "not ours to care about", never an error.
+ *
+ * Only the repo's DEFAULT branch counts for either: pages render from it, and
+ * a feature branch is not a submission until it lands.
  */
 async function handlePush(data: PushEventPayload): Promise<void> {
   const repo = data.repository?.name;
@@ -169,6 +184,24 @@ async function handlePush(data: PushEventPayload): Promise<void> {
 
   if (!repo || !owner || !defaultBranch) return;
   if (data.ref !== `refs/heads/${defaultBranch}`) return;
+
+  // A branch deletion is not a submission (the content sync below still wants
+  // to hear about it, since it tracks the branch's state).
+  const providerRepoId = data.repository?.id;
+  if (providerRepoId != null && !data.deleted && data.sender?.type !== 'Bot') {
+    const gitRepo = await getPrisma().gitRepo.findUnique({
+      where: { provider_provider_id: { provider: 'GITHUB', provider_id: String(providerRepoId) } },
+      select: { id: true },
+    });
+    if (gitRepo) {
+      await Tasks.repositoryPushHandlerTask.trigger(
+        { gitRepoId: gitRepo.id, pushedAt: new Date().toISOString() },
+        // One submission update per student repo at a time, in delivery order.
+        { concurrencyKey: gitRepo.id }
+      );
+      return;
+    }
+  }
 
   const classroom = await getPrisma().classroom.findFirst({
     where: { content_repo: repo, git_organization: { login: owner } },

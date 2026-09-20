@@ -12,7 +12,7 @@ interface GitRepoAssignmentGraderRecord {
 interface GitRepoAssignmentRecord {
   id: string;
   /** GitHub issue #number — matches the Prisma GitRepoAssignment field. */
-  provider_issue_number: number;
+  provider_issue_number: number | null;
   git_repo: {
     name: string;
   };
@@ -75,7 +75,12 @@ export const requestRegradeTask = task({
       return;
     }
 
-    const issueUrl = `https://github.com/${classroom.git_organization.login}/${gitRepoAssignment.git_repo.name}/issues/${gitRepoAssignment.provider_issue_number}`;
+    // The submission on GitHub: the issue in ISSUE mode, the repo in REPO mode.
+    const repoUrl = `https://github.com/${classroom.git_organization.login}/${gitRepoAssignment.git_repo.name}`;
+    const issueUrl =
+      gitRepoAssignment.provider_issue_number != null
+        ? `${repoUrl}/issues/${gitRepoAssignment.provider_issue_number}`
+        : repoUrl;
 
     if (gitRepoAssignment.graders && gitRepoAssignment.graders.length > 0) {
       // One batched request rather than one run (and one API request) per

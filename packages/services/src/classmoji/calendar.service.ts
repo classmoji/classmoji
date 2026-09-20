@@ -167,7 +167,7 @@ interface CalendarOverrideData {
 }
 
 interface DeadlineRepositoryAssignment {
-  provider_issue_number: number;
+  provider_issue_number: number | null;
   git_repo: {
     name: string;
   };
@@ -842,15 +842,21 @@ export const getDeadlinesForRange = async (
     ) as DeadlineRepositoryAssignment | null;
     const gitOrgLogin = assignment.module.classroom?.git_organization?.login;
 
-    // Build GitHub issue URL if user has a repo assignment
+    // The student's submission on GitHub: their issue (ISSUE mode) or their
+    // repo (REPO mode, no issue exists).
     let github_issue_url = null;
     if (repoAssignment && gitOrgLogin) {
-      github_issue_url = `https://github.com/${gitOrgLogin}/${repoAssignment.git_repo.name}/issues/${repoAssignment.provider_issue_number}`;
+      const repoUrl = `https://github.com/${gitOrgLogin}/${repoAssignment.git_repo.name}`;
+      github_issue_url =
+        repoAssignment.provider_issue_number != null
+          ? `${repoUrl}/issues/${repoAssignment.provider_issue_number}`
+          : repoUrl;
     }
 
     // Flag unpublished content for admin UI styling
     const isUnpublished =
-      !assignment.is_published || (assignment.repository ? !assignment.repository.is_published : false);
+      !assignment.is_published ||
+      (assignment.repository ? !assignment.repository.is_published : false);
 
     const deadline: CalendarDeadlineItem = {
       id: `deadline-${assignment.id}`,

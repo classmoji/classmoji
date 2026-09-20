@@ -21,7 +21,8 @@ interface DeleteRepositoryPayload {
 interface GitRepoAssignmentGraderPayload {
   repoName: string;
   gitOrganization: HelperGitOrganization;
-  githubIssueNumber: number;
+  /** Null for a REPO-mode submission: there is no issue to assign on GitHub. */
+  githubIssueNumber: number | null;
   graderLogin: string;
   graderId: string;
   gitRepoAssignmentId: string;
@@ -118,10 +119,12 @@ class HelperService {
       gitRepoAssignmentId,
     } = payload;
 
-    const gitProvider = getGitProvider(gitOrganization);
-    await gitProvider.addIssueAssignees(gitOrganization.login, repoName, githubIssueNumber, [
-      graderLogin,
-    ]);
+    if (githubIssueNumber != null) {
+      const gitProvider = getGitProvider(gitOrganization);
+      await gitProvider.addIssueAssignees(gitOrganization.login, repoName, githubIssueNumber, [
+        graderLogin,
+      ]);
+    }
 
     return ClassmojiService.gitRepoAssignmentGrader.addGraderToAssignment(
       gitRepoAssignmentId,
@@ -141,10 +144,12 @@ class HelperService {
       gitRepoAssignmentId,
     } = payload;
 
-    const gitProvider = getGitProvider(gitOrganization);
-    await gitProvider.removeIssueAssignees(gitOrganization.login, repoName, githubIssueNumber, [
-      graderLogin,
-    ]);
+    if (githubIssueNumber != null) {
+      const gitProvider = getGitProvider(gitOrganization);
+      await gitProvider.removeIssueAssignees(gitOrganization.login, repoName, githubIssueNumber, [
+        graderLogin,
+      ]);
+    }
 
     return ClassmojiService.gitRepoAssignmentGrader.removeGraderFromAssignment(
       gitRepoAssignmentId,
