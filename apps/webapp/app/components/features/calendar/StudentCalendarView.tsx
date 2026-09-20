@@ -88,6 +88,12 @@ const StudentCalendarView = ({
           onEventClick={onEventClick}
           startHour={startHour}
           endHour={endHour}
+          classSlug={classSlug}
+          rolePrefix="student"
+          pagesUrl={pagesUrl}
+          slidesUrl={slidesUrl}
+          gitOrgLogin={gitOrgLogin}
+          repoAssignmentsByAssignmentId={repoAssignmentsByAssignmentId}
         />
       )}
     </CalendarShell>

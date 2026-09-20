@@ -35,8 +35,13 @@ interface CourseCalendarProps {
   onRangeSelect?: ((start: Date, end: Date) => void) | null;
   canDragDeadlines?: boolean;
   /**
-   * Where a starred resource under a month chip points. Passed straight to the
-   * month grid; the calendar itself does not read them.
+   * Where a linked resource points — the starred line under a month chip, and
+   * the chips on a week block. Passed straight to the grids; the calendar
+   * itself does not read them.
+   *
+   * Deliberately no `gitOrgLogin`/`repoAssignmentsByAssignmentId`: those turn
+   * an assignment link into the VIEWER's own GitHub issue, and staff have no
+   * repo of their own in the class. The repositories page is their answer.
    */
   classSlug?: string;
   rolePrefix?: string;
@@ -209,6 +214,10 @@ const CourseCalendar = ({
             alwaysShowAllDay={Boolean(onEventDrop || onDeadlineDrop)}
             startHour={startHour}
             endHour={endHour}
+            classSlug={classSlug}
+            rolePrefix={rolePrefix}
+            pagesUrl={pagesUrl}
+            slidesUrl={slidesUrl}
             renderEvent={renderEvent}
             renderCell={renderCell}
           />

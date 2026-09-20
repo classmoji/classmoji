@@ -30,7 +30,9 @@ import AllDayStrip from './AllDayStrip';
 import { DeadlineLines, DeadlinePills, deadlineGroups } from './DeadlineMarkers';
 import { NowBadge, NowMarker, NowRule } from './NowIndicator';
 import { defaultRenderCell, defaultRenderEvent } from './gridRenderProps';
+import { resourcesForEvent } from './ResourceLink';
 import type { RenderCell, RenderEvent } from './gridRenderProps';
+import type { RepositoryAssignmentLinkInfo } from './ResourceLink';
 import type { CalendarEventWithLinks } from './types';
 
 interface WeekGridProps {
@@ -57,6 +59,20 @@ interface WeekGridProps {
    */
   startHour?: number;
   endHour?: number;
+  /**
+   * Where the chips on a block point. Threaded from the route, because the
+   * grid itself knows neither the classroom nor the role looking at it.
+   *
+   * The last two are the viewer's own repository assignments, which turn a
+   * linked assignment into a link to THEIR GitHub issue. Staff loaders do not
+   * send them and should not: staff have no personal repo in the class.
+   */
+  classSlug?: string;
+  rolePrefix?: string;
+  pagesUrl?: string;
+  slidesUrl?: string;
+  gitOrgLogin?: string | null;
+  repoAssignmentsByAssignmentId?: Record<string, RepositoryAssignmentLinkInfo | undefined>;
   renderEvent?: RenderEvent;
   renderCell?: RenderCell;
 }
@@ -69,9 +85,23 @@ const WeekGrid = ({
   alwaysShowAllDay = false,
   startHour = DEFAULT_START_HOUR,
   endHour = DEFAULT_END_HOUR,
+  classSlug,
+  rolePrefix,
+  pagesUrl,
+  slidesUrl,
+  gitOrgLogin,
+  repoAssignmentsByAssignmentId,
   renderEvent = defaultRenderEvent,
   renderCell = defaultRenderCell,
 }: WeekGridProps) => {
+  const linkContext = {
+    classSlug,
+    rolePrefix,
+    pagesUrl,
+    slidesUrl,
+    gitOrgLogin,
+    repoAssignmentsByAssignmentId,
+  };
   const hours = hoursInWindow(startHour, endHour);
   const nowHourFloat = now.getHours() + now.getMinutes() / 60;
   const nowTop = topForHour(nowHourFloat, startHour);
@@ -213,6 +243,11 @@ const WeekGrid = ({
                               // The grid sized the block, so the grid is what
                               // tells the card how much room it has to work in.
                               blockHours={durationHours}
+                              // "Show all" in week view: everything this
+                              // viewer's payload carries for the event, starred
+                              // one first. The card decides how many fit.
+                              resources={resourcesForEvent(event)}
+                              linkContext={linkContext}
                             />
                           ),
                         })}

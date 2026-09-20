@@ -8,8 +8,10 @@
  */
 
 import { renderToStaticMarkup } from 'react-dom/server';
+import { MemoryRouter } from 'react-router';
 import { describe, expect, it } from 'vitest';
 import WeekGrid from '../WeekGrid';
+import EventCard from '../EventCard';
 import type { CalendarEventWithLinks } from '../types';
 
 /** Sunday…Saturday around a date, the way the hook builds them. */
@@ -44,19 +46,34 @@ const deadline: CalendarEventWithLinks = {
   is_deadline: true,
 };
 
+interface RenderProps {
+  onEventClick?: (event: CalendarEventWithLinks) => void;
+  alwaysShowAllDay?: boolean;
+  startHour?: number;
+  endHour?: number;
+  classSlug?: string;
+  rolePrefix?: string;
+  pagesUrl?: string;
+  slidesUrl?: string;
+}
+
 const render = (
   events: CalendarEventWithLinks[],
   now: Date,
   dates = weekOf(TUESDAY),
-  props: { alwaysShowAllDay?: boolean; startHour?: number; endHour?: number } = {}
+  props: RenderProps = {}
 ): string =>
+  // A linked assignment falls back to a `NavLink`, which needs a router in
+  // scope — the app always has one, this test has to bring its own.
   renderToStaticMarkup(
-    <WeekGrid
-      dates={dates}
-      now={now}
-      eventsFor={date => events.filter(e => new Date(e.start_time).getDate() === date.getDate())}
-      {...props}
-    />
+    <MemoryRouter>
+      <WeekGrid
+        dates={dates}
+        now={now}
+        eventsFor={date => events.filter(e => new Date(e.start_time).getDate() === date.getDate())}
+        {...props}
+      />
+    </MemoryRouter>
   );
 
 /**
@@ -356,5 +373,169 @@ describe('WeekGrid — deadline lines', () => {
     // document order.
     expect(line).toBeLessThan(block);
     expect(block).toBeLessThan(pill);
+  });
+});
+
+/**
+ * "Show all" in week view, in as many chips as the block's DURATION pays for.
+ *
+ * The three tiers are 120 / 65 / 50 minutes here, plus the title-only 45. They
+ * are asserted on duration, never on a rendered height: the hour row is
+ * 56–80px depending on the reader's UI font size, and every length in
+ * `blockLayout` scales with it.
+ */
+describe('WeekGrid — linked resources on a block', () => {
+  const linked = (
+    minutes: number,
+    links: Partial<CalendarEventWithLinks>,
+    extra: Partial<CalendarEventWithLinks> = {}
+  ): CalendarEventWithLinks => ({
+    ...lecture,
+    id: `evt-${minutes}`,
+    end_time: new Date(2026, 8, 22, 10, minutes).toISOString(),
+    ...links,
+    ...extra,
+  });
+
+  const pages = (...titles: string[]) => ({
+    pages: titles.map((title, i) => ({ page: { id: `p-${i}`, title, is_draft: false } })),
+  });
+  const deck = { slides: [{ slide: { id: 's-1', title: 'Lecture 1 deck', is_draft: false } }] };
+  const homework = {
+    assignments: [
+      {
+        assignment: { id: 'a-1', title: 'Landing Page', is_published: true },
+        repository: { slug: 'landing-page', is_published: true },
+      },
+    ],
+  };
+
+  const LINKS = { classSlug: 'cs52-26f', rolePrefix: 'admin', slidesUrl: 'https://slides.test' };
+
+  it('lists several chips on a two-hour block, and says how many it kept back', () => {
+    const html = render(
+      [linked(120, pages('One', 'Two', 'Three', 'Four', 'Five'))],
+      TUESDAY,
+      weekOf(TUESDAY),
+      LINKS
+    );
+
+    // Three lines of chips fit; the last one ends with the count of the rest.
+    expect(html).toContain('>One<');
+    expect(html).toContain('>Two<');
+    expect(html).toContain('>Three<');
+    expect(html).not.toContain('>Four<');
+    expect(html).toContain('+2');
+    // …and the ones it kept back are still named, on hover.
+    expect(html).toContain('title="Four, Five"');
+  });
+
+  it('gives a 65-minute block one chip and a count, and no time row', () => {
+    const html = render([linked(65, { ...deck, ...pages('Reading') })], TUESDAY, weekOf(TUESDAY), {
+      ...LINKS,
+      endHour: 24,
+    });
+
+    expect(html).toContain('>Reading<');
+    expect(html).toContain('+1');
+    // The block has room for a title and ONE more row. The chip takes it: when
+    // the event happens is already legible from where the block sits.
+    expect(html).not.toMatch(/10:00\s*–/);
+  });
+
+  it('keeps the time row on a 65-minute block with nothing linked to it', () => {
+    const html = render([linked(65, {})], TUESDAY, weekOf(TUESDAY), { ...LINKS, endHour: 24 });
+    expect(html).toMatch(/10:00\s*–\s*11:05\s*AM/);
+  });
+
+  it('gives a 50-minute block an icon cluster instead of chips', () => {
+    const html = render(
+      [linked(50, { ...pages('Reading', 'Notes'), ...deck })],
+      TUESDAY,
+      weekOf(TUESDAY),
+      LINKS
+    );
+
+    // No chip is drawn — there is no line to draw it on — but the block still
+    // says that three things are attached to it, at no cost in height.
+    expect(html).not.toContain('>Reading<');
+    expect(html).toContain('>2<');
+    expect(html).toContain('aria-hidden="true"');
+    // And it keeps its time row, which is what the 50-minute x-hour is for.
+    expect(html).toMatch(/10:00\s*–\s*10:50\s*AM/);
+  });
+
+  it('still clusters on a title-only 45-minute block', () => {
+    const html = render([linked(45, deck)], TUESDAY, weekOf(TUESDAY), LINKS);
+
+    expect(html).toContain('Week 1 Lecture');
+    expect(html).not.toContain('Lecture 1 deck');
+    expect(html).not.toMatch(/10:00\s*–/);
+  });
+
+  it('counts the links in the block button’s accessible name', () => {
+    // The chips are separate controls and the cluster is decorative, so this
+    // is the only place a short block says it has anything attached.
+    const html = render([linked(50, { ...deck, ...homework })], TUESDAY, weekOf(TUESDAY), LINKS);
+    expect(html).toContain('2 linked resources');
+
+    const one = render([linked(50, deck)], TUESDAY, weekOf(TUESDAY), LINKS);
+    expect(one).toContain('1 linked resource');
+  });
+
+  it('puts the starred resource first, with a star, as the month cell does', () => {
+    const html = render(
+      [
+        linked(
+          120,
+          { ...pages('Reading'), ...deck },
+          {
+            featured_resource: {
+              kind: 'slide',
+              id: 's-1',
+              title: 'Lecture 1 deck',
+              is_draft: false,
+            },
+          }
+        ),
+      ],
+      TUESDAY,
+      weekOf(TUESDAY),
+      LINKS
+    );
+
+    expect(html.indexOf('Lecture 1 deck')).toBeLessThan(html.indexOf('>Reading<'));
+    expect(html).toContain('text-amber-500/90');
+  });
+
+  it('sends a chip exactly where the link list would send it', () => {
+    const html = render([linked(120, { ...deck, ...homework })], TUESDAY, weekOf(TUESDAY), LINKS);
+
+    expect(html).toContain('href="https://slides.test/s-1"');
+    expect(html).toContain('href="/admin/cs52-26f/repos#landing-page"');
+  });
+
+  it('keeps the chips outside the event’s button', () => {
+    // An anchor inside a button is not something a browser can render, and out
+    // here the staff drag layer sees a chip press as a press on the chip.
+    const html = render([linked(120, deck)], TUESDAY, weekOf(TUESDAY), {
+      ...LINKS,
+      onEventClick: () => {},
+    });
+
+    const buttonClose = html.indexOf('</button>');
+    expect(buttonClose).toBeGreaterThan(-1);
+    expect(html.indexOf('https://slides.test')).toBeGreaterThan(buttonClose);
+  });
+
+  it('draws no chips in the modal or the drag overlay', () => {
+    // Both render an EventCard with no slot to measure, so there is no tier
+    // to be in.
+    const html = renderToStaticMarkup(
+      <MemoryRouter>
+        <EventCard event={linked(120, deck)} compact resources={[]} />
+      </MemoryRouter>
+    );
+    expect(html).not.toContain('Lecture 1 deck');
   });
 });

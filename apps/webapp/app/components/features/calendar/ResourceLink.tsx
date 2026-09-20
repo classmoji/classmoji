@@ -196,11 +196,18 @@ export const featuredResource = (
       : null,
 });
 
-const ICONS = {
+/**
+ * One icon per kind. Exported because a block too short for chips shows the
+ * same icons as a cluster, and two icon sets for one kind would be two
+ * different answers to "what is this?".
+ */
+export const RESOURCE_ICONS = {
   page: IconFileText,
   slide: IconPresentation,
   assignment: IconClipboardList,
 } as const;
+
+const ICONS = RESOURCE_ICONS;
 
 /** What the accessible name calls each kind, so three links are tellable apart. */
 export const KIND_NOUN = {
