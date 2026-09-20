@@ -1,12 +1,12 @@
 import { useMemo, useState } from 'react';
-import { ConfigProvider, Input, Popover, Segmented, Select, Table, Tooltip } from 'antd';
+import { ConfigProvider, Input, Popover, Select, Table, Tooltip } from 'antd';
 import type { TableProps } from 'antd';
 import { IconAdjustmentsHorizontal, IconSearch } from '@tabler/icons-react';
 import { Link, useLocation, useParams } from 'react-router';
 import dayjs from 'dayjs';
 import { mean, median } from 'simple-statistics';
 
-import { EmojisDisplay, UserThumbnailView } from '~/components';
+import { UserThumbnailView } from '~/components';
 import GradeSettings from './GradeSettings';
 import {
   calculateAssignmentGrade,
@@ -78,7 +78,6 @@ type Submission = GitRepoAssignment & {
 };
 
 type EmojiMappings = Record<string, number>;
-type View = 'Score' | 'Emoji' | 'Letter';
 type RowFilter = 'all' | 'ungraded' | 'missing' | 'late';
 
 interface GradesTableProps {
@@ -140,7 +139,6 @@ const GradesTable = (props: GradesTableProps) => {
     memberships,
   } = props;
   const [letterGradeMappings, setLetterGradeMappings] = useState(initialLetterGradeMappings);
-  const [view, setView] = useState<View>('Score');
   const [rowFilter, setRowFilter] = useState<RowFilter>('all');
   const [searchQuery, setSearchQuery] = useState('');
   const { class: classSlug } = useParams();
@@ -216,19 +214,11 @@ const GradesTable = (props: GradesTableProps) => {
       body = <span className="text-ink-4">–</span>;
     } else if (isGraded(sub)) {
       const numeric = calculateAssignmentGrade(sub, emojiMappings, settings);
-      if (view === 'Emoji') body = <EmojisDisplay grades={sub.grades ?? []} />;
-      else if (view === 'Letter')
-        body = (
-          <span className="font-semibold">
-            {numeric === null ? '–' : calculateLetterGrade(numeric, letterGradeMappings)}
-          </span>
-        );
-      else
-        body = (
-          <span className="font-semibold tabular-nums">
-            {numeric === null ? '–' : Math.round(numeric * 10) / 10}
-          </span>
-        );
+      body = (
+        <span className="font-semibold tabular-nums">
+          {numeric === null ? '–' : Math.round(numeric * 10) / 10}
+        </span>
+      );
       if (isLate(sub)) tint = 'bg-amber-50 dark:bg-amber-950/30';
       if (sub.is_late_override)
         body = (
@@ -437,27 +427,7 @@ const GradesTable = (props: GradesTableProps) => {
             ]}
           />
           <div className="h-6 w-px bg-line" />
-          <div className="flex items-center gap-1.5" data-tour="grades-view-toggle">
-            <ConfigProvider
-              theme={{
-                token: { borderRadius: 6 },
-                components: {
-                  Segmented: {
-                    borderRadius: 6,
-                    borderRadiusSM: 4,
-                    itemSelectedBg: '#ffffff',
-                    itemSelectedColor: '#1f2937',
-                    trackPadding: 3,
-                  },
-                },
-              }}
-            >
-              <Segmented<View>
-                value={view}
-                onChange={setView}
-                options={['Score', 'Emoji', 'Letter']}
-              />
-            </ConfigProvider>
+          <div className="flex items-center gap-1.5">
             <Popover
               trigger="click"
               placement="bottomRight"

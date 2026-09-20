@@ -198,14 +198,6 @@ const OWNER_STEPS: FeatureStep[] = [
   },
   {
     link: '/grades',
-    selector: '[data-tour="grades-view-toggle"]',
-    placement: 'bottom',
-    title: 'Score, emoji or letter',
-    description:
-      'Each emoji maps to a numeric value from 0 to 100 that you set in settings, and a submission’s grade is the average of the emojis it received. Read the gradebook as the numbers, the emojis behind them, or the letter each number earns.',
-  },
-  {
-    link: '/grades',
     selector: '[data-tour="grades-filter"]',
     placement: 'bottom',
     title: 'Who needs attention',
