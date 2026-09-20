@@ -44,22 +44,6 @@ export function emojiToGrade(emoji: string, classroomMap: Map<string, number>): 
   return typeof fromDefault === 'number' ? fromDefault : null;
 }
 
-/**
- * Given a list of grade timestamps per AssignmentGrade and their submission
- * (closed_at) timestamps, compute median time-to-grade in hours.
- */
-export function computeMedianTimeToGradeHours(
-  pairs: Array<{ submittedAt: Date | null; gradedAt: Date | null }>
-): number | null {
-  const diffs: number[] = [];
-  for (const p of pairs) {
-    if (!p.submittedAt || !p.gradedAt) continue;
-    const ms = p.gradedAt.getTime() - p.submittedAt.getTime();
-    if (ms >= 0) diffs.push(ms / 3_600_000);
-  }
-  return computeGradeMedian(diffs);
-}
-
 // Internal helpers
 
 async function loadClassroomEmojiMap(classroomId: string): Promise<Map<string, number>> {
@@ -376,7 +360,6 @@ export interface AssignmentHealthRow {
   title: string;
   submissionRate: number;
   medianGrade: number | null;
-  medianTimeToGradeHours: number | null;
   regradeRate: number;
 }
 
@@ -419,20 +402,17 @@ export async function assignmentHealth(classroomId: string): Promise<AssignmentH
     const submissionRate = enrolled > 0 ? submitted / enrolled : 0;
 
     const gradeValues: number[] = [];
-    const ttgPairs: Array<{ submittedAt: Date | null; gradedAt: Date | null }> = [];
     let regradeHavers = 0;
     for (const r of ras) {
       if (r.grades.length > 0) {
         const first = r.grades[0];
         const g = emojiToGrade(first.emoji, emojiMap);
         if (g !== null) gradeValues.push(g);
-        ttgPairs.push({ submittedAt: r.closed_at, gradedAt: first.created_at });
       }
       if (r.regrade_requests.length > 0) regradeHavers += 1;
     }
 
     const medianGrade = computeGradeMedian(gradeValues);
-    const medianTimeToGradeHours = computeMedianTimeToGradeHours(ttgPairs);
     const regradeRate = ras.length > 0 ? regradeHavers / ras.length : 0;
 
     return {
@@ -440,7 +420,6 @@ export async function assignmentHealth(classroomId: string): Promise<AssignmentH
       title: a.title,
       submissionRate,
       medianGrade,
-      medianTimeToGradeHours,
       regradeRate,
     };
   });
@@ -453,7 +432,6 @@ export interface TaOpsRow {
   login: string;
   name: string | null;
   throughput7d: number;
-  avgTimeToGradeHours: number | null;
   overturnRate: number | null;
   gradeDistributionMean: number | null;
 }
@@ -498,7 +476,6 @@ export async function taOps(classroomId: string): Promise<TaOpsRow[]> {
         created_at: true,
         git_repo_assignment: {
           select: {
-            closed_at: true,
             regrade_requests: { select: { status: true } },
           },
         },
@@ -519,15 +496,6 @@ export async function taOps(classroomId: string): Promise<TaOpsRow[]> {
     const u = m.user;
     const grades = byTa.get(u.id) ?? [];
     const throughput7d = grades.filter(g => g.created_at >= sevenDaysAgo).length;
-
-    const ttg = grades
-      .map(g =>
-        g.git_repo_assignment.closed_at
-          ? (g.created_at.getTime() - g.git_repo_assignment.closed_at.getTime()) / 3_600_000
-          : null
-      )
-      .filter((v): v is number => v !== null && v >= 0);
-    const avgTimeToGradeHours = ttg.length > 0 ? ttg.reduce((a, b) => a + b, 0) / ttg.length : null;
 
     let overturned = 0;
     let withRegrade = 0;
@@ -553,7 +521,6 @@ export async function taOps(classroomId: string): Promise<TaOpsRow[]> {
       login: u.login ?? '',
       name: u.name,
       throughput7d,
-      avgTimeToGradeHours,
       overturnRate,
       gradeDistributionMean,
     };

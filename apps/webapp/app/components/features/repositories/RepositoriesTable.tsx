@@ -108,7 +108,9 @@ const RepositoriesTable = ({
   // Controlled expansion so the folder icon can react to expanded state.
   // Every repository starts open, showing its assignments; the chevron closes it.
   const [expandedKeys, setExpandedKeys] = useState<string[]>(() =>
-    repositories.filter(r => (r.assignments?.length ?? 0) > 0).map(r => `repository-${r.id}`)
+    repositories
+      .filter(r => (r.assignments ?? []).some(a => a.submission_mode !== 'REPO'))
+      .map(r => `repository-${r.id}`)
   );
 
   // Publish / sync / unpublish / delete + navigation, shared with the module
@@ -173,8 +175,13 @@ const RepositoriesTable = ({
   };
 
   // ---- build the tree (Repository -> Assignment) ----
+  // Only issue-mode assignments nest under a repository: each one is a GitHub
+  // issue opened in every student repo, which is what the child rows show. A
+  // push-mode assignment IS the repository (a push submits, nothing is opened),
+  // so listing it again underneath read as a phantom issue.
   const treeData: TreeNode[] = repositories.map(r => {
-    const children: TreeNode[] = (r.assignments || []).map(a => ({
+    const issueAssignments = (r.assignments || []).filter(a => a.submission_mode !== 'REPO');
+    const children: TreeNode[] = issueAssignments.map(a => ({
       key: `assignment-${a.id}`,
       kind: 'assignment' as const,
       name: a.title,

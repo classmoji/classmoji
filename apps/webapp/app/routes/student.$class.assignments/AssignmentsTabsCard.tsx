@@ -233,9 +233,10 @@ const AssignmentsTabsCard = ({ rows, balance }: AssignmentsTabsCardProps) => {
                         )}
                       </td>
                       <td className="px-4 py-3 hidden lg:table-cell">
-                        {row.status === 'completed' &&
-                        row.gradesReleased &&
-                        row.grades.length > 0 ? (
+                        {/* A released grade shows whether or not the student has
+                            submitted: staff can grade an open assignment (a zero,
+                            an extension), and hiding it read as "no grade". */}
+                        {row.gradesReleased && row.grades.length > 0 ? (
                           <div className="flex items-center gap-1">
                             {row.grades.slice(0, 4).map((g, idx) => (
                               <Emoji key={g.id ?? idx} emoji={g.emoji} fontSize={18} />
