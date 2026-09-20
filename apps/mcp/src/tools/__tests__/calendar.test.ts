@@ -374,3 +374,58 @@ describe('assistants and event types', () => {
     expect(mocks.updateEvent).toHaveBeenCalledTimes(1);
   });
 });
+
+// ─── A split reports the event the edit landed on ───────────────────────────
+
+describe('calendar_event_update after a this_and_future split', () => {
+  it('returns and audits the NEW event, not the id it was called with', async () => {
+    // That scope ends the old series and moves the occurrences from this date
+    // on to a new event. Reporting the old id would file the audit against a
+    // series that no longer covers the date, and hand the caller an id whose
+    // event does not carry their change.
+    mocks.updateEventWithScope.mockResolvedValue({ ...RECURRING_EVENT, id: 'event-new' });
+
+    const result = await calendarEventUpdateTool.handler(
+      {
+        classroom: 'org/winter-2025',
+        event_id: 'event-1',
+        title: 'Moved',
+        edit_scope: 'this_and_future',
+        occurrence_date: '2026-07-20T00:00:00-04:00',
+      },
+      CTX
+    );
+
+    expect(parse(result as { content: Array<{ text: string }> })).toMatchObject({
+      success: true,
+      event_id: 'event-new',
+    });
+
+    const audit = mocks.auditCreate.mock.calls[0][0] as {
+      resource_id: string;
+      data: Record<string, unknown>;
+    };
+    expect(audit.resource_id).toBe('event-new');
+    // The row the request named is still recorded, so the two can be tied up.
+    expect(audit.data.split_from_event_id).toBe('event-1');
+  });
+
+  it('keeps reporting the same id when no split happened', async () => {
+    mocks.updateEventWithScope.mockResolvedValue(RECURRING_EVENT);
+
+    const result = await calendarEventUpdateTool.handler(
+      {
+        classroom: 'org/winter-2025',
+        event_id: 'event-1',
+        title: 'Renamed',
+        edit_scope: 'all',
+        occurrence_date: '2026-07-20T00:00:00-04:00',
+      },
+      CTX
+    );
+
+    expect(parse(result as { content: Array<{ text: string }> }).event_id).toBe('event-1');
+    const audit = mocks.auditCreate.mock.calls[0][0] as { data: Record<string, unknown> };
+    expect(audit.data).not.toHaveProperty('split_from_event_id');
+  });
+});

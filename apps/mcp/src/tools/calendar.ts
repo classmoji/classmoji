@@ -284,6 +284,7 @@ export const calendarEventUpdateTool: ToolDefinition<CalendarEventUpdateArgs> = 
     }
 
     const scoped = resolveScope(event.is_recurring, args.edit_scope, args.occurrence_date);
+    let writtenEventId = event.id;
     if (scoped) {
       // 'all' rewrites the event template, and the service derives
       // recurrence_rule from is_recurring (undefined → falsy → SQL NULL). This
@@ -299,28 +300,36 @@ export const calendarEventUpdateTool: ToolDefinition<CalendarEventUpdateArgs> = 
               recurrence_rule: event.recurrence_rule as Prisma.InputJsonObject | null,
             }
           : updates;
-      await ClassmojiService.calendar.updateEventWithScope(
+      const result = await ClassmojiService.calendar.updateEventWithScope(
         event.id,
         scopedUpdates,
         scoped.scope,
         scoped.occurrence
       );
+      // 'this_and_future' SPLITS the series: the occurrences from this date on
+      // move to a NEW event, and that is the row the edit landed on. Reporting
+      // the id the request came in with would file the audit against a series
+      // that no longer covers the date, and hand the caller an id whose event
+      // does not have their change.
+      writtenEventId = result?.id ?? writtenEventId;
     } else {
       await ClassmojiService.calendar.updateEvent(event.id, updates);
     }
 
     await writeAudit(ctx, {
       resource_type: 'CALENDAR',
-      resource_id: event.id,
+      resource_id: writtenEventId,
       action: 'UPDATE',
       data: {
         tool: 'calendar_event_update',
         fields: Object.keys(updates),
         ...(scoped ? { edit_scope: scoped.scope } : {}),
+        // Which row the request named, when the edit moved to another one.
+        ...(writtenEventId === event.id ? {} : { split_from_event_id: event.id }),
       },
     });
 
-    return ok({ success: true, event_id: event.id, updated_fields: Object.keys(updates) });
+    return ok({ success: true, event_id: writtenEventId, updated_fields: Object.keys(updates) });
   },
 };
 
