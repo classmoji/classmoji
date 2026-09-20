@@ -1,4 +1,3 @@
-import getPrisma from '@classmoji/database';
 import { useState } from 'react';
 import { useLocation } from 'react-router';
 import { Button } from 'antd';
@@ -8,63 +7,18 @@ import { assertClassroomAccess } from '~/utils/helpers';
 import type { ModuleTreeNode } from '~/components/features/modules/ReadOnlyModulesTree';
 import StudentModuleCard from '~/components/features/modules/StudentModuleCard';
 import {
-  buildRepositoryNode,
+  buildAssignmentLeaf,
   resourceLeaves,
   type AnyRepoAssignment,
-  type AnyRepository,
   type StudentTreeCtx,
 } from '~/components/features/modules/studentTree';
 
-// Rich repository include matching the standalone repositories view, so a
-// repository placed in a module renders identically (assignments, git repos,
-// submission state, attached resources).
-//
 // `isStaff` MUST be this route's own flag, derived from the membership its gate
 // returned — never a prefix sniff or a client-supplied value. It is the single
-// thing standing between a student and another student's unpublished work here,
-// and repoDraftPolicy.test.ts pins that every filter below flips with the role.
-//
-// EVERY draft-filterable leg below is conditional on the same flag —
-// assignments, both slides legs, both pages legs, and quizzes. Students get the
-// published view of all six; staff get all six unfiltered, and anything
-// unpublished that reaches the tree is chipped there rather than hidden. Keeping
-// them uniform is the point: a leg that is filtered for one role and not the
-// other is how the two surfaces drifted apart in the first place.
-const repoInclude = (isStaff: boolean) => ({
-  assignments: {
-    // Staff preview drafts; students only ever get published assignments.
-    ...(isStaff ? {} : { where: { is_published: true } }),
-    include: {
-      pages: {
-        ...(isStaff ? {} : { where: { page: { is_draft: false } } }),
-        include: { page: true },
-        orderBy: { order: 'asc' as const },
-      },
-      slides: {
-        ...(isStaff ? {} : { where: { slide: { is_draft: false } } }),
-        include: { slide: true },
-        orderBy: { order: 'asc' as const },
-      },
-    },
-    orderBy: { student_deadline: 'asc' as const },
-  },
-  pages: {
-    ...(isStaff ? {} : { where: { page: { is_draft: false } } }),
-    include: { page: true },
-    orderBy: { order: 'asc' as const },
-  },
-  slides: {
-    ...(isStaff ? {} : { where: { slide: { is_draft: false } } }),
-    include: { slide: true },
-    orderBy: { order: 'asc' as const },
-  },
-  // `status` is selected because the tree renders it: a DRAFT or CLOSED quiz is
-  // chipped for staff rather than silently listed alongside the live ones.
-  quizzes: {
-    ...(isStaff ? {} : { where: { status: 'PUBLISHED' as const } }),
-    select: { id: true, name: true, status: true },
-  },
-});
+// thing standing between a student and another student's unpublished work here:
+// it is what `listForClassroom` filters on (published modules, items and
+// assignments, and a REPO assignment only once its repository is published),
+// and repoDraftPolicy.test.ts pins that the flag flips with the role.
 
 export const loader = async ({ params, request }: Route.LoaderArgs) => {
   const classSlug = params.class!;
@@ -97,22 +51,11 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
   }
 
   // The module list and the student's own repo-assignments are independent —
-  // fetch them in parallel. (Rich repo data depends on the module list, so it
-  // follows.)
+  // fetch them in parallel.
   const [modules, repoAssignments] = await Promise.all([
     ClassmojiService.module.listForClassroom(classSlug, { includeUnpublished: isStaff }),
     ClassmojiService.helper.findAllAssignmentsForStudent(userId, classSlug),
   ]);
-
-  // Fetch the rich repository data for every repository the modules own.
-  const repoIds = [...new Set(modules.flatMap(m => m.repositories.map(r => r.id)))];
-  const richRepos = repoIds.length
-    ? await getPrisma().repository.findMany({
-        where: { id: { in: repoIds } },
-        include: repoInclude(isStaff),
-      })
-    : [];
-  const repoById = Object.fromEntries(richRepos.map(r => [r.id, r]));
 
   // The student's own repo-assignments power submission status / issue links.
   const raByAssignmentId: Record<string, (typeof repoAssignments)[number]> = {};
@@ -124,7 +67,6 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
     enabled: true as const,
     isStaff,
     modules,
-    repoById,
     raByAssignmentId,
     slidesUrl: process.env.SLIDES_URL || 'http://localhost:6500',
     pagesUrl: process.env.PAGES_URL || 'http://localhost:7100',
@@ -136,26 +78,23 @@ type LoadedModules = Extract<Awaited<ReturnType<typeof loader>>, { enabled: true
 
 // Build each module's rows in the component — node objects hold JSX, which a
 // loader cannot serialize, so the loader only returns plain data. One leaf per
-// item: the module's repositories (with the viewer's own repo link and
-// submission count), its quiz and form assignments, and its pages and slides.
+// item: the module's assignments (a REPO one links to the viewer's own issue
+// and shows their submission state; quiz and form ones open the quiz or form)
+// and its pages and slides.
 const buildModuleLeaves = (
   module: LoadedModules[number],
-  repoById: Record<string, AnyRepository>,
   raByAssignmentId: Record<string, AnyRepoAssignment>,
   ctx: StudentTreeCtx
 ): ModuleTreeNode[] => {
   const leaves: ModuleTreeNode[] = [];
 
-  for (const r of module.repositories) {
-    const repo = repoById[r.id];
-    if (repo) {
-      const node = buildRepositoryNode(repo, raByAssignmentId, ctx, 0);
-      leaves.push({ ...node, children: undefined });
-    }
-  }
-
   for (const a of module.assignments) {
-    if (a.type === 'QUIZ' && a.quiz) {
+    if (a.type === 'REPO') {
+      // The row itself is the link; the nested "Open issue" action and the
+      // attached-resource children belong to the deeper staff tree only.
+      const leaf = buildAssignmentLeaf(a, raByAssignmentId[String(a.id)], ctx, 0);
+      leaves.push({ ...leaf, actionNode: undefined, children: undefined });
+    } else if (a.type === 'QUIZ' && a.quiz) {
       leaves.push(
         ...resourceLeaves(
           { quizzes: [{ id: a.quiz.id, name: a.title, status: a.quiz.status }] },
@@ -236,7 +175,8 @@ const buildModuleLeaves = (
             )
           );
         break;
-      // Legacy rows: the repository is already listed from module.repositories.
+      // Legacy pointer rows; a repository reaches a module only through its
+      // assignments now.
       case 'REPOSITORY':
         break;
     }
@@ -265,8 +205,7 @@ const StudentModules = ({ loaderData }: Route.ComponentProps) => {
     );
   }
 
-  const { modules, repoById, raByAssignmentId, slidesUrl, pagesUrl, classSlug, isStaff } =
-    loaderData;
+  const { modules, raByAssignmentId, slidesUrl, pagesUrl, classSlug, isStaff } = loaderData;
   // Served under every prefix this route's gate allows, so resource links stay
   // on the prefix the viewer arrived on. `isStaff` is the loader's own flag —
   // note it travels SEPARATELY from rolePrefix, which is only the URL: a student
@@ -305,7 +244,6 @@ const StudentModules = ({ loaderData }: Route.ComponentProps) => {
               index={index}
               leaves={buildModuleLeaves(
                 m,
-                repoById as Record<string, AnyRepository>,
                 raByAssignmentId as Record<string, AnyRepoAssignment>,
                 ctx
               )}

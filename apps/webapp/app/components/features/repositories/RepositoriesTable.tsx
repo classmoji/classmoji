@@ -25,15 +25,14 @@ interface AssignmentRow {
   is_published: boolean;
 }
 
-// The coursework unit. On origin's current model this is the Prisma `Repository`
-// (formerly "Module"). The list route fetches these via
+// A repository: the GitHub template students are provisioned from, with the
+// assignments that submit through it. The list route fetches these via
 // ClassmojiService.repository.findByClassroomSlug, which includes `assignments`.
 interface RepositoryRow {
   id: string;
   title: string;
   type: string;
   is_published: boolean;
-  module?: { id: string; title: string; slug: string | null } | null;
   assignments?: AssignmentRow[];
 }
 

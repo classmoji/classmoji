@@ -145,7 +145,7 @@ test.describe('Owner builds a module', () => {
     }
   });
 
-  test('a repository seeded into the module is listed under its Repositories tab', async ({
+  test('an assignment seeded into the module is listed with its repository as target', async ({
     authenticatedPage: page,
     testOrg,
   }) => {
@@ -159,27 +159,48 @@ test.describe('Owner builds a module', () => {
       await page.goto(MODULE_PATH(testOrg, 'qa-repo-tab-module'));
       await waitForDataLoad(page);
 
-      // Repositories is the default tab: the seeded repo and its assignment
-      // (the child row) are both there, with the assignment's weight.
-      await expect(page.getByText('qa-repo-tab-repo', { exact: true })).toBeVisible();
-      await expect(page.getByText(repo.assignmentTitle, { exact: true })).toBeVisible();
-
-      // The Assignments tab lists the same assignment flat, typed as a Repo one.
-      await page.getByRole('button', { name: 'Assignments', exact: true }).click();
+      // Assignments is the default tab: the seeded assignment is there, typed
+      // as a Repo one and naming the repository it submits through.
       const row = page.getByRole('row').filter({ hasText: repo.assignmentTitle });
+      await expect(row).toBeVisible();
       await expect(row.getByText('Repo', { exact: true })).toBeVisible();
+      await expect(row.getByText('qa-repo-tab-repo', { exact: true })).toBeVisible();
     } finally {
       await deleteRepositoryById(repo.repositoryId);
       await deleteModuleById(mod.moduleId);
     }
   });
 
-  test('New repository from a module opens the form with that module preselected', async ({
+  test('New assignment from a module offers every repository in the classroom', async ({
     authenticatedPage: page,
     testOrg,
   }) => {
     const classroom = await getClassroomBySlug(TEST_CLASSROOM);
     const mod = await seedModule(classroom.id, 'qa-new-repo-module', { isPublished: false });
+    const other = await seedModule(classroom.id, 'qa-other-module', { isPublished: false });
+    // A repository whose only assignment lives in ANOTHER module: still offered,
+    // since a repository is not a module member.
+    const repo = await seedRepositoryWithAssignment(classroom.id, 'qa-shared-repo', {
+      moduleId: other.moduleId,
+    });
+
+    try {
+      await page.goto(MODULE_PATH(testOrg, 'qa-new-repo-module'));
+      await waitForDataLoad(page);
+
+      await page.getByRole('button', { name: 'New assignment' }).click();
+      const dialog = page.getByRole('dialog');
+      await expect(dialog.getByText('New assignment', { exact: true })).toBeVisible();
+
+      await dialog.getByRole('combobox', { name: 'Repository' }).click();
+      await expect(page.getByRole('option', { name: 'qa-shared-repo' })).toBeVisible();
+    } finally {
+      await deleteRepositoryById(repo.repositoryId);
+      await deleteModuleById(mod.moduleId);
+      await deleteModuleById(other.moduleId);
+    }
+  });
+});
 
     try {
       await page.goto(MODULE_PATH(testOrg, 'qa-new-repo-module'));

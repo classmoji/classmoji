@@ -26,6 +26,7 @@ interface StudentModuleCardProps {
 
 /** The kind a leaf reads as, and its icon, mirroring the admin card's rows. */
 const kindOf = (node: ModuleTreeNode): { label: string; icon: Icon } => {
+  if (node.kind === 'assignment') return { label: 'Assignment', icon: TYPE_META.REPOSITORY.icon };
   if (node.kind === 'repository' || node.kind === 'repo')
     return { label: 'Repository', icon: TYPE_META.REPOSITORY.icon };
   switch (node.resourceIcon) {
@@ -40,8 +41,9 @@ const kindOf = (node: ModuleTreeNode): { label: string; icon: Icon } => {
   }
 };
 
-/** Which heading a leaf sits under: repos, quizzes and forms are assignments. */
+/** Which heading a leaf sits under: assignments, quizzes and forms are assignments. */
 const groupOf = (node: ModuleTreeNode): 'Assignments' | 'Content' =>
+  node.kind === 'assignment' ||
   node.kind === 'repository' ||
   node.kind === 'repo' ||
   node.resourceIcon === 'quiz' ||

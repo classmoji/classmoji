@@ -7,17 +7,12 @@ import {
   IconArrowUp,
   IconChevronDown,
   IconChevronRight,
-  IconCloudUpload,
+  IconClipboardList,
   IconDotsVertical,
-  IconEyeOff,
   IconFileText,
-  IconFolder,
-  IconForms,
-  IconHelpCircle,
   IconPencil,
   IconPlus,
   IconPresentation,
-  IconRefresh,
   IconTrash,
   IconWorld,
   type Icon,
@@ -31,9 +26,9 @@ import AssignmentFormModal, {
 } from '~/components/features/assignments/AssignmentFormModal';
 import {
   ASSIGNMENT_TYPE_META,
+  assignmentTarget,
   type AssignmentRowData,
 } from '~/components/features/assignments/AssignmentsTable';
-import { useRepositoryActions } from '~/components/features/repositories/useRepositoryActions';
 import AddContentItemModal from './AddContentItemModal';
 import {
   TYPE_META,
@@ -53,14 +48,6 @@ export interface ModuleCardData {
   is_published: boolean;
   is_public: boolean;
   items: ModuleItemLike[];
-  repositories: Array<{
-    id: string;
-    title: string;
-    type: string;
-    is_published: boolean;
-    assignments: Array<{ id: string; title: string; weight: number; is_published: boolean }>;
-    _count: { git_repos: number };
-  }>;
   assignments: AssignmentRowData[];
 }
 
@@ -72,6 +59,8 @@ interface ModuleCardProps {
   expanded: boolean;
   onToggle: () => void;
   candidates: CandidateContent;
+  /** Every repository in the classroom, for the REPO assignment picker. */
+  repositories: Array<{ id: string; title: string; is_published: boolean }>;
   boundQuizIds: Set<string>;
   boundFormIds: Set<string>;
 }
@@ -96,13 +85,13 @@ const GroupHeading = ({ children }: { children: string }) => (
 
 /**
  * Every item in a module renders through this one row, whatever its kind:
- * icon, "Kind: title" (kind in bold), status pill, Edit, and a menu holding
- * the rest.
+ * icon, "Kind: title" (kind in bold), an optional muted note (the target an
+ * assignment submits through), status pill, Edit, and a menu holding the rest.
  */
 const ItemRow = ({
   icon: RowIcon,
   title,
-  onTitleClick,
+  note,
   kind,
   published,
   onEdit,
@@ -111,7 +100,7 @@ const ItemRow = ({
 }: {
   icon: Icon;
   title: string;
-  onTitleClick?: () => void;
+  note?: string | null;
   kind: string;
   published: boolean;
   onEdit: () => void;
@@ -120,21 +109,11 @@ const ItemRow = ({
 }) => (
   <li className="flex items-center gap-3 py-2.5 px-2 -mx-2 rounded-lg cursor-pointer transition-colors hover:bg-stone-50 dark:hover:bg-neutral-800">
     <RowIcon size={18} className="text-gray-400 shrink-0" />
-    {onTitleClick ? (
-      <button
-        type="button"
-        onClick={onTitleClick}
-        className="min-w-0 flex-1 truncate text-left text-ink-1"
-      >
-        <span className="font-semibold mr-2">{kind}:</span>
-        {title}
-      </button>
-    ) : (
-      <span className="min-w-0 flex-1 truncate text-ink-1">
-        <span className="font-semibold mr-2">{kind}:</span>
-        {title}
-      </span>
-    )}
+    <span className="min-w-0 flex-1 truncate text-ink-1">
+      <span className="font-semibold mr-2">{kind}:</span>
+      {title}
+      {note && <span className="ml-2 text-xs text-ink-3">{note}</span>}
+    </span>
     <Tag color={published ? 'green' : 'orange'} className="m-0 shrink-0 font-medium">
       {published ? 'Published' : 'Draft'}
     </Tag>
@@ -163,9 +142,9 @@ const ItemRow = ({
 
 /**
  * One module, as an expandable card that shows and manages everything it
- * holds in one flat list: repositories, quiz and form assignments, pages and
- * slides. One "Add item" row asks which kind to add. The issues inside a
- * repository are managed on the repository itself.
+ * holds: its content (pages, slides) and its assignments, each submitting
+ * through a repository, a quiz or a form. One "Add item" row asks which kind
+ * to add. Repositories themselves are managed on the Repositories page.
  */
 const ModuleCard = ({
   module,
@@ -175,6 +154,7 @@ const ModuleCard = ({
   expanded,
   onToggle,
   candidates,
+  repositories,
   boundQuizIds,
   boundFormIds,
 }: ModuleCardProps) => {
@@ -182,7 +162,6 @@ const ModuleCard = ({
   const { modal } = App.useApp();
   const moduleFetcher = useFetcher<{ success?: string; error?: string }>();
   const assignmentFetcher = useFetcher<{ success?: string; error?: string }>();
-  const repoActions = useRepositoryActions(`/admin/${classSlug}/repos`);
 
   const [editOpen, setEditOpen] = useState(false);
   const [contentOpen, setContentOpen] = useState(false);
@@ -193,12 +172,10 @@ const ModuleCard = ({
   const [error, setError] = useState<string | null>(null);
 
   const busy = moduleFetcher.state !== 'idle';
-  const ownsCoursework = module.repositories.length > 0 || module.assignments.length > 0;
-  // Legacy REPOSITORY items duplicate the repository rows; hide them. Issues
-  // (REPO assignments) belong to their repository and are managed there.
+  const ownsCoursework = module.assignments.length > 0;
+  // Legacy REPOSITORY items are a pre-assignment pointer nobody renders now.
   const contentItems = module.items.filter(i => i.item_type !== 'REPOSITORY');
-  const standaloneAssignments = module.assignments.filter(a => a.type !== 'REPO');
-  const itemCount = module.repositories.length + standaloneAssignments.length + contentItems.length;
+  const itemCount = module.assignments.length + contentItems.length;
 
   useEffect(() => {
     if (moduleFetcher.state === 'idle' && moduleFetcher.data?.error) {
@@ -224,9 +201,10 @@ const ModuleCard = ({
 
   const removeAssignment = (a: AssignmentRowData) =>
     modal.confirm({
-      title: 'Remove from module',
-      content: 'This removes the assignment. The quiz or form itself is kept.',
-      okText: 'Remove',
+      title: 'Delete assignment',
+      content:
+        'This deletes the assignment along with its submissions and grades. The repository, quiz or form it points at is kept.',
+      okText: 'Delete',
       okButtonProps: { danger: true },
       cancelText: 'Cancel',
       onOk: () =>
@@ -294,21 +272,19 @@ const ModuleCard = ({
     if (key === 'delete') post('delete', { id: module.id });
   };
 
-  // "Add item" asks which kind. A repository goes to the repository form; a
-  // quiz or form links an existing one as an assignment; a page or slide deck
-  // is placed in the module's reading order.
+  // "Add item" asks which kind. An assignment picks how students submit
+  // (a repository, a quiz or a form) in its own modal; a page or slide deck is
+  // placed in the module's reading order.
   const addItemMenu: MenuProps['items'] = [
     {
       type: 'group',
       label: 'Assignments',
       children: [
         {
-          key: 'REPO',
-          icon: <IconFolder size={15} />,
-          label: 'Repository — a GitHub template copied to every student',
+          key: 'ASSIGNMENT',
+          icon: <IconClipboardList size={15} />,
+          label: 'Assignment — submitted through a repository, a quiz or a form',
         },
-        { key: 'QUIZ', icon: <IconHelpCircle size={15} />, label: 'Quiz — link an existing quiz' },
-        { key: 'FORM', icon: <IconForms size={15} />, label: 'Form — link an existing form' },
       ],
     },
     {
@@ -321,8 +297,7 @@ const ModuleCard = ({
     },
   ];
   const onAddItem: MenuProps['onClick'] = ({ key }) => {
-    if (key === 'REPO') navigate(`/admin/${classSlug}/repos/form?module=${module.id}`);
-    else if (key === 'QUIZ' || key === 'FORM') openAssignmentModal(key);
+    if (key === 'ASSIGNMENT') openAssignmentModal(undefined);
     else {
       setContentType(key as ContentItemType);
       setContentOpen(true);
@@ -332,6 +307,18 @@ const ModuleCard = ({
   const removeItem = {
     key: 'remove',
     label: 'Remove from module',
+    danger: true,
+    icon: <IconTrash size={15} />,
+  };
+  // What the assignment submits through, unless that is just its own title
+  // again (a quiz assignment usually carries the quiz's name); then the kind.
+  const assignmentNote = (a: AssignmentRowData) => {
+    const target = assignmentTarget(a);
+    return target && target !== a.title ? target : (ASSIGNMENT_TYPE_META[a.type]?.label ?? null);
+  };
+  const deleteAssignmentItem = {
+    key: 'remove',
+    label: 'Delete assignment',
     danger: true,
     icon: <IconTrash size={15} />,
   };
@@ -444,55 +431,17 @@ const ModuleCard = ({
                 />
               );
             })}
-            {module.repositories.length + standaloneAssignments.length > 0 && (
-              <GroupHeading>Assignments</GroupHeading>
-            )}
-            {module.repositories.map(r => (
-              <ItemRow
-                key={`repo-${r.id}`}
-                icon={IconFolder}
-                title={r.title}
-                onTitleClick={() => repoActions.viewRepository(r)}
-                kind="Repository"
-                published={r.is_published}
-                onEdit={() => repoActions.editRepository(r)}
-                menuItems={[
-                  r.is_published
-                    ? { key: 'sync', label: 'Sync student repos', icon: <IconRefresh size={15} /> }
-                    : {
-                        key: 'publish',
-                        label: 'Publish to students',
-                        icon: <IconCloudUpload size={15} />,
-                      },
-                  ...(r.is_published
-                    ? [{ key: 'unpublish', label: 'Unpublish', icon: <IconEyeOff size={15} /> }]
-                    : []),
-                  { type: 'divider' as const },
-                  {
-                    key: 'delete',
-                    label: 'Delete repository',
-                    danger: true,
-                    icon: <IconTrash size={15} />,
-                  },
-                ]}
-                onMenuClick={key => {
-                  if (key === 'sync') repoActions.confirmSync(r.id);
-                  if (key === 'publish') repoActions.confirmPublish(r.id);
-                  if (key === 'unpublish') repoActions.confirmUnpublish(r.id);
-                  if (key === 'delete') repoActions.confirmDelete(r.id);
-                }}
-              />
-            ))}
-
-            {standaloneAssignments.map(a => (
+            {module.assignments.length > 0 && <GroupHeading>Assignments</GroupHeading>}
+            {module.assignments.map(a => (
               <ItemRow
                 key={`assignment-${a.id}`}
-                icon={a.type === 'QUIZ' ? IconHelpCircle : IconForms}
+                icon={ASSIGNMENT_TYPE_META[a.type]?.icon ?? IconClipboardList}
                 title={a.title}
-                kind={ASSIGNMENT_TYPE_META[a.type]?.label ?? a.type}
+                note={assignmentNote(a)}
+                kind="Assignment"
                 published={a.is_published}
                 onEdit={() => openAssignmentModal(undefined, a)}
-                menuItems={[removeItem]}
+                menuItems={[deleteAssignmentItem]}
                 onMenuClick={key => {
                   if (key === 'remove') removeAssignment(a);
                 }}
@@ -507,7 +456,7 @@ const ModuleCard = ({
           >
             <button
               type="button"
-              data-tour={index === 0 ? 'repos-new' : undefined}
+              data-tour={index === 0 ? 'modules-add-item' : undefined}
               className="flex w-full items-center gap-3 py-2 text-sm text-ink-3 hover:text-ink-1"
             >
               <span className="h-px flex-1 border-t border-dashed border-line" />
@@ -529,11 +478,11 @@ const ModuleCard = ({
         classSlug={classSlug}
         moduleId={module.id}
         modules={[moduleRef]}
-        repositoriesByModule={{
-          [module.id]: module.repositories.map(r => ({ id: r.id, title: r.title })),
-        }}
+        repositories={repositories}
         quizzes={candidates.quizzes}
         forms={candidates.forms}
+        pages={candidates.pages}
+        slides={candidates.slides}
         boundQuizIds={boundQuizIds}
         boundFormIds={boundFormIds}
         assignment={editingAssignment}

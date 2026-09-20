@@ -66,21 +66,21 @@ const OWNER_STEPS: FeatureStep[] = [
     link: '/modules',
     title: 'Modules',
     description:
-      'Modules are the units of your course, such as a week, a topic, or a project. Each module holds repositories, assignments, pages, slides, quizzes and forms. This example course has one module, Week 1: Hello World.',
+      'Modules are the units of your course, such as a week, a topic, or a project. Each module holds content (pages and slides) and assignments. This example course has one module, Week 1: Hello World.',
   },
   {
-    link: '/modules/week-1-hello-world',
-    title: 'Inside a module',
+    link: '/modules',
+    selector: '[data-tour="modules-add-item"]',
+    placement: 'top',
+    title: 'Add an assignment',
     description:
-      'A module page has three tabs. Repositories are GitHub template repos that Classmoji copies to every student, or every team for group work, when you publish them. Assignments are the graded units: an issue in a repo, a quiz, or a form, each with a weight and due date. Content is the reading order of pages and slides.',
+      'Use Add item to place a page or slide deck in the module, or to create an assignment. An assignment is what gets graded: it has a weight and a due date, and students submit through a repository (Classmoji opens an issue in each student’s copy), a quiz, or a form.',
   },
   {
-    link: '/modules/week-1-hello-world',
-    selector: '[data-tour="repos-new"]',
-    placement: 'bottom',
-    title: 'Create a repository',
+    link: '/repos',
+    title: 'Repositories',
     description:
-      'Use New repository to add a template repo to this module. The assignments you add inside it become GitHub issues that Classmoji opens in each student’s copy of the repo, and you control release dates, due dates, and weighting per assignment.',
+      'A repository is a GitHub template that Classmoji copies to every student, or every team for group work, when you publish it. Assignments in any module can submit through the same repository, so a semester-long project repo can carry several of them.',
   },
   {
     link: '/repos/form',
@@ -99,19 +99,11 @@ const OWNER_STEPS: FeatureStep[] = [
   },
   {
     link: '/repos/form',
-    selector: '[data-tour="repos-form-add-assignment"]',
-    placement: 'left',
-    title: 'Add assignments',
-    description:
-      'Open the assignment editor to define each gradable assignment in this repository.',
-  },
-  {
-    link: '/repos/form',
     selector: '[data-tour="repos-form-submit"]',
     placement: 'top',
     title: 'Create repository',
     description:
-      'Save everything to create the repository with its assignments and linked content.',
+      'Save to create the repository. Then add an assignment to a module and pick this repository as the way students submit.',
   },
   {
     link: '/students',
@@ -202,7 +194,7 @@ const OWNER_STEPS: FeatureStep[] = [
     link: '/grades',
     title: 'The gradebook',
     description:
-      'The Grades page is a full gradebook with students as rows and assignments as columns. Grades are hidden from students by default and released per assignment when you are ready, and assignment grades roll up into repository grades and a final grade using the weighting you configure.',
+      'The Grades page is a full gradebook with students as rows and assignments as columns. Grades are hidden from students by default and released per assignment when you are ready, and each assignment’s weight decides how much it counts toward the final grade.',
   },
   {
     link: '/grades',
@@ -217,7 +209,7 @@ const OWNER_STEPS: FeatureStep[] = [
     selector: '[data-tour="grades-show-assignments"]',
     placement: 'bottom',
     title: 'Show assignments',
-    description: 'Expand each repository into its individual assignment grade columns.',
+    description: 'Expand each module into its individual assignment grade columns.',
   },
   {
     link: '/grades',

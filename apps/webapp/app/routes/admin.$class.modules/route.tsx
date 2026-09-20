@@ -22,15 +22,22 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
   });
 
   // Every module with everything it owns, plus what the pickers may add.
-  const [modules, candidates, allAssignments] = await Promise.all([
+  const [modules, candidates, allAssignments, repositories] = await Promise.all([
     ClassmojiService.module.listModuleContentsForClassroom(classroom.id),
     ClassmojiService.module.getCandidateContent(classroom.id),
     ClassmojiService.assignment.listForClassroom(classroom.id),
+    ClassmojiService.repository.findByClassroomId(classroom.id),
   ]);
 
   return {
     modules,
     candidates,
+    // A REPO assignment may submit through any repository in the classroom.
+    repositories: repositories.map(r => ({
+      id: r.id,
+      title: r.title,
+      is_published: r.is_published,
+    })),
     slidesUrl: process.env.SLIDES_URL || 'http://localhost:6500',
     // A quiz or form binds to at most one assignment in the classroom.
     boundQuizIds: allAssignments.map(a => a.quiz_id).filter(Boolean) as string[],
@@ -94,7 +101,7 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
         const message = error instanceof Error ? error.message : '';
         return {
           error: message.includes('still has')
-            ? 'Move or delete this module’s repositories and assignments first.'
+            ? 'Move or delete this module’s assignments first.'
             : 'Failed to delete module. Please try again.',
         };
       }
@@ -172,7 +179,7 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
  * assignments and content in place. Nothing needs the module detail page.
  */
 const ModulesIndex = ({ loaderData }: Route.ComponentProps) => {
-  const { modules, candidates, slidesUrl, boundQuizIds, boundFormIds } = loaderData;
+  const { modules, candidates, repositories, slidesUrl, boundQuizIds, boundFormIds } = loaderData;
   const { class: classSlug } = useParams();
   const [query, setQuery] = useState('');
   const [formOpen, setFormOpen] = useState(false);
@@ -236,6 +243,7 @@ const ModulesIndex = ({ loaderData }: Route.ComponentProps) => {
             expanded={!collapsed.has(m.id)}
             onToggle={() => toggle(m.id)}
             candidates={candidates}
+            repositories={repositories}
             boundQuizIds={quizSet}
             boundFormIds={formSet}
           />
@@ -249,7 +257,7 @@ const ModulesIndex = ({ loaderData }: Route.ComponentProps) => {
             <div className="text-sm">
               {query
                 ? 'Try adjusting your search terms.'
-                : 'A module is a unit of your course. Add one, then add repositories, assignments, pages, slides, quizzes and forms to it.'}
+                : 'A module is a unit of your course. Add one, then add assignments, pages and slides to it.'}
             </div>
           </div>
         )}

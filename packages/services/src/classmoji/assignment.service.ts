@@ -101,6 +101,9 @@ export const findByClassroomId = async (
 
 /** The include every flat assignment listing carries. */
 const LIST_INCLUDE = {
+  // Linked resources, so the edit modal can prefill them.
+  pages: { select: { page: { select: { id: true } } } },
+  slides: { select: { slide: { select: { id: true } } } },
   module: { select: { id: true, title: true, slug: true, position: true } },
   repository: { select: { id: true, title: true, slug: true, type: true, is_published: true } },
   quiz: { select: { id: true, name: true, status: true } },

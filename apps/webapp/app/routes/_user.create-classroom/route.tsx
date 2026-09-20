@@ -209,7 +209,6 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
             title: true,
             template: true,
             type: true,
-            module: { select: { id: true, title: true } },
             _count: {
               select: {
                 assignments: true,

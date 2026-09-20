@@ -10,9 +10,9 @@ import type { FormAccess, FormStatus, ModuleItemType } from '@prisma/client';
 import { formatCloseDate } from './ReadOnlyModulesTree';
 
 /**
- * The item types the "Add item" picker offers. Repositories join a module
- * through Repository.module_id (the module's repositories list), not as an
- * item; legacy REPOSITORY rows still render read-only.
+ * The item types the "Add item" picker offers. Repositories are not module
+ * members at all (a REPO assignment points at one); legacy REPOSITORY rows are
+ * kept in the data but no longer rendered.
  */
 export type ContentItemType = Exclude<ModuleItemType, 'REPOSITORY'>;
 

@@ -111,6 +111,73 @@ export const resourceLeaves = (
   });
 
 /**
+ * One assignment as the viewer sees it: title, submission state, released
+ * grades, due date, and — for REPO assignments — the student's own issue as
+ * the row's link (falling back to their repo when no issue exists yet). Used
+ * both nested under a repository in the staff tree and flat on the student's
+ * module card.
+ */
+export const buildAssignmentLeaf = (
+  a: AnyRepository,
+  ra: AnyRepoAssignment | undefined,
+  ctx: StudentTreeCtx,
+  level = 0,
+  typeText?: string
+): ModuleTreeNode => {
+  const showGrades = a.grades_released && (ra?.grades?.length ?? 0) > 0;
+  const login = ra?.git_repo?.classroom?.git_organization?.login ?? ctx.gitOrgLogin;
+  const issueUrl =
+    login && ra?.provider_issue_number
+      ? `https://github.com/${login}/${ra.git_repo.name}/issues/${ra.provider_issue_number}`
+      : null;
+  const ownRepo =
+    ra?.git_repo ??
+    (a.repository_id ? ctx.studentRepoByRepositoryId?.[String(a.repository_id)] : undefined);
+  const ownRepoUrl = ownRepo ? repoGithubUrl(ownRepo.name, login) : null;
+  return {
+    key: `assignment-${a.id}`,
+    kind: 'assignment',
+    level,
+    name: a.title,
+    typeText: typeText ?? (a.repository?.type ? prettyType(a.repository.type) : undefined),
+    weightText: a.weight != null ? `${a.weight}%` : undefined,
+    href: issueUrl ?? ownRepoUrl ?? undefined,
+    statusNode: (
+      <div className="flex items-center gap-2 flex-wrap">
+        {/* Staff-only, and gated on the flag rather than on the data: a
+            student payload carries is_published too (always true, the loader
+            filtered on it), so the flag is what keeps this off their tree. */}
+        {ctx.isStaff === true && a.is_published === false && DRAFT_TAG}
+        {submittedPill(ra?.status)}
+        {showGrades && (
+          <span className="inline-flex items-center gap-1 whitespace-nowrap">
+            {ra.grades.map((g: AnyRepoAssignment, i: number) => (
+              <Emoji key={g.id ?? i} emoji={g.emoji} fontSize={16} />
+            ))}
+          </span>
+        )}
+        {a.student_deadline && (
+          <span className="text-xs text-ink-3 whitespace-nowrap">
+            due {new Date(a.student_deadline).toLocaleDateString()}
+          </span>
+        )}
+      </div>
+    ),
+    actionNode: issueUrl ? (
+      <a
+        href={issueUrl}
+        target="_blank"
+        rel="noreferrer"
+        className="text-sm font-medium text-sky-600 hover:text-sky-700 dark:text-sky-400"
+      >
+        Open issue
+      </a>
+    ) : null,
+    children: resourceLeaves({ pages: a.pages, slides: a.slides }, level + 1, `a-${a.id}`, ctx),
+  };
+};
+
+/**
  * Build the read-only subtree for a single repository: the repository node
  * (folder), its student git repos and assignments with submission status, and
  * any attached resources. `baseLevel` is the repository node's indent level
@@ -124,59 +191,6 @@ export const buildRepositoryNode = (
 ): ModuleTreeNode => {
   const repositoryType = prettyType(repository.type);
   const assignments: AnyRepository[] = repository.assignments ?? [];
-
-  const assignmentNode = (
-    a: AnyRepository,
-    ra: AnyRepoAssignment | undefined,
-    level: number
-  ): ModuleTreeNode => {
-    const showGrades = a.grades_released && (ra?.grades?.length ?? 0) > 0;
-    const login = ra?.git_repo?.classroom?.git_organization?.login;
-    const issueUrl =
-      login && ra?.provider_issue_number
-        ? `https://github.com/${login}/${ra.git_repo.name}/issues/${ra.provider_issue_number}`
-        : null;
-    return {
-      key: `assignment-${a.id}`,
-      kind: 'assignment',
-      level,
-      name: a.title,
-      typeText: repositoryType,
-      weightText: a.weight != null ? `${a.weight}%` : undefined,
-      statusNode: (
-        <div className="flex items-center gap-2 flex-wrap">
-          {/* Staff-only, and gated on the flag rather than on the data: a
-              student payload carries is_published too (always true, the loader
-              filtered on it), so the flag is what keeps this off their tree. */}
-          {ctx.isStaff === true && a.is_published === false && DRAFT_TAG}
-          {submittedPill(ra?.status)}
-          {showGrades && (
-            <span className="inline-flex items-center gap-1 whitespace-nowrap">
-              {ra.grades.map((g: AnyRepoAssignment, i: number) => (
-                <Emoji key={g.id ?? i} emoji={g.emoji} fontSize={16} />
-              ))}
-            </span>
-          )}
-          {a.student_deadline && (
-            <span className="text-xs text-ink-3 whitespace-nowrap">
-              due {new Date(a.student_deadline).toLocaleDateString()}
-            </span>
-          )}
-        </div>
-      ),
-      actionNode: issueUrl ? (
-        <a
-          href={issueUrl}
-          target="_blank"
-          rel="noreferrer"
-          className="text-sm font-medium text-sky-600 hover:text-sky-700 dark:text-sky-400"
-        >
-          Open issue
-        </a>
-      ) : null,
-      children: resourceLeaves({ pages: a.pages, slides: a.slides }, level + 1, `a-${a.id}`, ctx),
-    };
-  };
 
   // Group the student's assignments by the per-student git repo their RA belongs to.
   const NONE = '__none__';
@@ -201,7 +215,9 @@ export const buildRepositoryNode = (
   for (const [key, bucket] of buckets) {
     if (key === NONE) {
       for (const a of bucket.items) {
-        repositoryChildren.push(assignmentNode(a, raByAssignmentId[String(a.id)], baseLevel + 1));
+        repositoryChildren.push(
+          buildAssignmentLeaf(a, raByAssignmentId[String(a.id)], ctx, baseLevel + 1, repositoryType)
+        );
       }
       continue;
     }
@@ -225,7 +241,7 @@ export const buildRepositoryNode = (
         </a>
       ) : null,
       children: bucket.items.map(a =>
-        assignmentNode(a, raByAssignmentId[String(a.id)], baseLevel + 2)
+        buildAssignmentLeaf(a, raByAssignmentId[String(a.id)], ctx, baseLevel + 2, repositoryType)
       ),
     });
   }

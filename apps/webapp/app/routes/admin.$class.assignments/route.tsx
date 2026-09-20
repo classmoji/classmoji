@@ -28,17 +28,18 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
     ClassmojiService.module.getCandidateContent(classroom.id),
   ]);
 
-  const repositoriesByModule: Record<string, Array<{ id: string; title: string }>> = {};
-  for (const r of repositories) {
-    (repositoriesByModule[r.module_id] ??= []).push({ id: r.id, title: r.title });
-  }
-
   return {
     assignments,
     modules: modules.map(m => ({ id: m.id, title: m.title, slug: m.slug, position: m.position })),
-    repositoriesByModule,
+    repositories: repositories.map(r => ({
+      id: r.id,
+      title: r.title,
+      is_published: r.is_published,
+    })),
     quizzes: candidates.quizzes,
     forms: candidates.forms,
+    pages: candidates.pages,
+    slides: candidates.slides,
   };
 };
 
@@ -90,7 +91,7 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
 };
 
 const AdminAssignments = ({ loaderData }: Route.ComponentProps) => {
-  const { assignments, modules, repositoriesByModule, quizzes, forms } = loaderData;
+  const { assignments, modules, repositories, quizzes, forms, pages, slides } = loaderData;
   const { class: classSlug } = useParams();
   const deleteFetcher = useFetcher<{ success?: string; error?: string }>();
 
@@ -187,9 +188,11 @@ const AdminAssignments = ({ loaderData }: Route.ComponentProps) => {
         onClose={() => setModalOpen(false)}
         classSlug={classSlug!}
         modules={modules}
-        repositoriesByModule={repositoriesByModule}
+        repositories={repositories}
         quizzes={quizzes}
         forms={forms}
+        pages={pages}
+        slides={slides}
         boundQuizIds={boundQuizIds}
         boundFormIds={boundFormIds}
         assignment={editing}

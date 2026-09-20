@@ -45,7 +45,6 @@ interface RepositoryAssignment {
 interface RepositoryData {
   type: string;
   is_published: boolean;
-  module?: { title: string } | null;
   assignments?: RepositoryAssignment[];
 }
 
@@ -102,7 +101,6 @@ const SummaryCards = ({ repository, repos }: SummaryCardsProps) => {
             </Tag>
           }
         />
-        <StatItem label="Module" value={repository.module?.title ?? '—'} />
         <StatItem label="Repositories" value={repoCount} />
         <StatItem
           label="Due date"

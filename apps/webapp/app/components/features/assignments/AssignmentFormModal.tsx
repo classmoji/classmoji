@@ -14,10 +14,13 @@ export interface AssignmentFormModalProps {
   /** Preselects (and locks) the module when opened from a module page. */
   moduleId?: string;
   modules: Array<{ id: string; title: string }>;
-  /** The classroom's repositories, grouped by module id, for REPO targets. */
-  repositoriesByModule: Record<string, Array<{ id: string; title: string }>>;
+  /** Every repository in the classroom: a REPO assignment may submit through any of them. */
+  repositories: Array<{ id: string; title: string; is_published: boolean }>;
   quizzes: Array<{ id: string; name: string; status: string }>;
   forms: Array<{ id: string; title: string; status: string }>;
+  /** Pages / slide decks the assignment can link as its resources. */
+  pages?: Array<{ id: string; title: string | null }>;
+  slides?: Array<{ id: string; title: string | null }>;
   /** Quiz / form ids already bound to another assignment (each may bind once). */
   boundQuizIds: Set<string>;
   boundFormIds: Set<string>;
@@ -41,14 +44,16 @@ interface FormValues {
   grader_deadline: Dayjs | null;
   tokens_per_hour: number;
   description: string;
+  page_ids: string[];
+  slide_ids: string[];
 }
 
 const toIso = (value: Dayjs | null | undefined) => (value ? value.toISOString() : null);
 
 /**
- * Create / edit one assignment. Phase 1 links an assignment to something that
- * already exists: pick the kind, then one of the module's repositories, a
- * quiz, or a form. Kind and target are fixed once created; everything else is
+ * Create / edit one assignment. The assignment links to something that already
+ * exists: pick how students submit (a repository, a quiz, or a form), then the
+ * one to use. Kind and target are fixed once created; everything else is
  * editable. Posts to the class-level assignments action.
  */
 const AssignmentFormModal = ({
@@ -57,9 +62,11 @@ const AssignmentFormModal = ({
   classSlug,
   moduleId,
   modules,
-  repositoriesByModule,
+  repositories,
   quizzes,
   forms,
+  pages = [],
+  slides = [],
   boundQuizIds,
   boundFormIds,
   assignment,
@@ -69,7 +76,6 @@ const AssignmentFormModal = ({
   const fetcher = useFetcher<{ success?: string; error?: string }>();
   const [form] = Form.useForm<FormValues>();
   const [kind, setKind] = useState<AssignmentKind>('REPO');
-  const [selectedModuleId, setSelectedModuleId] = useState<string | undefined>(moduleId);
   const isEdit = !!assignment;
   const busy = fetcher.state !== 'idle';
 
@@ -78,7 +84,6 @@ const AssignmentFormModal = ({
     if (!open) return;
     const nextKind = (assignment?.type as AssignmentKind) ?? presetKind ?? 'REPO';
     setKind(nextKind);
-    setSelectedModuleId(assignment?.module.id ?? moduleId);
     form.setFieldsValue({
       module_id: assignment?.module.id ?? moduleId,
       type: nextKind,
@@ -95,6 +100,8 @@ const AssignmentFormModal = ({
       grader_deadline: assignment?.grader_deadline ? dayjs(assignment.grader_deadline) : null,
       tokens_per_hour: assignment?.tokens_per_hour ?? 0,
       description: assignment?.description ?? '',
+      page_ids: assignment?.pages?.map(l => l.page.id) ?? [],
+      slide_ids: assignment?.slides?.map(l => l.slide.id) ?? [],
     });
   }, [open, assignment, moduleId, form, presetKind, presetRepositoryId]);
 
@@ -107,9 +114,9 @@ const AssignmentFormModal = ({
   const targetOptions = useMemo(() => {
     switch (kind) {
       case 'REPO':
-        return (selectedModuleId ? (repositoriesByModule[selectedModuleId] ?? []) : []).map(r => ({
+        return repositories.map(r => ({
           value: r.id,
-          label: r.title,
+          label: r.is_published ? r.title : `${r.title} · draft`,
         }));
       case 'QUIZ':
         return quizzes
@@ -122,19 +129,18 @@ const AssignmentFormModal = ({
       default:
         return [];
     }
-  }, [
-    kind,
-    selectedModuleId,
-    repositoriesByModule,
-    quizzes,
-    forms,
-    boundQuizIds,
-    boundFormIds,
-    assignment,
-  ]);
+  }, [kind, repositories, quizzes, forms, boundQuizIds, boundFormIds, assignment]);
 
+  const newRepositoryHref = `/admin/${classSlug}/repos/form`;
   const emptyTargetHint = {
-    REPO: 'This module has no repositories yet. Create one from the module page first.',
+    REPO: (
+      <>
+        No repositories yet.{' '}
+        <a href={newRepositoryHref} target="_blank" rel="noreferrer">
+          New repository
+        </a>
+      </>
+    ),
     QUIZ: 'No quizzes to bind. Create one on the Quizzes page first.',
     FORM: 'No forms to bind. Create one in the forms app first.',
   }[kind];
@@ -150,6 +156,8 @@ const AssignmentFormModal = ({
       grader_deadline: toIso(values.grader_deadline),
       tokens_per_hour: values.tokens_per_hour ?? 0,
       description: values.description ?? '',
+      page_ids: values.page_ids ?? [],
+      slide_ids: values.slide_ids ?? [],
     };
     if (isEdit) {
       payload.id = assignment!.id;
@@ -173,13 +181,7 @@ const AssignmentFormModal = ({
     <Modal
       open={open}
       onCancel={onClose}
-      title={
-        isEdit
-          ? `Edit assignment: ${assignment?.title}`
-          : kind === 'REPO' && presetRepositoryId
-            ? 'New issue in this repository'
-            : `New ${ASSIGNMENT_TYPE_META[kind].label.toLowerCase()} assignment`
-      }
+      title={isEdit ? `Edit assignment: ${assignment?.title}` : 'New assignment'}
       okText={isEdit ? 'Save' : 'Create'}
       onOk={submit}
       confirmLoading={busy}
@@ -203,15 +205,11 @@ const AssignmentFormModal = ({
               placeholder="Choose a module"
               disabled={isEdit}
               options={modules.map(m => ({ value: m.id, label: m.title }))}
-              onChange={value => {
-                setSelectedModuleId(value);
-                form.setFieldValue('target_id', undefined);
-              }}
             />
           </Form.Item>
         )}
 
-        <Form.Item label="Type" name="type">
+        <Form.Item label="Students submit through" name="type">
           <Segmented
             block
             disabled={isEdit || !!presetKind}
@@ -228,9 +226,16 @@ const AssignmentFormModal = ({
 
         <Form.Item
           name="target_id"
-          label={
-            { REPO: 'Repository', QUIZ: 'Quiz', FORM: 'Form' }[kind] +
-            (kind === 'REPO' ? ' (the assignment becomes an issue in each student repo)' : '')
+          label={{ REPO: 'Repository', QUIZ: 'Quiz', FORM: 'Form' }[kind]}
+          extra={
+            kind === 'REPO' && !isEdit ? (
+              <>
+                Students submit through an issue Classmoji opens in their copy of this repository.{' '}
+                <a href={newRepositoryHref} target="_blank" rel="noreferrer">
+                  New repository
+                </a>
+              </>
+            ) : undefined
           }
           rules={[{ required: true, message: 'Pick a target' }]}
         >
@@ -289,6 +294,27 @@ const AssignmentFormModal = ({
             <Input.TextArea rows={4} />
           </Form.Item>
         )}
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <Form.Item name="page_ids" label="Linked pages">
+            <Select
+              mode="multiple"
+              showSearch
+              optionFilterProp="label"
+              placeholder="Pages students should read"
+              options={pages.map(p => ({ value: p.id, label: p.title || 'Untitled' }))}
+            />
+          </Form.Item>
+          <Form.Item name="slide_ids" label="Linked slides">
+            <Select
+              mode="multiple"
+              showSearch
+              optionFilterProp="label"
+              placeholder="Slide decks for this assignment"
+              options={slides.map(d => ({ value: d.id, label: d.title || 'Untitled' }))}
+            />
+          </Form.Item>
+        </div>
       </Form>
     </Modal>
   );

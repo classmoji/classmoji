@@ -1,7 +1,13 @@
 import { Popconfirm, Table, Tag } from 'antd';
 import { Link } from 'react-router';
 import dayjs from 'dayjs';
-import { IconFileText, IconFolder, IconForms, IconHelpCircle, type Icon } from '@tabler/icons-react';
+import {
+  IconFileText,
+  IconFolder,
+  IconForms,
+  IconHelpCircle,
+  type Icon,
+} from '@tabler/icons-react';
 
 /** An assignment as the flat list and the module tab render it. */
 export interface AssignmentRowData {
@@ -21,6 +27,9 @@ export interface AssignmentRowData {
   repository?: { id: string; title: string } | null;
   quiz?: { id: string; name: string } | null;
   form?: { id: string; title: string } | null;
+  /** Pages / slide decks attached to the assignment (PageLink / SlideLink rows). */
+  pages?: Array<{ page: { id: string } }>;
+  slides?: Array<{ slide: { id: string } }>;
   _count?: { git_repo_assignments: number };
 }
 

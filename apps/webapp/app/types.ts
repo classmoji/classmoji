@@ -120,41 +120,4 @@ export interface StoreState {
 
 export type TourPhase = 'idle' | 'landing' | 'instructor' | 'student';
 
-// Template assignment shape from GitHub issues API
-export interface TemplateAssignment {
-  title: string;
-  body: string;
-}
-
-// Assignment form store state — admin.$class.modules.form/store.ts
-export interface AssignmentFormState {
-  assignment: AssignmentFormData;
-  template: string;
-  templateAssignments: TemplateAssignment[];
-  assignmentsToRemove: AssignmentFormData[];
-  setAssignmentValue: (key: string, value: unknown) => void;
-  resetAssignment: () => void;
-  setAssignment: (assignment: AssignmentFormData) => void;
-  setTemplate: (template: string) => void;
-  setTemplateAssignments: (templateAssignments: TemplateAssignment[]) => void;
-  addAssignmentToRemove: (assignment: AssignmentFormData) => void;
-  resetAssignmentsToRemove: () => void;
-}
-
-export interface AssignmentFormData {
-  id: string | null;
-  title: string;
-  weight: number;
-  is_extra_credit: boolean;
-  description: string;
-  student_deadline: string | null;
-  release_at: string | null;
-  grader_deadline: string | null;
-  tokens_per_hour: number;
-  branch: string;
-  workflow_file: string;
-  linkedPageIds: string[];
-  linkedSlideIds: string[];
-}
-
 export { Role, SubscriptionTier };

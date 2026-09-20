@@ -12,11 +12,9 @@ import {
 } from '@tabler/icons-react';
 
 import { ClassmojiService } from '@classmoji/services';
-import { TriggerProgress } from '~/components';
 import FolderTabs from '~/components/ui/FolderTabs';
 import AddContentItemModal from '~/components/features/modules/AddContentItemModal';
 import { TYPE_META, describeItem } from '~/components/features/modules/moduleItemMeta';
-import RepositoriesTable from '~/components/features/repositories/RepositoriesTable';
 import AssignmentsTable, {
   type AssignmentRowData,
 } from '~/components/features/assignments/AssignmentsTable';
@@ -41,10 +39,12 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
     throw data('Module not found', { status: 404 });
   }
 
-  // The module with everything it owns, plus the pickers' candidate content.
-  const [module, candidates] = await Promise.all([
+  // The module with everything it owns, plus the pickers' candidate content
+  // and every repository a REPO assignment may submit through.
+  const [module, candidates, repositories] = await Promise.all([
     ClassmojiService.module.listModuleContents(found.id, classroom.id),
     ClassmojiService.module.getCandidateContent(classroom.id),
+    ClassmojiService.repository.findByClassroomId(classroom.id),
   ]);
   if (!module) {
     throw data('Module not found', { status: 404 });
@@ -56,13 +56,18 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
   return {
     module,
     candidates,
+    repositories: repositories.map(r => ({
+      id: r.id,
+      title: r.title,
+      is_published: r.is_published,
+    })),
     boundQuizIds: bound.map(a => a.quiz_id).filter(Boolean) as string[],
     boundFormIds: bound.map(a => a.form_id).filter(Boolean) as string[],
   };
 };
 
 const ModuleDetail = ({ loaderData }: Route.ComponentProps) => {
-  const { module, candidates, boundQuizIds, boundFormIds } = loaderData;
+  const { module, candidates, repositories, boundQuizIds, boundFormIds } = loaderData;
   const { class: classSlug } = useParams();
   const navigate = useNavigate();
 
@@ -76,7 +81,7 @@ const ModuleDetail = ({ loaderData }: Route.ComponentProps) => {
   const [assignmentModalOpen, setAssignmentModalOpen] = useState(false);
   const [editingAssignment, setEditingAssignment] = useState<AssignmentRowData | null>(null);
 
-  // Legacy REPOSITORY items duplicate the Repositories tab; hide them.
+  // Legacy REPOSITORY items are a pre-assignment pointer nobody renders now.
   const items = module.items.filter(i => i.item_type !== 'REPOSITORY');
   const busy = itemFetcher.state !== 'idle';
 
@@ -138,45 +143,7 @@ const ModuleDetail = ({ loaderData }: Route.ComponentProps) => {
     ...(a as unknown as AssignmentRowData),
     module: moduleRef,
   }));
-  const repositoriesByModule = {
-    [module.id]: module.repositories.map(r => ({ id: r.id, title: r.title })),
-  };
-
   const tabItems = [
-    {
-      key: 'repositories',
-      label: 'Repositories',
-      extra: (
-        <Button
-          icon={<IconPlus size={16} />}
-          data-tour="repos-new"
-          onClick={() => navigate(`/admin/${classSlug}/repos/form?module=${module.id}`)}
-        >
-          New repository
-        </Button>
-      ),
-      children: (
-        <>
-          <RepositoriesTable
-            repositories={
-              module.repositories as Parameters<typeof RepositoriesTable>[0]['repositories']
-            }
-            actionBase={`/admin/${classSlug}/repos`}
-            bare
-          />
-          <TriggerProgress
-            operation="PUBLISH_OR_SYNC_ASSIGNMENT"
-            validIdentifiers={[
-              'gh-create_git_repo',
-              'cf-create_git_repo',
-              'gh-create_git_repo_assignment',
-              'cf-create_git_repo_assignment',
-              'gh-add_collaborator_to_repo',
-            ]}
-          />
-        </>
-      ),
-    },
     {
       key: 'assignments',
       label: 'Assignments',
@@ -279,7 +246,7 @@ const ModuleDetail = ({ loaderData }: Route.ComponentProps) => {
     },
   ];
 
-  const ownsCoursework = module.repositories.length > 0 || module.assignments.length > 0;
+  const ownsCoursework = module.assignments.length > 0;
 
   return (
     <div className="min-h-full relative">
@@ -325,7 +292,7 @@ const ModuleDetail = ({ loaderData }: Route.ComponentProps) => {
             title="Delete module"
             description={
               ownsCoursework
-                ? 'Move or delete its repositories and assignments first; a module that still owns coursework cannot be deleted.'
+                ? 'Move or delete its assignments first; a module that still owns coursework cannot be deleted.'
                 : 'This removes the module. Its content items (pages, quizzes, slides, forms) are kept.'
             }
             okText="Delete"
@@ -352,7 +319,7 @@ const ModuleDetail = ({ loaderData }: Route.ComponentProps) => {
         </div>
       )}
 
-      <FolderTabs items={tabItems} defaultActiveKey="repositories" panelClassName="min-h-[300px]" />
+      <FolderTabs items={tabItems} defaultActiveKey="assignments" panelClassName="min-h-[300px]" />
 
       <ModuleFormModal open={editOpen} module={editModule} onClose={() => setEditOpen(false)} />
 
@@ -362,9 +329,11 @@ const ModuleDetail = ({ loaderData }: Route.ComponentProps) => {
         classSlug={classSlug!}
         moduleId={module.id}
         modules={[moduleRef]}
-        repositoriesByModule={repositoriesByModule}
+        repositories={repositories}
         quizzes={candidates.quizzes}
         forms={candidates.forms}
+        pages={candidates.pages}
+        slides={candidates.slides}
         boundQuizIds={new Set(boundQuizIds)}
         boundFormIds={new Set(boundFormIds)}
         assignment={editingAssignment}

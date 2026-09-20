@@ -1,4 +1,3 @@
-import _ from 'lodash';
 import { useEffect, useMemo, useState } from 'react';
 
 import { useFetcher, useRevalidator } from 'react-router';
@@ -24,12 +23,10 @@ import { useDisclosure } from '@mantine/hooks';
 import AsyncAutocomplete from './AsyncAutocomplete';
 import ProjectTemplateSelect from './ProjectTemplateSelect';
 import { schema } from './schema';
-import FormAssignment from './FormAssignment';
 import { useGlobalFetcher } from '~/hooks';
 
-import { useAssignmentStore } from './store';
+import { useRepositoryFormStore } from './store';
 import { SectionHeader } from '~/components';
-import AssignmentsTable from './AssignmentsTable';
 import AutogradingTestsTable from './AutogradingTestsTable';
 import FormAutogradingTest, {
   emptyAutogradingTest,
@@ -65,7 +62,6 @@ interface ModuleData {
   template?: string;
   type?: string;
   tag_id?: string | null;
-  module_id?: string;
   is_published?: boolean;
   description?: string;
   team_formation_mode?: string;
@@ -73,35 +69,13 @@ interface ModuleData {
   max_team_size?: number | null;
   project_template_id?: string | null;
   project_template_title?: string | null;
-  assignments: Array<{
-    id?: string;
-    title: string;
-    weight: number;
-    is_extra_credit?: boolean;
-    tokens_per_hour: number;
-    description: string | null;
-    student_deadline?: string | null;
-    grader_deadline?: string | null;
-    release_at?: string | null;
-    pages?: Array<{ page?: PageRef }>;
-    slides?: Array<{ slide?: SlideRef }>;
-  }>;
   pages?: Array<{ page?: PageRef }>;
   slides?: Array<{ slide?: SlideRef }>;
-}
-
-interface ModuleOption {
-  id: string;
-  title: string;
 }
 
 interface FormModuleProps {
   isNew: boolean;
   repository: ModuleData | null;
-  /** The classroom's modules, for the module picker. */
-  modules: ModuleOption[];
-  /** Module preselected by the page that opened the form (locks the picker). */
-  moduleFromQuery?: ModuleOption | null;
   close: () => void;
   tags: TagRef[];
   classroom: { slug: string; settings: Record<string, unknown>; [key: string]: unknown };
@@ -116,28 +90,16 @@ const FormModule = ({
   close,
   tags,
   classroom,
-  modules,
-  moduleFromQuery = null,
   pages = [],
   slides = [],
   hasReposWithProjects = false,
 }: FormModuleProps) => {
-  const {
-    template,
-    setTemplate,
-    setTemplateAssignments,
-    templateAssignments,
-    assignment,
-    resetAssignment,
-    assignmentsToRemove,
-    resetAssignmentsToRemove,
-  } = useAssignmentStore();
+  const { template, setTemplate } = useRepositoryFormStore();
 
   const { fetcher, notify } = useGlobalFetcher();
   const revalidator = useRevalidator();
   const callout = useCallout();
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [opened, { open: openIssueModal, close: closeIssueModal }] = useDisclosure();
 
   // State for repository-level linked pages and slides
   const [linkedPageIds, setLinkedPageIds] = useState(() => {
@@ -212,7 +174,6 @@ const FormModule = ({
     template: repository?.template,
     type: repository?.type,
     tag: repository?.tag_id,
-    module_id: repository?.module_id ?? moduleFromQuery?.id,
     description: repository?.description || '',
     team_formation_mode: repository?.team_formation_mode || 'INSTRUCTOR',
     team_formation_deadline: repository?.team_formation_deadline
@@ -221,28 +182,12 @@ const FormModule = ({
     max_team_size: repository?.max_team_size || null,
     project_template_id: repository?.project_template_id || null,
     project_template_title: repository?.project_template_title || null,
-    assignments: repository?.assignments.map((assignment: ModuleData['assignments'][number]) => {
-      return {
-        ...assignment,
-        student_deadline: assignment.student_deadline ? dayjs(assignment.student_deadline) : null,
-        grader_deadline: assignment.grader_deadline ? dayjs(assignment.grader_deadline) : null,
-        release_at: assignment.release_at ? dayjs(assignment.release_at) : null,
-        is_extra_credit: assignment.is_extra_credit ?? false,
-        linkedPageIds:
-          assignment.pages?.map((link: { page?: PageRef }) => link.page?.id).filter(Boolean) || [],
-        linkedSlideIds:
-          assignment.slides?.map((link: { slide?: SlideRef }) => link.slide?.id).filter(Boolean) ||
-          [],
-      };
-    }),
     organization: classroom?.slug,
   };
 
   const newFormUpdateValues = {
     organization: classroom?.slug,
     type: 'INDIVIDUAL',
-    module_id: moduleFromQuery?.id ?? (modules.length === 1 ? modules[0].id : undefined),
-    assignments: [],
     description: '',
     team_formation_mode: 'INSTRUCTOR',
     team_formation_deadline: null,
@@ -262,7 +207,6 @@ const FormModule = ({
     defaultValues: isNew ? newFormUpdateValues : updateFormDefaultValues,
   });
 
-  const assignments = watch('assignments');
   const type = watch('type');
   const teamFormationMode = watch('team_formation_mode');
 
@@ -317,10 +261,6 @@ const FormModule = ({
     if (repository) setValue('template', repository.template);
   }, [repository?.id]);
 
-  // Queued assignment deletions live in the store until the form is submitted, so
-  // only drop them when the form itself goes away — never on a re-render.
-  useEffect(() => () => resetAssignmentsToRemove(), []);
-
   // Close drawer after successful submission and revalidate parent route
   useEffect(() => {
     if (isSubmitting && fetcher!.state === 'idle') {
@@ -340,49 +280,9 @@ const FormModule = ({
     }
   }, [fetcher!.state, isSubmitting, close, revalidator]);
 
+  // Keep the form's template field in step with the picker.
   useEffect(() => {
-    const fetchTemplateRepoIssues = async () => {
-      if (!template) return;
-      const [owner, repo] = template.split('/');
-      if (!owner || !repo) return;
-
-      // Fetch the template's issues through the server endpoint, which uses the
-      // org installation token. This works for private templates that the
-      // instructor's personal token can't read. Best-effort: a failure just
-      // means assignment titles won't prefill, so never break the form.
-      try {
-        const params = new URLSearchParams({
-          classroomSlug: classroom.slug,
-          owner,
-          repo,
-        });
-        const res = await fetch(`/api/github-repo-issues?${params.toString()}`);
-        if (!res.ok) return;
-        const issues = (await res.json()) as Array<{ title: string; body: string | null }>;
-        if (!Array.isArray(issues)) return;
-
-        const promises = issues.map(async ({ title, body }) => {
-          const data = await fetch('/api/parser', {
-            method: 'POST',
-            headers: {
-              Accept: 'application/json',
-              'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({ markdown: body }),
-          });
-          const parsed = await data.json();
-          return { title, body: parsed.html };
-        });
-
-        const assignments = await Promise.all(promises);
-        setTemplateAssignments(assignments);
-      } catch (error: unknown) {
-        console.error('Error fetching template repo issues:', error);
-      }
-    };
-
     if (template || repository?.template) {
-      fetchTemplateRepoIssues();
       setValue('template', template || repository?.template);
     }
   }, [template, repository?.template]);
@@ -392,23 +292,6 @@ const FormModule = ({
 
     if (dayjs.isDayjs(serialized.team_formation_deadline)) {
       serialized.team_formation_deadline = serialized.team_formation_deadline.toISOString();
-    }
-
-    if (Array.isArray(serialized.assignments) && serialized.assignments.length) {
-      serialized.assignments = (serialized.assignments as Array<Record<string, unknown>>).map(
-        assignment => ({
-          ...assignment,
-          student_deadline: dayjs.isDayjs(assignment.student_deadline)
-            ? assignment.student_deadline.toISOString()
-            : assignment.student_deadline,
-          grader_deadline: dayjs.isDayjs(assignment.grader_deadline)
-            ? assignment.grader_deadline.toISOString()
-            : assignment.grader_deadline,
-          release_at: dayjs.isDayjs(assignment.release_at)
-            ? assignment.release_at.toISOString()
-            : assignment.release_at,
-        })
-      );
     }
 
     return serialized;
@@ -425,7 +308,6 @@ const FormModule = ({
     fetcher!.submit(
       JSON.stringify({
         ...serializedData,
-        assignmentsToRemove,
         linkedPageIds: linkedPageIds.filter((id): id is string => id != null),
         linkedSlideIds: linkedSlideIds.filter((id): id is string => id != null),
         autogradingTests,
@@ -488,7 +370,7 @@ const FormModule = ({
           <Card className="shadow-xs mb-6">
             <SectionHeader
               title="Basic Information"
-              subtitle="Set up the core details for your assignment"
+              subtitle="Set up the core details for this repository"
               size="md"
               className="mb-4"
             />
@@ -517,20 +399,6 @@ const FormModule = ({
                   <Select.Option value="INDIVIDUAL">Individual</Select.Option>
                   <Select.Option value="GROUP">Group</Select.Option>
                 </Select>
-              </FormItem>
-            </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <FormItem control={control} name="module_id" label="Module">
-                <Select
-                  data-tour="repos-form-module"
-                  className="w-full"
-                  placeholder="Choose a module"
-                  disabled={!!moduleFromQuery}
-                  showSearch
-                  optionFilterProp="label"
-                  options={modules.map(m => ({ value: m.id, label: m.title }))}
-                />
               </FormItem>
             </div>
           </Card>
@@ -706,40 +574,6 @@ const FormModule = ({
             />
           </Card>
 
-          {/* Grading Issues */}
-          <Card className="shadow-xs mb-6">
-            <div className="flex justify-between items-start mb-4">
-              <SectionHeader
-                title="Issues"
-                subtitle="The GitHub issues students complete in this repository; each one is graded"
-                size="md"
-              />
-
-              <Tooltip title="Add a new issue">
-                <Button
-                  data-tour="repos-form-add-assignment"
-                  type="primary"
-                  icon={<PlusOutlined />}
-                  onClick={openIssueModal}
-                >
-                  Add issue
-                </Button>
-              </Tooltip>
-            </div>
-
-            <FormItem control={control} name="assignments">
-              {null}
-            </FormItem>
-
-            <AssignmentsTable
-              assignments={
-                (assignments || []) as Parameters<typeof AssignmentsTable>[0]['assignments']
-              }
-              setValue={setValue as Parameters<typeof AssignmentsTable>[0]['setValue']}
-              openAssignmentModal={openIssueModal}
-            />
-          </Card>
-
           {/* Autograding tests */}
           <Card className="shadow-xs mb-6">
             <div className="flex justify-between items-start mb-4">
@@ -806,136 +640,6 @@ const FormModule = ({
             </div>
           </Card>
         </div>
-
-        {/* Modal for adding/editing assignments (nested on top of repository modal) */}
-        <Modal
-          open={opened}
-          onCancel={() => {
-            closeIssueModal();
-            resetAssignment();
-          }}
-          title={null}
-          footer={null}
-          width={600}
-          centered
-          closable={false}
-          maskClosable={false}
-          styles={{
-            mask: { backgroundColor: 'rgba(15, 23, 42, 0.35)' },
-            content: {
-              padding: 0,
-              borderRadius: 16,
-              overflow: 'hidden',
-              maxWidth: '90vw',
-              boxShadow: '0 24px 48px -12px rgba(15, 23, 42, 0.25), 0 0 0 1px rgba(0, 0, 0, 0.04)',
-            },
-            body: { padding: 0 },
-            header: { display: 'none' },
-            footer: { display: 'none' },
-          }}
-        >
-          {(() => {
-            const isEditingAssignment = Boolean(
-              assignment?.id &&
-              (assignments || []).some(
-                (a: { id?: string | number | null }) => a.id === assignment.id
-              )
-            );
-            return (
-              <>
-                {/* Gmail-style header */}
-                <div className="flex items-center justify-between gap-3 px-5 py-3 bg-stone-50 dark:bg-neutral-800/60 border-b border-line">
-                  <div className="flex flex-col">
-                    <span className="text-sm font-semibold text-ink-0">
-                      {isEditingAssignment ? 'Edit issue' : 'New issue'}
-                    </span>
-                    <span className="text-xs font-normal text-ink-3">
-                      Set title, deadline, weight, and any linked resources.
-                    </span>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      closeIssueModal();
-                      resetAssignment();
-                    }}
-                    aria-label="Close"
-                    className="p-1 rounded hover:bg-line text-ink-3 transition-colors"
-                  >
-                    <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
-                      <path
-                        d="M4 4l8 8M12 4l-8 8"
-                        stroke="currentColor"
-                        strokeWidth="1.5"
-                        strokeLinecap="round"
-                      />
-                    </svg>
-                  </button>
-                </div>
-
-                {/* Body */}
-                <div className="max-h-[70vh] overflow-y-auto px-5 py-4">
-                  <FormAssignment
-                    templateAssignments={templateAssignments}
-                    settings={
-                      classroom.settings as {
-                        default_tokens_per_hour: number;
-                        [key: string]: unknown;
-                      }
-                    }
-                    pages={pages as { id: string; title: string | null }[]}
-                    slides={slides as { id: string; title: string | null }[]}
-                  />
-                </div>
-
-                {/* Footer */}
-                <div className="flex items-center justify-end gap-2 px-5 py-3 border-t border-line bg-stone-50/60 dark:bg-neutral-800/40">
-                  <Button
-                    type="text"
-                    onClick={() => {
-                      closeIssueModal();
-                      resetAssignment();
-                    }}
-                  >
-                    Discard
-                  </Button>
-                  <Button
-                    type="primary"
-                    style={{ backgroundColor: '#1f883d', borderColor: '#1f883d' }}
-                    onClick={() => {
-                      if (!assignment.title.length)
-                        return callout.show({
-                          variant: 'error',
-                          title: 'Please fill in the assignment title.',
-                        });
-
-                      const doesAssignmentExist = (assignments || []).find(
-                        (a: { id?: string | number | null }) => a.id === assignment.id
-                      );
-                      let currAssignments = [...(assignments || [])];
-
-                      if (doesAssignmentExist)
-                        currAssignments = currAssignments.filter(a => a.id !== assignment.id);
-
-                      const newList = _.uniq([
-                        ...currAssignments,
-                        assignment as (typeof currAssignments)[number],
-                      ]);
-                      setValue('assignments', newList, {
-                        shouldValidate: true,
-                      });
-
-                      closeIssueModal();
-                      resetAssignment();
-                    }}
-                  >
-                    {isEditingAssignment ? 'Save changes' : 'Add issue'}
-                  </Button>
-                </div>
-              </>
-            );
-          })()}
-        </Modal>
 
         {/* Modal for adding/editing autograding tests */}
         <Modal
