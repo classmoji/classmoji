@@ -76,3 +76,67 @@ export const assistantMayChangeEventType = (
   requested === null ||
   requested === ASSISTANT_EVENT_TYPE ||
   requested === current;
+
+/** The three things a calendar event can link to, and therefore can star. */
+export const FEATURED_LINK_KINDS = ['page', 'slide', 'assignment'] as const;
+
+export type FeaturedLinkKind = (typeof FEATURED_LINK_KINDS)[number];
+
+/** Which linked resource the month view shows under this event, on this date. */
+export interface FeaturedLinkRef {
+  kind: FeaturedLinkKind;
+  id: string;
+}
+
+/** The ids a write has already proved belong to this classroom. */
+export interface ValidatedLinkIds {
+  pageIds: string[];
+  slideIds: string[];
+  assignmentIds: string[];
+}
+
+/**
+ * Which of the resources being linked — if any — gets the star.
+ *
+ * The answer is a FILTER, not a check: a star is a display preference, and a
+ * star naming something that is not being linked is simply not a star. That
+ * happens for ordinary reasons (a stale form field, an id the user unlinked in
+ * the same save) and for hostile ones (an id from another classroom, which the
+ * caller has already dropped from the validated lists below). Refusing the
+ * whole write over it would lose the user's real edit to protect a decoration;
+ * dropping the star silently keeps the links and shows nothing under the event,
+ * which is the calendar's own default.
+ *
+ * The id must appear in the list for ITS OWN KIND. Ids are uuids, so a page id
+ * will not be found among assignments by accident — but the kind is what the
+ * caller asserted, and honouring it elsewhere would star a row the user did not
+ * point at.
+ */
+export const resolveFeaturedLink = (
+  featured: FeaturedLinkRef | null | undefined,
+  validated: ValidatedLinkIds
+): FeaturedLinkRef | null => {
+  if (!featured || typeof featured.id !== 'string' || featured.id === '') return null;
+  if (!FEATURED_LINK_KINDS.includes(featured.kind)) return null;
+
+  const ids =
+    featured.kind === 'page'
+      ? validated.pageIds
+      : featured.kind === 'slide'
+        ? validated.slideIds
+        : validated.assignmentIds;
+
+  return ids.includes(featured.id) ? { kind: featured.kind, id: featured.id } : null;
+};
+
+/**
+ * Does THIS row get `featured: true`?
+ *
+ * Asked once per row being created, against the already-resolved answer above,
+ * so exactly one row across the three tables can come out true.
+ */
+export const isFeaturedLinkRow = (
+  resolved: FeaturedLinkRef | null,
+  kind: FeaturedLinkKind,
+  id: string
+): boolean => resolved !== null && resolved.kind === kind && resolved.id === id;

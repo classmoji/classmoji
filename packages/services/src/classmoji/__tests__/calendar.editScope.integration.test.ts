@@ -240,4 +240,187 @@ describe.skipIf(!RUN)('scoped calendar edits (integration)', () => {
     const byEvent = await linkDatesByEvent([originalId]);
     expect(byEvent[originalId]).toEqual(['2026-09-21', '2026-09-28', '2026-10-05']);
   });
+
+  describe('the star', () => {
+    /** A second page, so two rows can compete for one date's star. */
+    let otherPageId: string;
+
+    beforeAll(async () => {
+      const other = await prisma.page.create({
+        data: {
+          classroom: { connect: { id: classroomId } },
+          creator: { connect: { id: ownerId } },
+          title: `Page 2 ${suite}`,
+          slug: `page-2-${suite}`,
+          content_path: `pages/page-2-${suite}`,
+        },
+      });
+      otherPageId = other.id;
+    });
+
+    /** Every starred link row these events own, across all three tables. */
+    const starredRows = async (eventIds: string[]) => {
+      const [pages, slides, assignments] = await Promise.all([
+        prisma.calendarEventPageLink.findMany({
+          where: { event_id: { in: eventIds }, featured: true },
+          select: { event_id: true, page_id: true, occurrence_date: true },
+        }),
+        prisma.calendarEventSlideLink.findMany({
+          where: { event_id: { in: eventIds }, featured: true },
+          select: { event_id: true, slide_id: true },
+        }),
+        prisma.calendarEventAssignmentLink.findMany({
+          where: { event_id: { in: eventIds }, featured: true },
+          select: { event_id: true, assignment_id: true },
+        }),
+      ]);
+      return {
+        pages,
+        total: pages.length + slides.length + assignments.length,
+      };
+    };
+
+    const makeEvent = async (recurring: boolean) =>
+      (
+        await calendarService.createEvent(classroomId, ownerId, {
+          event_type: 'LECTURE',
+          title: `Lecture ${randomUUID().slice(0, 8)}`,
+          start_time: new Date('2026-09-21T14:00:00.000Z'),
+          end_time: new Date('2026-09-21T15:00:00.000Z'),
+          is_recurring: recurring,
+          ...(recurring ? { recurrence_rule: { days: ['monday'] } } : {}),
+        })
+      ).id;
+
+    /** The other page's link row on this event, whatever date it sits on. */
+    const otherLinkId = async (eventId: string) =>
+      (await prisma.calendarEventPageLink.findFirstOrThrow({
+        where: { event_id: eventId, page_id: otherPageId },
+        select: { id: true },
+      })).id;
+
+    it('refuses a second starred row on the same date, whatever writes it', async () => {
+      // The service never writes two. The rule is one per date, and the
+      // database is where that has to hold for a writer added later.
+      const eventId = await makeEvent(true);
+      await calendarService.updateEventLinks(
+        eventId,
+        classroomId,
+        { pageIds: [pageId, otherPageId] },
+        FIRST,
+        { kind: 'page', id: pageId }
+      );
+
+      await expect(
+        prisma.calendarEventPageLink.update({
+          where: { id: await otherLinkId(eventId) },
+          data: { featured: true },
+        })
+      ).rejects.toThrow();
+    });
+
+    it('refuses a second starred row in the undated bucket too', async () => {
+      // Postgres treats NULLs as distinct, so the dated index above does not
+      // reach the bucket a non-recurring event's links live in.
+      const eventId = await makeEvent(false);
+      await calendarService.updateEventLinks(
+        eventId,
+        classroomId,
+        { pageIds: [pageId, otherPageId] },
+        null,
+        { kind: 'page', id: pageId }
+      );
+
+      await expect(
+        prisma.calendarEventPageLink.update({
+          where: { id: await otherLinkId(eventId) },
+          data: { featured: true },
+        })
+      ).rejects.toThrow();
+    });
+
+    it('waits for another save of the same event before it writes', async () => {
+      // One save stars a page and another a deck: different tables, no row in
+      // common, so nothing the partial indexes or Read Committed can catch.
+      // What stops both stars landing is the lock this save takes on the parent
+      // EVENT row — so the claim under test is that a save blocks while
+      // somebody else holds that row, which is asserted here by holding it.
+      const eventId = await makeEvent(false);
+
+      let release!: () => void;
+      const heldUntil = new Promise<void>(resolve => {
+        release = resolve;
+      });
+
+      // FOR KEY SHARE on purpose, and it is the whole experiment: it is what
+      // INSERTing a link row takes on its parent event anyway (the foreign
+      // key), and two of those do not block each other. So a save that does not
+      // ask for the row EXCLUSIVELY sails straight past this holder. Only the
+      // service's own FOR UPDATE conflicts with it.
+      const holder = prisma.$transaction(
+        async tx => {
+          await tx.$queryRaw`SELECT id FROM calendar_events WHERE id = ${eventId} FOR KEY SHARE`;
+          await heldUntil;
+        },
+        { timeout: 20000 }
+      );
+      // Let the holder actually take the lock before racing against it.
+      await new Promise(resolve => setTimeout(resolve, 150));
+
+      let settled = false;
+      const save = calendarService
+        .updateEventLinks(eventId, classroomId, { pageIds: [pageId] }, null, {
+          kind: 'page',
+          id: pageId,
+        })
+        .then(result => {
+          settled = true;
+          return result;
+        });
+
+      await new Promise(resolve => setTimeout(resolve, 400));
+      // Without the lock this save has long since inserted its starred row.
+      expect(settled).toBe(false);
+
+      release();
+      await holder;
+      await save;
+
+      expect(settled).toBe(true);
+      expect((await starredRows([eventId])).total).toBe(1);
+    });
+
+    it('hands the star to the new event when the series splits', async () => {
+      // Nothing does this on purpose: the split moves whole link ROWS, and the
+      // star is a column on the row it travels with.
+      const eventId = await makeEvent(true);
+      for (const date of [FIRST, SPLIT]) {
+        await calendarService.updateEventLinks(eventId, classroomId, { pageIds: [pageId] }, date, {
+          kind: 'page',
+          id: pageId,
+        });
+      }
+
+      const newEvent = await calendarService.updateEventWithScope(
+        eventId,
+        {},
+        'this_and_future',
+        SPLIT
+      );
+
+      const starred = await starredRows([eventId, newEvent.id]);
+      expect(starred.total).toBe(2);
+      expect(
+        starred.pages
+          .map(r => [
+            r.event_id === newEvent.id ? 'new' : 'original',
+            r.occurrence_date!.toISOString().slice(0, 10),
+          ])
+          .sort()
+      ).toEqual([
+        ['new', '2026-09-28'],
+        ['original', '2026-09-21'],
+      ]);
+    });
+  });
 });

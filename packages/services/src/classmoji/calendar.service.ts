@@ -2,7 +2,12 @@ import getPrisma from '@classmoji/database';
 import { Prisma } from '@prisma/client';
 import type { EventType } from '@prisma/client';
 import { pagesUrl } from '../emails/escape.ts';
-import { CalendarTimeRangeError } from './calendarPolicy.ts';
+import {
+  CalendarTimeRangeError,
+  isFeaturedLinkRow,
+  resolveFeaturedLink,
+  type FeaturedLinkRef,
+} from './calendarPolicy.ts';
 
 type DateInput = Date | string;
 type CalendarEditScope = 'this_only' | 'this_and_future' | 'all';
@@ -283,8 +288,12 @@ export {
   assistantMayChangeEventType,
   assistantMayCreateEventType,
   CalendarTimeRangeError,
+  FEATURED_LINK_KINDS,
   isCalendarTimeRangeError,
+  isFeaturedLinkRow,
+  resolveFeaturedLink,
 } from './calendarPolicy.ts';
+export type { FeaturedLinkKind, FeaturedLinkRef } from './calendarPolicy.ts';
 
 /**
  * An event must end strictly after it starts; a zero-length or inverted range
@@ -1550,12 +1559,16 @@ export const getUserEvents = async (userId: string, classroomId: string) => {
  * @param {string} classroomId - The classroom ID for validation
  * @param {object} linkData - Object containing pageIds, slideIds, assignmentIds arrays
  * @param {Date|null} occurrenceDate - For recurring events, the specific occurrence date
+ * @param {object|null} featured - Which of those links the month view shows under the event on
+ *   this date, as `{ kind, id }`. At most one, across all three kinds. A ref naming something
+ *   this write is not linking is dropped silently rather than refused — see `resolveFeaturedLink`.
  */
 export const updateEventLinks = async (
   eventId: string,
   classroomId: string,
   linkData: { pageIds?: string[]; slideIds?: string[]; assignmentIds?: string[] },
-  occurrenceDate: Date | null = null
+  occurrenceDate: Date | null = null,
+  featured: FeaturedLinkRef | null = null
 ) => {
   const { pageIds = [], slideIds = [], assignmentIds = [] } = linkData;
 
@@ -1604,7 +1617,28 @@ export const updateEventLinks = async (
   const validSlideIds = slides.map(s => s.id);
   const validAssignmentIds = assignments.map(a => a.id);
 
+  // The star is resolved against the VALIDATED lists, so an id this write is
+  // not actually linking — including one from another classroom, already
+  // dropped above — cannot carry it.
+  const featuredLink = resolveFeaturedLink(featured, {
+    pageIds: validPageIds,
+    slideIds: validSlideIds,
+    assignmentIds: validAssignmentIds,
+  });
+
   return getPrisma().$transaction(async tx => {
+    // Take the parent event's row lock BEFORE anything else in here.
+    //
+    // At most one link row per (event, date) may be starred, and that rule
+    // spans three tables, so no unique index can hold it on its own (the
+    // partial indexes the migration adds only cover one table each). Under Read
+    // Committed two concurrent saves of the same event would not see each
+    // other's uncommitted rows and could each insert a star into a different
+    // table. Locking the event row first makes them queue: the second save
+    // starts after the first has committed and deleted-and-rewritten the date's
+    // links, so it is rewriting a state it can see.
+    await tx.$queryRaw`SELECT id FROM calendar_events WHERE id = ${eventId} FOR UPDATE`;
+
     // Delete existing links for this event/occurrence combination
     await tx.calendarEventPageLink.deleteMany({
       where: { event_id: eventId, occurrence_date: normalizedDate },
@@ -1624,6 +1658,7 @@ export const updateEventLinks = async (
           page_id: id,
           occurrence_date: normalizedDate,
           order: idx,
+          featured: isFeaturedLinkRow(featuredLink, 'page', id),
         })),
       });
     }
@@ -1634,6 +1669,7 @@ export const updateEventLinks = async (
           slide_id: id,
           occurrence_date: normalizedDate,
           order: idx,
+          featured: isFeaturedLinkRow(featuredLink, 'slide', id),
         })),
       });
     }
@@ -1644,6 +1680,7 @@ export const updateEventLinks = async (
           assignment_id: id,
           occurrence_date: normalizedDate,
           order: idx,
+          featured: isFeaturedLinkRow(featuredLink, 'assignment', id),
         })),
       });
     }
