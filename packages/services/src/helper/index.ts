@@ -1,3 +1,4 @@
+import { parseScoreEmoji } from '@classmoji/utils';
 import { getGitProvider } from '../git/index.ts';
 import ClassmojiService from '../classmoji/index.ts';
 
@@ -190,6 +191,41 @@ class HelperService {
     // `previous_grade` snapshot keeps those emojis visible in the "Previous Grade"
     // column for reference.
     await this.clearGradesForOpenRegradeRequest(classroom, gitRepoAssignment);
+
+    // Only emojis in the classroom's grading scale are grades. A classroom
+    // with no scale yet (fresh import) accepts anything, as before.
+    const scale = (await ClassmojiService.emojiMapping.findByClassroomId(
+      classroom.id,
+      true
+    )) as EmojiMappingWithTokens[];
+    if (scale.length > 0 && !scale.some(mapping => mapping.emoji === grade)) {
+      throw new Error(`"${grade}" is not in this classroom's grading scale`);
+    }
+
+    // A numeric score is one number per grader, never a stack: a grader's new
+    // score replaces the score they gave before (tokens reversed with it).
+    // Other graders' scores stay and average, as separate opinions should.
+    if (parseScoreEmoji(grade) !== null) {
+      const existing = await ClassmojiService.assignmentGrade.findByAssignmentId(
+        gitRepoAssignment.id
+      );
+      for (const previous of existing) {
+        if (previous.grader_id !== graderId) continue;
+        if (parseScoreEmoji(previous.emoji) === null) continue;
+        if (previous.emoji === grade) return;
+        try {
+          await this.removeGradeFromGitRepoAssignment({
+            classroom,
+            gitRepoAssignment: { id: gitRepoAssignment.id, studentId, teamId },
+            grade: previous,
+          });
+        } catch (error) {
+          // Already removed by a concurrent request (a double submit from the
+          // same field): nothing to replace any more, carry on.
+          if ((error as { code?: string })?.code !== 'P2025') throw error;
+        }
+      }
+    }
 
     if (await ClassmojiService.assignmentGrade.doesGradeExist(gitRepoAssignment.id, grade)) {
       return;

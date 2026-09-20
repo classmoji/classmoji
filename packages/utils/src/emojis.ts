@@ -93,6 +93,14 @@ export const SCORE_EMOJI_VALUES: number[] = Array.from(
 export const scoreEmojiId = (value: number): string => `${SCORE_EMOJI_PREFIX}${value}`;
 
 /**
+ * Whether a grading scale is the numeric one: every emoji in it is a
+ * `score-N` badge. Such a scale is graded with one number per grader, not by
+ * stacking emojis.
+ */
+export const isScoreScheme = (emojiKeys: string[]): boolean =>
+  emojiKeys.length > 0 && emojiKeys.every(key => parseScoreEmoji(key) !== null);
+
+/**
  * The numeric value of a score shortcode, or null when `key` is not one.
  * Accepts any integer 0–100 (not only multiples of 5) so a hand-entered
  * `score-83` still renders. Case-sensitive: ids are always lowercase.
