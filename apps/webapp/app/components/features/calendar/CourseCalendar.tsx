@@ -10,7 +10,7 @@
  * hours to create one.
  */
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import CalendarShell, { CalendarTypeFilter } from './CalendarShell';
 import WeekGrid from './WeekGrid';
 import MonthGrid from './MonthGrid';
@@ -19,6 +19,7 @@ import CalendarDragLayer, {
   DroppableCell,
   canDragEvent,
 } from './CalendarDragLayer';
+import { hourRange } from './geometry';
 import { useCalendarNavigation, useEventsByDate } from './useCalendarNavigation';
 import { isSameDay } from './utils';
 import type { RenderCell, RenderEvent } from './gridRenderProps';
@@ -66,6 +67,9 @@ const CourseCalendar = ({
 }: CourseCalendarProps) => {
   const nav = useCalendarNavigation(onMonthChange);
   const eventsFor = useEventsByDate(events, nav.selectedTypes);
+  // The whole loaded month, UNFILTERED: the grid must not resize as the reader
+  // pages between its weeks or toggles a type in the legend.
+  const { startHour, endHour } = useMemo(() => hourRange(events), [events]);
 
   // Drag-to-select is plain mouse state, not dnd-kit: it picks a range of empty
   // cells rather than moving anything, and routing it through the drag library
@@ -85,7 +89,10 @@ const CourseCalendar = ({
       const start = new Date(date);
       start.setHours(Math.min(anchorHour, hoverHour), 0, 0, 0);
       const end = new Date(date);
-      end.setHours(Math.max(anchorHour, hoverHour) + 1, 0, 0, 0);
+      // Clamped at 24: selecting the 11 PM row ends the range at the NEXT
+      // day's midnight, which is what `setHours(24)` builds and what the add
+      // modal's `buildEventWindow` rebuilds when it rolls an end past midnight.
+      end.setHours(Math.min(Math.max(anchorHour, hoverHour) + 1, 24), 0, 0, 0);
       onRangeSelect(start, end);
     };
 
@@ -200,6 +207,8 @@ const CourseCalendar = ({
             // The strip is the only drop target that keeps an event's time of
             // day, so staff who can drop need it even on an empty week.
             alwaysShowAllDay={Boolean(onEventDrop || onDeadlineDrop)}
+            startHour={startHour}
+            endHour={endHour}
             renderEvent={renderEvent}
             renderCell={renderCell}
           />

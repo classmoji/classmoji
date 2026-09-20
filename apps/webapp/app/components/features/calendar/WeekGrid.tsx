@@ -11,9 +11,11 @@
 
 import { Fragment, useEffect, useState } from 'react';
 import {
+  DEFAULT_END_HOUR,
+  DEFAULT_START_HOUR,
   WEEK_GRID_COLUMNS,
   formatHourLabel,
-  heightForDuration,
+  heightForBlock,
   hoursInWindow,
   isOutsideWindow,
   monthDropId,
@@ -43,6 +45,16 @@ interface WeekGridProps {
    * when empty took that move away on exactly the weeks where it is needed.
    */
   alwaysShowAllDay?: boolean;
+  /**
+   * The clock hours to draw, from `geometry.hourRange` over the WHOLE loaded
+   * event set — the month-sized payload, unfiltered by the type legend. Per
+   * week it would resize the grid as you page; after the filter it would
+   * resize as you toggle a chip.
+   *
+   * `endHour` is exclusive, so 24 means the last row is 11 PM.
+   */
+  startHour?: number;
+  endHour?: number;
   renderEvent?: RenderEvent;
   renderCell?: RenderCell;
 }
@@ -53,12 +65,14 @@ const WeekGrid = ({
   eventsFor,
   onEventClick,
   alwaysShowAllDay = false,
+  startHour = DEFAULT_START_HOUR,
+  endHour = DEFAULT_END_HOUR,
   renderEvent = defaultRenderEvent,
   renderCell = defaultRenderCell,
 }: WeekGridProps) => {
-  const hours = hoursInWindow();
+  const hours = hoursInWindow(startHour, endHour);
   const nowHourFloat = now.getHours() + now.getMinutes() / 60;
-  const nowTop = topForHour(nowHourFloat);
+  const nowTop = topForHour(nowHourFloat, startHour);
 
   /**
    * The now indicator is client-only. Rendered on the server it would draw the
@@ -106,7 +120,7 @@ const WeekGrid = ({
 
       <AllDayStrip
         dates={dates}
-        itemsFor={date => eventsFor(date).filter(event => isOutsideWindow(event))}
+        itemsFor={date => eventsFor(date).filter(event => isOutsideWindow(event, startHour, endHour))}
         onEventClick={onEventClick}
         alwaysShow={alwaysShowAllDay}
         renderEvent={renderEvent}
@@ -124,7 +138,7 @@ const WeekGrid = ({
               <div
                 key={hour}
                 className="absolute right-3 text-xs font-medium text-ink-4 leading-tight whitespace-nowrap"
-                style={{ top: `calc(${topForHour(hour)} + 4px)` }}
+                style={{ top: `calc(${topForHour(hour, startHour)} + 4px)` }}
               >
                 {formatHourLabel(hour)}
               </div>
@@ -133,7 +147,9 @@ const WeekGrid = ({
           </div>
 
           {dates.map((date, dayIdx) => {
-            const timed = eventsFor(date).filter(event => !isOutsideWindow(event));
+            const timed = eventsFor(date).filter(
+              event => !isOutsideWindow(event, startHour, endHour)
+            );
             return (
               <div key={monthDropId(date)} className="relative border-l border-line">
                 {hours.map(hour => (
@@ -155,7 +171,7 @@ const WeekGrid = ({
                   {timed.map((event, idx) => {
                     const start = new Date(event.start_time);
                     const end = new Date(event.end_time);
-                    const startHour = start.getHours() + start.getMinutes() / 60;
+                    const eventHour = start.getHours() + start.getMinutes() / 60;
                     const durationHours = (end.getTime() - start.getTime()) / (1000 * 60 * 60);
 
                     return (
@@ -163,16 +179,19 @@ const WeekGrid = ({
                         {renderEvent({
                           event,
                           placement: 'week',
-                          // The block's height is the event's duration; `pb-1`
-                          // is inside it (border-box), so the card fills the
+                          // The block's height is the event's duration, clipped
+                          // at the bottom edge of the window — an event that
+                          // runs past midnight stops at the last row rather
+                          // than hanging below the calendar. `pb-1` is inside
+                          // that height (border-box), so the card fills the
                           // duration minus a hairline and two back-to-back
                           // events do not touch. The gap lives here rather than
-                          // in `heightForDuration`, which is the geometry the
-                          // drop targets are measured against.
+                          // in `heightForBlock`, which is the geometry the drop
+                          // targets are measured against.
                           className: 'absolute left-1 right-1 pb-1 pointer-events-auto',
                           style: {
-                            top: topForHour(startHour),
-                            height: heightForDuration(durationHours),
+                            top: topForHour(eventHour, startHour),
+                            height: heightForBlock(eventHour, durationHours, endHour),
                           },
                           children: (
                             <EventCard

@@ -10,9 +10,11 @@
  * to be written twice, and in practice was not.
  */
 
+import { useMemo } from 'react';
 import CalendarShell, { CalendarTypeFilter } from './CalendarShell';
 import WeekGrid from './WeekGrid';
 import MonthGrid from './MonthGrid';
+import { hourRange } from './geometry';
 import { useCalendarNavigation, useEventsByDate } from './useCalendarNavigation';
 import type { CalendarEventWithLinks } from './types';
 
@@ -36,6 +38,9 @@ const StudentCalendarView = ({
 }: StudentCalendarViewProps) => {
   const nav = useCalendarNavigation(onMonthChange);
   const eventsFor = useEventsByDate(events, nav.selectedTypes);
+  // The whole loaded month, UNFILTERED: the grid must not resize as the reader
+  // pages between its weeks or toggles a type in the legend.
+  const { startHour, endHour } = useMemo(() => hourRange(events), [events]);
 
   return (
     <CalendarShell
@@ -69,6 +74,8 @@ const StudentCalendarView = ({
           now={nav.now}
           eventsFor={eventsFor}
           onEventClick={onEventClick}
+          startHour={startHour}
+          endHour={endHour}
         />
       )}
     </CalendarShell>
