@@ -1,6 +1,6 @@
 import { forwardRef, useState } from 'react';
 import { Dropdown, Table, Tag } from 'antd';
-import { Link, useParams } from 'react-router';
+import { Link, useNavigate, useParams } from 'react-router';
 import type { MenuProps } from 'antd';
 import {
   IconChevronDown,
@@ -20,6 +20,8 @@ import {
 } from '@tabler/icons-react';
 
 import { useRepositoryActions } from './useRepositoryActions';
+import AssignmentFormModal from '~/components/features/assignments/AssignmentFormModal';
+import type { AssignmentRowData } from '~/components/features/assignments/AssignmentsTable';
 
 // An Assignment belongs to a Repository (origin schema: Assignment.repository_id).
 interface AssignmentRow {
@@ -67,6 +69,18 @@ interface RepositoriesTableProps {
   actionBase?: string;
   /** Render without the floating card, for use inside another panel. */
   bare?: boolean;
+  /**
+   * Context for editing an assignment in place. Without it, Edit on an
+   * assignment row falls back to opening the editor on the assignment's page.
+   */
+  editor?: {
+    assignments: AssignmentRowData[];
+    modules: Array<{ id: string; title: string }>;
+    quizzes: Array<{ id: string; name: string; status: string }>;
+    forms: Array<{ id: string; title: string; status: string }>;
+    pages?: Array<{ id: string; title: string | null }>;
+    slides?: Array<{ id: string; title: string | null }>;
+  };
 }
 
 const prettyType = (type?: string) => (type ? type.charAt(0) + type.slice(1).toLowerCase() : '');
@@ -104,6 +118,7 @@ const RepositoriesTable = ({
   repositories,
   actionBase = '',
   bare = false,
+  editor,
 }: RepositoriesTableProps) => {
   // Controlled expansion so the folder icon can react to expanded state.
   // Every repository starts open, showing its assignments; the chevron closes it.
@@ -116,6 +131,13 @@ const RepositoriesTable = ({
   // Publish / sync / unpublish / delete + navigation, shared with the module
   // cards so the two surfaces cannot drift.
   const { class: classSlug } = useParams();
+  const navigate = useNavigate();
+  const [editingAssignment, setEditingAssignment] = useState<AssignmentRowData | null>(null);
+  const editAssignment = (id: string) => {
+    const row = editor?.assignments.find(a => a.id === id) ?? null;
+    if (row) setEditingAssignment(row);
+    else navigate(`/admin/${classSlug}/assignments/${id}?edit=1`);
+  };
   const {
     editRepository,
     updateRepositories,
@@ -363,8 +385,10 @@ const RepositoriesTable = ({
           );
         }
 
-        // assignment: opens its own page (the name is the link)
-        return null;
+        // assignment: the name links to its page; Edit opens the editor right
+        // here (or on that page when this table was given no editor context).
+        const a = record.assignment!;
+        return <ActionLink onClick={() => editAssignment(a.id)}>Edit</ActionLink>;
       },
     },
   ];
@@ -403,6 +427,30 @@ const RepositoriesTable = ({
           ),
         }}
       />
+      {editor && (
+        <AssignmentFormModal
+          open={editingAssignment !== null}
+          onClose={() => setEditingAssignment(null)}
+          classSlug={classSlug!}
+          modules={editor.modules}
+          repositories={repositories.map(r => ({
+            id: r.id,
+            title: r.title,
+            is_published: r.is_published,
+          }))}
+          quizzes={editor.quizzes}
+          forms={editor.forms}
+          pages={editor.pages}
+          slides={editor.slides}
+          boundQuizIds={
+            new Set(editor.assignments.map(a => a.quiz?.id).filter(Boolean) as string[])
+          }
+          boundFormIds={
+            new Set(editor.assignments.map(a => a.form?.id).filter(Boolean) as string[])
+          }
+          assignment={editingAssignment}
+        />
+      )}
     </div>
   );
 };

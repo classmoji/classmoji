@@ -194,10 +194,12 @@ const AssignmentPage = ({ loaderData }: Route.ComponentProps) => {
   const navigate = useNavigate();
   const { pathname } = useLocation();
   const { revalidate } = useRevalidator();
-  const [editing, setEditing] = useState(false);
   // The gradebook links here with ?q=<login> to land on one student's row.
   const [searchParams] = useSearchParams();
   const [query, setQuery] = useState(searchParams.get('q') ?? '');
+  // `?edit=1` (the Edit issue link on the Repositories screen) opens the
+  // editor straight away instead of asking for a second click here.
+  const [editing, setEditing] = useState(searchParams.get('edit') === '1');
   const [filter, setFilter] = useState<SubmissionFilter>('all');
 
   const repository = assignment.repository!;

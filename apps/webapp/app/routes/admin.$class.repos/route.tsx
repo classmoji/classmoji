@@ -1,5 +1,6 @@
 import { NavLink, useLocation, Outlet } from 'react-router';
 import { useState } from 'react';
+import { IconFolder, IconFileText } from '@tabler/icons-react';
 
 import RepositoriesTable from '~/components/features/repositories/RepositoriesTable';
 import { SearchInput, ButtonNew, RequireRole, TriggerProgress } from '~/components';
@@ -11,18 +12,38 @@ import type { Route } from './+types/route';
 export const loader = async ({ params, request }: Route.LoaderArgs) => {
   const { class: classSlug } = params;
 
-  await requireClassroomAdmin(request, classSlug!, {
+  const { classroom } = await requireClassroomAdmin(request, classSlug!, {
     resourceType: 'REPOSITORIES',
     action: 'view_modules',
   });
 
-  const repositories = await ClassmojiService.repository.findByClassroomSlug(classSlug!);
-  return { repositories };
+  // The assignment editor opens in place from a nested row, so the page loads
+  // the same context the Assignments page gives it: every assignment (the full
+  // row to edit, and which quizzes/forms are already bound), the modules it
+  // may belong to, and the content it may link.
+  const [repositories, assignments, modules, candidates] = await Promise.all([
+    ClassmojiService.repository.findByClassroomSlug(classSlug!),
+    ClassmojiService.assignment.listForClassroom(classroom.id),
+    ClassmojiService.module.findByClassroomSlug(classSlug!),
+    ClassmojiService.module.getCandidateContent(classroom.id),
+  ]);
+
+  return {
+    repositories,
+    editor: {
+      assignments,
+      modules: modules.map(m => ({ id: m.id, title: m.title })),
+      quizzes: candidates.quizzes,
+      forms: candidates.forms,
+      pages: candidates.pages,
+      slides: candidates.slides,
+    },
+  };
 };
 
 const AdminAssignments = ({ loaderData }: Route.ComponentProps) => {
   const { pathname } = useLocation();
-  const { repositories } = loaderData;
+  const { repositories, editor } = loaderData;
   const { fetcher } = useGlobalFetcher();
   const [query, setQuery] = useState('');
   const fetcherData = fetcher!.data as
@@ -38,7 +59,21 @@ const AdminAssignments = ({ loaderData }: Route.ComponentProps) => {
     <div className="min-h-full relative">
       <Outlet />
       <div className="flex flex-col gap-3 mt-2 mb-4 sm:flex-row sm:items-center sm:justify-between">
-        <h1 className="text-lg font-semibold text-ink-1">Repositories</h1>
+        <div className="flex items-baseline gap-4">
+          <h1 className="text-lg font-semibold text-ink-1">Repositories</h1>
+          {/* Key for the tree: a folder row is a repository, a file row under it
+              is an issue students receive in their copy of that repository. */}
+          <div className="flex items-center gap-4 text-sm text-ink-3" aria-label="Legend">
+            <span className="inline-flex items-center gap-1">
+              <IconFolder size={16} className="text-gray-400" />
+              repository
+            </span>
+            <span className="inline-flex items-center gap-1">
+              <IconFileText size={16} className="text-gray-400" />
+              issue
+            </span>
+          </div>
+        </div>
 
         <RequireRole roles={['OWNER']}>
           <div className="flex items-center gap-3">
@@ -85,6 +120,7 @@ const AdminAssignments = ({ loaderData }: Route.ComponentProps) => {
           repositories={repositories.filter((repository: { title: string }) =>
             repository.title.toLowerCase().includes(query.toLowerCase())
           )}
+          editor={editor}
         />
       </>
     </div>
