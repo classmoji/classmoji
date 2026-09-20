@@ -1,6 +1,7 @@
 /**
  * The week grid: a day-name header, the all-day strip, and seven columns of
- * hour cells with the timed events drawn over them.
+ * hour cells with the timed events drawn over them — and, across each column,
+ * a line at every deadline due inside the rendered hours.
  *
  * Presentational and role-blind — the staff calendar makes each hour cell
  * droppable and each block draggable through the two render props, and the
@@ -26,6 +27,7 @@ import {
 import { DAY_LABELS, eventKey, isSameDay } from './utils';
 import EventCard from './EventCard';
 import AllDayStrip from './AllDayStrip';
+import { DeadlineLines, DeadlinePills, deadlineGroups } from './DeadlineMarkers';
 import { NowBadge, NowMarker, NowRule } from './NowIndicator';
 import { defaultRenderCell, defaultRenderEvent } from './gridRenderProps';
 import type { RenderCell, RenderEvent } from './gridRenderProps';
@@ -147,8 +149,11 @@ const WeekGrid = ({
           </div>
 
           {dates.map((date, dayIdx) => {
-            const timed = eventsFor(date).filter(
-              event => !isOutsideWindow(event, startHour, endHour)
+            const dayEvents = eventsFor(date);
+            const timed = dayEvents.filter(event => !isOutsideWindow(event, startHour, endHour));
+            // Deadlines are in the strip too — this is the line, not a move.
+            const deadlines = deadlineGroups(dayEvents, startHour, endHour, hourFloat =>
+              topForHour(hourFloat, startHour)
             );
             return (
               <div key={monthDropId(date)} className="relative border-l border-line">
@@ -164,6 +169,11 @@ const WeekGrid = ({
                     })}
                   </Fragment>
                 ))}
+
+                {/* Behind the blocks, on purpose: a deadline line is context,
+                    and an event running through one should not look cut in
+                    half by it. Its pills go in front, below. */}
+                <DeadlineLines groups={deadlines} />
 
                 {/* Blocks float over the cells: the cells stay droppable and
                     drag-selectable everywhere a block does not cover. */}
@@ -208,6 +218,11 @@ const WeekGrid = ({
                     );
                   })}
                 </div>
+
+                {/* In FRONT of the blocks: a label behind a block is not a
+                    label. The layer takes no pointer events, so only the pill
+                    itself is in the way of a drop or a drag-to-select. */}
+                <DeadlinePills groups={deadlines} onEventClick={onEventClick} />
 
                 {showNow && isSameDay(date, now) && <NowMarker top={nowTop} />}
               </div>
