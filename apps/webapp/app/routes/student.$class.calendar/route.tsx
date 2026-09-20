@@ -40,8 +40,10 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
 
   let events: Awaited<ReturnType<typeof ClassmojiService.calendar.getClassroomCalendar>> = [];
   try {
-    // Pass userId to include GitHub issue links for deadlines
-    // Don't include raw links for students (includeRawLinks=false by default)
+    // Pass userId to include GitHub issue links for deadlines. Everything
+    // after it stays at its default, which IS the student view: no raw link
+    // rows, no unpublished assignment deadlines, and no draft pages/decks or
+    // links to unpublished assignments (`canSeeDrafts`).
     events = await ClassmojiService.calendar.getClassroomCalendar(
       classroom!.id,
       start,

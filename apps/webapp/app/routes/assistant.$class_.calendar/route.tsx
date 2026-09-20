@@ -6,6 +6,14 @@ import invariant from 'tiny-invariant';
 import { data, useFetcher, useParams } from 'react-router';
 import type { Route } from './+types/route';
 import { ClassmojiService } from '@classmoji/services';
+// Pure write policy, imported straight from its own module: the decisions the
+// admin action and the MCP calendar tools apply too.
+import {
+  ASSISTANT_EVENT_TYPE_MESSAGE,
+  assistantMayChangeEventType,
+  assistantMayCreateEventType,
+  isCalendarTimeRangeError,
+} from '@classmoji/services/calendar-policy';
 import { useCallout } from '@classmoji/ui-components';
 import getPrisma from '@classmoji/database';
 import { assertClassroomAccess, assertClassroomMutationAllowed } from '~/utils/helpers';
@@ -54,10 +62,15 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
       end,
       null, // userId not needed for assistant
       true, // includeRawLinks for editing UI
-      true // includeUnpublished to see draft/unpublished assignments
-      // canManageForms deliberately left at its false default: the forms
-      // responses view is OWNER|TEACHER only, so an assistant's form-close
-      // event links to the form itself rather than to a 403.
+      true, // includeUnpublished to see draft/unpublished assignments
+      {
+        // Draft pages/decks and links to unpublished assignments are shown to
+        // assistants too — they teach from the same material.
+        canSeeDrafts: true,
+        // canManageForms deliberately left at its false default: the forms
+        // responses view is OWNER|TEACHER only, so an assistant's form-close
+        // event links to the form itself rather than to a 403.
+      }
     );
   } catch (error: unknown) {
     console.error(
@@ -121,16 +134,23 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
     const eventData = JSON.parse(formData.get('eventData') as string);
 
     // Assistants can only create Office Hours events
-    if (eventData.event_type !== 'OFFICE_HOURS') {
-      return data(
-        { success: false, error: 'Assistants can only create Office Hours events' },
-        { status: 403 }
-      );
+    if (!assistantMayCreateEventType(eventData.event_type)) {
+      return data({ success: false, error: ASSISTANT_EVENT_TYPE_MESSAGE }, { status: 403 });
     }
 
     const { linkedPageIds, linkedSlideIds, linkedAssignmentIds, ...createData } = eventData;
 
-    const newEvent = await ClassmojiService.calendar.createEvent(classroom.id, userId, createData);
+    let newEvent;
+    try {
+      newEvent = await ClassmojiService.calendar.createEvent(classroom.id, userId, createData);
+    } catch (error: unknown) {
+      // A refused time range is the user's to fix, so it comes back as a
+      // message the fetcher shows rather than as a 500.
+      if (isCalendarTimeRangeError(error)) {
+        return data({ success: false, error: (error as Error).message }, { status: 400 });
+      }
+      throw error;
+    }
 
     // If links were provided (non-recurring events only), add them
     const hasLinks = linkedPageIds?.length || linkedSlideIds?.length || linkedAssignmentIds?.length;
@@ -189,28 +209,47 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
         ...updateData
       } = eventData;
 
+      // The office-hours limit holds on update too, or it is only as strong as
+      // the create form: an assistant could add office hours and then retype
+      // the event as a lecture. This route serves assistants only, so the check
+      // is unconditional here.
+      if (!assistantMayChangeEventType(updateData.event_type, event.event_type)) {
+        return data({ success: false, error: ASSISTANT_EVENT_TYPE_MESSAGE }, { status: 403 });
+      }
+
+      // A 'this_and_future' edit SPLITS the series: the service ends the old
+      // event and returns a NEW one carrying the occurrences from this date on.
+      // Any link write below has to land on that event, not on the old id.
+      let linkTargetId = eventId as string;
       if (editScope && occurrenceDate) {
-        await ClassmojiService.calendar.updateEventWithScope(
+        const scoped = await ClassmojiService.calendar.updateEventWithScope(
           eventId as string,
           updateData,
           editScope,
           new Date(occurrenceDate)
         );
+        linkTargetId = scoped?.id ?? linkTargetId;
       } else {
         await ClassmojiService.calendar.updateEvent(eventId as string, updateData);
       }
 
-      // Handle resource links update (only allowed with 'this_only' scope for recurring events)
+      // Resource links belong to ONE occurrence date, and only a 'this_only'
+      // edit names one. A series-wide edit's link keys are ignored rather than
+      // written to the undated bucket, which a recurring event's occurrences
+      // never read — writing there would look like saving them and behave like
+      // discarding them.
+      const scopeCarriesLinks = !editScope || editScope === 'this_only';
       const hasLinkUpdates =
-        linkedPageIds !== undefined ||
-        linkedSlideIds !== undefined ||
-        linkedAssignmentIds !== undefined;
+        scopeCarriesLinks &&
+        (linkedPageIds !== undefined ||
+          linkedSlideIds !== undefined ||
+          linkedAssignmentIds !== undefined);
       if (hasLinkUpdates) {
         const linkOccurrenceDate =
           editScope === 'this_only' && occurrenceDate ? new Date(occurrenceDate) : null;
 
         await ClassmojiService.calendar.updateEventLinks(
-          eventId as string,
+          linkTargetId,
           classroom.id,
           {
             pageIds: linkedPageIds || [],
@@ -223,6 +262,10 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
 
       return data({ success: true });
     } catch (error: unknown) {
+      // A refused time range is the user's to fix, not a server fault.
+      if (isCalendarTimeRangeError(error)) {
+        return data({ success: false, error: (error as Error).message }, { status: 400 });
+      }
       console.error('Update event error:', error);
       return data(
         { success: false, error: error instanceof Error ? error.message : 'Unknown error' },

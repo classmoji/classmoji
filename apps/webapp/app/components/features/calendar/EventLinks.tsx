@@ -16,6 +16,20 @@ interface RepositoryAssignmentLinkInfo {
   } | null;
 }
 
+/**
+ * Marks linked content that is not published yet.
+ *
+ * Only staff are sent such a link at all — the calendar service leaves draft
+ * pages, draft decks and unpublished assignments out of a student's payload —
+ * so this says "your class cannot see this one". Same treatment the calendar
+ * already gives an unpublished deadline (see EventCard).
+ */
+const DraftPill = () => (
+  <span className="text-xs px-1.5 py-0.5 rounded bg-yellow-100 dark:bg-yellow-900/30 text-yellow-700 dark:text-yellow-400 font-normal">
+    Draft
+  </span>
+);
+
 interface EventLinksProps {
   event: CalendarEventWithLinks;
   classSlug?: string;
@@ -99,6 +113,7 @@ const EventLinks = ({
           >
             <IconFileText size={18} className="text-ink-3" />
             <span className="underline">{page.title}</span>
+            {page.is_draft && <DraftPill />}
             {peek ? null : <IconExternalLink size={14} className="text-ink-3" />}
           </PageLink>
         ))}
@@ -115,6 +130,7 @@ const EventLinks = ({
           >
             <IconPresentation size={18} className="text-ink-3" />
             <span className="underline">{slide.title}</span>
+            {slide.is_draft && <DraftPill />}
             <IconExternalLink size={14} className="text-ink-3" />
           </a>
         ))}
@@ -126,6 +142,10 @@ const EventLinks = ({
           const repoAssignment = repoAssignmentsByAssignmentId[assignment.id];
           const hasGitHubIssue =
             repoAssignment?.provider_issue_number && gitOrgLogin && repoAssignment.repository?.name;
+          // An assignment is on the class's calendar only once both it and its
+          // repository are published; until then only staff see this link.
+          const isDraftAssignment =
+            assignment.is_published === false || repository?.is_published === false;
 
           if (hasGitHubIssue) {
             // Link directly to student's GitHub issue (external)
@@ -140,6 +160,7 @@ const EventLinks = ({
               >
                 <IconClipboardList size={18} className="text-ink-3" />
                 <span className="underline">{assignment.title}</span>
+                {isDraftAssignment && <DraftPill />}
                 <IconExternalLink size={14} className="text-ink-3" />
               </a>
             );
@@ -154,6 +175,7 @@ const EventLinks = ({
             >
               <IconClipboardList size={18} className="text-ink-3" />
               <span className="underline">{assignment.title}</span>
+              {isDraftAssignment && <DraftPill />}
             </NavLink>
           );
         })}

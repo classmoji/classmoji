@@ -36,6 +36,16 @@ import * as entitlementService from './entitlement.service.ts';
 import * as instructorAudienceService from './instructorAudience.service.ts';
 import * as surveyService from './survey.service.ts';
 export { ClassroomSettingsEntitlementError } from './classroom.service.ts';
+// A refused calendar time range, so a caller can say so instead of 500ing,
+// plus the event-type policy every calendar write surface has to apply.
+export {
+  CalendarTimeRangeError,
+  isCalendarTimeRangeError,
+  ASSISTANT_EVENT_TYPE,
+  ASSISTANT_EVENT_TYPE_MESSAGE,
+  assistantMayCreateEventType,
+  assistantMayChangeEventType,
+} from './calendar.service.ts';
 // Installation repair: the refusal every caller has to tell apart from "not
 // installed", plus the shapes its results come back in.
 export {

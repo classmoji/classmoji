@@ -5,6 +5,14 @@ import dayjs from 'dayjs';
 import invariant from 'tiny-invariant';
 import { data, useFetcher, useLocation, useParams } from 'react-router';
 import { ClassmojiService } from '@classmoji/services';
+// Pure write policy, imported straight from its own module: the decisions the
+// assistant action and the MCP calendar tools apply too.
+import {
+  ASSISTANT_EVENT_TYPE_MESSAGE,
+  assistantMayChangeEventType,
+  assistantMayCreateEventType,
+  isCalendarTimeRangeError,
+} from '@classmoji/services/calendar-policy';
 import { useCallout } from '@classmoji/ui-components';
 import getPrisma from '@classmoji/database';
 import {
@@ -62,9 +70,14 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
       null, // userId not needed for admin
       true, // includeRawLinks for editing UI
       true, // includeUnpublished to see draft/unpublished assignments
-      // Form-close events link to the responses view only for OWNER/TEACHER —
-      // this route also admits ASSISTANT, and that page refuses them.
-      { canManageForms: isAdmin }
+      {
+        // Form-close events link to the responses view only for OWNER/TEACHER —
+        // this route also admits ASSISTANT, and that page refuses them.
+        canManageForms: isAdmin,
+        // Draft pages/decks and links to unpublished assignments are shown to
+        // every role this loader admits — OWNER, TEACHER and ASSISTANT alike.
+        canSeeDrafts: true,
+      }
     );
   } catch (error: unknown) {
     console.error(
@@ -165,14 +178,21 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
     // role. `isAdmin` already guards update/delete/update_deadline below;
     // create was the one branch that skipped it, and it is the branch where the
     // policy actually applies.
-    if (!isAdmin && createData.event_type !== 'OFFICE_HOURS') {
-      return data(
-        { success: false, error: 'Assistants can only create Office Hours events' },
-        { status: 403 }
-      );
+    if (!isAdmin && !assistantMayCreateEventType(createData.event_type)) {
+      return data({ success: false, error: ASSISTANT_EVENT_TYPE_MESSAGE }, { status: 403 });
     }
 
-    const newEvent = await ClassmojiService.calendar.createEvent(classroom.id, userId, createData);
+    let newEvent;
+    try {
+      newEvent = await ClassmojiService.calendar.createEvent(classroom.id, userId, createData);
+    } catch (error: unknown) {
+      // A refused time range is the user's to fix, so it comes back as a
+      // message the fetcher shows rather than as a 500.
+      if (isCalendarTimeRangeError(error)) {
+        return data({ success: false, error: (error as Error).message }, { status: 400 });
+      }
+      throw error;
+    }
 
     // If links were provided (non-recurring events only), add them
     const hasLinks = linkedPageIds?.length || linkedSlideIds?.length || linkedAssignmentIds?.length;
@@ -238,29 +258,53 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
       ...updateData
     } = eventData;
 
-    if (editScope && occurrenceDate) {
-      await ClassmojiService.calendar.updateEventWithScope(
-        eventId as string,
-        updateData,
-        editScope,
-        new Date(occurrenceDate)
-      );
-    } else {
-      await ClassmojiService.calendar.updateEvent(eventId as string, updateData);
+    // The office-hours limit holds on update too, or it is only as strong as
+    // the create form: an assistant could add office hours and then retype the
+    // event as a lecture.
+    if (!isAdmin && !assistantMayChangeEventType(updateData.event_type, event.event_type)) {
+      return data({ success: false, error: ASSISTANT_EVENT_TYPE_MESSAGE }, { status: 403 });
     }
 
-    // Handle resource links update (only allowed with 'this_only' scope for recurring events)
+    // A 'this_and_future' edit SPLITS the series: the service ends the old
+    // event and returns a NEW one carrying the occurrences from this date on.
+    // Any link write below has to land on that event, not on the old id.
+    let linkTargetId = eventId as string;
+    try {
+      if (editScope && occurrenceDate) {
+        const scoped = await ClassmojiService.calendar.updateEventWithScope(
+          eventId as string,
+          updateData,
+          editScope,
+          new Date(occurrenceDate)
+        );
+        linkTargetId = scoped?.id ?? linkTargetId;
+      } else {
+        await ClassmojiService.calendar.updateEvent(eventId as string, updateData);
+      }
+    } catch (error: unknown) {
+      if (isCalendarTimeRangeError(error)) {
+        return data({ success: false, error: (error as Error).message }, { status: 400 });
+      }
+      throw error;
+    }
+
+    // Resource links belong to ONE occurrence date, and only a 'this_only' edit
+    // names one. A series-wide edit is not a statement about any single date's
+    // links, so its link keys are ignored rather than written to the undated
+    // bucket, which a recurring event's occurrences never read — writing there
+    // would look like saving them and behave like discarding them.
+    const scopeCarriesLinks = !editScope || editScope === 'this_only';
     const hasLinkUpdates =
-      linkedPageIds !== undefined ||
-      linkedSlideIds !== undefined ||
-      linkedAssignmentIds !== undefined;
+      scopeCarriesLinks &&
+      (linkedPageIds !== undefined ||
+        linkedSlideIds !== undefined ||
+        linkedAssignmentIds !== undefined);
     if (hasLinkUpdates) {
-      // For recurring events, only allow link updates with 'this_only' scope
       const linkOccurrenceDate =
         editScope === 'this_only' && occurrenceDate ? new Date(occurrenceDate) : null;
 
       await ClassmojiService.calendar.updateEventLinks(
-        eventId as string,
+        linkTargetId,
         classroom.id,
         {
           pageIds: linkedPageIds || [],

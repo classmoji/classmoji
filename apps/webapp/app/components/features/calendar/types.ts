@@ -13,6 +13,11 @@
  * into the browser bundle. The service exports `ClassroomCalendarItem` instead,
  * and a type-level conformance test (`__tests__/serviceConformance.test.ts`)
  * checks that the two still agree where they are meant to.
+ *
+ * There is no index signature: every key a calendar surface reads is named
+ * here, and the service builds its payload from the same list. An index
+ * signature would let a component read a field nobody decided to send — and
+ * would keep the conformance test from noticing when one stops arriving.
  */
 
 export interface CalendarEventCreator {
@@ -30,12 +35,8 @@ export interface CalendarLinkedPage {
      * see, and an optional one fails open — a producer that forgets it reads as
      * `undefined`, which is falsy, which means "published".
      *
-     * The CalendarEvent link path selects it. The assignment-deadline path does
-     * not yet (`calendar.service.ts` selects only id/title for a deadline's
-     * linked pages, while selecting `is_draft` for its slides), so a deadline
-     * item's linked pages arrive without it. That select is a later fix;
-     * requiring it here is what makes the omission visible instead of silently
-     * reading as "not a draft".
+     * Both legs of the calendar select it: the CalendarEvent link path and the
+     * assignment-deadline path (whose linked pages once arrived without it).
      */
     is_draft: boolean;
   };
@@ -54,9 +55,17 @@ export interface CalendarLinkedAssignment {
   assignment: {
     id: string;
     title: string;
+    /**
+     * Required for the same reason `is_draft` is on a page: a link to an
+     * unpublished assignment is staff-only, and an optional flag would read as
+     * "published" wherever a producer forgot it.
+     */
+    is_published: boolean;
   };
   repository?: {
     slug?: string | null;
+    /** An unpublished repository hides its assignments' links the same way. */
+    is_published?: boolean;
   } | null;
 }
 
@@ -111,6 +120,8 @@ export interface CalendarEventWithLinks {
   form_status?: string | null;
   form_access?: string | null;
   is_unpublished?: boolean;
+  /** Who created the event — both staff routes gate "may I edit this?" on it. */
+  created_by?: string | null;
   meeting_link?: string | null;
   location?: string | null;
   creator?: CalendarEventCreator | null;
@@ -124,5 +135,4 @@ export interface CalendarEventWithLinks {
   _rawPageLinks?: CalendarRawPageLink[];
   _rawSlideLinks?: CalendarRawSlideLink[];
   _rawAssignmentLinks?: CalendarRawAssignmentLink[];
-  [key: string]: unknown;
 }

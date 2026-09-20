@@ -308,8 +308,18 @@ interface CalendarLinkedSlide {
   slide?: { id: string; title?: string | null; is_draft?: boolean } | null;
 }
 interface CalendarLinkedAssignment {
-  assignment?: { id: string; title?: string | null; slug?: string | null } | null;
-  repository?: { id: string; title?: string | null; slug?: string | null } | null;
+  assignment?: {
+    id: string;
+    title?: string | null;
+    slug?: string | null;
+    is_published?: boolean;
+  } | null;
+  repository?: {
+    id: string;
+    title?: string | null;
+    slug?: string | null;
+    is_published?: boolean;
+  } | null;
 }
 
 /** Union row shape: expanded CalendarEvents + synthesized deadline items. */
@@ -337,14 +347,21 @@ interface CalendarRow {
 }
 
 /**
- * Allowlist shaping for calendar rows. getClassroomCalendar returns raw
- * service rows whose `...event` spread carries the UNFILTERED
- * pageLinks/slideLinks/assignmentLinks include — draft/unpublished page and
- * slide titles a student must never see — plus overrides and other edit-UI
- * internals the web never renders. Emit only what the web calendar actually
- * shows: the event's own fields and the display-mapped linked content (which
- * the service already draft-filters for events); drafts are additionally
- * stripped for non-staff wherever the flag rides along.
+ * Allowlist shaping for calendar rows: emit only what the web calendar shows —
+ * the event's own fields and the display-mapped linked content.
+ *
+ * The service builds its display arrays for the viewer it was told about
+ * (`canSeeDrafts`, passed below). This shaping is the second, independent pass:
+ * it names the keys that may leave this server, and it re-applies the
+ * staff-only rule to the linked content it emits, so a row that arrives with a
+ * draft page, a draft deck or an unpublished assignment on it still does not
+ * reach a student through here.
+ *
+ * A staff payload keeps the publication flags alongside the titles. Staff are
+ * shown unpublished linked content, and a title on its own does not say that
+ * the class cannot see it yet — the web calendar marks those with a Draft pill
+ * for the same reason. A student's rows carry no such content, so the flags
+ * would be a constant `false` there and are left off.
  */
 function shapeCalendarRow(row: CalendarRow, staff: boolean) {
   const pages = (row.pages ?? [])
@@ -352,27 +369,38 @@ function shapeCalendarRow(row: CalendarRow, staff: boolean) {
     .filter((p): p is NonNullable<CalendarLinkedPage['page']> =>
       Boolean(p && (staff || p.is_draft !== true))
     )
-    .map(p => ({ id: p.id, title: p.title ?? null }));
+    .map(p => ({
+      id: p.id,
+      title: p.title ?? null,
+      ...(staff ? { is_draft: p.is_draft === true } : {}),
+    }));
   const slides = (row.slides ?? [])
     .map(l => l.slide)
     .filter((s): s is NonNullable<CalendarLinkedSlide['slide']> =>
       Boolean(s && (staff || s.is_draft !== true))
     )
-    .map(s => ({ id: s.id, title: s.title ?? null }));
+    .map(s => ({
+      id: s.id,
+      title: s.title ?? null,
+      ...(staff ? { is_draft: s.is_draft === true } : {}),
+    }));
   const assignments = (row.assignments ?? []).flatMap(l =>
-    l.assignment
+    l.assignment &&
+    (staff || (l.assignment.is_published !== false && l.repository?.is_published !== false))
       ? [
           {
             assignment: {
               id: l.assignment.id,
               title: l.assignment.title ?? null,
               slug: l.assignment.slug ?? null,
+              ...(staff ? { is_published: l.assignment.is_published !== false } : {}),
             },
             repository: l.repository
               ? {
                   id: l.repository.id,
                   title: l.repository.title ?? null,
                   slug: l.repository.slug ?? null,
+                  ...(staff ? { is_published: l.repository.is_published !== false } : {}),
                 }
               : null,
           },
@@ -427,15 +455,17 @@ async function loadCalendar(ctx: ToolContext, start: Date, end: Date) {
   const { classroomId, role } = classroomCtx(ctx);
   const staff = isStaff(role);
   // Mirrors the routes: students get published-only deadlines scoped to
-  // themselves; staff see unpublished too (raw link objects are edit-UI
-  // concerns and stay off).
+  // themselves; staff see unpublished ones too, and staff alone see draft
+  // pages, draft decks and links to unpublished assignments (`canSeeDrafts`).
+  // Raw link rows are an edit-UI concern and stay off.
   const events = (await ClassmojiService.calendar.getClassroomCalendar(
     classroomId,
     start,
     end,
     staff ? null : ctx.viewer.userId,
     false,
-    staff
+    staff,
+    { canSeeDrafts: staff }
   )) as CalendarRow[];
   return {
     range: { start: start.toISOString(), end: end.toISOString() },

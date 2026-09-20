@@ -37,6 +37,15 @@ type ExpandedItem = Exclude<ClassroomCalendarItem, { is_deadline: true }>;
 /** A synthesized item: an assignment deadline or a form close. */
 type SyntheticItem = Extract<ClassroomCalendarItem, { is_deadline: true }>;
 
+/**
+ * Every key of every variant. `keyof` over a union yields only the keys the
+ * variants share, which would quietly skip most of what is being checked here.
+ */
+type KeysOf<T> = T extends unknown ? keyof T : never;
+
+/** Every key any calendar item can arrive with. */
+type ServiceKeys = KeysOf<ClassroomCalendarItem>;
+
 describe('calendar service → client event shape', () => {
   it('delivers times the client type accepts', () => {
     // This is what `start_time: string | Date` on the client type is for: the
@@ -69,41 +78,71 @@ describe('calendar service → client event shape', () => {
     >();
   });
 
-  it('delivers raw link rows whose occurrence dates the client type accepts', () => {
-    // The edit modal filters `_raw*Links` by occurrence date, so that field has
-    // to line up. The rest of the raw row does NOT line up yet: the service's
-    // link interfaces declare `page`/`slide`/`assignment` but not the
-    // `page_id`/`slide_id`/`assignment_id` columns the modal actually reads, so
-    // whole-row assignability cannot be asserted until the service builds its
-    // display payload explicitly.
-    // Each kind is compared against ITS OWN client type — the three raw-link
-    // types are separate declarations, so checking all three against the page's
-    // would pass even if the slide or assignment one drifted.
-    type OccurrenceOf<T> = T extends { occurrence_date?: infer O } ? O : never;
-
-    expectTypeOf<OccurrenceOf<NonNullable<ExpandedItem['_rawPageLinks']>[number]>>().toExtend<
-      OccurrenceOf<NonNullable<CalendarEventWithLinks['_rawPageLinks']>[number]>
+  it('delivers whole raw link rows the client type accepts', () => {
+    // The edit modal reads both columns of a raw row — which resource, and
+    // which occurrence it is attached to — so the WHOLE row has to line up, not
+    // just the date. Each kind is compared against ITS OWN client type: the
+    // three raw-link types are separate declarations, so checking all three
+    // against the page's would pass even if the slide or assignment one
+    // drifted.
+    expectTypeOf<NonNullable<ExpandedItem['_rawPageLinks']>[number]>().toExtend<
+      NonNullable<CalendarEventWithLinks['_rawPageLinks']>[number]
     >();
-    expectTypeOf<OccurrenceOf<NonNullable<ExpandedItem['_rawSlideLinks']>[number]>>().toExtend<
-      OccurrenceOf<NonNullable<CalendarEventWithLinks['_rawSlideLinks']>[number]>
+    expectTypeOf<NonNullable<ExpandedItem['_rawSlideLinks']>[number]>().toExtend<
+      NonNullable<CalendarEventWithLinks['_rawSlideLinks']>[number]
     >();
-    expectTypeOf<OccurrenceOf<NonNullable<ExpandedItem['_rawAssignmentLinks']>[number]>>().toExtend<
-      OccurrenceOf<NonNullable<CalendarEventWithLinks['_rawAssignmentLinks']>[number]>
+    expectTypeOf<NonNullable<ExpandedItem['_rawAssignmentLinks']>[number]>().toExtend<
+      NonNullable<CalendarEventWithLinks['_rawAssignmentLinks']>[number]
     >();
   });
 
-  it('delivers linked page/slide rows whose non-null form the client type accepts', () => {
-    // The service types these entries with a NULLABLE `page`/`slide` (the
-    // Prisma include allows it); the client type does not model that, because
-    // a link row without its target is not rendered. Assert the non-null form.
-    type ServicePage = NonNullable<NonNullable<ExpandedItem['pages']>[number]['page']>;
-    expectTypeOf<ServicePage>().toExtend<
-      NonNullable<CalendarEventWithLinks['pages']>[number]['page']
+  it('delivers linked page/slide/assignment rows the client type accepts', () => {
+    expectTypeOf<NonNullable<ExpandedItem['pages']>[number]>().toExtend<
+      NonNullable<CalendarEventWithLinks['pages']>[number]
     >();
+    expectTypeOf<NonNullable<ExpandedItem['slides']>[number]>().toExtend<
+      NonNullable<CalendarEventWithLinks['slides']>[number]
+    >();
+    // Carries `is_published` on both the assignment and its repository: the
+    // link list marks one the class cannot see yet.
+    expectTypeOf<NonNullable<ExpandedItem['assignments']>[number]>().toExtend<
+      NonNullable<CalendarEventWithLinks['assignments']>[number]
+    >();
+  });
 
-    type ServiceSlide = NonNullable<NonNullable<ExpandedItem['slides']>[number]['slide']>;
-    expectTypeOf<ServiceSlide>().toExtend<
-      NonNullable<CalendarEventWithLinks['slides']>[number]['slide']
+  it('delivers a deadline’s linked pages and decks in the same shape', () => {
+    // The deadline leg builds its own arrays; they render through the same
+    // component, so they answer to the same client type — including the
+    // `is_draft` flag the Draft treatment reads.
+    expectTypeOf<NonNullable<SyntheticItem['pages']>[number]>().toExtend<
+      NonNullable<CalendarEventWithLinks['pages']>[number]
     >();
+    expectTypeOf<NonNullable<SyntheticItem['slides']>[number]>().toExtend<
+      NonNullable<CalendarEventWithLinks['slides']>[number]
+    >();
+  });
+
+  it('delivers the creator id the staff routes gate editing on', () => {
+    expectTypeOf<ExpandedItem['created_by']>().toExtend<CalendarEventWithLinks['created_by']>();
+  });
+});
+
+describe('client event shape → calendar service', () => {
+  it('names nothing the service never sends', () => {
+    // The other direction: a client field the service has no key for is a field
+    // that is always undefined at runtime — a rename, or a component reading
+    // something nobody decided to send. Neither shows up in the checks above,
+    // because they all start from a service key.
+    expectTypeOf<Exclude<keyof CalendarEventWithLinks, ServiceKeys>>().toEqualTypeOf<never>();
+  });
+
+  it('is the only shape the payload carries — no stored link relations ride along', () => {
+    // The calendar builds its display payload key by key. The stored relations
+    // (`pageLinks`/`slideLinks`/`assignmentLinks`) and the override rows are
+    // inputs to that build, not part of its result: linked content leaves as
+    // the occurrence-filtered, visibility-filtered display arrays.
+    expectTypeOf<
+      Extract<ServiceKeys, 'pageLinks' | 'slideLinks' | 'assignmentLinks' | 'overrides'>
+    >().toEqualTypeOf<never>();
   });
 });
