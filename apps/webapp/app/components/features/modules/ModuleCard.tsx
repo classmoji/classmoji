@@ -261,12 +261,6 @@ const ModuleCard = ({
 
   const menuItems: MenuProps['items'] = [
     { key: 'edit', label: 'Edit title & description', icon: <IconPencil size={15} /> },
-    {
-      key: 'public',
-      label: module.is_public ? 'Hide from course website' : 'Show on course website',
-      icon: <IconWorld size={15} />,
-      disabled: !module.is_published,
-    },
     { type: 'divider' },
     {
       key: 'delete',
@@ -280,7 +274,6 @@ const ModuleCard = ({
   const onMenuClick: MenuProps['onClick'] = ({ key, domEvent }) => {
     domEvent.stopPropagation();
     if (key === 'edit') setEditOpen(true);
-    if (key === 'public') post('setPublic', { id: module.id, isPublic: !module.is_public });
     if (key === 'delete') post('delete', { id: module.id });
   };
 
