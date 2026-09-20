@@ -1559,6 +1559,19 @@ export const updateEventLinks = async (
 ) => {
   const { pageIds = [], slideIds = [], assignmentIds = [] } = linkData;
 
+  // The TARGET has to be in this classroom too, not just the resources being
+  // linked. Without this the id checks below would happily rewrite another
+  // classroom's event — deleting its links for that date and writing this
+  // classroom's in their place — for anyone holding an id.
+  const target = await getPrisma().calendarEvent.findFirst({
+    where: { id: eventId, classroom_id: classroomId },
+    select: { id: true },
+  });
+
+  if (!target) {
+    throw new Error('Calendar event not found in this classroom');
+  }
+
   // Normalize occurrence_date for storage (date-only, no time)
   const normalizedDate = occurrenceDate
     ? new Date(new Date(occurrenceDate).toISOString().split('T')[0])
