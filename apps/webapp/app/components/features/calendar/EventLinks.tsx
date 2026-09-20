@@ -1,21 +1,8 @@
-import { NavLink } from 'react-router';
 import { VideoCameraOutlined, GithubOutlined } from '@ant-design/icons';
-import {
-  IconFileText,
-  IconPresentation,
-  IconExternalLink,
-  IconClipboardList,
-} from '@tabler/icons-react';
+import { IconExternalLink, IconClipboardList } from '@tabler/icons-react';
 import type { CalendarEventWithLinks } from './types';
-import DraftPill from './DraftPill';
-import { PageLink, usePagePeek } from '~/components/features/pages';
-
-interface RepositoryAssignmentLinkInfo {
-  provider_issue_number?: number | null;
-  repository?: {
-    name: string;
-  } | null;
-}
+import ResourceLink, { resourcesForEvent } from './ResourceLink';
+import type { RepositoryAssignmentLinkInfo, ResourceLinkContext } from './ResourceLink';
 
 interface EventLinksProps {
   event: CalendarEventWithLinks;
@@ -28,46 +15,41 @@ interface EventLinksProps {
 }
 
 /**
- * Renders clickable links for calendar events in the detail modal.
- * - Meeting links open in a new tab (external)
- * - Pages open in a new tab (external pages app)
- * - Slides open in a new tab (external slides viewer)
- * - Assignments: GitHub issue for students with repo assignment, repositories page with hash anchor otherwise
- * - GitHub issue links open in a new tab (for deadline events)
+ * Everything a calendar event links to, in the detail modal.
  *
- * @param {object} event - The calendar event
- * @param {string} classSlug - The classroom slug
- * @param {string} rolePrefix - Route prefix (student, admin, assistant)
- * @param {string} slidesUrl - Base URL for slides viewer
- * @param {string} pagesUrl - Base URL for pages viewer
- * @param {string} gitOrgLogin - GitHub organization login (for constructing issue URLs)
- * @param {object} repoAssignmentsByAssignmentId - Map of assignment_id -> RepositoryAssignment
+ * The three LINKED kinds — pages, decks, assignments — are drawn by the shared
+ * `ResourceLink`, which is also what the week chips and the month view's
+ * starred line use, so the modal cannot send a reader somewhere the grid does
+ * not. What is left here is what only the modal has: the meeting link, a
+ * synthesized form close, and a deadline's GitHub issue.
  */
 const EventLinks = ({
   event,
   classSlug,
   rolePrefix = 'student',
   slidesUrl,
-  pagesUrl = 'http://localhost:7100',
+  pagesUrl,
   gitOrgLogin = null,
   repoAssignmentsByAssignmentId = {},
 }: EventLinksProps) => {
-  const resolvedClassSlug = classSlug ?? '';
-  // Null on admin (no drawer mounted there) — the page links stay new-tab links.
-  const peek = usePagePeek();
+  const context: ResourceLinkContext = {
+    classSlug,
+    rolePrefix,
+    slidesUrl,
+    pagesUrl,
+    gitOrgLogin,
+    repoAssignmentsByAssignmentId,
+  };
+  const resources = resourcesForEvent(event);
+
   const hasMeetingLink = event.meeting_link;
-  const hasPages = (event.pages?.length ?? 0) > 0;
-  const hasSlides = (event.slides?.length ?? 0) > 0;
-  const hasAssignments = (event.assignments?.length ?? 0) > 0;
   const hasGitHubIssue = event.github_issue_url;
   // Synthesized form-close events carry a single link, already pointed at the
   // right surface by the service: the responses view for staff, the fill page
   // for everyone else.
   const formUrl = event.is_form_close ? (event.form_url ?? null) : null;
-  const hasAnyLinks =
-    hasMeetingLink || hasPages || hasSlides || hasAssignments || hasGitHubIssue || formUrl;
 
-  if (!hasAnyLinks) {
+  if (!hasMeetingLink && resources.length === 0 && !hasGitHubIssue && !formUrl) {
     return null;
   }
 
@@ -87,85 +69,18 @@ const EventLinks = ({
         </a>
       )}
 
-      {/* Pages — peek in place inside the student/assistant shell, new tab on
-          admin (no drawer there). The ↗ affordance follows the behaviour. */}
-      {hasPages &&
-        (event.pages ?? []).map(({ page }) => (
-          <PageLink
-            key={page.id}
-            pageId={page.id}
-            title={page.title}
-            href={`${pagesUrl}/${resolvedClassSlug}/${page.id}`}
-            className="flex items-center gap-2 text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300 text-sm"
-          >
-            <IconFileText size={18} className="text-ink-3" />
-            <span className="underline">{page.title}</span>
-            {page.is_draft && <DraftPill />}
-            {peek ? null : <IconExternalLink size={14} className="text-ink-3" />}
-          </PageLink>
-        ))}
-
-      {/* Slides - opens in new tab */}
-      {hasSlides &&
-        (event.slides ?? []).map(({ slide }) => (
-          <a
-            key={slide.id}
-            href={`${slidesUrl}/${slide.id}`}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="flex items-center gap-2 text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300 text-sm"
-          >
-            <IconPresentation size={18} className="text-ink-3" />
-            <span className="underline">{slide.title}</span>
-            {slide.is_draft && <DraftPill />}
-            <IconExternalLink size={14} className="text-ink-3" />
-          </a>
-        ))}
-
-      {/* Assignments - GitHub issue for students with repo, repositories page otherwise */}
-      {hasAssignments &&
-        (event.assignments ?? []).map(({ assignment, repository }) => {
-          // Check if user has a repo assignment with a GitHub issue
-          const repoAssignment = repoAssignmentsByAssignmentId[assignment.id];
-          const hasGitHubIssue =
-            repoAssignment?.provider_issue_number && gitOrgLogin && repoAssignment.repository?.name;
-          // An assignment is on the class's calendar only once both it and its
-          // repository are published; until then only staff see this link.
-          const isDraftAssignment =
-            assignment.is_published === false || repository?.is_published === false;
-
-          if (hasGitHubIssue) {
-            // Link directly to student's GitHub issue (external)
-            const githubIssueUrl = `https://github.com/${gitOrgLogin}/${repoAssignment!.repository!.name}/issues/${repoAssignment!.provider_issue_number}`;
-            return (
-              <a
-                key={assignment.id}
-                href={githubIssueUrl}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="flex items-center gap-2 text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300 text-sm"
-              >
-                <IconClipboardList size={18} className="text-ink-3" />
-                <span className="underline">{assignment.title}</span>
-                {isDraftAssignment && <DraftPill />}
-                <IconExternalLink size={14} className="text-ink-3" />
-              </a>
-            );
-          }
-
-          // Fallback: link to repositories page with hash anchor
-          return (
-            <NavLink
-              key={assignment.id}
-              to={`/${rolePrefix}/${resolvedClassSlug}/repos#${repository?.slug || ''}`}
-              className="flex items-center gap-2 text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300 text-sm"
-            >
-              <IconClipboardList size={18} className="text-ink-3" />
-              <span className="underline">{assignment.title}</span>
-              {isDraftAssignment && <DraftPill />}
-            </NavLink>
-          );
-        })}
+      {/* Pages peek in place inside the student/assistant shell and open a new
+          tab on admin, where no drawer is mounted; decks open the slides
+          viewer; an assignment goes to the reader's own GitHub issue where
+          they have one and to the repositories page where they do not. */}
+      {resources.map(resource => (
+        <ResourceLink
+          key={`${resource.kind}-${resource.id}`}
+          resource={resource}
+          context={context}
+          variant="list"
+        />
+      ))}
 
       {/* Form close - opens the form (or its responses, for staff) in a new tab */}
       {formUrl && (

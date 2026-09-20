@@ -122,7 +122,9 @@ const WeekGrid = ({
 
       <AllDayStrip
         dates={dates}
-        itemsFor={date => eventsFor(date).filter(event => isOutsideWindow(event, startHour, endHour))}
+        itemsFor={date =>
+          eventsFor(date).filter(event => isOutsideWindow(event, startHour, endHour))
+        }
         onEventClick={onEventClick}
         alwaysShow={alwaysShowAllDay}
         renderEvent={renderEvent}

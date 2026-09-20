@@ -16,16 +16,24 @@ import WeekGrid from './WeekGrid';
 import MonthGrid from './MonthGrid';
 import { hourRange } from './geometry';
 import { useCalendarNavigation, useEventsByDate } from './useCalendarNavigation';
+import type { RepositoryAssignmentLinkInfo } from './ResourceLink';
 import type { CalendarEventWithLinks } from './types';
 
 interface StudentCalendarViewProps {
   events: CalendarEventWithLinks[];
   onEventClick?: (event: CalendarEventWithLinks) => void;
   onMonthChange?: (year: number, month: number) => void;
-  /** Where a starred resource under a month chip points — see MonthGrid. */
+  /** Where a linked resource points — see MonthGrid. */
   classSlug?: string;
   pagesUrl?: string;
   slidesUrl?: string;
+  /**
+   * The student's own repository assignments. With them, a linked assignment
+   * goes straight to THEIR GitHub issue — the destination the detail modal has
+   * always meant to offer.
+   */
+  gitOrgLogin?: string | null;
+  repoAssignmentsByAssignmentId?: Record<string, RepositoryAssignmentLinkInfo | undefined>;
 }
 
 const StudentCalendarView = ({
@@ -35,6 +43,8 @@ const StudentCalendarView = ({
   classSlug,
   pagesUrl,
   slidesUrl,
+  gitOrgLogin,
+  repoAssignmentsByAssignmentId,
 }: StudentCalendarViewProps) => {
   const nav = useCalendarNavigation(onMonthChange);
   const eventsFor = useEventsByDate(events, nav.selectedTypes);
@@ -67,6 +77,8 @@ const StudentCalendarView = ({
           rolePrefix="student"
           pagesUrl={pagesUrl}
           slidesUrl={slidesUrl}
+          gitOrgLogin={gitOrgLogin}
+          repoAssignmentsByAssignmentId={repoAssignmentsByAssignmentId}
         />
       ) : (
         <WeekGrid

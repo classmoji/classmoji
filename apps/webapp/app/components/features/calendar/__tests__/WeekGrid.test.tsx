@@ -320,7 +320,7 @@ describe('WeekGrid — deadline lines', () => {
     expect(html).toContain('11:59 PM · Reading Response');
     // One bottom-anchored column holds both, so the second lands above the
     // first instead of on top of it.
-    expect((html.match(/transform:translateY\(-100%\)/g) ?? [])).toHaveLength(1);
+    expect(html.match(/transform:translateY\(-100%\)/g) ?? []).toHaveLength(1);
     expect(html).toContain('flex flex-col items-end gap-0.5');
   });
 

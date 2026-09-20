@@ -127,6 +127,8 @@ const StudentCalendar = ({ loaderData }: Route.ComponentProps) => {
           classSlug={classSlug}
           pagesUrl={pagesUrl}
           slidesUrl={slidesUrl}
+          gitOrgLogin={gitOrgLogin}
+          repoAssignmentsByAssignmentId={repoAssignmentsByAssignmentId}
         />
       </div>
 

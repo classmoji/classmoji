@@ -149,9 +149,7 @@ export const blockLayout = (hours: number, resourceCount = 0): BlockLayout => {
   const drawn = Math.max(hours, MIN_DURATION_HOURS);
   const tight = isTightBlock(hours);
   const content =
-    drawn * HOUR_HEIGHT_REM -
-    BLOCK_GAP_REM -
-    (tight ? TIGHT_BLOCK_PADDING_REM : BLOCK_PADDING_REM);
+    drawn * HOUR_HEIGHT_REM - BLOCK_GAP_REM - (tight ? TIGHT_BLOCK_PADDING_REM : BLOCK_PADDING_REM);
 
   // How many chip lines this block's DURATION entitles it to, before asking
   // whether they fit: none under an hour, one up to 105 minutes, and as many
@@ -169,7 +167,10 @@ export const blockLayout = (hours: number, resourceCount = 0): BlockLayout => {
   const afterTitle = content - TITLE_ROW_REM;
 
   let showMeta = fitsMetaRow(hours);
-  let chipLines = Math.min(allowed, linesIn(showMeta ? afterTitle - META_ROW_REM - ROW_GAP_REM : afterTitle));
+  let chipLines = Math.min(
+    allowed,
+    linesIn(showMeta ? afterTitle - META_ROW_REM - ROW_GAP_REM : afterTitle)
+  );
 
   // An hour-long block has room for a title and one more row, not two — and
   // the row it is asked for here is the chip line. The meta row gives way:
