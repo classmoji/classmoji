@@ -229,15 +229,22 @@ const EventCard = ({
         <button
           type="button"
           onClick={() => onClick(event)}
-          // The ring is drawn INSIDE the button: it fills a card that clips its
-          // overflow, so an outset ring — or an outline at a positive
+          // A column that starts at the top, not a button: a button centres its
+          // content vertically, so a two-hour block drew its title down the
+          // middle of the slot with an inch of colour above it.
+          //
+          // The focus ring is drawn INSIDE: the button fills a card that clips
+          // its overflow, so an outset ring — or an outline at a positive
           // offset — is painted straight into the clip and never seen.
-          className={`block w-full text-left cursor-pointer ${padding} ${fillChild} focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent`}
+          className={`flex flex-col justify-start items-stretch w-full text-left cursor-pointer ${padding} ${fillChild} focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent`}
         >
           {body}
         </button>
       ) : (
-        <div className={`${padding} ${fillChild}`}>{body}</div>
+        // Same column, so a card with nothing to press sits the same way.
+        <div className={`flex flex-col justify-start items-stretch ${padding} ${fillChild}`}>
+          {body}
+        </div>
       )}
     </div>
   );

@@ -141,6 +141,21 @@ describe('WeekGrid', () => {
     expect(html).not.toContain('px-2 py-1');
   });
 
+  it('starts a block’s content at the top, however tall the block is', () => {
+    // A <button> centres its content vertically, so a two-hour block drew its
+    // title down the middle of the slot. It is a top-aligned column instead.
+    const long: CalendarEventWithLinks = {
+      ...lecture,
+      id: 'evt-long',
+      title: 'Long OH',
+      end_time: new Date(2026, 8, 22, 12, 0).toISOString(),
+    };
+    const html = render([long], TUESDAY);
+
+    expect(html).toContain('height:8rem');
+    expect(html).toContain('flex flex-col justify-start items-stretch');
+  });
+
   it('sizes a block by its duration and leaves a gap under it', () => {
     // One hour of grid is 4rem, so a one-hour lecture is 4rem tall — not the
     // height of whatever text happens to be in it. `pb-1` is inside that
