@@ -43,6 +43,57 @@ export const buildEventWindow = (
 };
 
 /**
+ * The React key for one rendered occurrence.
+ *
+ * A recurring event surfaces once per date under a single id, so `event.id`
+ * alone collides across a week and React reuses the wrong node. The key is the
+ * pair that is actually unique: the id and the occurrence it was expanded for.
+ * `index` is the last resort for an item with no id at all (nothing the service
+ * sends is like that today).
+ */
+export const eventKey = (event: CalendarEventWithLinks, index: number): string => {
+  const id = event.id ?? `index-${index}`;
+  if (!event.occurrence_date) return String(id);
+  return `${id}-${new Date(event.occurrence_date).toISOString()}`;
+};
+
+/** `SUN` … `SAT`, the day-name row both grids draw. */
+export const DAY_LABELS = ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'];
+
+/** The calendar header's primary label, e.g. `September 2026`. */
+export const formatMonthYear = (date: DateInput) =>
+  `${getMonthName(date)} ${new Date(date).getFullYear()}`;
+
+/**
+ * The calendar header's secondary label in week view: the day range, without
+ * repeating the month the primary label already carries (`20 – 26`), unless the
+ * week straddles two months (`Sep 27 – Oct 3`).
+ */
+export const formatDayRange = (start: DateInput, end: DateInput) => {
+  const from = new Date(start);
+  const to = new Date(end);
+  if (from.getMonth() === to.getMonth() && from.getFullYear() === to.getFullYear()) {
+    return `${from.getDate()} – ${to.getDate()}`;
+  }
+  return `${getMonthName(from).slice(0, 3)} ${from.getDate()} – ${getMonthName(to).slice(0, 3)} ${to.getDate()}`;
+};
+
+/**
+ * A clock time with the minutes dropped when they are zero — `9 AM`, `11:59 PM`.
+ * What a deadline chip and the now badge show, where `formatTime`'s `9:00 AM`
+ * is more digits than a chip has room for.
+ */
+export const formatShortTime = (date: DateInput) => {
+  const d = new Date(date);
+  const hours = d.getHours() % 12 || 12;
+  const minutes = d.getMinutes();
+  const suffix = d.getHours() < 12 ? 'AM' : 'PM';
+  return minutes === 0
+    ? `${hours} ${suffix}`
+    : `${hours}:${String(minutes).padStart(2, '0')} ${suffix}`;
+};
+
+/**
  * Get day name from date (lowercase)
  */
 export const getDayName = (date: Date) => {

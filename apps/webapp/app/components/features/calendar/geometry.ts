@@ -13,6 +13,8 @@
  * hour row is 68px there and follows the reader's UI font size elsewhere.
  */
 
+import type { CalendarEventWithLinks } from './types';
+
 /** Height of one hour row. */
 export const HOUR_HEIGHT_REM = 4;
 
@@ -47,6 +49,48 @@ export const HOUR_FLOOR = 6;
  * a half-hour event was drawing ~47px of content into a 30px box.
  */
 export const MIN_DURATION_HOURS = 0.75;
+
+/**
+ * The CSS grid template both week surfaces use: a fixed time gutter plus seven
+ * equal day columns. `minmax(0, 1fr)` rather than a bare `1fr` — `1fr` has an
+ * `auto` minimum, so one long unbroken title widens its column and knocks the
+ * day header, the all-day strip and the hour grid out of alignment with each
+ * other. The staff grid used `1fr`, the student grid `minmax(0, 1fr)`.
+ */
+export const WEEK_GRID_COLUMNS = '4rem repeat(7, minmax(0, 1fr))';
+
+/**
+ * Exclusive upper bound for "does this event get a block in the hour grid?".
+ *
+ * NOT the end of the rendered window: the grid draws a 10 PM row, but an event
+ * starting inside that row is still sent to the all-day strip. Both week grids
+ * drew that same bound before they were merged, so it is preserved exactly
+ * here; unifying it with `DEFAULT_END_HOUR` moves events on screen and belongs
+ * with the dynamic hour range, not with this refactor.
+ */
+export const EVENT_END_HOUR = DEFAULT_END_HOUR - 1;
+
+/**
+ * Whether an item belongs in the all-day strip rather than in the hour grid:
+ * every deadline, plus anything starting before the window, starting in or
+ * after the last row, or already finished by the time the window opens.
+ *
+ * One implementation for both roles. The staff grid compared whole hours and
+ * the student grid compared floats, so a 7:45 AM event sat in the grid for one
+ * viewer and in the strip for the other.
+ */
+export const isOutsideWindow = (
+  event: Pick<CalendarEventWithLinks, 'is_deadline' | 'start_time' | 'end_time'>,
+  startHour: number = DEFAULT_START_HOUR,
+  endHourExclusive: number = EVENT_END_HOUR
+): boolean => {
+  if (event.is_deadline) return true;
+  const start = new Date(event.start_time);
+  const end = new Date(event.end_time);
+  const startFloat = start.getHours() + start.getMinutes() / 60;
+  const endFloat = end.getHours() + end.getMinutes() / 60;
+  return startFloat < startHour || startFloat >= endHourExclusive || endFloat <= startHour;
+};
 
 /** The hours rendered in a window, e.g. `[8, 9, … 22]` for the default one. */
 export const hoursInWindow = (
