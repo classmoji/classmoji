@@ -10,7 +10,7 @@
  * hours to create one.
  */
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import CalendarShell, { CalendarTypeFilter } from './CalendarShell';
 import WeekGrid from './WeekGrid';
 import MonthGrid from './MonthGrid';
@@ -19,6 +19,7 @@ import CalendarDragLayer, {
   DroppableCell,
   canDragEvent,
 } from './CalendarDragLayer';
+import { hourRange, selectionRange } from './geometry';
 import { useCalendarNavigation, useEventsByDate } from './useCalendarNavigation';
 import { isSameDay } from './utils';
 import type { RenderCell, RenderEvent } from './gridRenderProps';
@@ -34,8 +35,13 @@ interface CourseCalendarProps {
   onRangeSelect?: ((start: Date, end: Date) => void) | null;
   canDragDeadlines?: boolean;
   /**
-   * Where a starred resource under a month chip points. Passed straight to the
-   * month grid; the calendar itself does not read them.
+   * Where a linked resource points — the starred line under a month chip, and
+   * the chips on a week block. Passed straight to the grids; the calendar
+   * itself does not read them.
+   *
+   * Deliberately no `gitOrgLogin`/`repoAssignmentsByAssignmentId`: those turn
+   * an assignment link into the VIEWER's own GitHub issue, and staff have no
+   * repo of their own in the class. The repositories page is their answer.
    */
   classSlug?: string;
   rolePrefix?: string;
@@ -66,6 +72,9 @@ const CourseCalendar = ({
 }: CourseCalendarProps) => {
   const nav = useCalendarNavigation(onMonthChange);
   const eventsFor = useEventsByDate(events, nav.selectedTypes);
+  // The whole loaded month, UNFILTERED: the grid must not resize as the reader
+  // pages between its weeks or toggles a type in the legend.
+  const { startHour, endHour } = useMemo(() => hourRange(events), [events]);
 
   // Drag-to-select is plain mouse state, not dnd-kit: it picks a range of empty
   // cells rather than moving anything, and routing it through the drag library
@@ -82,10 +91,10 @@ const CourseCalendar = ({
       setDragSelect(null);
       if (!onRangeSelect) return;
 
-      const start = new Date(date);
-      start.setHours(Math.min(anchorHour, hoverHour), 0, 0, 0);
-      const end = new Date(date);
-      end.setHours(Math.max(anchorHour, hoverHour) + 1, 0, 0, 0);
+      // The 24-hour clamp lives in `geometry` with the rest of the window
+      // arithmetic, so the boundary the 11 PM row created can be asserted
+      // without a pointer.
+      const { start, end } = selectionRange(date, anchorHour, hoverHour);
       onRangeSelect(start, end);
     };
 
@@ -200,6 +209,12 @@ const CourseCalendar = ({
             // The strip is the only drop target that keeps an event's time of
             // day, so staff who can drop need it even on an empty week.
             alwaysShowAllDay={Boolean(onEventDrop || onDeadlineDrop)}
+            startHour={startHour}
+            endHour={endHour}
+            classSlug={classSlug}
+            rolePrefix={rolePrefix}
+            pagesUrl={pagesUrl}
+            slidesUrl={slidesUrl}
             renderEvent={renderEvent}
             renderCell={renderCell}
           />

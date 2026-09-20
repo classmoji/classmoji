@@ -1,6 +1,7 @@
 /**
  * The week grid: a day-name header, the all-day strip, and seven columns of
- * hour cells with the timed events drawn over them.
+ * hour cells with the timed events drawn over them — and, across each column,
+ * a line at every deadline due inside the rendered hours.
  *
  * Presentational and role-blind — the staff calendar makes each hour cell
  * droppable and each block draggable through the two render props, and the
@@ -11,9 +12,11 @@
 
 import { Fragment, useEffect, useState } from 'react';
 import {
+  DEFAULT_END_HOUR,
+  DEFAULT_START_HOUR,
   WEEK_GRID_COLUMNS,
   formatHourLabel,
-  heightForDuration,
+  heightForBlock,
   hoursInWindow,
   isOutsideWindow,
   monthDropId,
@@ -24,9 +27,12 @@ import {
 import { DAY_LABELS, eventKey, isSameDay } from './utils';
 import EventCard from './EventCard';
 import AllDayStrip from './AllDayStrip';
+import { DeadlineLines, DeadlinePills, deadlineGroups } from './DeadlineMarkers';
 import { NowBadge, NowMarker, NowRule } from './NowIndicator';
 import { defaultRenderCell, defaultRenderEvent } from './gridRenderProps';
+import { resourcesForEvent } from './ResourceLink';
 import type { RenderCell, RenderEvent } from './gridRenderProps';
+import type { RepositoryAssignmentLinkInfo } from './ResourceLink';
 import type { CalendarEventWithLinks } from './types';
 
 interface WeekGridProps {
@@ -43,6 +49,30 @@ interface WeekGridProps {
    * when empty took that move away on exactly the weeks where it is needed.
    */
   alwaysShowAllDay?: boolean;
+  /**
+   * The clock hours to draw, from `geometry.hourRange` over the WHOLE loaded
+   * event set — the month-sized payload, unfiltered by the type legend. Per
+   * week it would resize the grid as you page; after the filter it would
+   * resize as you toggle a chip.
+   *
+   * `endHour` is exclusive, so 24 means the last row is 11 PM.
+   */
+  startHour?: number;
+  endHour?: number;
+  /**
+   * Where the chips on a block point. Threaded from the route, because the
+   * grid itself knows neither the classroom nor the role looking at it.
+   *
+   * The last two are the viewer's own repository assignments, which turn a
+   * linked assignment into a link to THEIR GitHub issue. Staff loaders do not
+   * send them and should not: staff have no personal repo in the class.
+   */
+  classSlug?: string;
+  rolePrefix?: string;
+  pagesUrl?: string;
+  slidesUrl?: string;
+  gitOrgLogin?: string | null;
+  repoAssignmentsByAssignmentId?: Record<string, RepositoryAssignmentLinkInfo | undefined>;
   renderEvent?: RenderEvent;
   renderCell?: RenderCell;
 }
@@ -53,12 +83,28 @@ const WeekGrid = ({
   eventsFor,
   onEventClick,
   alwaysShowAllDay = false,
+  startHour = DEFAULT_START_HOUR,
+  endHour = DEFAULT_END_HOUR,
+  classSlug,
+  rolePrefix,
+  pagesUrl,
+  slidesUrl,
+  gitOrgLogin,
+  repoAssignmentsByAssignmentId,
   renderEvent = defaultRenderEvent,
   renderCell = defaultRenderCell,
 }: WeekGridProps) => {
-  const hours = hoursInWindow();
+  const linkContext = {
+    classSlug,
+    rolePrefix,
+    pagesUrl,
+    slidesUrl,
+    gitOrgLogin,
+    repoAssignmentsByAssignmentId,
+  };
+  const hours = hoursInWindow(startHour, endHour);
   const nowHourFloat = now.getHours() + now.getMinutes() / 60;
-  const nowTop = topForHour(nowHourFloat);
+  const nowTop = topForHour(nowHourFloat, startHour);
 
   /**
    * The now indicator is client-only. Rendered on the server it would draw the
@@ -72,11 +118,14 @@ const WeekGrid = ({
   // Every piece of the indicator hangs off this one check. The staff grid gated
   // only the per-column line, so its full-width rule and its gutter badge drew
   // on whatever week you had paged to.
+  // `< endHour`, not `<=`: the end is EXCLUSIVE, and at exactly the end the
+  // line would be drawn on the grid's bottom edge — a rule below the last row
+  // rather than an indicator inside it.
   const showNow =
     mounted &&
     dates.some(date => isSameDay(date, now)) &&
-    nowHourFloat >= hours[0] &&
-    nowHourFloat <= hours[hours.length - 1] + 1;
+    nowHourFloat >= startHour &&
+    nowHourFloat < endHour;
 
   return (
     // Min width keeps the seven columns and the gutter readable on phones; the
@@ -106,7 +155,9 @@ const WeekGrid = ({
 
       <AllDayStrip
         dates={dates}
-        itemsFor={date => eventsFor(date).filter(event => isOutsideWindow(event))}
+        itemsFor={date =>
+          eventsFor(date).filter(event => isOutsideWindow(event, startHour, endHour))
+        }
         onEventClick={onEventClick}
         alwaysShow={alwaysShowAllDay}
         renderEvent={renderEvent}
@@ -124,7 +175,7 @@ const WeekGrid = ({
               <div
                 key={hour}
                 className="absolute right-3 text-xs font-medium text-ink-4 leading-tight whitespace-nowrap"
-                style={{ top: `calc(${topForHour(hour)} + 4px)` }}
+                style={{ top: `calc(${topForHour(hour, startHour)} + 4px)` }}
               >
                 {formatHourLabel(hour)}
               </div>
@@ -133,21 +184,38 @@ const WeekGrid = ({
           </div>
 
           {dates.map((date, dayIdx) => {
-            const timed = eventsFor(date).filter(event => !isOutsideWindow(event));
+            const dayEvents = eventsFor(date);
+            const timed = dayEvents.filter(event => !isOutsideWindow(event, startHour, endHour));
+            // Deadlines are in the strip too — this is the line, not a move.
+            const deadlines = deadlineGroups(dayEvents, startHour, endHour, hourFloat =>
+              topForHour(hourFloat, startHour)
+            );
             return (
               <div key={monthDropId(date)} className="relative border-l border-line">
-                {hours.map(hour => (
+                {hours.map((hour, hourIdx) => (
                   <Fragment key={hour}>
                     {renderCell({
                       dropId: weekDropId(date, hour),
                       date,
                       hour,
                       dayIndex: dayIdx,
-                      className: 'border-b border-line last:border-b-0 transition-colors',
+                      // The last row closes with the grid's own edge rather
+                      // than a rule of its own. `last:border-b-0` said that
+                      // and never did it: the cells are not the column's last
+                      // children — the deadline, block and pill layers come
+                      // after them — so the variant never matched.
+                      className: `${
+                        hourIdx === hours.length - 1 ? '' : 'border-b border-line'
+                      } transition-colors`,
                       style: { height: remForHours(1) },
                     })}
                   </Fragment>
                 ))}
+
+                {/* Behind the blocks, on purpose: a deadline line is context,
+                    and an event running through one should not look cut in
+                    half by it. Its pills go in front, below. */}
+                <DeadlineLines groups={deadlines} />
 
                 {/* Blocks float over the cells: the cells stay droppable and
                     drag-selectable everywhere a block does not cover. */}
@@ -155,7 +223,7 @@ const WeekGrid = ({
                   {timed.map((event, idx) => {
                     const start = new Date(event.start_time);
                     const end = new Date(event.end_time);
-                    const startHour = start.getHours() + start.getMinutes() / 60;
+                    const eventHour = start.getHours() + start.getMinutes() / 60;
                     const durationHours = (end.getTime() - start.getTime()) / (1000 * 60 * 60);
 
                     return (
@@ -163,16 +231,19 @@ const WeekGrid = ({
                         {renderEvent({
                           event,
                           placement: 'week',
-                          // The block's height is the event's duration; `pb-1`
-                          // is inside it (border-box), so the card fills the
+                          // The block's height is the event's duration, clipped
+                          // at the bottom edge of the window — an event that
+                          // runs past midnight stops at the last row rather
+                          // than hanging below the calendar. `pb-1` is inside
+                          // that height (border-box), so the card fills the
                           // duration minus a hairline and two back-to-back
                           // events do not touch. The gap lives here rather than
-                          // in `heightForDuration`, which is the geometry the
-                          // drop targets are measured against.
+                          // in `heightForBlock`, which is the geometry the drop
+                          // targets are measured against.
                           className: 'absolute left-1 right-1 pb-1 pointer-events-auto',
                           style: {
-                            top: topForHour(startHour),
-                            height: heightForDuration(durationHours),
+                            top: topForHour(eventHour, startHour),
+                            height: heightForBlock(eventHour, durationHours, endHour),
                           },
                           children: (
                             <EventCard
@@ -182,6 +253,11 @@ const WeekGrid = ({
                               // The grid sized the block, so the grid is what
                               // tells the card how much room it has to work in.
                               blockHours={durationHours}
+                              // "Show all" in week view: everything this
+                              // viewer's payload carries for the event, starred
+                              // one first. The card decides how many fit.
+                              resources={resourcesForEvent(event)}
+                              linkContext={linkContext}
                             />
                           ),
                         })}
@@ -189,6 +265,11 @@ const WeekGrid = ({
                     );
                   })}
                 </div>
+
+                {/* In FRONT of the blocks: a label behind a block is not a
+                    label. The layer takes no pointer events, so only the pill
+                    itself is in the way of a drop or a drag-to-select. */}
+                <DeadlinePills groups={deadlines} onEventClick={onEventClick} />
 
                 {showNow && isSameDay(date, now) && <NowMarker top={nowTop} />}
               </div>

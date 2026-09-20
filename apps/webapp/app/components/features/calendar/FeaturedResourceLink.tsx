@@ -3,34 +3,20 @@
  *
  * A week column lists everything an event links to; a month cell has room for
  * one line, so an event shows the one thing the instructor starred and nothing
- * otherwise. It goes to the SAME place the link list sends that kind — pages
- * through `PageLink`, so the peek drawer keeps working where its provider is
- * mounted, decks to the slides viewer, assignments to the repositories page —
- * because two links with the same title that land in different places is worse
- * than either one alone.
+ * otherwise. Where that one line GOES is not decided here: it is decided in
+ * `ResourceLink`, along with every other link to the same three kinds of
+ * thing, because two links with the same title that land in different places
+ * are worse than either one alone. Sharing it is also what gives this line the
+ * student's own GitHub issue for a starred assignment — it used to send every
+ * reader to the repositories page.
  *
- * All three branches wear the SAME muted style. They are three different
- * elements only because their destinations differ: an `<a>` inherits the app's
- * green link colour while a `<button>` inherits nothing, so left alone one line
- * looked like two different things depending on which shell drew it.
- *
- * It is a SIBLING of the event's button, never inside it: a link nested in a
- * button is not something a browser can render. It also stops `pointerdown`
- * and `click` from travelling, so clicking it neither starts a drag (dnd-kit's
- * PointerSensor is listening on an ancestor in the staff calendar) nor opens
- * the event modal.
+ * What is left here is the one thing that is particular to the star: a starred
+ * assignment's repository anchor comes off the EVENT, not off the star.
  */
 
-import { NavLink } from 'react-router';
-import {
-  IconClipboardList,
-  IconExternalLink,
-  IconFileText,
-  IconPresentation,
-} from '@tabler/icons-react';
+import ResourceLink, { featuredResource } from './ResourceLink';
+import type { ResourceLinkContext } from './ResourceLink';
 import type { CalendarEventWithLinks, CalendarFeaturedResource } from './types';
-import DraftPill from './DraftPill';
-import { PageLink, usePagePeek } from '~/components/features/pages';
 
 export interface FeaturedResourceLinkProps {
   featured: CalendarFeaturedResource;
@@ -40,133 +26,11 @@ export interface FeaturedResourceLinkProps {
    * is not part of the starred resource itself.
    */
   event: CalendarEventWithLinks;
-  classSlug?: string;
-  rolePrefix?: string;
-  pagesUrl?: string;
-  slidesUrl?: string;
+  context?: ResourceLinkContext;
 }
 
-const ICONS = {
-  page: IconFileText,
-  slide: IconPresentation,
-  assignment: IconClipboardList,
-} as const;
-
-/** What the accessible name calls each kind, so three chips are tellable apart. */
-const KIND_NOUN = {
-  page: 'page',
-  slide: 'slide deck',
-  assignment: 'assignment',
-} as const;
-
-/**
- * Indented under the chip, one line, truncated — a month cell clips overflow.
- *
- * Muted on purpose: the chip above is the event, this is a footnote to it.
- * Stated once and handed to all three branches, so they cannot drift apart.
- *
- * ── WHY THE COLOUR AND UNDERLINE ARE `!important` ───────────────────────────
- * antd's `genLinkStyle` injects a bare `a { color: colorLink; text-decoration:
- * … }` (plus an `a:hover`) into the document, and `colorLink` is this app's
- * accent green. It is UNLAYERED, while Tailwind v4 puts its utilities in
- * `@layer utilities` — and unlayered CSS beats layered CSS whatever the
- * specificity, so a plain `text-ink-2` on an `<a>` lost to a bare type
- * selector. The `!` modifier is what climbs back out of the layer.
- *
- * Only the anchor branch is under that rule, but the marker stays on the
- * shared class: three branches that must look identical should not be styled
- * three different ways, and nothing competes for these properties on the
- * button branch.
- */
-const ROW_CLASS =
-  'flex items-center gap-1 pl-2 pr-1 w-full min-w-0 text-xs text-ink-2! no-underline! rounded ' +
-  'hover:text-ink-0! hover:underline! transition-colors ' +
-  'focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent';
-
-const FeaturedResourceLink = ({
-  featured,
-  event,
-  classSlug = '',
-  rolePrefix = 'student',
-  pagesUrl = 'http://localhost:7100',
-  slidesUrl = '',
-}: FeaturedResourceLinkProps) => {
-  const Icon = ICONS[featured.kind];
-  // Null wherever the peek drawer is not mounted (the /admin shell) — which is
-  // also where a page opens in a new tab, so the ↗ follows the behaviour rather
-  // than the kind, exactly as the link list decides it.
-  const peek = usePagePeek();
-
-  /** "Open page Logistics": the title alone does not say what it is. */
-  const label = `Open ${KIND_NOUN[featured.kind]} ${featured.title}`;
-
-  const body = (newTab: boolean) => (
-    <>
-      <Icon size={12} className="shrink-0" />
-      <span className="truncate">{featured.title}</span>
-      {featured.is_draft && <DraftPill />}
-      {newTab && <IconExternalLink size={11} className="shrink-0 text-ink-3" />}
-    </>
-  );
-
-  // React's synthetic handlers are what dnd-kit's listeners are too, so
-  // stopping propagation here is enough to keep a click off the drag layer.
-  const stop = {
-    onPointerDown: (e: React.PointerEvent) => e.stopPropagation(),
-    onClick: (e: React.MouseEvent) => e.stopPropagation(),
-  };
-
-  if (featured.kind === 'page') {
-    return (
-      <span {...stop} className="block min-w-0">
-        <PageLink
-          pageId={featured.id}
-          title={featured.title}
-          href={`${pagesUrl}/${classSlug}/${featured.id}`}
-          className={ROW_CLASS}
-          ariaLabel={label}
-        >
-          {body(!peek)}
-        </PageLink>
-      </span>
-    );
-  }
-
-  if (featured.kind === 'slide') {
-    return (
-      <a
-        {...stop}
-        href={`${slidesUrl}/${featured.id}`}
-        target="_blank"
-        rel="noopener noreferrer"
-        title={featured.title}
-        aria-label={label}
-        className={ROW_CLASS}
-      >
-        {body(true)}
-      </a>
-    );
-  }
-
-  // The repositories page scrolls to the repository, not to the assignment, so
-  // the anchor comes off the event's own assignment list — the same one the
-  // link list reads. Staff have no repo of their own to deep-link into, and a
-  // student's GitHub issue needs data the month grid is not given, so both get
-  // the fallback destination the link list already falls back to.
-  const repoSlug =
-    (event.assignments ?? []).find(a => a.assignment.id === featured.id)?.repository?.slug ?? '';
-
-  return (
-    <NavLink
-      {...stop}
-      to={`/${rolePrefix}/${classSlug}/repos#${repoSlug}`}
-      title={featured.title}
-      aria-label={label}
-      className={ROW_CLASS}
-    >
-      {body(false)}
-    </NavLink>
-  );
-};
+const FeaturedResourceLink = ({ featured, event, context }: FeaturedResourceLinkProps) => (
+  <ResourceLink resource={featuredResource(featured, event)} context={context} variant="row" />
+);
 
 export default FeaturedResourceLink;

@@ -13,6 +13,7 @@ import EventChip from './EventChip';
 import FeaturedResourceLink from './FeaturedResourceLink';
 import { defaultRenderCell, defaultRenderEvent } from './gridRenderProps';
 import type { RenderCell, RenderEvent } from './gridRenderProps';
+import type { RepositoryAssignmentLinkInfo } from './ResourceLink';
 import type { CalendarEventWithLinks } from './types';
 
 /** How many chips a cell shows before it offers "+N more". */
@@ -52,6 +53,14 @@ interface MonthGridProps {
   rolePrefix?: string;
   pagesUrl?: string;
   slidesUrl?: string;
+  /**
+   * The student's own repository assignments, which turn a starred assignment
+   * into a link to THEIR GitHub issue. Staff loaders do not send them, and
+   * should not: staff have no personal repo in the class, so the repositories
+   * page is the right destination for them.
+   */
+  gitOrgLogin?: string | null;
+  repoAssignmentsByAssignmentId?: Record<string, RepositoryAssignmentLinkInfo | undefined>;
 }
 
 const MonthGrid = ({
@@ -67,7 +76,17 @@ const MonthGrid = ({
   rolePrefix,
   pagesUrl,
   slidesUrl,
+  gitOrgLogin,
+  repoAssignmentsByAssignmentId,
 }: MonthGridProps) => {
+  const linkContext = {
+    classSlug,
+    rolePrefix,
+    pagesUrl,
+    slidesUrl,
+    gitOrgLogin,
+    repoAssignmentsByAssignmentId,
+  };
   const weeks: Date[][] = [];
   for (let i = 0; i < dates.length; i += 7) weeks.push(dates.slice(i, i + 7));
 
@@ -140,10 +159,7 @@ const MonthGrid = ({
                                 <FeaturedResourceLink
                                   featured={event.featured_resource}
                                   event={event}
-                                  classSlug={classSlug}
-                                  rolePrefix={rolePrefix}
-                                  pagesUrl={pagesUrl}
-                                  slidesUrl={slidesUrl}
+                                  context={linkContext}
                                 />
                               )}
                             </div>

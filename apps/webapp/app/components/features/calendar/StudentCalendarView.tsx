@@ -10,20 +10,30 @@
  * to be written twice, and in practice was not.
  */
 
+import { useMemo } from 'react';
 import CalendarShell, { CalendarTypeFilter } from './CalendarShell';
 import WeekGrid from './WeekGrid';
 import MonthGrid from './MonthGrid';
+import { hourRange } from './geometry';
 import { useCalendarNavigation, useEventsByDate } from './useCalendarNavigation';
+import type { RepositoryAssignmentLinkInfo } from './ResourceLink';
 import type { CalendarEventWithLinks } from './types';
 
 interface StudentCalendarViewProps {
   events: CalendarEventWithLinks[];
   onEventClick?: (event: CalendarEventWithLinks) => void;
   onMonthChange?: (year: number, month: number) => void;
-  /** Where a starred resource under a month chip points — see MonthGrid. */
+  /** Where a linked resource points — see MonthGrid. */
   classSlug?: string;
   pagesUrl?: string;
   slidesUrl?: string;
+  /**
+   * The student's own repository assignments. With them, a linked assignment
+   * goes straight to THEIR GitHub issue — the destination the detail modal has
+   * always meant to offer.
+   */
+  gitOrgLogin?: string | null;
+  repoAssignmentsByAssignmentId?: Record<string, RepositoryAssignmentLinkInfo | undefined>;
 }
 
 const StudentCalendarView = ({
@@ -33,9 +43,14 @@ const StudentCalendarView = ({
   classSlug,
   pagesUrl,
   slidesUrl,
+  gitOrgLogin,
+  repoAssignmentsByAssignmentId,
 }: StudentCalendarViewProps) => {
   const nav = useCalendarNavigation(onMonthChange);
   const eventsFor = useEventsByDate(events, nav.selectedTypes);
+  // The whole loaded month, UNFILTERED: the grid must not resize as the reader
+  // pages between its weeks or toggles a type in the legend.
+  const { startHour, endHour } = useMemo(() => hourRange(events), [events]);
 
   return (
     <CalendarShell
@@ -62,6 +77,8 @@ const StudentCalendarView = ({
           rolePrefix="student"
           pagesUrl={pagesUrl}
           slidesUrl={slidesUrl}
+          gitOrgLogin={gitOrgLogin}
+          repoAssignmentsByAssignmentId={repoAssignmentsByAssignmentId}
         />
       ) : (
         <WeekGrid
@@ -69,6 +86,14 @@ const StudentCalendarView = ({
           now={nav.now}
           eventsFor={eventsFor}
           onEventClick={onEventClick}
+          startHour={startHour}
+          endHour={endHour}
+          classSlug={classSlug}
+          rolePrefix="student"
+          pagesUrl={pagesUrl}
+          slidesUrl={slidesUrl}
+          gitOrgLogin={gitOrgLogin}
+          repoAssignmentsByAssignmentId={repoAssignmentsByAssignmentId}
         />
       )}
     </CalendarShell>
