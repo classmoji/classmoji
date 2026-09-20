@@ -33,10 +33,23 @@ describe('building an event’s start and end from one date and two times', () =
     expect(end.getTime() - start.getTime()).toBe(60 * 60 * 1000);
   });
 
-  it('rolls an end EQUAL to the start too', () => {
+  it('does NOT roll an end EQUAL to the start', () => {
+    // Two identical times are a mistake, not a request for a day-long event.
+    // Rolling it would answer the user silently and wrongly; leaving it as a
+    // zero-length range lets the service refuse it and say so.
     const { start, end } = buildEventWindow(new Date(2026, 8, 21), at(9), at(9));
 
-    expect(end.getTime() - start.getTime()).toBe(24 * 60 * 60 * 1000);
+    expect(end.getTime()).toBe(start.getTime());
+    expect(end.getDate()).toBe(21);
+  });
+
+  it('rolls only a real midnight crossing', () => {
+    // One minute earlier than the start is a crossing; the same minute is not.
+    const crossing = buildEventWindow(new Date(2026, 8, 21), at(9), at(8, 59));
+    expect(crossing.end.getDate()).toBe(22);
+
+    const equal = buildEventWindow(new Date(2026, 8, 21), at(9), at(9));
+    expect(equal.end.getDate()).toBe(21);
   });
 
   it('leaves the date it was given alone', () => {

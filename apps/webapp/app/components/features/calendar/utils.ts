@@ -12,9 +12,17 @@ type DateInput = Date | string | number;
  * times — what both event modals collect.
  *
  * The end time is stamped onto the SAME date as the start, so a pairing like
- * 11 PM → 12 AM would describe an event that finishes before it begins. That
- * combination means the next day, so the end rolls forward one date. Pure, so
- * the rule can be tested on its own.
+ * 11 PM → 12 AM would describe an event that finishes before it begins. An end
+ * strictly EARLIER than the start is a midnight crossing, so it rolls forward
+ * one date.
+ *
+ * An end EQUAL to the start does not roll. Two identical times are a mistake,
+ * not a request for a 24-hour event, and turning one into a day-long block
+ * would be a silent answer to something the user has to fix. It passes through
+ * as a zero-length range for the service to refuse, which is what puts the
+ * message on screen.
+ *
+ * Pure, so both halves of that rule can be tested on their own.
  */
 export const buildEventWindow = (
   date: Date,
@@ -27,7 +35,7 @@ export const buildEventWindow = (
   const end = new Date(date);
   end.setHours(endTime.getHours(), endTime.getMinutes(), 0, 0);
 
-  if (end.getTime() <= start.getTime()) {
+  if (end.getTime() < start.getTime()) {
     end.setDate(end.getDate() + 1);
   }
 
