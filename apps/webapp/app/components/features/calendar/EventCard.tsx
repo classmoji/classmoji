@@ -12,7 +12,7 @@ import {
   getEventTypeDarkText,
 } from './utils';
 import { blockLayout } from './geometry';
-import ResourceLink, { RESOURCE_ICONS } from './ResourceLink';
+import ResourceLink, { RESOURCE_ICONS, resourceKey } from './ResourceLink';
 import type { CalendarResource, ResourceKind, ResourceLinkContext } from './ResourceLink';
 import type { CalendarEventWithLinks } from './types';
 
@@ -377,10 +377,7 @@ const EventCard = ({
             }`}
           >
             {visibleChips.map((resource, index) => (
-              <div
-                key={`${resource.kind}-${resource.id}`}
-                className="flex items-center gap-1 min-w-0"
-              >
+              <div key={resourceKey(resource)} className="flex items-center gap-1 min-w-0">
                 <ResourceLink
                   resource={resource}
                   context={linkContext}

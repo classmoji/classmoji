@@ -1,7 +1,7 @@
 import { VideoCameraOutlined, GithubOutlined } from '@ant-design/icons';
 import { IconExternalLink, IconClipboardList } from '@tabler/icons-react';
 import type { CalendarEventWithLinks } from './types';
-import ResourceLink, { resourcesForEvent } from './ResourceLink';
+import ResourceLink, { LIST_LINK_CLASS, resourceKey, resourcesForEvent } from './ResourceLink';
 import type { RepositoryAssignmentLinkInfo, ResourceLinkContext } from './ResourceLink';
 
 interface EventLinksProps {
@@ -61,7 +61,7 @@ const EventLinks = ({
           href={event.meeting_link ?? undefined}
           target="_blank"
           rel="noopener noreferrer"
-          className="flex items-center gap-2 text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300 text-sm"
+          className={LIST_LINK_CLASS}
         >
           <VideoCameraOutlined className="text-lg" />
           <span className="underline">Join Meeting</span>
@@ -75,21 +75,20 @@ const EventLinks = ({
           they have one and to the repositories page where they do not. */}
       {resources.map(resource => (
         <ResourceLink
-          key={`${resource.kind}-${resource.id}`}
+          key={resourceKey(resource)}
           resource={resource}
           context={context}
           variant="list"
+          // The list is starred-first, like the grids. Without the star that
+          // order is unexplained — with it, the row says WHY it is at the top
+          // and what the month view will show.
+          showStar
         />
       ))}
 
       {/* Form close - opens the form (or its responses, for staff) in a new tab */}
       {formUrl && (
-        <a
-          href={formUrl}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="flex items-center gap-2 text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300 text-sm"
-        >
+        <a href={formUrl} target="_blank" rel="noopener noreferrer" className={LIST_LINK_CLASS}>
           <IconClipboardList size={18} className="text-ink-3" />
           <span className="underline">
             {formUrl.endsWith('/responses')
@@ -108,7 +107,7 @@ const EventLinks = ({
           href={event.github_issue_url ?? undefined}
           target="_blank"
           rel="noopener noreferrer"
-          className="flex items-center gap-2 text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300 text-sm"
+          className={LIST_LINK_CLASS}
         >
           <GithubOutlined className="text-lg" />
           <span className="underline">View on GitHub</span>

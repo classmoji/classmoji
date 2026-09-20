@@ -10,6 +10,7 @@ import { describe, expect, it } from 'vitest';
 import ResourceLink, {
   PAGES_URL_FALLBACK,
   resourceDestination,
+  resourceKey,
   resourcesForEvent,
 } from '../ResourceLink';
 import type { CalendarResource, ResourceLinkContext } from '../ResourceLink';
@@ -170,6 +171,52 @@ describe('resourcesForEvent', () => {
     expect(byId['a-1']).toBe(true);
   });
 
+  it('shows the same resource once, however many buckets it arrives in', () => {
+    // A non-recurring event can carry a link written against its NULL-date
+    // bucket AND one written against one of its dates; both surface for the
+    // same occurrence. Twice over that is a duplicated React key, a chip drawn
+    // twice, and a `+N` counting something already on screen.
+    const doubled: CalendarEventWithLinks = {
+      ...event,
+      pages: [
+        { page: { id: 'p-1', title: 'Logistics', is_draft: false } },
+        { page: { id: 'p-1', title: 'Logistics', is_draft: false } },
+      ],
+      slides: [],
+      assignments: [],
+    };
+
+    expect(resourcesForEvent(doubled).map(r => r.id)).toEqual(['p-1']);
+  });
+
+  it('does not confuse a page and a deck that happen to share an id', () => {
+    const sameId: CalendarEventWithLinks = {
+      ...event,
+      pages: [{ page: { id: 'shared', title: 'A page', is_draft: false } }],
+      slides: [{ slide: { id: 'shared', title: 'A deck', is_draft: false } }],
+      assignments: [],
+    };
+
+    expect(resourcesForEvent(sameId).map(resourceKey)).toEqual(['page-shared', 'slide-shared']);
+  });
+
+  it('keeps the star when the duplicate is the starred one', () => {
+    const doubled: CalendarEventWithLinks = {
+      ...event,
+      pages: [
+        { page: { id: 'p-1', title: 'Logistics', is_draft: false } },
+        { page: { id: 'p-1', title: 'Logistics', is_draft: false } },
+      ],
+      slides: [{ slide: { id: 's-1', title: 'Lecture 1', is_draft: false } }],
+      assignments: [],
+      featured_resource: { kind: 'page', id: 'p-1', title: 'Logistics', is_draft: false },
+    };
+    const resources = resourcesForEvent(doubled);
+
+    expect(resources.map(r => r.id)).toEqual(['p-1', 's-1']);
+    expect(resources[0].featured).toBe(true);
+  });
+
   it('is empty for an event with nothing linked to it', () => {
     expect(resourcesForEvent({ ...event, pages: null, slides: null, assignments: null })).toEqual(
       []
@@ -219,9 +266,27 @@ describe('ResourceLink', () => {
     expect(html).toContain('hover:text-ink-0!');
   });
 
-  it('marks a draft for staff', () => {
-    expect(render({ ...page, is_draft: true }, STAFF, 'chip')).toContain('Draft');
-    expect(render(page, STAFF, 'chip')).not.toContain('Draft');
+  it('marks a draft for staff, in the pill and in the name', () => {
+    const draft = render({ ...page, is_draft: true }, STAFF, 'chip');
+    expect(draft).toContain('Draft');
+    // The pill is a visual; the name is what a screen reader gets, and "your
+    // class cannot see this yet" is the whole point of marking it.
+    expect(draft).toContain('aria-label="Open page Logistics (draft)"');
+
+    const published = render(page, STAFF, 'chip');
+    expect(published).not.toContain('Draft');
+    expect(published).toContain('aria-label="Open page Logistics"');
+  });
+
+  it('reads one colour down the modal list, whatever element each row is', () => {
+    // A page is a <button> there (the peek drawer) while a deck and an
+    // assignment are anchors — and antd's unlayered `a { color }` beats a
+    // layered utility, so the three rows read as two colours without the `!`.
+    for (const resource of [page, deck, assignment]) {
+      const html = render(resource, STAFF, 'list');
+      expect(html).toContain('text-blue-600!');
+      expect(html).toContain('dark:text-blue-400!');
+    }
   });
 
   it('stars the featured resource only where a caller asks for it', () => {

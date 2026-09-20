@@ -144,6 +144,12 @@ export const resourceDestination = (
  * The sort is stable, so within each group the service's order survives — and
  * putting the starred one first is what makes the week view agree with the
  * month view about which resource matters most.
+ *
+ * Deduped by kind and id, because the same resource can arrive twice: a link
+ * written against a non-recurring event's NULL-date bucket and a link written
+ * against one of its dates both surface for the same occurrence. Left alone
+ * that is a duplicated React key, a chip drawn twice, and a `+N` counting
+ * something the reader can already see.
  */
 export const resourcesForEvent = (event: CalendarEventWithLinks): CalendarResource[] => {
   const featured = event.featured_resource ?? null;
@@ -175,8 +181,20 @@ export const resourcesForEvent = (event: CalendarEventWithLinks): CalendarResour
     })),
   ];
 
-  return resources.sort((a, b) => Number(b.featured) - Number(a.featured));
+  const seen = new Set<string>();
+  const unique = resources.filter(resource => {
+    const key = resourceKey(resource);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+
+  return unique.sort((a, b) => Number(b.featured) - Number(a.featured));
 };
+
+/** The one identity a resource has, for React keys and for deduping. */
+export const resourceKey = (resource: Pick<CalendarResource, 'kind' | 'id'>): string =>
+  `${resource.kind}-${resource.id}`;
 
 /**
  * The starred resource as a `CalendarResource`. It carries no repository slug
@@ -237,9 +255,17 @@ export type ResourceLinkVariant = 'list' | 'row' | 'chip';
  * Only the anchor branches are under that rule, but the marker stays on the
  * shared class: branches that have to look identical should not be styled two
  * different ways, and nothing competes for these properties on a `<button>`.
+ *
+ * The modal's list needs it as much as the other two: a page link is a
+ * `<button>` there (the peek drawer) while a deck and an assignment are
+ * anchors, so the three rows of one list read as two different colours.
  */
+export const LIST_LINK_CLASS =
+  'flex items-center gap-2 text-sm text-blue-600! hover:text-blue-800! ' +
+  'dark:text-blue-400! dark:hover:text-blue-300!';
+
 const VARIANT_CLASS: Record<ResourceLinkVariant, string> = {
-  list: 'flex items-center gap-2 text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300 text-sm',
+  list: LIST_LINK_CLASS,
   row:
     'flex items-center gap-1 pl-2 pr-1 w-full min-w-0 text-xs text-ink-2! no-underline! rounded ' +
     'hover:text-ink-0! hover:underline! transition-colors ' +
@@ -285,8 +311,14 @@ const ResourceLink = ({ resource, context = {}, variant, showStar = false }: Res
   const peek = usePagePeek();
   const destination = resourceDestination(resource, context);
 
-  /** "Open page Logistics": a truncated title beside an icon names nothing. */
-  const label = `Open ${KIND_NOUN[resource.kind]} ${resource.title}`;
+  /**
+   * "Open page Logistics": a truncated title beside an icon names nothing.
+   * A draft says so in the name as well as in its pill — only staff are ever
+   * handed one, and "your class cannot see this yet" is the whole point of it.
+   */
+  const label = `Open ${KIND_NOUN[resource.kind]} ${resource.title}${
+    resource.is_draft ? ' (draft)' : ''
+  }`;
   const className = VARIANT_CLASS[variant];
   const size = ICON_SIZE[variant];
 
