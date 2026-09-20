@@ -3,6 +3,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 const countMock = vi.fn();
 const findManyMock = vi.fn();
 const upsertMock = vi.fn();
+const updateManyMock = vi.fn();
 
 vi.mock('@classmoji/database', () => ({
   default: () => ({
@@ -10,11 +11,12 @@ vi.mock('@classmoji/database', () => ({
       count: countMock,
       findMany: findManyMock,
       upsert: upsertMock,
+      updateMany: updateManyMock,
     },
   }),
 }));
 
-const { create, getLatePercentage } = await import('../gitRepoAssignment.service.ts');
+const { create, getLatePercentage, recordPush } = await import('../gitRepoAssignment.service.ts');
 
 type Row = {
   closed_at: Date | null;
@@ -163,5 +165,43 @@ describe('create', () => {
         git_repo: true,
       },
     });
+  });
+});
+
+describe('recordPush', () => {
+  beforeEach(() => {
+    findManyMock.mockReset();
+    updateManyMock.mockReset();
+  });
+
+  const pushedAt = new Date('2026-09-20T12:00:00.000Z');
+
+  it('marks only ungraded, published REPO-mode rows submitted, never moving the time backwards', async () => {
+    findManyMock.mockResolvedValue([{ id: 'ra-1' }, { id: 'ra-2' }]);
+    updateManyMock.mockResolvedValue({ count: 2 });
+
+    const touched = await recordPush('gitrepo-1', pushedAt);
+
+    expect(findManyMock).toHaveBeenCalledWith({
+      where: {
+        git_repo_id: 'gitrepo-1',
+        assignment: { type: 'REPO', submission_mode: 'REPO', is_published: true },
+        grades: { none: {} },
+        OR: [{ closed_at: null }, { closed_at: { lt: pushedAt } }],
+      },
+      select: { id: true },
+    });
+    expect(updateManyMock).toHaveBeenCalledWith({
+      where: { id: { in: ['ra-1', 'ra-2'] } },
+      data: { status: 'CLOSED', closed_at: pushedAt },
+    });
+    expect(touched).toEqual([{ id: 'ra-1' }, { id: 'ra-2' }]);
+  });
+
+  it('writes nothing when no row qualifies', async () => {
+    findManyMock.mockResolvedValue([]);
+
+    expect(await recordPush('gitrepo-1', pushedAt)).toEqual([]);
+    expect(updateManyMock).not.toHaveBeenCalled();
   });
 });

@@ -11,6 +11,7 @@ const triggers = {
   memberAdded: vi.fn().mockResolvedValue(undefined),
   newInstall: vi.fn().mockResolvedValue(undefined),
   deleted: vi.fn().mockResolvedValue(undefined),
+  reopened: vi.fn().mockResolvedValue(undefined),
   appUninstalled: vi.fn().mockResolvedValue(undefined),
   appSuspended: vi.fn().mockResolvedValue(undefined),
   appUnsuspended: vi.fn().mockResolvedValue(undefined),
@@ -22,6 +23,7 @@ vi.mock('@classmoji/tasks', () => ({
     memberAddedHandlerTask: { trigger: triggers.memberAdded },
     newInstallationHandlerTask: { trigger: triggers.newInstall },
     repositoryAssignmentDeletedHandlerTask: { trigger: triggers.deleted },
+    repositoryAssignmentReopenedHandlerTask: { trigger: triggers.reopened },
     appUninstalledHandlerTask: { trigger: triggers.appUninstalled },
     appSuspendedHandlerTask: { trigger: triggers.appSuspended },
     appUnsuspendedHandlerTask: { trigger: triggers.appUnsuspended },
@@ -104,6 +106,23 @@ describe('github webhook route', () => {
     expect(triggers.closed).toHaveBeenCalledWith(
       expect.objectContaining({ action: 'closed', issue: { id: 1, number: 7 } })
     );
+  });
+
+  it('triggers the reopened handler for an issue reopen event', async () => {
+    const payload = { action: 'reopened', issue: { id: 1, number: 7 } };
+    const body = JSON.stringify(payload);
+    const res = await app.inject({
+      method: 'POST',
+      url: '/webhooks/callback/github',
+      headers: headersFor('issues', body),
+      payload: body,
+    });
+    expect(res.statusCode).toBe(200);
+    expect(triggers.reopened).toHaveBeenCalledTimes(1);
+    expect(triggers.reopened).toHaveBeenCalledWith(
+      expect.objectContaining({ action: 'reopened', issue: { id: 1, number: 7 } })
+    );
+    expect(triggers.closed).not.toHaveBeenCalled();
   });
 
   it('does not trigger closed handler when payload has no issue', async () => {

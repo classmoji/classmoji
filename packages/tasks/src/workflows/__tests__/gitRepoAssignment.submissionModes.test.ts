@@ -1,0 +1,191 @@
+/**
+ * Submission modes on the assignment release tasks.
+ *
+ * ISSUE mode (the original behaviour) opens a GitHub issue per student repo
+ * and keys the submission row on it. REPO mode opens nothing: the submission
+ * row is created straight away and the push webhook fills in the rest. These
+ * tests pin that REPO mode never reaches GitHub, that a REPO-mode row carries
+ * no issue fields, and that a push records the submission through the
+ * service and refreshes analytics for the rows it touched.
+ */
+
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+const mocks = vi.hoisted(() => ({
+  findFirstGitRepoAssignment: vi.fn(),
+  createGitRepoAssignment: vi.fn(),
+  recordPush: vi.fn(),
+  getGitProvider: vi.fn(),
+  tasksTrigger: vi.fn(),
+  dbTriggerAndWait: vi.fn(),
+}));
+
+vi.mock('@trigger.dev/sdk', () => ({
+  task: (config: unknown) => config,
+  tasks: { trigger: (...a: unknown[]) => mocks.tasksTrigger(...a) },
+  schedules: { task: (config: unknown) => config },
+  logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
+}));
+
+vi.mock('@classmoji/services', () => ({
+  ClassmojiService: {
+    assignment: { findForReleaseByRepository: vi.fn(), findReadyForRelease: vi.fn(), update: vi.fn() },
+    classroomMembership: { findUsersByRole: vi.fn() },
+    organizationTag: { findTeamsByTag: vi.fn() },
+    gitRepo: { findByRepository: vi.fn() },
+    gitRepoAssignment: {
+      findFirst: (...a: unknown[]) => mocks.findFirstGitRepoAssignment(...a),
+      create: (...a: unknown[]) => mocks.createGitRepoAssignment(...a),
+      recordPush: (...a: unknown[]) => mocks.recordPush(...a),
+    },
+  },
+  HelperService: {},
+  getGitProvider: (...a: unknown[]) => mocks.getGitProvider(...a),
+}));
+
+vi.mock('@classmoji/utils', () => ({
+  titleToIdentifier: (title: string) => title.toLowerCase().replace(/\s+/g, '-'),
+}));
+
+vi.mock('../gitRepo.ts', () => ({ createRepositoriesTask: { triggerAndWait: vi.fn() } }));
+
+const workflows = await import('../gitRepoAssignment.ts');
+
+// The GitHub task hands off to the DB task in the same module; stub that
+// handle so the test sees the payload it was given.
+(
+  workflows.createDatabaseRepositoryAssignmentTask as unknown as { triggerAndWait: unknown }
+).triggerAndWait = (...a: unknown[]) => mocks.dbTriggerAndWait(...a);
+
+const runTask = <P>(t: unknown, payload: P) =>
+  (t as { run: (p: P, ctx: unknown) => Promise<unknown> }).run(payload, {
+    ctx: { run: { tags: ['t'] } },
+  });
+
+const ORG = { login: 'acme', provider: 'GITHUB' };
+const STUDENT_REPO = { id: 'gitrepo-1', project_id: 'proj-1' };
+
+beforeEach(() => {
+  for (const m of Object.values(mocks)) m.mockReset();
+  mocks.findFirstGitRepoAssignment.mockResolvedValue(null);
+  mocks.dbTriggerAndWait.mockResolvedValue({ ok: true });
+  mocks.tasksTrigger.mockResolvedValue({ id: 'run-1' });
+});
+
+describe('gh-create_git_repo_assignment in REPO mode', () => {
+  it('creates the submission row without touching GitHub or the project board', async () => {
+    await runTask(workflows.createGithubRepositoryAssignmentTask, {
+      repoName: 'lab-1-alice',
+      assignment: { id: 'a-1', title: 'Lab 1', submission_mode: 'REPO' },
+      studentRepo: STUDENT_REPO,
+      organization: ORG,
+    });
+
+    expect(mocks.getGitProvider).not.toHaveBeenCalled();
+    expect(mocks.dbTriggerAndWait).toHaveBeenCalledTimes(1);
+    const [payload] = mocks.dbTriggerAndWait.mock.calls[0] as [Record<string, unknown>];
+    expect(payload).toMatchObject({ assignment: { id: 'a-1' }, studentRepo: STUDENT_REPO });
+    expect(payload).not.toHaveProperty('id');
+    expect(payload).not.toHaveProperty('issueNumber');
+  });
+
+  it('still respects the idempotency guard', async () => {
+    mocks.findFirstGitRepoAssignment.mockResolvedValue({ id: 'existing' });
+
+    await runTask(workflows.createGithubRepositoryAssignmentTask, {
+      repoName: 'lab-1-alice',
+      assignment: { id: 'a-1', title: 'Lab 1', submission_mode: 'REPO' },
+      studentRepo: STUDENT_REPO,
+      organization: ORG,
+    });
+
+    expect(mocks.dbTriggerAndWait).not.toHaveBeenCalled();
+    expect(mocks.getGitProvider).not.toHaveBeenCalled();
+  });
+
+  it('ISSUE mode (and the default) still goes to GitHub', async () => {
+    const provider = {
+      findIssueByTitle: vi.fn().mockResolvedValue({ id: 'issue-9', number: 9 }),
+      createIssue: vi.fn(),
+      getIssueNodeId: vi.fn().mockResolvedValue('node-9'),
+      addIssueToProject: vi.fn(),
+    };
+    mocks.getGitProvider.mockReturnValue(provider);
+
+    await runTask(workflows.createGithubRepositoryAssignmentTask, {
+      repoName: 'lab-1-alice',
+      assignment: { id: 'a-1', title: 'Lab 1' },
+      studentRepo: STUDENT_REPO,
+      organization: ORG,
+    });
+
+    expect(provider.findIssueByTitle).toHaveBeenCalled();
+    expect(mocks.dbTriggerAndWait.mock.calls[0][0]).toMatchObject({ id: 'issue-9', issueNumber: 9 });
+  });
+});
+
+describe('cf-create_git_repo_assignment', () => {
+  it('writes null issue fields and no id for a REPO-mode row', async () => {
+    await runTask(workflows.createDatabaseRepositoryAssignmentTask, {
+      assignment: { id: 'a-1', title: 'Lab 1', submission_mode: 'REPO' },
+      studentRepo: STUDENT_REPO,
+    });
+
+    expect(mocks.createGitRepoAssignment).toHaveBeenCalledWith({
+      assignment_id: 'a-1',
+      git_repo_id: 'gitrepo-1',
+      provider: 'GITHUB',
+      provider_issue_number: null,
+    });
+  });
+
+  it('keys an ISSUE-mode row on the issue id as before', async () => {
+    await runTask(workflows.createDatabaseRepositoryAssignmentTask, {
+      assignment: { id: 'a-1', title: 'Lab 1' },
+      studentRepo: STUDENT_REPO,
+      id: 'issue-9',
+      issueNumber: 9,
+    });
+
+    expect(mocks.createGitRepoAssignment).toHaveBeenCalledWith({
+      id: 'issue-9',
+      provider_id: 'issue-9',
+      assignment_id: 'a-1',
+      git_repo_id: 'gitrepo-1',
+      provider: 'GITHUB',
+      provider_issue_number: 9,
+    });
+  });
+});
+
+describe('webhook-git_repo_push_handler', () => {
+  it('records the push through the service and refreshes analytics for touched rows', async () => {
+    mocks.recordPush.mockResolvedValue([{ id: 'ra-1' }, { id: 'ra-2' }]);
+
+    const result = await runTask(workflows.repositoryPushHandlerTask, {
+      gitRepoId: 'gitrepo-1',
+      pushedAt: '2026-09-20T12:00:00.000Z',
+    });
+
+    expect(mocks.recordPush).toHaveBeenCalledWith('gitrepo-1', new Date('2026-09-20T12:00:00.000Z'));
+    expect(mocks.tasksTrigger).toHaveBeenCalledTimes(2);
+    expect(mocks.tasksTrigger).toHaveBeenCalledWith(
+      'refresh-repo-analytics',
+      { repositoryAssignmentId: 'ra-1' },
+      { concurrencyKey: 'gitrepo-1' }
+    );
+    expect(result).toEqual({ touched: 2 });
+  });
+
+  it('is a no-op when no REPO-mode row submits through the repo', async () => {
+    mocks.recordPush.mockResolvedValue([]);
+
+    const result = await runTask(workflows.repositoryPushHandlerTask, {
+      gitRepoId: 'gitrepo-1',
+      pushedAt: new Date(),
+    });
+
+    expect(mocks.tasksTrigger).not.toHaveBeenCalled();
+    expect(result).toEqual({ touched: 0 });
+  });
+});

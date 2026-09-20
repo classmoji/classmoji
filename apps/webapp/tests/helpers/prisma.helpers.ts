@@ -203,16 +203,23 @@ export interface SeededStudentSubmission extends SeededRepository {
  * has a real row to render and a spec can assert submission status in the DB.
  *
  * `status` controls whether the submission shows as "Submitted" (CLOSED) or
- * "Not submitted" (OPEN) on the student page.
+ * "Not submitted" (OPEN) on the student page. `submissionMode` picks how the
+ * student submits: ISSUE (the row is a GitHub issue) or REPO (a push is the
+ * submission; the row carries no issue).
  */
 export async function seedStudentSubmission(
   classroomId: string,
   studentId: string,
   title: string,
-  options: { status?: 'OPEN' | 'CLOSED'; gradesReleased?: boolean; moduleId?: string } = {}
+  options: {
+    status?: 'OPEN' | 'CLOSED';
+    gradesReleased?: boolean;
+    moduleId?: string;
+    submissionMode?: 'ISSUE' | 'REPO';
+  } = {}
 ): Promise<SeededStudentSubmission> {
   const prisma = getTestPrisma();
-  const { status = 'OPEN', gradesReleased = false } = options;
+  const { status = 'OPEN', gradesReleased = false, submissionMode = 'ISSUE' } = options;
   const moduleId = options.moduleId ?? (await ensureSeedModule(classroomId)).moduleId;
 
   await prisma.repository
@@ -232,6 +239,7 @@ export async function seedStudentSubmission(
           {
             module_id: moduleId,
             type: 'REPO',
+            submission_mode: submissionMode,
             title: `${title} Assignment`,
             slug: `${title}-assignment`,
             weight: 5,
@@ -263,9 +271,12 @@ export async function seedStudentSubmission(
       git_repo_id: gitRepo.id,
       assignment_id: assignment.id,
       provider: 'GITHUB',
-      provider_id: `test-issue-${uniqueSuffix}`,
-      provider_issue_number: 9001,
+      // A REPO-mode submission has no issue behind it.
+      ...(submissionMode === 'ISSUE'
+        ? { provider_id: `test-issue-${uniqueSuffix}`, provider_issue_number: 9001 }
+        : {}),
       status,
+      ...(status === 'CLOSED' ? { closed_at: new Date() } : {}),
     },
   });
 
@@ -296,16 +307,19 @@ export async function getSubmissionStatus(gitRepoAssignmentId: string): Promise<
 
 /**
  * Force a submission's status in the DB (used to model a student re-submitting
- * via GitHub, which the webapp surfaces but does not itself mutate).
+ * via GitHub, which the webapp surfaces but does not itself mutate). CLOSED
+ * also stamps the submission time (the issue close, or in REPO mode the push
+ * the webhook would have recorded); OPEN clears it.
  */
 export async function setSubmissionStatus(
   gitRepoAssignmentId: string,
-  status: 'OPEN' | 'CLOSED'
+  status: 'OPEN' | 'CLOSED',
+  closedAt: Date = new Date()
 ): Promise<void> {
   const prisma = getTestPrisma();
   await prisma.gitRepoAssignment.update({
     where: { id: gitRepoAssignmentId },
-    data: { status },
+    data: { status, closed_at: status === 'CLOSED' ? closedAt : null },
   });
 }
 
