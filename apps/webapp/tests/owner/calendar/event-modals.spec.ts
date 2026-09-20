@@ -1,3 +1,4 @@
+import type { Locator, Page } from '@playwright/test';
 import { test, expect } from '../../fixtures/auth.fixture';
 import { waitForDataLoad, waitForModal } from '../../helpers/wait.helpers';
 import { getTestPrisma, getClassroomBySlug } from '../../helpers/prisma.helpers';
@@ -79,9 +80,7 @@ test.describe('Add Event Modal', () => {
 
       // The Add modal prefills sensible default start/end times, so Save is enough.
       await Promise.all([
-        page.waitForResponse(
-          r => r.url().includes('/calendar') && r.request().method() === 'POST'
-        ),
+        page.waitForResponse(r => r.url().includes('/calendar') && r.request().method() === 'POST'),
         modal.getByRole('button', { name: 'Save', exact: true }).click(),
       ]);
 
@@ -106,9 +105,7 @@ test.describe('Recurring "Ends" toggle (Add modal)', () => {
     await page.getByRole('checkbox', { name: 'Repeat' }).check();
   });
 
-  test('Ends defaults to Never (no end-date picker shown)', async ({
-    authenticatedPage: page,
-  }) => {
+  test('Ends defaults to Never (no end-date picker shown)', async ({ authenticatedPage: page }) => {
     const modal = page.locator('.ant-modal');
     await expect(modal.getByText('Ends', { exact: true })).toBeVisible();
     await expect(modal.getByRole('radio', { name: 'Never' })).toBeChecked();
@@ -157,5 +154,161 @@ test.describe('Edit Event Modal redesign', () => {
     await expect(page.locator('.ant-drawer-content')).toHaveCount(0);
     await expect(modal.getByRole('button', { name: /Delete/ })).toBeVisible();
     await expect(modal.getByRole('button', { name: 'Save changes' })).toBeVisible();
+  });
+});
+
+/**
+ * The star: which linked resource the month view shows under an event.
+ *
+ * Driven against the seeded, non-recurring "Week 1 Lecture" in the CURRENT
+ * month — the same chip the display specs already rely on being visible, so a
+ * failure here is about the star rather than about a capped month cell. Its
+ * link rows are removed after each test; nothing else is touched.
+ */
+test.describe('Starring a linked resource', () => {
+  /** The seeded lecture in the month the calendar opens on. */
+  async function lectureThisMonth() {
+    const prisma = getTestPrisma();
+    const classroom = await getClassroomBySlug(TEST_CLASSROOM);
+    const now = new Date();
+    const event = await prisma.calendarEvent.findFirst({
+      where: {
+        classroom_id: classroom.id,
+        title: 'Week 1 Lecture',
+        start_time: { gte: new Date(now.getFullYear(), now.getMonth(), 1) },
+      },
+      orderBy: { start_time: 'asc' },
+      select: { id: true },
+    });
+    if (!event) throw new Error('No "Week 1 Lecture" in the current month. Run `npm run db:seed`.');
+    return event;
+  }
+
+  /** Two published pages to link, by the titles the picker searches on. */
+  async function publishedPages() {
+    const prisma = getTestPrisma();
+    const classroom = await getClassroomBySlug(TEST_CLASSROOM);
+    const pages = await prisma.page.findMany({
+      where: { classroom_id: classroom.id, is_draft: false },
+      select: { id: true, title: true },
+      orderBy: { title: 'asc' },
+      take: 2,
+    });
+    if (pages.length < 2) throw new Error('Need two published pages. Run `npm run db:seed`.');
+    return pages;
+  }
+
+  async function clearLinks(eventId: string) {
+    await getTestPrisma().calendarEventPageLink.deleteMany({ where: { event_id: eventId } });
+  }
+
+  /**
+   * Link a page through the picker.
+   *
+   * By test id, not by placeholder: antd draws a Select's placeholder as a span
+   * rather than as an input attribute, so `getByPlaceholder` finds nothing —
+   * and once a tag is in the picker the placeholder is gone anyway.
+   */
+  async function linkPage(page: Page, modal: Locator, title: string) {
+    await modal.getByTestId('calendar-link-pages').click();
+    await page.keyboard.type(title);
+    await page.locator('.ant-select-item-option-active').first().click();
+    await expect(modal.getByRole('button', { name: `Unlink ${title}` })).toBeVisible();
+  }
+
+  test.afterEach(async () => {
+    await clearLinks((await lectureThisMonth()).id);
+  });
+
+  test('a starred page survives a save and shows under the month chip', async ({
+    authenticatedPage: page,
+    testOrg,
+  }) => {
+    const [linked] = await publishedPages();
+    await page.goto(`/admin/${testOrg}/calendar`);
+    await waitForDataLoad(page);
+    await page.getByRole('button', { name: 'Month', exact: true }).click();
+
+    await page.getByRole('button', { name: 'Week 1 Lecture' }).first().click();
+    const modal = await waitForModal(page, /Edit event/i);
+
+    await linkPage(page, modal, linked.title);
+
+    const star = modal.getByRole('button', { name: `Show ${linked.title} in month view` });
+    await expect(star).toHaveAttribute('aria-pressed', 'false');
+    await star.click();
+    await expect(star).toHaveAttribute('aria-pressed', 'true');
+
+    await Promise.all([
+      page.waitForResponse(r => r.url().includes('/calendar') && r.request().method() === 'POST'),
+      modal.getByRole('button', { name: 'Save changes' }).click(),
+    ]);
+
+    // The month cell draws the starred page under the event chip.
+    await expect(page.getByRole('link', { name: linked.title }).first()).toBeVisible({
+      timeout: 10000,
+    });
+
+    // Reopening finds the star where it was left.
+    await page.getByRole('button', { name: 'Week 1 Lecture' }).first().click();
+    const reopened = await waitForModal(page, /Edit event/i);
+    await expect(
+      reopened.getByRole('button', { name: `Show ${linked.title} in month view` })
+    ).toHaveAttribute('aria-pressed', 'true');
+  });
+
+  test('starring a second resource clears the first', async ({
+    authenticatedPage: page,
+    testOrg,
+  }) => {
+    const [first, second] = await publishedPages();
+    await page.goto(`/admin/${testOrg}/calendar`);
+    await waitForDataLoad(page);
+    await page.getByRole('button', { name: 'Month', exact: true }).click();
+
+    await page.getByRole('button', { name: 'Week 1 Lecture' }).first().click();
+    const modal = await waitForModal(page, /Edit event/i);
+
+    for (const p of [first, second]) {
+      await linkPage(page, modal, p.title);
+    }
+
+    const firstStar = modal.getByRole('button', { name: `Show ${first.title} in month view` });
+    const secondStar = modal.getByRole('button', { name: `Show ${second.title} in month view` });
+
+    await firstStar.click();
+    await expect(firstStar).toHaveAttribute('aria-pressed', 'true');
+
+    // Only one per date, so this has to take the star off the first.
+    await secondStar.click();
+    await expect(secondStar).toHaveAttribute('aria-pressed', 'true');
+    await expect(firstStar).toHaveAttribute('aria-pressed', 'false');
+
+    // And clicking the starred one again leaves nothing starred.
+    await secondStar.click();
+    await expect(secondStar).toHaveAttribute('aria-pressed', 'false');
+    await expect(firstStar).toHaveAttribute('aria-pressed', 'false');
+  });
+
+  test('clicking a star does not open the picker dropdown', async ({
+    authenticatedPage: page,
+    testOrg,
+  }) => {
+    // rc-select wraps a custom tag in a span whose mousedown toggles the
+    // dropdown, so the star has to stop that event, not just the click.
+    const [linked] = await publishedPages();
+    await page.goto(`/admin/${testOrg}/calendar`);
+    await waitForDataLoad(page);
+    await page.getByRole('button', { name: 'Month', exact: true }).click();
+
+    await page.getByRole('button', { name: 'Week 1 Lecture' }).first().click();
+    const modal = await waitForModal(page, /Edit event/i);
+
+    await linkPage(page, modal, linked.title);
+    await page.keyboard.press('Escape');
+    await expect(page.locator('.ant-select-dropdown:visible')).toHaveCount(0);
+
+    await modal.getByRole('button', { name: `Show ${linked.title} in month view` }).click();
+    await expect(page.locator('.ant-select-dropdown:visible')).toHaveCount(0);
   });
 });

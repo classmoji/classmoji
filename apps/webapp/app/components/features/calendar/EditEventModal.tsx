@@ -569,6 +569,9 @@ const EditEventModal = ({
                     <Select
                       mode="multiple"
                       placeholder="Link pages"
+                      // The placeholder is a span in antd, not an input attribute,
+                      // so a spec cannot find this picker by it.
+                      data-testid="calendar-link-pages"
                       value={linkedPageIds}
                       onChange={ids => {
                         setLinkedPageIds(ids);
@@ -591,6 +594,9 @@ const EditEventModal = ({
                     <Select
                       mode="multiple"
                       placeholder="Link slide decks"
+                      // The placeholder is a span in antd, not an input attribute,
+                      // so a spec cannot find this picker by it.
+                      data-testid="calendar-link-slides"
                       value={linkedSlideIds}
                       onChange={ids => {
                         setLinkedSlideIds(ids);
@@ -613,6 +619,9 @@ const EditEventModal = ({
                     <Select
                       mode="multiple"
                       placeholder="Link assignments"
+                      // The placeholder is a span in antd, not an input attribute,
+                      // so a spec cannot find this picker by it.
+                      data-testid="calendar-link-assignments"
                       value={linkedAssignmentIds}
                       onChange={ids => {
                         setLinkedAssignmentIds(ids);
