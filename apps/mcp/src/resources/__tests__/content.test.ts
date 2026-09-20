@@ -22,10 +22,14 @@
  * quiz data is read; and a NON-Response failure is not laundered into
  * "you need Pro".
  *
- * U5: calendar.getClassroomCalendar rows spread `...event`, carrying the raw
- * pageLinks/slideLinks include (UNFILTERED — draft page/slide titles) plus
- * overrides. The resource must emit an explicit allowlist so students never
- * receive draft/unpublished linked-content titles.
+ * U5: the calendar resource emits an explicit allowlist rather than the service
+ * row it was handed. Two things are pinned below: the allowlist names the keys
+ * that may leave this server, and it re-applies the staff-only rule to the
+ * linked content it emits — so a row arriving with a draft page, a draft deck
+ * or an unpublished assignment still yields a student payload without them.
+ * The service is told which viewer it is answering (`canSeeDrafts`), and that
+ * wiring is asserted here too; what the service does with it is pinned in
+ * packages/services/…/calendar.displayShape.test.ts.
  *
  * `@classmoji/services` is mocked (factory idiom) so the guard/shaping
  * decisions run for real against hand-built rows.
@@ -158,9 +162,12 @@ describe('quizzes resource Pro gate (A3)', () => {
 });
 
 describe('calendar resource allowlist shaping (U5)', () => {
-  /** A raw expanded-event row exactly as the service returns it: the `...event`
-   * spread keeps the UNFILTERED pageLinks/slideLinks include (draft titles!)
-   * next to the draft-filtered display arrays. */
+  /**
+   * An expanded-event row, deliberately built with MORE on it than the service
+   * sends today — the stored link relations and the override rows alongside the
+   * display arrays. The allowlist has to name what it emits, so nothing here
+   * reaches the payload merely by being present on the row.
+   */
   const RAW_EVENT = {
     id: 'event-1',
     classroom_id: 'class-1',
@@ -188,7 +195,7 @@ describe('calendar resource allowlist shaping (U5)', () => {
     assignments: [],
   };
 
-  it('strips raw link includes and draft titles from the student payload', async () => {
+  it('emits only the allowlisted keys, and no draft titles, for a student', async () => {
     getClassroomCalendar.mockResolvedValue([RAW_EVENT]);
 
     const result = (await calendarResource.handler(
@@ -197,17 +204,90 @@ describe('calendar resource allowlist shaping (U5)', () => {
       new URL('classmoji://x')
     )) as { events: Array<Record<string, unknown>> };
 
-    // No draft/unpublished linked-content title anywhere in the payload.
+    // No unpublished linked-content title anywhere in the payload.
     expect(JSON.stringify(result)).not.toContain('SECRET');
     const [event] = result.events;
-    // Raw service internals must not ride along.
-    for (const leaked of ['pageLinks', 'slideLinks', 'assignmentLinks', 'overrides']) {
-      expect(event).not.toHaveProperty(leaked);
+    // Service-side internals are not part of the allowlist.
+    for (const internal of ['pageLinks', 'slideLinks', 'assignmentLinks', 'overrides']) {
+      expect(event).not.toHaveProperty(internal);
     }
     // …while the published display content survives.
     expect(event.pages).toEqual([{ id: 'p-pub', title: 'Published Page' }]);
     expect(event.title).toBe('Lecture 1');
     expect(event.creator).toEqual({ id: 'owner-1', name: 'Prof', login: 'prof' });
+  });
+
+  it('tells the service which viewer it is answering', async () => {
+    // The service builds its display arrays for that viewer; this resource then
+    // narrows again. Both passes have to agree about who is asking.
+    getClassroomCalendar.mockResolvedValue([]);
+
+    await calendarResource.handler({ org: 'o', slug: 's' }, studentCtx(), new URL('classmoji://x'));
+    expect(getClassroomCalendar).toHaveBeenLastCalledWith(
+      'class-1',
+      expect.any(Date),
+      expect.any(Date),
+      'student-1',
+      false,
+      false,
+      { canSeeDrafts: false }
+    );
+
+    await calendarResource.handler({ org: 'o', slug: 's' }, ownerCtx(), new URL('classmoji://x'));
+    expect(getClassroomCalendar).toHaveBeenLastCalledWith(
+      'class-1',
+      expect.any(Date),
+      expect.any(Date),
+      null,
+      false,
+      true,
+      { canSeeDrafts: true }
+    );
+  });
+
+  it('drops an unpublished assignment link for a student and keeps it for staff', async () => {
+    const rows = [
+      {
+        ...RAW_EVENT,
+        assignments: [
+          {
+            assignment: { id: 'a-pub', title: 'Published HW', slug: 'hw', is_published: true },
+            repository: { id: 'r1', title: 'Homework', slug: 'hw', is_published: true },
+          },
+          {
+            assignment: {
+              id: 'a-draft',
+              title: 'SECRET Unpublished HW',
+              slug: 'hw2',
+              is_published: false,
+            },
+            repository: { id: 'r1', title: 'Homework', slug: 'hw', is_published: true },
+          },
+        ],
+      },
+    ];
+
+    getClassroomCalendar.mockResolvedValue(rows);
+    const studentResult = (await calendarResource.handler(
+      { org: 'o', slug: 's' },
+      studentCtx(),
+      new URL('classmoji://x')
+    )) as { events: Array<{ assignments: Array<{ assignment: { id: string } }> }> };
+
+    expect(studentResult.events[0].assignments.map(a => a.assignment.id)).toEqual(['a-pub']);
+    expect(JSON.stringify(studentResult)).not.toContain('SECRET');
+
+    getClassroomCalendar.mockResolvedValue(rows);
+    const staffResult = (await calendarResource.handler(
+      { org: 'o', slug: 's' },
+      ownerCtx(),
+      new URL('classmoji://x')
+    )) as { events: Array<{ assignments: Array<{ assignment: { id: string } }> }> };
+
+    expect(staffResult.events[0].assignments.map(a => a.assignment.id)).toEqual([
+      'a-pub',
+      'a-draft',
+    ]);
   });
 
   it('defensively drops draft-flagged display entries for students', async () => {

@@ -54,10 +54,15 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
       end,
       null, // userId not needed for assistant
       true, // includeRawLinks for editing UI
-      true // includeUnpublished to see draft/unpublished assignments
-      // canManageForms deliberately left at its false default: the forms
-      // responses view is OWNER|TEACHER only, so an assistant's form-close
-      // event links to the form itself rather than to a 403.
+      true, // includeUnpublished to see draft/unpublished assignments
+      {
+        // Draft pages/decks and links to unpublished assignments are shown to
+        // assistants too — they teach from the same material.
+        canSeeDrafts: true,
+        // canManageForms deliberately left at its false default: the forms
+        // responses view is OWNER|TEACHER only, so an assistant's form-close
+        // event links to the form itself rather than to a 403.
+      }
     );
   } catch (error: unknown) {
     console.error(

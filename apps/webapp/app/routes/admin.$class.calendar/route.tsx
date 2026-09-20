@@ -62,9 +62,14 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
       null, // userId not needed for admin
       true, // includeRawLinks for editing UI
       true, // includeUnpublished to see draft/unpublished assignments
-      // Form-close events link to the responses view only for OWNER/TEACHER —
-      // this route also admits ASSISTANT, and that page refuses them.
-      { canManageForms: isAdmin }
+      {
+        // Form-close events link to the responses view only for OWNER/TEACHER —
+        // this route also admits ASSISTANT, and that page refuses them.
+        canManageForms: isAdmin,
+        // Draft pages/decks and links to unpublished assignments are shown to
+        // every role this loader admits — OWNER, TEACHER and ASSISTANT alike.
+        canSeeDrafts: true,
+      }
     );
   } catch (error: unknown) {
     console.error(
