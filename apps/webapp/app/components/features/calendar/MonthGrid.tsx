@@ -1,0 +1,137 @@
+/**
+ * The month grid: six rows of seven day cells, each holding up to three chips.
+ *
+ * Presentational and role-blind. The staff calendar makes the cells droppable
+ * and the chips draggable through the two render props; nothing in here knows
+ * that dragging exists.
+ */
+
+import { Fragment } from 'react';
+import { monthDropId } from './geometry';
+import { DAY_LABELS, eventKey, isCurrentMonth, isToday } from './utils';
+import EventChip from './EventChip';
+import { defaultRenderCell, defaultRenderEvent } from './gridRenderProps';
+import type { RenderCell, RenderEvent } from './gridRenderProps';
+import type { CalendarEventWithLinks } from './types';
+
+/** How many chips a cell shows before it offers "+N more". */
+export const MONTH_CELL_CAP = 3;
+
+interface MonthGridProps {
+  /** The 42 cells of the month on screen, padded from both neighbours. */
+  dates: Date[];
+  /** Which month is "this" one; the padding days are drawn back. */
+  currentDate: Date;
+  eventsFor: (date: Date) => CalendarEventWithLinks[];
+  onEventClick?: (event: CalendarEventWithLinks) => void;
+  /**
+   * Where a cell's "+N more" goes: week view, opened on that day. Without it
+   * the overflow count is not offered as a control at all, rather than being
+   * offered as a button that does nothing.
+   */
+  onShowMore?: (date: Date) => void;
+  renderEvent?: RenderEvent;
+  renderCell?: RenderCell;
+}
+
+const MonthGrid = ({
+  dates,
+  currentDate,
+  eventsFor,
+  onEventClick,
+  onShowMore,
+  renderEvent = defaultRenderEvent,
+  renderCell = defaultRenderCell,
+}: MonthGridProps) => {
+  const weeks: Date[][] = [];
+  for (let i = 0; i < dates.length; i += 7) weeks.push(dates.slice(i, i + 7));
+
+  return (
+    // Hold a minimum width on phones and let the shell scroll horizontally,
+    // rather than squeezing seven columns into nothing.
+    <div className="min-w-[44rem]">
+      <div className="grid grid-cols-7 border-b border-line">
+        {DAY_LABELS.map(day => (
+          <div
+            key={day}
+            className="py-3 text-center text-xs font-semibold tracking-[0.16em] text-ink-4"
+          >
+            {day}
+          </div>
+        ))}
+      </div>
+
+      <div>
+        {weeks.map((week, weekIdx) => (
+          <div key={weekIdx} className="grid grid-cols-7 border-b border-line last:border-b-0">
+            {week.map(date => {
+              const dayEvents = eventsFor(date);
+              const inMonth = isCurrentMonth(date, currentDate);
+              const isDayToday = isToday(date);
+              const visible = dayEvents.slice(0, MONTH_CELL_CAP);
+              const overflow = dayEvents.length - visible.length;
+              const dropId = monthDropId(date);
+
+              return (
+                <Fragment key={dropId}>
+                  {renderCell({
+                    dropId,
+                    date,
+                    className: `min-h-[120px] p-2 border-l border-line first:border-l-0 flex flex-col gap-1 overflow-hidden transition-colors ${
+                      inMonth ? '' : 'bg-stone-50/70 dark:bg-neutral-900/40'
+                    }`,
+                    children: (
+                      <>
+                        <div className="flex justify-end">
+                          <span
+                            className={`inline-flex items-center justify-center w-7 h-7 rounded-full text-xs font-semibold ${
+                              isDayToday
+                                ? 'text-white'
+                                : inMonth
+                                  ? 'text-ink-1'
+                                  : 'text-gray-400 dark:text-gray-600'
+                            }`}
+                            style={isDayToday ? { backgroundColor: 'var(--accent)' } : undefined}
+                          >
+                            {date.getDate()}
+                          </span>
+                        </div>
+
+                        <div className="flex flex-col gap-1 min-w-0">
+                          {visible.map((event, idx) => (
+                            <Fragment key={eventKey(event, idx)}>
+                              {renderEvent({
+                                event,
+                                placement: 'month',
+                                className: 'min-w-0',
+                                children: <EventChip event={event} onClick={onEventClick} />,
+                              })}
+                            </Fragment>
+                          ))}
+                          {overflow > 0 &&
+                            (onShowMore ? (
+                              <button
+                                type="button"
+                                onClick={() => onShowMore(date)}
+                                className="text-xs text-ink-3 hover:text-ink-1 text-left pl-1 rounded focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-accent"
+                              >
+                                +{overflow} more
+                              </button>
+                            ) : (
+                              <span className="text-xs text-ink-3 pl-1">+{overflow} more</span>
+                            ))}
+                        </div>
+                      </>
+                    ),
+                  })}
+                </Fragment>
+              );
+            })}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+};
+
+export default MonthGrid;
