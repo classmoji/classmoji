@@ -107,7 +107,6 @@ interface DroppableCellProps {
   id: string;
   children?: React.ReactNode;
   className: string;
-  onClick?: () => void;
   onMouseDown?: (e: React.MouseEvent) => void;
   onMouseEnter?: () => void;
 }
@@ -116,7 +115,6 @@ const DroppableCell = ({
   id,
   children,
   className,
-  onClick,
   onMouseDown,
   onMouseEnter,
 }: DroppableCellProps) => {
@@ -126,7 +124,6 @@ const DroppableCell = ({
     <div
       ref={setNodeRef}
       className={`${className} ${isOver ? '!bg-blue-50 dark:!bg-blue-900/20' : ''}`}
-      onClick={onClick}
       onMouseDown={onMouseDown}
       onMouseEnter={onMouseEnter}
     >
@@ -138,7 +135,6 @@ const DroppableCell = ({
 interface CourseCalendarProps {
   events: CalendarEventWithLinks[];
   onEventClick?: ((event: CalendarEventWithLinks) => void) | null;
-  onCellClick?: ((date: Date) => void) | null;
   onEventDrop?: ((event: CalendarEventWithLinks, newStart: Date, newEnd: Date) => void) | null;
   onDeadlineDrop?: ((event: CalendarEventWithLinks, newStart: Date) => void) | null;
   onMonthChange?: ((year: number, month: number) => void) | null;
@@ -151,7 +147,6 @@ interface CourseCalendarProps {
 const CourseCalendar = ({
   events,
   onEventClick,
-  onCellClick,
   onEventDrop,
   onDeadlineDrop,
   onMonthChange,
@@ -363,11 +358,8 @@ const CourseCalendar = ({
                     key={dayIdx}
                     id={dropId}
                     className={`min-h-[120px] p-2 border-r border-gray-200 dark:border-neutral-700 last:border-r-0 transition-colors overflow-hidden ${
-                      onCellClick
-                        ? 'cursor-pointer hover:bg-gray-50 dark:hover:bg-neutral-800/50'
-                        : ''
-                    } ${!isInCurrentMonth ? 'bg-gray-50/50 dark:bg-neutral-900/50' : ''}`}
-                    onClick={() => onCellClick?.(date)}
+                      !isInCurrentMonth ? 'bg-gray-50/50 dark:bg-neutral-900/50' : ''
+                    }`}
                   >
                     {/* Date number */}
                     <div className="flex items-center justify-end mb-1">
@@ -624,11 +616,6 @@ const CourseCalendar = ({
                             ? () => setDragSelect(s => (s ? { ...s, hoverHour: hour } : s))
                             : undefined
                         }
-                        onClick={() => {
-                          const cellDate = new Date(date);
-                          cellDate.setHours(hour, 0, 0, 0);
-                          onCellClick?.(cellDate);
-                        }}
                       />
                     );
                   })}

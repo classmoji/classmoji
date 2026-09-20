@@ -7,11 +7,6 @@ import type { CalendarEventWithLinks } from './types';
 /** A value that can be converted to a Date via `new Date(value)` */
 type DateInput = Date | string | number;
 
-interface RecurrenceRule {
-  days: string[];
-  until?: string;
-}
-
 /**
  * Get day name from date (lowercase)
  */
@@ -48,17 +43,6 @@ export const formatDate = (date: DateInput) => {
 };
 
 /**
- * Format full date (e.g., "December 17, 2025")
- */
-export const formatFullDate = (date: DateInput) => {
-  return new Intl.DateTimeFormat('en-US', {
-    month: 'long',
-    day: 'numeric',
-    year: 'numeric',
-  }).format(new Date(date));
-};
-
-/**
  * Get week dates (Sunday to Saturday) for a given date
  */
 export const getWeekDates = (date: DateInput) => {
@@ -80,80 +64,12 @@ export const getWeekDates = (date: DateInput) => {
 };
 
 /**
- * Get start and end of week
- */
-export const getWeekRange = (date: DateInput) => {
-  const dates = getWeekDates(date);
-  const start = new Date(dates[0]);
-  start.setHours(0, 0, 0, 0);
-
-  const end = new Date(dates[6]);
-  end.setHours(23, 59, 59, 999);
-
-  return { start, end };
-};
-
-/**
  * Add weeks to a date
  */
 export const addWeeks = (date: DateInput, weeks: number) => {
   const d = new Date(date);
   d.setDate(d.getDate() + weeks * 7);
   return d;
-};
-
-/**
- * Get color class for event type
- */
-export const getEventTypeColor = (eventType: string) => {
-  const colors: Record<string, string> = {
-    OFFICE_HOURS: 'bg-violet-50 dark:bg-violet-900/20 border-violet-200 dark:border-violet-700',
-    LECTURE: 'bg-sky-50 dark:bg-sky-900/20 border-sky-200 dark:border-sky-700',
-    LAB: 'bg-teal-50 dark:bg-teal-900/20 border-teal-200 dark:border-teal-700',
-    SECTION: 'bg-teal-50 dark:bg-teal-900/20 border-teal-200 dark:border-teal-700',
-    ASSESSMENT: 'bg-amber-50 dark:bg-amber-900/20 border-amber-200 dark:border-amber-700',
-    REVIEW_SESSION: 'bg-orange-50 dark:bg-orange-900/20 border-orange-200 dark:border-orange-700',
-    HOLIDAY: 'bg-gray-50 dark:bg-neutral-900/20 border-gray-200 dark:border-neutral-700',
-    DEADLINE: 'bg-rose-50 dark:bg-rose-900/20 border-rose-200 dark:border-rose-700',
-    OTHER: 'bg-gray-50 dark:bg-neutral-900/20 border-gray-200 dark:border-neutral-700',
-  };
-  return colors[eventType] || colors.OTHER;
-};
-
-/**
- * Get text color class for event type
- */
-export const getEventTypeTextColor = (eventType: string) => {
-  const colors: Record<string, string> = {
-    OFFICE_HOURS: 'text-violet-700 dark:text-violet-300',
-    LECTURE: 'text-sky-700 dark:text-sky-300',
-    LAB: 'text-teal-700 dark:text-teal-300',
-    SECTION: 'text-teal-700 dark:text-teal-300',
-    ASSESSMENT: 'text-amber-700 dark:text-amber-300',
-    REVIEW_SESSION: 'text-orange-700 dark:text-orange-300',
-    HOLIDAY: 'text-gray-700 dark:text-gray-300',
-    DEADLINE: 'text-rose-700 dark:text-rose-300',
-    OTHER: 'text-gray-700 dark:text-gray-300',
-  };
-  return colors[eventType] || colors.OTHER;
-};
-
-/**
- * Get badge color for event type
- */
-export const getEventTypeBadgeColor = (eventType: string) => {
-  const colors: Record<string, string> = {
-    OFFICE_HOURS: 'purple',
-    LECTURE: 'cyan',
-    LAB: 'cyan',
-    SECTION: 'cyan',
-    ASSESSMENT: 'orange',
-    REVIEW_SESSION: 'orange',
-    HOLIDAY: 'default',
-    DEADLINE: 'magenta',
-    OTHER: 'default',
-  };
-  return colors[eventType] || 'default';
 };
 
 /**
@@ -172,35 +88,6 @@ export const getEventTypeLabel = (eventType: string) => {
     OTHER: 'Other',
   };
   return labels[eventType] || 'Event';
-};
-
-/**
- * Calculate grid position for event in weekly calendar
- * Returns top and height percentages based on time
- */
-export const getEventGridPosition = (
-  startTime: DateInput,
-  endTime: DateInput,
-  dayStartHour = 0,
-  dayEndHour = 24
-) => {
-  const start = new Date(startTime);
-  const end = new Date(endTime);
-
-  const startMinutes = start.getHours() * 60 + start.getMinutes();
-  const endMinutes = end.getHours() * 60 + end.getMinutes();
-
-  const dayStartMinutes = dayStartHour * 60;
-  const dayEndMinutes = dayEndHour * 60;
-  const dayDuration = dayEndMinutes - dayStartMinutes;
-
-  const top = ((startMinutes - dayStartMinutes) / dayDuration) * 100;
-  const height = ((endMinutes - startMinutes) / dayDuration) * 100;
-
-  return {
-    top: Math.max(0, Math.min(100, top)),
-    height: Math.max(0, Math.min(100 - top, height)),
-  };
 };
 
 /**
@@ -243,16 +130,6 @@ export const isEventNow = (event: CalendarEventWithLinks) => {
 };
 
 /**
- * Check if event is upcoming (within next 24 hours)
- */
-export const isEventUpcoming = (event: CalendarEventWithLinks) => {
-  const now = new Date();
-  const start = new Date(event.start_time);
-  const tomorrow = new Date(now.getTime() + 24 * 60 * 60 * 1000);
-  return start > now && start < tomorrow;
-};
-
-/**
  * Get duration in minutes
  */
 export const getEventDuration = (event: CalendarEventWithLinks) => {
@@ -288,52 +165,11 @@ export const isSameDay = (date1: DateInput, date2: DateInput) => {
 };
 
 /**
- * Get time slots for calendar grid (hourly)
- */
-export const getTimeSlots = (startHour = 0, endHour = 24) => {
-  const slots = [];
-  for (let hour = startHour; hour < endHour; hour++) {
-    const date = new Date();
-    date.setHours(hour, 0, 0, 0);
-    slots.push({
-      hour,
-      label: formatTime(date),
-    });
-  }
-  return slots;
-};
-
-/**
  * Filter events by type
  */
 export const filterEventsByType = (events: CalendarEventWithLinks[], types: string[]) => {
   if (!types || types.length === 0) return events;
   return events.filter((event: CalendarEventWithLinks) => types.includes(event.event_type));
-};
-
-/**
- * Get recurrence rule display text
- */
-export const getRecurrenceText = (recurrenceRule: RecurrenceRule | null) => {
-  if (!recurrenceRule || !recurrenceRule.days) return '';
-
-  const { days, until } = recurrenceRule;
-  const dayLabels = {
-    sunday: 'Sun',
-    monday: 'Mon',
-    tuesday: 'Tue',
-    wednesday: 'Wed',
-    thursday: 'Thu',
-    friday: 'Fri',
-    saturday: 'Sat',
-  };
-
-  const dayNames = days
-    .map((d: string) => (dayLabels as Record<string, string>)[d] || d)
-    .join(', ');
-  const untilDate = until ? formatFullDate(new Date(until)) : '';
-
-  return `Repeats ${dayNames}${untilDate ? ` until ${untilDate}` : ''}`;
 };
 
 /**
@@ -362,23 +198,6 @@ export const getMonthDates = (date: DateInput) => {
   }
 
   return dates;
-};
-
-/**
- * Get month range (start and end dates)
- */
-export const getMonthRange = (date: DateInput) => {
-  const d = new Date(date);
-  const year = d.getFullYear();
-  const month = d.getMonth();
-
-  const start = new Date(year, month, 1);
-  start.setHours(0, 0, 0, 0);
-
-  const end = new Date(year, month + 1, 0);
-  end.setHours(23, 59, 59, 999);
-
-  return { start, end };
 };
 
 /**
