@@ -15,6 +15,7 @@ import { ActionTypes } from '~/constants';
 import { useCallout } from '@classmoji/ui-components';
 import { useGlobalFetcher } from '~/hooks';
 import { openRepositoryAssignmentInGithub } from '~/utils/helpers.client';
+import { isScoreScheme } from '@classmoji/utils';
 import type { AssignmentRowData } from '~/components/features/assignments/AssignmentsTable';
 import ImportedBadge from './ImportedBadge';
 import GradeBadges from '~/components/features/grading/GradeBadges';
@@ -127,6 +128,15 @@ const SubmissionsTable = ({
 
   const isIndividual = repositoryType === 'INDIVIDUAL';
   const isPushMode = assignment.submission_mode === 'REPO';
+  // On a numeric scale the grade control is the score field itself, so it
+  // stays in the Grade column; on an emoji scale the picker is an action.
+  const numericScale = isScoreScheme(Object.keys(emojiMappings));
+  const grader = (s: SubmissionRow) => (
+    <EmojiGrader
+      repositoryAssignment={s as Parameters<typeof EmojiGrader>[0]['repositoryAssignment']}
+      emojiMappings={emojiMappings}
+    />
+  );
   // Only surface the "Imported" column when at least one repo carries imported data.
   const anyImported = repos.some(r => r.metadata != null && typeof r.metadata === 'object');
 
@@ -326,10 +336,7 @@ const SubmissionsTable = ({
         return (
           <div className="flex items-center gap-4">
             <GradeBadges grades={s.grades} emojiMappings={emojiMappings} />
-            <EmojiGrader
-              repositoryAssignment={s as Parameters<typeof EmojiGrader>[0]['repositoryAssignment']}
-              emojiMappings={emojiMappings}
-            />
+            {numericScale && grader(s)}
           </div>
         );
       },
@@ -353,6 +360,7 @@ const SubmissionsTable = ({
             }
             hideViewText
           >
+            {!numericScale && grader(s)}
             <LateOverrideButton
               repositoryAssignment={
                 s as unknown as Parameters<typeof LateOverrideButton>[0]['repositoryAssignment']
