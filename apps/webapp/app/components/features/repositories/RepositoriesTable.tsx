@@ -1,4 +1,4 @@
-import { forwardRef, useMemo, useState } from 'react';
+import { forwardRef, useState } from 'react';
 import { Dropdown, Table, Tag } from 'antd';
 import type { MenuProps } from 'antd';
 import {
@@ -100,21 +100,8 @@ const RepositoriesTable = ({
   bare = false,
 }: RepositoriesTableProps) => {
   // Controlled expansion so the folder icon can react to expanded state.
-  // Default to fully expanded so the structure is visible.
-  const allExpandableKeys = useMemo(() => {
-    const keys: string[] = [];
-    repositories.forEach(r => {
-      if ((r.assignments?.length ?? 0) > 0) keys.push(`repository-${r.id}`);
-    });
-    return keys;
-  }, [repositories]);
-  // Expanded by default (including nodes that appear after a revalidation),
-  // minus the rows the user has explicitly collapsed.
-  const [collapsedKeys, setCollapsedKeys] = useState<Set<string>>(new Set());
-  const expandedKeys = useMemo(
-    () => allExpandableKeys.filter(k => !collapsedKeys.has(k)),
-    [allExpandableKeys, collapsedKeys]
-  );
+  // Issues start collapsed; the row's chevron opens them.
+  const [expandedKeys, setExpandedKeys] = useState<string[]>([]);
 
   // Publish / sync / unpublish / delete + navigation, shared with the module
   // cards so the two surfaces cannot drift.
@@ -186,12 +173,9 @@ const RepositoriesTable = ({
         const hasChildren = (record.children?.length ?? 0) > 0;
         const isExpanded = expandedKeys.includes(record.key);
         const toggle = () =>
-          setCollapsedKeys(prev => {
-            const next = new Set(prev);
-            if (next.has(record.key)) next.delete(record.key);
-            else next.add(record.key);
-            return next;
-          });
+          setExpandedKeys(prev =>
+            prev.includes(record.key) ? prev.filter(k => k !== record.key) : [...prev, record.key]
+          );
 
         return (
           <div className="flex items-center gap-2" style={{ paddingLeft: level * 24 }}>
@@ -349,10 +333,7 @@ const RepositoriesTable = ({
         expandable={{
           showExpandColumn: false,
           expandedRowKeys: expandedKeys,
-          onExpandedRowsChange: keys =>
-            setCollapsedKeys(
-              new Set(allExpandableKeys.filter(k => !(keys as string[]).includes(k)))
-            ),
+          onExpandedRowsChange: keys => setExpandedKeys(keys as string[]),
         }}
         scroll={{ x: 'max-content' }}
         pagination={{
