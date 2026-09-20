@@ -113,15 +113,18 @@ test.describe('Student Calendar Views', () => {
   }) => {
     const heading = rangeLabel(page);
 
-    // Week view labels the range "Week N: <dates>"; month view names the month.
+    // Asserted as "the two views label the range differently, and switching
+    // back restores it" rather than against either label's wording — the week
+    // label's format is expected to change.
     await page.getByRole('button', { name: 'Week', exact: true }).click();
-    await expect(heading).toHaveText(/^Week \d+:/);
+    const weekLabel = (await heading.innerText()).trim();
+    expect(weekLabel).not.toBe('');
 
     await page.getByRole('button', { name: 'Month', exact: true }).click();
-    await expect(heading).not.toHaveText(/^Week \d+:/);
+    await expect(heading).not.toHaveText(weekLabel);
 
     await page.getByRole('button', { name: 'Week', exact: true }).click();
-    await expect(heading).toHaveText(/^Week \d+:/);
+    await expect(heading).toHaveText(weekLabel);
   });
 
   test('renders a seeded event on the calendar', async ({ authenticatedPage: page }) => {

@@ -290,13 +290,25 @@ async function main() {
     { title: 'TA Office Hours', event_type: 'OFFICE_HOURS', offsetDays: 3, location: 'Online' },
   ];
   for (const ev of calendarDefs) {
+    const start = new Date(Date.now() + ev.offsetDays * 24 * 60 * 60 * 1000);
+    start.setHours(10, 0, 0, 0);
+    const end = new Date(start.getTime() + 90 * 60 * 1000);
+
     const existing = await prisma.calendarEvent.findFirst({
       where: { classroom_id: classroom.id, title: ev.title },
+      select: { id: true },
     });
-    if (!existing) {
-      const start = new Date(Date.now() + ev.offsetDays * 24 * 60 * 60 * 1000);
-      start.setHours(10, 0, 0, 0);
-      const end = new Date(start.getTime() + 90 * 60 * 1000);
+
+    if (existing) {
+      // Re-dated, not skipped. These events are defined relative to "now", so
+      // skipping an existing one pins it to the date of the FIRST seed — after
+      // a few days it falls out of the month the calendar loads, and anything
+      // that expects to see it on screen starts failing for no visible reason.
+      await prisma.calendarEvent.update({
+        where: { id: existing.id },
+        data: { start_time: start, end_time: end },
+      });
+    } else {
       await prisma.calendarEvent.create({
         data: {
           classroom_id: classroom.id,
