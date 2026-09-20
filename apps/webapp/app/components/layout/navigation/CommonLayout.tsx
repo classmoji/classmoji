@@ -430,16 +430,18 @@ const CommonLayout = ({
       // groups each category under a small muted label (no full-width rule);
       // collapsed (icon-only) mode has no room for a label, so the extra top
       // spacing alone carries the grouping.
+      // A student's list is short (Modules, Assignments, Resubmits, Tokens…),
+      // so it is one flat list with no section labels, like the lean nav.
+      const flat = leanNav || role === 'STUDENT';
       return (
-        <div key={categoryKey} className={leanNav ? '' : collapsed ? 'pt-3' : 'pt-5'}>
-          {!leanNav && !collapsed && (
+        <div key={categoryKey} className={flat ? '' : collapsed ? 'pt-3' : 'pt-5'}>
+          {!flat && !collapsed && (
             <div className="px-3.5 mb-1 text-[11px] font-semibold uppercase tracking-wider text-ink-4 select-none">
               {category.label}
             </div>
           )}
-          {/* Lean nav is a flat, short list with no section labels, so give the
-              items more breathing room; the grouped full nav stays tight. */}
-          <div className={leanNav ? 'space-y-1.5' : 'space-y-0.5'}>{categoryItems}</div>
+          {/* A flat list gets more breathing room; the grouped full nav stays tight. */}
+          <div className={flat ? 'space-y-1.5' : 'space-y-0.5'}>{categoryItems}</div>
         </div>
       );
     }),
