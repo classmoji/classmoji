@@ -36,7 +36,7 @@ export const CLASSROOM_THEMES: ClassroomTheme[] = [
   {
     key: 'stone',
     label: 'Stone',
-    background: '#FDFDFD',
+    background: '#fdfdfc',
     darkBackground: '#1d1d1d',
   },
   {
