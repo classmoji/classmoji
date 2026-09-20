@@ -144,8 +144,7 @@ test.describe('Assignment page', () => {
     const repoRow = repositoryRow(page, SEED_REPO);
     await expect(repoRow).toBeVisible();
 
-    // The repo row is collapsed by default; open it and follow the assignment.
-    await repoRow.getByRole('button', { name: 'Expand' }).click();
+    // Repo rows start open, so the assignment link is already there.
     await page.getByRole('link', { name: 'Hello World Part 1', exact: true }).click();
 
     await page.waitForURL(/\/assignments\/[^/]+$/, { timeout: 10000 });
@@ -156,7 +155,6 @@ test.describe('Assignment page', () => {
     authenticatedPage: page,
   }) => {
     const repoRow = repositoryRow(page, SEED_REPO);
-    await repoRow.getByRole('button', { name: 'Expand' }).click();
     await page.getByRole('link', { name: 'Hello World Part 1', exact: true }).click();
     await page.waitForURL(/\/assignments\/[^/]+$/, { timeout: 10000 });
     await waitForDataLoad(page);
@@ -405,7 +403,6 @@ test.describe('Assignment page - overview & actions', () => {
   test.beforeEach(async ({ authenticatedPage: page, testOrg }) => {
     await page.goto(`/admin/${testOrg}/repos`);
     await waitForDataLoad(page);
-    await repositoryRow(page, SEED_REPO).getByRole('button', { name: 'Expand' }).click();
     await page.getByRole('link', { name: 'Hello World Part 1', exact: true }).click();
     await page.waitForURL(/\/assignments\/[^/]+$/, { timeout: 10000 });
     await waitForDataLoad(page);

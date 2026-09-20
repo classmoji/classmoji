@@ -106,8 +106,10 @@ const RepositoriesTable = ({
   bare = false,
 }: RepositoriesTableProps) => {
   // Controlled expansion so the folder icon can react to expanded state.
-  // Issues start collapsed; the row's chevron opens them.
-  const [expandedKeys, setExpandedKeys] = useState<string[]>([]);
+  // Every repository starts open, showing its assignments; the chevron closes it.
+  const [expandedKeys, setExpandedKeys] = useState<string[]>(() =>
+    repositories.filter(r => (r.assignments?.length ?? 0) > 0).map(r => `repository-${r.id}`)
+  );
 
   // Publish / sync / unpublish / delete + navigation, shared with the module
   // cards so the two surfaces cannot drift.
