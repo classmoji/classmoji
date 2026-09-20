@@ -30,6 +30,7 @@ import { useCallback, useState, type ReactElement, type ReactNode } from 'react'
 import { Tooltip } from 'antd';
 import { IconStar, IconStarFilled } from '@tabler/icons-react';
 import DraftPill from './DraftPill';
+import type { CalendarLinkedAssignment, CalendarLinkedPage, CalendarLinkedSlide } from './types';
 
 /** The three things a calendar event can link, and therefore can star. */
 export type FeaturedKind = 'page' | 'slide' | 'assignment';
@@ -89,6 +90,55 @@ export const buildLinkOptions = <T extends LinkPickerItem>(
     meta: new Map(options.map(o => [o.value, { title: o.label, isDraft: o.is_draft }])),
   };
 };
+
+/**
+ * What a chip says when nobody offers an option for it.
+ *
+ * Practically unreachable: staff are the only ones who open these modals, and
+ * the payload they get names every page, deck and assignment their event links
+ * — drafts and unpublished ones included. It exists so that the one thing a
+ * chip can never do is show a bare uuid.
+ */
+export const UNNAMED_LINK = 'Unavailable link';
+
+/**
+ * Titles for the resources an EVENT already links, whether or not the pickers
+ * offer them.
+ *
+ * The assignment picker is published-only by decision, so an assignment linked
+ * while published and unpublished afterwards has a link row and no option — and
+ * the chip fell back to antd's label, which for a missing option is the raw id.
+ * The event's own display arrays know the title, so they are the fallback; a
+ * picker option, being the live list, still wins where both have one.
+ *
+ * `isDraft` follows the same rule the link list marks: for an assignment, EITHER
+ * it or its repository being unpublished means the class cannot see it.
+ */
+export const eventLinkMeta = (event: {
+  pages?: CalendarLinkedPage[] | null;
+  slides?: CalendarLinkedSlide[] | null;
+  assignments?: CalendarLinkedAssignment[] | null;
+}): Record<FeaturedKind, LinkOptionMetaMap> => ({
+  page: new Map(
+    (event.pages ?? []).map(l => [l.page.id, { title: l.page.title, isDraft: l.page.is_draft }])
+  ),
+  slide: new Map(
+    (event.slides ?? []).map(l => [l.slide.id, { title: l.slide.title, isDraft: l.slide.is_draft }])
+  ),
+  assignment: new Map(
+    (event.assignments ?? []).map(l => [
+      l.assignment.id,
+      {
+        title: l.assignment.title,
+        isDraft: l.assignment.is_published === false || l.repository?.is_published === false,
+      },
+    ])
+  ),
+});
+
+/** Later maps win, so a live picker option beats what the event remembers. */
+export const mergeLinkMeta = (...maps: Array<LinkOptionMetaMap | undefined>): LinkOptionMetaMap =>
+  new Map(maps.flatMap(m => (m ? [...m] : [])));
 
 /** The dropdown row: the same string the search matches, plus a Draft pill. */
 export const renderLinkOption = (option: { label?: ReactNode; data?: LinkOption }): ReactNode => (
@@ -151,14 +201,17 @@ export const useFeaturedLink = () => {
  * The props rc-select hands a custom tag (its `CustomTagProps`), declared here
  * rather than imported: `rc-select` is antd's dependency, not ours, and this
  * shape is structurally what antd passes.
+ *
+ * `label` is among them and is deliberately unused. For an option the picker
+ * offers it is the title the meta map already holds; for one it does not, it
+ * is the raw id — which is the bug the fallback below exists to fix.
  */
 interface CustomTagProps {
-  label: ReactNode;
+  label?: ReactNode;
   value: string;
   disabled?: boolean;
   closable: boolean;
   onClose: (event?: React.MouseEvent<HTMLElement>) => void;
-  isMaxTag?: boolean;
 }
 
 /** mousedown on a control inside a tag: keep focus, and keep the dropdown shut. */
@@ -170,6 +223,10 @@ const swallowMouseDown = (event: React.MouseEvent<HTMLElement>) => {
 interface LinkTagRenderOptions {
   /** Which picker this is — half of the star's identity. */
   kind: FeaturedKind;
+  /**
+   * Titles by value. The picker's own options first, then whatever the EVENT
+   * knows about what it links — see `mergeLinkMeta` and `eventLinkMeta`.
+   */
   meta: LinkOptionMetaMap;
   featured: FeaturedRef | null;
   onToggleFeatured: (ref: FeaturedRef) => void;
@@ -184,23 +241,9 @@ export const createLinkTagRender = ({
   // Named rather than anonymous: antd CALLS this to get an element, it does not
   // mount it as a component, but it returns JSX and eslint cannot tell the
   // difference without a name to go on.
-  function renderLinkTag({
-    label,
-    value,
-    disabled,
-    closable,
-    onClose,
-    isMaxTag,
-  }: CustomTagProps): ReactElement {
-    // antd collapses the overflow into one "+N" pseudo-tag. It stands for
-    // several links rather than naming one, so there is nothing to star or
-    // unlink on it.
-    if (isMaxTag) {
-      return <span className="ant-select-selection-item">{label}</span>;
-    }
-
+  function renderLinkTag({ value, disabled, closable, onClose }: CustomTagProps): ReactElement {
     const info = meta.get(value);
-    const title = info?.title ?? (typeof label === 'string' ? label : value);
+    const title = info?.title ?? UNNAMED_LINK;
     const isFeatured = isSameFeatured(featured, { kind, id: value });
 
     return (
@@ -209,7 +252,10 @@ export const createLinkTagRender = ({
           isFeatured ? 'ring-1 ring-amber-400 dark:ring-amber-500' : ''
         }`}
       >
-        <span className="ant-select-selection-item-content truncate">{title}</span>
+        {/* The chip truncates; the tooltip is how the rest is readable. */}
+        <span className="ant-select-selection-item-content truncate" title={title}>
+          {title}
+        </span>
         {info?.isDraft && <DraftPill />}
 
         <Tooltip title={FEATURED_TOOLTIP}>

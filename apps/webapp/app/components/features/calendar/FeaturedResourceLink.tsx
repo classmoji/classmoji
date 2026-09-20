@@ -9,6 +9,11 @@
  * because two links with the same title that land in different places is worse
  * than either one alone.
  *
+ * All three branches wear the SAME muted style. They are three different
+ * elements only because their destinations differ: an `<a>` inherits the app's
+ * green link colour while a `<button>` inherits nothing, so left alone one line
+ * looked like two different things depending on which shell drew it.
+ *
  * It is a SIBLING of the event's button, never inside it: a link nested in a
  * button is not something a browser can render. It also stops `pointerdown`
  * and `click` from travelling, so clicking it neither starts a drag (dnd-kit's
@@ -17,10 +22,15 @@
  */
 
 import { NavLink } from 'react-router';
-import { IconClipboardList, IconFileText, IconPresentation } from '@tabler/icons-react';
+import {
+  IconClipboardList,
+  IconExternalLink,
+  IconFileText,
+  IconPresentation,
+} from '@tabler/icons-react';
 import type { CalendarEventWithLinks, CalendarFeaturedResource } from './types';
 import DraftPill from './DraftPill';
-import { PageLink } from '~/components/features/pages';
+import { PageLink, usePagePeek } from '~/components/features/pages';
 
 export interface FeaturedResourceLinkProps {
   featured: CalendarFeaturedResource;
@@ -42,9 +52,23 @@ const ICONS = {
   assignment: IconClipboardList,
 } as const;
 
-/** Indented under the chip, one line, truncated — a month cell clips overflow. */
+/** What the accessible name calls each kind, so three chips are tellable apart. */
+const KIND_NOUN = {
+  page: 'page',
+  slide: 'slide deck',
+  assignment: 'assignment',
+} as const;
+
+/**
+ * Indented under the chip, one line, truncated — a month cell clips overflow.
+ *
+ * Muted on purpose: the chip above is the event, this is a footnote to it.
+ * Stated once and handed to all three branches, so an anchor cannot drift back
+ * to the global link colour.
+ */
 const ROW_CLASS =
-  'flex items-center gap-1 pl-2 pr-1 min-w-0 text-xs text-ink-3 hover:text-ink-1 rounded ' +
+  'flex items-center gap-1 pl-2 pr-1 w-full min-w-0 text-xs text-ink-2 no-underline rounded ' +
+  'hover:text-ink-0 hover:underline transition-colors ' +
   'focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent';
 
 const FeaturedResourceLink = ({
@@ -56,12 +80,20 @@ const FeaturedResourceLink = ({
   slidesUrl = '',
 }: FeaturedResourceLinkProps) => {
   const Icon = ICONS[featured.kind];
+  // Null wherever the peek drawer is not mounted (the /admin shell) — which is
+  // also where a page opens in a new tab, so the ↗ follows the behaviour rather
+  // than the kind, exactly as the link list decides it.
+  const peek = usePagePeek();
 
-  const body = (
+  /** "Open page Logistics": the title alone does not say what it is. */
+  const label = `Open ${KIND_NOUN[featured.kind]} ${featured.title}`;
+
+  const body = (newTab: boolean) => (
     <>
       <Icon size={12} className="shrink-0" />
       <span className="truncate">{featured.title}</span>
       {featured.is_draft && <DraftPill />}
+      {newTab && <IconExternalLink size={11} className="shrink-0 text-ink-3" />}
     </>
   );
 
@@ -74,14 +106,15 @@ const FeaturedResourceLink = ({
 
   if (featured.kind === 'page') {
     return (
-      <span {...stop} className="block min-w-0" title={featured.title}>
+      <span {...stop} className="block min-w-0">
         <PageLink
           pageId={featured.id}
           title={featured.title}
           href={`${pagesUrl}/${classSlug}/${featured.id}`}
-          className={`${ROW_CLASS} w-full`}
+          className={ROW_CLASS}
+          ariaLabel={label}
         >
-          {body}
+          {body(!peek)}
         </PageLink>
       </span>
     );
@@ -95,9 +128,10 @@ const FeaturedResourceLink = ({
         target="_blank"
         rel="noopener noreferrer"
         title={featured.title}
+        aria-label={label}
         className={ROW_CLASS}
       >
-        {body}
+        {body(true)}
       </a>
     );
   }
@@ -115,9 +149,10 @@ const FeaturedResourceLink = ({
       {...stop}
       to={`/${rolePrefix}/${classSlug}/repos#${repoSlug}`}
       title={featured.title}
+      aria-label={label}
       className={ROW_CLASS}
     >
-      {body}
+      {body(false)}
     </NavLink>
   );
 };

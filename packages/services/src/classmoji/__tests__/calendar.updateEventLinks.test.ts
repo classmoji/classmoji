@@ -82,9 +82,9 @@ describe('updateEventLinks — the event has to be in this classroom', () => {
     // key, which reached the user as a constraint error.
     $queryRaw.mockResolvedValue([]);
 
-    await expect(
-      updateEventLinks('event-1', 'class-1', { pageIds: ['p-1'] })
-    ).rejects.toThrow('Calendar event not found in this classroom');
+    await expect(updateEventLinks('event-1', 'class-1', { pageIds: ['p-1'] })).rejects.toThrow(
+      'Calendar event not found in this classroom'
+    );
 
     expect(calendarEventPageLink.deleteMany).not.toHaveBeenCalled();
     expect(calendarEventPageLink.createMany).not.toHaveBeenCalled();

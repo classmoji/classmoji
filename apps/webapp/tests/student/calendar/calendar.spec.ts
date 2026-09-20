@@ -237,6 +237,12 @@ test.describe('Student Calendar Starred Resource', () => {
     if (!published) throw new Error('Need a published page. Run `npm run db:seed`.');
     pageTitle = published.title;
 
+    // Idempotent on purpose. A row left behind by an interrupted run now trips
+    // the partial unique index on (event_id) WHERE featured, so the setup has
+    // to clear the event's links before it writes its own rather than assume a
+    // clean table.
+    await prisma.calendarEventPageLink.deleteMany({ where: { event_id: eventId } });
+
     // A non-recurring event keeps its links in the undated bucket.
     await prisma.calendarEventPageLink.create({
       data: {
@@ -266,6 +272,8 @@ test.describe('Student Calendar Starred Resource', () => {
     // label. A BUTTON rather than a link: the student shell mounts the page
     // peek provider, so `PageLink` opens the drawer instead of a new tab. The
     // staff calendar, which has no provider, renders the same line as an <a>.
-    await expect(page.getByRole('button', { name: pageTitle }).first()).toBeVisible();
+    await expect(
+      page.getByRole('button', { name: `Open page ${pageTitle}` }).first()
+    ).toBeVisible();
   });
 });

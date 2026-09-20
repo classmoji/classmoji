@@ -30,10 +30,14 @@ import {
   EDIT_SCOPES,
   filterLinksForOccurrence,
   isExpandedOccurrence,
+  linkSelectionChanged,
+  type EventLinkIds,
 } from './eventScope';
 import {
   buildLinkOptions,
   createLinkTagRender,
+  eventLinkMeta,
+  mergeLinkMeta,
   renderLinkOption,
   useFeaturedLink,
   type FeaturedRef,
@@ -175,6 +179,21 @@ const EditEventModal = ({
   // One star across all three pickers — see useFeaturedLink.
   const { featured, setFeatured, toggleFeatured, keepFeaturedWithin } = useFeaturedLink();
 
+  /**
+   * What the pickers held when this occurrence was loaded.
+   *
+   * Only used to decide whether the scope dialog owes the user a warning: a
+   * series-wide edit cannot carry link or star changes, and saying nothing
+   * makes that look like a successful save.
+   */
+  const [prefilledLinks, setPrefilledLinks] = useState<EventLinkIds>({
+    linkedPageIds: [],
+    linkedSlideIds: [],
+    linkedAssignmentIds: [],
+    featuredKind: null,
+    featuredId: null,
+  });
+
   const pagePicker = useMemo(() => buildLinkOptions(pages), [pages]);
   const slidePicker = useMemo(() => buildLinkOptions(slides), [slides]);
   const assignmentPicker = useMemo(
@@ -184,6 +203,18 @@ const EditEventModal = ({
       ),
     [assignments]
   );
+
+  // A chip has to be able to name a resource the pickers no longer offer — an
+  // assignment linked while published and unpublished since, say. The event
+  // itself carries the title; a live option still wins where there is one.
+  const chipMeta = useMemo(() => {
+    const fromEvent = eventLinkMeta(event ?? {});
+    return {
+      page: mergeLinkMeta(fromEvent.page, pagePicker.meta),
+      slide: mergeLinkMeta(fromEvent.slide, slidePicker.meta),
+      assignment: mergeLinkMeta(fromEvent.assignment, assignmentPicker.meta),
+    };
+  }, [event, pagePicker.meta, slidePicker.meta, assignmentPicker.meta]);
 
   const isRecurringOccurrence = event?.is_recurring && event?.occurrence_date;
 
@@ -244,8 +275,25 @@ const EditEventModal = ({
             ? { kind: 'assignment', id: starredAssignment.assignment_id }
             : null;
       setFeatured(starred);
+      setPrefilledLinks({
+        linkedPageIds: pageLinks.map(l => l.page_id),
+        linkedSlideIds: slideLinks.map(l => l.slide_id),
+        linkedAssignmentIds: assignmentLinks.map(l => l.assignment_id),
+        featuredKind: starred?.kind ?? null,
+        featuredId: starred?.id ?? null,
+      });
     }
   }, [event, form, setFeatured]);
+
+  /** The current picker state, in the shape the scope helpers compare. */
+  const currentLinks: EventLinkIds = {
+    linkedPageIds,
+    linkedSlideIds,
+    linkedAssignmentIds,
+    featuredKind: featured?.kind ?? null,
+    featuredId: featured?.id ?? null,
+  };
+  const linksTouched = linkSelectionChanged(currentLinks, prefilledLinks);
 
   const buildEventData = (values: EventFormValues, includeLinks = true) => {
     const { start, end } = buildEventWindow(
@@ -317,13 +365,7 @@ const EditEventModal = ({
           pendingFormData,
           editScope,
           event.occurrence_date ? new Date(event.occurrence_date).toISOString() : null,
-          {
-            linkedPageIds,
-            linkedSlideIds,
-            linkedAssignmentIds,
-            featuredKind: featured?.kind ?? null,
-            featuredId: featured?.id ?? null,
-          }
+          currentLinks
         )
       );
     } else if (scopeAction === 'delete' && event.id) {
@@ -569,9 +611,11 @@ const EditEventModal = ({
                     <Select
                       mode="multiple"
                       placeholder="Link pages"
-                      // The placeholder is a span in antd, not an input attribute,
-                      // so a spec cannot find this picker by it.
-                      data-testid="calendar-link-pages"
+                      // The placeholder is a span in antd, not an input
+                      // attribute, so a spec cannot find this picker by it.
+                      // Prefixed per modal: both are mounted at once, and an
+                      // unprefixed id would match two elements.
+                      data-testid="edit-calendar-link-pages"
                       value={linkedPageIds}
                       onChange={ids => {
                         setLinkedPageIds(ids);
@@ -581,7 +625,7 @@ const EditEventModal = ({
                       optionRender={renderLinkOption}
                       tagRender={createLinkTagRender({
                         kind: 'page',
-                        meta: pagePicker.meta,
+                        meta: chipMeta.page,
                         featured,
                         onToggleFeatured: toggleFeatured,
                       })}
@@ -596,7 +640,7 @@ const EditEventModal = ({
                       placeholder="Link slide decks"
                       // The placeholder is a span in antd, not an input attribute,
                       // so a spec cannot find this picker by it.
-                      data-testid="calendar-link-slides"
+                      data-testid="edit-calendar-link-slides"
                       value={linkedSlideIds}
                       onChange={ids => {
                         setLinkedSlideIds(ids);
@@ -606,7 +650,7 @@ const EditEventModal = ({
                       optionRender={renderLinkOption}
                       tagRender={createLinkTagRender({
                         kind: 'slide',
-                        meta: slidePicker.meta,
+                        meta: chipMeta.slide,
                         featured,
                         onToggleFeatured: toggleFeatured,
                       })}
@@ -621,7 +665,7 @@ const EditEventModal = ({
                       placeholder="Link assignments"
                       // The placeholder is a span in antd, not an input attribute,
                       // so a spec cannot find this picker by it.
-                      data-testid="calendar-link-assignments"
+                      data-testid="edit-calendar-link-assignments"
                       value={linkedAssignmentIds}
                       onChange={ids => {
                         setLinkedAssignmentIds(ids);
@@ -631,7 +675,7 @@ const EditEventModal = ({
                       optionRender={renderLinkOption}
                       tagRender={createLinkTagRender({
                         kind: 'assignment',
-                        meta: assignmentPicker.meta,
+                        meta: chipMeta.assignment,
                         featured,
                         onToggleFeatured: toggleFeatured,
                       })}
@@ -701,6 +745,19 @@ const EditEventModal = ({
             <Radio value={EDIT_SCOPES.THIS_AND_FUTURE}>This and future events</Radio>
             <Radio value={EDIT_SCOPES.ALL}>All events in series</Radio>
           </Radio.Group>
+
+          {/*
+            A link and its star belong to ONE date, so the two series-wide
+            scopes cannot carry them and the save drops them without a word.
+            Said here, beside the choice that decides it, and only when there
+            is something to lose.
+          */}
+          {scopeAction === 'edit' && linksTouched && (
+            <p className="mt-3 flex items-start gap-2 text-xs text-[#8a5b3a] dark:text-amber-200">
+              <IconInfoCircle size={14} className="shrink-0 mt-0.5" />
+              Link and star changes apply to this event only.
+            </p>
+          )}
         </div>
       </Modal>
     </Modal>

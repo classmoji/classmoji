@@ -389,9 +389,11 @@ const AddEventModal = ({
                       <Select
                         mode="multiple"
                         placeholder="Link pages"
-                        // The placeholder is a span in antd, not an input attribute,
-                        // so a spec cannot find this picker by it.
-                        data-testid="calendar-link-pages"
+                        // The placeholder is a span in antd, not an input
+                        // attribute, so a spec cannot find this picker by it.
+                        // Prefixed per modal: both are mounted at once, and an
+                        // unprefixed id would match two elements.
+                        data-testid="add-calendar-link-pages"
                         value={linkedPageIds}
                         onChange={ids => {
                           setLinkedPageIds(ids);
@@ -416,7 +418,7 @@ const AddEventModal = ({
                         placeholder="Link slide decks"
                         // The placeholder is a span in antd, not an input attribute,
                         // so a spec cannot find this picker by it.
-                        data-testid="calendar-link-slides"
+                        data-testid="add-calendar-link-slides"
                         value={linkedSlideIds}
                         onChange={ids => {
                           setLinkedSlideIds(ids);
@@ -441,7 +443,7 @@ const AddEventModal = ({
                         placeholder="Link assignments"
                         // The placeholder is a span in antd, not an input attribute,
                         // so a spec cannot find this picker by it.
-                        data-testid="calendar-link-assignments"
+                        data-testid="add-calendar-link-assignments"
                         value={linkedAssignmentIds}
                         onChange={ids => {
                           setLinkedAssignmentIds(ids);

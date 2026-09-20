@@ -210,7 +210,7 @@ test.describe('Starring a linked resource', () => {
    * and once a tag is in the picker the placeholder is gone anyway.
    */
   async function linkPage(page: Page, modal: Locator, title: string) {
-    await modal.getByTestId('calendar-link-pages').click();
+    await modal.getByTestId('edit-calendar-link-pages').click();
     await page.keyboard.type(title);
     await page.locator('.ant-select-item-option-active').first().click();
     await expect(modal.getByRole('button', { name: `Unlink ${title}` })).toBeVisible();
@@ -244,10 +244,12 @@ test.describe('Starring a linked resource', () => {
       modal.getByRole('button', { name: 'Save changes' }).click(),
     ]);
 
-    // The month cell draws the starred page under the event chip.
-    await expect(page.getByRole('link', { name: linked.title }).first()).toBeVisible({
-      timeout: 10000,
-    });
+    // The month cell draws the starred page under the event chip. On /admin
+    // there is no peek provider, so it is an anchor to the pages app; its
+    // accessible name says what kind of thing it opens.
+    await expect(page.getByRole('link', { name: `Open page ${linked.title}` }).first()).toBeVisible(
+      { timeout: 10000 }
+    );
 
     // Reopening finds the star where it was left.
     await page.getByRole('button', { name: 'Week 1 Lecture' }).first().click();
@@ -288,6 +290,100 @@ test.describe('Starring a linked resource', () => {
     await secondStar.click();
     await expect(secondStar).toHaveAttribute('aria-pressed', 'false');
     await expect(firstStar).toHaveAttribute('aria-pressed', 'false');
+  });
+
+  test('the picker offers draft pages, tagged as drafts', async ({
+    authenticatedPage: page,
+    testOrg,
+  }) => {
+    // Instructors write next week's page before publishing it and link it to
+    // the lecture then; the pill is what says the class cannot see it yet.
+    const prisma = getTestPrisma();
+    const classroom = await getClassroomBySlug(TEST_CLASSROOM);
+    const draft = await prisma.page.findFirst({
+      where: { classroom_id: classroom.id, is_draft: true },
+      select: { title: true },
+      orderBy: { title: 'asc' },
+    });
+    test.skip(!draft, 'No draft page in the seeded classroom.');
+
+    await page.goto(`/admin/${testOrg}/calendar`);
+    await waitForDataLoad(page);
+    await page.getByRole('button', { name: 'Month', exact: true }).click();
+    await page.getByRole('button', { name: 'Week 1 Lecture' }).first().click();
+    const modal = await waitForModal(page, /Edit event/i);
+
+    await modal.getByTestId('edit-calendar-link-pages').click();
+    await page.keyboard.type(draft!.title);
+
+    const option = page
+      .locator('.ant-select-item-option')
+      .filter({ hasText: draft!.title })
+      .first();
+    await expect(option).toBeVisible();
+    await expect(option.getByText('Draft', { exact: true })).toBeVisible();
+  });
+
+  test('a series-wide scope says so before it drops link changes', async ({
+    authenticatedPage: page,
+    testOrg,
+  }) => {
+    // Links and the star belong to ONE date, so 'all' and 'this and future'
+    // discard them. The save still succeeds, which is exactly why the dialog
+    // has to say it — and only when there is something to lose.
+    const prisma = getTestPrisma();
+    const classroom = await getClassroomBySlug(TEST_CLASSROOM);
+    const seeded = await lectureThisMonth();
+    const template = await prisma.calendarEvent.findUniqueOrThrow({
+      where: { id: seeded.id },
+      select: { created_by: true, start_time: true },
+    });
+    const start = new Date(template.start_time);
+    start.setHours(15, 0, 0, 0);
+    const title = `QA Recurring ${Date.now()}`;
+    const days = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
+
+    const recurring = await prisma.calendarEvent.create({
+      data: {
+        classroom_id: classroom.id,
+        title,
+        event_type: 'LECTURE',
+        start_time: start,
+        end_time: new Date(start.getTime() + 60 * 60 * 1000),
+        created_by: template.created_by,
+        is_recurring: true,
+        recurrence_rule: { days: [days[start.getDay()]], until: null },
+      },
+      select: { id: true },
+    });
+
+    try {
+      const [linked] = await publishedPages();
+      await page.goto(`/admin/${testOrg}/calendar`);
+      await waitForDataLoad(page);
+      await page.getByRole('button', { name: 'Month', exact: true }).click();
+
+      await page.getByRole('button', { name: title }).first().click();
+      const modal = await waitForModal(page, /Edit event/i);
+
+      const message = page.getByText('Link and star changes apply to this event only.');
+
+      // Nothing touched yet: the dialog has nothing to warn about.
+      await modal.getByRole('button', { name: 'Save changes' }).click();
+      await expect(page.getByText('Which occurrences do you want to update?')).toBeVisible();
+      await expect(message).toHaveCount(0);
+      await page.getByRole('button', { name: 'Cancel' }).last().click();
+
+      // Now link something, and the same dialog owes the user a sentence.
+      await linkPage(page, modal, linked.title);
+      await modal.getByRole('button', { name: 'Save changes' }).click();
+      await expect(message).toBeVisible();
+
+      // 'Only this event' is how the change is kept, and stays selectable.
+      await expect(page.getByRole('radio', { name: 'Only this event' })).toBeChecked();
+    } finally {
+      await prisma.calendarEvent.delete({ where: { id: recurring.id } }).catch(() => {});
+    }
   });
 
   test('the star is reachable and operable from the keyboard', async ({

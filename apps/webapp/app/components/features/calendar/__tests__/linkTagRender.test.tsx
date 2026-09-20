@@ -16,9 +16,13 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   buildLinkOptions,
   createLinkTagRender,
+  eventLinkMeta,
   featuredAfterSelection,
   FEATURED_TOOLTIP,
+  mergeLinkMeta,
   nextFeatured,
+  renderLinkOption,
+  UNNAMED_LINK,
   type FeaturedRef,
 } from '../linkTagRender';
 
@@ -138,22 +142,114 @@ describe('the tag', () => {
     expect(renderTag(null, 'p-1', { closable: false })).not.toContain('aria-label="Unlink');
   });
 
-  it('leaves the overflow tag as plain text', () => {
-    // "+2" stands for several links rather than naming one, so there is
-    // nothing on it to star or unlink.
-    const html = renderTag(null, 'p-1', { isMaxTag: true, label: '+ 2 ...' });
-
-    expect(html).toContain('+ 2 ...');
-    expect(html).not.toContain('<button');
+  it('offers the whole title as a tooltip, since the chip truncates', () => {
+    expect(renderTag(null, 'p-1')).toContain('title="Week 1 reading"');
   });
 
-  it('falls back to the value when nothing is known about the option', () => {
-    // The wart this replaced: a linked draft the picker did not offer showed
-    // as a bare uuid. It still cannot show a title it was never given, but the
-    // label antd passes is used before the id is.
-    const html = renderTag(null, 'p-missing', { label: 'A title from somewhere' });
+  it('never shows a bare id, even for a value nothing names', () => {
+    // antd's own label for an option that does not exist IS the raw uuid, which
+    // is what used to reach the screen. Reaching this at all takes a link whose
+    // resource is in neither the picker nor the event.
+    const html = renderTag(null, '0f8f0f6e-1f0e-4b9a-9a1e-0f0e0f0e0f0e');
 
-    expect(html).toContain('A title from somewhere');
+    expect(html).not.toContain('0f8f0f6e');
+    expect(html).toContain(UNNAMED_LINK);
+  });
+});
+
+describe('titles the event remembers', () => {
+  const EVENT = {
+    pages: [{ page: { id: 'p-9', title: 'Linked page', is_draft: true } }],
+    slides: [{ slide: { id: 's-9', title: 'Linked deck', is_draft: false } }],
+    assignments: [
+      {
+        assignment: { id: 'a-pub', title: 'Published HW', is_published: true },
+        repository: { slug: 'hw', is_published: true },
+      },
+      {
+        assignment: { id: 'a-unpub', title: 'Pulled HW', is_published: false },
+        repository: { slug: 'hw', is_published: true },
+      },
+      {
+        assignment: { id: 'a-unpub-repo', title: 'HW in a hidden repo', is_published: true },
+        repository: { slug: 'hw2', is_published: false },
+      },
+    ],
+  };
+
+  it('names each kind from the event\u2019s own display arrays', () => {
+    const meta = eventLinkMeta(EVENT);
+
+    expect(meta.page.get('p-9')).toEqual({ title: 'Linked page', isDraft: true });
+    expect(meta.slide.get('s-9')).toEqual({ title: 'Linked deck', isDraft: false });
+    expect(meta.assignment.get('a-pub')).toEqual({ title: 'Published HW', isDraft: false });
+  });
+
+  it('calls an assignment a draft when EITHER it or its repository is unpublished', () => {
+    // The pair the link list marks together: the class cannot see it either way.
+    const meta = eventLinkMeta(EVENT);
+
+    expect(meta.assignment.get('a-unpub')?.isDraft).toBe(true);
+    expect(meta.assignment.get('a-unpub-repo')?.isDraft).toBe(true);
+  });
+
+  it('survives an event that links nothing', () => {
+    const meta = eventLinkMeta({});
+    expect([meta.page.size, meta.slide.size, meta.assignment.size]).toEqual([0, 0, 0]);
+  });
+
+  it('lets a live picker option win over what the event remembers', () => {
+    // The picker is the current list; the event is a record of what was linked
+    // when. A renamed page should read by its new name.
+    const merged = mergeLinkMeta(
+      new Map([['p-1', { title: 'Old name', isDraft: true }]]),
+      buildLinkOptions(ITEMS).meta
+    );
+
+    expect(merged.get('p-1')).toEqual({ title: 'Week 1 reading', isDraft: false });
+  });
+
+  it('names a chip the picker does not offer, and marks it a draft', () => {
+    // The case seen in the browser: an assignment linked while published and
+    // unpublished since. The picker stays published-only, so only the event
+    // knows the title.
+    const { meta } = buildLinkOptions([{ id: 'a-pub', title: 'Published HW' }]);
+    const tagRender = createLinkTagRender({
+      kind: 'assignment',
+      meta: mergeLinkMeta(eventLinkMeta(EVENT).assignment, meta),
+      featured: null,
+      onToggleFeatured: vi.fn(),
+    });
+
+    const html = renderToStaticMarkup(
+      tagRender({ label: 'a-unpub', value: 'a-unpub', closable: true, onClose: vi.fn() })
+    );
+
+    expect(html).toContain('Pulled HW');
+    expect(html).toContain('Draft');
+    expect(html).toContain('aria-label="Show Pulled HW in month view"');
+    expect(html).not.toContain('>a-unpub<');
+  });
+});
+
+describe('a dropdown row', () => {
+  it('marks a draft option, so the list says what the picker now offers', () => {
+    const html = renderToStaticMarkup(
+      <>
+        {renderLinkOption({ label: 'Unfinished notes', data: buildLinkOptions(ITEMS).options[1] })}
+      </>
+    );
+
+    expect(html).toContain('Unfinished notes');
+    expect(html).toContain('Draft');
+  });
+
+  it('leaves a published option unmarked', () => {
+    const html = renderToStaticMarkup(
+      <>{renderLinkOption({ label: 'Week 1 reading', data: buildLinkOptions(ITEMS).options[0] })}</>
+    );
+
+    expect(html).not.toContain('Draft');
   });
 });
 

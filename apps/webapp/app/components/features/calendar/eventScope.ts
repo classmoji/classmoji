@@ -56,6 +56,25 @@ export interface EventLinkIds {
   featuredId?: string | null;
 }
 
+/** Same ids, same order — the order is stored, so a reshuffle is a change. */
+const sameIds = (a: string[], b: string[]): boolean =>
+  a.length === b.length && a.every((id, index) => id === b[index]);
+
+/**
+ * Has the user touched the links or the star since the modal prefilled them?
+ *
+ * Asked only to decide whether to WARN. A series-wide edit silently drops link
+ * and star changes — they belong to one occurrence and 'all' names none — and
+ * a save that appears to succeed while quietly discarding half of what was
+ * asked for is the kind of thing a user discovers weeks later.
+ */
+export const linkSelectionChanged = (current: EventLinkIds, original: EventLinkIds): boolean =>
+  !sameIds(current.linkedPageIds, original.linkedPageIds) ||
+  !sameIds(current.linkedSlideIds, original.linkedSlideIds) ||
+  !sameIds(current.linkedAssignmentIds, original.linkedAssignmentIds) ||
+  (current.featuredKind ?? null) !== (original.featuredKind ?? null) ||
+  (current.featuredId ?? null) !== (original.featuredId ?? null);
+
 /** Compare two values as calendar DAYS, in UTC — link dates are date-only. */
 export const isSameDateDay = (date1: string | Date, date2: string | Date) => {
   const d1 = new Date(date1);

@@ -140,6 +140,38 @@ describe('MonthGrid — the starred resource', () => {
     expect(html).toContain('Week 1 reading');
   });
 
+  it('names the kind as well as the title, so three chips are tellable apart', () => {
+    expect(
+      renderStarred({ kind: 'page', id: 'p-1', title: 'Logistics', is_draft: false })
+    ).toContain('aria-label="Open page Logistics"');
+    expect(renderStarred({ kind: 'slide', id: 's-1', title: 'Week 1', is_draft: false })).toContain(
+      'aria-label="Open slide deck Week 1"'
+    );
+    expect(
+      renderStarred({ kind: 'assignment', id: 'a-1', title: 'HW 1', is_draft: false })
+    ).toContain('aria-label="Open assignment HW 1"');
+  });
+
+  it('wears the muted style rather than the global link colour, whatever the element', () => {
+    // Without this the /admin anchor inherited the app's green while the peek
+    // button inherited nothing, and one line read as two different things.
+    for (const featured of [
+      { kind: 'page' as const, id: 'p-1', title: 'A', is_draft: false },
+      { kind: 'slide' as const, id: 's-1', title: 'B', is_draft: false },
+      { kind: 'assignment' as const, id: 'a-1', title: 'C', is_draft: false },
+    ]) {
+      const html = renderStarred(featured);
+      expect(html).toContain('text-ink-2');
+      expect(html).toContain('hover:text-ink-0');
+    }
+  });
+
+  it('keeps the whole title as a tooltip, because the line truncates', () => {
+    expect(
+      renderStarred({ kind: 'slide', id: 's-1', title: 'A very long deck name', is_draft: false })
+    ).toContain('title="A very long deck name"');
+  });
+
   it('links a starred deck to the slides viewer', () => {
     expect(
       renderStarred({ kind: 'slide', id: 's-1', title: 'Lecture 1', is_draft: false })
