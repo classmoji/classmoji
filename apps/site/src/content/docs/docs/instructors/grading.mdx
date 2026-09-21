@@ -1,6 +1,6 @@
 ---
 title: Grading
-description: How emoji grading works and how to grade assignments
+description: Grading scales, the assignment page, the gradebook, and the student report
 ---
 
 import Screenshot from '~/components/Screenshot.astro';
@@ -10,56 +10,69 @@ import gradingImg from './img-grading.png';
 import gradingQueueImg from './img-grading-queue.png';
 import settingsGradesImg from './img-settings-grades.png';
 
-Classmoji replaces numeric scores with emojis. Each emoji maps to a numeric value you configure, so grading stays expressive without losing precision.
+Classmoji grades with a scale you choose: expressive emoji, each mapped to a number, or a plain numeric scale. Either way, every grade on a submission is a number underneath, so weights and averages just work.
 
-### Emoji mappings
+### Grading scales
 
-Before grading, set up your emoji mappings in **Settings > Grades**. Each emoji you add gets assigned a numeric value (0–100). You can click **Populate defaults** to start with a sensible set.
+Set up your scale in **Settings > Grades**.
+
+**Emoji scale**: add emoji and give each one a numeric value (0–100). **Populate Defaults** starts you with a sensible set. A submission's grade is the mean of the emoji given to it; if several graders grade the same submission, their grades average.
+
+**Numeric scale**: click **Populate 0–100 scale** to get the built-in scores, `score-0` through `score-100` in steps of 5. Graders then type a score instead of picking an emoji.
 
 <Screenshot src={settingsGradesImg} alt="Settings > Grades showing the emoji-to-value mappings and the Populate defaults button" frame url="app.classmoji.io/admin/cs-101/settings/grades" size="lg" />
 
-When you grade a submission, you pick from these emojis. If you assign multiple emojis to a submission, the grade is the average of their values.
-
 ### Grading an assignment
 
-Open a repository from the sidebar and find the assignment you want to grade. Each student or team row has an emoji picker, click it to open, then click an emoji to add a grade. Click the same emoji again to remove it. Each row is one submission: a student's repository, their work on that assignment, and its status.
+Open a module, click an assignment, and you're on its [assignment page](/docs/instructors/modules-and-assignments#the-assignment-page). Each row is one submission: a student (or team), their repo, and its status.
 
-<Screenshot src={gradingImg} alt="A repository's grading view with per-student submission rows, emoji grades, graders, and a release toggle" frame url="app.classmoji.io/admin/cs-101/repos/hello-world" size="lg" />
+<Screenshot src={gradingImg} alt="An assignment page with per-student submission rows, grades, graders, and the release toggle" frame url="app.classmoji.io/admin/cs-101/assignments/lab-1" size="lg" />
 
-Assignments are graded per submission (one repository per student or team). You can assign graders to specific submissions from the repository view, so grading responsibilities stay organized across large classes. Assistants get a dedicated grading queue that gathers every submission across the class, with tabs for what still needs grading.
+- **Emoji scale**: click **Grade** on the row to open the emoji picker, then click an emoji to add it. Click the same emoji again to remove it.
+- **Numeric scale**: the **Grade** column holds an inline number field. Type a value from the scale and press **Tab** or **Enter** to save. Values that aren't on the scale are refused. Each grader has one score per submission; entering a new one replaces your previous score, while other graders' scores stay and average with yours.
+
+Filters (**All / Ungraded / Late / Not submitted**) and the **Submitted / Late / Graded / Ungraded** tiles keep track of where you are.
+
+### Graders
+
+Use **Assign graders** on the assignment page to split a large class between staff. In a row, the **Graders** column lists who's assigned; **Assign** or **Change** opens a checklist of staff flagged as graders. Assistants get a grading queue that gathers every submission assigned to them across the class.
 
 <Screenshot src={gradingQueueImg} alt="The assistant grading queue listing submissions by owner, repository, and assignment with status tabs" frame url="app.classmoji.io/assistant/cs-101/grading" size="lg" />
 
 ### Releasing grades
 
-Grades are hidden from students by default. Each assignment has a **release toggle** in the repository view. Flip it to release grades for that assignment — students will see their grade immediately.
-
-Releasing is per-assignment, so you can release one assignment while keeping others hidden.
-
-### Grade calculations
-
-Grades nest from the emoji values you apply all the way up to the final grade:
-
-<GradeCalculationDiagram />
-
-**Assignment grade** — the average of all emoji values applied to that submission.
-
-**Repository grade** — the average of all assignment grades within the repository. If drop lowest is enabled for the repository, the single lowest assignment grade is excluded from the average.
-
-**Final grade** — the average of all repository grades. Each repository contributes equally unless you configure weights in **Settings > Grades**.
-
-### Letter grades
-
-Map numeric ranges to letter grades in **Settings > Grades** (for example, 90–100 = A, 80–89 = B). Once configured, letter grades appear alongside numeric grades in the gradebook.
+Grades are hidden from students by default. Each assignment page has a **Grades released** switch. Flip it and students see their grade immediately. Releasing is per assignment, so you can release one while keeping others hidden.
 
 ### Late penalties
 
-You can apply a late penalty per assignment. When enabled, submissions after the deadline are automatically docked by the configured percentage. The penalty is applied before the grade feeds into repository and final grade calculations.
+Set **Late penalty points per hour** in **Settings > Grades**. A submission that lands after the deadline (plus any extension the student bought with tokens) is docked that many points per late hour. To forgive a specific submission, open the **⋮** on its row and choose **Waive late penalty**; **Restore late penalty** undoes it.
+
+### Grade calculations
+
+<GradeCalculationDiagram />
+
+**Submission grade**: the mean of the grades given to that submission (emoji values or scores, across graders), minus any late penalty.
+
+**Course grade**: the weighted mean of every graded, non-extra-credit assignment, using each assignment's weight, plus any extra-credit assignments on top. Repositories carry no weight, and there is no drop-lowest.
+
+### Letter grades
+
+Map score ranges to letters in **Settings > Grades** (for example, 90–100 = A, 80–89 = B). The gradebook's **Breakpoints** popover shows the same cutoffs. A student's letter can be overridden on their [report](#student-report).
 
 ### Gradebook
 
-The **Grades** page shows a full gradebook: every student as a row, every assignment as a column. You can toggle between emoji view and numeric view, search by student name or login, and edit letter grades inline.
+**Grades** (owner and teacher) is the full gradebook: one row per student, one column per published assignment.
 
 <Screenshot src={gradesImg} alt="The gradebook showing students with letter grades, raw grades, and final grade columns" frame url="app.classmoji.io/admin/cs-101/grades" size="lg" />
 
-For each student you can also leave a grade comment — open the comment panel from the gradebook row to add notes visible only to staff.
+- Search students, and use **Show** to filter: **Everyone**, **Has something to grade**, **Has a missing submission**, **Late somewhere**.
+- Columns are grouped by type, **Repositories**, **Quizzes**, **Forms**, in deadline order. Each header shows the title (linked to the assignment page), its module, weight, due date, and how many are left to grade.
+- Cells show the score, or **To grade** (blue), **Late** (amber), **Missing** (red), or **Not submitted**. Quiz cells show the score, **In progress**, or **Not attempted**; form cells **Responded** or **No response**.
+- Grade from the cell: type a score on a numeric scale, or click **Grade** to open the emoji picker on an emoji scale. Clicking an existing score jumps to that student's row on the assignment page.
+- **Total** (the weighted score; hover for the before-late-penalty and individual-only figures) and **Letter** (from the breakpoints, amber when overridden) stay pinned on the right. A class row at the bottom shows the mean and median.
+
+### Student report
+
+Click the eye icon on a gradebook row (or **View** on the Students list) to open a student's report at `/admin/:class/students/:login` (also under `/teacher`).
+
+It shows the student's name, login, school ID (owner-editable), and tokens; tiles for **Total** with letter, **Graded so far**, **Late** (hours and penalty), and **Final letter override**; then their assignments grouped into **Repositories**, **Quizzes**, and **Forms**, each with its module, status, grade, **View** (Github), **Waive late**, and **Grade now**. A **Private note** at the bottom is visible to staff only.

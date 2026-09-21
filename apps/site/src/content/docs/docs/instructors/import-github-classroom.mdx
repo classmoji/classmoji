@@ -31,8 +31,8 @@ A few things to know up front:
 - **You must be an administrator** of the classrooms you want to import. Github only returns classrooms you administer, so anything you can't see in Github Classroom won't appear here.
 - **You don't need to install the Classmoji Github app to import.** Classrooms come in fully usable. Install the app later to light up the Github-connected features (no re-import needed):
   - **Repository syncing** to keep imported repos in step with Github.
-  - **Live grading** through the emoji/issue pipeline.
-  - **Publishing assignments** and creating student repositories.
+  - **Live submissions**: push and issue webhooks from the student repos.
+  - **Publishing repositories** and creating student repositories.
   - **Roster syncing** and team management.
 
 ### Step 1: Connect to Github Classroom
@@ -60,33 +60,35 @@ Click **Import**. Classmoji starts a background job per classroom and shows live
 ### What gets imported
 
 - **Classrooms** under the matching Github organization.
-- **Assignments and their repositories**, brought in **published** since the student repositories already exist on Github.
+- **One module**, titled **GitHub Classroom import** and already published. Every imported assignment lands in it; split it into your own modules afterwards.
+- **A repository per Github Classroom assignment**, pointing at its starter repo as the template, Individual or Group to match, and **published** since the student repositories already exist on Github.
+- **An assignment per Github Classroom assignment**, submitting through that repository, **published**, with the Github Classroom deadline as its student deadline, a **weight of 0**, and **push** submission mode.
 - **Students**, enrolled as classroom members. Because they already accepted in Github Classroom, they're added as active members, not pending invites.
-- **Repositories**, linked to each student (individual assignments) or to a recovered team (group assignments).
+- **Student repositories**, linked to each student (individual assignments) or to a recovered team (group assignments).
 - **Teams**, for group assignments. Members are enrolled into the team and the shared repository is linked to it.
-- **Grades and submission info** (points awarded/available, commit count, submitted/passing status, original repo URL), stored on each student's repository.
-
-Each assignment lands as its own repository, **published** and **unweighted**, ready for you to weight when you configure the gradebook.
+- **Grades and submission info** (points awarded/available, commit count, submitted/passing status, original repo URL), stored read-only on each student's repository.
 
 <Screenshot src={importReposImg} alt="An imported classroom's Repositories list showing each assignment as a published, unweighted repository" frame url="app.classmoji.io/admin/cs-101/repos" size="lg" />
 
 ### Things to know
 
-- **Grades are read-only.** Imported scores are kept for viewing only. They are not pushed into Classmoji's live emoji/issue grading pipeline, so they won't conflict with a future real sync.
-- **Assignments start unweighted.** Imported assignments have a grading weight of `0`. Set weights when you configure the [gradebook](/docs/instructors/grading).
+- **Grades are read-only.** Imported scores are kept for viewing only. They are not turned into Classmoji grades, so they won't conflict with grading you do afterwards.
+- **Assignments start unweighted.** Imported assignments have a grading weight of `0`. Set weights from **Edit** on each assignment row; see [Grade assignments](/docs/instructors/grading).
+- **Assignments arrive in push mode.** Nothing is opened on Github by the import. Students keep submitting the way they did in Github Classroom: a push to their repository is the submission. If you'd rather have Classmoji open an issue per student, switch the assignment to issue mode in **Edit** before anyone submits; the mode locks once a submission exists.
 - **Group assignments** are imported with their teams. Each team's members are enrolled and the shared repository is linked to the team.
 - **Re-importing is safe.** The import is idempotent. Importing the same classroom again updates records in place rather than creating duplicates, and it won't overwrite edits you've made in Classmoji.
 - **Students with grades but no repository** (graded in Github Classroom but never accepted the assignment) are skipped, with a warning so you know who was left out.
 
 ### Organize into modules
 
-Imported assignments come in as individual repositories. To give students a guided path through them, group them into a [module](/docs/instructors/modules). A published module presents your imported work in the order you choose.
+Everything arrives in one published module, **GitHub Classroom import**. To give students a guided path, create your own [modules](/docs/instructors/modules) and move the assignments into them, adding pages and slides alongside.
 
 <Screenshot src={importModulesImg} alt="A module grouping the imported assignments into a guided sequence" frame url="app.classmoji.io/admin/cs-101/modules" size="lg" />
 
 ### What's next
 
 - [Manage your roster](/docs/instructors/roster)
-- [Set up repositories and assignments](/docs/instructors/modules-and-assignments)
+- [Repositories](/docs/instructors/repositories)
+- [Modules & assignments](/docs/instructors/modules-and-assignments)
 - [Build modules](/docs/instructors/modules)
 - [Grade assignments](/docs/instructors/grading)
