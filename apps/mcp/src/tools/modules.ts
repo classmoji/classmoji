@@ -220,15 +220,16 @@ export const moduleItemAddTool: ToolDefinition<ModuleItemAddArgs> = {
   },
   title: 'Add an item to a module',
   description:
-    'Appends a content item to a module: a page, a repo/lab (REPOSITORY links the assignment ' +
-    'container, not a git repo), a quiz, a slide deck, or a form. The target must belong to the ' +
-    'same classroom. Owner only.\n' +
+    'Appends a content item to a module: a page, a quiz, a slide deck, or a form. The target ' +
+    'must belong to the same classroom. Repositories are not module items: they are attached ' +
+    'to an assignment (assignment_create with type REPO), so REPOSITORY is refused here. ' +
+    'Owner only.\n' +
     'A FORM item links one of the classroom’s forms (list_forms / form_create) into the ' +
     'curriculum, so a waitlist, survey, team bid or peer review sits in the week it belongs to ' +
     'rather than as a link somebody has to remember to send. The form’s `closes_at` becomes the ' +
     'item’s due date, so setting one (form_update) is what puts the module row on the schedule. ' +
     'A DRAFT form can be attached — the item is created now and simply stays hidden from members ' +
-    'until form_publish, exactly as an unpublished repo or a DRAFT quiz does. A CLOSED form stays ' +
+    'until form_publish, exactly as a DRAFT quiz does. A CLOSED form stays ' +
     'visible on purpose, reading as closed. Attaching a form requires a Pro subscription (the ' +
     'forms surface is Pro everywhere); the other four types do not.',
   scope: 'write',
