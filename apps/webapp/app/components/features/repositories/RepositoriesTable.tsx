@@ -1,6 +1,6 @@
 import { forwardRef, useState } from 'react';
 import { Dropdown, Table, Tag } from 'antd';
-import { Link, useNavigate, useParams } from 'react-router';
+import { useNavigate, useParams } from 'react-router';
 import type { MenuProps } from 'antd';
 import {
   IconChevronDown,
@@ -198,8 +198,8 @@ const RepositoriesTable = ({
   // Only issue-mode assignments nest under a repository: each one is a GitHub
   // issue opened in every student repo, which is what a child row has always
   // meant here. A push-mode assignment IS the repository (a push submits,
-  // nothing is opened), so it is reached from the repository row's
-  // Submissions action instead of being listed as if it were an issue.
+  // nothing is opened), so it is reached from the repository row's View
+  // action instead of being listed as if it were an issue.
   const treeData: TreeNode[] = repositories.map(r => {
     const issueAssignments = (r.assignments || []).filter(a => a.submission_mode !== 'REPO');
     const children: TreeNode[] = issueAssignments.map(a => ({
@@ -343,13 +343,13 @@ const RepositoriesTable = ({
                 if (pushAssignments.length === 0) return null;
                 if (pushAssignments.length === 1) {
                   return (
-                    <Link
-                      to={`/admin/${classSlug}/assignments/${pushAssignments[0].id}`}
-                      onClick={e => e.stopPropagation()}
-                      className="text-sm font-medium text-sky-600 hover:text-sky-700 dark:text-sky-400 dark:hover:text-sky-300"
+                    <ActionLink
+                      onClick={() =>
+                        navigate(`/admin/${classSlug}/assignments/${pushAssignments[0].id}`)
+                      }
                     >
-                      Submissions
-                    </Link>
+                      View
+                    </ActionLink>
                   );
                 }
                 return (
@@ -364,7 +364,7 @@ const RepositoriesTable = ({
                       },
                     }}
                   >
-                    <ActionLink>Submissions</ActionLink>
+                    <ActionLink>View</ActionLink>
                   </Dropdown>
                 );
               })()}
@@ -398,19 +398,15 @@ const RepositoriesTable = ({
           );
         }
 
-        // assignment (issue mode): Submissions opens its page, like the repo
-        // row's action does for push mode; Edit opens the editor right here
+        // assignment (issue mode): View opens its page, like the repo row's
+        // action does for push mode; Edit opens the editor right here
         // (or on that page when this table was given no editor context).
         const a = record.assignment!;
         return (
           <div className="flex items-center gap-x-4 whitespace-nowrap">
-            <Link
-              to={`/admin/${classSlug}/assignments/${a.id}`}
-              onClick={e => e.stopPropagation()}
-              className="text-sm font-medium text-sky-600 hover:text-sky-700 dark:text-sky-400 dark:hover:text-sky-300"
-            >
-              Submissions
-            </Link>
+            <ActionLink onClick={() => navigate(`/admin/${classSlug}/assignments/${a.id}`)}>
+              View
+            </ActionLink>
             <ActionLink onClick={() => editAssignment(a.id)}>Edit</ActionLink>
           </div>
         );

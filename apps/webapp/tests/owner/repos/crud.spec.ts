@@ -147,7 +147,7 @@ test.describe('Assignment page', () => {
     // Repo rows start open, so the assignment link is already there.
     await page
       .getByRole('row', { name: /Hello World Part 1/ })
-      .getByRole('link', { name: 'Submissions' })
+      .getByRole('button', { name: 'View', exact: true })
       .click();
 
     await page.waitForURL(/\/assignments\/[^/]+$/, { timeout: 10000 });
@@ -160,7 +160,7 @@ test.describe('Assignment page', () => {
     const repoRow = repositoryRow(page, SEED_REPO);
     await page
       .getByRole('row', { name: /Hello World Part 1/ })
-      .getByRole('link', { name: 'Submissions' })
+      .getByRole('button', { name: 'View', exact: true })
       .click();
     await page.waitForURL(/\/assignments\/[^/]+$/, { timeout: 10000 });
     await waitForDataLoad(page);
@@ -411,7 +411,7 @@ test.describe('Assignment page - overview & actions', () => {
     await waitForDataLoad(page);
     await page
       .getByRole('row', { name: /Hello World Part 1/ })
-      .getByRole('link', { name: 'Submissions' })
+      .getByRole('button', { name: 'View', exact: true })
       .click();
     await page.waitForURL(/\/assignments\/[^/]+$/, { timeout: 10000 });
     await waitForDataLoad(page);
