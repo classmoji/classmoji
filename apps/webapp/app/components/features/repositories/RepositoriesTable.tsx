@@ -308,16 +308,6 @@ const RepositoriesTable = ({
       ),
     },
     {
-      // Grading weight lives on assignments; repositories carry none.
-      title: 'Weight (%)',
-      key: 'weight',
-      width: 110,
-      render: (_: unknown, record: TreeNode) =>
-        record.kind === 'assignment' ? (
-          <span className="text-ink-2">{record.weight ?? 0} %</span>
-        ) : null,
-    },
-    {
       title: 'Status',
       key: 'status',
       width: 110,

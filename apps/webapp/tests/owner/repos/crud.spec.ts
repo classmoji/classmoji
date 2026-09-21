@@ -53,9 +53,6 @@ test.describe('Repository List', () => {
       page.getByRole('columnheader', { name: 'Type', exact: true }).first()
     ).toBeVisible();
     await expect(
-      page.getByRole('columnheader', { name: 'Weight (%)', exact: true }).first()
-    ).toBeVisible();
-    await expect(
       page.getByRole('columnheader', { name: 'Status', exact: true }).first()
     ).toBeVisible();
 
@@ -255,37 +252,6 @@ test.describe('Repository Navigation', () => {
   }) => {
     const res = await page.request.get(`/admin/${testOrg}/repos/${SEED_REPO}`);
     expect(res.status()).toBe(404);
-  });
-});
-
-test.describe('Repository Weight Display', () => {
-  test('weight cell shows the seeded weight value', async ({
-    authenticatedPage: page,
-    testOrg,
-  }) => {
-    const classroom = await getClassroomBySlug(TEST_CLASSROOM);
-    const title = `qa-weight-${Date.now()}`;
-    // EditableCell renders the weight as "5 %".
-    const seeded = await seedRepositoryWithAssignment(classroom.id, title, {
-      isPublished: false,
-      weight: 5,
-    });
-    try {
-      await page.goto(`/admin/${testOrg}/repos`);
-      await waitForDataLoad(page);
-
-      const row = repositoryRow(page, title);
-      await expect(row).toBeVisible();
-      await expect(row.getByText('5 %')).toBeVisible();
-    } finally {
-      await deleteRepositoryById(seeded.repositoryId);
-    }
-  });
-
-  test('table shows a Total summary row', async ({ authenticatedPage: page, testOrg }) => {
-    await page.goto(`/admin/${testOrg}/repos`);
-    await waitForDataLoad(page);
-    await expect(page.getByText('Total')).toBeVisible();
   });
 });
 
