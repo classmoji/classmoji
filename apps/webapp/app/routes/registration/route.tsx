@@ -464,7 +464,25 @@ const Registration = ({ loaderData }: Route.ComponentProps) => {
         {/* Footer */}
         <div className="text-center mt-4">
           <p className="text-xs text-gray-500">
-            By registering, you agree to our terms of service and privacy policy.
+            By registering, you agree to our{' '}
+            <a
+              href="https://classmoji.io/terms"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="underline hover:text-gray-700 dark:hover:text-gray-300"
+            >
+              Terms of Service
+            </a>{' '}
+            and{' '}
+            <a
+              href="https://classmoji.io/privacy"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="underline hover:text-gray-700 dark:hover:text-gray-300"
+            >
+              Privacy Policy
+            </a>
+            .
           </p>
         </div>
       </div>

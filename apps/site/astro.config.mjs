@@ -19,7 +19,7 @@ export default defineConfig({
           navLinks: [
             { label: 'Back to main site', link: 'https://classmoji.io' },
           ],
-          footerText: '🍎 Built by educators and students. [Contribute on GitHub](https://github.com/classmoji/classmoji)',
+          footerText: '🍎 Built by educators and students. [Contribute on GitHub](https://github.com/classmoji/classmoji) · [Privacy Policy](/privacy) · [Terms of Service](/terms)',
         }),
       ],
       sidebar: [
