@@ -57,6 +57,40 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
     ClassmojiService.helper.findAllAssignmentsForStudent(userId, classSlug),
   ]);
 
+  // Self-formed group repos: the viewer's team state per repository, so the
+  // assignment row can send them to the team page. Students have no
+  // Repositories tab and no repository rows in this tree any more, so this
+  // row is the only place they can find team formation (#313).
+  const selfFormedByRepositoryId: NonNullable<StudentTreeCtx['selfFormedByRepositoryId']> = {};
+  const groupRepoIds = new Set<string>();
+  for (const m of modules) {
+    for (const a of m.assignments) {
+      if (a.type === 'REPO' && a.repository?.type === 'GROUP') groupRepoIds.add(a.repository.id);
+    }
+  }
+  if (groupRepoIds.size > 0) {
+    const selfFormedRepos = (
+      await ClassmojiService.repository.findByClassroomId(classroom.id)
+    ).filter(r => groupRepoIds.has(r.id) && r.team_formation_mode === 'SELF_FORMED' && r.slug);
+    for (const r of selfFormedRepos) {
+      // The tag is created lazily by the first team someone forms.
+      const tag = await ClassmojiService.organizationTag.findByClassroomIdAndName(
+        classroom.id,
+        r.slug as string
+      );
+      const team = tag
+        ? await ClassmojiService.team.findUserTeamByTag(classroom.id, tag.id, userId)
+        : null;
+      selfFormedByRepositoryId[r.id] = {
+        slug: r.slug as string,
+        hasTeam: !!team,
+        deadlinePassed: r.team_formation_deadline
+          ? new Date() > new Date(r.team_formation_deadline)
+          : false,
+      };
+    }
+  }
+
   // The student's own repo-assignments power submission status / issue links.
   const raByAssignmentId: Record<string, (typeof repoAssignments)[number]> = {};
   repoAssignments.forEach(ra => {
@@ -71,6 +105,7 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
     slidesUrl: process.env.SLIDES_URL || 'http://localhost:6500',
     pagesUrl: process.env.PAGES_URL || 'http://localhost:7100',
     classSlug,
+    selfFormedByRepositoryId,
   };
 };
 
@@ -93,7 +128,14 @@ const buildModuleLeaves = (
       // The row itself is the link; the nested "Open issue" action and the
       // attached-resource children belong to the deeper staff tree only.
       const leaf = buildAssignmentLeaf(a, raByAssignmentId[String(a.id)], ctx, 0);
-      leaves.push({ ...leaf, actionNode: undefined, children: undefined });
+      // A self-formed group assignment keeps its team action: it is the only
+      // way from this page to the team page.
+      const keepAction = !!(a.repository_id && ctx.selfFormedByRepositoryId?.[a.repository_id]);
+      leaves.push({
+        ...leaf,
+        actionNode: keepAction ? leaf.actionNode : undefined,
+        children: undefined,
+      });
     } else if (a.type === 'QUIZ' && a.quiz) {
       leaves.push(
         ...resourceLeaves(
@@ -205,13 +247,28 @@ const StudentModules = ({ loaderData }: Route.ComponentProps) => {
     );
   }
 
-  const { modules, raByAssignmentId, slidesUrl, pagesUrl, classSlug, isStaff } = loaderData;
+  const {
+    modules,
+    raByAssignmentId,
+    slidesUrl,
+    pagesUrl,
+    classSlug,
+    isStaff,
+    selfFormedByRepositoryId,
+  } = loaderData;
   // Served under every prefix this route's gate allows, so resource links stay
   // on the prefix the viewer arrived on. `isStaff` is the loader's own flag —
   // note it travels SEPARATELY from rolePrefix, which is only the URL: a student
   // under /teacher is still a student, and gets no draft chips because the
   // loader gave them no drafts to chip.
-  const ctx: StudentTreeCtx = { classSlug, slidesUrl, pagesUrl, rolePrefix, isStaff };
+  const ctx: StudentTreeCtx = {
+    classSlug,
+    slidesUrl,
+    pagesUrl,
+    rolePrefix,
+    isStaff,
+    selfFormedByRepositoryId,
+  };
   const allCollapsed = modules.length > 0 && modules.every(m => collapsed.has(m.id));
 
   return (

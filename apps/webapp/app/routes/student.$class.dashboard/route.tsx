@@ -163,12 +163,16 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
     );
     for (const m of selfFormedModules) {
       if (!m.slug) continue;
+      // The tag is created lazily by the first team someone forms, so a
+      // published self-formed repo with no teams yet has no tag: that student
+      // still needs a team, and used to be told there were no group repos.
       const tag = await ClassmojiService.organizationTag.findByClassroomIdAndName(
         classroom.id,
         m.slug
       );
-      if (!tag) continue;
-      const userTeam = await ClassmojiService.team.findUserTeamByTag(classroom.id, tag.id, userId);
+      const userTeam = tag
+        ? await ClassmojiService.team.findUserTeamByTag(classroom.id, tag.id, userId)
+        : null;
       if (userTeam) {
         const teamRepoName = allRepoAssignments.find(ra => ra.git_repo?.repository_id === m.id)
           ?.git_repo?.name;

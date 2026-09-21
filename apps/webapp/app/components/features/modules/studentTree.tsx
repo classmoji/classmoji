@@ -134,6 +134,28 @@ export const buildAssignmentLeaf = (
     ra?.git_repo ??
     (a.repository_id ? ctx.studentRepoByRepositoryId?.[String(a.repository_id)] : undefined);
   const ownRepoUrl = ownRepo ? repoGithubUrl(ownRepo.name, login) : null;
+
+  // A self-formed group assignment: until the viewer is on a team there is no
+  // repo to open, so the row sends them to the team page instead of GitHub.
+  const selfFormed = a.repository_id
+    ? ctx.selfFormedByRepositoryId?.[String(a.repository_id)]
+    : undefined;
+  const teamHref = selfFormed
+    ? `/${ctx.rolePrefix ?? 'student'}/${ctx.classSlug}/repos/${selfFormed.slug}/team`
+    : null;
+  const teamAction =
+    selfFormed && teamHref && !(selfFormed.deadlinePassed && !selfFormed.hasTeam) ? (
+      <Link to={teamHref}>
+        <Button size="small">{selfFormed.hasTeam ? 'View team' : 'Form a team'}</Button>
+      </Link>
+    ) : null;
+  const teamStatus =
+    selfFormed && !selfFormed.hasTeam ? (
+      <span className="text-xs font-medium text-ink-3">
+        {selfFormed.deadlinePassed ? 'Team formation closed' : 'No team yet'}
+      </span>
+    ) : null;
+
   return {
     key: `assignment-${a.id}`,
     kind: 'assignment',
@@ -141,14 +163,14 @@ export const buildAssignmentLeaf = (
     name: a.title,
     typeText: typeText ?? (a.repository?.type ? prettyType(a.repository.type) : undefined),
     weightText: a.weight != null ? `${a.weight}%` : undefined,
-    href: issueUrl ?? ownRepoUrl ?? undefined,
+    href: selfFormed && !selfFormed.hasTeam ? undefined : (issueUrl ?? ownRepoUrl ?? undefined),
     statusNode: (
       <div className="flex items-center gap-2 flex-wrap">
         {/* Staff-only, and gated on the flag rather than on the data: a
             student payload carries is_published too (always true, the loader
             filtered on it), so the flag is what keeps this off their tree. */}
         {ctx.isStaff === true && a.is_published === false && DRAFT_TAG}
-        {submittedPill(ra?.status)}
+        {teamStatus ?? submittedPill(ra?.status)}
         {showGrades && (
           <span className="inline-flex items-center gap-1 whitespace-nowrap">
             {ra.grades.map((g: AnyRepoAssignment, i: number) => (
@@ -163,16 +185,18 @@ export const buildAssignmentLeaf = (
         )}
       </div>
     ),
-    actionNode: issueUrl ? (
-      <a
-        href={issueUrl}
-        target="_blank"
-        rel="noreferrer"
-        className="text-sm font-medium text-sky-600 hover:text-sky-700 dark:text-sky-400"
-      >
-        Open issue
-      </a>
-    ) : null,
+    actionNode:
+      teamAction ??
+      (issueUrl ? (
+        <a
+          href={issueUrl}
+          target="_blank"
+          rel="noreferrer"
+          className="text-sm font-medium text-sky-600 hover:text-sky-700 dark:text-sky-400"
+        >
+          Open issue
+        </a>
+      ) : null),
     children: resourceLeaves({ pages: a.pages, slides: a.slides }, level + 1, `a-${a.id}`, ctx),
   };
 };
