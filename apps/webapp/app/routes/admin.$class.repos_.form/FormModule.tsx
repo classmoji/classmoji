@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 
 import { useFetcher, useRevalidator } from 'react-router';
 import { useCallout } from '@classmoji/ui-components';
@@ -261,9 +261,19 @@ const FormModule = ({
     if (repository) setValue('template', repository.template);
   }, [repository?.id]);
 
-  // Close drawer after successful submission and revalidate parent route
+  // Close after the save round-trips. The fetcher can still read `idle` on the
+  // render right after `submit()` (the router discovers the route first), so
+  // waiting for the idle→busy→idle transition is what makes this safe; keying
+  // on `isSubmitting` alone closed the form before the request left.
+  const sawBusyRef = useRef(false);
   useEffect(() => {
-    if (isSubmitting && fetcher!.state === 'idle') {
+    if (!isSubmitting) return;
+    if (fetcher!.state !== 'idle') {
+      sawBusyRef.current = true;
+      return;
+    }
+    if (sawBusyRef.current) {
+      sawBusyRef.current = false;
       setIsSubmitting(false);
 
       const fetcherData = fetcher!.data as ActionResponse | undefined;
