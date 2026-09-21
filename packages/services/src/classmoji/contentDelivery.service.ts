@@ -201,6 +201,23 @@ export function isContentDeliveryEnabled(
 }
 
 /**
+ * Should a NEW content repo for this classroom be created private?
+ *
+ * Yes exactly when this layer will serve the classroom: the deployment can sign
+ * and the classroom is enabled — the same two halves `signUploadedAsset` checks
+ * before it stores a signable path. Anything else is the legacy path, where an
+ * upload is stored as its raw.githubusercontent.com URL and images may come
+ * from `{org}.github.io`; a private repo there would turn every image into a
+ * broken link. Both repo-creation sites (page.service, the slides.com importer)
+ * ask this one function so they cannot drift apart.
+ */
+export function shouldCreatePrivateContentRepo(
+  classroom: { content_delivery_enabled?: boolean | null } | null | undefined
+): boolean {
+  return isContentDeliveryConfigured() && isContentDeliveryEnabled(classroom);
+}
+
+/**
  * Will this classroom's references actually come back SIGNED?
  *
  * The flag above answers "was this classroom opted in", which used to be the

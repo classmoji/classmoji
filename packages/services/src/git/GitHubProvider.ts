@@ -460,23 +460,40 @@ export class GitHubProvider extends GitProvider {
   }
 
   /**
-   * Create a public repository (e.g., for GitHub Pages content)
+   * Create a classroom's shared content repository.
+   *
+   * The caller decides visibility — `contentDelivery.shouldCreatePrivateContentRepo`
+   * is the rule. A classroom served through the signed content-delivery layer
+   * gets a private repo: that layer reads it through authenticated API calls,
+   * so it never needs to be public. The legacy path (a deployment without the
+   * signing env, or a classroom not enabled for delivery) stores uploads as
+   * raw.githubusercontent.com URLs and may serve images from `{org}.github.io`,
+   * both of which need a public repo.
+   *
+   * There is no fallback between the two: if a private repo is requested and
+   * GitHub refuses it, the error surfaces rather than a public repo being made.
+   *
+   * `auto_init` is required — the content flow commits to the default branch,
+   * which does not exist until the repo has an initial commit.
+   *
    * @param {string} org - Organization login
    * @param {string} name - Repository name
    * @param {string} description - Repository description
+   * @param {boolean} isPrivate - Whether the repo is private (default: true)
    * @returns {Promise<{id: string, name: string, url: string}>}
    */
-  async createPublicRepository(
+  async createContentRepository(
     org: string,
     name: string,
-    description: string = ''
+    description: string = '',
+    isPrivate: boolean = true
   ): Promise<{ id: string; name: string; url: string }> {
     const octokit = await this.#getOctokit();
     const { data } = await octokit.request('POST /orgs/{org}/repos', {
       org,
       name,
       description,
-      private: false,
+      private: isPrivate,
       auto_init: true,
     });
     return { id: String(data.id), name: data.name, url: data.html_url };

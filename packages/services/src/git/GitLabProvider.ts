@@ -230,13 +230,14 @@ export class GitLabProvider extends GitProvider {
    * @param {string} description - Project description
    * @returns {Promise<{id: string, name: string, url: string}>}
    */
-  async createPublicRepository(
+  async createContentRepository(
     _group: string,
     _name: string,
-    _description: string = ''
+    _description: string = '',
+    _isPrivate: boolean = true
   ): Promise<never> {
-    // TODO: POST /api/v4/projects with visibility: 'public'
-    throw new Error('GitLabProvider.createPublicRepository() not implemented');
+    // TODO: POST /api/v4/projects with visibility per _isPrivate
+    throw new Error('GitLabProvider.createContentRepository() not implemented');
   }
 
   /**

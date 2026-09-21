@@ -3,7 +3,10 @@ import { titleToIdentifier, RESERVED_PAGE_SLUGS } from '@classmoji/utils';
 import { ContentService } from '../content/ContentService.ts';
 import { getGitProvider } from '../git/index.ts';
 import { recordContentAssets, removeContentAssetFolder } from './contentAssets.service.ts';
-import { isContentDeliveryEnabled } from './contentDelivery.service.ts';
+import {
+  isContentDeliveryEnabled,
+  shouldCreatePrivateContentRepo,
+} from './contentDelivery.service.ts';
 import { indexOneFile } from './contentIndex.service.ts';
 import * as contentManifestService from './contentManifest.service.ts';
 import * as notificationService from './notification.service.ts';
@@ -279,10 +282,11 @@ async function ensureContentRepoExists({ classroom, gitOrgLogin, repoName }: Con
   const repoExists = await gitProvider.repositoryExists(gitOrgLogin, repoName);
   if (!repoExists) {
     try {
-      await gitProvider.createPublicRepository(
+      await gitProvider.createContentRepository(
         gitOrgLogin,
         repoName,
-        `Course content for ${classroom.name || gitOrgLogin}`
+        `Course content for ${classroom.name || gitOrgLogin}`,
+        shouldCreatePrivateContentRepo(classroom)
       );
 
       // Give GitHub a moment to initialize the repo

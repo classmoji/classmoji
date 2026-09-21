@@ -40,13 +40,13 @@ vi.mock('../../content/ContentService.ts', () => ({
 }));
 
 const repositoryExistsMock = vi.fn();
-const createPublicRepositoryMock = vi.fn();
+const createContentRepositoryMock = vi.fn();
 const enableGitHubPagesMock = vi.fn();
 
 vi.mock('../../git/index.ts', () => ({
   getGitProvider: () => ({
     repositoryExists: (...args: unknown[]) => repositoryExistsMock(...args),
-    createPublicRepository: (...args: unknown[]) => createPublicRepositoryMock(...args),
+    createContentRepository: (...args: unknown[]) => createContentRepositoryMock(...args),
     enableGitHubPages: (...args: unknown[]) => enableGitHubPagesMock(...args),
   }),
 }));
@@ -238,12 +238,48 @@ describe('page.createPage', () => {
     await pending;
     vi.useRealTimers();
 
-    expect(createPublicRepositoryMock).toHaveBeenCalledWith(
+    // Legacy path: uploads are stored as raw URLs, so the repo stays public.
+    expect(createContentRepositoryMock).toHaveBeenCalledWith(
       'test-org',
       'content-test-org-cs101',
-      'Course content for Test Class'
+      'Course content for Test Class',
+      false
     );
     expect(enableGitHubPagesMock).toHaveBeenCalledWith('test-org', 'content-test-org-cs101');
+  });
+
+  // Private exactly when the delivery layer will serve the classroom: the
+  // deployment can sign AND the classroom is enabled. Env is pinned per test so
+  // a local .env cannot change the outcome.
+  it.each([
+    { signing: 'test-secret', expected: true, label: 'private when delivery can serve it' },
+    { signing: '', expected: false, label: 'public when the deployment cannot sign' },
+  ])('creates the content repo $label', async ({ signing, expected }) => {
+    classroomFindUniqueMock.mockResolvedValue({ ...classroom, content_delivery_enabled: true });
+    repositoryExistsMock.mockResolvedValue(false);
+    vi.stubEnv('CONTENT_SIGNING_SECRET', signing);
+    vi.stubEnv('CONTENT_DELIVERY_ORIGIN', 'https://content.example.test');
+    vi.useFakeTimers();
+    try {
+      const pending = createPage({
+        classroomId: 'class-1',
+        title: 'First Page',
+        createdBy: 'user-1',
+      });
+      await vi.runAllTimersAsync();
+      await pending;
+    } finally {
+      vi.useRealTimers();
+      vi.unstubAllEnvs();
+    }
+
+    expect(createContentRepositoryMock).toHaveBeenCalledWith(
+      'test-org',
+      'content-test-org-cs101',
+      'Course content for Test Class',
+      expected
+    );
+    expect(enableGitHubPagesMock).not.toHaveBeenCalled();
   });
 
   // The cutover invariant. A classroom served by the signed-content Worker is
@@ -264,7 +300,7 @@ describe('page.createPage', () => {
     await pending;
     vi.useRealTimers();
 
-    expect(createPublicRepositoryMock).toHaveBeenCalled();
+    expect(createContentRepositoryMock).toHaveBeenCalled();
     expect(enableGitHubPagesMock).not.toHaveBeenCalled();
   });
 
@@ -489,7 +525,7 @@ describe('page.ensureContentRepo', () => {
   it('returns the repo name and tries to enable Pages while delivery is off', async () => {
     const result = await ensureContentRepo('class-1');
     expect(result).toEqual({ repoName: 'content-test-org-cs101' });
-    expect(createPublicRepositoryMock).not.toHaveBeenCalled();
+    expect(createContentRepositoryMock).not.toHaveBeenCalled();
     expect(enableGitHubPagesMock).toHaveBeenCalledTimes(1);
   });
 
@@ -504,7 +540,7 @@ describe('page.ensureContentRepo', () => {
 
   it('throws the route-identical message when repo creation fails', async () => {
     repositoryExistsMock.mockResolvedValue(false);
-    createPublicRepositoryMock.mockRejectedValue(new Error('403'));
+    createContentRepositoryMock.mockRejectedValue(new Error('403'));
     await expect(ensureContentRepo('class-1')).rejects.toThrow(
       'Failed to create GitHub repository. Please check your GitHub organization permissions'
     );

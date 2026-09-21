@@ -151,10 +151,11 @@ export async function processZipImport({
   const repoExists = await gitProvider.repositoryExists(org, repoName);
   if (!repoExists) {
     console.log(`Creating content repository: ${repoName}`);
-    await gitProvider.createPublicRepository(
+    await gitProvider.createContentRepository(
       org,
       repoName,
-      `Course content for ${classroom.name || org} - ${contentNamespace}`
+      `Course content for ${classroom.name || org} - ${contentNamespace}`,
+      ClassmojiService.contentDelivery.shouldCreatePrivateContentRepo(classroom)
     );
     // Give GitHub a moment to initialize the repo
     await new Promise(resolve => setTimeout(resolve, 2000));
