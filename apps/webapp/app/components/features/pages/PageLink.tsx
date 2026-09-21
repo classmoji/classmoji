@@ -18,15 +18,26 @@ export interface PageLinkProps {
   /** The pre-peek behaviour: the external pages-app URL this site already built. */
   href: string;
   className?: string;
+  /**
+   * What a screen reader announces, when the visible children are not enough on
+   * their own — a truncated title beside an icon, say. Left out, the children
+   * name the control as they always did.
+   */
+  ariaLabel?: string;
   children: React.ReactNode;
 }
 
-const PageLink = ({ pageId, title, href, className, children }: PageLinkProps) => {
+const PageLink = ({ pageId, title, href, className, ariaLabel, children }: PageLinkProps) => {
   const peek = usePagePeek();
+
+  // The page's title is the pointer tooltip in both branches. Whatever the
+  // caller renders inside can be truncated — this is where the whole title is
+  // still readable, and it costs nothing where it is not.
+  const shared = { className, title, 'aria-label': ariaLabel };
 
   if (!peek) {
     return (
-      <a href={href} target="_blank" rel="noopener noreferrer" className={className}>
+      <a href={href} target="_blank" rel="noopener noreferrer" {...shared}>
         {children}
       </a>
     );
@@ -36,8 +47,9 @@ const PageLink = ({ pageId, title, href, className, children }: PageLinkProps) =
     <button
       type="button"
       onClick={() => peek.openPeek({ pageId, title })}
-      className={`text-left ${className ?? ''}`}
       data-cm-page-link={pageId}
+      {...shared}
+      className={`text-left ${className ?? ''}`}
     >
       {children}
     </button>

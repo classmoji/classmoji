@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Modal, Form, Input, Select, DatePicker, TimePicker, Checkbox, Button, Radio } from 'antd';
 import dayjs, { type Dayjs } from 'dayjs';
 import {
@@ -10,7 +10,13 @@ import {
   IconRepeat,
   IconLink,
 } from '@tabler/icons-react';
-import { getEventTypeDotColor, getEventTypeLabel } from './utils';
+import { buildEventWindow, getEventTypeDotColor, getEventTypeLabel } from './utils';
+import {
+  buildLinkOptions,
+  createLinkTagRender,
+  renderLinkOption,
+  useFeaturedLink,
+} from './linkTagRender';
 
 const { TextArea } = Input;
 
@@ -29,16 +35,21 @@ const DAYS_OF_WEEK = [
 interface PageOption {
   id: string;
   title: string;
+  /** Staff pickers offer drafts, marked as such. See the calendar loaders. */
+  is_draft?: boolean;
 }
 
 interface SlideOption {
   id: string;
   title: string;
+  is_draft?: boolean;
 }
 
 interface AssignmentOption {
   id: string;
   title: string;
+  /** Always published today — the loaders do not offer unpublished ones. */
+  is_draft?: boolean;
   repository?: { title: string };
 }
 
@@ -69,11 +80,7 @@ const InlineRow = ({
   children: React.ReactNode;
 }) => (
   <div className="flex items-start gap-3 py-1.5">
-    <Icon
-      size={18}
-      strokeWidth={1.75}
-      className="shrink-0 mt-2.5 text-ink-4"
-    />
+    <Icon size={18} strokeWidth={1.75} className="shrink-0 mt-2.5 text-ink-4" />
     <div className="flex-1 min-w-0">{children}</div>
   </div>
 );
@@ -106,6 +113,19 @@ const AddEventModal = ({
   const [linkedSlideIds, setLinkedSlideIds] = useState<string[]>([]);
   const [linkedAssignmentIds, setLinkedAssignmentIds] = useState<string[]>([]);
 
+  // One star across all three pickers — see useFeaturedLink.
+  const { featured, setFeatured, toggleFeatured, keepFeaturedWithin } = useFeaturedLink();
+
+  const pagePicker = useMemo(() => buildLinkOptions(pages), [pages]);
+  const slidePicker = useMemo(() => buildLinkOptions(slides), [slides]);
+  const assignmentPicker = useMemo(
+    () =>
+      buildLinkOptions(assignments, a =>
+        a.repository?.title ? `${a.repository.title}: ${a.title}` : a.title
+      ),
+    [assignments]
+  );
+
   const resetAll = () => {
     form.resetFields();
     setIsRecurring(false);
@@ -113,27 +133,25 @@ const AddEventModal = ({
     setLinkedPageIds([]);
     setLinkedSlideIds([]);
     setLinkedAssignmentIds([]);
+    setFeatured(null);
   };
 
   const handleSubmit = async () => {
     try {
       const values = await form.validateFields();
 
-      const startDate = values.date.toDate();
-      const endDate = values.date.toDate();
-
-      const startTime = values.start_time.toDate();
-      const endTime = values.end_time.toDate();
-
-      startDate.setHours(startTime.getHours(), startTime.getMinutes(), 0, 0);
-      endDate.setHours(endTime.getHours(), endTime.getMinutes(), 0, 0);
+      const { start, end } = buildEventWindow(
+        values.date.toDate(),
+        values.start_time.toDate(),
+        values.end_time.toDate()
+      );
 
       const eventData = {
         event_type: values.event_type,
         title: values.title,
         description: values.description || null,
-        start_time: startDate.toISOString(),
-        end_time: endDate.toISOString(),
+        start_time: start.toISOString(),
+        end_time: end.toISOString(),
         location: values.location || null,
         meeting_link: values.meeting_link || null,
         is_recurring: isRecurring,
@@ -146,12 +164,17 @@ const AddEventModal = ({
                   : null,
             }
           : null,
+        // Links — and the star on one of them — belong to an occurrence date,
+        // and a recurring event has none until it is expanded. Both travel
+        // together for exactly that reason.
         ...(isRecurring
           ? {}
           : {
               linkedPageIds,
               linkedSlideIds,
               linkedAssignmentIds,
+              featuredKind: featured?.kind ?? null,
+              featuredId: featured?.id ?? null,
             }),
       };
 
@@ -366,9 +389,24 @@ const AddEventModal = ({
                       <Select
                         mode="multiple"
                         placeholder="Link pages"
+                        // The placeholder is a span in antd, not an input
+                        // attribute, so a spec cannot find this picker by it.
+                        // Prefixed per modal: both are mounted at once, and an
+                        // unprefixed id would match two elements.
+                        data-testid="add-calendar-link-pages"
                         value={linkedPageIds}
-                        onChange={setLinkedPageIds}
-                        options={pages.map(p => ({ value: p.id, label: p.title }))}
+                        onChange={ids => {
+                          setLinkedPageIds(ids);
+                          keepFeaturedWithin('page', ids);
+                        }}
+                        options={pagePicker.options}
+                        optionRender={renderLinkOption}
+                        tagRender={createLinkTagRender({
+                          kind: 'page',
+                          meta: pagePicker.meta,
+                          featured,
+                          onToggleFeatured: toggleFeatured,
+                        })}
                         optionFilterProp="label"
                         allowClear
                         className="w-full"
@@ -378,9 +416,22 @@ const AddEventModal = ({
                       <Select
                         mode="multiple"
                         placeholder="Link slide decks"
+                        // The placeholder is a span in antd, not an input attribute,
+                        // so a spec cannot find this picker by it.
+                        data-testid="add-calendar-link-slides"
                         value={linkedSlideIds}
-                        onChange={setLinkedSlideIds}
-                        options={slides.map(s => ({ value: s.id, label: s.title }))}
+                        onChange={ids => {
+                          setLinkedSlideIds(ids);
+                          keepFeaturedWithin('slide', ids);
+                        }}
+                        options={slidePicker.options}
+                        optionRender={renderLinkOption}
+                        tagRender={createLinkTagRender({
+                          kind: 'slide',
+                          meta: slidePicker.meta,
+                          featured,
+                          onToggleFeatured: toggleFeatured,
+                        })}
                         optionFilterProp="label"
                         allowClear
                         className="w-full"
@@ -390,12 +441,22 @@ const AddEventModal = ({
                       <Select
                         mode="multiple"
                         placeholder="Link assignments"
+                        // The placeholder is a span in antd, not an input attribute,
+                        // so a spec cannot find this picker by it.
+                        data-testid="add-calendar-link-assignments"
                         value={linkedAssignmentIds}
-                        onChange={setLinkedAssignmentIds}
-                        options={assignments.map(a => ({
-                          value: a.id,
-                          label: a.repository?.title ? `${a.repository.title}: ${a.title}` : a.title,
-                        }))}
+                        onChange={ids => {
+                          setLinkedAssignmentIds(ids);
+                          keepFeaturedWithin('assignment', ids);
+                        }}
+                        options={assignmentPicker.options}
+                        optionRender={renderLinkOption}
+                        tagRender={createLinkTagRender({
+                          kind: 'assignment',
+                          meta: assignmentPicker.meta,
+                          featured,
+                          onToggleFeatured: toggleFeatured,
+                        })}
                         optionFilterProp="label"
                         allowClear
                         className="w-full"

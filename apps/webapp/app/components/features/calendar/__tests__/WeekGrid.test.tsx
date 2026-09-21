@@ -1,0 +1,703 @@
+/**
+ * The shared week grid, asserted against the markup it renders.
+ *
+ * Two of these are regressions waiting to come back: the now indicator drawing
+ * on a week that does not contain today (the staff grid gated only one of its
+ * three pieces), and the all-day strip reserving a band across the top of every
+ * week (the staff grid always rendered it).
+ */
+
+import { renderToStaticMarkup } from 'react-dom/server';
+import { MemoryRouter } from 'react-router';
+import { describe, expect, it } from 'vitest';
+import WeekGrid from '../WeekGrid';
+import EventCard from '../EventCard';
+import type { CalendarEventWithLinks } from '../types';
+
+/** Sunday…Saturday around a date, the way the hook builds them. */
+const weekOf = (date: Date): Date[] => {
+  const sunday = new Date(date);
+  sunday.setDate(date.getDate() - date.getDay());
+  sunday.setHours(0, 0, 0, 0);
+  return Array.from({ length: 7 }, (_, i) => {
+    const d = new Date(sunday);
+    d.setDate(sunday.getDate() + i);
+    return d;
+  });
+};
+
+const TUESDAY = new Date(2026, 8, 22, 14, 30);
+
+const lecture: CalendarEventWithLinks = {
+  id: 'evt-lecture',
+  title: 'Week 1 Lecture',
+  start_time: new Date(2026, 8, 22, 10, 0).toISOString(),
+  end_time: new Date(2026, 8, 22, 11, 0).toISOString(),
+  event_type: 'LECTURE',
+  location: 'ECSC 116',
+};
+
+const deadline: CalendarEventWithLinks = {
+  id: 'deadline-1',
+  title: 'Due: Short Assignment 1',
+  start_time: new Date(2026, 8, 23, 23, 59).toISOString(),
+  end_time: new Date(2026, 8, 23, 23, 59).toISOString(),
+  event_type: 'DEADLINE',
+  is_deadline: true,
+};
+
+interface RenderProps {
+  onEventClick?: (event: CalendarEventWithLinks) => void;
+  alwaysShowAllDay?: boolean;
+  startHour?: number;
+  endHour?: number;
+  classSlug?: string;
+  rolePrefix?: string;
+  pagesUrl?: string;
+  slidesUrl?: string;
+}
+
+const render = (
+  events: CalendarEventWithLinks[],
+  now: Date,
+  dates = weekOf(TUESDAY),
+  props: RenderProps = {}
+): string =>
+  // A linked assignment falls back to a `NavLink`, which needs a router in
+  // scope — the app always has one, this test has to bring its own.
+  renderToStaticMarkup(
+    <MemoryRouter>
+      <WeekGrid
+        dates={dates}
+        now={now}
+        eventsFor={date => events.filter(e => new Date(e.start_time).getDate() === date.getDate())}
+        {...props}
+      />
+    </MemoryRouter>
+  );
+
+/**
+ * The three pieces of the now indicator, identified by markup only they
+ * produce. Asserting "the document contains no `var(--accent)`" would also
+ * forbid the today pill and anything later work draws in the accent colour.
+ */
+const NOW_BADGE = '>2:30<';
+const NOW_MARKER_DOT = 'w-2.5 h-2.5 rounded-full -ml-1.5';
+const NOW_RULE = 'h-px opacity-30';
+
+describe('WeekGrid', () => {
+  it('labels the hour gutter on one line, 8 AM first and 10 PM last', () => {
+    const html = render([], TUESDAY);
+    expect(html).toContain('>8 AM<');
+    expect(html).toContain('>10 PM<');
+    // Never "0 AM": midnight and noon are both 12.
+    expect(html).not.toContain('>0 AM<');
+  });
+
+  it('draws no part of the now indicator on the server', () => {
+    // This IS the server pass: `renderToStaticMarkup` never runs the mount
+    // effect. Drawing the server's clock is a hydration mismatch on the badge's
+    // text, and a visible jump for a reader in another timezone.
+    const html = render([], TUESDAY);
+    expect(html).not.toContain(NOW_BADGE);
+    expect(html).not.toContain(NOW_MARKER_DOT);
+    expect(html).not.toContain(NOW_RULE);
+  });
+
+  it('draws no part of the now indicator on another week', () => {
+    const html = render([], TUESDAY, weekOf(new Date(2026, 10, 10)));
+    expect(html).not.toContain(NOW_BADGE);
+    expect(html).not.toContain(NOW_MARKER_DOT);
+    expect(html).not.toContain(NOW_RULE);
+  });
+
+  it('gives a timed event the shared block, with its end time and room', () => {
+    const html = render([lecture], TUESDAY);
+    expect(html).toContain('Week 1 Lecture');
+    expect(html).toContain('ECSC 116');
+    // Students only ever saw a start time here. The time and the room share
+    // ONE row, with the meridiem written once — two rows did not fit in the
+    // blocks the grid draws, and the second was sliced in half.
+    expect(html).toMatch(/10:00\s*–\s*11:00\s*AM/);
+    expect(html).toContain('·');
+  });
+
+  it('keeps the meta row on a 50-minute x-hour, and pays for it in padding', () => {
+    // The most common short slot here. It keeps its row by dropping to `py-1`;
+    // at `p-2` the row would not have fitted.
+    const xHour: CalendarEventWithLinks = {
+      ...lecture,
+      id: 'evt-x-hour',
+      title: 'x-hour',
+      end_time: new Date(2026, 8, 22, 10, 50).toISOString(),
+    };
+    const html = render([xHour], TUESDAY);
+
+    expect(html).toMatch(/10:00\s*–\s*10:50\s*AM/);
+    expect(html).toContain('ECSC 116');
+    expect(html).toContain('px-2 py-1');
+  });
+
+  it('drops the meta row from a block too short to hold it', () => {
+    const short: CalendarEventWithLinks = {
+      ...lecture,
+      id: 'evt-short',
+      title: 'Quick sync',
+      end_time: new Date(2026, 8, 22, 10, 45).toISOString(),
+    };
+    const html = render([short], TUESDAY);
+
+    // Title only, rather than a title and the top half of a second line.
+    expect(html).toContain('Quick sync');
+    expect(html).not.toContain('ECSC 116');
+    expect(html).not.toMatch(/10:00\s*–/);
+  });
+
+  it('leaves an hour-long block at the roomier padding', () => {
+    const html = render([lecture], TUESDAY);
+    expect(html).not.toContain('px-2 py-1');
+  });
+
+  it('starts a block’s content at the top, however tall the block is', () => {
+    // A <button> centres its content vertically, so a two-hour block drew its
+    // title down the middle of the slot. It is a top-aligned column instead.
+    const long: CalendarEventWithLinks = {
+      ...lecture,
+      id: 'evt-long',
+      title: 'Long OH',
+      end_time: new Date(2026, 8, 22, 12, 0).toISOString(),
+    };
+    const html = render([long], TUESDAY);
+
+    expect(html).toContain('height:8rem');
+    expect(html).toContain('flex flex-col justify-start items-stretch');
+  });
+
+  it('sizes a block by its duration and leaves a gap under it', () => {
+    // One hour of grid is 4rem, so a one-hour lecture is 4rem tall — not the
+    // height of whatever text happens to be in it. `pb-1` is inside that
+    // height, so the next block does not touch this one.
+    const html = render([lecture], TUESDAY);
+    expect(html).toContain('height:4rem');
+    expect(html).toContain('pb-1');
+    // And the card fills what the grid measured for it.
+    expect(html).toContain('h-full flex flex-col min-h-0');
+  });
+
+  it('keeps the icons out of a block’s accessible name', () => {
+    // antd renders an icon as role="img" with aria-label="clock-circle", which
+    // a screen reader reads out in the middle of the event's name.
+    const html = render([lecture], TUESDAY);
+    expect(html).toContain('aria-label="clock-circle" aria-hidden="true"');
+  });
+
+  it('hides the all-day strip when the week has nothing for it', () => {
+    expect(render([lecture], TUESDAY)).not.toContain('All day');
+  });
+
+  it('keeps the strip on screen for a caller that can drop onto it', () => {
+    // Staff only: the strip is the one drop target that changes an event's day
+    // without rewriting its time, so it has to exist on an empty week.
+    const html = render([lecture], TUESDAY, weekOf(TUESDAY), { alwaysShowAllDay: true });
+    expect(html).toContain('All day');
+  });
+
+  it('shows the strip, with the due time, as soon as one day has a deadline', () => {
+    const html = render([lecture, deadline], TUESDAY);
+    expect(html).toContain('All day');
+    expect(html).toContain('due 11:59 PM');
+  });
+});
+
+describe('WeekGrid — the rendered window', () => {
+  it('draws the default 8 AM…10 PM band when nothing asks for more', () => {
+    const html = render([], TUESDAY);
+    expect(html).toContain('>8 AM<');
+    expect(html).toContain('>10 PM<');
+    expect(html).not.toContain('>11 PM<');
+  });
+
+  it('draws an 11 PM row when the window reaches midnight', () => {
+    // `hourRange` widens to 24 for an 11:59 PM deadline; the grid draws the
+    // row that gives its line somewhere to land.
+    const html = render([deadline], TUESDAY, weekOf(TUESDAY), { endHour: 24 });
+    expect(html).toContain('>11 PM<');
+    // And 24 prints as 12 AM, never 0 AM — but it is the EXCLUSIVE end, so
+    // there is no row for it.
+    expect(html).not.toContain('>0 AM<');
+  });
+
+  it('closes the last row with the grid’s edge, not a rule of its own', () => {
+    // `last:border-b-0` said that and never did it: an hour cell is not the
+    // column's last child, because the deadline, block and pill layers come
+    // after it.
+    const html = render([], TUESDAY);
+    expect(html).not.toContain('last:border-b-0');
+    // 15 rows, 14 of them with a bottom border, per day column plus nothing
+    // in the gutter.
+    expect((html.match(/border-b border-line transition-colors/g) ?? []).length).toBe(14 * 7);
+  });
+
+  it('opens upward to an early start and rebases everything on it', () => {
+    const html = render([], TUESDAY, weekOf(TUESDAY), { startHour: 6 });
+    expect(html).toContain('>6 AM<');
+    // The gutter labels are offsets from the top of the window, so 6 AM is now
+    // the row at zero.
+    expect(html).toContain('top:calc(0rem + 4px)');
+  });
+
+  it('gives a 10:30 PM event a block instead of exiling it to the strip', () => {
+    const late: CalendarEventWithLinks = {
+      ...lecture,
+      id: 'evt-late',
+      title: 'Late review',
+      start_time: new Date(2026, 8, 22, 22, 30).toISOString(),
+      end_time: new Date(2026, 8, 22, 23, 30).toISOString(),
+    };
+    const html = render([late], TUESDAY, weekOf(TUESDAY), { endHour: 24 });
+
+    expect(html).toContain('Late review');
+    expect(html).not.toContain('All day');
+  });
+
+  it('clips an event that crosses midnight at the bottom edge', () => {
+    const crossing: CalendarEventWithLinks = {
+      ...lecture,
+      id: 'evt-crossing',
+      title: 'Night lab',
+      start_time: new Date(2026, 8, 22, 23, 0).toISOString(),
+      end_time: new Date(2026, 8, 23, 1, 0).toISOString(),
+    };
+    const html = render([crossing], TUESDAY, weekOf(TUESDAY), { endHour: 24 });
+
+    expect(html).toContain('Night lab');
+    // Two hours of event, one hour of grid left: it stops at the last row
+    // rather than hanging 4rem below the calendar.
+    expect(html).toContain('height:4rem');
+    expect(html).not.toContain('height:8rem');
+  });
+});
+
+describe('WeekGrid — deadline lines', () => {
+  const ROSE_LINE = 'border-t-2 border-rose-500/80';
+
+  it('draws a line and a pill for a deadline inside the window', () => {
+    const html = render([deadline], TUESDAY, weekOf(TUESDAY), { endHour: 24 });
+
+    expect(html).toContain(ROSE_LINE);
+    expect(html).toContain('11:59 PM · Short Assignment 1');
+    // "Due: " is chrome in a 107px column; the pill is already rose, already
+    // on the line, and already says "Deadline" to a screen reader.
+    expect(html).toContain('aria-label="Deadline: Short Assignment 1, due 11:59 PM"');
+    // Truncated in the column, so the whole label stays on hover.
+    expect(html).toContain('title="11:59 PM · Short Assignment 1"');
+  });
+
+  it('keeps an 11:59 PM pill inside the grid by hanging it above its line', () => {
+    const html = render([deadline], TUESDAY, weekOf(TUESDAY), { endHour: 24 });
+    // The line sits at the very bottom of a 16-row grid; the pill is anchored
+    // to it and pulled up by its own height, which is the only placement that
+    // cannot fall off the bottom edge.
+    expect(html).toContain('transform:translateY(-100%)');
+  });
+
+  it('hangs a pill BELOW its line at the very top of the grid', () => {
+    // Above the first row is not the grid: it is the all-day strip, which
+    // holds this same deadline's chip.
+    const earlyBird: CalendarEventWithLinks = {
+      ...deadline,
+      id: 'deadline-8am',
+      title: 'Due: Morning Quiz',
+      start_time: new Date(2026, 8, 23, 8, 0).toISOString(),
+      end_time: new Date(2026, 8, 23, 8, 0).toISOString(),
+    };
+    const html = render([earlyBird], TUESDAY);
+
+    expect(html).toContain('8 AM · Morning Quiz');
+    expect(html).not.toContain('transform:translateY(-100%)');
+  });
+
+  it('dashes the line of an unpublished deadline, and only that one', () => {
+    const published = render([deadline], TUESDAY, weekOf(TUESDAY), { endHour: 24 });
+    expect(published).not.toContain('border-dashed');
+
+    const draft = render([{ ...deadline, is_unpublished: true }], TUESDAY, weekOf(TUESDAY), {
+      endHour: 24,
+    });
+    expect(draft).toContain('border-dashed');
+  });
+
+  it('draws no line for a deadline due before the window opens', () => {
+    // 2 AM, below the 6 AM floor: it keeps its all-day chip and nothing else.
+    // A line at an hour the grid does not draw would have to be drawn at an
+    // hour that is not its own.
+    const early: CalendarEventWithLinks = {
+      ...deadline,
+      id: 'deadline-early',
+      start_time: new Date(2026, 8, 23, 2, 0).toISOString(),
+      end_time: new Date(2026, 8, 23, 2, 0).toISOString(),
+    };
+    const html = render([early], TUESDAY);
+
+    expect(html).toContain('All day');
+    expect(html).toContain('due 2 AM');
+    expect(html).not.toContain(ROSE_LINE);
+  });
+
+  it('keeps the strip chip as well as the line', () => {
+    // The chip is the draggable one — rescheduling stays there — so the line
+    // is an addition, never a move.
+    const html = render([deadline], TUESDAY, weekOf(TUESDAY), { endHour: 24 });
+    expect(html).toContain('All day');
+    expect(html).toContain('due 11:59 PM');
+  });
+
+  it('stacks two deadlines due at the same minute rather than overlapping them', () => {
+    const second: CalendarEventWithLinks = {
+      ...deadline,
+      id: 'deadline-2',
+      title: 'Due: Reading Response',
+    };
+    const html = render([deadline, second], TUESDAY, weekOf(TUESDAY), { endHour: 24 });
+
+    expect(html).toContain('11:59 PM · Short Assignment 1');
+    expect(html).toContain('11:59 PM · Reading Response');
+    // One bottom-anchored column holds both, so the second lands above the
+    // first instead of on top of it.
+    expect(html.match(/transform:translateY\(-100%\)/g) ?? []).toHaveLength(1);
+    expect(html).toContain('flex flex-col items-end gap-0.5');
+  });
+
+  it('merges pills that would collide, and leaves their LINES where they fall', () => {
+    // 11:55 and 11:59 PM are four minutes apart — under a pill's height, so
+    // grouping by the exact minute drew one label on top of the other.
+    const earlier: CalendarEventWithLinks = {
+      ...deadline,
+      id: 'deadline-1155',
+      title: 'Due: Reading Response',
+      start_time: new Date(2026, 8, 23, 23, 55).toISOString(),
+      end_time: new Date(2026, 8, 23, 23, 55).toISOString(),
+    };
+    const html = render([earlier, deadline], TUESDAY, weekOf(TUESDAY), { endHour: 24 });
+
+    // One stack…
+    expect(html.match(/transform:translateY\(-100%\)/g) ?? []).toHaveLength(1);
+    // …two pills, each still saying its own time…
+    expect(html).toContain('11:55 PM · Reading Response');
+    expect(html).toContain('11:59 PM · Short Assignment 1');
+    // …and two lines, at the two times they are actually due: (23:55 − 8) and
+    // (23:59 − 8) hours of grid, at 4rem each.
+    expect(html).toContain(`top:${((23 + 55 / 60 - 8) * 4).toString()}rem`);
+    expect(html).toContain(`top:${((23 + 59 / 60 - 8) * 4).toString()}rem`);
+  });
+
+  it('keeps a merged stack out of the all-day strip at the top of the grid', () => {
+    // 8:25 in an 8 AM window is a comfortable drop for ONE pill and not for
+    // two, so the clearance has to scale with the stack.
+    const at825 = (id: string, title: string): CalendarEventWithLinks => ({
+      ...deadline,
+      id,
+      title,
+      start_time: new Date(2026, 8, 23, 8, 25).toISOString(),
+      end_time: new Date(2026, 8, 23, 8, 25).toISOString(),
+    });
+
+    const alone = render([at825('d-1', 'Due: Quiz')], TUESDAY);
+    expect(alone).toContain('transform:translateY(-100%)');
+
+    const stacked = render([at825('d-1', 'Due: Quiz'), at825('d-2', 'Due: Survey')], TUESDAY);
+    expect(stacked).toContain('8:25 AM · Quiz');
+    expect(stacked).toContain('8:25 AM · Survey');
+    expect(stacked).not.toContain('transform:translateY(-100%)');
+  });
+
+  it('keeps a pill narrow enough to leave the left of the column readable', () => {
+    // It is drawn over whatever the block beneath it holds, and the left of a
+    // chip — its icon and the start of its title — has to survive that.
+    const html = render([deadline], TUESDAY, weekOf(TUESDAY), { endHour: 24 });
+    expect(html).toContain('max-w-[70%]');
+  });
+
+  it('gives a form close its own wording, unchanged', () => {
+    const formClose: CalendarEventWithLinks = {
+      id: 'form-close-1',
+      title: 'Week 1 Survey closes',
+      start_time: new Date(2026, 8, 23, 17, 0).toISOString(),
+      end_time: new Date(2026, 8, 23, 17, 0).toISOString(),
+      event_type: 'DEADLINE',
+      is_deadline: true,
+      is_form_close: true,
+    };
+    const html = render([formClose], TUESDAY);
+
+    expect(html).toContain('5 PM · Week 1 Survey closes');
+  });
+
+  it('puts the line behind the blocks and the pill in front of them', () => {
+    // Both on Tuesday: the three layers only stack within ONE column.
+    const sameDay: CalendarEventWithLinks = {
+      ...deadline,
+      start_time: new Date(2026, 8, 22, 23, 59).toISOString(),
+      end_time: new Date(2026, 8, 22, 23, 59).toISOString(),
+    };
+    const html = render([lecture, sameDay], TUESDAY, weekOf(TUESDAY), { endHour: 24 });
+
+    const line = html.indexOf(ROSE_LINE);
+    const block = html.indexOf('Week 1 Lecture');
+    const pill = html.indexOf('11:59 PM · Short Assignment 1');
+
+    // Same stacking context, no z-index on any of them: paint order IS
+    // document order.
+    expect(line).toBeLessThan(block);
+    expect(block).toBeLessThan(pill);
+  });
+});
+
+/**
+ * "Show all" in week view, in as many chips as the block's DURATION pays for.
+ *
+ * The three tiers are 120 / 65 / 50 minutes here, plus the title-only 45. They
+ * are asserted on duration, never on a rendered height: the hour row is
+ * 56–80px depending on the reader's UI font size, and every length in
+ * `blockLayout` scales with it.
+ */
+describe('WeekGrid — linked resources on a block', () => {
+  const linked = (
+    minutes: number,
+    links: Partial<CalendarEventWithLinks>,
+    extra: Partial<CalendarEventWithLinks> = {}
+  ): CalendarEventWithLinks => ({
+    ...lecture,
+    id: `evt-${minutes}`,
+    end_time: new Date(2026, 8, 22, 10, minutes).toISOString(),
+    ...links,
+    ...extra,
+  });
+
+  const pages = (...titles: string[]) => ({
+    pages: titles.map((title, i) => ({ page: { id: `p-${i}`, title, is_draft: false } })),
+  });
+  const deck = { slides: [{ slide: { id: 's-1', title: 'Lecture 1 deck', is_draft: false } }] };
+  const homework = {
+    assignments: [
+      {
+        assignment: { id: 'a-1', title: 'Landing Page', is_published: true },
+        repository: { slug: 'landing-page', is_published: true },
+      },
+    ],
+  };
+
+  const LINKS = { classSlug: 'cs52-26f', rolePrefix: 'admin', slidesUrl: 'https://slides.test' };
+
+  it('lists several chips on a two-hour block, and says how many it kept back', () => {
+    const html = render(
+      [linked(120, pages('One', 'Two', 'Three', 'Four', 'Five'))],
+      TUESDAY,
+      weekOf(TUESDAY),
+      LINKS
+    );
+
+    // Three lines of chips fit; the last one ends with the count of the rest.
+    expect(html).toContain('>One<');
+    expect(html).toContain('>Two<');
+    expect(html).toContain('>Three<');
+    expect(html).not.toContain('>Four<');
+    expect(html).toContain('+2');
+    // …and the ones it kept back are still named, on hover.
+    expect(html).toContain('title="Four, Five"');
+  });
+
+  it('gives the 65-minute class its time row, a chip and a count', () => {
+    // The commonest block in the product keeps all three, by dropping to the
+    // tight padding.
+    const html = render([linked(65, { ...deck, ...pages('Reading') })], TUESDAY, weekOf(TUESDAY), {
+      ...LINKS,
+      endHour: 24,
+    });
+
+    expect(html).toContain('>Reading<');
+    expect(html).toContain('+1');
+    expect(html).toMatch(/10:00\s*–\s*11:05\s*AM/);
+    expect(html).toContain('px-2 py-1');
+  });
+
+  it('keeps that time row with two resources on the block as well', () => {
+    const html = render([linked(65, pages('Reading', 'Notes'))], TUESDAY, weekOf(TUESDAY), {
+      ...LINKS,
+      endHour: 24,
+    });
+
+    expect(html).toMatch(/10:00\s*–\s*11:05\s*AM/);
+    expect(html).toContain('>Reading<');
+    expect(html).toContain('+1');
+  });
+
+  it('keeps a chip carrying a Draft pill inside that same block', () => {
+    // A draft chip is the TALLEST chip, and it is the one the budget is
+    // measured against — so it is the one that has to fit beside the time row.
+    const html = render(
+      [linked(65, { pages: [{ page: { id: 'p-draft', title: 'Unfinished', is_draft: true } }] })],
+      TUESDAY,
+      weekOf(TUESDAY),
+      { ...LINKS, endHour: 24 }
+    );
+
+    expect(html).toContain('>Unfinished<');
+    expect(html).toContain('Draft');
+    expect(html).toMatch(/10:00\s*–\s*11:05\s*AM/);
+  });
+
+  it('still trades the time row away at 60 minutes', () => {
+    // Where the two genuinely do not both fit, the chip wins.
+    const html = render([linked(60, pages('Reading', 'Notes'))], TUESDAY, weekOf(TUESDAY), LINKS);
+    expect(html).toContain('>Reading<');
+    expect(html).not.toMatch(/10:00\s*–/);
+  });
+
+  it('keeps the time row on a 65-minute block with nothing linked to it', () => {
+    const html = render([linked(65, {})], TUESDAY, weekOf(TUESDAY), { ...LINKS, endHour: 24 });
+    expect(html).toMatch(/10:00\s*–\s*11:05\s*AM/);
+    // Nothing to pay for, so it keeps the roomier padding.
+    expect(html).not.toContain('px-2 py-1');
+  });
+
+  it('gives a 50-minute block an icon cluster instead of chips', () => {
+    const html = render(
+      [linked(50, { ...pages('Reading', 'Notes'), ...deck })],
+      TUESDAY,
+      weekOf(TUESDAY),
+      LINKS
+    );
+
+    // No chip is drawn — there is no line to draw it on — but the block still
+    // says that three things are attached to it, at no cost in height.
+    expect(html).not.toContain('>Reading<');
+    expect(html).toContain('>2<');
+    expect(html).toContain('aria-hidden="true"');
+    // And it keeps its time row, which is what the 50-minute x-hour is for.
+    expect(html).toMatch(/10:00\s*–\s*10:50\s*AM/);
+  });
+
+  it('still clusters on a title-only 45-minute block', () => {
+    const html = render([linked(45, deck)], TUESDAY, weekOf(TUESDAY), LINKS);
+
+    expect(html).toContain('Week 1 Lecture');
+    expect(html).not.toContain('Lecture 1 deck');
+    expect(html).not.toMatch(/10:00\s*–/);
+  });
+
+  it('names the block: what, when and where, then what is attached', () => {
+    // The chips are separate controls and the cluster and `+N` are decorative,
+    // so this is the only place a block says it has anything attached — and
+    // the only place a 60-minute block that traded its time row still says
+    // when it happens.
+    const clicky = { ...LINKS, onEventClick: () => {} };
+
+    const short = render([linked(50, { ...deck, ...homework })], TUESDAY, weekOf(TUESDAY), clicky);
+    expect(short).toContain(
+      'aria-label="Week 1 Lecture, 10:00 – 10:50 AM · ECSC 116, 2 linked resources"'
+    );
+
+    const one = render([linked(50, deck)], TUESDAY, weekOf(TUESDAY), clicky);
+    expect(one).toContain('1 linked resource"');
+
+    // A 60-minute block draws no time row; it still says the time.
+    const traded = render(
+      [linked(60, pages('Reading', 'Notes'))],
+      TUESDAY,
+      weekOf(TUESDAY),
+      clicky
+    );
+    expect(traded).not.toMatch(/10:00\s*–\s*11:00\s*AM<\/span>/);
+    expect(traded).toContain(
+      'aria-label="Week 1 Lecture, 10:00 – 11:00 AM · ECSC 116, 2 linked resources"'
+    );
+
+    // Nothing attached, nothing said about it, and never a leading comma.
+    const bare = render([lecture], TUESDAY, weekOf(TUESDAY), clicky);
+    expect(bare).toContain('aria-label="Week 1 Lecture, 10:00 – 11:00 AM · ECSC 116"');
+  });
+
+  it('hands the whole block to the event button, chips excepted', () => {
+    // The chip container used to swallow clicks across the full width of the
+    // column — a third of a 65-minute block, nearly half of a two-hour one —
+    // where the block dragged but would not open.
+    const html = render([linked(120, pages('One', 'Two'))], TUESDAY, weekOf(TUESDAY), {
+      ...LINKS,
+      onEventClick: () => {},
+    });
+
+    expect(html).toContain('class="absolute inset-0 w-full cursor-pointer');
+    expect(html).toContain('pointer-events-none');
+
+    // …and the CHIP asks for the pointer back, on its own element. Asserted
+    // that way round because the deadline pill is pointer-active too, so a
+    // loose search for the utility passed while every chip in the grid had
+    // quietly become unclickable.
+    expect(html).toMatch(/class="[^"]*pointer-events-auto[^"]*"[^>]*aria-label="Open page One"/);
+  });
+
+  it('draws the chips under the meta row, not pinned to the block’s floor', () => {
+    // A tall block used to leave a band of colour between its time row and its
+    // chips. Nothing in the column grows: the rows stack from the top.
+    const html = render([linked(120, pages('One'))], TUESDAY, weekOf(TUESDAY), LINKS);
+    expect(html).not.toContain('flex-1 min-h-0 overflow-hidden"><div class="p-2');
+    expect(html).toContain('justify-start items-stretch');
+  });
+
+  it('puts the starred resource first, with a star, as the month cell does', () => {
+    const html = render(
+      [
+        linked(
+          120,
+          { ...pages('Reading'), ...deck },
+          {
+            featured_resource: {
+              kind: 'slide',
+              id: 's-1',
+              title: 'Lecture 1 deck',
+              is_draft: false,
+            },
+          }
+        ),
+      ],
+      TUESDAY,
+      weekOf(TUESDAY),
+      LINKS
+    );
+
+    expect(html.indexOf('Lecture 1 deck')).toBeLessThan(html.indexOf('>Reading<'));
+    expect(html).toContain('text-amber-500/90');
+  });
+
+  it('sends a chip exactly where the link list would send it', () => {
+    const html = render([linked(120, { ...deck, ...homework })], TUESDAY, weekOf(TUESDAY), LINKS);
+
+    expect(html).toContain('href="https://slides.test/s-1"');
+    expect(html).toContain('href="/admin/cs52-26f/repos#landing-page"');
+  });
+
+  it('keeps the chips outside the event’s button', () => {
+    // An anchor inside a button is not something a browser can render, and out
+    // here the staff drag layer sees a chip press as a press on the chip.
+    const html = render([linked(120, deck)], TUESDAY, weekOf(TUESDAY), {
+      ...LINKS,
+      onEventClick: () => {},
+    });
+
+    const buttonClose = html.indexOf('</button>');
+    expect(buttonClose).toBeGreaterThan(-1);
+    expect(html.indexOf('https://slides.test')).toBeGreaterThan(buttonClose);
+  });
+
+  it('draws no chips in the modal or the drag overlay', () => {
+    // Both render an EventCard with no slot to measure, so there is no tier
+    // to be in.
+    const html = renderToStaticMarkup(
+      <MemoryRouter>
+        <EventCard event={linked(120, deck)} compact resources={[]} />
+      </MemoryRouter>
+    );
+    expect(html).not.toContain('Lecture 1 deck');
+  });
+});
