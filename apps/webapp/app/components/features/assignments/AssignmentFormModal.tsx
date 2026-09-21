@@ -105,7 +105,8 @@ const AssignmentFormModal = ({
     const nextMode: SubmissionMode = assignment?.submission_mode === 'ISSUE' ? 'ISSUE' : 'REPO';
     setMode(assignment ? nextMode : 'REPO');
     form.setFieldsValue({
-      module_id: assignment?.module.id ?? moduleId,
+      // A module card hands its assignments over without the module relation.
+      module_id: assignment?.module?.id ?? moduleId,
       type: nextKind,
       submission_mode: assignment ? nextMode : 'REPO',
       target_id:

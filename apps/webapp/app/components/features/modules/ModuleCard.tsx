@@ -355,40 +355,40 @@ const ModuleCard = ({
     }
   };
 
-  // "Edit" edits the thing itself: the repository form, the quiz editor, or
-  // the form builder. The assignment's own settings live in the ⋯ menu.
-  const editAssignment = (a: AssignmentRowData) => {
+  // "Edit" edits the assignment: its weight, deadlines, release and what it
+  // submits through. Editing the thing it submits through (the repository
+  // form, the quiz editor, the form builder) is the ⋯ menu's job.
+  const editAssignment = (a: AssignmentRowData) => openAssignmentModal(undefined, a);
+
+  // Where the ⋯ "Edit repository / quiz / form" item goes, or null when the
+  // assignment has no target yet.
+  const editTargetHref = (a: AssignmentRowData): string | null => {
     if (a.type === 'REPO' && a.repository?.title) {
-      navigate(`/admin/${classSlug}/repos/form?title=${encodeURIComponent(a.repository.title)}`);
-    } else if (a.type === 'QUIZ' && a.quiz) {
-      navigate(`/admin/${classSlug}/quizzes/form?quizId=${a.quiz.id}`);
-    } else if (a.type === 'FORM') {
-      navigate(formHref(a));
-    } else {
-      openAssignmentModal(undefined, a);
+      return `/admin/${classSlug}/repos/form?title=${encodeURIComponent(a.repository.title)}`;
     }
+    if (a.type === 'QUIZ' && a.quiz) return `/admin/${classSlug}/quizzes/form?quizId=${a.quiz.id}`;
+    if (a.type === 'FORM') return formHref(a);
+    return null;
   };
+  const editTargetLabel = (a: AssignmentRowData) =>
+    a.type === 'REPO' ? 'Edit repository' : a.type === 'QUIZ' ? 'Edit quiz' : 'Edit form';
 
   const assignmentNote = (a: AssignmentRowData) => {
     const target = assignmentTarget(a);
+    const weight = `${a.weight}%${a.is_extra_credit ? ' extra credit' : ''}`;
     // A REPO assignment names its repo and how students submit through it.
     if (a.type === 'REPO' && target) {
-      return `${target} · ${a.submission_mode === 'REPO' ? 'push' : 'issue'}`;
+      return `${target} · ${a.submission_mode === 'REPO' ? 'push' : 'issue'} · ${weight}`;
     }
-    return target && target !== a.title ? target : (ASSIGNMENT_TYPE_META[a.type]?.label ?? null);
+    const base =
+      target && target !== a.title ? target : (ASSIGNMENT_TYPE_META[a.type]?.label ?? null);
+    return base ? `${base} · ${weight}` : weight;
   };
   const deleteAssignmentItem = {
     key: 'remove',
     label: 'Delete assignment',
     danger: true,
     icon: <IconTrash size={15} />,
-  };
-  // Weight, deadlines and release for a quiz or form assignment live on the
-  // assignment, not on the quiz/form Edit opens.
-  const assignmentSettingsItem = {
-    key: 'settings',
-    label: 'Assignment settings',
-    icon: <IconPencil size={15} />,
   };
 
   return (
@@ -512,12 +512,23 @@ const ModuleCard = ({
                 onOpen={() => openAssignment(a)}
                 onEdit={() => editAssignment(a)}
                 menuItems={[
-                  assignmentSettingsItem,
-                  { type: 'divider' as const },
+                  ...(editTargetHref(a)
+                    ? [
+                        {
+                          key: 'edit-target',
+                          label: editTargetLabel(a),
+                          icon: <IconPencil size={15} />,
+                        },
+                        { type: 'divider' as const },
+                      ]
+                    : []),
                   deleteAssignmentItem,
                 ]}
                 onMenuClick={key => {
-                  if (key === 'settings') openAssignmentModal(undefined, a);
+                  if (key === 'edit-target') {
+                    const href = editTargetHref(a);
+                    if (href) navigate(href);
+                  }
                   if (key === 'remove') removeAssignment(a);
                 }}
               />
