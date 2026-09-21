@@ -123,7 +123,9 @@ const RepositoriesTable = ({
   // Controlled expansion so the folder icon can react to expanded state.
   // Every repository starts open, showing its assignments; the chevron closes it.
   const [expandedKeys, setExpandedKeys] = useState<string[]>(() =>
-    repositories.filter(r => (r.assignments?.length ?? 0) > 0).map(r => `repository-${r.id}`)
+    repositories
+      .filter(r => (r.assignments ?? []).some(a => a.submission_mode !== 'REPO'))
+      .map(r => `repository-${r.id}`)
   );
 
   // Publish / sync / unpublish / delete + navigation, shared with the module
@@ -195,11 +197,14 @@ const RepositoriesTable = ({
   };
 
   // ---- build the tree (Repository -> Assignment) ----
-  // Every assignment that submits through the repository nests under it,
-  // issue-mode and push-mode alike: each row is the way to that assignment's
-  // submissions and grades. The "push" / "issue" tag says how it is submitted.
+  // Only issue-mode assignments nest under a repository: each one is a GitHub
+  // issue opened in every student repo, which is what a child row has always
+  // meant here. A push-mode assignment IS the repository (a push submits,
+  // nothing is opened), so it is reached from the repository row's
+  // Submissions action instead of being listed as if it were an issue.
   const treeData: TreeNode[] = repositories.map(r => {
-    const children: TreeNode[] = (r.assignments || []).map(a => ({
+    const issueAssignments = (r.assignments || []).filter(a => a.submission_mode !== 'REPO');
+    const children: TreeNode[] = issueAssignments.map(a => ({
       key: `assignment-${a.id}`,
       kind: 'assignment' as const,
       name: a.title,
@@ -339,6 +344,38 @@ const RepositoriesTable = ({
           const r = record.repository!;
           return (
             <div className="flex items-center gap-x-4 whitespace-nowrap">
+              {(() => {
+                const pushAssignments = (r.assignments ?? []).filter(
+                  a => a.submission_mode === 'REPO'
+                );
+                if (pushAssignments.length === 0) return null;
+                if (pushAssignments.length === 1) {
+                  return (
+                    <Link
+                      to={`/admin/${classSlug}/assignments/${pushAssignments[0].id}`}
+                      onClick={e => e.stopPropagation()}
+                      className="text-sm font-medium text-sky-600 hover:text-sky-700 dark:text-sky-400 dark:hover:text-sky-300"
+                    >
+                      Submissions
+                    </Link>
+                  );
+                }
+                return (
+                  <Dropdown
+                    trigger={['click']}
+                    placement="bottomLeft"
+                    menu={{
+                      items: pushAssignments.map(a => ({ key: a.id, label: a.title })),
+                      onClick: ({ key, domEvent }) => {
+                        domEvent.stopPropagation();
+                        navigate(`/admin/${classSlug}/assignments/${key}`);
+                      },
+                    }}
+                  >
+                    <ActionLink>Submissions</ActionLink>
+                  </Dropdown>
+                );
+              })()}
               <ActionLink onClick={() => editRepository(r)}>Edit</ActionLink>
               {r.is_published ? (
                 <ActionLink
