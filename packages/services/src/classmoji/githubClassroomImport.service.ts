@@ -505,6 +505,9 @@ async function importClassroomAttempt(args: {
               student_deadline: a.deadline ? new Date(a.deadline) : null,
               // Published on arrival, same as the repository above (repos exist).
               is_published: true,
+              // GitHub Classroom never had Classmoji issues: students pushed to
+              // their repo, and that push is the submission here too.
+              submission_mode: 'REPO',
               // Imported assignments start unweighted; the teacher sets grading
               // weights when they configure the gradebook.
               weight: 0,
