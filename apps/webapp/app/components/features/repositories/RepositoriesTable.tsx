@@ -282,17 +282,11 @@ const RepositoriesTable = ({
               <IconFileText size={16} className="text-gray-400 shrink-0" />
             )}
 
-            {record.kind === 'assignment' ? (
-              <Link
-                to={`/admin/${classSlug}/assignments/${record.assignment!.id}`}
-                className="text-ink-1 hover:underline underline-offset-2"
-                onClick={e => e.stopPropagation()}
-              >
-                {record.name}
-              </Link>
-            ) : (
-              <span className="font-semibold text-ink-1">{record.name}</span>
-            )}
+            <span
+              className={record.kind === 'repository' ? 'font-semibold text-ink-1' : 'text-ink-1'}
+            >
+              {record.name}
+            </span>
             {record.kind === 'assignment' && (
               <span className="text-xs text-ink-3">
                 {record.assignment?.submission_mode === 'REPO' ? 'push' : 'issue'}
@@ -418,10 +412,22 @@ const RepositoriesTable = ({
           );
         }
 
-        // assignment: the name links to its page; Edit opens the editor right
-        // here (or on that page when this table was given no editor context).
+        // assignment (issue mode): Submissions opens its page, like the repo
+        // row's action does for push mode; Edit opens the editor right here
+        // (or on that page when this table was given no editor context).
         const a = record.assignment!;
-        return <ActionLink onClick={() => editAssignment(a.id)}>Edit</ActionLink>;
+        return (
+          <div className="flex items-center gap-x-4 whitespace-nowrap">
+            <Link
+              to={`/admin/${classSlug}/assignments/${a.id}`}
+              onClick={e => e.stopPropagation()}
+              className="text-sm font-medium text-sky-600 hover:text-sky-700 dark:text-sky-400 dark:hover:text-sky-300"
+            >
+              Submissions
+            </Link>
+            <ActionLink onClick={() => editAssignment(a.id)}>Edit</ActionLink>
+          </div>
+        );
       },
     },
   ];

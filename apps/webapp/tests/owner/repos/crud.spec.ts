@@ -145,7 +145,10 @@ test.describe('Assignment page', () => {
     await expect(repoRow).toBeVisible();
 
     // Repo rows start open, so the assignment link is already there.
-    await page.getByRole('link', { name: 'Hello World Part 1', exact: true }).click();
+    await page
+      .getByRole('row', { name: /Hello World Part 1/ })
+      .getByRole('link', { name: 'Submissions' })
+      .click();
 
     await page.waitForURL(/\/assignments\/[^/]+$/, { timeout: 10000 });
     await expect(page.getByRole('heading', { name: 'Hello World Part 1' })).toBeVisible();
@@ -155,7 +158,10 @@ test.describe('Assignment page', () => {
     authenticatedPage: page,
   }) => {
     const repoRow = repositoryRow(page, SEED_REPO);
-    await page.getByRole('link', { name: 'Hello World Part 1', exact: true }).click();
+    await page
+      .getByRole('row', { name: /Hello World Part 1/ })
+      .getByRole('link', { name: 'Submissions' })
+      .click();
     await page.waitForURL(/\/assignments\/[^/]+$/, { timeout: 10000 });
     await waitForDataLoad(page);
 
@@ -403,7 +409,10 @@ test.describe('Assignment page - overview & actions', () => {
   test.beforeEach(async ({ authenticatedPage: page, testOrg }) => {
     await page.goto(`/admin/${testOrg}/repos`);
     await waitForDataLoad(page);
-    await page.getByRole('link', { name: 'Hello World Part 1', exact: true }).click();
+    await page
+      .getByRole('row', { name: /Hello World Part 1/ })
+      .getByRole('link', { name: 'Submissions' })
+      .click();
     await page.waitForURL(/\/assignments\/[^/]+$/, { timeout: 10000 });
     await waitForDataLoad(page);
   });
