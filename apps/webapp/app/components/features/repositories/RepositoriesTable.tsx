@@ -5,7 +5,6 @@ import type { MenuProps } from 'antd';
 import {
   IconChevronDown,
   IconChevronUp,
-  IconCloudUpload,
   IconDotsVertical,
   IconEyeOff,
   IconFileText,
@@ -15,7 +14,6 @@ import {
   IconUsersGroup,
   IconFolder,
   IconFolderOpen,
-  IconRefresh,
   IconTrash,
 } from '@tabler/icons-react';
 
@@ -372,21 +370,9 @@ const RepositoriesTable = ({
               })()}
               <ActionLink onClick={() => editRepository(r)}>Edit</ActionLink>
               {r.is_published ? (
-                <ActionLink
-                  className="inline-flex items-center gap-x-1"
-                  onClick={() => confirmSync(r.id)}
-                >
-                  <IconRefresh size={15} />
-                  Sync
-                </ActionLink>
+                <ActionLink onClick={() => confirmSync(r.id)}>Sync</ActionLink>
               ) : (
-                <ActionLink
-                  className="inline-flex items-center gap-x-1"
-                  onClick={() => confirmPublish(r.id)}
-                >
-                  <IconCloudUpload size={15} />
-                  Publish
-                </ActionLink>
+                <ActionLink onClick={() => confirmPublish(r.id)}>Publish</ActionLink>
               )}
               <Dropdown
                 trigger={['click']}
