@@ -2,14 +2,21 @@ import { Link } from 'react-router';
 import dayjs, { type Dayjs } from 'dayjs';
 import { IconArrowRight } from '@tabler/icons-react';
 import { getEventTypeLightBg, getEventTypeDarkText } from '~/components/features/calendar/utils';
+import type { CalendarEventWithLinks } from '~/components/features/calendar/types';
 
-export interface WeekEvent {
+/**
+ * The card needs four fields, and it needs id/title to be PRESENT — the
+ * dashboard loader maps them through String(...) and the card keys its rows on
+ * id. So it picks the fields whose shape has to agree with the shared calendar
+ * type and keeps its own, stricter, contract for the rest. event_type stays
+ * nullable because the loader passes a missing type through as null rather
+ * than inventing one.
+ */
+export type WeekEvent = Pick<CalendarEventWithLinks, 'start_time' | 'is_deadline'> & {
   id: string;
   title: string;
-  start_time: string | Date;
   event_type?: string | null;
-  is_deadline?: boolean;
-}
+};
 
 interface WeeklyCalendarCardProps {
   events: WeekEvent[];
@@ -48,7 +55,11 @@ const WeeklyCalendarCard = ({ events, weekStart, classSlug }: WeeklyCalendarCard
   const today = dayjs().startOf('day');
   const grid = groupByDay(events, start);
 
-  const weekNumber = Math.ceil(start.diff(start.startOf('month'), 'day') / 7) + 1;
+  // The date range, and only the date range. The card used to lead with
+  // "Week 6:", counted from the start of the MONTH rather than the term — so it
+  // reset to "Week 1" partway through, named a week nobody in the class would
+  // recognise, and wrapped the heading onto two lines saying it. Nothing in the
+  // schema records when a term starts, so there is no week number to be right.
   const sameMonth = start.month() === end.month();
   const rangeLabel = sameMonth
     ? `${start.format('MMMM D')}–${end.format('D')}`
@@ -58,7 +69,7 @@ const WeeklyCalendarCard = ({ events, weekStart, classSlug }: WeeklyCalendarCard
     <section className="rounded-2xl bg-panel ring-1 ring-line overflow-hidden">
       <header className="flex items-center justify-between gap-3 px-5 sm:px-6 pt-5 sm:pt-6 pb-4">
         <h2 className="text-base sm:text-lg font-semibold text-ink-0 tracking-tight">
-          Week {weekNumber}: {rangeLabel}
+          {rangeLabel}
         </h2>
         <Link
           to={`/student/${classSlug}/calendar`}

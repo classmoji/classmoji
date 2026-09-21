@@ -22,6 +22,13 @@
  */
 
 import { ClassmojiService } from '@classmoji/services';
+// Pure write policy, imported straight from its own module: the decisions both
+// web calendar actions apply too.
+import {
+  ASSISTANT_EVENT_TYPE_MESSAGE,
+  assistantMayChangeEventType,
+  assistantMayCreateEventType,
+} from '@classmoji/services/calendar-policy';
 import type { EventType, Prisma } from '@prisma/client';
 import { z } from 'zod';
 import { ToolError } from '../mcp/errors.ts';
@@ -66,6 +73,20 @@ async function assertCanModifyEvent(ctx: ToolContext, createdBy: string): Promis
     'Assistants can only modify calendar events they created',
     'INSUFFICIENT_ROLE'
   );
+}
+
+/**
+ * The office-hours limit on assistants, applied to a write through this server.
+ *
+ * The web calendar enforces the same policy in both of its actions; the
+ * decision itself lives in @classmoji/services so the three cannot drift apart.
+ * Same holdsRole reasoning as above — a multi-role OWNER/TEACHER whose gate
+ * resolved as ASSISTANT is not an assistant for this purpose.
+ */
+async function assertEventTypeAllowed(ctx: ToolContext, allowed: boolean): Promise<void> {
+  if (allowed) return;
+  if (await holdsRole(ctx, ['OWNER', 'TEACHER'])) return;
+  throw new ToolError('forbidden', ASSISTANT_EVENT_TYPE_MESSAGE, 'INSUFFICIENT_ROLE');
 }
 
 /** Resolve the recurring-vs-scope rules shared by update and delete. */
@@ -139,6 +160,7 @@ export const calendarEventCreateTool: ToolDefinition<CalendarEventCreateArgs> = 
       throw new ToolError('invalid_params', 'recurrence_rule is required when is_recurring');
     }
     assertEndAfterStart(new Date(args.start_time), new Date(args.end_time));
+    await assertEventTypeAllowed(ctx, assistantMayCreateEventType(args.event_type));
 
     const event = await ClassmojiService.calendar.createEvent(
       classroom.classroomId,
@@ -221,6 +243,10 @@ export const calendarEventUpdateTool: ToolDefinition<CalendarEventUpdateArgs> = 
   handler: async (args, ctx) => {
     const event = await loadCalendarEventInClassroom(args.event_id, ctx);
     await assertCanModifyEvent(ctx, event.created_by);
+    await assertEventTypeAllowed(
+      ctx,
+      assistantMayChangeEventType(args.event_type, event.event_type)
+    );
 
     const updates = {
       ...(args.title !== undefined ? { title: args.title } : {}),
@@ -258,6 +284,7 @@ export const calendarEventUpdateTool: ToolDefinition<CalendarEventUpdateArgs> = 
     }
 
     const scoped = resolveScope(event.is_recurring, args.edit_scope, args.occurrence_date);
+    let writtenEventId = event.id;
     if (scoped) {
       // 'all' rewrites the event template, and the service derives
       // recurrence_rule from is_recurring (undefined → falsy → SQL NULL). This
@@ -273,28 +300,36 @@ export const calendarEventUpdateTool: ToolDefinition<CalendarEventUpdateArgs> = 
               recurrence_rule: event.recurrence_rule as Prisma.InputJsonObject | null,
             }
           : updates;
-      await ClassmojiService.calendar.updateEventWithScope(
+      const result = await ClassmojiService.calendar.updateEventWithScope(
         event.id,
         scopedUpdates,
         scoped.scope,
         scoped.occurrence
       );
+      // 'this_and_future' SPLITS the series: the occurrences from this date on
+      // move to a NEW event, and that is the row the edit landed on. Reporting
+      // the id the request came in with would file the audit against a series
+      // that no longer covers the date, and hand the caller an id whose event
+      // does not have their change.
+      writtenEventId = result?.id ?? writtenEventId;
     } else {
       await ClassmojiService.calendar.updateEvent(event.id, updates);
     }
 
     await writeAudit(ctx, {
       resource_type: 'CALENDAR',
-      resource_id: event.id,
+      resource_id: writtenEventId,
       action: 'UPDATE',
       data: {
         tool: 'calendar_event_update',
         fields: Object.keys(updates),
         ...(scoped ? { edit_scope: scoped.scope } : {}),
+        // Which row the request named, when the edit moved to another one.
+        ...(writtenEventId === event.id ? {} : { split_from_event_id: event.id }),
       },
     });
 
-    return ok({ success: true, event_id: event.id, updated_fields: Object.keys(updates) });
+    return ok({ success: true, event_id: writtenEventId, updated_fields: Object.keys(updates) });
   },
 };
 

@@ -2,6 +2,13 @@ import getPrisma from '@classmoji/database';
 import { Prisma } from '@prisma/client';
 import type { EventType } from '@prisma/client';
 import { pagesUrl } from '../emails/escape.ts';
+import {
+  CalendarTimeRangeError,
+  isFeaturedLinkRow,
+  resolveFeaturedLink,
+  type FeaturedLinkKind,
+  type FeaturedLinkRef,
+} from './calendarPolicy.ts';
 
 type DateInput = Date | string;
 type CalendarEditScope = 'this_only' | 'this_and_future' | 'all';
@@ -10,7 +17,15 @@ interface OccurrenceLink {
   occurrence_date: Date | null;
 }
 
+/**
+ * A stored link row, as the calendar query loads it.
+ *
+ * The `*_id` columns are declared alongside the joined row because the edit
+ * modal rebuilds its pickers from them — see `CalendarRawLinkRow` below.
+ */
 interface CalendarPageLink extends OccurrenceLink {
+  page_id: string;
+  featured: boolean;
   page: {
     id: string;
     title: string;
@@ -19,6 +34,8 @@ interface CalendarPageLink extends OccurrenceLink {
 }
 
 interface CalendarSlideLink extends OccurrenceLink {
+  slide_id: string;
+  featured: boolean;
   slide: {
     id: string;
     title: string;
@@ -27,16 +44,115 @@ interface CalendarSlideLink extends OccurrenceLink {
 }
 
 interface CalendarAssignmentLink extends OccurrenceLink {
+  assignment_id: string;
+  featured: boolean;
   assignment: {
     id: string;
     title: string;
     slug: string | null;
+    is_published: boolean;
     repository: {
       id: string;
       title: string;
       slug: string | null;
+      is_published: boolean;
     } | null;
   } | null;
+}
+
+/**
+ * A linked page as the calendar DISPLAYS it.
+ *
+ * No `featured` here on purpose. Which link is starred is answered once, by
+ * `featured_resource` — already resolved for this viewer — and the display
+ * arrays carry only what a surface actually renders. A per-entry flag would be
+ * a second, unread copy of the same fact, sent to students as well.
+ */
+interface CalendarDisplayPage {
+  page: {
+    id: string;
+    title: string;
+    is_draft: boolean;
+  };
+}
+
+/** A linked deck as the calendar DISPLAYS it. */
+interface CalendarDisplaySlide {
+  slide: {
+    id: string;
+    title: string;
+    is_draft: boolean;
+  };
+}
+
+/** A linked assignment as the calendar DISPLAYS it, with its repository. */
+interface CalendarDisplayAssignment {
+  assignment: {
+    id: string;
+    title: string;
+    slug: string | null;
+    is_published: boolean;
+  };
+  repository: {
+    id: string;
+    title: string;
+    slug: string | null;
+    is_published: boolean;
+  } | null;
+}
+
+interface CalendarDisplayLinks {
+  pages: CalendarDisplayPage[];
+  slides: CalendarDisplaySlide[];
+  assignments: CalendarDisplayAssignment[];
+}
+
+/**
+ * The ONE linked resource the month view shows under this event, already
+ * resolved for the viewer being answered.
+ *
+ * Derived after both filters — the occurrence's links, then the ones this
+ * viewer may see — so it is null rather than withheld when a student's event
+ * has a starred draft behind it. A student is not told that something is
+ * starred, only shown nothing, which is also what an unstarred event shows.
+ *
+ * `is_draft` is what the Draft treatment reads, and only staff are ever handed
+ * a true one. For an assignment it means "the class cannot see this yet",
+ * covering an unpublished assignment AND one in an unpublished repository —
+ * the pair the link list already marks together.
+ */
+interface CalendarFeaturedResource {
+  kind: FeaturedLinkKind;
+  id: string;
+  title: string;
+  is_draft: boolean;
+}
+
+/** What the mapper below returns: the display arrays and the star among them. */
+interface CalendarDisplayLinksWithFeatured extends CalendarDisplayLinks {
+  featured: CalendarFeaturedResource | null;
+}
+
+/**
+ * The stored link rows echoed back under `_raw*Links` when a caller asks for
+ * them, carrying only what the edit modal reads: which resource, and which
+ * occurrence it is attached to. The joined page/deck/assignment rows are NOT
+ * repeated here — the display arrays above are where linked content is read.
+ */
+interface CalendarRawPageLink extends OccurrenceLink {
+  page_id: string;
+  /** Which chip the edit modal draws the star on when it prefills. */
+  featured: boolean;
+}
+
+interface CalendarRawSlideLink extends OccurrenceLink {
+  slide_id: string;
+  featured: boolean;
+}
+
+interface CalendarRawAssignmentLink extends OccurrenceLink {
+  assignment_id: string;
+  featured: boolean;
 }
 
 interface CalendarEventOverrideShape {
@@ -55,9 +171,23 @@ interface CalendarRecurrenceRule {
   [key: string]: Prisma.JsonValue | undefined;
 }
 
+/**
+ * A stored CalendarEvent row with its link relations — the INPUT to expansion.
+ *
+ * Fields are declared one by one rather than through an index signature: the
+ * expansion below copies this row into the display shape field by field, and an
+ * index signature would let a column join that copy without anyone deciding it
+ * should.
+ */
 interface CalendarEventWithLinks {
+  id: string;
+  created_by: string;
+  event_type: EventType;
+  title: string;
+  description: string | null;
   is_recurring: boolean;
   recurrence_rule: Prisma.JsonValue | null;
+  creator?: { id: string; name: string | null; login: string | null } | null;
   pageLinks: CalendarPageLink[];
   slideLinks: CalendarSlideLink[];
   assignmentLinks: CalendarAssignmentLink[];
@@ -66,21 +196,37 @@ interface CalendarEventWithLinks {
   end_time: Date;
   location: string | null;
   meeting_link: string | null;
-  [key: string]: unknown;
 }
 
-interface CalendarExpandedEvent extends CalendarEventWithLinks {
-  pages: Array<{ page: CalendarPageLink['page'] }>;
-  slides: Array<{ slide: CalendarSlideLink['slide'] }>;
-  assignments: Array<{
-    assignment: CalendarAssignmentLink['assignment'];
-    repository: NonNullable<CalendarAssignmentLink['assignment']>['repository'] | undefined;
-  }>;
+/**
+ * One occurrence as the calendar DISPLAYS it — the OUTPUT of expansion.
+ *
+ * Built field by field from the stored row: every key here is one a calendar
+ * surface reads (both grids, the event card, the link list, the edit modal, the
+ * MCP calendar reads, the ICS feed). The stored link relations are not among
+ * them; linked content travels as the visibility-filtered, occurrence-filtered
+ * `pages`/`slides`/`assignments` arrays, and the `_raw*Links` arrays exist only
+ * for callers that asked for them.
+ */
+interface CalendarExpandedEvent extends CalendarDisplayLinks {
+  id: string;
+  created_by: string;
+  event_type: EventType;
+  title: string;
+  description: string | null;
+  start_time: Date;
+  end_time: Date;
+  location: string | null;
+  meeting_link: string | null;
+  is_recurring: boolean;
+  recurrence_rule: Prisma.JsonValue | null;
+  creator: { id: string; name: string | null; login: string | null } | null;
+  is_overridden: boolean;
+  featured_resource: CalendarFeaturedResource | null;
   occurrence_date?: Date;
-  is_overridden?: boolean;
-  _rawPageLinks?: CalendarPageLink[];
-  _rawSlideLinks?: CalendarSlideLink[];
-  _rawAssignmentLinks?: CalendarAssignmentLink[];
+  _rawPageLinks?: CalendarRawPageLink[];
+  _rawSlideLinks?: CalendarRawSlideLink[];
+  _rawAssignmentLinks?: CalendarRawAssignmentLink[];
 }
 
 interface CalendarDeadlineItem {
@@ -95,8 +241,16 @@ interface CalendarDeadlineItem {
   assignment_id: string;
   /** Null for quiz/form assignments, which have no repository. */
   repository_id: string | null;
-  pages: unknown[];
-  slides: unknown[];
+  pages: CalendarDisplayPage[];
+  slides: CalendarDisplaySlide[];
+  /**
+   * Always null. A deadline is not an event somebody links resources to — its
+   * pages and decks come from the assignment — so there is no chip to star and
+   * the month view shows nothing under it. Declared rather than omitted: these
+   * items carry no index signature, so a caller reading `featured_resource`
+   * across the union needs the key to exist on every variant.
+   */
+  featured_resource: null;
   github_issue_url: string | null;
 }
 
@@ -129,8 +283,10 @@ interface CalendarFormCloseItem {
   form_access: string;
   /** Where clicking through goes: the responses view for staff, the fill page otherwise. */
   form_url: string;
-  pages: unknown[];
-  slides: unknown[];
+  pages: CalendarDisplayPage[];
+  slides: CalendarDisplaySlide[];
+  /** Always null, for the same reason a deadline's is. */
+  featured_resource: null;
   github_issue_url: null;
 }
 
@@ -172,6 +328,52 @@ interface DeadlineRepositoryAssignment {
     name: string;
   };
 }
+
+/**
+ * The write policy lives in a dependency-free module so the three surfaces that
+ * enforce it — both web calendar actions and the MCP tools — can import the
+ * real decision rather than a copy. Re-exported here because this is where
+ * callers already look for it.
+ */
+export {
+  ASSISTANT_EVENT_TYPE,
+  ASSISTANT_EVENT_TYPE_MESSAGE,
+  assistantMayChangeEventType,
+  assistantMayCreateEventType,
+  CalendarTimeRangeError,
+  EDIT_SCOPE_THIS_ONLY,
+  FEATURED_LINK_KINDS,
+  isCalendarTimeRangeError,
+  isFeaturedLinkRow,
+  resolveFeaturedLink,
+  scopeCarriesLinks,
+  toFeaturedLinkRef,
+} from './calendarPolicy.ts';
+export type { FeaturedLinkKind, FeaturedLinkRef } from './calendarPolicy.ts';
+
+/**
+ * An event must end strictly after it starts; a zero-length or inverted range
+ * is refused.
+ *
+ * Only checked when BOTH edges are supplied, which is recurrence-independent.
+ * A single moved edge is deliberately NOT compared against the stored row: for
+ * a recurring series the stored `start_time`/`end_time` are the TEMPLATE's
+ * absolute datetimes (dated at the series start), not this occurrence's, so the
+ * comparison would refuse valid edits. calendar_event_update in apps/mcp draws
+ * the same line, for the same reason.
+ */
+const assertEndAfterStart = (
+  start: DateInput | null | undefined,
+  end: DateInput | null | undefined
+): void => {
+  if (start === undefined || start === null || end === undefined || end === null) return;
+
+  const startMs = new Date(start).getTime();
+  const endMs = new Date(end).getTime();
+  if (Number.isNaN(startMs) || Number.isNaN(endMs) || endMs <= startMs) {
+    throw new CalendarTimeRangeError();
+  }
+};
 
 const isJsonObject = (
   value: Prisma.JsonValue | Prisma.InputJsonValue | null | undefined
@@ -288,32 +490,183 @@ const filterLinksForOccurrence = <T extends OccurrenceLink>(
 };
 
 /**
- * Map raw link data to the format expected by EventLinks component
- * By default, filters out draft content (calendar links should only show published content)
+ * Build the linked-content arrays the calendar renders, from the stored link
+ * rows for one occurrence.
+ *
+ * Each entry is assembled field by field, so a column added to the query later
+ * does not become part of what the calendar hands out.
+ *
+ * @param {boolean} [canSeeDrafts=false] - Whether the viewer may see unpublished
+ *   linked content: draft pages, draft decks, and assignments (or repositories)
+ *   that are not published yet. Defaults to false, so a caller that says nothing
+ *   gets the published-only view.
  */
 const mapLinksToDisplayFormat = (
   pageLinks: CalendarPageLink[],
   slideLinks: CalendarSlideLink[],
   assignmentLinks: CalendarAssignmentLink[],
-  filterDrafts: boolean = true
-) => {
-  // Map pages (filter drafts by default)
-  const pages = (pageLinks || [])
-    .filter(l => !filterDrafts || !l.page?.is_draft)
-    .map(l => ({ page: l.page }));
+  canSeeDrafts: boolean = false
+): CalendarDisplayLinksWithFeatured => {
+  /**
+   * The starred rows that SURVIVED the visibility filter, in the order the
+   * three kinds are mapped. Pushed from inside the filters below, so a
+   * resource this viewer may not see cannot become their starred resource —
+   * not even as an id.
+   */
+  const starred: Array<CalendarFeaturedResource & { dated: boolean }> = [];
 
-  // Map slides (filter drafts by default)
-  const slides = (slideLinks || [])
-    .filter(l => !filterDrafts || !l.slide?.is_draft)
-    .map(l => ({ slide: l.slide }));
+  const pages = (pageLinks || []).flatMap(l => {
+    if (!l.page || (!canSeeDrafts && l.page.is_draft)) return [];
+    if (l.featured) {
+      starred.push({
+        kind: 'page',
+        id: l.page.id,
+        title: l.page.title,
+        is_draft: l.page.is_draft,
+        dated: Boolean(l.occurrence_date),
+      });
+    }
+    return [{ page: { id: l.page.id, title: l.page.title, is_draft: l.page.is_draft } }];
+  });
 
-  // Map assignments with repository info for navigation
-  const assignments = (assignmentLinks || []).map(l => ({
-    assignment: l.assignment,
-    repository: l.assignment?.repository,
-  }));
+  const slides = (slideLinks || []).flatMap(l => {
+    if (!l.slide || (!canSeeDrafts && l.slide.is_draft)) return [];
+    if (l.featured) {
+      starred.push({
+        kind: 'slide',
+        id: l.slide.id,
+        title: l.slide.title,
+        is_draft: l.slide.is_draft,
+        dated: Boolean(l.occurrence_date),
+      });
+    }
+    return [{ slide: { id: l.slide.id, title: l.slide.title, is_draft: l.slide.is_draft } }];
+  });
 
-  return { pages, slides, assignments };
+  // An assignment link follows the publication state of BOTH the assignment and
+  // the repository it lives in — the repositories view applies the same pair —
+  // so an unpublished repository hides its assignments' links too.
+  const assignments = (assignmentLinks || []).flatMap(l => {
+    const assignment = l.assignment;
+    if (!assignment) return [];
+    const published = assignment.is_published && assignment.repository?.is_published !== false;
+    if (!canSeeDrafts && !published) return [];
+
+    if (l.featured) {
+      starred.push({
+        kind: 'assignment',
+        id: assignment.id,
+        title: assignment.title,
+        // "The class cannot see this yet" — the pair the link list marks
+        // together, so an assignment in an unpublished repository counts.
+        is_draft: !published,
+        dated: Boolean(l.occurrence_date),
+      });
+    }
+
+    return [
+      {
+        assignment: {
+          id: assignment.id,
+          title: assignment.title,
+          slug: assignment.slug,
+          is_published: assignment.is_published,
+        },
+        repository: assignment.repository
+          ? {
+              id: assignment.repository.id,
+              title: assignment.repository.title,
+              slug: assignment.repository.slug,
+              is_published: assignment.repository.is_published,
+            }
+          : null,
+      },
+    ];
+  });
+
+  // Normally there is at most one, which the write and the database both hold
+  // to. One case can surface two: a NON-recurring event reads its undated
+  // links AND any dated link that falls on its own date, and those are two
+  // buckets with a star apiece — a series that was flattened back to a single
+  // event, say. The dated row wins, because it was written against the date
+  // being shown; without a rule the answer would depend on row order.
+  const featuredMatch = starred.find(s => s.dated) ?? starred[0] ?? null;
+  const featured = featuredMatch
+    ? {
+        kind: featuredMatch.kind,
+        id: featuredMatch.id,
+        title: featuredMatch.title,
+        is_draft: featuredMatch.is_draft,
+      }
+    : null;
+
+  return { pages, slides, assignments, featured };
+};
+
+/**
+ * Build one occurrence's display object from the stored row.
+ *
+ * The stored row's own relations (`pageLinks`, `slideLinks`, `assignmentLinks`,
+ * `overrides`) are deliberately not copied across: linked content travels as
+ * the already-filtered arrays in `links`, and the raw rows go out only under
+ * `_raw*Links`, only when the caller asked for them.
+ */
+const buildOccurrence = (
+  event: CalendarEventWithLinks,
+  occurrence: {
+    start_time: Date;
+    end_time: Date;
+    location: string | null;
+    meeting_link: string | null;
+    occurrence_date?: Date;
+    is_overridden?: boolean;
+  },
+  links: CalendarDisplayLinksWithFeatured,
+  includeRawLinks: boolean
+): CalendarExpandedEvent => {
+  const expanded: CalendarExpandedEvent = {
+    id: event.id,
+    created_by: event.created_by,
+    event_type: event.event_type,
+    title: event.title,
+    description: event.description,
+    start_time: occurrence.start_time,
+    end_time: occurrence.end_time,
+    location: occurrence.location,
+    meeting_link: occurrence.meeting_link,
+    is_recurring: event.is_recurring,
+    recurrence_rule: event.recurrence_rule,
+    creator: event.creator ?? null,
+    is_overridden: occurrence.is_overridden ?? false,
+    ...(occurrence.occurrence_date ? { occurrence_date: occurrence.occurrence_date } : {}),
+    pages: links.pages,
+    slides: links.slides,
+    assignments: links.assignments,
+    featured_resource: links.featured,
+  };
+
+  // Only for callers editing the event: which resource is attached to which
+  // occurrence, and which of them is starred, so the edit modal can prefill one
+  // date's pickers.
+  if (includeRawLinks) {
+    expanded._rawPageLinks = event.pageLinks.map(l => ({
+      page_id: l.page_id,
+      occurrence_date: l.occurrence_date,
+      featured: l.featured,
+    }));
+    expanded._rawSlideLinks = event.slideLinks.map(l => ({
+      slide_id: l.slide_id,
+      occurrence_date: l.occurrence_date,
+      featured: l.featured,
+    }));
+    expanded._rawAssignmentLinks = event.assignmentLinks.map(l => ({
+      assignment_id: l.assignment_id,
+      occurrence_date: l.occurrence_date,
+      featured: l.featured,
+    }));
+  }
+
+  return expanded;
 };
 
 /**
@@ -322,45 +675,43 @@ const mapLinksToDisplayFormat = (
  * @param {Date} startDate - Start of date range
  * @param {Date} endDate - End of date range
  * @param {boolean} includeRawLinks - Whether to include raw link data for admin UI editing
+ * @param {boolean} canSeeDrafts - Whether the viewer may see unpublished linked content
  */
 const expandRecurringEvent = (
   event: CalendarEventWithLinks,
   startDate: Date,
   endDate: Date,
-  includeRawLinks: boolean = false
+  includeRawLinks: boolean = false,
+  canSeeDrafts: boolean = false
 ): CalendarExpandedEvent[] => {
+  /** The links for one date, filtered for the occurrence and for the viewer. */
+  const linksFor = (occurrenceDate: Date, isRecurring: boolean): CalendarDisplayLinksWithFeatured =>
+    mapLinksToDisplayFormat(
+      filterLinksForOccurrence(event.pageLinks, occurrenceDate, isRecurring),
+      filterLinksForOccurrence(event.slideLinks, occurrenceDate, isRecurring),
+      filterLinksForOccurrence(event.assignmentLinks, occurrenceDate, isRecurring),
+      canSeeDrafts
+    );
+
+  /** The single occurrence an event without a usable recurrence rule has. */
+  const singleOccurrence = (): CalendarExpandedEvent[] => [
+    buildOccurrence(
+      event,
+      {
+        start_time: event.start_time,
+        end_time: event.end_time,
+        location: event.location,
+        meeting_link: event.meeting_link,
+      },
+      // isRecurring=false, so NULL occurrence_date links are included
+      linksFor(event.start_time, false),
+      includeRawLinks
+    ),
+  ];
+
   // For non-recurring events, just map links to display format
   if (!event.is_recurring || !event.recurrence_rule) {
-    // Map links to display format (filter for this non-recurring event's date)
-    // Pass isRecurring=false so NULL occurrence_date links are included
-    const filteredPageLinks = filterLinksForOccurrence(event.pageLinks, event.start_time, false);
-    const filteredSlideLinks = filterLinksForOccurrence(event.slideLinks, event.start_time, false);
-    const filteredAssignmentLinks = filterLinksForOccurrence(
-      event.assignmentLinks,
-      event.start_time,
-      false
-    );
-    const { pages, slides, assignments } = mapLinksToDisplayFormat(
-      filteredPageLinks,
-      filteredSlideLinks,
-      filteredAssignmentLinks
-    );
-
-    const expandedEvent: CalendarExpandedEvent = {
-      ...event,
-      pages,
-      slides,
-      assignments,
-    };
-
-    // Only include raw links if requested (for admin UI editing)
-    if (includeRawLinks) {
-      expandedEvent._rawPageLinks = event.pageLinks;
-      expandedEvent._rawSlideLinks = event.slideLinks;
-      expandedEvent._rawAssignmentLinks = event.assignmentLinks;
-    }
-
-    return [expandedEvent];
+    return singleOccurrence();
   }
 
   const occurrences = [];
@@ -368,32 +719,7 @@ const expandRecurringEvent = (
   const { days, until } = recurrenceRule ?? {};
 
   if (!days || !Array.isArray(days)) {
-    const filteredPageLinks = filterLinksForOccurrence(event.pageLinks, event.start_time, false);
-    const filteredSlideLinks = filterLinksForOccurrence(event.slideLinks, event.start_time, false);
-    const filteredAssignmentLinks = filterLinksForOccurrence(
-      event.assignmentLinks,
-      event.start_time,
-      false
-    );
-    const { pages, slides, assignments } = mapLinksToDisplayFormat(
-      filteredPageLinks,
-      filteredSlideLinks,
-      filteredAssignmentLinks
-    );
-    const expandedEvent: CalendarExpandedEvent = {
-      ...event,
-      pages,
-      slides,
-      assignments,
-    };
-
-    if (includeRawLinks) {
-      expandedEvent._rawPageLinks = event.pageLinks;
-      expandedEvent._rawSlideLinks = event.slideLinks;
-      expandedEvent._rawAssignmentLinks = event.assignmentLinks;
-    }
-
-    return [expandedEvent];
+    return singleOccurrence();
   }
 
   const currentDate = new Date(event.start_time);
@@ -422,18 +748,7 @@ const expandRecurringEvent = (
         // Filter and map links for this specific occurrence
         // Pass isRecurring=true so only occurrence-specific links are included
         const occurrenceDate = new Date(currentDate);
-        const filteredPageLinks = filterLinksForOccurrence(event.pageLinks, occurrenceDate, true);
-        const filteredSlideLinks = filterLinksForOccurrence(event.slideLinks, occurrenceDate, true);
-        const filteredAssignmentLinks = filterLinksForOccurrence(
-          event.assignmentLinks,
-          occurrenceDate,
-          true
-        );
-        const { pages, slides, assignments } = mapLinksToDisplayFormat(
-          filteredPageLinks,
-          filteredSlideLinks,
-          filteredAssignmentLinks
-        );
+        const links = linksFor(occurrenceDate, true);
 
         if (override) {
           // Use override times/location
@@ -452,27 +767,21 @@ const expandRecurringEvent = (
             ? new Date(override.new_end_time)
             : new Date(occurrenceStart.getTime() + duration);
 
-          const overrideOccurrence: CalendarExpandedEvent = {
-            ...event,
-            start_time: occurrenceStart,
-            end_time: occurrenceEnd,
-            location: override.new_location || event.location,
-            meeting_link: override.new_meeting_link || event.meeting_link,
-            is_overridden: true,
-            occurrence_date: occurrenceDate,
-            pages,
-            slides,
-            assignments,
-          };
-
-          // Only include raw links if requested (for admin UI editing)
-          if (includeRawLinks) {
-            overrideOccurrence._rawPageLinks = event.pageLinks;
-            overrideOccurrence._rawSlideLinks = event.slideLinks;
-            overrideOccurrence._rawAssignmentLinks = event.assignmentLinks;
-          }
-
-          occurrences.push(overrideOccurrence);
+          occurrences.push(
+            buildOccurrence(
+              event,
+              {
+                start_time: occurrenceStart,
+                end_time: occurrenceEnd,
+                location: override.new_location || event.location,
+                meeting_link: override.new_meeting_link || event.meeting_link,
+                is_overridden: true,
+                occurrence_date: occurrenceDate,
+              },
+              links,
+              includeRawLinks
+            )
+          );
         } else {
           // Use template times for this date
           const duration =
@@ -486,24 +795,20 @@ const expandRecurringEvent = (
           );
           const occurrenceEnd = new Date(occurrenceStart.getTime() + duration);
 
-          const templateOccurrence: CalendarExpandedEvent = {
-            ...event,
-            start_time: occurrenceStart,
-            end_time: occurrenceEnd,
-            occurrence_date: occurrenceDate,
-            pages,
-            slides,
-            assignments,
-          };
-
-          // Only include raw links if requested (for admin UI editing)
-          if (includeRawLinks) {
-            templateOccurrence._rawPageLinks = event.pageLinks;
-            templateOccurrence._rawSlideLinks = event.slideLinks;
-            templateOccurrence._rawAssignmentLinks = event.assignmentLinks;
-          }
-
-          occurrences.push(templateOccurrence);
+          occurrences.push(
+            buildOccurrence(
+              event,
+              {
+                start_time: occurrenceStart,
+                end_time: occurrenceEnd,
+                location: event.location,
+                meeting_link: event.meeting_link,
+                occurrence_date: occurrenceDate,
+              },
+              links,
+              includeRawLinks
+            )
+          );
         }
       }
     }
@@ -523,6 +828,12 @@ const expandRecurringEvent = (
  * @param {string} [userId] - Optional user ID to include their GitHub issue links for deadlines
  * @param {boolean} [includeRawLinks=false] - Include raw link data for admin UI editing
  * @param {boolean} [includeUnpublished=false] - Include unpublished assignments (for admin view)
+ * @param {boolean} [options.canSeeDrafts=false] - Whether the viewer may see unpublished LINKED
+ *   content: draft pages, draft decks, and links to assignments that are not published yet. All
+ *   staff may (OWNER, TEACHER and ASSISTANT alike); students may not. Kept separate from
+ *   `includeUnpublished`, which decides whether unpublished assignments get a DEADLINE item of
+ *   their own — the two answer different questions and are free to diverge. Defaults to false, so
+ *   a caller that says nothing gets the student view.
  */
 export const getClassroomCalendar = async (
   classroomId: string,
@@ -531,7 +842,10 @@ export const getClassroomCalendar = async (
   userId: string | null = null,
   includeRawLinks: boolean = false,
   includeUnpublished: boolean = false,
-  { canManageForms = false }: { canManageForms?: boolean } = {}
+  {
+    canManageForms = false,
+    canSeeDrafts = false,
+  }: { canManageForms?: boolean; canSeeDrafts?: boolean } = {}
 ) => {
   // Get all calendar events that could appear in this range
   const events = await getPrisma().calendarEvent.findMany({
@@ -582,12 +896,18 @@ export const getClassroomCalendar = async (
       },
       assignmentLinks: {
         include: {
+          // `is_published` on both rows is what decides whether this link is
+          // shown at all: a link to an assignment (or to a repository) that has
+          // not been published is staff-only.
           assignment: {
             select: {
               id: true,
               title: true,
               slug: true,
-              repository: { select: { id: true, title: true, slug: true } },
+              is_published: true,
+              repository: {
+                select: { id: true, title: true, slug: true, is_published: true },
+              },
             },
           },
         },
@@ -601,7 +921,7 @@ export const getClassroomCalendar = async (
 
   // Expand recurring events (pass includeRawLinks for admin UI editing)
   const expandedEvents = events.flatMap(event =>
-    expandRecurringEvent(event, startDate, endDate, includeRawLinks)
+    expandRecurringEvent(event, startDate, endDate, includeRawLinks, canSeeDrafts)
   );
 
   // Get deadlines from Assignments (pass userId to include GitHub issue links)
@@ -610,7 +930,8 @@ export const getClassroomCalendar = async (
     startDate,
     endDate,
     userId,
-    includeUnpublished
+    includeUnpublished,
+    { canSeeDrafts }
   );
 
   // Get form close dates. Where the click-through goes is a role question, and
@@ -629,6 +950,18 @@ export const getClassroomCalendar = async (
 
   return allEvents;
 };
+
+/**
+ * One item as the calendar hands it to a caller: an expanded CalendarEvent
+ * occurrence, a synthesized assignment deadline, or a synthesized form close.
+ *
+ * Derived from the function rather than written out, so it cannot describe a
+ * payload the service no longer returns. The webapp keeps its own client-side
+ * shape (`CalendarEventWithLinks`) — importing this one into a component would
+ * pull the service graph into the browser bundle — and a type-level conformance
+ * test in the webapp checks the two still agree where they must.
+ */
+export type ClassroomCalendarItem = Awaited<ReturnType<typeof getClassroomCalendar>>[number];
 
 /**
  * Get form close dates as calendar items.
@@ -706,6 +1039,7 @@ export const getFormCloseEventsForRange = async (
       form_url: forStaff ? `${formPath}/responses` : formPath,
       pages: [],
       slides: [],
+      featured_resource: null,
       github_issue_url: null,
     };
   });
@@ -718,13 +1052,17 @@ export const getFormCloseEventsForRange = async (
  * @param {Date} endDate - End of date range
  * @param {string} [userId] - Optional user ID to include their GitHub issue links
  * @param {boolean} [includeUnpublished=false] - Include unpublished assignments (for admin view)
+ * @param {boolean} [options.canSeeDrafts=false] - Whether the viewer may see draft pages and decks
+ *   attached to the assignment. Separate from `includeUnpublished`, which decides whether the
+ *   assignment appears at all — see `getClassroomCalendar`.
  */
 export const getDeadlinesForRange = async (
   classroomId: string,
   startDate: Date,
   endDate: Date,
   userId: string | null = null,
-  includeUnpublished: boolean = false
+  includeUnpublished: boolean = false,
+  { canSeeDrafts = false }: { canSeeDrafts?: boolean } = {}
 ) => {
   const assignments = await getPrisma().assignment.findMany({
     where: {
@@ -766,8 +1104,8 @@ export const getDeadlinesForRange = async (
         },
       },
       pages: {
-        // Only filter out drafts if not including unpublished content
-        ...(includeUnpublished
+        // Draft pages are staff-only, the same rule the event-link leg applies
+        ...(canSeeDrafts
           ? {}
           : {
               where: {
@@ -781,6 +1119,9 @@ export const getDeadlinesForRange = async (
             select: {
               id: true,
               title: true,
+              // Selected so a draft the viewer IS allowed to see can be shown
+              // as one; the flag is what the Draft treatment reads.
+              is_draft: true,
             },
           },
         },
@@ -789,8 +1130,8 @@ export const getDeadlinesForRange = async (
         },
       },
       slides: {
-        // Only filter out drafts if not including unpublished content
-        ...(includeUnpublished
+        // Draft decks are staff-only, same as the pages above
+        ...(canSeeDrafts
           ? {}
           : {
               where: {
@@ -840,7 +1181,7 @@ export const getDeadlinesForRange = async (
     const repoAssignment = (
       'git_repo_assignments' in assignment ? (assignment.git_repo_assignments?.[0] ?? null) : null
     ) as DeadlineRepositoryAssignment | null;
-    const gitOrgLogin = assignment.module.classroom?.git_organization?.login;
+    const gitOrgLogin = assignment.module?.classroom?.git_organization?.login;
 
     // The student's submission on GitHub: their issue (ISSUE mode) or their
     // repo (REPO mode, no issue exists).
@@ -862,15 +1203,24 @@ export const getDeadlinesForRange = async (
       id: `deadline-${assignment.id}`,
       event_type: 'DEADLINE',
       title: `Due: ${assignment.title}`,
-      description: assignment.repository?.title ?? assignment.module.title,
+      description: assignment.repository?.title ?? assignment.module?.title ?? '',
       start_time: assignment.student_deadline!,
       end_time: assignment.student_deadline!,
       is_deadline: true,
       is_unpublished: isUnpublished,
       assignment_id: assignment.id,
       repository_id: assignment.repository?.id ?? null,
-      pages: assignment.pages,
-      slides: assignment.slides,
+      // Built entry by entry, like the event-link leg: the stored link row
+      // carries columns (ids, ordering, timestamps) the calendar never renders.
+      pages: assignment.pages.flatMap(l =>
+        l.page ? [{ page: { id: l.page.id, title: l.page.title, is_draft: l.page.is_draft } }] : []
+      ),
+      slides: assignment.slides.flatMap(l =>
+        l.slide
+          ? [{ slide: { id: l.slide.id, title: l.slide.title, is_draft: l.slide.is_draft } }]
+          : []
+      ),
+      featured_resource: null,
       github_issue_url,
     };
 
@@ -897,6 +1247,8 @@ export const createEvent = async (
     is_recurring,
     recurrence_rule,
   } = eventData;
+
+  assertEndAfterStart(start_time, end_time);
 
   return getPrisma().calendarEvent.create({
     data: {
@@ -939,6 +1291,8 @@ export const updateEvent = async (eventId: string, eventData: CalendarEventUpdat
     is_recurring,
     recurrence_rule,
   } = eventData;
+
+  assertEndAfterStart(start_time, end_time);
 
   return getPrisma().calendarEvent.update({
     where: { id: eventId },
@@ -988,6 +1342,8 @@ export const updateEventWithScope = async (
   editScope: CalendarEditScope,
   occurrenceDate: Date
 ) => {
+  assertEndAfterStart(eventData.start_time, eventData.end_time);
+
   const event = await getPrisma().calendarEvent.findUnique({
     where: { id: eventId },
     include: { overrides: true },
@@ -1035,37 +1391,78 @@ export const updateEventWithScope = async (
       const dayBeforeOccurrence = new Date(occurrenceDate);
       dayBeforeOccurrence.setDate(dayBeforeOccurrence.getDate() - 1);
 
-      // Update original event to end before this occurrence
-      await getPrisma().calendarEvent.update({
-        where: { id: eventId },
-        data: {
-          recurrence_rule: {
-            ...toInputJsonObject(event.recurrence_rule),
-            until: dayBeforeOccurrence.toISOString(),
+      // Links and overrides are both stored per occurrence date, so the split
+      // has to divide them too: everything from this date on belongs to the new
+      // event, and the dates before it stay behind. One boundary for both, at
+      // midnight UTC — the normalisation the link writes already use, and the
+      // one an override needs as well, since an override's `date` carries the
+      // occurrence's time of day and would fall the wrong side of a bare
+      // instant comparison.
+      const splitFrom = normalizeDate(occurrenceDate);
+
+      return getPrisma().$transaction(async tx => {
+        // Update original event to end before this occurrence
+        await tx.calendarEvent.update({
+          where: { id: eventId },
+          data: {
+            recurrence_rule: {
+              ...toInputJsonObject(event.recurrence_rule),
+              until: dayBeforeOccurrence.toISOString(),
+            },
           },
-        },
-      });
+        });
 
-      // Create new event starting from this occurrence
-      const newEvent = await getPrisma().calendarEvent.create({
-        data: {
-          classroom_id: event.classroom_id,
-          created_by: event.created_by,
-          event_type: eventData.event_type || event.event_type,
-          title: eventData.title || event.title,
-          description: eventData.description ?? event.description,
-          start_time: eventData.start_time ? toDate(eventData.start_time) : event.start_time,
-          end_time: eventData.end_time ? toDate(eventData.end_time) : event.end_time,
-          location: eventData.location ?? event.location,
-          meeting_link: eventData.meeting_link ?? event.meeting_link,
-          is_recurring: eventData.is_recurring ?? event.is_recurring,
-          recurrence_rule: toNullableJsonInput(
-            eventData.recurrence_rule ?? toInputJsonObject(event.recurrence_rule)
-          ),
-        },
-      });
+        // Create new event starting from this occurrence
+        const newEvent = await tx.calendarEvent.create({
+          data: {
+            classroom_id: event.classroom_id,
+            created_by: event.created_by,
+            event_type: eventData.event_type || event.event_type,
+            title: eventData.title || event.title,
+            description: eventData.description ?? event.description,
+            start_time: eventData.start_time ? toDate(eventData.start_time) : event.start_time,
+            end_time: eventData.end_time ? toDate(eventData.end_time) : event.end_time,
+            location: eventData.location ?? event.location,
+            meeting_link: eventData.meeting_link ?? event.meeting_link,
+            is_recurring: eventData.is_recurring ?? event.is_recurring,
+            recurrence_rule: toNullableJsonInput(
+              eventData.recurrence_rule ?? toInputJsonObject(event.recurrence_rule)
+            ),
+          },
+        });
 
-      return newEvent;
+        // A NULL occurrence_date never matches `gte`, so the undated bucket
+        // stays with the original event — which is where a non-recurring
+        // event's links live.
+        const laterOccurrences = {
+          event_id: eventId,
+          occurrence_date: { gte: splitFrom },
+        };
+        const moveToNewEvent = { event_id: newEvent.id };
+
+        await tx.calendarEventPageLink.updateMany({
+          where: laterOccurrences,
+          data: moveToNewEvent,
+        });
+        await tx.calendarEventSlideLink.updateMany({
+          where: laterOccurrences,
+          data: moveToNewEvent,
+        });
+        await tx.calendarEventAssignmentLink.updateMany({
+          where: laterOccurrences,
+          data: moveToNewEvent,
+        });
+
+        // The overrides for those dates go with them. Left behind they would
+        // hang off a series that no longer reaches their date — invisible, and
+        // a cancelled occurrence would quietly come back on the new event.
+        await tx.calendarEventOverride.updateMany({
+          where: { event_id: eventId, date: { gte: splitFrom } },
+          data: moveToNewEvent,
+        });
+
+        return newEvent;
+      });
     }
 
     case 'all': {
@@ -1148,22 +1545,39 @@ export const deleteEventWithScope = async (
       const dayBeforeOccurrence = new Date(occurrenceDate);
       dayBeforeOccurrence.setDate(dayBeforeOccurrence.getDate() - 1);
 
-      // Also delete any overrides on or after this date
-      await getPrisma().calendarEventOverride.deleteMany({
-        where: {
-          event_id: eventId,
-          date: { gte: occurrenceDate },
-        },
-      });
+      // The occurrences from this date on are gone, so their per-date rows go
+      // with them. One boundary at midnight UTC for links AND overrides: an
+      // override's `date` carries the occurrence's time of day, so comparing it
+      // against the bare instant would spare the ones earlier in the same day.
+      // The undated bucket (NULL occurrence_date) is not matched by `gte`.
+      const deleteFrom = normalizeDate(occurrenceDate);
+      const laterOccurrences = {
+        event_id: eventId,
+        occurrence_date: { gte: deleteFrom },
+      };
 
-      return getPrisma().calendarEvent.update({
-        where: { id: eventId },
-        data: {
-          recurrence_rule: {
-            ...toInputJsonObject(event.recurrence_rule),
-            until: dayBeforeOccurrence.toISOString(),
+      return getPrisma().$transaction(async tx => {
+        // Also delete any overrides on or after this date
+        await tx.calendarEventOverride.deleteMany({
+          where: {
+            event_id: eventId,
+            date: { gte: deleteFrom },
           },
-        },
+        });
+
+        await tx.calendarEventPageLink.deleteMany({ where: laterOccurrences });
+        await tx.calendarEventSlideLink.deleteMany({ where: laterOccurrences });
+        await tx.calendarEventAssignmentLink.deleteMany({ where: laterOccurrences });
+
+        return tx.calendarEvent.update({
+          where: { id: eventId },
+          data: {
+            recurrence_rule: {
+              ...toInputJsonObject(event.recurrence_rule),
+              until: dayBeforeOccurrence.toISOString(),
+            },
+          },
+        });
       });
     }
 
@@ -1275,14 +1689,36 @@ export const getUserEvents = async (userId: string, classroomId: string) => {
  * @param {string} classroomId - The classroom ID for validation
  * @param {object} linkData - Object containing pageIds, slideIds, assignmentIds arrays
  * @param {Date|null} occurrenceDate - For recurring events, the specific occurrence date
+ * @param {object|null} featured - Which of those links the month view shows under the event on
+ *   this date, as `{ kind, id }`. At most one, across all three kinds. A ref naming something
+ *   this write is not linking is dropped silently rather than refused — see `resolveFeaturedLink`.
  */
 export const updateEventLinks = async (
   eventId: string,
   classroomId: string,
   linkData: { pageIds?: string[]; slideIds?: string[]; assignmentIds?: string[] },
-  occurrenceDate: Date | null = null
+  occurrenceDate: Date | null = null,
+  featured: FeaturedLinkRef | null = null
 ) => {
   const { pageIds = [], slideIds = [], assignmentIds = [] } = linkData;
+
+  // The TARGET has to be in this classroom too, not just the resources being
+  // linked. Without this the id checks below would happily rewrite another
+  // classroom's event — deleting its links for that date and writing this
+  // classroom's in their place — for anyone holding an id.
+  //
+  // This is the EARLY refusal: it fails before the validation queries and
+  // before a transaction is opened. The authoritative check is the same
+  // question asked again under the row lock inside the transaction, which is
+  // where a concurrent delete would otherwise slip through.
+  const target = await getPrisma().calendarEvent.findFirst({
+    where: { id: eventId, classroom_id: classroomId },
+    select: { id: true },
+  });
+
+  if (!target) {
+    throw new Error('Calendar event not found in this classroom');
+  }
 
   // Normalize occurrence_date for storage (date-only, no time)
   const normalizedDate = occurrenceDate
@@ -1316,7 +1752,45 @@ export const updateEventLinks = async (
   const validSlideIds = slides.map(s => s.id);
   const validAssignmentIds = assignments.map(a => a.id);
 
+  // The star is resolved against the VALIDATED lists, so an id this write is
+  // not actually linking — including one from another classroom, already
+  // dropped above — cannot carry it.
+  const featuredLink = resolveFeaturedLink(featured, {
+    pageIds: validPageIds,
+    slideIds: validSlideIds,
+    assignmentIds: validAssignmentIds,
+  });
+
   return getPrisma().$transaction(async tx => {
+    // Take the parent event's row lock BEFORE anything else in here, and take
+    // it as the real existence check.
+    //
+    // Two jobs, one statement. The first is the star: at most one link row per
+    // (event, date) may carry it, and that rule spans three tables, so no
+    // unique index can hold it on its own (the partial indexes the migration
+    // adds only cover one table each). Under Read Committed two concurrent
+    // saves of the same event would not see each other's uncommitted rows and
+    // could each insert a star into a different table. Locking the event row
+    // first makes them queue: the second save starts after the first has
+    // committed and rewritten the date's links, so it rewrites a state it can
+    // see.
+    //
+    // The second is the gap between the findFirst above and this transaction.
+    // An event deleted in that window — or moved to another classroom — left
+    // the inserts below to fail on a foreign key, which reaches the user as a
+    // 500 about a constraint. Asking here, under the lock, with the SAME
+    // classroom condition, turns that race into the refusal the caller already
+    // handles.
+    const locked = await tx.$queryRaw<Array<{ id: string }>>`
+      SELECT id FROM calendar_events
+      WHERE id = ${eventId} AND classroom_id = ${classroomId}
+      FOR UPDATE
+    `;
+
+    if (locked.length === 0) {
+      throw new Error('Calendar event not found in this classroom');
+    }
+
     // Delete existing links for this event/occurrence combination
     await tx.calendarEventPageLink.deleteMany({
       where: { event_id: eventId, occurrence_date: normalizedDate },
@@ -1336,6 +1810,7 @@ export const updateEventLinks = async (
           page_id: id,
           occurrence_date: normalizedDate,
           order: idx,
+          featured: isFeaturedLinkRow(featuredLink, 'page', id),
         })),
       });
     }
@@ -1346,6 +1821,7 @@ export const updateEventLinks = async (
           slide_id: id,
           occurrence_date: normalizedDate,
           order: idx,
+          featured: isFeaturedLinkRow(featuredLink, 'slide', id),
         })),
       });
     }
@@ -1356,6 +1832,7 @@ export const updateEventLinks = async (
           assignment_id: id,
           occurrence_date: normalizedDate,
           order: idx,
+          featured: isFeaturedLinkRow(featuredLink, 'assignment', id),
         })),
       });
     }

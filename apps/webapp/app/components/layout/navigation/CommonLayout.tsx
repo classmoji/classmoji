@@ -27,6 +27,7 @@ import type { AppUser, MembershipWithOrganization } from '~/types';
 const OWNER_CORE_LINKS = new Set([
   '/dashboard',
   '/modules',
+  '/calendar',
   '/repos',
   '/students',
   '/teams',

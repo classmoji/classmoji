@@ -2,33 +2,124 @@
  * Calendar utility functions for date manipulation and event processing
  */
 
+import type { CalendarEventWithLinks } from './types';
+
 /** A value that can be converted to a Date via `new Date(value)` */
 type DateInput = Date | string | number;
 
-export interface CalendarEvent {
-  id?: string;
-  title?: string;
-  start_time: string;
-  end_time: string;
-  event_type: string;
-  occurrence_date?: string | null;
-  is_deadline?: boolean;
-  /**
-   * A synthesized form-close item. A deadline for rendering, filtering and ICS
-   * export, but with no assignment behind it — so it is never draggable.
-   */
-  is_form_close?: boolean;
-  form_url?: string | null;
-  form_status?: string | null;
-  form_access?: string | null;
-  is_unpublished?: boolean;
-  [key: string]: unknown;
-}
+/**
+ * Build an event's start and end instants from one calendar date and two clock
+ * times — what both event modals collect.
+ *
+ * The end time is stamped onto the SAME date as the start, so a pairing like
+ * 11 PM → 12 AM would describe an event that finishes before it begins. An end
+ * strictly EARLIER than the start is a midnight crossing, so it rolls forward
+ * one date.
+ *
+ * An end EQUAL to the start does not roll. Two identical times are a mistake,
+ * not a request for a 24-hour event, and turning one into a day-long block
+ * would be a silent answer to something the user has to fix. It passes through
+ * as a zero-length range for the service to refuse, which is what puts the
+ * message on screen.
+ *
+ * Pure, so both halves of that rule can be tested on their own.
+ */
+export const buildEventWindow = (
+  date: Date,
+  startTime: Date,
+  endTime: Date
+): { start: Date; end: Date } => {
+  const start = new Date(date);
+  start.setHours(startTime.getHours(), startTime.getMinutes(), 0, 0);
 
-interface RecurrenceRule {
-  days: string[];
-  until?: string;
-}
+  const end = new Date(date);
+  end.setHours(endTime.getHours(), endTime.getMinutes(), 0, 0);
+
+  if (end.getTime() < start.getTime()) {
+    end.setDate(end.getDate() + 1);
+  }
+
+  return { start, end };
+};
+
+/**
+ * The React key for one rendered occurrence.
+ *
+ * A recurring event surfaces once per date under a single id, so `event.id`
+ * alone collides across a week and React reuses the wrong node. The key is the
+ * pair that is actually unique: the id and the occurrence it was expanded for.
+ * `index` is the last resort for an item with no id at all (nothing the service
+ * sends is like that today).
+ */
+export const eventKey = (event: CalendarEventWithLinks, index: number): string => {
+  const id = event.id ?? `index-${index}`;
+  if (!event.occurrence_date) return String(id);
+  return `${id}-${new Date(event.occurrence_date).toISOString()}`;
+};
+
+/** `SUN` … `SAT`, the day-name row both grids draw. */
+export const DAY_LABELS = ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'];
+
+/** The calendar header's primary label, e.g. `September 2026`. */
+export const formatMonthYear = (date: DateInput) =>
+  `${getMonthName(date)} ${new Date(date).getFullYear()}`;
+
+/**
+ * The calendar header's secondary label in week view: the day range, without
+ * repeating the month the primary label already carries (`20 – 26`), unless the
+ * week straddles two months (`Sep 27 – Oct 3`).
+ */
+export const formatDayRange = (start: DateInput, end: DateInput) => {
+  const from = new Date(start);
+  const to = new Date(end);
+  if (from.getMonth() === to.getMonth() && from.getFullYear() === to.getFullYear()) {
+    return `${from.getDate()} – ${to.getDate()}`;
+  }
+  return `${getMonthName(from).slice(0, 3)} ${from.getDate()} – ${getMonthName(to).slice(0, 3)} ${to.getDate()}`;
+};
+
+/**
+ * A time range with the meridiem written once when both ends share it —
+ * `2:10 – 3:15 PM`, but `11:30 AM – 12:30 PM` when they do not.
+ *
+ * A week block now carries the time and the room on ONE line, and
+ * `2:10 PM - 3:15 PM` spends a third of that line saying PM twice. The digits
+ * are left exactly as `Intl` wrote them — it separates the meridiem with a
+ * narrow no-break space, not an ordinary one — and only the first meridiem is
+ * taken off.
+ */
+export const formatTimeRange = (start: DateInput, end: DateInput) => {
+  const from = new Date(start);
+  const to = new Date(end);
+  const fromText = formatTime(from);
+  const sameHalfOfDay = from.getHours() < 12 === to.getHours() < 12;
+  return `${sameHalfOfDay ? fromText.replace(/\s*[AP]M$/i, '') : fromText} – ${formatTime(to)}`;
+};
+
+/**
+ * One day, named the way a control that acts on it has to name it — `Tue Sep
+ * 22`. `formatDate`'s `Tue 22` is enough beside a calendar a reader can see; it
+ * is not enough in a button's accessible name, which is announced on its own.
+ */
+export const formatDayLabel = (date: DateInput) => {
+  const d = new Date(date);
+  return `${getShortDayName(d)} ${getMonthName(d).slice(0, 3)} ${d.getDate()}`;
+};
+
+/**
+ * A clock time with the minutes dropped when they are zero — `9 AM`, `11:59 PM`.
+ * What a deadline chip and the now badge show, where `formatTime`'s `9:00 AM`
+ * is more digits than a chip has room for.
+ */
+export const formatShortTime = (date: DateInput) => {
+  const d = new Date(date);
+  const hours = d.getHours() % 12 || 12;
+  const minutes = d.getMinutes();
+  const suffix = d.getHours() < 12 ? 'AM' : 'PM';
+  return minutes === 0
+    ? `${hours} ${suffix}`
+    : `${hours}:${String(minutes).padStart(2, '0')} ${suffix}`;
+};
 
 /**
  * Get day name from date (lowercase)
@@ -66,17 +157,6 @@ export const formatDate = (date: DateInput) => {
 };
 
 /**
- * Format full date (e.g., "December 17, 2025")
- */
-export const formatFullDate = (date: DateInput) => {
-  return new Intl.DateTimeFormat('en-US', {
-    month: 'long',
-    day: 'numeric',
-    year: 'numeric',
-  }).format(new Date(date));
-};
-
-/**
  * Get week dates (Sunday to Saturday) for a given date
  */
 export const getWeekDates = (date: DateInput) => {
@@ -98,80 +178,12 @@ export const getWeekDates = (date: DateInput) => {
 };
 
 /**
- * Get start and end of week
- */
-export const getWeekRange = (date: DateInput) => {
-  const dates = getWeekDates(date);
-  const start = new Date(dates[0]);
-  start.setHours(0, 0, 0, 0);
-
-  const end = new Date(dates[6]);
-  end.setHours(23, 59, 59, 999);
-
-  return { start, end };
-};
-
-/**
  * Add weeks to a date
  */
 export const addWeeks = (date: DateInput, weeks: number) => {
   const d = new Date(date);
   d.setDate(d.getDate() + weeks * 7);
   return d;
-};
-
-/**
- * Get color class for event type
- */
-export const getEventTypeColor = (eventType: string) => {
-  const colors: Record<string, string> = {
-    OFFICE_HOURS: 'bg-violet-50 dark:bg-violet-900/20 border-violet-200 dark:border-violet-700',
-    LECTURE: 'bg-sky-50 dark:bg-sky-900/20 border-sky-200 dark:border-sky-700',
-    LAB: 'bg-teal-50 dark:bg-teal-900/20 border-teal-200 dark:border-teal-700',
-    SECTION: 'bg-teal-50 dark:bg-teal-900/20 border-teal-200 dark:border-teal-700',
-    ASSESSMENT: 'bg-amber-50 dark:bg-amber-900/20 border-amber-200 dark:border-amber-700',
-    REVIEW_SESSION: 'bg-orange-50 dark:bg-orange-900/20 border-orange-200 dark:border-orange-700',
-    HOLIDAY: 'bg-gray-50 dark:bg-neutral-900/20 border-gray-200 dark:border-neutral-700',
-    DEADLINE: 'bg-rose-50 dark:bg-rose-900/20 border-rose-200 dark:border-rose-700',
-    OTHER: 'bg-gray-50 dark:bg-neutral-900/20 border-gray-200 dark:border-neutral-700',
-  };
-  return colors[eventType] || colors.OTHER;
-};
-
-/**
- * Get text color class for event type
- */
-export const getEventTypeTextColor = (eventType: string) => {
-  const colors: Record<string, string> = {
-    OFFICE_HOURS: 'text-violet-700 dark:text-violet-300',
-    LECTURE: 'text-sky-700 dark:text-sky-300',
-    LAB: 'text-teal-700 dark:text-teal-300',
-    SECTION: 'text-teal-700 dark:text-teal-300',
-    ASSESSMENT: 'text-amber-700 dark:text-amber-300',
-    REVIEW_SESSION: 'text-orange-700 dark:text-orange-300',
-    HOLIDAY: 'text-gray-700 dark:text-gray-300',
-    DEADLINE: 'text-rose-700 dark:text-rose-300',
-    OTHER: 'text-gray-700 dark:text-gray-300',
-  };
-  return colors[eventType] || colors.OTHER;
-};
-
-/**
- * Get badge color for event type
- */
-export const getEventTypeBadgeColor = (eventType: string) => {
-  const colors: Record<string, string> = {
-    OFFICE_HOURS: 'purple',
-    LECTURE: 'cyan',
-    LAB: 'cyan',
-    SECTION: 'cyan',
-    ASSESSMENT: 'orange',
-    REVIEW_SESSION: 'orange',
-    HOLIDAY: 'default',
-    DEADLINE: 'magenta',
-    OTHER: 'default',
-  };
-  return colors[eventType] || 'default';
 };
 
 /**
@@ -193,41 +205,12 @@ export const getEventTypeLabel = (eventType: string) => {
 };
 
 /**
- * Calculate grid position for event in weekly calendar
- * Returns top and height percentages based on time
- */
-export const getEventGridPosition = (
-  startTime: DateInput,
-  endTime: DateInput,
-  dayStartHour = 0,
-  dayEndHour = 24
-) => {
-  const start = new Date(startTime);
-  const end = new Date(endTime);
-
-  const startMinutes = start.getHours() * 60 + start.getMinutes();
-  const endMinutes = end.getHours() * 60 + end.getMinutes();
-
-  const dayStartMinutes = dayStartHour * 60;
-  const dayEndMinutes = dayEndHour * 60;
-  const dayDuration = dayEndMinutes - dayStartMinutes;
-
-  const top = ((startMinutes - dayStartMinutes) / dayDuration) * 100;
-  const height = ((endMinutes - startMinutes) / dayDuration) * 100;
-
-  return {
-    top: Math.max(0, Math.min(100, top)),
-    height: Math.max(0, Math.min(100 - top, height)),
-  };
-};
-
-/**
  * Group events by date
  */
-export const groupEventsByDate = (events: CalendarEvent[]) => {
-  const grouped: Record<string, CalendarEvent[]> = {};
+export const groupEventsByDate = (events: CalendarEventWithLinks[]) => {
+  const grouped: Record<string, CalendarEventWithLinks[]> = {};
 
-  events.forEach((event: CalendarEvent) => {
+  events.forEach((event: CalendarEventWithLinks) => {
     const date = new Date(event.start_time);
     date.setHours(0, 0, 0, 0);
     const key = date.toISOString();
@@ -244,7 +227,7 @@ export const groupEventsByDate = (events: CalendarEvent[]) => {
 /**
  * Sort events by start time
  */
-export const sortEventsByTime = (events: CalendarEvent[]) => {
+export const sortEventsByTime = (events: CalendarEventWithLinks[]) => {
   return [...events].sort(
     (a, b) => new Date(a.start_time).getTime() - new Date(b.start_time).getTime()
   );
@@ -253,7 +236,7 @@ export const sortEventsByTime = (events: CalendarEvent[]) => {
 /**
  * Check if event is happening now
  */
-export const isEventNow = (event: CalendarEvent) => {
+export const isEventNow = (event: CalendarEventWithLinks) => {
   const now = new Date();
   const start = new Date(event.start_time);
   const end = new Date(event.end_time);
@@ -261,19 +244,9 @@ export const isEventNow = (event: CalendarEvent) => {
 };
 
 /**
- * Check if event is upcoming (within next 24 hours)
- */
-export const isEventUpcoming = (event: CalendarEvent) => {
-  const now = new Date();
-  const start = new Date(event.start_time);
-  const tomorrow = new Date(now.getTime() + 24 * 60 * 60 * 1000);
-  return start > now && start < tomorrow;
-};
-
-/**
  * Get duration in minutes
  */
-export const getEventDuration = (event: CalendarEvent) => {
+export const getEventDuration = (event: CalendarEventWithLinks) => {
   const start = new Date(event.start_time);
   const end = new Date(event.end_time);
   return Math.round((new Date(end).getTime() - new Date(start).getTime()) / (1000 * 60));
@@ -306,52 +279,11 @@ export const isSameDay = (date1: DateInput, date2: DateInput) => {
 };
 
 /**
- * Get time slots for calendar grid (hourly)
- */
-export const getTimeSlots = (startHour = 0, endHour = 24) => {
-  const slots = [];
-  for (let hour = startHour; hour < endHour; hour++) {
-    const date = new Date();
-    date.setHours(hour, 0, 0, 0);
-    slots.push({
-      hour,
-      label: formatTime(date),
-    });
-  }
-  return slots;
-};
-
-/**
  * Filter events by type
  */
-export const filterEventsByType = (events: CalendarEvent[], types: string[]) => {
+export const filterEventsByType = (events: CalendarEventWithLinks[], types: string[]) => {
   if (!types || types.length === 0) return events;
-  return events.filter((event: CalendarEvent) => types.includes(event.event_type));
-};
-
-/**
- * Get recurrence rule display text
- */
-export const getRecurrenceText = (recurrenceRule: RecurrenceRule | null) => {
-  if (!recurrenceRule || !recurrenceRule.days) return '';
-
-  const { days, until } = recurrenceRule;
-  const dayLabels = {
-    sunday: 'Sun',
-    monday: 'Mon',
-    tuesday: 'Tue',
-    wednesday: 'Wed',
-    thursday: 'Thu',
-    friday: 'Fri',
-    saturday: 'Sat',
-  };
-
-  const dayNames = days
-    .map((d: string) => (dayLabels as Record<string, string>)[d] || d)
-    .join(', ');
-  const untilDate = until ? formatFullDate(new Date(until)) : '';
-
-  return `Repeats ${dayNames}${untilDate ? ` until ${untilDate}` : ''}`;
+  return events.filter((event: CalendarEventWithLinks) => types.includes(event.event_type));
 };
 
 /**
@@ -380,23 +312,6 @@ export const getMonthDates = (date: DateInput) => {
   }
 
   return dates;
-};
-
-/**
- * Get month range (start and end dates)
- */
-export const getMonthRange = (date: DateInput) => {
-  const d = new Date(date);
-  const year = d.getFullYear();
-  const month = d.getMonth();
-
-  const start = new Date(year, month, 1);
-  start.setHours(0, 0, 0, 0);
-
-  const end = new Date(year, month + 1, 0);
-  end.setHours(23, 59, 59, 999);
-
-  return { start, end };
 };
 
 /**
