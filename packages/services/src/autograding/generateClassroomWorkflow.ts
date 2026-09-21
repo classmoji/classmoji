@@ -148,6 +148,9 @@ export function generateClassroomWorkflow(
     lines.push('');
     lines.push('      - name: Report results to Classmoji');
     lines.push('        if: always()');
+    // A failed report must be visible in the Actions log, but it is Classmoji's
+    // problem, not the student's: the step goes red, the check-run stays green.
+    lines.push('        continue-on-error: true');
     lines.push('        env:');
     lines.push('          AUTOGRADE_RESULTS: |');
     lines.push('            {');
@@ -165,10 +168,15 @@ export function generateClassroomWorkflow(
     lines.push(
       "            '{payload: {classroomSlug:$slug, repo:$repo, sha:$sha, run_id:$run_id, actor:$actor, token:$token, results:$results}}')"
     );
-    lines.push(`          curl -sS -X POST ${yamlStr(options.triggerUrl)} \\`);
+    lines.push(`          if ! curl -sS --fail-with-body -X POST ${yamlStr(options.triggerUrl)} \\`);
     lines.push(`            -H ${yamlStr(`Authorization: Bearer ${options.triggerToken}`)} \\`);
     lines.push('            -H "Content-Type: application/json" \\');
-    lines.push('            -d "$payload" || true');
+    lines.push('            -d "$payload"; then');
+    lines.push(
+      `            echo "::error::Could not report autograding results to Classmoji at ${options.triggerUrl}"`
+    );
+    lines.push('            exit 1');
+    lines.push('          fi');
   }
 
   return lines.join('\n') + '\n';

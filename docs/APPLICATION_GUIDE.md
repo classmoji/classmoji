@@ -1343,6 +1343,9 @@ JWT_SECRET="your-random-secret-string"
 # Trigger.dev
 TRIGGER_API_KEY="tr_..."
 TRIGGER_API_URL="https://api.trigger.dev"
+# Public Trigger address the generated autograding workflow reports to from
+# GitHub Actions. Unset = Trigger.dev cloud. Never the worker-internal URL.
+TRIGGER_PUBLIC_API_URL=""
 ```
 
 ### Testing
