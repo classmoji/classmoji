@@ -23,7 +23,7 @@ import {
 import { escapeVars, pagesUrl } from '../emails/escape.ts';
 import { fieldsOf } from './form.service.ts';
 import { Prisma } from '@prisma/client';
-import type { Role, SubmissionState } from '@prisma/client';
+import type { GalleryStatus, Role, SubmissionState } from '@prisma/client';
 
 /**
  * Form Response Service
@@ -2408,6 +2408,8 @@ const RESPONSE_SELECT = {
   added_by: true,
   staff_status: true,
   staff_note: true,
+  /** Gallery moderation — staff only, like the two columns above. */
+  gallery_status: true,
   submitted_at: true,
   created_at: true,
   updated_at: true,
@@ -2494,6 +2496,14 @@ export async function updateStaff({
     data.staff_note = staff_note === null ? null : staff_note.trim() || null;
   }
   return getPrisma().formResponse.update({ where: { id: responseId }, data });
+}
+
+/**
+ * Approve, hide, or reset one response's gallery status. No authorization:
+ * the route gates on the teaching team and scopes the id to the form.
+ */
+export async function setGalleryStatus(responseId: string, gallery_status: GalleryStatus) {
+  return getPrisma().formResponse.update({ where: { id: responseId }, data: { gallery_status } });
 }
 
 /**

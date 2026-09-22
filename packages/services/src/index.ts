@@ -364,5 +364,6 @@ export {
   seoOriginFor,
   canonicalOriginForSite,
   publicFormUrlFor,
+  galleryUrlFor,
 } from './classmoji/siteLinks.ts';
 export type { SeoOriginInput } from './classmoji/siteLinks.ts';

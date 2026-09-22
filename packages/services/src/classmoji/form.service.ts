@@ -7,6 +7,7 @@ import {
   OPTION_SOURCES,
   type OptionSource,
   assertFieldsAllowedForAccess,
+  assertGalleryRoles,
   definitionByteSize,
   flattenFields,
   formContractError,
@@ -575,7 +576,14 @@ async function publishWithin(tx: Prisma.TransactionClient, formId: string) {
 
     const form = await tx.form.findUnique({
       where: { id: formId },
-      select: { id: true, classroom_id: true, status: true, access: true, draft_fields: true },
+      select: {
+        id: true,
+        classroom_id: true,
+        status: true,
+        access: true,
+        draft_fields: true,
+        gallery_org_id: true,
+      },
     });
     if (!form) throw serviceError(FORM_NOT_FOUND, `Form ${formId} not found`);
 
@@ -589,6 +597,9 @@ async function publishWithin(tx: Prisma.TransactionClient, formId: string) {
     // BEFORE materialization on purpose — a PUBLIC form carrying a roster field
     // is refused without a single membership row being read.
     assertFieldsAllowedForAccess(fields, form.access);
+    // A gallery form's cards need exactly one title; checked where every
+    // publish path (builder, new version, MCP) passes.
+    if (form.gallery_org_id) assertGalleryRoles(fields);
 
     const materialized = await materializeSourcedOptions(tx, form.classroom_id, fields);
 
@@ -779,4 +790,29 @@ export async function deleteForm(formId: string, scope: { classroomId?: string }
   });
   if (count !== 1) throw serviceError(FORM_NOT_FOUND, `Form ${formId} not found`);
   return { count };
+}
+
+/**
+ * Turn the org project gallery on or off for a form. The org is always the
+ * form's own classroom's — never taken from a caller — so a form can only feed
+ * the gallery of the org it lives in. Owner-only; the route checks the role.
+ *
+ * @throws FORM_DEFINITION_INVALID when turning it on for a form whose live
+ * revision breaks the gallery role rule — its approved responses would go
+ * public at once. A draft is checked when it is published.
+ */
+export async function setGalleryOrg(formId: string, on: boolean) {
+  const form = await getPrisma().form.findUnique({
+    where: { id: formId },
+    select: { classroom: { select: { git_org_id: true } } },
+  });
+  if (!form) throw serviceError(FORM_NOT_FOUND, `Form ${formId} not found`);
+  if (on) {
+    const revision = await getCurrentRevision(formId);
+    if (revision) assertGalleryRoles(fieldsOf(revision.fields));
+  }
+  return getPrisma().form.update({
+    where: { id: formId },
+    data: { gallery_org_id: on ? form.classroom.git_org_id : null },
+  });
 }
