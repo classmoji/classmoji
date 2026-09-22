@@ -12,7 +12,6 @@ import {
   calculateAssignmentGrade,
   calculateLetterGrade,
   calculateStudentFinalGrade,
-  isScoreScheme,
 } from '@classmoji/utils';
 import type {
   GitRepo,
@@ -20,7 +19,7 @@ import type {
   LetterGradeMappingEntry,
   OrganizationSettings,
 } from '@classmoji/utils';
-import { useDarkMode, useUser } from '~/hooks';
+import { useDarkMode } from '~/hooks';
 import EmojiGrader from '~/components/features/grading/EmojiGrader';
 
 /**
@@ -169,9 +168,6 @@ const GradesTable = (props: GradesTableProps) => {
   const [searchQuery, setSearchQuery] = useState('');
   const { class: classSlug } = useParams();
   const rolePrefix = useLocation().pathname.split('/')[1];
-  const { user } = useUser();
-  const viewerId = user?.id;
-  const numericScale = isScoreScheme(Object.keys(emojiMappings));
   // Owners and teachers reach this page; both may grade.
   const canGrade = true;
   const base = `/${rolePrefix}/${classSlug}`;
@@ -293,17 +289,11 @@ const GradesTable = (props: GradesTableProps) => {
       body = <span className="text-ink-4">–</span>;
     } else if (isGraded(sub)) {
       const numeric = calculateAssignmentGrade(sub, emojiMappings, settings);
-      // On a numeric scale the score field IS the grade; the number would
-      // repeat it, so it only shows when other graders contributed too.
-      const others = (sub.grades ?? []).filter(
-        g => (g as { grader_id?: string | null }).grader_id !== viewerId
+      body = (
+        <span className="font-semibold tabular-nums">
+          {numeric === null ? '–' : Math.round(numeric * 10) / 10}
+        </span>
       );
-      body =
-        numericScale && others.length === 0 ? null : (
-          <span className="font-semibold tabular-nums">
-            {numeric === null ? '–' : Math.round(numeric * 10) / 10}
-          </span>
-        );
       if (isLate(sub)) tint = 'bg-amber-50 dark:bg-amber-950/30';
       if (sub.is_late_override)
         body = (
@@ -326,8 +316,7 @@ const GradesTable = (props: GradesTableProps) => {
       body = <Chip tone="grey">Not submitted</Chip>;
     }
 
-    // Grade right here: the score field on a numeric scale, the picker on an
-    // emoji scale. Same control, same API as the assignment page.
+    // Grade right here with the same picker and API as the assignment page.
     const control =
       hit && canGrade ? (
         <EmojiGrader

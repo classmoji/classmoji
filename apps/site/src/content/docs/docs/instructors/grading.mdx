@@ -18,7 +18,7 @@ Set up your scale in **Settings > Grades**.
 
 **Emoji scale**: add emoji and give each one a numeric value (0–100). Pick **Emoji scale** from the **Populate template** menu to start with 🚀 100, 👍 90, 👀 80, 👎 60 and 😭 0. A submission's grade is the mean of the emoji given to it; if several graders grade the same submission, their grades average.
 
-**Numeric scale**: pick **Number scale** from the **Populate template** menu to get the built-in scores, `score-0` through `score-100` in steps of 10. Graders then type a score instead of picking an emoji.
+**Numeric scale**: pick **Number scale** from the **Populate template** menu to get the built-in scores, `score-0` through `score-100` in steps of 10. Graders pick a score badge from the same hover picker used for emoji, and each grader holds one score at a time: picking another replaces it.
 
 <Screenshot src={settingsGradesImg} alt="Settings > Grades showing the emoji-to-value mappings and the Populate defaults button" frame url="app.classmoji.io/admin/cs-101/settings/grades" size="lg" />
 
@@ -68,7 +68,7 @@ Map score ranges to letters in **Settings > Grades** (for example, 90–100 = A,
 - Search students, and use **Show** to filter: **Everyone**, **Has something to grade**, **Has a missing submission**, **Late somewhere**.
 - Columns are grouped by type, **Repositories**, **Quizzes**, **Forms**, in deadline order. Each header shows the title (linked to the assignment page), its module, weight, due date, and how many are left to grade.
 - Cells show the score, or **To grade** (blue), **Late** (amber), **Missing** (red), or **Not submitted**. Quiz cells show the score, **In progress**, or **Not attempted**; form cells **Responded** or **No response**.
-- Grade from the cell: type a score on a numeric scale, or click **Grade** to open the emoji picker on an emoji scale. Clicking an existing score jumps to that student's row on the assignment page.
+- Grade from the cell: hover **Grade** to open the picker (emoji, or score badges on a numeric scale). Clicking an existing score jumps to that student's row on the assignment page.
 - **Total** (the weighted score; hover for the before-late-penalty and individual-only figures) and **Letter** (from the breakpoints, amber when overridden) stay pinned on the right. A class row at the bottom shows the mean and median.
 
 ### Student report

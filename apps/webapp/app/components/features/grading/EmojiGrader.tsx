@@ -1,7 +1,6 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { motion, useReducedMotion } from 'framer-motion';
 import { Popover } from 'antd';
-import { isScoreScheme, parseScoreEmoji, scoreEmojiId } from '@classmoji/utils';
 import { useGlobalFetcher, useUser } from '~/hooks';
 
 import { ActionTypes } from '~/constants';
@@ -33,17 +32,6 @@ interface EmojiGraderProps {
   repositoryAssignment: RepositoryAssignment;
   emojiMappings: Record<string, unknown>;
 }
-
-/**
- * "0–100 in steps of 5" when the scale is evenly spaced, else the values
- * themselves, for the hint under the score field.
- */
-const describeScale = (values: number[]): string => {
-  if (values.length < 2) return values.join(', ');
-  const step = values[1] - values[0];
-  const even = values.every((v, i) => i === 0 || v - values[i - 1] === step);
-  return even ? `${values[0]}–${values[values.length - 1]} in steps of ${step}` : values.join(', ');
-};
 
 const EmojiGrader = ({ repositoryAssignment, emojiMappings }: EmojiGraderProps) => {
   const [show, setShow] = useState(false);
@@ -116,98 +104,11 @@ const EmojiGrader = ({ repositoryAssignment, emojiMappings }: EmojiGraderProps) 
     );
   };
 
-  // ---- Numeric scale: one number per grader, typed in place ----
+  // Both scales grade through the picker. On the numeric scale the options are
+  // the score badges and the server keeps one score per grader, so picking a
+  // second badge replaces the first.
   const scaleKeys = Object.keys(emojiMappings);
-  const scoreScale = isScoreScheme(scaleKeys);
-  const scaleValues = scaleKeys
-    .map(parseScoreEmoji)
-    .filter((v): v is number => v !== null)
-    .sort((a, b) => a - b);
-  // The signed-in grader's own score on this row, if any. Other graders'
-  // scores show in the badge list beside this control and are not editable here.
-  // Rows graded before "one score per grader" may hold several; the newest
-  // is the one the field edits, and a new score replaces all of them.
-  const myScoreGrade = (repositoryAssignment.grades ?? [])
-    .filter(g => (g.grader_id ?? g.grader?.id) === user?.id && parseScoreEmoji(g.emoji) !== null)
-    .sort(
-      (a, b) => new Date(b.created_at ?? 0).getTime() - new Date(a.created_at ?? 0).getTime()
-    )[0];
-  const myScore = myScoreGrade ? parseScoreEmoji(myScoreGrade.emoji) : null;
-  const [draft, setDraft] = useState(myScore === null ? '' : String(myScore));
-  const [scoreError, setScoreError] = useState<string | null>(null);
-  useEffect(() => {
-    setDraft(myScore === null ? '' : String(myScore));
-    setScoreError(null);
-  }, [myScore]);
 
-  const commitScore = () => {
-    const text = draft.trim();
-    if (text === '') {
-      if (myScoreGrade) removeGrade(myScoreGrade.emoji);
-      return;
-    }
-    const value = Number(text);
-    const key = Number.isInteger(value) ? scoreEmojiId(value) : null;
-    if (!key || !(key in emojiMappings)) {
-      setScoreError(`Use ${describeScale(scaleValues)}`);
-      return;
-    }
-    setScoreError(null);
-    if (myScoreGrade?.emoji === key) return;
-    assignGrade(key);
-  };
-
-  if (scoreScale) {
-    const inputId = `score-${repositoryAssignment.id}`;
-    return (
-      <div className="flex flex-col gap-0.5">
-        <label htmlFor={inputId} className="sr-only">
-          Score out of {scaleValues[scaleValues.length - 1] ?? 100}
-        </label>
-        <input
-          id={inputId}
-          data-testid="score-grade-input"
-          type="number"
-          inputMode="numeric"
-          min={scaleValues[0] ?? 0}
-          max={scaleValues[scaleValues.length - 1] ?? 100}
-          step={scaleValues.length > 1 ? scaleValues[1] - scaleValues[0] : 1}
-          placeholder="0–100"
-          value={draft}
-          aria-invalid={scoreError ? true : undefined}
-          onChange={e => {
-            setDraft(e.target.value);
-            if (scoreError) setScoreError(null);
-          }}
-          onBlur={commitScore}
-          onKeyDown={e => {
-            // Enter hands off to blur so the score is committed exactly once.
-            if (e.key === 'Enter') {
-              e.preventDefault();
-              (e.target as HTMLInputElement).blur();
-            }
-            if (e.key === 'Escape') {
-              setDraft(myScore === null ? '' : String(myScore));
-              setScoreError(null);
-              (e.target as HTMLInputElement).blur();
-            }
-          }}
-          className={`w-16 h-8 rounded-md border px-2 text-sm font-semibold tabular-nums bg-white dark:bg-neutral-900 text-ink-1 focus:outline-none focus:ring-2 focus:ring-sky-300 dark:focus:ring-sky-700 ${
-            scoreError
-              ? 'border-rose-400 dark:border-rose-600'
-              : 'border-stone-300 dark:border-neutral-600'
-          }`}
-        />
-        {scoreError && (
-          <span role="alert" className="text-xs text-rose-600 dark:text-rose-400 whitespace-nowrap">
-            {scoreError}
-          </span>
-        )}
-      </div>
-    );
-  }
-
-  // ---- Glyph scale: the picker, emojis stack ----
   const emojiList = scaleKeys.map(key => {
     const isSelected = repositoryAssignment.grades?.some((grade: Grade) => grade.emoji === key);
     const isPopped = poppedKey === key && !reducedMotion;
@@ -249,7 +150,8 @@ const EmojiGrader = ({ repositoryAssignment, emojiMappings }: EmojiGraderProps) 
 
   return (
     <Popover
-      trigger="click"
+      trigger={['hover', 'click']}
+      mouseEnterDelay={0.15}
       open={show}
       onOpenChange={setShow}
       placement="top"
