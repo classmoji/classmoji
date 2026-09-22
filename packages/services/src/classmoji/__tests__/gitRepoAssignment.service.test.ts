@@ -197,17 +197,18 @@ describe('recordPush', () => {
     token_transactions: hours.map(h => ({ hours_purchased: h })),
   });
 
-  it('marks only ungraded, published REPO-mode rows submitted, never moving the time backwards', async () => {
+  it('submits published REPO-mode rows: any first push, and later pushes only while ungraded', async () => {
     findManyMock.mockResolvedValue([candidate('ra-1', null), candidate('ra-2', null)]);
     updateManyMock.mockResolvedValue({ count: 2 });
 
     const touched = await recordPush('gitrepo-1', pushedAt);
 
+    // A grade never freezes a row with no submission yet (a first push always
+    // counts); it freezes only a submission that already exists.
     expect(findManyMock.mock.calls[0][0].where).toEqual({
       git_repo_id: 'gitrepo-1',
       assignment: { type: 'REPO', submission_mode: 'REPO', is_published: true },
-      grades: { none: {} },
-      OR: [{ closed_at: null }, { closed_at: { lt: pushedAt } }],
+      OR: [{ closed_at: null }, { closed_at: { lt: pushedAt }, grades: { none: {} } }],
     });
     expect(updateManyMock).toHaveBeenCalledWith({
       where: { id: { in: ['ra-1', 'ra-2'] } },

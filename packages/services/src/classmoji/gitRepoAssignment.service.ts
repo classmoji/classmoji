@@ -118,7 +118,9 @@ export const findByClassroomId = async (classroomId: string) => {
     include: {
       assignment: true,
       // Commit count for the repository column, as of the last refresh.
-      analytics_snapshot: { select: { total_commits: true, last_commit_at: true, fetched_at: true } },
+      analytics_snapshot: {
+        select: { total_commits: true, last_commit_at: true, fetched_at: true },
+      },
       grades: {
         include: {
           token_transaction: true,
@@ -188,7 +190,9 @@ export const findForUser = async (query: Prisma.GitRepoAssignmentWhereInput) => 
     include: {
       token_transactions: true,
       // Commit count for the student's repository link.
-      analytics_snapshot: { select: { total_commits: true, last_commit_at: true, fetched_at: true } },
+      analytics_snapshot: {
+        select: { total_commits: true, last_commit_at: true, fetched_at: true },
+      },
       git_repo: {
         include: {
           student: true,
@@ -275,8 +279,15 @@ export const recordPush = async (gitRepoId: string, pushedAt: Date) => {
     where: {
       git_repo_id: gitRepoId,
       assignment: { type: 'REPO', submission_mode: 'REPO', is_published: true },
-      grades: { none: {} },
-      OR: [{ closed_at: null }, { closed_at: { lt: pushedAt } }],
+      OR: [
+        // Never submitted: the first push is the submission, graded or not.
+        // A grade given before any push must not leave the row stuck at
+        // "Not submitted" forever.
+        { closed_at: null },
+        // Already submitted: a later push may move the time only while the
+        // row is ungraded; once graded, the submission is frozen.
+        { closed_at: { lt: pushedAt }, grades: { none: {} } },
+      ],
     },
     select: {
       id: true,
