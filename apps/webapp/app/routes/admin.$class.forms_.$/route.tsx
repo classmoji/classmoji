@@ -3,13 +3,20 @@ import { assertClassroomAccess, assertProTier } from '~/utils/helpers';
 import type { Route } from './+types/route';
 
 /**
- * The webapp's whole Forms surface: a gate and a redirect into apps/pages,
- * exactly as `admin.$class.pages.$pageId` hands off to the page editor.
+ * Forms DEEP LINKS: a gate and a redirect into apps/pages, exactly as
+ * `admin.$class.pages.$pageId` hands off to the page editor.
  *
- * ONE splat route covers both the nav entry and every deep link. React Router
- * matches `admin/:class/forms/*` against the bare `/admin/:class/forms` with an
- * empty splat, so the list, the new-form drawer, and the builder all arrive
- * here and leave with the same path they came in on.
+ * The list itself is no longer here — it is a real webapp screen at
+ * `admin.$class.forms`. What still crosses to the pages app is everything
+ * below it: `/forms/new` (the new-form drawer), `/forms/:slug/edit` (the
+ * builder), and `/forms/:slug/responses`. Those are the links the webapp list
+ * points at, and they are also the shape of any bookmark saved while the whole
+ * subtree lived over there, so they keep resolving.
+ *
+ * The trailing underscore in the route id (`forms_.$`) is load-bearing: without
+ * it this splat would nest INSIDE `admin.$class.forms` and render in its
+ * Outlet — the list, with a redirect route mounted underneath it — instead of
+ * matching `/forms/*` on its own and redirecting.
  *
  * The gate is real, not decorative. `isProTier` on the nav entry only hides the
  * item; this loader is what refuses a free-tier classroom, and the pages-side
