@@ -10,7 +10,6 @@ import * as tokenTasks from './workflows/token.ts';
 import * as contributionTasks from './workflows/contribution.ts';
 import * as repoAnalyticsTasks from './workflows/repoAnalytics.ts';
 import * as notificationTasks from './workflows/notifications.ts';
-import * as importGithubClassroomTasks from './workflows/importGithubClassroom.ts';
 import * as classroomImportTasks from './workflows/classroomImport.ts';
 import * as customDomainTasks from './workflows/customDomains.ts';
 import * as contentAssetTasks from './workflows/contentAssets.ts';
@@ -35,7 +34,6 @@ const Tasks = {
   ...contributionTasks,
   ...repoAnalyticsTasks,
   ...notificationTasks,
-  ...importGithubClassroomTasks,
   ...classroomImportTasks,
   ...customDomainTasks,
   ...contentAssetTasks,

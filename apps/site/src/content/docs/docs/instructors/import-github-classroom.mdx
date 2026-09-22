@@ -4,56 +4,52 @@ description: Bring your existing Github Classroom classrooms, assignments, roste
 ---
 
 import Screenshot from '~/components/Screenshot.astro';
-import Video from '~/components/Video.astro';
-import importIntroImg from './img-import-intro.png';
-import importConnectImg from './img-import-connect.png';
+import importUploadImg from './img-import-upload.png';
 import importSelectImg from './img-import-select.png';
 import importReviewImg from './img-import-review.png';
 import importReposImg from './img-import-repositories.png';
 import importModulesImg from './img-import-modules.png';
 
-Already running your course on Github Classroom? You don't have to rebuild it by hand. Classmoji can import your existing classrooms, assignments, student rosters, repositories, and recorded grades in a few clicks, straight from Github.
-
-<Video
-  id="o8174ZXQos0"
-  title="Importing from Github Classroom"
-  caption="Watch: import your classrooms from Github Classroom"
-  size="lg"
-  poster={importIntroImg.src}
-/>
+Already ran your course on Github Classroom? If you exported its data while Github's Classroom export utility was still available, Classmoji can import those classrooms, assignments, student rosters, repositories, and recorded grades in a few clicks.
 
 ### How it works
 
-The import reads your classroom data **live from Github Classroom** using your Github sign-in. There's nothing to export or upload: Classmoji fetches your classrooms, then pulls each selected one's assignments, roster, submissions, and grades for you.
+The import reads an export of your Github Classroom data. It makes **zero Github API calls** and nothing is sent to Github. Your export is read entirely in your browser, then the normalized data is saved to your Classmoji account.
 
-A few things to know up front:
+You don't need to install the Classmoji Github app to import. Classrooms come in fully usable. Install the app later to light up the Github-connected features (no re-import needed):
 
-- **You must be an administrator** of the classrooms you want to import. Github only returns classrooms you administer, so anything you can't see in Github Classroom won't appear here.
-- **You don't need to install the Classmoji Github app to import.** Classrooms come in fully usable. Install the app later to light up the Github-connected features (no re-import needed):
-  - **Repository syncing** to keep imported repos in step with Github.
-  - **Live submissions**: push and issue webhooks from the student repos.
-  - **Publishing repositories** and creating student repositories.
-  - **Roster syncing** and team management.
+- **Repository syncing** to keep imported repos in step with Github.
+- **Live submissions**: push and issue webhooks from the student repos.
+- **Publishing repositories** and creating student repositories.
+- **Roster syncing** and team management.
 
-### Step 1: Connect to Github Classroom
+### Step 1: Locate your export
 
-Head to [app.classmoji.io](https://app.classmoji.io) and click **Import from Github Classroom** on your classrooms screen. Then click **Fetch my Github Classrooms**.
+Github has retired the Classroom export utility and the Classroom API it relied on, so **a new export can no longer be produced**. The import works only with an export you already made.
 
-Classmoji uses your existing Github sign-in to load the classrooms you administer. If your session can't reach Github, you'll be prompted to sign in with Github again and retry.
+Look for a folder named like `classroom-export-20260619-190913`. It should contain a `classrooms.json` file at its root and one subfolder per classroom, each holding `classroom.json`, `assignments.json`, and a folder per assignment with `assignment.json`, `accepted-assignments.json`, and `grades.csv`.
 
-<Screenshot src={importConnectImg} alt="The import wizard's Connect step with a button to fetch your Github Classrooms" frame url="app.classmoji.io/import-classroom" size="lg" />
+**Zip that folder** so you have a single `.zip` to upload. Zipping the folder itself or just its contents both work.
 
-### Step 2: Select classrooms
+### Step 2: Upload the export
 
-You may administer many classrooms. Pick the ones you want to bring over. Each row shows the classroom name and its Github organization. Assignments, rosters, and grades are fetched per classroom during the import itself.
+Head to [app.classmoji.io](https://app.classmoji.io) and click **Import from Github Classroom** on your classrooms screen. Then drag your `.zip` onto the upload area (or click to browse).
 
-<Screenshot src={importSelectImg} alt="The select step listing the classrooms you administer with their Github organization" frame url="app.classmoji.io/import-classroom" size="lg" />
+Classmoji parses the archive in your browser and shows what it found. If the file isn't a valid export, or `classrooms.json` is missing, you'll get a clear error explaining what's wrong.
 
-### Step 3: Review and import
+<Screenshot src={importUploadImg} alt="The import wizard's upload step with a drag-and-drop area for the export .zip" frame url="app.classmoji.io/import-classroom" size="lg" />
 
-For each selected classroom you can edit its **slug** (the part of the URL, e.g. `cs-101`). Slugs are auto-generated from the classroom name and must be unique within your Github organization.
+### Step 3: Select classrooms
 
-Click **Import**. Classmoji starts a background job per classroom and shows live progress, including how many students, assignments, and repositories came in. Any warnings (for example, students with grades but no repository) appear next to each classroom as it finishes. When everything's done, a single import drops you straight into its admin dashboard; importing several returns you to your classrooms list.
+A single export can contain many classrooms. Pick the ones you want to bring over. Each row shows the classroom name, its Github organization, and how many assignments, students, and grades it has.
+
+<Screenshot src={importSelectImg} alt="The select step listing exported classrooms with organization, assignment, student, and grade counts" frame url="app.classmoji.io/import-classroom" size="lg" />
+
+### Step 4: Review and import
+
+For each selected classroom you can edit its **slug** (the part of the URL, e.g. `cs-101`). Slugs are auto-generated from the classroom name and must be unique across Classmoji; if yours is taken, the wizard suggests a variation. Any warnings from the export (skipped files, students with grades but no repo) are listed here too.
+
+Click **Import** and Classmoji creates everything. A single classroom drops you straight into its admin dashboard; importing several returns you to your classrooms list.
 
 <Screenshot src={importReviewImg} alt="The review step showing each classroom's editable slug before importing" frame url="app.classmoji.io/import-classroom" size="lg" />
 
@@ -76,7 +72,7 @@ Click **Import**. Classmoji starts a background job per classroom and shows live
 - **Assignments start unweighted.** Imported assignments have a grading weight of `0`. Set weights from **Edit** on each assignment row; see [Grade assignments](/docs/instructors/grading).
 - **Assignments arrive in push mode.** Nothing is opened on Github by the import. Students keep submitting the way they did in Github Classroom: a push to their repository is the submission. If you'd rather have Classmoji open an issue per student, switch the assignment to issue mode in **Edit** before anyone submits; the mode locks once a submission exists.
 - **Group assignments** are imported with their teams. Each team's members are enrolled and the shared repository is linked to the team.
-- **Re-importing is safe.** The import is idempotent. Importing the same classroom again updates records in place rather than creating duplicates, and it won't overwrite edits you've made in Classmoji.
+- **Re-importing is safe.** The import is idempotent. Uploading the same export again updates records in place rather than creating duplicates, and it won't overwrite edits you've made in Classmoji.
 - **Students with grades but no repository** (graded in Github Classroom but never accepted the assignment) are skipped, with a warning so you know who was left out.
 
 ### Organize into modules
