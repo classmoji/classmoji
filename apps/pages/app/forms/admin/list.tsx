@@ -126,14 +126,18 @@ export const action = async ({
   const blocked = formMutationBlocked(classroom, membership.role);
   if (blocked) return blocked;
 
-  // Bind the record to the classroom that was authorized. Without this, a form
-  // id from ANOTHER classroom would be mutated by a caller who is staff here —
-  // the cross-classroom hole the MCP audit found and closed everywhere else.
-  const form = await prisma.form.findUnique({
-    where: { id: formId },
-    select: { id: true, classroom_id: true, title: true, slug: true },
+  // Read the record bound to the classroom that was authorized. A form id from
+  // ANOTHER classroom must not be touched by a caller who is staff here — the
+  // cross-classroom hole the MCP audit found and closed everywhere else.
+  //
+  // The read gives the message and the audit metadata; it is not what makes
+  // this safe, since it and the write are two statements. Every write below
+  // passes `classroomId` so the WRITE ITSELF is scoped.
+  const form = await prisma.form.findFirst({
+    where: { id: formId, classroom_id: classroom.id },
+    select: { id: true, title: true, slug: true },
   });
-  if (!form || form.classroom_id !== classroom.id) {
+  if (!form) {
     return { error: 'Form not found' };
   }
 
@@ -143,13 +147,17 @@ export const action = async ({
       return { error: 'Unknown status' };
     }
     try {
-      await ClassmojiService.form.quickUpdate(formId, { status });
+      await ClassmojiService.form.quickUpdate(formId, { status }, { classroomId: classroom.id });
     } catch (error) {
+      const code = (error as { code?: string }).code;
       // The one refusal quickUpdate makes: OPEN on a form that has never been
       // published. Surfaced as the instruction, not the error code.
-      if ((error as { code?: string }).code === 'FORM_NO_FIELDS') {
+      if (code === 'FORM_NO_FIELDS') {
         return { error: 'Publish this form before opening it.' };
       }
+      // The scoped write matched nothing: the form moved or was deleted
+      // between the read above and this write.
+      if (code === 'FORM_NOT_FOUND') return { error: 'Form not found' };
       throw error;
     }
     await ClassmojiService.audit.create({
@@ -165,7 +173,14 @@ export const action = async ({
   }
 
   if (intent === 'delete') {
-    await ClassmojiService.form.deleteForm(formId);
+    try {
+      await ClassmojiService.form.deleteForm(formId, { classroomId: classroom.id });
+    } catch (error) {
+      if ((error as { code?: string }).code === 'FORM_NOT_FOUND') {
+        return { error: 'Form not found' };
+      }
+      throw error;
+    }
     // Deleting a form cascades to its responses, which is the point and also
     // why it is audited: this is the one action here that destroys collected
     // PII, and the row is the only record it happened.
