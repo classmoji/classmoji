@@ -3,7 +3,7 @@ import { titleToIdentifier, RESERVED_PAGE_SLUGS } from '@classmoji/utils';
 import { ContentService } from '../content/ContentService.ts';
 import { getGitProvider } from '../git/index.ts';
 import { recordContentAssets, removeContentAssetFolder } from './contentAssets.service.ts';
-import { isContentDeliveryEnabled } from './contentDelivery.service.ts';
+import { shouldCreatePrivateContentRepo } from './contentDelivery.service.ts';
 import { indexOneFile } from './contentIndex.service.ts';
 import * as contentManifestService from './contentManifest.service.ts';
 import * as notificationService from './notification.service.ts';
@@ -279,10 +279,11 @@ async function ensureContentRepoExists({ classroom, gitOrgLogin, repoName }: Con
   const repoExists = await gitProvider.repositoryExists(gitOrgLogin, repoName);
   if (!repoExists) {
     try {
-      await gitProvider.createPublicRepository(
+      await gitProvider.createContentRepository(
         gitOrgLogin,
         repoName,
-        `Course content for ${classroom.name || gitOrgLogin}`
+        `Course content for ${classroom.name || gitOrgLogin}`,
+        shouldCreatePrivateContentRepo(classroom)
       );
 
       // Give GitHub a moment to initialize the repo
@@ -295,37 +296,14 @@ async function ensureContentRepoExists({ classroom, gitOrgLogin, repoName }: Con
     }
   }
 
-  // GitHub Pages is the LEGACY delivery path, and turning it on for a
-  // classroom already served by the signed-content Worker actively fights the
-  // cutover: an operator runs the Pages-off helper and flips the repo private,
-  // and then the next page or slide anyone creates here would switch the PUBLIC
-  // github.io site back on over a private repo — the exact leak the helper
-  // exists to close, with nobody in the loop to see it.
-  //
-  // Gate-OFF classrooms are deliberately untouched. github.io is still how
-  // their images are served; retiring that for everyone is the Phase 4
-  // teardown, not this.
-  if (isContentDeliveryEnabled(classroom)) {
-    console.warn(
-      `[page.service] Not enabling GitHub Pages for ${gitOrgLogin}/${repoName}: content delivery is on for this classroom`
-    );
-    return;
-  }
-
-  // Always try to enable GitHub Pages (idempotent - skips if already enabled)
-  try {
-    await gitProvider.enableGitHubPages(gitOrgLogin, repoName);
-  } catch (pagesError) {
-    // Pages API requires special permission - log but continue
-    console.warn(
-      `Could not auto-enable GitHub Pages: ${pagesError instanceof Error ? pagesError.message : String(pagesError)}`
-    );
-  }
+  // No GitHub Pages, ever. The delivery layer serves content for gated
+  // classrooms, and legacy ones read through raw URLs / the authenticated
+  // proxy. GitHub Pages sites on OLD repos are the Phase 4 teardown's business.
 }
 
 /**
  * Make sure the classroom's shared content repo exists on GitHub (creating it
- * and enabling GitHub Pages when missing). Idempotent.
+ * when missing). Idempotent.
  */
 export async function ensureContentRepo(classroomId: string) {
   const ctx = await resolveContentRepo(classroomId);

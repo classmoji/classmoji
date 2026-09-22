@@ -151,42 +151,28 @@ export async function processZipImport({
   const repoExists = await gitProvider.repositoryExists(org, repoName);
   if (!repoExists) {
     console.log(`Creating content repository: ${repoName}`);
-    await gitProvider.createPublicRepository(
+    await gitProvider.createContentRepository(
       org,
       repoName,
-      `Course content for ${classroom.name || org} - ${contentNamespace}`
+      `Course content for ${classroom.name || org} - ${contentNamespace}`,
+      ClassmojiService.contentDelivery.shouldCreatePrivateContentRepo(classroom)
     );
     // Give GitHub a moment to initialize the repo
     await new Promise(resolve => setTimeout(resolve, 2000));
   }
 
-  // Try to enable GitHub Pages (idempotent) — but NOT for a classroom already
-  // served by the signed-content Worker. Its content repo is on its way to
-  // private (or already there), and switching the public github.io site back on
-  // over a private repo is the leak the Pages-off helper exists to close. Same
-  // guard as page.service.ensureContentRepoExists; gate-off classrooms are
-  // untouched, because github.io is still how their images are served.
-  if (ClassmojiService.contentDelivery.isContentDeliveryEnabled(classroom)) {
-    console.warn(
-      `Not enabling GitHub Pages for ${org}/${repoName}: content delivery is on for this classroom`
-    );
-  } else {
-    try {
-      await gitProvider.enableGitHubPages(org, repoName);
-    } catch (pagesError: unknown) {
-      const message = pagesError instanceof Error ? pagesError.message : String(pagesError);
-      console.warn(`Could not auto-enable GitHub Pages: ${message}`);
-    }
-  }
+  // No GitHub Pages, ever — same rule as page.service.ensureContentRepoExists.
+  // The delivery layer serves gated classrooms; legacy ones read through the
+  // authenticated proxy.
 
   // 7. Collect files for batch upload
   const files: Array<{ path: string; content: string; encoding: 'utf-8' | 'base64' }> = [];
   /** @type {Map<string, string>} Maps old image path to new absolute URL */
   const imageMap = new Map();
 
-  // Use content proxy URLs for all assets - CDN-first + API fallback
-  // This ensures assets load immediately after import (via API fallback)
-  // and switch to faster CDN delivery once GitHub Pages propagates
+  // Use content proxy URLs for all assets. The proxy reads them through
+  // authenticated GitHub calls, so they load as soon as the import commits — a
+  // repo created here has no GitHub Pages site for its CDN leg to hit.
   const baseUrl = `/content/${org}/${repoName}/${contentPath}`;
   const imageBaseUrl = `${baseUrl}/images`;
 
