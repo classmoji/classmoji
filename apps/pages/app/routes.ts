@@ -47,6 +47,11 @@ export default [
   // `RESERVED_FORM_SLUGS` refuses `responses` at create, so neither of these can
   // ever be shadowed by a real form.
   route(':classroomSlug/forms/:formSlug/responses/export', 'forms/admin/responsesExport.ts'),
+  // Gallery Approve/Hide. A resource route beside `export`, gated on the
+  // teaching team rather than the OWNER/TEACHER responses gate.
+  route(':classroomSlug/forms/:formSlug/responses/gallery', 'forms/admin/responsesGallery.ts'),
+  // The teaching team's gallery queue: where assistants approve.
+  route(':classroomSlug/forms/:formSlug/gallery', 'forms/admin/galleryQueue.tsx'),
 
   // The public fill surfaces, exempted from the root login redirect (see
   // app/utils/formsPaths.ts). Placeholders until the renderer lands; they are
