@@ -351,19 +351,29 @@ const RepositoryAssignmentsTable = ({
     },
     {
       title: 'Repository',
+      dataIndex: ['git_repo', 'repository', 'title'],
       key: 'repository',
-      render: (_: unknown, record: RepoAssignment) => (
-        <span className="inline-flex items-center gap-2">
-          {record.git_repo.repository.title}
-          <CommitCount snapshot={record.analytics_snapshot} />
-        </span>
-      ),
       filters:
         active === 'all'
           ? repositories.map(({ title }: ModuleItem) => ({ text: title, value: title }))
           : undefined,
       onFilter: (value: React.Key | boolean, record: RepoAssignment) =>
         record.git_repo.repository.title === value,
+    },
+    {
+      title: 'Commits',
+      key: 'commits',
+      align: 'right' as const,
+      width: 100,
+      sorter: (a: RepoAssignment, b: RepoAssignment) =>
+        (a.analytics_snapshot?.total_commits ?? -1) - (b.analytics_snapshot?.total_commits ?? -1),
+      render: (_: unknown, record: RepoAssignment) =>
+        record.analytics_snapshot?.total_commits === null ||
+        record.analytics_snapshot?.total_commits === undefined ? (
+          <span className="text-ink-3">—</span>
+        ) : (
+          <CommitCount snapshot={record.analytics_snapshot} className="text-sm" />
+        ),
     },
     {
       title: 'Assignment',

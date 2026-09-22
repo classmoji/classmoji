@@ -451,6 +451,7 @@ const AssignmentPage = ({ loaderData }: Route.ComponentProps) => {
 
       <div className="rounded-2xl bg-panel ring-1 ring-line p-2 sm:p-3">
         <SubmissionsTable
+          autogradingEnabled={autogradingTestCount > 0}
           repositoryType={repository.type}
           assignment={assignment as unknown as AssignmentRowData}
           repos={visible}

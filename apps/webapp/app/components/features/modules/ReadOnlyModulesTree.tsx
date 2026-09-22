@@ -27,6 +27,12 @@ export interface ModuleTreeNode {
   typeText?: string;
   weightText?: string;
   statusNode?: React.ReactNode;
+  /** The submission state alone (no grade, no due date): one column on the student card. */
+  submissionNode?: React.ReactNode;
+  /** Released grades alone, for the student card's Grade column. */
+  gradeNode?: React.ReactNode;
+  /** The due date as text, for the student card's Due column. */
+  dueText?: string;
   actionNode?: React.ReactNode;
   autogradingNode?: React.ReactNode;
   href?: string;

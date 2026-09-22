@@ -108,6 +108,8 @@ export const matchesFilter = (repo: SubmissionsRepo, filter: SubmissionFilter) =
 
 interface SubmissionsTableProps {
   repositoryType: string;
+  /** Whether the repository has autograding tests; without them the column is noise. */
+  autogradingEnabled?: boolean;
   assignment: AssignmentRowData;
   repos: SubmissionsRepo[];
   assistants: Assistant[];
@@ -124,6 +126,7 @@ interface SubmissionsTableProps {
  */
 const SubmissionsTable = ({
   repositoryType,
+  autogradingEnabled = false,
   assignment,
   repos,
   assistants,
@@ -240,7 +243,6 @@ const SubmissionsTable = ({
               <IconBrandGithub size={14} className="shrink-0 text-gray-400" />
               <span className="truncate">{repo.name}</span>
             </a>
-            <CommitCount snapshot={repo.submission?.analytics_snapshot} className="ml-1" />
             {projectUrl && (
               <Tooltip title="Open Project">
                 <Button
@@ -257,6 +259,20 @@ const SubmissionsTable = ({
       },
     },
     {
+      title: 'Commits',
+      key: 'commits',
+      width: 100,
+      align: 'right' as const,
+      render: (_: unknown, repo) => {
+        const n = repo.submission?.analytics_snapshot?.total_commits;
+        return n === null || n === undefined ? (
+          <span className="text-ink-3">—</span>
+        ) : (
+          <CommitCount snapshot={repo.submission?.analytics_snapshot} className="text-sm" />
+        );
+      },
+    },
+    {
       title: 'Last push',
       key: 'lastPush',
       width: 150,
@@ -269,14 +285,22 @@ const SubmissionsTable = ({
         );
       },
     },
-    {
-      title: 'Autograding',
-      key: 'autograding',
-      width: 130,
-      render: (_: unknown, repo) => (
-        <AutogradingResultPill result={repo.autograding_result} org={org} repoName={repo.name} />
-      ),
-    },
+    ...(autogradingEnabled
+      ? [
+          {
+            title: 'Autograding',
+            key: 'autograding',
+            width: 130,
+            render: (_: unknown, repo: SubmissionsRepo) => (
+              <AutogradingResultPill
+                result={repo.autograding_result}
+                org={org}
+                repoName={repo.name}
+              />
+            ),
+          },
+        ]
+      : []),
     ...(anyImported
       ? [
           {

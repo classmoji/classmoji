@@ -164,6 +164,17 @@ export const buildAssignmentLeaf = (
     typeText: typeText ?? (a.repository?.type ? prettyType(a.repository.type) : undefined),
     weightText: a.weight != null ? `${a.weight}%` : undefined,
     href: selfFormed && !selfFormed.hasTeam ? undefined : (issueUrl ?? ownRepoUrl ?? undefined),
+    // The same three facts split out, so the student card can put each in its
+    // own column; statusNode below keeps them together for the staff tree.
+    submissionNode: teamStatus ?? submittedPill(ra?.status),
+    gradeNode: showGrades ? (
+      <span className="inline-flex items-center gap-1 whitespace-nowrap">
+        {ra.grades.map((g: AnyRepoAssignment, i: number) => (
+          <Emoji key={g.id ?? i} emoji={g.emoji} fontSize={16} />
+        ))}
+      </span>
+    ) : null,
+    dueText: a.student_deadline ? new Date(a.student_deadline).toLocaleDateString() : undefined,
     statusNode: (
       <div className="flex items-center gap-2 flex-wrap">
         {/* Staff-only, and gated on the flag rather than on the data: a

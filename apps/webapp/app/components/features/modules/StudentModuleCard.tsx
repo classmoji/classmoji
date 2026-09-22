@@ -41,6 +41,10 @@ const kindOf = (node: ModuleTreeNode): { label: string; icon: Icon } => {
   }
 };
 
+// Assignment rows share one grid with their header: icon, title, status, due, grade, action.
+const ASSIGNMENT_GRID =
+  'grid grid-cols-[18px_minmax(0,1fr)_9rem_6rem_6rem_7rem] items-center gap-3';
+
 /** Which heading a leaf sits under: assignments, quizzes and forms are assignments. */
 const groupOf = (node: ModuleTreeNode): 'Assignments' | 'Content' =>
   node.kind === 'assignment' ||
@@ -105,10 +109,27 @@ const StudentModuleCard = ({
             <ul className="flex flex-col">
               {ordered.map((node, i) => {
                 const group = groupOf(node);
-                const heading =
-                  i === 0 || groupOf(ordered[i - 1]) !== group ? (
-                    <li className="pt-5 pb-1.5 text-xs font-semibold uppercase tracking-wide text-ink-3 first:pt-3">
-                      {group}
+                const startsGroup = i === 0 || groupOf(ordered[i - 1]) !== group;
+                const heading = startsGroup ? (
+                  <li className="pt-5 pb-1.5 text-xs font-semibold uppercase tracking-wide text-ink-3 first:pt-3">
+                    {group}
+                  </li>
+                ) : null;
+                // Assignments read as a table: a header row, then one row per
+                // assignment with its status, due date, grade and action in
+                // fixed columns. Content rows stay a plain list.
+                const isTable = group === 'Assignments';
+                const tableHeader =
+                  startsGroup && isTable ? (
+                    <li
+                      className={`${ASSIGNMENT_GRID} px-2 -mx-2 pb-1.5 text-[11px] font-semibold uppercase tracking-wide text-ink-4`}
+                    >
+                      <span />
+                      <span>Assignment</span>
+                      <span>Status</span>
+                      <span>Due</span>
+                      <span>Grade</span>
+                      <span />
                     </li>
                   ) : null;
                 const { label, icon: RowIcon } = kindOf(node);
@@ -121,36 +142,65 @@ const StudentModuleCard = ({
                     : node.href
                       ? () => window.open(node.href, '_blank', 'noreferrer')
                       : undefined;
+                const rowProps = {
+                  role: open ? ('link' as const) : undefined,
+                  tabIndex: open ? 0 : undefined,
+                  onClick: open,
+                  onKeyDown: (e: React.KeyboardEvent) => {
+                    if (open && (e.key === 'Enter' || e.key === ' ')) {
+                      e.preventDefault();
+                      open();
+                    }
+                  },
+                };
+                const hover = open
+                  ? 'cursor-pointer hover:bg-stone-50 dark:hover:bg-neutral-800'
+                  : '';
+                const action = node.actionNode && (
+                  <span role="presentation" onClick={e => e.stopPropagation()}>
+                    {node.actionNode}
+                  </span>
+                );
                 return (
                   <Fragment key={node.key}>
                     {heading}
+                    {tableHeader}
                     <li>
-                      <div
-                        role={open ? 'link' : undefined}
-                        tabIndex={open ? 0 : undefined}
-                        onClick={open}
-                        onKeyDown={e => {
-                          if (open && (e.key === 'Enter' || e.key === ' ')) {
-                            e.preventDefault();
-                            open();
-                          }
-                        }}
-                        className={`flex items-center gap-3 py-2.5 px-2 -mx-2 rounded-lg transition-colors ${
-                          open ? 'cursor-pointer hover:bg-stone-50 dark:hover:bg-neutral-800' : ''
-                        }`}
-                      >
-                        <RowIcon size={18} className="text-gray-400 shrink-0" />
-                        <span className="min-w-0 flex-1 truncate text-ink-1">
-                          <span className="font-semibold mr-2">{label}:</span>
-                          {node.name}
-                        </span>
-                        {node.statusNode}
-                        {node.actionNode && (
-                          <span role="presentation" onClick={e => e.stopPropagation()}>
-                            {node.actionNode}
+                      {isTable ? (
+                        <div
+                          {...rowProps}
+                          className={`${ASSIGNMENT_GRID} py-2.5 px-2 -mx-2 rounded-lg transition-colors ${hover}`}
+                        >
+                          <RowIcon size={18} className="text-gray-400" />
+                          <span className="min-w-0 truncate text-ink-1">
+                            {/* The column header already says "Assignment"; only a
+                                quiz or form row still needs its kind spelled out. */}
+                            {label !== 'Assignment' && (
+                              <span className="font-semibold mr-2">{label}:</span>
+                            )}
+                            {node.name}
                           </span>
-                        )}
-                      </div>
+                          <span className="min-w-0">{node.submissionNode ?? node.statusNode}</span>
+                          <span className="text-xs text-ink-3 whitespace-nowrap">
+                            {node.dueText}
+                          </span>
+                          <span>{node.gradeNode}</span>
+                          <span className="flex justify-end">{action}</span>
+                        </div>
+                      ) : (
+                        <div
+                          {...rowProps}
+                          className={`flex items-center gap-3 py-2.5 px-2 -mx-2 rounded-lg transition-colors ${hover}`}
+                        >
+                          <RowIcon size={18} className="text-gray-400 shrink-0" />
+                          <span className="min-w-0 flex-1 truncate text-ink-1">
+                            <span className="font-semibold mr-2">{label}:</span>
+                            {node.name}
+                          </span>
+                          {node.statusNode}
+                          {action}
+                        </div>
+                      )}
                     </li>
                   </Fragment>
                 );
