@@ -21,6 +21,12 @@ import {
  * the viewer's ROLE prefix, because `/admin/:class/**` is owner-only and a
  * teacher sent there would be turned away from a screen they are entitled to.
  *
+ * It points at the webapp's FORMS LIST, not the classroom dashboard. That list
+ * is a real webapp screen now (`admin.$class.forms`, and its `/teacher` twin),
+ * and it is where staff arrive from: only New Form, Edit and Responses cross to
+ * this app. Landing someone a level above the screen they left is the
+ * regression this half of the spec exists to catch.
+ *
  * The copy control is the other half: the builder is where a form is finished,
  * and the next move after publishing is to send the link to someone. Until now
  * that meant navigating back to the list to find the copy button.
@@ -39,7 +45,7 @@ const FORM_SLUG = 'zz-e2e-chrome';
 const WEBAPP = getDevPort('webapp') || 'http://localhost:3000';
 const PAGES = getPagesBaseURL();
 
-const BACK_LINK = 'a[title="Back to this classroom in Classmoji"]';
+const BACK_LINK = `a[title="Back to this classroom's forms in Classmoji"]`;
 
 let formId: string | null = null;
 
@@ -94,10 +100,7 @@ test.describe('the way back to Classmoji', () => {
 
     // The full absolute URL, not a path: the webapp is another origin, and a
     // client-side navigation to it would only be a 404 inside this router.
-    await expect(page.locator(BACK_LINK)).toHaveAttribute(
-      'href',
-      `${WEBAPP}/admin/${CLASS}/dashboard`
-    );
+    await expect(page.locator(BACK_LINK)).toHaveAttribute('href', `${WEBAPP}/admin/${CLASS}/forms`);
   });
 
   test('and a teacher at their own tree, which is the whole point', async ({ page }) => {
@@ -109,22 +112,16 @@ test.describe('the way back to Classmoji', () => {
 
     await expect(page.locator(BACK_LINK)).toHaveAttribute(
       'href',
-      `${WEBAPP}/teacher/${CLASS}/dashboard`
+      `${WEBAPP}/teacher/${CLASS}/forms`
     );
   });
 
   test('so do the builder and the responses view', async ({ page }) => {
     await loginAs(page, 'owner', `/${CLASS}/forms/${FORM_SLUG}/edit`);
-    await expect(page.locator(BACK_LINK)).toHaveAttribute(
-      'href',
-      `${WEBAPP}/admin/${CLASS}/dashboard`
-    );
+    await expect(page.locator(BACK_LINK)).toHaveAttribute('href', `${WEBAPP}/admin/${CLASS}/forms`);
 
     await page.goto(`/${CLASS}/forms/${FORM_SLUG}/responses`);
-    await expect(page.locator(BACK_LINK)).toHaveAttribute(
-      'href',
-      `${WEBAPP}/admin/${CLASS}/dashboard`
-    );
+    await expect(page.locator(BACK_LINK)).toHaveAttribute('href', `${WEBAPP}/admin/${CLASS}/forms`);
   });
 });
 

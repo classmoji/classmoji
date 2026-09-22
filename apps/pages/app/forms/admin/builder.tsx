@@ -26,7 +26,7 @@ import { ConfirmDialog } from '~/components/forms/ConfirmDialog.tsx';
 import FieldCard from '~/components/forms/builder/FieldCard.tsx';
 import { BackToClassroom } from '~/components/forms/BackToClassroom.tsx';
 import { useCopyLink } from '~/components/forms/useCopyLink.ts';
-import { classroomHomeUrl, publicFormUrlFor } from './adminLinks.server.ts';
+import { formsListUrl, publicFormUrlFor } from './adminLinks.server.ts';
 import type { ScopeChoices } from '~/components/forms/builder/FieldConfig.tsx';
 import { FIELD_TYPE_META, makeField } from '~/components/forms/fieldTypes.ts';
 
@@ -129,7 +129,7 @@ export const loader = async ({
   return {
     classroomSlug,
     classroomName: (classroom as { name?: string | null }).name ?? classroomSlug,
-    classroomHome: classroomHomeUrl(membership.role, classroomSlug),
+    classroomFormsUrl: formsListUrl(membership.role, classroomSlug),
     // Built on the server because only the server knows whether this classroom
     // has a course site to shorten the link onto — and the short link is a
     // different PATH, not just a different host.
@@ -443,7 +443,7 @@ export default function FormBuilder() {
             wrapped a long intro every few words. `max-w-lg` still caps it. */}
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-1.5 text-xs text-gray-400">
-            <BackToClassroom href={data.classroomHome} name={data.classroomName} />
+            <BackToClassroom href={data.classroomFormsUrl} name={data.classroomName} />
             <span className="text-gray-300 dark:text-gray-600">·</span>
             <Link
               to={`/${data.classroomSlug}/forms`}
