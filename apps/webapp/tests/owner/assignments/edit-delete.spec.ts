@@ -4,22 +4,24 @@ import { TEST_CLASSROOM } from '../../helpers/env.helpers';
 import {
   getClassroomBySlug,
   getRepositoryByTitle,
+  getAssignmentById,
   seedRepositoryWithAssignment,
   deleteRepositoryById,
 } from '../../helpers/prisma.helpers';
 import { repositoryRow } from '../../helpers/repos.helpers';
 
 /**
- * Owner edits and deletes an assignment (Repository row) on /admin/<org>/repos.
- * Each spec seeds its own Repository (+Assignment) via Prisma and asserts the
- * persisted DB row after the write.
+ * Owner edits and deletes coursework on the admin screens. Grading weight
+ * lives on the Assignment row and is edited on /admin/<org>/assignments; a
+ * Repository is deleted from /admin/<org>/repos. Each spec seeds its own
+ * Repository (+Assignment) via Prisma and asserts the persisted DB row.
  */
 
 const REPOS_PATH = (org: string) => `/admin/${org}/repos`;
+const ASSIGNMENTS_PATH = (org: string) => `/admin/${org}/assignments`;
 
 test.describe('Owner edits an assignment weight', () => {
-
-  test('owner editing the weight cell persists the new weight to the repositories row', async ({
+  test('owner editing the weight in the assignment modal persists it to the assignments row', async ({
     authenticatedPage: page,
     testOrg,
   }) => {
@@ -31,23 +33,23 @@ test.describe('Owner edits an assignment weight', () => {
     });
 
     try {
-      await page.goto(REPOS_PATH(testOrg));
+      await page.goto(ASSIGNMENTS_PATH(testOrg));
       await waitForDataLoad(page);
 
-      const row = repositoryRow(page, title);
+      const row = page.getByRole('row').filter({ hasText: seeded.assignmentTitle });
       await expect(row).toBeVisible();
+      await row.getByRole('button', { name: 'Edit', exact: true }).click();
 
-      const weightButton = row.getByRole('button').filter({ hasText: '%' });
-      await expect(weightButton).toBeVisible();
-      await weightButton.click();
-
-      const input = row.getByRole('spinbutton');
-      await expect(input).toBeVisible();
-      await input.fill('17');
-      await input.press('Enter');
+      const dialog = page.getByRole('dialog', {
+        name: `Edit assignment: ${seeded.assignmentTitle}`,
+      });
+      await expect(dialog).toBeVisible();
+      const weight = dialog.getByRole('spinbutton', { name: 'Weight' });
+      await weight.fill('17');
+      await dialog.getByRole('button', { name: 'Save', exact: true }).click();
 
       await expect
-        .poll(async () => (await getRepositoryByTitle(classroom.id, title))?.weight)
+        .poll(async () => (await getAssignmentById(seeded.assignmentId))?.weight)
         .toBe(17);
     } finally {
       await deleteRepositoryById(seeded.repositoryId);
@@ -56,7 +58,6 @@ test.describe('Owner edits an assignment weight', () => {
 });
 
 test.describe('Owner deletes an assignment', () => {
-
   test('owner deleting an assignment removes its repositories row from the DB', async ({
     authenticatedPage: page,
     testOrg,
@@ -81,9 +82,7 @@ test.describe('Owner deletes an assignment', () => {
       await expect(confirmButton).toBeVisible();
       await confirmButton.click();
 
-      await expect
-        .poll(async () => getRepositoryByTitle(classroom.id, title))
-        .toBeNull();
+      await expect.poll(async () => getRepositoryByTitle(classroom.id, title)).toBeNull();
     } finally {
       await deleteRepositoryById(seeded.repositoryId);
     }

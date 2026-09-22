@@ -63,7 +63,6 @@ interface TriggerSession {
   numReposToCreate: number;
   numIssuesToCreate: number;
   numStudentsToSync: number;
-  numReposToDelete: number;
   numStudentsToAssignTokens: number;
   numAssignmentsToAddGradersTo: number;
   numRepos: number;
@@ -106,7 +105,6 @@ const TriggerProgress = ({ callback, validIdentifiers, operation }: TriggerProgr
           session.numReposToCreate + session.numReposToCreate / 2 + session.numIssuesToCreate,
         SYNC_ROSTER: session.numStudentsToSync,
         ADD_STUDENTS: session.numStudentsToSync,
-        DELETE_REPOS: session.numReposToDelete,
         ASSIGN_TOKENS_TO_STUDENT: session.numStudentsToAssignTokens,
         ASSIGN_GRADERS_TO_ASSIGNMENTS: session.numAssignmentsToAddGradersTo,
         CALCULATE_REPO_CONTRIBUTIONS: session.numRepos,

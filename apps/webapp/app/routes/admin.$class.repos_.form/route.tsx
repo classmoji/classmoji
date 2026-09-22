@@ -94,7 +94,9 @@ const ModuleForm = ({ loaderData }: Route.ComponentProps) => {
   const { repository, isNew, tags, classroom, pages, slides, hasReposWithProjects } = loaderData;
   const navigate = useNavigate();
   const { class: classSlug } = useParams();
-  const goToRepos = () => navigate(`/admin/${classSlug}/repos`);
+  // Repositories are managed on the Repositories page; assignments that
+  // submit through them live on the module page.
+  const goBack = () => navigate(`/admin/${classSlug}/repos`);
   // FormModule calls `close` on Discard and after a successful save.
   const close = () => navigate(-1);
 
@@ -104,14 +106,14 @@ const ModuleForm = ({ loaderData }: Route.ComponentProps) => {
       <div className="flex items-center gap-2 text-ink-2 mt-2 mb-4">
         <button
           type="button"
-          onClick={goToRepos}
+          onClick={goBack}
           className="hover:text-ink-1"
           aria-label="Back to repositories"
         >
           <IconChevronLeft size={18} />
         </button>
         <IconFolder size={18} className="text-gray-400" />
-        <button type="button" onClick={goToRepos} className="hover:text-ink-1">
+        <button type="button" onClick={goBack} className="hover:text-ink-1">
           Repositories
         </button>
         <span className="text-ink-3">/</span>
@@ -152,8 +154,6 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
   // Extract fields that shouldn't go to Prisma
   const {
     organization: _organization,
-    assignmentsToRemove,
-    assignments,
     tag,
     linkedPageIds,
     linkedSlideIds,
@@ -230,80 +230,6 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
     }
   };
 
-  // Helper to sync assignment-level content links
-  const syncAssignmentContentLinks = async (
-    assignmentsList: Array<{ id: string; linkedPageIds?: string[]; linkedSlideIds?: string[] }>
-  ) => {
-    for (const assignment of assignmentsList || []) {
-      const assignmentId = assignment.id;
-      const newPageIds = assignment.linkedPageIds || [];
-      const newSlideIds = assignment.linkedSlideIds || [];
-
-      // Get current links for this assignment
-      const currentPageLinks = await getPrisma().pageLink.findMany({
-        where: { assignment_id: assignmentId },
-        select: { page_id: true },
-      });
-      const currentSlideLinks = await getPrisma().slideLink.findMany({
-        where: { assignment_id: assignmentId },
-        select: { slide_id: true },
-      });
-
-      const currentPageIds = currentPageLinks.map(l => l.page_id);
-      const currentSlideIds = currentSlideLinks.map(l => l.slide_id);
-
-      // Pages to add and remove
-      const pagesToAdd = newPageIds.filter((id: string) => !currentPageIds.includes(id));
-      const pagesToRemove = currentPageIds.filter(id => !newPageIds.includes(id));
-
-      // Slides to add and remove
-      const slidesToAdd = newSlideIds.filter((id: string) => !currentSlideIds.includes(id));
-      const slidesToRemove = currentSlideIds.filter(id => !newSlideIds.includes(id));
-
-      // Add new page links
-      if (pagesToAdd.length > 0) {
-        await getPrisma().pageLink.createMany({
-          data: pagesToAdd.map((pageId: string) => ({
-            page_id: pageId,
-            assignment_id: assignmentId,
-          })),
-          skipDuplicates: true,
-        });
-      }
-
-      // Remove old page links
-      if (pagesToRemove.length > 0) {
-        await getPrisma().pageLink.deleteMany({
-          where: {
-            assignment_id: assignmentId,
-            page_id: { in: pagesToRemove },
-          },
-        });
-      }
-
-      // Add new slide links
-      if (slidesToAdd.length > 0) {
-        await getPrisma().slideLink.createMany({
-          data: slidesToAdd.map((slideId: string) => ({
-            slide_id: slideId,
-            assignment_id: assignmentId,
-          })),
-          skipDuplicates: true,
-        });
-      }
-
-      // Remove old slide links
-      if (slidesToRemove.length > 0) {
-        await getPrisma().slideLink.deleteMany({
-          where: {
-            assignment_id: assignmentId,
-            slide_id: { in: slidesToRemove },
-          },
-        });
-      }
-    }
-  };
-
   // Helper to save content manifest to GitHub repo
   const saveContentManifest = async () => {
     await ClassmojiService.contentManifest.saveManifest(classroom.id);
@@ -331,12 +257,10 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
           ...moduleData,
           classroom_id: classroom.id,
           tag_id: tag || null,
-          assignments: assignments || [],
         });
 
-        // Sync content links for repository and assignments
+        // Sync repository-level content links
         await syncModuleContentLinks(createdModule.id);
-        await syncAssignmentContentLinks(assignments);
         await ClassmojiService.autogradingTest.replaceForRepository(
           createdModule.id,
           autogradingTests || []
@@ -359,16 +283,10 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
     },
     async update() {
       try {
-        await ClassmojiService.repository.updateWithAssignments({
-          ...moduleData,
-          tag,
-          assignments: assignments || [],
-          assignmentsToRemove: assignmentsToRemove || [],
-        });
+        await ClassmojiService.repository.updateFromForm({ ...moduleData, tag });
 
-        // Sync content links for repository and assignments
+        // Sync repository-level content links
         await syncModuleContentLinks(moduleData.id);
-        await syncAssignmentContentLinks(assignments);
         await ClassmojiService.autogradingTest.replaceForRepository(
           moduleData.id,
           autogradingTests || []

@@ -1,3 +1,5 @@
+> **Superseded (2026-09-20).** Numeric grading shipped, but not as designed below. There is no `grading_mode` flag or `numeric_grade` column: the numeric scale is the built-in `score-0` … `score-100` emojis (`packages/utils/src/emojis.ts`), so the engine, the mappings and the grade rows are unchanged. On that scale the Grade cell is an inline number field (`EmojiGrader.tsx`), only values in the classroom scale are accepted (`HelperService.addGradeToGitRepoAssignment`), and each grader holds one score per submission — a new score replaces that grader's previous one (migration `20260920000003_one_score_per_grader`). The "issue philosophy" question was settled by submission modes: a `REPO`-mode assignment (the default) is submitted by pushing and never opens an issue. The rest of this document is kept as history.
+
 > **Status:** Planned, not started. Saved 2026-06-20 for later implementation.
 > Open question intentionally left undecided: the "issue philosophy" (whether grading should ever skip creating a GitHub issue). This plan keeps the existing always-create-the-issue behavior; "just grade the repo" is handled by using a single assignment.
 

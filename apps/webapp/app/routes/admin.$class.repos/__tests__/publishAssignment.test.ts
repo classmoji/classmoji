@@ -19,6 +19,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
+  publishReleased: vi.fn(),
   classroomFindById: vi.fn(),
   repositoryFindById: vi.fn(),
   setPublished: vi.fn(),
@@ -31,6 +32,7 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock('@classmoji/services', () => ({
   ClassmojiService: {
+    assignment: { publishReleased: (...a: unknown[]) => mocks.publishReleased(...a) },
     classroom: { findById: (...a: unknown[]) => mocks.classroomFindById(...a) },
     repository: {
       findById: (...a: unknown[]) => mocks.repositoryFindById(...a),
@@ -139,7 +141,7 @@ describe('publishAssignment — empty roster (pre-term staging)', () => {
     expect(mocks.createRepositoriesTrigger).not.toHaveBeenCalled();
   });
 
-  it('publishes a SELF_FORMED repo with no students (unchanged behaviour)', async () => {
+  it('publishes a SELF_FORMED repo with no students and releases its due assignments', async () => {
     mocks.repositoryFindById.mockResolvedValue(
       repositoryRow({ type: 'GROUP', team_formation_mode: 'SELF_FORMED' })
     );
@@ -148,6 +150,10 @@ describe('publishAssignment — empty roster (pre-term staging)', () => {
 
     expect(result.success).toBeDefined();
     expect(mocks.setPublished).toHaveBeenCalledWith(REPOSITORY_ID, true, CLASSROOM_ID);
+    // No per-team provisioning happens here (teams form later), so the
+    // assignments whose release date has passed are published directly.
+    expect(mocks.publishReleased).toHaveBeenCalledWith(REPOSITORY_ID);
+    expect(mocks.createRepositoriesTrigger).not.toHaveBeenCalled();
   });
 });
 

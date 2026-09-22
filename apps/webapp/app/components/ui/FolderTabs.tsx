@@ -96,7 +96,7 @@ const FolderTabs = ({ items, defaultActiveKey, panelClassName = '' }: FolderTabs
     <div className="flex flex-col">
       <div className="flex items-end justify-between gap-3">
         <FolderTabBar tabs={items} activeKey={active} onChange={setActive} />
-        {activeItem?.extra && <div className="shrink-0 pb-1">{activeItem.extra}</div>}
+        {activeItem?.extra && <div className="shrink-0 pb-3">{activeItem.extra}</div>}
       </div>
       <section
         className={`rounded-2xl rounded-tl-none bg-panel border border-line p-5 sm:p-6 ${panelClassName}`}

@@ -63,18 +63,24 @@ const OWNER_STEPS: FeatureStep[] = [
     description: 'Switch between per-assignment grading progress and TA grading activity.',
   },
   {
-    link: '/repos',
-    title: 'Repositories',
+    link: '/modules',
+    title: 'Modules',
     description:
-      'Repositories are the units of coursework in your class, such as a lab, a project, or a weekly problem set. Each one is created from a GitHub template repository, and when you publish it Classmoji copies that repo to every student, or every team for group work.',
+      'Modules are the units of your course, such as a week, a topic, or a project. Each module holds content (pages and slides) and assignments. This example course has one module, Week 1: Hello World.',
+  },
+  {
+    link: '/modules',
+    selector: '[data-tour="modules-add-item"]',
+    placement: 'top',
+    title: 'Add an assignment',
+    description:
+      'Use Add item to place a page or slide deck in the module, or to create an assignment. An assignment is what gets graded: it has a weight and a due date, and students submit through a repository (Classmoji opens an issue in each student’s copy), a quiz, or a form.',
   },
   {
     link: '/repos',
-    selector: '[data-tour="repos-new"]',
-    placement: 'bottom',
-    title: 'Create a repository',
+    title: 'Repositories',
     description:
-      'Use New repository to add a unit of work from a template. The assignments inside become GitHub issues that Classmoji opens in each student’s copy of the repo, and you control release dates, due dates, and weighting per assignment.',
+      'A repository is a GitHub template that Classmoji copies to every student, or every team for group work, when you publish it. Assignments in any module can submit through the same repository, so a semester-long project repo can carry several of them.',
   },
   {
     link: '/repos/form',
@@ -93,34 +99,11 @@ const OWNER_STEPS: FeatureStep[] = [
   },
   {
     link: '/repos/form',
-    selector: '[data-tour="repos-form-add-assignment"]',
-    placement: 'left',
-    title: 'Add assignments',
-    description:
-      'Open the assignment editor to define each gradable assignment in this repository.',
-  },
-  {
-    link: '/repos/form',
     selector: '[data-tour="repos-form-submit"]',
     placement: 'top',
     title: 'Create repository',
     description:
-      'Save everything to create the repository with its assignments and linked content.',
-  },
-  {
-    link: '/repos',
-    selector: '[data-tour="repos-cleanup"]',
-    placement: 'bottom',
-    title: 'Cleanup repos',
-    description:
-      'Finds students no longer on your roster so you can remove their leftover repos; nothing is deleted until you confirm.',
-  },
-  {
-    link: '/repos',
-    selector: '[data-tour="repos-link-resources"]',
-    placement: 'bottom',
-    title: 'Link resources',
-    description: 'Attach pages, slides, or other resources to your repositories.',
+      'Save to create the repository. Then add an assignment to a module and pick this repository as the way students submit.',
   },
   {
     link: '/students',
@@ -211,29 +194,15 @@ const OWNER_STEPS: FeatureStep[] = [
     link: '/grades',
     title: 'The gradebook',
     description:
-      'The Grades page is a full gradebook with students as rows and assignments as columns. Grades are hidden from students by default and released per assignment when you are ready, and assignment grades roll up into repository grades and a final grade using the weighting you configure.',
+      'The Grades page is a full gradebook with students as rows and assignments as columns. Grades are hidden from students by default and released per assignment when you are ready, and each assignment’s weight decides how much it counts toward the final grade.',
   },
   {
     link: '/grades',
-    selector: '[data-tour="grades-view-toggle"]',
+    selector: '[data-tour="grades-filter"]',
     placement: 'bottom',
-    title: 'Emoji grading',
+    title: 'Who needs attention',
     description:
-      'Classmoji grades with emojis instead of bare numbers, and each emoji maps to a numeric value from 0 to 100 that you set in settings. A submission’s grade is the average of the emoji values you apply. Use this toggle to read the gradebook as expressive emoji or as the exact numbers behind them.',
-  },
-  {
-    link: '/grades',
-    selector: '[data-tour="grades-show-assignments"]',
-    placement: 'bottom',
-    title: 'Show assignments',
-    description: 'Expand each repository into its individual assignment grade columns.',
-  },
-  {
-    link: '/grades',
-    selector: '[data-tour="grades-show-comments"]',
-    placement: 'bottom',
-    title: 'Show comments',
-    description: 'Reveal the per-student comment column alongside grades.',
+      'Narrow the rows to students with something waiting to be graded, a missing submission, or a late one. Cells are tinted the same way, and clicking a cell opens that student on the assignment page, where grading happens.',
   },
   {
     link: '/grades',
@@ -324,25 +293,6 @@ const OWNER_STEPS: FeatureStep[] = [
     placement: 'top',
     title: 'Create page',
     description: 'Click to create the page in your content repo and save it to the course.',
-  },
-  {
-    link: '/gitrepos',
-    title: 'GitHub repos',
-    description:
-      'This page mirrors every student and team repository created from your published coursework, pulled from your GitHub organization, so you can jump to any repo and confirm copies were created. This example course uses mock data with no real GitHub org, so the list here is empty.',
-  },
-  {
-    link: '/gitrepos',
-    selector: '[data-tour="gitrepos-refresh"]',
-    placement: 'bottom',
-    title: 'Refresh repositories',
-    description: 'Pull the latest repository list from your linked GitHub organization.',
-  },
-  {
-    link: '/repo-health',
-    title: 'Repo health',
-    description:
-      'Repo health surfaces patterns across student repositories, including commit timelines, contributor breakdowns, and flags for unusual activity, which helps you spot students who are stuck. Because this example course has no real repos, this view is empty here.',
   },
   {
     link: '/settings/general',
@@ -446,20 +396,6 @@ const STUDENT_STEPS: FeatureStep[] = [
     placement: 'top',
     title: 'Activity tabs',
     description: 'Switch between your recent feedback, team, and regrade activity.',
-  },
-  {
-    link: '/repos',
-    title: 'Your repositories',
-    description:
-      'Repositories are the units of coursework in the class, like labs, projects, and problem sets. Each one is your own GitHub repository, and the assignments inside it are GitHub issues you complete in that repo.',
-  },
-  {
-    link: '/repos',
-    selector: '[data-tour="repos-toggle"]',
-    placement: 'bottom',
-    title: 'Inside a repository',
-    description:
-      'Each repository is one of your coursework repos. Expand it to see its assignments and the resources your instructor attached, track how far along you are, then open the repo to start working.',
   },
   {
     link: '/assignments',

@@ -37,9 +37,21 @@ enum NotificationType {
   TA_REGRADE_ASSIGNED
 }
 
-enum AssignmentType {
+// How a Repository is provisioned: one git repo per student, or one per team.
+// (Was named AssignmentType before the coursework refactor; the name now
+// belongs to the kind of an Assignment.)
+enum RepositoryType {
   INDIVIDUAL
   GROUP
+}
+
+// What an Assignment points at. REPO assignments are GitHub issues in their
+// repository's student repos (graded); QUIZ and FORM assignments bind a quiz
+// or a form into a module and are structural only for now (no grade).
+enum AssignmentType {
+  REPO
+  QUIZ
+  FORM
 }
 
 enum TeamFormationMode {
@@ -50,6 +62,15 @@ enum TeamFormationMode {
 enum IssueStatus {
   OPEN
   CLOSED
+}
+
+// How a REPO assignment is submitted. ISSUE: Classmoji opens one GitHub issue
+// per student repo and closing it submits. REPO: no issue; any push to the
+// student repo's default branch submits, and the latest push (until graded)
+// is the submission time. Both grade on the same GitRepoAssignment row.
+enum SubmissionMode {
+  ISSUE
+  REPO
 }
 
 enum QuizStatus {
@@ -661,6 +682,10 @@ model ImportJob {
 // REPOSITORY & ASSIGNMENT (formerly Assignment & Issue)
 // ============================================================================
 
+// The GitHub provisioning unit: a template that becomes one git repo per
+// student or team. A repository has no module of its own: it is the storage a
+// REPO assignment points at, and one repository can serve assignments in
+// several modules. Grading weight lives on the Assignments, not here.
 model Repository {
   id                      String             @id @default(uuid())
   classroom_id            String
@@ -669,11 +694,8 @@ model Repository {
   template                String // Template repo name
   description             String?
   is_published            Boolean            @default(false)
-  weight                  Int                @default(100)
-  type                    AssignmentType
+  type                    RepositoryType
   tag_id                  String?
-  is_extra_credit         Boolean            @default(false)
-  drop_lowest_count       Int                @default(0)
   team_formation_mode     TeamFormationMode? @default(INSTRUCTOR)
   team_formation_deadline DateTime?
   max_team_size           Int?
@@ -697,8 +719,11 @@ model Repository {
   @@map("repositories")
 }
 
-// A Module is a single ordered list of mixed content items (pages, repos,
-// quizzes, slides). Membership and ordering live on ModuleItem.
+// A Module is the root unit of coursework: it owns assignments (via their
+// module_id) and carries an ordered list of content items (pages, slides,
+// quizzes, forms) on ModuleItem. Repositories are classroom-level storage that
+// REPO assignments point at. Modules have no weight; grading weight lives on
+// Assignment.
 model Module {
   id           String   @id @default(uuid())
   classroom_id String
@@ -714,8 +739,9 @@ model Module {
   created_at   DateTime @default(now())
   updated_at   DateTime @default(now()) @updatedAt
 
-  classroom Classroom    @relation(fields: [classroom_id], references: [id], onDelete: Cascade)
-  items     ModuleItem[]
+  classroom   Classroom    @relation(fields: [classroom_id], references: [id], onDelete: Cascade)
+  items       ModuleItem[]
+  assignments Assignment[]
 
   @@unique([classroom_id, title])
   @@index([classroom_id])
@@ -724,6 +750,9 @@ model Module {
 
 enum ModuleItemType {
   PAGE
+  // Deprecated legacy pointer: it no longer implies ownership (a repository
+  // reaches a module only through its assignments). Rows are kept read-only;
+  // no new ones are written and the UI ignores them.
   REPOSITORY
   QUIZ
   SLIDE
@@ -762,23 +791,56 @@ model ModuleItem {
   @@map("module_items")
 }
 
+/// Ledger written by the coursework phase-1 migration: pre-migration backups
+/// of the repository columns it dropped, and every report it produced
+/// (drop-lowest classrooms, repositories that sat in several modules,
+/// synthesized modules, zero-weight repositories, title collisions, summary).
+/// Read with SQL after `db:deploy`; dropped by a later cleanup migration once
+/// the owner has acted on it.
+model CourseworkMigrationReport {
+  id           String   @id @default(uuid())
+  kind         String
+  classroom_id String?
+  subject_id   String?
+  details      Json?
+  created_at   DateTime @default(now())
+
+  @@index([kind])
+  @@map("coursework_migration_report")
+}
+
+// A gradable unit inside a Module. Exactly one target matches `type`
+// (enforced by the assignments_type_target CHECK): REPO -> repository_id,
+// QUIZ -> quiz_id, FORM -> form_id. `weight` is the only grading weight:
+// course grade = weighted mean over graded non-extra-credit assignments,
+// plus extra credit on top. Weights need not sum to 100.
 model Assignment {
-  id               String    @id @default(uuid())
-  repository_id    String
+  id               String         @id @default(uuid())
+  module_id        String
+  type             AssignmentType
+  // Meaningful for type = REPO only; quiz/form assignments keep the default.
+  submission_mode  SubmissionMode @default(ISSUE)
+  repository_id    String?
+  quiz_id          String?        @unique
+  form_id          String?        @unique
   title            String
   slug             String? // Set once on creation from title, never updated
-  weight           Int       @default(100)
-  is_published     Boolean   @default(false)
-  description      String    @default("")
+  weight           Float          @default(100)
+  is_extra_credit  Boolean        @default(false)
+  is_published     Boolean        @default(false)
+  description      String         @default("")
   student_deadline DateTime?
   grader_deadline  DateTime?
-  tokens_per_hour  Int       @default(0)
+  tokens_per_hour  Int            @default(0)
   release_at       DateTime?
-  grades_released  Boolean   @default(false)
-  created_at       DateTime  @default(now())
-  updated_at       DateTime  @default(now()) @updatedAt
+  grades_released  Boolean        @default(false)
+  created_at       DateTime       @default(now())
+  updated_at       DateTime       @default(now()) @updatedAt
 
-  repository           Repository                    @relation(fields: [repository_id], references: [id], onDelete: Cascade)
+  module               Module                        @relation(fields: [module_id], references: [id], onDelete: Cascade)
+  repository           Repository?                   @relation(fields: [repository_id], references: [id], onDelete: Cascade)
+  quiz                 Quiz?                         @relation(fields: [quiz_id], references: [id], onDelete: Cascade)
+  form                 Form?                         @relation(fields: [form_id], references: [id], onDelete: Cascade)
   git_repo_assignments GitRepoAssignment[]
   pages                PageLink[]
   slides               SlideLink[]
@@ -786,6 +848,7 @@ model Assignment {
 
   @@unique([repository_id, title])
   @@index([repository_id])
+  @@index([module_id])
   @@map("assignments")
 }
 
@@ -808,6 +871,10 @@ model GitRepo {
   // Read-only provider data captured at import time (e.g. GitHub Classroom
   // points / commit count). Not part of live grading — for viewing only.
   metadata       Json?
+  // When the provider last told us about a push to this repo (the webhook's
+  // receipt time). Independent of any assignment's submission time, which
+  // freezes at the deadline; this is what "Last push" shows.
+  last_push_at   DateTime?
   created_at     DateTime    @default(now())
   updated_at     DateTime    @default(now()) @updatedAt
 
@@ -887,11 +954,14 @@ model AutogradingResult {
   @@map("autograding_results")
 }
 
+// One student's (or team's) submission for one assignment. In ISSUE mode the
+// row is the GitHub issue in their repo (id = issue id, provider_id = issue
+// id); in REPO mode there is no issue and both provider fields are null.
 model GitRepoAssignment {
   id                    String      @id @default(uuid())
   provider              GitProvider
-  provider_id           String // GitHub issue ID
-  provider_issue_number Int // Issue #number
+  provider_id           String? // GitHub issue ID (ISSUE mode only)
+  provider_issue_number Int? // Issue #number (ISSUE mode only)
   git_repo_id           String
   assignment_id         String
   status                IssueStatus @default(OPEN)
@@ -909,6 +979,7 @@ model GitRepoAssignment {
   analytics_snapshot GitRepoAnalyticsSnapshot?
 
   @@unique([provider, provider_id])
+  @@unique([git_repo_id, assignment_id])
   @@index([git_repo_id])
   @@index([assignment_id])
   @@map("git_repo_assignments")
@@ -1181,6 +1252,7 @@ model Quiz {
   repository   Repository?   @relation(fields: [repository_id], references: [id])
   attempts     QuizAttempt[]
   module_items ModuleItem[]
+  assignment   Assignment?
 
   @@index([classroom_id])
   @@index([repository_id])
@@ -1706,6 +1778,7 @@ model Form {
   revisions    FormRevision[]
   responses    FormResponse[]
   module_items ModuleItem[]
+  assignment   Assignment?
 
   @@unique([classroom_id, slug])
   @@index([classroom_id])

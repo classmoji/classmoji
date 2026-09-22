@@ -69,7 +69,7 @@
   },
   "dependencies": {
     "@infisical/sdk": "^5.0.2",
-    "@trigger.dev/sdk": "^4.4.4",
+    "@trigger.dev/sdk": "4.6.3",
     "dayjs": "^1.11.13",
     "dotenv": "^16.4.5",
     "highlight.js": "^11.11.1",
@@ -80,7 +80,7 @@
   },
   "devDependencies": {
     "@eslint/js": "^9.36.0",
-    "@trigger.dev/build": "^4.4.4",
+    "@trigger.dev/build": "4.6.3",
     "@types/async": "^3.2.25",
     "@types/js-cookie": "^3.0.6",
     "@types/jsonwebtoken": "^9.0.10",

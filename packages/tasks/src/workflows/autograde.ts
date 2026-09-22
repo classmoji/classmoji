@@ -16,7 +16,33 @@ const COMMIT_MESSAGE = 'Add/update Classmoji autograding workflow';
 // Results are reported by triggering this task via Trigger.dev's public REST
 // API (reachable from GitHub Actions; routes to the dev/deployed worker).
 const INGEST_TASK_ID = 'ingest_autograde_result';
-const TRIGGER_API_BASE = process.env.TRIGGER_API_URL || 'https://api.trigger.dev';
+
+/**
+ * The Trigger.dev API address that GitHub Actions can reach.
+ *
+ * Deliberately NOT `TRIGGER_API_URL`: inside a deployed worker the platform
+ * sets that to its own internal address (platform.internal.trigger.dev:44330),
+ * which is what the SDK should talk to but which does not exist from the
+ * public internet. Shipping it into a student's workflow made every report
+ * step fail silently (issue #391). Self-hosters set TRIGGER_PUBLIC_API_URL to
+ * their public Trigger URL; everyone else gets the cloud.
+ */
+export function publicTriggerApiBase(env: NodeJS.ProcessEnv = process.env): string {
+  const base = (env.TRIGGER_PUBLIC_API_URL || 'https://api.trigger.dev').replace(/\/+$/, '');
+  let host: string;
+  try {
+    host = new URL(base).hostname;
+  } catch {
+    throw new Error(`TRIGGER_PUBLIC_API_URL is not a URL: ${base}`);
+  }
+  if (host.includes('.internal.') || host === 'localhost' || host.startsWith('127.')) {
+    throw new Error(
+      `TRIGGER_PUBLIC_API_URL must be reachable from GitHub Actions; got ${base}. ` +
+        'Set it to your public Trigger.dev URL (https://api.trigger.dev for the cloud).'
+    );
+  }
+  return base;
+}
 
 type GitOrganizationLike = Parameters<typeof getGitProvider>[0];
 
@@ -57,7 +83,7 @@ export async function buildClassroomWorkflowYaml(
     multipleUse: true,
   });
   return generateClassroomWorkflow(tests, {
-    triggerUrl: `${TRIGGER_API_BASE}/api/v1/tasks/${INGEST_TASK_ID}/trigger`,
+    triggerUrl: `${publicTriggerApiBase()}/api/v1/tasks/${INGEST_TASK_ID}/trigger`,
     triggerToken,
     classroomSlug,
     hmacToken: signAutogradeCallbackToken(classroomSlug),

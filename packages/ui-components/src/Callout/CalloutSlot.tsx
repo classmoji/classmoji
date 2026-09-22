@@ -39,16 +39,18 @@ export function CalloutSlot({ id = DEFAULT_CALLOUT_SLOT_ID, className }: Callout
     ease: [0.4, 0, 1, 1] as [number, number, number, number],
   };
 
-  const baseClass =
-    'pointer-events-none fixed top-20 left-1/2 w-full max-w-2xl -translate-x-1/2 px-4';
+  const baseClass = 'pointer-events-none fixed left-1/2 w-full max-w-2xl -translate-x-1/2 px-4';
   const wrapperClass = className ? `${baseClass} ${className}` : baseClass;
 
   return (
-    // zIndex is set inline (not via a Tailwind class) so it applies even though this
-    // shared package's source isn't scanned by the consumer's Tailwind build. 60 keeps
-    // the callout above the sticky app header (z-50) so notifications aren't hidden
-    // behind the menu, while staying below antd modals (z-1000+).
-    <div className={wrapperClass} style={{ zIndex: 60 }}>
+    // top and zIndex are set inline (not via Tailwind classes) so they apply even
+    // though this shared package's source isn't scanned by the consumer's Tailwind
+    // build: a utility no app file happens to use (e.g. `top-20`) is never emitted,
+    // and the slot would sit flush against the top of the viewport. The sticky app
+    // header is a 52px card under ~30px of top padding (pt-7 at a 17px root font),
+    // so its bottom edge lands near 82px; 96px clears it with a gap. z 60 keeps the
+    // callout above that header (z-50) while staying below antd modals (z-1000+).
+    <div className={wrapperClass} style={{ top: 96, zIndex: 60 }}>
       <AnimatePresence mode="popLayout">
         {active ? (
           <motion.div

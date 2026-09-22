@@ -47,6 +47,7 @@ interface AssignmentRow {
   title: string;
   slug?: string | null;
   weight: number;
+  is_extra_credit?: boolean;
   is_published: boolean;
   description?: string;
   student_deadline?: Date | null;
@@ -62,9 +63,7 @@ interface RepositoryRow {
   slug?: string | null;
   description?: string | null;
   is_published: boolean;
-  weight: number;
   type: string;
-  is_extra_credit: boolean;
   team_formation_mode?: string | null;
   max_team_size?: number | null;
   assignments: AssignmentRow[];
@@ -121,9 +120,7 @@ export const reposResource: ResourceDefinition = {
           slug: r.slug ?? null,
           description: r.description ?? null,
           type: r.type,
-          weight: r.weight,
           is_published: r.is_published,
-          is_extra_credit: r.is_extra_credit,
           team_formation_mode: r.team_formation_mode ?? null,
           max_team_size: r.max_team_size ?? null,
           tag: r.tag?.name ?? null,
@@ -132,6 +129,7 @@ export const reposResource: ResourceDefinition = {
             title: a.title,
             slug: a.slug ?? null,
             weight: a.weight,
+            is_extra_credit: a.is_extra_credit ?? false,
             is_published: a.is_published,
             student_deadline: a.student_deadline ?? null,
             grader_deadline: a.grader_deadline ?? null,
@@ -164,8 +162,6 @@ export const reposResource: ResourceDefinition = {
           slug: r.slug ?? null,
           description: r.description ?? null,
           type: r.type,
-          weight: r.weight,
-          is_extra_credit: r.is_extra_credit,
           assignments: r.assignments.map(a => {
             const mine = byAssignment.get(a.id);
             return {
@@ -173,6 +169,7 @@ export const reposResource: ResourceDefinition = {
               title: a.title,
               slug: a.slug ?? null,
               weight: a.weight,
+              is_extra_credit: a.is_extra_credit ?? false,
               student_deadline: a.student_deadline ?? null,
               grades_released: a.grades_released,
               tokens_per_hour: a.tokens_per_hour,

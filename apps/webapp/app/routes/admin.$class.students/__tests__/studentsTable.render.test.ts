@@ -222,7 +222,8 @@ describe('StudentsTable with isOwner=true (the pre-existing view)', () => {
   it('does show the owner-only row actions', () => {
     const html = render({ students: rows, isOwner: true });
 
-    expect(html).toContain('View as');
+    // "View as" (impersonation) was removed from this list; View opens the report.
+    expect(html).not.toContain('View as');
     expect(html).toContain('Remove');
     expect(html).toContain('data-testid="table-action-view"');
   });

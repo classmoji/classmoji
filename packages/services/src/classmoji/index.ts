@@ -78,7 +78,6 @@ import * as contentImportService from './contentImport.service.ts';
 import * as templateImportService from './templateImport.service.ts';
 import * as classroomConfigImportService from './classroomConfigImport.service.ts';
 import * as githubClassroomImportService from './githubClassroomImport.service.ts';
-import * as githubClassroomApiService from './githubClassroomApi.service.ts';
 import * as githubUserTokenService from './githubUserToken.service.ts';
 import * as classroomInviteService from './classroomInvite.service.ts';
 import * as contentManifestService from './contentManifest.service.ts';
@@ -145,7 +144,6 @@ const ClassmojiService = {
   templateImport: templateImportService,
   classroomConfigImport: classroomConfigImportService,
   githubClassroomImport: githubClassroomImportService,
-  githubClassroomApi: githubClassroomApiService,
   githubUserToken: githubUserTokenService,
   classroomInvite: classroomInviteService,
   contentManifest: contentManifestService,
@@ -224,7 +222,6 @@ export {
   templateImportService,
   classroomConfigImportService,
   githubClassroomImportService,
-  githubClassroomApiService,
   githubUserTokenService,
   classroomInviteService,
   contentManifestService,

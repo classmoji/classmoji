@@ -2,9 +2,10 @@ import { useState } from 'react';
 import { Link, useParams } from 'react-router';
 import dayjs from 'dayjs';
 import { motion, useReducedMotion } from 'framer-motion';
-import { IconBrandGithub, IconCheck } from '@tabler/icons-react';
+import { IconCheck, IconExternalLink } from '@tabler/icons-react';
 import Emoji from '~/components/ui/display/Emoji';
 import TokenExtensionPopover from '~/components/features/TokenExtensionPopover';
+import { CommitCount } from '~/components/features/analytics';
 import { POP_SPRING } from '~/utils/motion';
 
 export type AssignmentStatus = 'current' | 'completed';
@@ -17,6 +18,9 @@ export interface AssignmentRow {
   status: AssignmentStatus;
   gradesReleased: boolean;
   studentDeadline: string | null;
+  repoUrl: string | null;
+  /** Commits in the student's repo, from the last analytics refresh. */
+  commitCount: number | null;
   issueUrl: string | null;
   grades: { id: string; emoji: string }[];
   gradersSummary: string;
@@ -131,7 +135,7 @@ const AssignmentsTabsCard = ({ rows, balance }: AssignmentsTabsCardProps) => {
               <thead className="text-xs font-semibold tracking-[0.08em] uppercase text-ink-3">
                 <tr className="border-b border-line">
                   <th className="text-left px-4 py-3 font-semibold">Repository</th>
-                  <th className="text-left px-4 py-3 font-semibold">Assignment</th>
+                  <th className="text-left px-4 py-3 font-semibold">Issue</th>
                   <th className="text-left px-4 py-3 font-semibold hidden md:table-cell">Type</th>
                   <th className="text-left px-4 py-3 font-semibold">Status</th>
                   <th className="text-left px-4 py-3 font-semibold hidden lg:table-cell">
@@ -158,28 +162,51 @@ const AssignmentsTabsCard = ({ rows, balance }: AssignmentsTabsCardProps) => {
                       className="border-b last:border-b-0 border-stone-100 dark:border-neutral-800/70 hover:bg-stone-50/70 dark:hover:bg-neutral-800/40 transition-colors align-top"
                     >
                       <td className="px-4 py-3 text-gray-600 dark:text-gray-300">
-                        <span className="block truncate max-w-[12rem]">
-                          {row.repositoryTitle || '—'}
-                        </span>
-                      </td>
-                      <td className="px-4 py-3">
-                        <div className="flex items-center gap-2">
-                          <span className="font-medium text-ink-0">
-                            {row.assignmentTitle}
-                          </span>
-                          {row.moduleType === 'INDIVIDUAL' && row.issueUrl && (
+                        {row.repoUrl ? (
+                          <span className="inline-flex items-center gap-2 min-w-0">
                             <a
-                              href={row.issueUrl}
+                              href={row.repoUrl}
                               target="_blank"
                               rel="noreferrer"
-                              title="View GitHub issue"
-                              aria-label="View GitHub issue"
-                              className="inline-flex items-center justify-center w-6 h-6 rounded-md text-gray-500 hover:text-gray-900 dark:text-gray-400 dark:hover:text-gray-100 hover:bg-nav-hover transition-colors"
+                              title="Open your repository on GitHub"
+                              className="inline-flex items-center gap-1.5 max-w-[12rem] rounded-md text-gray-700 dark:text-gray-200 hover:text-ink-0 hover:underline underline-offset-2 transition-colors"
                             >
-                              <IconBrandGithub size={14} />
+                              <span className="truncate">
+                                {row.repositoryTitle || 'Repository'}
+                              </span>
+                              <IconExternalLink
+                                size={13}
+                                className="shrink-0 text-gray-400 dark:text-gray-500"
+                              />
                             </a>
-                          )}
-                        </div>
+                            {row.commitCount !== null && (
+                              <CommitCount snapshot={{ total_commits: row.commitCount }} />
+                            )}
+                          </span>
+                        ) : (
+                          <span className="block truncate max-w-[12rem]">
+                            {row.repositoryTitle || '—'}
+                          </span>
+                        )}
+                      </td>
+                      <td className="px-4 py-3">
+                        {row.moduleType === 'INDIVIDUAL' && row.issueUrl ? (
+                          <a
+                            href={row.issueUrl}
+                            target="_blank"
+                            rel="noreferrer"
+                            title="Open the GitHub issue for this assignment"
+                            className="inline-flex items-center gap-1.5 font-medium text-ink-0 hover:underline underline-offset-2"
+                          >
+                            <span>{row.assignmentTitle}</span>
+                            <IconExternalLink
+                              size={13}
+                              className="shrink-0 text-gray-400 dark:text-gray-500"
+                            />
+                          </a>
+                        ) : (
+                          <span className="font-medium text-ink-0">{row.assignmentTitle}</span>
+                        )}
                       </td>
                       <td className="px-4 py-3 hidden md:table-cell text-gray-600 dark:text-gray-300">
                         {row.moduleType ? (
@@ -216,9 +243,10 @@ const AssignmentsTabsCard = ({ rows, balance }: AssignmentsTabsCardProps) => {
                         )}
                       </td>
                       <td className="px-4 py-3 hidden lg:table-cell">
-                        {row.status === 'completed' &&
-                        row.gradesReleased &&
-                        row.grades.length > 0 ? (
+                        {/* A released grade shows whether or not the student has
+                            submitted: staff can grade an open assignment (a zero,
+                            an extension), and hiding it read as "no grade". */}
+                        {row.gradesReleased && row.grades.length > 0 ? (
                           <div className="flex items-center gap-1">
                             {row.grades.slice(0, 4).map((g, idx) => (
                               <Emoji key={g.id ?? idx} emoji={g.emoji} fontSize={18} />

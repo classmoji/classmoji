@@ -117,7 +117,7 @@ const ModuleSpotlightCard = ({ repository, classSlug }: ModuleSpotlightCardProps
       className="rounded-2xl bg-panel ring-1 ring-line p-5 sm:p-6 h-full flex flex-col"
     >
       <div className="text-xs font-semibold tracking-[0.18em] text-ink-4">
-        MODULE #{repository.ordinal}
+        REPOSITORY #{repository.ordinal}
       </div>
       <h3 className="mt-1 text-lg sm:text-xl font-semibold text-ink-0 tracking-tight">
         {repository.title}
@@ -169,10 +169,10 @@ const ModuleSpotlightCard = ({ repository, classSlug }: ModuleSpotlightCardProps
           )}
         </div>
         <Link
-          to={`/student/${classSlug}/repos`}
+          to={`/student/${classSlug}/modules`}
           className="inline-flex items-center gap-1.5 text-xs sm:text-sm font-medium text-gray-700 dark:text-gray-200 px-3 py-1.5 rounded-full ring-1 ring-line bg-panel hover:bg-nav-hover transition-colors"
         >
-          View repository
+          View in Modules
           <IconArrowRight size={14} />
         </Link>
       </div>

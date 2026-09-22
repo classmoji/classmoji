@@ -2,10 +2,15 @@
  * Unit tests pinning WHO sees unpublished repositories, assignments and
  * attached resources.
  *
- * There are two repos loaders whose Prisma calls look almost identical:
+ * There are two repository-fetching loaders whose Prisma calls look almost
+ * identical:
  *
- *   - student.$class.repos  — filters `is_published: true` at the repository
- *     AND assignment level. This is what keeps drafts off the student surface.
+ *   - student.$class.modules — asks the module service for the published view
+ *     (`includeUnpublished: false`), which drops unpublished modules, items and
+ *     assignments, and REPO assignments whose repository is unpublished. This
+ *     is what keeps drafts off the student surface. (The separate student
+ *     repositories screen that used to do the same is gone; Modules is the
+ *     student surface now.)
  *   - assistant.$class_.repos — filters NOTHING. The teaching team is meant to
  *     see the classroom as it actually is (a teacher prepping next term has
  *     nothing but drafts), with drafts badged in the view instead of hidden.
@@ -17,10 +22,10 @@
  * loader and every student sees unreleased coursework. These tests assert the
  * ABSENCE of a filter as carefully as its presence, so either direction fails.
  *
- * student.$class.modules serves BOTH audiences from one loader, so its
- * repository include is a function of that route's own `isStaff` — derived from
- * the membership its gate returned, never from the URL prefix. The last test
- * here pins that specifically: role decides, prefix does not.
+ * student.$class.modules serves BOTH audiences from one loader, so the flag it
+ * hands the service is a function of that route's own `isStaff` — derived from
+ * the membership its gate returned, never from the URL prefix. The last tests
+ * here pin that specifically: role decides, prefix does not.
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -71,9 +76,9 @@ vi.mock('~/utils/routeAuth.server', () => ({
 vi.mock('~/components/features/modules/ReadOnlyModulesTree', () => ({ default: () => null }));
 vi.mock('~/components/features/modules/studentTree', () => ({
   buildRepositoryNode: () => ({}),
+  buildAssignmentLeaf: () => ({}),
   resourceLeaves: () => [],
 }));
-vi.mock('../student.$class.repos/ModuleAccordion', () => ({ default: () => null }));
 
 const CLASS_SLUG = 'cs52-26f';
 const CLASSROOM = { id: 'class-1', slug: CLASS_SLUG, status: 'ACTIVE', settings: {} };
@@ -104,42 +109,6 @@ const repositoryQuery = (callIndex = 0) =>
     };
   };
 
-/**
- * Every draft-filterable leg of the modules route's repository include, as
- * `{ leg: whereClause | undefined }`. Named so a failure says WHICH leg drifted,
- * and enumerated so a newly added leg that nobody made conditional shows up as a
- * missing key rather than passing silently.
- */
-const includeLegs = () => {
-  const { include } = repositoryQuery();
-  return {
-    assignments: include.assignments.where,
-    assignmentPages: include.assignments.include.pages.where,
-    assignmentSlides: include.assignments.include.slides.where,
-    pages: include.pages.where,
-    slides: include.slides.where,
-    quizzes: include.quizzes.where,
-  };
-};
-
-const STUDENT_LEGS = {
-  assignments: { is_published: true },
-  assignmentPages: { page: { is_draft: false } },
-  assignmentSlides: { slide: { is_draft: false } },
-  pages: { page: { is_draft: false } },
-  slides: { slide: { is_draft: false } },
-  quizzes: { status: 'PUBLISHED' },
-};
-
-const STAFF_LEGS = {
-  assignments: undefined,
-  assignmentPages: undefined,
-  assignmentSlides: undefined,
-  pages: undefined,
-  slides: undefined,
-  quizzes: undefined,
-};
-
 const asTeacher = () =>
   mocks.assertClassroomAccess.mockResolvedValue({
     userId: 'teacher-1',
@@ -166,27 +135,9 @@ beforeEach(() => {
   mocks.gitRepoFindMany.mockResolvedValue([]);
   mocks.findAllAssignmentsForStudent.mockResolvedValue([]);
   mocks.findLatestByGitRepoIds.mockResolvedValue(new Map());
-  // One module holding one repository item — without it the modules loader
-  // short-circuits the rich repository fetch and there is nothing to inspect.
   mocks.listForClassroom.mockResolvedValue([
-    { id: 'm1', title: 'Week 1', is_published: true, items: [] },
-    {
-      id: 'm2',
-      title: 'Week 2',
-      is_published: true,
-      items: [{ id: 'i1', item_type: 'REPOSITORY', repository_id: 'r1' }],
-    },
+    { id: 'm1', title: 'Week 1', is_published: true, items: [], assignments: [] },
   ]);
-});
-
-describe('the student repos loader hides everything unpublished', () => {
-  it('filters is_published at BOTH the repository and the assignment level', async () => {
-    await runLoader('student.$class.repos', `/student/${CLASS_SLUG}/repos`);
-
-    const query = repositoryQuery();
-    expect(query.where.is_published).toBe(true);
-    expect(query.include.assignments.where).toEqual({ is_published: true });
-  });
 });
 
 describe('the staff repos loader hides nothing', () => {
@@ -226,37 +177,46 @@ describe('the staff repos loader hides nothing', () => {
 });
 
 describe('the shared modules loader filters by ROLE, not by URL prefix', () => {
-  // Asserted as a whole object rather than leg by leg: every draft-filterable
-  // leg has to move together, and a leg someone adds later without making it
-  // conditional fails this as a missing key instead of slipping through.
-  it('gives a student every filter', async () => {
+  // The draft policy for modules lives in module.service.listForClassroom; the
+  // loader's whole job is to hand it the right flag. Asserted on the exact
+  // options object so a second, unfiltered call cannot slip in beside it.
+  const listOptions = () => mocks.listForClassroom.mock.calls[0][1];
+
+  it('asks for the published view for a student', async () => {
     await runLoader('student.$class.modules', `/student/${CLASS_SLUG}/modules`);
 
-    expect(includeLegs()).toEqual(STUDENT_LEGS);
+    expect(mocks.listForClassroom).toHaveBeenCalledTimes(1);
+    expect(listOptions()).toEqual({ includeUnpublished: false });
   });
 
-  it('gives staff none of them', async () => {
+  it('asks for everything for staff', async () => {
     asTeacher();
 
     await runLoader('student.$class.modules', `/teacher/${CLASS_SLUG}/modules`);
 
-    expect(includeLegs()).toEqual(STAFF_LEGS);
+    expect(listOptions()).toEqual({ includeUnpublished: true });
   });
 
   // If `isStaff` were ever sniffed from the pathname rather than taken from the
   // membership the gate returned, the prefix alone would change what comes back.
   // These two pin that it cannot.
-  it('gives a STUDENT the filtered include even under a staff prefix', async () => {
+  it('gives a STUDENT the published view even under a staff prefix', async () => {
     await runLoader('student.$class.modules', `/teacher/${CLASS_SLUG}/modules`);
 
-    expect(includeLegs()).toEqual(STUDENT_LEGS);
+    expect(listOptions()).toEqual({ includeUnpublished: false });
   });
 
-  it('gives a TEACHER the unfiltered include even under the student prefix', async () => {
+  it('gives a TEACHER everything even under the student prefix', async () => {
     asTeacher();
 
     await runLoader('student.$class.modules', `/student/${CLASS_SLUG}/modules`);
 
-    expect(includeLegs()).toEqual(STAFF_LEGS);
+    expect(listOptions()).toEqual({ includeUnpublished: true });
+  });
+
+  it('never fetches repositories itself', async () => {
+    await runLoader('student.$class.modules', `/student/${CLASS_SLUG}/modules`);
+
+    expect(mocks.repositoryFindMany).not.toHaveBeenCalled();
   });
 });

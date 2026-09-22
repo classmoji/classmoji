@@ -2,6 +2,7 @@ import { namedAction } from 'remix-utils/named-action';
 
 import { ClassmojiService } from '@classmoji/services';
 import { publishAssignment, syncAssignment } from './helpers';
+import { calculateContributions } from './contributions';
 import { ActionTypes } from '~/constants';
 import { requireClassroomAdmin, assertClassroomMutationAllowed } from '~/utils/routeAuth.server';
 import type { Route } from './+types/route';
@@ -51,48 +52,9 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
       return res;
     },
 
-    async updateAssignment() {
-      const { weight } = data;
-
-      const result = await ClassmojiService.repository.update(
-        assignmentId,
-        { weight },
-        classroom.id
-      );
-
-      return result;
-    },
-
-    async findUnenrolledStudents() {
-      const students = await ClassmojiService.classroomMembership.findUsersByRole(
-        classroom.id,
-        'STUDENT'
-      );
-      const student_ids = students.map(({ id }) => id);
-      const repositories = await ClassmojiService.gitRepo.findMany({
-        classroom_id: classroom.id,
-      });
-
-      const repositoriesToRemove: string[] = [];
-
-      const unenrolledStudents = new Map();
-
-      repositories.forEach(repo => {
-        if (!repo.student) return;
-        if (!student_ids.includes(repo.student.id)) {
-          unenrolledStudents.set(repo.student.id, repo.student);
-          repositoriesToRemove.push(repo.name);
-        }
-      });
-
-      return {
-        success:
-          unenrolledStudents.size > 0
-            ? 'Unenrolled students found'
-            : 'No unenrolled students found',
-        students: Array.from(unenrolledStudents.values()),
-        repositories: repositoriesToRemove,
-      };
+    // Group repos only: fan out one contribution-stats task per team repo.
+    async calculateContributions() {
+      return calculateContributions({ id: assignmentId }, classSlug);
     },
   });
 };

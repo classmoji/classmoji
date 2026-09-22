@@ -26,6 +26,7 @@ interface RepositoryAssignmentRecord {
   description?: string | null;
   release_at: Date | string | null;
   is_published?: boolean;
+  submission_mode?: 'ISSUE' | 'REPO' | null;
 }
 
 interface RepositoryRecord {

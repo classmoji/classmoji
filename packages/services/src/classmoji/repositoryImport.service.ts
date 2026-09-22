@@ -81,6 +81,7 @@ export const cloneTag = async (
 export const cloneAssignment = async (
   sourceAssignmentId: string,
   targetRepositoryId: string,
+  targetModuleId: string,
   options: { stripDeadlines?: boolean } = {},
   tx: RepositoryImportClient = getPrisma()
 ) => {
@@ -95,9 +96,12 @@ export const cloneAssignment = async (
   }
 
   const assignmentCreateData: unknown = {
+    module_id: targetModuleId,
+    type: 'REPO',
     repository_id: targetRepositoryId,
     title: sourceAssignment.title,
     weight: sourceAssignment.weight,
+    is_extra_credit: sourceAssignment.is_extra_credit,
     is_published: false,
     description: sourceAssignment.description || '',
     tokens_per_hour: sourceAssignment.tokens_per_hour || 0,
@@ -165,6 +169,37 @@ export const cloneQuiz = async (
 };
 
 /**
+ * Find or create the target classroom's counterpart of a source module, by
+ * title. Position/description are copied on create; an existing module of the
+ * same title is reused so repeated imports do not multiply modules. Created
+ * unpublished: importing never publishes anything by itself.
+ */
+export const ensureTargetModule = async (
+  sourceModule: {
+    title: string;
+    slug: string | null;
+    description: string | null;
+    position: number;
+  },
+  targetClassroomId: string,
+  tx: RepositoryImportClient = getPrisma()
+) => {
+  return tx.module.upsert({
+    where: { classroom_id_title: { classroom_id: targetClassroomId, title: sourceModule.title } },
+    create: {
+      classroom_id: targetClassroomId,
+      title: sourceModule.title,
+      slug: sourceModule.slug,
+      description: sourceModule.description,
+      position: sourceModule.position,
+      is_published: false,
+    },
+    update: {},
+    select: { id: true },
+  });
+};
+
+/**
  * Clone a repository to a target classroom
  * @param {string} sourceRepositoryId - Source repository ID
  * @param {string} targetClassroomId - Target classroom ID
@@ -182,6 +217,8 @@ export const cloneModule = async (
     includeAssignments?: boolean;
     includeQuizzes?: boolean;
     stripDeadlines?: boolean;
+    /** Module in the target classroom for the cloned assignments. Created from each source assignment's module when omitted. */
+    targetModuleId?: string;
   } = {},
   tx: RepositoryImportClient = getPrisma()
 ) => {
@@ -190,7 +227,7 @@ export const cloneModule = async (
   const sourceModule = await tx.repository.findUnique({
     where: { id: sourceRepositoryId },
     include: {
-      assignments: true,
+      assignments: { include: { module: true } },
       quizzes: true,
       tag: true,
     },
@@ -207,6 +244,26 @@ export const cloneModule = async (
     targetTagId = clonedTag.id;
   }
 
+  // A repository has no module; its assignments do. Reuse the caller's target
+  // module, or find/create the target classroom's counterpart of each source
+  // assignment's module by title.
+  const moduleIdMap: Record<string, string> = {};
+  const targetModuleFor = async (sourceAssignmentModule: {
+    id: string;
+    title: string;
+    slug: string | null;
+    description: string | null;
+    position: number;
+  }) => {
+    if (options.targetModuleId) return options.targetModuleId;
+    if (!moduleIdMap[sourceAssignmentModule.id]) {
+      moduleIdMap[sourceAssignmentModule.id] = (
+        await ensureTargetModule(sourceAssignmentModule, targetClassroomId, tx)
+      ).id;
+    }
+    return moduleIdMap[sourceAssignmentModule.id];
+  };
+
   // Create the repository
   const newModule = await tx.repository.create({
     data: {
@@ -216,11 +273,8 @@ export const cloneModule = async (
       template: sourceModule.template,
       description: sourceModule.description,
       is_published: false,
-      weight: sourceModule.weight,
       type: sourceModule.type,
       tag_id: targetTagId,
-      is_extra_credit: sourceModule.is_extra_credit,
-      drop_lowest_count: sourceModule.drop_lowest_count,
       team_formation_mode: sourceModule.team_formation_mode,
       team_formation_deadline: sourceModule.team_formation_deadline,
       max_team_size: sourceModule.max_team_size,
@@ -236,6 +290,7 @@ export const cloneModule = async (
     idMaps: {
       repositories: Record<string, string>;
       quizzes: Record<string, string>;
+      modules: Record<string, string>;
     };
   } = {
     repository: newModule,
@@ -245,15 +300,20 @@ export const cloneModule = async (
       // Source repository id → newly cloned repository id.
       repositories: { [sourceRepositoryId]: newModule.id },
       quizzes: {},
+      // Source module id → the target module its cloned assignments landed in.
+      modules: moduleIdMap,
     },
   };
 
   // Clone assignments
   if (includeAssignments && sourceModule.assignments.length > 0) {
     for (const assignment of sourceModule.assignments) {
+      const targetModuleId = await targetModuleFor(assignment.module);
+      if (options.targetModuleId) moduleIdMap[assignment.module.id] = options.targetModuleId;
       const clonedAssignment = await cloneAssignment(
         assignment.id,
         newModule.id,
+        targetModuleId,
         { stripDeadlines },
         tx
       );
@@ -309,6 +369,7 @@ export const cloneModulesWithRelations = async (
       idMaps: {
         repositories: Record<string, string>;
         quizzes: Record<string, string>;
+        modules: Record<string, string>;
       };
     } = {
       repositories: [],
@@ -318,6 +379,7 @@ export const cloneModulesWithRelations = async (
       idMaps: {
         repositories: {},
         quizzes: {},
+        modules: {},
       },
     };
 
@@ -347,6 +409,7 @@ export const cloneModulesWithRelations = async (
       results.quizzes.push(...cloneResult.quizzes);
       Object.assign(results.idMaps.repositories, cloneResult.idMaps.repositories);
       Object.assign(results.idMaps.quizzes, cloneResult.idMaps.quizzes);
+      Object.assign(results.idMaps.modules, cloneResult.idMaps.modules);
       emitProgress(onProgress, { done: index + 1, total });
     }
 
@@ -367,8 +430,6 @@ export const getModulesForImport = async (classroomId: string) => {
       title: true,
       template: true,
       type: true,
-      weight: true,
-      is_extra_credit: true,
       _count: {
         select: {
           assignments: true,

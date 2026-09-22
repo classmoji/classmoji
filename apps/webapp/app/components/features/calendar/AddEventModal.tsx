@@ -50,7 +50,8 @@ interface AssignmentOption {
   title: string;
   /** Always published today — the loaders do not offer unpublished ones. */
   is_draft?: boolean;
-  repository?: { title: string };
+  /** Null for quiz/form assignments, which have no repository. */
+  repository?: { title: string } | null;
 }
 
 export interface AddEventDefaults {

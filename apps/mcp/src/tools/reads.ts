@@ -160,11 +160,14 @@ export const listTeamsTool = mirrorResourceTool({
 export const listReposTool = mirrorResourceTool({
   resource: reposResource,
   name: 'list_repos',
-  title: 'List assignment containers (repos)',
+  title: 'List repositories',
   description:
-    'Assignment containers ("repos") with their due-dated assignments. Staff see all incl. ' +
-    'unpublished; students see published-only containers they have a git repo for, with their own ' +
-    'submission status per assignment (grades only after release). Any member.',
+    'Repositories (the storage: a template plus one git repo per student/team) with the ' +
+    'assignments that submit through them. A repository has no module or weight of its own; each ' +
+    'assignment and submission carries its submission_mode (REPO = push, ISSUE = close the issue) ' +
+    'and repo_url. Staff see all incl. unpublished; students see published-only repositories they ' +
+    'have a git repo for, with their own submission status per assignment (grades only after ' +
+    'release). Any member.',
 });
 
 export const myGradesTool = mirrorResourceTool({

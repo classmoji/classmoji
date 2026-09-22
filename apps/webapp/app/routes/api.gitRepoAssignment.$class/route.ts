@@ -121,16 +121,28 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
         );
       }
 
-      await HelperService.addGradeToGitRepoAssignment({
-        classroom,
-        gitRepoAssignment: { id: gitRepoAssignment.id },
-        // The UI always grades as the signed-in user; use the authenticated id
-        // rather than a client-supplied graderId.
-        graderId: userId,
-        grade,
-        studentId: gitRepoAssignment.git_repo.student_id ?? undefined,
-        teamId: gitRepoAssignment.git_repo.team_id ?? undefined,
-      });
+      try {
+        await HelperService.addGradeToGitRepoAssignment({
+          classroom,
+          gitRepoAssignment: { id: gitRepoAssignment.id },
+          // The UI always grades as the signed-in user; use the authenticated id
+          // rather than a client-supplied graderId.
+          graderId: userId,
+          grade,
+          studentId: gitRepoAssignment.git_repo.student_id ?? undefined,
+          teamId: gitRepoAssignment.git_repo.team_id ?? undefined,
+        });
+      } catch (error) {
+        // Outside the classroom's grading scale: the caller's mistake, said
+        // plainly instead of a 500.
+        if (error instanceof Error && /grading scale/.test(error.message)) {
+          return errorResponse(
+            { action: ActionTypes.ADD_GRADE_TO_GIT_REPO_ASSIGNMENT, error: error.message },
+            { status: 400 }
+          );
+        }
+        throw error;
+      }
 
       return {
         action: ActionTypes.ADD_GRADE_TO_GIT_REPO_ASSIGNMENT,

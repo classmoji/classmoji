@@ -128,3 +128,61 @@ describe('token.purchaseExtensionHours', () => {
     expect(txCreateMock).not.toHaveBeenCalled();
   });
 });
+
+describe('token.purchaseExtensionHours in REPO mode (a push is the submission)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    txFindManyMock.mockResolvedValue([]);
+    txFindFirstMock.mockResolvedValue({ balance_after: 100 });
+    txCreateMock.mockImplementation((args: { data: Record<string, unknown> }) => ({
+      id: 'tx-1',
+      ...args.data,
+    }));
+  });
+
+  const purchase = (hours = 1) =>
+    purchaseExtensionHours({
+      classroomId: 'class-1',
+      studentId: 'student-1',
+      gitRepoAssignmentId: 'gra-1',
+      hours,
+    });
+
+  it('lets a student who pushed late buy hours up to the push time', async () => {
+    const base = baseRepoAssignment();
+    graFindUniqueMock.mockResolvedValue({
+      ...base,
+      // Submitted (pushed) 2h1m after the deadline → 3 late hours (ceil).
+      status: 'CLOSED',
+      closed_at: new Date(base.assignment.student_deadline.getTime() + 2 * HOUR_MS + 60_000),
+      assignment: { ...base.assignment, submission_mode: 'REPO' },
+    });
+
+    await expect(purchase(3)).resolves.toBeTruthy();
+    await expect(purchase(4)).rejects.toThrow(/at most 3/);
+  });
+
+  it('charges up to now while nothing has been pushed yet', async () => {
+    const base = baseRepoAssignment();
+    graFindUniqueMock.mockResolvedValue({
+      ...base,
+      status: 'OPEN',
+      closed_at: null,
+      assignment: { ...base.assignment, submission_mode: 'REPO' },
+    });
+
+    // 6 hours past deadline (see baseRepoAssignment)
+    await expect(purchase(6)).resolves.toBeTruthy();
+    await expect(purchase(7)).rejects.toThrow(/at most 6/);
+  });
+
+  it('still refuses a CLOSED issue-mode submission', async () => {
+    graFindUniqueMock.mockResolvedValue({
+      ...baseRepoAssignment(),
+      status: 'CLOSED',
+      closed_at: new Date(),
+    });
+
+    await expect(purchase(1)).rejects.toThrow(/No purchasable late hours/);
+  });
+});

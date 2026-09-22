@@ -29,6 +29,8 @@ import {
   ok,
   OWNER_ONLY,
   OWNER_TEACHER,
+  requireClassroomCtx,
+  scopedNotFound,
   writeAudit,
 } from './shared.ts';
 
@@ -67,7 +69,7 @@ export const assignmentUpdateTool: ToolDefinition<AssignmentUpdateArgs> = {
       .datetime({ offset: true })
       .optional()
       .describe('New student deadline (ISO 8601, e.g. 2026-07-20T23:59:00-04:00)'),
-    weight: z.number().int().positive().max(10000).optional().describe('Grading weight'),
+    weight: z.number().positive().max(10000).optional().describe('Grading weight'),
     grades_released: z
       .boolean()
       .optional()
@@ -125,9 +127,12 @@ export const assignmentUpdateTool: ToolDefinition<AssignmentUpdateArgs> = {
 
 interface AssignmentCreateArgs {
   classroom: string;
+  module_id: string;
   repository_id: string;
+  submission_mode?: 'ISSUE' | 'REPO';
   title: string;
   weight?: number;
+  is_extra_credit?: boolean;
   description?: string;
   student_deadline?: string;
   grader_deadline?: string;
@@ -141,23 +146,31 @@ export const assignmentCreateTool: ToolDefinition<AssignmentCreateArgs> = {
   annotations: { destructive: false },
   title: 'Create an assignment',
   description:
-    'Creates an assignment (a due-dated, gradeable slice of a repo/lab) under an existing ' +
-    'repository (assignment container). Owner only. Creating it does NOT provision anything on ' +
+    'Creates a REPO assignment (due-dated, gradeable) in a module, submitting through an ' +
+    'existing repository (see list_repos). submission_mode REPO (default): the last push to the ' +
+    'student repo before the deadline is the submission, no issue is opened. ISSUE: Classmoji opens a GitHub issue in each ' +
+    'student repo and closing it submits. Owner only. Creating it does NOT provision anything on ' +
     'GitHub — the assignment reaches students only when its repo is published (repo_publish) or ' +
     'the next release runs. Created as a draft unless is_published is set.',
   scope: 'write',
   roles: OWNER_ONLY,
   inputSchema: {
     classroom: z.string().describe("Classroom reference as 'org/slug'"),
-    repository_id: z.string().uuid().describe('Parent repo (assignment container) id'),
-    title: z.string().min(1).max(200).describe('Assignment title (unique per repository)'),
-    weight: z
-      .number()
-      .int()
-      .positive()
-      .max(10000)
+    module_id: z.string().uuid().describe('Module the assignment belongs to (see list_modules)'),
+    repository_id: z
+      .string()
+      .uuid()
+      .describe('Repository students submit through (see list_repos)'),
+    submission_mode: z
+      .enum(['ISSUE', 'REPO'])
       .optional()
-      .describe('Grading weight (default 100)'),
+      .describe('REPO (default): a push submits. ISSUE: closing a GitHub issue submits.'),
+    title: z.string().min(1).max(200).describe('Assignment title (unique per repository)'),
+    weight: z.number().positive().max(10000).optional().describe('Grading weight (default 100)'),
+    is_extra_credit: z
+      .boolean()
+      .optional()
+      .describe('Extra credit: adds to the course grade without adding to its denominator'),
     description: z.string().max(10000).optional(),
     student_deadline: z
       .string()
@@ -183,15 +196,26 @@ export const assignmentCreateTool: ToolDefinition<AssignmentCreateArgs> = {
     is_published: z.boolean().optional().describe('Publish immediately (default false = draft)'),
   },
   handler: async (args, ctx) => {
-    // S1: the assignment row does not exist yet, so re-verify ownership of the
-    // PARENT container. classroom_id on the new row derives from the verified
-    // parent's repository_id — never from request input.
+    // S1: the assignment row does not exist yet, so verify BOTH cross-record
+    // references belong to this classroom: the module it lives in and the
+    // repository it submits through. Never trust request input for scope.
+    const classroom = requireClassroomCtx(ctx);
+    const module = await ClassmojiService.module.findById(args.module_id);
+    if (!module || module.classroom_id !== classroom.classroomId) {
+      throw scopedNotFound('Module');
+    }
     const repository = await loadRepositoryInClassroom(args.repository_id, ctx);
 
+    // The tool creates REPO assignments only (quiz/form assignments are a
+    // later phase).
     const data: Prisma.AssignmentUncheckedCreateInput = {
+      module_id: module.id,
+      type: 'REPO',
+      submission_mode: args.submission_mode ?? 'REPO',
       repository_id: repository.id,
       title: args.title,
       ...(args.weight !== undefined ? { weight: args.weight } : {}),
+      ...(args.is_extra_credit !== undefined ? { is_extra_credit: args.is_extra_credit } : {}),
       ...(args.description !== undefined ? { description: args.description } : {}),
       ...(args.student_deadline !== undefined
         ? { student_deadline: new Date(args.student_deadline) }
@@ -221,7 +245,12 @@ export const assignmentCreateTool: ToolDefinition<AssignmentCreateArgs> = {
       resource_type: 'ASSIGNMENT',
       resource_id: created.id,
       action: 'CREATE',
-      data: { tool: 'assignment_create', repository_id: repository.id, title: args.title },
+      data: {
+        tool: 'assignment_create',
+        repository_id: repository.id,
+        title: args.title,
+        submission_mode: args.submission_mode ?? 'REPO',
+      },
     });
 
     return ok({
@@ -229,8 +258,12 @@ export const assignmentCreateTool: ToolDefinition<AssignmentCreateArgs> = {
       assignment: {
         id: created.id,
         title: created.title,
+        module_id: created.module_id,
+        type: created.type,
+        submission_mode: created.submission_mode,
         repository_id: created.repository_id,
         weight: created.weight,
+        is_extra_credit: created.is_extra_credit,
         is_published: created.is_published,
         student_deadline: created.student_deadline?.toISOString() ?? null,
       },
@@ -251,8 +284,9 @@ export const assignmentDeleteTool: ToolDefinition<AssignmentDeleteArgs> = {
     'Permanently deletes an assignment. Owner only. THIS CANNOT BE UNDONE and cascades: it ' +
     'deletes every student/team submission for this assignment along with all their grades, ' +
     'grader assignments, regrade requests, token transactions, and analytics, plus its ' +
-    'page/slide/calendar links. It does NOT remove the GitHub issues already created in student ' +
-    'repos (they are orphaned), and it does NOT reconcile student token balances.',
+    'page/slide/calendar links. For an ISSUE-mode assignment it does NOT remove the GitHub issues ' +
+    'already created in student repos (they are orphaned), and it does NOT reconcile student ' +
+    'token balances.',
   scope: 'write',
   roles: OWNER_ONLY,
   inputSchema: {

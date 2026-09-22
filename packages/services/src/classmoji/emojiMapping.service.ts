@@ -1,5 +1,6 @@
 import getPrisma from '@classmoji/database';
 import type { Prisma } from '@prisma/client';
+import { SCORE_EMOJI_MAPPINGS } from '@classmoji/utils';
 
 type EmojiMappingInput = Prisma.EmojiMappingUncheckedCreateWithoutClassroomInput;
 
@@ -57,4 +58,22 @@ export const deleteEmojiMapping = async (classroomId: string, emoji: string) => 
       },
     },
   });
+};
+
+/**
+ * Give a classroom that has no grading scale the default one: the 0–100
+ * number scale in tens. Called once a classroom exists (after any config
+ * import, which may have copied a scale of its own), so a fresh classroom
+ * never lands on the Grades tab with nothing to grade with. A classroom that
+ * already has mappings is left exactly as it is.
+ */
+export const ensureDefaultScale = async (classroomId: string) => {
+  const prisma = getPrisma();
+  const existing = await prisma.emojiMapping.count({ where: { classroom_id: classroomId } });
+  if (existing > 0) return { seeded: false as const };
+  await prisma.emojiMapping.createMany({
+    data: SCORE_EMOJI_MAPPINGS.map(m => ({ classroom_id: classroomId, ...m })),
+    skipDuplicates: true,
+  });
+  return { seeded: true as const, count: SCORE_EMOJI_MAPPINGS.length };
 };

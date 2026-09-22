@@ -7,11 +7,7 @@ const GradeBadge = ({ grade }: GradeBadgeProps) => {
     return <span className="text-sm text-ink-4">—</span>;
   }
 
-  return (
-    <span className="text-sm font-medium text-ink-1 tabular-nums">
-      {grade.toFixed(1)}%
-    </span>
-  );
+  return <span className="text-sm font-medium text-ink-1 tabular-nums">{grade.toFixed(1)}%</span>;
 };
 
 export default GradeBadge;

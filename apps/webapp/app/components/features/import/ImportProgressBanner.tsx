@@ -304,8 +304,7 @@ const ImportProgressBanner = ({ job: initialJob, sourceName }: ImportProgressBan
           {/*
             The count alone is not actionable: a whole content phase can copy
             nothing and report "1 item skipped", which reads as a rounding error
-            rather than an empty classroom. Show the text, as the sibling
-            _user.import-classroom/StepProgress does. Capped at 6 — per-item
+            rather than an empty classroom. Show the text. Capped at 6 — per-item
             warnings on a large course can run to dozens.
           */}
           <ul className="ml-5 mt-1 list-disc text-xs text-amber-600 dark:text-amber-400">

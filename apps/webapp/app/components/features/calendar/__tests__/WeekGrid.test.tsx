@@ -674,7 +674,7 @@ describe('WeekGrid — linked resources on a block', () => {
     const html = render([linked(120, { ...deck, ...homework })], TUESDAY, weekOf(TUESDAY), LINKS);
 
     expect(html).toContain('href="https://slides.test/s-1"');
-    expect(html).toContain('href="/admin/cs52-26f/repos#landing-page"');
+    expect(html).toContain('href="/admin/cs52-26f/assignments/a-1"');
   });
 
   it('keeps the chips outside the event’s button', () => {

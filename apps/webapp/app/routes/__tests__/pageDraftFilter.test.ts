@@ -1,10 +1,10 @@
 /**
- * Unit tests pinning the repository query sent by two loaders: the student
- * repositories view (`student.$class.repos`) and the student dashboard
- * (`student.$class.dashboard`). Nothing else is covered here.
+ * Unit tests pinning the repository query sent by the student dashboard loader
+ * (`student.$class.dashboard`). Nothing else is covered here. (The student
+ * repositories view used to be pinned here too; that screen is gone.)
  *
  * Attached pages and attached slides are the same kind of resource to those
- * views: both render as a leaf under a repository or an assignment, and both
+ * view: both render as a leaf under a repository or an assignment, and both
  * carry an `is_draft` flag the author flips when the resource is ready. The
  * slide side has always been narrowed in the query; the page side is narrowed
  * so the two relations stay in step.
@@ -99,41 +99,14 @@ beforeEach(() => {
 });
 
 /**
- * The whole relation node a loader should send. `include` varies by route —
- * the repositories view takes the full row, the dashboard selects two columns
- * — so it is supplied per call while the filter and ordering stay fixed.
+ * The whole relation node the loader should send. `include` is supplied per
+ * call (the dashboard selects two columns) while the filter and ordering stay
+ * fixed.
  */
 const publishedPages = (include: unknown) => ({
   where: { page: { is_draft: false } },
   include,
   orderBy: { order: 'asc' },
-});
-const publishedSlides = (include: unknown) => ({
-  where: { slide: { is_draft: false } },
-  include,
-  orderBy: { order: 'asc' },
-});
-
-describe('the repositories view asks for published pages and slides alike', () => {
-  beforeEach(async () => {
-    const { loader } = await import('../student.$class.repos/route.tsx');
-    await loader(loaderArgs(`/student/${CLASS_SLUG}/repos`));
-  });
-
-  it('narrows the pages attached to a repository', () => {
-    expect(repositoryInclude().pages).toEqual(publishedPages({ page: true }));
-  });
-
-  it('narrows the pages attached to an assignment', () => {
-    expect(repositoryInclude().assignments.include.pages).toEqual(publishedPages({ page: true }));
-  });
-
-  it('leaves the slide relations narrowed exactly as before', () => {
-    expect(repositoryInclude().slides).toEqual(publishedSlides({ slide: true }));
-    expect(repositoryInclude().assignments.include.slides).toEqual(
-      publishedSlides({ slide: true })
-    );
-  });
 });
 
 describe('the dashboard spotlight counts the same set', () => {

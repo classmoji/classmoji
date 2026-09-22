@@ -145,6 +145,9 @@ beforeEach(() => {
   });
   mocks.assignmentFindById.mockResolvedValue({
     id: 'assignment-1',
+    // The classroom check reads the module; the repository is null for
+    // quiz/form assignments, so it is not what the action relies on.
+    module: { classroom_id: 'class-1' },
     repository: { classroom_id: 'class-1' },
     student_deadline: new Date('2026-01-01T00:00:00.000Z'),
   });

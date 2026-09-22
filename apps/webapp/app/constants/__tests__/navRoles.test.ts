@@ -131,6 +131,10 @@ describe('the assessment split', () => {
     expect(NAV.grading.roles).toContain('TEACHER');
   });
 
+  it('does not list Quizzes for a STUDENT: they reach a quiz through its module or Assignments', () => {
+    expect(NAV.quizzes.roles).not.toContain('STUDENT');
+  });
+
   it('offers quiz management to the whole teaching team', () => {
     for (const role of ['OWNER', 'TEACHER', 'ASSISTANT']) {
       expect(NAV.quizzes.roles).toContain(role);

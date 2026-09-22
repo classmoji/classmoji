@@ -152,6 +152,7 @@ export type {
   RemovedResourceLink,
   ResourceLinkSummary,
 } from './classmoji/resourceLink.service.ts';
+export { CLASSMOJI_BOT_EMAIL } from './classmoji/gitRepoAssignment.service.ts';
 export { AssignGradersError } from './classmoji/gitRepoAssignmentGrader.service.ts';
 export type {
   AssignGradersMethod,

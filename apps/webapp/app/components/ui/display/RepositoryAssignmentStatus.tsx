@@ -1,11 +1,15 @@
-import { Tag } from 'antd';
+import { Tag, Tooltip } from 'antd';
 
 interface RepositoryAssignmentStatusProps {
   repositoryAssignment?: {
     status?: 'OPEN' | 'CLOSED' | string;
+    /** Submission time: issue closed (ISSUE mode) or latest push (REPO mode). */
+    closed_at?: Date | string | null;
     num_late_hours?: number;
     extension_hours?: number;
     is_late_override?: boolean;
+    /** Any assignment shape; only `submission_mode` is read here. */
+    assignment?: object | null;
   } | null;
   isDropped?: boolean;
 }
@@ -20,21 +24,39 @@ const RepositoryAssignmentStatus = ({
   const hasExtension = extensionHours > 0;
   const isLateOverride = repositoryAssignment?.is_late_override;
   const isLate = hasLateHours && !isLateOverride;
+  // In REPO mode "submitted" means "has pushed"; say when, since a later push
+  // (until graded) moves it.
+  const isPushMode =
+    (repositoryAssignment?.assignment as { submission_mode?: string } | null | undefined)
+      ?.submission_mode === 'REPO';
+  const submittedAt = repositoryAssignment?.closed_at
+    ? new Date(repositoryAssignment.closed_at)
+    : null;
+  const submittedTip =
+    isPushMode && submittedAt
+      ? `Last push ${submittedAt.toLocaleString()}`
+      : isPushMode
+        ? 'A push to the repository is the submission'
+        : undefined;
 
   return (
     <div className="w-full">
       {/* Status Tags */}
       <div className="flex flex-wrap gap-1">
         {repositoryAssignment?.status === 'CLOSED' && (
-          <Tag color="green" bordered={false}>
-            Submitted
-          </Tag>
+          <Tooltip title={submittedTip}>
+            <Tag color="green" bordered={false}>
+              Submitted
+            </Tag>
+          </Tooltip>
         )}
 
         {repositoryAssignment?.status === 'OPEN' && (
-          <Tag color="red" bordered={false}>
-            Not submitted
-          </Tag>
+          <Tooltip title={isPushMode ? 'No push to the repository yet' : undefined}>
+            <Tag color="red" bordered={false}>
+              Not submitted
+            </Tag>
+          </Tooltip>
         )}
 
         {isLate && (

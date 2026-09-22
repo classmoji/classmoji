@@ -77,9 +77,15 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
       .filter(ra => ra.assignment?.is_published !== false)
       .map(ra => {
         const status = classifyStatus(ra);
+        // The student's (or their team's) own copy of the repository. With the
+        // student Repositories screen gone, this row is where they reach it.
+        const repoUrl =
+          gitOrgLogin && ra.git_repo?.name
+            ? `https://github.com/${gitOrgLogin}/${ra.git_repo.name}`
+            : null;
         const issueUrl =
-          gitOrgLogin && ra.git_repo?.name && ra.provider_issue_number
-            ? `https://github.com/${gitOrgLogin}/${ra.git_repo.name}/issues/${ra.provider_issue_number}`
+          repoUrl && ra.provider_issue_number
+            ? `${repoUrl}/issues/${ra.provider_issue_number}`
             : null;
         const gradersSummary = (ra.graders ?? [])
           .map(g => g.grader?.name)
@@ -87,18 +93,24 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
           .join(', ');
 
         // Late-hours: how many hours past the deadline the student still is, after
-        // subtracting any extension hours they've already bought with tokens. Only
-        // OPEN (not-yet-submitted) assignments can accrue late hours.
+        // subtracting any extension hours they've already bought with tokens. In
+        // ISSUE mode only OPEN (not-yet-submitted) assignments accrue late hours;
+        // in REPO mode the latest push is the submission, so a late push is late
+        // by that push's time.
         const extensionHours = (ra.token_transactions ?? [])
           .filter(t => t.type === 'PURCHASE')
           .reduce((sum, t) => sum + (t.hours_purchased ?? 0), 0);
         const deadlineMs = ra.assignment?.student_deadline
           ? new Date(ra.assignment.student_deadline).getTime()
           : null;
+        const isRepoMode = ra.assignment?.submission_mode === 'REPO';
+        const submittedAtMs = isRepoMode && ra.closed_at ? new Date(ra.closed_at).getTime() : null;
         const hoursPastDeadline =
-          deadlineMs !== null ? Math.max(0, Math.ceil((Date.now() - deadlineMs) / 3_600_000)) : 0;
+          deadlineMs !== null
+            ? Math.max(0, Math.ceil(((submittedAtMs ?? Date.now()) - deadlineMs) / 3_600_000))
+            : 0;
         const numLateHours =
-          ra.status === 'OPEN' ? Math.max(0, hoursPastDeadline - extensionHours) : 0;
+          isRepoMode || ra.status === 'OPEN' ? Math.max(0, hoursPastDeadline - extensionHours) : 0;
 
         return {
           id: ra.id,
@@ -110,6 +122,8 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
           studentDeadline: ra.assignment?.student_deadline
             ? new Date(ra.assignment.student_deadline).toISOString()
             : null,
+          repoUrl,
+          commitCount: ra.analytics_snapshot?.total_commits ?? null,
           issueUrl,
           grades: (ra.grades ?? []).map(g => ({ id: g.id, emoji: g.emoji })),
           gradersSummary,
@@ -156,9 +170,7 @@ const StudentAssignments = ({ loaderData }: Route.ComponentProps) => {
 
   return (
     <div className="min-h-full">
-      <h1 className="mt-2 mb-4 text-lg font-semibold text-ink-1">
-        Assignments
-      </h1>
+      <h1 className="mt-2 mb-4 text-lg font-semibold text-ink-1">Assignments</h1>
 
       <Suspense fallback={<Skeleton active paragraph={{ rows: 6 }} />}>
         <Await resolve={data} errorElement={null}>
