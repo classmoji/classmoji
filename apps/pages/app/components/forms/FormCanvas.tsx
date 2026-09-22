@@ -14,37 +14,25 @@
  * one and the dark one, chosen before paint, with no JavaScript in this
  * component and no flash. So both ship as a custom property and CSS picks.
  *
- * ── Why THREE selectors and not just `html.dark` ───────────────────────────
- * The card inside this canvas is styled with Tailwind's `dark:` utilities, and
- * this app's `tailwind.css` declares no `@custom-variant dark` — so in Tailwind
- * v4 those utilities compile to `@media (prefers-color-scheme: dark)`. The
- * canvas used to key on the `dark` CLASS that root.tsx's boot script adds: two
- * different sources of truth for one page. When they disagreed — a hydration
- * mismatch stripping the class was one real way (see `FormRenderer`), no JS is
- * another — the card went dark and the canvas stayed white. Making that
- * disagreement impossible is the whole point of the shape below.
+ * ── Why the class, and only the class ──────────────────────────────────────
+ * `tailwind.css` declares `@custom-variant dark (&:where(.dark, .dark *))`, so
+ * the card's `dark:` utilities key on the same `.dark` that root.tsx's boot
+ * script writes before first paint — from the OS, or from the `?theme=` the
+ * webapp passes when it frames one of these pages. One signal for the whole
+ * document, so the canvas cannot disagree with the card it wraps:
  *
- * The canvas now follows the SAME signal the card does, with the class as an
- * override on top:
+ *   `:root`      — light, the floor.
+ *   `html.dark`  — dark.
+ *   `html.light` — the explicit light `?theme=light` asks for.
  *
- *   1. `:root`                    — light, the floor.
- *   2. `@media (prefers-color-scheme: dark) :root:not(.light)`
- *                                 — dark whenever the card is dark: class or no
- *                                   class, JavaScript or none.
- *   3. `html.dark` / `html.light` — an EXPLICIT choice beats the OS.
+ * This block used to carry a `@media (prefers-color-scheme: dark)` branch too,
+ * from when the utilities were media-driven and the class could go missing
+ * under them. With the variant in place that branch was the last thing left
+ * that could paint a dark canvas around a light card, so it is gone.
  *
- * `.light` is the positive marker for forced light. `?theme=light` — the
- * appearance the webapp passes when it frames one of these pages — only ever
- * REMOVED the `dark` class, which is indistinguishable from "nobody expressed a
- * preference"; under rule 2 alone, a forced-light embed on a dark-mode machine
- * would have gone dark. So `APP_DARK_MODE_SCRIPT` in root.tsx now adds `light`
- * on that path and rule 2 steps aside for it. That branch of the script returns
- * before attaching the OS listener, so `.light` and `.dark` can never both be
- * present and rules 3 cannot fight each other.
- *
- * `color-scheme` rides the same three selectors, so the native controls this
- * page is made of — inputs, selects, checkboxes, the scrollbar — match the
- * surface they sit on.
+ * `color-scheme` rides the same selectors, so the native controls this page is
+ * made of — inputs, selects, checkboxes, the scrollbar — match the surface
+ * they sit on.
  *
  * `body` is painted too, so the overscroll area past the end of a long form
  * matches the canvas instead of showing the app's default background. The dark
@@ -73,9 +61,6 @@ export function FormCanvas({
     <>
       <style>{`
         :root { --forms-canvas: ${theme.background}; color-scheme: light; }
-        @media (prefers-color-scheme: dark) {
-          :root:not(.light) { --forms-canvas: ${theme.darkBackground}; color-scheme: dark; }
-        }
         html.dark { --forms-canvas: ${theme.darkBackground}; color-scheme: dark; }
         html.light { --forms-canvas: ${theme.background}; color-scheme: light; }
         body { background-color: var(--forms-canvas); }

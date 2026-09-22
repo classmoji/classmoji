@@ -312,10 +312,26 @@ const PageRoute = () => {
     [canEdit]
   );
 
+  /**
+   * BlockNote's theme follows the `dark` CLASS, not `prefers-color-scheme`.
+   *
+   * The class is what root.tsx's boot script maintains — from the OS, and from
+   * the `?theme=` the webapp passes when it frames this page — and, since
+   * `tailwind.css` declares `@custom-variant dark`, it is also what every
+   * `dark:` utility of the chrome around the editor keys on. Reading the media
+   * query here instead put the page's whole CONTENT surface on a different
+   * signal from everything around it, so a light-themed embed on a dark-mode
+   * machine drew a dark editor inside a light page. The observer keeps up with
+   * the OS listener the script attaches when no `?theme=` was given.
+   */
   useEffect(() => {
     setIsClient(true);
-    const isDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
-    if (isDark) setDarkMode(true);
+    const root = document.documentElement;
+    const sync = () => setDarkMode(root.classList.contains('dark'));
+    sync();
+    const observer = new MutationObserver(sync);
+    observer.observe(root, { attributes: true, attributeFilter: ['class'] });
+    return () => observer.disconnect();
   }, []);
 
   // Update title when page changes
