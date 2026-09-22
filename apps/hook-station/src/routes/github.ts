@@ -26,32 +26,78 @@ const webhooks = new Webhooks({
  * The payload guards that remain answer a different question — "does this
  * delivery carry the object the task needs" — and are not a substitute for the
  * event name.
+ *
+ * Every Trigger.dev run is billed, and the App is installed on organizations
+ * that never made a classroom, or made one and moved on. GitHub keeps sending
+ * their events regardless: every issue closed in any of their repos, every
+ * member they add. So each handler that can decide from the database whether
+ * the payload is ours does so HERE, with one indexed read, and triggers
+ * nothing when it is not. The tasks repeat the same lookup as a second line
+ * of defense; the point of doing it here first is that a miss costs a query
+ * instead of a run.
  */
+
+/** The GitRepoAssignment row an ISSUE-mode issue submits through, if any. */
+async function isTrackedIssue(data: WebhookEvent): Promise<boolean> {
+  if (!('issue' in data) || !data.issue) return false;
+  const row = await getPrisma().gitRepoAssignment.findUnique({
+    where: { provider_provider_id: { provider: 'GITHUB', provider_id: String(data.issue.id) } },
+    select: { id: true },
+  });
+  return row !== null;
+}
+
+/**
+ * Whether the organization in the payload has at least one classroom.
+ *
+ * A GitOrganization row alone is not enough: installing the App creates one,
+ * and plenty of orgs stop there. The member-added task activates the joiner's
+ * classroom memberships on this org, so with no classroom it has nothing to
+ * do; gating on the classroom, through the org's provider id in one joined
+ * read, is what turns those installs' joiners into a query instead of a run.
+ */
+async function isTrackedOrganization(data: WebhookEvent): Promise<boolean> {
+  if (!('organization' in data) || !data.organization) return false;
+  const row = await getPrisma().classroom.findFirst({
+    where: {
+      git_organization: { provider: 'GITHUB', provider_id: String(data.organization.id) },
+    },
+    select: { id: true },
+  });
+  return row !== null;
+}
+
 const githubWebhookHandlers: Record<string, (data: WebhookEvent) => Promise<void>> = {
-  // Assignment repos are tracked as issues in the classroom's org.
+  // ISSUE-mode submissions: the issue id is the GitRepoAssignment's provider
+  // id. Any other issue in the org (a REPO-mode student repo, a content repo,
+  // a repo that has nothing to do with Classmoji) is not ours.
   'issues.closed': async (data: WebhookEvent) => {
-    if ('issue' in data && data.issue) {
+    if ('issue' in data && data.issue && (await isTrackedIssue(data))) {
       await Tasks.repositoryAssignmentClosedHandlerTask.trigger(data);
     }
   },
 
   'issues.reopened': async (data: WebhookEvent) => {
-    if ('issue' in data && data.issue) {
+    if ('issue' in data && data.issue && (await isTrackedIssue(data))) {
       await Tasks.repositoryAssignmentReopenedHandlerTask.trigger(data);
     }
   },
 
   'issues.deleted': async (data: WebhookEvent) => {
-    if ('issue' in data && data.issue) {
+    if ('issue' in data && data.issue && (await isTrackedIssue(data))) {
       await Tasks.repositoryAssignmentDeletedHandlerTask.trigger(data);
     }
   },
 
-  // A brand-new member of a classroom's GitHub org.
+  // A brand-new member of a GitHub org that has a classroom. An org that
+  // installed the App and never created one has joiners with nothing to
+  // activate.
   'organization.member_added': async (data: WebhookEvent) => {
-    await Tasks.memberAddedHandlerTask.trigger(
-      data as unknown as Parameters<typeof Tasks.memberAddedHandlerTask.trigger>[0]
-    );
+    if (await isTrackedOrganization(data)) {
+      await Tasks.memberAddedHandlerTask.trigger(
+        data as unknown as Parameters<typeof Tasks.memberAddedHandlerTask.trigger>[0]
+      );
+    }
   },
 
   'installation.created': async (data: WebhookEvent) => {

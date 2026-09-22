@@ -17,6 +17,22 @@ const triggers = {
   appUnsuspended: vi.fn().mockResolvedValue(undefined),
 };
 
+// The route now asks the database whether an issue or an org is ours BEFORE
+// triggering anything: a Trigger.dev run is billed, and the App is installed
+// on organizations that never made a classroom. By default every lookup here
+// answers "found" so the dispatch tests below stay about dispatch; the gating
+// tests flip them to null.
+const gitRepoAssignmentFindUnique = vi.fn();
+const classroomFindFirst = vi.fn();
+
+vi.mock('@classmoji/database', () => {
+  const prisma = () => ({
+    gitRepoAssignment: { findUnique: gitRepoAssignmentFindUnique },
+    classroom: { findFirst: classroomFindFirst },
+  });
+  return { getPrisma: prisma, default: prisma };
+});
+
 vi.mock('@classmoji/tasks', () => ({
   default: {
     repositoryAssignmentClosedHandlerTask: { trigger: triggers.closed },
@@ -64,6 +80,8 @@ describe('github webhook route', () => {
 
   beforeEach(async () => {
     Object.values(triggers).forEach(t => t.mockClear());
+    gitRepoAssignmentFindUnique.mockReset().mockResolvedValue({ id: 'gra-1' });
+    classroomFindFirst.mockReset().mockResolvedValue({ id: 'classroom-1' });
     app = await buildApp();
   });
 
@@ -154,7 +172,11 @@ describe('github webhook route', () => {
   });
 
   it('triggers memberAdded for organization.member_added', async () => {
-    const payload = { action: 'member_added', member: { login: 'alice' } };
+    const payload = {
+      action: 'member_added',
+      member: { login: 'alice' },
+      organization: { id: 5, login: 'cs-org' },
+    };
     const body = JSON.stringify(payload);
     const res = await app.inject({
       method: 'POST',
@@ -167,7 +189,11 @@ describe('github webhook route', () => {
   });
 
   it('does not trigger memberAdded for team.member_added', async () => {
-    const payload = { action: 'member_added', member: { login: 'alice' } };
+    const payload = {
+      action: 'member_added',
+      member: { login: 'alice' },
+      organization: { id: 5, login: 'cs-org' },
+    };
     const body = JSON.stringify(payload);
     const res = await app.inject({
       method: 'POST',
@@ -322,6 +348,102 @@ describe('github webhook route', () => {
     expect(res.statusCode).toBe(200);
     expect(triggers.deleted).toHaveBeenCalledTimes(1);
     expect(triggers.appUninstalled).not.toHaveBeenCalled();
+  });
+
+  describe('events from organizations that are not ours', () => {
+    // The App is installed on orgs that never made a classroom, or made one
+    // and moved on. GitHub still sends every issue they close and every
+    // member they add. Each of those must cost one indexed read, never a run.
+
+    it('does not trigger the closed handler for an issue no assignment submits through', async () => {
+      gitRepoAssignmentFindUnique.mockResolvedValue(null);
+      const payload = { action: 'closed', issue: { id: 4242, number: 9 } };
+      const body = JSON.stringify(payload);
+      const res = await app.inject({
+        method: 'POST',
+        url: '/webhooks/callback/github',
+        headers: headersFor('issues', body),
+        payload: body,
+      });
+      expect(res.statusCode).toBe(200);
+      expect(triggers.closed).not.toHaveBeenCalled();
+      // Looked up by the GitHub issue id, which is the row's provider id.
+      expect(gitRepoAssignmentFindUnique).toHaveBeenCalledTimes(1);
+      expect(gitRepoAssignmentFindUnique).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { provider_provider_id: { provider: 'GITHUB', provider_id: '4242' } },
+        })
+      );
+    });
+
+    it('does not trigger the reopened or deleted handlers for an unknown issue', async () => {
+      gitRepoAssignmentFindUnique.mockResolvedValue(null);
+      for (const action of ['reopened', 'deleted']) {
+        const body = JSON.stringify({ action, issue: { id: 4242 } });
+        const res = await app.inject({
+          method: 'POST',
+          url: '/webhooks/callback/github',
+          headers: headersFor('issues', body),
+          payload: body,
+        });
+        expect(res.statusCode).toBe(200);
+      }
+      expect(triggers.reopened).not.toHaveBeenCalled();
+      expect(triggers.deleted).not.toHaveBeenCalled();
+    });
+
+    it('does not trigger memberAdded for an organization with no classroom', async () => {
+      // A GitOrganization row is not enough: installing the App creates one,
+      // and an org that stopped there has joiners with nothing to activate.
+      classroomFindFirst.mockResolvedValue(null);
+      const payload = {
+        action: 'member_added',
+        member: { login: 'alice' },
+        organization: { id: 777, login: 'someone-elses-org' },
+      };
+      const body = JSON.stringify(payload);
+      const res = await app.inject({
+        method: 'POST',
+        url: '/webhooks/callback/github',
+        headers: headersFor('organization', body),
+        payload: body,
+      });
+      expect(res.statusCode).toBe(200);
+      expect(triggers.memberAdded).not.toHaveBeenCalled();
+      expect(classroomFindFirst).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { git_organization: { provider: 'GITHUB', provider_id: '777' } },
+        })
+      );
+    });
+
+    it('does not trigger memberAdded when the payload carries no organization', async () => {
+      const payload = { action: 'member_added', member: { login: 'alice' } };
+      const body = JSON.stringify(payload);
+      const res = await app.inject({
+        method: 'POST',
+        url: '/webhooks/callback/github',
+        headers: headersFor('organization', body),
+        payload: body,
+      });
+      expect(res.statusCode).toBe(200);
+      expect(triggers.memberAdded).not.toHaveBeenCalled();
+      expect(classroomFindFirst).not.toHaveBeenCalled();
+    });
+
+    it('does not consult the database for installation events', async () => {
+      // Installation events are rare and always about us; they are not gated.
+      const body = JSON.stringify({ action: 'created', installation: { id: 99 } });
+      await app.inject({
+        method: 'POST',
+        url: '/webhooks/callback/github',
+        headers: headersFor('installation', body),
+        payload: body,
+      });
+      expect(triggers.newInstall).toHaveBeenCalledTimes(1);
+      expect(gitRepoAssignmentFindUnique).not.toHaveBeenCalled();
+      expect(classroomFindFirst).not.toHaveBeenCalled();
+    });
   });
 
   it('returns 200 with success but no trigger for unknown action', async () => {

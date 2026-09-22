@@ -19,6 +19,8 @@ Handlers are keyed `${X-GitHub-Event}.${action}` because GitHub reuses action wo
 | `installation.created` / `deleted` | Records or clears the classroom's GitHub App installation. |
 | `installation.suspend` / `unsuspend` | A suspended installation exists but mints no tokens. |
 
+Every Trigger.dev run is billed, and the App is installed on organizations that never created a classroom or stopped using one. GitHub sends their events regardless, so the route decides what is ours **before** triggering, with one indexed read each: a `push` must match a `GitRepo` or a classroom content repo, an `issues.*` event must match a `GitRepoAssignment` by issue id, and `organization.member_added` must match an org that has at least one classroom (a `GitOrganization` row alone, which every install creates, is not enough). A miss returns 200 and starts nothing. Installation events are not gated; they are rare and always about us.
+
 Pushes and `ISSUE`-mode events only affect `GitRepoAssignment` rows (the submission, unique per git repo + assignment). Autograding results arrive separately, through Trigger.dev's public API (`ingest_autograde_result`), not through this service.
 
 ## Local development
