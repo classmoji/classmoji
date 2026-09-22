@@ -308,7 +308,7 @@ const GradesTable = (props: GradesTableProps) => {
           {isLate(sub) ? 'Late · to grade' : 'To grade'}
         </Chip>
       );
-      tint = isLate(sub) ? 'bg-amber-50 dark:bg-amber-950/30' : 'bg-sky-50 dark:bg-sky-950/30';
+      if (isLate(sub)) tint = 'bg-amber-50 dark:bg-amber-950/30';
     } else if (sub.should_be_zero) {
       body = <Chip tone="red">Missing</Chip>;
       tint = 'bg-red-50 dark:bg-red-950/30';
@@ -637,10 +637,6 @@ const GradesTable = (props: GradesTableProps) => {
           />
         </ConfigProvider>
         <div className="flex items-center gap-4 pt-3 text-xs text-ink-3 flex-wrap">
-          <span className="inline-flex items-center gap-1.5">
-            <span className="w-3 h-3 rounded-sm bg-sky-50 ring-1 ring-sky-200 dark:bg-sky-950/40 dark:ring-sky-800" />
-            Submitted, to grade
-          </span>
           <span className="inline-flex items-center gap-1.5">
             <span className="w-3 h-3 rounded-sm bg-amber-50 ring-1 ring-amber-200 dark:bg-amber-950/40 dark:ring-amber-800" />
             Late
