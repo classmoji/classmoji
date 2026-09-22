@@ -1234,6 +1234,36 @@ export function assertClassroomMutationAllowed(args: ClassroomStatusInput): void
 }
 
 /**
+ * The classroom-status mutation gate (SEC4) as a RETURNED refusal rather than a
+ * thrown one — the shape a forms action needs.
+ *
+ * The decision is `assertClassroomMutationAllowed`'s, unchanged: a LOCKED or
+ * UNPUBLISHED classroom is read-only for everyone but its owner, and a form
+ * definition is classroom content like any other. Only the delivery differs.
+ * These actions are reached by `fetcher.submit`, and a THROWN Response from a
+ * fetcher escalates to the route's ErrorBoundary and unmounts the screen
+ * mid-edit; returning the platform's typed 403 as data lets the list (or the
+ * builder) show it in place.
+ *
+ * LIVES HERE rather than in apps/pages, where it started: the forms list now
+ * exists in the webapp too (`admin.$class.forms`), the webapp must not import
+ * from another app, and both surfaces have to refuse the same classrooms for
+ * the same reason. One copy, next to the rule it wraps.
+ */
+export function formMutationBlocked(classroom: { status?: string }, role: string): Response | null {
+  try {
+    assertClassroomMutationAllowed({
+      status: classroom.status as ClassroomStatusInput['status'],
+      role: role as ClassroomStatusInput['role'],
+    });
+    return null;
+  } catch (thrown) {
+    if (thrown instanceof Response) return thrown;
+    throw thrown;
+  }
+}
+
+/**
  * Assert access to a slide with comprehensive role-based and ownership-based checks.
  * Handles draft mode, public/private visibility, and team editing permissions.
  *

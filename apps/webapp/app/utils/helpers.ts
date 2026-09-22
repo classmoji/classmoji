@@ -228,6 +228,14 @@ export const addAuditLog = async ({
 export {
   assertClassroomAccess,
   assertClassroomMutationAllowed,
+  /**
+   * The same LOCKED/UNPUBLISHED mutation rule, RETURNED as the platform's typed
+   * 403 rather than thrown — the shape a fetcher-submitted action needs, since
+   * a thrown Response escalates to the route's ErrorBoundary and replaces the
+   * screen mid-interaction. Shared with apps/pages, which applies it to the
+   * same forms from its own list and builder.
+   */
+  formMutationBlocked,
   requireStudentAccess,
   /**
    * Throws a 403 Response unless the classroom holds an active PRO
