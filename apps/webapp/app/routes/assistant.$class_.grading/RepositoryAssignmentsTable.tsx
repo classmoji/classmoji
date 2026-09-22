@@ -14,6 +14,8 @@ import {
 } from '@tabler/icons-react';
 import {
   GitHubStatsPanel,
+  CommitCount,
+  type CommitCountSnapshot,
   type GitHubStatsSnapshot,
   type EligibleStudent,
 } from '~/components/features/analytics';
@@ -65,6 +67,7 @@ interface RepoAssignment {
   grades: GradeEntry[];
   git_repo: RepositoryInfo;
   provider_issue_number?: number | null;
+  analytics_snapshot?: CommitCountSnapshot | null;
 }
 
 interface ModuleItem {
@@ -348,8 +351,13 @@ const RepositoryAssignmentsTable = ({
     },
     {
       title: 'Repository',
-      dataIndex: ['git_repo', 'repository', 'title'],
       key: 'repository',
+      render: (_: unknown, record: RepoAssignment) => (
+        <span className="inline-flex items-center gap-2">
+          {record.git_repo.repository.title}
+          <CommitCount snapshot={record.analytics_snapshot} />
+        </span>
+      ),
       filters:
         active === 'all'
           ? repositories.map(({ title }: ModuleItem) => ({ text: title, value: title }))

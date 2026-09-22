@@ -1,5 +1,3 @@
-import { isScoreScheme, parseScoreEmoji } from '@classmoji/utils';
-import { useUser } from '~/hooks';
 import EmojisDisplay from './EmojisDisplay';
 
 interface Grade {
@@ -15,21 +13,10 @@ interface GradeBadgesProps {
 }
 
 /**
- * The grades on a submission, as badges, beside the grader control. On a
- * numeric scale the signed-in grader's own score is already in the score
- * field next to this, so it is not repeated here; only other graders' scores
- * show. Glyph scales show every emoji, as always.
+ * The grades on a submission, as badges, beside the grader control. Every
+ * grade shows, the signed-in grader's own included: both scales now grade
+ * through the hover picker, so there is no score field repeating it.
  */
-const GradeBadges = ({ grades, emojiMappings }: GradeBadgesProps) => {
-  const { user } = useUser();
-  const all = grades ?? [];
-  if (!isScoreScheme(Object.keys(emojiMappings))) return <EmojisDisplay grades={all} />;
-
-  const others = all.filter(
-    g => (g.grader_id ?? g.grader?.id) !== user?.id || parseScoreEmoji(g.emoji) === null
-  );
-  if (others.length === 0) return null;
-  return <EmojisDisplay grades={others} />;
-};
+const GradeBadges = ({ grades }: GradeBadgesProps) => <EmojisDisplay grades={grades ?? []} />;
 
 export default GradeBadges;

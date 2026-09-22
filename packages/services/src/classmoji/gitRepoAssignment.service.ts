@@ -117,6 +117,8 @@ export const findByClassroomId = async (classroomId: string) => {
     },
     include: {
       assignment: true,
+      // Commit count for the repository column, as of the last refresh.
+      analytics_snapshot: { select: { total_commits: true, last_commit_at: true, fetched_at: true } },
       grades: {
         include: {
           token_transaction: true,
@@ -185,6 +187,8 @@ export const findForUser = async (query: Prisma.GitRepoAssignmentWhereInput) => 
     where: query,
     include: {
       token_transactions: true,
+      // Commit count for the student's repository link.
+      analytics_snapshot: { select: { total_commits: true, last_commit_at: true, fetched_at: true } },
       git_repo: {
         include: {
           student: true,

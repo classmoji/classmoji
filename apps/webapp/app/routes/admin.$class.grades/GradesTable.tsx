@@ -46,7 +46,7 @@ interface Membership {
   letter_grade?: string | null;
 }
 
-/** A published assignment: one column. Standalone, never grouped. */
+/** A published assignment: one column, under its module's group header. */
 export interface GradebookAssignment {
   id: string;
   title: string;
@@ -55,6 +55,7 @@ export interface GradebookAssignment {
   type: string;
   module_id: string;
   module_title?: string;
+  created_at?: string | Date;
   repository_id?: string | null;
   student_deadline?: string | Date | null;
   submission_mode?: string;
@@ -69,7 +70,7 @@ export interface GradebookActivity {
   form: Record<string, Record<string, { submitted: boolean }>>;
 }
 
-/** Kept for the loader's payload; the grid no longer groups by module. */
+/** The classroom's modules, in course order: one column group each. */
 export interface GradebookModule {
   id: string;
   title: string;
@@ -88,7 +89,6 @@ type Submission = GitRepoAssignment & {
 
 type EmojiMappings = Record<string, number>;
 type RowFilter = 'all' | 'ungraded' | 'missing' | 'late';
-const TYPE_ORDER: Record<string, number> = { REPO: 0, QUIZ: 1, FORM: 2 };
 
 interface GradesTableProps {
   emojiMappings: EmojiMappings;
@@ -148,14 +148,15 @@ const Chip = ({
 };
 
 /**
- * The gradebook: students as rows, one column per published assignment in
- * deadline order, Total pinned beside the student. Read-only by design. Every
+ * The gradebook: students as rows, one column per published assignment
+ * grouped under its module, Total pinned beside the student. Read-only by design. Every
  * cell says where the submission stands and links to that student's row on the
  * assignment page, where grading happens.
  */
 const GradesTable = (props: GradesTableProps) => {
   const {
     emojiMappings,
+    modules = [],
     assignments,
     students,
     settings,
@@ -173,33 +174,33 @@ const GradesTable = (props: GradesTableProps) => {
   const base = `/${rolePrefix}/${classSlug}`;
   const { isDarkMode } = useDarkMode();
 
-  // Every published assignment is a column: grouped by type (repositories,
-  // quizzes, forms), and within a group in deadline order, undated last.
-  const columnsSpec = useMemo(
-    () =>
-      [...assignments].sort((x, y) => {
-        const tx = TYPE_ORDER[x.type] ?? 9;
-        const ty = TYPE_ORDER[y.type] ?? 9;
-        if (tx !== ty) return tx - ty;
-        const dx = x.student_deadline ? new Date(x.student_deadline).getTime() : Infinity;
-        const dy = y.student_deadline ? new Date(y.student_deadline).getTime() : Infinity;
-        return dx - dy || x.title.localeCompare(y.title);
-      }),
-    [assignments]
-  );
-  const groups = useMemo(
-    () =>
-      (
-        [
-          { type: 'REPO', title: 'Repositories' },
-          { type: 'QUIZ', title: 'Quizzes' },
-          { type: 'FORM', title: 'Forms' },
-        ] as const
+  // Every published assignment is a column, grouped under its module in the
+  // course's module order (the same shape as the student report); inside a
+  // module, columns run in the order the assignments were created.
+  const groups = useMemo(() => {
+    const byCreated = (x: GradebookAssignment, y: GradebookAssignment) =>
+      new Date(x.created_at ?? 0).getTime() - new Date(y.created_at ?? 0).getTime() ||
+      x.title.localeCompare(y.title);
+    const position = new Map(modules.map(m => [m.id, m.position]));
+    const byModule = new Map<string, { id: string; title: string; items: GradebookAssignment[] }>();
+    for (const a of assignments) {
+      const g = byModule.get(a.module_id) ?? {
+        id: a.module_id,
+        title: a.module_title ?? modules.find(m => m.id === a.module_id)?.title ?? 'Module',
+        items: [],
+      };
+      g.items.push(a);
+      byModule.set(a.module_id, g);
+    }
+    return [...byModule.values()]
+      .sort(
+        (g, h) =>
+          (position.get(g.id) ?? Infinity) - (position.get(h.id) ?? Infinity) ||
+          g.title.localeCompare(h.title)
       )
-        .map(g => ({ ...g, items: columnsSpec.filter(a => a.type === g.type) }))
-        .filter(g => g.items.length > 0),
-    [columnsSpec]
-  );
+      .map(g => ({ ...g, items: [...g.items].sort(byCreated) }));
+  }, [assignments, modules]);
+  const columnsSpec = useMemo(() => groups.flatMap(g => g.items), [groups]);
 
   const finalOf = (s: Student) => calculateStudentFinalGrade(s.git_repos, emojiMappings, settings);
   const rawOf = (s: Student) =>
@@ -363,9 +364,6 @@ const GradesTable = (props: GradesTableProps) => {
           >
             {assignment.title}
           </Link>
-          <span className="text-[11px] font-medium text-ink-4 truncate">
-            {assignment.module_title}
-          </span>
           <span className="text-[11px] font-medium text-ink-3">
             {assignment.weight}%{assignment.is_extra_credit ? ' EC' : ''}
             {due ? ` · due ${due}` : ''}
@@ -418,7 +416,7 @@ const GradesTable = (props: GradesTableProps) => {
     },
     ...groups.map(group => ({
       title: <span className="font-semibold">{group.title}</span>,
-      key: `group-${group.type}`,
+      key: `group-${group.id}`,
       className: 'border-l border-line',
       children: group.items.map(assignment => assignmentColumn(assignment)),
     })),

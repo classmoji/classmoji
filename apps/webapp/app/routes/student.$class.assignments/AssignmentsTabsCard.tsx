@@ -5,6 +5,7 @@ import { motion, useReducedMotion } from 'framer-motion';
 import { IconCheck, IconExternalLink } from '@tabler/icons-react';
 import Emoji from '~/components/ui/display/Emoji';
 import TokenExtensionPopover from '~/components/features/TokenExtensionPopover';
+import { CommitCount } from '~/components/features/analytics';
 import { POP_SPRING } from '~/utils/motion';
 
 export type AssignmentStatus = 'current' | 'completed';
@@ -18,6 +19,8 @@ export interface AssignmentRow {
   gradesReleased: boolean;
   studentDeadline: string | null;
   repoUrl: string | null;
+  /** Commits in the student's repo, from the last analytics refresh. */
+  commitCount: number | null;
   issueUrl: string | null;
   grades: { id: string; emoji: string }[];
   gradersSummary: string;
@@ -160,19 +163,26 @@ const AssignmentsTabsCard = ({ rows, balance }: AssignmentsTabsCardProps) => {
                     >
                       <td className="px-4 py-3 text-gray-600 dark:text-gray-300">
                         {row.repoUrl ? (
-                          <a
-                            href={row.repoUrl}
-                            target="_blank"
-                            rel="noreferrer"
-                            title="Open your repository on GitHub"
-                            className="inline-flex items-center gap-1.5 max-w-[12rem] rounded-md text-gray-700 dark:text-gray-200 hover:text-ink-0 hover:underline underline-offset-2 transition-colors"
-                          >
-                            <span className="truncate">{row.repositoryTitle || 'Repository'}</span>
-                            <IconExternalLink
-                              size={13}
-                              className="shrink-0 text-gray-400 dark:text-gray-500"
-                            />
-                          </a>
+                          <span className="inline-flex items-center gap-2 min-w-0">
+                            <a
+                              href={row.repoUrl}
+                              target="_blank"
+                              rel="noreferrer"
+                              title="Open your repository on GitHub"
+                              className="inline-flex items-center gap-1.5 max-w-[12rem] rounded-md text-gray-700 dark:text-gray-200 hover:text-ink-0 hover:underline underline-offset-2 transition-colors"
+                            >
+                              <span className="truncate">
+                                {row.repositoryTitle || 'Repository'}
+                              </span>
+                              <IconExternalLink
+                                size={13}
+                                className="shrink-0 text-gray-400 dark:text-gray-500"
+                              />
+                            </a>
+                            {row.commitCount !== null && (
+                              <CommitCount snapshot={{ total_commits: row.commitCount }} />
+                            )}
+                          </span>
                         ) : (
                           <span className="block truncate max-w-[12rem]">
                             {row.repositoryTitle || '—'}

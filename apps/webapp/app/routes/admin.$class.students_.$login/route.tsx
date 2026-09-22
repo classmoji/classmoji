@@ -384,23 +384,30 @@ const StudentReport = ({ loaderData }: Route.ComponentProps) => {
   // No letter cutoffs configured means no letter to show, not an F.
   const shownLetter = letters.length > 0 ? (membership.letter_grade ?? computedLetter) : null;
 
-  // Grouped by what the student did (repo, quiz, form), each group in
-  // deadline order. An assignment stands on its own; its module is a caption.
+  // Grouped by module, in the course's module order, so the report reads the
+  // way the course is organised rather than by what kind of thing each
+  // assignment is. Inside a module, items come in the order they were created.
   const sections = useMemo(() => {
-    const byDeadline = (x: Assignment, y: Assignment) => {
-      const dx = x.student_deadline ? new Date(x.student_deadline).getTime() : Infinity;
-      const dy = y.student_deadline ? new Date(y.student_deadline).getTime() : Infinity;
-      return dx - dy || x.title.localeCompare(y.title);
-    };
-    return (
-      [
-        { key: 'REPO', title: 'Repositories' },
-        { key: 'QUIZ', title: 'Quizzes' },
-        { key: 'FORM', title: 'Forms' },
-      ] as const
-    )
-      .map(g => ({ ...g, items: assignments.filter(a => a.type === g.key).sort(byDeadline) }))
-      .filter(g => g.items.length > 0);
+    const byCreated = (x: Assignment, y: Assignment) =>
+      new Date(x.created_at).getTime() - new Date(y.created_at).getTime() ||
+      x.title.localeCompare(y.title);
+    const groups = new Map<
+      string,
+      { key: string; title: string; position: number; items: Assignment[] }
+    >();
+    for (const a of assignments) {
+      const group = groups.get(a.module.id) ?? {
+        key: a.module.id,
+        title: a.module.title,
+        position: a.module.position ?? 0,
+        items: [],
+      };
+      group.items.push(a);
+      groups.set(a.module.id, group);
+    }
+    return [...groups.values()]
+      .sort((g, h) => g.position - h.position || g.title.localeCompare(h.title))
+      .map(g => ({ ...g, items: [...g.items].sort(byCreated) }));
   }, [assignments]);
 
   const saveNote = () =>
@@ -419,7 +426,6 @@ const StudentReport = ({ loaderData }: Route.ComponentProps) => {
     const Icon = meta?.icon;
     const due = fmt(a.student_deadline);
     const parts: string[] = [];
-    parts.push(a.module.title);
     if (a.type === 'REPO') parts.push(a.submission_mode === 'REPO' ? 'push' : 'issue');
     parts.push(`${a.weight}%${a.is_extra_credit ? ' extra credit' : ''}`);
     if (due) parts.push(`due ${due}`);
@@ -542,10 +548,13 @@ const StudentReport = ({ loaderData }: Route.ComponentProps) => {
     return (
       <li
         key={a.id}
-        className="flex items-center gap-4 px-4 py-3 rounded-xl bg-panel ring-1 ring-line"
+        // Fixed grid tracks so the status, grade and view columns sit at the
+        // same x on every row; in a flex row the title column shrank by however
+        // much the right side needed, and the pills drifted.
+        className="grid grid-cols-[18px_minmax(0,1fr)_16rem_auto_10rem_3.5rem] items-center gap-4 px-4 py-3 rounded-xl bg-panel ring-1 ring-line"
       >
-        {Icon && <Icon size={18} className="text-gray-400 shrink-0" />}
-        <div className="flex flex-col gap-0.5 w-72 min-w-0">
+        {Icon ? <Icon size={18} className="text-gray-400" /> : <span />}
+        <div className="flex flex-col gap-0.5 min-w-0">
           <Link
             to={href}
             className="font-semibold text-ink-1 truncate hover:underline underline-offset-2"
@@ -554,11 +563,10 @@ const StudentReport = ({ loaderData }: Route.ComponentProps) => {
           </Link>
           <span className="text-xs text-ink-3 truncate">{parts.join(' · ')}</span>
         </div>
-        <div className="w-64 shrink-0">{status}</div>
-        <div className="flex-1" />
-        {actions}
-        <div className="w-40 flex justify-end">{grade}</div>
-        <div className="w-14 flex justify-end">{view}</div>
+        <div>{status}</div>
+        <div className="flex justify-end">{actions}</div>
+        <div className="flex justify-end">{grade}</div>
+        <div className="flex justify-end">{view}</div>
       </li>
     );
   };
@@ -606,17 +614,15 @@ const StudentReport = ({ loaderData }: Route.ComponentProps) => {
             </span>
           </div>
         </div>
-        <span className="flex-1" />
-        <Button onClick={() => window.print()}>Print</Button>
       </div>
 
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-5">
         <Tile label="Total">
           {totals.finalNumericGrade >= 0 ? (
             <>
-              {Math.round(totals.finalNumericGrade * 10) / 10}{' '}
+              {Math.round(totals.finalNumericGrade * 10) / 10}
               {shownLetter && (
-                <Tag color="green" className="align-middle m-0 font-bold">
+                <Tag color="green" className="align-middle m-0 ml-2.5 font-bold">
                   {shownLetter}
                 </Tag>
               )}

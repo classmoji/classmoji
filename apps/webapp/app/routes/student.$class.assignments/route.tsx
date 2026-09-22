@@ -123,6 +123,7 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
             ? new Date(ra.assignment.student_deadline).toISOString()
             : null,
           repoUrl,
+          commitCount: ra.analytics_snapshot?.total_commits ?? null,
           issueUrl,
           grades: (ra.grades ?? []).map(g => ({ id: g.id, emoji: g.emoji })),
           gradersSummary,

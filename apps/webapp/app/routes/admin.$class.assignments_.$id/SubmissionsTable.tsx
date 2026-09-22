@@ -23,6 +23,7 @@ import { openRepositoryAssignmentInGithub } from '~/utils/helpers.client';
 import type { AssignmentRowData } from '~/components/features/assignments/AssignmentsTable';
 import ImportedBadge from './ImportedBadge';
 import GradeBadges from '~/components/features/grading/GradeBadges';
+import { CommitCount } from '~/components/features/analytics';
 import AutogradingResultPill from '~/components/features/AutogradingResultPill';
 import { type AutogradingResultData } from '~/components/features/AutogradingResultCard';
 
@@ -49,7 +50,11 @@ export interface SubmissionRow {
   is_late_override?: boolean;
   grades?: AssignmentGrade[];
   graders?: AssignmentGraderRef[];
-  analytics_snapshot?: { last_commit_at?: string | Date | null } | null;
+  analytics_snapshot?: {
+    last_commit_at?: string | Date | null;
+    total_commits?: number | null;
+    fetched_at?: string | Date | null;
+  } | null;
   repository?: { name: string; [key: string]: unknown } | null;
   assignment: { weight: number; submission_mode?: string; [key: string]: unknown };
   studentId?: string | null;
@@ -235,6 +240,7 @@ const SubmissionsTable = ({
               <IconBrandGithub size={14} className="shrink-0 text-gray-400" />
               <span className="truncate">{repo.name}</span>
             </a>
+            <CommitCount snapshot={repo.submission?.analytics_snapshot} className="ml-1" />
             {projectUrl && (
               <Tooltip title="Open Project">
                 <Button

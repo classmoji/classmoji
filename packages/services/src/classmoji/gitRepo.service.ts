@@ -52,7 +52,9 @@ export const findByRepository = async (classroomSlug: string, repositoryId: stri
           assignment: true,
           // Latest commit seen per submission row; the page shows the newest
           // across the repo as "last push".
-          analytics_snapshot: { select: { last_commit_at: true, fetched_at: true } },
+          analytics_snapshot: {
+            select: { total_commits: true, last_commit_at: true, fetched_at: true },
+          },
           grades: {
             include: {
               token_transaction: true,

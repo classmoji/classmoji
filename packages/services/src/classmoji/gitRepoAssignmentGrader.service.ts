@@ -155,6 +155,7 @@ export const findAssignedByGrader = async (graderId: string, classroomId: string
       git_repo_assignment: {
         include: {
           assignment: true,
+          analytics_snapshot: { select: { total_commits: true, last_commit_at: true, fetched_at: true } },
           grades: {
             include: {
               token_transaction: true,

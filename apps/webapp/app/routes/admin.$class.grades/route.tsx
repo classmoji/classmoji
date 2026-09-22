@@ -92,6 +92,7 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
           quiz_id: a.quiz_id,
           form_id: a.form_id,
           student_deadline: a.student_deadline,
+          created_at: a.created_at,
           submission_mode: a.submission_mode,
           grades_released: a.grades_released,
         }))
