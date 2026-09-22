@@ -3,7 +3,12 @@ import type { Role } from '@prisma/client';
 
 import { prisma, ClassmojiService, getAuthSession } from '~/utils/db.server.ts';
 import { siteHeaders } from './headers.server.ts';
-import { customDomainOrigin, siteOrigin } from './env.server.ts';
+import { siteOrigin } from './env.server.ts';
+// IMPORTED as well as re-exported below. `export { x } from 'y'` forwards a
+// name without binding it locally, so the two loaders further down that CALL
+// these would be a ReferenceError on every class-site page — which is exactly
+// what happened when this module first stopped defining them.
+import { canonicalOriginForSite, seoOriginFor } from '@classmoji/services';
 
 /**
  * Site types are derived from the service's own return type rather than
