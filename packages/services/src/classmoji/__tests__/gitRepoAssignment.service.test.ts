@@ -257,7 +257,11 @@ describe('recordExistingPush', () => {
       classroom: { git_organization: { login: 'acme', provider: 'GITHUB' } },
     },
   });
-  const commit = (ts: string, author: string | null = 'alice') => ({ ts, author_login: author });
+  const commit = (ts: string, author: string | null = 'alice', email: string | null = null) => ({
+    ts,
+    author_login: author,
+    author_email: email,
+  });
 
   it("stamps the student's latest push as the submission", async () => {
     findUniqueMock.mockResolvedValue(rowFor(new Date('2026-09-30T00:00:00.000Z')));
@@ -272,15 +276,26 @@ describe('recordExistingPush', () => {
     });
   });
 
-  it('ignores the template commit made when the repo was created, and bot commits', async () => {
+  it("ignores bot commits, the Classmoji Bot's template commit, and the template's history", async () => {
     findUniqueMock.mockResolvedValue(rowFor(null));
     listCommitsMock.mockResolvedValue([
       commit('2026-09-18T10:00:00.000Z', 'classmoji[bot]'),
-      commit('2026-09-01T10:00:30.000Z'),
+      commit('2026-09-01T10:00:30.000Z', null, 'hello@classmoji.com'),
+      commit('2026-08-20T10:00:00.000Z', 'template-author'),
     ]);
 
     expect(await recordExistingPush('ra-1')).toBeNull();
     expect(updateManyMock).not.toHaveBeenCalled();
+  });
+
+  it('counts a student push made right after provisioning', async () => {
+    findUniqueMock.mockResolvedValue(rowFor(null));
+    listCommitsMock.mockResolvedValue([
+      commit('2026-09-01T10:01:40.000Z', 'alice', 'alice@school.edu'),
+      commit('2026-09-01T10:00:30.000Z', null, 'hello@classmoji.com'),
+    ]);
+
+    expect(await recordExistingPush('ra-1')).toEqual(new Date('2026-09-01T10:01:40.000Z'));
   });
 
   it('leaves a push after the deadline unsubmitted, as the webhook would', async () => {

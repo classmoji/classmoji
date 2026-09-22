@@ -300,16 +300,22 @@ export const recordPush = async (gitRepoId: string, pushedAt: Date) => {
   return open.map(c => ({ id: c.id }));
 };
 
-/** How long after the student repo was created a commit must land to count as the student's own push. */
-const TEMPLATE_COMMIT_GRACE_MS = 2 * 60_000;
+/**
+ * The identity the provisioning task commits as when it copies the template
+ * into a student repo (see packages/tasks createRepository). Its commits are
+ * never a student's push.
+ */
+export const CLASSMOJI_BOT_EMAIL = 'hello@classmoji.com';
 
 /**
  * A push-mode submission row created for a repo that already holds work: the
  * student's latest push before the deadline counts as their submission,
  * exactly as one arriving through the webhook would. Reads the repo's recent
  * commits and skips what is not the student's: bot commits (autograding
- * workflow pushes) and anything within a couple of minutes of the repo's
- * creation, which is the template being copied in. Only fills an empty
+ * workflow pushes), the Classmoji Bot's own template commit, and anything
+ * dated before the repo existed (the template's history, pushed as-is). A
+ * student who pushes seconds after provisioning still counts; an earlier
+ * two-minute grace window used to swallow that push. Only fills an empty
  * `closed_at`; a push after the deadline leaves the row unsubmitted, as the
  * webhook path does. Returns the time recorded, or null.
  */
@@ -337,10 +343,11 @@ export const recordExistingPush = async (gitRepoAssignmentId: string) => {
   const commits = await getGitProvider(gitOrg).listCommits(gitOrg.login, row.git_repo.name, {
     maxCommits: 10,
   });
-  const notBefore = new Date(row.git_repo.created_at).getTime() + TEMPLATE_COMMIT_GRACE_MS;
+  const createdAt = new Date(row.git_repo.created_at).getTime();
   const own = commits.find(c => {
     if (c.author_login?.endsWith('[bot]')) return false;
-    return new Date(c.ts).getTime() > notBefore;
+    if (c.author_email?.toLowerCase() === CLASSMOJI_BOT_EMAIL) return false;
+    return new Date(c.ts).getTime() > createdAt;
   });
   if (!own) return null;
   const pushedAt = new Date(own.ts);
