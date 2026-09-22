@@ -1,6 +1,6 @@
 import { Modal, Form, Input, Alert } from 'antd';
 import { useNavigate, useParams } from 'react-router';
-import { useEffect } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import { auth, tasks } from '@trigger.dev/sdk';
 import { nanoid } from 'nanoid';
 import { ClassmojiService, getGitProvider, GitHubProvider } from '@classmoji/services';
@@ -34,19 +34,35 @@ const UpdateRepositories = ({ loaderData }: Route.ComponentProps) => {
     show();
   }, []);
 
+  // Leave only once the update has round-tripped: closing on the same tick as
+  // submit() unmounted this route and cancelled the request. The fetcher can
+  // still read idle right after submit(), so wait for idle→busy→idle.
+  const [submitting, setSubmitting] = useState(false);
+  const sawBusyRef = useRef(false);
+  useEffect(() => {
+    if (!submitting) return;
+    if (fetcher!.state !== 'idle') {
+      sawBusyRef.current = true;
+      return;
+    }
+    if (!sawBusyRef.current) return;
+    sawBusyRef.current = false;
+    setSubmitting(false);
+    close();
+    navigate(-1);
+  }, [submitting, fetcher!.state, close, navigate]);
+
   const onSubmit = () => {
     form
       .validateFields()
       .then(() => {
         const values = form.getFieldsValue();
+        setSubmitting(true);
         fetcher!.submit(JSON.stringify({ values, repository }), {
           method: 'post',
           action: `/admin/${classSlug}/repos/update`,
           encType: 'application/json',
         });
-
-        close();
-        navigate(-1);
       })
       .catch(errorInfo => {
         console.error('Validation Failed:', errorInfo);

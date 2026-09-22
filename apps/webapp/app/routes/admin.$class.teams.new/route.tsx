@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router';
 import { namedAction } from 'remix-utils/named-action';
 import { Input, Modal, Form, Radio, Select } from 'antd';
@@ -54,13 +54,34 @@ const AdminNewTeam = ({ loaderData }: Route.ComponentProps) => {
 
     notify(ActionTypes.SAVE_TEAM, 'Creating team...');
 
+    setSubmitting(true);
     fetcher!.submit(
       { name, tags: tagsList, visibility },
       { method: 'post', encType: 'application/json', action: '?/createTeam' }
     );
-
-    navigate(-1);
   };
+
+  // Leave only once the create has round-tripped. Navigating away on the
+  // same tick as submit() unmounted this route and cancelled the request, so
+  // the team was never created (a fresh tab made it obvious: "back" was the
+  // new-tab page). The fetcher can still read idle on the render right after
+  // submit(), hence waiting for the idle→busy→idle transition.
+  const [submitting, setSubmitting] = useState(false);
+  const sawBusyRef = useRef(false);
+  useEffect(() => {
+    if (!submitting) return;
+    if (fetcher!.state !== 'idle') {
+      sawBusyRef.current = true;
+      return;
+    }
+    if (!sawBusyRef.current) return;
+    sawBusyRef.current = false;
+    setSubmitting(false);
+    const data = fetcher!.data as { error?: string } | undefined;
+    if (data?.error) return; // the global fetcher surfaces it; keep the form open
+    close();
+    navigate(-1);
+  }, [submitting, fetcher!.state, fetcher!.data, close, navigate]);
 
   return (
     <>
