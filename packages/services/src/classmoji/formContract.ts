@@ -127,6 +127,24 @@ export function formContractError(
   return Object.assign(new Error(message), { code, ...(details?.issues ? details : {}) });
 }
 
+// ─── Gallery roles ──────────────────────────────────────────────────────────
+// Which answer a project-gallery card reads. A key on an input field, stored in
+// the revision like any other def key, so a response renders against the roles
+// it was filled under. Non-gallery forms carry and ignore them.
+
+export const GALLERY_ROLES = [
+  'title',
+  'tagline',
+  'summary',
+  'icon',
+  'cover',
+  'team',
+  'tags',
+  'link',
+  'detail',
+] as const;
+export type GalleryRole = (typeof GALLERY_ROLES)[number];
+
 // ─── Primitives ─────────────────────────────────────────────────────────────
 
 const mintId = (): string => globalThis.crypto.randomUUID();
@@ -252,6 +270,7 @@ const inputFieldBase = {
   description: helpText.optional(),
   required: z.boolean().default(false),
   placeholder: z.string().max(FORM_LIMITS.MAX_LABEL_CHARS).optional(),
+  gallery_role: z.enum(GALLERY_ROLES).optional(),
 };
 
 // ─── Definition schemas, per type ───────────────────────────────────────────
@@ -785,6 +804,19 @@ export const fieldSchema: z.ZodTypeAny = fieldDispatch(() => FIELD_TYPES);
 /** A normalized field, after parse. Structure is per-type; `id` is always set. */
 export type FormField = { id: string; type: FormFieldType } & Record<string, unknown>;
 
+/** The field types each gallery role can read an answer from. */
+export const GALLERY_ROLE_TYPES: Record<GalleryRole, readonly FormFieldType[]> = {
+  title: ['short_text'],
+  tagline: ['short_text'],
+  icon: ['short_text'],
+  cover: ['short_text'],
+  link: ['short_text'],
+  summary: ['long_text'],
+  detail: ['long_text'],
+  team: ['roster_select'],
+  tags: ['multiselect', 'short_text'],
+};
+
 /** The stored payload of FormRevision.fields. */
 export interface FormDefinition {
   definition_version: typeof DEFINITION_VERSION;
@@ -912,6 +944,28 @@ export function parseFormDefinition(input: unknown): FormDefinition {
     seen.add(field.id);
   }
 
+  // A gallery role reads one answer shape, so it may only sit on a top-level
+  // field of a type that produces it. A repeat group answers once per teammate,
+  // which no gallery card can show, so nothing inside one may carry a role.
+  // A team is several people, so its roster_select must allow several.
+  for (const field of flattenFields(definition.fields)) {
+    const role = galleryRoleOf(field);
+    if (!role) continue;
+    const nested = !definition.fields.includes(field);
+    const wrongType = !GALLERY_ROLE_TYPES[role].includes(field.type);
+    const singleTeam = role === 'team' && field.multiple !== true;
+    if (nested || wrongType || singleTeam) {
+      throw formContractError(
+        FORM_DEFINITION_INVALID,
+        nested
+          ? `"${String(field.label)}" is inside a repeat group and cannot have a gallery role.`
+          : wrongType
+            ? `The ${role} gallery role needs a ${GALLERY_ROLE_TYPES[role].join(' or ')} field, not ${field.type}.`
+            : 'The team gallery role needs a roster select that allows several people.'
+      );
+    }
+  }
+
   const total = flattenFields(definition.fields).length;
   if (total > FORM_LIMITS.MAX_FIELDS) {
     throw formContractError(
@@ -954,6 +1008,45 @@ export function assertFieldsAllowedForAccess(
     FORM_FIELD_ACCESS_VIOLATION,
     `Field type(s) ${types} require Classroom access — a public form cannot read the roster.`
   );
+}
+
+/** The field's gallery role, if it has one. `FormField` is loose, hence the cast. */
+export function galleryRoleOf(field: FormField): GalleryRole | undefined {
+  return field.gallery_role as GalleryRole | undefined;
+}
+
+/** Roles a gallery card has room for exactly once. `link` and `detail` repeat. */
+const SINGLE_GALLERY_ROLES: GalleryRole[] = ['tagline', 'summary', 'icon', 'cover', 'team', 'tags'];
+
+/**
+ * Publish-time rule for a form that feeds the gallery (form.gallery_org_id set):
+ * exactly one title, at most one of each single role. Type pairing is already
+ * enforced at save by parseFormDefinition.
+ *
+ * @throws Error with code FORM_DEFINITION_INVALID.
+ */
+export function assertGalleryRoles(fields: FormField[]): void {
+  const counts = new Map<GalleryRole, number>();
+  for (const field of fields) {
+    const role = galleryRoleOf(field);
+    if (role) counts.set(role, (counts.get(role) ?? 0) + 1);
+  }
+  const titles = counts.get('title') ?? 0;
+  if (titles !== 1) {
+    throw formContractError(
+      FORM_DEFINITION_INVALID,
+      `A gallery form needs exactly one field with the title gallery role (found ${titles}).`
+    );
+  }
+  for (const role of SINGLE_GALLERY_ROLES) {
+    const count = counts.get(role) ?? 0;
+    if (count > 1) {
+      throw formContractError(
+        FORM_DEFINITION_INVALID,
+        `A gallery form can have only one ${role} field (found ${count}).`
+      );
+    }
+  }
 }
 
 // ─── Answer schemas ─────────────────────────────────────────────────────────

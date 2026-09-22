@@ -22,6 +22,8 @@ import {
   FORM_REPEAT_CONTEXT_MISSING,
   answersByteSize,
   assertFieldsAllowedForAccess,
+  assertGalleryRoles,
+  galleryRoleOf,
   buildResponseSchema,
   exceedsMaxDepth,
   flattenFields,
@@ -642,5 +644,84 @@ describe('formContract — repeat groups', () => {
     expect(() =>
       parseAnswers(relaxed, { [relaxedGroup.id]: { [alice]: { [relaxedScale]: 4 } } }, relaxedCtx)
     ).not.toThrow();
+  });
+});
+
+describe('formContract — gallery roles', () => {
+  it('accepts a role on the field types it reads, and keeps it through a re-parse', () => {
+    const { fields } = parseFormDefinition([
+      { type: 'short_text', label: 'Project title', gallery_role: 'title' },
+      { type: 'long_text', label: 'Summary', gallery_role: 'summary' },
+      { ...SAMPLES.multiselect, gallery_role: 'tags' },
+      { ...SAMPLES.roster_select, gallery_role: 'team' },
+      { type: 'short_text', label: 'Tags', gallery_role: 'tags' },
+    ]);
+    const roles = ['title', 'summary', 'tags', 'team', 'tags'];
+    expect(fields.map(field => galleryRoleOf(field))).toEqual(roles);
+    expect(parseFormDefinition(fields).fields.map(field => galleryRoleOf(field))).toEqual(roles);
+  });
+
+  it('rejects an unknown role', () => {
+    expect(
+      codeOf(() => parseOne({ type: 'short_text', label: 'Title', gallery_role: 'hero' }))
+    ).toBe(FORM_DEFINITION_INVALID);
+  });
+
+  it('rejects a role on a display block', () => {
+    expect(codeOf(() => parseOne({ ...SAMPLES.heading, gallery_role: 'title' }))).toBe(
+      FORM_DEFINITION_INVALID
+    );
+  });
+
+  // The strict schemas reject ANY unknown key today, so these assert the
+  // message: only the new pairing/nesting check produces it.
+  it('rejects a role on a field type it cannot read', () => {
+    expect(() => parseOne({ type: 'long_text', label: 'Title', gallery_role: 'title' })).toThrow(
+      /title gallery role needs a short_text field/
+    );
+    expect(() => parseOne({ ...SAMPLES.number, gallery_role: 'tags' })).toThrow(
+      /tags gallery role needs/
+    );
+  });
+
+  it('rejects a role inside a repeat group', () => {
+    const group = {
+      ...SAMPLES.repeat_group,
+      fields: [{ type: 'long_text', label: 'Comments', gallery_role: 'detail' }],
+    };
+    expect(() => parseOne(group)).toThrow(/inside a repeat group/);
+  });
+
+  it('rejects a team role on a single-select roster', () => {
+    expect(() =>
+      parseOne({ ...SAMPLES.roster_select, multiple: false, gallery_role: 'team' })
+    ).toThrow(/team gallery role needs a roster select that allows several people/);
+  });
+
+  it('assertGalleryRoles wants exactly one title and at most one of each single role', () => {
+    const withRole = (id: string, type: string, role: string) =>
+      ({ id, type, label: id, gallery_role: role }) as FormField;
+    const title = withRole('t1', 'short_text', 'title');
+    const summary = withRole('s1', 'long_text', 'summary');
+
+    expect(codeOf(() => assertGalleryRoles([summary]))).toBe(FORM_DEFINITION_INVALID);
+    expect(codeOf(() => assertGalleryRoles([title, withRole('t2', 'short_text', 'title')]))).toBe(
+      FORM_DEFINITION_INVALID
+    );
+    expect(
+      codeOf(() => assertGalleryRoles([title, summary, withRole('s2', 'long_text', 'summary')]))
+    ).toBe(FORM_DEFINITION_INVALID);
+    expect(
+      codeOf(() =>
+        assertGalleryRoles([
+          title,
+          summary,
+          withRole('d1', 'long_text', 'detail'),
+          withRole('d2', 'long_text', 'detail'),
+          withRole('l1', 'short_text', 'link'),
+          withRole('l2', 'short_text', 'link'),
+        ])
+      )
+    ).toBeUndefined();
   });
 });
