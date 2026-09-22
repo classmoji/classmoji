@@ -53,7 +53,9 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
     tokenBalance,
   ] = await Promise.all([
     ClassmojiService.assignment.listForClassroom(classroom.id, { publishedOnly: true }),
-    ClassmojiService.gitRepoAssignment.findAllForStudent(studentId, classSlug),
+    // Individual repos AND team repos: a team member's submission row hangs
+    // off the team's git repo, not off the student.
+    ClassmojiService.helper.findAllAssignmentsForStudent(studentId, classSlug),
     ClassmojiService.emojiMapping.findByClassroomId(classroom.id),
     ClassmojiService.classroom.getClassroomSettingsForServer(classroom.id),
     ClassmojiService.letterGradeMapping.findByClassroomId(classroom.id),
@@ -439,7 +441,7 @@ const StudentReport = ({ loaderData }: Route.ComponentProps) => {
     if (a.type === 'REPO') {
       const ra = byAssignment[a.id];
       if (!ra) {
-        status = <Pill tone="grey">Not released to this student</Pill>;
+        status = <Pill tone="grey">No repository yet</Pill>;
       } else {
         const submitted = ra.status === 'CLOSED';
         const graded = (ra.grades?.length ?? 0) > 0;
