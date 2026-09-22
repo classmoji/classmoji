@@ -13,7 +13,7 @@ import { answerColumnFields, formatAnswer } from '~/components/forms/answerForma
 import { ClassmojiService } from '~/utils/db.server.ts';
 import { formMutationBlocked } from '~/utils/formAuth.server.ts';
 import { hasRepeatGroup } from './responsesCsv.server.ts';
-import { classroomHomeUrl } from './adminLinks.server.ts';
+import { formsListUrl } from './adminLinks.server.ts';
 import {
   NO_STORE,
   auditResponses,
@@ -109,7 +109,7 @@ export const loader = async ({
     {
       classroomSlug: params.classroomSlug!,
       classroomName: classroom.name ?? params.classroomSlug!,
-      classroomHome: classroomHomeUrl(context.membership.role, params.classroomSlug!),
+      classroomFormsUrl: formsListUrl(context.membership.role, params.classroomSlug!),
       form: context.form,
       rows,
       suggestions,
@@ -270,7 +270,7 @@ export default function FormResponses() {
   const {
     classroomSlug,
     classroomName,
-    classroomHome,
+    classroomFormsUrl,
     form,
     rows,
     suggestions,
@@ -381,7 +381,7 @@ export default function FormResponses() {
     <div className="mx-auto max-w-[96rem] px-6 py-8">
       <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
         <div className="min-w-0">
-          <BackToClassroom href={classroomHome} name={classroomName} />
+          <BackToClassroom href={classroomFormsUrl} name={classroomName} />
           <h1 className="text-base font-semibold text-gray-600 dark:text-gray-400">
             <Link
               to={`/${classroomSlug}/forms`}
