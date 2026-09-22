@@ -17,7 +17,7 @@ import { flatRoutes } from '@react-router/fs-routes';
  *
  * Static segments outrank `:pageSlug` in React Router's ranking regardless of
  * declaration order, which is what keeps `RESERVED_PAGE_SLUGS`
- * (app / classmoji / sign-in / schedule / forms / robots.txt) from being
+ * (app / classmoji / sign-in / schedule / forms / robots.txt / projects) from being
  * shadowed by a page that claims one as its slug.
  *
  * The `/:classroomSlug/forms` subtree is declared here too, with its modules
@@ -84,6 +84,10 @@ export default [
       route('sign-in', 'site/sign-in.tsx'),
       route('schedule', 'site/schedule.tsx'),
       route('app', 'site/app.tsx'),
+      // The org project gallery. Static `projects` outranks `:pageSlug`, and
+      // `projects` is in RESERVED_PAGE_SLUGS so no page can hold it.
+      route('projects', 'site/projects.tsx'),
+      route('projects/:responseId', 'site/project.tsx'),
       route(':pageSlug', 'site/page.tsx'),
 
       // Everything else on a course site. Inside the layout ON PURPOSE: the
