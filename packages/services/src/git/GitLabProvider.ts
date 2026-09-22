@@ -696,7 +696,8 @@ export class GitLabProvider extends GitProvider {
 
   // ─── GitLab Pages ─────────────────────────────────────────────────────────
 
-  // There is no enable here either: Classmoji never turns Pages on.
+  // There is no enable here either: Classmoji never turns on GitLab Pages, the
+  // same rule as GitHub Pages.
 
   /**
    * GitLab Pages state lives in CI/CD, not in an API this adapter speaks

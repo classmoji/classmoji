@@ -209,8 +209,8 @@ export function isContentDeliveryEnabled(
  * before it stores a signable path. Anything else is the legacy path, where an
  * upload is stored as its raw.githubusercontent.com URL; a private repo there
  * would turn every image into a broken link. (Legacy CONTENT may also reference
- * `{org}.github.io` on an old repo that already has a Pages site — a new repo
- * never gets one.) Both repo-creation sites (page.service, the slides.com
+ * `{org}.github.io` on an old repo that already has a GitHub Pages site — a
+ * new repo never gets one.) Both repo-creation sites (page.service, the slides.com
  * importer) ask this one function so they cannot drift apart.
  *
  * Asked ONLY at creation: flipping the flag later does not revisit an existing

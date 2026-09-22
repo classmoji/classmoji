@@ -42,9 +42,9 @@ vi.mock('../../content/ContentService.ts', () => ({
 const repositoryExistsMock = vi.fn();
 const createContentRepositoryMock = vi.fn();
 
-// The provider stub carries NO Pages method, on purpose: Classmoji never turns
-// GitHub Pages on, so a create that reached for one would throw here rather
-// than pass quietly.
+// The provider stub carries NO GitHub Pages method, on purpose: Classmoji
+// never turns GitHub Pages on, so a create that reached for one would throw
+// here rather than pass quietly.
 vi.mock('../../git/index.ts', () => ({
   getGitProvider: () => ({
     repositoryExists: (...args: unknown[]) => repositoryExistsMock(...args),
@@ -246,7 +246,7 @@ describe('page.createPage', () => {
       'Course content for Test Class',
       false
     );
-    // Create-and-wait is the whole of it — no Pages call follows.
+    // Create-and-wait is the whole of it — no GitHub Pages call follows.
     expect(createContentRepositoryMock).toHaveBeenCalledTimes(1);
   });
 
@@ -283,12 +283,13 @@ describe('page.createPage', () => {
     );
   });
 
-  // The invariant, and it is absolute: Pages is never enabled, whatever the
-  // delivery flag says. The public github.io site is what the Pages-off helper
-  // exists to close, and a page create used to be the likeliest thing to switch
-  // it back on. The repo is still created — the create simply stops there, so a
-  // reinstated Pages call would blow up on the provider stub.
-  it('creates the repo without enabling Pages, delivery flag on', async () => {
+  // The invariant, and it is absolute: GitHub Pages is never enabled, whatever
+  // the delivery flag says. The public github.io site is what the Pages-off
+  // helper exists to close, and a page create used to be the likeliest thing
+  // to switch it back on. The repo is still created — the create simply stops
+  // there, so a reinstated GitHub Pages call would blow up on the provider
+  // stub.
+  it('creates the repo without enabling GitHub Pages, delivery flag on', async () => {
     classroomFindUniqueMock.mockResolvedValue({ ...classroom, content_delivery_enabled: true });
     repositoryExistsMock.mockResolvedValue(false);
     vi.useFakeTimers();
@@ -523,9 +524,10 @@ describe('page.ensureContentRepo', () => {
     repositoryExistsMock.mockResolvedValue(true);
   });
 
-  // An existing repo means there is nothing to do: no create, and no Pages call
-  // either — this is the entry point every slide create, batch page import and
-  // classroom import goes through, and none of them may turn a site on.
+  // An existing repo means there is nothing to do: no create, and no
+  // GitHub Pages call either — this is the entry point every slide create,
+  // batch page import and classroom import goes through, and none of them
+  // may turn a site on.
   it('returns the repo name and touches nothing for an existing repo', async () => {
     const result = await ensureContentRepo('class-1');
     expect(result).toEqual({ repoName: 'content-test-org-cs101' });

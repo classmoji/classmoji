@@ -298,7 +298,7 @@ async function ensureContentRepoExists({ classroom, gitOrgLogin, repoName }: Con
 
   // No GitHub Pages, ever. The delivery layer serves content for gated
   // classrooms, and legacy ones read through raw URLs / the authenticated
-  // proxy. Pages sites on OLD repos are the Phase 4 teardown's business.
+  // proxy. GitHub Pages sites on OLD repos are the Phase 4 teardown's business.
 }
 
 /**

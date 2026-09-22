@@ -172,7 +172,7 @@ export async function processZipImport({
 
   // Use content proxy URLs for all assets. The proxy reads them through
   // authenticated GitHub calls, so they load as soon as the import commits — a
-  // repo created here has no Pages site for its CDN leg to hit.
+  // repo created here has no GitHub Pages site for its CDN leg to hit.
   const baseUrl = `/content/${org}/${repoName}/${contentPath}`;
   const imageBaseUrl = `${baseUrl}/images`;
 

@@ -468,8 +468,8 @@ export class GitHubProvider extends GitProvider {
    * so it never needs to be public. The legacy path (a deployment without the
    * signing env, or a classroom not enabled for delivery) stores page-asset
    * uploads as raw.githubusercontent.com URLs, which need a public repo — that
-   * is why the legacy path stays public. No repo made here ever gets a GitHub
-   * Pages site.
+   * is why the legacy path stays public. No repo made here ever gets a
+   * GitHub Pages site.
    *
    * There is no fallback between the two: if a private repo is requested and
    * GitHub refuses it, the error surfaces rather than a public repo being made.
@@ -1293,8 +1293,8 @@ export class GitHubProvider extends GitProvider {
 
   // ─── GitHub Pages ──────────────────────────────────────────────────────────
 
-  // There is no enable: Classmoji never turns Pages on. The reader and the OFF
-  // switch below are for retiring the sites legacy repos already have.
+  // There is no enable: Classmoji never turns GitHub Pages on. The reader and
+  // the OFF switch below are for retiring the sites legacy repos already have.
 
   /**
    * Read a repository's GitHub Pages configuration, or `null` when it has none.
