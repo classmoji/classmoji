@@ -346,6 +346,78 @@ describe.skipIf(!RUN)('forms services (integration)', () => {
       expect(await prisma.formRevision.findUnique({ where: { id: revisionId } })).toBeNull();
       expect(await prisma.formMagicToken.count({ where: { response_id: responseId } })).toBe(0);
     });
+
+    /**
+     * The `classroomId` scope, which is what the two admin lists pass.
+     *
+     * A form id arrives in a request body while the authorization proves
+     * something about a CLASSROOM, so a surface that gates on `/:class` and
+     * then writes by id alone lets staff of one classroom mutate — or delete,
+     * taking the responses with it — another classroom's form. Both lists do
+     * read the form scoped first, but a read and a write are two statements;
+     * the scope is what makes the write itself conditional. These are the tests
+     * that still fail if someone removes the scope and keeps the pre-check.
+     */
+    describe('the classroom scope on the admin writes', () => {
+      const FOREIGN_CLASSROOM = 'classroom-that-is-not-this-one';
+
+      it('refuses a status change scoped to another classroom, and changes nothing', async () => {
+        const { formId } = await makeOpenForm();
+
+        expect(
+          await codeOf(
+            formService.quickUpdate(
+              formId,
+              { status: 'CLOSED' },
+              { classroomId: FOREIGN_CLASSROOM }
+            )
+          )
+        ).toBe(formService.FORM_NOT_FOUND);
+
+        expect((await prisma.form.findUniqueOrThrow({ where: { id: formId } })).status).toBe(
+          'OPEN'
+        );
+      });
+
+      it('refuses OPEN scoped to another classroom as not-found, never as "publish first"', async () => {
+        // The precheck reads through the scope too. A form outside the
+        // authorized classroom must read as ABSENT, not as a form that merely
+        // has no revision — the second answer would confirm the form exists.
+        const draft = await makeForm();
+
+        expect(
+          await codeOf(
+            formService.quickUpdate(
+              draft.id,
+              { status: 'OPEN' },
+              { classroomId: FOREIGN_CLASSROOM }
+            )
+          )
+        ).toBe(formService.FORM_NOT_FOUND);
+      });
+
+      it('refuses a delete scoped to another classroom, and the form survives', async () => {
+        const { formId } = await makeOpenForm();
+
+        expect(
+          await codeOf(formService.deleteForm(formId, { classroomId: FOREIGN_CLASSROOM }))
+        ).toBe(formService.FORM_NOT_FOUND);
+
+        expect(await prisma.form.findUnique({ where: { id: formId } })).not.toBeNull();
+      });
+
+      it('performs both writes when the scope is the form’s own classroom', async () => {
+        const { formId } = await makeOpenForm();
+
+        const closed = await formService.quickUpdate(formId, { status: 'CLOSED' }, { classroomId });
+        // The scoped path still returns the updated row, which is what the
+        // tri-state select reads its new status back from.
+        expect(closed.status).toBe('CLOSED');
+
+        await formService.deleteForm(formId, { classroomId });
+        expect(await prisma.form.findUnique({ where: { id: formId } })).toBeNull();
+      });
+    });
   });
 
   // ── public submission + magic links ──────────────────────────────────────

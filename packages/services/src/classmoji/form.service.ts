@@ -707,11 +707,33 @@ export async function reopen(formId: string) {
  * misleading "this form changed" instead of "this form was never published".
  * The guard lives HERE and not only in `reopen` because the tri-state select
  * calls this function directly.
+ *
+ * ── `scope.classroomId` ────────────────────────────────────────────────────
+ * The classroom the caller was AUTHORIZED for. A form id arrives in a request
+ * body, and an authorization proves something about a classroom, not about
+ * that id — so a surface that gates on `/:class` and then writes by id alone
+ * lets staff of one classroom mutate another's form. Callers that check the
+ * form's `classroom_id` first still race: the check and the write are two
+ * statements. Passing the scope makes the WRITE itself conditional, which is
+ * the only version with no window, and is what the slides list already does
+ * with `updateMany({ where: { id, classroom_id } })`.
+ *
+ * Omitting it keeps the previous behaviour exactly, for callers that resolved
+ * the form some other way (the MCP tools resolve it through the classroom).
  */
-export async function quickUpdate(formId: string, updates: { status?: FormStatus }) {
+export async function quickUpdate(
+  formId: string,
+  updates: { status?: FormStatus },
+  scope: { classroomId?: string } = {}
+) {
+  const classroomScope = scope.classroomId ? { classroom_id: scope.classroomId } : {};
+
   if (updates.status === 'OPEN') {
-    const form = await getPrisma().form.findUnique({
-      where: { id: formId },
+    // findFirst, not findUnique: the scope is a non-unique filter, and a form
+    // outside the authorized classroom must read as absent here too — not as a
+    // form that merely has no revision.
+    const form = await getPrisma().form.findFirst({
+      where: { id: formId, ...classroomScope },
       select: { current_revision_id: true },
     });
     if (!form) throw serviceError(FORM_NOT_FOUND, `Form ${formId} not found`);
@@ -720,17 +742,41 @@ export async function quickUpdate(formId: string, updates: { status?: FormStatus
     }
   }
 
-  return getPrisma().form.update({
-    where: { id: formId },
+  if (!scope.classroomId) {
+    return getPrisma().form.update({
+      where: { id: formId },
+      data: { ...updates },
+    });
+  }
+
+  const { count } = await getPrisma().form.updateMany({
+    where: { id: formId, ...classroomScope },
     data: { ...updates },
   });
+  if (count !== 1) throw serviceError(FORM_NOT_FOUND, `Form ${formId} not found`);
+  // The caller's contract is the updated row (the tri-state select reads its
+  // status back), which `updateMany` cannot return.
+  return getPrisma().form.findUniqueOrThrow({ where: { id: formId } });
 }
 
 /**
  * Delete a form and everything filled against it. Revisions, responses, and
  * magic tokens all cascade in the database — the response PII goes with it,
  * which is the point. Callers must audit-log this.
+ *
+ * `scope.classroomId` binds the delete to the classroom the caller was
+ * authorized for — see `quickUpdate`. It matters more here than anywhere else
+ * in this file: this is the call that destroys collected PII, so the id in the
+ * request body must never be enough on its own.
  */
-export async function deleteForm(formId: string) {
-  return getPrisma().form.delete({ where: { id: formId } });
+export async function deleteForm(formId: string, scope: { classroomId?: string } = {}) {
+  if (!scope.classroomId) {
+    return getPrisma().form.delete({ where: { id: formId } });
+  }
+
+  const { count } = await getPrisma().form.deleteMany({
+    where: { id: formId, classroom_id: scope.classroomId },
+  });
+  if (count !== 1) throw serviceError(FORM_NOT_FOUND, `Form ${formId} not found`);
+  return { count };
 }

@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react';
-import { redirect, useFetcher, useNavigate, useParams } from 'react-router';
+import { redirect, useFetcher, useLoaderData } from 'react-router';
 import { IconX } from '@tabler/icons-react';
 
 import { ClassmojiService } from '~/utils/db.server.ts';
 import { assertFormAdmin, formMutationBlocked } from '~/utils/formAuth.server.ts';
+import { formsListUrl } from './adminLinks.server.ts';
 import { FORM_PRESETS, presetByKey, type FormAccessMode } from '~/components/forms/presets.ts';
 
 /**
@@ -37,8 +38,17 @@ export const loader = async ({
 }) => {
   // The child route gates too. It is reachable directly by URL, and its action
   // is a create endpoint.
-  await assertFormAdmin(params.classroomSlug!, request, { action: 'new_form' });
+  const { membership } = await assertFormAdmin(params.classroomSlug!, request, {
+    action: 'new_form',
+  });
   return {
+    // Where backing out goes. This drawer's dominant entry point is the
+    // webapp's New Form button, so Cancel and Escape have to return THERE —
+    // dismissing to the pages list underneath would strand someone who came
+    // from the webapp on a second copy of a list they never asked for.
+    // Resolved on the server, which is the only side that knows the webapp
+    // origin and the viewer's role prefix.
+    formsList: formsListUrl(membership.role, params.classroomSlug!),
     presets: FORM_PRESETS.map(
       ({ key, label, blurb, access, requiresClassroom, suggestedTitle }) => ({
         key,
@@ -131,8 +141,7 @@ export const action = async ({
 };
 
 export default function NewFormDrawer() {
-  const params = useParams();
-  const navigate = useNavigate();
+  const { formsList } = useLoaderData<typeof loader>();
   const fetcher = useFetcher<{ error?: string }>();
 
   const [presetKey, setPresetKey] = useState('blank');
@@ -142,7 +151,9 @@ export default function NewFormDrawer() {
 
   const preset = presetByKey(presetKey);
   const submitting = fetcher.state !== 'idle';
-  const close = () => navigate(`/${params.classroomSlug}/forms`);
+  // A full page load, not `navigate`: the target is the webapp, another origin,
+  // and a client-side navigation there is only a 404 inside this router.
+  const close = () => window.location.assign(formsList);
 
   // Choosing a template proposes its title and its mode; typing over either one
   // wins. Retargeting the mode is refused only for a template whose fields the

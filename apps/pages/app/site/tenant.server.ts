@@ -3,7 +3,12 @@ import type { Role } from '@prisma/client';
 
 import { prisma, ClassmojiService, getAuthSession } from '~/utils/db.server.ts';
 import { siteHeaders } from './headers.server.ts';
-import { customDomainOrigin, siteOrigin } from './env.server.ts';
+import { siteOrigin } from './env.server.ts';
+// IMPORTED as well as re-exported below. `export { x } from 'y'` forwards a
+// name without binding it locally, so the two loaders further down that CALL
+// these would be a ReferenceError on every class-site page — which is exactly
+// what happened when this module first stopped defining them.
+import { canonicalOriginForSite, seoOriginFor } from '@classmoji/services';
 
 /**
  * Site types are derived from the service's own return type rather than
@@ -227,42 +232,17 @@ function publicRequestPath(request: Request, subdomain: string): string {
   return publicPathOf(url.pathname, subdomain) + url.search;
 }
 
-/** Everything the canonical-hostname decision depends on. */
-export type SeoOriginInput = {
-  /** Origin of the canonical `{subdomain}.{SITE_BASE_DOMAIN}` host. */
-  subdomainOrigin: string | null;
-  /** The stored claim — never the inbound Host header. */
-  customDomain: string | null;
-  /** Has this claim served over its own hostname? */
-  verified: boolean;
-  /** Is the classroom's subscription active right now? */
-  proActive: boolean;
-  /** Is THIS request being served on the custom domain? */
-  servingOnCustomDomain: boolean;
-};
-
 /**
- * Which hostname should `rel=canonical` and `og:url` name?
+ * The canonical-hostname decision — both the pure rule and the site-row
+ * wrapper — now lives in `@classmoji/services` (`classmoji/siteLinks.ts`) and is
+ * re-exported here under the names this app already imports.
  *
- * Pulled out as a pure function because it is one decision that has to come out
- * the same in two places. If the custom host said "I am canonical" while the
- * subdomain also said "I am canonical", the two hostnames would be competing
- * copies of the same course — the duplicate-content split the flip exists to
- * prevent. Worse in the lapsed case: the custom host is 302ing visitors to the
- * subdomain, so a subdomain canonical pointing back at it would name a URL that
- * redirects away.
- *
- * Serving ON the custom domain is itself the verification — the request only
- * exists because a certificate for that hostname completed a handshake — so
- * that case does not wait for the stamp it is in the middle of writing.
+ * It moved because it has a THIRD asker that cannot reach into this app: the
+ * webapp's forms list, whose copied public form link must be the same link this
+ * app's list copies. The rule itself is unchanged.
  */
-export function seoOriginFor(input: SeoOriginInput): string | null {
-  const { subdomainOrigin, customDomain, verified, proActive, servingOnCustomDomain } = input;
-
-  if (!customDomain || !proActive) return subdomainOrigin;
-  if (servingOnCustomDomain || verified) return customDomainOrigin(customDomain);
-  return subdomainOrigin;
-}
+export { seoOriginFor, canonicalOriginForSite } from '@classmoji/services';
+export type { SeoOriginInput } from '@classmoji/services';
 
 /**
  * The response a custom domain gives once its subscription has lapsed.
@@ -414,46 +394,6 @@ async function loadSiteContext(
     memberLinkOrigin: '',
     seoOrigin: await canonicalOriginForSite(site),
   };
-}
-
-/**
- * Which hostname does a site call its own, asked from anywhere but the custom
- * domain itself?
- *
- * The custom domain, once it is verified and the classroom is actually on PRO —
- * otherwise the two hostnames would disagree about which of them is canonical,
- * which is the duplicate-content split the flip exists to prevent. The lapsed
- * case matters most: the custom host is 302ing visitors here, so pointing
- * `rel=canonical` back at it would name a URL that redirects away.
- *
- * The subscription lookup runs ONLY for the handful of sites that have a domain
- * to flip to — the overwhelmingly common request reads `custom_domain === null`
- * and does no extra work at all.
- *
- * Exported because the question has a second asker: the forms admin's copied
- * link (`publicFormUrlFor`) shares a form on the address of the course, and
- * that address has to mean the same thing there as it does in `rel=canonical`.
- * Its site row comes from `getSiteForClassroom` — the bare `ClassroomSite`,
- * with no `classroom` include — so the parameter names the four columns this
- * actually reads rather than `SiteWithClassroom`, which both callers satisfy.
- */
-export async function canonicalOriginForSite(
-  site: Pick<
-    SiteWithClassroom,
-    'subdomain' | 'classroom_id' | 'custom_domain' | 'custom_domain_verified_at'
-  >
-): Promise<string | null> {
-  const subdomainOrigin = siteOrigin(site.subdomain);
-  if (!site.custom_domain || !site.custom_domain_verified_at) return subdomainOrigin;
-
-  const proState = await ClassmojiService.subscription.getProStateForClassroomId(site.classroom_id);
-  return seoOriginFor({
-    subdomainOrigin,
-    customDomain: site.custom_domain,
-    verified: true,
-    proActive: proState.isPro,
-    servingOnCustomDomain: false,
-  });
 }
 
 /**

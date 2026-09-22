@@ -120,10 +120,12 @@ export const routes = {
     link: '/forms',
     label: 'Forms',
     icon: IconForms,
-    // Staff-only and management-only: the entry opens the builder/list, which
-    // lives in apps/pages behind a redirect. Students reach a classroom form by
-    // its link or a module item, never through this nav item — there is no
-    // student forms list in v1.
+    // Staff-only and management-only: the entry opens the forms LIST, which is
+    // a webapp screen (`admin.$class.forms` and its `/teacher` twin). Only the
+    // builder and the responses view still live in apps/pages, behind the
+    // `forms_.$` redirect. Students reach a classroom form by its link or a
+    // module item, never through this nav item — there is no student forms
+    // list in v1.
     roles: ['OWNER', 'TEACHER'],
     isProTier: true,
     category: 'content',
