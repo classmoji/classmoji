@@ -6,9 +6,11 @@ import relativeTime from 'dayjs/plugin/relativeTime';
 import {
   IconCopy,
   IconExternalLink,
-  IconListDetails,
+  IconEyeOff,
+  IconLock,
   IconPencil,
   IconPlus,
+  IconWorld,
 } from '@tabler/icons-react';
 
 import getPrisma from '@classmoji/database';
@@ -159,7 +161,11 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
 
   const formData = await request.formData();
   const intent = formData.get('intent');
-  const formId = formData.get('formId') as string | null;
+  const rawFormId = formData.get('formId');
+  // `formData.get` returns `File | string | null`, so this is a real narrowing
+  // and not a formality: a multipart part would otherwise be cast to a string
+  // and reach Prisma as an object.
+  const formId = typeof rawFormId === 'string' ? rawFormId : null;
 
   if (!formId) return { error: 'Form not found' };
 
@@ -169,17 +175,20 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
   const blocked = formMutationBlocked(classroom, membership!.role);
   if (blocked) return blocked;
 
-  // Bind the record to the classroom that was authorized. Without this, a form
-  // id from ANOTHER classroom would be mutated by a caller who is staff here —
-  // the cross-classroom hole the MCP audit closed everywhere else. Same reason
-  // the slides action scopes every write by `classroom_id`.
-  const form = await getPrisma().form.findUnique({
-    where: { id: formId },
-    select: { id: true, classroom_id: true, title: true, slug: true },
+  // Read the form bound to the classroom that was authorized. A form id from
+  // ANOTHER classroom must not be touched by a caller who is staff here — the
+  // cross-classroom hole the MCP audit closed everywhere else.
+  //
+  // This read is for the MESSAGE and the audit metadata, not for safety: it and
+  // the write are two statements, so on its own it would still be a race. Every
+  // write below is additionally scoped by `classroom_id` in the service, which
+  // is what actually closes the window — the same shape as the slides action's
+  // `updateMany({ where: { id, classroom_id } })`.
+  const form = await getPrisma().form.findFirst({
+    where: { id: formId, classroom_id: classroom.id },
+    select: { id: true, title: true, slug: true },
   });
-  if (!form || form.classroom_id !== classroom.id) {
-    return { error: 'Form not found' };
-  }
+  if (!form) return { error: 'Form not found' };
 
   if (intent === 'update-status') {
     const status = formData.get('status');
@@ -187,13 +196,17 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
       return { error: 'Unknown status' };
     }
     try {
-      await ClassmojiService.form.quickUpdate(formId, { status });
+      await ClassmojiService.form.quickUpdate(formId, { status }, { classroomId: classroom.id });
     } catch (error) {
+      const code = (error as { code?: string }).code;
       // The one refusal quickUpdate makes: OPEN on a form that has never been
       // published. Surfaced as the instruction, not the error code.
-      if ((error as { code?: string }).code === 'FORM_NO_FIELDS') {
+      if (code === 'FORM_NO_FIELDS') {
         return { error: 'Publish this form before opening it.' };
       }
+      // The scoped write matched nothing — the form left this classroom (or
+      // was deleted) between the read above and the write.
+      if (code === 'FORM_NOT_FOUND') return { error: 'Form not found' };
       throw error;
     }
     await addClassroomAuditLog({
@@ -209,7 +222,14 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
   }
 
   if (intent === 'delete') {
-    await ClassmojiService.form.deleteForm(formId);
+    try {
+      await ClassmojiService.form.deleteForm(formId, { classroomId: classroom.id });
+    } catch (error) {
+      if ((error as { code?: string }).code === 'FORM_NOT_FOUND') {
+        return { error: 'Form not found' };
+      }
+      throw error;
+    }
     // Deleting a form cascades to its responses, which is the point and also
     // why it is audited: this is the one action here that destroys collected
     // PII, and the row is the only record it happened.
@@ -228,15 +248,45 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
   return { error: 'Unknown intent' };
 };
 
-const STATUS_OPTIONS: { value: FormStatus; label: string }[] = [
-  { value: 'DRAFT', label: 'Draft' },
-  { value: 'OPEN', label: 'Open' },
-  { value: 'CLOSED', label: 'Closed' },
+/**
+ * The tri-state, with an icon per state — the shape the slides list's status
+ * Select uses, so the two management screens read as one system rather than as
+ * two people's tables. The icons also carry the meaning at a glance once the
+ * select is closed, which a bare word in a 100px control does not.
+ */
+const STATUS_OPTIONS: { value: FormStatus; label: React.ReactNode }[] = [
+  {
+    value: 'DRAFT',
+    label: (
+      <span className="flex items-center gap-1">
+        <IconEyeOff size={14} /> Draft
+      </span>
+    ),
+  },
+  {
+    value: 'OPEN',
+    label: (
+      <span className="flex items-center gap-1">
+        <IconWorld size={14} /> Open
+      </span>
+    ),
+  },
+  {
+    value: 'CLOSED',
+    label: (
+      <span className="flex items-center gap-1">
+        <IconLock size={14} /> Closed
+      </span>
+    ),
+  },
 ];
 
 export default function FormsAdmin({ loaderData }: Route.ComponentProps) {
   const { forms, classSlug, pagesUrl } = loaderData;
-  const fetcher = useFetcher<{ error?: string; success?: boolean }>();
+  // `message` is not this route's own shape: `formMutationBlocked` returns the
+  // platform's typed 403 body, `{ error: 'CLASSROOM_LOCKED', message: '…' }`,
+  // where `error` is a CODE and the sentence is in `message`.
+  const fetcher = useFetcher<{ error?: string; message?: string; success?: boolean }>();
   const callout = useCallout();
   const [query, setQuery] = useState('');
   // The form a delete has been REQUESTED for and not yet confirmed. Holding the
@@ -259,7 +309,12 @@ export default function FormsAdmin({ loaderData }: Route.ComponentProps) {
   useEffect(() => {
     if (fetcher.state !== 'idle') return;
     if (fetcher.data?.error) {
-      callout.show({ variant: 'error', title: fetcher.data.error, autoDismissMs: 4000 });
+      // `message` first: a classroom-status refusal puts its SENTENCE there and
+      // a machine code in `error`, so reading `error` alone toasted the literal
+      // string "CLASSROOM_LOCKED" at the instructor. This route's own refusals
+      // only set `error`, and it is already a sentence.
+      const title = fetcher.data.message ?? fetcher.data.error;
+      callout.show({ variant: 'error', title, autoDismissMs: 4000 });
       return;
     }
     if (fetcher.data?.success) setPendingDelete(null);
@@ -401,29 +456,34 @@ export default function FormsAdmin({ loaderData }: Route.ComponentProps) {
     {
       title: 'Actions',
       key: 'actions',
-      width: 300,
+      width: 210,
+      /**
+       * Four actions, not five. Responses was dropped from this column because
+       * the Responses COUNT is already a link at rest — a second door to the
+       * same page, three columns away, was the whole reason this column ran to
+       * 370px against the slides list's 220. Delete drops its label the way
+       * RepoActions and the assignment table do; the red trash is unambiguous.
+       */
       render: (_: unknown, record: FormRow) => (
         <TableActionButtons
           onDelete={() => setPendingDelete(record)}
+          hideDeleteText
           // The confirmation is the Modal below, which names the form and says
           // what else goes with it. A popconfirm reading "Are you sure?" would
           // not mention the responses.
           skipDeleteConfirm
         >
-          <FormActionLink
-            href={`${formsUrl}/${record.slug}/responses`}
-            icon={<IconListDetails size={17} />}
-          >
-            Responses
-          </FormActionLink>
           <button
             type="button"
             onClick={() => copyLink(record)}
+            title="Copy the public link to this form"
             aria-label={`Copy link to ${record.title}`}
             className="flex items-center gap-1 text-gray-600 hover:text-gray-800 dark:text-gray-300 dark:hover:text-gray-100 cursor-pointer bg-transparent border-0 p-0"
           >
             <IconCopy size={17} />
-            <span>Copy</span>
+            {/* "Copy link", not "Copy": next to Open and Edit, a bare verb reads
+                as "copy the form". */}
+            <span>Copy link</span>
           </button>
           {/* The one link that opens a tab of its own: this is the respondent's
               view on the course's public address, not a step in the staff task. */}
@@ -431,6 +491,7 @@ export default function FormsAdmin({ loaderData }: Route.ComponentProps) {
             href={record.publicUrl}
             target="_blank"
             rel="noopener noreferrer"
+            title="Open the form as a respondent sees it"
             aria-label={`Open ${record.title} as a respondent sees it`}
             className="flex items-center gap-1 !text-gray-600 hover:!text-gray-800 dark:!text-gray-300 dark:hover:!text-gray-100 no-underline cursor-pointer"
           >
