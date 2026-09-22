@@ -36,6 +36,17 @@ export const create = async (payload: RepositoryCreatePayload) => {
   });
 };
 
+/**
+ * Note a push the provider reported for this repo. Never moves backwards, so
+ * a late-delivered older webhook cannot hide a newer push.
+ */
+export const recordPushTime = async (gitRepoId: string, pushedAt: Date) => {
+  return getPrisma().gitRepo.updateMany({
+    where: { id: gitRepoId, OR: [{ last_push_at: null }, { last_push_at: { lt: pushedAt } }] },
+    data: { last_push_at: pushedAt },
+  });
+};
+
 export const findByRepository = async (classroomSlug: string, repositoryId: string) => {
   const repos = await getPrisma().gitRepo.findMany({
     where: {
@@ -44,7 +55,8 @@ export const findByRepository = async (classroomSlug: string, repositoryId: stri
     },
     include: {
       student: true,
-      team: true,
+      // Members ride along so a team row can name who is on it.
+      team: { include: { memberships: { include: { user: true } } } },
       repository: true,
       assignments: {
         include: {

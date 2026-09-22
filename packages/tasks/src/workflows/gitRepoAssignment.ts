@@ -444,6 +444,8 @@ export const repositoryPushHandlerTask = task({
   id: 'webhook-git_repo_push_handler',
   run: async (payload: RepositoryPushTaskPayload) => {
     const pushedAt = new Date(payload.pushedAt);
+    // The repo's own "last push", whatever it does to submissions below.
+    await ClassmojiService.gitRepo.recordPushTime(payload.gitRepoId, pushedAt);
     const touched = await ClassmojiService.gitRepoAssignment.recordPush(
       payload.gitRepoId,
       pushedAt

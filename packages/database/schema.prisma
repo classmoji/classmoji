@@ -871,6 +871,10 @@ model GitRepo {
   // Read-only provider data captured at import time (e.g. GitHub Classroom
   // points / commit count). Not part of live grading — for viewing only.
   metadata       Json?
+  // When the provider last told us about a push to this repo (the webhook's
+  // receipt time). Independent of any assignment's submission time, which
+  // freezes at the deadline; this is what "Last push" shows.
+  last_push_at   DateTime?
   created_at     DateTime    @default(now())
   updated_at     DateTime    @default(now()) @updatedAt
 

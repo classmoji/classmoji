@@ -63,6 +63,7 @@ export interface SubmissionRow {
 }
 
 export interface SubmissionsRepo {
+  last_push_at?: string | Date | null;
   id: string;
   name: string;
   student_id: string | null;
@@ -150,12 +151,17 @@ const SubmissionsTable = ({
   // Only surface the "Imported" column when at least one repo carries imported data.
   const anyImported = repos.some(r => r.metadata != null && typeof r.metadata === 'object');
 
-  // The newest commit this repo has seen. Until the commit stats have been
-  // fetched, a push-mode row's submission time is the push the webhook
-  // recorded, so it stands in.
+  // The newest push this repo has seen: the webhook's stamp on the repo first
+  // (a push after the deadline does not move a frozen submission, so the
+  // submission time alone would hide it), then the commit stats, then a
+  // push-mode submission time as the last resort.
   const lastPush = (repo: SubmissionsRepo) => {
     const s = repo.submission;
-    const candidates = [s?.analytics_snapshot?.last_commit_at, isPushMode ? s?.closed_at : null];
+    const candidates = [
+      repo.last_push_at,
+      s?.analytics_snapshot?.last_commit_at,
+      isPushMode ? s?.closed_at : null,
+    ];
     let latest: number | null = null;
     for (const at of candidates) {
       if (!at) continue;
