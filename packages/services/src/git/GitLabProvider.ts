@@ -230,13 +230,14 @@ export class GitLabProvider extends GitProvider {
    * @param {string} description - Project description
    * @returns {Promise<{id: string, name: string, url: string}>}
    */
-  async createPublicRepository(
+  async createContentRepository(
     _group: string,
     _name: string,
-    _description: string = ''
+    _description: string = '',
+    _isPrivate: boolean = true
   ): Promise<never> {
-    // TODO: POST /api/v4/projects with visibility: 'public'
-    throw new Error('GitLabProvider.createPublicRepository() not implemented');
+    // TODO: POST /api/v4/projects with visibility per _isPrivate
+    throw new Error('GitLabProvider.createContentRepository() not implemented');
   }
 
   /**
@@ -695,24 +696,8 @@ export class GitLabProvider extends GitProvider {
 
   // ─── GitLab Pages ─────────────────────────────────────────────────────────
 
-  /**
-   * GitLab Pages is enabled via .gitlab-ci.yml, not API
-   * @param {string} group - Group path
-   * @param {string} project - Project name
-   * @param {string} branch - Branch to serve pages from
-   * @returns {Promise<{alreadyEnabled?: boolean}>}
-   */
-  async enableGitHubPages(
-    _group: string,
-    _project: string,
-    _branch: string = 'main'
-  ): Promise<never> {
-    // GitLab Pages requires CI/CD configuration, not API call
-    // TODO: Check if pages job exists in .gitlab-ci.yml
-    throw new Error(
-      'GitLabProvider.enableGitHubPages() not implemented - GitLab uses CI/CD for Pages'
-    );
-  }
+  // There is no enable here either: Classmoji never turns on GitLab Pages, the
+  // same rule as GitHub Pages.
 
   /**
    * GitLab Pages state lives in CI/CD, not in an API this adapter speaks

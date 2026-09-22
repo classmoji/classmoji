@@ -40,14 +40,15 @@ vi.mock('../../content/ContentService.ts', () => ({
 }));
 
 const repositoryExistsMock = vi.fn();
-const createPublicRepositoryMock = vi.fn();
-const enableGitHubPagesMock = vi.fn();
+const createContentRepositoryMock = vi.fn();
 
+// The provider stub carries NO GitHub Pages method, on purpose: Classmoji
+// never turns GitHub Pages on, so a create that reached for one would throw
+// here rather than pass quietly.
 vi.mock('../../git/index.ts', () => ({
   getGitProvider: () => ({
     repositoryExists: (...args: unknown[]) => repositoryExistsMock(...args),
-    createPublicRepository: (...args: unknown[]) => createPublicRepositoryMock(...args),
-    enableGitHubPages: (...args: unknown[]) => enableGitHubPagesMock(...args),
+    createContentRepository: (...args: unknown[]) => createContentRepositoryMock(...args),
   }),
 }));
 
@@ -226,7 +227,7 @@ describe('page.createPage', () => {
     expect(repositoryExistsMock).not.toHaveBeenCalled();
   });
 
-  it('creates the content repo (and enables Pages) when missing and delivery is off', async () => {
+  it('creates the content repo when missing, and nothing beyond it', async () => {
     repositoryExistsMock.mockResolvedValue(false);
     vi.useFakeTimers();
     const pending = createPage({
@@ -238,20 +239,57 @@ describe('page.createPage', () => {
     await pending;
     vi.useRealTimers();
 
-    expect(createPublicRepositoryMock).toHaveBeenCalledWith(
+    // Legacy path: uploads are stored as raw URLs, so the repo stays public.
+    expect(createContentRepositoryMock).toHaveBeenCalledWith(
       'test-org',
       'content-test-org-cs101',
-      'Course content for Test Class'
+      'Course content for Test Class',
+      false
     );
-    expect(enableGitHubPagesMock).toHaveBeenCalledWith('test-org', 'content-test-org-cs101');
+    // Create-and-wait is the whole of it — no GitHub Pages call follows.
+    expect(createContentRepositoryMock).toHaveBeenCalledTimes(1);
   });
 
-  // The cutover invariant. A classroom served by the signed-content Worker is
-  // on its way to a PRIVATE content repo; switching the public github.io site
-  // back on there is the leak the Pages-off helper exists to close, and a page
-  // create is the likeliest thing to do it. The repo is still created — only
-  // Pages is withheld.
-  it('does NOT enable Pages when content delivery is on for the classroom', async () => {
+  // Private exactly when the delivery layer will serve the classroom: the
+  // deployment can sign AND the classroom is enabled. Env is pinned per test so
+  // a local .env cannot change the outcome.
+  it.each([
+    { signing: 'test-secret', expected: true, label: 'private when delivery can serve it' },
+    { signing: '', expected: false, label: 'public when the deployment cannot sign' },
+  ])('creates the content repo $label', async ({ signing, expected }) => {
+    classroomFindUniqueMock.mockResolvedValue({ ...classroom, content_delivery_enabled: true });
+    repositoryExistsMock.mockResolvedValue(false);
+    vi.stubEnv('CONTENT_SIGNING_SECRET', signing);
+    vi.stubEnv('CONTENT_DELIVERY_ORIGIN', 'https://content.example.test');
+    vi.useFakeTimers();
+    try {
+      const pending = createPage({
+        classroomId: 'class-1',
+        title: 'First Page',
+        createdBy: 'user-1',
+      });
+      await vi.runAllTimersAsync();
+      await pending;
+    } finally {
+      vi.useRealTimers();
+      vi.unstubAllEnvs();
+    }
+
+    expect(createContentRepositoryMock).toHaveBeenCalledWith(
+      'test-org',
+      'content-test-org-cs101',
+      'Course content for Test Class',
+      expected
+    );
+  });
+
+  // The invariant, and it is absolute: GitHub Pages is never enabled, whatever
+  // the delivery flag says. The public github.io site is what the Pages-off
+  // helper exists to close, and a page create used to be the likeliest thing
+  // to switch it back on. The repo is still created — the create simply stops
+  // there, so a reinstated GitHub Pages call would blow up on the provider
+  // stub.
+  it('creates the repo without enabling GitHub Pages, delivery flag on', async () => {
     classroomFindUniqueMock.mockResolvedValue({ ...classroom, content_delivery_enabled: true });
     repositoryExistsMock.mockResolvedValue(false);
     vi.useFakeTimers();
@@ -261,11 +299,11 @@ describe('page.createPage', () => {
       createdBy: 'user-1',
     });
     await vi.runAllTimersAsync();
-    await pending;
+    const page = await pending;
     vi.useRealTimers();
 
-    expect(createPublicRepositoryMock).toHaveBeenCalled();
-    expect(enableGitHubPagesMock).not.toHaveBeenCalled();
+    expect(createContentRepositoryMock).toHaveBeenCalledTimes(1);
+    expect(page.id).toBe('page-1');
   });
 
   it('propagates route-identical errors for missing org config', async () => {
@@ -486,25 +524,26 @@ describe('page.ensureContentRepo', () => {
     repositoryExistsMock.mockResolvedValue(true);
   });
 
-  it('returns the repo name and tries to enable Pages while delivery is off', async () => {
+  // An existing repo means there is nothing to do: no create, and no
+  // GitHub Pages call either — this is the entry point every slide create,
+  // batch page import and classroom import goes through, and none of them
+  // may turn a site on.
+  it('returns the repo name and touches nothing for an existing repo', async () => {
     const result = await ensureContentRepo('class-1');
     expect(result).toEqual({ repoName: 'content-test-org-cs101' });
-    expect(createPublicRepositoryMock).not.toHaveBeenCalled();
-    expect(enableGitHubPagesMock).toHaveBeenCalledTimes(1);
+    expect(createContentRepositoryMock).not.toHaveBeenCalled();
   });
 
-  // Same guard reached through the other entry point — this is the one every
-  // slide create, batch page import and classroom import goes through.
-  it('does NOT enable Pages when content delivery is on for the classroom', async () => {
+  it('is the same with content delivery on for the classroom', async () => {
     classroomFindUniqueMock.mockResolvedValue({ ...classroom, content_delivery_enabled: true });
     const result = await ensureContentRepo('class-1');
     expect(result).toEqual({ repoName: 'content-test-org-cs101' });
-    expect(enableGitHubPagesMock).not.toHaveBeenCalled();
+    expect(createContentRepositoryMock).not.toHaveBeenCalled();
   });
 
   it('throws the route-identical message when repo creation fails', async () => {
     repositoryExistsMock.mockResolvedValue(false);
-    createPublicRepositoryMock.mockRejectedValue(new Error('403'));
+    createContentRepositoryMock.mockRejectedValue(new Error('403'));
     await expect(ensureContentRepo('class-1')).rejects.toThrow(
       'Failed to create GitHub repository. Please check your GitHub organization permissions'
     );

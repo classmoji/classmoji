@@ -1,9 +1,15 @@
-import {
-  assertClassroomMutationAllowed,
-  assertProTier,
-  requireClassroomStaff,
-  type ClassroomStatusInput,
-} from '@classmoji/auth/server';
+import { assertProTier, requireClassroomStaff } from '@classmoji/auth/server';
+
+/**
+ * The classroom-status mutation gate, re-exported from the platform package it
+ * now lives in.
+ *
+ * It moved out of this file when the webapp grew a forms list of its own: two
+ * apps apply the same rule, the webapp cannot import from apps/pages, and a
+ * second copy is a second thing to keep in step. Re-exported under the name the
+ * four forms routes here already import, so none of them changed.
+ */
+export { formMutationBlocked } from '@classmoji/auth/server';
 
 /**
  * The forms subtree's gate.
@@ -81,27 +87,4 @@ export async function assertFormAdmin(
   await assertProTier(classroomSlug);
 
   return access as unknown as FormAdminContext;
-}
-
-/**
- * Classroom-status mutation gate (SEC4), applied to forms for the same reason
- * `pageMutationBlocked` applies it to pages: a LOCKED or UNPUBLISHED classroom
- * is read-only for everyone but its owner, and a form definition is classroom
- * content like any other.
- *
- * Returns the platform's typed 403 Response for the action to RETURN as data
- * rather than throw — a thrown Response from a fetcher submit escalates to the
- * route ErrorBoundary and unmounts the builder mid-edit.
- */
-export function formMutationBlocked(classroom: { status?: string }, role: string): Response | null {
-  try {
-    assertClassroomMutationAllowed({
-      status: classroom.status as ClassroomStatusInput['status'],
-      role: role as ClassroomStatusInput['role'],
-    });
-    return null;
-  } catch (thrown) {
-    if (thrown instanceof Response) return thrown;
-    throw thrown;
-  }
 }

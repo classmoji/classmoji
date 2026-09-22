@@ -567,6 +567,9 @@ const CommonLayout = ({
             pathname.includes('/submissions/') ||
             pathname.match(/\/slides(\/|$)/) ||
             pathname.match(/\/pages(\/|$)/) ||
+            // Segment-anchored like its neighbours: the forms list brings its
+            // own floating card, so without this it would render card-on-card.
+            pathname.match(/\/forms(\/|$)/) ||
             pathname.match(/\/grades(\/|$)/)
               ? ''
               : 'bg-panel rounded-2xl ring-1 ring-line'

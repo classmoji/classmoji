@@ -1,5 +1,16 @@
 @import 'tailwindcss';
 
+/* Drive `dark:` from the theme CLASS, not `prefers-color-scheme`.
+ *
+ * root.tsx's boot script is the single place that decides this document's
+ * appearance -- it reads the OS and honours the `?theme=` the webapp passes
+ * when it frames a page -- and writes `.dark`/`.light` on <html> before first
+ * paint. Without this line Tailwind v4 compiles every `dark:` utility to a
+ * media query, so the utilities followed the OS while the ground rules below
+ * and the `.dark` rules in blocknote-overrides.css followed the class; when the
+ * two disagreed a page rendered half-dark. Same shape as apps/slides. */
+@custom-variant dark (&:where(.dark, .dark *));
+
 /* Notion-inspired design tokens */
 :root {
   /* Colors - Light Mode */

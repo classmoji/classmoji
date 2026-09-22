@@ -353,3 +353,16 @@ export {
   aggregateByContributor,
   commitsPerDayByContributor,
 } from './classmoji/repoAnalytics.flags.ts';
+
+// Class-site origins, and the public URL a form is shared as. One copy, because
+// apps/pages and apps/webapp both build these links and have to build the same
+// ones; apps/pages re-exports them under the local names it already used.
+export {
+  siteBaseDomain,
+  siteOrigin,
+  customDomainOrigin,
+  seoOriginFor,
+  canonicalOriginForSite,
+  publicFormUrlFor,
+} from './classmoji/siteLinks.ts';
+export type { SeoOriginInput } from './classmoji/siteLinks.ts';
