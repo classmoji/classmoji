@@ -43,8 +43,14 @@ export const action = checkAuth(async ({ request, user }) => {
     return { error: error instanceof Error ? error.message : 'Import failed. Please try again.' };
   }
 
-  // Durable audit record per imported classroom (the importer is the OWNER).
+  // Durable audit record per imported classroom (the importer is the OWNER),
+  // and a grading scale for any imported classroom that has none.
   for (const r of results) {
+    try {
+      await ClassmojiService.emojiMapping.ensureDefaultScale(r.classroomId);
+    } catch (error: unknown) {
+      console.error('Default grading scale seeding failed:', error);
+    }
     try {
       await ClassmojiService.audit.create({
         user_id: user.id,

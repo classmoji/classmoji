@@ -1,7 +1,12 @@
 import { useMemo, useState } from 'react';
 import { ConfigProvider, Input, Popover, Select, Table, Tooltip } from 'antd';
 import type { TableProps } from 'antd';
-import { IconAdjustmentsHorizontal, IconSearch } from '@tabler/icons-react';
+import {
+  IconAdjustmentsHorizontal,
+  IconChevronDown,
+  IconChevronRight,
+  IconSearch,
+} from '@tabler/icons-react';
 import { Link, useLocation, useParams } from 'react-router';
 import dayjs from 'dayjs';
 import { mean, median } from 'simple-statistics';
@@ -149,9 +154,10 @@ const Chip = ({
 
 /**
  * The gradebook: students as rows, one column per published assignment
- * grouped under its module, Total pinned beside the student. Read-only by design. Every
- * cell says where the submission stands and links to that student's row on the
- * assignment page, where grading happens.
+ * grouped under its module, each module closing with its own total, and the
+ * class Total pinned beside the student. Repo cells grade in place through the
+ * hover picker; every cell also links to that student's row on the assignment
+ * page.
  */
 const GradesTable = (props: GradesTableProps) => {
   const {
@@ -203,6 +209,27 @@ const GradesTable = (props: GradesTableProps) => {
   const columnsSpec = useMemo(() => groups.flatMap(g => g.items), [groups]);
 
   const finalOf = (s: Student) => calculateStudentFinalGrade(s.git_repos, emojiMappings, settings);
+  // A module's total is the same weighted math as the class total, run over
+  // just that module's repo assignments (quiz and form scores are not graded
+  // into the total anywhere, so they are not here either).
+  const moduleTotalOf = (s: Student, assignmentIds: Set<string>) => {
+    const repos = s.git_repos.map(repo => ({
+      ...repo,
+      assignments: (repo.assignments ?? []).filter(ra =>
+        assignmentIds.has(String((ra as Submission).assignment_id))
+      ),
+    }));
+    return calculateStudentFinalGrade(repos, emojiMappings, settings);
+  };
+  // Collapsed modules show only their total column.
+  const [collapsedModules, setCollapsedModules] = useState<Set<string>>(new Set());
+  const toggleModule = (id: string) =>
+    setCollapsedModules(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
   const rawOf = (s: Student) =>
     calculateStudentFinalGrade(s.git_repos, emojiMappings, settings, false);
   const individualOf = (s: Student) =>
@@ -414,12 +441,53 @@ const GradesTable = (props: GradesTableProps) => {
         </Link>
       ),
     },
-    ...groups.map(group => ({
-      title: <span className="font-semibold">{group.title}</span>,
-      key: `group-${group.id}`,
-      className: 'border-l border-line',
-      children: group.items.map(assignment => assignmentColumn(assignment)),
-    })),
+    ...groups.map(group => {
+      const collapsed = collapsedModules.has(group.id);
+      const ids = new Set(group.items.map(a => a.id));
+      const totalColumn = {
+        title: (
+          <div className="flex flex-col gap-0.5">
+            <span>Module total</span>
+            <span className="text-[11px] font-medium text-ink-3">
+              {group.items.length} assignment{group.items.length === 1 ? '' : 's'}
+            </span>
+          </div>
+        ),
+        key: `module-total-${group.id}`,
+        width: 120,
+        className: 'bg-stone-50/60 dark:bg-neutral-800/40',
+        sorter: (a: Student, b: Student) => moduleTotalOf(a, ids) - moduleTotalOf(b, ids),
+        render: (_: unknown, student: Student) => {
+          const total = moduleTotalOf(student, ids);
+          return total >= 0 ? (
+            <span className="font-semibold tabular-nums">{Math.round(total * 10) / 10}</span>
+          ) : (
+            <span className="text-ink-4">–</span>
+          );
+        },
+      };
+      return {
+        title: (
+          <span className="inline-flex items-center gap-1.5 font-semibold">
+            <button
+              type="button"
+              onClick={() => toggleModule(group.id)}
+              aria-expanded={!collapsed}
+              aria-label={collapsed ? `Expand ${group.title}` : `Collapse ${group.title}`}
+              className="inline-flex h-5 w-5 items-center justify-center rounded text-ink-3 hover:bg-nav-hover hover:text-ink-1"
+            >
+              {collapsed ? <IconChevronRight size={14} /> : <IconChevronDown size={14} />}
+            </button>
+            {group.title}
+          </span>
+        ),
+        key: `group-${group.id}`,
+        className: 'border-l border-line',
+        children: collapsed
+          ? [totalColumn]
+          : [...group.items.map(assignment => assignmentColumn(assignment)), totalColumn],
+      };
+    }),
     {
       title: (
         <div className="flex flex-col gap-0.5">
@@ -498,13 +566,14 @@ const GradesTable = (props: GradesTableProps) => {
   const summary = (pageData: readonly Student[]) => {
     const finals = pageData.map(finalOf).filter(g => g >= 0);
     if (finals.length === 0) return null;
-    return (
-      <Table.Summary fixed>
-        <Table.Summary.Row>
-          <Table.Summary.Cell index={0}>
-            <span className="text-xs font-semibold text-ink-3">Class</span>
-          </Table.Summary.Cell>
-          {columnsSpec.map((a, i) => {
+    // One summary cell per VISIBLE column, in column order: a collapsed module
+    // contributes only its total cell.
+    const meanText = (values: number[]) => (values.length ? mean(values).toFixed(1) : '–');
+    const summaryCells = groups.flatMap(group => {
+      const ids = new Set(group.items.map(a => a.id));
+      const assignmentCells = collapsedModules.has(group.id)
+        ? []
+        : group.items.map(a => {
             const grades =
               a.type === 'REPO'
                 ? pageData.map(s => gradeOf(s, a.id)).filter((g): g is number => g !== null)
@@ -513,22 +582,30 @@ const GradesTable = (props: GradesTableProps) => {
                       .map(s => activity.quiz[a.id]?.[s.id]?.score ?? null)
                       .filter((g): g is number => g !== null)
                   : [];
-            return (
-              <Table.Summary.Cell key={a.id} index={i + 1}>
-                <span className="text-xs text-ink-2 tabular-nums">
-                  {grades.length ? mean(grades).toFixed(1) : '–'}
-                </span>
-              </Table.Summary.Cell>
-            );
-          })}
-          <Table.Summary.Cell index={columnsSpec.length + 1}>
+            return { key: a.id, text: meanText(grades) };
+          });
+      const totals = pageData.map(s => moduleTotalOf(s, ids)).filter(t => t >= 0);
+      return [...assignmentCells, { key: `module-total-${group.id}`, text: meanText(totals) }];
+    });
+    return (
+      <Table.Summary fixed>
+        <Table.Summary.Row>
+          <Table.Summary.Cell index={0}>
+            <span className="text-xs font-semibold text-ink-3">Class</span>
+          </Table.Summary.Cell>
+          {summaryCells.map((cell, i) => (
+            <Table.Summary.Cell key={cell.key} index={i + 1}>
+              <span className="text-xs text-ink-2 tabular-nums">{cell.text}</span>
+            </Table.Summary.Cell>
+          ))}
+          <Table.Summary.Cell index={summaryCells.length + 1}>
             <span className="text-xs text-ink-2 whitespace-nowrap">
               mean {mean(finals).toFixed(1)}
               <br />
               median {median(finals).toFixed(1)}
             </span>
           </Table.Summary.Cell>
-          <Table.Summary.Cell index={columnsSpec.length + 2}></Table.Summary.Cell>
+          <Table.Summary.Cell index={summaryCells.length + 2}></Table.Summary.Cell>
         </Table.Summary.Row>
       </Table.Summary>
     );
@@ -610,7 +687,7 @@ const GradesTable = (props: GradesTableProps) => {
             size="small"
             bordered
             sticky
-            scroll={{ x: 440 + columnsSpec.length * 170 }}
+            scroll={{ x: 440 + (columnsSpec.length + groups.length) * 170 }}
             pagination={{
               pageSize: 50,
               showSizeChanger: true,

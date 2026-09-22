@@ -529,6 +529,14 @@ export const action = checkAuth(async ({ request }: { request: Request }) => {
     }
   }
 
+  // A grading scale from day one. Runs after the config import above so a
+  // copied scale wins; only a classroom with no mappings gets the default.
+  try {
+    await ClassmojiService.emojiMapping.ensureDefaultScale(classroom.id);
+  } catch (error: unknown) {
+    console.error('Default grading scale seeding failed:', error);
+  }
+
   // Create per-classroom GitHub teams (e.g., "cs101-25w-students", "cs101-25w-assistants")
   const gitProvider = getGitProvider(gitOrg);
 

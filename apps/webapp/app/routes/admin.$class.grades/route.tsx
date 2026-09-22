@@ -28,7 +28,7 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
 
   const promises = {
     emojiMappings: ClassmojiService.emojiMapping.findByClassroomId(classroom.id),
-    // Modules, for the payload the tests pin; the grid itself does not group.
+    // Modules, in course order: the grid groups its columns under them.
     modules: ClassmojiService.module
       .findByClassroomSlug(classSlug!)
       .then(modules => modules.map(m => ({ id: m.id, title: m.title, position: m.position }))),
@@ -75,8 +75,8 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
           letter_grade: m.letter_grade,
         }))
       ),
-    // The columns: every published assignment, flat, in deadline order; the
-    // module is a caption, never a grouping. Grading weight lives here.
+    // The columns: every published assignment, grouped under its module in the
+    // grid (module order, then creation order). Grading weight lives here.
     assignments: ClassmojiService.assignment
       .listForClassroom(classroom.id, { publishedOnly: true })
       .then(assignments =>

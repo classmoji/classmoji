@@ -317,7 +317,7 @@ const AssignmentFormModal = ({
 
         <Form.Item
           name="title"
-          label="Title"
+          label="Assignment title"
           rules={[{ required: true, message: 'Enter a title' }]}
         >
           <Input placeholder="Lab 3: Linked lists" />
@@ -346,62 +346,71 @@ const AssignmentFormModal = ({
         )}
 
         {kind === 'REPO' && !isEdit && repoSource === 'new' ? (
-          <Form.Item
-            name="template"
-            label="Template repository"
-            extra={
-              <>
-                Each student&apos;s copy will be named{' '}
-                <code className="text-ink-1">{repoSlug}-&lt;github-login&gt;</code>. Need a team
-                repository?{' '}
-                <a href={newRepositoryHref} target="_blank" rel="noreferrer">
-                  Create it on the Repositories page
-                </a>
-                .
-              </>
-            }
-            rules={[{ required: true, message: 'Pick a template repository' }]}
-          >
-            <Select
-              showSearch
-              filterOption={false}
-              placeholder="Type to search template repositories…"
-              loading={templateLoading}
-              onSearch={setTemplateQuery}
-              notFoundContent={
-                templateLoading ? (
-                  <span className="text-sm text-ink-3">
-                    <Spin size="small" /> Searching…
-                  </span>
-                ) : (
-                  <span className="text-sm text-ink-3">
-                    {templateQuery.trim().length >= 2
-                      ? 'No template repositories found'
-                      : 'Type to search GitHub for a template'}
-                  </span>
-                )
+          <>
+            <Form.Item label="Student repository name">
+              <div className="flex items-center gap-2 text-sm">
+                <code className="rounded-md bg-stone-100 dark:bg-neutral-800 px-2 py-1 text-ink-1">
+                  {repoSlug}-&lt;github-login&gt;
+                </code>
+                <span className="text-ink-3">one copy per student, named after the title</span>
+              </div>
+            </Form.Item>
+            <Form.Item
+              name="template"
+              label="Template repository"
+              extra={
+                <>
+                  Optional. Leave empty and a blank, private template named{' '}
+                  <code className="text-ink-1">{repoSlug}-template</code> is created in your
+                  organization for you to fill in. Need a team repository?{' '}
+                  <a href={newRepositoryHref} target="_blank" rel="noreferrer">
+                    Create it on the Repositories page
+                  </a>
+                  .
+                </>
               }
-              options={templateOptions.map(t => ({
-                value: t.full_name,
-                label: (
-                  <span className="flex items-center justify-between gap-2">
-                    <span className="flex items-center gap-2">
-                      <span className="font-medium">{t.full_name}</span>
-                      {t.private && (
-                        <Tag color="gold" className="m-0">
-                          Private
-                        </Tag>
-                      )}
+            >
+              <Select
+                showSearch
+                filterOption={false}
+                placeholder="Leave empty for a blank template, or search…"
+                loading={templateLoading}
+                onSearch={setTemplateQuery}
+                notFoundContent={
+                  templateLoading ? (
+                    <span className="text-sm text-ink-3">
+                      <Spin size="small" /> Searching…
                     </span>
-                    <span className="text-xs text-ink-3">
-                      {Number(t.stargazers_count) > 0 && `⭐${t.stargazers_count} `}
-                      {t.language ?? ''}
+                  ) : (
+                    <span className="text-sm text-ink-3">
+                      {templateQuery.trim().length >= 2
+                        ? 'No template repositories found'
+                        : 'Type to search GitHub for a template'}
                     </span>
-                  </span>
-                ),
-              }))}
-            />
-          </Form.Item>
+                  )
+                }
+                options={templateOptions.map(t => ({
+                  value: t.full_name,
+                  label: (
+                    <span className="flex items-center justify-between gap-2">
+                      <span className="flex items-center gap-2">
+                        <span className="font-medium">{t.full_name}</span>
+                        {t.private && (
+                          <Tag color="gold" className="m-0">
+                            Private
+                          </Tag>
+                        )}
+                      </span>
+                      <span className="text-xs text-ink-3">
+                        {Number(t.stargazers_count) > 0 && `⭐${t.stargazers_count} `}
+                        {t.language ?? ''}
+                      </span>
+                    </span>
+                  ),
+                }))}
+              />
+            </Form.Item>
+          </>
         ) : (
           <Form.Item
             name="target_id"

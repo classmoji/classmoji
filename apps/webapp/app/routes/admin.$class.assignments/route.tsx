@@ -63,9 +63,6 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
         // the template, named after the assignment, so each student's copy is
         // `<title-slug>-<login>`. Published later from the Repositories page.
         if (assignmentData.type === 'REPO' && !assignmentData.repository_id) {
-          if (typeof template !== 'string' || !template.trim()) {
-            return { error: 'Pick a template repository or an existing repository.' };
-          }
           const title = String(assignmentData.title ?? '').trim();
           const slug = titleToIdentifier(title);
           if (!slug) return { error: 'Enter a title the repository can be named after.' };
@@ -78,9 +75,34 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
               error: `A repository named "${title}" already exists. Pick it under "Existing repository", or use another title.`,
             };
           }
+          // No template picked: make a blank one in the classroom's own org
+          // rather than refusing or reaching for a shared default. It is the
+          // instructor's to fill in before the assignment is published.
+          let templateRef = typeof template === 'string' ? template.trim() : '';
+          if (!templateRef) {
+            if (!classroom.git_organization) {
+              return {
+                error: 'This classroom has no GitHub organization to create a template in.',
+              };
+            }
+            try {
+              const blank = await ClassmojiService.templateImport.createBlankTemplateRepository({
+                gitOrganization: classroom.git_organization,
+                slug,
+                assignmentTitle: title,
+                classroomName: classroom.name,
+              });
+              templateRef = blank.fullName;
+            } catch (error: unknown) {
+              console.error('Blank template creation failed:', error);
+              return {
+                error: `Could not create a blank template repository in ${classroom.git_organization.login}. Pick a template repository instead.`,
+              };
+            }
+          }
           const repository = await ClassmojiService.repository.create({
             title,
-            template: template.trim(),
+            template: templateRef,
             type: 'INDIVIDUAL',
             classroom_id: classroom.id,
           });

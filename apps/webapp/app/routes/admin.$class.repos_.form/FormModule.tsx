@@ -390,7 +390,7 @@ const FormModule = ({
                 {...{
                   control,
                   name: 'title',
-                  label: 'Title',
+                  label: 'Repository title',
                   placeholder: 'intro-to-data-structures',
                 }}
               >
