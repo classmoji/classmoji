@@ -125,7 +125,9 @@ const StudentModuleCard = ({
                       className={`${ASSIGNMENT_GRID} px-2 -mx-2 pb-1.5 text-[11px] font-semibold uppercase tracking-wide text-ink-4`}
                     >
                       <span />
-                      <span>Assignment</span>
+                      {/* No label over the title column: the "Assignments"
+                          section heading directly above already names it. */}
+                      <span />
                       <span>Status</span>
                       <span>Due</span>
                       <span>Grade</span>
@@ -173,8 +175,8 @@ const StudentModuleCard = ({
                         >
                           <RowIcon size={18} className="text-gray-400" />
                           <span className="min-w-0 truncate text-ink-1">
-                            {/* The column header already says "Assignment"; only a
-                                quiz or form row still needs its kind spelled out. */}
+                            {/* The "Assignments" section heading already says what these
+                                are; only a quiz or form row needs its kind spelled out. */}
                             {label !== 'Assignment' && (
                               <span className="font-semibold mr-2">{label}:</span>
                             )}
