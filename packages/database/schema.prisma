@@ -169,6 +169,14 @@ enum SubmissionState {
   SUBMITTED
 }
 
+/// Gallery moderation for a response. Only meaningful when the response's form
+/// has gallery_org_id set; the public gallery shows APPROVED + SUBMITTED only.
+enum GalleryStatus {
+  PENDING
+  APPROVED
+  HIDDEN
+}
+
 // ============================================================================
 // BETTERAUTH TABLES
 // ============================================================================
@@ -388,7 +396,8 @@ model GitOrganization {
   created_at             DateTime    @default(now())
   updated_at             DateTime    @default(now()) @updatedAt
 
-  classrooms Classroom[]
+  classrooms    Classroom[]
+  gallery_forms Form[]
 
   @@unique([provider, provider_id])
   @@index([provider, login])
@@ -1769,6 +1778,11 @@ model Form {
   /// partial answers can turn it off per form.
   save_partials       Boolean    @default(true)
   confirmation_email  Boolean    @default(false)
+  /// Non-null: this form's APPROVED responses appear in the org project
+  /// gallery ({subdomain}/projects on every class site in the org). Always the
+  /// form's own classroom's git_org_id — form.service.setGalleryOrg is the only
+  /// writer and never takes an org id from a caller.
+  gallery_org_id      String?
   created_by          String
   created_at          DateTime   @default(now())
   updated_at          DateTime   @default(now()) @updatedAt
@@ -1779,9 +1793,11 @@ model Form {
   responses    FormResponse[]
   module_items ModuleItem[]
   assignment   Assignment?
+  gallery_org  GitOrganization? @relation(fields: [gallery_org_id], references: [id], onDelete: SetNull)
 
   @@unique([classroom_id, slug])
   @@index([classroom_id])
+  @@index([gallery_org_id])
   @@map("forms")
 }
 
@@ -1862,6 +1878,9 @@ model FormResponse {
   staff_status     String?
   /// Staff-only note living with the submission. Same visibility rule.
   staff_note       String?
+  /// Gallery moderation. New rows start PENDING; the teaching team approves or
+  /// hides. A student edit after approval keeps APPROVED (staff can hide).
+  gallery_status   GalleryStatus   @default(PENDING)
 
   submitted_at DateTime @default(now())
   created_at   DateTime @default(now())
@@ -1882,6 +1901,7 @@ model FormResponse {
   //   (form_id, email_normalized) WHERE user_id IS NULL
   @@index([form_id, submitted_at])
   @@index([added_by])
+  @@index([form_id, gallery_status])
   @@map("form_responses")
 }
 
