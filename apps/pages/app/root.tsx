@@ -233,16 +233,18 @@ const DARK_MODE_SCRIPT = `
  * pages host, opened directly) this is the OS-driven behavior of
  * `DARK_MODE_SCRIPT`. Class sites never carry the param and keep `DARK_MODE_SCRIPT`.
  *
- * FORCED LIGHT IS A POSITIVE MARKER. `?theme=light` adds a `light` class as well
- * as removing `dark`, because "no dark class" cannot be told apart from "nobody
- * expressed a preference" — and something has to be able to tell, or a rule
- * keyed on `prefers-color-scheme` darkens a deliberately-light embed on a
- * dark-mode machine. The forms canvas is the rule that needs it today (see
- * `components/forms/FormCanvas.tsx`); every Tailwind `dark:` utility in this app
- * is in the same position, compiling to a media query for want of a
- * `@custom-variant dark`. Only this branch sets `light`, and this branch returns
- * before the OS listener is attached, so `light` and `dark` are never both
- * present.
+ * THE CLASS THIS WRITES IS THE ONLY SIGNAL. `styles/tailwind.css` declares
+ * `@custom-variant dark`, so every Tailwind `dark:` utility keys on `.dark`,
+ * as do the ground rules there, the `.dark` rules in `blocknote-overrides.css`
+ * and BlockNote's own theme (`$classroomSlug.$pageId/route.tsx`). Nothing reads
+ * `prefers-color-scheme` except this script, which means a forced `?theme=`
+ * moves the whole document at once instead of half of it.
+ *
+ * FORCED LIGHT IS STILL A POSITIVE MARKER. `?theme=light` adds a `light` class
+ * as well as removing `dark`, because "no dark class" cannot be told apart from
+ * "nobody expressed a preference" — `FormCanvas`'s `html.light` rule is what
+ * reads it today. Only this branch sets `light`, and this branch returns before
+ * the OS listener is attached, so `light` and `dark` are never both present.
  */
 const APP_DARK_MODE_SCRIPT = `
               (function() {
@@ -414,14 +416,21 @@ export function ErrorBoundary() {
   // The loader may be what threw, so the site flag is derived from the URL
   // rather than loader data.
   if (isSitePath(location.pathname)) {
-    // Script-less error document: no <Scripts/>, no JS-dependent controls.
+    // No <Scripts/> and no JS-dependent controls: the dark-mode script below is
+    // the only thing that runs here, exactly as on a real class-site page.
     return (
-      <html lang="en">
+      <html lang="en" suppressHydrationWarning>
         <head>
           <meta charSet="utf-8" />
           <meta name="viewport" content="width=device-width, initial-scale=1" />
           <Meta />
           <Links />
+          {/* `dark:` is class-driven (styles/tailwind.css), so a document that
+              never sets the class is stuck in light mode however dark the OS
+              is. DARK_MODE_SCRIPT and not the App twin: a class site's
+              `script-src` allows exactly one hash (site/headers.server.ts), and
+              this is it. */}
+          <script dangerouslySetInnerHTML={{ __html: DARK_MODE_SCRIPT }} />
         </head>
         <body className="bg-gray-50 dark:bg-[#191919]">
           <div className="min-h-screen flex flex-col items-center justify-center px-4">
@@ -447,12 +456,16 @@ export function ErrorBoundary() {
   }
 
   return (
-    <html lang="en">
+    <html lang="en" suppressHydrationWarning>
       <head>
         <meta charSet="utf-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1" />
         <Meta />
         <Links />
+        {/* This document renders INSTEAD of `App`, so it has to set the theme
+            class itself: `dark:` is class-driven (styles/tailwind.css) and an
+            error page without this would always be light. */}
+        <script dangerouslySetInnerHTML={{ __html: APP_DARK_MODE_SCRIPT }} />
       </head>
       <body className="bg-gray-50 dark:bg-[#191919]">
         <div className="min-h-screen flex flex-col items-center justify-center px-4">
