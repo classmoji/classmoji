@@ -259,13 +259,15 @@ export const create = async (data: GitRepoAssignmentCreateData) => {
 
 /**
  * A push to a student repo is the submission for every published REPO-mode
- * assignment that submits through it, the way GitHub Classroom treated repos:
- * the latest push BEFORE the deadline is the submission, and the deadline
- * freezes it. Extension hours the student bought with tokens push their
- * deadline out by that many hours. A push after that is not a submission at
- * all (the row stays as it was), a row with grades is frozen too, and a
- * late-delivered older webhook never moves the time backwards. Returns the
- * rows that changed.
+ * assignment that submits through it. The latest push BEFORE the deadline is
+ * the submission and the deadline freezes it, the way GitHub Classroom
+ * treated repos; extension hours the student bought with tokens push their
+ * deadline out by that many hours. A push AFTER that cutoff only counts when
+ * the row has no submission yet: it becomes a late submission (the late
+ * penalty applies, or the instructor waives it) rather than leaving the
+ * student at "Not submitted". An on-time submission is never replaced by a
+ * late push, a row with grades is frozen too, and a late-delivered older
+ * webhook never moves the time backwards. Returns the rows that changed.
  */
 export const recordPush = async (gitRepoId: string, pushedAt: Date) => {
   const prisma = getPrisma();
@@ -278,6 +280,7 @@ export const recordPush = async (gitRepoId: string, pushedAt: Date) => {
     },
     select: {
       id: true,
+      closed_at: true,
       assignment: { select: { student_deadline: true } },
       token_transactions: { where: { type: 'PURCHASE' }, select: { hours_purchased: true } },
     },
@@ -290,7 +293,9 @@ export const recordPush = async (gitRepoId: string, pushedAt: Date) => {
       0
     );
     const cutoff = new Date(deadline).getTime() + extensionHours * 3_600_000;
-    return pushedAt.getTime() <= cutoff;
+    if (pushedAt.getTime() <= cutoff) return true;
+    // Past the cutoff: a first push is a late submission; an existing one stays.
+    return c.closed_at === null;
   });
   if (open.length === 0) return [];
   await prisma.gitRepoAssignment.updateMany({
@@ -316,8 +321,8 @@ export const CLASSMOJI_BOT_EMAIL = 'hello@classmoji.com';
  * dated before the repo existed (the template's history, pushed as-is). A
  * student who pushes seconds after provisioning still counts; an earlier
  * two-minute grace window used to swallow that push. Only fills an empty
- * `closed_at`; a push after the deadline leaves the row unsubmitted, as the
- * webhook path does. Returns the time recorded, or null.
+ * `closed_at`; a push after the deadline is recorded as a late submission,
+ * as the webhook path does. Returns the time recorded, or null.
  */
 export const recordExistingPush = async (gitRepoAssignmentId: string) => {
   const prisma = getPrisma();
@@ -351,9 +356,6 @@ export const recordExistingPush = async (gitRepoAssignmentId: string) => {
   });
   if (!own) return null;
   const pushedAt = new Date(own.ts);
-
-  const deadline = row.assignment.student_deadline;
-  if (deadline && pushedAt.getTime() > new Date(deadline).getTime()) return null;
 
   const result = await prisma.gitRepoAssignment.updateMany({
     where: { id: row.id, closed_at: null },

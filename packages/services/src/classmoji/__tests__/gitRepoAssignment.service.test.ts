@@ -185,8 +185,14 @@ describe('recordPush', () => {
 
   const pushedAt = new Date('2026-09-20T12:00:00.000Z');
 
-  const candidate = (id: string, deadline: Date | null, hours: number[] = []) => ({
+  const candidate = (
+    id: string,
+    deadline: Date | null,
+    hours: number[] = [],
+    closedAt: Date | null = null
+  ) => ({
     id,
+    closed_at: closedAt,
     assignment: { student_deadline: deadline },
     token_transactions: hours.map(h => ({ hours_purchased: h })),
   });
@@ -210,13 +216,14 @@ describe('recordPush', () => {
     expect(touched).toEqual([{ id: 'ra-1' }, { id: 'ra-2' }]);
   });
 
-  it('freezes the submission at the deadline, extended by purchased hours (GitHub Classroom rule)', async () => {
+  it('freezes an on-time submission at the deadline, extended by purchased hours', async () => {
     const hourBefore = new Date(pushedAt.getTime() - 3_600_000);
     const threeHoursBefore = new Date(pushedAt.getTime() - 3 * 3_600_000);
+    const onTime = new Date(pushedAt.getTime() - 2 * 3_600_000);
     findManyMock.mockResolvedValue([
-      candidate('past-deadline', hourBefore),
+      candidate('past-deadline-submitted', hourBefore, [], onTime),
       candidate('within-extension', threeHoursBefore, [2, 2]),
-      candidate('extension-too-short', threeHoursBefore, [1]),
+      candidate('extension-too-short-submitted', threeHoursBefore, [1], onTime),
       candidate('no-deadline', null),
     ]);
     updateManyMock.mockResolvedValue({ count: 2 });
@@ -228,6 +235,20 @@ describe('recordPush', () => {
       data: { status: 'CLOSED', closed_at: pushedAt },
     });
     expect(touched).toEqual([{ id: 'within-extension' }, { id: 'no-deadline' }]);
+  });
+
+  it('records a first push after the deadline as a late submission', async () => {
+    const hourBefore = new Date(pushedAt.getTime() - 3_600_000);
+    findManyMock.mockResolvedValue([candidate('never-submitted', hourBefore)]);
+    updateManyMock.mockResolvedValue({ count: 1 });
+
+    const touched = await recordPush('gitrepo-1', pushedAt);
+
+    expect(updateManyMock).toHaveBeenCalledWith({
+      where: { id: { in: ['never-submitted'] } },
+      data: { status: 'CLOSED', closed_at: pushedAt },
+    });
+    expect(touched).toEqual([{ id: 'never-submitted' }]);
   });
 
   it('writes nothing when no row qualifies', async () => {
@@ -298,12 +319,15 @@ describe('recordExistingPush', () => {
     expect(await recordExistingPush('ra-1')).toEqual(new Date('2026-09-01T10:01:40.000Z'));
   });
 
-  it('leaves a push after the deadline unsubmitted, as the webhook would', async () => {
+  it('records a push after the deadline as a late submission, as the webhook would', async () => {
     findUniqueMock.mockResolvedValue(rowFor(new Date('2026-09-10T00:00:00.000Z')));
     listCommitsMock.mockResolvedValue([commit('2026-09-18T10:00:00.000Z')]);
 
-    expect(await recordExistingPush('ra-1')).toBeNull();
-    expect(updateManyMock).not.toHaveBeenCalled();
+    expect(await recordExistingPush('ra-1')).toEqual(new Date('2026-09-18T10:00:00.000Z'));
+    expect(updateManyMock).toHaveBeenCalledWith({
+      where: { id: 'ra-1', closed_at: null },
+      data: { status: 'CLOSED', closed_at: new Date('2026-09-18T10:00:00.000Z') },
+    });
   });
 
   it('does nothing for an issue-mode row or one already submitted', async () => {

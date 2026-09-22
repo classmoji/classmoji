@@ -44,9 +44,9 @@ A repository assignment has one of two submission modes.
 
 **Push mode** is the default for new assignments. A push to the student's repo is the submission. Nothing is created on Github.
 
-- The last push before the deadline (plus any extension hours bought with tokens) counts as the submission.
-- A push after the deadline is late; the late penalty applies unless you waive it.
-- Once the submission is graded, its submission time is frozen. Later pushes don't move it.
+- The last push before the deadline (plus any extension hours bought with tokens) counts as the submission. The deadline freezes it: later pushes never replace an on-time submission.
+- A student who only pushes after the deadline still gets a submission, marked late; the late penalty applies unless you waive it. Lateness counts in whole hours.
+- Once the submission is graded, its submission time is frozen.
 - If you add an assignment to a repository students have already pushed to, their latest push counts (template and bot commits are excluded).
 
 **Issue mode** is the older flow. When the assignment is released, Classmoji opens a Github issue in each student repo. Closing the issue submits; reopening it un-submits. Make sure students know that closing the issue is the submit button.
