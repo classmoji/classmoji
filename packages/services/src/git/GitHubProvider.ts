@@ -467,8 +467,8 @@ export class GitHubProvider extends GitProvider {
    * gets a private repo: that layer reads it through authenticated API calls,
    * so it never needs to be public. The legacy path (a deployment without the
    * signing env, or a classroom not enabled for delivery) stores uploads as
-   * raw.githubusercontent.com URLs and may serve images from `{org}.github.io`,
-   * both of which need a public repo.
+   * raw.githubusercontent.com URLs, which need a public repo. No repo made here
+   * ever gets a GitHub Pages site.
    *
    * There is no fallback between the two: if a private repo is requested and
    * GitHub refuses it, the error surfaces rather than a public repo being made.
@@ -1292,39 +1292,8 @@ export class GitHubProvider extends GitProvider {
 
   // ─── GitHub Pages ──────────────────────────────────────────────────────────
 
-  /**
-   * Enable GitHub Pages for a repository
-   * @param {string} org - Organization login
-   * @param {string} repo - Repository name
-   * @param {string} branch - Branch to serve pages from (default: main)
-   * @returns {Promise<{alreadyEnabled?: boolean}>}
-   */
-  async enableGitHubPages(
-    org: string,
-    repo: string,
-    branch: string = 'main'
-  ): Promise<{ alreadyEnabled: boolean }> {
-    const octokit = await this.#getOctokit();
-    try {
-      await octokit.request('GET /repos/{owner}/{repo}/pages', {
-        owner: org,
-        repo,
-      });
-      return { alreadyEnabled: true };
-    } catch (error: unknown) {
-      if (!isNotFound(error)) throw error;
-    }
-
-    await octokit.request('POST /repos/{owner}/{repo}/pages', {
-      owner: org,
-      repo,
-      source: {
-        branch,
-        path: '/',
-      },
-    });
-    return { alreadyEnabled: false };
-  }
+  // There is no enable: Classmoji never turns Pages on. The reader and the OFF
+  // switch below are for retiring the sites legacy repos already have.
 
   /**
    * Read a repository's GitHub Pages configuration, or `null` when it has none.
@@ -1360,7 +1329,7 @@ export class GitHubProvider extends GitProvider {
   }
 
   /**
-   * Turn GitHub Pages OFF for a repository. The inverse of enableGitHubPages.
+   * Turn GitHub Pages OFF for a repository.
    *
    * This exists for the content-delivery cutover: a content repo that is about
    * to be flipped private must stop serving `{org}.github.io/{repo}/…` first.

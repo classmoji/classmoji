@@ -696,24 +696,7 @@ export class GitLabProvider extends GitProvider {
 
   // ─── GitLab Pages ─────────────────────────────────────────────────────────
 
-  /**
-   * GitLab Pages is enabled via .gitlab-ci.yml, not API
-   * @param {string} group - Group path
-   * @param {string} project - Project name
-   * @param {string} branch - Branch to serve pages from
-   * @returns {Promise<{alreadyEnabled?: boolean}>}
-   */
-  async enableGitHubPages(
-    _group: string,
-    _project: string,
-    _branch: string = 'main'
-  ): Promise<never> {
-    // GitLab Pages requires CI/CD configuration, not API call
-    // TODO: Check if pages job exists in .gitlab-ci.yml
-    throw new Error(
-      'GitLabProvider.enableGitHubPages() not implemented - GitLab uses CI/CD for Pages'
-    );
-  }
+  // There is no enable here either: Classmoji never turns Pages on.
 
   /**
    * GitLab Pages state lives in CI/CD, not in an API this adapter speaks

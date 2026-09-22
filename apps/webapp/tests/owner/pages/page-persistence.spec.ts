@@ -258,9 +258,9 @@ test.describe('Pages deletion persistence', () => {
  * Create-page persistence.
  *
  * The create action is not a pure DB write: it resolves a git provider, creates a
- * GitHub content repo, enables GitHub Pages, and uploads index.html via
- * ContentService before inserting the Page row. Those calls cannot be reliably
- * stubbed via Playwright route interception, so the assertion is skipped.
+ * GitHub content repo, and uploads index.html via ContentService before
+ * inserting the Page row. Those calls cannot be reliably stubbed via Playwright
+ * route interception, so the assertion is skipped.
  */
 test.describe('Pages creation persistence', () => {
   test.fixme(

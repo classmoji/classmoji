@@ -94,7 +94,6 @@ vi.mock('../../git/index.ts', () => ({
   getGitProvider: () => ({
     repositoryExists: async () => true,
     createContentRepository: vi.fn(),
-    enableGitHubPages: vi.fn(),
   }),
 }));
 
