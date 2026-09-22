@@ -25,8 +25,9 @@ Open a module and click **Add item** on the module card. Pick **Assignment**, th
 
 The assignment form asks for:
 
-- **Title**
-- **Target**: the repository, quiz, or form students submit through
+- **Title**: for a repository assignment this also names the repository, so each student's copy is `<title-slug>-<github-login>` (for example `react-intro-jdoe`).
+- **Repository** (repository assignments): **New repository from a template** searches Github for starter code and creates the repository on the spot, or **Existing repository** picks one the class already uses. Team repositories are created on the [Repositories](/docs/instructors/repositories) page.
+- **Quiz** or **Form** (quiz and form assignments): the one students complete.
 - **Weight**: percentage of the course grade. Mark it **Extra credit** to add on top instead of counting toward the 100%.
 - **Release date**: when the assignment is released into student repositories (in issue mode, that's when the issue is opened) and unlocks for students. Always set one: an assignment with no release date is never released on its own, even after the module and repository are published. Future-dated assignments are released by a daily job (04:01 UTC), so set the date to the day before if you want something available first thing in the morning.
 - **Student deadline**: the due date. Late penalties and token extensions count from here.

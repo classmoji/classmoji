@@ -10,8 +10,12 @@ import {
   Radio,
   Segmented,
   Select,
+  Spin,
+  Tag,
 } from 'antd';
 import dayjs, { type Dayjs } from 'dayjs';
+import { useDebounce } from '@uidotdev/usehooks';
+import { titleToIdentifier } from '@classmoji/utils';
 
 import { ASSIGNMENT_TYPE_META, type AssignmentRowData } from './AssignmentsTable';
 
@@ -43,11 +47,37 @@ export interface AssignmentFormModalProps {
   presetRepositoryId?: string;
 }
 
+/** Where a new REPO assignment's repository comes from. */
+type RepoSource = 'new' | 'existing';
+
+interface TemplateRepository {
+  full_name: string;
+  private: boolean;
+  language: string | null;
+  stargazers_count: number;
+}
+
+// Same endpoint as the Repositories form: the classroom org's repos (public and
+// private) plus public templates anywhere, searched with the installation token.
+const searchTemplates = async (query: string, classSlug: string): Promise<TemplateRepository[]> => {
+  try {
+    const params = new URLSearchParams({ classroomSlug: classSlug, q: query });
+    const response = await fetch(`/api/github-repos?${params.toString()}`);
+    if (!response.ok) return [];
+    const data = (await response.json()) as TemplateRepository[] | { error: string };
+    return Array.isArray(data) ? data : [];
+  } catch {
+    return [];
+  }
+};
+
 interface FormValues {
   module_id?: string;
   type: AssignmentKind;
   submission_mode: SubmissionMode;
   target_id?: string;
+  repo_source: RepoSource;
+  template?: string;
   title: string;
   weight: number;
   is_extra_credit: boolean;
@@ -63,10 +93,11 @@ interface FormValues {
 const toIso = (value: Dayjs | null | undefined) => (value ? value.toISOString() : null);
 
 /**
- * Create / edit one assignment. The assignment links to something that already
- * exists: pick how students submit (a repository, a quiz, or a form), then the
- * one to use. Kind and target are fixed once created; everything else is
- * editable. Posts to the class-level assignments action.
+ * Create / edit one assignment. Pick how students submit (a repository, a
+ * quiz, or a form). A repository can be created on the spot from a template,
+ * named after the assignment title, or picked from the ones the class already
+ * has. Kind and target are fixed once created; everything else is editable.
+ * Posts to the class-level assignments action.
  */
 const AssignmentFormModal = ({
   open,
@@ -95,6 +126,33 @@ const AssignmentFormModal = ({
   const modeLocked = isEdit && (assignment?._count?.git_repo_assignments ?? 0) > 0;
   const busy = fetcher.state !== 'idle';
 
+  // New REPO assignment: a fresh repository from a template (the default), or
+  // one the class already has. The title names the repository, so each
+  // student's copy is `<title-slug>-<login>`.
+  const [repoSource, setRepoSource] = useState<RepoSource>('new');
+  const title = Form.useWatch('title', form) ?? '';
+  const repoSlug = titleToIdentifier(title || '') || 'repo-name';
+  const [templateQuery, setTemplateQuery] = useState('');
+  const [templateOptions, setTemplateOptions] = useState<TemplateRepository[]>([]);
+  const [templateLoading, setTemplateLoading] = useState(false);
+  const debouncedTemplateQuery = useDebounce(templateQuery, 400);
+  useEffect(() => {
+    if (debouncedTemplateQuery.trim().length < 2) {
+      setTemplateOptions([]);
+      return;
+    }
+    let cancelled = false;
+    setTemplateLoading(true);
+    searchTemplates(debouncedTemplateQuery.trim(), classSlug).then(result => {
+      if (cancelled) return;
+      setTemplateOptions(result);
+      setTemplateLoading(false);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [debouncedTemplateQuery, classSlug]);
+
   // Reset the form each time the modal opens for a different target.
   useEffect(() => {
     if (!open) return;
@@ -104,7 +162,13 @@ const AssignmentFormModal = ({
     // keep whatever they were created with.
     const nextMode: SubmissionMode = assignment?.submission_mode === 'ISSUE' ? 'ISSUE' : 'REPO';
     setMode(assignment ? nextMode : 'REPO');
+    // Opened from a repository row: that repository is the target.
+    const nextSource: RepoSource = presetRepositoryId ? 'existing' : 'new';
+    setRepoSource(nextSource);
+    setTemplateQuery('');
     form.setFieldsValue({
+      repo_source: nextSource,
+      template: undefined,
       // A module card hands its assignments over without the module relation.
       module_id: assignment?.module?.id ?? moduleId,
       type: nextKind,
@@ -190,7 +254,10 @@ const AssignmentFormModal = ({
       // is hidden the module comes from the page that opened the modal.
       payload.module_id = values.module_id ?? moduleId;
       payload.type = kind;
-      payload.repository_id = kind === 'REPO' ? values.target_id : null;
+      // A new repository is created by the action, named after the title.
+      const newRepo = kind === 'REPO' && repoSource === 'new';
+      payload.repository_id = kind === 'REPO' && !newRepo ? values.target_id : null;
+      payload.template = newRepo ? values.template : undefined;
       payload.quiz_id = kind === 'QUIZ' ? values.target_id : null;
       payload.form_id = kind === 'FORM' ? values.target_id : null;
     }
@@ -249,29 +316,113 @@ const AssignmentFormModal = ({
         </Form.Item>
 
         <Form.Item
-          name="target_id"
-          label={{ REPO: 'Repository', QUIZ: 'Quiz', FORM: 'Form' }[kind]}
-          extra={
-            kind === 'REPO' && !isEdit ? (
-              <>
-                Each student gets their own copy of this repository when it is published.{' '}
-                <a href={newRepositoryHref} target="_blank" rel="noreferrer">
-                  New repository
-                </a>
-              </>
-            ) : undefined
-          }
-          rules={[{ required: true, message: 'Pick a target' }]}
+          name="title"
+          label="Title"
+          rules={[{ required: true, message: 'Enter a title' }]}
         >
-          <Select
-            showSearch
-            optionFilterProp="label"
-            disabled={isEdit}
-            placeholder={`Select a ${kind.toLowerCase()}…`}
-            options={targetOptions}
-            notFoundContent={<span className="text-sm text-ink-3">{emptyTargetHint}</span>}
-          />
+          <Input placeholder="Lab 3: Linked lists" />
         </Form.Item>
+
+        {kind === 'REPO' && !isEdit && (
+          <Form.Item name="repo_source" label="Repository">
+            <Radio.Group
+              onChange={e => {
+                setRepoSource(e.target.value as RepoSource);
+                form.setFieldValue('target_id', undefined);
+                form.setFieldValue('template', undefined);
+              }}
+              className="flex flex-col gap-1"
+            >
+              <Radio value="new">
+                New repository from a template{' '}
+                <span className="text-ink-3">— starter code students get a copy of</span>
+              </Radio>
+              <Radio value="existing">
+                Existing repository{' '}
+                <span className="text-ink-3">— one this class already uses</span>
+              </Radio>
+            </Radio.Group>
+          </Form.Item>
+        )}
+
+        {kind === 'REPO' && !isEdit && repoSource === 'new' ? (
+          <Form.Item
+            name="template"
+            label="Template repository"
+            extra={
+              <>
+                Each student&apos;s copy will be named{' '}
+                <code className="text-ink-1">{repoSlug}-&lt;github-login&gt;</code>. Need a team
+                repository?{' '}
+                <a href={newRepositoryHref} target="_blank" rel="noreferrer">
+                  Create it on the Repositories page
+                </a>
+                .
+              </>
+            }
+            rules={[{ required: true, message: 'Pick a template repository' }]}
+          >
+            <Select
+              showSearch
+              filterOption={false}
+              placeholder="Type to search template repositories…"
+              loading={templateLoading}
+              onSearch={setTemplateQuery}
+              notFoundContent={
+                templateLoading ? (
+                  <span className="text-sm text-ink-3">
+                    <Spin size="small" /> Searching…
+                  </span>
+                ) : (
+                  <span className="text-sm text-ink-3">
+                    {templateQuery.trim().length >= 2
+                      ? 'No template repositories found'
+                      : 'Type to search GitHub for a template'}
+                  </span>
+                )
+              }
+              options={templateOptions.map(t => ({
+                value: t.full_name,
+                label: (
+                  <span className="flex items-center justify-between gap-2">
+                    <span className="flex items-center gap-2">
+                      <span className="font-medium">{t.full_name}</span>
+                      {t.private && (
+                        <Tag color="gold" className="m-0">
+                          Private
+                        </Tag>
+                      )}
+                    </span>
+                    <span className="text-xs text-ink-3">
+                      {Number(t.stargazers_count) > 0 && `⭐${t.stargazers_count} `}
+                      {t.language ?? ''}
+                    </span>
+                  </span>
+                ),
+              }))}
+            />
+          </Form.Item>
+        ) : (
+          <Form.Item
+            name="target_id"
+            label={{ REPO: 'Repository', QUIZ: 'Quiz', FORM: 'Form' }[kind]}
+            extra={
+              kind === 'REPO' && !isEdit
+                ? 'Students who already have a copy of this repository keep it; the assignment is added to it.'
+                : undefined
+            }
+            rules={[{ required: true, message: 'Pick a target' }]}
+          >
+            <Select
+              showSearch
+              optionFilterProp="label"
+              disabled={isEdit}
+              placeholder={`Select a ${kind.toLowerCase()}…`}
+              options={targetOptions}
+              notFoundContent={<span className="text-sm text-ink-3">{emptyTargetHint}</span>}
+            />
+          </Form.Item>
+        )}
 
         {kind === 'REPO' && (
           <Form.Item
@@ -301,14 +452,6 @@ const AssignmentFormModal = ({
             </Radio.Group>
           </Form.Item>
         )}
-
-        <Form.Item
-          name="title"
-          label="Title"
-          rules={[{ required: true, message: 'Enter a title' }]}
-        >
-          <Input placeholder="Lab 3: Linked lists" />
-        </Form.Item>
 
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           <Form.Item

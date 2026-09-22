@@ -3,6 +3,7 @@ import { useFetcher, useParams } from 'react-router';
 import { Button, Select } from 'antd';
 import { IconPlus } from '@tabler/icons-react';
 import { namedAction } from 'remix-utils/named-action';
+import { titleToIdentifier } from '@classmoji/utils';
 
 import { SearchInput } from '~/components';
 import AssignmentsTable, {
@@ -57,7 +58,38 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
   return namedAction(request, {
     async create() {
       try {
-        const created = await ClassmojiService.assignment.createInClassroom(classroom.id, data);
+        const { template, ...assignmentData } = data;
+        // A REPO assignment may bring its own repository: created here from
+        // the template, named after the assignment, so each student's copy is
+        // `<title-slug>-<login>`. Published later from the Repositories page.
+        if (assignmentData.type === 'REPO' && !assignmentData.repository_id) {
+          if (typeof template !== 'string' || !template.trim()) {
+            return { error: 'Pick a template repository or an existing repository.' };
+          }
+          const title = String(assignmentData.title ?? '').trim();
+          const slug = titleToIdentifier(title);
+          if (!slug) return { error: 'Enter a title the repository can be named after.' };
+          const existing = await ClassmojiService.repository.findByClassroomAndTitle(
+            classroom.id,
+            title
+          );
+          if (existing) {
+            return {
+              error: `A repository named "${title}" already exists. Pick it under "Existing repository", or use another title.`,
+            };
+          }
+          const repository = await ClassmojiService.repository.create({
+            title,
+            template: template.trim(),
+            type: 'INDIVIDUAL',
+            classroom_id: classroom.id,
+          });
+          assignmentData.repository_id = repository.id;
+        }
+        const created = await ClassmojiService.assignment.createInClassroom(
+          classroom.id,
+          assignmentData
+        );
         return { success: `Assignment "${created.title}" created` };
       } catch (error: unknown) {
         console.error('Assignment create error:', error);
