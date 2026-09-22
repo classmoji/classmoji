@@ -215,10 +215,17 @@ export function isContentDeliveryEnabled(
  *
  * Asked ONLY at creation: flipping the flag later does not revisit an existing
  * repo's visibility.
+ *
+ * The parameter is STRICT where `isContentDeliveryEnabled`'s is lenient — the
+ * column is required and the classroom cannot be null — because the two
+ * failures are not the same size. A partial `select` that forgot the column
+ * degrades a RENDER to a legacy URL, which the next read can undo; here it
+ * would quietly create a PUBLIC repo, and visibility at creation time is not
+ * something a later read takes back.
  */
-export function shouldCreatePrivateContentRepo(
-  classroom: { content_delivery_enabled?: boolean | null } | null | undefined
-): boolean {
+export function shouldCreatePrivateContentRepo(classroom: {
+  content_delivery_enabled: boolean | null;
+}): boolean {
   return isContentDeliveryConfigured() && isContentDeliveryEnabled(classroom);
 }
 

@@ -466,9 +466,10 @@ export class GitHubProvider extends GitProvider {
    * is the rule. A classroom served through the signed content-delivery layer
    * gets a private repo: that layer reads it through authenticated API calls,
    * so it never needs to be public. The legacy path (a deployment without the
-   * signing env, or a classroom not enabled for delivery) stores uploads as
-   * raw.githubusercontent.com URLs, which need a public repo. No repo made here
-   * ever gets a GitHub Pages site.
+   * signing env, or a classroom not enabled for delivery) stores page-asset
+   * uploads as raw.githubusercontent.com URLs, which need a public repo — that
+   * is why the legacy path stays public. No repo made here ever gets a GitHub
+   * Pages site.
    *
    * There is no fallback between the two: if a private repo is requested and
    * GitHub refuses it, the error surfaces rather than a public repo being made.
