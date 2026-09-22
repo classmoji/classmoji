@@ -188,8 +188,9 @@ export function isContentDeliveryConfigured(): boolean {
  * to be true, and the two are separate on purpose: production Fly apps already
  * carry `CONTENT_SIGNING_SECRET` and `CONTENT_DELIVERY_ORIGIN`, so a gate made
  * of env alone would have flipped every classroom the moment this deployed. The
- * column defaults to false, which makes that deploy a no-op and turns rollout
- * into a decision per classroom.
+ * column shipped false so that deploy was a no-op, which made rollout a
+ * decision per classroom; it is `@default(true)` now, so a NEW classroom is on
+ * and only the classrooms left behind by that rollout are off.
  *
  * Strict `=== true` rather than truthiness: a caller that selected the row
  * without the column gets `undefined`, and "I did not ask" must read as off.
@@ -198,6 +199,34 @@ export function isContentDeliveryEnabled(
   classroom: { content_delivery_enabled?: boolean | null } | null | undefined
 ): boolean {
   return classroom?.content_delivery_enabled === true;
+}
+
+/**
+ * Should a NEW content repo for this classroom be created private?
+ *
+ * Yes exactly when this layer will serve the classroom: the deployment can sign
+ * and the classroom is enabled — the same two halves `signUploadedAsset` checks
+ * before it stores a signable path. Anything else is the legacy path, where an
+ * upload is stored as its raw.githubusercontent.com URL; a private repo there
+ * would turn every image into a broken link. (Legacy CONTENT may also reference
+ * `{org}.github.io` on an old repo that already has a GitHub Pages site — a
+ * new repo never gets one.) Both repo-creation sites (page.service, the slides.com
+ * importer) ask this one function so they cannot drift apart.
+ *
+ * Asked ONLY at creation: flipping the flag later does not revisit an existing
+ * repo's visibility.
+ *
+ * The parameter is STRICT where `isContentDeliveryEnabled`'s is lenient — the
+ * column is required and the classroom cannot be null — because the two
+ * failures are not the same size. A partial `select` that forgot the column
+ * degrades a RENDER to a legacy URL, which the next read can undo; here it
+ * would quietly create a PUBLIC repo, and visibility at creation time is not
+ * something a later read takes back.
+ */
+export function shouldCreatePrivateContentRepo(classroom: {
+  content_delivery_enabled: boolean | null;
+}): boolean {
+  return isContentDeliveryConfigured() && isContentDeliveryEnabled(classroom);
 }
 
 /**
