@@ -150,7 +150,9 @@ const EmojiGrader = ({ repositoryAssignment, emojiMappings }: EmojiGraderProps) 
 
   return (
     <Popover
-      trigger={['hover', 'click']}
+      // Hover opens it; a click must keep it open, not toggle it shut (a click
+      // trigger on top of hover closes what the hover just opened).
+      trigger="hover"
       mouseEnterDelay={0.15}
       open={show}
       onOpenChange={setShow}
@@ -164,6 +166,7 @@ const EmojiGrader = ({ repositoryAssignment, emojiMappings }: EmojiGraderProps) 
     >
       <button
         type="button"
+        onClick={() => setShow(true)}
         data-testid="emoji-grade-trigger"
         className="text-sm font-medium text-ink-2 hover:text-ink-1 hover:underline underline-offset-2 cursor-pointer"
       >
