@@ -239,6 +239,23 @@ export const setReleaseNow = async (repositoryId: string, assignmentIds?: string
   });
 };
 
+/**
+ * Flip a repository's REPO assignments whose release date has passed to
+ * published. For a self-formed group repository nothing provisions rows at
+ * publish time (teams do not exist yet), so this is what releases them.
+ */
+export const publishReleased = async (repositoryId: string) => {
+  return getPrisma().assignment.updateMany({
+    where: {
+      type: 'REPO',
+      repository_id: repositoryId,
+      is_published: false,
+      release_at: { lte: new Date() },
+    },
+    data: { is_published: true },
+  });
+};
+
 export const findForReleaseByRepository = async (
   repositoryId: string,
   assignmentIds?: string[]

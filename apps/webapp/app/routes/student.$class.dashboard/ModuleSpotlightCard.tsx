@@ -117,7 +117,7 @@ const ModuleSpotlightCard = ({ repository, classSlug }: ModuleSpotlightCardProps
       className="rounded-2xl bg-panel ring-1 ring-line p-5 sm:p-6 h-full flex flex-col"
     >
       <div className="text-xs font-semibold tracking-[0.18em] text-ink-4">
-        MODULE #{repository.ordinal}
+        REPOSITORY #{repository.ordinal}
       </div>
       <h3 className="mt-1 text-lg sm:text-xl font-semibold text-ink-0 tracking-tight">
         {repository.title}

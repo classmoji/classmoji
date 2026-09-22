@@ -39,6 +39,7 @@ interface RepositoryRow {
   id: string;
   title: string;
   type: string;
+  team_formation_mode?: string | null;
   is_published: boolean;
   assignments?: AssignmentRow[];
 }
@@ -49,6 +50,7 @@ interface TreeNode {
   name: string;
   repositoryTitle: string;
   repositoryType?: string;
+  teamFormationMode?: string | null;
   weight?: number;
   is_published?: boolean;
   is_extra_credit?: boolean;
@@ -220,6 +222,7 @@ const RepositoriesTable = ({
       name: r.title,
       repositoryTitle: r.title,
       repositoryType: r.type,
+      teamFormationMode: r.team_formation_mode ?? null,
       is_published: r.is_published,
       repository: r,
       children,
@@ -304,7 +307,15 @@ const RepositoriesTable = ({
       key: 'type',
       width: 130,
       render: (_: unknown, record: TreeNode) => (
-        <span className="text-ink-2">{prettyType(record.repositoryType)}</span>
+        <span className="text-ink-2">
+          {prettyType(record.repositoryType)}
+          {record.repositoryType === 'GROUP' && record.kind === 'repository' && (
+            <span className="text-ink-3">
+              {' '}
+              · {record.teamFormationMode === 'SELF_FORMED' ? 'self-formed' : 'instructor teams'}
+            </span>
+          )}
+        </span>
       ),
     },
     {

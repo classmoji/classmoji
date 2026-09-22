@@ -332,11 +332,11 @@ const StudentTeamPage = ({ loaderData }: Route.ComponentProps) => {
     fetcher.submit({}, { method: 'post', action: '?/leave' });
   };
 
-  const availableTeams = teams.filter(team => {
-    if (userTeam && team.id === userTeam.id) return false;
-    if (maxTeamSize && team.memberships.length >= maxTeamSize) return false;
-    return true;
-  });
+  // Every other team is listed, full ones included (marked, with Join
+  // disabled), so a student can see who has formed what.
+  const availableTeams = teams.filter(team => !(userTeam && team.id === userTeam.id));
+  const isFull = (team: { memberships: unknown[] }) =>
+    Boolean(maxTeamSize && team.memberships.length >= maxTeamSize);
 
   return (
     <div className="max-w-4xl mx-auto">
@@ -478,8 +478,9 @@ const StudentTeamPage = ({ loaderData }: Route.ComponentProps) => {
                         type="primary"
                         onClick={() => handleJoinTeam(team.id)}
                         loading={isSubmitting}
+                        disabled={isFull(team)}
                       >
-                        Join
+                        {isFull(team) ? 'Full' : 'Join'}
                       </Button>,
                     ]}
                   >
@@ -488,9 +489,10 @@ const StudentTeamPage = ({ loaderData }: Route.ComponentProps) => {
                       title={team.name}
                       description={
                         <div className="flex items-center gap-3">
-                          <Tag color="blue">
+                          <Tag color={isFull(team) ? 'red' : 'blue'}>
                             {team.memberships.length}
                             {maxTeamSize ? `/${maxTeamSize}` : ''} members
+                            {isFull(team) && ' (Full)'}
                           </Tag>
                           <div className="flex items-center gap-2">
                             {team.memberships.map(m => (

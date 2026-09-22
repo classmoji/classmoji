@@ -31,7 +31,10 @@ export const publishAssignment = async (
     invariant(repository.classroom_id === classroomId, 'Repository not found in classroom');
 
     // If repos already exist (re-publish after unpublish), just flip the flag
-    const existingRepos = await ClassmojiService.gitRepo.findByRepository(classroomSlug, repositoryId);
+    const existingRepos = await ClassmojiService.gitRepo.findByRepository(
+      classroomSlug,
+      repositoryId
+    );
     if (existingRepos.length > 0) {
       await ClassmojiService.repository.setPublished(repositoryId, true, classroomId);
       return { success: 'Repository re-published. Use Sync to update repositories.' };
@@ -90,6 +93,10 @@ export const publishAssignment = async (
       // For self-formed teams, just mark repository as published
       // Teams and repos will be created when students form their teams
       await ClassmojiService.repository.setPublished(repositoryId, true, classroomId);
+      // Nothing provisions per-team repos until a team forms, so the
+      // assignments whose release date has passed would otherwise stay
+      // drafts. Publish them now; each team's rows are created as it forms.
+      await ClassmojiService.assignment.publishReleased(repositoryId);
 
       return {
         success: 'Repository published! Students can now form teams.',
@@ -180,7 +187,12 @@ export const syncAssignment = async (
   if (repository!.type === 'INDIVIDUAL') {
     syncResult = await syncIndividualAssignment(classroomSlug, classroom!, repository!, sessionId);
   } else if (repository!.team_formation_mode === 'SELF_FORMED') {
-    syncResult = await syncSelfFormedTeamAssignment(classroomSlug, classroom!, repository!, sessionId);
+    syncResult = await syncSelfFormedTeamAssignment(
+      classroomSlug,
+      classroom!,
+      repository!,
+      sessionId
+    );
   } else {
     syncResult = await syncTeamAssignment(classroomSlug, classroom!, repository!, sessionId);
   }
@@ -210,7 +222,10 @@ const syncIndividualAssignment = async (
   );
 
   // 2. Find existing repos for repository given classroom
-  const existingRepos = await ClassmojiService.gitRepo.findByRepository(classroomSlug, repository.id);
+  const existingRepos = await ClassmojiService.gitRepo.findByRepository(
+    classroomSlug,
+    repository.id
+  );
 
   // 3. Find students with missing repos and create missing repos
   const studentsWithMissingRepos = students.filter(
@@ -262,7 +277,10 @@ const syncTeamAssignment = async (
   const teams = await ClassmojiService.organizationTag.findTeamsByTag(repository.tag_id!);
 
   // 2. Find existing repos for repository given classroom
-  const existingRepos = await ClassmojiService.gitRepo.findByRepository(classroomSlug, repository.id);
+  const existingRepos = await ClassmojiService.gitRepo.findByRepository(
+    classroomSlug,
+    repository.id
+  );
 
   // 3. Find teams with missing repos and create missing repos
   const teamsWithMissingRepos = teams.filter(
@@ -324,7 +342,10 @@ const syncSelfFormedTeamAssignment = async (
   const teams = await ClassmojiService.team.findByTagId(classroom.id, tag.id);
 
   // Find existing repos for repository given classroom
-  const existingRepos = await ClassmojiService.gitRepo.findByRepository(classroomSlug, repository.id);
+  const existingRepos = await ClassmojiService.gitRepo.findByRepository(
+    classroomSlug,
+    repository.id
+  );
 
   // Find teams with missing repos and create missing repos
   const teamsWithMissingRepos = teams.filter(

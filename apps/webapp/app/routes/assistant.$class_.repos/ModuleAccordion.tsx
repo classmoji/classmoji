@@ -249,7 +249,7 @@ const ModuleCard = ({
                 number rather than one that shifts every other module's. */}
             {ordinal !== null && (
               <div className="text-xs font-semibold tracking-[0.18em] text-ink-4">
-                MODULE #{ordinal}
+                REPOSITORY #{ordinal}
               </div>
             )}
             <div className="mt-1 flex flex-wrap items-center gap-2">
