@@ -8,7 +8,7 @@
  * reads the commit history for work that predates the assignment), that a
  * REPO-mode row carries
  * no issue fields, and that a push records the submission through the
- * service and refreshes analytics for the rows it touched.
+ * service and refreshes analytics for every row on the repo.
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -17,6 +17,7 @@ const mocks = vi.hoisted(() => ({
   findFirstGitRepoAssignment: vi.fn(),
   createGitRepoAssignment: vi.fn(),
   recordPush: vi.fn(),
+  findIdsByGitRepoId: vi.fn(),
   recordExistingPush: vi.fn(),
   getGitProvider: vi.fn(),
   tasksTrigger: vi.fn(),
@@ -35,11 +36,12 @@ vi.mock('@classmoji/services', () => ({
     assignment: { findForReleaseByRepository: vi.fn(), findReadyForRelease: vi.fn(), update: vi.fn() },
     classroomMembership: { findUsersByRole: vi.fn() },
     organizationTag: { findTeamsByTag: vi.fn() },
-    gitRepo: { findByRepository: vi.fn() },
+    gitRepo: { findByRepository: vi.fn(), recordPushTime: vi.fn() },
     gitRepoAssignment: {
       findFirst: (...a: unknown[]) => mocks.findFirstGitRepoAssignment(...a),
       create: (...a: unknown[]) => mocks.createGitRepoAssignment(...a),
       recordPush: (...a: unknown[]) => mocks.recordPush(...a),
+      findIdsByGitRepoId: (...a: unknown[]) => mocks.findIdsByGitRepoId(...a),
       recordExistingPush: (...a: unknown[]) => mocks.recordExistingPush(...a),
     },
   },
@@ -196,26 +198,51 @@ describe('cf-create_git_repo_assignment', () => {
 });
 
 describe('webhook-git_repo_push_handler', () => {
-  it('records the push through the service and refreshes analytics for touched rows', async () => {
+  it('records the push through the service and refreshes analytics for every row on the repo', async () => {
     mocks.recordPush.mockResolvedValue([{ id: 'ra-1' }, { id: 'ra-2' }]);
+    // A third row (graded, so frozen) is not touched but still shows commits.
+    mocks.findIdsByGitRepoId.mockResolvedValue(['ra-1', 'ra-2', 'ra-3']);
 
     const result = await runTask(workflows.repositoryPushHandlerTask, {
       gitRepoId: 'gitrepo-1',
       pushedAt: '2026-09-20T12:00:00.000Z',
     });
 
-    expect(mocks.recordPush).toHaveBeenCalledWith('gitrepo-1', new Date('2026-09-20T12:00:00.000Z'));
-    expect(mocks.tasksTrigger).toHaveBeenCalledTimes(2);
+    expect(mocks.recordPush).toHaveBeenCalledWith(
+      'gitrepo-1',
+      new Date('2026-09-20T12:00:00.000Z')
+    );
+    expect(mocks.findIdsByGitRepoId).toHaveBeenCalledWith('gitrepo-1');
+    expect(mocks.tasksTrigger).toHaveBeenCalledTimes(3);
     expect(mocks.tasksTrigger).toHaveBeenCalledWith(
       'refresh-repo-analytics',
-      { repositoryAssignmentId: 'ra-1' },
+      { repositoryAssignmentId: 'ra-3' },
       { concurrencyKey: 'gitrepo-1' }
     );
-    expect(result).toEqual({ touched: 2 });
+    expect(result).toEqual({ touched: 2, refreshed: 3 });
   });
 
-  it('is a no-op when no REPO-mode row submits through the repo', async () => {
+  it("still refreshes commit stats when the push counts as nobody's submission", async () => {
     mocks.recordPush.mockResolvedValue([]);
+    mocks.findIdsByGitRepoId.mockResolvedValue(['ra-9']);
+
+    const result = await runTask(workflows.repositoryPushHandlerTask, {
+      gitRepoId: 'gitrepo-1',
+      pushedAt: new Date(),
+    });
+
+    expect(mocks.tasksTrigger).toHaveBeenCalledTimes(1);
+    expect(mocks.tasksTrigger).toHaveBeenCalledWith(
+      'refresh-repo-analytics',
+      { repositoryAssignmentId: 'ra-9' },
+      { concurrencyKey: 'gitrepo-1' }
+    );
+    expect(result).toEqual({ touched: 0, refreshed: 1 });
+  });
+
+  it('is a no-op when the repo has no submission rows at all', async () => {
+    mocks.recordPush.mockResolvedValue([]);
+    mocks.findIdsByGitRepoId.mockResolvedValue([]);
 
     const result = await runTask(workflows.repositoryPushHandlerTask, {
       gitRepoId: 'gitrepo-1',
@@ -223,6 +250,6 @@ describe('webhook-git_repo_push_handler', () => {
     });
 
     expect(mocks.tasksTrigger).not.toHaveBeenCalled();
-    expect(result).toEqual({ touched: 0 });
+    expect(result).toEqual({ touched: 0, refreshed: 0 });
   });
 });

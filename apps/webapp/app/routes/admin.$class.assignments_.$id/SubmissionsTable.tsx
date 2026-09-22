@@ -24,6 +24,19 @@ import type { AssignmentRowData } from '~/components/features/assignments/Assign
 import ImportedBadge from './ImportedBadge';
 import GradeBadges from '~/components/features/grading/GradeBadges';
 import { CommitCount } from '~/components/features/analytics';
+
+/** The sha of the newest commit in a snapshot's list, by timestamp; null when unknown. */
+const latestCommitSha = (commits: unknown): string | null => {
+  if (!Array.isArray(commits)) return null;
+  let best: { sha: string; t: number } | null = null;
+  for (const c of commits as Array<{ sha?: unknown; ts?: unknown }>) {
+    if (typeof c?.sha !== 'string') continue;
+    const t = new Date(String(c.ts ?? '')).getTime();
+    if (!best || (Number.isFinite(t) && t > best.t))
+      best = { sha: c.sha, t: Number.isFinite(t) ? t : -1 };
+  }
+  return best?.sha ?? null;
+};
 import AutogradingResultPill from '~/components/features/AutogradingResultPill';
 import { type AutogradingResultData } from '~/components/features/AutogradingResultCard';
 
@@ -54,6 +67,8 @@ export interface SubmissionRow {
     last_commit_at?: string | Date | null;
     total_commits?: number | null;
     fetched_at?: string | Date | null;
+    /** The snapshot's commit list ({ sha, ts, … }), newest not guaranteed first. */
+    commits?: unknown;
   } | null;
   repository?: { name: string; [key: string]: unknown } | null;
   assignment: { weight: number; submission_mode?: string; [key: string]: unknown };
@@ -270,12 +285,14 @@ const SubmissionsTable = ({
       width: 100,
       align: 'right' as const,
       render: (_: unknown, repo) => {
-        const n = repo.submission?.analytics_snapshot?.total_commits;
-        return n === null || n === undefined ? (
-          <span className="text-ink-3">—</span>
-        ) : (
-          <CommitCount snapshot={repo.submission?.analytics_snapshot} className="text-sm" />
-        );
+        const snapshot = repo.submission?.analytics_snapshot;
+        const n = snapshot?.total_commits;
+        if (n === null || n === undefined) return <span className="text-ink-3">—</span>;
+        const sha = latestCommitSha(snapshot?.commits);
+        const href = sha
+          ? `https://github.com/${org}/${repo.name}/commit/${sha}`
+          : `https://github.com/${org}/${repo.name}/commits`;
+        return <CommitCount snapshot={snapshot} href={href} className="text-sm" />;
       },
     },
     {

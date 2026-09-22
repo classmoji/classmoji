@@ -113,7 +113,9 @@ export default defineConfig({
     mdx(),
   ],
   server: {
-    port: 4000
+    // Not 4000: that is the local webhook fanout the Smee tunnels post to, and
+    // a site dev server sitting on it swallows every GitHub push event.
+    port: 4321
   },
   vite: {
     plugins: [tailwindcss()],

@@ -456,15 +456,19 @@ export const repositoryPushHandlerTask = task({
       touched: touched.map(t => t.id),
     });
 
-    // Keep the commit stats fresh for the rows that just changed.
-    for (const row of touched) {
+    // Keep the commit stats fresh for EVERY row on this repo, not only the
+    // ones the push counted as a submission: a graded row is frozen above,
+    // and an issue-mode row never submits by push, but both still show the
+    // repo's commit count and should see the new commits.
+    const rows = await ClassmojiService.gitRepoAssignment.findIdsByGitRepoId(payload.gitRepoId);
+    for (const id of rows) {
       await tasks.trigger(
         'refresh-repo-analytics',
-        { repositoryAssignmentId: row.id },
+        { repositoryAssignmentId: id },
         { concurrencyKey: payload.gitRepoId }
       );
     }
-    return { touched: touched.length };
+    return { touched: touched.length, refreshed: rows.length };
   },
 });
 
