@@ -31,9 +31,9 @@ export const emojis: Record<string, EmojiEntry> = {
  * Single source of truth for both admin settings and quiz grading.
  */
 export const DEFAULT_EMOJI_MAPPINGS: EmojiMappingEntry[] = [
-  { emoji: 'heart', grade: 100, extra_tokens: 0, description: 'Excellent work!' },
+  { emoji: 'rocket', grade: 100, extra_tokens: 0, description: 'To the moon!' },
   { emoji: '+1', grade: 90, extra_tokens: 0, description: 'Great job!' },
-  { emoji: 'eyes', grade: 80, extra_tokens: 0, description: 'Good work' },
+  { emoji: 'eyes', grade: 80, extra_tokens: 0, description: 'So close, but not quite there' },
   { emoji: '-1', grade: 60, extra_tokens: 0, description: 'Needs improvement' },
   { emoji: 'sob', grade: 0, extra_tokens: 0, description: 'Not submitted' },
 ];
@@ -71,7 +71,7 @@ export const DEFAULT_LETTER_GRADE_MAPPINGS: LetterGradeMappingEntry[] = [
  * ids drop into EmojiMapping / AssignmentGrade unchanged.
  */
 export const SCORE_EMOJI_PREFIX = 'score-';
-export const SCORE_EMOJI_STEP = 5;
+export const SCORE_EMOJI_STEP = 10;
 /**
  * Sampled from Apple's keycap number emojis (1️⃣ … 🔟): a pale sheen at the
  * top, blue-slate body, darker edge. The badges then read as one family with
@@ -84,7 +84,7 @@ export const SCORE_EMOJI_COLORS = {
   edge: '#54708b',
 };
 
-/** 0, 5, 10 … 100 — the 21 values the picker and the populate button offer. */
+/** 0, 10, 20 … 100 — the 11 values the picker and the populate template offer. */
 export const SCORE_EMOJI_VALUES: number[] = Array.from(
   { length: 100 / SCORE_EMOJI_STEP + 1 },
   (_, i) => i * SCORE_EMOJI_STEP
@@ -102,7 +102,7 @@ export const isScoreScheme = (emojiKeys: string[]): boolean =>
 
 /**
  * The numeric value of a score shortcode, or null when `key` is not one.
- * Accepts any integer 0–100 (not only multiples of 5) so a hand-entered
+ * Accepts any integer 0–100 (not only multiples of 10) so a hand-entered
  * `score-83` still renders. Case-sensitive: ids are always lowercase.
  */
 export const parseScoreEmoji = (key: string): number | null => {

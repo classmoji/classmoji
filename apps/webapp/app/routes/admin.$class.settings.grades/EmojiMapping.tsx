@@ -151,30 +151,30 @@ const EmojiMapping = ({ emojiMappings, orphanedEmojis }: EmojiMappingProps) => {
     );
   };
 
-  const populateDefaults = () => {
-    notify('Adding default emoji mappings...');
+  // The two built-in scales. Either one replaces every existing mapping, so
+  // picking one asks first; grades given under the old emojis then surface in
+  // the orphaned-grades banner above.
+  const TEMPLATES = {
+    emoji: {
+      label: 'Emoji scale',
+      action: '?/populateDefaultMappings',
+      notice: 'Adding the emoji scale...',
+      confirm: 'Replaces all existing mappings with the five emoji (100, 90, 80, 60, 0).',
+    },
+    score: {
+      label: 'Number scale',
+      action: '?/populateScoreScaleMappings',
+      notice: 'Adding the 0–100 grade scale...',
+      confirm: 'Replaces all existing mappings with 11 score emojis (0, 10, 20 … 100).',
+    },
+  } as const;
 
-    fetcher!.submit(
-      {},
-      {
-        action: '?/populateDefaultMappings',
-        method: 'POST',
-        encType: 'application/json',
-      }
-    );
-  };
+  const [template, setTemplate] = useState<keyof typeof TEMPLATES>('emoji');
 
-  const populateScoreScale = () => {
-    notify('Adding the 0–100 grade scale...');
-
-    fetcher!.submit(
-      {},
-      {
-        action: '?/populateScoreScaleMappings',
-        method: 'POST',
-        encType: 'application/json',
-      }
-    );
+  const populateTemplate = () => {
+    const chosen = TEMPLATES[template];
+    notify(chosen.notice);
+    fetcher!.submit({}, { action: chosen.action, method: 'POST', encType: 'application/json' });
   };
 
   const emojiMappingColumns = [
@@ -318,139 +318,141 @@ const EmojiMapping = ({ emojiMappings, orphanedEmojis }: EmojiMappingProps) => {
     >
       <div className="flex flex-col gap-6">
         {(orphanedEmojis?.length ?? 0) > 0 && (
-        <Alert
-          type="warning"
-          showIcon
-          icon={<WarningOutlined />}
-          message="Orphaned Grades Detected"
-          description={
-            <div className="mt-2">
-              <p className="mb-3 text-ink-2">
-                The following emoji grades are used but no longer have mappings. Select a new emoji
-                for each to fix:
-              </p>
-              <div className="space-y-2">
-                {orphanedEmojis!.map(({ emoji: oldEmoji, count }) => (
-                  <div key={oldEmoji} className="flex items-center gap-3">
-                    <div className="flex items-center gap-2 min-w-[140px]">
-                      <Emoji emoji={oldEmoji} size="sm" />
-                      <span className="text-ink-1 font-mono text-sm">{oldEmoji}</span>
-                      <span className="text-ink-3 text-xs">({count})</span>
+          <Alert
+            type="warning"
+            showIcon
+            icon={<WarningOutlined />}
+            message="Orphaned Grades Detected"
+            description={
+              <div className="mt-2">
+                <p className="mb-3 text-ink-2">
+                  The following emoji grades are used but no longer have mappings. Select a new
+                  emoji for each to fix:
+                </p>
+                <div className="space-y-2">
+                  {orphanedEmojis!.map(({ emoji: oldEmoji, count }) => (
+                    <div key={oldEmoji} className="flex items-center gap-3">
+                      <div className="flex items-center gap-2 min-w-[140px]">
+                        <Emoji emoji={oldEmoji} size="sm" />
+                        <span className="text-ink-1 font-mono text-sm">{oldEmoji}</span>
+                        <span className="text-ink-3 text-xs">({count})</span>
+                      </div>
+                      <span className="text-ink-4">&rarr;</span>
+                      <Select
+                        placeholder="Select new emoji"
+                        className="w-48"
+                        value={remapSelections[oldEmoji]}
+                        onChange={value => handleRemapSelection(oldEmoji, value)}
+                        options={emojiMappings?.map(m => ({
+                          value: m.emoji,
+                          label: (
+                            <div className="flex items-center gap-2">
+                              <Emoji emoji={m.emoji} size="sm" />
+                              <span>{m.emoji}</span>
+                              <span className="text-ink-4">({m.grade})</span>
+                            </div>
+                          ),
+                        }))}
+                      />
                     </div>
-                    <span className="text-ink-4">&rarr;</span>
-                    <Select
-                      placeholder="Select new emoji"
-                      className="w-48"
-                      value={remapSelections[oldEmoji]}
-                      onChange={value => handleRemapSelection(oldEmoji, value)}
-                      options={emojiMappings?.map(m => ({
-                        value: m.emoji,
-                        label: (
-                          <div className="flex items-center gap-2">
-                            <Emoji emoji={m.emoji} size="sm" />
-                            <span>{m.emoji}</span>
-                            <span className="text-ink-4">({m.grade})</span>
-                          </div>
-                        ),
-                      }))}
-                    />
-                  </div>
-                ))}
+                  ))}
+                </div>
+                <Button
+                  type="primary"
+                  size="small"
+                  className="mt-4"
+                  onClick={remapAllOrphans}
+                  disabled={Object.keys(remapSelections).length === 0}
+                >
+                  Remap All
+                </Button>
               </div>
-              <Button
-                type="primary"
-                size="small"
-                className="mt-4"
-                onClick={remapAllOrphans}
-                disabled={Object.keys(remapSelections).length === 0}
-              >
-                Remap All
+            }
+          />
+        )}
+
+        <div className="rounded-2xl ring-1 ring-line overflow-hidden">
+          <div className="px-4 sm:px-5 py-4 border-b border-line bg-panel">
+            <div className="flex items-center justify-between mb-4">
+              <div className="flex items-center gap-2">
+                <span className="text-sm font-semibold text-ink-0">Emoji Mappings</span>
+                <span className="text-xs text-ink-3 bg-nav-hover px-2 py-0.5 rounded-full tabular-nums">
+                  {emojiMappings?.length || 0}
+                </span>
+              </div>
+              <div className="flex items-center gap-2">
+                <Select
+                  size="small"
+                  value={template}
+                  popupMatchSelectWidth={false}
+                  onChange={(key: keyof typeof TEMPLATES) => setTemplate(key)}
+                  options={Object.entries(TEMPLATES).map(([key, t]) => ({
+                    value: key,
+                    label: t.label,
+                  }))}
+                  className="min-w-40"
+                />
+                <Popconfirm
+                  title={`Use the ${TEMPLATES[template].label.toLowerCase()}?`}
+                  description={TEMPLATES[template].confirm}
+                  onConfirm={populateTemplate}
+                  okText="Yes, replace"
+                  cancelText="Cancel"
+                >
+                  <Button size="small">Populate</Button>
+                </Popconfirm>
+              </div>
+            </div>
+            <div className="flex flex-wrap items-end gap-3">
+              <EmojiPicker setEmoji={setEmoji} emoji={emoji} />
+              <Input
+                value={grade ?? undefined}
+                onChange={e => setGrade(e.target.value)}
+                type="number"
+                placeholder="Grade (0-100)"
+                min={0}
+                max={100}
+                className="!w-28"
+              />
+              <Input
+                value={extraTokens}
+                onChange={e => setExtraTokens(parseInt(e.target.value) || 0)}
+                type="number"
+                min={0}
+                placeholder="Tokens"
+                addonBefore={<img src={tokenImage} alt="token" className="w-4 h-4" />}
+                className="!w-28"
+              />
+              <Input
+                placeholder="Description (optional)"
+                value={description}
+                onChange={e => setDescription(e.target.value)}
+                className="flex-1 !min-w-[140px]"
+              />
+              <Button type="primary" onClick={createEmojiMapping}>
+                Add
               </Button>
             </div>
-          }
-        />
-      )}
+          </div>
 
-      <div className="rounded-2xl ring-1 ring-line overflow-hidden">
-        <div className="px-4 sm:px-5 py-4 border-b border-line bg-panel">
-          <div className="flex items-center justify-between mb-4">
-            <div className="flex items-center gap-2">
-              <span className="text-sm font-semibold text-ink-0">Emoji Mappings</span>
-              <span className="text-xs text-ink-3 bg-nav-hover px-2 py-0.5 rounded-full tabular-nums">
-                {emojiMappings?.length || 0}
-              </span>
-            </div>
-            <div className="flex items-center gap-2">
-              <Popconfirm
-                title="Reset to defaults?"
-                description="This will remove all existing mappings and add the default ones."
-                onConfirm={populateDefaults}
-                okText="Yes, reset"
-                cancelText="Cancel"
-              >
-                <Button size="small">Populate Defaults</Button>
-              </Popconfirm>
-              <Popconfirm
-                title="Use the 0–100 scale?"
-                description="Replaces all existing mappings with 21 score emojis (0, 5, 10 … 100)."
-                onConfirm={populateScoreScale}
-                okText="Yes, replace"
-                cancelText="Cancel"
-              >
-                <Button size="small">Populate 0–100 scale</Button>
-              </Popconfirm>
-            </div>
-          </div>
-          <div className="flex flex-wrap items-end gap-3">
-            <EmojiPicker setEmoji={setEmoji} emoji={emoji} />
-            <Input
-              value={grade ?? undefined}
-              onChange={e => setGrade(e.target.value)}
-              type="number"
-              placeholder="Grade (0-100)"
-              min={0}
-              max={100}
-              className="!w-28"
-            />
-            <Input
-              value={extraTokens}
-              onChange={e => setExtraTokens(parseInt(e.target.value) || 0)}
-              type="number"
-              min={0}
-              placeholder="Tokens"
-              addonBefore={<img src={tokenImage} alt="token" className="w-4 h-4" />}
-              className="!w-28"
-            />
-            <Input
-              placeholder="Description (optional)"
-              value={description}
-              onChange={e => setDescription(e.target.value)}
-              className="flex-1 !min-w-[140px]"
-            />
-            <Button type="primary" onClick={createEmojiMapping}>
-              Add
-            </Button>
-          </div>
+          <Table
+            dataSource={emojiMappings?.length ? emojiMappings : []}
+            columns={emojiMappingColumns}
+            size="small"
+            scroll={{ x: 'max-content' }}
+            pagination={false}
+            rowHoverable={false}
+            rowKey="emoji"
+            locale={{
+              emptyText: (
+                <div className="text-center py-8">
+                  <div className="font-medium text-ink-3">No emoji mappings yet</div>
+                  <div className="text-sm text-ink-4">Add your first mapping above</div>
+                </div>
+              ),
+            }}
+          />
         </div>
-
-        <Table
-          dataSource={emojiMappings?.length ? emojiMappings : []}
-          columns={emojiMappingColumns}
-          size="small"
-          scroll={{ x: 'max-content' }}
-          pagination={false}
-          rowHoverable={false}
-          rowKey="emoji"
-          locale={{
-            emptyText: (
-              <div className="text-center py-8">
-                <div className="font-medium text-ink-3">No emoji mappings yet</div>
-                <div className="text-sm text-ink-4">Add your first mapping above</div>
-              </div>
-            ),
-          }}
-        />
-      </div>
       </div>
     </SettingSection>
   );

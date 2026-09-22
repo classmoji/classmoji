@@ -63,15 +63,15 @@ describe('getEmojiSymbol', () => {
 });
 
 describe('score emojis', () => {
-  it('offers 21 values from 0 to 100 in steps of 5', () => {
-    expect(SCORE_EMOJI_VALUES).toHaveLength(21);
+  it('offers 11 values from 0 to 100 in steps of 10', () => {
+    expect(SCORE_EMOJI_VALUES).toHaveLength(11);
     expect(SCORE_EMOJI_VALUES[0]).toBe(0);
-    expect(SCORE_EMOJI_VALUES[20]).toBe(100);
-    expect(SCORE_EMOJI_VALUES.every(v => v % 5 === 0)).toBe(true);
+    expect(SCORE_EMOJI_VALUES[10]).toBe(100);
+    expect(SCORE_EMOJI_VALUES.every(v => v % 10 === 0)).toBe(true);
   });
 
   it('maps every value to a descending grade scale whose ids round-trip', () => {
-    expect(SCORE_EMOJI_MAPPINGS).toHaveLength(21);
+    expect(SCORE_EMOJI_MAPPINGS).toHaveLength(11);
     for (let i = 1; i < SCORE_EMOJI_MAPPINGS.length; i++) {
       expect(SCORE_EMOJI_MAPPINGS[i - 1].grade).toBeGreaterThan(SCORE_EMOJI_MAPPINGS[i].grade);
     }

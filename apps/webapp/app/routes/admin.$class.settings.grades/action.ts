@@ -68,7 +68,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
     },
 
     async populateScoreScaleMappings() {
-      // Same shape as populateDefaultMappings: wipe, then add the 21-step
+      // Same shape as populateDefaultMappings: wipe, then add the 11-step
       // 0–100 scale. Grades awarded under the old emojis surface in the
       // orphaned-grades banner, where the existing remap flow handles them.
       const existingMappings = (await ClassmojiService.emojiMapping.findByClassroomId(
@@ -85,7 +85,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
 
       return {
         action: 'POPULATE_SCORE_SCALE_MAPPINGS',
-        success: '0–100 grade scale added (21 emojis).',
+        success: '0–100 grade scale added (11 emojis).',
       };
     },
 
