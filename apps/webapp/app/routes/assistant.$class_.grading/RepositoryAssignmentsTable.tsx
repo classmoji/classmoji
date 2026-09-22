@@ -372,7 +372,7 @@ const RepositoryAssignmentsTable = ({
         record.analytics_snapshot?.total_commits === undefined ? (
           <span className="text-ink-3">—</span>
         ) : (
-          <CommitCount snapshot={record.analytics_snapshot} className="text-sm" />
+          <CommitCount snapshot={record.analytics_snapshot} size="lg" />
         ),
     },
     {

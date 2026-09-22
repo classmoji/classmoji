@@ -12,6 +12,8 @@ interface CommitCountProps {
   snapshot?: CommitCountSnapshot | null;
   /** Where the chip goes when clicked (the newest commit, or the commit list). */
   href?: string | null;
+  /** `sm` sits inline beside a link; `lg` fills a table column of its own. */
+  size?: 'sm' | 'lg';
   className?: string;
 }
 
@@ -20,18 +22,21 @@ interface CommitCountProps {
  * analytics snapshot, so it is as fresh as the last refresh (the tooltip says
  * when) and renders nothing until a snapshot exists.
  */
-const CommitCount = ({ snapshot, href, className = '' }: CommitCountProps) => {
+const CommitCount = ({ snapshot, href, size = 'sm', className = '' }: CommitCountProps) => {
   const n = snapshot?.total_commits;
   if (n === null || n === undefined) return null;
   const asOf = snapshot?.fetched_at ? dayjs(snapshot.fetched_at).format('MMM D, h:mm A') : null;
   const label = `${n} commit${n === 1 ? '' : 's'}${asOf ? ` · as of ${asOf}` : ''}`;
+  const large = size === 'lg';
   const body = (
     <>
-      <IconGitCommit size={13} className="shrink-0" />
+      <IconGitCommit size={large ? 18 : 13} className="shrink-0 text-ink-3" />
       {n}
     </>
   );
-  const classes = `inline-flex items-center gap-0.5 text-xs tabular-nums text-ink-3 ${className}`;
+  const classes = `inline-flex items-center gap-1 tabular-nums ${
+    large ? 'text-base font-semibold text-ink-1' : 'text-xs text-ink-3'
+  } ${className}`;
   return (
     <Tooltip title={href ? `${label} · open the latest commit` : label}>
       {href ? (

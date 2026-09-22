@@ -292,7 +292,7 @@ const SubmissionsTable = ({
         const href = sha
           ? `https://github.com/${org}/${repo.name}/commit/${sha}`
           : `https://github.com/${org}/${repo.name}/commits`;
-        return <CommitCount snapshot={snapshot} href={href} className="text-sm" />;
+        return <CommitCount snapshot={snapshot} href={href} size="lg" />;
       },
     },
     {
