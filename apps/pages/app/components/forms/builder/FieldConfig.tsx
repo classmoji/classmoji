@@ -15,7 +15,14 @@ import {
   verticalListSortingStrategy,
 } from '@dnd-kit/sortable';
 import { IconGripVertical, IconPlus, IconTrash } from '@tabler/icons-react';
-import { FORM_LIMITS, type FormField, type FormOption } from '@classmoji/services/form-contract';
+import {
+  FORM_LIMITS,
+  GALLERY_ROLES,
+  GALLERY_ROLE_TYPES,
+  galleryRoleOf,
+  type FormField,
+  type FormOption,
+} from '@classmoji/services/form-contract';
 
 import {
   NESTABLE_FIELD_TYPE_META,
@@ -43,6 +50,8 @@ import OptionsEditor from './OptionsEditor.tsx';
 export interface ScopeChoices {
   tags: Array<{ id: string; name: string }>;
   repositories: Array<{ id: string; title: string }>;
+  /** The form feeds the org project gallery: show the Gallery role select. */
+  gallery: boolean;
 }
 
 interface FieldConfigProps {
@@ -718,6 +727,44 @@ function TypeSpecific({ field, onChange, scopes, nested }: FieldConfigProps) {
   }
 }
 
+/**
+ * Which gallery card slot this answer fills. Only the roles this field's type
+ * can serve are offered; the contract refuses any other pairing on save.
+ * '' clears the key — the strict schema must never see an empty string.
+ */
+function GalleryRoleSelect({
+  field,
+  onChange,
+}: {
+  field: FormField;
+  onChange: (patch: Record<string, unknown>) => void;
+}) {
+  const roles = GALLERY_ROLES.filter(role => GALLERY_ROLE_TYPES[role].includes(field.type));
+  if (roles.length === 0) return null;
+  return (
+    <Row label="Gallery role">
+      <select
+        aria-label="Gallery role"
+        value={galleryRoleOf(field) ?? ''}
+        onChange={event =>
+          onChange({ gallery_role: event.target.value === '' ? undefined : event.target.value })
+        }
+        className={inputClass}
+      >
+        <option value="">None</option>
+        {roles.map(role => (
+          <option key={role} value={role}>
+            {role[0].toUpperCase() + role.slice(1)}
+          </option>
+        ))}
+      </select>
+      <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+        Where this answer shows on the public project page.
+      </p>
+    </Row>
+  );
+}
+
 export default function FieldConfig(props: FieldConfigProps) {
   const { field, onChange } = props;
 
@@ -751,6 +798,10 @@ export default function FieldConfig(props: FieldConfigProps) {
       </Row>
 
       <TypeSpecific {...props} />
+
+      {props.scopes.gallery && !props.nested ? (
+        <GalleryRoleSelect field={field} onChange={onChange} />
+      ) : null}
 
       {/* A repeat group has no meaningful "required" of its own: what it demands
           is "every teammate reviewed", which is `require_all_targets` above. A

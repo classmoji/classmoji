@@ -130,6 +130,9 @@ export const loader = async ({
     classroomSlug,
     classroomName: (classroom as { name?: string | null }).name ?? classroomSlug,
     classroomFormsUrl: formsListUrl(membership.role, classroomSlug),
+    // The gallery switch is owner-only: it publishes onto every class site in
+    // the org, including other instructors' terms.
+    isOwner: membership.role === 'OWNER',
     // Built on the server because only the server knows whether this classroom
     // has a course site to shorten the link onto — and the short link is a
     // different PATH, not just a different host.
@@ -152,6 +155,7 @@ export const loader = async ({
       closesAtIso: form.closes_at ? form.closes_at.toISOString() : '',
       allowMultiple: form.allow_multiple,
       savePartials: form.save_partials,
+      gallery: Boolean(form.gallery_org_id),
     },
     fields: fieldsOf(form.draft_fields),
     scopes: {
@@ -159,6 +163,7 @@ export const loader = async ({
       repositories: repositories
         .filter(repo => repo.type === 'GROUP')
         .map(repo => ({ id: repo.id, title: repo.title })),
+      gallery: Boolean(form.gallery_org_id),
     } satisfies ScopeChoices,
   };
 };
@@ -188,6 +193,7 @@ export const action = async ({
     closesAt?: string | null;
     allowMultiple?: boolean;
     savePartials?: boolean;
+    gallery?: boolean;
   };
 
   // Resolve by (classroom, slug), never by an id from the request body: the
@@ -254,6 +260,15 @@ export const action = async ({
           return {
             error: `A description can be at most ${DESCRIPTION_MAX.toLocaleString('en-US')} characters.`,
           };
+        }
+        if (body.gallery !== undefined) {
+          if (membership.role !== 'OWNER') {
+            return { error: 'Only the classroom owner can change the project gallery setting.' };
+          }
+          // Turning it on for a live form whose revision breaks the role rule
+          // throws FORM_DEFINITION_INVALID; the catch below already maps that
+          // code to { error }, so it lands in the existing error slot.
+          await ClassmojiService.form.setGalleryOrg(form.id, body.gallery === true);
         }
         await ClassmojiService.form.update(form.id, {
           ...(body.title !== undefined ? { title: body.title } : {}),
@@ -699,6 +714,16 @@ export default function FormBuilder() {
             />
             Save answers as people type
           </label>
+          {data.isOwner ? (
+            <label className="mt-1 flex items-center gap-2 border border-transparent py-1 text-sm text-gray-700 dark:text-gray-200">
+              <input
+                type="checkbox"
+                defaultChecked={data.form.gallery}
+                onChange={event => post({ intent: 'save-meta', gallery: event.target.checked })}
+              />
+              Feed the org project gallery
+            </label>
+          ) : null}
           <span className="mt-1 block h-4" />
         </div>
       </div>
