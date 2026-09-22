@@ -13,7 +13,8 @@ import { answerColumnFields, formatAnswer } from '~/components/forms/answerForma
 import { ClassmojiService } from '~/utils/db.server.ts';
 import { formMutationBlocked } from '~/utils/formAuth.server.ts';
 import { hasRepeatGroup } from './responsesCsv.server.ts';
-import { formsListUrl } from './adminLinks.server.ts';
+import { formsListUrl, galleryUrlFor } from './adminLinks.server.ts';
+import GalleryCell from '~/components/forms/GalleryCell.tsx';
 import {
   NO_STORE,
   auditResponses,
@@ -104,6 +105,8 @@ export const loader = async ({
   });
 
   const classroom = context.classroom as { name?: string | null; slug: string };
+  // Null when the classroom has no serving site; the link is then hidden.
+  const galleryUrl = context.form.galleryOrgId ? await galleryUrlFor(context.classroom) : null;
 
   return data(
     {
@@ -116,6 +119,7 @@ export const loader = async ({
       currentFields: context.currentFields,
       fieldsByRevision: context.fieldsByRevision,
       offersLongExport: hasRepeatGroup(context.currentFields),
+      galleryUrl,
     },
     { headers: NO_STORE }
   );
@@ -277,7 +281,12 @@ export default function FormResponses() {
     currentFields,
     fieldsByRevision,
     offersLongExport,
+    galleryUrl,
   } = useLoaderData<typeof loader>();
+  const galleryOn = Boolean(form.galleryOrgId);
+  const pendingApproval = rows.filter(
+    row => row.submissionState === 'SUBMITTED' && row.galleryStatus === 'PENDING'
+  ).length;
   const fetcher = useFetcher<{ error?: string; ok?: boolean }>();
 
   const [query, setQuery] = useState('');
@@ -342,6 +351,14 @@ export default function FormResponses() {
   const setNote = (id: string, note: string | null) =>
     submit({ intent: 'set-note', responseIds: [id], note });
 
+  // Its own endpoint (teaching-team gate); the fetcher revalidates this page.
+  const setGallery = (ids: string[], status: 'APPROVED' | 'HIDDEN') =>
+    fetcher.submit({ responseIds: ids, status } as never, {
+      method: 'post',
+      action: `/${classroomSlug}/forms/${form.slug}/responses/gallery`,
+      encType: 'application/json',
+    });
+
   // The ids a delete has been REQUESTED for and not yet confirmed. Keeping the
   // whole array (rather than a boolean) is what preserves the single-vs-bulk
   // wording, and means the bulk bar and the drawer share one dialog.
@@ -399,6 +416,24 @@ export default function FormResponses() {
             <span className="mx-1.5 text-gray-300 dark:text-gray-600">/</span>
             Responses
           </h1>
+          {galleryOn ? (
+            <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">
+              {`${pendingApproval} pending approval`}
+              {galleryUrl ? (
+                <>
+                  <span className="mx-1.5 text-gray-300 dark:text-gray-600">·</span>
+                  <a
+                    href={galleryUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="text-blue-600 hover:underline dark:text-blue-400"
+                  >
+                    View gallery
+                  </a>
+                </>
+              ) : null}
+            </p>
+          ) : null}
         </div>
 
         <div className="flex items-center gap-2">
@@ -538,6 +573,7 @@ export default function FormResponses() {
                   'Submitted',
                   'Status',
                   'Note',
+                  ...(galleryOn ? ['Gallery'] : []),
                 ].map((heading, index) => (
                   <th
                     key={`${heading}-${index}`}
@@ -569,12 +605,13 @@ export default function FormResponses() {
                   onStatus={next => setStatus([row.id], next)}
                   onNote={next => setNote(row.id, next)}
                   onDelete={() => setPendingDelete([row.id])}
+                  onGallery={galleryOn ? status => setGallery([row.id], status) : undefined}
                 />
               ))}
               {visible.length === 0 ? (
                 <tr>
                   <td
-                    colSpan={answerColumns.length + 6}
+                    colSpan={answerColumns.length + (galleryOn ? 7 : 6)}
                     className="px-4 py-8 text-center text-sm text-gray-500 dark:text-gray-400"
                   >
                     No responses match “{query}”.
@@ -1022,6 +1059,7 @@ function ResponseTableRow({
   onStatus,
   onNote,
   onDelete,
+  onGallery,
 }: {
   row: ResponseRow;
   answerColumns: FormField[];
@@ -1032,6 +1070,8 @@ function ResponseTableRow({
   onStatus: (next: string | null) => void;
   onNote: (next: string | null) => void;
   onDelete: () => void;
+  /** Set only on gallery forms; renders the Gallery cell. */
+  onGallery?: (status: 'APPROVED' | 'HIDDEN') => void;
 }) {
   const partial = PARTIAL_STATES.has(row.submissionState);
   const chip = STATE_CHIP[row.submissionState];
@@ -1148,6 +1188,15 @@ function ResponseTableRow({
       <td className="px-4 py-3">
         <NoteCell value={row.staffNote} onCommit={onNote} />
       </td>
+      {onGallery ? (
+        <td className="px-4 py-3" onClick={event => event.stopPropagation()}>
+          {partial ? (
+            <span className="text-xs text-gray-400 dark:text-gray-500">—</span>
+          ) : (
+            <GalleryCell status={row.galleryStatus} onChange={onGallery} />
+          )}
+        </td>
+      ) : null}
       <td className="px-3 py-3" onClick={event => event.stopPropagation()}>
         <button
           type="button"
