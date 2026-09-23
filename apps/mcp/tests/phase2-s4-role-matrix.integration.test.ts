@@ -471,7 +471,7 @@ describe('OWNER-only tools deny the adjacent TEACHER boundary', () => {
 // ─── assignment_update per-field tiering (OWNER_TEACHER + in-handler gate) ──
 
 describe('assignment_update per-field tiering', () => {
-  it('TEACHER may flip grades_released + move student_deadline, NOT weight; ASSISTANT denied outright', async () => {
+  it('TEACHER may flip grades_released + move student_deadline, NOT weight or the grader/release dates; ASSISTANT denied outright', async () => {
     // DENY (role gate): ASSISTANT is outside OWNER_TEACHER.
     expectForbidden(
       await callTool(ta, 'assignment_update', {
@@ -530,6 +530,29 @@ describe('assignment_update per-field tiering', () => {
     expect(afterDenied.weight).toBe(10);
     expect(afterDenied.grades_released).toBe(true);
 
+    // DENY (in-handler per-field gate): grader_deadline and release_at are
+    // OWNER-only (the web edit form posts to the requireClassroomAdmin route),
+    // whether setting or clearing them.
+    for (const [field, value] of [
+      ['grader_deadline', '2026-08-22T23:59:00-04:00'],
+      ['release_at', '2026-08-01T09:00:00-04:00'],
+      ['grader_deadline', null],
+      ['release_at', null],
+    ] as const) {
+      const dateDenied = await callTool(teacher, 'assignment_update', {
+        classroom: DEV_REF,
+        assignment_id: tierAssignmentId,
+        [field]: value,
+      });
+      expectForbidden(dateDenied, `${field}=${value} as teacher`, 'INSUFFICIENT_ROLE');
+      expect(String(dateDenied.payload.message)).toMatch(new RegExp(field));
+    }
+    const afterDateDenied = await prisma.assignment.findUniqueOrThrow({
+      where: { id: tierAssignmentId },
+    });
+    expect(afterDateDenied.grader_deadline).toBeNull();
+    expect(afterDateDenied.release_at).toBeNull();
+
     // ALLOW: OWNER updates weight.
     const ownerUpdate = await callTool(owner, 'assignment_update', {
       classroom: DEV_REF,
@@ -540,6 +563,35 @@ describe('assignment_update per-field tiering', () => {
     expect(
       (await prisma.assignment.findUniqueOrThrow({ where: { id: tierAssignmentId } })).weight
     ).toBe(60);
+
+    // ALLOW: OWNER sets grader_deadline + release_at, then clears both with null.
+    const graderDeadline = '2026-08-22T23:59:00-04:00';
+    const releaseAt = '2026-08-01T09:00:00-04:00';
+    const ownerDates = await callTool(owner, 'assignment_update', {
+      classroom: DEV_REF,
+      assignment_id: tierAssignmentId,
+      grader_deadline: graderDeadline,
+      release_at: releaseAt,
+    });
+    expect(ownerDates.isError).toBe(false);
+    const afterDates = await prisma.assignment.findUniqueOrThrow({
+      where: { id: tierAssignmentId },
+    });
+    expect(afterDates.grader_deadline?.toISOString()).toBe(new Date(graderDeadline).toISOString());
+    expect(afterDates.release_at?.toISOString()).toBe(new Date(releaseAt).toISOString());
+
+    const ownerCleared = await callTool(owner, 'assignment_update', {
+      classroom: DEV_REF,
+      assignment_id: tierAssignmentId,
+      grader_deadline: null,
+      release_at: null,
+    });
+    expect(ownerCleared.isError).toBe(false);
+    const afterCleared = await prisma.assignment.findUniqueOrThrow({
+      where: { id: tierAssignmentId },
+    });
+    expect(afterCleared.grader_deadline).toBeNull();
+    expect(afterCleared.release_at).toBeNull();
   });
 });
 
