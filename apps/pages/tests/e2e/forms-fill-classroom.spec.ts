@@ -369,6 +369,11 @@ test.describe('the fill', () => {
     const search = control.getByRole('combobox');
     await expect(search).toHaveAttribute('aria-label', 'Search Your partner');
 
+    // The list only shows while searching: closed until the box is focused.
+    await expect(search).toHaveAttribute('aria-expanded', 'false');
+    await search.click();
+    await expect(search).toHaveAttribute('aria-expanded', 'true');
+
     // The options are people, keyed by user id — which is what makes an answer
     // survive a rename, and what the isolation tests below lean on.
     for (const option of rosterOptions.slice(0, 3)) {
@@ -376,6 +381,48 @@ test.describe('the fill', () => {
     }
     await search.fill('zzzz-nobody');
     await expect(control.getByText('No matches.')).toBeVisible();
+  });
+
+  test('the roster list closes on Escape and on a click outside', async ({ page }) => {
+    await loginAs(page, 'student');
+    await openFill(page, multiPath);
+
+    const control = page.getByTestId(`roster-${F.crew}`);
+    const search = control.getByRole('combobox');
+    const firstOption = control.getByRole('button', { name: rosterOptions[0].label, exact: true });
+
+    await search.click();
+    await expect(firstOption).toBeVisible();
+    await page.keyboard.press('Escape');
+    await expect(firstOption).toBeHidden();
+    await expect(search).toBeFocused();
+
+    // Picking a name in a multi-pick keeps the list open for the next one.
+    await search.click();
+    await firstOption.click();
+    await expect(
+      control.getByRole('button', { name: `Remove ${rosterOptions[0].label}` })
+    ).toBeVisible();
+    await expect(
+      control.getByRole('button', { name: rosterOptions[1].label, exact: true })
+    ).toBeVisible();
+
+    // Escape works from an option too, not only from the search box.
+    await control.getByRole('button', { name: rosterOptions[1].label, exact: true }).focus();
+    await page.keyboard.press('Escape');
+    await expect(
+      control.getByRole('button', { name: rosterOptions[1].label, exact: true })
+    ).toBeHidden();
+    await expect(search).toBeFocused();
+
+    await search.click();
+    await expect(
+      control.getByRole('button', { name: rosterOptions[1].label, exact: true })
+    ).toBeVisible();
+    await page.getByLabel('Anything else?', { exact: true }).click();
+    await expect(
+      control.getByRole('button', { name: rosterOptions[1].label, exact: true })
+    ).toBeHidden();
   });
 
   test('a search box types a character at a time', async ({ page }) => {
