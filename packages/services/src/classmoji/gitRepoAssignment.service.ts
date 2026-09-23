@@ -456,18 +456,47 @@ export interface LateOverrideResult {
   unchangedIds: string[];
   /** Requested ids (ids mode only) that are missing or in another classroom. */
   notFoundIds: string[];
+  /** Setting only: matched rows skipped because they are not past the deadline. */
+  notLateIds: string[];
+  /** Setting by assignment only: matched rows skipped because nothing was turned in. */
+  notSubmittedIds: string[];
   /** Matched rows past their deadline, ignoring any exemption. */
   lateIds: string[];
 }
 
+const EMPTY_LATE_OVERRIDE_RESULT: LateOverrideResult = {
+  updatedIds: [],
+  unchangedIds: [],
+  notFoundIds: [],
+  notLateIds: [],
+  notSubmittedIds: [],
+  lateIds: [],
+};
+
 /**
  * Set or clear the late-penalty exemption on submissions of ONE classroom.
+ *
+ * Which rows may be written (mirrors when the web offers its waive button —
+ * SubmissionsTable / LateOverrideButton show it only on `is_late ||
+ * is_late_override` rows):
+ *   - SETTING (true) writes only rows past their deadline ignoring any
+ *     exemption; the rest come back in `notLateIds`. Exempting an on-time row
+ *     would count it as late in getLatePercentage and the dashboard, and label
+ *     it "Late waived".
+ *   - SETTING by assignment also skips rows with nothing turned in (no
+ *     `closed_at`, the field `is_late` uses) → `notSubmittedIds`: an exemption
+ *     on an unsubmitted row switches off its `should_be_zero` missing-work zero,
+ *     and "waive the late penalty for the class" must not mean "waive missing
+ *     work". A row NAMED by id that is unsubmitted but past the deadline is
+ *     still written — the web offers waive on exactly that row.
+ *   - CLEARING (false) writes any row that currently carries the exemption.
  *
  * Both the read and the write carry `git_repo.classroom_id` in their WHERE
  * clause, so an id from another classroom is never matched, never written, and
  * comes back in `notFoundIds` exactly like an id that does not exist. The
- * write also filters on the current value, so only rows that actually change
- * are touched and `updatedIds` is what the database reports it wrote.
+ * eligibility rules run in JS over the scoped read; only the vetted ids reach
+ * the write, which also filters on the current value, so `updatedIds` is what
+ * the database reports it wrote.
  */
 export const setLateOverrideInClassroom = async ({
   classroomId,
@@ -483,8 +512,9 @@ export const setLateOverrideInClassroom = async ({
   if (!classroomId) throw new Error('setLateOverrideInClassroom requires a classroomId');
   const requestedIds = 'ids' in selector ? [...new Set(selector.ids)] : null;
   if (requestedIds && requestedIds.length === 0) {
-    return { updatedIds: [], unchangedIds: [], notFoundIds: [], lateIds: [] };
+    return { ...EMPTY_LATE_OVERRIDE_RESULT };
   }
+  const skipUnsubmitted = isLateOverride && 'assignmentId' in selector;
 
   const rows = await getPrisma().gitRepoAssignment.findMany({
     where: {
@@ -502,10 +532,22 @@ export const setLateOverrideInClassroom = async ({
     },
   });
 
-  const toUpdate = rows.filter(r => r.is_late_override !== isLateOverride).map(r => r.id);
   const lateIds = rows.filter(r => isPastDeadlineIgnoringOverride(r, now)).map(r => r.id);
+  const late = new Set(lateIds);
   const found = new Set(rows.map(r => r.id));
   const notFoundIds = requestedIds ? requestedIds.filter(id => !found.has(id)) : [];
+
+  // Rows already at the value are left alone (reported unchanged below); of
+  // the rest, a SET is vetted against the eligibility rules above.
+  const notSubmittedIds: string[] = [];
+  const notLateIds: string[] = [];
+  const toUpdate: string[] = [];
+  for (const r of rows) {
+    if (r.is_late_override === isLateOverride) continue;
+    if (skipUnsubmitted && !r.closed_at) notSubmittedIds.push(r.id);
+    else if (isLateOverride && !late.has(r.id)) notLateIds.push(r.id);
+    else toUpdate.push(r.id);
+  }
 
   let updatedIds: string[] = [];
   if (toUpdate.length > 0) {
@@ -521,12 +563,13 @@ export const setLateOverrideInClassroom = async ({
     updatedIds = written.map(r => r.id);
   }
 
-  // Everything matched but not written is already at the value — including a
-  // row a concurrent writer flipped between the read and the guarded write.
-  const updated = new Set(updatedIds);
-  const unchangedIds = rows.filter(r => !updated.has(r.id)).map(r => r.id);
+  // Everything matched that was neither written nor skipped is already at the
+  // value — including a row a concurrent writer flipped between the read and
+  // the guarded write (the write's value filter drops it from updatedIds).
+  const settled = new Set([...updatedIds, ...notLateIds, ...notSubmittedIds]);
+  const unchangedIds = rows.filter(r => !settled.has(r.id)).map(r => r.id);
 
-  return { updatedIds, unchangedIds, notFoundIds, lateIds };
+  return { updatedIds, unchangedIds, notFoundIds, notLateIds, notSubmittedIds, lateIds };
 };
 
 /**

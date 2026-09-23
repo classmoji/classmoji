@@ -87,7 +87,15 @@ function parse(result: { content: Array<{ text: string }> }) {
 }
 
 function serviceResult(partial: Partial<Record<string, string[]>> = {}) {
-  return { updatedIds: [], unchangedIds: [], notFoundIds: [], lateIds: [], ...partial };
+  return {
+    updatedIds: [],
+    unchangedIds: [],
+    notFoundIds: [],
+    notLateIds: [],
+    notSubmittedIds: [],
+    lateIds: [],
+    ...partial,
+  };
 }
 
 const auditRows = () =>
@@ -108,6 +116,7 @@ beforeEach(() => {
   mocks.auditCreate.mockResolvedValue(undefined);
   mocks.assignmentFindById.mockImplementation(async (id: string) => ({
     id,
+    type: 'REPO',
     repository: { classroom_id: 'class-1' },
   }));
   mocks.setLateOverride.mockResolvedValue(serviceResult());
@@ -356,6 +365,114 @@ describe('submission_late_override — assignment_id', () => {
     });
     expect(mocks.setLateOverride).not.toHaveBeenCalled();
   });
+
+  it.each(['QUIZ', 'FORM'])(
+    'refuses a %s assignment as invalid_params instead of reporting 0 matched',
+    async type => {
+      mocks.assignmentFindById.mockResolvedValue({
+        id: ASSIGNMENT_ID,
+        type,
+        repository: { classroom_id: 'class-1' },
+      });
+
+      await expect(submissionLateOverrideTool.handler(ARGS, CTX)).rejects.toMatchObject({
+        kind: 'invalid_params',
+      });
+      expect(mocks.setLateOverride).not.toHaveBeenCalled();
+      expect(mocks.auditCreate).not.toHaveBeenCalled();
+    }
+  );
+
+  it('reports not_submitted and not_late skips alongside what it waived', async () => {
+    mocks.setLateOverride.mockResolvedValue(
+      serviceResult({
+        updatedIds: [SUB_A],
+        notSubmittedIds: [SUB_B],
+        notLateIds: [SUB_C],
+        lateIds: [SUB_A, SUB_B],
+      })
+    );
+
+    const payload = parse(await submissionLateOverrideTool.handler(ARGS, CTX));
+    expect(payload).toMatchObject({
+      matched_count: 3,
+      updated_count: 1,
+      not_submitted_count: 1,
+      not_submitted_ids: [SUB_B],
+      not_late_count: 1,
+      not_late_ids: [SUB_C],
+      late_count: 2,
+      late_updated_count: 1,
+    });
+    expect(payload).not.toHaveProperty('reason');
+    expect(auditRows().map(r => r.resource_id)).toEqual([SUB_A]);
+  });
+});
+
+describe('submission_late_override — skips and audit failures', () => {
+  it('single id on time → success, updated_count 0, a not_late reason, no audit', async () => {
+    mocks.setLateOverride.mockResolvedValue(serviceResult({ notLateIds: [SUB_A] }));
+
+    const payload = parse(
+      await submissionLateOverrideTool.handler(
+        { classroom: 'org/c', git_repo_assignment_id: SUB_A, is_late_override: true },
+        CTX
+      )
+    );
+    expect(payload).toMatchObject({
+      success: true,
+      mode: 'single',
+      updated_count: 0,
+      not_late_count: 1,
+      not_late_ids: [SUB_A],
+    });
+    expect(String(payload.reason)).toMatch(/^not_late/);
+    expect(mocks.auditCreate).not.toHaveBeenCalled();
+  });
+
+  it('keeps the committed result and flags audit_incomplete when an audit write fails', async () => {
+    const ids = Array.from(
+      { length: 45 },
+      (_, i) => `00000000-0000-4000-8000-${String(i).padStart(12, '0')}`
+    );
+    mocks.setLateOverride.mockResolvedValue(serviceResult({ updatedIds: ids }));
+    const secret = 'db password is hunter2';
+    mocks.auditCreate.mockImplementation(async (row: { resource_id: string }) => {
+      if (row.resource_id === ids[3] || row.resource_id === ids[30]) throw new Error(secret);
+    });
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    const result = await submissionLateOverrideTool.handler(
+      { classroom: 'org/c', git_repo_assignment_ids: ids, is_late_override: true },
+      CTX
+    );
+    const payload = parse(result);
+
+    expect(payload).toMatchObject({
+      success: true,
+      updated_count: 45,
+      audit_incomplete: true,
+      audit_failed_ids: [ids[3], ids[30]],
+    });
+    // Every row was attempted, in parallel chunks — the loop did not stop at the failure.
+    expect(mocks.auditCreate).toHaveBeenCalledTimes(45);
+    // The error is logged server-side and never reaches the client.
+    expect(logged).toHaveBeenCalled();
+    expect(result.content[0].text).not.toContain(secret);
+    logged.mockRestore();
+  });
+
+  it('omits audit_incomplete when every audit row lands', async () => {
+    mocks.setLateOverride.mockResolvedValue(serviceResult({ updatedIds: [SUB_A] }));
+    const payload = parse(
+      await submissionLateOverrideTool.handler(
+        { classroom: 'org/c', git_repo_assignment_id: SUB_A, is_late_override: true },
+        CTX
+      )
+    );
+    expect(payload).not.toHaveProperty('audit_incomplete');
+    expect(payload).not.toHaveProperty('audit_failed_ids');
+  });
 });
 
 describe('submission_late_override — definition', () => {
@@ -505,47 +622,167 @@ describe('gitRepoAssignment.setLateOverrideInClassroom (real service, schema stu
     };
   }
 
-  it('scopes BOTH the read and the write by classroom and writes only rows that change', async () => {
+  const SUB_D = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd';
+  const LATE_CLOSE = new Date('2026-09-18T10:00:00Z');
+  const ON_TIME_CLOSE = new Date('2026-09-15T10:00:00Z');
+
+  it('ids: scopes read + write by classroom, writes only late rows, skips on-time as not_late', async () => {
     setPrismaRows({
       gitRepoAssignment: {
         findMany: [
-          row(SUB_A, { closed_at: new Date('2026-09-18T10:00:00Z') }), // late, not exempt
-          row(SUB_B, { is_late_override: true, closed_at: new Date('2026-09-18T10:00:00Z') }),
-          row(SUB_C, { closed_at: new Date('2026-09-15T10:00:00Z') }), // on time
+          row(SUB_A, { closed_at: LATE_CLOSE }), // late → written
+          row(SUB_B, { is_late_override: true, closed_at: LATE_CLOSE }), // already exempt
+          row(SUB_C, { closed_at: ON_TIME_CLOSE }), // on time → not_late
+          row(SUB_D), // never submitted, past deadline, NAMED → still written
         ],
-        updateManyAndReturn: [{ id: SUB_A }, { id: SUB_C }],
+        updateManyAndReturn: [{ id: SUB_A }, { id: SUB_D }],
       },
     });
 
     const result = await realService.setLateOverrideInClassroom({
       classroomId: 'class-1',
-      selector: { ids: [SUB_A, SUB_B, SUB_C, FOREIGN, SUB_A] },
+      selector: { ids: [SUB_A, SUB_B, SUB_C, SUB_D, FOREIGN, SUB_A] },
       isLateOverride: true,
       now: NOW,
     });
 
     expect(argsOf('findMany')?.where).toEqual({
       git_repo: { classroom_id: 'class-1' },
-      id: { in: [SUB_A, SUB_B, SUB_C, FOREIGN] },
+      id: { in: [SUB_A, SUB_B, SUB_C, SUB_D, FOREIGN] },
     });
-
+    // Only the vetted ids reach the write — the on-time row never does.
     expect(argsOf('updateManyAndReturn')?.where).toEqual({
-      id: { in: [SUB_A, SUB_C] },
+      id: { in: [SUB_A, SUB_D] },
       git_repo: { classroom_id: 'class-1' },
       is_late_override: false,
     });
     expect(argsOf('updateManyAndReturn')?.data).toEqual({ is_late_override: true });
 
     expect(result).toEqual({
-      updatedIds: [SUB_A, SUB_C],
+      updatedIds: [SUB_A, SUB_D],
       unchangedIds: [SUB_B],
       notFoundIds: [FOREIGN],
+      notLateIds: [SUB_C],
+      notSubmittedIds: [],
       // SUB_B counts as late even though it is exempt — the point of the count.
+      lateIds: [SUB_A, SUB_B, SUB_D],
+    });
+  });
+
+  it('single id on time: skipped as not_late, nothing written', async () => {
+    setPrismaRows({
+      gitRepoAssignment: { findMany: [row(SUB_C, { closed_at: ON_TIME_CLOSE })] },
+    });
+
+    const result = await realService.setLateOverrideInClassroom({
+      classroomId: 'class-1',
+      selector: { ids: [SUB_C] },
+      isLateOverride: true,
+      now: NOW,
+    });
+    expect(prismaCallsFor('gitRepoAssignment', 'updateManyAndReturn')).toHaveLength(0);
+    expect(result).toMatchObject({ updatedIds: [], unchangedIds: [], notLateIds: [SUB_C] });
+  });
+
+  it('assignment: skips never-submitted rows as not_submitted and on-time rows as not_late', async () => {
+    setPrismaRows({
+      gitRepoAssignment: {
+        findMany: [
+          row(SUB_A, { closed_at: LATE_CLOSE }), // late → written
+          row(SUB_B), // never submitted (past deadline) → not_submitted
+          row(SUB_C, { closed_at: ON_TIME_CLOSE }), // on time → not_late
+        ],
+        updateManyAndReturn: [{ id: SUB_A }],
+      },
+    });
+
+    const result = await realService.setLateOverrideInClassroom({
+      classroomId: 'class-1',
+      selector: { assignmentId: ASSIGNMENT_ID },
+      isLateOverride: true,
+      now: NOW,
+    });
+
+    expect(argsOf('findMany')?.where).toEqual({
+      git_repo: { classroom_id: 'class-1' },
+      assignment_id: ASSIGNMENT_ID,
+    });
+    expect(argsOf('updateManyAndReturn')?.where).toEqual({
+      id: { in: [SUB_A] },
+      git_repo: { classroom_id: 'class-1' },
+      is_late_override: false,
+    });
+    expect(result).toEqual({
+      updatedIds: [SUB_A],
+      unchangedIds: [],
+      notFoundIds: [],
+      notLateIds: [SUB_C],
+      notSubmittedIds: [SUB_B],
       lateIds: [SUB_A, SUB_B],
     });
   });
 
-  it('selects by assignment inside the classroom and never writes when nothing changes', async () => {
+  it('clearing writes any exempt row — on time or unsubmitted — and skips nothing', async () => {
+    setPrismaRows({
+      gitRepoAssignment: {
+        findMany: [
+          row(SUB_A, { is_late_override: true, closed_at: ON_TIME_CLOSE }), // not late
+          row(SUB_B, { is_late_override: true }), // never submitted
+          row(SUB_C, { closed_at: LATE_CLOSE }), // not exempt → unchanged
+        ],
+        updateManyAndReturn: [{ id: SUB_A }, { id: SUB_B }],
+      },
+    });
+
+    const result = await realService.setLateOverrideInClassroom({
+      classroomId: 'class-1',
+      selector: { assignmentId: ASSIGNMENT_ID },
+      isLateOverride: false,
+      now: NOW,
+    });
+
+    expect(argsOf('updateManyAndReturn')?.where).toEqual({
+      id: { in: [SUB_A, SUB_B] },
+      git_repo: { classroom_id: 'class-1' },
+      is_late_override: true,
+    });
+    expect(argsOf('updateManyAndReturn')?.data).toEqual({ is_late_override: false });
+    expect(result).toMatchObject({
+      updatedIds: [SUB_A, SUB_B],
+      unchangedIds: [SUB_C],
+      notLateIds: [],
+      notSubmittedIds: [],
+    });
+  });
+
+  it('a row flipped concurrently (write returns fewer rows) is counted unchanged, not lost', async () => {
+    setPrismaRows({
+      gitRepoAssignment: {
+        findMany: [row(SUB_A, { closed_at: LATE_CLOSE }), row(SUB_B, { closed_at: LATE_CLOSE })],
+        // SUB_B was exempted by someone else between the read and the guarded write.
+        updateManyAndReturn: [{ id: SUB_A }],
+      },
+    });
+
+    const result = await realService.setLateOverrideInClassroom({
+      classroomId: 'class-1',
+      selector: { ids: [SUB_A, SUB_B] },
+      isLateOverride: true,
+      now: NOW,
+    });
+
+    expect(argsOf('updateManyAndReturn')?.where).toMatchObject({ id: { in: [SUB_A, SUB_B] } });
+    expect(result).toMatchObject({
+      updatedIds: [SUB_A],
+      unchangedIds: [SUB_B],
+      notLateIds: [],
+      notSubmittedIds: [],
+    });
+    // Every matched row lands in exactly one bucket.
+    expect(result.updatedIds.length + result.unchangedIds.length).toBe(2);
+  });
+
+  it('never writes when nothing changes', async () => {
     setPrismaRows({
       gitRepoAssignment: { findMany: [row(SUB_A, { is_late_override: false })] },
     });
@@ -557,18 +794,9 @@ describe('gitRepoAssignment.setLateOverrideInClassroom (real service, schema stu
       now: NOW,
     });
 
-    expect(argsOf('findMany')?.where).toEqual({
-      git_repo: { classroom_id: 'class-1' },
-      assignment_id: ASSIGNMENT_ID,
-    });
     expect(prismaCallsFor('gitRepoAssignment', 'updateManyAndReturn')).toHaveLength(0);
     // Not yet submitted and past the deadline: late, like the `is_late` field.
-    expect(result).toEqual({
-      updatedIds: [],
-      unchangedIds: [SUB_A],
-      notFoundIds: [],
-      lateIds: [SUB_A],
-    });
+    expect(result).toMatchObject({ updatedIds: [], unchangedIds: [SUB_A], lateIds: [SUB_A] });
   });
 
   it('refuses to run without a classroom id', async () => {

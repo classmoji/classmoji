@@ -471,24 +471,82 @@ describe('OWNER-only tools deny the adjacent TEACHER boundary', () => {
 // ─── submission_late_override (OWNER_TEACHER — the web shield button) ───────
 
 describe('submission_late_override', () => {
-  /** Snapshot is_late_override on these submissions and restore it at cleanup. */
-  async function restoreLater(ids: string[]) {
-    const before = await prisma.gitRepoAssignment.findMany({
-      where: { id: { in: ids } },
-      select: { id: true, is_late_override: true },
+  // The seeded 'Hello World Part 1' has no deadline, so nothing in it is late
+  // and every set would be skipped as not_late. For this block: a deadline in
+  // the past, fake-student-1 turned in LATE, fake-student-2 ON TIME, and the
+  // rest never submitted. Everything is put back in afterAll, before later
+  // blocks read these rows.
+  const DEADLINE = new Date('2026-01-10T12:00:00Z');
+  const LATE_CLOSE = new Date('2026-01-12T12:00:00Z');
+  const ON_TIME_CLOSE = new Date('2026-01-09T12:00:00Z');
+
+  let subs: Array<{ id: string; closed_at: Date | null; is_late_override: boolean }> = [];
+  let deadlineBefore: Date | null = null;
+  let foreignBefore = false;
+  let student2GraId = '';
+
+  beforeAll(async () => {
+    const assignment = await prisma.assignment.findUniqueOrThrow({
+      where: { id: fx.releasedAssignment.id },
+      select: { student_deadline: true },
     });
-    cleanup.add('restore is_late_override', () =>
-      prisma.$transaction(
-        before.map(r =>
-          prisma.gitRepoAssignment.update({
-            where: { id: r.id },
-            data: { is_late_override: r.is_late_override },
-          })
-        )
-      )
-    );
-    return new Map(before.map(r => [r.id, r.is_late_override]));
-  }
+    deadlineBefore = assignment.student_deadline;
+    subs = await prisma.gitRepoAssignment.findMany({
+      where: { assignment_id: fx.releasedAssignment.id, git_repo: { classroom_id: fx.dev.id } },
+      select: { id: true, closed_at: true, is_late_override: true },
+    });
+    foreignBefore = (
+      await prisma.gitRepoAssignment.findUniqueOrThrow({
+        where: { id: fx.foreignGra.id },
+        select: { is_late_override: true },
+      })
+    ).is_late_override;
+    student2GraId = (
+      await prisma.gitRepoAssignment.findUniqueOrThrow({
+        where: {
+          provider_provider_id: { provider: 'GITHUB', provider_id: 'fake-issue-fake-student-2' },
+        },
+        select: { id: true },
+      })
+    ).id;
+    expect(subs.map(s => s.id)).toEqual(expect.arrayContaining([fx.student1Gra.id, student2GraId]));
+
+    await prisma.assignment.update({
+      where: { id: fx.releasedAssignment.id },
+      data: { student_deadline: DEADLINE },
+    });
+    await prisma.gitRepoAssignment.updateMany({
+      where: { id: { in: subs.map(s => s.id) } },
+      data: { is_late_override: false, closed_at: null },
+    });
+    await prisma.gitRepoAssignment.update({
+      where: { id: fx.student1Gra.id },
+      data: { closed_at: LATE_CLOSE },
+    });
+    await prisma.gitRepoAssignment.update({
+      where: { id: student2GraId },
+      data: { closed_at: ON_TIME_CLOSE },
+    });
+  });
+
+  afterAll(async () => {
+    await prisma.$transaction([
+      prisma.assignment.update({
+        where: { id: fx.releasedAssignment.id },
+        data: { student_deadline: deadlineBefore },
+      }),
+      ...subs.map(s =>
+        prisma.gitRepoAssignment.update({
+          where: { id: s.id },
+          data: { closed_at: s.closed_at, is_late_override: s.is_late_override },
+        })
+      ),
+      prisma.gitRepoAssignment.update({
+        where: { id: fx.foreignGra.id },
+        data: { is_late_override: foreignBefore },
+      }),
+    ]);
+  });
 
   const overrideOf = async (id: string) =>
     (
@@ -498,13 +556,8 @@ describe('submission_late_override', () => {
       })
     ).is_late_override;
 
-  it('TEACHER sets + clears; ASSISTANT/STUDENT denied; foreign ids are never written', async () => {
+  it('TEACHER sets + clears; ASSISTANT/STUDENT denied; on-time skipped; foreign ids never written', async () => {
     const gra = fx.student1Gra.id;
-    const foreignBefore = (await restoreLater([gra, fx.foreignGra.id])).get(fx.foreignGra.id);
-    await prisma.gitRepoAssignment.update({
-      where: { id: gra },
-      data: { is_late_override: false },
-    });
 
     // DENY (role gate): ASSISTANT and STUDENT are outside OWNER_TEACHER.
     for (const [token, who] of [
@@ -523,10 +576,10 @@ describe('submission_late_override', () => {
     }
     expect(await overrideOf(gra)).toBe(false);
 
-    // ALLOW: TEACHER, list mode with a cross-classroom id mixed in.
+    // ALLOW: TEACHER, list mode — a late row, an on-time row, a foreign id.
     const set = await callTool(teacher, 'submission_late_override', {
       classroom: DEV_REF,
-      git_repo_assignment_ids: [gra, fx.foreignGra.id],
+      git_repo_assignment_ids: [gra, student2GraId, fx.foreignGra.id],
       is_late_override: true,
     });
     expect(set.isError).toBe(false);
@@ -534,10 +587,13 @@ describe('submission_late_override', () => {
       mode: 'ids',
       updated_count: 1,
       updated_ids: [gra],
+      not_late_count: 1,
+      not_late_ids: [student2GraId],
       not_found_count: 1,
       not_found_ids: [fx.foreignGra.id],
     });
     expect(await overrideOf(gra)).toBe(true);
+    expect(await overrideOf(student2GraId)).toBe(false);
     expect(await overrideOf(fx.foreignGra.id)).toBe(foreignBefore);
     await expectAuditRow({
       userId: teacherMint.user_id,
@@ -549,6 +605,17 @@ describe('submission_late_override', () => {
       tool: 'submission_late_override',
       since: suiteStart,
     });
+
+    // A single on-time id → success with a not_late reason, nothing written.
+    const onTime = await callTool(teacher, 'submission_late_override', {
+      classroom: DEV_REF,
+      git_repo_assignment_id: student2GraId,
+      is_late_override: true,
+    });
+    expect(onTime.isError).toBe(false);
+    expect(onTime.payload).toMatchObject({ updated_count: 0, not_late_count: 1 });
+    expect(String(onTime.payload.reason)).toMatch(/^not_late/);
+    expect(await overrideOf(student2GraId)).toBe(false);
 
     // Repeat → unchanged, no write.
     const again = await callTool(teacher, 'submission_late_override', {
@@ -598,24 +665,9 @@ describe('submission_late_override', () => {
     expect(clearAudit?.data).toMatchObject({ tool: 'submission_late_override', value: false });
   });
 
-  it('OWNER exempts a whole assignment and gets the late count', async () => {
-    const subs = await prisma.gitRepoAssignment.findMany({
-      where: { assignment_id: fx.releasedAssignment.id, git_repo: { classroom_id: fx.dev.id } },
-      select: { id: true },
-    });
-    expect(subs.length).toBeGreaterThan(0);
-    await restoreLater(subs.map(s => s.id));
-    await prisma.gitRepoAssignment.updateMany({
-      where: { id: { in: subs.map(s => s.id) } },
-      data: { is_late_override: false },
-    });
-    // `is_late` (the computed field) is only unmasked while nothing is exempt.
-    const lateBefore = (
-      (await prisma.gitRepoAssignment.findMany({
-        where: { id: { in: subs.map(s => s.id) } },
-        select: { is_late: true } as never,
-      })) as unknown as Array<{ is_late: boolean }>
-    ).filter(r => r.is_late).length;
+  it('OWNER exempts a whole assignment: only late, submitted rows; missing work keeps its zero', async () => {
+    const unsubmitted = subs.length - 2;
+    expect(unsubmitted).toBeGreaterThan(0);
 
     const res = await callTool(owner, 'submission_late_override', {
       classroom: DEV_REF,
@@ -626,15 +678,20 @@ describe('submission_late_override', () => {
     expect(res.payload).toMatchObject({
       mode: 'assignment',
       matched_count: subs.length,
-      updated_count: subs.length,
-      late_count: lateBefore,
-      late_updated_count: lateBefore,
+      updated_count: 1,
+      updated_ids: [fx.student1Gra.id],
+      not_late_count: 1,
+      not_late_ids: [student2GraId],
+      not_submitted_count: unsubmitted,
+      // student-1 (turned in late) + every unsubmitted row past the deadline.
+      late_count: 1 + unsubmitted,
+      late_updated_count: 1,
     });
     expect(
       await prisma.gitRepoAssignment.count({
         where: { id: { in: subs.map(s => s.id) }, is_late_override: true },
       })
-    ).toBe(subs.length);
+    ).toBe(1);
   });
 });
 
