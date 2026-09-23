@@ -1,9 +1,20 @@
 /**
- * assignment_update — deadline / weight / grades_released.
+ * assignment_update — deadline / weight / grades_released / grader_deadline /
+ * release_at.
  *
  * Route-derived per-field tiers (plan §4.2, verified in the tree):
- *   - general edits (weight, …):   OWNER only (admin.$class.repos_.$title.update
- *                                  → requireClassroomAdmin)
+ *   - general edits (weight, …):   OWNER only (admin.$class.assignments
+ *                                  `update` → requireClassroomAdmin →
+ *                                  assignment.updateInClassroom)
+ *   - grader_deadline, release_at: OWNER only, same route — the only web
+ *                                  route that edits either field on an existing
+ *                                  assignment (classroom import copies/strips
+ *                                  them at create time). AssignmentFormModal
+ *                                  always posts to /admin/…/assignments?/update,
+ *                                  even when opened from the /teacher detail
+ *                                  page. An empty picker sends null, so both
+ *                                  are clearable; no ordering rule between the
+ *                                  dates is enforced anywhere.
  *   - grades_released flip:        OWNER + TEACHER (api.gitRepoAssignment.$class
  *                                  updateGradeRelease → ['OWNER','TEACHER'])
  *   - student_deadline move:       OWNER + TEACHER (admin.$class.calendar
@@ -15,6 +26,11 @@
  * ASSIGNMENT_DUE_DATE_CHANGED on deadline change and ASSIGNMENT_GRADED on a
  * false→true grades_released flip). Never assignment.releaseGrades, which is
  * the same DB write with the notification silently skipped (plan §5.2 gap 7).
+ * updateInClassroom (the web path for the date fields) runs the same
+ * notifyAfterUpdate, which ignores grader_deadline and release_at: neither
+ * schedules anything on write. release_at is read later by the nightly
+ * release cron (findReadyForRelease), the repo-provisioning filter, and the
+ * student "locked" view; a null release_at is never auto-released.
  */
 
 import { ClassmojiService } from '@classmoji/services';
@@ -43,6 +59,8 @@ interface AssignmentUpdateArgs {
   student_deadline?: string;
   weight?: number;
   grades_released?: boolean;
+  grader_deadline?: string | null;
+  release_at?: string | null;
 }
 
 /** Fields a TEACHER (non-OWNER) may update, per the web routes above. */
@@ -53,10 +71,12 @@ export const assignmentUpdateTool: ToolDefinition<AssignmentUpdateArgs> = {
   annotations: { destructive: false },
   title: 'Update an assignment',
   description:
-    'Updates an assignment (a due-dated, gradeable slice of a repo/lab): student deadline, ' +
-    'weight, and/or grades_released. Owners can update all fields; teachers only ' +
-    'grades_released and student_deadline. Releasing grades notifies graded students; moving ' +
-    'the deadline notifies affected students.',
+    'Updates an assignment (a due-dated, gradeable slice of a repo/lab): student_deadline, ' +
+    'weight, grades_released, grader_deadline, and/or release_at. Owners can update all ' +
+    'fields; teachers only grades_released and student_deadline. Releasing grades notifies ' +
+    'graded students; moving the student deadline notifies affected students. release_at is ' +
+    'when an unpublished assignment auto-releases to students (checked nightly). Pass null ' +
+    'to clear grader_deadline or release_at; a cleared release_at never auto-releases.',
   scope: 'write',
   roles: OWNER_TEACHER,
   inputSchema: {
@@ -72,6 +92,20 @@ export const assignmentUpdateTool: ToolDefinition<AssignmentUpdateArgs> = {
       .boolean()
       .optional()
       .describe('Whether grades for this assignment are visible to students'),
+    // Nullable, unlike on assignment_create: the web edit form clears either
+    // date by sending null (AssignmentFormModal toIso → updateInClassroom).
+    grader_deadline: z
+      .string()
+      .datetime({ offset: true })
+      .nullable()
+      .optional()
+      .describe('Grader due date (ISO 8601); null clears it. Owner only'),
+    release_at: z
+      .string()
+      .datetime({ offset: true })
+      .nullable()
+      .optional()
+      .describe('Auto-release date (ISO 8601); null clears it. Owner only'),
   },
   handler: async (args, ctx) => {
     const updates: Prisma.AssignmentUpdateInput = {};
@@ -80,12 +114,19 @@ export const assignmentUpdateTool: ToolDefinition<AssignmentUpdateArgs> = {
     }
     if (args.weight !== undefined) updates.weight = args.weight;
     if (args.grades_released !== undefined) updates.grades_released = args.grades_released;
+    if (args.grader_deadline !== undefined) {
+      updates.grader_deadline =
+        args.grader_deadline === null ? null : new Date(args.grader_deadline);
+    }
+    if (args.release_at !== undefined) {
+      updates.release_at = args.release_at === null ? null : new Date(args.release_at);
+    }
 
     const fields = Object.keys(updates);
     if (fields.length === 0) {
       throw new ToolError(
         'invalid_params',
-        'Provide at least one of: student_deadline, weight, grades_released'
+        'Provide at least one of: student_deadline, weight, grades_released, grader_deadline, release_at'
       );
     }
 
@@ -118,6 +159,8 @@ export const assignmentUpdateTool: ToolDefinition<AssignmentUpdateArgs> = {
         student_deadline: updated.student_deadline?.toISOString() ?? null,
         weight: updated.weight,
         grades_released: updated.grades_released,
+        grader_deadline: updated.grader_deadline?.toISOString() ?? null,
+        release_at: updated.release_at?.toISOString() ?? null,
       },
     });
   },
