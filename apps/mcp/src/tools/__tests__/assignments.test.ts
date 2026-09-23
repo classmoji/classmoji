@@ -267,7 +267,11 @@ describe('assignment_update: grader_deadline and release_at', () => {
       resource_type: 'ASSIGNMENT',
       resource_id: 'asg-1',
       action: 'UPDATE',
-      data: { tool: 'assignment_update', fields: [field] },
+      data: {
+        tool: 'assignment_update',
+        fields: [field],
+        values: { [field]: new Date(value).toISOString() },
+      },
     });
   });
 
@@ -295,8 +299,15 @@ describe('assignment_update: grader_deadline and release_at', () => {
         release_at: new Date(RELEASE).toISOString(),
       },
     });
-    const audit = mocks.auditCreate.mock.calls[0][0] as { data: { fields: string[] } };
-    expect(audit.data.fields).toEqual(['grader_deadline', 'release_at']);
+    const audit = mocks.auditCreate.mock.calls[0][0] as { data: unknown };
+    expect(audit.data).toEqual({
+      tool: 'assignment_update',
+      fields: ['grader_deadline', 'release_at'],
+      values: {
+        grader_deadline: new Date(GRADER).toISOString(),
+        release_at: new Date(RELEASE).toISOString(),
+      },
+    });
   });
 
   it('clears both dates with null, as the web edit form does', async () => {
@@ -310,8 +321,36 @@ describe('assignment_update: grader_deadline and release_at', () => {
     });
     expect(payload.assignment.grader_deadline).toBeNull();
     expect(payload.assignment.release_at).toBeNull();
-    const audit = mocks.auditCreate.mock.calls[0][0] as { data: { fields: string[] } };
-    expect(audit.data.fields).toEqual(['grader_deadline', 'release_at']);
+    const audit = mocks.auditCreate.mock.calls[0][0] as { data: unknown };
+    expect(audit.data).toEqual({
+      tool: 'assignment_update',
+      fields: ['grader_deadline', 'release_at'],
+      values: { grader_deadline: null, release_at: null },
+    });
+  });
+
+  it('records the new value of every changed field, not only the dates', async () => {
+    await assignmentUpdateTool.handler(
+      {
+        ...ARGS,
+        student_deadline: '2026-07-21T23:59:00-04:00',
+        weight: 40,
+        grades_released: true,
+        release_at: RELEASE,
+      },
+      CTX
+    );
+    const audit = mocks.auditCreate.mock.calls[0][0] as { data: unknown };
+    expect(audit.data).toEqual({
+      tool: 'assignment_update',
+      fields: ['student_deadline', 'weight', 'grades_released', 'release_at'],
+      values: {
+        student_deadline: new Date('2026-07-21T23:59:00-04:00').toISOString(),
+        weight: 40,
+        grades_released: true,
+        release_at: new Date(RELEASE).toISOString(),
+      },
+    });
   });
 
   it.each([
