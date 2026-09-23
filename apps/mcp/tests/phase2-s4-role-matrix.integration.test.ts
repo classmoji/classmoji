@@ -466,6 +466,176 @@ describe('OWNER-only tools deny the adjacent TEACHER boundary', () => {
   });
 });
 
+// ─── submission_late_override (OWNER_TEACHER — the web shield button) ───────
+
+describe('submission_late_override', () => {
+  /** Snapshot is_late_override on these submissions and restore it at cleanup. */
+  async function restoreLater(ids: string[]) {
+    const before = await prisma.gitRepoAssignment.findMany({
+      where: { id: { in: ids } },
+      select: { id: true, is_late_override: true },
+    });
+    cleanup.add('restore is_late_override', () =>
+      prisma.$transaction(
+        before.map(r =>
+          prisma.gitRepoAssignment.update({
+            where: { id: r.id },
+            data: { is_late_override: r.is_late_override },
+          })
+        )
+      )
+    );
+    return new Map(before.map(r => [r.id, r.is_late_override]));
+  }
+
+  const overrideOf = async (id: string) =>
+    (
+      await prisma.gitRepoAssignment.findUniqueOrThrow({
+        where: { id },
+        select: { is_late_override: true },
+      })
+    ).is_late_override;
+
+  it('TEACHER sets + clears; ASSISTANT/STUDENT denied; foreign ids are never written', async () => {
+    const gra = fx.student1Gra.id;
+    const foreignBefore = (await restoreLater([gra, fx.foreignGra.id])).get(fx.foreignGra.id);
+    await prisma.gitRepoAssignment.update({
+      where: { id: gra },
+      data: { is_late_override: false },
+    });
+
+    // DENY (role gate): ASSISTANT and STUDENT are outside OWNER_TEACHER.
+    for (const [token, who] of [
+      [ta, 'assistant'],
+      [student1, 'student'],
+    ] as const) {
+      expectForbidden(
+        await callTool(token, 'submission_late_override', {
+          classroom: DEV_REF,
+          git_repo_assignment_id: gra,
+          is_late_override: true,
+        }),
+        `submission_late_override as ${who}`,
+        'INSUFFICIENT_ROLE'
+      );
+    }
+    expect(await overrideOf(gra)).toBe(false);
+
+    // ALLOW: TEACHER, list mode with a cross-classroom id mixed in.
+    const set = await callTool(teacher, 'submission_late_override', {
+      classroom: DEV_REF,
+      git_repo_assignment_ids: [gra, fx.foreignGra.id],
+      is_late_override: true,
+    });
+    expect(set.isError).toBe(false);
+    expect(set.payload).toMatchObject({
+      mode: 'ids',
+      updated_count: 1,
+      updated_ids: [gra],
+      not_found_count: 1,
+      not_found_ids: [fx.foreignGra.id],
+    });
+    expect(await overrideOf(gra)).toBe(true);
+    expect(await overrideOf(fx.foreignGra.id)).toBe(foreignBefore);
+    await expectAuditRow({
+      userId: teacherMint.user_id,
+      classroomId: fx.dev.id,
+      role: 'TEACHER',
+      resourceType: 'GIT_REPO_ASSIGNMENT',
+      action: 'UPDATE',
+      resourceId: gra,
+      tool: 'submission_late_override',
+      since: suiteStart,
+    });
+
+    // Repeat → unchanged, no write.
+    const again = await callTool(teacher, 'submission_late_override', {
+      classroom: DEV_REF,
+      git_repo_assignment_id: gra,
+      is_late_override: true,
+    });
+    expect(again.payload).toMatchObject({ updated_count: 0, unchanged_count: 1 });
+
+    // Single mode on a foreign id / assignment mode on a foreign assignment →
+    // the uniform not_found, nothing written.
+    expectScopedNotFound(
+      await callTool(teacher, 'submission_late_override', {
+        classroom: DEV_REF,
+        git_repo_assignment_id: fx.foreignGra.id,
+        is_late_override: !foreignBefore,
+      }),
+      'submission_late_override on a foreign submission'
+    );
+    expectScopedNotFound(
+      await callTool(teacher, 'submission_late_override', {
+        classroom: DEV_REF,
+        assignment_id: fx.foreignAssignment.id,
+        is_late_override: !foreignBefore,
+      }),
+      'submission_late_override on a foreign assignment'
+    );
+    expect(await overrideOf(fx.foreignGra.id)).toBe(foreignBefore);
+
+    // Clear → false, audited with value:false.
+    const cleared = await callTool(teacher, 'submission_late_override', {
+      classroom: DEV_REF,
+      git_repo_assignment_id: gra,
+      is_late_override: false,
+    });
+    expect(cleared.payload).toMatchObject({ mode: 'single', updated_count: 1 });
+    expect(await overrideOf(gra)).toBe(false);
+    const clearAudit = await prisma.auditLog.findFirst({
+      where: {
+        user_id: teacherMint.user_id,
+        resource_id: gra,
+        resource_type: 'GIT_REPO_ASSIGNMENT',
+        timestamp: { gte: suiteStart },
+        data: { path: ['value'], equals: false },
+      },
+    });
+    expect(clearAudit?.data).toMatchObject({ tool: 'submission_late_override', value: false });
+  });
+
+  it('OWNER exempts a whole assignment and gets the late count', async () => {
+    const subs = await prisma.gitRepoAssignment.findMany({
+      where: { assignment_id: fx.releasedAssignment.id, git_repo: { classroom_id: fx.dev.id } },
+      select: { id: true },
+    });
+    expect(subs.length).toBeGreaterThan(0);
+    await restoreLater(subs.map(s => s.id));
+    await prisma.gitRepoAssignment.updateMany({
+      where: { id: { in: subs.map(s => s.id) } },
+      data: { is_late_override: false },
+    });
+    // `is_late` (the computed field) is only unmasked while nothing is exempt.
+    const lateBefore = (
+      (await prisma.gitRepoAssignment.findMany({
+        where: { id: { in: subs.map(s => s.id) } },
+        select: { is_late: true } as never,
+      })) as unknown as Array<{ is_late: boolean }>
+    ).filter(r => r.is_late).length;
+
+    const res = await callTool(owner, 'submission_late_override', {
+      classroom: DEV_REF,
+      assignment_id: fx.releasedAssignment.id,
+      is_late_override: true,
+    });
+    expect(res.isError).toBe(false);
+    expect(res.payload).toMatchObject({
+      mode: 'assignment',
+      matched_count: subs.length,
+      updated_count: subs.length,
+      late_count: lateBefore,
+      late_updated_count: lateBefore,
+    });
+    expect(
+      await prisma.gitRepoAssignment.count({
+        where: { id: { in: subs.map(s => s.id) }, is_late_override: true },
+      })
+    ).toBe(subs.length);
+  });
+});
+
 // ─── assignment_update per-field tiering (OWNER_TEACHER + in-handler gate) ──
 
 describe('assignment_update per-field tiering', () => {
