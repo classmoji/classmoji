@@ -109,18 +109,26 @@ export const assignmentUpdateTool: ToolDefinition<AssignmentUpdateArgs> = {
   },
   handler: async (args, ctx) => {
     const updates: Prisma.AssignmentUpdateInput = {};
-    if (args.student_deadline !== undefined) {
-      updates.student_deadline = new Date(args.student_deadline);
+    // The new value of each changed field for the audit row, as the web
+    // calendar's deadline move records its new_deadline. Dates as ISO strings,
+    // cleared dates as null.
+    const values: Record<string, string | number | boolean | null> = {};
+    const toDate = (iso: string | null) => (iso === null ? null : new Date(iso));
+    const setDate = (
+      field: 'student_deadline' | 'grader_deadline' | 'release_at',
+      iso: string | null
+    ) => {
+      const date = toDate(iso);
+      updates[field] = date;
+      values[field] = date?.toISOString() ?? null;
+    };
+    if (args.student_deadline !== undefined) setDate('student_deadline', args.student_deadline);
+    if (args.weight !== undefined) updates.weight = values.weight = args.weight;
+    if (args.grades_released !== undefined) {
+      updates.grades_released = values.grades_released = args.grades_released;
     }
-    if (args.weight !== undefined) updates.weight = args.weight;
-    if (args.grades_released !== undefined) updates.grades_released = args.grades_released;
-    if (args.grader_deadline !== undefined) {
-      updates.grader_deadline =
-        args.grader_deadline === null ? null : new Date(args.grader_deadline);
-    }
-    if (args.release_at !== undefined) {
-      updates.release_at = args.release_at === null ? null : new Date(args.release_at);
-    }
+    if (args.grader_deadline !== undefined) setDate('grader_deadline', args.grader_deadline);
+    if (args.release_at !== undefined) setDate('release_at', args.release_at);
 
     const fields = Object.keys(updates);
     if (fields.length === 0) {
@@ -148,7 +156,7 @@ export const assignmentUpdateTool: ToolDefinition<AssignmentUpdateArgs> = {
       resource_type: 'ASSIGNMENT',
       resource_id: assignment.id,
       action: 'UPDATE',
-      data: { tool: 'assignment_update', fields },
+      data: { tool: 'assignment_update', fields, values },
     });
 
     return ok({
