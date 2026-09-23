@@ -469,7 +469,7 @@ describe('OWNER-only tools deny the adjacent TEACHER boundary', () => {
 // ─── assignment_update per-field tiering (OWNER_TEACHER + in-handler gate) ──
 
 describe('assignment_update per-field tiering', () => {
-  it('TEACHER may flip grades_released + move student_deadline, NOT weight; ASSISTANT denied outright', async () => {
+  it('TEACHER may flip grades_released + move student_deadline, NOT weight or the grader/release dates; ASSISTANT denied outright', async () => {
     // DENY (role gate): ASSISTANT is outside OWNER_TEACHER.
     expectForbidden(
       await callTool(ta, 'assignment_update', {
@@ -538,6 +538,59 @@ describe('assignment_update per-field tiering', () => {
     expect(
       (await prisma.assignment.findUniqueOrThrow({ where: { id: tierAssignmentId } })).weight
     ).toBe(60);
+
+    // ALLOW: OWNER sets grader_deadline + release_at. Far-future dates: a past
+    // release_at on this unpublished REPO assignment would make it eligible for
+    // the nightly release cron until the clear below.
+    const graderDeadline = '2099-08-22T23:59:00-04:00';
+    const releaseAt = '2099-08-01T09:00:00-04:00';
+    const ownerDates = await callTool(owner, 'assignment_update', {
+      classroom: DEV_REF,
+      assignment_id: tierAssignmentId,
+      grader_deadline: graderDeadline,
+      release_at: releaseAt,
+    });
+    expect(ownerDates.isError).toBe(false);
+    const expectOwnerDates = async () => {
+      const row = await prisma.assignment.findUniqueOrThrow({ where: { id: tierAssignmentId } });
+      expect(row.grader_deadline?.toISOString()).toBe(new Date(graderDeadline).toISOString());
+      expect(row.release_at?.toISOString()).toBe(new Date(releaseAt).toISOString());
+    };
+    await expectOwnerDates();
+
+    // DENY (in-handler per-field gate): grader_deadline and release_at are
+    // OWNER-only (the web edit form posts to the requireClassroomAdmin route),
+    // whether setting or clearing them. Runs while the OWNER's values are in
+    // place, so a clear that slipped through would show in the DB check.
+    for (const [field, value] of [
+      ['grader_deadline', '2099-09-22T23:59:00-04:00'],
+      ['release_at', '2099-09-01T09:00:00-04:00'],
+      ['grader_deadline', null],
+      ['release_at', null],
+    ] as const) {
+      const dateDenied = await callTool(teacher, 'assignment_update', {
+        classroom: DEV_REF,
+        assignment_id: tierAssignmentId,
+        [field]: value,
+      });
+      expectForbidden(dateDenied, `${field}=${value} as teacher`, 'INSUFFICIENT_ROLE');
+      expect(String(dateDenied.payload.message)).toMatch(new RegExp(field));
+    }
+    await expectOwnerDates();
+
+    // ALLOW: OWNER clears both with null.
+    const ownerCleared = await callTool(owner, 'assignment_update', {
+      classroom: DEV_REF,
+      assignment_id: tierAssignmentId,
+      grader_deadline: null,
+      release_at: null,
+    });
+    expect(ownerCleared.isError).toBe(false);
+    const afterCleared = await prisma.assignment.findUniqueOrThrow({
+      where: { id: tierAssignmentId },
+    });
+    expect(afterCleared.grader_deadline).toBeNull();
+    expect(afterCleared.release_at).toBeNull();
   });
 });
 

@@ -10,6 +10,7 @@
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { z } from 'zod';
 import type { ToolContext } from '../../mcp/registry.ts';
 
 const mocks = vi.hoisted(() => ({
@@ -17,6 +18,8 @@ const mocks = vi.hoisted(() => ({
   assignmentFindById: vi.fn(),
   assignmentCreate: vi.fn(),
   assignmentDeleteById: vi.fn(),
+  assignmentUpdate: vi.fn(),
+  membershipFindByClassroomAndUser: vi.fn(),
   auditCreate: vi.fn(),
 }));
 
@@ -27,12 +30,17 @@ vi.mock('@classmoji/services', () => ({
       findById: (...a: unknown[]) => mocks.assignmentFindById(...a),
       create: (...a: unknown[]) => mocks.assignmentCreate(...a),
       deleteById: (...a: unknown[]) => mocks.assignmentDeleteById(...a),
+      update: (...a: unknown[]) => mocks.assignmentUpdate(...a),
+    },
+    classroomMembership: {
+      findByClassroomAndUser: (...a: unknown[]) => mocks.membershipFindByClassroomAndUser(...a),
     },
     audit: { create: (...a: unknown[]) => mocks.auditCreate(...a) },
   },
 }));
 
-const { assignmentCreateTool, assignmentDeleteTool } = await import('../assignments.ts');
+const { assignmentCreateTool, assignmentDeleteTool, assignmentUpdateTool } =
+  await import('../assignments.ts');
 
 const CTX: ToolContext = {
   viewer: { userId: 'owner-1', clientId: 'c', scopes: new Set(['read', 'write']) },
@@ -42,6 +50,18 @@ const CTX: ToolContext = {
     status: 'ACTIVE',
     membership: { id: 'm-1', role: 'OWNER' },
     classroom: { settings: {} },
+  },
+} as unknown as ToolContext;
+
+// A TEACHER whose gate resolved as TEACHER; holdsRole(['OWNER']) then asks
+// classroomMembership, which the tests answer per case.
+const TEACHER_CTX: ToolContext = {
+  ...CTX,
+  viewer: { userId: 'teacher-1', clientId: 'c', scopes: new Set(['read', 'write']) },
+  classroom: {
+    ...(CTX.classroom as object),
+    role: 'TEACHER',
+    membership: { id: 'm-2', role: 'TEACHER' },
   },
 } as unknown as ToolContext;
 
@@ -152,5 +172,215 @@ describe('assignment_delete', () => {
       kind: 'not_found',
     });
     expect(mocks.assignmentDeleteById).not.toHaveBeenCalled();
+  });
+});
+
+describe('assignment_update: grader_deadline and release_at', () => {
+  const ARGS = { classroom: 'org/winter-2025', assignment_id: 'asg-1' };
+  const GRADER = '2026-07-27T23:59:00-04:00';
+  const RELEASE = '2026-07-06T09:00:00-04:00';
+
+  beforeEach(() => {
+    mocks.assignmentFindById.mockResolvedValue({
+      id: 'asg-1',
+      title: 'Lab 3',
+      repository: { classroom_id: 'class-1' },
+    });
+    // Echo the write back the way Prisma would.
+    mocks.assignmentUpdate.mockImplementation(
+      async (id: string, data: Record<string, unknown>) => ({
+        id,
+        title: 'Lab 3',
+        student_deadline: new Date('2026-07-20T23:59:00-04:00'),
+        weight: 50,
+        grades_released: false,
+        grader_deadline: null,
+        release_at: null,
+        ...data,
+      })
+    );
+    // Not an OWNER unless a case says so.
+    mocks.membershipFindByClassroomAndUser.mockResolvedValue(null);
+  });
+
+  it.each([
+    ['grader_deadline', GRADER],
+    ['release_at', RELEASE],
+  ] as const)('OWNER sets %s through the notifying update path', async (field, value) => {
+    const payload = parse(await assignmentUpdateTool.handler({ ...ARGS, [field]: value }, CTX));
+
+    // The same service call the other fields use (notifyAfterUpdate runs there),
+    // with an explicit Date and nothing else from the request.
+    expect(mocks.assignmentUpdate).toHaveBeenCalledTimes(1);
+    expect(mocks.assignmentUpdate).toHaveBeenCalledWith('asg-1', { [field]: new Date(value) });
+    expect(payload.success).toBe(true);
+    expect(payload.assignment[field]).toBe(new Date(value).toISOString());
+
+    const audit = mocks.auditCreate.mock.calls[0][0] as {
+      resource_type: string;
+      resource_id: string;
+      action: string;
+      data: { tool: string; fields: string[] };
+    };
+    expect(audit).toMatchObject({
+      resource_type: 'ASSIGNMENT',
+      resource_id: 'asg-1',
+      action: 'UPDATE',
+      data: {
+        tool: 'assignment_update',
+        fields: [field],
+        values: { [field]: new Date(value).toISOString() },
+      },
+    });
+  });
+
+  it('sets both together, audits both fields, and returns the full shape', async () => {
+    const payload = parse(
+      await assignmentUpdateTool.handler(
+        { ...ARGS, grader_deadline: GRADER, release_at: RELEASE },
+        CTX
+      )
+    );
+
+    expect(mocks.assignmentUpdate).toHaveBeenCalledWith('asg-1', {
+      grader_deadline: new Date(GRADER),
+      release_at: new Date(RELEASE),
+    });
+    expect(payload).toEqual({
+      success: true,
+      assignment: {
+        id: 'asg-1',
+        title: 'Lab 3',
+        student_deadline: new Date('2026-07-20T23:59:00-04:00').toISOString(),
+        weight: 50,
+        grades_released: false,
+        grader_deadline: new Date(GRADER).toISOString(),
+        release_at: new Date(RELEASE).toISOString(),
+      },
+    });
+    const audit = mocks.auditCreate.mock.calls[0][0] as { data: unknown };
+    expect(audit.data).toEqual({
+      tool: 'assignment_update',
+      fields: ['grader_deadline', 'release_at'],
+      values: {
+        grader_deadline: new Date(GRADER).toISOString(),
+        release_at: new Date(RELEASE).toISOString(),
+      },
+    });
+  });
+
+  it('clears both dates with null, as the web edit form does', async () => {
+    const payload = parse(
+      await assignmentUpdateTool.handler({ ...ARGS, grader_deadline: null, release_at: null }, CTX)
+    );
+
+    expect(mocks.assignmentUpdate).toHaveBeenCalledWith('asg-1', {
+      grader_deadline: null,
+      release_at: null,
+    });
+    expect(payload.assignment.grader_deadline).toBeNull();
+    expect(payload.assignment.release_at).toBeNull();
+    const audit = mocks.auditCreate.mock.calls[0][0] as { data: unknown };
+    expect(audit.data).toEqual({
+      tool: 'assignment_update',
+      fields: ['grader_deadline', 'release_at'],
+      values: { grader_deadline: null, release_at: null },
+    });
+  });
+
+  it('records the new value of every changed field, not only the dates', async () => {
+    await assignmentUpdateTool.handler(
+      {
+        ...ARGS,
+        student_deadline: '2026-07-21T23:59:00-04:00',
+        weight: 40,
+        grades_released: true,
+        release_at: RELEASE,
+      },
+      CTX
+    );
+    const audit = mocks.auditCreate.mock.calls[0][0] as { data: unknown };
+    expect(audit.data).toEqual({
+      tool: 'assignment_update',
+      fields: ['student_deadline', 'weight', 'grades_released', 'release_at'],
+      values: {
+        student_deadline: new Date('2026-07-21T23:59:00-04:00').toISOString(),
+        weight: 40,
+        grades_released: true,
+        release_at: new Date(RELEASE).toISOString(),
+      },
+    });
+  });
+
+  it.each([
+    ['grader_deadline', GRADER],
+    ['release_at', RELEASE],
+    ['grader_deadline', null],
+    ['release_at', null],
+  ] as const)(
+    'refuses a TEACHER setting %s (%s): the web route is OWNER only',
+    async (field, value) => {
+      await expect(
+        assignmentUpdateTool.handler({ ...ARGS, [field]: value }, TEACHER_CTX)
+      ).rejects.toMatchObject({ kind: 'forbidden' });
+
+      expect(mocks.membershipFindByClassroomAndUser).toHaveBeenCalledWith('class-1', 'teacher-1', [
+        'OWNER',
+      ]);
+      expect(mocks.assignmentUpdate).not.toHaveBeenCalled();
+      expect(mocks.auditCreate).not.toHaveBeenCalled();
+    }
+  );
+
+  it('refuses a mixed TEACHER update without applying the teacher-tier field', async () => {
+    await expect(
+      assignmentUpdateTool.handler(
+        { ...ARGS, student_deadline: '2026-07-21T23:59:00-04:00', release_at: RELEASE },
+        TEACHER_CTX
+      )
+    ).rejects.toMatchObject({ kind: 'forbidden', message: expect.stringMatching(/release_at/) });
+    expect(mocks.assignmentUpdate).not.toHaveBeenCalled();
+  });
+
+  it('lets a TEACHER who also holds OWNER set the dates', async () => {
+    mocks.membershipFindByClassroomAndUser.mockResolvedValue({ id: 'm-3', role: 'OWNER' });
+    await assignmentUpdateTool.handler({ ...ARGS, release_at: RELEASE }, TEACHER_CTX);
+    expect(mocks.assignmentUpdate).toHaveBeenCalledWith('asg-1', { release_at: new Date(RELEASE) });
+  });
+
+  it('refuses an assignment in another classroom before any write', async () => {
+    mocks.assignmentFindById.mockResolvedValue({
+      id: 'asg-1',
+      title: 'Lab 3',
+      repository: { classroom_id: 'OTHER-class' },
+    });
+    await expect(
+      assignmentUpdateTool.handler({ ...ARGS, release_at: RELEASE }, CTX)
+    ).rejects.toMatchObject({ kind: 'not_found' });
+    expect(mocks.assignmentUpdate).not.toHaveBeenCalled();
+  });
+
+  it('names the new fields when nothing is provided', async () => {
+    await expect(assignmentUpdateTool.handler(ARGS, CTX)).rejects.toMatchObject({
+      kind: 'invalid_params',
+      message: expect.stringMatching(/grader_deadline, release_at/),
+    });
+  });
+
+  it('accepts an offset datetime or null and rejects anything else in the schema', () => {
+    const schema = z.object(assignmentUpdateTool.inputSchema);
+    const base = { classroom: 'org/w26', assignment_id: '00000000-0000-4000-8000-000000000001' };
+    for (const field of ['grader_deadline', 'release_at']) {
+      expect(schema.safeParse({ ...base, [field]: GRADER }).success).toBe(true);
+      expect(schema.safeParse({ ...base, [field]: '2026-07-27T23:59:00Z' }).success).toBe(true);
+      expect(schema.safeParse({ ...base, [field]: null }).success).toBe(true);
+      expect(schema.safeParse({ ...base, [field]: 'next friday' }).success).toBe(false);
+      expect(schema.safeParse({ ...base, [field]: '2026-07-27' }).success).toBe(false);
+      expect(schema.safeParse({ ...base, [field]: 1785196740000 }).success).toBe(false);
+    }
+  });
+
+  it('keeps the description under the 1,500-byte connector limit', () => {
+    expect(new TextEncoder().encode(assignmentUpdateTool.description).length).toBeLessThan(1500);
   });
 });
