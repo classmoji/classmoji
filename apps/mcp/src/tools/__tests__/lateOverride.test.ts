@@ -116,7 +116,6 @@ beforeEach(() => {
   mocks.auditCreate.mockResolvedValue(undefined);
   mocks.assignmentFindById.mockImplementation(async (id: string) => ({
     id,
-    type: 'REPO',
     repository: { classroom_id: 'class-1' },
   }));
   mocks.setLateOverride.mockResolvedValue(serviceResult());
@@ -366,22 +365,15 @@ describe('submission_late_override — assignment_id', () => {
     expect(mocks.setLateOverride).not.toHaveBeenCalled();
   });
 
-  it.each(['QUIZ', 'FORM'])(
-    'refuses a %s assignment as invalid_params instead of reporting 0 matched',
-    async type => {
-      mocks.assignmentFindById.mockResolvedValue({
-        id: ASSIGNMENT_ID,
-        type,
-        repository: { classroom_id: 'class-1' },
-      });
+  it('refuses an assignment without a repository (quiz/form coursework) as not_found', async () => {
+    mocks.assignmentFindById.mockResolvedValue({ id: ASSIGNMENT_ID, repository: null });
 
-      await expect(submissionLateOverrideTool.handler(ARGS, CTX)).rejects.toMatchObject({
-        kind: 'invalid_params',
-      });
-      expect(mocks.setLateOverride).not.toHaveBeenCalled();
-      expect(mocks.auditCreate).not.toHaveBeenCalled();
-    }
-  );
+    await expect(submissionLateOverrideTool.handler(ARGS, CTX)).rejects.toMatchObject({
+      kind: 'not_found',
+    });
+    expect(mocks.setLateOverride).not.toHaveBeenCalled();
+    expect(mocks.auditCreate).not.toHaveBeenCalled();
+  });
 
   it('reports not_submitted and not_late skips alongside what it waived', async () => {
     mocks.setLateOverride.mockResolvedValue(
