@@ -33,8 +33,9 @@
  * foreign id is never matched or written and lands in not_found alongside ids
  * that do not exist. assignment_id is classroom-verified up front
  * (loadAssignmentInClassroom): the scoped query would otherwise answer a
- * foreign assignment with "0 matched" instead of not_found. A QUIZ or FORM
- * assignment has no repo submissions at all, so it is refused as invalid.
+ * foreign assignment with "0 matched" instead of not_found. The loader
+ * scopes through `repository`, so an assignment without one (quiz/form
+ * coursework) is not_found too — it has no repo submissions to exempt.
  *
  * Audit (the web action writes none): ONE row per submission actually changed,
  * resource GIT_REPO_ASSIGNMENT/<id>, with the value under `data.value`. A
@@ -176,14 +177,6 @@ export const submissionLateOverrideTool: ToolDefinition<LateOverrideArgs> = {
     if (args.assignment_id !== undefined) {
       mode = 'assignment';
       const assignment = await loadAssignmentInClassroom(args.assignment_id, ctx);
-      // Quiz and form assignments have no repo submissions to exempt; saying
-      // "0 matched" would read as success.
-      if (assignment.type !== 'REPO') {
-        throw new ToolError(
-          'invalid_params',
-          `This is a ${assignment.type} assignment — it has no repo submissions, so there is no late penalty to waive`
-        );
-      }
       selector = { assignmentId: assignment.id };
     } else if (args.git_repo_assignment_id !== undefined) {
       mode = 'single';
