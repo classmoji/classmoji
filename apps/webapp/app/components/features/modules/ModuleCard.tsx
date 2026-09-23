@@ -33,6 +33,7 @@ import {
   type AssignmentRowData,
 } from '~/components/features/assignments/AssignmentsTable';
 import AddContentItemModal from './AddContentItemModal';
+import { useRepositoryActions } from '~/components/features/repositories/useRepositoryActions';
 import {
   TYPE_META,
   describeItem,
@@ -66,6 +67,8 @@ interface ModuleCardProps {
   repositories: Array<{ id: string; title: string; is_published: boolean }>;
   boundQuizIds: Set<string>;
   boundFormIds: Set<string>;
+  /** Team tags in this classroom, for an instructor-assigned team assignment. */
+  tags?: { id: string; name: string }[];
 }
 
 // antd's Dropdown clones its trigger child to attach its own onClick and ref,
@@ -112,6 +115,7 @@ const ItemRow = ({
   published,
   onOpen,
   onEdit,
+  action,
   menuItems,
   onMenuClick,
 }: {
@@ -122,6 +126,8 @@ const ItemRow = ({
   published: boolean;
   onOpen: () => void;
   onEdit: () => void;
+  /** An extra inline action beside Edit (a REPO assignment's Publish). */
+  action?: { label: string; onClick: () => void };
   menuItems: MenuProps['items'];
   onMenuClick: (key: string) => void;
 }) => (
@@ -143,6 +149,15 @@ const ItemRow = ({
     <Tag color={published ? 'green' : 'orange'} className="m-0 shrink-0 font-medium">
       {published ? 'Published' : 'Draft'}
     </Tag>
+    {action && (
+      <button
+        type="button"
+        onClick={action.onClick}
+        className="text-sm font-medium text-sky-600 hover:text-sky-700 dark:text-sky-400"
+      >
+        {action.label}
+      </button>
+    )}
     <button
       type="button"
       onClick={onEdit}
@@ -183,8 +198,15 @@ const ModuleCard = ({
   repositories,
   boundQuizIds,
   boundFormIds,
+  tags = [],
 }: ModuleCardProps) => {
   const navigate = useNavigate();
+  // Publish acts on the repository a REPO assignment submits through, via the
+  // repositories route's action — the same one the Repositories page posts to,
+  // so the two surfaces cannot drift.
+  const { confirmPublishAssignment, confirmSync } = useRepositoryActions(
+    `/admin/${classSlug}/repos`
+  );
   const { modal } = App.useApp();
   const moduleFetcher = useFetcher<{ success?: string; error?: string }>();
   const assignmentFetcher = useFetcher<{ success?: string; error?: string }>();
@@ -501,38 +523,66 @@ const ModuleCard = ({
               );
             })}
             {module.assignments.length > 0 && <GroupHeading>Assignments</GroupHeading>}
-            {module.assignments.map(a => (
-              <ItemRow
-                key={`assignment-${a.id}`}
-                icon={ASSIGNMENT_TYPE_META[a.type]?.icon ?? IconClipboardList}
-                title={a.title}
-                note={assignmentNote(a)}
-                kind="Assignment"
-                published={a.is_published}
-                onOpen={() => openAssignment(a)}
-                onEdit={() => editAssignment(a)}
-                menuItems={[
-                  ...(editTargetHref(a)
-                    ? [
-                        {
-                          key: 'edit-target',
-                          label: editTargetLabel(a),
-                          icon: <IconPencil size={15} />,
-                        },
-                        { type: 'divider' as const },
-                      ]
-                    : []),
-                  deleteAssignmentItem,
-                ]}
-                onMenuClick={key => {
-                  if (key === 'edit-target') {
-                    const href = editTargetHref(a);
-                    if (href) navigate(href);
+            {module.assignments.map(a => {
+              // Publish is a property of the repository the assignment submits
+              // through, so only REPO assignments with one can offer it. Its
+              // published state comes from the classroom's repository list.
+              // Publishing opens the assignment to students; the action
+              // provisions its repository first when that has not happened yet.
+              const repoId = a.type === 'REPO' ? a.repository?.id : undefined;
+              const needsRepo = repoId
+                ? !(repositories.find(r => r.id === repoId)?.is_published ?? false)
+                : false;
+              return (
+                <ItemRow
+                  key={`assignment-${a.id}`}
+                  icon={ASSIGNMENT_TYPE_META[a.type]?.icon ?? IconClipboardList}
+                  title={a.title}
+                  note={assignmentNote(a)}
+                  kind="Assignment"
+                  published={a.is_published}
+                  onOpen={() => openAssignment(a)}
+                  onEdit={() => editAssignment(a)}
+                  action={
+                    // Something outstanding — the assignment is a draft, or its
+                    // repositories do not exist — offers Publish. Once both are
+                    // done the row offers Sync, as the Repositories page does.
+                    !a.is_published || needsRepo
+                      ? {
+                          label: a.is_published ? 'Create repos' : 'Publish',
+                          onClick: () =>
+                            confirmPublishAssignment(a.id, {
+                              needsRepo,
+                              assignmentPublished: a.is_published,
+                            }),
+                        }
+                      : repoId
+                        ? { label: 'Sync', onClick: () => confirmSync(repoId) }
+                        : undefined
                   }
-                  if (key === 'remove') removeAssignment(a);
-                }}
-              />
-            ))}
+                  menuItems={[
+                    ...(editTargetHref(a)
+                      ? [
+                          {
+                            key: 'edit-target',
+                            label: editTargetLabel(a),
+                            icon: <IconPencil size={15} />,
+                          },
+                          { type: 'divider' as const },
+                        ]
+                      : []),
+                    deleteAssignmentItem,
+                  ]}
+                  onMenuClick={key => {
+                    if (key === 'edit-target') {
+                      const href = editTargetHref(a);
+                      if (href) navigate(href);
+                    }
+                    if (key === 'remove') removeAssignment(a);
+                  }}
+                />
+              );
+            })}
           </ul>
 
           <Dropdown
@@ -573,6 +623,7 @@ const ModuleCard = ({
         boundFormIds={boundFormIds}
         assignment={editingAssignment}
         presetKind={presetKind}
+        tags={tags}
       />
 
       <AddContentItemModal

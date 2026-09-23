@@ -22,11 +22,12 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
   });
 
   // Every module with everything it owns, plus what the pickers may add.
-  const [modules, candidates, allAssignments, repositories] = await Promise.all([
+  const [modules, candidates, allAssignments, repositories, tags] = await Promise.all([
     ClassmojiService.module.listModuleContentsForClassroom(classroom.id),
     ClassmojiService.module.getCandidateContent(classroom.id),
     ClassmojiService.assignment.listForClassroom(classroom.id),
     ClassmojiService.repository.findByClassroomId(classroom.id),
+    ClassmojiService.organizationTag.findByClassroomId(classroom.id),
   ]);
 
   return {
@@ -39,6 +40,8 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
       is_published: r.is_published,
     })),
     slidesUrl: process.env.SLIDES_URL || 'http://localhost:6500',
+    // Team tags, for an instructor-assigned team assignment created from a card.
+    tags: tags.map(t => ({ id: t.id, name: t.name })),
     // A quiz or form binds to at most one assignment in the classroom.
     boundQuizIds: allAssignments.map(a => a.quiz_id).filter(Boolean) as string[],
     boundFormIds: allAssignments.map(a => a.form_id).filter(Boolean) as string[],
@@ -179,7 +182,8 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
  * assignments and content in place. Nothing needs the module detail page.
  */
 const ModulesIndex = ({ loaderData }: Route.ComponentProps) => {
-  const { modules, candidates, repositories, slidesUrl, boundQuizIds, boundFormIds } = loaderData;
+  const { modules, candidates, repositories, slidesUrl, boundQuizIds, boundFormIds, tags } =
+    loaderData;
   const { class: classSlug } = useParams();
   const [query, setQuery] = useState('');
   const [formOpen, setFormOpen] = useState(false);
@@ -246,6 +250,7 @@ const ModulesIndex = ({ loaderData }: Route.ComponentProps) => {
             repositories={repositories}
             boundQuizIds={quizSet}
             boundFormIds={formSet}
+            tags={tags}
           />
         ))}
 

@@ -1,4 +1,4 @@
-import { Button, Checkbox, Dropdown, Popover, Table, Tooltip } from 'antd';
+import { App, Button, Checkbox, Dropdown, Popover, Table, Tooltip } from 'antd';
 import type { MenuProps } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import dayjs from 'dayjs';
@@ -152,6 +152,7 @@ const SubmissionsTable = ({
   total,
 }: SubmissionsTableProps) => {
   const { fetcher, notify } = useGlobalFetcher();
+  const { modal } = App.useApp();
   const { classroom } = useStore();
   const callout = useCallout();
 
@@ -470,6 +471,32 @@ const SubmissionsTable = ({
               }
             >
               View
+            </button>
+            <button
+              type="button"
+              className="text-sm font-medium text-rose-600 hover:text-rose-700 dark:text-rose-400 hover:underline underline-offset-2 whitespace-nowrap"
+              onClick={() =>
+                modal.confirm({
+                  title: 'Delete submission',
+                  content: `This removes ${repo.name} from this assignment, along with its grades. The GitHub repository itself is kept.`,
+                  okText: 'Delete',
+                  okButtonProps: { danger: true },
+                  cancelText: 'Cancel',
+                  onOk: () => {
+                    notify(ActionTypes.DELETE_GIT_REPO_ASSIGNMENT, 'Deleting submission…');
+                    fetcher!.submit(
+                      { git_repo_assignment_id: s.id },
+                      {
+                        method: 'post',
+                        action: `/api/gitRepoAssignment/${classroom?.slug}?action=deleteSubmission`,
+                        encType: 'application/json',
+                      }
+                    );
+                  },
+                })
+              }
+            >
+              Delete
             </button>
             {rare.length > 0 && (
               <Dropdown

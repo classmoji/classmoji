@@ -82,6 +82,8 @@ interface FormModuleProps {
   pages?: PageRef[];
   slides?: SlideRef[];
   hasReposWithProjects?: boolean;
+  /** Repos already exist on GitHub: type and team formation are frozen. */
+  hasProvisionedRepos?: boolean;
 }
 
 const FormModule = ({
@@ -93,6 +95,7 @@ const FormModule = ({
   pages = [],
   slides = [],
   hasReposWithProjects = false,
+  hasProvisionedRepos = false,
 }: FormModuleProps) => {
   const { template, setTemplate } = useRepositoryFormStore();
 
@@ -404,8 +407,22 @@ const FormModule = ({
                 />
               </FormItem>
 
-              <FormItem control={control} name="type" label="Type">
-                <Select data-tour="repos-form-type" className="w-full" placeholder="Select type">
+              <FormItem
+                control={control}
+                name="type"
+                label="Type"
+                extra={
+                  hasProvisionedRepos
+                    ? 'Fixed: repositories have already been created for this one.'
+                    : undefined
+                }
+              >
+                <Select
+                  data-tour="repos-form-type"
+                  className="w-full"
+                  placeholder="Select type"
+                  disabled={hasProvisionedRepos}
+                >
                   <Select.Option value="INDIVIDUAL">Individual</Select.Option>
                   <Select.Option value="GROUP">Group</Select.Option>
                 </Select>
@@ -423,8 +440,19 @@ const FormModule = ({
               />
 
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                <FormItem control={control} name="team_formation_mode" label="Team Formation">
-                  <Select className="w-full" placeholder="Select formation mode">
+                <FormItem
+                  control={control}
+                  name="team_formation_mode"
+                  label="Team Formation"
+                  extra={
+                    hasProvisionedRepos ? 'Fixed: team repositories already exist.' : undefined
+                  }
+                >
+                  <Select
+                    className="w-full"
+                    placeholder="Select formation mode"
+                    disabled={hasProvisionedRepos}
+                  >
                     <Select.Option value="INSTRUCTOR">Instructor Assigned</Select.Option>
                     <Select.Option value="SELF_FORMED">Student Self-Formed</Select.Option>
                   </Select>

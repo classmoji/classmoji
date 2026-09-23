@@ -1,23 +1,12 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useFetcher } from 'react-router';
-import {
-  Checkbox,
-  DatePicker,
-  Form,
-  Input,
-  InputNumber,
-  Modal,
-  Radio,
-  Segmented,
-  Select,
-  Spin,
-  Tag,
-} from 'antd';
+import { DatePicker, Form, Input, InputNumber, Modal, Radio, Select, Spin, Tag } from 'antd';
+import { IconArrowRight } from '@tabler/icons-react';
 import dayjs, { type Dayjs } from 'dayjs';
 import { useDebounce } from '@uidotdev/usehooks';
 import { titleToIdentifier } from '@classmoji/utils';
 
-import { ASSIGNMENT_TYPE_META, type AssignmentRowData } from './AssignmentsTable';
+import { type AssignmentRowData } from './AssignmentsTable';
 
 export type AssignmentKind = 'REPO' | 'QUIZ' | 'FORM';
 export type SubmissionMode = 'ISSUE' | 'REPO';
@@ -45,10 +34,83 @@ export interface AssignmentFormModalProps {
   presetKind?: AssignmentKind;
   /** Preselect the repository for a new REPO assignment (an issue in that repo). */
   presetRepositoryId?: string;
+  /** Team tags in this classroom, for an instructor-assigned team assignment. */
+  tags?: { id: string; name: string }[];
 }
 
 /** Where a new REPO assignment's repository comes from. */
 type RepoSource = 'new' | 'existing';
+
+/** How teams are filled for a team assignment. */
+type TeamFormation = 'INSTRUCTOR' | 'SELF_FORMED';
+
+/**
+ * Who a repository is cut for. Two cards rather than a switch: "individual" is
+ * a real choice here, not the absence of one. antd hands `value`/`onChange` in.
+ */
+const WhoSubmits = ({
+  value,
+  onChange,
+}: {
+  value?: boolean;
+  onChange?: (next: boolean) => void;
+}) => (
+  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+    {[
+      { v: false, title: 'Each student', hint: 'one repository per person' },
+      { v: true, title: 'Each team', hint: 'one repository per team' },
+    ].map(option => {
+      const selected = !!value === option.v;
+      return (
+        <label
+          key={String(option.v)}
+          className={`flex cursor-pointer flex-col gap-1 rounded-xl border px-4 py-3 transition-colors ${
+            selected
+              ? 'border-[#D97757] bg-[#FDF1EC] dark:border-amber-700 dark:bg-amber-900/20'
+              : 'border-line bg-white dark:bg-neutral-900 hover:border-[#E0A98F]'
+          }`}
+        >
+          <span className="flex items-center gap-2">
+            <input
+              type="radio"
+              name="assignment-who-submits"
+              checked={selected}
+              onChange={() => onChange?.(option.v)}
+              className="h-4 w-4 accent-[#D97757]"
+            />
+            <span
+              className={`text-sm font-semibold ${
+                selected ? 'text-[#8F3F20] dark:text-amber-200' : 'text-ink-1'
+              }`}
+            >
+              {option.title}
+            </span>
+          </span>
+          <span className="pl-6 text-xs text-ink-3">{option.hint}</span>
+        </label>
+      );
+    })}
+  </div>
+);
+
+/** A numbered rule between groups of fields, so the form reads as a sequence. */
+const Section = ({
+  n,
+  title,
+  className = '',
+}: {
+  n: number;
+  title: string;
+  className?: string;
+}) => (
+  <div className={`flex items-center gap-2.5 mb-4 ${className}`}>
+    <span className="text-[10px] font-bold tracking-widest text-[#B4552F] dark:text-amber-500">
+      {n}
+    </span>
+    <span className="text-xs font-semibold uppercase tracking-wide text-ink-3">{title}</span>
+    <span className="h-px flex-1 bg-line" />
+  </div>
+);
 
 interface TemplateRepository {
   full_name: string;
@@ -78,9 +140,12 @@ interface FormValues {
   target_id?: string;
   repo_source: RepoSource;
   template?: string;
+  is_team: boolean;
+  team_formation_mode: TeamFormation;
+  max_team_size?: number | null;
+  tag_id?: string;
   title: string;
   weight: number;
-  is_extra_credit: boolean;
   release_at: Dayjs | null;
   student_deadline: Dayjs | null;
   grader_deadline: Dayjs | null;
@@ -115,6 +180,7 @@ const AssignmentFormModal = ({
   assignment,
   presetKind,
   presetRepositoryId,
+  tags = [],
 }: AssignmentFormModalProps) => {
   const fetcher = useFetcher<{ success?: string; error?: string }>();
   const [form] = Form.useForm<FormValues>();
@@ -132,6 +198,18 @@ const AssignmentFormModal = ({
   const [repoSource, setRepoSource] = useState<RepoSource>('new');
   const title = Form.useWatch('title', form) ?? '';
   const repoSlug = titleToIdentifier(title || '') || 'repo-name';
+  // Team config for a repository created here. Provisioning is per-repository,
+  // so this decides whether each copy belongs to a student or to a team.
+  const isTeam = Form.useWatch('is_team', form) ?? false;
+  const teamFormation = (Form.useWatch('team_formation_mode', form) ??
+    'INSTRUCTOR') as TeamFormation;
+  // Section numbers shift: "Who submits" and "What counts as submitting" only
+  // exist for a new REPO assignment.
+  const isRepoCreate = kind === 'REPO' && !isEdit;
+  const gradingStep = isRepoCreate ? 4 : kind === 'REPO' ? 3 : 2;
+  // Opened from a module card, so the module is already settled: it rides in
+  // the header as context instead of taking a field.
+  const knownModule = moduleId ? modules.find(m => m.id === moduleId) : undefined;
   const [templateQuery, setTemplateQuery] = useState('');
   const [templateOptions, setTemplateOptions] = useState<TemplateRepository[]>([]);
   const [templateLoading, setTemplateLoading] = useState(false);
@@ -169,6 +247,10 @@ const AssignmentFormModal = ({
     form.setFieldsValue({
       repo_source: nextSource,
       template: undefined,
+      is_team: false,
+      team_formation_mode: 'INSTRUCTOR',
+      max_team_size: undefined,
+      tag_id: undefined,
       // A module card hands its assignments over without the module relation.
       module_id: assignment?.module?.id ?? moduleId,
       type: nextKind,
@@ -180,7 +262,6 @@ const AssignmentFormModal = ({
         (nextKind === 'REPO' ? presetRepositoryId : undefined),
       title: assignment?.title ?? '',
       weight: assignment?.weight ?? 100,
-      is_extra_credit: assignment?.is_extra_credit ?? false,
       release_at: assignment?.release_at ? dayjs(assignment.release_at) : null,
       student_deadline: assignment?.student_deadline ? dayjs(assignment.student_deadline) : null,
       grader_deadline: assignment?.grader_deadline ? dayjs(assignment.grader_deadline) : null,
@@ -236,7 +317,8 @@ const AssignmentFormModal = ({
     const payload: Record<string, unknown> = {
       title: values.title,
       weight: values.weight,
-      is_extra_credit: values.is_extra_credit,
+      // The checkbox is gone from the form; an existing value must survive an edit.
+      is_extra_credit: assignment?.is_extra_credit ?? false,
       release_at: toIso(values.release_at),
       student_deadline: toIso(values.student_deadline),
       grader_deadline: toIso(values.grader_deadline),
@@ -258,6 +340,13 @@ const AssignmentFormModal = ({
       const newRepo = kind === 'REPO' && repoSource === 'new';
       payload.repository_id = kind === 'REPO' && !newRepo ? values.target_id : null;
       payload.template = newRepo ? values.template : undefined;
+      // The action creates the repository, so team config rides along with it.
+      if (newRepo && values.is_team) {
+        payload.repository_type = 'GROUP';
+        payload.team_formation_mode = values.team_formation_mode;
+        payload.max_team_size = values.max_team_size ?? null;
+        payload.tag_id = values.team_formation_mode === 'INSTRUCTOR' ? values.tag_id : null;
+      }
       payload.quiz_id = kind === 'QUIZ' ? values.target_id : null;
       payload.form_id = kind === 'FORM' ? values.target_id : null;
     }
@@ -272,13 +361,22 @@ const AssignmentFormModal = ({
     <Modal
       open={open}
       onCancel={onClose}
-      title={isEdit ? `Edit assignment: ${assignment?.title}` : 'New assignment'}
+      title={
+        <span className="flex items-center gap-2.5">
+          <span>{isEdit ? `Edit assignment: ${assignment?.title}` : 'New assignment'}</span>
+          {knownModule && (
+            <span className="rounded-full border border-line bg-stone-100 dark:bg-neutral-800 px-2.5 py-0.5 text-xs font-normal text-ink-3">
+              {knownModule.title}
+            </span>
+          )}
+        </span>
+      }
       okText={isEdit ? 'Save' : 'Create'}
       onOk={submit}
       confirmLoading={busy}
       cancelButtonProps={{ disabled: busy }}
       destroyOnHidden
-      width={640}
+      width={720}
     >
       {fetcher.data?.error && (
         <div className="mb-3 text-sm text-rose-600 dark:text-rose-400">{fetcher.data.error}</div>
@@ -300,21 +398,6 @@ const AssignmentFormModal = ({
           </Form.Item>
         )}
 
-        <Form.Item label="Students submit through" name="type">
-          <Segmented
-            block
-            disabled={isEdit || !!presetKind}
-            options={(Object.keys(ASSIGNMENT_TYPE_META) as AssignmentKind[]).map(t => ({
-              value: t,
-              label: ASSIGNMENT_TYPE_META[t].label,
-            }))}
-            onChange={value => {
-              setKind(value as AssignmentKind);
-              form.setFieldValue('target_id', undefined);
-            }}
-          />
-        </Form.Item>
-
         <Form.Item
           name="title"
           label="Assignment title"
@@ -324,7 +407,73 @@ const AssignmentFormModal = ({
         </Form.Item>
 
         {kind === 'REPO' && !isEdit && (
-          <Form.Item name="repo_source" label="Repository">
+          <>
+            <Section n={1} title="Who submits" className="mt-5" />
+
+            <Form.Item name="is_team" className="mb-5">
+              <WhoSubmits
+                onChange={next => {
+                  form.setFieldValue('is_team', next);
+                  if (!next) form.setFieldValue('tag_id', undefined);
+                }}
+              />
+            </Form.Item>
+
+            {isTeam && repoSource === 'new' && (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-x-4 rounded-xl border border-[#F0E3DB] dark:border-amber-800/40 bg-[#FDF7F4] dark:bg-amber-900/10 px-4 pt-4 pb-1 mb-6">
+                <Form.Item name="team_formation_mode" label="Team formation">
+                  <Select
+                    options={[
+                      { value: 'INSTRUCTOR', label: 'Instructor assigned' },
+                      { value: 'SELF_FORMED', label: 'Student self-formed' },
+                    ]}
+                  />
+                </Form.Item>
+
+                <Form.Item name="max_team_size" label="Max team size">
+                  <InputNumber min={2} style={{ width: '100%' }} placeholder="e.g. 4" />
+                </Form.Item>
+
+                {teamFormation === 'INSTRUCTOR' && (
+                  <Form.Item
+                    name="tag_id"
+                    label="Team tag"
+                    className="md:col-span-2"
+                    rules={[{ required: true, message: 'Pick the tag whose teams get a repo' }]}
+                    extra={
+                      tags.length
+                        ? 'Every team carrying this tag gets one repository.'
+                        : 'This classroom has no team tags yet — create one on the Teams page, or let students self-form.'
+                    }
+                  >
+                    <Select
+                      showSearch
+                      optionFilterProp="label"
+                      placeholder="Choose a team tag…"
+                      options={tags.map(t => ({ value: t.id, label: t.name }))}
+                      notFoundContent={<span className="text-sm text-ink-3">No team tags</span>}
+                    />
+                  </Form.Item>
+                )}
+              </div>
+            )}
+
+            {isTeam && repoSource === 'existing' && (
+              <div className="-mt-2 mb-6 text-sm text-ink-3">
+                Team formation comes from the repository you pick below.
+              </div>
+            )}
+          </>
+        )}
+
+        <Section
+          n={kind === 'REPO' && !isEdit ? 2 : 1}
+          title={kind === 'REPO' ? 'Where the code lives' : 'Source'}
+          className="mt-2"
+        />
+
+        {kind === 'REPO' && !isEdit && (
+          <Form.Item name="repo_source" label="Where it comes from">
             <Radio.Group
               onChange={e => {
                 setRepoSource(e.target.value as RepoSource);
@@ -347,26 +496,13 @@ const AssignmentFormModal = ({
 
         {kind === 'REPO' && !isEdit && repoSource === 'new' ? (
           <>
-            <Form.Item label="Student repository name">
-              <div className="flex items-center gap-2 text-sm">
-                <code className="rounded-md bg-stone-100 dark:bg-neutral-800 px-2 py-1 text-ink-1">
-                  {repoSlug}-&lt;github-login&gt;
-                </code>
-                <span className="text-ink-3">one copy per student, named after the title</span>
-              </div>
-            </Form.Item>
             <Form.Item
               name="template"
               label="Template repository"
               extra={
                 <>
-                  Optional. Leave empty and a blank, private template named{' '}
-                  <code className="text-ink-1">{repoSlug}-template</code> is created in your
-                  organization for you to fill in. Need a team repository?{' '}
-                  <a href={newRepositoryHref} target="_blank" rel="noreferrer">
-                    Create it on the Repositories page
-                  </a>
-                  .
+                  Optional. Leave empty to create a blank, private{' '}
+                  <code className="text-ink-1">{repoSlug}-template</code>.
                 </>
               }
             >
@@ -410,6 +546,17 @@ const AssignmentFormModal = ({
                 }))}
               />
             </Form.Item>
+
+            {/* Derived from the choices above, so it reads last, not as a field. */}
+            <div className="-mt-1 mb-6 flex w-fit flex-wrap items-center gap-2 rounded-lg bg-stone-100 dark:bg-neutral-800 px-3 py-2">
+              <IconArrowRight size={14} className="text-ink-3" aria-hidden />
+              <span className="text-sm text-ink-3">
+                {isTeam ? 'Each team gets' : 'Each student gets'}
+              </span>
+              <code className="rounded-md bg-stone-200/70 dark:bg-neutral-700 px-2 py-0.5 text-sm text-ink-1">
+                {repoSlug}-&lt;{isTeam ? 'team' : 'github-login'}&gt;
+              </code>
+            </div>
           </>
         ) : (
           <Form.Item
@@ -431,6 +578,10 @@ const AssignmentFormModal = ({
               notFoundContent={<span className="text-sm text-ink-3">{emptyTargetHint}</span>}
             />
           </Form.Item>
+        )}
+
+        {kind === 'REPO' && (
+          <Section n={isRepoCreate ? 3 : 2} title="What counts as submitting" className="mt-2" />
         )}
 
         {kind === 'REPO' && (
@@ -462,7 +613,9 @@ const AssignmentFormModal = ({
           </Form.Item>
         )}
 
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <Section n={gradingStep} title="Grading & schedule" className="mt-2" />
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-x-4">
           <Form.Item
             name="weight"
             label="Weight"
@@ -471,15 +624,12 @@ const AssignmentFormModal = ({
             <InputNumber addonAfter="%" min={0} className="w-full" />
           </Form.Item>
           <Form.Item name="tokens_per_hour" label="Tokens per late hour">
-            <InputNumber min={0} className="w-full" />
-          </Form.Item>
-          <Form.Item name="is_extra_credit" valuePropName="checked" label=" ">
-            <Checkbox>Extra credit</Checkbox>
+            <InputNumber min={0} style={{ width: '100%' }} />
           </Form.Item>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          <Form.Item name="release_at" label="Release">
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-x-4">
+          <Form.Item name="release_at" label="Release date">
             <DatePicker showTime className="w-full" format="MMM D, YYYY h:mm A" />
           </Form.Item>
           <Form.Item name="student_deadline" label="Student deadline">
@@ -489,6 +639,8 @@ const AssignmentFormModal = ({
             <DatePicker showTime className="w-full" format="MMM D, YYYY h:mm A" />
           </Form.Item>
         </div>
+
+        <Section n={gradingStep + 1} title="Content" className="mt-2" />
 
         {kind === 'REPO' && (
           <Form.Item
@@ -504,7 +656,7 @@ const AssignmentFormModal = ({
           </Form.Item>
         )}
 
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-x-4">
           <Form.Item name="page_ids" label="Linked pages">
             <Select
               mode="multiple"

@@ -40,6 +40,15 @@ export const useRepositoryActions = (actionBase = '') => {
     LocalStorage.forceRefreshRepos();
   };
   const unpublishRepository = (id: string) => post('unpublish', id);
+
+  /**
+   * Publish one assignment. The action publishes its repository first when that
+   * still needs provisioning, and leaves an already-published one alone.
+   */
+  const publishAssignment = (id: string) => {
+    post('publishAssignment', id);
+    LocalStorage.forceRefreshRepos();
+  };
   const deleteRepository = (id: string) => {
     notify(ActionTypes.DELETE_ASSIGNMENT, 'Deleting repository...');
     post('delete', id, 'delete');
@@ -87,6 +96,36 @@ export const useRepositoryActions = (actionBase = '') => {
       onOk: () => publishRepository(id),
     });
 
+  /**
+   * One button for "make this assignment work for students", whichever half is
+   * outstanding: the assignment's own visibility, its repositories, or both.
+   */
+  const confirmPublishAssignment = (
+    id: string,
+    opts: { needsRepo: boolean; assignmentPublished: boolean }
+  ) => {
+    // Already open to students, but nobody has repositories yet.
+    if (opts.assignmentPublished) {
+      return modal.confirm({
+        title: 'Create student repositories',
+        content:
+          'This assignment is already open to students, but its repositories have not been created. This creates them.',
+        okText: 'Create',
+        cancelText: 'Cancel',
+        onOk: () => publishAssignment(id),
+      });
+    }
+    return modal.confirm({
+      title: 'Publish assignment',
+      content: opts.needsRepo
+        ? 'This creates the student repositories first, then opens the assignment to students.'
+        : 'This opens the assignment to students. Its repository is already published.',
+      okText: 'Publish',
+      cancelText: 'Cancel',
+      onOk: () => publishAssignment(id),
+    });
+  };
+
   const confirmUnpublish = (id: string) =>
     modal.confirm({
       title: 'Unpublish repository',
@@ -112,6 +151,7 @@ export const useRepositoryActions = (actionBase = '') => {
     autograde,
     calculateContributions,
     confirmPublish,
+    confirmPublishAssignment,
     confirmSync,
     confirmUnpublish,
     confirmDelete,
