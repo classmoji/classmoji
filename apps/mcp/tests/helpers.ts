@@ -438,6 +438,7 @@ export const MCP_TOOL_NAMES = new Set([
   'grade_add',
   'grade_remove',
   'grade_remove_all',
+  'submission_late_override',
   'grader_assign',
   'grader_unassign',
   'emoji_mapping_upsert',

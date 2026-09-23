@@ -186,7 +186,7 @@ export const getSubmissionTool = mirrorResourceTool({
   description:
     'One submission (a GitRepoAssignment) with its grades, graders, and analytics snapshot if ' +
     'present. Teaching team only. `submission_id` comes from list_submissions; it is also the ' +
-    'id that grade_add, grade_remove, and grader_assign consume.',
+    'id that grade_add, grade_remove, grader_assign, and submission_late_override consume.',
   extraInput: {
     submission_id: z.string().uuid().describe('Submission (GitRepoAssignment) id'),
   },
@@ -308,8 +308,8 @@ export const listSubmissionsTool: ToolDefinition<ListSubmissionsArgs> = {
     'All submissions (GitRepoAssignments) in the classroom with grade emojis, grader assignments, ' +
     'student/team, and the classroom emoji scale — the same per-submission shape as the ' +
     'grading-queue. Optional filters: repository_id, assignment_id, grader_id, status (OPEN|CLOSED). ' +
-    'The returned `id` is the submission id that grade_add, grade_remove, and grader_assign ' +
-    'consume. Teaching team only.',
+    'The returned `id` is the submission id that grade_add, grade_remove, grader_assign, and ' +
+    'submission_late_override consume. Teaching team only.',
   scope: 'read',
   roles: TEACHING_TEAM,
   inputSchema: {

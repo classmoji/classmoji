@@ -15,6 +15,7 @@ import { whoamiTool } from './whoami.ts';
 import { readTools } from './reads.ts';
 import { gradeAddTool, gradeRemoveTool, gradeRemoveAllTool } from './grades.ts';
 import { graderAssignTool, graderUnassignTool, graderAssignBulkTool } from './graders.ts';
+import { submissionLateOverrideTool } from './lateOverride.ts';
 import { emojiMappingUpsertTool, letterGradeMappingUpsertTool } from './mappings.ts';
 import { assignmentCreateTool, assignmentUpdateTool, assignmentDeleteTool } from './assignments.ts';
 import { regradeCreateTool, regradeResolveTool } from './regrades.ts';
@@ -99,6 +100,10 @@ export function registerAllTools(): void {
   registerToolDefinition(gradeAddTool);
   registerToolDefinition(gradeRemoveTool);
   registerToolDefinition(gradeRemoveAllTool);
+
+  // Late-penalty exemption (OWNER+TEACHER — the web shield button's tier); one
+  // submission, a list, or every submission of an assignment.
+  registerToolDefinition(submissionLateOverrideTool);
 
   // Grader assignment (OWNER — route-derived); bulk distributes across a whole
   // assignment in one call.

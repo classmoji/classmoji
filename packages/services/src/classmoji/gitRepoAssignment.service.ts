@@ -409,6 +409,169 @@ export const update = async (id: string, updates: GitRepoAssignmentUpdateData) =
   });
 };
 
+interface LateOverrideRow {
+  closed_at: Date | null;
+  assignment: { student_deadline: Date | null } | null;
+  token_transactions: { hours_purchased: number | null }[];
+}
+
+const MS_PER_HOUR = 60 * 60 * 1000;
+
+/**
+ * Whether a submission is past its deadline IGNORING `is_late_override`.
+ *
+ * Mirrors the `is_late` computed field in packages/database/index.ts minus its
+ * first line (`if (is_late_override) return false`): that field reads false
+ * for every exempted row, so it cannot say whether an exempted — or
+ * about-to-be-cleared — submission was actually late. Same rules otherwise:
+ * no valid deadline → not late; not yet closed → late once the deadline has
+ * passed (purchased extension hours are NOT subtracted, as in `is_late`);
+ * closed → whole hours late (dayjs `diff(..., 'hours')` truncation, floored at
+ * zero) minus purchased extension hours, late when positive.
+ */
+export function isPastDeadlineIgnoringOverride(row: LateOverrideRow, now: Date = new Date()) {
+  const deadline = row.assignment?.student_deadline;
+  if (!deadline) return false;
+  const deadlineMs = new Date(deadline).getTime();
+  if (Number.isNaN(deadlineMs)) return false;
+  if (!row.closed_at) return now.getTime() > deadlineMs;
+
+  const hoursLate = Math.max(
+    Math.trunc((new Date(row.closed_at).getTime() - deadlineMs) / MS_PER_HOUR),
+    0
+  );
+  const extensionHours = (row.token_transactions ?? []).reduce(
+    (acc, t) => acc + (t.hours_purchased || 0),
+    0
+  );
+  return hoursLate - extensionHours > 0;
+}
+
+export type LateOverrideSelector = { ids: string[] } | { assignmentId: string };
+
+export interface LateOverrideResult {
+  /** Ids this call actually flipped (returned by the scoped write itself). */
+  updatedIds: string[];
+  /** Matched ids already at the requested value — not written. */
+  unchangedIds: string[];
+  /** Requested ids (ids mode only) that are missing or in another classroom. */
+  notFoundIds: string[];
+  /** Setting only: matched rows skipped because they are not past the deadline. */
+  notLateIds: string[];
+  /** Setting by assignment only: matched rows skipped because nothing was turned in. */
+  notSubmittedIds: string[];
+  /** Matched rows past their deadline, ignoring any exemption. */
+  lateIds: string[];
+}
+
+const EMPTY_LATE_OVERRIDE_RESULT: LateOverrideResult = {
+  updatedIds: [],
+  unchangedIds: [],
+  notFoundIds: [],
+  notLateIds: [],
+  notSubmittedIds: [],
+  lateIds: [],
+};
+
+/**
+ * Set or clear the late-penalty exemption on submissions of ONE classroom.
+ *
+ * Which rows may be written (mirrors when the web offers its waive button —
+ * SubmissionsTable / LateOverrideButton show it only on `is_late ||
+ * is_late_override` rows):
+ *   - SETTING (true) writes only rows past their deadline ignoring any
+ *     exemption; the rest come back in `notLateIds`. Exempting an on-time row
+ *     would count it as late in getLatePercentage and the dashboard, and label
+ *     it "Late waived".
+ *   - SETTING by assignment also skips rows with nothing turned in (no
+ *     `closed_at`, the field `is_late` uses) → `notSubmittedIds`: an exemption
+ *     on an unsubmitted row switches off its `should_be_zero` missing-work zero,
+ *     and "waive the late penalty for the class" must not mean "waive missing
+ *     work". A row NAMED by id that is unsubmitted but past the deadline is
+ *     still written — the web offers waive on exactly that row.
+ *   - CLEARING (false) writes any row that currently carries the exemption.
+ *
+ * Both the read and the write carry `git_repo.classroom_id` in their WHERE
+ * clause, so an id from another classroom is never matched, never written, and
+ * comes back in `notFoundIds` exactly like an id that does not exist. The
+ * eligibility rules run in JS over the scoped read; only the vetted ids reach
+ * the write, which also filters on the current value, so `updatedIds` is what
+ * the database reports it wrote.
+ */
+export const setLateOverrideInClassroom = async ({
+  classroomId,
+  selector,
+  isLateOverride,
+  now = new Date(),
+}: {
+  classroomId: string;
+  selector: LateOverrideSelector;
+  isLateOverride: boolean;
+  now?: Date;
+}): Promise<LateOverrideResult> => {
+  if (!classroomId) throw new Error('setLateOverrideInClassroom requires a classroomId');
+  const requestedIds = 'ids' in selector ? [...new Set(selector.ids)] : null;
+  if (requestedIds && requestedIds.length === 0) {
+    return { ...EMPTY_LATE_OVERRIDE_RESULT };
+  }
+  const skipUnsubmitted = isLateOverride && 'assignmentId' in selector;
+
+  const rows = await getPrisma().gitRepoAssignment.findMany({
+    where: {
+      git_repo: { classroom_id: classroomId },
+      ...('ids' in selector
+        ? { id: { in: requestedIds ?? [] } }
+        : { assignment_id: selector.assignmentId }),
+    },
+    select: {
+      id: true,
+      is_late_override: true,
+      closed_at: true,
+      assignment: { select: { student_deadline: true } },
+      token_transactions: { select: { hours_purchased: true } },
+    },
+  });
+
+  const lateIds = rows.filter(r => isPastDeadlineIgnoringOverride(r, now)).map(r => r.id);
+  const late = new Set(lateIds);
+  const found = new Set(rows.map(r => r.id));
+  const notFoundIds = requestedIds ? requestedIds.filter(id => !found.has(id)) : [];
+
+  // Rows already at the value are left alone (reported unchanged below); of
+  // the rest, a SET is vetted against the eligibility rules above.
+  const notSubmittedIds: string[] = [];
+  const notLateIds: string[] = [];
+  const toUpdate: string[] = [];
+  for (const r of rows) {
+    if (r.is_late_override === isLateOverride) continue;
+    if (skipUnsubmitted && !r.closed_at) notSubmittedIds.push(r.id);
+    else if (isLateOverride && !late.has(r.id)) notLateIds.push(r.id);
+    else toUpdate.push(r.id);
+  }
+
+  let updatedIds: string[] = [];
+  if (toUpdate.length > 0) {
+    const written = await getPrisma().gitRepoAssignment.updateManyAndReturn({
+      where: {
+        id: { in: toUpdate },
+        git_repo: { classroom_id: classroomId },
+        is_late_override: !isLateOverride,
+      },
+      data: { is_late_override: isLateOverride },
+      select: { id: true },
+    });
+    updatedIds = written.map(r => r.id);
+  }
+
+  // Everything matched that was neither written nor skipped is already at the
+  // value — including a row a concurrent writer flipped between the read and
+  // the guarded write (the write's value filter drops it from updatedIds).
+  const settled = new Set([...updatedIds, ...notLateIds, ...notSubmittedIds]);
+  const unchangedIds = rows.filter(r => !settled.has(r.id)).map(r => r.id);
+
+  return { updatedIds, unchangedIds, notFoundIds, notLateIds, notSubmittedIds, lateIds };
+};
+
 /**
  * Delete a GitRepoAssignment
  * @param {string} id - UUID of the GitRepoAssignment

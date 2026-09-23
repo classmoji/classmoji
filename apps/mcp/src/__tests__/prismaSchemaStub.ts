@@ -374,6 +374,7 @@ const WRITE_METHODS = new Set([
   'createManyAndReturn',
   'update',
   'updateMany',
+  'updateManyAndReturn',
   'upsert',
   'delete',
   'deleteMany',
@@ -416,6 +417,7 @@ export function createValidatingPrisma(initialRows: PrismaRows = {}): Validating
     switch (method) {
       case 'findMany':
       case 'createManyAndReturn':
+      case 'updateManyAndReturn':
       case 'groupBy':
         return answer(key, method, args, []);
       case 'count':
