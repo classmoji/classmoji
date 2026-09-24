@@ -8,6 +8,7 @@ import type { Route } from './+types/route';
 import { assertClassroomAccess } from '~/utils/helpers';
 import WeeklyCalendarCard, { type WeekEvent } from './WeeklyCalendarCard';
 import ModuleSpotlightCard, { type SpotlightModule } from './ModuleSpotlightCard';
+import { eventFetchWindow, startOfWeek } from './week';
 import RetroTabsCard, {
   type FeedbackItem,
   type ResubmitItem,
@@ -36,15 +37,24 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
     attemptedAction: 'view_dashboard',
   });
 
-  // Sunday-start week, locale-independent
-  const weekStart = dayjs().day(0).startOf('day');
-  const weekEnd = weekStart.add(6, 'day').endOf('day');
+  // Sunday-start week in the SERVER's time zone (UTC in production). It is only
+  // the card's first-render frame: the browser recomputes the week in its own
+  // zone after hydration, so events are fetched wide enough to cover whichever
+  // week that turns out to be.
+  const serverNow = dayjs();
+  const weekStart = startOfWeek(serverNow);
+  const fetchWindow = eventFetchWindow(serverNow);
   const gitOrgLogin = classroom.git_organization?.login ?? null;
 
   const dataPromise = (async (): Promise<DashboardData> => {
     const [weekEventsRaw, repositories, regradeRequests, allRepoAssignments] = await Promise.all([
       ClassmojiService.calendar
-        .getClassroomCalendar(classroom.id, weekStart.toDate(), weekEnd.toDate(), userId)
+        .getClassroomCalendar(
+          classroom.id,
+          fetchWindow.from.toDate(),
+          fetchWindow.to.toDate(),
+          userId
+        )
         .catch(() => [] as unknown[]),
       getPrisma().repository.findMany({
         where: { classroom_id: classroom.id, is_published: true },
@@ -116,13 +126,29 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
       ? (repositories.find(m => m.id === spotlightId) ?? null)
       : (repositories[repositories.length - 1] ?? null);
 
+    // The spotlight lists the module's Assignment records, which know nothing
+    // about this student, so join them to the student's own repo assignments to
+    // tell submitted from overdue. Same rules as the Assignments page, so the two
+    // screens agree: first row per assignment wins (individual before team, the
+    // order findAllAssignmentsForStudent returns), and CLOSED means submitted.
+    const submittedByAssignmentId = new Map<string, boolean>();
+    for (const ra of allRepoAssignments) {
+      const key = ra.assignment_id ?? ra.id;
+      if (!submittedByAssignmentId.has(key)) {
+        submittedByAssignmentId.set(key, ra.status === 'CLOSED');
+      }
+    }
+
     const spotlight: SpotlightModule | null = spotlightSrc
       ? {
           id: spotlightSrc.id,
           slug: spotlightSrc.slug,
           title: spotlightSrc.title,
           ordinal: repositories.findIndex(m => m.id === spotlightSrc.id) + 1,
-          assignments: spotlightSrc.assignments,
+          assignments: spotlightSrc.assignments.map(a => ({
+            ...a,
+            submitted: submittedByAssignmentId.get(a.id) ?? false,
+          })),
           pages: spotlightSrc.pages,
           slides: spotlightSrc.slides,
           quizzes: spotlightSrc.quizzes.map(q => ({ id: q.id, title: q.name })),
@@ -209,7 +235,8 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
     });
 
     return {
-      weekStart: weekStart.toISOString(),
+      // A plain date, which dayjs parses as local midnight on either side.
+      weekStart: weekStart.format('YYYY-MM-DD'),
       weekEvents,
       spotlight,
       feedback,
