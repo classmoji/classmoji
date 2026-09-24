@@ -131,14 +131,58 @@ const FAILED = ['FAILED', 'CRASHED', 'SYSTEM FAILURE', 'TIMED OUT', 'EXPIRED', '
 /** How long to wait for the first run before giving up on a silent batch. */
 const FIRST_RUN_TIMEOUT_MS = 30_000;
 
+/**
+ * What a run carries about the work it was doing. Trigger hands the task's
+ * payload back with the run, which is the only place the student, the team or
+ * the repository is named.
+ */
+interface RunPayload {
+  student?: { name?: string; login?: string } | null;
+  user?: { name?: string } | null;
+  repoName?: string | null;
+  name?: string | null;
+  assignment?: { title?: string } | null;
+  issue?: { title?: string } | null;
+}
+
 export interface OperationRun {
   id: string;
   taskIdentifier: string;
   status: string;
+  payload?: RunPayload;
 }
 
 const outcome = (status: string) =>
   status === 'COMPLETED' ? 'done' : FAILED.includes(status) ? 'failed' : 'pending';
+
+/**
+ * Who a run was for, in the words the instructor uses. Falls back to the task
+ * identifier only when the payload names nobody, which should not happen for
+ * the per-student tasks but is better than an empty row.
+ */
+const subjectOf = (run: OperationRun): string => {
+  const p = run.payload ?? {};
+  return (
+    p.student?.login ||
+    p.student?.name ||
+    p.repoName ||
+    p.user?.name ||
+    p.assignment?.title ||
+    p.issue?.title ||
+    p.name ||
+    run.taskIdentifier
+  );
+};
+
+/** Why it did not finish, said plainly. */
+const REASONS: Record<string, string> = {
+  FAILED: 'Failed',
+  CRASHED: 'Crashed',
+  'SYSTEM FAILURE': 'Github did not respond',
+  'TIMED OUT': 'Timed out',
+  EXPIRED: 'Gave up waiting',
+  CANCELED: 'Canceled',
+};
 
 /**
  * Mounted once, at the app root. Holds the failure list itself so the details
@@ -170,15 +214,21 @@ export const OperationProgress = () => {
         width={520}
       >
         <p className="text-ink-2 mb-3">
-          These runs did not complete. Running the operation again retries only what is still
-          missing.
+          Running the operation again retries only what is still missing.
         </p>
-        <ul className="flex flex-col gap-2 max-h-80 overflow-y-auto">
+        <ul className="flex flex-col divide-y divide-line max-h-80 overflow-y-auto">
           {(failures ?? []).map(run => (
-            <li key={run.id} className="flex items-center justify-between gap-3">
-              <span className="font-mono text-xs text-ink-2 truncate">{run.taskIdentifier}</span>
+            <li key={run.id} className="flex items-center justify-between gap-3 py-2">
+              <span className="min-w-0">
+                <span className="block truncate text-ink-1">{subjectOf(run)}</span>
+                {/* The task and status are what a bug report needs, so they
+                    stay, one step quieter than the name. */}
+                <span className="block truncate font-mono text-xs text-ink-3">
+                  {run.taskIdentifier}
+                </span>
+              </span>
               <Tag color="red" className="m-0 shrink-0 font-medium">
-                {run.status}
+                {REASONS[run.status] ?? run.status}
               </Tag>
             </li>
           ))}
@@ -233,16 +283,19 @@ const OperationRuns = ({
 
     const unitRuns = all.filter(r => unit.tasks.includes(r.taskIdentifier));
     let done = 0;
-    const failed: OperationRun[] = [];
+    let unitsFailed = 0;
     for (const run of unitRuns) {
       const result = outcome(run.status);
       if (result === 'done') done += 1;
-      else if (result === 'failed') failed.push(run);
+      else if (result === 'failed') unitsFailed += 1;
     }
-    // Every run in the batch has to settle, not only the ones that count as a
-    // unit: a repository is not ready until its collaborator invite lands too.
+    // Failures are counted across the WHOLE batch, not just the runs that count
+    // as a unit. Every repository can exist and the job still be wrong: an
+    // invite that never landed leaves a student locked out of their own repo.
+    const failed = all.filter(r => outcome(r.status) === 'failed');
+    // For the same reason, the job is not finished until every run has settled.
     const complete = all.every(r => outcome(r.status) !== 'pending');
-    return { spec, unit, total: unitRuns.length, done, failed, complete };
+    return { spec, unit, total: unitRuns.length, done, unitsFailed, failed, complete };
   }, [runs]);
 
   // A batch that never reports anything would otherwise spin forever.
@@ -272,7 +325,7 @@ const OperationRuns = ({
     }
     if (!progress) return;
 
-    const { spec, unit, total, done, failed, complete } = progress;
+    const { spec, unit, total, done, unitsFailed, failed, complete } = progress;
 
     // Whatever the caller put up before the work started is redundant now.
     if (spec.notifyKey) dismissNotify(spec.notifyKey);
@@ -294,8 +347,10 @@ const OperationRuns = ({
     if (failed.length > 0) {
       finish({
         variant: 'error',
-        title: `${done} of ${total} ${unit.noun} finished`,
-        message: `${failed.length} could not be completed`,
+        // Every unit can be done and the batch still have failures in the steps
+        // around them, so the title says which of the two happened.
+        title: unitsFailed > 0 ? `${done} of ${total} ${unit.noun} finished` : unit.done,
+        message: `${failed.length} step${failed.length === 1 ? '' : 's'} did not finish`,
         persistent: true,
         progress: undefined,
         action: { label: 'Details', onClick: () => onFailures(failed) },
