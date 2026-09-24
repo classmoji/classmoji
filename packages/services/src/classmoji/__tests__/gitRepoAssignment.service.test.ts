@@ -6,6 +6,10 @@ const upsertMock = vi.fn();
 const updateManyMock = vi.fn();
 const findUniqueMock = vi.fn();
 const listCommitsMock = vi.fn();
+// `create` checks the repo and the assignment share a classroom before linking
+// them; both lookups resolve to the same classroom here so the write proceeds.
+const gitRepoFindUniqueMock = vi.fn(async () => ({ classroom_id: 'cls-1' }));
+const assignmentFindUniqueMock = vi.fn(async () => ({ module: { classroom_id: 'cls-1' } }));
 
 vi.mock('@classmoji/database', () => ({
   default: () => ({
@@ -16,6 +20,8 @@ vi.mock('@classmoji/database', () => ({
       updateMany: updateManyMock,
       findUnique: findUniqueMock,
     },
+    gitRepo: { findUnique: gitRepoFindUniqueMock },
+    assignment: { findUnique: assignmentFindUniqueMock },
   }),
 }));
 
@@ -23,9 +29,8 @@ vi.mock('../../git/index.ts', () => ({
   getGitProvider: () => ({ listCommits: (...a: unknown[]) => listCommitsMock(...a) }),
 }));
 
-const { create, getLatePercentage, recordPush, recordExistingPush } = await import(
-  '../gitRepoAssignment.service.ts'
-);
+const { create, getLatePercentage, recordPush, recordExistingPush } =
+  await import('../gitRepoAssignment.service.ts');
 
 type Row = {
   closed_at: Date | null;

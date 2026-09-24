@@ -233,6 +233,28 @@ export const findForUser = async (query: Prisma.GitRepoAssignmentWhereInput) => 
 export const create = async (data: GitRepoAssignmentCreateData) => {
   const provider = data.provider as GitProvider;
 
+  // A submission row joins a student's repo to an assignment, and both belong
+  // to a classroom. Nothing in the schema stops those classrooms differing, and
+  // when they do the row leaks one classroom's grades into another's views —
+  // the student dashboard reads submissions by the REPO's classroom but renders
+  // the ASSIGNMENT's title and grades. Refuse rather than write it.
+  const [repo, assignment] = await Promise.all([
+    getPrisma().gitRepo.findUnique({
+      where: { id: data.git_repo_id },
+      select: { classroom_id: true },
+    }),
+    getPrisma().assignment.findUnique({
+      where: { id: data.assignment_id },
+      select: { module: { select: { classroom_id: true } } },
+    }),
+  ]);
+  if (repo && assignment && repo.classroom_id !== assignment.module.classroom_id) {
+    throw new Error(
+      `Refusing to link assignment ${data.assignment_id} to a repo in another classroom ` +
+        `(${assignment.module.classroom_id} vs ${repo.classroom_id})`
+    );
+  }
+
   // One row per (student repo, assignment) in either submission mode. A retry
   // that adopted an existing GitHub issue may fill in the issue fields; the
   // row's id is never rewritten.
