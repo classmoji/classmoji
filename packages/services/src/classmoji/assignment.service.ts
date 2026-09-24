@@ -115,6 +115,9 @@ const LIST_INCLUDE = {
 
 const LIST_ORDER = [
   { module: { position: 'asc' } },
+  // The order the Modules screen arranges by hand; deadline and title are the
+  // tie-break for rows that have never been dragged.
+  { position: 'asc' },
   { student_deadline: { sort: 'asc', nulls: 'last' } },
   { title: 'asc' },
 ] satisfies Prisma.AssignmentOrderByWithRelationInput[];
@@ -331,6 +334,16 @@ const validateTarget = async (data: Prisma.AssignmentUncheckedCreateInput) => {
   return type;
 };
 
+/** Where an assignment lands when nothing says otherwise: after the last one. */
+const nextPositionInModule = async (moduleId: string) => {
+  const last = await getPrisma().assignment.findFirst({
+    where: { module_id: moduleId },
+    orderBy: { position: 'desc' },
+    select: { position: true },
+  });
+  return last ? last.position + 1 : 0;
+};
+
 export const create = async (data: Prisma.AssignmentUncheckedCreateInput) => {
   const type = await validateTarget(data);
   return getPrisma().assignment.create({
@@ -339,6 +352,9 @@ export const create = async (data: Prisma.AssignmentUncheckedCreateInput) => {
       type,
       slug: titleToIdentifier(data.title),
       weight: Number(data.weight || 100),
+      // Position 0 is the top of the module's list, so an assignment that does
+      // not name one is appended instead of taking the column default.
+      position: data.position ?? (await nextPositionInModule(data.module_id)),
     },
     include: {
       module: true,
@@ -655,6 +671,102 @@ export const updateInClassroom = async (
 };
 
 /** Delete an assignment the classroom owns. Submissions and grades cascade. */
+/**
+ * Persist a new ordering for one module's assignments. `orderedAssignmentIds`
+ * is the full list in its new order; each row's position becomes its index.
+ * The module is proven to belong to the classroom first, and the list has to
+ * name every assignment in it — a partial list would leave the rest behind on
+ * stale positions.
+ */
+export const reorderInModule = async (
+  moduleId: string,
+  orderedAssignmentIds: string[],
+  classroomId: string
+) => {
+  const prisma = getPrisma();
+
+  const module = await prisma.module.findFirst({
+    where: { id: moduleId, classroom_id: classroomId },
+    select: { id: true },
+  });
+  if (!module) throw new Error('Module not found in classroom');
+
+  const existing = await prisma.assignment.findMany({
+    where: { module_id: moduleId },
+    select: { id: true },
+  });
+  const existingIds = new Set(existing.map(a => a.id));
+  const orderedIds = new Set(orderedAssignmentIds);
+  const matches =
+    existingIds.size === orderedAssignmentIds.length &&
+    orderedIds.size === orderedAssignmentIds.length &&
+    orderedAssignmentIds.every(id => existingIds.has(id));
+  if (!matches) throw new Error('Ordered assignment ids must match the module assignments');
+
+  await prisma.$transaction(
+    orderedAssignmentIds.map((id, index) =>
+      prisma.assignment.update({
+        where: { id, module_id: moduleId },
+        data: { position: index },
+      })
+    )
+  );
+};
+
+/**
+ * Move an assignment into `toModuleId` and give that module the ordering the
+ * caller hands over. `orderedAssignmentIds` is the TARGET module's full list
+ * after the move, the moved id included; the module it came from is compacted
+ * behind it. Passing the module it is already in is a plain reorder.
+ *
+ * Only the module changes: weight, deadlines, grades and submissions travel
+ * with the assignment, and the course grade is a weighted mean over all of
+ * them, so which module holds it does not move any number.
+ */
+export const moveToModule = async (
+  assignmentId: string,
+  toModuleId: string,
+  orderedAssignmentIds: string[],
+  classroomId: string
+) => {
+  const prisma = getPrisma();
+
+  const target = await prisma.module.findFirst({
+    where: { id: toModuleId, classroom_id: classroomId },
+    select: { id: true },
+  });
+  if (!target) throw new Error('Module not found in classroom');
+
+  const assignment = await prisma.assignment.findFirst({
+    where: { id: assignmentId, module: { classroom_id: classroomId } },
+    select: { id: true, module_id: true },
+  });
+  if (!assignment) throw new Error('Assignment not found in classroom');
+
+  const fromModuleId = assignment.module_id;
+  if (fromModuleId !== toModuleId) {
+    await prisma.assignment.update({
+      where: { id: assignmentId },
+      data: { module_id: toModuleId },
+    });
+  }
+
+  await reorderInModule(toModuleId, orderedAssignmentIds, classroomId);
+
+  if (fromModuleId !== toModuleId) {
+    const remaining = await prisma.assignment.findMany({
+      where: { module_id: fromModuleId },
+      orderBy: { position: 'asc' },
+      select: { id: true },
+    });
+    await prisma.$transaction(
+      remaining.map((row, index) =>
+        prisma.assignment.update({ where: { id: row.id }, data: { position: index } })
+      )
+    );
+  }
+};
+
 export const deleteInClassroom = async (id: string, classroomId: string) => {
   const { count } = await getPrisma().assignment.deleteMany({
     where: { id, module: { classroom_id: classroomId } },

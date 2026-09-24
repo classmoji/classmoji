@@ -825,6 +825,9 @@ model Assignment {
   form_id          String?        @unique
   title            String
   slug             String? // Set once on creation from title, never updated
+  // Manual order inside the module, as the admin Modules screen arranges it.
+  // Ties (and rows created before the column existed) fall back to deadline.
+  position         Int            @default(0)
   weight           Float          @default(100)
   is_extra_credit  Boolean        @default(false)
   is_published     Boolean        @default(false)

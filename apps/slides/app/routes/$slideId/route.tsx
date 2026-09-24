@@ -1,6 +1,6 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
 import { useLoaderData, useFetcher, data, redirect } from 'react-router';
-import { message, Tooltip, Popconfirm } from 'antd';
+import { Tooltip, Popconfirm } from 'antd';
 import getPrisma from '@classmoji/database';
 import { ContentService } from '@classmoji/content';
 import { assertSlideAccess } from '@classmoji/auth/server';
@@ -31,7 +31,7 @@ import {
   type MergeResolution,
 } from '@classmoji/services/slides';
 import { SandpackRenderer } from '@classmoji/ui-components/sandpack';
-import { useUser } from '~/hooks';
+import { useToast, useUser } from '~/hooks';
 import { diffDeckSnapshots, extractDeckSnapshot, type DeckSnapshot } from '~/utils/deckOpsDiff';
 import { getThemeUrls } from '~/utils/themeService.server';
 import {
@@ -1853,6 +1853,7 @@ export const action = async ({
 };
 
 export default function SlideViewer() {
+  const toast = useToast();
   const {
     slide,
     isPro,
@@ -2124,13 +2125,13 @@ export default function SlideViewer() {
   useEffect(() => {
     if (!notice) return;
     if (notice === 'preview-accepted') {
-      message.success(
+      toast.success(
         noticeAutoMerged
           ? `Preview merged —${noticeAutoMerged} change${noticeAutoMerged === 1 ? '' : 's'} merged automatically; changes are now live.`
           : 'Preview merged —changes are now live.'
       );
     } else if (notice === 'preview-discarded') {
-      message.success('Preview discarded.');
+      toast.success('Preview discarded.');
     }
     // Strip the params so a refresh doesn't re-toast
     const url = new URL(window.location.href);
@@ -2190,86 +2191,86 @@ export default function SlideViewer() {
       // message, and KEEP any open chooser / conflict banner (they hold the
       // only recovery path — do not strand the user, S8).
       setIsLoadingLatest(false);
-      message.error(`Couldn't load the latest version: ${fetcher.data.error}. Please try again.`);
+      toast.error(`Couldn't load the latest version: ${fetcher.data.error}. Please try again.`);
     } else if (fetcher.data?.intent === 'delete-images') {
       // Images were deleted
       setIsDeletingImages(false);
       if (fetcher.data.success) {
-        message.success(
+        toast.success(
           `Deleted ${fetcher.data.deleted} unused image${fetcher.data.deleted !== 1 ? 's' : ''}`
         );
         setShowOrphanedModal(false);
         setOrphanedImages([]);
       } else if (fetcher.data.error) {
-        message.error(`Failed to delete images: ${fetcher.data.error}`);
+        toast.error(`Failed to delete images: ${fetcher.data.error}`);
       }
     } else if (fetcher.data?.intent === 'save-snippet') {
       // Snippet was saved
       if (fetcher.data.success && fetcher.data.snippet) {
-        message.success(`Snippet "${fetcher.data.snippet.name}" saved!`);
+        toast.success(`Snippet "${fetcher.data.snippet.name}" saved!`);
         // Add the new snippet to the list
         setSnippets((prev: Array<{ id: string; name: string; content: string }>) => [
           ...prev,
           fetcher.data.snippet,
         ]);
       } else if (fetcher.data.error) {
-        message.error(`Failed to save snippet: ${fetcher.data.error}`);
+        toast.error(`Failed to save snippet: ${fetcher.data.error}`);
       }
     } else if (fetcher.data?.intent === 'update-snippet') {
       // Snippet was updated
       if (fetcher.data.success && fetcher.data.snippet) {
-        message.success(`Snippet "${fetcher.data.snippet.name}" updated!`);
+        toast.success(`Snippet "${fetcher.data.snippet.name}" updated!`);
         // Replace the old snippet with the updated one
         setSnippets((prev: Array<{ id: string; name: string; content: string }>) =>
           prev.map(s => (s.id === fetcher.data.oldId ? fetcher.data.snippet : s))
         );
       } else if (fetcher.data.error) {
-        message.error(`Failed to update snippet: ${fetcher.data.error}`);
+        toast.error(`Failed to update snippet: ${fetcher.data.error}`);
       }
     } else if (fetcher.data?.intent === 'delete-snippet') {
       // Snippet was deleted
       if (fetcher.data.success) {
-        message.success('Snippet deleted');
+        toast.success('Snippet deleted');
         // Remove the snippet from the list
         setSnippets((prev: Array<{ id: string; name: string; content: string }>) =>
           prev.filter(s => s.id !== fetcher.data.deletedId)
         );
       } else if (fetcher.data.error) {
-        message.error(`Failed to delete snippet: ${fetcher.data.error}`);
+        toast.error(`Failed to delete snippet: ${fetcher.data.error}`);
       }
     } else if (fetcher.data?.intent === 'save-theme') {
       // CSS theme was saved
       if (fetcher.data.success && fetcher.data.theme) {
-        message.success(`CSS theme "${fetcher.data.theme.name}" saved!`);
+        toast.success(`CSS theme "${fetcher.data.theme.name}" saved!`);
         // Add the new theme to the list
         setCssThemes((prev: Array<{ id: string; name: string; type: string; content: string }>) => [
           ...prev,
           fetcher.data.theme,
         ]);
       } else if (fetcher.data.error) {
-        message.error(`Failed to save theme: ${fetcher.data.error}`);
+        toast.error(`Failed to save theme: ${fetcher.data.error}`);
       }
     } else if (fetcher.data?.intent === 'update-theme') {
       // CSS theme was updated
       if (fetcher.data.success && fetcher.data.theme) {
-        message.success(`CSS theme "${fetcher.data.theme.name}" updated!`);
+        toast.success(`CSS theme "${fetcher.data.theme.name}" updated!`);
         // Replace the old theme with the updated one
         setCssThemes((prev: Array<{ id: string; name: string; type: string; content: string }>) =>
           prev.map(t => (t.id === fetcher.data.oldId ? fetcher.data.theme : t))
         );
       } else if (fetcher.data.error) {
-        message.error(`Failed to update theme: ${fetcher.data.error}`);
+        toast.error(`Failed to update theme: ${fetcher.data.error}`);
       }
     } else if (fetcher.data?.intent === 'delete-theme') {
       // CSS theme was deleted
       if (fetcher.data.success) {
-        message.success('CSS theme deleted');
+        toast.success('CSS theme deleted');
         // Remove the theme from the list
         setCssThemes((prev: Array<{ id: string; name: string; type: string; content: string }>) =>
           prev.filter(t => t.id !== fetcher.data.deletedId)
         );
       } else if (fetcher.data.error) {
-        message.error(`Failed to delete theme: ${fetcher.data.error}`);
+        toast.error(`Failed to delete theme: ${fetcher.data.error}`);
       }
     } else if (fetcher.data?.conflict && fetcher.data?.units) {
       // Save-merge collision report (Phase 7.5): true same-unit conflicts the
@@ -2366,7 +2367,7 @@ export default function SlideViewer() {
       if (typeof fetcher.data.merged_with_concurrent === 'number') {
         const n = fetcher.data.merged_with_concurrent;
         if (n > 0) {
-          message.success(`Saved — merged with ${n} concurrent change${n === 1 ? '' : 's'}`);
+          toast.success(`Saved — merged with ${n} concurrent change${n === 1 ? '' : 's'}`);
         }
       }
       // Check if there are orphaned images to clean up
@@ -2397,7 +2398,7 @@ export default function SlideViewer() {
       saveInFlightRef.current = false;
       exitAfterSaveRef.current = false;
       setSavingInFlight(false);
-      message.error(
+      toast.error(
         `Couldn't save: ${fetcher.data.error}. Your changes are still here — please try again.`
       );
     }

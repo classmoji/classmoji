@@ -20,6 +20,7 @@ import { auth as triggerAuth } from '@trigger.dev/sdk';
 
 import { GitHubProvider, ClassmojiService } from '@classmoji/services';
 import { CalloutProvider, CalloutSlot } from '@classmoji/ui-components';
+import OperationProgress from '~/components/features/operations/OperationProgress';
 import { auth, getAuthSession } from '@classmoji/auth/server';
 import { COOKIE_DOMAIN } from '@classmoji/auth/secret';
 import { isAIAgentConfigured } from '~/utils/aiFeatures.server';
@@ -302,8 +303,12 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
 // Provides FetcherContext; must live inside CalloutProvider since
 // useNotifiedFetcher reads useCallout().
 const FetcherProvider = ({ children }: { children: React.ReactNode }) => {
-  const { fetcher, notify } = useNotifiedFetcher();
-  return <FetcherContext.Provider value={{ fetcher, notify }}>{children}</FetcherContext.Provider>;
+  const { fetcher, notify, operation, endOperation, dismissNotify } = useNotifiedFetcher();
+  return (
+    <FetcherContext.Provider value={{ fetcher, notify, operation, endOperation, dismissNotify }}>
+      {children}
+    </FetcherContext.Provider>
+  );
 };
 
 const App = ({ loaderData }: Route.ComponentProps) => {
@@ -476,6 +481,10 @@ const App = ({ loaderData }: Route.ComponentProps) => {
                         classroom layout (landing, registration, select-organization)
                         are buffered then silently dropped. */}
                     <CalloutSlot />
+                    {/* Background Trigger.dev work reports into the callout from
+                        here, above the router, so progress survives navigation
+                        and no route has to host a modal for it. */}
+                    <OperationProgress />
                     <NavigationProgress />
                     <ImpersonationBanner
                       key={(session as Record<string, Record<string, string>>)?.session?.id}

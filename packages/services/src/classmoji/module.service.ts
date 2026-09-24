@@ -60,11 +60,20 @@ const ASSIGNMENT_INCLUDE = {
   _count: { select: { git_repo_assignments: true } },
 } satisfies Prisma.AssignmentInclude;
 
+// A module's assignments in the order the Modules screen arranges them by
+// hand, with the old deadline sort kept as the tie-break for rows that have
+// never been dragged (they all sit at the position the migration gave them).
+const ASSIGNMENT_ORDER = [
+  { position: 'asc' },
+  { student_deadline: { sort: 'asc', nulls: 'last' } },
+  { title: 'asc' },
+] satisfies Prisma.AssignmentOrderByWithRelationInput[];
+
 const DETAIL_INCLUDE = {
   items: { orderBy: { position: 'asc' }, include: ITEM_INCLUDE },
   assignments: {
     include: ASSIGNMENT_INCLUDE,
-    orderBy: [{ student_deadline: { sort: 'asc', nulls: 'last' } }, { title: 'asc' }],
+    orderBy: ASSIGNMENT_ORDER,
   },
 } satisfies Prisma.ModuleInclude;
 
@@ -348,12 +357,21 @@ export const getCandidateContent = async (classroomId: string) => {
 };
 
 export const create = async (classroomId: string, input: ModuleWriteInput) => {
-  return getPrisma().module.create({
+  const prisma = getPrisma();
+  // Position 0 is the top of the Modules page, so a new module has to be
+  // placed explicitly at the end instead of taking the column default.
+  const last = await prisma.module.findFirst({
+    where: { classroom_id: classroomId },
+    orderBy: { position: 'desc' },
+    select: { position: true },
+  });
+  return prisma.module.create({
     data: {
       classroom_id: classroomId,
       title: input.title,
       slug: titleToIdentifier(input.title),
       description: input.description ?? null,
+      position: last ? last.position + 1 : 0,
     },
   });
 };
@@ -511,6 +529,21 @@ export const removeItem = async (moduleItemId: string, classroomId?: string) => 
 };
 
 /**
+ * A reorder replaces every position in one go, so the caller has to hand back
+ * exactly the rows it was given: a short, padded or foreign list would leave
+ * the rest of the list sitting on stale positions.
+ */
+const assertSameSet = (existing: string[], ordered: string[], message: string) => {
+  const existingIds = new Set(existing);
+  const orderedIds = new Set(ordered);
+  const matches =
+    existingIds.size === ordered.length &&
+    orderedIds.size === ordered.length &&
+    ordered.every(id => existingIds.has(id));
+  if (!matches) throw new Error(message);
+};
+
+/**
  * Persist a new ordering for a module's items. `orderedItemIds` is the full
  * list of ModuleItem ids in their new order; each row's position becomes its
  * index.
@@ -529,18 +562,118 @@ export const reorderItems = async (
     where: { module_id: moduleId, item_type: { not: 'REPOSITORY' } },
     select: { id: true },
   });
-  const existingIds = new Set(existingItems.map(item => item.id));
-  const orderedIds = new Set(orderedItemIds);
-  const hasExactSet =
-    existingIds.size === orderedItemIds.length &&
-    orderedIds.size === orderedItemIds.length &&
-    orderedItemIds.every(id => existingIds.has(id));
-  if (!hasExactSet) throw new Error('Ordered item ids must match module items');
+  assertSameSet(
+    existingItems.map(item => item.id),
+    orderedItemIds,
+    'Ordered item ids must match module items'
+  );
 
   await prisma.$transaction(
     orderedItemIds.map((id, index) =>
       prisma.moduleItem.update({
         where: { id, module_id: moduleId },
+        data: { position: index },
+      })
+    )
+  );
+};
+
+/**
+ * Is this a unique violation on one of ModuleItem's (module_id, <target>)
+ * indexes? All five mean the same thing to a caller — that module already
+ * holds this page, slide, quiz or form — so they are matched as a group, by
+ * `module_id` appearing in the reported field set. Prisma does not pin
+ * `meta.target`: it arrives as field names, the raw constraint name, or that
+ * name inside a one-element array depending on driver and version.
+ */
+const isModuleItemDuplicate = (error: unknown): boolean => {
+  if (!error || typeof error !== 'object') return false;
+  if ((error as { code?: unknown }).code !== 'P2002') return false;
+  const raw = (error as { meta?: { target?: unknown } }).meta?.target;
+  const tokens = (Array.isArray(raw) ? raw : typeof raw === 'string' ? raw.split(',') : [])
+    .map(token => String(token).trim().toLowerCase())
+    .filter(Boolean);
+  return tokens.some(token => token.includes('module_id'));
+};
+
+/** Close the gap a departing item leaves behind, so positions stay 0..n-1. */
+const compactItems = async (moduleId: string) => {
+  const prisma = getPrisma();
+  const remaining = await prisma.moduleItem.findMany({
+    where: { module_id: moduleId, item_type: { not: 'REPOSITORY' } },
+    orderBy: { position: 'asc' },
+    select: { id: true },
+  });
+  await prisma.$transaction(
+    remaining.map((item, index) =>
+      prisma.moduleItem.update({ where: { id: item.id }, data: { position: index } })
+    )
+  );
+};
+
+/**
+ * Move a content item into `toModuleId` and give that module the ordering the
+ * caller hands over. `orderedItemIds` is the TARGET module's full list after
+ * the move, the moved id included; the module the item came from is compacted
+ * behind it. Passing the module the item is already in is a plain reorder.
+ */
+export const moveItemToModule = async (
+  moduleItemId: string,
+  toModuleId: string,
+  orderedItemIds: string[],
+  classroomId: string
+) => {
+  const prisma = getPrisma();
+  await assertModuleInClassroom(toModuleId, classroomId);
+
+  const item = await prisma.moduleItem.findFirst({
+    where: { id: moduleItemId, module: { classroom_id: classroomId } },
+    select: { id: true, module_id: true, item_type: true },
+  });
+  if (!item) throw new Error('Module item not found in classroom');
+  // Legacy pointers are invisible in the UI and keep their positions; nothing
+  // should be able to drag one somewhere else.
+  if (item.item_type === 'REPOSITORY') throw new Error('Repository items cannot be moved');
+
+  const fromModuleId = item.module_id;
+  if (fromModuleId !== toModuleId) {
+    try {
+      await prisma.moduleItem.update({
+        where: { id: moduleItemId },
+        data: { module_id: toModuleId },
+      });
+    } catch (error: unknown) {
+      if (isModuleItemDuplicate(error)) throw new Error('That module already has this item');
+      throw error;
+    }
+  }
+
+  await reorderItems(toModuleId, orderedItemIds, classroomId);
+  if (fromModuleId !== toModuleId) await compactItems(fromModuleId);
+};
+
+/**
+ * Persist a new ordering for a classroom's modules. `orderedModuleIds` is the
+ * full list of module ids in their new order; each row's position becomes its
+ * index, which is what the Modules page and every student-facing tree read.
+ */
+export const reorderModules = async (classroomId: string, orderedModuleIds: string[]) => {
+  const prisma = getPrisma();
+
+  const existing = await prisma.module.findMany({
+    where: { classroom_id: classroomId },
+    select: { id: true },
+  });
+  assertSameSet(
+    existing.map(m => m.id),
+    orderedModuleIds,
+    'Ordered module ids must match the classroom modules'
+  );
+
+  await prisma.$transaction(
+    orderedModuleIds.map((id, index) =>
+      prisma.module.update({
+        where: { id, classroom_id: classroomId },
         data: { position: index },
       })
     )

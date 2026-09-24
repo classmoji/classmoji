@@ -92,7 +92,7 @@ const EmojiMapping = ({ emojiMappings, orphanedEmojis }: EmojiMappingProps) => {
       });
     }
 
-    notify('Remapping grades...');
+    notify('EMOJI_REMAP', 'Remapping grades…');
 
     fetcher!.submit(
       { mappings },
@@ -114,7 +114,7 @@ const EmojiMapping = ({ emojiMappings, orphanedEmojis }: EmojiMappingProps) => {
       });
     }
 
-    notify('Creating emoji mapping...');
+    notify('EMOJI_CREATE', 'Creating emoji mapping…');
 
     fetcher!.submit(
       {
@@ -137,7 +137,7 @@ const EmojiMapping = ({ emojiMappings, orphanedEmojis }: EmojiMappingProps) => {
   };
 
   const deleteMapping = async (record: EmojiMappingRecord) => {
-    notify('Deleting emoji mapping...');
+    notify('EMOJI_DELETE', 'Deleting emoji mapping…');
 
     fetcher!.submit(
       {
@@ -173,7 +173,7 @@ const EmojiMapping = ({ emojiMappings, orphanedEmojis }: EmojiMappingProps) => {
 
   const populateTemplate = () => {
     const chosen = TEMPLATES[template];
-    notify(chosen.notice);
+    notify('EMOJI_SCALE', chosen.notice);
     fetcher!.submit({}, { action: chosen.action, method: 'POST', encType: 'application/json' });
   };
 
@@ -371,8 +371,8 @@ const EmojiMapping = ({ emojiMappings, orphanedEmojis }: EmojiMappingProps) => {
           />
         )}
 
-        <div className="rounded-2xl ring-1 ring-line overflow-hidden">
-          <div className="px-4 sm:px-5 py-4 border-b border-line bg-panel">
+        <div className="rounded-2xl ring-1 ring-line">
+          <div className="px-4 sm:px-5 py-4 border-b border-line bg-panel rounded-t-2xl">
             <div className="flex items-center justify-between mb-4">
               <div className="flex items-center gap-2">
                 <span className="text-sm font-semibold text-ink-0">Emoji Mappings</span>
@@ -435,23 +435,25 @@ const EmojiMapping = ({ emojiMappings, orphanedEmojis }: EmojiMappingProps) => {
             </div>
           </div>
 
-          <Table
-            dataSource={emojiMappings?.length ? emojiMappings : []}
-            columns={emojiMappingColumns}
-            size="small"
-            scroll={{ x: 'max-content' }}
-            pagination={false}
-            rowHoverable={false}
-            rowKey="emoji"
-            locale={{
-              emptyText: (
-                <div className="text-center py-8">
-                  <div className="font-medium text-ink-3">No emoji mappings yet</div>
-                  <div className="text-sm text-ink-4">Add your first mapping above</div>
-                </div>
-              ),
-            }}
-          />
+          <div className="overflow-hidden rounded-b-2xl">
+            <Table
+              dataSource={emojiMappings?.length ? emojiMappings : []}
+              columns={emojiMappingColumns}
+              size="small"
+              scroll={{ x: 'max-content' }}
+              pagination={false}
+              rowHoverable={false}
+              rowKey="emoji"
+              locale={{
+                emptyText: (
+                  <div className="text-center py-8">
+                    <div className="font-medium text-ink-3">No emoji mappings yet</div>
+                    <div className="text-sm text-ink-4">Add your first mapping above</div>
+                  </div>
+                ),
+              }}
+            />
+          </div>
         </div>
       </div>
     </SettingSection>

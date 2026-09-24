@@ -22,11 +22,12 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
     action: 'view_assignments',
   });
 
-  const [assignments, modules, repositories, candidates] = await Promise.all([
+  const [assignments, modules, repositories, candidates, tags] = await Promise.all([
     ClassmojiService.assignment.listForClassroom(classroom.id),
     ClassmojiService.module.findByClassroomSlug(classSlug!),
     ClassmojiService.repository.findByClassroomSlug(classSlug!),
     ClassmojiService.module.getCandidateContent(classroom.id),
+    ClassmojiService.organizationTag.findByClassroomId(classroom.id),
   ]);
 
   return {
@@ -35,12 +36,14 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
     repositories: repositories.map(r => ({
       id: r.id,
       title: r.title,
+      slug: r.slug,
       is_published: r.is_published,
     })),
     quizzes: candidates.quizzes,
     forms: candidates.forms,
     pages: candidates.pages,
     slides: candidates.slides,
+    tags: tags.map(t => ({ id: t.id, name: t.name })),
   };
 };
 
@@ -58,21 +61,33 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
   return namedAction(request, {
     async create() {
       try {
-        const { template, ...assignmentData } = data;
+        const {
+          template,
+          repo_name,
+          repository_type,
+          team_formation_mode,
+          max_team_size,
+          tag_id,
+          ...assignmentData
+        } = data;
         // A REPO assignment may bring its own repository: created here from
         // the template, named after the assignment, so each student's copy is
-        // `<title-slug>-<login>`. Published later from the Repositories page.
+        // `<title-slug>-<login>` (or `-<team>` for a team assignment).
+        // Published later from the Repositories page.
         if (assignmentData.type === 'REPO' && !assignmentData.repository_id) {
           const title = String(assignmentData.title ?? '').trim();
-          const slug = titleToIdentifier(title);
-          if (!slug) return { error: 'Enter a title the repository can be named after.' };
+          // The repository is named separately from the assignment: the form
+          // seeds it from the title but the instructor can name it anything.
+          const repoTitle = String(repo_name ?? '').trim() || title;
+          const slug = titleToIdentifier(repoTitle);
+          if (!slug) return { error: 'Enter a name the repository can be created under.' };
           const existing = await ClassmojiService.repository.findByClassroomAndTitle(
             classroom.id,
-            title
+            repoTitle
           );
           if (existing) {
             return {
-              error: `A repository named "${title}" already exists. Pick it under "Existing repository", or use another title.`,
+              error: `A repository named "${repoTitle}" already exists. Pick it under "Existing repository", or use another name.`,
             };
           }
           // No template picked: make a blank one in the classroom's own org
@@ -89,7 +104,7 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
               const blank = await ClassmojiService.templateImport.createBlankTemplateRepository({
                 gitOrganization: classroom.git_organization,
                 slug,
-                assignmentTitle: title,
+                assignmentTitle: repoTitle,
                 classroomName: classroom.name,
               });
               templateRef = blank.fullName;
@@ -100,11 +115,22 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
               };
             }
           }
+          // Team config comes from the assignment form; provisioning is
+          // per-repository, so it has to land on the repository we create here.
+          const isTeam = repository_type === 'GROUP';
+          if (isTeam && team_formation_mode === 'INSTRUCTOR' && !tag_id) {
+            return { error: 'Pick the team tag whose teams each get a repository.' };
+          }
           const repository = await ClassmojiService.repository.create({
-            title,
+            title: repoTitle,
             template: templateRef,
-            type: 'INDIVIDUAL',
+            type: isTeam ? 'GROUP' : 'INDIVIDUAL',
             classroom_id: classroom.id,
+            ...(isTeam && {
+              team_formation_mode: team_formation_mode ?? 'INSTRUCTOR',
+              max_team_size: max_team_size ?? null,
+              tag_id: tag_id ?? null,
+            }),
           });
           assignmentData.repository_id = repository.id;
         }
@@ -145,7 +171,7 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
 };
 
 const AdminAssignments = ({ loaderData }: Route.ComponentProps) => {
-  const { assignments, modules, repositories, quizzes, forms, pages, slides } = loaderData;
+  const { assignments, modules, repositories, quizzes, forms, pages, slides, tags } = loaderData;
   const { class: classSlug } = useParams();
   const deleteFetcher = useFetcher<{ success?: string; error?: string }>();
 
@@ -250,6 +276,7 @@ const AdminAssignments = ({ loaderData }: Route.ComponentProps) => {
         boundQuizIds={boundQuizIds}
         boundFormIds={boundFormIds}
         assignment={editing}
+        tags={tags}
       />
     </div>
   );

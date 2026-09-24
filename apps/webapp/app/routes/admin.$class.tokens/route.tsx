@@ -1,6 +1,6 @@
 import { useNavigate, Outlet } from 'react-router';
 
-import { TokensLog, ButtonNew, TriggerProgress } from '~/components';
+import { TokensLog, ButtonNew } from '~/components';
 import { ClassmojiService } from '@classmoji/services';
 import { requireClassroomAdmin } from '~/utils/routeAuth.server';
 import type { Route } from './+types/route';
@@ -32,12 +32,7 @@ const AdminTokensLog = ({ loaderData }: Route.ComponentProps) => {
 
   return (
     <div className="min-h-full relative">
-      <Outlet />
-      <TriggerProgress
-        operation="ASSIGN_TOKENS_TO_STUDENT"
-        validIdentifiers={['assign_tokens_to_student']}
-      />
-
+      <Outlet />{' '}
       <div className="flex items-center justify-between gap-3 mt-2 mb-4">
         <h1 className="text-lg font-semibold text-ink-1">Tokens</h1>
 
@@ -47,7 +42,6 @@ const AdminTokensLog = ({ loaderData }: Route.ComponentProps) => {
           </ButtonNew>
         </span>
       </div>
-
       <div className="rounded-2xl bg-panel ring-1 ring-line p-5 sm:p-6 min-h-[calc(100vh-10rem)]">
         <TokensLog
           transactions={transactions}

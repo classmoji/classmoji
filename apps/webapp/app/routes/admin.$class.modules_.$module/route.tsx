@@ -41,10 +41,11 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
 
   // The module with everything it owns, plus the pickers' candidate content
   // and every repository a REPO assignment may submit through.
-  const [module, candidates, repositories] = await Promise.all([
+  const [module, candidates, repositories, tags] = await Promise.all([
     ClassmojiService.module.listModuleContents(found.id, classroom.id),
     ClassmojiService.module.getCandidateContent(classroom.id),
     ClassmojiService.repository.findByClassroomId(classroom.id),
+    ClassmojiService.organizationTag.findByClassroomId(classroom.id),
   ]);
   if (!module) {
     throw data('Module not found', { status: 404 });
@@ -56,9 +57,12 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
   return {
     module,
     candidates,
+    // Team tags, for an instructor-assigned team assignment created here.
+    tags: tags.map(t => ({ id: t.id, name: t.name })),
     repositories: repositories.map(r => ({
       id: r.id,
       title: r.title,
+      slug: r.slug,
       is_published: r.is_published,
     })),
     boundQuizIds: bound.map(a => a.quiz_id).filter(Boolean) as string[],
@@ -67,7 +71,7 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
 };
 
 const ModuleDetail = ({ loaderData }: Route.ComponentProps) => {
-  const { module, candidates, repositories, boundQuizIds, boundFormIds } = loaderData;
+  const { module, candidates, repositories, boundQuizIds, boundFormIds, tags } = loaderData;
   const { class: classSlug } = useParams();
   const navigate = useNavigate();
 
@@ -337,6 +341,7 @@ const ModuleDetail = ({ loaderData }: Route.ComponentProps) => {
         boundQuizIds={new Set(boundQuizIds)}
         boundFormIds={new Set(boundFormIds)}
         assignment={editingAssignment}
+        tags={tags}
       />
 
       <AddContentItemModal

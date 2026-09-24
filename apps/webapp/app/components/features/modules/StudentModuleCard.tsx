@@ -155,8 +155,11 @@ const StudentModuleCard = ({
                     }
                   },
                 };
+                // `group` lets the title underline on hover, the usual "this opens
+                // something" cue; without it a row only shifts background and
+                // reads as decoration.
                 const hover = open
-                  ? 'cursor-pointer hover:bg-stone-50 dark:hover:bg-neutral-800'
+                  ? 'group cursor-pointer hover:bg-stone-50 dark:hover:bg-neutral-800'
                   : '';
                 const action = node.actionNode && (
                   <span role="presentation" onClick={e => e.stopPropagation()}>
@@ -174,7 +177,7 @@ const StudentModuleCard = ({
                           className={`${ASSIGNMENT_GRID} py-2.5 px-2 -mx-2 rounded-lg transition-colors ${hover}`}
                         >
                           <RowIcon size={18} className="text-gray-400" />
-                          <span className="min-w-0 truncate text-ink-1">
+                          <span className="min-w-0 truncate text-ink-1 group-hover:underline underline-offset-2 decoration-ink-3">
                             {/* The "Assignments" section heading already says what these
                                 are; only a quiz or form row needs its kind spelled out. */}
                             {label !== 'Assignment' && (
@@ -195,7 +198,7 @@ const StudentModuleCard = ({
                           className={`flex items-center gap-3 py-2.5 px-2 -mx-2 rounded-lg transition-colors ${hover}`}
                         >
                           <RowIcon size={18} className="text-gray-400 shrink-0" />
-                          <span className="min-w-0 flex-1 truncate text-ink-1">
+                          <span className="min-w-0 flex-1 truncate text-ink-1 group-hover:underline underline-offset-2 decoration-ink-3">
                             <span className="font-semibold mr-2">{label}:</span>
                             {node.name}
                           </span>

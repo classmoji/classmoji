@@ -1,7 +1,7 @@
 import { namedAction } from 'remix-utils/named-action';
 
 import { ClassmojiService } from '@classmoji/services';
-import { publishAssignment, syncAssignment } from './helpers';
+import { publishAssignment, publishAssignmentAndRepository, syncAssignment } from './helpers';
 import { calculateContributions } from './contributions';
 import { ActionTypes } from '~/constants';
 import { requireClassroomAdmin, assertClassroomMutationAllowed } from '~/utils/routeAuth.server';
@@ -31,6 +31,13 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
 
     async publish() {
       return publishAssignment(classSlug, classroom.id, assignmentId, userId);
+    },
+
+    // One assignment, plus its repository when that still needs provisioning.
+    // `assignment_id` really is an assignment id here, unlike the repository-
+    // scoped actions around it.
+    async publishAssignment() {
+      return publishAssignmentAndRepository(classSlug, classroom.id, assignmentId, userId);
     },
 
     async unpublish() {

@@ -10,6 +10,7 @@ export const ActionTypes = {
 
   SAVE_ASSIGNMENT: 'save-assignment',
   DELETE_ASSIGNMENT: 'delete-assignment',
+  DELETE_GIT_REPO_ASSIGNMENT: 'delete-git-repo-assignment',
   SYNC_ASSIGNMENT: 'sync-assignment',
   PUBLISH_ASSIGNMENT: 'publish-assignment',
 

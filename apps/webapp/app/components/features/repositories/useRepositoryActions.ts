@@ -1,7 +1,9 @@
 import { App } from 'antd';
+import { useContext, useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router';
 
 import { ActionTypes } from '~/constants';
+import { FetcherContext } from '~/contexts';
 import LocalStorage from '~/utils/localStorage';
 import { useGlobalFetcher } from '~/hooks';
 
@@ -12,10 +14,14 @@ interface RepositoryRef {
 
 /**
  * The repository actions every admin surface shares: publish / sync /
- * unpublish / delete through the repositories route's action (so the
- * TriggerProgress bar keyed on the global fetcher keeps working wherever the
- * table is rendered), plus navigation to the edit form and the repo-wide
- * operations (autograde, update student repos, contributions).
+ * unpublish / delete through the repositories route's action, plus navigation
+ * to the edit form and the repo-wide operations (autograde, update student
+ * repos, contributions).
+ *
+ * `pending` names the repository whose work is still going, so the row that
+ * started it can say so in place. It covers the whole job, not just the
+ * request: the action returns as soon as the Trigger.dev batch is queued, and
+ * the repositories do not exist until that batch finishes.
  * Confirmations use modal.confirm since antd Popconfirm doesn't compose inside
  * a Dropdown menu item.
  */
@@ -23,7 +29,14 @@ export const useRepositoryActions = (actionBase = '') => {
   const navigate = useNavigate();
   const { class: classSlug } = useParams();
   const { fetcher, notify } = useGlobalFetcher();
+  const { operation } = useContext(FetcherContext);
   const { modal } = App.useApp();
+  const [pending, setPending] = useState<{ id: string; label: string } | null>(null);
+
+  // Done when the request has landed and no background batch came out of it.
+  useEffect(() => {
+    if (pending && fetcher!.state === 'idle' && !operation) setPending(null);
+  }, [fetcher, fetcher!.state, operation, pending]);
 
   const post = (action: string, id: string, method: 'post' | 'delete' = 'post') =>
     fetcher!.submit(
@@ -32,14 +45,26 @@ export const useRepositoryActions = (actionBase = '') => {
     );
 
   const publishRepository = (id: string) => {
+    setPending({ id, label: 'Publishing' });
     post('publish', id);
     LocalStorage.forceRefreshRepos();
   };
   const syncRepository = (id: string) => {
+    setPending({ id, label: 'Syncing' });
     post('sync', id);
     LocalStorage.forceRefreshRepos();
   };
   const unpublishRepository = (id: string) => post('unpublish', id);
+
+  /**
+   * Publish one assignment. The action publishes its repository first when that
+   * still needs provisioning, and leaves an already-published one alone.
+   */
+  const publishAssignment = (id: string) => {
+    setPending({ id, label: 'Publishing' });
+    post('publishAssignment', id);
+    LocalStorage.forceRefreshRepos();
+  };
   const deleteRepository = (id: string) => {
     notify(ActionTypes.DELETE_ASSIGNMENT, 'Deleting repository...');
     post('delete', id, 'delete');
@@ -50,6 +75,7 @@ export const useRepositoryActions = (actionBase = '') => {
   const updateRepositories = (record: RepositoryRef) =>
     navigate(`/admin/${classSlug}/repos/update?id=${record.id}`);
   const autograde = (record: RepositoryRef) => {
+    setPending({ id: record.id, label: 'Setting up' });
     notify('AUTOGRADE_GIT_REPO_ASSIGNMENT', 'Provisioning autograding…');
     fetcher!.submit(
       { repositoryId: record.id, classroomSlug: classSlug! },
@@ -61,6 +87,7 @@ export const useRepositoryActions = (actionBase = '') => {
     );
   };
   const calculateContributions = (record: RepositoryRef) => {
+    setPending({ id: record.id, label: 'Calculating' });
     notify('CALCULATE_REPO_CONTRIBUTIONS', 'Calculating contributions…');
     post('calculateContributions', record.id);
   };
@@ -87,6 +114,36 @@ export const useRepositoryActions = (actionBase = '') => {
       onOk: () => publishRepository(id),
     });
 
+  /**
+   * One button for "make this assignment work for students", whichever half is
+   * outstanding: the assignment's own visibility, its repositories, or both.
+   */
+  const confirmPublishAssignment = (
+    id: string,
+    opts: { needsRepo: boolean; assignmentPublished: boolean }
+  ) => {
+    // Already open to students, but nobody has repositories yet.
+    if (opts.assignmentPublished) {
+      return modal.confirm({
+        title: 'Create student repositories',
+        content:
+          'This assignment is already open to students, but its repositories have not been created. This creates them.',
+        okText: 'Create',
+        cancelText: 'Cancel',
+        onOk: () => publishAssignment(id),
+      });
+    }
+    return modal.confirm({
+      title: 'Publish assignment',
+      content: opts.needsRepo
+        ? 'This creates the student repositories first, then opens the assignment to students.'
+        : 'This opens the assignment to students. Its repository is already published.',
+      okText: 'Publish',
+      cancelText: 'Cancel',
+      onOk: () => publishAssignment(id),
+    });
+  };
+
   const confirmUnpublish = (id: string) =>
     modal.confirm({
       title: 'Unpublish repository',
@@ -112,8 +169,10 @@ export const useRepositoryActions = (actionBase = '') => {
     autograde,
     calculateContributions,
     confirmPublish,
+    confirmPublishAssignment,
     confirmSync,
     confirmUnpublish,
     confirmDelete,
+    pending,
   };
 };

@@ -23,7 +23,6 @@ import Label from './ui/display/Label';
 import PageHeader from './ui/display/PageHeader';
 import SectionHeader from './ui/display/SectionHeader';
 import StatCard from './ui/display/StatCard';
-import TriggerProgress from './ui/display/TriggerProgress';
 import TableOfContents, { useActiveHeading } from './ui/display/TableOfContents';
 
 import QuizEvaluation from './ui/display/QuizEvaluation';
@@ -96,7 +95,6 @@ export {
   PageHeader,
   SectionHeader,
   StatCard,
-  TriggerProgress,
   TableOfContents,
   useActiveHeading,
 

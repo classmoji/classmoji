@@ -24,6 +24,7 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
 
   let repository = null;
   let hasReposWithProjects = false;
+  let hasProvisionedRepos = false;
 
   if (moduleTitle) {
     repository = await ClassmojiService.repository.findBySlugAndTitle(classSlug!, moduleTitle, {
@@ -40,6 +41,12 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
         },
       });
       hasReposWithProjects = reposWithProjects > 0;
+
+      // Type and team formation decide whether each copy belongs to a student
+      // or a team, which is baked into the repos already on GitHub. Flipping
+      // either once they exist would strand every one of them.
+      hasProvisionedRepos =
+        (await getPrisma().gitRepo.count({ where: { repository_id: repository.id } })) > 0;
 
       const autogradingTests = await ClassmojiService.autogradingTest.findByRepositoryId(
         repository.id
@@ -70,6 +77,7 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
     pages,
     slides,
     hasReposWithProjects,
+    hasProvisionedRepos,
   };
 };
 
@@ -91,7 +99,16 @@ export const shouldRevalidate = ({
 };
 
 const ModuleForm = ({ loaderData }: Route.ComponentProps) => {
-  const { repository, isNew, tags, classroom, pages, slides, hasReposWithProjects } = loaderData;
+  const {
+    repository,
+    isNew,
+    tags,
+    classroom,
+    pages,
+    slides,
+    hasReposWithProjects,
+    hasProvisionedRepos,
+  } = loaderData;
   const navigate = useNavigate();
   const { class: classSlug } = useParams();
   // Repositories are managed on the Repositories page; assignments that
@@ -131,6 +148,7 @@ const ModuleForm = ({ loaderData }: Route.ComponentProps) => {
         pages={pages}
         slides={slides}
         hasReposWithProjects={hasReposWithProjects}
+        hasProvisionedRepos={hasProvisionedRepos}
       />
     </div>
   );

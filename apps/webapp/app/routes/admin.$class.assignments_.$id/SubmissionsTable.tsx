@@ -1,4 +1,4 @@
-import { Button, Checkbox, Dropdown, Popover, Table, Tooltip } from 'antd';
+import { App, Button, Checkbox, Dropdown, Popover, Table, Tooltip } from 'antd';
 import type { MenuProps } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import dayjs from 'dayjs';
@@ -152,6 +152,7 @@ const SubmissionsTable = ({
   total,
 }: SubmissionsTableProps) => {
   const { fetcher, notify } = useGlobalFetcher();
+  const { modal } = App.useApp();
   const { classroom } = useStore();
   const callout = useCallout();
 
@@ -292,7 +293,7 @@ const SubmissionsTable = ({
         const href = sha
           ? `https://github.com/${org}/${repo.name}/commit/${sha}`
           : `https://github.com/${org}/${repo.name}/commits`;
-        return <CommitCount snapshot={snapshot} href={href} size="lg" />;
+        return <CommitCount snapshot={snapshot} href={href} size="lg" className="text-sm!" />;
       },
     },
     {
@@ -470,6 +471,55 @@ const SubmissionsTable = ({
               }
             >
               View
+            </button>
+            <button
+              type="button"
+              className="text-sm font-medium text-rose-600 hover:text-rose-700 dark:text-rose-400 hover:underline underline-offset-2 whitespace-nowrap"
+              onClick={() =>
+                (() => {
+                  // Read straight off the box at confirm time: modal.confirm
+                  // renders its content once and does not re-render on state.
+                  const alsoRepo = { current: false };
+                  modal.confirm({
+                    title: 'Delete submission',
+                    content: (
+                      <div className="flex flex-col gap-3">
+                        <span>
+                          This removes <strong>{repo.name}</strong> from this assignment, along with
+                          its grades.
+                        </span>
+                        <Checkbox
+                          onChange={e => {
+                            alsoRepo.current = e.target.checked;
+                          }}
+                        >
+                          Also delete the GitHub repository
+                          <span className="block text-xs text-ink-3">
+                            Permanent, and removes every other assignment&rsquo;s submission on this
+                            repository.
+                          </span>
+                        </Checkbox>
+                      </div>
+                    ),
+                    okText: 'Delete',
+                    okButtonProps: { danger: true },
+                    cancelText: 'Cancel',
+                    onOk: () => {
+                      notify(ActionTypes.DELETE_GIT_REPO_ASSIGNMENT, 'Deleting submission…');
+                      fetcher!.submit(
+                        { git_repo_assignment_id: s.id, delete_repository: alsoRepo.current },
+                        {
+                          method: 'post',
+                          action: `/api/gitRepoAssignment/${classroom?.slug}?action=deleteSubmission`,
+                          encType: 'application/json',
+                        }
+                      );
+                    },
+                  });
+                })()
+              }
+            >
+              Delete
             </button>
             {rare.length > 0 && (
               <Dropdown
