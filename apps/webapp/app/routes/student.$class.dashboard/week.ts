@@ -35,7 +35,10 @@ export const groupByDay = <T extends { start_time: string | Date }>(
 ): T[][] => {
   const grid: T[][] = Array.from({ length: 7 }, () => []);
   events.forEach(event => {
-    const offset = dayjs(event.start_time).startOf('day').diff(weekStart, 'day');
+    // Rounded, not truncated: in a zone whose clocks spring forward at
+    // midnight (Santiago, Havana, Beirut) that week's Sunday starts at 01:00,
+    // so Monday is 23 hours after it and a truncating diff would say 0.
+    const offset = Math.round(dayjs(event.start_time).startOf('day').diff(weekStart, 'day', true));
     if (offset >= 0 && offset < 7) grid[offset].push(event);
   });
   grid.forEach(day =>
