@@ -7,6 +7,8 @@ interface SpotlightAssignment {
   title: string;
   student_deadline: string | Date | null;
   is_published?: boolean;
+  /** This student's repo assignment is CLOSED (see the dashboard loader). */
+  submitted?: boolean;
 }
 
 interface SpotlightLinked {
@@ -48,9 +50,12 @@ const typeStyles: Record<SpotlightItemType, string> = {
   QUIZ: 'bg-sky-50 text-sky-700 dark:bg-sky-900/30 dark:text-sky-200',
 };
 
-const formatRelative = (date: string | Date) => {
+// The card has no status pill, so a submitted assignment says so here rather
+// than counting down to (or past) a deadline that no longer applies to it.
+export const formatRelative = (date: string | Date, submitted = false, now = dayjs()) => {
   const target = dayjs(date);
-  const today = dayjs().startOf('day');
+  if (submitted) return `submitted · ${target.format('MMM D')}`;
+  const today = now.startOf('day');
   const days = target.startOf('day').diff(today, 'day');
   if (days < 0) return `overdue · ${target.format('MMM D')}`;
   if (days === 0) return 'due today';
@@ -66,7 +71,7 @@ const buildItems = (repository: SpotlightModule): SpotlightItem[] => {
       key: `a-${a.id}`,
       type: 'ASGN',
       title: a.title,
-      meta: a.student_deadline ? formatRelative(a.student_deadline) : undefined,
+      meta: a.student_deadline ? formatRelative(a.student_deadline, a.submitted) : undefined,
     });
   });
   repository.slides?.forEach(s => {

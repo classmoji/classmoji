@@ -119,7 +119,18 @@ describe('student dashboard loader — assignment lookup guard', () => {
   });
 });
 
-describe('student dashboard loader — week', () => {
+describe('student dashboard loader — spotlight submitted flag and week', () => {
+  const ra = (id: string, assignmentId: string, status: 'OPEN' | 'CLOSED') => ({
+    id,
+    assignment_id: assignmentId,
+    status,
+    closed_at: null,
+    assignment: { title: assignmentId, grades_released: false, student_deadline: null },
+    git_repo: { name: `repo-${id}`, repository_id: 'repo-module-1' },
+    graders: [],
+    grades: [],
+  });
+
   beforeEach(() => {
     vi.clearAllMocks();
     assertAccessMock.mockResolvedValue({
@@ -128,7 +139,40 @@ describe('student dashboard loader — week', () => {
     });
     calendarMock.mockResolvedValue([]);
     regradeRequestsMock.mockResolvedValue([]);
-    repositoryFindManyMock.mockResolvedValue([buildRepository()]);
+    repositoryFindManyMock.mockResolvedValue([
+      {
+        ...buildRepository(),
+        assignments: [
+          { id: 'a-closed', title: 'Closed', student_deadline: new Date('2026-09-20T16:00:00Z') },
+          { id: 'a-open', title: 'Open', student_deadline: new Date('2026-09-20T16:00:00Z') },
+          { id: 'a-none', title: 'No repo yet', student_deadline: new Date('2026-09-20T16:00:00Z') },
+          { id: 'a-both', title: 'Individual and team', student_deadline: null },
+        ],
+      },
+    ]);
+  });
+
+  it('marks an assignment submitted only when the student\'s own repo assignment is CLOSED', async () => {
+    findAllAssignmentsMock.mockResolvedValue([
+      ra('ra-1', 'a-closed', 'CLOSED'),
+      ra('ra-2', 'a-open', 'OPEN'),
+      // Individual row first, as findAllAssignmentsForStudent returns it: it
+      // wins over the team row, the same pick the Assignments page makes.
+      ra('ra-3', 'a-both', 'OPEN'),
+      ra('ra-4', 'a-both', 'CLOSED'),
+    ]);
+
+    const data = await (await loader(loaderArgs())).data;
+
+    const submitted = Object.fromEntries(
+      (data.spotlight?.assignments ?? []).map(a => [a.id, a.submitted])
+    );
+    expect(submitted).toEqual({
+      'a-closed': true,
+      'a-open': false,
+      'a-none': false,
+      'a-both': false,
+    });
   });
 
   it('sends the week start as a plain date and fetches events beyond it on both sides', async () => {
