@@ -201,6 +201,11 @@ const AssignmentFormModal = ({
   tags = [],
 }: AssignmentFormModalProps) => {
   const fetcher = useFetcher<{ success?: string; error?: string }>();
+  // Tag creation has its own fetcher so it never collides with the form submit.
+  const tagFetcher = useFetcher<{ tag?: { id: string; name: string }; error?: string }>();
+  const [newTagName, setNewTagName] = useState('');
+  const [createdTags, setCreatedTags] = useState<{ id: string; name: string }[]>([]);
+  const creatingTag = tagFetcher.state !== 'idle';
   const [form] = Form.useForm<FormValues>();
   const [kind, setKind] = useState<AssignmentKind>('REPO');
   const [mode, setMode] = useState<SubmissionMode>('REPO');
@@ -228,6 +233,24 @@ const AssignmentFormModal = ({
     'INSTRUCTOR') as TeamFormation;
   // Section numbers shift: "Who submits" and "What counts as submitting" only
   // exist for a new REPO assignment.
+  // Tags the classroom already had, plus any made here without leaving the form.
+  const allTags = useMemo(
+    () => [...tags, ...createdTags.filter(c => !tags.some(t => t.id === c.id))],
+    [tags, createdTags]
+  );
+  const createTag = () => {
+    const name = newTagName.trim();
+    if (!name) return;
+    tagFetcher.submit(
+      { name },
+      {
+        method: 'post',
+        action: `/admin/${classSlug}/assignments?/createTag`,
+        encType: 'application/json',
+      }
+    );
+  };
+
   const isRepoCreate = kind === 'REPO' && !isEdit;
   const gradingStep = isRepoCreate ? 4 : kind === 'REPO' ? 3 : 2;
   // Opened from a module card, so the module is already settled: it rides in
@@ -302,6 +325,17 @@ const AssignmentFormModal = ({
     if (!open || isEdit || namesItsOwnRepo) return;
     form.setFieldValue('repo_name', title);
   }, [title, open, isEdit, namesItsOwnRepo, form]);
+
+  // A tag made here is selected straight away, so the flow never breaks to go
+  // and configure one.
+  useEffect(() => {
+    if (tagFetcher.state !== 'idle') return;
+    const created = tagFetcher.data?.tag;
+    if (!created) return;
+    setCreatedTags(prev => (prev.some(t => t.id === created.id) ? prev : [...prev, created]));
+    form.setFieldValue('tag_id', created.id);
+    setNewTagName('');
+  }, [tagFetcher.state, tagFetcher.data, form]);
 
   // Close once a submit settles successfully.
   useEffect(() => {
@@ -432,8 +466,10 @@ const AssignmentFormModal = ({
         </div>
       }
     >
-      {fetcher.data?.error && (
-        <div className="mb-3 text-sm text-rose-600 dark:text-rose-400">{fetcher.data.error}</div>
+      {(fetcher.data?.error || tagFetcher.data?.error) && (
+        <div className="mb-3 text-sm text-rose-600 dark:text-rose-400">
+          {fetcher.data?.error ?? tagFetcher.data?.error}
+        </div>
       )}
       <Form form={form} layout="vertical" className="mt-2">
         {!moduleId && (
@@ -497,18 +533,53 @@ const AssignmentFormModal = ({
                     label="Team tag"
                     className="md:col-span-2"
                     rules={[{ required: true, message: 'Pick the tag whose teams get a repo' }]}
-                    extra={
-                      tags.length
-                        ? 'Every team carrying this tag gets one repository.'
-                        : 'This classroom has no team tags yet — create one on the Teams page, or let students self-form.'
-                    }
+                    extra="Every team carrying this tag gets one repository."
                   >
                     <Select
                       showSearch
                       optionFilterProp="label"
                       placeholder="Choose a team tag…"
-                      options={tags.map(t => ({ value: t.id, label: t.name }))}
-                      notFoundContent={<span className="text-sm text-ink-3">No team tags</span>}
+                      options={allTags.map(t => ({ value: t.id, label: t.name }))}
+                      notFoundContent={
+                        <span className="text-sm text-ink-3">
+                          No team tags yet — type one below.
+                        </span>
+                      }
+                      // Tags are made here rather than in settings: the moment
+                      // you need one is the moment you are asked for it.
+                      popupRender={menu => (
+                        <>
+                          {menu}
+                          <div className="flex items-center gap-2 border-t border-line px-2 py-2">
+                            <Input
+                              size="small"
+                              value={newTagName}
+                              placeholder="New tag name"
+                              aria-label="New team tag name"
+                              disabled={creatingTag}
+                              onChange={e => setNewTagName(e.target.value)}
+                              onKeyDown={e => {
+                                // Enter makes the tag rather than submitting the
+                                // assignment; Escape leaves the field alone.
+                                if (e.key === 'Enter') {
+                                  e.preventDefault();
+                                  e.stopPropagation();
+                                  createTag();
+                                }
+                              }}
+                            />
+                            <Button
+                              size="small"
+                              type="primary"
+                              loading={creatingTag}
+                              disabled={!newTagName.trim()}
+                              onClick={createTag}
+                            >
+                              Add
+                            </Button>
+                          </div>
+                        </>
+                      )}
                     />
                   </Form.Item>
                 )}

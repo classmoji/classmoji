@@ -32,8 +32,9 @@ interface UnitSpec {
 interface OperationSpec {
   /**
    * Ordered: the first shape with runs in it decides what a unit is here.
-   * Publishing creates repositories, unless they already exist and it is only
-   * opening the assignment inside them.
+   * Publishing creates repositories, unless they already exist and the work is
+   * only adding this assignment to them (an issue per repo in issue mode, a
+   * submission row in push mode).
    */
   units: UnitSpec[];
   /** The placeholder callout the caller opened, which this one replaces. */
@@ -51,8 +52,10 @@ const OPERATIONS: Record<string, OperationSpec> = {
       },
       {
         tasks: ['gh-create_git_repo_assignment'],
-        running: 'Opening the assignment for students',
-        done: 'Assignment opened for students',
+        // Only reached when the first unit has no runs — the repositories were
+        // already there and the work is linking this assignment into them.
+        running: 'Adding the assignment to existing repositories',
+        done: 'Assignment added to existing repositories',
         noun: 'repositories',
       },
     ],

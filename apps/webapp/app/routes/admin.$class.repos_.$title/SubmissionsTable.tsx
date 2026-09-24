@@ -1,4 +1,4 @@
-import { App, Button, Table, Tooltip } from 'antd';
+import { App, Button, Checkbox, Popover, Table, Tooltip } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import dayjs from 'dayjs';
 import { IconBrandGithub, IconLayoutKanban } from '@tabler/icons-react';
@@ -9,7 +9,6 @@ import {
   EmojisDisplay,
   EmojiGrader,
   LateOverrideButton,
-  MultiSelect,
 } from '~/components';
 import { ActionTypes } from '~/constants';
 import { CommitCount } from '~/components/features/analytics';
@@ -325,21 +324,21 @@ const SubmissionsTable = ({
     className: 'border-l border-line',
     render: (_: unknown, repo: SubmissionsRepo) => {
       return (
+        // Plain links rather than antd's link buttons: `ant-btn-link` paints
+        // itself the theme's link colour, which is the brand green, so View
+        // read as an affirmative action next to a destructive one.
         <div className="flex items-center gap-4 whitespace-nowrap">
           <a
             href={`https://github.com/${org}/${repo.name}`}
             target="_blank"
             rel="noreferrer"
-            // antd's unlayered `a { color: <link> }` reset outranks a plain
-            // Tailwind utility on an anchor, so these need the important modifier
-            // to read as text rather than the theme's green link colour.
             className="text-sm font-medium text-ink-2! hover:text-ink-1! hover:underline underline-offset-2"
           >
             View
           </a>
           <button
             type="button"
-            className="text-sm font-medium text-rose-600 hover:text-rose-700 dark:text-rose-400 hover:underline underline-offset-2"
+            className="text-sm font-medium text-rose-600 hover:text-rose-700 dark:text-rose-400"
             onClick={() =>
               modal.confirm({
                 title: 'Delete repository',
@@ -389,22 +388,56 @@ const SubmissionsTable = ({
         title: 'Graders',
         key: `g-${assignment.id}`,
         width: 200,
-        onCell: () => ({ style: { padding: '0px' } }),
+        // Who grades this rarely changes, so the row reads it rather than
+        // offering an open select: the names as text, and one link to change
+        // them. Same treatment as the assignment page's own roster.
         render: (_: unknown, repo: SubmissionsRepo) => {
           const ra = rowFor(repo, assignment.id);
           if (!ra) return null;
+          const names = (ra.graders ?? []).map(g => g.grader.name || g.grader.login).join(', ');
+          const assigned = new Set(
+            (ra.graders ?? []).map(g => g.grader.login).filter((v): v is string => v != null)
+          );
+          const choices = assistants
+            .map(a => ({ label: a.name || a.login || '', value: a.login || '' }))
+            .sort((a, b) => a.label.localeCompare(b.label));
           return (
-            <div className="pl-4 pt-1.5">
-              <MultiSelect
-                defaultValue={ra.graders
-                  ?.map(g => g.grader.login)
-                  .filter((v): v is string => v != null)}
-                options={assistants
-                  .map(a => ({ label: a.name || '', value: a.login || '' }))
-                  .sort((a, b) => (a.label || '').localeCompare(b.label || ''))}
-                onSelect={(login: string) => graderHandler(login, assignment.id, repo, 'ADD')}
-                onDeselect={(login: string) => graderHandler(login, assignment.id, repo, 'REMOVE')}
-              />
+            <div className="flex items-center gap-3 whitespace-nowrap">
+              {names && <span className="text-sm text-ink-1 truncate max-w-40">{names}</span>}
+              <Popover
+                trigger="click"
+                placement="bottomLeft"
+                content={
+                  <div className="flex flex-col gap-2 min-w-44 py-1">
+                    {choices.length === 0 && (
+                      <span className="text-sm text-ink-3">No graders on the staff yet</span>
+                    )}
+                    {choices.map(c => (
+                      <Checkbox
+                        key={c.value}
+                        checked={assigned.has(c.value)}
+                        onChange={e =>
+                          graderHandler(
+                            c.value,
+                            assignment.id,
+                            repo,
+                            e.target.checked ? 'ADD' : 'REMOVE'
+                          )
+                        }
+                      >
+                        {c.label}
+                      </Checkbox>
+                    ))}
+                  </div>
+                }
+              >
+                <button
+                  type="button"
+                  className="text-sm font-medium text-ink-2 hover:text-ink-1 hover:underline underline-offset-2"
+                >
+                  {names ? 'Change' : 'Assign'}
+                </button>
+              </Popover>
             </div>
           );
         },

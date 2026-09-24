@@ -60,6 +60,19 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
   const data = await request.json();
 
   return namedAction(request, {
+    // Tags are made where they are needed. Upsert, so re-entering a name that
+    // exists simply hands back that tag instead of erroring.
+    async createTag() {
+      const name = typeof data.name === 'string' ? data.name.trim() : '';
+      if (!name) return { error: 'Enter a tag name.' };
+      try {
+        const tag = await ClassmojiService.organizationTag.upsert(classroom.id, name);
+        return { tag: { id: tag.id, name: tag.name } };
+      } catch (error: unknown) {
+        console.error('Tag create error:', error);
+        return { error: 'Could not create the tag. Try again.' };
+      }
+    },
     async create() {
       try {
         const {
