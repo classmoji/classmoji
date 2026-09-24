@@ -19,6 +19,8 @@ import {
   IconFolder,
   IconHelpCircle,
   IconForms,
+  IconGripVertical,
+  IconLoader2,
 } from '@tabler/icons-react';
 
 import ModuleFormModal, {
@@ -33,6 +35,7 @@ import {
   type AssignmentRowData,
 } from '~/components/features/assignments/AssignmentsTable';
 import AddContentItemModal from './AddContentItemModal';
+import { mergeDragProps, type CourseworkCardDrag } from './useCourseworkDrag';
 import { useRepositoryActions } from '~/components/features/repositories/useRepositoryActions';
 import {
   TYPE_META,
@@ -69,6 +72,16 @@ interface ModuleCardProps {
   boundFormIds: Set<string>;
   /** Team tags in this classroom, for an instructor-assigned team assignment. */
   tags?: { id: string; name: string }[];
+  /** Drag-to-reorder wiring for the card itself; absent when searching. */
+  dragProps?: Record<string, unknown>;
+  dragHandleProps?: Record<string, unknown>;
+  dragClassName?: string;
+  /**
+   * This card's slice of the page-level coursework drag: the rows it shows, in
+   * the order they are being dragged into, and the handlers that move them
+   * within this module or into another one.
+   */
+  coursework: CourseworkCardDrag;
 }
 
 // antd's Dropdown clones its trigger child to attach its own onClick and ref,
@@ -94,6 +107,34 @@ const IconMore = forwardRef<
 ));
 IconMore.displayName = 'IconMore';
 
+/**
+ * The grip that arms a drag. Dragging is armed from here rather than from the
+ * whole row, so the links, menus and switches inside a row keep working.
+ * `handleProps` is absent while the list cannot be reordered (during a search).
+ */
+const DragHandle = ({
+  props,
+  label,
+  // Which hover reveals it: a row inside a card, or the card itself. Written
+  // out in full because Tailwind only generates class names it can see.
+  reveal = 'group-hover/row:opacity-100',
+}: {
+  props?: Record<string, unknown>;
+  label: string;
+  reveal?: 'group-hover/row:opacity-100' | 'group-hover/card:opacity-100';
+}) => (
+  <span
+    {...props}
+    role="presentation"
+    title={props ? label : undefined}
+    className={`shrink-0 text-gray-300 dark:text-neutral-600 transition-opacity opacity-0 ${
+      props ? `cursor-grab active:cursor-grabbing ${reveal}` : ''
+    }`}
+  >
+    <IconGripVertical size={16} />
+  </span>
+);
+
 /** A small heading that splits the card's rows into Assignments and Content. */
 const GroupHeading = ({ children }: { children: string }) => (
   <li className="pt-5 pb-1.5 text-xs font-semibold uppercase tracking-wide text-ink-3 first:pt-3">
@@ -116,8 +157,12 @@ const ItemRow = ({
   onOpen,
   onEdit,
   action,
+  busyLabel,
   menuItems,
   onMenuClick,
+  dragProps,
+  dragHandleProps,
+  dragClassName = '',
 }: {
   icon: Icon;
   title: string;
@@ -128,10 +173,19 @@ const ItemRow = ({
   onEdit: () => void;
   /** An extra inline action beside Edit (a REPO assignment's Publish). */
   action?: { label: string; onClick: () => void };
+  /** Set while that action's background work runs; it replaces the action. */
+  busyLabel?: string;
   menuItems: MenuProps['items'];
   onMenuClick: (key: string) => void;
+  dragProps?: Record<string, unknown>;
+  dragHandleProps?: Record<string, unknown>;
+  dragClassName?: string;
 }) => (
-  <li className="flex items-center gap-3 py-2.5 px-2 -mx-2 rounded-lg transition-colors hover:bg-stone-50 dark:hover:bg-neutral-800">
+  <li
+    {...dragProps}
+    className={`group/row flex items-center gap-2 py-2.5 px-2 -mx-2 rounded-lg transition-colors hover:bg-stone-50 dark:hover:bg-neutral-800 ${dragClassName}`}
+  >
+    <DragHandle props={dragHandleProps} label={`Drag to reorder: ${title}`} />
     {/* A real button, so the row opens from the keyboard too. It spans the
         label area; the pill, Edit and the menu sit beside it. */}
     <button
@@ -149,14 +203,21 @@ const ItemRow = ({
     <Tag color={published ? 'green' : 'orange'} className="m-0 shrink-0 font-medium">
       {published ? 'Published' : 'Draft'}
     </Tag>
-    {action && (
-      <button
-        type="button"
-        onClick={action.onClick}
-        className="text-sm font-medium text-sky-600 hover:text-sky-700 dark:text-sky-400"
-      >
-        {action.label}
-      </button>
+    {busyLabel ? (
+      <span className="inline-flex items-center gap-1.5 text-sm text-ink-3 whitespace-nowrap">
+        <IconLoader2 size={14} className="animate-spin" />
+        {busyLabel}
+      </span>
+    ) : (
+      action && (
+        <button
+          type="button"
+          onClick={action.onClick}
+          className="text-sm font-medium text-sky-600 hover:text-sky-700 dark:text-sky-400"
+        >
+          {action.label}
+        </button>
+      )
     )}
     <button
       type="button"
@@ -199,12 +260,16 @@ const ModuleCard = ({
   boundQuizIds,
   boundFormIds,
   tags = [],
+  coursework,
+  dragProps,
+  dragHandleProps,
+  dragClassName = '',
 }: ModuleCardProps) => {
   const navigate = useNavigate();
   // Publish acts on the repository a REPO assignment submits through, via the
   // repositories route's action — the same one the Repositories page posts to,
   // so the two surfaces cannot drift.
-  const { confirmPublishAssignment, confirmSync } = useRepositoryActions(
+  const { confirmPublishAssignment, confirmSync, pending } = useRepositoryActions(
     `/admin/${classSlug}/repos`
   );
   const { modal } = App.useApp();
@@ -220,10 +285,13 @@ const ModuleCard = ({
   const [error, setError] = useState<string | null>(null);
 
   const busy = moduleFetcher.state !== 'idle';
-  const ownsCoursework = module.assignments.length > 0;
-  // Legacy REPOSITORY items are a pre-assignment pointer nobody renders now.
-  const contentItems = module.items.filter(i => i.item_type !== 'REPOSITORY');
-  const itemCount = module.assignments.length + contentItems.length;
+  // The rows as the page is showing them: its order, including a drag that has
+  // not come back from the server yet. Legacy REPOSITORY items are filtered out
+  // there, since they are a pre-assignment pointer nobody renders now.
+  const contentItems = coursework.content.items as ModuleItemLike[];
+  const assignments = coursework.assignments.items as AssignmentRowData[];
+  const ownsCoursework = assignments.length > 0;
+  const itemCount = assignments.length + contentItems.length;
 
   useEffect(() => {
     if (moduleFetcher.state === 'idle' && moduleFetcher.data?.error) {
@@ -398,9 +466,12 @@ const ModuleCard = ({
   const assignmentNote = (a: AssignmentRowData) => {
     const target = assignmentTarget(a);
     const weight = `${a.weight}%${a.is_extra_credit ? ' extra credit' : ''}`;
-    // A REPO assignment names its repo and how students submit through it.
+    // A REPO assignment names its repo and how students submit through it —
+    // unless the repo carries the assignment's own name, which is the push-mode
+    // default and would just say it twice.
     if (a.type === 'REPO' && target) {
-      return `${target} · ${a.submission_mode === 'REPO' ? 'push' : 'issue'} · ${weight}`;
+      const mode = a.submission_mode === 'REPO' ? 'push' : 'issue';
+      return target === a.title ? `${mode} · ${weight}` : `${target} · ${mode} · ${weight}`;
     }
     const base =
       target && target !== a.title ? target : (ASSIGNMENT_TYPE_META[a.type]?.label ?? null);
@@ -415,7 +486,10 @@ const ModuleCard = ({
 
   return (
     <div
-      className="rounded-2xl bg-panel ring-1 ring-line"
+      {...mergeDragProps(dragProps, coursework.cardProps)}
+      className={`group/card rounded-2xl bg-panel ring-1 transition-shadow ${
+        coursework.isDropTarget ? 'ring-2 ring-sky-500' : 'ring-line'
+      } ${dragClassName}`}
       data-testid={`module-card-${module.slug ?? module.id}`}
     >
       {/* Header row: number, title, count, visibility, menu */}
@@ -426,13 +500,18 @@ const ModuleCard = ({
         onKeyDown={e => {
           if (e.key === 'Enter' || e.key === ' ') onToggle();
         }}
-        className="flex items-center gap-3 px-4 sm:px-5 py-3.5 cursor-pointer select-none"
+        className="flex items-center gap-2 px-4 sm:px-5 py-3.5 cursor-pointer select-none"
       >
+        <DragHandle
+          props={dragHandleProps}
+          label={`Drag to reorder: ${module.title}`}
+          reveal="group-hover/card:opacity-100"
+        />
         <span className="text-ink-3">
           {expanded ? <IconChevronDown size={18} /> : <IconChevronRight size={18} />}
         </span>
         <span className="w-6 text-right tabular-nums text-ink-3 font-semibold">{index + 1}</span>
-        <span className="h-5 border-l border-line" />
+        <span className="mx-1 h-5 border-l border-line" />
         <span className="min-w-0 flex-1 truncate font-semibold text-ink-1">{module.title}</span>
         <span className="hidden sm:inline text-xs text-ink-3 whitespace-nowrap">
           {itemCount} item{itemCount === 1 ? '' : 's'}
@@ -519,11 +598,14 @@ const ModuleCard = ({
                     if (key === 'down') move(itemIndex, 1);
                     if (key === 'remove') removeContentItem(item.id);
                   }}
+                  dragProps={coursework.content.rowProps(item.id)}
+                  dragHandleProps={coursework.content.handleProps(item.id)}
+                  dragClassName={coursework.content.rowClassName(item.id)}
                 />
               );
             })}
-            {module.assignments.length > 0 && <GroupHeading>Assignments</GroupHeading>}
-            {module.assignments.map(a => {
+            {assignments.length > 0 && <GroupHeading>Assignments</GroupHeading>}
+            {assignments.map(a => {
               // Publish is a property of the repository the assignment submits
               // through, so only REPO assignments with one can offer it. Its
               // published state comes from the classroom's repository list.
@@ -543,6 +625,13 @@ const ModuleCard = ({
                   published={a.is_published}
                   onOpen={() => openAssignment(a)}
                   onEdit={() => editAssignment(a)}
+                  busyLabel={
+                    // Publishing queues background work, so the row keeps
+                    // saying so until that work reports back.
+                    pending && (pending.id === a.id || pending.id === repoId)
+                      ? pending.label
+                      : undefined
+                  }
                   action={
                     // Something outstanding — the assignment is a draft, or its
                     // repositories do not exist — offers Publish. Once both are
@@ -580,6 +669,9 @@ const ModuleCard = ({
                     }
                     if (key === 'remove') removeAssignment(a);
                   }}
+                  dragProps={coursework.assignments.rowProps(a.id)}
+                  dragHandleProps={coursework.assignments.handleProps(a.id)}
+                  dragClassName={coursework.assignments.rowClassName(a.id)}
                 />
               );
             })}

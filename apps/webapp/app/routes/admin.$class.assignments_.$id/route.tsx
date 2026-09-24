@@ -2,20 +2,12 @@ import { Button, Dropdown, Switch, Tag, Tooltip } from 'antd';
 import type { MenuProps } from 'antd';
 import dayjs from 'dayjs';
 import { IconChevronLeft, IconDotsVertical, IconRobot } from '@tabler/icons-react';
-import {
-  Link,
-  Outlet,
-  redirect,
-  useLocation,
-  useNavigate,
-  useRevalidator,
-  useSearchParams,
-} from 'react-router';
+import { Link, Outlet, redirect, useLocation, useNavigate, useSearchParams } from 'react-router';
 import { useMemo, useState } from 'react';
 import { namedAction } from 'remix-utils/named-action';
 
 import { ClassmojiService, HelperService } from '@classmoji/services';
-import { SearchInput, TriggerProgress } from '~/components';
+import { SearchInput } from '~/components';
 import AssignmentFormModal from '~/components/features/assignments/AssignmentFormModal';
 import type { AssignmentRowData } from '~/components/features/assignments/AssignmentsTable';
 import { useGlobalFetcher } from '~/hooks';
@@ -106,6 +98,7 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
     repositories: repositories.map(r => ({
       id: r.id,
       title: r.title,
+      slug: r.slug,
       is_published: r.is_published,
     })),
     candidates,
@@ -193,7 +186,6 @@ const AssignmentPage = ({ loaderData }: Route.ComponentProps) => {
   const { fetcher, notify } = useGlobalFetcher();
   const navigate = useNavigate();
   const { pathname } = useLocation();
-  const { revalidate } = useRevalidator();
   // The gradebook links here with ?q=<login> to land on one student's row.
   const [searchParams] = useSearchParams();
   const [query, setQuery] = useState(searchParams.get('q') ?? '');
@@ -476,17 +468,6 @@ const AssignmentPage = ({ loaderData }: Route.ComponentProps) => {
         boundQuizIds={new Set(boundQuizIds)}
         boundFormIds={new Set(boundFormIds)}
         assignment={assignment as unknown as AssignmentRowData}
-      />
-
-      <TriggerProgress
-        operation="AUTOGRADE"
-        validIdentifiers={['dispatch_autograde_workflow', 'gh-commit_autograde_workflow']}
-        callback={() => setTimeout(() => revalidate(), 100)}
-      />
-      <TriggerProgress
-        operation="ASSIGN_GRADERS_TO_ASSIGNMENTS"
-        validIdentifiers={['add_grader_to_git_repo_assignment']}
-        callback={() => setTimeout(() => revalidate(), 100)}
       />
 
       <Outlet />

@@ -4,6 +4,7 @@ import { Skeleton } from 'antd';
 import { namedAction } from 'remix-utils/named-action';
 import dayjs from 'dayjs';
 import { ClassmojiService } from '@classmoji/services';
+import { titleToIdentifier } from '@classmoji/utils';
 import type { Route } from './+types/route';
 import { assertClassroomAccess, assertClassroomMutationAllowed } from '~/utils/helpers';
 import ProgressSummaryCard, { type BucketCounts } from './ProgressSummaryCard';
@@ -115,7 +116,13 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
         return {
           id: ra.id,
           assignmentTitle: ra.assignment?.title ?? 'Assignment',
-          repositoryTitle: ra.git_repo?.repository?.title ?? '',
+          // Name it the way GitHub does: the student's own repo when it exists,
+          // otherwise the repository's slug — the prefix theirs will be cut
+          // under. The display title would not match what they open.
+          repositoryTitle:
+            ra.git_repo?.name ??
+            ra.git_repo?.repository?.slug ??
+            (ra.git_repo?.repository?.title ? titleToIdentifier(ra.git_repo.repository.title) : ''),
           moduleType: ra.git_repo?.repository?.type ?? null,
           status,
           gradesReleased: Boolean(ra.assignment?.grades_released && (ra.grades?.length ?? 0) > 0),

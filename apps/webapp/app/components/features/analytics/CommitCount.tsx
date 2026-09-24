@@ -34,8 +34,11 @@ const CommitCount = ({ snapshot, href, size = 'sm', className = '' }: CommitCoun
       {n}
     </>
   );
+  // antd's own `a { color: <link> }` reset is unlayered, so it outranks a
+  // plain Tailwind text utility on an anchor and paints the count the theme's
+  // link colour. The important modifier is what keeps it reading as text.
   const classes = `inline-flex items-center gap-1 tabular-nums ${
-    large ? 'text-base font-semibold text-ink-1' : 'text-xs text-ink-3'
+    large ? 'text-base text-ink-1!' : 'text-xs text-ink-3!'
   } ${className}`;
   return (
     <Tooltip title={href ? `${label} · open the latest commit` : label}>
@@ -45,7 +48,7 @@ const CommitCount = ({ snapshot, href, size = 'sm', className = '' }: CommitCoun
           target="_blank"
           rel="noreferrer"
           data-testid="commit-count"
-          className={`${classes} hover:text-ink-1 hover:underline underline-offset-2`}
+          className={`${classes} hover:text-ink-1! hover:underline underline-offset-2`}
         >
           {body}
         </a>

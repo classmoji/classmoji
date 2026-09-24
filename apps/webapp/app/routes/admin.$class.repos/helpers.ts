@@ -208,6 +208,43 @@ export const publishAssignmentAndRepository = async (
     return repoResult;
   }
 
+  // The repository was already published, so publishing this assignment cut no
+  // repos and nothing chained into opening its issues. Open them here: only
+  // the first assignment on a repository gets them for free, when its repos are
+  // created. Scoped to this assignment so its siblings are left alone.
+  if (assignment.type === 'REPO' && assignment.repository_id) {
+    const sessionId = nanoid();
+    const classroom = await ClassmojiService.classroom.findById(classroomId);
+    const repository = await ClassmojiService.repository.findById(assignment.repository_id);
+    const existingRepos = await ClassmojiService.gitRepo.findByRepository(
+      classroomSlug,
+      assignment.repository_id
+    );
+
+    if (repository && classroom) {
+      const missing = findMissingAssignments(repository as Repository, existingRepos as GitRepo[]);
+      const mine = missing[assignmentId] ? { [assignmentId]: missing[assignmentId] } : {};
+      const numMissing = Object.values(mine).reduce((n, a) => n + a.repos.length, 0);
+
+      if (numMissing > 0) {
+        await createMissingAssignments(classroom as Classroom, mine, sessionId);
+
+        const accessToken = await auth.createPublicToken({
+          scopes: { read: { tags: [`session_${sessionId}`] } },
+        });
+
+        return {
+          triggerSession: {
+            accessToken,
+            id: sessionId,
+            numReposToCreate: 0,
+            numIssuesToCreate: 2 * numMissing, // gh + cf per issue
+          },
+        };
+      }
+    }
+  }
+
   return { success: `Assignment "${assignment.title}" published` };
 };
 

@@ -113,9 +113,7 @@ const AssignmentsTabsCard = ({ rows, balance }: AssignmentsTabsCardProps) => {
             >
               {label}
               <span
-                className={`ml-2 text-xs tabular-nums ${
-                  isActive ? 'text-ink-3' : 'text-ink-4'
-                }`}
+                className={`ml-2 text-xs tabular-nums ${isActive ? 'text-ink-3' : 'text-ink-4'}`}
               >
                 {counts[key]}
               </span>
@@ -135,7 +133,7 @@ const AssignmentsTabsCard = ({ rows, balance }: AssignmentsTabsCardProps) => {
               <thead className="text-xs font-semibold tracking-[0.08em] uppercase text-ink-3">
                 <tr className="border-b border-line">
                   <th className="text-left px-4 py-3 font-semibold">Repository</th>
-                  <th className="text-left px-4 py-3 font-semibold">Issue</th>
+                  <th className="text-left px-4 py-3 font-semibold">Assignment</th>
                   <th className="text-left px-4 py-3 font-semibold hidden md:table-cell">Type</th>
                   <th className="text-left px-4 py-3 font-semibold">Status</th>
                   <th className="text-left px-4 py-3 font-semibold hidden lg:table-cell">
@@ -169,7 +167,7 @@ const AssignmentsTabsCard = ({ rows, balance }: AssignmentsTabsCardProps) => {
                               target="_blank"
                               rel="noreferrer"
                               title="Open your repository on GitHub"
-                              className="inline-flex items-center gap-1.5 max-w-[12rem] rounded-md text-gray-700 dark:text-gray-200 hover:text-ink-0 hover:underline underline-offset-2 transition-colors"
+                              className="inline-flex items-center gap-1.5 max-w-[12rem] rounded-md text-gray-700! dark:text-gray-200! hover:text-ink-0! hover:underline underline-offset-2 transition-colors"
                             >
                               <span className="truncate">
                                 {row.repositoryTitle || 'Repository'}
@@ -196,7 +194,7 @@ const AssignmentsTabsCard = ({ rows, balance }: AssignmentsTabsCardProps) => {
                             target="_blank"
                             rel="noreferrer"
                             title="Open the GitHub issue for this assignment"
-                            className="inline-flex items-center gap-1.5 font-medium text-ink-0 hover:underline underline-offset-2"
+                            className="inline-flex items-center gap-1.5 font-medium text-ink-0! hover:underline underline-offset-2"
                           >
                             <span>{row.assignmentTitle}</span>
                             <IconExternalLink

@@ -1,7 +1,8 @@
 import { useLocation, useNavigate, useParams, Outlet, useFetcher } from 'react-router';
 import { useEffect, useState } from 'react';
 import type { Route } from './+types/admin.$class.quizzes_.$quizId';
-import { Table, Button, Tag, Tooltip, Badge, Space, Modal, message, Select, Spin } from 'antd';
+import { Table, Button, Tag, Tooltip, Badge, Space, Modal, Select, Spin } from 'antd';
+import { useCallout } from '@classmoji/ui-components';
 import { IconEye, IconArrowLeft, IconClock, IconTrophy, IconChartBar } from '@tabler/icons-react';
 import { TrophyOutlined, PlayCircleOutlined, ClearOutlined } from '@ant-design/icons';
 import dayjs from 'dayjs';
@@ -367,6 +368,7 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
 };
 
 const QuizView = ({ loaderData }: Route.ComponentProps) => {
+  const callout = useCallout();
   const { quiz, students, adminAttempt } = loaderData;
   const navigate = useNavigate();
   const { class: classSlug, quizId } = useParams();
@@ -385,7 +387,7 @@ const QuizView = ({ loaderData }: Route.ComponentProps) => {
   // Show success message when clearing attempts
   useEffect(() => {
     if (fetcher.state === 'idle' && fetcher.data?.success) {
-      message.success(fetcher.data.success);
+      callout.show({ variant: 'success', title: fetcher.data.success });
     }
   }, [fetcher.state, fetcher.data]);
 
@@ -407,7 +409,7 @@ const QuizView = ({ loaderData }: Route.ComponentProps) => {
       }
     } catch (error: unknown) {
       console.error('[Preview] Error fetching repos:', error);
-      message.error('Failed to fetch repositories');
+      callout.show({ variant: 'error', title: 'Could not load repositories' });
     } finally {
       setLoadingRepos(false);
     }
@@ -508,7 +510,7 @@ const QuizView = ({ loaderData }: Route.ComponentProps) => {
   // Handle repo selection confirmation (only used for new attempts now)
   const handleRepoSelected = () => {
     if (!selectedRepo) {
-      message.warning('Please select a repository');
+      callout.show({ variant: 'info', title: 'Pick a repository first' });
       return;
     }
 

@@ -284,6 +284,24 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
         );
       }
 
+      // Opt-in, mirroring team deletion: Classmoji's record always goes, the
+      // GitHub repository only when explicitly asked. Removing the GitRepo
+      // cascades to every assignment's submission on it, not just this one.
+      if (data.delete_repository) {
+        const full = await ClassmojiService.classroom.findById(classroom.id);
+        const gitRepo = gitRepoAssignment.git_repo;
+        await HelperService.deleteRepository({
+          id: gitRepo.id,
+          name: gitRepo.name,
+          gitOrganization: full!.git_organization,
+          deleteFromGithub: true,
+        });
+        return {
+          action: ActionTypes.DELETE_GIT_REPO_ASSIGNMENT,
+          success: 'Submission and repository deleted',
+        };
+      }
+
       await ClassmojiService.gitRepoAssignment.deleteById(gitRepoAssignment.id);
 
       return {

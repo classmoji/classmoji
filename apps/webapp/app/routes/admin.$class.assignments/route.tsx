@@ -36,6 +36,7 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
     repositories: repositories.map(r => ({
       id: r.id,
       title: r.title,
+      slug: r.slug,
       is_published: r.is_published,
     })),
     quizzes: candidates.quizzes,
@@ -62,6 +63,7 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
       try {
         const {
           template,
+          repo_name,
           repository_type,
           team_formation_mode,
           max_team_size,
@@ -74,15 +76,18 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
         // Published later from the Repositories page.
         if (assignmentData.type === 'REPO' && !assignmentData.repository_id) {
           const title = String(assignmentData.title ?? '').trim();
-          const slug = titleToIdentifier(title);
-          if (!slug) return { error: 'Enter a title the repository can be named after.' };
+          // The repository is named separately from the assignment: the form
+          // seeds it from the title but the instructor can name it anything.
+          const repoTitle = String(repo_name ?? '').trim() || title;
+          const slug = titleToIdentifier(repoTitle);
+          if (!slug) return { error: 'Enter a name the repository can be created under.' };
           const existing = await ClassmojiService.repository.findByClassroomAndTitle(
             classroom.id,
-            title
+            repoTitle
           );
           if (existing) {
             return {
-              error: `A repository named "${title}" already exists. Pick it under "Existing repository", or use another title.`,
+              error: `A repository named "${repoTitle}" already exists. Pick it under "Existing repository", or use another name.`,
             };
           }
           // No template picked: make a blank one in the classroom's own org
@@ -99,7 +104,7 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
               const blank = await ClassmojiService.templateImport.createBlankTemplateRepository({
                 gitOrganization: classroom.git_organization,
                 slug,
-                assignmentTitle: title,
+                assignmentTitle: repoTitle,
                 classroomName: classroom.name,
               });
               templateRef = blank.fullName;
@@ -117,7 +122,7 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
             return { error: 'Pick the team tag whose teams each get a repository.' };
           }
           const repository = await ClassmojiService.repository.create({
-            title,
+            title: repoTitle,
             template: templateRef,
             type: isTeam ? 'GROUP' : 'INDIVIDUAL',
             classroom_id: classroom.id,

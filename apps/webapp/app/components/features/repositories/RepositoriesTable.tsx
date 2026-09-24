@@ -1,19 +1,18 @@
-import { forwardRef, useState } from 'react';
+import { forwardRef, useMemo, useState } from 'react';
 import { Dropdown, Table, Tag } from 'antd';
 import { useNavigate, useParams } from 'react-router';
+import { titleToIdentifier } from '@classmoji/utils';
 import type { MenuProps } from 'antd';
 import {
   IconChevronDown,
-  IconChevronUp,
+  IconChevronRight,
   IconDotsVertical,
-  IconEyeOff,
   IconFileText,
   IconGitPullRequest,
-  IconPencil,
   IconRobot,
   IconUsersGroup,
   IconFolder,
-  IconFolderOpen,
+  IconLoader2,
   IconTrash,
 } from '@tabler/icons-react';
 
@@ -38,6 +37,8 @@ interface AssignmentRow {
 interface RepositoryRow {
   id: string;
   title: string;
+  /** The identifier student repos are actually cut under, set once at creation. */
+  slug?: string | null;
   type: string;
   team_formation_mode?: string | null;
   is_published: boolean;
@@ -56,6 +57,8 @@ interface TreeNode {
   is_extra_credit?: boolean;
   repository?: RepositoryRow;
   assignment?: AssignmentRow;
+  /** Say push or issue on this row, because its folder carries both. */
+  showMode?: boolean;
   children?: TreeNode[];
 }
 
@@ -121,13 +124,6 @@ const RepositoriesTable = ({
   editor,
 }: RepositoriesTableProps) => {
   // Controlled expansion so the folder icon can react to expanded state.
-  // Every repository starts open, showing its assignments; the chevron closes it.
-  const [expandedKeys, setExpandedKeys] = useState<string[]>(() =>
-    repositories
-      .filter(r => (r.assignments ?? []).some(a => a.submission_mode !== 'REPO'))
-      .map(r => `repository-${r.id}`)
-  );
-
   // Publish / sync / unpublish / delete + navigation, shared with the module
   // cards so the two surfaces cannot drift.
   const { class: classSlug } = useParams();
@@ -145,15 +141,14 @@ const RepositoriesTable = ({
     calculateContributions,
     confirmPublish,
     confirmSync,
-    confirmUnpublish,
     confirmDelete,
+    pending,
   } = useRepositoryActions(actionBase);
 
   // The primary action (Publish / Sync) is surfaced as an inline button; the
   // overflow menu holds everything else about the repo. There is no detail
   // page any more: grading happens on each assignment's own page.
   const repoMenuItems = (r: RepositoryRow): MenuProps['items'] => [
-    { key: 'edit', label: 'Edit repository', icon: <IconPencil size={15} /> },
     ...(r.is_published
       ? [
           { key: 'autograde', label: 'Autograde', icon: <IconRobot size={15} /> },
@@ -171,8 +166,6 @@ const RepositoriesTable = ({
                 },
               ]
             : []),
-          { type: 'divider' as const },
-          { key: 'unpublish', label: 'Unpublish', icon: <IconEyeOff size={15} /> },
         ]
       : []),
     { type: 'divider' as const },
@@ -181,53 +174,69 @@ const RepositoriesTable = ({
 
   const onRepoMenuClick = (r: RepositoryRow, key: string) => {
     switch (key) {
-      case 'edit':
-        return editRepository(r);
       case 'autograde':
         return autograde(r);
       case 'update':
         return updateRepositories(r);
       case 'contributions':
         return calculateContributions(r);
-      case 'unpublish':
-        return confirmUnpublish(r.id);
       case 'delete':
         return confirmDelete(r.id);
     }
   };
 
-  // ---- build the tree (Repository -> Assignment) ----
-  // Only issue-mode assignments nest under a repository: each one is a GitHub
-  // issue opened in every student repo, which is what a child row has always
-  // meant here. A push-mode assignment IS the repository (a push submits,
-  // nothing is opened), so it is reached from the repository row's View
-  // action instead of being listed as if it were an issue.
-  const treeData: TreeNode[] = repositories.map(r => {
-    const issueAssignments = (r.assignments || []).filter(a => a.submission_mode !== 'REPO');
-    const children: TreeNode[] = issueAssignments.map(a => ({
-      key: `assignment-${a.id}`,
-      kind: 'assignment' as const,
-      name: a.title,
-      repositoryTitle: r.title,
-      repositoryType: r.type,
-      weight: a.weight,
-      is_published: a.is_published,
-      is_extra_credit: a.is_extra_credit,
-      assignment: a,
-    }));
+  // ---- a folder per repository, a file per assignment inside it ---------
+  // The repository is the template students are cut from; the assignments that
+  // submit through it are the work handed out inside that copy. Several
+  // assignments may share one repository, and each carries its own weight and
+  // publish state, so each gets a row rather than hiding in a menu.
+  const treeData: TreeNode[] = useMemo(
+    () =>
+      repositories.map(r => {
+        const assignments = r.assignments ?? [];
+        // A repository is normally all push or all issue. When it carries both,
+        // each child says which it is, since the folder cannot.
+        const mixedModes =
+          assignments.some(a => a.submission_mode === 'REPO') &&
+          assignments.some(a => a.submission_mode !== 'REPO');
+        return {
+          key: `repository-${r.id}`,
+          kind: 'repository' as const,
+          // What Github actually sees: every student repo is `<this>-<login>`.
+          // The slug is frozen at creation, so it can drift from a renamed title.
+          name: r.slug || titleToIdentifier(r.title),
+          repositoryTitle: r.title,
+          repositoryType: r.type,
+          teamFormationMode: r.team_formation_mode ?? null,
+          is_published: r.is_published,
+          repository: r,
+          children: assignments.length
+            ? assignments.map(a => ({
+                key: `assignment-${a.id}`,
+                kind: 'assignment' as const,
+                name: a.title,
+                repositoryTitle: r.title,
+                // The folder's type applies to everything inside it.
+                repositoryType: r.type,
+                teamFormationMode: r.team_formation_mode ?? null,
+                weight: a.weight,
+                is_published: a.is_published,
+                is_extra_credit: a.is_extra_credit,
+                showMode: mixedModes,
+                assignment: a,
+              }))
+            : undefined,
+        };
+      }),
+    [repositories]
+  );
 
-    return {
-      key: `repository-${r.id}`,
-      kind: 'repository' as const,
-      name: r.title,
-      repositoryTitle: r.title,
-      repositoryType: r.type,
-      teamFormationMode: r.team_formation_mode ?? null,
-      is_published: r.is_published,
-      repository: r,
-      children,
-    };
-  });
+  // Folders open by default, the way the page reads best; what the user
+  // collapses stays collapsed, and a repository added later still arrives open.
+  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+  const expandedRowKeys = treeData
+    .filter(node => node.children?.length && !collapsed.has(node.key))
+    .map(node => node.key);
 
   const columns = [
     {
@@ -237,68 +246,50 @@ const RepositoriesTable = ({
       width: 240,
       sorter: (a: TreeNode, b: TreeNode) => a.name.localeCompare(b.name),
       render: (_: unknown, record: TreeNode) => {
-        const level = record.kind === 'repository' ? 0 : 1;
-        const hasChildren = (record.children?.length ?? 0) > 0;
-        const isExpanded = expandedKeys.includes(record.key);
-        const toggle = () =>
-          setExpandedKeys(prev =>
-            prev.includes(record.key) ? prev.filter(k => k !== record.key) : [...prev, record.key]
-          );
-
-        return (
-          <div className="flex items-center gap-2" style={{ paddingLeft: level * 24 }}>
-            {hasChildren ? (
-              <button
-                type="button"
-                aria-label={isExpanded ? 'Collapse' : 'Expand'}
-                onClick={e => {
-                  e.stopPropagation();
-                  toggle();
-                }}
-                className="shrink-0 inline-flex text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
-              >
-                {isExpanded ? <IconChevronUp size={16} /> : <IconChevronDown size={16} />}
-              </button>
-            ) : (
-              <span className="shrink-0 w-4" />
-            )}
-
-            {record.kind === 'repository' && (
-              <span className="relative inline-flex shrink-0 w-[18px] h-[18px]">
-                <IconFolder
-                  size={18}
-                  className={`absolute inset-0 text-gray-400 transition-opacity duration-200 ease-in-out ${
-                    isExpanded ? 'opacity-0' : 'opacity-100'
-                  }`}
-                />
-                <IconFolderOpen
-                  size={18}
-                  className={`absolute inset-0 text-gray-400 transition-opacity duration-200 ease-in-out ${
-                    isExpanded ? 'opacity-100' : 'opacity-0'
-                  }`}
-                />
-              </span>
-            )}
-            {record.kind === 'assignment' && (
+        if (record.kind === 'assignment') {
+          const a = record.assignment!;
+          return (
+            <span className="inline-flex items-center gap-2 align-middle">
               <IconFileText size={16} className="text-gray-400 shrink-0" />
-            )}
-
-            <span
-              className={record.kind === 'repository' ? 'font-semibold text-ink-1' : 'text-ink-1'}
-            >
-              {record.name}
+              <span className="text-ink-1">{record.name}</span>
+              {record.showMode && (
+                <Tag
+                  color={a.submission_mode === 'REPO' ? 'geekblue' : 'purple'}
+                  className="m-0 shrink-0 font-medium"
+                >
+                  {a.submission_mode === 'REPO' ? 'push' : 'issue'}
+                </Tag>
+              )}
+              {record.is_extra_credit && (
+                <Tag color="green" className="m-0 shrink-0 font-medium">
+                  Extra credit
+                </Tag>
+              )}
             </span>
-            {record.kind === 'assignment' && (
-              <span className="text-xs text-ink-3">
-                {record.assignment?.submission_mode === 'REPO' ? 'push' : 'issue'}
-              </span>
-            )}
-            {record.kind === 'assignment' && record.is_extra_credit && (
-              <Tag color="green" bordered={false} className="text-xs m-0">
-                EC
+          );
+        }
+
+        const r = record.repository!;
+        // Issues opened in this repository, each its own assignment.
+        const issues = (r.assignments ?? []).filter(a => a.submission_mode !== 'REPO');
+        // How students submit here. A repository is normally one or the other;
+        // both tags show if it somehow carries a mix.
+        const hasPush = (r.assignments ?? []).some(a => a.submission_mode === 'REPO');
+        return (
+          <span className="inline-flex items-center gap-2 align-middle">
+            <IconFolder size={18} className="text-gray-400 shrink-0" />
+            <span className="font-semibold text-ink-1">{record.name}</span>
+            {hasPush && (
+              <Tag color="geekblue" className="m-0 shrink-0 font-medium">
+                push
               </Tag>
             )}
-          </div>
+            {issues.length > 0 && (
+              <Tag color="purple" className="m-0 shrink-0 font-medium">
+                issue
+              </Tag>
+            )}
+          </span>
         );
       },
     },
@@ -309,7 +300,7 @@ const RepositoriesTable = ({
       render: (_: unknown, record: TreeNode) => (
         <span className="text-ink-2">
           {prettyType(record.repositoryType)}
-          {record.repositoryType === 'GROUP' && record.kind === 'repository' && (
+          {record.repositoryType === 'GROUP' && (
             <span className="text-ink-3">
               {' '}
               · {record.teamFormationMode === 'SELF_FORMED' ? 'self-formed' : 'instructor teams'}
@@ -317,6 +308,17 @@ const RepositoriesTable = ({
           )}
         </span>
       ),
+    },
+    {
+      title: 'Weight (%)',
+      key: 'weight',
+      width: 110,
+      // A repository has no weight of its own; the assignments that submit
+      // through it carry the whole grade.
+      render: (_: unknown, record: TreeNode) =>
+        record.kind === 'assignment' ? (
+          <span className="text-ink-2 tabular-nums">{record.weight} %</span>
+        ) : null,
     },
     {
       title: 'Status',
@@ -337,40 +339,22 @@ const RepositoriesTable = ({
           const r = record.repository!;
           return (
             <div className="flex items-center gap-x-4 whitespace-nowrap">
-              {(() => {
-                const pushAssignments = (r.assignments ?? []).filter(
-                  a => a.submission_mode === 'REPO'
-                );
-                if (pushAssignments.length === 0) return null;
-                if (pushAssignments.length === 1) {
-                  return (
-                    <ActionLink
-                      onClick={() =>
-                        navigate(`/admin/${classSlug}/assignments/${pushAssignments[0].id}`)
-                      }
-                    >
-                      View
-                    </ActionLink>
-                  );
-                }
-                return (
-                  <Dropdown
-                    trigger={['click']}
-                    placement="bottomLeft"
-                    menu={{
-                      items: pushAssignments.map(a => ({ key: a.id, label: a.title })),
-                      onClick: ({ key, domEvent }) => {
-                        domEvent.stopPropagation();
-                        navigate(`/admin/${classSlug}/assignments/${key}`);
-                      },
-                    }}
-                  >
-                    <ActionLink>View</ActionLink>
-                  </Dropdown>
-                );
-              })()}
+              {/* The repository's own page: one roster row per student repo,
+                  with a column group per assignment. */}
+              <ActionLink
+                onClick={() => navigate(`/admin/${classSlug}/repos/${encodeURIComponent(r.title)}`)}
+              >
+                View
+              </ActionLink>
               <ActionLink onClick={() => editRepository(r)}>Edit</ActionLink>
-              {r.is_published ? (
+              {pending?.id === r.id ? (
+                // The job outlives the request, so the row stays busy until the
+                // background batch reports back.
+                <span className="inline-flex items-center gap-1.5 text-sm text-ink-3">
+                  <IconLoader2 size={14} className="animate-spin" />
+                  {pending.label}
+                </span>
+              ) : r.is_published ? (
                 <ActionLink onClick={() => confirmSync(r.id)}>Sync</ActionLink>
               ) : (
                 <ActionLink onClick={() => confirmPublish(r.id)}>Publish</ActionLink>
@@ -399,18 +383,7 @@ const RepositoriesTable = ({
           );
         }
 
-        // assignment (issue mode): View opens its page, like the repo row's
-        // action does for push mode; Edit opens the editor right here
-        // (or on that page when this table was given no editor context).
-        const a = record.assignment!;
-        return (
-          <div className="flex items-center gap-x-4 whitespace-nowrap">
-            <ActionLink onClick={() => navigate(`/admin/${classSlug}/assignments/${a.id}`)}>
-              View
-            </ActionLink>
-            <ActionLink onClick={() => editAssignment(a.id)}>Edit</ActionLink>
-          </div>
-        );
+        return <ActionLink onClick={() => editAssignment(record.assignment!.id)}>Edit</ActionLink>;
       },
     },
   ];
@@ -430,9 +403,33 @@ const RepositoriesTable = ({
         rowHoverable={false}
         size="middle"
         expandable={{
-          showExpandColumn: false,
-          expandedRowKeys: expandedKeys,
-          onExpandedRowsChange: keys => setExpandedKeys(keys as string[]),
+          expandedRowKeys,
+          // A chevron, not antd's plus/minus box: the same disclosure the
+          // module cards use. Leaf rows keep the spacer so names stay aligned.
+          expandIcon: ({ expanded, onExpand, record, expandable }) =>
+            expandable ? (
+              <button
+                type="button"
+                aria-expanded={expanded}
+                aria-label={`${expanded ? 'Collapse' : 'Expand'} ${record.name}`}
+                onClick={e => {
+                  e.stopPropagation();
+                  onExpand(record, e);
+                }}
+                className="float-left mr-2 inline-flex h-5 w-5 shrink-0 items-center justify-center rounded align-middle text-ink-3 transition-colors hover:bg-stone-100 hover:text-ink-1 dark:hover:bg-neutral-800"
+              >
+                {expanded ? <IconChevronDown size={16} /> : <IconChevronRight size={16} />}
+              </button>
+            ) : (
+              <span className="float-left mr-2 inline-block h-5 w-5 shrink-0" />
+            ),
+          onExpand: (expanded, record) =>
+            setCollapsed(prev => {
+              const next = new Set(prev);
+              if (expanded) next.delete(record.key);
+              else next.add(record.key);
+              return next;
+            }),
         }}
         scroll={{ x: 'max-content' }}
         pagination={{
@@ -458,6 +455,7 @@ const RepositoriesTable = ({
           repositories={repositories.map(r => ({
             id: r.id,
             title: r.title,
+            slug: r.slug,
             is_published: r.is_published,
           }))}
           quizzes={editor.quizzes}

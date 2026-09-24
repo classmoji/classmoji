@@ -62,15 +62,7 @@ const CHIP_STYLES: Record<ImportPhaseStatus, string> = {
 };
 
 const Spinner = () => (
-  <svg
-    className="h-4 w-4 shrink-0 animate-spin text-blue-600 dark:text-blue-400"
-    viewBox="0 0 24 24"
-    fill="none"
-    aria-hidden="true"
-  >
-    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
-  </svg>
+  <span className="cm-callout-spinner shrink-0 text-[var(--accent)]" aria-hidden="true" />
 );
 
 /** One phase, with its count when it has one. */
@@ -176,12 +168,8 @@ const ImportProgressBanner = ({ job: initialJob, sourceName }: ImportProgressBan
     if (age > COMPLETED_REOPEN_WINDOW_MS) return null;
     return (
       <div className="mb-3 flex justify-end">
-        <button
-          type="button"
-          onClick={() => setCollapsed(false)}
-          className="rounded-full border border-emerald-300 bg-emerald-50 px-3 py-1 text-xs text-emerald-800 hover:bg-emerald-100 dark:border-emerald-800 dark:bg-emerald-950 dark:text-emerald-300 dark:hover:bg-emerald-900"
-        >
-          ✓ Import complete — view summary
+        <button type="button" onClick={() => setCollapsed(false)} className="btn btn-sm">
+          Import complete, view summary
         </button>
       </div>
     );
@@ -205,14 +193,14 @@ const ImportProgressBanner = ({ job: initialJob, sourceName }: ImportProgressBan
     : 'Retry import';
   const retryError = retry.data && 'error' in retry.data ? retry.data.error : null;
 
-  const tone = failed
-    ? 'border-red-200 bg-red-50 dark:border-red-900 dark:bg-red-950/40'
-    : completed
-      ? 'border-emerald-200 bg-emerald-50 dark:border-emerald-900 dark:bg-emerald-950/40'
-      : 'border-blue-200 bg-blue-50 dark:border-blue-900 dark:bg-blue-950/40';
+  const tone = failed ? 'cm-banner-rose' : 'cm-banner-accent';
 
   return (
-    <div className={`mb-4 rounded-xl border p-4 ${tone}`} role="status" aria-live="polite">
+    <div
+      className={`cm-banner ${tone} mb-4 flex-col items-stretch p-4`}
+      role="status"
+      aria-live="polite"
+    >
       <div className="flex items-start justify-between gap-3">
         <div className="flex min-w-0 items-center gap-2">
           {isLive && <Spinner />}
@@ -236,15 +224,10 @@ const ImportProgressBanner = ({ job: initialJob, sourceName }: ImportProgressBan
 
       {!failed && !completed && (
         <div className="mt-3">
-          <div className="h-2 w-full overflow-hidden rounded-full bg-blue-100 dark:bg-blue-900/50">
-            <div
-              className="h-full rounded-full bg-blue-500 transition-all duration-500 dark:bg-blue-400"
-              style={{ width: `${percent}%` }}
-            />
+          <div className="cm-callout-track">
+            <div className="cm-callout-fill" style={{ width: `${percent}%` }} />
           </div>
-          <div className="mt-1 text-xs tabular-nums text-gray-500 dark:text-gray-400">
-            {percent}%
-          </div>
+          <div className="cm-callout-meta mt-1">{percent}%</div>
         </div>
       )}
 
