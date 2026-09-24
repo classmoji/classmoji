@@ -188,12 +188,19 @@ const AssignmentsTabsCard = ({ rows, balance }: AssignmentsTabsCardProps) => {
                         )}
                       </td>
                       <td className="px-4 py-3">
-                        {row.moduleType === 'INDIVIDUAL' && row.issueUrl ? (
+                        {/* The issue when one was opened — a team's issue lives in
+                            the team's own repo, so this holds for both — and the
+                            repository itself in push mode, where no issue exists. */}
+                        {row.issueUrl || row.repoUrl ? (
                           <a
-                            href={row.issueUrl}
+                            href={row.issueUrl ?? row.repoUrl!}
                             target="_blank"
                             rel="noreferrer"
-                            title="Open the GitHub issue for this assignment"
+                            title={
+                              row.issueUrl
+                                ? 'Open the GitHub issue for this assignment'
+                                : 'Open the repository you submit this in'
+                            }
                             className="inline-flex items-center gap-1.5 font-medium text-ink-0! hover:underline underline-offset-2"
                           >
                             <span>{row.assignmentTitle}</span>
