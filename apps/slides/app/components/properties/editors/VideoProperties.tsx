@@ -1,5 +1,7 @@
 import { useState, useCallback, useEffect } from 'react';
-import { Input, Switch, Button, message } from 'antd';
+import { Input, Switch, Button } from 'antd';
+
+import { useToast } from '~/hooks';
 import { CloudUploadOutlined, CheckCircleOutlined } from '@ant-design/icons';
 import PropertySection, { PropertyRow, PropertyLabel } from '../PropertySection';
 import { useElementSelection } from '../ElementSelectionContext';
@@ -16,6 +18,7 @@ import { useElementSelection } from '../ElementSelectionContext';
  */
 
 export default function VideoProperties({ element }: { element: HTMLVideoElement }) {
+  const toast = useToast();
   const { onContentChange, onSaveContent, isPro } = useElementSelection();
 
   // State for all properties
@@ -130,7 +133,7 @@ export default function VideoProperties({ element }: { element: HTMLVideoElement
     const slideId = pathParts[1]; // URL format: /:slideId
 
     if (!slideId) {
-      message.error('Could not determine slide ID');
+      toast.error('Could not determine slide ID');
       return;
     }
 
@@ -165,14 +168,14 @@ export default function VideoProperties({ element }: { element: HTMLVideoElement
         // Format file size for message
         const sizeMB = data.bytes ? (data.bytes / 1024 / 1024).toFixed(1) : null;
         const deletedMsg = data.deletedOriginal ? ' Saved.' : '';
-        message.success(
+        toast.success(
           `Video uploaded to Cloudinary!${sizeMB ? ` (${sizeMB} MB)` : ''}${deletedMsg}`
         );
       }
     } catch (err: unknown) {
       console.error('Cloudinary upload error:', err);
       const errorMessage = err instanceof Error ? err.message : String(err);
-      message.error(`Upload failed: ${errorMessage}`);
+      toast.error(`Upload failed: ${errorMessage}`);
     } finally {
       setUploading(false);
     }

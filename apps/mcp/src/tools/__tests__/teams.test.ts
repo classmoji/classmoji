@@ -275,6 +275,7 @@ describe('team_delete', () => {
     expect(mocks.deleteTeam).toHaveBeenCalledWith({
       classroomId: 'class-1',
       slugOrId: 'team-rocket',
+      deleteOnProvider: false,
     });
 
     const audit = auditRow();

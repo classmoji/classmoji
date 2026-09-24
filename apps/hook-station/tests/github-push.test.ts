@@ -23,17 +23,20 @@ import fastifyRawBody from 'fastify-raw-body';
 const GITHUB_SECRET = 'test-gh-secret';
 
 const contentAssetsSync = vi.fn().mockResolvedValue(undefined);
+const pushHandler = vi.fn().mockResolvedValue(undefined);
 const findFirst = vi.fn();
+const gitRepoFindUnique = vi.fn();
 
 vi.mock('@classmoji/tasks', () => ({
   default: {
     contentAssetsSyncTask: { trigger: contentAssetsSync },
+    repositoryPushHandlerTask: { trigger: pushHandler },
   },
 }));
 
 vi.mock('@classmoji/database', () => ({
-  getPrisma: () => ({ classroom: { findFirst } }),
-  default: () => ({ classroom: { findFirst } }),
+  getPrisma: () => ({ classroom: { findFirst }, gitRepo: { findUnique: gitRepoFindUnique } }),
+  default: () => ({ classroom: { findFirst }, gitRepo: { findUnique: gitRepoFindUnique } }),
 }));
 
 const sign = (body: string): string => {
@@ -63,8 +66,11 @@ interface PushOverrides {
   created?: boolean;
   deleted?: boolean;
   repo?: string;
+  /** GitHub's numeric repository id; absent on the older-shaped payloads below. */
+  repoId?: number;
   owner?: string;
   defaultBranch?: string;
+  senderType?: string;
   commits?: { added?: string[]; modified?: string[]; removed?: string[] }[];
 }
 
@@ -78,6 +84,8 @@ const pushBody = ({
   after = 'b'.repeat(40),
   created = false,
   deleted = false,
+  repoId,
+  senderType = 'User',
   commits = [{ added: ['images/one.png'], modified: [], removed: [] }],
 }: PushOverrides = {}): string =>
   JSON.stringify({
@@ -89,10 +97,12 @@ const pushBody = ({
     forced,
     commits,
     repository: {
+      ...(repoId !== undefined ? { id: repoId } : {}),
       name: repo,
       default_branch: defaultBranch,
       owner: { login: owner, name: owner },
     },
+    sender: { login: 'someone', type: senderType },
   });
 
 const post = async (app: FastifyInstance, body: string) =>
@@ -111,10 +121,82 @@ let app: FastifyInstance;
 
 beforeEach(async () => {
   contentAssetsSync.mockClear();
+  pushHandler.mockClear();
   findFirst.mockReset();
-  // The default: this repo IS a classroom's content repo.
+  gitRepoFindUnique.mockReset();
+  // The default: this repo IS a classroom's content repo, and no student repo.
   findFirst.mockResolvedValue({ id: 'classroom-1' });
+  gitRepoFindUnique.mockResolvedValue(null);
   app = await buildApp();
+});
+
+/**
+ * A push to a STUDENT repo is a submission (REPO-mode assignments). The
+ * lookup is by GitHub's repository id, checked before the content-repo path
+ * because student pushes are the common case.
+ */
+describe('a push to a student repo is a submission', () => {
+  const STUDENT = { repo: 'cs101-lab-1-alice', repoId: 4242 };
+
+  it('hands a default-branch push to the push handler with the delivery time', async () => {
+    gitRepoFindUnique.mockResolvedValue({ id: 'gitrepo-1' });
+    const before = Date.now();
+
+    const response = await post(app, pushBody(STUDENT));
+
+    expect(response.statusCode).toBe(200);
+    expect(gitRepoFindUnique).toHaveBeenCalledWith({
+      where: { provider_provider_id: { provider: 'GITHUB', provider_id: '4242' } },
+      select: { id: true },
+    });
+    expect(pushHandler).toHaveBeenCalledTimes(1);
+    const [payload, options] = pushHandler.mock.calls[0] as [
+      { gitRepoId: string; pushedAt: string },
+      { concurrencyKey: string },
+    ];
+    expect(payload.gitRepoId).toBe('gitrepo-1');
+    // Delivery time, never the commit's own timestamp.
+    expect(new Date(payload.pushedAt).getTime()).toBeGreaterThanOrEqual(before);
+    expect(options.concurrencyKey).toBe('gitrepo-1');
+    // A student repo is never also a content repo; the sync is not consulted.
+    expect(findFirst).not.toHaveBeenCalled();
+    expect(contentAssetsSync).not.toHaveBeenCalled();
+  });
+
+  it('ignores a push to a branch other than the default', async () => {
+    gitRepoFindUnique.mockResolvedValue({ id: 'gitrepo-1' });
+
+    await post(app, pushBody({ ...STUDENT, ref: 'refs/heads/feature' }));
+
+    expect(pushHandler).not.toHaveBeenCalled();
+    expect(gitRepoFindUnique).not.toHaveBeenCalled();
+  });
+
+  it('ignores a branch deletion', async () => {
+    gitRepoFindUnique.mockResolvedValue({ id: 'gitrepo-1' });
+
+    await post(app, pushBody({ ...STUDENT, deleted: true, after: '0'.repeat(40), commits: [] }));
+
+    expect(pushHandler).not.toHaveBeenCalled();
+  });
+
+  it("ignores a bot's push (Classmoji's own workflow commits)", async () => {
+    gitRepoFindUnique.mockResolvedValue({ id: 'gitrepo-1' });
+
+    await post(app, pushBody({ ...STUDENT, senderType: 'Bot' }));
+
+    expect(pushHandler).not.toHaveBeenCalled();
+    expect(gitRepoFindUnique).not.toHaveBeenCalled();
+  });
+
+  it('falls through to the content-repo path when no student repo matches', async () => {
+    gitRepoFindUnique.mockResolvedValue(null);
+
+    await post(app, pushBody({ repoId: 7, repo: 'content-cs101' }));
+
+    expect(pushHandler).not.toHaveBeenCalled();
+    expect(contentAssetsSync).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe('which pushes are ours', () => {

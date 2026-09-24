@@ -131,7 +131,7 @@ describe('addLink', () => {
     expect(saveManifest).toHaveBeenCalledExactlyOnceWith(CLASSROOM);
   });
 
-  it('reaches an assignment target through its repository classroom chain', async () => {
+  it('reaches an assignment target through its module classroom chain', async () => {
     await addLink({
       classroomId: CLASSROOM,
       resourceType: 'slide',
@@ -140,9 +140,9 @@ describe('addLink', () => {
       targetId: 'assign-1',
     });
 
-    // Assignment has no classroom_id of its own.
+    // Assignment has no classroom_id of its own; its module places it.
     expect(assignmentFindFirst).toHaveBeenCalledWith({
-      where: { id: 'assign-1', repository: { classroom_id: CLASSROOM } },
+      where: { id: 'assign-1', module: { classroom_id: CLASSROOM } },
       select: { id: true },
     });
     // The unused target column is an explicit null in the duplicate lookup too.
@@ -373,6 +373,7 @@ describe('listLinks', () => {
       id: 'assign-1',
       title: 'Part A',
       slug: 'part-a',
+      module: { classroom_id: CLASSROOM },
       repository: { id: 'repo-1', title: 'Lab 1', classroom_id: CLASSROOM },
     },
   };
@@ -496,6 +497,7 @@ describe('listLinks', () => {
           id: 'assign-9',
           title: 'Other',
           slug: 'other',
+          module: { classroom_id: 'classroom-2' },
           repository: { id: 'repo-9', title: 'Other', classroom_id: 'classroom-2' },
         },
       },

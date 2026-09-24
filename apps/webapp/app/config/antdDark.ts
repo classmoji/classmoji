@@ -1,4 +1,4 @@
-import { BRAND, BRAND_LIGHT, BRAND_DARK, BRAND_TEXT, PRIMARY } from './theme.ts';
+import { BRAND, BRAND_LIGHT, BRAND_TEXT, PRIMARY } from './theme.ts';
 
 // Keep in sync with --font-sans (see config/antd.ts). Ant components otherwise
 // fall back to the default system font stack instead of Mona Sans.
@@ -20,9 +20,10 @@ const darkTheme = {
     colorTextSecondary: '#a3a3a3',
     colorTextTertiary: '#737373',
     colorTextQuaternary: '#525252',
-    colorLink: BRAND,
-    colorLinkHover: BRAND_LIGHT,
-    colorLinkActive: BRAND_DARK,
+    // See config/antd.ts: links are ink, green is reserved for primary actions.
+    colorLink: '#d9dbe3', // --ink-1 (dark)
+    colorLinkHover: '#f1f2f6', // --ink-0 (dark)
+    colorLinkActive: '#f1f2f6',
     colorBgSolidActive: BRAND,
     colorSuccess: PRIMARY,
     colorWarning: '#f59e0b',
@@ -32,6 +33,10 @@ const darkTheme = {
   components: {
     Button: {
       algorithm: true,
+      // See config/antd.ts: Button re-derives its own link colour.
+      colorLink: '#d9dbe3',
+      colorLinkHover: '#f1f2f6',
+      colorLinkActive: '#f1f2f6',
       colorBgContainer: BRAND,
       colorText: BRAND_TEXT,
       colorBorder: BRAND,
@@ -371,9 +376,10 @@ const darkTheme = {
       colorTextDescription: '#a3a3a3',
       colorTextSecondary: '#a3a3a3',
       colorTextDisabled: '#737373',
-      colorLink: BRAND,
-      colorLinkHover: BRAND_LIGHT,
-      colorLinkActive: BRAND_DARK,
+      // Typography.Link follows the global ink link colour too.
+      colorLink: '#d9dbe3',
+      colorLinkHover: '#f1f2f6',
+      colorLinkActive: '#f1f2f6',
     },
     Breadcrumb: {
       colorText: '#a3a3a3',

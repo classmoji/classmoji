@@ -119,6 +119,8 @@ export interface SubmissionLike {
   assignment?: {
     id: string;
     title: string;
+    /** ISSUE: closing the issue submits. REPO: a push submits (no issue exists). */
+    submission_mode?: 'ISSUE' | 'REPO' | string;
     student_deadline?: Date | string | null;
     grades_released?: boolean;
     is_published?: boolean;
@@ -137,7 +139,17 @@ export interface SubmissionLike {
   graders?: GraderRowLike[];
 }
 
-/** Build the GitHub issue URL the webapp derives (org login + repo name + issue #). */
+/** The student's repo on GitHub — the submission itself in REPO mode. */
+export function repoUrl(
+  orgLogin: string | null | undefined,
+  submission: SubmissionLike
+): string | null {
+  const repoName = submission.git_repo?.name;
+  if (!orgLogin || !repoName) return null;
+  return `https://github.com/${orgLogin}/${repoName}`;
+}
+
+/** Build the GitHub issue URL the webapp derives (org login + repo name + issue #). Null in REPO mode. */
 export function issueUrl(
   orgLogin: string | null | undefined,
   submission: SubmissionLike

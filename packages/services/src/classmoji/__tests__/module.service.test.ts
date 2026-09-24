@@ -147,11 +147,18 @@ describe('addItem', () => {
     itemFindFirst.mockResolvedValue(null);
     itemCreate.mockResolvedValue({ id: 'mi1' });
 
-    await addItem('mod1', 'REPOSITORY', 'repo1');
+    await addItem('mod1', 'QUIZ', 'quiz1');
 
     expect(itemCreate).toHaveBeenCalledWith({
-      data: { module_id: 'mod1', item_type: 'REPOSITORY', position: 0, repository_id: 'repo1' },
+      data: { module_id: 'mod1', item_type: 'QUIZ', position: 0, quiz_id: 'quiz1' },
     });
+  });
+
+  it('refuses REPOSITORY: repositories are attached to assignments, not modules', async () => {
+    await expect(addItem('mod1', 'REPOSITORY' as never, 'repo1')).rejects.toThrow(
+      'Repositories are attached to assignments'
+    );
+    expect(itemCreate).not.toHaveBeenCalled();
   });
 
   it('appends after the last item and maps type to the right column', async () => {
@@ -173,7 +180,9 @@ describe('reorderItems', () => {
     await reorderItems('mod1', ['b', 'a', 'c']);
 
     expect(itemFindMany).toHaveBeenCalledWith({
-      where: { module_id: 'mod1' },
+      // Legacy REPOSITORY items are hidden from the content list and keep
+      // their positions; only content items take part in the exact-set check.
+      where: { module_id: 'mod1', item_type: { not: 'REPOSITORY' } },
       select: { id: true },
     });
     expect(itemUpdate).toHaveBeenNthCalledWith(1, {

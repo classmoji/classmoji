@@ -270,7 +270,7 @@ jobs:
 
       - name: Deploy to Trigger.dev (preview/dev)
         working-directory: packages/tasks
-        run: npx trigger.dev@4.4.0 deploy --push -e preview --branch dev
+        run: npx trigger.dev@4.6.3 deploy --push -e preview --branch dev
         env:
           TRIGGER_ACCESS_TOKEN: ${{ secrets.TRIGGER_ACCESS_TOKEN }}
           INFISICAL_CLIENT_ID: ${{ secrets.INFISICAL_CLIENT_ID }}

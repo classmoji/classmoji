@@ -257,6 +257,7 @@ interface TeamDeleteArgs {
   classroom: string;
   team: string;
   confirm: true;
+  delete_on_github?: boolean;
 }
 
 export const teamDeleteTool: ToolDefinition<TeamDeleteArgs> = {
@@ -266,9 +267,9 @@ export const teamDeleteTool: ToolDefinition<TeamDeleteArgs> = {
   annotations: { destructive: true, openWorld: true },
   title: 'Delete a team',
   description:
-    'Deletes a team: the team in the classroom GitHub organization and its Classmoji record. ' +
-    'Owner only, destructive, requires confirm:true. The GitHub REPOSITORIES themselves survive — ' +
-    "they stay in the organization. Classmoji's RECORDS of them do not: every linked repo record " +
+    "Deletes a team's Classmoji record. Owner only, destructive, requires confirm:true. GitHub is " +
+    'left alone unless delete_on_github is true, in which case the GitHub team AND its ' +
+    "repositories are deleted too. Classmoji's RECORDS of the repos always go: every linked repo record " +
     'is permanently deleted along with the team, and that takes its submissions, grades, grader ' +
     'assignments, regrade requests, token transactions and analytics with it. That history cannot ' +
     'be restored from this surface or any other, so when the team has graded work use team_rename ' +
@@ -284,8 +285,14 @@ export const teamDeleteTool: ToolDefinition<TeamDeleteArgs> = {
     confirm: z
       .literal(true)
       .describe(
-        'Must be true — acknowledges the GitHub team and the linked repo records (with their ' +
-          'grading history) are permanently deleted'
+        'Must be true — acknowledges the linked repo records (with their grading history) are ' +
+          'permanently deleted'
+      ),
+    delete_on_github: z
+      .boolean()
+      .optional()
+      .describe(
+        'Also delete the GitHub team and its repositories (default false: GitHub is untouched)'
       ),
   },
   handler: async (args, ctx) => {
@@ -296,6 +303,7 @@ export const teamDeleteTool: ToolDefinition<TeamDeleteArgs> = {
       result = await ClassmojiService.teamAdmin.deleteTeam({
         classroomId: classroom.classroomId,
         slugOrId: args.team,
+        deleteOnProvider: args.delete_on_github === true,
       });
     } catch (error) {
       throw mapTeamError(error);
@@ -321,7 +329,8 @@ export const teamDeleteTool: ToolDefinition<TeamDeleteArgs> = {
     const repoNote =
       result.reposDeleted > 0
         ? ` ${result.reposDeleted} linked repository record(s) were deleted with it, along with ` +
-          'their submissions, grades and analytics; the GitHub repositories themselves remain.'
+          'their submissions, grades and analytics' +
+          (args.delete_on_github ? ', and on GitHub.' : '; the GitHub repositories themselves remain.')
         : '';
 
     return ok({
@@ -335,7 +344,9 @@ export const teamDeleteTool: ToolDefinition<TeamDeleteArgs> = {
       message:
         (result.removedFromProvider
           ? `Team '${result.slug}' was deleted on GitHub and removed from Classmoji.`
-          : `Team '${result.slug}' was already gone on GitHub; the Classmoji record was removed.`) +
+          : args.delete_on_github
+            ? `Team '${result.slug}' was already gone on GitHub; the Classmoji record was removed.`
+            : `Team '${result.slug}' was removed from Classmoji; the GitHub team and repositories were left in place.`) +
         repoNote,
     });
   },

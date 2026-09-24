@@ -113,14 +113,14 @@ describe('setPublished', () => {
 
 describe('update', () => {
   it.each(unusableIds)('rejects %s as an id before issuing any query', async (_label, id) => {
-    await expect(update(id as string, { weight: 50 }, 'classroom-1')).rejects.toThrow(
+    await expect(update(id as string, { description: 'updated' }, 'classroom-1')).rejects.toThrow(
       'Invalid repository id'
     );
     for (const fn of allPrismaCalls()) expect(fn).not.toHaveBeenCalled();
   });
 
   it.each(unusableIds)('rejects %s as a classroom id before any query', async (_label, cid) => {
-    await expect(update('repo-1', { weight: 50 }, cid as string)).rejects.toThrow(
+    await expect(update('repo-1', { description: 'updated' }, cid as string)).rejects.toThrow(
       'Invalid classroom id'
     );
     for (const fn of allPrismaCalls()) expect(fn).not.toHaveBeenCalled();
@@ -128,15 +128,20 @@ describe('update', () => {
 
   it('scopes the write to the authorized classroom and returns the row', async () => {
     updateMany.mockResolvedValue({ count: 1 });
-    findFirst.mockResolvedValue({ id: 'repo-1', weight: 50, assignments: [], tag: null });
-
-    await expect(update('repo-1', { weight: 50 }, 'classroom-1')).resolves.toMatchObject({
+    findFirst.mockResolvedValue({
       id: 'repo-1',
-      weight: 50,
+      description: 'updated',
+      assignments: [],
+      tag: null,
+    });
+
+    await expect(update('repo-1', { description: 'updated' }, 'classroom-1')).resolves.toMatchObject({
+      id: 'repo-1',
+      description: 'updated',
     });
     expect(updateMany).toHaveBeenCalledExactlyOnceWith({
       where: { id: 'repo-1', classroom_id: 'classroom-1' },
-      data: { weight: 50 },
+      data: { description: 'updated' },
     });
     expect(findFirst).toHaveBeenCalledWith(
       expect.objectContaining({ where: { id: 'repo-1', classroom_id: 'classroom-1' } })
@@ -146,7 +151,7 @@ describe('update', () => {
   it('throws when the repository lives in another classroom', async () => {
     updateMany.mockResolvedValue({ count: 0 });
 
-    await expect(update('repo-1', { weight: 50 }, 'other-classroom')).rejects.toThrow(
+    await expect(update('repo-1', { description: 'updated' }, 'other-classroom')).rejects.toThrow(
       'Repository not found in classroom'
     );
     expect(findFirst).not.toHaveBeenCalled();

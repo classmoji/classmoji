@@ -115,21 +115,30 @@ export const resourceDestination = (
     return { kind: 'external', href: `${context.slidesUrl ?? ''}/${resource.id}` };
   }
 
-  // A student with a repository of their own goes straight to their issue for
-  // this assignment. Everyone else — staff, and a student not yet assigned a
-  // repo — goes to the repositories page, anchored at the repository.
+  // A student with a repository of their own goes straight to it: the issue
+  // for this assignment in ISSUE mode, the repo itself in REPO mode (a push
+  // is the submission, there is no issue). Staff go to the assignment page,
+  // where the roster and grading live; a student without a repo yet goes to
+  // their Assignments page. There is no student repositories page any more.
   const repoAssignment = context.repoAssignmentsByAssignmentId?.[resource.id];
   const repoName = repoAssignment?.git_repo?.name;
-  if (repoAssignment?.provider_issue_number && context.gitOrgLogin && repoName) {
+  if (context.gitOrgLogin && repoName) {
+    const repoUrl = `https://github.com/${context.gitOrgLogin}/${repoName}`;
     return {
       kind: 'external',
-      href: `https://github.com/${context.gitOrgLogin}/${repoName}/issues/${repoAssignment.provider_issue_number}`,
+      href: repoAssignment?.provider_issue_number
+        ? `${repoUrl}/issues/${repoAssignment.provider_issue_number}`
+        : repoUrl,
     };
   }
 
+  const rolePrefix = context.rolePrefix ?? 'student';
   return {
     kind: 'internal',
-    to: `/${context.rolePrefix ?? 'student'}/${classSlug}/repos#${resource.repoSlug ?? ''}`,
+    to:
+      rolePrefix === 'student'
+        ? `/student/${classSlug}/assignments`
+        : `/${rolePrefix}/${classSlug}/assignments/${resource.id}`,
   };
 };
 

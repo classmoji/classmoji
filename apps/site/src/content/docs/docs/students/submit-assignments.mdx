@@ -8,29 +8,39 @@ import assignmentsImg from './img-student-assignments.png';
 
 ### Finding your work
 
-Each assignment is a Github issue inside a repository that Classmoji set up for you. Open **Assignments** in your classroom to see them, split into tabs:
+Open **Modules** in your classroom. Each module lists its reading, slides, and assignments in the order your instructor set. **Assignments** shows the same work as a flat list, split into tabs:
 
 - **Current**: assignments that are still open
 - **Completed**: assignments you've submitted
 - **All**: everything
 
-For an individual assignment, click **View Github issue** to jump straight to the issue in your repo.
+Each row links to your repository on Github and shows the deadline, your status, and your grade once it's released.
 
 <Screenshot src={assignmentsImg} alt="A student's assignments list showing submitted status, grade, and a link to the Github issue" frame url="app.classmoji.io/student/cs-101/assignments" size="lg" />
 
 ### Doing the work
 
-Work directly in your repository. Clone it, make your changes, commit, and push, the same Github workflow you'd use anywhere. The issue describes what to do and is where your submission gets marked.
+Work directly in your repository. Clone it, make your changes, commit, and push, the same Github workflow you'd use anywhere. If your instructor set up autograding, every push runs the tests and the results show on the assignment in **Modules**.
 
-### Submitting
+### Submitting by pushing
 
-When you're done, **close the Github issue**. That's the submit button. Closing the issue marks the assignment as submitted in Classmoji, and your status flips from **Not submitted** to **Submitted**.
+For most assignments, **pushing is submitting**. There's nothing else to click.
 
-If you need to keep working, reopen the issue, push more changes, and close it again when you're ready.
+- Your last push before the deadline counts as your submission.
+- If you push after the deadline, the submission is late. You can buy extra hours with [tokens](/docs/students/use-tokens); a push inside the extension isn't late.
+- Once your work has been graded, your submission time is frozen. Pushing again won't change it.
+
+Your status on the **Assignments** page flips from **Not submitted** to **Submitted** as soon as Classmoji sees the push. If it doesn't, you haven't pushed to the repository Classmoji created for you; check the remote.
+
+### Submitting by closing an issue
+
+Some assignments instead open a **Github issue** in your repo describing what to do. For those, **closing the issue** is the submit button. Closing marks the assignment as submitted; if you need to keep working, reopen it, push more changes, and close it again.
+
+You can tell which kind an assignment is: for individual work, issue-mode rows link to the issue from the assignment title.
 
 ### Group assignments
 
-For group work, your team shares one repository. Anyone on the team can push and close the issue to submit on behalf of the team.
+For group work, your team shares one repository. Anyone on the team can push, and in issue mode anyone can close the issue, to submit on behalf of the team.
 
 ### What's next
 

@@ -4,7 +4,6 @@ import { motion, AnimatePresence, LayoutGroup } from 'framer-motion';
 import { Button, IconGithub, IconPlus } from '@classmoji/ui-components';
 import { IconRoute } from '@tabler/icons-react';
 import { ClassroomCard } from './ClassroomCard';
-import { ClassroomRow, ClassroomRowHeader } from './ClassroomRow';
 import type { LandingClass } from './types';
 import type { BellNotification, NotificationRole } from '~/components/features/notifications';
 
@@ -21,42 +20,6 @@ interface Props {
   membershipRoles?: Record<string, NotificationRole[]>;
 }
 
-function ViewGridIcon() {
-  return (
-    <svg
-      width="13"
-      height="13"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.8"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    >
-      <rect x="4" y="4" width="7" height="7" rx="1" />
-      <rect x="13" y="4" width="7" height="7" rx="1" />
-      <rect x="4" y="13" width="7" height="7" rx="1" />
-      <rect x="13" y="13" width="7" height="7" rx="1" />
-    </svg>
-  );
-}
-function ViewListIcon() {
-  return (
-    <svg
-      width="13"
-      height="13"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.8"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    >
-      <path d="M4 6h16M4 12h16M4 18h16" />
-    </svg>
-  );
-}
-
 export function ClassroomsLandingScreen({
   user,
   classes,
@@ -67,7 +30,6 @@ export function ClassroomsLandingScreen({
   unreadCount,
   membershipRoles,
 }: Props) {
-  const [view, setView] = useState<'grid' | 'list'>('grid');
   const [tourSpin, setTourSpin] = useState(false);
 
   const [archivedExpanded, setArchivedExpanded] = useState(false);
@@ -238,35 +200,33 @@ export function ClassroomsLandingScreen({
     </div>
   );
 
-  const renderList = (items: LandingClass[]) => (
-    <div className="overflow-x-auto -mx-4 px-4 sm:mx-0 sm:px-0">
-      <div className="bg-panel ring-1 ring-line rounded-2xl overflow-hidden sm:min-w-[700px] [&>*:last-child]:border-b-0">
-        <ClassroomRowHeader />
-        {items.map(c => (
-          <ClassroomRow key={c.id} c={c} onOpen={() => onOpenClass(c)} />
-        ))}
-      </div>
-    </div>
-  );
-
   const sectionHeading = (label: string, count: number) => (
     <div className="text-sm font-semibold text-ink-3 mb-2.5 mt-1">
       {label} <span className="text-xs text-ink-4 font-normal">{count}</span>
     </div>
   );
 
+  // First name only, so the greeting stays one short line; the login is the
+  // fallback for an account with no display name.
+  const firstName = (user?.name?.trim().split(/\s+/)[0] || user?.login || '').trim();
+
   return (
     <div>
       <div className="flex flex-col sm:flex-row sm:items-end gap-4 pb-5 mb-6">
         <div className="flex-1">
-          <h1 className="text-base font-semibold text-ink-2 m-0">
-            Your classrooms
-            <span className="ml-2 text-sm font-normal text-ink-4">
-              {counts.all} active
-              <span className="text-gray-300 dark:text-gray-600 mx-1">·</span>
-              {counts.archived} archived
+          <h1 className="text-2xl font-bold text-ink-0 m-0 tracking-tight">
+            {firstName ? `Hi ${firstName}` : 'Hi there'}{' '}
+            <span role="img" aria-label="wave">
+              👋
             </span>
           </h1>
+          <div className="mt-1.5 text-base text-ink-4">
+            Your classrooms
+            <span className="text-gray-300 dark:text-gray-600 mx-1.5">·</span>
+            {counts.all} active
+            <span className="text-gray-300 dark:text-gray-600 mx-1.5">·</span>
+            {counts.archived} archived
+          </div>
         </div>
         <div className="flex flex-wrap gap-2">
           {tourAvailable && onTakeTour && (
@@ -300,41 +260,6 @@ export function ClassroomsLandingScreen({
         </div>
       </div>
 
-      <div className="flex items-center gap-2 mb-4">
-        <div className="flex-1" />
-
-        <div className="flex rounded-lg ring-1 ring-line overflow-hidden">
-          <button
-            type="button"
-            onClick={() => setView('grid')}
-            title="Grid"
-            aria-label="Grid view"
-            aria-pressed={view === 'grid'}
-            className={`px-2.5 py-1.5 text-xs border-none cursor-pointer inline-flex items-center transition-colors ${
-              view === 'grid'
-                ? 'bg-nav-hover text-ink-0'
-                : 'bg-panel text-ink-4 hover:text-gray-600 dark:hover:text-gray-300'
-            }`}
-          >
-            <ViewGridIcon />
-          </button>
-          <button
-            type="button"
-            onClick={() => setView('list')}
-            title="List"
-            aria-label="List view"
-            aria-pressed={view === 'list'}
-            className={`px-2.5 py-1.5 text-xs border-none cursor-pointer inline-flex items-center transition-colors ${
-              view === 'list'
-                ? 'bg-nav-hover text-ink-0'
-                : 'bg-panel text-ink-4 hover:text-gray-600 dark:hover:text-gray-300'
-            }`}
-          >
-            <ViewListIcon />
-          </button>
-        </div>
-      </div>
-
       {pinned.length === 0 && active.length === 0 && archived.length === 0 ? (
         <div className="rounded-2xl border-2 border-dashed border-line p-10 text-center text-ink-4">
           No classrooms yet.
@@ -344,14 +269,14 @@ export function ClassroomsLandingScreen({
           {pinnedDisplay.length > 0 && (
             <section className="mb-6">
               {sectionHeading('Pinned', pinnedDisplay.length)}
-              {view === 'grid' ? renderGrid(pinnedDisplay, true) : renderList(pinnedDisplay)}
+              {renderGrid(pinnedDisplay, true)}
             </section>
           )}
 
           {active.length > 0 && (
             <section className="mb-6">
               {sectionHeading('Active', active.length)}
-              {view === 'grid' ? renderGrid(active) : renderList(active)}
+              {renderGrid(active)}
             </section>
           )}
 
@@ -367,11 +292,7 @@ export function ClassroomsLandingScreen({
                 <span>Archived</span>
                 <span className="text-xs text-ink-4 font-normal">{archived.length}</span>
               </button>
-              {archivedExpanded && (
-                <div className="mt-2.5">
-                  {view === 'grid' ? renderGrid(archived) : renderList(archived)}
-                </div>
-              )}
+              {archivedExpanded && <div className="mt-2.5">{renderGrid(archived)}</div>}
             </section>
           )}
         </LayoutGroup>

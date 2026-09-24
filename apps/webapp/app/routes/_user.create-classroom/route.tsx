@@ -209,8 +209,6 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
             title: true,
             template: true,
             type: true,
-            weight: true,
-            is_extra_credit: true,
             _count: {
               select: {
                 assignments: true,

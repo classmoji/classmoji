@@ -6,6 +6,7 @@
  */
 import getPrisma from '@classmoji/database';
 import type { GitProvider, IssueStatus, Prisma } from '@prisma/client';
+import { getGitProvider } from '../git/index.ts';
 
 interface GitRepoAssignmentCreateData extends Omit<
   Prisma.GitRepoAssignmentUncheckedCreateInput,
@@ -116,6 +117,10 @@ export const findByClassroomId = async (classroomId: string) => {
     },
     include: {
       assignment: true,
+      // Commit count for the repository column, as of the last refresh.
+      analytics_snapshot: {
+        select: { total_commits: true, last_commit_at: true, fetched_at: true },
+      },
       grades: {
         include: {
           token_transaction: true,
@@ -184,6 +189,10 @@ export const findForUser = async (query: Prisma.GitRepoAssignmentWhereInput) => 
     where: query,
     include: {
       token_transactions: true,
+      // Commit count for the student's repository link.
+      analytics_snapshot: {
+        select: { total_commits: true, last_commit_at: true, fetched_at: true },
+      },
       git_repo: {
         include: {
           student: true,
@@ -224,11 +233,36 @@ export const findForUser = async (query: Prisma.GitRepoAssignmentWhereInput) => 
 export const create = async (data: GitRepoAssignmentCreateData) => {
   const provider = data.provider as GitProvider;
 
+  // A submission row joins a student's repo to an assignment, and both belong
+  // to a classroom. Nothing in the schema stops those classrooms differing, and
+  // when they do the row leaks one classroom's grades into another's views —
+  // the student dashboard reads submissions by the REPO's classroom but renders
+  // the ASSIGNMENT's title and grades. Refuse rather than write it.
+  const [repo, assignment] = await Promise.all([
+    getPrisma().gitRepo.findUnique({
+      where: { id: data.git_repo_id },
+      select: { classroom_id: true },
+    }),
+    getPrisma().assignment.findUnique({
+      where: { id: data.assignment_id },
+      select: { module: { select: { classroom_id: true } } },
+    }),
+  ]);
+  if (repo && assignment && repo.classroom_id !== assignment.module.classroom_id) {
+    throw new Error(
+      `Refusing to link assignment ${data.assignment_id} to a repo in another classroom ` +
+        `(${assignment.module.classroom_id} vs ${repo.classroom_id})`
+    );
+  }
+
+  // One row per (student repo, assignment) in either submission mode. A retry
+  // that adopted an existing GitHub issue may fill in the issue fields; the
+  // row's id is never rewritten.
   return getPrisma().gitRepoAssignment.upsert({
     where: {
-      provider_provider_id: {
-        provider,
-        provider_id: data.provider_id,
+      git_repo_id_assignment_id: {
+        git_repo_id: data.git_repo_id,
+        assignment_id: data.assignment_id,
       },
     },
     create: {
@@ -236,16 +270,143 @@ export const create = async (data: GitRepoAssignmentCreateData) => {
       provider,
     },
     update: {
-      assignment_id: data.assignment_id,
-      git_repo_id: data.git_repo_id,
-      provider_issue_number: data.provider_issue_number,
-      provider: data.provider as GitProvider,
+      provider,
+      ...(data.provider_id != null ? { provider_id: data.provider_id } : {}),
+      ...(data.provider_issue_number != null
+        ? { provider_issue_number: data.provider_issue_number }
+        : {}),
     },
     include: {
       assignment: true,
       git_repo: true,
     },
   });
+};
+
+/**
+ * A push to a student repo is the submission for every published REPO-mode
+ * assignment that submits through it. The latest push BEFORE the deadline is
+ * the submission and the deadline freezes it, the way GitHub Classroom
+ * treated repos; extension hours the student bought with tokens push their
+ * deadline out by that many hours. A push AFTER that cutoff only counts when
+ * the row has no submission yet: it becomes a late submission (the late
+ * penalty applies, or the instructor waives it) rather than leaving the
+ * student at "Not submitted". An on-time submission is never replaced by a
+ * late push, a row with grades is frozen too, and a late-delivered older
+ * webhook never moves the time backwards. Returns the rows that changed.
+ */
+export const recordPush = async (gitRepoId: string, pushedAt: Date) => {
+  const prisma = getPrisma();
+  const candidates = await prisma.gitRepoAssignment.findMany({
+    where: {
+      git_repo_id: gitRepoId,
+      assignment: { type: 'REPO', submission_mode: 'REPO', is_published: true },
+      OR: [
+        // Never submitted: the first push is the submission, graded or not.
+        // A grade given before any push must not leave the row stuck at
+        // "Not submitted" forever.
+        { closed_at: null },
+        // Already submitted: a later push may move the time only while the
+        // row is ungraded; once graded, the submission is frozen.
+        { closed_at: { lt: pushedAt }, grades: { none: {} } },
+      ],
+    },
+    select: {
+      id: true,
+      closed_at: true,
+      assignment: { select: { student_deadline: true } },
+      token_transactions: { where: { type: 'PURCHASE' }, select: { hours_purchased: true } },
+    },
+  });
+  const open = candidates.filter(c => {
+    const deadline = c.assignment.student_deadline;
+    if (!deadline) return true;
+    const extensionHours = c.token_transactions.reduce(
+      (sum, t) => sum + (t.hours_purchased ?? 0),
+      0
+    );
+    const cutoff = new Date(deadline).getTime() + extensionHours * 3_600_000;
+    if (pushedAt.getTime() <= cutoff) return true;
+    // Past the cutoff: a first push is a late submission; an existing one stays.
+    return c.closed_at === null;
+  });
+  if (open.length === 0) return [];
+  await prisma.gitRepoAssignment.updateMany({
+    where: { id: { in: open.map(c => c.id) } },
+    data: { status: 'CLOSED', closed_at: pushedAt },
+  });
+  return open.map(c => ({ id: c.id }));
+};
+
+/**
+ * Every submission row on one student repo, by id. A push refreshes commit
+ * stats for all of them, whether or not it counted as a submission.
+ */
+export const findIdsByGitRepoId = async (gitRepoId: string) => {
+  const rows = await getPrisma().gitRepoAssignment.findMany({
+    where: { git_repo_id: gitRepoId },
+    select: { id: true },
+  });
+  return rows.map(r => r.id);
+};
+
+/**
+ * The identity the provisioning task commits as when it copies the template
+ * into a student repo (see packages/tasks createRepository). Its commits are
+ * never a student's push.
+ */
+export const CLASSMOJI_BOT_EMAIL = 'hello@classmoji.com';
+
+/**
+ * A push-mode submission row created for a repo that already holds work: the
+ * student's latest push before the deadline counts as their submission,
+ * exactly as one arriving through the webhook would. Reads the repo's recent
+ * commits and skips what is not the student's: bot commits (autograding
+ * workflow pushes), the Classmoji Bot's own template commit, and anything
+ * dated before the repo existed (the template's history, pushed as-is). A
+ * student who pushes seconds after provisioning still counts; an earlier
+ * two-minute grace window used to swallow that push. Only fills an empty
+ * `closed_at`; a push after the deadline is recorded as a late submission,
+ * as the webhook path does. Returns the time recorded, or null.
+ */
+export const recordExistingPush = async (gitRepoAssignmentId: string) => {
+  const prisma = getPrisma();
+  const row = await prisma.gitRepoAssignment.findUnique({
+    where: { id: gitRepoAssignmentId },
+    select: {
+      id: true,
+      closed_at: true,
+      assignment: { select: { submission_mode: true, student_deadline: true } },
+      git_repo: {
+        select: {
+          name: true,
+          created_at: true,
+          classroom: { select: { git_organization: true } },
+        },
+      },
+    },
+  });
+  if (!row || row.closed_at || row.assignment.submission_mode !== 'REPO') return null;
+  const gitOrg = row.git_repo.classroom.git_organization;
+  if (!gitOrg?.login) return null;
+
+  const commits = await getGitProvider(gitOrg).listCommits(gitOrg.login, row.git_repo.name, {
+    maxCommits: 10,
+  });
+  const createdAt = new Date(row.git_repo.created_at).getTime();
+  const own = commits.find(c => {
+    if (c.author_login?.endsWith('[bot]')) return false;
+    if (c.author_email?.toLowerCase() === CLASSMOJI_BOT_EMAIL) return false;
+    return new Date(c.ts).getTime() > createdAt;
+  });
+  if (!own) return null;
+  const pushedAt = new Date(own.ts);
+
+  const result = await prisma.gitRepoAssignment.updateMany({
+    where: { id: row.id, closed_at: null },
+    data: { status: 'CLOSED', closed_at: pushedAt },
+  });
+  return result.count > 0 ? pushedAt : null;
 };
 
 /**
@@ -453,7 +614,7 @@ export const getGradingProgress = async (classroomSlug: string) => {
   let totalNum = await getPrisma().gitRepoAssignment.count({
     where: {
       git_repo: { classroom: { slug: classroomSlug } },
-      assignment: { repository: { is_extra_credit: false } },
+      assignment: { is_extra_credit: false },
     },
   });
 
@@ -462,7 +623,7 @@ export const getGradingProgress = async (classroomSlug: string) => {
     where: {
       status: 'CLOSED',
       git_repo: { classroom: { slug: classroomSlug } },
-      assignment: { repository: { is_extra_credit: true } },
+      assignment: { is_extra_credit: true },
     },
   });
 
@@ -471,7 +632,7 @@ export const getGradingProgress = async (classroomSlug: string) => {
   let numUngraded = await getPrisma().gitRepoAssignment.count({
     where: {
       git_repo: { classroom: { slug: classroomSlug } },
-      assignment: { repository: { is_extra_credit: false } },
+      assignment: { is_extra_credit: false },
       grades: { none: {} },
     },
   });
@@ -481,7 +642,7 @@ export const getGradingProgress = async (classroomSlug: string) => {
     where: {
       status: 'CLOSED',
       git_repo: { classroom: { slug: classroomSlug } },
-      assignment: { repository: { is_extra_credit: true } },
+      assignment: { is_extra_credit: true },
       grades: { none: {} },
     },
   });
@@ -502,7 +663,7 @@ export const getCompletionProgress = async (classroomSlug: string) => {
   const totalNum = await getPrisma().gitRepoAssignment.count({
     where: {
       git_repo: { classroom: { slug: classroomSlug } },
-      assignment: { repository: { is_extra_credit: false } },
+      assignment: { is_extra_credit: false },
     },
   });
 
@@ -510,7 +671,7 @@ export const getCompletionProgress = async (classroomSlug: string) => {
     where: {
       status: 'CLOSED',
       git_repo: { classroom: { slug: classroomSlug } },
-      assignment: { repository: { is_extra_credit: false } },
+      assignment: { is_extra_credit: false },
     },
   });
 

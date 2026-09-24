@@ -7,6 +7,8 @@ interface SpotlightAssignment {
   title: string;
   student_deadline: string | Date | null;
   is_published?: boolean;
+  /** This student's repo assignment is CLOSED (see the dashboard loader). */
+  submitted?: boolean;
 }
 
 interface SpotlightLinked {
@@ -48,9 +50,12 @@ const typeStyles: Record<SpotlightItemType, string> = {
   QUIZ: 'bg-sky-50 text-sky-700 dark:bg-sky-900/30 dark:text-sky-200',
 };
 
-const formatRelative = (date: string | Date) => {
+// The card has no status pill, so a submitted assignment says so here rather
+// than counting down to (or past) a deadline that no longer applies to it.
+export const formatRelative = (date: string | Date, submitted = false, now = dayjs()) => {
   const target = dayjs(date);
-  const today = dayjs().startOf('day');
+  if (submitted) return `submitted · ${target.format('MMM D')}`;
+  const today = now.startOf('day');
   const days = target.startOf('day').diff(today, 'day');
   if (days < 0) return `overdue · ${target.format('MMM D')}`;
   if (days === 0) return 'due today';
@@ -66,7 +71,7 @@ const buildItems = (repository: SpotlightModule): SpotlightItem[] => {
       key: `a-${a.id}`,
       type: 'ASGN',
       title: a.title,
-      meta: a.student_deadline ? formatRelative(a.student_deadline) : undefined,
+      meta: a.student_deadline ? formatRelative(a.student_deadline, a.submitted) : undefined,
     });
   });
   repository.slides?.forEach(s => {
@@ -117,7 +122,7 @@ const ModuleSpotlightCard = ({ repository, classSlug }: ModuleSpotlightCardProps
       className="rounded-2xl bg-panel ring-1 ring-line p-5 sm:p-6 h-full flex flex-col"
     >
       <div className="text-xs font-semibold tracking-[0.18em] text-ink-4">
-        MODULE #{repository.ordinal}
+        REPOSITORY #{repository.ordinal}
       </div>
       <h3 className="mt-1 text-lg sm:text-xl font-semibold text-ink-0 tracking-tight">
         {repository.title}
@@ -169,10 +174,10 @@ const ModuleSpotlightCard = ({ repository, classSlug }: ModuleSpotlightCardProps
           )}
         </div>
         <Link
-          to={`/student/${classSlug}/repos`}
+          to={`/student/${classSlug}/modules`}
           className="inline-flex items-center gap-1.5 text-xs sm:text-sm font-medium text-gray-700 dark:text-gray-200 px-3 py-1.5 rounded-full ring-1 ring-line bg-panel hover:bg-nav-hover transition-colors"
         >
-          View repository
+          View in Modules
           <IconArrowRight size={14} />
         </Link>
       </div>

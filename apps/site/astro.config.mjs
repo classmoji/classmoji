@@ -46,7 +46,8 @@ export default defineConfig({
               badge: { text: 'New', variant: 'tip' },
             },
             { label: 'Manage your roster', slug: 'docs/instructors/roster' },
-            { label: 'Repositories & assignments', slug: 'docs/instructors/modules-and-assignments' },
+            { label: 'Repositories', slug: 'docs/instructors/repositories' },
+            { label: 'Modules & assignments', slug: 'docs/instructors/modules-and-assignments' },
             {
               label: 'Autograding',
               slug: 'docs/instructors/autograding',
@@ -112,7 +113,9 @@ export default defineConfig({
     mdx(),
   ],
   server: {
-    port: 4000
+    // Not 4000: that is the local webhook fanout the Smee tunnels post to, and
+    // a site dev server sitting on it swallows every GitHub push event.
+    port: 4321
   },
   vite: {
     plugins: [tailwindcss()],

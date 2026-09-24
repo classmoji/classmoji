@@ -71,7 +71,8 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
   // rest into the page's payload for anyone who opened the network tab.
   const repoAssignmentsByAssignmentId: Record<
     string,
-    { provider_issue_number: number; git_repo: { name: string } }
+    // The issue number is null on a push-mode submission, which links to the repo.
+    { provider_issue_number: number | null; git_repo: { name: string } }
   > = {};
   repoAssignments.forEach(ra => {
     repoAssignmentsByAssignmentId[ra.assignment_id] = {

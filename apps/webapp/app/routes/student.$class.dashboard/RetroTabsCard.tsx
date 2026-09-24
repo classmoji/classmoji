@@ -190,7 +190,7 @@ const TeamPanel = ({
           to={
             team.moduleSlug
               ? `/student/${classSlug}/repos/${team.moduleSlug}/team`
-              : `/student/${classSlug}/repos`
+              : `/student/${classSlug}/modules`
           }
           className="text-xs font-medium text-gray-700 dark:text-gray-200 px-3 py-1.5 rounded-full ring-1 ring-line hover:bg-nav-hover transition-colors"
         >
@@ -248,7 +248,7 @@ const TeamPanel = ({
             to={
               needsTeam.moduleSlug
                 ? `/student/${classSlug}/repos/${needsTeam.moduleSlug}/team`
-                : `/student/${classSlug}/repos`
+                : `/student/${classSlug}/modules`
             }
             className="inline-flex items-center gap-1.5 text-xs font-medium text-gray-700 dark:text-gray-200 px-3 py-1.5 rounded-full ring-1 ring-line hover:bg-nav-hover transition-colors"
           >

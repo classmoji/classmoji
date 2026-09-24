@@ -1,9 +1,7 @@
 import { task } from '@trigger.dev/sdk';
 import { appUrl, ClassmojiService, escapeVars } from '@classmoji/services';
 import { sendBatchEmailTask, sendEmailTask } from './email.ts';
-import { emojiShortcodes } from '@classmoji/utils';
-
-const emojiMap: Record<string, string> = emojiShortcodes;
+import { getEmojiSymbol } from '@classmoji/utils';
 
 interface GitRepoAssignmentGraderRecord {
   grader: {
@@ -14,7 +12,7 @@ interface GitRepoAssignmentGraderRecord {
 interface GitRepoAssignmentRecord {
   id: string;
   /** GitHub issue #number — matches the Prisma GitRepoAssignment field. */
-  provider_issue_number: number;
+  provider_issue_number: number | null;
   git_repo: {
     name: string;
   };
@@ -77,7 +75,12 @@ export const requestRegradeTask = task({
       return;
     }
 
-    const issueUrl = `https://github.com/${classroom.git_organization.login}/${gitRepoAssignment.git_repo.name}/issues/${gitRepoAssignment.provider_issue_number}`;
+    // The submission on GitHub: the issue in ISSUE mode, the repo in REPO mode.
+    const repoUrl = `https://github.com/${classroom.git_organization.login}/${gitRepoAssignment.git_repo.name}`;
+    const issueUrl =
+      gitRepoAssignment.provider_issue_number != null
+        ? `${repoUrl}/issues/${gitRepoAssignment.provider_issue_number}`
+        : repoUrl;
 
     if (gitRepoAssignment.graders && gitRepoAssignment.graders.length > 0) {
       // One batched request rather than one run (and one API request) per
@@ -95,7 +98,7 @@ export const requestRegradeTask = task({
               STUDENT_LOGIN: student.login,
               ASSIGNMENT_TITLE: gitRepoAssignment.assignment.title,
               ISSUE_URL: issueUrl,
-              PREVIOUS_GRADE: previous_grade.map(grade => emojiMap[grade] || grade).join(' '),
+              PREVIOUS_GRADE: previous_grade.map(grade => getEmojiSymbol(grade)).join(' '),
               STUDENT_COMMENT: student_comment || 'None',
             }),
           },

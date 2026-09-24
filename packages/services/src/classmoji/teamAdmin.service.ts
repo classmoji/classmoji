@@ -102,7 +102,11 @@ export interface DeleteTeamResult {
   id: string;
   name: string;
   slug: string;
-  /** false when the team was already gone on the provider side (404 tolerated). */
+  /**
+   * true only when the caller asked for the provider delete and the team was
+   * there to remove; false when GitHub was left alone or the team was already
+   * gone there (404 tolerated).
+   */
   removedFromProvider: boolean;
   /** How many linked repository records went with the team. */
   reposDeleted: number;
@@ -465,9 +469,16 @@ export const createTeam = async ({
 export const deleteTeam = async ({
   classroomId,
   slugOrId,
+  deleteOnProvider = false,
 }: {
   classroomId: string;
   slugOrId: string;
+  /**
+   * Also delete the team and its repositories on GitHub. Off by default: a
+   * delete here is a Classmoji bookkeeping change, and the students' work on
+   * GitHub is the instructor's call to remove.
+   */
+  deleteOnProvider?: boolean;
 }): Promise<DeleteTeamResult> => {
   const { gitOrganization, orgLogin } = await loadClassroomOrg(classroomId);
   const team = await resolveTeam(classroomId, slugOrId);
@@ -479,12 +490,22 @@ export const deleteTeam = async ({
     .slice(0, MAX_REPORTED_REPO_NAMES)
     .map((repo: { name: string }) => repo.name);
 
-  let removedFromProvider = true;
-  try {
-    await gitProvider.deleteTeam(orgLogin, team.slug);
-  } catch (error: unknown) {
-    if (!isProviderNotFound(error)) throw error;
-    removedFromProvider = false;
+  let removedFromProvider = false;
+  if (deleteOnProvider) {
+    removedFromProvider = true;
+    try {
+      await gitProvider.deleteTeam(orgLogin, team.slug);
+    } catch (error: unknown) {
+      if (!isProviderNotFound(error)) throw error;
+      removedFromProvider = false;
+    }
+    for (const repo of repositories as Array<{ name: string }>) {
+      try {
+        await gitProvider.deleteRepository(orgLogin, repo.name);
+      } catch (error: unknown) {
+        if (!isProviderNotFound(error)) throw error;
+      }
+    }
   }
 
   await teamService.deleteBySlug(classroomId, team.slug);

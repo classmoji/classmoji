@@ -1,4 +1,4 @@
-# Classmoji (ClassFlow) - Complete Application Guide
+# Classmoji - Complete Application Guide
 
 ## Table of Contents
 - [Overview](#overview)
@@ -21,7 +21,7 @@
 
 ## Overview
 
-**Classmoji** (branded as **ClassFlow**) is a comprehensive educational technology platform designed specifically for computer science courses that use GitHub for assignments. It automates classroom management, assignment distribution, grading workflows, and student engagement tracking through deep GitHub integration.
+**Classmoji** is a comprehensive educational technology platform designed specifically for computer science courses that use GitHub for assignments. It automates classroom management, assignment distribution, grading workflows, and student engagement tracking through deep GitHub integration.
 
 ### Purpose
 - Streamline CS course management with GitHub-native workflows
@@ -144,14 +144,13 @@ await assertClassroomAccess({
 - Self-access patterns (students can view own resources)
 - Resource ownership validation
 - Audit logging for denied access attempts
-- View-as functionality for admins to see student perspective
 
 ### Permission Matrix Examples
 
 | Resource | Student (Own) | Student (Others) | Assistant | Teacher | Owner |
 |----------|--------------|------------------|-----------|---------|-------|
 | View Assignment Grades | ✅ | ❌ | ✅ | ✅ | ✅ |
-| View Gradebook (letter grades, comments) | ❌ | ❌ | ❌ | ✅ | ✅ |
+| View Gradebook / Student Report (letter override, staff note) | ❌ | ❌ | ❌ | ✅ | ✅ |
 | View Roster Contact Details (email, school ID) | ❌ | ❌ | ❌ | ❌ | ✅ |
 | Grant Tokens | ❌ | ❌ | ❌ | ❌ | ✅ |
 | Grade Assignments (grading queue) | ❌ | ❌ | ✅ | ✅ | ✅ |
@@ -167,9 +166,10 @@ await assertClassroomAccess({
 
 A student still sees their OWN grades — the per-assignment marks on their
 assignments page, and via the `my_grades` MCP tool. The **gradebook** row above
-is the staff-facing screen: every student's row at once, plus the letter-grade
-override and the private performance comment. Those two fields are what a
-student never sees, not their marks.
+is the staff-facing overview: every student's row at once, one column per
+published assignment. The letter-grade override and the private staff note live
+on the **student report** (`admin.$class.students_.$login`, re-exported for
+teachers). Those two fields are what a student never sees, not their marks.
 
 ---
 
@@ -177,66 +177,74 @@ student never sees, not their marks.
 
 ### 1. Assignment Management
 
-#### Assignment Types
+#### Coursework Model
 
-**Individual Assignments**
-- One repository per student
-- Personal workspace for solo projects
-- Individual grade tracking
+A **Module** is the unit of the curriculum: it lists content (pages, slide decks) and **Assignments**. Every assignment belongs to exactly one module (`module_id` is required) and has a `type`:
 
-**Group Assignments**
-- Shared repository for team
-- Contribution tracking per member
-- Team-based grading
+| Type | Backed by | Students submit by |
+|------|-----------|--------------------|
+| `REPO` | a **Repository** (`repository_id`): a template plus one git repo per student or team | pushing to their repo, or closing its GitHub issue (see submission modes) |
+| `QUIZ` | a **Quiz** (`quiz_id`) | completing an attempt |
+| `FORM` | a **Form** (`form_id`) | sending a response |
+
+Repositories, quizzes and forms are the storage; assignments are what gets released, weighted and graded. A repository has no module and no weight of its own, and several assignments may submit through the same repository (a semester project graded at three milestones is one repository with three assignments).
+
+**Individual vs group**: a repository creates one git repo per student or per team. Team repos get per-member contribution tracking.
 
 #### Assignment Configuration
 
-- **Weight**: Assignment weight in final grade calculation
-- **Extra Credit**: Bonus points that don't affect denominator
-- **Deadlines**:
-  - Student deadline: When work is due
-  - Grader deadline: When grading should be completed
-- **Late Penalties**: Configurable points deducted per hour late
-- **Modules/Tags**: Organize assignments by unit, topic, or section
+- **Weight** (`weight`): the only grading weight. Course grade = weighted mean of graded, non-extra-credit assignments, plus extra credit ([packages/utils/src/grades.ts](packages/utils/src/grades.ts)). Drop-lowest was removed.
+- **Extra Credit** (`is_extra_credit`): bonus that does not enter the denominator
+- **Deadlines**: `release_at` (when students see it), `student_deadline` (when work is due), `grader_deadline` (when grading should be done)
+- **Tokens per hour** (`tokens_per_hour`): reward for early submission (Pro tier)
+- **Submission mode** (`submission_mode`, `REPO` assignments only): `REPO` (push) or `ISSUE`. The database column defaults to `ISSUE`; the web UI and the MCP `assignment_create` tool default new assignments to `REPO`.
+
+#### Submission Modes
+
+A submission is a `GitRepoAssignment` row, unique per (`git_repo_id`, `assignment_id`). Its `closed_at` is the submission time and is frozen once the submission is graded.
+
+- **`REPO` (push)**: the student's last push to the default branch before the deadline (plus any purchased extension hours) is the submission. `provider_id` / `provider_issue_number` stay null. When a submission row is created for a repo that already has commits, `ClassmojiService.gitRepoAssignment.recordExistingPush` stamps the latest student push (the template commit made within 2 minutes of repo creation and `[bot]` authors are excluded; the push must be before the deadline). `packages/database/scripts/backfillRepoSubmissions.ts` does the same for existing rows (`--apply`).
+- **`ISSUE`**: a GitHub issue is opened in the student's repo. Closing it submits; reopening it un-submits.
 
 #### Assignment Workflow
 
-1. **Creation** ([admin.tsx:300](apps/webapp/app/routes/admin.$org/admin.tsx#L300))
-   - Instructor creates assignment with configuration
-   - Sets repository template (optional)
-   - Configures workflow file for auto-grading (optional)
+1. **Creation** ([admin.$class.modules/route.tsx](apps/webapp/app/routes/admin.$class.modules/route.tsx))
+   - Instructor adds an assignment to a module, picks its type and the repository / quiz / form it submits through
+   - Sets weight, deadlines and submission mode
+   - Tests for autograding are edited on the repository form
 
-2. **Publishing** ([admin.tsx:400](apps/webapp/app/routes/admin.$org/admin.tsx#L400))
-   - Assignment becomes visible to students
-   - Triggers repository creation if enabled
-   - Creates GitHub issues for tracking
+2. **Publishing**
+   - The assignment becomes visible to students at `release_at`
+   - Publishing a repository triggers student repo creation
 
-3. **Distribution** ([create-repos.js](packages/tasks/src/workflows/create-repos.js))
-   - Background task creates repositories from template
+3. **Distribution** ([packages/tasks/src/workflows/](packages/tasks/src/workflows/))
+   - Background task creates repositories from the template
    - Adds students as collaborators
-   - Creates GitHub issues linked to assignment
+   - Opens the GitHub issue for `ISSUE`-mode assignments; commits the autograding workflow when the repository has tests
 
-4. **Submission** ([webhook handlers](apps/hook-station/src/webhooks/github/handlers.js))
-   - Students close GitHub issue to submit
-   - Webhook captures submission timestamp
-   - Late hours calculated automatically
+4. **Submission** ([apps/hook-station/src/routes/github.ts](apps/hook-station/src/routes/github.ts))
+   - `push` on a student repo (default branch only; bots and branch deletions ignored) → Trigger task `webhook-git_repo_push_handler` → `gitRepoAssignment.recordPush`
+   - `issues.closed` records the submission time; `issues.reopened` clears it
+   - Late hours are calculated from `closed_at` against the deadline
 
-5. **Grading** ([grades.jsx](apps/webapp/app/routes/admin.$org.grades/grades.jsx))
-   - Graders assigned to specific issues
-   - Emoji-based feedback provided
-   - Grades released when ready
+5. **Grading** ([admin.$class.assignments_.$id/route.tsx](apps/webapp/app/routes/admin.$class.assignments_.$id/route.tsx))
+   - One roster per assignment: graders are assigned and grades entered on the assignment page (re-exported for teachers and assistants; grader changes are owner/teacher only)
+   - The gradebook ([admin.$class.grades/route.tsx](apps/webapp/app/routes/admin.$class.grades/route.tsx)) is the overview: one column per published assignment, grouped by type in deadline order, Total and Letter pinned right, grading in the cell
+   - Grades are released when ready
 
 #### GitHub Integration Features
 
-- **Repository Templates**: Clone assignments from template repos
-- **Issue Tracking**: Each assignment component is a GitHub issue
-- **Workflow Files**: Support for GitHub Actions auto-grading
+- **Repository Templates**: student repos are cloned from a template repo
+- **Push or Issue Submission**: chosen per assignment
+- **Autograding**: tests on the repository run as a GitHub Actions workflow committed to every student repo; results are advisory (`autograding_results`), never grades
 - **Contribution Analysis**: Track individual commits in group projects
 
 #### File Locations
 
-- Assignment routes: [apps/webapp/app/routes/student.$org.assignments/](apps/webapp/app/routes/student.$org.assignments/)
-- Admin dashboard: [apps/webapp/app/routes/admin.$org/](apps/webapp/app/routes/admin.$org/)
+- Modules: [apps/webapp/app/routes/admin.$class.modules/](apps/webapp/app/routes/admin.$class.modules/), module card: [apps/webapp/app/components/features/modules/ModuleCard.tsx](apps/webapp/app/components/features/modules/ModuleCard.tsx)
+- Assignment page: [apps/webapp/app/routes/admin.$class.assignments_.$id/](apps/webapp/app/routes/admin.$class.assignments_.$id/)
+- Repositories list: [apps/webapp/app/routes/admin.$class.repos/](apps/webapp/app/routes/admin.$class.repos/), table: [apps/webapp/app/components/features/repositories/RepositoriesTable.tsx](apps/webapp/app/components/features/repositories/RepositoriesTable.tsx)
+- Student assignments: [apps/webapp/app/routes/student.$class.assignments/](apps/webapp/app/routes/student.$class.assignments/)
 - Repository tasks: [packages/tasks/src/workflows/](packages/tasks/src/workflows/)
 
 ---
@@ -249,7 +257,9 @@ The platform's unique grading approach uses **emojis mapped to numeric grades**,
 
 #### How It Works
 
-**Emoji Mappings** ([grade-settings.jsx](apps/webapp/app/routes/admin.$org.settings.grades/grade-settings.jsx))
+A classroom grades on one of two scales. Either way every grade is stored as a number.
+
+**Emoji scale** ([admin.$class.settings.grades](apps/webapp/app/routes/admin.$class.settings.grades/)): each emoji maps to a number in Settings → Grades. A submission's grade is the mean of its emojis, and graders may stack several.
 ```
 🎯 = 100 (Perfect)
 ⭐ = 95  (Excellent)
@@ -259,7 +269,11 @@ The platform's unique grading approach uses **emojis mapped to numeric grades**,
 ...and more
 ```
 
-**Configurable Per Organization**
+**Numeric scale**: the built-in `score-0` … `score-100` emojis ([packages/utils/src/emojis.ts](packages/utils/src/emojis.ts): `SCORE_EMOJI_PREFIX`, `isScoreScheme`, `parseScoreEmoji`). On a numeric scale the Grade cell is an inline number field (`EmojiGrader.tsx`) and each grader holds **one score per submission**: entering a new score replaces that grader's previous one (its token reward reversed); other graders' scores stay. `GradeBadges` hides the viewer's own score next to the field. Migration `20260920000003_one_score_per_grader` collapsed old stacked scores.
+
+`HelperService.addGradeToGitRepoAssignment` ([packages/services/src/helper/index.ts](packages/services/src/helper/index.ts)) refuses any grade that is not in the classroom scale, on either scale.
+
+**Configurable Per Classroom**
 - Instructors can customize emoji-grade mappings
 - Set letter grade thresholds (A+, A, B+, etc.)
 - Configure late penalty points per hour
@@ -267,17 +281,18 @@ The platform's unique grading approach uses **emojis mapped to numeric grades**,
 #### Grading Workflow
 
 1. **Grader Assignment**
-   - Instructors assign TAs/themselves to specific issues
-   - Each assignment component can have multiple graders
+   - Instructors assign TAs/themselves per assignment (assignment page → Assign graders)
+   - Each submission can have multiple graders
 
-2. **Emoji Selection**
-   - Grader selects emoji for each graded issue
-   - Can add comments for context
-   - Supports partial credit through emoji choice
+2. **Grade Entry**
+   - Emoji scale: grader picks one or more emojis per submission
+   - Numeric scale: grader types a number; one score per grader
+   - Grading happens on the assignment page or in the gradebook cell
 
-3. **Grade Calculation** ([helpers.ts:calculateGrade](apps/webapp/app/utils/helpers.ts))
+3. **Grade Calculation** ([packages/utils/src/grades.ts](packages/utils/src/grades.ts))
    ```
-   Final Grade = (Emoji Points - Late Penalty) + Extra Credit
+   Submission grade = mean of its grades (minus late penalty)
+   Course grade     = weighted mean of graded non-extra-credit assignments + extra credit
    ```
 
 4. **Grade Release**
@@ -286,18 +301,20 @@ The platform's unique grading approach uses **emojis mapped to numeric grades**,
 
 #### Features
 
-- **Multiple Graders**: Average scores from multiple graders
+- **Multiple Graders**: Average scores from multiple graders (numeric scale: one score per grader)
 - **Late Penalties**: Automatic deduction based on late hours
 - **Extra Credit**: Bonus points that don't affect grade denominator
-- **Weighted Grades**: Assignment weights in overall course grade
+- **Weighted Grades**: Each assignment's `weight` is the only weight in the course grade; no drop-lowest
 - **Letter Conversion**: Automatic conversion to letter grades
 - **Token Integration**: Earn tokens for high grades (Pro tier)
 
 #### File Locations
 
-- Grading interface: [apps/webapp/app/routes/admin.$org.grades/](apps/webapp/app/routes/admin.$org.grades/)
-- Grade settings: [apps/webapp/app/routes/admin.$org.settings.grades/](apps/webapp/app/routes/admin.$org.settings.grades/)
-- Grade helpers: [apps/webapp/app/utils/helpers.ts](apps/webapp/app/utils/helpers.ts)
+- Assignment grading page: [apps/webapp/app/routes/admin.$class.assignments_.$id/](apps/webapp/app/routes/admin.$class.assignments_.$id/)
+- Gradebook: [apps/webapp/app/routes/admin.$class.grades/](apps/webapp/app/routes/admin.$class.grades/)
+- Student report (letter override, staff note): [apps/webapp/app/routes/admin.$class.students_.$login/](apps/webapp/app/routes/admin.$class.students_.$login/)
+- Grade settings: [apps/webapp/app/routes/admin.$class.settings.grades/](apps/webapp/app/routes/admin.$class.settings.grades/)
+- Grade engine: [packages/utils/src/grades.ts](packages/utils/src/grades.ts), scale helpers: [packages/utils/src/emojis.ts](packages/utils/src/emojis.ts)
 
 ---
 
@@ -409,7 +426,7 @@ Response displayed in chat interface
    - Student's GitHub repo cloned to secure sandbox
    - Path validation and security constraints applied
 
-2. **Code Exploration** ([agent-sdk provider](packages/llm/src/providers/agent-sdk/))
+2. **Code Exploration** ([agent-sdk provider](apps/ai-agent/src/llm/providers/agent-sdk/))
    - Claude Agent SDK with file access tools:
      - `Read`: Read file contents
      - `Grep`: Search code for patterns
@@ -487,10 +504,9 @@ Real-time exploration steps → WebSocket → Student UI
 
 #### File Locations
 
-- LLM package: [packages/llm/](packages/llm/)
-  - Standard quiz: [packages/llm/src/providers/langchain/](packages/llm/src/providers/langchain/)
-  - Code-aware: [packages/llm/src/providers/agent-sdk/](packages/llm/src/providers/agent-sdk/)
-  - Prompts: [packages/llm/src/prompts/](packages/llm/src/prompts/)
+- LLM code: [apps/ai-agent/src/llm/](apps/ai-agent/src/llm/) (private submodule; `packages/llm` no longer exists)
+  - Agent SDK provider: [apps/ai-agent/src/llm/providers/agent-sdk/](apps/ai-agent/src/llm/providers/agent-sdk/)
+  - Quiz evaluation schema: [apps/ai-agent/src/llm/schemas/quizEvaluation.js](apps/ai-agent/src/llm/schemas/quizEvaluation.js)
 - AI agent service: [apps/ai-agent/](apps/ai-agent/)
 - Quiz routes: [apps/webapp/app/routes/student.$org.quizzes/](apps/webapp/app/routes/student.$org.quizzes/)
 - Quiz settings: [apps/webapp/app/routes/admin.$org.settings.quizzes/](apps/webapp/app/routes/admin.$org.settings.quizzes/)
@@ -509,11 +525,13 @@ Deep integration with GitHub is a core feature, automating classroom workflows.
 3. Webhook events automatically configured
 4. Background task completes setup
 
-**Required Permissions**
-- Repository: Read & Write
+**Required Permissions** ([setup/manifest.ts](apps/webapp/app/routes/setup/manifest.ts))
+- Contents: Read & Write (create student repos from templates)
 - Issues: Read & Write
+- Workflows: Read & Write (the App commits `.github/workflows/classroom.yml` to student repos for autograding)
 - Members: Read
-- Webhooks: Receive events
+- Metadata: Read
+- Webhook events: `push`, `issues`, `organization` (see Webhook Events below)
 
 #### OAuth Authentication
 
@@ -543,13 +561,20 @@ For each student in course:
 - Workflow file inclusion (for GitHub Actions)
 - Repository deletion on assignment removal
 
-#### Issue Tracking
+#### Submission Tracking
 
-**Issue Workflow**
-1. **Creation**: GitHub issue created per assignment component
+**Push Workflow** (`submission_mode = REPO`, the default for new assignments)
+1. **Creation**: a `GitRepoAssignment` row per (student repo, assignment); no issue is opened
+2. **Submission**: the student pushes to the repo's default branch
+3. **Webhook**: `push` → `webhook-git_repo_push_handler` → `gitRepoAssignment.recordPush` stamps `closed_at` with the delivery time (pushes after the deadline + purchased extension hours do not move it; frozen once graded)
+4. **Existing commits**: `recordExistingPush` stamps the latest student push when the row is created for a repo that already has commits
+5. **Grading**: graders open the repo from the assignment page
+
+**Issue Workflow** (`submission_mode = ISSUE`)
+1. **Creation**: GitHub issue created in the student repo per assignment
 2. **Assignment**: Issue assigned to student
 3. **Submission**: Student closes issue when complete
-4. **Webhook**: Closure event triggers submission tracking
+4. **Webhook**: `issues.closed` records the submission; `issues.reopened` un-submits
 5. **Grading**: Graders access issue directly from platform
 
 **Issue Features**
@@ -560,15 +585,21 @@ For each student in course:
 
 #### Webhook Events
 
-**GitHub Webhooks** ([github handlers](apps/hook-station/src/webhooks/github/handlers.js))
+**GitHub Webhooks** ([apps/hook-station/src/routes/github.ts](apps/hook-station/src/routes/github.ts))
 
 | Event | Action | Purpose |
 |-------|--------|---------|
-| `issues.closed` | Record submission timestamp | Track when student completes work |
+| `push` (student repo) | Trigger `webhook-git_repo_push_handler` | Record the push as the submission for every published `REPO`-mode assignment on that repo (default branch only; bots and branch deletions ignored) |
+| `push` (classroom content repo) | Sync content assets | Refresh the classroom's path → SHA map |
+| `issues.closed` | Record submission timestamp | Track when student completes work (`ISSUE` mode) |
+| `issues.reopened` | Clear submission timestamp | Un-submit |
 | `issues.deleted` | Mark issue as deleted | Handle issue removal |
-| `member.added` | Sync roster | Auto-add new org members |
+| `organization.member_added` | Sync roster | Auto-add new org members |
 | `installation.created` | Setup organization | Complete GitHub App installation |
 | `installation.deleted` | Cleanup | Remove organization data |
+| `installation.suspend` / `unsuspend` | Pause / resume | Stop minting tokens while suspended |
+
+The GitHub App must subscribe to `push`, `issues` and `organization` (`default_events` in [setup/manifest.ts](apps/webapp/app/routes/setup/manifest.ts)). An App created before push mode existed needs `push` added by hand in its GitHub settings.
 
 **Webhook Processing**
 ```
@@ -597,7 +628,7 @@ Return 200 OK (fast response)
 #### File Locations
 
 - GitHub service: [packages/services/src/github.service.js](packages/services/src/github.service.js)
-- Webhook handlers: [apps/hook-station/src/webhooks/github/](apps/hook-station/src/webhooks/github/)
+- Webhook handlers: [apps/hook-station/src/routes/github.ts](apps/hook-station/src/routes/github.ts)
 - Repository workflows: [packages/tasks/src/workflows/repo-workflows.js](packages/tasks/src/workflows/repo-workflows.js)
 - GitHub auth: [apps/webapp/app/routes/auth.github/](apps/webapp/app/routes/auth.github/)
 
@@ -899,27 +930,43 @@ Membership
   ├── role (OWNER/ASSISTANT/STUDENT)
   └── accepted (invitation status)
 
-Assignment
-  ├── slug (URL-friendly name)
-  ├── title, description
-  ├── weight, extra_credit
-  ├── student_deadline, grader_deadline
-  ├── module_number, module_tag
-  └── Issues (components)
+Module
+  ├── classroom_id
+  ├── title, position
+  ├── Items (pages, slides)
+  └── Assignments
 
-Issue
-  ├── github_issue_id
-  ├── assignment_id
-  ├── student_id
-  ├── closed_at (submission time)
-  ├── late_hours
-  └── Grades (emoji grades)
+Assignment
+  ├── module_id (required)
+  ├── type (REPO/QUIZ/FORM)
+  ├── repository_id / quiz_id / form_id (exactly one)
+  ├── title, description
+  ├── weight (the only grading weight), is_extra_credit
+  ├── release_at, student_deadline, grader_deadline
+  ├── tokens_per_hour
+  ├── submission_mode (ISSUE/REPO; column default ISSUE, UI/MCP default REPO)
+  └── GitRepoAssignments (submissions)
 
 Repository
-  ├── github_repo_id
+  ├── classroom_id
+  ├── title, template
+  ├── AutogradingTests
+  ├── GitRepos (one per student/team)
+  └── (no module, no weight — attached through Assignments)
+
+GitRepo
+  ├── provider_id (GitHub repo id)
+  ├── repository_id
   ├── student_id / team_id
-  ├── assignment_id
   └── contributions (JSON)
+
+GitRepoAssignment (the submission; unique per git_repo_id + assignment_id)
+  ├── git_repo_id
+  ├── assignment_id
+  ├── provider_id, provider_issue_number (null in REPO mode)
+  ├── closed_at (submission time; frozen once graded)
+  ├── late_hours
+  └── Grades (emoji / score-N grades)
 
 Team
   ├── name
@@ -959,7 +1006,7 @@ Subscription
 AuditLog
   ├── user_id
   ├── organization_id
-  ├── action (VIEW_AS/ACCESS_DENIED)
+  ├── action (ACCESS_DENIED/GRADE_RELEASED/…)
   ├── resource_type, resource_id
   └── metadata (JSON)
 ```
@@ -977,13 +1024,21 @@ AuditLog
 
 **Repository Workflows**
 - `createRepositories`: Bulk repository creation from templates
-- `deleteRepository`: Clean up when assignment removed
+- `deleteRepository`: Clean up when a repository is removed
 - `updateRepositoryCollaborators`: Sync collaborator permissions
+- `dispatch_autograde_workflow`: commit `.github/workflows/classroom.yml` to every student repo (`provisionAutogradeWorkflowForRepo` does it for new repos); `ingest_autograde_result` receives the results
 
-**Issue Workflows**
-- `createIssues`: GitHub issue creation for assignments
-- `closeIssue`: Programmatic issue closure
-- `syncIssueStatus`: Keep platform in sync with GitHub
+**Submission Workflows** ([gitRepoAssignment.ts](packages/tasks/src/workflows/gitRepoAssignment.ts))
+- `webhook-git_repo_push_handler`: a push on a student repo → `ClassmojiService.gitRepoAssignment.recordPush` stamps `closed_at` on every published `REPO`-mode submission for that repo (before the deadline + extensions; frozen once graded)
+- `recordExistingPush` (service, not a task): when a `REPO`-mode submission row is created for a repo that already has commits, stamps the student's latest push (template commit within 2 minutes of repo creation and `[bot]` authors excluded)
+- `packages/database/scripts/backfillRepoSubmissions.ts --apply`: the same for rows that predate push mode
+- `issues.closed` / `issues.reopened` / `issues.deleted` handlers: `ISSUE`-mode submission, un-submission and cleanup
+
+**Coursework migrations** (`packages/database/migrations/20260920*`)
+- `20260920000000_coursework_phase1_additive`: modules at root, typed assignments (`type`, `module_id`, `repository_id`/`quiz_id`/`form_id`)
+- `20260920000001_coursework_phase1_constraints`: required `module_id`, one backing resource per assignment, single `weight`
+- `20260920000002_submission_modes`: `Assignment.submission_mode`, nullable issue columns on `GitRepoAssignment`
+- `20260920000003_one_score_per_grader`: collapsed stacked `score-N` grades to one per grader
 
 **Organization Workflows**
 - `setupOrganization`: Complete GitHub App installation
@@ -1014,52 +1069,9 @@ AuditLog
 - Local development uses `.env` file (no Infisical needed)
 - To update secrets: modify in Infisical dashboard → redeploy workflows
 
-### LLM Package Architecture
+### LLM Architecture
 
-**Centralized LLM Functionality** ([packages/llm/](packages/llm/))
-
-```
-packages/llm/
-├── src/
-│   ├── providers/
-│   │   ├── langchain/
-│   │   │   ├── openai.provider.js
-│   │   │   ├── anthropic.provider.js
-│   │   │   └── index.js
-│   │   └── agent-sdk/
-│   │       ├── code-aware-quiz.provider.js
-│   │       ├── sandbox.js
-│   │       └── index.js
-│   ├── prompts/
-│   │   ├── quiz-prompts.js
-│   │   ├── grading-rubrics.js
-│   │   └── system-prompts.js
-│   └── services/
-│       ├── standard-quiz.service.js
-│       ├── code-aware-quiz.service.js
-│       └── index.js
-└── package.json
-```
-
-**Provider Pattern**
-```javascript
-// Unified interface for all LLM providers
-class LLMProvider {
-  async generateCompletion(prompt, config) {}
-  async streamCompletion(prompt, config) {}
-  async evaluateResponse(response, rubric) {}
-}
-
-// OpenAI implementation
-class OpenAIProvider extends LLMProvider {
-  // LangChain-based implementation
-}
-
-// Agent SDK implementation
-class AgentSDKProvider extends LLMProvider {
-  // Claude Agent SDK with file access
-}
-```
+LLM code lives in the private `ai-agent` submodule at [apps/ai-agent/src/llm/](apps/ai-agent/src/llm/) (`QuizService`, Agent SDK provider, quiz evaluation schema); `packages/llm` no longer exists. The webapp never calls a model directly: it talks to the AI agent over WebSocket, and the public-facing exports (`getAllModels`, `examplePrompts`) come from `@classmoji/services`.
 
 ### WebSocket Architecture
 
@@ -1209,7 +1221,6 @@ async function assertClassroomAccess({
 - Access control: Students see only their own data
 - Audit logging: Track who views what
 - Data masking: Analytics exclude PII
-- View-as logging: Track admin impersonation
 - Secure data transmission: HTTPS everywhere
 
 **Data Retention**
@@ -1223,7 +1234,6 @@ async function assertClassroomAccess({
 
 | Action | When Logged | Purpose |
 |--------|-------------|---------|
-| `VIEW_AS` | Admin views as student | FERPA compliance |
 | `ACCESS_DENIED` | Unauthorized access attempt | Security monitoring |
 | `GRADE_RELEASED` | Grades made visible | Track data disclosure |
 | `TOKEN_GRANTED` | Tokens manually awarded | Financial audit trail |
@@ -1234,12 +1244,12 @@ async function assertClassroomAccess({
 {
   user_id: 12345,
   organization_id: 67890,
-  action: 'VIEW_AS',
+  action: 'ACCESS_DENIED',
   resource_type: 'STUDENT_GRADES',
   resource_id: 'student-123',
   metadata: {
-    viewed_user_id: 'student-123',
-    route: '/student/org/grades',
+    route: '/admin/org/grades',
+    required_role: 'TEACHER',
     ip_address: '1.2.3.4'
   },
   created_at: '2024-01-15T10:30:00Z'
@@ -1343,6 +1353,9 @@ JWT_SECRET="your-random-secret-string"
 # Trigger.dev
 TRIGGER_API_KEY="tr_..."
 TRIGGER_API_URL="https://api.trigger.dev"
+# Public Trigger address the generated autograding workflow reports to from
+# GitHub Actions. Unset = Trigger.dev cloud. Never the worker-internal URL.
+TRIGGER_PUBLIC_API_URL=""
 ```
 
 ### Testing

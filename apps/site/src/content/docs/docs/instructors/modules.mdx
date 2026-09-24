@@ -9,9 +9,9 @@ import modulesImg from './img-modules.png';
 
 ### What is a module?
 
-A module is an ordered collection of course content. Group repositories, pages, slides, and quizzes into a single sequence students move through, like a week or a unit. Modules don't replace repositories. They sit on top of them as a way to organize what students see and the order they see it in.
+A module is an ordered collection of course content and assignments, like a week or a unit. It lists pages and slide decks alongside the assignments students submit, in the order you set. Every assignment lives in a module, so modules are where you create them and where students find them.
 
-Unlike a repository, a module isn't backed by a Github repo. It lives entirely in Classmoji.
+A module isn't backed by a Github repo. It lives entirely in Classmoji. [Repositories](/docs/instructors/repositories) are storage for student work and stay separate.
 
 <ModulesDiagram />
 
@@ -28,14 +28,17 @@ Create the module first, then open it to add content.
 
 ### Adding and ordering content
 
-Open a module to add items to it. A module can hold:
+Click **Add item** on a module card. It offers:
 
-- Repositories
-- Pages
-- Slides
-- Quizzes
+- **Assignment**: submitted through a repository, a quiz, or a form. See [Modules & assignments](/docs/instructors/modules-and-assignments).
+- **Page**
+- **Slides**
 
-Add items, then drag them into the order you want students to follow. Removing an item from a module doesn't delete the underlying content, it just takes it out of that module. The same repository or page can also live outside the module, so a module is really a curated view over content you already have.
+Add items, then drag them into the order you want students to follow. Removing a page or deck from a module doesn't delete it, it just takes it out of that module; the same page can appear in several modules. Assignments belong to their module.
+
+### The module card
+
+Each assignment row on the card shows its title, a caption such as `lab-1 · push · 10%` (repository name, submission mode, weight) or `· issue`, a **Published** or **Draft** tag, and **Edit**, which opens the assignment form. Clicking the row opens its submissions: the assignment page for a repository assignment, the results for a quiz, the responses for a form. The row's **⋮** menu has **Edit repository** / **Edit quiz** / **Edit form** (to change the thing itself) and **Delete assignment**.
 
 ### Publishing a module
 
@@ -45,9 +48,10 @@ This makes modules a natural way to release content on a schedule: build the who
 
 ### Showing modules to students
 
-Modules are off for students by default. To turn them on, go to **Settings > Content** and enable **Show Modules** under Student Navigation. Once enabled, students get a **Modules** view in their sidebar that shows each published module with its items in the order you set, giving them a clear, guided path through the course instead of a flat list of repositories and pages.
+Students get a **Modules** entry in their sidebar that shows each published module with its items in the order you set. Their sidebar is short, **Dashboard, Calendar, Modules, Assignments, Resubmits, Tokens, Settings, Help**, and Modules is how they reach pages, slides, and their work; the **Assignments** page is the same work as a flat list with deadlines and status. Modules are on by default; the **Show Modules** switch under **Settings > Content > Student Navigation** hides the entry if you need to.
 
 ### What's next
 
-- [Repositories & assignments](/docs/instructors/modules-and-assignments)
+- [Modules & assignments](/docs/instructors/modules-and-assignments)
+- [Repositories](/docs/instructors/repositories)
 - [Build pages](/docs/instructors/pages)

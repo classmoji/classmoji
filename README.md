@@ -9,17 +9,18 @@ The classroom management system for teaching CS as it's actually practiced. Stud
 
 **Same GitHub Classroom features:**
 
-- Create individual or group assignments
-- Set due dates and track progress in teacher dashboard
-- Reuse assignments across multiple classrooms
-- Automatic repository creation for each student/group
+- Modules with typed assignments: a repository, a quiz or a form
+- Individual or group repositories with automatic creation for each student/team
 - Template repositories with starter code and boilerplate
+- Submit by pushing to the repo or by closing a GitHub issue, per assignment
+- Autograding via GitHub Actions, with results shown alongside submissions
+- Set release dates and deadlines and track progress in the teacher dashboard
 - Access control management
-- Automatic feedback pull requests (special "Feedback" PR for each student)
 
 **Extra features:**
 
-- Assign emoji grades instead of traditional scores
+- Grade with an emoji scale or a plain numeric scale
+- A grading page per assignment, plus a gradebook with every assignment in one view
 - AI quiz generation and grading using Claude
 - Code-aware quiz mode (can access student repositories)
 - Interactive slide presentations with Reveal.js

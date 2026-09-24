@@ -10,9 +10,9 @@ Results are advisory feedback, not grades. They give students a quick signal tha
 ### How it works
 
 1. You add one or more tests to a repository.
-2. You click **Autograde** to push a Github Actions workflow into every student repository for that lab.
+2. You click **Autograde** to push a Github Actions workflow into every student repository.
 3. A student pushes their code. The workflow runs the tests on Github's runners.
-4. The results are reported back to Classmoji and shown to the student and to you.
+4. The results are reported back to Classmoji and shown to the student and on the assignment page.
 
 Behind the scenes Classmoji generates a `.github/workflows/classroom.yml` file from your tests and uses the open source [classroom-resources](https://github.com/classroom-resources) graders, the same graders that power Github Classroom. New student repositories get the workflow automatically when they are created, so in most cases you only push manually after editing your tests.
 
@@ -52,13 +52,19 @@ When you pick the **Input / output** method, you get two extra fields and a comp
 
 ### Pushing the workflow to student repos
 
-After you save your tests, open the repository's detail page and click **Autograde**. This pushes the generated workflow into every existing student repository for that lab. The button is disabled until the repository has at least one test.
+After you save your tests, click **Autograde**: it's in the **⋮** menu of the repository's row on the **Repositories** page, and in the **⋮** menu of any assignment page that submits through that repository. This commits the generated `.github/workflows/classroom.yml` into every existing student repository.
 
-You only need to do this when you add or change tests. Repositories created after the tests exist already receive the workflow when they are provisioned.
+You only need to do this when you add or change tests. Student repositories created after the tests exist get the workflow when they are created.
+
+### How results get back
+
+The workflow runs on every push, uses the Github Classroom grader actions, and posts a check-run on the commit. A final step reports pass/fail to Classmoji through Trigger.dev's public API. The address it calls is `TRIGGER_PUBLIC_API_URL` (default: the Trigger.dev cloud, `https://api.trigger.dev`). If you self-host Trigger.dev, set that variable to your public Trigger URL; never the worker-internal `TRIGGER_API_URL`, which Github's runners can't reach.
+
+If the report can't be delivered, it's visible: the report step fails in the Actions log while the student's test check stays green. Classmoji simply won't show a result for that push.
 
 ### What students see
 
-On their **Repositories** page each student sees an autograding card for their repo showing:
+In **Modules**, each repository assignment shows the student an autograding card for their repo with:
 
 - A summary pill, for example **3/4 passing**, green when everything passes and red when any test fails.
 - A checklist of every test with a green check or a red cross next to each test name.
@@ -68,11 +74,11 @@ The card makes it clear that results come from Github Actions on the last push a
 
 ### What you see
 
-In the repository roster you get a compact **Autograding** column with a pill for each student showing how many tests passed (for example **3/4**), green when all pass and red otherwise. Click a pill to jump straight to that run on Github Actions.
+The assignment page's roster has an **Autograding** column with a pill for each student showing how many tests passed (for example **3/4**), green when all pass and red otherwise. Click a pill to jump straight to that run on Github Actions.
 
 ### Things to know
 
-- **Results are not grades.** Autograding never writes to a student's grade. The points field on a test is reserved for future grade mapping and is not used yet.
+- **Results are not grades.** Autograding never writes to a student's grade.
 - **Tests are advisory, not tamper proof.** The workflow lives in the student's own repository, so a determined student could edit it. Use autograding as fast feedback, and rely on your own review and emoji grades for the grade of record.
 - **Runs happen on Github Actions.** Autograding needs Github Actions enabled for your organization. Each push to any branch triggers a run; pushes made by the `github-classroom[bot]` account are skipped so setup commits do not produce noise.
 - **One result per push.** Classmoji stores the latest run per repository and shows that on the student and instructor views.

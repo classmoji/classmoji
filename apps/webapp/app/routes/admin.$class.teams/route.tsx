@@ -1,5 +1,5 @@
 import { Outlet, useNavigate } from 'react-router';
-import { Table, Tag } from 'antd';
+import { Checkbox, Modal, Table, Tag } from 'antd';
 import { useState } from 'react';
 
 import {
@@ -49,10 +49,24 @@ const AdminTeams = ({ loaderData }: Route.ComponentProps) => {
   const { fetcher, notify } = useGlobalFetcher();
   const [query, setQuery] = useState('');
 
-  const onDeleteTeam = async (team: { slug: string; name: string }) => {
-    notify(ActionTypes.DELETE_TEAM, 'Deleting team...');
+  // Deleting a team is a Classmoji change first: the GitHub team and the
+  // students' repositories stay unless the instructor ticks the box.
+  const [pendingDelete, setPendingDelete] = useState<{ slug: string; name: string } | null>(null);
+  const [deleteOnGitHub, setDeleteOnGitHub] = useState(false);
 
-    fetcher!.submit({ team }, { method: 'post', encType: 'application/json', action: '?/action' });
+  const onDeleteTeam = (team: { slug: string; name: string }) => {
+    setDeleteOnGitHub(false);
+    setPendingDelete(team);
+  };
+
+  const confirmDeleteTeam = () => {
+    if (!pendingDelete) return;
+    notify(ActionTypes.DELETE_TEAM, 'Deleting team...');
+    fetcher!.submit(
+      { team: pendingDelete, deleteOnGitHub },
+      { method: 'post', encType: 'application/json', action: '?/action' }
+    );
+    setPendingDelete(null);
   };
 
   const filteredTeams = teams.filter((t: { name: string }) =>
@@ -112,6 +126,7 @@ const AdminTeams = ({ loaderData }: Route.ComponentProps) => {
           <TableActionButtons
             onView={() => navigate(`./${team.slug}/edit`)}
             onDelete={() => onDeleteTeam(team)}
+            skipDeleteConfirm
           />
         );
       },
@@ -121,6 +136,27 @@ const AdminTeams = ({ loaderData }: Route.ComponentProps) => {
   return (
     <div className="min-h-full relative">
       <Outlet />
+      <Modal
+        open={pendingDelete !== null}
+        title={`Delete ${pendingDelete?.name ?? 'team'}?`}
+        okText="Delete"
+        okButtonProps={{ danger: true }}
+        onOk={confirmDeleteTeam}
+        onCancel={() => setPendingDelete(null)}
+      >
+        <p className="text-sm text-ink-2">
+          Removes the team from Classmoji, with its memberships and its repository records
+          (submissions, grades and analytics). The GitHub team and the repositories stay in the
+          organization unless you choose otherwise.
+        </p>
+        <Checkbox
+          className="mt-3"
+          checked={deleteOnGitHub}
+          onChange={e => setDeleteOnGitHub(e.target.checked)}
+        >
+          Also delete the GitHub team and its repositories
+        </Checkbox>
+      </Modal>
       <div className="flex items-center justify-between gap-3 mt-2 mb-4">
         <h1 className="text-lg font-semibold text-ink-1 shrink-0">Teams</h1>
 
@@ -191,12 +227,13 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
   assertClassroomMutationAllowed({ status: classroom.status, role: membership!.role });
 
   const data = await request.json();
-  const { team } = data;
+  const { team, deleteOnGitHub } = data;
 
   try {
     await ClassmojiService.teamAdmin.deleteTeam({
       classroomId: classroom.id,
       slugOrId: team.slug,
+      deleteOnProvider: deleteOnGitHub === true,
     });
   } catch (error: unknown) {
     if (error instanceof TeamServiceError) {

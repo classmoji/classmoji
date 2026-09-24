@@ -1,20 +1,31 @@
 interface RepoAssignmentForGithub {
   git_repo?: { name: string } | null;
-  provider_issue_number?: number;
+  provider_issue_number?: number | null;
 }
 
 interface RepoAssignmentWithModule {
-  assignment: { id: string; repository_id?: string };
+  /** repository_id is null for quiz/form assignments, which have no repo. */
+  assignment: { id: string; repository_id?: string | null };
 }
+
+/**
+ * The student's submission on GitHub: their issue in ISSUE mode, their repo
+ * in REPO mode (no issue exists).
+ */
+export const repositoryAssignmentGithubUrl = (
+  org: string,
+  repositoryAssignment: RepoAssignmentForGithub
+) => {
+  const repoUrl = `https://github.com/${org}/${repositoryAssignment.git_repo?.name}`;
+  return repositoryAssignment.provider_issue_number != null
+    ? `${repoUrl}/issues/${repositoryAssignment.provider_issue_number}`
+    : repoUrl;
+};
 
 export const openRepositoryAssignmentInGithub = (
   org: string,
   repositoryAssignment: RepoAssignmentForGithub
-) =>
-  window.open(
-    `https://github.com/${org}/${repositoryAssignment.git_repo?.name}/issues/${repositoryAssignment.provider_issue_number}`,
-    '_blank'
-  );
+) => window.open(repositoryAssignmentGithubUrl(org, repositoryAssignment), '_blank');
 
 export const removeCircularReferences = (obj: unknown) => {
   const seen = new WeakSet();
@@ -47,7 +58,7 @@ export const groupByAssignment = (data: RepoAssignmentWithModule[]) => {
 
 export const groupByModule = (data: RepoAssignmentWithModule[]) => {
   return data.reduce((acc: Record<string, RepoAssignmentWithModule[]>, item) => {
-    const repositoryId = item.assignment.repository_id!;
+    const repositoryId = item.assignment.repository_id ?? 'none';
 
     if (!acc[repositoryId]) {
       acc[repositoryId] = [];

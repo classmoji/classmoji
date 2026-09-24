@@ -62,11 +62,14 @@ export const gradeAddTool: ToolDefinition<GradeAddArgs> = {
   annotations: { destructive: false },
   title: 'Add a grade',
   description:
-    'Adds an emoji grade to a submission (a GitRepoAssignment — one assignment on one ' +
-    "student/team repo). Use a submission id from the grading queue. The emoji must be in the classroom's " +
-    'grading scale. Token rewards from the emoji mapping are minted automatically (per team member ' +
-    'for group repos). If the submission has an open regrade request, pre-request grades are ' +
-    'replaced rather than averaged.',
+    'Adds a grade to a submission (a GitRepoAssignment — one assignment on one student/team ' +
+    'repo). Use a submission id from the grading queue. The value must be in the classroom\'s ' +
+    'grading scale: on an emoji scale, one of the configured emojis (a grader may stack several; ' +
+    'the submission grade is their mean); on the numeric scale, a `score-N` emoji (score-0 … ' +
+    "score-100), where the call replaces the caller's previous score on that submission (its " +
+    "tokens reversed) and other graders' scores stay. Token rewards from the mapping are minted " +
+    'automatically (per team member for group repos). If the submission has an open regrade ' +
+    'request, pre-request grades are replaced rather than averaged.',
   scope: 'write',
   roles: TEACHING_TEAM,
   inputSchema: {

@@ -14,11 +14,12 @@ import {
 } from '@tabler/icons-react';
 import {
   GitHubStatsPanel,
+  CommitCount,
+  type CommitCountSnapshot,
   type GitHubStatsSnapshot,
   type EligibleStudent,
 } from '~/components/features/analytics';
 import { openRepositoryAssignmentInGithub } from '~/utils/helpers.client';
-import { emojis } from '@classmoji/utils';
 import dayjs from 'dayjs';
 import useStore from '~/store';
 import {
@@ -27,8 +28,9 @@ import {
   SearchInput,
   Countdown,
   TableActionButtons,
-  EmojisDisplay,
+  Emoji,
 } from '~/components';
+import GradeBadges from '~/components/features/grading/GradeBadges';
 
 interface GradeEntry {
   id: string;
@@ -64,7 +66,8 @@ interface RepoAssignment {
   assignment: AssignmentInfo;
   grades: GradeEntry[];
   git_repo: RepositoryInfo;
-  provider_issue_number?: number;
+  provider_issue_number?: number | null;
+  analytics_snapshot?: CommitCountSnapshot | null;
 }
 
 interface ModuleItem {
@@ -322,6 +325,16 @@ const RepositoryAssignmentsTable = ({
     // When switching data sources, reset page implicitly via key (Table handles this)
   }, [showMyAssignments]);
 
+  // The classroom's own grade emojis drive the Grade filter. The prop is either
+  // a { emoji: grade } record or the full mapping rows, depending on the loader.
+  const gradeEmojiKeys = useMemo(
+    () =>
+      Array.isArray(emojiMappings)
+        ? emojiMappings.map(m => m.emoji)
+        : Object.keys(emojiMappings ?? {}),
+    [emojiMappings]
+  );
+
   const columns = [
     {
       title: 'Owner',
@@ -348,6 +361,21 @@ const RepositoryAssignmentsTable = ({
         record.git_repo.repository.title === value,
     },
     {
+      title: 'Commits',
+      key: 'commits',
+      align: 'right' as const,
+      width: 100,
+      sorter: (a: RepoAssignment, b: RepoAssignment) =>
+        (a.analytics_snapshot?.total_commits ?? -1) - (b.analytics_snapshot?.total_commits ?? -1),
+      render: (_: unknown, record: RepoAssignment) =>
+        record.analytics_snapshot?.total_commits === null ||
+        record.analytics_snapshot?.total_commits === undefined ? (
+          <span className="text-ink-3">—</span>
+        ) : (
+          <CommitCount snapshot={record.analytics_snapshot} size="lg" />
+        ),
+    },
+    {
       title: 'Assignment',
       dataIndex: ['assignment', 'title'],
       key: 'assignment',
@@ -359,8 +387,8 @@ const RepositoryAssignmentsTable = ({
       filters:
         active === 'all'
           ? [
-              ...Object.keys(emojis).map(key => ({
-                text: emojis[key].emoji,
+              ...gradeEmojiKeys.map(key => ({
+                text: <Emoji emoji={key} fontSize={16} />,
                 value: key,
               })),
               { text: 'No Grade', value: 'NO_GRADE' },
@@ -370,7 +398,9 @@ const RepositoryAssignmentsTable = ({
         if (value === 'NO_GRADE') return !record.grades.length;
         return record.grades.some((grade: GradeEntry) => grade.emoji === value);
       },
-      render: (grades: GradeEntry[]) => <EmojisDisplay grades={grades} />,
+      render: (grades: GradeEntry[]) => (
+        <GradeBadges grades={grades} emojiMappings={emojiMappings as Record<string, unknown>} />
+      ),
     },
     {
       title: 'Status',
@@ -485,9 +515,7 @@ const RepositoryAssignmentsTable = ({
   return (
     <div className="flex flex-col">
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mt-2 mb-4 sm:min-h-8">
-        <h1 className="text-base font-semibold leading-8 text-ink-2">
-          Grading
-        </h1>
+        <h1 className="text-base font-semibold leading-8 text-ink-2">Grading</h1>
 
         <div className="flex flex-wrap items-center gap-3">
           <label className="flex items-center gap-2 text-xs text-gray-600 dark:text-gray-300 whitespace-nowrap">
@@ -537,9 +565,7 @@ const RepositoryAssignmentsTable = ({
             >
               {tab.label}
               <span
-                className={`ml-2 text-xs tabular-nums ${
-                  isActive ? 'text-ink-3' : 'text-ink-4'
-                }`}
+                className={`ml-2 text-xs tabular-nums ${isActive ? 'text-ink-3' : 'text-ink-4'}`}
               >
                 {count}
               </span>
@@ -556,12 +582,8 @@ const RepositoryAssignmentsTable = ({
               <div className="flex-1 flex flex-col items-center justify-center text-center gap-3">
                 <Icon size={36} strokeWidth={1.5} className="text-ink-4" />
                 <div>
-                  <div className="text-sm font-semibold text-ink-1">
-                    {title}
-                  </div>
-                  {subtitle && (
-                    <div className="mt-1 text-xs text-ink-3">{subtitle}</div>
-                  )}
+                  <div className="text-sm font-semibold text-ink-1">{title}</div>
+                  {subtitle && <div className="mt-1 text-xs text-ink-3">{subtitle}</div>}
                 </div>
               </div>
             );

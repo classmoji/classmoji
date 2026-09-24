@@ -239,7 +239,8 @@ interface CalendarDeadlineItem {
   is_deadline: true;
   is_unpublished: boolean;
   assignment_id: string;
-  repository_id: string;
+  /** Null for quiz/form assignments, which have no repository. */
+  repository_id: string | null;
   pages: CalendarDisplayPage[];
   slides: CalendarDisplaySlide[];
   /**
@@ -322,7 +323,7 @@ interface CalendarOverrideData {
 }
 
 interface DeadlineRepositoryAssignment {
-  provider_issue_number: number;
+  provider_issue_number: number | null;
   git_repo: {
     name: string;
   };
@@ -1065,24 +1066,25 @@ export const getDeadlinesForRange = async (
 ) => {
   const assignments = await getPrisma().assignment.findMany({
     where: {
-      repository: {
-        classroom_id: classroomId,
-        // Only filter by is_published if not including unpublished
-        ...(includeUnpublished ? {} : { is_published: true }),
-      },
-      // Only filter by is_published if not including unpublished
-      ...(includeUnpublished ? {} : { is_published: true }),
+      module: { classroom_id: classroomId },
+      // Only filter by is_published if not including unpublished. A REPO
+      // assignment also needs its repository published; quiz/form assignments
+      // have no repository and stand on their own flag.
+      ...(includeUnpublished
+        ? {}
+        : {
+            is_published: true,
+            OR: [{ repository: null }, { repository: { is_published: true } }],
+          }),
       student_deadline: {
         gte: startDate,
         lte: endDate,
       },
     },
     include: {
-      repository: {
+      module: {
         select: {
-          id: true,
           title: true,
-          is_published: true,
           classroom: {
             select: {
               git_organization: {
@@ -1092,6 +1094,13 @@ export const getDeadlinesForRange = async (
               },
             },
           },
+        },
+      },
+      repository: {
+        select: {
+          id: true,
+          title: true,
+          is_published: true,
         },
       },
       pages: {
@@ -1172,28 +1181,35 @@ export const getDeadlinesForRange = async (
     const repoAssignment = (
       'git_repo_assignments' in assignment ? (assignment.git_repo_assignments?.[0] ?? null) : null
     ) as DeadlineRepositoryAssignment | null;
-    const gitOrgLogin = assignment.repository.classroom?.git_organization?.login;
+    const gitOrgLogin = assignment.module?.classroom?.git_organization?.login;
 
-    // Build GitHub issue URL if user has a repo assignment
+    // The student's submission on GitHub: their issue (ISSUE mode) or their
+    // repo (REPO mode, no issue exists).
     let github_issue_url = null;
     if (repoAssignment && gitOrgLogin) {
-      github_issue_url = `https://github.com/${gitOrgLogin}/${repoAssignment.git_repo.name}/issues/${repoAssignment.provider_issue_number}`;
+      const repoUrl = `https://github.com/${gitOrgLogin}/${repoAssignment.git_repo.name}`;
+      github_issue_url =
+        repoAssignment.provider_issue_number != null
+          ? `${repoUrl}/issues/${repoAssignment.provider_issue_number}`
+          : repoUrl;
     }
 
     // Flag unpublished content for admin UI styling
-    const isUnpublished = !assignment.is_published || !assignment.repository?.is_published;
+    const isUnpublished =
+      !assignment.is_published ||
+      (assignment.repository ? !assignment.repository.is_published : false);
 
     const deadline: CalendarDeadlineItem = {
       id: `deadline-${assignment.id}`,
       event_type: 'DEADLINE',
       title: `Due: ${assignment.title}`,
-      description: assignment.repository.title,
+      description: assignment.repository?.title ?? assignment.module?.title ?? '',
       start_time: assignment.student_deadline!,
       end_time: assignment.student_deadline!,
       is_deadline: true,
       is_unpublished: isUnpublished,
       assignment_id: assignment.id,
-      repository_id: assignment.repository.id,
+      repository_id: assignment.repository?.id ?? null,
       // Built entry by entry, like the event-link leg: the stored link row
       // carries columns (ids, ordering, timestamps) the calendar never renders.
       pages: assignment.pages.flatMap(l =>

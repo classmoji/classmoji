@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useLoaderData, Link, useFetcher } from 'react-router';
-import { Popconfirm, Modal, Input, Tooltip, Spin, message } from 'antd';
+import { Popconfirm, Modal, Input, Tooltip, Spin } from 'antd';
+
+import { useToast } from '~/hooks';
 import getPrisma from '@classmoji/database';
 import { getAuthSession, assertSlideAccess } from '@classmoji/auth/server';
 import { ClassmojiService } from '@classmoji/services';
@@ -621,6 +623,7 @@ function DeckThumbnail({
 }
 
 export default function SlidesIndex() {
+  const toast = useToast();
   const { slides: initialSlides, webappUrl } = useLoaderData<typeof loader>();
   const [slides, setSlides] = useState(initialSlides);
   const [renameModal, setRenameModal] = useState<{
@@ -667,11 +670,11 @@ export default function SlidesIndex() {
   useEffect(() => {
     if (fetcher.data?.success) {
       if (fetcher.data.intent === 'delete' && fetcher.data.deletedSlideId) {
-        message.success('Slide deleted successfully');
+        toast.success('Slide deleted successfully');
         setSlides(prev => prev.filter(s => s.id !== fetcher.data.deletedSlideId));
         setProgressModal({ open: false, action: null, slideTitle: '' });
       } else if (fetcher.data.intent === 'rename' && fetcher.data.slide) {
-        message.success('Slide renamed successfully');
+        toast.success('Slide renamed successfully');
         setSlides(prev =>
           prev.map(s =>
             s.id === fetcher.data.slide.id ? { ...s, title: fetcher.data.slide.title } : s
@@ -680,12 +683,12 @@ export default function SlidesIndex() {
         setRenameModal({ open: false, slide: null });
         setRenameValue('');
       } else if (fetcher.data.intent === 'duplicate' && fetcher.data.newSlide) {
-        message.success('Slide duplicated successfully');
+        toast.success('Slide duplicated successfully');
         setSlides(prev => [fetcher.data.newSlide, ...prev]);
         setProgressModal({ open: false, action: null, slideTitle: '' });
       }
     } else if (fetcher.data?.error) {
-      message.error(fetcher.data.error);
+      toast.error(fetcher.data.error);
       setProgressModal({ open: false, action: null, slideTitle: '' });
     }
   }, [fetcher.data]);

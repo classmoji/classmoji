@@ -199,7 +199,7 @@ describe('MonthGrid — the starred resource', () => {
       }
     );
 
-    expect(html).toContain('href="/admin/cs52-26f/repos#homework"');
+    expect(html).toContain('href="/admin/cs52-26f/assignments/a-1"');
   });
 
   it('marks a starred draft, so staff can see what the class cannot', () => {

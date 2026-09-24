@@ -9,11 +9,11 @@ import RolesDiagram from '~/components/RolesDiagram.astro';
 
 ### How Classmoji maps to Github
 
-If you've used Github before, Classmoji will feel familiar. Every Classmoji concept has a Github counterpart, and they nest the same way: an organization holds repositories, which hold issues.
+If you've used Github before, Classmoji will feel familiar. Every Classmoji concept has a Github counterpart: an organization holds repositories, and each student's work happens in one.
 
 <GithubMappingDiagram />
 
-A Github organization is a Classmoji classroom, a Github repository is a Classmoji repository, and the issues inside a repository are your assignments. On the people side, org members are your students and Github teams are your teams.
+A Github organization is a Classmoji classroom, and a Github repository is a Classmoji repository. Assignments are Classmoji's own layer on top: a student submits one by pushing to their repo, or, in issue mode, by closing an issue Classmoji opened there. On the people side, org members are your students and Github teams are your teams.
 
 Everything stays in Github where your code already lives.
 
@@ -23,21 +23,21 @@ A classroom is scoped to a Github organization, but one org can hold multiple cl
 
 ### Repositories
 
-A repository is a unit of work backed by a Github repo, like a lab, a project, or a weekly problem set. Repositories hold assignments, and you can weight them for grading or mark them as extra credit.
+A repository is storage backed by a Github repo. It points at a template that Classmoji copies to each student or team when you publish it. It carries no weight and no grades; several assignments can submit through the same repository.
 
 ### Modules
 
-Modules are an ordered layer on top of your content. A module groups repositories, pages, slides, and quizzes into a sequence students move through, like a week or a unit. Unlike a repository, a module isn't backed by a Github repo. It's a Classmoji-only way to organize what students see and the order they see it in. Modules stay hidden until you publish them.
+A module is a week or a unit: an ordered list of pages, slide decks, and assignments. Every assignment lives in a module, and students reach everything through their Modules view. A module isn't backed by a Github repo. Modules stay hidden until you publish them.
 
 <ModulesDiagram />
 
 ### Assignments
 
-Assignments are Github issues inside a repository. Each assignment tracks a student's work within the context of that repository, keeping everything organized in the same place your code lives.
+An assignment is one graded piece of work. It has a type, **repository**, **quiz**, or **form**, and carries the weight, release date, deadlines, and token rate. A repository assignment is submitted by pushing to the student's repo (push mode) or by closing a Github issue Classmoji opened there (issue mode). The course grade is the weighted mean of the graded assignments, plus extra credit.
 
-### Emoji Grading
+### Grading
 
-Instead of numeric scores, Classmoji uses emoji to represent grades. Each emoji maps to a grade range. The goal is feedback that feels less punitive and more expressive. If you've only ever graded with numbers, this feels weird for about one week. Then you won't want to go back.
+Classmoji grades with emoji: each emoji maps to a number, and a submission's grade is the mean of the emoji it was given. The goal is feedback that feels less punitive and more expressive. If you've only ever graded with numbers, this feels weird for about one week. Then you won't want to go back. If you'd rather not, a built-in 0–100 scale is one click away.
 
 ### Tokens
 

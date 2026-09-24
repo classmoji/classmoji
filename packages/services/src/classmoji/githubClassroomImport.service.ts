@@ -451,6 +451,21 @@ async function importClassroomAttempt(args: {
         update: {},
       });
 
+      // Every repository lives in a module. An import lands everything in one
+      // published module the teacher can split up afterwards.
+      const importModule = await tx.module.upsert({
+        where: {
+          classroom_id_title: { classroom_id: classroom.id, title: 'GitHub Classroom import' },
+        },
+        create: {
+          classroom_id: classroom.id,
+          title: 'GitHub Classroom import',
+          slug: 'github-classroom-import',
+          is_published: true,
+        },
+        update: {},
+      });
+
       // Repositories + assignments. Keep a map from the GitHub assignment id to the
       // Classmoji repository id so student repos can be linked back to it.
       const repoIdByAssignment = new Map<number, string>();
@@ -468,9 +483,6 @@ async function importClassroomAttempt(args: {
             // already exist on Github, so there is nothing to provision and no
             // reason to hide them as drafts.
             is_published: true,
-            // Imported assignments start unweighted; the teacher sets grading
-            // weights when they configure the gradebook.
-            weight: 0,
           },
           // Don't clobber teacher edits on re-import.
           update: {},
@@ -478,18 +490,30 @@ async function importClassroomAttempt(args: {
         repoIdByAssignment.set(a.githubId, repository.id);
         summary.repositoriesImported += 1;
 
-        await tx.assignment.upsert({
-          where: { repository_id_title: { repository_id: repository.id, title: a.title } },
-          create: {
-            repository_id: repository.id,
-            title: a.title,
-            slug: a.slug || null,
-            student_deadline: a.deadline ? new Date(a.deadline) : null,
-            // Published on arrival, same as the repository above (repos exist).
-            is_published: true,
-          },
-          update: {},
+        const existingAssignment = await tx.assignment.findFirst({
+          where: { repository_id: repository.id, title: a.title },
+          select: { id: true },
         });
+        if (!existingAssignment) {
+          await tx.assignment.create({
+            data: {
+              module_id: importModule.id,
+              type: 'REPO',
+              repository_id: repository.id,
+              title: a.title,
+              slug: a.slug || null,
+              student_deadline: a.deadline ? new Date(a.deadline) : null,
+              // Published on arrival, same as the repository above (repos exist).
+              is_published: true,
+              // GitHub Classroom never had Classmoji issues: students pushed to
+              // their repo, and that push is the submission here too.
+              submission_mode: 'REPO',
+              // Imported assignments start unweighted; the teacher sets grading
+              // weights when they configure the gradebook.
+              weight: 0,
+            },
+          });
+        }
         summary.assignmentsImported += 1;
       }
 

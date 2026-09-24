@@ -220,15 +220,16 @@ export const moduleItemAddTool: ToolDefinition<ModuleItemAddArgs> = {
   },
   title: 'Add an item to a module',
   description:
-    'Appends a content item to a module: a page, a repo/lab (REPOSITORY links the assignment ' +
-    'container, not a git repo), a quiz, a slide deck, or a form. The target must belong to the ' +
-    'same classroom. Owner only.\n' +
+    'Appends a content item to a module: a page, a quiz, a slide deck, or a form. The target ' +
+    'must belong to the same classroom. Repositories are not module items: they are attached ' +
+    'to an assignment (assignment_create with type REPO), so REPOSITORY is refused here. ' +
+    'Owner only.\n' +
     'A FORM item links one of the classroom’s forms (list_forms / form_create) into the ' +
     'curriculum, so a waitlist, survey, team bid or peer review sits in the week it belongs to ' +
     'rather than as a link somebody has to remember to send. The form’s `closes_at` becomes the ' +
     'item’s due date, so setting one (form_update) is what puts the module row on the schedule. ' +
     'A DRAFT form can be attached — the item is created now and simply stays hidden from members ' +
-    'until form_publish, exactly as an unpublished repo or a DRAFT quiz does. A CLOSED form stays ' +
+    'until form_publish, exactly as a DRAFT quiz does. A CLOSED form stays ' +
     'visible on purpose, reading as closed. Attaching a form requires a Pro subscription (the ' +
     'forms surface is Pro everywhere); the other four types do not.',
   scope: 'write',
@@ -238,8 +239,11 @@ export const moduleItemAddTool: ToolDefinition<ModuleItemAddArgs> = {
     module_id: z.string().uuid().describe('Module id'),
     item_type: z
       .enum(['PAGE', 'REPOSITORY', 'QUIZ', 'SLIDE', 'FORM'])
-      .describe('What kind of content the item links'),
-    target_id: z.string().uuid().describe('Id of the page/repository/quiz/slide/form to link'),
+      .describe(
+        'What kind of content the item links. REPOSITORY is no longer an item: repositories ' +
+          'are attached to assignments (assignment_create with repository_id).'
+      ),
+    target_id: z.string().uuid().describe('Id of the page/quiz/slide/form to link'),
   },
   handler: async (args, ctx) => {
     const classroom = requireClassroomCtx(ctx);
@@ -251,10 +255,19 @@ export const moduleItemAddTool: ToolDefinition<ModuleItemAddArgs> = {
     // unchanged for a free-tier classroom.
     if (args.item_type === 'FORM') await assertProTier(ctx);
 
+    // Repositories are attached to assignments, not placed in modules as
+    // content items. Refused before any lookup.
+    if (args.item_type === 'REPOSITORY') {
+      throw new ToolError(
+        'invalid_params',
+        'Repositories are attached to assignments; use assignment_create with repository_id.'
+      );
+    }
+
     try {
       const item = await ClassmojiService.module.addItem(
         args.module_id,
-        args.item_type as ModuleItemType,
+        args.item_type as Exclude<ModuleItemType, 'REPOSITORY'>,
         args.target_id,
         classroom.classroomId
       );

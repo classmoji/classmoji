@@ -160,3 +160,46 @@ test.describe('Student resubmits an assignment', () => {
     }
   });
 });
+
+/**
+ * REPO-mode assignments: there is no issue. A push to the student's repo is
+ * the submission, which the push webhook records as status CLOSED with the
+ * delivery time. The webhook is not reachable in e2e, so the push is modelled
+ * the same way the issue close is above: by stamping the row.
+ */
+test.describe('Student submits a REPO-mode assignment by pushing', () => {
+  test('a push flips the row to Submitted and the row links to the repo, not an issue', async ({
+    authenticatedPage: page,
+    testOrg,
+  }) => {
+    const classroom = await getClassroomBySlug(TEST_CLASSROOM);
+    const seeded = await seedStudentSubmission(
+      classroom.id,
+      await studentId(),
+      `qa-student-push-fixture`,
+      { status: 'OPEN', submissionMode: 'REPO' }
+    );
+
+    try {
+      await page.goto(ASSIGNMENTS_PATH(testOrg));
+      await waitForDataLoad(page);
+      const before = page.getByRole('row').filter({ hasText: seeded.assignmentTitle });
+      await expect(before.getByText('Not submitted')).toBeVisible();
+      // No issue exists: the row links to the student's repo and offers no issue link.
+      await expect(before.getByTitle('Open your repository on GitHub')).toBeVisible();
+      await expect(before.getByTitle('Open the GitHub issue for this assignment')).toHaveCount(0);
+
+      // Model the push the webhook would record.
+      await setSubmissionStatus(seeded.gitRepoAssignmentId, 'CLOSED');
+      expect(await getSubmissionStatus(seeded.gitRepoAssignmentId)).toBe('CLOSED');
+
+      await page.reload();
+      await waitForDataLoad(page);
+      await page.getByRole('button', { name: /^Completed/ }).click();
+      const after = page.getByRole('row').filter({ hasText: seeded.assignmentTitle });
+      await expect(after.getByText('Submitted')).toBeVisible();
+    } finally {
+      await deleteRepositoryById(seeded.repositoryId);
+    }
+  });
+});

@@ -77,19 +77,30 @@ describe('resourceDestination', () => {
     });
   });
 
-  it('sends staff to the repositories page, anchored at the repository', () => {
+  it('sends staff to the assignment page, where the roster and grading live', () => {
     // Deliberate: staff have no repo of their own in the class, so there is no
     // issue to deep-link them into.
     expect(resourceDestination(assignment, STAFF)).toEqual({
       kind: 'internal',
-      to: '/admin/cs52-26f/repos#landing-page',
+      to: '/admin/cs52-26f/assignments/a-1',
     });
   });
 
-  it('falls back for a student who has not been assigned a repo yet', () => {
+  it('sends a student with a push-mode repo (no issue) to the repo itself', () => {
+    const pushMode: ResourceLinkContext = {
+      ...STUDENT,
+      repoAssignmentsByAssignmentId: { 'a-1': { git_repo: { name: 'landing-page-jane' } } },
+    };
+    expect(resourceDestination(assignment, pushMode)).toEqual({
+      kind: 'external',
+      href: 'https://github.com/cs52/landing-page-jane',
+    });
+  });
+
+  it('falls back to the Assignments page for a student who has no repo yet', () => {
     expect(
       resourceDestination(assignment, { ...STUDENT, repoAssignmentsByAssignmentId: {} })
-    ).toEqual({ kind: 'internal', to: '/student/cs52-26f/repos#landing-page' });
+    ).toEqual({ kind: 'internal', to: '/student/cs52-26f/assignments' });
   });
 
   it('falls back when half the issue URL is missing', () => {
@@ -102,16 +113,11 @@ describe('resourceDestination', () => {
     };
     expect(resourceDestination(assignment, noRepoName).kind).toBe('internal');
 
-    const noIssue: ResourceLinkContext = {
-      ...STUDENT,
-      repoAssignmentsByAssignmentId: { 'a-1': { git_repo: { name: 'landing-page-jane' } } },
-    };
-    expect(resourceDestination(assignment, noIssue).kind).toBe('internal');
   });
 
   it('defaults to the student prefix when a caller names no role', () => {
     expect(resourceDestination(assignment, { classSlug: 'cs52-26f' })).toMatchObject({
-      to: '/student/cs52-26f/repos#landing-page',
+      to: '/student/cs52-26f/assignments',
     });
   });
 });

@@ -708,3 +708,57 @@ export const duplicateImportedTemplates = async (
 
   return summary;
 };
+
+/**
+ * A blank template repository, made on demand in the classroom's own org when
+ * an instructor adds a repository assignment without picking a template. The
+ * repo is private, named `<slug>-template`, and seeded with a README so it has
+ * a root commit (student copies are made from `main`, and a repo with no
+ * commits would fall back to classmoji/empty-template). Returns the
+ * `owner/name` reference the Repository row stores as its template.
+ */
+export async function createBlankTemplateRepository({
+  gitOrganization,
+  slug,
+  assignmentTitle,
+  classroomName,
+}: {
+  gitOrganization: GitOrgRecord;
+  slug: string;
+  assignmentTitle: string;
+  classroomName: string;
+}): Promise<{ fullName: string; name: string }> {
+  const provider = getGitProvider(gitOrganization);
+  const orgLogin = gitOrganization.login;
+  const name = `${slug}-template`;
+
+  await createRepositoryWithBackoff({ provider, orgLogin, name, onWait: () => {} });
+  try {
+    await ContentService.uploadBatch({
+      gitOrganization,
+      repo: name,
+      files: [
+        {
+          path: 'README.md',
+          content:
+            `# ${assignmentTitle}\n\n` +
+            `Starter code for **${assignmentTitle}** in ${classroomName}. ` +
+            'Anything committed here is what each student starts from.\n',
+        },
+      ],
+      branch: 'main',
+      message: `Blank template for ${assignmentTitle}`,
+      allowRootCommit: true,
+    });
+  } catch (error: unknown) {
+    // Do not leave an empty shell behind: it would be picked up by the
+    // template search and produce student repos with no commits.
+    try {
+      await provider.deleteRepository(orgLogin, name);
+    } catch {
+      /* the create already failed loudly enough */
+    }
+    throw error;
+  }
+  return { fullName: `${orgLogin}/${name}`, name };
+}

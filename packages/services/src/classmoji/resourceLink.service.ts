@@ -205,7 +205,7 @@ async function resolveTarget(
     }
     case 'assignment': {
       const found = await getPrisma().assignment.findFirst({
-        where: { id: targetId, repository: { classroom_id: classroomId } },
+        where: { id: targetId, module: { classroom_id: classroomId } },
         select: { id: true },
       });
       if (!found) throw notFound();
@@ -399,6 +399,7 @@ const LINK_INCLUDE = {
       id: true,
       title: true,
       slug: true,
+      module: { select: { classroom_id: true } },
       repository: { select: { id: true, title: true, classroom_id: true } },
     },
   },
@@ -413,6 +414,7 @@ type LinkRow = {
     id: string;
     title: string;
     slug: string | null;
+    module: { classroom_id: string };
     repository: { id: string; title: string; classroom_id: string } | null;
   } | null;
 };
@@ -465,11 +467,9 @@ function toSummary(
   }
 
   if (row.assignment) {
-    // Assignment has no classroom of its own; its repository is what places it.
-    if (!row.assignment.repository) {
-      return drop('its assignment target has no repository to place it in a classroom');
-    }
-    if (row.assignment.repository.classroom_id !== classroomId) {
+    // Assignment has no classroom of its own; its module is what places it.
+    // The repository is only present for REPO assignments.
+    if (row.assignment.module.classroom_id !== classroomId) {
       return drop('its assignment target is in another classroom');
     }
     return {
@@ -483,8 +483,12 @@ function toSummary(
         id: row.assignment.id,
         title: row.assignment.title,
         slug: row.assignment.slug,
-        repositoryId: row.assignment.repository.id,
-        repositoryTitle: row.assignment.repository.title,
+        ...(row.assignment.repository
+          ? {
+              repositoryId: row.assignment.repository.id,
+              repositoryTitle: row.assignment.repository.title,
+            }
+          : {}),
       },
     };
   }

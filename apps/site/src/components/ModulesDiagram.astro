@@ -1,10 +1,11 @@
 ---
 // Black-and-white structural diagram for modules: a module is a container that
-// groups all the content for ONE topic (e.g. HTML) — the repository, slides,
-// page, and quiz that all belong to that topic — in one place. Not a linear
-// sequence; a grouping. Pure outline drawing in `currentColor`, so it renders
-// dark-on-light in light mode and light-on-dark in dark mode with a single
-// asset. No fills/gradients (flat B&W only), matching the other diagrams.
+// groups all the content for ONE topic (e.g. HTML) — the assignments, slides,
+// and page that all belong to that topic — in one place. Assignments live in
+// the module; a repository is only what an assignment submits through. Pure
+// outline drawing in `currentColor`, so it renders dark-on-light in light mode
+// and light-on-dark in dark mode with a single asset. No fills/gradients (flat
+// B&W only), matching the other diagrams.
 interface Props {
   class?: string;
 }
@@ -26,7 +27,8 @@ const { class: className } = Astro.props;
     <title id="modules-title">What a module groups together</title>
     <desc id="modules-desc">
       A module is a container for one topic. The HTML Basics module groups its
-      repository, slides, page, and quiz — all about HTML — in one place.
+      slides, page, a repository assignment, and a quiz assignment — all about
+      HTML — in one place.
     </desc>
 
     <!-- Module container -->
@@ -45,24 +47,24 @@ const { class: className } = Astro.props;
     <line x1="36" y1="102" x2="484" y2="102" opacity="0.25" />
 
     <!-- Grouped content, all about the same topic (HTML) -->
-    <!-- Repository -->
-    <rect x="40" y="116" width="212" height="84" rx="10" />
-    <text x="58" y="150" fill="currentColor" stroke="none" font-size="14" font-weight="600">Repository</text>
-    <text x="58" y="173" fill="currentColor" stroke="none" font-size="12" opacity="0.7">index.html starter</text>
-
     <!-- Slides -->
-    <rect x="268" y="116" width="212" height="84" rx="10" />
-    <text x="286" y="150" fill="currentColor" stroke="none" font-size="14" font-weight="600">Slides</text>
-    <text x="286" y="173" fill="currentColor" stroke="none" font-size="12" opacity="0.7">Intro to HTML deck</text>
+    <rect x="40" y="116" width="212" height="84" rx="10" />
+    <text x="58" y="150" fill="currentColor" stroke="none" font-size="14" font-weight="600">Slides</text>
+    <text x="58" y="173" fill="currentColor" stroke="none" font-size="12" opacity="0.7">Intro to HTML deck</text>
 
     <!-- Page -->
-    <rect x="40" y="214" width="212" height="84" rx="10" />
-    <text x="58" y="248" fill="currentColor" stroke="none" font-size="14" font-weight="600">Page</text>
-    <text x="58" y="271" fill="currentColor" stroke="none" font-size="12" opacity="0.7">HTML notes &amp; reading</text>
+    <rect x="268" y="116" width="212" height="84" rx="10" />
+    <text x="286" y="150" fill="currentColor" stroke="none" font-size="14" font-weight="600">Page</text>
+    <text x="286" y="173" fill="currentColor" stroke="none" font-size="12" opacity="0.7">HTML notes &amp; reading</text>
 
-    <!-- Quiz -->
+    <!-- Assignment (repository) -->
+    <rect x="40" y="214" width="212" height="84" rx="10" />
+    <text x="58" y="248" fill="currentColor" stroke="none" font-size="14" font-weight="600">Assignment</text>
+    <text x="58" y="271" fill="currentColor" stroke="none" font-size="12" opacity="0.7">html-lab · push · 10%</text>
+
+    <!-- Assignment (quiz) -->
     <rect x="268" y="214" width="212" height="84" rx="10" />
-    <text x="286" y="248" fill="currentColor" stroke="none" font-size="14" font-weight="600">Quiz</text>
-    <text x="286" y="271" fill="currentColor" stroke="none" font-size="12" opacity="0.7">HTML basics check</text>
+    <text x="286" y="248" fill="currentColor" stroke="none" font-size="14" font-weight="600">Assignment</text>
+    <text x="286" y="271" fill="currentColor" stroke="none" font-size="12" opacity="0.7">HTML basics quiz · 5%</text>
   </svg>
 </figure>

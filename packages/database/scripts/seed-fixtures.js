@@ -52,7 +52,19 @@ export async function seedTeamWithGroupRepo(prisma, { classroom, students }) {
     });
   }
 
-  // Repository = assignment container (NOT a git repo); type GROUP → team-owned GitRepos
+  // Module → Repository (assignment container, NOT a git repo); type GROUP → team-owned GitRepos
+  const module = await prisma.module.upsert({
+    where: { classroom_id_title: { classroom_id: classroom.id, title: 'Group Project' } },
+    update: { is_published: true },
+    create: {
+      classroom_id: classroom.id,
+      title: 'Group Project',
+      slug: 'group-project',
+      position: 1,
+      is_published: true,
+    },
+  });
+
   const repository = await prisma.repository.upsert({
     where: { classroom_id_title: { classroom_id: classroom.id, title: 'group-project' } },
     update: {},
@@ -60,7 +72,6 @@ export async function seedTeamWithGroupRepo(prisma, { classroom, students }) {
       classroom_id: classroom.id,
       title: 'group-project',
       template: 'dev-org/group-project-template',
-      weight: 100,
       type: 'GROUP',
       is_published: true,
     },
@@ -70,6 +81,8 @@ export async function seedTeamWithGroupRepo(prisma, { classroom, students }) {
     where: { repository_id_title: { repository_id: repository.id, title: 'Group Project Part 1' } },
     update: {},
     create: {
+      module_id: module.id,
+      type: 'REPO',
       repository_id: repository.id,
       title: 'Group Project Part 1',
       weight: 100,
@@ -202,6 +215,18 @@ export async function seedForeignClassroom(prisma, { org }) {
 
   // Container → Assignment → GitRepo → GitRepoAssignment chain (foreign UUIDs
   // at every tier for S1 cross-classroom rejection tests)
+  const module = await prisma.module.upsert({
+    where: { classroom_id_title: { classroom_id: classroom.id, title: 'Other Week 1' } },
+    update: { is_published: true },
+    create: {
+      classroom_id: classroom.id,
+      title: 'Other Week 1',
+      slug: 'other-week-1',
+      position: 0,
+      is_published: true,
+    },
+  });
+
   const repository = await prisma.repository.upsert({
     where: { classroom_id_title: { classroom_id: classroom.id, title: 'other-hello-world' } },
     update: {},
@@ -209,7 +234,6 @@ export async function seedForeignClassroom(prisma, { org }) {
       classroom_id: classroom.id,
       title: 'other-hello-world',
       template: 'dev-org/hello-world-template',
-      weight: 100,
       type: 'INDIVIDUAL',
       is_published: true,
     },
@@ -219,6 +243,8 @@ export async function seedForeignClassroom(prisma, { org }) {
     where: { repository_id_title: { repository_id: repository.id, title: 'Other Assignment 1' } },
     update: {},
     create: {
+      module_id: module.id,
+      type: 'REPO',
       repository_id: repository.id,
       title: 'Other Assignment 1',
       weight: 100,

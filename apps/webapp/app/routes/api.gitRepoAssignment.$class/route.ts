@@ -121,16 +121,28 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
         );
       }
 
-      await HelperService.addGradeToGitRepoAssignment({
-        classroom,
-        gitRepoAssignment: { id: gitRepoAssignment.id },
-        // The UI always grades as the signed-in user; use the authenticated id
-        // rather than a client-supplied graderId.
-        graderId: userId,
-        grade,
-        studentId: gitRepoAssignment.git_repo.student_id ?? undefined,
-        teamId: gitRepoAssignment.git_repo.team_id ?? undefined,
-      });
+      try {
+        await HelperService.addGradeToGitRepoAssignment({
+          classroom,
+          gitRepoAssignment: { id: gitRepoAssignment.id },
+          // The UI always grades as the signed-in user; use the authenticated id
+          // rather than a client-supplied graderId.
+          graderId: userId,
+          grade,
+          studentId: gitRepoAssignment.git_repo.student_id ?? undefined,
+          teamId: gitRepoAssignment.git_repo.team_id ?? undefined,
+        });
+      } catch (error) {
+        // Outside the classroom's grading scale: the caller's mistake, said
+        // plainly instead of a 500.
+        if (error instanceof Error && /grading scale/.test(error.message)) {
+          return errorResponse(
+            { action: ActionTypes.ADD_GRADE_TO_GIT_REPO_ASSIGNMENT, error: error.message },
+            { status: 400 }
+          );
+        }
+        throw error;
+      }
 
       return {
         action: ActionTypes.ADD_GRADE_TO_GIT_REPO_ASSIGNMENT,
@@ -239,6 +251,62 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
       return {
         action: ActionTypes.UPDATE_LATE_OVERRIDE,
         success: message,
+      };
+    },
+
+    /**
+     * Remove one student's (or team's) submission row for an assignment. The
+     * GitHub repository is left alone; only Classmoji's record of this
+     * assignment against it goes, and its grades go with it by cascade.
+     */
+    async deleteSubmission() {
+      const { classroom, membership } = await assertClassroomAccess({
+        request,
+        classroomSlug: classSlug,
+        allowedRoles: ['OWNER', 'TEACHER'],
+        resourceType: 'GIT_REPO_ASSIGNMENT',
+        attemptedAction: 'delete_git_repo_assignment',
+        metadata: { git_repo_assignment_id: data.git_repo_assignment_id },
+      });
+      assertClassroomMutationAllowed({ status: classroom.status, role: membership!.role });
+
+      const gitRepoAssignment = await loadClassroomScopedGitRepoAssignment(
+        data.git_repo_assignment_id,
+        classroom.id
+      );
+      if (!gitRepoAssignment) {
+        return errorResponse(
+          {
+            action: ActionTypes.DELETE_GIT_REPO_ASSIGNMENT,
+            error: 'Submission not found for this classroom.',
+          },
+          { status: 404 }
+        );
+      }
+
+      // Opt-in, mirroring team deletion: Classmoji's record always goes, the
+      // GitHub repository only when explicitly asked. Removing the GitRepo
+      // cascades to every assignment's submission on it, not just this one.
+      if (data.delete_repository) {
+        const full = await ClassmojiService.classroom.findById(classroom.id);
+        const gitRepo = gitRepoAssignment.git_repo;
+        await HelperService.deleteRepository({
+          id: gitRepo.id,
+          name: gitRepo.name,
+          gitOrganization: full!.git_organization,
+          deleteFromGithub: true,
+        });
+        return {
+          action: ActionTypes.DELETE_GIT_REPO_ASSIGNMENT,
+          success: 'Submission and repository deleted',
+        };
+      }
+
+      await ClassmojiService.gitRepoAssignment.deleteById(gitRepoAssignment.id);
+
+      return {
+        action: ActionTypes.DELETE_GIT_REPO_ASSIGNMENT,
+        success: 'Submission deleted',
       };
     },
 

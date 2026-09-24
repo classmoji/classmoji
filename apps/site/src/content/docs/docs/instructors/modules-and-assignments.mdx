@@ -1,78 +1,87 @@
 ---
-title: Repositories & assignments
-description: How to create and manage repositories and assignments
+title: Modules & assignments
+description: How assignments live in modules, how students submit, and how you work through submissions
 ---
 
 import Screenshot from '~/components/Screenshot.astro';
-import RepositoryPublishDiagram from '~/components/RepositoryPublishDiagram.astro';
-import repositoriesImg from './img-repositories.png';
+import modulesImg from './img-modules.png';
+import gradingImg from './img-grading.png';
 
-### What is a repository?
+### What is an assignment?
 
-A repository is a unit of work. Think a lab, a project, or a weekly problem set. Every repository is backed by a Github repo. When you publish a repository, Classmoji creates a copy of a template repo for each student (or team), with all the assignments already loaded as issues.
+An assignment is one graded piece of work. It lives in a [module](/docs/instructors/modules), and it points at the thing students submit through:
 
-<Screenshot src={repositoriesImg} alt="The Repositories list showing a repository expanded to its weighted assignments and publish status" frame url="app.classmoji.io/admin/cs-101/repos" size="lg" />
+- **Repository** (`REPO`): students work in a Github repo Classmoji created for them
+- **Quiz** (`QUIZ`): students take a quiz in Classmoji
+- **Form** (`FORM`): students fill in a form
 
-### Creating a repository
+The assignment carries everything grading needs: its **weight** (a percentage of the course grade), an **extra credit** flag, a **release date**, a **student deadline**, a **grader deadline**, and **tokens per hour** for deadline extensions. A [repository](/docs/instructors/repositories) is just storage; several assignments can submit through the same one.
 
-Go to **Repositories** and click **New repository**.
+<Screenshot src={modulesImg} alt="The Modules list showing a published module with items and a draft module" frame url="app.classmoji.io/admin/cs-101/modules" size="lg" />
 
-**Basic info:**
+### Creating an assignment
 
-- **Title**: becomes the repo name slug (e.g. "Data Structures" → `data-structures-username`)
-- **Description**: learning objectives or overview, shown to students
-- **Type**: Individual (one repo per student) or Group (one repo per team)
-- **Weight**: what percentage of the final grade this repository counts for
-- **Extra credit**: marks the whole repository as extra credit
-- **Drop lowest**: automatically drops the N lowest-scoring assignments from the grade
+Open a module and click **Add item** on the module card. Pick **Assignment**, then choose whether it's submitted through a repository, a quiz, or a form. Pages and slide decks are added from the same menu as content.
 
-**Github template:**
+The assignment form asks for:
 
-- **Template repo**: a Github repo path (e.g. `myorg/data-structures-template`) that becomes the starting point for every student's repo. Starter code and issue templates are copied from it.
+- **Title**: for a repository assignment this also names the repository, so each student's copy is `<title-slug>-<github-login>` (for example `react-intro-jdoe`).
+- **Repository** (repository assignments): **New repository from a template** searches Github for starter code and creates the repository on the spot, or **Existing repository** picks one the class already uses. Team repositories are created on the [Repositories](/docs/instructors/repositories) page.
+- **Quiz** or **Form** (quiz and form assignments): the one students complete.
+- **Weight**: percentage of the course grade. Mark it **Extra credit** to add on top instead of counting toward the 100%.
+- **Release date**: when the assignment is released into student repositories (in issue mode, that's when the issue is opened) and unlocks for students. Always set one: an assignment with no release date is never released on its own, even after the module and repository are published. Future-dated assignments are released by a daily job (04:01 UTC), so set the date to the day before if you want something available first thing in the morning.
+- **Student deadline**: the due date. Late penalties and token extensions count from here.
+- **Grader deadline**: when graders should finish. Internal only, students never see it.
+- **Tokens per hour**: what an hour of extension costs a student. See [Configure tokens](/docs/instructors/tokens).
+- **Linked pages and slides**: content shown next to the assignment.
+- **Submission mode** (repository assignments only, see below). It locks once any student has submitted.
 
-Assignments are added inline while creating the repository (see below).
+On the module card, an assignment row shows its title, a caption like `lab-1 · push · 10%` (or `· issue`), a **Published** or **Draft** tag, and **Edit**. Clicking the row opens its submissions; for a quiz that's the quiz results, for a form the responses. The row's **⋮** menu has **Edit repository** / **Edit quiz** / **Edit form** (the thing itself, not the assignment) and **Delete assignment**.
 
-**Group repositories:**
+### Submission modes
 
-If type is Group, you'll also configure:
+A repository assignment has one of two submission modes.
 
-- **Team formation**: Instructor-assigned (you assign teams) or Student-formed (students self-organize before a deadline)
-- **Max team size**: cap on students per team
-- **Team formation deadline**: for student-formed teams, when they need to finalize
+**Push mode** is the default for new assignments. A push to the student's repo is the submission. Nothing is created on Github.
 
-### Publishing a repository
+- The last push before the deadline (plus any extension hours bought with tokens) counts as the submission. The deadline freezes it: later pushes never replace an on-time submission.
+- A student who only pushes after the deadline still gets a submission, marked late; the late penalty applies unless you waive it. Lateness counts in whole hours.
+- Once the submission is graded, its submission time is frozen.
+- If you add an assignment to a repository students have already pushed to, their latest push counts (template and bot commits are excluded).
 
-Repositories start as drafts. Nothing is visible to students until you publish.
+**Issue mode** is the older flow. When the assignment is released, Classmoji opens a Github issue in each student repo. Closing the issue submits; reopening it un-submits. Make sure students know that closing the issue is the submit button.
 
-When you publish:
+For both modes, students push their code to their repo the usual way. Push mode simply removes the extra step.
 
-- Classmoji creates a copy of the template repo for every student (or team) in your roster
-- Each repo gets the assignments loaded as Github issues
-- Assignments with a future release date are not created yet; they appear automatically when their date hits
+### The assignment page
 
-<RepositoryPublishDiagram />
+Clicking an assignment row opens its page at `/admin/:class/assignments/:id` (teachers and assistants get the same page under `/teacher` and `/assistant`).
 
-### Syncing a repository
+<Screenshot src={gradingImg} alt="An assignment page with per-student submission rows, grades, graders, and the release toggle" frame url="app.classmoji.io/admin/cs-101/assignments/lab-1" size="lg" />
 
-After publishing, hit **Sync** if something is missing. A student joined late and doesn't have a repo, or a release date just passed and the issue didn't show up. Sync checks for gaps and fills them in. That's all it does.
+At the top: a **Modules / module / assignment** breadcrumb, the facts (Repo · push or issue, a link to the repository, due date, weight, autograding on or off, student repos *n of N*), and the controls: a **Grades released** switch, **Assign graders** (owner), **Edit assignment**, and a **⋮** menu with **Autograde**, **Edit repository**, and **Update student repositories**.
 
-### Assignments
+Tiles count **Submitted**, **Late**, **Graded**, and **Ungraded**. Search by student, and filter **All / Ungraded / Late / Not submitted**.
 
-Each assignment becomes a Github issue in the student's repo. Assignments are added while creating or editing a repository.
+Each roster row is one submission, a student (or team) and their repo:
 
-**Per assignment:**
+- **Student**
+- **Repository**: link to the Github repo
+- **Last push**
+- **Autograding**: a passed/total pill when [autograding](/docs/instructors/autograding) is set up
+- **Submission**: *Submitted* with the time, *Late Nh*, *Not submitted*, or *Missing*
+- **Graders**: the assigned graders; **Assign** or **Change** opens a checklist of grader-flagged staff
+- **Grade**: the grades given.
+- **Actions**: hovering **Grade** opens the picker (emoji, or score badges on a numeric scale); **View** opens the student's repo (or issue, in issue mode). Late rows get a **⋮** with **Waive late penalty** / **Restore late penalty**.
 
-- **Title**: the issue title
-- **Weight**: percentage of this repository's grade
-- **Description**: instructions shown in the issue body, supports rich text
-- **Release date**: when the issue gets created in student repos. Leave blank to release immediately on publish. Issues are released daily at 12:01 AM, so set the date to the day before if you want something available first thing in the morning. Want to drip-release weekly? Set it up once and forget it.
-- **Student deadline**: the due date, used to calculate late penalties
-- **Grader deadline**: when graders should finish. Internal only, doesn't affect students.
+Grading itself is covered in [Grade assignments](/docs/instructors/grading).
 
-**How students submit:**
+### Weights and the course grade
 
-Students work directly in their repo and push their changes. When they're done, they close the issue, which marks the assignment as submitted in Classmoji. Closing the issue is the submit button — make sure your students know this.
+Each assignment's weight is a percentage of the course grade. The course grade is the weighted mean of the graded, non-extra-credit assignments, plus any extra credit. There is no per-repository weight and no drop-lowest; the assignment is the only place a weight lives.
 
 ### What's next
 
+- [Repositories](/docs/instructors/repositories)
 - [Grade assignments](/docs/instructors/grading)
+- [Autograding](/docs/instructors/autograding)

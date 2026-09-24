@@ -125,7 +125,9 @@ export const purchaseExtensionHours = async ({
   }
 
   // Mirror the popover's num_late_hours cap: hours past the deadline minus
-  // hours already purchased. Only OPEN submissions can accrue late hours.
+  // hours already purchased. In ISSUE mode only an OPEN (unsubmitted) issue
+  // accrues late hours. In REPO mode the latest push is the submission, so a
+  // student who pushed late is late by the push time and may still buy hours.
   const purchaseTransactions = await getPrisma().tokenTransaction.findMany({
     where: {
       git_repo_assignment_id: repoAssignment.id,
@@ -137,9 +139,15 @@ export const purchaseExtensionHours = async ({
     (sum, t) => sum + (t.hours_purchased ?? 0),
     0
   );
-  const hoursPastDeadline = Math.max(0, Math.ceil((Date.now() - deadlineMs) / 3_600_000));
-  const numLateHours =
-    repoAssignment.status === 'OPEN' ? Math.max(0, hoursPastDeadline - alreadyPurchasedHours) : 0;
+  const isRepoMode = repoAssignment.assignment?.submission_mode === 'REPO';
+  const submittedAtMs =
+    isRepoMode && repoAssignment.closed_at ? new Date(repoAssignment.closed_at).getTime() : null;
+  const hoursPastDeadline = Math.max(
+    0,
+    Math.ceil(((submittedAtMs ?? Date.now()) - deadlineMs) / 3_600_000)
+  );
+  const accrues = isRepoMode || repoAssignment.status === 'OPEN';
+  const numLateHours = accrues ? Math.max(0, hoursPastDeadline - alreadyPurchasedHours) : 0;
 
   if (numLateHours <= 0) {
     throw new Error('No purchasable late hours remain for this assignment.');
