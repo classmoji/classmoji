@@ -126,13 +126,29 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
       ? (repositories.find(m => m.id === spotlightId) ?? null)
       : (repositories[repositories.length - 1] ?? null);
 
+    // The spotlight lists the module's Assignment records, which know nothing
+    // about this student, so join them to the student's own repo assignments to
+    // tell submitted from overdue. Same rules as the Assignments page, so the two
+    // screens agree: first row per assignment wins (individual before team, the
+    // order findAllAssignmentsForStudent returns), and CLOSED means submitted.
+    const submittedByAssignmentId = new Map<string, boolean>();
+    for (const ra of allRepoAssignments) {
+      const key = ra.assignment_id ?? ra.id;
+      if (!submittedByAssignmentId.has(key)) {
+        submittedByAssignmentId.set(key, ra.status === 'CLOSED');
+      }
+    }
+
     const spotlight: SpotlightModule | null = spotlightSrc
       ? {
           id: spotlightSrc.id,
           slug: spotlightSrc.slug,
           title: spotlightSrc.title,
           ordinal: repositories.findIndex(m => m.id === spotlightSrc.id) + 1,
-          assignments: spotlightSrc.assignments,
+          assignments: spotlightSrc.assignments.map(a => ({
+            ...a,
+            submitted: submittedByAssignmentId.get(a.id) ?? false,
+          })),
           pages: spotlightSrc.pages,
           slides: spotlightSrc.slides,
           quizzes: spotlightSrc.quizzes.map(q => ({ id: q.id, title: q.name })),
