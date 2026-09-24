@@ -456,6 +456,7 @@ const RepositoriesTable = ({
             id: r.id,
             title: r.title,
             slug: r.slug,
+            type: r.type,
             is_published: r.is_published,
           }))}
           quizzes={editor.quizzes}

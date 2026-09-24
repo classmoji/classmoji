@@ -30,7 +30,13 @@ export interface AssignmentFormModalProps {
   moduleId?: string;
   modules: Array<{ id: string; title: string }>;
   /** Every repository in the classroom: a REPO assignment may submit through any of them. */
-  repositories: Array<{ id: string; title: string; slug?: string | null; is_published: boolean }>;
+  repositories: Array<{
+    id: string;
+    title: string;
+    slug?: string | null;
+    type?: string | null;
+    is_published: boolean;
+  }>;
   quizzes: Array<{ id: string; name: string; status: string }>;
   forms: Array<{ id: string; title: string; status: string }>;
   /** Pages / slide decks the assignment can link as its resources. */
@@ -306,15 +312,24 @@ const AssignmentFormModal = ({
   const targetOptions = useMemo(() => {
     switch (kind) {
       case 'REPO':
-        // Name them as the student repos will be: the slug is the prefix every
-        // copy is cut under, so it is what the instructor will recognise.
-        return repositories.map(r => {
-          const name = r.slug || titleToIdentifier(r.title);
-          return {
-            value: r.id,
-            label: r.is_published ? name : `${name} · draft`,
-          };
-        });
+        // Provisioning cuts one repo per student or per team from the
+        // repository's own type, so a team assignment cannot submit through an
+        // individual repository and vice versa. The one already attached stays
+        // listed, so editing an assignment never loses its target.
+        return repositories
+          .filter(
+            r =>
+              !r.type ||
+              r.id === assignment?.repository?.id ||
+              r.type === (isTeam ? 'GROUP' : 'INDIVIDUAL')
+          )
+          .map(r => {
+            const name = r.slug || titleToIdentifier(r.title);
+            return {
+              value: r.id,
+              label: r.is_published ? name : `${name} · draft`,
+            };
+          });
       case 'QUIZ':
         return quizzes
           .filter(q => !boundQuizIds.has(q.id) || q.id === assignment?.quiz?.id)
@@ -326,13 +341,13 @@ const AssignmentFormModal = ({
       default:
         return [];
     }
-  }, [kind, repositories, quizzes, forms, boundQuizIds, boundFormIds, assignment]);
+  }, [kind, isTeam, repositories, quizzes, forms, boundQuizIds, boundFormIds, assignment]);
 
   const newRepositoryHref = `/admin/${classSlug}/repos/form`;
   const emptyTargetHint = {
     REPO: (
       <>
-        No repositories yet.{' '}
+        No {isTeam ? 'team' : 'individual'} repositories yet.{' '}
         <a href={newRepositoryHref} target="_blank" rel="noreferrer">
           New repository
         </a>
@@ -454,6 +469,9 @@ const AssignmentFormModal = ({
                 onChange={next => {
                   form.setFieldValue('is_team', next);
                   if (!next) form.setFieldValue('tag_id', undefined);
+                  // The repository picker is filtered by this, so a target
+                  // chosen under the old answer would now be the wrong kind.
+                  form.setFieldValue('target_id', undefined);
                 }}
               />
             </Form.Item>

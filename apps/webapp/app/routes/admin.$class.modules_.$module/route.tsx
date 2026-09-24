@@ -63,6 +63,7 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
       id: r.id,
       title: r.title,
       slug: r.slug,
+      type: r.type,
       is_published: r.is_published,
     })),
     boundQuizIds: bound.map(a => a.quiz_id).filter(Boolean) as string[],
