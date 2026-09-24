@@ -118,3 +118,28 @@ describe('student dashboard loader — assignment lookup guard', () => {
     ]);
   });
 });
+
+describe('student dashboard loader — week', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    assertAccessMock.mockResolvedValue({
+      userId: 'student-1',
+      classroom: { id: 'class-1', name: 'Test Class', git_organization: { login: 'test-org' } },
+    });
+    calendarMock.mockResolvedValue([]);
+    regradeRequestsMock.mockResolvedValue([]);
+    repositoryFindManyMock.mockResolvedValue([buildRepository()]);
+  });
+
+  it('sends the week start as a plain date and fetches events beyond it on both sides', async () => {
+    findAllAssignmentsMock.mockResolvedValue([]);
+
+    const data = await (await loader(loaderArgs())).data;
+
+    expect(data.weekStart).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    const [, from, to] = calendarMock.mock.calls[0] as [string, Date, Date];
+    const weekStart = new Date(`${data.weekStart}T00:00:00`).getTime();
+    expect(from.getTime()).toBeLessThan(weekStart);
+    expect(to.getTime()).toBeGreaterThan(weekStart + 7 * 86_400_000);
+  });
+});
