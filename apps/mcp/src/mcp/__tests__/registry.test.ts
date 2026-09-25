@@ -28,12 +28,10 @@ vi.mock('@classmoji/services', () => ({
       findAll: (...args: unknown[]) => findAll(...args),
       // Sanitization itself is the webapp service's concern; identity is fine here.
       getClassroomForUI: (c: unknown) => c,
+      getTimeZone: (...args: unknown[]) => getClassroomTimeZone(...args),
     },
     classroomMembership: {
       findByClassroomAndUser: (...args: unknown[]) => findByClassroomAndUser(...args),
-    },
-    site: {
-      getClassroomTimeZone: (...args: unknown[]) => getClassroomTimeZone(...args),
     },
   },
 }));
@@ -182,6 +180,7 @@ beforeAll(() => {
               title: 'Landing Page Part 1',
               student_deadline: '2026-09-21T03:59:00.000Z',
               occurrence_date: '2026-09-21T00:00:00.000Z',
+              updated_at: '2026-09-10T12:00:00.000Z',
             },
             null,
             2
@@ -489,6 +488,8 @@ describe('class-zone renderings on classroom-bound results', () => {
       student_deadline_local: 'Sun Sep 20, 2026, 11:59 PM EDT',
       // A date-only column is never shifted into the zone.
       occurrence_date: '2026-09-21T00:00:00.000Z',
+      // Record-keeping stamps get no twin (allowlist, decision 3).
+      updated_at: '2026-09-10T12:00:00.000Z',
       timezone: 'America/New_York',
       now_local: 'Thursday, September 24, 2026, 11:20 AM EDT (America/New_York)',
     });
@@ -506,6 +507,33 @@ describe('class-zone renderings on classroom-bound results', () => {
     expect(body.student_deadline_local).toBe('Mon Sep 21, 2026, 3:59 AM UTC');
     expect(body.timezone).toBe('UTC');
     expect(body.now_local).toMatch(/\(UTC; this course has not set a time zone\)$/);
+  });
+
+  it("uses the caller's validated zone hint when the classroom has none", async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-09-24T15:20:00Z'));
+    mockClassroom({ status: 'ACTIVE', memberRole: 'STUDENT' });
+    const client = await connectClient({
+      ...makeViewer(['read']),
+      timezoneHint: 'America/New_York',
+    });
+
+    const body = JSON.parse(
+      (await callTool(client, 't_read_deadline', { classroom: REF })).content[0].text
+    );
+    expect(body.student_deadline_local).toBe('Sun Sep 20, 2026, 11:59 PM EDT');
+    expect(body.timezone).toBe('America/New_York');
+  });
+
+  it('prefers the classroom zone over a caller hint', async () => {
+    mockClassroom({ status: 'ACTIVE', memberRole: 'STUDENT' });
+    getClassroomTimeZone.mockResolvedValue('America/Los_Angeles');
+    const client = await connectClient({ ...makeViewer(['read']), timezoneHint: 'Europe/Paris' });
+
+    const body = JSON.parse(
+      (await callTool(client, 't_read_deadline', { classroom: REF })).content[0].text
+    );
+    expect(body.student_deadline_local).toBe('Sun Sep 20, 2026, 8:59 PM PDT');
   });
 
   it('leaves a result with no timestamps byte-for-byte alone', async () => {

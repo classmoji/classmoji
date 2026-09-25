@@ -44,7 +44,7 @@ import { resolveClassroomContext, type ClassroomContext } from '../authz/classro
 import { assertMutationAllowed, canEnterClassroom } from '../authz/pure.ts';
 import { ToolError, type ToolErrorKind } from './errors.ts';
 import { DEFAULT_RATE_LIMIT, tryConsume, type RateLimitConfig } from './rateLimit.ts';
-import { localizePayload, localizeToolResult } from './localTimes.ts';
+import { localizePayload, localizeToolResult, renderZone } from './localTimes.ts';
 
 export type Scope = 'read' | 'write';
 
@@ -307,7 +307,9 @@ function wrapHandler(def: ToolDefinition<never>, viewer: Viewer) {
       const result = await (def.handler as ToolDefinition['handler'])(args, ctx);
       // 5. Class-zone renderings next to every timestamp (mcp/localTimes.ts).
       //    Classroom-bound tools only: without a classroom there is no zone.
-      return ctx.classroom ? localizeToolResult(result, ctx.classroom.timezone) : result;
+      return ctx.classroom
+        ? localizeToolResult(result, renderZone(ctx.classroom.effectiveTimezone))
+        : result;
     } catch (error) {
       return toErrorResult(error, def.name);
     }
@@ -385,7 +387,9 @@ function wrapResourceRead(def: ResourceDefinition, viewer: Viewer) {
       const raw = await def.handler(vars, ctx, uri);
       // Same class-zone renderings the tools get, so a mirror tool and its
       // resource keep returning the same document.
-      const payload = ctx.classroom ? localizePayload(raw, ctx.classroom.timezone) : raw;
+      const payload = ctx.classroom
+        ? localizePayload(raw, renderZone(ctx.classroom.effectiveTimezone))
+        : raw;
       return {
         contents: [
           {

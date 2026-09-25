@@ -1,4 +1,5 @@
 import getPrisma from '@classmoji/database';
+import { canonicalTimeZone } from '@classmoji/utils';
 import { GitHubProvider } from '../git/index.ts';
 import * as entitlementService from './entitlement.service.ts';
 import type { Prisma, Role } from '@prisma/client';
@@ -16,6 +17,20 @@ export class ClassroomSettingsEntitlementError extends Error {
   constructor(message: string) {
     super(message);
     this.name = 'ClassroomSettingsEntitlementError';
+  }
+}
+
+/**
+ * A settings value refused as malformed, with a machine-readable `code` the web
+ * actions and the MCP registry map to a caller error (never a 500).
+ */
+export class ClassroomSettingsValidationError extends Error {
+  readonly code: 'TIMEZONE_INVALID';
+
+  constructor(code: 'TIMEZONE_INVALID', message: string) {
+    super(message);
+    this.name = 'ClassroomSettingsValidationError';
+    this.code = code;
   }
 }
 
@@ -43,6 +58,7 @@ const SAFE_SETTINGS_FIELDS = [
   'default_student_page',
   'recent_viewers_enabled',
   'theme',
+  'timezone',
 ];
 
 /**
@@ -731,6 +747,14 @@ export const updateSettings = async (
     }
   }
 
+  // The course time zone: canonical IANA spelling, blank = cleared. Resolved
+  // BEFORE the write so a refused zone costs nothing, and here rather than in
+  // the callers because the web Settings page, classroom creation/import and the
+  // MCP tool all write through this upsert.
+  if (updates.timezone !== undefined) {
+    updates = { ...updates, timezone: normalizeTimeZoneSetting(updates.timezone) };
+  }
+
   return getPrisma().classroomSettings.upsert({
     where: { classroom_id: classroomId },
     create: {
@@ -739,4 +763,35 @@ export const updateSettings = async (
     },
     update: updates,
   });
+};
+
+/**
+ * A submitted time-zone setting as it should be stored: null for a clear (null
+ * or blank), the canonical IANA name for a zone Intl knows, and a
+ * ClassroomSettingsValidationError for anything else.
+ */
+export function normalizeTimeZoneSetting(value: unknown): string | null {
+  if (value === null || (typeof value === 'string' && value.trim() === '')) return null;
+  const canonical = canonicalTimeZone(value);
+  if (!canonical) {
+    throw new ClassroomSettingsValidationError(
+      'TIMEZONE_INVALID',
+      `'${String(value)}' is not a time zone we recognize. Pick one from the list, or clear it.`
+    );
+  }
+  return canonical;
+}
+
+/**
+ * The classroom's own time zone (classroom_settings.timezone), or null when none
+ * is set. THE reader for every server-side date rendering: the public schedule,
+ * Ask Moji and the MCP server. Callers resolve the fallback order with
+ * @classmoji/utils resolveEffectiveTimeZone (classroom, then caller, then UTC).
+ */
+export const getTimeZone = async (classroomId: string): Promise<string | null> => {
+  const settings = await getPrisma().classroomSettings.findUnique({
+    where: { classroom_id: classroomId },
+    select: { timezone: true },
+  });
+  return settings?.timezone ?? null;
 };

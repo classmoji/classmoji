@@ -18,6 +18,7 @@ import { assertClassroomAccess } from '~/utils/helpers';
 import { assertClassroomMutationAllowed } from '~/utils/routeAuth.server';
 import { isAIAgentConfigured } from '~/utils/aiFeatures.server';
 import { getContentRepoName } from '@classmoji/utils';
+import { sessionTimeZone } from './sessionTimeZone';
 import { sendRequest } from '~/services/aiAgentConnection.server';
 import agentStreamManager from '~/utils/agentStreamManager';
 import { v4 as uuidv4 } from 'uuid';
@@ -278,13 +279,7 @@ async function handleInitConversation(request: Request, classSlug: string, formD
     return jsonResponse({ error: 'The syllabus assistant requires a Pro subscription' }, 403);
   }
 
-  // The zone rides along with the settings read: the prompt states the current
-  // local date and time once, when the session starts, and every date the MCP
-  // tools return is rendered in this same zone. Null = UTC, labelled as such.
-  const [settings, timezone] = await Promise.all([
-    ClassmojiService.classroom.getClassroomSettingsForServer(classroom.id),
-    ClassmojiService.site.getClassroomTimeZone(classroom.id),
-  ]);
+  const settings = await ClassmojiService.classroom.getClassroomSettingsForServer(classroom.id);
 
   // Check if syllabus bot is enabled
   if (!settings?.syllabus_bot_enabled) {
@@ -304,9 +299,7 @@ async function handleInitConversation(request: Request, classSlug: string, formD
     orgName: classroom.name,
     courseName: (settings as { course_name?: string })?.course_name || classroom.name,
     userRole: contextRole,
-    // IANA zone from classroom_sites.timezone, or null (ai-agent falls back to
-    // UTC and says so). See @classmoji/utils timeZone.ts.
-    timezone,
+    ...sessionTimeZone(settings?.timezone, formData.get('browserTimezone')),
   };
 
   // The MCP bearer this turn carries. Minted before anything is sent, so a mint

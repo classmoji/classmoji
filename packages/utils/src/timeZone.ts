@@ -36,15 +36,82 @@ export interface ResolvedTimeZone {
  * thrown: this runs on read paths, and one bad row must not take a tool down.
  */
 export function resolveTimeZone(zone: string | null | undefined): ResolvedTimeZone {
-  const trimmed = typeof zone === 'string' ? zone.trim() : '';
-  if (!trimmed) return { timeZone: FALLBACK_TIME_ZONE, isFallback: true };
+  const timeZone = canonicalTimeZone(zone);
+  return timeZone
+    ? { timeZone, isFallback: false }
+    : { timeZone: FALLBACK_TIME_ZONE, isFallback: true };
+}
+
+/**
+ * The canonical spelling of a zone Intl can format with, or null.
+ *
+ * THE validation for every zone that arrives from outside — a settings form, a
+ * browser at classroom creation, Ask Moji's init, the MCP timezone header.
+ * Asking Intl to build a formatter (rather than checking membership in
+ * `Intl.supportedValuesOf`) accepts aliases like `US/Eastern` and stores the
+ * resolved name, so one zone has one spelling in the database.
+ */
+export function canonicalTimeZone(zone: unknown): string | null {
+  if (typeof zone !== 'string') return null;
+  const trimmed = zone.trim();
+  // Same shape floor as the DB CHECK: refuse before handing junk to Intl.
+  if (!trimmed || trimmed.length > 64 || !/^[A-Za-z0-9+_/-]+$/.test(trimmed)) return null;
   try {
-    const timeZone = new Intl.DateTimeFormat('en-US', { timeZone: trimmed }).resolvedOptions()
-      .timeZone;
-    return { timeZone, isFallback: false };
+    return new Intl.DateTimeFormat('en-US', { timeZone: trimmed }).resolvedOptions().timeZone;
   } catch {
-    return { timeZone: FALLBACK_TIME_ZONE, isFallback: true };
+    return null;
   }
+}
+
+/** Where an effective zone came from. */
+export type TimeZoneSource = 'classroom' | 'caller' | 'default';
+
+export interface EffectiveTimeZone {
+  /** The zone to render in: an IANA name, or `UTC`. */
+  timeZone: string;
+  /**
+   * `classroom` — the course's own setting; `caller` — the asking user's
+   * browser zone (Ask Moji only, used when the course has none); `default` —
+   * neither, so UTC, which every renderer labels as UTC.
+   */
+  source: TimeZoneSource;
+}
+
+/**
+ * THE resolution order, in one place: the classroom's zone, then a
+ * caller-supplied zone, then UTC. Each candidate is validated; an invalid one is
+ * skipped as if it were absent, never thrown.
+ *
+ * The caller zone is a fallback for Ask Moji, whose client knows the student's
+ * browser zone. The Claude.ai connector has no browser and passes none.
+ */
+export function resolveEffectiveTimeZone(
+  classroomZone: string | null | undefined,
+  callerZone?: string | null
+): EffectiveTimeZone {
+  const fromClassroom = canonicalTimeZone(classroomZone);
+  if (fromClassroom) return { timeZone: fromClassroom, source: 'classroom' };
+  const fromCaller = canonicalTimeZone(callerZone);
+  if (fromCaller) return { timeZone: fromCaller, source: 'caller' };
+  return { timeZone: FALLBACK_TIME_ZONE, source: 'default' };
+}
+
+/**
+ * Every zone to offer in a picker: the runtime's IANA list, each in the
+ * canonical spelling `canonicalTimeZone` stores, with UTC first. Call it on the
+ * SERVER and ship the result, so the list the browser renders is the list the
+ * server validates against (browser and server ICU can disagree).
+ */
+export function listTimeZones(): string[] {
+  const intl = Intl as unknown as { supportedValuesOf?: (key: string) => string[] };
+  const raw =
+    typeof intl.supportedValuesOf === 'function' ? intl.supportedValuesOf('timeZone') : [];
+  const zones = new Set<string>();
+  for (const zone of raw) {
+    const canonical = canonicalTimeZone(zone);
+    if (canonical && canonical !== FALLBACK_TIME_ZONE) zones.add(canonical);
+  }
+  return [FALLBACK_TIME_ZONE, ...[...zones].sort()];
 }
 
 /** A Date for anything instant-shaped, or null when it is not one. */
@@ -268,12 +335,16 @@ function localFor(value: unknown, timeZone: string): string | null {
  * class zone. Nothing is removed or rewritten: existing keys, including an
  * existing `<key>_local`, are left exactly as they were.
  *
+ * `include`, when given, limits which keys get a rendering (an allowlist of
+ * the dates a reader actually quotes); without it every timestamp does.
+ *
  * `count` is how many were added, so a caller can decide whether the payload
  * had any dates in it at all.
  */
 export function addLocalTimes<T>(
   payload: T,
-  zone: string | null | undefined
+  zone: string | null | undefined,
+  { include }: { include?: (key: string) => boolean } = {}
 ): { value: T; count: number } {
   const { timeZone } = resolveTimeZone(zone);
   let count = 0;
@@ -287,6 +358,7 @@ export function addLocalTimes<T>(
       out[key] = walk(value);
       const localKey = `${key}${LOCAL_SUFFIX}`;
       if (DATE_ONLY_KEYS.has(key) || key.endsWith(LOCAL_SUFFIX) || localKey in node) continue;
+      if (include && !include(key)) continue;
       const local = localFor(value, timeZone);
       if (local !== null) {
         out[localKey] = local;

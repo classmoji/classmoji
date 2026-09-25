@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
   addLocalTimes,
+  canonicalTimeZone,
+  listTimeZones,
+  resolveEffectiveTimeZone,
   formatLocalDateTime,
   formatNowContext,
   localDayRange,
@@ -197,5 +200,77 @@ describe('addLocalTimes', () => {
   it('ignores prose that merely contains a timestamp', () => {
     const { count } = addLocalTimes({ text: 'due 2026-09-25T03:59:00Z sharp' }, NY);
     expect(count).toBe(0);
+  });
+});
+
+describe('canonicalTimeZone', () => {
+  it('returns the canonical spelling for real zones and aliases', () => {
+    expect(canonicalTimeZone('America/New_York')).toBe(NY);
+    expect(canonicalTimeZone(' america/new_york ')).toBe(NY);
+    expect(canonicalTimeZone('UTC')).toBe('UTC');
+  });
+
+  it('refuses junk, oversized and injection-shaped values', () => {
+    expect(canonicalTimeZone('Mars/Olympus')).toBeNull();
+    expect(canonicalTimeZone('')).toBeNull();
+    expect(canonicalTimeZone(null)).toBeNull();
+    expect(canonicalTimeZone(42)).toBeNull();
+    expect(canonicalTimeZone('America/New_York\r\nX-Evil: 1')).toBeNull();
+    expect(canonicalTimeZone('A'.repeat(65))).toBeNull();
+  });
+});
+
+describe('resolveEffectiveTimeZone - classroom, then caller, then UTC', () => {
+  it('prefers the classroom zone over the caller', () => {
+    expect(resolveEffectiveTimeZone(NY, 'Europe/Paris')).toEqual({
+      timeZone: NY,
+      source: 'classroom',
+    });
+  });
+
+  it('uses the caller zone when the classroom has none', () => {
+    expect(resolveEffectiveTimeZone(null, 'Europe/Paris')).toEqual({
+      timeZone: 'Europe/Paris',
+      source: 'caller',
+    });
+  });
+
+  it('skips an invalid classroom zone as if it were unset', () => {
+    expect(resolveEffectiveTimeZone('Not/AZone', 'Europe/Paris').source).toBe('caller');
+  });
+
+  it('ignores an invalid caller zone and lands on labelled UTC', () => {
+    expect(resolveEffectiveTimeZone(null, 'Not/AZone')).toEqual({
+      timeZone: 'UTC',
+      source: 'default',
+    });
+    expect(resolveEffectiveTimeZone(undefined)).toEqual({ timeZone: 'UTC', source: 'default' });
+  });
+});
+
+describe('listTimeZones', () => {
+  it('leads with UTC and holds only canonical spellings a save would keep', () => {
+    const zones = listTimeZones();
+    expect(zones[0]).toBe('UTC');
+    expect(zones).toContain(NY);
+    expect(zones.length).toBeGreaterThan(300);
+    for (const zone of zones) expect(canonicalTimeZone(zone)).toBe(zone);
+    expect(new Set(zones).size).toBe(zones.length);
+  });
+});
+
+describe('addLocalTimes include filter', () => {
+  it('renders only the keys the filter allows', () => {
+    const { value, count } = addLocalTimes(
+      { closes_at: '2026-09-25T03:59:00Z', created_at: '2026-09-01T12:00:00Z' },
+      NY,
+      { include: key => key !== 'created_at' }
+    );
+    expect(count).toBe(1);
+    expect(value).toEqual({
+      closes_at: '2026-09-25T03:59:00Z',
+      closes_at_local: 'Thu Sep 24, 2026, 11:59 PM EDT',
+      created_at: '2026-09-01T12:00:00Z',
+    });
   });
 });

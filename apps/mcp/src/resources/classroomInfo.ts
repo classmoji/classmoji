@@ -12,7 +12,6 @@
  * the organization is narrowed to public identity fields.
  */
 
-import { resolveTimeZone } from '@classmoji/utils';
 import type { ResourceDefinition } from '../mcp/registry.ts';
 import { MEMBER, classroomCtx } from './shape.ts';
 
@@ -64,10 +63,15 @@ export const classroomInfoResource: ResourceDefinition = {
           }
         : null,
       viewer_role: resolved.role,
-      // The zone every `*_local` field is rendered in: the site's IANA zone,
-      // or 'UTC' when the course has not set one (then timezone_is_default).
-      timezone: resolveTimeZone(resolved.timezone).timeZone,
-      timezone_is_default: resolveTimeZone(resolved.timezone).isFallback,
+      // The zone every `*_local` field in this request is rendered in, and
+      // where it came from: 'classroom' (the course setting), 'caller' (the
+      // requester's browser zone, sent by Ask Moji when the course has none),
+      // or 'default' (UTC, because neither is set). `classroom_timezone` is the
+      // course setting itself, null when unset.
+      timezone: resolved.effectiveTimezone.timeZone,
+      timezone_source: resolved.effectiveTimezone.source,
+      classroom_timezone: resolved.timezone,
+      timezone_is_default: resolved.effectiveTimezone.source === 'default',
     };
   },
 };

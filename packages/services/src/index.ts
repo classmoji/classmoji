@@ -82,6 +82,7 @@ export {
   gitRepoAssignmentService,
   notificationService,
   ClassroomSettingsEntitlementError,
+  ClassroomSettingsValidationError,
   CalendarTimeRangeError,
   isCalendarTimeRangeError,
   ASSISTANT_EVENT_TYPE,

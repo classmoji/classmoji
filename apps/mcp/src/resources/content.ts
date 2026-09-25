@@ -32,6 +32,7 @@
 import { ClassmojiService } from '@classmoji/services';
 import { localDayRange, localMonthGridRange } from '@classmoji/utils';
 import { ToolError } from '../mcp/errors.ts';
+import { renderZone } from '../mcp/localTimes.ts';
 import type { ResourceDefinition, ToolContext } from '../mcp/registry.ts';
 import { assertProTier } from '../authz/proTier.ts';
 import { MEMBER, QUIZ_ROLES, classroomCtx, isStaff, sanitizedSettings } from './shape.ts';
@@ -478,12 +479,14 @@ function shapeCalendarRow(row: CalendarRow, staff: boolean) {
 }
 
 /**
- * The classroom's zone, straight off the resolved context. Calendar windows are
+ * The zone this request renders in (classroom setting, else the caller's hint,
+ * else UTC — see ClassroomContext.effectiveTimezone). Calendar windows are
  * whole days in it: a Sun 11:59 PM EDT deadline is Mon 03:59Z, and a window of
  * UTC days ending on that Sunday would silently drop it.
  */
 function classroomZone(ctx: ToolContext): string | null {
-  return classroomCtx(ctx).timezone ?? null;
+  const effective = classroomCtx(ctx).effectiveTimezone;
+  return effective ? renderZone(effective) : null;
 }
 
 async function loadCalendar(ctx: ToolContext, start: Date, end: Date) {

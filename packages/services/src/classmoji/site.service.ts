@@ -50,7 +50,6 @@ export const SITE_ERROR = {
   /** Custom domains are a PRO feature and this classroom is not on PRO. */
   PRO_REQUIRED: 'PRO_REQUIRED',
   /** Not an IANA zone name this runtime's tz data knows. */
-  TIMEZONE_INVALID: 'TIMEZONE_INVALID',
 } as const;
 
 export type SiteErrorCode = (typeof SITE_ERROR)[keyof typeof SITE_ERROR];
@@ -151,23 +150,6 @@ export async function getSiteBySubdomain(subdomain: string): Promise<SiteLookup>
 /** The raw site row for a classroom (admin settings loader), or null. */
 export async function getSiteForClassroom(classroomId: string) {
   return getPrisma().classroomSite.findUnique({ where: { classroom_id: classroomId } });
-}
-
-/**
- * The classroom's time zone: the IANA zone its public schedule renders in, or
- * null when none is set (no site row, or the column is empty).
- *
- * `classroom_sites.timezone` is the one place a classroom records its zone, so
- * everything that renders a date for a MODEL (Ask Moji, the MCP server) reads it
- * from here rather than growing a second setting. A null is not an error: the
- * callers fall back to UTC and say so (see @classmoji/utils resolveTimeZone).
- */
-export async function getClassroomTimeZone(classroomId: string): Promise<string | null> {
-  const site = await getPrisma().classroomSite.findUnique({
-    where: { classroom_id: classroomId },
-    select: { timezone: true },
-  });
-  return site?.timezone ?? null;
 }
 
 export type SubdomainAvailability = {
@@ -292,41 +274,10 @@ export type SiteSettingsInput = {
   is_enabled?: boolean;
   home_page_id?: string | null;
   show_schedule?: boolean;
-  /** IANA zone name; `null` clears it back to the UTC fallback. */
-  timezone?: string | null;
+  // No `timezone` any more: the course zone is a classroom setting
+  // (classroom.updateSettings / getTimeZone), and classroom_sites.timezone is
+  // deprecated. The public schedule reads the classroom setting.
 };
-
-/**
- * The canonical form of an IANA zone name, or null if this runtime has never
- * heard of it.
- *
- * Asks Intl to BUILD a formatter rather than checking membership in
- * `Intl.supportedValuesOf('timeZone')`, and the difference matters. The
- * schedule renders through `dayjs.utc(...).tz(zone)`, which is Intl underneath,
- * so "Intl can format with this" is precisely the invariant that has to hold —
- * whereas the supported-values list omits aliases (`Etc/UTC`, `US/Eastern`) and
- * its exact contents move with the ICU build. Validating against the list would
- * refuse zones that would have rendered perfectly well.
- *
- * The RESOLVED name is what comes back, not the caller's spelling. Intl accepts
- * zone names case-insensitively, so `america/new_york` from a script or a future
- * API caller is stored as `America/New_York` — one spelling per zone in the
- * column, which is what keeps the settings <select> able to show the stored
- * value as its selected option.
- */
-function canonicalizeTimeZone(zone: string): string | null {
-  const trimmed = zone.trim();
-  if (!trimmed) return null;
-
-  try {
-    return new Intl.DateTimeFormat(undefined, { timeZone: trimmed }).resolvedOptions().timeZone;
-  } catch {
-    // RangeError is the documented rejection for an unknown zone. Caught
-    // broadly anyway: this runs on an admin write path, and no Intl failure is
-    // worth a 500 when the honest answer is "that is not a zone we can use".
-    return null;
-  }
-}
 
 /**
  * Update a site's settings, enforcing the invariant the schema cannot: an
@@ -345,13 +296,6 @@ function canonicalizeTimeZone(zone: string): string | null {
  * NULL, which leaves an enabled site with a null home page. That is deliberate:
  * losing a page must not delete the site row and release its subdomain. PR2's
  * serving code has to treat that shape as a repairable landing state.)
- *
- * `timezone` follows the same three-state convention as every other key here:
- * absent means "leave it alone", `null` (or a blank string, which is what an
- * emptied form control submits) CLEARS it back to the UTC fallback, and a
- * non-blank string is validated against the runtime's tz data and stored
- * canonicalized. A bad zone is refused rather than silently dropped — writing
- * it would produce a public schedule that formats in a zone nobody chose.
  */
 export async function upsertSiteSettings(classroomId: string, input: SiteSettingsInput) {
   const prisma = getPrisma();
@@ -415,31 +359,12 @@ export async function upsertSiteSettings(classroomId: string, input: SiteSetting
     );
   }
 
-  // Resolved before the write so a rejected zone costs nothing, and so the row
-  // stores Intl's canonical spelling rather than the caller's.
-  let nextTimezone: string | null | undefined;
-  if (input.timezone !== undefined) {
-    if (input.timezone === null || input.timezone.trim() === '') {
-      nextTimezone = null;
-    } else {
-      const canonical = canonicalizeTimeZone(input.timezone);
-      if (!canonical) {
-        throw new SiteError(
-          SITE_ERROR.TIMEZONE_INVALID,
-          `'${input.timezone}' is not a time zone we recognize. Pick one from the list, or clear it to use UTC.`
-        );
-      }
-      nextTimezone = canonical;
-    }
-  }
-
   return prisma.classroomSite.update({
     where: { classroom_id: classroomId },
     data: {
       ...(input.is_enabled === undefined ? {} : { is_enabled: input.is_enabled }),
       ...(input.home_page_id === undefined ? {} : { home_page_id: input.home_page_id }),
       ...(input.show_schedule === undefined ? {} : { show_schedule: input.show_schedule }),
-      ...(nextTimezone === undefined ? {} : { timezone: nextTimezone }),
     },
   });
 }

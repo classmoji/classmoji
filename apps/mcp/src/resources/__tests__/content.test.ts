@@ -475,7 +475,10 @@ describe('calendar resource allowlist shaping (U5)', () => {
 describe('calendar windows are whole days in the classroom zone', () => {
   function nyStudentCtx(): ToolContext {
     const ctx = studentCtx();
-    (ctx.classroom as unknown as { timezone: string }).timezone = 'America/New_York';
+    Object.assign(ctx.classroom as object, {
+      timezone: 'America/New_York',
+      effectiveTimezone: { timeZone: 'America/New_York', source: 'classroom' },
+    });
     return ctx;
   }
 
@@ -541,5 +544,24 @@ describe('calendar windows are whole days in the classroom zone', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe('calendar windows follow the caller zone when the classroom has none', () => {
+  it('uses a caller-supplied zone (Ask Moji) for the day boundaries', async () => {
+    const ctx = studentCtx();
+    Object.assign(ctx.classroom as object, {
+      timezone: null,
+      effectiveTimezone: { timeZone: 'America/New_York', source: 'caller' },
+    });
+    getClassroomCalendar.mockResolvedValue([]);
+    await calendarRangeResource.handler(
+      { org: 'o', slug: 's', start: '2026-09-21', end: '2026-09-27' },
+      ctx,
+      new URL('classmoji://x')
+    );
+    const [, start, end] = getClassroomCalendar.mock.lastCall as [string, Date, Date];
+    expect(start.toISOString()).toBe('2026-09-21T04:00:00.000Z');
+    expect(end.toISOString()).toBe('2026-09-28T03:59:59.999Z');
   });
 });

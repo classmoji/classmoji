@@ -76,7 +76,8 @@ vi.mock('@classmoji/database', () => ({
   }),
 }));
 
-vi.mock('@classmoji/utils', () => ({
+vi.mock('@classmoji/utils', async importOriginal => ({
+  ...(await importOriginal<typeof import('@classmoji/utils')>()),
   defaultContentRepoName: vi.fn((ns: string) => `content-${ns}`),
   sanitizeRepoName: vi.fn((n: string) => n),
   suggestContentNamespace: vi.fn(({ slug }: { slug: string }) => slug),

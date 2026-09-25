@@ -7,8 +7,8 @@
  * Claude.ai connector both read these payloads, so the conversion is done ONCE,
  * here, for every tool, instead of per handler:
  *
- *   - every timestamp field gains a `<field>_local` sibling in the classroom's
- *     zone (`Sun Sep 20, 2026, 11:59 PM EDT`). Nothing is removed or renamed;
+ *   - every student-meaningful timestamp field (LOCALIZED_KEYS below) gains a
+ *     `<field>_local` sibling in the classroom's zone (`Sun Sep 20, 2026, 11:59 PM EDT`). Nothing is removed or renamed;
  *     the ISO value stays the machine-readable truth.
  *   - a payload that carried any timestamp also gains top-level `timezone` and
  *     `now_local` (when those keys are free), so the reader can tell "tonight"
@@ -21,6 +21,40 @@
 import { addLocalTimes, formatNowContext, resolveTimeZone } from '@classmoji/utils';
 import type { ToolResult } from './registry.ts';
 
+/**
+ * The dates a reader actually QUOTES — deadlines, when something opens,
+ * closes, starts or ends, and when a student's own work was submitted, closed
+ * or graded. Only these get a `_local` twin.
+ *
+ * Record-keeping stamps (`created_at`, `updated_at`, `last_activity`,
+ * `verified_at`, `oldest_commit_at`, token expiries, …) are left alone: nobody
+ * asks Ask Moji when a row was last updated, and on a 500-row submissions list
+ * those twins were most of the growth (Tim, decision 3, 2026-09-25).
+ * An allowlist rather than a denylist, so a new bookkeeping column added
+ * anywhere does not silently start growing every payload.
+ */
+const LOCALIZED_KEYS: ReadonlySet<string> = new Set([
+  'due_date',
+  'due_at',
+  'release_at',
+  'opens_at',
+  'closes_at',
+  'start_time',
+  'end_time',
+  'submitted_at',
+  'closed_at',
+  'last_graded_at',
+  // The calendar's `range: { start, end }`: which local window was searched.
+  'start',
+  'end',
+]);
+
+/** True for a key whose timestamp gets a `_local` rendering. */
+export function isLocalizedDateKey(key: string): boolean {
+  // Every `*_deadline` (student_deadline, grader_deadline, team_formation_deadline…).
+  return LOCALIZED_KEYS.has(key) || key.endsWith('_deadline');
+}
+
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
@@ -31,7 +65,7 @@ export function localizePayload<T>(
   zone: string | null | undefined,
   now: Date = new Date()
 ): T {
-  const { value, count } = addLocalTimes(payload, zone);
+  const { value, count } = addLocalTimes(payload, zone, { include: isLocalizedDateKey });
   // No timestamps: hand back the ORIGINAL, so callers can tell nothing changed
   // and leave the serialized text byte-for-byte alone.
   if (count === 0) return payload;
@@ -70,4 +104,12 @@ export function localizeToolResult(
       return { ...block, text: JSON.stringify(localized, null, 2) };
     }),
   };
+}
+
+/**
+ * The zone argument the renderers take for a resolved classroom: the effective
+ * zone, or null on the UTC default so every label says the course has none.
+ */
+export function renderZone(effective: { timeZone: string; source: string }): string | null {
+  return effective.source === 'default' ? null : effective.timeZone;
 }

@@ -14,6 +14,7 @@
  */
 
 import { ClassmojiService } from '@classmoji/services';
+import { resolveEffectiveTimeZone, type EffectiveTimeZone } from '@classmoji/utils';
 import type { ClassroomStatus, Role } from '@prisma/client';
 import { ToolError } from '../mcp/errors.ts';
 import type { Viewer } from '../auth/resolveViewer.ts';
@@ -35,12 +36,17 @@ export interface ClassroomContext {
   /** Raw status kept alongside because handlers need it for mutation gating. */
   status: ClassroomStatus;
   /**
-   * The classroom's IANA time zone (`classroom_sites.timezone`), or null when
-   * none is set. Every date this server hands a model is also rendered in this
-   * zone (see mcp/localTimes.ts), and calendar windows are whole days in it.
-   * Null means the UTC fallback, which the rendering labels as UTC.
+   * The classroom's OWN time zone setting (`classroom_settings.timezone`), or
+   * null when none is set.
    */
   timezone: string | null;
+  /**
+   * The zone this request renders in, and where it came from: the classroom's
+   * setting, else the caller's validated `X-Classmoji-Timezone` hint (Ask
+   * Moji), else UTC (`source: 'default'`, labelled as UTC). Every `_local`
+   * field and every calendar window uses this.
+   */
+  effectiveTimezone: EffectiveTimeZone;
   /** The membership that satisfied the tool's role requirement. */
   membership: Membership;
   /** The caller's HIGHEST-privilege role among those satisfying the gate. */
@@ -110,7 +116,7 @@ export async function resolveClassroomContext(
         ])
       )
     ),
-    ClassmojiService.site.getClassroomTimeZone(classroom.id),
+    ClassmojiService.classroom.getTimeZone(classroom.id),
   ]);
   let memberships = found.filter((m): m is Membership => Boolean(m));
   if (memberships.length === 0 && rolesFilter) {
@@ -133,6 +139,7 @@ export async function resolveClassroomContext(
     classroom: ClassmojiService.classroom.getClassroomForUI(classroom),
     status: classroom.status,
     timezone,
+    effectiveTimezone: resolveEffectiveTimeZone(timezone, viewer.timezoneHint),
     membership: effective,
     role: effective.role,
     roles: memberships.map(m => m.role),
