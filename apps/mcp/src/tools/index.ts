@@ -77,6 +77,7 @@ import {
   formResponseCreateTool,
   formResponseUpdateTool,
 } from './forms.ts';
+import { formTeamsGetTool, formTeamsRunTool, formTeamsCreateTool } from './formTeams.ts';
 import {
   teamCreateTool,
   teamDeleteTool,
@@ -251,4 +252,13 @@ export function registerAllTools(): void {
   registerToolDefinition(formResponseGetTool);
   registerToolDefinition(formResponseCreateTool);
   registerToolDefinition(formResponseUpdateTool);
+
+  // Team sets on a CLASSROOM form (Pro, checked in-handler like every forms
+  // tool). get/run are the forms tier (OWNER+TEACHER): a run is only a
+  // proposal and never touches a team. create is OWNER-only — it mints real
+  // GitHub teams — previews unless confirm:true, and hands the work to a
+  // background task.
+  registerToolDefinition(formTeamsGetTool);
+  registerToolDefinition(formTeamsRunTool);
+  registerToolDefinition(formTeamsCreateTool);
 }
