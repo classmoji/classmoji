@@ -1,0 +1,75 @@
+---
+interface Props {
+  name: string;
+  /** Github handle. Drives the profile link only; the avatar comes from `photo`. */
+  github?: string;
+  /** The committed photo for this person, from `src/assets/team/`. */
+  photo?: ImageMetadata;
+  /** Quieter type for the past-members row. Same size, so the rows line up. */
+  muted?: boolean;
+}
+
+const { name, github, role, years, emoji, photo, muted = false } = Astro.props;
+
+// Photos are committed and served from this site, never hot-linked. Github
+// avatars, Slack and LinkedIn all serve urls that move or expire, and a team
+// page that quietly loses a face is worse than one that loads a little more.
+// Without a photo the card shows a neutral circle rather than reaching out.
+const src = photo?.src ?? null;
+// Someone with no Github account still belongs on the page; their card simply
+// does not link anywhere.
+const Tag = github ? 'a' : 'div';
+---
+
+<Tag
+  href={github ? `https://github.com/${github}` : undefined}
+  target={github ? '_blank' : undefined}
+  rel={github ? 'noopener noreferrer' : undefined}
+  class="group flex w-44 flex-col items-center gap-3"
+>
+  <span class="relative block w-36 h-36">
+    {
+      src ? (
+        <img
+          src={src}
+          alt=""
+          width="144"
+          height="144"
+          class="w-36 h-36 rounded-full ring-1 ring-gray-200 bg-gray-100 object-cover"
+        />
+      ) : (
+        <div class="w-36 h-36 rounded-full ring-1 ring-gray-200 bg-gray-100" />
+      )
+    }
+    {
+      /* Flair, not identity: the name already says who this is, so screen
+         readers skip it rather than announcing a bare emoji. */
+      emoji && (
+        <span
+          aria-hidden="true"
+          class="absolute bottom-0.5 right-0.5 flex h-9 w-9 items-center justify-center rounded-full bg-white text-xl leading-none ring-4 ring-white shadow-sm"
+        >
+          {emoji}
+        </span>
+      )
+    }
+  </span>
+  <span class="flex flex-col items-center gap-0.5">
+    <span
+      class:list={[
+        'text-[15px] font-semibold text-center',
+        muted ? 'text-gray-700' : 'text-gray-900',
+        github && 'group-hover:text-primary transition-colors',
+      ]}
+    >
+      {name}
+    </span>
+    {role && <span class="text-[13px] text-gray-600 text-center">{role}</span>}
+    {years && <span class="text-xs text-gray-500 tabular-nums">{years}</span>}
+    {
+      github && (
+        <span class:list={['text-xs', muted ? 'text-gray-400' : 'text-gray-500']}>@{github}</span>
+      )
+    }
+  </span>
+</Tag>
