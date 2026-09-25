@@ -1,13 +1,15 @@
 import { Form, Switch } from 'antd';
 import { namedAction } from 'remix-utils/named-action';
 
-import { ClassmojiService } from '@classmoji/services';
+import { ClassmojiService, ClassroomSettingsValidationError } from '@classmoji/services';
+import { listTimeZones } from '@classmoji/utils';
 import { SettingSection } from '~/components';
 import { ActionTypes } from '~/constants';
 import { useGlobalFetcher } from '~/hooks';
 import ProfileSection from './ProfileSection';
 import StatusSection from './StatusSection';
 import DefaultPageSection from './DefaultPageSection';
+import TimeZoneSection from './TimeZoneSection';
 import TweaksSection from '~/components/features/tweaks/TweaksSection';
 import { assertClassroomAccess, assertClassroomMutationAllowed } from '~/utils/helpers';
 import type { Route } from './+types/route';
@@ -27,12 +29,17 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
   // Fetch pages that appear in student menu (potential default page options)
   const menuPages = await ClassmojiService.page.findForStudentMenu(classroom.id);
 
+  // The zone picker's options come from the SERVER's Intl, the same data the
+  // save validates against (see timeZoneOptions.ts). The stored zone is read
+  // directly rather than off the sanitized settings, so it is always current.
+  const timeZone = await ClassmojiService.classroom.getTimeZone(classroom.id);
+
   // Return classroom for settings display (API keys stripped by assertClassroomAccess)
-  return { classroom, menuPages };
+  return { classroom, menuPages, timeZone, timeZones: listTimeZones() };
 };
 
 const SettingsGeneral = ({ loaderData }: Route.ComponentProps) => {
-  const { classroom, menuPages } = loaderData;
+  const { classroom, menuPages, timeZone, timeZones } = loaderData;
   const { fetcher } = useGlobalFetcher();
 
   const handleRecentViewersToggle = (checked: boolean) => {
@@ -58,6 +65,7 @@ const SettingsGeneral = ({ loaderData }: Route.ComponentProps) => {
         currentDefault={classroom.settings?.default_student_page || 'dashboard'}
         menuPages={menuPages}
       />
+      <TimeZoneSection current={timeZone} zones={timeZones} />
       <TweaksSection />
       <SettingSection
         title="Features"
@@ -130,6 +138,28 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
       return {
         success: 'Extension settings updated',
         action: ActionTypes.SAVE_EXTENSION_SETTINGS,
+      };
+    },
+
+    async saveTimeZone() {
+      // Only `timezone` is read from the body, and the service validates it
+      // against Intl (canonical spelling stored; null or blank clears it).
+      if (!data || typeof data !== 'object' || !('timezone' in data)) {
+        return { error: 'Nothing to update' };
+      }
+      try {
+        await ClassmojiService.classroom.updateSettings(classroom.id, {
+          timezone: (data as { timezone: unknown }).timezone as string | null,
+        });
+      } catch (error: unknown) {
+        if (error instanceof ClassroomSettingsValidationError) {
+          return { error: error.message };
+        }
+        throw error;
+      }
+      return {
+        success: 'Time zone updated',
+        action: ActionTypes.SAVE_TIME_ZONE,
       };
     },
 

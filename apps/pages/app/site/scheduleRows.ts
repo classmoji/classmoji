@@ -61,7 +61,8 @@ const unhandledItemType = (type: never): never => {
  * Prod is UTC (alpine, no TZ), so a 23:59 America/New_York deadline rendered as
  * the NEXT day while every member surface — formatted in the reader's browser —
  * showed the right one. The zone is therefore an explicit input:
- * `ScheduleTargets.timezone`, which the route reads from `classroom_sites`.
+ * `ScheduleTargets.timezone`, which the route reads from the classroom's time
+ * zone setting (`classroom_settings.timezone`, via classroom.getTimeZone).
  * Null there means UTC, and a UTC rendering says so in the string.
  */
 const DATE_FORMAT = 'MMM D, YYYY';
@@ -166,7 +167,7 @@ export type ScheduleTargets = {
    */
   formsBase: string;
   /**
-   * The course's IANA zone (`classroom_sites.timezone`), or null for none set.
+   * The course's IANA zone (`classroom_settings.timezone`), or null for none set.
    *
    * Required rather than optional on purpose: a forgotten zone is invisible in
    * review and off by up to a day in production, so every call site has to say

@@ -18,6 +18,7 @@ import { assertClassroomAccess } from '~/utils/helpers';
 import { assertClassroomMutationAllowed } from '~/utils/routeAuth.server';
 import { isAIAgentConfigured } from '~/utils/aiFeatures.server';
 import { getContentRepoName } from '@classmoji/utils';
+import { sessionTimeZone } from './sessionTimeZone';
 import { sendRequest } from '~/services/aiAgentConnection.server';
 import agentStreamManager from '~/utils/agentStreamManager';
 import { v4 as uuidv4 } from 'uuid';
@@ -298,6 +299,7 @@ async function handleInitConversation(request: Request, classSlug: string, formD
     orgName: classroom.name,
     courseName: (settings as { course_name?: string })?.course_name || classroom.name,
     userRole: contextRole,
+    ...sessionTimeZone(settings?.timezone, formData.get('browserTimezone')),
   };
 
   // The MCP bearer this turn carries. Minted before anything is sent, so a mint

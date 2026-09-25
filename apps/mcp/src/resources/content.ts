@@ -23,12 +23,16 @@
  *                     system_prompt/rubric_prompt); staff get the admin one.
  *   calendar        — any member; calendar.getClassroomCalendar already
  *                     expands recurrence and merges assignment deadlines. The
- *                     parameterless URI covers the current UTC month (web
- *                     default); …/calendar/{start}/{end} takes ISO dates.
+ *                     parameterless URI covers the current month in the
+ *                     classroom's zone (web default shape);
+ *                     …/calendar/{start}/{end} takes ISO dates, read as whole
+ *                     days in that zone.
  */
 
 import { ClassmojiService } from '@classmoji/services';
+import { isRealCalendarDate, localDayRange, localMonthGridRange } from '@classmoji/utils';
 import { ToolError } from '../mcp/errors.ts';
+import { renderZone } from '../mcp/localTimes.ts';
 import type { ResourceDefinition, ToolContext } from '../mcp/registry.ts';
 import { assertProTier } from '../authz/proTier.ts';
 import { MEMBER, QUIZ_ROLES, classroomCtx, isStaff, sanitizedSettings } from './shape.ts';
@@ -474,17 +478,15 @@ function shapeCalendarRow(row: CalendarRow, staff: boolean) {
   };
 }
 
-/** Current UTC month expanded to grid-week boundaries ±1 day (web default). */
-function defaultCalendarRange(): { start: Date; end: Date } {
-  const now = new Date();
-  const firstOfMonth = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
-  const lastOfMonth = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 0));
-  const start = new Date(firstOfMonth);
-  start.setUTCDate(start.getUTCDate() - firstOfMonth.getUTCDay() - 1);
-  const end = new Date(lastOfMonth);
-  end.setUTCDate(end.getUTCDate() + (6 - lastOfMonth.getUTCDay()) + 1);
-  end.setUTCHours(23, 59, 59, 999);
-  return { start, end };
+/**
+ * The zone this request renders in (classroom setting, else the caller's hint,
+ * else UTC — see ClassroomContext.effectiveTimezone). Calendar windows are
+ * whole days in it: a Sun 11:59 PM EDT deadline is Mon 03:59Z, and a window of
+ * UTC days ending on that Sunday would silently drop it.
+ */
+function classroomZone(ctx: ToolContext): string | null {
+  const effective = classroomCtx(ctx).effectiveTimezone;
+  return effective ? renderZone(effective) : null;
 }
 
 async function loadCalendar(ctx: ToolContext, start: Date, end: Date) {
@@ -520,10 +522,30 @@ export const calendarResource: ResourceDefinition = {
   scope: 'read',
   roles: MEMBER,
   handler: async (_vars, ctx) => {
-    const { start, end } = defaultCalendarRange();
+    // The current month in the CLASS zone, widened to grid weeks ±1 day (web
+    // default shape), so the last evening of a month is still that month.
+    const { start, end } = localMonthGridRange(new Date(), classroomZone(ctx));
     return loadCalendar(ctx, start, end);
   },
 };
+
+/**
+ * The pre-zone reading, kept for a caller that passes full ISO date-times rather
+ * than the documented bare dates: exact instants, end widened to the end of its
+ * UTC day as before. Null when either is unparseable or start is not before end.
+ */
+function exactRange(startRaw: string, endRaw: string): { start: Date; end: Date } | null {
+  // Full date-times only, on real calendar dates: Date silently rolls a bare or
+  // impossible date (`2026-02-30`) into the next month, which must be refused.
+  const realDateTime = (raw: string) =>
+    /^\d{4}-\d{2}-\d{2}T/.test(raw) && isRealCalendarDate(raw.slice(0, 10));
+  if (!realDateTime(startRaw) || !realDateTime(endRaw)) return null;
+  const start = new Date(startRaw);
+  const end = new Date(endRaw);
+  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || start >= end) return null;
+  end.setUTCHours(23, 59, 59, 999);
+  return { start, end };
+}
 
 export const calendarRangeResource: ResourceDefinition = {
   name: 'calendar-range',
@@ -535,15 +557,16 @@ export const calendarRangeResource: ResourceDefinition = {
   scope: 'read',
   roles: MEMBER,
   handler: async (vars, ctx) => {
-    const start = new Date(vars.start);
-    const end = new Date(vars.end);
-    if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || start >= end) {
+    // Whole days in the class zone: local 00:00 on `start` to local
+    // 23:59:59.999 on `end`. A bare date means a day on the course's calendar.
+    const range =
+      localDayRange(vars.start, vars.end, classroomZone(ctx)) ?? exactRange(vars.start, vars.end);
+    if (!range) {
       throw new ToolError(
         'invalid_params',
         'start/end must be ISO dates (YYYY-MM-DD) with start before end'
       );
     }
-    end.setUTCHours(23, 59, 59, 999);
-    return loadCalendar(ctx, start, end);
+    return loadCalendar(ctx, range.start, range.end);
   },
 };

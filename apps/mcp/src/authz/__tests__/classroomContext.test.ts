@@ -34,6 +34,7 @@ vi.mock('@classmoji/services', () => ({
     classroom: {
       findAll: (...args: unknown[]) => findAll(...args),
       getClassroomForUI: (c: unknown) => c,
+      getTimeZone: async () => 'America/New_York',
     },
     classroomMembership: {
       findByClassroomAndUser: (...args: unknown[]) => findByClassroomAndUser(...args),
@@ -97,6 +98,12 @@ describe('resolveClassroomContext ambiguity guard (A1)', () => {
     expect(ctx.role).toBe('STUDENT');
     expect(ctx.roles).toEqual(['STUDENT']);
     expect(findByClassroomAndUser).toHaveBeenCalled();
+    // The classroom's zone rides along for the class-zone renderings, and it
+    // outranks any caller hint.
+    expect(ctx.timezone).toBe('America/New_York');
+    expect(ctx.effectiveTimezone).toEqual({ timeZone: 'America/New_York', source: 'classroom' });
+    const hinted = await resolveClassroomContext({ ...VIEWER, timezoneHint: 'Europe/Paris' }, REF);
+    expect(hinted.effectiveTimezone.source).toBe('classroom');
   });
 });
 

@@ -131,7 +131,8 @@ export const getClassroomInfoTool = mirrorResourceTool({
   title: 'Get classroom info',
   description:
     'Classroom name, status, archive flag, sanitized settings (feature flags, model choices, ' +
-    'has_anthropic_key/has_openai_key booleans — never raw keys), and your role in it. Any member.',
+    'has_anthropic_key/has_openai_key booleans — never raw keys), your role in it, and its time ' +
+    'zone (UTC when unset). Any member.',
 });
 
 export const getRosterTool = mirrorResourceTool({
@@ -255,8 +256,11 @@ export const listCalendarTool = mirrorResourceTool({
   name: 'list_calendar',
   title: 'List calendar (current month)',
   description:
-    'Calendar events for the current month — recurring events expanded, assignment deadlines ' +
-    'merged in. Use list_calendar_range for another window. Any member; staff reads also include ' +
+    "Calendar events for the current month in the classroom's time zone — recurring events " +
+    'expanded, assignment deadlines merged in. Use list_calendar_range for another window. Event ' +
+    'times and deadlines have a `<field>_local` rendering in that zone; quote those, not raw UTC. ' +
+    'Any member; ' +
+    'staff reads also include ' +
     'linked draft pages/decks and links to unpublished assignments, flagged as such. ' +
     '`featured_resource` is the one link the month view shows under an event, or null.',
 });
@@ -267,8 +271,10 @@ export const listCalendarRangeTool = mirrorResourceTool({
   title: 'List calendar (date range)',
   description:
     'Calendar events for an explicit date range. `start` and `end` are ISO dates ' +
-    '(YYYY-MM-DD, e.g. 2026-07-01 / 2026-08-31), start before end. Recurring events expanded, ' +
-    'deadlines merged. Any member; staff reads also include linked draft pages/decks and links ' +
+    '(YYYY-MM-DD, e.g. 2026-07-01 / 2026-08-31), start before end, read as whole days in the ' +
+    "classroom's time zone. Recurring events expanded, deadlines merged. Event times and " +
+    'deadlines have a `<field>_local` rendering in that zone. Any member; staff reads also include linked draft ' +
+    'pages/decks and links ' +
     'to unpublished assignments, flagged as such. `featured_resource` is the one link the month ' +
     'view shows under an event, or null.',
   extraInput: {
