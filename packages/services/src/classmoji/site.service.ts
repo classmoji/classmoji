@@ -153,6 +153,23 @@ export async function getSiteForClassroom(classroomId: string) {
   return getPrisma().classroomSite.findUnique({ where: { classroom_id: classroomId } });
 }
 
+/**
+ * The classroom's time zone: the IANA zone its public schedule renders in, or
+ * null when none is set (no site row, or the column is empty).
+ *
+ * `classroom_sites.timezone` is the one place a classroom records its zone, so
+ * everything that renders a date for a MODEL (Ask Moji, the MCP server) reads it
+ * from here rather than growing a second setting. A null is not an error: the
+ * callers fall back to UTC and say so (see @classmoji/utils resolveTimeZone).
+ */
+export async function getClassroomTimeZone(classroomId: string): Promise<string | null> {
+  const site = await getPrisma().classroomSite.findUnique({
+    where: { classroom_id: classroomId },
+    select: { timezone: true },
+  });
+  return site?.timezone ?? null;
+}
+
 export type SubdomainAvailability = {
   available: boolean;
   /** The trimmed, lowercased label the caller would actually get. */

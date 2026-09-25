@@ -12,6 +12,7 @@
  * the organization is narrowed to public identity fields.
  */
 
+import { resolveTimeZone } from '@classmoji/utils';
 import type { ResourceDefinition } from '../mcp/registry.ts';
 import { MEMBER, classroomCtx } from './shape.ts';
 
@@ -63,6 +64,10 @@ export const classroomInfoResource: ResourceDefinition = {
           }
         : null,
       viewer_role: resolved.role,
+      // The zone every `*_local` field is rendered in: the site's IANA zone,
+      // or 'UTC' when the course has not set one (then timezone_is_default).
+      timezone: resolveTimeZone(resolved.timezone).timeZone,
+      timezone_is_default: resolveTimeZone(resolved.timezone).isFallback,
     };
   },
 };

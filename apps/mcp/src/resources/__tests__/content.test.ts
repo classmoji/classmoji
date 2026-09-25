@@ -61,7 +61,7 @@ vi.mock('@classmoji/services', () => ({
   },
 }));
 
-const { calendarResource, quizzesResource } = await import('../content.ts');
+const { calendarResource, calendarRangeResource, quizzesResource } = await import('../content.ts');
 
 const VARS = { org: 'twin-org', slug: 'winter-2025' };
 
@@ -469,5 +469,77 @@ describe('calendar resource allowlist shaping (U5)', () => {
       expect(event.featured_resource).toBeNull();
       expect(JSON.stringify(event)).not.toContain('SECRET');
     });
+  });
+});
+
+describe('calendar windows are whole days in the classroom zone', () => {
+  function nyStudentCtx(): ToolContext {
+    const ctx = studentCtx();
+    (ctx.classroom as unknown as { timezone: string }).timezone = 'America/New_York';
+    return ctx;
+  }
+
+  function lastWindow(): { start: string; end: string } {
+    const [, start, end] = getClassroomCalendar.mock.lastCall as [string, Date, Date];
+    return { start: start.toISOString(), end: end.toISOString() };
+  }
+
+  it('reads a Mon-Sun range as New York days, so Sun 11:59 PM EDT is inside', async () => {
+    getClassroomCalendar.mockResolvedValue([]);
+    const result = (await calendarRangeResource.handler(
+      { org: 'o', slug: 's', start: '2026-09-21', end: '2026-09-27' },
+      nyStudentCtx(),
+      new URL('classmoji://x')
+    )) as { range: { start: string; end: string } };
+
+    // Lab2 is due 2026-09-28T03:59Z; a UTC-day window ending Sep 27 missed it.
+    expect(lastWindow()).toEqual({
+      start: '2026-09-21T04:00:00.000Z',
+      end: '2026-09-28T03:59:59.999Z',
+    });
+    expect(result.range).toEqual(lastWindow());
+  });
+
+  it('keeps plain UTC days when the classroom has no zone', async () => {
+    getClassroomCalendar.mockResolvedValue([]);
+    await calendarRangeResource.handler(
+      { org: 'o', slug: 's', start: '2026-09-21', end: '2026-09-27' },
+      studentCtx(),
+      new URL('classmoji://x')
+    );
+    expect(lastWindow()).toEqual({
+      start: '2026-09-21T00:00:00.000Z',
+      end: '2026-09-27T23:59:59.999Z',
+    });
+  });
+
+  it('still refuses a reversed range', async () => {
+    await expect(
+      calendarRangeResource.handler(
+        { org: 'o', slug: 's', start: '2026-09-27', end: '2026-09-21' },
+        nyStudentCtx(),
+        new URL('classmoji://x')
+      )
+    ).rejects.toMatchObject({ kind: 'invalid_params' });
+  });
+
+  it('anchors the default month on the class calendar, not UTC', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      // Sep 30, 10 PM EDT: already October in UTC, still September in class.
+      vi.setSystemTime(new Date('2026-10-01T02:00:00Z'));
+      getClassroomCalendar.mockResolvedValue([]);
+      await calendarResource.handler(
+        { org: 'o', slug: 's' },
+        nyStudentCtx(),
+        new URL('classmoji://x')
+      );
+      expect(lastWindow()).toEqual({
+        start: '2026-08-29T04:00:00.000Z',
+        end: '2026-10-05T03:59:59.999Z',
+      });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

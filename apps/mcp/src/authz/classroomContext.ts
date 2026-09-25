@@ -34,6 +34,13 @@ export interface ClassroomContext {
   classroom: ReturnType<typeof ClassmojiService.classroom.getClassroomForUI<Classroom>>;
   /** Raw status kept alongside because handlers need it for mutation gating. */
   status: ClassroomStatus;
+  /**
+   * The classroom's IANA time zone (`classroom_sites.timezone`), or null when
+   * none is set. Every date this server hands a model is also rendered in this
+   * zone (see mcp/localTimes.ts), and calendar windows are whole days in it.
+   * Null means the UTC fallback, which the rendering labels as UTC.
+   */
+  timezone: string | null;
   /** The membership that satisfied the tool's role requirement. */
   membership: Membership;
   /** The caller's HIGHEST-privilege role among those satisfying the gate. */
@@ -95,13 +102,16 @@ export async function resolveClassroomContext(
   const candidateRoles = rolesFilter
     ? ROLE_PRIORITY.filter(role => rolesFilter.includes(role))
     : [...ROLE_PRIORITY];
-  const found = await Promise.all(
-    candidateRoles.map(role =>
-      ClassmojiService.classroomMembership.findByClassroomAndUser(classroom.id, viewer.userId, [
-        role,
-      ])
-    )
-  );
+  const [found, timezone] = await Promise.all([
+    Promise.all(
+      candidateRoles.map(role =>
+        ClassmojiService.classroomMembership.findByClassroomAndUser(classroom.id, viewer.userId, [
+          role,
+        ])
+      )
+    ),
+    ClassmojiService.site.getClassroomTimeZone(classroom.id),
+  ]);
   let memberships = found.filter((m): m is Membership => Boolean(m));
   if (memberships.length === 0 && rolesFilter) {
     // Distinguish "not a member" from "insufficient role" for the error message.
@@ -122,6 +132,7 @@ export async function resolveClassroomContext(
     classroomId: classroom.id,
     classroom: ClassmojiService.classroom.getClassroomForUI(classroom),
     status: classroom.status,
+    timezone,
     membership: effective,
     role: effective.role,
     roles: memberships.map(m => m.role),

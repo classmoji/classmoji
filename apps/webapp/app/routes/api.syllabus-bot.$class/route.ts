@@ -278,7 +278,13 @@ async function handleInitConversation(request: Request, classSlug: string, formD
     return jsonResponse({ error: 'The syllabus assistant requires a Pro subscription' }, 403);
   }
 
-  const settings = await ClassmojiService.classroom.getClassroomSettingsForServer(classroom.id);
+  // The zone rides along with the settings read: the prompt states the current
+  // local date and time once, when the session starts, and every date the MCP
+  // tools return is rendered in this same zone. Null = UTC, labelled as such.
+  const [settings, timezone] = await Promise.all([
+    ClassmojiService.classroom.getClassroomSettingsForServer(classroom.id),
+    ClassmojiService.site.getClassroomTimeZone(classroom.id),
+  ]);
 
   // Check if syllabus bot is enabled
   if (!settings?.syllabus_bot_enabled) {
@@ -298,6 +304,9 @@ async function handleInitConversation(request: Request, classSlug: string, formD
     orgName: classroom.name,
     courseName: (settings as { course_name?: string })?.course_name || classroom.name,
     userRole: contextRole,
+    // IANA zone from classroom_sites.timezone, or null (ai-agent falls back to
+    // UTC and says so). See @classmoji/utils timeZone.ts.
+    timezone,
   };
 
   // The MCP bearer this turn carries. Minted before anything is sent, so a mint

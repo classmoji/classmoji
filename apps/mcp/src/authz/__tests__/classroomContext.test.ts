@@ -38,6 +38,7 @@ vi.mock('@classmoji/services', () => ({
     classroomMembership: {
       findByClassroomAndUser: (...args: unknown[]) => findByClassroomAndUser(...args),
     },
+    site: { getClassroomTimeZone: async () => 'America/New_York' },
   },
 }));
 
@@ -97,6 +98,8 @@ describe('resolveClassroomContext ambiguity guard (A1)', () => {
     expect(ctx.role).toBe('STUDENT');
     expect(ctx.roles).toEqual(['STUDENT']);
     expect(findByClassroomAndUser).toHaveBeenCalled();
+    // The classroom's zone rides along for the class-zone renderings.
+    expect(ctx.timezone).toBe('America/New_York');
   });
 });
 

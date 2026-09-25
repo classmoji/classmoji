@@ -41,6 +41,7 @@ vi.mock('@classmoji/services', () => ({
     classroom: {
       getClassroomSettingsForServer: (...a: unknown[]) => getClassroomSettingsForServerMock(...a),
     },
+    site: { getClassroomTimeZone: vi.fn(async () => 'America/New_York') },
   },
 }));
 

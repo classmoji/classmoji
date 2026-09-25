@@ -34,6 +34,7 @@ vi.mock('@classmoji/services', () => ({
     classroom: {
       getClassroomSettingsForServer: vi.fn(async () => ({ syllabus_bot_enabled: true })),
     },
+    site: { getClassroomTimeZone: vi.fn(async () => 'America/New_York') },
   },
 }));
 vi.mock('~/services/aiAgentConnection.server', () => ({
@@ -93,5 +94,15 @@ describe('syllabus bot presentation role', () => {
 
   it('refuses a lowercase near-miss, since the enum is the whole contract', async () => {
     expect(await initWith('student')).toBe('OWNER');
+  });
+});
+
+describe('syllabus bot class time zone', () => {
+  it("hands ai-agent the classroom's zone at init, for the session-start clock", async () => {
+    await initWith('STUDENT');
+    const payload = sendRequestMock.mock.calls.at(-1)?.[1] as {
+      orgConfig: { timezone: string | null };
+    };
+    expect(payload.orgConfig.timezone).toBe('America/New_York');
   });
 });

@@ -12,7 +12,7 @@
  * DECISIONS under test (pure gates, ordering) all run for real.
  */
 
-import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { z } from 'zod';
@@ -20,6 +20,7 @@ import type { Viewer } from '../../auth/resolveViewer.ts';
 
 const findAll = vi.fn();
 const findByClassroomAndUser = vi.fn();
+const getClassroomTimeZone = vi.fn();
 
 vi.mock('@classmoji/services', () => ({
   ClassmojiService: {
@@ -30,6 +31,9 @@ vi.mock('@classmoji/services', () => ({
     },
     classroomMembership: {
       findByClassroomAndUser: (...args: unknown[]) => findByClassroomAndUser(...args),
+    },
+    site: {
+      getClassroomTimeZone: (...args: unknown[]) => getClassroomTimeZone(...args),
     },
   },
 }));
@@ -162,6 +166,31 @@ beforeAll(() => {
     handler: async () => ({ content: [{ type: 'text', text: 'limited-ok' }] }),
   });
 
+  registerToolDefinition<{ classroom: string }>({
+    name: 't_read_deadline',
+    title: 'Read a deadline',
+    description: 'classroom-bound read that returns timestamps',
+    scope: 'read',
+    roles: ['OWNER', 'TEACHER', 'ASSISTANT', 'STUDENT'],
+    inputSchema: { classroom: z.string() },
+    handler: async () => ({
+      content: [
+        {
+          type: 'text',
+          text: JSON.stringify(
+            {
+              title: 'Landing Page Part 1',
+              student_deadline: '2026-09-21T03:59:00.000Z',
+              occurrence_date: '2026-09-21T00:00:00.000Z',
+            },
+            null,
+            2
+          ),
+        },
+      ],
+    }),
+  });
+
   // Registry defense-in-depth guard for a missing classroom arg: the zod
   // schema must let the argument through so the registry's own check runs.
   registerToolDefinition<{ classroom?: string }>({
@@ -239,6 +268,8 @@ beforeEach(() => {
   resetRateLimits();
   findAll.mockReset();
   findByClassroomAndUser.mockReset();
+  getClassroomTimeZone.mockReset();
+  getClassroomTimeZone.mockResolvedValue(null);
   writeHandlerCalls = 0;
 });
 
@@ -430,6 +461,62 @@ describe('classroom-bound tools', () => {
 
     const result = await callTool(client, 't_read_classroom', { classroom: REF });
     expect(result.isError).toBeFalsy();
+  });
+});
+
+// ─── Class-zone renderings (localTimes.ts) ───────────────────────────────────
+
+describe('class-zone renderings on classroom-bound results', () => {
+  const REF = 'dev-org/cs101-fall-2025';
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('adds <field>_local, timezone and now_local in the classroom zone', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-09-24T15:20:00Z'));
+    mockClassroom({ status: 'ACTIVE', memberRole: 'STUDENT' });
+    getClassroomTimeZone.mockResolvedValue('America/New_York');
+    const client = await connectClient(makeViewer(['read']));
+
+    const result = await callTool(client, 't_read_deadline', { classroom: REF });
+    expect(result.isError).toBeFalsy();
+    expect(JSON.parse(result.content[0].text)).toEqual({
+      title: 'Landing Page Part 1',
+      student_deadline: '2026-09-21T03:59:00.000Z',
+      // Sun Sep 20, not "Sep 21 at 3:59 AM".
+      student_deadline_local: 'Sun Sep 20, 2026, 11:59 PM EDT',
+      // A date-only column is never shifted into the zone.
+      occurrence_date: '2026-09-21T00:00:00.000Z',
+      timezone: 'America/New_York',
+      now_local: 'Thursday, September 24, 2026, 11:20 AM EDT (America/New_York)',
+    });
+  });
+
+  it('falls back to labelled UTC when the classroom has no zone', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-09-24T15:20:00Z'));
+    mockClassroom({ status: 'ACTIVE', memberRole: 'STUDENT' });
+    const client = await connectClient(makeViewer(['read']));
+
+    const body = JSON.parse(
+      (await callTool(client, 't_read_deadline', { classroom: REF })).content[0].text
+    );
+    expect(body.student_deadline_local).toBe('Mon Sep 21, 2026, 3:59 AM UTC');
+    expect(body.timezone).toBe('UTC');
+    expect(body.now_local).toMatch(/\(UTC; this course has not set a time zone\)$/);
+  });
+
+  it('leaves a result with no timestamps byte-for-byte alone', async () => {
+    mockClassroom({ status: 'ACTIVE', memberRole: 'ASSISTANT' });
+    getClassroomTimeZone.mockResolvedValue('America/New_York');
+    const client = await connectClient(makeViewer(['read']));
+
+    const result = await callTool(client, 't_read_classroom', { classroom: REF });
+    expect(result.content[0].text).toBe(
+      JSON.stringify({ classroomId: 'classroom-1', role: 'ASSISTANT' })
+    );
   });
 });
 
