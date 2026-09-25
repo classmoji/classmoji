@@ -516,11 +516,17 @@ model ClassroomSettings {
   syllabus_bot_model           String?
   llm_provider                 String?
   llm_model                    String?
+  // Legacy: no quiz call sends a temperature or token cap, and the settings page
+  // no longer edits these. Kept (not dropped) so old rows stay readable.
   llm_temperature              Float?
   llm_max_tokens               Int?
   openai_api_key               String?
   anthropic_api_key            String?
   code_aware_model             String?
+  // Model for the code-aware quiz's repository-exploration sub-agent. Null =
+  // the platform EXPLORATION_MODEL. Runs in a Trigger.dev task on the platform
+  // Anthropic key, not anthropic_api_key above.
+  exploration_model            String?
   content_repo_name            String?
   default_student_page         String   @default("dashboard")
   theme                        String   @default("stone")

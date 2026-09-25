@@ -267,7 +267,7 @@ const StepImportModules = ({
                         {
                           key: 'aiConfig',
                           label: 'AI & quiz config',
-                          sublabel: 'models, temperature, syllabus bot',
+                          sublabel: 'models, syllabus bot',
                         },
                         // Owners only. A teacher may copy a class they teach but
                         // not lift its LLM credentials out of it; the server
