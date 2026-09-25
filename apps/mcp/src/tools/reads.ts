@@ -17,7 +17,7 @@
  * serializes it with the same `JSON.stringify(payload, null, 2)` the resource
  * read uses. Resource and tool are therefore byte-identical by construction.
  *
- * Three tools are NOT pure mirrors:
+ * Four tools are NOT pure mirrors:
  *   - list_submissions   adds server-side filters over the grading-queue data
  *     (shares loadGradingQueueData + queueRow with the grading-queue resource).
  *   - list_teaching_team is a NEW capability (no resource lists staff-with-ids)
@@ -25,6 +25,9 @@
  *   - grading_report     is a NEW capability (per-TA grading oversight) on a
  *     TIGHTER tier than the rest: OWNER/TEACHER, since it exposes each TA's
  *     throughput and grading patterns to whoever reads it.
+ *   - list_tags          is a NEW capability: list_teams names tags but carries
+ *     no ids, while repo_create/repo_update's tag_id and team_create/
+ *     team_tag_add's tag_ids take ids. Teaching team, like list_teaching_team.
  */
 
 import { UriTemplate } from '@modelcontextprotocol/sdk/shared/uriTemplate.js';
@@ -441,6 +444,41 @@ export const listTeachingTeamTool: ToolDefinition<ListTeachingTeamArgs> = {
   },
 };
 
+// ─── list_tags (NEW — resolves the tag ids the team/repo tools take) ────────
+
+interface ListTagsArgs {
+  classroom: string;
+}
+
+export const listTagsTool: ToolDefinition<ListTagsArgs> = {
+  name: 'list_tags',
+  title: 'List tags',
+  description:
+    "The classroom's team tags, each with { id, name, team_count, repository_count }. Use an id " +
+    'as tag_id for repo_create / repo_update (instructor-assigned GROUP repos) and in tag_ids for ' +
+    'team_create / team_tag_add. list_teams shows tag names only. Teaching team only.',
+  scope: 'read',
+  // Tags are not sensitive, but only staff tools consume their ids; students
+  // have no call that takes one.
+  roles: TEACHING_TEAM,
+  inputSchema: {
+    classroom: z.string().describe("Classroom reference as 'org/slug'"),
+  },
+  handler: async (_args, ctx) => {
+    const { classroomId } = requireClassroomCtx(ctx);
+    const tags = await ClassmojiService.organizationTag.findByClassroomIdWithCounts(classroomId);
+    return ok({
+      count: tags.length,
+      tags: tags.map(tag => ({
+        id: tag.id,
+        name: tag.name,
+        team_count: tag._count.teams,
+        repository_count: tag._count.repositories,
+      })),
+    });
+  },
+};
+
 // ─── grading_report (TA grading oversight) ──────────────────────────────────
 
 interface GradingReportArgs {
@@ -497,6 +535,7 @@ export const readTools: ToolDefinition<never>[] = [
   getClassroomInfoTool,
   getRosterTool,
   listTeamsTool,
+  listTagsTool,
   listReposTool,
   myGradesTool,
   listSubmissionsTool,

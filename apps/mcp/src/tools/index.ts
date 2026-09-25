@@ -51,7 +51,13 @@ import {
 import { contentSearchTool, contentListTool, contentGetTool } from './contentSearch.ts';
 import { tokenGrantTool } from './tokens.ts';
 import { extensionPurchaseTool } from './extensions.ts';
-import { repoCreateTool, repoPublishTool, repoUnpublishTool } from './repos.ts';
+import {
+  repoCreateTool,
+  repoUpdateTool,
+  repoDeleteTool,
+  repoPublishTool,
+  repoUnpublishTool,
+} from './repos.ts';
 import { rosterAddStudentTool, rosterRemoveStudentTool } from './roster.ts';
 import { staffAddTool, staffUpdateTool, staffRemoveTool } from './staff.ts';
 import { quizCreateTool, quizUpdateTool, quizPublishTool, quizDeleteTool } from './quizzes.ts';
@@ -204,8 +210,12 @@ export function registerAllTools(): void {
   // Extensions (STUDENT self)
   registerToolDefinition(extensionPurchaseTool);
 
-  // Repos: create container + publish/unpublish + provisioning (OWNER)
+  // Repos: create/update/delete container + publish/unpublish + provisioning
+  // (OWNER). update freezes structural fields once student repos exist; delete
+  // is destructive, confirm-gated, and refuses published/provisioned repos.
   registerToolDefinition(repoCreateTool);
+  registerToolDefinition(repoUpdateTool);
+  registerToolDefinition(repoDeleteTool);
   registerToolDefinition(repoPublishTool);
   registerToolDefinition(repoUnpublishTool);
 

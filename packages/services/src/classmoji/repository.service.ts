@@ -249,7 +249,9 @@ const assertScopedIds = (id: unknown, classroomId: unknown): void => {
  */
 export const update = async (
   id: string,
-  updates: Prisma.RepositoryUpdateManyMutationInput,
+  // Unchecked so the tag_id FK scalar is writable; id and classroom_id are
+  // omitted so an update can never move a repository to another classroom.
+  updates: Omit<Prisma.RepositoryUncheckedUpdateManyInput, 'id' | 'classroom_id'>,
   classroomId: string
 ) => {
   assertScopedIds(id, classroomId);
@@ -404,6 +406,40 @@ export const findWithStudentStatus = async (classroomId: string, studentId: stri
       tag: true,
     },
     orderBy: { title: 'asc' },
+  });
+};
+
+/**
+ * What hangs off a repository, read inside the authorized classroom: its
+ * assignments (id + title) and counts of every dependent row. Returns null when
+ * the id is not a repository of `classroomId`.
+ *
+ * `git_repos` > 0 means student/team copies were provisioned from it, which is
+ * what freezes its structural fields and blocks a delete. The other counts are
+ * the blast radius of a delete: assignments, module items, page/slide links and
+ * autograding tests cascade with the repository; quizzes are unlinked (SET NULL).
+ *
+ * `classroomId` is REQUIRED and part of the query — see `deleteById`.
+ */
+export const findDependents = async (id: string, classroomId: string) => {
+  assertScopedIds(id, classroomId);
+
+  return getPrisma().repository.findFirst({
+    where: { id, classroom_id: classroomId },
+    select: {
+      id: true,
+      assignments: { select: { id: true, title: true }, orderBy: { title: 'asc' } },
+      _count: {
+        select: {
+          git_repos: true,
+          module_items: true,
+          pages: true,
+          slides: true,
+          quizzes: true,
+          autograding_tests: true,
+        },
+      },
+    },
   });
 };
 

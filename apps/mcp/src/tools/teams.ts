@@ -160,7 +160,7 @@ const teamRefSchema = z.string().min(1).describe("The team's slug or id (from li
 const tagIdsSchema = z
   .array(z.string().min(1))
   .max(20)
-  .describe('Tag ids to attach (tags must belong to this classroom)');
+  .describe('Tag ids to attach, from list_tags (tags must belong to this classroom)');
 
 // ─── team_create ────────────────────────────────────────────────────────────
 
@@ -183,7 +183,7 @@ export const teamCreateTool: ToolDefinition<TeamCreateArgs> = {
     "the classroom's own membership teams), are refused before anything is created. is_visible " +
     'is recorded on the team but no read path currently varies on it: in list_teams a student ' +
     'sees the teams they belong to and the teaching team sees them all, either way. tag_ids ' +
-    'attach classroom tags at creation time; a tag id ' +
+    '(from list_tags) attach classroom tags at creation time; a tag id ' +
     'from another classroom is reported in tags_failed and the team is still created. Add members ' +
     'afterwards with team_members_add.',
   scope: 'write',
@@ -638,7 +638,8 @@ export const teamTagAddTool: ToolDefinition<TeamTagAddArgs> = {
   title: 'Attach tags to a team',
   description:
     'Attaches classroom tags to a team (Classmoji only — nothing is written to GitHub). Owner ' +
-    'only. Tags group teams for assignment distribution. Tag ids must belong to this classroom; ' +
+    'only. Tags group teams for assignment distribution. Tag ids come from list_tags and must ' +
+    'belong to this classroom; ' +
     'ones that do not are reported in failed while the rest are still attached. Attaching a tag ' +
     'the team already has is a no-op and counts as added.',
   scope: 'write',
@@ -716,7 +717,11 @@ export const teamTagRemoveTool: ToolDefinition<TeamTagRemoveArgs> = {
     classroom: z.string().describe("Classroom reference as 'org/slug'"),
     team: teamRefSchema,
     tag_name: z.string().min(1).optional().describe('Tag name as shown in list_teams'),
-    tag_id: z.string().min(1).optional().describe('Tag id (alternative to tag_name)'),
+    tag_id: z
+      .string()
+      .min(1)
+      .optional()
+      .describe('Tag id from list_tags (alternative to tag_name)'),
   },
   handler: async (args, ctx) => {
     const classroom = requireClassroomCtx(ctx);

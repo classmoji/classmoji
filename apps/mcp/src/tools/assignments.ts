@@ -158,7 +158,9 @@ export const assignmentUpdateTool: ToolDefinition<AssignmentUpdateArgs> = {
       resource_type: 'ASSIGNMENT',
       resource_id: assignment.id,
       action: 'UPDATE',
-      data: { tool: 'assignment_update', fields, values },
+      // `value` is what keeps two different edits inside audit's 5s dedup window
+      // from collapsing into one row; an identical re-send still dedups.
+      data: { tool: 'assignment_update', fields, values, value: JSON.stringify(values) },
     });
 
     return ok({

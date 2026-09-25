@@ -19,7 +19,8 @@ vi.mock('../notification.service.ts', () => ({
   createNotifications: vi.fn(),
 }));
 
-const { deleteById, setPublished, update } = await import('../repository.service.ts');
+const { deleteById, findDependents, setPublished, update } =
+  await import('../repository.service.ts');
 
 /** Every prisma method the service could reach — asserted untouched by the guard. */
 const allPrismaCalls = () => [deleteMany, updateMany, findFirst, findUniqueOrThrow];
@@ -155,5 +156,31 @@ describe('update', () => {
       'Repository not found in classroom'
     );
     expect(findFirst).not.toHaveBeenCalled();
+  });
+});
+
+describe('findDependents', () => {
+  it.each(unusableIds)('rejects %s as an id before issuing any query', async (_label, id) => {
+    await expect(findDependents(id as string, 'classroom-1')).rejects.toThrow(
+      'Invalid repository id'
+    );
+    for (const fn of allPrismaCalls()) expect(fn).not.toHaveBeenCalled();
+  });
+
+  it.each(unusableIds)('rejects %s as a classroom id before any query', async (_label, cid) => {
+    await expect(findDependents('repo-1', cid as string)).rejects.toThrow('Invalid classroom id');
+    for (const fn of allPrismaCalls()) expect(fn).not.toHaveBeenCalled();
+  });
+
+  it('reads inside the authorized classroom and counts the git repos', async () => {
+    findFirst.mockResolvedValue(null);
+
+    await expect(findDependents('repo-1', 'other-classroom')).resolves.toBeNull();
+    const query = findFirst.mock.calls[0][0] as {
+      where: unknown;
+      select: { _count: { select: Record<string, boolean> } };
+    };
+    expect(query.where).toEqual({ id: 'repo-1', classroom_id: 'other-classroom' });
+    expect(query.select._count.select).toMatchObject({ git_repos: true, module_items: true });
   });
 });
