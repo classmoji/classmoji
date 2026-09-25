@@ -31,7 +31,16 @@ export const action = async ({ request }: Route.ActionArgs) => {
     return Response.json({ error: 'Account has no Github login yet.' }, { status: 400 });
   }
 
-  const sandbox = await provisionExampleClassroom({ ownerUserId: userId, ownerLogin: user.login });
+  // Optional form field: the tour sends the browser's zone. Absent (an older
+  // client, or an empty body) simply means no initial zone.
+  const form = await request.formData().catch(() => null);
+  const timezone = form?.get('timezone');
+
+  const sandbox = await provisionExampleClassroom({
+    ownerUserId: userId,
+    ownerLogin: user.login,
+    timezone: typeof timezone === 'string' ? timezone : null,
+  });
   if (!sandbox) {
     return Response.json({ error: 'Could not create the example course.' }, { status: 500 });
   }

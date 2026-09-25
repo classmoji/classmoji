@@ -46,6 +46,7 @@ vi.mock('@classmoji/services', () => ({
     classroom: {
       findAll: (...a: unknown[]) => mocks.classroomFindAll(...a),
       getClassroomForUI: (c: unknown) => c,
+      getTimeZone: async () => null,
     },
     classroomMembership: {
       findByClassroomAndUser: (...a: unknown[]) => mocks.findByClassroomAndUser(...a),

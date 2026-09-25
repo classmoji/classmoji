@@ -25,9 +25,22 @@ const mocks = vi.hoisted(() => ({
   auditCreate: vi.fn(),
 }));
 
+// The real rule lives in classroom.service (tested there); this stand-in has the
+// same contract so the tool's wiring — call it, store what it returns, map its
+// refusal — is what gets tested here.
+class ClassroomSettingsValidationError extends Error {
+  code = 'TIMEZONE_INVALID';
+}
+
 vi.mock('@classmoji/services', () => ({
+  ClassroomSettingsValidationError,
   ClassmojiService: {
     classroom: {
+      normalizeTimeZoneSetting: (value: unknown) => {
+        if (value === null) return null;
+        if (value === 'america/new_york') return 'America/New_York';
+        throw new ClassroomSettingsValidationError(`'${String(value)}' is not a time zone`);
+      },
       update: (...a: unknown[]) => mocks.classroomUpdate(...a),
       updateSettings: (...a: unknown[]) => mocks.updateSettings(...a),
       findById: (...a: unknown[]) => mocks.classroomFindById(...a),
@@ -207,6 +220,37 @@ describe('classroom_settings_update', () => {
     expect(schema.safeParse({ ...base, late_penalty_points_per_hour: -0.5 }).success).toBe(false);
     expect(schema.safeParse({ ...base, late_penalty_points_per_hour: 2.5 }).success).toBe(true);
     expect(schema.safeParse({ ...base, name: '   ' }).success).toBe(false);
+  });
+});
+
+describe('classroom_settings_update — timezone', () => {
+  it('stores the canonical zone and echoes it', async () => {
+    const result = await classroomSettingsUpdateTool.handler(
+      { classroom: 'org/w26', timezone: 'america/new_york' },
+      CTX
+    );
+    expect(mocks.updateSettings).toHaveBeenCalledWith('class-1', { timezone: 'America/New_York' });
+    expect(parse(result).settings).toEqual({ timezone: 'America/New_York' });
+  });
+
+  it('clears the zone with null', async () => {
+    await classroomSettingsUpdateTool.handler({ classroom: 'org/w26', timezone: null }, CTX);
+    expect(mocks.updateSettings).toHaveBeenCalledWith('class-1', { timezone: null });
+  });
+
+  it('refuses an unknown zone as invalid_params and writes nothing', async () => {
+    const error = await classroomSettingsUpdateTool
+      .handler({ classroom: 'org/w26', timezone: 'Mars/Olympus' }, CTX)
+      .catch(e => e);
+    expect(error.kind).toBe('invalid_params');
+    expect(error.code).toBe('TIMEZONE_INVALID');
+    expect(mocks.updateSettings).not.toHaveBeenCalled();
+  });
+
+  it('accepts a nullable string in the schema', () => {
+    const schema = z.object(classroomSettingsUpdateTool.inputSchema);
+    expect(schema.safeParse({ classroom: 'o/s', timezone: null }).success).toBe(true);
+    expect(schema.safeParse({ classroom: 'o/s', timezone: 5 }).success).toBe(false);
   });
 });
 

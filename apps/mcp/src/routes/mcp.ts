@@ -18,6 +18,18 @@ import { resolveViewer } from '../auth/resolveViewer.ts';
 import { UnauthorizedError } from '../mcp/errors.ts';
 import { buildMcpServer } from '../mcp/registry.ts';
 import { registerAllResources } from '../resources/index.ts';
+import { canonicalTimeZone } from '@classmoji/utils';
+
+/**
+ * The caller's rendering-zone hint. Validated against Intl and dropped when
+ * invalid — never an error, since the only thing it can change is how a date
+ * is labelled, and only for a classroom that has no zone of its own.
+ */
+export const TIMEZONE_HEADER = 'x-classmoji-timezone';
+
+export function timezoneHintFrom(headers: Headers): string | null {
+  return canonicalTimeZone(headers.get(TIMEZONE_HEADER));
+}
 
 /** RFC 9728 §5.1: challenge advertises where our protected-resource metadata lives. */
 const WWW_AUTHENTICATE_VALUE = `Bearer resource_metadata="${MCP_PUBLIC_URL}${PROTECTED_RESOURCE_METADATA_PATH}"`;
@@ -52,7 +64,8 @@ export default async function mcpRoutes(fastify: FastifyInstance) {
   fastify.post('/mcp', async (request, reply) => {
     let viewer;
     try {
-      viewer = await resolveViewer(toFetchHeaders(request));
+      const headers = toFetchHeaders(request);
+      viewer = { ...(await resolveViewer(headers)), timezoneHint: timezoneHintFrom(headers) };
     } catch (error) {
       const message = error instanceof UnauthorizedError ? error.message : 'Authentication failed';
       if (!(error instanceof UnauthorizedError)) request.log.error(error);

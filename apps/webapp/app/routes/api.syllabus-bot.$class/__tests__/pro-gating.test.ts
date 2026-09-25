@@ -49,7 +49,12 @@ vi.mock('~/services/aiAgentConnection.server', () => ({
 }));
 
 vi.mock('~/utils/agentStreamManager', () => ({ default: { publish: vi.fn() } }));
-vi.mock('@classmoji/utils', () => ({ getContentRepoName: () => 'content-x' }));
+// The real module, with only the repo-name helper stubbed: the route's session
+// time-zone resolution runs the real validator.
+vi.mock('@classmoji/utils', async importOriginal => ({
+  ...(await importOriginal<typeof import('@classmoji/utils')>()),
+  getContentRepoName: () => 'content-x',
+}));
 // Both are module-level imports of the route; the conversation lookup is
 // exercised properly in conversation-binding.test.ts, and the mint in
 // mcp-token.test.ts.

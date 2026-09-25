@@ -27,6 +27,7 @@ import { useUser } from '~/hooks';
 import useStore from '~/store';
 import { useSurveyPending } from '~/components/features/survey';
 import type { TourPhase } from '~/types';
+import { browserTimeZone } from '~/utils/browserTimeZone';
 
 /** Target a landing `data-onboarding` element; null -> antd renders centered. */
 const target = (key: string) =>
@@ -248,7 +249,12 @@ export function OnboardingTour() {
       enterSandbox(existingSlug);
       return;
     }
-    sandboxFetcher.submit(null, { method: 'POST', action: '/api/example-classroom' });
+    // The browser zone seeds the sandbox's course time zone, as it does for a
+    // real classroom at creation (validated on the server).
+    sandboxFetcher.submit(
+      { timezone: browserTimeZone() ?? '' },
+      { method: 'POST', action: '/api/example-classroom' }
+    );
   }, [provisioning, existingSlug, enterSandbox, sandboxFetcher]);
 
   useEffect(() => {

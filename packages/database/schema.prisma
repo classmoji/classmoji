@@ -524,6 +524,17 @@ model ClassroomSettings {
   content_repo_name            String?
   default_student_page         String   @default("dashboard")
   theme                        String   @default("stone")
+  // The course's IANA time zone, e.g. `America/New_York` — THE one place a
+  // classroom records its zone. Everything that formats a date on the server
+  // reads it through classroom.getTimeZone: the public /schedule, Ask Moji's
+  // "now" line and the MCP server's `<field>_local` renderings. Null = not set:
+  // Ask Moji then falls back to the asking user's browser zone, and everything
+  // else to UTC, labelled as UTC. Set at creation from the creator's browser.
+  //
+  // Validated in classroom.updateSettings against Intl (canonical spelling
+  // stored); the CHECK in classroom_settings_timezone is a shape floor only,
+  // same reasoning as the deprecated ClassroomSite.timezone it replaces.
+  timezone                     String?
   created_at                   DateTime @default(now())
   updated_at                   DateTime @default(now()) @updatedAt
 
@@ -555,6 +566,14 @@ model ClassroomSite {
   // repair, never delete the site row (and with it the claimed subdomain).
   home_page_id              String?
   show_schedule             Boolean   @default(true)
+  // DEPRECATED — superseded by ClassroomSettings.timezone (migration
+  // classroom_settings_timezone copied every non-null value there). Nothing
+  // reads or writes this column any more. It is left in place, not dropped, so
+  // a process still running the previous release during a rolling deploy (the
+  // pages app deploys separately) does not select a column that is gone. Drop it
+  // in a later migration once no deployed build references it.
+  //
+  // Original note, kept for history:
   // The IANA zone the PUBLIC schedule renders deadlines in, e.g.
   // `America/New_York`. Null = fall back to UTC, and the schedule then LABELS
   // the date as UTC rather than printing a bare, ambiguous one.

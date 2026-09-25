@@ -24,7 +24,12 @@ vi.mock('~/utils/routeAuth.server', () => ({
 
 vi.mock('~/services/aiAgentConnection.server', () => ({ sendRequest: vi.fn() }));
 vi.mock('~/utils/agentStreamManager', () => ({ default: {} }));
-vi.mock('@classmoji/utils', () => ({ getContentRepoName: () => '' }));
+// The real module, with only the repo-name helper stubbed: the route's session
+// time-zone resolution runs the real validator.
+vi.mock('@classmoji/utils', async importOriginal => ({
+  ...(await importOriginal<typeof import('@classmoji/utils')>()),
+  getContentRepoName: () => '',
+}));
 vi.mock('@classmoji/services', () => ({
   ClassmojiService: {
     classroom: { getClassroomSettingsForServer: vi.fn() },
