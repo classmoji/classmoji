@@ -27,6 +27,8 @@ const mocks = vi.hoisted(() => ({
   repairInstallation: vi.fn(),
   graphql: vi.fn(),
   findUniqueGitOrg: vi.fn(),
+  settingsCreate: vi.fn(),
+  createWithUniqueClassroomSlug: vi.fn(),
 }));
 
 vi.mock('@classmoji/auth/server', () => ({
@@ -49,11 +51,15 @@ vi.mock('@classmoji/services', () => ({
   ClassroomSlugUnavailableError: class ClassroomSlugUnavailableError extends Error {},
   GitHubProvider: {
     getUserOctokit: () => ({
-      rest: { users: { getAuthenticated: (...a: unknown[]) => mocks.getAuthenticated(...a) } },
+      rest: {
+        users: { getAuthenticated: (...a: unknown[]) => mocks.getAuthenticated(...a) },
+        // The content repo does not exist yet — the normal path to creation.
+        repos: { get: vi.fn().mockRejectedValue(Object.assign(new Error('nf'), { status: 404 })) },
+      },
       graphql: (...a: unknown[]) => mocks.graphql(...a),
     }),
   },
-  createWithUniqueClassroomSlug: vi.fn(),
+  createWithUniqueClassroomSlug: (...a: unknown[]) => mocks.createWithUniqueClassroomSlug(...a),
   describeTokenMintError: vi.fn(() => 'mint failed'),
   getGitProvider: vi.fn(),
   ensureClassroomTeam: vi.fn(),
@@ -72,7 +78,18 @@ vi.mock('@classmoji/tasks', () => ({ default: {} }));
 vi.mock('@classmoji/database', () => ({
   default: () => ({
     gitOrganization: { findUnique: (...a: unknown[]) => mocks.findUniqueGitOrg(...a) },
-    classroom: { findMany: vi.fn().mockResolvedValue([]) },
+    classroom: {
+      findMany: vi.fn().mockResolvedValue([]),
+      findFirst: vi.fn().mockResolvedValue(null),
+    },
+    // Only the creation transaction's settings row matters to the time-zone
+    // tests; the other writes just have to succeed.
+    $transaction: (fn: (tx: unknown) => unknown) =>
+      fn({
+        classroom: { create: vi.fn().mockResolvedValue({ id: 'new-classroom' }) },
+        classroomSettings: { create: (...a: unknown[]) => mocks.settingsCreate(...a) },
+        classroomMembership: { create: vi.fn().mockResolvedValue({}) },
+      }),
   }),
 }));
 
@@ -211,5 +228,37 @@ describe('create-classroom installation guard', () => {
 
     await call();
     expect(mocks.repairInstallation).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * The creator's browser zone seeds the new classroom's time zone. The
+ * transaction runs for real against a fake `tx`; the slug helper then reports
+ * every slug taken, which stops the action right after the settings row is
+ * written and before the rest of provisioning.
+ */
+describe('create-classroom initial time zone', () => {
+  const createWith = async (timezone: unknown) => {
+    mocks.createWithUniqueClassroomSlug.mockImplementation(
+      async (_opts: unknown, build: (slug: string) => Promise<unknown>) => {
+        await build('web-dev');
+        throw new (await import('@classmoji/services')).ClassroomSlugUnavailableError('taken');
+      }
+    );
+    await call({ name: 'Web Dev', timezone });
+    return (mocks.settingsCreate.mock.calls[0]?.[0] as { data: Record<string, unknown> }).data;
+  };
+
+  it("stores the creator's browser zone, canonicalized", async () => {
+    expect(await createWith('america/new_york')).toEqual({
+      classroom_id: 'new-classroom',
+      timezone: 'America/New_York',
+    });
+  });
+
+  it('starts with no zone when the browser sent none, or an invalid one', async () => {
+    expect((await createWith(undefined)).timezone).toBeNull();
+    mocks.settingsCreate.mockClear();
+    expect((await createWith('Mars/Olympus')).timezone).toBeNull();
   });
 });
