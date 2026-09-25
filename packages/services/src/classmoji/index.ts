@@ -69,6 +69,7 @@ export type {
 import * as teamMembershipService from './teamMembership.service.ts';
 import * as teamService from './team.service.ts';
 import * as teamTagService from './teamTag.service.ts';
+import * as teamSetService from './teamSet.service.ts';
 import * as tokenService from './token.service.ts';
 import * as userService from './user.service.ts';
 import * as quizService from './quiz.service.ts';
@@ -135,6 +136,9 @@ const ClassmojiService = {
   team: teamService,
   teamAdmin: teamAdminService,
   teamTag: teamTagService,
+  // Team sets: configure, solve (Trigger `team-set-solve`) and create (Trigger
+  // `team-set-apply`) a grouping of a classroom form's respondents.
+  teamSet: teamSetService,
   token: tokenService,
   user: userService,
   quiz: quizService,
@@ -213,6 +217,7 @@ export {
   teamService,
   teamAdminService,
   teamTagService,
+  teamSetService,
   tokenService,
   userService,
   quizService,
