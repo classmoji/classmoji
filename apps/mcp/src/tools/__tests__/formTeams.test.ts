@@ -313,9 +313,9 @@ describe('team-set tool definitions', () => {
     });
   });
 
-  it('rate-limits run and create tighter than the default (previews spend create’s bucket)', () => {
-    expect(formTeamsRunTool.rateLimit).toEqual({ capacity: 10, refillPerSecond: 0.2 });
-    expect(formTeamsCreateTool.rateLimit).toEqual({ capacity: 6, refillPerSecond: 0.02 });
+  it('sizes run and create buckets for iteration (checks and previews spend the same bucket)', () => {
+    expect(formTeamsRunTool.rateLimit).toEqual({ capacity: 30, refillPerSecond: 0.5 });
+    expect(formTeamsCreateTool.rateLimit).toEqual({ capacity: 12, refillPerSecond: 0.1 });
   });
 
   it('bounds wait_s to 0..45 and takes only confirm: true', () => {
@@ -961,6 +961,7 @@ describe('form_teams_run — an existing set', () => {
       [{ status: 'INFEASIBLE', summary: 'They collide.' }, /relax or remove one of those in core/],
       [{ status: 'FAILED', error: 'no_solution_in_time' }, /raise time_limit_s/],
       [{ status: 'FAILED', error: 'lost' }, /start a new run/],
+      [{ status: 'FAILED', error: 'queue_expired' }, /waited too long to start; start a new run/],
       [{ status: 'CANCELED' }, /canceled/],
     ];
     for (const [overrides, next] of cases) {
@@ -1121,6 +1122,54 @@ describe('TeamSetError mapping', () => {
     );
     const created = (await formTeamsCreateTool.handler(BASE, CTX).catch(e => e)) as ToolError;
     expect(created.data).toEqual({ run_number: 4, status: 'FAILED' });
+    // A failed create that made teams: only its run can be retried…
+    expect(created.message).toBe(
+      'A create of run 4 failed partway and made some teams; only run 4 can be retried (form_teams_create with run: 4)'
+    );
+
+    // …while a set that has its teams says so, and names no run to retry.
+    mocks.previewCreate.mockRejectedValueOnce(
+      teamSetError('already_created', 'raw', { run_number: 4, status: 'DONE' })
+    );
+    const done = (await formTeamsCreateTool.handler(BASE, CTX).catch(e => e)) as ToolError;
+    expect(done.message).toMatch(/^This set already has its teams/);
+    expect(done.message).not.toMatch(/retried/);
+  });
+
+  it('says GitHub only to a classroom that is not on GitHub', async () => {
+    mocks.previewCreate.mockRejectedValueOnce(
+      teamSetError('provider_unsupported', 'raw GITLAB text', { provider: 'GITLAB' })
+    );
+    const error = (await formTeamsCreateTool.handler(BASE, CTX).catch(e => e)) as ToolError;
+    expect(error).toMatchObject({ kind: 'invalid_params', code: 'provider_unsupported' });
+    expect(error.message).toMatch(/GitHub only/);
+    expect(error.message).not.toMatch(/cannot be reached/);
+    expect(error.data).toBeUndefined();
+  });
+
+  it('asks to try again when the GitHub pre-flight ran out of time', async () => {
+    mocks.previewCreate.mockRejectedValueOnce(
+      teamSetError('github_unavailable', 'raw', { reason: 'timeout' })
+    );
+    const error = (await formTeamsCreateTool.handler(BASE, CTX).catch(e => e)) as ToolError;
+    expect(error.code).toBe('github_unavailable');
+    expect(error.message).toMatch(/did not answer in time.*Try again/);
+    expect(error.data).toEqual({ reason: 'timeout' });
+  });
+
+  it('says why a same-run retry is blocked, instead of "start a new run"', async () => {
+    mocks.previewCreate.mockRejectedValueOnce(
+      teamSetError('run_stale', 'raw', {
+        reasons: ['1 person on teams not yet created has left the class.'],
+        retry_blocked: true,
+      })
+    );
+    const error = (await formTeamsCreateTool.handler(BASE, CTX).catch(e => e)) as ToolError;
+    expect(error.message).toMatch(/left the class, so this create cannot be retried/);
+    expect(error.data).toEqual({
+      reasons: ['1 person on teams not yet created has left the class.'],
+      retry_blocked: true,
+    });
   });
 
   it('turns an ambiguous set reference into a question with the names', async () => {
@@ -1290,7 +1339,9 @@ describe('form_teams_get', () => {
     });
     expect(payload.team_set).toEqual({ id: 'set-1', name: 'project-bids-teams' });
     expect(payload.run.teams).toHaveLength(1);
-    expect(payload.run.next).toMatch(/form_teams_create/);
+    // The set's create of this very run is under way: not "go create it".
+    expect(payload.run.next).toMatch(/being created now \(from this run\)/);
+    expect(payload.run.next).not.toMatch(/form_teams_create/);
     expect(payload.created_from_this_run).toBe(true);
     expect(payload.create_status).toBe('running');
     expect(payload.create_state).toMatchObject({
@@ -1304,6 +1355,90 @@ describe('form_teams_get', () => {
     expect(mocks.auditCreate).toHaveBeenCalledWith(
       expect.objectContaining({ resource_id: 'run-3', action: 'VIEW' })
     );
+  });
+
+  it('says on a SOLVED run where the set’s create stands, before staleness', async () => {
+    mocks.getRun.mockResolvedValue({ ...RUN_ROW, status: 'SOLVED' });
+    const state = (status: string, teams: number, run_number = 3) => ({
+      status,
+      run_number,
+      total: 3,
+      done: teams,
+      failed: [],
+      teams: Array.from({ length: teams }, (_, i) => ({ team_id: `t-${i}`, name: `t-${i}` })),
+    });
+    const cases: [Record<string, unknown>, boolean, RegExp][] = [
+      // Nothing created yet: the ordinary advice.
+      [
+        { created_run_id: null, create_state: null },
+        false,
+        /owner previews with form_teams_create \(run: 3\)/,
+      ],
+      [
+        { created_run_id: 'run-3', create_state: state('DONE', 3) },
+        false,
+        /already created from this set \(this run\); nothing is left/,
+      ],
+      [
+        { created_run_id: 'run-2', create_state: state('PARTIAL', 3, 2) },
+        false,
+        /already created from this set \(run 2\), but some members or tags are missing/,
+      ],
+      // A failed create of THIS run is retried even though the run went stale.
+      [
+        { created_run_id: 'run-3', create_state: state('FAILED', 1) },
+        true,
+        /failed partway .*preview again with form_teams_create \(run: 3\)/,
+      ],
+      [
+        { created_run_id: 'run-2', create_state: state('FAILED', 1, 2) },
+        false,
+        /A create of run 2 failed partway .*only that run can be retried/,
+      ],
+      // Failed before making any team: any run may be created.
+      [
+        { created_run_id: 'run-2', create_state: state('FAILED', 0, 2) },
+        false,
+        /owner previews with form_teams_create \(run: 3\)/,
+      ],
+    ];
+    for (const [set, stale, next] of cases) {
+      mocks.getSet.mockResolvedValue({ ...SET_ROW, ...set });
+      mocks.describeRun.mockResolvedValue({ ...RUN_VIEW, stale });
+      const payload = parse(await formTeamsGetTool.handler({ ...BASE, run: 3 }, CTX));
+      expect(payload.run.next, JSON.stringify(set)).toMatch(next);
+    }
+  });
+
+  it('forwards core_status beside an infeasible run’s summary, and nothing outside its vocabulary', async () => {
+    mocks.getSet.mockResolvedValue(SET_ROW);
+    mocks.getRun.mockResolvedValue({ ...RUN_ROW, status: 'INFEASIBLE' });
+    mocks.describeRun.mockResolvedValue({
+      ...RUN_VIEW,
+      status: 'INFEASIBLE',
+      teams: [],
+      solver: {
+        status: 'INFEASIBLE',
+        objective: null,
+        bound: null,
+        wall_s: 30,
+        core_status: 'timeout',
+      },
+      core: [{ src: 'pin:p1', label: 'Pin p1: together: 2 people' }],
+      summary: 'The solver ran out of time.',
+    });
+    const payload = parse(await formTeamsGetTool.handler({ ...BASE, run: 3 }, CTX));
+    expect(payload.run.solver.core_status).toBe('timeout');
+    expect(payload.run.summary).toBe('The solver ran out of time.');
+    expect(payload.run.core_status).toBe('timeout');
+
+    mocks.describeRun.mockResolvedValue({
+      ...RUN_VIEW,
+      solver: { ...RUN_VIEW.solver, core_status: 'something-new' },
+    });
+    const solved = parse(await formTeamsGetTool.handler({ ...BASE, run: 3 }, CTX));
+    expect(solved.run.solver).not.toHaveProperty('core_status');
+    expect(solved.run).not.toHaveProperty('core_status');
   });
 
   it('reads avoids as zero on runs solved before it existed', async () => {

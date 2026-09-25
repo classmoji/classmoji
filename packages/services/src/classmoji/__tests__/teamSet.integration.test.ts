@@ -48,13 +48,35 @@ vi.mock('../teamAdmin.service.ts', async importOriginal => ({
   deleteTeam: (...args: unknown[]) => deleteTeamMock(...args),
 }));
 
-// previewCreate's GitHub pre-flight: the org read and the per-name team probe.
-// Nothing else of the provider is reachable from the service under test.
+// The create's GitHub pre-flight: the org read and the per-name team probe,
+// through the provider's probe client. `getTeamMock` keeps octokit's shape —
+// resolve = the team exists, a 404 = free, anything else thrown — and the
+// probe adapter below turns that into probeTeam's boolean the way the real
+// provider does. Nothing else of the provider is reachable from the service.
+const { probeSignals } = vi.hoisted(() => ({ probeSignals: [] as AbortSignal[] }));
 vi.mock('../../git/index.ts', async importOriginal => ({
   ...(await importOriginal<typeof import('../../git/index.ts')>()),
-  getGitProvider: () => ({
-    getOrganization: (...args: unknown[]) => getOrganizationMock(...args),
-    getTeam: (...args: unknown[]) => getTeamMock(...args),
+  getGitHubProvider: () => ({
+    probeOrganization: async (org: string) => {
+      await getOrganizationMock(org);
+    },
+    probeTeam: async (org: string, slug: string, options: { signal?: AbortSignal } = {}) => {
+      const { signal } = options;
+      if (signal) probeSignals.push(signal);
+      // Like fetch: an abort ends the request, whatever the server is doing.
+      const aborted = new Promise<never>((_, reject) =>
+        signal?.addEventListener('abort', () =>
+          reject(Object.assign(new Error('aborted'), { name: 'AbortError' }))
+        )
+      );
+      try {
+        await Promise.race([getTeamMock(org, slug), aborted]);
+        return true;
+      } catch (error) {
+        if ((error as { status?: number }).status === 404) return false;
+        throw error;
+      }
+    },
   }),
 }));
 
@@ -62,6 +84,7 @@ vi.mock('../../git/index.ts', async importOriginal => ({
 const notFound = () => Object.assign(new Error('Not Found'), { status: 404 });
 
 import getPrisma from '@classmoji/database';
+import { Prisma } from '@prisma/client';
 import * as formService from '../form.service.ts';
 import * as responseService from '../formResponse.service.ts';
 import * as teamSetService from '../teamSet.service.ts';
@@ -195,11 +218,54 @@ describe.skipIf(!RUN)('teamSet.service (integration)', () => {
     });
   };
 
+  /** A set's create_state as stored. */
+  const stateOf = async (teamSetId: string): Promise<CreateState> =>
+    (await prisma.teamSet.findUniqueOrThrow({ where: { id: teamSetId } }))
+      .create_state as unknown as CreateState;
+
+  /** Another set on the shared form, sized for the eight students. */
+  const newSet = (label: string) =>
+    teamSetService.saveConfig({
+      classroomId,
+      formId,
+      userId: ownerId,
+      name: `${label} ${suite}`,
+      patch: { team_size: { min: 2, max: 3 } },
+    });
+
+  /** createTeam as teamAdmin leaves it locally: a real Team row, on its tags. */
+  const realCreateTeam = async ({ name, tagIds }: { name: string; tagIds: string[] }) => {
+    const team = await prisma.team.create({
+      data: { classroom_id: classroomId, name, slug: name.toLowerCase(), is_visible: true },
+    });
+    for (const tagId of tagIds) {
+      await prisma.teamTag.create({ data: { tag_id: tagId, team_id: team.id } });
+    }
+    return {
+      team: { id: team.id, name: team.name, slug: team.slug, isVisible: true },
+      tagsAdded: tagIds,
+      tagsFailed: [],
+    };
+  };
+  const allAdded = async ({ logins: requested }: { logins: string[] }) => ({
+    succeeded: requested.map(login => ({ login })),
+    failed: [],
+  });
+
+  type ApplyCall = [string, { teamSetId: string; attemptId: string }, { idempotencyKey: string }];
+  const applyCalls = () =>
+    triggerMock.mock.calls.filter(([id]) => id === 'team-set-apply') as ApplyCall[];
+
   beforeAll(async () => {
     process.env.TRIGGER_SECRET_KEY = 'tr_test_team_sets';
 
     const org = await prisma.gitOrganization.create({
-      data: { provider: 'GITHUB', provider_id: `tstest-${suite}`, login: `tstest-org-${suite}` },
+      data: {
+        provider: 'GITHUB',
+        provider_id: `tstest-${suite}`,
+        login: `tstest-org-${suite}`,
+        github_installation_id: '1',
+      },
     });
     orgId = org.id;
     const classroom = await prisma.classroom.create({
@@ -402,11 +468,12 @@ describe.skipIf(!RUN)('teamSet.service (integration)', () => {
     expect(first.run?.status).toBe('QUEUED');
     expect(first.run?.trigger_run_id).toMatch(/^run_/);
     expect(first.run?.engine).toBe(teamSetService.TEAM_SET_ENGINE);
-    // One solve per run, whatever retries the client or network adds.
+    // One solve per run, whatever retries the client or network adds; the
+    // queue drops it at the QUEUED expiry (15 min) rather than start it late.
     expect(triggerMock).toHaveBeenCalledWith(
       'team-set-solve',
       { runId: first.run!.id },
-      { idempotencyKey: `team-set-solve:${first.run!.id}` }
+      { idempotencyKey: `team-set-solve:${first.run!.id}`, ttl: 900 }
     );
 
     const byNumber = await teamSetService.getRun({ classroomId, teamSetId: setId, runRef: 1 });
@@ -925,21 +992,26 @@ describe.skipIf(!RUN)('teamSet.service (integration)', () => {
     expect(results.filter(r => r.status === 'fulfilled')).toHaveLength(1);
     const rejected = results.find(r => r.status === 'rejected') as PromiseRejectedResult;
     expect(rejected.reason.code).toBe('create_in_progress');
+
+    const set = await prisma.teamSet.findUniqueOrThrow({ where: { id: setId } });
+    const claimed = set.create_state as unknown as CreateState;
+    expect(claimed.attempt_id).toMatch(/^[0-9a-f-]{36}$/);
+    // The task carries the attempt, and its key is the attempt's own.
     expect(triggerMock.mock.calls.filter(([id]) => id === 'team-set-apply')).toEqual([
       [
         'team-set-apply',
-        { teamSetId: setId },
-        { idempotencyKey: `team-set-apply:${setId}:${run.id}:1` },
+        { teamSetId: setId, attemptId: claimed.attempt_id },
+        { idempotencyKey: `team-set-apply:${setId}:${claimed.attempt_id}` },
       ],
     ]);
-
-    const set = await prisma.teamSet.findUniqueOrThrow({ where: { id: setId } });
     expect(set.created_run_id).toBe(run.id);
     expect(set.create_state).toMatchObject({
       status: 'RUNNING',
       done: 0,
       claimed_by: ownerId,
       attempt: 1,
+      task_started_at: null,
+      heartbeat_at: claimed.started_at,
       names: run.result!.teams.map((_, i) => `${setName}-${String(i + 1).padStart(2, '0')}`),
     });
     expect(
@@ -979,10 +1051,15 @@ describe.skipIf(!RUN)('teamSet.service (integration)', () => {
     }));
 
     const progress: number[] = [];
+    const claimed = set.create_state as unknown as CreateState;
     const state = await teamSetService.applyCreate({
       teamSetId: setId,
+      attemptId: claimed.attempt_id!,
       onProgress: s => progress.push(s.done),
     });
+    // The task stamped its start, and its writes kept the heartbeat fresh.
+    expect(state.task_started_at).toEqual(expect.any(String));
+    expect(Date.parse(state.heartbeat_at!)).toBeGreaterThanOrEqual(Date.parse(claimed.started_at));
 
     expect(state.status).toBe('FAILED');
     expect(state.done).toBe(teamCount);
@@ -1022,7 +1099,10 @@ describe.skipIf(!RUN)('teamSet.service (integration)', () => {
 
     // Re-entry is a no-op once the create has finished.
     createTeamMock.mockClear();
-    const again = await teamSetService.applyCreate({ teamSetId: setId });
+    const again = await teamSetService.applyCreate({
+      teamSetId: setId,
+      attemptId: claimed.attempt_id!,
+    });
     expect(again.status).toBe('FAILED');
     expect(createTeamMock).not.toHaveBeenCalled();
 
@@ -1055,13 +1135,14 @@ describe.skipIf(!RUN)('teamSet.service (integration)', () => {
     const run = await teamSetService.getRun({ classroomId, teamSetId: setId, runRef: runId });
 
     await teamSetService.claimCreate({ classroomId, teamSetId: setId, runId, userId: ownerId });
-    expect(triggerMock).toHaveBeenCalledWith(
-      'team-set-apply',
-      { teamSetId: setId },
-      { idempotencyKey: `team-set-apply:${setId}:${runId}:2` }
-    );
     const claimed = (await prisma.teamSet.findUniqueOrThrow({ where: { id: setId } }))
       .create_state as unknown as CreateState;
+    expect(claimed.attempt_id).not.toBe(before.attempt_id);
+    expect(triggerMock).toHaveBeenCalledWith(
+      'team-set-apply',
+      { teamSetId: setId, attemptId: claimed.attempt_id },
+      { idempotencyKey: `team-set-apply:${setId}:${claimed.attempt_id}` }
+    );
     expect(claimed).toMatchObject({
       status: 'RUNNING',
       attempt: 2,
@@ -1096,7 +1177,10 @@ describe.skipIf(!RUN)('teamSet.service (integration)', () => {
       };
     });
 
-    const state = await teamSetService.applyCreate({ teamSetId: setId });
+    const state = await teamSetService.applyCreate({
+      teamSetId: setId,
+      attemptId: claimed.attempt_id!,
+    });
     expect(createTeamMock).toHaveBeenCalledTimes(1);
     expect(createTeamMock).toHaveBeenCalledWith(expect.objectContaining({ name: `${setName}-02` }));
     // Every team exists now; only member adds are missing → PARTIAL, not FAILED.
@@ -1157,6 +1241,7 @@ describe.skipIf(!RUN)('teamSet.service (integration)', () => {
       teams: [],
       names: [],
       attempt: 1,
+      attempt_id: randomUUID(),
       claimed_by: ownerId,
       started_at: longAgo,
       finished_at: null,
@@ -1187,19 +1272,22 @@ describe.skipIf(!RUN)('teamSet.service (integration)', () => {
     const moved = await prisma.teamSet.findUniqueOrThrow({ where: { id: second.id } });
     expect(moved.created_run_id).toBe(runB.id);
     expect(moved.create_state).toMatchObject({ status: 'RUNNING', attempt: 2, run_id: runB.id });
+    const movedAttempt = (moved.create_state as unknown as CreateState).attempt_id!;
     expect(triggerMock).toHaveBeenCalledWith(
       'team-set-apply',
-      { teamSetId: second.id },
-      { idempotencyKey: `team-set-apply:${second.id}:${runB.id}:2` }
+      { teamSetId: second.id, attemptId: movedAttempt },
+      { idempotencyKey: `team-set-apply:${second.id}:${movedAttempt}` }
     );
 
     // The cancel hook stops it; a late progress write cannot revive it.
-    expect(await teamSetService.stopCreate({ teamSetId: second.id, reason: 'canceled' })).toBe(
-      true
-    );
-    expect(await teamSetService.stopCreate({ teamSetId: second.id, reason: 'canceled' })).toBe(
-      false
-    );
+    const stop = () =>
+      teamSetService.stopCreate({
+        teamSetId: second.id,
+        attemptId: movedAttempt,
+        reason: 'canceled',
+      });
+    expect(await stop()).toBe(true);
+    expect(await stop()).toBe(false);
     const canceled = (await prisma.teamSet.findUniqueOrThrow({ where: { id: second.id } }))
       .create_state as unknown as CreateState;
     expect(canceled).toMatchObject({
@@ -1207,7 +1295,10 @@ describe.skipIf(!RUN)('teamSet.service (integration)', () => {
       failed: [{ team: '*', reason: 'canceled' }],
     });
     // applyCreate on a stopped create changes nothing and makes nothing.
-    const again = await teamSetService.applyCreate({ teamSetId: second.id });
+    const again = await teamSetService.applyCreate({
+      teamSetId: second.id,
+      attemptId: movedAttempt,
+    });
     expect(again.status).toBe('FAILED');
     expect(createTeamMock).not.toHaveBeenCalled();
 
@@ -1243,10 +1334,11 @@ describe.skipIf(!RUN)('teamSet.service (integration)', () => {
       runId: run.id,
       userId: ownerId,
     });
+    const attemptId = (await stateOf(third.id)).attempt_id!;
     // The first team is made; then a cancel lands before its progress is written.
     createTeamMock.mockImplementation(
       async ({ name, tagIds }: { name: string; tagIds: string[] }) => {
-        await teamSetService.stopCreate({ teamSetId: third.id, reason: 'canceled' });
+        await teamSetService.stopCreate({ teamSetId: third.id, attemptId, reason: 'canceled' });
         return {
           team: { id: randomUUID(), name, slug: name, isVisible: true },
           tagsAdded: tagIds,
@@ -1254,15 +1346,37 @@ describe.skipIf(!RUN)('teamSet.service (integration)', () => {
         };
       }
     );
-    addTeamMembersMock.mockResolvedValue({ succeeded: [], failed: [] });
+    // …and one of its members could not be added.
+    const missing = logins.get(run.result!.teams[0]!.member_user_ids[0]!)!;
+    addTeamMembersMock.mockImplementation(async ({ logins: requested }: { logins: string[] }) => ({
+      succeeded: requested.filter(l => l !== missing).map(login => ({ login })),
+      failed: [{ login: missing, error: 'provider_error' }],
+    }));
 
-    const state = await teamSetService.applyCreate({ teamSetId: third.id });
+    const state = await teamSetService.applyCreate({ teamSetId: third.id, attemptId });
     expect(createTeamMock).toHaveBeenCalledTimes(1);
     // Still FAILED/canceled — not flipped back to RUNNING — and the team that
-    // was made is recorded, so a retry skips it.
-    expect(state).toMatchObject({ status: 'FAILED', failed: [{ team: '*', reason: 'canceled' }] });
+    // was made is recorded, so a retry skips it, with the member it could not
+    // add, so the retry still reports that person.
+    expect(state).toMatchObject({ status: 'FAILED' });
+    expect(state.failed).toEqual([
+      { team: '*', reason: 'canceled' },
+      {
+        team: state.teams[0]!.name,
+        reason: 'members_failed',
+        members: [
+          {
+            user_id: run.result!.teams[0]!.member_user_ids[0],
+            login: missing,
+            reason: 'provider_error',
+          },
+        ],
+      },
+    ]);
     expect(state.teams).toHaveLength(1);
     expect(state.teams[0]!.n).toBe(1);
+    expect(state.counts).toMatchObject({ members_failed: 1 });
+    expect(await stateOf(third.id)).toEqual(state);
   });
 
   it('expires runs that outlived any task, on read and while waiting', async () => {
@@ -1274,9 +1388,10 @@ describe.skipIf(!RUN)('teamSet.service (integration)', () => {
       userId: ownerId,
     });
     await prisma.teamSetRun.update({ where: { id: queued!.id }, data: { created_at: back(16) } });
+    // Never started: its own code, not 'lost'.
     expect(
       await teamSetService.getRun({ classroomId, teamSetId: setId, runRef: queued!.id })
-    ).toMatchObject({ status: 'FAILED', error: 'lost' });
+    ).toMatchObject({ status: 'FAILED', error: 'queue_expired' });
 
     const { run: running } = await teamSetService.startRun({
       classroomId,
@@ -1317,6 +1432,9 @@ describe.skipIf(!RUN)('teamSet.service (integration)', () => {
       number: listed!.number,
       status: 'FAILED',
     });
+    expect(
+      await teamSetService.getRun({ classroomId, teamSetId: setId, runRef: listed!.id })
+    ).toMatchObject({ error: 'queue_expired' });
     await teamSetService.failRun(late!.id, 'canceled');
   });
 
@@ -1360,5 +1478,431 @@ describe.skipIf(!RUN)('teamSet.service (integration)', () => {
     ).toBe('invalid_config');
 
     expect(await snapshot()).toEqual(before);
+  });
+
+  // ── Create robustness: attempts, heartbeats, retries ─────────────────────
+
+  it('ties a create to its attempt: a released attempt’s task does nothing; a reclaim gets a fresh key', async () => {
+    const set = await newSet('attempt');
+    const run = await solvedRun(set.id);
+    const claim = () =>
+      teamSetService.claimCreate({
+        classroomId,
+        teamSetId: set.id,
+        runId: run.id,
+        userId: ownerId,
+      });
+
+    triggerMock.mockRejectedValueOnce(new Error('network down'));
+    expect(await codeOf(claim())).toBe('trigger_unavailable');
+    const [, released, releasedOptions] = applyCalls().at(-1)!;
+
+    await claim();
+    const current = await stateOf(set.id);
+    const [, payload, options] = applyCalls().at(-1)!;
+    expect(payload).toEqual({ teamSetId: set.id, attemptId: current.attempt_id });
+    expect(options).toEqual({ idempotencyKey: `team-set-apply:${set.id}:${current.attempt_id}` });
+    // The released claim never happened (still attempt 1), but its identity
+    // and key are spent: the reclaim is a new task, not the old one handed back.
+    expect(current.attempt).toBe(1);
+    expect(released.attemptId).not.toBe(current.attempt_id);
+    expect(releasedOptions.idempotencyKey).not.toBe(options.idempotencyKey);
+
+    // The released attempt's task, delivered after all, touches nothing.
+    expect(
+      await teamSetService.applyCreate({ teamSetId: set.id, attemptId: released.attemptId })
+    ).toEqual(current);
+    expect(
+      await teamSetService.stopCreate({
+        teamSetId: set.id,
+        attemptId: released.attemptId,
+        reason: 'canceled',
+      })
+    ).toBe(false);
+    expect(await stateOf(set.id)).toEqual(current);
+    expect(createTeamMock).not.toHaveBeenCalled();
+
+    // The current attempt's task stamps its start before it makes a team.
+    const seen: CreateState[] = [];
+    createTeamMock.mockImplementation(async (args: { name: string; tagIds: string[] }) => {
+      if (seen.length === 0) seen.push(await stateOf(set.id));
+      return realCreateTeam(args);
+    });
+    addTeamMembersMock.mockImplementation(allAdded);
+    const done = await teamSetService.applyCreate({
+      teamSetId: set.id,
+      attemptId: current.attempt_id!,
+    });
+    expect(done.status).toBe('DONE');
+    expect(seen[0]!.task_started_at).toEqual(expect.any(String));
+    expect(Date.parse(seen[0]!.heartbeat_at!)).toBeGreaterThanOrEqual(
+      Date.parse(current.started_at)
+    );
+  });
+
+  it('expires a create 35 minutes after its last sign of life, not after its claim', async () => {
+    const set = await newSet('heartbeat');
+    const run = await solvedRun(set.id);
+    const ago = (minutes: number) => new Date(Date.now() - minutes * 60_000).toISOString();
+    const put = (times: Partial<CreateState>) =>
+      prisma.teamSet.update({
+        where: { id: set.id },
+        data: {
+          created_run_id: run.id,
+          create_state: {
+            status: 'RUNNING',
+            run_id: run.id,
+            run_number: run.number,
+            total: run.result!.teams.length,
+            done: 0,
+            failed: [],
+            teams: [],
+            names: [],
+            attempt: 1,
+            attempt_id: randomUUID(),
+            claimed_by: ownerId,
+            started_at: ago(0),
+            finished_at: null,
+            ...times,
+          } as unknown as object,
+        },
+      });
+    const status = async () =>
+      (await teamSetService.getSet({ classroomId, formId, setRef: set.id }))!.create_state!.status;
+
+    // Claimed 50 minutes ago, but the task sat in the queue and started 10 minutes ago.
+    await put({ started_at: ago(50), heartbeat_at: ago(50), task_started_at: ago(10) });
+    expect(await status()).toBe('RUNNING');
+    // Started an hour ago; its last progress write was 30 minutes ago.
+    await put({ started_at: ago(70), task_started_at: ago(60), heartbeat_at: ago(30) });
+    expect(await status()).toBe('RUNNING');
+    // 36 minutes without a sign of life.
+    await put({ started_at: ago(70), task_started_at: ago(60), heartbeat_at: ago(36) });
+    expect(await status()).toBe('FAILED');
+    expect(await stateOf(set.id)).toMatchObject({ failed: [{ team: '*', reason: 'lost' }] });
+    // Claimed 36 minutes ago and never started.
+    await put({ started_at: ago(36), heartbeat_at: ago(36), task_started_at: null });
+    expect(await status()).toBe('FAILED');
+  });
+
+  it('throws when the final write fails, and a same-run retry adopts the team it never recorded', async () => {
+    const set = await newSet('adopt');
+    const run = await solvedRun(set.id);
+    const total = run.result!.teams.length;
+    await teamSetService.claimCreate({
+      classroomId,
+      teamSetId: set.id,
+      runId: run.id,
+      userId: ownerId,
+    });
+    const claimed = await stateOf(set.id);
+    createTeamMock.mockImplementation(realCreateTeam);
+    addTeamMembersMock.mockImplementation(allAdded);
+
+    // The database goes away as the last team is made: that team's progress
+    // write (best effort, swallowed) and every try of the final write fail.
+    const delegate = prisma.teamSet;
+    const original = delegate.updateMany;
+    let refused = 0;
+    delegate.updateMany = (async (args: { data?: { create_state?: { teams?: unknown[] } } }) => {
+      if ((args.data?.create_state?.teams?.length ?? 0) >= total) {
+        refused += 1;
+        throw new Prisma.PrismaClientKnownRequestError('connection lost', {
+          code: 'P1017',
+          clientVersion: 'test',
+        });
+      }
+      return original.call(delegate, args as never);
+    }) as unknown as typeof delegate.updateMany;
+    let thrown: unknown;
+    try {
+      await teamSetService.applyCreate({ teamSetId: set.id, attemptId: claimed.attempt_id! });
+    } catch (error) {
+      thrown = error;
+    } finally {
+      delegate.updateMany = original;
+    }
+    expect(thrown).toMatchObject({ name: 'CreateStateWriteError', code: 'state_write_failed' });
+    expect(refused).toBe(1 + 3);
+    expect(createTeamMock).toHaveBeenCalledTimes(total);
+
+    // What the task's catch does next. The last team exists, unrecorded.
+    expect(
+      await teamSetService.stopCreate({
+        teamSetId: set.id,
+        attemptId: claimed.attempt_id!,
+        reason: 'internal_error',
+      })
+    ).toBe(true);
+    const stopped = await stateOf(set.id);
+    expect(stopped.status).toBe('FAILED');
+    expect(stopped.teams).toHaveLength(total - 1);
+
+    // A tagged team under no planned name is still someone else's.
+    const tag = await prisma.tag.findUniqueOrThrow({
+      where: { classroom_id_name: { classroom_id: classroomId, name: set.name } },
+    });
+    const stranger = await prisma.team.create({
+      data: { classroom_id: classroomId, name: `stranger-${suite}`, slug: `stranger-${suite}` },
+    });
+    await prisma.teamTag.create({ data: { tag_id: tag.id, team_id: stranger.id } });
+    expect(
+      await codeOf(teamSetService.previewCreate({ classroomId, teamSetId: set.id, runRef: run.id }))
+    ).toBe('tag_conflict');
+    await prisma.teamTag.deleteMany({ where: { team_id: stranger.id } });
+
+    // The unrecorded team holds the last planned name: adopted. Nothing is
+    // left to make, so nothing is asked of GitHub.
+    getTeamMock.mockClear();
+    const preview = await teamSetService.previewCreate({
+      classroomId,
+      teamSetId: set.id,
+      runRef: run.id,
+    });
+    expect(preview.retry).toEqual({ attempt: 2, teams_already_created: total });
+    expect(preview.teams.map(t => t.name)).toEqual(claimed.names);
+    expect(getTeamMock).not.toHaveBeenCalled();
+
+    await teamSetService.claimCreate({
+      classroomId,
+      teamSetId: set.id,
+      runId: run.id,
+      userId: ownerId,
+    });
+    const retry = await stateOf(set.id);
+    const last = await prisma.team.findFirstOrThrow({
+      where: { classroom_id: classroomId, slug: claimed.names![total - 1]!.toLowerCase() },
+    });
+    expect(retry.teams.at(-1)).toEqual({
+      team_id: last.id,
+      name: last.name,
+      n: total,
+      adopted: true,
+    });
+    expect(retry.done).toBe(total);
+
+    // The retry makes no team; it adds the adopted team's members again
+    // (idempotent), drops the flag, and finishes.
+    createTeamMock.mockClear();
+    addTeamMembersMock.mockClear();
+    const final = await teamSetService.applyCreate({
+      teamSetId: set.id,
+      attemptId: retry.attempt_id!,
+    });
+    expect(createTeamMock).not.toHaveBeenCalled();
+    expect(addTeamMembersMock).toHaveBeenCalledTimes(1);
+    expect(addTeamMembersMock).toHaveBeenCalledWith(expect.objectContaining({ slugOrId: last.id }));
+    expect(final.status).toBe('DONE');
+    expect(final.teams).toHaveLength(total);
+    expect(final.teams.some(t => t.adopted)).toBe(false);
+  });
+
+  it('lets a same-run retry through ordinary staleness, but not past a member who left', async () => {
+    const set = await newSet('stale retry');
+    const run = await solvedRun(set.id);
+    await teamSetService.claimCreate({
+      classroomId,
+      teamSetId: set.id,
+      runId: run.id,
+      userId: ownerId,
+    });
+    const claimed = await stateOf(set.id);
+    // Team 1 is made; the others fail.
+    let made = 0;
+    createTeamMock.mockImplementation(async (args: { name: string; tagIds: string[] }) => {
+      made += 1;
+      if (made > 1) throw new TeamServiceError('name_collision', 'raw');
+      return realCreateTeam(args);
+    });
+    addTeamMembersMock.mockImplementation(allAdded);
+    const failed = await teamSetService.applyCreate({
+      teamSetId: set.id,
+      attemptId: claimed.attempt_id!,
+    });
+    expect(failed.status).toBe('FAILED');
+
+    const preview = () =>
+      teamSetService.previewCreate({ classroomId, teamSetId: set.id, runRef: run.id });
+    const [editor, leaver] = run.result!.teams[1]!.member_user_ids;
+    const leaverOfMade = run.result!.teams[0]!.member_user_ids[0]!;
+    try {
+      // An answer changes: the run is stale, which would refuse a new create…
+      await submit(editor!, { [rankFieldId]: [optionIds[1], optionIds[2]] });
+      expect((await teamSetService.staleness({ classroomId, run })).stale).toBe(true);
+      // …but a retry finishes a grouping that is already partly real.
+      const allowed = await preview();
+      expect(allowed.retry).toEqual({ attempt: 2, teams_already_created: 1 });
+      expect(
+        allowed.warnings.some(w =>
+          w.startsWith(`Answers or the roster changed since run ${run.number}`)
+        )
+      ).toBe(true);
+
+      // A member of a team already made leaving does not block it either…
+      await prisma.classroomMembership.deleteMany({
+        where: { classroom_id: classroomId, user_id: leaverOfMade },
+      });
+      await preview();
+      // …a member of a team still to make does.
+      await prisma.classroomMembership.deleteMany({
+        where: { classroom_id: classroomId, user_id: leaver! },
+      });
+      const blocked = (await preview().catch(e => e)) as { code: string; details: unknown };
+      expect(blocked.code).toBe('run_stale');
+      expect(blocked.details).toEqual({
+        reasons: ['1 person on teams not yet created has left the class.'],
+        retry_blocked: true,
+      });
+      expect(
+        await codeOf(
+          teamSetService.claimCreate({
+            classroomId,
+            teamSetId: set.id,
+            runId: run.id,
+            userId: ownerId,
+          })
+        )
+      ).toBe('run_stale');
+    } finally {
+      for (const userId of [leaverOfMade, leaver!]) {
+        const enrolled = await prisma.classroomMembership.count({
+          where: { classroom_id: classroomId, user_id: userId },
+        });
+        if (enrolled === 0) await enroll(userId);
+      }
+    }
+  });
+
+  it('suffixes a name GitHub holds on a retry, but refuses it on a first create', async () => {
+    const set = await newSet('gh names');
+    const run = await solvedRun(set.id);
+    const planned = run.result!.teams.map(
+      (_, i) => `${set.name}-${String(i + 1).padStart(2, '0')}`
+    );
+    const onGithub = (taken: string[]) =>
+      getTeamMock.mockImplementation(async (_org: string, slug: string) => {
+        if (taken.includes(slug)) return { slug };
+        throw notFound();
+      });
+
+    // First create: the owner has approved nothing yet — refused, by name.
+    onGithub([planned[1]!]);
+    const first = (await teamSetService
+      .previewCreate({ classroomId, teamSetId: set.id, runRef: run.id })
+      .catch(e => e)) as { code: string; details: unknown };
+    expect(first.code).toBe('name_collision');
+    expect(first.details).toEqual({ names: [planned[1]] });
+
+    // It goes ahead (the name was freed); team 2 then fails at GitHub.
+    onGithub([]);
+    await teamSetService.claimCreate({
+      classroomId,
+      teamSetId: set.id,
+      runId: run.id,
+      userId: ownerId,
+    });
+    const claimed = await stateOf(set.id);
+    createTeamMock.mockImplementation(async (args: { name: string; tagIds: string[] }) => {
+      if (args.name === planned[1]) throw new TeamServiceError('name_collision', 'raw');
+      return realCreateTeam(args);
+    });
+    addTeamMembersMock.mockImplementation(allAdded);
+    await teamSetService.applyCreate({ teamSetId: set.id, attemptId: claimed.attempt_id! });
+
+    // The retry: GitHub holds the planned name AND its first suffix. It moves
+    // to the first free one, and only the moved name is asked about.
+    onGithub([planned[1]!, `${planned[1]}-2`]);
+    getTeamMock.mockClear();
+    const preview = await teamSetService.previewCreate({
+      classroomId,
+      teamSetId: set.id,
+      runRef: run.id,
+    });
+    const expected = planned.map((name, i) => (i === 1 ? `${name}-3` : name));
+    expect(preview.teams.map(t => t.name)).toEqual(expected);
+    expect(getTeamMock.mock.calls.map(([, slug]) => slug)).toEqual([
+      planned[1],
+      `${planned[1]}-2`,
+      `${planned[1]}-3`,
+    ]);
+    // The claim stores exactly the names the preview showed.
+    await teamSetService.claimCreate({
+      classroomId,
+      teamSetId: set.id,
+      runId: run.id,
+      userId: ownerId,
+    });
+    expect((await stateOf(set.id)).names).toEqual(expected);
+  });
+
+  it('bounds the GitHub pre-flight: out of time, or the first answer that is not a 404', async () => {
+    const set = await newSet('budget');
+    const run = await solvedRun(set.id);
+    const preview = () =>
+      teamSetService
+        .previewCreate({ classroomId, teamSetId: set.id, runRef: run.id })
+        .catch(e => e) as Promise<{ code: string; details?: unknown }>;
+
+    teamSetService.__setPreflightBudgetForTests(300);
+    try {
+      // GitHub never answers a probe…
+      getTeamMock.mockImplementation(() => new Promise(() => {}));
+      let started = Date.now();
+      const slow = await preview();
+      expect(slow).toMatchObject({ code: 'github_unavailable', details: { reason: 'timeout' } });
+      expect(Date.now() - started).toBeLessThan(3_000);
+      // …or the organization read (with its token mint) never returns.
+      getOrganizationMock.mockImplementationOnce(() => new Promise(() => {}));
+      started = Date.now();
+      expect(await preview()).toMatchObject({ details: { reason: 'timeout' } });
+      expect(Date.now() - started).toBeLessThan(3_000);
+    } finally {
+      teamSetService.__setPreflightBudgetForTests();
+    }
+
+    // A 502 ends it at once — no retry, no wait for the probes still in
+    // flight, which are aborted.
+    probeSignals.length = 0;
+    let calls = 0;
+    getTeamMock.mockImplementation(() => {
+      calls += 1;
+      return calls === 1
+        ? Promise.reject(Object.assign(new Error('bad gateway'), { status: 502 }))
+        : new Promise(() => {});
+    });
+    const started = Date.now();
+    const down = await preview();
+    expect(down.code).toBe('github_unavailable');
+    expect(down.details).toBeUndefined();
+    expect(Date.now() - started).toBeLessThan(3_000);
+    expect(calls).toBeLessThanOrEqual(run.result!.teams.length);
+    expect(probeSignals.length).toBeGreaterThan(0);
+    expect(probeSignals.every(signal => signal.aborted)).toBe(true);
+  });
+
+  it('tells a classroom whose organization is not on GitHub that creating teams is GitHub only', async () => {
+    const set = await newSet('gitlab');
+    const run = await solvedRun(set.id);
+    await prisma.gitOrganization.update({ where: { id: orgId }, data: { provider: 'GITLAB' } });
+    try {
+      expect(
+        await codeOf(
+          teamSetService.previewCreate({ classroomId, teamSetId: set.id, runRef: run.id })
+        )
+      ).toBe('provider_unsupported');
+      expect(
+        await codeOf(
+          teamSetService.claimCreate({
+            classroomId,
+            teamSetId: set.id,
+            runId: run.id,
+            userId: ownerId,
+          })
+        )
+      ).toBe('provider_unsupported');
+    } finally {
+      await prisma.gitOrganization.update({ where: { id: orgId }, data: { provider: 'GITHUB' } });
+    }
+    expect(getOrganizationMock).not.toHaveBeenCalled();
   });
 });

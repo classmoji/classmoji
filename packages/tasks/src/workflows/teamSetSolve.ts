@@ -23,6 +23,10 @@
  * a fast path: `markRunning` moves the row out of QUEUED atomically and says
  * whether this call did it, and a false there is skipped untouched too.
  *
+ * A solve that waits in the queue too long never starts at all: `startRun`
+ * triggers it with a `ttl` equal to the service's QUEUED expiry, so Trigger
+ * drops it at the moment the service marks the run FAILED `queue_expired`.
+ *
  * ── Failure ────────────────────────────────────────────────────────────────
  * ANY throw — engine missing, killed, non-zero exit, no result line, a result
  * of the wrong shape, a database error — marks the run FAILED with the public

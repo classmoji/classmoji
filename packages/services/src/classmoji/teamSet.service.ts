@@ -27,10 +27,12 @@
  * payload was written by this file after the caller was scoped.
  *
  * ── Nothing is left hanging ─────────────────────────────────────────────────
- * There is no sweeper job. A run QUEUED/RUNNING, or a create RUNNING, far past
- * its task's lifetime is expired (FAILED 'lost') the next time anything reads
- * it; a FAILED create can be claimed again (same run: the teams it made are
- * skipped; no team made: any run).
+ * There is no sweeper job. A run still QUEUED past its wait (FAILED
+ * 'queue_expired'), a run RUNNING or a create RUNNING far past its task's
+ * lifetime (FAILED 'lost') is expired the next time anything reads it; a FAILED
+ * create can be claimed again (same run: the teams it made are skipped, and
+ * teams it made without recording them are found on the tag by name and
+ * adopted; no team made: any run).
  *
  * ── Who is in the set ───────────────────────────────────────────────────────
  * The ROSTER is the classroom's STUDENT memberships, with no accepted-invite
@@ -56,7 +58,7 @@
  * (TEAM_SET_RUN_ERRORS) — never exception text, which would carry Prisma query
  * text or provider internals to a client.
  */
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 
 import { tasks } from '@trigger.dev/sdk';
 import getPrisma from '@classmoji/database';
@@ -68,7 +70,7 @@ import type {
   TeamSetRunStatus,
 } from '@prisma/client';
 
-import { getGitProvider } from '../git/index.ts';
+import { getGitHubProvider } from '../git/index.ts';
 import { flattenFields, type FormField } from './formContract.ts';
 import { fieldsOf } from './form.service.ts';
 import * as organizationTagService from './organizationTag.service.ts';
@@ -121,8 +123,18 @@ const MAX_RUN_NUMBER = 2 ** 31 - 1;
  * task died without writing its ending would otherwise say QUEUED / RUNNING
  * forever, and a RUNNING create blocks every retry. Each is expired the next
  * time anything reads it, well past the task's own maxDuration: the solve task
- * is capped at 300 s, the apply task at 1,800 s. A QUEUED run gets longer
- * because a burst of runs legitimately waits in the solve queue.
+ * is capped at 300 s, the apply task at 1,800 s.
+ *
+ * A QUEUED run gets longer because a burst of runs legitimately waits in the
+ * solve queue; the same number goes to Trigger as the solve's `ttl`, so the
+ * queue drops a run at the moment this file stops waiting for it (and that
+ * expiry is `queue_expired`, not `lost`: nothing ever started).
+ *
+ * A create is expired 35 minutes after its last SIGN OF LIFE, not after its
+ * claim: the claim stamps `heartbeat_at`, the apply task stamps it again when
+ * it starts (`task_started_at`) and on every progress write. A task that sat
+ * in Trigger's queue for twenty minutes therefore still gets its whole
+ * 30-minute run before anyone may call it lost.
  */
 const RUN_QUEUED_TTL_MS = 15 * 60_000;
 const RUN_RUNNING_TTL_MS = 10 * 60_000;
@@ -139,6 +151,30 @@ const DEFAULT_POLL_MS = 300;
  */
 const NAME_PROBE_MAX_TEAMS = 60;
 const NAME_PROBE_CONCURRENCY = 5;
+
+/**
+ * The whole GitHub pre-flight (org read, token mint, every name probe) must
+ * answer within this: it runs inside an MCP call the connector gives ~60 s.
+ * Past it the preview is refused `github_unavailable` ("try again"), never
+ * left hanging. Tests shorten it with `__setPreflightBudgetForTests`.
+ */
+const PREFLIGHT_BUDGET_MS = 15_000;
+let preflightBudgetMs = PREFLIGHT_BUDGET_MS;
+
+/** Tests only: shorten the pre-flight's budget; no argument restores it. */
+export const __setPreflightBudgetForTests = (ms?: number): void => {
+  preflightBudgetMs = ms ?? PREFLIGHT_BUDGET_MS;
+};
+
+/**
+ * On a RETRY a name GitHub reports as taken is suffixed and probed again, at
+ * most this many rounds (each round only asks about the names it changed).
+ */
+const NAME_PROBE_ROUNDS = 3;
+
+/** The final create_state write is retried this often (short backoff) before the create throws. */
+const TERMINAL_WRITE_ATTEMPTS = 3;
+const TERMINAL_WRITE_BACKOFF_MS = 150;
 
 /** How long a set name may be (it becomes a Tag name and a team-name prefix). */
 const MAX_SET_NAME = 40;
@@ -179,7 +215,9 @@ export type TeamSetErrorCode =
   | 'github_teams_off_unsupported'
   | 'trigger_unavailable'
   | 'github_unavailable'
-  | 'name_collision';
+  | 'name_collision'
+  /** The classroom's organization is not on GitHub; creating teams is GitHub only. */
+  | 'provider_unsupported';
 
 /** Thrown for every caller-fixable refusal; callers branch on `code`. */
 export class TeamSetError extends Error {
@@ -209,8 +247,10 @@ export const TEAM_SET_RUN_ERRORS = [
   'model_invalid',
   /** The solve task was canceled (its cancel hook reports this). */
   'canceled',
-  /** QUEUED or RUNNING far past any task's lifetime; expired on read. */
+  /** RUNNING far past the solve task's lifetime; expired on read. */
   'lost',
+  /** Still QUEUED when its wait ran out (Trigger's ttl drops it too); never started. */
+  'queue_expired',
 ] as const;
 export type TeamSetRunErrorCode = (typeof TEAM_SET_RUN_ERRORS)[number];
 
@@ -345,8 +385,14 @@ export interface CreateState {
   total: number;
   done: number;
   failed: CreateFailure[];
-  /** `n` is the team's 1-based position in the run (absent on rows written before it existed). */
-  teams: { team_id: string; name: string; n?: number }[];
+  /**
+   * `n` is the team's 1-based position in the run (absent on rows written
+   * before it existed). `adopted`: the team was found on the set's tag under
+   * its planned name without having been recorded (its attempt died between
+   * making it and writing it down); the retry that adopted it re-adds its
+   * members, which is idempotent, and then drops the flag.
+   */
+  teams: { team_id: string; name: string; n?: number; adopted?: true }[];
   /**
    * The names planned at claim time, index-aligned with the run's teams.
    * applyCreate uses these rather than recomputing, so a team made elsewhere
@@ -354,10 +400,22 @@ export interface CreateState {
    */
   names?: string[];
   counts?: CreateCounts;
-  /** 1 on the first claim, +1 per retry; part of the apply task's idempotency key. */
+  /** 1 on the first claim, +1 per retry. For humans; identity is `attempt_id`. */
   attempt?: number;
+  /**
+   * A fresh id per claim — THE identity of one attempt. It is in the apply
+   * task's payload and idempotency key, and every write the create makes is
+   * conditional on it, so a task from a released or superseded claim (queued
+   * late, or delivered twice) finds a different id and does nothing.
+   */
+  attempt_id?: string;
   claimed_by: string;
+  /** When the claim was made. */
   started_at: string;
+  /** When the apply task first touched this attempt (null until then). */
+  task_started_at?: string | null;
+  /** Last sign of life: the claim, the task's start, each progress write. Lazy expiry counts from here. */
+  heartbeat_at?: string;
   finished_at: string | null;
 }
 
@@ -590,6 +648,26 @@ const isDatabaseError = (error: unknown): boolean =>
 const readCreateState = (raw: unknown): CreateState | null =>
   (raw as CreateState | null | undefined) ?? null;
 
+/**
+ * One attempt's identity: its `attempt_id`, or — on a state written before
+ * that existed — its claim time, which was the identity then.
+ */
+const attemptOf = (state: CreateState): string => state.attempt_id ?? state.started_at;
+
+/** The JSON-path condition that matches exactly this attempt's create_state. */
+const attemptWhere = (state: CreateState): Prisma.TeamSetWhereInput =>
+  state.attempt_id
+    ? { create_state: { path: ['attempt_id'], equals: state.attempt_id } }
+    : { create_state: { path: ['started_at'], equals: state.started_at } };
+
+/** The newest sign of life a create's state carries, in ms (NaN when none parses). */
+function lastSignOfLife(state: CreateState): number {
+  const times = [state.heartbeat_at, state.task_started_at, state.started_at]
+    .map(value => (value ? Date.parse(value) : NaN))
+    .filter(Number.isFinite);
+  return times.length > 0 ? Math.max(...times) : NaN;
+}
+
 // ─── Form, roster, responses ────────────────────────────────────────────────
 
 /**
@@ -689,15 +767,16 @@ function recount(state: CreateState, membersAdded: number, finished: boolean): C
 
 /**
  * A create whose task died mid-flight says RUNNING forever and blocks every
- * retry. Past CREATE_RUNNING_TTL_MS it is FAILED 'lost' — persisted, and only
- * if the row still holds the very state that was judged (same status and
- * start time), so a create that finished or restarted meanwhile is untouched.
+ * retry. CREATE_RUNNING_TTL_MS after its last sign of life (see there) it is
+ * FAILED 'lost' — persisted, and only if the row still holds the very state
+ * that was judged (same attempt, still RUNNING, same heartbeat), so a create
+ * that finished, restarted or just wrote progress meanwhile is untouched.
  */
 async function expireLostCreate(row: TeamSetDbRow): Promise<TeamSetDbRow> {
   const state = readCreateState(row.create_state);
   if (!state || state.status !== 'RUNNING') return row;
-  const started = Date.parse(state.started_at);
-  if (Number.isFinite(started) && Date.now() - started <= CREATE_RUNNING_TTL_MS) return row;
+  const alive = lastSignOfLife(state);
+  if (Number.isFinite(alive) && Date.now() - alive <= CREATE_RUNNING_TTL_MS) return row;
 
   const lost: CreateState = {
     ...state,
@@ -712,7 +791,10 @@ async function expireLostCreate(row: TeamSetDbRow): Promise<TeamSetDbRow> {
       id: row.id,
       AND: [
         { create_state: { path: ['status'], equals: 'RUNNING' } },
-        { create_state: { path: ['started_at'], equals: state.started_at } },
+        attemptWhere(state),
+        ...(state.heartbeat_at
+          ? [{ create_state: { path: ['heartbeat_at'], equals: state.heartbeat_at } }]
+          : []),
       ],
     },
     data: { create_state: toJson(lost) },
@@ -734,24 +816,25 @@ function isLostRun(row: { status: TeamSetRunStatus; created_at: Date; started_at
 }
 
 /**
- * Fail every QUEUED/RUNNING run matching `where` that has outlived any task
- * (FAILED 'lost'). The age test is in the WHERE, not decided beforehand, so a
- * run that a solve task just picked up (RUNNING, started a moment ago) can
- * never be expired by a reader that saw it QUEUED.
+ * Fail every QUEUED/RUNNING run matching `where` that has outlived its wait:
+ * QUEUED too long is `queue_expired` (it never started — Trigger's ttl drops
+ * it at the same age), RUNNING too long is `lost`. The age test is in the
+ * WHERE, not decided beforehand, so a run that a solve task just picked up
+ * (RUNNING, started a moment ago) can never be expired by a reader that saw it
+ * QUEUED.
  */
 async function expireLostRuns(where: Prisma.TeamSetRunWhereInput): Promise<void> {
   const now = Date.now();
-  await getPrisma().teamSetRun.updateMany({
+  const prisma = getPrisma();
+  await prisma.teamSetRun.updateMany({
     where: {
-      AND: [
-        where,
-        {
-          OR: [
-            { status: 'QUEUED', created_at: { lt: new Date(now - RUN_QUEUED_TTL_MS) } },
-            { status: 'RUNNING', started_at: { lt: new Date(now - RUN_RUNNING_TTL_MS) } },
-          ],
-        },
-      ],
+      AND: [where, { status: 'QUEUED', created_at: { lt: new Date(now - RUN_QUEUED_TTL_MS) } }],
+    },
+    data: { status: 'FAILED', error: 'queue_expired', finished_at: new Date(now) },
+  });
+  await prisma.teamSetRun.updateMany({
+    where: {
+      AND: [where, { status: 'RUNNING', started_at: { lt: new Date(now - RUN_RUNNING_TTL_MS) } }],
     },
     data: { status: 'FAILED', error: 'lost', finished_at: new Date(now) },
   });
@@ -1273,10 +1356,17 @@ export async function startRun({
     try {
       // One solve per run, however often this call is retried by a client or
       // a flaky network: Trigger returns the existing run for a repeated key.
+      // The ttl is the QUEUED expiry: the queue drops the solve at the age
+      // this file stops waiting for it (`queue_expired`), instead of starting
+      // it long after the run says FAILED. One that slips through by a moment
+      // finds the run no longer QUEUED (markRunning) and does nothing.
       const handle = await tasks.trigger(
         SOLVE_TASK_ID,
         { runId: inserted.id },
-        { idempotencyKey: `${SOLVE_TASK_ID}:${inserted.id}` }
+        {
+          idempotencyKey: `${SOLVE_TASK_ID}:${inserted.id}`,
+          ttl: RUN_QUEUED_TTL_MS / 1000,
+        }
       );
       triggered = true;
       final = await prisma.teamSetRun.update({
@@ -1656,11 +1746,45 @@ export function teamNamesFor(
       .replace(/^-+|-+$/g, '')
       .slice(0, MAX_TEAM_NAME);
     if (!name) name = `${setName}-${n}`;
-    let unique = name;
-    for (let k = 2; !isFree(unique); k++) {
-      const suffix = `-${k}`;
-      unique = `${name.slice(0, MAX_TEAM_NAME - suffix.length).replace(/-+$/, '')}${suffix}`;
-    }
+    const unique = firstFreeName(name, isFree);
+    used.add(predictTeamSlug(unique));
+    return unique;
+  });
+}
+
+/** `name`, or `name-2`, `name-3`, … (suffix after truncating to the cap) — the first that is free. */
+function firstFreeName(name: string, isFree: (name: string) => boolean): string {
+  let unique = name;
+  for (let k = 2; !isFree(unique); k++) {
+    const suffix = `-${k}`;
+    unique = `${name.slice(0, MAX_TEAM_NAME - suffix.length).replace(/-+$/, '')}${suffix}`;
+  }
+  return unique;
+}
+
+/**
+ * Keep a list of names, but move every one whose slug is taken (in `taken`,
+ * reserved, or already held by an earlier name in the list) to its first free
+ * suffix. Positions in `fixed` (0-based) are never renamed — they are teams
+ * that exist — and nothing else may land on their slugs.
+ *
+ * A retry uses this instead of `teamNamesFor`, so the names the owner approved
+ * the first time stay put unless something now holds them.
+ */
+export function renameTaken(
+  names: string[],
+  fixed: ReadonlySet<number>,
+  taken: Iterable<string>
+): string[] {
+  const used = new Set([...taken].map(slug => slug.toLowerCase()));
+  for (const i of fixed) if (names[i] !== undefined) used.add(predictTeamSlug(names[i]!));
+  const isFree = (name: string) => {
+    const slug = predictTeamSlug(name);
+    return !used.has(slug) && !isReservedSlug(slug);
+  };
+  return names.map((name, i) => {
+    if (fixed.has(i)) return name;
+    const unique = firstFreeName(name, isFree);
     used.add(predictTeamSlug(unique));
     return unique;
   });
@@ -1915,12 +2039,21 @@ interface CreatePlan {
   set: TeamSetDbRow;
   run: TeamSetRunRow;
   tag: { id: string; name: string } | null;
+  /** Every team of the run, named — before the GitHub pre-flight (which may rename on a retry). */
   teams: { n: number; name: string; option_id: string | null; member_user_ids: string[] }[];
   optionLabels: Map<string, string>;
   /** The FAILED create this claim retries, or null for a first create. */
   previous: CreateState | null;
-  /** Positions (1-based `n`) of teams a previous attempt of THIS run already made. */
+  /** `previous` was a create of THIS run: its teams are kept and skipped. */
+  sameRun: boolean;
+  /** Positions (1-based `n`) of this run's teams that already exist: recorded, or adopted. */
   alreadyCreated: Set<number>;
+  /** Teams found on the tag under a planned name that no attempt recorded (see CreateState.teams). */
+  adopted: { team_id: string; name: string; n: number; adopted: true }[];
+  /** Slugs a new team name must avoid locally: the classroom's teams, minus this run's own. */
+  localTaken: string[];
+  /** Same-run retry only: why the run is stale. Not a refusal — the retry keeps the run's grouping. */
+  staleReasons: string[];
 }
 
 /** Which positions a state records as created; by `n`, else by name. */
@@ -1933,6 +2066,35 @@ function createdPositions(state: CreateState): Set<number> {
   return positions;
 }
 
+/** 1-based positions as the 0-based index set `renameTaken` and the pre-flight take. */
+const indexesOf = (positions: Set<number>): Set<number> => new Set([...positions].map(n => n - 1));
+
+/**
+ * The classroom's git organization. A create makes one GitHub team per team,
+ * so an organization on another provider is refused `provider_unsupported`
+ * before anything else — a GitLab classroom must hear "GitHub only", not
+ * "GitHub cannot be reached".
+ */
+async function loadCreateOrg(classroomId: string) {
+  const classroom = await getPrisma().classroom.findUnique({
+    where: { id: classroomId },
+    select: {
+      git_organization: {
+        select: { provider: true, login: true, github_installation_id: true },
+      },
+    },
+  });
+  const org = classroom?.git_organization ?? null;
+  if (org && org.provider !== 'GITHUB') {
+    throw new TeamSetError(
+      'provider_unsupported',
+      'Creating teams from a team set needs a GitHub organization; this classroom’s is not on GitHub.',
+      { provider: org.provider }
+    );
+  }
+  return org;
+}
+
 /**
  * Everything previewCreate and claimCreate both refuse on, in the order a
  * caller can act on them. Uses the RUN's config snapshot (template,
@@ -1943,6 +2105,19 @@ function createdPositions(state: CreateState): Set<number> {
  * create FAILED: for the same run (the teams it made are skipped), or — when
  * it made no team at all — for any run. RUNNING is `create_in_progress`;
  * DONE and PARTIAL (every team exists) are `already_created`.
+ *
+ * A SAME-RUN retry differs from a first create in three ways:
+ *   - Its names start from the ones the last claim stored (what the owner
+ *     approved, and what any team it made is called), not recomputed ones.
+ *   - A team on the set's tag that the state never recorded — its attempt
+ *     made it, then died or failed its final write — is ADOPTED when it holds
+ *     the planned name of a position not yet made: that position counts as
+ *     created and the retry re-adds its members. Only a tagged team matching
+ *     no planned name is someone else's (`tag_conflict`).
+ *   - Ordinary staleness does not block it: the grouping is already partly
+ *     real, and edited answers change nothing about the teams still to make.
+ *     Only a member of such a team who has left the class (or whose account is
+ *     gone) blocks it, as `run_stale`.
  */
 async function planCreate(
   classroomId: string,
@@ -1950,6 +2125,7 @@ async function planCreate(
   runRef: string | number
 ): Promise<CreatePlan> {
   const set = await expireLostCreate(await findSetScoped(classroomId, teamSetId));
+  await loadCreateOrg(classroomId);
   const run = await getRun({ classroomId, teamSetId, runRef });
 
   let previous: CreateState | null = null;
@@ -1982,8 +2158,93 @@ async function planCreate(
       'Creating teams without GitHub teams is not supported yet.'
     );
   }
+
+  const prisma = getPrisma();
+  const sameRun = previous !== null && set.created_run_id === run.id;
+  const runTeams = run.result.teams;
+  const optionLabels = await optionLabelsFor(run);
+
+  // Teams a previous attempt of THIS run recorded are ours: they sit on the
+  // tag and hold their names, and neither is a conflict for the retry.
+  const recorded = sameRun ? previous!.teams : [];
+  const ours = new Set(recorded.map(team => team.team_id));
+  const alreadyCreated = new Set<number>();
+  let names: string[] = [];
+  if (sameRun) {
+    names =
+      previous!.names?.length === runTeams.length
+        ? [...previous!.names]
+        : teamNamesFor(
+            set.name,
+            run.config,
+            runTeams,
+            optionLabels,
+            await classroomTeamSlugs(classroomId, ours)
+          );
+    // The teams that exist keep the names they were made with.
+    for (const team of recorded) {
+      const n = team.n ?? (previous!.names ? previous!.names.indexOf(team.name) + 1 : 0);
+      if (n < 1 || n > names.length) continue;
+      names[n - 1] = team.name;
+      alreadyCreated.add(n);
+    }
+  }
+
+  const tag = await prisma.tag.findUnique({
+    where: { classroom_id_name: { classroom_id: classroomId, name: set.name } },
+    select: {
+      id: true,
+      name: true,
+      teams: { select: { team: { select: { id: true, name: true, slug: true } } } },
+    },
+  });
+  const adopted: CreatePlan['adopted'] = [];
+  const foreign: { name: string; slug: string }[] = [];
+  for (const { team } of tag?.teams ?? []) {
+    if (ours.has(team.id)) continue;
+    const slug = team.slug.toLowerCase();
+    const index = sameRun
+      ? names.findIndex(
+          (name, i) =>
+            !alreadyCreated.has(i + 1) &&
+            (predictTeamSlug(name) === slug || name.toLowerCase() === team.name.toLowerCase())
+        )
+      : -1;
+    if (index < 0) {
+      foreign.push(team);
+      continue;
+    }
+    names[index] = team.name;
+    alreadyCreated.add(index + 1);
+    ours.add(team.id);
+    adopted.push({ team_id: team.id, name: team.name, n: index + 1, adopted: true });
+  }
+
   const { stale, reasons } = await staleness({ classroomId, run });
-  if (stale) {
+  let staleReasons: string[] = [];
+  if (sameRun) {
+    const pending = runTeams
+      .filter((_, i) => !alreadyCreated.has(i + 1))
+      .flatMap(team => team.member_user_ids);
+    if (pending.length > 0) {
+      const roster = new Set(await loadRosterUserIds(classroomId));
+      const users = await prisma.user.findMany({
+        where: { id: { in: pending } },
+        select: { id: true },
+      });
+      const exists = new Set(users.map(user => user.id));
+      const gone = pending.filter(id => !roster.has(id) || !exists.has(id)).length;
+      if (gone > 0) {
+        const reason = `${plural(gone, 'person', 'people')} on teams not yet created ${gone === 1 ? 'has' : 'have'} left the class.`;
+        throw new TeamSetError(
+          'run_stale',
+          `Run ${run.number} cannot be retried: ${reason} Create the remaining teams by hand on the Teams screen, or make a new team set.`,
+          { reasons: [reason], retry_blocked: true }
+        );
+      }
+    }
+    staleReasons = reasons;
+  } else if (stale) {
     throw new TeamSetError(
       'run_stale',
       `Run ${run.number} is out of date: ${reasons.join(' ')} Start a new run first.`,
@@ -1991,47 +2252,34 @@ async function planCreate(
     );
   }
 
-  // Teams a previous attempt of THIS run made are ours: they sit on the tag and
-  // hold their names, and neither is a conflict for the retry.
-  const sameRun = previous !== null && set.created_run_id === run.id;
-  const ours = new Set(sameRun ? previous!.teams.map(t => t.team_id) : []);
-
-  const tag = await getPrisma().tag.findUnique({
-    where: { classroom_id_name: { classroom_id: classroomId, name: set.name } },
-    select: { id: true, name: true, teams: { select: { team_id: true } } },
-  });
-  const foreignTagged = tag ? tag.teams.filter(t => !ours.has(t.team_id)).length : 0;
-  if (foreignTagged > 0) {
+  if (foreign.length > 0) {
+    // A FAILED create of ANOTHER run that left teams on the tag without
+    // recording them: those teams are that run's, and only it can be retried.
+    const previousSlugs = new Set((previous?.names ?? []).map(name => predictTeamSlug(name)));
+    if (previous && foreign.some(team => previousSlugs.has(team.slug.toLowerCase()))) {
+      throw new TeamSetError(
+        'already_created',
+        `Teams were partly created from run ${previous.run_number}; only that run can be retried.`,
+        { run_number: previous.run_number, status: previous.status }
+      );
+    }
     throw new TeamSetError(
       'tag_conflict',
       `The tag "${set.name}" already has teams. Make a new team set with a different name and run it.`,
-      { tag: set.name, teams: foreignTagged }
+      { tag: set.name, teams: foreign.length }
     );
   }
 
-  const optionLabels = await optionLabelsFor(run);
-  const names = teamNamesFor(
-    set.name,
-    run.config,
-    run.result.teams,
-    optionLabels,
-    await classroomTeamSlugs(classroomId, ours)
-  );
-  const alreadyCreated = new Set<number>();
-  if (sameRun) {
-    // The teams that exist keep the names they were made with.
-    for (const team of previous!.teams) {
-      const n = team.n ?? (previous!.names ? previous!.names.indexOf(team.name) + 1 : 0);
-      if (n < 1 || n > names.length) continue;
-      names[n - 1] = team.name;
-      alreadyCreated.add(n);
-    }
-  }
+  const localTaken = await classroomTeamSlugs(classroomId, ours);
+  names = sameRun
+    ? renameTaken(names, indexesOf(alreadyCreated), localTaken)
+    : teamNamesFor(set.name, run.config, runTeams, optionLabels, localTaken);
+
   return {
     set,
     run,
     tag: tag ? { id: tag.id, name: tag.name } : null,
-    teams: run.result.teams.map((team, i) => ({
+    teams: runTeams.map((team, i) => ({
       n: i + 1,
       name: names[i]!,
       option_id: team.option_id,
@@ -2039,7 +2287,11 @@ async function planCreate(
     })),
     optionLabels,
     previous,
-    alreadyCreated: sameRun ? alreadyCreated : new Set(),
+    sameRun,
+    alreadyCreated,
+    adopted,
+    localTaken,
+    staleReasons,
   };
 }
 
@@ -2057,61 +2309,157 @@ const statusOf = (error: unknown): number | undefined => {
   return typeof status === 'number' ? status : undefined;
 };
 
-/**
- * Before an owner is asked to approve, make sure the create can reach GitHub
- * and that no planned name is already a team in the organization (another
- * classroom in the same org, or a team made by hand, is invisible to the
- * local check). The organization read comes FIRST and must succeed: a dead
- * installation can answer a team lookup with 404, which would otherwise read
- * as "name free". Refuses `github_unavailable` / `name_collision`; returns a
- * warning when there were too many teams to check one by one.
- */
-async function githubPreflight(classroomId: string, names: string[]): Promise<string[]> {
-  const classroom = await getPrisma().classroom.findUnique({
-    where: { id: classroomId },
-    select: { git_organization: true },
-  });
-  const org = classroom?.git_organization;
-  const unavailable = () =>
-    new TeamSetError(
-      'github_unavailable',
-      'The classroom’s GitHub organization cannot be reached (is the Classmoji app installed on it?).'
-    );
-  if (!org?.login) throw unavailable();
-  let provider: ReturnType<typeof getGitProvider>;
-  try {
-    provider = getGitProvider(org);
-    await provider.getOrganization(org.login);
-  } catch (error) {
-    console.error(`[teamSet] GitHub pre-flight failed for classroom ${classroomId}`, error);
-    throw unavailable();
-  }
+/** The pre-flight's budget ran out. */
+class PreflightTimeout extends Error {}
 
-  if (names.length > NAME_PROBE_MAX_TEAMS) {
-    return [
-      `Team names were not checked against GitHub (more than ${NAME_PROBE_MAX_TEAMS} teams); a taken name fails only that team.`,
-    ];
-  }
-  const collisions: string[] = [];
-  let failed = false;
-  await eachLimited(names, NAME_PROBE_CONCURRENCY, async name => {
+function githubUnavailable(timeout = false): TeamSetError {
+  return timeout
+    ? new TeamSetError(
+        'github_unavailable',
+        'GitHub did not answer in time while checking the team names; try again in a minute.',
+        { reason: 'timeout' }
+      )
+    : new TeamSetError(
+        'github_unavailable',
+        'The classroom’s GitHub organization cannot be reached (is the Classmoji app installed on it?).'
+      );
+}
+
+/**
+ * Ask GitHub whether each slug is a team, a few at a time. The FIRST answer
+ * that is neither "exists" nor 404 ends it at once: that error is thrown
+ * without waiting for the other lanes, no lane takes another slug, and the
+ * requests still in flight are aborted.
+ */
+async function probeSlugs(
+  provider: ReturnType<typeof getGitHubProvider>,
+  org: string,
+  slugs: string[],
+  controller: AbortController
+): Promise<Set<string>> {
+  const taken = new Set<string>();
+  let stopped = false;
+  let fail: (error: unknown) => void = () => {};
+  const failed = new Promise<never>((_, reject) => {
+    fail = reject;
+  });
+  const lanes = eachLimited(slugs, NAME_PROBE_CONCURRENCY, async slug => {
+    if (stopped || controller.signal.aborted) return;
     try {
-      await provider.getTeam(org.login, predictTeamSlug(name));
-      collisions.push(name);
+      if (await provider.probeTeam(org, slug, { signal: controller.signal })) taken.add(slug);
     } catch (error) {
-      if (statusOf(error) !== 404) failed = true;
+      if (stopped) return;
+      stopped = true;
+      fail(error);
+      controller.abort();
     }
   });
-  if (failed) throw unavailable();
-  if (collisions.length > 0) {
-    const ordered = names.filter(name => collisions.includes(name));
-    throw new TeamSetError(
-      'name_collision',
-      `${plural(ordered.length, 'team name is', 'team names are')} already used in the GitHub organization: ${ordered.join(', ')}. Change team_name_template (or the set name) and run again.`,
-      { names: ordered }
+  await Promise.race([lanes, failed]);
+  return taken;
+}
+
+/**
+ * Before an owner is asked to approve (and, on a retry, again at the claim so
+ * it stores the same names), make sure the create can reach GitHub and that no
+ * name still to be made is already a team in the organization — another
+ * classroom in the same org, a team made by hand, or a GitHub team a failed
+ * attempt left behind are all invisible to the local check.
+ *
+ * The organization read comes FIRST and must succeed: a dead installation can
+ * answer a team lookup with 404, which would otherwise read as "name free".
+ * Every request goes through the provider's probe client (a rate limit is
+ * thrown, never slept off; nothing is retried) under one AbortController, and
+ * the whole pre-flight — token mint included — is raced against
+ * PREFLIGHT_BUDGET_MS. Any answer but "exists" or 404 refuses
+ * `github_unavailable` at once; running out of time refuses it too, asking
+ * the caller to try again. Nothing here waits on GitHub past the budget.
+ *
+ * A taken name refuses `name_collision`, with the list, on a FIRST attempt:
+ * the owner has approved nothing yet and picks another template. On a RETRY
+ * it is suffixed instead (usually it is a GitHub team the failed attempt made
+ * and could not record) and the new names are probed in turn, for up to
+ * NAME_PROBE_ROUNDS rounds. Positions in `fixed` (0-based) exist already and
+ * are neither probed nor renamed.
+ */
+async function githubPreflight({
+  classroomId,
+  names,
+  fixed,
+  localTaken,
+  retry,
+}: {
+  classroomId: string;
+  names: string[];
+  fixed: ReadonlySet<number>;
+  localTaken: string[];
+  retry: boolean;
+}): Promise<{ names: string[]; warnings: string[] }> {
+  const org = await loadCreateOrg(classroomId);
+  if (!org?.login || !org.github_installation_id) throw githubUnavailable();
+  const orgLogin = org.login;
+
+  const controller = new AbortController();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const budget = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      reject(new PreflightTimeout());
+      controller.abort();
+    }, preflightBudgetMs);
+  });
+  // Every rejection of `budget` is observed by a race below; this only keeps
+  // one that lands between races from being reported as unhandled.
+  budget.catch(() => {});
+  const withinBudget = <T>(work: Promise<T>): Promise<T> => Promise.race([work, budget]);
+
+  try {
+    const provider = getGitHubProvider(org.github_installation_id, orgLogin);
+    await withinBudget(provider.probeOrganization(orgLogin, { signal: controller.signal }));
+
+    const open = names.map((_, i) => i).filter(i => !fixed.has(i));
+    if (open.length > NAME_PROBE_MAX_TEAMS) {
+      return {
+        names,
+        warnings: [
+          `Team names were not checked against GitHub (more than ${NAME_PROBE_MAX_TEAMS} teams); a taken name fails only that team.`,
+        ],
+      };
+    }
+
+    const free = new Set<string>();
+    const onGithub = new Set<string>();
+    let current = names;
+    for (let round = 1; ; round++) {
+      const pending = [...new Set(open.map(i => predictTeamSlug(current[i]!)))].filter(
+        slug => !free.has(slug) && !onGithub.has(slug)
+      );
+      const taken = await withinBudget(probeSlugs(provider, orgLogin, pending, controller));
+      for (const slug of pending) (taken.has(slug) ? onGithub : free).add(slug);
+
+      const colliding = open.filter(i => onGithub.has(predictTeamSlug(current[i]!)));
+      if (colliding.length === 0) return { names: current, warnings: [] };
+      if (!retry || round >= NAME_PROBE_ROUNDS) {
+        const listed = colliding.map(i => current[i]!);
+        throw new TeamSetError(
+          'name_collision',
+          `${plural(listed.length, 'team name is', 'team names are')} already used in the GitHub organization: ${listed.join(', ')}. Change team_name_template (or the set name) and run again.`,
+          { names: listed }
+        );
+      }
+      // From the ORIGINAL names each round, against everything found taken
+      // so far: `x-02` → `x-02-2` → `x-02-3`, never `x-02-2-2`.
+      current = renameTaken(names, fixed, [...localTaken, ...onGithub]);
+    }
+  } catch (error) {
+    if (error instanceof TeamSetError) throw error;
+    if (error instanceof PreflightTimeout) throw githubUnavailable(true);
+    console.error(
+      `[teamSet] GitHub pre-flight failed for classroom ${classroomId}`,
+      statusOf(error) ?? (error instanceof Error ? error.name : 'unknown')
     );
+    throw githubUnavailable();
+  } finally {
+    clearTimeout(timer);
   }
-  return [];
 }
 
 export async function previewCreate({
@@ -2124,13 +2472,17 @@ export async function previewCreate({
   runRef: string | number;
 }): Promise<CreatePreview> {
   const plan = await planCreate(classroomId, teamSetId, runRef);
-  const toMake = plan.teams.filter(team => !plan.alreadyCreated.has(team.n));
-  const warnings = await githubPreflight(
+  const { names, warnings } = await githubPreflight({
     classroomId,
-    toMake.map(team => team.name)
-  );
+    names: plan.teams.map(team => team.name),
+    fixed: indexesOf(plan.alreadyCreated),
+    localTaken: plan.localTaken,
+    retry: plan.previous !== null,
+  });
+  const teams = plan.teams.map((team, i) => ({ ...team, name: names[i]! }));
+  const toMake = teams.filter(team => !plan.alreadyCreated.has(team.n));
 
-  const memberIds = plan.teams.flatMap(t => t.member_user_ids);
+  const memberIds = teams.flatMap(t => t.member_user_ids);
   const users = await getPrisma().user.findMany({
     where: { id: { in: memberIds } },
     select: { id: true, name: true, login: true },
@@ -2142,13 +2494,18 @@ export async function previewCreate({
       `${plural(noLogin, 'person has', 'people have')} no GitHub login and cannot be added to a GitHub team.`
     );
   }
+  if (plan.staleReasons.length > 0) {
+    warnings.push(
+      `Answers or the roster changed since run ${plan.run.number} (${plan.staleReasons.map(reason => reason.replace(/\.$/, '')).join('; ')}). This retry makes the remaining teams exactly as run ${plan.run.number} planned them.`
+    );
+  }
 
   return {
     run_id: plan.run.id,
     run_number: plan.run.number,
     tag: { name: plan.set.name, exists: plan.tag !== null },
     github_teams: plan.run.config.github_teams !== false,
-    teams: plan.teams.map(team => ({
+    teams: teams.map(team => ({
       name: team.name,
       option: team.option_id
         ? { id: team.option_id, label: plan.optionLabels.get(team.option_id) ?? team.option_id }
@@ -2176,18 +2533,24 @@ export async function previewCreate({
  *
  * A first claim is `updateMany … WHERE created_run_id IS NULL`; a retry of a
  * FAILED create is `updateMany … WHERE created_run_id = <the failed run> AND
- * create_state is that very FAILED state` (status and start time). Either way
- * two confirms that both passed the checks race on one statement and exactly
- * one wins; the loser is told `create_in_progress` (or `already_created`).
+ * create_state is that very FAILED attempt`. Either way two confirms that both
+ * passed the checks race on one statement and exactly one wins; the loser is
+ * told `create_in_progress` (or `already_created`).
+ *
+ * Every claim mints a fresh `attempt_id`. It goes into the apply task's
+ * payload and idempotency key, so a claim that is released and made again
+ * queues a NEW task rather than being handed the old one back, and a task of
+ * a superseded attempt finds a different id in the row and does nothing.
  *
  * A retry keeps the teams the failed attempt made (and their member/tag
- * failures) and drops the failures of teams it will try again. The planned
- * names are stored in the state, so applyCreate creates exactly the names the
- * preview showed.
+ * failures), records the teams it adopted from the tag, and drops the
+ * failures of teams it will try again. It re-runs the GitHub pre-flight, so a
+ * name GitHub now holds is suffixed exactly as the retry's preview showed.
+ * The planned names are stored in the state, so applyCreate creates exactly
+ * the names the preview showed.
  *
- * The apply task is queued with an idempotency key per attempt. If it cannot
- * be queued the claim is RELEASED — back to unclaimed, or back to the FAILED
- * state it retried — and `trigger_unavailable` is thrown.
+ * If the task cannot be queued the claim is RELEASED — back to unclaimed, or
+ * back to the FAILED state it retried — and `trigger_unavailable` is thrown.
  *
  * `runId` may also be a run number; it is resolved through the set.
  */
@@ -2209,32 +2572,55 @@ export async function claimCreate({
       'Background jobs are not configured here, so teams cannot be created.'
     );
   }
+  let names = plan.teams.map(team => team.name);
+  if (plan.previous) {
+    ({ names } = await githubPreflight({
+      classroomId,
+      names,
+      fixed: indexesOf(plan.alreadyCreated),
+      localTaken: plan.localTaken,
+      retry: true,
+    }));
+  }
 
   const previous = plan.previous;
-  const kept = plan.alreadyCreated.size > 0 ? previous! : null;
-  const keptNames = new Set(
-    plan.teams.filter(team => plan.alreadyCreated.has(team.n)).map(team => team.name)
-  );
+  const kept = plan.sameRun
+    ? previous!.teams.map(team => ({
+        ...team,
+        n: team.n ?? plan.teams.find(t => t.name === team.name)?.n,
+      }))
+    : [];
+  const teams: CreateState['teams'] = [...kept, ...plan.adopted];
+  const existing = new Set(teams.map(team => team.name));
+  const now = new Date().toISOString();
+  const attemptId = randomUUID();
   const state: CreateState = {
     status: 'RUNNING',
     run_id: plan.run.id,
     run_number: plan.run.number,
     total: plan.teams.length,
     done: plan.alreadyCreated.size,
-    failed: kept ? kept.failed.filter(f => f.team !== '*' && keptNames.has(f.team)) : [],
-    teams: kept
-      ? kept.teams.map(team => ({
-          ...team,
-          n: team.n ?? plan.teams.find(t => t.name === team.name)?.n,
-        }))
+    // A team that exists keeps its member/tag failures (they are still
+    // missing); every other failure is of a team this attempt makes again.
+    failed: plan.sameRun
+      ? previous!.failed.filter(
+          f =>
+            f.team !== '*' &&
+            existing.has(f.team) &&
+            (f.reason === 'members_failed' || f.reason === 'tag_failed')
+        )
       : [],
-    names: plan.teams.map(team => team.name),
+    teams,
+    names,
     attempt: (previous?.attempt ?? (previous ? 1 : 0)) + 1,
+    attempt_id: attemptId,
     claimed_by: userId,
-    started_at: new Date().toISOString(),
+    started_at: now,
+    task_started_at: null,
+    heartbeat_at: now,
     finished_at: null,
   };
-  state.counts = recount(state, kept?.counts?.members_added ?? 0, false);
+  state.counts = recount(state, plan.sameRun ? (previous!.counts?.members_added ?? 0) : 0, false);
 
   const prisma = getPrisma();
   const claimed = await prisma.teamSet.updateMany({
@@ -2243,39 +2629,37 @@ export async function claimCreate({
           id: plan.set.id,
           classroom_id: classroomId,
           created_run_id: plan.set.created_run_id,
-          AND: [
-            { create_state: { path: ['status'], equals: 'FAILED' } },
-            { create_state: { path: ['started_at'], equals: previous.started_at } },
-          ],
+          AND: [{ create_state: { path: ['status'], equals: 'FAILED' } }, attemptWhere(previous)],
         }
       : { id: plan.set.id, classroom_id: classroomId, created_run_id: null },
     data: { created_run_id: plan.run.id, create_state: toJson(state) },
   });
   if (claimed.count === 0) {
-    const now = await prisma.teamSet.findUnique({
+    const row = await prisma.teamSet.findUnique({
       where: { id: plan.set.id },
       select: { create_state: true },
     });
-    if (readCreateState(now?.create_state)?.status === 'RUNNING') {
+    const current = readCreateState(row?.create_state);
+    if (current?.status === 'RUNNING') {
       throw new TeamSetError('create_in_progress', 'Teams for this set are being created now.');
     }
-    throw new TeamSetError('already_created', 'Teams were already created from this set.');
+    throw new TeamSetError(
+      'already_created',
+      'Teams were already created from this set.',
+      current ? { run_number: current.run_number, status: current.status } : undefined
+    );
   }
 
   try {
     await tasks.trigger(
       APPLY_TASK_ID,
-      { teamSetId: plan.set.id },
-      { idempotencyKey: `${APPLY_TASK_ID}:${plan.set.id}:${plan.run.id}:${state.attempt}` }
+      { teamSetId: plan.set.id, attemptId },
+      { idempotencyKey: `${APPLY_TASK_ID}:${plan.set.id}:${attemptId}` }
     );
   } catch (error) {
     console.error(`[teamSet] could not queue create for set ${plan.set.id}`, error);
     await prisma.teamSet.updateMany({
-      where: {
-        id: plan.set.id,
-        created_run_id: plan.run.id,
-        create_state: { path: ['started_at'], equals: state.started_at },
-      },
+      where: { id: plan.set.id, created_run_id: plan.run.id, AND: [attemptWhere(state)] },
       data: previous
         ? { created_run_id: plan.set.created_run_id, create_state: toJson(previous) }
         : { created_run_id: null, create_state: Prisma.DbNull },
@@ -2288,79 +2672,128 @@ export async function claimCreate({
 }
 
 /** The WHERE that matches only this attempt's create, and only while it is RUNNING. */
-const whileOursAndRunning = (teamSetId: string, startedAt: string) => ({
+const whileOursAndRunning = (teamSetId: string, state: CreateState): Prisma.TeamSetWhereInput => ({
   id: teamSetId,
-  AND: [
-    { create_state: { path: ['status'], equals: 'RUNNING' } },
-    { create_state: { path: ['started_at'], equals: startedAt } },
-  ],
+  AND: [{ create_state: { path: ['status'], equals: 'RUNNING' } }, attemptWhere(state)],
 });
 
 /**
- * Persist progress — but only while the row still holds THIS attempt,
- * RUNNING. A create that was stopped underneath it (canceled, or expired as
- * 'lost') must not be flipped back to RUNNING by a late write; in that case
- * the teams this attempt made are still merged into the stopped state (its
- * status untouched), because a retry can only skip teams it knows exist.
- *
- * Returns false when the create is no longer ours; the caller stops. A
- * database failure is logged (by set id only) and swallowed — the teams it
- * describes exist either way and the next write carries them.
+ * The FINAL create_state write failed even after its retries. applyCreate
+ * lets it out (rather than turning it into yet another write that would fail
+ * the same way), so the apply task's catch marks the create stopped.
  */
-async function writeCreateState(teamSetId: string, state: CreateState): Promise<boolean> {
-  const prisma = getPrisma();
-  try {
-    const { count } = await prisma.teamSet.updateMany({
-      where: whileOursAndRunning(teamSetId, state.started_at),
-      data: { create_state: toJson(state) },
-    });
-    if (count > 0) return true;
+export class CreateStateWriteError extends Error {
+  readonly code = 'state_write_failed';
 
-    const row = await prisma.teamSet.findUnique({
-      where: { id: teamSetId },
-      select: { create_state: true },
-    });
-    const current = readCreateState(row?.create_state);
-    if (!current || current.started_at !== state.started_at) return false;
-    if (current.status === 'RUNNING') return true; // a concurrent write of ours; not stopped
-    const known = new Set(current.teams.map(team => team.team_id));
-    const extra = state.teams.filter(team => !known.has(team.team_id));
-    if (extra.length > 0) {
-      const merged: CreateState = { ...current, teams: [...current.teams, ...extra] };
-      merged.counts = recount(merged, state.counts?.members_added ?? 0, true);
-      await prisma.teamSet.updateMany({
-        where: {
-          id: teamSetId,
-          AND: [
-            { create_state: { path: ['status'], equals: current.status } },
-            { create_state: { path: ['started_at'], equals: current.started_at } },
-          ],
-        },
-        data: { create_state: toJson(merged) },
-      });
-    }
-    return false;
-  } catch (error) {
-    console.error(
-      `[teamSet] could not record create progress for set ${teamSetId}`,
-      error instanceof Error ? error.name : 'unknown'
-    );
-    return true;
+  constructor() {
+    super('The final create state could not be recorded.');
+    this.name = 'CreateStateWriteError';
   }
+}
+
+const errorName = (error: unknown): string => (error instanceof Error ? error.name : 'unknown');
+
+/**
+ * Persist progress — but only while the row still holds THIS attempt,
+ * RUNNING. Every write refreshes `heartbeat_at`, which is what lazy expiry
+ * counts from. A create that was stopped underneath it (canceled, or expired
+ * as 'lost') must not be flipped back to RUNNING by a late write; in that case
+ * what this attempt learned since its last write — the teams it made and every
+ * failure it recorded (member-level ones included) — is merged into the
+ * stopped state (its status untouched), because a retry can only skip teams it
+ * knows exist and can only report failures it was told about.
+ *
+ * Returns false when the create is no longer ours; the caller stops.
+ *
+ * A PROGRESS write that hits a database error is logged (by set id only) and
+ * swallowed: the teams it describes exist either way and the next write
+ * carries them. The TERMINAL write is not allowed to vanish like that — a
+ * create that finished while its row still says RUNNING would be expired as
+ * 'lost' — so it is tried TERMINAL_WRITE_ATTEMPTS times with a short backoff,
+ * and then throws `CreateStateWriteError`.
+ */
+async function writeCreateState(
+  teamSetId: string,
+  state: CreateState,
+  { terminal = false }: { terminal?: boolean } = {}
+): Promise<boolean> {
+  state.heartbeat_at = new Date().toISOString();
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await writeCreateStateOnce(teamSetId, state);
+    } catch (error) {
+      console.error(
+        `[teamSet] could not record ${terminal ? 'the final create state' : 'create progress'} for set ${teamSetId} (try ${attempt})`,
+        errorName(error)
+      );
+      if (!terminal) return true;
+      if (attempt >= TERMINAL_WRITE_ATTEMPTS) throw new CreateStateWriteError();
+      await sleep(TERMINAL_WRITE_BACKOFF_MS * 2 ** (attempt - 1));
+    }
+  }
+}
+
+async function writeCreateStateOnce(teamSetId: string, state: CreateState): Promise<boolean> {
+  const prisma = getPrisma();
+  const { count } = await prisma.teamSet.updateMany({
+    where: whileOursAndRunning(teamSetId, state),
+    data: { create_state: toJson(state) },
+  });
+  if (count > 0) return true;
+
+  const row = await prisma.teamSet.findUnique({
+    where: { id: teamSetId },
+    select: { create_state: true },
+  });
+  const current = readCreateState(row?.create_state);
+  if (!current || attemptOf(current) !== attemptOf(state)) return false;
+  if (current.status === 'RUNNING') return true; // a concurrent write of ours; not stopped
+
+  const known = new Set(current.teams.map(team => team.team_id));
+  const extra = state.teams.filter(team => !known.has(team.team_id));
+  const failureKey = (f: CreateFailure) => `${f.team}\u0000${f.reason}`;
+  const recorded = new Set(current.failed.map(failureKey));
+  const newFailures = state.failed.filter(f => f.team !== '*' && !recorded.has(failureKey(f)));
+  if (extra.length > 0 || newFailures.length > 0) {
+    const merged: CreateState = {
+      ...current,
+      teams: [...current.teams, ...extra],
+      failed: [...current.failed, ...newFailures],
+    };
+    merged.counts = recount(
+      merged,
+      Math.max(current.counts?.members_added ?? 0, state.counts?.members_added ?? 0),
+      true
+    );
+    await prisma.teamSet.updateMany({
+      where: {
+        id: teamSetId,
+        AND: [
+          { create_state: { path: ['status'], equals: current.status } },
+          attemptWhere(current),
+        ],
+      },
+      data: { create_state: toJson(merged) },
+    });
+  }
+  return false;
 }
 
 /**
  * Mark a RUNNING create FAILED from outside `applyCreate` — the apply task's
  * cancel hook (`canceled`) or its last-resort catch (`internal_error`).
- * Conditional on the row still holding the RUNNING state that was read, so a
- * create that finished (or restarted) meanwhile is left alone, and every team
- * already recorded is kept. Returns whether it wrote.
+ * Conditional on the row still holding THAT task's attempt, RUNNING: a create
+ * that finished, was retried under a new attempt, or belongs to another task
+ * is left alone, and every team already recorded is kept. Returns whether it
+ * wrote.
  */
 export async function stopCreate({
   teamSetId,
+  attemptId,
   reason,
 }: {
   teamSetId: string;
+  attemptId: string;
   reason: 'canceled' | 'internal_error';
 }): Promise<boolean> {
   const prisma = getPrisma();
@@ -2369,7 +2802,7 @@ export async function stopCreate({
     select: { create_state: true },
   });
   const state = readCreateState(row?.create_state);
-  if (!state || state.status !== 'RUNNING') return false;
+  if (!state || state.status !== 'RUNNING' || attemptOf(state) !== attemptId) return false;
   const stopped: CreateState = {
     ...state,
     status: 'FAILED',
@@ -2378,7 +2811,7 @@ export async function stopCreate({
   };
   stopped.counts = recount(stopped, state.counts?.members_added ?? 0, true);
   const { count } = await prisma.teamSet.updateMany({
-    where: whileOursAndRunning(teamSetId, state.started_at),
+    where: whileOursAndRunning(teamSetId, state),
     data: { create_state: toJson(stopped) },
   });
   return count > 0;
@@ -2421,7 +2854,8 @@ function teamFailureReason(error: unknown): CreateFailureReason {
 }
 
 /**
- * Create the claimed run's teams. Called by the `team-set-apply` task.
+ * Create the claimed run's teams. Called by the `team-set-apply` task with the
+ * `attemptId` its claim minted.
  *
  * Ensures the Tag named after the set (and points `tag_id` at it), then, per
  * team in run order: `teamAdmin.createTeam` (visible, tagged, under the name
@@ -2433,17 +2867,26 @@ function teamFailureReason(error: unknown): CreateFailureReason {
  * (some team does not exist — the same run can be claimed again). Never
  * deletes: not a team, not a tag, not a membership.
  *
- * Idempotent on re-entry: a state that is no longer RUNNING is returned as is,
- * and teams already recorded in `state.teams` are skipped. If the create is
- * stopped underneath it (stopCreate on cancel, or lazy expiry), the next
- * progress write notices, the teams made so far are merged into the stopped
- * state, and no further team is made.
+ * Its first act is to stamp `task_started_at` / `heartbeat_at`, so lazy expiry
+ * counts from when the task started, not from the claim. A team the claim
+ * ADOPTED (found on the tag, never recorded) is not made again; its members
+ * are added again, which `addTeamMembers` makes idempotent.
+ *
+ * A no-op when the row holds a different attempt (this task's claim was
+ * released or superseded) or the create is no longer RUNNING; teams already
+ * recorded are skipped on re-entry. If the create is stopped underneath it
+ * (stopCreate on cancel, or lazy expiry), the next progress write notices, the
+ * teams made so far are merged into the stopped state, and no further team is
+ * made. The FINAL write is retried and then thrown (`CreateStateWriteError`)
+ * rather than swallowed, so the task's catch can mark the create stopped.
  */
 export async function applyCreate({
   teamSetId,
+  attemptId,
   onProgress,
 }: {
   teamSetId: string;
+  attemptId: string;
   onProgress?: (state: CreateState) => void;
 }): Promise<CreateState> {
   const prisma = getPrisma();
@@ -2452,18 +2895,22 @@ export async function applyCreate({
   if (!set || !set.created_run_id || !initial) {
     throw new TeamSetError('not_found', 'No claimed create for this team set.');
   }
+  if (attemptOf(initial) !== attemptId) {
+    console.warn(`[teamSet] apply for set ${set.id} is not the current attempt; doing nothing`);
+    return initial;
+  }
   if (initial.status !== 'RUNNING') return initial;
 
   const state: CreateState = {
     ...initial,
     failed: [...initial.failed],
-    teams: [...initial.teams],
+    teams: initial.teams.map(team => ({ ...team })),
   };
   let membersAdded = initial.counts?.members_added ?? 0;
-  /** Write progress; false once the create was stopped underneath us. */
+  /** Write progress (or, finished, the final state); false once the create was stopped underneath us. */
   const report = async (finished = false): Promise<boolean> => {
     state.counts = recount(state, membersAdded, finished);
-    const ours = await writeCreateState(set.id, state);
+    const ours = await writeCreateState(set.id, state, { terminal: finished });
     try {
       onProgress?.(state);
     } catch {
@@ -2484,6 +2931,10 @@ export async function applyCreate({
     state.finished_at = new Date().toISOString();
     return (await report(true)) ? state : stored();
   };
+
+  // The task is alive: lazy expiry counts from here, not from the claim.
+  state.task_started_at = state.task_started_at ?? new Date().toISOString();
+  if (!(await report())) return stored();
 
   try {
     const runRow = await prisma.teamSetRun.findUnique({ where: { id: set.created_run_id } });
@@ -2527,33 +2978,16 @@ export async function applyCreate({
     });
     const loginOf = new Map(users.map(u => [u.id, u.login]));
     const alreadyCreated = createdPositions(state);
+    const adoptedAt = new Map(
+      state.teams.filter(team => team.adopted && team.n).map(team => [team.n!, team])
+    );
 
-    for (const team of teams) {
-      if (alreadyCreated.has(team.n)) continue;
-
-      let createdTeam: { id: string; name: string };
-      try {
-        const created = await teamAdminService.createTeam({
-          classroomId: set.classroom_id,
-          name: team.name,
-          isVisible: true,
-          tagIds: [tagId],
-        });
-        createdTeam = created.team;
-        state.teams.push({ team_id: created.team.id, name: created.team.name, n: team.n });
-        if (created.tagsFailed.length > 0) {
-          state.failed.push({ team: team.name, reason: 'tag_failed' });
-        }
-      } catch (error) {
-        console.error(`[teamSet] could not create team ${team.n} of set ${set.id}`, error);
-        state.failed.push({ team: team.name, reason: teamFailureReason(error) });
-        state.done += 1;
-        if (!(await report())) return await stored();
-        continue;
-      }
-
-      // The team exists from here on: whatever happens to its members is a
-      // member-level failure, never a reason to retry the team itself.
+    /**
+     * Add a team's members by login and record who could not be added. The
+     * team exists by now: whatever happens here is a member-level failure,
+     * never a reason to retry the team itself.
+     */
+    const addMembers = async (team: (typeof teams)[number], teamId: string) => {
       const memberFailures: NonNullable<CreateFailure['members']> = [];
       const logins: string[] = [];
       const userByLogin = new Map<string, string>();
@@ -2571,7 +3005,7 @@ export async function applyCreate({
         try {
           const added = await teamAdminService.addTeamMembers({
             classroomId: set.classroom_id,
-            slugOrId: createdTeam.id,
+            slugOrId: teamId,
             logins,
           });
           membersAdded += added.succeeded.length;
@@ -2599,6 +3033,42 @@ export async function applyCreate({
       if (memberFailures.length > 0) {
         state.failed.push({ team: team.name, reason: 'members_failed', members: memberFailures });
       }
+    };
+
+    for (const team of teams) {
+      const adoptedEntry = adoptedAt.get(team.n);
+      if (adoptedEntry) {
+        // Made by an attempt that never recorded it, so its members may be
+        // missing: add them again (idempotent), then it is an ordinary team.
+        await addMembers(team, adoptedEntry.team_id);
+        delete adoptedEntry.adopted;
+        if (!(await report())) return await stored();
+        continue;
+      }
+      if (alreadyCreated.has(team.n)) continue;
+
+      let createdTeam: { id: string; name: string };
+      try {
+        const created = await teamAdminService.createTeam({
+          classroomId: set.classroom_id,
+          name: team.name,
+          isVisible: true,
+          tagIds: [tagId],
+        });
+        createdTeam = created.team;
+        state.teams.push({ team_id: created.team.id, name: created.team.name, n: team.n });
+        if (created.tagsFailed.length > 0) {
+          state.failed.push({ team: team.name, reason: 'tag_failed' });
+        }
+      } catch (error) {
+        console.error(`[teamSet] could not create team ${team.n} of set ${set.id}`, error);
+        state.failed.push({ team: team.name, reason: teamFailureReason(error) });
+        state.done += 1;
+        if (!(await report())) return await stored();
+        continue;
+      }
+
+      await addMembers(team, createdTeam.id);
       state.done += 1;
       // Stopped underneath (canceled, or expired as lost): make no more teams.
       if (!(await report())) return await stored();
@@ -2607,6 +3077,9 @@ export async function applyCreate({
     if (state.teams.length < state.total) return await finish('FAILED');
     return await finish(state.failed.length > 0 ? 'PARTIAL' : 'DONE');
   } catch (error) {
+    // The final write already failed every retry: another write would fail
+    // the same way. Let it out, so the task's catch marks the create stopped.
+    if (error instanceof CreateStateWriteError) throw error;
     console.error(`[teamSet] create for set ${set.id} stopped`, error);
     state.failed.push({ team: '*', reason: 'internal_error' });
     return finish('FAILED');

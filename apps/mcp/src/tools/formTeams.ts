@@ -153,7 +153,7 @@ const TEAM_SET_ERRORS: ReadonlyMap<string, { kind: MappedKind; message: string }
     {
       kind: 'invalid_params',
       message:
-        'Teams were already created from this set; change them on the Teams screen, or make a new set',
+        'This set already has its teams; change them on the Teams screen, or make a new set to group differently',
     },
   ],
   [
@@ -192,10 +192,46 @@ const TEAM_SET_ERRORS: ReadonlyMap<string, { kind: MappedKind; message: string }
     },
   ],
   [
+    'provider_unsupported',
+    {
+      kind: 'invalid_params',
+      message:
+        'Creating teams from a team set is GitHub only; this classroom’s organization is not on GitHub',
+    },
+  ],
+  [
     'trigger_unavailable',
     { kind: 'internal', message: 'Background jobs are unavailable; nothing was created' },
   ],
 ]);
+
+/**
+ * A sharper sentence than the code's own, for the cases the service's
+ * details tell apart. Null keeps the code's sentence.
+ */
+function refinedMessage(code: string, details: unknown): string | null {
+  const record = (details && typeof details === 'object' ? details : {}) as Record<string, unknown>;
+  switch (code) {
+    case 'already_created':
+      // A FAILED create that made teams pins the set to its run: that run can
+      // be retried, no other can. DONE/PARTIAL: the set simply has its teams.
+      if (record.status === 'FAILED' && Number.isSafeInteger(record.run_number)) {
+        const n = record.run_number as number;
+        return `A create of run ${n} failed partway and made some teams; only run ${n} can be retried (form_teams_create with run: ${n})`;
+      }
+      return null;
+    case 'run_stale':
+      return record.retry_blocked === true
+        ? 'People on the teams still to create have left the class, so this create cannot be retried; create the rest on the Teams screen, or make a new set'
+        : null;
+    case 'github_unavailable':
+      return record.reason === 'timeout'
+        ? 'GitHub did not answer in time while checking team names; nothing was created. Try again in a minute'
+        : null;
+    default:
+      return null;
+  }
+}
 
 const strings = (value: unknown): string[] | undefined =>
   Array.isArray(value)
@@ -234,6 +270,10 @@ function detailsData(details: unknown): Record<string, unknown> | undefined {
   if (typeof record.field_id === 'string') data.field_id = record.field_id;
   if (typeof record.status === 'string') data.status = record.status;
   if (Number.isSafeInteger(record.run_number)) data.run_number = record.run_number;
+  // Closed markers the service sets: a pre-flight that ran out of time, a
+  // same-run retry blocked by someone who left.
+  if (record.reason === 'timeout') data.reason = 'timeout';
+  if (record.retry_blocked === true) data.retry_blocked = true;
   return Object.keys(data).length ? data : undefined;
 }
 
@@ -263,7 +303,12 @@ function mapTeamSetError(error: unknown, what: string): unknown {
 
   const mapped = TEAM_SET_ERRORS.get(named.code);
   if (!mapped) return error;
-  return new ToolError(mapped.kind, mapped.message, named.code, detailsData(named.details));
+  return new ToolError(
+    mapped.kind,
+    refinedMessage(named.code, named.details) ?? mapped.message,
+    named.code,
+    detailsData(named.details)
+  );
 }
 
 /** Run a service call, mapping its documented refusals. */
@@ -443,23 +488,89 @@ const RUN_ERROR_NEXT: Readonly<Record<string, string>> = {
     'The solver rejected this setup; remove match/mix rules or loosen must rules, then run again.',
   canceled: 'This run was canceled; start a new run.',
   lost: 'The background solve stopped without an answer; start a new run.',
+  queue_expired: 'The run waited too long to start; start a new run.',
 };
 
+/** Where the set's create stands, as nextForRun needs it for a SOLVED run. */
+interface CreateContext {
+  status: CreateStatus;
+  /** The run the set's create is (or was) of. */
+  runNumber: number | null;
+  /** That run is the one being described. */
+  thisRun: boolean;
+  /** Teams that create has made so far. */
+  teamsMade: number;
+}
+
+function createContext(
+  set: { created_run_id?: string | null; create_state?: CreateState | null },
+  runId: string
+): CreateContext {
+  return {
+    status: createStatus(set),
+    runNumber: Number.isSafeInteger(set.create_state?.run_number)
+      ? set.create_state!.run_number
+      : null,
+    thisRun: Boolean(set.created_run_id) && set.created_run_id === runId,
+    teamsMade: set.create_state?.teams?.length ?? 0,
+  };
+}
+
+/**
+ * The next step for a SOLVED run of a set whose create has started, or null
+ * when the set has no create that constrains it. It comes before staleness: a
+ * set with teams cannot take another create whatever the run says, and a
+ * same-run retry is allowed even when the run has gone stale.
+ */
+function createNext(runNumber: number, create: CreateContext | undefined): string | null {
+  if (!create || create.status === 'none') return null;
+  const from = create.thisRun
+    ? 'this run'
+    : create.runNumber !== null
+      ? `run ${create.runNumber}`
+      : 'another run';
+  switch (create.status) {
+    case 'running':
+      return `Teams for this set are being created now (from ${from}); follow with form_teams_get and don't create again.`;
+    case 'done':
+      return `Teams were already created from this set (${from}); nothing is left to create. To group differently, make a new set (form_teams_run with name and new_set: true).`;
+    case 'partial':
+      return `Teams were already created from this set (${from}), but some members or tags are missing (see create_state): fix those on the Teams screen. To group differently, make a new set.`;
+    case 'failed':
+      if (create.thisRun) {
+        return `Creating these teams failed partway (see create_state). To finish, preview again with form_teams_create (run: ${runNumber}) and confirm only after the user approves; teams already made are skipped.`;
+      }
+      if (create.teamsMade > 0) {
+        return `A create of ${from} failed partway and made some teams; only that run can be retried (form_teams_create with run: ${create.runNumber ?? 'that run'}).`;
+      }
+      // Failed before making any team: any run may be created.
+      return null;
+    default:
+      return null;
+  }
+}
+
 /** One sentence: what the caller does next with this run. */
-function nextForRun(run: {
-  number: number;
-  status: string;
-  stale?: boolean;
-  error?: string | null;
-}): string {
+function nextForRun(
+  run: {
+    number: number;
+    status: string;
+    stale?: boolean;
+    error?: string | null;
+  },
+  create?: CreateContext
+): string {
   switch (run.status) {
     case 'QUEUED':
     case 'RUNNING':
       return `Still solving. Poll form_teams_get with run: ${run.number}; don't start another run.`;
     case 'SOLVED':
-      return run.stale
-        ? 'Answers or the roster changed since this run: start a new run before creating teams.'
-        : `Show these teams to the user. To make them real, an owner previews with form_teams_create (run: ${run.number}) and confirms only after the user approves.`;
+      return (
+        createNext(run.number, create) ??
+        (run.stale
+          ? 'Answers or the roster changed since this run: start a new run before creating teams.'
+          : `Show these teams to the user. To make them real, an owner previews with form_teams_create (run: ${run.number}) and confirms only after the user approves.`)
+      );
     case 'INFEASIBLE':
       return 'No grouping meets every must rule and pin: relax or remove one of those in core (or the size limits), then run again.';
     case 'CANCELED':
@@ -469,7 +580,14 @@ function nextForRun(run: {
   }
 }
 
-function runViewPayload(view: RunView) {
+const CORE_STATUSES: ReadonlySet<string> = new Set(['complete', 'timeout', 'n/a']);
+
+function runViewPayload(view: RunView, create?: CreateContext) {
+  // Closed vocabulary (complete | timeout | n/a); anything else is dropped.
+  const coreStatus =
+    typeof view.solver?.core_status === 'string' && CORE_STATUSES.has(view.solver.core_status)
+      ? view.solver.core_status
+      : undefined;
   return {
     id: view.id,
     number: view.number,
@@ -483,6 +601,7 @@ function runViewPayload(view: RunView) {
           objective: view.solver.objective ?? null,
           bound: view.solver.bound ?? null,
           wall_s: view.solver.wall_s ?? null,
+          ...(coreStatus ? { core_status: coreStatus } : {}),
         }
       : null,
     metrics: metricsPayload(view.metrics),
@@ -490,7 +609,11 @@ function runViewPayload(view: RunView) {
     stale_reasons: view.stale_reasons ?? [],
     issues: (view.issues ?? []).map(issuePayload),
     core: (view.core ?? []).map(entry => ({ src: entry.src, label: entry.label })),
-    ...(view.summary ? { summary: view.summary } : {}),
+    // Beside the INFEASIBLE sentence: whether its core is the whole story
+    // ('complete') or the solver ran out of time narrowing it ('timeout').
+    ...(view.summary
+      ? { summary: view.summary, ...(coreStatus ? { core_status: coreStatus } : {}) }
+      : {}),
     teams: (view.teams ?? []).map(team => ({
       n: team.n,
       name: team.name,
@@ -513,7 +636,7 @@ function runViewPayload(view: RunView) {
           : {}),
       })),
     })),
-    next: nextForRun(view),
+    next: nextForRun(view, create),
   };
 }
 
@@ -711,7 +834,7 @@ export const formTeamsGetTool: ToolDefinition<FormTeamsGetArgs> = {
 
       return ok({
         team_set: setRef(set),
-        run: runViewPayload(view),
+        run: runViewPayload(view, createContext(set, run.id)),
         created_from_this_run: set.created_run_id === run.id,
         create_status: createStatus(set),
         create_state: createStatePayload(set.create_state),
@@ -855,9 +978,12 @@ export const formTeamsRunTool: ToolDefinition<FormTeamsRunArgs> = {
     'returns a run number, poll with form_teams_get; don’t start another run.',
   scope: 'write',
   roles: FORMS_STAFF,
-  // Each start queues a solver job of up to two minutes of CPU: 10 burst, one
-  // every five seconds sustained, which still fits an edit → run → edit loop.
-  rateLimit: { capacity: 10, refillPerSecond: 0.2 },
+  // One bucket for every call — the registry cannot tell a check or a
+  // start: false save from a start — so it is sized for an agent iterating on
+  // a setup (check, patch, check again) with a solve among them: 30 burst, one
+  // every two seconds sustained. The solve queue's own concurrency limit (5)
+  // is what bounds the CPU.
+  rateLimit: { capacity: 30, refillPerSecond: 0.5 },
   inputSchema: {
     classroom: classroomArg,
     form_id: formIdArg,
@@ -1079,7 +1205,7 @@ export const formTeamsRunTool: ToolDefinition<FormTeamsRunArgs> = {
       team_set: setRef(saved),
       started: true,
       ...(notes.length ? { notes } : {}),
-      run: runViewPayload(view),
+      run: runViewPayload(view, createContext(saved, latest.id)),
     });
   },
 };
@@ -1116,10 +1242,11 @@ export const formTeamsCreateTool: ToolDefinition<FormTeamsCreateArgs> = {
     'made are skipped. Nothing is deleted, and there is no undo tool.',
   scope: 'write',
   roles: OWNER_ONLY,
-  // Every confirm creates a batch of real GitHub teams. Previews spend the same
-  // bucket (and each probes GitHub once per team), so the burst allows a few
-  // preview → confirm rounds; about one a minute sustained.
-  rateLimit: { capacity: 6, refillPerSecond: 0.02 },
+  // Previews and confirms share one bucket (the registry cannot tell them
+  // apart). A preview probes GitHub once per team, and a confirm can only
+  // succeed once per set (the claim is atomic), so the burst allows several
+  // preview → fix → preview rounds; one every ten seconds sustained.
+  rateLimit: { capacity: 12, refillPerSecond: 0.1 },
   inputSchema: {
     classroom: classroomArg,
     form_id: formIdArg,

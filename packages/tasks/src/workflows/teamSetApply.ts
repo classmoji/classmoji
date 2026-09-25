@@ -3,10 +3,18 @@
  *
  * `teamSet.claimCreate` (owner only, after the preview was approved) atomically
  * sets `created_run_id` and a RUNNING `create_state`, then triggers this task
- * with a bare `{ teamSetId }`. Everything else — which run, which teams, which
- * logins — is read back by `teamSet.applyCreate`, which ensures the set's Tag,
- * creates each team (GitHub team included) and adds its members, continuing
- * past a team that fails and recording every failure. It never deletes.
+ * with `{ teamSetId, attemptId }` (idempotency key per attempt id). Everything
+ * else — which run, which teams, which logins — is read back by
+ * `teamSet.applyCreate`, which ensures the set's Tag, creates each team (GitHub
+ * team included) and adds its members, continuing past a team that fails and
+ * recording every failure. It never deletes.
+ *
+ * ── Attempt identity ───────────────────────────────────────────────────────
+ * `attemptId` is minted by the claim and stored in `create_state`. Every call
+ * this task makes into the service carries it, and the service does nothing
+ * when the row holds a different attempt: a task whose claim was released
+ * (the trigger call failed on our side after Trigger had queued it), or that
+ * starts after its create was expired and retried, cannot touch the retry.
  *
  * ── Progress ───────────────────────────────────────────────────────────────
  * `applyCreate` persists `create_state` itself after every team (that row is
@@ -21,10 +29,13 @@
  * reads or records the final state), which would leave `create_state` RUNNING
  * and every viewer polling a create that stopped. The catch below is that
  * backstop: `teamSet.stopCreate` with `internal_error`, a conditional write
- * (only while the row still holds that RUNNING attempt) that marks it FAILED
+ * (only while the row still holds THIS attempt, RUNNING) that marks it FAILED
  * with a whole-create `{ team: '*' }` failure, keeping every team already
- * recorded. Then the sanitized error is rethrown so the Trigger run shows
- * failed too. This task never writes `create_state` itself.
+ * recorded. That includes applyCreate's own final write when it failed every
+ * retry (`state_write_failed`): the teams made since the last good progress
+ * write are then unrecorded, and a retry of the same run finds them on the tag
+ * and adopts them. Then the sanitized error is rethrown so the Trigger run
+ * shows failed too. This task never writes `create_state` itself.
  *
  * `maxAttempts: 1`: team creation is not replayable blindly (GitHub teams and
  * memberships would be retried against half-finished state). `applyCreate` is
@@ -46,6 +57,8 @@ import { ClassmojiService, type CreateState } from '@classmoji/services';
 
 export interface TeamSetApplyPayload {
   teamSetId: string;
+  /** The claim's `create_state.attempt_id`; the service ignores any other attempt's task. */
+  attemptId: string;
 }
 
 /** Minimum spacing between progress log lines. */
@@ -90,7 +103,7 @@ export const teamSetApplyTask = task({
   id: 'team-set-apply',
   maxDuration: 1800,
   retry: { maxAttempts: 1 },
-  run: async ({ teamSetId }: TeamSetApplyPayload) => {
+  run: async ({ teamSetId, attemptId }: TeamSetApplyPayload) => {
     let lastLogAt = 0;
     const onProgress = (state: CreateState) => {
       const now = Date.now();
@@ -100,8 +113,18 @@ export const teamSetApplyTask = task({
     };
 
     try {
-      const state = await ClassmojiService.teamSet.applyCreate({ teamSetId, onProgress });
+      const state = await ClassmojiService.teamSet.applyCreate({
+        teamSetId,
+        attemptId,
+        onProgress,
+      });
       const counts = progressCounts(state);
+      if (state.attempt_id !== attemptId) {
+        // Released or superseded before this task ran: the row belongs to
+        // another attempt, and applyCreate left it alone.
+        logger.warn('team-set-apply: not the current attempt; nothing done', { teamSetId });
+        return { ...counts, superseded: true };
+      }
       if (state.status === 'DONE') {
         logger.info('team-set-apply: finished', { teamSetId, ...counts });
       } else {
@@ -118,7 +141,7 @@ export const teamSetApplyTask = task({
         error && typeof error === 'object' && 'code' in error ? String(error.code) : 'unexpected';
       logger.error('team-set-apply: stopped', { teamSetId, code });
       await ClassmojiService.teamSet
-        .stopCreate({ teamSetId, reason: 'internal_error' })
+        .stopCreate({ teamSetId, attemptId, reason: 'internal_error' })
         .catch(() => {
           logger.error('team-set-apply: could not mark the create failed', { teamSetId });
         });
@@ -134,7 +157,11 @@ export const teamSetApplyTask = task({
       teamSetId: payload.teamSetId,
     });
     await ClassmojiService.teamSet
-      .stopCreate({ teamSetId: payload.teamSetId, reason: 'canceled' })
+      .stopCreate({
+        teamSetId: payload.teamSetId,
+        attemptId: payload.attemptId,
+        reason: 'canceled',
+      })
       .catch(() => {
         logger.error('team-set-apply: could not mark the canceled create failed', {
           teamSetId: payload.teamSetId,
