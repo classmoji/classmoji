@@ -242,7 +242,12 @@ describe('create-classroom initial time zone', () => {
     mocks.createWithUniqueClassroomSlug.mockImplementation(
       async (_opts: unknown, build: (slug: string) => Promise<unknown>) => {
         await build('web-dev');
-        throw new (await import('@classmoji/services')).ClassroomSlugUnavailableError('taken');
+        // The mock's class takes a message; the real one's arity is irrelevant here.
+        const { ClassroomSlugUnavailableError } =
+          (await import('@classmoji/services')) as unknown as {
+            ClassroomSlugUnavailableError: new (message: string) => Error;
+          };
+        throw new ClassroomSlugUnavailableError('taken');
       }
     );
     await call({ name: 'Web Dev', timezone });

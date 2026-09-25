@@ -774,9 +774,13 @@ export function normalizeTimeZoneSetting(value: unknown): string | null {
   if (value === null || (typeof value === 'string' && value.trim() === '')) return null;
   const canonical = canonicalTimeZone(value);
   if (!canonical) {
+    // The rejected value is echoed back to the caller, so it is capped: an
+    // arbitrary-length body must not come back verbatim in the error.
+    const shown = String(value);
+    const echo = shown.length > 64 ? `${shown.slice(0, 64)}…` : shown;
     throw new ClassroomSettingsValidationError(
       'TIMEZONE_INVALID',
-      `'${String(value)}' is not a time zone we recognize. Pick one from the list, or clear it.`
+      `'${echo}' is not a time zone we recognize. Pick one from the list, or clear it.`
     );
   }
   return canonical;

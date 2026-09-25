@@ -30,7 +30,7 @@
  */
 
 import { ClassmojiService } from '@classmoji/services';
-import { localDayRange, localMonthGridRange } from '@classmoji/utils';
+import { isRealCalendarDate, localDayRange, localMonthGridRange } from '@classmoji/utils';
 import { ToolError } from '../mcp/errors.ts';
 import { renderZone } from '../mcp/localTimes.ts';
 import type { ResourceDefinition, ToolContext } from '../mcp/registry.ts';
@@ -535,6 +535,11 @@ export const calendarResource: ResourceDefinition = {
  * UTC day as before. Null when either is unparseable or start is not before end.
  */
 function exactRange(startRaw: string, endRaw: string): { start: Date; end: Date } | null {
+  // Full date-times only, on real calendar dates: Date silently rolls a bare or
+  // impossible date (`2026-02-30`) into the next month, which must be refused.
+  const realDateTime = (raw: string) =>
+    /^\d{4}-\d{2}-\d{2}T/.test(raw) && isRealCalendarDate(raw.slice(0, 10));
+  if (!realDateTime(startRaw) || !realDateTime(endRaw)) return null;
   const start = new Date(startRaw);
   const end = new Date(endRaw);
   if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || start >= end) return null;

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   addLocalTimes,
   canonicalTimeZone,
+  isRealCalendarDate,
   listTimeZones,
   resolveEffectiveTimeZone,
   formatLocalDateTime,
@@ -272,5 +273,41 @@ describe('addLocalTimes include filter', () => {
       closes_at_local: 'Thu Sep 24, 2026, 11:59 PM EDT',
       created_at: '2026-09-01T12:00:00Z',
     });
+  });
+});
+
+describe('impossible dates', () => {
+  it('refuses a date that does not exist instead of rolling it over', () => {
+    expect(localDayRange('2026-02-30', '2026-03-05', NY)).toBeNull();
+    expect(localDayRange('2026-02-01', '2026-13-01', NY)).toBeNull();
+    expect(isRealCalendarDate('2026-02-28')).toBe(true);
+    expect(isRealCalendarDate('2028-02-29')).toBe(true);
+    expect(isRealCalendarDate('2026-02-29')).toBe(false);
+  });
+});
+
+describe('days in zones whose DST changes AT midnight', () => {
+  it('starts Santiago spring-forward day at the first instant that is actually that day', () => {
+    // 2026-09-06: 23:59 -04 on the 5th is followed by 01:00 -03 on the 6th.
+    const range = localDayRange('2026-09-06', '2026-09-06', 'America/Santiago')!;
+    expect(range.start.toISOString()).toBe('2026-09-06T04:00:00.000Z');
+    expect(formatLocalDateTime(range.start, 'America/Santiago')).toBe(
+      'Sun Sep 6, 2026, 1:00 AM GMT-3'
+    );
+    // ...and the day before ends one millisecond earlier, not an hour late.
+    const before = localDayRange('2026-09-05', '2026-09-05', 'America/Santiago')!;
+    expect(before.end.toISOString()).toBe('2026-09-06T03:59:59.999Z');
+  });
+
+  it('does the same for Havana (2026-03-08)', () => {
+    const range = localDayRange('2026-03-08', '2026-03-08', 'America/Havana')!;
+    expect(range.start.toISOString()).toBe('2026-03-08T05:00:00.000Z');
+  });
+
+  it('starts a fall-back day at its one real midnight', () => {
+    // Santiago 2026-04-05: at 00:00 -03 the clock returns to 23:00 -04 on the
+    // 4th, so the 5th begins at 00:00 -04 = 04:00Z.
+    const range = localDayRange('2026-04-05', '2026-04-05', 'America/Santiago')!;
+    expect(range.start.toISOString()).toBe('2026-04-05T04:00:00.000Z');
   });
 });

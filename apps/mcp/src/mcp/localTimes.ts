@@ -27,9 +27,9 @@ import type { ToolResult } from './registry.ts';
  * or graded. Only these get a `_local` twin.
  *
  * Record-keeping stamps (`created_at`, `updated_at`, `last_activity`,
- * `verified_at`, `oldest_commit_at`, token expiries, …) are left alone: nobody
- * asks Ask Moji when a row was last updated, and on a 500-row submissions list
- * those twins were most of the growth (Tim, decision 3, 2026-09-25).
+ * `verified_at`, `oldest_commit_at`, token expiries, …) get no twin, to keep
+ * payloads small: nobody quotes when a row was last updated, and on a long
+ * submissions list those twins would be most of the added bytes.
  * An allowlist rather than a denylist, so a new bookkeeping column added
  * anywhere does not silently start growing every payload.
  */

@@ -257,8 +257,9 @@ export const listCalendarTool = mirrorResourceTool({
   title: 'List calendar (current month)',
   description:
     "Calendar events for the current month in the classroom's time zone — recurring events " +
-    'expanded, assignment deadlines merged in. Use list_calendar_range for another window. Every ' +
-    'timestamp has a `<field>_local` rendering in that zone; quote those, not raw UTC. Any member; ' +
+    'expanded, assignment deadlines merged in. Use list_calendar_range for another window. Event ' +
+    'times and deadlines have a `<field>_local` rendering in that zone; quote those, not raw UTC. ' +
+    'Any member; ' +
     'staff reads also include ' +
     'linked draft pages/decks and links to unpublished assignments, flagged as such. ' +
     '`featured_resource` is the one link the month view shows under an event, or null.',
@@ -271,8 +272,8 @@ export const listCalendarRangeTool = mirrorResourceTool({
   description:
     'Calendar events for an explicit date range. `start` and `end` are ISO dates ' +
     '(YYYY-MM-DD, e.g. 2026-07-01 / 2026-08-31), start before end, read as whole days in the ' +
-    "classroom's time zone. Recurring events expanded, deadlines merged. Every timestamp has a " +
-    '`<field>_local` rendering in that zone. Any member; staff reads also include linked draft ' +
+    "classroom's time zone. Recurring events expanded, deadlines merged. Event times and " +
+    'deadlines have a `<field>_local` rendering in that zone. Any member; staff reads also include linked draft ' +
     'pages/decks and links ' +
     'to unpublished assignments, flagged as such. `featured_resource` is the one link the month ' +
     'view shows under an event, or null.',

@@ -7,7 +7,7 @@
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { timeZoneOptions } from '../timeZoneOptions';
+import { matchOfferedZone, timeZoneOptions } from '../timeZoneOptions';
 
 const mocks = vi.hoisted(() => ({
   assertClassroomAccess: vi.fn(),
@@ -107,5 +107,29 @@ describe('timeZoneOptions', () => {
     const values = timeZoneOptions(['UTC'], 'Antarctica/Troll').map(o => o.value);
     expect(values).toEqual(['UTC', 'Antarctica/Troll']);
     expect(timeZoneOptions(['UTC'], 'UTC')).toHaveLength(1);
+  });
+});
+
+describe('matchOfferedZone', () => {
+  it('offers the exact option when the browser zone is listed', () => {
+    expect(matchOfferedZone(['UTC', 'America/New_York'], 'America/New_York')).toBe(
+      'America/New_York'
+    );
+  });
+
+  it('matches a browser on the current name to an option listed under the old alias', () => {
+    // Browsers report Asia/Kolkata and Europe/Kyiv; this server lists the aliases.
+    expect(matchOfferedZone(['UTC', 'Asia/Calcutta', 'Europe/Kiev'], 'Asia/Kolkata')).toBe(
+      'Asia/Calcutta'
+    );
+    expect(matchOfferedZone(['UTC', 'Asia/Calcutta', 'Europe/Kiev'], 'Europe/Kyiv')).toBe(
+      'Europe/Kiev'
+    );
+  });
+
+  it('offers nothing for a missing, unknown or unlisted zone', () => {
+    expect(matchOfferedZone(['UTC'], null)).toBeNull();
+    expect(matchOfferedZone(['UTC'], 'Mars/Olympus')).toBeNull();
+    expect(matchOfferedZone(['UTC'], 'America/New_York')).toBeNull();
   });
 });

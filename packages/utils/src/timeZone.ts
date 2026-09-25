@@ -9,14 +9,16 @@
  * out itself. So the server does the conversion and hands the model a ready
  * local string alongside the ISO value.
  *
- * THE ZONE comes from `classroom_sites.timezone` (the IANA zone the public
- * schedule already renders in). Null, blank or unrecognised falls back to UTC
- * and says so, the same rule apps/pages' schedule applies: an honest UTC label
- * beats a bare time in an unknown zone.
+ * THE ZONE comes from `classroom_settings.timezone` (read through
+ * classroom.getTimeZone), resolved by `resolveEffectiveTimeZone`: the
+ * classroom's zone, else a caller-supplied zone (Ask Moji's browser zone), else
+ * UTC. Null, blank or unrecognised falls back to UTC and says so, the same rule
+ * apps/pages' schedule applies: an honest UTC label beats a bare time in an
+ * unknown zone.
  *
  * Intl only, no date library: the column is validated against Intl on write
- * (site.service canonicalizeTimeZone), so "Intl can format with this zone" is
- * exactly the invariant that already holds.
+ * (`canonicalTimeZone`, via classroom.updateSettings), so "Intl can format
+ * with this zone" is exactly the invariant that already holds.
  */
 
 /** The zone used when a classroom has none set. */
@@ -123,9 +125,26 @@ function toInstant(value: Date | string | number | null | undefined): Date | nul
 
 type Parts = Partial<Record<Intl.DateTimeFormatPartTypes, string>>;
 
+/**
+ * Formatters are costly to build and a payload can hold hundreds of dates in
+ * one zone, so each (zone, options) formatter is built once and reused. The key
+ * space is small: a handful of option shapes times the zones actually in use.
+ */
+const formatterCache = new Map<string, Intl.DateTimeFormat>();
+
+function formatterFor(options: Intl.DateTimeFormatOptions): Intl.DateTimeFormat {
+  const key = JSON.stringify(options);
+  let formatter = formatterCache.get(key);
+  if (!formatter) {
+    formatter = new Intl.DateTimeFormat('en-US', options);
+    formatterCache.set(key, formatter);
+  }
+  return formatter;
+}
+
 function partsOf(instant: Date, options: Intl.DateTimeFormatOptions): Parts {
   const parts: Parts = {};
-  for (const part of new Intl.DateTimeFormat('en-US', options).formatToParts(instant)) {
+  for (const part of formatterFor(options).formatToParts(instant)) {
     parts[part.type] = part.value;
   }
   return parts;
@@ -189,6 +208,8 @@ export function formatNowContext(now: Date, zone: string | null | undefined): st
 
 // ─── Calendar-day arithmetic in a zone ──────────────────────────────────────
 
+const YMD = /^(\d{4})-(\d{2})-(\d{2})$/;
+
 /** The zone's UTC offset at `instantMs`, in ms (positive east of UTC). */
 function offsetMs(instantMs: number, timeZone: string): number {
   const p = partsOf(new Date(instantMs), {
@@ -213,18 +234,49 @@ function offsetMs(instantMs: number, timeZone: string): number {
 }
 
 /**
- * The instant local midnight begins on `year-month-day` in `timeZone`.
- * `month` is 1-based. Overflowing days (Oct 32) roll over the way Date.UTC does.
+ * The first instant that falls on local date `year-month-day` in `timeZone`
+ * (normally local 00:00). `month` is 1-based; overflowing days (Oct 32) roll
+ * over the way Date.UTC does.
+ *
+ * NOT simply "wall-clock midnight minus the offset": in zones that change DST
+ * AT midnight (America/Santiago, America/Havana, …) local 00:00 does not exist
+ * on the spring-forward day — the clock goes 23:59 → 01:00 — and the naive
+ * answer lands an hour early, on the previous day. So both candidate offsets
+ * (before and after any change) are tried, and the earliest one that actually
+ * falls on the target date wins.
  */
 function localMidnight(year: number, month: number, day: number, timeZone: string): Date {
   const wall = Date.UTC(year, month - 1, day);
-  const first = offsetMs(wall, timeZone);
-  let instant = wall - first;
-  // One correction step: the offset AT the resulting instant can differ from
-  // the offset at the naive guess when a DST change falls between them.
-  const second = offsetMs(instant, timeZone);
-  if (second !== first) instant = wall - second;
-  return new Date(instant);
+  const target = new Date(wall);
+  const onTarget = (instant: number) => {
+    const p = partsOf(new Date(instant), {
+      timeZone,
+      year: 'numeric',
+      month: 'numeric',
+      day: 'numeric',
+    });
+    return (
+      Number(p.year) === target.getUTCFullYear() &&
+      Number(p.month) === target.getUTCMonth() + 1 &&
+      Number(p.day) === target.getUTCDate()
+    );
+  };
+
+  const first = wall - offsetMs(wall, timeZone);
+  const second = wall - offsetMs(first, timeZone);
+  const valid = [first, second].filter(onTarget);
+  return new Date(valid.length > 0 ? Math.min(...valid) : Math.max(first, second));
+}
+
+/** True when `YYYY-MM-DD` names a date that exists (no Feb 30, no month 13). */
+export function isRealCalendarDate(ymd: string): boolean {
+  const m = YMD.exec(ymd);
+  if (!m) return false;
+  const [year, month, day] = [Number(m[1]), Number(m[2]), Number(m[3])];
+  const date = new Date(Date.UTC(year, month - 1, day));
+  return (
+    date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day
+  );
 }
 
 /** The calendar date (in `timeZone`) that `instant` falls on. */
@@ -247,24 +299,23 @@ export function localDateParts(
   return { year, month, day, weekday };
 }
 
-const YMD = /^(\d{4})-(\d{2})-(\d{2})$/;
-
 /**
  * The instants bounding whole local days `startYmd` … `endYmd` (inclusive) in
  * the class zone: local 00:00 on the first day to local 23:59:59.999 on the
  * last. This is what "the week of Sep 21" means to a student — a deadline at
  * Sun 11:59 PM EDT is `Mon 03:59Z`, and a UTC-day window drops it.
  *
- * Returns null when either date is not `YYYY-MM-DD`, or start is after end.
+ * Returns null when either date is not a real `YYYY-MM-DD` date (no
+ * `2026-02-30`: Date would silently roll that into March), or start is after end.
  */
 export function localDayRange(
   startYmd: string,
   endYmd: string,
   zone: string | null | undefined
 ): { start: Date; end: Date } | null {
-  const s = YMD.exec(startYmd);
-  const e = YMD.exec(endYmd);
-  if (!s || !e) return null;
+  if (!isRealCalendarDate(startYmd) || !isRealCalendarDate(endYmd)) return null;
+  const s = YMD.exec(startYmd)!;
+  const e = YMD.exec(endYmd)!;
   const { timeZone } = resolveTimeZone(zone);
   const start = localMidnight(Number(s[1]), Number(s[2]), Number(s[3]), timeZone);
   const end = new Date(

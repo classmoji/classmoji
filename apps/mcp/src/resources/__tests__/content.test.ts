@@ -516,6 +516,21 @@ describe('calendar windows are whole days in the classroom zone', () => {
     });
   });
 
+  it('refuses an impossible date instead of rolling it into the next month', async () => {
+    for (const [start, end] of [
+      ['2026-02-30', '2026-03-05'],
+      ['2026-02-30T00:00:00Z', '2026-03-05T00:00:00Z'],
+    ]) {
+      await expect(
+        calendarRangeResource.handler(
+          { org: 'o', slug: 's', start, end },
+          nyStudentCtx(),
+          new URL('classmoji://x')
+        )
+      ).rejects.toMatchObject({ kind: 'invalid_params' });
+    }
+  });
+
   it('still refuses a reversed range', async () => {
     await expect(
       calendarRangeResource.handler(

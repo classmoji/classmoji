@@ -134,6 +134,13 @@ describe('updateSettings — time zone', () => {
     expect(upsertMock).not.toHaveBeenCalled();
   });
 
+  it('caps the rejected value it echoes back', async () => {
+    const { updateSettings } = await import('../classroom.service.ts');
+    const error = await updateSettings(CLASSROOM_ID, { timezone: 'x'.repeat(5000) }).catch(e => e);
+    expect(error.message.length).toBeLessThan(200);
+    expect(error.message).toContain('…');
+  });
+
   it('clears the zone on null or a blank string', async () => {
     const { updateSettings } = await import('../classroom.service.ts');
     await updateSettings(CLASSROOM_ID, { timezone: null });

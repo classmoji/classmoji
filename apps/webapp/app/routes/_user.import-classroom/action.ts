@@ -44,8 +44,10 @@ export const action = checkAuth(async ({ request, user }) => {
     return { error: error instanceof Error ? error.message : 'Import failed. Please try again.' };
   }
 
-  // The importer's browser zone seeds each new classroom's time zone. Invalid
-  // or absent: the classroom starts with none (never a failed import).
+  // The importer's browser zone seeds a classroom's time zone ONLY when it has
+  // none. A re-import returns the EXISTING classroom, and its owner's chosen
+  // zone must survive it. Invalid or absent: nothing is seeded (never a failed
+  // import).
   const initialTimeZone = canonicalTimeZone(body.timezone);
 
   // Durable audit record per imported classroom (the importer is the OWNER),
@@ -53,9 +55,12 @@ export const action = checkAuth(async ({ request, user }) => {
   for (const r of results) {
     if (initialTimeZone) {
       try {
-        await ClassmojiService.classroom.updateSettings(r.classroomId, {
-          timezone: initialTimeZone,
-        });
+        const current = await ClassmojiService.classroom.getTimeZone(r.classroomId);
+        if (!current) {
+          await ClassmojiService.classroom.updateSettings(r.classroomId, {
+            timezone: initialTimeZone,
+          });
+        }
       } catch (error: unknown) {
         console.error('Initial time zone for imported classroom failed:', error);
       }

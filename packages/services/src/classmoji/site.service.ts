@@ -49,7 +49,6 @@ export const SITE_ERROR = {
   DOMAIN_TAKEN: 'DOMAIN_TAKEN',
   /** Custom domains are a PRO feature and this classroom is not on PRO. */
   PRO_REQUIRED: 'PRO_REQUIRED',
-  /** Not an IANA zone name this runtime's tz data knows. */
 } as const;
 
 export type SiteErrorCode = (typeof SITE_ERROR)[keyof typeof SITE_ERROR];

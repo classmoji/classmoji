@@ -1,8 +1,8 @@
 -- The course's time zone becomes a CLASSROOM setting.
 --
 -- Until now the only stored zone was classroom_sites.timezone, which exists only
--- for classrooms that claimed a public-site subdomain (6 of 393 active
--- classrooms had one set). Ask Moji and the MCP server need a zone for EVERY
+-- for classrooms that claimed a public-site subdomain, and few of those set one.
+-- Ask Moji and the MCP server need a zone for EVERY
 -- classroom, so the value moves to classroom_settings, where the general
 -- Settings page, classroom creation and the MCP classroom_settings_update tool
 -- can all reach it. The public schedule reads the new column too, so there is
@@ -45,5 +45,6 @@ SELECT s."classroom_id", s."timezone", CURRENT_TIMESTAMP
 FROM "classroom_sites" s
 WHERE s."timezone" IS NOT NULL
 ON CONFLICT ("classroom_id") DO UPDATE
-  SET "timezone" = EXCLUDED."timezone"
+  SET "timezone" = EXCLUDED."timezone",
+      "updated_at" = CURRENT_TIMESTAMP
   WHERE "classroom_settings"."timezone" IS NULL;

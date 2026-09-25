@@ -26,3 +26,33 @@ export function timeZoneOptions(
   if (stored && !list.includes(stored)) list.push(stored);
   return list.map(zone => ({ value: zone, label: zone.replace(/_/g, ' ') }));
 }
+
+/** The zone Intl resolves `zone` to, or null when it cannot build a formatter. */
+function resolved(zone: string): string | null {
+  try {
+    return new Intl.DateTimeFormat('en-US', { timeZone: zone }).resolvedOptions().timeZone;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The OFFERED option (server spelling) that names the same zone as the
+ * browser's, or null when none does.
+ *
+ * Browsers report the current IANA names (`Asia/Kolkata`, `Europe/Kyiv`) while
+ * the server's ICU may list the older aliases (`Asia/Calcutta`, `Europe/Kiev`),
+ * so a plain `includes` would never offer those users the shortcut. Both sides
+ * are put through THIS runtime's Intl, which resolves an alias and its current
+ * name to the same zone, and the option's own value is what gets selected.
+ */
+export function matchOfferedZone(
+  zones: readonly string[],
+  browserZone: string | null | undefined
+): string | null {
+  if (!browserZone) return null;
+  if (zones.includes(browserZone)) return browserZone;
+  const target = resolved(browserZone);
+  if (!target) return null;
+  return zones.find(zone => resolved(zone) === target) ?? null;
+}

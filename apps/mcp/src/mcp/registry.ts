@@ -480,8 +480,21 @@ export function toolAnnotations(def: ToolDefinition<never>): {
  * all, so tools/list + resources/list only ever show what the token can
  * actually call (S7).
  */
+/**
+ * Server-level guidance every MCP client sees at initialize — including the
+ * Claude.ai connector, which reads deadlines through many tools (quizzes,
+ * forms, grades) whose descriptions do not each repeat the date rule.
+ */
+export const SERVER_INSTRUCTIONS =
+  "Dates: quote the `<field>_local` values (already in the classroom's time zone, with " +
+  "weekday) and compare against `now_local` for 'today'/'tonight'/'this week'. Never state a " +
+  'raw UTC clock time to a user as if it were local.';
+
 export function buildMcpServer(viewer: Viewer): McpServer {
-  const server = new McpServer({ name: 'classmoji-mcp', version: '0.1.0' });
+  const server = new McpServer(
+    { name: 'classmoji-mcp', version: '0.1.0' },
+    { instructions: SERVER_INSTRUCTIONS }
+  );
   for (const def of toolDefinitions.values()) {
     if (!viewer.scopes.has(def.scope)) continue;
     server.registerTool(

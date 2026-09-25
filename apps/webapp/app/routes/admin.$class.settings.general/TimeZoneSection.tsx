@@ -3,7 +3,7 @@ import { useEffect, useState } from 'react';
 
 import { useGlobalFetcher } from '~/hooks';
 import { SettingSection } from '~/components';
-import { timeZoneOptions } from './timeZoneOptions';
+import { matchOfferedZone, timeZoneOptions } from './timeZoneOptions';
 
 interface TimeZoneSectionProps {
   /** The classroom's stored zone, or null when none is set. */
@@ -41,7 +41,10 @@ const TimeZoneSection = ({ current, zones }: TimeZoneSectionProps) => {
     );
   };
 
-  const browserIsOffered = browserZone && zones.includes(browserZone) && browserZone !== zone;
+  // The offered option for the browser's zone, in the SERVER's spelling (a
+  // browser on Asia/Kolkata matches an Asia/Calcutta option).
+  const browserOption = matchOfferedZone(zones, browserZone);
+  const browserIsOffered = browserOption !== null && browserOption !== zone;
 
   return (
     <SettingSection
@@ -71,9 +74,9 @@ const TimeZoneSection = ({ current, zones }: TimeZoneSectionProps) => {
             <button
               type="button"
               className="block mt-2 text-blue-600 hover:underline dark:text-blue-400"
-              onClick={() => setZone(browserZone)}
+              onClick={() => setZone(browserOption)}
             >
-              Use my time zone ({browserZone!.replace(/_/g, ' ')})
+              Use my time zone ({browserOption!.replace(/_/g, ' ')})
             </button>
           )}
         </p>

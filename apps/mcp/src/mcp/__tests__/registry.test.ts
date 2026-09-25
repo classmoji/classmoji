@@ -625,6 +625,17 @@ describe('toolAnnotations mapping', () => {
   });
 });
 
+describe('server instructions', () => {
+  it('tell every client to quote _local fields and never raw UTC clock times', async () => {
+    const client = await connectClient(makeViewer(['read']));
+    const instructions = client.getInstructions() ?? '';
+    expect(instructions).toMatch(/_local/);
+    expect(instructions).toMatch(/now_local/);
+    expect(instructions).toMatch(/Never state a raw UTC clock time/);
+    expect(instructions.length).toBeLessThan(400);
+  });
+});
+
 describe('annotations reach the wire (tools/list)', () => {
   it('advertises readOnlyHint on reads and destructiveHint on writes', async () => {
     const client = await connectClient(makeViewer(['read', 'write']));
