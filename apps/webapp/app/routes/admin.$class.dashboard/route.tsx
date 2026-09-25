@@ -172,7 +172,7 @@ const StatItem = ({
   duration,
 }: StatItemProps) => (
   <div
-    className="flex-1 min-w-0 flex items-start justify-between gap-3 px-4 sm:px-5 py-4"
+    className="min-w-0 flex items-start justify-between gap-3 rounded-2xl bg-panel ring-1 ring-line px-4 sm:px-5 py-4"
     data-stat={statKey}
   >
     <div className="min-w-0">
@@ -323,7 +323,7 @@ const AdminDashboard = ({ loaderData }: Route.ComponentProps) => {
               <>
                 <div
                   data-tour="dashboard-stats"
-                  className="rounded-2xl bg-panel ring-1 ring-line overflow-hidden flex flex-col sm:flex-row divide-y sm:divide-y-0 sm:divide-x divide-line"
+                  className="grid grid-cols-2 lg:grid-cols-4 gap-4"
                 >
                   <StatItem
                     statKey="students"

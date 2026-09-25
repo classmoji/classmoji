@@ -113,9 +113,14 @@ export default defineConfig({
     mdx(),
   ],
   server: {
+    // Round and easy to remember, and clear of every other app: the webapp is
+    // on 3000, hook on 4001, quiz agent 6000, slides 6500, pages 7100, admin
+    // 7500, MCP 8100, each shifted by `DEVPORT_ID * 10` in a worktree.
+    //
     // Not 4000: that is the local webhook fanout the Smee tunnels post to, and
-    // a site dev server sitting on it swallows every GitHub push event.
-    port: 4321
+    // a site dev server sitting on it swallows every Github push event.
+    // Not under 1024 either, since those need root to bind.
+    port: 2000
   },
   vite: {
     plugins: [tailwindcss()],

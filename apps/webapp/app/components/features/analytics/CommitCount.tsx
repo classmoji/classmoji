@@ -21,12 +21,17 @@ interface CommitCountProps {
  * The number of commits in a student repo, beside its link. Reads the
  * analytics snapshot, so it is as fresh as the last refresh (the tooltip says
  * when) and renders nothing until a snapshot exists.
+ *
+ * A push refreshes the snapshot at most every 5 minutes, so the tooltip names
+ * that cadence: a student who pushes and reloads immediately would otherwise
+ * read an unchanged count as a bug.
  */
 const CommitCount = ({ snapshot, href, size = 'sm', className = '' }: CommitCountProps) => {
   const n = snapshot?.total_commits;
   if (n === null || n === undefined) return null;
   const asOf = snapshot?.fetched_at ? dayjs(snapshot.fetched_at).format('MMM D, h:mm A') : null;
   const label = `${n} commit${n === 1 ? '' : 's'}${asOf ? ` · as of ${asOf}` : ''}`;
+  const cadence = 'Updates within 5 minutes of a push';
   const large = size === 'lg';
   const body = (
     <>
@@ -41,7 +46,14 @@ const CommitCount = ({ snapshot, href, size = 'sm', className = '' }: CommitCoun
     large ? 'text-base text-ink-1!' : 'text-xs text-ink-3!'
   } ${className}`;
   return (
-    <Tooltip title={href ? `${label} · open the latest commit` : label}>
+    <Tooltip
+      title={
+        <>
+          <div>{href ? `${label} · open the latest commit` : label}</div>
+          <div className="text-xs opacity-70">{cadence}</div>
+        </>
+      }
+    >
       {href ? (
         <a
           href={href}

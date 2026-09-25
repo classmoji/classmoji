@@ -1,0 +1,132 @@
+---
+import Layout from '../layouts/Layout.astro';
+import Header from '../components/Header.astro';
+import Footer from '../components/Footer.astro';
+import TeamMember from '../components/TeamMember.astro';
+import brigidPhoto from '../assets/team/brigid-odonnell.jpg';
+// import joycePhoto from '../assets/team/joyce-zou.jpg';
+import timPhoto from '../assets/team/tim-tregubov.jpg';
+import moizPhoto from '../assets/team/muhammad-moiz.png';
+import papePhoto from '../assets/team/pape-sow-traore.png';
+import raheePhoto from '../assets/team/rahee-sikder.png';
+import yayingPhoto from '../assets/team/yaying-yu.jpg';
+
+type Member = {
+  name: string;
+  /** Github handle. Drives the profile link only. */
+  github?: string;
+  /** What they do here. */
+  role?: string;
+  /** The years they were on the project. */
+  years?: string;
+  /** Their favourite emoji. Leave it off and nothing renders. */
+  emoji?: string;
+  /**
+   * The person's photo, committed under src/assets/team/. Kept in the repo
+   * rather than hot-linked: Github, Slack and LinkedIn all serve urls that move
+   * or expire, and a team page that quietly loses a face is worse than one that
+   * loads a little more.
+   */
+  photo?: ImageMetadata;
+};
+
+// The two lists to edit. Photos live in src/assets/team/ and are served from
+// this site; nothing is hot-linked. Both lists render in the order written
+// here; nothing sorts them.
+const active: Member[] = [
+  { name: 'Tim Tregubov', github: 'timofei7', role: 'Faculty, Developer', years: '2022-present', emoji: '😅', photo: timPhoto },
+  { name: 'Pape Sow Traoré', github: 'pape98', role: 'Staff, Developer', years: '2022-present', emoji: '😊', photo: papePhoto },
+  // { name: 'Joyce Zou', github: 'floodywaves', role: 'Developer', years: '2026-present', photo: joycePhoto },
+  { name: 'Muhammad Moiz', github: 'MuhammadMoiz20', role: 'Developer', years: '2026-present', emoji: '🔥', photo: moizPhoto },
+];
+
+// People who are no longer on the project. The section hides itself while this
+// is empty, so the page reads correctly before anyone is listed.
+const past: Member[] = [
+  { name: "Brigid O'Donnell", role: 'Product Manager', years: '2026', photo: brigidPhoto },
+  { name: 'Rahee Sikder', github: 'prahee', role: 'Designer, Developer', years: '2026', photo: raheePhoto },
+  { name: 'Yaying Yu', role: 'Designer', years: '2026', photo: yayingPhoto },
+];
+---
+
+<Layout
+  title="Team - Classmoji"
+  description="The faculty and students who build Classmoji at the DALI Lab."
+>
+  <Header />
+
+  <section class="px-6 pt-32 pb-20">
+    <div class="max-w-5xl mx-auto">
+      <h1 class="text-4xl lg:whitespace-nowrap font-bold text-gray-900 tracking-tight mb-5">
+        Classmoji is built by the faculty and students who use it.
+      </h1>
+      <p class="text-lg text-gray-600">
+        It has evolved with every group that has come through the DALI Lab at Dartmouth College.
+      </p>
+
+      <div class="border-t border-gray-200 mt-12 mb-10"></div>
+
+      <h2 class="text-xl font-semibold text-gray-900 mb-8">Active team</h2>
+
+      <ul class="flex flex-wrap gap-x-6 gap-y-9">
+        {
+          active.map(member => (
+            <li>
+              <TeamMember
+                name={member.name}
+                github={member.github}
+                role={member.role}
+                years={member.years}
+                emoji={member.emoji}
+                photo={member.photo}
+              />
+            </li>
+          ))
+        }
+      </ul>
+
+      {
+        past.length > 0 && (
+          <>
+            <div class="border-t border-gray-200 mt-14 mb-10" />
+
+            <h2 class="text-xl font-semibold text-gray-900 mb-8">Past members</h2>
+
+            <ul class="flex flex-wrap gap-x-6 gap-y-9">
+              {past.map(member => (
+                <li>
+                  <TeamMember
+                    name={member.name}
+                    github={member.github}
+                    role={member.role}
+                    years={member.years}
+                    emoji={member.emoji}
+                    photo={member.photo}
+                    muted
+                  />
+                </li>
+              ))}
+            </ul>
+          </>
+        )
+      }
+
+      <p class="text-sm text-gray-500 mt-14">
+        Made with support from <a
+          href="https://dali.dartmouth.edu"
+          target="_blank"
+          rel="noopener noreferrer"
+          class="text-gray-600 hover:text-gray-900 underline underline-offset-2">DALI</a
+        > and the <a
+          href="https://web.cs.dartmouth.edu"
+          target="_blank"
+          rel="noopener noreferrer"
+          class="text-gray-600 hover:text-gray-900 underline underline-offset-2"
+          >Computer Science Department at Dartmouth College</a
+        >.
+      </p>
+    </div>
+  </section>
+
+  <Footer />
+</Layout>

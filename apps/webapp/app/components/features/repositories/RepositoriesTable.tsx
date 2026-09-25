@@ -1,6 +1,6 @@
 import { forwardRef, useMemo, useState } from 'react';
 import { Dropdown, Table, Tag } from 'antd';
-import { useNavigate, useParams } from 'react-router';
+import { useLocation, useNavigate, useParams } from 'react-router';
 import { titleToIdentifier } from '@classmoji/utils';
 import type { MenuProps } from 'antd';
 import {
@@ -73,6 +73,13 @@ interface RepositoriesTableProps {
   /** Render without the floating card, for use inside another panel. */
   bare?: boolean;
   /**
+   * False for a viewer who may read the repositories but not change them (an
+   * ASSISTANT). The table keeps the owner's layout and the View link, and drops
+   * everything that writes: Edit, Publish/Sync and the overflow menu that holds
+   * Autograde, Update student repositories and Delete.
+   */
+  canEdit?: boolean;
+  /**
    * Context for editing an assignment in place. Without it, Edit on an
    * assignment row falls back to opening the editor on the assignment's page.
    */
@@ -121,6 +128,7 @@ const RepositoriesTable = ({
   repositories,
   actionBase = '',
   bare = false,
+  canEdit = true,
   editor,
 }: RepositoriesTableProps) => {
   // Controlled expansion so the folder icon can react to expanded state.
@@ -128,11 +136,14 @@ const RepositoriesTable = ({
   // cards so the two surfaces cannot drift.
   const { class: classSlug } = useParams();
   const navigate = useNavigate();
+  // Stay in the section the viewer is already in: an assistant following a link
+  // into /admin would only meet a loader that refuses them.
+  const rolePrefix = useLocation().pathname.split('/')[1] || 'admin';
   const [editingAssignment, setEditingAssignment] = useState<AssignmentRowData | null>(null);
   const editAssignment = (id: string) => {
     const row = editor?.assignments.find(a => a.id === id) ?? null;
     if (row) setEditingAssignment(row);
-    else navigate(`/admin/${classSlug}/assignments/${id}?edit=1`);
+    else navigate(`/${rolePrefix}/${classSlug}/assignments/${id}?edit=1`);
   };
   const {
     editRepository,
@@ -342,48 +353,57 @@ const RepositoriesTable = ({
               {/* The repository's own page: one roster row per student repo,
                   with a column group per assignment. */}
               <ActionLink
-                onClick={() => navigate(`/admin/${classSlug}/repos/${encodeURIComponent(r.title)}`)}
+                onClick={() =>
+                  navigate(`/${rolePrefix}/${classSlug}/repos/${encodeURIComponent(r.title)}`)
+                }
               >
                 View
               </ActionLink>
-              <ActionLink onClick={() => editRepository(r)}>Edit</ActionLink>
-              {pending?.id === r.id ? (
-                // The job outlives the request, so the row stays busy until the
-                // background batch reports back.
-                <span className="inline-flex items-center gap-1.5 text-sm text-ink-3">
-                  <IconLoader2 size={14} className="animate-spin" />
-                  {pending.label}
-                </span>
-              ) : r.is_published ? (
-                <ActionLink onClick={() => confirmSync(r.id)}>Sync</ActionLink>
-              ) : (
-                <ActionLink onClick={() => confirmPublish(r.id)}>Publish</ActionLink>
-              )}
-              <Dropdown
-                trigger={['click']}
-                placement="bottomRight"
-                menu={{
-                  items: repoMenuItems(r),
-                  onClick: ({ key, domEvent }) => {
-                    domEvent.stopPropagation();
-                    onRepoMenuClick(r, key);
-                  },
-                }}
-              >
-                <button
-                  type="button"
-                  aria-label="More actions"
-                  onClick={e => e.stopPropagation()}
-                  className="inline-flex h-7 w-7 items-center justify-center rounded-md text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-600 dark:hover:bg-neutral-800 dark:hover:text-gray-200"
+              {canEdit && <ActionLink onClick={() => editRepository(r)}>Edit</ActionLink>}
+              {canEdit &&
+                (pending?.id === r.id ? (
+                  // The job outlives the request, so the row stays busy until the
+                  // background batch reports back.
+                  <span className="inline-flex items-center gap-1.5 text-sm text-ink-3">
+                    <IconLoader2 size={14} className="animate-spin" />
+                    {pending.label}
+                  </span>
+                ) : r.is_published ? (
+                  <ActionLink onClick={() => confirmSync(r.id)}>Sync</ActionLink>
+                ) : (
+                  <ActionLink onClick={() => confirmPublish(r.id)}>Publish</ActionLink>
+                ))}
+              {canEdit && (
+                <Dropdown
+                  trigger={['click']}
+                  placement="bottomRight"
+                  menu={{
+                    items: repoMenuItems(r),
+                    onClick: ({ key, domEvent }) => {
+                      domEvent.stopPropagation();
+                      onRepoMenuClick(r, key);
+                    },
+                  }}
                 >
-                  <IconDotsVertical size={18} />
-                </button>
-              </Dropdown>
+                  <button
+                    type="button"
+                    aria-label="More actions"
+                    onClick={e => e.stopPropagation()}
+                    className="inline-flex h-7 w-7 items-center justify-center rounded-md text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-600 dark:hover:bg-neutral-800 dark:hover:text-gray-200"
+                  >
+                    <IconDotsVertical size={18} />
+                  </button>
+                </Dropdown>
+              )}
             </div>
           );
         }
 
-        return <ActionLink onClick={() => editAssignment(record.assignment!.id)}>Edit</ActionLink>;
+        // An assignment row: its only action is editing, so a read-only viewer
+        // gets nothing here. The row itself still opens the repository.
+        return canEdit ? (
+          <ActionLink onClick={() => editAssignment(record.assignment!.id)}>Edit</ActionLink>
+        ) : null;
       },
     },
   ];

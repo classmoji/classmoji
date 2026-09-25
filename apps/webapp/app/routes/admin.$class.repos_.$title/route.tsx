@@ -1,130 +1,18 @@
 import { Tag, Button, Tooltip } from 'antd';
 import { IconFolder, IconChevronLeft, IconRobot } from '@tabler/icons-react';
-import { useParams, useNavigate, Outlet } from 'react-router';
+import { useParams, useNavigate, useLocation, Outlet } from 'react-router';
 import { useState } from 'react';
 
 import { useGlobalFetcher } from '~/hooks';
-import { ClassmojiService } from '@classmoji/services';
 import Menu from './Menu';
 import { action } from './action';
+import { adminLoader } from './loader.server';
 import SubmissionsTable, { type SubmissionsRepo } from './SubmissionsTable';
 import AssignmentsCard from './AssignmentsCard';
 import AssignmentFormModal from '~/components/features/assignments/AssignmentFormModal';
 import type { AssignmentRowData } from '~/components/features/assignments/AssignmentsTable';
-import LinkedPages, { type LinkedPage } from './LinkedPages';
-import { requireClassroomAdmin } from '~/utils/routeAuth.server';
+import LinkedPages from './LinkedPages';
 import type { Route } from './+types/route';
-
-export const loader = async ({ params, request }: Route.LoaderArgs) => {
-  const { class: classSlug, title } = params;
-
-  const { classroom } = await requireClassroomAdmin(request, classSlug!, {
-    resourceType: 'REPOSITORIES',
-    action: 'view_module',
-  });
-
-  const repository = await ClassmojiService.repository.findBySlugAndTitle(classSlug!, title!, {
-    includePages: true,
-  });
-  const repos = await ClassmojiService.gitRepo.findByRepository(classSlug!, repository!.id);
-
-  // Attach each repo's latest autograding result + the configured test count.
-  const latestAutograding = await ClassmojiService.autogradingResult.findLatestByGitRepoIds(
-    repos.map(r => r.id)
-  );
-  const reposWithAutograding = repos.map(r => ({
-    ...r,
-    autograding_result: latestAutograding.get(r.id) ?? null,
-  }));
-  const autogradingTestCount = (
-    await ClassmojiService.autogradingTest.findByRepositoryId(repository!.id)
-  ).length;
-  // The grader pool spans every staff role that can be flagged as a grader —
-  // ASSISTANT and TEACHER — the same pair the RANDOM bulk assignment draws from.
-  // Listing only assistants here would offer a narrower set of options than the
-  // graders actually assigned to these repos.
-  const assistants = (
-    await ClassmojiService.classroomMembership.findUsersByRoles(
-      classroom.id,
-      ['ASSISTANT', 'TEACHER'],
-      { is_grader: true }
-    )
-  ).filter(({ is_grader }) => is_grader);
-
-  const emojiMappings = await ClassmojiService.emojiMapping.findByClassroomId(classroom.id);
-
-  // The assignments that submit through this repository (with their module),
-  // plus what the assignment modal needs to edit one, and the roster size so
-  // the header can say how many students have a copy.
-  const [allAssignments, modules, repositories, candidates, students] = await Promise.all([
-    ClassmojiService.assignment.listForClassroom(classroom.id),
-    ClassmojiService.module.findByClassroomSlug(classSlug!),
-    ClassmojiService.repository.findByClassroomId(classroom.id),
-    ClassmojiService.module.getCandidateContent(classroom.id),
-    ClassmojiService.classroomMembership.findUsersByRoles(classroom.id, ['STUDENT']),
-  ]);
-  const assignments = allAssignments.filter(a => a.repository_id === repository!.id);
-
-  // Linked pages = pages linked to the repository unit + to any of its assignments.
-  // PageLink rows carry `.page` (the Page) when includePages is set on the query.
-  const linkedPages: LinkedPage[] = [];
-  type PageLinkLike = {
-    id: string;
-    page?: { id: string; title: string; is_draft: boolean; updated_at: Date } | null;
-  };
-  for (const link of (repository?.pages ?? []) as PageLinkLike[]) {
-    if (link.page) {
-      linkedPages.push({
-        id: link.id,
-        pageId: link.page.id,
-        title: link.page.title,
-        linkedTo: 'linked to repository',
-        isDraft: link.page.is_draft,
-        updatedAt: link.page.updated_at,
-      });
-    }
-  }
-  for (const a of (repository?.assignments ?? []) as Array<{
-    title: string;
-    pages?: PageLinkLike[];
-  }>) {
-    for (const link of a.pages ?? []) {
-      if (link.page) {
-        linkedPages.push({
-          id: link.id,
-          pageId: link.page.id,
-          title: link.page.title,
-          linkedTo: `linked to ${a.title}`,
-          isDraft: link.page.is_draft,
-          updatedAt: link.page.updated_at,
-        });
-      }
-    }
-  }
-
-  return {
-    repository,
-    repos: reposWithAutograding,
-    assignments,
-    assistants,
-    emojiMappings,
-    classroom,
-    linkedPages,
-    autogradingTestCount,
-    studentCount: students.length,
-    modules: modules.map(m => ({ id: m.id, title: m.title })),
-    repositories: repositories.map(r => ({
-      id: r.id,
-      title: r.title,
-      slug: r.slug,
-      type: r.type,
-      is_published: r.is_published,
-    })),
-    candidates,
-    boundQuizIds: allAssignments.map(a => a.quiz_id).filter(Boolean) as string[],
-    boundFormIds: allAssignments.map(a => a.form_id).filter(Boolean) as string[],
-  };
-};
 
 const SingleRepository = ({ loaderData }: Route.ComponentProps) => {
   const {
@@ -146,7 +34,12 @@ const SingleRepository = ({ loaderData }: Route.ComponentProps) => {
   const { fetcher, notify } = useGlobalFetcher();
   const { class: classSlug } = useParams();
   const navigate = useNavigate();
+  const location = useLocation();
   const [editing, setEditing] = useState<AssignmentRowData | null>(null);
+  // The assistant section serves this same page read-only. /admin is OWNER-gated
+  // in the loader, so being under it is the permission.
+  const canEdit = location.pathname.split('/')[1] === 'admin';
+  const rolePrefix = canEdit ? 'admin' : location.pathname.split('/')[1];
 
   const gitOrgLogin = classroom.git_organization?.login;
   const rows = repos as unknown as SubmissionsRepo[];
@@ -197,7 +90,7 @@ const SingleRepository = ({ loaderData }: Route.ComponentProps) => {
         <div className="flex items-center gap-2 text-ink-2">
           <button
             type="button"
-            onClick={() => navigate(`/admin/${classSlug}/repos`)}
+            onClick={() => navigate(`/${rolePrefix}/${classSlug}/repos`)}
             className="hover:text-ink-1"
             aria-label="Back to repositories"
           >
@@ -206,7 +99,7 @@ const SingleRepository = ({ loaderData }: Route.ComponentProps) => {
           <IconFolder size={18} className="text-gray-400" />
           <button
             type="button"
-            onClick={() => navigate(`/admin/${classSlug}/repos`)}
+            onClick={() => navigate(`/${rolePrefix}/${classSlug}/repos`)}
             className="hover:text-ink-1"
           >
             Repositories
@@ -221,28 +114,30 @@ const SingleRepository = ({ loaderData }: Route.ComponentProps) => {
           </Tag>
         </div>
 
-        <div className="flex items-center gap-2">
-          <Tooltip
-            title={
-              autogradingTestCount
-                ? 'Push the autograding workflow to student repos'
-                : 'Add autograding tests to this repository first'
-            }
-          >
-            <Button
-              icon={<IconRobot size={16} />}
-              disabled={!autogradingTestCount}
-              loading={isAutograding}
-              onClick={handleAutograde}
+        {canEdit && (
+          <div className="flex items-center gap-2">
+            <Tooltip
+              title={
+                autogradingTestCount
+                  ? 'Push the autograding workflow to student repos'
+                  : 'Add autograding tests to this repository first'
+              }
             >
-              {isAutograding ? 'Provisioning…' : 'Autograde'}
-            </Button>
-          </Tooltip>
-          <Menu
-            repository={repository as Parameters<typeof Menu>[0]['repository']}
-            assistants={assistants as Parameters<typeof Menu>[0]['assistants']}
-          />
-        </div>
+              <Button
+                icon={<IconRobot size={16} />}
+                disabled={!autogradingTestCount}
+                loading={isAutograding}
+                onClick={handleAutograde}
+              >
+                {isAutograding ? 'Provisioning…' : 'Autograde'}
+              </Button>
+            </Tooltip>
+            <Menu
+              repository={repository as Parameters<typeof Menu>[0]['repository']}
+              assistants={assistants as Parameters<typeof Menu>[0]['assistants']}
+            />
+          </div>
+        )}
       </div>
 
       {/* Meta line */}
@@ -277,6 +172,7 @@ const SingleRepository = ({ loaderData }: Route.ComponentProps) => {
           totalRepos={rows.length}
           onEdit={setEditing}
           onToggleGradesReleased={handleGradeRelease}
+          canEdit={canEdit}
         />
 
         <div className="rounded-2xl bg-panel ring-1 ring-line p-2 sm:p-3">
@@ -285,6 +181,7 @@ const SingleRepository = ({ loaderData }: Route.ComponentProps) => {
             assignments={assignmentRows}
             repos={rows}
             assistants={assistants as Parameters<typeof SubmissionsTable>[0]['assistants']}
+            canEdit={canEdit}
             emojiMappings={emojiMappings as Record<string, unknown>}
             org={gitOrgLogin ?? ''}
           />
@@ -312,6 +209,8 @@ const SingleRepository = ({ loaderData }: Route.ComponentProps) => {
     </div>
   );
 };
+
+export const loader = adminLoader;
 
 export { action };
 export default SingleRepository;

@@ -95,6 +95,12 @@ interface SubmissionsTableProps {
   assistants: Assistant[];
   emojiMappings: Record<string, unknown>;
   org: string;
+  /**
+   * False for an ASSISTANT. Deleting here destroys the GitHub repository and
+   * every submission recorded against it, so it stays with the classroom's
+   * owners. View is untouched.
+   */
+  canEdit?: boolean;
 }
 
 /**
@@ -110,6 +116,7 @@ const SubmissionsTable = ({
   assistants,
   emojiMappings,
   org,
+  canEdit = true,
 }: SubmissionsTableProps) => {
   // Repo-only: a push IS the submission, so nothing here is about issues and
   // autograding (which runs off an issue workflow) has nothing to report.
@@ -336,28 +343,30 @@ const SubmissionsTable = ({
           >
             View
           </a>
-          <button
-            type="button"
-            className="text-sm font-medium text-rose-600 hover:text-rose-700 dark:text-rose-400"
-            onClick={() =>
-              modal.confirm({
-                title: 'Delete repository',
-                content: `This permanently deletes ${repo.name} on GitHub and every submission recorded against it.`,
-                okText: 'Delete',
-                okButtonProps: { danger: true },
-                cancelText: 'Cancel',
-                onOk: () => {
-                  notify(ActionTypes.DELETE_REPO, 'Deleting repository…');
-                  fetcher!.submit(
-                    { action: ActionTypes.DELETE_REPO, repo: { id: repo.id, name: repo.name } },
-                    { method: 'post', action: '?/deleteRepo', encType: 'application/json' }
-                  );
-                },
-              })
-            }
-          >
-            Delete
-          </button>
+          {canEdit && (
+            <button
+              type="button"
+              className="text-sm font-medium text-rose-600 hover:text-rose-700 dark:text-rose-400"
+              onClick={() =>
+                modal.confirm({
+                  title: 'Delete repository',
+                  content: `This permanently deletes ${repo.name} on GitHub and every submission recorded against it.`,
+                  okText: 'Delete',
+                  okButtonProps: { danger: true },
+                  cancelText: 'Cancel',
+                  onOk: () => {
+                    notify(ActionTypes.DELETE_REPO, 'Deleting repository…');
+                    fetcher!.submit(
+                      { action: ActionTypes.DELETE_REPO, repo: { id: repo.id, name: repo.name } },
+                      { method: 'post', action: '?/deleteRepo', encType: 'application/json' }
+                    );
+                  },
+                })
+              }
+            >
+              Delete
+            </button>
+          )}
         </div>
       );
     },
@@ -395,6 +404,13 @@ const SubmissionsTable = ({
           const ra = rowFor(repo, assignment.id);
           if (!ra) return null;
           const names = (ra.graders ?? []).map(g => g.grader.name || g.grader.login).join(', ');
+          // Who grades what is the owner's call. An assistant reads the names
+          // — they need to know whether a submission is theirs — but cannot
+          // reassign it, here or through the Assign graders route, which is
+          // requireClassroomAdmin on the server.
+          if (!canEdit) {
+            return <span className="text-sm text-ink-2">{names || '—'}</span>;
+          }
           const assigned = new Set(
             (ra.graders ?? []).map(g => g.grader.login).filter((v): v is string => v != null)
           );

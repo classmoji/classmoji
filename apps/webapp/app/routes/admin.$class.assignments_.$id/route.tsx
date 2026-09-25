@@ -452,6 +452,7 @@ const AssignmentPage = ({ loaderData }: Route.ComponentProps) => {
           emojiMappings={emojiMappings as Record<string, unknown>}
           org={gitOrgLogin ?? ''}
           canManageGraders={canManage}
+          canDeleteSubmissions={canManage}
           total={rows.length}
         />
       </div>

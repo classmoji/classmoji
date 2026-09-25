@@ -44,6 +44,10 @@ const AdminAssignments = ({ loaderData }: Route.ComponentProps) => {
   const { pathname } = useLocation();
   const { repositories, editor } = loaderData;
   const [query, setQuery] = useState('');
+  // The assistant section renders this same page read-only. The URL is the
+  // authority: /admin is OWNER-gated in the loader, so being here is the
+  // permission.
+  const canEdit = pathname.split('/')[1] === 'admin';
 
   return (
     <div className="min-h-full relative">
@@ -65,20 +69,22 @@ const AdminAssignments = ({ loaderData }: Route.ComponentProps) => {
           </div>
         </div>
 
-        <RequireRole roles={['OWNER']}>
-          <div className="flex items-center gap-3">
-            <SearchInput
-              query={query}
-              setQuery={setQuery}
-              placeholder="Search by title"
-              className="flex-1 min-w-0 sm:grow-0 sm:basis-56"
-            />
+        <div className="flex items-center gap-3">
+          {/* Search is reading, not writing: an assistant scanning a long list
+              needs it as much as the owner does. */}
+          <SearchInput
+            query={query}
+            setQuery={setQuery}
+            placeholder="Search by title"
+            className="flex-1 min-w-0 sm:grow-0 sm:basis-56"
+          />
 
+          <RequireRole roles={['OWNER']}>
             <NavLink to={`${pathname}/form`} data-tour="repos-new">
               <ButtonNew>New repository</ButtonNew>
             </NavLink>
-          </div>
-        </RequireRole>
+          </RequireRole>
+        </div>
       </div>
 
       <RepositoriesTable
@@ -86,6 +92,7 @@ const AdminAssignments = ({ loaderData }: Route.ComponentProps) => {
           repository.title.toLowerCase().includes(query.toLowerCase())
         )}
         editor={editor}
+        canEdit={canEdit}
       />
     </div>
   );
