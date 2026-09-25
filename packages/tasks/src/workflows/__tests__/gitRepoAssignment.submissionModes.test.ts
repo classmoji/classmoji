@@ -17,7 +17,6 @@ const mocks = vi.hoisted(() => ({
   findFirstGitRepoAssignment: vi.fn(),
   createGitRepoAssignment: vi.fn(),
   recordPush: vi.fn(),
-  findIdsByGitRepoId: vi.fn(),
   recordExistingPush: vi.fn(),
   getGitProvider: vi.fn(),
   tasksTrigger: vi.fn(),
@@ -41,7 +40,6 @@ vi.mock('@classmoji/services', () => ({
       findFirst: (...a: unknown[]) => mocks.findFirstGitRepoAssignment(...a),
       create: (...a: unknown[]) => mocks.createGitRepoAssignment(...a),
       recordPush: (...a: unknown[]) => mocks.recordPush(...a),
-      findIdsByGitRepoId: (...a: unknown[]) => mocks.findIdsByGitRepoId(...a),
       recordExistingPush: (...a: unknown[]) => mocks.recordExistingPush(...a),
     },
   },
@@ -198,10 +196,8 @@ describe('cf-create_git_repo_assignment', () => {
 });
 
 describe('webhook-git_repo_push_handler', () => {
-  it('records the push through the service and refreshes analytics for every row on the repo', async () => {
+  it('records the push and refreshes the whole repo in one run', async () => {
     mocks.recordPush.mockResolvedValue([{ id: 'ra-1' }, { id: 'ra-2' }]);
-    // A third row (graded, so frozen) is not touched but still shows commits.
-    mocks.findIdsByGitRepoId.mockResolvedValue(['ra-1', 'ra-2', 'ra-3']);
 
     const result = await runTask(workflows.repositoryPushHandlerTask, {
       gitRepoId: 'gitrepo-1',
@@ -212,19 +208,19 @@ describe('webhook-git_repo_push_handler', () => {
       'gitrepo-1',
       new Date('2026-09-20T12:00:00.000Z')
     );
-    expect(mocks.findIdsByGitRepoId).toHaveBeenCalledWith('gitrepo-1');
-    expect(mocks.tasksTrigger).toHaveBeenCalledTimes(3);
+    // One analytics run for the repo, however many rows hang off it \u2014 the
+    // snapshot is identical for all of them.
+    expect(mocks.tasksTrigger).toHaveBeenCalledTimes(1);
     expect(mocks.tasksTrigger).toHaveBeenCalledWith(
-      'refresh-repo-analytics',
-      { repositoryAssignmentId: 'ra-3' },
+      'refresh-repo-analytics-repo',
+      { gitRepoId: 'gitrepo-1' },
       { concurrencyKey: 'gitrepo-1' }
     );
-    expect(result).toEqual({ touched: 2, refreshed: 3 });
+    expect(result).toEqual({ touched: 2 });
   });
 
   it("still refreshes commit stats when the push counts as nobody's submission", async () => {
     mocks.recordPush.mockResolvedValue([]);
-    mocks.findIdsByGitRepoId.mockResolvedValue(['ra-9']);
 
     const result = await runTask(workflows.repositoryPushHandlerTask, {
       gitRepoId: 'gitrepo-1',
@@ -233,23 +229,10 @@ describe('webhook-git_repo_push_handler', () => {
 
     expect(mocks.tasksTrigger).toHaveBeenCalledTimes(1);
     expect(mocks.tasksTrigger).toHaveBeenCalledWith(
-      'refresh-repo-analytics',
-      { repositoryAssignmentId: 'ra-9' },
+      'refresh-repo-analytics-repo',
+      { gitRepoId: 'gitrepo-1' },
       { concurrencyKey: 'gitrepo-1' }
     );
-    expect(result).toEqual({ touched: 0, refreshed: 1 });
-  });
-
-  it('is a no-op when the repo has no submission rows at all', async () => {
-    mocks.recordPush.mockResolvedValue([]);
-    mocks.findIdsByGitRepoId.mockResolvedValue([]);
-
-    const result = await runTask(workflows.repositoryPushHandlerTask, {
-      gitRepoId: 'gitrepo-1',
-      pushedAt: new Date(),
-    });
-
-    expect(mocks.tasksTrigger).not.toHaveBeenCalled();
-    expect(result).toEqual({ touched: 0, refreshed: 0 });
+    expect(result).toEqual({ touched: 0 });
   });
 });

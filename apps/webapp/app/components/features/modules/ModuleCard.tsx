@@ -1,5 +1,5 @@
 import { forwardRef, useEffect, useState } from 'react';
-import { useFetcher, useNavigate } from 'react-router';
+import { useFetcher, useLocation, useNavigate } from 'react-router';
 import { App, Dropdown, Switch, Tag, Tooltip } from 'antd';
 import type { MenuProps } from 'antd';
 import {
@@ -72,6 +72,13 @@ interface ModuleCardProps {
   boundFormIds: Set<string>;
   /** Team tags in this classroom, for an instructor-assigned team assignment. */
   tags?: { id: string; name: string }[];
+  /**
+   * False for a viewer who may read the coursework but not change it (an
+   * ASSISTANT). The card keeps the owner's layout and every link, and drops
+   * every control that writes: drag handles, Edit, the row and module menus,
+   * the publish switch and "Add item".
+   */
+  canEdit?: boolean;
   /** Drag-to-reorder wiring for the card itself; absent when searching. */
   dragProps?: Record<string, unknown>;
   dragHandleProps?: Record<string, unknown>;
@@ -160,6 +167,7 @@ const ItemRow = ({
   busyLabel,
   menuItems,
   onMenuClick,
+  canEdit,
   dragProps,
   dragHandleProps,
   dragClassName = '',
@@ -177,6 +185,8 @@ const ItemRow = ({
   busyLabel?: string;
   menuItems: MenuProps['items'];
   onMenuClick: (key: string) => void;
+  /** False for a read-only viewer (an assistant): the row opens, nothing else. */
+  canEdit: boolean;
   dragProps?: Record<string, unknown>;
   dragHandleProps?: Record<string, unknown>;
   dragClassName?: string;
@@ -185,7 +195,7 @@ const ItemRow = ({
     {...dragProps}
     className={`group/row flex items-center gap-2 py-2.5 px-2 -mx-2 rounded-lg transition-colors hover:bg-stone-50 dark:hover:bg-neutral-800 ${dragClassName}`}
   >
-    <DragHandle props={dragHandleProps} label={`Drag to reorder: ${title}`} />
+    {canEdit && <DragHandle props={dragHandleProps} label={`Drag to reorder: ${title}`} />}
     {/* A real button, so the row opens from the keyboard too. It spans the
         label area; the pill, Edit and the menu sit beside it. */}
     <button
@@ -203,42 +213,47 @@ const ItemRow = ({
     <Tag color={published ? 'green' : 'orange'} className="m-0 shrink-0 font-medium">
       {published ? 'Published' : 'Draft'}
     </Tag>
-    {busyLabel ? (
-      <span className="inline-flex items-center gap-1.5 text-sm text-ink-3 whitespace-nowrap">
-        <IconLoader2 size={14} className="animate-spin" />
-        {busyLabel}
-      </span>
-    ) : (
-      action && (
-        <button
-          type="button"
-          onClick={action.onClick}
-          className="text-sm font-medium text-sky-600 hover:text-sky-700 dark:text-sky-400"
-        >
-          {action.label}
-        </button>
-      )
+    {canEdit &&
+      (busyLabel ? (
+        <span className="inline-flex items-center gap-1.5 text-sm text-ink-3 whitespace-nowrap">
+          <IconLoader2 size={14} className="animate-spin" />
+          {busyLabel}
+        </span>
+      ) : (
+        action && (
+          <button
+            type="button"
+            onClick={action.onClick}
+            className="text-sm font-medium text-sky-600 hover:text-sky-700 dark:text-sky-400"
+          >
+            {action.label}
+          </button>
+        )
+      ))}
+    {canEdit && (
+      <button
+        type="button"
+        onClick={onEdit}
+        className="text-sm font-medium text-sky-600 hover:text-sky-700 dark:text-sky-400"
+      >
+        Edit
+      </button>
     )}
-    <button
-      type="button"
-      onClick={onEdit}
-      className="text-sm font-medium text-sky-600 hover:text-sky-700 dark:text-sky-400"
-    >
-      Edit
-    </button>
-    <Dropdown
-      trigger={['click']}
-      placement="bottomRight"
-      menu={{
-        items: menuItems,
-        onClick: ({ key, domEvent }) => {
-          domEvent.stopPropagation();
-          onMenuClick(String(key));
-        },
-      }}
-    >
-      <IconMore label={`Actions: ${title}`} />
-    </Dropdown>
+    {canEdit && (
+      <Dropdown
+        trigger={['click']}
+        placement="bottomRight"
+        menu={{
+          items: menuItems,
+          onClick: ({ key, domEvent }) => {
+            domEvent.stopPropagation();
+            onMenuClick(String(key));
+          },
+        }}
+      >
+        <IconMore label={`Actions: ${title}`} />
+      </Dropdown>
+    )}
   </li>
 );
 
@@ -261,16 +276,20 @@ const ModuleCard = ({
   boundFormIds,
   tags = [],
   coursework,
+  canEdit = true,
   dragProps,
   dragHandleProps,
   dragClassName = '',
 }: ModuleCardProps) => {
   const navigate = useNavigate();
+  // Every link below stays inside the section the viewer is already in, so an
+  // assistant is never sent to an /admin route their loader would refuse.
+  const rolePrefix = useLocation().pathname.split('/')[1] || 'admin';
   // Publish acts on the repository a REPO assignment submits through, via the
   // repositories route's action — the same one the Repositories page posts to,
   // so the two surfaces cannot drift.
   const { confirmPublishAssignment, confirmSync, pending } = useRepositoryActions(
-    `/admin/${classSlug}/repos`
+    `/${rolePrefix}/${classSlug}/repos`
   );
   const { modal } = App.useApp();
   const moduleFetcher = useFetcher<{ success?: string; error?: string }>();
@@ -434,10 +453,17 @@ const ModuleCard = ({
   // (one roster with submission state and grades), the quiz's attempts, or
   // the form's responses.
   const openAssignment = (a: AssignmentRowData) => {
+    // A read-only viewer has no editor to open and no Forms section to reach,
+    // so every kind resolves to the assignment page — which is the one they
+    // came for: the roster with each submission's state and grade.
+    if (!canEdit) {
+      navigate(`/${rolePrefix}/${classSlug}/assignments/${a.id}`);
+      return;
+    }
     if (a.type === 'REPO' && a.repository) {
-      navigate(`/admin/${classSlug}/assignments/${a.id}`);
+      navigate(`/${rolePrefix}/${classSlug}/assignments/${a.id}`);
     } else if (a.type === 'QUIZ' && a.quiz) {
-      navigate(`/admin/${classSlug}/quizzes/${a.quiz.id}`);
+      navigate(`/${rolePrefix}/${classSlug}/quizzes/${a.quiz.id}`);
     } else if (a.type === 'FORM') {
       navigate(formHref(a));
     } else {
@@ -502,11 +528,13 @@ const ModuleCard = ({
         }}
         className="flex items-center gap-2 px-4 sm:px-5 py-3.5 cursor-pointer select-none"
       >
-        <DragHandle
-          props={dragHandleProps}
-          label={`Drag to reorder: ${module.title}`}
-          reveal="group-hover/card:opacity-100"
-        />
+        {canEdit && (
+          <DragHandle
+            props={dragHandleProps}
+            label={`Drag to reorder: ${module.title}`}
+            reveal="group-hover/card:opacity-100"
+          />
+        )}
         <span className="text-ink-3">
           {expanded ? <IconChevronDown size={18} /> : <IconChevronRight size={18} />}
         </span>
@@ -521,28 +549,40 @@ const ModuleCard = ({
             <IconWorld size={16} className="text-sky-500 shrink-0" />
           </Tooltip>
         )}
-        <Tooltip title="When on, students see this module (published items only).">
-          <div
-            role="presentation"
-            className="flex items-center gap-2 text-xs text-ink-2 cursor-pointer whitespace-nowrap"
-            onClick={e => e.stopPropagation()}
+        {canEdit ? (
+          <Tooltip title="When on, students see this module (published items only).">
+            <div
+              role="presentation"
+              className="flex items-center gap-2 text-xs text-ink-2 cursor-pointer whitespace-nowrap"
+              onClick={e => e.stopPropagation()}
+            >
+              <Switch
+                size="small"
+                checked={module.is_published}
+                loading={busy}
+                onChange={checked => post('setPublished', { id: module.id, isPublished: checked })}
+              />
+              Visible to students
+            </div>
+          </Tooltip>
+        ) : (
+          // Read-only: the state still matters to an assistant (a draft module
+          // is one students cannot see yet), so it reads as a tag, not a switch.
+          !module.is_published && (
+            <Tag color="orange" className="m-0 shrink-0 font-medium">
+              Hidden
+            </Tag>
+          )
+        )}
+        {canEdit && (
+          <Dropdown
+            trigger={['click']}
+            placement="bottomRight"
+            menu={{ items: menuItems, onClick: onMenuClick }}
           >
-            <Switch
-              size="small"
-              checked={module.is_published}
-              loading={busy}
-              onChange={checked => post('setPublished', { id: module.id, isPublished: checked })}
-            />
-            Visible to students
-          </div>
-        </Tooltip>
-        <Dropdown
-          trigger={['click']}
-          placement="bottomRight"
-          menu={{ items: menuItems, onClick: onMenuClick }}
-        >
-          <IconMore label={`Module actions: ${module.title}`} />
-        </Dropdown>
+            <IconMore label={`Module actions: ${module.title}`} />
+          </Dropdown>
+        )}
       </div>
 
       {expanded && (
@@ -559,18 +599,21 @@ const ModuleCard = ({
               const { label, published } = describeItem(item);
               const edit = () => {
                 if (item.item_type === 'PAGE' && item.page) {
-                  navigate(`/admin/${classSlug}/pages/${item.page.id}`);
+                  navigate(`/${rolePrefix}/${classSlug}/pages/${item.page.id}`);
                 } else if (item.item_type === 'SLIDE' && item.slide) {
                   window.open(`${slidesUrl}/${item.slide.id}`, '_blank');
                 } else if (item.item_type === 'QUIZ') {
-                  navigate(`/admin/${classSlug}/quizzes`);
-                } else if (item.item_type === 'FORM') {
+                  navigate(`/${rolePrefix}/${classSlug}/quizzes`);
+                } else if (item.item_type === 'FORM' && canEdit) {
+                  // Forms live in the admin section only; there is nowhere to
+                  // send a read-only viewer, so the row simply does not open.
                   navigate(`/admin/${classSlug}/forms`);
                 }
               };
               return (
                 <ItemRow
                   key={`item-${item.id}`}
+                  canEdit={canEdit}
                   icon={meta.icon}
                   title={label}
                   kind={meta.label}
@@ -618,6 +661,7 @@ const ModuleCard = ({
               return (
                 <ItemRow
                   key={`assignment-${a.id}`}
+                  canEdit={canEdit}
                   icon={ASSIGNMENT_TYPE_META[a.type]?.icon ?? IconClipboardList}
                   title={a.title}
                   note={assignmentNote(a)}
@@ -677,24 +721,26 @@ const ModuleCard = ({
             })}
           </ul>
 
-          <Dropdown
-            trigger={['click']}
-            placement="bottom"
-            menu={{ items: addItemMenu, onClick: onAddItem }}
-          >
-            <button
-              type="button"
-              data-tour={index === 0 ? 'modules-add-item' : undefined}
-              className="flex w-full items-center gap-3 py-2 text-sm text-ink-3 hover:text-ink-1"
+          {canEdit && (
+            <Dropdown
+              trigger={['click']}
+              placement="bottom"
+              menu={{ items: addItemMenu, onClick: onAddItem }}
             >
-              <span className="h-px flex-1 border-t border-dashed border-line" />
-              <span className="inline-flex items-center gap-1 whitespace-nowrap">
-                <IconPlus size={14} />
-                Add item
-              </span>
-              <span className="h-px flex-1 border-t border-dashed border-line" />
-            </button>
-          </Dropdown>
+              <button
+                type="button"
+                data-tour={index === 0 ? 'modules-add-item' : undefined}
+                className="flex w-full items-center gap-3 py-2 text-sm text-ink-3 hover:text-ink-1"
+              >
+                <span className="h-px flex-1 border-t border-dashed border-line" />
+                <span className="inline-flex items-center gap-1 whitespace-nowrap">
+                  <IconPlus size={14} />
+                  Add item
+                </span>
+                <span className="h-px flex-1 border-t border-dashed border-line" />
+              </button>
+            </Dropdown>
+          )}
         </div>
       )}
 

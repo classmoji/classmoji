@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { useFetcher, useParams } from 'react-router';
+import { useFetcher, useLocation, useParams } from 'react-router';
 import { Button } from 'antd';
 import { namedAction } from 'remix-utils/named-action';
 import { IconPlus } from '@tabler/icons-react';
@@ -254,6 +254,11 @@ const ModulesIndex = ({ loaderData }: Route.ComponentProps) => {
   const orderFetcher = useFetcher<{ success?: string; error?: string }>();
   const [query, setQuery] = useState('');
   const [formOpen, setFormOpen] = useState(false);
+  // The assistant section renders this same page read-only. The URL is the
+  // authority: /admin is OWNER-gated in the loader, so being here at all is
+  // the permission. The create buttons below already gate on RequireRole; this
+  // is what turns off the rest — dragging and every control inside a card.
+  const canEdit = useLocation().pathname.split('/')[1] === 'admin';
   // Every module starts expanded; the user collapses what they are done with.
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
 
@@ -271,7 +276,7 @@ const ModulesIndex = ({ loaderData }: Route.ComponentProps) => {
         action: `/admin/${classSlug}/modules?/reorderModules`,
         encType: 'application/json',
       }),
-    !searching
+    !searching && canEdit
   );
 
   const filtered = useMemo(
@@ -310,7 +315,7 @@ const ModulesIndex = ({ loaderData }: Route.ComponentProps) => {
       }
     );
 
-  const coursework = useCourseworkDrag({ lists, onMove: submitMove });
+  const coursework = useCourseworkDrag({ lists, onMove: submitMove, enabled: canEdit });
   const allCollapsed = filtered.length > 0 && filtered.every(m => collapsed.has(m.id));
 
   const toggle = (id: string) =>
@@ -364,6 +369,7 @@ const ModulesIndex = ({ loaderData }: Route.ComponentProps) => {
             boundFormIds={formSet}
             tags={tags}
             coursework={coursework.forModule(m.id)}
+            canEdit={canEdit}
             dragProps={drag.rowProps(m.id)}
             dragHandleProps={drag.handleProps(m.id)}
             dragClassName={dragRowClass(m.id, drag.draggingId, drag.dropTarget)}

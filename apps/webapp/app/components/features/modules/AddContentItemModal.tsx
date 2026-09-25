@@ -82,16 +82,20 @@ const AddContentItemModal = ({
         <div className="mb-3 text-sm text-rose-600 dark:text-rose-400">{fetcher.data.error}</div>
       )}
       <div className="flex flex-col gap-3 mt-2">
-        <Segmented
-          block
-          disabled={!!presetType}
-          value={type}
-          onChange={value => {
-            setType(value as ContentItemType);
-            setTargetId(undefined);
-          }}
-          options={CONTENT_TYPES.map(t => ({ value: t, label: TYPE_META[t].label }))}
-        />
+        {/* Only a question when the caller has not already answered it. Coming
+            from "Add item", the kind was chosen in that menu and the title says
+            so, which left a row of dead tabs under it. */}
+        {!presetType && (
+          <Segmented
+            block
+            value={type}
+            onChange={value => {
+              setType(value as ContentItemType);
+              setTargetId(undefined);
+            }}
+            options={CONTENT_TYPES.map(t => ({ value: t, label: TYPE_META[t].label }))}
+          />
+        )}
         <Select
           showSearch
           allowClear

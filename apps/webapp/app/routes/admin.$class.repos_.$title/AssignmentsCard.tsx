@@ -12,6 +12,11 @@ interface AssignmentsCardProps {
   totalRepos: number;
   onEdit: (assignment: AssignmentRowData) => void;
   onToggleGradesReleased: (assignmentId: string, released: boolean) => void;
+  /**
+   * False for a read-only viewer (an assistant): the row still reports how many
+   * submitted and whether grades are out, but neither can be changed here.
+   */
+  canEdit?: boolean;
 }
 
 /**
@@ -25,6 +30,7 @@ const AssignmentsCard = ({
   totalRepos,
   onEdit,
   onToggleGradesReleased,
+  canEdit = true,
 }: AssignmentsCardProps) => {
   const Icon = ASSIGNMENT_TYPE_META.REPO.icon;
   return (
@@ -56,26 +62,34 @@ const AssignmentsCard = ({
             <span className="text-sm font-medium text-ink-1 tabular-nums whitespace-nowrap">
               {submittedById[a.id] ?? 0} / {totalRepos} submitted
             </span>
-            <Tooltip title="When on, students can see their grades for this assignment.">
-              <label className="flex items-center gap-2 text-xs text-ink-2 whitespace-nowrap cursor-pointer">
-                <Switch
-                  size="small"
-                  checked={a.grades_released}
-                  onChange={checked => onToggleGradesReleased(a.id, checked)}
-                />
-                Grades released
-              </label>
-            </Tooltip>
+            {canEdit ? (
+              <Tooltip title="When on, students can see their grades for this assignment.">
+                <label className="flex items-center gap-2 text-xs text-ink-2 whitespace-nowrap cursor-pointer">
+                  <Switch
+                    size="small"
+                    checked={a.grades_released}
+                    onChange={checked => onToggleGradesReleased(a.id, checked)}
+                  />
+                  Grades released
+                </label>
+              </Tooltip>
+            ) : (
+              a.grades_released && (
+                <span className="text-xs text-ink-2 whitespace-nowrap">Grades released</span>
+              )
+            )}
             <Tag color={a.is_published ? 'green' : 'orange'} className="m-0 shrink-0 font-medium">
               {a.is_published ? 'Published' : 'Draft'}
             </Tag>
-            <button
-              type="button"
-              onClick={() => onEdit(a)}
-              className="text-sm font-medium text-sky-600 hover:text-sky-700 dark:text-sky-400"
-            >
-              Edit
-            </button>
+            {canEdit && (
+              <button
+                type="button"
+                onClick={() => onEdit(a)}
+                className="text-sm font-medium text-sky-600 hover:text-sky-700 dark:text-sky-400"
+              >
+                Edit
+              </button>
+            )}
           </div>
         ))
       )}

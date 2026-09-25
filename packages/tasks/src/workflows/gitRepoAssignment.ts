@@ -460,15 +460,17 @@ export const repositoryPushHandlerTask = task({
     // ones the push counted as a submission: a graded row is frozen above,
     // and an issue-mode row never submits by push, but both still show the
     // repo's commit count and should see the new commits.
-    const rows = await ClassmojiService.gitRepoAssignment.findIdsByGitRepoId(payload.gitRepoId);
-    for (const id of rows) {
-      await tasks.trigger(
-        'refresh-repo-analytics',
-        { repositoryAssignmentId: id },
-        { concurrencyKey: payload.gitRepoId }
-      );
-    }
-    return { touched: touched.length, refreshed: rows.length };
+    //
+    // One run for the whole repo, not one per row. The commits, contributors,
+    // languages and PRs a snapshot holds are facts about the repo and identical
+    // across its rows, so fanning out per row re-read the same four GitHub
+    // endpoints once per row to write N identical snapshots.
+    await tasks.trigger(
+      'refresh-repo-analytics-repo',
+      { gitRepoId: payload.gitRepoId },
+      { concurrencyKey: payload.gitRepoId }
+    );
+    return { touched: touched.length };
   },
 });
 

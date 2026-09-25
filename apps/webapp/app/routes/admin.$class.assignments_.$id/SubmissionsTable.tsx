@@ -132,6 +132,12 @@ interface SubmissionsTableProps {
   emojiMappings: Record<string, unknown>;
   org: string;
   canManageGraders: boolean;
+  /**
+   * False for an ASSISTANT. Deleting a submission destroys its grades, and can
+   * take the GitHub repository with it, so it stays with the people who own
+   * the classroom. An assistant still opens every submission to grade it.
+   */
+  canDeleteSubmissions: boolean;
   /** Unfiltered row count, for the footer. */
   total: number;
 }
@@ -149,6 +155,7 @@ const SubmissionsTable = ({
   emojiMappings,
   org,
   canManageGraders,
+  canDeleteSubmissions,
   total,
 }: SubmissionsTableProps) => {
   const { fetcher, notify } = useGlobalFetcher();
@@ -472,55 +479,57 @@ const SubmissionsTable = ({
             >
               View
             </button>
-            <button
-              type="button"
-              className="text-sm font-medium text-rose-600 hover:text-rose-700 dark:text-rose-400 hover:underline underline-offset-2 whitespace-nowrap"
-              onClick={() =>
-                (() => {
-                  // Read straight off the box at confirm time: modal.confirm
-                  // renders its content once and does not re-render on state.
-                  const alsoRepo = { current: false };
-                  modal.confirm({
-                    title: 'Delete submission',
-                    content: (
-                      <div className="flex flex-col gap-3">
-                        <span>
-                          This removes <strong>{repo.name}</strong> from this assignment, along with
-                          its grades.
-                        </span>
-                        <Checkbox
-                          onChange={e => {
-                            alsoRepo.current = e.target.checked;
-                          }}
-                        >
-                          Also delete the GitHub repository
-                          <span className="block text-xs text-ink-3">
-                            Permanent, and removes every other assignment&rsquo;s submission on this
-                            repository.
+            {canDeleteSubmissions && (
+              <button
+                type="button"
+                className="text-sm font-medium text-rose-600 hover:text-rose-700 dark:text-rose-400 hover:underline underline-offset-2 whitespace-nowrap"
+                onClick={() =>
+                  (() => {
+                    // Read straight off the box at confirm time: modal.confirm
+                    // renders its content once and does not re-render on state.
+                    const alsoRepo = { current: false };
+                    modal.confirm({
+                      title: 'Delete submission',
+                      content: (
+                        <div className="flex flex-col gap-3">
+                          <span>
+                            This removes <strong>{repo.name}</strong> from this assignment, along
+                            with its grades.
                           </span>
-                        </Checkbox>
-                      </div>
-                    ),
-                    okText: 'Delete',
-                    okButtonProps: { danger: true },
-                    cancelText: 'Cancel',
-                    onOk: () => {
-                      notify(ActionTypes.DELETE_GIT_REPO_ASSIGNMENT, 'Deleting submission…');
-                      fetcher!.submit(
-                        { git_repo_assignment_id: s.id, delete_repository: alsoRepo.current },
-                        {
-                          method: 'post',
-                          action: `/api/gitRepoAssignment/${classroom?.slug}?action=deleteSubmission`,
-                          encType: 'application/json',
-                        }
-                      );
-                    },
-                  });
-                })()
-              }
-            >
-              Delete
-            </button>
+                          <Checkbox
+                            onChange={e => {
+                              alsoRepo.current = e.target.checked;
+                            }}
+                          >
+                            Also delete the GitHub repository
+                            <span className="block text-xs text-ink-3">
+                              Permanent, and removes every other assignment&rsquo;s submission on
+                              this repository.
+                            </span>
+                          </Checkbox>
+                        </div>
+                      ),
+                      okText: 'Delete',
+                      okButtonProps: { danger: true },
+                      cancelText: 'Cancel',
+                      onOk: () => {
+                        notify(ActionTypes.DELETE_GIT_REPO_ASSIGNMENT, 'Deleting submission…');
+                        fetcher!.submit(
+                          { git_repo_assignment_id: s.id, delete_repository: alsoRepo.current },
+                          {
+                            method: 'post',
+                            action: `/api/gitRepoAssignment/${classroom?.slug}?action=deleteSubmission`,
+                            encType: 'application/json',
+                          }
+                        );
+                      },
+                    });
+                  })()
+                }
+              >
+                Delete
+              </button>
+            )}
             {rare.length > 0 && (
               <Dropdown
                 trigger={['click']}
