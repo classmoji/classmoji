@@ -1,0 +1,15 @@
+# The team-set solver's Python dependencies: OR-Tools and every package it pulls in, pinned exactly
+# (the `pip freeze` of python/.venv on Python 3.11, nothing else in it). The deployed image installs
+# exactly these, so a rebuild months from now gets the wheels the selftest and cross-check ran on.
+# To move OR-Tools: install the new version in the venv, replace these lines with its `pip freeze`
+# (ortools and its dependencies only), rerun `--selftest` and the cross-check test, and update
+# TEAM_SET_ENGINE in teamSet.service.ts. trigger.config.js drops these comment lines.
+absl-py==2.5.0
+immutabledict==4.3.1
+numpy==2.4.6
+ortools==9.15.6755
+pandas==3.0.6
+protobuf==6.33.6
+python-dateutil==2.9.0.post0
+six==1.17.0
+typing_extensions==4.16.0
