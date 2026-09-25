@@ -44,6 +44,7 @@ const SAFE_SETTINGS_FIELDS = [
   'llm_temperature',
   'llm_max_tokens',
   'code_aware_model',
+  'exploration_model',
   'syllabus_bot_enabled',
   'syllabus_bot_model',
   'content_repo_name',

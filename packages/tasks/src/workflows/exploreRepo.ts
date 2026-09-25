@@ -212,7 +212,41 @@ function formatTreeForLLM(tree: Array<{ path: string; size: number; type: string
 }
 
 /**
- * Use Claude Haiku to pick the most relevant files to read.
+ * Return the answer text from a Messages API response, or null if there is none.
+ *
+ * A model that thinks (Sonnet 5 and Opus 5.5 decide for themselves) puts a
+ * `thinking` block first, so the answer is the first `text` block, not
+ * `content[0]`. An answer cut short (max_tokens, refusal) or missing is logged,
+ * so an exploration that found nothing shows up in the Trigger logs instead of
+ * passing silently.
+ *
+ * @param {Anthropic.Message} response - Messages API response
+ * @param {string} label - Which call this was, for the log line
+ * @returns {string|null} Text of the first text block, or null
+ */
+function responseText(response: Anthropic.Message, label: string): string | null {
+  // These calls use no tools or stop sequences, so anything but end_turn means
+  // the answer was cut short.
+  if (response.stop_reason !== 'end_turn') {
+    logger.warn(
+      `${label}: ${response.model} stopped with ${response.stop_reason} (${response.usage?.output_tokens} output tokens), answer may be incomplete`
+    );
+  }
+  const textBlock = response.content.find(
+    (block): block is Anthropic.TextBlock => block.type === 'text'
+  );
+  if (!textBlock) {
+    const blockTypes = response.content.map(block => block.type).join(', ') || 'none';
+    logger.warn(
+      `${label}: ${response.model} returned no text block (blocks: ${blockTypes}, stop_reason: ${response.stop_reason})`
+    );
+    return null;
+  }
+  return textBlock.text;
+}
+
+/**
+ * Use the exploration model to pick the most relevant files to read.
  *
  * @param {Anthropic} client - Anthropic SDK client
  * @param {string} model - Model ID
@@ -223,7 +257,7 @@ function formatTreeForLLM(tree: Array<{ path: string; size: number; type: string
  * @param {string|null} specificQuestion - Specific student question
  * @returns {Promise<string[]>} Array of file paths to read
  */
-async function pickRelevantFiles(
+export async function pickRelevantFiles(
   client: Anthropic,
   model: string,
   treeListing: string,
@@ -247,9 +281,13 @@ async function pickRelevantFiles(
       ? `\nFor context, these files were already read in earlier explorations: ${previouslyReadFiles.join(', ')}`
       : '';
 
+  // No `thinking` param: owners can pick any model here, and no single value
+  // works for all of them (Opus 5.5 rejects `disabled`; it and Sonnet 5 think
+  // adaptively when the param is omitted). Thinking tokens count against
+  // max_tokens, so it is a roomy ceiling, not the expected spend.
   const response = await client.messages.create({
     model,
-    max_tokens: 1024,
+    max_tokens: 4096,
     messages: [
       {
         role: 'user',
@@ -276,8 +314,7 @@ Respond with ONLY a JSON array of file paths, nothing else. Example:
     ],
   });
 
-  const firstBlock = response.content[0];
-  const text = firstBlock?.type === 'text' ? firstBlock.text : '[]';
+  const text = responseText(response, 'File picker') ?? '[]';
   try {
     // Extract JSON array from response (may include markdown)
     const jsonMatch = text.match(/\[[\s\S]*\]/);
@@ -289,7 +326,7 @@ Respond with ONLY a JSON array of file paths, nothing else. Example:
 }
 
 /**
- * Use Claude Haiku to synthesize exploration findings.
+ * Use the exploration model to synthesize exploration findings.
  *
  * @param {Anthropic} client - Anthropic SDK client
  * @param {string} model - Model ID
@@ -298,9 +335,9 @@ Respond with ONLY a JSON array of file paths, nothing else. Example:
  * @param {string[]} previousFindings - Topics already covered
  * @param {string|null} specificQuestion - Specific student question
  * @param {string} treeListing - Formatted tree listing (for context)
- * @returns {Promise<string>} Markdown analysis
+ * @returns {Promise<string>} Findings as a JSON-object string
  */
-async function synthesizeFindings(
+export async function synthesizeFindings(
   client: Anthropic,
   model: string,
   files: Array<{ path: string; content: string; error?: string }>,
@@ -332,9 +369,11 @@ async function synthesizeFindings(
 
   const isInitial = focusArea === 'initial';
 
+  // No `thinking` param and a roomy max_tokens, for the same reasons as the
+  // file picker above.
   const response = await client.messages.create({
     model,
-    max_tokens: 2048,
+    max_tokens: 8192,
     messages: [
       {
         role: 'user',
@@ -391,19 +430,23 @@ Respond with ONLY the JSON object, no other text.`,
     ],
   });
 
-  const firstBlock = response.content[0];
-  return firstBlock?.type === 'text' ? firstBlock.text : '{}';
+  const text = responseText(response, 'Synthesizer') ?? '{}';
+  // Models often wrap the object in ```json fences despite the instruction.
+  // Strip one outer fence so callers get bare JSON; the match is anchored to the
+  // whole answer, so a ``` inside a code_snippet is left alone.
+  const fenced = text.trim().match(/^```(?:json)?\s*([\s\S]*?)\s*```$/);
+  return fenced ? fenced[1] : text;
 }
 
 /**
- * Trigger.dev task: Explore a GitHub gitRepo using the REST API + Claude Haiku.
+ * Trigger.dev task: Explore a GitHub gitRepo using the REST API + the exploration model.
  *
  * This is the core of the "trigger" exploration mode. Instead of cloning repos into
- * VMs (slow, expensive), it reads files directly via GitHub's API and uses Haiku
- * for fast, cheap analysis.
+ * VMs (slow, expensive), it reads files directly via GitHub's API and makes two
+ * direct Messages API calls on the exploration model (chosen per classroom).
  *
- * Typical execution: ~10-20s.
- * Cost: ~$0.003 per exploration (Haiku calls + Trigger.dev compute).
+ * Typical execution: ~10-40s, most of it the synthesis call.
+ * Cost: two exploration-model calls + Trigger.dev compute.
  */
 export const exploreRepoTask = task({
   id: 'explore-repo',
@@ -434,7 +477,7 @@ export const exploreRepoTask = task({
       explorationModel,
     } = payload;
 
-    const model = explorationModel || 'claude-haiku-4-5-20251001';
+    const model = explorationModel || 'claude-sonnet-5';
     console.log(
       `[explore-repo] Starting: ${owner}/${repo} — focus: ${focusArea}, depth: ${depth}, model: ${model}`
     );
@@ -464,8 +507,8 @@ export const exploreRepoTask = task({
 
     const treeListing = formatTreeForLLM(tree);
 
-    // Step 2: Claude picks relevant files (~2s)
-    console.log(`[explore-repo] Step 2: Asking Haiku to pick relevant files...`);
+    // Step 2: Claude picks relevant files (~2-5s)
+    console.log(`[explore-repo] Step 2: Asking the exploration model to pick relevant files...`);
     logger.info('Analyzing gitRepo structure...');
     metadata.set('currentStep', 'Analyzing gitRepo structure');
     metadata.append('steps', {
@@ -511,8 +554,8 @@ export const exploreRepoTask = task({
     console.log(`[explore-repo] Step 3 done: read ${successCount}/${filePaths.length} files`);
     logger.info(`Successfully read ${successCount}/${filePaths.length} files`);
 
-    // Step 4: Claude synthesizes findings (~5s)
-    console.log(`[explore-repo] Step 4: Synthesizing findings with Haiku...`);
+    // Step 4: Claude synthesizes findings (~20-25s on Sonnet 5 / Opus 5.5)
+    console.log(`[explore-repo] Step 4: Synthesizing findings with the exploration model...`);
     logger.info('Synthesizing exploration findings...');
     metadata.set('currentStep', 'Analyzing code patterns');
     metadata.append('steps', {

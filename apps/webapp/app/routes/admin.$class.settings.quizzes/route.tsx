@@ -1,18 +1,6 @@
 import {} from 'react';
 import { useParams } from 'react-router';
-import {
-  Form,
-  Switch,
-  Input,
-  Select,
-  Slider,
-  InputNumber,
-  Button,
-  Modal,
-  Badge,
-  Alert,
-  Divider,
-} from 'antd';
+import { Form, Switch, Input, Select, Button, Modal, Badge, Alert, Divider } from 'antd';
 
 import { namedAction } from 'remix-utils/named-action';
 
@@ -25,6 +13,9 @@ import { isAIAgentConfigured } from '~/utils/aiFeatures.server';
 import type { Route } from './+types/route';
 
 const { Option } = Select;
+
+/** Per-classroom model choices. Null (or unset) = the platform default. */
+const MODEL_FIELDS = ['llm_model', 'code_aware_model', 'exploration_model'] as const;
 
 export const loader = async ({ params, request }: Route.LoaderArgs) => {
   const classSlug = params.class!;
@@ -108,17 +99,20 @@ const SettingsQuizzes = ({ loaderData }: Route.ComponentProps) => {
   };
 
   const handleSaveLLMSettings = (values: Record<string, unknown>) => {
-    fetcher!.submit(
-      {
-        _action: 'saveLLMSettings',
-        ...values,
-      },
-      {
-        method: 'POST',
-        encType: 'application/json',
-        action: `/admin/${classSlug}/settings/quizzes`,
-      }
-    );
+    const payload: Record<string, string | null> = {
+      _action: 'saveLLMSettings',
+      anthropic_api_key: (values.anthropic_api_key as string) || '',
+    };
+    // A cleared Select is undefined, which JSON.stringify drops, so the server
+    // would never see the clear. Send null to put the column back to default.
+    for (const field of MODEL_FIELDS) {
+      payload[field] = (values[field] as string) || null;
+    }
+    fetcher!.submit(payload, {
+      method: 'POST',
+      encType: 'application/json',
+      action: `/admin/${classSlug}/settings/quizzes`,
+    });
   };
 
   const handleClearSettings = () => {
@@ -180,10 +174,10 @@ const SettingsQuizzes = ({ loaderData }: Route.ComponentProps) => {
         onFinish={handleSaveLLMSettings}
         initialValues={{
           anthropic_api_key: '',
-          llm_model: (settings.llm_model as string) || '',
-          llm_temperature: (settings.llm_temperature as number) ?? 0.7,
-          llm_max_tokens: (settings.llm_max_tokens as number) ?? 1000,
-          code_aware_model: (settings.code_aware_model as string) || '',
+          // undefined, not '', so an unset Select shows its placeholder.
+          llm_model: (settings.llm_model as string) || undefined,
+          code_aware_model: (settings.code_aware_model as string) || undefined,
+          exploration_model: (settings.exploration_model as string) || undefined,
         }}
       >
         {/* API Keys Section */}
@@ -241,7 +235,7 @@ const SettingsQuizzes = ({ loaderData }: Route.ComponentProps) => {
         {/* Standard Quiz Settings Section */}
         <SettingSection
           title="Standard Quiz Settings"
-          description="Configure the AI model and parameters for standard quizzes."
+          description="Configure the AI model for standard quizzes."
         >
           <Form.Item label="Model" name="llm_model">
             <Select disabled={usingSystemDefaults} placeholder="Select a model">
@@ -251,33 +245,6 @@ const SettingsQuizzes = ({ loaderData }: Route.ComponentProps) => {
                 </Option>
               ))}
             </Select>
-          </Form.Item>
-
-          <Form.Item
-            label={`Temperature: ${form.getFieldValue('llm_temperature') ?? 0.7}`}
-            name="llm_temperature"
-          >
-            <Slider
-              min={0}
-              max={2}
-              step={0.1}
-              disabled={usingSystemDefaults}
-              marks={{
-                0: '0',
-                0.7: '0.7',
-                1: '1',
-                2: '2',
-              }}
-            />
-          </Form.Item>
-
-          <Form.Item label="Max Tokens" name="llm_max_tokens">
-            <InputNumber
-              min={100}
-              max={8000}
-              disabled={usingSystemDefaults}
-              style={{ width: '100%' }}
-            />
           </Form.Item>
 
           <Button type="primary" htmlType="submit">
@@ -290,7 +257,7 @@ const SettingsQuizzes = ({ loaderData }: Route.ComponentProps) => {
         {/* Code-Aware Quiz Settings Section */}
         <SettingSection
           title="Code-Aware Quiz Settings"
-          description="Configure the AI agent model for code-aware quizzes that can explore student repositories."
+          description="Configure the AI models for code-aware quizzes that can explore student repositories."
         >
           <Form.Item
             label="Agent Model"
@@ -304,6 +271,30 @@ const SettingsQuizzes = ({ loaderData }: Route.ComponentProps) => {
             <Select
               disabled={!hasAnthropicKey}
               placeholder={hasAnthropicKey ? 'Select a Claude model' : 'Anthropic API Key required'}
+            >
+              {anthropicModels.map((model: { value: string; label: string }) => (
+                <Option key={model.value} value={model.value}>
+                  {model.label}
+                </Option>
+              ))}
+            </Select>
+          </Form.Item>
+
+          <Form.Item
+            label="Exploration Model"
+            name="exploration_model"
+            extra={
+              hasAnthropicKey
+                ? "Picks and summarizes files in the student's repo. Runs on the Classmoji platform key, not the key above."
+                : 'Provide Anthropic API Key above to enable'
+            }
+          >
+            <Select
+              allowClear
+              disabled={!hasAnthropicKey}
+              placeholder={
+                hasAnthropicKey ? 'Default: Claude Sonnet 5' : 'Anthropic API Key required'
+              }
             >
               {anthropicModels.map((model: { value: string; label: string }) => (
                 <Option key={model.value} value={model.value}>
@@ -365,8 +356,10 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
 
   return namedAction(formData, {
     async saveQuizSettings() {
-      const { _action, ...updateData } = data;
-      await ClassmojiService.classroom.updateSettings(classroom.id, updateData);
+      // Only the field the toggle owns; model fields go through saveLLMSettings.
+      await ClassmojiService.classroom.updateSettings(classroom.id, {
+        quizzes_enabled: Boolean(data.quizzes_enabled),
+      });
       return {
         success: 'Quiz settings updated',
         action: ActionTypes.SAVE_QUIZ_SETTINGS,
@@ -374,21 +367,36 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
     },
 
     async saveLLMSettings() {
-      const { _action, anthropic_api_key, ...otherSettings } = data;
+      const { anthropic_api_key } = data;
 
-      // Prepare update data
-      const updateData = { ...otherSettings };
+      // Only the fields this form owns. A stale client may still send
+      // llm_temperature / llm_max_tokens; nothing sends those to a model, so
+      // they are not written.
+      const updateData: {
+        anthropic_api_key?: string;
+        llm_model?: string | null;
+        code_aware_model?: string | null;
+        exploration_model?: string | null;
+      } = {};
+      for (const field of MODEL_FIELDS) {
+        if (!(field in data)) continue;
+        const value = data[field];
+        // '' and null both mean "platform default", stored as null.
+        updateData[field] = typeof value === 'string' && value.trim() !== '' ? value.trim() : null;
+      }
 
       // Only update API key if provided (non-empty)
-      if (anthropic_api_key && anthropic_api_key.trim() !== '') {
+      if (typeof anthropic_api_key === 'string' && anthropic_api_key.trim() !== '') {
         updateData.anthropic_api_key = anthropic_api_key;
       }
 
-      // Validation: if trying to set model settings, ensure key exists
-      const willHaveKey =
-        (anthropic_api_key && anthropic_api_key.trim()) || currentSettings?.anthropic_api_key;
+      // Validation: choosing ANY model requires a key. The disabled Selects are
+      // not the gate; this is.
+      const willHaveKey = Boolean(
+        updateData.anthropic_api_key || currentSettings?.anthropic_api_key
+      );
 
-      if (updateData.llm_model && !willHaveKey) {
+      if (MODEL_FIELDS.some(field => updateData[field]) && !willHaveKey) {
         return {
           error:
             'Custom model selection requires an API key. Leave fields empty to use system defaults.',
@@ -412,6 +420,7 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
         llm_max_tokens: null,
         anthropic_api_key: null,
         code_aware_model: null,
+        exploration_model: null,
       });
       return {
         success: 'LLM settings cleared. Using system defaults.',
