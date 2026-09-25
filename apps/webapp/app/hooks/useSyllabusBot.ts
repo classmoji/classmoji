@@ -1,5 +1,6 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
 import { processResponseReferences } from '~/utils/contentReferenceUrl';
+import { browserTimeZone } from '~/utils/browserTimeZone';
 
 /**
  * Hook for managing syllabus bot conversations
@@ -58,6 +59,10 @@ export function useSyllabusBot({ classroomSlug, userRole }: UseSyllabusBotOption
       if (userRole) {
         formData.append('userRole', userRole);
       }
+      // The student's own zone, sent once at session start. Used only when the
+      // classroom has no time zone set; the server validates it.
+      const zone = browserTimeZone();
+      if (zone) formData.append('browserTimezone', zone);
 
       const response = await fetch(`/api/syllabus-bot/${classroomSlug}`, {
         method: 'POST',

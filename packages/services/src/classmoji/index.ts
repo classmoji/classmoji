@@ -35,7 +35,10 @@ import * as subscriptionService from './subscription.service.ts';
 import * as entitlementService from './entitlement.service.ts';
 import * as instructorAudienceService from './instructorAudience.service.ts';
 import * as surveyService from './survey.service.ts';
-export { ClassroomSettingsEntitlementError } from './classroom.service.ts';
+export {
+  ClassroomSettingsEntitlementError,
+  ClassroomSettingsValidationError,
+} from './classroom.service.ts';
 // A refused calendar time range, so a caller can say so instead of 500ing,
 // plus the event-type policy every calendar write surface has to apply.
 export {
@@ -69,6 +72,7 @@ export type {
 import * as teamMembershipService from './teamMembership.service.ts';
 import * as teamService from './team.service.ts';
 import * as teamTagService from './teamTag.service.ts';
+import * as teamSetService from './teamSet.service.ts';
 import * as tokenService from './token.service.ts';
 import * as userService from './user.service.ts';
 import * as quizService from './quiz.service.ts';
@@ -135,6 +139,9 @@ const ClassmojiService = {
   team: teamService,
   teamAdmin: teamAdminService,
   teamTag: teamTagService,
+  // Team sets: configure, solve (Trigger `team-set-solve`) and create (Trigger
+  // `team-set-apply`) a grouping of a classroom form's respondents.
+  teamSet: teamSetService,
   token: tokenService,
   user: userService,
   quiz: quizService,
@@ -213,6 +220,7 @@ export {
   teamService,
   teamAdminService,
   teamTagService,
+  teamSetService,
   tokenService,
   userService,
   quizService,

@@ -25,6 +25,7 @@
 import {
   ClassmojiService,
   ClassroomSettingsEntitlementError,
+  ClassroomSettingsValidationError,
   getGitProvider,
 } from '@classmoji/services';
 import { z } from 'zod';
@@ -53,6 +54,7 @@ interface SafeSettingsUpdate {
   late_penalty_points_per_hour?: number;
   default_student_page?: string;
   theme?: string;
+  timezone?: string | null;
 }
 
 interface ClassroomSettingsUpdateArgs {
@@ -69,6 +71,7 @@ interface ClassroomSettingsUpdateArgs {
   late_penalty_points_per_hour?: number;
   default_student_page?: string;
   theme?: (typeof THEME_KEYS)[number];
+  timezone?: string | null;
 }
 
 export const classroomSettingsUpdateTool: ToolDefinition<ClassroomSettingsUpdateArgs> = {
@@ -82,8 +85,9 @@ export const classroomSettingsUpdateTool: ToolDefinition<ClassroomSettingsUpdate
     'are left alone. Turning a feature off hides it from students but deletes nothing. ' +
     'default_student_page takes "dashboard", "repositories", or "page:{pageId}" for a specific ' +
     'page (it must be a page in this classroom, published and shown in the student menu, or ' +
-    'students fall back to the dashboard). AI provider keys and model settings are not editable ' +
-    'here — those are managed in the web app.',
+    'students fall back to the dashboard). timezone is the course IANA zone (e.g. ' +
+    '"America/New_York"; null clears it) that deadlines are shown in. AI provider keys and model ' +
+    'settings are not editable here — those are managed in the web app.',
   scope: 'write',
   roles: OWNER_ONLY,
   inputSchema: {
@@ -115,6 +119,12 @@ export const classroomSettingsUpdateTool: ToolDefinition<ClassroomSettingsUpdate
       .optional()
       .describe("Student landing page: 'dashboard', 'repositories', or 'page:{pageId}'"),
     theme: z.enum(THEME_KEYS).optional().describe('Classroom color theme'),
+    timezone: z
+      .string()
+      .max(64)
+      .nullable()
+      .optional()
+      .describe("Course IANA time zone, e.g. 'America/New_York'; null clears it"),
   },
   handler: async (args, ctx) => {
     const classroom = requireClassroomCtx(ctx);
@@ -139,6 +149,19 @@ export const classroomSettingsUpdateTool: ToolDefinition<ClassroomSettingsUpdate
     set('default_tokens_per_hour', args.default_tokens_per_hour);
     set('late_penalty_points_per_hour', args.late_penalty_points_per_hour);
     set('theme', args.theme);
+
+    // Validated (and canonicalized) up front with the service's own rule, so a
+    // bad zone is a clean invalid_params and the echo below shows what is stored.
+    if (args.timezone !== undefined) {
+      try {
+        settings.timezone = ClassmojiService.classroom.normalizeTimeZoneSetting(args.timezone);
+      } catch (error: unknown) {
+        if (error instanceof ClassroomSettingsValidationError) {
+          throw new ToolError('invalid_params', error.message, error.code);
+        }
+        throw error;
+      }
+    }
 
     if (args.default_student_page !== undefined) {
       const target = args.default_student_page;

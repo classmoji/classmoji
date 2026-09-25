@@ -1168,6 +1168,86 @@ export class GitHubProvider extends GitProvider {
     return { id: data.id, slug: data.slug, name: data.name, node_id: data.node_id };
   }
 
+  // ─── Latency-bounded probes ────────────────────────────────────────────────
+
+  /**
+   * An installation client on `ImmediateOctokit`, for probes a caller has to
+   * answer within seconds (a create preview asking whether names are free).
+   *
+   * `#getOctokit` is the umbrella client: on a rate limit its throttling plugin
+   * sleeps for as long as GitHub asks (up to an hour) and its retry plugin
+   * retries a 5xx three times with growing backoff. A probe that must answer
+   * inside a request would hang behind either. This client throws a rate limit
+   * at once, and each probe passes `retries: 0` so a 5xx is thrown too. Cached
+   * apart from `#installationCache`: the two clients behave differently and
+   * must never be handed out in each other's place.
+   */
+  static #immediateCache: Map<string, { octokit: Octokit; expiresAt: number }> = new Map();
+
+  async #getImmediateOctokit(): Promise<Octokit> {
+    // Dependency injection hook (used by tests).
+    if (this._octokit) {
+      return this._octokit;
+    }
+    const cached = GitHubProvider.#immediateCache.get(this.installationId);
+    if (cached && Date.now() < cached.expiresAt) {
+      return cached.octokit;
+    }
+    const app = new App({
+      appId: process.env.GITHUB_APP_ID!,
+      privateKey: privateKey!,
+      Octokit: ImmediateOctokit,
+    });
+    const octokit = await app.getInstallationOctokit(Number(this.installationId));
+    GitHubProvider.#immediateCache.set(this.installationId, {
+      octokit,
+      expiresAt: Date.now() + GitHubProvider.#CACHE_TTL_MS,
+    });
+    return octokit;
+  }
+
+  /**
+   * Read the organization once — no throttle sleep, no retry, abortable.
+   * Throws on any failure; a dead installation can answer later team lookups
+   * with 404, so this is what tells "reachable" apart from "absent".
+   * @param {string} org - Organization login
+   * @param {Object} [options.signal] - Aborts the request
+   */
+  async probeOrganization(org: string, options: { signal?: AbortSignal } = {}): Promise<void> {
+    const octokit = await this.#getImmediateOctokit();
+    await octokit.request('GET /orgs/{org}', {
+      org,
+      request: { retries: 0, ...(options.signal ? { signal: options.signal } : {}) },
+    });
+  }
+
+  /**
+   * Whether a team slug exists in the organization: true, false on a 404, and
+   * any other answer (rate limit, 5xx, abort) thrown — never read as "free".
+   * No throttle sleep, no retry.
+   * @param {string} org - Organization login
+   * @param {string} teamSlug - Team slug
+   * @param {Object} [options.signal] - Aborts the request
+   */
+  async probeTeam(
+    org: string,
+    teamSlug: string,
+    options: { signal?: AbortSignal } = {}
+  ): Promise<boolean> {
+    const octokit = await this.#getImmediateOctokit();
+    try {
+      await octokit.request('GET /orgs/{org}/teams/{team_slug}', {
+        org,
+        team_slug: teamSlug,
+        request: { retries: 0, ...(options.signal ? { signal: options.signal } : {}) },
+      });
+      return true;
+    } catch (error: unknown) {
+      if (isNotFound(error)) return false;
+      throw error;
+    }
+  }
+
   /**
    * Get all teams in organization
    * @param {string} org - Organization login

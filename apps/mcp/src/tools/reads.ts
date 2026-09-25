@@ -131,7 +131,8 @@ export const getClassroomInfoTool = mirrorResourceTool({
   title: 'Get classroom info',
   description:
     'Classroom name, status, archive flag, sanitized settings (feature flags, model choices, ' +
-    'has_anthropic_key/has_openai_key booleans — never raw keys), and your role in it. Any member.',
+    'has_anthropic_key/has_openai_key booleans — never raw keys), your role in it, and its time ' +
+    'zone (UTC when unset). Any member.',
 });
 
 export const getRosterTool = mirrorResourceTool({
@@ -186,7 +187,7 @@ export const getSubmissionTool = mirrorResourceTool({
   description:
     'One submission (a GitRepoAssignment) with its grades, graders, and analytics snapshot if ' +
     'present. Teaching team only. `submission_id` comes from list_submissions; it is also the ' +
-    'id that grade_add, grade_remove, and grader_assign consume.',
+    'id that grade_add, grade_remove, grader_assign, and submission_late_override consume.',
   extraInput: {
     submission_id: z.string().uuid().describe('Submission (GitRepoAssignment) id'),
   },
@@ -255,8 +256,11 @@ export const listCalendarTool = mirrorResourceTool({
   name: 'list_calendar',
   title: 'List calendar (current month)',
   description:
-    'Calendar events for the current month — recurring events expanded, assignment deadlines ' +
-    'merged in. Use list_calendar_range for another window. Any member; staff reads also include ' +
+    "Calendar events for the current month in the classroom's time zone — recurring events " +
+    'expanded, assignment deadlines merged in. Use list_calendar_range for another window. Event ' +
+    'times and deadlines have a `<field>_local` rendering in that zone; quote those, not raw UTC. ' +
+    'Any member; ' +
+    'staff reads also include ' +
     'linked draft pages/decks and links to unpublished assignments, flagged as such. ' +
     '`featured_resource` is the one link the month view shows under an event, or null.',
 });
@@ -267,8 +271,10 @@ export const listCalendarRangeTool = mirrorResourceTool({
   title: 'List calendar (date range)',
   description:
     'Calendar events for an explicit date range. `start` and `end` are ISO dates ' +
-    '(YYYY-MM-DD, e.g. 2026-07-01 / 2026-08-31), start before end. Recurring events expanded, ' +
-    'deadlines merged. Any member; staff reads also include linked draft pages/decks and links ' +
+    '(YYYY-MM-DD, e.g. 2026-07-01 / 2026-08-31), start before end, read as whole days in the ' +
+    "classroom's time zone. Recurring events expanded, deadlines merged. Event times and " +
+    'deadlines have a `<field>_local` rendering in that zone. Any member; staff reads also include linked draft ' +
+    'pages/decks and links ' +
     'to unpublished assignments, flagged as such. `featured_resource` is the one link the month ' +
     'view shows under an event, or null.',
   extraInput: {
@@ -308,8 +314,8 @@ export const listSubmissionsTool: ToolDefinition<ListSubmissionsArgs> = {
     'All submissions (GitRepoAssignments) in the classroom with grade emojis, grader assignments, ' +
     'student/team, and the classroom emoji scale — the same per-submission shape as the ' +
     'grading-queue. Optional filters: repository_id, assignment_id, grader_id, status (OPEN|CLOSED). ' +
-    'The returned `id` is the submission id that grade_add, grade_remove, and grader_assign ' +
-    'consume. Teaching team only.',
+    'The returned `id` is the submission id that grade_add, grade_remove, grader_assign, and ' +
+    'submission_late_override consume. Teaching team only.',
   scope: 'read',
   roles: TEACHING_TEAM,
   inputSchema: {

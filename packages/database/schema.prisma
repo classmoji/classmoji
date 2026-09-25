@@ -349,6 +349,8 @@ model User {
   /// Rows this user typed in on somebody else's behalf — see FormResponse.added_by.
   form_responses_added          FormResponse[]            @relation("FormResponseAddedBy")
   survey_responses              SurveyResponse[]
+  team_sets_created             TeamSet[]
+  team_set_runs_created         TeamSetRun[]
 
   @@unique([provider, provider_id])
   @@index([provider, login])
@@ -482,6 +484,7 @@ model Classroom {
   forms                 Form[]
   content_assets        ContentAsset[]
   content_index         ContentIndex[]
+  team_sets             TeamSet[]
 
   // Logically redundant now that slug is globally unique, but retained: it is
   // the compound key live upserts select on (githubClassroomImport, example
@@ -521,6 +524,17 @@ model ClassroomSettings {
   content_repo_name            String?
   default_student_page         String   @default("dashboard")
   theme                        String   @default("stone")
+  // The course's IANA time zone, e.g. `America/New_York` — THE one place a
+  // classroom records its zone. Everything that formats a date on the server
+  // reads it through classroom.getTimeZone: the public /schedule, Ask Moji's
+  // "now" line and the MCP server's `<field>_local` renderings. Null = not set:
+  // Ask Moji then falls back to the asking user's browser zone, and everything
+  // else to UTC, labelled as UTC. Set at creation from the creator's browser.
+  //
+  // Validated in classroom.updateSettings against Intl (canonical spelling
+  // stored); the CHECK in classroom_settings_timezone is a shape floor only,
+  // same reasoning as the deprecated ClassroomSite.timezone it replaces.
+  timezone                     String?
   created_at                   DateTime @default(now())
   updated_at                   DateTime @default(now()) @updatedAt
 
@@ -552,6 +566,14 @@ model ClassroomSite {
   // repair, never delete the site row (and with it the claimed subdomain).
   home_page_id              String?
   show_schedule             Boolean   @default(true)
+  // DEPRECATED — superseded by ClassroomSettings.timezone (migration
+  // classroom_settings_timezone copied every non-null value there). Nothing
+  // reads or writes this column any more. It is left in place, not dropped, so
+  // a process still running the previous release during a rolling deploy (the
+  // pages app deploys separately) does not select a column that is gone. Drop it
+  // in a later migration once no deployed build references it.
+  //
+  // Original note, kept for history:
   // The IANA zone the PUBLIC schedule renders deadlines in, e.g.
   // `America/New_York`. Null = fall back to UTC, and the schedule then LABELS
   // the date as UTC rather than printing a bare, ambiguous one.
@@ -1160,6 +1182,7 @@ model Tag {
   classroom    Classroom    @relation(fields: [classroom_id], references: [id], onDelete: Cascade)
   repositories Repository[]
   teams        TeamTag[]
+  team_sets    TeamSet[]
 
   @@unique([classroom_id, name])
   @@map("tags")
@@ -1782,6 +1805,7 @@ model Form {
   responses    FormResponse[]
   module_items ModuleItem[]
   assignment   Assignment?
+  team_sets    TeamSet[]
 
   @@unique([classroom_id, slug])
   @@index([classroom_id])
@@ -1925,6 +1949,101 @@ model FormMagicToken {
   /// the same id, and a duplicate must be a no-op rather than an error.
   @@index([provider_message_id])
   @@map("form_magic_tokens")
+}
+
+// ============================================================================
+// TEAM SETS
+// ============================================================================
+// A team set is one configured grouping of a CLASSROOM form's respondents
+// ("workshop-pairs"). A run is one solve of that configuration against the
+// responses as they stood when it started: a PROPOSAL, stored as ids and
+// integers only. Neither ever touches a Team row. Teams come into existence
+// only through a separate, owner-confirmed "create" step (teamSet.service
+// applyCreate), which adds teams under the set's tag and never deletes any —
+// a Team delete cascades to its repositories and their grades, so nothing on
+// this path is allowed to issue one.
+
+enum TeamSetRunStatus {
+  QUEUED
+  RUNNING
+  SOLVED
+  INFEASIBLE
+  FAILED
+  CANCELED
+}
+
+model TeamSet {
+  id             String   @id @default(uuid())
+  classroom_id   String
+  form_id        String
+  /// Slug-like; becomes the Tag name on create. Unique per form.
+  name           String
+  /// TeamSetConfig (version 1) — see teamSetConfig.ts.
+  config         Json
+  /// Set by create: the Tag every created team carries.
+  tag_id         String?
+  /// The run whose teams were created. Null until a create is CLAIMED; the
+  /// claim is an `updateMany … WHERE created_run_id IS NULL`, which is what
+  /// makes a double-confirm create one set of teams rather than two.
+  created_run_id String?
+  /// { status: 'RUNNING'|'DONE'|'FAILED', total, done, failed: [{team, reason}],
+  ///   teams: [{team_id, name}], started_at, finished_at }
+  create_state   Json?
+  created_by     String
+  created_at     DateTime @default(now())
+  updated_at     DateTime @default(now()) @updatedAt
+
+  classroom Classroom    @relation(fields: [classroom_id], references: [id], onDelete: Cascade)
+  form      Form         @relation(fields: [form_id], references: [id], onDelete: Cascade)
+  tag       Tag?         @relation(fields: [tag_id], references: [id], onDelete: SetNull)
+  creator   User         @relation(fields: [created_by], references: [id])
+  runs      TeamSetRun[]
+
+  @@unique([form_id, name])
+  @@index([classroom_id])
+  @@map("team_sets")
+}
+
+model TeamSetRun {
+  id             String           @id @default(uuid())
+  team_set_id    String
+  /// 1..n per set, shown to humans ("run 3"). Allocated under the set's row lock.
+  number         Int
+  status         TeamSetRunStatus @default(QUEUED)
+  /// Snapshot of TeamSet.config at start.
+  config         Json
+  /// TeamSetProblem — ids and integers only, no names or free text. This exact
+  /// JSON is what the solver reads.
+  problem        Json
+  /// TeamSetContext — ids only; what metrics and explanations need.
+  context        Json
+  /// Staleness snapshot: { revision_id, responses: [{id, user_id, updated_at,
+  /// answers_hash}], roster_user_ids }.
+  inputs         Json
+  seed           Int
+  /// e.g. "cpsat@9.15.6755"
+  engine         String
+  /// { teams: [{ slot, option_id, member_user_ids }] }
+  result         Json?
+  /// TeamSetMetrics
+  metrics        Json?
+  /// { status, objective, bound, wall_s }
+  solver         Json?
+  /// { issues?: CheckIssue[], core?: [{src, label}] }
+  diagnostics    Json?
+  /// Closed-vocabulary code, never raw exception text.
+  error          String?
+  trigger_run_id String?
+  created_by     String
+  created_at     DateTime         @default(now())
+  started_at     DateTime?
+  finished_at    DateTime?
+
+  team_set TeamSet @relation(fields: [team_set_id], references: [id], onDelete: Cascade)
+  creator  User    @relation(fields: [created_by], references: [id])
+
+  @@unique([team_set_id, number])
+  @@map("team_set_runs")
 }
 
 /// Path → git object map for a classroom's content repo, refreshed from push

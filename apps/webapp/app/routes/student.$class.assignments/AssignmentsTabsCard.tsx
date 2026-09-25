@@ -1,12 +1,12 @@
 import { useState } from 'react';
 import { Link, useParams } from 'react-router';
-import dayjs from 'dayjs';
 import { motion, useReducedMotion } from 'framer-motion';
 import { IconCheck, IconExternalLink } from '@tabler/icons-react';
 import Emoji from '~/components/ui/display/Emoji';
 import TokenExtensionPopover from '~/components/features/TokenExtensionPopover';
 import { CommitCount } from '~/components/features/analytics';
 import { POP_SPRING } from '~/utils/motion';
+import { formatDeadline } from './formatDeadline';
 
 export type AssignmentStatus = 'current' | 'completed';
 
@@ -61,16 +61,6 @@ const emptyCopy: Record<TabKey, string> = {
   current: 'No current assignments. You’re all caught up.',
   completed: 'Nothing submitted yet.',
   all: 'No assignments yet.',
-};
-
-const formatDeadline = (deadline: string) => {
-  const target = dayjs(deadline);
-  const today = dayjs().startOf('day');
-  const days = target.startOf('day').diff(today, 'day');
-  if (days < 0) return `overdue · ${target.format('MMM D')}`;
-  if (days === 0) return 'due today';
-  if (days === 1) return 'due tomorrow';
-  return target.format('MMM D');
 };
 
 const AssignmentsTabsCard = ({ rows, balance }: AssignmentsTabsCardProps) => {
@@ -272,7 +262,7 @@ const AssignmentsTabsCard = ({ rows, balance }: AssignmentsTabsCardProps) => {
                       </td>
                       <td className="px-4 py-3 hidden sm:table-cell whitespace-nowrap text-gray-600 dark:text-gray-300">
                         {row.studentDeadline ? (
-                          formatDeadline(row.studentDeadline)
+                          formatDeadline(row.studentDeadline, row.status)
                         ) : (
                           <span className="text-gray-400 dark:text-gray-600">—</span>
                         )}

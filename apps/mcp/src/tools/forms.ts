@@ -55,7 +55,14 @@ import { z } from 'zod';
 import { ToolError } from '../mcp/errors.ts';
 import type { ToolContext, ToolDefinition } from '../mcp/registry.ts';
 import { assertProTier } from '../authz/proTier.ts';
-import { FORMS_STAFF, ok, requireClassroomCtx, scopedNotFound, writeAudit } from './shared.ts';
+import {
+  FORMS_STAFF,
+  loadFormInClassroom as loadSharedFormInClassroom,
+  ok,
+  requireClassroomCtx,
+  scopedNotFound,
+  writeAudit,
+} from './shared.ts';
 
 /** Audit vocabulary, shared with the pages routes and the webapp redirect. */
 const FORMS_RESOURCE = 'FORMS';
@@ -180,20 +187,11 @@ interface FormRow {
 }
 
 /**
- * Load a Form and verify its classroom_id (S1). Form carries classroom_id
- * directly, so the comparison is a single hop — same uniform rejection as every
- * other loader in this server, so an unknown id and another classroom's form are
- * indistinguishable to the caller.
- *
- * `includeCreator` is never requested: it attaches the full creator User row.
+ * The S1 form loader (shared.ts — the team-set tools use the same one), typed
+ * with this file's row.
  */
-async function loadFormInClassroom(formId: string, ctx: ToolContext): Promise<FormRow> {
-  const form = (await ClassmojiService.form.findById(formId)) as FormRow | null;
-  if (!form || form.classroom_id !== requireClassroomCtx(ctx).classroomId) {
-    throw scopedNotFound('Form');
-  }
-  return form;
-}
+const loadFormInClassroom = (formId: string, ctx: ToolContext): Promise<FormRow> =>
+  loadSharedFormInClassroom<FormRow>(formId, ctx);
 
 /** The response columns these tools read. Mirrors the web's loader row. */
 interface ResponseRow {

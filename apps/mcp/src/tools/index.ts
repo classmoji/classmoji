@@ -15,6 +15,7 @@ import { whoamiTool } from './whoami.ts';
 import { readTools } from './reads.ts';
 import { gradeAddTool, gradeRemoveTool, gradeRemoveAllTool } from './grades.ts';
 import { graderAssignTool, graderUnassignTool, graderAssignBulkTool } from './graders.ts';
+import { submissionLateOverrideTool } from './lateOverride.ts';
 import { emojiMappingUpsertTool, letterGradeMappingUpsertTool } from './mappings.ts';
 import { assignmentCreateTool, assignmentUpdateTool, assignmentDeleteTool } from './assignments.ts';
 import { regradeCreateTool, regradeResolveTool } from './regrades.ts';
@@ -76,6 +77,7 @@ import {
   formResponseCreateTool,
   formResponseUpdateTool,
 } from './forms.ts';
+import { formTeamsGetTool, formTeamsRunTool, formTeamsCreateTool } from './formTeams.ts';
 import {
   teamCreateTool,
   teamDeleteTool,
@@ -99,6 +101,10 @@ export function registerAllTools(): void {
   registerToolDefinition(gradeAddTool);
   registerToolDefinition(gradeRemoveTool);
   registerToolDefinition(gradeRemoveAllTool);
+
+  // Late-penalty exemption (OWNER+TEACHER — the web shield button's tier); one
+  // submission, a list, or every submission of an assignment.
+  registerToolDefinition(submissionLateOverrideTool);
 
   // Grader assignment (OWNER — route-derived); bulk distributes across a whole
   // assignment in one call.
@@ -246,4 +252,13 @@ export function registerAllTools(): void {
   registerToolDefinition(formResponseGetTool);
   registerToolDefinition(formResponseCreateTool);
   registerToolDefinition(formResponseUpdateTool);
+
+  // Team sets on a CLASSROOM form (Pro, checked in-handler like every forms
+  // tool). get/run are the forms tier (OWNER+TEACHER): a run is only a
+  // proposal and never touches a team. create is OWNER-only — it mints real
+  // GitHub teams — previews unless confirm:true, and hands the work to a
+  // background task.
+  registerToolDefinition(formTeamsGetTool);
+  registerToolDefinition(formTeamsRunTool);
+  registerToolDefinition(formTeamsCreateTool);
 }
