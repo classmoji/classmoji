@@ -339,18 +339,6 @@ export const recordPush = async (gitRepoId: string, pushedAt: Date) => {
 };
 
 /**
- * Every submission row on one student repo, by id. A push refreshes commit
- * stats for all of them, whether or not it counted as a submission.
- */
-export const findIdsByGitRepoId = async (gitRepoId: string) => {
-  const rows = await getPrisma().gitRepoAssignment.findMany({
-    where: { git_repo_id: gitRepoId },
-    select: { id: true },
-  });
-  return rows.map(r => r.id);
-};
-
-/**
  * The identity the provisioning task commits as when it copies the template
  * into a student repo (see packages/tasks createRepository). Its commits are
  * never a student's push.
