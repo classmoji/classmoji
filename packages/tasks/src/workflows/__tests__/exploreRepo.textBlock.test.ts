@@ -7,7 +7,7 @@
  * no error anywhere. These tests pin that the answer is taken from the first
  * text block, that a missing or cut-short answer falls back AND is logged, that
  * no `thinking` param is sent (Opus 5.5 rejects `disabled`), and that the
- * synthesizer strips the outer ```json fence Sonnet 5 wraps its answer in.
+ * excerpt selector strips the outer ```json fence Sonnet 5 wraps its answer in.
  * `@trigger.dev/sdk/v3` is mocked and the Anthropic client is a stub — nothing
  * reaches the API.
  */
@@ -29,7 +29,7 @@ vi.mock('@trigger.dev/sdk/v3', () => ({
 
 vi.spyOn(console, 'log').mockImplementation(() => {});
 
-const { pickRelevantFiles, synthesizeFindings } = await import('../exploreRepo.ts');
+const { pickRelevantFiles, requestExcerptPointers } = await import('../exploreRepo.ts');
 
 const client = { messages: { create: mocks.create } } as unknown as Anthropic;
 
@@ -57,8 +57,8 @@ const pick = () =>
     null
   );
 
-const synthesize = () =>
-  synthesizeFindings(
+const select = () =>
+  requestExcerptPointers(
     client,
     'claude-opus-5-5',
     [{ path: 'src/App.jsx', content: 'export default function App() {}' }],
@@ -102,74 +102,106 @@ describe('pickRelevantFiles', () => {
     expect(params).not.toHaveProperty('thinking');
     expect(params.max_tokens).toBe(4096);
   });
+
+  it('keeps only paths, each once, without "./", and no more than the depth allows', async () => {
+    // A non-string used to crash the initial call's summary at `p.split`, and
+    // a repeat was fetched and shown to the excerpt model twice.
+    mocks.create.mockResolvedValue(
+      message([
+        {
+          type: 'text',
+          text: '["src/App.jsx", {"path": "x.js"}, 7, " ./src/App.jsx ", "", "a.js", "b.js", "c.js", "d.js"]',
+        },
+      ])
+    );
+
+    // 'focused' allows 4.
+    await expect(pick()).resolves.toEqual(['src/App.jsx', 'a.js', 'b.js', 'c.js']);
+  });
 });
 
-describe('synthesizeFindings', () => {
-  it('returns the text block that follows a thinking block', async () => {
-    const findings = '{"focus_area": "initial", "relevant_files": []}';
-    mocks.create.mockResolvedValue(message([THINKING, { type: 'text', text: findings }]));
+describe('requestExcerptPointers', () => {
+  const POINTERS =
+    '{"excerpts": [{"path": "src/App.jsx", "start_line": 1, "end_line": 1, "why": "the component"}]}';
+  const PARSED = {
+    overview: null,
+    pointers: [
+      { path: 'src/App.jsx', startLine: 1, endLine: 1, wholeFile: false, why: 'the component' },
+    ],
+  };
 
-    await expect(synthesize()).resolves.toBe(findings);
+  it('parses the text block that follows a thinking block', async () => {
+    mocks.create.mockResolvedValue(message([THINKING, { type: 'text', text: POINTERS }]));
+
+    await expect(select()).resolves.toEqual(PARSED);
     expect(mocks.warn).not.toHaveBeenCalled();
   });
 
-  it('falls back to an empty object, and says so, when no text block comes back', async () => {
+  it('returns null, and says so, when no text block comes back', async () => {
     mocks.create.mockResolvedValue(message([THINKING]));
 
-    await expect(synthesize()).resolves.toBe('{}');
+    await expect(select()).resolves.toBeNull();
     expect(mocks.warn).toHaveBeenCalledTimes(1);
     expect(String(mocks.warn.mock.calls[0][0])).toContain(
-      'Synthesizer: claude-opus-5-5 returned no text block (blocks: thinking, stop_reason: end_turn)'
+      'Excerpt selector: claude-opus-5-5 returned no text block (blocks: thinking, stop_reason: end_turn)'
     );
   });
 
-  it('warns on a truncated answer but still returns what came back', async () => {
+  it('warns on a truncated answer and returns null for the half-written JSON', async () => {
     mocks.create.mockResolvedValue(
-      message([THINKING, { type: 'text', text: '{"focus_area": "ini' }], 'max_tokens')
+      message([THINKING, { type: 'text', text: '{"excerpts": [{"path": "src/Ap' }], 'max_tokens')
     );
 
-    await expect(synthesize()).resolves.toBe('{"focus_area": "ini');
+    await expect(select()).resolves.toBeNull();
     expect(mocks.warn).toHaveBeenCalledTimes(1);
     expect(String(mocks.warn.mock.calls[0][0])).toContain(
-      'Synthesizer: claude-opus-5-5 stopped with max_tokens'
+      'Excerpt selector: claude-opus-5-5 stopped with max_tokens'
     );
   });
 
   it('warns on a refusal, which is not a max_tokens stop but still cuts the answer short', async () => {
     mocks.create.mockResolvedValue(message([], 'refusal'));
 
-    await expect(synthesize()).resolves.toBe('{}');
+    await expect(select()).resolves.toBeNull();
     const warnings = mocks.warn.mock.calls.map(call => String(call[0]));
     expect(warnings).toEqual([
-      expect.stringContaining('Synthesizer: claude-opus-5-5 stopped with refusal'),
+      expect.stringContaining('Excerpt selector: claude-opus-5-5 stopped with refusal'),
       expect.stringContaining('returned no text block (blocks: none, stop_reason: refusal)'),
     ]);
   });
 
-  it('strips the outer ```json fence but leaves a ``` inside a code_snippet alone', async () => {
-    const inner = '{"relevant_files": [{"code_snippet": "```js\\nx()\\n```"}]}';
+  it('strips an outer ```json fence', async () => {
     mocks.create.mockResolvedValue(
-      message([{ type: 'text', text: '```json\n' + inner + '\n```\n' }])
+      message([{ type: 'text', text: '```json\n' + POINTERS + '\n```\n' }])
     );
 
-    const findings = await synthesize();
-    expect(findings).toBe(inner);
-    expect(JSON.parse(findings).relevant_files[0].code_snippet).toBe('```js\nx()\n```');
+    await expect(select()).resolves.toEqual(PARSED);
   });
 
-  it('returns an unfenced answer unchanged', async () => {
-    const bare = '{"focus_area": "initial"}';
-    mocks.create.mockResolvedValue(message([{ type: 'text', text: bare }]));
+  it('reads the object out of prose around it', async () => {
+    mocks.create.mockResolvedValue(
+      message([
+        { type: 'text', text: 'Here are the excerpts:\n' + POINTERS + '\nHope that helps.' },
+      ])
+    );
 
-    await expect(synthesize()).resolves.toBe(bare);
+    await expect(select()).resolves.toEqual(PARSED);
   });
 
-  it('sends no thinking param and leaves room for thinking in max_tokens', async () => {
-    mocks.create.mockResolvedValue(message([{ type: 'text', text: '{}' }]));
+  it('sends the files with line numbers, and no thinking param', async () => {
+    mocks.create.mockResolvedValue(message([{ type: 'text', text: POINTERS }]));
 
-    await synthesize();
+    await select();
     const params = mocks.create.mock.calls[0][0];
     expect(params).not.toHaveProperty('thinking');
+    // Thinking counts against max_tokens and this call reads the code, so it
+    // gets twice the picker's room.
     expect(params.max_tokens).toBe(8192);
+    const prompt = params.messages[0].content as string;
+    expect(prompt).toContain(
+      '### FILE: src/App.jsx (1 lines)\n1| export default function App() {}'
+    );
+    // The initial call asks for the overview; others do not.
+    expect(prompt).toContain('"overview"');
   });
 });
