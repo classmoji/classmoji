@@ -346,6 +346,35 @@ export async function loadRepositoryInClassroom(
   return record;
 }
 
+/** The Form columns every forms-surface loader relies on; callers type the rest. */
+export interface FormRecord {
+  id: string;
+  classroom_id: string;
+  current_revision_id?: string | null;
+}
+
+/**
+ * Load a Form and verify its classroom_id (S1). Form carries classroom_id
+ * directly, so the comparison is a single hop — same uniform rejection as every
+ * other loader in this server, so an unknown id and another classroom's form are
+ * indistinguishable to the caller. Shared by the forms tools and the team-set
+ * tools, which are two faces of one surface.
+ *
+ * `includeCreator` is never requested: it attaches the full creator User row.
+ * `T` lets a caller name the wider row it reads (the service returns the whole
+ * Form row); the check itself only reads `classroom_id`.
+ */
+export async function loadFormInClassroom<T extends FormRecord = FormRecord>(
+  formId: string,
+  ctx: ToolContext
+): Promise<T> {
+  const form = (await ClassmojiService.form.findById(formId)) as T | null;
+  if (!form || form.classroom_id !== requireClassroomCtx(ctx).classroomId) {
+    throw scopedNotFound('Form');
+  }
+  return form;
+}
+
 type QuizRecord = NonNullable<Awaited<ReturnType<typeof ClassmojiService.quiz.findById>>>;
 
 /**
