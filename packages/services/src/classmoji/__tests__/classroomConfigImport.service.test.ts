@@ -64,6 +64,7 @@ describe('selectedSettingsFields', () => {
       'llm_temperature',
       'llm_max_tokens',
       'code_aware_model',
+      'exploration_model',
       'syllabus_bot_model',
     ]);
   });

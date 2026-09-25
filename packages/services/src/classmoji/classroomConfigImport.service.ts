@@ -23,7 +23,10 @@ export interface ConfigImportSelections {
    * syllabus_bot_enabled only lands on a Pro target — see importClassroomConfig.
    */
   features?: boolean;
-  /** llm_provider, llm_model, llm_temperature, llm_max_tokens, code_aware_model, syllabus_bot_model */
+  /**
+   * llm_provider, llm_model, llm_temperature, llm_max_tokens, code_aware_model,
+   * exploration_model, syllabus_bot_model
+   */
   aiConfig?: boolean;
   /** openai_api_key, anthropic_api_key — OPT-IN secrets, never copied unless enabled */
   apiKeys?: boolean;
@@ -86,6 +89,7 @@ export const SETTINGS_FIELD_GROUPS: Record<
     'llm_temperature',
     'llm_max_tokens',
     'code_aware_model',
+    'exploration_model',
     'syllabus_bot_model',
   ],
   apiKeys: ['openai_api_key', 'anthropic_api_key'],

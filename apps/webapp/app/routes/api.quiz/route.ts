@@ -444,6 +444,9 @@ export async function action({ request }: Route.ActionArgs) {
                     difficultyLevel: attempt.quiz.difficulty_level,
                     anthropicApiKey: classroomSettings?.anthropic_api_key,
                     model: classroomSettings?.code_aware_model,
+                    // Repo-exploration sub-agent. Runs on the platform key in
+                    // Trigger.dev regardless of anthropicApiKey.
+                    explorationModel: classroomSettings?.exploration_model,
                   },
                   // Code-aware options
                   { orgLogin: gitOrganization.login, repoName, accessToken }
