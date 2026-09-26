@@ -9,6 +9,7 @@ import { canonicalTimeZone, defaultContentRepoName, scopeGitlabId } from '@class
 import { ActionTypes } from '~/constants';
 import { slugify } from './utils';
 import { pickContentNamespace } from './contentNamespace.server';
+import { prepareClassroomImport, runClassroomImport } from './importFlow.server';
 
 /**
  * Create a classroom on GitLab: the group is the organization (connected
@@ -18,7 +19,13 @@ import { pickContentNamespace } from './contentNamespace.server';
  */
 export async function createGitLabClassroom(
   userId: string,
-  input: { group_id?: unknown; name?: unknown; slug?: unknown; timezone?: unknown }
+  input: {
+    group_id?: unknown;
+    name?: unknown;
+    slug?: unknown;
+    timezone?: unknown;
+    importConfig?: unknown;
+  }
 ) {
   const name = typeof input.name === 'string' ? input.name.trim() : '';
   if (!name) return { error: 'Classroom name is required' };
@@ -30,6 +37,10 @@ export async function createGitLabClassroom(
 
   const connection = await ClassmojiService.gitlabConnection.findForUser(userId);
   if (!connection) return { error: 'Connect Gitlab first.' };
+
+  // Import checks that can refuse the create run before anything is made.
+  const prepared = await prepareClassroomImport(userId, input.importConfig ?? null);
+  if ('error' in prepared) return { error: prepared.error };
 
   // The connection's instance: gitlab.com, or the school's own GitLab.
   const instanceId = connection.gitlab_instance_id ?? null;
@@ -154,18 +165,23 @@ export async function createGitLabClassroom(
     console.error('Templates subgroup creation failed:', error);
   }
 
-  try {
-    await ClassmojiService.emojiMapping.ensureDefaultScale(classroom.id);
-  } catch (error: unknown) {
-    console.error('Default grading scale seeding failed:', error);
-  }
+  // Import from a source classroom if asked (settings, repositories, and in
+  // the background content, template copies and modules); seeds the default
+  // grading scale either way.
+  const { successMessage, importJobId, importWarnings, unreachableSourceOrg } =
+    await runClassroomImport({
+      state: prepared.state,
+      classroom,
+      gitOrgLogin: gitOrg.login,
+      userId,
+    });
 
   return {
-    success: 'Classroom created successfully!',
+    success: successMessage,
     action: ActionTypes.CREATE_CLASSROOM,
     classroomSlug: classroom.slug,
-    import_job_id: null,
-    import_warnings: [] as string[],
-    import_github_unavailable: null,
+    import_job_id: importJobId,
+    import_warnings: importWarnings,
+    import_github_unavailable: unreachableSourceOrg,
   };
 }

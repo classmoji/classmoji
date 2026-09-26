@@ -426,22 +426,43 @@ export const importModules = async (
   let skipped_items = 0;
 
   for (const sourceModule of sourceModules) {
-    const newModule = await tx.module.create({
-      data: {
-        classroom_id: targetClassroomId,
-        title: sourceModule.title,
-        slug: sourceModule.slug,
-        description: sourceModule.description,
-        position: sourceModule.position,
-        is_published: false,
-      },
-    });
+    // The repository import already makes (by title) the module each copied
+    // assignment lands in, and titles are unique per classroom: reuse that
+    // module rather than fail on a second create.
+    const newModule =
+      (await tx.module.findFirst({
+        where: { classroom_id: targetClassroomId, title: sourceModule.title },
+        include: { items: true },
+      })) ??
+      (await tx.module.create({
+        data: {
+          classroom_id: targetClassroomId,
+          title: sourceModule.title,
+          slug: sourceModule.slug,
+          description: sourceModule.description,
+          position: sourceModule.position,
+          is_published: false,
+        },
+        include: { items: true },
+      }));
     modules += 1;
 
     for (const item of sourceModule.items) {
       const remapped = remapModuleItem(item, idMaps);
       if (!remapped) {
         skipped_items += 1;
+        continue;
+      }
+      // Already in the reused module (an item per resource per module).
+      if (
+        newModule.items.some(
+          existing =>
+            (remapped.page_id && existing.page_id === remapped.page_id) ||
+            (remapped.repository_id && existing.repository_id === remapped.repository_id) ||
+            (remapped.quiz_id && existing.quiz_id === remapped.quiz_id) ||
+            (remapped.slide_id && existing.slide_id === remapped.slide_id)
+        )
+      ) {
         continue;
       }
       await tx.moduleItem.create({

@@ -16,9 +16,9 @@ import StepImportModules from './StepImportModules';
 import StepReview from './StepReview';
 import { slugify, STEPS } from './utils';
 import { browserTimeZone } from '~/utils/browserTimeZone';
-import { SOURCE_ROLES } from './sourceAccess';
 import type { ImportSelections } from './types';
 import { loadGitLabOptions } from './gitlabOptions.server';
+import { loadImportableClassrooms } from './importSources.server';
 import GitLabClassroomForm from './GitLabClassroomForm';
 import type { Route } from './+types/route';
 
@@ -33,7 +33,16 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
     (authData.session as { user?: { provider?: string | null } } | undefined)?.user?.provider
   );
   const gitlab = await loadGitLabOptions(authData.userId);
-  if (gitMode === 'GITLAB') return { requiresGithub: true as const, gitMode, gitlab };
+  if (gitMode === 'GITLAB') {
+    // GitLab classrooms import from any class this user owns or teaches,
+    // Github or GitLab.
+    return {
+      requiresGithub: true as const,
+      gitMode,
+      gitlab,
+      importableClassrooms: await loadImportableClassrooms(authData.userId),
+    };
+  }
   if (!authData.token) return { requiresGithub: true as const, gitMode, gitlab };
 
   const octokit = GitHubProvider.getUserOctokit(authData.token);
@@ -177,63 +186,7 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
         },
       },
     }),
-    getPrisma().classroom.findMany({
-      where: {
-        memberships: {
-          some: {
-            user_id: user.id,
-            // Shared with the action's re-verification. If these two ever drift,
-            // the picker offers a source the action refuses — a dead end reached
-            // only after the whole wizard has been filled in.
-            role: { in: [...SOURCE_ROLES] },
-          },
-        },
-      },
-      select: {
-        id: true,
-        slug: true,
-        name: true,
-        // THIS viewer's roles only, and only the role column — enough to derive
-        // `is_owner` below. A wider select would serialize every member's
-        // membership rows into the picker payload.
-        memberships: {
-          where: { user_id: user.id },
-          select: { role: true },
-        },
-        git_organization: {
-          select: {
-            login: true,
-          },
-        },
-        // Counts drive the "Also copy" checkboxes on the import step.
-        _count: {
-          select: {
-            pages: true,
-            slides: true,
-            modules: true,
-            calendar_events: true,
-            emoji_mappings: true,
-            letter_grade_mappings: true,
-          },
-        },
-        repositories: {
-          select: {
-            id: true,
-            title: true,
-            template: true,
-            type: true,
-            _count: {
-              select: {
-                assignments: true,
-                quizzes: true,
-              },
-            },
-          },
-          orderBy: { title: 'asc' },
-        },
-      },
-      orderBy: { created_at: 'desc' },
-    }),
+    loadImportableClassrooms(user.id),
   ]);
 
   // Enrich gitOrgs with avatar URLs from GitHub
@@ -242,22 +195,13 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
     avatar_url: avatarByProviderId.get(org.provider_id) ?? null,
   }));
 
-  // Collapse the viewer's membership rows to a single flag and DROP the rows —
-  // the picker needs "may this person copy the API keys too", nothing more.
-  // `some(OWNER)` rather than reading one row's role: roles are additive and a
-  // person may hold both OWNER and TEACHER here, in which case they are an owner.
-  const importSources = importableClassrooms.map(({ memberships, ...classroom }) => ({
-    ...classroom,
-    is_owner: memberships.some(m => m.role === 'OWNER'),
-  }));
-
   return {
     requiresGithub: false as const,
     gitMode,
     gitlab,
     user,
     gitOrgs: gitOrgsWithAvatars,
-    importableClassrooms: importSources,
+    importableClassrooms,
     githubAppName: process.env.GITHUB_APP_NAME,
   };
 };
@@ -288,7 +232,15 @@ const CreateClassroom = ({ loaderData }: Route.ComponentProps) => {
 
   // One side per session: its mode decides, so there is no Github/GitLab switch.
   if (hasGitLab) {
-    return <GitLabClassroomForm gitlab={loaderData.gitlab} providerSwitch={null} />;
+    return (
+      <GitLabClassroomForm
+        gitlab={loaderData.gitlab}
+        importableClassrooms={
+          ('importableClassrooms' in loaderData ? loaderData.importableClassrooms : null) ?? []
+        }
+        providerSwitch={null}
+      />
+    );
   }
   return (
     <CreateClassroomForm loaderData={loaderData as CreateClassroomData} providerSwitch={null} />

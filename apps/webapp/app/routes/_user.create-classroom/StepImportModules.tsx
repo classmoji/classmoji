@@ -23,6 +23,8 @@ interface StepImportModulesProps {
   setSelectedModules: (repositories: Map<string, ModuleConfig>) => void;
   importSelections: ImportSelections;
   setImportSelections: (selections: ImportSelections) => void;
+  /** Gitlab wording (projects, the group's templates subgroup). */
+  isGitLab?: boolean;
 }
 
 /** One "Also copy" toggle row: key, label, sublabel, and an item count that
@@ -44,6 +46,7 @@ const StepImportModules = ({
   setSelectedModules,
   importSelections,
   setImportSelections,
+  isGitLab = false,
 }: StepImportModulesProps) => {
   const [drawerOpen, setDrawerOpen] = useState(false);
 
@@ -301,9 +304,13 @@ const StepImportModules = ({
                         },
                         {
                           key: 'duplicateTemplates',
-                          label: 'Duplicate template repos',
+                          label: isGitLab
+                            ? 'Duplicate template projects'
+                            : 'Duplicate template repos',
                           count: distinctTemplates,
-                          sublabel: 'private copies in this org — keeps terms independent',
+                          sublabel: isGitLab
+                            ? "private copies in the group's templates subgroup, so terms stay independent"
+                            : 'private copies in this org — keeps terms independent',
                         },
                         {
                           key: 'calendar',

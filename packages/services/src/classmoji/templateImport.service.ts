@@ -119,10 +119,14 @@ export function parseTemplateRef(
   if (segments.length === 1) {
     return fallbackOwner ? { owner: fallbackOwner, name: segments[0]! } : null;
   }
-  if (segments.length === 2) {
-    return { owner: segments[0]!, name: segments[1]! };
+  // A URL (`https://…`) is not a ref.
+  if (segments.some(segment => segment.includes(':'))) return null;
+  if (segments.length >= 2) {
+    // Split on the LAST slash: a GitLab template sits in a (nested) group,
+    // `group/templates/name`. Github owners never contain a slash.
+    return { owner: segments.slice(0, -1).join('/'), name: segments[segments.length - 1]! };
   }
-  // Empty, or more path segments than a repo ref can carry — unusable.
+  // Empty — unusable.
   return null;
 }
 
@@ -513,14 +517,36 @@ export const duplicateImportedTemplates = async (
     warn('templates', 'target classroom has no git organization');
     return summary;
   }
-  if (targetOrg.provider !== 'GITHUB') {
+  if (targetOrg.provider !== 'GITHUB' && targetOrg.provider !== 'GITLAB') {
     warn(
       'templates',
-      `template duplication supports GitHub only (target is ${targetOrg.provider})`
+      `template duplication supports Github and Gitlab only (target is ${targetOrg.provider})`
     );
     return summary;
   }
+  const targetIsGitLab = targetOrg.provider === 'GITLAB';
+  // Where the copies go: the org on Github, the top group's `templates`
+  // subgroup on GitLab (where every GitLab classroom's templates live).
+  const targetOwner = targetIsGitLab ? `${targetOrg.login}/templates` : targetOrg.login;
+  const targetWriter: GitOrgRecord = { ...targetOrg, login: targetOwner };
   const sourceOrg = sourceClassroom?.git_organization as GitOrgRecord | null | undefined;
+
+  /**
+   * The org record that can read `owner`'s repos: the target's or the source
+   * classroom's connection, `login` set to the owner itself (a GitLab
+   * template's owner is a group path under the top group). Null for anything
+   * else (a third org, a personal account).
+   */
+  const readerFor = (owner: string): GitOrgRecord | null => {
+    const lower = owner.toLowerCase();
+    for (const org of [targetOrg, sourceOrg]) {
+      if (!org?.login || (org.provider !== 'GITHUB' && org.provider !== 'GITLAB')) continue;
+      const login = org.login.toLowerCase();
+      if (lower === login) return org;
+      if (org.provider === 'GITLAB' && lower.startsWith(`${login}/`)) return { ...org, login: owner };
+    }
+    return null;
+  };
 
   // Scope to the target classroom as well as the id list — the relink queries
   // below inherit this scope, which is what keeps SOURCE rows untouched.
@@ -541,7 +567,7 @@ export const duplicateImportedTemplates = async (
    * what makes a resumed relink a no-op rather than a double count.
    */
   const relinkRows = async (rawRefs: string[], newName: string): Promise<number> => {
-    const newRef = `${targetOrg.login}/${newName}`;
+    const newRef = `${targetOwner}/${newName}`;
     let relinked = 0;
     for (const rawRef of rawRefs) {
       const { count } = await getPrisma().repository.updateMany({
@@ -601,13 +627,7 @@ export const duplicateImportedTemplates = async (
       // Readable only through an installation this flow holds: the target org's,
       // or the source classroom's. Anything else (a third org, a personal
       // account) stays linked to the original.
-      const ownerLower = group.ref.owner.toLowerCase();
-      let readerOrg: GitOrgRecord | null = null;
-      if (ownerLower === targetOrg.login.toLowerCase()) {
-        readerOrg = targetOrg;
-      } else if (sourceOrg?.login && ownerLower === sourceOrg.login.toLowerCase()) {
-        readerOrg = sourceOrg.provider === 'GITHUB' ? sourceOrg : null;
-      }
+      const readerOrg = readerFor(group.ref.owner);
       if (!readerOrg) {
         warn(scope, `not readable from ${targetOrg.login} — keeping the original link`);
         continue;
@@ -616,7 +636,7 @@ export const duplicateImportedTemplates = async (
       try {
         // Distinguish a DELETED template from an empty one — a dangling ref is
         // the exact failure this feature exists to stop repeating, so say so.
-        const readerProvider = readerOrg === targetOrg ? targetProvider : getGitProvider(readerOrg);
+        const readerProvider = getGitProvider(readerOrg);
         if (!(await readerProvider.repositoryExists(group.ref.owner, group.ref.name))) {
           warn(scope, 'skipped — template repository no longer exists');
           continue;
@@ -650,17 +670,21 @@ export const duplicateImportedTemplates = async (
 
         const newName = await resolveFreeRepoName(
           targetProvider,
-          targetOrg.login,
-          templateNameCandidates(group.ref.name, targetNamespace)
+          targetOwner,
+          templateNameCandidates(
+            targetIsGitLab ? group.ref.name.toLowerCase() : group.ref.name,
+            targetNamespace
+          )
         );
         if (!newName) {
-          warn(scope, `skipped — no free repository name in ${targetOrg.login}`);
+          warn(scope, `skipped — no free repository name in ${targetOwner}`);
           continue;
         }
 
         // Pace BEFORE the retry loop, so a create that just slept off a
-        // rate-limit backoff is not made to wait all over again.
-        if (attemptedAnyCreate) {
+        // rate-limit backoff is not made to wait all over again. GitLab has
+        // no such content-creation limit.
+        if (attemptedAnyCreate && !targetIsGitLab) {
           emit('pacing repository creation to stay under GitHub limits');
           await sleep(REPO_CREATE_SPACING_MS);
           emit(null);
@@ -670,7 +694,7 @@ export const duplicateImportedTemplates = async (
         attemptedAnyCreate = true;
         await createRepositoryWithBackoff({
           provider: targetProvider,
-          orgLogin: targetOrg.login,
+          orgLogin: targetOwner,
           name: newName,
           onWait: emit,
         });
@@ -679,7 +703,7 @@ export const duplicateImportedTemplates = async (
           // (Contents API — the Git Data API 409s on an empty repo) and creates
           // `main`, which becomes the default branch.
           await ContentService.uploadBatch({
-            gitOrganization: targetOrg,
+            gitOrganization: targetWriter,
             repo: newName,
             files,
             branch: 'main',
@@ -690,7 +714,7 @@ export const duplicateImportedTemplates = async (
           // Drop the repo we just made rather than leave an empty shell behind —
           // it has no commits, and the rows still point at the original template.
           try {
-            await targetProvider.deleteRepository(targetOrg.login, newName);
+            await targetProvider.deleteRepository(targetOwner, newName);
           } catch (cleanupError: unknown) {
             warn(scope, `left an empty ${newName} behind: ${errText(cleanupError)}`);
           }

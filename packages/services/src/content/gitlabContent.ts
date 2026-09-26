@@ -59,7 +59,9 @@ const ownerCache = new Map<string, { owner: string; expiresAt: number }>();
  * matches (and when `login` already names a subgroup, it is kept).
  */
 export async function owned(org: GitLabOrgRecord, repo: string): Promise<GitLabOrgRecord> {
-  const key = `${org.id ?? org.login}/${repo}`;
+  // The login is part of the key: a template read passes its own group path
+  // as `login`, and must not be answered with (or poison) a content lookup.
+  const key = `${org.id ?? ''}:${org.login}/${repo}`;
   const cached = ownerCache.get(key);
   if (cached && Date.now() < cached.expiresAt) return { ...org, login: cached.owner };
   const classroom = await getPrisma().classroom.findFirst({

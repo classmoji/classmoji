@@ -59,10 +59,12 @@ const ACCESS_LEVELS: Record<string, number> = {
 /** Reporter — the level a plain organization invite lands on. */
 const REPORTER_ACCESS_LEVEL = 20;
 
-// A class subgroup's layout subgroups, by path, with their display names.
+// Layout subgroups made on first use, by path, with their display names.
 const LAYOUT_SUBGROUPS: Record<string, string> = {
   [GITLAB_PROJECTS_SUBGROUP]: 'Projects',
   [GITLAB_TEAMS_SUBGROUP]: 'Teams',
+  // The top group's template projects (made at classroom creation too).
+  templates: 'Templates',
 };
 
 /** GitLab derives a project/group `path` from its name; mirror that slugging. */

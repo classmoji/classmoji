@@ -7,7 +7,9 @@ import { useGlobalFetcher } from '~/hooks';
 import { ActionTypes } from '~/constants';
 import { browserTimeZone } from '~/utils/browserTimeZone';
 import { slugify } from './utils';
+import StepImportModules from './StepImportModules';
 import type { GitLabOptions } from './gitlabOptions.server';
+import type { ImportSelections, ImportableClassroom } from './types';
 
 const CONNECT_URL = `/connect/gitlab?returnTo=${encodeURIComponent('/create-classroom?provider=gitlab')}`;
 
@@ -34,9 +36,11 @@ const CONNECT_OUTCOMES: Record<string, { type: 'success' | 'error' | 'warning'; 
  */
 const GitLabClassroomForm = ({
   gitlab,
+  importableClassrooms,
   providerSwitch,
 }: {
   gitlab: GitLabOptions;
+  importableClassrooms: ImportableClassroom[];
   providerSwitch: React.ReactNode;
 }) => {
   const navigate = useNavigate();
@@ -45,6 +49,27 @@ const GitLabClassroomForm = ({
   const [groupId, setGroupId] = useState<number | null>(gitlab.groups[0]?.id ?? null);
   const [name, setName] = useState('');
   const [nameTouched, setNameTouched] = useState(false);
+
+  // Import from an existing classroom (Github or Gitlab), the same choices as
+  // the Github wizard's import step.
+  const [importEnabled, setImportEnabled] = useState(false);
+  const [sourceClassroomId, setSourceClassroomId] = useState<string | null>(null);
+  const [selectedModules, setSelectedModules] = useState(
+    new Map<string, { includeQuizzes: boolean }>()
+  );
+  const [importSelections, setImportSelections] = useState<ImportSelections>({
+    grading: true,
+    gradeScales: true,
+    tokens: true,
+    features: true,
+    aiConfig: true,
+    apiKeys: false,
+    calendar: false,
+    pages: true,
+    slides: true,
+    modules: true,
+    duplicateTemplates: true,
+  });
 
   const outcome = CONNECT_OUTCOMES[searchParams.get('gitlab') ?? ''];
   const data = fetcher!.data as { classroomSlug?: string; error?: string } | undefined;
@@ -57,9 +82,29 @@ const GitLabClassroomForm = ({
   }, [data, navigate]);
 
   const submit = () => {
+    let importConfig = null;
+    const anySelection = selectedModules.size > 0 || Object.values(importSelections).some(Boolean);
+    if (importEnabled && sourceClassroomId && anySelection) {
+      const { pages, slides, modules, duplicateTemplates, ...config } = importSelections;
+      importConfig = {
+        sourceClassroomId,
+        repositories: Array.from(selectedModules.entries()).map(([id, cfg]) => ({
+          id,
+          includeQuizzes: cfg.includeQuizzes || false,
+        })),
+        config,
+        content: { pages, slides, modules, duplicateTemplates },
+      };
+    }
     notify(ActionTypes.CREATE_CLASSROOM, 'Creating classroom...');
     fetcher!.submit(
-      { intent: 'create-gitlab', group_id: groupId, name, timezone: browserTimeZone() },
+      {
+        intent: 'create-gitlab',
+        group_id: groupId,
+        name,
+        timezone: browserTimeZone(),
+        importConfig,
+      },
       { method: 'post', action: '/create-classroom', encType: 'application/json' }
     );
   };
@@ -158,6 +203,23 @@ const GitLabClassroomForm = ({
                   onBlur={() => setNameTouched(true)}
                 />
               </Form.Item>
+
+              {importableClassrooms.length > 0 && (
+                <div className="mb-6">
+                  <StepImportModules
+                    importableClassrooms={importableClassrooms}
+                    importEnabled={importEnabled}
+                    setImportEnabled={setImportEnabled}
+                    sourceClassroomId={sourceClassroomId}
+                    setSourceClassroomId={setSourceClassroomId}
+                    selectedModules={selectedModules}
+                    setSelectedModules={setSelectedModules}
+                    importSelections={importSelections}
+                    setImportSelections={setImportSelections}
+                    isGitLab
+                  />
+                </div>
+              )}
 
               {data?.error && (
                 <Alert type="error" showIcon message={data.error} style={{ marginBottom: 16 }} />

@@ -208,9 +208,7 @@ const StepBasicInfo = ({
 
             {/* Availability feedback */}
             <div className="mt-1 text-sm min-h-[1.25rem]">
-              {availabilityLoading && (
-                <span className="text-ink-4">Checking availability…</span>
-              )}
+              {availabilityLoading && <span className="text-ink-4">Checking availability…</span>}
               {!availabilityLoading && slugAvailable && (
                 <span className="text-emerald-600 dark:text-emerald-400">✓ available</span>
               )}
