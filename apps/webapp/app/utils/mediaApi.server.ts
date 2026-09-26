@@ -5,6 +5,11 @@ import {
   requireAuth,
 } from '@classmoji/auth/server';
 import { ClassmojiService } from '@classmoji/services';
+import {
+  UploadTooLargeError,
+  declaredBodyTooLarge,
+  readLimitedBody,
+} from '@classmoji/utils/upload-limit';
 
 /**
  * The four media routes' shared plumbing: who may call them, what a body may
@@ -104,16 +109,21 @@ export function mediaErrorResponse(error: unknown): Response {
 
 /** Read a small JSON object, or throw the response that refuses it. */
 export async function readJsonBody(request: Request): Promise<Record<string, unknown>> {
-  const declared = Number(request.headers.get('content-length') ?? '0');
-  if (Number.isFinite(declared) && declared > MAX_JSON_BODY_BYTES) {
-    throw mediaError('BAD_REQUEST', 413, { message: 'Request body is too large.' });
-  }
+  const tooLarge = () => mediaError('BAD_REQUEST', 413, { message: 'Request body is too large.' });
+  if (declaredBodyTooLarge(request.headers, MAX_JSON_BODY_BYTES)) throw tooLarge();
 
-  // The header is a claim, so the bytes are counted too — a chunked request
-  // declares no length at all.
-  const text = await request.text();
-  if (text.length > MAX_JSON_BODY_BYTES) {
-    throw mediaError('BAD_REQUEST', 413, { message: 'Request body is too large.' });
+  // The header is a claim — a chunked request declares no length at all — so
+  // the bytes are counted AS THEY ARRIVE, and the read is abandoned the moment
+  // the count crosses the cap, rather than buffering the whole body and
+  // measuring it afterwards.
+  let text = '';
+  if (request.body) {
+    try {
+      text = new TextDecoder().decode(await readLimitedBody(request.body, MAX_JSON_BODY_BYTES));
+    } catch (error: unknown) {
+      if (error instanceof UploadTooLargeError) throw tooLarge();
+      throw error;
+    }
   }
 
   try {

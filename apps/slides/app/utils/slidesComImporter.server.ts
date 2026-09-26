@@ -18,7 +18,7 @@ import {
 } from '@classmoji/services/slides';
 import { getContentRepoName } from '@classmoji/utils';
 import { getThemeUrls, saveTheme, generateThemeSlug } from './themeService.server.ts';
-import { RepoEntryGate } from './zipRepoEntries.ts';
+import { RepoEntryGate, resolveMediaRef, slideNumberLabel } from './zipRepoEntries.ts';
 import {
   uploadVideoBuffer,
   isCloudinaryConfigured,
@@ -66,8 +66,11 @@ const SL_BLOCK_VISIBILITY_CSS = `
  * Everything the import keeps goes to GitHub in ONE commit, and GitHub refuses
  * a single file over the REST ceiling by refusing the whole commit. So every
  * entry is measured against `REPO_REST_MAX_BYTES` as it is read, and one over
- * it is left out with a warning naming it (`warnings`, also on the `done`
- * event) — the deck imports without it rather than not at all. Videos a Pro
+ * it is left out with a warning naming it and the slides that used it
+ * (`warnings`, also on the `done` event) — the deck imports without it rather
+ * than not at all. An entry is measured by the size its ZIP header declares
+ * before it is decompressed, and again after. The deck's references to a file
+ * left out are removed rather than left pointing at nothing. Videos a Pro
  * classroom sends to Cloudinary are not repository files and are not measured,
  * unless Cloudinary fails and they fall back to the repository.
  */
@@ -183,7 +186,9 @@ export async function processZipImport({
   // Entries left out for being over the course repository's per-file ceiling —
   // see "Files too large for the course repository" above.
   const repoGate = new RepoEntryGate();
-  const { warnings } = repoGate;
+  // The slides that referenced each file left out — `3`, or `3.2` in a stack —
+  // so its warning can say where the gap is.
+  const skippedOnSlides = new Map<string, string[]>();
   /** @type {Map<string, string>} Maps old image path to new absolute URL */
   const imageMap = new Map();
 
@@ -277,6 +282,9 @@ export async function processZipImport({
     // Also map just the filename for fallback matching
     imageMap.set(filename, absoluteUrl);
   }
+
+  // Images left out, for the reference pass in step 9.
+  const skippedImages = repoGate.skippedPaths();
 
   // 7e. Process videos with progress
   if (videoFiles.length > 0) {
@@ -417,8 +425,32 @@ export async function processZipImport({
   // 9. Rewrite image paths in HTML
   const $slides = $('.reveal .slides');
 
+  /** Reveal's number for the slide holding `el` (`3`, or `3.2` in a stack). */
+  const slideOf = (el: Parameters<typeof $>[0]): string | null => {
+    const indexes: number[] = [];
+    let $section = $(el).closest('section');
+    while ($section.length > 0) {
+      indexes.push($section.parent().children('section').index($section));
+      $section = $section.parent().closest('section');
+    }
+    return slideNumberLabel(indexes);
+  };
+
+  /** Remember that the slide holding `el` referenced a file left out. */
+  const noteSkipped = (path: string, el: Parameters<typeof $>[0]) => {
+    const label = slideOf(el);
+    if (!label) return;
+    const labels = skippedOnSlides.get(path) ?? [];
+    if (!labels.includes(label)) labels.push(label);
+    skippedOnSlides.set(path, labels);
+  };
+
   // Process all elements with image-related attributes
   // Includes: src, data-src, data-background-image, data-video-thumb (slides.com video thumbnails), poster (HTML5 video)
+  //
+  // A reference to an image the import left out is REMOVED, not kept: left in
+  // place it is a relative path into the ZIP, which resolves to nothing once
+  // the deck is served from the repository.
   $slides
     .find('[src], [data-src], [data-background-image], [data-video-thumb], [poster]')
     .each((_, el) => {
@@ -428,24 +460,20 @@ export async function processZipImport({
         const val = $el.attr(attr);
         if (!val) return;
 
-        // Try to match the path in our image map
-        for (const [oldPath, newPath] of imageMap) {
-          // Match full path or just filename
-          if (
-            val === oldPath ||
-            val.endsWith('/' + oldPath.split('/').pop()) ||
-            val.includes(oldPath)
-          ) {
-            // Convert data-src to src for compatibility with our viewer
-            if (attr === 'data-src') {
-              $el.attr('src', newPath);
-              $el.removeAttr('data-src');
-              $el.removeAttr('data-lazy-loaded');
-            } else {
-              $el.attr(attr, newPath);
-            }
-            break;
+        const ref = resolveMediaRef(val, imageMap, skippedImages);
+        if (ref?.kind === 'kept') {
+          // Convert data-src to src for compatibility with our viewer
+          if (attr === 'data-src') {
+            $el.attr('src', ref.url);
+            $el.removeAttr('data-src');
+            $el.removeAttr('data-lazy-loaded');
+          } else {
+            $el.attr(attr, ref.url);
           }
+        } else if (ref?.kind === 'skipped') {
+          $el.removeAttr(attr);
+          if (attr === 'data-src') $el.removeAttr('data-lazy-loaded');
+          noteSkipped(ref.path, el);
         }
       });
     });
@@ -456,15 +484,12 @@ export async function processZipImport({
     const val = $el.attr('data-background-image');
     if (!val) return;
 
-    for (const [oldPath, newPath] of imageMap) {
-      if (
-        val === oldPath ||
-        val.endsWith('/' + oldPath.split('/').pop()) ||
-        val.includes(oldPath)
-      ) {
-        $el.attr('data-background-image', newPath);
-        break;
-      }
+    const ref = resolveMediaRef(val, imageMap, skippedImages);
+    if (ref?.kind === 'kept') {
+      $el.attr('data-background-image', ref.url);
+    } else if (ref?.kind === 'skipped') {
+      $el.removeAttr('data-background-image');
+      noteSkipped(ref.path, el);
     }
   });
 
@@ -686,7 +711,7 @@ export async function processZipImport({
         const message = cloudErr instanceof Error ? cloudErr.message : String(cloudErr);
         console.error(`Cloudinary upload failed for ${filename}, falling back to GitHub:`, message);
 
-        if (!repoGate.admit(filename, buffer.length)) continue;
+        if (!repoGate.admit(filename, buffer.length, filePath)) continue;
         const content = buffer.toString('base64');
         const newPath = `${contentPath}/videos/${filename}`;
 
@@ -704,6 +729,13 @@ export async function processZipImport({
   }
 
   // 11b. Rewrite video URLs in HTML (now that videoMap has all URLs including Cloudinary)
+  //
+  // As with images, a reference to a video the import left out — skipped on
+  // the way in, or refused when a Cloudinary upload fell back to the repository
+  // — is removed rather than left pointing into the ZIP.
+  const videoPaths = new Set(videoFiles.map(f => f.filePath));
+  const skippedVideos = new Set([...repoGate.skippedPaths()].filter(p => videoPaths.has(p)));
+
   $slides.find('video').each((_, el) => {
     const $video = $(el);
 
@@ -716,23 +748,20 @@ export async function processZipImport({
         return;
       }
 
-      // Try to match local path in our video map
-      for (const [oldPath, newPath] of videoMap) {
-        if (
-          val === oldPath ||
-          val.endsWith('/' + oldPath.split('/').pop()) ||
-          val.includes(oldPath)
-        ) {
-          // Convert data-src to src for compatibility
-          if (attr === 'data-src') {
-            $video.attr('src', newPath);
-            $video.removeAttr('data-src');
-            $video.removeAttr('data-lazy-loaded');
-          } else {
-            $video.attr(attr, newPath);
-          }
-          break;
+      const ref = resolveMediaRef(val, videoMap, skippedVideos);
+      if (ref?.kind === 'kept') {
+        // Convert data-src to src for compatibility
+        if (attr === 'data-src') {
+          $video.attr('src', ref.url);
+          $video.removeAttr('data-src');
+          $video.removeAttr('data-lazy-loaded');
+        } else {
+          $video.attr(attr, ref.url);
         }
+      } else if (ref?.kind === 'skipped') {
+        $video.removeAttr(attr);
+        if (attr === 'data-src') $video.removeAttr('data-lazy-loaded');
+        noteSkipped(ref.path, el);
       }
     });
 
@@ -747,15 +776,34 @@ export async function processZipImport({
         return;
       }
 
-      // Try to match in video map
-      for (const [oldPath, newPath] of videoMap) {
-        if (srcVal === oldPath || srcVal.includes(oldPath.split('/').pop())) {
-          $source.attr('src', newPath);
-          break;
-        }
+      const ref = resolveMediaRef(srcVal, videoMap, skippedVideos);
+      if (ref?.kind === 'kept') {
+        $source.attr('src', ref.url);
+      } else if (ref?.kind === 'skipped') {
+        noteSkipped(ref.path, sourceEl);
+        $source.remove();
       }
     });
   });
+
+  // Section background videos: rewritten like any other video reference, and
+  // removed when the video was left out.
+  $slides.find('section[data-background-video]').each((_, el) => {
+    const $el = $(el);
+    const val = $el.attr('data-background-video');
+    if (!val || val.startsWith('http://') || val.startsWith('https://')) return;
+
+    const ref = resolveMediaRef(val, videoMap, skippedVideos);
+    if (ref?.kind === 'kept') {
+      $el.attr('data-background-video', ref.url);
+    } else if (ref?.kind === 'skipped') {
+      $el.removeAttr('data-background-video');
+      noteSkipped(ref.path, el);
+    }
+  });
+
+  // Every file left out, named, with the slides that used it.
+  const warnings = repoGate.warnings(skippedOnSlides);
 
   // 12. Build deck.json (source of truth) and generate index.html (build
   // artifact) via the canonical deck engine — both land in the SAME commit.

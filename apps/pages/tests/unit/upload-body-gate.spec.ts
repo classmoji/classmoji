@@ -36,6 +36,20 @@ test.describe('page uploads read the body after the gate', () => {
     expect(UPLOAD_SOURCE).not.toContain('await request.formData()');
   });
 
+  test('the editor toasts every refusal before BlockNote swallows it', () => {
+    // BlockNote's upload tab turns any thrown error into "Upload failed", so
+    // the reason reaches the person only through the toast.
+    const upload = EDITOR_SOURCE.slice(EDITOR_SOURCE.indexOf('const uploadFile = useCallback('));
+    expect(upload).toContain('toast.error(message);\n        throw new Error(message);');
+    expect(upload).toContain('refuse(repoFileTooLargeMessage(file.name));');
+    expect(upload).toContain(
+      "refuse(typeof body?.error === 'string' ? body.error : 'Upload failed');"
+    );
+    expect(upload.slice(0, upload.indexOf('return result.url;'))).not.toContain(
+      'throw new Error(repo'
+    );
+  });
+
   test('the editor sends the page in the query string, not the form', () => {
     expect(EDITOR_SOURCE).toContain('/api/upload?pageId=${encodeURIComponent(pageId)}');
     expect(EDITOR_SOURCE).not.toContain("formData.append('pageId'");
@@ -51,5 +65,53 @@ test.describe('page uploads read the body after the gate', () => {
     expect(membership).toBeLessThan(read);
     expect(status).toBeLessThan(read);
     expect(action).not.toContain('await request.formData()');
+  });
+
+  test('the page action reads a JSON save capped, after the same gates', () => {
+    const action = PAGE_ACTION_SOURCE.slice(PAGE_ACTION_SOURCE.indexOf('export const action'));
+    const status = action.indexOf('pageMutationBlocked(page.classroom, membership.role)');
+    const read = action.indexOf('data = await readPageJsonBody(request);');
+
+    for (const at of [status, read]) expect(at).toBeGreaterThan(-1);
+    expect(status).toBeLessThan(read);
+    expect(action).not.toContain('await request.json()');
+    // Twice the repository's file cap: the document rides as an escaped string.
+    expect(PAGE_ACTION_SOURCE).toContain(
+      'const PAGE_JSON_BODY_MAX_BYTES = 2 * REPO_REST_MAX_BYTES + MULTIPART_OVERHEAD_BYTES;'
+    );
+    expect(PAGE_ACTION_SOURCE).toContain(
+      'const bytes = await readLimitedBody(request.body, PAGE_JSON_BODY_MAX_BYTES);'
+    );
+  });
+});
+
+test.describe('page uploads take an upload slot', () => {
+  test('api.upload takes one after the gate, before the read, and gives it back', () => {
+    const gate = UPLOAD_SOURCE.indexOf('pageMutationBlocked(');
+    const slot = UPLOAD_SOURCE.indexOf('if (!acquireUploadSlot()) {');
+    const read = UPLOAD_SOURCE.indexOf('await readLimitedFormData(');
+
+    for (const at of [gate, slot, read]) expect(at).toBeGreaterThan(-1);
+    expect(gate).toBeLessThan(slot);
+    expect(slot).toBeLessThan(read);
+    expect(UPLOAD_SOURCE).toContain('} finally {\n    releaseUploadSlot();');
+    expect(UPLOAD_SOURCE).toContain(
+      "{ status: 503, headers: { 'Retry-After': String(UPLOAD_RETRY_AFTER_SECONDS) } }"
+    );
+  });
+
+  test('the cover upload takes one after the gates, before the read, released by the action', () => {
+    const action = PAGE_ACTION_SOURCE.slice(
+      PAGE_ACTION_SOURCE.indexOf('async function pageAction')
+    );
+    const status = action.indexOf('pageMutationBlocked(page.classroom, membership.role)');
+    const slot = action.indexOf('if (!acquireUploadSlot()) {');
+    const read = action.indexOf('await readLimitedFormData(request, uploadBodyLimit(');
+
+    for (const at of [status, slot, read]) expect(at).toBeGreaterThan(-1);
+    expect(status).toBeLessThan(slot);
+    expect(slot).toBeLessThan(read);
+    expect(action).toContain('slot.held = true;');
+    expect(PAGE_ACTION_SOURCE).toContain('} finally {\n    if (slot.held) releaseUploadSlot();');
   });
 });

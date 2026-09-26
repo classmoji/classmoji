@@ -11,6 +11,18 @@ export function oversizedFileMessage(files: File[]): string | null {
   return oversized ? repoFileTooLargeMessage(oversized.name) : null;
 }
 
+/** One page a batch import could not create, and the server's reason. */
+export interface BatchImportFailure {
+  title: string;
+  error: string;
+}
+
+/** The line above the list of failures: `Imported 3 of 5 pages.` */
+export function batchImportSummary(total: number, failures: BatchImportFailure[]): string {
+  const imported = total - failures.length;
+  return `Imported ${imported} of ${total} page${total === 1 ? '' : 's'}.`;
+}
+
 /**
  * Extract image references from markdown (client-side)
  * Handles paths with parentheses and URL-encoded characters

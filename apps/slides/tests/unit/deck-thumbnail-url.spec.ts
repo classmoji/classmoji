@@ -364,13 +364,17 @@ test.describe('the on-view enqueue endpoint', () => {
   );
 
   test('requires a session before it does anything else', () => {
-    expect(branch).toContain(
-      "if (!authData) return { intent: 'thumbnail', outcome: 'rate-limited' }"
-    );
-    // Before the slide lookup, and before the access check that would otherwise
-    // be the first thing an anonymous caller reached.
-    expect(branch.indexOf('!authData')).toBeLessThan(branch.indexOf('assertSlideAccess'));
-    expect(branch.indexOf('!authData')).toBeLessThan(branch.indexOf('findUnique'));
+    // At the top of the action, before the body is read — so before this branch
+    // is even chosen, and long before the slide lookup and the access check. The
+    // refusal is the same for every slide id, so it reveals nothing about them.
+    const action = INDEX_SOURCE.slice(INDEX_SOURCE.indexOf('export const action'));
+    const session = action.indexOf('if (!authData) {');
+    const read = action.indexOf('await readLimitedFormData(request, INDEX_ACTION_BODY_MAX_BYTES)');
+
+    for (const at of [session, read]) expect(at).toBeGreaterThan(-1);
+    expect(session).toBeLessThan(read);
+    expect(read).toBeLessThan(action.indexOf("if (intent === 'thumbnail')"));
+    expect(action).not.toContain('await request.formData()');
   });
 
   test('answers anonymous, denied and rate-limited with the same outcome', () => {

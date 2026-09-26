@@ -1,7 +1,14 @@
 import { redirect } from 'react-router';
-import { REPO_REST_MAX_BYTES, repoFileTooLargeMessage } from '@classmoji/utils/repo-limits';
 import {
+  REPO_REST_MAX_BYTES,
+  REPO_REST_MAX_LABEL,
+  repoFileTooLargeMessage,
+} from '@classmoji/utils/repo-limits';
+import {
+  MULTIPART_OVERHEAD_BYTES,
   UploadTooLargeError,
+  declaredBodyTooLarge,
+  readLimitedBody,
   readLimitedFormData,
   uploadBodyLimit,
 } from '@classmoji/utils/upload-limit';
@@ -14,6 +21,12 @@ import {
   uploadPageAsset,
 } from '~/utils/content.server.ts';
 import { migrateHtmlToBlockNote } from '~/utils/migration.server.ts';
+import {
+  UPLOAD_BUSY_MESSAGE,
+  UPLOAD_RETRY_AFTER_SECONDS,
+  acquireUploadSlot,
+  releaseUploadSlot,
+} from '~/utils/uploadConcurrency.server.ts';
 import { schema } from '~/components/editor/blocks/index.tsx';
 import type { PageForContent } from '~/types/pages.ts';
 import {
@@ -23,6 +36,36 @@ import {
   canonicalizeOpsAssets,
   resolveDocumentAssets,
 } from '~/utils/assetRefs.server.ts';
+
+/**
+ * The most a JSON request to the page action may send.
+ *
+ * The largest one is a whole-document save, which carries the page's
+ * `content.json` — itself at most `REPO_REST_MAX_BYTES`, the most the
+ * repository will commit — as a STRING inside the JSON body. Escaping that
+ * string adds a backslash before every quote, and BlockNote JSON is mostly
+ * quotes and short values, so the body is allowed twice the file plus slack
+ * for the other fields: room for any page the repository could store, and
+ * still a bound.
+ */
+const PAGE_JSON_BODY_MAX_BYTES = 2 * REPO_REST_MAX_BYTES + MULTIPART_OVERHEAD_BYTES;
+
+/** What a person reads when a save is over that. */
+const PAGE_TOO_LARGE_MESSAGE = `This page is larger than the ${REPO_REST_MAX_LABEL} your course repository accepts.`;
+
+/**
+ * The JSON body, read through the byte-counting reader. Throws
+ * `UploadTooLargeError` when it is over `PAGE_JSON_BODY_MAX_BYTES`, and the
+ * parser's own error for anything that is not JSON.
+ */
+async function readPageJsonBody(request: Request): Promise<Record<string, unknown>> {
+  if (declaredBodyTooLarge(request.headers, PAGE_JSON_BODY_MAX_BYTES)) {
+    throw new UploadTooLargeError(PAGE_JSON_BODY_MAX_BYTES);
+  }
+  if (!request.body) return (await request.json()) as Record<string, unknown>;
+  const bytes = await readLimitedBody(request.body, PAGE_JSON_BODY_MAX_BYTES);
+  return JSON.parse(new TextDecoder().decode(bytes)) as Record<string, unknown>;
+}
 
 /** Extensions a page cover may have — the image half of the upload allowlist. */
 const COVER_IMAGE_EXTENSION = /\.(png|jpe?g|gif|webp|svg)$/i;
@@ -287,16 +330,28 @@ export const loader = async ({
   };
 };
 
-/**
- * Actions for page mutations (edit mode only).
- */
-export const action = async ({
-  params,
-  request,
-}: {
+interface PageActionArgs {
   params: Record<string, string | undefined>;
   request: Request;
-}) => {
+}
+
+/**
+ * Actions for page mutations (edit mode only).
+ *
+ * The cover upload takes an upload slot partway through `pageAction` — after
+ * the gates, before its body is read — and this is where it is given back,
+ * whichever way the action ends.
+ */
+export const action = async (args: PageActionArgs) => {
+  const slot = { held: false };
+  try {
+    return await pageAction(args, slot);
+  } finally {
+    if (slot.held) releaseUploadSlot();
+  }
+};
+
+async function pageAction({ params, request }: PageActionArgs, slot: { held: boolean }) {
   const pageId = params.pageId!;
 
   const page = await ClassmojiService.page.findById(pageId, {
@@ -343,6 +398,16 @@ export const action = async ({
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- form/JSON data has dynamic shape
   let data: Record<string, any>, formData: FormData | undefined;
   if (contentType.includes('multipart/form-data')) {
+    // The one multipart intent is the cover upload: it takes an upload slot
+    // like every other file upload in this app (released by `action`).
+    if (!acquireUploadSlot()) {
+      return Response.json(
+        { error: UPLOAD_BUSY_MESSAGE },
+        { status: 503, headers: { 'Retry-After': String(UPLOAD_RETRY_AFTER_SECONDS) } }
+      );
+    }
+    slot.held = true;
+
     // Read only now — after the session, the membership and the status gate
     // above — and through a byte-counting reader: the one multipart intent is
     // the cover upload, which carries one repository-sized file at most.
@@ -356,7 +421,15 @@ export const action = async ({
     }
     data = { intent: formData.get('intent') };
   } else {
-    data = await request.json();
+    // Read capped, and only now, after the same gates. See PAGE_JSON_BODY_MAX_BYTES.
+    try {
+      data = await readPageJsonBody(request);
+    } catch (error: unknown) {
+      if (error instanceof UploadTooLargeError) {
+        return Response.json({ error: PAGE_TOO_LARGE_MESSAGE }, { status: 413 });
+      }
+      throw error;
+    }
   }
   const { intent } = data;
 
@@ -834,4 +907,4 @@ export const action = async ({
   }
 
   return Response.json({ error: 'Invalid action' }, { status: 400 });
-};
+}
