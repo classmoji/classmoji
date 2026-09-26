@@ -13,7 +13,7 @@ import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:
 import { lookup } from 'node:dns/promises';
 import { isIP } from 'node:net';
 import getPrisma from '@classmoji/database';
-import { GITLAB_COM, normalizeGitlabHost } from '@classmoji/utils';
+import { GITLAB_COM, GITLAB_PROJECTS_SUBGROUP, normalizeGitlabHost } from '@classmoji/utils';
 
 export interface GitLabOAuthClient {
   /** Null for the default instance. */
@@ -410,10 +410,11 @@ export async function checkHealth(instanceId: string): Promise<InstanceHealth> {
     for (const repo of classroom.git_repos) {
       if (health.projectsChecked >= HEALTH_SAMPLE) break;
       health.projectsChecked += 1;
-      const project = `${classroom.git_namespace}/${repo.name}`;
+      const group = `${classroom.git_namespace}/${GITLAB_PROJECTS_SUBGROUP}`;
+      const project = `${group}/${repo.name}`;
       try {
         const status = await provider.getClassmojiHookStatus(
-          classroom.git_namespace,
+          group,
           repo.name,
           url
         );

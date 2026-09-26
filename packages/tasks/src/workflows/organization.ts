@@ -1,5 +1,6 @@
 import { task } from '@trigger.dev/sdk';
 import getPrisma from '@classmoji/database';
+import { GITLAB_PROJECTS_SUBGROUP } from '@classmoji/utils';
 import {
   ClassmojiService,
   getGitProvider,
@@ -164,7 +165,9 @@ async function leaveGitLabClassAsStudent(
     ClassmojiService.user.findProviderUsernames([userId], 'GITLAB'),
   ]);
   const gitlabUsername = usernames.get(userId);
-  const namespace = classroomRow?.git_namespace;
+  const namespace = classroomRow?.git_namespace
+    ? `${classroomRow.git_namespace}/${GITLAB_PROJECTS_SUBGROUP}`
+    : null;
   if (!namespace || !gitlabUsername) return;
   const provider = getGitProvider(gitOrganization) as GitLabProvider;
 

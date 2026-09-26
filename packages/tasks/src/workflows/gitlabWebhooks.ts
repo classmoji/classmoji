@@ -1,6 +1,7 @@
 import { logger, schedules, task } from '@trigger.dev/sdk';
 import getPrisma from '@classmoji/database';
 import { ClassmojiService, getGitProvider, type GitLabProvider } from '@classmoji/services';
+import { GITLAB_PROJECTS_SUBGROUP } from '@classmoji/utils';
 
 /**
  * Repair GitLab webhooks: make every student project and content project of a
@@ -61,13 +62,13 @@ async function repairClassrooms(classroomIds?: string[]): Promise<RepairResult> 
       continue;
     }
 
-    // Student projects and the content project all live in the class subgroup.
+    // Student and team projects live in the class subgroup's `projects`, the
+    // content project at the class subgroup's root.
     const targets = classroom.git_repos.map(repo => ({
-      group: classroom.git_namespace as string,
+      group: `${classroom.git_namespace}/${GITLAB_PROJECTS_SUBGROUP}`,
       project: repo.name,
     }));
     if (classroom.content_repo) {
-      // The content project lives in the class subgroup.
       targets.push({ group: classroom.git_namespace as string, project: classroom.content_repo });
     }
 
@@ -165,7 +166,9 @@ export async function pollGitlabPushes(): Promise<{
 
   for (const repo of repos) {
     const org = repo.classroom?.git_organization;
-    const namespace = repo.classroom?.git_namespace;
+    const namespace = repo.classroom?.git_namespace
+      ? `${repo.classroom.git_namespace}/${GITLAB_PROJECTS_SUBGROUP}`
+      : null;
     if (!org || !namespace) continue;
     result.repos += 1;
     try {

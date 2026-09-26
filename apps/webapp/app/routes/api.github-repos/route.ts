@@ -15,6 +15,7 @@
 import { Octokit } from '@octokit/rest';
 import getPrisma from '@classmoji/database';
 import { GitLabProvider, getGitProvider } from '@classmoji/services';
+import { repoNamespace } from '@classmoji/utils';
 import { assertClassroomAccess } from '~/utils/helpers';
 import { getInstallationToken } from '~/routes/student.$class.quizzes/helpers.server';
 import type { Route } from './+types/route';
@@ -144,7 +145,9 @@ async function listGitLabTemplates(
     }),
   ]);
   const excluded = new Set(
-    generated.map(r => `${r.classroom.git_namespace ?? gitOrg.login}/${r.name}`.toLowerCase())
+    generated.map(r =>
+      `${repoNamespace({ ...r.classroom, git_organization: gitOrg })}/${r.name}`.toLowerCase()
+    )
   );
   const templatesPrefix = `${gitOrg.login}/templates/`.toLowerCase();
 

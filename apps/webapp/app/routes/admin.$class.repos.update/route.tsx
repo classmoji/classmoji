@@ -1,6 +1,6 @@
 import { Modal, Form, Input, Alert } from 'antd';
 import { isGitLabClassroom } from '~/utils/gitlabGuard.server';
-import { resolveTemplateRef } from '@classmoji/utils';
+import { repoNamespace, resolveTemplateRef } from '@classmoji/utils';
 import { useNavigate, useParams } from 'react-router';
 import { useEffect, useState, useRef } from 'react';
 import { auth, tasks } from '@trigger.dev/sdk';
@@ -172,8 +172,8 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
         templateOwner,
         templateRepo,
         token,
-        // GitLab: student projects live in the class subgroup.
-        repoOwner: classroom.git_namespace ?? null,
+        // GitLab: student projects live in the class subgroup's `projects`.
+        repoOwner: classroom.git_namespace ? repoNamespace(classroom) : null,
       },
       options: { tags: [`session_${sessionId}`] },
     };

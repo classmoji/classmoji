@@ -6,7 +6,13 @@ import {
   getGitProvider,
   type GitLabProvider,
 } from '@classmoji/services';
-import { gitTerms, scopeGitlabId, titleToIdentifier } from '@classmoji/utils';
+import {
+  GITLAB_PROJECTS_SUBGROUP,
+  gitTerms,
+  repoNamespace,
+  scopeGitlabId,
+  titleToIdentifier,
+} from '@classmoji/utils';
 import { createRepositoriesTask } from './gitRepo.ts';
 import { nanoid } from 'nanoid';
 import dayjs from 'dayjs';
@@ -120,7 +126,9 @@ async function gitlabServerPushTime(
         classroom: { select: { git_namespace: true, git_organization: true } },
       },
     });
-    const namespace = repo?.classroom?.git_namespace;
+    const namespace = repo?.classroom?.git_namespace
+      ? repoNamespace(repo.classroom)
+      : null;
     const org = repo?.classroom?.git_organization;
     if (!repo || !namespace || org?.provider !== 'GITLAB') return delivered;
     const provider = getGitProvider(org) as GitLabProvider;
@@ -349,8 +357,9 @@ export const createGithubRepositoryAssignmentTask = task({
     const gitProvider = getGitProvider(organization);
     const provider = organization.provider as 'GITHUB' | 'GITLAB';
 
-    // Where the student repo lives: the org on Github, the class subgroup on
-    // GitLab (the org row carries no classroom, so read it off the repo).
+    // Where the student repo lives: the org on Github, the class subgroup's
+    // `projects` on GitLab (the org row carries no classroom, so read it off
+    // the repo).
     let owner = organization.login;
     if (provider === 'GITLAB') {
       const repoRow = await ClassmojiService.gitRepo.find({ id: studentRepo.id });
@@ -362,7 +371,7 @@ export const createGithubRepositoryAssignmentTask = task({
           `No Gitlab class subgroup for repo ${repoName} (studentRepoId=${studentRepo.id})`
         );
       }
-      owner = classroomRow.git_namespace;
+      owner = `${classroomRow.git_namespace}/${GITLAB_PROJECTS_SUBGROUP}`;
 
       // Projects created before issue mode existed on GitLab have a push-only
       // hook; make sure close/reopen events reach Classmoji too.

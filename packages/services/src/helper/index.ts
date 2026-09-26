@@ -1,4 +1,4 @@
-import { parseScoreEmoji } from '@classmoji/utils';
+import { GITLAB_PROJECTS_SUBGROUP, parseScoreEmoji } from '@classmoji/utils';
 import { getGitProvider } from '../git/index.ts';
 import ClassmojiService from '../classmoji/index.ts';
 
@@ -101,14 +101,17 @@ class HelperService {
       const { name: repoName, gitOrganization, deleteFromGithub } = payload;
       if (deleteFromGithub) {
         const gitProvider = getGitProvider(gitOrganization);
-        // GitLab student projects live in the class subgroup, not the group.
+        // GitLab student projects live in the class subgroup's `projects`
+        // subgroup, not the group.
         let owner = payload.repoOwner ?? gitOrganization.login;
         if (!payload.repoOwner && gitOrganization.provider === 'GITLAB' && payload.id) {
           const row = await ClassmojiService.gitRepo.find({ id: payload.id });
           const classroom = row?.classroom_id
             ? await ClassmojiService.classroom.findById(row.classroom_id)
             : null;
-          owner = classroom?.git_namespace || owner;
+          if (classroom?.git_namespace) {
+            owner = `${classroom.git_namespace}/${GITLAB_PROJECTS_SUBGROUP}`;
+          }
         }
         await gitProvider.deleteRepository(owner, repoName);
       }

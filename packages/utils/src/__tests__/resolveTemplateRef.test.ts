@@ -46,10 +46,10 @@ describe('resolveTemplateRef', () => {
 });
 
 describe('repoNamespace', () => {
-  it('uses the classroom subgroup when there is one', () => {
+  it("uses the class subgroup's projects subgroup when there is one", () => {
     expect(
       repoNamespace({ git_namespace: 'dept/cs10-fall26', git_organization: { login: 'dept' } })
-    ).toBe('dept/cs10-fall26');
+    ).toBe('dept/cs10-fall26/projects');
   });
 
   it('falls back to the org for classrooms without one (Github)', () => {

@@ -6,6 +6,7 @@ import type {
   LanguagesMap,
   PRSummary,
 } from '../classmoji/repoAnalytics.types.ts';
+import { GITLAB_PROJECTS_SUBGROUP, GITLAB_TEAMS_SUBGROUP } from '@classmoji/utils';
 import { defaultHost } from '../classmoji/gitlabInstance.service.ts';
 
 /**
@@ -57,6 +58,12 @@ const ACCESS_LEVELS: Record<string, number> = {
 
 /** Reporter — the level a plain organization invite lands on. */
 const REPORTER_ACCESS_LEVEL = 20;
+
+// A class subgroup's layout subgroups, by path, with their display names.
+const LAYOUT_SUBGROUPS: Record<string, string> = {
+  [GITLAB_PROJECTS_SUBGROUP]: 'Projects',
+  [GITLAB_TEAMS_SUBGROUP]: 'Teams',
+};
 
 /** GitLab derives a project/group `path` from its name; mirror that slugging. */
 function toPath(name: string): string {
@@ -228,6 +235,23 @@ export class GitLabProvider extends GitProvider {
     return body.id;
   }
 
+  /**
+   * Resolve `group`, creating it when it is missing and is one of a class
+   * subgroup's layout subgroups (`projects`, `teams`), which are made on
+   * first use. Anything else missing still throws with `.status` 404.
+   */
+  async resolveOrCreateGroupId(group: string): Promise<number> {
+    try {
+      return await this.resolveGroupId(group);
+    } catch (error: unknown) {
+      const at = group.lastIndexOf('/');
+      const path = group.slice(at + 1);
+      const name = LAYOUT_SUBGROUPS[path];
+      if ((error as { status?: number }).status !== 404 || at === -1 || !name) throw error;
+      return (await this.createSubgroup(group.slice(0, at), name, path)).id;
+    }
+  }
+
   /** Resolve a username to its numeric user id, or null when no user matches. */
   async resolveUserId(username: string): Promise<number | null> {
     const users = (await this.api(
@@ -273,7 +297,7 @@ export class GitLabProvider extends GitProvider {
     name: string,
     isPrivate: boolean = true
   ): Promise<GitRepository> {
-    const namespaceId = await this.resolveGroupId(group);
+    const namespaceId = await this.resolveOrCreateGroupId(group);
 
     const project = (await this.api('/api/v4/projects', {
       method: 'POST',
@@ -1215,16 +1239,7 @@ export class GitLabProvider extends GitProvider {
     group: string,
     name: string
   ): Promise<{ id: number; slug: string; name: string }> {
-    let parentId: number;
-    try {
-      parentId = await this.resolveGroupId(group);
-    } catch (error: unknown) {
-      const at = group.lastIndexOf('/');
-      if ((error as { status?: number }).status !== 404 || at === -1) throw error;
-      const parent = group.slice(0, at);
-      const path = group.slice(at + 1);
-      parentId = (await this.createSubgroup(parent, 'Teams', path)).id;
-    }
+    const parentId = await this.resolveOrCreateGroupId(group);
     const path = toPath(name);
 
     const { ok, status, body } = await this.request('/api/v4/groups', {

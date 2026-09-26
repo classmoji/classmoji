@@ -70,15 +70,22 @@ describe('gitWeb on a self-managed instance', () => {
       git_namespace: 'cs/cs101',
       base_url: 'https://gitlab.school.edu',
     });
-    expect(web.repo('hw1-alice')).toBe('https://gitlab.school.edu/cs/cs101/hw1-alice');
-    expect(web.issue('hw1-alice', 3)).toBe(
-      'https://gitlab.school.edu/cs/cs101/hw1-alice/-/issues/3'
+    expect(web.repo('hw1-alice')).toBe(
+      'https://gitlab.school.edu/cs/cs101/projects/hw1-alice'
     );
+    expect(web.issue('hw1-alice', 3)).toBe(
+      'https://gitlab.school.edu/cs/cs101/projects/hw1-alice/-/issues/3'
+    );
+    // The content project sits at the class subgroup's root.
+    expect(web.contentRepo('content-cs101')).toBe(
+      'https://gitlab.school.edu/cs/cs101/content-cs101'
+    );
+    expect(web.reposIndex()).toBe('https://gitlab.school.edu/cs/cs101/projects');
   });
 
   it('falls back to gitlab.com without a base_url', () => {
     const web = gitWeb({ provider: 'GITLAB', login: 'cs', git_namespace: 'cs/cs101' });
-    expect(web.repo('x')).toBe('https://gitlab.com/cs/cs101/x');
+    expect(web.repo('x')).toBe('https://gitlab.com/cs/cs101/projects/x');
   });
 });
 

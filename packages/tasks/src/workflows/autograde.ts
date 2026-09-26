@@ -1,5 +1,6 @@
 import { task, logger, auth } from '@trigger.dev/sdk';
 import getPrisma from '@classmoji/database';
+import { repoNamespace } from '@classmoji/utils';
 import {
   ClassmojiService,
   getGitProvider,
@@ -167,8 +168,8 @@ export const provisionAutogradeWorkflowTask = task({
 
     const tests = repository.autograding_tests as WorkflowTestInput[];
     const yaml = await buildClassroomWorkflowYaml(tests, classroomSlug, gitOrganization.provider);
-    // GitLab student projects live in the class subgroup, not the top group.
-    const owner = repository.classroom.git_namespace || orgLogin;
+    // GitLab student projects live in the class subgroup's `projects`.
+    const owner = repoNamespace(repository.classroom) || orgLogin;
 
     // Fan out to existing student repos. We deliberately do NOT write the
     // workflow to the template repo: that would make every future repo-creation

@@ -133,10 +133,30 @@ export function resolveTemplateRef(
 }
 
 /**
- * Where a classroom's student repos live: its own namespace when it has one
- * (a GitLab classroom's subgroup), else the org itself (every Github classroom).
+ * A GitLab class subgroup's layout: the content project at its root, student
+ * and team projects in `projects/`, team subgroups in `teams/`.
+ */
+export const GITLAB_PROJECTS_SUBGROUP = 'projects';
+export const GITLAB_TEAMS_SUBGROUP = 'teams';
+
+/**
+ * Where a classroom's student and team repos live: the class subgroup's
+ * `projects` subgroup on GitLab, the org itself on Github (no namespace).
  */
 export function repoNamespace(classroom: {
+  git_namespace?: string | null;
+  git_organization: { login: string | null };
+}): string | null {
+  return classroom.git_namespace
+    ? `${classroom.git_namespace}/${GITLAB_PROJECTS_SUBGROUP}`
+    : classroom.git_organization.login;
+}
+
+/**
+ * Where a classroom's own content repo lives: the class subgroup on GitLab,
+ * the org on Github.
+ */
+export function classNamespace(classroom: {
   git_namespace?: string | null;
   git_organization: { login: string | null };
 }): string | null {
@@ -153,7 +173,9 @@ export function teamsNamespace(classroom: {
   git_organization: { login: string | null; provider?: string | null };
 }): string | null {
   if (classroom.git_organization.provider === 'GITLAB') {
-    return classroom.git_namespace ? `${classroom.git_namespace}/teams` : null;
+    return classroom.git_namespace
+      ? `${classroom.git_namespace}/${GITLAB_TEAMS_SUBGROUP}`
+      : null;
   }
   return classroom.git_organization.login;
 }
