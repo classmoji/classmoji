@@ -458,6 +458,20 @@ test.describe('the upload endpoints', () => {
     expect(gate).toBeLessThan(read);
     expect(action).not.toContain('await request.formData()');
   });
+
+  test('every answer to a deck image upload names its intent, failures included', () => {
+    // The image dialog's promise settles only on `intent: 'upload-image'`; an
+    // error without it leaves the dialog spinning with no message.
+    const start = VIEWER_SOURCE.indexOf("if (intent === 'upload-image') {");
+    const end = VIEWER_SOURCE.indexOf("if (intent === 'save-snippet')", start);
+    expect(start).toBeGreaterThan(-1);
+
+    const answers = VIEWER_SOURCE.slice(start, end).split(/\breturn\b/).slice(1);
+    expect(answers).toHaveLength(3);
+    for (const answer of answers) {
+      expect(answer.slice(0, 120)).toContain("intent: 'upload-image'");
+    }
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────

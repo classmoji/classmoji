@@ -4,7 +4,7 @@ import { Tooltip, Popconfirm } from 'antd';
 import getPrisma from '@classmoji/database';
 import { ContentService } from '@classmoji/content';
 import { assertSlideAccess } from '@classmoji/auth/server';
-import { ClassmojiService } from '@classmoji/services';
+import { ClassmojiService, isCommitTooLargeRefusal } from '@classmoji/services';
 import {
   DeckConflictError,
   DeckOpsBaseMismatchError,
@@ -1028,11 +1028,15 @@ export const action = async ({
   }
 
   // Upload an image to the slide's images folder
+  //
+  // EVERY answer from this intent carries `intent: 'upload-image'`, failures
+  // included: the image dialog's pending promise settles only on a response
+  // tagged with it, so an untagged error leaves the dialog spinning forever.
   if (intent === 'upload-image') {
     try {
       const file = formData.get('file');
       if (!file || !(file instanceof File)) {
-        return { error: 'No file provided' };
+        return { intent: 'upload-image' as const, error: 'No file provided' };
       }
 
       // Convert File to Buffer for ContentService
@@ -1073,7 +1077,15 @@ export const action = async ({
       };
     } catch (error: unknown) {
       console.error('Failed to upload image:', error);
-      return { error: error instanceof Error ? error.message : String(error) };
+      // A file over the repository's cap — refused by the service, or by
+      // GitHub — keeps its own sentence and a 413, like the body cap above.
+      return data(
+        {
+          intent: 'upload-image' as const,
+          error: error instanceof Error ? error.message : String(error),
+        },
+        { status: isCommitTooLargeRefusal(error) ? 413 : 500 }
+      );
     }
   }
 
