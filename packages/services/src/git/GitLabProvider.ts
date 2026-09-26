@@ -828,33 +828,6 @@ export class GitLabProvider extends GitProvider {
     return { id: mr.id, iid: mr.iid, url: mr.web_url };
   }
 
-  /**
-   * Move a project into another group (e.g. a content project into its class
-   * subgroup). GitLab keeps redirects from the old path.
-   */
-  async transferProject(group: string, project: string, toNamespace: string): Promise<void> {
-    await this.api(`/api/v4/projects/${encodeURIComponent(`${group}/${project}`)}/transfer`, {
-      method: 'PUT',
-      body: { namespace: toNamespace },
-    });
-  }
-
-  /** Set a project's display name only; its path (and every URL) stays. */
-  async setProjectDisplayName(group: string, project: string, name: string): Promise<void> {
-    await this.api(`/api/v4/projects/${encodeURIComponent(`${group}/${project}`)}`, {
-      method: 'PUT',
-      body: { name },
-    });
-  }
-
-  /** Whether a project exists at `group/project`. */
-  async projectExists(group: string, project: string): Promise<boolean> {
-    const { ok } = await this.request(
-      `/api/v4/projects/${encodeURIComponent(`${group}/${project}`)}`
-    );
-    return ok;
-  }
-
   /** An open merge request from `source` into `target`, if any. */
   async findOpenMergeRequest(
     group: string,
