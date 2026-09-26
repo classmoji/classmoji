@@ -343,7 +343,8 @@ export const repoCreateTool: ToolDefinition<RepoCreateArgs> = {
     'which live in modules. No student git repos are created — the repo starts hidden; attach ' +
     'assignments with assignment_create (module_id + repository_id), then provision student repos ' +
     'with repo_publish. Grading weight lives on assignments, not the repo. For a GROUP repo with instructor-assigned teams, ' +
-    "pass tag_id (a team tag id from list_tags). Refreshes the classroom's content manifest on " +
+    'pass tag_id (a team tag id from list_tags; create one with tag_create). Refreshes the ' +
+    "classroom's content manifest on " +
     'GitHub (best-effort).',
   scope: 'write',
   roles: OWNER_ONLY,
@@ -550,7 +551,8 @@ export const repoUpdateTool: ToolDefinition<RepoUpdateArgs> = {
     'once student/team git repos exist — except setting tag_id on a repo that has none. ' +
     'description, and on GROUP repos team_formation_deadline and max_team_size, stay editable. ' +
     'Team fields apply to GROUP repos only. A GROUP repo with instructor-assigned teams needs a ' +
-    'tag_id (ids from list_tags). Switching to INDIVIDUAL clears tag_id, team_formation_deadline ' +
+    'tag_id (ids from list_tags; create one with tag_create). Switching to INDIVIDUAL clears ' +
+    'tag_id, team_formation_deadline ' +
     "and max_team_size. Refreshes the classroom's content manifest on GitHub (best-effort).",
   scope: 'write',
   roles: OWNER_ONLY,
