@@ -335,28 +335,26 @@ describe('grading tools', () => {
   });
 });
 
-// ─── Grader assignment + grading-scale tiers (OWNER-only) ───────────────────
+// ─── Grader assignment (OWNER + TEACHER) ────────────────────────────────────
 
-describe('OWNER-only tools deny the adjacent TEACHER boundary', () => {
-  it('grader_assign / grader_unassign refuse a TEACHER', async () => {
-    expectForbidden(
-      await callTool(teacher, 'grader_assign', {
-        classroom: DEV_REF,
-        git_repo_assignment_id: fx.teamGra.id,
-        grader_id: fx.users['fake-ta'].id,
-      }),
-      'grader_assign as teacher',
-      'INSUFFICIENT_ROLE'
-    );
-    expectForbidden(
-      await callTool(teacher, 'grader_unassign', {
-        classroom: DEV_REF,
-        git_repo_assignment_id: fx.teamGra.id,
-        grader_id: fx.users['fake-ta'].id,
-      }),
-      'grader_unassign as teacher',
-      'INSUFFICIENT_ROLE'
-    );
+describe('grader_assign / grader_unassign admit OWNER + TEACHER, like the web assignment page', () => {
+  // The grader named is a STUDENT, who is never grader-eligible, so an admitted
+  // caller reaches the handler and gets invalid_params without anything being
+  // written or any GitHub call (the seeded repos are fake).
+  const args = () => ({
+    classroom: DEV_REF,
+    git_repo_assignment_id: fx.teamGra.id,
+    grader_id: fx.users['fake-student-1'].id,
+  });
+
+  it('a TEACHER passes the role gate', async () => {
+    for (const tool of ['grader_assign', 'grader_unassign']) {
+      const outcome = await callTool(teacher, tool, args());
+      expect(outcome.isError, `${tool} as teacher`).toBe(true);
+      expect(outcome.payload.error, `${tool} as teacher reaches the handler`).toBe(
+        'invalid_params'
+      );
+    }
     expect(
       await prisma.gitRepoAssignmentGrader.count({
         where: { git_repo_assignment_id: fx.teamGra.id },
@@ -364,6 +362,26 @@ describe('OWNER-only tools deny the adjacent TEACHER boundary', () => {
     ).toBe(0);
   });
 
+  it('an ASSISTANT and a STUDENT are refused', async () => {
+    for (const tool of ['grader_assign', 'grader_unassign']) {
+      expectForbidden(await callTool(ta, tool, args()), `${tool} as ta`, 'INSUFFICIENT_ROLE');
+      expectForbidden(
+        await callTool(student1, tool, args()),
+        `${tool} as student`,
+        'INSUFFICIENT_ROLE'
+      );
+    }
+    expect(
+      await prisma.gitRepoAssignmentGrader.count({
+        where: { git_repo_assignment_id: fx.teamGra.id },
+      })
+    ).toBe(0);
+  });
+});
+
+// ─── Grading-scale tiers (OWNER-only) ───────────────────────────────────────
+
+describe('OWNER-only tools deny the adjacent TEACHER boundary', () => {
   it('emoji/letter grade mappings: TEACHER denied, OWNER allowed (letter)', async () => {
     expectForbidden(
       await callTool(teacher, 'emoji_mapping_upsert', {
