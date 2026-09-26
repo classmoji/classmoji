@@ -767,9 +767,28 @@ export class GitLabProvider extends GitProvider {
    * @param {string} project - Project name
    * @param {string} branch - Branch name
    */
-  async protectBranch(_group: string, _project: string, _branch: string): Promise<never> {
-    // TODO: POST /api/v4/projects/:id/protected_branches
-    throw new Error('GitLabProvider.protectBranch() not implemented');
+  async protectBranch(group: string, project: string, branch: string): Promise<void> {
+    // Maintainers only (Classmoji's connection and staff); students are
+    // Developers. Already protected is fine: the branch stays protected.
+    const { ok, status, body } = await this.request(
+      `/api/v4/projects/${encodeURIComponent(`${group}/${project}`)}/protected_branches`,
+      {
+        method: 'POST',
+        body: {
+          name: branch,
+          push_access_level: 40,
+          merge_access_level: 40,
+          allow_force_push: false,
+        },
+      }
+    );
+    if (ok || status === 409) return;
+    const message =
+      body && typeof body === 'object' && 'message' in body
+        ? JSON.stringify((body as { message: unknown }).message)
+        : String(body ?? '');
+    if (status === 422 && message.includes('already')) return;
+    throw new Error(`Gitlab API protect branch ${branch} failed (${status}): ${message}`);
   }
 
   /**

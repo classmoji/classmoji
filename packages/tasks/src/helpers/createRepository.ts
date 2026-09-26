@@ -190,7 +190,8 @@ export const createRepository = async (payload: CreateRepositoryPayload): Promis
     await repoGit.checkoutLocalBranch('updates');
     await repoGit.push('origin', 'updates', ['--set-upstream', ...setupPush]);
 
-    if (organizationGithubPlan !== 'free') {
+    // Github protects branches on paid plans only; GitLab on every plan.
+    if (provider === 'GITLAB' || organizationGithubPlan !== 'free') {
       await gitProvider.protectBranch(gitOrgLogin, repoName, 'updates');
     }
 
