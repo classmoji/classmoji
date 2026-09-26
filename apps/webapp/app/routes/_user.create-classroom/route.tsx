@@ -53,7 +53,8 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
       (error as { status?: number })?.status === 401 ||
       (error as { message?: string })?.message?.includes('Bad credentials')
     ) {
-      await clearRevokedToken(authData.userId);
+      // Only the token GitHub refused: a token refreshed meanwhile is kept.
+      await clearRevokedToken(authData.userId, authData.token);
       return redirect('/');
     }
     throw error;
