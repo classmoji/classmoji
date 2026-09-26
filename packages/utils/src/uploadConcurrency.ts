@@ -1,6 +1,5 @@
 /**
- * uploadConcurrency.server.ts — how many slide-file uploads one process holds
- * at a time.
+ * uploadConcurrency.ts — how many uploads one process holds at a time.
  *
  * The size cap in `./uploadLimit` bounds ONE upload. It says nothing about ten
  * of them arriving together, and a slide file is allowed to be 35 MB: the
@@ -15,9 +14,14 @@
  * moment", not a failure the uploader can do anything about by changing the
  * file.
  *
- * `.server.ts` because the count has to be ONE number per process. A copy of
- * this module in a browser bundle would be a per-tab counter, which is no
- * counter at all.
+ * Shared by the slides, pages and webapp apps' upload actions, each of which
+ * is its own process — so the count below is per process either way, and
+ * sharing this module changes nothing about the behaviour.
+ *
+ * Server-only by intent, which is why it is a subpath (`@classmoji/utils/
+ * upload-concurrency`) and not part of the root barrel that client bundles
+ * import: a copy of this module in a browser bundle would be a per-tab
+ * counter, which is no counter at all.
  */
 
 /** Slots. Two, so one large upload never blocks the next person entirely. */

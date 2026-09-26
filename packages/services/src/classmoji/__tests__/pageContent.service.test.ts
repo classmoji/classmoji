@@ -69,6 +69,10 @@ const warmContentTextMock = vi.fn(async (..._args: unknown[]) => {});
 // contentDelivery.resolve.test.ts owns the resolve itself.
 const resolveAssetUrlMock = vi.fn();
 const canonicalizeAssetRefMock = vi.fn();
+// Which file types an upload may be — the classroom policy, stubbed so the
+// wiring (asked with the page's classroom, handed to the upload) is what is
+// under test here; contentDelivery owns the rule itself.
+const uploadFileTypesMock = vi.fn((..._args: unknown[]) => 'allowlist');
 vi.mock('../contentDelivery.service.ts', async () => {
   const actual = await vi.importActual<typeof import('../contentDelivery.service.ts')>(
     '../contentDelivery.service.ts'
@@ -85,6 +89,7 @@ vi.mock('../contentDelivery.service.ts', async () => {
     signBlobUrlForClassroom: actual.signBlobUrlForClassroom,
     resolveAssetUrl: (...args: unknown[]) => resolveAssetUrlMock(...args),
     canonicalizeAssetRef: (...args: unknown[]) => canonicalizeAssetRefMock(...args),
+    uploadFileTypes: (...args: unknown[]) => uploadFileTypesMock(...args),
     // Real: the placeholder check is a pure shape test, and it is one of the
     // decisions `resolvePageAssetUrl` is made of. Stubbing it would leave
     // nothing under test. (`canonicalizePageCoverRef`'s own path rule is
@@ -689,6 +694,16 @@ describe('pageContent.uploadPageAsset', () => {
     expect(arg.file).toBe(buffer);
     expect(arg.filename).toBe('a.png');
     expect(arg.branch).toBe('main');
+    expect(arg.fileTypes).toBe('allowlist');
+  });
+
+  it("uploads under the classroom's file-type policy", async () => {
+    uploadFileTypesMock.mockReturnValueOnce('any');
+
+    await uploadPageAsset(page, Buffer.from('x'), 'notebook.ipynb');
+
+    expect(uploadFileTypesMock).toHaveBeenCalledWith(page.classroom);
+    expect(callArg(uploadMock).fileTypes).toBe('any');
   });
 
   it('commits to the repo default branch rather than a hardcoded main', async () => {

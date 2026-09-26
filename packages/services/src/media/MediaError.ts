@@ -15,7 +15,10 @@
 export type MediaErrorCode =
   /** No R2 credentials on this deployment. The feature is off, not broken. */
   | 'NOT_CONFIGURED'
-  /** The filename's extension is not on the allowlist. */
+  /**
+   * The filename has no extension the store can address: none at all, or one
+   * longer than the `orig.{ext}` variant allows. The message says which.
+   */
   | 'KIND_NOT_ALLOWED'
   /** The classroom's owner has no active PRO subscription. */
   | 'PRO_REQUIRED'
@@ -41,7 +44,14 @@ export type MediaErrorCode =
    * unverified — and distinct only so the client can say "try again" instead of
    * "your file was the wrong size".
    */
-  | 'VERIFY_FAILED';
+  | 'VERIFY_FAILED'
+  /**
+   * The upload was opened longer ago than its reservation lasts
+   * (`RESERVATION_WINDOW_MS`). Its bytes stopped counting against the quota
+   * when the window closed, so letting it finish would store a file the quota
+   * never covered. It has been cancelled; the uploader starts again.
+   */
+  | 'UPLOAD_EXPIRED';
 
 export class MediaError extends Error {
   readonly code: MediaErrorCode;

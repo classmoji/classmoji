@@ -44,6 +44,13 @@ describe('messageFor', () => {
     expect(message).not.toBe(fallback);
   });
 
+  it('says plainly that an expired upload has to be started again', () => {
+    const message = messageFor(failure('UPLOAD_EXPIRED'), quota);
+
+    expect(message).toBe('This upload took too long. Start it again.');
+    expect(message).not.toBe(fallback);
+  });
+
   it('leaves every other code saying what it already said', () => {
     expect(messageFor(failure('NOT_CONFIGURED'), quota)).toContain('not configured');
     expect(messageFor(failure('PRO_REQUIRED'), quota)).toContain('Pro');

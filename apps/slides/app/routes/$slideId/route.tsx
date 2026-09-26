@@ -4,7 +4,7 @@ import { Tooltip, Popconfirm } from 'antd';
 import getPrisma from '@classmoji/database';
 import { ContentService } from '@classmoji/content';
 import { assertSlideAccess } from '@classmoji/auth/server';
-import { ClassmojiService } from '@classmoji/services';
+import { ClassmojiService, isCommitTooLargeRefusal } from '@classmoji/services';
 import {
   DeckConflictError,
   DeckOpsBaseMismatchError,
@@ -30,6 +30,16 @@ import {
   type DeckThemeUrls,
   type MergeResolution,
 } from '@classmoji/services/slides';
+import {
+  REPO_REST_MAX_BYTES,
+  REPO_REST_MAX_LABEL,
+  repoFileTooLargeMessage,
+} from '@classmoji/utils/repo-limits';
+import {
+  UploadTooLargeError,
+  readLimitedFormData,
+  uploadBodyLimit,
+} from '@classmoji/utils/upload-limit';
 import { SandpackRenderer } from '@classmoji/ui-components/sandpack';
 import { useToast, useUser } from '~/hooks';
 import { diffDeckSnapshots, extractDeckSnapshot, type DeckSnapshot } from '~/utils/deckOpsDiff';
@@ -626,6 +636,31 @@ async function forgetThemeFiles(
   await ClassmojiService.contentAssets.removeContentAssets(slide.classroom_id, paths);
 }
 
+/**
+ * What an author reads when a deck save is too large — the deck's sentence, not
+ * the file one, because the author is saving a deck and has picked no file. No
+ * full stop: the save-failure toast puts one after it.
+ */
+const DECK_TOO_LARGE_MESSAGE = `This deck is larger than the ${REPO_REST_MAX_LABEL} your course repository accepts`;
+
+/**
+ * The most the deck editor's action reads of a request body.
+ *
+ * Two shapes arrive here. The image upload is multipart and carries one file,
+ * so its cap is the repository's per-file ceiling plus the multipart envelope.
+ * Every other intent — the deck save above all — is a url-encoded form whose
+ * largest field is the deck's HTML, and percent-encoding can inflate markup up
+ * to about three times (every `<`, `>`, `"` and space), so that shape gets
+ * three times the same ceiling: room for any deck the repository could store,
+ * and still a bound.
+ */
+function deckActionBodyLimit(request: Request): number {
+  const contentType = request.headers.get('content-type') ?? '';
+  return contentType.includes('multipart/form-data')
+    ? uploadBodyLimit(REPO_REST_MAX_BYTES)
+    : 3 * REPO_REST_MAX_BYTES;
+}
+
 export const action = async ({
   request,
   params,
@@ -635,8 +670,6 @@ export const action = async ({
 }) => {
   const { slideId } = params;
   if (!slideId) return { error: 'Missing slideId' };
-  const formData = await request.formData();
-  const intent = formData.get('intent');
 
   // Fetch slide to get classroom/git org info
   const slide = await getPrisma().slide.findUnique({
@@ -661,6 +694,35 @@ export const action = async ({
     slide,
     accessType: 'edit',
   });
+
+  // The body is read only now, after the gate above, and through a byte-counting
+  // reader: a caller who may not edit this deck never gets to make the process
+  // hold a byte of what they sent. See `deckActionBodyLimit` for the cap.
+  let formData: FormData;
+  try {
+    formData = await readLimitedFormData(request, deckActionBodyLimit(request));
+  } catch (error: unknown) {
+    if (error instanceof UploadTooLargeError) {
+      // The image upload is the only multipart intent, and its client settles
+      // its pending promise on `intent: 'upload-image'` — which the unread body
+      // can no longer tell us, so it is named here.
+      const multipart = (request.headers.get('content-type') ?? '').includes('multipart/form-data');
+      if (multipart) {
+        return data(
+          { intent: 'upload-image' as const, error: repoFileTooLargeMessage() },
+          { status: 413 }
+        );
+      }
+      // Everything else here is a deck save. `tooLarge` — deliberately NOT
+      // `code`, which the client answers with a whole-deck re-submit every time
+      // — lets a changes-only save fall back to ONE whole-deck save (its ops can
+      // outweigh the document they describe); a whole-deck save that is still
+      // too large shows the sentence.
+      return data({ error: DECK_TOO_LARGE_MESSAGE, tooLarge: true }, { status: 413 });
+    }
+    throw error;
+  }
+  const intent = formData.get('intent');
 
   // This action is the DECK EDITOR's action, whole and entire: themes,
   // snippets, deck images, the deck read, the preview branch — and the
@@ -982,18 +1044,24 @@ export const action = async ({
   }
 
   // Upload an image to the slide's images folder
+  //
+  // EVERY answer from this intent carries `intent: 'upload-image'`, failures
+  // included: the image dialog's pending promise settles only on a response
+  // tagged with it, so an untagged error leaves the dialog spinning forever.
   if (intent === 'upload-image') {
     try {
       const file = formData.get('file');
       if (!file || !(file instanceof File)) {
-        return { error: 'No file provided' };
+        return { intent: 'upload-image' as const, error: 'No file provided' };
       }
 
       // Convert File to Buffer for ContentService
       const arrayBuffer = await file.arrayBuffer();
       const buffer = Buffer.from(arrayBuffer);
 
-      // Upload to images folder alongside the slide content
+      // Upload to images folder alongside the slide content. Same type policy
+      // as a page asset: any file where the delivery layer serves the
+      // classroom, images and PDFs elsewhere.
       const result = await ContentService.upload({
         orgLogin: gitOrgLogin,
         repo,
@@ -1001,6 +1069,7 @@ export const action = async ({
         filename: file.name,
         folder: `${slide.content_path}/images`,
         message: `Upload image for slides: ${slide.title}`,
+        fileTypes: ClassmojiService.contentDelivery.uploadFileTypes(slide.classroom),
       });
 
       // Record the row now rather than waiting for the push webhook: a deck
@@ -1024,7 +1093,15 @@ export const action = async ({
       };
     } catch (error: unknown) {
       console.error('Failed to upload image:', error);
-      return { error: error instanceof Error ? error.message : String(error) };
+      // A file over the repository's cap — refused by the service, or by
+      // GitHub — keeps its own sentence and a 413, like the body cap above.
+      return data(
+        {
+          intent: 'upload-image' as const,
+          error: error instanceof Error ? error.message : String(error),
+        },
+        { status: isCommitTooLargeRefusal(error) ? 413 : 500 }
+      );
     }
   }
 
@@ -1645,6 +1722,11 @@ export const action = async ({
           { status: 409 }
         );
       }
+      // GitHub refused the commit as too large. No `tooLarge` flag: a
+      // whole-deck retry would carry the same deck and be refused again.
+      if (isCommitTooLargeRefusal(error)) {
+        return data({ error: DECK_TOO_LARGE_MESSAGE }, { status: 413 });
+      }
       console.error('Failed to save slide (ops):', error);
       return { error: error instanceof Error ? error.message : String(error) };
     }
@@ -1846,6 +1928,9 @@ export const action = async ({
         },
         { status: 409 }
       );
+    }
+    if (isCommitTooLargeRefusal(error)) {
+      return data({ error: DECK_TOO_LARGE_MESSAGE }, { status: 413 });
     }
     console.error('Failed to save slide:', error);
     return { error: error instanceof Error ? error.message : String(error) };
@@ -2303,6 +2388,21 @@ export default function SlideViewer() {
       saveInFlightRef.current = false;
       exitAfterSaveRef.current = false;
       setSavingInFlight(false);
+    } else if (fetcher.data?.tooLarge && lastPostedOpsRef.current && lastPostedContentRef.current) {
+      // A changes-only save was over the body cap — its ops can outweigh the
+      // document they describe. Re-run it ONCE as a whole-deck save: clearing
+      // the posted ops is what bounds this, since a whole-deck save that is
+      // still too large arrives here with no ops posted and falls through to
+      // the error toast below.
+      lastPostedOpsRef.current = null;
+      saveInFlightRef.current = true;
+      setSavingInFlight(true);
+      const payload: Record<string, string> = { content: lastPostedContentRef.current };
+      if (contentToken.content_sha) {
+        payload.content_sha = contentToken.content_sha;
+        payload.sha_source = contentToken.sha_source;
+      }
+      fetcher.submit(payload, { method: 'post' });
     } else if (fetcher.data?.code && lastPostedContentRef.current) {
       // A chooser re-submit was refused (stale ours_sha pin, conflict set
       // changed) OR an ops save answered OPS_BASE_MISMATCH. Re-run the plain

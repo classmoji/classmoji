@@ -23,6 +23,7 @@ import {
   formMutationBlocked,
 } from '~/utils/helpers';
 import { SearchInput, TableActionButtons } from '~/components';
+import { SMALL_FORM_TOO_LARGE_MESSAGE, readSmallForm } from '~/utils/smallFormBody.server';
 import type { Route } from './+types/route';
 
 dayjs.extend(relativeTime);
@@ -159,7 +160,9 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
     'mutate_form'
   );
 
-  const formData = await request.formData();
+  // Short fields only, read capped — and only now, after the gate above.
+  const formData = await readSmallForm(request);
+  if (!formData) return { error: SMALL_FORM_TOO_LARGE_MESSAGE };
   const intent = formData.get('intent');
   const rawFormId = formData.get('formId');
   // `formData.get` returns `File | string | null`, so this is a real narrowing

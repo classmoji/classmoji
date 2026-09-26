@@ -130,7 +130,14 @@ export default function ImportPage() {
 
   // Import progress state (SSE-based)
   const [importId, setImportId] = useState<string | null>(null);
-  const { progress, error: streamError, isDone, isConnected, slideId } = useImportStream(importId);
+  const {
+    progress,
+    error: streamError,
+    isDone,
+    isConnected,
+    slideId,
+    warnings: importWarnings,
+  } = useImportStream(importId);
 
   // Form ref for reading form data
   const formRef = useRef<HTMLFormElement>(null);
@@ -138,12 +145,17 @@ export default function ImportPage() {
   const isProcessing = isSubmitting || !!importId;
   const error = submitError || streamError || dropzoneError;
 
-  // Navigate to slide when import completes
+  // Navigate to slide when import completes — unless it left files out, in
+  // which case the progress modal says which, and opening the deck waits for
+  // the person to have read that.
+  const openImportedSlides = useCallback(() => {
+    if (slideId) navigate(`/${slideId}?mode=edit`);
+  }, [slideId, navigate]);
   useEffect(() => {
-    if (isDone && slideId) {
-      navigate(`/${slideId}?mode=edit`);
+    if (isDone && slideId && importWarnings.length === 0) {
+      openImportedSlides();
     }
-  }, [isDone, slideId, navigate]);
+  }, [isDone, slideId, importWarnings.length, openImportedSlides]);
 
   // Check if user has permission using classroom memberships
   const membership = user?.classroom_memberships?.find(
@@ -659,6 +671,8 @@ export default function ImportPage() {
         error={streamError}
         isDone={isDone}
         isConnected={isConnected}
+        warnings={importWarnings}
+        onOpen={openImportedSlides}
         onCancel={handleImportCancel}
         onRetry={handleRetry}
       />

@@ -26,6 +26,7 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
     requireMethod(request, 'POST');
 
     const mediaId = requireMediaId(params.mediaId);
+    // Read before the access check on purpose: capped at 64 KB, no file bytes (part numbers only), validated before the row lookup.
     const body = await readJsonBody(request);
     const partNumbers = Array.isArray(body.partNumbers)
       ? body.partNumbers.filter((n): n is number => typeof n === 'number')

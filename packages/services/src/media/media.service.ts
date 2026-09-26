@@ -4,6 +4,7 @@ import {
   CreateMultipartUploadCommand,
   DeleteObjectCommand,
   HeadObjectCommand,
+  ListObjectsV2Command,
   S3Client,
   UploadPartCommand,
 } from '@aws-sdk/client-s3';
@@ -17,12 +18,14 @@ import getPrisma from '@classmoji/database';
 import { canDeliverContent } from '../classmoji/contentDelivery.service.ts';
 import { getProStateForClassroomId } from '../classmoji/subscription.service.ts';
 import { MediaError } from './MediaError.ts';
-import { mediaKey } from './mediaKeys.ts';
-import { classifyFilename } from './mediaKinds.ts';
+import { mediaKey, mediaPrefix } from './mediaKeys.ts';
+import { classifyFilename, filenameRefusal } from './mediaKinds.ts';
 import {
   findMediaRow,
   liveRows,
   liveRowsWhere,
+  mediaRef,
+  reservationCutoff,
   toMediaRecord,
   type MediaClassroom,
   type MediaRecord,
@@ -219,7 +222,8 @@ function requireClient(): { client: S3Client; bucket: string } {
  *
  *   1. configured — no credentials means the feature is off, not that this file
  *      is wrong, and saying so first keeps a dev laptop's error honest;
- *   2. kind — decided from the extension, which also fixes the content type;
+ *   2. extension — any, as long as there is one the store can address; it
+ *      decides the kind and fixes the content type;
  *   3. Pro — before the numbers, so a free classroom is told it needs Pro
  *      rather than that it is 2 GB over a quota of zero;
  *   4. delivery — a classroom whose references cannot be signed has nowhere to
@@ -265,9 +269,14 @@ export async function createUpload({
 }> {
   const { client, bucket } = requireClient();
 
+  // Any extension, as long as there is one the store can address (see
+  // mediaKinds.ts). The refusal says which of the two it was.
   const classified = classifyFilename(filename);
   if (!classified) {
-    throw new MediaError('KIND_NOT_ALLOWED', `Files of this type cannot be uploaded: ${filename}`);
+    throw new MediaError(
+      'KIND_NOT_ALLOWED',
+      filenameRefusal(filename) ?? `This file cannot be uploaded: ${filename}`
+    );
   }
 
   // Pro before the numbers: a classroom that cannot store media at all should
@@ -308,8 +317,13 @@ export async function createUpload({
     throw new MediaError('FILE_TOO_LARGE', 'This file is larger than the per-file limit');
   }
 
-  // Video-only options. For any other kind they are stored at their defaults
-  // and nothing reads them, so an uploader cannot mark a PDF for transcoding.
+  // Video-only options. For any other kind they are stored at fixed values and
+  // nothing reads them, so an uploader cannot mark a PDF for transcoding.
+  //
+  // `allowDownload` is fixed TRUE for everything but video. The setting exists
+  // for a lecture recording the instructor wants watched, not saved; a PDF, a
+  // zip or a deck IS the file a student came for, and there is no player to
+  // fall back on. `mediaDownloadUrl` applies the same rule on the read side.
   //
   // `keepOriginal` is forced true whenever `optimise` is off, and that is not a
   // default but an invariant: dropping the original is only meaningful once a
@@ -319,7 +333,7 @@ export async function createUpload({
   const isVideo = classified.kind === 'VIDEO';
   const optimise = isVideo ? options.optimise !== false : false;
   const keepOriginal = isVideo && optimise ? options.keepOriginal !== false : true;
-  const allowDownload = isVideo ? options.allowDownload === true : false;
+  const allowDownload = isVideo ? options.allowDownload === true : true;
 
   // The id is minted HERE rather than by the database, so the R2 key can be
   // built — and validated — before anything is written. `mediaKey` asserts
@@ -423,6 +437,56 @@ async function uploadingRow(
 }
 
 /**
+ * Refuse — and cancel — an open upload whose reservation has lapsed.
+ *
+ * An UPLOADING row stops counting against the quota once it is older than
+ * `RESERVATION_WINDOW_MS`, which is what lets an abandoned upload free its
+ * bytes without a sweep. The other half of that rule is here: a row outside the
+ * window must not be allowed to go on and finish, or the bytes it stores would
+ * be ones no reservation ever covered, and waiting out the window would be a
+ * way to fit two files into the room for one.
+ *
+ * So `signParts` and `completeUpload` both ask this first. The multipart is
+ * aborted (best effort — R2 expires it on its own at 7 days if this fails) and
+ * the row tombstoned, conditionally, in that order: `markDeleted` clears the
+ * upload id the abort needs. The caller is told `UPLOAD_EXPIRED`, which the
+ * client treats as terminal.
+ *
+ * `abortUpload` does not ask: cancelling a lapsed upload is exactly what should
+ * happen to it, and refusing to would leave its parts in the bucket.
+ */
+async function refuseIfExpired(
+  client: S3Client,
+  bucket: string,
+  classroom: MediaClassroom,
+  row: MediaRow & { upload_id: string },
+  now: number = Date.now()
+): Promise<void> {
+  if (row.created_at.getTime() >= reservationCutoff(now).getTime()) return;
+
+  const key = mediaKey(classroom.id, row.id, `orig.${row.ext}`);
+  await abortQuietly(client, bucket, key, row.upload_id);
+  await markDeleted(row.id, 'UPLOADING');
+  throw new MediaError(
+    'UPLOAD_EXPIRED',
+    'This upload took too long and has been cancelled. Start it again.'
+  );
+}
+
+/**
+ * The exact byte count of one part of a file of `sizeBytes`.
+ *
+ * Every part is `PART_SIZE_BYTES` except the last, which is whatever is left —
+ * the same slicing the upload client does. A file that is an exact multiple of
+ * the part size has a FULL last part, never an empty one.
+ */
+export function partLengthFor(sizeBytes: number, partNumber: number): number {
+  const partCount = partCountFor(sizeBytes);
+  if (partNumber < partCount) return PART_SIZE_BYTES;
+  return sizeBytes - (partCount - 1) * PART_SIZE_BYTES;
+}
+
+/**
  * Presigned `UploadPart` URLs for a batch of part numbers.
  *
  * Batched rather than all at once because a 2 GB upload is 64 parts and the
@@ -452,6 +516,7 @@ export async function signParts({
 }): Promise<{ urls: { partNumber: number; url: string; expiresAt: string }[] }> {
   const { client, bucket } = requireClient();
   const row = await uploadingRow(classroom, mediaId);
+  await refuseIfExpired(client, bucket, classroom, row);
 
   const wanted = [...new Set(partNumbers)];
   if (wanted.length === 0 || wanted.length > MAX_PARTS_PER_SIGN) {
@@ -472,7 +537,18 @@ export async function signParts({
 
   const key = mediaKey(classroom.id, row.id, `orig.${row.ext}`);
   const expiresAt = new Date(Date.now() + PART_URL_TTL_SECONDS * 1000).toISOString();
+  const declared = Number(row.size_bytes);
 
+  // Each URL is signed for an exact `Content-Length`: the full part size for
+  // every part but the last, and the remainder for the last. The length is
+  // part of the signature, so a PUT carrying more (or fewer) bytes than that is
+  // refused by R2 before it is stored — the parts can only add up to the size
+  // the quota reserved. `completeUpload`'s size check still runs; this makes it
+  // a formality rather than the only line.
+  //
+  // `signableHeaders` names it explicitly. The presigner signs a
+  // `content-length` it finds on the request today, but that is its default
+  // rather than its contract, and this is the header the whole rule rests on.
   const urls = await Promise.all(
     wanted.map(async partNumber => ({
       partNumber,
@@ -483,8 +559,9 @@ export async function signParts({
           Key: key,
           UploadId: row.upload_id,
           PartNumber: partNumber,
+          ContentLength: partLengthFor(declared, partNumber),
         }),
-        { expiresIn: PART_URL_TTL_SECONDS }
+        { expiresIn: PART_URL_TTL_SECONDS, signableHeaders: new Set(['content-length']) }
       ),
       expiresAt,
     }))
@@ -571,9 +648,13 @@ async function markDeleted(
  * trusts a number the client declared: the reservation, the per-file check, the
  * remaining-space arithmetic. `HeadObject` is the first moment the app learns
  * what was actually written, and a mismatch means every one of those decisions
- * was made against a false premise — so the object is deleted, the row is
- * marked DELETED, and the caller is told. Not rounded down to a warning: a
- * client that can overrun its declaration can fill the bucket.
+ * was made against a false premise — so the row is marked DELETED (only from
+ * UPLOADING), the object is deleted once that tombstone has landed, and the
+ * caller is told. Not rounded down to a warning: a client that can overrun its
+ * declaration can fill the bucket. A tombstone that does NOT land means another
+ * call moved the row first. Moved to READY, the bytes are left alone: that row
+ * is serving them, and that finished upload is this caller's answer too. Moved
+ * to DELETED, they are deleted anyway — nothing can ever serve them again.
  *
  * A `HeadObject` that FAILS is the same outcome, not a lesser one. Letting the
  * error escape would leave a verified-by-nobody object in the bucket behind an
@@ -653,6 +734,23 @@ async function verifiedSize(client: S3Client, bucket: string, key: string): Prom
   return null;
 }
 
+/** What a finished upload answers with — the same shape however it was reached. */
+function completedResult(row: MediaRow): { mediaId: string; ref: string; sizeBytes: number } {
+  return { mediaId: row.id, ref: mediaRef(row.id), sizeBytes: Number(row.size_bytes) };
+}
+
+/**
+ * Whether another call already finished this upload, read fresh.
+ *
+ * The question every lost race in `completeUpload` comes down to: a conditional
+ * write that matched nothing means the row moved, and the one move that makes
+ * this call's work redundant rather than wrong is to READY.
+ */
+async function finishedElsewhere(classroom: MediaClassroom, mediaId: string) {
+  const fresh = await findMediaRow(classroom.id, mediaId);
+  return fresh?.status === 'READY' ? fresh : null;
+}
+
 export async function completeUpload({
   classroom,
   mediaId,
@@ -663,7 +761,22 @@ export async function completeUpload({
   parts: { partNumber: number; etag: string }[];
 }): Promise<{ mediaId: string; ref: string; sizeBytes: number }> {
   const { client, bucket } = requireClient();
-  const row = await uploadingRow(classroom, mediaId);
+
+  // Idempotent by status, before anything touches R2. A complete whose
+  // response was lost is retried by a client that cannot know it succeeded;
+  // answering the retry with the same result is what keeps that client from
+  // concluding the upload failed and cleaning up a file that exists. A DELETED
+  // row is gone as far as this caller is concerned — cancelled, expired or
+  // deleted — and gets the same answer as an id that was never issued.
+  const current = await findMediaRow(classroom.id, mediaId);
+  if (!current || current.status === 'DELETED') {
+    throw new MediaError('NOT_FOUND', 'No such media object');
+  }
+  if (current.status === 'READY') return completedResult(current);
+  if (!current.upload_id) throw new MediaError('BAD_STATE', 'This upload is not open');
+
+  const row = current as MediaRow & { upload_id: string };
+  await refuseIfExpired(client, bucket, classroom, row);
 
   const key = mediaKey(classroom.id, row.id, `orig.${row.ext}`);
   const uploadId = row.upload_id;
@@ -699,7 +812,26 @@ export async function completeUpload({
     );
   } catch (error) {
     await abortQuietly(client, bucket, key, uploadId);
-    await markDeleted(row.id, 'UPLOADING');
+    // Only from UPLOADING. If the tombstone does not land, the row moved while
+    // this call was assembling — and when it moved to READY, a concurrent
+    // complete of the same upload finished it (R2 then answers this one
+    // `NoSuchUpload`). That is success from the caller's point of view, and the
+    // object at `key` is that upload's file, so it is left alone. A row that
+    // went DELETED was cancelled underneath us, and a DELETED row never becomes
+    // READY again, so whatever this call assembled can never be served: it is
+    // deleted here, because an abort only cancels the multipart and would leave
+    // an assembled object behind with nothing to bill or find it.
+    if (!(await markDeleted(row.id, 'UPLOADING'))) {
+      const done = await finishedElsewhere(classroom, row.id);
+      if (done) return completedResult(done);
+      await deleteObjectsQuietly(client, bucket, [key]);
+      throw new MediaError('NOT_FOUND', 'This upload was cancelled before it finished');
+    }
+    // The tombstone landed, so nothing will ever serve this key. A complete
+    // that errored (a timeout, a dropped connection) may still have assembled
+    // the object on R2's side, and with the row DELETED nothing would bill it
+    // or find it again. R2 answers a delete of a missing key with success.
+    await deleteObjectsQuietly(client, bucket, [key]);
     throw error;
   }
 
@@ -707,8 +839,21 @@ export async function completeUpload({
   const declared = Number(row.size_bytes);
 
   if (actual === null || actual !== declared) {
-    // Row first, then the bytes: see `deleteObjectsQuietly`.
-    await markDeleted(row.id, 'UPLOADING');
+    // Row first, then the bytes: see `deleteObjectsQuietly`. And the bytes ONLY
+    // if the tombstone landed. A concurrent complete of the same upload writes
+    // to the same key, and when it has already made the row READY this call's
+    // R2 request was a replay of a finished upload — the object it failed to
+    // measure is the file the READY row serves, and deleting it would break
+    // that file everywhere it is referenced. A row that went DELETED under us
+    // was cancelled, and a DELETED row never becomes READY again, so the bytes
+    // can never be served and go now — the same as the cancelled branch after
+    // the READY write below.
+    if (!(await markDeleted(row.id, 'UPLOADING'))) {
+      const done = await finishedElsewhere(classroom, row.id);
+      if (done) return completedResult(done);
+      await deleteObjectsQuietly(client, bucket, [key]);
+      throw new MediaError('NOT_FOUND', 'This upload was cancelled before it finished');
+    }
     await deleteObjectsQuietly(client, bucket, [key]);
     if (actual === null) {
       throw new MediaError(
@@ -719,11 +864,16 @@ export async function completeUpload({
     throw new MediaError('SIZE_MISMATCH', `Uploaded ${actual} bytes but ${declared} were declared`);
   }
 
-  const ready = (await getPrisma().mediaObject.update({
-    where: { id: row.id },
+  // READY only FROM UPLOADING. Between the read above and here the row can
+  // have been cancelled (an abort racing this complete) or finished by a
+  // concurrent complete; an unconditional write would resurrect the first and
+  // double-fire `onMediaReady` for the second.
+  const readyAt = new Date();
+  const { count } = await getPrisma().mediaObject.updateMany({
+    where: { id: row.id, status: 'UPLOADING' },
     data: {
       status: 'READY',
-      ready_at: new Date(),
+      ready_at: readyAt,
       upload_id: null,
       // NONE, even for a row that asked to be optimised. PENDING means "a job
       // is queued", and in P1 there is no job — a row parked in PENDING is one
@@ -732,22 +882,46 @@ export async function completeUpload({
       // enqueues, which is the only moment the claim is true.
       processing: 'NONE',
     },
-  })) as MediaRow;
+  });
 
-  const record = toMediaRecord(ready);
-  await onMediaReady(record);
+  if (count === 0) {
+    const done = await finishedElsewhere(classroom, row.id);
+    if (done) return completedResult(done);
+    // Cancelled underneath us: the object was assembled for a row that no
+    // longer exists, so nothing will ever serve it, bill it or delete it. It
+    // goes now, and the caller hears what an abort would have told them.
+    await deleteObjectsQuietly(client, bucket, [key]);
+    throw new MediaError('NOT_FOUND', 'This upload was cancelled before it finished');
+  }
 
-  return { mediaId: record.id, ref: record.ref, sizeBytes: record.sizeBytes };
+  const ready: MediaRow = {
+    ...row,
+    status: 'READY',
+    ready_at: readyAt,
+    upload_id: null,
+    processing: 'NONE',
+  };
+  await onMediaReady(toMediaRecord(ready));
+
+  return completedResult(ready);
 }
 
 /**
- * Cancel an upload in flight — the client's own "stop" button, and what an
- * unmounting editor calls.
+ * Cancel an upload in flight — the client's own "stop" button, and the upload
+ * client's cleanup after any failure.
  *
- * Refuses a READY row rather than quietly deleting it: "cancel the upload" and
- * "delete the file" are different intentions, and one standing in for the other
- * would turn a stray abort into data loss. `deleteMedia` is the one that means
- * the second thing.
+ * Acts ONLY on an UPLOADING row, and is a quiet no-op on anything else:
+ * "cancel the upload" and "delete the file" are different intentions, and one
+ * standing in for the other would turn a stray abort into data loss. That
+ * matters most for the client's cleanup, which runs after a failure it cannot
+ * always see the bottom of — a `complete` whose response was lost looks like a
+ * failure from the browser while the file is READY on this side. An abort then
+ * must leave the file alone, which is why the client calls this and never
+ * `deleteMedia`.
+ *
+ * A READY or DELETED row answers `{ aborted: false }` rather than an error:
+ * there is nothing to cancel, and a cleanup call that failed noisily would only
+ * be ignored. An unknown id is still NOT_FOUND.
  */
 export async function abortUpload({
   classroom,
@@ -755,18 +929,20 @@ export async function abortUpload({
 }: {
   classroom: MediaClassroom;
   mediaId: string;
-}): Promise<{ mediaId: string }> {
+}): Promise<{ mediaId: string; aborted: boolean }> {
   const { client, bucket } = requireClient();
-  const row = await uploadingRow(classroom, mediaId);
+  const row = await findMediaRow(classroom.id, mediaId);
+  if (!row) throw new MediaError('NOT_FOUND', 'No such media object');
+  if (row.status !== 'UPLOADING' || !row.upload_id) return { mediaId: row.id, aborted: false };
 
   const key = mediaKey(classroom.id, row.id, `orig.${row.ext}`);
   await abortQuietly(client, bucket, key, row.upload_id);
   // Only from UPLOADING: a `complete` that won the race while this abort was in
   // flight has already made the row READY, and cancelling an upload must never
   // be able to delete the file that upload produced.
-  await markDeleted(row.id, 'UPLOADING');
+  const aborted = await markDeleted(row.id, 'UPLOADING');
 
-  return { mediaId: row.id };
+  return { mediaId: row.id, aborted };
 }
 
 /**
@@ -792,6 +968,17 @@ export async function abortUpload({
  *
  * Deleting an UPLOADING row aborts its multipart first: without that, R2 holds
  * the uploaded parts until its own 7-day expiry.
+ *
+ * ## Retryable, so idempotent
+ *
+ * Object deletes are best effort (`deleteObjectsQuietly`), so one can fail
+ * after the row is already a tombstone. Deleting a DELETED row therefore does
+ * not answer NOT_FOUND: it re-attempts the object deletes and succeeds, which
+ * is what lets a half-failed delete be finished by asking again. The same goes
+ * for the loser of two concurrent deletes. Only an id this classroom has never
+ * had is NOT_FOUND. A tombstoned row no longer carries its multipart id, so a
+ * retry cannot re-abort an upload whose first abort failed; R2's own 7-day
+ * expiry of incomplete uploads covers that one.
  */
 export async function deleteMedia({
   classroom,
@@ -802,9 +989,7 @@ export async function deleteMedia({
 }): Promise<{ mediaId: string }> {
   const { client, bucket } = requireClient();
   const row = await findMediaRow(classroom.id, mediaId);
-  if (!row || row.status === 'DELETED') {
-    throw new MediaError('NOT_FOUND', 'No such media object');
-  }
+  if (!row) throw new MediaError('NOT_FOUND', 'No such media object');
 
   const origKey = mediaKey(classroom.id, row.id, `orig.${row.ext}`);
 
@@ -812,9 +997,10 @@ export async function deleteMedia({
   // reader sees, and an R2 delete that fails halfway must not be able to leave
   // a READY row pointing at bytes that are gone — a permanently broken file in
   // every page that referenced it. Conditional, so a delete racing another one
-  // does not double-tombstone: the loser is told the object is already gone.
-  if (!(await markDeleted(row.id, ['UPLOADING', 'READY']))) {
-    throw new MediaError('NOT_FOUND', 'No such media object');
+  // does not double-tombstone; the loser simply goes on to the object deletes,
+  // which are safe to repeat.
+  if (row.status !== 'DELETED') {
+    await markDeleted(row.id, ['UPLOADING', 'READY']);
   }
 
   if (row.status === 'UPLOADING' && row.upload_id) {
@@ -832,4 +1018,88 @@ export async function deleteMedia({
   ]);
 
   return { mediaId: row.id };
+}
+
+/**
+ * Delete every object a classroom has in the media bucket, ahead of the
+ * classroom itself being deleted.
+ *
+ * The rows go with the classroom (`ON DELETE CASCADE`), and once they are gone
+ * nothing names these objects any more: no page can reach them, no quota bills
+ * them, and no later delete will find them. So this runs BEFORE the cascade,
+ * over the whole `m/{classroomId}/` prefix rather than over the rows — every
+ * variant the rendition job ever wrote is under it, named in a column or not.
+ *
+ * Open multiparts are not objects and a listing does not show them, so the
+ * UPLOADING rows' uploads are aborted first, from the ids the rows hold. One
+ * that cannot be aborted is left to R2's 7-day expiry of incomplete uploads.
+ *
+ * A deployment with no media store has nothing to delete and returns at once,
+ * and so does a classroom with no media rows in any status, without asking R2.
+ * A LISTING that fails throws, and the caller must not delete the classroom:
+ * with the rows gone the prefix is the only record of what is there. Individual
+ * object deletes that fail are counted, and a purge with failures throws too,
+ * for the same reason — asking again deletes what is left.
+ *
+ * Returns how many objects were deleted, for the log line.
+ */
+export async function purgeClassroomMedia(classroomId: string): Promise<{ deleted: number }> {
+  const client = r2Client();
+  const bucket = mediaBucket();
+  if (!client || !bucket) return { deleted: 0 };
+  const prefix = mediaPrefix(classroomId);
+
+  // A classroom that never had a row never had an object: the row is written
+  // before an upload can start, and it outlives its bytes as a tombstone. So a
+  // classroom with no rows at all — every Free classroom — has nothing under
+  // its prefix, and asking R2 to list it would only let an R2 outage block a
+  // classroom delete that has nothing to clean up.
+  const anyRow = await getPrisma().mediaObject.findFirst({
+    where: { classroom_id: classroomId },
+    select: { id: true },
+  });
+  if (!anyRow) return { deleted: 0 };
+
+  const open = (await getPrisma().mediaObject.findMany({
+    where: { classroom_id: classroomId, status: 'UPLOADING', upload_id: { not: null } },
+    select: { id: true, ext: true, upload_id: true },
+  })) as { id: string; ext: string; upload_id: string }[];
+  for (const upload of open) {
+    const key = mediaKey(classroomId, upload.id, `orig.${upload.ext}`);
+    await abortQuietly(client, bucket, key, upload.upload_id);
+  }
+
+  let deleted = 0;
+  const failed: string[] = [];
+  let continuationToken: string | undefined;
+  do {
+    const page = await client.send(
+      new ListObjectsV2Command({
+        Bucket: bucket,
+        Prefix: prefix,
+        ContinuationToken: continuationToken,
+      })
+    );
+    for (const object of page.Contents ?? []) {
+      if (!object.Key) continue;
+      try {
+        await client.send(new DeleteObjectCommand({ Bucket: bucket, Key: object.Key }));
+        deleted += 1;
+      } catch (error) {
+        failed.push(object.Key);
+        console.warn(
+          `[media] Could not delete ${object.Key}:`,
+          error instanceof Error ? error.message : error
+        );
+      }
+    }
+    continuationToken = page.IsTruncated ? page.NextContinuationToken : undefined;
+  } while (continuationToken);
+
+  if (failed.length > 0) {
+    throw new Error(
+      `Could not delete ${failed.length} media object(s) for classroom ${classroomId}`
+    );
+  }
+  return { deleted };
 }

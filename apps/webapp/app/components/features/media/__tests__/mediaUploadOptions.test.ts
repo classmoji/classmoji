@@ -11,7 +11,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   DEFAULT_VIDEO_OPTIONS,
-  MEDIA_ACCEPT,
+  MAX_MEDIA_EXTENSION_LENGTH,
   applyVideoOption,
   canDropOriginal,
   extensionOf,
@@ -26,7 +26,7 @@ import {
 const GiB = 1024 ** 3;
 const quota: QuotaSummary = { usedBytes: 0, quotaBytes: 10 * GiB, perFileBytes: 2 * GiB };
 
-describe('accepted kinds', () => {
+describe('kinds', () => {
   it.each([
     ['lecture.mp4', 'video'],
     ['screen.MOV', 'video'],
@@ -42,19 +42,23 @@ describe('accepted kinds', () => {
     expect(kindForFilename(filename)).toBe(kind);
   });
 
-  it.each(['virus.exe', 'index.html', 'README', 'page.svg'])('refuses %s', filename => {
+  it.each(['virus.exe', 'index.html', 'page.svg', 'Week 3.ipynb'])(
+    'takes %s as a file of no particular kind',
+    filename => {
+      // Any extension goes to media; unknown ones are stored as downloads.
+      expect(kindForFilename(filename)).toBe('other');
+    }
+  );
+
+  it.each(['README', '.gitignore', 'notes.データ'])('has no kind for %s', filename => {
     expect(kindForFilename(filename)).toBeNull();
   });
 
-  it('offers every accepted extension to the file picker', () => {
-    expect(MEDIA_ACCEPT.split(',')).toContain('.mov');
-    expect(MEDIA_ACCEPT.split(',')).toContain('.zip');
-    expect(MEDIA_ACCEPT).not.toContain('.exe');
-  });
-
-  it('reads an extension regardless of case or dots in the name', () => {
+  it('reads an extension the way the server does', () => {
     expect(extensionOf('Week 1 — Lecture.Final.MP4')).toBe('mp4');
     expect(extensionOf('noextension')).toBe('');
+    expect(extensionOf('.gitignore')).toBe('');
+    expect(extensionOf('data.tar-gz')).toBe('targz');
   });
 });
 
@@ -108,10 +112,19 @@ describe('pre-checks', () => {
     expect(precheck({ name: 'lecture.mp4', size: 500 * 1024 * 1024 }, quota)).toBeNull();
   });
 
-  it('names the type first, because freeing space would not help', () => {
-    const message = precheck({ name: 'malware.exe', size: 10 }, quota);
-    expect(message).toContain('.exe files');
-    expect(message).toContain('mp4');
+  it('passes any file with an extension', () => {
+    for (const name of ['notebook.ipynb', 'data.csv', 'tool.exe', 'page.html']) {
+      expect(precheck({ name, size: 10 }, quota), name).toBeNull();
+    }
+  });
+
+  it('names a missing or too-long extension first, because freeing space would not help', () => {
+    expect(precheck({ name: 'Makefile', size: 3 * GiB }, quota)).toContain('needs an extension');
+
+    const tooLong = precheck({ name: 'export.longextension', size: 10 }, quota);
+    expect(tooLong).toContain(`at most ${MAX_MEDIA_EXTENSION_LENGTH}`);
+    expect(tooLong).toContain('.longextension is 13');
+    expect(precheck({ name: 'a.abcdefgh', size: 10 }, quota)).toBeNull();
   });
 
   it('quotes the per-file ceiling', () => {

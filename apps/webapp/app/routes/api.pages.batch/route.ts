@@ -5,16 +5,44 @@ import {
 } from '~/utils/helpers';
 import { ClassmojiService } from '@classmoji/services';
 import { processMarkdownImport } from '~/utils/markdownImporter.server';
+import {
+  PAGE_IMPORT_TOO_LARGE_MESSAGE,
+  oversizedImportFileMessage,
+  readPageImportForm,
+} from '~/utils/pageImportBody.server';
 import { wrapHtmlContent } from '~/utils/htmlWrapper';
+import {
+  UPLOAD_BUSY_MESSAGE,
+  UPLOAD_RETRY_AFTER_SECONDS,
+  acquireUploadSlot,
+  releaseUploadSlot,
+} from '@classmoji/utils/upload-concurrency';
 import type { Route } from './+types/route';
 
 /**
  * API route for batch page imports - always returns JSON
+ *
+ * POST /api/pages/batch?classSlug=<slug>
+ *
+ * The classroom is named in the QUERY STRING so the gate runs before the body
+ * is read; the body is then read with a cap (see `pageImportBody.server`).
  */
-export const action = async ({ request }: Route.ActionArgs) => {
-  const formData = await request.formData();
-  const intent = formData.get('intent') as string;
-  const classSlug = formData.get('classSlug') as string;
+export const action = async (args: Route.ActionArgs) => {
+  // The import takes an upload slot partway through — after the gate, before
+  // the body is read — and this gives it back however the request ends.
+  const slot = { held: false };
+  try {
+    return await batchAction(args, slot);
+  } finally {
+    if (slot.held) releaseUploadSlot();
+  }
+};
+
+async function batchAction({ request }: Route.ActionArgs, slot: { held: boolean }) {
+  const classSlug = new URL(request.url).searchParams.get('classSlug');
+  if (!classSlug) {
+    return Response.json({ error: 'No classroom provided' }, { status: 400 });
+  }
   const { classroom, userId, membership } = await assertClassroomAccess({
     request,
     classroomSlug: classSlug,
@@ -23,6 +51,22 @@ export const action = async ({ request }: Route.ActionArgs) => {
     attemptedAction: 'create_page',
   });
   assertClassroomMutationAllowed({ status: classroom.status, role: membership!.role });
+
+  // One slot per request in flight: the body cap bounds one page of a batch,
+  // this bounds how many this process holds at once.
+  if (!acquireUploadSlot()) {
+    return Response.json(
+      { error: UPLOAD_BUSY_MESSAGE },
+      { status: 503, headers: { 'Retry-After': String(UPLOAD_RETRY_AFTER_SECONDS) } }
+    );
+  }
+  slot.held = true;
+
+  const formData = await readPageImportForm(request);
+  if (!formData) {
+    return Response.json({ error: PAGE_IMPORT_TOO_LARGE_MESSAGE }, { status: 413 });
+  }
+  const intent = formData.get('intent') as string;
 
   // Use git_organization.login for GitHub API calls, not the classroom slug
   const gitOrgLogin = classroom.git_organization?.login;
@@ -59,6 +103,11 @@ export const action = async ({ request }: Route.ActionArgs) => {
       // Get markdown and images
       const markdownFile = formData.get('markdown') as File;
       const imageFiles = formData.getAll('images') as File[];
+
+      // One commit carries the page and every image, so one image over the
+      // repository's cap is refused here, by name, before anything is written.
+      const oversized = oversizedImportFileMessage(imageFiles);
+      if (oversized) return Response.json({ error: oversized });
 
       const markdownText = await markdownFile.text();
 
@@ -156,4 +205,4 @@ export const action = async ({ request }: Route.ActionArgs) => {
   }
 
   return Response.json({ error: 'Invalid intent' }, { status: 400 });
-};
+}

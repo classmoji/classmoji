@@ -1,10 +1,10 @@
 -- Media objects: a classroom's large files, stored in R2 rather than in git.
 --
--- Content repos cap what an instructor can attach — 5 MB page assets, 35 MB
--- file slides, 100 MB at the Worker's GitHub origin — and lecture video is
--- none of those sizes. This table is the ledger for the files that go to R2
--- instead: what they are, who uploaded them, how big they are, and whether
--- they are finished.
+-- A content repo takes at most 35 MB per file (`REPO_REST_MAX_BYTES`: GitHub
+-- refuses the base64 request body above that), and lecture video is not that
+-- size. Media takes a Pro classroom's files up to 2 GB each. This table is the
+-- ledger for the files that go to R2 instead: what they are, who uploaded them,
+-- how big they are, and whether they are finished.
 --
 -- ── NOT A CACHE ─────────────────────────────────────────────────────────────
 -- `content_assets` is derivable from the repo and a lost row is repaired by a
@@ -36,15 +36,20 @@
 -- `size_bytes` and `rendition_bytes` are BIGINT: the per-file ceiling is 2 GiB,
 -- which is already past the 2^31 INTEGER limit, and the quota sums many of them.
 --
--- ON DELETE CASCADE matches every other classroom-scoped table. It orphans the
--- R2 objects rather than deleting them — classroom deletion is not a path this
--- phase wires up, and a cascade is the truthful shape for the ledger either way.
+-- ON DELETE CASCADE matches every other classroom-scoped table. The cascade
+-- alone would orphan the R2 objects, so classroom deletion purges the
+-- classroom's R2 prefix first (`purgeClassroomMedia`) and does not delete the
+-- classroom when that purge fails.
 
 -- CreateEnum
 CREATE TYPE "MediaStatus" AS ENUM ('UPLOADING', 'READY', 'DELETED');
 
 -- CreateEnum
-CREATE TYPE "MediaKind" AS ENUM ('VIDEO', 'AUDIO', 'DOCUMENT', 'ARCHIVE', 'IMAGE');
+-- Any file with an extension is accepted (decision §7.10: Pro routes video, and
+-- anything over the repository's REST ceiling, to R2 — whatever it is). An
+-- extension the store has a type for gets its kind; every other one is OTHER,
+-- stored and served as application/octet-stream (a download).
+CREATE TYPE "MediaKind" AS ENUM ('VIDEO', 'AUDIO', 'DOCUMENT', 'ARCHIVE', 'IMAGE', 'OTHER');
 
 -- CreateEnum
 CREATE TYPE "MediaProcessing" AS ENUM ('NONE', 'PENDING', 'DONE', 'FAILED');
@@ -60,8 +65,9 @@ CREATE TABLE "media_objects" (
     -- Canonical lowercase extension of the original. Half of the `orig.{ext}`
     -- variant, so it is what a signed URL for the original is built from.
     "ext" TEXT NOT NULL,
-    -- Server-assigned from `ext` against an allowlist, never taken from the
-    -- client.
+    -- Server-assigned from `ext`, never taken from the client. Any extension is
+    -- accepted: a known kind gets its real type, every other extension (kind
+    -- OTHER) is application/octet-stream.
     "content_type" TEXT NOT NULL,
     "size_bytes" BIGINT NOT NULL,
     "status" "MediaStatus" NOT NULL DEFAULT 'UPLOADING',

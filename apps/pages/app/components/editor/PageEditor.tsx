@@ -19,6 +19,8 @@ import {
   getMultiColumnSlashMenuItems,
   locales as multiColumnLocales,
 } from '@blocknote/xl-multi-column';
+import { toast } from 'react-toastify';
+import { REPO_REST_MAX_BYTES, repoFileTooLargeMessage } from '@classmoji/utils/repo-limits';
 
 import {
   schema,
@@ -104,20 +106,37 @@ const PageEditor = forwardRef(function PageEditor(
   }: PageEditorProps,
   ref: React.Ref<{ getContent: () => unknown }>
 ) {
-  // Upload handler: POSTs to the page's upload action
+  // Upload handler: POSTs to the page's upload action. The page travels in the
+  // query string so the server can authorize before it reads the body.
+  //
+  // A refusal is TOASTED before it is thrown: BlockNote's upload tab catches
+  // the error and shows its own generic "Upload failed", so the sentence that
+  // says why (the size cap, a type the classroom does not accept) would
+  // otherwise never reach the person.
   const uploadFile = useCallback(
     async (file: File) => {
+      const refuse = (message: string): never => {
+        toast.error(message);
+        throw new Error(message);
+      };
+
+      // The same ceiling the server enforces — refused here before a large
+      // file spends a minute uploading only to be turned away.
+      if (file.size > REPO_REST_MAX_BYTES) {
+        refuse(repoFileTooLargeMessage(file.name));
+      }
+
       const formData = new FormData();
       formData.append('file', file);
-      formData.append('pageId', pageId);
 
-      const response = await fetch(`/api/upload`, {
+      const response = await fetch(`/api/upload?pageId=${encodeURIComponent(pageId)}`, {
         method: 'POST',
         body: formData,
       });
 
       if (!response.ok) {
-        throw new Error('Upload failed');
+        const body = (await response.json().catch(() => null)) as { error?: unknown } | null;
+        refuse(typeof body?.error === 'string' ? body.error : 'Upload failed');
       }
 
       const result = await response.json();

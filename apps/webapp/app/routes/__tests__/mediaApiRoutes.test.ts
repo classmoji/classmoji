@@ -1,5 +1,5 @@
 /**
- * The four media routes.
+ * The media routes.
  *
  * They are thin, so what is worth pinning is the seam rather than the logic:
  *
@@ -7,7 +7,7 @@
  *     `usedBytes`/`quotaBytes` off a quota refusal. A route that answered 500
  *     where the service said 409 would make the client give up on an upload it
  *     could have reported honestly;
- *   - the GATE. Three of the four are addressed by media id alone, so the
+ *   - the GATE. All but the create are addressed by media id alone, so the
  *     classroom is read off the row — and a session is required before that
  *     read, so an anonymous caller cannot use the 404 to ask which ids exist;
  *   - that the service, not the route, decides anything about media. The route
@@ -25,6 +25,7 @@ const mocks = vi.hoisted(() => ({
   signParts: vi.fn(),
   completeUpload: vi.fn(),
   deleteMedia: vi.fn(),
+  abortUpload: vi.fn(),
 }));
 
 class FakeMediaError extends Error {
@@ -56,6 +57,7 @@ vi.mock('@classmoji/services', () => ({
       signParts: (...a: unknown[]) => mocks.signParts(...a),
       completeUpload: (...a: unknown[]) => mocks.completeUpload(...a),
       deleteMedia: (...a: unknown[]) => mocks.deleteMedia(...a),
+      abortUpload: (...a: unknown[]) => mocks.abortUpload(...a),
     },
   },
 }));
@@ -64,6 +66,7 @@ const { action: createAction } = await import('../api.media.uploads/route');
 const { action: partsAction } = await import('../api.media.uploads_.$mediaId.parts/route');
 const { action: completeAction } = await import('../api.media.uploads_.$mediaId.complete/route');
 const { action: deleteAction } = await import('../api.media.$mediaId/route');
+const { action: abortAction } = await import('../api.media.uploads_.$mediaId.abort/route');
 
 const CLASSROOM_ID = '11111111-2222-4333-8444-555555555555';
 const MEDIA_ID = '77777777-8888-4999-8aaa-bbbbbbbbbbbb';
@@ -162,6 +165,7 @@ describe('POST /api/media/uploads', () => {
       ['BAD_STATE', 409],
       ['SIZE_MISMATCH', 409],
       ['VERIFY_FAILED', 409],
+      ['UPLOAD_EXPIRED', 410],
     ];
 
     for (const [code, status] of cases) {
@@ -384,8 +388,53 @@ describe('DELETE /api/media/:mediaId', () => {
   });
 });
 
+describe('POST /api/media/uploads/:mediaId/abort', () => {
+  it('is 204 and hands the classroom off the row to the service', async () => {
+    mocks.abortUpload.mockResolvedValue({ mediaId: MEDIA_ID, aborted: true });
+
+    const response = await abortAction(
+      args(post(`/api/media/uploads/${MEDIA_ID}/abort`, null, 'POST'), { mediaId: MEDIA_ID })
+    );
+
+    expect(response.status).toBe(204);
+    expect(mocks.assertClassroomAccess).toHaveBeenCalledWith(
+      expect.objectContaining({ classroomId: CLASSROOM_ID, attemptedAction: 'abort_upload' })
+    );
+    expect(mocks.abortUpload).toHaveBeenCalledWith({
+      classroom: { id: CLASSROOM_ID },
+      mediaId: MEDIA_ID,
+    });
+    expect(mocks.deleteMedia).not.toHaveBeenCalled();
+  });
+
+  it('is still 204 when there was nothing open to cancel', async () => {
+    // A finished file is left alone and the cleanup call is not an error.
+    mocks.abortUpload.mockResolvedValue({ mediaId: MEDIA_ID, aborted: false });
+    const response = await abortAction(
+      args(post(`/api/media/uploads/${MEDIA_ID}/abort`, null, 'POST'), { mediaId: MEDIA_ID })
+    );
+    expect(response.status).toBe(204);
+  });
+
+  it('requires a session before it will say whether an id exists', async () => {
+    mocks.requireAuth.mockRejectedValue(new Response('Unauthorized', { status: 401 }));
+    const response = await abortAction(
+      args(post(`/api/media/uploads/${MEDIA_ID}/abort`, null, 'POST'), { mediaId: MEDIA_ID })
+    );
+    expect(response.status).toBe(401);
+    expect(mocks.findUnique).not.toHaveBeenCalled();
+  });
+
+  it('refuses a DELETE', async () => {
+    const response = await abortAction(
+      args(post(`/api/media/uploads/${MEDIA_ID}/abort`, null, 'DELETE'), { mediaId: MEDIA_ID })
+    );
+    expect(response.status).toBe(405);
+  });
+});
+
 /**
- * The three id-addressed routes must have no reply that means "this exists,
+ * The id-addressed routes must have no reply that means "this exists,
  * elsewhere". A 403 was exactly that reply: it told a signed-in stranger that
  * the uuid they had named was a real object in somebody else's classroom,
  * which is the one fact the id alone was not supposed to be able to buy.
@@ -430,6 +479,13 @@ describe('an id in a classroom the caller cannot edit', () => {
       () =>
         deleteAction(args(post(`/api/media/${MEDIA_ID}`, null, 'DELETE'), { mediaId: MEDIA_ID })),
     ],
+    [
+      'abort',
+      () =>
+        abortAction(
+          args(post(`/api/media/uploads/${MEDIA_ID}/abort`, null, 'POST'), { mediaId: MEDIA_ID })
+        ),
+    ],
   ])('answers %s with the same 404 an unknown id gets', async (_name, call) => {
     const response = await call();
 
@@ -439,6 +495,7 @@ describe('an id in a classroom the caller cannot edit', () => {
     expect(mocks.signParts).not.toHaveBeenCalled();
     expect(mocks.completeUpload).not.toHaveBeenCalled();
     expect(mocks.deleteMedia).not.toHaveBeenCalled();
+    expect(mocks.abortUpload).not.toHaveBeenCalled();
   });
 
   it('is byte-identical to the answer for an id that was never issued', async () => {

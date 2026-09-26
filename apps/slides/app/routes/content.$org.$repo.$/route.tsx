@@ -45,6 +45,7 @@
  */
 
 import { fetchContent, getMimeType, isBinaryFile } from '~/utils/contentProxy';
+import { contentProxySafetyHeaders, withNosniff } from '~/utils/contentProxyHeaders';
 import { isWithinContentPath, slideDocumentDecision } from '~/utils/slideDocumentAccess';
 import { assertSlideAccess, getAuthSession } from '@classmoji/auth/server';
 import { ClassmojiService } from '@classmoji/services';
@@ -166,13 +167,28 @@ async function fetchProxyText(
   return legacy ? { content: legacy.content as string, source: legacy.source } : null;
 }
 
-export const loader = async ({
-  params,
-  request,
-}: {
+interface ContentLoaderArgs {
   params: Record<string, string | undefined>;
   request: Request;
-}) => {
+}
+
+/**
+ * Every answer this route gives — served, refused, not found or redirected —
+ * leaves with `nosniff`. The served ones get their full header set where they
+ * are built (`contentProxySafetyHeaders`); this covers the rest, returned or
+ * thrown, so a new early exit cannot forget it.
+ */
+export const loader = async (args: ContentLoaderArgs) => {
+  try {
+    const response = await serveContent(args);
+    return withNosniff(response);
+  } catch (error: unknown) {
+    if (error instanceof Response) throw withNosniff(error);
+    throw error;
+  }
+};
+
+async function serveContent({ params, request }: ContentLoaderArgs): Promise<Response> {
   const { org, repo } = params;
   const path = params['*']; // Catch-all segment
   const url = new URL(request.url);
@@ -369,6 +385,10 @@ export const loader = async ({
     'Content-Type': mimeType,
     'Cache-Control': binary ? 'public, max-age=3600' : 'public, max-age=60',
     'X-Content-Source': result.source, // Debug header
+    // `nosniff` on everything; HTML, SVG and XML also go out as a sandboxed
+    // download rather than a page on this origin. See `contentProxyHeaders.ts`
+    // for why no deck surface is affected.
+    ...contentProxySafetyHeaders(mimeType),
   };
 
   // For binary content, pass the Buffer directly
@@ -381,4 +401,4 @@ export const loader = async ({
   }
 
   return new Response(result.content as string, { headers });
-};
+}

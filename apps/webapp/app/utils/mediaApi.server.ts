@@ -5,16 +5,21 @@ import {
   requireAuth,
 } from '@classmoji/auth/server';
 import { ClassmojiService } from '@classmoji/services';
+import {
+  UploadTooLargeError,
+  declaredBodyTooLarge,
+  readLimitedBody,
+} from '@classmoji/utils/upload-limit';
 
 /**
- * The four media routes' shared plumbing: who may call them, what a body may
- * be, and how a `MediaError` becomes a response.
+ * The media routes' shared plumbing: who may call them, what a body may be,
+ * and how a `MediaError` becomes a response.
  *
- * It lives here rather than in one of the routes because all four answer the
- * SAME error shape — `{ error: 'CODE' }` with the same status per code — and
- * the upload client switches on `body.error`. Four copies of that table would
- * be four chances for one route to answer 500 where the client expects 409 and
- * give up on an upload it could have reported honestly.
+ * It lives here rather than in one of the routes because every one of them
+ * answers the SAME error shape — `{ error: 'CODE' }` with the same status per
+ * code — and the upload client switches on `body.error`. A copy of that table
+ * per route would be a chance per route to answer 500 where the client expects
+ * 409 and give up on an upload it could have reported honestly.
  */
 
 /**
@@ -36,7 +41,7 @@ const MEDIA_EDIT_ROLES = ['OWNER', 'TEACHER', 'ASSISTANT'] as const;
 /**
  * The most JSON one of these routes will read.
  *
- * All four bodies are small and bounded: the largest is `complete`, and a 2 GiB
+ * Every body is small and bounded: the largest is `complete`, and a 2 GiB
  * file in 32 MiB parts is 64 entries of about sixty bytes. 64 KiB is two orders
  * of magnitude of headroom and still refuses a body sent to make the server
  * allocate. `request.json()` has no limit of its own, which is the whole reason
@@ -75,6 +80,9 @@ const STATUS_FOR: Record<string, number> = {
   BAD_STATE: 409,
   SIZE_MISMATCH: 409,
   VERIFY_FAILED: 409,
+  // Gone for good: the reservation lapsed and the upload was cancelled, so no
+  // retry of the same call can succeed. The client starts over.
+  UPLOAD_EXPIRED: 410,
 };
 
 /**
@@ -104,16 +112,21 @@ export function mediaErrorResponse(error: unknown): Response {
 
 /** Read a small JSON object, or throw the response that refuses it. */
 export async function readJsonBody(request: Request): Promise<Record<string, unknown>> {
-  const declared = Number(request.headers.get('content-length') ?? '0');
-  if (Number.isFinite(declared) && declared > MAX_JSON_BODY_BYTES) {
-    throw mediaError('BAD_REQUEST', 413, { message: 'Request body is too large.' });
-  }
+  const tooLarge = () => mediaError('BAD_REQUEST', 413, { message: 'Request body is too large.' });
+  if (declaredBodyTooLarge(request.headers, MAX_JSON_BODY_BYTES)) throw tooLarge();
 
-  // The header is a claim, so the bytes are counted too — a chunked request
-  // declares no length at all.
-  const text = await request.text();
-  if (text.length > MAX_JSON_BODY_BYTES) {
-    throw mediaError('BAD_REQUEST', 413, { message: 'Request body is too large.' });
+  // The header is a claim — a chunked request declares no length at all — so
+  // the bytes are counted AS THEY ARRIVE, and the read is abandoned the moment
+  // the count crosses the cap, rather than buffering the whole body and
+  // measuring it afterwards.
+  let text = '';
+  if (request.body) {
+    try {
+      text = new TextDecoder().decode(await readLimitedBody(request.body, MAX_JSON_BODY_BYTES));
+    } catch (error: unknown) {
+      if (error instanceof UploadTooLargeError) throw tooLarge();
+      throw error;
+    }
   }
 
   try {
@@ -169,7 +182,7 @@ export async function requireMediaAccess(
 /**
  * The classroom one media object belongs to, gated.
  *
- * `parts`, `complete` and `delete` are addressed by media id alone — the upload
+ * `parts`, `complete`, `abort` and `delete` are addressed by media id alone — the upload
  * client holds nothing else by then — so the classroom has to be read off the
  * row before there is anything to authorize against. Three things keep that
  * from being a way to ask which ids exist:
@@ -177,7 +190,7 @@ export async function requireMediaAccess(
  *   - the session is required FIRST, so an anonymous caller gets 401 for every
  *     id, real or not, and learns nothing;
  *   - an id belonging to a classroom the caller cannot edit answers the SAME
- *     404 as an id that was never issued. These three routes therefore have no
+ *     404 as an id that was never issued. These routes therefore have no
  *     reply that means "this exists, elsewhere" — which a 403 would have been.
  *     The audit row is still written, so a real attempt is still visible to us;
  *   - the id is a v4 UUID, so the set cannot be walked in the first place.

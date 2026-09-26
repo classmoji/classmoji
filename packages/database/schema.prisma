@@ -2266,13 +2266,15 @@ enum MediaStatus {
 /// What KIND of file this is, decided from the extension at create time. It
 /// picks the content type, decides whether the video options mean anything, and
 /// is what the media page groups by. Not a mime prefix: `key` and `pptx` are
-/// both DOCUMENT and share no mime family.
+/// both DOCUMENT and share no mime family. OTHER is any extension the store has
+/// no type for — stored and served as `application/octet-stream`, a download.
 enum MediaKind {
   VIDEO
   AUDIO
   DOCUMENT
   ARCHIVE
   IMAGE
+  OTHER
 }
 
 /// Where the video rendition job got to. NONE is the resting state for anything
@@ -2331,7 +2333,9 @@ model MediaObject {
   upload_id           String?
   uploaded_by         String
   /// The three upload-dialog options. Video only — for every other kind they
-  /// are stored at their defaults and nothing reads them.
+  /// are stored at fixed values: no optimise, keep the original, and
+  /// allow_download TRUE (a PDF or a zip is the file itself; the setting is
+  /// about keeping a lecture recording from being saved).
   optimise            Boolean         @default(false)
   keep_original       Boolean         @default(true)
   allow_download      Boolean         @default(false)

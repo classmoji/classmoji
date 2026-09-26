@@ -16,6 +16,7 @@
  *              one is a short-lived credential and most would expire unused)
  *   PUT × n  → the only step that carries bytes, four at a time
  *   complete → the ETags, in part order, so S3 can stitch the object together
+ *   abort    → only on failure: cancels the upload if it is still open
  *
  * Nothing here is resumable across a reload; the multipart id lives for seven
  * days on R2's side, so adding that later is additive.
@@ -75,6 +76,12 @@ export type MultipartUploadErrorCode =
   | 'SIZE_MISMATCH'
   /** The assembled object could not be read back, so it was discarded. */
   | 'VERIFY_FAILED'
+  /**
+   * The upload was open longer than its reservation lasts, and the server
+   * cancelled it. Terminal: the same call cannot succeed, the file has to be
+   * uploaded again from the start.
+   */
+  | 'UPLOAD_EXPIRED'
   /** The upload row is gone, or no longer in a state that accepts parts. */
   | 'NOT_FOUND'
   | 'BAD_STATE'
@@ -172,6 +179,7 @@ const STATUS_CODES: Record<number, MultipartUploadErrorCode> = {
   403: 'PRO_REQUIRED',
   404: 'NOT_FOUND',
   409: 'QUOTA_EXCEEDED',
+  410: 'UPLOAD_EXPIRED',
   413: 'FILE_TOO_LARGE',
   422: 'KIND_NOT_ALLOWED',
   503: 'NOT_CONFIGURED',
@@ -187,6 +195,7 @@ const KNOWN_CODES = new Set<string>([
   'KIND_NOT_ALLOWED',
   'SIZE_MISMATCH',
   'VERIFY_FAILED',
+  'UPLOAD_EXPIRED',
   'NOT_FOUND',
   'BAD_STATE',
 ]);
@@ -309,10 +318,14 @@ export async function uploadMultipart({
   const { mediaId, partSize, partCount } = created;
   const totalBytes = file.size;
 
-  // Everything past the create has an object behind it, so every failure from
-  // here owes R2 a cleanup: the DELETE both aborts the multipart and drops the
-  // row, which is what stops a dead reservation eating the classroom's quota
-  // for the next 24 hours.
+  // Everything past the create has an upload behind it, so every failure from
+  // here owes R2 a cleanup: the abort cancels the multipart and drops the row,
+  // which is what stops a dead reservation eating the classroom's quota for the
+  // next 24 hours.
+  //
+  // ABORT, never DELETE. The abort acts only on an upload that is still open;
+  // a failure seen here may be a `complete` that succeeded on the server and
+  // whose answer was lost, and a DELETE would then remove the finished file.
   try {
     onProgress?.({ sentBytes: 0, totalBytes, part: 0, partCount });
 
@@ -454,7 +467,7 @@ export async function uploadMultipart({
   } catch (error) {
     // Best-effort, and deliberately un-signalled: the usual reason we are here
     // is that `signal` just aborted, and a cleanup wired to it would abort too.
-    await fetch(`${base}/${mediaId}`, { method: 'DELETE' }).catch(() => {});
+    await fetch(`${base}/uploads/${mediaId}/abort`, { method: 'POST' }).catch(() => {});
     throw error;
   }
 }

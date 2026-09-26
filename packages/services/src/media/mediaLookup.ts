@@ -131,7 +131,7 @@ export function toMediaRecord(row: MediaRow): MediaRecord {
  */
 export function servedVariant(row: { ext: string; renditionKey?: string | null }): string {
   if (row.renditionKey) return 'web.mp4';
-  // The ext was validated against the allowlist at create time, so the fallback
+  // The ext was checked against the variant grammar at create time, so the fallback
   // is unreachable for a row this codebase wrote — and if it ever is reached,
   // an unsignable variant is better than one the Worker would 404 on silently.
   return origVariant(row.ext) ?? `orig.${row.ext}`;

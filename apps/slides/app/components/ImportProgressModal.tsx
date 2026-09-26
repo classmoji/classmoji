@@ -5,7 +5,8 @@
  * - Current step indicator with animation
  * - Progress bar for file-level operations (e.g., "Processing image 5/20")
  * - Error display with retry option
- * - Automatic navigation on completion
+ * - Automatic navigation on completion — or, when the import left files out,
+ *   the list of them and a button to open the slides
  */
 
 import { useState, useEffect } from 'react';
@@ -14,6 +15,7 @@ import {
   LoadingOutlined,
   CheckCircleOutlined,
   CloseCircleOutlined,
+  ExclamationCircleOutlined,
   FileZipOutlined,
   FileImageOutlined,
   VideoCameraOutlined,
@@ -111,6 +113,10 @@ interface ImportProgressModalProps {
   error: string | null;
   isDone: boolean;
   isConnected: boolean;
+  /** Files the import left out; when non-empty the modal stays open on done. */
+  warnings?: string[];
+  /** Open the imported slides (shown when the import finished with warnings). */
+  onOpen?: () => void;
   onCancel: () => void;
   onRetry: () => void;
 }
@@ -227,10 +233,13 @@ export default function ImportProgressModal({
   error,
   isDone,
   isConnected,
+  warnings = [],
+  onOpen,
   onCancel,
   onRetry,
 }: ImportProgressModalProps) {
   const currentStep = progress?.step;
+  const doneWithWarnings = isDone && warnings.length > 0;
 
   // Detect dark mode for Ant Design theming
   const isDarkMode = useIsDarkMode();
@@ -294,13 +303,19 @@ export default function ImportProgressModal({
                   Try Again
                 </Button>,
               ]
-            : isDone
-              ? null // No footer when done - will auto-navigate
-              : [
-                  <Button key="cancel" onClick={onCancel} disabled={isConnected}>
-                    Cancel
+            : doneWithWarnings
+              ? [
+                  <Button key="open" type="primary" onClick={onOpen}>
+                    Open slides
                   </Button>,
                 ]
+              : isDone
+                ? null // No footer when done - will auto-navigate
+                : [
+                    <Button key="cancel" onClick={onCancel} disabled={isConnected}>
+                      Cancel
+                    </Button>,
+                  ]
         }
       >
         <div className="space-y-1">
@@ -330,11 +345,30 @@ export default function ImportProgressModal({
           )}
 
           {/* Success message */}
-          {isDone && (
+          {isDone && !doneWithWarnings && (
             <div className="mt-4 p-3 bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 rounded-md">
               <p className="text-sm text-green-600 dark:text-green-400">
                 Slides imported successfully! Redirecting to editor...
               </p>
+            </div>
+          )}
+
+          {/* Imported, but without some files */}
+          {doneWithWarnings && (
+            <div className="mt-4 p-3 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-md">
+              <p className="flex items-center gap-2 text-sm font-medium text-amber-800 dark:text-amber-300">
+                <ExclamationCircleOutlined />
+                Slides imported without{' '}
+                {warnings.length === 1 ? 'one file' : `${warnings.length} files`}
+              </p>
+              <ul className="mt-2 space-y-1 text-sm text-amber-700 dark:text-amber-400">
+                {warnings.map((warning, index) => (
+                  // By position: two skipped files can produce the same sentence.
+                  <li key={index} className="break-words">
+                    {warning}
+                  </li>
+                ))}
+              </ul>
             </div>
           )}
         </div>

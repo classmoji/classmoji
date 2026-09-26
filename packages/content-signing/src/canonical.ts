@@ -35,7 +35,17 @@ export const MEDIA_QUERY_KEYS: readonly string[] = ['p', 'v', 'exp', 'sig', 'dl'
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const GIT_SHA_PATTERN = /^[0-9a-f]{40}$/;
-const EXT_PATTERN = /^[a-z0-9]{1,8}$/;
+
+/**
+ * Longest extension the signer will ever sign: `EXT_PATTERN` below, and the
+ * `orig.{ext}` slot of `MEDIA_VARIANT_PATTERN`, both cap at this length. It is
+ * exported so a caller that accepts a file before it is ever signed — the
+ * repository's `'any'` upload policy, the media store — can refuse a name it
+ * could never later serve, with the one number both sides agree on.
+ */
+export const MAX_EXT_LENGTH = 8;
+
+const EXT_PATTERN = new RegExp(`^[a-z0-9]{1,${MAX_EXT_LENGTH}}$`);
 // Leading dots are excluded so a theme can never name a dotfile directory.
 const THEME_PATTERN = /^[a-z0-9][a-z0-9._-]*$/;
 /**
@@ -47,7 +57,9 @@ const THEME_PATTERN = /^[a-z0-9][a-z0-9._-]*$/;
  * slash, a dot segment or an escape, so `mediaKey` cannot be talked into
  * addressing an object outside `m/{classroom}/{media}/`.
  */
-const MEDIA_VARIANT_PATTERN = /^(?:orig\.[a-z0-9]{1,8}|web\.mp4|poster\.webp)$/;
+const MEDIA_VARIANT_PATTERN = new RegExp(
+  `^(?:orig\\.[a-z0-9]{1,${MAX_EXT_LENGTH}}|web\\.mp4|poster\\.webp)$`
+);
 
 /** A lowercase RFC-4122 UUID. Classroom ids and slide ids are the same shape. */
 export function isUuid(value: unknown): value is string {

@@ -13,6 +13,7 @@ import {
   resolveAssetUrl,
   signBlobUrlForClassroom,
   textReadBudget,
+  uploadFileTypes,
   warmContentText,
   type ResolveContext,
   type WarmContext,
@@ -702,6 +703,9 @@ export async function uploadPageAsset(
     filename,
     branch,
     message: `Upload asset for ${page.title || 'page'}`,
+    // Any file type where the delivery layer serves this classroom; the
+    // image/PDF allowlist everywhere else.
+    fileTypes: uploadFileTypes(page.classroom as unknown as Parameters<typeof uploadFileTypes>[0]),
   });
 
   const classroomId = (page.classroom as { id?: unknown }).id;

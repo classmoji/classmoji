@@ -43,6 +43,7 @@ vi.mock('@aws-sdk/client-s3', () => ({
   CreateMultipartUploadCommand: command('CreateMultipartUpload'),
   DeleteObjectCommand: command('DeleteObject'),
   HeadObjectCommand: command('HeadObject'),
+  ListObjectsV2Command: command('ListObjectsV2'),
   UploadPartCommand: command('UploadPart'),
 }));
 
@@ -82,9 +83,18 @@ vi.mock('../../classmoji/subscription.service.ts', () => ({
   getProStateForClassroomId: (...args: unknown[]) => getProStateForClassroomId(...args),
 }));
 
-const { abortUpload, completeUpload, createUpload, deleteMedia, listMedia, signParts, usage } =
-  await import('../media.service.ts');
-const { PART_SIZE_BYTES, PER_FILE_MAX_BYTES, PRO_QUOTA_BYTES } = await import('../mediaQuota.ts');
+const {
+  abortUpload,
+  completeUpload,
+  createUpload,
+  deleteMedia,
+  listMedia,
+  purgeClassroomMedia,
+  signParts,
+  usage,
+} = await import('../media.service.ts');
+const { PART_SIZE_BYTES, PER_FILE_MAX_BYTES, PRO_QUOTA_BYTES, RESERVATION_WINDOW_MS } =
+  await import('../mediaQuota.ts');
 const { resetR2Client } = await import('../r2Client.ts');
 
 const CLASSROOM_ID = '11111111-2222-4333-8444-555555555555';
@@ -377,7 +387,7 @@ describe('createUpload', () => {
     configure();
 
     await expect(
-      createUpload({ classroom, userId: 'u', filename: 'a.html', sizeBytes: 1 })
+      createUpload({ classroom, userId: 'u', filename: 'README', sizeBytes: 1 })
     ).rejects.toMatchObject({ code: 'KIND_NOT_ALLOWED' });
 
     // Pro comes BEFORE the numbers, so a free classroom hears PRO_REQUIRED even
@@ -455,6 +465,50 @@ describe('createUpload', () => {
     );
   });
 
+  it('takes any extension, typing an unknown one as an opaque download', async () => {
+    // §7.10: media is where a Pro classroom's large files go, whatever they
+    // are. What it must never do is serve one as something runnable.
+    sendImpl.mockResolvedValue({ UploadId: 'up-1' });
+    for (const [filename, ext] of [
+      ['Week 3.ipynb', 'ipynb'],
+      ['page.HTML', 'html'],
+      ['diagram.svg', 'svg'],
+    ]) {
+      prisma.mediaObject.create.mockClear();
+      sent.length = 0;
+      const created = await createUpload({ classroom, userId: 'u', filename, sizeBytes: 10 });
+
+      expect(created.contentType).toBe('application/octet-stream');
+      expect(prisma.mediaObject.create.mock.calls[0][0].data).toMatchObject({
+        kind: 'OTHER',
+        ext,
+        content_type: 'application/octet-stream',
+        allow_download: true,
+      });
+      expect(sent.find(call => call.name === 'CreateMultipartUpload')?.input).toMatchObject({
+        ContentType: 'application/octet-stream',
+      });
+    }
+  });
+
+  it('refuses a name with no extension, or one the variant cannot carry', async () => {
+    for (const [filename, words] of [
+      ['Makefile', 'needs an extension'],
+      ['.gitignore', 'needs an extension'],
+      ['notes.データ', 'needs an extension'],
+      ['export.longextension', 'at most 8'],
+    ]) {
+      await expect(
+        createUpload({ classroom, userId: 'u', filename, sizeBytes: 10 }),
+        filename
+      ).rejects.toMatchObject({
+        code: 'KIND_NOT_ALLOWED',
+        message: expect.stringContaining(words),
+      });
+    }
+    expect(prisma.mediaObject.create).not.toHaveBeenCalled();
+  });
+
   it('defaults a video to optimise + keep original, and forces them off elsewhere', async () => {
     await createUpload({ classroom, userId: 'u', filename: 'a.mp4', sizeBytes: 10 });
     expect(prisma.mediaObject.create.mock.calls[0][0].data).toMatchObject({
@@ -477,7 +531,21 @@ describe('createUpload', () => {
       kind: 'DOCUMENT',
       optimise: false,
       keep_original: true,
-      allow_download: false,
+      // Download control is a VIDEO setting; a PDF is the file itself.
+      allow_download: true,
+    });
+
+    prisma.mediaObject.create.mockClear();
+    await createUpload({
+      classroom,
+      userId: 'u',
+      filename: 'handout.zip',
+      sizeBytes: 10,
+      options: { allowDownload: false },
+    });
+    expect(prisma.mediaObject.create.mock.calls[0][0].data).toMatchObject({
+      kind: 'ARCHIVE',
+      allow_download: true,
     });
   });
 
@@ -538,10 +606,94 @@ describe('signParts', () => {
 
     const inputs = getSignedUrl.mock.calls.map(call => (call[1] as { input: object }).input);
     expect(inputs).toEqual([
-      { Bucket: 'classmoji-media-test', Key: ORIG_KEY, UploadId: 'up-1', PartNumber: 1 },
-      { Bucket: 'classmoji-media-test', Key: ORIG_KEY, UploadId: 'up-1', PartNumber: 2 },
+      {
+        Bucket: 'classmoji-media-test',
+        Key: ORIG_KEY,
+        UploadId: 'up-1',
+        PartNumber: 1,
+        ContentLength: PART_SIZE_BYTES,
+      },
+      // The last part is the remainder: PART_SIZE_BYTES + 1 declared bytes.
+      {
+        Bucket: 'classmoji-media-test',
+        Key: ORIG_KEY,
+        UploadId: 'up-1',
+        PartNumber: 2,
+        ContentLength: 1,
+      },
     ]);
     expect(getSignedUrl.mock.calls[0][2]).toMatchObject({ expiresIn: 15 * 60 });
+    // The length is what the rule rests on, so it is named as signed rather
+    // than left to the presigner's default.
+    expect(
+      (getSignedUrl.mock.calls[0][2] as { signableHeaders: Set<string> }).signableHeaders.has(
+        'content-length'
+      )
+    ).toBe(true);
+  });
+
+  it('signs a full last part when the size is an exact multiple of the part size', async () => {
+    prisma.mediaObject.findFirst.mockResolvedValue(
+      row({ status: 'UPLOADING', upload_id: 'up-1', size_bytes: BigInt(2 * PART_SIZE_BYTES) })
+    );
+    await signParts({ classroom, mediaId: MEDIA_ID, partNumbers: [1, 2] });
+    const lengths = getSignedUrl.mock.calls.map(
+      call => (call[1] as { input: { ContentLength: number } }).input.ContentLength
+    );
+    expect(lengths).toEqual([PART_SIZE_BYTES, PART_SIZE_BYTES]);
+  });
+
+  it('signs a one-part file for exactly its own size', async () => {
+    prisma.mediaObject.findFirst.mockResolvedValue(
+      row({ status: 'UPLOADING', upload_id: 'up-1', size_bytes: BigInt(12_345) })
+    );
+    await signParts({ classroom, mediaId: MEDIA_ID, partNumbers: [1] });
+    expect(
+      (getSignedUrl.mock.calls[0][1] as { input: { ContentLength: number } }).input.ContentLength
+    ).toBe(12_345);
+  });
+
+  it('refuses and cancels an upload older than its reservation window', async () => {
+    // Its bytes stopped counting when the window closed. Letting it go on
+    // would store a file the quota never covered.
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    sendImpl.mockResolvedValue({});
+    prisma.mediaObject.findFirst.mockResolvedValue(
+      row({
+        status: 'UPLOADING',
+        upload_id: 'up-1',
+        created_at: new Date(Date.now() - RESERVATION_WINDOW_MS - 1000),
+      })
+    );
+
+    await expect(
+      signParts({ classroom, mediaId: MEDIA_ID, partNumbers: [1] })
+    ).rejects.toMatchObject({ code: 'UPLOAD_EXPIRED' });
+
+    expect(getSignedUrl).not.toHaveBeenCalled();
+    expect(sent).toEqual([
+      {
+        name: 'AbortMultipartUpload',
+        input: { Bucket: 'classmoji-media-test', Key: ORIG_KEY, UploadId: 'up-1' },
+      },
+    ]);
+    expect(prisma.mediaObject.updateMany.mock.calls.at(-1)?.[0]).toMatchObject({
+      where: { id: MEDIA_ID, status: 'UPLOADING' },
+      data: expect.objectContaining({ status: 'DELETED' }),
+    });
+  });
+
+  it('still signs an upload just inside its window', async () => {
+    prisma.mediaObject.findFirst.mockResolvedValue(
+      row({
+        status: 'UPLOADING',
+        upload_id: 'up-1',
+        created_at: new Date(Date.now() - RESERVATION_WINDOW_MS + 60_000),
+      })
+    );
+    const { urls } = await signParts({ classroom, mediaId: MEDIA_ID, partNumbers: [1] });
+    expect(urls).toHaveLength(1);
+    expect(prisma.mediaObject.updateMany).not.toHaveBeenCalled();
   });
 
   it('refuses a row that is not open, and one that is not this classroom', async () => {
@@ -627,13 +779,18 @@ describe('completeUpload', () => {
       ],
     });
 
-    expect(result).toMatchObject({ mediaId: MEDIA_ID, ref: `media://${MEDIA_ID}` });
-    expect(prisma.mediaObject.update.mock.calls.at(-1)?.[0].data).toMatchObject({
-      status: 'READY',
-      upload_id: null,
-      // NONE even though the row asked to be optimised: P1 queues nothing, and
-      // PENDING with no job behind it is a row that processes forever.
-      processing: 'NONE',
+    expect(result).toEqual({ mediaId: MEDIA_ID, ref: `media://${MEDIA_ID}`, sizeBytes: 4096 });
+    // READY only FROM UPLOADING: a conditional write, never an unconditional one.
+    expect(prisma.mediaObject.update).not.toHaveBeenCalled();
+    expect(prisma.mediaObject.updateMany.mock.calls.at(-1)?.[0]).toMatchObject({
+      where: { id: MEDIA_ID, status: 'UPLOADING' },
+      data: {
+        status: 'READY',
+        upload_id: null,
+        // NONE even though the row asked to be optimised: P1 queues nothing, and
+        // PENDING with no job behind it is a row that processes forever.
+        processing: 'NONE',
+      },
     });
   });
 
@@ -702,7 +859,7 @@ describe('completeUpload', () => {
     // overloaded node the same question.
     expect(at[1] - at[0]).toBeGreaterThanOrEqual(250);
     expect(result).toMatchObject({ mediaId: MEDIA_ID });
-    expect(prisma.mediaObject.update.mock.calls.at(-1)?.[0].data).toMatchObject({
+    expect(prisma.mediaObject.updateMany.mock.calls.at(-1)?.[0].data).toMatchObject({
       status: 'READY',
     });
   });
@@ -759,8 +916,17 @@ describe('completeUpload', () => {
     }
   });
 
-  it('aborts and tombstones when the assembly itself fails', async () => {
+  it('aborts, tombstones, then deletes the object when the assembly itself fails', async () => {
+    // A complete that errors may still have assembled the object on R2's side
+    // (a timeout, a dropped response). Once the row is DELETED nothing would
+    // ever bill or find it, so it goes — after the tombstone, never before.
+    const order: string[] = [];
+    prisma.mediaObject.updateMany.mockImplementation(async () => {
+      order.push('tombstone');
+      return { count: 1 };
+    });
     sendImpl.mockImplementation(async (name: string) => {
+      order.push(name);
       if (name === 'CompleteMultipartUpload') throw new Error('bad part');
       return {};
     });
@@ -769,32 +935,68 @@ describe('completeUpload', () => {
       completeUpload({ classroom, mediaId: MEDIA_ID, parts: [{ partNumber: 1, etag: '"a"' }] })
     ).rejects.toThrow('bad part');
 
-    expect(sent.some(call => call.name === 'AbortMultipartUpload')).toBe(true);
+    expect(order).toEqual([
+      'CompleteMultipartUpload',
+      'AbortMultipartUpload',
+      'tombstone',
+      'DeleteObject',
+    ]);
+    expect(sent.find(call => call.name === 'DeleteObject')?.input).toMatchObject({ Key: ORIG_KEY });
     expect(prisma.mediaObject.updateMany.mock.calls.at(-1)?.[0]).toMatchObject({
       where: { id: MEDIA_ID, status: 'UPLOADING' },
       data: expect.objectContaining({ status: 'DELETED' }),
     });
   });
 
+  it('deletes what it may have assembled when the assembly fails for a call that lost to a cancel', async () => {
+    // The row went DELETED while this call was assembling. Its tombstone
+    // matches nothing and the caller hears what an abort would have told it.
+    // An abort only cancels the multipart, so if R2 assembled the object
+    // anyway, nothing else would ever delete it — and a DELETED row never
+    // becomes READY again, so these cannot be live bytes.
+    let reads = 0;
+    prisma.mediaObject.findFirst.mockImplementation(async () =>
+      ++reads === 1
+        ? row({ status: 'UPLOADING', upload_id: 'up-1', size_bytes: BigInt(4096) })
+        : row({ status: 'DELETED', upload_id: null, size_bytes: BigInt(4096) })
+    );
+    prisma.mediaObject.updateMany.mockResolvedValue({ count: 0 });
+    sendImpl.mockImplementation(async (name: string) => {
+      if (name === 'CompleteMultipartUpload') throw new Error('NoSuchUpload');
+      return {};
+    });
+
+    await expect(
+      completeUpload({ classroom, mediaId: MEDIA_ID, parts: [{ partNumber: 1, etag: '"a"' }] })
+    ).rejects.toMatchObject({ code: 'NOT_FOUND' });
+
+    expect(sent.filter(call => call.name === 'DeleteObject').map(c => c.input.Key)).toEqual([
+      ORIG_KEY,
+    ]);
+  });
+
   it('cannot un-READY a row another call already finished', async () => {
-    // The lost-response retry: `complete` runs twice, the first one assembles
-    // the object and marks the row READY, and R2 answers the second with
-    // NoSuchUpload because there is no multipart left. The second call's
-    // cleanup must not land on the row the first one finished.
+    // Two completes of the same upload racing: both read the row as open, the
+    // first assembles the object and marks it READY, and R2 answers the second
+    // with NoSuchUpload because there is no multipart left. The second call's
+    // cleanup must not land on the row the first one finished — and since the
+    // file exists, the second caller is told it succeeded.
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
     const state = { status: 'UPLOADING' };
+    let stale = true;
     prisma.mediaObject.findFirst.mockImplementation(async () =>
       // A stale read is what makes this a race at all: both calls believe the
-      // row is still open.
-      row({ status: 'UPLOADING', upload_id: 'up-1', size_bytes: BigInt(4096) })
+      // row is still open. The fresh re-read after the lost race sees the truth.
+      row({
+        status: stale ? 'UPLOADING' : state.status,
+        upload_id: 'up-1',
+        size_bytes: BigInt(4096),
+      })
     );
-    prisma.mediaObject.update.mockImplementation(async ({ data }: { data: { status: string } }) => {
-      state.status = data.status;
-      return row({ ...data });
-    });
     prisma.mediaObject.updateMany.mockImplementation(
-      async ({ where }: { where: { status: string } }) => {
+      async ({ where, data }: { where: { status: string }; data: { status: string } }) => {
         if (where.status !== state.status) return { count: 0 };
-        state.status = 'DELETED';
+        state.status = data.status;
         return { count: 1 };
       }
     );
@@ -814,35 +1016,202 @@ describe('completeUpload', () => {
     });
     expect(state.status).toBe('READY');
 
-    await expect(
-      completeUpload({ classroom, mediaId: MEDIA_ID, parts: [{ partNumber: 1, etag: '"a"' }] })
-    ).rejects.toThrow('NoSuchUpload');
+    const second = completeUpload({
+      classroom,
+      mediaId: MEDIA_ID,
+      parts: [{ partNumber: 1, etag: '"a"' }],
+    });
+    // The stale read happens first; everything after it is fresh.
+    queueMicrotask(() => (stale = false));
+    await expect(second).resolves.toEqual({
+      mediaId: MEDIA_ID,
+      ref: `media://${MEDIA_ID}`,
+      sizeBytes: 4096,
+    });
 
     // The file exists and is being served; the second call's conclusion about
     // it was out of date.
     expect(state.status).toBe('READY');
+    expect(sent.some(call => call.name === 'DeleteObject')).toBe(false);
   });
 
-  it('answers a second complete with a refusal, not a second assembly', async () => {
+  it('leaves the object alone when it cannot verify a file another call already finished', async () => {
+    // Two completes of one upload: A assembles, verifies and marks READY. B read
+    // the row while it was still open, R2 accepted B's complete as a replay of
+    // the finished upload, and then B could not read the object back. The bytes
+    // B failed to measure ARE A's file — B must not delete them, and since the
+    // file exists, B's caller is told it succeeded.
+    vi.useFakeTimers();
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const state = { status: 'UPLOADING' };
+    let staleReads = 0;
+    prisma.mediaObject.findFirst.mockImplementation(async () => {
+      if (staleReads > 0) {
+        staleReads -= 1;
+        return row({ status: 'UPLOADING', upload_id: 'up-1', size_bytes: BigInt(4096) });
+      }
+      return row({
+        status: state.status,
+        upload_id: state.status === 'UPLOADING' ? 'up-1' : null,
+        size_bytes: BigInt(4096),
+      });
+    });
+    prisma.mediaObject.updateMany.mockImplementation(
+      async ({ where, data }: { where: { status: string }; data: { status: string } }) => {
+        if (where.status !== state.status) return { count: 0 };
+        state.status = data.status;
+        return { count: 1 };
+      }
+    );
+    let headFails = false;
+    sendImpl.mockImplementation(async (name: string) => {
+      if (name !== 'HeadObject') return {};
+      if (headFails) throw new Error('r2 is down');
+      return { ContentLength: 4096 };
+    });
+
+    const a = await completeUpload({
+      classroom,
+      mediaId: MEDIA_ID,
+      parts: [{ partNumber: 1, etag: '"a"' }],
+    });
+    expect(state.status).toBe('READY');
+
+    // B's first read is from before A finished; its re-read after the lost
+    // tombstone is fresh.
+    staleReads = 1;
+    headFails = true;
+    sent.length = 0;
+    const b = await settleThroughRetry(
+      completeUpload({ classroom, mediaId: MEDIA_ID, parts: [{ partNumber: 1, etag: '"a"' }] })
+    );
+
+    expect(sent.filter(call => call.name === 'HeadObject')).toHaveLength(2);
+    expect(b).toEqual(a);
+    expect(state.status).toBe('READY');
+    expect(sent.some(call => call.name === 'DeleteObject')).toBe(false);
+  });
+
+  it('deletes the object when it cannot verify an upload cancelled underneath it', async () => {
+    // The row went DELETED between this call's read and its tombstone: the
+    // conditional tombstone matches nothing, and this call is told what an
+    // abort would have told it. The object goes too — the abort only cancelled
+    // the multipart, and a DELETED row can never serve these bytes.
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    let reads = 0;
+    prisma.mediaObject.findFirst.mockImplementation(async () =>
+      ++reads === 1
+        ? row({ status: 'UPLOADING', upload_id: 'up-1', size_bytes: BigInt(4096) })
+        : row({ status: 'DELETED', upload_id: null, size_bytes: BigInt(4096) })
+    );
+    prisma.mediaObject.updateMany.mockResolvedValue({ count: 0 });
+    sendImpl.mockImplementation(async (name: string) =>
+      name === 'HeadObject' ? { ContentLength: 99_999_999 } : {}
+    );
+
+    await expect(
+      completeUpload({ classroom, mediaId: MEDIA_ID, parts: [{ partNumber: 1, etag: '"a"' }] })
+    ).rejects.toMatchObject({ code: 'NOT_FOUND' });
+
+    expect(sent.filter(call => call.name === 'DeleteObject').map(c => c.input.Key)).toEqual([
+      ORIG_KEY,
+    ]);
+  });
+
+  it('answers a repeated complete with the same result, touching nothing', async () => {
+    // The lost-response retry: the first complete finished, its answer never
+    // reached the browser, and the browser asks again.
     const state = { status: 'UPLOADING' };
     prisma.mediaObject.findFirst.mockImplementation(async () =>
       row({ status: state.status, upload_id: state.status === 'UPLOADING' ? 'up-1' : null })
     );
-    prisma.mediaObject.update.mockImplementation(async ({ data }: { data: { status: string } }) => {
-      state.status = data.status;
-      return row({ ...data });
-    });
+    prisma.mediaObject.updateMany.mockImplementation(
+      async ({ data }: { data: { status: string } }) => {
+        state.status = data.status;
+        return { count: 1 };
+      }
+    );
     sendImpl.mockImplementation(async (name: string) =>
       name === 'HeadObject' ? { ContentLength: 1000 } : {}
     );
 
-    await completeUpload({ classroom, mediaId: MEDIA_ID, parts: [{ partNumber: 1, etag: '"a"' }] });
+    const first = await completeUpload({
+      classroom,
+      mediaId: MEDIA_ID,
+      parts: [{ partNumber: 1, etag: '"a"' }],
+    });
+    const sendsAfterFirst = sent.length;
+    const writesAfterFirst = prisma.mediaObject.updateMany.mock.calls.length;
+
+    const again = await completeUpload({
+      classroom,
+      mediaId: MEDIA_ID,
+      parts: [{ partNumber: 1, etag: '"a"' }],
+    });
+
+    expect(again).toEqual(first);
+    expect(again).toEqual({ mediaId: MEDIA_ID, ref: `media://${MEDIA_ID}`, sizeBytes: 1000 });
+    expect(state.status).toBe('READY');
+    // Not R2, not the row.
+    expect(sent.length).toBe(sendsAfterFirst);
+    expect(prisma.mediaObject.updateMany.mock.calls.length).toBe(writesAfterFirst);
+  });
+
+  it('is NOT_FOUND for a row that was cancelled, expired or deleted', async () => {
+    prisma.mediaObject.findFirst.mockResolvedValue(row({ status: 'DELETED' }));
     await expect(
       completeUpload({ classroom, mediaId: MEDIA_ID, parts: [{ partNumber: 1, etag: '"a"' }] })
-    ).rejects.toMatchObject({ code: 'BAD_STATE' });
+    ).rejects.toMatchObject({ code: 'NOT_FOUND' });
+    expect(sent).toHaveLength(0);
+  });
 
-    expect(state.status).toBe('READY');
-    expect(prisma.mediaObject.updateMany).not.toHaveBeenCalled();
+  it('discards the assembled object when the upload was cancelled underneath it', async () => {
+    // An abort landed between this call's read and its READY write: the row is
+    // DELETED, so nothing would ever serve, bill or delete the object.
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    let reads = 0;
+    prisma.mediaObject.findFirst.mockImplementation(async () =>
+      ++reads === 1
+        ? row({ status: 'UPLOADING', upload_id: 'up-1', size_bytes: BigInt(4096) })
+        : row({ status: 'DELETED', upload_id: null, size_bytes: BigInt(4096) })
+    );
+    prisma.mediaObject.updateMany.mockResolvedValue({ count: 0 });
+    sendImpl.mockImplementation(async (name: string) =>
+      name === 'HeadObject' ? { ContentLength: 4096 } : {}
+    );
+
+    await expect(
+      completeUpload({ classroom, mediaId: MEDIA_ID, parts: [{ partNumber: 1, etag: '"a"' }] })
+    ).rejects.toMatchObject({ code: 'NOT_FOUND' });
+
+    expect(sent.filter(call => call.name === 'DeleteObject').map(c => c.input.Key)).toEqual([
+      ORIG_KEY,
+    ]);
+  });
+
+  it('refuses and cancels an upload older than its reservation window', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    sendImpl.mockResolvedValue({});
+    prisma.mediaObject.findFirst.mockResolvedValue(
+      row({
+        status: 'UPLOADING',
+        upload_id: 'up-1',
+        size_bytes: BigInt(4096),
+        created_at: new Date(Date.now() - RESERVATION_WINDOW_MS - 1000),
+      })
+    );
+
+    await expect(
+      completeUpload({ classroom, mediaId: MEDIA_ID, parts: [{ partNumber: 1, etag: '"a"' }] })
+    ).rejects.toMatchObject({ code: 'UPLOAD_EXPIRED' });
+
+    // Aborted, never assembled, and the row tombstoned only from UPLOADING.
+    expect(sent.map(call => call.name)).toEqual(['AbortMultipartUpload']);
+    expect(prisma.mediaObject.updateMany.mock.calls.at(-1)?.[0]).toMatchObject({
+      where: { id: MEDIA_ID, status: 'UPLOADING' },
+      data: expect.objectContaining({ status: 'DELETED' }),
+    });
+    expect(prisma.mediaObject.update).not.toHaveBeenCalled();
   });
 
   it('refuses an empty parts list before touching R2', async () => {
@@ -874,12 +1243,25 @@ describe('abortUpload', () => {
   });
 
   it('will not quietly delete a finished file', async () => {
-    // "Cancel the upload" and "delete the file" are different intentions.
-    prisma.mediaObject.findFirst.mockResolvedValue(row({ status: 'READY' }));
-    await expect(abortUpload({ classroom, mediaId: MEDIA_ID })).rejects.toMatchObject({
-      code: 'BAD_STATE',
-    });
+    // "Cancel the upload" and "delete the file" are different intentions. The
+    // client's cleanup calls this after a failure it cannot always see the
+    // bottom of, so a finished file answers with a no-op, not an error.
+    for (const status of ['READY', 'DELETED']) {
+      prisma.mediaObject.findFirst.mockResolvedValue(row({ status }));
+      await expect(abortUpload({ classroom, mediaId: MEDIA_ID })).resolves.toEqual({
+        mediaId: MEDIA_ID,
+        aborted: false,
+      });
+    }
     expect(sent).toHaveLength(0);
+    expect(prisma.mediaObject.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('is NOT_FOUND for an id it has never seen', async () => {
+    prisma.mediaObject.findFirst.mockResolvedValue(null);
+    await expect(abortUpload({ classroom, mediaId: MEDIA_ID })).rejects.toMatchObject({
+      code: 'NOT_FOUND',
+    });
   });
 });
 
@@ -960,14 +1342,17 @@ describe('deleteMedia', () => {
     expect(warn).toHaveBeenCalledWith(expect.stringContaining('Could not delete'), 'r2 said no');
   });
 
-  it('tells the loser of a double delete that the object is gone', async () => {
+  it('lets the loser of a double delete finish the object deletes too', async () => {
+    // The winner tombstoned the row between the loser's read and its write.
+    // The loser does not tombstone again, but repeating the deletes is safe
+    // and is what a retry of a half-failed delete needs.
     prisma.mediaObject.findFirst.mockResolvedValue(row());
     prisma.mediaObject.updateMany.mockResolvedValue({ count: 0 });
 
-    await expect(deleteMedia({ classroom, mediaId: MEDIA_ID })).rejects.toMatchObject({
-      code: 'NOT_FOUND',
+    await expect(deleteMedia({ classroom, mediaId: MEDIA_ID })).resolves.toEqual({
+      mediaId: MEDIA_ID,
     });
-    expect(sent).toHaveLength(0);
+    expect(sent.filter(call => call.name === 'DeleteObject')).toHaveLength(3);
   });
 
   it('aborts first when the upload is still open', async () => {
@@ -978,16 +1363,147 @@ describe('deleteMedia', () => {
     expect(sent.filter(call => call.name === 'DeleteObject')).toHaveLength(3);
   });
 
-  it('is NOT_FOUND for an id already gone, or one in another classroom', async () => {
-    prisma.mediaObject.findFirst.mockResolvedValue(row({ status: 'DELETED' }));
-    await expect(deleteMedia({ classroom, mediaId: MEDIA_ID })).rejects.toMatchObject({
-      code: 'NOT_FOUND',
+  it('re-attempts the object deletes for a row that is already deleted', async () => {
+    // A delete whose R2 half failed left a tombstone and some bytes. Asking
+    // again must finish the job, not answer NOT_FOUND and strand them.
+    prisma.mediaObject.findFirst.mockResolvedValue(
+      row({ status: 'DELETED', rendition_key: `m/${CLASSROOM_ID}/${MEDIA_ID}/web.mp4` })
+    );
+
+    await expect(deleteMedia({ classroom, mediaId: MEDIA_ID })).resolves.toEqual({
+      mediaId: MEDIA_ID,
     });
 
+    expect(sent.map(call => call.input.Key)).toEqual([
+      ORIG_KEY,
+      `m/${CLASSROOM_ID}/${MEDIA_ID}/web.mp4`,
+      `m/${CLASSROOM_ID}/${MEDIA_ID}/poster.webp`,
+    ]);
+    // The tombstone is not rewritten: `deleted_at` keeps the first delete's time.
+    expect(prisma.mediaObject.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('is NOT_FOUND for an id this classroom never had', async () => {
     prisma.mediaObject.findFirst.mockResolvedValue(null);
     await expect(deleteMedia({ classroom, mediaId: MEDIA_ID })).rejects.toMatchObject({
       code: 'NOT_FOUND',
     });
     expect(sent).toHaveLength(0);
+  });
+});
+
+describe('purgeClassroomMedia', () => {
+  const PREFIX = `m/${CLASSROOM_ID}/`;
+
+  beforeEach(() => {
+    // A classroom that has had media: the purge only goes to R2 for one of these.
+    prisma.mediaObject.findFirst.mockResolvedValue({ id: MEDIA_ID });
+  });
+
+  it('does nothing on a deployment with no media store', async () => {
+    unconfigure();
+    await expect(purgeClassroomMedia(CLASSROOM_ID)).resolves.toEqual({ deleted: 0 });
+    expect(sent).toHaveLength(0);
+    expect(prisma.mediaObject.findMany).not.toHaveBeenCalled();
+  });
+
+  it('never asks R2 about a classroom that has had no media, so an outage cannot block it', async () => {
+    // Rows are written before any object can exist, and outlive their bytes as
+    // tombstones — no row in any status means nothing under the prefix.
+    prisma.mediaObject.findFirst.mockResolvedValue(null);
+    sendImpl.mockImplementation(async () => {
+      throw new Error('r2 is down');
+    });
+
+    await expect(purgeClassroomMedia(CLASSROOM_ID)).resolves.toEqual({ deleted: 0 });
+
+    expect(sent).toHaveLength(0);
+    // Any status: a DELETED row can still have bytes a failed delete left.
+    expect(prisma.mediaObject.findFirst.mock.calls[0][0].where).toEqual({
+      classroom_id: CLASSROOM_ID,
+    });
+  });
+
+  it('deletes every object under the classroom prefix, across pages', async () => {
+    sendImpl.mockImplementation(async (name: string, input: Record<string, unknown>) => {
+      if (name !== 'ListObjectsV2') return {};
+      return input.ContinuationToken === 'page-2'
+        ? { Contents: [{ Key: `${PREFIX}c/orig.zip` }], IsTruncated: false }
+        : {
+            Contents: [{ Key: `${PREFIX}a/orig.mp4` }, { Key: `${PREFIX}a/web.mp4` }],
+            IsTruncated: true,
+            NextContinuationToken: 'page-2',
+          };
+    });
+
+    await expect(purgeClassroomMedia(CLASSROOM_ID)).resolves.toEqual({ deleted: 3 });
+
+    const lists = sent.filter(call => call.name === 'ListObjectsV2');
+    expect(lists.map(call => call.input)).toEqual([
+      { Bucket: 'classmoji-media-test', Prefix: PREFIX, ContinuationToken: undefined },
+      { Bucket: 'classmoji-media-test', Prefix: PREFIX, ContinuationToken: 'page-2' },
+    ]);
+    expect(sent.filter(call => call.name === 'DeleteObject').map(call => call.input.Key)).toEqual([
+      `${PREFIX}a/orig.mp4`,
+      `${PREFIX}a/web.mp4`,
+      `${PREFIX}c/orig.zip`,
+    ]);
+  });
+
+  it('aborts the open uploads first, which a listing cannot see', async () => {
+    prisma.mediaObject.findMany.mockResolvedValue([
+      { id: MEDIA_ID, ext: 'mp4', upload_id: 'up-9' },
+    ]);
+    sendImpl.mockImplementation(async (name: string) =>
+      name === 'ListObjectsV2' ? { Contents: [], IsTruncated: false } : {}
+    );
+
+    await purgeClassroomMedia(CLASSROOM_ID);
+
+    expect(prisma.mediaObject.findMany.mock.calls[0][0].where).toMatchObject({
+      classroom_id: CLASSROOM_ID,
+      status: 'UPLOADING',
+    });
+    expect(sent[0]).toEqual({
+      name: 'AbortMultipartUpload',
+      input: { Bucket: 'classmoji-media-test', Key: ORIG_KEY, UploadId: 'up-9' },
+    });
+    expect(sent[1].name).toBe('ListObjectsV2');
+  });
+
+  it('throws when the listing fails, so the classroom is not deleted', async () => {
+    sendImpl.mockImplementation(async (name: string) => {
+      if (name === 'ListObjectsV2') throw new Error('r2 is down');
+      return {};
+    });
+    await expect(purgeClassroomMedia(CLASSROOM_ID)).rejects.toThrow('r2 is down');
+  });
+
+  it('tries every object, then throws when any of them could not be deleted', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    sendImpl.mockImplementation(async (name: string, input: Record<string, unknown>) => {
+      if (name === 'ListObjectsV2') {
+        return {
+          Contents: [{ Key: `${PREFIX}a/orig.mp4` }, { Key: `${PREFIX}b/orig.pdf` }],
+          IsTruncated: false,
+        };
+      }
+      if (name === 'DeleteObject' && input.Key === `${PREFIX}a/orig.mp4`) {
+        throw new Error('r2 said no');
+      }
+      return {};
+    });
+
+    await expect(purgeClassroomMedia(CLASSROOM_ID)).rejects.toThrow('1 media object');
+    expect(sent.filter(call => call.name === 'DeleteObject')).toHaveLength(2);
+  });
+
+  it('refuses anything that is not a whole classroom id', async () => {
+    // An empty id would be the prefix `m//`; a partial one matches neighbours.
+    for (const bad of ['', '1111', `${CLASSROOM_ID}/..`]) {
+      await expect(purgeClassroomMedia(bad)).rejects.toThrow(TypeError);
+    }
+    expect(sent).toHaveLength(0);
+    expect(prisma.mediaObject.findMany).not.toHaveBeenCalled();
   });
 });

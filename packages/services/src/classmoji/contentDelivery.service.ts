@@ -1,3 +1,4 @@
+import type { FileTypePolicy } from '../content/utils/validateFile.ts';
 import getPrisma from '@classmoji/database';
 import {
   contentDispositionFor,
@@ -260,6 +261,27 @@ export function canDeliverContent(
     | undefined
 ): boolean {
   return isContentDeliveryEnabled(classroom) && isDeliverableClassroom(classroom);
+}
+
+/**
+ * Which file types an upload into this classroom's content repo may be.
+ *
+ * `'any'` exactly when this layer serves the classroom: the deployment can sign
+ * (`isContentDeliveryConfigured`) AND the classroom is one it delivers
+ * (`canDeliverContent`). The classroom half alone is not enough — a deployment
+ * with no signing secret or origin serves every file straight from GitHub,
+ * however the row is set. What makes an arbitrary file safe to host is the
+ * Worker — it types a blob from its signed extension
+ * alone, serves an unknown one as `application/octet-stream`, and sends
+ * `nosniff` and a sandboxing CSP on every response. A classroom it does not
+ * serve has its files read straight from GitHub, so it keeps the image/PDF
+ * allowlist. Every upload surface (page assets and covers, deck images, the MCP
+ * asset tool) asks this one function, so the policy cannot drift between them.
+ */
+export function uploadFileTypes(
+  classroom: Parameters<typeof canDeliverContent>[0]
+): FileTypePolicy {
+  return isContentDeliveryConfigured() && canDeliverContent(classroom) ? 'any' : 'allowlist';
 }
 
 /**
@@ -1110,7 +1132,7 @@ export async function resolveMediaPoster(ctx: ResolveContext, ref: string): Prom
  *
  * Two separate reasons for null, and they are not the same thing:
  *
- *   - `forStudent` on a row whose uploader did not tick "Allow download". The
+ *   - `forStudent` on a VIDEO whose uploader did not tick "Allow download". The
  *     video still plays; there is simply no button, and minting the URL anyway
  *     would make the refusal cosmetic — a ten-minute unauthenticated handle to
  *     the file is exactly what the setting is about. Teaching staff always get
@@ -1132,7 +1154,11 @@ export async function mediaDownloadUrl({
   record: MediaRecord;
   forStudent: boolean;
 }): Promise<string | null> {
-  if (forStudent && !record.allowDownload) return null;
+  // `allowDownload` is a VIDEO setting. Every other kind is the file itself —
+  // a PDF, a zip, a deck — with no player to fall back on, so a student always
+  // gets it; that holds for rows written before the flag was fixed true for
+  // them, too, which is why the kind is checked here rather than only the flag.
+  if (forStudent && record.kind === 'VIDEO' && !record.allowDownload) return null;
 
   const ctx: ResolveContext = { classroom, tier: DOWNLOAD_TIER };
   const env = deliveryEnvFor(ctx);

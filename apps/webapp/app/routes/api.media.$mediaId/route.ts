@@ -10,16 +10,16 @@ import type { Route } from './+types/route';
 /**
  * `DELETE /api/media/:mediaId` — remove a media object.
  *
- * One endpoint for two situations, because the caller does not always know
- * which it is in: the upload client fires this best-effort after ANY failure,
- * and whether the multipart was still open or the object had just been
- * completed depends on where it failed. `deleteMedia` aborts an open multipart
- * and deletes the objects of a finished one, so either way the classroom stops
- * paying for it.
+ * A deliberate delete: the media page's Delete button. It aborts an open
+ * multipart and removes the objects of a finished one, so either way the
+ * classroom stops paying for it. The upload client does NOT call this when an
+ * upload fails — it calls `POST /api/media/uploads/:mediaId/abort`, which
+ * leaves a finished file alone — because a failure the browser saw may be a
+ * `complete` that succeeded and whose answer was lost.
  *
- * 204 on success, and 404 for an id that is already gone — the client ignores
- * both, which is what "best effort" means. Nothing here throws past the
- * handler; a repeat call is a 404, never a 500.
+ * 204 on success, including a repeat call on an object already deleted: the
+ * service re-attempts the object deletes, so a delete that half-failed can be
+ * retried. 404 for an id that was never issued.
  */
 export const action = async ({ params, request }: Route.ActionArgs) => {
   try {

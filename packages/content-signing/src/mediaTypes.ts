@@ -52,9 +52,14 @@ const MEDIA_CONTENT_TYPES: Readonly<Record<string, string>> = {
  * The type a media extension is stored and served with, or null when it is not
  * one the media store knows.
  *
- * Null rather than a default, because the two callers want different things
- * from a miss: the app refuses the upload outright, and the Worker falls back
- * to its own general table before giving up on `application/octet-stream`.
+ * Null rather than a default, because the two callers treat a miss
+ * differently. The app (`BY_EXT` in `services/src/media/mediaKinds.ts`) asks
+ * only for the extensions its `MEDIA_KINDS` groups, once at import, and throws
+ * on a miss, because that is drift between its list and this table; an
+ * extension outside those kinds never reaches here from the app, it is stored
+ * as `OTHER` and typed `application/octet-stream`. The Worker (`contentTypeOf`
+ * in `apps/content/src/origins/media.ts`) asks only for an object with no
+ * stored type, and serves a miss as `application/octet-stream`.
  */
 export function contentTypeForMediaExt(ext: string): string | null {
   if (typeof ext !== 'string') return null;

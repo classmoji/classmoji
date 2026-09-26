@@ -10,7 +10,6 @@ import type {
 import MediaVideoOptions from './MediaVideoOptions';
 import {
   DEFAULT_VIDEO_OPTIONS,
-  MEDIA_ACCEPT,
   applyVideoOption,
   formatBytes,
   isVideoFilename,
@@ -65,11 +64,13 @@ export function messageFor(error: MultipartUploadError, quota: QuotaSummary): st
     case 'FILE_TOO_LARGE':
       return `That file is over the ${formatBytes(quota.perFileBytes)} limit for a single upload.`;
     case 'KIND_NOT_ALLOWED':
-      return "That file type can't be uploaded.";
+      return "That file can't be uploaded. It needs an extension of at most 8 letters or digits.";
     case 'SIZE_MISMATCH':
       return 'The upload did not arrive intact and was discarded. Please try again.';
     case 'VERIFY_FAILED':
       return "The upload couldn't be verified. Try again.";
+    case 'UPLOAD_EXPIRED':
+      return 'This upload took too long. Start it again.';
     case 'NOT_FOUND':
     case 'BAD_STATE':
       return 'This upload is no longer valid. Please start it again.';
@@ -176,8 +177,8 @@ const MediaUploadDialog = ({
       <div className="pr-6">
         <h2 className="mb-1 text-lg font-semibold text-ink-0">Upload media</h2>
         <p className="mb-5 text-sm text-ink-3">
-          Video, audio, documents and archives. {formatBytes(free)} free of{' '}
-          {formatBytes(quota.quotaBytes)}, up to {formatBytes(quota.perFileBytes)} per file.
+          Video, audio, documents, archives — any file with an extension. {formatBytes(free)} free
+          of {formatBytes(quota.quotaBytes)}, up to {formatBytes(quota.perFileBytes)} per file.
         </p>
       </div>
 
@@ -186,7 +187,6 @@ const MediaUploadDialog = ({
           <input
             ref={inputRef}
             type="file"
-            accept={MEDIA_ACCEPT}
             disabled={uploading}
             onChange={event => chooseFile(event.target.files?.[0] ?? null)}
             className="sr-only"
@@ -203,7 +203,7 @@ const MediaUploadDialog = ({
                 {file ? file.name : 'Choose a file'}
               </span>
               <span className="block text-xs text-ink-3">
-                {file ? formatBytes(file.size) : 'mp4, mov, webm, mp3, pdf, pptx, key, zip…'}
+                {file ? formatBytes(file.size) : 'Any file with an extension'}
               </span>
             </span>
           </button>

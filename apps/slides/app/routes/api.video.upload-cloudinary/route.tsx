@@ -11,6 +11,15 @@
  * since Cloudinary can't access localhost. External URLs are passed directly.
  *
  * Returns the Cloudinary secure URL which can replace the original video src.
+ *
+ * ## Order of the checks
+ *
+ * The slide arrives in the BODY, so the slide's own edit gate cannot run before
+ * the body is read. What can run first is the session check: an anonymous
+ * caller is refused before a byte is read. The body is then read through a
+ * byte-counting reader capped at `CLOUDINARY_FORM_MAX_BYTES` — its two fields
+ * are a URL and an id, never file bytes — and only then is the slide looked up
+ * and `assertSlideAccess` applied.
  */
 
 import { v2 as cloudinary } from 'cloudinary';
@@ -18,12 +27,40 @@ import getPrisma from '@classmoji/database';
 import { ClassmojiService } from '@classmoji/services';
 import { isDeckSlide } from '@classmoji/services/slides';
 import { ContentService } from '@classmoji/content';
-import { assertSlideAccess } from '@classmoji/auth/server';
+import { assertSlideAccess, getAuthSession } from '@classmoji/auth/server';
+import { UploadTooLargeError, readLimitedFormData } from '@classmoji/utils/upload-limit';
 import { fetchContent, getMimeType } from '~/utils/contentProxy';
 import { deckOnlyMessage } from '~/utils/slideKind';
+import { deckVideoSource } from '~/utils/deckVideoSource';
+import { getContentRepoName } from '@classmoji/utils';
+
+/** The most this route reads of a body: two short text fields. */
+const CLOUDINARY_FORM_MAX_BYTES = 64 * 1024;
+
+function jsonResponse(body: Record<string, unknown>, status: number): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { 'Content-Type': 'application/json' },
+  });
+}
 
 export const action = async ({ request }: { request: Request }) => {
-  const formData = await request.formData();
+  // 1. A session, before the body is touched. See "Order of the checks".
+  const authData = await getAuthSession(request);
+  if (!authData) {
+    return jsonResponse({ error: 'Sign in to upload video.' }, 401);
+  }
+
+  // 2. The body, capped.
+  let formData: FormData;
+  try {
+    formData = await readLimitedFormData(request, CLOUDINARY_FORM_MAX_BYTES);
+  } catch (error: unknown) {
+    if (error instanceof UploadTooLargeError) {
+      return jsonResponse({ error: 'Request body is too large.' }, 413);
+    }
+    throw error;
+  }
   const videoUrl = formData.get('videoUrl') as string | null;
   const slideId = formData.get('slideId') as string | null;
 
@@ -55,7 +92,7 @@ export const action = async ({ request }: { request: Request }) => {
       });
     }
 
-    // Authorization: require edit permission
+    // 3. Authorization: require edit permission on the slide the body named
     await assertSlideAccess({
       request,
       slideId,
@@ -118,30 +155,39 @@ export const action = async ({ request }: { request: Request }) => {
       api_secret: apiSecret,
     });
 
-    // Determine upload source based on URL type
-    let uploadSource;
+    // Determine upload source based on URL type.
+    //
+    // A `/content/...` URL names a repository file this route reads and then
+    // DELETES, so it must be a file of THIS deck: the deck's org, its content
+    // repo, and a path inside its folder. The URL comes from the editor; the
+    // edit gate above covers the slide, not whatever file the URL points at.
+    const gitOrgLogin = slide.classroom?.git_organization?.login ?? '';
+    const source = deckVideoSource(videoUrl, {
+      org: gitOrgLogin,
+      // Stored and user-editable; legacy classrooms fall back to the org-level
+      // repo, the same rule the content proxy applies.
+      repo: slide.classroom?.content_repo
+        ? slide.classroom.content_repo
+        : getContentRepoName({ login: gitOrgLogin }),
+      contentPath: slide.content_path,
+    });
+    if (source.kind === 'foreign') {
+      return jsonResponse({ error: 'This video is not part of this deck.' }, 400);
+    }
 
-    // Check if it's a local content URL (either relative /content/... or full http://localhost.../content/...)
-    const isLocalContentUrl =
-      videoUrl.startsWith('/content/') ||
-      (videoUrl.includes('/content/') && videoUrl.includes('localhost'));
+    let uploadSource;
+    const isLocalContentUrl = source.kind === 'repo';
 
     // Store these for deletion after successful upload
     let contentOrg: string | null = null;
     let contentRepo: string | null = null;
     let contentPath: string | null = null;
 
-    if (isLocalContentUrl) {
+    if (source.kind === 'repo') {
       // Local content URL - fetch the video ourselves since Cloudinary can't access localhost
-      // Parse the content path: /content/{org}/{repo}/{...path}
-      // Handle both "/content/..." and "http://localhost:6500/content/..."
-      const parsedPath = videoUrl.includes('/content/')
-        ? videoUrl.substring(videoUrl.indexOf('/content/') + '/content/'.length)
-        : videoUrl.replace('/content/', '');
-      const pathParts = parsedPath.split('/');
-      contentOrg = pathParts[0];
-      contentRepo = pathParts[1];
-      contentPath = pathParts.slice(2).join('/');
+      contentOrg = source.org;
+      contentRepo = source.repo;
+      contentPath = source.path;
 
       const org = contentOrg;
       const repo = contentRepo;
