@@ -652,8 +652,9 @@ async function markDeleted(
  * UPLOADING), the object is deleted once that tombstone has landed, and the
  * caller is told. Not rounded down to a warning: a client that can overrun its
  * declaration can fill the bucket. A tombstone that does NOT land means another
- * call moved the row first, and the bytes are left alone: a READY row is
- * serving them, and that finished upload is this caller's answer too.
+ * call moved the row first. Moved to READY, the bytes are left alone: that row
+ * is serving them, and that finished upload is this caller's answer too. Moved
+ * to DELETED, they are deleted anyway — nothing can ever serve them again.
  *
  * A `HeadObject` that FAILS is the same outcome, not a lesser one. Letting the
  * error escape would leave a verified-by-nobody object in the bucket behind an
@@ -816,11 +817,14 @@ export async function completeUpload({
     // complete of the same upload finished it (R2 then answers this one
     // `NoSuchUpload`). That is success from the caller's point of view, and the
     // object at `key` is that upload's file, so it is left alone. A row that
-    // went DELETED was cancelled or deleted by another call, which owns its
-    // bytes.
+    // went DELETED was cancelled underneath us, and a DELETED row never becomes
+    // READY again, so whatever this call assembled can never be served: it is
+    // deleted here, because an abort only cancels the multipart and would leave
+    // an assembled object behind with nothing to bill or find it.
     if (!(await markDeleted(row.id, 'UPLOADING'))) {
       const done = await finishedElsewhere(classroom, row.id);
       if (done) return completedResult(done);
+      await deleteObjectsQuietly(client, bucket, [key]);
       throw new MediaError('NOT_FOUND', 'This upload was cancelled before it finished');
     }
     // The tombstone landed, so nothing will ever serve this key. A complete
@@ -841,11 +845,13 @@ export async function completeUpload({
     // R2 request was a replay of a finished upload — the object it failed to
     // measure is the file the READY row serves, and deleting it would break
     // that file everywhere it is referenced. A row that went DELETED under us
-    // was cancelled or deleted by someone else, whose call owns what happens
-    // to the bytes.
+    // was cancelled, and a DELETED row never becomes READY again, so the bytes
+    // can never be served and go now — the same as the cancelled branch after
+    // the READY write below.
     if (!(await markDeleted(row.id, 'UPLOADING'))) {
       const done = await finishedElsewhere(classroom, row.id);
       if (done) return completedResult(done);
+      await deleteObjectsQuietly(client, bucket, [key]);
       throw new MediaError('NOT_FOUND', 'This upload was cancelled before it finished');
     }
     await deleteObjectsQuietly(client, bucket, [key]);

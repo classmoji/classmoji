@@ -948,10 +948,12 @@ describe('completeUpload', () => {
     });
   });
 
-  it('keeps the object when the assembly fails for a call that lost to a cancel', async () => {
+  it('deletes what it may have assembled when the assembly fails for a call that lost to a cancel', async () => {
     // The row went DELETED while this call was assembling. Its tombstone
-    // matches nothing, the caller hears what an abort would have told it, and
-    // the bytes are left to whoever deleted the row.
+    // matches nothing and the caller hears what an abort would have told it.
+    // An abort only cancels the multipart, so if R2 assembled the object
+    // anyway, nothing else would ever delete it — and a DELETED row never
+    // becomes READY again, so these cannot be live bytes.
     let reads = 0;
     prisma.mediaObject.findFirst.mockImplementation(async () =>
       ++reads === 1
@@ -968,7 +970,9 @@ describe('completeUpload', () => {
       completeUpload({ classroom, mediaId: MEDIA_ID, parts: [{ partNumber: 1, etag: '"a"' }] })
     ).rejects.toMatchObject({ code: 'NOT_FOUND' });
 
-    expect(sent.some(call => call.name === 'DeleteObject')).toBe(false);
+    expect(sent.filter(call => call.name === 'DeleteObject').map(c => c.input.Key)).toEqual([
+      ORIG_KEY,
+    ]);
   });
 
   it('cannot un-READY a row another call already finished', async () => {
@@ -1088,10 +1092,11 @@ describe('completeUpload', () => {
     expect(sent.some(call => call.name === 'DeleteObject')).toBe(false);
   });
 
-  it('leaves the object to whoever deleted the row when it cannot verify a cancelled upload', async () => {
+  it('deletes the object when it cannot verify an upload cancelled underneath it', async () => {
     // The row went DELETED between this call's read and its tombstone: the
     // conditional tombstone matches nothing, and this call is told what an
-    // abort would have told it — without deleting anything itself.
+    // abort would have told it. The object goes too — the abort only cancelled
+    // the multipart, and a DELETED row can never serve these bytes.
     vi.spyOn(console, 'warn').mockImplementation(() => {});
     let reads = 0;
     prisma.mediaObject.findFirst.mockImplementation(async () =>
@@ -1108,7 +1113,9 @@ describe('completeUpload', () => {
       completeUpload({ classroom, mediaId: MEDIA_ID, parts: [{ partNumber: 1, etag: '"a"' }] })
     ).rejects.toMatchObject({ code: 'NOT_FOUND' });
 
-    expect(sent.some(call => call.name === 'DeleteObject')).toBe(false);
+    expect(sent.filter(call => call.name === 'DeleteObject').map(c => c.input.Key)).toEqual([
+      ORIG_KEY,
+    ]);
   });
 
   it('answers a repeated complete with the same result, touching nothing', async () => {
