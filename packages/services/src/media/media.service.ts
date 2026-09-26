@@ -23,6 +23,7 @@ import {
   findMediaRow,
   liveRows,
   liveRowsWhere,
+  mediaRef,
   reservationCutoff,
   toMediaRecord,
   type MediaClassroom,
@@ -717,6 +718,23 @@ async function verifiedSize(client: S3Client, bucket: string, key: string): Prom
   return null;
 }
 
+/** What a finished upload answers with — the same shape however it was reached. */
+function completedResult(row: MediaRow): { mediaId: string; ref: string; sizeBytes: number } {
+  return { mediaId: row.id, ref: mediaRef(row.id), sizeBytes: Number(row.size_bytes) };
+}
+
+/**
+ * Whether another call already finished this upload, read fresh.
+ *
+ * The question every lost race in `completeUpload` comes down to: a conditional
+ * write that matched nothing means the row moved, and the one move that makes
+ * this call's work redundant rather than wrong is to READY.
+ */
+async function finishedElsewhere(classroom: MediaClassroom, mediaId: string) {
+  const fresh = await findMediaRow(classroom.id, mediaId);
+  return fresh?.status === 'READY' ? fresh : null;
+}
+
 export async function completeUpload({
   classroom,
   mediaId,
@@ -727,7 +745,21 @@ export async function completeUpload({
   parts: { partNumber: number; etag: string }[];
 }): Promise<{ mediaId: string; ref: string; sizeBytes: number }> {
   const { client, bucket } = requireClient();
-  const row = await uploadingRow(classroom, mediaId);
+
+  // Idempotent by status, before anything touches R2. A complete whose
+  // response was lost is retried by a client that cannot know it succeeded;
+  // answering the retry with the same result is what keeps that client from
+  // concluding the upload failed and cleaning up a file that exists. A DELETED
+  // row is gone as far as this caller is concerned — cancelled, expired or
+  // deleted — and gets the same answer as an id that was never issued.
+  const current = await findMediaRow(classroom.id, mediaId);
+  if (!current || current.status === 'DELETED') {
+    throw new MediaError('NOT_FOUND', 'No such media object');
+  }
+  if (current.status === 'READY') return completedResult(current);
+  if (!current.upload_id) throw new MediaError('BAD_STATE', 'This upload is not open');
+
+  const row = current as MediaRow & { upload_id: string };
   await refuseIfExpired(client, bucket, classroom, row);
 
   const key = mediaKey(classroom.id, row.id, `orig.${row.ext}`);
@@ -764,7 +796,14 @@ export async function completeUpload({
     );
   } catch (error) {
     await abortQuietly(client, bucket, key, uploadId);
-    await markDeleted(row.id, 'UPLOADING');
+    // Only from UPLOADING. If the tombstone does not land, the row moved while
+    // this call was assembling — and when it moved to READY, a concurrent
+    // complete of the same upload finished it (R2 then answers this one
+    // `NoSuchUpload`). That is success from the caller's point of view.
+    if (!(await markDeleted(row.id, 'UPLOADING'))) {
+      const done = await finishedElsewhere(classroom, row.id);
+      if (done) return completedResult(done);
+    }
     throw error;
   }
 
@@ -784,11 +823,16 @@ export async function completeUpload({
     throw new MediaError('SIZE_MISMATCH', `Uploaded ${actual} bytes but ${declared} were declared`);
   }
 
-  const ready = (await getPrisma().mediaObject.update({
-    where: { id: row.id },
+  // READY only FROM UPLOADING. Between the read above and here the row can
+  // have been cancelled (an abort racing this complete) or finished by a
+  // concurrent complete; an unconditional write would resurrect the first and
+  // double-fire `onMediaReady` for the second.
+  const readyAt = new Date();
+  const { count } = await getPrisma().mediaObject.updateMany({
+    where: { id: row.id, status: 'UPLOADING' },
     data: {
       status: 'READY',
-      ready_at: new Date(),
+      ready_at: readyAt,
       upload_id: null,
       // NONE, even for a row that asked to be optimised. PENDING means "a job
       // is queued", and in P1 there is no job — a row parked in PENDING is one
@@ -797,22 +841,46 @@ export async function completeUpload({
       // enqueues, which is the only moment the claim is true.
       processing: 'NONE',
     },
-  })) as MediaRow;
+  });
 
-  const record = toMediaRecord(ready);
-  await onMediaReady(record);
+  if (count === 0) {
+    const done = await finishedElsewhere(classroom, row.id);
+    if (done) return completedResult(done);
+    // Cancelled underneath us: the object was assembled for a row that no
+    // longer exists, so nothing will ever serve it, bill it or delete it. It
+    // goes now, and the caller hears what an abort would have told them.
+    await deleteObjectsQuietly(client, bucket, [key]);
+    throw new MediaError('NOT_FOUND', 'This upload was cancelled before it finished');
+  }
 
-  return { mediaId: record.id, ref: record.ref, sizeBytes: record.sizeBytes };
+  const ready: MediaRow = {
+    ...row,
+    status: 'READY',
+    ready_at: readyAt,
+    upload_id: null,
+    processing: 'NONE',
+  };
+  await onMediaReady(toMediaRecord(ready));
+
+  return completedResult(ready);
 }
 
 /**
- * Cancel an upload in flight — the client's own "stop" button, and what an
- * unmounting editor calls.
+ * Cancel an upload in flight — the client's own "stop" button, and the upload
+ * client's cleanup after any failure.
  *
- * Refuses a READY row rather than quietly deleting it: "cancel the upload" and
- * "delete the file" are different intentions, and one standing in for the other
- * would turn a stray abort into data loss. `deleteMedia` is the one that means
- * the second thing.
+ * Acts ONLY on an UPLOADING row, and is a quiet no-op on anything else:
+ * "cancel the upload" and "delete the file" are different intentions, and one
+ * standing in for the other would turn a stray abort into data loss. That
+ * matters most for the client's cleanup, which runs after a failure it cannot
+ * always see the bottom of — a `complete` whose response was lost looks like a
+ * failure from the browser while the file is READY on this side. An abort then
+ * must leave the file alone, which is why the client calls this and never
+ * `deleteMedia`.
+ *
+ * A READY or DELETED row answers `{ aborted: false }` rather than an error:
+ * there is nothing to cancel, and a cleanup call that failed noisily would only
+ * be ignored. An unknown id is still NOT_FOUND.
  */
 export async function abortUpload({
   classroom,
@@ -820,18 +888,20 @@ export async function abortUpload({
 }: {
   classroom: MediaClassroom;
   mediaId: string;
-}): Promise<{ mediaId: string }> {
+}): Promise<{ mediaId: string; aborted: boolean }> {
   const { client, bucket } = requireClient();
-  const row = await uploadingRow(classroom, mediaId);
+  const row = await findMediaRow(classroom.id, mediaId);
+  if (!row) throw new MediaError('NOT_FOUND', 'No such media object');
+  if (row.status !== 'UPLOADING' || !row.upload_id) return { mediaId: row.id, aborted: false };
 
   const key = mediaKey(classroom.id, row.id, `orig.${row.ext}`);
   await abortQuietly(client, bucket, key, row.upload_id);
   // Only from UPLOADING: a `complete` that won the race while this abort was in
   // flight has already made the row READY, and cancelling an upload must never
   // be able to delete the file that upload produced.
-  await markDeleted(row.id, 'UPLOADING');
+  const aborted = await markDeleted(row.id, 'UPLOADING');
 
-  return { mediaId: row.id };
+  return { mediaId: row.id, aborted };
 }
 
 /**

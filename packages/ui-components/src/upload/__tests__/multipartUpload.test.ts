@@ -105,7 +105,7 @@ function makeServer(options: ServerOptions = {}) {
       return options.complete?.() ?? json(200, { mediaId: MEDIA_ID, ref: `media://${MEDIA_ID}` });
     }
 
-    if (url === `${BASE}/${MEDIA_ID}` && method === 'DELETE') {
+    if (url === `${BASE}/uploads/${MEDIA_ID}/abort` && method === 'POST') {
       return new Response(null, { status: 204 });
     }
 
@@ -196,7 +196,7 @@ describe('uploadMultipart — happy path', () => {
     });
 
     // Nothing to clean up when nothing went wrong.
-    expect(server.of('DELETE')).toHaveLength(0);
+    expect(server.of('POST', '/abort')).toHaveLength(0);
     expect(progress.at(0)).toEqual({ sentBytes: 0, totalBytes: 10, part: 0, partCount: 3 });
     expect(progress.at(-1)?.sentBytes).toBe(10);
   });
@@ -237,7 +237,7 @@ describe('uploadMultipart — retries', () => {
     expect(result).toEqual({ mediaId: MEDIA_ID, ref: `media://${MEDIA_ID}` });
     // Four PUTs: part 2 twice, parts 1 and 3 once each.
     expect(server.of('PUT')).toHaveLength(4);
-    expect(server.of('DELETE')).toHaveLength(0);
+    expect(server.of('POST', '/abort')).toHaveLength(0);
   });
 
   it('retries a network failure and a 429, then gives up after three tries', async () => {
@@ -259,7 +259,7 @@ describe('uploadMultipart — retries', () => {
     // One attempt plus the three the backoff schedule allows.
     expect(server.of('PUT').filter(c => c.url.includes('/part/1'))).toHaveLength(4);
     // A dead upload must not keep holding quota.
-    expect(server.of('DELETE')).toHaveLength(1);
+    expect(server.of('POST', '/abort')).toHaveLength(1);
   });
 
   it('does not retry a 4xx that is not a rate limit', async () => {
@@ -323,6 +323,21 @@ describe('uploadMultipart — expired signatures', () => {
   });
 });
 
+describe('uploadMultipart — cleanup never deletes', () => {
+  it('cleans up a failed complete with an abort, not a DELETE', async () => {
+    // A complete that fails from the browser's side may have succeeded on the
+    // server with its answer lost; a DELETE would remove the finished file.
+    const server = makeServer({ complete: () => new Response('gateway', { status: 502 }) });
+
+    await expect(
+      uploadMultipart({ file: videoFile(), classroomId: 'class-1', endpoints: { base: BASE } })
+    ).rejects.toMatchObject({ code: 'NETWORK' });
+
+    expect(server.of('POST', '/abort')).toHaveLength(1);
+    expect(server.calls.filter(c => c.method === 'DELETE')).toHaveLength(0);
+  });
+});
+
 describe('uploadMultipart — cancellation', () => {
   it('stops, cleans up and rejects as ABORTED', async () => {
     const controller = new AbortController();
@@ -343,8 +358,8 @@ describe('uploadMultipart — cancellation', () => {
 
     expect(error).toBeInstanceOf(MultipartUploadError);
     expect((error as MultipartUploadError).code).toBe('ABORTED');
-    expect(server.of('DELETE')).toHaveLength(1);
-    expect(server.of('DELETE')[0].url).toBe(`${BASE}/${MEDIA_ID}`);
+    expect(server.of('POST', '/abort')).toHaveLength(1);
+    expect(server.of('POST', '/abort')[0].url).toBe(`${BASE}/uploads/${MEDIA_ID}/abort`);
     expect(server.of('POST', '/complete')).toHaveLength(0);
   });
 
@@ -380,7 +395,7 @@ describe('uploadMultipart — server error codes', () => {
       uploadMultipart({ file: videoFile(), classroomId: 'class-1', endpoints: { base: BASE } })
     ).rejects.toMatchObject({ code, status });
 
-    expect(server.of('DELETE')).toHaveLength(0);
+    expect(server.of('POST', '/abort')).toHaveLength(0);
   });
 
   it('reads a 409 by its body code, not by the status table', async () => {
@@ -425,7 +440,7 @@ describe('uploadMultipart — server error codes', () => {
         uploadMultipart({ file: videoFile(), classroomId: 'class-1', endpoints: { base: BASE } })
       ).rejects.toMatchObject({ code });
 
-      expect(server.of('DELETE')).toHaveLength(1);
+      expect(server.of('POST', '/abort')).toHaveLength(1);
     }
   );
 
@@ -441,7 +456,7 @@ describe('uploadMultipart — server error codes', () => {
     expect(server.partsCalls()).toBe(1);
     expect(server.of('PUT')).toHaveLength(0);
     expect(server.of('POST', '/complete')).toHaveLength(0);
-    expect(server.of('DELETE')).toHaveLength(1);
+    expect(server.of('POST', '/abort')).toHaveLength(1);
   });
 
   it('reads a bare 410 as UPLOAD_EXPIRED', async () => {
