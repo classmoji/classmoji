@@ -1088,9 +1088,12 @@ export const getDeadlinesForRange = async (
           title: true,
           classroom: {
             select: {
+              git_namespace: true,
               git_organization: {
                 select: {
                   login: true,
+                  provider: true,
+                  base_url: true,
                 },
               },
             },

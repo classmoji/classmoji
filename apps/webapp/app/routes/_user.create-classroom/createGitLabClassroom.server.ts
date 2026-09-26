@@ -5,7 +5,7 @@ import {
   GitLabProvider,
   createWithUniqueClassroomSlug,
 } from '@classmoji/services';
-import { canonicalTimeZone, defaultContentRepoName } from '@classmoji/utils';
+import { canonicalTimeZone, defaultContentRepoName, scopeGitlabId } from '@classmoji/utils';
 import { ActionTypes } from '~/constants';
 import { slugify } from './utils';
 import { pickContentNamespace } from './contentNamespace.server';
@@ -31,8 +31,14 @@ export async function createGitLabClassroom(
   const connection = await ClassmojiService.gitlabConnection.findForUser(userId);
   if (!connection) return { error: 'Connect Gitlab first.' };
 
-  const provider = new GitLabProvider(groupId, null, () =>
-    ClassmojiService.gitlabConnection.getConnectionToken(connection.id)
+  // The connection's instance: gitlab.com, or the school's own GitLab.
+  const instanceId = connection.gitlab_instance_id ?? null;
+  const host = await ClassmojiService.gitlabInstance.hostFor(instanceId);
+  const provider = new GitLabProvider(
+    groupId,
+    null,
+    () => ClassmojiService.gitlabConnection.getConnectionToken(connection.id),
+    host
   );
 
   // The group must be one the connection's user administers (Maintainer+),
@@ -49,22 +55,27 @@ export async function createGitLabClassroom(
 
   // The GitLab counterpart of the org row an installation creates. The first
   // connection to reach a group backs it; later ones don't take it over.
+  // Group ids repeat across instances: a self-managed one's are scoped.
+  const providerId = scopeGitlabId(instanceId, group.id);
   const existing = await getPrisma().gitOrganization.findUnique({
-    where: { provider_provider_id: { provider: 'GITLAB', provider_id: String(group.id) } },
+    where: { provider_provider_id: { provider: 'GITLAB', provider_id: providerId } },
   });
   const gitOrg = existing
     ? await getPrisma().gitOrganization.update({
         where: { id: existing.id },
         data: {
           login: group.full_path,
+          base_url: host,
           ...(existing.gitlab_connection_id ? {} : { gitlab_connection_id: connection.id }),
         },
       })
     : await getPrisma().gitOrganization.create({
         data: {
           provider: 'GITLAB',
-          provider_id: String(group.id),
+          provider_id: providerId,
           login: group.full_path,
+          base_url: host,
+          gitlab_instance_id: instanceId,
           gitlab_connection_id: connection.id,
         },
       });

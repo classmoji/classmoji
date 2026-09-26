@@ -124,6 +124,8 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
     '/login',
     '/test-login',
     '/site-return',
+    // Connecting a self-managed Gitlab happens before its first sign-in.
+    '/gitlab/setup',
   ];
   const isPublicRoute = publicRoutes.some(
     route =>

@@ -105,6 +105,24 @@ describe('mapGitLabProfile', () => {
     expect(result.login).toBe('jdoe');
   });
 
+  it('scopes the id to a self-managed instance', async () => {
+    prisma.user.findFirst.mockResolvedValue(null);
+
+    await expect(mapGitLabProfile(db, { id: 7, username: 'jdoe' }, 'inst-1')).resolves.toEqual({
+      login: 'jdoe',
+      provider: 'GITLAB',
+      provider_id: 'inst-1:7',
+    });
+  });
+
+  it('does not treat the same GitLab id on another instance as the login holder', async () => {
+    prisma.user.findFirst.mockResolvedValue({ provider: 'GITLAB', provider_id: '7' });
+
+    const result = await mapGitLabProfile(db, { id: 7, username: 'jdoe' }, 'inst-1');
+
+    expect(result.login).toBeNull();
+  });
+
   it('never links or writes to an existing user', async () => {
     prisma.user.findFirst.mockResolvedValue({ provider: null, provider_id: null });
 

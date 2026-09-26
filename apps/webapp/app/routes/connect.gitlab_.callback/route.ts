@@ -43,14 +43,23 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
   const code = url.searchParams.get('code');
   if (!code) return finish(saved.returnTo, 'error');
 
+  // One GitLab per user: replacing a connection on another instance would
+  // leave that instance's groups acting with this one's tokens.
+  const instanceId = saved.instanceId ?? null;
+  const existing = await ClassmojiService.gitlabConnection.findForUser(userId);
+  if (existing && (existing.gitlab_instance_id ?? null) !== instanceId) {
+    return finish(saved.returnTo, 'other_instance');
+  }
+
   try {
     const svc = ClassmojiService.gitlabConnection;
-    const tokens = await svc.exchangeCode(code, gitlabConnectRedirectUri(), saved.verifier);
+    const client = await ClassmojiService.gitlabInstance.oauthClient(instanceId);
+    const tokens = await svc.exchangeCode(client, code, gitlabConnectRedirectUri(), saved.verifier);
     if (!tokens.scope?.split(/[\s,]+/).includes('api')) {
       return finish(saved.returnTo, 'missing_scope');
     }
-    const gitlabUser = await svc.fetchTokenUser(tokens.accessToken);
-    await svc.saveConnection(userId, tokens, gitlabUser);
+    const gitlabUser = await svc.fetchTokenUser(client.host, tokens.accessToken);
+    await svc.saveConnection(userId, tokens, gitlabUser, instanceId);
   } catch (error: unknown) {
     console.error(
       '[connect.gitlab] callback failed:',

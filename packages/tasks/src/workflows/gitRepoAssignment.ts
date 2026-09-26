@@ -5,7 +5,7 @@ import {
   getGitProvider,
   type GitLabProvider,
 } from '@classmoji/services';
-import { gitTerms, titleToIdentifier } from '@classmoji/utils';
+import { gitTerms, scopeGitlabId, titleToIdentifier } from '@classmoji/utils';
 import { createRepositoriesTask } from './gitRepo.ts';
 import { nanoid } from 'nanoid';
 import dayjs from 'dayjs';
@@ -274,10 +274,13 @@ export const createGithubRepositoryAssignmentTask = task({
     // submission. Nothing is created on GitHub; the submission row is all
     // that is needed, and the push webhook fills in the rest.
     if (assignment.submission_mode === 'REPO') {
-      await createDatabaseRepositoryAssignmentTask.triggerAndWait(
+      const created = await createDatabaseRepositoryAssignmentTask.triggerAndWait(
         { assignment, studentRepo, provider: organization.provider as 'GITHUB' | 'GITLAB' },
         { tags: ctx.run.tags, concurrencyKey: organization.login }
       );
+      // Without the row the assignment reads "not released" for this student,
+      // so a failed child must fail this run (and retry), never pass silently.
+      if (!created.ok) throw created.error;
       // The repo may already hold work: an assignment added to a repository
       // students have been pushing to for weeks. The webhook only sees pushes
       // from now on, so the latest commit stands in for the missed push.
@@ -320,7 +323,7 @@ export const createGithubRepositoryAssignmentTask = task({
 
       // Projects created before issue mode existed on GitLab have a push-only
       // hook; make sure close/reopen events reach Classmoji too.
-      const url = process.env.GITLAB_WEBHOOK_URL;
+      const url = ClassmojiService.gitlabInstance.webhookUrl(organization.gitlab_instance_id);
       const secret = process.env.GITLAB_WEBHOOK_SECRET;
       if (url && secret) {
         try {
@@ -383,7 +386,11 @@ export const createGithubRepositoryAssignmentTask = task({
       );
     }
 
-    const { id, number: issueNumber } = issue;
+    const { number: issueNumber } = issue;
+    // A self-managed GitLab's issue ids are stored instance-scoped, the same
+    // form hook-station looks them up by.
+    const id =
+      provider === 'GITLAB' ? scopeGitlabId(organization.gitlab_instance_id, issue.id) : issue.id;
 
     if (studentRepo.project_id) {
       try {

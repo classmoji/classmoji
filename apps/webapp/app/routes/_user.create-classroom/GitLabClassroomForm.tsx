@@ -20,6 +20,10 @@ const CONNECT_OUTCOMES: Record<string, { type: 'success' | 'error' | 'warning'; 
     text: 'Gitlab did not grant API access. Try again and approve all requested permissions.',
   },
   invalid_state: { type: 'error', text: 'That Gitlab connection attempt expired. Try again.' },
+  other_instance: {
+    type: 'error',
+    text: 'Your account is already connected to a different Gitlab. Sign in with that Gitlab instead.',
+  },
   error: { type: 'error', text: 'Could not connect Gitlab. Try again.' },
 };
 
@@ -78,6 +82,11 @@ const GitLabClassroomForm = ({
               its student projects. You approve this once on Gitlab; it works like installing the
               Github App.
             </p>
+            {gitlab.host && (
+              <p className="text-xs text-ink-3">
+                Gitlab: <span className="font-medium">{new URL(gitlab.host).host}</span>
+              </p>
+            )}
             <Button type="primary" href={CONNECT_URL} icon={<GitlabLogo size={16} />}>
               Connect Gitlab
             </Button>
@@ -89,6 +98,7 @@ const GitLabClassroomForm = ({
             <span className="flex items-center gap-2">
               <GitlabLogo size={14} />
               Connected as @{gitlab.connection.username}
+              {gitlab.host && <span>on {new URL(gitlab.host).host}</span>}
             </span>
             <a href={CONNECT_URL} className="text-xs font-medium text-accent hover:underline">
               Reconnect

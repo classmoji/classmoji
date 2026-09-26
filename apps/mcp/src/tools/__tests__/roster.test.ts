@@ -82,6 +82,7 @@ describe('roster_add_student', () => {
       addedExistingUsers: 1,
       invitedNewUsers: 1,
       emails: [{ payload: { to: 'a@x.edu', template: { id: 'roster-added', variables: {} } } }],
+      activations: [],
     });
 
     const payload = parse(await rosterAddStudentTool.handler(ARGS, CTX));
@@ -102,7 +103,12 @@ describe('roster_add_student', () => {
   });
 
   it('does not batch-trigger when the service returns no emails', async () => {
-    mocks.addStudents.mockResolvedValue({ addedExistingUsers: 0, invitedNewUsers: 0, emails: [] });
+    mocks.addStudents.mockResolvedValue({
+      addedExistingUsers: 0,
+      invitedNewUsers: 0,
+      emails: [],
+      activations: [],
+    });
     await rosterAddStudentTool.handler(ARGS, CTX);
     expect(mocks.batchTrigger).not.toHaveBeenCalled();
   });
@@ -112,6 +118,7 @@ describe('roster_add_student', () => {
       addedExistingUsers: 1,
       invitedNewUsers: 0,
       emails: [{ payload: { to: 'a@x.edu', template: { id: 'roster-added', variables: {} } } }],
+      activations: [],
     });
     mocks.batchTrigger.mockRejectedValue(new Error('trigger down'));
 

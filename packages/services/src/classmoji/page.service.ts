@@ -2,6 +2,7 @@ import getPrisma from '@classmoji/database';
 import { titleToIdentifier, RESERVED_PAGE_SLUGS } from '@classmoji/utils';
 import { ContentService } from '../content/ContentService.ts';
 import { getGitProvider } from '../git/index.ts';
+import type { GitLabProvider } from '../git/GitLabProvider.ts';
 import { recordContentAssets, removeContentAssetFolder } from './contentAssets.service.ts';
 import { shouldCreatePrivateContentRepo } from './contentDelivery.service.ts';
 import { indexOneFile } from './contentIndex.service.ts';
@@ -283,16 +284,43 @@ async function ensureContentRepoExists({ classroom, gitOrgLogin, repoName }: Con
         gitOrgLogin,
         repoName,
         `Course content for ${classroom.name || gitOrgLogin}`,
-        shouldCreatePrivateContentRepo(classroom)
+        // A Gitlab content project is always private: only the delivery
+        // layer and the authenticated proxy read it, never a public raw URL.
+        classroom.git_organization?.provider === 'GITLAB' ||
+          shouldCreatePrivateContentRepo(classroom)
       );
 
       // Give GitHub a moment to initialize the repo
       await new Promise(resolve => setTimeout(resolve, 2000));
     } catch (repoError) {
-      console.error('Failed to create GitHub repository:', repoError);
+      const isGitLab = classroom.git_organization?.provider === 'GITLAB';
+      console.error('Failed to create content repository:', repoError);
       throw new Error(
-        'Failed to create GitHub repository. Please check your GitHub organization permissions'
+        isGitLab
+          ? 'Failed to create the Gitlab content project. Please check your Gitlab group permissions'
+          : 'Failed to create GitHub repository. Please check your GitHub organization permissions'
       );
+    }
+  }
+
+  // Gitlab has no org-wide webhook on the free plan, so the content project
+  // gets its own push hook: edits made outside Classmoji refresh the asset map
+  // the way the Github App's push events do. Checked on every call (it is
+  // idempotent) so a project created before the hook existed picks it up.
+  if (classroom.git_organization?.provider === 'GITLAB') {
+    const url = process.env.GITLAB_WEBHOOK_URL;
+    const secret = process.env.GITLAB_WEBHOOK_SECRET;
+    if (url && secret) {
+      try {
+        await (gitProvider as GitLabProvider).ensureProjectPushHook(
+          gitOrgLogin,
+          repoName,
+          url,
+          secret
+        );
+      } catch (error: unknown) {
+        console.error('Failed to register the content project push hook:', error);
+      }
     }
   }
 

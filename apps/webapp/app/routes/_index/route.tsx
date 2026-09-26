@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { data, redirect } from 'react-router';
 
 import { Alert } from 'antd';
@@ -6,8 +7,9 @@ import getPrisma from '@classmoji/database';
 import { isSafeRelativePath } from '@classmoji/auth/site-return';
 import { authClient } from '@classmoji/auth/client';
 import SignInPage from './SignInPage';
+import GitLabSignIn from './GitLabSignIn';
+import { loadGitLabSignIn } from './gitlabSignIn.server';
 import GitHubIcon from './github.svg';
-import GitLabIcon from '~/components/ui/display/gitlab.svg';
 import type { Route } from './+types/route';
 
 /**
@@ -32,6 +34,11 @@ const SIGN_IN_ERRORS: Record<string, string> = {
   account_not_linked:
     'You already have a Classmoji account with this email. Sign in the way you usually do, then connect this account in Settings.',
   access_denied: 'Sign-in was cancelled.',
+  gitlab_instance_unavailable: 'That Gitlab is no longer available for sign-in.',
+  gitlab_setup_credentials:
+    'Gitlab rejected that Application ID or Secret, or the callback URL on the application does not match. Check them and try again.',
+  gitlab_setup_failed: 'Could not save that Gitlab. Try again.',
+  email_is_missing: 'Your Gitlab account has no email address Classmoji can read.',
 };
 
 function signInErrorMessage(code: string | null): string | null {
@@ -68,7 +75,7 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
         {
           isDev: process.env.NODE_ENV === 'development',
           multipleTokens: process.env.MULTIPLE_TOKENS === 'true',
-          gitlabEnabled: Boolean(process.env.GITLAB_CLIENT_ID),
+          gitlab: await loadGitLabSignIn(url, redirectPath),
           signInError: null,
           setupComplete: false,
           redirectPath,
@@ -85,8 +92,8 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
   return {
     isDev: process.env.NODE_ENV === 'development',
     multipleTokens: process.env.MULTIPLE_TOKENS === 'true',
-    // Mirrors the server: the GitLab provider is only registered when configured.
-    gitlabEnabled: Boolean(process.env.GITLAB_CLIENT_ID),
+    // gitlab.com (when configured) and any self-managed instances.
+    gitlab: await loadGitLabSignIn(url, redirectPath),
     signInError: signInErrorMessage(url.searchParams.get('error')),
     setupComplete: url.searchParams.get('setup') === 'complete',
     redirectPath,
@@ -94,20 +101,25 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
 };
 
 const Index = ({ loaderData }: Route.ComponentProps) => {
-  const { isDev, setupComplete, multipleTokens, gitlabEnabled, signInError, redirectPath } =
-    loaderData;
+  const { isDev, setupComplete, multipleTokens, gitlab, signInError, redirectPath } = loaderData;
 
   // Use BetterAuth client for OAuth flow. `redirectPath` was validated in the
   // loader; it is null unless it is a safe relative path.
-  const signInWith = (provider: 'github' | 'gitlab') => async () => {
-    await authClient.signIn.social({
-      provider,
-      callbackURL: redirectPath ?? '/select-organization',
-      errorCallbackURL: '/',
-    });
+  const callbackURL = redirectPath ?? '/select-organization';
+  const handleGitHubLogin = async () => {
+    await authClient.signIn.social({ provider: 'github', callbackURL, errorCallbackURL: '/' });
   };
-  const handleGitHubLogin = signInWith('github');
-  const handleGitLabLogin = gitlabEnabled ? signInWith('gitlab') : undefined;
+  // While the Gitlab chooser is open it takes the whole column: no Github button.
+  const [gitlabChoosing, setGitlabChoosing] = useState(false);
+  const gitlabSignIn = (buttonClassName: string) =>
+    gitlab.enabled ? (
+      <GitLabSignIn
+        options={gitlab}
+        callbackURL={callbackURL}
+        buttonClassName={buttonClassName}
+        onChoosingChange={setGitlabChoosing}
+      />
+    ) : null;
 
   const errorBanner = signInError && (
     <Alert type="warning" showIcon message={signInError} className="max-w-md" />
@@ -129,23 +141,21 @@ const Index = ({ loaderData }: Route.ComponentProps) => {
         {errorBanner}
         <div className="text-ink-3 text-sm mb-2">Development Login</div>
 
-        <button
-          onClick={handleGitHubLogin}
-          className="flex items-center justify-center gap-2 font-bold bg-black text-white dark:ring-1 dark:ring-neutral-700 rounded-md px-6 py-3 min-w-[200px] cursor-pointer"
-        >
-          <img src={GitHubIcon} alt="" className="w-5 h-5" />
-          Continue with Github
-        </button>
-
-        {handleGitLabLogin && (
+        {!gitlabChoosing && (
           <button
-            onClick={handleGitLabLogin}
-            className="flex items-center justify-center gap-2 font-bold bg-white dark:bg-neutral-800 text-gray-900 dark:text-white ring-1 ring-stone-200 dark:ring-neutral-700 rounded-md px-6 py-3 min-w-[200px] cursor-pointer"
+            onClick={handleGitHubLogin}
+            className="flex items-center justify-center gap-2 font-bold bg-black text-white dark:ring-1 dark:ring-neutral-700 rounded-md px-4 py-3 w-64 cursor-pointer"
           >
-            <img src={GitLabIcon} alt="" className="w-5 h-5" />
-            Continue with Gitlab
+            <img src={GitHubIcon} alt="" className="w-5 h-5" />
+            Continue with Github
           </button>
         )}
+
+        <div className={`${gitlabChoosing ? 'w-96' : 'w-64'} flex justify-center`}>
+          {gitlabSignIn(
+            'w-full flex items-center justify-center gap-2 font-bold bg-white dark:bg-neutral-800 text-gray-900 dark:text-white ring-1 ring-stone-200 dark:ring-neutral-700 rounded-md px-4 py-3 cursor-pointer'
+          )}
+        </div>
 
         {multipleTokens && (
           <>
@@ -192,7 +202,10 @@ const Index = ({ loaderData }: Route.ComponentProps) => {
       <SignInPage
         error={signInError}
         handleGitHubLogin={handleGitHubLogin}
-        handleGitLabLogin={handleGitLabLogin}
+        gitlabChoosing={gitlabChoosing}
+        gitlabSignIn={gitlabSignIn(
+          'w-full flex items-center justify-center gap-2 bg-white hover:bg-stone-50 dark:bg-neutral-900 dark:hover:bg-neutral-800 text-gray-900 dark:text-white ring-1 ring-stone-200 dark:ring-neutral-700 font-medium rounded-lg px-4 py-2.5 transition-colors cursor-pointer'
+        )}
       />
     </>
   );

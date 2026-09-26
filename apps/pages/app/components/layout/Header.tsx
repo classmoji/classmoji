@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import gitlabLogo from '~/components/ui/gitlab.svg';
 import { IconBrandGithub, IconMaximize, IconMinimize, IconDots } from '@tabler/icons-react';
 import PageOptionsMenu from '~/components/editor/PageOptionsMenu.tsx';
 
@@ -45,11 +46,10 @@ const Header = ({
     }
   };
 
-  // Build GitHub URL
-  const githubUrl =
-    classroom.git_organization && page?.content_path
-      ? `https://github.com/${classroom.git_organization.login}/${classroom.git_organization.repo}/blob/main/${page.content_path}/content.json`
-      : null;
+  // The page's source file on its provider, built by the loader (Github or Gitlab)
+  const gitOrg = classroom.git_organization;
+  const sourceUrl = page?.content_path ? (gitOrg?.source_url ?? null) : null;
+  const isGitLab = gitOrg?.provider === 'GITLAB';
 
   return (
     <header className="sticky top-0 z-40 bg-white dark:bg-[#191919] w-full">
@@ -98,16 +98,20 @@ const Header = ({
                   </div>
                 )}
 
-                {/* GitHub button (instructors only) */}
-                {canEdit && githubUrl && (
+                {/* Source button (instructors only) */}
+                {canEdit && sourceUrl && (
                   <a
-                    href={githubUrl}
+                    href={sourceUrl}
                     target="_blank"
                     rel="noopener noreferrer"
                     className="p-1.5 text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-800 rounded"
-                    title="View on GitHub"
+                    title={`View on ${isGitLab ? 'Gitlab' : 'Github'}`}
                   >
-                    <IconBrandGithub size={18} />
+                    {isGitLab ? (
+                      <img src={gitlabLogo} alt="" aria-hidden width={18} height={18} />
+                    ) : (
+                      <IconBrandGithub size={18} />
+                    )}
                   </a>
                 )}
 

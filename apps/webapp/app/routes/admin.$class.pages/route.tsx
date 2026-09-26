@@ -18,6 +18,7 @@ import { ClassmojiService } from '@classmoji/services';
 import { useCallout } from '@classmoji/ui-components';
 import getPrisma from '@classmoji/database';
 import { TableActionButtons, RecentViewers } from '~/components';
+import { useGitWeb } from '~/hooks';
 import { adminLoader } from './loader.server';
 import type { Route } from './+types/route';
 
@@ -161,6 +162,7 @@ export default function AdminPages({ loaderData }: Route.ComponentProps) {
   const [searchText, setSearchText] = useState('');
   const navigate = useNavigate();
   const callout = useCallout();
+  const web = useGitWeb();
   // This route is served under more than one prefix (/admin and /teacher — both
   // tiers the loader and action already allow), so links are built from the
   // prefix the user actually arrived on rather than a hardcoded '/admin'.
@@ -366,7 +368,7 @@ export default function AdminPages({ loaderData }: Route.ComponentProps) {
               fetcher.submit({ intent: 'delete', pageId: record.id }, { method: 'post' })
             }
             deleteConfirmTitle="Delete page?"
-            deleteConfirmDescription="This will delete the page record. The content in GitHub will remain."
+            deleteConfirmDescription={`This will delete the page record. The content in ${web.label} will remain.`}
           />
         ) : (
           <button

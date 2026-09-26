@@ -1,7 +1,7 @@
 import { treeKey, errorResponse } from './cache.ts';
 import { contentTypeForPath } from './content-type.ts';
 import type { Env } from './env.ts';
-import { GitHubOrigin } from './origins/github.ts';
+import { originFor } from './origins/select.ts';
 import type { TreeEntry } from './origins/types.ts';
 import { deliveryOptions, serveBlobBySha } from './blob.ts';
 import { withOriginRetry } from './token.ts';
@@ -9,8 +9,6 @@ import { cacheControlFor, nowSeconds, type ThemeVerification } from './verify.ts
 
 /** The success half of the verification union. */
 type VerifiedTheme = Extract<ThemeVerification, { ok: true }>;
-
-const origin = new GitHubOrigin();
 
 /**
  * Tree listings are immutable (keyed by tree sha), so R2 is the source of truth
@@ -25,14 +23,15 @@ async function loadTree(
   env: Env,
   ctx: ExecutionContext,
   classroomId: string,
-  treeSha: string
+  treeSha: string,
+  theme: string
 ): Promise<TreeEntry[]> {
   const key = treeKey(treeSha);
   const hit = await env.CACHE.get(key);
   if (hit) return (await hit.json()) as TreeEntry[];
 
   const { entries, truncated } = await withOriginRetry(env, classroomId, ref =>
-    origin.fetchTree({ ...ref, treeSha })
+    originFor(ref).fetchTree({ ...ref, treeSha, path: `.slidesthemes/${theme}` })
   );
 
   if (truncated) {
@@ -64,7 +63,7 @@ export async function serveTheme(
 ): Promise<Response> {
   // The tree is read either way: a theme URL names a path, and only the listing
   // turns that into the sha a HEAD would look up.
-  const entries = await loadTree(env, ctx, verified.classroomId, verified.treeSha);
+  const entries = await loadTree(env, ctx, verified.classroomId, verified.treeSha, verified.theme);
   const entry = findEntry(entries, verified.relPath);
   if (!entry) return errorResponse(404, 'not found');
 

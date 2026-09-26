@@ -1,4 +1,5 @@
 import getPrisma from '@classmoji/database';
+import { parseGitlabId } from '@classmoji/utils';
 import { appUrl, escapeVars, inviteLandingUrl } from '../emails/escape.ts';
 import * as classroomService from './classroom.service.ts';
 import * as classroomMembershipService from './classroomMembership.service.ts';
@@ -29,12 +30,19 @@ export interface AddStudentsResult {
    * stays with the caller (web route / MCP tool).
    */
   emails: RosterEmail[];
+  /**
+   * Gitlab: students enrolled already active (they have a Gitlab account on
+   * the classroom's instance), whose projects the CALLER should now create by
+   * triggering `activate_membership` with each entry.
+   */
+  activations: Array<{ login: string; gitOrganizationId: string }>;
 }
 
 /**
  * Add students to a classroom roster by email (bulk). Existing platform users
  * are enrolled directly (a STUDENT membership with has_accepted_invite=false,
- * pending their GitHub org invite); unknown emails get a ClassroomInvite row.
+ * pending their GitHub org invite; on Gitlab, active right away when they
+ * already have Gitlab, see `activations`); unknown emails get a ClassroomInvite row.
  * Shared by the web "Add Students" action and the MCP roster_add_student tool
  * so both take one code path.
  *
@@ -62,32 +70,67 @@ export const addStudents = async ({
   const emails = students.map(s => s.email.toLowerCase());
   const existingUsers = await getPrisma().user.findMany({
     where: { email: { in: emails } },
-    select: { id: true, email: true, name: true },
+    select: { id: true, email: true, name: true, login: true },
   });
+
+  // Gitlab has no org invite to accept: a student who already has a Gitlab
+  // account on this classroom's instance is enrolled active, and their
+  // projects are created now. Anyone else activates on their first Gitlab
+  // sign-in (select-organization).
+  const org = classroom.git_organization;
+  const readyOnGitLab = new Set<string>();
+  if (org?.provider === 'GITLAB' && existingUsers.length > 0) {
+    const instanceId = org.gitlab_instance_id ?? null;
+    const accounts = await getPrisma().account.findMany({
+      where: { user_id: { in: existingUsers.map(u => u.id) }, provider_id: 'gitlab' },
+      select: { user_id: true, account_id: true },
+    });
+    for (const account of accounts) {
+      if (parseGitlabId(account.account_id).instanceId === instanceId) {
+        readyOnGitLab.add(account.user_id);
+      }
+    }
+  }
   const existingByEmail = new Map(existingUsers.map(u => [(u.email ?? '').toLowerCase(), u]));
 
-  const toAddDirectly: Array<RosterStudentInput & { userId: string; userName: string | null }> = [];
+  const toAddDirectly: Array<
+    RosterStudentInput & { userId: string; userName: string | null; login: string | null }
+  > = [];
   const toInvite: RosterStudentInput[] = [];
   for (const student of students) {
     const existing = existingByEmail.get(student.email.toLowerCase());
     if (existing) {
-      toAddDirectly.push({ ...student, userId: existing.id, userName: existing.name });
+      toAddDirectly.push({
+        ...student,
+        userId: existing.id,
+        userName: existing.name,
+        login: existing.login,
+      });
     } else {
       toInvite.push(student);
     }
   }
 
   const emailsOut: RosterEmail[] = [];
+  const activations: AddStudentsResult['activations'] = [];
 
-  // Enroll existing users directly (they still need to accept the GitHub org invite).
+  // Enroll existing users directly. On Github they still need to accept the
+  // org invite; on Gitlab they are active if they already have Gitlab.
   if (toAddDirectly.length > 0) {
     const memberships = toAddDirectly.map(student => ({
       classroom_id: classroomId,
       user_id: student.userId,
       role: 'STUDENT' as const,
-      has_accepted_invite: false,
+      has_accepted_invite: readyOnGitLab.has(student.userId) && Boolean(student.login),
     }));
     await classroomMembershipService.createMany(memberships);
+    if (org) {
+      for (const student of toAddDirectly) {
+        if (readyOnGitLab.has(student.userId) && student.login) {
+          activations.push({ login: student.login, gitOrganizationId: org.id });
+        }
+      }
+    }
 
     for (const student of toAddDirectly) {
       emailsOut.push({
@@ -146,5 +189,6 @@ export const addStudents = async ({
     addedExistingUsers: toAddDirectly.length,
     invitedNewUsers: toInvite.length,
     emails: emailsOut,
+    activations,
   };
 };

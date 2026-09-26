@@ -49,7 +49,7 @@ const SettingsContent = ({ loaderData }: Route.ComponentProps) => {
   // only a fallback for legacy classrooms that predate it.
   const gitOrgLogin = organization.git_organization?.login || classSlug || '';
   const repoName = organization.content_repo || getContentRepoName({ login: gitOrgLogin });
-  const repoUrl = web.isGitLab ? web.repo(repoName) : web.fullPath(`${gitOrgLogin}/${repoName}`);
+  const repoUrl = web.contentRepo(repoName);
 
   // Handler for customizable repo name (currently disabled in UI)
   const _handleContentRepoChange = (

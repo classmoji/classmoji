@@ -10,7 +10,13 @@ import {
   ensureClassroomTeam,
   type GitLabProvider,
 } from '@classmoji/services';
-import { gitTerms, titleToIdentifier, resolveTemplateRef, repoNamespace } from '@classmoji/utils';
+import {
+  gitTerms,
+  titleToIdentifier,
+  resolveTemplateRef,
+  repoNamespace,
+  scopeGitlabId,
+} from '@classmoji/utils';
 import { createGithubRepositoryAssignmentTask } from './gitRepoAssignment.ts';
 import { updateRepository, type UpdateRepositoryPayload } from '../helpers/updateRepository.ts';
 import { createRepository, type CreateRepositoryPayload } from '../helpers/createRepository.ts';
@@ -338,14 +344,21 @@ export const createRepositoryTask = task({
           })()
         : payload;
       const { classroom } = normalizedPayload;
-      const repoId = await createRepository(normalizedPayload);
+      // A self-managed GitLab's project ids are stored instance-scoped.
+      const createdRepoId = await createRepository(normalizedPayload);
+      const repoId =
+        classroom.git_organization.provider === 'GITLAB'
+          ? scopeGitlabId(classroom.git_organization.gitlab_instance_id, createdRepoId)
+          : createdRepoId;
 
       // GitLab: pushes reach Classmoji through a project hook (Github's come
       // through the App). Added after the template setup pushes above, so
       // those never count as a submission. Best-effort: a missing hook only
       // means pushes aren't tracked, which recordExistingPush later backfills.
       if (classroom.git_organization.provider === 'GITLAB') {
-        const url = process.env.GITLAB_WEBHOOK_URL;
+        const url = ClassmojiService.gitlabInstance.webhookUrl(
+          classroom.git_organization.gitlab_instance_id
+        );
         const secret = process.env.GITLAB_WEBHOOK_SECRET;
         const namespace = repoNamespace(classroom);
         if (url && secret && namespace) {

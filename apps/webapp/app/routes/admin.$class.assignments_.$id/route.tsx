@@ -315,7 +315,7 @@ const AssignmentPage = ({ loaderData }: Route.ComponentProps) => {
             <span>
               {web.isGitLab ? 'Project' : 'Repo'} ·{' '}
               <span className="text-ink-1 font-medium">
-                {assignment.submission_mode === 'REPO' ? 'push' : 'issue'}
+                {assignment.submission_mode === 'REPO' ? 'push' : terms.issue}
               </span>
             </span>
             <span>

@@ -18,6 +18,7 @@ import {
   sessionTokenFromCookieHeader,
 } from './secret.ts';
 import { ASK_MOJI_CLIENT_ID } from './mcpToken.ts';
+import { GITLAB_INSTANCE_CALLBACK_PATH, gitlabInstances } from './gitlabInstances.ts';
 import { mapGitHubProfile, mapGitLabProfile, onAccountCreated } from './providerProfile.ts';
 
 export { AUTH_SECRET, COOKIE_PREFIX };
@@ -542,6 +543,10 @@ export const auth = betterAuth({
         // is `/callback/:id`). That provider is the session's mode: a GitLab
         // session is shown only GitLab classrooms and GitLab identity.
         before: async (session, ctx) => {
+          // A self-managed GitLab signs in through its own callback path.
+          if (ctx?.path === GITLAB_INSTANCE_CALLBACK_PATH) {
+            return { data: { ...session, sign_in_provider: 'GITLAB' } };
+          }
           const id = (ctx?.params as { id?: string } | undefined)?.id;
           if (id !== 'github' && id !== 'gitlab') return;
           return { data: { ...session, sign_in_provider: id.toUpperCase() } };
@@ -590,6 +595,8 @@ export const auth = betterAuth({
    */
   disabledPaths: ['/mcp/get-session'],
   plugins: [
+    // Self-managed GitLab instances (gitlab.com uses socialProviders.gitlab).
+    gitlabInstances(),
     admin({
       impersonationSessionDuration: 60 * 60, // 1 hour
       // Allow users with 'admin' role to impersonate

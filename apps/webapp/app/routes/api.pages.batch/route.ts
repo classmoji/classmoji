@@ -66,7 +66,13 @@ export const action = async ({ request }: Route.ActionArgs) => {
       const { html, imageMap, unmatchedImages } = await processMarkdownImport(
         markdownText,
         imageFiles,
-        { org: gitOrgLogin, repo: contentRepo, contentPath, assetsFolder }
+        {
+          org: gitOrgLogin,
+          repo: contentRepo,
+          contentPath,
+          assetsFolder,
+          provider: classroom.git_organization?.provider,
+        }
       );
 
       // Prepare files to upload

@@ -276,7 +276,7 @@ const RepositoriesTable = ({
                   color={a.submission_mode === 'REPO' ? 'geekblue' : 'purple'}
                   className="m-0 shrink-0 font-medium"
                 >
-                  {a.submission_mode === 'REPO' ? 'push' : 'issue'}
+                  {a.submission_mode === 'REPO' ? 'push' : terms.issue}
                 </Tag>
               )}
               {record.is_extra_credit && (

@@ -641,7 +641,7 @@ const AssignmentFormModal = ({
                 </span>
               </Radio>
               <Radio value="ISSUE">
-                Close a {web.label} issue{' '}
+                Close {web.isGitLab ? 'a work item' : `a ${web.label} issue`}{' '}
                 <span className="text-ink-3">
                   — Classmoji opens one in each student {web.isGitLab ? 'project' : 'repo'}
                 </span>
@@ -685,7 +685,7 @@ const AssignmentFormModal = ({
                 name="repo_name"
                 label={`${terms.Repo} name`}
                 rules={[{ required: true, message: `Name the ${terms.repo}` }]}
-                extra={`Every assignment that opens an issue in this ${terms.repo} shares it, so name the container rather than this one assignment.`}
+                extra={`Every assignment that opens ${terms.anIssue} in this ${terms.repo} shares it, so name the container rather than this one assignment.`}
               >
                 <Input placeholder="quizzes-2026" />
               </Form.Item>
@@ -809,10 +809,10 @@ const AssignmentFormModal = ({
         {kind === 'REPO' && (
           <Form.Item
             name="description"
-            label={mode === 'ISSUE' ? 'Issue body' : 'Instructions'}
+            label={mode === 'ISSUE' ? `${terms.Issue} body` : 'Instructions'}
             extra={
               mode === 'ISSUE'
-                ? `Becomes the body of the issue created in each student ${terms.repo}.`
+                ? `Becomes the body of the ${terms.issue} created in each student ${terms.repo}.`
                 : 'Shown to students with the assignment.'
             }
           >

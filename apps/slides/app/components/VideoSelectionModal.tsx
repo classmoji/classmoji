@@ -145,7 +145,7 @@ export default function VideoSelectionModal({
           <p className="text-gray-600 dark:text-gray-400 text-sm">
             This ZIP contains {videos.length} video{videos.length !== 1 ? 's' : ''}. Choose which
             videos to upload to <strong>Cloudinary</strong> for optimized delivery and format
-            conversion. Unselected videos will be stored in GitHub.
+            conversion. Unselected videos will be stored in the content repository.
           </p>
 
           {/* Quick select buttons */}
@@ -229,7 +229,7 @@ export default function VideoSelectionModal({
                 </p>
               </div>
               <div>
-                <p className="text-gray-500 dark:text-gray-400 mb-1">GitHub (as-is)</p>
+                <p className="text-gray-500 dark:text-gray-400 mb-1">Content repository (as-is)</p>
                 <p className="font-medium text-gray-900 dark:text-white">
                   {stats.totalCount - stats.selectedCount} video
                   {stats.totalCount - stats.selectedCount !== 1 ? 's' : ''}
@@ -248,7 +248,7 @@ export default function VideoSelectionModal({
               adaptive quality, reduced load times.
             </p>
             <p>
-              <strong>GitHub storage:</strong> No transcoding, larger file sizes in repository,
+              <strong>Repository storage:</strong> No transcoding, larger file sizes in repository,
               direct file serving.
             </p>
           </div>

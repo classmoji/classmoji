@@ -359,6 +359,7 @@ model User {
   team_sets_created             TeamSet[]
   team_set_runs_created         TeamSetRun[]
   gitlab_connection             GitLabConnection?
+  gitlab_instances_created      GitLabInstance[]
 
   @@unique([provider, provider_id])
   @@index([provider, login])
@@ -401,13 +402,45 @@ model GitLabConnection {
   refresh_token           String?
   access_token_expires_at DateTime?
   scope                   String?
+  // The self-managed instance this grant is on. Null means the default
+  // instance (gitlab.com, or GITLAB_URL on a single-instance deployment).
+  gitlab_instance_id      String?
   created_at              DateTime  @default(now())
   updated_at              DateTime  @default(now()) @updatedAt
 
   user              User              @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  gitlab_instance   GitLabInstance?   @relation(fields: [gitlab_instance_id], references: [id], onDelete: Cascade)
   git_organizations GitOrganization[]
 
   @@map("gitlab_connections")
+}
+
+/// A self-managed GitLab that Classmoji signs in with and acts on. Each one has
+/// its own OAuth application, registered on that instance by whoever set it up
+/// (an instructor or the school's GitLab admin) and pasted in at /gitlab/setup.
+/// gitlab.com is not a row: it is the default instance, configured from env.
+///
+/// GitLab ids (users, groups, projects, issues) are only unique within one
+/// instance, so ids from a row here are stored as `<instance id>:<id>` in every
+/// provider id column (see scopeGitlabId in @classmoji/utils).
+model GitLabInstance {
+  id                 String    @id @default(uuid())
+  /// Normalized origin, e.g. `https://gitlab.example.edu`.
+  host               String    @unique
+  client_id          String
+  /// Encrypted (see gitlabInstance.service.ts).
+  client_secret      String
+  created_by_user_id String?
+  /// Set by a platform admin: no sign-in, no new connections.
+  disabled_at        DateTime?
+  created_at         DateTime  @default(now())
+  updated_at         DateTime  @default(now()) @updatedAt
+
+  created_by        User?              @relation(fields: [created_by_user_id], references: [id], onDelete: SetNull)
+  connections       GitLabConnection[]
+  git_organizations GitOrganization[]
+
+  @@map("gitlab_instances")
 }
 
 model GitOrganization {
@@ -421,11 +454,15 @@ model GitOrganization {
   // GitLab: the connection whose token acts on this group, the counterpart of
   // github_installation_id. Null for Github orgs.
   gitlab_connection_id   String?
+  // GitLab: the self-managed instance the group lives on (null: the default
+  // instance). base_url then holds that instance's host for links.
+  gitlab_instance_id     String?
   created_at             DateTime    @default(now())
   updated_at             DateTime    @default(now()) @updatedAt
 
   classrooms        Classroom[]
   gitlab_connection GitLabConnection? @relation(fields: [gitlab_connection_id], references: [id], onDelete: SetNull)
+  gitlab_instance   GitLabInstance?   @relation(fields: [gitlab_instance_id], references: [id], onDelete: Restrict)
 
   @@unique([provider, provider_id])
   @@index([provider, login])

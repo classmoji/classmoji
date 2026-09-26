@@ -207,12 +207,6 @@ const CommonLayout = ({
     if (item.link === '/quizzes' && !isProTier && isDemoClassroom === false) return null;
     if (item.link === '/quizzes' && classroom?.settings?.quizzes_enabled === false) return null;
     if (item.link === '/quizzes' && !aiAgentAvailable) return null;
-    // Pages and slides live in a Github content repo; GitLab has none yet.
-    if (
-      (item.link === '/pages' || item.link === '/slides') &&
-      classroom?.git_organization?.provider === 'GITLAB'
-    )
-      return null;
 
     // Hide slides if disabled in classroom settings
     if (item.link === '/slides' && classroom?.settings?.slides_enabled === false) return null;
@@ -284,11 +278,6 @@ const CommonLayout = ({
     if (item.link === '/quizzes' && !isProTier && !isDemoClassroom) return false;
     if (item.link === '/quizzes' && classroom?.settings?.quizzes_enabled === false) return false;
     if (item.link === '/quizzes' && !aiAgentAvailable) return false;
-    if (
-      (item.link === '/pages' || item.link === '/slides') &&
-      classroom?.git_organization?.provider === 'GITLAB'
-    )
-      return false;
     if (item.link === '/slides' && role === 'STUDENT' && hasModules) return false;
 
     // Student navigation visibility toggles (OWNER always retains access).

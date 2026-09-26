@@ -33,3 +33,4 @@ export * from './naturalSort.ts';
 export * from './surveyQuestions.ts';
 export * from './timeZone.ts';
 export * from './gitWeb.ts';
+export * from './gitlabInstance.ts';

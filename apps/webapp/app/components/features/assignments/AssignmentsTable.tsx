@@ -2,6 +2,7 @@ import { Popconfirm, Table, Tag } from 'antd';
 import { Link } from 'react-router';
 import dayjs from 'dayjs';
 import { useGitWeb } from '~/hooks/useGitWeb';
+import { gitTerms } from '~/utils/gitWeb';
 import {
   IconFileText,
   IconFolder,
@@ -40,7 +41,7 @@ export interface AssignmentRowData {
 export const assignmentTypeLabel = (a: AssignmentRowData, isGitLab = false): string => {
   const base = assignmentTypeName(a.type, isGitLab);
   if (a.type !== 'REPO') return base;
-  return `${base} · ${a.submission_mode === 'REPO' ? 'push' : 'issue'}`;
+  return `${base} · ${a.submission_mode === 'REPO' ? 'push' : gitTerms(isGitLab).issue}`;
 };
 
 export const ASSIGNMENT_TYPE_META: Record<string, { label: string; icon: Icon; color: string }> = {

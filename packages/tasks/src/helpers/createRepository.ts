@@ -3,7 +3,12 @@ import { logger } from '@trigger.dev/sdk';
 import path from 'path';
 import fs from 'fs';
 
-import { CLASSMOJI_BOT_EMAIL, getGitProvider, type GitLabProvider } from '@classmoji/services';
+import {
+  CLASSMOJI_BOT_EMAIL,
+  ClassmojiService,
+  getGitProvider,
+  type GitLabProvider,
+} from '@classmoji/services';
 import { gitTerms, repoNamespace, type GitTerms } from '@classmoji/utils';
 
 // Public fallback template used when an instructor's configured template repo has
@@ -26,14 +31,16 @@ interface ClassroomForRepositoryCreation {
 /**
  * Authenticated HTTPS remote for `owner/repo` on the classroom's provider.
  * Github installation tokens use `x-access-token`; GitLab OAuth tokens use
- * `oauth2`, on the configured instance.
+ * `oauth2`, on the org's instance (its base_url; the default instance when unset).
  */
-function authedRemote(provider: string, token: string, fullPath: string): string {
-  if (provider === 'GITLAB') {
-    const host = (process.env.GITLAB_URL || process.env.GITLAB_ISSUER || 'https://gitlab.com')
-      .replace(/\/+$/, '')
-      .replace(/^https?:\/\//, '');
-    return `https://oauth2:${token}@${host}/${fullPath}.git`;
+function authedRemote(
+  gitOrganization: GitOrganizationLike,
+  token: string,
+  fullPath: string
+): string {
+  if (gitOrganization.provider === 'GITLAB') {
+    const url = new URL(gitOrganization.base_url || ClassmojiService.gitlabInstance.defaultHost());
+    return `${url.protocol}//oauth2:${token}@${url.host}/${fullPath}.git`;
   }
   return `https://x-access-token:${token}@github.com/${fullPath}.git`;
 }
@@ -91,8 +98,9 @@ export const createRepository = async (payload: CreateRepositoryPayload): Promis
   // Students' own pushes are untouched.
   const setupPush = provider === 'GITLAB' ? ['-o', 'ci.skip'] : [];
   const terms = gitTerms(provider === 'GITLAB');
-  const studentRepoUrl = authedRemote(provider, token, `${gitOrgLogin}/${repoName}`);
-  const templateRepoUrl = authedRemote(provider, token, `${templateOwner}/${templateRepo}`);
+  const org = classroom.git_organization;
+  const studentRepoUrl = authedRemote(org, token, `${gitOrgLogin}/${repoName}`);
+  const templateRepoUrl = authedRemote(org, token, `${templateOwner}/${templateRepo}`);
 
   const git = simpleGit();
 

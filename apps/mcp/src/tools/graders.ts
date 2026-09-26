@@ -60,7 +60,7 @@ export const graderAssignTool: ToolDefinition<GraderArgs> = {
   title: 'Assign a grader',
   description:
     'Assigns a teaching-team member as grader on a submission. Mirrors the grader to the ' +
-    'issue assignees on Github (Gitlab issues are left unassigned: one assignee per issue on its free plan). Owner only (matches the web admin repo view).',
+    'issue assignees on Github (Gitlab work items are left unassigned: one assignee per work item on its free plan). Owner only (matches the web admin repo view).',
   scope: 'write',
   roles: OWNER_ONLY,
   inputSchema: {

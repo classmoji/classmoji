@@ -69,6 +69,7 @@ interface ContentRouteMembership {
       // `git_organization` included, so this costs no extra query.
       provider?: string | null;
       github_installation_id?: string | null;
+      gitlab_connection_id?: string | null;
     } | null;
   } | null;
 }
@@ -348,8 +349,10 @@ export const loader = async ({
   // requires github_installation_id", logging both failures per asset per
   // request, before reaching the CDN tier that was always going to answer.
   const preferCdn = !ClassmojiService.contentDelivery.canDeliverContent(matched);
+  // Gitlab projects have no Pages site: authenticated reads only.
+  const cdn = matched?.git_organization?.provider !== 'GITLAB';
   const result = binary
-    ? await fetchContent({ org, repo, path, binary, preferCdn })
+    ? await fetchContent({ org, repo, path, binary, preferCdn, cdn })
     : await fetchProxyText(matched, org, repo, path);
 
   if (!result) {

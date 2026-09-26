@@ -167,7 +167,27 @@ export const action = async ({ request }: Route.ActionArgs) => {
     // per-mint line would be pure volume — and the one thing worth never
     // writing down is in scope right here. Refusals and failures log; the happy
     // path does not.
-    return json({ org, repo, token, expiresAt }, 200);
+    // The Worker picks its origin from `provider`; a Gitlab origin also needs
+    // the instance to call, which may be self-hosted.
+    const isGitLab = classroom.git_organization.provider === 'GITLAB';
+    return json(
+      {
+        org,
+        repo,
+        token,
+        expiresAt,
+        provider: isGitLab ? 'GITLAB' : 'GITHUB',
+        ...(isGitLab
+          ? {
+              apiBase: (
+                classroom.git_organization.base_url ||
+                ClassmojiService.gitlabInstance.defaultHost()
+              ).replace(/\/+$/, ''),
+            }
+          : {}),
+      },
+      200
+    );
   } catch (error: unknown) {
     // Laundered before it is logged: raw mint failures echo credentials back.
     console.error(

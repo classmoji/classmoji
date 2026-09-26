@@ -26,6 +26,9 @@ export interface ClassroomSummary {
     login: string | undefined;
     repo?: string | null;
     avatar_url?: string | null;
+    provider?: string | null;
+    /** The page's content.json on the provider, for staff. */
+    source_url?: string | null;
   } | null;
 }
 

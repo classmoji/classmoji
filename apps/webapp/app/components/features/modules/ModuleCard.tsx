@@ -415,10 +415,10 @@ const ModuleCard = ({
         {
           key: 'ASSIGNMENT_REPO',
           icon: <IconFolder size={15} />,
-          label: `${terms.Repo} assignment`,
+          label: terms.Repo,
         },
-        { key: 'ASSIGNMENT_QUIZ', icon: <IconHelpCircle size={15} />, label: 'Quiz assignment' },
-        { key: 'ASSIGNMENT_FORM', icon: <IconForms size={15} />, label: 'Form assignment' },
+        { key: 'ASSIGNMENT_QUIZ', icon: <IconHelpCircle size={15} />, label: 'AI quiz' },
+        { key: 'ASSIGNMENT_FORM', icon: <IconForms size={15} />, label: 'Form response' },
       ],
     },
     {
@@ -500,7 +500,7 @@ const ModuleCard = ({
     // unless the repo carries the assignment's own name, which is the push-mode
     // default and would just say it twice.
     if (a.type === 'REPO' && target) {
-      const mode = a.submission_mode === 'REPO' ? 'push' : 'issue';
+      const mode = a.submission_mode === 'REPO' ? 'push' : web.terms.issue;
       return target === a.title ? `${mode} · ${weight}` : `${target} · ${mode} · ${weight}`;
     }
     const base =

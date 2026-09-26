@@ -13,20 +13,13 @@
  */
 
 import getPrisma from '@classmoji/database';
+import { oauthClient, type GitLabOAuthClient } from './gitlabInstance.service.ts';
 
 /** Refresh this long before expiry so a token never dies mid-request. */
 const REFRESH_BUFFER_MS = 5 * 60 * 1000;
 
 /** Per-process single flight: one refresh per connection at a time. */
 const refreshing = new Map<string, Promise<string | null>>();
-
-/** OAuth host (self-managed GitLab sets GITLAB_ISSUER or GITLAB_URL). */
-export function gitlabOAuthBase(): string {
-  return (process.env.GITLAB_ISSUER || process.env.GITLAB_URL || 'https://gitlab.com').replace(
-    /\/+$/,
-    ''
-  );
-}
 
 /** Scopes a connection needs: act on groups/projects and push over HTTPS. */
 export const CONNECTION_SCOPES = ['api', 'read_user', 'read_repository', 'write_repository'];
@@ -38,20 +31,21 @@ interface TokenResponse {
   scope: string | null;
 }
 
-async function postToken(params: Record<string, string>): Promise<TokenResponse> {
-  const clientId = process.env.GITLAB_CLIENT_ID;
-  const clientSecret = process.env.GITLAB_CLIENT_SECRET;
-  if (!clientId || !clientSecret) {
-    throw new Error('Gitlab is not configured (GITLAB_CLIENT_ID / GITLAB_CLIENT_SECRET)');
-  }
-
-  const response = await fetch(`${gitlabOAuthBase()}/oauth/token`, {
+async function postToken(
+  client: GitLabOAuthClient,
+  params: Record<string, string>
+): Promise<TokenResponse> {
+  const response = await fetch(`${client.host}/oauth/token`, {
     method: 'POST',
     headers: {
       'content-type': 'application/x-www-form-urlencoded',
       accept: 'application/json',
     },
-    body: new URLSearchParams({ client_id: clientId, client_secret: clientSecret, ...params }),
+    body: new URLSearchParams({
+      client_id: client.clientId,
+      client_secret: client.clientSecret,
+      ...params,
+    }),
   });
   // GitLab, unlike Github's OAuth endpoint, reports failures with real statuses.
   const data = (await response.json().catch(() => ({}))) as Record<string, unknown>;
@@ -72,8 +66,13 @@ async function postToken(params: Record<string, string>): Promise<TokenResponse>
 }
 
 /** Exchange the authorization code from the connect callback. */
-export function exchangeCode(code: string, redirectUri: string, codeVerifier: string) {
-  return postToken({
+export function exchangeCode(
+  client: GitLabOAuthClient,
+  code: string,
+  redirectUri: string,
+  codeVerifier: string
+) {
+  return postToken(client, {
     grant_type: 'authorization_code',
     code,
     redirect_uri: redirectUri,
@@ -83,9 +82,10 @@ export function exchangeCode(code: string, redirectUri: string, codeVerifier: st
 
 /** The GitLab user a token belongs to. */
 export async function fetchTokenUser(
+  host: string,
   accessToken: string
 ): Promise<{ id: string; username: string }> {
-  const response = await fetch(`${gitlabOAuthBase()}/api/v4/user`, {
+  const response = await fetch(`${host}/api/v4/user`, {
     headers: { Authorization: `Bearer ${accessToken}`, Accept: 'application/json' },
   });
   if (!response.ok) throw new Error(`Gitlab /user failed (${response.status})`);
@@ -100,9 +100,11 @@ export async function fetchTokenUser(
 export async function saveConnection(
   userId: string,
   tokens: TokenResponse,
-  gitlabUser: { id: string; username: string }
+  gitlabUser: { id: string; username: string },
+  instanceId: string | null
 ) {
   const data = {
+    gitlab_instance_id: instanceId,
     gitlab_user_id: gitlabUser.id,
     gitlab_username: gitlabUser.username,
     access_token: tokens.accessToken,
@@ -122,7 +124,13 @@ export async function saveConnection(
 export function findForUser(userId: string) {
   return getPrisma().gitLabConnection.findUnique({
     where: { user_id: userId },
-    select: { id: true, gitlab_user_id: true, gitlab_username: true, scope: true },
+    select: {
+      id: true,
+      gitlab_user_id: true,
+      gitlab_username: true,
+      scope: true,
+      gitlab_instance_id: true,
+    },
   });
 }
 
@@ -137,7 +145,8 @@ async function refreshConnection(connectionId: string): Promise<string | null> {
   if (!row.refresh_token) return null;
 
   try {
-    const tokens = await postToken({
+    const client = await oauthClient(row.gitlab_instance_id, { allowDisabled: true });
+    const tokens = await postToken(client, {
       grant_type: 'refresh_token',
       refresh_token: row.refresh_token,
     });

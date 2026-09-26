@@ -100,6 +100,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
           repo: repoName,
           contentPath,
           assetsFolder,
+          provider: classroom.git_organization?.provider,
         }
       );
 
@@ -234,7 +235,7 @@ export default function NewPage({ loaderData }: Route.ComponentProps) {
     if (percent <= 15) return '🧙‍♂️ Casting markdown spells...';
     if (percent <= 30) return '🦄 Teaching unicorns to carry your files...';
     if (percent <= 45) return '🤝 Convincing the server this is important...';
-    if (percent <= 60) return '🐙 Negotiating with the GitHub octocats...';
+    if (percent <= 60) return '🐙 Negotiating with the git octocats...';
     if (percent <= 75) return '🏃‍♂️ Your content is sprinting to the cloud...';
     if (percent <= 90) return '💅 Making everything look fabulous...';
     return '🎊 Victory is near!';

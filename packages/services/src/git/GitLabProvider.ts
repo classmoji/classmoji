@@ -6,14 +6,7 @@ import type {
   LanguagesMap,
   PRSummary,
 } from '../classmoji/repoAnalytics.types.ts';
-
-/** Base URL of the GitLab instance (self-hosted instances override this). */
-function gitlabBaseUrl(): string {
-  return (process.env.GITLAB_URL || process.env.GITLAB_ISSUER || 'https://gitlab.com').replace(
-    /\/+$/,
-    ''
-  );
-}
+import { defaultHost } from '../classmoji/gitlabInstance.service.ts';
 
 /**
  * GitLab access levels, plus the GitHub permission names the rest of the
@@ -59,6 +52,8 @@ function toPath(name: string): string {
 export class GitLabProvider extends GitProvider {
   groupId: string;
   groupPath: string | null;
+  /** The instance's origin, e.g. `https://gitlab.com` or a school's GitLab. */
+  baseUrl: string;
   _client: unknown;
 
   /**
@@ -74,15 +69,18 @@ export class GitLabProvider extends GitProvider {
    * @param {string} [groupPath] - Group path/slug (optional)
    * @param {string | () => Promise<string>} [token] - GitLab access token, or a
    *   function returning a current one (a GitLab connection, refreshed per call)
+   * @param {string} [baseUrl] - The instance's origin; the default instance when omitted
    */
   constructor(
     groupId: string,
     groupPath: string | null = null,
-    token: string | null | (() => Promise<string>) = null
+    token: string | null | (() => Promise<string>) = null,
+    baseUrl: string | null = null
   ) {
     super({ groupId, groupPath });
     this.groupId = groupId;
     this.groupPath = groupPath;
+    this.baseUrl = (baseUrl || defaultHost()).replace(/\/+$/, '');
     this.#token = token;
     this._client = null;
   }
@@ -116,7 +114,7 @@ export class GitLabProvider extends GitProvider {
       options.body = JSON.stringify(init.body);
     }
 
-    const res = await fetch(`${gitlabBaseUrl()}${path}`, options);
+    const res = await fetch(`${this.baseUrl}${path}`, options);
     const text = await res.text();
     let body: unknown = null;
     if (text) {
@@ -151,6 +149,50 @@ export class GitLabProvider extends GitProvider {
       throw error;
     }
     return body;
+  }
+
+  /**
+   * A raw authenticated call, for the few endpoints whose answer is not JSON
+   * (raw blob bytes) or lives in headers (file metadata on HEAD, pagination).
+   * Never throws on a status; the caller reads `res.status`.
+   */
+  async fetchRaw(path: string, init: { method?: string } = {}): Promise<Response> {
+    const token = await this.getAccessToken();
+    const url = path.startsWith('http') ? path : `${this.baseUrl}${path}`;
+    return fetch(url, {
+      method: init.method || 'GET',
+      headers: { Authorization: `Bearer ${token}` },
+    });
+  }
+
+  /**
+   * Every page of a list endpoint. Follows the `Link: rel="next"` header, which
+   * both offset and keyset pagination send, so a caller can ask for keyset
+   * (required past 50k offset rows on large trees) without changing this.
+   */
+  async paginate<T>(path: string): Promise<T[]> {
+    const items: T[] = [];
+    let next: string | null = path;
+    while (next) {
+      const res = await this.fetchRaw(next);
+      if (!res.ok) {
+        const error = new Error(
+          `Gitlab API GET ${next} failed (${res.status}): ${await res.text()}`
+        ) as Error & { status: number };
+        error.status = res.status;
+        throw error;
+      }
+      items.push(...((await res.json()) as T[]));
+      const link = res.headers.get('link') ?? '';
+      const match = link.split(',').find(part => /rel="next"/.test(part));
+      next = match ? (match.match(/<([^>]+)>/)?.[1] ?? null) : null;
+    }
+    return items;
+  }
+
+  /** `/api/v4/projects/:id` for a project by group path + project path. */
+  projectApi(group: string, project: string): string {
+    return `/api/v4/projects/${encodeURIComponent(`${group}/${project}`)}`;
   }
 
   /** Resolve a group path (or numeric id) to its numeric group id. */
@@ -247,13 +289,27 @@ export class GitLabProvider extends GitProvider {
    * @returns {Promise<{id: string, name: string, url: string}>}
    */
   async createContentRepository(
-    _group: string,
-    _name: string,
-    _description: string = '',
-    _isPrivate: boolean = true
-  ): Promise<never> {
-    // TODO: POST /api/v4/projects with visibility per _isPrivate
-    throw new Error('GitLabProvider.createContentRepository() not implemented');
+    group: string,
+    name: string,
+    description: string = '',
+    isPrivate: boolean = true
+  ): Promise<GitRepository> {
+    const namespaceId = await this.resolveGroupId(group);
+    // Initialized with a README, like Github's auto_init, so the default
+    // branch exists before the first content write.
+    const project = (await this.api('/api/v4/projects', {
+      method: 'POST',
+      body: {
+        name,
+        path: toPath(name),
+        namespace_id: namespaceId,
+        description,
+        visibility: isPrivate ? 'private' : 'public',
+        initialize_with_readme: true,
+        default_branch: 'main',
+      },
+    })) as { id: number; path: string; web_url: string };
+    return { id: String(project.id), name: project.path, url: project.web_url };
   }
 
   /**
@@ -262,9 +318,11 @@ export class GitLabProvider extends GitProvider {
    * @param {string} name - Project name
    * @returns {Promise<boolean>}
    */
-  async repositoryExists(_group: string, _name: string): Promise<never> {
-    // TODO: GET /api/v4/projects/:id (URL-encoded group/name)
-    throw new Error('GitLabProvider.repositoryExists() not implemented');
+  async repositoryExists(group: string, name: string): Promise<boolean> {
+    const { ok, status } = await this.request(this.projectApi(group, name));
+    if (ok) return true;
+    if (status === 404) return false;
+    throw Object.assign(new Error(`Gitlab project lookup failed (${status})`), { status });
   }
 
   /**
@@ -272,10 +330,91 @@ export class GitLabProvider extends GitProvider {
    * @param {string} group - Group path
    * @param {string} name - Project name
    */
-  async deleteRepository(_group: string, _name: string): Promise<never> {
-    // TODO: DELETE /api/v4/projects/:id
-    throw new Error('GitLabProvider.deleteRepository() not implemented');
+  async deleteRepository(group: string, name: string): Promise<void> {
+    await this.api(this.projectApi(group, name), { method: 'DELETE' });
   }
+
+  /** The project's default branch. */
+  async getDefaultBranch(group: string, project: string): Promise<string> {
+    const body = (await this.api(this.projectApi(group, project))) as {
+      default_branch: string | null;
+    };
+    return body.default_branch || 'main';
+  }
+
+  /**
+   * Every path in the project and the git object behind it. GitLab's tree ids
+   * are real git object ids, so the entries match Github's tree listing; the
+   * listing carries no sizes. Never truncated: every page is followed.
+   */
+  async getTree(
+    group: string,
+    project: string,
+    ref: string,
+    recursive: boolean = true
+  ): Promise<{
+    sha: string;
+    truncated: boolean;
+    entries: { path: string; sha: string; type: string; size?: number }[];
+  }> {
+    const params = new URLSearchParams({
+      ref,
+      per_page: '100',
+      pagination: 'keyset',
+      ...(recursive ? { recursive: 'true' } : {}),
+    });
+    const items = await this.paginate<{ id: string; path: string; type: string }>(
+      `${this.projectApi(group, project)}/repository/tree?${params.toString()}`
+    );
+    return {
+      sha: ref,
+      truncated: false,
+      entries: items
+        .filter(item => item.type === 'blob' || item.type === 'tree')
+        .map(item => ({ path: item.path, sha: item.id, type: item.type })),
+    };
+  }
+
+  /**
+   * A token to hand to someone else (the content Worker). Never the
+   * connection's own OAuth token, which can write to everything its user can:
+   * for exactly one project (`scope.repositories`), a Reporter project access
+   * token with `read_api`, the counterpart of Github's down-scoped
+   * installation token. Gitlab dates expire at day granularity, so it is kept
+   * for a day and handed out as good for less.
+   */
+  async getInstallationToken(scope?: {
+    repositories?: string[];
+    permissions?: Record<string, string>;
+  }): Promise<{ token: string; expiresAt: string }> {
+    const repo = scope?.repositories?.length === 1 ? scope.repositories[0] : null;
+    if (!repo || !this.groupPath) {
+      throw new Error('Gitlab tokens are only handed out for a single project');
+    }
+    const key = `${this.groupPath}/${repo}`;
+    const cached = GitLabProvider.#projectTokens.get(key);
+    if (cached && Date.now() < cached.handOutUntil) {
+      return { token: cached.token, expiresAt: new Date(cached.handOutUntil).toISOString() };
+    }
+
+    const expiresOn = new Date(Date.now() + 2 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+    const minted = (await this.api(`${this.projectApi(this.groupPath, repo)}/access_tokens`, {
+      method: 'POST',
+      body: {
+        name: 'classmoji-content-delivery',
+        scopes: ['read_api'],
+        access_level: REPORTER_ACCESS_LEVEL,
+        expires_at: expiresOn,
+      },
+    })) as { token: string };
+
+    const handOutUntil = Date.now() + 20 * 60 * 60 * 1000;
+    GitLabProvider.#projectTokens.set(key, { token: minted.token, handOutUntil });
+    return { token: minted.token, expiresAt: new Date(handOutUntil).toISOString() };
+  }
+
+  /** Minted read-only project tokens, per `group/project`, for this process. */
+  static #projectTokens = new Map<string, { token: string; handOutUntil: number }>();
 
   // ─── Branches & Merge Requests ────────────────────────────────────────────
 
@@ -286,13 +425,11 @@ export class GitLabProvider extends GitProvider {
    * @param {string} branch - Branch name (default: main)
    * @returns {Promise<string>} Commit SHA
    */
-  async getLatestCommitSHA(
-    _group: string,
-    _project: string,
-    _branch: string = 'main'
-  ): Promise<never> {
-    // TODO: GET /api/v4/projects/:id/repository/branches/:branch
-    throw new Error('GitLabProvider.getLatestCommitSHA() not implemented');
+  async getLatestCommitSHA(group: string, project: string, branch: string = 'main'): Promise<string> {
+    const body = (await this.api(
+      `${this.projectApi(group, project)}/repository/branches/${encodeURIComponent(branch)}`
+    )) as { commit: { id: string } };
+    return body.commit.id;
   }
 
   /**
@@ -429,7 +566,13 @@ export class GitLabProvider extends GitProvider {
   async getContributorStats(group: string, project: string): Promise<ContributorRecord[]> {
     const contributors = (await this.api(
       `/api/v4/projects/${encodeURIComponent(`${group}/${project}`)}/repository/contributors?per_page=100`
-    )) as Array<{ name: string; email: string; commits: number; additions: number; deletions: number }>;
+    )) as Array<{
+      name: string;
+      email: string;
+      commits: number;
+      additions: number;
+      deletions: number;
+    }>;
     return contributors.map(c => ({
       login: c.name || c.email,
       user_id: null,
@@ -468,14 +611,11 @@ export class GitLabProvider extends GitProvider {
    * @param {string} branch - New branch name
    * @param {string} sha - Commit SHA to branch from
    */
-  async createBranch(
-    _group: string,
-    _project: string,
-    _branch: string,
-    _sha: string
-  ): Promise<never> {
-    // TODO: POST /api/v4/projects/:id/repository/branches
-    throw new Error('GitLabProvider.createBranch() not implemented');
+  async createBranch(group: string, project: string, branch: string, sha: string): Promise<void> {
+    await this.api(`${this.projectApi(group, project)}/repository/branches`, {
+      method: 'POST',
+      body: { branch, ref: sha },
+    });
   }
 
   /**
@@ -1094,7 +1234,7 @@ export class GitLabProvider extends GitProvider {
    */
   getCloneUrl(group: string, project: string, token: string): string {
     // GitLab clone URL format, on the configured instance
-    const host = gitlabBaseUrl().replace(/^https?:\/\//, '');
+    const host = this.baseUrl.replace(/^https?:\/\//, '');
     return `https://oauth2:${token}@${host}/${group}/${project}.git`;
   }
 }

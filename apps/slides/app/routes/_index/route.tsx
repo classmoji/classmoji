@@ -962,7 +962,7 @@ export default function SlidesIndex() {
           </p>
           {progressModal.action === 'duplicate' && (
             <p className="mt-2 text-xs text-gray-500 dark:text-gray-400 text-center">
-              Copying content to GitHub...
+              Copying content to the content repository...
             </p>
           )}
         </div>

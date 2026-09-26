@@ -18,7 +18,6 @@ import {
   FileImageOutlined,
   VideoCameraOutlined,
   CloudUploadOutlined,
-  GithubOutlined,
   FileTextOutlined,
 } from '@ant-design/icons';
 
@@ -49,7 +48,7 @@ const STEP_CONFIG = {
   },
   creating_repo: {
     label: 'Setting up repository',
-    icon: GithubOutlined,
+    icon: CloudUploadOutlined,
   },
   processing_images: {
     label: 'Processing images',
@@ -72,8 +71,8 @@ const STEP_CONFIG = {
     icon: FileTextOutlined,
   },
   uploading_github: {
-    label: 'Uploading to GitHub',
-    icon: GithubOutlined,
+    label: 'Saving to the content repository',
+    icon: CloudUploadOutlined,
   },
 };
 

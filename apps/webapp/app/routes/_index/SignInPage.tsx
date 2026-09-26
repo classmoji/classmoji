@@ -1,21 +1,28 @@
 import { Emoji } from '~/components';
+import type { ReactNode } from 'react';
 import GitHubIcon from './github.svg';
-import GitLabIcon from '~/components/ui/display/gitlab.svg';
 
 interface SignInPageProps {
   handleGitHubLogin: () => void;
-  /** Absent when GitLab sign-in is not configured on this deployment. */
-  handleGitLabLogin?: () => void;
+  /** The Gitlab sign-in control; null when no Gitlab is available. */
+  gitlabSignIn?: ReactNode;
+  /** The Gitlab chooser is open: it gets the column, Github steps aside. */
+  gitlabChoosing?: boolean;
   /** A failed sign-in, already turned into a sentence by the loader. */
   error?: string | null;
 }
 
-const SignInPage = ({ handleGitHubLogin, handleGitLabLogin, error }: SignInPageProps) => {
+const SignInPage = ({
+  handleGitHubLogin,
+  gitlabSignIn,
+  gitlabChoosing = false,
+  error,
+}: SignInPageProps) => {
   return (
     <div className="min-h-screen bg-[#fafaf9] dark:bg-neutral-950 flex flex-col">
       {/* Main content */}
       <main className="flex-1 flex items-center justify-center px-4">
-        <div className="w-64">
+        <div className={gitlabChoosing ? 'w-96' : 'w-64'}>
           {/* Logo - just the apple */}
           <div className="flex justify-center mb-3">
             <Emoji emoji="apple" fontSize="48px" logo />
@@ -33,23 +40,17 @@ const SignInPage = ({ handleGitHubLogin, handleGitLabLogin, error }: SignInPageP
           )}
 
           {/* GitHub OAuth button */}
-          <button
-            onClick={handleGitHubLogin}
-            className="w-full flex items-center justify-center gap-2 bg-primary hover:bg-primary/90 text-white font-medium rounded-lg px-4 py-2.5 transition-colors cursor-pointer"
-          >
-            <img src={GitHubIcon} alt="GitHub" className="w-5 h-5" />
-            Continue with GitHub
-          </button>
-
-          {handleGitLabLogin && (
+          {!gitlabChoosing && (
             <button
-              onClick={handleGitLabLogin}
-              className="mt-3 w-full flex items-center justify-center gap-2 bg-white hover:bg-stone-50 dark:bg-neutral-900 dark:hover:bg-neutral-800 text-gray-900 dark:text-white ring-1 ring-stone-200 dark:ring-neutral-700 font-medium rounded-lg px-4 py-2.5 transition-colors cursor-pointer"
+              onClick={handleGitHubLogin}
+              className="mb-3 w-full flex items-center justify-center gap-2 bg-primary hover:bg-primary/90 text-white font-medium rounded-lg px-4 py-2.5 transition-colors cursor-pointer"
             >
-              <img src={GitLabIcon} alt="Gitlab" className="w-5 h-5" />
-              Continue with Gitlab
+              <img src={GitHubIcon} alt="GitHub" className="w-5 h-5" />
+              Continue with Github
             </button>
           )}
+
+          {gitlabSignIn}
         </div>
       </main>
 

@@ -31,6 +31,7 @@
 import { tasks } from '@trigger.dev/sdk';
 
 import getPrisma from '@classmoji/database';
+import { scopeGitlabId } from '@classmoji/utils';
 import { getGitProvider, ensureClassroomTeam } from '../git/index.ts';
 import type { GitLabProvider } from '../git/GitLabProvider.ts';
 import { buildRemoveUserPayload } from './removeUserPayload.ts';
@@ -398,7 +399,8 @@ const addGitLabStaff = async ({
   if (!gitlabUser) {
     throw new StaffServiceError('git_user_not_found', `[staff] Gitlab user ${username} not found`);
   }
-  const gitlabId = String(gitlabUser.id);
+  // Instance-scoped for a self-managed GitLab: the form sign-in stores too.
+  const gitlabId = scopeGitlabId(classroom.git_organization.gitlab_instance_id, gitlabUser.id);
 
   const account = await getPrisma().account.findUnique({
     where: { provider_id_account_id: { provider_id: 'gitlab', account_id: gitlabId } },

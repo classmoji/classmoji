@@ -12,6 +12,7 @@
  */
 
 import type { PrismaClient } from '@prisma/client';
+import { scopeGitlabId } from '@classmoji/utils';
 
 type Prisma = Pick<PrismaClient, 'user' | 'account'>;
 
@@ -115,12 +116,16 @@ export async function mapGitHubProfile(
  *
  * The GitLab username becomes `login` only when nobody holds it. Otherwise
  * `login` stays null rather than failing sign-in on the unique constraint.
+ *
+ * `instanceId` is the self-managed instance signed in with (null: the default
+ * instance). GitLab ids repeat across instances, so the stored id is scoped.
  */
 export async function mapGitLabProfile(
   prisma: Prisma,
-  profile: { id: number | string; username: string }
+  profile: { id: number | string; username: string },
+  instanceId: string | null = null
 ): Promise<ProviderUserFields> {
-  const gitlabId = String(profile.id);
+  const gitlabId = scopeGitlabId(instanceId, profile.id);
   let login: string | null = profile.username || null;
   await noteProviderUsername(prisma, 'gitlab', gitlabId, profile.username);
 

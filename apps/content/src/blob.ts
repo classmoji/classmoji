@@ -10,6 +10,7 @@ import {
 import { contentTypeForExtension, isRasterExtension } from './content-type.ts';
 import type { Env } from './env.ts';
 import { GitHubOrigin } from './origins/github.ts';
+import { originFor } from './origins/select.ts';
 import { deliveryStrategy, type OriginAdapter } from './origins/types.ts';
 import {
   contentRangeHeader,
@@ -339,7 +340,7 @@ async function pullBlobFromOrigin(env: Env, classroomId: string, sha: string): P
     response = await withOriginRetry(
       env,
       classroomId,
-      ref => origin.fetchBlob({ ...ref, sha }),
+      ref => originFor(ref).fetchBlob({ ...ref, sha }),
       timing => {
         token.ms += timing.ms;
         if (timing.source === 'minted') token.source = 'minted';

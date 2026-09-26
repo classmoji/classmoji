@@ -401,7 +401,7 @@ const STUDENT_STEPS: FeatureStep[] = [
     link: '/assignments',
     title: 'Assignments',
     description:
-      'This page lists all of your assignments across every repository in one place. Each assignment is a GitHub issue in your repo, with a due date and its current status, so you can see everything you owe without opening each repo separately.',
+      'This page lists all of your assignments across every repository in one place, each with its due date and current status, so you can see everything you owe without opening each repo separately.',
   },
   {
     link: '/assignments',
@@ -409,7 +409,7 @@ const STUDENT_STEPS: FeatureStep[] = [
     placement: 'bottom',
     title: 'Your progress',
     description:
-      'This bar shows how much of your work is submitted and graded at a glance, and the tabs below switch between current and completed assignments. You submit an assignment by closing its GitHub issue in your repo, which marks it as turned in here automatically.',
+      'This bar shows how much of your work is submitted and graded at a glance, and the tabs below switch between current and completed assignments. You submit an assignment by pushing your work before the deadline, or by closing the item Classmoji opened for it when the assignment says so, and it is marked as turned in here automatically.',
   },
   {
     link: '/assignments',

@@ -9,7 +9,7 @@ import JSZip from 'jszip';
 import * as cheerio from 'cheerio';
 import getPrisma from '@classmoji/database';
 import { ContentService } from '@classmoji/content';
-import { GitHubProvider, ClassmojiService } from '@classmoji/services';
+import { getGitProvider, ClassmojiService } from '@classmoji/services';
 import {
   generateDeckHtml,
   parseSlidesFragment,
@@ -132,11 +132,9 @@ export async function processZipImport({
     throw new Error(`Git organization not configured for classroom: ${classroomId}`);
   }
 
-  // Create GitHub provider instance for this organization
-  const gitProvider = new GitHubProvider(
-    classroom.git_organization.github_installation_id as string,
-    org
-  );
+  // The org's own provider: a Github App installation or a Gitlab connection.
+  const gitProvider = getGitProvider(classroom.git_organization);
+  const isGitLab = classroom.git_organization.provider === 'GITLAB';
 
   // 5. Flat content path: slides/{slug}-{timestamp}
   const timestamp = Date.now();
@@ -155,7 +153,8 @@ export async function processZipImport({
       org,
       repoName,
       `Course content for ${classroom.name || org} - ${contentNamespace}`,
-      ClassmojiService.contentDelivery.shouldCreatePrivateContentRepo(classroom)
+      // A Gitlab content project is always private (see page.service).
+      isGitLab || ClassmojiService.contentDelivery.shouldCreatePrivateContentRepo(classroom)
     );
     // Give GitHub a moment to initialize the repo
     await new Promise(resolve => setTimeout(resolve, 2000));
@@ -813,7 +812,7 @@ export async function processZipImport({
   onProgress({ type: 'step', step: 'uploading_github', current: 0, total: files.length });
   try {
     const result = await ContentService.uploadBatch({
-      orgLogin: org,
+      gitOrganization: classroom.git_organization,
       repo: repoName,
       files,
       message: `Import slides from slides.com: ${slideTitle}`,

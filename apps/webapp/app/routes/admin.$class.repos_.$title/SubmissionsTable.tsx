@@ -500,7 +500,11 @@ const SubmissionsTable = ({
               <span className="inline-flex items-center gap-2">
                 <span className="text-ink-1">{assignment.title}</span>
                 <span className="text-xs font-normal text-ink-3">
-                  {isPushOnly ? '' : assignment.submission_mode === 'REPO' ? 'push' : 'issue'}
+                  {isPushOnly
+                    ? ''
+                    : assignment.submission_mode === 'REPO'
+                      ? 'push'
+                      : web.terms.issue}
                 </span>
               </span>
             ),

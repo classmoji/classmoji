@@ -177,6 +177,7 @@ export interface DeliverableClassroom {
     login?: string | null;
     provider?: string | null;
     github_installation_id?: string | null;
+    gitlab_connection_id?: string | null;
   } | null;
 }
 
@@ -195,8 +196,10 @@ export function isDeliverableClassroom(
   return Boolean(
     classroom?.content_repo &&
     classroom.git_organization?.login &&
-    classroom.git_organization.provider === 'GITHUB' &&
-    classroom.git_organization.github_installation_id
+    ((classroom.git_organization.provider === 'GITHUB' &&
+      classroom.git_organization.github_installation_id) ||
+      (classroom.git_organization.provider === 'GITLAB' &&
+        classroom.git_organization.gitlab_connection_id))
   );
 }
 

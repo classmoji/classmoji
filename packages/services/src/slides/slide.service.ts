@@ -22,6 +22,23 @@ import type { DeckJson } from './deckTypes.ts';
 
 const THEMES_FOLDER = '.slidesthemes';
 
+/** Whether Classmoji can reach this org's content: a Github install or a Gitlab connection. */
+function isConnectedGitOrg(
+  org:
+    | {
+        provider?: string | null;
+        github_installation_id?: string | null;
+        gitlab_connection_id?: string | null;
+        access_token?: string | null;
+      }
+    | null
+    | undefined
+): boolean {
+  if (!org) return false;
+  if (org.provider === 'GITLAB') return Boolean(org.gitlab_connection_id || org.access_token);
+  return Boolean(org.github_installation_id);
+}
+
 interface SlideQueryOptions {
   includeClassroom?: boolean;
   includeCreator?: boolean;
@@ -520,9 +537,12 @@ export async function countSlidesUsingTheme(
   themeName: string
 ): Promise<{ count: number; slides: Array<{ id: string; title: string }> }> {
   const gitOrg = await getPrisma().gitOrganization.findFirst({
-    where: { provider: 'GITHUB', login: gitOrgLogin },
+    where: {
+      login: gitOrgLogin,
+      classrooms: { some: { content_repo: contentRepo } },
+    },
   });
-  if (!gitOrg?.github_installation_id) {
+  if (!isConnectedGitOrg(gitOrg)) {
     return { count: 0, slides: [] };
   }
 
@@ -530,7 +550,7 @@ export async function countSlidesUsingTheme(
     where: {
       classroom: {
         content_repo: contentRepo,
-        git_organization: { provider: 'GITHUB', login: gitOrgLogin },
+        git_organization: { login: gitOrgLogin },
       },
     },
     include: {
@@ -565,9 +585,12 @@ export async function deleteSharedTheme(
   themeName: string
 ): Promise<void> {
   const gitOrg = await getPrisma().gitOrganization.findFirst({
-    where: { provider: 'GITHUB', login: gitOrgLogin },
+    where: {
+      login: gitOrgLogin,
+      classrooms: { some: { content_repo: contentRepo } },
+    },
   });
-  if (!gitOrg?.github_installation_id) {
+  if (!isConnectedGitOrg(gitOrg)) {
     throw new Error('Git organization not found');
   }
 
@@ -640,12 +663,8 @@ export async function deleteSlide({
   if (!gitOrgLogin) {
     throw new Error('Git organization not configured');
   }
-  // Slides live in a Github content repo; Gitlab classrooms have none yet.
-  if (slide.classroom.git_organization?.provider === 'GITLAB') {
-    throw new Error('Not available for Gitlab classrooms yet.');
-  }
-  if (!slide.classroom.git_organization?.github_installation_id) {
-    throw new Error('Github installation not configured');
+  if (!isConnectedGitOrg(slide.classroom.git_organization)) {
+    throw new Error('Git organization not connected');
   }
 
   const repoName = slide.classroom.content_repo;
@@ -755,7 +774,7 @@ export async function getSlideDeleteInfo(slideId: string) {
   }
 
   const gitOrgLogin = slide.classroom?.git_organization?.login;
-  if (!gitOrgLogin || !slide.classroom.git_organization?.github_installation_id) {
+  if (!gitOrgLogin || !isConnectedGitOrg(slide.classroom.git_organization)) {
     return { slide, themeName: null };
   }
 

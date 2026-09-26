@@ -1,6 +1,7 @@
 import { GitProvider } from './GitProvider.ts';
 import { GitHubProvider } from './GitHubProvider.ts';
 import { GitLabProvider } from './GitLabProvider.ts';
+import { parseGitlabId } from '@classmoji/utils';
 import { getConnectionToken } from '../classmoji/gitlabConnection.service.ts';
 
 /**
@@ -22,14 +23,9 @@ export function getGitProvider(gitOrganization: {
   login?: string | null;
   provider_id?: string | null;
   gitlab_connection_id?: string | null;
+  gitlab_instance_id?: string | null;
 }) {
-  const {
-    provider,
-    github_installation_id,
-    access_token,
-    base_url: _base_url,
-    login,
-  } = gitOrganization;
+  const { provider, github_installation_id, access_token, base_url, login } = gitOrganization;
 
   switch (provider) {
     case 'GITHUB':
@@ -49,7 +45,14 @@ export function getGitProvider(gitOrganization: {
       if (!token) {
         throw new Error('Gitlab provider requires a Gitlab connection or access_token');
       }
-      return new GitLabProvider(gitOrganization.provider_id ?? '', login, token);
+      // provider_id is instance-scoped for a self-managed GitLab; the API wants
+      // GitLab's own id. base_url is that instance's host (null: the default).
+      return new GitLabProvider(
+        parseGitlabId(gitOrganization.provider_id ?? '').rawId,
+        login,
+        token,
+        base_url
+      );
     }
 
     // Future implementations:

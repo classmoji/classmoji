@@ -1,13 +1,14 @@
 /**
- * ContentService - Write operations via GitHub API
+ * ContentService - Write operations via the git provider's API
  *
- * Reads go directly to GitHub Pages CDN (see urls.js)
- * Writes go through this service using the GitHub API
+ * Github content repos go through the Github API here; Gitlab content projects
+ * go through ./gitlabContent.ts, which answers in the same shapes.
  */
 
 import getPrisma from '@classmoji/database';
 import { getGitProvider } from '../git/index.ts';
 import { validateFile, sanitizeFilename } from './utils/validateFile.ts';
+import * as gitlab from './gitlabContent.ts';
 
 interface GitOrganizationRecord {
   provider: string;
@@ -15,7 +16,24 @@ interface GitOrganizationRecord {
   github_installation_id?: string | null;
   access_token?: string | null;
   base_url?: string | null;
-  gitlab_group_id?: string | null;
+  provider_id?: string | null;
+  gitlab_connection_id?: string | null;
+}
+
+/** A Gitlab-backed org: its content project is read and written by gitlabContent. */
+const isGitLab = (org: GitOrganizationRecord): boolean => org.provider === 'GITLAB';
+
+/**
+ * Where a written file can be fetched right away, for the callers that store a
+ * URL. A Gitlab content project is private and has no public raw URL, so its
+ * files go through the slides app's session-gated content proxy.
+ */
+function rawFileUrl(org: GitOrganizationRecord, repo: string, branch: string, path: string) {
+  if (isGitLab(org)) {
+    const slides = (process.env.SLIDES_URL || '').replace(/\/+$/, '');
+    return `${slides}/content/${org.login}/${repo}/${path}`;
+  }
+  return `https://raw.githubusercontent.com/${org.login}/${repo}/${branch}/${path}`;
 }
 
 interface CacheEntry<T = unknown> {
@@ -125,21 +143,30 @@ function isImagePath(path: string): boolean {
  */
 async function resolveGitOrganization(
   gitOrganization: GitOrganizationRecord | undefined,
-  orgLogin: string | undefined
+  orgLogin: string | undefined,
+  repo?: string
 ): Promise<GitOrganizationRecord> {
   // If gitOrganization is a valid object with provider, use it directly
   if (gitOrganization?.provider) {
     return gitOrganization;
   }
 
-  // Fall back to looking up by orgLogin (assumes GITHUB provider)
+  // Fall back to looking up by orgLogin. A login can name a Github org AND a
+  // Gitlab group; the content repo settles it, since a classroom's content
+  // repo belongs to exactly one of them. Github wins a tie that the repo cannot
+  // settle, as it always did.
   if (orgLogin) {
-    const org = await getPrisma().gitOrganization.findFirst({
-      where: {
-        provider: 'GITHUB',
-        login: orgLogin,
-      },
+    const orgs = await getPrisma().gitOrganization.findMany({
+      where: { login: orgLogin, provider: { in: ['GITHUB', 'GITLAB'] } },
+      include: repo
+        ? { classrooms: { where: { content_repo: repo }, select: { id: true }, take: 1 } }
+        : undefined,
     });
+    const owning =
+      orgs.length > 1 && repo
+        ? orgs.filter(o => ((o as { classrooms?: unknown[] }).classrooms ?? []).length > 0)
+        : orgs;
+    const org = owning.find(o => o.provider === 'GITHUB') ?? owning[0] ?? orgs[0];
     if (org) {
       return org;
     }
@@ -219,6 +246,175 @@ export class ContentService {
   }
 
   /**
+   * `put` on Gitlab. The lock is Gitlab's per-file `last_commit_id`: the
+   * file's blob id is checked against `expectedSha`, and the write is pinned to
+   * the commit that read came from, so Gitlab refuses it if the file moved in
+   * between. Same 409s as the Github path.
+   * @private
+   */
+  static async #gitlabPut(
+    org: GitOrganizationRecord,
+    {
+      repo,
+      path,
+      bytes,
+      expectedSha,
+      branch,
+      message,
+      createOnly,
+    }: {
+      repo: string;
+      path: string;
+      bytes: Buffer;
+      expectedSha?: string;
+      branch?: string;
+      message: string;
+      createOnly?: boolean;
+    }
+  ): Promise<{ sha: string; commit: string }> {
+    const target = branch || (await gitlab.gitlabDefaultBranch(org, repo));
+    const current = createOnly ? null : await gitlab.headFileAt(org, repo, path, target);
+
+    if (expectedSha) {
+      if (!current) {
+        const error = new Error('File was deleted since it was read') as Error & { status: number };
+        error.status = 409;
+        throw error;
+      }
+      if (current.sha !== expectedSha) {
+        const error = new Error('File was modified by someone else') as Error & { status: number };
+        error.status = 409;
+        throw error;
+      }
+    }
+
+    let commit: string;
+    try {
+      commit = await gitlab.commit(org, repo, target, message, [
+        {
+          action: current ? 'update' : 'create',
+          file_path: path,
+          content: bytes.toString('base64'),
+          encoding: 'base64',
+          ...(current && expectedSha ? { last_commit_id: current.lastCommit } : {}),
+        },
+      ]);
+    } catch (error: unknown) {
+      if (createOnly && hasStatus(error, 422)) {
+        const conflict = new Error(
+          `File already exists: ${path} (create-only write refused)`
+        ) as Error & { status: number };
+        conflict.status = 409;
+        throw conflict;
+      }
+      if (expectedSha && hasStatus(error, 404)) {
+        const conflict = new Error('File was deleted since it was read') as Error & {
+          status: number;
+        };
+        conflict.status = 409;
+        throw conflict;
+      }
+      throw error;
+    }
+
+    if (!branch) {
+      invalidateCache(org.login, repo, path);
+    }
+    return { sha: gitlab.gitBlobSha(bytes), commit };
+  }
+
+  /**
+   * `uploadBatch` on Gitlab: one Commits API call. Every file that already
+   * exists is updated pinned to its last commit, so a concurrent change to any
+   * of them refuses the whole commit, which is retried from a fresh read (and
+   * a fresh `verifyBaseTree`) the way the Github path retries a ref race.
+   * @private
+   */
+  static async #gitlabUploadBatch(
+    org: GitOrganizationRecord,
+    {
+      repo,
+      files,
+      branch,
+      message,
+      onProgress,
+      verifyBaseTree,
+      primeCache,
+    }: {
+      repo: string;
+      files: Array<{ path: string; content: string; encoding?: 'utf-8' | 'base64' }>;
+      branch: string;
+      message: string;
+      onProgress?: (progress: {
+        current: number;
+        total: number;
+        filename: string | undefined;
+      }) => void;
+      verifyBaseTree?: (ctx: {
+        getFileSha: (path: string) => Promise<string | null>;
+      }) => Promise<void>;
+      primeCache: boolean;
+    }
+  ): Promise<{ commit: string; filesUploaded: number; files: Array<{ path: string; sha: string }> }> {
+    const prepared = files.map(file => ({
+      path: file.path,
+      bytes:
+        (file.encoding ?? 'utf-8') === 'base64'
+          ? Buffer.from(file.content, 'base64')
+          : Buffer.from(file.content),
+    }));
+    const written = prepared.map(file => ({ path: file.path, sha: gitlab.gitBlobSha(file.bytes) }));
+
+    const attempt = async () => {
+      const head = await gitlab.branchHead(org, repo, branch);
+      if (head && verifyBaseTree) {
+        await verifyBaseTree({
+          getFileSha: async (path: string) =>
+            (await gitlab.headFileAt(org, repo, path, head))?.sha ?? null,
+        });
+      }
+      const actions = head
+        ? await gitlab.upsertActions(org, repo, head, prepared)
+        : prepared.map(file => ({
+            action: 'create' as const,
+            file_path: file.path,
+            content: file.bytes.toString('base64'),
+            encoding: 'base64' as const,
+          }));
+      prepared.forEach((file, i) =>
+        onProgress?.({ current: i + 1, total: prepared.length, filename: file.path.split('/').pop() })
+      );
+      return gitlab.commit(org, repo, branch, message, actions);
+    };
+
+    // A refused pin is Gitlab's "not a fast forward": retry from a fresh read.
+    let commit: string | undefined;
+    for (let i = 0; i <= 5 && commit === undefined; i++) {
+      try {
+        commit = await attempt();
+      } catch (error: unknown) {
+        if (!hasStatus(error, 409) || i === 5) throw error;
+        await new Promise(r => setTimeout(r, 200 * 2 ** i * (1 + Math.random())));
+      }
+    }
+
+    for (const file of files) {
+      invalidateCache(org.login, repo, file.path);
+    }
+    if (primeCache && branch === 'main') {
+      files.forEach((file, i) => {
+        if ((file.encoding ?? 'utf-8') !== 'utf-8' || isImagePath(file.path)) return;
+        setCache(getCacheKey(org.login, repo, file.path) + ':content', {
+          content: file.content,
+          sha: written[i]!.sha,
+        });
+      });
+    }
+
+    return { commit: commit!, filesUploaded: files.length, files: written };
+  }
+
+  /**
    * Get file metadata (SHA) for optimistic locking
    * @param {Object} options
    * @param {Object} [options.gitOrganization] - GitOrganization record from database
@@ -245,7 +441,7 @@ export class ContentService {
     skipCache?: boolean;
   }): Promise<{ sha: string; size: number } | null> {
     try {
-      const resolvedOrg = await resolveGitOrganization(gitOrganization, orgLogin);
+      const resolvedOrg = await resolveGitOrganization(gitOrganization, orgLogin, repo);
 
       // Check cache first (unless explicitly skipped or is an image).
       // Ref-bearing reads bypass the cache entirely: the cache is keyed
@@ -259,18 +455,21 @@ export class ContentService {
         }
       }
 
-      const octokit = await getOctokit(resolvedOrg);
-      const { data } = await octokit.request('GET /repos/{owner}/{repo}/contents/{path}', {
-        owner: resolvedOrg.login,
-        repo,
-        path,
-        ...(ref ? { ref } : {}),
-      });
-
-      const result = {
-        sha: data.sha,
-        size: data.size,
-      };
+      let result: { sha: string; size: number };
+      if (isGitLab(resolvedOrg)) {
+        const meta = await gitlab.getMeta(resolvedOrg, repo, path, ref);
+        if (!meta) return null;
+        result = meta;
+      } else {
+        const octokit = await getOctokit(resolvedOrg);
+        const { data } = await octokit.request('GET /repos/{owner}/{repo}/contents/{path}', {
+          owner: resolvedOrg.login,
+          repo,
+          path,
+          ...(ref ? { ref } : {}),
+        });
+        result = { sha: data.sha, size: data.size };
+      }
 
       // Cache the result (unless it's an image or a ref-bearing read)
       if (!ref && !isImagePath(path)) {
@@ -325,7 +524,7 @@ export class ContentService {
     cacheTtl?: number;
   }): Promise<{ content: string; sha: string } | null> {
     try {
-      const resolvedOrg = await resolveGitOrganization(gitOrganization, orgLogin);
+      const resolvedOrg = await resolveGitOrganization(gitOrganization, orgLogin, repo);
 
       // Check cache first (unless explicitly skipped or is an image)
       // Images are excluded because they're large and rarely refetched
@@ -340,13 +539,20 @@ export class ContentService {
         }
       }
 
-      const octokit = await getOctokit(resolvedOrg);
-      const { data } = await octokit.request('GET /repos/{owner}/{repo}/contents/{path}', {
-        owner: resolvedOrg.login,
-        repo,
-        path,
-        ...(ref ? { ref } : {}),
-      });
+      let data: { content: string; sha: string };
+      if (isGitLab(resolvedOrg)) {
+        const file = await gitlab.getFile(resolvedOrg, repo, path, ref);
+        if (!file) return null;
+        data = file;
+      } else {
+        const octokit = await getOctokit(resolvedOrg);
+        ({ data } = await octokit.request('GET /repos/{owner}/{repo}/contents/{path}', {
+          owner: resolvedOrg.login,
+          repo,
+          path,
+          ...(ref ? { ref } : {}),
+        }));
+      }
 
       // GitHub returns base64-encoded content for files
       // For binary files (raw=true), return the base64 string as-is
@@ -406,7 +612,12 @@ export class ContentService {
     path: string;
   }): Promise<{ content: string; sha: string } | null> {
     try {
-      const resolvedOrg = await resolveGitOrganization(gitOrganization, orgLogin);
+      const resolvedOrg = await resolveGitOrganization(gitOrganization, orgLogin, repo);
+      if (isGitLab(resolvedOrg)) {
+        const meta = await gitlab.getMeta(resolvedOrg, repo, path);
+        const bytes = meta ? await gitlab.getBlob(resolvedOrg, repo, meta.sha) : null;
+        return meta && bytes ? { content: bytes.toString('base64'), sha: meta.sha } : null;
+      }
       const octokit = await getOctokit(resolvedOrg);
 
       // Step 1: Get the file SHA from Contents API (metadata only, works for any size)
@@ -471,7 +682,11 @@ export class ContentService {
     sha: string;
   }): Promise<{ content: string; sha: string } | null> {
     try {
-      const resolvedOrg = await resolveGitOrganization(gitOrganization, orgLogin);
+      const resolvedOrg = await resolveGitOrganization(gitOrganization, orgLogin, repo);
+      if (isGitLab(resolvedOrg)) {
+        const bytes = await gitlab.getBlob(resolvedOrg, repo, sha);
+        return bytes ? { content: bytes.toString('utf-8'), sha } : null;
+      }
       const octokit = await getOctokit(resolvedOrg);
       const { data } = await octokit.request('GET /repos/{owner}/{repo}/git/blobs/{file_sha}', {
         owner: resolvedOrg.login,
@@ -535,12 +750,24 @@ export class ContentService {
     message?: string;
     createOnly?: boolean;
   }): Promise<{ sha: string; commit: string }> {
-    const resolvedOrg = await resolveGitOrganization(gitOrganization, orgLogin);
-    const octokit = await getOctokit(resolvedOrg);
+    const resolvedOrg = await resolveGitOrganization(gitOrganization, orgLogin, repo);
 
     if (createOnly && expectedSha) {
       throw new Error('createOnly and expectedSha are mutually exclusive');
     }
+
+    if (isGitLab(resolvedOrg)) {
+      return this.#gitlabPut(resolvedOrg, {
+        repo,
+        path,
+        bytes: Buffer.from(content),
+        expectedSha,
+        branch,
+        message: message || `Update ${path}`,
+        createOnly,
+      });
+    }
+    const octokit = await getOctokit(resolvedOrg);
 
     // Pre-check when optimistic locking is requested (branch writes check the
     // sha on that branch). skipCache is REQUIRED here: a cached read could
@@ -686,7 +913,7 @@ export class ContentService {
     branch?: string;
     message?: string;
   }): Promise<{ path: string; sha: string; url: string }> {
-    const resolvedOrg = await resolveGitOrganization(gitOrganization, orgLogin);
+    const resolvedOrg = await resolveGitOrganization(gitOrganization, orgLogin, repo);
 
     // Validate file
     const validation = validateFile({ filename, size: file.length });
@@ -711,6 +938,22 @@ export class ContentService {
         branch,
         message: message || `Upload ${sanitizedFilename}`,
       });
+    }
+
+    if (isGitLab(resolvedOrg)) {
+      const written = await this.#gitlabPut(resolvedOrg, {
+        repo,
+        path: filePath,
+        bytes: file,
+        branch,
+        message: message || `Upload ${sanitizedFilename}`,
+      });
+      invalidateCache(resolvedOrg.login, repo, filePath);
+      return {
+        path: filePath,
+        sha: written.sha,
+        url: rawFileUrl(resolvedOrg, repo, branch, filePath),
+      };
     }
 
     const octokit = await getOctokit(resolvedOrg);
@@ -762,6 +1005,22 @@ export class ContentService {
     branch?: string;
     message?: string;
   }): Promise<{ path: string; sha: string; url: string }> {
+    if (isGitLab(gitOrganization)) {
+      const written = await this.#gitlabPut(gitOrganization, {
+        repo,
+        path: filePath,
+        bytes: file,
+        branch,
+        message: message || `Upload ${filePath}`,
+      });
+      invalidateCache(gitOrganization.login, repo, filePath);
+      return {
+        path: filePath,
+        sha: written.sha,
+        url: rawFileUrl(gitOrganization, repo, branch, filePath),
+      };
+    }
+
     const octokit = await getOctokit(gitOrganization);
 
     // Step 1: Create the blob with file content (done once, content-addressed and idempotent)
@@ -863,7 +1122,21 @@ export class ContentService {
     path: string;
     message?: string;
   }): Promise<{ commit: string }> {
-    const resolvedOrg = await resolveGitOrganization(gitOrganization, orgLogin);
+    const resolvedOrg = await resolveGitOrganization(gitOrganization, orgLogin, repo);
+
+    if (isGitLab(resolvedOrg)) {
+      const target = await gitlab.gitlabDefaultBranch(resolvedOrg, repo);
+      const current = await gitlab.headFileAt(resolvedOrg, repo, path, target);
+      if (!current) {
+        throw new Error(`File not found: ${path}`);
+      }
+      const commit = await gitlab.commit(resolvedOrg, repo, target, message || `Delete ${path}`, [
+        { action: 'delete', file_path: path, last_commit_id: current.lastCommit },
+      ]);
+      invalidateCache(resolvedOrg.login, repo, path);
+      return { commit };
+    }
+
     const octokit = await getOctokit(resolvedOrg);
 
     // Get current SHA (required for delete)
@@ -936,7 +1209,7 @@ export class ContentService {
     skipCache?: boolean;
   }): Promise<Array<{ name: string; path: string; type: 'file' | 'dir'; sha: string }>> {
     try {
-      const resolvedOrg = await resolveGitOrganization(gitOrganization, orgLogin);
+      const resolvedOrg = await resolveGitOrganization(gitOrganization, orgLogin, repo);
 
       // Check cache first (ref-bearing reads bypass the cache entirely —
       // it is keyed org:repo:path for the default branch only)
@@ -951,27 +1224,30 @@ export class ContentService {
         }
       }
 
-      const octokit = await getOctokit(resolvedOrg);
-      const { data } = await octokit.request('GET /repos/{owner}/{repo}/contents/{path}', {
-        owner: resolvedOrg.login,
-        repo,
-        path,
-        ...(ref ? { ref } : {}),
-      });
+      let result: Array<{ name: string; path: string; type: 'file' | 'dir'; sha: string }>;
+      if (isGitLab(resolvedOrg)) {
+        result = await gitlab.listFolder(resolvedOrg, repo, path, ref);
+      } else {
+        const octokit = await getOctokit(resolvedOrg);
+        const { data } = await octokit.request('GET /repos/{owner}/{repo}/contents/{path}', {
+          owner: resolvedOrg.login,
+          repo,
+          path,
+          ...(ref ? { ref } : {}),
+        });
 
-      // GitHub returns array for directories, object for files
-      if (!Array.isArray(data)) {
-        return [];
+        // GitHub returns array for directories, object for files
+        if (!Array.isArray(data)) {
+          return [];
+        }
+
+        result = (data as RepositoryContentItem[]).map(item => ({
+          name: item.name,
+          path: item.path,
+          type: item.type === 'dir' ? 'dir' : 'file',
+          sha: item.sha,
+        }));
       }
-
-      const result: Array<{ name: string; path: string; type: 'file' | 'dir'; sha: string }> = (
-        data as RepositoryContentItem[]
-      ).map(item => ({
-        name: item.name,
-        path: item.path,
-        type: item.type === 'dir' ? 'dir' : 'file',
-        sha: item.sha,
-      }));
 
       // Cache the result (not for ref-bearing reads)
       if (!ref) {
@@ -1013,7 +1289,7 @@ export class ContentService {
     htmlContent: string;
     branch?: string;
   }): Promise<Array<{ name: string; path: string; url: string }>> {
-    const resolvedOrg = await resolveGitOrganization(gitOrganization, orgLogin);
+    const resolvedOrg = await resolveGitOrganization(gitOrganization, orgLogin, repo);
     // List all files in the images folder
     const files = await this.listFolder({ gitOrganization: resolvedOrg, repo, path: imagesFolder });
 
@@ -1040,7 +1316,7 @@ export class ContentService {
     return orphaned.map(file => ({
       name: file.name,
       path: file.path,
-      url: `https://raw.githubusercontent.com/${resolvedOrg.login}/${repo}/${branch}/${file.path}`,
+      url: rawFileUrl(resolvedOrg, repo, branch, file.path),
     }));
   }
 
@@ -1067,7 +1343,7 @@ export class ContentService {
     paths: string[];
     message?: string;
   }): Promise<{ deleted: number; errors: string[] }> {
-    const resolvedOrg = await resolveGitOrganization(gitOrganization, orgLogin);
+    const resolvedOrg = await resolveGitOrganization(gitOrganization, orgLogin, repo);
     let deleted = 0;
     const errors: string[] = [];
 
@@ -1164,7 +1440,20 @@ export class ContentService {
       throw new Error('No files to upload');
     }
 
-    const resolvedOrg = await resolveGitOrganization(gitOrganization, orgLogin);
+    const resolvedOrg = await resolveGitOrganization(gitOrganization, orgLogin, repo);
+
+    if (isGitLab(resolvedOrg)) {
+      return this.#gitlabUploadBatch(resolvedOrg, {
+        repo,
+        files,
+        branch,
+        message: message || `Upload ${files.length} files`,
+        onProgress,
+        verifyBaseTree,
+        primeCache,
+      });
+    }
+
     const octokit = await getOctokit(resolvedOrg);
 
     // Step 0 (opt-in): give an EMPTY repository its initial commit, because
@@ -1365,7 +1654,24 @@ export class ContentService {
     branch?: string;
     message?: string;
   }): Promise<{ commit: string | null; filesDeleted: number }> {
-    const resolvedOrg = await resolveGitOrganization(gitOrganization, orgLogin);
+    const resolvedOrg = await resolveGitOrganization(gitOrganization, orgLogin, repo);
+
+    if (isGitLab(resolvedOrg)) {
+      const entries = await gitlab.listFolder(resolvedOrg, repo, path, branch, true);
+      const doomed = entries.filter(entry => entry.type === 'file').map(entry => entry.path);
+      if (doomed.length === 0) return { commit: null, filesDeleted: 0 };
+      const commit = await gitlab.commit(
+        resolvedOrg,
+        repo,
+        branch,
+        message || `Delete folder ${path}`,
+        doomed.map(filePath => ({ action: 'delete', file_path: filePath }))
+      );
+      for (const filePath of doomed) invalidateCache(resolvedOrg.login, repo, filePath);
+      invalidateCache(resolvedOrg.login, repo, path);
+      return { commit, filesDeleted: doomed.length };
+    }
+
     const octokit = await getOctokit(resolvedOrg);
 
     // Get all files in the folder recursively (done once, outside retry loop)
@@ -1495,6 +1801,29 @@ export class ContentService {
     destPath: string;
     message?: string;
   }): Promise<{ copied: number; paths: string[] }> {
+    if (isGitLab(gitOrganization)) {
+      const target = await gitlab.gitlabDefaultBranch(gitOrganization, repo);
+      const entries = (
+        await gitlab.listFolder(gitOrganization, repo, sourcePath, target, true)
+      ).filter(entry => entry.type === 'file');
+      if (entries.length === 0) return { copied: 0, paths: [] };
+      const files = await gitlab.mapLimit(entries, 6, async entry => {
+        const bytes = await gitlab.getBlob(gitOrganization, repo, entry.sha);
+        const relativePath = entry.path.slice(sourcePath.length).replace(/^\//, '');
+        return { path: `${destPath}/${relativePath}`, bytes: bytes ?? Buffer.alloc(0) };
+      });
+      const actions = await gitlab.upsertActions(gitOrganization, repo, target, files);
+      await gitlab.commit(
+        gitOrganization,
+        repo,
+        target,
+        message || `Copy ${sourcePath} to ${destPath}`,
+        actions
+      );
+      for (const file of files) invalidateCache(gitOrganization.login, repo, file.path);
+      return { copied: files.length, paths: files.map(file => file.path) };
+    }
+
     const octokit = await getOctokit(gitOrganization);
 
     // Get all files in source folder
@@ -1568,7 +1897,10 @@ export class ContentService {
     branch: string;
     fromSha: string;
   }): Promise<{ ref: string; sha: string }> {
-    const resolvedOrg = await resolveGitOrganization(gitOrganization, orgLogin);
+    const resolvedOrg = await resolveGitOrganization(gitOrganization, orgLogin, repo);
+    if (isGitLab(resolvedOrg)) {
+      return gitlab.createBranch(resolvedOrg, repo, branch, fromSha);
+    }
     const octokit = await getOctokit(resolvedOrg);
 
     const { data } = await octokit.request('POST /repos/{owner}/{repo}/git/refs', {
@@ -1605,7 +1937,11 @@ export class ContentService {
     repo: string;
     branch: string;
   }): Promise<{ deleted: boolean }> {
-    const resolvedOrg = await resolveGitOrganization(gitOrganization, orgLogin);
+    const resolvedOrg = await resolveGitOrganization(gitOrganization, orgLogin, repo);
+    if (isGitLab(resolvedOrg)) {
+      await gitlab.deleteBranch(resolvedOrg, repo, branch);
+      return { deleted: true };
+    }
     const octokit = await getOctokit(resolvedOrg);
 
     await octokit.request('DELETE /repos/{owner}/{repo}/git/refs/{ref}', {
@@ -1653,7 +1989,11 @@ export class ContentService {
     head: string;
     message?: string;
   }): Promise<{ merged: boolean; sha?: string; conflict?: boolean }> {
-    const resolvedOrg = await resolveGitOrganization(gitOrganization, orgLogin);
+    const resolvedOrg = await resolveGitOrganization(gitOrganization, orgLogin, repo);
+    if (isGitLab(resolvedOrg)) {
+      const result = await gitlab.mergeBranch(resolvedOrg, repo, base, head, message);
+      return result;
+    }
     const octokit = await getOctokit(resolvedOrg);
 
     try {
@@ -1724,7 +2064,10 @@ export class ContentService {
     merge_base_sha: string | null;
     commits: Array<{ sha: string; date: string | null }>;
   } | null> {
-    const resolvedOrg = await resolveGitOrganization(gitOrganization, orgLogin);
+    const resolvedOrg = await resolveGitOrganization(gitOrganization, orgLogin, repo);
+    if (isGitLab(resolvedOrg)) {
+      return gitlab.compareBranches(resolvedOrg, repo, base, head);
+    }
     const octokit = await getOctokit(resolvedOrg);
 
     try {

@@ -11,7 +11,9 @@
  */
 
 import getPrisma from '@classmoji/database';
+import { parseGitlabId } from '@classmoji/utils';
 import type { Account as PrismaAccount } from '@prisma/client';
+import { oauthClient } from './gitlabInstance.service.ts';
 
 export interface GitLabTokenResult {
   token: string;
@@ -32,10 +34,6 @@ const REFRESH_BUFFER_MS = 5 * 60 * 1000; // 5 minutes (GitLab tokens live 2h)
 // GitHub App refresh tokens.
 const refreshLocks = new Map<string, Promise<GitLabTokenResult | null>>();
 
-function gitlabIssuer(): string {
-  return (process.env.GITLAB_ISSUER || 'https://gitlab.com').replace(/\/+$/, '');
-}
-
 async function withRefreshLock(
   userId: string,
   fn: () => Promise<GitLabTokenResult | null>
@@ -51,25 +49,32 @@ async function withRefreshLock(
 }
 
 async function refreshGitLabToken(
-  account: Pick<PrismaAccount, 'refresh_token'>
+  account: Pick<PrismaAccount, 'refresh_token' | 'account_id'>
 ): Promise<RefreshedTokens | null> {
   if (!account.refresh_token) return null;
 
-  const clientId = process.env.GITLAB_CLIENT_ID;
-  const clientSecret = process.env.GITLAB_CLIENT_SECRET;
-  if (!clientId || !clientSecret) {
-    console.error('[gitlabUserToken] Missing GITLAB_CLIENT_ID or GITLAB_CLIENT_SECRET');
+  // The account id carries its instance (see scopeGitlabId).
+  let client;
+  try {
+    client = await oauthClient(parseGitlabId(account.account_id).instanceId, {
+      allowDisabled: true,
+    });
+  } catch (error: unknown) {
+    console.error(
+      '[gitlabUserToken] No usable Gitlab OAuth client:',
+      error instanceof Error ? error.message : error
+    );
     return null;
   }
 
   const body = new URLSearchParams({
-    client_id: clientId,
-    client_secret: clientSecret,
+    client_id: client.clientId,
+    client_secret: client.clientSecret,
     grant_type: 'refresh_token',
     refresh_token: account.refresh_token,
   });
 
-  const response = await fetch(`${gitlabIssuer()}/oauth/token`, {
+  const response = await fetch(`${client.host}/oauth/token`, {
     method: 'POST',
     headers: {
       'content-type': 'application/x-www-form-urlencoded',
@@ -93,9 +98,7 @@ async function refreshGitLabToken(
   return {
     accessToken: data.access_token,
     refreshToken: data.refresh_token, // rotates on every refresh
-    accessTokenExpiresAt: data.expires_in
-      ? new Date(Date.now() + data.expires_in * 1000)
-      : null,
+    accessTokenExpiresAt: data.expires_in ? new Date(Date.now() + data.expires_in * 1000) : null,
   };
 }
 
@@ -109,6 +112,7 @@ export async function getGitLabTokenForUser(userId: string): Promise<GitLabToken
       where: { user_id: userId, provider_id: 'gitlab' },
       select: {
         id: true,
+        account_id: true,
         access_token: true,
         refresh_token: true,
         access_token_expires_at: true,

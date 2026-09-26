@@ -33,6 +33,7 @@ export async function loadClassroom({ request, params }: LoaderFunctionArgs) {
           provider_id: true,
           github_installation_id: true,
           gitlab_connection_id: true,
+          base_url: true,
         },
       },
       memberships: {

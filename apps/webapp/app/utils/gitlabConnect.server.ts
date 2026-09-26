@@ -20,6 +20,8 @@ export interface GitLabConnectState {
   verifier: string;
   userId: string;
   returnTo: string;
+  /** The instance the grant is on (null: the default instance). */
+  instanceId: string | null;
 }
 
 export const gitlabConnectRedirectUri = () =>

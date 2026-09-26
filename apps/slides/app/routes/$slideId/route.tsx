@@ -1,4 +1,5 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
+import { gitWeb } from '@classmoji/utils';
 import { useLoaderData, useFetcher, data, redirect } from 'react-router';
 import { Tooltip, Popconfirm } from 'antd';
 import getPrisma from '@classmoji/database';
@@ -246,9 +247,12 @@ export const loader = async ({
     deckAccessFor('viewer', { canEdit, previewActive }, slide)
   );
 
-  // GitHub's free diff UI for the pending preview (branch segment URL-encoded —
-  // preview branch names contain slashes).
-  const diffUrl = `https://github.com/${gitOrgLogin}/${repo}/compare/main...${encodeURIComponent(previewBranch)}`;
+  // The provider's own diff UI for the pending preview (branch segment
+  // URL-encoded — preview branch names contain slashes).
+  const diffUrl = gitWeb({
+    provider: slide.classroom.git_organization?.provider,
+    login: gitOrgLogin,
+  }).contentCompare(repo, 'main', previewBranch);
 
   // Two reads, and the split is deliberate.
   //

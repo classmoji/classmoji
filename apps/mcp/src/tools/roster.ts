@@ -44,10 +44,10 @@ export const rosterAddStudentTool: ToolDefinition<RosterAddStudentArgs> = {
   title: 'Add students to the roster',
   description:
     'Adds students to the classroom roster by email (bulk). Owner only. Existing Classmoji users ' +
-    'are enrolled immediately (on Github still pending their org invite; on Gitlab active once they open Classmoji with Gitlab connected); unknown emails get an ' +
-    'invitation row. Sends a real email to every student — NOT idempotent, calling twice emails ' +
-    'twice. Does not touch Github/Gitlab or create repos; students get their access + repos when ' +
-    'they first sign in and join.',
+    'are enrolled immediately (on Github still pending their org invite; on Gitlab active right away ' +
+    'if they already have Gitlab, with their projects created now, else on their first Gitlab sign-in); ' +
+    'unknown emails get an invitation row. Sends a real email to every student — NOT idempotent, ' +
+    'calling twice emails twice.',
   scope: 'write',
   roles: OWNER_ONLY,
   inputSchema: {
@@ -88,6 +88,10 @@ export const rosterAddStudentTool: ToolDefinition<RosterAddStudentArgs> = {
 
     if (result.emails.length > 0) {
       await Tasks.sendBatchEmailTask.trigger({ emails: result.emails.map(e => e.payload) });
+    }
+    // Gitlab students who already have Gitlab: create their projects now.
+    for (const activation of result.activations) {
+      await tasks.trigger('activate_membership', activation);
     }
 
     return ok({

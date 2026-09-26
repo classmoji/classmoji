@@ -470,7 +470,7 @@ export const PreviewBar = ({
                 rel="noopener noreferrer"
                 className={`${actionButtonBase} inline-flex items-center gap-1 text-amber-900 dark:text-amber-200 ring-1 ring-amber-300 dark:ring-amber-700 hover:bg-amber-100 dark:hover:bg-amber-900/40`}
               >
-                GitHub diff
+                View diff
                 <IconExternalLink size={14} />
               </a>
             )}
