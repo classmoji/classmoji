@@ -11,6 +11,15 @@
  * since Cloudinary can't access localhost. External URLs are passed directly.
  *
  * Returns the Cloudinary secure URL which can replace the original video src.
+ *
+ * ## Order of the checks
+ *
+ * The slide arrives in the BODY, so the slide's own edit gate cannot run before
+ * the body is read. What can run first is the session check: an anonymous
+ * caller is refused before a byte is read. The body is then read through a
+ * byte-counting reader capped at `CLOUDINARY_FORM_MAX_BYTES` — its two fields
+ * are a URL and an id, never file bytes — and only then is the slide looked up
+ * and `assertSlideAccess` applied.
  */
 
 import { v2 as cloudinary } from 'cloudinary';
@@ -18,12 +27,38 @@ import getPrisma from '@classmoji/database';
 import { ClassmojiService } from '@classmoji/services';
 import { isDeckSlide } from '@classmoji/services/slides';
 import { ContentService } from '@classmoji/content';
-import { assertSlideAccess } from '@classmoji/auth/server';
+import { assertSlideAccess, getAuthSession } from '@classmoji/auth/server';
+import { UploadTooLargeError, readLimitedFormData } from '@classmoji/utils/upload-limit';
 import { fetchContent, getMimeType } from '~/utils/contentProxy';
 import { deckOnlyMessage } from '~/utils/slideKind';
 
+/** The most this route reads of a body: two short text fields. */
+const CLOUDINARY_FORM_MAX_BYTES = 64 * 1024;
+
+function jsonResponse(body: Record<string, unknown>, status: number): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { 'Content-Type': 'application/json' },
+  });
+}
+
 export const action = async ({ request }: { request: Request }) => {
-  const formData = await request.formData();
+  // 1. A session, before the body is touched. See "Order of the checks".
+  const authData = await getAuthSession(request);
+  if (!authData) {
+    return jsonResponse({ error: 'Sign in to upload video.' }, 401);
+  }
+
+  // 2. The body, capped.
+  let formData: FormData;
+  try {
+    formData = await readLimitedFormData(request, CLOUDINARY_FORM_MAX_BYTES);
+  } catch (error: unknown) {
+    if (error instanceof UploadTooLargeError) {
+      return jsonResponse({ error: 'Request body is too large.' }, 413);
+    }
+    throw error;
+  }
   const videoUrl = formData.get('videoUrl') as string | null;
   const slideId = formData.get('slideId') as string | null;
 
@@ -55,7 +90,7 @@ export const action = async ({ request }: { request: Request }) => {
       });
     }
 
-    // Authorization: require edit permission
+    // 3. Authorization: require edit permission on the slide the body named
     await assertSlideAccess({
       request,
       slideId,
