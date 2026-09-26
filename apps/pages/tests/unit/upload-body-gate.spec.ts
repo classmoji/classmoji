@@ -62,4 +62,21 @@ test.describe('page uploads read the body after the gate', () => {
     expect(status).toBeLessThan(read);
     expect(action).not.toContain('await request.formData()');
   });
+
+  test('the page action reads a JSON save capped, after the same gates', () => {
+    const action = PAGE_ACTION_SOURCE.slice(PAGE_ACTION_SOURCE.indexOf('export const action'));
+    const status = action.indexOf('pageMutationBlocked(page.classroom, membership.role)');
+    const read = action.indexOf('data = await readPageJsonBody(request);');
+
+    for (const at of [status, read]) expect(at).toBeGreaterThan(-1);
+    expect(status).toBeLessThan(read);
+    expect(action).not.toContain('await request.json()');
+    // Twice the repository's file cap: the document rides as an escaped string.
+    expect(PAGE_ACTION_SOURCE).toContain(
+      'const PAGE_JSON_BODY_MAX_BYTES = 2 * REPO_REST_MAX_BYTES + MULTIPART_OVERHEAD_BYTES;'
+    );
+    expect(PAGE_ACTION_SOURCE).toContain(
+      'const bytes = await readLimitedBody(request.body, PAGE_JSON_BODY_MAX_BYTES);'
+    );
+  });
 });

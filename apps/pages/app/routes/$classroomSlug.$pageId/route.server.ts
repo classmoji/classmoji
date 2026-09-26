@@ -1,7 +1,14 @@
 import { redirect } from 'react-router';
-import { REPO_REST_MAX_BYTES, repoFileTooLargeMessage } from '@classmoji/utils/repo-limits';
 import {
+  REPO_REST_MAX_BYTES,
+  REPO_REST_MAX_LABEL,
+  repoFileTooLargeMessage,
+} from '@classmoji/utils/repo-limits';
+import {
+  MULTIPART_OVERHEAD_BYTES,
   UploadTooLargeError,
+  declaredBodyTooLarge,
+  readLimitedBody,
   readLimitedFormData,
   uploadBodyLimit,
 } from '@classmoji/utils/upload-limit';
@@ -23,6 +30,36 @@ import {
   canonicalizeOpsAssets,
   resolveDocumentAssets,
 } from '~/utils/assetRefs.server.ts';
+
+/**
+ * The most a JSON request to the page action may send.
+ *
+ * The largest one is a whole-document save, which carries the page's
+ * `content.json` — itself at most `REPO_REST_MAX_BYTES`, the most the
+ * repository will commit — as a STRING inside the JSON body. Escaping that
+ * string adds a backslash before every quote, and BlockNote JSON is mostly
+ * quotes and short values, so the body is allowed twice the file plus slack
+ * for the other fields: room for any page the repository could store, and
+ * still a bound.
+ */
+const PAGE_JSON_BODY_MAX_BYTES = 2 * REPO_REST_MAX_BYTES + MULTIPART_OVERHEAD_BYTES;
+
+/** What a person reads when a save is over that. */
+const PAGE_TOO_LARGE_MESSAGE = `This page is larger than the ${REPO_REST_MAX_LABEL} your course repository accepts.`;
+
+/**
+ * The JSON body, read through the byte-counting reader. Throws
+ * `UploadTooLargeError` when it is over `PAGE_JSON_BODY_MAX_BYTES`, and the
+ * parser's own error for anything that is not JSON.
+ */
+async function readPageJsonBody(request: Request): Promise<Record<string, unknown>> {
+  if (declaredBodyTooLarge(request.headers, PAGE_JSON_BODY_MAX_BYTES)) {
+    throw new UploadTooLargeError(PAGE_JSON_BODY_MAX_BYTES);
+  }
+  if (!request.body) return (await request.json()) as Record<string, unknown>;
+  const bytes = await readLimitedBody(request.body, PAGE_JSON_BODY_MAX_BYTES);
+  return JSON.parse(new TextDecoder().decode(bytes)) as Record<string, unknown>;
+}
 
 /** Extensions a page cover may have — the image half of the upload allowlist. */
 const COVER_IMAGE_EXTENSION = /\.(png|jpe?g|gif|webp|svg)$/i;
@@ -356,7 +393,15 @@ export const action = async ({
     }
     data = { intent: formData.get('intent') };
   } else {
-    data = await request.json();
+    // Read capped, and only now, after the same gates. See PAGE_JSON_BODY_MAX_BYTES.
+    try {
+      data = await readPageJsonBody(request);
+    } catch (error: unknown) {
+      if (error instanceof UploadTooLargeError) {
+        return Response.json({ error: PAGE_TOO_LARGE_MESSAGE }, { status: 413 });
+      }
+      throw error;
+    }
   }
   const { intent } = data;
 

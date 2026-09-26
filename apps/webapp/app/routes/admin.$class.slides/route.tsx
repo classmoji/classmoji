@@ -24,6 +24,7 @@ import {
 import { ClassmojiService, isDeckSlide, slideKindLabel, slideLinkHost } from '@classmoji/services';
 import { TableActionButtons, RecentViewers } from '~/components';
 import { SlideActionLink, SlideKindChip } from '~/components/features/slides';
+import { SMALL_FORM_TOO_LARGE_MESSAGE, readSmallForm } from '~/utils/smallFormBody.server';
 import type { Route } from './+types/route';
 
 /**
@@ -116,13 +117,9 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
 
 export const action = async ({ request, params }: Route.ActionArgs) => {
   const classSlug = params.class!;
-  const formData = await request.formData();
 
-  const slideId = formData.get('slideId') as string;
-  const field = formData.get('field') as string;
-  const value = formData.get('value') as string;
-
-  // Authorization: require OWNER or TEACHER to modify slide settings
+  // Authorization: require OWNER or TEACHER to modify slide settings. The
+  // classroom is in the URL, so the gate runs before a byte of the body is read.
   const { userId, classroom, membership } = await assertClassroomAccess({
     request,
     classroomSlug: classSlug,
@@ -131,6 +128,14 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
     attemptedAction: 'update_slide_visibility',
   });
   assertClassroomMutationAllowed({ status: classroom.status, role: membership!.role });
+
+  // Three short fields, read capped.
+  const formData = await readSmallForm(request);
+  if (!formData) return { error: SMALL_FORM_TOO_LARGE_MESSAGE };
+
+  const slideId = formData.get('slideId') as string;
+  const field = formData.get('field') as string;
+  const value = formData.get('value') as string;
 
   if (!slideId) {
     return { error: 'Slide not found' };

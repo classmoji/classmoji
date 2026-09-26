@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { useLoaderData, Link, useFetcher } from 'react-router';
+import { useLoaderData, Link, useFetcher, data } from 'react-router';
 import { Popconfirm, Modal, Input, Tooltip, Spin } from 'antd';
 
 import { useToast } from '~/hooks';
 import getPrisma from '@classmoji/database';
 import { getAuthSession, assertSlideAccess } from '@classmoji/auth/server';
+import { UploadTooLargeError, readLimitedFormData } from '@classmoji/utils/upload-limit';
 import { ClassmojiService } from '@classmoji/services';
 import { ContentService } from '@classmoji/content';
 import { isDeckSlide, slideService } from '@classmoji/services/slides';
@@ -151,12 +152,33 @@ export const loader = async ({ request }: { request: Request }) => {
   };
 };
 
-export const action = async ({ request }: { request: Request }) => {
-  const formData = await request.formData();
-  const intent = formData.get('intent');
+/**
+ * The most this action reads of a body. Every intent posts a few short text
+ * fields (an intent, a slide id, a title), never a file.
+ */
+const INDEX_ACTION_BODY_MAX_BYTES = 64 * 1024;
 
-  // Get auth for actions that need userId
+export const action = async ({ request }: { request: Request }) => {
+  // A session before the body is touched. Every intent needs one — each is
+  // gated by `assertSlideAccess` below, which refuses an anonymous caller — and
+  // this refusal is the same for every slide id, so it tells a caller nothing
+  // about which decks exist.
   const authData = await getAuthSession(request);
+  if (!authData) {
+    return data({ error: 'Sign in to continue.' }, { status: 401 });
+  }
+
+  // Then the body, through the byte-counting reader.
+  let formData: FormData;
+  try {
+    formData = await readLimitedFormData(request, INDEX_ACTION_BODY_MAX_BYTES);
+  } catch (error: unknown) {
+    if (error instanceof UploadTooLargeError) {
+      return data({ error: 'Request body is too large.' }, { status: 413 });
+    }
+    throw error;
+  }
+  const intent = formData.get('intent');
 
   if (intent === 'delete') {
     const slideId = formData.get('slideId') as string | null;
@@ -201,12 +223,10 @@ export const action = async ({ request }: { request: Request }) => {
     const slideId = formData.get('slideId') as string | null;
     if (!slideId) return { intent: 'thumbnail', outcome: 'invalid' };
 
-    // A SESSION first. This endpoint spends a render — a booted browser, a
-    // commit into a content repo — and the loader that produces the placeholder
-    // cards it answers for is behind a session already. Anonymous callers get
-    // the same `rate-limited` shape as everything else here rather than a 401,
-    // because a distinguishable refusal is an oracle for which slide ids exist.
-    if (!authData) return { intent: 'thumbnail', outcome: 'rate-limited' };
+    // A SESSION first — checked at the top of the action, before the body was
+    // read. This endpoint spends a render — a booted browser, a commit into a
+    // content repo — and the loader that produces the placeholder cards it
+    // answers for is behind a session already.
 
     // Then the same gate the card's own link is behind: a viewer may ask for a
     // picture of a deck they may open, and nothing else. A refusal answers the
@@ -473,7 +493,7 @@ export const action = async ({ request }: { request: Request }) => {
           slug: newSlug,
           content_path: newContentPath,
           classroom_id: slide.classroom_id,
-          created_by: authData?.userId || slide.created_by,
+          created_by: authData.userId || slide.created_by,
           is_draft: slide.is_draft,
           is_public: slide.is_public,
           allow_team_edit: slide.allow_team_edit,
