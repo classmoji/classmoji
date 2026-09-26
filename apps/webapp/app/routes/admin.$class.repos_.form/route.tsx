@@ -169,7 +169,9 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
 
   const data = await request.json();
 
-  // Extract fields that shouldn't go to Prisma
+  // Extract fields that shouldn't go to Prisma. moduleData is never written
+  // as-is: the service keeps only the columns the form edits
+  // (repository.REPOSITORY_FORM_FIELDS).
   const {
     organization: _organization,
     tag,
@@ -179,7 +181,44 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
     ...moduleData
   } = data;
 
-  // Helper to sync repository-level content links
+  const saveError = (error: string) => ({ error, action: ActionTypes.SAVE_ASSIGNMENT });
+
+  /** Non-empty string ids from a body value that should be a list of ids. */
+  const idList = (value: unknown): string[] =>
+    Array.isArray(value)
+      ? value.filter((id): id is string => typeof id === 'string' && id.length > 0)
+      : [];
+
+  /** A tag id is usable only if it is one of this classroom's tags (or absent). */
+  const isClassroomTag = async (tagId: unknown) => {
+    if (!tagId) return true;
+    const tags = await ClassmojiService.organizationTag.findByClassroomId(classroom.id);
+    return tags.some(t => t.id === tagId);
+  };
+
+  // Linked pages and slides are limited to this classroom's own; other ids are
+  // ignored rather than linked.
+  const classroomPageIds = async (ids: string[]) => {
+    if (ids.length === 0) return [];
+    const rows = await getPrisma().page.findMany({
+      where: { id: { in: ids }, classroom_id: classroom.id },
+      select: { id: true },
+    });
+    const owned = new Set(rows.map(r => r.id));
+    return ids.filter(id => owned.has(id));
+  };
+  const classroomSlideIds = async (ids: string[]) => {
+    if (ids.length === 0) return [];
+    const rows = await getPrisma().slide.findMany({
+      where: { id: { in: ids }, classroom_id: classroom.id },
+      select: { id: true },
+    });
+    const owned = new Set(rows.map(r => r.id));
+    return ids.filter(id => owned.has(id));
+  };
+
+  // Helper to sync repository-level content links. Only called with a
+  // repository already known to belong to this classroom.
   const syncModuleContentLinks = async (moduleId: string) => {
     // Get current links for this repository
     const currentPageLinks = await getPrisma().pageLink.findMany({
@@ -194,8 +233,8 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
     const currentPageIds = currentPageLinks.map(l => l.page_id);
     const currentSlideIds = currentSlideLinks.map(l => l.slide_id);
 
-    const newPageIds = linkedPageIds || [];
-    const newSlideIds = linkedSlideIds || [];
+    const newPageIds = await classroomPageIds(idList(linkedPageIds));
+    const newSlideIds = await classroomSlideIds(idList(linkedSlideIds));
 
     // Pages to add and remove
     const pagesToAdd = newPageIds.filter((id: string) => !currentPageIds.includes(id));
@@ -270,12 +309,15 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
       }
     },
     async create() {
+      if (!(await isClassroomTag(tag))) {
+        return saveError('Please choose a team tag from this classroom.');
+      }
+
       try {
-        const createdModule = await ClassmojiService.repository.create({
-          ...moduleData,
-          classroom_id: classroom.id,
-          tag_id: tag || null,
-        });
+        // Form-owned columns only; the classroom always comes from the route.
+        const createdModule = await ClassmojiService.repository.create(
+          ClassmojiService.repository.createFromFormData(moduleData, classroom.id, tag || null)
+        );
 
         // Sync repository-level content links
         await syncModuleContentLinks(createdModule.id);
@@ -300,13 +342,31 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
       }
     },
     async update() {
+      // The repository must belong to this classroom before anything is
+      // written: the form fields, its content links and its autograding tests.
+      const repositoryId = typeof moduleData.id === 'string' ? moduleData.id : '';
+      const repository = repositoryId
+        ? await getPrisma().repository.findFirst({
+            where: { id: repositoryId, classroom_id: classroom.id },
+            select: { id: true },
+          })
+        : null;
+      if (!repository) return saveError('Repository not found.');
+
+      if (!(await isClassroomTag(tag))) {
+        return saveError('Please choose a team tag from this classroom.');
+      }
+
       try {
-        await ClassmojiService.repository.updateFromForm({ ...moduleData, tag });
+        await ClassmojiService.repository.updateFromForm(
+          { ...moduleData, id: repository.id, tag },
+          classroom.id
+        );
 
         // Sync repository-level content links
-        await syncModuleContentLinks(moduleData.id);
+        await syncModuleContentLinks(repository.id);
         await ClassmojiService.autogradingTest.replaceForRepository(
-          moduleData.id,
+          repository.id,
           autogradingTests || []
         );
 

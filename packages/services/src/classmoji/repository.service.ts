@@ -283,27 +283,104 @@ export const update = async (
 };
 
 /**
+ * The Repository columns the repository form (admin.$class.repos_.form) edits,
+ * and so the only ones `createFromFormData` / `updateFromForm` will write. They
+ * are exactly the form schema's fields (schema.ts) minus the ones the route
+ * handles itself: `id` (the target), `tag` (becomes tag_id, checked against the
+ * classroom) and `organization` (display only). Anything else in a submitted
+ * body — classroom_id, slug, is_published, … — is ignored.
+ *
+ * `title` is editable in the form and stays editable; `slug` is set once on
+ * create and never follows it.
+ */
+export const REPOSITORY_FORM_FIELDS = [
+  'title',
+  'type',
+  'template',
+  'description',
+  'team_formation_mode',
+  'team_formation_deadline',
+  'max_team_size',
+  'project_template_id',
+  'project_template_title',
+] as const;
+
+/**
+ * The form-owned columns of a submitted form body, ready for Prisma: absent
+ * fields are left out, and the team formation deadline (sent as an ISO string)
+ * becomes a Date.
+ */
+export const pickRepositoryFormFields = (
+  values: Record<string, unknown>
+): Record<string, unknown> => {
+  const data: Record<string, unknown> = {};
+  for (const field of REPOSITORY_FORM_FIELDS) {
+    if (values[field] !== undefined) data[field] = values[field];
+  }
+  const deadline = data.team_formation_deadline;
+  if (deadline && !(deadline instanceof Date)) {
+    data.team_formation_deadline = new Date(deadline as string);
+  }
+  return data;
+};
+
+/**
+ * Create-data for a Repository from a repository-form body: the form-owned
+ * columns only, in the given classroom, with the given tag. The caller has
+ * already checked that the tag belongs to that classroom.
+ */
+export const createFromFormData = (
+  values: Record<string, unknown>,
+  classroomId: string,
+  tagId: string | null
+): RepositoryCreateInput =>
+  ({
+    ...pickRepositoryFormFields(values),
+    classroom_id: classroomId,
+    tag_id: tagId,
+  }) as RepositoryCreateInput;
+
+/**
  * Update a Repository from the repository form. Assignments are managed on
  * the module page, not here.
- * @param {Object} values - Update values
- * @returns {Promise<Object>}
+ *
+ * Scoped to `classroomId` like `update`: the write is an `updateMany` on
+ * (id, classroom_id), so a repository of another classroom is never touched —
+ * a count other than 1 throws 'Repository not found in classroom'. Only the
+ * form-owned columns (REPOSITORY_FORM_FIELDS) are written. As before, the tag
+ * is applied only to a GROUP repository, and only when one is given; it must
+ * be a tag of this classroom ('Tag not found in classroom' otherwise).
+ *
+ * @param {Object} values - The form body: id, the form fields, and tag
+ * @param {string} classroomId - UUID of the authorized Classroom
+ * @returns {Promise<Object>} The updated repository with assignments and tag
  */
-export const updateFromForm = async (values: RepositoryUpdateValues) => {
-  const { id, tag, ...updateData } = values;
+export const updateFromForm = async (values: RepositoryUpdateValues, classroomId: string) => {
+  const { id, tag } = values;
+  assertScopedIds(id, classroomId);
 
-  // Coerce repository-level dates
-  if (updateData.team_formation_deadline && !(updateData.team_formation_deadline instanceof Date)) {
-    updateData.team_formation_deadline = new Date(updateData.team_formation_deadline);
+  const applyTag = values.type === 'GROUP' && Boolean(tag);
+  if (applyTag) {
+    const owned = await getPrisma().tag.findFirst({
+      where: { id: String(tag), classroom_id: classroomId },
+      select: { id: true },
+    });
+    if (!owned) throw new Error('Tag not found in classroom');
   }
 
-  const repositoryUpdateData = {
-    ...(updateData as Prisma.RepositoryUncheckedUpdateInput),
-    ...(updateData.type === 'GROUP' && tag && { tag_id: tag }),
-  } satisfies Prisma.RepositoryUncheckedUpdateInput;
+  const data = {
+    ...pickRepositoryFormFields(values),
+    ...(applyTag ? { tag_id: String(tag) } : {}),
+  } as Prisma.RepositoryUncheckedUpdateManyInput;
 
-  return getPrisma().repository.update({
-    where: { id },
-    data: repositoryUpdateData,
+  const { count } = await getPrisma().repository.updateMany({
+    where: { id, classroom_id: classroomId },
+    data,
+  });
+  if (count !== 1) throw new Error('Repository not found in classroom');
+
+  return getPrisma().repository.findFirst({
+    where: { id, classroom_id: classroomId },
     include: { assignments: true, tag: true },
   });
 };
