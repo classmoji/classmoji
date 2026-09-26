@@ -14,12 +14,14 @@
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import type { z } from 'zod';
 import type { ToolContext } from '../../mcp/registry.ts';
 
 const mocks = vi.hoisted(() => ({
   findById: vi.fn(),
   findByClassroomId: vi.fn(),
   findByAssignmentId: vi.fn(),
+  gradeFindById: vi.fn(),
   addGradeToGitRepoAssignment: vi.fn(),
   removeGradeFromGitRepoAssignment: vi.fn(),
   auditCreate: vi.fn(),
@@ -29,7 +31,10 @@ vi.mock('@classmoji/services', () => ({
   ClassmojiService: {
     gitRepoAssignment: { findById: (...a: unknown[]) => mocks.findById(...a) },
     emojiMapping: { findByClassroomId: (...a: unknown[]) => mocks.findByClassroomId(...a) },
-    assignmentGrade: { findByAssignmentId: (...a: unknown[]) => mocks.findByAssignmentId(...a) },
+    assignmentGrade: {
+      findByAssignmentId: (...a: unknown[]) => mocks.findByAssignmentId(...a),
+      findById: (...a: unknown[]) => mocks.gradeFindById(...a),
+    },
     audit: { create: (...a: unknown[]) => mocks.auditCreate(...a) },
   },
   HelperService: {
@@ -39,7 +44,7 @@ vi.mock('@classmoji/services', () => ({
   },
 }));
 
-const { gradeAddTool, gradeRemoveAllTool } = await import('../grades.ts');
+const { gradeAddTool, gradeRemoveTool, gradeRemoveAllTool } = await import('../grades.ts');
 
 const CTX: ToolContext = {
   viewer: { userId: 'ta-1', clientId: 'c', scopes: new Set(['read', 'write']) },
@@ -153,5 +158,93 @@ describe('grade_remove_all per-grade audit (U9)', () => {
     expect(
       (mocks.auditCreate.mock.calls[0][0] as { data: { grade_id: string } }).data.grade_id
     ).toBe('g1');
+  });
+});
+
+// ─── ISSUE-mode submissions: the id is the numeric GitHub issue id ──────────
+
+describe('numeric submission ids (ISSUE mode: id == GitHub issue id)', () => {
+  const NUMERIC_ID = '5482151816';
+  const GRADE_ID = '33333333-3333-4333-8333-333333333333';
+
+  function numericGra(grades: Array<{ id: string; emoji: string }>) {
+    return { ...gra(grades), id: NUMERIC_ID };
+  }
+
+  it('every grade tool accepts a numeric submission id at the schema; grade_id stays a uuid', () => {
+    for (const tool of [gradeAddTool, gradeRemoveTool, gradeRemoveAllTool]) {
+      const field = tool.inputSchema.git_repo_assignment_id as z.ZodTypeAny;
+      expect(field.safeParse(NUMERIC_ID).success, tool.name).toBe(true);
+      expect(field.safeParse('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa').success, tool.name).toBe(true);
+      expect(field.safeParse('gra-1').success, tool.name).toBe(false);
+    }
+    const gradeId = gradeRemoveTool.inputSchema.grade_id as z.ZodTypeAny;
+    expect(gradeId.safeParse(NUMERIC_ID).success).toBe(false);
+  });
+
+  it('grade_add loads, grades and audits the numeric id unchanged', async () => {
+    mocks.findById.mockResolvedValue(numericGra([]));
+    mocks.findByAssignmentId.mockResolvedValue([
+      { id: 'g-new', emoji: '🟢', grader: { login: 'ta' } },
+    ]);
+
+    const payload = parse(
+      await gradeAddTool.handler({ ...ARGS, git_repo_assignment_id: NUMERIC_ID }, CTX)
+    );
+    expect(payload).toMatchObject({ success: true, git_repo_assignment_id: NUMERIC_ID });
+    expect(mocks.findById).toHaveBeenCalledWith(NUMERIC_ID);
+    expect(mocks.addGradeToGitRepoAssignment).toHaveBeenCalledWith(
+      expect.objectContaining({ gitRepoAssignment: { id: NUMERIC_ID } })
+    );
+    expect(mocks.auditCreate.mock.calls[0][0]).toMatchObject({ resource_id: NUMERIC_ID });
+  });
+
+  it('grade_remove matches the grade to the numeric submission', async () => {
+    mocks.findById.mockResolvedValue(numericGra([]));
+    mocks.gradeFindById.mockResolvedValue({
+      id: GRADE_ID,
+      emoji: '🟢',
+      git_repo_assignment_id: NUMERIC_ID,
+    });
+    mocks.removeGradeFromGitRepoAssignment.mockResolvedValue(undefined);
+
+    const payload = parse(
+      await gradeRemoveTool.handler(
+        { classroom: 'org/winter-2025', git_repo_assignment_id: NUMERIC_ID, grade_id: GRADE_ID },
+        CTX
+      )
+    );
+    expect(payload).toMatchObject({ success: true, removed: { id: GRADE_ID } });
+    expect(mocks.auditCreate.mock.calls[0][0]).toMatchObject({ resource_id: NUMERIC_ID });
+  });
+
+  it('grade_remove_all clears the numeric submission', async () => {
+    mocks.findById.mockResolvedValue(numericGra([]));
+    mocks.findByAssignmentId.mockResolvedValue([{ id: 'g1', emoji: '🟢' }]);
+    mocks.removeGradeFromGitRepoAssignment.mockResolvedValue(undefined);
+
+    const payload = parse(
+      await gradeRemoveAllTool.handler(
+        { classroom: 'org/winter-2025', git_repo_assignment_id: NUMERIC_ID },
+        CTX
+      )
+    );
+    expect(payload.removed_count).toBe(1);
+    expect(mocks.findByAssignmentId).toHaveBeenCalledWith(NUMERIC_ID);
+  });
+
+  it('a numeric id from another classroom is the uniform not_found', async () => {
+    mocks.findById.mockResolvedValue({
+      ...numericGra([]),
+      git_repo: { classroom_id: 'class-2', student_id: 'student-1', team_id: null },
+    });
+
+    await expect(
+      gradeAddTool.handler({ ...ARGS, git_repo_assignment_id: NUMERIC_ID }, CTX)
+    ).rejects.toMatchObject({
+      kind: 'not_found',
+      message: 'Submission not found in this classroom',
+    });
+    expect(mocks.addGradeToGitRepoAssignment).not.toHaveBeenCalled();
   });
 });

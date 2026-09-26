@@ -1,27 +1,35 @@
 /**
  * Grader assignment tools — grader_assign / grader_unassign.
  *
- * ROUTE-DERIVED TIER: the web actions live in
- * apps/webapp/app/routes/admin.$class.repos_.$title/action.ts (addGrader /
- * removeGrader) and .assign-graders (bulk), BOTH gated by
- * requireClassroomAdmin — OWNER only. Plan §6 guessed "teaching-team
- * (confirm)"; the routes win (plan §0), so these tools are OWNER-only.
+ * ROUTE-DERIVED TIER: the web adds and removes graders on the assignment page
+ * (apps/webapp/app/routes/admin.$class.assignments_.$id, re-exported under
+ * /teacher), whose action admits OWNER or TEACHER, and on the owner-only
+ * repository page (admin.$class.repos_.$title/action.ts). The wider of the two
+ * is the web's rule, so grader_assign / grader_unassign are OWNER + TEACHER.
+ * Bulk assignment (.assign-graders) is requireClassroomAdmin, so
+ * grader_assign_bulk stays OWNER only. `roles` is who may CALL a tool; who
+ * may BE a grader is a separate rule, below.
  *
- * Backbone: HelperService.addGraderToGitRepoAssignment /
- * removeGraderFromGitRepoAssignment — these mirror the grader to the GitHub
- * issue assignees AND the DB row; the bare gitRepoAssignmentGrader service
- * would skip the GitHub mirror (plan §5.1).
+ * Backbone: HelperService.addGraderInClassroom / removeGraderInClassroom, the
+ * same classroom-scoped helpers the web actions call, so both surfaces apply
+ * one rule:
+ *   - the submission is loaded from THIS classroom (gitRepoAssignment
+ *     .findByIdInClassroom); a missing or foreign one is `submission_not_found`;
+ *   - the grader must be in the classroom's grader pool
+ *     (gitRepoAssignmentGrader.findEligibleGrader): an ASSISTANT or TEACHER
+ *     membership with is_grader=true, and a stored login. An OWNER, or staff
+ *     without is_grader, is `grader_not_eligible`;
+ *   - the repo name, issue number and login come from stored rows, never the
+ *     request;
+ *   - removal takes the grader from the submission's own grader rows, so
+ *     someone who has since left the pool can still be removed.
+ * The submission check runs before the eligibility check, so a foreign
+ * submission id gets the same not_found whoever is named as grader.
  *
- * ⚠ EXTERNAL SIDE EFFECT / FAILURE MODE (code-read finding): the Helper
- * `await`s the GitHub call BEFORE the DB write with no try/catch, so a GitHub
- * failure (e.g. fake seeded repos, revoked app permissions) aborts the whole
- * operation — it fails CLOSED with no partial DB state, but it also means
- * grader assignment is impossible while GitHub is unreachable. These tools are
- * therefore verified by code-read + typecheck only against seeded (fake) repos.
- *
- * S1: the submission is loaded and classroom-verified; the grader's GitHub
- * login is derived from the DB user row (never the request); the grader must
- * hold a teaching-team membership in THIS classroom.
+ * ⚠ EXTERNAL SIDE EFFECT / FAILURE MODE: the helper `await`s the GitHub
+ * assignee call BEFORE the DB write with no try/catch, so a GitHub failure
+ * aborts the whole operation — it fails CLOSED with no partial DB state. A
+ * submission with no issue number (REPO mode) skips GitHub entirely.
  */
 
 import { AssignGradersError, ClassmojiService, HelperService } from '@classmoji/services';
@@ -30,11 +38,12 @@ import { ToolError } from '../mcp/errors.ts';
 import type { ToolDefinition } from '../mcp/registry.ts';
 import {
   loadAssignmentInClassroom,
-  loadGitRepoAssignmentInClassroom,
   ok,
   OWNER_ONLY,
+  OWNER_TEACHER,
   requireClassroomCtx,
   scopedNotFound,
+  submissionIdSchema,
   writeAudit,
 } from './shared.ts';
 
@@ -54,58 +63,78 @@ async function loadGitOrganization(classroomId: string) {
   return gitOrganization;
 }
 
+/** The eligibility rule, worded for the caller (grader_not_eligible). */
+export const GRADER_NOT_ELIGIBLE_MESSAGE =
+  'That person cannot be a grader here: a grader must be an ASSISTANT or TEACHER in this ' +
+  'classroom marked as a grader (is_grader). staff_update can set is_grader.';
+
 export const graderAssignTool: ToolDefinition<GraderArgs> = {
   name: 'grader_assign',
   annotations: { destructive: false, openWorld: true },
   title: 'Assign a grader',
   description:
-    'Assigns a teaching-team member as grader on a submission. Mirrors the grader to the ' +
-    'GitHub issue assignees. Owner only (matches the web admin repo view).',
+    'Assigns a grader to one submission and mirrors them onto the GitHub issue assignees, like ' +
+    'the web assignment page. Owner or teacher. The grader must be an ASSISTANT or ' +
+    'TEACHER of this classroom marked as a grader (is_grader) — an owner, or staff without ' +
+    'is_grader, is refused; staff_update sets is_grader. git_repo_assignment_id is the `id` from ' +
+    'list_submissions; grader_id is a user id from list_teaching_team (grader_eligible: true). ' +
+    'An eligible grader already on the submission changes nothing and returns ' +
+    'already_assigned: true.',
   scope: 'write',
-  roles: OWNER_ONLY,
+  roles: OWNER_TEACHER,
   inputSchema: {
     classroom: z.string().describe("Classroom reference as 'org/slug'"),
-    git_repo_assignment_id: z.string().uuid().describe('Submission (GitRepoAssignment) id'),
-    grader_id: z.string().uuid().describe('User id of the grader (must be teaching team)'),
+    git_repo_assignment_id: submissionIdSchema().describe('Submission (GitRepoAssignment) id'),
+    grader_id: z
+      .string()
+      .uuid()
+      .describe('User id of the grader (an ASSISTANT or TEACHER with is_grader)'),
   },
   handler: async (args, ctx) => {
     const classroom = requireClassroomCtx(ctx);
-    const gra = await loadGitRepoAssignmentInClassroom(args.git_repo_assignment_id, ctx);
-
-    // The grader must be a teaching-team member of THIS classroom; their
-    // GitHub login comes from the DB row, never the request.
-    const graderMembership = await ClassmojiService.classroomMembership.findByClassroomAndUser(
-      classroom.classroomId,
-      args.grader_id,
-      ['OWNER', 'TEACHER', 'ASSISTANT']
-    );
-    const grader = graderMembership?.user;
-    if (!grader?.login) {
-      throw scopedNotFound('Grader (teaching-team member)');
-    }
-
-    if (gra.graders.some(g => g.grader_id === grader.id)) {
-      return ok({ success: true, already_assigned: true, grader: grader.login });
-    }
-
     const gitOrganization = await loadGitOrganization(classroom.classroomId);
-    await HelperService.addGraderToGitRepoAssignment({
-      repoName: gra.git_repo.name,
+
+    const result = await HelperService.addGraderInClassroom({
+      classroomId: classroom.classroomId,
       gitOrganization,
-      githubIssueNumber: gra.provider_issue_number,
-      graderLogin: grader.login,
-      graderId: grader.id,
-      gitRepoAssignmentId: gra.id,
+      gitRepoAssignmentId: args.git_repo_assignment_id,
+      graderId: args.grader_id,
     });
+
+    switch (result.status) {
+      case 'submission_not_found':
+        throw scopedNotFound('Submission');
+      case 'grader_not_eligible':
+        throw new ToolError('invalid_params', GRADER_NOT_ELIGIBLE_MESSAGE);
+      case 'already_assigned':
+        // Nothing was written, so nothing is audited.
+        return ok({
+          success: true,
+          already_assigned: true,
+          grader: result.graderLogin,
+          git_repo_assignment_id: args.git_repo_assignment_id,
+        });
+    }
 
     await writeAudit(ctx, {
       resource_type: 'GIT_REPO_ASSIGNMENT_GRADER',
-      resource_id: gra.id,
+      resource_id: args.git_repo_assignment_id,
       action: 'CREATE',
-      data: { tool: 'grader_assign', grader_id: grader.id, grader_login: grader.login },
+      data: {
+        tool: 'grader_assign',
+        // `value` joins the audit service's 5s dedup key: assigning two
+        // different graders to one submission must leave two rows.
+        value: args.grader_id,
+        grader_id: args.grader_id,
+        grader_login: result.graderLogin,
+      },
     });
 
-    return ok({ success: true, grader: grader.login, git_repo_assignment_id: gra.id });
+    return ok({
+      success: true,
+      grader: result.graderLogin,
+      git_repo_assignment_id: args.git_repo_assignment_id,
+    });
   },
 };
 
@@ -114,47 +143,51 @@ export const graderUnassignTool: ToolDefinition<GraderArgs> = {
   annotations: { destructive: true, openWorld: true },
   title: 'Unassign a grader',
   description:
-    'Removes a grader from a submission and from the GitHub issue assignees. Owner only.',
+    'Removes a grader from one submission and from the GitHub issue assignees, like the web ' +
+    'assignment page. Owner or teacher. The grader must currently be assigned to the ' +
+    'submission; anyone assigned can be removed, even if they are no longer marked as a grader. ' +
+    'git_repo_assignment_id is the `id` from list_submissions.',
   scope: 'write',
-  roles: OWNER_ONLY,
+  roles: OWNER_TEACHER,
   inputSchema: {
     classroom: z.string().describe("Classroom reference as 'org/slug'"),
-    git_repo_assignment_id: z.string().uuid().describe('Submission (GitRepoAssignment) id'),
+    git_repo_assignment_id: submissionIdSchema().describe('Submission (GitRepoAssignment) id'),
     grader_id: z.string().uuid().describe('User id of the currently assigned grader'),
   },
   handler: async (args, ctx) => {
     const classroom = requireClassroomCtx(ctx);
-    const gra = await loadGitRepoAssignmentInClassroom(args.git_repo_assignment_id, ctx);
-
-    // Derive the grader from the EXISTING assignment row (works even if the
-    // user has since left the classroom).
-    const assigned = gra.graders.find(g => g.grader_id === args.grader_id);
-    if (!assigned?.grader?.login) {
-      throw scopedNotFound('Grader assignment');
-    }
-
     const gitOrganization = await loadGitOrganization(classroom.classroomId);
-    await HelperService.removeGraderFromGitRepoAssignment({
-      repoName: gra.git_repo.name,
+
+    const result = await HelperService.removeGraderInClassroom({
+      classroomId: classroom.classroomId,
       gitOrganization,
-      githubIssueNumber: gra.provider_issue_number,
-      graderLogin: assigned.grader.login,
-      graderId: assigned.grader_id,
-      gitRepoAssignmentId: gra.id,
+      gitRepoAssignmentId: args.git_repo_assignment_id,
+      graderId: args.grader_id,
     });
+
+    switch (result.status) {
+      case 'submission_not_found':
+        throw scopedNotFound('Submission');
+      case 'grader_not_assigned':
+        throw new ToolError(
+          'invalid_params',
+          'That person is not assigned as a grader on this submission'
+        );
+    }
 
     await writeAudit(ctx, {
       resource_type: 'GIT_REPO_ASSIGNMENT_GRADER',
-      resource_id: gra.id,
+      resource_id: args.git_repo_assignment_id,
       action: 'DELETE',
       data: {
         tool: 'grader_unassign',
-        grader_id: assigned.grader_id,
-        grader_login: assigned.grader.login,
+        value: args.grader_id,
+        grader_id: args.grader_id,
+        grader_login: result.graderLogin,
       },
     });
 
-    return ok({ success: true, removed_grader: assigned.grader.login });
+    return ok({ success: true, removed_grader: result.graderLogin });
   },
 };
 
