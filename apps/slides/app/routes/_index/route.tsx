@@ -432,17 +432,15 @@ export const action = async ({ request }: { request: Request }) => {
         },
       };
 
-      // Both rewrites below record what they wrote. index.html and deck.json
-      // are READ through the asset map now (fetchContentText), and the copy's
-      // paths are new, so the map has no row for them until the push webhook
-      // lands.
+      // Everything the copy wrote goes into the asset map now, rather than when
+      // the push webhook lands: index.html and deck.json are READ through the
+      // map (fetchContentText), and every path in the copy is new. The files
+      // `copyFolder` committed come with their blob shas; the two rewrites below
+      // then replace index.html's and deck.json's with the rewritten ones.
       //
-      // Only what the REWRITES write, though: `copyFolder` above is what puts
-      // the files there, and it reports no shas, so a deck whose content had no
-      // self-referencing paths to rewrite gets no rows here. That is a missing
-      // row, not a wrong one — the read falls back to the contents API and
-      // serves the right bytes — so it costs one GitHub call per view until the
-      // webhook arrives rather than showing the wrong deck.
+      // `entries` is read defensively: an older `copyFolder` reported paths only,
+      // and a copy without shas simply records nothing until the webhook does.
+      const copiedEntries = (copy as { entries?: Array<{ path: string; sha: string }> }).entries;
       const written: Array<{ path: string; sha: string }> = [];
 
       for (const [path, file] of [
@@ -481,9 +479,13 @@ export const action = async ({ request }: { request: Request }) => {
       }
 
       // Never throws: the copy is already committed, and the next sync writes
-      // the same rows.
+      // the same rows. A rewritten file's sha supersedes the copied one.
       if (slide.classroom_id) {
-        await ClassmojiService.contentAssets.recordContentAssets(slide.classroom_id, written);
+        const rows = new Map<string, { path: string; sha: string }>();
+        for (const entry of [...(copiedEntries ?? []), ...written]) rows.set(entry.path, entry);
+        await ClassmojiService.contentAssets.recordContentAssets(slide.classroom_id, [
+          ...rows.values(),
+        ]);
       }
 
       // Create new database record

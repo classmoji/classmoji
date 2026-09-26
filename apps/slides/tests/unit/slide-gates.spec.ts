@@ -476,6 +476,12 @@ test.describe('the upload endpoints', () => {
     expect(CLOUDINARY_SOURCE).not.toContain('await request.formData()');
   });
 
+  test('a duplicated deck records every copied file in the asset map, rewrites last', () => {
+    const duplicate = INDEX_SOURCE.slice(INDEX_SOURCE.indexOf("if (intent === 'duplicate')"));
+    expect(duplicate).toContain('for (const entry of [...(copiedEntries ?? []), ...written])');
+    expect(duplicate).not.toContain('it reports no shas');
+  });
+
   test('every answer to a deck image upload names its intent, failures included', () => {
     // The image dialog's promise settles only on `intent: 'upload-image'`; an
     // error without it leaves the dialog spinning with no message.
