@@ -98,6 +98,17 @@ describe('assignment page: grader actions', () => {
     expect(mocks.removeGraderInClassroom).toHaveBeenCalledExactlyOnceWith(EXPECTED_SCOPE);
   });
 
+  it('reports a grader already on the submission as a success', async () => {
+    mocks.addGraderInClassroom.mockResolvedValueOnce({
+      status: 'already_assigned',
+      graderLogin: 'ta-bob',
+    });
+    expect(await submit('addGrader', BODY)).toEqual({
+      action: 'add-grader',
+      success: 'Already assigned',
+    });
+  });
+
   it('returns the error shape when the helper refuses', async () => {
     mocks.addGraderInClassroom.mockResolvedValueOnce({ status: 'submission_not_found' });
     expect(await submit('addGrader', BODY)).toEqual({

@@ -94,7 +94,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
 
       return {
         action: ActionTypes.ADD_GRADER,
-        success: 'Grader added',
+        success: result.status === 'already_assigned' ? 'Already assigned' : 'Grader added',
       };
     },
 

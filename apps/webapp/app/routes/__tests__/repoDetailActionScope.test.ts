@@ -224,6 +224,18 @@ describe('repository page: addGrader / removeGrader', () => {
     });
   });
 
+  it('reports a grader already on the submission as a success', async () => {
+    mocks.addGraderInClassroom.mockResolvedValue({
+      status: 'already_assigned',
+      graderLogin: 'ta-bob',
+    });
+
+    expect(await detailAction('addGrader', GRADER_BODY)).toEqual({
+      action: 'add-grader',
+      success: 'Already assigned',
+    });
+  });
+
   it('removes the same way', async () => {
     const result = await detailAction('removeGrader', GRADER_BODY);
 
@@ -338,6 +350,23 @@ describe('repositories list: calculateContributions', () => {
       action: 'CALCULATE_REPO_CONTRIBUTIONS',
       error: 'Repository not found.',
     });
+    expect(mocks.calculateContributions).not.toHaveBeenCalled();
+  });
+
+  it('answers a malformed body with the error shape', async () => {
+    for (const body of [null, 'text', {}, { assignment_id: 42 }, { assignment_id: '' }]) {
+      expect(await listAction(body)).toEqual({ error: 'Invalid request.' });
+    }
+    const notJson = await (list.action as unknown as (args: ActionArgs) => Promise<unknown>)({
+      params: { class: CLASS_SLUG },
+      request: new Request(`http://localhost/admin/${CLASS_SLUG}/repos?/calculateContributions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: '{not json',
+      }),
+    });
+    expect(notJson).toEqual({ error: 'Invalid request.' });
+    expect(mocks.repositoryFindByIdInClassroom).not.toHaveBeenCalled();
     expect(mocks.calculateContributions).not.toHaveBeenCalled();
   });
 });

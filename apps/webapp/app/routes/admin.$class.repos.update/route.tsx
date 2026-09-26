@@ -4,8 +4,10 @@ import { useEffect, useState, useRef } from 'react';
 import { auth, tasks } from '@trigger.dev/sdk';
 import { nanoid } from 'nanoid';
 import { ClassmojiService, getGitProvider, GitHubProvider } from '@classmoji/services';
+import { resolveTemplateRef } from '@classmoji/utils';
 import { requireClassroomAdmin, assertClassroomMutationAllowed } from '~/utils/routeAuth.server';
 import { useDisclosure, useGlobalFetcher } from '~/hooks';
+import { parseUpdateRequest } from './updateRequest.server';
 import type { Route } from './+types/route';
 
 export const loader = async ({ request, params }: Route.LoaderArgs) => {
@@ -115,17 +117,20 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
   });
   assertClassroomMutationAllowed({ status: classroom.status, role: membership!.role });
 
-  const { values, repository: submitted } = await request.json();
+  const parsed = await parseUpdateRequest(request);
+  if (!parsed) return { error: 'Invalid request.' };
+  const { values } = parsed;
 
   // The body names the repository by id only; it is loaded from this classroom,
-  // and the template the student repos are updated from is the stored one.
+  // and the template the student repos are updated from is the stored one. A
+  // bare template name is a repository in the classroom's own organization.
   const repository = await ClassmojiService.repository.findByIdInClassroom(
-    submitted?.id,
+    parsed.repositoryId,
     classroom.id
   );
   if (!repository) return { error: 'Repository not found.' };
-  const template = repository.template;
-  if (typeof template !== 'string' || !template.includes('/')) {
+  const templateRef = resolveTemplateRef(repository.template, classroom.git_organization?.login);
+  if (!templateRef) {
     return { error: 'This repository has no template repository to update from.' };
   }
 
@@ -159,7 +164,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
   );
 
   const repositories = await ClassmojiService.gitRepo.findByRepository(classSlug!, repository.id);
-  const [templateOwner, templateRepo] = template.split('/');
+  const { owner: templateOwner, repo: templateRepo } = templateRef;
 
   const payloads = repositories.map(repo => {
     return {

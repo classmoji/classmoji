@@ -5,8 +5,9 @@
  * The loader reads the repository named by `?id=` from the authorized
  * classroom only (404 otherwise). The action takes only the repository id from
  * the body, loads it from the classroom, and builds the task payload from the
- * STORED template — a template in the body is ignored. A refused id triggers
- * nothing and asks GitHub for nothing.
+ * STORED template — a template in the body is ignored; a bare stored name is a
+ * repository in the classroom's organization. A refused id or a malformed body
+ * triggers nothing and asks GitHub for nothing.
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -147,27 +148,99 @@ describe.each(ROUTES)('%s', (_name, route, params) => {
   });
 
   it('refuses a repository outside this classroom with no GitHub call and no task', async () => {
-    for (const repository of [
-      { id: 'repo-elsewhere', template: 'acme/x' },
-      { id: { not: '' } },
-      null,
-    ]) {
-      expect(await submit({ values: { title: 't' }, repository })).toEqual({
-        error: 'Repository not found.',
-      });
-    }
+    expect(
+      await submit({
+        values: { title: 't' },
+        repository: { id: 'repo-elsewhere', template: 'a/x' },
+      })
+    ).toEqual({ error: 'Repository not found.' });
     expect(mocks.getGitProvider).not.toHaveBeenCalled();
     expect(mocks.octokitRequest).not.toHaveBeenCalled();
     expect(mocks.gitRepoFindByRepository).not.toHaveBeenCalled();
     expect(mocks.batchTrigger).not.toHaveBeenCalled();
   });
 
-  it('refuses a repository with no stored template', async () => {
-    mocks.repositoryFindByIdInClassroom.mockResolvedValue({ ...OWN_REPOSITORY, template: null });
+  it('resolves a stored bare template name against the classroom organization', async () => {
+    mocks.repositoryFindByIdInClassroom.mockResolvedValue({
+      ...OWN_REPOSITORY,
+      template: 'lab-1-template',
+    });
 
-    expect(
-      await submit({ values: { title: 't' }, repository: { id: 'repo-1', template: 'acme/x' } })
-    ).toEqual({ error: 'This repository has no template repository to update from.' });
+    await submit({ values: { title: 't' }, repository: { id: 'repo-1' } });
+
+    expect(mocks.batchTrigger).toHaveBeenCalledWith(
+      'update_git_repo',
+      expect.arrayContaining([
+        expect.objectContaining({
+          payload: expect.objectContaining({
+            templateOwner: 'acme',
+            templateRepo: 'lab-1-template',
+          }),
+        }),
+      ])
+    );
+  });
+
+  it('keeps the owner of a stored owner/repo template', async () => {
+    mocks.repositoryFindByIdInClassroom.mockResolvedValue({
+      ...OWN_REPOSITORY,
+      template: 'course-templates/lab-1',
+    });
+
+    await submit({ values: { title: 't' }, repository: { id: 'repo-1' } });
+
+    expect(mocks.batchTrigger).toHaveBeenCalledWith(
+      'update_git_repo',
+      expect.arrayContaining([
+        expect.objectContaining({
+          payload: expect.objectContaining({
+            templateOwner: 'course-templates',
+            templateRepo: 'lab-1',
+          }),
+        }),
+      ])
+    );
+  });
+
+  it('refuses a repository with no stored template', async () => {
+    for (const template of [null, '', '  /  ']) {
+      mocks.repositoryFindByIdInClassroom.mockResolvedValue({ ...OWN_REPOSITORY, template });
+      expect(
+        await submit({ values: { title: 't' }, repository: { id: 'repo-1', template: 'acme/x' } })
+      ).toEqual({ error: 'This repository has no template repository to update from.' });
+    }
+    expect(mocks.octokitRequest).not.toHaveBeenCalled();
+    expect(mocks.batchTrigger).not.toHaveBeenCalled();
+  });
+
+  it('answers a malformed body with the error shape and no lookup', async () => {
+    const malformed: unknown[] = [
+      null,
+      'text',
+      [],
+      { repository: { id: 'repo-1' } },
+      { values: 'title', repository: { id: 'repo-1' } },
+      { values: { title: 42 }, repository: { id: 'repo-1' } },
+      { values: { title: 't', description: { x: 1 } }, repository: { id: 'repo-1' } },
+      { values: { title: 't', branchName: 7 }, repository: { id: 'repo-1' } },
+      { values: { title: 't' }, repository: { id: { not: '' } } },
+      { values: { title: 't' }, repository: null },
+    ];
+    for (const body of malformed) {
+      expect(await submit(body)).toEqual({ error: 'Invalid request.' });
+    }
+
+    const notJson = await route.action({
+      params,
+      request: new Request(`http://localhost/admin/${CLASS_SLUG}/repos/update`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: '{not json',
+      }),
+    });
+    expect(notJson).toEqual({ error: 'Invalid request.' });
+
+    expect(mocks.repositoryFindByIdInClassroom).not.toHaveBeenCalled();
     expect(mocks.octokitRequest).not.toHaveBeenCalled();
     expect(mocks.batchTrigger).not.toHaveBeenCalled();
   });

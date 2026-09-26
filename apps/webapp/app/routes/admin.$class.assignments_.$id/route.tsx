@@ -150,7 +150,10 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
           error: 'That person is not a grader in this classroom.',
         };
       }
-      return { action: ActionTypes.ADD_GRADER, success: 'Grader added' };
+      return {
+        action: ActionTypes.ADD_GRADER,
+        success: result.status === 'already_assigned' ? 'Already assigned' : 'Grader added',
+      };
     },
 
     async removeGrader() {

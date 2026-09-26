@@ -414,9 +414,18 @@ const SubmissionsTable = ({
           const assigned = new Set(
             (ra.graders ?? []).map(g => g.grader.login).filter((v): v is string => v != null)
           );
-          const choices = assistants
-            .map(a => ({ label: a.name || a.login || '', value: a.login || '' }))
-            .sort((a, b) => a.label.localeCompare(b.label));
+          // The pool is who can be added. A grader already on this row stays listed,
+          // checked, even once they have left the pool, so they can still be removed.
+          const byId = new Map<string, { label: string; value: string }>();
+          for (const a of assistants) {
+            if (a.login) byId.set(a.id, { label: a.name || a.login, value: a.login });
+          }
+          for (const { grader } of ra.graders ?? []) {
+            if (grader.login && !byId.has(grader.id)) {
+              byId.set(grader.id, { label: grader.name || grader.login, value: grader.login });
+            }
+          }
+          const choices = [...byId.values()].sort((a, b) => a.label.localeCompare(b.label));
           return (
             <div className="flex items-center gap-3 whitespace-nowrap">
               {names && <span className="text-sm text-ink-1 truncate max-w-40">{names}</span>}
