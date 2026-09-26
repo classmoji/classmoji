@@ -126,28 +126,47 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
 
   const data = await request.json();
 
+  // Only the ids in the body are used: the submission is loaded from this
+  // classroom and this page's assignment, and the repo name, issue number and
+  // grader login that reach GitHub are the stored ones.
+  const scope = {
+    classroomId: classroom.id,
+    gitOrganization: classroom.git_organization,
+    gitRepoAssignmentId: data?.repoAssignmentId,
+    graderId: data?.graderId,
+    assignmentId: params.id!,
+  };
+  const SUBMISSION_NOT_FOUND = 'Submission not found.';
+
   return namedAction(request, {
     async addGrader() {
-      await HelperService.addGraderToGitRepoAssignment({
-        repoName: data.repoName,
-        gitOrganization: classroom.git_organization,
-        githubIssueNumber: data.githubIssueNumber,
-        graderLogin: data.graderLogin,
-        graderId: data.graderId,
-        gitRepoAssignmentId: data.repoAssignmentId,
-      });
-      return { action: ActionTypes.ADD_GRADER, success: 'Grader added' };
+      const result = await HelperService.addGraderInClassroom(scope);
+      if (result.status === 'submission_not_found') {
+        return { action: ActionTypes.ADD_GRADER, error: SUBMISSION_NOT_FOUND };
+      }
+      if (result.status === 'grader_not_eligible') {
+        return {
+          action: ActionTypes.ADD_GRADER,
+          error: 'That person is not a grader in this classroom.',
+        };
+      }
+      return {
+        action: ActionTypes.ADD_GRADER,
+        success: result.status === 'already_assigned' ? 'Already assigned' : 'Grader added',
+      };
     },
 
     async removeGrader() {
-      await HelperService.removeGraderFromGitRepoAssignment({
-        repoName: data.repoName,
-        gitOrganization: classroom.git_organization,
-        githubIssueNumber: data.githubIssueNumber,
-        graderLogin: data.graderLogin,
-        graderId: data.graderId,
-        gitRepoAssignmentId: data.repoAssignmentId,
-      });
+      const result = await HelperService.removeGraderInClassroom(scope);
+      if (result.status === 'submission_not_found') {
+        return { action: ActionTypes.REMOVE_GRADER, error: SUBMISSION_NOT_FOUND };
+      }
+      if (result.status === 'grader_not_assigned') {
+        return {
+          action: ActionTypes.REMOVE_GRADER,
+          error: 'That grader is not assigned to this submission.',
+        };
+      }
       return { action: ActionTypes.REMOVE_GRADER, success: 'Grader removed' };
     },
   });

@@ -37,6 +37,29 @@ export const findById = async (id: string) => {
 };
 
 /**
+ * Find a Repository of one classroom by id.
+ *
+ * Returns null — without querying — when either id is not a non-empty string;
+ * see `assertScopedIds` below for why an unchecked value cannot stand in the
+ * `where`. Unlike `findById` it does not include the classroom row.
+ *
+ * @param {unknown} id - UUID of the Repository (may come from a request)
+ * @param {string} classroomId - UUID of the authorized Classroom
+ */
+export const findByIdInClassroom = async (id: unknown, classroomId: string) => {
+  if (typeof id !== 'string' || !id) return null;
+  if (typeof classroomId !== 'string' || !classroomId) return null;
+
+  return getPrisma().repository.findFirst({
+    where: { id, classroom_id: classroomId },
+    include: {
+      assignments: true,
+      tag: true,
+    },
+  });
+};
+
+/**
  * Find a Repository by classroom and title
  * @param {string} classroomId - UUID of the Classroom
  * @param {string} title - Repository title
@@ -579,6 +602,7 @@ export const findDependents = async (id: string, classroomId: string) => {
 
 /** Prove a repository belongs to the classroom, or throw. */
 export const assertInClassroom = async (repositoryId: string, classroomId: string) => {
+  assertScopedIds(repositoryId, classroomId);
   const repository = await getPrisma().repository.findFirst({
     where: { id: repositoryId, classroom_id: classroomId },
     select: { id: true },
