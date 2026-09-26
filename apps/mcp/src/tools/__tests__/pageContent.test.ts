@@ -1380,6 +1380,22 @@ describe('page_asset_upload', () => {
     expect(mocks.auditCreate).not.toHaveBeenCalled();
   });
 
+  it('tells an agent that sent a path to send just the file name', async () => {
+    for (const filename of ['assets/hero.png', 'C:\\Users\\me\\hero.png']) {
+      await expect(upload({ filename })).rejects.toMatchObject({
+        kind: 'invalid_params',
+        message: 'File names cannot contain "/" or "\\". Send just the file name, without folders.',
+      });
+    }
+    expect(mocks.uploadPageAsset).not.toHaveBeenCalled();
+  });
+
+  it('adds no folder hint to other refusals', async () => {
+    await expect(upload({ filename: 'notes.txt' })).rejects.toMatchObject({
+      message: expect.not.stringContaining('without folders'),
+    });
+  });
+
   it('accepts any extension where the classroom policy says so', async () => {
     mocks.uploadFileTypes.mockReturnValue('any');
 

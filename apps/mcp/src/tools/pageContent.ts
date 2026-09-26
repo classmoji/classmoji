@@ -1039,7 +1039,9 @@ export const pageAssetUploadTool: ToolDefinition<PageAssetUploadArgs> = {
       fileTypes: ClassmojiService.contentDelivery.uploadFileTypes(page.classroom),
     });
     if (!validation.valid) {
-      throw new ToolError('invalid_params', validation.error ?? 'Invalid file');
+      // An agent tends to send the path it read the file from; say what to send.
+      const hint = /[/\\]/.test(args.filename) ? ' Send just the file name, without folders.' : '';
+      throw new ToolError('invalid_params', (validation.error ?? 'Invalid file') + hint);
     }
 
     const uploaded = await ClassmojiService.pageContent.uploadPageAsset(
