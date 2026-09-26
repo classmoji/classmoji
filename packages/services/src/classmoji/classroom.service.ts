@@ -245,7 +245,8 @@ export const update = async (id: string, updates: Prisma.ClassroomUpdateInput) =
  * they would sit in the bucket unreachable and unbilled. A purge that fails
  * throws and the classroom is NOT deleted, so the caller can say so and the
  * delete can be retried; the purge is idempotent. A deployment with no media
- * store skips it.
+ * store skips it, and so does a classroom that has never had a media row, so
+ * an R2 outage cannot block deleting a classroom with nothing in the bucket.
  *
  * @param {string} id - UUID of the Classroom
  * @returns {Promise<Object>}

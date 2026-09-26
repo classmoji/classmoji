@@ -1028,7 +1028,8 @@ export async function deleteMedia({
  * UPLOADING rows' uploads are aborted first, from the ids the rows hold. One
  * that cannot be aborted is left to R2's 7-day expiry of incomplete uploads.
  *
- * A deployment with no media store has nothing to delete and returns at once.
+ * A deployment with no media store has nothing to delete and returns at once,
+ * and so does a classroom with no media rows in any status, without asking R2.
  * A LISTING that fails throws, and the caller must not delete the classroom:
  * with the rows gone the prefix is the only record of what is there. Individual
  * object deletes that fail are counted, and a purge with failures throws too,
@@ -1041,6 +1042,17 @@ export async function purgeClassroomMedia(classroomId: string): Promise<{ delete
   const bucket = mediaBucket();
   if (!client || !bucket) return { deleted: 0 };
   const prefix = mediaPrefix(classroomId);
+
+  // A classroom that never had a row never had an object: the row is written
+  // before an upload can start, and it outlives its bytes as a tombstone. So a
+  // classroom with no rows at all — every Free classroom — has nothing under
+  // its prefix, and asking R2 to list it would only let an R2 outage block a
+  // classroom delete that has nothing to clean up.
+  const anyRow = await getPrisma().mediaObject.findFirst({
+    where: { classroom_id: classroomId },
+    select: { id: true },
+  });
+  if (!anyRow) return { deleted: 0 };
 
   const open = (await getPrisma().mediaObject.findMany({
     where: { classroom_id: classroomId, status: 'UPLOADING', upload_id: { not: null } },

@@ -1388,11 +1388,33 @@ describe('deleteMedia', () => {
 describe('purgeClassroomMedia', () => {
   const PREFIX = `m/${CLASSROOM_ID}/`;
 
+  beforeEach(() => {
+    // A classroom that has had media: the purge only goes to R2 for one of these.
+    prisma.mediaObject.findFirst.mockResolvedValue({ id: MEDIA_ID });
+  });
+
   it('does nothing on a deployment with no media store', async () => {
     unconfigure();
     await expect(purgeClassroomMedia(CLASSROOM_ID)).resolves.toEqual({ deleted: 0 });
     expect(sent).toHaveLength(0);
     expect(prisma.mediaObject.findMany).not.toHaveBeenCalled();
+  });
+
+  it('never asks R2 about a classroom that has had no media, so an outage cannot block it', async () => {
+    // Rows are written before any object can exist, and outlive their bytes as
+    // tombstones — no row in any status means nothing under the prefix.
+    prisma.mediaObject.findFirst.mockResolvedValue(null);
+    sendImpl.mockImplementation(async () => {
+      throw new Error('r2 is down');
+    });
+
+    await expect(purgeClassroomMedia(CLASSROOM_ID)).resolves.toEqual({ deleted: 0 });
+
+    expect(sent).toHaveLength(0);
+    // Any status: a DELETED row can still have bytes a failed delete left.
+    expect(prisma.mediaObject.findFirst.mock.calls[0][0].where).toEqual({
+      classroom_id: CLASSROOM_ID,
+    });
   });
 
   it('deletes every object under the classroom prefix, across pages', async () => {
