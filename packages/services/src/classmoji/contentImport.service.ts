@@ -20,6 +20,7 @@
  */
 
 import getPrisma from '@classmoji/database';
+import { REPO_REST_MAX_BYTES, repoFileSkippedWarning } from '@classmoji/utils';
 import { ContentService } from '../content/ContentService.ts';
 import { contentProxyBase, isCommitRef, pagesContentBase, splitRawRef } from './contentRefs.ts';
 import {
@@ -40,10 +41,6 @@ import {
   isCommitTooLargeRefusal,
 } from '../slides/slideSource.ts';
 import type { Prisma } from '@prisma/client';
-
-// GitHub Contents API caps single-file reads at 1MB; larger files return no
-// usable content, so they are skipped with a warning (task requirement).
-const ONE_MB = 1024 * 1024;
 
 /** Cap on retained warnings and on per-warning detail length (bounded output). */
 const MAX_WARNINGS = 50;
@@ -751,11 +748,19 @@ type BatchFile = { path: string; content: string; encoding: 'base64' };
 
 /**
  * Recursively read every file under `sourcePath` on the source repo's MAIN
- * branch, remapping each path to sit under `targetPath`. Files >1MB are skipped
- * with a warning. Returns the base64 file writes for a later batch commit.
- * Reads are ref-pinned to 'main' (also bypasses the per-process response cache).
+ * branch, remapping each path to sit under `targetPath`. Returns the base64
+ * file writes for a later batch commit. The listing is ref-pinned to 'main'
+ * (which also bypasses the per-process response cache).
+ *
+ * Bytes come through the Git Blobs API by the sha the listing already carries —
+ * good to 100 MB, where the Contents API's JSON body stops at 1 MB. A file over
+ * `REPO_REST_MAX_BYTES` (by the listing's size) is skipped with a warning naming
+ * it, rather than read: the target's batch commit would refuse it, and the
+ * whole item with it.
+ *
+ * Exported for tests.
  */
-async function collectFolderFiles({
+export async function collectFolderFiles({
   source,
   sourcePath,
   targetPath,
@@ -782,21 +787,14 @@ async function collectFolderFiles({
         await walk(entry.path);
         continue;
       }
-      const meta = await ContentService.getMeta({
-        gitOrganization: source.gitOrganization,
-        repo: source.repo,
-        path: entry.path,
-        ref: 'main',
-      });
-      if (meta && meta.size > ONE_MB) {
-        warn(scope, `skipped ${entry.path} (>1MB, ${meta.size} bytes)`);
+      if (typeof entry.size === 'number' && entry.size > REPO_REST_MAX_BYTES) {
+        warn(scope, repoFileSkippedWarning(entry.path, entry.size));
         continue;
       }
-      const file = await ContentService.getContent({
+      const file = await ContentService.getBlobContent({
         gitOrganization: source.gitOrganization,
         repo: source.repo,
-        path: entry.path,
-        ref: 'main',
+        sha: entry.sha,
         raw: true,
       });
       if (!file) {
@@ -818,16 +816,13 @@ async function collectFolderFiles({
 /**
  * Read the ONE document behind a FILE slide, remapped onto the target folder.
  *
- * Separate from `collectFolderFiles` for one reason that decides everything
- * else: that walk skips any file over 1 MB, and a slide file is a lecture PDF
- * or a Keynote — almost always over 1 MB, up to the 35 MB policy cap. A copy
- * that dropped it would leave a FILE row whose `source_path` names a document
- * nobody ever wrote, which is a broken slide rather than a missing image.
- *
- * So it reads through the Git blobs API (`getLargeContent`, 100 MB ceiling)
- * rather than the Contents API, and it reads exactly `source_path` — not the
- * folder — because a FILE slide's folder holds one thing and a walk would be a
- * listing call to learn what the column already says.
+ * Separate from `collectFolderFiles` because a FILE slide's row already says
+ * which one file it is: it reads exactly `source_path` — not the folder — since
+ * a FILE slide's folder holds one thing and a walk would be a listing call to
+ * learn what the column already says. A copy that dropped the document would
+ * leave a FILE row whose `source_path` names a file nobody ever wrote, which is
+ * a broken slide rather than a missing image, so it reads through the Git blobs
+ * API (`getLargeContent`, 100 MB ceiling), capped at the slide-file limit.
  *
  * MEMORY, stated plainly: the body is staged base64 in memory alongside every
  * other file in the run, so a course of large decks is a large import. The cap
@@ -1533,10 +1528,10 @@ async function importSlides({
       //    point: the "no files" refusal below used to be a correct shortcut
       //    for a deck whose folder was missing, and applied to a link it would
       //    drop every one of them from the import in silence.
-      //  - FILE is ONE document, read through the blobs API rather than the
-      //    folder walk, because the walk skips anything over 1 MB and a slide
-      //    file is almost always over 1 MB. Skipping it there would create a
-      //    row pointing at a document that was never copied. Its bytes are NOT
+      //  - FILE is ONE document, read by its `source_path` rather than by the
+      //    folder walk, which would be a listing call to learn what the column
+      //    already says, and a document dropped there would leave a row
+      //    pointing at a file that was never copied. Its bytes are NOT
       //    staged here — see `commitSlideDocuments`, which reads and commits
       //    them one at a time so a course of lecture PDFs is never held in
       //    memory all at once, and so one unreadable document cannot take the
