@@ -445,6 +445,19 @@ test.describe('the upload endpoints', () => {
     // `request.formData()` to explain why, so this looks for the CALL.)
     expect(IMPORT_SOURCE).not.toContain('await request.formData()');
   });
+
+  test('the deck editor action authorizes before it reads the body, and meters it', () => {
+    // The slide comes from the URL, so the whole edit gate can run first: a
+    // caller who may not edit this deck never gets a byte of their body read.
+    const action = VIEWER_SOURCE.slice(VIEWER_SOURCE.indexOf('export const action'));
+    const gate = action.indexOf('await assertSlideAccess(');
+    const read = action.indexOf('await readLimitedFormData(request, deckActionBodyLimit(request))');
+
+    expect(gate).toBeGreaterThan(-1);
+    expect(read).toBeGreaterThan(-1);
+    expect(gate).toBeLessThan(read);
+    expect(action).not.toContain('await request.formData()');
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────

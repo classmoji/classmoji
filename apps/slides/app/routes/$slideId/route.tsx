@@ -30,6 +30,12 @@ import {
   type DeckThemeUrls,
   type MergeResolution,
 } from '@classmoji/services/slides';
+import { REPO_REST_MAX_BYTES, repoFileTooLargeMessage } from '@classmoji/utils/repo-limits';
+import {
+  UploadTooLargeError,
+  readLimitedFormData,
+  uploadBodyLimit,
+} from '@classmoji/utils/upload-limit';
 import { SandpackRenderer } from '@classmoji/ui-components/sandpack';
 import { useToast, useUser } from '~/hooks';
 import { diffDeckSnapshots, extractDeckSnapshot, type DeckSnapshot } from '~/utils/deckOpsDiff';
@@ -626,6 +632,24 @@ async function forgetThemeFiles(
   await ClassmojiService.contentAssets.removeContentAssets(slide.classroom_id, paths);
 }
 
+/**
+ * The most the deck editor's action reads of a request body.
+ *
+ * Two shapes arrive here. The image upload is multipart and carries one file,
+ * so its cap is the repository's per-file ceiling plus the multipart envelope.
+ * Every other intent — the deck save above all — is a url-encoded form whose
+ * largest field is the deck's HTML, and percent-encoding can inflate markup up
+ * to about three times (every `<`, `>`, `"` and space), so that shape gets
+ * three times the same ceiling: room for any deck the repository could store,
+ * and still a bound.
+ */
+function deckActionBodyLimit(request: Request): number {
+  const contentType = request.headers.get('content-type') ?? '';
+  return contentType.includes('multipart/form-data')
+    ? uploadBodyLimit(REPO_REST_MAX_BYTES)
+    : 3 * REPO_REST_MAX_BYTES;
+}
+
 export const action = async ({
   request,
   params,
@@ -635,8 +659,6 @@ export const action = async ({
 }) => {
   const { slideId } = params;
   if (!slideId) return { error: 'Missing slideId' };
-  const formData = await request.formData();
-  const intent = formData.get('intent');
 
   // Fetch slide to get classroom/git org info
   const slide = await getPrisma().slide.findUnique({
@@ -661,6 +683,30 @@ export const action = async ({
     slide,
     accessType: 'edit',
   });
+
+  // The body is read only now, after the gate above, and through a byte-counting
+  // reader: a caller who may not edit this deck never gets to make the process
+  // hold a byte of what they sent. See `deckActionBodyLimit` for the cap.
+  let formData: FormData;
+  try {
+    formData = await readLimitedFormData(request, deckActionBodyLimit(request));
+  } catch (error: unknown) {
+    if (error instanceof UploadTooLargeError) {
+      // The image upload is the only multipart intent, and its client settles
+      // its pending promise on `intent: 'upload-image'` — which the unread body
+      // can no longer tell us, so it is named here.
+      const multipart = (request.headers.get('content-type') ?? '').includes('multipart/form-data');
+      return data(
+        {
+          ...(multipart ? { intent: 'upload-image' as const } : {}),
+          error: repoFileTooLargeMessage(),
+        },
+        { status: 413 }
+      );
+    }
+    throw error;
+  }
+  const intent = formData.get('intent');
 
   // This action is the DECK EDITOR's action, whole and entire: themes,
   // snippets, deck images, the deck read, the preview branch — and the
@@ -993,7 +1039,9 @@ export const action = async ({
       const arrayBuffer = await file.arrayBuffer();
       const buffer = Buffer.from(arrayBuffer);
 
-      // Upload to images folder alongside the slide content
+      // Upload to images folder alongside the slide content. Same type policy
+      // as a page asset: any file where the delivery layer serves the
+      // classroom, images and PDFs elsewhere.
       const result = await ContentService.upload({
         orgLogin: gitOrgLogin,
         repo,
@@ -1001,6 +1049,7 @@ export const action = async ({
         filename: file.name,
         folder: `${slide.content_path}/images`,
         message: `Upload image for slides: ${slide.title}`,
+        fileTypes: ClassmojiService.contentDelivery.uploadFileTypes(slide.classroom),
       });
 
       // Record the row now rather than waiting for the push webhook: a deck

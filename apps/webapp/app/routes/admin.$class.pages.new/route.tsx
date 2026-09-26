@@ -10,6 +10,11 @@ import {
 import { ClassmojiService } from '@classmoji/services';
 import { useCallout } from '@classmoji/ui-components';
 import { processMarkdownImport } from '~/utils/markdownImporter.server';
+import {
+  PAGE_IMPORT_TOO_LARGE_MESSAGE,
+  oversizedImportFileMessage,
+  readPageImportForm,
+} from '~/utils/pageImportBody.server';
 import { wrapHtmlContent } from '~/utils/htmlWrapper';
 import ImportTab from './ImportTab';
 import CreateBlankTab from './CreateBlankTab';
@@ -40,9 +45,9 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
 
 export const action = async ({ request, params }: Route.ActionArgs) => {
   const { class: classSlug } = params;
-  const formData = await request.formData();
-  const intent = formData.get('intent');
 
+  // The gate first: the classroom is in the URL, so nobody who may not create
+  // pages here gets to send this action a byte.
   const { classroom, userId, membership } = await assertClassroomAccess({
     request,
     classroomSlug: classSlug!,
@@ -51,6 +56,12 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
     attemptedAction: 'create_page',
   });
   assertClassroomMutationAllowed({ status: classroom.status, role: membership!.role });
+
+  const formData = await readPageImportForm(request);
+  if (!formData) {
+    return { error: PAGE_IMPORT_TOO_LARGE_MESSAGE };
+  }
+  const intent = formData.get('intent');
 
   // Use git_organization.login for GitHub API calls, not the classroom slug
   const gitOrgLogin = classroom.git_organization?.login;
@@ -85,6 +96,11 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
       if (!markdownFile || typeof markdownFile === 'string') {
         return { error: 'Please select a markdown file to import' };
       }
+
+      // Every image goes to GitHub in one commit with the page — one over the
+      // repository's cap would refuse them all, so it is refused here, by name.
+      const oversized = oversizedImportFileMessage(imageFiles);
+      if (oversized) return { error: oversized };
 
       const markdownText = await markdownFile.text();
       if (!markdownText.trim()) {
@@ -260,11 +276,13 @@ export default function NewPage({ loaderData }: Route.ComponentProps) {
 
     try {
       // Step 1: Initialize (create repo if needed)
+      // The classroom rides in the query string so the server can authorize
+      // before it reads the body.
+      const batchUrl = `/api/pages/batch?classSlug=${encodeURIComponent(classroom.slug)}`;
       const initFormData = new FormData();
       initFormData.append('intent', 'batch-init');
-      initFormData.append('classSlug', classroom.slug);
 
-      const initResponse = await fetch('/api/pages/batch', {
+      const initResponse = await fetch(batchUrl, {
         method: 'POST',
         body: initFormData,
       });
@@ -284,7 +302,6 @@ export default function NewPage({ loaderData }: Route.ComponentProps) {
 
         const formData = new FormData();
         formData.append('intent', 'batch-import-single');
-        formData.append('classSlug', classroom.slug);
         formData.append('title', page.title);
         if (page.repository) formData.append('repository', page.repository);
         if (page.assignmentId) formData.append('assignmentId', page.assignmentId);
@@ -300,7 +317,7 @@ export default function NewPage({ loaderData }: Route.ComponentProps) {
         });
 
         try {
-          const response = await fetch('/api/pages/batch', {
+          const response = await fetch(batchUrl, {
             method: 'POST',
             body: formData,
           });

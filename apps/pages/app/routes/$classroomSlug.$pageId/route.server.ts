@@ -1,4 +1,10 @@
 import { redirect } from 'react-router';
+import { REPO_REST_MAX_BYTES, repoFileTooLargeMessage } from '@classmoji/utils/repo-limits';
+import {
+  UploadTooLargeError,
+  readLimitedFormData,
+  uploadBodyLimit,
+} from '@classmoji/utils/upload-limit';
 import { ClassmojiService, getAuthSession } from '~/utils/db.server.ts';
 import { pageMutationBlocked } from '~/utils/auth.server.ts';
 import {
@@ -17,6 +23,9 @@ import {
   canonicalizeOpsAssets,
   resolveDocumentAssets,
 } from '~/utils/assetRefs.server.ts';
+
+/** Extensions a page cover may have — the image half of the upload allowlist. */
+const COVER_IMAGE_EXTENSION = /\.(png|jpe?g|gif|webp|svg)$/i;
 
 /**
  * Public page viewer route - read-only view for students and public access.
@@ -334,8 +343,18 @@ export const action = async ({
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- form/JSON data has dynamic shape
   let data: Record<string, any>, formData: FormData | undefined;
   if (contentType.includes('multipart/form-data')) {
-    formData = await request.formData();
-    data = { intent: formData!.get('intent') };
+    // Read only now — after the session, the membership and the status gate
+    // above — and through a byte-counting reader: the one multipart intent is
+    // the cover upload, which carries one repository-sized file at most.
+    try {
+      formData = await readLimitedFormData(request, uploadBodyLimit(REPO_REST_MAX_BYTES));
+    } catch (error: unknown) {
+      if (error instanceof UploadTooLargeError) {
+        return Response.json({ error: repoFileTooLargeMessage() }, { status: 413 });
+      }
+      throw error;
+    }
+    data = { intent: formData.get('intent') };
   } else {
     data = await request.json();
   }
@@ -778,6 +797,14 @@ export const action = async ({
       if (!file || typeof file === 'string') {
         return Response.json({ error: 'No file provided' }, { status: 400 });
       }
+      // A cover is rendered as an image. Page assets may be any file type where
+      // the delivery layer serves the classroom; a cover may not.
+      if (!COVER_IMAGE_EXTENSION.test(file.name)) {
+        return Response.json(
+          { error: 'A cover must be an image (PNG, JPG, GIF, WebP or SVG).' },
+          { status: 400 }
+        );
+      }
       // `url` is the repo path (what gets stored); `displayUrl` is the signed
       // URL for showing it right now — the two are never the same string.
       const { url, displayUrl } = await uploadPageAsset(actionPage, file);
@@ -787,6 +814,9 @@ export const action = async ({
       });
       return Response.json({ success: true, url, displayUrl, sha });
     } catch (error: unknown) {
+      if ((error as { code?: unknown } | null)?.code === 'REPO_FILE_TOO_LARGE') {
+        return Response.json({ error: (error as Error).message }, { status: 413 });
+      }
       if ((error as { status?: number } | null)?.status === 409) {
         // F5: the asset uploaded fine, but the cover-image metadata write
         // lost to a concurrent content edit. Retrying is safe and cheap.

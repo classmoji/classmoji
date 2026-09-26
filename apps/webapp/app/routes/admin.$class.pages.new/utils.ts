@@ -1,4 +1,15 @@
 import JSZip from 'jszip';
+import { REPO_REST_MAX_BYTES, repoFileTooLargeMessage } from '@classmoji/utils/repo-limits';
+
+/**
+ * The refusal for the first file over the course repository's per-file cap, or
+ * null when every one fits. The server refuses the same file by the same rule;
+ * this only saves uploading it first.
+ */
+export function oversizedFileMessage(files: File[]): string | null {
+  const oversized = files.find(file => file.size > REPO_REST_MAX_BYTES);
+  return oversized ? repoFileTooLargeMessage(oversized.name) : null;
+}
 
 /**
  * Extract image references from markdown (client-side)
