@@ -457,7 +457,8 @@ export const listTagsTool: ToolDefinition<ListTagsArgs> = {
   description:
     "The classroom's team tags, each with { id, name, team_count, repository_count }. Use an id " +
     'as tag_id for repo_create / repo_update (instructor-assigned GROUP repos) and in tag_ids for ' +
-    'team_create / team_tag_add. list_teams shows tag names only. Teaching team only.',
+    'team_create / team_tag_add. list_teams shows tag names only; create a missing tag with ' +
+    'tag_create. Teaching team only.',
   scope: 'read',
   // Tags are not sensitive, but only staff tools consume their ids; students
   // have no call that takes one.

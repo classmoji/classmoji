@@ -92,6 +92,7 @@ import {
   teamMemberRemoveTool,
   teamTagAddTool,
   teamTagRemoveTool,
+  tagCreateTool,
 } from './teams.ts';
 
 export function registerAllTools(): void {
@@ -236,12 +237,13 @@ export function registerAllTools(): void {
 
   // Teams (OWNER — the write surface behind list_teams). create/rename/members
   // touch real GitHub teams; delete is destructive and confirm-gated; the tag
-  // tools are Classmoji-only links.
+  // tools are Classmoji-only links, and tag_create mints the tags they attach.
   registerToolDefinition(teamCreateTool);
   registerToolDefinition(teamDeleteTool);
   registerToolDefinition(teamRenameTool);
   registerToolDefinition(teamMembersAddTool);
   registerToolDefinition(teamMemberRemoveTool);
+  registerToolDefinition(tagCreateTool);
   registerToolDefinition(teamTagAddTool);
   registerToolDefinition(teamTagRemoveTool);
 
