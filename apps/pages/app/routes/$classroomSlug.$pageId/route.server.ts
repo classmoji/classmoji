@@ -21,6 +21,12 @@ import {
   uploadPageAsset,
 } from '~/utils/content.server.ts';
 import { migrateHtmlToBlockNote } from '~/utils/migration.server.ts';
+import {
+  UPLOAD_BUSY_MESSAGE,
+  UPLOAD_RETRY_AFTER_SECONDS,
+  acquireUploadSlot,
+  releaseUploadSlot,
+} from '~/utils/uploadConcurrency.server.ts';
 import { schema } from '~/components/editor/blocks/index.tsx';
 import type { PageForContent } from '~/types/pages.ts';
 import {
@@ -324,16 +330,28 @@ export const loader = async ({
   };
 };
 
-/**
- * Actions for page mutations (edit mode only).
- */
-export const action = async ({
-  params,
-  request,
-}: {
+interface PageActionArgs {
   params: Record<string, string | undefined>;
   request: Request;
-}) => {
+}
+
+/**
+ * Actions for page mutations (edit mode only).
+ *
+ * The cover upload takes an upload slot partway through `pageAction` — after
+ * the gates, before its body is read — and this is where it is given back,
+ * whichever way the action ends.
+ */
+export const action = async (args: PageActionArgs) => {
+  const slot = { held: false };
+  try {
+    return await pageAction(args, slot);
+  } finally {
+    if (slot.held) releaseUploadSlot();
+  }
+};
+
+async function pageAction({ params, request }: PageActionArgs, slot: { held: boolean }) {
   const pageId = params.pageId!;
 
   const page = await ClassmojiService.page.findById(pageId, {
@@ -380,6 +398,16 @@ export const action = async ({
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- form/JSON data has dynamic shape
   let data: Record<string, any>, formData: FormData | undefined;
   if (contentType.includes('multipart/form-data')) {
+    // The one multipart intent is the cover upload: it takes an upload slot
+    // like every other file upload in this app (released by `action`).
+    if (!acquireUploadSlot()) {
+      return Response.json(
+        { error: UPLOAD_BUSY_MESSAGE },
+        { status: 503, headers: { 'Retry-After': String(UPLOAD_RETRY_AFTER_SECONDS) } }
+      );
+    }
+    slot.held = true;
+
     // Read only now — after the session, the membership and the status gate
     // above — and through a byte-counting reader: the one multipart intent is
     // the cover upload, which carries one repository-sized file at most.
@@ -879,4 +907,4 @@ export const action = async ({
   }
 
   return Response.json({ error: 'Invalid action' }, { status: 400 });
-};
+}

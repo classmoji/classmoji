@@ -7,6 +7,12 @@ import {
 import { ClassmojiService } from '~/utils/db.server.ts';
 import { assertPageAccess, pageMutationBlocked } from '~/utils/auth.server.ts';
 import { uploadPageAsset } from '~/utils/content.server.ts';
+import {
+  UPLOAD_BUSY_MESSAGE,
+  UPLOAD_RETRY_AFTER_SECONDS,
+  acquireUploadSlot,
+  releaseUploadSlot,
+} from '~/utils/uploadConcurrency.server.ts';
 
 /**
  * Image/file upload endpoint.
@@ -50,6 +56,26 @@ export const action = async ({ request }: { request: Request }) => {
   const blocked = membership ? pageMutationBlocked(page.classroom, membership.role) : null;
   if (blocked) return blocked;
 
+  // One slot per upload in flight, given back in the `finally` below: the size
+  // cap bounds one upload, this bounds how many this process holds at once.
+  if (!acquireUploadSlot()) {
+    return Response.json(
+      { error: UPLOAD_BUSY_MESSAGE },
+      { status: 503, headers: { 'Retry-After': String(UPLOAD_RETRY_AFTER_SECONDS) } }
+    );
+  }
+  try {
+    return await receiveUpload(request, page);
+  } finally {
+    releaseUploadSlot();
+  }
+};
+
+/** Read the file and commit it — once the caller holds a slot. */
+async function receiveUpload(
+  request: Request,
+  page: Parameters<typeof uploadPageAsset>[0]
+): Promise<Response> {
   let formData: FormData;
   try {
     formData = await readLimitedFormData(request, uploadBodyLimit(REPO_REST_MAX_BYTES));
@@ -80,4 +106,4 @@ export const action = async ({ request }: { request: Request }) => {
       { status: 500 }
     );
   }
-};
+}

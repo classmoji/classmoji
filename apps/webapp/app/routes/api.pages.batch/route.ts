@@ -11,6 +11,12 @@ import {
   readPageImportForm,
 } from '~/utils/pageImportBody.server';
 import { wrapHtmlContent } from '~/utils/htmlWrapper';
+import {
+  UPLOAD_BUSY_MESSAGE,
+  UPLOAD_RETRY_AFTER_SECONDS,
+  acquireUploadSlot,
+  releaseUploadSlot,
+} from '~/utils/uploadConcurrency.server';
 import type { Route } from './+types/route';
 
 /**
@@ -21,7 +27,18 @@ import type { Route } from './+types/route';
  * The classroom is named in the QUERY STRING so the gate runs before the body
  * is read; the body is then read with a cap (see `pageImportBody.server`).
  */
-export const action = async ({ request }: Route.ActionArgs) => {
+export const action = async (args: Route.ActionArgs) => {
+  // The import takes an upload slot partway through — after the gate, before
+  // the body is read — and this gives it back however the request ends.
+  const slot = { held: false };
+  try {
+    return await batchAction(args, slot);
+  } finally {
+    if (slot.held) releaseUploadSlot();
+  }
+};
+
+async function batchAction({ request }: Route.ActionArgs, slot: { held: boolean }) {
   const classSlug = new URL(request.url).searchParams.get('classSlug');
   if (!classSlug) {
     return Response.json({ error: 'No classroom provided' }, { status: 400 });
@@ -34,6 +51,16 @@ export const action = async ({ request }: Route.ActionArgs) => {
     attemptedAction: 'create_page',
   });
   assertClassroomMutationAllowed({ status: classroom.status, role: membership!.role });
+
+  // One slot per request in flight: the body cap bounds one page of a batch,
+  // this bounds how many this process holds at once.
+  if (!acquireUploadSlot()) {
+    return Response.json(
+      { error: UPLOAD_BUSY_MESSAGE },
+      { status: 503, headers: { 'Retry-After': String(UPLOAD_RETRY_AFTER_SECONDS) } }
+    );
+  }
+  slot.held = true;
 
   const formData = await readPageImportForm(request);
   if (!formData) {
@@ -178,4 +205,4 @@ export const action = async ({ request }: Route.ActionArgs) => {
   }
 
   return Response.json({ error: 'Invalid intent' }, { status: 400 });
-};
+}

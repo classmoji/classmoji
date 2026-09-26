@@ -59,10 +59,16 @@ vi.mock('react-router', () => ({
   useNavigate: () => vi.fn(),
   useFetcher: () => ({ submit: vi.fn() }),
   useLocation: () => ({ pathname: '/admin/cs52-26f/pages/new' }),
+  data: (value: unknown, init: ResponseInit) => ({
+    type: 'DataWithResponseInit',
+    data: value,
+    init,
+  }),
 }));
 
 const newPageRoute = await import('../route.tsx');
 const batchRoute = await import('../../api.pages.batch/route.ts');
+const slots = await import('~/utils/uploadConcurrency.server');
 
 const CLASS_SLUG = 'cs52-26f';
 const CLASSROOM = {
@@ -213,5 +219,78 @@ describe('api.pages.batch — body after auth, with a cap', () => {
       error: 'big.png is larger than the 35 MB your course repository accepts.',
     });
     expect(mocks.createPage).not.toHaveBeenCalled();
+  });
+});
+
+describe('page imports take an upload slot', () => {
+  const batchUrl = `http://localhost/api/pages/batch?classSlug=${CLASS_SLUG}`;
+
+  /** Hold every slot, run `fn`, and give them back. */
+  async function withAllSlotsTaken(fn: () => Promise<void>) {
+    for (let i = 0; i < slots.MAX_CONCURRENT_UPLOADS; i += 1) slots.acquireUploadSlot();
+    try {
+      await fn();
+    } finally {
+      for (let i = 0; i < slots.MAX_CONCURRENT_UPLOADS; i += 1) slots.releaseUploadSlot();
+    }
+  }
+
+  it('the single import answers 503 with a retry when none is free, unread', async () => {
+    await withAllSlotsTaken(async () => {
+      const { request, state } = hugeStreamingRequest(
+        `http://localhost/admin/${CLASS_SLUG}/pages/new`
+      );
+      const result = (await newPageRoute.action({
+        params: { class: CLASS_SLUG },
+        request,
+      } as never)) as unknown as { data: { error: string }; init: ResponseInit };
+
+      expect(result.init.status).toBe(503);
+      expect(result.init.headers).toEqual({ 'Retry-After': '30' });
+      expect(result.data.error).toBe(slots.UPLOAD_BUSY_MESSAGE);
+      expect(state.pulled).toBe(0);
+    });
+  });
+
+  it('the batch import answers 503 with a retry when none is free, unread', async () => {
+    await withAllSlotsTaken(async () => {
+      const { request, state } = hugeStreamingRequest(batchUrl);
+      const response = (await batchRoute.action({ request } as never)) as Response;
+
+      expect(response.status).toBe(503);
+      expect(response.headers.get('Retry-After')).toBe('30');
+      expect(await response.json()).toEqual({ error: slots.UPLOAD_BUSY_MESSAGE });
+      expect(state.pulled).toBe(0);
+    });
+  });
+
+  it('gives the slot back whether the import succeeds, is refused, or throws', async () => {
+    await newPageRoute.action({
+      params: { class: CLASS_SLUG },
+      request: formRequest(`http://localhost/admin/${CLASS_SLUG}/pages/new`, {
+        intent: 'import',
+        title: 'Week 1',
+        markdown: markdown(),
+        images: oversizedImage(),
+      }),
+    } as never);
+    expect(slots.uploadsInFlight()).toBe(0);
+
+    mocks.createPage.mockRejectedValue(new Error('GitHub is down'));
+    await batchRoute.action({
+      request: formRequest(batchUrl, {
+        intent: 'batch-import-single',
+        title: 'Week 2',
+        markdown: markdown(),
+      }),
+    } as never);
+    expect(slots.uploadsInFlight()).toBe(0);
+  });
+
+  it('is not taken by a caller the gate turns away', async () => {
+    mocks.assertClassroomAccess.mockRejectedValue(new Response('Unauthorized', { status: 401 }));
+    const { request } = hugeStreamingRequest(batchUrl);
+    await expect(batchRoute.action({ request } as never)).rejects.toBeInstanceOf(Response);
+    expect(slots.uploadsInFlight()).toBe(0);
   });
 });

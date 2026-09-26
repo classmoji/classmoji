@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { useNavigate, useFetcher, useLocation } from 'react-router';
+import { useNavigate, useFetcher, useLocation, data } from 'react-router';
 import { Form, Button, Alert, Modal, Tabs } from 'antd';
 import { FileTextOutlined, UploadOutlined } from '@ant-design/icons';
 import {
@@ -16,6 +16,12 @@ import {
   readPageImportForm,
 } from '~/utils/pageImportBody.server';
 import { wrapHtmlContent } from '~/utils/htmlWrapper';
+import {
+  UPLOAD_BUSY_MESSAGE,
+  UPLOAD_RETRY_AFTER_SECONDS,
+  acquireUploadSlot,
+  releaseUploadSlot,
+} from '~/utils/uploadConcurrency.server';
 import { batchImportSummary, type BatchImportFailure } from './utils';
 import ImportTab from './ImportTab';
 import CreateBlankTab from './CreateBlankTab';
@@ -44,7 +50,20 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
   };
 };
 
-export const action = async ({ request, params }: Route.ActionArgs) => {
+/**
+ * The import takes an upload slot partway through `createPage` — after the
+ * gate, before the body is read — and this gives it back however that ends.
+ */
+export const action = async (args: Route.ActionArgs) => {
+  const slot = { held: false };
+  try {
+    return await createPage(args, slot);
+  } finally {
+    if (slot.held) releaseUploadSlot();
+  }
+};
+
+async function createPage({ request, params }: Route.ActionArgs, slot: { held: boolean }) {
   const { class: classSlug } = params;
 
   // The gate first: the classroom is in the URL, so nobody who may not create
@@ -57,6 +76,16 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
     attemptedAction: 'create_page',
   });
   assertClassroomMutationAllowed({ status: classroom.status, role: membership!.role });
+
+  // One slot per import in flight: the body cap bounds one import, this bounds
+  // how many this process holds at once.
+  if (!acquireUploadSlot()) {
+    return data(
+      { error: UPLOAD_BUSY_MESSAGE },
+      { status: 503, headers: { 'Retry-After': String(UPLOAD_RETRY_AFTER_SECONDS) } }
+    );
+  }
+  slot.held = true;
 
   const formData = await readPageImportForm(request);
   if (!formData) {
@@ -205,7 +234,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
     console.error('Failed to create page:', error);
     return { error: error instanceof Error ? error.message : 'Failed to create page' };
   }
-};
+}
 
 interface BatchProgress {
   current: number;

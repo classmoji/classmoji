@@ -84,3 +84,34 @@ test.describe('page uploads read the body after the gate', () => {
     );
   });
 });
+
+test.describe('page uploads take an upload slot', () => {
+  test('api.upload takes one after the gate, before the read, and gives it back', () => {
+    const gate = UPLOAD_SOURCE.indexOf('pageMutationBlocked(');
+    const slot = UPLOAD_SOURCE.indexOf('if (!acquireUploadSlot()) {');
+    const read = UPLOAD_SOURCE.indexOf('await readLimitedFormData(');
+
+    for (const at of [gate, slot, read]) expect(at).toBeGreaterThan(-1);
+    expect(gate).toBeLessThan(slot);
+    expect(slot).toBeLessThan(read);
+    expect(UPLOAD_SOURCE).toContain('} finally {\n    releaseUploadSlot();');
+    expect(UPLOAD_SOURCE).toContain(
+      "{ status: 503, headers: { 'Retry-After': String(UPLOAD_RETRY_AFTER_SECONDS) } }"
+    );
+  });
+
+  test('the cover upload takes one after the gates, before the read, released by the action', () => {
+    const action = PAGE_ACTION_SOURCE.slice(
+      PAGE_ACTION_SOURCE.indexOf('async function pageAction')
+    );
+    const status = action.indexOf('pageMutationBlocked(page.classroom, membership.role)');
+    const slot = action.indexOf('if (!acquireUploadSlot()) {');
+    const read = action.indexOf('await readLimitedFormData(request, uploadBodyLimit(');
+
+    for (const at of [status, slot, read]) expect(at).toBeGreaterThan(-1);
+    expect(status).toBeLessThan(slot);
+    expect(slot).toBeLessThan(read);
+    expect(action).toContain('slot.held = true;');
+    expect(PAGE_ACTION_SOURCE).toContain('} finally {\n    if (slot.held) releaseUploadSlot();');
+  });
+});
