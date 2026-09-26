@@ -875,6 +875,16 @@ export interface ClassroomIndexPlan {
   /** Documents with no blob in the asset map at all — nothing to fetch. */
   missingAssets: number;
   /**
+   * Documents already level with the repo: right sha, right extract version,
+   * right model, every chunk present.
+   *
+   * They are deliberately NOT in `items`, and that is exactly what made them
+   * invisible — a run over a fleet that is entirely indexed and a run that
+   * found no documents at all both came back with an empty plan. This count is
+   * the only thing that tells those two apart.
+   */
+  upToDate: number;
+  /**
    * `file` rows that LOOK orphaned but were left alone, because the asset map
    * that would have proved it is empty and nothing just rebuilt it.
    *
@@ -958,6 +968,7 @@ export async function planClassroomIndex(
   const metadataItems: SlideMetadataDoc[] = [];
   const live = new Set<string>();
   let missingAssets = 0;
+  let upToDate = 0;
 
   const consider = (kind: ContentDocKind, id: string, title: string, path: string | null) => {
     live.add(docKey(kind, id));
@@ -975,7 +986,12 @@ export async function planClassroomIndex(
       extractVersion: EXTRACT_VERSION,
       embedModel: EMBEDDING_MODEL,
     };
-    if (isFresh(rows, stamp)) return;
+    if (isFresh(rows, stamp)) {
+      // Counted on the way past rather than simply dropped: this is the steady
+      // state, and a steady state that leaves no trace reads as an empty run.
+      upToDate += 1;
+      return;
+    }
     items.push({ classroomId, path, sha, docHint: { kind, id, title } });
   };
 
@@ -1012,7 +1028,12 @@ export async function planClassroomIndex(
         extractVersion: EXTRACT_VERSION,
         embedModel: EMBEDDING_MODEL,
       });
-      if (!fresh) metadataItems.push(doc);
+      // Fresh ones count toward `upToDate` exactly as `consider` counts a
+      // fresh deck or page — left out, every indexed file and link slide would
+      // vanish from the steady-state tally that tells a healthy run from an
+      // empty one.
+      if (fresh) upToDate += 1;
+      else metadataItems.push(doc);
       continue;
     }
     const html = `${slide.content_path}/index.html`;
@@ -1058,7 +1079,7 @@ export async function planClassroomIndex(
     orphans.push({ kind: kind as ContentDocKind, id });
   }
 
-  return { items, metadataItems, orphans, missingAssets, heldFileOrphans };
+  return { items, metadataItems, orphans, missingAssets, heldFileOrphans, upToDate };
 }
 
 /**
@@ -1116,6 +1137,17 @@ export interface ReconcileClassroomReport {
   failed: number;
   orphansDeleted: number;
   /**
+   * The same reason tally as the fleet's, for this classroom alone.
+   *
+   * The aggregate says WHAT a run did and the reasons say WHY, but only per
+   * classroom do the two combine into a diagnosis: a fleet-wide
+   * `sha_mismatch: 300` is either one classroom whose delivery layer disagrees
+   * with the map about every document or three hundred classrooms that each
+   * raced it once, and those are not the same incident. The fleet tally is the
+   * sum of these.
+   */
+  byReason: Record<string, number>;
+  /**
    * Present only when the classroom was abandoned WHOLE — its repo is gone, its
    * App install was revoked, it hit a rate limit. Its counters are then
    * whatever had accumulated before the throw, which is the useful reading.
@@ -1128,6 +1160,11 @@ export interface ReconcileReport {
   /** Documents found to need work. */
   eligible: number;
   indexed: number;
+  /**
+   * Documents the run declined to write rather than failed to: no blob in the
+   * map, no Workers AI token in this environment, bytes whose sha the map does
+   * not agree with. None of these is an error, and `byReason` names which.
+   */
   skipped: number;
   /**
    * Per-DOCUMENT failures, fleet-wide. A classroom that died whole is NOT in
@@ -1139,7 +1176,11 @@ export interface ReconcileReport {
   /** Classrooms abandoned whole, each with an `error` on its `byClassroom` row. */
   classroomErrors: number;
   orphansDeleted: number;
-  /** Every non-clean outcome, counted by its reason. The readiness signal. */
+  /**
+   * Every outcome that was not a plain write, counted by its reason — including
+   * `up_to_date`, which is the healthy steady state rather than a complaint.
+   * The readiness signal.
+   */
   byReason: Record<string, number>;
   /** One row per classroom the run looked at, in the order it looked. */
   byClassroom: ReconcileClassroomReport[];
@@ -1226,9 +1267,6 @@ export async function reconcileContentIndex(opts: ReconcileOptions = {}): Promis
     byReason: {},
     byClassroom: [],
   };
-  const count = (reason: string, by = 1) => {
-    report.byReason[reason] = (report.byReason[reason] ?? 0) + by;
-  };
 
   let classroomIds = opts.classroomIds;
   if (!classroomIds) {
@@ -1271,6 +1309,7 @@ export async function reconcileContentIndex(opts: ReconcileOptions = {}): Promis
       skipped: 0,
       failed: 0,
       orphansDeleted: 0,
+      byReason: {},
     };
     report.byClassroom.push(own);
     /** Every counter moves in both places or in neither. */
@@ -1280,6 +1319,11 @@ export async function reconcileContentIndex(opts: ReconcileOptions = {}): Promis
     ) => {
       report[field] += by;
       own[field] += by;
+    };
+    /** Reasons too — the fleet tally is the sum of the per-classroom ones. */
+    const count = (reason: string, by = 1) => {
+      report.byReason[reason] = (report.byReason[reason] ?? 0) + by;
+      own.byReason[reason] = (own.byReason[reason] ?? 0) + by;
     };
 
     if (!row.content_repo || !row.git_organization?.login) {
@@ -1308,6 +1352,13 @@ export async function reconcileContentIndex(opts: ReconcileOptions = {}): Promis
 
       const plan = await planClassroomIndex(row.id, { assetsSynced: synced !== null });
       bump('eligible', plan.items.length + plan.metadataItems.length);
+      // Documents the plan found already level with the repo. Counted by reason
+      // only: they are not work this run took on, so they belong in neither
+      // `eligible` nor `skipped` — but counted they must be, because otherwise
+      // a fleet that is entirely indexed and a fleet whose planner came back
+      // empty report the same zeroes, and the readiness gate cannot tell
+      // "healthy and quiet" from "broken and silent".
+      if (plan.upToDate > 0) count('up_to_date', plan.upToDate);
       if (plan.missingAssets > 0) {
         bump('skipped', plan.missingAssets);
         count('no_asset', plan.missingAssets);
@@ -1351,8 +1402,16 @@ export async function reconcileContentIndex(opts: ReconcileOptions = {}): Promis
         // raced the map. Either way these bytes are NOT the sha we would stamp
         // them with, and stamping them anyway makes a wrong document look fresh
         // to every future run. Leave it for the next reconcile.
+        //
+        // SKIPPED, not failed. A classroom served off the Pages CDN answers
+        // without an object id as a matter of course, so for those this is the
+        // ordinary steady state and every document in them would land in
+        // `failed` every single night. A `failed` that is permanently non-zero
+        // on healthy classrooms is a number nobody can alert on. The
+        // `sha_mismatch` reason still carries the whole signal, and a RISE in
+        // it is still the thing to go and look at.
         if (body.sha === null || body.sha !== item.sha) {
-          bump('failed');
+          bump('skipped');
           count('sha_mismatch');
           return;
         }
