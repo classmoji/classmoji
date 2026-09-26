@@ -45,6 +45,8 @@ const unusableIds: [string, unknown][] = [
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // Reset implementations too, so no test inherits another's resolved values.
+  for (const fn of allPrismaCalls()) fn.mockReset();
 });
 
 describe('deleteById', () => {
@@ -294,12 +296,30 @@ const FORM_BODY = {
   tag: 'tag-1',
 };
 
-const NON_FORM_COLUMNS = {
+/**
+ * Keys a body may carry that the form does not own: other columns, relation
+ * writes, and an own `__proto__` key (built with JSON.parse, since an object
+ * literal would set the prototype instead). None may reach Prisma.
+ */
+const NON_FORM_COLUMNS: Record<string, unknown> = {
+  id: 'other-id',
   classroom_id: 'other-classroom',
+  tag_id: 'other-tag',
   slug: 'renamed-slug',
   is_published: true,
   created_at: '2020-01-01T00:00:00.000Z',
+  classroom: { connect: { id: 'other-classroom' } },
+  tag: { connect: { id: 'other-tag' } },
+  assignments: { create: [{ title: 'extra' }] },
+  ...JSON.parse('{"__proto__": {"is_published": true}}'),
 };
+
+/** The data handed to Prisma carries no own `__proto__` and a plain prototype. */
+function expectPlainData(data: object) {
+  expect(Object.prototype.hasOwnProperty.call(data, '__proto__')).toBe(false);
+  expect(Object.getPrototypeOf(data)).toBe(Object.prototype);
+  expect((data as { is_published?: unknown }).is_published).toBeUndefined();
+}
 
 describe('updateFromForm', () => {
   it.each(unusableIds)('rejects %s as an id before issuing any query', async (_label, id) => {
@@ -319,9 +339,10 @@ describe('updateFromForm', () => {
     updateMany.mockResolvedValue({ count: 1 });
     findFirst.mockResolvedValue({ id: 'repo-1', title: 'lab-2' });
 
-    await expect(
-      updateFromForm({ ...FORM_BODY, ...NON_FORM_COLUMNS }, 'classroom-1')
-    ).resolves.toMatchObject({ id: 'repo-1' });
+    // The form's own id and tag win; every other key in the body is ignored.
+    const body = { ...NON_FORM_COLUMNS, ...FORM_BODY };
+    expect(Object.prototype.hasOwnProperty.call(body, '__proto__')).toBe(true);
+    await expect(updateFromForm(body, 'classroom-1')).resolves.toMatchObject({ id: 'repo-1' });
 
     expect(updateMany).toHaveBeenCalledExactlyOnceWith({
       where: { id: 'repo-1', classroom_id: 'classroom-1' },
@@ -338,6 +359,7 @@ describe('updateFromForm', () => {
         tag_id: 'tag-1',
       },
     });
+    expectPlainData((updateMany.mock.calls[0][0] as { data: object }).data);
     expect(findFirst).toHaveBeenCalledWith(
       expect.objectContaining({ where: { id: 'repo-1', classroom_id: 'classroom-1' } })
     );
@@ -387,7 +409,9 @@ describe('updateFromForm', () => {
 describe('createFromFormData', () => {
   it('keeps only form-owned columns and takes the classroom and tag from the caller', () => {
     const { id: _id, tag: _tag, ...body } = FORM_BODY;
-    expect(createFromFormData({ ...body, ...NON_FORM_COLUMNS }, 'classroom-1', 'tag-1')).toEqual({
+    const data = createFromFormData({ ...body, ...NON_FORM_COLUMNS }, 'classroom-1', 'tag-1');
+    expectPlainData(data);
+    expect(data).toEqual({
       title: 'lab-2',
       type: 'GROUP',
       template: 'org/lab-template',

@@ -192,9 +192,14 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
   /** A tag id is usable only if it is one of this classroom's tags (or absent). */
   const isClassroomTag = async (tagId: unknown) => {
     if (!tagId) return true;
+    if (typeof tagId !== 'string') return false;
     const tags = await ClassmojiService.organizationTag.findByClassroomId(classroom.id);
     return tags.some(t => t.id === tagId);
   };
+
+  /** Repository titles are unique per classroom ([classroom_id, title]). */
+  const isTitleTaken = (error: unknown) => (error as { code?: unknown } | null)?.code === 'P2002';
+  const TITLE_TAKEN = 'A repository with this title already exists.';
 
   // Linked pages and slides are limited to this classroom's own; other ids are
   // ignored rather than linked.
@@ -334,6 +339,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
           action: ActionTypes.SAVE_ASSIGNMENT,
         };
       } catch (error: unknown) {
+        if (isTitleTaken(error)) return saveError(TITLE_TAKEN);
         console.error('Repository create error:', error);
         return {
           error: 'Failed to create repository. Please try again.',
@@ -353,7 +359,10 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
         : null;
       if (!repository) return saveError('Repository not found.');
 
-      if (!(await isClassroomTag(tag))) {
+      // The tag only matters for a GROUP repository: the service ignores it
+      // otherwise, and the form always sends the stored tag_id, so a leftover
+      // tag on an INDIVIDUAL repository must not block the save.
+      if (moduleData.type === 'GROUP' && !(await isClassroomTag(tag))) {
         return saveError('Please choose a team tag from this classroom.');
       }
 
@@ -378,6 +387,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
           action: ActionTypes.SAVE_ASSIGNMENT,
         };
       } catch (error: unknown) {
+        if (isTitleTaken(error)) return saveError(TITLE_TAKEN);
         console.error('Repository update error:', error);
         return {
           error: 'Failed to update repository. Please try again.',
