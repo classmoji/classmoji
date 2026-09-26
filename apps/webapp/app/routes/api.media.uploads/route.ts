@@ -26,6 +26,7 @@ export const action = async ({ request }: Route.ActionArgs) => {
   try {
     requireMethod(request, 'POST');
 
+    // Read before the classroom check on purpose: capped at 64 KB, no file bytes, and the classroom id lives in it.
     const body = await readJsonBody(request);
     const classroomId = typeof body.classroomId === 'string' ? body.classroomId : '';
     const filename = typeof body.filename === 'string' ? body.filename : '';
