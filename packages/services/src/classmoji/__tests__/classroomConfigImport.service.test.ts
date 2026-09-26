@@ -65,6 +65,9 @@ describe('selectedSettingsFields', () => {
       'llm_max_tokens',
       'code_aware_model',
       'exploration_model',
+      'question_effort',
+      'grading_effort',
+      'exploration_effort',
       'syllabus_bot_model',
     ]);
   });

@@ -36,6 +36,10 @@ AI features (quizzes, syllabus bot, prompt assistant) run on **Anthropic Claude*
 | `LLM_MODEL` | No | `claude-sonnet-4-5` | Claude model used for quiz and chat evaluation. |
 | `EXPLORATION_MODEL` | No | `claude-sonnet-5` | Claude model used for code-aware quiz repository exploration. |
 | `EXPLORATION_MODE` | No | | Controls the code-aware exploration behavior for quizzes. |
+| `QUIZ_QUESTION_EFFORT` | No | `medium` | Reasoning effort (`low`, `medium`, `high`, `xhigh`, `max`) for quiz question and conversation turns. A classroom with its own API key can override it. |
+| `QUIZ_GRADING_EFFORT` | No | `high` | Reasoning effort for final quiz grading. A classroom with its own API key can override it. |
+| `EXPLORATION_EFFORT` | No | `low` | Reasoning effort for the code-aware quiz's excerpt selection (`xhigh` and `max` run as `high`). A classroom with its own API key can override it. |
+| `QUIZ_MAX_BUDGET_USD` | No | `1.00` | Per-call cost ceiling in USD for quiz agent calls on the platform `ANTHROPIC_API_KEY`. A runaway guard, not a spend limit. |
 | `OPENAI_API_KEY` | No | | Reserved. Not used by any current feature. |
 | `LLM_PROVIDER` | No | | Reserved. Only Anthropic/Claude is wired today. |
 

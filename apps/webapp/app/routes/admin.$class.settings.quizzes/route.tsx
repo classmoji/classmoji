@@ -17,6 +17,44 @@ const { Option } = Select;
 /** Per-classroom model choices. Null (or unset) = the platform default. */
 const MODEL_FIELDS = ['llm_model', 'code_aware_model', 'exploration_model'] as const;
 
+/**
+ * Per-classroom reasoning effort, per quiz phase. Null (or unset) = the
+ * ai-agent's platform default: medium for questions, high for grading, low for
+ * exploration.
+ */
+const EFFORT_FIELDS = ['question_effort', 'grading_effort', 'exploration_effort'] as const;
+
+const EFFORT_OPTIONS = [
+  { value: 'low', label: 'Low' },
+  { value: 'medium', label: 'Medium' },
+  { value: 'high', label: 'High' },
+  { value: 'xhigh', label: 'Extra high (xhigh)' },
+  { value: 'max', label: 'Max' },
+] as const;
+
+/**
+ * Exploration stops at High. Its excerpt call reads up to ~20k tokens of code,
+ * and at xhigh or max the thinking can use up the call's max_tokens before it
+ * answers, which falls back to whole files. (packages/tasks exploreRepo.ts runs
+ * those two as high anyway.)
+ */
+const EXPLORATION_EFFORT_OPTIONS = EFFORT_OPTIONS.filter(
+  option => option.value !== 'xhigh' && option.value !== 'max'
+);
+
+/** The only values the action stores for each effort field (besides null). */
+const EFFORT_LEVELS: Record<(typeof EFFORT_FIELDS)[number], readonly string[]> = {
+  question_effort: EFFORT_OPTIONS.map(option => option.value),
+  grading_effort: EFFORT_OPTIONS.map(option => option.value),
+  exploration_effort: EXPLORATION_EFFORT_OPTIONS.map(option => option.value),
+};
+
+const EFFORT_LABELS: Record<(typeof EFFORT_FIELDS)[number], string> = {
+  question_effort: 'Question effort',
+  grading_effort: 'Grading effort',
+  exploration_effort: 'Exploration effort',
+};
+
 export const loader = async ({ params, request }: Route.LoaderArgs) => {
   const classSlug = params.class!;
 
@@ -105,7 +143,7 @@ const SettingsQuizzes = ({ loaderData }: Route.ComponentProps) => {
     };
     // A cleared Select is undefined, which JSON.stringify drops, so the server
     // would never see the clear. Send null to put the column back to default.
-    for (const field of MODEL_FIELDS) {
+    for (const field of [...MODEL_FIELDS, ...EFFORT_FIELDS]) {
       payload[field] = (values[field] as string) || null;
     }
     fetcher!.submit(payload, {
@@ -178,6 +216,9 @@ const SettingsQuizzes = ({ loaderData }: Route.ComponentProps) => {
           llm_model: (settings.llm_model as string) || undefined,
           code_aware_model: (settings.code_aware_model as string) || undefined,
           exploration_model: (settings.exploration_model as string) || undefined,
+          question_effort: (settings.question_effort as string) || undefined,
+          grading_effort: (settings.grading_effort as string) || undefined,
+          exploration_effort: (settings.exploration_effort as string) || undefined,
         }}
       >
         {/* API Keys Section */}
@@ -206,7 +247,7 @@ const SettingsQuizzes = ({ loaderData }: Route.ComponentProps) => {
         >
           {usingSystemDefaults && (
             <Alert
-              message="Provide an Anthropic API key below to configure custom model settings."
+              message="Provide an Anthropic API key below to configure custom model and effort settings."
               type="info"
               showIcon={true}
               style={{ marginBottom: '16px' }}
@@ -242,6 +283,46 @@ const SettingsQuizzes = ({ loaderData }: Route.ComponentProps) => {
               {anthropicModels.map((model: { value: string; label: string }) => (
                 <Option key={model.value} value={model.value}>
                   {model.label}
+                </Option>
+              ))}
+            </Select>
+          </Form.Item>
+
+          <Form.Item
+            label="Question effort"
+            name="question_effort"
+            extra="Question and conversation turns in standard and code-aware quizzes. Higher effort is slower but more thorough; models that don't support effort ignore it."
+          >
+            <Select allowClear disabled={!hasAnthropicKey} placeholder="Default: Medium">
+              {EFFORT_OPTIONS.map(option => (
+                <Option key={option.value} value={option.value}>
+                  {option.label}
+                </Option>
+              ))}
+            </Select>
+          </Form.Item>
+
+          <Button type="primary" htmlType="submit">
+            Save
+          </Button>
+        </SettingSection>
+
+        <Divider />
+
+        {/* Grading applies to both quiz types */}
+        <SettingSection
+          title="Quiz Grading"
+          description="Configure the final grading of standard and code-aware quizzes."
+        >
+          <Form.Item
+            label="Grading effort"
+            name="grading_effort"
+            extra="How much the AI reasons when it grades a finished quiz; models that don't support effort ignore it."
+          >
+            <Select allowClear disabled={!hasAnthropicKey} placeholder="Default: High">
+              {EFFORT_OPTIONS.map(option => (
+                <Option key={option.value} value={option.value}>
+                  {option.label}
                 </Option>
               ))}
             </Select>
@@ -285,7 +366,7 @@ const SettingsQuizzes = ({ loaderData }: Route.ComponentProps) => {
             name="exploration_model"
             extra={
               hasAnthropicKey
-                ? "Picks and summarizes files in the student's repo. Runs on the Classmoji platform key, not the key above."
+                ? "Picks the files and lines of the student's code the quiz agent sees. Runs on the Classmoji platform key, not the key above."
                 : 'Provide Anthropic API Key above to enable'
             }
           >
@@ -299,6 +380,20 @@ const SettingsQuizzes = ({ loaderData }: Route.ComponentProps) => {
               {anthropicModels.map((model: { value: string; label: string }) => (
                 <Option key={model.value} value={model.value}>
                   {model.label}
+                </Option>
+              ))}
+            </Select>
+          </Form.Item>
+
+          <Form.Item
+            label="Exploration effort"
+            name="exploration_effort"
+            extra="How much the exploration model reasons when it picks the lines of code to show; models that don't support effort ignore it. Runs on the Classmoji platform key, not the key above."
+          >
+            <Select allowClear disabled={!hasAnthropicKey} placeholder="Default: Low">
+              {EXPLORATION_EFFORT_OPTIONS.map(option => (
+                <Option key={option.value} value={option.value}>
+                  {option.label}
                 </Option>
               ))}
             </Select>
@@ -377,6 +472,9 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
         llm_model?: string | null;
         code_aware_model?: string | null;
         exploration_model?: string | null;
+        question_effort?: string | null;
+        grading_effort?: string | null;
+        exploration_effort?: string | null;
       } = {};
       for (const field of MODEL_FIELDS) {
         if (!(field in data)) continue;
@@ -384,22 +482,41 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
         // '' and null both mean "platform default", stored as null.
         updateData[field] = typeof value === 'string' && value.trim() !== '' ? value.trim() : null;
       }
+      for (const field of EFFORT_FIELDS) {
+        if (!(field in data)) continue;
+        const value = data[field];
+        if (value === null || value === '') {
+          updateData[field] = null;
+          continue;
+        }
+        // The ai-agent passes the stored value to the model, so only a level
+        // this field offers is written (exploration stops at high). Anything
+        // else fails the save rather than being dropped quietly.
+        const levels = EFFORT_LEVELS[field];
+        if (typeof value !== 'string' || !levels.includes(value)) {
+          return {
+            error: `${EFFORT_LABELS[field]} must be one of ${levels.join(', ')}, or empty for the default.`,
+            action: ActionTypes.SAVE_QUIZ_SETTINGS,
+          };
+        }
+        updateData[field] = value;
+      }
 
       // Only update API key if provided (non-empty)
       if (typeof anthropic_api_key === 'string' && anthropic_api_key.trim() !== '') {
         updateData.anthropic_api_key = anthropic_api_key;
       }
 
-      // Validation: choosing ANY model requires a key. The disabled Selects are
-      // not the gate; this is.
+      // Validation: choosing ANY model or effort requires a key. The disabled
+      // Selects are not the gate; this is.
       const willHaveKey = Boolean(
         updateData.anthropic_api_key || currentSettings?.anthropic_api_key
       );
 
-      if (MODEL_FIELDS.some(field => updateData[field]) && !willHaveKey) {
+      if ([...MODEL_FIELDS, ...EFFORT_FIELDS].some(field => updateData[field]) && !willHaveKey) {
         return {
           error:
-            'Custom model selection requires an API key. Leave fields empty to use system defaults.',
+            'Custom model or effort selection requires an API key. Leave fields empty to use system defaults.',
           action: ActionTypes.SAVE_QUIZ_SETTINGS,
         };
       }
@@ -421,6 +538,9 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
         anthropic_api_key: null,
         code_aware_model: null,
         exploration_model: null,
+        question_effort: null,
+        grading_effort: null,
+        exploration_effort: null,
       });
       return {
         success: 'LLM settings cleared. Using system defaults.',

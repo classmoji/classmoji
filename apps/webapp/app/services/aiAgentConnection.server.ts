@@ -119,6 +119,23 @@ interface AgentResponse {
   payload: Record<string, unknown>;
 }
 
+/**
+ * An ERROR reply from the ai-agent. `code` and `retryable` come over from its
+ * payload, so a caller can tell one failure from another (a BUDGET_EXCEEDED
+ * stop from an API error, say) without matching on the message text.
+ */
+export class AIAgentRequestError extends Error {
+  code?: string;
+  retryable?: boolean;
+
+  constructor(message: string, code?: string, retryable?: boolean) {
+    super(message);
+    this.name = 'AIAgentRequestError';
+    this.code = code;
+    this.retryable = retryable;
+  }
+}
+
 export async function sendRequest(
   type: string,
   payload: Record<string, unknown>,
@@ -161,6 +178,8 @@ export async function sendRequest(
         conversationId?: string;
         step?: Record<string, unknown>;
         error?: string;
+        code?: string;
+        retryable?: boolean;
       };
     }) => {
       // SECURITY: Filter by requestId (primary) or sessionId (fallback for legacy)
@@ -217,7 +236,13 @@ export async function sendRequest(
       // Handle errors - must match our request
       if (msg.type === 'ERROR' && (matchesRequest || matchesSession)) {
         cleanup();
-        reject(new Error(msg.payload?.error || 'Request failed'));
+        reject(
+          new AIAgentRequestError(
+            msg.payload?.error || 'Request failed',
+            msg.payload?.code,
+            msg.payload?.retryable
+          )
+        );
         return;
       }
     };

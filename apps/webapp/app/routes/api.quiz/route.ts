@@ -51,6 +51,26 @@ const extractDurationMetrics = (payload: Record<string, unknown> | null) => {
   return metrics;
 };
 
+/**
+ * The ai-agent's platform budget guard (QUIZ_MAX_BUDGET_USD) stopped the turn.
+ * aiAgentConnection carries the ERROR payload's `code` onto the thrown error.
+ */
+const isBudgetExceeded = (error: unknown) =>
+  (error as { code?: unknown } | null)?.code === 'BUDGET_EXCEEDED';
+
+/**
+ * Saved in place of a first question when the budget guard stopped the opening
+ * turn. It does not say "restart the quiz", because a student can't: createNew
+ * refuses a new attempt while this one is incomplete (the quiz list offers to
+ * resume it instead), and resuming doesn't re-run startQuiz, since the ai-agent
+ * already saved the welcome message. Sending a message does work: the ai-agent
+ * recovers the session it dropped and, with questions_asked still 0, presents
+ * Question 1. That is also why nothing here invents a question or advances
+ * questions_asked.
+ */
+const BUDGET_STOPPED_START_MESSAGE =
+  'I couldn\'t get your first question ready: it was taking much longer than it should have, so I stopped. Send any message ("ready" is fine) and I\'ll try again.';
+
 export async function action({ request }: Route.ActionArgs) {
   // Only handle POST requests
   if (request.method !== 'POST') {
@@ -447,6 +467,12 @@ export async function action({ request }: Route.ActionArgs) {
                     // Repo-exploration sub-agent. Runs on the platform key in
                     // Trigger.dev regardless of anthropicApiKey.
                     explorationModel: classroomSettings?.exploration_model,
+                    // Reasoning effort per phase; null = the ai-agent's
+                    // platform default. The ai-agent drops it for a model that
+                    // takes no effort.
+                    questionEffort: classroomSettings?.question_effort,
+                    gradingEffort: classroomSettings?.grading_effort,
+                    explorationEffort: classroomSettings?.exploration_effort,
                   },
                   // Code-aware options
                   { orgLogin: gitOrganization.login, repoName, accessToken }
@@ -466,6 +492,18 @@ export async function action({ request }: Route.ActionArgs) {
                 // Frontend picks up new messages via DB polling (revalidation)
               } catch (error: unknown) {
                 console.error('[startQuiz] Quiz-agent initialization failed:', error);
+
+                // Stopped by the budget guard: say so, and ask no question.
+                if (isBudgetExceeded(error)) {
+                  await ClassmojiService.aiConversation.addMessage(
+                    attempt.id,
+                    'ASSISTANT',
+                    BUDGET_STOPPED_START_MESSAGE,
+                    false,
+                    { errorType: 'BUDGET_EXCEEDED' }
+                  );
+                  return;
+                }
 
                 // Fallback to standard LLM
                 const fallbackMessage =
@@ -513,6 +551,9 @@ export async function action({ request }: Route.ActionArgs) {
                   difficultyLevel: attempt.quiz.difficulty_level,
                   anthropicApiKey: classroomSettings?.anthropic_api_key,
                   model: classroomSettings?.llm_model,
+                  // Reasoning effort per phase; null = the ai-agent's default.
+                  questionEffort: classroomSettings?.question_effort,
+                  gradingEffort: classroomSettings?.grading_effort,
                 });
 
                 // ai-agent already saved the opening message to AIConversationMessage
@@ -528,6 +569,19 @@ export async function action({ request }: Route.ActionArgs) {
                 // Frontend picks up new messages via DB polling (revalidation)
               } catch (llmError) {
                 console.error('[startQuiz] Quiz-agent error:', llmError);
+
+                // Stopped by the budget guard: say so, and ask no question.
+                if (isBudgetExceeded(llmError)) {
+                  await ClassmojiService.aiConversation.addMessage(
+                    attempt.id,
+                    'ASSISTANT',
+                    BUDGET_STOPPED_START_MESSAGE,
+                    false,
+                    { errorType: 'BUDGET_EXCEEDED' }
+                  );
+                  return;
+                }
+
                 const fallbackQuestion = `Let's begin with your first question. Can you tell me about your understanding of the key concepts we'll be covering today?`;
 
                 await ClassmojiService.aiConversation.addMessage(

@@ -527,6 +527,15 @@ model ClassroomSettings {
   // the platform EXPLORATION_MODEL. Runs in a Trigger.dev task on the platform
   // Anthropic key, not anthropic_api_key above.
   exploration_model            String?
+  // Reasoning effort per quiz phase: question and conversation turns (both quiz
+  // types), final grading (both), and the exploration excerpt call. One of
+  // low|medium|high|xhigh|max; null = the platform default (the ai-agent's
+  // QUIZ_QUESTION_EFFORT, QUIZ_GRADING_EFFORT, EXPLORATION_EFFORT). Only a
+  // classroom with its own key can set these on the settings page; the ai-agent
+  // honors what is stored and drops it for a model that takes no effort.
+  question_effort              String?
+  grading_effort               String?
+  exploration_effort           String?
   content_repo_name            String?
   default_student_page         String   @default("dashboard")
   theme                        String   @default("stone")
