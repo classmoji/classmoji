@@ -36,7 +36,13 @@ import { IssueStatus, type Role } from '@prisma/client';
 import { z, type ZodRawShape } from 'zod';
 import type { ResourceDefinition, ToolDefinition } from '../mcp/registry.ts';
 import { parseClassroomRef } from '../authz/pure.ts';
-import { ok, OWNER_TEACHER, requireClassroomCtx, TEACHING_TEAM } from './shared.ts';
+import {
+  ok,
+  OWNER_TEACHER,
+  requireClassroomCtx,
+  submissionIdSchema,
+  TEACHING_TEAM,
+} from './shared.ts';
 import { orgLogin, type SubmissionLike } from '../resources/shape.ts';
 import { meResource } from '../resources/me.ts';
 import { classroomInfoResource } from '../resources/classroomInfo.ts';
@@ -193,7 +199,7 @@ export const getSubmissionTool = mirrorResourceTool({
     'present. Teaching team only. `submission_id` comes from list_submissions; it is also the ' +
     'id that grade_add, grade_remove, grader_assign, and submission_late_override consume.',
   extraInput: {
-    submission_id: z.string().uuid().describe('Submission (GitRepoAssignment) id'),
+    submission_id: submissionIdSchema.describe('Submission (GitRepoAssignment) id'),
   },
   buildVars: args => ({ submissionId: String(args.submission_id) }),
 });

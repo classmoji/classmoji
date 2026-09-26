@@ -101,6 +101,19 @@ const isComputed = (model: DmmfModel, key: string): boolean =>
 const fieldOf = (model: DmmfModel, key: string): DmmfField | undefined =>
   model.fields.find(f => f.name === key);
 
+/**
+ * The fields of a compound unique selector (`@@unique([a, b])` or `@@id([a, b])`),
+ * which Prisma exposes in a unique `where` as one key named `a_b` (or the
+ * index's explicit `name`), e.g. `{ git_repo_assignment_id_grader_id: {...} }`.
+ */
+const compoundUniqueFieldsOf = (model: DmmfModel, key: string): readonly string[] | undefined => {
+  const keys = [
+    ...model.uniqueIndexes.map(u => ({ name: u.name, fields: u.fields })),
+    ...(model.primaryKey ? [model.primaryKey] : []),
+  ];
+  return keys.find(u => (u.name ?? u.fields.join('_')) === key)?.fields;
+};
+
 const relatedModelOf = (field: DmmfField): DmmfModel | undefined =>
   field.kind === 'object' ? MODELS_BY_NAME.get(field.type) : undefined;
 
@@ -127,6 +140,17 @@ function assertWhere(model: DmmfModel, clause: Clause): void {
   for (const [key, value] of Object.entries(clause)) {
     if (LOGICAL_OPS.has(key)) {
       assertWhere(model, value);
+      continue;
+    }
+    const compoundFields = compoundUniqueFieldsOf(model, key);
+    if (compoundFields) {
+      // Its value names exactly the index's fields.
+      if (isPlainObject(value)) {
+        for (const inner of Object.keys(value)) {
+          if (!compoundFields.includes(inner))
+            throw unknownField(model, `${key}.${inner}`, 'where');
+        }
+      }
       continue;
     }
     const field = fieldOf(model, key);

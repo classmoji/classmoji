@@ -122,6 +122,15 @@ describe('valid queries', () => {
     ]);
   });
 
+  it('accepts a compound unique selector (@@unique([a, b]) as `a_b`)', async () => {
+    await validatingPrisma.gitRepoAssignmentGrader.delete({
+      where: {
+        git_repo_assignment_id_grader_id: { git_repo_assignment_id: 'gra-1', grader_id: 'u-1' },
+      },
+    });
+    expect(prismaCallsFor('gitRepoAssignmentGrader', 'delete')).toHaveLength(1);
+  });
+
   it('accepts a client-extension computed field in select', async () => {
     await expect(
       validatingPrisma.classroom.findMany({ select: { id: true, num_students: true } })
@@ -142,6 +151,18 @@ describe('unknown field', () => {
   it('rejects a where on a field the model does not have, naming model and field', async () => {
     await expect(validatingPrisma.page.findMany({ where: { module_id: 'm-1' } })).rejects.toThrow(
       'Unknown field `module_id` for where statement on model `Page`.'
+    );
+  });
+
+  it('rejects a compound unique selector naming a field outside the index', async () => {
+    await expect(
+      validatingPrisma.gitRepoAssignmentGrader.delete({
+        where: {
+          git_repo_assignment_id_grader_id: { git_repo_assignment_id: 'gra-1', user_id: 'u' },
+        },
+      })
+    ).rejects.toThrow(
+      'Unknown field `git_repo_assignment_id_grader_id.user_id` for where statement on model `GitRepoAssignmentGrader`.'
     );
   });
 

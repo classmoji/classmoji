@@ -40,6 +40,7 @@ import {
   ok,
   requireClassroomCtx,
   scopedNotFound,
+  submissionIdSchema,
   TEACHING_TEAM,
   writeAudit,
 } from './shared.ts';
@@ -98,7 +99,7 @@ export const regradeCreateTool: ToolDefinition<RegradeCreateArgs> = {
   roles: ['STUDENT'],
   inputSchema: {
     classroom: z.string().describe("Classroom reference as 'org/slug'"),
-    git_repo_assignment_id: z.string().uuid().describe('Your submission (GitRepoAssignment) id'),
+    git_repo_assignment_id: submissionIdSchema.describe('Your submission (GitRepoAssignment) id'),
     comment: z.string().min(1).max(2000).describe('Why the work should be regraded'),
   },
   handler: async (args, ctx) => {

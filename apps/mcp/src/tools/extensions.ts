@@ -21,7 +21,13 @@ import { ClassmojiService } from '@classmoji/services';
 import { z } from 'zod';
 import { ToolError } from '../mcp/errors.ts';
 import type { ToolDefinition } from '../mcp/registry.ts';
-import { loadGitRepoAssignmentInClassroom, ok, scopedNotFound, writeAudit } from './shared.ts';
+import {
+  loadGitRepoAssignmentInClassroom,
+  ok,
+  scopedNotFound,
+  submissionIdSchema,
+  writeAudit,
+} from './shared.ts';
 
 /**
  * The service's domain rejections are intentional user-facing messages
@@ -65,7 +71,7 @@ export const extensionPurchaseTool: ToolDefinition<ExtensionPurchaseArgs> = {
   roles: ['STUDENT'],
   inputSchema: {
     classroom: z.string().describe("Classroom reference as 'org/slug'"),
-    git_repo_assignment_id: z.string().uuid().describe('Your submission (GitRepoAssignment) id'),
+    git_repo_assignment_id: submissionIdSchema.describe('Your submission (GitRepoAssignment) id'),
     hours: z.number().int().positive().max(1000).describe('Late hours to purchase'),
   },
   handler: async (args, ctx) => {
