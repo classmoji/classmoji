@@ -28,6 +28,7 @@ const mocks = vi.hoisted(() => ({
   updateStaff: vi.fn(),
   removeStaff: vi.fn(),
   waitForRunCompletion: vi.fn(),
+  countUngradedSlotsByGrader: vi.fn(),
 }));
 
 vi.mock('~/utils/routeAuth.server', () => ({
@@ -39,6 +40,9 @@ vi.mock('~/utils/routeAuth.server', () => ({
 vi.mock('@classmoji/services', () => ({
   ClassmojiService: {
     classroomMembership: { findUsersByRole: (...a: unknown[]) => mocks.findUsersByRole(...a) },
+    gitRepoAssignmentGrader: {
+      countUngradedSlotsByGrader: (...a: unknown[]) => mocks.countUngradedSlotsByGrader(...a),
+    },
     staff: {
       addStaff: (...a: unknown[]) => mocks.addStaff(...a),
       updateStaff: (...a: unknown[]) => mocks.updateStaff(...a),
@@ -141,6 +145,7 @@ beforeEach(() => {
   for (const m of Object.values(mocks)) m.mockReset();
   // One call per role; the loader queries OWNER, TEACHER and ASSISTANT in turn.
   mocks.findUsersByRole.mockResolvedValue([RAW_STAFF_ROW]);
+  mocks.countUngradedSlotsByGrader.mockResolvedValue({ 'user-1': 9 });
   mocks.requireClassroomTeachingTeam.mockResolvedValue({
     userId: 'ta-1',
     classroom: CLASSROOM,
@@ -281,6 +286,33 @@ describe('staff loader — payload allowlist', () => {
     const row = data.staff[0] as unknown as Record<string, unknown>;
 
     expect('image' in row).toBe(false);
+  });
+});
+
+// ─── Ungraded slots for the remove dialog ────────────────────────────────────
+
+describe('staff loader — ungradedByUser', () => {
+  it('gives an owner on /admin the per-grader ungraded counts, for this classroom', async () => {
+    asOwner();
+    const data = await adminRoute.loader(loaderArgs(`/admin/${CLASS_SLUG}/staff`));
+
+    expect(mocks.countUngradedSlotsByGrader).toHaveBeenCalledWith('class-1');
+    expect(data.ungradedByUser).toEqual({ 'user-1': 9 });
+  });
+
+  it('gives an assistant nothing — grading workload is not part of the read', async () => {
+    const data = await adminRoute.loader(loaderArgs(`/assistant/${CLASS_SLUG}/staff`));
+
+    expect(mocks.countUngradedSlotsByGrader).not.toHaveBeenCalled();
+    expect(data.ungradedByUser).toEqual({});
+  });
+
+  it('gives an owner on a read-only prefix nothing either', async () => {
+    asOwner();
+    const data = await teacherRoute.loader(loaderArgs(`/teacher/${CLASS_SLUG}/staff`));
+
+    expect(mocks.countUngradedSlotsByGrader).not.toHaveBeenCalled();
+    expect(data.ungradedByUser).toEqual({});
   });
 });
 

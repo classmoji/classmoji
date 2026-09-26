@@ -31,10 +31,12 @@ vi.mock('@classmoji/services', () => {
   // the class the handler imports must be the class the test constructs.
   class StaffServiceError extends Error {
     code: string;
-    constructor(code: string, message: string) {
+    ungradedCount?: number;
+    constructor(code: string, message: string, details: { ungradedCount?: number } = {}) {
       super(message);
       this.name = 'StaffServiceError';
       this.code = code;
+      this.ungradedCount = details.ungradedCount;
     }
   }
   return {
@@ -43,9 +45,14 @@ vi.mock('@classmoji/services', () => {
       staff: {
         addStaff: (...a: unknown[]) => mocks.addStaff(...a),
         updateStaff: (...a: unknown[]) => mocks.updateStaff(...a),
-        removeStaff: (...a: unknown[]) => mocks.removeStaff(...a),
       },
       audit: { create: (...a: unknown[]) => mocks.auditCreate(...a) },
+    },
+    // staff_remove goes through the shared removal entry point, which also
+    // settles the person's ungraded grader slots. `mocks.removeStaff` stands
+    // in for it.
+    HelperService: {
+      removeStaffMember: (...a: unknown[]) => mocks.removeStaff(...a),
     },
   };
 });
@@ -430,6 +437,8 @@ describe('staff_remove', () => {
       classroomId: 'class-1',
       login: 'ta-ann',
       role: 'ASSISTANT',
+      ungradedSubmissions: null,
+      requireChoice: true,
     });
 
     const audit = auditRow();
@@ -462,6 +471,8 @@ describe('staff_remove', () => {
         classroomId: 'class-1',
         login: 'pat',
         role,
+        ungradedSubmissions: null,
+        requireChoice: true,
       });
       expect(payload).toMatchObject({ success: true, queued: true, role });
       // The role is the whole point of the record.
@@ -536,5 +547,155 @@ describe('staff_remove', () => {
       expect(role.safeParse(value).success).toBe(true);
     }
     expect(role.safeParse('STUDENT').success).toBe(false);
+  });
+});
+
+describe('staff_remove — ungraded submissions', () => {
+  const ARGS = {
+    classroom: 'org/w26',
+    login: 'ta-ann',
+    role: 'ASSISTANT' as const,
+    confirm: true as const,
+  };
+
+  const REMOVAL = { userId: 'ta-1', login: 'ta-ann', role: 'ASSISTANT', runId: 'run-1' };
+
+  const outcome = (over: Record<string, unknown>) => ({
+    choice: 'reassign',
+    total: 9,
+    reassigned: [],
+    unassigned: 0,
+    alreadyCovered: 0,
+    kept: 0,
+    failed: 0,
+    queued: false,
+    fallback: null,
+    ...over,
+  });
+
+  it('refuses without a choice, with the count and the three options, and audits nothing', async () => {
+    mocks.removeStaff.mockRejectedValue(
+      new StaffServiceError('ungraded_choice_required', '[staff] 9 ungraded', {
+        ungradedCount: 9,
+      } as never)
+    );
+
+    const error = await staffRemoveTool.handler(ARGS, CTX).catch(e => e);
+    expect(error).toMatchObject({
+      kind: 'invalid_params',
+      code: 'UNGRADED_CHOICE_REQUIRED',
+      data: { ungraded_count: 9, options: ['reassign', 'unassign', 'keep'] },
+    });
+    expect(error.message).toContain('9 ungraded submissions');
+    expect(error.message).toContain('ungraded_submissions');
+    // The tool always asks the shared entry point to refuse rather than keep.
+    expect(mocks.removeStaff.mock.calls[0][0]).toMatchObject({
+      ungradedSubmissions: null,
+      requireChoice: true,
+    });
+    expect(mocks.auditCreate).not.toHaveBeenCalled();
+  });
+
+  it('reassign: reports reassigned_to per grader login and audits the choice and counts', async () => {
+    mocks.removeStaff.mockResolvedValue({
+      ...REMOVAL,
+      ungradedCount: 9,
+      ungraded: outcome({
+        reassigned: [
+          { graderId: 'u-bob', login: 'ta-bob', count: 5 },
+          { graderId: 'u-cat', login: 'ta-cat', count: 4 },
+        ],
+      }),
+    });
+
+    const payload = parse(
+      await staffRemoveTool.handler({ ...ARGS, ungraded_submissions: 'reassign' }, CTX)
+    );
+
+    expect(mocks.removeStaff.mock.calls[0][0]).toMatchObject({ ungradedSubmissions: 'reassign' });
+    expect(payload.ungraded_submissions).toEqual({
+      choice: 'reassign',
+      total: 9,
+      reassigned_to: { 'ta-bob': 5, 'ta-cat': 4 },
+      unassigned: 0,
+      kept: 0,
+      failed: 0,
+      queued: false,
+    });
+
+    const audit = auditRow();
+    expect(audit.action).toBe('DELETE');
+    expect(audit.data).toMatchObject({
+      tool: 'staff_remove',
+      value: 'ASSISTANT:reassign',
+      role: 'ASSISTANT',
+      ungraded_submissions: {
+        choice: 'reassign',
+        reassigned_to: { 'ta-bob': 5, 'ta-cat': 4 },
+      },
+    });
+  });
+
+  it('reassign with no other grader reports the fallback', async () => {
+    mocks.removeStaff.mockResolvedValue({
+      ...REMOVAL,
+      ungradedCount: 2,
+      ungraded: outcome({ total: 2, unassigned: 2, fallback: 'no_eligible_graders' }),
+    });
+    const payload = parse(
+      await staffRemoveTool.handler({ ...ARGS, ungraded_submissions: 'reassign' }, CTX)
+    );
+    expect(payload.ungraded_submissions).toMatchObject({
+      unassigned: 2,
+      reassigned_to: {},
+      fallback: 'no_eligible_graders',
+    });
+  });
+
+  it('unassign: reports the unassigned count (covered slots included)', async () => {
+    mocks.removeStaff.mockResolvedValue({
+      ...REMOVAL,
+      ungradedCount: 3,
+      ungraded: outcome({ choice: 'unassign', total: 3, unassigned: 2, alreadyCovered: 1 }),
+    });
+    const payload = parse(
+      await staffRemoveTool.handler({ ...ARGS, ungraded_submissions: 'unassign' }, CTX)
+    );
+    expect(payload.ungraded_submissions).toMatchObject({ choice: 'unassign', unassigned: 3 });
+    expect(auditRow().data).toMatchObject({ value: 'ASSISTANT:unassign' });
+  });
+
+  it('keep: reports the kept count', async () => {
+    mocks.removeStaff.mockResolvedValue({
+      ...REMOVAL,
+      ungradedCount: 4,
+      ungraded: outcome({ choice: 'keep', total: 4, kept: 4 }),
+    });
+    const payload = parse(
+      await staffRemoveTool.handler({ ...ARGS, ungraded_submissions: 'keep' }, CTX)
+    );
+    expect(payload.ungraded_submissions).toMatchObject({ choice: 'keep', kept: 4 });
+    expect(auditRow().data).toMatchObject({ value: 'ASSISTANT:keep' });
+  });
+
+  it('no ungraded slots: no param needed and no ungraded_submissions field', async () => {
+    mocks.removeStaff.mockResolvedValue({ ...REMOVAL, ungradedCount: 0, ungraded: null });
+    const payload = parse(await staffRemoveTool.handler(ARGS, CTX));
+    expect(payload).not.toHaveProperty('ungraded_submissions');
+    expect(auditRow().data).toMatchObject({ value: 'ASSISTANT:none' });
+    expect(auditRow().data).not.toHaveProperty('ungraded_submissions');
+  });
+
+  it('accepts only the three choices', () => {
+    const field = staffRemoveTool.inputSchema.ungraded_submissions;
+    for (const value of ['reassign', 'unassign', 'keep', undefined]) {
+      expect(field.safeParse(value).success).toBe(true);
+    }
+    expect(field.safeParse('spread').success).toBe(false);
+  });
+
+  it('stays destructive and keeps its description under 1,500 bytes', () => {
+    expect(staffRemoveTool.annotations).toMatchObject({ destructive: true });
+    expect(Buffer.byteLength(staffRemoveTool.description, 'utf8')).toBeLessThan(1500);
   });
 });

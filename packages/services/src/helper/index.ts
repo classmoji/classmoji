@@ -1,6 +1,92 @@
+import { tasks } from '@trigger.dev/sdk';
 import { parseScoreEmoji } from '@classmoji/utils';
 import { getGitProvider } from '../git/index.ts';
 import ClassmojiService from '../classmoji/index.ts';
+import {
+  StaffServiceError,
+  type RemoveStaffResult,
+  type StaffRole,
+} from '../classmoji/staff.service.ts';
+import type { PlannedMove, UngradedChoice } from '../classmoji/graderReassignPlan.ts';
+
+/**
+ * At or below this many slots the move runs inside the request; above it, one
+ * background run per slot (the grader_assign_bulk fan-out pattern). Each slot
+ * is up to two GitHub calls plus a few queries; the web removal already waits
+ * on its own background run, so ten slots at UNGRADED_INLINE_CONCURRENCY cost a
+ * few seconds, while a TA holding a whole assignment's worth would not.
+ */
+export const UNGRADED_INLINE_LIMIT = 10;
+const UNGRADED_INLINE_CONCURRENCY = 4;
+/** Trigger.dev caps a batch at 500 items before SDK 4.3.1 and 1,000 after. */
+const BATCH_CHUNK = 500;
+
+export interface MoveGraderSlotPayload {
+  classroomId: string;
+  gitRepoAssignmentId: string;
+  fromGraderId: string;
+  /** null → only remove the departing grader. */
+  toGraderId: string | null;
+}
+
+export type MoveGraderSlotResult =
+  | { status: 'moved'; toLogin: string }
+  | {
+      status:
+        | 'unassigned'
+        | 'already_removed'
+        | 'graded_since'
+        | 'submission_not_found'
+        | 'grader_not_eligible'
+        | 'no_git_organization';
+    };
+
+export interface UngradedSlotsOutcome {
+  choice: UngradedChoice;
+  /** Ungraded slots found when the decision ran. */
+  total: number;
+  /** Per new grader. With `queued`, the plan the background runs carry out. */
+  reassigned: Array<{ graderId: string; login: string; count: number }>;
+  unassigned: number;
+  /** Removed with no replacement because every other grader is already on it. */
+  alreadyCovered: number;
+  kept: number;
+  failed: number;
+  queued: boolean;
+  fallback: 'no_eligible_graders' | null;
+}
+
+export interface RemoveStaffMemberResult extends RemoveStaffResult {
+  ungradedCount: number;
+  /** null when there was nothing to decide (no ungraded slots, or still a grader). */
+  ungraded: UngradedSlotsOutcome | null;
+}
+
+const emptyOutcome = (choice: UngradedChoice, total: number): UngradedSlotsOutcome => ({
+  choice,
+  total,
+  reassigned: [],
+  unassigned: 0,
+  alreadyCovered: 0,
+  kept: 0,
+  failed: 0,
+  queued: false,
+  fallback: null,
+});
+
+/** Run `fn` over `items`, at most `limit` at a time, keeping order. */
+const mapPool = async <T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>) => {
+  const results = new Array<R>(items.length);
+  let next = 0;
+  const worker = async () => {
+    while (next < items.length) {
+      const index = next++;
+      results[index] = await fn(items[index]);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return results;
+};
 
 interface HelperGitOrganization {
   provider: string;
@@ -281,6 +367,242 @@ class HelperService {
       gitRepoAssignmentId: submission.id,
     });
     return { status: 'removed', graderLogin: assigned.grader.login };
+  }
+
+  /**
+   * Move ONE slot off a departing grader: add the new grader first, then remove
+   * the old one, so the submission is never left without a grader. Both steps
+   * go through the classroom-scoped helpers above, so the submission is
+   * re-loaded from this classroom and the new grader re-checked against the
+   * pool. The provider calls use the classroom's own installation, never the
+   * departing person's credentials — their login only appears as the assignee
+   * being removed.
+   *
+   * Safe to repeat (a background retry): the add reports already_assigned and
+   * a second removal reports already_removed. A slot graded since the plan was
+   * made is left alone — graded slots are the record of who graded.
+   */
+  static async moveGraderSlot(
+    payload: MoveGraderSlotPayload & { gitOrganization?: HelperGitOrganization | null }
+  ): Promise<MoveGraderSlotResult> {
+    const { classroomId, gitRepoAssignmentId, fromGraderId, toGraderId } = payload;
+
+    let gitOrganization = payload.gitOrganization ?? null;
+    if (!gitOrganization) {
+      const classroom = await ClassmojiService.classroom.findById(classroomId);
+      gitOrganization = (classroom?.git_organization as HelperGitOrganization | null) ?? null;
+    }
+    if (!gitOrganization) return { status: 'no_git_organization' };
+
+    const grades = await ClassmojiService.assignmentGrade.findByAssignmentId(gitRepoAssignmentId);
+    if (grades.length > 0) return { status: 'graded_since' };
+
+    let toLogin: string | null = null;
+    if (toGraderId) {
+      const added = await this.addGraderInClassroom({
+        classroomId,
+        gitOrganization,
+        gitRepoAssignmentId,
+        graderId: toGraderId,
+      });
+      if (!('graderLogin' in added)) return { status: added.status };
+      toLogin = added.graderLogin;
+    }
+
+    const removed = await this.removeGraderInClassroom({
+      classroomId,
+      gitOrganization,
+      gitRepoAssignmentId,
+      graderId: fromGraderId,
+    });
+    if (removed.status === 'submission_not_found') return { status: 'submission_not_found' };
+    if (removed.status === 'grader_not_assigned') return { status: 'already_removed' };
+
+    return toLogin ? { status: 'moved', toLogin } : { status: 'unassigned' };
+  }
+
+  /**
+   * Carry out the owner's decision for a departing grader's UNGRADED slots.
+   *
+   *   keep     — nothing changes (the behaviour before this existed).
+   *   unassign — their rows on those submissions are removed.
+   *   reassign — spread across the other eligible graders
+   *              (gitRepoAssignmentGrader.planUngradedReassignment); with no
+   *              other eligible grader it falls back to unassign and says so
+   *              in `fallback`.
+   *
+   * Slots are re-read here rather than taken from the caller. Up to
+   * UNGRADED_INLINE_LIMIT they are moved in this request, each one in its own
+   * try so one provider failure does not abort the rest; above it they go out
+   * as one `move_grader_slot` run per slot and the outcome reports the plan
+   * with `queued: true`.
+   */
+  static async resolveUngradedSlots({
+    classroomId,
+    graderId,
+    choice,
+  }: {
+    classroomId: string;
+    graderId: string;
+    choice: UngradedChoice;
+  }): Promise<UngradedSlotsOutcome> {
+    const slots = await ClassmojiService.gitRepoAssignmentGrader.findUngradedSlotsForGrader(
+      classroomId,
+      graderId
+    );
+    const outcome = emptyOutcome(choice, slots.length);
+    if (slots.length === 0) return outcome;
+
+    if (choice === 'keep') {
+      outcome.kept = slots.length;
+      return outcome;
+    }
+
+    let moves: PlannedMove[];
+    if (choice === 'reassign') {
+      const plan = await ClassmojiService.gitRepoAssignmentGrader.planUngradedReassignment({
+        classroomId,
+        fromGraderId: graderId,
+        slots,
+      });
+      moves = plan.moves;
+      outcome.fallback = plan.fallback;
+    } else {
+      moves = slots.map(slot => ({
+        gitRepoAssignmentId: slot.git_repo_assignment.id,
+        toGraderId: null,
+        toLogin: null,
+        reason: 'no_eligible_graders' as const,
+      }));
+    }
+
+    const tally = new Map<string, { graderId: string; login: string; count: number }>();
+    const record = (move: PlannedMove, login: string | null) => {
+      if (move.toGraderId && login) {
+        const entry = tally.get(move.toGraderId) ?? {
+          graderId: move.toGraderId,
+          login,
+          count: 0,
+        };
+        entry.count += 1;
+        tally.set(move.toGraderId, entry);
+      } else if (move.reason === 'covered') {
+        outcome.alreadyCovered += 1;
+      } else {
+        outcome.unassigned += 1;
+      }
+    };
+
+    if (moves.length > UNGRADED_INLINE_LIMIT) {
+      const payloads = moves.map(move => ({
+        payload: {
+          classroomId,
+          gitRepoAssignmentId: move.gitRepoAssignmentId,
+          fromGraderId: graderId,
+          toGraderId: move.toGraderId,
+        } satisfies MoveGraderSlotPayload,
+      }));
+      for (let i = 0; i < payloads.length; i += BATCH_CHUNK) {
+        await tasks.batchTrigger('move_grader_slot', payloads.slice(i, i + BATCH_CHUNK));
+      }
+      for (const move of moves) record(move, move.toLogin);
+      outcome.queued = true;
+      outcome.reassigned = [...tally.values()];
+      return outcome;
+    }
+
+    const classroom = await ClassmojiService.classroom.findById(classroomId);
+    const gitOrganization = (classroom?.git_organization as HelperGitOrganization | null) ?? null;
+
+    await mapPool(moves, UNGRADED_INLINE_CONCURRENCY, async move => {
+      try {
+        const result = await this.moveGraderSlot({
+          classroomId,
+          gitOrganization,
+          gitRepoAssignmentId: move.gitRepoAssignmentId,
+          fromGraderId: graderId,
+          toGraderId: move.toGraderId,
+        });
+        if (result.status === 'moved') record(move, result.toLogin);
+        else if (result.status === 'unassigned') record(move, null);
+        // already_removed / graded_since are correct skips, not failures: the
+        // slot is gone, or it is now the record of who graded.
+        else if (result.status !== 'already_removed' && result.status !== 'graded_since') {
+          outcome.failed += 1;
+        }
+      } catch (error) {
+        console.error(
+          `[ungraded-slots] could not move submission ${move.gitRepoAssignmentId} off ${graderId}:`,
+          error
+        );
+        outcome.failed += 1;
+      }
+    });
+
+    outcome.reassigned = [...tally.values()].sort((a, b) => a.login.localeCompare(b.login));
+    return outcome;
+  }
+
+  /**
+   * Remove one staff role and settle the person's ungraded grader slots — the
+   * one entry point the web Teaching Staff action and MCP staff_remove share.
+   *
+   * Order matters:
+   *   1. previewRemoval — who they are, and whether their slots need a
+   *      decision (only when no ASSISTANT/TEACHER role remains).
+   *   2. With slots and no choice: `requireChoice` (MCP) refuses with
+   *      `ungraded_choice_required` BEFORE anything changes; otherwise the
+   *      choice is `keep`, which is what removal did before.
+   *   3. staff.removeStaff — its own checks (last owner, not found) run before
+   *      anything is queued, so a refused removal never moves a slot.
+   *   4. resolveUngradedSlots. The GitHub removal run may be going at the same
+   *      time; nothing here depends on the departing person's access. A failure
+   *      at this step is reported in the outcome, not thrown: the removal is
+   *      already queued and the caller must say so.
+   */
+  static async removeStaffMember({
+    classroomId,
+    login,
+    role,
+    ungradedSubmissions,
+    requireChoice = false,
+  }: {
+    classroomId: string;
+    login: string;
+    role: StaffRole;
+    ungradedSubmissions?: UngradedChoice | null;
+    requireChoice?: boolean;
+  }): Promise<RemoveStaffMemberResult> {
+    const preview = await ClassmojiService.staff.previewRemoval({ classroomId, login, role });
+
+    if (preview.ungradedCount > 0 && !ungradedSubmissions && requireChoice) {
+      throw new StaffServiceError(
+        'ungraded_choice_required',
+        `[staff] ${preview.login} is assigned ${preview.ungradedCount} ungraded submissions`,
+        { ungradedCount: preview.ungradedCount }
+      );
+    }
+    const choice: UngradedChoice = ungradedSubmissions ?? 'keep';
+
+    const removal = await ClassmojiService.staff.removeStaff({ classroomId, login, role });
+
+    if (preview.ungradedCount === 0) {
+      return { ...removal, ungradedCount: 0, ungraded: null };
+    }
+
+    let ungraded: UngradedSlotsOutcome;
+    try {
+      ungraded = await this.resolveUngradedSlots({
+        classroomId,
+        graderId: removal.userId,
+        choice,
+      });
+    } catch (error) {
+      console.error(`[staff] ungraded slots of ${removal.login} were not handled:`, error);
+      ungraded = { ...emptyOutcome(choice, preview.ungradedCount), failed: preview.ungradedCount };
+    }
+
+    return { ...removal, ungradedCount: preview.ungradedCount, ungraded };
   }
 
   /**

@@ -20,7 +20,13 @@
  * cross-classroom probe cannot enumerate foreign staff.
  */
 
-import { ClassmojiService, StaffServiceError, type StaffRole } from '@classmoji/services';
+import {
+  ClassmojiService,
+  HelperService,
+  StaffServiceError,
+  type RemoveStaffMemberResult,
+  type StaffRole,
+} from '@classmoji/services';
 import { z } from 'zod';
 import { ToolError } from '../mcp/errors.ts';
 import type { ToolDefinition } from '../mcp/registry.ts';
@@ -88,6 +94,19 @@ function mapStaffError(error: unknown): unknown {
         'invalid_params',
         'is_grader applies to ASSISTANT and TEACHER only — owners do not join the grading pool'
       );
+    case 'ungraded_choice_required': {
+      // Refused BEFORE anything is queued: the caller must decide.
+      const count = error.ungradedCount ?? 0;
+      return new ToolError(
+        'invalid_params',
+        `They are grader on ${count} ungraded submission${count === 1 ? '' : 's'} and will ` +
+          'no longer be an assistant or teacher here. Call again with ungraded_submissions: ' +
+          '"reassign" (spread across the other graders), "unassign" (remove them as grader) or ' +
+          '"keep" (leave them assigned). Graded submissions are never changed.',
+        'UNGRADED_CHOICE_REQUIRED',
+        { ungraded_count: count, options: ['reassign', 'unassign', 'keep'] }
+      );
+    }
     default:
       return error;
   }
@@ -317,11 +336,16 @@ export const staffUpdateTool: ToolDefinition<StaffUpdateArgs> = {
   },
 };
 
+/** What happens to a removed grader's ungraded submissions (HelperService.removeStaffMember). */
+const UNGRADED_CHOICES = ['reassign', 'unassign', 'keep'] as const;
+type UngradedChoiceArg = (typeof UNGRADED_CHOICES)[number];
+
 interface StaffRemoveArgs {
   classroom: string;
   login: string;
   role: StaffRole;
   confirm: true;
+  ungraded_submissions?: UngradedChoiceArg;
 }
 
 /** One shape for both surfaces (the registry's raw shape and the guard below). */
@@ -332,7 +356,32 @@ const staffRemoveShape = {
   confirm: z
     .literal(true)
     .describe('Must be true — acknowledges this can remove the user from the GitHub org'),
+  ungraded_submissions: z
+    .enum(UNGRADED_CHOICES)
+    .optional()
+    .describe(
+      'Required when they grade ungraded submissions and keep no ASSISTANT/TEACHER role: ' +
+        'reassign, unassign or keep'
+    ),
 };
+
+/** The response and audit fields describing what became of the ungraded slots. */
+function describeUngraded(result: RemoveStaffMemberResult) {
+  const outcome = result.ungraded;
+  if (!outcome) return null;
+  return {
+    choice: outcome.choice,
+    total: outcome.total,
+    reassigned_to: Object.fromEntries(outcome.reassigned.map(r => [r.login, r.count])),
+    unassigned: outcome.unassigned + outcome.alreadyCovered,
+    kept: outcome.kept,
+    failed: outcome.failed,
+    // Above the inline limit the moves run in the background: the numbers
+    // are the plan those runs carry out.
+    queued: outcome.queued,
+    ...(outcome.fallback ? { fallback: outcome.fallback } : {}),
+  };
+}
 
 /** Exported so tests pin the confirm gate. */
 export const staffRemoveArgsSchema = z.object(staffRemoveShape);
@@ -344,20 +393,19 @@ export const staffRemoveTool: ToolDefinition<StaffRemoveArgs> = {
   annotations: { destructive: true, openWorld: true },
   title: 'Remove a teaching-staff member from the classroom',
   description:
-    'Removes one role from a member of the classroom teaching team. Owner only, destructive, ' +
-    'requires confirm:true. Because roles are additive, this deletes ONLY the membership row at ' +
-    'the given role — someone who also holds another role here keeps it, and keeps the access ' +
-    'that role carries. Triggers the standard removal workflow, which is role-aware throughout: ' +
-    'it removes them from the classroom staff team on GitHub UNLESS they still hold another ' +
-    'staff role here (all staff roles share one team), and removes them from the GitHub ' +
-    'organization entirely — revoking their access — only IF they hold no other membership in ' +
-    'that organization (e.g. they also take a class in the same org). Removing the LAST ' +
-    'remaining owner is refused: add another owner first, though an owner MAY remove their own ' +
-    'owner role while another owner exists — and if that was their only role in the ' +
-    'organization, doing so ends their own GitHub access to it. Runs in the background. ' +
-    'Because the removal is processed ' +
-    'asynchronously it can still fail after this call reports success — check list_teaching_team ' +
-    'afterwards to confirm they are gone.',
+    'Removes one role from a teaching-team member. Owner only, destructive, requires ' +
+    'confirm:true. Roles are additive: only the membership at the given role is deleted; any ' +
+    'other role they hold here survives with its access. A background workflow removes them ' +
+    'from the classroom GitHub staff team unless another staff role keeps them on it, and from ' +
+    'the GitHub organization only if they hold no other membership there. The last owner cannot ' +
+    'be removed; an owner may remove their own owner role while another exists, which can end ' +
+    'their own GitHub access. UNGRADED SUBMISSIONS: if this leaves them with no ASSISTANT or ' +
+    'TEACHER role while they are grader on submissions with no grade yet, ungraded_submissions ' +
+    'is required and the refusal gives the count. reassign spreads them over the other ' +
+    'eligible graders, least-loaded per assignment (unassigns when there are none); unassign ' +
+    'removes them as grader; keep leaves them. Graded submissions never change. The response ' +
+    'reports ungraded_submissions: reassigned_to (count per grader login), unassigned, kept, ' +
+    'failed. The removal can still fail after this returns — check list_teaching_team.',
   scope: 'write',
   roles: OWNER_ONLY,
   // Same tight bucket as staff_add: every call can revoke GitHub organization
@@ -375,21 +423,27 @@ export const staffRemoveTool: ToolDefinition<StaffRemoveArgs> = {
       throw new ToolError('invalid_params', parsed.error.issues[0]?.message ?? 'Invalid arguments');
     }
 
-    let result;
+    let result: RemoveStaffMemberResult;
     try {
-      // The service resolves the target from the DB by (classroom, login, role)
-      // and builds the removal-task payload ENTIRELY server-side. It awaits the
-      // ENQUEUE only and hands back the run id; unlike the web route we do not
+      // The shared entry point resolves the target from the DB by (classroom,
+      // login, role) and builds the removal-task payload ENTIRELY server-side.
+      // It awaits the ENQUEUE only; unlike the web route we do not
       // waitForRunCompletion — the removal finishes in the background. The
-      // last-owner guard runs BEFORE the enqueue for exactly that reason.
-      result = await ClassmojiService.staff.removeStaff({
+      // last-owner guard runs BEFORE the enqueue for exactly that reason, and
+      // so does the ungraded-submissions refusal (requireChoice): nothing is
+      // queued or moved until the caller has decided.
+      result = await HelperService.removeStaffMember({
         classroomId: classroom.classroomId,
         login: parsed.data.login,
         role: parsed.data.role,
+        ungradedSubmissions: parsed.data.ungraded_submissions ?? null,
+        requireChoice: true,
       });
     } catch (error) {
       throw mapStaffError(error);
     }
+
+    const ungraded = describeUngraded(result);
 
     await writeAudit(ctx, {
       resource_type: 'STAFF',
@@ -397,9 +451,13 @@ export const staffRemoveTool: ToolDefinition<StaffRemoveArgs> = {
       action: 'DELETE',
       data: {
         tool: 'staff_remove',
+        // `value` joins the audit service's 5s dedup key: removing two roles
+        // of the same person back to back must leave two rows.
+        value: `${result.role}:${ungraded?.choice ?? 'none'}`,
         user_id: result.userId,
         login: result.login,
         role: result.role,
+        ...(ungraded ? { ungraded_submissions: ungraded } : {}),
       },
     });
 
@@ -409,6 +467,7 @@ export const staffRemoveTool: ToolDefinition<StaffRemoveArgs> = {
       login: result.login,
       user_id: result.userId,
       role: result.role,
+      ...(ungraded ? { ungraded_submissions: ungraded } : {}),
       message: `Removal of the ${result.role} role queued — removing the GitHub staff team membership (and org access if they hold no other role there) in the background.`,
     });
   },

@@ -116,7 +116,18 @@ export type {
 
 // Admin service result/error shapes shared by the web routes and the MCP tools.
 export { StaffServiceError } from './classmoji/staff.service.ts';
-export type { AddStaffResult, RemoveStaffResult, StaffRole } from './classmoji/staff.service.ts';
+export type {
+  AddStaffResult,
+  RemoveStaffResult,
+  StaffRemovalPreview,
+  StaffRole,
+} from './classmoji/staff.service.ts';
+export type { UngradedChoice } from './classmoji/graderReassignPlan.ts';
+export type {
+  MoveGraderSlotPayload,
+  RemoveStaffMemberResult,
+  UngradedSlotsOutcome,
+} from './helper/index.ts';
 // Quiz authorization refusal, so routes can answer 403 instead of 500.
 export { QuizAccessError, QUIZ_STAFF_ROLES } from './classmoji/quiz.service.ts';
 // "No such attempt", so routes can answer 404 for that and only that — a query

@@ -35,6 +35,7 @@ import { getGitProvider, ensureClassroomTeam } from '../git/index.ts';
 import { buildRemoveUserPayload } from './removeUserPayload.ts';
 import * as classroomService from './classroom.service.ts';
 import * as classroomMembershipService from './classroomMembership.service.ts';
+import * as gitRepoAssignmentGraderService from './gitRepoAssignmentGrader.service.ts';
 
 /** The roles this service manages. STUDENT is the roster service's business. */
 export const STAFF_ROLES = ['ASSISTANT', 'TEACHER', 'OWNER'] as const;
@@ -71,13 +72,33 @@ export class StaffServiceError extends Error {
     | 'login_conflict'
     | 'last_owner'
     | 'grader_flag_invalid'
-    | 'invalid_role';
+    | 'invalid_role'
+    | 'ungraded_choice_required';
 
-  constructor(code: StaffServiceError['code'], message: string) {
+  /** Set with `ungraded_choice_required`: how many ungraded slots need a decision. */
+  ungradedCount?: number;
+
+  constructor(
+    code: StaffServiceError['code'],
+    message: string,
+    details: { ungradedCount?: number } = {}
+  ) {
     super(message);
     this.name = 'StaffServiceError';
     this.code = code;
+    if (details.ungradedCount !== undefined) this.ungradedCount = details.ungradedCount;
   }
+}
+
+export interface StaffRemovalPreview {
+  userId: string;
+  login: string;
+  name: string | null;
+  role: StaffRole;
+  /** true when another membership keeps them ASSISTANT or TEACHER here. */
+  remainsGrader: boolean;
+  /** Ungraded grader slots that need a decision; 0 whenever remainsGrader. */
+  ungradedCount: number;
 }
 
 /** A git provider 404 — the login genuinely names nobody (same shape the providers throw). */
@@ -398,6 +419,66 @@ export const updateStaff = async ({
   }
 
   return classroomMembershipService.updateById(membership.id, { is_grader: isGrader });
+};
+
+/**
+ * What removing `role` from this person would leave behind on the grading side.
+ *
+ * Roles are additive, so the question is asked about the classroom AFTER this
+ * one (classroom, user, role) row is gone: do they still hold ASSISTANT or
+ * TEACHER here (GRADER_ROLES, the roles the grader pool draws from)? If so they
+ * still grade and nothing needs deciding. If not — including someone who stays
+ * an OWNER, since owners are not in the grader pool — their ungraded slots are
+ * counted. Asking with the removed row excluded gives the same answer whether
+ * or not the background removal has deleted it yet.
+ *
+ * Read-only; throws the same staff_not_found / invalid_role as removeStaff.
+ */
+export const previewRemoval = async ({
+  classroomId,
+  login,
+  role,
+}: {
+  classroomId: string;
+  login: string;
+  role: StaffRole;
+}): Promise<StaffRemovalPreview> => {
+  assertStaffRole(role);
+
+  const user = await findUserByLoginInsensitive(login);
+  if (!user) {
+    throw new StaffServiceError('staff_not_found', `[staff] user ${login} not found`);
+  }
+
+  const membership = await classroomMembershipService.findByClassroomAndUser(
+    classroomId,
+    user.id,
+    role
+  );
+  if (!membership) {
+    throw new StaffServiceError(
+      'staff_not_found',
+      `[staff] ${login} does not hold the ${role} role in classroom ${classroomId}`
+    );
+  }
+
+  const otherGraderRoles = gitRepoAssignmentGraderService.GRADER_ROLES.filter(r => r !== role);
+  const remainsGrader =
+    otherGraderRoles.length > 0 &&
+    (await classroomMembershipService.hasRole(classroomId, user.id, [...otherGraderRoles]));
+
+  const ungradedCount = remainsGrader
+    ? 0
+    : await gitRepoAssignmentGraderService.countUngradedSlotsForGrader(classroomId, user.id);
+
+  return {
+    userId: user.id,
+    login: user.login ?? login,
+    name: user.name,
+    role,
+    remainsGrader,
+    ungradedCount,
+  };
 };
 
 /**

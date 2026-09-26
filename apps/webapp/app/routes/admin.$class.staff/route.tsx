@@ -7,10 +7,11 @@ import { Table, Radio, Popconfirm, Modal, Tag } from 'antd';
 import { authClient } from '@classmoji/auth/client';
 import { rememberImpersonationReturn } from '~/utils/impersonationReturn';
 import { ButtonNew, UserThumbnailView, SearchInput, TableActionButtons } from '~/components';
-import { ClassmojiService } from '@classmoji/services';
+import { ClassmojiService, type UngradedChoice as UngradedChoiceValue } from '@classmoji/services';
 import { useCallout } from '@classmoji/ui-components';
 export { action } from './action';
 import FormStaff from './FormStaff';
+import UngradedChoice from './UngradedChoice';
 
 import { useGlobalFetcher, useDisclosure } from '~/hooks';
 import { ActionTypes } from '~/constants';
@@ -114,12 +115,62 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
     )
   );
 
-  return { staff: staffByRole.flat(), canManage };
+  // Ungraded grader slots per user, for the remove dialog's reassign offer.
+  // Only for a viewer who can remove anyone: grading workload is not part of
+  // what an assistant or teacher reading this list is shown.
+  const ungradedByUser: Record<string, number> = canManage
+    ? await ClassmojiService.gitRepoAssignmentGrader.countUngradedSlotsByGrader(classroom.id)
+    : {};
+
+  return { staff: staffByRole.flat(), canManage, ungradedByUser };
 };
 
+const GRADER_ROLES: readonly StaffRole[] = ['ASSISTANT', 'TEACHER'];
+
+/**
+ * How many ungraded submissions removing THIS row would strand. Roles are
+ * additive: someone who keeps an ASSISTANT or TEACHER row still grades, so
+ * nothing needs deciding. The server re-derives this from the DB on removal;
+ * this only decides whether the dialog asks.
+ */
+const ungradedAtStake = (
+  member: StaffMember,
+  staff: StaffMember[],
+  ungradedByUser: Record<string, number>
+): number => {
+  const staysGrader = staff.some(
+    other =>
+      other.id === member.id && other.role !== member.role && GRADER_ROLES.includes(other.role)
+  );
+  return staysGrader ? 0 : (ungradedByUser[member.id] ?? 0);
+};
+
+/** Whether anyone else in the grader pool could take the slots. */
+const hasOtherGraders = (member: StaffMember, staff: StaffMember[]): boolean =>
+  staff.some(
+    other =>
+      other.id !== member.id &&
+      GRADER_ROLES.includes(other.role) &&
+      other.is_grader &&
+      Boolean(other.login)
+  );
+
+const removalDescription = (member: StaffMember): string =>
+  member.role === 'OWNER'
+    ? 'Remove this person as a co-owner of this classroom? Their other roles here, if any, are untouched.'
+    : 'Are you sure you want to remove this staff member? This action cannot be undone.';
+
+interface PendingRemoval {
+  member: StaffMember;
+  count: number;
+  canReassign: boolean;
+}
+
 const AdminStaff = ({ loaderData }: Route.ComponentProps) => {
-  const { staff, canManage } = loaderData;
+  const { staff, canManage, ungradedByUser = {} } = loaderData;
   const { fetcher, notify } = useGlobalFetcher();
+  const [pendingRemoval, setPendingRemoval] = useState<PendingRemoval | null>(null);
+  const [ungradedChoice, setUngradedChoice] = useState<UngradedChoiceValue>('reassign');
   const navigate = useNavigate();
   const { class: classSlug } = useParams();
   const { show, close, visible } = useDisclosure();
@@ -178,17 +229,34 @@ const AdminStaff = ({ loaderData }: Route.ComponentProps) => {
     );
   };
 
-  // Only the login and the role — the row itself is not the server's input.
-  const removeStaffMember = (member: StaffMember) => {
+  // Only the login, the role and — when the dialog asked — what happens to
+  // their ungraded submissions. The row itself is not the server's input.
+  const removeStaffMember = (member: StaffMember, ungradedSubmissions?: UngradedChoiceValue) => {
     notify(ActionTypes.REMOVE_USER, 'Removing staff member...');
     fetcher!.submit(
-      { login: member.login, role: member.role },
+      {
+        login: member.login,
+        role: member.role,
+        ...(ungradedSubmissions ? { ungradedSubmissions } : {}),
+      },
       {
         method: 'delete',
         action: '?/removeStaff',
         encType: 'application/json',
       }
     );
+  };
+
+  const openRemovalDialog = (member: StaffMember, count: number) => {
+    const canReassign = hasOtherGraders(member, staff);
+    setUngradedChoice(canReassign ? 'reassign' : 'unassign');
+    setPendingRemoval({ member, count, canReassign });
+  };
+
+  const confirmRemoval = () => {
+    if (!pendingRemoval) return;
+    removeStaffMember(pendingRemoval.member, ungradedChoice);
+    setPendingRemoval(null);
   };
 
   const filteredStaff = !query
@@ -320,23 +388,42 @@ const AdminStaff = ({ loaderData }: Route.ComponentProps) => {
                       <span>View as</span>
                     </div>
                   )}
-                  <Popconfirm
-                    title={`Remove ${ROLE_LABEL[member.role].label}`}
-                    description={
-                      member.role === 'OWNER'
-                        ? 'Remove this person as a co-owner of this classroom? Their other roles here, if any, are untouched.'
-                        : 'Are you sure you want to remove this staff member? This action cannot be undone.'
+                  {(() => {
+                    const trigger = (
+                      <div className="flex items-center gap-1 text-red-600 hover:text-red-700 dark:text-red-400 dark:hover:text-red-300 cursor-pointer">
+                        <IconTrash size={16} />
+                        <span>Remove</span>
+                      </div>
+                    );
+                    // With ungraded submissions at stake the removal needs a
+                    // decision, which a popover has no room for — open the
+                    // dialog instead. Otherwise the confirm is unchanged.
+                    const atStake = ungradedAtStake(member, staff, ungradedByUser);
+                    if (atStake > 0) {
+                      return (
+                        <div
+                          onClick={e => {
+                            e.stopPropagation();
+                            openRemovalDialog(member, atStake);
+                          }}
+                        >
+                          {trigger}
+                        </div>
+                      );
                     }
-                    onConfirm={() => removeStaffMember(member)}
-                    okButtonProps={{ danger: true }}
-                    okText="Remove"
-                    cancelText="Cancel"
-                  >
-                    <div className="flex items-center gap-1 text-red-600 hover:text-red-700 dark:text-red-400 dark:hover:text-red-300 cursor-pointer">
-                      <IconTrash size={16} />
-                      <span>Remove</span>
-                    </div>
-                  </Popconfirm>
+                    return (
+                      <Popconfirm
+                        title={`Remove ${ROLE_LABEL[member.role].label}`}
+                        description={removalDescription(member)}
+                        onConfirm={() => removeStaffMember(member)}
+                        okButtonProps={{ danger: true }}
+                        okText="Remove"
+                        cancelText="Cancel"
+                      >
+                        {trigger}
+                      </Popconfirm>
+                    );
+                  })()}
                 </TableActionButtons>
               );
             },
@@ -377,6 +464,36 @@ const AdminStaff = ({ loaderData }: Route.ComponentProps) => {
           className="rounded-lg"
         >
           <FormStaff close={close} />
+        </Modal>
+      )}
+
+      {canManage && (
+        <Modal
+          title={
+            pendingRemoval ? `Remove ${ROLE_LABEL[pendingRemoval.member.role].label}` : 'Remove'
+          }
+          open={pendingRemoval !== null}
+          onOk={confirmRemoval}
+          onCancel={() => setPendingRemoval(null)}
+          okText="Remove"
+          okButtonProps={{ danger: true }}
+          cancelText="Cancel"
+          destroyOnHidden
+        >
+          {pendingRemoval && (
+            <div className="space-y-4">
+              <p className="text-sm text-gray-600 dark:text-gray-300">
+                {removalDescription(pendingRemoval.member)}
+              </p>
+              <UngradedChoice
+                name={pendingRemoval.member.name || pendingRemoval.member.login || 'This person'}
+                count={pendingRemoval.count}
+                canReassign={pendingRemoval.canReassign}
+                value={ungradedChoice}
+                onChange={setUngradedChoice}
+              />
+            </div>
+          )}
         </Modal>
       )}
 
