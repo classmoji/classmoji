@@ -27,6 +27,8 @@
  *
  * Whatever the policy, a name must be a name: no path separators (it is a
  * basename, and becomes one segment of a git path), and not empty or only dots.
+ * Under `'any'` it must also keep an extension after sanitizing, because the
+ * extension is the only thing that types the stored file.
  * `sanitizeFilename` then reduces it to lowercase ASCII — extension included,
  * which matters once any extension is allowed, because the extension lands in
  * the path verbatim.
@@ -79,7 +81,16 @@ export function validateFile({
     return { valid: false, error: 'That file needs a name.' };
   }
 
-  if (fileTypes === 'any') return { valid: true };
+  if (fileTypes === 'any') {
+    // The extension is what types the file once it is stored — the delivery
+    // Worker reads nothing else — so a name that keeps none after sanitizing
+    // (`Makefile`, `.gitignore`, `x.データ`, a bare `.png`) is refused rather
+    // than stored as an untyped blob.
+    if (!sanitizedExtension(name)) {
+      return { valid: false, error: 'This file needs an extension, e.g. notes.txt' };
+    }
+    return { valid: true };
+  }
 
   const ext = name.toLowerCase().match(/\.[^.]+$/)?.[0];
   if (!ext || !ALLOWED_EXTENSIONS.includes(ext)) {
@@ -90,6 +101,22 @@ export function validateFile({
   }
 
   return { valid: true };
+}
+
+/**
+ * The extension `sanitizeFilename` keeps for `name` — lowercase letters and
+ * digits, capped — or `''` when it keeps none. A leading dot does not start an
+ * extension (`.gitignore` is a name). `validateFile` asks the same function, so
+ * what it checks is exactly what gets stored.
+ */
+function sanitizedExtension(name: string): string {
+  const dot = name.lastIndexOf('.');
+  if (dot <= 0) return '';
+  return name
+    .slice(dot + 1)
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, '')
+    .slice(0, MAX_EXTENSION_LENGTH);
 }
 
 /**
@@ -111,13 +138,7 @@ export function sanitizeFilename(filename: string): string {
   const dot = name.lastIndexOf('.');
   const hasExt = dot > 0;
 
-  const ext = hasExt
-    ? name
-        .slice(dot + 1)
-        .toLowerCase()
-        .replace(/[^a-z0-9]/g, '')
-        .slice(0, MAX_EXTENSION_LENGTH)
-    : '';
+  const ext = sanitizedExtension(name);
   const baseName = hasExt ? name.slice(0, dot) : name;
 
   // Sanitize: lowercase, replace spaces and special chars with dashes
