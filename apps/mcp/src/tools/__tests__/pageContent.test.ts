@@ -33,6 +33,7 @@ const mocks = vi.hoisted(() => ({
   resolvePreviewConflicts: vi.fn(),
   discardPreview: vi.fn(),
   uploadPageAsset: vi.fn(),
+  uploadFileTypes: vi.fn(),
   resolvePageAssetUrl: vi.fn(),
   canonicalizePageCoverRef: vi.fn(),
   auditCreate: vi.fn(),
@@ -49,7 +50,7 @@ vi.mock('@classmoji/services', async () => {
     typeof import('../../../../../packages/services/src/classmoji/pageContent.service.ts')
   >('../../../../../packages/services/src/classmoji/pageContent.service.ts');
   // Upload validation is pure and shared with ContentService — the tool must
-  // enforce the SAME 5 MB / extension rules, so use the real ones.
+  // enforce the SAME size / extension rules, so use the real ones.
   const files = await vi.importActual<
     typeof import('../../../../../packages/services/src/content/utils/validateFile.ts')
   >('../../../../../packages/services/src/content/utils/validateFile.ts');
@@ -57,6 +58,9 @@ vi.mock('@classmoji/services', async () => {
     validateFile: files.validateFile,
     MAX_FILE_SIZE: files.MAX_FILE_SIZE,
     ClassmojiService: {
+      contentDelivery: {
+        uploadFileTypes: (...a: unknown[]) => mocks.uploadFileTypes(...a),
+      },
       page: {
         findById: (...a: unknown[]) => mocks.pageFindById(...a),
         quickUpdate: (...a: unknown[]) => mocks.pageQuickUpdate(...a),
@@ -84,6 +88,8 @@ vi.mock('@classmoji/services', async () => {
 });
 
 const {
+  MAX_CONTENT_BASE64_CHARS,
+  PAGE_ASSET_MAX_BYTES,
   pageContentOutlineTool,
   pageContentGetTool,
   pageContentApplyTool,
@@ -175,6 +181,7 @@ beforeEach(() => {
   mocks.ensurePreviewBranch.mockResolvedValue({ branch: PREVIEW_BRANCH, created: true });
   mocks.auditCreate.mockResolvedValue(undefined);
   mocks.pageQuickUpdate.mockResolvedValue(undefined);
+  mocks.uploadFileTypes.mockReturnValue('allowlist');
   mocks.uploadPageAsset.mockResolvedValue({
     url: 'pages/syllabus/assets/1700000000000-hero.png',
     path: 'pages/syllabus/assets/1700000000000-hero.png',
@@ -1332,14 +1339,36 @@ describe('page_asset_upload', () => {
     expect(mocks.uploadPageAsset.mock.calls[0][1]).toEqual(Buffer.from(PNG_BASE64, 'base64'));
   });
 
-  it('the char cap leaves room for wrapping and a data: prefix on a legal 5 MB file', async () => {
-    // A 5 MB file is ~6.99 M base64 chars; wrapped at 76 columns it gains ~92 K
-    // newlines, and a data: prefix another 22. A cap set to the bare encoded
-    // length would refuse all three for being too big when none of them is.
-    const atCap = Buffer.alloc(5 * 1024 * 1024).toString('base64');
-    const wrapped = `data:image/png;base64,${(atCap.match(/.{1,76}/g) ?? []).join('\n')}`;
+  it('derives its cap from the 8 MiB request body, below the 35 MB repository cap', () => {
+    // A cap above what the body can carry would never fire: Fastify would
+    // answer a bare 413 first. So the cap is what fits, not the repository's.
+    expect(MAX_CONTENT_BASE64_CHARS).toBeLessThan(8 * 1024 * 1024);
+    expect(PAGE_ASSET_MAX_BYTES).toBeLessThan(35 * 1024 * 1024);
+    expect(PAGE_ASSET_MAX_BYTES).toBeGreaterThan(5 * 1024 * 1024);
+    expect(pageAssetUploadTool.description).toContain('5.7 MB');
+  });
+
+  it('a file at the cap, CRLF-wrapped with a data: prefix, fits both the schema and the body', () => {
+    const atCap = Buffer.alloc(PAGE_ASSET_MAX_BYTES).toString('base64');
+    const wrapped = `data:image/png;base64,${(atCap.match(/.{1,76}/g) ?? []).join('\r\n')}`;
 
     expect(pageAssetUploadTool.inputSchema.content_base64.safeParse(wrapped).success).toBe(true);
+    // The whole JSON-RPC request, escaped as it would travel, under Fastify's limit.
+    const body = JSON.stringify({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'tools/call',
+      params: {
+        name: 'page_asset_upload',
+        arguments: {
+          classroom: 'org/x',
+          page_id: PAGE_ID,
+          filename: 'hero.png',
+          content_base64: wrapped,
+        },
+      },
+    });
+    expect(Buffer.byteLength(body)).toBeLessThan(8 * 1024 * 1024);
   });
 
   it('refuses a disallowed extension BEFORE touching the repo', async () => {
@@ -1351,18 +1380,27 @@ describe('page_asset_upload', () => {
     expect(mocks.auditCreate).not.toHaveBeenCalled();
   });
 
-  it('refuses a file over the 5 MB cap, in bytes not characters', async () => {
-    const oversize = Buffer.alloc(5 * 1024 * 1024 + 1024).toString('base64');
+  it('accepts any extension where the classroom policy says so', async () => {
+    mocks.uploadFileTypes.mockReturnValue('any');
+
+    await upload({ filename: 'notes.ipynb' });
+
+    expect(mocks.uploadFileTypes).toHaveBeenCalledWith(PAGE.classroom);
+    expect(mocks.uploadPageAsset.mock.calls[0][2]).toBe('notes.ipynb');
+  });
+
+  it('refuses a file over the cap, in bytes not characters', async () => {
+    const oversize = Buffer.alloc(PAGE_ASSET_MAX_BYTES + 3).toString('base64');
 
     await expect(upload({ content_base64: oversize })).rejects.toMatchObject({
       kind: 'invalid_params',
-      message: expect.stringContaining('File too large'),
+      message: expect.stringContaining('page_asset_upload takes up to 5.7 MB'),
     });
     expect(mocks.uploadPageAsset).not.toHaveBeenCalled();
 
-    // The schema's character cap is the outer sanity ceiling, well above the
-    // real one — it is what stops an absurd payload before the bytes are ever
-    // decoded (handlers are called directly here, so it does not run).
+    // The schema's character cap is the outer sanity ceiling — it is what stops
+    // an absurd payload before the bytes are ever decoded (handlers are called
+    // directly here, so it does not run).
     const absurd = Buffer.alloc(6 * 1024 * 1024).toString('base64');
     expect(pageAssetUploadTool.inputSchema.content_base64.safeParse(absurd).success).toBe(false);
     expect(pageAssetUploadTool.inputSchema.content_base64.safeParse(PNG_BASE64).success).toBe(true);
