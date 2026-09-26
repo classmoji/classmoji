@@ -35,6 +35,7 @@ const SUBMISSION_KEY = /submission|git_repo_assignment/i;
 const NOT_SUBMISSION_IDS = new Set([
   'assignment_create.submission_mode', // ISSUE | REPO enum
   'list_form_responses.submission_state', // form response filter enum
+  'staff_remove.ungraded_submissions', // reassign | unassign | keep enum
 ]);
 
 let tools: ToolDefinition<never>[];

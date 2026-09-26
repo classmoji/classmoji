@@ -63,6 +63,7 @@ vi.mock('~/utils/helpers', () => ({ waitForRunCompletion: vi.fn() }));
 
 const StaffScreen = (await import('../route.tsx')).default;
 const FormStaff = (await import('../FormStaff')).default;
+const UngradedChoice = (await import('../UngradedChoice')).default;
 
 // ─── Row fixtures, shaped exactly as the loader emits them ──────────────────
 
@@ -279,5 +280,56 @@ describe('FormStaff — granting OWNER', () => {
 
     expect(html).toContain('not a GitHub organization admin');
     expect(html).toContain('GitHub credentials');
+  });
+});
+
+// ─── The remove dialog's ungraded-submissions choice ────────────────────────
+
+describe('UngradedChoice — what happens to ungraded submissions', () => {
+  const renderChoice = (over: Partial<{ count: number; canReassign: boolean }> = {}) =>
+    renderToStaticMarkup(
+      createElement(UngradedChoice, {
+        name: 'Ada Lovelace',
+        count: 9,
+        canReassign: true,
+        value: 'reassign',
+        onChange: vi.fn(),
+        ...over,
+      })
+    );
+
+  it('states the count and offers the three choices, reassign selected', () => {
+    const html = renderChoice();
+
+    expect(html).toContain('Ada Lovelace is assigned 9 ungraded submissions.');
+    expect(html).toContain('Spread across other graders');
+    expect(html).toContain('Unassign');
+    expect(html).toContain('Leave as is');
+    expect(html.match(/type="radio"/g)).toHaveLength(3);
+    // The checked radio is the reassign one.
+    expect(html).toMatch(/value="reassign"[^>]*checked|checked[^>]*value="reassign"/);
+  });
+
+  it('uses the singular for one submission', () => {
+    expect(renderChoice({ count: 1 })).toContain('is assigned 1 ungraded submission.');
+  });
+
+  it('disables reassign and says why when nobody else grades', () => {
+    const html = renderChoice({ canReassign: false });
+
+    expect(html).toContain('No other assistant or teacher is marked as a grader.');
+    expect(html).toMatch(/value="reassign"[^>]*disabled|disabled[^>]*value="reassign"/);
+  });
+
+  it('carries dark-mode variants on its text', () => {
+    const html = renderChoice();
+    expect(html).toContain('dark:text-gray-100');
+    expect(html).toContain('dark:text-gray-400');
+  });
+
+  it('sets the graded-submissions note apart from the choices', () => {
+    expect(renderChoice()).toMatch(
+      /<p class="mt-2 [^"]*dark:text-gray-400">Graded submissions keep their grader\./
+    );
   });
 });

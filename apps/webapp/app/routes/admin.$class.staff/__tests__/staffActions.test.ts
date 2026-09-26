@@ -48,8 +48,14 @@ vi.mock('@classmoji/services', () => ({
     staff: {
       addStaff: (...a: unknown[]) => mocks.addStaff(...a),
       updateStaff: (...a: unknown[]) => mocks.updateStaff(...a),
-      removeStaff: (...a: unknown[]) => mocks.removeStaff(...a),
     },
+  },
+  // Removal goes through the shared entry point (startStaffRemoval);
+  // `mocks.removeStaff` stands in for it. The ungraded-slot choices, settled
+  // after the run succeeds, are pinned in routes/__tests__/staffRemoveUngraded.test.ts.
+  HelperService: {
+    startStaffRemoval: (...a: unknown[]) => mocks.removeStaff(...a),
+    settleUngradedSlots: vi.fn(),
   },
   StaffServiceError: FakeStaffServiceError,
 }));
@@ -304,6 +310,8 @@ describe('staff action — role-scoped update and removal', () => {
       classroomId: 'class-1',
       login: 'ada',
       role: 'OWNER',
+      // No ungraded-slot choice was posted: the service keeps them.
+      ungradedSubmissions: null,
     });
     expect(mocks.waitForRunCompletion).toHaveBeenCalledWith('run-1');
   });

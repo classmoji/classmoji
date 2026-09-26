@@ -1,5 +1,5 @@
 import { betterAuth } from 'better-auth';
-import { APIError, createAuthMiddleware } from 'better-auth/api';
+import { APIError, createAuthMiddleware, getSession } from 'better-auth/api';
 import { prismaAdapter } from 'better-auth/adapters/prisma';
 import { admin, mcp } from 'better-auth/plugins';
 import getPrisma from '@classmoji/database';
@@ -18,8 +18,38 @@ import {
   sessionTokenFromCookieHeader,
 } from './secret.ts';
 import { ASK_MOJI_CLIENT_ID } from './mcpToken.ts';
+import { applyAppConnectionRules, type AppConnectionSession } from './appConnectionGuard.ts';
 
 export { AUTH_SECRET, COOKIE_PREFIX };
+export { CONNECT_APP_VIEWING_AS_MESSAGE } from './appConnectionGuard.ts';
+
+/**
+ * The current session, read from inside `hooks.before` the way better-auth's
+ * own `getSessionFromCtx` does (api/routes/session.mjs:242-259), with two
+ * differences: an error is thrown rather than read as "signed out", so the
+ * caller can tell a failed lookup from no session; and the lookup leaves no
+ * trace on the request (no session refresh, and `ctx.context.session` is put
+ * back), so the endpoint then runs exactly as it would have.
+ */
+async function lookupSessionForHook(ctx: {
+  context: { session?: unknown };
+  headers?: Headers;
+}): Promise<AppConnectionSession> {
+  const previous = ctx.context.session;
+  try {
+    const result = await (getSession() as unknown as (c: unknown) => Promise<unknown>)({
+      ...ctx,
+      asResponse: false,
+      headers: ctx.headers,
+      returnHeaders: false,
+      returnStatus: false,
+      query: { disableRefresh: true },
+    });
+    return (result ?? null) as AppConnectionSession;
+  } finally {
+    ctx.context.session = previous;
+  }
+}
 
 /**
  * Platform admins, by User.id, from `PLATFORM_ADMIN_USER_IDS` (comma-separated).
@@ -272,14 +302,18 @@ export function clearTokenCache(userId: string | null = null): void {
  * Clear a revoked token from both cache and DB when GitHub returns 401.
  * Call this when you get "Bad credentials" from GitHub API.
  * @param {string} userId - The user ID whose token was revoked
+ * @param {string} [refusedToken] - The token GitHub refused. When given, the
+ *   stored token is cleared only if it is still that one, so a token refreshed
+ *   in the meantime survives. The in-memory cache is cleared either way (it is
+ *   re-read from the database on the next request).
  */
-export async function clearRevokedToken(userId: string): Promise<void> {
+export async function clearRevokedToken(userId: string, refusedToken?: string): Promise<void> {
   // Clear from memory cache (webapp session-layer cache, not the shared service).
   clearTokenCache(userId);
 
   // DB clear (sets access_token=null, expires_at=epoch so refresh still fires)
   // lives in the shared token service so workers can reuse it.
-  await ClassmojiService.githubUserToken.clearRevokedTokenForUser(userId);
+  await ClassmojiService.githubUserToken.clearRevokedTokenForUser(userId, refusedToken);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -561,12 +595,23 @@ export const auth = betterAuth({
    *
    * This hook runs before EVERY endpoint (better-auth gives user hooks a
    * `() => true` matcher — dist/api/to-auth-endpoints.mjs:159-170), including
-   * hot in-process `auth.api.*` calls, so the non-matching path must stay a
-   * single string comparison.
+   * hot in-process `auth.api.*` calls, so the non-matching path must stay
+   * cheap: string comparisons plus, for the app-connection rules, one anchored
+   * match on the cookie header. It does no session lookup, UNLESS the request
+   * carries the saved-authorization cookie (`oidc_login_prompt`, set by
+   * /mcp/authorize while signed out and short-lived), in which case the rules
+   * look the session up once.
    */
   hooks: {
     before: createAuthMiddleware(async ctx => {
-      if (ctx.path !== '/mcp/token') return;
+      if (ctx.path !== '/mcp/token') {
+        // Connecting apps: the consent page is always shown, and no app is
+        // connected while viewing as another user (./appConnectionGuard.ts).
+        // Every other path returns after string comparisons and one anchored
+        // cookie-header match, with no session lookup unless the request
+        // carries the saved-authorization cookie (oidc_login_prompt).
+        return applyAppConnectionRules(ctx, () => lookupSessionForHook(ctx));
+      }
 
       const authorization =
         ctx.request?.headers.get('authorization') ?? ctx.headers?.get('authorization') ?? null;

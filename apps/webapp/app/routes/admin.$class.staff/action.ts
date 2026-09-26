@@ -1,6 +1,13 @@
 import { namedAction } from 'remix-utils/named-action';
 
-import { ClassmojiService, StaffServiceError } from '@classmoji/services';
+import {
+  ClassmojiService,
+  HelperService,
+  StaffServiceError,
+  type StaffRemovalStart,
+  type UngradedChoice,
+  type UngradedSlotsOutcome,
+} from '@classmoji/services';
 import { ActionTypes } from '~/constants';
 import { waitForRunCompletion } from '~/utils/helpers';
 import { requireClassroomAdmin, assertClassroomMutationAllowed } from '~/utils/routeAuth.server';
@@ -54,6 +61,68 @@ const parseGraderFlag = (value: unknown): boolean | null =>
  */
 const parseOverride = (value: unknown): string | null =>
   typeof value === 'string' && value.trim().length > 0 ? value.trim() : null;
+
+/** What happens to a removed grader's ungraded submissions (see HelperService.startStaffRemoval). */
+const UNGRADED_CHOICES = [
+  'reassign',
+  'unassign',
+  'keep',
+] as const satisfies readonly UngradedChoice[];
+
+/**
+ * null → no choice sent (keep, the old behaviour); undefined → a value that is
+ * not one of the three, refused rather than guessed at.
+ */
+const parseUngradedChoice = (value: unknown): UngradedChoice | null | undefined => {
+  if (value === undefined || value === null) return null;
+  return typeof value === 'string' && (UNGRADED_CHOICES as readonly string[]).includes(value)
+    ? (value as UngradedChoice)
+    : undefined;
+};
+
+const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
+
+/** The success callout: the removal, then what became of the ungraded slots. */
+const removalMessage = (ungraded: UngradedSlotsOutcome | null): string => {
+  if (!ungraded) return 'Staff member removed';
+
+  const parts = ['Staff member removed.'];
+  const subs = (n: number) => plural(n, 'ungraded submission', 'ungraded submissions');
+
+  if (ungraded.choice === 'keep') {
+    parts.push(`${subs(ungraded.kept)} still assigned to them.`);
+  } else {
+    const moved = ungraded.reassigned.reduce((sum, r) => sum + r.count, 0);
+    if (moved > 0) {
+      const who = ungraded.reassigned.map(r => `${r.login} ${r.count}`).join(', ');
+      parts.push(
+        ungraded.queued
+          ? `${subs(moved)} being reassigned in the background (${who}).`
+          : `${subs(moved)} reassigned (${who}).`
+      );
+    }
+    if (ungraded.fallback === 'no_eligible_graders') {
+      parts.push('No other graders are available, so their submissions were unassigned instead.');
+    }
+    const dropped = ungraded.unassigned + ungraded.alreadyCovered;
+    if (dropped > 0) {
+      parts.push(
+        `${subs(dropped)} ${ungraded.queued ? 'being unassigned in the background' : 'unassigned'}.`
+      );
+    }
+    if (ungraded.unassignedIneligible > 0) {
+      parts.push(
+        `${plural(ungraded.unassignedIneligible, 'was', 'were')} unassigned because the grader picked for them is no longer a grader.`
+      );
+    }
+  }
+  if (ungraded.failed > 0) {
+    parts.push(
+      `${plural(ungraded.failed, 'submission', 'submissions')} could not be changed and still list them as grader.`
+    );
+  }
+  return parts.join(' ');
+};
 
 /**
  * Turn a StaffServiceError into the sentence the instructor needs.
@@ -241,31 +310,75 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
         };
       }
 
+      // Absent means the page offered no choice (it saw no ungraded slots):
+      // the service then keeps them, which is what removal always did. A value
+      // that is present must be one of the three.
+      const ungradedSubmissions = parseUngradedChoice(data.ungradedSubmissions);
+      if (ungradedSubmissions === undefined) {
+        return {
+          action: ActionTypes.REMOVE_USER,
+          error: 'Pick what happens to their ungraded submissions.',
+        };
+      }
+
+      let started: StaffRemovalStart;
+      let finalStatus: string | undefined;
       try {
         // The service resolves the target from the DB by (classroom, login,
-        // role) and builds the task payload entirely server-side; the route
-        // keeps awaiting the run so the UI can report the finished removal. It
-        // also refuses to remove the LAST owner before triggering anything,
-        // which is why that failure arrives here rather than inside the task.
-        const { runId } = await ClassmojiService.staff.removeStaff({
+        // role) and builds the task payload entirely server-side. It refuses a
+        // missing role or the LAST owner before triggering anything, which is
+        // why those failures arrive here rather than inside the task.
+        //
+        // Whether the ungraded-slot choice applies at all (no grader-flagged
+        // ASSISTANT or TEACHER role left afterwards) is decided there too,
+        // from the DB — never from what the page believed.
+        started = await HelperService.startStaffRemoval({
           classroomId: classroom.id,
           login,
           role,
+          ungradedSubmissions,
         });
 
-        await waitForRunCompletion(runId);
-
-        return {
-          success: 'Staff member removed',
-          action: ActionTypes.REMOVE_USER,
-        };
+        finalStatus = (await waitForRunCompletion(started.runId))?.status as string | undefined;
       } catch (error: unknown) {
+        // Nothing has been moved yet: slots are settled only after the
+        // removal run has succeeded.
         console.error('removeStaff failed:', error);
         return {
           action: ActionTypes.REMOVE_USER,
           error: staffErrorMessage(error, 'Failed to remove staff member. Please try again.'),
         };
       }
+
+      // waitForRunCompletion throws on a failed run but hands back undefined
+      // when its subscription ends without a terminal run. Only a run KNOWN to
+      // have completed may have its slots moved. (With nothing to move, the
+      // reply is what it always was.)
+      const completed = finalStatus === 'COMPLETED' || finalStatus === 'COMPLETED_SUCCESSFULLY';
+      if (started.choice && !completed) {
+        return {
+          action: ActionTypes.REMOVE_USER,
+          error:
+            'The removal is still in progress, so their ungraded submissions were not changed. Once it finishes, they stay listed as grader on those submissions — reassign them from the repository or assignment page.',
+        };
+      }
+
+      // The removal is done; now carry out the choice. This never throws —
+      // anything it could not change is counted in `failed`.
+      const ungraded = started.choice
+        ? await HelperService.settleUngradedSlots({
+            classroomId: classroom.id,
+            graderId: started.userId,
+            choice: started.choice,
+            departingName: started.name || started.login,
+            expectedCount: started.ungradedCount,
+          })
+        : null;
+
+      return {
+        success: removalMessage(ungraded),
+        action: ActionTypes.REMOVE_USER,
+      };
     },
   });
 };
