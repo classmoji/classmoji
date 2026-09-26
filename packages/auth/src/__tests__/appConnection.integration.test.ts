@@ -21,7 +21,9 @@
  * a session cookie:
  *   - it is saved with the consent page required;
  *   - it is not resumed on a request made while viewing as another user.
- * And that both mounted handlers (webapp and admin) are this one instance.
+ * And, for sessions read from the cookie cache (`session_data`), the same
+ * refusals; and starting to view as a user (/admin/impersonate-user) with a
+ * saved authorization cookie creates the session without resuming it.
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -29,6 +31,8 @@ import { serializeSignedCookie } from 'better-call';
 
 process.env.WEBAPP_URL = 'http://localhost:3000';
 process.env.BETTER_AUTH_SECRET = 'test-secret-that-is-at-least-32-chars!!';
+// Read once at import: the platform admin who can start viewing as a user.
+process.env.PLATFORM_ADMIN_USER_IDS = 'admin-1';
 
 const CLIENT_ID = 'test-client';
 const REDIRECT = 'http://localhost:9999/callback';
@@ -36,6 +40,19 @@ const REDIRECT = 'http://localhost:9999/callback';
 const mocks = vi.hoisted(() => {
   const state = {
     session: null as Record<string, unknown> | null,
+    adminSession: null as Record<string, unknown> | null,
+    createdSessions: [] as Record<string, any>[],
+    admin: {
+      id: 'admin-1',
+      name: 'Platform admin',
+      provider_email: 'admin@example.edu',
+      emailVerified: true,
+      image: null,
+      created_at: new Date(),
+      updated_at: new Date(),
+      login: 'platform-admin',
+      role: null,
+    } as Record<string, unknown>,
     user: {
       id: 'owner-1',
       name: 'Owner',
@@ -66,15 +83,24 @@ const mocks = vi.hoisted(() => {
   client.user = {
     ...noop(),
     findFirst: vi.fn(({ where }: any) =>
-      Promise.resolve(state.session && where?.id === 'owner-1' ? state.user : null)
+      Promise.resolve(
+        where?.id === 'owner-1' ? state.user : where?.id === 'admin-1' ? state.admin : null
+      )
     ),
   };
   client.session = {
     ...noop(),
     update: vi.fn(({ data }: any) => Promise.resolve({ ...state.session, ...data })),
     findFirst: vi.fn(({ where }: any) =>
-      Promise.resolve(state.session && where?.token === state.session.token ? state.session : null)
+      Promise.resolve(
+        [state.session, state.adminSession].find(row => row && where?.token === row.token) ?? null
+      )
     ),
+    create: vi.fn(({ data }: any) => {
+      const row = { id: `sess-new-${state.createdSessions.length}`, ...data };
+      state.createdSessions.push(row);
+      return Promise.resolve(row);
+    }),
   };
   client.oauthApplication = {
     ...noop(),
@@ -167,16 +193,16 @@ const sessionRow = (impersonatedBy: string | null) => ({
   impersonatedBy,
 });
 
-async function sessionCookie(): Promise<string> {
+async function sessionCookie(token = SESSION_TOKEN): Promise<string> {
   const serialized = await serializeSignedCookie(
     `${COOKIE_PREFIX}.session_token`,
-    SESSION_TOKEN,
+    token,
     process.env.BETTER_AUTH_SECRET!
   );
   return serialized.split(';')[0]!;
 }
 
-async function authorize(query: Record<string, string> = {}) {
+async function authorize(query: Record<string, string> = {}, cookie?: string) {
   const params = new URLSearchParams({
     client_id: CLIENT_ID,
     response_type: 'code',
@@ -189,17 +215,17 @@ async function authorize(query: Record<string, string> = {}) {
   });
   return auth.handler(
     new Request(`${BASE}/mcp/authorize?${params}`, {
-      headers: { cookie: await sessionCookie() },
+      headers: { cookie: cookie ?? (await sessionCookie()) },
     })
   );
 }
 
-async function consent(accept: boolean, consentCode: string) {
+async function consent(accept: boolean, consentCode: string, cookie?: string) {
   return auth.handler(
     new Request(`${BASE}/oauth2/consent`, {
       method: 'POST',
       headers: {
-        cookie: await sessionCookie(),
+        cookie: cookie ?? (await sessionCookie()),
         'content-type': 'application/json',
         origin: 'http://localhost:3000',
       },
@@ -210,6 +236,8 @@ async function consent(accept: boolean, consentCode: string) {
 
 beforeEach(() => {
   mocks.state.session = null;
+  mocks.state.adminSession = null;
+  mocks.state.createdSessions.length = 0;
   mocks.state.verifications.length = 0;
   mocks.state.consents.length = 0;
 });
@@ -382,17 +410,124 @@ describe('an authorization saved while signed out', () => {
   });
 });
 
-describe('both apps mount this one instance', () => {
-  it('apps/webapp and apps/admin hand /api/auth/* to the shared auth.handler', async () => {
-    const { readFile } = await import('node:fs/promises');
-    const root = new URL('../../../../', import.meta.url);
-    for (const route of [
-      'apps/webapp/app/routes/api.auth.$.ts',
-      'apps/admin/app/routes/api.auth.$.ts',
-    ]) {
-      const source = await readFile(new URL(route, root), 'utf8');
-      expect(source, route).toMatch(/import \{ auth \} from '@classmoji\/auth\/server'/);
-      expect(source, route).toMatch(/return auth\.handler\(request\)/);
-    }
+// That apps/webapp and apps/admin both hand /api/auth/* to this one `auth`
+// instance is tested by importing both route modules:
+// apps/webapp/app/routes/__tests__/appConnectionImpersonation.test.ts.
+
+/** The first segment (`name=value`) of each Set-Cookie, keyed by cookie name. */
+function setCookies(res: Response): Map<string, string> {
+  const out = new Map<string, string>();
+  for (const header of res.headers.getSetCookie()) {
+    const pair = header.split(';')[0]!;
+    out.set(pair.slice(0, pair.indexOf('=')), pair);
+  }
+  return out;
+}
+
+describe('a session presented through the cookie cache (session_data)', () => {
+  // Browsers send the signed session_data cookie alongside session_token
+  // (cookieCache is on, 24h), and getSession then answers from it without the
+  // database. Mint a real one through /get-session, then take the database
+  // row away so the cookie is the only place the session can come from.
+  async function cachedViewingAsCookies(): Promise<string> {
+    mocks.state.session = sessionRow('platform-admin-1');
+    const res = await auth.handler(
+      new Request(`${BASE}/get-session`, { headers: { cookie: await sessionCookie() } })
+    );
+    const cookies = setCookies(res);
+    const sessionData = cookies.get(`${COOKIE_PREFIX}.session_data`);
+    const sessionToken = cookies.get(`${COOKIE_PREFIX}.session_token`) ?? (await sessionCookie());
+    expect(sessionData, 'session_data cookie was issued').toBeTruthy();
+    mocks.state.session = null;
+    return `${sessionToken}; ${sessionData}`;
+  }
+
+  it('refuses authorization', async () => {
+    const cookie = await cachedViewingAsCookies();
+
+    const res = await authorize({}, cookie);
+
+    expect(res.status).toBe(403);
+    expect(await res.json()).toMatchObject({
+      error: 'access_denied',
+      error_description: CONNECT_APP_VIEWING_AS_MESSAGE,
+    });
+    expect(mocks.state.verifications).toHaveLength(0);
+  });
+
+  it('refuses authorization even when the client asks to skip the cookie cache', async () => {
+    const cookie = await cachedViewingAsCookies();
+
+    const res = await authorize({ disableCookieCache: 'true' }, cookie);
+
+    expect(res.status).toBe(403);
+    expect(mocks.state.verifications).toHaveLength(0);
+  });
+
+  it('refuses approving consent', async () => {
+    const cookie = await cachedViewingAsCookies();
+
+    const res = await consent(true, 'any-consent-code', cookie);
+
+    expect(res.status).toBe(403);
+    expect(await res.json()).toMatchObject({
+      error: 'access_denied',
+      error_description: CONNECT_APP_VIEWING_AS_MESSAGE,
+    });
+    expect(mocks.state.consents).toHaveLength(0);
+  });
+});
+
+describe('starting to view as a user with a saved authorization cookie', () => {
+  const ADMIN_TOKEN = 'admin-session-token';
+
+  it('creates the viewing-as session and does not resume the saved authorization', async () => {
+    mocks.state.adminSession = {
+      ...sessionRow(null),
+      id: 'sess-admin',
+      token: ADMIN_TOKEN,
+      user_id: 'admin-1',
+    };
+    const savedAuthorization = await serializeSignedCookie(
+      'oidc_login_prompt',
+      JSON.stringify({
+        client_id: CLIENT_ID,
+        response_type: 'code',
+        redirect_uri: REDIRECT,
+        scope: 'openid read',
+        state: 'client-state',
+        code_challenge: 'x'.repeat(43),
+        code_challenge_method: 'S256',
+        prompt: 'consent',
+      }),
+      process.env.BETTER_AUTH_SECRET!
+    );
+
+    const res = await auth.handler(
+      new Request(`${BASE}/admin/impersonate-user`, {
+        method: 'POST',
+        headers: {
+          cookie: `${await sessionCookie(ADMIN_TOKEN)}; ${savedAuthorization.split(';')[0]}`,
+          'content-type': 'application/json',
+          origin: 'http://localhost:3000',
+        },
+        body: JSON.stringify({ userId: 'owner-1' }),
+      })
+    );
+
+    expect(res.status).toBe(200);
+    // The viewing-as session was created and its cookie set.
+    expect(mocks.state.createdSessions).toHaveLength(1);
+    expect(mocks.state.createdSessions[0]).toMatchObject({
+      user_id: 'owner-1',
+      impersonatedBy: 'admin-1',
+    });
+    const newToken = mocks.state.createdSessions[0]!.token as string;
+    expect(setCookies(res).get(`${COOKIE_PREFIX}.session_token`)).toContain(
+      encodeURIComponent(newToken).slice(0, 8)
+    );
+    // No resume: no redirect to the consent page or the client, no code stored.
+    expect(res.headers.get('location')).toBeNull();
+    expect(mocks.state.verifications).toHaveLength(0);
   });
 });

@@ -64,6 +64,25 @@ describe('/mcp/authorize', () => {
     });
   });
 
+  it('turns off client-supplied session read options, so the endpoint reads the same session', async () => {
+    const result = await applyAppConnectionRules(
+      ctx('/mcp/authorize', {
+        query: { client_id: 'c1', disableCookieCache: 'true', disableRefresh: 'true' },
+      }),
+      lookup(OWN)
+    );
+    expect(result).toEqual({
+      context: {
+        query: {
+          client_id: 'c1',
+          prompt: 'consent',
+          disableCookieCache: false,
+          disableRefresh: false,
+        },
+      },
+    });
+  });
+
   it('asks for the consent page when signed out too (the saved request keeps it)', async () => {
     const result = await applyAppConnectionRules(
       ctx('/mcp/authorize', { query: { client_id: 'c1' } }),
@@ -181,12 +200,31 @@ describe('a saved authorization cookie (oidc_login_prompt)', () => {
     );
   });
 
-  it('does not match a cookie whose name only contains the name', async () => {
-    const result = await applyAppConnectionRules(
-      ctx('/admin/impersonate-user', { cookie: 'x_oidc_login_prompt=1; a=b' }),
+  it('ignores a cookie whose name only ends with the name, without a session lookup', async () => {
+    for (const path of ['/admin/impersonate-user', '/update-user']) {
+      const session = lookup(VIEWING_AS);
+      const result = await applyAppConnectionRules(
+        ctx(path, { cookie: 'x_oidc_login_prompt=1; a=b' }),
+        session
+      );
+      expect(result).toBeUndefined();
+      expect(session).not.toHaveBeenCalled();
+    }
+  });
+
+  it('handles whitespace around the name, as better-call parses it', async () => {
+    const spaced = 'a=1; oidc_login_prompt =v; b=2';
+    const onImpersonate = await applyAppConnectionRules(
+      ctx('/admin/impersonate-user', { cookie: spaced }),
       lookup(OWN)
     );
-    expect(result).toBeUndefined();
+    expect(onImpersonate?.context.headers?.get('cookie')).toBe('a=1; b=2');
+
+    const whileViewingAs = await applyAppConnectionRules(
+      ctx('/update-user', { cookie: 'oidc_login_prompt= v;a=1' }),
+      lookup(VIEWING_AS)
+    );
+    expect(whileViewingAs?.context.headers?.get('cookie')).toBe('a=1');
   });
 });
 
@@ -195,5 +233,12 @@ describe('withoutCookie', () => {
     expect(withoutCookie('a=1; oidc_login_prompt=2; b=3', 'oidc_login_prompt')).toBe('a=1; b=3');
     expect(withoutCookie('oidc_login_prompt=2', 'oidc_login_prompt')).toBe('');
     expect(withoutCookie('a=1;b=2', 'oidc_login_prompt')).toBe('a=1; b=2');
+    expect(
+      withoutCookie('a=1; oidc_login_prompt =2; x_oidc_login_prompt=3', 'oidc_login_prompt')
+    ).toBe('a=1; x_oidc_login_prompt=3');
+    // Every occurrence goes (better-call keeps the first one it sees).
+    expect(
+      withoutCookie('oidc_login_prompt=1; oidc_login_prompt=2; a=3', 'oidc_login_prompt')
+    ).toBe('a=3');
   });
 });

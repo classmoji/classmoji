@@ -61,26 +61,54 @@ export type AppConnectionContextChange = {
   context: { headers?: Headers; query?: Record<string, unknown> };
 };
 
-/** A cookie header with one cookie removed; every other cookie is kept as sent. */
+/**
+ * A cookie's name as better-call reads it: the text before the first `=`,
+ * trimmed (better-call cookies.mjs parseCookies), so `oidc_login_prompt =v`
+ * names the same cookie as `oidc_login_prompt=v`.
+ */
+const cookieName = (segment: string) => segment.split('=')[0]?.trim() ?? '';
+
+/**
+ * A cookie header with every occurrence of one cookie removed; every other
+ * cookie is kept as sent. (better-call keeps the first occurrence of a name, so
+ * all of them go.)
+ */
 export function withoutCookie(cookieHeader: string, name: string): string {
   return cookieHeader
     .split(';')
     .map(part => part.trim())
-    .filter(part => part.length > 0 && part.split('=')[0]?.trim() !== name)
+    .filter(part => part.length > 0 && cookieName(part) !== name)
     .join('; ');
 }
 
 const carriesCookie = (cookieHeader: string, name: string) =>
-  cookieHeader.split(';').some(part => part.split('=')[0]?.trim() === name);
+  cookieHeader.split(';').some(part => part.includes('=') && cookieName(part) === name);
+
+/** Cheap pre-check: a cookie segment that starts with the saved-prompt name. */
+const LOGIN_PROMPT_SEGMENT = new RegExp(`(?:^|;)\\s*${LOGIN_PROMPT_COOKIE}\\s*=`);
+
+/**
+ * getSession options a client could put on the authorize query. authorize.mjs
+ * reads the session with `query: { ...ctx.query }` (getSessionFromCtx), so these
+ * would make the endpoint read the session from a different source than this
+ * hook did (database instead of the cookie cache). They are turned off.
+ *
+ * Set to `false` rather than deleted: better-auth merges the hook's context
+ * over the request's with defu (to-auth-endpoints.mjs:47), which keeps any key
+ * the hook leaves out, so a deleted key would come back from the original query.
+ */
+const SESSION_READ_OPTIONS = ['disableCookieCache', 'disableRefresh'] as const;
 
 /**
  * Apply the rules to one request. Returns the context change for better-auth
  * to merge, nothing when the request is untouched, or throws an APIError to
  * refuse it.
  *
- * Paths other than the two authorization endpoints, with no saved
- * authorization cookie, return after a string comparison and a substring check
- * on the cookie header, without a session lookup.
+ * Paths other than the two authorization endpoints return after two string
+ * comparisons and one anchored match on the cookie header, with no session
+ * lookup, UNLESS the request carries the saved-authorization cookie
+ * (`oidc_login_prompt`): then the session is looked up (except on
+ * /admin/impersonate-user, where the cookie is removed without one).
  */
 export async function applyAppConnectionRules(
   ctx: AppConnectionHookContext,
@@ -91,7 +119,7 @@ export async function applyAppConnectionRules(
   const isApprovingConsent =
     path === OAUTH_CONSENT_PATH && (ctx.body as { accept?: unknown } | undefined)?.accept !== false;
   const cookieHeader = ctx.headers?.get('cookie') ?? '';
-  const mayCarryLoginPrompt = cookieHeader.includes(`${LOGIN_PROMPT_COOKIE}=`);
+  const mayCarryLoginPrompt = LOGIN_PROMPT_SEGMENT.test(cookieHeader);
 
   if (!isAuthorize && !isApprovingConsent && !mayCarryLoginPrompt) return undefined;
 
@@ -130,7 +158,13 @@ export async function applyAppConnectionRules(
   if (viewingAsAnotherUser && carriesLoginPrompt) change.headers = withoutLoginPrompt();
   // Always show the consent page. `prompt` must be exactly "consent" for
   // authorize.mjs to require it; other prompt values have no effect there.
-  if (isAuthorize) change.query = { ...(ctx.query ?? {}), prompt: 'consent' };
+  if (isAuthorize) {
+    const query: Record<string, unknown> = { ...(ctx.query ?? {}), prompt: 'consent' };
+    for (const option of SESSION_READ_OPTIONS) {
+      if (option in query) query[option] = false;
+    }
+    change.query = query;
+  }
 
   return Object.keys(change).length > 0 ? { context: change } : undefined;
 }

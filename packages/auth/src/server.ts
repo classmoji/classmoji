@@ -595,17 +595,21 @@ export const auth = betterAuth({
    *
    * This hook runs before EVERY endpoint (better-auth gives user hooks a
    * `() => true` matcher — dist/api/to-auth-endpoints.mjs:159-170), including
-   * hot in-process `auth.api.*` calls, so the non-matching path must stay a
-   * string comparison (plus, for the app-connection rules, one substring check
-   * on the cookie header), never a session lookup.
+   * hot in-process `auth.api.*` calls, so the non-matching path must stay
+   * cheap: string comparisons plus, for the app-connection rules, one anchored
+   * match on the cookie header. It does no session lookup, UNLESS the request
+   * carries the saved-authorization cookie (`oidc_login_prompt`, set by
+   * /mcp/authorize while signed out and short-lived), in which case the rules
+   * look the session up once.
    */
   hooks: {
     before: createAuthMiddleware(async ctx => {
       if (ctx.path !== '/mcp/token') {
         // Connecting apps: the consent page is always shown, and no app is
         // connected while viewing as another user (./appConnectionGuard.ts).
-        // Every other path returns after a string comparison and a
-        // cookie-header substring check, with no session lookup.
+        // Every other path returns after string comparisons and one anchored
+        // cookie-header match, with no session lookup unless the request
+        // carries the saved-authorization cookie (oidc_login_prompt).
         return applyAppConnectionRules(ctx, () => lookupSessionForHook(ctx));
       }
 

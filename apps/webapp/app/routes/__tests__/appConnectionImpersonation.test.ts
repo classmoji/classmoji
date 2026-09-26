@@ -3,7 +3,8 @@
  * refusal itself is server-side, in the shared better-auth hook, and is tested
  * in packages/auth (appConnectionGuard.test.ts, appConnection.integration.test.ts).
  * Here: the page reports the state, shows the note, and turns Approve off; and
- * the webapp's auth route hands every request to the shared handler.
+ * both the webapp's and the admin app's auth routes hand the authorization
+ * requests to the one shared handler unchanged.
  */
 
 import { createElement } from 'react';
@@ -36,6 +37,7 @@ vi.mock('react-router', () => ({
 }));
 
 const authRoute = await import('../api.auth.$.ts');
+const adminAuthRoute = await import('../../../../admin/app/routes/api.auth.$.ts');
 const consentRoute = await import('../oauth.consent/route.tsx');
 
 const VIEWING_AS = {
@@ -52,18 +54,51 @@ beforeEach(() => {
   mocks.findApplication.mockResolvedValue({ name: 'Claude', icon: null });
 });
 
-describe('webapp auth route', () => {
-  it('hands authorization to the shared auth handler, where the rules run', async () => {
-    mocks.handler.mockResolvedValue(new Response(null, { status: 302 }));
-    const response = (await authRoute.loader({
-      request: new Request('http://localhost/api/auth/mcp/authorize?client_id=c1'),
-    } as unknown as Parameters<typeof authRoute.loader>[0])) as Response;
+describe('both apps hand /api/auth/* to the shared auth handler', () => {
+  // The app-connection rules live in the shared better-auth hook, so what
+  // matters here is that each origin passes these requests through untouched.
+  const routes = [
+    ['apps/webapp', authRoute],
+    ['apps/admin', adminAuthRoute],
+  ] as const;
+
+  it.each(routes)('%s passes /mcp/authorize through unchanged', async (_app, route) => {
+    const upstream = new Response(null, { status: 302 });
+    mocks.handler.mockResolvedValue(upstream);
+    const request = new Request(
+      'http://localhost/api/auth/mcp/authorize?client_id=c1&response_type=code&prompt=none'
+    );
+
+    const response = await route.loader({ request } as unknown as Parameters<
+      typeof route.loader
+    >[0]);
 
     expect(mocks.handler).toHaveBeenCalledOnce();
-    expect(response.status).toBe(302);
-    // No second session lookup at the route level.
+    expect(mocks.handler.mock.calls[0]![0]).toBe(request);
+    expect(response).toBe(upstream);
     expect(mocks.getSession).not.toHaveBeenCalled();
   });
+
+  it.each(routes)(
+    '%s passes an approving /oauth2/consent through unchanged',
+    async (_app, route) => {
+      const upstream = new Response('{}', { status: 200 });
+      mocks.handler.mockResolvedValue(upstream);
+      const request = new Request('http://localhost/api/auth/oauth2/consent', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ accept: true, consent_code: 'x' }),
+      });
+
+      const response = await route.action({ request } as unknown as Parameters<
+        typeof route.action
+      >[0]);
+
+      expect(mocks.handler).toHaveBeenCalledOnce();
+      expect(mocks.handler.mock.calls[0]![0]).toBe(request);
+      expect(response).toBe(upstream);
+    }
+  );
 });
 
 describe('consent screen', () => {
