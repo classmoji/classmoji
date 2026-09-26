@@ -36,6 +36,16 @@ test.describe('page uploads read the body after the gate', () => {
     expect(UPLOAD_SOURCE).not.toContain('await request.formData()');
   });
 
+  test('the editor toasts every refusal before BlockNote swallows it', () => {
+    // BlockNote's upload tab turns any thrown error into "Upload failed", so
+    // the reason reaches the person only through the toast.
+    const upload = EDITOR_SOURCE.slice(EDITOR_SOURCE.indexOf('const uploadFile = useCallback('));
+    expect(upload).toContain('toast.error(message);\n        throw new Error(message);');
+    expect(upload).toContain('refuse(repoFileTooLargeMessage(file.name));');
+    expect(upload).toContain("refuse(typeof body?.error === 'string' ? body.error : 'Upload failed');");
+    expect(upload.slice(0, upload.indexOf('return result.url;'))).not.toContain('throw new Error(repo');
+  });
+
   test('the editor sends the page in the query string, not the form', () => {
     expect(EDITOR_SOURCE).toContain('/api/upload?pageId=${encodeURIComponent(pageId)}');
     expect(EDITOR_SOURCE).not.toContain("formData.append('pageId'");

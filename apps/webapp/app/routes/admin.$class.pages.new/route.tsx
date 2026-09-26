@@ -16,6 +16,7 @@ import {
   readPageImportForm,
 } from '~/utils/pageImportBody.server';
 import { wrapHtmlContent } from '~/utils/htmlWrapper';
+import { batchImportSummary, type BatchImportFailure } from './utils';
 import ImportTab from './ImportTab';
 import CreateBlankTab from './CreateBlankTab';
 import BatchImportTab from './BatchImportTab';
@@ -209,7 +210,44 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
 interface BatchProgress {
   current: number;
   total: number;
-  errors: Array<{ title: string; error: string }>;
+  errors: BatchImportFailure[];
+}
+
+/** A finished batch that left pages out: how many made it, and each that did not. */
+interface BatchResult {
+  total: number;
+  failures: BatchImportFailure[];
+}
+
+/**
+ * Shown in place of the form when a batch finished with failures, so each page
+ * that did not import is named with the reason the server gave — the pages
+ * that did import are already created, and "2 failed" alone leaves nothing to
+ * act on.
+ */
+function BatchImportFailures({ result, onDone }: { result: BatchResult; onDone: () => void }) {
+  return (
+    <div>
+      <div className="text-sm font-semibold text-ink-0">
+        {batchImportSummary(result.total, result.failures)}
+      </div>
+      <ul className="mt-3 rounded-lg bg-red-50 dark:bg-red-950/30 ring-1 ring-red-200 dark:ring-red-900/60 divide-y divide-red-200 dark:divide-red-900/60">
+        {result.failures.map((failure, index) => (
+          <li key={index} className="px-3 py-2 text-sm">
+            <div className="font-medium text-ink-0">{failure.title}</div>
+            <div className="mt-0.5 break-words text-red-700 dark:text-red-300">
+              {failure.error}
+            </div>
+          </li>
+        ))}
+      </ul>
+      <div className="flex justify-end mt-6">
+        <Button type="primary" onClick={onDone}>
+          Go to pages
+        </Button>
+      </div>
+    </div>
+  );
 }
 
 interface BatchPage {
@@ -240,6 +278,8 @@ export default function NewPage({ loaderData }: Route.ComponentProps) {
 
   // Batch import progress state
   const [batchProgress, setBatchProgress] = useState<BatchProgress | null>(null);
+  // A finished batch with failures, listed in place of the form
+  const [batchResult, setBatchResult] = useState<BatchResult | null>(null);
 
   // Get progress-based loading message
   const getProgressMessage = () => {
@@ -295,7 +335,7 @@ export default function NewPage({ loaderData }: Route.ComponentProps) {
       }
 
       // Step 2: Import each page sequentially
-      const errors = [];
+      const errors: BatchImportFailure[] = [];
       for (let i = 0; i < batchPages.length; i++) {
         const page = batchPages[i];
         setBatchProgress(prev => (prev ? { ...prev, current: i + 1 } : prev));
@@ -338,16 +378,14 @@ export default function NewPage({ loaderData }: Route.ComponentProps) {
       setBatchProgress(null);
 
       if (errors.length > 0) {
-        callout.show({
-          variant: 'error',
-          title: `Imported ${total - errors.length} of ${total} pages. ${errors.length} failed.`,
-        });
-      } else {
-        callout.show({
-          variant: 'success',
-          title: `Successfully imported ${total} page${total !== 1 ? 's' : ''}!`,
-        });
+        // Stay here and name each page that did not import, with its reason.
+        setBatchResult({ total, failures: errors });
+        return;
       }
+      callout.show({
+        variant: 'success',
+        title: `Successfully imported ${total} page${total !== 1 ? 's' : ''}!`,
+      });
       navigate(`/${rolePrefix}/${classroom.slug}/pages`);
     } catch (err: unknown) {
       console.error('Batch import failed:', err);
@@ -452,8 +490,16 @@ export default function NewPage({ loaderData }: Route.ComponentProps) {
       </div>
 
       <div className="max-h-[75vh] overflow-y-auto px-6 py-5">
+        {/* A finished batch that left pages out */}
+        {!isCreating && batchResult && (
+          <BatchImportFailures
+            result={batchResult}
+            onDone={() => navigate(`/${rolePrefix}/${classroom.slug}/pages`)}
+          />
+        )}
+
         {/* Show form when not loading */}
-        {!isCreating && (
+        {!isCreating && !batchResult && (
           <>
             {createError && (
               <Alert
