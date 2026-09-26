@@ -36,9 +36,10 @@
 -- `size_bytes` and `rendition_bytes` are BIGINT: the per-file ceiling is 2 GiB,
 -- which is already past the 2^31 INTEGER limit, and the quota sums many of them.
 --
--- ON DELETE CASCADE matches every other classroom-scoped table. It orphans the
--- R2 objects rather than deleting them — classroom deletion is not a path this
--- phase wires up, and a cascade is the truthful shape for the ledger either way.
+-- ON DELETE CASCADE matches every other classroom-scoped table. The cascade
+-- alone would orphan the R2 objects, so classroom deletion purges the
+-- classroom's R2 prefix first (`purgeClassroomMedia`) and does not delete the
+-- classroom when that purge fails.
 
 -- CreateEnum
 CREATE TYPE "MediaStatus" AS ENUM ('UPLOADING', 'READY', 'DELETED');
@@ -64,8 +65,9 @@ CREATE TABLE "media_objects" (
     -- Canonical lowercase extension of the original. Half of the `orig.{ext}`
     -- variant, so it is what a signed URL for the original is built from.
     "ext" TEXT NOT NULL,
-    -- Server-assigned from `ext` against an allowlist, never taken from the
-    -- client.
+    -- Server-assigned from `ext`, never taken from the client. Any extension is
+    -- accepted: a known kind gets its real type, every other extension (kind
+    -- OTHER) is application/octet-stream.
     "content_type" TEXT NOT NULL,
     "size_bytes" BIGINT NOT NULL,
     "status" "MediaStatus" NOT NULL DEFAULT 'UPLOADING',
