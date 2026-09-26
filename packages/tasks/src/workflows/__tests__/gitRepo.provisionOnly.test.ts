@@ -65,6 +65,13 @@ vi.mock('@classmoji/services', () => ({
 }));
 
 vi.mock('@classmoji/utils', () => ({
+  repoNamespace: (c: {
+    git_namespace?: string | null;
+    git_organization: { login: string | null };
+  }) => c.git_namespace || c.git_organization.login,
+  teamsNamespace: () => null,
+  scopeGitlabId: (instanceId: string | null, id: string | number) =>
+    instanceId ? `${instanceId}:${id}` : String(id),
   titleToIdentifier: (title: string) => title.toLowerCase().replace(/\s+/g, '-'),
   // The real resolver: the task's template handling is part of what these
   // fixtures exercise, so a stub would pin the stub.

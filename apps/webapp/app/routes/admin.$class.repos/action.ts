@@ -1,6 +1,6 @@
 import { namedAction } from 'remix-utils/named-action';
 
-import { GITLAB_UNSUPPORTED, isGitLabClassroom } from '~/utils/gitlabGuard.server';
+import { isGitLabClassroom } from '~/utils/gitlabGuard.server';
 import { ClassmojiService } from '@classmoji/services';
 import { gitTerms } from '~/utils/gitWeb';
 import { publishAssignment, publishAssignmentAndRepository, syncAssignment } from './helpers';
@@ -65,7 +65,6 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
 
     // Group repos only: fan out one contribution-stats task per team repo.
     async calculateContributions() {
-      if (isGitLabClassroom(classroom)) return { error: GITLAB_UNSUPPORTED };
       return calculateContributions({ id: assignmentId }, classSlug);
     },
   });

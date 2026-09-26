@@ -119,7 +119,7 @@ const SingleRepository = ({ loaderData }: Route.ComponentProps) => {
 
         {canEdit && (
           <div className="flex items-center gap-2">
-            {!web.isGitLab && (
+            {
               <Tooltip
                 title={
                   autogradingTestCount
@@ -136,7 +136,7 @@ const SingleRepository = ({ loaderData }: Route.ComponentProps) => {
                   {isAutograding ? 'Provisioning…' : 'Autograde'}
                 </Button>
               </Tooltip>
-            )}
+            }
             <Menu
               repository={repository as Parameters<typeof Menu>[0]['repository']}
               assistants={assistants as Parameters<typeof Menu>[0]['assistants']}

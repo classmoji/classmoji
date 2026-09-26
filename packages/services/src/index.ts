@@ -349,6 +349,7 @@ export { isPlatformDomain, PLATFORM_DOMAINS } from '@classmoji/utils';
 
 // Autograding: workflow (classroom.yml) generator (pure, client-safe)
 export { generateClassroomWorkflow } from './autograding/generateClassroomWorkflow.ts';
+export { generateGitlabCi } from './autograding/generateGitlabCi.ts';
 export type {
   WorkflowTestInput,
   GenerateWorkflowOptions,

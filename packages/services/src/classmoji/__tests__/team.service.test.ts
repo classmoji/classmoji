@@ -376,11 +376,10 @@ describe('teamAdmin.renameTeam', () => {
     expect(teamRenameAndRepos).not.toHaveBeenCalled();
   });
 
-  it('refuses a non-GitHub organization before resolving anything', async () => {
+  it('refuses an unsupported provider before resolving anything', async () => {
     classroomFindById.mockResolvedValue({
       ...CLASSROOM,
-      git_namespace: 'cs/cs1-25f',
-      git_organization: { ...CLASSROOM.git_organization, provider: 'GITLAB' },
+      git_organization: { ...CLASSROOM.git_organization, provider: 'GITEA' },
     });
 
     await expect(

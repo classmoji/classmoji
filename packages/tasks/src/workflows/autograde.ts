@@ -4,6 +4,7 @@ import {
   ClassmojiService,
   getGitProvider,
   generateClassroomWorkflow,
+  generateGitlabCi,
   signAutogradeCallbackToken,
   verifyAutogradeCallbackToken,
   type GitProvider,
@@ -11,6 +12,11 @@ import {
 } from '@classmoji/services';
 
 const WORKFLOW_PATH = '.github/workflows/classroom.yml';
+/** GitLab runs CI from the project's root `.gitlab-ci.yml`. */
+const GITLAB_CI_PATH = '.gitlab-ci.yml';
+
+const workflowPath = (provider?: string | null) =>
+  provider === 'GITLAB' ? GITLAB_CI_PATH : WORKFLOW_PATH;
 const COMMIT_MESSAGE = 'Add/update Classmoji autograding workflow';
 
 // Results are reported by triggering this task via Trigger.dev's public REST
@@ -51,10 +57,11 @@ export async function commitWorkflow(
   gitProvider: GitProvider,
   owner: string,
   repo: string,
-  yaml: string
+  yaml: string,
+  provider: string = 'GITHUB'
 ): Promise<void> {
   try {
-    await gitProvider.putFile(owner, repo, WORKFLOW_PATH, yaml, COMMIT_MESSAGE);
+    await gitProvider.putFile(owner, repo, workflowPath(provider), yaml, COMMIT_MESSAGE);
   } catch (error: unknown) {
     const status = (error as { status?: number })?.status;
     if (status === 403) {
@@ -74,7 +81,8 @@ export async function commitWorkflow(
  */
 export async function buildClassroomWorkflowYaml(
   tests: WorkflowTestInput[],
-  classroomSlug: string
+  classroomSlug: string,
+  provider: string = 'GITHUB'
 ): Promise<string> {
   // multipleUse: trigger tokens are one-time-use by default — but this token is
   // committed into the workflow and used on every push, so it must be reusable.
@@ -82,7 +90,8 @@ export async function buildClassroomWorkflowYaml(
     expirationTime: '1y',
     multipleUse: true,
   });
-  return generateClassroomWorkflow(tests, {
+  const generate = provider === 'GITLAB' ? generateGitlabCi : generateClassroomWorkflow;
+  return generate(tests, {
     triggerUrl: `${publicTriggerApiBase()}/api/v1/tasks/${INGEST_TASK_ID}/trigger`,
     triggerToken,
     classroomSlug,
@@ -102,18 +111,22 @@ export async function provisionAutogradeWorkflowForRepo(params: {
   repoName: string;
   classroomSlug: string;
   gitOrganization: GitOrganizationLike;
+  /** Where the repo lives: the org on Github, the class subgroup on GitLab. */
+  repoOwner?: string | null;
 }): Promise<void> {
-  const login = (params.gitOrganization as { login?: string | null }).login;
+  const login = params.repoOwner || (params.gitOrganization as { login?: string | null }).login;
   if (!login) return;
+  const provider = (params.gitOrganization as { provider?: string }).provider ?? 'GITHUB';
   try {
     const tests = await ClassmojiService.autogradingTest.findByRepositoryId(params.repositoryId);
     if (!tests.length) return;
     const yaml = await buildClassroomWorkflowYaml(
       tests as WorkflowTestInput[],
-      params.classroomSlug
+      params.classroomSlug,
+      provider
     );
     const gitProvider = getGitProvider(params.gitOrganization);
-    await commitWorkflow(gitProvider, login, params.repoName, yaml);
+    await commitWorkflow(gitProvider, login, params.repoName, yaml, provider);
   } catch (error) {
     logger.error('autograde: failed to provision workflow on new repo', {
       error,
@@ -153,7 +166,9 @@ export const provisionAutogradeWorkflowTask = task({
     }
 
     const tests = repository.autograding_tests as WorkflowTestInput[];
-    const yaml = await buildClassroomWorkflowYaml(tests, classroomSlug);
+    const yaml = await buildClassroomWorkflowYaml(tests, classroomSlug, gitOrganization.provider);
+    // GitLab student projects live in the class subgroup, not the top group.
+    const owner = repository.classroom.git_namespace || orgLogin;
 
     // Fan out to existing student repos. We deliberately do NOT write the
     // workflow to the template repo: that would make every future repo-creation
@@ -167,7 +182,7 @@ export const provisionAutogradeWorkflowTask = task({
     if (studentRepos.length) {
       await commitAutogradeWorkflowToRepoTask.batchTriggerAndWait(
         studentRepos.map(repo => ({
-          payload: { gitOrganization, repoName: repo.name, yaml },
+          payload: { gitOrganization, repoName: repo.name, yaml, owner },
           options: { concurrencyKey: classroomSlug },
         }))
       );
@@ -181,15 +196,23 @@ interface CommitToRepoPayload {
   gitOrganization: GitOrganizationLike & { login: string };
   repoName: string;
   yaml: string;
+  /** The repo's namespace when it isn't the org itself (a GitLab class subgroup). */
+  owner?: string;
 }
 
 /** Commit the generated workflow into a single student repo. */
 export const commitAutogradeWorkflowToRepoTask = task({
   id: 'gh-commit_autograde_workflow',
   queue: { concurrencyLimit: 6 },
-  run: async ({ gitOrganization, repoName, yaml }: CommitToRepoPayload) => {
+  run: async ({ gitOrganization, repoName, yaml, owner }: CommitToRepoPayload) => {
     const gitProvider = getGitProvider(gitOrganization);
-    await commitWorkflow(gitProvider, gitOrganization.login, repoName, yaml);
+    await commitWorkflow(
+      gitProvider,
+      owner || gitOrganization.login,
+      repoName,
+      yaml,
+      gitOrganization.provider
+    );
     return { repoName };
   },
 });

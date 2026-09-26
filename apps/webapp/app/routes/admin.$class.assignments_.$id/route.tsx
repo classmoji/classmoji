@@ -255,20 +255,17 @@ const AssignmentPage = ({ loaderData }: Route.ComponentProps) => {
     postApi('autograde', { repositoryId: repository.id, classroomSlug: classSlug });
   };
 
-  // Gitlab classrooms have no autograding or repo updates yet.
-  const moreItems: MenuProps['items'] = web.isGitLab
-    ? [{ key: 'edit-repo', label: `Edit ${terms.repo}` }]
-    : [
-        {
-          key: 'autograde',
-          label: isAutograding ? 'Provisioning autograding…' : 'Autograde',
-          icon: <IconRobot size={15} />,
-          disabled: !autogradingTestCount || isAutograding,
-        },
-        { type: 'divider' },
-        { key: 'edit-repo', label: 'Edit repository' },
-        { key: 'update-repos', label: 'Update student repositories' },
-      ];
+  const moreItems: MenuProps['items'] = [
+    {
+      key: 'autograde',
+      label: isAutograding ? 'Provisioning autograding…' : 'Autograde',
+      icon: <IconRobot size={15} />,
+      disabled: !autogradingTestCount || isAutograding,
+    },
+    { type: 'divider' },
+    { key: 'edit-repo', label: `Edit ${terms.repo}` },
+    { key: 'update-repos', label: `Update student ${terms.repos}` },
+  ];
   const onMoreClick: MenuProps['onClick'] = ({ key }) => {
     if (key === 'autograde') handleAutograde();
     if (key === 'edit-repo')
@@ -340,7 +337,7 @@ const AssignmentPage = ({ loaderData }: Route.ComponentProps) => {
                 </Tag>
               )}
             </span>
-            {!web.isGitLab && (
+            {
               <span>
                 Autograding{' '}
                 <span
@@ -349,7 +346,7 @@ const AssignmentPage = ({ loaderData }: Route.ComponentProps) => {
                   {autogradingTestCount ? 'on' : 'off'}
                 </span>
               </span>
-            )}
+            }
             <span>
               {isIndividual ? 'Student' : 'Team'} {web.isGitLab ? 'projects' : 'repos'}{' '}
               <span className="text-ink-1 font-medium">

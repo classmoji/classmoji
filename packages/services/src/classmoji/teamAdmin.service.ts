@@ -595,12 +595,12 @@ export const renameTeam = async ({
   newName: string;
 }): Promise<RenameTeamResult> => {
   const trimmedName = requireName(newName);
-  const { gitOrganization, orgLogin } = await loadClassroomOrg(classroomId);
+  const { gitOrganization, orgLogin, reposParent } = await loadClassroomOrg(classroomId);
 
-  if (gitOrganization.provider !== 'GITHUB') {
+  if (gitOrganization.provider !== 'GITHUB' && gitOrganization.provider !== 'GITLAB') {
     throw new TeamServiceError(
       'provider_unsupported',
-      '[team] renaming a team is only supported for GitHub organizations'
+      '[team] renaming a team is only supported for Github and Gitlab'
     );
   }
 
@@ -659,12 +659,12 @@ export const renameTeam = async ({
     }
     const newRepoName = repo.name.split(oldSuffix).join(`-${newSlug}`);
     try {
-      await gitProvider.updateRepo(orgLogin, repo.name, { name: newRepoName });
+      await gitProvider.updateRepo(reposParent, repo.name, { name: newRepoName });
       succeeded.push({ id: repo.id, name: newRepoName });
     } catch (error: unknown) {
       failed.push({
         name: repo.name,
-        error: failureReason(`rename repo ${orgLogin}/${repo.name}`, error, 'provider_error'),
+        error: failureReason(`rename repo ${reposParent}/${repo.name}`, error, 'provider_error'),
       });
     }
     await sleep(PROVIDER_THROTTLE_MS);

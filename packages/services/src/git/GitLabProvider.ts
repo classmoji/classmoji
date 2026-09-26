@@ -8,6 +8,13 @@ import type {
 } from '../classmoji/repoAnalytics.types.ts';
 import { defaultHost } from '../classmoji/gitlabInstance.service.ts';
 
+/**
+ * The author of commits Classmoji makes in student projects (CI config, etc.).
+ * Same address as CLASSMOJI_BOT_EMAIL, which push handling treats as not a
+ * student's work.
+ */
+const CLASSMOJI_BOT_AUTHOR_EMAIL = 'hello@classmoji.com';
+
 /** The name Classmoji gives its project hooks, so they can be found again. */
 const CLASSMOJI_HOOK_NAME = 'Classmoji';
 
@@ -774,6 +781,35 @@ export class GitLabProvider extends GitProvider {
     return { id: mr.id, iid: mr.iid, url: mr.web_url };
   }
 
+  /** An open merge request from `source` into `target`, if any. */
+  async findOpenMergeRequest(
+    group: string,
+    project: string,
+    source: string,
+    target: string
+  ): Promise<{ iid: number; url: string } | null> {
+    const mrs = (await this.api(
+      `/api/v4/projects/${encodeURIComponent(`${group}/${project}`)}/merge_requests?state=opened` +
+        `&source_branch=${encodeURIComponent(source)}&target_branch=${encodeURIComponent(target)}`
+    )) as Array<{ iid: number; web_url: string }>;
+    return mrs[0] ? { iid: mrs[0].iid, url: mrs[0].web_url } : null;
+  }
+
+  /** Retitle / re-describe a merge request. */
+  async updateMergeRequest(
+    group: string,
+    project: string,
+    iid: number,
+    title: string,
+    description: string
+  ): Promise<{ url: string }> {
+    const mr = (await this.api(
+      `/api/v4/projects/${encodeURIComponent(`${group}/${project}`)}/merge_requests/${iid}`,
+      { method: 'PUT', body: { title, description } }
+    )) as { web_url: string };
+    return { url: mr.web_url };
+  }
+
   /** A project by group path + project path. */
   async getRepository(group: string, project: string): Promise<GitRepository> {
     const body = (await this.api(
@@ -1196,6 +1232,38 @@ export class GitLabProvider extends GitProvider {
     return { id: subgroup.id, slug: subgroup.path, name: subgroup.name };
   }
 
+  /**
+   * Rename a team subgroup; its path follows the name, like a GitHub team's
+   * slug. Returns the new slug (path) and name.
+   */
+  async updateTeam(
+    group: string,
+    subgroupPath: string,
+    changes: { name: string }
+  ): Promise<{ id: number; slug: string; name: string }> {
+    const updated = (await this.api(
+      `/api/v4/groups/${encodeURIComponent(`${group}/${subgroupPath}`)}`,
+      { method: 'PUT', body: { name: changes.name, path: toPath(changes.name) } }
+    )) as { id: number; path: string; name: string };
+    return { id: updated.id, slug: updated.path, name: updated.name };
+  }
+
+  /**
+   * Rename a project (name and path together, so its URL matches). GitLab
+   * redirects the old path, so existing clones keep working.
+   */
+  async updateRepo(
+    group: string,
+    project: string,
+    changes: { name: string }
+  ): Promise<{ name: string }> {
+    const updated = (await this.api(
+      `/api/v4/projects/${encodeURIComponent(`${group}/${project}`)}`,
+      { method: 'PUT', body: { name: changes.name, path: toPath(changes.name) } }
+    )) as { path: string };
+    return { name: updated.path };
+  }
+
   /** Every team subgroup under `group` (none when `group` doesn't exist yet). */
   async getTeams(group: string): Promise<Array<{ id: number; slug: string; name: string }>> {
     const { ok, status, body } = await this.request(
@@ -1299,6 +1367,76 @@ export class GitLabProvider extends GitProvider {
     ) as Error & { status: number };
     error.status = status;
     throw error;
+  }
+
+  /**
+   * Write one file on the project's default branch, committed as the
+   * Classmoji bot (so hook-station can tell the commit isn't a student's).
+   * Creates the file, or updates it when it exists; unchanged content is a
+   * no-op. Same contract as GitHubProvider.putFile.
+   */
+  async putFile(
+    group: string,
+    project: string,
+    path: string,
+    content: string,
+    message: string
+  ): Promise<{ commit: string; unchanged?: boolean }> {
+    const projectPath = `/api/v4/projects/${encodeURIComponent(`${group}/${project}`)}`;
+    const meta = (await this.api(projectPath)) as { default_branch?: string | null };
+    const branch = meta.default_branch || 'main';
+
+    const existing = await this.request(
+      `${projectPath}/repository/files/${encodeURIComponent(path)}?ref=${encodeURIComponent(branch)}`
+    );
+    if (existing.ok) {
+      const current = existing.body as {
+        content?: string;
+        encoding?: string;
+        last_commit_id?: string;
+      };
+      const text =
+        current.encoding === 'base64'
+          ? Buffer.from(current.content ?? '', 'base64').toString('utf8')
+          : (current.content ?? '');
+      if (text === content) return { commit: current.last_commit_id ?? '', unchanged: true };
+    }
+
+    const commit = (await this.api(`${projectPath}/repository/commits`, {
+      method: 'POST',
+      body: {
+        branch,
+        commit_message: message,
+        author_name: 'Classmoji',
+        author_email: CLASSMOJI_BOT_AUTHOR_EMAIL,
+        actions: [{ action: existing.ok ? 'update' : 'create', file_path: path, content }],
+      },
+    })) as { id: string };
+    return { commit: commit.id };
+  }
+
+  /**
+   * Change a direct project member's access (e.g. to Reporter, read-only, when
+   * a student leaves the class). Not a member, or no such user, is fine.
+   */
+  async setProjectMemberAccess(
+    group: string,
+    project: string,
+    username: string,
+    permission: string
+  ): Promise<void> {
+    const accessLevel = ACCESS_LEVELS[permission.toLowerCase()];
+    if (accessLevel === undefined) throw new Error(`Unknown Gitlab permission: ${permission}`);
+    const userId = await this.resolveUserId(username);
+    if (userId === null) return;
+    const { ok, status, body } = await this.request(
+      `/api/v4/projects/${encodeURIComponent(`${group}/${project}`)}/members/${userId}`,
+      { method: 'PUT', body: { access_level: accessLevel } }
+    );
+    if (ok || status === 404) return;
+    throw new Error(
+      `Gitlab API PUT project member failed (${status}): ${JSON.stringify(body ?? '')}`
+    );
   }
 
   // ─── GitLab Pages ─────────────────────────────────────────────────────────

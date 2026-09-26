@@ -165,17 +165,12 @@ const RepositoriesTable = ({
   const repoMenuItems = (r: RepositoryRow): MenuProps['items'] => [
     ...(r.is_published
       ? [
-          // Gitlab classrooms have no autograding or template updates yet.
-          ...(web.isGitLab
-            ? []
-            : [
-                { key: 'autograde', label: 'Autograde', icon: <IconRobot size={15} /> },
-                {
-                  key: 'update',
-                  label: 'Update student repositories',
-                  icon: <IconGitPullRequest size={15} />,
-                },
-              ]),
+          { key: 'autograde', label: 'Autograde', icon: <IconRobot size={15} /> },
+          {
+            key: 'update',
+            label: `Update student ${web.terms.repos}`,
+            icon: <IconGitPullRequest size={15} />,
+          },
           ...(r.type === 'GROUP'
             ? [
                 {

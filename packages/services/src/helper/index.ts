@@ -17,6 +17,8 @@ interface DeleteRepositoryPayload {
   name: string;
   gitOrganization: HelperGitOrganization;
   deleteFromGithub?: boolean;
+  /** Where the repo lives when not the org itself (a GitLab class subgroup). */
+  repoOwner?: string | null;
 }
 
 interface GitRepoAssignmentGraderPayload {
@@ -99,7 +101,16 @@ class HelperService {
       const { name: repoName, gitOrganization, deleteFromGithub } = payload;
       if (deleteFromGithub) {
         const gitProvider = getGitProvider(gitOrganization);
-        await gitProvider.deleteRepository(gitOrganization.login, repoName);
+        // GitLab student projects live in the class subgroup, not the group.
+        let owner = payload.repoOwner ?? gitOrganization.login;
+        if (!payload.repoOwner && gitOrganization.provider === 'GITLAB' && payload.id) {
+          const row = await ClassmojiService.gitRepo.find({ id: payload.id });
+          const classroom = row?.classroom_id
+            ? await ClassmojiService.classroom.findById(row.classroom_id)
+            : null;
+          owner = classroom?.git_namespace || owner;
+        }
+        await gitProvider.deleteRepository(owner, repoName);
       }
       if (payload?.id) return ClassmojiService.gitRepo.deleteById(payload.id);
     } catch (error: unknown) {

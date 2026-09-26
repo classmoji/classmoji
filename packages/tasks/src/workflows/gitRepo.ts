@@ -386,6 +386,7 @@ export const createRepositoryTask = task({
         repoName: normalizedPayload.repoName,
         classroomSlug: classroom.slug,
         gitOrganization: classroom.git_organization,
+        repoOwner: repoNamespace(classroom),
       });
 
       // Without this the student has a repo they can't open; fail and retry.

@@ -1,4 +1,5 @@
 import { task } from '@trigger.dev/sdk';
+import getPrisma from '@classmoji/database';
 import {
   ClassmojiService,
   getGitProvider,
@@ -148,6 +149,55 @@ async function activateMembership({
  * `tasks.trigger('activate_membership', { login, gitOrganizationId })`. Used by the
  * self-join and add-assistant flows when the user is already in the org.
  */
+/**
+ * A student leaving a GitLab classroom: their own projects drop to Reporter
+ * (read-only) and they leave every team of the class. Best effort per project
+ * and team: one failure is logged and the rest still run.
+ */
+async function leaveGitLabClassAsStudent(
+  classroomId: string,
+  userId: string,
+  gitOrganization: Parameters<typeof getGitProvider>[0]
+): Promise<void> {
+  const [classroomRow, usernames] = await Promise.all([
+    ClassmojiService.classroom.findById(classroomId),
+    ClassmojiService.user.findProviderUsernames([userId], 'GITLAB'),
+  ]);
+  const gitlabUsername = usernames.get(userId);
+  const namespace = classroomRow?.git_namespace;
+  if (!namespace || !gitlabUsername) return;
+  const provider = getGitProvider(gitOrganization) as GitLabProvider;
+
+  const repos = await getPrisma().gitRepo.findMany({
+    where: { classroom_id: classroomId, student_id: userId, provider: 'GITLAB' },
+    select: { name: true },
+  });
+  for (const repo of repos) {
+    try {
+      await provider.setProjectMemberAccess(namespace, repo.name, gitlabUsername, 'reporter');
+    } catch (error: unknown) {
+      console.error(`[remove_user] could not make ${namespace}/${repo.name} read-only`, error);
+    }
+  }
+
+  const user = await ClassmojiService.user.findById(userId);
+  const teams = await getPrisma().team.findMany({
+    where: { classroom_id: classroomId, memberships: { some: { user_id: userId } } },
+    select: { id: true },
+  });
+  for (const team of teams) {
+    try {
+      await ClassmojiService.teamAdmin.removeTeamMember({
+        classroomId,
+        slugOrId: team.id,
+        login: user?.login ?? gitlabUsername,
+      });
+    } catch (error: unknown) {
+      console.error(`[remove_user] could not remove the student from team ${team.id}`, error);
+    }
+  }
+}
+
 export const activateMembershipTask = task({
   id: 'activate_membership',
   run: async (payload: { login: string; gitOrganizationId: string }) => {
@@ -197,11 +247,14 @@ export const removeUserFromOrganizationTask = task({
 
     // GitLab: staff access is membership of the class subgroup (no teams, no
     // org invite), set to the highest staff role the person still holds here.
-    // Students were never subgroup members; their own projects stay theirs,
-    // like a Github student keeps collaborator access to their repo.
+    // A student who leaves keeps READ access to their own projects (their work
+    // stays theirs to see, as on Github) but can no longer push, and leaves
+    // the class's teams (which also removes them from team projects).
     if (gitOrgData.provider === 'GITLAB') {
       const userRole = role || 'STUDENT';
-      if (userRole !== 'STUDENT') {
+      if (userRole === 'STUDENT') {
+        await leaveGitLabClassAsStudent(classroomData.id, user.id, gitOrgData);
+      } else {
         const [classroomRow, usernames] = await Promise.all([
           ClassmojiService.classroom.findById(classroomData.id),
           ClassmojiService.user.findProviderUsernames([user.id], 'GITLAB'),

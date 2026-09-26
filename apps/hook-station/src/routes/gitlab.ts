@@ -2,7 +2,7 @@ import { timingSafeEqual } from 'node:crypto';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import Tasks from '@classmoji/tasks';
 import getPrisma from '@classmoji/database';
-import { ClassmojiService } from '@classmoji/services';
+import { CLASSMOJI_BOT_EMAIL, ClassmojiService } from '@classmoji/services';
 import { scopeGitlabId } from '@classmoji/utils';
 
 /**
@@ -37,7 +37,12 @@ interface GitLabPushPayload {
   before?: string;
   after?: string;
   total_commits_count?: number;
-  commits?: Array<{ added?: string[]; modified?: string[]; removed?: string[] }>;
+  commits?: Array<{
+    added?: string[];
+    modified?: string[];
+    removed?: string[];
+    author?: { email?: string };
+  }>;
   project?: {
     id?: number;
     default_branch?: string;
@@ -103,8 +108,13 @@ async function handlePush(data: GitLabPushPayload, instanceId: string | null): P
   if (projectId == null || !defaultBranch) return;
   if (data.ref !== `refs/heads/${defaultBranch}`) return;
   const deleted = !data.after || NULL_SHA.test(data.after);
+  // Classmoji's own commits (the autograding CI file) are never a student
+  // submitting; GitHub skips its bot's pushes the same way.
+  const pushCommits = data.commits ?? [];
+  const onlyClassmoji =
+    pushCommits.length > 0 && pushCommits.every(c => c.author?.email === CLASSMOJI_BOT_EMAIL);
 
-  if (!deleted) {
+  if (!deleted && !onlyClassmoji) {
     const gitRepo = await getPrisma().gitRepo.findUnique({
       where: {
         provider_provider_id: {

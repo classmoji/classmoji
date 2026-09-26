@@ -1,5 +1,5 @@
 import { namedAction } from 'remix-utils/named-action';
-import { GITLAB_UNSUPPORTED, isGitLabClassroom } from '~/utils/gitlabGuard.server';
+import { isGitLabClassroom } from '~/utils/gitlabGuard.server';
 import { calculateContributions } from './helpers';
 import { gitTerms } from '~/utils/gitWeb';
 import { HelperService } from '@classmoji/services';
@@ -25,13 +25,11 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
 
   return namedAction(request, {
     async calculateContributions() {
-      if (isGitLabClassroom(classroom)) return { error: GITLAB_UNSUPPORTED };
       const result = await calculateContributions(data.repository, classSlug);
 
       return result;
     },
     async deleteRepo() {
-      if (isGitLabClassroom(classroom)) return { error: GITLAB_UNSUPPORTED };
       await HelperService.deleteRepository({
         name: data.repo.name,
         gitOrganization: classroom.git_organization,

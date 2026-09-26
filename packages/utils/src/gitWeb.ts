@@ -117,9 +117,9 @@ export function gitWeb(ctx: GitWebContext) {
     /** Github Projects board. GitLab has none: null. */
     project: (projectNumber: number) =>
       isGitLab ? null : `${GITHUB_WEB}/orgs/${ctx.login}/projects/${projectNumber}`,
-    /** Github Actions run. GitLab classrooms have no autograding: null. */
+    /** The autograding run: a Github Actions run, or a GitLab CI pipeline. */
     actionsRun: (name: string, runId: number | string) =>
-      isGitLab ? null : `${repo(name)}/actions/runs/${runId}`,
+      isGitLab ? `${repo(name)}/-/pipelines/${runId}` : `${repo(name)}/actions/runs/${runId}`,
     /**
      * The classroom's content repo (pages and slides). It lives in the org on
      * Github and at the group root on Gitlab, never in the class subgroup.

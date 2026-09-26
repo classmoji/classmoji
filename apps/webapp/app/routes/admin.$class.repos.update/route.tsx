@@ -1,5 +1,6 @@
 import { Modal, Form, Input, Alert } from 'antd';
-import { GITLAB_UNSUPPORTED, isGitLabClassroom } from '~/utils/gitlabGuard.server';
+import { isGitLabClassroom } from '~/utils/gitlabGuard.server';
+import { resolveTemplateRef } from '@classmoji/utils';
 import { useNavigate, useParams } from 'react-router';
 import { useEffect, useState, useRef } from 'react';
 import { auth, tasks } from '@trigger.dev/sdk';
@@ -113,8 +114,6 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
     action: 'update_repository',
   });
   assertClassroomMutationAllowed({ status: classroom.status, role: membership!.role });
-  // Pushes template updates with the Github API; no GitLab path yet.
-  if (isGitLabClassroom(classroom)) return { error: GITLAB_UNSUPPORTED };
 
   const { values, repository } = await request.json();
   const sessionId = nanoid();
@@ -132,22 +131,35 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
     throw new Response('Github organization not configured', { status: 400 });
   }
 
-  const gitProvider = getGitProvider(classroom.git_organization);
-  const octokit = await (gitProvider as GitHubProvider).getOctokit();
+  // Github: a short-lived installation token the task clones and pushes with.
+  // GitLab: the task mints its own from the org's connection (they rotate).
+  let token = '';
+  if (!isGitLabClassroom(classroom)) {
+    const gitProvider = getGitProvider(classroom.git_organization);
+    const octokit = await (gitProvider as GitHubProvider).getOctokit();
 
-  const { data } = await octokit.request(
-    'POST /app/installations/{installation_id}/access_tokens',
-    {
-      installation_id: Number(classroom.git_organization.github_installation_id),
-      permissions: {
-        contents: 'write',
-        pull_requests: 'write',
-      },
-    }
-  );
+    const { data } = await octokit.request(
+      'POST /app/installations/{installation_id}/access_tokens',
+      {
+        installation_id: Number(classroom.git_organization.github_installation_id),
+        permissions: {
+          contents: 'write',
+          pull_requests: 'write',
+        },
+      }
+    );
+    token = data.token;
+  }
 
   const repositories = await ClassmojiService.gitRepo.findByRepository(classSlug!, repository.id);
-  const [templateOwner, templateRepo] = repository.template.split('/');
+  // Split on the LAST slash: a GitLab template can sit in a nested group.
+  const templateRef = resolveTemplateRef(repository.template, gitOrgLogin);
+  if (!templateRef) {
+    return {
+      error: `This ${isGitLabClassroom(classroom) ? 'project' : 'repository'} has no template.`,
+    };
+  }
+  const { owner: templateOwner, repo: templateRepo } = templateRef;
 
   const payloads = repositories.map(repo => {
     return {
@@ -159,7 +171,9 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
         prDescription: values.description,
         templateOwner,
         templateRepo,
-        token: data.token,
+        token,
+        // GitLab: student projects live in the class subgroup.
+        repoOwner: classroom.git_namespace ?? null,
       },
       options: { tags: [`session_${sessionId}`] },
     };

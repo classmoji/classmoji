@@ -620,8 +620,8 @@ const FormModule = ({
             />
           </Card>
 
-          {/* Autograding tests: they run on Github Actions, so not on GitLab. */}
-          {!isGitLab && (
+          {/* Autograding tests: Github Actions, or GitLab CI (a runner is needed). */}
+          {
             <Card className="shadow-xs mb-6">
               <div className="flex justify-between items-start mb-4">
                 <SectionHeader
@@ -642,7 +642,7 @@ const FormModule = ({
                 onRemove={removeTest}
               />
             </Card>
-          )}
+          }
 
           {/* Linked Content */}
           <Card className="shadow-xs mb-6">
