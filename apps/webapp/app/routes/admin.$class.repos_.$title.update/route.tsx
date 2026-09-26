@@ -11,14 +11,18 @@ import type { Route } from './+types/route';
 export const loader = async ({ request, params }: Route.LoaderArgs) => {
   const { class: classSlug } = params;
 
-  await requireClassroomAdmin(request, classSlug!, {
+  const { classroom } = await requireClassroomAdmin(request, classSlug!, {
     resourceType: 'REPOSITORIES',
     action: 'view_module_update',
   });
 
   const url = new URL(request.url);
-  const moduleId = url.searchParams.get('id');
-  const repository = await ClassmojiService.repository.findById(moduleId!);
+  const repositoryId = url.searchParams.get('id');
+  const repository = await ClassmojiService.repository.findByIdInClassroom(
+    repositoryId,
+    classroom.id
+  );
+  if (!repository) throw new Response('Repository not found', { status: 404 });
   return { repository };
 };
 
@@ -39,7 +43,7 @@ const UpdateRepositories = ({ loaderData }: Route.ComponentProps) => {
       .validateFields()
       .then(() => {
         const values = form.getFieldsValue();
-        fetcher!.submit(JSON.stringify({ values, repository }), {
+        fetcher!.submit(JSON.stringify({ values, repository: { id: repository.id } }), {
           method: 'post',
           action: `/admin/${classSlug}/repos/${title}/update`,
           encType: 'application/json',
@@ -95,7 +99,20 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
   });
   assertClassroomMutationAllowed({ status: classroom.status, role: membership!.role });
 
-  const { values, repository } = await request.json();
+  const { values, repository: submitted } = await request.json();
+
+  // The body names the repository by id only; it is loaded from this classroom,
+  // and the template the student repos are updated from is the stored one.
+  const repository = await ClassmojiService.repository.findByIdInClassroom(
+    submitted?.id,
+    classroom.id
+  );
+  if (!repository) return { error: 'Repository not found.' };
+  const template = repository.template;
+  if (typeof template !== 'string' || !template.includes('/')) {
+    return { error: 'This repository has no template repository to update from.' };
+  }
+
   const sessionId = nanoid();
   const accessToken = await auth.createPublicToken({
     scopes: {
@@ -126,7 +143,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
   );
 
   const repositories = await ClassmojiService.gitRepo.findByRepository(classSlug!, repository.id);
-  const [templateOwner, templateRepo] = repository.template.split('/');
+  const [templateOwner, templateRepo] = template.split('/');
 
   const payloads = repositories.map(repo => {
     return {

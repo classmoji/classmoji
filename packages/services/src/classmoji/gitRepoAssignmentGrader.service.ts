@@ -116,6 +116,38 @@ export const addGraderToAssignment = async (repositoryAssignmentId: string, grad
 };
 
 /**
+ * The staff roles that can be picked as a grader: the same pair the web grader
+ * pickers list and the RANDOM bulk assignment draws from. OWNER is not one.
+ */
+export const GRADER_ROLES = ['ASSISTANT', 'TEACHER'] as const;
+
+/**
+ * Find a user who may be picked as a grader in this classroom: a membership
+ * with a grader role and `is_grader` set — the pool the web pickers offer.
+ *
+ * One query over the membership row itself, with the role in the `where`: a
+ * user can hold several memberships in one classroom (one per role), so a
+ * user-first lookup would read an arbitrary one of them. Returns the user
+ * (whose stored login is the one to use), or null when not eligible or when
+ * either id is not a non-empty string.
+ */
+export const findEligibleGrader = async (classroomId: string, userId: unknown) => {
+  if (typeof userId !== 'string' || !userId) return null;
+  if (typeof classroomId !== 'string' || !classroomId) return null;
+
+  const membership = await getPrisma().classroomMembership.findFirst({
+    where: {
+      classroom_id: classroomId,
+      user_id: userId,
+      role: { in: [...GRADER_ROLES] },
+      is_grader: true,
+    },
+    include: { user: true },
+  });
+  return membership?.user ?? null;
+};
+
+/**
  * Remove a grader from a GitRepoAssignment
  * @param {string} repositoryAssignmentId - UUID of the GitRepoAssignment
  * @param {string} graderId - UUID of the grader User

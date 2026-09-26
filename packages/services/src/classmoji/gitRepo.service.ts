@@ -158,6 +158,54 @@ export const deleteById = async (repoId: string) => {
   });
 };
 
+/** A usable id for a scoped `where`: a non-empty string, nothing else. */
+const isScopedId = (value: unknown): value is string => typeof value === 'string' && value !== '';
+
+/**
+ * Find one git repo of a classroom, optionally narrowed to one Repository.
+ *
+ * Returns null — without querying — when an id is not a non-empty string.
+ * Prisma drops an `undefined` value from a `where` rather than rejecting it, and
+ * an id field also accepts a filter object, so an unchecked value would turn
+ * this into "any git repo in the classroom".
+ */
+export const findByIdInClassroom = async (
+  id: unknown,
+  classroomId: string,
+  options: { repositoryId?: string } = {}
+) => {
+  if (!isScopedId(id) || !isScopedId(classroomId)) return null;
+  if (options.repositoryId !== undefined && !isScopedId(options.repositoryId)) return null;
+
+  return getPrisma().gitRepo.findFirst({
+    where: {
+      id,
+      classroom_id: classroomId,
+      ...(options.repositoryId ? { repository_id: options.repositoryId } : {}),
+    },
+  });
+};
+
+/**
+ * Delete one git repo row of a classroom.
+ *
+ * The classroom id is part of the write itself (`deleteMany` accepts the
+ * non-unique pair), so the row is only removed when it belongs to that
+ * classroom. `id` is the primary key, so anything other than one deleted row
+ * means it did not, and nothing was written — which throws rather than passing
+ * as a silent no-op. Deleting the row cascades to its submissions and grades.
+ */
+export const deleteInClassroom = async (id: string, classroomId: string) => {
+  if (!isScopedId(id)) throw new Error('Invalid git repo id');
+  if (!isScopedId(classroomId)) throw new Error('Invalid classroom id');
+
+  const { count } = await getPrisma().gitRepo.deleteMany({
+    where: { id, classroom_id: classroomId },
+  });
+  if (count !== 1) throw new Error('Git repo not found in classroom');
+  return { id };
+};
+
 export const update = async (repoId: string, data: Prisma.GitRepoUpdateInput) => {
   return getPrisma().gitRepo.update({
     where: {

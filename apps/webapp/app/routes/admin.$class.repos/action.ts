@@ -61,7 +61,14 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
 
     // Group repos only: fan out one contribution-stats task per team repo.
     async calculateContributions() {
-      return calculateContributions({ id: assignmentId }, classSlug);
+      const repository = await ClassmojiService.repository.findByIdInClassroom(
+        assignmentId,
+        classroom.id
+      );
+      if (!repository) {
+        return { action: 'CALCULATE_REPO_CONTRIBUTIONS', error: 'Repository not found.' };
+      }
+      return calculateContributions({ id: repository.id }, classSlug);
     },
   });
 };

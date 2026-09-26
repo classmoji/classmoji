@@ -17,7 +17,37 @@ interface DeleteRepositoryPayload {
   name: string;
   gitOrganization: HelperGitOrganization;
   deleteFromGithub?: boolean;
+  /**
+   * When set, the row is deleted with `gitRepo.deleteInClassroom`, so it is
+   * only removed if it belongs to this classroom.
+   */
+  classroomId?: string;
 }
+
+/**
+ * Add or remove one grader on one submission of a classroom. Only ids come in;
+ * the repo name, the issue number and the grader's login are read from the
+ * stored rows.
+ */
+interface ClassroomGraderPayload {
+  classroomId: string;
+  /** The classroom's own git organization — the one its repos live in. */
+  gitOrganization: HelperGitOrganization;
+  gitRepoAssignmentId: unknown;
+  graderId: unknown;
+  /** Narrow the submission to one Repository (the repository page). */
+  repositoryId?: string;
+  /** Narrow the submission to one Assignment (the assignment page). */
+  assignmentId?: string;
+}
+
+export type AddGraderInClassroomResult =
+  | { status: 'added' | 'already_assigned'; graderLogin: string }
+  | { status: 'submission_not_found' | 'grader_not_eligible' };
+
+export type RemoveGraderInClassroomResult =
+  | { status: 'removed'; graderLogin: string }
+  | { status: 'submission_not_found' | 'grader_not_assigned' };
 
 interface GitRepoAssignmentGraderPayload {
   repoName: string;
@@ -101,6 +131,9 @@ class HelperService {
         const gitProvider = getGitProvider(gitOrganization);
         await gitProvider.deleteRepository(gitOrganization.login, repoName);
       }
+      if (payload?.id && payload.classroomId) {
+        return ClassmojiService.gitRepo.deleteInClassroom(payload.id, payload.classroomId);
+      }
       if (payload?.id) return ClassmojiService.gitRepo.deleteById(payload.id);
     } catch (error: unknown) {
       console.error('Error deleting git_repo:', error);
@@ -156,6 +189,86 @@ class HelperService {
       gitRepoAssignmentId,
       graderId
     );
+  }
+
+  /**
+   * Add a grader to a submission of this classroom, from ids alone.
+   *
+   * The submission is loaded from this classroom (optionally narrowed to a
+   * repository or an assignment); its stored repo name and issue number are the
+   * ones the provider call uses. The grader must be in this classroom's grader
+   * pool (`gitRepoAssignmentGrader.findEligibleGrader`), and their stored login
+   * is the one assigned. Nothing reaches the provider or the database unless
+   * both checks pass. Someone already on the submission is left as is.
+   */
+  static async addGraderInClassroom(
+    payload: ClassroomGraderPayload
+  ): Promise<AddGraderInClassroomResult> {
+    const { classroomId, gitOrganization, gitRepoAssignmentId, graderId } = payload;
+
+    const submission = await ClassmojiService.gitRepoAssignment.findByIdInClassroom(
+      gitRepoAssignmentId,
+      classroomId,
+      { repositoryId: payload.repositoryId, assignmentId: payload.assignmentId }
+    );
+    if (!submission) return { status: 'submission_not_found' };
+
+    const grader = await ClassmojiService.gitRepoAssignmentGrader.findEligibleGrader(
+      classroomId,
+      graderId
+    );
+    if (!grader?.login) return { status: 'grader_not_eligible' };
+
+    if (submission.graders.some(g => g.grader_id === grader.id)) {
+      return { status: 'already_assigned', graderLogin: grader.login };
+    }
+
+    await this.addGraderToGitRepoAssignment({
+      repoName: submission.git_repo.name,
+      gitOrganization,
+      githubIssueNumber: submission.provider_issue_number,
+      graderLogin: grader.login,
+      graderId: grader.id,
+      gitRepoAssignmentId: submission.id,
+    });
+    return { status: 'added', graderLogin: grader.login };
+  }
+
+  /**
+   * Remove a grader from a submission of this classroom, from ids alone.
+   *
+   * The submission is loaded from this classroom as in `addGraderInClassroom`;
+   * the grader is taken from the submission's own grader rows (so someone who
+   * has since left the grader pool can still be removed), and their stored
+   * login is the one unassigned on the provider.
+   */
+  static async removeGraderInClassroom(
+    payload: ClassroomGraderPayload
+  ): Promise<RemoveGraderInClassroomResult> {
+    const { classroomId, gitOrganization, gitRepoAssignmentId, graderId } = payload;
+
+    const submission = await ClassmojiService.gitRepoAssignment.findByIdInClassroom(
+      gitRepoAssignmentId,
+      classroomId,
+      { repositoryId: payload.repositoryId, assignmentId: payload.assignmentId }
+    );
+    if (!submission) return { status: 'submission_not_found' };
+
+    const assigned =
+      typeof graderId === 'string' && graderId
+        ? submission.graders.find(g => g.grader_id === graderId)
+        : undefined;
+    if (!assigned?.grader?.login) return { status: 'grader_not_assigned' };
+
+    await this.removeGraderFromGitRepoAssignment({
+      repoName: submission.git_repo.name,
+      gitOrganization,
+      githubIssueNumber: submission.provider_issue_number,
+      graderLogin: assigned.grader.login,
+      graderId: assigned.grader_id,
+      gitRepoAssignmentId: submission.id,
+    });
+    return { status: 'removed', graderLogin: assigned.grader.login };
   }
 
   /**
