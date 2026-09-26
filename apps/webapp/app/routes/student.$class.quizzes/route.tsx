@@ -7,6 +7,7 @@ import type { Route } from './+types/route';
 import { Countdown } from '~/components';
 import { assertClassroomAccess, assertProTier } from '~/utils/helpers';
 import { formatDuration } from '~/utils/quizUtils';
+import { studentQuizAttemptView, studentQuizAttemptsSummaryView } from '~/utils/quizPayloads';
 
 const { Text } = Typography;
 
@@ -127,10 +128,11 @@ export async function loader({ params, request }: Route.LoaderArgs) {
       maxAttempts: quiz.max_attempts ?? 1,
       gradingStrategy: quiz.grading_strategy || 'HIGHEST',
 
-      // Attempt metadata from new service
+      // Attempt metadata from the service, narrowed to what this list reads —
+      // the service spreads each attempt row (see ~/utils/quizPayloads).
       attemptCount: quiz.attemptCount || 0,
-      attempts: quiz.attempts || [],
-      attemptsSummary: quiz.attemptsSummary || {},
+      attempts: (quiz.attempts || []).map(studentQuizAttemptView),
+      attemptsSummary: studentQuizAttemptsSummaryView(quiz.attemptsSummary, quiz.max_attempts ?? 1),
 
       // Backward compatibility
       attemptStatus:

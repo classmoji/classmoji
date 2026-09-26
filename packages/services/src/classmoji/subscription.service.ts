@@ -213,9 +213,11 @@ export const getProStateForClassroomId = async (
 /**
  * A classroom's tier as a subscription row: the active PRO row that makes it
  * Pro, or a FREE placeholder. The shape `/api/get-org-subscription` has always
- * returned to the webapp store (`useSubscription`, which drives the Pro-only
- * nav items), decided by `getProStateForClassroomId` so the nav agrees with
- * the Pro gates on the routes it links to.
+ * returned to the webapp store (`useSubscription`, which drives the owner
+ * sidebar's Pro-only nav items; the /teacher and /assistant layouts get a bare
+ * boolean from their own loaders instead), decided by
+ * `getProStateForClassroomId` so the nav agrees with the Pro gates on the
+ * routes it links to.
  *
  * Keyed on `isPro`, never on `tier`: the resolver reports the oldest owner's
  * `tier` when nobody holds an active PRO, so a lapsed PRO row comes back as

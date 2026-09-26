@@ -101,11 +101,15 @@ describe('quiz preview loader — reads stay inside the authorized classroom', (
   it("serves the instructor's own preview attempt on this quiz", async () => {
     const data = await load();
 
-    expect(data.quiz).toEqual(QUIZ);
+    expect(data.quiz).toEqual({ id: QUIZ_ID, name: QUIZ.name, question_count: null });
     expect(data.attempt.id).toBe('attempt-1');
     expect(data.readOnly).toBe(false);
     expect(data.attempt).not.toHaveProperty('agent_config');
-    expect(data.attempt.quiz.classroom).toEqual({ id: 'class-1', settings: undefined });
+    // The attempt carries its own fields only — not the quiz and classroom it
+    // was joined to — so no settings object reaches the browser at all.
+    expect('quiz' in data.attempt).toBe(false);
+    expect('user' in data.attempt).toBe(false);
+    expect(JSON.stringify(data)).not.toContain('sk-');
   });
 
   it("refuses an attempt sat on another classroom's quiz, before checking whose it is", async () => {

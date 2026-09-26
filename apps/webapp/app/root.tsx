@@ -373,13 +373,36 @@ const App = ({ loaderData }: Route.ComponentProps) => {
     }
   }, [user, setUser]);
 
+  // The classroom's tier, for the admin sidebar's Pro-only entries (the
+  // /teacher and /assistant layouts pass their own flag instead). The endpoint
+  // admits OWNER alone, so only an owner of THIS classroom asks. Anyone else —
+  // and a failed fetch — is left with no tier, never the previous classroom's.
+  const ownsCurrentClassroom =
+    !!classroom &&
+    !!user?.memberships?.some(
+      (m: MembershipWithOrganization) =>
+        m.organization.login === classroom.slug && m.role === 'OWNER'
+    );
+
   useEffect(() => {
-    const fetchSubscription = async () => {
-      const subscription = await axios.get(`/api/get-org-subscription?orgLogin=${classroom!.slug}`);
-      setSubscription(subscription.data);
+    if (!classroom) return;
+    if (!ownsCurrentClassroom) {
+      setSubscription(null);
+      return;
+    }
+    let cancelled = false;
+    axios
+      .get(`/api/get-org-subscription?orgLogin=${classroom.slug}`)
+      .then(response => {
+        if (!cancelled) setSubscription(response.data);
+      })
+      .catch(() => {
+        if (!cancelled) setSubscription(null);
+      });
+    return () => {
+      cancelled = true;
     };
-    if (classroom) fetchSubscription();
-  }, [classroom, setSubscription]);
+  }, [classroom, ownsCurrentClassroom, setSubscription]);
 
   return (
     <html lang="en" className={isDarkMode ? 'dark' : ''} suppressHydrationWarning>

@@ -92,7 +92,7 @@ function QuizFormDrawer({ loaderData }: Route.ComponentProps) {
   const navigate = useNavigate();
   const { class: classSlug } = useParams();
   const fetcher = useFetcher();
-  // Served under every prefix this route's gate allows (/admin and /teacher).
+  // Served under every prefix this route's gate allows (/admin, /teacher and /assistant).
   // The submit target matters as much as the links: posting to the other
   // prefix's list route would miss this drawer's parent action.
   const rolePrefix = useLocation().pathname.split('/')[1];
