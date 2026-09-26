@@ -19,12 +19,20 @@
  */
 
 import getPrisma from '@classmoji/database';
-import { REPO_REST_MAX_BYTES, repoFileSkippedWarning } from '@classmoji/utils';
+import { REPO_REST_MAX_BYTES, formatMegabytes, repoFileSkippedWarning } from '@classmoji/utils';
 import { ContentService } from '../content/ContentService.ts';
 import { getGitProvider } from '../git/index.ts';
 
 /** Templates are starter code, not monorepos: past this a template is skipped whole. */
 const MAX_TEMPLATE_FILES = 200;
+
+/**
+ * Past this many bytes in total a template is skipped whole, before any file is
+ * read. The duplicate is staged in memory and committed in ONE `uploadBatch`,
+ * so this is what bounds both; the per-file cap alone would let 200 files of
+ * 35 MB each through.
+ */
+export const MAX_TEMPLATE_TOTAL_BYTES = 200 * 1024 * 1024;
 
 /** Cap on retained warnings and on per-warning detail length (bounded output). */
 const MAX_WARNINGS = 50;
@@ -457,6 +465,55 @@ export async function readRepoFiles({
   return files;
 }
 
+/**
+ * The files to commit for one template, or null when it is skipped — each
+ * reason warned once under `scope`: too many files, none at all, more than
+ * `MAX_TEMPLATE_TOTAL_BYTES` in total (summed from the listing, before any byte
+ * is read), or nothing readable. Reads are sequential.
+ */
+export async function collectTemplateFiles({
+  gitOrganization,
+  repo,
+  scope,
+  warn,
+}: {
+  gitOrganization: GitOrgRecord;
+  repo: string;
+  scope: string;
+  warn: WarnFn;
+}): Promise<BatchFile[] | null> {
+  const { files: listed, exceededCap } = await listRepoFiles(
+    gitOrganization,
+    repo,
+    MAX_TEMPLATE_FILES
+  );
+  if (exceededCap) {
+    warn(scope, `skipped — more than ${MAX_TEMPLATE_FILES} files`);
+    return null;
+  }
+  if (listed.length === 0) {
+    warn(scope, 'skipped — no readable files on the default branch');
+    return null;
+  }
+
+  const totalBytes = listed.reduce((sum, entry) => sum + (entry.size ?? 0), 0);
+  if (totalBytes > MAX_TEMPLATE_TOTAL_BYTES) {
+    warn(
+      scope,
+      `skipped — ${formatMegabytes(totalBytes)} in total, over the ` +
+        `${formatMegabytes(MAX_TEMPLATE_TOTAL_BYTES)} a template may be`
+    );
+    return null;
+  }
+
+  const files = await readRepoFiles({ gitOrganization, repo, files: listed, scope, warn });
+  if (files.length === 0) {
+    warn(scope, 'skipped — every file was unreadable or oversized');
+    return null;
+  }
+  return files;
+}
+
 /** First candidate name free in the target org, or null when all are taken. */
 async function resolveFreeRepoName(
   provider: ReturnType<typeof getGitProvider>,
@@ -629,31 +686,13 @@ export const duplicateImportedTemplates = async (
           continue;
         }
 
-        const { files: listed, exceededCap } = await listRepoFiles(
-          readerOrg,
-          group.ref.name,
-          MAX_TEMPLATE_FILES
-        );
-        if (exceededCap) {
-          warn(scope, `skipped — more than ${MAX_TEMPLATE_FILES} files`);
-          continue;
-        }
-        if (listed.length === 0) {
-          warn(scope, 'skipped — no readable files on the default branch');
-          continue;
-        }
-
-        const files = await readRepoFiles({
+        const files = await collectTemplateFiles({
           gitOrganization: readerOrg,
           repo: group.ref.name,
-          files: listed,
           scope,
           warn,
         });
-        if (files.length === 0) {
-          warn(scope, 'skipped — every file was unreadable or oversized');
-          continue;
-        }
+        if (!files) continue;
 
         const newName = await resolveFreeRepoName(
           targetProvider,

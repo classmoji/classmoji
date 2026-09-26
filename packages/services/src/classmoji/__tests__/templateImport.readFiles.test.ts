@@ -25,7 +25,8 @@ vi.mock('../../content/ContentService.ts', () => ({
 }));
 vi.mock('../../git/index.ts', () => ({ getGitProvider: vi.fn() }));
 
-const { listRepoFiles, readRepoFiles } = await import('../templateImport.service.ts');
+const { collectTemplateFiles, listRepoFiles, readRepoFiles } =
+  await import('../templateImport.service.ts');
 
 const ORG = { provider: 'GITHUB', login: 'org', github_installation_id: '1' };
 const MB = 1024 * 1024;
@@ -111,5 +112,84 @@ describe('template file reads', () => {
 
     expect(files).toEqual([]);
     expect(warn).toHaveBeenCalledWith('org/tpl', 'could not read gone.txt');
+  });
+});
+
+describe('template total budget', () => {
+  const listing = (sizes: number[]) =>
+    sizes.map((size, i) => ({
+      name: `f${i}.bin`,
+      path: `f${i}.bin`,
+      type: 'file',
+      sha: `s${i}`,
+      size,
+    }));
+
+  it('skips a template over 200 MB in total with ONE warning, before reading any bytes', async () => {
+    // Every file is under the per-file cap; only the sum is too much.
+    mocks.listFolder.mockResolvedValue(
+      listing([30 * MB, 30 * MB, 30 * MB, 30 * MB, 30 * MB, 30 * MB, 30 * MB])
+    );
+    const warn = vi.fn();
+
+    const files = await collectTemplateFiles({
+      gitOrganization: ORG as never,
+      repo: 'tpl',
+      scope: 'org/tpl',
+      warn,
+    });
+
+    expect(files).toBeNull();
+    expect(mocks.getBlobContent).not.toHaveBeenCalled();
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn).toHaveBeenCalledWith(
+      'org/tpl',
+      'skipped — 210 MB in total, over the 200 MB a template may be'
+    );
+  });
+
+  it('reads a template exactly at the budget, file by file', async () => {
+    // 5 × 35 MB + 25 MB = 200 MB: the cap itself is allowed.
+    mocks.listFolder.mockResolvedValue(listing([35, 35, 35, 35, 35, 25].map(n => n * MB)));
+    mocks.getBlobContent.mockResolvedValue({ content: 'eA==', sha: 's' });
+    const warn = vi.fn();
+
+    const files = await collectTemplateFiles({
+      gitOrganization: ORG as never,
+      repo: 'tpl',
+      scope: 'org/tpl',
+      warn,
+    });
+
+    expect(files).toHaveLength(6);
+    expect(mocks.getBlobContent).toHaveBeenCalledTimes(6);
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it('keeps the file-count cap', async () => {
+    mocks.listFolder.mockResolvedValue(listing(new Array(201).fill(1)));
+    const warn = vi.fn();
+
+    expect(
+      await collectTemplateFiles({ gitOrganization: ORG as never, repo: 'tpl', scope: 's', warn })
+    ).toBeNull();
+    expect(warn).toHaveBeenCalledWith('s', 'skipped — more than 200 files');
+    expect(mocks.getBlobContent).not.toHaveBeenCalled();
+  });
+
+  it('returns the read files for a template inside every limit', async () => {
+    mocks.listFolder.mockResolvedValue(listing([10, 20]));
+    mocks.getBlobContent.mockResolvedValue({ content: 'eA==', sha: 's' });
+    const warn = vi.fn();
+
+    const files = await collectTemplateFiles({
+      gitOrganization: ORG as never,
+      repo: 'tpl',
+      scope: 's',
+      warn,
+    });
+
+    expect(files?.map(f => f.path)).toEqual(['f0.bin', 'f1.bin']);
+    expect(warn).not.toHaveBeenCalled();
   });
 });
