@@ -42,8 +42,12 @@ test.describe('page uploads read the body after the gate', () => {
     const upload = EDITOR_SOURCE.slice(EDITOR_SOURCE.indexOf('const uploadFile = useCallback('));
     expect(upload).toContain('toast.error(message);\n        throw new Error(message);');
     expect(upload).toContain('refuse(repoFileTooLargeMessage(file.name));');
-    expect(upload).toContain("refuse(typeof body?.error === 'string' ? body.error : 'Upload failed');");
-    expect(upload.slice(0, upload.indexOf('return result.url;'))).not.toContain('throw new Error(repo');
+    expect(upload).toContain(
+      "refuse(typeof body?.error === 'string' ? body.error : 'Upload failed');"
+    );
+    expect(upload.slice(0, upload.indexOf('return result.url;'))).not.toContain(
+      'throw new Error(repo'
+    );
   });
 
   test('the editor sends the page in the query string, not the form', () => {

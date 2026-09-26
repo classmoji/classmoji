@@ -235,9 +235,7 @@ function BatchImportFailures({ result, onDone }: { result: BatchResult; onDone: 
         {result.failures.map((failure, index) => (
           <li key={index} className="px-3 py-2 text-sm">
             <div className="font-medium text-ink-0">{failure.title}</div>
-            <div className="mt-0.5 break-words text-red-700 dark:text-red-300">
-              {failure.error}
-            </div>
+            <div className="mt-0.5 break-words text-red-700 dark:text-red-300">{failure.error}</div>
           </li>
         ))}
       </ul>
