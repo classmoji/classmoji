@@ -18,13 +18,14 @@
  *
  * ## Why the commit is `uploadBatch` and not `upload`
  *
- * `ContentService.upload` validates against the SHARED policy in
- * `validateFile.ts` — 5 MB, and an extension list built for page images — and
- * would refuse a 30 MB lecture PDF. `uploadBatch` validates nothing, which is
- * why every call below runs `validateSlideFile` explicitly first. It is also
- * the path that routes a >1 MB body through the Git blobs API, which is
- * mandatory here: the Contents API caps at 1 MB and a slide file is usually
- * larger than that.
+ * `ContentService.upload` validates against the SHARED page-asset policy in
+ * `validateFile.ts` — the same 35 MB ceiling, but a file-type rule chosen per
+ * classroom for page images and attachments, and a timestamped, sanitized
+ * name. A slide file has its own narrower extension list and its own storage
+ * name, so it commits through `uploadBatch`, which validates nothing — which
+ * is why every call below runs `validateSlideFile` explicitly first. The blob
+ * path is also one request per file however large it is, and a slide file is
+ * usually well over 1 MB.
  */
 
 import getPrisma from '@classmoji/database';

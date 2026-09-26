@@ -11,8 +11,9 @@
  * three separate things would have to be wrong at once.
  *
  * Images are on the list even though small ones belong in the content repo:
- * the 5 MB page-asset cap is a git limit, and an instructor with a 40 MB scan
- * needs somewhere to put it. Nothing routes an image here automatically.
+ * the repository takes files up to its REST ceiling (`REPO_REST_MAX_BYTES`,
+ * 35 MB), and an instructor with a larger scan needs somewhere to put it.
+ * Nothing routes an image here automatically.
  *
  * The extension → content-type mapping itself is NOT here. It lives in
  * `@classmoji/content-signing` (reached through `mediaKeys.ts`, this folder's
