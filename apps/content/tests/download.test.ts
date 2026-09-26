@@ -329,11 +329,13 @@ describe('download delivery', () => {
     );
   });
 
-  it('is honoured on any tier — the filename decides, not the window', async () => {
-    // The signer refuses to MINT this (a save-to-disk link has no business
-    // being immutable for a week), so the fixture hand-signs it. The Worker's
-    // side of that split is what this pins: a valid signature is served, and
-    // the filename is what turns the reply into an attachment.
+  it('ignores a dl that was signed onto a cacheable tier', async () => {
+    // `signBlobUrl` refuses to MINT this (a save-to-disk link has no business
+    // being immutable for a week), so the fixture hand-signs it — only the
+    // signing key could produce one. The tier is what decides cacheability, so
+    // the serve side refuses it too: a per-viewer filename must never ride an
+    // immutable reply a shared cache may keep and hand to the next reader of
+    // the same sha. Exactly what `serveMedia` does with the same shape.
     const { response } = await fetchBlob(cachedFile(), {
       sha: BLOB_SHA,
       ext: 'pdf',
@@ -342,10 +344,9 @@ describe('download delivery', () => {
     });
 
     expect(response.status).toBe(200);
-    expect(response.headers.get('Content-Disposition')).toBe(DISPOSITION);
-    // A week-tier URL would otherwise be immutable for seven days; a per-viewer
-    // filename on shared bytes is the reason it must not be stored.
-    expect(response.headers.get('Cache-Control')).toBe('no-store');
+    expect(response.headers.get('Content-Disposition')).toBeNull();
+    expect(response.headers.get('Content-Security-Policy')).toBe(STRICT_CSP);
+    expect(response.headers.get('Cache-Control')).toMatch(/^public, max-age=\d+, immutable$/);
   });
 
   it('logs no filename on a refusal', async () => {

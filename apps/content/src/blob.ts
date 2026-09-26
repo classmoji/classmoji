@@ -685,11 +685,18 @@ async function serveVariant(
  * Serve one verified blob URL.
  *
  * `verified.downloadFilename` is present only when the URL carried a signed
- * `dl`, and its presence is the whole download decision: the bytes, the R2 key,
- * the range handling and the origin pull are identical either way, and only the
- * headers on the way out differ (see `asDownload`). Wrapping the finished
- * response is what makes that true for every path below — including a 206 and a
- * HEAD answered from R2 metadata — without any of them knowing about downloads.
+ * `dl`, and it is honoured only on the `download` tier — the one tier that is
+ * `no-store`. The bytes, the R2 key, the range handling and the origin pull are
+ * identical either way, and only the headers on the way out differ (see
+ * `asDownload`). Wrapping the finished response is what makes that true for
+ * every path below — including a 206 and a HEAD answered from R2 metadata —
+ * without any of them knowing about downloads.
+ *
+ * `signBlobUrl` already refuses to mint a `dl` on any other tier, so this is
+ * the belt to that pair of braces, and the same rule `serveMedia` applies:
+ * the TIER is what decides cacheability, and a per-viewer filename on shared,
+ * content-addressed bytes must never ride a reply a shared cache may keep and
+ * hand to the next reader of the same sha.
  */
 export async function serveBlob(
   env: Env,
@@ -698,7 +705,7 @@ export async function serveBlob(
   verified: VerifiedBlob
 ): Promise<Response> {
   const response = await serveVerifiedBlob(env, ctx, request, verified);
-  return verified.downloadFilename === undefined
+  return verified.downloadFilename === undefined || verified.tier !== 'download'
     ? response
     : asDownload(response, verified.downloadFilename);
 }

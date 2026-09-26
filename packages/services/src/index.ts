@@ -57,6 +57,22 @@ export type {
   SlideLinkValidation,
 } from './slides/slideSource.ts';
 
+// Media object SHAPES, for the surfaces that render them.
+//
+// Types only, deliberately. The media service reaches R2 through
+// `@aws-sdk/client-s3`, and a VALUE export here would put that package in the
+// import graph of every route that only wanted to know what a media row looks
+// like. `export type` is erased at compile time, so this costs nothing; the
+// operations stay behind `ClassmojiService.media`, which is server-side by
+// construction. Same reasoning as the slide-source note above.
+export type {
+  MediaKind,
+  MediaProcessing,
+  MediaRecord,
+  MediaStatus,
+  MediaUsage,
+} from './media/index.ts';
+
 // Git provider abstraction layer
 export {
   GitProvider,

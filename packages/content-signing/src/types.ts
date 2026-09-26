@@ -91,6 +91,24 @@ export type BlobVerification =
     }
   | { ok: false; reason: VerifyFailure };
 
+export type MediaVerification =
+  | {
+      ok: true;
+      kind: 'media';
+      classroomId: string;
+      mediaId: string;
+      /** `orig.{ext}`, `web.mp4` or `poster.webp` — which object of the three. */
+      variant: string;
+      tier: Tier;
+      keyVersion: number;
+      exp: number;
+      /** The DECODED display filename. See `BlobVerification.downloadFilename`. */
+      downloadFilename?: string;
+      inGrace: boolean;
+      keySlot: KeySlot;
+    }
+  | { ok: false; reason: VerifyFailure };
+
 export type ThemeVerification =
   | {
       ok: true;
@@ -129,6 +147,21 @@ export interface ParsedBlobUrl {
   dl?: string;
 }
 
+/** Raw fields lifted out of a media URL, before any cryptographic check. */
+export interface ParsedMediaUrl {
+  kind: 'media';
+  host: string;
+  classroomId: string;
+  mediaId: string;
+  variant: string;
+  tier: Tier;
+  keyVersion: number;
+  exp: number;
+  sig: string;
+  /** Still base64url, never decoded here. See `ParsedBlobUrl.dl`. */
+  dl?: string;
+}
+
 /** Raw fields lifted out of a theme URL, before any cryptographic check. */
 export interface ParsedThemeUrl {
   kind: 'theme';
@@ -143,4 +176,4 @@ export interface ParsedThemeUrl {
   relPath: string;
 }
 
-export type ParsedContentUrl = ParsedBlobUrl | ParsedThemeUrl;
+export type ParsedContentUrl = ParsedBlobUrl | ParsedThemeUrl | ParsedMediaUrl;

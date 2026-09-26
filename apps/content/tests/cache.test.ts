@@ -29,7 +29,7 @@ describe('response headers', () => {
     expect(headers.get('Access-Control-Allow-Origin')).toBe('*');
     expect(headers.get('Access-Control-Allow-Methods')).toBe('GET, HEAD, OPTIONS');
     expect(headers.get('Access-Control-Expose-Headers')).toBe(
-      'Content-Type, Content-Length, ETag, Accept-Ranges, Content-Range'
+      'Content-Type, Content-Length, ETag, Accept-Ranges, Content-Range, Content-Disposition'
     );
     // A cross-origin reader that is allowed to SEND `Range` but cannot READ
     // `Content-Range` cannot tell a 206 from a truncated 200.

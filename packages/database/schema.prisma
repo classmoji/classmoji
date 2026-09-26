@@ -484,6 +484,7 @@ model Classroom {
   forms                 Form[]
   content_assets        ContentAsset[]
   content_index         ContentIndex[]
+  media_objects         MediaObject[]
   team_sets             TeamSet[]
 
   // Logically redundant now that slug is globally unique, but retained: it is
@@ -2250,4 +2251,111 @@ model DocsIndex {
 
   @@id([slug, chunk_ix])
   @@map("docs_index")
+}
+
+/// Lifecycle of one uploaded media object. UPLOADING is a reservation — the row
+/// exists and the multipart upload is open, but no bytes are addressable yet;
+/// READY means the object is complete and its size verified; DELETED means the
+/// R2 objects are gone and every reference to it now resolves to `/missing/`.
+enum MediaStatus {
+  UPLOADING
+  READY
+  DELETED
+}
+
+/// What KIND of file this is, decided from the extension at create time. It
+/// picks the content type, decides whether the video options mean anything, and
+/// is what the media page groups by. Not a mime prefix: `key` and `pptx` are
+/// both DOCUMENT and share no mime family.
+enum MediaKind {
+  VIDEO
+  AUDIO
+  DOCUMENT
+  ARCHIVE
+  IMAGE
+}
+
+/// Where the video rendition job got to. NONE is the resting state for anything
+/// that is not an optimised video, and is what every non-video row keeps.
+enum MediaProcessing {
+  NONE
+  PENDING
+  DONE
+  FAILED
+}
+
+/// One uploaded file in a classroom's media store — the primary copy, in R2,
+/// outside git.
+///
+/// This is NOT a cache, which is the whole difference between it and
+/// `ContentAsset`: nothing here is derivable from a repo, so a lost row is a
+/// lost file. Content stores the reference `media://{id}` and the render-time
+/// resolver turns it into a signed `/media/` URL exactly as a repo path becomes
+/// a signed `/blob/` URL — same key, same tiers, same proof that the row
+/// belongs to the classroom doing the signing.
+///
+/// R2 keys are DERIVED, never stored: `m/{classroom_id}/{id}/{variant}` with
+/// the variant being `orig.{ext}`, `web.mp4` or `poster.webp`. A stored key
+/// would be a second place for the key shape to live, and the app and the
+/// Worker have to agree on it byte for byte — `mediaKey()` in
+/// @classmoji/content-signing is the one copy.
+///
+/// QUOTA is a SUM over these rows, deliberately without a counter column:
+/// `size_bytes` for READY rows whose original is still there, `rendition_bytes`
+/// for the ones whose original was dropped after processing, plus `size_bytes`
+/// for UPLOADING rows younger than the reservation window. A stale reservation
+/// therefore falls out of the sum by age alone, and R2 aborts the abandoned
+/// multipart itself at 7 days — no sweep job, nothing to run.
+model MediaObject {
+  id                  String          @id @default(uuid())
+  classroom_id        String
+  kind                MediaKind
+  /// The name the uploader chose, kept verbatim for display and for the
+  /// `dl` filename on a download URL. Never a path and never part of a key.
+  filename            String
+  /// Canonical lowercase extension of the ORIGINAL, e.g. "mov". It is half of
+  /// the `orig.{ext}` variant, so it is what a signed URL for the original is
+  /// built from.
+  ext                 String
+  /// Server-assigned from `ext` against an allowlist, never taken from the
+  /// client. The Worker answers with it and sends nosniff, so an uploaded
+  /// document can never be served as something executable.
+  content_type        String
+  /// Declared at create so the quota can be checked BEFORE any bytes move, then
+  /// verified against HeadObject at complete. A client that lies gets its
+  /// upload aborted and its row deleted.
+  size_bytes          BigInt
+  status              MediaStatus     @default(UPLOADING)
+  /// The S3 multipart id, held only while UPLOADING so parts can be signed and
+  /// the upload aborted.
+  upload_id           String?
+  uploaded_by         String
+  /// The three upload-dialog options. Video only — for every other kind they
+  /// are stored at their defaults and nothing reads them.
+  optimise            Boolean         @default(false)
+  keep_original       Boolean         @default(true)
+  allow_download      Boolean         @default(false)
+  processing          MediaProcessing @default(NONE)
+  processing_error    String?
+  /// Set by the phase-2 rendition job. Its presence is the serve switch: a row
+  /// with a rendition serves `web.mp4`, otherwise `orig.{ext}`.
+  rendition_key       String?
+  rendition_bytes     BigInt?
+  poster_key          String?
+  duration_ms         Int?
+  width               Int?
+  height              Int?
+  created_at          DateTime        @default(now())
+  ready_at            DateTime?
+  deleted_at          DateTime?
+  /// When the original was dropped after a verified rendition. From then on the
+  /// rendition's bytes are what this row costs against the quota.
+  original_deleted_at DateTime?
+
+  classroom Classroom @relation(fields: [classroom_id], references: [id], onDelete: Cascade)
+
+  /// Every read is classroom-scoped and status-filtered: the usage sum, the
+  /// media list, and the resolver's own lookup.
+  @@index([classroom_id, status])
+  @@map("media_objects")
 }

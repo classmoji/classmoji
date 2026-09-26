@@ -5,10 +5,12 @@
   "exports": {
     ".": "./src/index.ts",
     "./sandpack": "./src/Sandpack/index.ts",
+    "./upload": "./src/upload/index.ts",
     "./styles/*": "./styles/*"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
+    "test": "vitest run",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "format": "prettier --write \"**/*.{js,jsx,ts,tsx,json,md}\"",
@@ -24,6 +26,7 @@
     "@codesandbox/sandpack-themes": "^2.0.21"
   },
   "devDependencies": {
-    "framer-motion": "^12.23.22"
+    "framer-motion": "^12.23.22",
+    "vitest": "^4.1.5"
   }
 }

@@ -13,6 +13,9 @@ const ALL_TABS: TabDef[] = [
   { key: 'grades', label: 'Grades' },
   { key: 'quizzes', label: 'Quizzes' },
   { key: 'content', label: 'Content' },
+  // Next to Content on purpose: both are about what the classroom stores, and
+  // the split between them is only where the bytes live.
+  { key: 'media', label: 'Media' },
   { key: 'website', label: 'Website' },
   { key: 'team', label: 'Team' },
   { key: 'extension', label: 'Extension' },

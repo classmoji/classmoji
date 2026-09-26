@@ -4,6 +4,7 @@ import {
   normalizeDownloadFilename,
   parseContentUrl,
   signBlobUrl,
+  signMediaUrl,
   signSrcSet,
   signThemeBase,
   type SigningContext,
@@ -11,6 +12,12 @@ import {
   type TransformFormat,
   type TransformWidth,
 } from '@classmoji/content-signing';
+import {
+  lookupReadyMedia,
+  mediaRef,
+  servedVariant,
+  type MediaRecord,
+} from '../media/mediaLookup.ts';
 import { ContentService } from '../content/ContentService.ts';
 import {
   ensureContentAssetsOutcome,
@@ -882,6 +889,269 @@ export function parseMissingUrl(ctx: ResolveContext, ref: string): string | null
   }
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Media references — the content that is not in git
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * `media://{uuid}` — a reference to a `MediaObject` row rather than to a repo
+ * path.
+ *
+ * The same UUID shape the signer will take: lowercase, hyphenated, 36
+ * characters. A ref that is not exactly that is not one of ours and falls
+ * through to the repo-path branch, where it resolves to itself — better than
+ * being claimed here and turned into a placeholder.
+ */
+const MEDIA_REF = /^media:\/\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/;
+
+/** The media id a reference names, or null when it is not a media reference. */
+export function parseMediaRef(ref: string): string | null {
+  if (typeof ref !== 'string') return null;
+  const match = MEDIA_REF.exec(ref);
+  return match ? match[1] : null;
+}
+
+/**
+ * A signed media URL of OURS → the media id in it.
+ *
+ * Matched by SHAPE, like `parseMissingUrl`, and scoped to this classroom.
+ * `parseContentUrl` would answer this too, but this is also the check
+ * `canonicalizeAssetRef` needs before it has decided anything, and keeping it
+ * here means the save path does not depend on the verifier's parse succeeding.
+ */
+const MEDIA_URL =
+  /^https?:\/\/[^/]+\/c\/([0-9a-f-]{36})\/media\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\/[^/?#]+(?:\?|$)/i;
+
+/**
+ * Is this host the one this deployment mints delivery URLs on?
+ *
+ * "Ours" has to mean the HOST as well as the path: the shape above is a public
+ * URL grammar and any site can serve a path that matches it. A save that
+ * accepted `https://somewhere-else.example/c/{thisClassroom}/media/{id}/…`
+ * would rewrite an author's external link into a reference to one of this
+ * classroom's own objects — a silent edit of their content, driven by a string
+ * somebody else chose.
+ *
+ * Env rather than `deliveryEnvFor`, for `canonicalizeAssetRef`'s reason: this
+ * path only ever REMOVES a derived URL, so it has to keep working for a
+ * classroom whose flag has since been switched off. A deployment with no origin
+ * at all mints nothing, so no host is ours and every string is left alone.
+ */
+function isOwnDeliveryHost(host: string | null | undefined): boolean {
+  const origin = process.env.CONTENT_DELIVERY_ORIGIN;
+  if (!origin || !host) return false;
+  try {
+    return new URL(origin).host.toLowerCase() === host.toLowerCase();
+  } catch {
+    return false;
+  }
+}
+
+function parseMediaUrl(ctx: ResolveContext, ref: string): string | null {
+  const match = MEDIA_URL.exec(ref);
+  if (!match || match[1].toLowerCase() !== ctx.classroom.id.toLowerCase()) return null;
+
+  let host: string;
+  try {
+    host = new URL(ref).host;
+  } catch {
+    return null;
+  }
+  if (!isOwnDeliveryHost(host)) return null;
+
+  return match[2].toLowerCase();
+}
+
+/**
+ * THE INVARIANT, media edition.
+ *
+ * `mintSigned`'s proof is a row read out of one classroom's asset map. Here it
+ * is a row read out of `media_objects` WHERE `classroom_id` — and the proof is
+ * the query, not a check after the fact: `lookupReadyMedia` filters on the
+ * classroom and on READY in SQL, so a record in hand is already one this
+ * classroom owns. The assertion below is the belt to that: it can only fire if
+ * a caller built a record some other way, and a signature over another
+ * classroom's media id is the one thing the Worker would honour and should not.
+ *
+ * Null on refusal and on a signer validation error, exactly like `mintSigned` —
+ * every caller degrades to the placeholder rather than failing the render.
+ */
+async function mintMedia(
+  ctx: ResolveContext,
+  env: { origin: string; master: string },
+  record: MediaRecord,
+  variant: string,
+  tier: ResolveTier,
+  now: number | undefined,
+  dl?: string
+): Promise<string | null> {
+  if (record.classroomId !== ctx.classroom.id) {
+    console.warn(
+      `[contentDelivery] refused to sign media outside the classroom: ` +
+        `classroom=${ctx.classroom.id} media=${record.id} (row belongs to ${record.classroomId})`
+    );
+    return null;
+  }
+
+  const signing: SigningContext = {
+    master: env.master,
+    classroomId: ctx.classroom.id,
+    keyVersion: ctx.classroom.content_key_version,
+    tier,
+    ...(now === undefined ? {} : { now }),
+  };
+
+  try {
+    return await signMediaUrl(env.origin, signing, {
+      mediaId: record.id,
+      variant,
+      ...(dl ? { dl } : {}),
+    });
+  } catch (error) {
+    console.warn(
+      `[contentDelivery] Could not sign media ${record.id} for classroom ${ctx.classroom.id}:`,
+      error instanceof Error ? error.message : error
+    );
+    return null;
+  }
+}
+
+/**
+ * Media refs → signed URLs, in ONE query for the whole batch.
+ *
+ * Every input ref appears in the result. A ref whose row is missing, deleted or
+ * owned by another classroom gets the same `/missing/` placeholder a repo path
+ * with no row gets — those three are indistinguishable by design, because the
+ * lookup is scoped in SQL and never has a foreign row to tell apart.
+ *
+ * No `ensureMapBounded`: the asset map is the git tree's index and has nothing
+ * to say about media. A page of nothing but media refs costs one query and no
+ * GitHub call at all.
+ */
+/**
+ * What a `media://` reference resolves to when the layer is NOT acting.
+ *
+ * Every other kind of reference has an answer without the delivery layer: a
+ * repo path is a path, a legacy absolute URL is a URL, and handing either back
+ * unchanged renders the same file it always did. A media reference has no such
+ * fallback — the bytes are in R2, reachable only through a signed URL, and
+ * there is no proxy, no legacy route and no public object. So echoing the
+ * `media://…` string puts a scheme no browser understands into `src`, and a
+ * save that does not canonicalize would commit that back into the document.
+ *
+ * The placeholder is the honest answer: the same deterministic `/missing/` URL
+ * a deleted or unknown object gets, which `parseMissingUrl` turns back into the
+ * reference on the way to storage, so nothing is lost and a later render — once
+ * the flag is on again — resolves it properly.
+ *
+ * A deployment with no origin at all can form no URL, so there the reference
+ * does come back unchanged; there is nothing better, and nothing is being
+ * served on that deployment either way.
+ */
+function unresolvedMediaUrl(ctx: ResolveContext, ref: string): string {
+  const origin = process.env.CONTENT_DELIVERY_ORIGIN;
+  if (!origin) return ref;
+  return missingUrl(origin, ctx.classroom.id, ref);
+}
+
+async function resolveMediaRefs(
+  ctx: ResolveContext,
+  env: { origin: string; master: string },
+  refs: Map<string, string>,
+  now?: number
+): Promise<Map<string, string>> {
+  const urls = new Map<string, string>();
+  if (refs.size === 0) return urls;
+
+  const records = await lookupReadyMedia(ctx.classroom.id, [...refs.values()]);
+
+  await Promise.all(
+    [...refs].map(async ([ref, mediaId]) => {
+      const record = records.get(mediaId);
+      if (!record) {
+        console.warn(
+          `[contentDelivery] No READY media row for "${ref}" in classroom ${ctx.classroom.id}`
+        );
+        urls.set(ref, missingUrl(env.origin, ctx.classroom.id, ref));
+        return;
+      }
+      const url = await mintMedia(ctx, env, record, servedVariant(record), ctx.tier, now);
+      urls.set(ref, url ?? missingUrl(env.origin, ctx.classroom.id, ref));
+    })
+  );
+
+  return urls;
+}
+
+/**
+ * The poster frame for a media reference, or null when there is not one.
+ *
+ * Null rather than a placeholder: a `<video poster>` with a broken URL shows a
+ * broken image where the first frame should be, and no attribute at all shows
+ * the browser's own first-frame behaviour. Only rows the phase-2 job has
+ * produced a poster for have one, so null is the answer for most of them.
+ */
+export async function resolveMediaPoster(ctx: ResolveContext, ref: string): Promise<string | null> {
+  const mediaId = parseMediaRef(ref);
+  if (!mediaId) return null;
+
+  const env = deliveryEnvFor(ctx);
+  if (!env) return null;
+
+  const records = await lookupReadyMedia(ctx.classroom.id, [mediaId]);
+  const record = records.get(mediaId);
+  if (!record?.posterKey) return null;
+
+  return mintMedia(ctx, env, record, 'poster.webp', ctx.tier, undefined);
+}
+
+/**
+ * The save-to-disk URL for one media object, or null when there is not one.
+ *
+ * Two separate reasons for null, and they are not the same thing:
+ *
+ *   - `forStudent` on a row whose uploader did not tick "Allow download". The
+ *     video still plays; there is simply no button, and minting the URL anyway
+ *     would make the refusal cosmetic — a ten-minute unauthenticated handle to
+ *     the file is exactly what the setting is about. Teaching staff always get
+ *     one, which is why the caller says which it is asking for rather than the
+ *     row deciding alone;
+ *   - the layer is off, or the signer refused. The same degradation every other
+ *     entry point has.
+ *
+ * Always the `download` tier — ten minutes, `no-store`, no edge bucket — and
+ * always the ORIGINAL rather than the served variant: a download is the file
+ * the instructor uploaded, not the copy the player happens to use.
+ */
+export async function mediaDownloadUrl({
+  classroom,
+  record,
+  forStudent,
+}: {
+  classroom: ResolveClassroom;
+  record: MediaRecord;
+  forStudent: boolean;
+}): Promise<string | null> {
+  if (forStudent && !record.allowDownload) return null;
+
+  const ctx: ResolveContext = { classroom, tier: DOWNLOAD_TIER };
+  const env = deliveryEnvFor(ctx);
+  if (!env) return null;
+
+  // The original is gone once the rendition replaced it, so that is what there
+  // is to hand over. Same rule the player uses, for the one row where it differs.
+  const variant = record.originalDeletedAt ? 'web.mp4' : `orig.${record.ext}`;
+
+  // A name that does not survive normalization (all-bidi, all-separator, far
+  // too long) must not cost the URL its `dl` — without it the response carries
+  // no `Content-Disposition: attachment`, so the browser NAVIGATES to the file
+  // and a click on Download plays a video instead of saving it. The id and the
+  // extension are both already validated, so this fallback always normalizes.
+  const filename = normalizeDownloadFilename(record.filename) ?? `${record.id}.${record.ext}`;
+
+  return mintMedia(ctx, env, record, variant, DOWNLOAD_TIER, undefined, filename);
+}
+
 /**
  * Sign one already-resolved asset, degrading to the legacy ref on refusal.
  *
@@ -963,7 +1233,18 @@ export async function resolveAssetUrl(
   opts: { transform?: ResolveTransform } = {}
 ): Promise<string> {
   const env = deliveryEnvFor(ctx);
-  if (!env) return ref;
+  // A media reference has no legacy form to fall back to. See
+  // `unresolvedMediaUrl`.
+  if (!env) return parseMediaRef(ref) ? unresolvedMediaUrl(ctx, ref) : ref;
+
+  // Media first, and BEFORE the map check: a media reference has nothing to do
+  // with the content repo's tree, so resolving one must not pull a GitHub sync
+  // onto the render path.
+  const mediaId = parseMediaRef(ref);
+  if (mediaId) {
+    const urls = await resolveMediaRefs(ctx, env, new Map([[ref, mediaId]]));
+    return urls.get(ref) ?? ref;
+  }
 
   const mapIsCurrent = await ensureMapBounded(ctx.classroom.id);
   return resolveOne(ctx, env, ref, opts.transform, undefined, mapIsCurrent);
@@ -1144,7 +1425,11 @@ export async function resolveDelivery(
 
   const env = deliveryEnvFor(ctx);
   if (!env) {
-    for (const ref of unique) urls.set(ref, ref);
+    // Same rule as `resolveAssetUrl`: everything else resolves to itself, and a
+    // media reference resolves to the placeholder. See `unresolvedMediaUrl`.
+    for (const ref of unique) {
+      urls.set(ref, parseMediaRef(ref) ? unresolvedMediaUrl(ctx, ref) : ref);
+    }
     return { urls, srcSets };
   }
 
@@ -1152,11 +1437,30 @@ export async function resolveDelivery(
   // itself without ever reaching the map, and the ones that remain share a
   // single `findMany` — the difference between a forty-image deck costing one
   // query per view and costing forty.
+  //
+  // Media refs are split off here rather than folded in: they are answered by a
+  // different table, they never get a `srcset`, and they must not drag the
+  // asset-map freshness check (and its GitHub call) onto a page that has no
+  // repo references at all.
   const wanted = new Map<string, string>();
+  const media = new Map<string, string>();
   for (const ref of unique) {
+    const mediaId = parseMediaRef(ref);
+    if (mediaId) {
+      media.set(ref, mediaId);
+      continue;
+    }
     const path = toRepoPath(ctx, ref);
     if (path) wanted.set(ref, path);
     else urls.set(ref, ref);
+  }
+
+  // One query for every media ref in the batch, on the same clock as the rest.
+  if (media.size > 0) {
+    const mediaNow = passClock();
+    for (const [ref, url] of await resolveMediaRefs(ctx, env, media, mediaNow)) {
+      urls.set(ref, url);
+    }
   }
 
   if (wanted.size === 0) return { urls, srcSets };
@@ -1935,9 +2239,25 @@ export async function canonicalizeAssetRef(ctx: ResolveContext, urlOrRef: string
   const missing = parseMissingUrl(ctx, urlOrRef);
   if (missing !== null) return missing;
 
+  // A signed MEDIA url undoes to `media://{id}` with no lookup at all: the id
+  // IS the reference, where a blob url has to be traced back through the map to
+  // find a path. Matched by shape and checked before the parse, so a save keeps
+  // working even for a URL shape the verifier has not learned yet.
+  const mediaId = parseMediaUrl(ctx, urlOrRef);
+  if (mediaId !== null) return mediaRef(mediaId);
+
   const parsed = parseContentUrl(urlOrRef);
   if (!parsed) return urlOrRef;
   if (parsed.classroomId !== ctx.classroom.id) return urlOrRef;
+
+  // Belt to the shape match above. Only reachable for one of OUR media URLs the
+  // regex did not claim, and it must not fall through to the blob branch, which
+  // would read `parsed.sha` off a shape that has none. The host check is the
+  // same one `parseMediaUrl` makes: this parse is structural and would accept
+  // the shape from any host at all.
+  if (parsed.kind === 'media') {
+    return isOwnDeliveryHost(parsed.host) ? mediaRef(parsed.mediaId) : urlOrRef;
+  }
 
   // A signed THEME url reaches storage through a deck's `<link href>` or an
   // inline `url()`, and it expires exactly like a blob url does. Its repo path
@@ -2002,6 +2322,11 @@ export async function canonicalizeMany(
  */
 export function isOwnAssetRef(ctx: ResolveContext, ref: string): boolean {
   if (typeof ref !== 'string' || ref.length === 0) return false;
+  // A `media://` reference is ours by construction — it names a row, and a row
+  // only ever belongs to one classroom. Whether that row is this classroom's is
+  // the RESOLVER's question, and its answer to "no" is a placeholder rather
+  // than a passthrough.
+  if (parseMediaRef(ref) !== null) return true;
   if (toRepoPath(ctx, ref) !== null) return true;
   // The placeholder is derived from one of ours and belongs to the same set —
   // leaving it out here would let a stale `srcset` survive around one.

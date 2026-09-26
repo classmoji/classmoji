@@ -2,6 +2,14 @@
 export interface Env {
   /** R2 bucket used as the content cache. */
   CACHE: R2Bucket;
+  /**
+   * R2 bucket holding large media uploads — the PRIMARY copy, not a cache.
+   *
+   * Nothing in this Worker ever writes to it: the app uploads over the S3 API
+   * and this side only reads. An object missing from here is a 404 and not a
+   * cache miss, because there is no origin behind it to pull from.
+   */
+  MEDIA: R2Bucket;
   /** Cloudflare Images binding, used for width/format variants. */
   IMAGES: ImagesBinding;
   /** Webapp endpoint that mints short-lived GitHub installation tokens. */
@@ -37,6 +45,23 @@ export function isConfigured(env: Env): boolean {
   return Boolean(
     env.CONTENT_SIGNING_SECRET && env.CONTENT_WORKER_SHARED_SECRET && env.CONTENT_TOKEN_ENDPOINT
   );
+}
+
+/**
+ * Whether the MEDIA bucket is actually bound.
+ *
+ * Deliberately NOT part of `isConfigured`. Blob and theme delivery do not touch
+ * that bucket, and a deploy that lost only the media binding must keep serving
+ * them rather than 503ing the whole Worker. What it must not do is fail as a
+ * generic 500 from the router's catch, which says nothing an operator can act
+ * on — so the media route checks this itself and `/healthz` reports it, which
+ * is the one place a missing binding can be seen before a student finds it.
+ *
+ * The type says `R2Bucket` because `wrangler.jsonc` declares the binding; this
+ * is about the deploy where that declaration did not make it to the runtime.
+ */
+export function hasMediaBinding(env: Env): boolean {
+  return Boolean(env.MEDIA);
 }
 
 /**

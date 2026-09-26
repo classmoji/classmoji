@@ -3,8 +3,10 @@ import {
   deriveKey,
   encodeDownloadFilename,
   hostOf,
+  mediaCanonicalString,
   nowSeconds,
   signBlobUrl,
+  signMediaUrl,
   signThemeBase,
   themeCanonicalString,
   type Tier,
@@ -23,6 +25,10 @@ export const BLOB_SHA = '0123456789abcdef0123456789abcdef01234567';
 export const MISSING_SHA = 'fedcba9876543210fedcba9876543210fedcba98';
 export const TREE_SHA = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
 export const THEME_BLOB_SHA = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
+
+/** A media id is a lowercase uuid, exactly like a classroom id. */
+export const MEDIA_ID = '3f2504e0-4f89-41d3-9a0c-0305e82c3301';
+export const MISSING_MEDIA_ID = '9c858901-8a57-4791-81fe-4c455b099bc9';
 
 interface StoredObject {
   body: string;
@@ -219,6 +225,9 @@ export function fakeContext(): ExecutionContext & { settled(): Promise<void> } {
 export function fakeEnv(overrides: Partial<Env> = {}): Env {
   return {
     CACHE: fakeBucket() as unknown as R2Bucket,
+    // Empty by default: every media test seeds its own, and a blob test that
+    // touched this bucket at all would be a bug worth failing on.
+    MEDIA: fakeBucket() as unknown as R2Bucket,
     IMAGES: {} as unknown as ImagesBinding,
     CONTENT_TOKEN_ENDPOINT: 'https://staging.classmoji.io/api/content/token',
     ENVIRONMENT: 'test',
@@ -318,6 +327,63 @@ export async function signedBlobUrl(options: {
   if (options.transform?.fmt !== undefined) query.push(`fmt=${options.transform.fmt}`);
   if (dl !== undefined) query.push(`dl=${dl}`);
   return `${origin}/c/${classroomId}/blob/${options.sha}.${options.ext}?${query.join('&')}`;
+}
+
+/**
+ * The media equivalent of `signedBlobUrl`, with the same escape hatches: a
+ * pinned expiry, a forged host, and a `dl` on a tier the mint path refuses —
+ * all three take the hand-rolled branch, and all three still go through the
+ * package's canonical string and key derivation.
+ */
+export async function signedMediaUrl(options: {
+  classroomId?: string;
+  mediaId?: string;
+  variant: string;
+  tier?: Tier;
+  keyVersion?: number;
+  exp?: number;
+  dl?: string;
+  master?: string;
+  origin?: string;
+  signedHost?: string;
+}): Promise<string> {
+  const origin = options.origin ?? ORIGIN;
+  const classroomId = options.classroomId ?? CLASSROOM;
+  const mediaId = options.mediaId ?? MEDIA_ID;
+  const tier = options.tier ?? 'month';
+  const keyVersion = options.keyVersion ?? 1;
+  const master = options.master ?? MASTER;
+
+  const mintable =
+    options.exp === undefined &&
+    options.signedHost === undefined &&
+    (options.dl === undefined || tier === 'download');
+
+  if (mintable) {
+    return signMediaUrl(
+      origin,
+      { master, classroomId, keyVersion, tier },
+      { mediaId, variant: options.variant, dl: options.dl }
+    );
+  }
+
+  const exp = options.exp ?? futureExp();
+  const dl = options.dl === undefined ? undefined : encodeDownloadFilename(options.dl);
+  const canonical = mediaCanonicalString({
+    host: options.signedHost ?? hostOf(origin),
+    classroomId,
+    mediaId,
+    variant: options.variant,
+    tier,
+    keyVersion,
+    exp,
+    dl,
+  });
+  const sig = await signCanonicalString(master, classroomId, keyVersion, canonical);
+
+  const query = [`p=${tier}`, `v=${keyVersion}`, `exp=${exp}`, `sig=${sig}`];
+  if (dl !== undefined) query.push(`dl=${dl}`);
+  return `${origin}/c/${classroomId}/media/${mediaId}/${options.variant}?${query.join('&')}`;
 }
 
 export async function signedThemeUrl(options: {

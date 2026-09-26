@@ -1,8 +1,10 @@
 /**
- * Origin adapters: where bytes come from when R2 misses.
+ * Origin adapters: where bytes come from when the CACHE bucket misses.
  *
- * The Worker knows nothing about a classroom's storage beyond this interface,
- * so a second backend (large media) can be added without touching the router.
+ * Everything here describes a REMOTE origin reached with a repo and a
+ * short-lived installation token — which is GitHub, and only GitHub. The media
+ * bucket is not behind this seam: it is not a miss path, it has no repo and no
+ * token, and `origins/media.ts` says so in its own shape.
  */
 
 export interface OriginRef {
@@ -67,8 +69,11 @@ export interface OriginAdapter {
 
 /**
  * Choose a delivery strategy. Blob size is not known ahead of the fetch today,
- * so callers pass `undefined` and always proxy; the branch exists for the media
- * origin, which will know sizes.
+ * so callers pass `undefined` and always proxy; the branch is the seam for an
+ * origin that knows sizes and can hand out a direct URL for a large object.
+ *
+ * Not the media origin, which knows sizes and still proxies every byte: a
+ * presigned R2 URL would leave `finalizeHeaders` behind. See `origins/media.ts`.
  */
 export function deliveryStrategy(origin: OriginAdapter, size?: number): 'proxy' | 'presign' {
   if (size === undefined) return 'proxy';

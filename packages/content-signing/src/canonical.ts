@@ -24,11 +24,30 @@ export const TRANSFORM_FORMATS: readonly TransformFormat[] = ['webp', 'avif', 'a
 /** Query keys a blob URL may carry. Anything else is unsigned, so it is refused. */
 export const BLOB_QUERY_KEYS: readonly string[] = ['p', 'v', 'exp', 'sig', 'w', 'fmt', 'dl'];
 
+/**
+ * Query keys a media URL may carry.
+ *
+ * No `w` and no `fmt`: a media object is a video, an audio file or a document,
+ * and the image pipeline never sees one. A media URL carrying either is
+ * refused rather than ignored — an unsigned param is what tampering looks like.
+ */
+export const MEDIA_QUERY_KEYS: readonly string[] = ['p', 'v', 'exp', 'sig', 'dl'];
+
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const GIT_SHA_PATTERN = /^[0-9a-f]{40}$/;
 const EXT_PATTERN = /^[a-z0-9]{1,8}$/;
 // Leading dots are excluded so a theme can never name a dotfile directory.
 const THEME_PATTERN = /^[a-z0-9][a-z0-9._-]*$/;
+/**
+ * The three objects one media upload can produce: the original as it was
+ * uploaded, the streaming rendition, and the poster frame.
+ *
+ * A closed list rather than a grammar with a free filename, because this string
+ * is BOTH a URL segment and the tail of an R2 key. Nothing here can hold a
+ * slash, a dot segment or an escape, so `mediaKey` cannot be talked into
+ * addressing an object outside `m/{classroom}/{media}/`.
+ */
+const MEDIA_VARIANT_PATTERN = /^(?:orig\.[a-z0-9]{1,8}|web\.mp4|poster\.webp)$/;
 
 /** A lowercase RFC-4122 UUID. Classroom ids and slide ids are the same shape. */
 export function isUuid(value: unknown): value is string {
@@ -49,6 +68,15 @@ export function isExt(value: unknown): value is string {
 
 export function isTheme(value: unknown): value is string {
   return typeof value === 'string' && THEME_PATTERN.test(value);
+}
+
+/** A media object's id. Same shape as a classroom id — both are row uuids. */
+export function isMediaId(value: unknown): value is string {
+  return isUuid(value);
+}
+
+export function isMediaVariant(value: unknown): value is string {
+  return typeof value === 'string' && MEDIA_VARIANT_PATTERN.test(value);
 }
 
 export function isTier(value: unknown): value is Tier {
@@ -84,6 +112,17 @@ export function assertClassroomId(value: string): void {
 
 export function assertTier(value: Tier): void {
   assert(isTier(value), `content-signing: unknown tier (got ${value})`);
+}
+
+export function assertMediaId(value: string): void {
+  assert(isMediaId(value), `content-signing: mediaId must be a lowercase UUID (got ${value})`);
+}
+
+export function assertMediaVariant(value: string): void {
+  assert(
+    isMediaVariant(value),
+    `content-signing: variant must be orig.{ext}, web.mp4 or poster.webp (got ${value})`
+  );
 }
 
 export function assertKeyVersion(value: number): void {
@@ -152,6 +191,18 @@ export interface BlobCanonicalFields {
   dl?: string;
 }
 
+export interface MediaCanonicalFields {
+  host: string;
+  classroomId: string;
+  mediaId: string;
+  variant: string;
+  tier: Tier;
+  keyVersion: number;
+  exp: number;
+  /** The ENCODED (base64url) download filename. See `BlobCanonicalFields.dl`. */
+  dl?: string;
+}
+
 export interface ThemeCanonicalFields {
   host: string;
   classroomId: string;
@@ -191,6 +242,55 @@ export function blobCanonicalString(fields: BlobCanonicalFields): string {
     fmt,
   ].join('|');
   return dl === undefined ? base : `${base}|dl|${dl}`;
+}
+
+/**
+ * `cm1|media|{host}|{classroomId}|{mediaId}|{variant}|{p}|{v}|{exp}`
+ * and, ONLY for a download URL, `|dl|{dl}` appended to it.
+ *
+ * The blob shape with its path swapped, minus the two transform slots: media is
+ * never resized or re-encoded on the way out, so a `w`/`fmt` pair could only
+ * ever be empty and a field that is always empty is a field that means nothing.
+ * The discriminator is what keeps the namespaces apart — `media` here, `blob`
+ * there — so no media URL can be replayed as a blob one, or the reverse, even
+ * for the same classroom and key version.
+ *
+ * Every field is validated before it reaches this string (uuid, closed variant
+ * list, tier, integers), so none of them can carry the `|` that separates them.
+ */
+export function mediaCanonicalString(fields: MediaCanonicalFields): string {
+  const { host, classroomId, mediaId, variant, tier, keyVersion, exp, dl } = fields;
+  const base = [
+    CANONICAL_VERSION,
+    'media',
+    host,
+    classroomId,
+    mediaId,
+    variant,
+    tier,
+    keyVersion,
+    exp,
+  ].join('|');
+  return dl === undefined ? base : `${base}|dl|${dl}`;
+}
+
+/**
+ * Where one media variant lives in the media bucket: `m/{classroomId}/{mediaId}/{variant}`.
+ *
+ * Classroom-scoped and NOT content-addressed, unlike `blobKey` in the Worker.
+ * Two classrooms holding the same video hold two objects, because the quota has
+ * to be answerable per classroom and a delete must not reach into another one.
+ *
+ * It lives in this package because the app writes these keys and the Worker
+ * reads them, and a disagreement about the shape would be a 404 nobody can see
+ * the cause of. Inputs are asserted rather than trusted: this is a storage
+ * address built from values that arrived over the network.
+ */
+export function mediaKey(classroomId: string, mediaId: string, variant: string): string {
+  assertClassroomId(classroomId);
+  assertMediaId(mediaId);
+  assertMediaVariant(variant);
+  return `m/${classroomId}/${mediaId}/${variant}`;
 }
 
 export interface RenderCanonicalFields {

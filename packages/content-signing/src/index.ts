@@ -2,8 +2,10 @@ export type {
   BlobVerification,
   KeySlot,
   MasterSecrets,
+  MediaVerification,
   ParsedBlobUrl,
   ParsedContentUrl,
+  ParsedMediaUrl,
   ParsedThemeUrl,
   SigningContext,
   ThemeVerification,
@@ -17,6 +19,7 @@ export type {
 export {
   BLOB_QUERY_KEYS,
   CANONICAL_VERSION,
+  MEDIA_QUERY_KEYS,
   SCHEME_SEGMENTS,
   TIERS,
   TRANSFORM_FORMATS,
@@ -25,12 +28,18 @@ export {
   fromBase64Url,
   hostOf,
   isClassroomId,
+  isMediaId,
+  isMediaVariant,
   isUuid,
+  mediaCanonicalString,
+  mediaKey,
   renderCanonicalString,
   themeCanonicalString,
   toBase64Url,
 } from './canonical.ts';
-export type { RenderCanonicalFields } from './canonical.ts';
+export type { MediaCanonicalFields, RenderCanonicalFields } from './canonical.ts';
+
+export { contentTypeForMediaExt } from './mediaTypes.ts';
 
 export {
   MAX_DOWNLOAD_FILENAME_BYTES,
@@ -56,8 +65,8 @@ export { clearKeyCache, deriveKey, signCanonical, verifyCanonical } from './deri
 export type { RenderTokenFields, RenderVerification } from './render.ts';
 export { RENDER_TOKEN_TTL_SECONDS, signRenderToken, verifyRenderToken } from './render.ts';
 
-export type { BlobRef, SrcSet, SrcSetRef, ThemeRef } from './urls.ts';
-export { signBlobUrl, signSrcSet, signThemeBase } from './urls.ts';
+export type { BlobRef, MediaRef, SrcSet, SrcSetRef, ThemeRef } from './urls.ts';
+export { signBlobUrl, signMediaUrl, signSrcSet, signThemeBase } from './urls.ts';
 
 export {
   cacheControlFor,
@@ -65,5 +74,6 @@ export {
   parseContentUrl,
   verifyBlobUrl,
   verifyContentUrl,
+  verifyMediaUrl,
   verifyThemeUrl,
 } from './verify.ts';
