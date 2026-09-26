@@ -19,7 +19,7 @@ vi.mock('../notification.service.ts', () => ({
   createNotifications: vi.fn(),
 }));
 
-const { deleteById, findDependents, setPublished, update } =
+const { deleteById, deleteIfUnprovisioned, findDependents, setPublished, update } =
   await import('../repository.service.ts');
 
 /** Every prisma method the service could reach — asserted untouched by the guard. */
@@ -136,7 +136,9 @@ describe('update', () => {
       tag: null,
     });
 
-    await expect(update('repo-1', { description: 'updated' }, 'classroom-1')).resolves.toMatchObject({
+    await expect(
+      update('repo-1', { description: 'updated' }, 'classroom-1')
+    ).resolves.toMatchObject({
       id: 'repo-1',
       description: 'updated',
     });
@@ -182,5 +184,88 @@ describe('findDependents', () => {
     };
     expect(query.where).toEqual({ id: 'repo-1', classroom_id: 'other-classroom' });
     expect(query.select._count.select).toMatchObject({ git_repos: true, module_items: true });
+  });
+
+  it('counts the links hanging off each assignment', async () => {
+    findFirst.mockResolvedValue(null);
+    await findDependents('repo-1', 'classroom-1');
+    const query = findFirst.mock.calls[0][0] as {
+      select: { assignments: { select: { _count: { select: Record<string, boolean> } } } };
+    };
+    expect(query.select.assignments.select._count.select).toEqual({
+      pages: true,
+      slides: true,
+      calendarEventLinks: true,
+    });
+  });
+});
+
+describe('update — immutable columns', () => {
+  it('strips id, classroom_id, slug and title at runtime, whatever the type says', async () => {
+    updateMany.mockResolvedValue({ count: 1 });
+    findFirst.mockResolvedValue({ id: 'repo-1' });
+
+    const smuggled = {
+      description: 'ok',
+      id: 'other-id',
+      classroom_id: 'other-classroom',
+      slug: 'renamed',
+      title: 'Renamed',
+    } as unknown as Parameters<typeof update>[1];
+    await update('repo-1', smuggled, 'classroom-1');
+
+    expect(updateMany).toHaveBeenCalledExactlyOnceWith({
+      where: { id: 'repo-1', classroom_id: 'classroom-1' },
+      data: { description: 'ok' },
+    });
+  });
+});
+
+describe('deleteIfUnprovisioned', () => {
+  it.each(unusableIds)('rejects %s as an id before issuing any query', async (_label, id) => {
+    await expect(deleteIfUnprovisioned(id as string, 'classroom-1')).rejects.toThrow(
+      'Invalid repository id'
+    );
+    for (const fn of allPrismaCalls()) expect(fn).not.toHaveBeenCalled();
+  });
+
+  it.each(unusableIds)('rejects %s as a classroom id before any query', async (_label, cid) => {
+    await expect(deleteIfUnprovisioned('repo-1', cid as string)).rejects.toThrow(
+      'Invalid classroom id'
+    );
+    for (const fn of allPrismaCalls()) expect(fn).not.toHaveBeenCalled();
+  });
+
+  it('puts "unpublished and nothing provisioned" into the DELETE itself', async () => {
+    deleteMany.mockResolvedValue({ count: 1 });
+    await expect(deleteIfUnprovisioned('repo-1', 'classroom-1')).resolves.toEqual({
+      status: 'deleted',
+    });
+    expect(deleteMany).toHaveBeenCalledExactlyOnceWith({
+      where: {
+        id: 'repo-1',
+        classroom_id: 'classroom-1',
+        is_published: false,
+        git_repos: { none: {} },
+      },
+    });
+    expect(findFirst).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['not_found', null, { status: 'not_found' }],
+    ['published', { is_published: true, _count: { git_repos: 0 } }, { status: 'published' }],
+    [
+      'provisioned',
+      { is_published: false, _count: { git_repos: 3 } },
+      { status: 'provisioned', gitRepos: 3 },
+    ],
+  ])('reports %s when nothing was deleted', async (_label, row, expected) => {
+    deleteMany.mockResolvedValue({ count: 0 });
+    findFirst.mockResolvedValue(row);
+    await expect(deleteIfUnprovisioned('repo-1', 'classroom-1')).resolves.toEqual(expected);
+    expect(findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: 'repo-1', classroom_id: 'classroom-1' } })
+    );
   });
 });

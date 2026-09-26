@@ -237,6 +237,9 @@ const assertScopedIds = (id: unknown, classroomId: unknown): void => {
   if (typeof classroomId !== 'string' || !classroomId) throw new Error('Invalid classroom id');
 };
 
+/** Columns `update` never writes, whatever the caller passes. */
+const IMMUTABLE_REPOSITORY_FIELDS = ['id', 'classroom_id', 'slug', 'title'] as const;
+
 /**
  * Update a Repository.
  *
@@ -249,16 +252,24 @@ const assertScopedIds = (id: unknown, classroomId: unknown): void => {
  */
 export const update = async (
   id: string,
-  // Unchecked so the tag_id FK scalar is writable; id and classroom_id are
-  // omitted so an update can never move a repository to another classroom.
-  updates: Omit<Prisma.RepositoryUncheckedUpdateManyInput, 'id' | 'classroom_id'>,
+  // Unchecked so the tag_id FK scalar is writable.
+  updates: Omit<
+    Prisma.RepositoryUncheckedUpdateManyInput,
+    (typeof IMMUTABLE_REPOSITORY_FIELDS)[number]
+  >,
   classroomId: string
 ) => {
   assertScopedIds(id, classroomId);
 
+  // Stripped at RUNTIME as well as by the type: a JS caller or a cast would
+  // otherwise move the row to another classroom or rename it (the slug and the
+  // title are what provisioned git repo names derive from).
+  const data: Record<string, unknown> = { ...updates };
+  for (const field of IMMUTABLE_REPOSITORY_FIELDS) delete data[field];
+
   const { count } = await getPrisma().repository.updateMany({
     where: { id, classroom_id: classroomId },
-    data: updates,
+    data: data as Prisma.RepositoryUncheckedUpdateManyInput,
   });
   if (count !== 1) throw new Error('Repository not found in classroom');
 
@@ -323,6 +334,41 @@ export const deleteById = async (id: string, classroomId: string) => {
   });
   if (count !== 1) throw new Error('Repository not found in classroom');
   return { id };
+};
+
+/**
+ * Delete a Repository ONLY if it is still unpublished and nothing has been
+ * provisioned from it — the conditions are part of the DELETE itself, so a
+ * publish or a provisioned GitRepo landing between a caller's checks and this
+ * write cannot slip through. Scoped exactly like `deleteById`.
+ *
+ * Never throws for a refused delete; it reports why, re-reading the row only
+ * when nothing was deleted:
+ *   - `deleted`     — the row is gone (and its cascade with it);
+ *   - `not_found`   — no such repository in this classroom (any more);
+ *   - `published`   — it is published;
+ *   - `provisioned` — student/team git repos exist (`gitRepos` of them).
+ */
+export const deleteIfUnprovisioned = async (
+  id: string,
+  classroomId: string
+): Promise<
+  { status: 'deleted' | 'not_found' | 'published' } | { status: 'provisioned'; gitRepos: number }
+> => {
+  assertScopedIds(id, classroomId);
+
+  const { count } = await getPrisma().repository.deleteMany({
+    where: { id, classroom_id: classroomId, is_published: false, git_repos: { none: {} } },
+  });
+  if (count === 1) return { status: 'deleted' };
+
+  const row = await getPrisma().repository.findFirst({
+    where: { id, classroom_id: classroomId },
+    select: { is_published: true, _count: { select: { git_repos: true } } },
+  });
+  if (!row) return { status: 'not_found' };
+  if (row.is_published) return { status: 'published' };
+  return { status: 'provisioned', gitRepos: row._count.git_repos };
 };
 
 /**
@@ -418,6 +464,10 @@ export const findWithStudentStatus = async (classroomId: string, studentId: stri
  * what freezes its structural fields and blocks a delete. The other counts are
  * the blast radius of a delete: assignments, module items, page/slide links and
  * autograding tests cascade with the repository; quizzes are unlinked (SET NULL).
+ * Each assignment carries its own link counts (page/slide links and calendar
+ * event links), which cascade with the assignment. A link row targets a
+ * repository OR an assignment, never both (resourceLink.service), so the
+ * repository-level and assignment-level counts do not overlap.
  *
  * `classroomId` is REQUIRED and part of the query — see `deleteById`.
  */
@@ -428,7 +478,14 @@ export const findDependents = async (id: string, classroomId: string) => {
     where: { id, classroom_id: classroomId },
     select: {
       id: true,
-      assignments: { select: { id: true, title: true }, orderBy: { title: 'asc' } },
+      assignments: {
+        select: {
+          id: true,
+          title: true,
+          _count: { select: { pages: true, slides: true, calendarEventLinks: true } },
+        },
+        orderBy: { title: 'asc' },
+      },
       _count: {
         select: {
           git_repos: true,

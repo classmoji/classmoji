@@ -169,7 +169,8 @@ export const listReposTool = mirrorResourceTool({
     'Repositories (the storage: a template plus one git repo per student/team) with the ' +
     'assignments that submit through them. A repository has no module or weight of its own; each ' +
     'assignment and submission carries its submission_mode (REPO = push, ISSUE = close the issue) ' +
-    'and repo_url. Staff see all incl. unpublished; students see published-only repositories they ' +
+    'and repo_url. Staff see all incl. unpublished, with the template, team settings, tag_id and ' +
+    'project template repo_update edits; students see published-only repositories they ' +
     'have a git repo for, with their own submission status per assignment (grades only after ' +
     'release). Any member.',
 });

@@ -24,7 +24,7 @@ const mocks = vi.hoisted(() => ({
   moduleFindById: vi.fn(),
   repositoryUpdate: vi.fn(),
   findDependents: vi.fn(),
-  repositoryDeleteById: vi.fn(),
+  deleteIfUnprovisioned: vi.fn(),
 }));
 
 vi.mock('@classmoji/services', () => ({
@@ -35,7 +35,7 @@ vi.mock('@classmoji/services', () => ({
       setPublished: (...a: unknown[]) => mocks.setPublished(...a),
       update: (...a: unknown[]) => mocks.repositoryUpdate(...a),
       findDependents: (...a: unknown[]) => mocks.findDependents(...a),
-      deleteById: (...a: unknown[]) => mocks.repositoryDeleteById(...a),
+      deleteIfUnprovisioned: (...a: unknown[]) => mocks.deleteIfUnprovisioned(...a),
     },
     organizationTag: {
       findByClassroomId: (...a: unknown[]) => mocks.findByClassroomId(...a),
@@ -321,7 +321,26 @@ const storedRepo = (overrides: Record<string, unknown> = {}) => ({
   ...overrides,
 });
 
-const dependents = (overrides: Record<string, number> = {}, assignments: unknown[] = []) => ({
+interface AssignmentDependent {
+  id: string;
+  title: string;
+  _count: { pages: number; slides: number; calendarEventLinks: number };
+}
+
+const assignmentDependent = (
+  id: string,
+  title: string,
+  counts: Partial<AssignmentDependent['_count']> = {}
+): AssignmentDependent => ({
+  id,
+  title,
+  _count: { pages: 0, slides: 0, calendarEventLinks: 0, ...counts },
+});
+
+const dependents = (
+  overrides: Record<string, number> = {},
+  assignments: AssignmentDependent[] = []
+) => ({
   id: REPO_ID,
   assignments,
   _count: {
@@ -336,9 +355,9 @@ const dependents = (overrides: Record<string, number> = {}, assignments: unknown
 });
 
 /** repository.update echoes the merged row back, tag included. */
-function echoUpdate() {
+function echoUpdate(base: Record<string, unknown> = {}) {
   mocks.repositoryUpdate.mockImplementation(async (_id: string, patch: Record<string, unknown>) => {
-    const merged = { ...storedRepo(), ...patch };
+    const merged = { ...storedRepo(base), ...patch };
     return { ...merged, tag: merged.tag_id ? { id: merged.tag_id, name: 'workshop-pairs' } : null };
   });
 }
@@ -385,6 +404,12 @@ describe('repo_update', () => {
     expect(mocks.saveManifest).toHaveBeenCalledWith('class-1');
   });
 
+  it('audits a scalar `value` that is exactly the serialized `values`', async () => {
+    await repoUpdateTool.handler({ ...BASE, description: 'Pairs', max_team_size: 3 }, CTX);
+    const data = (mocks.auditCreate.mock.calls[0][0] as { data: Record<string, unknown> }).data;
+    expect(data.value).toBe(JSON.stringify(data.values));
+  });
+
   it('rejects an empty patch before touching the database', async () => {
     await expect(repoUpdateTool.handler(BASE, CTX)).rejects.toMatchObject({
       kind: 'invalid_params',
@@ -412,6 +437,7 @@ describe('repo_update', () => {
   });
 
   it('freezes structural fields once git repos exist', async () => {
+    mocks.repositoryFindById.mockResolvedValue(storedRepo({ tag_id: 'old-tag' }));
     mocks.findDependents.mockResolvedValue(dependents({ git_repos: 3 }));
     await expect(
       repoUpdateTool.handler({ ...BASE, team_formation_mode: 'INSTRUCTOR', tag_id: TAG_ID }, CTX)
@@ -443,12 +469,29 @@ describe('repo_update', () => {
     expect(patch.max_team_size).toBe(3);
   });
 
-  it('keeps the template read-only on a published repo (web parity)', async () => {
+  it.each<[string, Partial<Parameters<typeof repoUpdateTool.handler>[0]>]>([
+    ['template', { template: 'org/other-template' }],
+    ['type', { type: 'INDIVIDUAL' }],
+    ['team_formation_mode', { team_formation_mode: 'INSTRUCTOR', tag_id: TAG_ID }],
+    ['project_template_id', { project_template_id: 'PVT_1' }],
+  ])(
+    'refuses a %s change while published even with ZERO git repos (provisioning is async)',
+    async (_label, change) => {
+      mocks.repositoryFindById.mockResolvedValue(storedRepo({ is_published: true }));
+      mocks.findDependents.mockResolvedValue(dependents({ git_repos: 0 }));
+      await expect(repoUpdateTool.handler({ ...BASE, ...change }, CTX)).rejects.toMatchObject({
+        kind: 'invalid_params',
+        code: 'REPO_PUBLISHED',
+        message: /unpublish.*update.*republish/,
+      });
+      expect(mocks.repositoryUpdate).not.toHaveBeenCalled();
+    }
+  );
+
+  it('still takes a description edit on a published repo', async () => {
     mocks.repositoryFindById.mockResolvedValue(storedRepo({ is_published: true }));
-    await expect(
-      repoUpdateTool.handler({ ...BASE, template: 'org/other-template' }, CTX)
-    ).rejects.toMatchObject({ kind: 'invalid_params', code: 'REPO_PUBLISHED' });
-    expect(mocks.repositoryUpdate).not.toHaveBeenCalled();
+    await repoUpdateTool.handler({ ...BASE, description: 'x' }, CTX);
+    expect(mocks.repositoryUpdate.mock.calls[0][1]).toEqual({ description: 'x' });
   });
 
   it('rejects a merged GROUP + INSTRUCTOR row with no tag', async () => {
@@ -464,7 +507,62 @@ describe('repo_update', () => {
     );
     await expect(repoUpdateTool.handler({ ...BASE, tag_id: null }, CTX)).rejects.toMatchObject({
       kind: 'invalid_params',
+      message: 'A GROUP repo with instructor-assigned teams requires tag_id (see list_tags)',
     });
+    expect(mocks.repositoryUpdate).not.toHaveBeenCalled();
+  });
+
+  describe('a GROUP/INSTRUCTOR repo whose tag was deleted (FK SET NULL)', () => {
+    beforeEach(() => {
+      mocks.repositoryFindById.mockResolvedValue(
+        storedRepo({ team_formation_mode: 'INSTRUCTOR', tag_id: null })
+      );
+      mocks.findDependents.mockResolvedValue(dependents({ git_repos: 4 }));
+    });
+
+    it('still takes a description-only edit', async () => {
+      await repoUpdateTool.handler({ ...BASE, description: 'x' }, CTX);
+      expect(mocks.repositoryUpdate.mock.calls[0][1]).toEqual({ description: 'x' });
+    });
+
+    it('can be given a tag again even though git repos exist (repair path)', async () => {
+      await repoUpdateTool.handler({ ...BASE, tag_id: TAG_ID }, CTX);
+      expect(mocks.repositoryUpdate.mock.calls[0][1]).toEqual({ tag_id: TAG_ID });
+    });
+
+    it('repair still checks the tag belongs to this classroom', async () => {
+      await expect(
+        repoUpdateTool.handler({ ...BASE, tag_id: FOREIGN_TAG_ID }, CTX)
+      ).rejects.toMatchObject({ kind: 'not_found' });
+      expect(mocks.repositoryUpdate).not.toHaveBeenCalled();
+    });
+
+    it('repair is still refused while published', async () => {
+      mocks.repositoryFindById.mockResolvedValue(
+        storedRepo({ team_formation_mode: 'INSTRUCTOR', tag_id: null, is_published: true })
+      );
+      await expect(repoUpdateTool.handler({ ...BASE, tag_id: TAG_ID }, CTX)).rejects.toMatchObject({
+        code: 'REPO_PUBLISHED',
+      });
+    });
+
+    it('changing an EXISTING tag stays locked once git repos exist', async () => {
+      mocks.repositoryFindById.mockResolvedValue(
+        storedRepo({ team_formation_mode: 'INSTRUCTOR', tag_id: 'old-tag' })
+      );
+      await expect(repoUpdateTool.handler({ ...BASE, tag_id: TAG_ID }, CTX)).rejects.toMatchObject({
+        code: 'REPOS_PROVISIONED',
+      });
+    });
+  });
+
+  it('treats a stored null team_formation_mode like the web superRefine (not INSTRUCTOR)', async () => {
+    mocks.repositoryFindById.mockResolvedValue(
+      storedRepo({ type: 'INDIVIDUAL', team_formation_mode: null, max_team_size: null })
+    );
+    echoUpdate({ type: 'INDIVIDUAL', team_formation_mode: null, max_team_size: null });
+    await repoUpdateTool.handler({ ...BASE, type: 'GROUP' }, CTX);
+    expect(mocks.repositoryUpdate.mock.calls[0][1]).toEqual({ type: 'GROUP' });
   });
 
   it('GROUP → INDIVIDUAL clears the team fields and audits them', async () => {
@@ -511,6 +609,56 @@ describe('repo_update', () => {
     });
   });
 
+  it('lets an INDIVIDUAL repo re-send team fields at their current values', async () => {
+    mocks.repositoryFindById.mockResolvedValue(
+      storedRepo({ type: 'INDIVIDUAL', team_formation_mode: 'INSTRUCTOR', max_team_size: 2 })
+    );
+    await repoUpdateTool.handler(
+      { ...BASE, description: 'x', team_formation_mode: 'INSTRUCTOR', max_team_size: 2 },
+      CTX
+    );
+    expect(mocks.repositoryUpdate).toHaveBeenCalledTimes(1);
+  });
+
+  it('stores an empty project template as null (web parity)', async () => {
+    mocks.repositoryFindById.mockResolvedValue(
+      storedRepo({ project_template_id: 'PVT_1', project_template_title: 'Board' })
+    );
+    await repoUpdateTool.handler(
+      { ...BASE, project_template_id: '', project_template_title: '' },
+      CTX
+    );
+    expect(mocks.repositoryUpdate.mock.calls[0][1]).toEqual({
+      project_template_id: null,
+      project_template_title: null,
+    });
+  });
+
+  it('holds max_team_size to the web minimum of 2', () => {
+    expect(repoUpdateTool.inputSchema.max_team_size.safeParse(1).success).toBe(false);
+    expect(repoUpdateTool.inputSchema.max_team_size.safeParse(2).success).toBe(true);
+    expect(repoUpdateTool.inputSchema.max_team_size.safeParse(null).success).toBe(true);
+    expect(repoCreateTool.inputSchema.max_team_size.safeParse(1).success).toBe(false);
+    expect(repoCreateTool.inputSchema.max_team_size.safeParse(2).success).toBe(true);
+  });
+
+  it('maps a row deleted before the write to not_found, with no audit row', async () => {
+    mocks.repositoryUpdate.mockRejectedValue(new Error('Repository not found in classroom'));
+    await expect(repoUpdateTool.handler({ ...BASE, description: 'x' }, CTX)).rejects.toMatchObject({
+      kind: 'not_found',
+      message: 'Repo not found in this classroom',
+    });
+    expect(mocks.auditCreate).not.toHaveBeenCalled();
+  });
+
+  it('maps a row deleted between the write and its re-read to not_found', async () => {
+    mocks.repositoryUpdate.mockResolvedValue(null);
+    await expect(repoUpdateTool.handler({ ...BASE, description: 'x' }, CTX)).rejects.toMatchObject({
+      kind: 'not_found',
+    });
+    expect(mocks.auditCreate).not.toHaveBeenCalled();
+  });
+
   it('survives a manifest refresh that throws (write + audit already done)', async () => {
     mocks.saveManifest.mockRejectedValue(new Error('db down'));
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
@@ -526,6 +674,31 @@ describe('repo_update', () => {
   });
 });
 
+describe('repo_create manifest refresh', () => {
+  it('runs after the audit row and never fails the call', async () => {
+    const order: string[] = [];
+    mocks.auditCreate.mockImplementation(async () => void order.push('audit'));
+    mocks.saveManifest.mockImplementation(async () => {
+      order.push('manifest');
+      throw new Error('db down');
+    });
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const payload = parse(
+      await repoCreateTool.handler(
+        { classroom: 'org/cs1-w26', title: 'Lab 2', template: 't', project_template_id: '' },
+        CTX
+      )
+    );
+    expect(payload.success).toBe(true);
+    expect(order).toEqual(['audit', 'manifest']);
+    expect(
+      (mocks.repositoryCreate.mock.calls[0][0] as { project_template_id: unknown })
+        .project_template_id
+    ).toBeNull();
+    errorSpy.mockRestore();
+  });
+});
+
 describe('repo_delete', () => {
   const ARGS = { classroom: 'org/cs1-w26', repository_id: REPO_ID, confirm: true as const };
 
@@ -533,18 +706,28 @@ describe('repo_delete', () => {
     mocks.repositoryFindById.mockResolvedValue(storedRepo());
     mocks.findDependents.mockResolvedValue(
       dependents({ module_items: 1, pages: 2 }, [
-        { id: 'a-1', title: 'Checkpoint 1' },
-        { id: 'a-2', title: 'Final' },
+        assignmentDependent('a-1', 'Checkpoint 1', { pages: 1, calendarEventLinks: 2 }),
+        assignmentDependent('a-2', 'Final', { pages: 1, slides: 3 }),
       ])
     );
-    mocks.repositoryDeleteById.mockResolvedValue({ id: REPO_ID });
+    mocks.deleteIfUnprovisioned.mockResolvedValue({ status: 'deleted' });
   });
 
   it('deletes an unpublished empty container and reports the cascade', async () => {
     const payload = parse(await repoDeleteTool.handler(ARGS, CTX));
 
-    expect(mocks.repositoryDeleteById).toHaveBeenCalledWith(REPO_ID, 'class-1');
-    expect(payload).toMatchObject({
+    expect(mocks.deleteIfUnprovisioned).toHaveBeenCalledWith(REPO_ID, 'class-1');
+    const cascade = {
+      module_items_removed: 1,
+      page_links_removed: 2,
+      slide_links_removed: 0,
+      assignment_page_links_removed: 2,
+      assignment_slide_links_removed: 3,
+      calendar_event_links_removed: 2,
+      autograding_tests_deleted: 0,
+      quizzes_unlinked: 0,
+    };
+    expect(payload).toEqual({
       success: true,
       deleted_repository_id: REPO_ID,
       title: 'workshop',
@@ -553,8 +736,7 @@ describe('repo_delete', () => {
         { id: 'a-2', title: 'Final' },
       ],
       assignments_deleted_count: 2,
-      module_items_removed: 1,
-      page_links_removed: 2,
+      ...cascade,
     });
     expect(mocks.auditCreate.mock.calls[0][0]).toMatchObject({
       resource_type: 'REPOSITORIES',
@@ -567,6 +749,7 @@ describe('repo_delete', () => {
           { id: 'a-1', title: 'Checkpoint 1' },
           { id: 'a-2', title: 'Final' },
         ],
+        ...cascade,
       },
     });
     expect(mocks.saveManifest).toHaveBeenCalledWith('class-1');
@@ -578,7 +761,7 @@ describe('repo_delete', () => {
       kind: 'invalid_params',
       code: 'REPO_PUBLISHED',
     });
-    expect(mocks.repositoryDeleteById).not.toHaveBeenCalled();
+    expect(mocks.deleteIfUnprovisioned).not.toHaveBeenCalled();
   });
 
   it('refuses a repo whose student/team repos exist', async () => {
@@ -588,7 +771,30 @@ describe('repo_delete', () => {
       code: 'REPOS_PROVISIONED',
       message: /web app/,
     });
-    expect(mocks.repositoryDeleteById).not.toHaveBeenCalled();
+    expect(mocks.deleteIfUnprovisioned).not.toHaveBeenCalled();
+    expect(mocks.auditCreate).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [{ status: 'published' }, { kind: 'invalid_params', code: 'REPO_PUBLISHED' }],
+    [
+      { status: 'provisioned', gitRepos: 2 },
+      { kind: 'invalid_params', code: 'REPOS_PROVISIONED' },
+    ],
+    [{ status: 'not_found' }, { kind: 'not_found' }],
+  ])(
+    'refuses when the conditional delete matched nothing (%o), with no audit row',
+    async (outcome, error) => {
+      mocks.deleteIfUnprovisioned.mockResolvedValue(outcome);
+      await expect(repoDeleteTool.handler(ARGS, CTX)).rejects.toMatchObject(error);
+      expect(mocks.auditCreate).not.toHaveBeenCalled();
+      expect(mocks.saveManifest).not.toHaveBeenCalled();
+    }
+  );
+
+  it('propagates a delete that throws, with no audit row', async () => {
+    mocks.deleteIfUnprovisioned.mockRejectedValue(new Error('connection lost'));
+    await expect(repoDeleteTool.handler(ARGS, CTX)).rejects.toThrow('connection lost');
     expect(mocks.auditCreate).not.toHaveBeenCalled();
   });
 
@@ -596,7 +802,7 @@ describe('repo_delete', () => {
     mocks.repositoryFindById.mockResolvedValue(storedRepo({ classroom_id: 'other-class' }));
     await expect(repoDeleteTool.handler(ARGS, CTX)).rejects.toMatchObject({ kind: 'not_found' });
     expect(mocks.findDependents).not.toHaveBeenCalled();
-    expect(mocks.repositoryDeleteById).not.toHaveBeenCalled();
+    expect(mocks.deleteIfUnprovisioned).not.toHaveBeenCalled();
   });
 
   it('is destructive and confirm-gated', () => {
@@ -606,8 +812,13 @@ describe('repo_delete', () => {
   });
 });
 
-describe('repo tool descriptions', () => {
-  it('stay under the 1,500 bytes a client will keep', () => {
+describe('repo tool definitions', () => {
+  it('pin repo_update and repo_delete to OWNER only', () => {
+    expect(repoUpdateTool.roles).toEqual(['OWNER']);
+    expect(repoDeleteTool.roles).toEqual(['OWNER']);
+  });
+
+  it('keep descriptions under the 1,500 bytes a client will keep', () => {
     for (const tool of [repoCreateTool, repoUpdateTool, repoDeleteTool, repoPublishTool]) {
       expect(new TextEncoder().encode(tool.description).length, tool.name).toBeLessThan(1500);
     }
