@@ -916,8 +916,17 @@ describe('completeUpload', () => {
     }
   });
 
-  it('aborts and tombstones when the assembly itself fails', async () => {
+  it('aborts, tombstones, then deletes the object when the assembly itself fails', async () => {
+    // A complete that errors may still have assembled the object on R2's side
+    // (a timeout, a dropped response). Once the row is DELETED nothing would
+    // ever bill or find it, so it goes — after the tombstone, never before.
+    const order: string[] = [];
+    prisma.mediaObject.updateMany.mockImplementation(async () => {
+      order.push('tombstone');
+      return { count: 1 };
+    });
     sendImpl.mockImplementation(async (name: string) => {
+      order.push(name);
       if (name === 'CompleteMultipartUpload') throw new Error('bad part');
       return {};
     });
@@ -926,11 +935,40 @@ describe('completeUpload', () => {
       completeUpload({ classroom, mediaId: MEDIA_ID, parts: [{ partNumber: 1, etag: '"a"' }] })
     ).rejects.toThrow('bad part');
 
-    expect(sent.some(call => call.name === 'AbortMultipartUpload')).toBe(true);
+    expect(order).toEqual([
+      'CompleteMultipartUpload',
+      'AbortMultipartUpload',
+      'tombstone',
+      'DeleteObject',
+    ]);
+    expect(sent.find(call => call.name === 'DeleteObject')?.input).toMatchObject({ Key: ORIG_KEY });
     expect(prisma.mediaObject.updateMany.mock.calls.at(-1)?.[0]).toMatchObject({
       where: { id: MEDIA_ID, status: 'UPLOADING' },
       data: expect.objectContaining({ status: 'DELETED' }),
     });
+  });
+
+  it('keeps the object when the assembly fails for a call that lost to a cancel', async () => {
+    // The row went DELETED while this call was assembling. Its tombstone
+    // matches nothing, the caller hears what an abort would have told it, and
+    // the bytes are left to whoever deleted the row.
+    let reads = 0;
+    prisma.mediaObject.findFirst.mockImplementation(async () =>
+      ++reads === 1
+        ? row({ status: 'UPLOADING', upload_id: 'up-1', size_bytes: BigInt(4096) })
+        : row({ status: 'DELETED', upload_id: null, size_bytes: BigInt(4096) })
+    );
+    prisma.mediaObject.updateMany.mockResolvedValue({ count: 0 });
+    sendImpl.mockImplementation(async (name: string) => {
+      if (name === 'CompleteMultipartUpload') throw new Error('NoSuchUpload');
+      return {};
+    });
+
+    await expect(
+      completeUpload({ classroom, mediaId: MEDIA_ID, parts: [{ partNumber: 1, etag: '"a"' }] })
+    ).rejects.toMatchObject({ code: 'NOT_FOUND' });
+
+    expect(sent.some(call => call.name === 'DeleteObject')).toBe(false);
   });
 
   it('cannot un-READY a row another call already finished', async () => {

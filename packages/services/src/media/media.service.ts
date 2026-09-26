@@ -814,11 +814,20 @@ export async function completeUpload({
     // Only from UPLOADING. If the tombstone does not land, the row moved while
     // this call was assembling — and when it moved to READY, a concurrent
     // complete of the same upload finished it (R2 then answers this one
-    // `NoSuchUpload`). That is success from the caller's point of view.
+    // `NoSuchUpload`). That is success from the caller's point of view, and the
+    // object at `key` is that upload's file, so it is left alone. A row that
+    // went DELETED was cancelled or deleted by another call, which owns its
+    // bytes.
     if (!(await markDeleted(row.id, 'UPLOADING'))) {
       const done = await finishedElsewhere(classroom, row.id);
       if (done) return completedResult(done);
+      throw new MediaError('NOT_FOUND', 'This upload was cancelled before it finished');
     }
+    // The tombstone landed, so nothing will ever serve this key. A complete
+    // that errored (a timeout, a dropped connection) may still have assembled
+    // the object on R2's side, and with the row DELETED nothing would bill it
+    // or find it again. R2 answers a delete of a missing key with success.
+    await deleteObjectsQuietly(client, bucket, [key]);
     throw error;
   }
 
