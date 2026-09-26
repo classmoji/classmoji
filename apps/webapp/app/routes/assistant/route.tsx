@@ -6,6 +6,8 @@ import { requireClassroomTeachingTeam } from '~/utils/routeAuth.server';
 import { PagePeekProvider } from '~/components/features/pages';
 import { DEFAULT_NAV_VISIBILITY, navVisibilityFromSettings } from '~/utils/navVisibility';
 import { EMPTY_PAGES_NAV, loadPagesNav } from '~/utils/pagesNav.server';
+import { loadClassroomIsPro } from '~/utils/classroomProFlag.server';
+import { revalidateOnClassChange } from '~/utils/revalidateOnClassChange';
 
 export const loader = async ({ params, request }: Route.LoaderArgs) => {
   const { class: classSlug } = params;
@@ -18,6 +20,7 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
       pagesUrl,
       pagesNav: EMPTY_PAGES_NAV,
       navVisibility: DEFAULT_NAV_VISIBILITY,
+      isPro: false,
     };
   }
 
@@ -66,6 +69,11 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
       isTeachingTeam: true,
       pagesUrl,
       pagesNav,
+      // Whether the Pro-only nav entries (Quizzes) show. A boolean and nothing
+      // else: the subscription behind it is owner information, which is why
+      // the client's own tier fetch (/api/get-org-subscription) admits OWNER
+      // alone and an assistant cannot read it there.
+      isPro: await loadClassroomIsPro(classroom.id),
       navVisibility: {
         ...navVisibilityFromSettings(classroom.settings),
         // Staff preview drafts, so any module (published or not) shows the tab.
@@ -82,12 +90,17 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
       pagesUrl,
       pagesNav: EMPTY_PAGES_NAV,
       navVisibility: DEFAULT_NAV_VISIBILITY,
+      isPro: false,
     };
   }
 };
 
+// Every classroom shares this layout's match, so switching classrooms would
+// otherwise keep the previous classroom's nav data (Pro flag included).
+export const shouldRevalidate = revalidateOnClassChange;
+
 const Assistant = ({ loaderData, params }: Route.ComponentProps) => {
-  const { recentViewers, isTeachingTeam, pagesUrl, pagesNav, navVisibility } = loaderData;
+  const { recentViewers, isTeachingTeam, pagesUrl, pagesNav, navVisibility, isPro } = loaderData;
 
   return (
     <CommonLayout
@@ -95,6 +108,7 @@ const Assistant = ({ loaderData, params }: Route.ComponentProps) => {
       groupViewersByRole={isTeachingTeam}
       pagesUrl={pagesUrl}
       navVisibility={navVisibility}
+      isPro={isPro}
     >
       <PagePeekProvider
         classSlug={params.class ?? ''}

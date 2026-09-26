@@ -8,60 +8,18 @@ import { TrophyOutlined, PlayCircleOutlined, ClearOutlined } from '@ant-design/i
 import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
 import { UserThumbnailView, GradeBadge, SectionHeader } from '~/components';
-import { formatDuration, checkForCompletion } from '~/utils/quizUtils';
+import { formatDuration } from '~/utils/quizUtils';
+import {
+  buildQuizResultRows,
+  quizResultsQuizView,
+  type QuizFocusMetrics as FocusMetrics,
+  type QuizResultAttempt as QuizAttempt,
+  type QuizResultStudent as QuizStudent,
+} from '~/utils/quizPayloads';
 import { namedAction } from 'remix-utils/named-action';
 import { assertClassroomMutationAllowed } from '~/utils/routeAuth.server';
 
 dayjs.extend(relativeTime);
-
-interface QuizMessage {
-  role: string;
-  content: string;
-}
-
-interface FocusMetrics {
-  totalMs: number | null;
-  focusedMs: number;
-  percentage: number;
-}
-
-interface QuizAttempt {
-  id: string;
-  user_id: string;
-  started_at: string;
-  completed_at: string | null;
-  total_duration_ms: number | null;
-  unfocused_duration_ms: number | null;
-  partial_credit_percentage: number | null;
-  first_attempt_percentage: number | null;
-  messages: QuizMessage[];
-  messageCount: number;
-  user: QuizUser;
-  evaluationData: Record<string, unknown> | null;
-  focusMetrics: FocusMetrics | null;
-  partialCreditScore: number | null;
-  firstAttemptScore: number | null;
-  isCounting?: boolean;
-}
-
-interface QuizUser {
-  id: string;
-  name?: string;
-  login?: string;
-  avatar_url?: string;
-}
-
-interface QuizStudent {
-  user: QuizUser;
-  userId: string;
-  attempts: QuizAttempt[];
-  attemptCount: number;
-  currentScore: number | null;
-  bestScore: number | null;
-  firstAttemptScore: number | null;
-  countingAttemptId: string | null;
-  latestAttempt: string;
-}
 
 interface StatCardProps {
   value: string | number;
@@ -69,21 +27,6 @@ interface StatCardProps {
   icon?: React.ComponentType<{ size: number; className: string }>;
   color?: string;
 }
-
-// Helper function to find evaluation data in attempt messages
-const getEvaluationData = (attempt: Pick<QuizAttempt, 'messages'>) => {
-  if (!attempt?.messages) return null;
-
-  for (const msg of attempt.messages) {
-    if (msg.role === 'ASSISTANT') {
-      const completion = checkForCompletion(msg.content);
-      if (completion) {
-        return completion;
-      }
-    }
-  }
-  return null;
-};
 
 export const loader = async ({ request, params }: Route.LoaderArgs) => {
   const { ClassmojiService } = await import('@classmoji/services');
@@ -111,19 +54,6 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
 
   const attempts = await ClassmojiService.quizAttempt.findByQuiz(quiz.id);
 
-  const attemptsWithUsers = await Promise.all(
-    attempts.map(async attempt => {
-      const user = await ClassmojiService.user.findById(attempt.user_id);
-      const messages = await ClassmojiService.quizAttempt.getMessages(attempt.id);
-      return {
-        ...attempt,
-        user,
-        messageCount: messages.length,
-        messages, // Include messages for each attempt
-      };
-    })
-  );
-
   addAuditLog({
     request,
     params,
@@ -132,166 +62,20 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
     resourceId: quiz.id.toString(),
   });
 
-  // Find admin's attempt for preview functionality
-  const adminAttempt = attemptsWithUsers.find(a => String(a.user_id) === String(userId));
-
-  // Add evaluation and focus metrics to each attempt
-  const attemptsWithEvaluation = attemptsWithUsers.map(attempt => {
-    const totalDurationMs = attempt.total_duration_ms ?? null;
-    const unfocusedDurationMs = attempt.unfocused_duration_ms ?? null;
-
-    let focusMetrics = null;
-
-    if (
-      Number.isFinite(totalDurationMs) &&
-      totalDurationMs! > 0 &&
-      Number.isFinite(unfocusedDurationMs) &&
-      unfocusedDurationMs! >= 0
-    ) {
-      const focusedDurationMs = Math.max(totalDurationMs! - unfocusedDurationMs!, 0);
-      const ratio = focusedDurationMs / totalDurationMs!;
-
-      focusMetrics = {
-        totalMs: totalDurationMs,
-        focusedMs: focusedDurationMs,
-        percentage: Math.round(ratio * 100),
-      };
-    }
-
-    const evaluationData = getEvaluationData(attempt);
-
-    const partialCreditScore =
-      typeof attempt.partial_credit_percentage === 'number'
-        ? attempt.partial_credit_percentage
-        : null;
-
-    const firstAttemptScore =
-      typeof attempt.first_attempt_percentage === 'number'
-        ? attempt.first_attempt_percentage
-        : null;
-
-    return {
-      ...attempt,
-      evaluationData,
-      focusMetrics,
-      partialCreditScore,
-      firstAttemptScore,
-    };
-  });
-
-  // Group attempts by student
-  const studentMap = new Map();
-
-  attemptsWithEvaluation.forEach(attempt => {
-    const userId = attempt.user_id.toString();
-
-    if (!studentMap.has(userId)) {
-      studentMap.set(userId, {
-        user: attempt.user,
-        userId,
-        attempts: [],
-      });
-    }
-
-    studentMap.get(userId).attempts.push(attempt);
-  });
-
-  // Transform student data with grading strategy calculations
-  const students = Array.from(studentMap.values()).map(student => {
-    interface AttemptWithScore {
-      id: string;
-      completed_at: string | null;
-      started_at: string;
-      partialCreditScore: number | null;
-      firstAttemptScore: number | null;
-      [key: string]: unknown;
-    }
-    const completedAttempts: AttemptWithScore[] = student.attempts.filter(
-      (a: AttemptWithScore) => a.completed_at && a.partialCreditScore !== null
-    );
-    const attemptCount = student.attempts.length;
-
-    // Calculate which attempt counts based on grading strategy
-    let countingAttemptId = null;
-    let currentScore = null;
-    let bestScore = null;
-
-    if (completedAttempts.length > 0) {
-      const scores = completedAttempts.map((a: AttemptWithScore) => a.partialCreditScore ?? 0);
-      bestScore = Math.max(...scores);
-
-      switch (quiz.grading_strategy) {
-        case 'HIGHEST': {
-          const highest = completedAttempts.reduce((max, a) =>
-            (a.partialCreditScore ?? 0) > (max.partialCreditScore ?? 0) ? a : max
-          );
-          countingAttemptId = highest.id;
-          currentScore = highest.partialCreditScore;
-          break;
-        }
-        case 'MOST_RECENT': {
-          // Sort by completed_at to get most recent
-          const sorted = [...completedAttempts].sort(
-            (a, b) => new Date(b.completed_at!).getTime() - new Date(a.completed_at!).getTime()
-          );
-          countingAttemptId = sorted[0].id;
-          currentScore = sorted[0].partialCreditScore;
-          break;
-        }
-        case 'FIRST': {
-          // Sort by started_at to get first
-          const sorted = [...completedAttempts].sort(
-            (a, b) => new Date(a.started_at).getTime() - new Date(b.started_at).getTime()
-          );
-          countingAttemptId = sorted[0].id;
-          currentScore = sorted[0].partialCreditScore;
-          break;
-        }
-        default: {
-          // Default to highest
-          const highest = completedAttempts.reduce((max, a) =>
-            (a.partialCreditScore ?? 0) > (max.partialCreditScore ?? 0) ? a : max
-          );
-          countingAttemptId = highest.id;
-          currentScore = highest.partialCreditScore;
-        }
-      }
-    }
-
-    // Sort attempts by started_at (most recent first)
-    const sortedAttempts = [...student.attempts].sort(
-      (a, b) => new Date(b.started_at).getTime() - new Date(a.started_at).getTime()
-    );
-
-    // Get latest attempt timestamp
-    const latestAttempt = sortedAttempts[0];
-
-    // Calculate first-attempt score for the counting attempt
-    const countingAttempt = student.attempts.find(
-      (a: AttemptWithScore) => a.id === countingAttemptId
-    );
-    const firstAttemptScore = countingAttempt?.firstAttemptScore ?? null;
-
-    return {
-      ...student,
-      attemptCount,
-      currentScore,
-      bestScore,
-      firstAttemptScore,
-      countingAttemptId,
-      latestAttempt: latestAttempt.started_at,
-      attempts: sortedAttempts.map(attempt => ({
-        ...attempt,
-        isCounting: attempt.id === countingAttemptId,
-      })),
-    };
+  // Rows carry the fields this page renders and nothing else — see
+  // ~/utils/quizPayloads. `findByQuiz` already joins each attempt's user, and
+  // `quiz` (from findById) joins every attempt again, so neither is sent as-is.
+  const { students, viewerAttempt } = buildQuizResultRows({
+    attempts,
+    gradingStrategy: quiz.grading_strategy,
+    viewerId: userId,
   });
 
   return {
-    quiz,
+    quiz: quizResultsQuizView(quiz),
     students,
-    classroom,
-    adminAttempt: adminAttempt || null,
+    // The viewer's own latest attempt, for resuming or restarting a preview.
+    adminAttempt: viewerAttempt,
   };
 };
 
@@ -373,7 +157,7 @@ const QuizView = ({ loaderData }: Route.ComponentProps) => {
   const navigate = useNavigate();
   const { class: classSlug, quizId } = useParams();
   const fetcher = useFetcher();
-  // Served under every prefix this route's gate allows (/admin and /teacher),
+  // Served under every prefix this route's gate allows (/admin, /teacher and /assistant),
   // so links stay on the prefix the user arrived on.
   const rolePrefix = useLocation().pathname.split('/')[1];
 

@@ -124,14 +124,18 @@ describe('student quiz attempt loader — reads stay inside the authorized class
   it("serves a student their own attempt on this classroom's quiz", async () => {
     const data = await load();
 
-    expect(data.quiz).toEqual(QUIZ);
+    expect(data.quiz).toEqual({ id: QUIZ_ID, name: QUIZ.name, question_count: null });
     expect(data.attempt.id).toBe('attempt-1');
     expect(data.messages).toHaveLength(1);
     expect(data.isAdmin).toBe(false);
     expect(data.focusMetrics).toEqual({ totalMs: 1000, focusedMs: 750, percentage: 75 });
     // Nothing carrying a key reaches the browser.
     expect(data.attempt).not.toHaveProperty('agent_config');
-    expect(data.attempt.quiz.classroom).toEqual({ id: 'class-1', settings: undefined });
+    // The attempt carries its own fields only — not the quiz and classroom it
+    // was joined to — so no settings object reaches the browser at all.
+    expect('quiz' in data.attempt).toBe(false);
+    expect('user' in data.attempt).toBe(false);
+    expect(JSON.stringify(data)).not.toContain('sk-');
   });
 
   it("serves staff a student's attempt on this quiz without owning it", async () => {

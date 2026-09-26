@@ -125,10 +125,14 @@ export async function loader({ params, request }: Route.LoaderArgs) {
       includeCodeContext: quiz.include_code_context || false,
       attemptsCount: quiz.attemptsCount,
       avgScore: quiz.avgScore,
-      // Include admin's attempt data for preview
+      // Include admin's attempt data for preview. Only the fields a preview
+      // needs: the attempt row is joined to its user, whose row carries far
+      // more than this list uses.
       attemptStatus,
       score,
-      userAttempt: adminAttempt || null,
+      userAttempt: adminAttempt
+        ? { id: adminAttempt.id, completed_at: adminAttempt.completed_at }
+        : null,
     };
   });
 
@@ -334,13 +338,11 @@ export default function AdminQuizzes({ loaderData }: Route.ComponentProps) {
   const fetcher = useFetcher();
   const navigate = useNavigate();
   const { class: classSlug } = useParams();
-  // Served under every prefix this route's gate allows (/admin and /teacher),
-  // so links stay on the prefix the user arrived on.
+  // Served under every prefix this route's gate allows (/admin, /teacher and
+  // /assistant), so links stay on the prefix the user arrived on. Every one of
+  // them gets the full authoring surface — create, edit, weight, publish,
+  // delete — because the action above admits the whole teaching team.
   const rolePrefix = useLocation().pathname.split('/')[1];
-  // The assistant section serves this same list read-only: they open a quiz and
-  // read its attempts, but authoring, weighting, publishing and deleting belong
-  // to the people who own the class.
-  const canEdit = rolePrefix === 'admin' || rolePrefix === 'teacher';
 
   const handleEditQuiz = (quiz: AdminQuiz) => {
     navigate(`/${rolePrefix}/${classSlug}/quizzes/form?quizId=${quiz.id}`);
@@ -442,17 +444,14 @@ export default function AdminQuizzes({ loaderData }: Route.ComponentProps) {
       key: 'weight',
       width: 110,
       sorter: (a: AdminQuiz, b: AdminQuiz) => a.weight - b.weight,
-      render: (quiz: AdminQuiz) =>
-        canEdit ? (
-          <EditableCell
-            record={quiz}
-            dataIndex="weight"
-            onUpdate={handleUpdateWeight}
-            format="number"
-          />
-        ) : (
-          <Text type="secondary">{quiz.weight}</Text>
-        ),
+      render: (quiz: AdminQuiz) => (
+        <EditableCell
+          record={quiz}
+          dataIndex="weight"
+          onUpdate={handleUpdateWeight}
+          format="number"
+        />
+      ),
     },
     {
       title: 'Due Date',
@@ -515,34 +514,31 @@ export default function AdminQuizzes({ loaderData }: Route.ComponentProps) {
     {
       title: 'Actions',
       key: 'actions',
-      render: (_: unknown, record: AdminQuiz) =>
-        !canEdit ? (
-          <TableActionButtons onView={() => handleViewQuiz(record)} />
-        ) : (
-          <TableActionButtons
-            onView={() => handleViewQuiz(record)}
-            onEdit={() => handleEditQuiz(record)}
-            onDelete={() => handleDeleteQuiz(record.id)}
-          >
-            {record.status === 'DRAFT' && (
-              <ActionButton
-                icon={IconSend}
-                tooltip="Publish Quiz"
-                color="green"
-                popconfirmProps={{
-                  title: 'Publish Quiz',
-                  description: 'This will make the quiz available to all students.',
-                  onConfirm: (e?: React.MouseEvent) => {
-                    e?.stopPropagation();
-                    handlePublishQuiz(record.id);
-                  },
-                  okText: 'Publish',
-                  cancelText: 'Cancel',
-                }}
-              />
-            )}
-          </TableActionButtons>
-        ),
+      render: (_: unknown, record: AdminQuiz) => (
+        <TableActionButtons
+          onView={() => handleViewQuiz(record)}
+          onEdit={() => handleEditQuiz(record)}
+          onDelete={() => handleDeleteQuiz(record.id)}
+        >
+          {record.status === 'DRAFT' && (
+            <ActionButton
+              icon={IconSend}
+              tooltip="Publish Quiz"
+              color="green"
+              popconfirmProps={{
+                title: 'Publish Quiz',
+                description: 'This will make the quiz available to all students.',
+                onConfirm: (e?: React.MouseEvent) => {
+                  e?.stopPropagation();
+                  handlePublishQuiz(record.id);
+                },
+                okText: 'Publish',
+                cancelText: 'Cancel',
+              }}
+            />
+          )}
+        </TableActionButtons>
+      ),
     },
   ];
 
@@ -565,11 +561,9 @@ export default function AdminQuizzes({ loaderData }: Route.ComponentProps) {
             <Button icon={<IconTrash size={16} />}>Clear My Attempts</Button>
           </Popconfirm>
 
-          {canEdit && (
-            <ButtonNew action={() => navigate(`/${rolePrefix}/${classSlug}/quizzes/form`)}>
-              New quiz
-            </ButtonNew>
-          )}
+          <ButtonNew action={() => navigate(`/${rolePrefix}/${classSlug}/quizzes/form`)}>
+            New quiz
+          </ButtonNew>
         </Space>
       </div>
 
