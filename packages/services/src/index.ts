@@ -117,6 +117,18 @@ export type {
 // Admin service result/error shapes shared by the web routes and the MCP tools.
 export { StaffServiceError } from './classmoji/staff.service.ts';
 export type { AddStaffResult, RemoveStaffResult, StaffRole } from './classmoji/staff.service.ts';
+// GitHub organization repository settings: typed refusal + shared messages.
+export {
+  OrgRepoSettingsError,
+  GITHUB_REFUSED_CHANGE_MESSAGE,
+  GITHUB_RATE_LIMITED_MESSAGE,
+  GITHUB_SIGN_IN_AGAIN_MESSAGE,
+} from './classmoji/orgRepoSettings.service.ts';
+export type {
+  OrgRepoSettingsErrorCode,
+  OrgRepoSettingsResult,
+  OrgOwnerStatus,
+} from './classmoji/orgRepoSettings.service.ts';
 // Quiz authorization refusal, so routes can answer 403 instead of 500.
 export { QuizAccessError, QUIZ_STAFF_ROLES } from './classmoji/quiz.service.ts';
 // "No such attempt", so routes can answer 404 for that and only that — a query
