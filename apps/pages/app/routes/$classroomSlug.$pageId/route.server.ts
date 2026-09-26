@@ -210,6 +210,7 @@ export const loader = async ({
     login?: string;
     avatar_url?: string;
     provider?: string;
+    base_url?: string | null;
   } | null;
   // Content repo is STORED and user-editable — never re-derived from the namespace.
   const contentRepo = page.classroom.content_repo;
@@ -219,11 +220,11 @@ export const loader = async ({
   // URL-encoded — preview branch names contain slashes).
   const diffUrl =
     gitOrg?.login && repoName
-      ? gitWeb({ provider: gitOrg.provider, login: gitOrg.login }).contentCompare(
-          repoName,
-          'main',
-          previewBranch
-        )
+      ? gitWeb({
+          provider: gitOrg.provider,
+          login: gitOrg.login,
+          base_url: gitOrg.base_url,
+        }).contentCompare(repoName, 'main', previewBranch)
       : null;
 
   return {
@@ -248,11 +249,11 @@ export const loader = async ({
             avatar_url: gitOrg.avatar_url,
             provider: gitOrg.provider ?? 'GITHUB',
             source_url: repoName
-              ? gitWeb({ provider: gitOrg.provider, login: gitOrg.login }).contentFile(
-                  repoName,
-                  'main',
-                  `${page.content_path}/content.json`
-                )
+              ? gitWeb({
+                  provider: gitOrg.provider,
+                  login: gitOrg.login,
+                  base_url: gitOrg.base_url,
+                }).contentFile(repoName, 'main', `${page.content_path}/content.json`)
               : null,
           }
         : null,

@@ -94,10 +94,10 @@ describe('oauthClient', () => {
 });
 
 describe('webhookUrl', () => {
-  it('adds the instance id to the path for self-managed instances', () => {
+  it('is the same URL for every instance (hook-station reads the host from the payload)', () => {
     process.env.GITLAB_WEBHOOK_URL = 'https://hooks.example.com/webhooks/callback/gitlab/';
     expect(svc.webhookUrl(null)).toBe('https://hooks.example.com/webhooks/callback/gitlab');
-    expect(svc.webhookUrl('i1')).toBe('https://hooks.example.com/webhooks/callback/gitlab/i1');
+    expect(svc.webhookUrl('i1')).toBe('https://hooks.example.com/webhooks/callback/gitlab');
   });
 
   it('is null when webhooks are not configured', () => {

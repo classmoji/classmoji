@@ -72,6 +72,8 @@ interface PushOverrides {
   defaultBranch?: string;
   senderType?: string;
   commits?: { added?: string[]; modified?: string[]; removed?: string[] }[];
+  /** repository.pushed_at: when GitHub received the push (epoch seconds). */
+  pushedAt?: number;
 }
 
 const pushBody = ({
@@ -87,6 +89,7 @@ const pushBody = ({
   repoId,
   senderType = 'User',
   commits = [{ added: ['images/one.png'], modified: [], removed: [] }],
+  pushedAt,
 }: PushOverrides = {}): string =>
   JSON.stringify({
     ref,
@@ -101,6 +104,7 @@ const pushBody = ({
       name: repo,
       default_branch: defaultBranch,
       owner: { login: owner, name: owner },
+      ...(pushedAt !== undefined ? { pushed_at: pushedAt } : {}),
     },
     sender: { login: 'someone', type: senderType },
   });
@@ -137,6 +141,28 @@ beforeEach(async () => {
  */
 describe('a push to a student repo is a submission', () => {
   const STUDENT = { repo: 'cs101-lab-1-alice', repoId: 4242 };
+
+  it("records GitHub's server-side push time, even when the webhook arrives late", async () => {
+    gitRepoFindUnique.mockResolvedValue({ id: 'gitrepo-1' });
+    const pushedAtSeconds = Math.floor(Date.now() / 1000) - 3 * 3600; // 3h ago
+
+    await post(app, pushBody({ ...STUDENT, pushedAt: pushedAtSeconds }));
+
+    const [payload] = pushHandler.mock.calls[0] as [{ pushedAt: string }];
+    expect(new Date(payload.pushedAt).getTime()).toBe(pushedAtSeconds * 1000);
+  });
+
+  it('ignores a pushed_at in the future and uses the delivery time', async () => {
+    gitRepoFindUnique.mockResolvedValue({ id: 'gitrepo-1' });
+    const before = Date.now();
+
+    await post(app, pushBody({ ...STUDENT, pushedAt: Math.floor(Date.now() / 1000) + 86400 }));
+
+    const [payload] = pushHandler.mock.calls[0] as [{ pushedAt: string }];
+    const recorded = new Date(payload.pushedAt).getTime();
+    expect(recorded).toBeGreaterThanOrEqual(before);
+    expect(recorded).toBeLessThanOrEqual(Date.now());
+  });
 
   it('hands a default-branch push to the push handler with the delivery time', async () => {
     gitRepoFindUnique.mockResolvedValue({ id: 'gitrepo-1' });

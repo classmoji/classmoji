@@ -5,6 +5,7 @@ import { IconChevronDown, IconCheck, IconUsers } from '@tabler/icons-react';
 import ResourceLinks from './ResourceLinks';
 import AssignmentCard from './AssignmentCard';
 import { useGitWeb } from '~/hooks/useGitWeb';
+import { userAvatarUrl } from '@classmoji/utils';
 
 // The `is_draft` / `status` flags below are only ever set to a draft value on
 // the teaching-team view, whose loader fetches unpublished content too.
@@ -96,11 +97,7 @@ const TeamFormationBanner = ({ repository, userTeam, classSlug }: TeamFormationB
               </Tag>
               <div className="flex items-center gap-2">
                 {userTeam.memberships?.map((m: TeamMembership) => (
-                  <Avatar
-                    key={m.user_id}
-                    src={`https://avatars.githubusercontent.com/u/${m.user?.provider_id}?v=4`}
-                    size={24}
-                  >
+                  <Avatar key={m.user_id} src={userAvatarUrl(m.user)} size={24}>
                     {m.user?.name?.[0] || m.user?.login?.[0]}
                   </Avatar>
                 ))}
@@ -206,6 +203,7 @@ const ModuleCard = ({
   defaultOpen,
 }: ModuleCardProps) => {
   const [open, setOpen] = useState(defaultOpen);
+  const web = useGitWeb();
 
   const assignments = repository.assignments ?? [];
   const total = assignments.length;
@@ -251,7 +249,7 @@ const ModuleCard = ({
                 number rather than one that shifts every other module's. */}
             {ordinal !== null && (
               <div className="text-xs font-semibold tracking-[0.18em] text-ink-4">
-                REPOSITORY #{ordinal}
+                {web.terms.Repo.toUpperCase()} #{ordinal}
               </div>
             )}
             <div className="mt-1 flex flex-wrap items-center gap-2">

@@ -31,7 +31,7 @@
 import { tasks } from '@trigger.dev/sdk';
 
 import getPrisma from '@classmoji/database';
-import { scopeGitlabId } from '@classmoji/utils';
+import { pickAvailableLogin, scopeGitlabId } from '@classmoji/utils';
 import { getGitProvider, ensureClassroomTeam } from '../git/index.ts';
 import type { GitLabProvider } from '../git/GitLabProvider.ts';
 import { buildRemoveUserPayload } from './removeUserPayload.ts';
@@ -426,15 +426,20 @@ const addGitLabStaff = async ({
       };
     }
   } else {
-    // `login` is unique across providers; leave it empty rather than take a
-    // username someone else (e.g. a Github user) already holds.
-    const loginTaken = await getPrisma().user.findFirst({
-      where: { login: { equals: gitlabUser.username, mode: 'insensitive' } },
-      select: { id: true },
-    });
+    // `login` is unique across providers: the GitLab username, else the first
+    // free `username-2`, `username-3`… (someone else, e.g. a Github user or a
+    // different GitLab's `alice`, may hold it).
+    const login = await pickAvailableLogin(gitlabUser.username, async candidate =>
+      Boolean(
+        await getPrisma().user.findFirst({
+          where: { login: { equals: candidate, mode: 'insensitive' } },
+          select: { id: true },
+        })
+      )
+    );
     user = await getPrisma().user.create({
       data: {
-        login: loginTaken ? null : gitlabUser.username,
+        login,
         name: name || gitlabUser.username,
         provider: 'GITLAB',
         provider_id: gitlabId,

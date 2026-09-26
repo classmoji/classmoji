@@ -91,8 +91,9 @@ export const publishAssignment = async (
 
       numReposToCreate = studentList.length;
       numIssuesToCreate =
-        repository.assignments.filter(assignment => dayjs(assignment.release_at).isBefore(dayjs()))
-          .length * studentList.length;
+        repository.assignments.filter(
+          assignment => !assignment.release_at || dayjs(assignment.release_at).isBefore(dayjs())
+        ).length * studentList.length;
       _numStudents = studentList.length;
 
       Tasks.createRepositoriesTask.trigger(
@@ -141,8 +142,9 @@ export const publishAssignment = async (
 
       numReposToCreate = teams.length;
       numIssuesToCreate =
-        repository.assignments.filter(assignment => dayjs(assignment.release_at).isBefore(dayjs()))
-          .length * teams.length;
+        repository.assignments.filter(
+          assignment => !assignment.release_at || dayjs(assignment.release_at).isBefore(dayjs())
+        ).length * teams.length;
       _numStudents = teams.length;
 
       Tasks.createRepositoriesTask.trigger(
@@ -505,10 +507,10 @@ const findMissingAssignments = (
   const moduleAssignments = keyed as unknown as Record<string, MissingAssignmentEntry>;
   _.forEach(moduleAssignments, assignment => (assignment.repos = []));
 
-  // remove assignments where release_at is in the future
+  // remove assignments where release_at is in the future (no date: released)
   for (const assignment of Object.values(moduleAssignments)) {
     const releaseAt = (assignment as unknown as { release_at: Date | null }).release_at;
-    if (!releaseAt || dayjs(releaseAt).isAfter(dayjs())) {
+    if (releaseAt && dayjs(releaseAt).isAfter(dayjs())) {
       delete moduleAssignments[assignment.id];
     }
   }

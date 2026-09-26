@@ -16,6 +16,7 @@ import {
   resolveTemplateRef,
   repoNamespace,
   scopeGitlabId,
+  teamsNamespace,
 } from '@classmoji/utils';
 import { createGithubRepositoryAssignmentTask } from './gitRepoAssignment.ts';
 import { updateRepository, type UpdateRepositoryPayload } from '../helpers/updateRepository.ts';
@@ -197,19 +198,13 @@ export const createRepositoriesTask = task({
     // GitLab: projects are named after, and shared with, each student's GitLab
     // username. Callers still identify students by `login`.
     const isGitLab = classroom.git_organization.provider === 'GITLAB';
-    const gitlabUsernames = isGitLab
-      ? await ClassmojiService.user.findProviderUsernames(
-          students.map(student => student.id),
-          'GITLAB'
-        )
-      : null;
-    if (isGitLab && repository.type !== 'INDIVIDUAL') {
-      logger.warn('Team repositories are not supported on Gitlab classrooms yet; skipping', {
-        classroomSlug: org,
-        repositoryId: repository.id,
-      });
-      return { created: 0 };
-    }
+    const gitlabUsernames =
+      isGitLab && repository.type === 'INDIVIDUAL'
+        ? await ClassmojiService.user.findProviderUsernames(
+            students.map(student => student.id),
+            'GITLAB'
+          )
+        : null;
 
     const gitProvider = getGitProvider(classroom.git_organization);
     const token = await gitProvider.getAccessToken();
@@ -220,7 +215,11 @@ export const createRepositoriesTask = task({
     const repositorySlug = repository.slug || titleToIdentifier(repository.title);
 
     const reposData = uniqueLogins.flatMap(login => {
-      let repoName = `${repositorySlug}-${login}`;
+      // GitLab lowercases project paths; keep the stored name identical. (A
+      // team's slug is already a lowercase GitLab path.)
+      let repoName = isGitLab
+        ? `${repositorySlug}-${login}`.toLowerCase()
+        : `${repositorySlug}-${login}`;
       let gitlabStudent: StudentRecord | undefined;
       if (gitlabUsernames) {
         const student = students.find(s => s.login === login);
@@ -389,12 +388,14 @@ export const createRepositoryTask = task({
         gitOrganization: classroom.git_organization,
       });
 
-      await addCollaboratorsToRepoTask.triggerAndWait(
+      // Without this the student has a repo they can't open; fail and retry.
+      const collaborators = await addCollaboratorsToRepoTask.triggerAndWait(
         {
           ...normalizedPayload,
         },
         { tags: ctx.run.tags, concurrencyKey: classroom.slug }
       );
+      if (!collaborators.ok) throw collaborators.error;
 
       const triggerResult = await createRepoInDatabaseTask.triggerAndWait(
         {
@@ -412,6 +413,8 @@ export const createRepositoryTask = task({
 
       if (
         normalizedPayload.repository.type === 'GROUP' &&
+        // Github Projects boards have no GitLab counterpart.
+        classroom.git_organization.provider === 'GITHUB' &&
         normalizedPayload.repository.project_template_id &&
         !studentRepo.project_id
       ) {
@@ -434,7 +437,8 @@ export const createRepositoryTask = task({
       // release semantics the daily cron and Publish depend on.
       const filteredAssignments = normalizedPayload.repository.assignments.filter(
         assignment =>
-          dayjs(assignment.release_at).isSameOrBefore(dayjs()) &&
+          // No release date means released as soon as the repo is published.
+          (!assignment.release_at || dayjs(assignment.release_at).isSameOrBefore(dayjs())) &&
           (!normalizedPayload.provisionOnly || assignment.is_published === true)
       );
 
@@ -449,7 +453,12 @@ export const createRepositoryTask = task({
       }));
 
       if (assignmentPayloads.length) {
-        await createGithubRepositoryAssignmentTask.batchTriggerAndWait(assignmentPayloads);
+        const assignmentRuns =
+          await createGithubRepositoryAssignmentTask.batchTriggerAndWait(assignmentPayloads);
+        // A missing row reads "not released" for this student; fail and retry
+        // (the child skips rows that already exist).
+        const failedRun = assignmentRuns.runs.find(run => !run.ok);
+        if (failedRun && !failedRun.ok) throw failedRun.error;
 
         if (!normalizedPayload.provisionOnly) {
           for (const assignmentPayload of assignmentPayloads) {
@@ -482,11 +491,26 @@ export const addCollaboratorsToRepoTask = task({
 
       const gitProvider = getGitProvider(classroom.git_organization);
 
-      // GitLab: the student joins their own project as Developer and nothing
-      // else. Staff are members of the class subgroup and inherit every
-      // project in it, so there is no assistants team to add.
+      // GitLab: the student joins their own project as Developer; a team
+      // project is shared with the team's subgroup, so its members (and later
+      // member changes) get Developer access. Staff are members of the class
+      // subgroup and inherit every project in it, so there is no assistants
+      // team to add.
       if (classroom.git_organization.provider === 'GITLAB') {
         const namespace = repoNamespace(classroom);
+        if (repository.type !== 'INDIVIDUAL') {
+          const teamsParent = teamsNamespace(classroom);
+          if (!namespace || !teamsParent || !payload.team?.slug) {
+            throw new Error(`Missing class subgroup or team for repo ${repoName}`);
+          }
+          await gitProvider.addTeamToRepo(
+            namespace,
+            repoName,
+            `${teamsParent}/${payload.team.slug}`,
+            'push'
+          );
+          return;
+        }
         const gitLogin = payload.student?.git_login;
         if (!namespace || !gitLogin) {
           throw new Error(`Missing class subgroup or Gitlab username for repo ${repoName}`);

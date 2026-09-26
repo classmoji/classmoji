@@ -12,7 +12,7 @@
  */
 
 import type { PrismaClient } from '@prisma/client';
-import { scopeGitlabId } from '@classmoji/utils';
+import { pickAvailableLogin, scopeGitlabId } from '@classmoji/utils';
 
 type Prisma = Pick<PrismaClient, 'user' | 'account'>;
 
@@ -114,8 +114,9 @@ export async function mapGitHubProfile(
  * resolves through its own account row (better-auth's lookup), so a returning
  * GitLab user is found by id and a new one gets a fresh user.
  *
- * The GitLab username becomes `login` only when nobody holds it. Otherwise
- * `login` stays null rather than failing sign-in on the unique constraint.
+ * The GitLab username becomes `login` when nobody holds it; otherwise the
+ * first free `username-2`, `username-3`… (a user without a login can't be
+ * activated in a classroom, which looks the student up by login).
  *
  * `instanceId` is the self-managed instance signed in with (null: the default
  * instance). GitLab ids repeat across instances, so the stored id is scoped.
@@ -126,24 +127,36 @@ export async function mapGitLabProfile(
   instanceId: string | null = null
 ): Promise<ProviderUserFields> {
   const gitlabId = scopeGitlabId(instanceId, profile.id);
-  let login: string | null = profile.username || null;
   await noteProviderUsername(prisma, 'gitlab', gitlabId, profile.username);
 
-  if (login) {
-    try {
-      const holder = await prisma.user.findFirst({
-        where: { login },
-        select: { provider: true, provider_id: true },
-      });
-      // A returning GitLab user already holds their own login; anyone else
-      // holding it means the name is taken.
-      if (holder && !(holder.provider === 'GITLAB' && holder.provider_id === gitlabId)) {
-        login = null;
-      }
-    } catch (error: unknown) {
-      console.error('[auth] GitLab login availability check failed', error);
-      login = null;
+  let login: string | null = null;
+  try {
+    // The login the returning GitLab user already holds, if any.
+    const own = await prisma.user.findFirst({
+      where: { provider: 'GITLAB', provider_id: gitlabId },
+      select: { id: true, login: true },
+    });
+    login =
+      own?.login ??
+      (await pickAvailableLogin(profile.username || '', async candidate =>
+        Boolean(
+          await prisma.user.findFirst({
+            where: {
+              login: { equals: candidate, mode: 'insensitive' },
+              ...(own ? { NOT: { id: own.id } } : {}),
+            },
+            select: { id: true },
+          })
+        )
+      ));
+    // A GitLab user created before this (or pre-provisioned by staff) may
+    // have been left without a login; give them one now.
+    if (own && !own.login && login) {
+      await prisma.user.update({ where: { id: own.id }, data: { login } });
     }
+  } catch (error: unknown) {
+    console.error('[auth] GitLab login availability check failed', error);
+    login = null;
   }
 
   return { login, provider: 'GITLAB', provider_id: gitlabId };

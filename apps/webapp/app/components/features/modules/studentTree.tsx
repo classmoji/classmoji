@@ -219,7 +219,7 @@ export const buildAssignmentLeaf = (
           rel="noreferrer"
           className="text-sm font-medium text-sky-600 hover:text-sky-700 dark:text-sky-400"
         >
-          Open issue
+          Open {rowWeb.terms.issue}
         </a>
       ) : null),
     children: resourceLeaves({ pages: a.pages, slides: a.slides }, level + 1, `a-${a.id}`, ctx),

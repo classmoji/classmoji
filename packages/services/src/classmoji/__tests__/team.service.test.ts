@@ -127,7 +127,7 @@ describe('teamAdmin.createTeam', () => {
 
     expect(createTeam).toHaveBeenCalledWith('cs1-org', 'Blue Team');
     expect(teamCreate).toHaveBeenCalledWith({
-      providerId: 7,
+      providerId: '7',
       provider: 'GITHUB',
       name: 'Blue Team',
       slug: 'blue-team',
@@ -379,6 +379,7 @@ describe('teamAdmin.renameTeam', () => {
   it('refuses a non-GitHub organization before resolving anything', async () => {
     classroomFindById.mockResolvedValue({
       ...CLASSROOM,
+      git_namespace: 'cs/cs1-25f',
       git_organization: { ...CLASSROOM.git_organization, provider: 'GITLAB' },
     });
 

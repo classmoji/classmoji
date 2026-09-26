@@ -7,7 +7,7 @@ import type { Route } from './+types/route';
 import { ClassmojiService, getGitProvider, isReservedSlug } from '@classmoji/services';
 import { useCallout } from '@classmoji/ui-components';
 import { assertClassroomAccess, assertClassroomMutationAllowed } from '~/utils/helpers';
-import { titleToIdentifier } from '@classmoji/utils';
+import { scopeGitlabId, teamsNamespace, titleToIdentifier, userAvatarUrl } from '@classmoji/utils';
 import { tasks } from '@trigger.dev/sdk/v3';
 import { useClassroomStatusModals } from '~/utils/classroomStatusModals';
 import { gitTerms } from '~/utils/gitWeb';
@@ -23,6 +23,7 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
     resourceType: 'TEAM',
     attemptedAction: 'view_teams',
   });
+  const terms = gitTerms(classroom.git_organization?.provider === 'GITLAB');
 
   // Get the repository
   const repository = await ClassmojiService.repository.findByClassroomSlugAndModuleSlug(
@@ -31,12 +32,12 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
   );
 
   if (!repository) {
-    throw new Response('Repository not found', { status: 404 });
+    throw new Response(`${terms.Repo} not found`, { status: 404 });
   }
 
   // Only allow for GROUP repositories with SELF_FORMED mode
   if (repository.type !== 'GROUP' || repository.team_formation_mode !== 'SELF_FORMED') {
-    throw new Response('Team formation not available for this repository', { status: 400 });
+    throw new Response(`Team formation not available for this ${terms.repo}`, { status: 400 });
   }
 
   // Get the tag for this repository (if it exists)
@@ -121,7 +122,17 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
       login?: string;
     }
   );
-  const orgLogin = classroomWithOrg!.git_organization.login;
+  // Where teams live: the org on Github, `<class subgroup>/teams` on GitLab.
+  const orgLogin = teamsNamespace(classroomWithOrg!) ?? classroomWithOrg!.git_organization.login;
+  const isGitLab = classroomWithOrg!.git_organization.provider === 'GITLAB';
+  // The provider username to put on the team: GitLab's own username on a
+  // GitLab classroom (the Classmoji login may differ from it).
+  const providerLogin = isGitLab
+    ? ((await ClassmojiService.user.findProviderUsernames([userId], 'GITLAB')).get(userId) ?? null)
+    : (user?.login ?? null);
+  if (!providerLogin) {
+    return { error: 'Connect your Gitlab account first (Settings → Connected accounts).' };
+  }
 
   return namedAction(request, {
     async create() {
@@ -194,14 +205,20 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
         name: teamName.trim(),
         slug: teamSlug,
         classroomId: classroom.id,
-        providerId: githubTeam.id,
+        providerId: isGitLab
+          ? scopeGitlabId(
+              classroomWithOrg!.git_organization.gitlab_instance_id ?? null,
+              githubTeam.id
+            )
+          : githubTeam.id,
+        provider: isGitLab ? 'GITLAB' : 'GITHUB',
         userId,
         tagId: tag.id,
       });
 
       // Add user to GitHub team
       try {
-        await gitProvider.addTeamMember(orgLogin, teamSlug, user!.login!);
+        await gitProvider.addTeamMember(orgLogin, teamSlug, providerLogin);
       } catch (error: unknown) {
         console.error('Failed to add user to GitHub team:', error);
         // Team was created, but user wasn't added - still return success
@@ -261,7 +278,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
 
       // Add user to GitHub team
       try {
-        await gitProvider.addTeamMember(orgLogin, team.slug, user!.login!);
+        await gitProvider.addTeamMember(orgLogin, team.slug, providerLogin);
       } catch (error: unknown) {
         console.error('Failed to add user to GitHub team:', error);
         // DB was updated, GitHub failed - still return success
@@ -283,7 +300,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
 
       // Remove user from GitHub team
       try {
-        await gitProvider.removeTeamMember(orgLogin, userTeam.slug, user!.login!);
+        await gitProvider.removeTeamMember(orgLogin, userTeam.slug, providerLogin);
       } catch (error: unknown) {
         console.error('Failed to remove user from GitHub team:', error);
         // DB was updated, GitHub failed - still return success
@@ -389,10 +406,7 @@ const StudentTeamPage = ({ loaderData }: Route.ComponentProps) => {
               <div className="flex gap-3">
                 {userTeam.memberships.map(membership => (
                   <div key={membership.user_id} className="flex items-center gap-2">
-                    <Avatar
-                      src={`https://avatars.githubusercontent.com/u/${membership.user.provider_id}?v=4`}
-                      size={32}
-                    >
+                    <Avatar src={userAvatarUrl(membership.user)} size={32}>
                       {membership.user.name?.[0] || membership.user.login?.[0]}
                     </Avatar>
                     <span className="text-sm">{membership.user.name || membership.user.login}</span>
@@ -498,11 +512,7 @@ const StudentTeamPage = ({ loaderData }: Route.ComponentProps) => {
                           </Tag>
                           <div className="flex items-center gap-2">
                             {team.memberships.map(m => (
-                              <Avatar
-                                key={m.user_id}
-                                src={`https://avatars.githubusercontent.com/u/${m.user.provider_id}?v=4`}
-                                size={24}
-                              >
+                              <Avatar key={m.user_id} src={userAvatarUrl(m.user)} size={24}>
                                 {m.user.name?.[0] || m.user.login?.[0]}
                               </Avatar>
                             ))}

@@ -10,6 +10,7 @@ import * as contentManifestService from './contentManifest.service.ts';
 import * as notificationService from './notification.service.ts';
 import { blankPageContentJson, previewBranchName } from './pageContent.service.ts';
 import type { Prisma } from '@prisma/client';
+import * as gitlabInstanceService from './gitlabInstance.service.ts';
 
 interface PageQueryOptions {
   includeClassroom?: boolean;
@@ -308,7 +309,7 @@ async function ensureContentRepoExists({ classroom, gitOrgLogin, repoName }: Con
   // the way the Github App's push events do. Checked on every call (it is
   // idempotent) so a project created before the hook existed picks it up.
   if (classroom.git_organization?.provider === 'GITLAB') {
-    const url = process.env.GITLAB_WEBHOOK_URL;
+    const url = gitlabInstanceService.webhookUrl();
     const secret = process.env.GITLAB_WEBHOOK_SECRET;
     if (url && secret) {
       try {

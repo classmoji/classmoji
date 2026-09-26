@@ -252,6 +252,7 @@ export const loader = async ({
   const diffUrl = gitWeb({
     provider: slide.classroom.git_organization?.provider,
     login: gitOrgLogin,
+    base_url: slide.classroom.git_organization?.base_url,
   }).contentCompare(repo, 'main', previewBranch);
 
   // Two reads, and the split is deliberate.

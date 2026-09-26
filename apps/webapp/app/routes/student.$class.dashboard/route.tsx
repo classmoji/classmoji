@@ -16,6 +16,7 @@ import RetroTabsCard, {
   type TeamSummary,
   type SelfFormedNeedsTeam,
 } from './RetroTabsCard';
+import { userAvatarUrl } from '@classmoji/utils';
 
 interface DashboardData {
   weekStart: string;
@@ -134,10 +135,21 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
     // screens agree: first row per assignment wins (individual before team, the
     // order findAllAssignmentsForStudent returns), and CLOSED means submitted.
     const submittedByAssignmentId = new Map<string, boolean>();
+    // Where the student works on each assignment: its issue (work item on
+    // Gitlab) in ISSUE mode, their repo in REPO mode. Same first-row rule.
+    const linkByAssignmentId = new Map<string, string>();
     for (const ra of allRepoAssignments) {
       const key = ra.assignment_id ?? ra.id;
       if (!submittedByAssignmentId.has(key)) {
         submittedByAssignmentId.set(key, ra.status === 'CLOSED');
+        if (gitOrgLogin && ra.git_repo?.name) {
+          linkByAssignmentId.set(
+            key,
+            ra.provider_issue_number != null
+              ? web.issue(ra.git_repo.name, ra.provider_issue_number)
+              : web.repo(ra.git_repo.name)
+          );
+        }
       }
     }
 
@@ -150,6 +162,10 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
           assignments: spotlightSrc.assignments.map(a => ({
             ...a,
             submitted: submittedByAssignmentId.get(a.id) ?? false,
+            url: linkByAssignmentId.get(a.id) ?? null,
+            opensIssue: allRepoAssignments.some(
+              ra => (ra.assignment_id ?? ra.id) === a.id && ra.provider_issue_number != null
+            ),
           })),
           pages: spotlightSrc.pages,
           slides: spotlightSrc.slides,
@@ -212,7 +228,7 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
             id: mb.user.id,
             name: mb.user.name,
             login: mb.user.login,
-            providerId: mb.user.provider_id,
+            avatarUrl: userAvatarUrl(mb.user, 48) ?? null,
           })),
           repoUrl: gitOrgLogin && teamRepoName ? web.repo(teamRepoName) : null,
         };

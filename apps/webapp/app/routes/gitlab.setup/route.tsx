@@ -64,6 +64,7 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
       `${webappUrl}/connect/gitlab/callback`,
     ],
     scopes: SCOPES,
+    egressIps: svc.egressIps(),
   };
 };
 
@@ -94,7 +95,7 @@ const inputClass =
   'w-full rounded-md px-2.5 py-1.5 text-sm bg-white dark:bg-neutral-950 text-gray-900 dark:text-white ring-1 ring-stone-200 dark:ring-neutral-700 focus:outline-none focus:ring-2 focus:ring-primary';
 
 export default function GitLabSetup({ loaderData }: Route.ComponentProps) {
-  const { done, callbackUrls, scopes } = loaderData;
+  const { done, callbackUrls, scopes, egressIps } = loaderData;
 
   // Remember this Gitlab for the sign-in page, as signing in through it would.
   useEffect(() => {
@@ -287,6 +288,12 @@ export default function GitLabSetup({ loaderData }: Route.ComponentProps) {
                     You&apos;ll approve Classmoji on your Gitlab once; that proves the credentials
                     work. Your Gitlab must be reachable from the internet.
                   </p>
+                  {egressIps.length > 0 && (
+                    <p className="text-xs text-ink-3">
+                      Only reachable on campus? Ask IT to allow these Classmoji addresses, both for
+                      your Gitlab and for its outgoing webhooks: {egressIps.join(', ')}.
+                    </p>
+                  )}
                 </form>
               </li>
             </ol>

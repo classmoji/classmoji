@@ -166,6 +166,25 @@ export async function findPublic(instanceId: string) {
 
 // ─── Registering an instance ─────────────────────────────────────────────────
 
+/**
+ * The addresses Classmoji's servers call out from (CLASSMOJI_EGRESS_IPS,
+ * comma-separated), for a school whose GitLab only accepts known IPs.
+ */
+export function egressIps(): string[] {
+  return (process.env.CLASSMOJI_EGRESS_IPS ?? '')
+    .split(',')
+    .map(ip => ip.trim())
+    .filter(Boolean);
+}
+
+/** " Ask your IT team to allow …" when the IPs are known, else "". */
+function allowlistHint(): string {
+  const ips = egressIps();
+  return ips.length
+    ? ` If it's only reachable on your campus network, ask your IT team to allow Classmoji's addresses: ${ips.join(', ')}.`
+    : '';
+}
+
 const PRIVATE_V4 = [
   /^0\./,
   /^10\./,
@@ -202,7 +221,7 @@ async function assertPublicHost(host: string): Promise<void> {
   if (addresses.length === 0 || addresses.some(a => isPrivateAddress(a.address))) {
     throw new GitLabInstanceError(
       'unreachable',
-      `${hostname} is not reachable from the internet, so Classmoji can't connect to it`
+      `${hostname} is not reachable from the internet, so Classmoji can't connect to it.${allowlistHint()}`
     );
   }
 }
@@ -229,7 +248,10 @@ export async function probe(input: string): Promise<string> {
     if (!response.ok) throw new Error(String(response.status));
     issuer = ((await response.json()) as { issuer?: unknown }).issuer;
   } catch {
-    throw new GitLabInstanceError('unreachable', `Classmoji couldn't reach a Gitlab at ${host}`);
+    throw new GitLabInstanceError(
+      'unreachable',
+      `Classmoji couldn't reach a Gitlab at ${host}.${allowlistHint()}`
+    );
   }
   if (typeof issuer !== 'string' || normalizeHost(issuer) !== host) {
     throw new GitLabInstanceError('unreachable', `${host} doesn't look like a Gitlab`);
@@ -307,13 +329,103 @@ export function updateCredentials(instanceId: string, clientId: string, clientSe
 // ─── Webhooks ────────────────────────────────────────────────────────────────
 
 /**
- * Where an instance's project hooks deliver: GITLAB_WEBHOOK_URL for the
- * default instance, `<GITLAB_WEBHOOK_URL>/<instance id>` for a self-managed
- * one, so hook-station knows whose project and issue ids it is reading. Null
- * when webhooks aren't configured.
+ * Where project hooks deliver: GITLAB_WEBHOOK_URL, the same for every
+ * instance. hook-station tells instances apart by the host in each payload's
+ * project URL, so a relay (smee) that can't carry an extra path still works.
+ * Null when webhooks aren't configured.
  */
-export function webhookUrl(instanceId: string | null | undefined): string | null {
-  const base = process.env.GITLAB_WEBHOOK_URL?.replace(/\/+$/, '');
-  if (!base) return null;
-  return instanceId ? `${base}/${instanceId}` : base;
+export function webhookUrl(_instanceId?: string | null): string | null {
+  return process.env.GITLAB_WEBHOOK_URL?.replace(/\/+$/, '') || null;
+}
+
+// ─── Health ──────────────────────────────────────────────────────────────────
+
+export interface InstanceHealth {
+  reachable: boolean;
+  error: string | null;
+  /** Student and content projects whose hooks were checked (sampled). */
+  projectsChecked: number;
+  missingHooks: number;
+  failingHooks: number;
+  /** A few affected projects, for the admin to look at. */
+  examples: string[];
+}
+
+const HEALTH_SAMPLE = 60;
+
+/**
+ * Is an instance reachable, and do its classrooms' projects still carry a
+ * working Classmoji webhook? Checks up to HEALTH_SAMPLE projects, newest
+ * classrooms first. Imports the provider lazily (it imports this module).
+ */
+export async function checkHealth(instanceId: string): Promise<InstanceHealth> {
+  const health: InstanceHealth = {
+    reachable: false,
+    error: null,
+    projectsChecked: 0,
+    missingHooks: 0,
+    failingHooks: 0,
+    examples: [],
+  };
+  const row = await getPrisma().gitLabInstance.findUnique({
+    where: { id: instanceId },
+    select: { host: true },
+  });
+  if (!row) return { ...health, error: 'Instance not found' };
+  try {
+    await probe(row.host);
+    health.reachable = true;
+  } catch (error: unknown) {
+    health.error = error instanceof Error ? error.message : String(error);
+    return health;
+  }
+
+  const url = webhookUrl();
+  if (!url) return { ...health, error: 'GITLAB_WEBHOOK_URL is not set' };
+
+  const { getGitProvider } = await import('../git/index.ts');
+  const classrooms = await getPrisma().classroom.findMany({
+    where: {
+      is_archived: false,
+      git_namespace: { not: null },
+      git_organization: { gitlab_instance_id: instanceId },
+    },
+    orderBy: { created_at: 'desc' },
+    select: {
+      git_namespace: true,
+      git_organization: true,
+      git_repos: { where: { provider: 'GITLAB' }, select: { name: true } },
+    },
+  });
+
+  for (const classroom of classrooms) {
+    if (health.projectsChecked >= HEALTH_SAMPLE) break;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    let provider: any;
+    try {
+      provider = getGitProvider(classroom.git_organization);
+    } catch {
+      continue;
+    }
+    for (const repo of classroom.git_repos) {
+      if (health.projectsChecked >= HEALTH_SAMPLE) break;
+      health.projectsChecked += 1;
+      const project = `${classroom.git_namespace}/${repo.name}`;
+      try {
+        const status = await provider.getClassmojiHookStatus(
+          classroom.git_namespace,
+          repo.name,
+          url
+        );
+        if (status === 'ok') continue;
+        if (status === 'missing') health.missingHooks += 1;
+        else health.failingHooks += 1;
+        if (health.examples.length < 5) health.examples.push(`${project} (${status})`);
+      } catch {
+        health.missingHooks += 1;
+        if (health.examples.length < 5) health.examples.push(`${project} (unreadable)`);
+      }
+    }
+  }
+  return health;
 }

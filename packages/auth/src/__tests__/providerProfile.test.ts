@@ -79,8 +79,26 @@ describe('mapGitHubProfile', () => {
 });
 
 describe('mapGitLabProfile', () => {
+  /**
+   * findFirst answers two questions: "is this GitLab account already a user?"
+   * (where.provider === 'GITLAB') and "does anyone hold this login?".
+   */
+  const users = ({
+    own = null,
+    taken = [],
+  }: {
+    own?: { id: string; login: string | null } | null;
+    taken?: string[];
+  }) =>
+    prisma.user.findFirst.mockImplementation(
+      async ({ where }: { where: { provider?: string; login?: { equals: string } } }) => {
+        if (where.provider === 'GITLAB') return own;
+        return where.login && taken.includes(where.login.equals) ? { id: 'someone' } : null;
+      }
+    );
+
   it('uses the GitLab username as login when nobody holds it', async () => {
-    prisma.user.findFirst.mockResolvedValue(null);
+    users({});
 
     await expect(mapGitLabProfile(db, { id: 7, username: 'jdoe' })).resolves.toEqual({
       login: 'jdoe',
@@ -89,24 +107,37 @@ describe('mapGitLabProfile', () => {
     });
   });
 
-  it('leaves login empty when another user holds the username', async () => {
-    prisma.user.findFirst.mockResolvedValue({ provider: 'GITHUB', provider_id: '42' });
+  it('takes the first free suffix when someone else holds the username', async () => {
+    users({ taken: ['jdoe', 'jdoe-2'] });
 
     const result = await mapGitLabProfile(db, { id: 7, username: 'jdoe' });
 
-    expect(result.login).toBeNull();
+    expect(result.login).toBe('jdoe-3');
   });
 
-  it('keeps the login for the returning GitLab user who holds it', async () => {
-    prisma.user.findFirst.mockResolvedValue({ provider: 'GITLAB', provider_id: '7' });
+  it('keeps the login a returning GitLab user already holds', async () => {
+    users({ own: { id: 'u7', login: 'jdoe-2' }, taken: ['jdoe'] });
 
     const result = await mapGitLabProfile(db, { id: 7, username: 'jdoe' });
 
-    expect(result.login).toBe('jdoe');
+    expect(result.login).toBe('jdoe-2');
+    expect(prisma.user.update).not.toHaveBeenCalled();
+  });
+
+  it('gives a returning GitLab user who has no login one', async () => {
+    users({ own: { id: 'u7', login: null }, taken: ['jdoe'] });
+
+    const result = await mapGitLabProfile(db, { id: 7, username: 'jdoe' });
+
+    expect(result.login).toBe('jdoe-2');
+    expect(prisma.user.update).toHaveBeenCalledWith({
+      where: { id: 'u7' },
+      data: { login: 'jdoe-2' },
+    });
   });
 
   it('scopes the id to a self-managed instance', async () => {
-    prisma.user.findFirst.mockResolvedValue(null);
+    users({});
 
     await expect(mapGitLabProfile(db, { id: 7, username: 'jdoe' }, 'inst-1')).resolves.toEqual({
       login: 'jdoe',
@@ -115,26 +146,25 @@ describe('mapGitLabProfile', () => {
     });
   });
 
-  it('does not treat the same GitLab id on another instance as the login holder', async () => {
-    prisma.user.findFirst.mockResolvedValue({ provider: 'GITLAB', provider_id: '7' });
+  it("gives another instance's jdoe a different login", async () => {
+    // gitlab.com's jdoe (id 7) holds "jdoe"; the school's jdoe (also id 7) is someone else.
+    users({ taken: ['jdoe'] });
 
     const result = await mapGitLabProfile(db, { id: 7, username: 'jdoe' }, 'inst-1');
 
-    expect(result.login).toBeNull();
+    expect(result).toEqual({ login: 'jdoe-2', provider: 'GITLAB', provider_id: 'inst-1:7' });
   });
 
-  it('never links or writes to an existing user', async () => {
-    prisma.user.findFirst.mockResolvedValue({ provider: null, provider_id: null });
+  it('never links an existing Github user', async () => {
+    users({ taken: ['jdoe'] });
 
-    const result = await mapGitLabProfile(db, { id: 7, username: 'jdoe' });
+    await mapGitLabProfile(db, { id: 7, username: 'jdoe' });
 
-    expect(result.login).toBeNull();
-    expect(prisma.user.update).not.toHaveBeenCalled();
     expect(prisma.account.upsert).not.toHaveBeenCalled();
   });
 
   it('keeps the stored username of a returning account current', async () => {
-    prisma.user.findFirst.mockResolvedValue(null);
+    users({});
 
     await mapGitLabProfile(db, { id: 7, username: 'renamed' });
 

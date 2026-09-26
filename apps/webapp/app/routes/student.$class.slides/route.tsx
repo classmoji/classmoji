@@ -6,6 +6,7 @@ import type { Route } from './+types/route';
 import { assertClassroomAccess } from '~/utils/helpers';
 import { TableActionButtons } from '~/components';
 import { SlideActionLink, SlideKindChip } from '~/components/features/slides';
+import { useGitWeb } from '~/hooks/useGitWeb';
 
 /**
  * A row of this list.
@@ -90,6 +91,7 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
 export default function StudentSlides({ loaderData }: Route.ComponentProps) {
   const { slides, slidesUrl } = loaderData;
 
+  const { terms } = useGitWeb();
   const columns = [
     {
       title: 'Title',
@@ -124,7 +126,7 @@ export default function StudentSlides({ loaderData }: Route.ComponentProps) {
       ),
     },
     {
-      title: 'Repository',
+      title: terms.Repo,
       dataIndex: 'repository',
       key: 'repository',
       render: (repository: string | null) => repository || <span className="text-ink-4">—</span>,

@@ -142,3 +142,18 @@ export function repoNamespace(classroom: {
 }): string | null {
   return classroom.git_namespace || classroom.git_organization.login;
 }
+
+/**
+ * Where a classroom's teams live on its provider: the org itself on Github
+ * (teams are org-level), `<class subgroup>/teams` on GitLab (each team a
+ * subgroup there, its projects shared with it).
+ */
+export function teamsNamespace(classroom: {
+  git_namespace?: string | null;
+  git_organization: { login: string | null; provider?: string | null };
+}): string | null {
+  if (classroom.git_organization.provider === 'GITLAB') {
+    return classroom.git_namespace ? `${classroom.git_namespace}/teams` : null;
+  }
+  return classroom.git_organization.login;
+}

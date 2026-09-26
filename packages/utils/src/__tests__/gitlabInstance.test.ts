@@ -81,3 +81,21 @@ describe('gitWeb on a self-managed instance', () => {
     expect(web.repo('x')).toBe('https://gitlab.com/cs/cs101/x');
   });
 });
+
+describe('pickAvailableLogin', () => {
+  const takenSet = (taken: string[]) => async (l: string) => taken.includes(l);
+
+  it('uses the base when free, else the first free suffix', async () => {
+    const { pickAvailableLogin } = await import('../index.ts');
+    await expect(pickAvailableLogin('alice', takenSet([]))).resolves.toBe('alice');
+    await expect(pickAvailableLogin('alice', takenSet(['alice', 'alice-2']))).resolves.toBe(
+      'alice-3'
+    );
+  });
+
+  it('gives up with null when nothing is free', async () => {
+    const { pickAvailableLogin } = await import('../index.ts');
+    await expect(pickAvailableLogin('a', async () => true, 3)).resolves.toBeNull();
+    await expect(pickAvailableLogin('  ', takenSet([]))).resolves.toBeNull();
+  });
+});

@@ -12,6 +12,7 @@ import { useCallout } from '@classmoji/ui-components';
 import { requireAuth } from '@classmoji/auth/server';
 import getPrisma from '@classmoji/database';
 import { ClassmojiService } from '@classmoji/services';
+import { parseGitlabId } from '@classmoji/utils';
 import {
   sendEmailVerificationCode,
   consumeEmailVerificationCode,
@@ -28,12 +29,21 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
   const { userId } = await requireAuth(request);
   const accounts = await getPrisma().account.findMany({
     where: { user_id: userId, provider_id: { in: ['github', 'gitlab'] } },
-    select: { provider_id: true, username: true },
+    select: { provider_id: true, username: true, account_id: true },
   });
-  const connected = accounts.map(a => ({
-    provider: a.provider_id as LinkProvider,
-    username: a.username,
-  }));
+  const instances = ClassmojiService.gitlabInstance;
+  const connected = await Promise.all(
+    accounts.map(async a => {
+      // A self-managed GitLab account names its server; gitlab.com's doesn't.
+      const instanceId = a.provider_id === 'gitlab' ? parseGitlabId(a.account_id).instanceId : null;
+      const host = instanceId ? await instances.hostFor(instanceId).catch(() => null) : null;
+      return {
+        provider: a.provider_id as LinkProvider,
+        username: a.username,
+        host: host ? new URL(host).host : null,
+      };
+    })
+  );
 
   // Github is connected but its username could not become the main login
   // because another user holds it, so Github courses are closed to this user.
@@ -49,11 +59,21 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
       )
     : false;
 
+  // Gitlab can be linked through gitlab.com (when configured) or any
+  // self-managed instance set up at /gitlab/setup.
+  const gitlabDefaultHost = instances.defaultConfigured() ? instances.defaultHost() : null;
+  const hasInstances =
+    (await getPrisma().gitLabInstance.count({ where: { disabled_at: null } })) > 0;
+
   return {
     connected,
     githubLoginTaken,
+    gitlabDefaultHost,
     // Only offer providers this deployment has configured.
-    available: ['github', ...(process.env.GITLAB_CLIENT_ID ? ['gitlab'] : [])] as LinkProvider[],
+    available: [
+      'github',
+      ...(gitlabDefaultHost || hasInstances ? ['gitlab'] : []),
+    ] as LinkProvider[],
   };
 };
 
@@ -63,6 +83,8 @@ const PROVIDER_LABEL: Record<LinkProvider, string> = { github: 'Github', gitlab:
 const LINK_ERRORS: Record<string, string> = {
   account_already_linked_to_different_user:
     'That account is already connected to a different Classmoji account.',
+  gitlab_already_connected: 'This account already has a Gitlab account connected.',
+  gitlab_instance_unavailable: 'That Gitlab is no longer available.',
   unable_to_link_account: 'We could not connect that account. Please try again.',
   access_denied: 'Connection cancelled.',
 };
@@ -156,21 +178,128 @@ const FieldRow = ({
 
 const linkButton = 'text-xs font-medium text-accent hover:underline cursor-pointer';
 
+/**
+ * Which Gitlab to connect: gitlab.com, or a school's own address (the same
+ * choice as the sign-in page). A self-managed one links through the
+ * gitlab-instance plugin; gitlab.com through better-auth's own provider.
+ */
+const GitLabConnectChooser = ({
+  defaultHost,
+  onCancel,
+}: {
+  defaultHost: string | null;
+  onCancel: () => void;
+}) => {
+  const [host, setHost] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState<string | null>(null);
+  const callbackURL = '/settings/general?connected=gitlab';
+
+  const linkInstance = async (instanceId: string) => {
+    const response = await fetch('/api/auth/gitlab-instance/link', {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ instanceId, callbackURL, errorCallbackURL: '/settings/general' }),
+    });
+    const body = (await response.json().catch(() => null)) as {
+      url?: string;
+      message?: string;
+    } | null;
+    if (response.ok && body?.url) {
+      window.location.href = body.url;
+      return;
+    }
+    setMessage(body?.message ?? 'Could not start connecting Gitlab.');
+    setBusy(false);
+  };
+
+  const connectDefault = async () => {
+    setBusy(true);
+    await authClient.linkSocial({
+      provider: 'gitlab',
+      callbackURL,
+      errorCallbackURL: '/settings/general',
+    });
+  };
+
+  const connectHost = async () => {
+    if (!host.trim()) return;
+    setBusy(true);
+    setMessage(null);
+    const response = await fetch(
+      `/api/gitlab-instances/lookup?host=${encodeURIComponent(host.trim())}`
+    );
+    const body = (await response.json().catch(() => null)) as
+      | { status: 'ok'; instance: { id: string | null; host: string } }
+      | { status: 'unknown' | 'disabled'; host: string }
+      | { status: 'invalid' }
+      | null;
+    if (body?.status === 'ok') {
+      if (body.instance.id === null) await connectDefault();
+      else await linkInstance(body.instance.id);
+      return;
+    }
+    setBusy(false);
+    setMessage(
+      body?.status === 'unknown'
+        ? `${new URL(body.host).host} isn't connected to Classmoji yet. It can be set up at /gitlab/setup.`
+        : body?.status === 'disabled'
+          ? 'Sign-in with that Gitlab is turned off.'
+          : 'Enter your Gitlab address, like gitlab.school.edu'
+    );
+  };
+
+  return (
+    <div className="px-4 pb-3 flex flex-col gap-2">
+      {defaultHost && (
+        <Button size="small" onClick={connectDefault} disabled={busy} className="self-start">
+          {new URL(defaultHost).host}
+        </Button>
+      )}
+      <div className="flex gap-2">
+        <Input
+          size="small"
+          value={host}
+          onChange={e => setHost(e.target.value)}
+          onPressEnter={connectHost}
+          placeholder="Self-hosted Gitlab address, e.g. gitlab.school.edu"
+        />
+        <Button size="small" type="primary" onClick={connectHost} loading={busy}>
+          Connect
+        </Button>
+        <Button size="small" onClick={onCancel} disabled={busy}>
+          Cancel
+        </Button>
+      </div>
+      {message && <p className="text-xs text-red-600 dark:text-red-400">{message}</p>}
+    </div>
+  );
+};
+
 const ConnectedAccounts = ({
   connected,
   available,
   githubLoginTaken,
+  gitlabDefaultHost,
 }: {
-  connected: { provider: LinkProvider; username: string | null }[];
+  connected: { provider: LinkProvider; username: string | null; host: string | null }[];
   available: LinkProvider[];
   githubLoginTaken: boolean;
+  gitlabDefaultHost: string | null;
 }) => {
   const [searchParams, setSearchParams] = useSearchParams();
   const [connecting, setConnecting] = useState<LinkProvider | null>(null);
+  const [choosingGitLab, setChoosingGitLab] = useState(false);
   const linkError = searchParams.get('error');
   const justConnected = searchParams.get('connected') as LinkProvider | null;
 
   const connect = async (provider: LinkProvider) => {
+    // Gitlab first asks which Gitlab.
+    if (provider === 'gitlab') {
+      setChoosingGitLab(true);
+      return;
+    }
     setConnecting(provider);
     // Links to the SIGNED-IN user; better-auth sends them to the provider and
     // back here, with `?error=` on failure.
@@ -227,30 +356,38 @@ const ConnectedAccounts = ({
         {available.map(provider => {
           const account = connected.find(a => a.provider === provider);
           return (
-            <div key={provider} className="flex items-center justify-between px-4 py-3">
-              <span className="flex items-center gap-2 text-sm font-medium text-ink-1">
-                {provider === 'gitlab' ? (
-                  <GitlabLogo size={14} />
-                ) : (
-                  <GithubOutlined />
-                )}
-                {PROVIDER_LABEL[provider]}
-                {account?.username && (
-                  <span className="font-normal text-ink-3">@{account.username}</span>
-                )}
-              </span>
-              {account ? (
-                <span className="text-xs font-medium text-green-700 dark:text-green-400">
-                  Connected
+            <div key={provider}>
+              <div className="flex items-center justify-between px-4 py-3">
+                <span className="flex items-center gap-2 text-sm font-medium text-ink-1">
+                  {provider === 'gitlab' ? <GitlabLogo size={14} /> : <GithubOutlined />}
+                  {PROVIDER_LABEL[provider]}
+                  {account?.username && (
+                    <span className="font-normal text-ink-3">@{account.username}</span>
+                  )}
+                  {account?.host && (
+                    <span className="font-normal text-ink-3">on {account.host}</span>
+                  )}
                 </span>
-              ) : (
-                <Button
-                  size="small"
-                  onClick={() => connect(provider)}
-                  loading={connecting === provider}
-                >
-                  Connect
-                </Button>
+                {account ? (
+                  <span className="text-xs font-medium text-green-700 dark:text-green-400">
+                    Connected
+                  </span>
+                ) : (
+                  <Button
+                    size="small"
+                    onClick={() => connect(provider)}
+                    loading={connecting === provider}
+                    disabled={provider === 'gitlab' && choosingGitLab}
+                  >
+                    Connect
+                  </Button>
+                )}
+              </div>
+              {provider === 'gitlab' && !account && choosingGitLab && (
+                <GitLabConnectChooser
+                  defaultHost={gitlabDefaultHost}
+                  onCancel={() => setChoosingGitLab(false)}
+                />
               )}
             </div>
           );
@@ -541,6 +678,7 @@ const SettingsGeneral = ({ loaderData }: Route.ComponentProps) => {
           <ConnectedAccounts
             connected={loaderData.connected}
             available={loaderData.available}
+            gitlabDefaultHost={loaderData.gitlabDefaultHost}
             githubLoginTaken={loaderData.githubLoginTaken}
           />
         </div>

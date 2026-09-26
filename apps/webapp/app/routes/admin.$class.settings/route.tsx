@@ -24,9 +24,11 @@ const OrgSettings = () => {
   const navigate = useNavigate();
   const { class: classSlug } = useParams();
   const location = useLocation();
-  const { isGitLab } = useGitWeb();
-  // Gitlab classrooms have no project settings to manage yet.
-  const tabs = isGitLab ? ALL_TABS.filter(tab => tab.key !== 'repos') : ALL_TABS;
+  const { isGitLab, terms } = useGitWeb();
+  // Gitlab classrooms keep the tab for webhook upkeep, under Gitlab's word.
+  const tabs = ALL_TABS.map(tab =>
+    tab.key === 'repos' && isGitLab ? { ...tab, label: terms.Repos } : tab
+  );
 
   const currentTab = location.pathname.split('/').pop() || 'general';
 

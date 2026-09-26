@@ -1,4 +1,5 @@
 import { task, tasks, schedules, logger } from '@trigger.dev/sdk';
+import getPrisma from '@classmoji/database';
 import {
   ClassmojiService,
   HelperService,
@@ -92,8 +93,46 @@ interface GitRepoAssignmentWebhookTaskPayload {
 interface RepositoryPushTaskPayload {
   /** The student's git repo (GitRepo.id) that received the push. */
   gitRepoId: string;
-  /** When the webhook was delivered (never the commit's own timestamp). */
+  /**
+   * When the Git server received the push (GitHub's `pushed_at`), else when
+   * the webhook was delivered. Never the commit's own timestamp.
+   */
   pushedAt: string | Date;
+  /** GitLab: the pushed commit, to look up GitLab's server-side push time. */
+  sha?: string;
+}
+
+/**
+ * GitLab's own record of when it received the push to `sha` (its payload has
+ * no server time, and a redelivered webhook arrives late). Only ever moves the
+ * time earlier than delivery; any failure keeps the delivery time.
+ */
+async function gitlabServerPushTime(
+  gitRepoId: string,
+  sha: string,
+  delivered: Date
+): Promise<Date> {
+  try {
+    const repo = await getPrisma().gitRepo.findUnique({
+      where: { id: gitRepoId },
+      select: {
+        name: true,
+        classroom: { select: { git_namespace: true, git_organization: true } },
+      },
+    });
+    const namespace = repo?.classroom?.git_namespace;
+    const org = repo?.classroom?.git_organization;
+    if (!repo || !namespace || org?.provider !== 'GITLAB') return delivered;
+    const provider = getGitProvider(org) as GitLabProvider;
+    const serverTime = await provider.getPushTime(namespace, repo.name, sha);
+    return serverTime && serverTime <= delivered ? serverTime : delivered;
+  } catch (error: unknown) {
+    logger.warn('Could not read the Gitlab push time; using delivery time', {
+      gitRepoId,
+      error: getErrorMessage(error),
+    });
+    return delivered;
+  }
 }
 
 interface ClassroomRecord {
@@ -181,9 +220,13 @@ const repoNamerFor = async (
   );
   return login => {
     const gitlabUsername = gitlabByLogin.get(login);
-    return gitlabUsername
-      ? `${repositorySlug}-${gitlabUsername}`.toLowerCase()
-      : repoNameForLogin(repositorySlug, login);
+    // A team slug (or a student without GitLab) falls through; GitLab
+    // project paths are lowercase either way.
+    return (
+      gitlabUsername
+        ? `${repositorySlug}-${gitlabUsername}`
+        : repoNameForLogin(repositorySlug, login)
+    ).toLowerCase();
   };
 };
 
@@ -409,7 +452,9 @@ export const createGithubRepositoryAssignmentTask = task({
       }
     }
 
-    await createDatabaseRepositoryAssignmentTask.triggerAndWait(
+    // Without the row the issue exists but Classmoji never sees it submitted,
+    // so a failed child fails this run (and retries) rather than passing.
+    const created = await createDatabaseRepositoryAssignmentTask.triggerAndWait(
       {
         ...payload,
         id,
@@ -421,6 +466,7 @@ export const createGithubRepositoryAssignmentTask = task({
         concurrencyKey: organization.login,
       }
     );
+    if (!created.ok) throw created.error;
   },
 });
 
@@ -521,7 +567,10 @@ export const repositoryAssignmentReopenedHandlerTask = task({
 export const repositoryPushHandlerTask = task({
   id: 'webhook-git_repo_push_handler',
   run: async (payload: RepositoryPushTaskPayload) => {
-    const pushedAt = new Date(payload.pushedAt);
+    const delivered = new Date(payload.pushedAt);
+    const pushedAt = payload.sha
+      ? await gitlabServerPushTime(payload.gitRepoId, payload.sha, delivered)
+      : delivered;
     // The repo's own "last push", whatever it does to submissions below.
     await ClassmojiService.gitRepo.recordPushTime(payload.gitRepoId, pushedAt);
     const touched = await ClassmojiService.gitRepoAssignment.recordPush(

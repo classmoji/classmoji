@@ -517,9 +517,7 @@ const AssignmentFormModal = ({
             <Form.Item name="is_team" className="mb-5">
               <WhoSubmits
                 repoWord={terms.repo}
-                teamDisabledReason={
-                  web.isGitLab ? 'not available on Gitlab classrooms yet' : undefined
-                }
+                teamDisabledReason={undefined}
                 onChange={next => {
                   form.setFieldValue('is_team', next);
                   if (!next) form.setFieldValue('tag_id', undefined);

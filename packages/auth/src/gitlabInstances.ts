@@ -12,6 +12,9 @@
  *    Registers a new instance. Nothing is stored until the OAuth round trip
  *    with those credentials succeeds, which proves they work and that the
  *    person has an account there; setup is their first sign-in.
+ *  - POST /gitlab-instance/link     { instanceId, callbackURL, errorCallbackURL }
+ *    Connects a self-managed GitLab account to the SIGNED-IN user ("Connect
+ *    Gitlab" in settings). A user has at most one GitLab account.
  *  - GET  /gitlab-instance/callback  The redirect URI registered on every
  *    instance's application. Which instance it is comes from the OAuth state.
  *
@@ -19,7 +22,7 @@
  * in the account id (`<instance id>:<gitlab user id>`; see scopeGitlabId).
  */
 
-import { APIError, createAuthEndpoint } from 'better-auth/api';
+import { APIError, createAuthEndpoint, sessionMiddleware } from 'better-auth/api';
 // eslint's resolver misses these subpath exports; TypeScript resolves them.
 // eslint-disable-next-line import/no-unresolved
 import { setSessionCookie } from 'better-auth/cookies';
@@ -29,6 +32,7 @@ import {
   generateState,
   handleOAuthUserInfo,
   parseState,
+  setTokenUtil,
   validateAuthorizationCode,
 } from 'better-auth/oauth2';
 /* eslint-enable import/no-unresolved */
@@ -74,9 +78,10 @@ const svc = () => ClassmojiService.gitlabInstance;
 async function authorizeUrl(
   ctx: Parameters<typeof generateState>[0],
   client: { host: string; clientId: string; clientSecret: string },
-  additionalData: Record<string, unknown>
+  additionalData: Record<string, unknown>,
+  link?: { email: string; userId: string }
 ) {
-  const { state, codeVerifier } = await generateState(ctx, undefined, additionalData);
+  const { state, codeVerifier } = await generateState(ctx, link, additionalData);
   const url = await createAuthorizationURL({
     id: 'gitlab',
     options: { clientId: client.clientId, clientSecret: client.clientSecret },
@@ -114,6 +119,39 @@ export const gitlabInstances = () =>
           const url = await authorizeUrl(ctx, client, {
             gitlabInstanceId: client.instanceId,
           });
+          return ctx.json({ url, redirect: true });
+        }
+      ),
+
+      linkGitlabInstance: createAuthEndpoint(
+        '/gitlab-instance/link',
+        {
+          method: 'POST',
+          body: z.object({ instanceId: z.string().min(1), ...redirectBody }),
+          use: [sessionMiddleware],
+        },
+        async ctx => {
+          const { user } = ctx.context.session;
+          // One GitLab account per user: its instance decides which GitLab
+          // their classrooms and connection live on.
+          const accounts = await ctx.context.internalAdapter.findAccounts(user.id);
+          if (accounts.some(a => a.providerId === 'gitlab')) {
+            throw new APIError('BAD_REQUEST', {
+              message: 'This account already has a Gitlab account connected.',
+            });
+          }
+          let client;
+          try {
+            client = await svc().oauthClient(ctx.body.instanceId);
+          } catch (error: unknown) {
+            refuse(error);
+          }
+          const url = await authorizeUrl(
+            ctx,
+            client,
+            { gitlabInstanceId: client.instanceId },
+            { email: user.email, userId: user.id }
+          );
           return ctx.json({ url, redirect: true });
         }
       ),
@@ -224,7 +262,8 @@ export const gitlabInstances = () =>
             return fail('user_info_is_missing');
           }
           const email = (profile.email || profile.public_email || '').toLowerCase();
-          if (!email) return fail('email_is_missing');
+          // Sign-in needs an email for the new user; linking an existing one doesn't.
+          if (!email && !state.link) return fail('email_is_missing');
 
           // Setup: the credentials just worked, so the instance is real.
           if (setup) {
@@ -249,6 +288,38 @@ export const gitlabInstances = () =>
 
           const accountId = scopeGitlabId(instanceId, profile.id);
           const mapped = await mapGitLabProfile(getPrisma(), profile, instanceId);
+
+          // "Connect Gitlab" from settings: attach this GitLab account to the
+          // signed-in user who started the round trip, instead of signing in.
+          if (state.link) {
+            const adapter = ctx.context.internalAdapter;
+            const existing = await adapter.findAccountByProviderId(accountId, 'gitlab');
+            if (existing && existing.userId !== state.link.userId) {
+              return fail('account_already_linked_to_different_user');
+            }
+            const own = await adapter.findAccounts(state.link.userId);
+            if (own.some(a => a.providerId === 'gitlab' && a.accountId !== accountId)) {
+              return fail('gitlab_already_connected');
+            }
+            const tokenFields = {
+              accessToken: await setTokenUtil(tokens.accessToken, ctx.context),
+              refreshToken: await setTokenUtil(tokens.refreshToken, ctx.context),
+              accessTokenExpiresAt: tokens.accessTokenExpiresAt,
+              scope: tokens.scopes?.join(','),
+            };
+            if (existing) {
+              await adapter.updateAccount(existing.id, tokenFields);
+            } else {
+              await adapter.createAccount({
+                userId: state.link.userId,
+                providerId: 'gitlab',
+                accountId,
+                ...tokenFields,
+              });
+            }
+            throw ctx.redirect(new URL(state.callbackURL, ctx.context.baseURL).toString());
+          }
+
           const result = await handleOAuthUserInfo(ctx, {
             userInfo: {
               id: accountId,

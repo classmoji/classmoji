@@ -2,6 +2,9 @@ import { Link } from 'react-router';
 import dayjs from 'dayjs';
 import { IconArrowRight } from '@tabler/icons-react';
 import { useGitWeb } from '~/hooks/useGitWeb';
+import type { gitWeb } from '~/utils/gitWeb';
+
+type GitWeb = ReturnType<typeof gitWeb>;
 
 interface SpotlightAssignment {
   id: string;
@@ -10,6 +13,10 @@ interface SpotlightAssignment {
   is_published?: boolean;
   /** This student's repo assignment is CLOSED (see the dashboard loader). */
   submitted?: boolean;
+  /** The student's issue (work item on Gitlab) for it, or their repo in push mode. */
+  url?: string | null;
+  /** Whether `url` is an issue rather than the repo. */
+  opensIssue?: boolean;
 }
 
 interface SpotlightLinked {
@@ -42,6 +49,7 @@ interface SpotlightItem {
   title: string;
   meta?: string;
   href?: string;
+  hrefTitle?: string;
 }
 
 const typeStyles: Record<SpotlightItemType, string> = {
@@ -65,7 +73,7 @@ export const formatRelative = (date: string | Date, submitted = false, now = day
   return target.format('MMM D');
 };
 
-const buildItems = (repository: SpotlightModule): SpotlightItem[] => {
+const buildItems = (repository: SpotlightModule, web: GitWeb): SpotlightItem[] => {
   const items: SpotlightItem[] = [];
   repository.assignments?.forEach(a => {
     items.push({
@@ -73,6 +81,10 @@ const buildItems = (repository: SpotlightModule): SpotlightItem[] => {
       type: 'ASGN',
       title: a.title,
       meta: a.student_deadline ? formatRelative(a.student_deadline, a.submitted) : undefined,
+      href: a.url ?? undefined,
+      hrefTitle: a.opensIssue
+        ? `Open the ${web.terms.issue} on ${web.label}`
+        : `Open your ${web.terms.repo} on ${web.label}`,
     });
   });
   repository.slides?.forEach(s => {
@@ -113,7 +125,7 @@ const ModuleSpotlightCard = ({ repository, classSlug }: ModuleSpotlightCardProps
     );
   }
 
-  const items = buildItems(repository);
+  const items = buildItems(repository, web);
   const summary = buildSummary(repository);
 
   return (
@@ -122,7 +134,7 @@ const ModuleSpotlightCard = ({ repository, classSlug }: ModuleSpotlightCardProps
       className="rounded-2xl bg-panel ring-1 ring-line p-5 sm:p-6 h-full flex flex-col"
     >
       <div className="text-xs font-semibold tracking-[0.18em] text-ink-4">
-        REPOSITORY #{repository.ordinal}
+        {web.terms.Repo.toUpperCase()} #{repository.ordinal}
       </div>
       <h3 className="mt-1 text-lg sm:text-xl font-semibold text-ink-0 tracking-tight">
         {repository.title}
@@ -144,7 +156,19 @@ const ModuleSpotlightCard = ({ repository, classSlug }: ModuleSpotlightCardProps
             >
               {item.type}
             </span>
-            <span className="flex-1 text-sm text-ink-1 truncate">{item.title}</span>
+            {item.href ? (
+              <a
+                href={item.href}
+                target="_blank"
+                rel="noreferrer"
+                title={item.hrefTitle}
+                className="flex-1 text-sm text-ink-1 truncate hover:underline"
+              >
+                {item.title}
+              </a>
+            ) : (
+              <span className="flex-1 text-sm text-ink-1 truncate">{item.title}</span>
+            )}
             {item.meta && <span className="text-xs text-ink-3 whitespace-nowrap">{item.meta}</span>}
           </li>
         ))}

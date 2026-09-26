@@ -288,7 +288,7 @@ const SettingsContent = ({ loaderData }: Route.ComponentProps) => {
                   <code className="bg-gray-200 dark:bg-neutral-700 px-1.5 py-0.5 rounded text-ink-1">
                     bot-context/
                   </code>{' '}
-                  folder to your content repository with additional context files (e.g., FAQ,
+                  folder to your content {web.terms.repo} with additional context files (e.g., FAQ,
                   policies, announcements).
                 </p>
               </div>

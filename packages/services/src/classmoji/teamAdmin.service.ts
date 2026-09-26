@@ -31,7 +31,9 @@ import type { GitProvider as GitProviderEnum } from '@prisma/client';
 
 import { getGitProvider } from '../git/index.ts';
 import { sleep } from './sleep.ts';
+import { repoNamespace, scopeGitlabId, teamsNamespace } from '@classmoji/utils';
 import * as classroomService from './classroom.service.ts';
+import * as userService from './user.service.ts';
 import * as teamService from './team.service.ts';
 import * as teamMembershipService from './teamMembership.service.ts';
 import * as teamTagService from './teamTag.service.ts';
@@ -256,8 +258,54 @@ const loadClassroomOrg = async (classroomId: string) => {
       `[team] classroom ${classroomId} has no git organization`
     );
   }
-  return { classroom, gitOrganization, orgLogin: gitOrganization.login };
+  // Teams live at the org on Github, under `<class subgroup>/teams` on
+  // GitLab; team repos sit where every student repo does.
+  const teamsParent = teamsNamespace(classroom);
+  const reposParent = repoNamespace(classroom);
+  if (!teamsParent || !reposParent) {
+    throw new TeamServiceError(
+      'no_org_configured',
+      `[team] classroom ${classroomId} has no Gitlab class subgroup`
+    );
+  }
+  return {
+    classroom,
+    gitOrganization,
+    orgLogin: teamsParent,
+    reposParent,
+  };
 };
+
+/**
+ * The provider-side username to add to a team: the GitLab username on a GitLab
+ * classroom (a user's Classmoji login may differ from it, e.g. "alice-2"),
+ * the Github login otherwise.
+ */
+const providerUsername = async (
+  gitOrganization: { provider: string },
+  user: { id: string; login: string | null },
+  fallback: string
+): Promise<string> => {
+  if (gitOrganization.provider !== 'GITLAB') return user.login ?? fallback;
+  const usernames = await userService.findProviderUsernames([user.id], 'GITLAB');
+  const username = usernames.get(user.id);
+  if (!username) {
+    throw new TeamServiceError(
+      'user_not_found',
+      `[team] ${user.login ?? fallback} has no Gitlab account connected`
+    );
+  }
+  return username;
+};
+
+/** The stored provider id of a team: instance-scoped on a self-managed GitLab. */
+const storedTeamId = (
+  gitOrganization: { provider: string; gitlab_instance_id?: string | null },
+  id: number | string
+): string =>
+  gitOrganization.provider === 'GITLAB'
+    ? scopeGitlabId(gitOrganization.gitlab_instance_id ?? null, id)
+    : String(id);
 
 /**
  * Resolve a team by slug OR id, ALWAYS scoped to the classroom. Every mutation
@@ -436,7 +484,7 @@ export const createTeam = async ({
   }
 
   const team = await teamService.create({
-    providerId: providerTeam.id,
+    providerId: storedTeamId(gitOrganization, providerTeam.id),
     provider: gitOrganization.provider as GitProviderEnum,
     name: providerTeam.name,
     slug: providerTeam.slug,
@@ -480,7 +528,7 @@ export const deleteTeam = async ({
    */
   deleteOnProvider?: boolean;
 }): Promise<DeleteTeamResult> => {
-  const { gitOrganization, orgLogin } = await loadClassroomOrg(classroomId);
+  const { gitOrganization, orgLogin, reposParent } = await loadClassroomOrg(classroomId);
   const team = await resolveTeam(classroomId, slugOrId);
   const gitProvider = getGitProvider(gitOrganization);
 
@@ -501,7 +549,7 @@ export const deleteTeam = async ({
     }
     for (const repo of repositories as Array<{ name: string }>) {
       try {
-        await gitProvider.deleteRepository(orgLogin, repo.name);
+        await gitProvider.deleteRepository(reposParent, repo.name);
       } catch (error: unknown) {
         if (!isProviderNotFound(error)) throw error;
       }
@@ -696,7 +744,7 @@ export const addTeamMembers = async ({
         failed.push({ login, error: 'not_found' });
         return;
       }
-      const canonicalLogin = user.login ?? login;
+      const canonicalLogin = await providerUsername(gitOrganization, user, login);
       await gitProvider.addTeamMember(orgLogin, team.slug, canonicalLogin);
       await teamMembershipService.addMemberToTeam(team.id, user.id);
       succeeded.push({ login: canonicalLogin });
@@ -741,7 +789,7 @@ export const removeTeamMember = async ({
   if (!user) {
     throw new TeamServiceError('user_not_found', `[team] no user with login ${login}`);
   }
-  const canonicalLogin = user.login ?? login;
+  const canonicalLogin = await providerUsername(gitOrganization, user, login);
 
   const gitProvider = getGitProvider(gitOrganization);
   await gitProvider.removeTeamMember(orgLogin, team.slug, canonicalLogin);

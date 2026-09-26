@@ -19,7 +19,7 @@ const RowActions = ({ repo, org: _org }: RowActionsProps) => {
   const deleteRepo = () => {
     const action = `${ActionTypes.DELETE_REPO}-${repo.name}`;
 
-    notify(action, 'Deleting repository...');
+    notify(action, `Deleting ${web.terms.repo}...`);
 
     fetcher.submit(
       { repo: removeCircularReferences(repo), action },

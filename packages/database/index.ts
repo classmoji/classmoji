@@ -33,8 +33,18 @@ function createPrismaClient() {
     result: {
       user: {
         avatar_url: {
-          needs: { provider_id: true },
-          compute(user: { provider_id: string | null }) {
+          needs: { provider_id: true, provider: true, image: true },
+          compute(user: {
+            provider_id: string | null;
+            provider: string | null;
+            image: string | null;
+          }) {
+            // Github avatars are addressable by user id; a Gitlab id is not (and
+            // is instance-scoped), so Gitlab users use the avatar their Gitlab
+            // reported at sign-in.
+            if (user.provider === 'GITLAB') {
+              return user.image || 'https://cdn-icons-png.flaticon.com/512/25/25231.png';
+            }
             if (!user.provider_id) {
               return 'https://cdn-icons-png.flaticon.com/512/25/25231.png';
             }
@@ -55,8 +65,10 @@ function createPrismaClient() {
       },
       gitOrganization: {
         avatar_url: {
-          needs: { provider_id: true },
-          compute(gitOrg: { provider_id: string }) {
+          needs: { provider_id: true, provider: true },
+          compute(gitOrg: { provider_id: string; provider: string }) {
+            // Only Github org avatars can be built from an id.
+            if (gitOrg.provider !== 'GITHUB') return null;
             return `https://avatars.githubusercontent.com/u/${gitOrg.provider_id}?v=4`;
           },
         },

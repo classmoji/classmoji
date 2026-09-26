@@ -53,6 +53,9 @@ export async function gitLabInstancesAction({ request }: ActionFunctionArgs) {
       await svc.setDisabled(instanceId, form.get('disabled') === 'true');
       return { ok: true };
     }
+    if (intent === 'check') {
+      return { health: await svc.checkHealth(instanceId) };
+    }
     if (intent === 'credentials') {
       const clientId = String(form.get('clientId') ?? '').trim();
       const clientSecret = String(form.get('clientSecret') ?? '').trim();

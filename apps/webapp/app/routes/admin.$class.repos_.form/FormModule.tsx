@@ -86,8 +86,8 @@ interface FormModuleProps {
   /** Repos already exist on GitHub: type and team formation are frozen. */
   hasProvisionedRepos?: boolean;
   /**
-   * GitLab classroom: team repositories and autograding (Github Actions) are
-   * not supported there yet, so they aren't offered.
+   * GitLab classroom: autograding (Github Actions) is not supported there yet,
+   * so it isn't offered. Team repositories are (team subgroups).
    */
   isGitLab?: boolean;
 }
@@ -432,9 +432,7 @@ const FormModule = ({
                   disabled={hasProvisionedRepos}
                 >
                   <Select.Option value="INDIVIDUAL">Individual</Select.Option>
-                  <Select.Option value="GROUP" disabled={isGitLab}>
-                    {isGitLab ? 'Group (not available on Gitlab yet)' : 'Group'}
-                  </Select.Option>
+                  <Select.Option value="GROUP">Group</Select.Option>
                 </Select>
               </FormItem>
             </div>

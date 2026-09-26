@@ -11,6 +11,67 @@ export const meta = () => [{ title: 'Gitlab instances · Classmoji Admin' }];
 const inputClass =
   'rounded-md border border-line bg-panel px-2 py-1 text-xs text-ink-0 focus:outline-none focus:border-line-strong';
 
+type Health = {
+  reachable: boolean;
+  error: string | null;
+  projectsChecked: number;
+  missingHooks: number;
+  failingHooks: number;
+  examples: string[];
+};
+
+/** Reachability and a sample of the instance's project webhooks. */
+const HealthCheck = ({ row }: { row: InstanceRow }) => {
+  const check = useFetcher<{ health?: Health; error?: string }>();
+  const health = check.data?.health;
+  return (
+    <div className="flex flex-col items-end gap-1">
+      <check.Form method="post">
+        <input type="hidden" name="intent" value="check" />
+        <input type="hidden" name="instanceId" value={row.id} />
+        <button
+          type="submit"
+          disabled={check.state !== 'idle'}
+          className="rounded-md border border-line px-2.5 py-1 text-xs font-medium text-ink-2 hover:bg-nav-hover disabled:opacity-40"
+        >
+          {check.state !== 'idle' ? 'Checking…' : 'Check health'}
+        </button>
+      </check.Form>
+      {health ? (
+        <div className="text-[11px] text-right max-w-[22rem]">
+          {!health.reachable ? (
+            <span className="text-red-600 dark:text-red-400">
+              Unreachable: {health.error ?? 'unknown error'}
+            </span>
+          ) : health.error ? (
+            <span className="text-red-600 dark:text-red-400">{health.error}</span>
+          ) : (
+            <span
+              className={
+                health.missingHooks + health.failingHooks > 0
+                  ? 'text-amber-700 dark:text-amber-400'
+                  : 'text-ink-3'
+              }
+            >
+              Reachable · {health.projectsChecked} projects checked · {health.missingHooks} missing,{' '}
+              {health.failingHooks} failing webhooks
+            </span>
+          )}
+          {health.examples.length > 0 ? (
+            <div className="text-ink-3">{health.examples.join(', ')}</div>
+          ) : null}
+          {health.missingHooks + health.failingHooks > 0 ? (
+            <div className="text-ink-3">
+              Fix: the classroom&apos;s Settings → Projects → Repair webhooks, or wait for the
+              nightly repair.
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+    </div>
+  );
+};
+
 const InstanceActions = ({ row }: { row: InstanceRow }) => {
   const toggle = useFetcher<{ error?: string }>();
   const creds = useFetcher<{ error?: string; ok?: boolean }>();
@@ -21,6 +82,7 @@ const InstanceActions = ({ row }: { row: InstanceRow }) => {
 
   return (
     <div className="flex flex-col items-end gap-1.5">
+      <HealthCheck row={row} />
       <div className="flex gap-2">
         <button
           type="button"

@@ -1,5 +1,6 @@
 import getPrisma from '@classmoji/database';
 import type { Prisma, Role } from '@prisma/client';
+import { userAvatarUrl } from '@classmoji/utils';
 
 /**
  * Resource View Service
@@ -223,11 +224,7 @@ function buildViewerObject(
   userRoles: Record<string, string>,
   includeRoles: boolean
 ) {
-  const avatar_url =
-    view.user.image ||
-    (view.user.provider_id
-      ? `https://avatars.githubusercontent.com/u/${view.user.provider_id}?v=4`
-      : null);
+  const avatar_url = userAvatarUrl(view.user) ?? null;
 
   const viewerData: {
     user: { id: string; name: string | null; login: string | null; avatar_url: string | null };

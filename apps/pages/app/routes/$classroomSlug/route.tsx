@@ -164,6 +164,7 @@ export const loader = async ({
             login: classroom.git_organization.login,
             repo: classroom.git_organization.repo,
             avatar_url: classroom.git_organization.avatar_url,
+            provider: classroom.git_organization.provider,
           }
         : null,
     },

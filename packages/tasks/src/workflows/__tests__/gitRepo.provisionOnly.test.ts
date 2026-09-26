@@ -189,8 +189,8 @@ beforeEach(() => {
   mocks.createRepository.mockResolvedValue('gh-repo-1');
   mocks.provisionAutograde.mockResolvedValue(undefined);
   mocks.batchTriggerCreateRepo.mockResolvedValue(undefined);
-  mocks.batchTriggerAssignments.mockResolvedValue(undefined);
-  mocks.addCollaborators.mockResolvedValue(undefined);
+  mocks.batchTriggerAssignments.mockResolvedValue({ runs: [] });
+  mocks.addCollaborators.mockResolvedValue({ ok: true });
   mocks.createRepoInDatabase.mockResolvedValue({
     ok: true,
     output: { id: 'gitrepo-1', project_id: null },
@@ -264,9 +264,27 @@ describe('gh-create_git_repo — assignment release side effect', () => {
     expect(mocks.batchTriggerAssignments).not.toHaveBeenCalled();
   });
 
-  it('excludes an assignment with no release_at at all', async () => {
+  it('treats an assignment with no release_at as released (released on publish)', async () => {
     await runCreateRepository([assignment('a-1', true, null)], true);
 
-    expect(mocks.batchTriggerAssignments).not.toHaveBeenCalled();
+    expect(mocks.batchTriggerAssignments).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('gh-create_git_repo — child failures are not swallowed', () => {
+  it('fails the run when adding collaborators failed', async () => {
+    mocks.addCollaborators.mockResolvedValueOnce({ ok: false, error: new Error('no access') });
+    await expect(runCreateRepository([assignment('a-1', true, null)], true)).rejects.toThrow(
+      'no access'
+    );
+  });
+
+  it('fails the run when creating an assignment row failed', async () => {
+    mocks.batchTriggerAssignments.mockResolvedValueOnce({
+      runs: [{ ok: false, error: new Error('row write failed') }],
+    });
+    await expect(runCreateRepository([assignment('a-1', true, null)], true)).rejects.toThrow(
+      'row write failed'
+    );
   });
 });

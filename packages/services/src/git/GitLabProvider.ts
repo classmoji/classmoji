@@ -8,6 +8,26 @@ import type {
 } from '../classmoji/repoAnalytics.types.ts';
 import { defaultHost } from '../classmoji/gitlabInstance.service.ts';
 
+/** The name Classmoji gives its project hooks, so they can be found again. */
+const CLASSMOJI_HOOK_NAME = 'Classmoji';
+
+/** hook-station's GitLab callback, with or without the old per-instance segment. */
+const CLASSMOJI_HOOK_PATH = /\/webhooks\/callback\/gitlab(\/[0-9a-f-]{36})?\/?$/i;
+
+/**
+ * A project hook Classmoji made: its name, its current URL, a URL at
+ * hook-station's GitLab path, or a smee relay (local development).
+ */
+function isClassmojiHook(hook: { url: string; name?: string | null }, url: string): boolean {
+  if (hook.url === url || hook.name === CLASSMOJI_HOOK_NAME) return true;
+  try {
+    const parsed = new URL(hook.url);
+    return CLASSMOJI_HOOK_PATH.test(parsed.pathname) || parsed.hostname === 'smee.io';
+  } catch {
+    return false;
+  }
+}
+
 /**
  * GitLab access levels, plus the GitHub permission names the rest of the
  * codebase already speaks, mapped onto their GitLab equivalents.
@@ -425,7 +445,11 @@ export class GitLabProvider extends GitProvider {
    * @param {string} branch - Branch name (default: main)
    * @returns {Promise<string>} Commit SHA
    */
-  async getLatestCommitSHA(group: string, project: string, branch: string = 'main'): Promise<string> {
+  async getLatestCommitSHA(
+    group: string,
+    project: string,
+    branch: string = 'main'
+  ): Promise<string> {
     const body = (await this.api(
       `${this.projectApi(group, project)}/repository/branches/${encodeURIComponent(branch)}`
     )) as { commit: { id: string } };
@@ -520,42 +544,128 @@ export class GitLabProvider extends GitProvider {
   }
 
   /**
-   * Add a push webhook to a project, unless one for `url` exists already.
-   * Project hooks are free on gitlab.com; group hooks need a paid plan.
+   * The state of a project's Classmoji webhook: missing, `failing` when GitLab
+   * has disabled it (temporarily or for good) after failed deliveries, else ok.
+   */
+  async getClassmojiHookStatus(
+    group: string,
+    project: string,
+    url: string
+  ): Promise<'ok' | 'missing' | 'failing'> {
+    const hooks = (await this.api(
+      `/api/v4/projects/${encodeURIComponent(`${group}/${project}`)}/hooks`
+    )) as Array<{ url: string; name?: string | null; alert_status?: string }>;
+    const ours = hooks.filter(h => isClassmojiHook(h, url));
+    if (ours.length === 0) return 'missing';
+    return ours.some(h => h.alert_status && h.alert_status !== 'executable') ? 'failing' : 'ok';
+  }
+
+  /**
+   * Pushes to a project's default branch after `since`, oldest first, with
+   * GitLab's server-side time and the pusher's username. For catching up on
+   * pushes whose webhook never arrived (a GitLab that can't reach Classmoji).
+   * Branch deletions are left out.
+   */
+  async listDefaultBranchPushes(
+    group: string,
+    project: string,
+    since: Date | null
+  ): Promise<Array<{ at: Date; author: string | null; sha: string }>> {
+    const path = encodeURIComponent(`${group}/${project}`);
+    const meta = (await this.api(`/api/v4/projects/${path}`)) as { default_branch?: string | null };
+    const branch = meta.default_branch;
+    if (!branch) return [];
+    // `after` is a date (exclusive), so step back a day and filter precisely.
+    const after = since
+      ? `&after=${new Date(since.getTime() - 86_400_000).toISOString().slice(0, 10)}`
+      : '';
+    const events = (await this.api(
+      `/api/v4/projects/${path}/events?action=pushed&per_page=100${after}`
+    )) as Array<{
+      created_at?: string;
+      author_username?: string;
+      push_data?: { ref?: string; ref_type?: string; action?: string; commit_to?: string | null };
+    }>;
+    return events
+      .filter(
+        e =>
+          e.push_data?.ref_type === 'branch' &&
+          e.push_data.ref === branch &&
+          e.push_data.action !== 'removed' &&
+          e.push_data.commit_to &&
+          e.created_at
+      )
+      .map(e => ({
+        at: new Date(e.created_at as string),
+        author: e.author_username ?? null,
+        sha: e.push_data?.commit_to as string,
+      }))
+      .filter(e => !Number.isNaN(e.at.getTime()) && (!since || e.at > since))
+      .sort((a, b) => a.at.getTime() - b.at.getTime());
+  }
+
+  /**
+   * When GitLab received the push that moved a project's branch to `sha`, from
+   * its events API (server-set, unlike commit dates, which are the author's
+   * clock). Null when the event can't be found.
+   */
+  async getPushTime(group: string, project: string, sha: string): Promise<Date | null> {
+    const events = (await this.api(
+      `/api/v4/projects/${encodeURIComponent(`${group}/${project}`)}/events?action=pushed&per_page=50`
+    )) as Array<{ created_at?: string; push_data?: { commit_to?: string | null } }>;
+    const match = events.find(e => e.push_data?.commit_to === sha);
+    const time = match?.created_at ? new Date(match.created_at) : null;
+    return time && !Number.isNaN(time.getTime()) ? time : null;
+  }
+
+  /**
+   * Make sure a project has exactly one Classmoji webhook, pointing at `url`
+   * with `secret` as its token, for pushes and issue events. Project hooks are
+   * free on gitlab.com; group hooks need a paid plan.
+   *
+   * Self-healing, because a hook can go bad without anyone noticing:
+   *  - GitLab wipes a hook's secret token when its URL is changed, and the
+   *    token can't be read back, so the token is always re-set.
+   *  - A hook left on an older Classmoji URL (a moved hook-station, an old
+   *    per-instance path, a rotated smee channel) is found and repointed
+   *    rather than a second one added. Duplicates are removed.
+   *  - Updating a hook re-enables one GitLab disabled after failed deliveries.
    */
   async ensureProjectPushHook(
     group: string,
     project: string,
     url: string,
     secret: string
-  ): Promise<void> {
+  ): Promise<'created' | 'updated'> {
     const base = `/api/v4/projects/${encodeURIComponent(`${group}/${project}`)}/hooks`;
     const hooks = (await this.api(base)) as Array<{
       id: number;
       url: string;
-      issues_events?: boolean;
+      name?: string | null;
     }>;
-    const existing = hooks.find(h => h.url === url);
-    // Pushes are REPO-mode submissions; issue close/reopen are ISSUE-mode ones.
-    if (existing) {
-      if (!existing.issues_events) {
-        await this.api(`${base}/${existing.id}`, {
-          method: 'PUT',
-          body: { url, token: secret, push_events: true, issues_events: true },
-        });
-      }
-      return;
+    const ours = hooks
+      .filter(h => isClassmojiHook(h, url))
+      // Keep the one already on the right URL, if any.
+      .sort((a, b) => Number(b.url === url) - Number(a.url === url));
+    const body = {
+      url,
+      token: secret,
+      name: CLASSMOJI_HOOK_NAME,
+      push_events: true,
+      issues_events: true,
+      enable_ssl_verification: true,
+    };
+
+    if (ours.length === 0) {
+      await this.api(base, { method: 'POST', body });
+      return 'created';
     }
-    await this.api(base, {
-      method: 'POST',
-      body: {
-        url,
-        token: secret,
-        push_events: true,
-        issues_events: true,
-        enable_ssl_verification: true,
-      },
-    });
+    const [keep, ...duplicates] = ours;
+    await this.api(`${base}/${keep.id}`, { method: 'PUT', body });
+    for (const duplicate of duplicates) {
+      await this.api(`${base}/${duplicate.id}`, { method: 'DELETE' });
+    }
+    return 'updated';
   }
 
   /**
@@ -1025,18 +1135,31 @@ export class GitLabProvider extends GitProvider {
   }
 
   // ─── Subgroups (Team equivalent) ──────────────────────────────────────────
+  //
+  // A GitLab classroom's teams are subgroups of `<class subgroup>/teams`, the
+  // `group` every method below receives (see gitlabTeamsNamespace in
+  // @classmoji/utils). Members are Developers of their team subgroup, and each
+  // team project is shared with it, so a membership change reaches every
+  // project of the team at once, like a Github team.
 
   /**
-   * Create a subgroup (equivalent to GitHub team)
-   * @param {string} group - Parent group path
-   * @param {string} name - Subgroup name
-   * @returns {Promise<{id: number, path: string, name: string}>}
+   * Create a team subgroup under `group`, creating `group` itself (the class's
+   * `teams` subgroup) the first time. A taken path adopts the existing team.
    */
   async createTeam(
     group: string,
     name: string
   ): Promise<{ id: number; slug: string; name: string }> {
-    const parentId = await this.resolveGroupId(group);
+    let parentId: number;
+    try {
+      parentId = await this.resolveGroupId(group);
+    } catch (error: unknown) {
+      const at = group.lastIndexOf('/');
+      if ((error as { status?: number }).status !== 404 || at === -1) throw error;
+      const parent = group.slice(0, at);
+      const path = group.slice(at + 1);
+      parentId = (await this.createSubgroup(parent, 'Teams', path)).id;
+    }
     const path = toPath(name);
 
     const { ok, status, body } = await this.request('/api/v4/groups', {
@@ -1055,19 +1178,14 @@ export class GitLabProvider extends GitProvider {
       body && typeof body === 'object' && 'message' in body
         ? JSON.stringify((body as { message: unknown }).message)
         : String(body ?? '');
-    if (status === 400 && message.includes('has already been taken')) {
+    if ((status === 400 || status === 422) && message.includes('has already been taken')) {
       return this.getTeam(group, path);
     }
 
     throw new Error(`Gitlab API POST /api/v4/groups failed (${status}): ${message}`);
   }
 
-  /**
-   * Get a subgroup by path
-   * @param {string} group - Parent group path
-   * @param {string} subgroupPath - Subgroup path
-   * @returns {Promise<{id: number, path: string, name: string}>}
-   */
+  /** A team subgroup by path. Throws with `.status` 404 when missing. */
   async getTeam(
     group: string,
     subgroupPath: string
@@ -1078,63 +1196,65 @@ export class GitLabProvider extends GitProvider {
     return { id: subgroup.id, slug: subgroup.path, name: subgroup.name };
   }
 
-  /**
-   * Get all subgroups in group
-   * @param {string} group - Group path
-   * @returns {Promise<Object[]>}
-   */
-  async getTeams(_group: string): Promise<never> {
-    // TODO: GET /api/v4/groups/:id/subgroups
-    throw new Error('GitLabProvider.getTeams() not implemented');
+  /** Every team subgroup under `group` (none when `group` doesn't exist yet). */
+  async getTeams(group: string): Promise<Array<{ id: number; slug: string; name: string }>> {
+    const { ok, status, body } = await this.request(
+      `/api/v4/groups/${encodeURIComponent(group)}/subgroups?per_page=100`
+    );
+    if (!ok) {
+      if (status === 404) return [];
+      throw new Error(`Gitlab API GET subgroups failed (${status})`);
+    }
+    return (body as Array<{ id: number; path: string; name: string }>).map(g => ({
+      id: g.id,
+      slug: g.path,
+      name: g.name,
+    }));
+  }
+
+  /** Delete a team subgroup. Already gone is fine. */
+  async deleteTeam(group: string, subgroupPath: string): Promise<void> {
+    const { ok, status } = await this.request(
+      `/api/v4/groups/${encodeURIComponent(`${group}/${subgroupPath}`)}`,
+      { method: 'DELETE' }
+    );
+    if (!ok && status !== 404) {
+      throw new Error(`Gitlab API DELETE group failed (${status})`);
+    }
+  }
+
+  /** Add a member to a team subgroup, as Developer. */
+  async addTeamMember(group: string, subgroupPath: string, username: string): Promise<void> {
+    await this.addGroupMember(`${group}/${subgroupPath}`, username, ACCESS_LEVELS.developer);
+  }
+
+  /** Remove a member from a team subgroup. Not a member is fine. */
+  async removeTeamMember(group: string, subgroupPath: string, username: string): Promise<void> {
+    await this.removeGroupMember(`${group}/${subgroupPath}`, username);
   }
 
   /**
-   * Delete a subgroup
-   * @param {string} group - Parent group path
-   * @param {string} subgroupPath - Subgroup path
-   */
-  async deleteTeam(_group: string, _subgroupPath: string): Promise<never> {
-    // TODO: DELETE /api/v4/groups/:id
-    throw new Error('GitLabProvider.deleteTeam() not implemented');
-  }
-
-  /**
-   * Add a member to a subgroup
-   * @param {string} group - Parent group path
-   * @param {string} subgroupPath - Subgroup path
-   * @param {string} username - GitLab username
-   */
-  async addTeamMember(_group: string, _subgroupPath: string, _username: string): Promise<never> {
-    // TODO: POST /api/v4/groups/:id/members
-    throw new Error('GitLabProvider.addTeamMember() not implemented');
-  }
-
-  /**
-   * Remove a member from a subgroup
-   * @param {string} group - Parent group path
-   * @param {string} subgroupPath - Subgroup path
-   * @param {string} username - GitLab username
-   */
-  async removeTeamMember(_group: string, _subgroupPath: string, _username: string): Promise<never> {
-    // TODO: DELETE /api/v4/groups/:id/members/:user_id
-    throw new Error('GitLabProvider.removeTeamMember() not implemented');
-  }
-
-  /**
-   * Share project with a group (team permission to repo)
-   * @param {string} group - Group path
-   * @param {string} project - Project name
-   * @param {string} shareWithGroup - Group to share with
-   * @param {string} permission - Access level (guest, reporter, developer, maintainer)
+   * Share a project with a team subgroup, so its members get `permission` on
+   * it (Developer for students; the project's default branch already lets
+   * Developers push). `shareWithGroup` is the team subgroup's full path.
+   * Already shared is fine.
    */
   async addTeamToRepo(
-    _group: string,
-    _project: string,
-    _shareWithGroup: string,
-    _permission: string
-  ): Promise<never> {
-    // TODO: POST /api/v4/projects/:id/share
-    throw new Error('GitLabProvider.addTeamToRepo() not implemented');
+    group: string,
+    project: string,
+    shareWithGroup: string,
+    permission: string
+  ): Promise<void> {
+    const groupId = await this.resolveGroupId(shareWithGroup);
+    const level = ACCESS_LEVELS[permission] ?? ACCESS_LEVELS.developer;
+    const { ok, status, body } = await this.request(
+      `/api/v4/projects/${encodeURIComponent(`${group}/${project}`)}/share`,
+      { method: 'POST', body: { group_id: groupId, group_access: level } }
+    );
+    if (ok) return;
+    const message = JSON.stringify(body ?? '');
+    if (status === 409 || message.includes('already')) return;
+    throw new Error(`Gitlab API POST project share failed (${status}): ${message}`);
   }
 
   // ─── Collaborators ────────────────────────────────────────────────────────

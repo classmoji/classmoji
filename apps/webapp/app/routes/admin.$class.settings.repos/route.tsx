@@ -1,9 +1,10 @@
-import { Select, Switch, Alert } from 'antd';
+import { Select, Switch, Alert, Button } from 'antd';
 import { useParams } from 'react-router';
 import { useNotifiedFetcher } from '~/hooks';
 
 import { assertClassroomAccess, assertClassroomMutationAllowed } from '~/utils/helpers';
 import { getGitProvider } from '@classmoji/services';
+import Tasks from '@classmoji/tasks';
 import InstallAppBanner from '~/components/features/InstallAppBanner';
 import { useGitWeb } from '~/hooks/useGitWeb';
 import { GITLAB_UNSUPPORTED, isGitLabClassroom } from '~/utils/gitlabGuard.server';
@@ -41,19 +42,16 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
       githubOrganization: null,
       gitOrgLogin: null,
       ...install,
+      isGitLab,
       error: isGitLab
         ? 'This classroom is not connected to a Gitlab group.'
         : 'This classroom is not connected to a Github organization.',
     };
   }
 
+  // Gitlab: no org-level permission settings, only webhook upkeep.
   if (isGitLab) {
-    return {
-      githubOrganization: null,
-      gitOrgLogin,
-      ...install,
-      error: 'Project settings are not available for Gitlab classrooms yet.',
-    };
+    return { githubOrganization: null, gitOrgLogin, ...install, isGitLab, error: null };
   }
 
   if (!classroom.git_organization?.github_installation_id) {
@@ -61,6 +59,7 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
       githubOrganization: null,
       gitOrgLogin,
       ...install,
+      isGitLab,
       error: `The Classmoji GitHub App isn't installed on "${gitOrgLogin}". Install it to manage repository settings.`,
     };
   }
@@ -68,7 +67,7 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
   try {
     const gitProvider = getGitProvider(classroom.git_organization);
     const githubOrganization = await gitProvider.getOrganization(gitOrgLogin);
-    return { githubOrganization, gitOrgLogin, ...install, error: null };
+    return { githubOrganization, gitOrgLogin, ...install, isGitLab, error: null };
   } catch (err: unknown) {
     const status =
       err && typeof err === 'object' && 'status' in err
@@ -80,6 +79,7 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
       githubOrganization: null,
       gitOrgLogin,
       ...install,
+      isGitLab,
       error:
         status === 404
           ? `GitHub couldn't find the "${gitOrgLogin}" organization or the Classmoji App installation. The App may have been uninstalled or the org renamed.`
@@ -115,10 +115,34 @@ const SettingsRepos = ({ loaderData }: Route.ComponentProps) => {
     isExample,
     gitProvider,
     githubAppName,
+    isGitLab,
   } = loaderData;
   const { class: classSlug } = useParams();
   const { fetcher } = useNotifiedFetcher();
   const { terms } = useGitWeb();
+
+  if (isGitLab && !error) {
+    return (
+      <div className="flex flex-col gap-14 pt-4">
+        <Section
+          title="Webhooks"
+          subtitle="Gitlab tells Classmoji about pushes and closed issues through a webhook on each project. If submissions stop showing up, repair them: every student and content project gets one working Classmoji webhook again. This also runs every night."
+        >
+          <Button
+            loading={fetcher.state !== 'idle'}
+            onClick={() =>
+              fetcher.submit(
+                { intent: 'repairWebhooks' },
+                { method: 'post', encType: 'application/json' }
+              )
+            }
+          >
+            Repair webhooks
+          </Button>
+        </Section>
+      </div>
+    );
+  }
 
   const showInstallBanner =
     !appInstalled && !isExample && Boolean(gitOrgLogin) && gitProvider === 'GITHUB';
@@ -221,7 +245,16 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
     throw new Response('No Github organization or Gitlab group configured', { status: 400 });
   }
 
+  const data = await request.json();
+
   if (isGitLabClassroom(classroom)) {
+    if (data?.intent === 'repairWebhooks') {
+      await Tasks.repairGitlabWebhooksTask.trigger({ classroomId: classroom.id });
+      return {
+        success: 'Repairing webhooks. Every project will be fixed within a few minutes.',
+        action: 'REPAIR_GITLAB_WEBHOOKS',
+      };
+    }
     throw new Response(GITLAB_UNSUPPORTED, { status: 400 });
   }
 
@@ -229,7 +262,6 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
     throw new Response('GitHub App not installed for this organization', { status: 400 });
   }
 
-  const data = await request.json();
   const gitProvider = getGitProvider(classroom.git_organization);
   await (
     gitProvider as {

@@ -25,6 +25,8 @@ interface TeamCreateWithMembershipAndTagPayload {
   providerId: string | number;
   userId: string;
   tagId: string;
+  /** The team's provider; GitLab teams are subgroups. Default Github. */
+  provider?: 'GITHUB' | 'GITLAB';
 }
 
 export const create = async (payload: TeamCreatePayload) => {
@@ -189,13 +191,13 @@ export const findUserTeamByTag = async (classroomId: string, tagId: string, user
 export const createWithMembershipAndTag = async (
   payload: TeamCreateWithMembershipAndTagPayload
 ) => {
-  const { name, slug, classroomId, providerId, userId, tagId } = payload;
+  const { name, slug, classroomId, providerId, userId, tagId, provider = 'GITHUB' } = payload;
   return getPrisma().team.create({
     data: {
       name,
       slug,
       classroom_id: classroomId,
-      provider: 'GITHUB',
+      provider,
       provider_id: String(providerId),
       is_visible: true,
       memberships: {

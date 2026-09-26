@@ -2,6 +2,7 @@ import { timingSafeEqual } from 'node:crypto';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import Tasks from '@classmoji/tasks';
 import getPrisma from '@classmoji/database';
+import { ClassmojiService } from '@classmoji/services';
 import { scopeGitlabId } from '@classmoji/utils';
 
 /**
@@ -23,10 +24,11 @@ import { scopeGitlabId } from '@classmoji/utils';
  * The secret is read per request: an unconfigured deployment answers 503 on
  * this path instead of failing to boot and taking the other webhooks down.
  *
- * `/gitlab` receives the default instance's hooks; `/gitlab/:instanceId` a
- * self-managed instance's (see webhookUrl in gitlabInstance.service). Project
- * and issue ids are only unique per instance, so they are scoped by it before
- * any lookup.
+ * Every instance's hooks share one URL. Project and issue ids are only unique
+ * per instance, so the instance is read from the payload's project URL (the
+ * payload is trusted once the secret token matched) and ids are scoped by it
+ * before any lookup. `/gitlab/:instanceId` still names the instance for hooks
+ * registered with it in the path.
  */
 
 interface GitLabPushPayload {
@@ -36,7 +38,12 @@ interface GitLabPushPayload {
   after?: string;
   total_commits_count?: number;
   commits?: Array<{ added?: string[]; modified?: string[]; removed?: string[] }>;
-  project?: { id?: number; default_branch?: string; path_with_namespace?: string };
+  project?: {
+    id?: number;
+    default_branch?: string;
+    path_with_namespace?: string;
+    web_url?: string;
+  };
 }
 
 /** Gitlab lists at most 20 commits in a push payload, like Github. */
@@ -58,6 +65,26 @@ function aggregateChanges(commits: NonNullable<GitLabPushPayload['commits']>) {
 interface GitLabIssuePayload {
   object_kind?: string;
   object_attributes?: { id?: number; action?: string; closed_at?: string | null };
+  project?: { web_url?: string };
+}
+
+/**
+ * The instance an event came from, by its project's host: null for the default
+ * instance, undefined for a GitLab Classmoji doesn't know (ignored).
+ */
+async function instanceFromPayload(webUrl: string | undefined): Promise<string | null | undefined> {
+  if (!webUrl) return null;
+  const svc = ClassmojiService.gitlabInstance;
+  let host: string | null;
+  try {
+    host = svc.normalizeHost(new URL(webUrl).origin);
+  } catch {
+    return undefined;
+  }
+  if (!host) return undefined;
+  if (host === svc.defaultHost()) return null;
+  const found = await svc.findByHost(host);
+  return found?.id ?? undefined;
 }
 
 /** A deleted branch reports an all-zero `after`. */
@@ -89,7 +116,9 @@ async function handlePush(data: GitLabPushPayload, instanceId: string | null): P
     });
     if (gitRepo) {
       await Tasks.repositoryPushHandlerTask.trigger(
-        { gitRepoId: gitRepo.id, pushedAt: new Date().toISOString() },
+        // GitLab's payload has no server push time; the task looks the push
+        // up by its commit (GitLab's events API) and falls back to this.
+        { gitRepoId: gitRepo.id, pushedAt: new Date().toISOString(), sha: data.after },
         // One submission update per student repo at a time, in delivery order.
         { concurrencyKey: gitRepo.id }
       );
@@ -178,10 +207,14 @@ export default async function gitlabRoutes(fastify: FastifyInstance): Promise<vo
       }
     },
     handler: async function handler(request, reply) {
-      const instanceId = request.params.instanceId ?? null;
-      if (instanceId !== null && !INSTANCE_ID.test(instanceId)) {
+      const fromPath = request.params.instanceId;
+      if (fromPath !== undefined && !INSTANCE_ID.test(fromPath)) {
         return reply.status(404).send('Unknown Gitlab instance');
       }
+      const body = request.body as { project?: { web_url?: string } };
+      const instanceId = fromPath ?? (await instanceFromPayload(body?.project?.web_url));
+      // A GitLab Classmoji has no instance for: nothing here can be ours.
+      if (instanceId === undefined) return reply.status(200).send({ success: true });
       const event = request.headers['x-gitlab-event'];
       if (event === 'Push Hook') {
         await handlePush(request.body as GitLabPushPayload, instanceId);

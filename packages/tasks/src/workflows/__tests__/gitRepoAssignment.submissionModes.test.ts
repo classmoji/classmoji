@@ -47,6 +47,7 @@ vi.mock('@classmoji/services', () => ({
   getGitProvider: (...a: unknown[]) => mocks.getGitProvider(...a),
 }));
 
+vi.mock('@classmoji/database', () => ({ default: () => ({}) }));
 vi.mock('@classmoji/utils', () => ({
   titleToIdentifier: (title: string) => title.toLowerCase().replace(/\s+/g, '-'),
 }));

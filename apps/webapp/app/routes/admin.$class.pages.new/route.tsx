@@ -61,7 +61,8 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
   // Stored, user-editable content repo name. Never re-derive it.
   const repoName = classroom.content_repo;
   if (!repoName) {
-    return { error: 'Classroom content repo not configured' };
+    const isGitLab = classroom.git_organization?.provider === 'GITLAB';
+    return { error: `Classroom content ${isGitLab ? 'project' : 'repo'} not configured` };
   }
 
   // Single page import/create
@@ -250,7 +251,9 @@ export default function NewPage({ loaderData }: Route.ComponentProps) {
   useEffect(() => {
     if (fetcher.state === 'idle' && fetcher.data?.created && fetcher.data.page && !batchProgress) {
       callout.show({ variant: 'success', title: 'Page created successfully!' });
-      navigate(`/${rolePrefix}/${classroom.slug}/pages/${fetcher.data.page.id}`);
+      // Replace, not push: the editor lives on the pages app, and a /pages/new
+      // left in history reopens this form when the user comes back.
+      navigate(`/${rolePrefix}/${classroom.slug}/pages/${fetcher.data.page.id}`, { replace: true });
     }
   }, [fetcher.state, fetcher.data, navigate, classroom.slug, batchProgress, rolePrefix]);
 
@@ -332,7 +335,7 @@ export default function NewPage({ loaderData }: Route.ComponentProps) {
           title: `Successfully imported ${total} page${total !== 1 ? 's' : ''}!`,
         });
       }
-      navigate(`/${rolePrefix}/${classroom.slug}/pages`);
+      navigate(`/${rolePrefix}/${classroom.slug}/pages`, { replace: true });
     } catch (err: unknown) {
       console.error('Batch import failed:', err);
       callout.show({

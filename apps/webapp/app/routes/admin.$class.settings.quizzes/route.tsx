@@ -287,7 +287,7 @@ const SettingsQuizzes = ({ loaderData }: Route.ComponentProps) => {
             name="exploration_model"
             extra={
               hasAnthropicKey
-                ? "Picks and summarizes files in the student's repo. Runs on the Classmoji platform key, not the key above."
+                ? `Picks and summarizes files in the student's ${terms.repo === 'project' ? 'project' : 'repo'}. Runs on the Classmoji platform key, not the key above.`
                 : 'Provide Anthropic API Key above to enable'
             }
           >

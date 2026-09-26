@@ -381,6 +381,9 @@ describe('staff.removeStaff', () => {
             provider: 'GITHUB',
             github_installation_id: null,
             base_url: null,
+            gitlab_connection_id: null,
+            gitlab_instance_id: null,
+            provider_id: null,
           },
           classroom: { id: 'class-1', slug: 'cs1-25f' },
           role,
@@ -474,9 +477,12 @@ describe('staff.removeStaff', () => {
     expect(Object.keys(payload.gitOrganization as object).sort()).toEqual([
       'base_url',
       'github_installation_id',
+      'gitlab_connection_id',
+      'gitlab_instance_id',
       'id',
       'login',
       'provider',
+      'provider_id',
     ]);
     expect(JSON.stringify(payload)).not.toMatch(/secret/);
   });

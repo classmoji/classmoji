@@ -246,7 +246,9 @@ export const OperationProgress = () => {
               <Tag color="red" className="m-0 shrink-0 font-medium">
                 {run.status === 'SYSTEM FAILURE'
                   ? `${web.label} did not respond`
-                  : (REASONS[run.status] ?? run.status)}
+                  : run.status === 'SYSTEM FAILURE'
+                    ? `${web.label} did not respond`
+                    : (REASONS[run.status] ?? run.status)}
               </Tag>
             </li>
           ))}

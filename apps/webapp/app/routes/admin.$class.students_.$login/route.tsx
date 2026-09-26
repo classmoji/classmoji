@@ -432,7 +432,7 @@ const StudentReport = ({ loaderData }: Route.ComponentProps) => {
     const Icon = meta?.icon;
     const due = fmt(a.student_deadline);
     const parts: string[] = [];
-    if (a.type === 'REPO') parts.push(a.submission_mode === 'REPO' ? 'push' : 'issue');
+    if (a.type === 'REPO') parts.push(a.submission_mode === 'REPO' ? 'push' : web.terms.issue);
     parts.push(`${a.weight}%${a.is_extra_credit ? ' extra credit' : ''}`);
     if (due) parts.push(`due ${due}`);
 

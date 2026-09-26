@@ -199,9 +199,12 @@ describe('roster_remove_student', () => {
     expect(Object.keys(payload.gitOrganization as object).sort()).toEqual([
       'base_url',
       'github_installation_id',
+      'gitlab_connection_id',
+      'gitlab_instance_id',
       'id',
       'login',
       'provider',
+      'provider_id',
     ]);
     expect(JSON.stringify(payload)).not.toMatch(/secret/);
   });

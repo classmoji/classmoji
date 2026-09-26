@@ -24,6 +24,7 @@ import { useState } from 'react';
  * - onMobileClose: Function - close callback for mobile
  */
 import type { PageSummary, ClassroomSummary } from '~/types/pages.ts';
+import gitlabLogo from '~/components/ui/gitlab.svg';
 
 interface PagesSidebarProps {
   pages: PageSummary[];
@@ -95,11 +96,16 @@ const PagesSidebar = ({
         >
           {!collapsed && (
             <div className="flex items-center gap-2 min-w-0">
-              <img
-                src={classroom.git_organization?.avatar_url || classroom.avatar_url || undefined}
-                alt={classroom.git_organization?.login || classroom.name}
-                className="h-6 w-6 rounded-full border-2 border-gray-200 dark:border-gray-600 flex-shrink-0"
-              />
+              {/* Gitlab groups have no avatar we can build: show the Gitlab logo. */}
+              {classroom.git_organization?.avatar_url || classroom.avatar_url ? (
+                <img
+                  src={(classroom.git_organization?.avatar_url || classroom.avatar_url) as string}
+                  alt={classroom.git_organization?.login || classroom.name}
+                  className="h-6 w-6 rounded-full border-2 border-gray-200 dark:border-gray-600 flex-shrink-0"
+                />
+              ) : classroom.git_organization?.provider === 'GITLAB' ? (
+                <img src={gitlabLogo} alt="Gitlab" className="h-6 w-6 flex-shrink-0" />
+              ) : null}
               <h2 className="font-semibold text-gray-900 dark:text-white truncate">
                 {classroom.name}
               </h2>

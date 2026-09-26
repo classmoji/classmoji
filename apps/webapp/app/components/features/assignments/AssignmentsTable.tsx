@@ -259,8 +259,8 @@ const AssignmentsTable = ({
           <div className="text-center py-12 text-gray-500">
             <div className="font-medium">{emptyText}</div>
             <div className="text-sm">
-              An assignment is a {web.isGitLab ? 'project' : 'repo'} issue, a quiz, or a form, with
-              a weight and a due date.
+              An assignment is a {web.isGitLab ? 'project work item' : 'repo issue'}, a quiz, or a
+              form, with a weight and a due date.
             </div>
           </div>
         ),
