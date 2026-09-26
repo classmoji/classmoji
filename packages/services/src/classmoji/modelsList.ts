@@ -188,13 +188,15 @@ function formatClaudeModelName(modelId: string): string {
  * every entry must be a model the API still serves — picking a retired id writes
  * a setting that 404s on the next quiz, long after the person who chose it has
  * left the page. Every id that used to be here (Claude 3 Opus/Sonnet/Haiku,
- * Claude 3.5 Sonnet/Haiku) has since been retired by Anthropic; the two below
- * are the repo's own declared defaults from .env.example (LLM_MODEL and
- * EXPLORATION_MODEL), which is the only list this file can keep current without
- * guessing at ids.
+ * Claude 3.5 Sonnet/Haiku) has since been retired by Anthropic. The entries
+ * below are ids the repo itself declares, which is the only list this file can
+ * keep current without guessing: Sonnet 4.5 is LLM_MODEL in .env.example,
+ * Sonnet 5 is EXPLORATION_MODEL there, and Haiku 4.5 was the previous
+ * EXPLORATION_MODEL, kept so a classroom that saved it still sees it listed.
  */
 function getFallbackAnthropicModels(): Model[] {
   return [
+    { value: 'claude-sonnet-5', label: 'Claude Sonnet 5' },
     { value: 'claude-sonnet-4-5-20250929', label: 'Claude Sonnet 4.5' },
     { value: 'claude-haiku-4-5-20251001', label: 'Claude Haiku 4.5' },
   ];

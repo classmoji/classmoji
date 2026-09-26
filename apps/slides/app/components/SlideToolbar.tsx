@@ -1,5 +1,7 @@
 import { useCallback, useState, useEffect, useRef } from 'react';
-import { Popconfirm, message, Popover, Tooltip, Dropdown } from 'antd';
+import { Popconfirm, Popover, Tooltip, Dropdown } from 'antd';
+
+import { useToast } from '~/hooks';
 import ImageUploadModal from './ImageUploadModal';
 import { useElementSelection } from './properties/ElementSelectionContext';
 
@@ -174,6 +176,7 @@ export default function SlideToolbar({
   onImageUpload,
   onOpenOverview, // Callback to open slide overview
 }: SlideToolbarProps) {
+  const toast = useToast();
   const [isImageModalOpen, setIsImageModalOpen] = useState(false);
   const [popoverOpen, setPopoverOpen] = useState(false);
   const toolbarRef = useRef<HTMLDivElement>(null);
@@ -388,7 +391,7 @@ export default function SlideToolbar({
       if (!canDeleteSlide()) {
         e.preventDefault();
         e.stopPropagation();
-        message.warning('Cannot delete the only slide in the presentation');
+        toast.info('A presentation needs at least one slide');
         return false;
       }
     },
@@ -532,7 +535,7 @@ document.querySelector('h1').addEventListener('click', () => {
   const handleBlockImageUploaded = useCallback(
     async (file: File) => {
       if (!onImageUpload) {
-        message.error('Image upload not available');
+        toast.error('Image upload not available');
         setPendingBlockImage(false);
         return;
       }

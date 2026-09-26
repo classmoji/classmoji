@@ -554,8 +554,11 @@ export default function RevealPresenter({
   // Uses capture phase to intercept 'S' before Reveal.js's built-in speaker view handler
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      // Don't handle shortcuts if typing in an input
-      if ((e.target as HTMLElement)?.matches?.('input, textarea')) return;
+      // Don't handle shortcuts while typing. The Sandpack code editor (CodeMirror) is a
+      // contenteditable div, not an input, so check isContentEditable too — the same
+      // rule Reveal.js's own keyboard handler uses.
+      const target = e.target as HTMLElement | null;
+      if (target?.isContentEditable || target?.matches?.('input, textarea, select')) return;
 
       if (e.key === 'Escape') {
         // Close QR overlay if open, otherwise exit presentation

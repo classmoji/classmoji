@@ -31,7 +31,10 @@ export const publishAssignment = async (
     invariant(repository.classroom_id === classroomId, 'Repository not found in classroom');
 
     // If repos already exist (re-publish after unpublish), just flip the flag
-    const existingRepos = await ClassmojiService.gitRepo.findByRepository(classroomSlug, repositoryId);
+    const existingRepos = await ClassmojiService.gitRepo.findByRepository(
+      classroomSlug,
+      repositoryId
+    );
     if (existingRepos.length > 0) {
       await ClassmojiService.repository.setPublished(repositoryId, true, classroomId);
       return { success: 'Repository re-published. Use Sync to update repositories.' };
@@ -90,6 +93,10 @@ export const publishAssignment = async (
       // For self-formed teams, just mark repository as published
       // Teams and repos will be created when students form their teams
       await ClassmojiService.repository.setPublished(repositoryId, true, classroomId);
+      // Nothing provisions per-team repos until a team forms, so the
+      // assignments whose release date has passed would otherwise stay
+      // drafts. Publish them now; each team's rows are created as it forms.
+      await ClassmojiService.assignment.publishReleased(repositoryId);
 
       return {
         success: 'Repository published! Students can now form teams.',
@@ -153,6 +160,94 @@ export const publishAssignment = async (
   }
 };
 
+/**
+ * Publish one assignment, and whatever it needs to be reachable.
+ *
+ * A REPO assignment is not open to students until its repositories exist, so
+ * an unpublished repository is published first (which provisions them). A
+ * repository that is already published is left alone: its repos are on GitHub
+ * and other assignments may be submitting through them, so re-publishing would
+ * be a no-op at best. Quiz and form assignments have nothing to provision.
+ *
+ * `release_at` still gates visibility independently, so publishing an
+ * assignment dated in the future marks it released without exposing it early.
+ */
+export const publishAssignmentAndRepository = async (
+  classroomSlug: string,
+  classroomId: string,
+  assignmentId: string,
+  userId: string | null = null
+) => {
+  const assignment = await ClassmojiService.assignment.findByIdInClassroom(
+    assignmentId,
+    classroomId
+  );
+  invariant(assignment != null, 'Assignment not found');
+
+  let repoResult: Awaited<ReturnType<typeof publishAssignment>> | null = null;
+
+  if (assignment.type === 'REPO' && assignment.repository_id) {
+    const repository = await ClassmojiService.repository.findById(assignment.repository_id);
+    if (repository && !repository.is_published) {
+      repoResult = await publishAssignment(
+        classroomSlug,
+        classroomId,
+        assignment.repository_id,
+        userId
+      );
+    }
+  }
+
+  await ClassmojiService.assignment.publish(assignmentId);
+
+  // Provisioning started: hand back the trigger session alone, exactly as the
+  // repository publish does. Adding a `success` here would pop a "published"
+  // toast (useNotifiedFetcher watches that key) while the repos are still being
+  // created, and the progress modal is the honest feedback for that.
+  if (repoResult && 'triggerSession' in repoResult) {
+    return repoResult;
+  }
+
+  // The repository was already published, so publishing this assignment cut no
+  // repos and nothing chained into opening its issues. Open them here: only
+  // the first assignment on a repository gets them for free, when its repos are
+  // created. Scoped to this assignment so its siblings are left alone.
+  if (assignment.type === 'REPO' && assignment.repository_id) {
+    const sessionId = nanoid();
+    const classroom = await ClassmojiService.classroom.findById(classroomId);
+    const repository = await ClassmojiService.repository.findById(assignment.repository_id);
+    const existingRepos = await ClassmojiService.gitRepo.findByRepository(
+      classroomSlug,
+      assignment.repository_id
+    );
+
+    if (repository && classroom) {
+      const missing = findMissingAssignments(repository as Repository, existingRepos as GitRepo[]);
+      const mine = missing[assignmentId] ? { [assignmentId]: missing[assignmentId] } : {};
+      const numMissing = Object.values(mine).reduce((n, a) => n + a.repos.length, 0);
+
+      if (numMissing > 0) {
+        await createMissingAssignments(classroom as Classroom, mine, sessionId);
+
+        const accessToken = await auth.createPublicToken({
+          scopes: { read: { tags: [`session_${sessionId}`] } },
+        });
+
+        return {
+          triggerSession: {
+            accessToken,
+            id: sessionId,
+            numReposToCreate: 0,
+            numIssuesToCreate: 2 * numMissing, // gh + cf per issue
+          },
+        };
+      }
+    }
+  }
+
+  return { success: `Assignment "${assignment.title}" published` };
+};
+
 /** `classroomId` scopes the body-supplied repository — see `publishAssignment`. */
 export const syncAssignment = async (
   classroomSlug: string,
@@ -180,7 +275,12 @@ export const syncAssignment = async (
   if (repository!.type === 'INDIVIDUAL') {
     syncResult = await syncIndividualAssignment(classroomSlug, classroom!, repository!, sessionId);
   } else if (repository!.team_formation_mode === 'SELF_FORMED') {
-    syncResult = await syncSelfFormedTeamAssignment(classroomSlug, classroom!, repository!, sessionId);
+    syncResult = await syncSelfFormedTeamAssignment(
+      classroomSlug,
+      classroom!,
+      repository!,
+      sessionId
+    );
   } else {
     syncResult = await syncTeamAssignment(classroomSlug, classroom!, repository!, sessionId);
   }
@@ -210,7 +310,10 @@ const syncIndividualAssignment = async (
   );
 
   // 2. Find existing repos for repository given classroom
-  const existingRepos = await ClassmojiService.gitRepo.findByRepository(classroomSlug, repository.id);
+  const existingRepos = await ClassmojiService.gitRepo.findByRepository(
+    classroomSlug,
+    repository.id
+  );
 
   // 3. Find students with missing repos and create missing repos
   const studentsWithMissingRepos = students.filter(
@@ -262,7 +365,10 @@ const syncTeamAssignment = async (
   const teams = await ClassmojiService.organizationTag.findTeamsByTag(repository.tag_id!);
 
   // 2. Find existing repos for repository given classroom
-  const existingRepos = await ClassmojiService.gitRepo.findByRepository(classroomSlug, repository.id);
+  const existingRepos = await ClassmojiService.gitRepo.findByRepository(
+    classroomSlug,
+    repository.id
+  );
 
   // 3. Find teams with missing repos and create missing repos
   const teamsWithMissingRepos = teams.filter(
@@ -324,7 +430,10 @@ const syncSelfFormedTeamAssignment = async (
   const teams = await ClassmojiService.team.findByTagId(classroom.id, tag.id);
 
   // Find existing repos for repository given classroom
-  const existingRepos = await ClassmojiService.gitRepo.findByRepository(classroomSlug, repository.id);
+  const existingRepos = await ClassmojiService.gitRepo.findByRepository(
+    classroomSlug,
+    repository.id
+  );
 
   // Find teams with missing repos and create missing repos
   const teamsWithMissingRepos = teams.filter(

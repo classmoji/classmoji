@@ -1,11 +1,12 @@
 import { useEffect, useState } from 'react';
-import { Input, Tag } from 'antd';
-import { slugify, type ListedClassroom } from './utils';
+import { Input, Tag, Alert } from 'antd';
+import { slugify, type ParsedClassroom } from './utils';
 
 interface Props {
-  classrooms: ListedClassroom[]; // only the selected ones
+  classrooms: ParsedClassroom[]; // only the selected ones
   slugByClassroom: Map<number, string>;
   onSlugChange: (githubId: number, slug: string) => void;
+  bundleWarnings: string[];
 }
 
 interface SlugStatus {
@@ -25,7 +26,12 @@ interface SlugStatus {
  * login, since the org row usually doesn't exist until import time — so the
  * suggestion comes back org-qualified rather than as a bare `slug-2`.
  */
-export default function StepReview({ classrooms, slugByClassroom, onSlugChange }: Props) {
+export default function StepReview({
+  classrooms,
+  slugByClassroom,
+  onSlugChange,
+  bundleWarnings,
+}: Props) {
   const [status, setStatus] = useState<Map<number, SlugStatus>>(new Map());
 
   // Debounced availability check whenever a slug changes.
@@ -35,8 +41,8 @@ export default function StepReview({ classrooms, slugByClassroom, onSlugChange }
       await Promise.all(
         classrooms.map(async c => {
           const slug = slugByClassroom.get(c.githubId) ?? '';
-          if (!slug || !c.organization) {
-            next.set(c.githubId, { checking: false, available: !!c.organization });
+          if (!slug) {
+            next.set(c.githubId, { checking: false, available: false });
             return;
           }
           try {
@@ -78,6 +84,22 @@ export default function StepReview({ classrooms, slugByClassroom, onSlugChange }
         to enable live syncing and grading.
       </p>
 
+      {bundleWarnings.length > 0 && (
+        <Alert
+          className="mb-4"
+          type="warning"
+          showIcon
+          message="Some items were skipped while reading the export"
+          description={
+            <ul className="list-disc ml-5">
+              {bundleWarnings.slice(0, 8).map((w, i) => (
+                <li key={i}>{w}</li>
+              ))}
+            </ul>
+          }
+        />
+      )}
+
       <div className="space-y-3">
         {classrooms.map(c => {
           const slug = slugByClassroom.get(c.githubId) ?? '';
@@ -90,7 +112,8 @@ export default function StepReview({ classrooms, slugByClassroom, onSlugChange }
             >
               <div className="font-medium dark:text-gray-100">{c.name}</div>
               <div className="text-xs text-gray-500 dark:text-gray-400 mb-2">
-                {c.organization?.login ?? 'No organization'}
+                {c.organization.login} · {c.assignmentCount} assignments · {c.studentCount} students
+                {c.grades.length ? ` · ${c.grades.length} grades` : ''}
               </div>
               <div className="flex items-center gap-2">
                 <span className="text-xs text-gray-500 dark:text-gray-400">/admin/</span>

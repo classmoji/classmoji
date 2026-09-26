@@ -15,12 +15,21 @@ async function main() {
   });
   if (!repository) throw new Error('hello-world repository not found — run npm run db:seed first');
 
+  // The late lab joins the module the repo's other assignments already sit in.
+  const sibling = await prisma.assignment.findFirst({
+    where: { repository_id: repository.id },
+    select: { module_id: true },
+  });
+  if (!sibling) throw new Error('hello-world has no assignments — run npm run db:seed first');
+
   const deadline = new Date(Date.now() - 5 * 60 * 60 * 1000); // 5 hours ago
 
   const assignment = await prisma.assignment.upsert({
     where: { repository_id_title: { repository_id: repository.id, title: 'Late Lab' } },
     update: { student_deadline: deadline, tokens_per_hour: 5 },
     create: {
+      module_id: sibling.module_id,
+      type: 'REPO',
       repository_id: repository.id,
       title: 'Late Lab',
       weight: 50,

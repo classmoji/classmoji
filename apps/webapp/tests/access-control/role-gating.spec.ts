@@ -32,29 +32,6 @@ test.describe('Access Control: owner repositories page exposes instructor contro
   });
 });
 
-test.describe('Access Control: student repositories page hides instructor controls', () => {
-  test.use({ storageState: './tests/.auth/student.json' });
-
-  test.beforeEach(async ({ authenticatedPage: page }) => {
-    await page.goto(`/student/${TEST_CLASSROOM}/repos`);
-    await waitForDataLoad(page, {
-      anchor: page.getByRole('heading', { name: 'Repositories', level: 1 }),
-    });
-  });
-
-  test('a student does not see any "New repository" create button on their repositories page', async ({
-    authenticatedPage: page,
-  }) => {
-    // Confirm the student page rendered before asserting absence of controls.
-    await expect(
-      page.getByRole('heading', { name: 'Repositories', level: 1 })
-    ).toBeVisible();
-
-    const createButton = page.getByRole('button', { name: 'New repository' });
-    await expect(createButton).toHaveCount(0);
-  });
-});
-
 test.describe('Access Control: a student cannot reach owner-only routes', () => {
   test.use({ storageState: './tests/.auth/student.json' });
 
@@ -81,6 +58,18 @@ test.describe('Access Control: a student cannot reach owner-only routes', () => 
       { maxRedirects: 0 }
     );
     expect(res.status()).toBe(403);
+  });
+
+  test('a student navigating to the forms list is denied at both staff prefixes (403)', async ({
+    authenticatedPage: page,
+  }) => {
+    // Forms management is OWNER + TEACHER. Unlike the quizzes screen below,
+    // this stays a sound assertion whatever tier the seed classroom is on:
+    // access is checked BEFORE Pro, so a student's 403 is the role gate's and
+    // never the subscription's. There is deliberately no /student forms route
+    // at all — a student reaches a form by its link, not through a list.
+    expect((await page.goto(`/admin/${TEST_CLASSROOM}/forms`))?.status()).toBe(403);
+    expect((await page.goto(`/teacher/${TEST_CLASSROOM}/forms`))?.status()).toBe(403);
   });
 });
 
@@ -127,5 +116,16 @@ test.describe('Access Control: an assistant cannot reach the /admin namespace', 
       { maxRedirects: 0 }
     );
     expect(res.status()).toBe(403);
+  });
+
+  test('an assistant navigating to the forms list is denied at both staff prefixes (403)', async ({
+    authenticatedPage: page,
+  }) => {
+    // The forms screen's OWN gate is OWNER + TEACHER, so unlike quizzes this is
+    // refused by the screen under /teacher as well as by the namespace under
+    // /admin. Both are pinned because they fail for different reasons, and a
+    // future widening could reach one without the other.
+    expect((await page.goto(`/admin/${TEST_CLASSROOM}/forms`))?.status()).toBe(403);
+    expect((await page.goto(`/teacher/${TEST_CLASSROOM}/forms`))?.status()).toBe(403);
   });
 });

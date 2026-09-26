@@ -1,14 +1,11 @@
-import { useLocation, useNavigate, useParams } from 'react-router';
+import { useLocation, useNavigate } from 'react-router';
 import { Table, Tag, Popconfirm, Tooltip } from 'antd';
-import { IconUserSearch, IconTrash } from '@tabler/icons-react';
-import { useState } from 'react';
+import { IconTrash } from '@tabler/icons-react';
 
 import { TableActionButtons, UserThumbnailView } from '~/components';
 import { useGlobalFetcher } from '~/hooks';
 import { useCallout } from '@classmoji/ui-components';
 import { ActionTypes } from '~/constants';
-import { rememberImpersonationReturn } from '~/utils/impersonationReturn';
-import { authClient } from '@classmoji/auth/client';
 
 interface Student {
   id: string;
@@ -46,49 +43,10 @@ interface StudentsTableProps {
 }
 
 const StudentsTable = ({ students, query, isOwner, canManage }: StudentsTableProps) => {
-  const { class: classSlug } = useParams();
   const { pathname } = useLocation();
   const navigate = useNavigate();
   const { fetcher, notify } = useGlobalFetcher();
-  const [impersonating, setImpersonating] = useState(false);
   const callout = useCallout();
-
-  const handleImpersonate = async (student: Student) => {
-    if (!student.login) {
-      callout.show({ variant: 'error', title: 'Student has not accepted invite.' });
-      return;
-    }
-
-    setImpersonating(true);
-    try {
-      const { data: _data, error } = await authClient.admin.impersonateUser({
-        userId: student.id.toString(),
-      });
-
-      console.log('data', error);
-
-      if (error) {
-        throw new Error(error.message || 'Failed to view as student');
-      }
-
-      // Record where "Stop viewing" should land, while still standing on the
-      // page it should land on. Working it out afterwards means guessing at a
-      // classroom and a role from wherever the impersonated session wandered
-      // to; this page is one the actor could open a moment ago.
-      rememberImpersonationReturn();
-
-      // Navigate to class root - student.$class._index handles default page redirect
-      navigate(`/student/${classSlug}`);
-    } catch (error: unknown) {
-      console.error('Impersonation failed:', error);
-      callout.show({
-        variant: 'error',
-        title: error instanceof Error ? error.message : 'Failed to view as student',
-      });
-    } finally {
-      setImpersonating(false);
-    }
-  };
 
   const removeStudent = async (student: Student) => {
     if (student._isInvite) {
@@ -207,14 +165,13 @@ const StudentsTable = ({ students, query, isOwner, canManage }: StudentsTablePro
     {
       title: 'Actions',
       key: 'actions',
-      width: 260,
+      width: 180,
       render: (_: unknown, student: Student) => {
         // Every action in this column is OWNER-only AND admin-prefix-only:
         // remove/revoke post to the OWNER-gated action with a relative action
-        // path, "View as" impersonates, and the detail page the View button
-        // opens is a nested OWNER-gated route. Under the assistant prefix none
-        // of those targets exist, so `canManage` — not `isOwner` — decides.
-        // Anyone else gets a read-only row rather than controls that would fail.
+        // path, and the report the View button opens is staff-only. Under the
+        // assistant prefix none of those targets exist, so `canManage` — not
+        // `isOwner` — decides. Anyone else gets a read-only row.
         if (!canManage) return null;
 
         // For invites, only show Remove action
@@ -244,18 +201,6 @@ const StudentsTable = ({ students, query, isOwner, canManage }: StudentsTablePro
               } else callout.show({ variant: 'error', title: 'Student has not accepted invite.' });
             }}
           >
-            <div
-              onClick={e => {
-                e.stopPropagation();
-                if (!impersonating) {
-                  handleImpersonate(student);
-                }
-              }}
-              className={`flex items-center gap-1 whitespace-nowrap text-gray-600 hover:text-gray-800 dark:text-gray-300 dark:hover:text-gray-100 cursor-pointer ${impersonating ? 'opacity-50' : ''}`}
-            >
-              <IconUserSearch size={16} />
-              <span>View as</span>
-            </div>
             <Popconfirm
               title="Remove Student"
               description="Are you sure you want to remove this student? This action cannot be undone."

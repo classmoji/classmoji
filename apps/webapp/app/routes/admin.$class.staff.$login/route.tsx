@@ -6,13 +6,12 @@ import { IconX, IconUserSearch, IconClock } from '@tabler/icons-react';
 import { useRouteDrawer, useDarkMode } from '~/hooks';
 import { ClassmojiService } from '@classmoji/services';
 import { useCallout } from '@classmoji/ui-components';
-import { RequireRole, StatsCard } from '~/components';
+import { RequireRole, StatsCard, Emoji } from '~/components';
 import { requireClassroomAdmin } from '~/utils/routeAuth.server';
 import { resolveHighestMembership } from '@classmoji/auth/server';
 import { addAuditLog } from '~/utils/helpers';
 import { authClient } from '@classmoji/auth/client';
 import { rememberImpersonationReturn } from '~/utils/impersonationReturn';
-import { getEmojiSymbol } from '@classmoji/utils';
 import type { Route } from './+types/route';
 
 interface AssignmentSummary {
@@ -219,9 +218,7 @@ const AdminStaffDrawer = ({ loaderData }: Route.ComponentProps) => {
                 <div className="flex items-center gap-2 ml-2">
                   {assignment.isGraded ? (
                     <Tag color="green" className="flex items-center gap-1">
-                      <span className="text-base">
-                        {getEmojiSymbol(assignment.gradeEmoji ?? '')}
-                      </span>
+                      <Emoji emoji={assignment.gradeEmoji ?? ''} fontSize={16} />
                     </Tag>
                   ) : (
                     <Tag color="orange" className="flex items-center gap-1">

@@ -1,0 +1,34 @@
+---
+import Layout from './Layout.astro';
+import Header from '../components/Header.astro';
+import Footer from '../components/Footer.astro';
+
+// Layout for the markdown legal pages (src/pages/privacy.md, terms.md). Astro
+// hands a markdown page's frontmatter to its layout, so the page text stays
+// plain markdown that can be edited without touching this file.
+interface Props {
+  frontmatter: {
+    title: string;
+    description: string;
+    updated: string;
+  };
+}
+
+const { title, description, updated } = Astro.props.frontmatter;
+---
+
+<Layout title={`${title} - Classmoji`} description={description}>
+  <Header />
+
+  <main class="px-6 pt-32 pb-20">
+    <article class="max-w-3xl mx-auto">
+      <h1 class="text-4xl md:text-5xl font-bold text-gray-900 mb-3">{title}</h1>
+      <p class="text-sm text-gray-500 mb-10">Last updated {updated}</p>
+      <div class="prose">
+        <slot />
+      </div>
+    </article>
+  </main>
+
+  <Footer />
+</Layout>

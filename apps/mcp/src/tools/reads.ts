@@ -17,7 +17,7 @@
  * serializes it with the same `JSON.stringify(payload, null, 2)` the resource
  * read uses. Resource and tool are therefore byte-identical by construction.
  *
- * Three tools are NOT pure mirrors:
+ * Four tools are NOT pure mirrors:
  *   - list_submissions   adds server-side filters over the grading-queue data
  *     (shares loadGradingQueueData + queueRow with the grading-queue resource).
  *   - list_teaching_team is a NEW capability (no resource lists staff-with-ids)
@@ -25,6 +25,9 @@
  *   - grading_report     is a NEW capability (per-TA grading oversight) on a
  *     TIGHTER tier than the rest: OWNER/TEACHER, since it exposes each TA's
  *     throughput and grading patterns to whoever reads it.
+ *   - list_tags          is a NEW capability: list_teams names tags but carries
+ *     no ids, while repo_create/repo_update's tag_id and team_create/
+ *     team_tag_add's tag_ids take ids. Teaching team, like list_teaching_team.
  */
 
 import { UriTemplate } from '@modelcontextprotocol/sdk/shared/uriTemplate.js';
@@ -131,7 +134,8 @@ export const getClassroomInfoTool = mirrorResourceTool({
   title: 'Get classroom info',
   description:
     'Classroom name, status, archive flag, sanitized settings (feature flags, model choices, ' +
-    'has_anthropic_key/has_openai_key booleans — never raw keys), and your role in it. Any member.',
+    'has_anthropic_key/has_openai_key booleans — never raw keys), your role in it, and its time ' +
+    'zone (UTC when unset). Any member.',
 });
 
 export const getRosterTool = mirrorResourceTool({
@@ -160,11 +164,15 @@ export const listTeamsTool = mirrorResourceTool({
 export const listReposTool = mirrorResourceTool({
   resource: reposResource,
   name: 'list_repos',
-  title: 'List assignment containers (repos)',
+  title: 'List repositories',
   description:
-    'Assignment containers ("repos") with their due-dated assignments. Staff see all incl. ' +
-    'unpublished; students see published-only containers they have a git repo for, with their own ' +
-    'submission status per assignment (grades only after release). Any member.',
+    'Repositories (the storage: a template plus one git repo per student/team) with the ' +
+    'assignments that submit through them. A repository has no module or weight of its own; each ' +
+    'assignment and submission carries its submission_mode (REPO = push, ISSUE = close the issue) ' +
+    'and repo_url. Staff see all incl. unpublished, with the template, team settings, tag_id and ' +
+    'project template repo_update edits; students see published-only repositories they ' +
+    'have a git repo for, with their own submission status per assignment (grades only after ' +
+    'release). Any member.',
 });
 
 export const myGradesTool = mirrorResourceTool({
@@ -183,7 +191,7 @@ export const getSubmissionTool = mirrorResourceTool({
   description:
     'One submission (a GitRepoAssignment) with its grades, graders, and analytics snapshot if ' +
     'present. Teaching team only. `submission_id` comes from list_submissions; it is also the ' +
-    'id that grade_add, grade_remove, and grader_assign consume.',
+    'id that grade_add, grade_remove, grader_assign, and submission_late_override consume.',
   extraInput: {
     submission_id: z.string().uuid().describe('Submission (GitRepoAssignment) id'),
   },
@@ -252,8 +260,13 @@ export const listCalendarTool = mirrorResourceTool({
   name: 'list_calendar',
   title: 'List calendar (current month)',
   description:
-    'Calendar events for the current month — recurring events expanded, assignment deadlines ' +
-    'merged in. Use list_calendar_range for another window. Any member.',
+    "Calendar events for the current month in the classroom's time zone — recurring events " +
+    'expanded, assignment deadlines merged in. Use list_calendar_range for another window. Event ' +
+    'times and deadlines have a `<field>_local` rendering in that zone; quote those, not raw UTC. ' +
+    'Any member; ' +
+    'staff reads also include ' +
+    'linked draft pages/decks and links to unpublished assignments, flagged as such. ' +
+    '`featured_resource` is the one link the month view shows under an event, or null.',
 });
 
 export const listCalendarRangeTool = mirrorResourceTool({
@@ -262,8 +275,12 @@ export const listCalendarRangeTool = mirrorResourceTool({
   title: 'List calendar (date range)',
   description:
     'Calendar events for an explicit date range. `start` and `end` are ISO dates ' +
-    '(YYYY-MM-DD, e.g. 2026-07-01 / 2026-08-31), start before end. Recurring events expanded, ' +
-    'deadlines merged. Any member.',
+    '(YYYY-MM-DD, e.g. 2026-07-01 / 2026-08-31), start before end, read as whole days in the ' +
+    "classroom's time zone. Recurring events expanded, deadlines merged. Event times and " +
+    'deadlines have a `<field>_local` rendering in that zone. Any member; staff reads also include linked draft ' +
+    'pages/decks and links ' +
+    'to unpublished assignments, flagged as such. `featured_resource` is the one link the month ' +
+    'view shows under an event, or null.',
   extraInput: {
     start: z.string().describe('Range start, ISO date YYYY-MM-DD'),
     end: z.string().describe('Range end, ISO date YYYY-MM-DD (must be after start)'),
@@ -301,8 +318,8 @@ export const listSubmissionsTool: ToolDefinition<ListSubmissionsArgs> = {
     'All submissions (GitRepoAssignments) in the classroom with grade emojis, grader assignments, ' +
     'student/team, and the classroom emoji scale — the same per-submission shape as the ' +
     'grading-queue. Optional filters: repository_id, assignment_id, grader_id, status (OPEN|CLOSED). ' +
-    'The returned `id` is the submission id that grade_add, grade_remove, and grader_assign ' +
-    'consume. Teaching team only.',
+    'The returned `id` is the submission id that grade_add, grade_remove, grader_assign, and ' +
+    'submission_late_override consume. Teaching team only.',
   scope: 'read',
   roles: TEACHING_TEAM,
   inputSchema: {
@@ -428,6 +445,42 @@ export const listTeachingTeamTool: ToolDefinition<ListTeachingTeamArgs> = {
   },
 };
 
+// ─── list_tags (NEW — resolves the tag ids the team/repo tools take) ────────
+
+interface ListTagsArgs {
+  classroom: string;
+}
+
+export const listTagsTool: ToolDefinition<ListTagsArgs> = {
+  name: 'list_tags',
+  title: 'List tags',
+  description:
+    "The classroom's team tags, each with { id, name, team_count, repository_count }. Use an id " +
+    'as tag_id for repo_create / repo_update (instructor-assigned GROUP repos) and in tag_ids for ' +
+    'team_create / team_tag_add. list_teams shows tag names only; create a missing tag with ' +
+    'tag_create. Teaching team only.',
+  scope: 'read',
+  // Tags are not sensitive, but only staff tools consume their ids; students
+  // have no call that takes one.
+  roles: TEACHING_TEAM,
+  inputSchema: {
+    classroom: z.string().describe("Classroom reference as 'org/slug'"),
+  },
+  handler: async (_args, ctx) => {
+    const { classroomId } = requireClassroomCtx(ctx);
+    const tags = await ClassmojiService.organizationTag.findByClassroomIdWithCounts(classroomId);
+    return ok({
+      count: tags.length,
+      tags: tags.map(tag => ({
+        id: tag.id,
+        name: tag.name,
+        team_count: tag._count.teams,
+        repository_count: tag._count.repositories,
+      })),
+    });
+  },
+};
+
 // ─── grading_report (TA grading oversight) ──────────────────────────────────
 
 interface GradingReportArgs {
@@ -484,6 +537,7 @@ export const readTools: ToolDefinition<never>[] = [
   getClassroomInfoTool,
   getRosterTool,
   listTeamsTool,
+  listTagsTool,
   listReposTool,
   myGradesTool,
   listSubmissionsTool,

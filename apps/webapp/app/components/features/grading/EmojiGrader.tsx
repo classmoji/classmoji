@@ -1,7 +1,6 @@
 import { useState } from 'react';
-import { AnimatePresence, motion, useReducedMotion } from 'framer-motion';
-import { useClickAway } from '@uidotdev/usehooks';
-import { IconMoodHappy } from '@tabler/icons-react';
+import { motion, useReducedMotion } from 'framer-motion';
+import { Popover } from 'antd';
 import { useGlobalFetcher, useUser } from '~/hooks';
 
 import { ActionTypes } from '~/constants';
@@ -12,7 +11,9 @@ import Emoji from '../../ui/display/Emoji';
 interface Grade {
   id: string;
   emoji: string;
-  grader?: { name: string | null } | null;
+  grader_id?: string | null;
+  grader?: { id?: string; name: string | null } | null;
+  created_at?: string | Date;
   token_transaction?: {
     amount: number;
   } | null;
@@ -39,10 +40,6 @@ const EmojiGrader = ({ repositoryAssignment, emojiMappings }: EmojiGraderProps) 
   const { fetcher, notify } = useGlobalFetcher();
   const { user } = useUser();
   const { classroom } = useStore();
-
-  const ref = useClickAway(() => {
-    setShow(false);
-  }) as React.RefObject<HTMLDivElement>;
 
   const assignGrade = (emoji: string) => {
     setPoppedKey(emoji);
@@ -107,8 +104,12 @@ const EmojiGrader = ({ repositoryAssignment, emojiMappings }: EmojiGraderProps) 
     );
   };
 
-  // const validEmojis = getValidEmojis(emojis, emojiMappings);
-  const emojiList = Object.keys(emojiMappings).map(key => {
+  // Both scales grade through the picker. On the numeric scale the options are
+  // the score badges and the server keeps one score per grader, so picking a
+  // second badge replaces the first.
+  const scaleKeys = Object.keys(emojiMappings);
+
+  const emojiList = scaleKeys.map(key => {
     const isSelected = repositoryAssignment.grades?.some((grade: Grade) => grade.emoji === key);
     const isPopped = poppedKey === key && !reducedMotion;
     // Outer wrapper owns the celebratory bounce, inner button owns hover/tap, so
@@ -119,7 +120,7 @@ const EmojiGrader = ({ repositoryAssignment, emojiMappings }: EmojiGraderProps) 
         data-testid={`emoji-grade-option-${key}`}
         data-selected={isSelected ? 'true' : 'false'}
         aria-pressed={isSelected}
-        className="inline-flex"
+        className="inline-flex shrink-0"
         animate={isPopped ? { scale: [1, 1.35, 0.92, 1] } : { scale: 1 }}
         transition={isPopped ? { duration: 0.4, ease: EASE_OUT_QUINT } : { duration: 0 }}
         onAnimationComplete={() => {
@@ -148,33 +149,30 @@ const EmojiGrader = ({ repositoryAssignment, emojiMappings }: EmojiGraderProps) 
   });
 
   return (
-    <div className="relative" ref={ref}>
-      <div
-        data-testid="emoji-grade-trigger"
+    <Popover
+      // Hover opens it; a click must keep it open, not toggle it shut (a click
+      // trigger on top of hover closes what the hover just opened).
+      trigger="hover"
+      mouseEnterDelay={0.15}
+      open={show}
+      onOpenChange={setShow}
+      placement="top"
+      overlayInnerStyle={{ padding: '10px 12px' }}
+      content={
+        <div data-testid="emoji-grade-popover" className="flex flex-wrap gap-2 max-w-[23rem]">
+          {emojiList}
+        </div>
+      }
+    >
+      <button
+        type="button"
         onClick={() => setShow(true)}
-        className="flex items-center gap-1 text-gray-600 hover:text-gray-800 dark:text-gray-300 dark:hover:text-gray-100 cursor-pointer"
+        data-testid="emoji-grade-trigger"
+        className="text-sm font-medium text-ink-2 hover:text-ink-1 hover:underline underline-offset-2 cursor-pointer"
       >
-        <IconMoodHappy size={16} />
-        <span>Grade</span>
-      </div>
-      <AnimatePresence>
-        {show && (
-          <motion.div
-            data-testid="emoji-grade-popover"
-            initial={reducedMotion ? { opacity: 0, y: -65 } : { opacity: 0, scale: 0.85, y: -55 }}
-            animate={reducedMotion ? { opacity: 1, y: -65 } : { opacity: 1, scale: 1, y: -65 }}
-            exit={reducedMotion ? { opacity: 0, y: -65 } : { opacity: 0, scale: 0.9, y: -55 }}
-            transition={
-              reducedMotion ? { duration: 0.12 } : { ...POP_SPRING, opacity: { duration: 0.15 } }
-            }
-            style={{ transformOrigin: 'top right' }}
-            className="absolute py-3 px-4 border border-stone-200 dark:border-neutral-700 bg-white dark:bg-neutral-900 rounded-md shadow-sm top-0 right-0 z-10"
-          >
-            <div className="flex gap-2 z-10">{emojiList}</div>
-          </motion.div>
-        )}
-      </AnimatePresence>
-    </div>
+        Grade
+      </button>
+    </Popover>
   );
 };
 

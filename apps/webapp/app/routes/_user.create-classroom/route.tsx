@@ -14,6 +14,7 @@ import StepBasicInfo from './StepBasicInfo';
 import StepImportModules from './StepImportModules';
 import StepReview from './StepReview';
 import { slugify, STEPS } from './utils';
+import { browserTimeZone } from '~/utils/browserTimeZone';
 import { SOURCE_ROLES } from './sourceAccess';
 import type { ImportSelections } from './types';
 import type { Route } from './+types/route';
@@ -209,8 +210,6 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
             title: true,
             template: true,
             type: true,
-            weight: true,
-            is_extra_credit: true,
             _count: {
               select: {
                 assignments: true,
@@ -435,7 +434,15 @@ const CreateClassroom = ({ loaderData }: Route.ComponentProps) => {
     notify(ActionTypes.CREATE_CLASSROOM, 'Creating classroom...');
 
     fetcher!.submit(
-      { ...values, slug: effectiveSlug, content_repo: effectiveContentRepo, importConfig },
+      {
+        ...values,
+        slug: effectiveSlug,
+        content_repo: effectiveContentRepo,
+        importConfig,
+        // The creator's browser zone seeds the course time zone (validated on
+        // the server; editable later in General settings).
+        timezone: browserTimeZone(),
+      },
       {
         method: 'post',
         action: '/create-classroom',

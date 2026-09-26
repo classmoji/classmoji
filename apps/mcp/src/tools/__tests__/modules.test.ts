@@ -269,9 +269,27 @@ describe('cross-classroom scoping (S1)', () => {
     expect(mocks.auditCreate).not.toHaveBeenCalled();
   });
 
-  it('gives every item type the identical refusal (FORM is not special)', async () => {
+  it('refuses REPOSITORY before any lookup: repos are attached to assignments', async () => {
+    const error = await moduleItemAddTool
+      .handler(
+        {
+          classroom: 'org/w26',
+          module_id: 'mod-1',
+          item_type: 'REPOSITORY',
+          target_id: 'repo-1',
+        } as never,
+        CTX
+      )
+      .catch(e => e);
+    expect((error as ToolError).kind).toBe('invalid_params');
+    expect((error as ToolError).message).toContain('assignment_create');
+    expect(mocks.moduleAddItem).not.toHaveBeenCalled();
+    expect(mocks.auditCreate).not.toHaveBeenCalled();
+  });
+
+  it('gives every content item type the identical refusal (FORM is not special)', async () => {
     const messages: string[] = [];
-    for (const item_type of ['PAGE', 'REPOSITORY', 'QUIZ', 'SLIDE', 'FORM']) {
+    for (const item_type of ['PAGE', 'QUIZ', 'SLIDE', 'FORM']) {
       mocks.moduleAddItem.mockRejectedValue(foreignTarget());
       const error = await moduleItemAddTool
         .handler(
@@ -346,10 +364,10 @@ describe('Pro gating of FORM items', () => {
     expect(mocks.auditCreate).not.toHaveBeenCalled();
   });
 
-  it('still adds a PAGE (and the other three types) in that same non-Pro classroom', async () => {
+  it('still adds a PAGE (and the other content types) in that same non-Pro classroom', async () => {
     mocks.assertProTier.mockRejectedValue(proDenial());
 
-    for (const item_type of ['PAGE', 'REPOSITORY', 'QUIZ', 'SLIDE']) {
+    for (const item_type of ['PAGE', 'QUIZ', 'SLIDE']) {
       mocks.moduleAddItem.mockClear();
       mocks.assertProTier.mockClear();
       mocks.moduleAddItem.mockResolvedValue({ ...ITEM_ROW, item_type });

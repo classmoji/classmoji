@@ -35,7 +35,20 @@ import * as subscriptionService from './subscription.service.ts';
 import * as entitlementService from './entitlement.service.ts';
 import * as instructorAudienceService from './instructorAudience.service.ts';
 import * as surveyService from './survey.service.ts';
-export { ClassroomSettingsEntitlementError } from './classroom.service.ts';
+export {
+  ClassroomSettingsEntitlementError,
+  ClassroomSettingsValidationError,
+} from './classroom.service.ts';
+// A refused calendar time range, so a caller can say so instead of 500ing,
+// plus the event-type policy every calendar write surface has to apply.
+export {
+  CalendarTimeRangeError,
+  isCalendarTimeRangeError,
+  ASSISTANT_EVENT_TYPE,
+  ASSISTANT_EVENT_TYPE_MESSAGE,
+  assistantMayCreateEventType,
+  assistantMayChangeEventType,
+} from './calendar.service.ts';
 // Installation repair: the refusal every caller has to tell apart from "not
 // installed", plus the shapes its results come back in.
 export {
@@ -59,6 +72,7 @@ export type {
 import * as teamMembershipService from './teamMembership.service.ts';
 import * as teamService from './team.service.ts';
 import * as teamTagService from './teamTag.service.ts';
+import * as teamSetService from './teamSet.service.ts';
 import * as tokenService from './token.service.ts';
 import * as userService from './user.service.ts';
 import * as quizService from './quiz.service.ts';
@@ -68,7 +82,6 @@ import * as contentImportService from './contentImport.service.ts';
 import * as templateImportService from './templateImport.service.ts';
 import * as classroomConfigImportService from './classroomConfigImport.service.ts';
 import * as githubClassroomImportService from './githubClassroomImport.service.ts';
-import * as githubClassroomApiService from './githubClassroomApi.service.ts';
 import * as githubUserTokenService from './githubUserToken.service.ts';
 import * as classroomInviteService from './classroomInvite.service.ts';
 import * as contentManifestService from './contentManifest.service.ts';
@@ -131,6 +144,9 @@ const ClassmojiService = {
   team: teamService,
   teamAdmin: teamAdminService,
   teamTag: teamTagService,
+  // Team sets: configure, solve (Trigger `team-set-solve`) and create (Trigger
+  // `team-set-apply`) a grouping of a classroom form's respondents.
+  teamSet: teamSetService,
   token: tokenService,
   user: userService,
   quiz: quizService,
@@ -140,7 +156,6 @@ const ClassmojiService = {
   templateImport: templateImportService,
   classroomConfigImport: classroomConfigImportService,
   githubClassroomImport: githubClassroomImportService,
-  githubClassroomApi: githubClassroomApiService,
   githubUserToken: githubUserTokenService,
   classroomInvite: classroomInviteService,
   contentManifest: contentManifestService,
@@ -211,6 +226,7 @@ export {
   teamService,
   teamAdminService,
   teamTagService,
+  teamSetService,
   tokenService,
   userService,
   quizService,
@@ -220,7 +236,6 @@ export {
   templateImportService,
   classroomConfigImportService,
   githubClassroomImportService,
-  githubClassroomApiService,
   githubUserTokenService,
   classroomInviteService,
   contentManifestService,

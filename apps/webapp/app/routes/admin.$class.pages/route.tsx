@@ -1,7 +1,14 @@
 import { useState, useEffect } from 'react';
 import { useFetcher, Link, Outlet, useSearchParams, useNavigate, useLocation } from 'react-router';
 import { Table, Button, Input, Select, Switch, Tooltip } from 'antd';
-import { IconPlus, IconEyeOff, IconLock, IconWorld, IconMenu2, IconSearch } from '@tabler/icons-react';
+import {
+  IconPlus,
+  IconEyeOff,
+  IconLock,
+  IconWorld,
+  IconMenu2,
+  IconSearch,
+} from '@tabler/icons-react';
 import {
   addClassroomAuditLog,
   assertClassroomAccess,
@@ -11,45 +18,10 @@ import { ClassmojiService } from '@classmoji/services';
 import { useCallout } from '@classmoji/ui-components';
 import getPrisma from '@classmoji/database';
 import { TableActionButtons, RecentViewers } from '~/components';
+import { adminLoader } from './loader.server';
 import type { Route } from './+types/route';
 
-export const loader = async ({ request, params }: Route.LoaderArgs) => {
-  const { class: classSlug } = params;
-
-  const { classroom } = await assertClassroomAccess({
-    request,
-    classroomSlug: classSlug!,
-    allowedRoles: ['OWNER', 'TEACHER'],
-    resourceType: 'PAGES',
-    attemptedAction: 'view_pages',
-  });
-
-  // Get all pages for this classroom
-  const pages = await ClassmojiService.page.findByClassroomId(classroom.id, {
-    includeCreator: true,
-    includeLinks: true,
-  });
-
-  // Fetch recent viewers for all pages in one query (with total counts and roles for admin UI)
-  const resourcePaths = pages.map(page => `pages/${page.id}`);
-  const pageViewersMap = await ClassmojiService.resourceView.getRecentViewersForPaths({
-    resourcePaths,
-    classroomId: classroom.id,
-    limitPerPath: 50,
-    includeTotalCount: true,
-    includeRoles: true,
-  });
-
-  // Convert Map to plain object for serialization (React Router can't serialize Maps)
-  const pageViewers = Object.fromEntries(pageViewersMap);
-
-  return {
-    classSlug,
-    classroom,
-    pages,
-    pageViewers,
-  };
-};
+export const loader = adminLoader;
 
 export const action = async ({ request, params }: Route.ActionArgs) => {
   const { class: classSlug } = params;
@@ -193,6 +165,11 @@ export default function AdminPages({ loaderData }: Route.ComponentProps) {
   // tiers the loader and action already allow), so links are built from the
   // prefix the user actually arrived on rather than a hardcoded '/admin'.
   const rolePrefix = useLocation().pathname.split('/')[1];
+  // The assistant section serves this same list read-only: they open a page to
+  // read it, but its status, menu visibility, creation and deletion belong to
+  // the people who own the class. /admin and /teacher are gated in the loader,
+  // so being under one of them is the permission.
+  const canEdit = rolePrefix === 'admin' || rolePrefix === 'teacher';
 
   // Show toast notification after delete (from redirect)
   useEffect(() => {
@@ -296,6 +273,19 @@ export default function AdminPages({ loaderData }: Route.ComponentProps) {
       width: 130,
       render: (_: unknown, record: PageRecord) => {
         const status = getPageStatus(record);
+        if (!canEdit) {
+          const meta = {
+            draft: { icon: <IconEyeOff size={14} />, label: 'Draft' },
+            private: { icon: <IconLock size={14} />, label: 'Private' },
+            public: { icon: <IconWorld size={14} />, label: 'Public' },
+          }[status] ?? { icon: null, label: status };
+          return (
+            <span className="inline-flex items-center gap-1 text-sm text-ink-2">
+              {meta.icon}
+              {meta.label}
+            </span>
+          );
+        }
         return (
           <Select
             value={status}
@@ -344,13 +334,16 @@ export default function AdminPages({ loaderData }: Route.ComponentProps) {
       key: 'show_in_student_menu',
       width: 80,
       align: 'center',
-      render: (_: unknown, record: PageRecord) => (
-        <Switch
-          size="small"
-          checked={record.show_in_student_menu}
-          onChange={checked => updatePageField(record.id, 'show_in_student_menu', checked)}
-        />
-      ),
+      render: (_: unknown, record: PageRecord) =>
+        canEdit ? (
+          <Switch
+            size="small"
+            checked={record.show_in_student_menu}
+            onChange={checked => updatePageField(record.id, 'show_in_student_menu', checked)}
+          />
+        ) : (
+          <span className="text-sm text-ink-3">{record.show_in_student_menu ? 'Yes' : 'No'}</span>
+        ),
     },
     {
       title: 'Updated',
@@ -363,18 +356,27 @@ export default function AdminPages({ loaderData }: Route.ComponentProps) {
       title: 'Actions',
       key: 'actions',
       width: 200,
-      render: (_: unknown, record: PageRecord) => (
-        <TableActionButtons
-          onEdit={() => {
-            navigate(`/${rolePrefix}/${classSlug}/pages/${record.id}`);
-          }}
-          onDelete={() =>
-            fetcher.submit({ intent: 'delete', pageId: record.id }, { method: 'post' })
-          }
-          deleteConfirmTitle="Delete page?"
-          deleteConfirmDescription="This will delete the page record. The content in GitHub will remain."
-        />
-      ),
+      render: (_: unknown, record: PageRecord) =>
+        canEdit ? (
+          <TableActionButtons
+            onEdit={() => {
+              navigate(`/${rolePrefix}/${classSlug}/pages/${record.id}`);
+            }}
+            onDelete={() =>
+              fetcher.submit({ intent: 'delete', pageId: record.id }, { method: 'post' })
+            }
+            deleteConfirmTitle="Delete page?"
+            deleteConfirmDescription="This will delete the page record. The content in GitHub will remain."
+          />
+        ) : (
+          <button
+            type="button"
+            onClick={() => navigate(`/${rolePrefix}/${classSlug}/pages/${record.id}`)}
+            className="text-sm font-medium text-ink-2! hover:text-ink-1! hover:underline underline-offset-2"
+          >
+            View
+          </button>
+        ),
     },
   ];
 
@@ -392,18 +394,17 @@ export default function AdminPages({ loaderData }: Route.ComponentProps) {
             onChange={e => setSearchText(e.target.value)}
             style={{ width: 260 }}
           />
-          <Link to={`/${rolePrefix}/${classSlug}/pages/new`} data-tour="pages-new">
-            <Button type="primary" icon={<IconPlus size={16} />}>
-              New Page
-            </Button>
-          </Link>
+          {canEdit && (
+            <Link to={`/${rolePrefix}/${classSlug}/pages/new`} data-tour="pages-new">
+              <Button type="primary" icon={<IconPlus size={16} />}>
+                New Page
+              </Button>
+            </Link>
+          )}
         </div>
       </div>
 
-      <div
-
-        className="rounded-2xl overflow-hidden bg-panel ring-1 ring-line min-h-[calc(100vh-10rem)] p-5 sm:p-6"
-      >
+      <div className="rounded-2xl overflow-hidden bg-panel ring-1 ring-line min-h-[calc(100vh-10rem)] p-5 sm:p-6">
         <Table
           columns={columns as Parameters<typeof Table>[0]['columns']}
           dataSource={filteredPages}

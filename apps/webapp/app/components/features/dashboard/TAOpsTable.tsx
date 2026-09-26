@@ -8,7 +8,6 @@ export interface TaOpsRow {
   login: string;
   name: string | null;
   throughput7d: number;
-  avgTimeToGradeHours: number | null;
   overturnRate: number | null;
   gradeDistributionMean: number | null;
 }
@@ -45,19 +44,6 @@ const TAOpsTable = ({ rows }: TAOpsTableProps) => {
       align: 'right',
       sorter: (a, b) => a.throughput7d - b.throughput7d,
       render: (v: number) => <span className="tabular-nums">{v}</span>,
-    },
-    {
-      title: 'Avg TTG',
-      key: 'avgTimeToGradeHours',
-      align: 'right',
-      sorter: (a, b) =>
-        (a.avgTimeToGradeHours ?? Number.POSITIVE_INFINITY) -
-        (b.avgTimeToGradeHours ?? Number.POSITIVE_INFINITY),
-      render: (_, r) => (
-        <span className="tabular-nums">
-          {r.avgTimeToGradeHours === null ? '—' : `${r.avgTimeToGradeHours.toFixed(1)}h`}
-        </span>
-      ),
     },
     {
       title: 'Overturn %',

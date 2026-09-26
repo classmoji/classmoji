@@ -1,9 +1,10 @@
 ---
-// Black-and-white left-to-right flow for the Repositories & assignments page:
-// publishing a repository clones the template into one repo per student/team,
-// and the assignments land as Github issues. The footnote captures the
-// temporal bit (future-dated assignments appear on their release date). Pure
-// outline drawing in `currentColor` so it flips black/white with the theme.
+// Black-and-white left-to-right flow for the Repositories page: publishing a
+// repository clones the template into one repo per student/team, and the
+// assignments that submit through it then count pushes to those repos (or, in
+// issue mode, open an issue there). The footnote captures the temporal bit
+// (future-dated assignments appear on their release date). Pure outline drawing
+// in `currentColor` so it flips black/white with the theme.
 interface Props {
   class?: string;
 }
@@ -25,14 +26,15 @@ const { class: className } = Astro.props;
     <title id="publish-title">What happens when you publish a repository</title>
     <desc id="publish-desc">
       Publishing a repository copies the template repo into one repository per
-      student or team, with each assignment loaded as a Github issue.
+      student or team. Assignments then submit through those repos: a push is
+      the submission, or in issue mode Classmoji opens a Github issue there.
       Assignments with a future release date appear automatically on that date.
     </desc>
 
     <!-- Template repo -->
     <rect x="24" y="60" width="160" height="80" rx="10" />
     <text x="104" y="96" text-anchor="middle" fill="currentColor" stroke="none" font-size="14" font-weight="600">Template repo</text>
-    <text x="104" y="116" text-anchor="middle" fill="currentColor" stroke="none" font-size="11" opacity="0.6">starter code + issues</text>
+    <text x="104" y="116" text-anchor="middle" fill="currentColor" stroke="none" font-size="11" opacity="0.6">starter code</text>
 
     <!-- Arrow 1: publish -->
     <text x="208" y="92" text-anchor="middle" fill="currentColor" stroke="none" font-size="11" opacity="0.6">publish</text>
@@ -45,15 +47,15 @@ const { class: className } = Astro.props;
     <text x="326" y="96" text-anchor="middle" fill="currentColor" stroke="none" font-size="14" font-weight="600">Student / team repos</text>
     <text x="326" y="116" text-anchor="middle" fill="currentColor" stroke="none" font-size="11" opacity="0.6">one copy each</text>
 
-    <!-- Arrow 2: loads -->
-    <text x="430" y="92" text-anchor="middle" fill="currentColor" stroke="none" font-size="11" opacity="0.6">loads</text>
+    <!-- Arrow 2: submit through -->
+    <text x="430" y="92" text-anchor="middle" fill="currentColor" stroke="none" font-size="11" opacity="0.6">submit via</text>
     <line x1="414" y1="100" x2="448" y2="100" />
     <polygon points="458,100 446,93 446,107" fill="currentColor" stroke="none" />
 
-    <!-- Assignments as issues -->
+    <!-- Assignments that submit through the repo -->
     <rect x="476" y="60" width="160" height="80" rx="10" />
     <text x="556" y="96" text-anchor="middle" fill="currentColor" stroke="none" font-size="14" font-weight="600">Assignments</text>
-    <text x="556" y="116" text-anchor="middle" fill="currentColor" stroke="none" font-size="11" opacity="0.6">= Github issues</text>
+    <text x="556" y="116" text-anchor="middle" fill="currentColor" stroke="none" font-size="11" opacity="0.6">a push submits · or an issue</text>
 
     <!-- Footnote: scheduled release -->
     <circle cx="176" cy="196" r="9" />

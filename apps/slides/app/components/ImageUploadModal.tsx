@@ -1,5 +1,7 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
-import { Modal, Slider, Button, message, Spin } from 'antd';
+import { Modal, Slider, Button, Spin } from 'antd';
+
+import { useToast } from '~/hooks';
 import { useDropzone } from 'react-dropzone';
 import ReactCrop, { type Crop } from 'react-image-crop';
 import 'react-image-crop/dist/ReactCrop.css';
@@ -31,6 +33,7 @@ interface ProcessedInfo {
 }
 
 export default function ImageUploadModal({ open, onClose, onUpload }: ImageUploadModalProps) {
+  const toast = useToast();
   const [file, setFile] = useState<File | null>(null);
   const [preview, setPreview] = useState<string | null>(null);
   const [crop, setCrop] = useState<Crop | null>(null);
@@ -71,14 +74,14 @@ export default function ImageUploadModal({ open, onClose, onUpload }: ImageUploa
 
       // Validate file type
       if (!selectedFile.type.startsWith('image/')) {
-        message.error('Please select an image file');
+        toast.error('Please select an image file');
         return;
       }
 
       // Check file size (max 100MB for Git Blobs API)
       const MAX_SIZE = 100 * 1024 * 1024;
       if (selectedFile.size > MAX_SIZE) {
-        message.error('File too large. Maximum size is 100MB');
+        toast.error('File too large. Maximum size is 100MB');
         return;
       }
 
@@ -150,12 +153,12 @@ export default function ImageUploadModal({ open, onClose, onUpload }: ImageUploa
 
       // Call parent upload handler
       await onUpload(processedFile);
-      message.success('Image uploaded successfully');
+      toast.success('Image uploaded successfully');
       onClose();
     } catch (err: unknown) {
       console.error('Upload failed:', err);
       const errorMessage = err instanceof Error ? err.message : String(err);
-      message.error(`Upload failed: ${errorMessage}`);
+      toast.error(`Upload failed: ${errorMessage}`);
     } finally {
       setProcessing(false);
     }

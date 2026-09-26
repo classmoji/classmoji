@@ -1,35 +1,36 @@
-import { useState, useMemo } from 'react';
-import { Table, Checkbox, ConfigProvider, Segmented, Popover, Input } from 'antd';
-import { IconAdjustmentsHorizontal, IconMessagePlus, IconSearch } from '@tabler/icons-react';
-import { useParams, useNavigate, useLocation } from 'react-router';
+import { useMemo, useState } from 'react';
+import { ConfigProvider, Input, Popover, Select, Table, Tooltip } from 'antd';
+import type { TableProps } from 'antd';
+import {
+  IconAdjustmentsHorizontal,
+  IconChevronDown,
+  IconChevronRight,
+  IconSearch,
+} from '@tabler/icons-react';
+import { Link, useLocation, useParams } from 'react-router';
+import dayjs from 'dayjs';
 import { mean, median } from 'simple-statistics';
 
-import { UserThumbnailView, TableActionButtons } from '~/components';
+import { UserThumbnailView } from '~/components';
 import GradeSettings from './GradeSettings';
-import { createAssignmentColumns } from './columns/assignmentColumns';
-import { createStudentGradeColumns } from './columns/studentGradeColumns';
-import { calculateStudentFinalGrade } from '@classmoji/utils';
-import type { TableProps } from 'antd';
-import type { GitRepo, OrganizationSettings, LetterGradeMappingEntry } from '@classmoji/utils';
-import { useGlobalFetcher, useDarkMode } from '~/hooks';
-
-interface ModuleData {
-  id: string | number;
-  title: string;
-  weight: number;
-  is_published: boolean;
-  is_extra_credit?: boolean;
-  assignments: Array<{ id: string | number; title: string; weight: number }>;
-}
+import {
+  calculateAssignmentGrade,
+  calculateLetterGrade,
+  calculateStudentFinalGrade,
+} from '@classmoji/utils';
+import type {
+  GitRepo,
+  GitRepoAssignment,
+  LetterGradeMappingEntry,
+  OrganizationSettings,
+} from '@classmoji/utils';
+import { useDarkMode } from '~/hooks';
+import EmojiGrader from '~/components/features/grading/EmojiGrader';
 
 /**
- * A gradebook row as it leaves the loader.
- *
- * Declared as a CLOSED shape on purpose. This used to carry an
- * `[key: string]: unknown` index signature, which meant the loader could hand
- * the whole `User` row over — contact details, ban state, the Stripe customer
- * id — and the compiler had nothing to say about it. The contact fields stay
- * optional because the loader includes them for an OWNER only.
+ * A gradebook row as it leaves the loader. A CLOSED shape on purpose: the
+ * loader projects the User row down to this, and the contact fields are
+ * present for an OWNER only.
  */
 interface Student {
   id: string;
@@ -50,227 +51,561 @@ interface Membership {
   letter_grade?: string | null;
 }
 
+/** A published assignment: one column, under its module's group header. */
+export interface GradebookAssignment {
+  id: string;
+  title: string;
+  weight: number;
+  is_extra_credit: boolean;
+  type: string;
+  module_id: string;
+  module_title?: string;
+  created_at?: string | Date;
+  repository_id?: string | null;
+  student_deadline?: string | Date | null;
+  submission_mode?: string;
+  grades_released?: boolean;
+  quiz_id?: string | null;
+  form_id?: string | null;
+}
+
+/** Per-student state for quiz and form assignments, keyed by assignment id then user id. */
+export interface GradebookActivity {
+  quiz: Record<string, Record<string, { completed: boolean; score: number | null }>>;
+  form: Record<string, Record<string, { submitted: boolean }>>;
+}
+
+/** The classroom's modules, in course order: one column group each. */
+export interface GradebookModule {
+  id: string;
+  title: string;
+  position: number;
+}
+
+/** A submission row with the fields the Prisma extension computes at read time. */
+type Submission = GitRepoAssignment & {
+  assignment_id?: string | number;
+  status?: string;
+  closed_at?: string | Date | null;
+  is_late?: boolean;
+  num_late_hours?: number;
+  should_be_zero?: boolean;
+};
+
 type EmojiMappings = Record<string, number>;
+type RowFilter = 'all' | 'ungraded' | 'missing' | 'late';
 
 interface GradesTableProps {
   emojiMappings: EmojiMappings;
-  repositories: ModuleData[];
+  modules: GradebookModule[];
+  assignments: GradebookAssignment[];
   students: Student[];
   settings: OrganizationSettings;
   letterGradeMappings: LetterGradeMappingEntry[];
   memberships: Membership[];
+  activity?: GradebookActivity;
 }
 
+/** The student's submission row for an assignment, wherever its git repo sits. */
+type StudentGitRepo = GitRepo & {
+  id?: string;
+  name?: string;
+  student_id?: string | null;
+  team_id?: string | null;
+};
+
+const findSubmissionWithRepo = (
+  student: Student,
+  assignmentId: string
+): { sub: Submission; repo: StudentGitRepo } | undefined => {
+  for (const repo of student.git_repos as StudentGitRepo[]) {
+    const found = (repo.assignments as Submission[] | undefined)?.find(
+      ra =>
+        String(ra.assignment_id ?? (ra.assignment as { id?: string } | undefined)?.id) ===
+        assignmentId
+    );
+    if (found) return { sub: found, repo };
+  }
+  return undefined;
+};
+
+const findSubmission = (student: Student, assignmentId: string): Submission | undefined =>
+  findSubmissionWithRepo(student, assignmentId)?.sub;
+
+const isGraded = (s: Submission | undefined) => Boolean(s && (s.grades?.length ?? 0) > 0);
+const isLate = (s: Submission | undefined) => Boolean(s?.is_late && !s.is_late_override);
+const isSubmitted = (s: Submission | undefined) => s?.status === 'CLOSED';
+
+const Chip = ({
+  tone,
+  children,
+}: {
+  tone: 'blue' | 'red' | 'amber' | 'grey';
+  children: React.ReactNode;
+}) => {
+  const cls = {
+    blue: 'text-sky-700 dark:text-sky-300',
+    red: 'text-red-700 dark:text-red-300',
+    amber: 'text-amber-700 dark:text-amber-300',
+    grey: 'text-ink-3',
+  }[tone];
+  return <span className={`text-xs font-semibold whitespace-nowrap ${cls}`}>{children}</span>;
+};
+
+/**
+ * The gradebook: students as rows, one column per published assignment
+ * grouped under its module, each module closing with its own total, and the
+ * class Total pinned beside the student. Repo cells grade in place through the
+ * hover picker; every cell also links to that student's row on the assignment
+ * page.
+ */
 const GradesTable = (props: GradesTableProps) => {
   const {
     emojiMappings,
-    repositories: assignments,
+    modules = [],
+    assignments,
     students,
     settings,
     letterGradeMappings: initialLetterGradeMappings,
     memberships,
+    activity = { quiz: {}, form: {} },
   } = props;
   const [letterGradeMappings, setLetterGradeMappings] = useState(initialLetterGradeMappings);
-  const [view, setView] = useState('Emoji');
-  const [showIssues, setShowIssues] = useState(false);
-  const [showComments, setShowComments] = useState(false);
+  const [rowFilter, setRowFilter] = useState<RowFilter>('all');
   const [searchQuery, setSearchQuery] = useState('');
   const { class: classSlug } = useParams();
-  const navigate = useNavigate();
-  // Served under every prefix this route's gate allows (/admin and /teacher),
-  // so links stay on the prefix the user arrived on.
   const rolePrefix = useLocation().pathname.split('/')[1];
-  const { fetcher } = useGlobalFetcher();
+  // Owners and teachers reach this page; both may grade.
+  const canGrade = true;
+  const base = `/${rolePrefix}/${classSlug}`;
   const { isDarkMode } = useDarkMode();
 
-  // Filter students based on search query
-  const filteredStudents = useMemo(() => {
-    if (!searchQuery.trim()) return students;
+  // Every published assignment is a column, grouped under its module in the
+  // course's module order (the same shape as the student report); inside a
+  // module, columns run in the order the assignments were created.
+  const groups = useMemo(() => {
+    const byCreated = (x: GradebookAssignment, y: GradebookAssignment) =>
+      new Date(x.created_at ?? 0).getTime() - new Date(y.created_at ?? 0).getTime() ||
+      x.title.localeCompare(y.title);
+    const position = new Map(modules.map(m => [m.id, m.position]));
+    const byModule = new Map<string, { id: string; title: string; items: GradebookAssignment[] }>();
+    for (const a of assignments) {
+      const g = byModule.get(a.module_id) ?? {
+        id: a.module_id,
+        title: a.module_title ?? modules.find(m => m.id === a.module_id)?.title ?? 'Module',
+        items: [],
+      };
+      g.items.push(a);
+      byModule.set(a.module_id, g);
+    }
+    return [...byModule.values()]
+      .sort(
+        (g, h) =>
+          (position.get(g.id) ?? Infinity) - (position.get(h.id) ?? Infinity) ||
+          g.title.localeCompare(h.title)
+      )
+      .map(g => ({ ...g, items: [...g.items].sort(byCreated) }));
+  }, [assignments, modules]);
+  const columnsSpec = useMemo(() => groups.flatMap(g => g.items), [groups]);
 
-    const query = searchQuery.toLowerCase();
-    return students.filter((student: Student) => {
-      const name = student.name?.toLowerCase() || '';
-      const login = student.login?.toLowerCase() || '';
-      const email = student.email?.toLowerCase() || '';
-      const providerEmail = student.provider_email?.toLowerCase() || '';
-      return (
-        name.includes(query) ||
-        login.includes(query) ||
-        email.includes(query) ||
-        providerEmail.includes(query)
-      );
+  const finalOf = (s: Student) => calculateStudentFinalGrade(s.git_repos, emojiMappings, settings);
+  // A module's total is the same weighted math as the class total, run over
+  // just that module's repo assignments (quiz and form scores are not graded
+  // into the total anywhere, so they are not here either).
+  const moduleTotalOf = (s: Student, assignmentIds: Set<string>) => {
+    const repos = s.git_repos.map(repo => ({
+      ...repo,
+      assignments: (repo.assignments ?? []).filter(ra =>
+        assignmentIds.has(String((ra as Submission).assignment_id))
+      ),
+    }));
+    return calculateStudentFinalGrade(repos, emojiMappings, settings);
+  };
+  // Collapsed modules show only their total column.
+  const [collapsedModules, setCollapsedModules] = useState<Set<string>>(new Set());
+  const toggleModule = (id: string) =>
+    setCollapsedModules(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
     });
-  }, [students, searchQuery]);
+  const rawOf = (s: Student) =>
+    calculateStudentFinalGrade(s.git_repos, emojiMappings, settings, false);
+  const individualOf = (s: Student) =>
+    calculateStudentFinalGrade(s.git_repos, emojiMappings, settings, true, false);
+  const membershipOf = (s: Student) => memberships.find(m => String(m.user_id) === String(s.id));
+  const gradeOf = (s: Student, assignmentId: string) => {
+    const sub = findSubmission(s, assignmentId);
+    return sub ? calculateAssignmentGrade(sub, emojiMappings, settings) : null;
+  };
 
-  const handleUpdateLetterGrade = (
-    membershipId: string | number,
-    letterGrade: string | number | null | undefined
-  ) => {
-    fetcher!.submit(
-      { membership_id: String(membershipId), letter_grade: String(letterGrade ?? '') },
-      {
-        method: 'post',
-        action: '?/updateLetterGrade',
-        encType: 'application/json',
+  const rows = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+    return students.filter(student => {
+      if (q) {
+        const hay = [student.name, student.login, student.email, student.provider_email]
+          .map(v => (v ?? '').toLowerCase())
+          .join(' ');
+        if (!hay.includes(q)) return false;
       }
-    );
-  };
+      if (rowFilter === 'all') return true;
+      const subs = columnsSpec
+        .filter(a => a.type === 'REPO')
+        .map(a => findSubmission(student, a.id));
+      if (rowFilter === 'ungraded') return subs.some(s => isSubmitted(s) && !isGraded(s));
+      if (rowFilter === 'missing') return subs.some(s => s?.should_be_zero);
+      if (rowFilter === 'late') return subs.some(s => isLate(s));
+      return true;
+    });
+  }, [students, searchQuery, rowFilter, columnsSpec]);
 
-  const changeLetterGradeMapping = async (letterGrade: string, grade: number) => {
+  const toGradeCount = (assignmentId: string) =>
+    students.reduce((n, s) => {
+      const sub = findSubmission(s, assignmentId);
+      return n + (isSubmitted(sub) && !isGraded(sub) ? 1 : 0);
+    }, 0);
+
+  const changeLetterGradeMapping = (letterGrade: string, grade: number) =>
     setLetterGradeMappings(
-      letterGradeMappings.map((mapping: LetterGradeMappingEntry) => {
-        if (mapping.letter_grade === letterGrade) {
-          return { ...mapping, min_grade: grade };
-        }
-        return mapping;
-      })
+      letterGradeMappings.map(m =>
+        m.letter_grade === letterGrade ? { ...m, min_grade: grade } : m
+      )
+    );
+
+  const renderCell = (student: Student, assignment: GradebookAssignment) => {
+    if (assignment.type === 'QUIZ') {
+      const q = activity.quiz[assignment.id]?.[student.id];
+      const href = assignment.quiz_id ? `${base}/quizzes/${assignment.quiz_id}` : null;
+      const body = !q ? (
+        <Chip tone="grey">Not attempted</Chip>
+      ) : !q.completed ? (
+        <Chip tone="blue">In progress</Chip>
+      ) : (
+        <span className="font-semibold tabular-nums">
+          {q.score === null ? 'Completed' : Math.round(q.score * 10) / 10}
+        </span>
+      );
+      return href ? (
+        <Link
+          to={href}
+          className="flex items-center min-h-9 -m-2 p-2 rounded-md text-ink-1 hover:ring-1 hover:ring-line"
+        >
+          {body}
+        </Link>
+      ) : (
+        body
+      );
+    }
+    if (assignment.type === 'FORM') {
+      const f = activity.form[assignment.id]?.[student.id];
+      return f?.submitted ? (
+        <Chip tone="grey">Responded</Chip>
+      ) : (
+        <Chip tone="grey">No response</Chip>
+      );
+    }
+    const hit = findSubmissionWithRepo(student, assignment.id);
+    const sub = hit?.sub;
+    const href = `${base}/assignments/${assignment.id}${
+      student.login ? `?q=${encodeURIComponent(student.login)}` : ''
+    }`;
+    let body: React.ReactNode;
+    let tint = '';
+
+    if (!sub) {
+      body = <span className="text-ink-4">–</span>;
+    } else if (isGraded(sub)) {
+      const numeric = calculateAssignmentGrade(sub, emojiMappings, settings);
+      body = (
+        <span className="font-semibold tabular-nums">
+          {numeric === null ? '–' : Math.round(numeric * 10) / 10}
+        </span>
+      );
+      if (isLate(sub)) tint = 'bg-amber-50 dark:bg-amber-950/30';
+      if (sub.is_late_override)
+        body = (
+          <span className="inline-flex items-center gap-1.5">
+            {body}
+            <Chip tone="grey">waived</Chip>
+          </span>
+        );
+    } else if (isSubmitted(sub)) {
+      body = (
+        <Chip tone={isLate(sub) ? 'amber' : 'blue'}>
+          {isLate(sub) ? 'Late · to grade' : 'To grade'}
+        </Chip>
+      );
+      if (isLate(sub)) tint = 'bg-amber-50 dark:bg-amber-950/30';
+    } else if (sub.should_be_zero) {
+      body = <Chip tone="red">Missing</Chip>;
+      tint = 'bg-red-50 dark:bg-red-950/30';
+    } else {
+      body = <Chip tone="grey">Not submitted</Chip>;
+    }
+
+    // Grade right here with the same picker and API as the assignment page.
+    const control =
+      hit && canGrade ? (
+        <EmojiGrader
+          repositoryAssignment={{
+            id: sub!.id,
+            assignment_id: assignment.id,
+            studentId: hit.repo.student_id ?? undefined,
+            teamId: hit.repo.team_id ?? undefined,
+            grades: (sub!.grades ?? []) as Parameters<
+              typeof EmojiGrader
+            >[0]['repositoryAssignment']['grades'],
+            repository: { name: hit.repo.name ?? null },
+          }}
+          emojiMappings={emojiMappings as Record<string, unknown>}
+        />
+      ) : null;
+
+    return (
+      <div
+        className={`flex items-center justify-between gap-2 min-h-9 -m-2 p-2 rounded-md ${tint}`}
+      >
+        {body && (
+          <Link to={href} className="text-ink-1 hover:underline underline-offset-2">
+            {body}
+          </Link>
+        )}
+        {control}
+      </div>
     );
   };
 
-  const assignmentColumns = createAssignmentColumns(
-    assignments || [],
-    view,
-    showIssues,
-    emojiMappings,
-    settings
-  );
-
-  const studentGradeColumns = createStudentGradeColumns(
-    emojiMappings,
-    settings,
-    letterGradeMappings,
-    memberships,
-    handleUpdateLetterGrade,
-    showComments
-  );
-
-  const columns = [
-    {
-      title: 'Student',
-      key: 'student',
-      dataIndex: 'name',
-      fixed: 'left',
-      ellipsis: true,
+  const assignmentColumn = (assignment: GradebookAssignment) => {
+    const due = assignment.student_deadline
+      ? dayjs(assignment.student_deadline).format('MMM D')
+      : null;
+    const pending = assignment.type === 'REPO' ? toGradeCount(assignment.id) : 0;
+    return {
+      title: (
+        <div className="flex flex-col gap-0.5 min-w-0">
+          <Link
+            to={`${base}/assignments/${assignment.id}`}
+            className="truncate text-ink-1 hover:underline underline-offset-2"
+            title={assignment.title}
+          >
+            {assignment.title}
+          </Link>
+          <span className="text-[11px] font-medium text-ink-3">
+            {assignment.weight}%{assignment.is_extra_credit ? ' EC' : ''}
+            {due ? ` · due ${due}` : ''}
+          </span>
+          {pending > 0 && (
+            <span className="pt-0.5">
+              <Chip tone="blue">{pending} to grade</Chip>
+            </span>
+          )}
+        </div>
+      ),
+      key: `a-${assignment.id}`,
       width: 170,
-      render: (_: unknown, student: Student) => {
-        return <UserThumbnailView user={student} truncate />;
+      sorter: (a: Student, b: Student) => {
+        if (assignment.type === 'QUIZ') {
+          const qa = activity.quiz[assignment.id]?.[a.id]?.score ?? -1;
+          const qb = activity.quiz[assignment.id]?.[b.id]?.score ?? -1;
+          return qa - qb;
+        }
+        if (assignment.type === 'FORM') {
+          const fa = activity.form[assignment.id]?.[a.id]?.submitted ? 1 : 0;
+          const fb = activity.form[assignment.id]?.[b.id]?.submitted ? 1 : 0;
+          return fa - fb;
+        }
+        return (gradeOf(a, assignment.id) ?? -1) - (gradeOf(b, assignment.id) ?? -1);
+      },
+      render: (_: unknown, student: Student) => renderCell(student, assignment),
+    };
+  };
+  const columns: TableProps<Student>['columns'] = [
+    {
+      title: (
+        <div className="flex flex-col gap-0.5">
+          <span>Student</span>
+          <span className="text-[11px] font-medium text-ink-3">{students.length} enrolled</span>
+        </div>
+      ),
+      key: 'student',
+      fixed: 'left',
+      width: 220,
+      sorter: (a, b) => (a.name ?? a.login ?? '').localeCompare(b.name ?? b.login ?? ''),
+      render: (_: unknown, student) => (
+        <Link
+          to={student.login ? `${base}/students/${student.login}` : '#'}
+          className="block hover:underline underline-offset-2"
+        >
+          <UserThumbnailView user={student} truncate />
+        </Link>
+      ),
+    },
+    ...groups.map(group => {
+      const collapsed = collapsedModules.has(group.id);
+      const ids = new Set(group.items.map(a => a.id));
+      const totalColumn = {
+        title: (
+          <div className="flex flex-col gap-0.5">
+            <span>Module total</span>
+            <span className="text-[11px] font-medium text-ink-3">
+              {group.items.length} assignment{group.items.length === 1 ? '' : 's'}
+            </span>
+          </div>
+        ),
+        key: `module-total-${group.id}`,
+        width: 120,
+        className: 'bg-stone-50/60 dark:bg-neutral-800/40',
+        sorter: (a: Student, b: Student) => moduleTotalOf(a, ids) - moduleTotalOf(b, ids),
+        render: (_: unknown, student: Student) => {
+          const total = moduleTotalOf(student, ids);
+          return total >= 0 ? (
+            <span className="font-semibold tabular-nums">{Math.round(total * 10) / 10}</span>
+          ) : (
+            <span className="text-ink-4">–</span>
+          );
+        },
+      };
+      return {
+        title: (
+          <span className="inline-flex items-center gap-1.5 font-semibold">
+            <button
+              type="button"
+              onClick={() => toggleModule(group.id)}
+              aria-expanded={!collapsed}
+              aria-label={collapsed ? `Expand ${group.title}` : `Collapse ${group.title}`}
+              className="inline-flex h-5 w-5 items-center justify-center rounded text-ink-3 hover:bg-nav-hover hover:text-ink-1"
+            >
+              {collapsed ? <IconChevronRight size={14} /> : <IconChevronDown size={14} />}
+            </button>
+            {group.title}
+          </span>
+        ),
+        key: `group-${group.id}`,
+        className: 'border-l border-line',
+        children: collapsed
+          ? [totalColumn]
+          : [...group.items.map(assignment => assignmentColumn(assignment)), totalColumn],
+      };
+    }),
+    {
+      title: (
+        <div className="flex flex-col gap-0.5">
+          <span>Total</span>
+          <span className="text-[11px] font-medium text-ink-3">weighted score</span>
+        </div>
+      ),
+      key: 'total',
+      fixed: 'right',
+      width: 120,
+      className: 'border-l border-line',
+      sorter: (a, b) => finalOf(a) - finalOf(b),
+      defaultSortOrder: 'descend',
+      render: (_: unknown, student) => {
+        const final = finalOf(student);
+        if (!(final >= 0)) return <span className="text-ink-4">–</span>;
+        const raw = rawOf(student);
+        const individual = individualOf(student);
+        const tip = (
+          <div className="text-xs flex flex-col gap-0.5">
+            <span>Before late penalties: {Math.round(raw * 10) / 10}</span>
+            <span>
+              Individual work only: {individual >= 0 ? Math.round(individual * 10) / 10 : '–'}
+            </span>
+          </div>
+        );
+        return (
+          <Tooltip title={tip}>
+            <span className="font-bold tabular-nums">{Math.round(final * 10) / 10}</span>
+          </Tooltip>
+        );
       },
     },
-    ...studentGradeColumns,
-    ...(assignmentColumns ?? []),
     {
-      title: 'Actions',
-      key: 'actions',
+      title: (
+        <div className="flex flex-col gap-0.5">
+          <span>Letter</span>
+          <span className="text-[11px] font-medium text-ink-3">from breakpoints</span>
+        </div>
+      ),
+      key: 'letter',
       fixed: 'right',
       width: 100,
-      render: (_: unknown, student: Student) => {
+      render: (_: unknown, student) => {
+        const final = finalOf(student);
+        const override = membershipOf(student)?.letter_grade ?? null;
+        const computed =
+          final >= 0 && letterGradeMappings.length > 0
+            ? calculateLetterGrade(final, letterGradeMappings)
+            : null;
+        const letter = override ?? computed;
+        if (!letter) return <span className="text-ink-4">–</span>;
         return (
-          <div className="pl-2">
-            <TableActionButtons
-              // The student detail drawer is owner-only and exists under the
-              // /admin prefix alone, so the link is offered there alone rather
-              // than pointing a teacher at a screen that would refuse them.
-              onView={
-                rolePrefix === 'admin'
-                  ? () => {
-                      navigate(`/admin/${classSlug}/students/${student.login}`);
-                    }
-                  : undefined
-              }
+          <Tooltip
+            title={
+              override
+                ? `Overridden on the student report (computed ${computed ?? '–'})`
+                : undefined
+            }
+          >
+            <span
+              className={`px-1.5 py-0.5 rounded text-[11px] font-bold ${
+                override
+                  ? 'bg-amber-50 text-amber-700 dark:bg-amber-950/40 dark:text-amber-300'
+                  : 'bg-green-50 text-green-700 dark:bg-green-950/40 dark:text-green-300'
+              }`}
             >
-              <button
-                className="cursor-pointer hover:text-blue-600"
-                onClick={() => {
-                  navigate(`/${rolePrefix}/${classSlug}/grades/${student.login}`);
-                }}
-                title="Add comment"
-              >
-                <IconMessagePlus size={16} />
-              </button>
-            </TableActionButtons>
-          </div>
+              {letter}
+            </span>
+          </Tooltip>
         );
       },
     },
   ];
 
-  // Calculate scroll width dynamically based on visible columns
-  const scrollX = useMemo(() => {
-    const baseWidth = 170 + 100; // Student + Actions (fixed columns)
-    const gradeColumnsWidth = studentGradeColumns.reduce(
-      (sum: number, col) => sum + (Number(col.width) || 150),
-      0
-    );
-    const cols = assignmentColumns ?? [];
-    const assignmentColumnsWidth = cols.reduce((sum: number, repository) => {
-      const mod = repository as { width?: number; children?: Array<{ width?: number }> };
-      if (!mod.children?.length) return sum + (Number(mod.width) || 140);
-      return (
-        sum +
-        mod.children.reduce((childSum: number, child) => childSum + (Number(child.width) || 140), 0)
-      );
-    }, 0);
-    return Math.max(1500, baseWidth + gradeColumnsWidth + assignmentColumnsWidth);
-  }, [studentGradeColumns, assignmentColumns]);
-
   const summary = (pageData: readonly Student[]) => {
-    // Return null if no data to prevent mean/median errors
-    if (!pageData || pageData.length === 0) {
-      return null;
-    }
-
-    const finalIndividualNumericGrades = pageData.map((student: Student) => {
-      return calculateStudentFinalGrade(student.git_repos, emojiMappings, settings, true, false);
+    const finals = pageData.map(finalOf).filter(g => g >= 0);
+    if (finals.length === 0) return null;
+    // One summary cell per VISIBLE column, in column order: a collapsed module
+    // contributes only its total cell.
+    const meanText = (values: number[]) => (values.length ? mean(values).toFixed(1) : '–');
+    const summaryCells = groups.flatMap(group => {
+      const ids = new Set(group.items.map(a => a.id));
+      const assignmentCells = collapsedModules.has(group.id)
+        ? []
+        : group.items.map(a => {
+            const grades =
+              a.type === 'REPO'
+                ? pageData.map(s => gradeOf(s, a.id)).filter((g): g is number => g !== null)
+                : a.type === 'QUIZ'
+                  ? pageData
+                      .map(s => activity.quiz[a.id]?.[s.id]?.score ?? null)
+                      .filter((g): g is number => g !== null)
+                  : [];
+            return { key: a.id, text: meanText(grades) };
+          });
+      const totals = pageData.map(s => moduleTotalOf(s, ids)).filter(t => t >= 0);
+      return [...assignmentCells, { key: `module-total-${group.id}`, text: meanText(totals) }];
     });
-    const finalNumericGrades = pageData.map((student: Student) => {
-      return calculateStudentFinalGrade(student.git_repos, emojiMappings, settings);
-    });
-
-    // Filter out invalid grades for statistics
-    const validIndividualGrades = finalIndividualNumericGrades.filter((g: number) => g >= 0);
-    const validFinalGrades = finalNumericGrades.filter((g: number) => g >= 0);
-
     return (
-      <Table.Summary {...({ fixed: true, className: 'bg-yellow-50' } as Record<string, unknown>)}>
+      <Table.Summary fixed>
         <Table.Summary.Row>
-          <Table.Summary.Cell index={-1}></Table.Summary.Cell>
-          <Table.Summary.Cell index={0}></Table.Summary.Cell>
-          <Table.Summary.Cell index={1}></Table.Summary.Cell>
-          <Table.Summary.Cell index={2}></Table.Summary.Cell>
-          <Table.Summary.Cell index={3}>
-            <div className="font-semibold text-gray-900">
-              <div>Final Grade (Individual)</div>
-              <div className="flex gap-3 text-sm font-normal text-gray-600 mt-1">
-                <span>
-                  Mean:{' '}
-                  {validIndividualGrades.length > 0
-                    ? mean(validIndividualGrades).toFixed(1)
-                    : 'N/A'}
-                </span>
-                <span>
-                  Median:{' '}
-                  {validIndividualGrades.length > 0
-                    ? median(validIndividualGrades).toFixed(1)
-                    : 'N/A'}
-                </span>
-              </div>
-            </div>
+          <Table.Summary.Cell index={0}>
+            <span className="text-xs font-semibold text-ink-3">Class</span>
           </Table.Summary.Cell>
-          <Table.Summary.Cell index={4}>
-            <div className="font-semibold text-gray-900">
-              <div>Final Grade</div>
-              <div className="flex gap-3 text-sm font-normal text-gray-600 mt-1">
-                <span>
-                  Mean: {validFinalGrades.length > 0 ? mean(validFinalGrades).toFixed(1) : 'N/A'}
-                </span>
-                <span>
-                  Median:{' '}
-                  {validFinalGrades.length > 0 ? median(validFinalGrades).toFixed(1) : 'N/A'}
-                </span>
-              </div>
-            </div>
+          {summaryCells.map((cell, i) => (
+            <Table.Summary.Cell key={cell.key} index={i + 1}>
+              <span className="text-xs text-ink-2 tabular-nums">{cell.text}</span>
+            </Table.Summary.Cell>
+          ))}
+          <Table.Summary.Cell index={summaryCells.length + 1}>
+            <span className="text-xs text-ink-2 whitespace-nowrap">
+              mean {mean(finals).toFixed(1)}
+              <br />
+              median {median(finals).toFixed(1)}
+            </span>
           </Table.Summary.Cell>
-          <Table.Summary.Cell index={5}></Table.Summary.Cell>
+          <Table.Summary.Cell index={summaryCells.length + 2}></Table.Summary.Cell>
         </Table.Summary.Row>
       </Table.Summary>
     );
@@ -278,146 +613,118 @@ const GradesTable = (props: GradesTableProps) => {
 
   return (
     <div className="min-h-full min-w-0">
-      <div className="flex flex-col gap-3 mt-2 mb-4">
-        <div className="flex items-center justify-between gap-3 flex-wrap">
-          <div className="flex items-center gap-3">
-            <h1 className="text-lg font-semibold text-ink-1">Grades</h1>
-            {searchQuery && (
-              <span className="text-xs text-ink-3 bg-nav-hover px-2.5 py-1 rounded-full">
-                {filteredStudents.length} of {students.length}
-              </span>
-            )}
-          </div>
-          <div className="flex items-center gap-3 flex-wrap justify-end">
-            <Checkbox
-              checked={showIssues}
-              onChange={() => setShowIssues(!showIssues)}
-              data-tour="grades-show-assignments"
-            >
-              Show Assignments
-            </Checkbox>
-            <Checkbox
-              checked={showComments}
-              onChange={() => setShowComments(!showComments)}
-              data-tour="grades-show-comments"
-            >
-              Show Comments
-            </Checkbox>
-            <div className="h-6 w-px bg-line" />
-            <div className="flex items-center gap-1.5" data-tour="grades-view-toggle">
-              <ConfigProvider
-                theme={{
-                  token: {
-                    borderRadius: 6,
-                  },
-                  components: {
-                    Segmented: {
-                      borderRadius: 6,
-                      borderRadiusSM: 4,
-                      itemSelectedBg: '#ffffff',
-                      itemSelectedColor: '#1f2937',
-                      trackPadding: 3,
-                    },
-                  },
-                }}
-              >
-                <Segmented
-                  value={view}
-                  onChange={val => setView(val as string)}
-                  options={['Emoji', 'Numeric']}
-                />
-              </ConfigProvider>
-              <Popover
-                trigger="click"
-                placement="bottomRight"
-                content={
-                  <GradeSettings
-                    letterGradeMappings={letterGradeMappings}
-                    changeLetterGradeMapping={changeLetterGradeMapping}
-                  />
-                }
-              >
-                <button
-                  type="button"
-                  aria-label="Letter grade breakpoints"
-                  className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-sm font-medium text-gray-600 hover:text-gray-900 dark:text-gray-300 dark:hover:text-gray-100 ring-1 ring-line hover:bg-nav-hover transition-colors"
-                >
-                  <IconAdjustmentsHorizontal size={16} />
-                  Breakpoints
-                </button>
-              </Popover>
-            </div>
-          </div>
+      <div className="flex items-center justify-between gap-3 mt-2 mb-4">
+        <div className="flex items-center gap-3 shrink-0">
+          <h1 className="text-base font-semibold text-gray-600 dark:text-gray-400">Grades</h1>
+          {(searchQuery || rowFilter !== 'all') && (
+            <span className="text-xs text-ink-3 bg-nav-hover px-2.5 py-1 rounded-full">
+              {rows.length} of {students.length}
+            </span>
+          )}
         </div>
-        <div className="flex">
+        <div className="flex items-center gap-3 justify-end min-w-0">
           <Input
-            placeholder="Search by name, username, or email..."
+            placeholder="Search students"
             prefix={<IconSearch size={16} />}
             value={searchQuery}
             onChange={e => setSearchQuery(e.target.value)}
-            className="w-full max-w-[260px]"
+            className="w-52"
             data-tour="grades-search"
           />
+          <Select<RowFilter>
+            value={rowFilter}
+            onChange={setRowFilter}
+            className="w-52"
+            data-tour="grades-filter"
+            options={[
+              { value: 'all', label: 'Everyone' },
+              { value: 'ungraded', label: 'Has something to grade' },
+              { value: 'missing', label: 'Has a missing submission' },
+              { value: 'late', label: 'Late somewhere' },
+            ]}
+          />
+          <div className="h-6 w-px bg-line" />
+          <div className="flex items-center gap-1.5">
+            <Popover
+              trigger="click"
+              placement="bottomRight"
+              content={
+                <GradeSettings
+                  letterGradeMappings={letterGradeMappings}
+                  changeLetterGradeMapping={changeLetterGradeMapping}
+                />
+              }
+            >
+              <button
+                type="button"
+                aria-label="Letter grade breakpoints"
+                className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-sm font-medium text-gray-600 hover:text-gray-900 dark:text-gray-300 dark:hover:text-gray-100 ring-1 ring-line hover:bg-nav-hover transition-colors"
+              >
+                <IconAdjustmentsHorizontal size={16} />
+                Breakpoints
+              </button>
+            </Popover>
+          </div>
         </div>
       </div>
 
       <div className="rounded-2xl overflow-hidden bg-panel ring-1 ring-line min-h-[calc(100vh-10rem)] p-5 sm:p-6">
-        {searchQuery && filteredStudents.length === 0 ? (
-          <div className="text-center py-12 text-gray-500">
-            <div className="font-medium">No students found</div>
-            <div className="text-sm">
-              No results for <span className="font-medium text-gray-900 italic">{searchQuery}</span>
-            </div>
-            <div className="text-sm mt-1">Try adjusting your search terms</div>
-          </div>
-        ) : (
-          <div className="overflow-x-auto max-w-full">
-            <ConfigProvider
-              theme={{
-                components: {
-                  Table: {
-                    // In dark mode, match the global slate header tokens; the
-                    // light values would otherwise leak through as a white header.
-                    headerBg: isDarkMode ? '#1c2030' : '#fafafa',
-                    headerColor: isDarkMode ? '#d9dbe3' : '#374151',
-                  },
-                },
-              }}
-            >
-              <Table
-                dataSource={filteredStudents}
-                columns={
-                  columns.filter(
-                    col => !(col as Record<string, unknown>).hidden
-                  ) as TableProps<Student>['columns']
-                }
-                rowHoverable={true}
-                size="small"
-                bordered={true}
-                rowKey="id"
-                scroll={{ x: scrollX }}
-                sticky
-                pagination={{
-                  pageSize: 50,
-                  showSizeChanger: true,
-                  showTotal: (total, range) => `${range[0]}-${range[1]} of ${total} students`,
-                }}
-                summary={summary}
-                locale={{
-                  emptyText: (
-                    <div className="text-center py-12 text-gray-500">
-                      <div className="font-medium">No student grades available</div>
-                      <div className="text-sm">
-                        Students will appear here once assignments are published
-                      </div>
-                    </div>
-                  ),
-                }}
-                className="rounded-lg"
-              />
-            </ConfigProvider>
-          </div>
-        )}
+        <ConfigProvider
+          theme={{
+            components: {
+              Table: {
+                headerBg: isDarkMode ? '#1c2030' : '#fafafa',
+                headerColor: isDarkMode ? '#d9dbe3' : '#374151',
+              },
+            },
+          }}
+        >
+          <Table<Student>
+            dataSource={rows}
+            columns={columns}
+            rowKey="id"
+            rowHoverable
+            size="small"
+            bordered
+            sticky
+            scroll={{ x: 440 + (columnsSpec.length + groups.length) * 170 }}
+            pagination={{
+              pageSize: 50,
+              showSizeChanger: true,
+              showTotal: (total, range) => `${range[0]}-${range[1]} of ${total} students`,
+            }}
+            summary={summary}
+            locale={{
+              emptyText: (
+                <div className="text-center py-12 text-gray-500">
+                  <div className="font-medium">
+                    {students.length === 0 ? 'No students yet' : 'Nobody matches this filter'}
+                  </div>
+                  <div className="text-sm">
+                    {students.length === 0
+                      ? 'Students appear here once they join the classroom.'
+                      : 'Pick another filter or clear the search.'}
+                  </div>
+                </div>
+              ),
+            }}
+            className="rounded-lg"
+          />
+        </ConfigProvider>
+        <div className="flex items-center gap-4 pt-3 text-xs text-ink-3 flex-wrap">
+          <span className="inline-flex items-center gap-1.5">
+            <span className="w-3 h-3 rounded-sm bg-amber-50 ring-1 ring-amber-200 dark:bg-amber-950/40 dark:ring-amber-800" />
+            Late
+          </span>
+          <span className="inline-flex items-center gap-1.5">
+            <span className="w-3 h-3 rounded-sm bg-red-50 ring-1 ring-red-200 dark:bg-red-950/40 dark:ring-red-800" />
+            Missing
+          </span>
+          <span className="flex-1" />
+          <span>
+            Click a cell to grade it on the assignment page. Click a student for their report.
+          </span>
+        </div>
       </div>
     </div>
   );

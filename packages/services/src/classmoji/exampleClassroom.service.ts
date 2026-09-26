@@ -7,7 +7,7 @@
  *  - is parameterized by the owner,
  *  - lives under a single shared mock GitOrganization whose
  *    `github_installation_id` is NULL, so GitHub-touching views (repositories,
- *    teams, repo-health, syllabus bot) short-circuit to clean empty states
+ *    teams, syllabus bot) short-circuit to clean empty states
  *    instead of attempting real API calls,
  *  - marks the classroom `is_example` (which is what auto-starts the tour), and
  *  - namespaces repository provider ids by owner login so they stay globally
@@ -27,7 +27,7 @@
  */
 
 import getPrisma from '@classmoji/database';
-import { defaultContentRepoName } from '@classmoji/utils';
+import { canonicalTimeZone, defaultContentRepoName } from '@classmoji/utils';
 import { createWithUniqueClassroomSlug } from './classroomSlug.ts';
 
 const EXAMPLE_ORG = {
@@ -85,8 +85,11 @@ const LETTER_SCALE = [
 export async function provisionExampleClassroom(params: {
   ownerUserId: string;
   ownerLogin: string;
+  /** The creator's browser zone; validated here, dropped when invalid. */
+  timezone?: string | null;
 }): Promise<{ id: string; slug: string } | null> {
   const { ownerUserId, ownerLogin } = params;
+  const timezone = canonicalTimeZone(params.timezone);
   const prisma = getPrisma();
 
   // Shared mock org. Leave github_installation_id NULL on purpose. It's idempotent
@@ -137,7 +140,13 @@ export async function provisionExampleClassroom(params: {
   const { result } = await createWithUniqueClassroomSlug(
     { slug, orgLogin: EXAMPLE_ORG.login },
     classroomSlug =>
-      buildExampleSandbox({ ownerUserId, ownerLogin, gitOrgId: org.id, slug: classroomSlug })
+      buildExampleSandbox({
+        ownerUserId,
+        ownerLogin,
+        gitOrgId: org.id,
+        slug: classroomSlug,
+        timezone,
+      })
   );
   return result;
 }
@@ -154,8 +163,9 @@ function buildExampleSandbox(args: {
   ownerLogin: string;
   gitOrgId: string;
   slug: string;
+  timezone: string | null;
 }): Promise<{ id: string; slug: string }> {
-  const { ownerUserId, ownerLogin, gitOrgId, slug } = args;
+  const { ownerUserId, ownerLogin, gitOrgId, slug, timezone } = args;
   const prisma = getPrisma();
 
   return prisma.$transaction(
@@ -168,7 +178,9 @@ function buildExampleSandbox(args: {
           content_namespace: slug,
           content_repo: defaultContentRepoName(slug),
           is_example: true,
-          settings: { create: { show_grades_to_students: true, quizzes_enabled: true } },
+          settings: {
+            create: { show_grades_to_students: true, quizzes_enabled: true, timezone },
+          },
         },
       });
 
@@ -223,19 +235,30 @@ function buildExampleSandbox(args: {
         else studentUsers.push({ id: user.id, login: p.login });
       }
 
-      // Repository + two assignments (Part 1 graded + released, Part 2 awaiting grading).
+      // Module -> two assignments submitting through one repository (Part 1
+      // graded + released, Part 2 awaiting grading).
+      const courseModule = await tx.module.create({
+        data: {
+          classroom_id: classroom.id,
+          title: 'Week 1: Hello World',
+          slug: 'week-1-hello-world',
+          position: 0,
+          is_published: true,
+        },
+      });
       const courseRepository = await tx.repository.create({
         data: {
           classroom_id: classroom.id,
           title: 'hello-world',
           template: 'classmoji-examples/hello-world-template',
-          weight: 100,
           type: 'INDIVIDUAL',
           is_published: true,
         },
       });
       const assignment1 = await tx.assignment.create({
         data: {
+          module_id: courseModule.id,
+          type: 'REPO',
           repository_id: courseRepository.id,
           title: 'Hello World Part 1',
           weight: 50,
@@ -245,6 +268,8 @@ function buildExampleSandbox(args: {
       });
       const assignment2 = await tx.assignment.create({
         data: {
+          module_id: courseModule.id,
+          type: 'REPO',
           repository_id: courseRepository.id,
           title: 'Hello World Part 2',
           weight: 50,

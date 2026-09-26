@@ -1215,13 +1215,13 @@ const backgroundOf = (page: Page, selector: string): Promise<string> =>
   page.locator(selector).evaluate(node => getComputedStyle(node).backgroundColor);
 
 /**
- * The canvas has to be dark WHENEVER THE CARD IS, and the card's `dark:`
- * utilities are driven by `prefers-color-scheme` — this app's `tailwind.css`
- * declares no `@custom-variant dark`, so that is what Tailwind v4 compiles them
- * to. The canvas used to key on the `dark` CLASS instead, and the two disagreed
- * for real: a hydration mismatch in the renderer made React regenerate the
- * document, which stripped the class the boot script had set, leaving a WHITE
- * page around a DARK card.
+ * The canvas has to be dark WHENEVER THE CARD IS. Both now key on the `dark`
+ * CLASS — `tailwind.css` declares `@custom-variant dark`, so the card's `dark:`
+ * utilities read the same class the canvas does. They have disagreed for real
+ * twice: once when the card was media-driven and the class went missing (a
+ * hydration mismatch in the renderer made React regenerate the document and
+ * strip it), and once when the canvas carried its own media branch. Either way
+ * the page came out half-dark.
  *
  * So these assert RESOLVED COLOURS under an emulated dark OS. Asserting that
  * the class exists — the obvious test — passes on the broken code, because the

@@ -3,7 +3,56 @@ import { defineConfig } from '@trigger.dev/sdk';
 import { prismaExtension } from '@trigger.dev/build/extensions/prisma';
 // eslint-disable-next-line import/no-unresolved
 import { aptGet, syncEnvVars } from '@trigger.dev/build/extensions/core';
+// eslint-disable-next-line import/no-unresolved
+import { pythonExtension } from '@trigger.dev/python/extension';
 import { InfisicalSDK } from '@infisical/sdk';
+import { existsSync, readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+/**
+ * Options for the Python build extension that carries the team-set solver
+ * (python/team_set_solver.py, OR-Tools CP-SAT).
+ *
+ * A FUNCTION, called only inside `build.extensions`, never at module top level:
+ * the CLI's config-strip plugin replaces `build` with `{}` when it bundles this
+ * file into the worker, but top-level statements survive — and a top-level file
+ * read of a path resolved from this file's location would run inside the
+ * deployed container, where that path does not exist.
+ *
+ * `requirements`, NOT `requirementsFile`. In @trigger.dev/python 4.6.3 the
+ * requirementsFile branch emits `COPY ./python/requirements.txt .` followed by
+ * `pip install -r ./python/requirements.txt`; the COPY lands the file at
+ * `./requirements.txt`, so a nested requirements file cannot be opened and the
+ * image build fails (triggerdotdev/trigger.dev#1843). The `requirements` branch
+ * writes the list to a file and installs it in one working directory. The file
+ * stays the single source of truth — it is also what the local venv installs.
+ *
+ * `scripts` is resolved relative to this directory and copied to the same
+ * relative path in the build output (`/app/python/…` when deployed). The glob
+ * does not descend into dot-directories, so the local `.venv` is not copied.
+ *
+ * `devPythonBinaryPath` points `trigger dev` at the local venv (see
+ * python/README.md) and is set only when that interpreter exists, so a checkout
+ * without the venv still loads this config; the solve task then fails its runs
+ * with `engine_error` rather than the whole dev worker refusing to start.
+ * Deployed images ignore it and use the extension's /opt/venv. (The 4.6.3 CLI
+ * snapshots dev run environments before the extension sets it, so the solve
+ * task also falls back to the venv itself — `useLocalVenvIfUnset`.)
+ */
+function teamSetSolverPythonOptions() {
+  const pythonDir = join(dirname(fileURLToPath(import.meta.url)), 'python');
+  const requirements = readFileSync(join(pythonDir, 'requirements.txt'), 'utf8')
+    .split('\n')
+    .map(line => line.replace(/\s+#.*$/, '').trim())
+    .filter(line => line && !line.startsWith('#'));
+  const venvPython = join(pythonDir, '.venv', 'bin', 'python');
+  return {
+    requirements,
+    scripts: ['./python/**/*.py'],
+    ...(existsSync(venvPython) ? { devPythonBinaryPath: venvPython } : {}),
+  };
+}
 
 export default defineConfig({
   project: process.env.TRIGGER_PROJECT_ID || 'proj_ijxcrutouxchmrbjmkkk',
@@ -52,6 +101,7 @@ export default defineConfig({
       aptGet({
         packages: ['bash', 'git'],
       }),
+      pythonExtension(teamSetSolverPythonOptions()),
       syncEnvVars(async ctx => {
         // Skip sync if credentials not available (allows local dev without Infisical)
         if (!process.env.INFISICAL_CLIENT_ID || !process.env.INFISICAL_CLIENT_SECRET) {

@@ -29,6 +29,14 @@ Postgres is the only database. For local work, `npm run db:start` brings up the 
 
 Each image generates the Prisma client at build time, but you still need to apply migrations to your database. Run `prisma migrate deploy` against `DATABASE_URL` before serving traffic. In the hosted setup, the webapp runs `migrate deploy` automatically as a release step on every deploy, so you don't have to do it by hand there.
 
+**Upgrading to the coursework model (assignments in modules, push-mode submissions).** Four migrations carry existing data over: `20260920000000_coursework_phase1_additive`, `20260920000001_coursework_phase1_constraints`, `20260920000002_submission_modes`, and `20260920000003_one_score_per_grader`. They run with `prisma migrate deploy` like any other. Afterwards, run
+
+```bash
+npx tsx packages/database/scripts/backfillRepoSubmissions.ts --apply
+```
+
+to stamp push-mode submissions from each student repo's push history (run it without `--apply` first for a dry run). The migrations record what they changed in the `coursework_migration_report` table, so you can review moved weights and rewritten records before opening the app to students.
+
 ### Building an image yourself
 
 Build any app from the repo root, passing the app's Dockerfile:

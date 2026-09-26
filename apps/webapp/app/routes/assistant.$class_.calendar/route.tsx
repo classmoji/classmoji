@@ -6,6 +6,16 @@ import invariant from 'tiny-invariant';
 import { data, useFetcher, useParams } from 'react-router';
 import type { Route } from './+types/route';
 import { ClassmojiService } from '@classmoji/services';
+// Pure write policy, imported straight from its own module: the decisions the
+// admin action and the MCP calendar tools apply too.
+import {
+  ASSISTANT_EVENT_TYPE_MESSAGE,
+  assistantMayChangeEventType,
+  assistantMayCreateEventType,
+  isCalendarTimeRangeError,
+  scopeCarriesLinks,
+  toFeaturedLinkRef,
+} from '@classmoji/services/calendar-policy';
 import { useCallout } from '@classmoji/ui-components';
 import getPrisma from '@classmoji/database';
 import { assertClassroomAccess, assertClassroomMutationAllowed } from '~/utils/helpers';
@@ -13,7 +23,10 @@ import { buildCalendarUrl, getCalendarDateRange } from '~/utils/calendar.server'
 import CourseCalendar from '~/components/features/calendar/CourseCalendar';
 import CalendarSubscriptionCard from '~/components/features/calendar/CalendarSubscriptionCard';
 import AddEventModal, { type AddEventDefaults } from '~/components/features/calendar/AddEventModal';
-import EditEventModal, { type EventFormData } from '~/components/features/calendar/EditEventModal';
+import EditEventModal, {
+  type EventDeleteOptions,
+  type EventFormData,
+} from '~/components/features/calendar/EditEventModal';
 import EventCard from '~/components/features/calendar/EventCard';
 import EventLinks from '~/components/features/calendar/EventLinks';
 import type { CalendarEventWithLinks } from '~/components/features/calendar/types';
@@ -51,10 +64,15 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
       end,
       null, // userId not needed for assistant
       true, // includeRawLinks for editing UI
-      true // includeUnpublished to see draft/unpublished assignments
-      // canManageForms deliberately left at its false default: the forms
-      // responses view is OWNER|TEACHER only, so an assistant's form-close
-      // event links to the form itself rather than to a 403.
+      true, // includeUnpublished to see draft/unpublished assignments
+      {
+        // Draft pages/decks and links to unpublished assignments are shown to
+        // assistants too — they teach from the same material.
+        canSeeDrafts: true,
+        // canManageForms deliberately left at its false default: the forms
+        // responses view is OWNER|TEACHER only, so an assistant's form-close
+        // event links to the form itself rather than to a 403.
+      }
     );
   } catch (error: unknown) {
     console.error(
@@ -64,20 +82,23 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
     events = [];
   }
 
-  // Fetch available resources for linking (all published content)
+  // What the modals offer to link. Draft pages and decks are in, tagged as
+  // drafts — the same list the admin calendar offers, for the same reasons, and
+  // to the same set of roles: assistants already SEE those drafts on the
+  // calendar this loader builds. Assignments stay published-only.
   const [pages, slides, assignments] = await Promise.all([
     getPrisma().page.findMany({
-      where: { classroom_id: classroom.id, is_draft: false },
-      select: { id: true, title: true },
+      where: { classroom_id: classroom.id },
+      select: { id: true, title: true, is_draft: true },
       orderBy: { title: 'asc' },
     }),
     getPrisma().slide.findMany({
-      where: { classroom_id: classroom.id, is_draft: false },
-      select: { id: true, title: true },
+      where: { classroom_id: classroom.id },
+      select: { id: true, title: true, is_draft: true },
       orderBy: { title: 'asc' },
     }),
     getPrisma().assignment.findMany({
-      where: { repository: { classroom_id: classroom.id }, is_published: true },
+      where: { module: { classroom_id: classroom.id }, is_published: true },
       select: { id: true, title: true, repository: { select: { title: true, slug: true } } },
       orderBy: { title: 'asc' },
     }),
@@ -118,16 +139,32 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
     const eventData = JSON.parse(formData.get('eventData') as string);
 
     // Assistants can only create Office Hours events
-    if (eventData.event_type !== 'OFFICE_HOURS') {
-      return data(
-        { success: false, error: 'Assistants can only create Office Hours events' },
-        { status: 403 }
-      );
+    if (!assistantMayCreateEventType(eventData.event_type)) {
+      return data({ success: false, error: ASSISTANT_EVENT_TYPE_MESSAGE }, { status: 403 });
     }
 
-    const { linkedPageIds, linkedSlideIds, linkedAssignmentIds, ...createData } = eventData;
+    // `featuredKind`/`featuredId` come out with the link ids and for the same
+    // reason: they describe the LINKS, not the event.
+    const {
+      linkedPageIds,
+      linkedSlideIds,
+      linkedAssignmentIds,
+      featuredKind,
+      featuredId,
+      ...createData
+    } = eventData;
 
-    const newEvent = await ClassmojiService.calendar.createEvent(classroom.id, userId, createData);
+    let newEvent;
+    try {
+      newEvent = await ClassmojiService.calendar.createEvent(classroom.id, userId, createData);
+    } catch (error: unknown) {
+      // A refused time range is the user's to fix, so it comes back as a
+      // message the fetcher shows rather than as a 500.
+      if (isCalendarTimeRangeError(error)) {
+        return data({ success: false, error: (error as Error).message }, { status: 400 });
+      }
+      throw error;
+    }
 
     // If links were provided (non-recurring events only), add them
     const hasLinks = linkedPageIds?.length || linkedSlideIds?.length || linkedAssignmentIds?.length;
@@ -140,7 +177,8 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
           slideIds: linkedSlideIds || [],
           assignmentIds: linkedAssignmentIds || [],
         },
-        null
+        null,
+        toFeaturedLinkRef(featuredKind, featuredId)
       );
     }
 
@@ -183,43 +221,71 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
         linkedPageIds,
         linkedSlideIds,
         linkedAssignmentIds,
+        featuredKind,
+        featuredId,
         ...updateData
       } = eventData;
 
+      // The office-hours limit holds on update too, or it is only as strong as
+      // the create form: an assistant could add office hours and then retype
+      // the event as a lecture. This route serves assistants only, so the check
+      // is unconditional here.
+      if (!assistantMayChangeEventType(updateData.event_type, event.event_type)) {
+        return data({ success: false, error: ASSISTANT_EVENT_TYPE_MESSAGE }, { status: 403 });
+      }
+
+      // A 'this_and_future' edit SPLITS the series: the service ends the old
+      // event and returns a NEW one carrying the occurrences from this date on.
+      // Any link write below has to land on that event, not on the old id.
+      let linkTargetId = eventId as string;
       if (editScope && occurrenceDate) {
-        await ClassmojiService.calendar.updateEventWithScope(
+        const scoped = await ClassmojiService.calendar.updateEventWithScope(
           eventId as string,
           updateData,
           editScope,
           new Date(occurrenceDate)
         );
+        linkTargetId = scoped?.id ?? linkTargetId;
       } else {
         await ClassmojiService.calendar.updateEvent(eventId as string, updateData);
       }
 
-      // Handle resource links update (only allowed with 'this_only' scope for recurring events)
+      // Resource links belong to ONE occurrence date, and only a 'this_only'
+      // edit names one. A series-wide edit's link keys are ignored rather than
+      // written to the undated bucket, which a recurring event's occurrences
+      // never read — writing there would look like saving them and behave like
+      // discarding them.
+      // One rule, shared with the modal and the sibling action.
       const hasLinkUpdates =
-        linkedPageIds !== undefined ||
-        linkedSlideIds !== undefined ||
-        linkedAssignmentIds !== undefined;
+        scopeCarriesLinks(editScope) &&
+        (linkedPageIds !== undefined ||
+          linkedSlideIds !== undefined ||
+          linkedAssignmentIds !== undefined);
       if (hasLinkUpdates) {
         const linkOccurrenceDate =
           editScope === 'this_only' && occurrenceDate ? new Date(occurrenceDate) : null;
 
         await ClassmojiService.calendar.updateEventLinks(
-          eventId as string,
+          linkTargetId,
           classroom.id,
           {
             pageIds: linkedPageIds || [],
             slideIds: linkedSlideIds || [],
             assignmentIds: linkedAssignmentIds || [],
           },
-          linkOccurrenceDate
+          linkOccurrenceDate,
+          // Ignored wherever the link keys are: a star with no date to sit on
+          // is as meaningless as a link with none.
+          toFeaturedLinkRef(featuredKind, featuredId)
         );
       }
 
       return data({ success: true });
     } catch (error: unknown) {
+      // A refused time range is the user's to fix, not a server fault.
+      if (isCalendarTimeRangeError(error)) {
+        return data({ success: false, error: (error as Error).message }, { status: 400 });
+      }
       console.error('Update event error:', error);
       return data(
         { success: false, error: error instanceof Error ? error.message : 'Unknown error' },
@@ -351,13 +417,13 @@ const AssistantCalendar = ({ loaderData }: Route.ComponentProps) => {
 
     const formData = new FormData();
     formData.append('intent', 'update');
-    formData.append('eventId', selectedEvent.id as string);
+    formData.append('eventId', selectedEvent.id);
     formData.append('eventData', JSON.stringify(eventData));
 
     fetcher.submit(formData, { method: 'POST' });
   };
 
-  const handleDeleteEvent = (eventId: string, options: Record<string, unknown> | null = null) => {
+  const handleDeleteEvent = (eventId: string, options?: EventDeleteOptions) => {
     const formData = new FormData();
     formData.append('intent', 'delete');
     formData.append('eventId', eventId);
@@ -374,6 +440,9 @@ const AssistantCalendar = ({ loaderData }: Route.ComponentProps) => {
       callout.show({ variant: 'error', title: 'You can only move your own events' });
       return;
     }
+    // A persisted event always has an id; the shared type leaves it optional
+    // because synthesized items (deadlines, form closes) build theirs.
+    if (!event.id) return;
 
     // Optimistically update events immediately for smooth UI
     const updatedEvents = (events as CalendarEventWithLinks[]).map((e: CalendarEventWithLinks) => {
@@ -382,8 +451,7 @@ const AssistantCalendar = ({ loaderData }: Route.ComponentProps) => {
         ((!e.occurrence_date && !event.occurrence_date) ||
           (e.occurrence_date &&
             event.occurrence_date &&
-            new Date(e.occurrence_date as string).getTime() ===
-              new Date(event.occurrence_date as string).getTime()));
+            new Date(e.occurrence_date).getTime() === new Date(event.occurrence_date).getTime()));
 
       if (isSameEvent) {
         return {
@@ -411,12 +479,16 @@ const AssistantCalendar = ({ loaderData }: Route.ComponentProps) => {
     const eventPayload: Record<string, unknown> = { ...eventData };
     if (event.is_recurring && event.occurrence_date) {
       eventPayload.editScope = 'this_only';
-      eventPayload.occurrenceDate = event.occurrence_date;
+      // Normalised, not passed through: `occurrence_date` arrives as a real
+      // Date over single fetch, and this only survived `JSON.stringify` because
+      // Date has a `toJSON`. The edit modal already sends an ISO string here,
+      // so the action sees one shape either way.
+      eventPayload.occurrenceDate = new Date(event.occurrence_date).toISOString();
     }
 
     const formData = new FormData();
     formData.append('intent', 'update');
-    formData.append('eventId', event.id as string);
+    formData.append('eventId', event.id);
     formData.append('eventData', JSON.stringify(eventPayload));
 
     fetcher.submit(formData, { method: 'POST' });
@@ -476,7 +548,10 @@ const AssistantCalendar = ({ loaderData }: Route.ComponentProps) => {
         onEventDrop={handleEventDrop}
         onMonthChange={handleMonthChange}
         onRangeSelect={handleRangeSelect}
-        showCreator={true}
+        classSlug={classSlug}
+        rolePrefix="assistant"
+        pagesUrl={pagesUrl}
+        slidesUrl={slidesUrl}
       />
 
       <AddEventModal
@@ -496,13 +571,13 @@ const AssistantCalendar = ({ loaderData }: Route.ComponentProps) => {
 
       <EditEventModal
         open={editModalOpen}
-        event={selectedEvent as Parameters<typeof EditEventModal>[0]['event']}
+        event={selectedEvent}
         onClose={() => {
           setEditModalOpen(false);
           setSelectedEvent(null);
         }}
-        onSubmit={handleUpdateEvent as Parameters<typeof EditEventModal>[0]['onSubmit']}
-        onDelete={handleDeleteEvent as Parameters<typeof EditEventModal>[0]['onDelete']}
+        onSubmit={handleUpdateEvent}
+        onDelete={handleDeleteEvent}
         loading={loading}
         allowedEventTypes={['OFFICE_HOURS']}
         classSlug={classSlug!}

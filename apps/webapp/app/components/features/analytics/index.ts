@@ -14,4 +14,6 @@ export type { ContributorBreakdownProps, EligibleStudent } from './ContributorBr
 export { default as HeuristicsChips } from './HeuristicsChips';
 export type { HeuristicsChipsProps } from './HeuristicsChips';
 export { default as PullRequestPills } from './PullRequestPills';
+export { default as CommitCount } from './CommitCount';
+export type { CommitCountSnapshot } from './CommitCount';
 export type { PullRequestPillsProps } from './PullRequestPills';

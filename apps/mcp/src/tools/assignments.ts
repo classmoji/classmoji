@@ -1,9 +1,20 @@
 /**
- * assignment_update — deadline / weight / grades_released.
+ * assignment_update — deadline / weight / grades_released / grader_deadline /
+ * release_at.
  *
  * Route-derived per-field tiers (plan §4.2, verified in the tree):
- *   - general edits (weight, …):   OWNER only (admin.$class.repos_.$title.update
- *                                  → requireClassroomAdmin)
+ *   - general edits (weight, …):   OWNER only (admin.$class.assignments
+ *                                  `update` → requireClassroomAdmin →
+ *                                  assignment.updateInClassroom)
+ *   - grader_deadline, release_at: OWNER only, same route — the only web
+ *                                  route that edits either field on an existing
+ *                                  assignment (classroom import copies/strips
+ *                                  them at create time). AssignmentFormModal
+ *                                  always posts to /admin/…/assignments?/update,
+ *                                  even when opened from the /teacher detail
+ *                                  page. An empty picker sends null, so both
+ *                                  are clearable; no ordering rule between the
+ *                                  dates is enforced anywhere.
  *   - grades_released flip:        OWNER + TEACHER (api.gitRepoAssignment.$class
  *                                  updateGradeRelease → ['OWNER','TEACHER'])
  *   - student_deadline move:       OWNER + TEACHER (admin.$class.calendar
@@ -15,6 +26,11 @@
  * ASSIGNMENT_DUE_DATE_CHANGED on deadline change and ASSIGNMENT_GRADED on a
  * false→true grades_released flip). Never assignment.releaseGrades, which is
  * the same DB write with the notification silently skipped (plan §5.2 gap 7).
+ * updateInClassroom (the web path for the date fields) runs the same
+ * notifyAfterUpdate, which ignores grader_deadline and release_at: neither
+ * schedules anything on write. release_at is read later by the nightly
+ * release cron (findReadyForRelease), the repo-provisioning filter, and the
+ * student "locked" view; a null release_at is never auto-released.
  */
 
 import { ClassmojiService } from '@classmoji/services';
@@ -29,6 +45,8 @@ import {
   ok,
   OWNER_ONLY,
   OWNER_TEACHER,
+  requireClassroomCtx,
+  scopedNotFound,
   writeAudit,
 } from './shared.ts';
 
@@ -43,6 +61,8 @@ interface AssignmentUpdateArgs {
   student_deadline?: string;
   weight?: number;
   grades_released?: boolean;
+  grader_deadline?: string | null;
+  release_at?: string | null;
 }
 
 /** Fields a TEACHER (non-OWNER) may update, per the web routes above. */
@@ -53,10 +73,12 @@ export const assignmentUpdateTool: ToolDefinition<AssignmentUpdateArgs> = {
   annotations: { destructive: false },
   title: 'Update an assignment',
   description:
-    'Updates an assignment (a due-dated, gradeable slice of a repo/lab): student deadline, ' +
-    'weight, and/or grades_released. Owners can update all fields; teachers only ' +
-    'grades_released and student_deadline. Releasing grades notifies graded students; moving ' +
-    'the deadline notifies affected students.',
+    'Updates an assignment (a due-dated, gradeable slice of a repo/lab): student_deadline, ' +
+    'weight, grades_released, grader_deadline, and/or release_at. Owners can update all ' +
+    'fields; teachers only grades_released and student_deadline. Releasing grades notifies ' +
+    'graded students; moving the student deadline notifies affected students. release_at is ' +
+    'when an unpublished assignment auto-releases to students (checked nightly). Pass null ' +
+    'to clear grader_deadline or release_at; a cleared release_at never auto-releases.',
   scope: 'write',
   roles: OWNER_TEACHER,
   inputSchema: {
@@ -67,25 +89,54 @@ export const assignmentUpdateTool: ToolDefinition<AssignmentUpdateArgs> = {
       .datetime({ offset: true })
       .optional()
       .describe('New student deadline (ISO 8601, e.g. 2026-07-20T23:59:00-04:00)'),
-    weight: z.number().int().positive().max(10000).optional().describe('Grading weight'),
+    weight: z.number().positive().max(10000).optional().describe('Grading weight'),
     grades_released: z
       .boolean()
       .optional()
       .describe('Whether grades for this assignment are visible to students'),
+    // Nullable, unlike on assignment_create: the web edit form clears either
+    // date by sending null (AssignmentFormModal toIso → updateInClassroom).
+    grader_deadline: z
+      .string()
+      .datetime({ offset: true })
+      .nullable()
+      .optional()
+      .describe('Grader due date (ISO 8601); null clears it. Owner only'),
+    release_at: z
+      .string()
+      .datetime({ offset: true })
+      .nullable()
+      .optional()
+      .describe('Auto-release date (ISO 8601); null clears it. Owner only'),
   },
   handler: async (args, ctx) => {
     const updates: Prisma.AssignmentUpdateInput = {};
-    if (args.student_deadline !== undefined) {
-      updates.student_deadline = new Date(args.student_deadline);
+    // The new value of each changed field for the audit row, as the web
+    // calendar's deadline move records its new_deadline. Dates as ISO strings,
+    // cleared dates as null.
+    const values: Record<string, string | number | boolean | null> = {};
+    const toDate = (iso: string | null) => (iso === null ? null : new Date(iso));
+    const setDate = (
+      field: 'student_deadline' | 'grader_deadline' | 'release_at',
+      iso: string | null
+    ) => {
+      const date = toDate(iso);
+      updates[field] = date;
+      values[field] = date?.toISOString() ?? null;
+    };
+    if (args.student_deadline !== undefined) setDate('student_deadline', args.student_deadline);
+    if (args.weight !== undefined) updates.weight = values.weight = args.weight;
+    if (args.grades_released !== undefined) {
+      updates.grades_released = values.grades_released = args.grades_released;
     }
-    if (args.weight !== undefined) updates.weight = args.weight;
-    if (args.grades_released !== undefined) updates.grades_released = args.grades_released;
+    if (args.grader_deadline !== undefined) setDate('grader_deadline', args.grader_deadline);
+    if (args.release_at !== undefined) setDate('release_at', args.release_at);
 
     const fields = Object.keys(updates);
     if (fields.length === 0) {
       throw new ToolError(
         'invalid_params',
-        'Provide at least one of: student_deadline, weight, grades_released'
+        'Provide at least one of: student_deadline, weight, grades_released, grader_deadline, release_at'
       );
     }
 
@@ -107,7 +158,9 @@ export const assignmentUpdateTool: ToolDefinition<AssignmentUpdateArgs> = {
       resource_type: 'ASSIGNMENT',
       resource_id: assignment.id,
       action: 'UPDATE',
-      data: { tool: 'assignment_update', fields },
+      // `value` is what keeps two different edits inside audit's 5s dedup window
+      // from collapsing into one row; an identical re-send still dedups.
+      data: { tool: 'assignment_update', fields, values, value: JSON.stringify(values) },
     });
 
     return ok({
@@ -118,6 +171,8 @@ export const assignmentUpdateTool: ToolDefinition<AssignmentUpdateArgs> = {
         student_deadline: updated.student_deadline?.toISOString() ?? null,
         weight: updated.weight,
         grades_released: updated.grades_released,
+        grader_deadline: updated.grader_deadline?.toISOString() ?? null,
+        release_at: updated.release_at?.toISOString() ?? null,
       },
     });
   },
@@ -125,9 +180,12 @@ export const assignmentUpdateTool: ToolDefinition<AssignmentUpdateArgs> = {
 
 interface AssignmentCreateArgs {
   classroom: string;
+  module_id: string;
   repository_id: string;
+  submission_mode?: 'ISSUE' | 'REPO';
   title: string;
   weight?: number;
+  is_extra_credit?: boolean;
   description?: string;
   student_deadline?: string;
   grader_deadline?: string;
@@ -141,23 +199,31 @@ export const assignmentCreateTool: ToolDefinition<AssignmentCreateArgs> = {
   annotations: { destructive: false },
   title: 'Create an assignment',
   description:
-    'Creates an assignment (a due-dated, gradeable slice of a repo/lab) under an existing ' +
-    'repository (assignment container). Owner only. Creating it does NOT provision anything on ' +
+    'Creates a REPO assignment (due-dated, gradeable) in a module, submitting through an ' +
+    'existing repository (see list_repos). submission_mode REPO (default): the last push to the ' +
+    'student repo before the deadline is the submission, no issue is opened. ISSUE: Classmoji opens a GitHub issue in each ' +
+    'student repo and closing it submits. Owner only. Creating it does NOT provision anything on ' +
     'GitHub — the assignment reaches students only when its repo is published (repo_publish) or ' +
     'the next release runs. Created as a draft unless is_published is set.',
   scope: 'write',
   roles: OWNER_ONLY,
   inputSchema: {
     classroom: z.string().describe("Classroom reference as 'org/slug'"),
-    repository_id: z.string().uuid().describe('Parent repo (assignment container) id'),
-    title: z.string().min(1).max(200).describe('Assignment title (unique per repository)'),
-    weight: z
-      .number()
-      .int()
-      .positive()
-      .max(10000)
+    module_id: z.string().uuid().describe('Module the assignment belongs to (see list_modules)'),
+    repository_id: z
+      .string()
+      .uuid()
+      .describe('Repository students submit through (see list_repos)'),
+    submission_mode: z
+      .enum(['ISSUE', 'REPO'])
       .optional()
-      .describe('Grading weight (default 100)'),
+      .describe('REPO (default): a push submits. ISSUE: closing a GitHub issue submits.'),
+    title: z.string().min(1).max(200).describe('Assignment title (unique per repository)'),
+    weight: z.number().positive().max(10000).optional().describe('Grading weight (default 100)'),
+    is_extra_credit: z
+      .boolean()
+      .optional()
+      .describe('Extra credit: adds to the course grade without adding to its denominator'),
     description: z.string().max(10000).optional(),
     student_deadline: z
       .string()
@@ -183,15 +249,26 @@ export const assignmentCreateTool: ToolDefinition<AssignmentCreateArgs> = {
     is_published: z.boolean().optional().describe('Publish immediately (default false = draft)'),
   },
   handler: async (args, ctx) => {
-    // S1: the assignment row does not exist yet, so re-verify ownership of the
-    // PARENT container. classroom_id on the new row derives from the verified
-    // parent's repository_id — never from request input.
+    // S1: the assignment row does not exist yet, so verify BOTH cross-record
+    // references belong to this classroom: the module it lives in and the
+    // repository it submits through. Never trust request input for scope.
+    const classroom = requireClassroomCtx(ctx);
+    const module = await ClassmojiService.module.findById(args.module_id);
+    if (!module || module.classroom_id !== classroom.classroomId) {
+      throw scopedNotFound('Module');
+    }
     const repository = await loadRepositoryInClassroom(args.repository_id, ctx);
 
+    // The tool creates REPO assignments only (quiz/form assignments are a
+    // later phase).
     const data: Prisma.AssignmentUncheckedCreateInput = {
+      module_id: module.id,
+      type: 'REPO',
+      submission_mode: args.submission_mode ?? 'REPO',
       repository_id: repository.id,
       title: args.title,
       ...(args.weight !== undefined ? { weight: args.weight } : {}),
+      ...(args.is_extra_credit !== undefined ? { is_extra_credit: args.is_extra_credit } : {}),
       ...(args.description !== undefined ? { description: args.description } : {}),
       ...(args.student_deadline !== undefined
         ? { student_deadline: new Date(args.student_deadline) }
@@ -221,7 +298,12 @@ export const assignmentCreateTool: ToolDefinition<AssignmentCreateArgs> = {
       resource_type: 'ASSIGNMENT',
       resource_id: created.id,
       action: 'CREATE',
-      data: { tool: 'assignment_create', repository_id: repository.id, title: args.title },
+      data: {
+        tool: 'assignment_create',
+        repository_id: repository.id,
+        title: args.title,
+        submission_mode: args.submission_mode ?? 'REPO',
+      },
     });
 
     return ok({
@@ -229,8 +311,12 @@ export const assignmentCreateTool: ToolDefinition<AssignmentCreateArgs> = {
       assignment: {
         id: created.id,
         title: created.title,
+        module_id: created.module_id,
+        type: created.type,
+        submission_mode: created.submission_mode,
         repository_id: created.repository_id,
         weight: created.weight,
+        is_extra_credit: created.is_extra_credit,
         is_published: created.is_published,
         student_deadline: created.student_deadline?.toISOString() ?? null,
       },
@@ -251,8 +337,9 @@ export const assignmentDeleteTool: ToolDefinition<AssignmentDeleteArgs> = {
     'Permanently deletes an assignment. Owner only. THIS CANNOT BE UNDONE and cascades: it ' +
     'deletes every student/team submission for this assignment along with all their grades, ' +
     'grader assignments, regrade requests, token transactions, and analytics, plus its ' +
-    'page/slide/calendar links. It does NOT remove the GitHub issues already created in student ' +
-    'repos (they are orphaned), and it does NOT reconcile student token balances.',
+    'page/slide/calendar links. For an ISSUE-mode assignment it does NOT remove the GitHub issues ' +
+    'already created in student repos (they are orphaned), and it does NOT reconcile student ' +
+    'token balances.',
   scope: 'write',
   roles: OWNER_ONLY,
   inputSchema: {

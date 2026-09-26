@@ -15,6 +15,7 @@ import { whoamiTool } from './whoami.ts';
 import { readTools } from './reads.ts';
 import { gradeAddTool, gradeRemoveTool, gradeRemoveAllTool } from './grades.ts';
 import { graderAssignTool, graderUnassignTool, graderAssignBulkTool } from './graders.ts';
+import { submissionLateOverrideTool } from './lateOverride.ts';
 import { emojiMappingUpsertTool, letterGradeMappingUpsertTool } from './mappings.ts';
 import { assignmentCreateTool, assignmentUpdateTool, assignmentDeleteTool } from './assignments.ts';
 import { regradeCreateTool, regradeResolveTool } from './regrades.ts';
@@ -50,7 +51,13 @@ import {
 import { contentSearchTool, contentListTool, contentGetTool } from './contentSearch.ts';
 import { tokenGrantTool } from './tokens.ts';
 import { extensionPurchaseTool } from './extensions.ts';
-import { repoCreateTool, repoPublishTool, repoUnpublishTool } from './repos.ts';
+import {
+  repoCreateTool,
+  repoUpdateTool,
+  repoDeleteTool,
+  repoPublishTool,
+  repoUnpublishTool,
+} from './repos.ts';
 import { rosterAddStudentTool, rosterRemoveStudentTool } from './roster.ts';
 import { staffAddTool, staffUpdateTool, staffRemoveTool } from './staff.ts';
 import { quizCreateTool, quizUpdateTool, quizPublishTool, quizDeleteTool } from './quizzes.ts';
@@ -76,6 +83,7 @@ import {
   formResponseCreateTool,
   formResponseUpdateTool,
 } from './forms.ts';
+import { formTeamsGetTool, formTeamsRunTool, formTeamsCreateTool } from './formTeams.ts';
 import {
   teamCreateTool,
   teamDeleteTool,
@@ -84,6 +92,7 @@ import {
   teamMemberRemoveTool,
   teamTagAddTool,
   teamTagRemoveTool,
+  tagCreateTool,
 } from './teams.ts';
 
 export function registerAllTools(): void {
@@ -99,6 +108,10 @@ export function registerAllTools(): void {
   registerToolDefinition(gradeAddTool);
   registerToolDefinition(gradeRemoveTool);
   registerToolDefinition(gradeRemoveAllTool);
+
+  // Late-penalty exemption (OWNER+TEACHER — the web shield button's tier); one
+  // submission, a list, or every submission of an assignment.
+  registerToolDefinition(submissionLateOverrideTool);
 
   // Grader assignment (OWNER — route-derived); bulk distributes across a whole
   // assignment in one call.
@@ -198,8 +211,12 @@ export function registerAllTools(): void {
   // Extensions (STUDENT self)
   registerToolDefinition(extensionPurchaseTool);
 
-  // Repos: create container + publish/unpublish + provisioning (OWNER)
+  // Repos: create/update/delete container + publish/unpublish + provisioning
+  // (OWNER). update freezes structural fields once student repos exist; delete
+  // is destructive, confirm-gated, and refuses published/provisioned repos.
   registerToolDefinition(repoCreateTool);
+  registerToolDefinition(repoUpdateTool);
+  registerToolDefinition(repoDeleteTool);
   registerToolDefinition(repoPublishTool);
   registerToolDefinition(repoUnpublishTool);
 
@@ -220,12 +237,13 @@ export function registerAllTools(): void {
 
   // Teams (OWNER — the write surface behind list_teams). create/rename/members
   // touch real GitHub teams; delete is destructive and confirm-gated; the tag
-  // tools are Classmoji-only links.
+  // tools are Classmoji-only links, and tag_create mints the tags they attach.
   registerToolDefinition(teamCreateTool);
   registerToolDefinition(teamDeleteTool);
   registerToolDefinition(teamRenameTool);
   registerToolDefinition(teamMembersAddTool);
   registerToolDefinition(teamMemberRemoveTool);
+  registerToolDefinition(tagCreateTool);
   registerToolDefinition(teamTagAddTool);
   registerToolDefinition(teamTagRemoveTool);
 
@@ -246,4 +264,13 @@ export function registerAllTools(): void {
   registerToolDefinition(formResponseGetTool);
   registerToolDefinition(formResponseCreateTool);
   registerToolDefinition(formResponseUpdateTool);
+
+  // Team sets on a CLASSROOM form (Pro, checked in-handler like every forms
+  // tool). get/run are the forms tier (OWNER+TEACHER): a run is only a
+  // proposal and never touches a team. create is OWNER-only — it mints real
+  // GitHub teams — previews unless confirm:true, and hands the work to a
+  // background task.
+  registerToolDefinition(formTeamsGetTool);
+  registerToolDefinition(formTeamsRunTool);
+  registerToolDefinition(formTeamsCreateTool);
 }

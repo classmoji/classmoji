@@ -1,5 +1,6 @@
 /**
- * Unit tests for the admin calendar action's audit rows.
+ * Unit tests for the admin calendar action: the audit row every write leaves,
+ * which event a link write lands on, and how a refusal reaches the user.
  *
  * Calendar writes are the ones most likely to be disputed after the fact — a
  * moved deadline or a deleted lecture changes what a whole class is expected to
@@ -35,6 +36,11 @@ vi.mock('~/utils/helpers', () => ({
   addClassroomAuditLog: (...a: unknown[]) => mocks.addClassroomAuditLog(...a),
 }));
 
+// The write policy is NOT mocked: it is a dependency-free module, so the action
+// runs the real decision here and these tests cannot pass against a copy of it.
+const { CalendarTimeRangeError, ASSISTANT_EVENT_TYPE_MESSAGE } =
+  await import('@classmoji/services/calendar-policy');
+
 vi.mock('@classmoji/services', () => ({
   ClassmojiService: {
     calendar: {
@@ -63,6 +69,17 @@ vi.mock('@classmoji/database', () => ({
 }));
 
 // The action is what is under test; the view layer only needs to import.
+//
+// Every calendar module the route imports AT RUNTIME belongs in the list below,
+// or importing the route drags a React component tree (and antd) into this node
+// test. Type-only imports need no entry — the transform erases them — which is
+// why `calendar/types` and the modal's form types are absent.
+//
+// The shared calendar parts — CalendarShell, WeekGrid, MonthGrid, AllDayStrip,
+// NowIndicator, EventChip, geometry, useCalendarNavigation and the drag
+// layer — need no entries of their own: the route reaches every one of them
+// through CourseCalendar, which is mocked here. An entry is needed the day the
+// route imports one of them DIRECTLY.
 vi.mock('@classmoji/ui-components', () => ({ useCallout: () => ({ show: vi.fn() }) }));
 vi.mock('~/utils/calendar.server', () => ({
   buildCalendarUrl: () => 'webcal://example.test/cal.ics',
@@ -76,7 +93,6 @@ vi.mock('~/components/features/calendar/AddEventModal', () => ({ default: () => 
 vi.mock('~/components/features/calendar/EditEventModal', () => ({ default: () => null }));
 vi.mock('~/components/features/calendar/EventCard', () => ({ default: () => null }));
 vi.mock('~/components/features/calendar/EventLinks', () => ({ default: () => null }));
-vi.mock('~/components/features/calendar/utils', () => ({}));
 vi.mock('react-router', async () => {
   const actual = await vi.importActual<typeof import('react-router')>('react-router');
   return {
@@ -129,6 +145,9 @@ beforeEach(() => {
   });
   mocks.assignmentFindById.mockResolvedValue({
     id: 'assignment-1',
+    // The classroom check reads the module; the repository is null for
+    // quiz/form assignments, so it is not what the action relies on.
+    module: { classroom_id: 'class-1' },
     repository: { classroom_id: 'class-1' },
     student_deadline: new Date('2026-01-01T00:00:00.000Z'),
   });
@@ -258,6 +277,272 @@ describe('calendar action — audit rows', () => {
  * entirely until the check moved onto `isAdmin`, which the update, delete and
  * deadline branches already consulted.
  */
+describe('calendar action — which event a link write lands on', () => {
+  it('writes the links against the occurrence being edited', async () => {
+    await submit({
+      intent: 'update',
+      eventId: 'event-1',
+      eventData: JSON.stringify({
+        title: 'Lecture 3',
+        editScope: 'this_only',
+        occurrenceDate: '2026-09-28T00:00:00.000Z',
+        linkedPageIds: ['p-1'],
+        linkedSlideIds: [],
+        linkedAssignmentIds: [],
+      }),
+    });
+
+    expect(mocks.updateEventLinks).toHaveBeenCalledWith(
+      'event-1',
+      'class-1',
+      { pageIds: ['p-1'], slideIds: [], assignmentIds: [] },
+      new Date('2026-09-28T00:00:00.000Z'),
+      null
+    );
+  });
+
+  it.each(['all', 'this_and_future'])('ignores link keys sent with a %s edit', async scope => {
+    // Those scopes name no occurrence, and a link written without one lands in
+    // the undated bucket that a recurring event's occurrences never read: it
+    // would look like saving the links and behave like discarding them. The
+    // modal no longer sends them, and the action would not write them if it did.
+    mocks.updateEventWithScope.mockResolvedValue({ id: 'event-2' });
+
+    await submit({
+      intent: 'update',
+      eventId: 'event-1',
+      eventData: JSON.stringify({
+        title: 'Lecture 3',
+        editScope: scope,
+        occurrenceDate: '2026-09-28T00:00:00.000Z',
+        linkedPageIds: ['p-1'],
+        linkedSlideIds: [],
+        linkedAssignmentIds: [],
+      }),
+    });
+
+    expect(mocks.updateEventLinks).not.toHaveBeenCalled();
+    // The rest of the edit still goes through.
+    expect(mocks.updateEventWithScope).toHaveBeenCalled();
+  });
+
+  it('follows a split onto the returned event when a link write does happen', async () => {
+    // 'this_only' is the scope that carries links. The id still has to be the
+    // one the service wrote, since a scoped call is what returns it.
+    mocks.updateEventWithScope.mockResolvedValue({ id: 'event-2' });
+
+    await submit({
+      intent: 'update',
+      eventId: 'event-1',
+      eventData: JSON.stringify({
+        title: 'Lecture 3',
+        editScope: 'this_only',
+        occurrenceDate: '2026-09-28T00:00:00.000Z',
+        linkedPageIds: ['p-1'],
+      }),
+    });
+
+    expect(mocks.updateEventLinks).toHaveBeenCalledWith(
+      'event-2',
+      'class-1',
+      expect.anything(),
+      new Date('2026-09-28T00:00:00.000Z'),
+      null
+    );
+  });
+
+  it('writes no links at all when the edit carried none', async () => {
+    // The modal sends the link arrays only for a 'this only' edit, and the
+    // action keys off their presence — so a series-wide edit must leave every
+    // date's links exactly as they were.
+    mocks.updateEventWithScope.mockResolvedValue({ id: 'event-1' });
+
+    await submit({
+      intent: 'update',
+      eventId: 'event-1',
+      eventData: JSON.stringify({
+        title: 'Renamed',
+        editScope: 'all',
+        occurrenceDate: '2026-09-28T00:00:00.000Z',
+      }),
+    });
+
+    expect(mocks.updateEventLinks).not.toHaveBeenCalled();
+  });
+});
+
+describe('calendar action — the starred link', () => {
+  /** The `featured` argument of the single updateEventLinks call. */
+  const featuredArg = () => mocks.updateEventLinks.mock.calls[0][4];
+
+  it('travels to the link write on a create', async () => {
+    await submit({
+      intent: 'create',
+      eventData: JSON.stringify({
+        title: 'Lecture 4',
+        event_type: 'LECTURE',
+        linkedPageIds: ['p-1'],
+        featuredKind: 'page',
+        featuredId: 'p-1',
+      }),
+    });
+
+    expect(featuredArg()).toEqual({ kind: 'page', id: 'p-1' });
+  });
+
+  it('never reaches createEvent, which knows nothing about links', async () => {
+    await submit({
+      intent: 'create',
+      eventData: JSON.stringify({
+        title: 'Lecture 4',
+        event_type: 'LECTURE',
+        linkedPageIds: ['p-1'],
+        featuredKind: 'page',
+        featuredId: 'p-1',
+      }),
+    });
+
+    const createData = mocks.createEvent.mock.calls[0][2] as Record<string, unknown>;
+    expect(createData).not.toHaveProperty('featuredKind');
+    expect(createData).not.toHaveProperty('featuredId');
+    expect(createData).not.toHaveProperty('linkedPageIds');
+  });
+
+  it('travels with a this_only edit', async () => {
+    await submit({
+      intent: 'update',
+      eventId: 'event-1',
+      eventData: JSON.stringify({
+        title: 'Lecture 3',
+        editScope: 'this_only',
+        occurrenceDate: '2026-09-28T00:00:00.000Z',
+        linkedSlideIds: ['s-1'],
+        featuredKind: 'slide',
+        featuredId: 's-1',
+      }),
+    });
+
+    expect(featuredArg()).toEqual({ kind: 'slide', id: 's-1' });
+  });
+
+  it.each(['all', 'this_and_future'])(
+    'is ignored with a %s edit, as the links are',
+    async scope => {
+      // A star is stored on a link row. A scope that has no occurrence to save a
+      // link against has nowhere to put a star either.
+      mocks.updateEventWithScope.mockResolvedValue({ id: 'event-2' });
+
+      await submit({
+        intent: 'update',
+        eventId: 'event-1',
+        eventData: JSON.stringify({
+          title: 'Lecture 3',
+          editScope: scope,
+          occurrenceDate: '2026-09-28T00:00:00.000Z',
+          linkedPageIds: ['p-1'],
+          featuredKind: 'page',
+          featuredId: 'p-1',
+        }),
+      });
+
+      expect(mocks.updateEventLinks).not.toHaveBeenCalled();
+    }
+  );
+
+  it('is dropped when it names a kind the calendar does not have', async () => {
+    await submit({
+      intent: 'update',
+      eventId: 'event-1',
+      eventData: JSON.stringify({
+        title: 'Lecture 3',
+        linkedPageIds: ['p-1'],
+        featuredKind: 'quiz',
+        featuredId: 'q-1',
+      }),
+    });
+
+    expect(featuredArg()).toBeNull();
+  });
+
+  it('is not claimed among the fields an update changed', async () => {
+    // The audit row lists which columns of the EVENT moved. A star is not one
+    // of them, and neither are the link ids beside it.
+    await submit({
+      intent: 'update',
+      eventId: 'event-1',
+      eventData: JSON.stringify({
+        title: 'Lecture 3',
+        linkedPageIds: ['p-1'],
+        featuredKind: 'page',
+        featuredId: 'p-1',
+      }),
+    });
+
+    expect(auditEntry().metadata.fields).toEqual(['title']);
+  });
+
+  it('never reaches updateEvent either', async () => {
+    await submit({
+      intent: 'update',
+      eventId: 'event-1',
+      eventData: JSON.stringify({
+        title: 'Lecture 3',
+        linkedPageIds: ['p-1'],
+        featuredKind: 'page',
+        featuredId: 'p-1',
+      }),
+    });
+
+    const updateData = mocks.updateEvent.mock.calls[0][1] as Record<string, unknown>;
+    expect(Object.keys(updateData)).toEqual(['title']);
+  });
+});
+
+describe('calendar action — a refused time range reaches the user', () => {
+  it('answers a create with the message, not a 500', async () => {
+    mocks.createEvent.mockRejectedValue(new CalendarTimeRangeError());
+
+    const response = (await submit({
+      intent: 'create',
+      eventData: JSON.stringify({ title: 'Backwards', event_type: 'LECTURE' }),
+    })) as { data?: { error?: string }; init?: { status?: number } };
+
+    expect(response.init?.status).toBe(400);
+    expect(response.data?.error).toBe('End time must be after the start time');
+    // Nothing was written, so nothing is claimed in the log.
+    expect(mocks.addClassroomAuditLog).not.toHaveBeenCalled();
+  });
+
+  it('answers an update the same way, and writes no links after it', async () => {
+    mocks.updateEvent.mockRejectedValue(new CalendarTimeRangeError());
+
+    const response = (await submit({
+      intent: 'update',
+      eventId: 'event-1',
+      eventData: JSON.stringify({ title: 'Backwards', linkedPageIds: ['p-1'] }),
+    })) as { data?: { error?: string }; init?: { status?: number } };
+
+    expect(response.init?.status).toBe(400);
+    expect(response.data?.error).toBe('End time must be after the start time');
+    expect(mocks.updateEventLinks).not.toHaveBeenCalled();
+    expect(mocks.addClassroomAuditLog).not.toHaveBeenCalled();
+  });
+
+  it('still lets any other failure surface as itself', async () => {
+    // Laundering every failure into a friendly message would tell a user to fix
+    // their times when the database was down.
+    mocks.updateEvent.mockRejectedValue(new Error('connection reset'));
+
+    await expect(
+      submit({
+        intent: 'update',
+        eventId: 'event-1',
+        eventData: JSON.stringify({ title: 'Whatever' }),
+      })
+    ).rejects.toThrow('connection reset');
+  });
+});
+
 describe('calendar action — the assistant event-type limit follows the role', () => {
   const asAssistant = () =>
     mocks.assertClassroomAccess.mockResolvedValue({
@@ -289,6 +574,69 @@ describe('calendar action — the assistant event-type limit follows the role', 
 
     expect(mocks.createEvent).toHaveBeenCalled();
     expect(auditEntry()).toMatchObject({ action: 'CREATE', resourceType: 'CALENDAR' });
+  });
+
+  it('refuses an assistant retyping their office hours as a lecture', async () => {
+    // The create limit is worth nothing on its own: add office hours, then
+    // change the type. Same policy, same message, on the update path.
+    asAssistant();
+    mocks.getEventById.mockResolvedValue({
+      id: 'event-1',
+      classroom_id: 'class-1',
+      created_by: 'ta-1',
+      event_type: 'OFFICE_HOURS',
+      title: 'Office hours',
+    });
+
+    const response = (await submit({
+      intent: 'update',
+      eventId: 'event-1',
+      eventData: JSON.stringify({ title: 'Office hours', event_type: 'LECTURE' }),
+    })) as { data?: { error?: string }; init?: { status?: number } };
+
+    expect(response.init?.status).toBe(403);
+    expect(response.data?.error).toBe(ASSISTANT_EVENT_TYPE_MESSAGE);
+    expect(mocks.updateEvent).not.toHaveBeenCalled();
+    expect(mocks.addClassroomAuditLog).not.toHaveBeenCalled();
+  });
+
+  it('still lets an assistant edit the time of their office hours', async () => {
+    // The refusal is about the TYPE. Re-sending the one the event already has
+    // is not a change, and must not block an ordinary edit.
+    asAssistant();
+    mocks.getEventById.mockResolvedValue({
+      id: 'event-1',
+      classroom_id: 'class-1',
+      created_by: 'ta-1',
+      event_type: 'OFFICE_HOURS',
+      title: 'Office hours',
+    });
+
+    await submit({
+      intent: 'update',
+      eventId: 'event-1',
+      eventData: JSON.stringify({ title: 'Office hours', event_type: 'OFFICE_HOURS' }),
+    });
+
+    expect(mocks.updateEvent).toHaveBeenCalled();
+  });
+
+  it('does not stop an OWNER retyping an event', async () => {
+    mocks.getEventById.mockResolvedValue({
+      id: 'event-1',
+      classroom_id: 'class-1',
+      created_by: 'owner-1',
+      event_type: 'OFFICE_HOURS',
+      title: 'Office hours',
+    });
+
+    await submit({
+      intent: 'update',
+      eventId: 'event-1',
+      eventData: JSON.stringify({ title: 'Now a lecture', event_type: 'LECTURE' }),
+    });
+
+    expect(mocks.updateEvent).toHaveBeenCalled();
   });
 
   it.each(['OWNER', 'TEACHER'])('does not limit a %s to office hours', async role => {

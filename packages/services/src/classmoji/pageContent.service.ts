@@ -913,7 +913,10 @@ function isPlainRepoPath(path: string): boolean {
  * URL, which then made `uploadPageAsset` store the BARE REPO PATH for a file
  * with no map row: an upload that saved as a reference no reader can resolve
  * and no later sync repairs. Refusing here restores the legacy absolute URL for
- * exactly those uploads, which is the answer that keeps working.
+ * exactly those uploads: that URL resolves on a legacy PUBLIC content repo, and
+ * on a private one — the default for a new delivery-enabled classroom since
+ * content-repo-private — raw.githubusercontent.com 404s until the next asset
+ * sync writes the map row this upload missed.
  */
 async function signUploadedAsset(
   page: PageWithContentRepo,
@@ -939,7 +942,8 @@ async function signUploadedAsset(
   const asset = (await mappedAssetsBySha(classroom.id, [sha])).get(sha);
   // The row the upload just wrote is missing, so there is nothing to prove this
   // classroom's claim on these bytes. `mappedAssetsBySha` logs the refusal; the
-  // caller stores the legacy absolute URL, which still resolves.
+  // caller stores the legacy absolute URL, which resolves only while the content
+  // repo is public — otherwise the next asset sync is what repairs it.
   if (!asset) return null;
 
   return signBlobUrlForClassroom(

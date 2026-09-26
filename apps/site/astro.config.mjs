@@ -19,7 +19,7 @@ export default defineConfig({
           navLinks: [
             { label: 'Back to main site', link: 'https://classmoji.io' },
           ],
-          footerText: '🍎 Built by educators and students. [Contribute on GitHub](https://github.com/classmoji/classmoji)',
+          footerText: '🍎 Built by educators and students. [Contribute on GitHub](https://github.com/classmoji/classmoji) · [Privacy Policy](/privacy) · [Terms of Service](/terms)',
         }),
       ],
       sidebar: [
@@ -46,7 +46,8 @@ export default defineConfig({
               badge: { text: 'New', variant: 'tip' },
             },
             { label: 'Manage your roster', slug: 'docs/instructors/roster' },
-            { label: 'Repositories & assignments', slug: 'docs/instructors/modules-and-assignments' },
+            { label: 'Repositories', slug: 'docs/instructors/repositories' },
+            { label: 'Modules & assignments', slug: 'docs/instructors/modules-and-assignments' },
             {
               label: 'Autograding',
               slug: 'docs/instructors/autograding',
@@ -112,7 +113,14 @@ export default defineConfig({
     mdx(),
   ],
   server: {
-    port: 4000
+    // Round and easy to remember, and clear of every other app: the webapp is
+    // on 3000, hook on 4001, quiz agent 6000, slides 6500, pages 7100, admin
+    // 7500, MCP 8100, each shifted by `DEVPORT_ID * 10` in a worktree.
+    //
+    // Not 4000: that is the local webhook fanout the Smee tunnels post to, and
+    // a site dev server sitting on it swallows every Github push event.
+    // Not under 1024 either, since those need root to bind.
+    port: 2000
   },
   vite: {
     plugins: [tailwindcss()],

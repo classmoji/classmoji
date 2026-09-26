@@ -337,6 +337,10 @@ export default function AdminQuizzes({ loaderData }: Route.ComponentProps) {
   // Served under every prefix this route's gate allows (/admin and /teacher),
   // so links stay on the prefix the user arrived on.
   const rolePrefix = useLocation().pathname.split('/')[1];
+  // The assistant section serves this same list read-only: they open a quiz and
+  // read its attempts, but authoring, weighting, publishing and deleting belong
+  // to the people who own the class.
+  const canEdit = rolePrefix === 'admin' || rolePrefix === 'teacher';
 
   const handleEditQuiz = (quiz: AdminQuiz) => {
     navigate(`/${rolePrefix}/${classSlug}/quizzes/form?quizId=${quiz.id}`);
@@ -438,14 +442,17 @@ export default function AdminQuizzes({ loaderData }: Route.ComponentProps) {
       key: 'weight',
       width: 110,
       sorter: (a: AdminQuiz, b: AdminQuiz) => a.weight - b.weight,
-      render: (quiz: AdminQuiz) => (
-        <EditableCell
-          record={quiz}
-          dataIndex="weight"
-          onUpdate={handleUpdateWeight}
-          format="number"
-        />
-      ),
+      render: (quiz: AdminQuiz) =>
+        canEdit ? (
+          <EditableCell
+            record={quiz}
+            dataIndex="weight"
+            onUpdate={handleUpdateWeight}
+            format="number"
+          />
+        ) : (
+          <Text type="secondary">{quiz.weight}</Text>
+        ),
     },
     {
       title: 'Due Date',
@@ -508,31 +515,34 @@ export default function AdminQuizzes({ loaderData }: Route.ComponentProps) {
     {
       title: 'Actions',
       key: 'actions',
-      render: (_: unknown, record: AdminQuiz) => (
-        <TableActionButtons
-          onView={() => handleViewQuiz(record)}
-          onEdit={() => handleEditQuiz(record)}
-          onDelete={() => handleDeleteQuiz(record.id)}
-        >
-          {record.status === 'DRAFT' && (
-            <ActionButton
-              icon={IconSend}
-              tooltip="Publish Quiz"
-              color="green"
-              popconfirmProps={{
-                title: 'Publish Quiz',
-                description: 'This will make the quiz available to all students.',
-                onConfirm: (e?: React.MouseEvent) => {
-                  e?.stopPropagation();
-                  handlePublishQuiz(record.id);
-                },
-                okText: 'Publish',
-                cancelText: 'Cancel',
-              }}
-            />
-          )}
-        </TableActionButtons>
-      ),
+      render: (_: unknown, record: AdminQuiz) =>
+        !canEdit ? (
+          <TableActionButtons onView={() => handleViewQuiz(record)} />
+        ) : (
+          <TableActionButtons
+            onView={() => handleViewQuiz(record)}
+            onEdit={() => handleEditQuiz(record)}
+            onDelete={() => handleDeleteQuiz(record.id)}
+          >
+            {record.status === 'DRAFT' && (
+              <ActionButton
+                icon={IconSend}
+                tooltip="Publish Quiz"
+                color="green"
+                popconfirmProps={{
+                  title: 'Publish Quiz',
+                  description: 'This will make the quiz available to all students.',
+                  onConfirm: (e?: React.MouseEvent) => {
+                    e?.stopPropagation();
+                    handlePublishQuiz(record.id);
+                  },
+                  okText: 'Publish',
+                  cancelText: 'Cancel',
+                }}
+              />
+            )}
+          </TableActionButtons>
+        ),
     },
   ];
 
@@ -555,9 +565,11 @@ export default function AdminQuizzes({ loaderData }: Route.ComponentProps) {
             <Button icon={<IconTrash size={16} />}>Clear My Attempts</Button>
           </Popconfirm>
 
-          <ButtonNew action={() => navigate(`/${rolePrefix}/${classSlug}/quizzes/form`)}>
-            New quiz
-          </ButtonNew>
+          {canEdit && (
+            <ButtonNew action={() => navigate(`/${rolePrefix}/${classSlug}/quizzes/form`)}>
+              New quiz
+            </ButtonNew>
+          )}
         </Space>
       </div>
 

@@ -32,3 +32,7 @@ apps/admin/build
 
 # Generated scale-to-zero fly configs for staging/dev (see scripts/fly-autostop-config.sh)
 apps/*/fly.autostop.generated.toml
+
+# Local Python venv for the team-set solver (packages/tasks/python)
+packages/tasks/python/.venv/
+__pycache__/

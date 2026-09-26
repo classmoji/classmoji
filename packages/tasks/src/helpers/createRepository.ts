@@ -3,7 +3,7 @@ import { logger } from '@trigger.dev/sdk';
 import path from 'path';
 import fs from 'fs';
 
-import { getGitProvider } from '@classmoji/services';
+import { CLASSMOJI_BOT_EMAIL, getGitProvider } from '@classmoji/services';
 
 // Public fallback template used when an instructor's configured template repo has
 // no commits. An empty repo can't seed a student/team repo (the clone lands on an
@@ -76,7 +76,7 @@ export const createRepository = async (payload: CreateRepositoryPayload): Promis
     const repoGit = simpleGit(localPath);
 
     await repoGit.addConfig('user.name', 'Classmoji Bot');
-    await repoGit.addConfig('user.email', 'hello@classmoji.com');
+    await repoGit.addConfig('user.email', CLASSMOJI_BOT_EMAIL);
 
     await repoGit.removeRemote('origin');
     await repoGit.addRemote('origin', studentRepoUrl);

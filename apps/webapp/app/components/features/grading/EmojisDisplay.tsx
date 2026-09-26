@@ -26,8 +26,8 @@ const EmojisDisplay = ({ grades }: EmojisDisplayProps) => {
         return (
           <div key={grade.id ?? index} className="relative group">
             <Tooltip title={role !== 'STUDENT' && grade.grader?.name} placement="top">
-              <div className="p-2 rounded-lg bg-gray-50 hover:bg-gray-100 transition-all duration-200 hover:scale-110 hover:shadow-xs border border-gray-200">
-                <Emoji emoji={grade.emoji} fontSize={14} className="block" />
+              <div className="p-0.5 transition-transform duration-200 hover:scale-110">
+                <Emoji emoji={grade.emoji} fontSize={18} className="block" />
               </div>
             </Tooltip>
             {role !== 'STUDENT' && (

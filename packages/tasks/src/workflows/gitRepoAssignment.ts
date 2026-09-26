@@ -1,4 +1,4 @@
-import { task, schedules, logger } from '@trigger.dev/sdk';
+import { task, tasks, schedules, logger } from '@trigger.dev/sdk';
 import { ClassmojiService, HelperService, getGitProvider } from '@classmoji/services';
 import { titleToIdentifier } from '@classmoji/utils';
 import { createRepositoriesTask } from './gitRepo.ts';
@@ -17,11 +17,15 @@ interface GitRepoAssignmentTaskContext {
   };
 }
 
+type SubmissionMode = 'ISSUE' | 'REPO';
+
 interface IssueAssignmentRecord {
   id: string;
   title: string;
   body?: string | null;
   description?: string | null;
+  /** ISSUE opens a GitHub issue per student repo; REPO opens nothing (a push submits). */
+  submission_mode?: SubmissionMode | null;
 }
 
 interface StudentRepositoryRecord {
@@ -42,14 +46,16 @@ interface CreateGithubRepositoryAssignmentTaskPayload {
 interface CreateDatabaseRepositoryAssignmentTaskPayload {
   assignment: IssueAssignmentRecord;
   studentRepo: StudentRepositoryRecord;
-  issueNumber: number;
-  id: string;
+  /** The GitHub issue, in ISSUE mode. Absent for a REPO-mode submission row. */
+  issueNumber?: number;
+  id?: string;
 }
 
 interface GitRepoAssignmentGraderTaskPayload {
   repoName: string;
   gitOrganization: StrictGitOrganizationLike;
-  githubIssueNumber: number;
+  /** Null for a REPO-mode submission: there is no issue to assign on GitHub. */
+  githubIssueNumber: number | null;
   graderLogin: string;
   graderId: string;
   gitRepoAssignmentId: string;
@@ -72,6 +78,13 @@ interface WebhookIssuePayload {
 
 interface GitRepoAssignmentWebhookTaskPayload {
   issue: WebhookIssuePayload;
+}
+
+interface RepositoryPushTaskPayload {
+  /** The student's git repo (GitRepo.id) that received the push. */
+  gitRepoId: string;
+  /** When the webhook was delivered (never the commit's own timestamp). */
+  pushedAt: string | Date;
 }
 
 interface ClassroomRecord {
@@ -218,6 +231,33 @@ export const createGithubRepositoryAssignmentTask = task({
       return;
     }
 
+    // REPO mode: the repository itself is the assignment and a push is the
+    // submission. Nothing is created on GitHub; the submission row is all
+    // that is needed, and the push webhook fills in the rest.
+    if (assignment.submission_mode === 'REPO') {
+      await createDatabaseRepositoryAssignmentTask.triggerAndWait(
+        { assignment, studentRepo },
+        { tags: ctx.run.tags, concurrencyKey: organization.login }
+      );
+      // The repo may already hold work: an assignment added to a repository
+      // students have been pushing to for weeks. The webhook only sees pushes
+      // from now on, so the latest commit stands in for the missed push.
+      try {
+        const row = await ClassmojiService.gitRepoAssignment.findFirst({
+          assignment_id: assignment.id,
+          git_repo_id: studentRepo.id,
+        });
+        if (row) await ClassmojiService.gitRepoAssignment.recordExistingPush(row.id);
+      } catch (error) {
+        logger.warn('Could not read the repo history for an existing push; the next push will count', {
+          repoName,
+          assignmentId: assignment.id,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+      return;
+    }
+
     const gitProvider = getGitProvider(organization);
 
     let issue: { id: string; number: number };
@@ -311,13 +351,14 @@ export const createDatabaseRepositoryAssignmentTask = task({
   run: async (payload: CreateDatabaseRepositoryAssignmentTaskPayload) => {
     const { assignment, studentRepo, issueNumber, id } = payload;
 
+    // ISSUE mode: the row id and provider_id are the GitHub issue id. REPO
+    // mode: no issue; the row gets a generated id and null provider fields.
     const data = {
-      id,
+      ...(id ? { id, provider_id: String(id) } : {}),
       assignment_id: assignment.id,
       git_repo_id: studentRepo.id,
       provider: 'GITHUB',
-      provider_id: String(id),
-      provider_issue_number: issueNumber,
+      provider_issue_number: issueNumber ?? null,
     };
 
     return ClassmojiService.gitRepoAssignment.create(data);
@@ -367,6 +408,69 @@ export const repositoryAssignmentClosedHandlerTask = task({
         closed_at: issue.closed_at,
       },
     });
+  },
+});
+
+export const repositoryAssignmentReopenedHandlerTask = task({
+  id: 'webhook-git_repo_assignment_reopened_handler',
+  run: async (payload: GitRepoAssignmentWebhookTaskPayload) => {
+    const { issue } = payload;
+    // Resolves through the issue id, so a REPO-mode row (no issue) can never
+    // be reopened this way.
+    const repoAssignment = await ClassmojiService.gitRepoAssignment.findByProviderId(
+      'GITHUB',
+      String(issue.id)
+    );
+
+    if (!repoAssignment?.assignment) {
+      logger.info('GitRepo assignment not found in database', { issue });
+      return;
+    }
+
+    return updateRepositoryAssignmentTask.trigger({
+      payload: { gitRepoAssignmentId: repoAssignment.id, status: 'OPEN', closed_at: null },
+    });
+  },
+});
+
+/**
+ * A push to a student repo's default branch is the submission for every
+ * published REPO-mode assignment that submits through it. As in GitHub
+ * Classroom, the last push before the deadline (plus bought extension hours)
+ * is the submission; later pushes do not count, graded rows are frozen, and a
+ * late-delivered older webhook never moves the time backwards.
+ */
+export const repositoryPushHandlerTask = task({
+  id: 'webhook-git_repo_push_handler',
+  run: async (payload: RepositoryPushTaskPayload) => {
+    const pushedAt = new Date(payload.pushedAt);
+    // The repo's own "last push", whatever it does to submissions below.
+    await ClassmojiService.gitRepo.recordPushTime(payload.gitRepoId, pushedAt);
+    const touched = await ClassmojiService.gitRepoAssignment.recordPush(
+      payload.gitRepoId,
+      pushedAt
+    );
+    logger.info('Recorded push as submission', {
+      gitRepoId: payload.gitRepoId,
+      pushedAt: pushedAt.toISOString(),
+      touched: touched.map(t => t.id),
+    });
+
+    // Keep the commit stats fresh for EVERY row on this repo, not only the
+    // ones the push counted as a submission: a graded row is frozen above,
+    // and an issue-mode row never submits by push, but both still show the
+    // repo's commit count and should see the new commits.
+    //
+    // One run for the whole repo, not one per row. The commits, contributors,
+    // languages and PRs a snapshot holds are facts about the repo and identical
+    // across its rows, so fanning out per row re-read the same four GitHub
+    // endpoints once per row to write N identical snapshots.
+    await tasks.trigger(
+      'refresh-repo-analytics-repo',
+      { gitRepoId: payload.gitRepoId },
+      { concurrencyKey: payload.gitRepoId }
+    );
+    return { touched: touched.length };
   },
 });
 

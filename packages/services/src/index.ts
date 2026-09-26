@@ -98,6 +98,13 @@ export {
   gitRepoAssignmentService,
   notificationService,
   ClassroomSettingsEntitlementError,
+  ClassroomSettingsValidationError,
+  CalendarTimeRangeError,
+  isCalendarTimeRangeError,
+  ASSISTANT_EVENT_TYPE,
+  ASSISTANT_EVENT_TYPE_MESSAGE,
+  assistantMayCreateEventType,
+  assistantMayChangeEventType,
 } from './classmoji/index.ts';
 
 export { ClassmojiService, HelperService, StripeService, FlyCertService, MarkdownImporter };
@@ -162,12 +169,80 @@ export type {
   RemovedResourceLink,
   ResourceLinkSummary,
 } from './classmoji/resourceLink.service.ts';
+export { CLASSMOJI_BOT_EMAIL } from './classmoji/gitRepoAssignment.service.ts';
 export { AssignGradersError } from './classmoji/gitRepoAssignmentGrader.service.ts';
 export type {
   AssignGradersMethod,
   AssignGradersResult,
   GradingReportRow,
 } from './classmoji/gitRepoAssignmentGrader.service.ts';
+
+// Team sets. The service's refusal and result shapes are flat so the MCP tools
+// can branch on `TeamSetError.code` and type their payloads; the pure modules
+// (config schema, compiler, scorer, checks, metrics) are here for the Trigger
+// tasks and the MCP input schema, and are ALSO reachable one file at a time
+// through the `./team-set-*` subpaths, which pull in zod and nothing else —
+// the only door a browser bundle may use.
+export {
+  TeamSetError,
+  isTeamSetError,
+  teamNamesFor,
+  TEAM_SET_ENGINE,
+  TEAM_SET_RUN_ERRORS,
+} from './classmoji/teamSet.service.ts';
+export type {
+  TeamSetErrorCode,
+  TeamSetRunErrorCode,
+  TeamSetRow,
+  TeamSetRunRow,
+  TeamSetSummary,
+  TeamSetRunListItem,
+  RunInputs,
+  RunResult,
+  RunDiagnostics,
+  RunView,
+  RunViewTeam,
+  RunViewMember,
+  SolverOutput,
+  SolverSummary,
+  SolverCoreStatus,
+  SolverStats,
+  CreatePreview,
+  CreateState,
+  CreateCounts,
+  CreateFailure,
+  CreateFailureReason,
+  CreateMemberFailureReason,
+  NamedCheckIssue,
+} from './classmoji/teamSet.service.ts';
+export {
+  TEAM_SET_JOBS,
+  TeamSetConfigSchema,
+  TeamSetConfigPatchSchema,
+  TeamSetConfigError,
+  applyConfigPatch,
+  suggestConfig,
+  validateConfigAgainstForm,
+} from './classmoji/teamSetConfig.ts';
+export type {
+  TeamSetConfig,
+  TeamSetConfigPatch,
+  TeamSetConfigPatchInput,
+  TeamSetJob,
+} from './classmoji/teamSetConfig.ts';
+export { compileProblem, FREE_OPTION_ID } from './classmoji/teamSetProblem.ts';
+export type {
+  TeamSetProblem,
+  TeamSetContext,
+  TeamSetHard,
+  CompileInput,
+} from './classmoji/teamSetProblem.ts';
+export { scoreAssignment } from './classmoji/teamSetScore.ts';
+export type { TeamSetAssignment, TeamSetViolation } from './classmoji/teamSetScore.ts';
+export { runChecks } from './classmoji/teamSetChecks.ts';
+export type { CheckIssue } from './classmoji/teamSetChecks.ts';
+export { computeMetrics } from './classmoji/teamSetMetrics.ts';
+export type { TeamSetMetrics, PersonPlacement } from './classmoji/teamSetMetrics.ts';
 
 // Course-content search: the permission-joined vector query behind the MCP's
 // `content_search` / `content_list` / `content_get`, plus the ONE draft-
@@ -344,6 +419,9 @@ export type {
 export { aggregateForTeam } from './classmoji/repoAnalytics.service.ts';
 export type { TeamAggregate, TeamRepoSnapshot } from './classmoji/repoAnalytics.service.ts';
 
+// Calendar payload shape (the item type `getClassroomCalendar` returns).
+export type { ClassroomCalendarItem } from './classmoji/calendar.service.ts';
+
 // Email helpers. Resend injects template variables raw, so every
 // user-controlled value must be escaped before it becomes one.
 export { appUrl, escapeHtml, escapeVars } from './emails/escape.ts';
@@ -359,3 +437,16 @@ export {
   aggregateByContributor,
   commitsPerDayByContributor,
 } from './classmoji/repoAnalytics.flags.ts';
+
+// Class-site origins, and the public URL a form is shared as. One copy, because
+// apps/pages and apps/webapp both build these links and have to build the same
+// ones; apps/pages re-exports them under the local names it already used.
+export {
+  siteBaseDomain,
+  siteOrigin,
+  customDomainOrigin,
+  seoOriginFor,
+  canonicalOriginForSite,
+  publicFormUrlFor,
+} from './classmoji/siteLinks.ts';
+export type { SeoOriginInput } from './classmoji/siteLinks.ts';

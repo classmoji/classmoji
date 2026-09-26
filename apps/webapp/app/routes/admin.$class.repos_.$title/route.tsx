@@ -1,158 +1,58 @@
-import { Tabs, Switch, Card, Tag, Button, Tooltip } from 'antd';
-import {
-  IconFolder,
-  IconChevronLeft,
-  IconList,
-  IconTable,
-  IconPlus,
-  IconRobot,
-} from '@tabler/icons-react';
-import { useParams, useRevalidator, useNavigate, Outlet } from 'react-router';
+import { Tag, Button, Tooltip } from 'antd';
+import { IconFolder, IconChevronLeft, IconRobot } from '@tabler/icons-react';
+import { useParams, useNavigate, useLocation, Outlet } from 'react-router';
 import { useState } from 'react';
 
 import { useGlobalFetcher } from '~/hooks';
-import { ClassmojiService } from '@classmoji/services';
-import FolderTabs from '~/components/ui/FolderTabs';
 import Menu from './Menu';
-import { TriggerProgress } from '~/components';
-import AssignmentTable from './AssignmentTable';
 import { action } from './action';
-import SummaryCards from './SummaryCards';
-import ModuleTable from './ModuleTable';
-import AssignmentsTab from './AssignmentsTab';
-import LinkedPages, { type LinkedPage } from './LinkedPages';
-import { requireClassroomAdmin } from '~/utils/routeAuth.server';
+import { adminLoader } from './loader.server';
+import SubmissionsTable, { type SubmissionsRepo } from './SubmissionsTable';
+import AssignmentsCard from './AssignmentsCard';
+import AssignmentFormModal from '~/components/features/assignments/AssignmentFormModal';
+import type { AssignmentRowData } from '~/components/features/assignments/AssignmentsTable';
+import LinkedPages from './LinkedPages';
 import type { Route } from './+types/route';
-
-interface RepositoryAssignmentSummary {
-  id: string;
-  title: string;
-  slug: string | null;
-  description: string;
-  weight: number;
-  student_deadline: Date | null;
-  grader_deadline: Date | null;
-  release_at: Date | null;
-  grades_released: boolean;
-  is_published: boolean;
-  tokens_per_hour: number;
-  repository_id: string;
-  created_at: Date;
-  updated_at: Date;
-}
-
-export const loader = async ({ params, request }: Route.LoaderArgs) => {
-  const { class: classSlug, title } = params;
-
-  const { classroom } = await requireClassroomAdmin(request, classSlug!, {
-    resourceType: 'REPOSITORIES',
-    action: 'view_module',
-  });
-
-  const repository = await ClassmojiService.repository.findBySlugAndTitle(classSlug!, title!, {
-    includePages: true,
-  });
-  const repos = await ClassmojiService.gitRepo.findByRepository(classSlug!, repository!.id);
-
-  // Attach each repo's latest autograding result + the configured test count.
-  const latestAutograding = await ClassmojiService.autogradingResult.findLatestByGitRepoIds(
-    repos.map(r => r.id)
-  );
-  const reposWithAutograding = repos.map(r => ({
-    ...r,
-    autograding_result: latestAutograding.get(r.id) ?? null,
-  }));
-  const autogradingTestCount = (
-    await ClassmojiService.autogradingTest.findByRepositoryId(repository!.id)
-  ).length;
-  // The grader pool spans every staff role that can be flagged as a grader —
-  // ASSISTANT and TEACHER — the same pair the RANDOM bulk assignment draws from.
-  // Listing only assistants here would offer a narrower set of options than the
-  // graders actually assigned to these repos.
-  const assistants = (
-    await ClassmojiService.classroomMembership.findUsersByRoles(
-      classroom.id,
-      ['ASSISTANT', 'TEACHER'],
-      { is_grader: true }
-    )
-  ).filter(({ is_grader }) => is_grader);
-
-  const emojiMappings = await ClassmojiService.emojiMapping.findByClassroomId(classroom.id);
-  const settings = await ClassmojiService.classroom.getClassroomSettingsForServer(classroom.id);
-  const students = await ClassmojiService.classroomMembership.findStudents(classroom.id);
-  const teams = await ClassmojiService.team.findByClassroomId(classroom.id);
-
-  // Linked pages = pages linked to the repository unit + to any of its assignments.
-  // PageLink rows carry `.page` (the Page) when includePages is set on the query.
-  const linkedPages: LinkedPage[] = [];
-  type PageLinkLike = {
-    id: string;
-    page?: { id: string; title: string; is_draft: boolean; updated_at: Date } | null;
-  };
-  for (const link of (repository?.pages ?? []) as PageLinkLike[]) {
-    if (link.page) {
-      linkedPages.push({
-        id: link.id,
-        pageId: link.page.id,
-        title: link.page.title,
-        linkedTo: 'linked to repository',
-        isDraft: link.page.is_draft,
-        updatedAt: link.page.updated_at,
-      });
-    }
-  }
-  for (const a of (repository?.assignments ?? []) as Array<{
-    title: string;
-    pages?: PageLinkLike[];
-  }>) {
-    for (const link of a.pages ?? []) {
-      if (link.page) {
-        linkedPages.push({
-          id: link.id,
-          pageId: link.page.id,
-          title: link.page.title,
-          linkedTo: `linked to ${a.title}`,
-          isDraft: link.page.is_draft,
-          updatedAt: link.page.updated_at,
-        });
-      }
-    }
-  }
-
-  return {
-    repository,
-    repos: reposWithAutograding,
-    assistants,
-    emojiMappings,
-    settings,
-    classroom,
-    studentsCount: students.length,
-    teamsCount: teams.length,
-    linkedPages,
-    autogradingTestCount,
-  };
-};
 
 const SingleRepository = ({ loaderData }: Route.ComponentProps) => {
   const {
     repository,
     repos,
+    assignments,
     assistants,
     emojiMappings,
-    settings,
     classroom,
-    studentsCount,
-    teamsCount,
     linkedPages,
     autogradingTestCount,
+    studentCount,
+    modules,
+    repositories,
+    candidates,
+    boundQuizIds,
+    boundFormIds,
   } = loaderData;
   const { fetcher, notify } = useGlobalFetcher();
   const { class: classSlug } = useParams();
   const navigate = useNavigate();
-  const { revalidate } = useRevalidator();
-  const [viewMode, setViewMode] = useState('repository'); // 'repository' or 'assignment'
+  const location = useLocation();
+  const [editing, setEditing] = useState<AssignmentRowData | null>(null);
+  // The assistant section serves this same page read-only. /admin is OWNER-gated
+  // in the loader, so being under it is the permission.
+  const canEdit = location.pathname.split('/')[1] === 'admin';
+  const rolePrefix = canEdit ? 'admin' : location.pathname.split('/')[1];
 
   const gitOrgLogin = classroom.git_organization?.login;
+  const rows = repos as unknown as SubmissionsRepo[];
+  const assignmentRows = assignments as unknown as AssignmentRowData[];
+
+  // Submitted per assignment, from the student repos' rows.
+  const submittedById: Record<string, number> = {};
+  for (const repo of rows) {
+    for (const ra of repo.assignments ?? []) {
+      if (ra.status === 'CLOSED')
+        submittedById[ra.assignment_id] = (submittedById[ra.assignment_id] ?? 0) + 1;
+    }
+  }
 
   // Scope the loading state to the autograde request (the fetcher is shared).
   const isAutograding =
@@ -170,7 +70,7 @@ const SingleRepository = ({ loaderData }: Route.ComponentProps) => {
     );
   };
 
-  const handleGradeRelease = async (assignmentId: string, gradesReleased: boolean) => {
+  const handleGradeRelease = (assignmentId: string, gradesReleased: boolean) => {
     fetcher!.submit(
       { assignment_id: assignmentId, grades_released: gradesReleased },
       {
@@ -181,155 +81,16 @@ const SingleRepository = ({ loaderData }: Route.ComponentProps) => {
     );
   };
 
-  const gradeTabItems = (repository!.assignments as RepositoryAssignmentSummary[])
-    .slice()
-    .sort((a, b) => {
-      const aTime = a.student_deadline ? new Date(a.student_deadline).getTime() : 0;
-      const bTime = b.student_deadline ? new Date(b.student_deadline).getTime() : 0;
-      if (aTime !== bTime) return aTime - bTime;
-      return a.title.localeCompare(b.title);
-    })
-    .map(assignment => ({
-      key: assignment.id,
-      label: assignment.title,
-      children: (
-        <>
-          <Card
-            size="small"
-            title="Grade Management"
-            className="mb-4"
-            extra={
-              <div className="flex items-center gap-2">
-                <Tag color={assignment.grades_released ? 'green' : 'orange'}>
-                  {assignment.grades_released ? 'Released' : 'Hidden'}
-                </Tag>
-                <Switch
-                  size="small"
-                  checked={assignment.grades_released}
-                  onChange={checked => handleGradeRelease(assignment.id, checked)}
-                />
-              </div>
-            }
-          >
-            <p className="text-gray-600">
-              {assignment.grades_released ? (
-                <>
-                  Students <span className="text-green-600 font-medium">can see</span> their grades
-                  for this assignment
-                </>
-              ) : (
-                <>
-                  Grades are <span className="text-red-600 font-medium">hidden from students</span>{' '}
-                  until released
-                </>
-              )}
-            </p>
-          </Card>
-
-          <AssignmentTable
-            assignment={
-              assignment as unknown as Parameters<typeof AssignmentTable>[0]['assignment']
-            }
-            repository={repository as Parameters<typeof AssignmentTable>[0]['repository']}
-            repos={repos as Parameters<typeof AssignmentTable>[0]['repos']}
-            assistants={assistants as Parameters<typeof AssignmentTable>[0]['assistants']}
-            emojiMappings={emojiMappings as Parameters<typeof AssignmentTable>[0]['emojiMappings']}
-            settings={settings as Parameters<typeof AssignmentTable>[0]['settings']}
-            org={gitOrgLogin}
-          />
-        </>
-      ),
-    }));
-
-  const gradesToggle = (
-    <div className="flex items-center gap-3 bg-gray-50 dark:bg-neutral-800 rounded-lg p-2 border border-gray-200 dark:border-neutral-700">
-      <div className="flex items-center gap-2">
-        <IconTable
-          size={18}
-          className={
-            viewMode === 'repository' ? 'text-yellow-600 dark:text-yellow-400' : 'text-gray-400'
-          }
-        />
-        <span
-          className={`text-sm font-medium ${viewMode === 'repository' ? 'text-yellow-600 dark:text-yellow-400' : 'text-ink-2'}`}
-        >
-          Repository
-        </span>
-      </div>
-      <Switch
-        checked={viewMode === 'assignment'}
-        onChange={checked => setViewMode(checked ? 'assignment' : 'repository')}
-        size="small"
-      />
-      <div className="flex items-center gap-2">
-        <IconList
-          size={18}
-          className={
-            viewMode === 'assignment' ? 'text-yellow-600 dark:text-yellow-400' : 'text-gray-400'
-          }
-        />
-        <span
-          className={`text-sm font-medium ${viewMode === 'assignment' ? 'text-yellow-600 dark:text-yellow-400' : 'text-ink-2'}`}
-        >
-          Assignments
-        </span>
-      </div>
-    </div>
-  );
-
-  const gradesContent =
-    viewMode === 'assignment' ? (
-      <Tabs items={gradeTabItems} />
-    ) : (
-      <ModuleTable
-        repository={repository as Parameters<typeof ModuleTable>[0]['repository']}
-        repos={repos as unknown as Parameters<typeof ModuleTable>[0]['repos']}
-        emojiMappings={emojiMappings as Parameters<typeof ModuleTable>[0]['emojiMappings']}
-        settings={settings as Parameters<typeof ModuleTable>[0]['settings']}
-        org={gitOrgLogin}
-      />
-    );
-
-  // Grades first — it's where faculty go most often.
-  const tabItems = [
-    {
-      key: 'grades',
-      label: 'Grades',
-      extra: gradesToggle,
-      children: gradesContent,
-    },
-    {
-      key: 'assignments',
-      label: 'Assignments',
-      extra: (
-        <Button
-          icon={<IconPlus size={16} />}
-          onClick={() => navigate(`/admin/${classSlug}/repos/form?title=${repository!.title}`)}
-        >
-          New assignment
-        </Button>
-      ),
-      children: (
-        <AssignmentsTab
-          classSlug={classSlug}
-          repositoryId={repository!.id}
-          repositoryTitle={repository!.title}
-          assignments={
-            repository!.assignments as Parameters<typeof AssignmentsTab>[0]['assignments']
-          }
-        />
-      ),
-    },
-  ];
+  const isIndividual = repository!.type === 'INDIVIDUAL';
 
   return (
     <div className="min-h-full relative">
       {/* Header */}
-      <div className="flex items-center justify-between mt-2 mb-4 gap-3 flex-wrap">
+      <div className="flex items-center justify-between mt-2 mb-3 gap-3 flex-wrap">
         <div className="flex items-center gap-2 text-ink-2">
           <button
             type="button"
-            onClick={() => navigate(`/admin/${classSlug}/repos`)}
+            onClick={() => navigate(`/${rolePrefix}/${classSlug}/repos`)}
             className="hover:text-ink-1"
             aria-label="Back to repositories"
           >
@@ -338,75 +99,118 @@ const SingleRepository = ({ loaderData }: Route.ComponentProps) => {
           <IconFolder size={18} className="text-gray-400" />
           <button
             type="button"
-            onClick={() => navigate(`/admin/${classSlug}/repos`)}
+            onClick={() => navigate(`/${rolePrefix}/${classSlug}/repos`)}
             className="hover:text-ink-1"
           >
             Repositories
           </button>
           <span className="text-ink-3">/</span>
           <span className="font-semibold text-ink-1">{repository!.title}</span>
+          <Tag
+            color={repository!.is_published ? 'green' : 'orange'}
+            className="m-0 ml-1 font-medium"
+          >
+            {repository!.is_published ? 'Published' : 'Draft'}
+          </Tag>
         </div>
 
-        <div className="flex items-center gap-2">
-          <Tooltip
-            title={
-              autogradingTestCount
-                ? 'Push the autograding workflow to student repos'
-                : 'Add autograding tests to this repository first'
-            }
-          >
-            <Button
-              icon={<IconRobot size={16} />}
-              disabled={!autogradingTestCount}
-              loading={isAutograding}
-              onClick={handleAutograde}
+        {canEdit && (
+          <div className="flex items-center gap-2">
+            <Tooltip
+              title={
+                autogradingTestCount
+                  ? 'Push the autograding workflow to student repos'
+                  : 'Add autograding tests to this repository first'
+              }
             >
-              {isAutograding ? 'Provisioning…' : 'Autograde'}
-            </Button>
-          </Tooltip>
-          <Menu
-            repository={repository as Parameters<typeof Menu>[0]['repository']}
-            assistants={assistants as Parameters<typeof Menu>[0]['assistants']}
+              <Button
+                icon={<IconRobot size={16} />}
+                disabled={!autogradingTestCount}
+                loading={isAutograding}
+                onClick={handleAutograde}
+              >
+                {isAutograding ? 'Provisioning…' : 'Autograde'}
+              </Button>
+            </Tooltip>
+            <Menu
+              repository={repository as Parameters<typeof Menu>[0]['repository']}
+              assistants={assistants as Parameters<typeof Menu>[0]['assistants']}
+            />
+          </div>
+        )}
+      </div>
+
+      {/* Meta line */}
+      <div className="flex flex-wrap items-center gap-x-6 gap-y-1 mb-4 text-sm text-ink-3">
+        <span>
+          Template <span className="text-ink-1 font-medium">{repository!.template}</span>
+        </span>
+        <span>
+          Type{' '}
+          <span className="text-ink-1 font-medium">{isIndividual ? 'Individual' : 'Group'}</span>
+        </span>
+        <span>
+          {isIndividual ? 'Student repos' : 'Team repos'}{' '}
+          <span className="text-ink-1 font-medium">
+            {rows.length}
+            {isIndividual ? ` of ${studentCount}` : ''}
+          </span>
+        </span>
+      </div>
+
+      <div className="flex flex-col gap-4">
+        {assignmentRows.length === 0 && (
+          <div className="rounded-xl border border-[#F4D8C5] dark:border-amber-800/40 bg-[#FEF3EC] dark:bg-amber-900/20 px-4 py-3 text-sm text-[#8a5b3a] dark:text-amber-200">
+            No assignment submits through this repository yet, so pushes to it are recorded but
+            count as nothing. Add a REPO assignment pointing at it to start collecting submissions.
+          </div>
+        )}
+
+        <AssignmentsCard
+          assignments={assignmentRows}
+          submittedById={submittedById}
+          totalRepos={rows.length}
+          onEdit={setEditing}
+          onToggleGradesReleased={handleGradeRelease}
+          canEdit={canEdit}
+        />
+
+        <div className="rounded-2xl bg-panel ring-1 ring-line p-2 sm:p-3">
+          <SubmissionsTable
+            repositoryType={repository!.type}
+            assignments={assignmentRows}
+            repos={rows}
+            assistants={assistants as Parameters<typeof SubmissionsTable>[0]['assistants']}
+            canEdit={canEdit}
+            emojiMappings={emojiMappings as Record<string, unknown>}
+            org={gitOrgLogin ?? ''}
           />
         </div>
       </div>
 
-      <SummaryCards
-        repository={repository as Parameters<typeof SummaryCards>[0]['repository']}
-        repos={repos as Parameters<typeof SummaryCards>[0]['repos']}
-        studentsCount={studentsCount}
-        teamsCount={teamsCount}
-        emojiMappings={emojiMappings as Parameters<typeof SummaryCards>[0]['emojiMappings']}
-        settings={settings as Parameters<typeof SummaryCards>[0]['settings']}
-      />
-
-      <FolderTabs items={tabItems} defaultActiveKey="grades" panelClassName="min-h-[300px]" />
-
       <LinkedPages classSlug={classSlug} pages={linkedPages} />
 
-      <TriggerProgress operation="UPDATE_REPOS" validIdentifiers={['update_git_repo']} />
-
-      <TriggerProgress
-        operation="AUTOGRADE"
-        validIdentifiers={['dispatch_autograde_workflow', 'gh-commit_autograde_workflow']}
-        callback={() => setTimeout(() => revalidate(), 100)}
-      />
-
-      <TriggerProgress
-        operation="CALCULATE_REPO_CONTRIBUTIONS"
-        validIdentifiers={['calculate_repo_contributions']}
-      />
-
-      <TriggerProgress
-        operation="ASSIGN_GRADERS_TO_ASSIGNMENTS"
-        validIdentifiers={['add_grader_to_git_repo_assignment']}
-        callback={() => setTimeout(() => revalidate(), 100)}
+      <AssignmentFormModal
+        open={editing !== null}
+        onClose={() => setEditing(null)}
+        classSlug={classSlug!}
+        modules={modules}
+        repositories={repositories}
+        quizzes={candidates.quizzes}
+        forms={candidates.forms}
+        pages={candidates.pages}
+        slides={candidates.slides}
+        boundQuizIds={new Set(boundQuizIds)}
+        boundFormIds={new Set(boundFormIds)}
+        assignment={editing}
       />
 
       <Outlet />
     </div>
   );
 };
+
+export const loader = adminLoader;
 
 export { action };
 export default SingleRepository;

@@ -14,15 +14,10 @@
  * operator does the visibility flip by hand — this script only does the Pages
  * half.
  *
- * NOT DURABLE ON ITS OWN, and this is the sharp edge. `ensureContentRepoExists`
- * in page.service.ts calls `enableGitHubPages` unconditionally, and it runs on
- * every page create, slide create, batch page import, class-to-class import and
- * classroom-import run. So the next such action in a swept classroom turns Pages
- * back ON — on a now-private repo, which is the leak this exists to close, and
- * it happens silently (only the failure branch logs). Removing that call is its
- * own Phase 4 line item; until it lands, treat a run of this script as good only
- * until the classroom's next content write, and re-run before the visibility
- * flip.
+ * DURABLE: nothing in the app enables GitHub Pages any more. A page create,
+ * slide create, batch page import, class-to-class import or classroom-import run
+ * stops at creating the content repo, so nothing turns a swept classroom's site
+ * back on and a run holds until the visibility flip.
  *
  * REFUSES a classroom whose `content_delivery_enabled` is false. That gate is
  * what routes renders through the signed Worker; with it off, the repo's

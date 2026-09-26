@@ -28,7 +28,10 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
 
   const promises = {
     emojiMappings: ClassmojiService.emojiMapping.findByClassroomId(classroom.id),
-    repositories: ClassmojiService.repository.findByClassroomSlug(classSlug!),
+    // Modules, in course order: the grid groups its columns under them.
+    modules: ClassmojiService.module
+      .findByClassroomSlug(classSlug!)
+      .then(modules => modules.map(m => ({ id: m.id, title: m.title, position: m.position }))),
     // Everything below is serialised to the browser, so each source is
     // projected down to the fields the table renders. The services return whole
     // `User` and `ClassroomMembership` rows — which carry contact details, the
@@ -72,7 +75,63 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
           letter_grade: m.letter_grade,
         }))
       ),
+    // The columns: every published assignment, grouped under its module in the
+    // grid (module order, then creation order). Grading weight lives here.
+    assignments: ClassmojiService.assignment
+      .listForClassroom(classroom.id, { publishedOnly: true })
+      .then(assignments =>
+        assignments.map(a => ({
+          id: a.id,
+          title: a.title,
+          weight: a.weight,
+          is_extra_credit: a.is_extra_credit,
+          type: a.type,
+          module_id: a.module_id,
+          module_title: a.module?.title,
+          repository_id: a.repository_id,
+          quiz_id: a.quiz_id,
+          form_id: a.form_id,
+          student_deadline: a.student_deadline,
+          created_at: a.created_at,
+          submission_mode: a.submission_mode,
+          grades_released: a.grades_released,
+        }))
+      ),
   };
+
+  // Quiz and form assignments have no submission row; their per-student state
+  // comes from attempts and responses, one query per assignment, keyed by
+  // assignment id then user id.
+  const activity = promises.assignments.then(async assignments => {
+    const quiz: Record<string, Record<string, { completed: boolean; score: number | null }>> = {};
+    const form: Record<string, Record<string, { submitted: boolean }>> = {};
+    await Promise.all(
+      assignments.map(async a => {
+        if (a.type === 'QUIZ' && a.quiz_id) {
+          const attempts = await ClassmojiService.quizAttempt.findByQuiz(a.quiz_id);
+          quiz[a.id] = {};
+          for (const attempt of attempts) {
+            // Newest first, so the first one seen per student wins.
+            quiz[a.id][attempt.user_id] ??= {
+              completed: Boolean(attempt.completed_at),
+              score: attempt.score ?? null,
+            };
+          }
+        } else if (a.type === 'FORM' && a.form_id) {
+          const responses = await ClassmojiService.formResponse.listByFormId(a.form_id);
+          form[a.id] = {};
+          for (const r of responses) {
+            if (!r.user_id) continue;
+            const submitted = r.submission_state === 'SUBMITTED';
+            form[a.id][r.user_id] = {
+              submitted: submitted || form[a.id][r.user_id]?.submitted || false,
+            };
+          }
+        }
+      })
+    );
+    return { quiz, form };
+  });
 
   addAuditLog({
     request,
@@ -82,7 +141,7 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
   });
 
   return {
-    allData: Promise.all(Object.values(promises)),
+    allData: Promise.all([...Object.values(promises), activity]),
   };
 };
 
@@ -108,12 +167,15 @@ const Grades = ({ loaderData }: Route.ComponentProps) => {
             resolvedSettings,
             resolvedLetterGradeMappings,
             resolvedMemberships,
+            resolvedAssignments,
+            resolvedActivity,
           ]) => (
             <GradesTable
               emojiMappings={
                 resolvedEmojiMappings as Parameters<typeof GradesTable>[0]['emojiMappings']
               }
-              repositories={resolvedModules as Parameters<typeof GradesTable>[0]['repositories']}
+              modules={resolvedModules as Parameters<typeof GradesTable>[0]['modules']}
+              assignments={resolvedAssignments as Parameters<typeof GradesTable>[0]['assignments']}
               students={
                 resolvedStudents as unknown as Parameters<typeof GradesTable>[0]['students']
               }
@@ -124,6 +186,7 @@ const Grades = ({ loaderData }: Route.ComponentProps) => {
                 >[0]['letterGradeMappings']
               }
               memberships={resolvedMemberships as Parameters<typeof GradesTable>[0]['memberships']}
+              activity={resolvedActivity as Parameters<typeof GradesTable>[0]['activity']}
             />
           )}
         </Await>

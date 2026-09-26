@@ -14,8 +14,7 @@ export interface ClassroomModule {
   title: string;
   template?: string | null;
   type: string;
-  weight?: number;
-  is_extra_credit?: boolean;
+  module?: { id: string; title: string } | null;
   _count?: {
     assignments?: number;
     quizzes?: number;

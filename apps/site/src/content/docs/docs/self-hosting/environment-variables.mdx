@@ -34,7 +34,7 @@ AI features (quizzes, syllabus bot, prompt assistant) run on **Anthropic Claude*
 | `AI_AGENT_SHARED_SECRET` | No | | Shared secret used to authenticate the webapp to the AI agent. |
 | `ANTHROPIC_API_KEY` | No | | Anthropic API key the AI agent uses to call Claude. |
 | `LLM_MODEL` | No | `claude-sonnet-4-5` | Claude model used for quiz and chat evaluation. |
-| `EXPLORATION_MODEL` | No | `claude-haiku-4-5` | Claude model used for code-aware quiz repository exploration. |
+| `EXPLORATION_MODEL` | No | `claude-sonnet-5` | Claude model used for code-aware quiz repository exploration. |
 | `EXPLORATION_MODE` | No | | Controls the code-aware exploration behavior for quizzes. |
 | `OPENAI_API_KEY` | No | | Reserved. Not used by any current feature. |
 | `LLM_PROVIDER` | No | | Reserved. Only Anthropic/Claude is wired today. |
@@ -58,6 +58,7 @@ AI features (quizzes, syllabus bot, prompt assistant) run on **Anthropic Claude*
 | Name | Required | Default | Description |
 |------|----------|---------|-------------|
 | `TRIGGER_API_URL` | No | | Base URL of the Trigger.dev API. Leave unset to use Trigger.dev cloud. |
+| `TRIGGER_PUBLIC_API_URL` | No | | Public Trigger.dev API address that GitHub Actions can reach; the generated autograding workflow reports results to it. Leave unset for Trigger.dev cloud. Not the worker-internal `TRIGGER_API_URL`. |
 | `TRIGGER_SECRET_KEY` | No | | Trigger.dev secret key used to authenticate background job runs. |
 
 ### Media

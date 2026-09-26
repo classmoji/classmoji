@@ -7,21 +7,13 @@ Classmoji is a classroom management platform for CS education. Instructors creat
 ### Apps
 - apps/webapp: React Router app (routes `apps/webapp/app/routes/**`, components, styles).
 - apps/ai-agent: **Git submodule** (private repo `classmoji/ai-agent`). WebSocket microservice for AI features (quiz, syllabus bot, prompt assistant) (`apps/ai-agent/src/**`). Contains merged `llm` package at `apps/ai-agent/src/llm/`. Clone with `--recursive` to populate; OSS contributors can skip it.
-- apps/hook-station: Webhook listener for GitHub/Stripe (`apps/hook-station/src/**`).
+- apps/hook-station: Webhook listener for GitHub/Stripe (`apps/hook-station/src/**`). GitHub events (`src/routes/github.ts`): `push` on student repos (REPO-mode submissions) and content repos (asset sync), `issues.closed` / `issues.reopened` / `issues.deleted` (ISSUE-mode submissions), `organization.member_added`, `installation.*`. See `apps/hook-station/README.md`.
 - apps/slides: Slide presentation app with Reveal.js editor (`apps/slides/app/**`).
 - apps/site: Astro marketing/blog site (`apps/site/src/**`).
 - apps/admin: Platform-admin app (`apps/admin/app/**`). Cross-classroom user search + account impersonation via better-auth's admin plugin. Access is gated on `PLATFORM_ADMIN_USER_IDS` (comma-separated `User.id`s) — empty means nobody, and the app 403s. Separate origin from the webapp; sessions are shared through the cookie, not passed.
 
 ### Packages
-- packages/database: Prisma schema, migrations, seed.
-- ~~packages/llm~~: Merged into `apps/ai-agent/src/llm/` (no longer a separate package).
-- packages/services: Shared business logic.
-- packages/utils: Shared helpers.
-- packages/tasks: Trigger.dev workflows (`packages/tasks/src/workflows/**`).
-- packages/auth: Authentication utilities.
-- packages/content: Content management utilities.
 - packages/ui-components: Shared React UI components, plus the shared design system in `packages/ui-components/styles/` (`theme.css` Tailwind `@theme`, `tokens.css` raw CSS vars, `fonts.css`, `components.css` for `.btn`/`.card`/`.chip`). The webapp, slides, and admin all import from here — do NOT fork these into an app. Note `html { font-size: 17px }` and the `@fontsource-variable/mona-sans` import are per-app and must be repeated.
-- packages/eslint-config: Shared ESLint configuration.
 
 Monorepo via npm workspaces + Turbo; Node 22+ required.
 
@@ -40,25 +32,13 @@ Monorepo via npm workspaces + Turbo; Node 22+ required.
 - Query DB: `psql "$DATABASE_URL" -c "SELECT ..."`
 - All apps (concurrent dev): `npm run dev` (check `.dev-context` for ports/database after starting)
 - **Dev logs**: `/tmp/classmoji-dev.log` (or `/tmp/classmoji-dev-<feature>.log` for devports)
-- Web: `npm run web:dev` | build: `npm run web:build` | serve: `npm run web:start`
-- AI Agent: `npm run ai-agent:dev` | `npm run ai-agent:start`
-- Hooks: `npm run hook:dev` | `npm run hook:start` | tunnels: `npm run hook:github`, `npm run hook:stripe`
-- Slides: `npm run slides:dev` | build: `npm run slides:build` | serve: `npm run slides:start`
-- Site: `npm run site:dev`
-- Trigger.dev: `npm run trigger:dev`
-- Tests: `npm run test` (all) | `npm run web:test` | `npm run web:test:ui` | `npm run slides:test` | `npm run slides:test:ui` | `npm run test:ai-agent` | `npm run test:ai-agent:integration`
+- Per-app dev/build/start/test scripts (`web:*`, `slides:*`, `hook:*`, `ai-agent:*`, `site:dev`, `trigger:dev`, `test`) are in the root `package.json`.
 
 ## Coding Style & Naming Conventions
-- JavaScript/TypeScript ES Modules; 2-space indentation; semicolons; single quotes.
-- React components: PascalCase filenames (e.g., `GradesTable.jsx`); hooks/utilities camelCase.
+- Formatting is enforced by `.prettierrc` and `eslint.config.js`.
 - Routes: `apps/webapp/app/routes/<route>/route.jsx` with action/loader exports inline and optional co-located `.server.js` files.
 - TailwindCSS for styling where applicable.
 - **Dark mode**: The app supports light and dark modes via Tailwind's `dark:` variant (class strategy). `useDarkMode.js` toggles the `dark` class on `<html>` based on OS `prefers-color-scheme`. All UI work must include both modes — use `dark:` variants for Tailwind classes (e.g., `bg-white dark:bg-gray-900`) and `.dark` parent selectors for custom CSS.
-
-## Testing Guidelines
-- Playwright for e2e/UI in `apps/webapp` and `apps/slides`.
-- Specs: `apps/webapp/tests/**/*.spec.{ts,js}`, `apps/slides/tests/**/*.spec.ts`
-- Run locally with `npm run web:test` or `npm run slides:test`; prefer covering core flows.
 
 ## Commit & Pull Request Guidelines
 - Commits: short, imperative (e.g., "updated dark mode", "fixing trigger cli"). Subject ≤72 chars; scope when helpful: `feat(webapp): add grade settings`.
@@ -73,6 +53,7 @@ When working on features that span admin/assistant/student routes, avoid duplica
 - **Shared components** go in `apps/webapp/app/components/features/`
 - **Shared business logic** goes in `packages/services` or `packages/utils`
 - Check existing role routes before creating new ones — the feature may already exist under a different role prefix.
+- Coursework routes: `admin.$class.assignments_.$id` is the per-assignment grading page (one roster per assignment; loader/action gated by `requireClassroomTeachingTeam`, grader changes owner/teacher only), re-exported by `teacher.$class_.assignments_.$id` and `assistant.$class_.assignments_.$id`; `admin.$class.assignments_.$id.assign-graders` is its modal. `admin.$class.students_.$login` is the student report (letter override, staff note, owner-only school id), re-exported for teacher; it replaced the `admin.$class.students.$login` drawer and the `admin.$class.grades.$login` comment modal. `admin.$class.repos.update` is the "Update student repositories" modal. There is NO repository detail page: `admin.$class.repos_.$title` and its children are gone; submissions are reached from the module card or the assignment page.
 
 ### Service Isolation
 Slides, pages, and ai-agent are moving toward self-contained services. When working on these, keep code consolidated within each service rather than adding cross-app dependencies. Prefer importing from shared packages (`@classmoji/services`, `@classmoji/utils`, `@classmoji/database`) over reaching into another app's internals.
@@ -115,11 +96,19 @@ Conventions:
   - `.env.example` (with placeholder and instructions)
   - Infisical workspace (e9a6487c-350e-41e7-8bba-2d95ca5934a6) prod environment
 - **Trigger.dev deployments** are automatic via GitHub Actions when `packages/tasks/**` changes. Deployments automatically sync all secrets from Infisical `prod` environment via the `syncEnvVars` extension. Manual deployment is no longer needed unless testing locally.
+- **`TRIGGER_PUBLIC_API_URL`, never `TRIGGER_API_URL`, for anything GitHub Actions calls.** The generated autograding workflow reports to `publicTriggerApiBase()` (`packages/tasks/src/workflows/autograde.ts`; default `https://api.trigger.dev`, internal/localhost addresses refused). Inside a deployed worker `TRIGGER_API_URL` is the platform's internal address and is unreachable from a runner (issue #391). `AUTOGRADE_CALLBACK_SECRET` unset makes the Autograde task fail before committing anything.
 - Local DB via `docker compose up -d`. Do not commit secrets or `.env`.
 - `apps/ai-agent` is a git submodule (`git@github.com:classmoji/ai-agent.git`). Use `git clone --recursive` or `git submodule update --init` to populate. It may be empty for OSS contributors — that's expected.
 - **Contributors without submodule access: do not commit `package-lock.json` changes.** Running `npm install` with the submodule empty strips ai-agent's deps from the lockfile, which breaks staging's `npm ci` after merge. If your PR legitimately needs to add/update deps, flag it in the PR description and a maintainer will regenerate the lockfile with the submodule populated before merging. A `pr-lockfile-check` CI job enforces this.
 - `@classmoji/llm` does not exist. LLM code lives in `apps/ai-agent/src/llm/` (private submodule). Public-facing exports (`getAllModels`, `examplePrompts`) are in `@classmoji/services`.
 - AI features (quiz, syllabus bot, prompt assistant) are gated by `isAIAgentConfigured()` in `~/utils/aiFeatures.server.js`. When `AI_AGENT_URL` or `AI_AGENT_SHARED_SECRET` env vars are missing, AI nav items hide, settings toggles disable, and API routes return 503. Always use this guard when adding new AI-dependent features.
+
+## Coursework model
+- Module → Assignment → Repository | Quiz | Form. A module lists content (pages, slides) and assignments. An assignment has `type` REPO/QUIZ/FORM, a required `module_id`, exactly one of `repository_id`/`quiz_id`/`form_id`, and `weight` (the only grading weight), `is_extra_credit`, `release_at`, `student_deadline`, `grader_deadline`, `tokens_per_hour`. A repository has no module and no weight; several assignments may submit through one repository. Course grade = weighted mean of graded non-extra-credit assignments + extra credit (`packages/utils/src/grades.ts`); no drop-lowest.
+- Submission modes (`Assignment.submission_mode`): `REPO` = the student's last push to the default branch before the deadline (+ purchased extension hours) is the submission, no issue is opened; `ISSUE` = closing the GitHub issue submits, reopening un-submits. Column default ISSUE; UI and MCP default REPO. The submission row is `GitRepoAssignment` (unique per git repo + assignment; `closed_at` is the submission time, frozen once graded). `recordPush` handles live pushes, `recordExistingPush` stamps repos that already had commits, `packages/database/scripts/backfillRepoSubmissions.ts --apply` backfills old rows.
+- Grading happens on the assignment page (`admin.$class.assignments_.$id`) or in a gradebook cell. The gradebook (`admin.$class.grades`) is a read-first overview: one column per published assignment. Scales: emoji (mean of stacked emojis) or numeric `score-0`…`score-100` (`packages/utils/src/emojis.ts`; one score per grader, a new score replaces the caller's own). `HelperService.addGradeToGitRepoAssignment` refuses values outside the scale.
+- Student report (`admin.$class.students_.$login`): letter-grade override, private staff note, owner-only school id. Not the gradebook.
+- Autograding: tests live on the repository; `dispatch_autograde_workflow` commits `.github/workflows/classroom.yml` to student repos; results are advisory (`autograding_results`), never grades. The GitHub App needs `workflows: write` and must subscribe to `push`, `issues`, `organization`.
 
 ## Authorization Patterns
 **ALL routes MUST be protected** unless explicitly marked as public. Every new loader/action needs an auth check — no exceptions.
@@ -131,20 +120,6 @@ Auth helpers are in `~/utils/routeAuth.server.js` (re-exported from `@classmoji/
 - `assertClassroomAccess({...})` — custom role/ownership checks (API routes, self-access patterns with `resourceOwnerId`/`selfAccessRoles`/`requireOwnership`)
 
 All return `{ userId, classroom, membership, ... }`. Denied attempts are auto-logged.
-
-## Architecture Overview
-```
-[Webapp (React Router)] ---> [packages/services] ---> [packages/database] ---> [PostgreSQL]
-[Slides (React Router)] -/        |
-                             [packages/utils]
-                             [packages/auth]
-                             [packages/content]
-[AI Agent] <--- WebSocket --- [Webapp]
-[Hook Station] <--- Webhooks (GitHub, Stripe)
-[Site (Astro)] (standalone marketing site)
-[packages/tasks] <--- Trigger.dev workflows
-```
-Turbo coordinates tasks across workspaces; npm workspaces handle local linking. Secrets loaded from `.env` file; DB runs via Docker locally.
 
 ## LLM & Quiz Architecture
 The quiz system uses Claude Agent SDK (`@anthropic-ai/claude-agent-sdk`) for both standard and code-aware modes, centralized in `apps/ai-agent/src/llm/` (private submodule).
@@ -163,23 +138,10 @@ The quiz system uses Claude Agent SDK (`@anthropic-ai/claude-agent-sdk`) for bot
 - Schema: `apps/ai-agent/src/llm/schemas/quizEvaluation.js` (single source of truth)
 - Validation errors return `isError: true`, allowing Claude to self-correct
 
-### Key Files
-- **Entry point**: `import { QuizService } from '../llm/index.js'` (internal to ai-agent)
-- **Agent SDK Provider**: `apps/ai-agent/src/llm/providers/agent-sdk/index.js`
-- **Quiz Schema**: `apps/ai-agent/src/llm/schemas/quizEvaluation.js`
-- **AI Agent WebSocket**: `apps/ai-agent/src/websocket/handlers.js`
-- **Quiz Routes**: `apps/webapp/app/routes/student.$class.quizzes/`
-
-### Quiz Focus & Time Tracking
-Tracks student engagement via `total_duration_ms`, `unfocused_duration_ms`, and `modal_closed_at`:
-- **Focus Hook**: `useQuizFocusMetrics.js` — tracks unfocused time via `visibilitychange` and `blur/focus`
-- **Modal Close Logic**: `QuizAttemptInterface.jsx` uses `hasUserClosedModalRef` to distinguish explicit closes from React re-renders
-- **Calculation**: `pct_focused = (total_duration_ms - unfocused_duration_ms) / total_duration_ms`
-
 ## Agent-Specific Instructions
 - Plan first, share a short step-by-step plan, and get approval before large changes.
 - **Use TaskCreate to break plans into discrete, trackable tasks** with clear subjects and descriptions. Set dependencies with `addBlockedBy` so work proceeds in the right order. Mark each task `in_progress` when starting and `completed` when done — this provides live progress visibility.
 - Keep PRs incremental; prefer small, verifiable diffs with clear scope.
-- Don't run `npm run dev` to test, it will already be running.
+- **Work in a devport worktree, start the dev stack, and test locally.** Create one with `npm run devport create <feature-name>` (own worktree, database, and port block; `.env` is copied in), run `npm run dev` inside it, then read `.dev-context` for the actual ports and database. Start the stack yourself whenever testing needs it — don't assume it is already running.
 - **Test frontend changes** using Claude-in-Chrome browser tools. After making changes, open the affected page and verify both visual rendering and functionality.
 - When working on the webapp, use the `react-router-framework-mode` skill if available for React Router conventions and patterns.

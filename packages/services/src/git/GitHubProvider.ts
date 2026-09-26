@@ -460,23 +460,41 @@ export class GitHubProvider extends GitProvider {
   }
 
   /**
-   * Create a public repository (e.g., for GitHub Pages content)
+   * Create a classroom's shared content repository.
+   *
+   * The caller decides visibility — `contentDelivery.shouldCreatePrivateContentRepo`
+   * is the rule. A classroom served through the signed content-delivery layer
+   * gets a private repo: that layer reads it through authenticated API calls,
+   * so it never needs to be public. The legacy path (a deployment without the
+   * signing env, or a classroom not enabled for delivery) stores page-asset
+   * uploads as raw.githubusercontent.com URLs, which need a public repo — that
+   * is why the legacy path stays public. No repo made here ever gets a
+   * GitHub Pages site.
+   *
+   * There is no fallback between the two: if a private repo is requested and
+   * GitHub refuses it, the error surfaces rather than a public repo being made.
+   *
+   * `auto_init` is required — the content flow commits to the default branch,
+   * which does not exist until the repo has an initial commit.
+   *
    * @param {string} org - Organization login
    * @param {string} name - Repository name
    * @param {string} description - Repository description
+   * @param {boolean} isPrivate - Whether the repo is private (default: true)
    * @returns {Promise<{id: string, name: string, url: string}>}
    */
-  async createPublicRepository(
+  async createContentRepository(
     org: string,
     name: string,
-    description: string = ''
+    description: string = '',
+    isPrivate: boolean = true
   ): Promise<{ id: string; name: string; url: string }> {
     const octokit = await this.#getOctokit();
     const { data } = await octokit.request('POST /orgs/{org}/repos', {
       org,
       name,
       description,
-      private: false,
+      private: isPrivate,
       auto_init: true,
     });
     return { id: String(data.id), name: data.name, url: data.html_url };
@@ -1150,6 +1168,86 @@ export class GitHubProvider extends GitProvider {
     return { id: data.id, slug: data.slug, name: data.name, node_id: data.node_id };
   }
 
+  // ─── Latency-bounded probes ────────────────────────────────────────────────
+
+  /**
+   * An installation client on `ImmediateOctokit`, for probes a caller has to
+   * answer within seconds (a create preview asking whether names are free).
+   *
+   * `#getOctokit` is the umbrella client: on a rate limit its throttling plugin
+   * sleeps for as long as GitHub asks (up to an hour) and its retry plugin
+   * retries a 5xx three times with growing backoff. A probe that must answer
+   * inside a request would hang behind either. This client throws a rate limit
+   * at once, and each probe passes `retries: 0` so a 5xx is thrown too. Cached
+   * apart from `#installationCache`: the two clients behave differently and
+   * must never be handed out in each other's place.
+   */
+  static #immediateCache: Map<string, { octokit: Octokit; expiresAt: number }> = new Map();
+
+  async #getImmediateOctokit(): Promise<Octokit> {
+    // Dependency injection hook (used by tests).
+    if (this._octokit) {
+      return this._octokit;
+    }
+    const cached = GitHubProvider.#immediateCache.get(this.installationId);
+    if (cached && Date.now() < cached.expiresAt) {
+      return cached.octokit;
+    }
+    const app = new App({
+      appId: process.env.GITHUB_APP_ID!,
+      privateKey: privateKey!,
+      Octokit: ImmediateOctokit,
+    });
+    const octokit = await app.getInstallationOctokit(Number(this.installationId));
+    GitHubProvider.#immediateCache.set(this.installationId, {
+      octokit,
+      expiresAt: Date.now() + GitHubProvider.#CACHE_TTL_MS,
+    });
+    return octokit;
+  }
+
+  /**
+   * Read the organization once — no throttle sleep, no retry, abortable.
+   * Throws on any failure; a dead installation can answer later team lookups
+   * with 404, so this is what tells "reachable" apart from "absent".
+   * @param {string} org - Organization login
+   * @param {Object} [options.signal] - Aborts the request
+   */
+  async probeOrganization(org: string, options: { signal?: AbortSignal } = {}): Promise<void> {
+    const octokit = await this.#getImmediateOctokit();
+    await octokit.request('GET /orgs/{org}', {
+      org,
+      request: { retries: 0, ...(options.signal ? { signal: options.signal } : {}) },
+    });
+  }
+
+  /**
+   * Whether a team slug exists in the organization: true, false on a 404, and
+   * any other answer (rate limit, 5xx, abort) thrown — never read as "free".
+   * No throttle sleep, no retry.
+   * @param {string} org - Organization login
+   * @param {string} teamSlug - Team slug
+   * @param {Object} [options.signal] - Aborts the request
+   */
+  async probeTeam(
+    org: string,
+    teamSlug: string,
+    options: { signal?: AbortSignal } = {}
+  ): Promise<boolean> {
+    const octokit = await this.#getImmediateOctokit();
+    try {
+      await octokit.request('GET /orgs/{org}/teams/{team_slug}', {
+        org,
+        team_slug: teamSlug,
+        request: { retries: 0, ...(options.signal ? { signal: options.signal } : {}) },
+      });
+      return true;
+    } catch (error: unknown) {
+      if (isNotFound(error)) return false;
+      throw error;
+    }
+  }
+
   /**
    * Get all teams in organization
    * @param {string} org - Organization login
@@ -1275,39 +1373,8 @@ export class GitHubProvider extends GitProvider {
 
   // ─── GitHub Pages ──────────────────────────────────────────────────────────
 
-  /**
-   * Enable GitHub Pages for a repository
-   * @param {string} org - Organization login
-   * @param {string} repo - Repository name
-   * @param {string} branch - Branch to serve pages from (default: main)
-   * @returns {Promise<{alreadyEnabled?: boolean}>}
-   */
-  async enableGitHubPages(
-    org: string,
-    repo: string,
-    branch: string = 'main'
-  ): Promise<{ alreadyEnabled: boolean }> {
-    const octokit = await this.#getOctokit();
-    try {
-      await octokit.request('GET /repos/{owner}/{repo}/pages', {
-        owner: org,
-        repo,
-      });
-      return { alreadyEnabled: true };
-    } catch (error: unknown) {
-      if (!isNotFound(error)) throw error;
-    }
-
-    await octokit.request('POST /repos/{owner}/{repo}/pages', {
-      owner: org,
-      repo,
-      source: {
-        branch,
-        path: '/',
-      },
-    });
-    return { alreadyEnabled: false };
-  }
+  // There is no enable: Classmoji never turns GitHub Pages on. The reader and
+  // the OFF switch below are for retiring the sites legacy repos already have.
 
   /**
    * Read a repository's GitHub Pages configuration, or `null` when it has none.
@@ -1343,7 +1410,7 @@ export class GitHubProvider extends GitProvider {
   }
 
   /**
-   * Turn GitHub Pages OFF for a repository. The inverse of enableGitHubPages.
+   * Turn GitHub Pages OFF for a repository.
    *
    * This exists for the content-delivery cutover: a content repo that is about
    * to be flipped private must stop serving `{org}.github.io/{repo}/…` first.

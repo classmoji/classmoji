@@ -137,7 +137,19 @@ async function main() {
     if (u.role === 'STUDENT') studentUsers.push(user);
   }
 
-  // ── Repository + Assignments ────────────────────────────────────────────
+  // ── Module → Assignments (each pointing at a Repository) ────────────────
+  const module = await prisma.module.upsert({
+    where: { classroom_id_title: { classroom_id: classroom.id, title: 'Week 1: Hello World' } },
+    update: { is_published: true },
+    create: {
+      classroom_id: classroom.id,
+      title: 'Week 1: Hello World',
+      slug: 'week-1-hello-world',
+      position: 0,
+      is_published: true,
+    },
+  });
+
   const repository = await prisma.repository.upsert({
     where: { classroom_id_title: { classroom_id: classroom.id, title: 'hello-world' } },
     update: {},
@@ -145,18 +157,18 @@ async function main() {
       classroom_id: classroom.id,
       title: 'hello-world',
       template: 'dev-org/hello-world-template',
-      weight: 100,
       type: 'INDIVIDUAL',
       is_published: true,
     },
   });
-
   const assignments = [];
   for (const [i, title] of ['Hello World Part 1', 'Hello World Part 2'].entries()) {
     const a = await prisma.assignment.upsert({
       where: { repository_id_title: { repository_id: repository.id, title } },
       update: { grades_released: i === 0 }, // Part 1 grades visible to students
       create: {
+        module_id: module.id,
+        type: 'REPO',
         repository_id: repository.id,
         title,
         weight: 50,
@@ -289,14 +301,47 @@ async function main() {
     { title: 'Week 1 Lab', event_type: 'LAB', offsetDays: 2, location: 'Room 101' },
     { title: 'TA Office Hours', event_type: 'OFFICE_HOURS', offsetDays: 3, location: 'Online' },
   ];
+  /**
+   * A day close to today that is still inside THIS month.
+   *
+   * The calendar opens on the current month, so an event a couple of days out
+   * falls off the screen entirely once "a couple of days out" crosses into the
+   * next one — on the 30th, every spec that clicks "Week 1 Lecture" fails, and
+   * only on that day. Stepping backwards when the forward date would leave the
+   * month keeps the event near today AND in the grid the calendar loads.
+   */
+  const nearbyDayInThisMonth = offsetDays => {
+    const today = new Date();
+    const forward = new Date(today);
+    forward.setDate(today.getDate() + offsetDays);
+    if (forward.getMonth() === today.getMonth()) return forward;
+
+    const backward = new Date(today);
+    backward.setDate(today.getDate() - offsetDays);
+    // Only a month shorter than the offsets could fail both ways, and none is.
+    return backward.getMonth() === today.getMonth() ? backward : today;
+  };
+
   for (const ev of calendarDefs) {
+    const start = nearbyDayInThisMonth(ev.offsetDays);
+    start.setHours(10, 0, 0, 0);
+    const end = new Date(start.getTime() + 90 * 60 * 1000);
+
     const existing = await prisma.calendarEvent.findFirst({
       where: { classroom_id: classroom.id, title: ev.title },
+      select: { id: true },
     });
-    if (!existing) {
-      const start = new Date(Date.now() + ev.offsetDays * 24 * 60 * 60 * 1000);
-      start.setHours(10, 0, 0, 0);
-      const end = new Date(start.getTime() + 90 * 60 * 1000);
+
+    if (existing) {
+      // Re-dated, not skipped. These events are defined relative to "now", so
+      // skipping an existing one pins it to the date of the FIRST seed — after
+      // a few days it falls out of the month the calendar loads, and anything
+      // that expects to see it on screen starts failing for no visible reason.
+      await prisma.calendarEvent.update({
+        where: { id: existing.id },
+        data: { start_time: start, end_time: end },
+      });
+    } else {
       await prisma.calendarEvent.create({
         data: {
           classroom_id: classroom.id,

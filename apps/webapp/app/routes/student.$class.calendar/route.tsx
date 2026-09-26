@@ -10,7 +10,7 @@ import CalendarSubscriptionCard from '~/components/features/calendar/CalendarSub
 import EventCard from '~/components/features/calendar/EventCard';
 import EventLinks from '~/components/features/calendar/EventLinks';
 import type { CalendarEventWithLinks } from '~/components/features/calendar/types';
-import StudentCalendarView from './StudentCalendarView';
+import StudentCalendarView from '~/components/features/calendar/StudentCalendarView';
 
 export const loader = async ({ request, params }: Route.LoaderArgs) => {
   const { class: classSlug } = params;
@@ -40,8 +40,10 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
 
   let events: Awaited<ReturnType<typeof ClassmojiService.calendar.getClassroomCalendar>> = [];
   try {
-    // Pass userId to include GitHub issue links for deadlines
-    // Don't include raw links for students (includeRawLinks=false by default)
+    // Pass userId to include GitHub issue links for deadlines. Everything
+    // after it stays at its default, which IS the student view: no raw link
+    // rows, no unpublished assignment deadlines, and no draft pages/decks or
+    // links to unpublished assignments (`canSeeDrafts`).
     events = await ClassmojiService.calendar.getClassroomCalendar(
       classroom!.id,
       start,
@@ -56,16 +58,27 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
     events = [];
   }
 
-  // Get user's repository assignments for assignment link navigation
-  // This allows linking directly to GitHub issues for assignments
+  // The reader's own repository assignments, which turn a linked assignment
+  // into a link to THEIR GitHub issue.
   const repoAssignments = await ClassmojiService.gitRepoAssignment.findForUser({
     git_repo: { student_id: userId, classroom_id: classroom!.id },
   });
 
-  // Build map of assignment_id -> repository assignment (with repo info)
-  const repoAssignmentsByAssignmentId: Record<string, (typeof repoAssignments)[number]> = {};
+  // Built field by field rather than by handing the row over. `findForUser`
+  // returns the whole graph — grades, graders, token transactions, the
+  // classroom, the student — and the calendar reads exactly two things off it:
+  // the issue number and the repository's name. Spreading the row put all the
+  // rest into the page's payload for anyone who opened the network tab.
+  const repoAssignmentsByAssignmentId: Record<
+    string,
+    // The issue number is null on a push-mode submission, which links to the repo.
+    { provider_issue_number: number | null; git_repo: { name: string } }
+  > = {};
   repoAssignments.forEach(ra => {
-    repoAssignmentsByAssignmentId[ra.assignment_id] = ra;
+    repoAssignmentsByAssignmentId[ra.assignment_id] = {
+      provider_issue_number: ra.provider_issue_number,
+      git_repo: { name: ra.git_repo.name },
+    };
   });
 
   // Build subscription URL
@@ -122,6 +135,11 @@ const StudentCalendar = ({ loaderData }: Route.ComponentProps) => {
           events={events}
           onEventClick={handleEventClick}
           onMonthChange={handleMonthChange}
+          classSlug={classSlug}
+          pagesUrl={pagesUrl}
+          slidesUrl={slidesUrl}
+          gitOrgLogin={gitOrgLogin}
+          repoAssignmentsByAssignmentId={repoAssignmentsByAssignmentId}
         />
       </div>
 

@@ -67,7 +67,10 @@ vi.mock('~/utils/agentStreamManager', () => ({
   },
 }));
 
-vi.mock('@classmoji/utils', () => ({
+// The real module, with only the repo-name helper stubbed: the route's session
+// time-zone resolution runs the real validator.
+vi.mock('@classmoji/utils', async importOriginal => ({
+  ...(await importOriginal<typeof import('@classmoji/utils')>()),
   getContentRepoName: (...a: unknown[]) => getContentRepoNameMock(...a),
 }));
 

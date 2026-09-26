@@ -1,11 +1,10 @@
-import { auth, tasks } from '@trigger.dev/sdk';
+import { tasks } from '@trigger.dev/sdk';
 import { data } from 'react-router';
 import { namedAction } from 'remix-utils/named-action';
-import { nanoid } from 'nanoid';
 import { getAuthSession } from '@classmoji/auth/server';
 
 import { ClassmojiService } from '@classmoji/services';
-import { checkAuth, waitForRunCompletion, assertClassroomAccess, assertClassroomMutationAllowed } from '~/utils/helpers';
+import { checkAuth, waitForRunCompletion, assertClassroomAccess } from '~/utils/helpers';
 
 export const loader = checkAuth(
   async ({ request, params }: { request: Request; params: Record<string, string | undefined> }) => {
@@ -213,61 +212,6 @@ export const action = checkAuth(async ({ request }: { request: Request }) => {
         success: isResourceOwner ? 'Your transaction has been cancelled' : 'Transaction cancelled',
       };
     },
-
-    async deleteRepositories() {
-      const { deleteFromGithub, repositories, classSlug } = body;
-
-      // No pre-auth lookup: the previous shape resolved the slug, then handed
-      // the SAME slug to the auth helper to resolve a second time, and used the
-      // first result for the git org and repo scoping. One resolution, and
-      // everything below reads off the classroom the auth helper authorized.
-      const { classroom, membership } = await assertClassroomAccess({
-        request,
-        classroomSlug: classSlug,
-        allowedRoles: ['OWNER'],
-        resourceType: 'REPOSITORY',
-        attemptedAction: 'delete_repositories',
-      });
-      assertClassroomMutationAllowed({ status: classroom.status, role: membership!.role });
-
-      const sessionId = nanoid();
-      const payloads = await Promise.all(
-        repositories.map(async (repo: { name: string }) => {
-          const repository = await ClassmojiService.gitRepo.find({
-            name: repo.name,
-            classroom_id: classroom.id,
-          });
-
-          return {
-            payload: {
-              id: repository?.id,
-              name: repo.name,
-              gitOrganization: classroom.git_organization,
-              deleteFromGithub,
-            },
-            options: {
-              tags: [`session_${sessionId}`],
-            },
-          };
-        })
-      );
-
-      const accessToken = await auth.createPublicToken({
-        scopes: {
-          read: {
-            tags: [`session_${sessionId}`],
-          },
-        },
-      });
-
-      const numReposToDelete = repositories.length;
-
-      await tasks.batchTrigger('delete_git_repo', payloads);
-
-      return {
-        triggerSession: { accessToken, id: sessionId, numReposToDelete },
-      };
-    },
   });
 });
 
@@ -279,8 +223,7 @@ const cancelTokenTransactionHandler = async (transaction: {
   git_repo_assignment_id: string;
   hours_purchased: number;
 }) => {
-  const { classroom_id, student_id, amount, git_repo_assignment_id, hours_purchased } =
-    transaction;
+  const { classroom_id, student_id, amount, git_repo_assignment_id, hours_purchased } = transaction;
 
   await ClassmojiService.token.updateTransaction(transaction.id, {
     is_cancelled: true,

@@ -105,7 +105,7 @@ export function ClassroomCard({
       }}
       onMouseEnter={() => setHover(true)}
       onMouseLeave={() => setHover(false)}
-      className={`relative rounded-lg overflow-hidden flex flex-col w-[373px] h-[173px] bg-panel ring-1 ring-stone-200 dark:ring-neutral-700 hover:ring-stone-300 dark:hover:ring-neutral-600 hover:shadow-sm transition-all duration-150 ${draggable ? 'cursor-grab' : 'cursor-pointer'} ${fetcher.state !== 'idle' ? 'opacity-70' : ''}`}
+      className={`relative rounded-lg overflow-hidden flex flex-col w-full h-[173px] bg-panel ring-1 ring-stone-200 dark:ring-neutral-700 hover:ring-stone-300 dark:hover:ring-neutral-600 hover:shadow-sm transition-all duration-150 ${draggable ? 'cursor-grab' : 'cursor-pointer'} ${fetcher.state !== 'idle' ? 'opacity-70' : ''}`}
     >
       {/* Colored top strip */}
       <div className="h-1.5 w-full shrink-0" style={{ backgroundColor: 'var(--accent)' }} />

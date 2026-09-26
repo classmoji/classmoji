@@ -131,6 +131,8 @@ beforeAll(async () => {
 
   const tierAssignment = await prisma.assignment.create({
     data: {
+      module_id: fx.releasedAssignment.module_id,
+      type: 'REPO',
       repository_id: fx.devRepository.id,
       title: S4_TITLES.assignment,
       weight: 10,
@@ -466,10 +468,237 @@ describe('OWNER-only tools deny the adjacent TEACHER boundary', () => {
   });
 });
 
+// ─── submission_late_override (OWNER_TEACHER — the web shield button) ───────
+
+describe('submission_late_override', () => {
+  // The seeded 'Hello World Part 1' has no deadline, so nothing in it is late
+  // and every set would be skipped as not_late. For this block: a deadline in
+  // the past, fake-student-1 turned in LATE, fake-student-2 ON TIME, and the
+  // rest never submitted. Everything is put back in afterAll, before later
+  // blocks read these rows.
+  const DEADLINE = new Date('2026-01-10T12:00:00Z');
+  const LATE_CLOSE = new Date('2026-01-12T12:00:00Z');
+  const ON_TIME_CLOSE = new Date('2026-01-09T12:00:00Z');
+
+  let subs: Array<{ id: string; closed_at: Date | null; is_late_override: boolean }> = [];
+  let deadlineBefore: Date | null = null;
+  let foreignBefore = false;
+  let student2GraId = '';
+
+  beforeAll(async () => {
+    const assignment = await prisma.assignment.findUniqueOrThrow({
+      where: { id: fx.releasedAssignment.id },
+      select: { student_deadline: true },
+    });
+    deadlineBefore = assignment.student_deadline;
+    subs = await prisma.gitRepoAssignment.findMany({
+      where: { assignment_id: fx.releasedAssignment.id, git_repo: { classroom_id: fx.dev.id } },
+      select: { id: true, closed_at: true, is_late_override: true },
+    });
+    foreignBefore = (
+      await prisma.gitRepoAssignment.findUniqueOrThrow({
+        where: { id: fx.foreignGra.id },
+        select: { is_late_override: true },
+      })
+    ).is_late_override;
+    student2GraId = (
+      await prisma.gitRepoAssignment.findUniqueOrThrow({
+        where: {
+          provider_provider_id: { provider: 'GITHUB', provider_id: 'fake-issue-fake-student-2' },
+        },
+        select: { id: true },
+      })
+    ).id;
+    expect(subs.map(s => s.id)).toEqual(expect.arrayContaining([fx.student1Gra.id, student2GraId]));
+
+    await prisma.assignment.update({
+      where: { id: fx.releasedAssignment.id },
+      data: { student_deadline: DEADLINE },
+    });
+    await prisma.gitRepoAssignment.updateMany({
+      where: { id: { in: subs.map(s => s.id) } },
+      data: { is_late_override: false, closed_at: null },
+    });
+    await prisma.gitRepoAssignment.update({
+      where: { id: fx.student1Gra.id },
+      data: { closed_at: LATE_CLOSE },
+    });
+    await prisma.gitRepoAssignment.update({
+      where: { id: student2GraId },
+      data: { closed_at: ON_TIME_CLOSE },
+    });
+  });
+
+  afterAll(async () => {
+    await prisma.$transaction([
+      prisma.assignment.update({
+        where: { id: fx.releasedAssignment.id },
+        data: { student_deadline: deadlineBefore },
+      }),
+      ...subs.map(s =>
+        prisma.gitRepoAssignment.update({
+          where: { id: s.id },
+          data: { closed_at: s.closed_at, is_late_override: s.is_late_override },
+        })
+      ),
+      prisma.gitRepoAssignment.update({
+        where: { id: fx.foreignGra.id },
+        data: { is_late_override: foreignBefore },
+      }),
+    ]);
+  });
+
+  const overrideOf = async (id: string) =>
+    (
+      await prisma.gitRepoAssignment.findUniqueOrThrow({
+        where: { id },
+        select: { is_late_override: true },
+      })
+    ).is_late_override;
+
+  it('TEACHER sets + clears; ASSISTANT/STUDENT denied; on-time skipped; foreign ids never written', async () => {
+    const gra = fx.student1Gra.id;
+
+    // DENY (role gate): ASSISTANT and STUDENT are outside OWNER_TEACHER.
+    for (const [token, who] of [
+      [ta, 'assistant'],
+      [student1, 'student'],
+    ] as const) {
+      expectForbidden(
+        await callTool(token, 'submission_late_override', {
+          classroom: DEV_REF,
+          git_repo_assignment_id: gra,
+          is_late_override: true,
+        }),
+        `submission_late_override as ${who}`,
+        'INSUFFICIENT_ROLE'
+      );
+    }
+    expect(await overrideOf(gra)).toBe(false);
+
+    // ALLOW: TEACHER, list mode — a late row, an on-time row, a foreign id.
+    const set = await callTool(teacher, 'submission_late_override', {
+      classroom: DEV_REF,
+      git_repo_assignment_ids: [gra, student2GraId, fx.foreignGra.id],
+      is_late_override: true,
+    });
+    expect(set.isError).toBe(false);
+    expect(set.payload).toMatchObject({
+      mode: 'ids',
+      updated_count: 1,
+      updated_ids: [gra],
+      not_late_count: 1,
+      not_late_ids: [student2GraId],
+      not_found_count: 1,
+      not_found_ids: [fx.foreignGra.id],
+    });
+    expect(await overrideOf(gra)).toBe(true);
+    expect(await overrideOf(student2GraId)).toBe(false);
+    expect(await overrideOf(fx.foreignGra.id)).toBe(foreignBefore);
+    await expectAuditRow({
+      userId: teacherMint.user_id,
+      classroomId: fx.dev.id,
+      role: 'TEACHER',
+      resourceType: 'GIT_REPO_ASSIGNMENT',
+      action: 'UPDATE',
+      resourceId: gra,
+      tool: 'submission_late_override',
+      since: suiteStart,
+    });
+
+    // A single on-time id → success with a not_late reason, nothing written.
+    const onTime = await callTool(teacher, 'submission_late_override', {
+      classroom: DEV_REF,
+      git_repo_assignment_id: student2GraId,
+      is_late_override: true,
+    });
+    expect(onTime.isError).toBe(false);
+    expect(onTime.payload).toMatchObject({ updated_count: 0, not_late_count: 1 });
+    expect(String(onTime.payload.reason)).toMatch(/^not_late/);
+    expect(await overrideOf(student2GraId)).toBe(false);
+
+    // Repeat → unchanged, no write.
+    const again = await callTool(teacher, 'submission_late_override', {
+      classroom: DEV_REF,
+      git_repo_assignment_id: gra,
+      is_late_override: true,
+    });
+    expect(again.payload).toMatchObject({ updated_count: 0, unchanged_count: 1 });
+
+    // Single mode on a foreign id / assignment mode on a foreign assignment →
+    // the uniform not_found, nothing written.
+    expectScopedNotFound(
+      await callTool(teacher, 'submission_late_override', {
+        classroom: DEV_REF,
+        git_repo_assignment_id: fx.foreignGra.id,
+        is_late_override: !foreignBefore,
+      }),
+      'submission_late_override on a foreign submission'
+    );
+    expectScopedNotFound(
+      await callTool(teacher, 'submission_late_override', {
+        classroom: DEV_REF,
+        assignment_id: fx.foreignAssignment.id,
+        is_late_override: !foreignBefore,
+      }),
+      'submission_late_override on a foreign assignment'
+    );
+    expect(await overrideOf(fx.foreignGra.id)).toBe(foreignBefore);
+
+    // Clear → false, audited with value:false.
+    const cleared = await callTool(teacher, 'submission_late_override', {
+      classroom: DEV_REF,
+      git_repo_assignment_id: gra,
+      is_late_override: false,
+    });
+    expect(cleared.payload).toMatchObject({ mode: 'single', updated_count: 1 });
+    expect(await overrideOf(gra)).toBe(false);
+    const clearAudit = await prisma.auditLog.findFirst({
+      where: {
+        user_id: teacherMint.user_id,
+        resource_id: gra,
+        resource_type: 'GIT_REPO_ASSIGNMENT',
+        timestamp: { gte: suiteStart },
+        data: { path: ['value'], equals: false },
+      },
+    });
+    expect(clearAudit?.data).toMatchObject({ tool: 'submission_late_override', value: false });
+  });
+
+  it('OWNER exempts a whole assignment: only late, submitted rows; missing work keeps its zero', async () => {
+    const unsubmitted = subs.length - 2;
+    expect(unsubmitted).toBeGreaterThan(0);
+
+    const res = await callTool(owner, 'submission_late_override', {
+      classroom: DEV_REF,
+      assignment_id: fx.releasedAssignment.id,
+      is_late_override: true,
+    });
+    expect(res.isError).toBe(false);
+    expect(res.payload).toMatchObject({
+      mode: 'assignment',
+      matched_count: subs.length,
+      updated_count: 1,
+      updated_ids: [fx.student1Gra.id],
+      not_late_count: 1,
+      not_late_ids: [student2GraId],
+      not_submitted_count: unsubmitted,
+      // student-1 (turned in late) + every unsubmitted row past the deadline.
+      late_count: 1 + unsubmitted,
+      late_updated_count: 1,
+    });
+    expect(
+      await prisma.gitRepoAssignment.count({
+        where: { id: { in: subs.map(s => s.id) }, is_late_override: true },
+      })
+    ).toBe(1);
+  });
+});
+
 // ─── assignment_update per-field tiering (OWNER_TEACHER + in-handler gate) ──
 
 describe('assignment_update per-field tiering', () => {
-  it('TEACHER may flip grades_released + move student_deadline, NOT weight; ASSISTANT denied outright', async () => {
+  it('TEACHER may flip grades_released + move student_deadline, NOT weight or the grader/release dates; ASSISTANT denied outright', async () => {
     // DENY (role gate): ASSISTANT is outside OWNER_TEACHER.
     expectForbidden(
       await callTool(ta, 'assignment_update', {
@@ -538,6 +767,59 @@ describe('assignment_update per-field tiering', () => {
     expect(
       (await prisma.assignment.findUniqueOrThrow({ where: { id: tierAssignmentId } })).weight
     ).toBe(60);
+
+    // ALLOW: OWNER sets grader_deadline + release_at. Far-future dates: a past
+    // release_at on this unpublished REPO assignment would make it eligible for
+    // the nightly release cron until the clear below.
+    const graderDeadline = '2099-08-22T23:59:00-04:00';
+    const releaseAt = '2099-08-01T09:00:00-04:00';
+    const ownerDates = await callTool(owner, 'assignment_update', {
+      classroom: DEV_REF,
+      assignment_id: tierAssignmentId,
+      grader_deadline: graderDeadline,
+      release_at: releaseAt,
+    });
+    expect(ownerDates.isError).toBe(false);
+    const expectOwnerDates = async () => {
+      const row = await prisma.assignment.findUniqueOrThrow({ where: { id: tierAssignmentId } });
+      expect(row.grader_deadline?.toISOString()).toBe(new Date(graderDeadline).toISOString());
+      expect(row.release_at?.toISOString()).toBe(new Date(releaseAt).toISOString());
+    };
+    await expectOwnerDates();
+
+    // DENY (in-handler per-field gate): grader_deadline and release_at are
+    // OWNER-only (the web edit form posts to the requireClassroomAdmin route),
+    // whether setting or clearing them. Runs while the OWNER's values are in
+    // place, so a clear that slipped through would show in the DB check.
+    for (const [field, value] of [
+      ['grader_deadline', '2099-09-22T23:59:00-04:00'],
+      ['release_at', '2099-09-01T09:00:00-04:00'],
+      ['grader_deadline', null],
+      ['release_at', null],
+    ] as const) {
+      const dateDenied = await callTool(teacher, 'assignment_update', {
+        classroom: DEV_REF,
+        assignment_id: tierAssignmentId,
+        [field]: value,
+      });
+      expectForbidden(dateDenied, `${field}=${value} as teacher`, 'INSUFFICIENT_ROLE');
+      expect(String(dateDenied.payload.message)).toMatch(new RegExp(field));
+    }
+    await expectOwnerDates();
+
+    // ALLOW: OWNER clears both with null.
+    const ownerCleared = await callTool(owner, 'assignment_update', {
+      classroom: DEV_REF,
+      assignment_id: tierAssignmentId,
+      grader_deadline: null,
+      release_at: null,
+    });
+    expect(ownerCleared.isError).toBe(false);
+    const afterCleared = await prisma.assignment.findUniqueOrThrow({
+      where: { id: tierAssignmentId },
+    });
+    expect(afterCleared.grader_deadline).toBeNull();
+    expect(afterCleared.release_at).toBeNull();
   });
 });
 

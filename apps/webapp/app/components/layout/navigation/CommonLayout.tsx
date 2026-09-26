@@ -1,7 +1,7 @@
 import { Avatar, Tooltip } from 'antd';
 import { Link, useParams, useLocation, useRouteLoaderData } from 'react-router';
 import { useEffect, useRef, useState } from 'react';
-import { IconMenu2, IconApple, IconSparkles } from '@tabler/icons-react';
+import { IconMenu2, IconApple } from '@tabler/icons-react';
 import useLocalStorageState from 'use-local-storage-state';
 import { Logo } from '@classmoji/ui-components';
 import { RequireRole, RecentViewers } from '~/components';
@@ -18,23 +18,6 @@ import ImportProgressBanner, {
   type ImportProgressBannerProps,
 } from '../../features/import/ImportProgressBanner';
 import type { AppUser, MembershipWithOrganization } from '~/types';
-
-// Lean owner navigation. New/imported instructors land in a small core that
-// maps to the GitHub-Classroom mental model (roster + repos + grades) plus the
-// class's public reading surface (Pages); the rest of the platform stays one
-// click away behind the "Show all features" toggle. Other roles
-// (student/assistant) are never reduced. Keyed by `route.link`.
-const OWNER_CORE_LINKS = new Set([
-  '/dashboard',
-  '/repos',
-  '/pages',
-  '/students',
-  '/teams',
-  '/staff',
-  '/grades',
-  '/settings/general',
-  '/support',
-]);
 
 interface Viewer {
   user: { id: string; name?: string | null; login?: string | null; avatar_url?: string | null };
@@ -53,7 +36,6 @@ interface NavItem {
 interface NavVisibility {
   showModules?: boolean;
   showPages?: boolean;
-  showRepos?: boolean;
   /** Whether the class has any modules; hides the empty Modules tab from non-owners. */
   hasModules?: boolean;
   /** Whether the class has any published page; hides the empty Pages tab likewise. */
@@ -91,11 +73,6 @@ const CommonLayout = ({
   const [collapsed, setCollapsed] = useLocalStorageState('classmoji-collapsed', {
     defaultValue: false,
   });
-  // Owner-only "Show all features" toggle. Defaults to the lean core so a fresh
-  // classroom isn't a wall of links; sticky once expanded.
-  const [showAllNav, setShowAllNav] = useLocalStorageState('classmoji-nav-show-all', {
-    defaultValue: false,
-  });
   const [mobileOpen, setMobileOpen] = useState(false);
   const [supportOpen, setSupportOpen] = useState(false);
   const { classroom } = useStore();
@@ -115,9 +92,6 @@ const CommonLayout = ({
   }, [sectionKey]);
 
   const { role } = useRole();
-  // Owner viewing the reduced core nav (no "Show all features"). Drives both the
-  // item filtering and the flat, divider-less layout for the short list.
-  const leanNav = role === 'OWNER' && !showAllNav;
   const roleSettings = useRoleSettings();
   const rootData = useRouteLoaderData('root') as
     | {
@@ -137,13 +111,12 @@ const CommonLayout = ({
 
   // Effective student-nav visibility: prefer the fresh value from the layout
   // loader (navVisibility), fall back to the store. Defaults match the schema
-  // (modules, pages, repos all on).
+  // (modules and pages both on).
   const storeSettings = classroom?.settings as
-    | { show_modules?: boolean; show_pages?: boolean; show_repos?: boolean }
+    | { show_modules?: boolean; show_pages?: boolean }
     | undefined;
   const showModules = navVisibility?.showModules ?? storeSettings?.show_modules ?? true;
   const showPages = navVisibility?.showPages ?? storeSettings?.show_pages ?? true;
-  const showRepos = navVisibility?.showRepos ?? storeSettings?.show_repos ?? true;
   // Hide the Modules tab from non-owners when the class has no modules, so profs
   // who never use the feature don't show students an empty tab. Defaults true
   // when unknown (store fallback / pre-loader render) to avoid hiding wrongly.
@@ -200,10 +173,6 @@ const CommonLayout = ({
 
     const isDemoClassroom = Number(classroom?.id) === DEMO_ORG_ID;
 
-    // Lean owner nav: until "Show all features" is on, the OWNER sees only the
-    // core set. Other roles keep their full nav.
-    if (leanNav && !OWNER_CORE_LINKS.has(item.link)) return null;
-
     // Support has no page of its own — it opens a modal with the ways to reach
     // us (community, bug report, email), so it renders as a button, not a Link.
     if (item.link === '/support') {
@@ -239,19 +208,18 @@ const CommonLayout = ({
 
     // Hide slides if disabled in classroom settings
     if (item.link === '/slides' && classroom?.settings?.slides_enabled === false) return null;
+    // Students find decks inside their modules; the flat list is only for a
+    // class that has no modules to hold them.
+    if (item.link === '/slides' && role === 'STUDENT' && hasModules) return null;
 
     // Student navigation visibility toggles. OWNER always sees these to manage
     // them; students/assistants only when the instructor enables them. Modules
     // also hides when the class has none, so the tab never shows up empty.
     if (item.link === '/modules' && role !== 'OWNER' && (!showModules || !hasModules)) return null;
-    if (item.link === '/repos' && role !== 'OWNER' && !showRepos) return null;
     // `show_pages` used to gate the group of per-page links; it now gates the
     // one Pages entry that replaced them.
     if (item.link === '/pages' && role !== 'OWNER' && (!showPages || !hasPages)) return null;
 
-    // Repos keeps its own label now that students have a real Modules tab.
-    // (Previously the repos section was framed as "Modules" for students, which
-    // now collides with the actual Modules tab.)
     const displayLabel = item.label;
 
     return (
@@ -302,16 +270,14 @@ const CommonLayout = ({
     if (!item.roles || !role || !item.roles.includes(role)) return false;
 
     const isDemoClassroom = Number(classroom?.id) === DEMO_ORG_ID;
-    // Lean owner nav (mirror of renderNavItem) so empty categories collapse.
-    if (leanNav && !OWNER_CORE_LINKS.has(item.link)) return false;
     if (item.isProTier && !isProTier && !isDemoClassroom) return false;
     if (item.link === '/quizzes' && !isProTier && !isDemoClassroom) return false;
     if (item.link === '/quizzes' && classroom?.settings?.quizzes_enabled === false) return false;
     if (item.link === '/quizzes' && !aiAgentAvailable) return false;
+    if (item.link === '/slides' && role === 'STUDENT' && hasModules) return false;
 
     // Student navigation visibility toggles (OWNER always retains access).
     if (item.link === '/modules' && role !== 'OWNER' && (!showModules || !hasModules)) return false;
-    if (item.link === '/repos' && role !== 'OWNER' && !showRepos) return false;
     if (item.link === '/pages' && role !== 'OWNER' && (!showPages || !hasPages)) return false;
 
     return true;
@@ -371,39 +337,6 @@ const CommonLayout = ({
     );
   };
 
-  // Owner-only reveal at the foot of the nav. Lives next to the items it
-  // controls so a missing feature is discoverable here, not buried in Settings.
-  const renderShowAllToggle = () => {
-    if (role !== 'OWNER') return null;
-
-    const label = showAllNav ? 'Show fewer' : 'Show all features';
-
-    return (
-      <div key="show-all-toggle" className={leanNav ? '' : collapsed ? 'pt-3' : 'pt-4'}>
-        <button
-          type="button"
-          onClick={() => setShowAllNav(!showAllNav)}
-          aria-pressed={showAllNav}
-          className={`group flex items-center gap-2.5 rounded-md transition-colors duration-150 w-[calc(100%-12px)] ${
-            collapsed ? 'justify-center p-2 mx-1.5' : 'px-2 py-1.5 mx-1.5 text-left'
-          } hover:bg-nav-hover`}
-          style={{ color: 'var(--ink-1)' }}
-        >
-          {collapsed ? (
-            <Tooltip title={label} placement="right">
-              <IconSparkles size={20} strokeWidth={1.75} />
-            </Tooltip>
-          ) : (
-            <>
-              <IconSparkles size={20} strokeWidth={1.75} className="shrink-0" />
-              <span className="flex-1">{label}</span>
-            </>
-          )}
-        </button>
-      </div>
-    );
-  };
-
   const tabs = [
     // Dashboard (uncategorized)
     renderNavItem(routes.dashboard, 'dashboard'),
@@ -433,25 +366,24 @@ const CommonLayout = ({
       // groups each category under a small muted label (no full-width rule);
       // collapsed (icon-only) mode has no room for a label, so the extra top
       // spacing alone carries the grouping.
+      // A student's list is short (Modules, Assignments, Resubmits, Tokens…),
+      // so it is one flat list with no section labels.
+      const flat = role === 'STUDENT';
       return (
-        <div key={categoryKey} className={leanNav ? '' : collapsed ? 'pt-3' : 'pt-5'}>
-          {!leanNav && !collapsed && (
+        <div key={categoryKey} className={flat ? '' : collapsed ? 'pt-3' : 'pt-5'}>
+          {!flat && !collapsed && (
             <div className="px-3.5 mb-1 text-[11px] font-semibold uppercase tracking-wider text-ink-4 select-none">
               {category.label}
             </div>
           )}
-          {/* Lean nav is a flat, short list with no section labels, so give the
-              items more breathing room; the grouped full nav stays tight. */}
-          <div className={leanNav ? 'space-y-1.5' : 'space-y-0.5'}>{categoryItems}</div>
+          {/* A flat list gets more breathing room; the grouped full nav stays tight. */}
+          <div className={flat ? 'space-y-1.5' : 'space-y-0.5'}>{categoryItems}</div>
         </div>
       );
     }),
 
     // (Pages used to hang here as one nav entry per page. It is a single
     // "Pages" item in CONTENT now — see routeCategories.content.)
-
-    // Owner-only "Show all features" reveal at the foot of the nav
-    renderShowAllToggle(),
   ];
 
   return (
@@ -539,7 +471,7 @@ const CommonLayout = ({
         {/* Navigation — the bordered class selector above already separates this
             zone, so no top divider here (the footer keeps its divider). */}
         <nav className="flex-1 overflow-y-auto overflow-x-hidden py-0.5 no-scrollbar">
-          <div className={leanNav ? 'space-y-1.5' : 'space-y-0.5'}>{tabs}</div>
+          <div className="space-y-0.5">{tabs}</div>
         </nav>
 
         {/* Bottom row: profile + GitHub + collapse */}
@@ -632,12 +564,13 @@ const CommonLayout = ({
             pathname.includes('/tokens') ||
             pathname.includes('/teams') ||
             pathname.includes('/grading') ||
-            pathname.includes('/repo-health') ||
             pathname.includes('/submissions/') ||
             pathname.match(/\/slides(\/|$)/) ||
             pathname.match(/\/pages(\/|$)/) ||
-            pathname.match(/\/grades(\/|$)/) ||
-            pathname.match(/\/gitrepos(\/|$)/)
+            // Segment-anchored like its neighbours: the forms list brings its
+            // own floating card, so without this it would render card-on-card.
+            pathname.match(/\/forms(\/|$)/) ||
+            pathname.match(/\/grades(\/|$)/)
               ? ''
               : 'bg-panel rounded-2xl ring-1 ring-line'
           }`}

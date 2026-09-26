@@ -8,7 +8,9 @@
  *
  * repos (any member — mirrors student.$class.repos allowedRoles):
  *   - Staff see every container + assignment incl. unpublished
- *     (repository.findByClassroomId, as the admin repos loader does).
+ *     (repository.findByClassroomId, as the admin repos loader does), with
+ *     every field repo_update edits (template, team settings, tag_id, project
+ *     template) — staff view only; the student view does not carry them.
  *   - Students see only is_published containers with is_published assignments
  *     (repository.findPublished), further narrowed — as the student route
  *     does — to containers they own a GitRepo for, each assignment annotated
@@ -47,6 +49,7 @@ interface AssignmentRow {
   title: string;
   slug?: string | null;
   weight: number;
+  is_extra_credit?: boolean;
   is_published: boolean;
   description?: string;
   student_deadline?: Date | null;
@@ -62,13 +65,16 @@ interface RepositoryRow {
   slug?: string | null;
   description?: string | null;
   is_published: boolean;
-  weight: number;
   type: string;
-  is_extra_credit: boolean;
+  template?: string | null;
+  tag_id?: string | null;
   team_formation_mode?: string | null;
+  team_formation_deadline?: Date | null;
   max_team_size?: number | null;
+  project_template_id?: string | null;
+  project_template_title?: string | null;
   assignments: AssignmentRow[];
-  tag?: { name?: string | null } | null;
+  tag?: { id?: string; name?: string | null } | null;
 }
 
 /** The viewer's own GitRepoAssignments in this classroom (individual + team). */
@@ -121,17 +127,24 @@ export const reposResource: ResourceDefinition = {
           slug: r.slug ?? null,
           description: r.description ?? null,
           type: r.type,
-          weight: r.weight,
           is_published: r.is_published,
-          is_extra_credit: r.is_extra_credit,
+          // Everything repo_update edits, so an agent can read before it writes.
+          template: r.template ?? null,
           team_formation_mode: r.team_formation_mode ?? null,
+          team_formation_deadline: r.team_formation_deadline ?? null,
           max_team_size: r.max_team_size ?? null,
+          project_template_id: r.project_template_id ?? null,
+          project_template_title: r.project_template_title ?? null,
+          // `tag` stays the name (existing shape); `tag_id` is what the write
+          // tools take.
           tag: r.tag?.name ?? null,
+          tag_id: r.tag_id ?? null,
           assignments: r.assignments.map(a => ({
             id: a.id,
             title: a.title,
             slug: a.slug ?? null,
             weight: a.weight,
+            is_extra_credit: a.is_extra_credit ?? false,
             is_published: a.is_published,
             student_deadline: a.student_deadline ?? null,
             grader_deadline: a.grader_deadline ?? null,
@@ -164,8 +177,6 @@ export const reposResource: ResourceDefinition = {
           slug: r.slug ?? null,
           description: r.description ?? null,
           type: r.type,
-          weight: r.weight,
-          is_extra_credit: r.is_extra_credit,
           assignments: r.assignments.map(a => {
             const mine = byAssignment.get(a.id);
             return {
@@ -173,6 +184,7 @@ export const reposResource: ResourceDefinition = {
               title: a.title,
               slug: a.slug ?? null,
               weight: a.weight,
+              is_extra_credit: a.is_extra_credit ?? false,
               student_deadline: a.student_deadline ?? null,
               grades_released: a.grades_released,
               tokens_per_hour: a.tokens_per_hour,

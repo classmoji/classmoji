@@ -2,6 +2,7 @@ export const ActionTypes = {
   SAVE_PROFILE: 'save-profile',
   SAVE_EXTENSION_SETTINGS: 'save-extension-settings',
   SAVE_DEFAULT_PAGE: 'save-default-page',
+  SAVE_TIME_ZONE: 'save-time-zone',
   SAVE_THEME: 'save-theme',
   SAVE_QUIZ_SETTINGS: 'save-quiz-settings',
   SAVE_SLIDES_SETTINGS: 'save-slides-settings',
@@ -10,6 +11,7 @@ export const ActionTypes = {
 
   SAVE_ASSIGNMENT: 'save-assignment',
   DELETE_ASSIGNMENT: 'delete-assignment',
+  DELETE_GIT_REPO_ASSIGNMENT: 'delete-git-repo-assignment',
   SYNC_ASSIGNMENT: 'sync-assignment',
   PUBLISH_ASSIGNMENT: 'publish-assignment',
 

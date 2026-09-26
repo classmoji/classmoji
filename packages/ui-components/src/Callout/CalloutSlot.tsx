@@ -39,16 +39,27 @@ export function CalloutSlot({ id = DEFAULT_CALLOUT_SLOT_ID, className }: Callout
     ease: [0.4, 0, 1, 1] as [number, number, number, number],
   };
 
-  const baseClass =
-    'pointer-events-none fixed top-20 left-1/2 w-full max-w-2xl -translate-x-1/2 px-4';
+  const baseClass = 'pointer-events-none fixed left-1/2 w-full -translate-x-1/2 px-4';
   const wrapperClass = className ? `${baseClass} ${className}` : baseClass;
 
   return (
-    // zIndex is set inline (not via a Tailwind class) so it applies even though this
-    // shared package's source isn't scanned by the consumer's Tailwind build. 60 keeps
-    // the callout above the sticky app header (z-50) so notifications aren't hidden
-    // behind the menu, while staying below antd modals (z-1000+).
-    <div className={wrapperClass} style={{ zIndex: 60 }}>
+    // top and zIndex are set inline (not via Tailwind classes) so they apply even
+    // though this shared package's source isn't scanned by the consumer's Tailwind
+    // build: a utility no app file happens to use (e.g. `top-20`) is never emitted,
+    // and the slot would sit flush against the top of the viewport.
+    //
+    // Most screens have nothing fixed at the top, so the callout sits just below
+    // the viewport edge. A layout with a sticky header raises it by setting
+    // `--callout-top` (the app's user header does, to clear its 82px). z 60 keeps
+    // the callout above such a header (z-50) and below antd modals (z-1000+).
+    <div
+      className={wrapperClass}
+      // No max-width here: the card sets its own 420px and centres itself, so
+      // this only has to span the viewport and keep a gutter at phone width.
+      // `px-4` is a rem, which is 17px in the webapp, so pinning the wrapper
+      // instead would make the card 418 in one app and 420 in another.
+      style={{ top: 'var(--callout-top, 24px)', zIndex: 60 }}
+    >
       <AnimatePresence mode="popLayout">
         {active ? (
           <motion.div

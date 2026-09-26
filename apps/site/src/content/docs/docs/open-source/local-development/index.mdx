@@ -169,6 +169,14 @@ Smee is a free webhook proxy. It gives you a public URL that receives events and
 
 4. Copy the value of `GITHUB_WEBHOOK_SECRET` from your `.env` into the **Webhook secret** field in the GitHub App settings.
 
+5. Under **Subscribe to events**, make sure the App is subscribed to **Push**, **Issues**, and **Organization**. The setup wizard requests these when it creates the App, so a fresh App already has them.
+
+hook-station handles these events: `push` records push-mode submissions (pushes by bots and branch deletions are ignored), `issues` closed / reopened / deleted drive issue-mode submissions, and `organization` membership and `installation` events keep the roster and the App installation in sync.
+
+:::caution
+A GitHub App created before push-mode submissions existed is not subscribed to `push`. Add it by hand under **Permissions & events → Subscribe to events**, or push-mode submissions never get recorded.
+:::
+
 ### Create a test GitHub organization
 
 Before doing the steps below, make sure to stop running the webapp service and run:

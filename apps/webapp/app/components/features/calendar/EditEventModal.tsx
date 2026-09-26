@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import {
   Modal,
   Form,
@@ -22,20 +22,28 @@ import {
   IconTrash,
 } from '@tabler/icons-react';
 import dayjs from 'dayjs';
-import { getEventTypeDotColor, getEventTypeLabel } from './utils';
+import { buildEventWindow, getEventTypeDotColor, getEventTypeLabel } from './utils';
 import EventLinks from './EventLinks';
+import type { CalendarEventWithLinks } from './types';
+import {
+  buildScopedEventData,
+  EDIT_SCOPES,
+  filterLinksForOccurrence,
+  isExpandedOccurrence,
+  linkSelectionChanged,
+  type EventLinkIds,
+} from './eventScope';
+import {
+  buildLinkOptions,
+  createLinkTagRender,
+  eventLinkMeta,
+  mergeLinkMeta,
+  renderLinkOption,
+  useFeaturedLink,
+  type FeaturedRef,
+} from './linkTagRender';
 
 const { TextArea } = Input;
-
-const isSameDateDay = (date1: string | Date, date2: string | Date) => {
-  const d1 = new Date(date1);
-  const d2 = new Date(date2);
-  return (
-    d1.getUTCFullYear() === d2.getUTCFullYear() &&
-    d1.getUTCMonth() === d2.getUTCMonth() &&
-    d1.getUTCDate() === d2.getUTCDate()
-  );
-};
 
 const ALL_EVENT_TYPES = ['OFFICE_HOURS', 'LECTURE', 'LAB', 'ASSESSMENT'];
 
@@ -49,39 +57,20 @@ const DAYS_OF_WEEK = [
   { value: 'sunday', label: 'Sun' },
 ];
 
-const EDIT_SCOPES = {
-  THIS_ONLY: 'this_only',
-  THIS_AND_FUTURE: 'this_and_future',
-  ALL: 'all',
-};
-
-interface CalendarEvent {
-  id: string;
-  event_type: string;
-  title: string;
-  description?: string | null;
-  start_time: string;
-  end_time: string;
-  location?: string | null;
-  meeting_link?: string | null;
-  is_recurring?: boolean;
-  occurrence_date?: string | null;
-  recurrence_rule?: { days?: string[]; until?: string | null } | null;
-  _rawPageLinks?: Array<{ page_id: string; occurrence_date?: string | null }>;
-  _rawSlideLinks?: Array<{ slide_id: string; occurrence_date?: string | null }>;
-  _rawAssignmentLinks?: Array<{ assignment_id: string; occurrence_date?: string | null }>;
-  [key: string]: unknown;
-}
-
 interface CalendarResource {
   id: string;
   title: string;
+  /** Staff pickers offer drafts, marked as such. See the calendar loaders. */
+  is_draft?: boolean;
 }
 
 interface CalendarAssignment {
   id: string;
   title: string;
-  repository?: { title: string };
+  /** Always published today — the loaders do not offer unpublished ones. */
+  is_draft?: boolean;
+  /** Null for quiz/form assignments, which have no repository. */
+  repository?: { title: string } | null;
 }
 
 interface EventFormValues {
@@ -110,14 +99,31 @@ interface EventFormData {
   linkedPageIds?: string[];
   linkedSlideIds?: string[];
   linkedAssignmentIds?: string[];
+  /**
+   * Which of those links the month view shows under the event. Two flat fields
+   * rather than an object because they travel with the link ids through the
+   * same form payload, and are dropped by the same rule when a scope cannot
+   * hold links.
+   */
+  featuredKind?: string | null;
+  featuredId?: string | null;
+}
+
+/** What a recurring delete carries back to the route. */
+interface EventDeleteOptions {
+  editScope: string;
+  occurrenceDate: string | null;
 }
 
 interface EditEventModalProps {
   open: boolean;
-  event: CalendarEvent | null;
+  event: CalendarEventWithLinks | null;
   onClose: () => void;
-  onSubmit: (data: EventFormData) => Promise<void>;
-  onDelete: (id: string, opts?: Record<string, unknown>) => Promise<void>;
+  // The routes' handlers submit through a fetcher and return nothing; awaiting a
+  // plain `undefined` is harmless, and demanding a Promise here is what forced
+  // every call site to cast.
+  onSubmit: (data: EventFormData) => void | Promise<void>;
+  onDelete: (id: string, opts?: EventDeleteOptions) => void | Promise<void>;
   loading?: boolean;
   allowedEventTypes?: string[];
   classSlug: string;
@@ -137,11 +143,7 @@ const InlineRow = ({
   children: React.ReactNode;
 }) => (
   <div className="flex items-start gap-3 py-1.5">
-    <Icon
-      size={18}
-      strokeWidth={1.75}
-      className="shrink-0 mt-2.5 text-ink-4"
-    />
+    <Icon size={18} strokeWidth={1.75} className="shrink-0 mt-2.5 text-ink-4" />
     <div className="flex-1 min-w-0">{children}</div>
   </div>
 );
@@ -175,6 +177,46 @@ const EditEventModal = ({
   const [linkedSlideIds, setLinkedSlideIds] = useState<string[]>([]);
   const [linkedAssignmentIds, setLinkedAssignmentIds] = useState<string[]>([]);
 
+  // One star across all three pickers — see useFeaturedLink.
+  const { featured, setFeatured, toggleFeatured, keepFeaturedWithin } = useFeaturedLink();
+
+  /**
+   * What the pickers held when this occurrence was loaded.
+   *
+   * Only used to decide whether the scope dialog owes the user a warning: a
+   * series-wide edit cannot carry link or star changes, and saying nothing
+   * makes that look like a successful save.
+   */
+  const [prefilledLinks, setPrefilledLinks] = useState<EventLinkIds>({
+    linkedPageIds: [],
+    linkedSlideIds: [],
+    linkedAssignmentIds: [],
+    featuredKind: null,
+    featuredId: null,
+  });
+
+  const pagePicker = useMemo(() => buildLinkOptions(pages), [pages]);
+  const slidePicker = useMemo(() => buildLinkOptions(slides), [slides]);
+  const assignmentPicker = useMemo(
+    () =>
+      buildLinkOptions(assignments, a =>
+        a.repository?.title ? `${a.repository.title}: ${a.title}` : a.title
+      ),
+    [assignments]
+  );
+
+  // A chip has to be able to name a resource the pickers no longer offer — an
+  // assignment linked while published and unpublished since, say. The event
+  // itself carries the title; a live option still wins where there is one.
+  const chipMeta = useMemo(() => {
+    const fromEvent = eventLinkMeta(event ?? {});
+    return {
+      page: mergeLinkMeta(fromEvent.page, pagePicker.meta),
+      slide: mergeLinkMeta(fromEvent.slide, slidePicker.meta),
+      assignment: mergeLinkMeta(fromEvent.assignment, assignmentPicker.meta),
+    };
+  }, [event, pagePicker.meta, slidePicker.meta, assignmentPicker.meta]);
+
   const isRecurringOccurrence = event?.is_recurring && event?.occurrence_date;
 
   useEffect(() => {
@@ -200,41 +242,73 @@ const EditEventModal = ({
       });
 
       const occurrenceDate = event.occurrence_date || event.start_time;
-      const filterLinksForOccurrence = <T extends { occurrence_date?: string | null }>(
-        links: T[] | undefined
-      ) => {
-        if (!links) return [];
-        return links.filter(
-          link => !link.occurrence_date || isSameDateDay(link.occurrence_date, occurrenceDate)
-        );
-      };
+      // How the calendar read this item's links — see isExpandedOccurrence.
+      const isOccurrence = isExpandedOccurrence(event);
 
-      const pageLinks = filterLinksForOccurrence(event._rawPageLinks);
-      const slideLinks = filterLinksForOccurrence(event._rawSlideLinks);
-      const assignmentLinks = filterLinksForOccurrence(event._rawAssignmentLinks);
+      const pageLinks = filterLinksForOccurrence(event._rawPageLinks, occurrenceDate, isOccurrence);
+      const slideLinks = filterLinksForOccurrence(
+        event._rawSlideLinks,
+        occurrenceDate,
+        isOccurrence
+      );
+      const assignmentLinks = filterLinksForOccurrence(
+        event._rawAssignmentLinks,
+        occurrenceDate,
+        isOccurrence
+      );
 
       setLinkedPageIds(pageLinks.map(l => l.page_id));
       setLinkedSlideIds(slideLinks.map(l => l.slide_id));
       setLinkedAssignmentIds(assignmentLinks.map(l => l.assignment_id));
+
+      // The star is prefilled from the same occurrence-filtered rows the
+      // pickers are, so it can only land on a chip that is actually on screen.
+      // At most one row carries it, and the database holds that; the order
+      // below only decides what a hand-written row would look like.
+      const starredPage = pageLinks.find(l => l.featured);
+      const starredSlide = slideLinks.find(l => l.featured);
+      const starredAssignment = assignmentLinks.find(l => l.featured);
+      const starred: FeaturedRef | null = starredPage
+        ? { kind: 'page', id: starredPage.page_id }
+        : starredSlide
+          ? { kind: 'slide', id: starredSlide.slide_id }
+          : starredAssignment
+            ? { kind: 'assignment', id: starredAssignment.assignment_id }
+            : null;
+      setFeatured(starred);
+      setPrefilledLinks({
+        linkedPageIds: pageLinks.map(l => l.page_id),
+        linkedSlideIds: slideLinks.map(l => l.slide_id),
+        linkedAssignmentIds: assignmentLinks.map(l => l.assignment_id),
+        featuredKind: starred?.kind ?? null,
+        featuredId: starred?.id ?? null,
+      });
     }
-  }, [event, form]);
+  }, [event, form, setFeatured]);
+
+  /** The current picker state, in the shape the scope helpers compare. */
+  const currentLinks: EventLinkIds = {
+    linkedPageIds,
+    linkedSlideIds,
+    linkedAssignmentIds,
+    featuredKind: featured?.kind ?? null,
+    featuredId: featured?.id ?? null,
+  };
+  const linksTouched = linkSelectionChanged(currentLinks, prefilledLinks);
 
   const buildEventData = (values: EventFormValues, includeLinks = true) => {
-    const startDate = values.date.toDate();
-    const endDate = values.date.toDate();
-
-    const startTime = values.start_time.toDate();
-    const endTime = values.end_time.toDate();
-
-    startDate.setHours(startTime.getHours(), startTime.getMinutes(), 0, 0);
-    endDate.setHours(endTime.getHours(), endTime.getMinutes(), 0, 0);
+    const { start, end } = buildEventWindow(
+      values.date.toDate(),
+      values.start_time.toDate(),
+      values.end_time.toDate()
+    );
 
     const eventData: EventFormData = {
       event_type: values.event_type,
       title: values.title,
       description: values.description || null,
-      start_time: startDate.toISOString(),
-      end_time: endDate.toISOString(),
+      start_time: start.toISOString(),
+      end_time: end.toISOString(),
       location: values.location || null,
       meeting_link: values.meeting_link || null,
       is_recurring: isRecurring,
@@ -253,6 +327,8 @@ const EditEventModal = ({
       eventData.linkedPageIds = linkedPageIds;
       eventData.linkedSlideIds = linkedSlideIds;
       eventData.linkedAssignmentIds = linkedAssignmentIds;
+      eventData.featuredKind = featured?.kind ?? null;
+      eventData.featuredId = featured?.id ?? null;
     }
 
     return eventData;
@@ -261,16 +337,20 @@ const EditEventModal = ({
   const handleSubmit = async () => {
     try {
       const values = await form.validateFields();
-      const eventData = buildEventData(values);
 
       if (isRecurringOccurrence) {
-        setPendingFormData(eventData);
+        // Links are per-occurrence, and only the 'this_only' scope has an
+        // occurrence to attach them to. Build the pending data WITHOUT them and
+        // let handleScopeConfirm add them for that one scope — carrying them in
+        // here would send link arrays with an 'all' or 'this and future' edit,
+        // which stores them against no date at all.
+        setPendingFormData(buildEventData(values, false));
         setScopeAction('edit');
         setShowScopeModal(true);
         return;
       }
 
-      await onSubmit(eventData);
+      await onSubmit(buildEventData(values));
     } catch (error: unknown) {
       console.error('Form validation failed:', error);
     }
@@ -279,27 +359,17 @@ const EditEventModal = ({
   const handleScopeConfirm = async () => {
     if (!event) return;
     if (scopeAction === 'edit' && pendingFormData) {
-      const includeLinks = editScope === EDIT_SCOPES.THIS_ONLY;
-      const dataToSubmit = includeLinks
-        ? {
-            ...pendingFormData,
-            linkedPageIds,
-            linkedSlideIds,
-            linkedAssignmentIds,
-            editScope,
-            occurrenceDate: event.occurrence_date
-              ? new Date(event.occurrence_date).toISOString()
-              : null,
-          }
-        : {
-            ...pendingFormData,
-            editScope,
-            occurrenceDate: event.occurrence_date
-              ? new Date(event.occurrence_date).toISOString()
-              : null,
-          };
-      await onSubmit(dataToSubmit);
-    } else if (scopeAction === 'delete') {
+      // `pendingFormData` was built WITHOUT links; buildScopedEventData adds
+      // them back for the one scope that has an occurrence to store them under.
+      await onSubmit(
+        buildScopedEventData(
+          pendingFormData,
+          editScope,
+          event.occurrence_date ? new Date(event.occurrence_date).toISOString() : null,
+          currentLinks
+        )
+      );
+    } else if (scopeAction === 'delete' && event.id) {
       await onDelete(event.id, {
         editScope,
         occurrenceDate: event.occurrence_date
@@ -320,6 +390,9 @@ const EditEventModal = ({
       return;
     }
 
+    // Only an unsaved event lacks an id, and one of those cannot reach this
+    // modal — but the shared type allows it, so say so rather than assert.
+    if (!event.id) return;
     await onDelete(event.id);
   };
 
@@ -539,9 +612,24 @@ const EditEventModal = ({
                     <Select
                       mode="multiple"
                       placeholder="Link pages"
+                      // The placeholder is a span in antd, not an input
+                      // attribute, so a spec cannot find this picker by it.
+                      // Prefixed per modal: both are mounted at once, and an
+                      // unprefixed id would match two elements.
+                      data-testid="edit-calendar-link-pages"
                       value={linkedPageIds}
-                      onChange={setLinkedPageIds}
-                      options={pages.map(p => ({ value: p.id, label: p.title }))}
+                      onChange={ids => {
+                        setLinkedPageIds(ids);
+                        keepFeaturedWithin('page', ids);
+                      }}
+                      options={pagePicker.options}
+                      optionRender={renderLinkOption}
+                      tagRender={createLinkTagRender({
+                        kind: 'page',
+                        meta: chipMeta.page,
+                        featured,
+                        onToggleFeatured: toggleFeatured,
+                      })}
                       optionFilterProp="label"
                       allowClear
                       className="w-full"
@@ -551,9 +639,22 @@ const EditEventModal = ({
                     <Select
                       mode="multiple"
                       placeholder="Link slide decks"
+                      // The placeholder is a span in antd, not an input attribute,
+                      // so a spec cannot find this picker by it.
+                      data-testid="edit-calendar-link-slides"
                       value={linkedSlideIds}
-                      onChange={setLinkedSlideIds}
-                      options={slides.map(s => ({ value: s.id, label: s.title }))}
+                      onChange={ids => {
+                        setLinkedSlideIds(ids);
+                        keepFeaturedWithin('slide', ids);
+                      }}
+                      options={slidePicker.options}
+                      optionRender={renderLinkOption}
+                      tagRender={createLinkTagRender({
+                        kind: 'slide',
+                        meta: chipMeta.slide,
+                        featured,
+                        onToggleFeatured: toggleFeatured,
+                      })}
                       optionFilterProp="label"
                       allowClear
                       className="w-full"
@@ -563,12 +664,22 @@ const EditEventModal = ({
                     <Select
                       mode="multiple"
                       placeholder="Link assignments"
+                      // The placeholder is a span in antd, not an input attribute,
+                      // so a spec cannot find this picker by it.
+                      data-testid="edit-calendar-link-assignments"
                       value={linkedAssignmentIds}
-                      onChange={setLinkedAssignmentIds}
-                      options={assignments.map(a => ({
-                        value: a.id,
-                        label: a.repository?.title ? `${a.repository.title}: ${a.title}` : a.title,
-                      }))}
+                      onChange={ids => {
+                        setLinkedAssignmentIds(ids);
+                        keepFeaturedWithin('assignment', ids);
+                      }}
+                      options={assignmentPicker.options}
+                      optionRender={renderLinkOption}
+                      tagRender={createLinkTagRender({
+                        kind: 'assignment',
+                        meta: chipMeta.assignment,
+                        featured,
+                        onToggleFeatured: toggleFeatured,
+                      })}
                       optionFilterProp="label"
                       allowClear
                       className="w-full"
@@ -635,6 +746,19 @@ const EditEventModal = ({
             <Radio value={EDIT_SCOPES.THIS_AND_FUTURE}>This and future events</Radio>
             <Radio value={EDIT_SCOPES.ALL}>All events in series</Radio>
           </Radio.Group>
+
+          {/*
+            A link and its star belong to ONE date, so the two series-wide
+            scopes cannot carry them and the save drops them without a word.
+            Said here, beside the choice that decides it, and only when there
+            is something to lose.
+          */}
+          {scopeAction === 'edit' && linksTouched && (
+            <p className="mt-3 flex items-start gap-2 text-xs text-[#8a5b3a] dark:text-amber-200">
+              <IconInfoCircle size={14} className="shrink-0 mt-0.5" />
+              Link and star changes apply to this event only.
+            </p>
+          )}
         </div>
       </Modal>
     </Modal>
@@ -642,4 +766,4 @@ const EditEventModal = ({
 };
 
 export default EditEventModal;
-export type { EventFormData };
+export type { EventFormData, EventDeleteOptions };

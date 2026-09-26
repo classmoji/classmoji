@@ -24,6 +24,7 @@ import Tasks from '@classmoji/tasks';
 import { ActionTypes } from '~/constants';
 import getPrisma from '@classmoji/database';
 import {
+  canonicalTimeZone,
   defaultContentRepoName,
   sanitizeRepoName,
   suggestContentNamespace,
@@ -125,7 +126,14 @@ export const action = checkAuth(async ({ request }: { request: Request }) => {
     slug: slugInput,
     content_repo: contentRepoInput,
     importConfig,
+    timezone: browserTimeZone,
   } = await request.json();
+
+  // The creator's browser zone becomes the course's time zone. Validated
+  // against Intl and stored canonically; anything else is dropped (the course
+  // simply starts with no zone, which the owner can set in General settings)
+  // rather than failing the creation over a rendering preference.
+  const initialTimeZone = canonicalTimeZone(browserTimeZone);
 
   if (!name) {
     return { error: 'Classroom name is required' };
@@ -432,7 +440,7 @@ export const action = checkAuth(async ({ request }: { request: Request }) => {
           });
 
           await tx.classroomSettings.create({
-            data: { classroom_id: row.id },
+            data: { classroom_id: row.id, timezone: initialTimeZone },
           });
 
           await tx.classroomMembership.create({
@@ -527,6 +535,14 @@ export const action = checkAuth(async ({ request }: { request: Request }) => {
         }
       }
     }
+  }
+
+  // A grading scale from day one. Runs after the config import above so a
+  // copied scale wins; only a classroom with no mappings gets the default.
+  try {
+    await ClassmojiService.emojiMapping.ensureDefaultScale(classroom.id);
+  } catch (error: unknown) {
+    console.error('Default grading scale seeding failed:', error);
   }
 
   // Create per-classroom GitHub teams (e.g., "cs101-25w-students", "cs101-25w-assistants")

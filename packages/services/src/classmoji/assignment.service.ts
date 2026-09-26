@@ -1,8 +1,11 @@
 /**
- * Assignment Service (formerly Issue)
+ * Assignment Service
  *
- * An Assignment represents a specific deadline/branch configuration within a Repository.
- * Students work on GitRepoAssignments which track their progress on these Assignments.
+ * An Assignment is a gradable unit inside a Module. Its `type` says what it
+ * points at: REPO (a GitHub issue in the repository's student repos, the only
+ * kind that carries grades today), QUIZ, or FORM. `weight` is the only grading
+ * weight in the system. Students work on GitRepoAssignments which track their
+ * progress on REPO assignments.
  */
 import getPrisma from '@classmoji/database';
 import { titleToIdentifier } from '@classmoji/utils';
@@ -18,11 +21,14 @@ export const findById = async (id: string) => {
   return getPrisma().assignment.findUnique({
     where: { id },
     include: {
+      module: true,
       repository: {
         include: {
           classroom: true,
         },
       },
+      quiz: true,
+      form: true,
       git_repo_assignments: true,
     },
   });
@@ -35,13 +41,8 @@ export const findById = async (id: string) => {
  * @returns {Promise<Object|null>}
  */
 export const findByModuleAndTitle = async (repositoryId: string, title: string) => {
-  return getPrisma().assignment.findUnique({
-    where: {
-      repository_id_title: {
-        repository_id: repositoryId,
-        title,
-      },
-    },
+  return getPrisma().assignment.findFirst({
+    where: { repository_id: repositoryId, title },
     include: {
       repository: true,
     },
@@ -87,15 +88,75 @@ export const findByClassroomId = async (
 ) => {
   return getPrisma().assignment.findMany({
     where: {
-      repository: {
-        classroom_id: classroomId,
-      },
+      module: { classroom_id: classroomId },
       ...query,
     },
     include: {
+      module: true,
       repository: true,
     },
     orderBy: { created_at: 'asc' },
+  });
+};
+
+/** The include every flat assignment listing carries. */
+const LIST_INCLUDE = {
+  // Linked resources, so the edit modal can prefill them.
+  pages: { select: { page: { select: { id: true } } } },
+  slides: { select: { slide: { select: { id: true } } } },
+  module: { select: { id: true, title: true, slug: true, position: true } },
+  repository: {
+    select: { id: true, title: true, slug: true, type: true, template: true, is_published: true },
+  },
+  quiz: { select: { id: true, name: true, status: true } },
+  form: { select: { id: true, title: true, slug: true, status: true } },
+  _count: { select: { git_repo_assignments: true } },
+} satisfies Prisma.AssignmentInclude;
+
+const LIST_ORDER = [
+  { module: { position: 'asc' } },
+  // The order the Modules screen arranges by hand; deadline and title are the
+  // tie-break for rows that have never been dragged.
+  { position: 'asc' },
+  { student_deadline: { sort: 'asc', nulls: 'last' } },
+  { title: 'asc' },
+] satisfies Prisma.AssignmentOrderByWithRelationInput[];
+
+/**
+ * Every assignment in a classroom, flat, with its module and target resolved.
+ * Feeds the class-level Assignments page and the gradebook's column list.
+ */
+export const listForClassroom = async (
+  classroomId: string,
+  { publishedOnly = false }: { publishedOnly?: boolean } = {}
+) => {
+  return getPrisma().assignment.findMany({
+    where: {
+      module: { classroom_id: classroomId },
+      ...(publishedOnly ? { is_published: true } : {}),
+    },
+    include: LIST_INCLUDE,
+    orderBy: LIST_ORDER,
+  });
+};
+
+/**
+ * One assignment, with the same module/target shape the lists carry, or null
+ * when it is not in this classroom. Feeds the assignment page.
+ */
+export const findByIdInClassroom = async (id: string, classroomId: string) => {
+  return getPrisma().assignment.findFirst({
+    where: { id, module: { classroom_id: classroomId } },
+    include: LIST_INCLUDE,
+  });
+};
+
+/** The assignments of one module, in display order. */
+export const findByModuleId = async (moduleId: string) => {
+  return getPrisma().assignment.findMany({
+    where: { module_id: moduleId },
+    include: LIST_INCLUDE,
+    orderBy: LIST_ORDER,
   });
 };
 
@@ -108,15 +169,14 @@ export const findByClassroomId = async (
 export const findUpcoming = async (classroomId: string, afterDate: Date = new Date()) => {
   return getPrisma().assignment.findMany({
     where: {
-      repository: {
-        classroom_id: classroomId,
-      },
+      module: { classroom_id: classroomId },
       is_published: true,
       student_deadline: {
         gte: afterDate,
       },
     },
     include: {
+      module: true,
       repository: true,
     },
     orderBy: { student_deadline: 'asc' },
@@ -131,6 +191,10 @@ export const findUpcoming = async (classroomId: string, afterDate: Date = new Da
 export const findReadyForRelease = async (beforeDate: Date = new Date()) => {
   return getPrisma().assignment.findMany({
     where: {
+      // Only REPO assignments are released into student repos as issues.
+      // Quiz and form assignments never reach the release workflow.
+      type: 'REPO',
+      repository_id: { not: null },
       is_published: false,
       release_at: {
         lte: beforeDate,
@@ -169,11 +233,29 @@ export const findReadyForRelease = async (beforeDate: Date = new Date()) => {
 export const setReleaseNow = async (repositoryId: string, assignmentIds?: string[]) => {
   return getPrisma().assignment.updateMany({
     where: {
+      type: 'REPO',
       repository_id: repositoryId,
       is_published: false,
       ...(assignmentIds && assignmentIds.length > 0 ? { id: { in: assignmentIds } } : {}),
     },
     data: { release_at: new Date() },
+  });
+};
+
+/**
+ * Flip a repository's REPO assignments whose release date has passed to
+ * published. For a self-formed group repository nothing provisions rows at
+ * publish time (teams do not exist yet), so this is what releases them.
+ */
+export const publishReleased = async (repositoryId: string) => {
+  return getPrisma().assignment.updateMany({
+    where: {
+      type: 'REPO',
+      repository_id: repositoryId,
+      is_published: false,
+      release_at: { lte: new Date() },
+    },
+    data: { is_published: true },
   });
 };
 
@@ -183,6 +265,7 @@ export const findForReleaseByRepository = async (
 ) => {
   return getPrisma().assignment.findMany({
     where: {
+      type: 'REPO',
       repository_id: repositoryId,
       is_published: false,
       ...(assignmentIds && assignmentIds.length > 0 ? { id: { in: assignmentIds } } : {}),
@@ -216,15 +299,68 @@ export const findForReleaseByRepository = async (
  * @param {Date} [data.release_at] - Auto-release date
  * @returns {Promise<Object>}
  */
+export type AssignmentTargetType = 'REPO' | 'QUIZ' | 'FORM';
+
+/**
+ * Exactly one target, matching the kind. Mirrors the assignments_type_target
+ * CHECK so a caller gets a readable error instead of a constraint violation.
+ * A repository is storage a REPO assignment points at, not a module member,
+ * so assignments in different modules may share one repository.
+ */
+const validateTarget = async (data: Prisma.AssignmentUncheckedCreateInput) => {
+  const type = (data.type ?? 'REPO') as AssignmentTargetType;
+  const targets = {
+    repository_id: data.repository_id ?? null,
+    quiz_id: data.quiz_id ?? null,
+    form_id: data.form_id ?? null,
+  };
+  const expected = { REPO: 'repository_id', QUIZ: 'quiz_id', FORM: 'form_id' }[type];
+  if (!expected) throw new Error(`Unknown assignment type: ${String(type)}`);
+  for (const [column, value] of Object.entries(targets)) {
+    if (column === expected && !value) {
+      throw new Error(`A ${type} assignment needs a ${column}`);
+    }
+    if (column !== expected && value) {
+      throw new Error(`A ${type} assignment cannot have a ${column}`);
+    }
+  }
+  if (type === 'REPO') {
+    const repository = await getPrisma().repository.findUnique({
+      where: { id: targets.repository_id! },
+      select: { id: true },
+    });
+    if (!repository) throw new Error('Repository not found');
+  }
+  return type;
+};
+
+/** Where an assignment lands when nothing says otherwise: after the last one. */
+const nextPositionInModule = async (moduleId: string) => {
+  const last = await getPrisma().assignment.findFirst({
+    where: { module_id: moduleId },
+    orderBy: { position: 'desc' },
+    select: { position: true },
+  });
+  return last ? last.position + 1 : 0;
+};
+
 export const create = async (data: Prisma.AssignmentUncheckedCreateInput) => {
+  const type = await validateTarget(data);
   return getPrisma().assignment.create({
     data: {
       ...data,
+      type,
       slug: titleToIdentifier(data.title),
       weight: Number(data.weight || 100),
+      // Position 0 is the top of the module's list, so an assignment that does
+      // not name one is appended instead of taking the column default.
+      position: data.position ?? (await nextPositionInModule(data.module_id)),
     },
     include: {
+      module: true,
       repository: true,
+      quiz: true,
+      form: true,
     },
   });
 };
@@ -260,10 +396,32 @@ export const update = async (id: string, updates: Prisma.AssignmentUpdateInput) 
     where: { id },
     data: updates,
     include: {
+      module: true,
       repository: true,
     },
   });
 
+  await notifyAfterUpdate(id, updates, previous, updated);
+
+  return updated;
+};
+
+type AssignmentNotificationSnapshot = { student_deadline: Date | null; grades_released: boolean };
+
+/**
+ * Due-date-changed and graded notifications, shared by every update path.
+ * The classroom comes from the module, which every assignment has; the
+ * repository is null for quiz/form assignments.
+ */
+const notifyAfterUpdate = async (
+  id: string,
+  updates: Prisma.AssignmentUpdateInput | Prisma.AssignmentUncheckedUpdateInput,
+  previous: AssignmentNotificationSnapshot | null,
+  updated: AssignmentNotificationSnapshot & {
+    title: string;
+    module: { classroom_id: string };
+  }
+) => {
   if ('student_deadline' in updates) {
     await notificationService.runSafely('assignment due date notification', async () => {
       const newDeadline = updated.student_deadline?.toISOString() ?? null;
@@ -296,7 +454,7 @@ export const update = async (id: string, updates: Prisma.AssignmentUpdateInput) 
       if (recipientIds.length > 0) {
         await notificationService.createNotifications({
           type: 'ASSIGNMENT_GRADED',
-          classroomId: updated.repository.classroom_id,
+          classroomId: updated.module.classroom_id,
           recipientUserIds: recipientIds,
           resourceType: 'assignment',
           resourceId: id,
@@ -305,8 +463,316 @@ export const update = async (id: string, updates: Prisma.AssignmentUpdateInput) 
       }
     });
   }
+};
+
+/** Input for the classroom-scoped write helpers below. */
+export type SubmissionModeInput = 'ISSUE' | 'REPO';
+
+export interface AssignmentWriteInput {
+  module_id: string;
+  type: AssignmentTargetType;
+  /** REPO assignments only: ISSUE (close an issue) or REPO (a push submits). */
+  submission_mode?: SubmissionModeInput;
+  repository_id?: string | null;
+  quiz_id?: string | null;
+  form_id?: string | null;
+  title: string;
+  weight?: number;
+  is_extra_credit?: boolean;
+  is_published?: boolean;
+  description?: string;
+  student_deadline?: Date | string | null;
+  grader_deadline?: Date | string | null;
+  release_at?: Date | string | null;
+  tokens_per_hour?: number;
+  grades_released?: boolean;
+  /** Pages / slide decks attached to the assignment; replaces the current set when given. */
+  page_ids?: string[];
+  slide_ids?: string[];
+}
+
+/**
+ * Replace the pages / slide decks linked to an assignment. Links the caller
+ * leaves out are removed; links already present are kept (no churn on the
+ * `order` column).
+ */
+const syncContentLinks = async (
+  assignmentId: string,
+  pageIds: string[] | undefined,
+  slideIds: string[] | undefined
+) => {
+  const prisma = getPrisma();
+  if (pageIds) {
+    const current = (
+      await prisma.pageLink.findMany({
+        where: { assignment_id: assignmentId },
+        select: { page_id: true },
+      })
+    ).map(l => l.page_id);
+    const toAdd = pageIds.filter(id => !current.includes(id));
+    const toRemove = current.filter(id => !pageIds.includes(id));
+    if (toAdd.length) {
+      await prisma.pageLink.createMany({
+        data: toAdd.map(page_id => ({ page_id, assignment_id: assignmentId })),
+        skipDuplicates: true,
+      });
+    }
+    if (toRemove.length) {
+      await prisma.pageLink.deleteMany({
+        where: { assignment_id: assignmentId, page_id: { in: toRemove } },
+      });
+    }
+  }
+  if (slideIds) {
+    const current = (
+      await prisma.slideLink.findMany({
+        where: { assignment_id: assignmentId },
+        select: { slide_id: true },
+      })
+    ).map(l => l.slide_id);
+    const toAdd = slideIds.filter(id => !current.includes(id));
+    const toRemove = current.filter(id => !slideIds.includes(id));
+    if (toAdd.length) {
+      await prisma.slideLink.createMany({
+        data: toAdd.map(slide_id => ({ slide_id, assignment_id: assignmentId })),
+        skipDuplicates: true,
+      });
+    }
+    if (toRemove.length) {
+      await prisma.slideLink.deleteMany({
+        where: { assignment_id: assignmentId, slide_id: { in: toRemove } },
+      });
+    }
+  }
+};
+
+const toDate = (value: Date | string | null | undefined): Date | null | undefined =>
+  value === undefined ? undefined : value === null ? null : new Date(value);
+
+/**
+ * Create an assignment on behalf of a classroom. The module and every target
+ * are proven to live in that classroom before anything is written; the
+ * type/target shape is then validated by `create`.
+ */
+export const createInClassroom = async (classroomId: string, input: AssignmentWriteInput) => {
+  const prisma = getPrisma();
+  // Prisma drops an undefined id from a `where`, which would turn this scoped
+  // lookup into "any module in the classroom". Refuse up front.
+  if (typeof input.module_id !== 'string' || !input.module_id) {
+    throw new Error('A module is required');
+  }
+  const module = await prisma.module.findFirst({
+    where: { id: input.module_id, classroom_id: classroomId },
+    select: { id: true },
+  });
+  if (!module) throw new Error('Module not found in classroom');
+
+  if (input.repository_id) {
+    const repository = await prisma.repository.findFirst({
+      where: { id: input.repository_id, classroom_id: classroomId },
+      select: { id: true },
+    });
+    if (!repository) throw new Error('Repository not found in classroom');
+  }
+  if (input.quiz_id) {
+    const quiz = await prisma.quiz.findFirst({
+      where: { id: input.quiz_id, classroom_id: classroomId },
+      select: { id: true },
+    });
+    if (!quiz) throw new Error('Quiz not found in classroom');
+  }
+  if (input.form_id) {
+    const form = await prisma.form.findFirst({
+      where: { id: input.form_id, classroom_id: classroomId },
+      select: { id: true },
+    });
+    if (!form) throw new Error('Form not found in classroom');
+  }
+
+  const created = await create({
+    module_id: input.module_id,
+    type: input.type,
+    submission_mode: input.type === 'REPO' ? (input.submission_mode ?? 'ISSUE') : 'ISSUE',
+    repository_id: input.repository_id ?? null,
+    quiz_id: input.quiz_id ?? null,
+    form_id: input.form_id ?? null,
+    title: input.title,
+    weight: input.weight,
+    is_extra_credit: input.is_extra_credit ?? false,
+    is_published: input.is_published ?? false,
+    description: input.description ?? '',
+    student_deadline: toDate(input.student_deadline) ?? null,
+    grader_deadline: toDate(input.grader_deadline) ?? null,
+    release_at: toDate(input.release_at) ?? null,
+    tokens_per_hour: input.tokens_per_hour ?? 0,
+    grades_released: input.grades_released ?? false,
+  });
+  await syncContentLinks(created.id, input.page_ids, input.slide_ids);
+  return created;
+};
+
+/**
+ * Update an assignment the classroom owns. Type and target are immutable
+ * (change the kind by deleting and recreating); everything else is editable.
+ * Notifications fire exactly as they do for `update`.
+ */
+export const updateInClassroom = async (
+  id: string,
+  classroomId: string,
+  input: Partial<
+    Omit<AssignmentWriteInput, 'module_id' | 'type' | 'repository_id' | 'quiz_id' | 'form_id'>
+  >
+) => {
+  const prisma = getPrisma();
+  const previous = await prisma.assignment.findFirst({
+    where: { id, module: { classroom_id: classroomId } },
+    select: {
+      id: true,
+      type: true,
+      submission_mode: true,
+      student_deadline: true,
+      grades_released: true,
+      _count: { select: { git_repo_assignments: true } },
+    },
+  });
+  if (!previous) throw new Error('Assignment not found in classroom');
+
+  const data: Prisma.AssignmentUncheckedUpdateInput = {};
+  // The mode may change only while no submission row exists: flipping it
+  // afterwards would strand issues already opened, or rows that expect none.
+  if (input.submission_mode !== undefined && input.submission_mode !== previous.submission_mode) {
+    if (previous.type !== 'REPO') throw new Error('Only REPO assignments have a submission mode');
+    if (previous._count.git_repo_assignments > 0) {
+      throw new Error('Submission mode cannot change once students have submission rows');
+    }
+    data.submission_mode = input.submission_mode;
+  }
+  if (input.title !== undefined) data.title = input.title;
+  if (input.weight !== undefined) data.weight = Number(input.weight);
+  if (input.is_extra_credit !== undefined) data.is_extra_credit = input.is_extra_credit;
+  if (input.is_published !== undefined) data.is_published = input.is_published;
+  if (input.description !== undefined) data.description = input.description;
+  if (input.student_deadline !== undefined) data.student_deadline = toDate(input.student_deadline);
+  if (input.grader_deadline !== undefined) data.grader_deadline = toDate(input.grader_deadline);
+  if (input.release_at !== undefined) data.release_at = toDate(input.release_at);
+  if (input.tokens_per_hour !== undefined) data.tokens_per_hour = input.tokens_per_hour;
+  if (input.grades_released !== undefined) data.grades_released = input.grades_released;
+
+  const updated = await prisma.assignment.update({
+    where: { id },
+    data,
+    include: { module: true, repository: true, quiz: true, form: true },
+  });
+  await syncContentLinks(id, input.page_ids, input.slide_ids);
+
+  await notifyAfterUpdate(id, data, previous, updated);
 
   return updated;
+};
+
+/** Delete an assignment the classroom owns. Submissions and grades cascade. */
+/**
+ * Persist a new ordering for one module's assignments. `orderedAssignmentIds`
+ * is the full list in its new order; each row's position becomes its index.
+ * The module is proven to belong to the classroom first, and the list has to
+ * name every assignment in it — a partial list would leave the rest behind on
+ * stale positions.
+ */
+export const reorderInModule = async (
+  moduleId: string,
+  orderedAssignmentIds: string[],
+  classroomId: string
+) => {
+  const prisma = getPrisma();
+
+  const module = await prisma.module.findFirst({
+    where: { id: moduleId, classroom_id: classroomId },
+    select: { id: true },
+  });
+  if (!module) throw new Error('Module not found in classroom');
+
+  const existing = await prisma.assignment.findMany({
+    where: { module_id: moduleId },
+    select: { id: true },
+  });
+  const existingIds = new Set(existing.map(a => a.id));
+  const orderedIds = new Set(orderedAssignmentIds);
+  const matches =
+    existingIds.size === orderedAssignmentIds.length &&
+    orderedIds.size === orderedAssignmentIds.length &&
+    orderedAssignmentIds.every(id => existingIds.has(id));
+  if (!matches) throw new Error('Ordered assignment ids must match the module assignments');
+
+  await prisma.$transaction(
+    orderedAssignmentIds.map((id, index) =>
+      prisma.assignment.update({
+        where: { id, module_id: moduleId },
+        data: { position: index },
+      })
+    )
+  );
+};
+
+/**
+ * Move an assignment into `toModuleId` and give that module the ordering the
+ * caller hands over. `orderedAssignmentIds` is the TARGET module's full list
+ * after the move, the moved id included; the module it came from is compacted
+ * behind it. Passing the module it is already in is a plain reorder.
+ *
+ * Only the module changes: weight, deadlines, grades and submissions travel
+ * with the assignment, and the course grade is a weighted mean over all of
+ * them, so which module holds it does not move any number.
+ */
+export const moveToModule = async (
+  assignmentId: string,
+  toModuleId: string,
+  orderedAssignmentIds: string[],
+  classroomId: string
+) => {
+  const prisma = getPrisma();
+
+  const target = await prisma.module.findFirst({
+    where: { id: toModuleId, classroom_id: classroomId },
+    select: { id: true },
+  });
+  if (!target) throw new Error('Module not found in classroom');
+
+  const assignment = await prisma.assignment.findFirst({
+    where: { id: assignmentId, module: { classroom_id: classroomId } },
+    select: { id: true, module_id: true },
+  });
+  if (!assignment) throw new Error('Assignment not found in classroom');
+
+  const fromModuleId = assignment.module_id;
+  if (fromModuleId !== toModuleId) {
+    await prisma.assignment.update({
+      where: { id: assignmentId },
+      data: { module_id: toModuleId },
+    });
+  }
+
+  await reorderInModule(toModuleId, orderedAssignmentIds, classroomId);
+
+  if (fromModuleId !== toModuleId) {
+    const remaining = await prisma.assignment.findMany({
+      where: { module_id: fromModuleId },
+      orderBy: { position: 'asc' },
+      select: { id: true },
+    });
+    await prisma.$transaction(
+      remaining.map((row, index) =>
+        prisma.assignment.update({ where: { id: row.id }, data: { position: index } })
+      )
+    );
+  }
+};
+
+export const deleteInClassroom = async (id: string, classroomId: string) => {
+  const { count } = await getPrisma().assignment.deleteMany({
+    where: { id, module: { classroom_id: classroomId } },
+  });
+  if (count !== 1) throw new Error('Assignment not found in classroom');
+  return { id };
 };
 
 /**
@@ -399,6 +865,7 @@ export const findWithGradingSummary = async (id: string) => {
   const assignment = await getPrisma().assignment.findUnique({
     where: { id },
     include: {
+      module: true,
       repository: {
         include: {
           classroom: true,

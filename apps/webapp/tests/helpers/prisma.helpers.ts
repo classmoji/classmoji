@@ -62,12 +62,36 @@ export async function getClassroomBySlug(
 export async function getRepositoryByTitle(
   classroomId: string,
   title: string
-): Promise<{ id: string; title: string; is_published: boolean; weight: number } | null> {
+): Promise<{ id: string; title: string; is_published: boolean } | null> {
   const prisma = getTestPrisma();
   return prisma.repository.findUnique({
     where: { classroom_id_title: { classroom_id: classroomId, title } },
-    select: { id: true, title: true, is_published: true, weight: true },
+    select: { id: true, title: true, is_published: true },
   });
+}
+
+/**
+ * Find or create the Module a seeded assignment lives in. Every assignment
+ * belongs to exactly one module, so every seeder that creates one goes
+ * through here. Defaults to one shared, published module per classroom.
+ */
+export async function ensureSeedModule(
+  classroomId: string,
+  title = 'QA Seed Module'
+): Promise<{ moduleId: string }> {
+  const prisma = getTestPrisma();
+  const module = await prisma.module.upsert({
+    where: { classroom_id_title: { classroom_id: classroomId, title } },
+    update: {},
+    create: {
+      classroom_id: classroomId,
+      title,
+      slug: title.toLowerCase().replace(/\s+/g, '-'),
+      is_published: true,
+    },
+    select: { id: true },
+  });
+  return { moduleId: module.id };
 }
 
 /**
@@ -85,6 +109,7 @@ export async function getRepositoryPublishedState(id: string): Promise<boolean> 
 
 export interface SeededRepository {
   repositoryId: string;
+  moduleId: string;
   title: string;
   assignmentId: string;
   assignmentTitle: string;
@@ -98,10 +123,17 @@ export interface SeededRepository {
 export async function seedRepositoryWithAssignment(
   classroomId: string,
   title: string,
-  options: { isPublished?: boolean; weight?: number; assignmentTitle?: string } = {}
+  options: {
+    isPublished?: boolean;
+    /** Grading weight of the seeded ASSIGNMENT (weight lives on assignments now). */
+    weight?: number;
+    assignmentTitle?: string;
+    moduleId?: string;
+  } = {}
 ): Promise<SeededRepository> {
   const prisma = getTestPrisma();
   const { isPublished = true, weight = 5, assignmentTitle = `${title} Part 1` } = options;
+  const moduleId = options.moduleId ?? (await ensureSeedModule(classroomId)).moduleId;
 
   await prisma.repository
     .delete({ where: { classroom_id_title: { classroom_id: classroomId, title } } })
@@ -113,15 +145,16 @@ export async function seedRepositoryWithAssignment(
       title,
       slug: title,
       template: 'dev-org/test-template',
-      weight,
       type: 'INDIVIDUAL',
       is_published: isPublished,
       assignments: {
         create: [
           {
+            module_id: moduleId,
+            type: 'REPO',
             title: assignmentTitle,
             slug: assignmentTitle.toLowerCase().replace(/\s+/g, '-'),
-            weight: 100,
+            weight,
             is_published: isPublished,
           },
         ],
@@ -132,10 +165,22 @@ export async function seedRepositoryWithAssignment(
 
   return {
     repositoryId: repository.id,
+    moduleId,
     title: repository.title,
     assignmentId: repository.assignments[0].id,
     assignmentTitle: repository.assignments[0].title,
   };
+}
+
+/** Read an Assignment's grading fields by id. Returns null when absent. */
+export async function getAssignmentById(
+  id: string
+): Promise<{ id: string; title: string; weight: number; is_extra_credit: boolean } | null> {
+  const prisma = getTestPrisma();
+  return prisma.assignment.findUnique({
+    where: { id },
+    select: { id: true, title: true, weight: true, is_extra_credit: true },
+  });
 }
 
 /**
@@ -158,16 +203,24 @@ export interface SeededStudentSubmission extends SeededRepository {
  * has a real row to render and a spec can assert submission status in the DB.
  *
  * `status` controls whether the submission shows as "Submitted" (CLOSED) or
- * "Not submitted" (OPEN) on the student page.
+ * "Not submitted" (OPEN) on the student page. `submissionMode` picks how the
+ * student submits: ISSUE (the row is a GitHub issue) or REPO (a push is the
+ * submission; the row carries no issue).
  */
 export async function seedStudentSubmission(
   classroomId: string,
   studentId: string,
   title: string,
-  options: { status?: 'OPEN' | 'CLOSED'; gradesReleased?: boolean } = {}
+  options: {
+    status?: 'OPEN' | 'CLOSED';
+    gradesReleased?: boolean;
+    moduleId?: string;
+    submissionMode?: 'ISSUE' | 'REPO';
+  } = {}
 ): Promise<SeededStudentSubmission> {
   const prisma = getTestPrisma();
-  const { status = 'OPEN', gradesReleased = false } = options;
+  const { status = 'OPEN', gradesReleased = false, submissionMode = 'ISSUE' } = options;
+  const moduleId = options.moduleId ?? (await ensureSeedModule(classroomId)).moduleId;
 
   await prisma.repository
     .delete({ where: { classroom_id_title: { classroom_id: classroomId, title } } })
@@ -179,15 +232,17 @@ export async function seedStudentSubmission(
       title,
       slug: title,
       template: 'dev-org/test-template',
-      weight: 5,
       type: 'INDIVIDUAL',
       is_published: true,
       assignments: {
         create: [
           {
+            module_id: moduleId,
+            type: 'REPO',
+            submission_mode: submissionMode,
             title: `${title} Assignment`,
             slug: `${title}-assignment`,
-            weight: 100,
+            weight: 5,
             is_published: true,
             grades_released: gradesReleased,
           },
@@ -216,14 +271,18 @@ export async function seedStudentSubmission(
       git_repo_id: gitRepo.id,
       assignment_id: assignment.id,
       provider: 'GITHUB',
-      provider_id: `test-issue-${uniqueSuffix}`,
-      provider_issue_number: 9001,
+      // A REPO-mode submission has no issue behind it.
+      ...(submissionMode === 'ISSUE'
+        ? { provider_id: `test-issue-${uniqueSuffix}`, provider_issue_number: 9001 }
+        : {}),
       status,
+      ...(status === 'CLOSED' ? { closed_at: new Date() } : {}),
     },
   });
 
   return {
     repositoryId: repository.id,
+    moduleId,
     title: repository.title,
     assignmentId: assignment.id,
     assignmentTitle: assignment.title,
@@ -248,16 +307,19 @@ export async function getSubmissionStatus(gitRepoAssignmentId: string): Promise<
 
 /**
  * Force a submission's status in the DB (used to model a student re-submitting
- * via GitHub, which the webapp surfaces but does not itself mutate).
+ * via GitHub, which the webapp surfaces but does not itself mutate). CLOSED
+ * also stamps the submission time (the issue close, or in REPO mode the push
+ * the webhook would have recorded); OPEN clears it.
  */
 export async function setSubmissionStatus(
   gitRepoAssignmentId: string,
-  status: 'OPEN' | 'CLOSED'
+  status: 'OPEN' | 'CLOSED',
+  closedAt: Date = new Date()
 ): Promise<void> {
   const prisma = getTestPrisma();
   await prisma.gitRepoAssignment.update({
     where: { id: gitRepoAssignmentId },
-    data: { status },
+    data: { status, closed_at: status === 'CLOSED' ? closedAt : null },
   });
 }
 
@@ -710,7 +772,7 @@ export async function deleteFormById(id: string): Promise<void> {
 /** Upsert the three student-navigation visibility toggles for a classroom. */
 export async function setClassroomNavVisibility(
   classroomSlug: string,
-  flags: { showModules?: boolean; showPages?: boolean; showRepos?: boolean }
+  flags: { showModules?: boolean; showPages?: boolean }
 ): Promise<void> {
   const prisma = getTestPrisma();
   const classroom = await prisma.classroom.findFirst({
@@ -722,7 +784,6 @@ export async function setClassroomNavVisibility(
   const data = {
     ...(flags.showModules !== undefined ? { show_modules: flags.showModules } : {}),
     ...(flags.showPages !== undefined ? { show_pages: flags.showPages } : {}),
-    ...(flags.showRepos !== undefined ? { show_repos: flags.showRepos } : {}),
   };
 
   await prisma.classroomSettings.upsert({

@@ -23,12 +23,16 @@
  *                     system_prompt/rubric_prompt); staff get the admin one.
  *   calendar        — any member; calendar.getClassroomCalendar already
  *                     expands recurrence and merges assignment deadlines. The
- *                     parameterless URI covers the current UTC month (web
- *                     default); …/calendar/{start}/{end} takes ISO dates.
+ *                     parameterless URI covers the current month in the
+ *                     classroom's zone (web default shape);
+ *                     …/calendar/{start}/{end} takes ISO dates, read as whole
+ *                     days in that zone.
  */
 
 import { ClassmojiService } from '@classmoji/services';
+import { isRealCalendarDate, localDayRange, localMonthGridRange } from '@classmoji/utils';
 import { ToolError } from '../mcp/errors.ts';
+import { renderZone } from '../mcp/localTimes.ts';
 import type { ResourceDefinition, ToolContext } from '../mcp/registry.ts';
 import { assertProTier } from '../authz/proTier.ts';
 import { MEMBER, QUIZ_ROLES, classroomCtx, isStaff, sanitizedSettings } from './shape.ts';
@@ -308,8 +312,33 @@ interface CalendarLinkedSlide {
   slide?: { id: string; title?: string | null; is_draft?: boolean } | null;
 }
 interface CalendarLinkedAssignment {
-  assignment?: { id: string; title?: string | null; slug?: string | null } | null;
-  repository?: { id: string; title?: string | null; slug?: string | null } | null;
+  assignment?: {
+    id: string;
+    title?: string | null;
+    slug?: string | null;
+    is_published?: boolean;
+  } | null;
+  repository?: {
+    id: string;
+    title?: string | null;
+    slug?: string | null;
+    is_published?: boolean;
+  } | null;
+}
+
+/**
+ * The one linked resource the web calendar draws under an event in month view.
+ *
+ * The service has already decided it for the viewer being answered — a student
+ * whose event stars a draft gets null, not a withheld title — and the shaping
+ * below applies the staff-only rule a second time, as it does to every other
+ * piece of linked content here.
+ */
+interface CalendarFeaturedResource {
+  kind: string;
+  id: string;
+  title?: string | null;
+  is_draft?: boolean;
 }
 
 /** Union row shape: expanded CalendarEvents + synthesized deadline items. */
@@ -334,17 +363,30 @@ interface CalendarRow {
   pages?: CalendarLinkedPage[];
   slides?: CalendarLinkedSlide[];
   assignments?: CalendarLinkedAssignment[];
+  featured_resource?: CalendarFeaturedResource | null;
 }
 
 /**
- * Allowlist shaping for calendar rows. getClassroomCalendar returns raw
- * service rows whose `...event` spread carries the UNFILTERED
- * pageLinks/slideLinks/assignmentLinks include — draft/unpublished page and
- * slide titles a student must never see — plus overrides and other edit-UI
- * internals the web never renders. Emit only what the web calendar actually
- * shows: the event's own fields and the display-mapped linked content (which
- * the service already draft-filters for events); drafts are additionally
- * stripped for non-staff wherever the flag rides along.
+ * Allowlist shaping for calendar rows: emit only what the web calendar shows —
+ * the event's own fields and the display-mapped linked content.
+ *
+ * The service builds its display arrays for the viewer it was told about
+ * (`canSeeDrafts`, passed below). This shaping is the second, independent pass:
+ * it names the keys that may leave this server, and it re-applies the
+ * staff-only rule to the linked content it emits, so a row that arrives with a
+ * draft page, a draft deck or an unpublished assignment on it still does not
+ * reach a student through here.
+ *
+ * A staff payload keeps the publication flags alongside the titles. Staff are
+ * shown unpublished linked content, and a title on its own does not say that
+ * the class cannot see it yet — the web calendar marks those with a Draft pill
+ * for the same reason. A student's rows carry no such content, so the flags
+ * would be a constant `false` there and are left off.
+ *
+ * `featured_resource` — which ONE of those links the web calendar shows under
+ * the event in month view — is emitted for both, in the form the viewer's own
+ * calendar would draw: null where nothing is starred, and null for a student
+ * whose event stars something they may not see.
  */
 function shapeCalendarRow(row: CalendarRow, staff: boolean) {
   const pages = (row.pages ?? [])
@@ -352,33 +394,58 @@ function shapeCalendarRow(row: CalendarRow, staff: boolean) {
     .filter((p): p is NonNullable<CalendarLinkedPage['page']> =>
       Boolean(p && (staff || p.is_draft !== true))
     )
-    .map(p => ({ id: p.id, title: p.title ?? null }));
+    .map(p => ({
+      id: p.id,
+      title: p.title ?? null,
+      ...(staff ? { is_draft: p.is_draft === true } : {}),
+    }));
   const slides = (row.slides ?? [])
     .map(l => l.slide)
     .filter((s): s is NonNullable<CalendarLinkedSlide['slide']> =>
       Boolean(s && (staff || s.is_draft !== true))
     )
-    .map(s => ({ id: s.id, title: s.title ?? null }));
+    .map(s => ({
+      id: s.id,
+      title: s.title ?? null,
+      ...(staff ? { is_draft: s.is_draft === true } : {}),
+    }));
   const assignments = (row.assignments ?? []).flatMap(l =>
-    l.assignment
+    l.assignment &&
+    (staff || (l.assignment.is_published !== false && l.repository?.is_published !== false))
       ? [
           {
             assignment: {
               id: l.assignment.id,
               title: l.assignment.title ?? null,
               slug: l.assignment.slug ?? null,
+              ...(staff ? { is_published: l.assignment.is_published !== false } : {}),
             },
             repository: l.repository
               ? {
                   id: l.repository.id,
                   title: l.repository.title ?? null,
                   slug: l.repository.slug ?? null,
+                  ...(staff ? { is_published: l.repository.is_published !== false } : {}),
                 }
               : null,
           },
         ]
       : []
   );
+
+  // The starred resource follows the same two rules as the arrays above: the
+  // staff-only filter is re-applied here, and the publication flag travels only
+  // with a staff payload, where it is what marks the Draft treatment.
+  const featured = row.featured_resource;
+  const featured_resource =
+    featured && (staff || featured.is_draft !== true)
+      ? {
+          kind: featured.kind,
+          id: featured.id,
+          title: featured.title ?? null,
+          ...(staff ? { is_draft: featured.is_draft === true } : {}),
+        }
+      : null;
 
   return {
     id: row.id,
@@ -407,35 +474,36 @@ function shapeCalendarRow(row: CalendarRow, staff: boolean) {
     pages,
     slides,
     assignments,
+    featured_resource,
   };
 }
 
-/** Current UTC month expanded to grid-week boundaries ±1 day (web default). */
-function defaultCalendarRange(): { start: Date; end: Date } {
-  const now = new Date();
-  const firstOfMonth = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
-  const lastOfMonth = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 0));
-  const start = new Date(firstOfMonth);
-  start.setUTCDate(start.getUTCDate() - firstOfMonth.getUTCDay() - 1);
-  const end = new Date(lastOfMonth);
-  end.setUTCDate(end.getUTCDate() + (6 - lastOfMonth.getUTCDay()) + 1);
-  end.setUTCHours(23, 59, 59, 999);
-  return { start, end };
+/**
+ * The zone this request renders in (classroom setting, else the caller's hint,
+ * else UTC — see ClassroomContext.effectiveTimezone). Calendar windows are
+ * whole days in it: a Sun 11:59 PM EDT deadline is Mon 03:59Z, and a window of
+ * UTC days ending on that Sunday would silently drop it.
+ */
+function classroomZone(ctx: ToolContext): string | null {
+  const effective = classroomCtx(ctx).effectiveTimezone;
+  return effective ? renderZone(effective) : null;
 }
 
 async function loadCalendar(ctx: ToolContext, start: Date, end: Date) {
   const { classroomId, role } = classroomCtx(ctx);
   const staff = isStaff(role);
   // Mirrors the routes: students get published-only deadlines scoped to
-  // themselves; staff see unpublished too (raw link objects are edit-UI
-  // concerns and stay off).
+  // themselves; staff see unpublished ones too, and staff alone see draft
+  // pages, draft decks and links to unpublished assignments (`canSeeDrafts`).
+  // Raw link rows are an edit-UI concern and stay off.
   const events = (await ClassmojiService.calendar.getClassroomCalendar(
     classroomId,
     start,
     end,
     staff ? null : ctx.viewer.userId,
     false,
-    staff
+    staff,
+    { canSeeDrafts: staff }
   )) as CalendarRow[];
   return {
     range: { start: start.toISOString(), end: end.toISOString() },
@@ -454,10 +522,30 @@ export const calendarResource: ResourceDefinition = {
   scope: 'read',
   roles: MEMBER,
   handler: async (_vars, ctx) => {
-    const { start, end } = defaultCalendarRange();
+    // The current month in the CLASS zone, widened to grid weeks ±1 day (web
+    // default shape), so the last evening of a month is still that month.
+    const { start, end } = localMonthGridRange(new Date(), classroomZone(ctx));
     return loadCalendar(ctx, start, end);
   },
 };
+
+/**
+ * The pre-zone reading, kept for a caller that passes full ISO date-times rather
+ * than the documented bare dates: exact instants, end widened to the end of its
+ * UTC day as before. Null when either is unparseable or start is not before end.
+ */
+function exactRange(startRaw: string, endRaw: string): { start: Date; end: Date } | null {
+  // Full date-times only, on real calendar dates: Date silently rolls a bare or
+  // impossible date (`2026-02-30`) into the next month, which must be refused.
+  const realDateTime = (raw: string) =>
+    /^\d{4}-\d{2}-\d{2}T/.test(raw) && isRealCalendarDate(raw.slice(0, 10));
+  if (!realDateTime(startRaw) || !realDateTime(endRaw)) return null;
+  const start = new Date(startRaw);
+  const end = new Date(endRaw);
+  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || start >= end) return null;
+  end.setUTCHours(23, 59, 59, 999);
+  return { start, end };
+}
 
 export const calendarRangeResource: ResourceDefinition = {
   name: 'calendar-range',
@@ -469,15 +557,16 @@ export const calendarRangeResource: ResourceDefinition = {
   scope: 'read',
   roles: MEMBER,
   handler: async (vars, ctx) => {
-    const start = new Date(vars.start);
-    const end = new Date(vars.end);
-    if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || start >= end) {
+    // Whole days in the class zone: local 00:00 on `start` to local
+    // 23:59:59.999 on `end`. A bare date means a day on the course's calendar.
+    const range =
+      localDayRange(vars.start, vars.end, classroomZone(ctx)) ?? exactRange(vars.start, vars.end);
+    if (!range) {
       throw new ToolError(
         'invalid_params',
         'start/end must be ISO dates (YYYY-MM-DD) with start before end'
       );
     }
-    end.setUTCHours(23, 59, 59, 999);
-    return loadCalendar(ctx, start, end);
+    return loadCalendar(ctx, range.start, range.end);
   },
 };

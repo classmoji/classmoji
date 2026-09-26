@@ -1,7 +1,11 @@
 import { namedAction } from 'remix-utils/named-action';
 
 import { ClassmojiService } from '@classmoji/services';
-import { DEFAULT_EMOJI_MAPPINGS, DEFAULT_LETTER_GRADE_MAPPINGS } from '@classmoji/utils';
+import {
+  DEFAULT_EMOJI_MAPPINGS,
+  DEFAULT_LETTER_GRADE_MAPPINGS,
+  SCORE_EMOJI_MAPPINGS,
+} from '@classmoji/utils';
 import { requireClassroomAdmin, assertClassroomMutationAllowed } from '~/utils/routeAuth.server';
 import type { Route } from './+types/route';
 
@@ -60,6 +64,28 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
       return {
         action: 'POPULATE_DEFAULT_MAPPINGS',
         success: 'Default emoji mappings have been added.',
+      };
+    },
+
+    async populateScoreScaleMappings() {
+      // Same shape as populateDefaultMappings: wipe, then add the 11-step
+      // 0–100 scale. Grades awarded under the old emojis surface in the
+      // orphaned-grades banner, where the existing remap flow handles them.
+      const existingMappings = (await ClassmojiService.emojiMapping.findByClassroomId(
+        classroom.id,
+        true
+      )) as Array<{ emoji: string }>;
+      for (const mapping of existingMappings) {
+        await ClassmojiService.emojiMapping.deleteEmojiMapping(classroom.id, mapping.emoji);
+      }
+
+      for (const mapping of SCORE_EMOJI_MAPPINGS) {
+        await ClassmojiService.emojiMapping.saveEmojiMapping(classroom.id, mapping);
+      }
+
+      return {
+        action: 'POPULATE_SCORE_SCALE_MAPPINGS',
+        success: '0–100 grade scale added (11 emojis).',
       };
     },
 

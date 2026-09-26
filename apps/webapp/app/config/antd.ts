@@ -16,11 +16,25 @@ const theme = {
     // body text lands around ink-1 rather than pure black.
     colorTextBase: '#14151a',
     colorBgSolidActive: BRAND,
+    // Links read as ink, not as the brand green. antd derives colorLink from
+    // colorPrimary, which paints every <a>, Typography.Link and
+    // `Button type="link"` green — including plain text that only happens to be
+    // a link. Green stays for what it means: primary actions.
+    colorLink: '#2b2d35', // --ink-1
+    colorLinkHover: '#14151a', // --ink-0
+    colorLinkActive: '#14151a',
     fontFamily: FONT_SANS,
   },
   components: {
     Button: {
       algorithm: true,
+      // `algorithm: true` re-derives this component's palette from the
+      // overrides below, so Button's link colour comes from its own
+      // colorPrimary — green — and ignores the global colorLink. Set it here
+      // too, or `type="link"` stays green whatever the token says.
+      colorLink: '#2b2d35',
+      colorLinkHover: '#14151a',
+      colorLinkActive: '#14151a',
       // Primary button styling (green background, white text)
       colorPrimary: PRIMARY,
       colorPrimaryHover: PRIMARY_600,

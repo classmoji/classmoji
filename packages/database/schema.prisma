@@ -37,9 +37,21 @@ enum NotificationType {
   TA_REGRADE_ASSIGNED
 }
 
-enum AssignmentType {
+// How a Repository is provisioned: one git repo per student, or one per team.
+// (Was named AssignmentType before the coursework refactor; the name now
+// belongs to the kind of an Assignment.)
+enum RepositoryType {
   INDIVIDUAL
   GROUP
+}
+
+// What an Assignment points at. REPO assignments are GitHub issues in their
+// repository's student repos (graded); QUIZ and FORM assignments bind a quiz
+// or a form into a module and are structural only for now (no grade).
+enum AssignmentType {
+  REPO
+  QUIZ
+  FORM
 }
 
 enum TeamFormationMode {
@@ -50,6 +62,15 @@ enum TeamFormationMode {
 enum IssueStatus {
   OPEN
   CLOSED
+}
+
+// How a REPO assignment is submitted. ISSUE: Classmoji opens one GitHub issue
+// per student repo and closing it submits. REPO: no issue; any push to the
+// student repo's default branch submits, and the latest push (until graded)
+// is the submission time. Both grade on the same GitRepoAssignment row.
+enum SubmissionMode {
+  ISSUE
+  REPO
 }
 
 enum QuizStatus {
@@ -328,6 +349,8 @@ model User {
   /// Rows this user typed in on somebody else's behalf — see FormResponse.added_by.
   form_responses_added          FormResponse[]            @relation("FormResponseAddedBy")
   survey_responses              SurveyResponse[]
+  team_sets_created             TeamSet[]
+  team_set_runs_created         TeamSetRun[]
 
   @@unique([provider, provider_id])
   @@index([provider, login])
@@ -462,6 +485,7 @@ model Classroom {
   content_assets        ContentAsset[]
   content_index         ContentIndex[]
   media_objects         MediaObject[]
+  team_sets             TeamSet[]
 
   // Logically redundant now that slug is globally unique, but retained: it is
   // the compound key live upserts select on (githubClassroomImport, example
@@ -493,14 +517,31 @@ model ClassroomSettings {
   syllabus_bot_model           String?
   llm_provider                 String?
   llm_model                    String?
+  // Legacy: no quiz call sends a temperature or token cap, and the settings page
+  // no longer edits these. Kept (not dropped) so old rows stay readable.
   llm_temperature              Float?
   llm_max_tokens               Int?
   openai_api_key               String?
   anthropic_api_key            String?
   code_aware_model             String?
+  // Model for the code-aware quiz's repository-exploration sub-agent. Null =
+  // the platform EXPLORATION_MODEL. Runs in a Trigger.dev task on the platform
+  // Anthropic key, not anthropic_api_key above.
+  exploration_model            String?
   content_repo_name            String?
   default_student_page         String   @default("dashboard")
   theme                        String   @default("stone")
+  // The course's IANA time zone, e.g. `America/New_York` — THE one place a
+  // classroom records its zone. Everything that formats a date on the server
+  // reads it through classroom.getTimeZone: the public /schedule, Ask Moji's
+  // "now" line and the MCP server's `<field>_local` renderings. Null = not set:
+  // Ask Moji then falls back to the asking user's browser zone, and everything
+  // else to UTC, labelled as UTC. Set at creation from the creator's browser.
+  //
+  // Validated in classroom.updateSettings against Intl (canonical spelling
+  // stored); the CHECK in classroom_settings_timezone is a shape floor only,
+  // same reasoning as the deprecated ClassroomSite.timezone it replaces.
+  timezone                     String?
   created_at                   DateTime @default(now())
   updated_at                   DateTime @default(now()) @updatedAt
 
@@ -532,6 +573,14 @@ model ClassroomSite {
   // repair, never delete the site row (and with it the claimed subdomain).
   home_page_id              String?
   show_schedule             Boolean   @default(true)
+  // DEPRECATED — superseded by ClassroomSettings.timezone (migration
+  // classroom_settings_timezone copied every non-null value there). Nothing
+  // reads or writes this column any more. It is left in place, not dropped, so
+  // a process still running the previous release during a rolling deploy (the
+  // pages app deploys separately) does not select a column that is gone. Drop it
+  // in a later migration once no deployed build references it.
+  //
+  // Original note, kept for history:
   // The IANA zone the PUBLIC schedule renders deadlines in, e.g.
   // `America/New_York`. Null = fall back to UTC, and the schedule then LABELS
   // the date as UTC rather than printing a bare, ambiguous one.
@@ -662,6 +711,10 @@ model ImportJob {
 // REPOSITORY & ASSIGNMENT (formerly Assignment & Issue)
 // ============================================================================
 
+// The GitHub provisioning unit: a template that becomes one git repo per
+// student or team. A repository has no module of its own: it is the storage a
+// REPO assignment points at, and one repository can serve assignments in
+// several modules. Grading weight lives on the Assignments, not here.
 model Repository {
   id                      String             @id @default(uuid())
   classroom_id            String
@@ -670,11 +723,8 @@ model Repository {
   template                String // Template repo name
   description             String?
   is_published            Boolean            @default(false)
-  weight                  Int                @default(100)
-  type                    AssignmentType
+  type                    RepositoryType
   tag_id                  String?
-  is_extra_credit         Boolean            @default(false)
-  drop_lowest_count       Int                @default(0)
   team_formation_mode     TeamFormationMode? @default(INSTRUCTOR)
   team_formation_deadline DateTime?
   max_team_size           Int?
@@ -698,8 +748,11 @@ model Repository {
   @@map("repositories")
 }
 
-// A Module is a single ordered list of mixed content items (pages, repos,
-// quizzes, slides). Membership and ordering live on ModuleItem.
+// A Module is the root unit of coursework: it owns assignments (via their
+// module_id) and carries an ordered list of content items (pages, slides,
+// quizzes, forms) on ModuleItem. Repositories are classroom-level storage that
+// REPO assignments point at. Modules have no weight; grading weight lives on
+// Assignment.
 model Module {
   id           String   @id @default(uuid())
   classroom_id String
@@ -715,8 +768,9 @@ model Module {
   created_at   DateTime @default(now())
   updated_at   DateTime @default(now()) @updatedAt
 
-  classroom Classroom    @relation(fields: [classroom_id], references: [id], onDelete: Cascade)
-  items     ModuleItem[]
+  classroom   Classroom    @relation(fields: [classroom_id], references: [id], onDelete: Cascade)
+  items       ModuleItem[]
+  assignments Assignment[]
 
   @@unique([classroom_id, title])
   @@index([classroom_id])
@@ -725,6 +779,9 @@ model Module {
 
 enum ModuleItemType {
   PAGE
+  // Deprecated legacy pointer: it no longer implies ownership (a repository
+  // reaches a module only through its assignments). Rows are kept read-only;
+  // no new ones are written and the UI ignores them.
   REPOSITORY
   QUIZ
   SLIDE
@@ -763,23 +820,59 @@ model ModuleItem {
   @@map("module_items")
 }
 
+/// Ledger written by the coursework phase-1 migration: pre-migration backups
+/// of the repository columns it dropped, and every report it produced
+/// (drop-lowest classrooms, repositories that sat in several modules,
+/// synthesized modules, zero-weight repositories, title collisions, summary).
+/// Read with SQL after `db:deploy`; dropped by a later cleanup migration once
+/// the owner has acted on it.
+model CourseworkMigrationReport {
+  id           String   @id @default(uuid())
+  kind         String
+  classroom_id String?
+  subject_id   String?
+  details      Json?
+  created_at   DateTime @default(now())
+
+  @@index([kind])
+  @@map("coursework_migration_report")
+}
+
+// A gradable unit inside a Module. Exactly one target matches `type`
+// (enforced by the assignments_type_target CHECK): REPO -> repository_id,
+// QUIZ -> quiz_id, FORM -> form_id. `weight` is the only grading weight:
+// course grade = weighted mean over graded non-extra-credit assignments,
+// plus extra credit on top. Weights need not sum to 100.
 model Assignment {
-  id               String    @id @default(uuid())
-  repository_id    String
+  id               String         @id @default(uuid())
+  module_id        String
+  type             AssignmentType
+  // Meaningful for type = REPO only; quiz/form assignments keep the default.
+  submission_mode  SubmissionMode @default(ISSUE)
+  repository_id    String?
+  quiz_id          String?        @unique
+  form_id          String?        @unique
   title            String
   slug             String? // Set once on creation from title, never updated
-  weight           Int       @default(100)
-  is_published     Boolean   @default(false)
-  description      String    @default("")
+  // Manual order inside the module, as the admin Modules screen arranges it.
+  // Ties (and rows created before the column existed) fall back to deadline.
+  position         Int            @default(0)
+  weight           Float          @default(100)
+  is_extra_credit  Boolean        @default(false)
+  is_published     Boolean        @default(false)
+  description      String         @default("")
   student_deadline DateTime?
   grader_deadline  DateTime?
-  tokens_per_hour  Int       @default(0)
+  tokens_per_hour  Int            @default(0)
   release_at       DateTime?
-  grades_released  Boolean   @default(false)
-  created_at       DateTime  @default(now())
-  updated_at       DateTime  @default(now()) @updatedAt
+  grades_released  Boolean        @default(false)
+  created_at       DateTime       @default(now())
+  updated_at       DateTime       @default(now()) @updatedAt
 
-  repository           Repository                    @relation(fields: [repository_id], references: [id], onDelete: Cascade)
+  module               Module                        @relation(fields: [module_id], references: [id], onDelete: Cascade)
+  repository           Repository?                   @relation(fields: [repository_id], references: [id], onDelete: Cascade)
+  quiz                 Quiz?                         @relation(fields: [quiz_id], references: [id], onDelete: Cascade)
+  form                 Form?                         @relation(fields: [form_id], references: [id], onDelete: Cascade)
   git_repo_assignments GitRepoAssignment[]
   pages                PageLink[]
   slides               SlideLink[]
@@ -787,6 +880,7 @@ model Assignment {
 
   @@unique([repository_id, title])
   @@index([repository_id])
+  @@index([module_id])
   @@map("assignments")
 }
 
@@ -809,6 +903,10 @@ model GitRepo {
   // Read-only provider data captured at import time (e.g. GitHub Classroom
   // points / commit count). Not part of live grading — for viewing only.
   metadata       Json?
+  // When the provider last told us about a push to this repo (the webhook's
+  // receipt time). Independent of any assignment's submission time, which
+  // freezes at the deadline; this is what "Last push" shows.
+  last_push_at   DateTime?
   created_at     DateTime    @default(now())
   updated_at     DateTime    @default(now()) @updatedAt
 
@@ -888,11 +986,14 @@ model AutogradingResult {
   @@map("autograding_results")
 }
 
+// One student's (or team's) submission for one assignment. In ISSUE mode the
+// row is the GitHub issue in their repo (id = issue id, provider_id = issue
+// id); in REPO mode there is no issue and both provider fields are null.
 model GitRepoAssignment {
   id                    String      @id @default(uuid())
   provider              GitProvider
-  provider_id           String // GitHub issue ID
-  provider_issue_number Int // Issue #number
+  provider_id           String? // GitHub issue ID (ISSUE mode only)
+  provider_issue_number Int? // Issue #number (ISSUE mode only)
   git_repo_id           String
   assignment_id         String
   status                IssueStatus @default(OPEN)
@@ -910,6 +1011,7 @@ model GitRepoAssignment {
   analytics_snapshot GitRepoAnalyticsSnapshot?
 
   @@unique([provider, provider_id])
+  @@unique([git_repo_id, assignment_id])
   @@index([git_repo_id])
   @@index([assignment_id])
   @@map("git_repo_assignments")
@@ -1087,6 +1189,7 @@ model Tag {
   classroom    Classroom    @relation(fields: [classroom_id], references: [id], onDelete: Cascade)
   repositories Repository[]
   teams        TeamTag[]
+  team_sets    TeamSet[]
 
   @@unique([classroom_id, name])
   @@map("tags")
@@ -1182,6 +1285,7 @@ model Quiz {
   repository   Repository?   @relation(fields: [repository_id], references: [id])
   attempts     QuizAttempt[]
   module_items ModuleItem[]
+  assignment   Assignment?
 
   @@index([classroom_id])
   @@index([repository_id])
@@ -1426,6 +1530,13 @@ model CalendarEventPageLink {
   page_id         String
   occurrence_date DateTime? @db.Date // Date-only to avoid timezone issues
   order           Int       @default(0)
+  // The one linked resource the MONTH view shows under this event on this date.
+  // At most one row across ALL THREE link tables may carry it for a given
+  // (event, occurrence_date): the write locks the parent event row and sets it
+  // on exactly one created row. The per-table partial unique indexes added by
+  // the calendar_link_featured migration are the backstop within each table —
+  // Prisma cannot express a partial index, so they live only in that SQL.
+  featured        Boolean   @default(false)
   created_at      DateTime  @default(now())
 
   event CalendarEvent @relation(fields: [event_id], references: [id], onDelete: Cascade)
@@ -1444,6 +1555,8 @@ model CalendarEventSlideLink {
   slide_id        String
   occurrence_date DateTime? @db.Date
   order           Int       @default(0)
+  // See CalendarEventPageLink.featured — same column, same one-per-date rule.
+  featured        Boolean   @default(false)
   created_at      DateTime  @default(now())
 
   event CalendarEvent @relation(fields: [event_id], references: [id], onDelete: Cascade)
@@ -1461,6 +1574,8 @@ model CalendarEventAssignmentLink {
   assignment_id   String
   occurrence_date DateTime? @db.Date
   order           Int       @default(0)
+  // See CalendarEventPageLink.featured — same column, same one-per-date rule.
+  featured        Boolean   @default(false)
   created_at      DateTime  @default(now())
 
   event      CalendarEvent @relation(fields: [event_id], references: [id], onDelete: Cascade)
@@ -1696,6 +1811,8 @@ model Form {
   revisions    FormRevision[]
   responses    FormResponse[]
   module_items ModuleItem[]
+  assignment   Assignment?
+  team_sets    TeamSet[]
 
   @@unique([classroom_id, slug])
   @@index([classroom_id])
@@ -1839,6 +1956,101 @@ model FormMagicToken {
   /// the same id, and a duplicate must be a no-op rather than an error.
   @@index([provider_message_id])
   @@map("form_magic_tokens")
+}
+
+// ============================================================================
+// TEAM SETS
+// ============================================================================
+// A team set is one configured grouping of a CLASSROOM form's respondents
+// ("workshop-pairs"). A run is one solve of that configuration against the
+// responses as they stood when it started: a PROPOSAL, stored as ids and
+// integers only. Neither ever touches a Team row. Teams come into existence
+// only through a separate, owner-confirmed "create" step (teamSet.service
+// applyCreate), which adds teams under the set's tag and never deletes any —
+// a Team delete cascades to its repositories and their grades, so nothing on
+// this path is allowed to issue one.
+
+enum TeamSetRunStatus {
+  QUEUED
+  RUNNING
+  SOLVED
+  INFEASIBLE
+  FAILED
+  CANCELED
+}
+
+model TeamSet {
+  id             String   @id @default(uuid())
+  classroom_id   String
+  form_id        String
+  /// Slug-like; becomes the Tag name on create. Unique per form.
+  name           String
+  /// TeamSetConfig (version 1) — see teamSetConfig.ts.
+  config         Json
+  /// Set by create: the Tag every created team carries.
+  tag_id         String?
+  /// The run whose teams were created. Null until a create is CLAIMED; the
+  /// claim is an `updateMany … WHERE created_run_id IS NULL`, which is what
+  /// makes a double-confirm create one set of teams rather than two.
+  created_run_id String?
+  /// { status: 'RUNNING'|'DONE'|'FAILED', total, done, failed: [{team, reason}],
+  ///   teams: [{team_id, name}], started_at, finished_at }
+  create_state   Json?
+  created_by     String
+  created_at     DateTime @default(now())
+  updated_at     DateTime @default(now()) @updatedAt
+
+  classroom Classroom    @relation(fields: [classroom_id], references: [id], onDelete: Cascade)
+  form      Form         @relation(fields: [form_id], references: [id], onDelete: Cascade)
+  tag       Tag?         @relation(fields: [tag_id], references: [id], onDelete: SetNull)
+  creator   User         @relation(fields: [created_by], references: [id])
+  runs      TeamSetRun[]
+
+  @@unique([form_id, name])
+  @@index([classroom_id])
+  @@map("team_sets")
+}
+
+model TeamSetRun {
+  id             String           @id @default(uuid())
+  team_set_id    String
+  /// 1..n per set, shown to humans ("run 3"). Allocated under the set's row lock.
+  number         Int
+  status         TeamSetRunStatus @default(QUEUED)
+  /// Snapshot of TeamSet.config at start.
+  config         Json
+  /// TeamSetProblem — ids and integers only, no names or free text. This exact
+  /// JSON is what the solver reads.
+  problem        Json
+  /// TeamSetContext — ids only; what metrics and explanations need.
+  context        Json
+  /// Staleness snapshot: { revision_id, responses: [{id, user_id, updated_at,
+  /// answers_hash}], roster_user_ids }.
+  inputs         Json
+  seed           Int
+  /// e.g. "cpsat@9.15.6755"
+  engine         String
+  /// { teams: [{ slot, option_id, member_user_ids }] }
+  result         Json?
+  /// TeamSetMetrics
+  metrics        Json?
+  /// { status, objective, bound, wall_s }
+  solver         Json?
+  /// { issues?: CheckIssue[], core?: [{src, label}] }
+  diagnostics    Json?
+  /// Closed-vocabulary code, never raw exception text.
+  error          String?
+  trigger_run_id String?
+  created_by     String
+  created_at     DateTime         @default(now())
+  started_at     DateTime?
+  finished_at    DateTime?
+
+  team_set TeamSet @relation(fields: [team_set_id], references: [id], onDelete: Cascade)
+  creator  User    @relation(fields: [created_by], references: [id])
+
+  @@unique([team_set_id, number])
+  @@map("team_set_runs")
 }
 
 /// Path → git object map for a classroom's content repo, refreshed from push

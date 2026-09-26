@@ -16,6 +16,9 @@
  *   4. mutation gate (write-scope tools on a classroom: non-owners mutate
  *      only when the classroom is ACTIVE)
  *
+ * and AFTER it, for classroom-bound surfaces, adds a `<field>_local` rendering
+ * in the classroom's time zone next to every timestamp (see localTimes.ts).
+ *
  * Handlers are wrapped so ANY thrown error becomes a structured `isError`
  * tool result (S5) — never a hung request or a crashed process.
  *
@@ -41,6 +44,7 @@ import { resolveClassroomContext, type ClassroomContext } from '../authz/classro
 import { assertMutationAllowed, canEnterClassroom } from '../authz/pure.ts';
 import { ToolError, type ToolErrorKind } from './errors.ts';
 import { DEFAULT_RATE_LIMIT, tryConsume, type RateLimitConfig } from './rateLimit.ts';
+import { localizePayload, localizeToolResult, renderZone } from './localTimes.ts';
 
 export type Scope = 'read' | 'write';
 
@@ -300,7 +304,12 @@ function wrapHandler(def: ToolDefinition<never>, viewer: Viewer) {
         }
       }
 
-      return await (def.handler as ToolDefinition['handler'])(args, ctx);
+      const result = await (def.handler as ToolDefinition['handler'])(args, ctx);
+      // 5. Class-zone renderings next to every timestamp (mcp/localTimes.ts).
+      //    Classroom-bound tools only: without a classroom there is no zone.
+      return ctx.classroom
+        ? localizeToolResult(result, renderZone(ctx.classroom.effectiveTimezone))
+        : result;
     } catch (error) {
       return toErrorResult(error, def.name);
     }
@@ -375,7 +384,12 @@ function wrapResourceRead(def: ResourceDefinition, viewer: Viewer) {
         });
       }
 
-      const payload = await def.handler(vars, ctx, uri);
+      const raw = await def.handler(vars, ctx, uri);
+      // Same class-zone renderings the tools get, so a mirror tool and its
+      // resource keep returning the same document.
+      const payload = ctx.classroom
+        ? localizePayload(raw, renderZone(ctx.classroom.effectiveTimezone))
+        : raw;
       return {
         contents: [
           {
@@ -466,8 +480,21 @@ export function toolAnnotations(def: ToolDefinition<never>): {
  * all, so tools/list + resources/list only ever show what the token can
  * actually call (S7).
  */
+/**
+ * Server-level guidance every MCP client sees at initialize — including the
+ * Claude.ai connector, which reads deadlines through many tools (quizzes,
+ * forms, grades) whose descriptions do not each repeat the date rule.
+ */
+export const SERVER_INSTRUCTIONS =
+  "Dates: quote the `<field>_local` values (already in the classroom's time zone, with " +
+  "weekday) and compare against `now_local` for 'today'/'tonight'/'this week'. Never state a " +
+  'raw UTC clock time to a user as if it were local.';
+
 export function buildMcpServer(viewer: Viewer): McpServer {
-  const server = new McpServer({ name: 'classmoji-mcp', version: '0.1.0' });
+  const server = new McpServer(
+    { name: 'classmoji-mcp', version: '0.1.0' },
+    { instructions: SERVER_INSTRUCTIONS }
+  );
   for (const def of toolDefinitions.values()) {
     if (!viewer.scopes.has(def.scope)) continue;
     server.registerTool(

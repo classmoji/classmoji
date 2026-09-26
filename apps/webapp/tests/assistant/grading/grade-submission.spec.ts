@@ -77,7 +77,8 @@ test.describe('Assistant grades a student submission', () => {
     await expect(row).toBeVisible();
 
     await row.getByTestId('emoji-grade-trigger').click();
-    const emojiButton = row.getByTestId(`emoji-grade-option-${GRADE_SHORTCODE}`);
+    const emojiButton = // The picker renders in a portal, outside the row.
+    page.getByTestId(`emoji-grade-option-${GRADE_SHORTCODE}`);
     // Asserting the unselected starting state makes a real add (vs a no-op) provable.
     await expect(emojiButton).toHaveAttribute('data-selected', 'false');
     await emojiButton.click();
@@ -108,7 +109,8 @@ test.describe('Assistant grades a student submission', () => {
     await expect(row).toBeVisible();
 
     await row.getByTestId('emoji-grade-trigger').click();
-    const emojiButton = row.getByTestId(`emoji-grade-option-${GRADE_SHORTCODE}`);
+    const emojiButton = // The picker renders in a portal, outside the row.
+    page.getByTestId(`emoji-grade-option-${GRADE_SHORTCODE}`);
     // The emoji must render SELECTED so the click is a genuine remove, not a no-op add.
     await expect(emojiButton).toHaveAttribute('data-selected', 'true');
     await emojiButton.click();

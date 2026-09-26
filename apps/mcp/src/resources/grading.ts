@@ -29,6 +29,7 @@ import {
   issueUrl,
   orgLogin,
   publicUser,
+  repoUrl,
   type SubmissionLike,
 } from './shape.ts';
 
@@ -47,6 +48,7 @@ export function queueRow(s: SubmissionLike, org: string | null) {
       ? {
           id: s.assignment.id,
           title: s.assignment.title,
+          submission_mode: s.assignment.submission_mode ?? 'ISSUE',
           student_deadline: s.assignment.student_deadline ?? null,
           grades_released: s.assignment.grades_released ?? false,
         }
@@ -57,6 +59,7 @@ export function queueRow(s: SubmissionLike, org: string | null) {
     grades: gradeRefs(s.grades),
     graders: graderRefs(s.graders),
     issue_url: issueUrl(org, s),
+    repo_url: repoUrl(org, s),
   };
 }
 

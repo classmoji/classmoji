@@ -10,17 +10,14 @@ import {
   IconSettings,
   IconUsersGroup,
   IconNumber,
-  IconBrandGithub,
   IconCoin,
   IconRotate,
   IconRobot,
   IconPresentation,
   IconBook,
   IconCalendar,
-  IconLink,
   IconChecklist,
   IconClipboardList,
-  IconHeartRateMonitor,
   IconStack2,
   IconLifebuoy,
   IconForms,
@@ -43,10 +40,6 @@ export const routeCategories = {
   people: {
     label: 'People',
     items: ['students', 'teams', 'staff'],
-  },
-  integrations: {
-    label: 'Integrations',
-    items: ['gitrepos', 'repo-health'],
   },
   settings: {
     label: 'Settings',
@@ -87,7 +80,8 @@ export const routes = {
     link: '/repos',
     label: 'Repositories',
     icon: IconFileText,
-    roles: ['OWNER', 'TEACHER', 'ASSISTANT', 'STUDENT'],
+    // Students have no repositories screen; their coursework lives in Modules.
+    roles: ['OWNER', 'TEACHER', 'ASSISTANT'],
     category: 'content',
   },
   assignments: {
@@ -101,6 +95,9 @@ export const routes = {
     link: '/slides',
     label: 'Slides',
     icon: IconPresentation,
+    // Students reach decks through their module. The entry stays in their
+    // list only for a classroom with no modules, where CommonLayout shows it
+    // so the decks are not stranded; otherwise it hides for STUDENT.
     roles: ['OWNER', 'TEACHER', 'ASSISTANT', 'STUDENT'],
     category: 'content',
   },
@@ -113,26 +110,21 @@ export const routes = {
     // docked (the Option C reader). The sidebar no longer hangs one entry per
     // page — CommonLayout hides this whole entry from non-owners when the
     // class has no readable pages, the same way Modules hides.
-    roles: ['OWNER', 'TEACHER', 'ASSISTANT', 'STUDENT'],
+    roles: ['OWNER', 'TEACHER', 'ASSISTANT'],
     category: 'content',
   },
   forms: {
     link: '/forms',
     label: 'Forms',
     icon: IconForms,
-    // Staff-only and management-only: the entry opens the builder/list, which
-    // lives in apps/pages behind a redirect. Students reach a classroom form by
-    // its link or a module item, never through this nav item — there is no
-    // student forms list in v1.
+    // Staff-only and management-only: the entry opens the forms LIST, which is
+    // a webapp screen (`admin.$class.forms` and its `/teacher` twin). Only the
+    // builder and the responses view still live in apps/pages, behind the
+    // `forms_.$` redirect. Students reach a classroom form by its link or a
+    // module item, never through this nav item — there is no student forms
+    // list in v1.
     roles: ['OWNER', 'TEACHER'],
     isProTier: true,
-    category: 'content',
-  },
-  resources: {
-    link: '/resources',
-    label: 'Link Resources',
-    icon: IconLink,
-    roles: ['OWNER', 'TEACHER'],
     category: 'content',
   },
 
@@ -141,7 +133,9 @@ export const routes = {
     link: '/quizzes',
     label: 'Quizzes',
     icon: IconRobot,
-    roles: ['OWNER', 'TEACHER', 'STUDENT', 'ASSISTANT'],
+    // Staff management list. A student reaches a quiz from its module or the
+    // Assignments page, where a quiz assignment sits with its deadline.
+    roles: ['OWNER', 'TEACHER', 'ASSISTANT'],
     isProTier: true,
     category: 'assessment',
   },
@@ -199,22 +193,6 @@ export const routes = {
     // re-exports the admin loader (read only — no action lives there).
     roles: ['OWNER', 'TEACHER', 'ASSISTANT'],
     category: 'people',
-  },
-
-  // Integrations
-  gitrepos: {
-    link: '/gitrepos',
-    label: 'GitHub Repos',
-    icon: IconBrandGithub,
-    roles: ['OWNER'],
-    category: 'integrations',
-  },
-  'repo-health': {
-    link: '/repo-health',
-    label: 'Repo Health',
-    icon: IconHeartRateMonitor,
-    roles: ['OWNER'],
-    category: 'integrations',
   },
 
   // Assessment (continued)

@@ -92,19 +92,10 @@ async function main() {
     },
   });
   if (repo) {
-    const existingItem = await prisma.moduleItem.findFirst({
-      where: { module_id: week1.id, repository_id: repo.id },
+    await prisma.assignment.updateMany({
+      where: { repository_id: repo.id },
+      data: { module_id: week1.id },
     });
-    if (!existingItem) {
-      await prisma.moduleItem.create({
-        data: {
-          module_id: week1.id,
-          item_type: 'REPOSITORY',
-          repository_id: repo.id,
-          position: 0,
-        },
-      });
-    }
   }
 
   await prisma.module.upsert({

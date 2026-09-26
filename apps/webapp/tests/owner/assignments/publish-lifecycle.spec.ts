@@ -8,6 +8,7 @@ import {
   getRepositoryByTitle,
   getRepositoryPublishedState,
   deleteRepositoryById,
+  ensureSeedModule,
   type SeededRepository,
 } from '../../helpers/prisma.helpers';
 import { repositoryRow } from '../../helpers/repos.helpers';
@@ -64,6 +65,7 @@ async function seedRepoWithGitRepo(
 ): Promise<SeededRepository & { classroomId: string }> {
   const prisma = getTestPrisma();
   const classroom = await getClassroomBySlug(TEST_CLASSROOM);
+  const { moduleId } = await ensureSeedModule(classroom.id);
 
   await prisma.repository
     .delete({ where: { classroom_id_title: { classroom_id: classroom.id, title } } })
@@ -75,15 +77,16 @@ async function seedRepoWithGitRepo(
       title,
       slug: title,
       template: 'dev-org/test-template',
-      weight: 5,
       type: 'INDIVIDUAL',
       is_published: isPublished,
       assignments: {
         create: [
           {
+            module_id: moduleId,
+            type: 'REPO',
             title: `${title} Part 1`,
             slug: `${title}-part-1`,
-            weight: 100,
+            weight: 5,
             is_published: isPublished,
           },
         ],
@@ -104,7 +107,6 @@ async function seedRepoWithGitRepo(
 }
 
 test.describe('Owner publishes and unpublishes an assignment', () => {
-
   test('owner unpublishing a published assignment flips is_published to false in the DB', async ({
     authenticatedPage: page,
     testOrg,
@@ -123,16 +125,12 @@ test.describe('Owner publishes and unpublishes an assignment', () => {
       await openRowMenu(row);
       await page.getByRole('menuitem', { name: 'Unpublish', exact: true }).click();
 
-      await expect(
-        page.getByText('hides the repository from students')
-      ).toBeVisible();
+      await expect(page.getByText('hides the repository from students')).toBeVisible();
       await confirmDialog(page, 'Unpublish');
 
       await expect(row.getByText('Draft')).toBeVisible();
 
-      await expect
-        .poll(async () => getRepositoryPublishedState(seeded.repositoryId))
-        .toBe(false);
+      await expect.poll(async () => getRepositoryPublishedState(seeded.repositoryId)).toBe(false);
     } finally {
       await deleteRepositoryById(seeded.repositoryId);
     }
@@ -157,16 +155,12 @@ test.describe('Owner publishes and unpublishes an assignment', () => {
       await expect(row.getByText('Unpublish', { exact: true })).toHaveCount(0);
       await row.getByRole('button', { name: 'Publish', exact: true }).click();
 
-      await expect(
-        page.getByText('makes the repository available to all students')
-      ).toBeVisible();
+      await expect(page.getByText('makes the repository available to all students')).toBeVisible();
       await confirmDialog(page, 'Publish');
 
       await expect(row.getByText('Published')).toBeVisible();
 
-      await expect
-        .poll(async () => getRepositoryPublishedState(seeded.repositoryId))
-        .toBe(true);
+      await expect.poll(async () => getRepositoryPublishedState(seeded.repositoryId)).toBe(true);
     } finally {
       await deleteRepositoryById(seeded.repositoryId);
     }
@@ -191,17 +185,13 @@ test.describe('Owner publishes and unpublishes an assignment', () => {
       await page.getByRole('menuitem', { name: 'Unpublish', exact: true }).click();
       await confirmDialog(page, 'Unpublish');
       await expect(row.getByText('Draft')).toBeVisible();
-      await expect
-        .poll(async () => getRepositoryPublishedState(seeded.repositoryId))
-        .toBe(false);
+      await expect.poll(async () => getRepositoryPublishedState(seeded.repositoryId)).toBe(false);
 
       // Re-publish via the inline action -> Published.
       await row.getByRole('button', { name: 'Publish', exact: true }).click();
       await confirmDialog(page, 'Publish');
       await expect(row.getByText('Published')).toBeVisible();
-      await expect
-        .poll(async () => getRepositoryPublishedState(seeded.repositoryId))
-        .toBe(true);
+      await expect.poll(async () => getRepositoryPublishedState(seeded.repositoryId)).toBe(true);
     } finally {
       await deleteRepositoryById(seeded.repositoryId);
     }
