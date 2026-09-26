@@ -6,6 +6,7 @@ import RepositoriesTable from '~/components/features/repositories/RepositoriesTa
 import { SearchInput, ButtonNew, RequireRole } from '~/components';
 import { ClassmojiService } from '@classmoji/services';
 import { requireClassroomAdmin } from '~/utils/routeAuth.server';
+import { useGitWeb } from '~/hooks/useGitWeb';
 import type { Route } from './+types/route';
 
 export const loader = async ({ params, request }: Route.LoaderArgs) => {
@@ -44,6 +45,7 @@ const AdminAssignments = ({ loaderData }: Route.ComponentProps) => {
   const { pathname } = useLocation();
   const { repositories, editor } = loaderData;
   const [query, setQuery] = useState('');
+  const { terms } = useGitWeb();
   // The assistant section renders this same page read-only. The URL is the
   // authority: /admin is OWNER-gated in the loader, so being here is the
   // permission.
@@ -54,13 +56,13 @@ const AdminAssignments = ({ loaderData }: Route.ComponentProps) => {
       <Outlet />
       <div className="flex flex-col gap-3 mt-2 mb-4 sm:flex-row sm:items-center sm:justify-between">
         <div className="flex items-baseline gap-4">
-          <h1 className="text-lg font-semibold text-ink-1">Repositories</h1>
+          <h1 className="text-lg font-semibold text-ink-1">{terms.Repos}</h1>
           {/* Key for the tree: a folder row is a repository, a file row under it
               is an issue students receive in their copy of that repository. */}
           <div className="flex items-center gap-4 text-sm text-ink-3" aria-label="Legend">
             <span className="inline-flex items-center gap-1">
               <IconFolder size={16} className="text-gray-400" />
-              repository
+              {terms.repo}
             </span>
             <span className="inline-flex items-center gap-1">
               <IconFileText size={16} className="text-gray-400" />
@@ -81,7 +83,7 @@ const AdminAssignments = ({ loaderData }: Route.ComponentProps) => {
 
           <RequireRole roles={['OWNER']}>
             <NavLink to={`${pathname}/form`} data-tour="repos-new">
-              <ButtonNew>New repository</ButtonNew>
+              <ButtonNew>New {terms.repo}</ButtonNew>
             </NavLink>
           </RequireRole>
         </div>

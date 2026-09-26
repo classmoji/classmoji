@@ -4,6 +4,7 @@ import { Link } from 'react-router';
 import { IconChevronDown, IconCheck, IconUsers } from '@tabler/icons-react';
 import ResourceLinks from './ResourceLinks';
 import AssignmentCard from './AssignmentCard';
+import { useGitWeb } from '~/hooks/useGitWeb';
 
 // The `is_draft` / `status` flags below are only ever set to a draft value on
 // the teaching-team view, whose loader fetches unpublished content too.
@@ -72,6 +73,7 @@ interface TeamFormationBannerProps {
 }
 
 const TeamFormationBanner = ({ repository, userTeam, classSlug }: TeamFormationBannerProps) => {
+  const web = useGitWeb();
   const deadlinePassed = repository.team_formation_deadline
     ? new Date() > new Date(repository.team_formation_deadline)
     : false;
@@ -134,7 +136,7 @@ const TeamFormationBanner = ({ repository, userTeam, classSlug }: TeamFormationB
       message={
         <div className="flex flex-wrap items-center justify-between gap-y-2">
           <span>
-            You need to join or create a team for this repository
+            You need to join or create a team for this {web.terms.repo}
             {repository.team_formation_deadline && (
               <span className="ml-2 text-sm">
                 (Deadline: {new Date(repository.team_formation_deadline).toLocaleDateString()})
@@ -269,9 +271,7 @@ const ModuleCard = ({
           {hasExpandableContent && (
             <IconChevronDown
               size={20}
-              className={`text-ink-4 shrink-0 transition-transform ${
-                open ? 'rotate-180' : ''
-              }`}
+              className={`text-ink-4 shrink-0 transition-transform ${open ? 'rotate-180' : ''}`}
             />
           )}
         </div>
@@ -287,9 +287,7 @@ const ModuleCard = ({
                 }}
               />
             </div>
-            <span className="text-sm font-medium text-ink-1 tabular-nums">
-              {pct}%
-            </span>
+            <span className="text-sm font-medium text-ink-1 tabular-nums">{pct}%</span>
           </div>
         )}
       </button>
@@ -297,12 +295,14 @@ const ModuleCard = ({
       {open && hasExpandableContent && (
         <div className="px-5 sm:px-6 pb-5 sm:pb-6 -mt-1 border-t border-line pt-5">
           {repository.team_formation_mode === 'SELF_FORMED' && rolePrefix === 'student' && (
-            <TeamFormationBanner repository={repository} userTeam={userTeam} classSlug={classSlug} />
+            <TeamFormationBanner
+              repository={repository}
+              userTeam={userTeam}
+              classSlug={classSlug}
+            />
           )}
 
-          {repository.description && (
-            <p className="text-ink-2 mb-4">{repository.description}</p>
-          )}
+          {repository.description && <p className="text-ink-2 mb-4">{repository.description}</p>}
 
           <ResourceLinks
             pages={repository.pages}
@@ -314,15 +314,11 @@ const ModuleCard = ({
           />
 
           {((repository.pages?.length ?? 0) > 0 || (repository.slides?.length ?? 0) > 0) &&
-            assignments.length > 0 && (
-              <div className="border-t border-line my-4" />
-            )}
+            assignments.length > 0 && <div className="border-t border-line my-4" />}
 
           {assignments.length > 0 && (
             <div>
-              <h4 className="text-sm font-semibold text-ink-3 mb-3">
-                Assignments
-              </h4>
+              <h4 className="text-sm font-semibold text-ink-3 mb-3">Assignments</h4>
               {assignments.map(assignment => (
                 <AssignmentCard
                   key={String(assignment.id)}

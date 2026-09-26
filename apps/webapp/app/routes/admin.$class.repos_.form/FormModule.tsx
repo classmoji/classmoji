@@ -22,10 +22,11 @@ import { useDisclosure } from '@mantine/hooks';
 
 import AsyncAutocomplete from './AsyncAutocomplete';
 import ProjectTemplateSelect from './ProjectTemplateSelect';
-import { schema } from './schema';
+import { makeSchema } from './schema';
 import { useGlobalFetcher } from '~/hooks';
 
 import { useRepositoryFormStore } from './store';
+import { gitTerms } from '~/utils/gitWeb';
 import { SectionHeader } from '~/components';
 import AutogradingTestsTable from './AutogradingTestsTable';
 import FormAutogradingTest, {
@@ -104,6 +105,7 @@ const FormModule = ({
   isGitLab = false,
 }: FormModuleProps) => {
   const { template, setTemplate } = useRepositoryFormStore();
+  const terms = gitTerms(isGitLab);
 
   const { fetcher, notify } = useGlobalFetcher();
   const revalidator = useRevalidator();
@@ -212,7 +214,7 @@ const FormModule = ({
     setValue,
     formState: { errors },
   } = useForm({
-    resolver: zodResolver(schema),
+    resolver: zodResolver(makeSchema(`A template ${terms.repo} must be selected.`)),
     defaultValues: isNew ? newFormUpdateValues : updateFormDefaultValues,
   });
 
@@ -289,7 +291,7 @@ const FormModule = ({
       if (fetcherData?.error) {
         callout.show({
           variant: 'error',
-          title: fetcherData.error || 'Failed to save repository.',
+          title: fetcherData.error || `Failed to save ${terms.repo}.`,
         });
         return;
       }
@@ -317,7 +319,7 @@ const FormModule = ({
   };
 
   const onSubmit = (data: Record<string, unknown>) => {
-    const message = isNew ? 'Creating repository...' : 'Updating repository...';
+    const message = isNew ? `Creating ${terms.repo}...` : `Updating ${terms.repo}...`;
 
     notify(ActionTypes.SAVE_ASSIGNMENT, message);
     setIsSubmitting(true);
@@ -389,7 +391,7 @@ const FormModule = ({
           <Card className="shadow-xs mb-6">
             <SectionHeader
               title="Basic Information"
-              subtitle="Set up the core details for this repository"
+              subtitle={`Set up the core details for this ${terms.repo}`}
               size="md"
               className="mb-4"
             />
@@ -399,7 +401,7 @@ const FormModule = ({
                 {...{
                   control,
                   name: 'title',
-                  label: 'Repository title',
+                  label: `${terms.Repo} title`,
                   placeholder: 'intro-to-data-structures',
                 }}
               >
@@ -419,7 +421,7 @@ const FormModule = ({
                 label="Type"
                 extra={
                   hasProvisionedRepos
-                    ? 'Fixed: repositories have already been created for this one.'
+                    ? `Fixed: ${terms.repos} have already been created for this one.`
                     : undefined
                 }
               >
@@ -453,7 +455,7 @@ const FormModule = ({
                   name="team_formation_mode"
                   label="Team Formation"
                   extra={
-                    hasProvisionedRepos ? 'Fixed: team repositories already exist.' : undefined
+                    hasProvisionedRepos ? `Fixed: team ${terms.repos} already exist.` : undefined
                   }
                 >
                   <Select
@@ -589,7 +591,7 @@ const FormModule = ({
           <Card className="shadow-xs mb-6">
             <SectionHeader
               title="Learning Objectives"
-              subtitle="Add a description for the learning objective of this repository"
+              subtitle={`Add a description for the learning objective of this ${terms.repo}`}
               size="md"
               className="mb-4"
             />
@@ -605,7 +607,7 @@ const FormModule = ({
           {/* Template Repository */}
           <Card className="shadow-xs mb-6">
             <SectionHeader
-              title="Template Repository"
+              title={`Template ${terms.Repo}`}
               subtitle="Provide starter code for students"
               size="md"
               className="mb-4"
@@ -648,7 +650,7 @@ const FormModule = ({
           <Card className="shadow-xs mb-6">
             <SectionHeader
               title="Linked Content"
-              subtitle="Link pages and slides to this repository"
+              subtitle={`Link pages and slides to this ${terms.repo}`}
               size="md"
               className="mb-4"
             />
@@ -754,7 +756,7 @@ const FormModule = ({
             htmlType="submit"
             style={{ backgroundColor: '#1f883d', borderColor: '#1f883d' }}
           >
-            {isNew ? 'Create repository' : 'Update repository'}
+            {isNew ? `Create ${terms.repo}` : `Update ${terms.repo}`}
           </Button>
         </div>
       </Form>

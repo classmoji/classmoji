@@ -430,7 +430,7 @@ const AdminDashboard = () => {
           value={tiles.students}
           line={`${onboarding.studentsAdded30d} joined in the last 30 days`}
           trend={onboarding.studentsAdded30d > 0 ? 'up' : undefined}
-          sub={`${acceptedPct}% of them accepted the Github invite`}
+          sub={`${acceptedPct}% of them accepted their invite`}
         />
         <StatCard
           label="Active classrooms"

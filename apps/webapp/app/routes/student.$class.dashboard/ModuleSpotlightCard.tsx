@@ -1,6 +1,7 @@
 import { Link } from 'react-router';
 import dayjs from 'dayjs';
 import { IconArrowRight } from '@tabler/icons-react';
+import { useGitWeb } from '~/hooks/useGitWeb';
 
 interface SpotlightAssignment {
   id: string;
@@ -100,14 +101,13 @@ const buildSummary = (repository: SpotlightModule) => {
 };
 
 const ModuleSpotlightCard = ({ repository, classSlug }: ModuleSpotlightCardProps) => {
+  const web = useGitWeb();
   if (!repository) {
     return (
       <section className="rounded-2xl bg-panel ring-1 ring-line p-5 sm:p-6 h-full flex flex-col items-center justify-center text-center">
-        <h3 className="text-base font-semibold text-ink-1">
-          No published repositories yet
-        </h3>
+        <h3 className="text-base font-semibold text-ink-1">No published {web.terms.repos} yet</h3>
         <p className="text-sm text-ink-3 mt-1">
-          Repositories will appear here once your instructor publishes them.
+          {web.terms.Repos} will appear here once your instructor publishes them.
         </p>
       </section>
     );
@@ -129,14 +129,10 @@ const ModuleSpotlightCard = ({ repository, classSlug }: ModuleSpotlightCardProps
       </h3>
       {summary && <p className="text-sm text-ink-3 mt-1">{summary}</p>}
 
-      <div className="mt-5 text-xs font-semibold tracking-[0.18em] text-ink-4">
-        THIS WEEK
-      </div>
+      <div className="mt-5 text-xs font-semibold tracking-[0.18em] text-ink-4">THIS WEEK</div>
       <ul className="mt-2 flex-1 flex flex-col gap-1.5">
         {items.length === 0 && (
-          <li className="text-sm text-ink-3">
-            Nothing scheduled in this repository yet.
-          </li>
+          <li className="text-sm text-ink-3">Nothing scheduled in this {web.terms.repo} yet.</li>
         )}
         {items.map(item => (
           <li
@@ -148,14 +144,8 @@ const ModuleSpotlightCard = ({ repository, classSlug }: ModuleSpotlightCardProps
             >
               {item.type}
             </span>
-            <span className="flex-1 text-sm text-ink-1 truncate">
-              {item.title}
-            </span>
-            {item.meta && (
-              <span className="text-xs text-ink-3 whitespace-nowrap">
-                {item.meta}
-              </span>
-            )}
+            <span className="flex-1 text-sm text-ink-1 truncate">{item.title}</span>
+            {item.meta && <span className="text-xs text-ink-3 whitespace-nowrap">{item.meta}</span>}
           </li>
         ))}
       </ul>

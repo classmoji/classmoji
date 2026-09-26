@@ -475,7 +475,10 @@ export const getClassroomGitHubArtifactPlan = async (
     return {
       artifacts: [],
       withheld: null,
-      unavailable: 'provider not supported for cleanup — artifacts left in place',
+      unavailable:
+        classroom.git_organization.provider === 'GITLAB'
+          ? 'Gitlab cleanup is not available yet: the class subgroup and its projects were left in place'
+          : 'provider not supported for cleanup — artifacts left in place',
     };
   }
 
@@ -575,7 +578,7 @@ export const deleteGitHubArtifacts = async (
       deleted_repos: 0,
       deleted_teams: 0,
       skipped: 0,
-      failures: ['no GitHub user token — nothing deleted'],
+      failures: ['no Github user token — nothing deleted on Github'],
     };
   }
 

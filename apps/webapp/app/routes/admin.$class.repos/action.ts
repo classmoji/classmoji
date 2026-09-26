@@ -2,6 +2,7 @@ import { namedAction } from 'remix-utils/named-action';
 
 import { GITLAB_UNSUPPORTED, isGitLabClassroom } from '~/utils/gitlabGuard.server';
 import { ClassmojiService } from '@classmoji/services';
+import { gitTerms } from '~/utils/gitWeb';
 import { publishAssignment, publishAssignmentAndRepository, syncAssignment } from './helpers';
 import { calculateContributions } from './contributions';
 import { ActionTypes } from '~/constants';
@@ -17,6 +18,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
   });
   assertClassroomMutationAllowed({ status: classroom.status, role: membership!.role });
 
+  const terms = gitTerms(isGitLabClassroom(classroom));
   const data = await request.json();
   const assignmentId = data.assignment_id;
 
@@ -25,7 +27,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
       await ClassmojiService.repository.deleteById(assignmentId, classroom.id);
 
       return {
-        success: 'Repository deleted',
+        success: `${terms.Repo} deleted`,
         action: ActionTypes.DELETE_ASSIGNMENT,
       };
     },
@@ -43,7 +45,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
 
     async unpublish() {
       await ClassmojiService.repository.setPublished(assignmentId, false, classroom.id);
-      return { success: 'Repository unpublished' };
+      return { success: `${terms.Repo} unpublished` };
     },
 
     async sync() {
@@ -54,7 +56,8 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
 
       if (numReposToCreate + numIssuesToCreate == 0)
         return {
-          info: 'No missing repo or issue',
+          info:
+            terms.repo === 'project' ? 'No missing project or issue' : 'No missing repo or issue',
         };
 
       return res;

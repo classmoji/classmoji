@@ -236,7 +236,7 @@ describe('team_create', () => {
 
     await expect(teamCreateTool.handler(ARGS, CTX)).rejects.toMatchObject({
       kind: 'invalid_params',
-      message: 'This classroom has no linked GitHub organization — teams cannot be managed',
+      message: 'This classroom has no linked Github organization or Gitlab group — teams cannot be managed',
     });
   });
 

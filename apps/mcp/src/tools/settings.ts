@@ -368,13 +368,17 @@ export const orgRepoSettingsUpdateTool: ToolDefinition<OrgRepoSettingsUpdateArgs
     if (!gitOrganization?.login) {
       throw new ToolError(
         'invalid_params',
-        'This classroom is not connected to a GitHub organization'
+        'This classroom is not connected to a Github organization or Gitlab group'
       );
+    }
+    // Organization-wide repository settings are a Github App feature.
+    if (gitOrganization.provider === 'GITLAB') {
+      throw new ToolError('invalid_params', 'Not available for Gitlab classrooms yet.');
     }
     if (!gitOrganization.github_installation_id) {
       throw new ToolError(
         'invalid_params',
-        `The Classmoji GitHub App is not installed on '${gitOrganization.login}' — install it to manage repository settings`
+        `The Classmoji Github App is not installed on '${gitOrganization.login}' — install it to manage repository settings`
       );
     }
 
@@ -395,7 +399,7 @@ export const orgRepoSettingsUpdateTool: ToolDefinition<OrgRepoSettingsUpdateArgs
       organization: gitOrganization.login,
       updated_fields: fields,
       settings: updates,
-      message: `Updated organization-wide GitHub settings for '${gitOrganization.login}' — this affects every classroom and repository in that organization.`,
+      message: `Updated organization-wide Github settings for '${gitOrganization.login}' — this affects every classroom and repository in that organization.`,
     });
   },
 };

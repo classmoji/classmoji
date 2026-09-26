@@ -20,6 +20,8 @@ import ReactMarkdown from 'react-markdown';
 import rehypeHighlight from 'rehype-highlight';
 import { usePromptAssistant } from '~/hooks/usePromptAssistant';
 import { useUser } from '~/hooks';
+import { useGitWeb } from '~/hooks/useGitWeb';
+import { GitlabLogo } from '~/components/ui/display/GitlabLogo';
 
 import './PromptAssistant.css';
 
@@ -80,6 +82,7 @@ export function PromptAssistant({
   } = usePromptAssistant({ classroomSlug });
 
   const { user } = useUser();
+  const { terms } = useGitWeb();
   const userLogin = user?.login;
 
   const [inputValue, setInputValue] = useState('');
@@ -178,7 +181,7 @@ export function PromptAssistant({
           <div className="pa-code-banner">
             <CodeOutlined style={{ fontSize: 16 }} />
             <div className="pa-code-banner-text">
-              <strong>Repository available</strong>
+              <strong>{terms.Repo} available</strong>
               <span>Explore code for better prompts</span>
             </div>
             <Button size="small" onClick={handleStartCodeExploration} loading={isInitializing}>
@@ -432,12 +435,14 @@ function SuggestionCard({
 }
 
 function ExplorationSteps({ steps }: { steps: PromptExplorationStep[] }) {
+  const { isGitLab } = useGitWeb();
   const getIcon = (name: string | undefined) => {
     const n = name?.includes('__') ? name.split('__').pop() : name || '';
     // Trigger-mode tools
     if (n === 'explore_codebase') return <RocketOutlined style={{ color: '#3b82f6' }} />;
     if (n === 'github_tree') return <BranchesOutlined style={{ color: '#06b6d4' }} />;
-    if (n === 'github_read') return <GithubOutlined style={{ color: '#10b981' }} />;
+    if (n === 'github_read')
+      return isGitLab ? <GitlabLogo size={14} /> : <GithubOutlined style={{ color: '#10b981' }} />;
     if (n === 'synthesize') return <ExperimentOutlined style={{ color: '#8b5cf6' }} />;
     // Local/sandbox-mode tools
     if (n === 'Read' || n === 'secure_read')

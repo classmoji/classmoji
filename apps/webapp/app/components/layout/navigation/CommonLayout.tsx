@@ -12,6 +12,7 @@ import OrgSelect from './OrgSelect';
 import useStore from '~/store';
 import tokenImage from '~/assets/images/token.png';
 import githubLogo from '~/assets/images/github_logo.svg';
+import { GitlabLogo } from '~/components/ui/display/GitlabLogo';
 import ProfileDropdown from '../../features/profile/ProfileDropdown';
 import SupportModal from '../../features/support/SupportModal';
 import { LockedBanner } from '~/components/features/classroom/LockedBanner';
@@ -227,7 +228,9 @@ const CommonLayout = ({
     // one Pages entry that replaced them.
     if (item.link === '/pages' && role !== 'OWNER' && (!showPages || !hasPages)) return null;
 
-    const displayLabel = item.label;
+    // Gitlab calls repositories projects.
+    const displayLabel =
+      item.link === '/repos' ? gitWeb(gitContextFor(classroom)).terms.Repos : item.label;
 
     return (
       <RequireRole roles={item.roles} key={key}>
@@ -522,7 +525,13 @@ const CommonLayout = ({
                 className="p-1.5 rounded-lg hover:bg-nav-hover transition-colors shrink-0"
                 onClick={() => window.open(gitWeb(gitContextFor(classroom)).reposIndex(), '_blank')}
               >
-                <img src={githubLogo} alt="GitHub" className="w-[18px] h-[18px] dark:invert" />
+                {gitWeb(gitContextFor(classroom)).isGitLab ? (
+                  <span role="img" aria-label="Gitlab" className="inline-flex">
+                    <GitlabLogo size={18} />
+                  </span>
+                ) : (
+                  <img src={githubLogo} alt="GitHub" className="w-[18px] h-[18px] dark:invert" />
+                )}
               </button>
             </Tooltip>
           )}

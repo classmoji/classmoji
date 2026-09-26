@@ -14,7 +14,8 @@ import {
 import { ClassmojiService } from '@classmoji/services';
 import FolderTabs from '~/components/ui/FolderTabs';
 import AddContentItemModal from '~/components/features/modules/AddContentItemModal';
-import { TYPE_META, describeItem } from '~/components/features/modules/moduleItemMeta';
+import { TYPE_META, describeItem, typeLabel } from '~/components/features/modules/moduleItemMeta';
+import { useGitWeb } from '~/hooks/useGitWeb';
 import AssignmentsTable, {
   type AssignmentRowData,
 } from '~/components/features/assignments/AssignmentsTable';
@@ -75,6 +76,7 @@ const ModuleDetail = ({ loaderData }: Route.ComponentProps) => {
   const { module, candidates, repositories, boundQuizIds, boundFormIds, tags } = loaderData;
   const { class: classSlug } = useParams();
   const navigate = useNavigate();
+  const { isGitLab } = useGitWeb();
 
   // Navigates away after delete; item ops revalidate in place.
   const deleteFetcher = useFetcher<{ success?: string; error?: string }>();
@@ -199,7 +201,7 @@ const ModuleDetail = ({ loaderData }: Route.ComponentProps) => {
             {items.map((item, index) => {
               const meta = TYPE_META[item.item_type];
               const ItemIcon = meta.icon;
-              const { label, published, note } = describeItem(item);
+              const { label, published, note } = describeItem(item, isGitLab);
               return (
                 <li key={item.id} className="flex items-center gap-3 py-2.5">
                   <div className="flex flex-col">
@@ -229,7 +231,7 @@ const ModuleDetail = ({ loaderData }: Route.ComponentProps) => {
                   {note && (
                     <span className="shrink-0 text-xs text-ink-3 whitespace-nowrap">{note}</span>
                   )}
-                  <Tag className="shrink-0">{meta.label}</Tag>
+                  <Tag className="shrink-0">{typeLabel(item.item_type, isGitLab)}</Tag>
                   <Tag color={published ? 'green' : 'orange'} className="shrink-0">
                     {published ? 'Published' : 'Draft'}
                   </Tag>

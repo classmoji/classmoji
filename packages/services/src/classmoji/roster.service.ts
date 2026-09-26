@@ -128,6 +128,8 @@ export const addStudents = async ({
             variables: escapeVars({
               STUDENT_NAME: student.name || 'there',
               CLASSROOM_NAME: classroom.name,
+              PROVIDER_LABEL:
+                classroom.git_organization?.provider === 'GITLAB' ? 'Gitlab' : 'Github',
               // Carries a signed token for the invited address, which sign-up
               // accepts as proof of it: the link used to be the same for
               // everyone, and students retyping a different address at

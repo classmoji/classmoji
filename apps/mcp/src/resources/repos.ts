@@ -39,6 +39,7 @@ import {
   isStaff,
   issueUrl,
   orgLogin,
+  orgGit,
   type SubmissionLike,
 } from './shape.ts';
 
@@ -147,6 +148,7 @@ export const reposResource: ResourceDefinition = {
       findMySubmissions(ctx),
     ]);
     const org = orgLogin(ctx);
+    const git = orgGit(ctx);
     const ownedRepositoryIds = new Set(
       submissions.map(s => s.git_repo?.repository_id).filter(Boolean)
     );
@@ -179,7 +181,7 @@ export const reposResource: ResourceDefinition = {
                     status: mine.status,
                     closed_at: mine.closed_at ?? null,
                     is_late_override: mine.is_late_override ?? false,
-                    issue_url: issueUrl(org, mine),
+                    issue_url: issueUrl(git, mine),
                     // Locked decision 7: grades only after release.
                     grades: a.grades_released ? gradeRefs(mine.grades) : [],
                     graders: graderRefs(mine.graders),
@@ -204,6 +206,7 @@ export const gradesMineResource: ResourceDefinition = {
   handler: async (_vars, ctx) => {
     const submissions = await findMySubmissions(ctx);
     const org = orgLogin(ctx);
+    const git = orgGit(ctx);
 
     // The student dashboard's exact feedback filter: released AND has grades.
     const released = submissions.filter(
@@ -221,7 +224,7 @@ export const gradesMineResource: ResourceDefinition = {
         closed_at: s.closed_at ?? null,
         grades: gradeRefs(s.grades),
         graders: graderRefs(s.graders),
-        issue_url: issueUrl(org, s),
+        issue_url: issueUrl(git, s),
       })),
     };
   },

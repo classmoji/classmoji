@@ -11,6 +11,7 @@ import {
   assertProTier,
 } from '~/utils/helpers';
 import type { Route } from './+types/route';
+import { useGitWeb } from '~/hooks/useGitWeb';
 import type React from 'react';
 import type { TablerIconsProps } from '@tabler/icons-react';
 
@@ -332,6 +333,7 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
 export default function AdminQuizzes({ loaderData }: Route.ComponentProps) {
   const { quizzes } = loaderData;
   const fetcher = useFetcher();
+  const { terms } = useGitWeb();
   const navigate = useNavigate();
   const { class: classSlug } = useParams();
   // Served under every prefix this route's gate allows (/admin and /teacher),
@@ -425,7 +427,7 @@ export default function AdminQuizzes({ loaderData }: Route.ComponentProps) {
       render: (name: string) => <span className="font-medium text-ink-1">{name}</span>,
     },
     {
-      title: 'Repository',
+      title: terms.Repo,
       dataIndex: 'moduleTitle',
       key: 'repository',
       width: 240,

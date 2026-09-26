@@ -12,6 +12,8 @@ import {
   IconRobot,
 } from '@tabler/icons-react';
 import { PageLink } from '~/components/features/pages';
+import { GitlabLogo } from '~/components/ui/display/GitlabLogo';
+import { useGitWeb } from '~/hooks/useGitWeb';
 
 /**
  * Generic, read-only module tree renderer shared by the student and assistant
@@ -201,6 +203,7 @@ const collectExpandableKeys = (nodes: ModuleTreeNode[]): string[] => {
 };
 
 const NodeIcon = ({ node, isExpanded }: { node: ModuleTreeNode; isExpanded: boolean }) => {
+  const web = useGitWeb();
   if (node.kind === 'module') {
     return (
       <span className="relative inline-flex shrink-0 w-[18px] h-[18px]">
@@ -222,10 +225,18 @@ const NodeIcon = ({ node, isExpanded }: { node: ModuleTreeNode; isExpanded: bool
   if (node.kind === 'repository') {
     // Top-level repository (the standalone Repositories tab): a prominent repo
     // header, mirroring the folder icon's role for modules.
-    return <IconBrandGithub size={18} className="text-gray-400 shrink-0" />;
+    return web.isGitLab ? (
+      <GitlabLogo size={18} />
+    ) : (
+      <IconBrandGithub size={18} className="text-gray-400 shrink-0" />
+    );
   }
   if (node.kind === 'repo') {
-    return <IconBrandGithub size={16} className="text-gray-400 shrink-0" />;
+    return web.isGitLab ? (
+      <GitlabLogo size={16} />
+    ) : (
+      <IconBrandGithub size={16} className="text-gray-400 shrink-0" />
+    );
   }
   if (node.kind === 'assignment') {
     return <IconFileText size={16} className="text-gray-400 shrink-0" />;

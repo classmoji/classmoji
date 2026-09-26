@@ -5,6 +5,7 @@ import { TriggerAuthContext, useRealtimeRunsWithTag } from '@trigger.dev/react-h
 
 import { FetcherContext, type ActiveOperation } from '~/contexts';
 import { useCallout } from '@classmoji/ui-components';
+import { useGitWeb } from '~/hooks/useGitWeb';
 
 /**
  * Progress for background work, reported in the callout instead of a modal.
@@ -114,6 +115,17 @@ const OPERATIONS: Record<string, OperationSpec> = {
   },
 };
 
+/** The spec copy says "repositories"; a Gitlab classroom says its own word. */
+const localizeUnit = (unit: UnitSpec, repos: string): UnitSpec =>
+  repos === 'repositories'
+    ? unit
+    : {
+        ...unit,
+        running: unit.running.replace(/repositories/g, repos),
+        done: unit.done.replace(/repositories/g, repos),
+        noun: unit.noun.replace(/repositories/g, repos),
+      };
+
 /** Which operation a task identifier belongs to. */
 const OPERATION_BY_TASK: Record<string, string> = {
   'gh-create_git_repo': 'PUBLISH',
@@ -195,6 +207,7 @@ const REASONS: Record<string, string> = {
 export const OperationProgress = () => {
   const { operation } = useContext(FetcherContext);
   const [failures, setFailures] = useState<OperationRun[] | null>(null);
+  const web = useGitWeb();
 
   return (
     <>
@@ -231,7 +244,9 @@ export const OperationProgress = () => {
                 </span>
               </span>
               <Tag color="red" className="m-0 shrink-0 font-medium">
-                {REASONS[run.status] ?? run.status}
+                {run.status === 'SYSTEM FAILURE'
+                  ? `${web.label} did not respond`
+                  : (REASONS[run.status] ?? run.status)}
               </Tag>
             </li>
           ))}
@@ -263,6 +278,7 @@ const OperationRuns = ({
   const { runs, error } = useRealtimeRunsWithTag(`session_${operation.session.id}`);
   const { endOperation, dismissNotify } = useContext(FetcherContext);
   const callout = useCallout();
+  const { terms } = useGitWeb();
   const { revalidate } = useRevalidator();
   const settled = useRef(false);
 
@@ -328,7 +344,8 @@ const OperationRuns = ({
     }
     if (!progress) return;
 
-    const { spec, unit, total, done, unitsFailed, failed, complete } = progress;
+    const { spec, total, done, unitsFailed, failed, complete } = progress;
+    const unit = localizeUnit(progress.unit, terms.repos);
 
     // Whatever the caller put up before the work started is redundant now.
     if (spec.notifyKey) dismissNotify(spec.notifyKey);

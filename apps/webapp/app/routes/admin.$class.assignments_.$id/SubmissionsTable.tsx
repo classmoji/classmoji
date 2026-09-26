@@ -167,6 +167,7 @@ const SubmissionsTable = ({
   // Github org or GitLab class subgroup, whichever this classroom is on.
   const gitCtx = gitContextFor(classroom as ClassroomLike | null);
   const web = gitWeb(gitCtx);
+  const terms = web.terms;
 
   const isIndividual = repositoryType === 'INDIVIDUAL';
   const isPushMode = assignment.submission_mode === 'REPO';
@@ -259,7 +260,7 @@ const SubmissionsTable = ({
         ),
     },
     {
-      title: 'Repository',
+      title: terms.Repo,
       key: 'repo',
       width: 240,
       render: (_: unknown, repo) => {
@@ -358,7 +359,9 @@ const SubmissionsTable = ({
         repo.submission ? (
           <RepositoryAssignmentStatus repositoryAssignment={repo.submission} />
         ) : (
-          <Tooltip title="Sync the repository from the Repositories page to create this student's submission row">
+          <Tooltip
+            title={`Sync the ${terms.repo} from the ${terms.Repos} page to create this student's submission row`}
+          >
             <span className="text-sm text-ink-3">Not released</span>
           </Tooltip>
         ),
@@ -506,10 +509,12 @@ const SubmissionsTable = ({
                               alsoRepo.current = e.target.checked;
                             }}
                           >
-                            Also delete the GitHub repository
+                            {web.isGitLab
+                              ? 'Also delete the Gitlab project'
+                              : 'Also delete the Github repository'}
                             <span className="block text-xs text-ink-3">
                               Permanent, and removes every other assignment&rsquo;s submission on
-                              this repository.
+                              this {terms.repo}.
                             </span>
                           </Checkbox>
                         </div>
@@ -573,11 +578,11 @@ const SubmissionsTable = ({
         emptyText: (
           <div className="text-center py-12 text-gray-500">
             <div className="font-medium">
-              {total === 0 ? 'No student repositories yet' : 'Nothing matches this filter'}
+              {total === 0 ? `No student ${terms.repos} yet` : 'Nothing matches this filter'}
             </div>
             <div className="text-sm">
               {total === 0
-                ? 'Publish the repository to create one per student.'
+                ? `Publish the ${terms.repo} to create one per student.`
                 : 'Pick another filter or clear the search.'}
             </div>
           </div>

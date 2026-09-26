@@ -9,6 +9,7 @@ import { getContentRepoName } from '@classmoji/utils';
 import { SettingSection } from '~/components';
 import { ActionTypes } from '~/constants';
 import { useGlobalFetcher } from '~/hooks';
+import { useGitWeb } from '~/hooks/useGitWeb';
 import { assertClassroomAccess, assertClassroomMutationAllowed } from '~/utils/helpers';
 import { isAIAgentConfigured } from '~/utils/aiFeatures.server';
 import type { Route } from './+types/route';
@@ -42,12 +43,13 @@ const SettingsContent = ({ loaderData }: Route.ComponentProps) => {
   const { class: classSlug } = useParams();
 
   const { fetcher } = useGlobalFetcher();
+  const web = useGitWeb();
 
   // content_repo is the stored, user-editable repo name; the org-level helper is
   // only a fallback for legacy classrooms that predate it.
   const gitOrgLogin = organization.git_organization?.login || classSlug || '';
   const repoName = organization.content_repo || getContentRepoName({ login: gitOrgLogin });
-  const repoUrl = `https://github.com/${gitOrgLogin}/${repoName}`;
+  const repoUrl = web.isGitLab ? web.repo(repoName) : web.fullPath(`${gitOrgLogin}/${repoName}`);
 
   // Handler for customizable repo name (currently disabled in UI)
   const _handleContentRepoChange = (
@@ -157,8 +159,12 @@ const SettingsContent = ({ loaderData }: Route.ComponentProps) => {
 
       {/* Content Repository Link */}
       <SettingSection
-        title="Content Repository"
-        description="Your course content (slides, pages, syllabus) is stored in a GitHub repository."
+        title={web.isGitLab ? 'Content Project' : 'Content Repository'}
+        description={
+          web.isGitLab
+            ? 'Your course content (slides, pages, syllabus) is stored in a Gitlab project.'
+            : 'Your course content (slides, pages, syllabus) is stored in a Github repository.'
+        }
       >
         <a
           href={repoUrl}
@@ -320,8 +326,9 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
       await ClassmojiService.classroom.updateSettings(classroom.id, {
         content_repo_name: content_repo_name || null,
       });
+      const isGitLab = classroom.git_organization?.provider === 'GITLAB';
       return {
-        success: 'Content repository updated',
+        success: isGitLab ? 'Content project updated' : 'Content repository updated',
         action: ActionTypes.SAVE_CONTENT_SETTINGS,
       };
     },

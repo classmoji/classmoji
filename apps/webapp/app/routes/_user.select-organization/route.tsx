@@ -396,7 +396,10 @@ const SelectOrganization = ({ loaderData }: Route.ComponentProps) => {
 
   const acceptInvite = (organization: MembershipOrganization | null) => {
     if (!organization || !user.login) return;
-    notify(ActionTypes.SEND_INVITATION, 'Sending you Github invite...');
+    notify(
+      ActionTypes.SEND_INVITATION,
+      loaderData.gitMode === 'GITLAB' ? 'Joining the class...' : 'Sending you Github invite...'
+    );
     fetcher?.submit(
       { classroom_id: organization.id },
       {
@@ -463,7 +466,10 @@ const SelectOrganization = ({ loaderData }: Route.ComponentProps) => {
           <span className="underline">
             {(pendingClassroom ?? classroom)?.name || (pendingClassroom ?? classroom)?.login}
           </span>
-          . Once you accept, you will be sent a Github invitation to join the organization.
+          .{' '}
+          {loaderData.gitMode === 'GITLAB'
+            ? 'Once you accept, you will get your Gitlab project(s) right away.'
+            : 'Once you accept, you will be sent a Github invitation to join the organization.'}
         </p>
       </Modal>
 

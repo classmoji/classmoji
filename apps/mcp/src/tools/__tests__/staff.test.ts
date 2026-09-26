@@ -242,7 +242,7 @@ describe('staff_add', () => {
 
     await expect(staffAddTool.handler(ARGS, CTX)).rejects.toMatchObject({
       kind: 'not_found',
-      message: 'GitHub user not found',
+      message: 'No user with that username on the classroom’s Github/Gitlab',
     });
     expect(mocks.auditCreate).not.toHaveBeenCalled();
   });

@@ -17,6 +17,7 @@ import {
 } from 'recharts';
 import { aggregateByContributor, commitsPerDayByContributor } from '@classmoji/services/flags';
 import { useDarkMode } from '~/hooks';
+import { useGitWeb } from '~/hooks/useGitWeb';
 import type { CommitRecord } from './CommitTimeline';
 import type { ContributorRecord } from './GitHubStatsPanel';
 
@@ -61,6 +62,7 @@ const ContributorBreakdown = ({
   onLinkSuccess,
 }: ContributorBreakdownProps) => {
   const { isDarkMode } = useDarkMode();
+  const web = useGitWeb();
   const fetcher = useFetcher<{ linked?: boolean; error?: string }>();
   const { revalidate } = useRevalidator();
 
@@ -239,14 +241,14 @@ const ContributorBreakdown = ({
           }
         }}
         footer={null}
-        title={linkTarget ? `Link GitHub user ${linkTarget} to a student` : undefined}
+        title={linkTarget ? `Link ${web.label} user ${linkTarget} to a student` : undefined}
         destroyOnClose
         data-testid="link-contributor-modal"
       >
         <div className="space-y-3">
           <Input
             prefix={<IconSearch size={16} />}
-            placeholder="Search by name or GitHub login"
+            placeholder={`Search by name or ${web.isGitLab ? 'Gitlab username' : 'Github login'}`}
             value={search}
             onChange={e => setSearch(e.target.value)}
             allowClear
@@ -265,9 +267,7 @@ const ContributorBreakdown = ({
             data-testid="link-contributor-student-list"
           >
             {filteredStudents.length === 0 ? (
-              <div className="px-3 py-4 text-sm text-ink-3 text-center">
-                No students match.
-              </div>
+              <div className="px-3 py-4 text-sm text-ink-3 text-center">No students match.</div>
             ) : (
               filteredStudents.map(s => (
                 <div
@@ -279,11 +279,7 @@ const ContributorBreakdown = ({
                     <div className="font-medium text-gray-800 dark:text-gray-100 truncate">
                       {s.name ?? s.login ?? 'Unknown student'}
                     </div>
-                    {s.login && (
-                      <div className="text-xs text-ink-3 truncate">
-                        @{s.login}
-                      </div>
-                    )}
+                    {s.login && <div className="text-xs text-ink-3 truncate">@{s.login}</div>}
                   </div>
                   <Button
                     size="small"
@@ -304,7 +300,7 @@ const ContributorBreakdown = ({
       {unmatched.length > 0 && (
         <div data-testid="unmatched-contributors">
           <div className="text-xs uppercase tracking-wide text-ink-3 font-semibold mb-2">
-            Unmatched GitHub logins
+            Unmatched {web.isGitLab ? 'Gitlab usernames' : 'Github logins'}
           </div>
           <div className="rounded-lg border border-gray-100 dark:border-gray-700 divide-y divide-gray-100 dark:divide-gray-700">
             {unmatched.map(u => (

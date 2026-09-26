@@ -1,2 +1,9 @@
 // Shared with packages/services and packages/tasks, which build the same links.
-export { gitWeb, gitContextFor, type GitWebContext, type ClassroomLike } from '@classmoji/utils';
+export {
+  gitWeb,
+  gitTerms,
+  gitContextFor,
+  type GitWebContext,
+  type ClassroomLike,
+  type GitTerms,
+} from '@classmoji/utils';

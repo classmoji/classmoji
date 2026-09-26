@@ -19,6 +19,7 @@ import { ASSIGNMENT_TYPE_META } from '~/components/features/assignments/Assignme
 import { addAuditLog, addClassroomAuditLog } from '~/utils/helpers';
 import { requireClassroomStaff, assertClassroomMutationAllowed } from '~/utils/routeAuth.server';
 import { normalizeSchoolId } from '~/utils/schoolId';
+import { useGitWeb } from '~/hooks/useGitWeb';
 import type { Route } from './+types/route';
 
 /**
@@ -325,6 +326,7 @@ const SchoolIdField = ({ value, editable }: { value: string | null; editable: bo
 };
 
 const StudentReport = ({ loaderData }: Route.ComponentProps) => {
+  const web = useGitWeb();
   const {
     rolePrefix,
     isOwner,
@@ -443,7 +445,7 @@ const StudentReport = ({ loaderData }: Route.ComponentProps) => {
     if (a.type === 'REPO') {
       const ra = byAssignment[a.id];
       if (!ra) {
-        status = <Pill tone="grey">No repository yet</Pill>;
+        status = <Pill tone="grey">No {web.terms.repo} yet</Pill>;
       } else {
         const submitted = ra.status === 'CLOSED';
         const graded = (ra.grades?.length ?? 0) > 0;

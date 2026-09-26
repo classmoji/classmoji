@@ -185,6 +185,8 @@ const AssignmentPage = ({ loaderData }: Route.ComponentProps) => {
     boundFormIds,
   } = loaderData;
   const classSlug = classroom.slug;
+  const web = gitWeb(gitContextFor(classroom as ClassroomLike));
+  const terms = web.terms;
   const { fetcher, notify } = useGlobalFetcher();
   const navigate = useNavigate();
   const { pathname } = useLocation();
@@ -253,17 +255,20 @@ const AssignmentPage = ({ loaderData }: Route.ComponentProps) => {
     postApi('autograde', { repositoryId: repository.id, classroomSlug: classSlug });
   };
 
-  const moreItems: MenuProps['items'] = [
-    {
-      key: 'autograde',
-      label: isAutograding ? 'Provisioning autograding…' : 'Autograde',
-      icon: <IconRobot size={15} />,
-      disabled: !autogradingTestCount || isAutograding,
-    },
-    { type: 'divider' },
-    { key: 'edit-repo', label: 'Edit repository' },
-    { key: 'update-repos', label: 'Update student repositories' },
-  ];
+  // Gitlab classrooms have no autograding or repo updates yet.
+  const moreItems: MenuProps['items'] = web.isGitLab
+    ? [{ key: 'edit-repo', label: `Edit ${terms.repo}` }]
+    : [
+        {
+          key: 'autograde',
+          label: isAutograding ? 'Provisioning autograding…' : 'Autograde',
+          icon: <IconRobot size={15} />,
+          disabled: !autogradingTestCount || isAutograding,
+        },
+        { type: 'divider' },
+        { key: 'edit-repo', label: 'Edit repository' },
+        { key: 'update-repos', label: 'Update student repositories' },
+      ];
   const onMoreClick: MenuProps['onClick'] = ({ key }) => {
     if (key === 'autograde') handleAutograde();
     if (key === 'edit-repo')
@@ -308,17 +313,15 @@ const AssignmentPage = ({ loaderData }: Route.ComponentProps) => {
           <h1 className="text-2xl font-bold text-ink-1 truncate">{assignment.title}</h1>
           <div className="flex flex-wrap items-center gap-x-5 gap-y-1 text-sm text-ink-3">
             <span>
-              Repo ·{' '}
+              {web.isGitLab ? 'Project' : 'Repo'} ·{' '}
               <span className="text-ink-1 font-medium">
                 {assignment.submission_mode === 'REPO' ? 'push' : 'issue'}
               </span>
             </span>
             <span>
-              Repository{' '}
+              {terms.Repo}{' '}
               <a
-                href={gitWeb(gitContextFor(classroom as ClassroomLike)).template(
-                  repository.template
-                )}
+                href={web.template(repository.template)}
                 target="_blank"
                 rel="noreferrer"
                 className="text-ink-1 font-medium hover:underline underline-offset-2"
@@ -337,16 +340,18 @@ const AssignmentPage = ({ loaderData }: Route.ComponentProps) => {
                 </Tag>
               )}
             </span>
-            <span>
-              Autograding{' '}
-              <span
-                className={`font-medium ${autogradingTestCount ? 'text-green-700 dark:text-green-400' : 'text-ink-1'}`}
-              >
-                {autogradingTestCount ? 'on' : 'off'}
+            {!web.isGitLab && (
+              <span>
+                Autograding{' '}
+                <span
+                  className={`font-medium ${autogradingTestCount ? 'text-green-700 dark:text-green-400' : 'text-ink-1'}`}
+                >
+                  {autogradingTestCount ? 'on' : 'off'}
+                </span>
               </span>
-            </span>
+            )}
             <span>
-              {isIndividual ? 'Student repos' : 'Team repos'}{' '}
+              {isIndividual ? 'Student' : 'Team'} {web.isGitLab ? 'projects' : 'repos'}{' '}
               <span className="text-ink-1 font-medium">
                 {rows.length}
                 {isIndividual ? ` of ${studentCount}` : ''}

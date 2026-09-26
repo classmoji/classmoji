@@ -1,4 +1,5 @@
 import type { PRSummary } from './GitHubStatsPanel';
+import { useGitWeb } from '~/hooks/useGitWeb';
 
 export interface PullRequestPillsProps {
   pr_summary: PRSummary;
@@ -22,6 +23,7 @@ function pillClasses(tone: Tone): string {
  * Three capsule pills for PR summary. Counts of 0 are hidden.
  */
 const PullRequestPills = ({ pr_summary }: PullRequestPillsProps) => {
+  const web = useGitWeb();
   const items: Array<{ key: string; count: number; label: string; tone: Tone }> = [
     { key: 'open', count: pr_summary.open, label: 'open', tone: 'green' },
     { key: 'merged', count: pr_summary.merged, label: 'merged', tone: 'violet' },
@@ -32,7 +34,7 @@ const PullRequestPills = ({ pr_summary }: PullRequestPillsProps) => {
   if (visible.length === 0) {
     return (
       <div className="text-xs text-ink-3" data-testid="pr-pills-empty">
-        No pull requests.
+        No {web.terms.prs}.
       </div>
     );
   }
@@ -40,7 +42,7 @@ const PullRequestPills = ({ pr_summary }: PullRequestPillsProps) => {
   return (
     <div className="flex flex-wrap gap-2" data-testid="pr-pills">
       <span className="text-xs font-semibold uppercase tracking-wide text-ink-3 self-center mr-1">
-        PRs
+        {web.terms.prShort}s
       </span>
       {visible.map(i => (
         <span

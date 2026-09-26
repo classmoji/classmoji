@@ -4,7 +4,7 @@ import path from 'path';
 import fs from 'fs';
 
 import { CLASSMOJI_BOT_EMAIL, getGitProvider, type GitLabProvider } from '@classmoji/services';
-import { repoNamespace } from '@classmoji/utils';
+import { gitTerms, repoNamespace, type GitTerms } from '@classmoji/utils';
 
 // Public fallback template used when an instructor's configured template repo has
 // no commits. An empty repo can't seed a student/team repo (the clone lands on an
@@ -90,6 +90,7 @@ export const createRepository = async (payload: CreateRepositoryPayload): Promis
   // student project fires several pipelines (and failure emails) at them.
   // Students' own pushes are untouched.
   const setupPush = provider === 'GITLAB' ? ['-o', 'ci.skip'] : [];
+  const terms = gitTerms(provider === 'GITLAB');
   const studentRepoUrl = authedRemote(provider, token, `${gitOrgLogin}/${repoName}`);
   const templateRepoUrl = authedRemote(provider, token, `${templateOwner}/${templateRepo}`);
 
@@ -163,7 +164,7 @@ export const createRepository = async (payload: CreateRepositoryPayload): Promis
     await repoGit.checkout('main');
 
     const classmojiPath = path.join(localPath, 'CLASSMOJI.md');
-    fs.writeFileSync(classmojiPath, 'Hello! This is your gitRepo for the assignment. 📝\n');
+    fs.writeFileSync(classmojiPath, `Hello! This is your ${terms.repo} for the assignment. 📝\n`);
 
     await repoGit.add('CLASSMOJI.md');
     await repoGit.commit('Add Classmoji welcome message');
@@ -175,7 +176,7 @@ export const createRepository = async (payload: CreateRepositoryPayload): Promis
       'feedback',
       'main',
       'Feedback',
-      FeedbackPRMessage
+      feedbackMessage(terms)
     );
 
     await repoGit.checkoutLocalBranch('updates');
@@ -202,16 +203,17 @@ export const createRepository = async (payload: CreateRepositoryPayload): Promis
   }
 };
 
-const FeedbackPRMessage = `
-This PR is your feedback 📝 space! Your instructor will leave comments and suggestions on your code here.
+/** The Feedback PR/MR body, in the provider's own words. */
+const feedbackMessage = (terms: GitTerms) => `
+This ${terms.pr} is your feedback 📝 space! Your instructor will leave comments and suggestions on your code here.
 
 ### How it works
-- **Files changed** tab → See all your changes since the assignment started
+- **${terms.changesTab}** tab → See all your changes since the assignment started
 - **Commits** tab → Review your commit history
 - Your instructor can leave inline comments on specific lines of code
 
 ### ⚠️ Important
-Don't close or merge this PR unless your instructor tells you to!
+Don't close or merge this ${terms.pr} unless your instructor tells you to!
 
 ---
-*This PR updates automatically as you push to main* ✨`;
+*This ${terms.pr} updates automatically as you push to main* ✨`;

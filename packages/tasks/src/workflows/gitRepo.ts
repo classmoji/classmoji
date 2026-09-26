@@ -10,7 +10,7 @@ import {
   ensureClassroomTeam,
   type GitLabProvider,
 } from '@classmoji/services';
-import { titleToIdentifier, resolveTemplateRef, repoNamespace } from '@classmoji/utils';
+import { gitTerms, titleToIdentifier, resolveTemplateRef, repoNamespace } from '@classmoji/utils';
 import { createGithubRepositoryAssignmentTask } from './gitRepoAssignment.ts';
 import { updateRepository, type UpdateRepositoryPayload } from '../helpers/updateRepository.ts';
 import { createRepository, type CreateRepositoryPayload } from '../helpers/createRepository.ts';
@@ -174,10 +174,11 @@ export const createRepositoriesTask = task({
     // half undefined and fail once per student on a URL that named no field.
     const templateRef = resolveTemplateRef(repository.template, classroom.git_organization.login);
     if (!templateRef) {
+      const templateTerms = gitTerms(classroom.git_organization.provider === 'GITLAB');
       throw new Error(
-        `Assignment "${repository.title}" has no usable template repository ` +
-          `(template is "${repository.template ?? ''}"). Set it to owner/repo, ` +
-          `or to a repository in ${classroom.git_organization.login}.`
+        `Assignment "${repository.title}" has no usable template ${templateTerms.repo} ` +
+          `(template is "${repository.template ?? ''}"). Set it to owner/name, ` +
+          `or to a ${templateTerms.repo} in ${classroom.git_organization.login}.`
       );
     }
     const { owner: templateOwner, repo: templateRepo } = templateRef;

@@ -1,5 +1,6 @@
 import type { CSSProperties } from 'react';
 import { Outlet, useNavigate, useParams, useLocation } from 'react-router';
+import { useGitWeb } from '~/hooks/useGitWeb';
 
 interface TabDef {
   key: string;
@@ -23,6 +24,9 @@ const OrgSettings = () => {
   const navigate = useNavigate();
   const { class: classSlug } = useParams();
   const location = useLocation();
+  const { isGitLab } = useGitWeb();
+  // Gitlab classrooms have no project settings to manage yet.
+  const tabs = isGitLab ? ALL_TABS.filter(tab => tab.key !== 'repos') : ALL_TABS;
 
   const currentTab = location.pathname.split('/').pop() || 'general';
 
@@ -32,9 +36,9 @@ const OrgSettings = () => {
 
       <div className="flex-1 flex flex-col">
         <div className="flex -mb-px relative overflow-x-auto">
-          {ALL_TABS.map((tab, idx) => {
+          {tabs.map((tab, idx) => {
             const isActive = tab.key === currentTab;
-            const baseZ = ALL_TABS.length - idx;
+            const baseZ = tabs.length - idx;
             const zStyle = { zIndex: isActive ? 10 : baseZ };
             const inactiveTextColor = tab.danger
               ? 'text-red-500/80 dark:text-red-400/80 hover:text-red-600 dark:hover:text-red-400'

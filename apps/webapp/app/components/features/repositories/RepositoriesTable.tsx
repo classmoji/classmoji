@@ -17,6 +17,7 @@ import {
 } from '@tabler/icons-react';
 
 import { useRepositoryActions } from './useRepositoryActions';
+import { useGitWeb } from '~/hooks/useGitWeb';
 import AssignmentFormModal from '~/components/features/assignments/AssignmentFormModal';
 import type { AssignmentRowData } from '~/components/features/assignments/AssignmentsTable';
 
@@ -136,6 +137,8 @@ const RepositoriesTable = ({
   // cards so the two surfaces cannot drift.
   const { class: classSlug } = useParams();
   const navigate = useNavigate();
+  const web = useGitWeb();
+  const { terms } = web;
   // Stay in the section the viewer is already in: an assistant following a link
   // into /admin would only meet a loader that refuses them.
   const rolePrefix = useLocation().pathname.split('/')[1] || 'admin';
@@ -162,12 +165,17 @@ const RepositoriesTable = ({
   const repoMenuItems = (r: RepositoryRow): MenuProps['items'] => [
     ...(r.is_published
       ? [
-          { key: 'autograde', label: 'Autograde', icon: <IconRobot size={15} /> },
-          {
-            key: 'update',
-            label: 'Update student repositories',
-            icon: <IconGitPullRequest size={15} />,
-          },
+          // Gitlab classrooms have no autograding or template updates yet.
+          ...(web.isGitLab
+            ? []
+            : [
+                { key: 'autograde', label: 'Autograde', icon: <IconRobot size={15} /> },
+                {
+                  key: 'update',
+                  label: 'Update student repositories',
+                  icon: <IconGitPullRequest size={15} />,
+                },
+              ]),
           ...(r.type === 'GROUP'
             ? [
                 {
@@ -251,7 +259,7 @@ const RepositoriesTable = ({
 
   const columns = [
     {
-      title: 'Repository',
+      title: terms.Repo,
       dataIndex: 'name',
       key: 'name',
       width: 240,
@@ -455,13 +463,13 @@ const RepositoriesTable = ({
         pagination={{
           pageSize: 25,
           showSizeChanger: true,
-          showTotal: (total, range) => `${range[0]}-${range[1]} of ${total} repositories`,
+          showTotal: (total, range) => `${range[0]}-${range[1]} of ${total} ${terms.repos}`,
         }}
         locale={{
           emptyText: (
             <div className="text-center py-12 text-gray-500">
-              <div className="font-medium">No repositories created yet</div>
-              <div className="text-sm">Create your first repository to get started!</div>
+              <div className="font-medium">No {terms.repos} created yet</div>
+              <div className="text-sm">Create your first {terms.repo} to get started!</div>
             </div>
           ),
         }}

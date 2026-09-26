@@ -199,9 +199,9 @@ export const assignmentCreateTool: ToolDefinition<AssignmentCreateArgs> = {
   description:
     'Creates a REPO assignment (due-dated, gradeable) in a module, submitting through an ' +
     'existing repository (see list_repos). submission_mode REPO (default): the last push to the ' +
-    'student repo before the deadline is the submission, no issue is opened. ISSUE: Classmoji opens a GitHub issue in each ' +
+    'student repo before the deadline is the submission, no issue is opened. ISSUE: Classmoji opens an issue (Github or Gitlab) in each ' +
     'student repo and closing it submits. Owner only. Creating it does NOT provision anything on ' +
-    'GitHub — the assignment reaches students only when its repo is published (repo_publish) or ' +
+    'the git host — the assignment reaches students only when its repo is published (repo_publish) or ' +
     'the next release runs. Created as a draft unless is_published is set.',
   scope: 'write',
   roles: OWNER_ONLY,
@@ -215,7 +215,9 @@ export const assignmentCreateTool: ToolDefinition<AssignmentCreateArgs> = {
     submission_mode: z
       .enum(['ISSUE', 'REPO'])
       .optional()
-      .describe('REPO (default): a push submits. ISSUE: closing a GitHub issue submits.'),
+      .describe(
+        'REPO (default): a push submits. ISSUE: closing the assignment issue (Github or Gitlab) submits.'
+      ),
     title: z.string().min(1).max(200).describe('Assignment title (unique per repository)'),
     weight: z.number().positive().max(10000).optional().describe('Grading weight (default 100)'),
     is_extra_credit: z
@@ -335,7 +337,7 @@ export const assignmentDeleteTool: ToolDefinition<AssignmentDeleteArgs> = {
     'Permanently deletes an assignment. Owner only. THIS CANNOT BE UNDONE and cascades: it ' +
     'deletes every student/team submission for this assignment along with all their grades, ' +
     'grader assignments, regrade requests, token transactions, and analytics, plus its ' +
-    'page/slide/calendar links. For an ISSUE-mode assignment it does NOT remove the GitHub issues ' +
+    'page/slide/calendar links. For an ISSUE-mode assignment it does NOT remove the issues on Github/Gitlab ' +
     'already created in student repos (they are orphaned), and it does NOT reconcile student ' +
     'token balances.',
   scope: 'write',

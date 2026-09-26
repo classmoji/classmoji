@@ -6,6 +6,7 @@ import { IconBrandGithub, IconCheck } from '@tabler/icons-react';
 import { EmojisDisplay } from '~/components';
 import { POP_SPRING } from '~/utils/motion';
 import ResourceLinks from './ResourceLinks';
+import { GitlabLogo } from '~/components/ui/display/GitlabLogo';
 
 interface AssignmentCardAssignment {
   title: string;
@@ -147,11 +148,11 @@ const AssignmentCard = ({
               href={githubIssueUrl}
               target="_blank"
               rel="noreferrer"
-              title="View GitHub issue"
-              aria-label="View GitHub issue"
+              title={`View ${repoWeb.label} issue`}
+              aria-label={`View ${repoWeb.label} issue`}
               className="inline-flex items-center justify-center w-7 h-7 rounded-md text-gray-500 hover:text-gray-900 dark:text-gray-400 dark:hover:text-gray-100 hover:bg-stone-100 dark:hover:bg-neutral-700 transition-colors"
             >
-              <IconBrandGithub size={16} />
+              {repoWeb.isGitLab ? <GitlabLogo size={16} /> : <IconBrandGithub size={16} />}
             </a>
           )}
         </div>

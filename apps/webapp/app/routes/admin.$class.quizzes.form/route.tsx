@@ -19,6 +19,7 @@ import { useRouteDrawer, useDarkMode } from '~/hooks';
 import { assertClassroomAccess, assertProTier } from '~/utils/helpers';
 import { ClassmojiService } from '@classmoji/services';
 import { PromptAssistant, type PromptSuggestion } from '~/components/quiz/PromptAssistant';
+import { useGitWeb } from '~/hooks/useGitWeb';
 
 import type { Route } from './+types/route';
 
@@ -88,6 +89,8 @@ export async function loader({ params, request }: Route.LoaderArgs) {
 function QuizFormDrawer({ loaderData }: Route.ComponentProps) {
   const { org, quiz, isEditing, assignments, examplePrompts } = loaderData;
   const { opened, close } = useRouteDrawer({});
+  const web = useGitWeb();
+  const { terms } = web;
   const { isDarkMode } = useDarkMode();
   const navigate = useNavigate();
   const { class: classSlug } = useParams();
@@ -345,10 +348,13 @@ function QuizFormDrawer({ loaderData }: Route.ComponentProps) {
 
                 <Form.Item
                   name="moduleId"
-                  label="Linked Repository (Optional)"
-                  tooltip="Optionally link this quiz to a specific repository"
+                  label={`Linked ${terms.Repo} (Optional)`}
+                  tooltip={`Optionally link this quiz to a specific ${terms.repo}`}
                 >
-                  <Select placeholder="Select a repository to link this quiz to (optional)" allowClear>
+                  <Select
+                    placeholder={`Select a ${terms.repo} to link this quiz to (optional)`}
+                    allowClear
+                  >
                     {assignments?.map((repository: { id: string; title: string }) => (
                       <Option key={repository.id} value={repository.id}>
                         {repository.title}
@@ -359,14 +365,18 @@ function QuizFormDrawer({ loaderData }: Route.ComponentProps) {
 
                 {/* Example Solution Repo (optional - for AI assistant code exploration) */}
                 <Form.Item
-                  label="Example Solution Repository (Optional)"
-                  tooltip="Provide a GitHub URL to an example solution. The AI Prompt Assistant can explore this code to generate more targeted prompts."
+                  label={`Example Solution ${terms.Repo} (Optional)`}
+                  tooltip={`Provide a ${web.label} URL to an example solution. The AI Prompt Assistant can explore this code to generate more targeted prompts.`}
                   extra="Used by the AI Prompt Assistant to analyze code and generate context-aware quiz prompts"
                 >
                   <Input
                     value={exampleRepoUrl}
                     onChange={e => setExampleRepoUrl(e.target.value)}
-                    placeholder="https://github.com/org/example-solution"
+                    placeholder={
+                      web.isGitLab
+                        ? 'https://gitlab.com/group/example-solution'
+                        : 'https://github.com/org/example-solution'
+                    }
                   />
                 </Form.Item>
 
@@ -374,7 +384,7 @@ function QuizFormDrawer({ loaderData }: Route.ComponentProps) {
                   name="includeCodeContext"
                   label="Code-Aware Quiz"
                   valuePropName="checked"
-                  tooltip="Enable AI agent to analyze student's code submission and ask specific questions about their implementation. Requires a linked repository with student repositories."
+                  tooltip={`Enable AI agent to analyze student's code submission and ask specific questions about their implementation. Requires a linked ${terms.repo} with student ${terms.repos}.`}
                 >
                   <Switch checkedChildren="Enabled" unCheckedChildren="Disabled" />
                 </Form.Item>

@@ -10,6 +10,7 @@ import { assertClassroomAccess, assertClassroomMutationAllowed } from '~/utils/h
 import { titleToIdentifier } from '@classmoji/utils';
 import { tasks } from '@trigger.dev/sdk/v3';
 import { useClassroomStatusModals } from '~/utils/classroomStatusModals';
+import { gitTerms } from '~/utils/gitWeb';
 
 export const loader = async ({ request, params }: Route.LoaderArgs) => {
   const classSlug = params.class!;
@@ -79,6 +80,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
     attemptedAction: 'modify_team',
   });
   assertClassroomMutationAllowed({ status: classroom.status, role: membership!.role });
+  const terms = gitTerms(classroom.git_organization?.provider === 'GITLAB');
 
   // Get the repository
   const repository = await ClassmojiService.repository.findByClassroomSlugAndModuleSlug(
@@ -91,7 +93,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
     repository.type !== 'GROUP' ||
     repository.team_formation_mode !== 'SELF_FORMED'
   ) {
-    return { error: 'Team formation not available for this repository' };
+    return { error: `Team formation not available for this ${terms.repo}` };
   }
 
   // Check deadline
@@ -171,7 +173,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
       } catch (error: unknown) {
         console.error('Failed to create GitHub team:', error);
         return {
-          error: 'Failed to create team on GitHub. Please try again or contact your instructor.',
+          error: `Failed to create team on ${terms.platform}. Please try again or contact your instructor.`,
         };
       }
 
@@ -213,7 +215,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
         sessionId: Date.now().toString(),
       });
 
-      return { success: `Team "${teamName}" created! Repository is being set up.` };
+      return { success: `Team "${teamName}" created! ${terms.Repo} is being set up.` };
     },
 
     async join() {
@@ -246,7 +248,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
 
       // Check if team is for this repository
       if (!team.tags.some(t => t.tag_id === tag.id)) {
-        return { error: 'This team is not for this repository' };
+        return { error: `This team is not for this ${terms.repo}` };
       }
 
       // Check if team is full

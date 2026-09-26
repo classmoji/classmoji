@@ -7,6 +7,7 @@ import type { ButtonProps } from 'antd';
 import { useGlobalFetcher, useDisclosure } from '~/hooks';
 import { ClassmojiService, TeamServiceError } from '@classmoji/services';
 import { ActionTypes } from '~/constants';
+import { useGitWeb } from '~/hooks/useGitWeb';
 import { requireClassroomAdmin, assertClassroomMutationAllowed } from '~/utils/routeAuth.server';
 import type { Route } from './+types/route';
 
@@ -25,6 +26,7 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
 
 const AdminNewTeam = ({ loaderData }: Route.ComponentProps) => {
   const { tags } = loaderData;
+  const web = useGitWeb();
 
   const { fetcher, notify } = useGlobalFetcher();
   const navigate = useNavigate();
@@ -132,7 +134,7 @@ const AdminNewTeam = ({ loaderData }: Route.ComponentProps) => {
             >
               <Radio value="secret">Secret - can only be seen by its members.</Radio>
               <Radio value="closed">
-                Visible - can be seen by every member of this organization.
+                Visible - can be seen by every member of this {web.terms.org}.
               </Radio>
             </Radio.Group>
           </div>
@@ -181,7 +183,14 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
         };
       } catch (error: unknown) {
         if (error instanceof TeamServiceError) {
-          return { error: createErrorMessage(error, name), action: ActionTypes.SAVE_TEAM };
+          return {
+            error: createErrorMessage(
+              error,
+              name,
+              classroom.git_organization?.provider === 'GITLAB'
+            ),
+            action: ActionTypes.SAVE_TEAM,
+          };
         }
         throw error;
       }
@@ -189,16 +198,18 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
   });
 };
 
-const createErrorMessage = (error: TeamServiceError, name: string) => {
+const createErrorMessage = (error: TeamServiceError, name: string, isGitLab = false) => {
   switch (error.code) {
     case 'invalid_name':
       return 'Team name is required';
     case 'reserved_name':
       return `Team name "${name}" is reserved for classroom teams. Please choose a different name.`;
     case 'name_collision':
-      return `A team named "${name}" already exists in this GitHub organization. Please choose a different name.`;
+      return isGitLab
+        ? `A subgroup named "${name}" already exists in this Gitlab group. Please choose a different name.`
+        : `A team named "${name}" already exists in this Github organization. Please choose a different name.`;
     case 'no_org_configured':
-      return 'Git organization not configured';
+      return 'No Github organization or Gitlab group configured';
     default:
       return 'Could not create this team.';
   }

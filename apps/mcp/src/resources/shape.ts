@@ -9,6 +9,13 @@
  * spread a service row into a payload.
  */
 
+import {
+  gitContextFor,
+  gitTerms,
+  gitWeb,
+  type ClassroomLike,
+  type GitWebContext,
+} from '@classmoji/utils';
 import type { Role } from '@prisma/client';
 import { ToolError } from '../mcp/errors.ts';
 import type { ToolContext } from '../mcp/registry.ts';
@@ -26,6 +33,20 @@ export function classroomCtx(ctx: ToolContext): NonNullable<ToolContext['classro
 }
 
 /** The classroom's git-org login (for org/slug refs and issue URLs). */
+/**
+ * The classroom's git context (provider, org/group, class subgroup), for links
+ * that must point at Github or Gitlab correctly. Null without an org.
+ */
+export function orgGit(ctx: ToolContext): GitWebContext | null {
+  const classroom = classroomCtx(ctx).classroom as unknown as ClassroomLike;
+  return classroom.git_organization?.login ? gitContextFor(classroom) : null;
+}
+
+/** The classroom's words for repos, PRs and orgs (project/merge request/group on Gitlab). */
+export function gitTermsFor(ctx: ToolContext) {
+  return gitTerms(orgGit(ctx)?.provider === 'GITLAB');
+}
+
 export function orgLogin(ctx: ToolContext): string | null {
   const classroom = classroomCtx(ctx).classroom as unknown as {
     git_organization?: { login?: string | null } | null;
@@ -139,25 +160,25 @@ export interface SubmissionLike {
   graders?: GraderRowLike[];
 }
 
-/** The student's repo on GitHub — the submission itself in REPO mode. */
+/** The student's repo on its git host — the submission itself in REPO mode. */
 export function repoUrl(
-  orgLogin: string | null | undefined,
+  git: GitWebContext | null | undefined,
   submission: SubmissionLike
 ): string | null {
   const repoName = submission.git_repo?.name;
-  if (!orgLogin || !repoName) return null;
-  return `https://github.com/${orgLogin}/${repoName}`;
+  if (!git?.login || !repoName) return null;
+  return gitWeb(git).repo(repoName);
 }
 
-/** Build the GitHub issue URL the webapp derives (org login + repo name + issue #). Null in REPO mode. */
+/** The submission's issue URL on its git host, as the webapp builds it. Null in REPO mode. */
 export function issueUrl(
-  orgLogin: string | null | undefined,
+  git: GitWebContext | null | undefined,
   submission: SubmissionLike
 ): string | null {
   const repoName = submission.git_repo?.name;
   const issueNumber = submission.provider_issue_number;
-  if (!orgLogin || !repoName || !issueNumber) return null;
-  return `https://github.com/${orgLogin}/${repoName}/issues/${issueNumber}`;
+  if (!git?.login || !repoName || !issueNumber) return null;
+  return gitWeb(git).issue(repoName, issueNumber);
 }
 
 export function gradeRefs(grades: GradeLike[] | undefined) {

@@ -28,6 +28,7 @@
  * into repository.setPublished so the write itself is scoped.
  */
 
+import { gitTermsFor } from '../resources/shape.ts';
 import { randomUUID } from 'node:crypto';
 import { ClassmojiService } from '@classmoji/services';
 import Tasks from '@classmoji/tasks';
@@ -132,7 +133,7 @@ export const repoPublishTool: ToolDefinition<RepoPublishArgs> = {
       return ok({
         success: true,
         is_published: true,
-        message: 'Repository re-published. Use Sync to update repositories.',
+        message: `${gitTermsFor(ctx).Repo} re-published. Use Sync to update ${gitTermsFor(ctx).repos}.`,
       });
     }
 
@@ -154,7 +155,7 @@ export const repoPublishTool: ToolDefinition<RepoPublishArgs> = {
           success: true,
           is_published: true,
           provisioning: { repos_to_create: 0 },
-          message: 'Repository published. Student repositories are created as students join.',
+          message: `${gitTermsFor(ctx).Repo} published. Student ${gitTermsFor(ctx).repos} are created as students join.`,
         });
       }
 
@@ -174,7 +175,7 @@ export const repoPublishTool: ToolDefinition<RepoPublishArgs> = {
         success: true,
         is_published: true,
         provisioning: { repos_to_create: logins.length },
-        message: 'Repository published. Student repositories are being created in the background.',
+        message: `${gitTermsFor(ctx).Repo} published. Student ${gitTermsFor(ctx).repos} are being created in the background.`,
       });
     }
 
@@ -186,7 +187,7 @@ export const repoPublishTool: ToolDefinition<RepoPublishArgs> = {
       return ok({
         success: true,
         is_published: true,
-        message: 'Repository published! Students can now form teams.',
+        message: `${gitTermsFor(ctx).Repo} published! Students can now form teams.`,
       });
     }
 
@@ -201,7 +202,7 @@ export const repoPublishTool: ToolDefinition<RepoPublishArgs> = {
         success: true,
         is_published: true,
         provisioning: { repos_to_create: 0 },
-        message: 'Repository published. Team repositories are created once teams exist.',
+        message: `${gitTermsFor(ctx).Repo} published. Team ${gitTermsFor(ctx).repos} are created once teams exist.`,
       });
     }
 
@@ -224,7 +225,7 @@ export const repoPublishTool: ToolDefinition<RepoPublishArgs> = {
       success: true,
       is_published: true,
       provisioning: { repos_to_create: teams.length },
-      message: 'Repository published. Team repositories are being created in the background.',
+      message: `${gitTermsFor(ctx).Repo} published. Team ${gitTermsFor(ctx).repos} are being created in the background.`,
     });
   },
 };
@@ -262,7 +263,11 @@ export const repoUnpublishTool: ToolDefinition<RepoUnpublishArgs> = {
       data: { tool: 'repo_unpublish', is_published: false },
     });
 
-    return ok({ success: true, is_published: false, message: 'Repository unpublished' });
+    return ok({
+      success: true,
+      is_published: false,
+      message: `${gitTermsFor(ctx).Repo} unpublished`,
+    });
   },
 };
 
@@ -288,13 +293,13 @@ export const repoCreateTool: ToolDefinition<RepoCreateArgs> = {
   annotations: { destructive: false, openWorld: true },
   title: 'Create an assignment container (repo)',
   description:
-    'Creates an UNPUBLISHED repository (a GitHub template students are provisioned from). ' +
+    'Creates an UNPUBLISHED repository (a Github repo or Gitlab project template students are provisioned from). ' +
     'Owner only. A repository has no module: it is the submission target of REPO assignments, ' +
     'which live in modules. No student git repos are created — the repo starts hidden; attach ' +
     'assignments with assignment_create (module_id + repository_id), then provision student repos ' +
     'with repo_publish. Grading weight lives on assignments, not the repo. For a GROUP repo with instructor-assigned teams, ' +
     "pass tag_id (a team tag in this classroom). Refreshes the classroom's content manifest on " +
-    'GitHub (best-effort).',
+    'Github (best-effort; Github classrooms only).',
   scope: 'write',
   roles: OWNER_ONLY,
   inputSchema: {
@@ -304,7 +309,9 @@ export const repoCreateTool: ToolDefinition<RepoCreateArgs> = {
       .string()
       .min(1)
       .max(200)
-      .describe('GitHub template repo name students are provisioned from at publish'),
+      .describe(
+        'Template students are provisioned from at publish: owner/name on Github, group/.../project on Gitlab'
+      ),
     type: z
       .enum(['INDIVIDUAL', 'GROUP'])
       .optional()
@@ -325,7 +332,10 @@ export const repoCreateTool: ToolDefinition<RepoCreateArgs> = {
       .optional()
       .describe('GROUP only (ISO 8601)'),
     max_team_size: z.number().int().positive().optional().describe('GROUP only'),
-    project_template_id: z.string().optional().describe('GitHub Projects V2 template node_id'),
+    project_template_id: z
+      .string()
+      .optional()
+      .describe('Github Projects V2 template node_id (Github classrooms only)'),
     project_template_title: z.string().optional().describe('Human-readable project template name'),
   },
   handler: async (args, ctx) => {

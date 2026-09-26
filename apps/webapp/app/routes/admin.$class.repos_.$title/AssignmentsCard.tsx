@@ -4,6 +4,7 @@ import {
   ASSIGNMENT_TYPE_META,
   type AssignmentRowData,
 } from '~/components/features/assignments/AssignmentsTable';
+import { useGitWeb } from '~/hooks/useGitWeb';
 
 interface AssignmentsCardProps {
   assignments: AssignmentRowData[];
@@ -33,14 +34,16 @@ const AssignmentsCard = ({
   canEdit = true,
 }: AssignmentsCardProps) => {
   const Icon = ASSIGNMENT_TYPE_META.REPO.icon;
+  const web = useGitWeb();
   return (
     <div className="rounded-2xl bg-panel ring-1 ring-line px-5 py-4 flex flex-col gap-2">
       <div className="text-xs font-semibold uppercase tracking-wide text-ink-3">
-        Assignments through this repo
+        Assignments through this {web.isGitLab ? web.terms.repo : 'repo'}
       </div>
       {assignments.length === 0 ? (
         <p className="text-sm text-ink-3 py-2">
-          None yet. Add an assignment from a module and pick this repository to make it gradable.
+          None yet. Add an assignment from a module and pick this {web.terms.repo} to make it
+          gradable.
         </p>
       ) : (
         assignments.map(a => (

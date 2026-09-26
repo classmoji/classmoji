@@ -22,6 +22,7 @@
  * (fails safe) and there is no wait-timeout window for a retry to re-fire.
  */
 
+import { gitTermsFor } from '../resources/shape.ts';
 import { buildRemoveUserPayload, ClassmojiService } from '@classmoji/services';
 import { signInviteToken } from '@classmoji/auth/invite-token';
 import Tasks from '@classmoji/tasks';
@@ -43,9 +44,9 @@ export const rosterAddStudentTool: ToolDefinition<RosterAddStudentArgs> = {
   title: 'Add students to the roster',
   description:
     'Adds students to the classroom roster by email (bulk). Owner only. Existing Classmoji users ' +
-    'are enrolled immediately (still pending their GitHub org invite); unknown emails get an ' +
+    'are enrolled immediately (on Github still pending their org invite; on Gitlab active once they open Classmoji with Gitlab connected); unknown emails get an ' +
     'invitation row. Sends a real email to every student — NOT idempotent, calling twice emails ' +
-    'twice. Does not touch GitHub or create repos; students get their org invite + repos when ' +
+    'twice. Does not touch Github/Gitlab or create repos; students get their access + repos when ' +
     'they first sign in and join.',
   scope: 'write',
   roles: OWNER_ONLY,
@@ -114,19 +115,19 @@ export const rosterRemoveStudentTool: ToolDefinition<RosterRemoveStudentArgs> = 
   description:
     'Removes a student from the classroom. Owner only, destructive, requires confirm:true. ' +
     'Identify the student by student_login or user_id. Triggers the standard removal workflow: ' +
-    'it removes them from the classroom GitHub team and, IF they are in no other class in that ' +
-    'GitHub org, removes them from the org entirely (revoking access and DELETING their private ' +
+    'on Github it removes them from the classroom Github team and, IF they are in no other class in that ' +
+    'Github org, removes them from the org entirely (revoking access and DELETING their private ' +
     'forks) — this is not cleanly reversible. Deletes the classroom membership. Runs in the ' +
     'background; does not delete their assignment repos, but org removal revokes access.',
   scope: 'write',
   roles: OWNER_ONLY,
   inputSchema: {
     classroom: z.string().describe("Classroom reference as 'org/slug'"),
-    student_login: z.string().min(1).optional().describe('The student GitHub login'),
+    student_login: z.string().min(1).optional().describe('The student Classmoji login'),
     user_id: z.string().uuid().optional().describe('The student user id (alternative to login)'),
     confirm: z
       .literal(true)
-      .describe('Must be true — acknowledges this can remove the student from the GitHub org'),
+      .describe('Must be true — acknowledges this can remove the student from the Github org'),
   },
   handler: async (args, ctx) => {
     const classroom = requireClassroomCtx(ctx);
@@ -199,8 +200,7 @@ export const rosterRemoveStudentTool: ToolDefinition<RosterRemoveStudentArgs> = 
       queued: true,
       user_id: target.id,
       login: target.login,
-      message:
-        'Student removal queued — removing GitHub team/org access and the membership in the background.',
+      message: `Student removal queued — removing ${gitTermsFor(ctx).platform} access and the membership in the background.`,
     });
   },
 };

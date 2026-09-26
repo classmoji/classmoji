@@ -27,7 +27,7 @@ export const action = async ({ request }: Route.ActionArgs) => {
   // Use git_organization.login for GitHub API calls, not the classroom slug
   const gitOrgLogin = classroom.git_organization?.login;
   if (!gitOrgLogin) {
-    return Response.json({ error: 'Git organization not configured' });
+    return Response.json({ error: 'No Github organization or Gitlab group configured' });
   }
 
   // Stored, user-editable content repo name. Never re-derive it.

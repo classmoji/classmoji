@@ -4,6 +4,7 @@ import { useParams, useNavigate, useLocation, Outlet } from 'react-router';
 import { useState } from 'react';
 
 import { useGlobalFetcher } from '~/hooks';
+import { useGitWeb } from '~/hooks/useGitWeb';
 import Menu from './Menu';
 import { action } from './action';
 import { adminLoader } from './loader.server';
@@ -34,6 +35,8 @@ const SingleRepository = ({ loaderData }: Route.ComponentProps) => {
   const { fetcher, notify } = useGlobalFetcher();
   const { class: classSlug } = useParams();
   const navigate = useNavigate();
+  const web = useGitWeb();
+  const { terms } = web;
   const location = useLocation();
   const [editing, setEditing] = useState<AssignmentRowData | null>(null);
   // The assistant section serves this same page read-only. /admin is OWNER-gated
@@ -92,7 +95,7 @@ const SingleRepository = ({ loaderData }: Route.ComponentProps) => {
             type="button"
             onClick={() => navigate(`/${rolePrefix}/${classSlug}/repos`)}
             className="hover:text-ink-1"
-            aria-label="Back to repositories"
+            aria-label={`Back to ${terms.repos}`}
           >
             <IconChevronLeft size={18} />
           </button>
@@ -102,7 +105,7 @@ const SingleRepository = ({ loaderData }: Route.ComponentProps) => {
             onClick={() => navigate(`/${rolePrefix}/${classSlug}/repos`)}
             className="hover:text-ink-1"
           >
-            Repositories
+            {terms.Repos}
           </button>
           <span className="text-ink-3">/</span>
           <span className="font-semibold text-ink-1">{repository!.title}</span>
@@ -116,22 +119,24 @@ const SingleRepository = ({ loaderData }: Route.ComponentProps) => {
 
         {canEdit && (
           <div className="flex items-center gap-2">
-            <Tooltip
-              title={
-                autogradingTestCount
-                  ? 'Push the autograding workflow to student repos'
-                  : 'Add autograding tests to this repository first'
-              }
-            >
-              <Button
-                icon={<IconRobot size={16} />}
-                disabled={!autogradingTestCount}
-                loading={isAutograding}
-                onClick={handleAutograde}
+            {!web.isGitLab && (
+              <Tooltip
+                title={
+                  autogradingTestCount
+                    ? 'Push the autograding workflow to student repos'
+                    : 'Add autograding tests to this repository first'
+                }
               >
-                {isAutograding ? 'Provisioning…' : 'Autograde'}
-              </Button>
-            </Tooltip>
+                <Button
+                  icon={<IconRobot size={16} />}
+                  disabled={!autogradingTestCount}
+                  loading={isAutograding}
+                  onClick={handleAutograde}
+                >
+                  {isAutograding ? 'Provisioning…' : 'Autograde'}
+                </Button>
+              </Tooltip>
+            )}
             <Menu
               repository={repository as Parameters<typeof Menu>[0]['repository']}
               assistants={assistants as Parameters<typeof Menu>[0]['assistants']}
@@ -150,7 +155,7 @@ const SingleRepository = ({ loaderData }: Route.ComponentProps) => {
           <span className="text-ink-1 font-medium">{isIndividual ? 'Individual' : 'Group'}</span>
         </span>
         <span>
-          {isIndividual ? 'Student repos' : 'Team repos'}{' '}
+          {isIndividual ? 'Student' : 'Team'} {web.isGitLab ? terms.repos : 'repos'}{' '}
           <span className="text-ink-1 font-medium">
             {rows.length}
             {isIndividual ? ` of ${studentCount}` : ''}
@@ -161,7 +166,7 @@ const SingleRepository = ({ loaderData }: Route.ComponentProps) => {
       <div className="flex flex-col gap-4">
         {assignmentRows.length === 0 && (
           <div className="rounded-xl border border-[#F4D8C5] dark:border-amber-800/40 bg-[#FEF3EC] dark:bg-amber-900/20 px-4 py-3 text-sm text-[#8a5b3a] dark:text-amber-200">
-            No assignment submits through this repository yet, so pushes to it are recorded but
+            No assignment submits through this {terms.repo} yet, so pushes to it are recorded but
             count as nothing. Add a REPO assignment pointing at it to start collecting submissions.
           </div>
         )}

@@ -7,6 +7,7 @@ import TokenExtensionPopover from '~/components/features/TokenExtensionPopover';
 import { CommitCount } from '~/components/features/analytics';
 import { POP_SPRING } from '~/utils/motion';
 import { formatDeadline } from './formatDeadline';
+import { useGitWeb } from '~/hooks/useGitWeb';
 
 export type AssignmentStatus = 'current' | 'completed';
 
@@ -64,6 +65,7 @@ const emptyCopy: Record<TabKey, string> = {
 };
 
 const AssignmentsTabsCard = ({ rows, balance }: AssignmentsTabsCardProps) => {
+  const web = useGitWeb();
   const [active, setActive] = useState<TabKey>('current');
   const reducedMotion = useReducedMotion();
   const { class: classSlug } = useParams();
@@ -122,7 +124,7 @@ const AssignmentsTabsCard = ({ rows, balance }: AssignmentsTabsCardProps) => {
             <table className="w-full text-sm">
               <thead className="text-xs font-semibold tracking-[0.08em] uppercase text-ink-3">
                 <tr className="border-b border-line">
-                  <th className="text-left px-4 py-3 font-semibold">Repository</th>
+                  <th className="text-left px-4 py-3 font-semibold">{web.terms.Repo}</th>
                   <th className="text-left px-4 py-3 font-semibold">Assignment</th>
                   <th className="text-left px-4 py-3 font-semibold hidden md:table-cell">Type</th>
                   <th className="text-left px-4 py-3 font-semibold">Status</th>
@@ -156,11 +158,11 @@ const AssignmentsTabsCard = ({ rows, balance }: AssignmentsTabsCardProps) => {
                               href={row.repoUrl}
                               target="_blank"
                               rel="noreferrer"
-                              title="Open your repository on GitHub"
+                              title={`Open your ${web.terms.repo} on ${web.label}`}
                               className="inline-flex items-center gap-1.5 max-w-[12rem] rounded-md text-gray-700! dark:text-gray-200! hover:text-ink-0! hover:underline underline-offset-2 transition-colors"
                             >
                               <span className="truncate">
-                                {row.repositoryTitle || 'Repository'}
+                                {row.repositoryTitle || web.terms.Repo}
                               </span>
                               <IconExternalLink
                                 size={13}
@@ -188,8 +190,8 @@ const AssignmentsTabsCard = ({ rows, balance }: AssignmentsTabsCardProps) => {
                             rel="noreferrer"
                             title={
                               row.issueUrl
-                                ? 'Open the GitHub issue for this assignment'
-                                : 'Open the repository you submit this in'
+                                ? `Open the ${web.label} issue for this assignment`
+                                : `Open the ${web.terms.repo} you submit this in`
                             }
                             className="inline-flex items-center gap-1.5 font-medium text-ink-0! hover:underline underline-offset-2"
                           >

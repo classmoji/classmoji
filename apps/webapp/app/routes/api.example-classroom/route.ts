@@ -28,7 +28,7 @@ export const action = async ({ request }: Route.ActionArgs) => {
     select: { login: true },
   });
   if (!user?.login) {
-    return Response.json({ error: 'Account has no Github login yet.' }, { status: 400 });
+    return Response.json({ error: 'Account has no git username yet.' }, { status: 400 });
   }
 
   // Optional form field: the tour sends the browser's zone. Absent (an older

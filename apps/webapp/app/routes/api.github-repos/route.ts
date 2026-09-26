@@ -116,7 +116,9 @@ export async function loader({ request }: Route.LoaderArgs) {
     });
   } catch (error: unknown) {
     console.error('[api.github-repos] Error fetching repos:', error);
-    return new Response(JSON.stringify({ error: 'Failed to fetch repositories' }), {
+    const reposWord =
+      classroom.git_organization.provider === 'GITLAB' ? 'projects' : 'repositories';
+    return new Response(JSON.stringify({ error: `Failed to fetch ${reposWord}` }), {
       status: 500,
       headers: { 'Content-Type': 'application/json' },
     });

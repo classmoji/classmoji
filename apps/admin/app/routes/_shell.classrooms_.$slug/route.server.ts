@@ -27,7 +27,13 @@ export async function loadClassroom({ request, params }: LoaderFunctionArgs) {
       github_classroom_id: true,
       created_at: true,
       git_organization: {
-        select: { login: true, provider: true, provider_id: true, github_installation_id: true },
+        select: {
+          login: true,
+          provider: true,
+          provider_id: true,
+          github_installation_id: true,
+          gitlab_connection_id: true,
+        },
       },
       memberships: {
         select: {
@@ -92,7 +98,11 @@ export async function loadClassroom({ request, params }: LoaderFunctionArgs) {
       provider: org.provider,
       // Missing means the GitHub App was never installed or was revoked, which
       // makes every repo operation fail in ways that look like random bugs.
-      hasInstallation: Boolean(org.github_installation_id),
+      // Gitlab groups act through a Gitlab connection, not a Github App install.
+      hasInstallation:
+        org.provider === 'GITLAB'
+          ? Boolean(org.gitlab_connection_id)
+          : Boolean(org.github_installation_id),
     },
     owners: byRole('OWNER'),
     teachers: byRole('TEACHER'),

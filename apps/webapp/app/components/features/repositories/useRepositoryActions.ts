@@ -6,6 +6,7 @@ import { ActionTypes } from '~/constants';
 import { FetcherContext } from '~/contexts';
 import LocalStorage from '~/utils/localStorage';
 import { useGlobalFetcher } from '~/hooks';
+import { useGitWeb } from '~/hooks/useGitWeb';
 
 interface RepositoryRef {
   id: string;
@@ -31,6 +32,7 @@ export const useRepositoryActions = (actionBase = '') => {
   const { fetcher, notify } = useGlobalFetcher();
   const { operation } = useContext(FetcherContext);
   const { modal } = App.useApp();
+  const { terms } = useGitWeb();
   const [pending, setPending] = useState<{ id: string; label: string } | null>(null);
 
   // Done when the request has landed and no background batch came out of it.
@@ -66,7 +68,7 @@ export const useRepositoryActions = (actionBase = '') => {
     LocalStorage.forceRefreshRepos();
   };
   const deleteRepository = (id: string) => {
-    notify(ActionTypes.DELETE_ASSIGNMENT, 'Deleting repository...');
+    notify(ActionTypes.DELETE_ASSIGNMENT, `Deleting ${terms.repo}...`);
     post('delete', id, 'delete');
     LocalStorage.forceRefreshRepos();
   };
@@ -98,8 +100,8 @@ export const useRepositoryActions = (actionBase = '') => {
 
   const confirmSync = (id: string) =>
     modal.confirm({
-      title: 'Sync repository',
-      content: 'This updates all student repositories with the latest changes.',
+      title: `Sync ${terms.repo}`,
+      content: `This updates all student ${terms.repos} with the latest changes.`,
       okText: 'Sync',
       cancelText: 'Cancel',
       onOk: () => syncRepository(id),
@@ -107,8 +109,8 @@ export const useRepositoryActions = (actionBase = '') => {
 
   const confirmPublish = (id: string) =>
     modal.confirm({
-      title: 'Publish repository',
-      content: 'This makes the repository available to all students.',
+      title: `Publish ${terms.repo}`,
+      content: `This makes the ${terms.repo} available to all students.`,
       okText: 'Publish',
       cancelText: 'Cancel',
       onOk: () => publishRepository(id),
@@ -125,9 +127,8 @@ export const useRepositoryActions = (actionBase = '') => {
     // Already open to students, but nobody has repositories yet.
     if (opts.assignmentPublished) {
       return modal.confirm({
-        title: 'Create student repositories',
-        content:
-          'This assignment is already open to students, but its repositories have not been created. This creates them.',
+        title: `Create student ${terms.repos}`,
+        content: `This assignment is already open to students, but its ${terms.repos} have not been created. This creates them.`,
         okText: 'Create',
         cancelText: 'Cancel',
         onOk: () => publishAssignment(id),
@@ -136,8 +137,8 @@ export const useRepositoryActions = (actionBase = '') => {
     return modal.confirm({
       title: 'Publish assignment',
       content: opts.needsRepo
-        ? 'This creates the student repositories first, then opens the assignment to students.'
-        : 'This opens the assignment to students. Its repository is already published.',
+        ? `This creates the student ${terms.repos} first, then opens the assignment to students.`
+        : `This opens the assignment to students. Its ${terms.repo} is already published.`,
       okText: 'Publish',
       cancelText: 'Cancel',
       onOk: () => publishAssignment(id),
@@ -146,8 +147,8 @@ export const useRepositoryActions = (actionBase = '') => {
 
   const confirmUnpublish = (id: string) =>
     modal.confirm({
-      title: 'Unpublish repository',
-      content: 'This hides the repository from students. Repositories are not deleted.',
+      title: `Unpublish ${terms.repo}`,
+      content: `This hides the ${terms.repo} from students. ${terms.Repos} are not deleted.`,
       okText: 'Unpublish',
       cancelText: 'Cancel',
       onOk: () => unpublishRepository(id),
@@ -155,8 +156,8 @@ export const useRepositoryActions = (actionBase = '') => {
 
   const confirmDelete = (id: string) =>
     modal.confirm({
-      title: 'Delete repository',
-      content: 'This permanently deletes the repository and its assignments.',
+      title: `Delete ${terms.repo}`,
+      content: `This permanently deletes the ${terms.repo} and its assignments.`,
       okText: 'Delete',
       okButtonProps: { danger: true },
       cancelText: 'Cancel',

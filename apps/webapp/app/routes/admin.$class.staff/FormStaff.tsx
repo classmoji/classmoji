@@ -7,6 +7,7 @@ import { IconMail, IconUser, IconBrandGithubCopilot } from '@tabler/icons-react'
 import { useGlobalFetcher } from '~/hooks';
 import { useCallout } from '@classmoji/ui-components';
 import { ActionTypes } from '~/constants';
+import { GitlabLogo } from '~/components/ui/display/GitlabLogo';
 
 const { Text } = Typography;
 
@@ -160,10 +161,9 @@ const FormStaff = ({ close, initialRole = 'ASSISTANT' }: FormStaffProps) => {
             the classroom and everything in it.
           </p>
           <p className="mt-1">
-            Co-owner is a Classmoji role, not a GitHub organization admin. Anything that runs with
-            the requester&rsquo;s own GitHub credentials — such as the GitHub cleanup offered when a
-            classroom is deleted — will fail for a co-owner who is not an admin of the GitHub
-            organization.
+            {web.isGitLab
+              ? 'Co-owner is a Classmoji role, not a Gitlab group owner. Anything that runs with the requester’s own Gitlab credentials, such as the Gitlab cleanup offered when a classroom is deleted, will fail for a co-owner who is not an owner of the Gitlab group.'
+              : 'Co-owner is a Classmoji role, not a GitHub organization admin. Anything that runs with the requester’s own GitHub credentials — such as the GitHub cleanup offered when a classroom is deleted — will fail for a co-owner who is not an admin of the GitHub organization.'}
           </p>
         </div>
       )}
@@ -192,7 +192,7 @@ const FormStaff = ({ close, initialRole = 'ASSISTANT' }: FormStaffProps) => {
       >
         <Input
           placeholder={web.isGitLab ? 'gitlab-username' : 'github-username'}
-          prefix={<IconBrandGithubCopilot size={16} />}
+          prefix={web.isGitLab ? <GitlabLogo size={16} /> : <IconBrandGithubCopilot size={16} />}
         />
       </Form.Item>
 
@@ -203,7 +203,10 @@ const FormStaff = ({ close, initialRole = 'ASSISTANT' }: FormStaffProps) => {
           instructor inviting someone whose real name they did not have to
           hand. */}
       <Form.Item label="Name (optional)" name="name">
-        <Input placeholder="Defaults to their GitHub name" prefix={<IconUser size={16} />} />
+        <Input
+          placeholder={`Defaults to their ${web.isGitLab ? 'Gitlab' : 'GitHub'} name`}
+          prefix={<IconUser size={16} />}
+        />
       </Form.Item>
 
       <Form.Item
@@ -211,7 +214,10 @@ const FormStaff = ({ close, initialRole = 'ASSISTANT' }: FormStaffProps) => {
         name="email"
         rules={[{ type: 'email', message: 'Please enter a valid email address' }]}
       >
-        <Input placeholder="Defaults to their GitHub email" prefix={<IconMail size={16} />} />
+        <Input
+          placeholder={`Defaults to their ${web.isGitLab ? 'Gitlab' : 'GitHub'} email`}
+          prefix={<IconMail size={16} />}
+        />
       </Form.Item>
 
       <Form.Item className="mb-0 mt-6">
@@ -228,10 +234,9 @@ const FormStaff = ({ close, initialRole = 'ASSISTANT' }: FormStaffProps) => {
                     what they delete.
                   </p>
                   <p className="mt-2">
-                    Co-owner is a Classmoji role, not a GitHub organization admin. Operations that
-                    use the requester&rsquo;s own GitHub credentials — such as the GitHub cleanup
-                    offered when a classroom is deleted — will fail for a co-owner who is not an
-                    admin of the GitHub organization.
+                    {web.isGitLab
+                      ? 'Co-owner is a Classmoji role, not a Gitlab group owner. Operations that use the requester’s own Gitlab credentials, such as the Gitlab cleanup offered when a classroom is deleted, will fail for a co-owner who is not an owner of the Gitlab group.'
+                      : 'Co-owner is a Classmoji role, not a GitHub organization admin. Operations that use the requester’s own GitHub credentials — such as the GitHub cleanup offered when a classroom is deleted — will fail for a co-owner who is not an admin of the GitHub organization.'}
                   </p>
                 </div>
               }

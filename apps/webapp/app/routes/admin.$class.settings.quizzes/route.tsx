@@ -8,6 +8,7 @@ import { ClassmojiService } from '@classmoji/services';
 import { SettingSection } from '~/components';
 import { ActionTypes } from '~/constants';
 import { useGlobalFetcher } from '~/hooks';
+import { useGitWeb } from '~/hooks/useGitWeb';
 import { assertClassroomAccess, assertClassroomMutationAllowed } from '~/utils/helpers';
 import { isAIAgentConfigured } from '~/utils/aiFeatures.server';
 import type { Route } from './+types/route';
@@ -73,6 +74,7 @@ const SettingsQuizzes = ({ loaderData }: Route.ComponentProps) => {
   const { organization, availableModels, aiAgentAvailable } = loaderData;
   const { class: classSlug } = useParams();
   const [form] = Form.useForm();
+  const { terms } = useGitWeb();
 
   const { fetcher } = useGlobalFetcher();
 
@@ -257,7 +259,7 @@ const SettingsQuizzes = ({ loaderData }: Route.ComponentProps) => {
         {/* Code-Aware Quiz Settings Section */}
         <SettingSection
           title="Code-Aware Quiz Settings"
-          description="Configure the AI models for code-aware quizzes that can explore student repositories."
+          description={`Configure the AI models for code-aware quizzes that can explore student ${terms.repos}.`}
         >
           <Form.Item
             label="Agent Model"

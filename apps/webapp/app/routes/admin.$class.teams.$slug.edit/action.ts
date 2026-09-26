@@ -8,6 +8,7 @@ import {
 } from '@classmoji/services';
 import { ActionTypes } from '~/constants';
 import { requireClassroomAdmin, assertClassroomMutationAllowed } from '~/utils/routeAuth.server';
+import { GITLAB_UNSUPPORTED } from '~/utils/gitlabGuard.server';
 import type { Route } from './+types/route';
 
 /**
@@ -21,9 +22,9 @@ const errorMessage = (error: TeamServiceError, slug: string) => {
     case 'invalid_name':
       return 'New team name is required';
     case 'no_org_configured':
-      return 'Git organization not configured';
+      return 'No Github organization or Gitlab group configured';
     case 'provider_unsupported':
-      return 'Team rename is only supported for GitHub organizations';
+      return GITLAB_UNSUPPORTED;
     case 'team_not_found':
       return `Team @${slug} was not found in this classroom.`;
     case 'reserved_name':

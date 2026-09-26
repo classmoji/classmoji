@@ -640,8 +640,12 @@ export async function deleteSlide({
   if (!gitOrgLogin) {
     throw new Error('Git organization not configured');
   }
+  // Slides live in a Github content repo; Gitlab classrooms have none yet.
+  if (slide.classroom.git_organization?.provider === 'GITLAB') {
+    throw new Error('Not available for Gitlab classrooms yet.');
+  }
   if (!slide.classroom.git_organization?.github_installation_id) {
-    throw new Error('GitHub installation not configured');
+    throw new Error('Github installation not configured');
   }
 
   const repoName = slide.classroom.content_repo;

@@ -6,6 +6,7 @@ import dayjs from 'dayjs';
 
 import { ClassmojiService } from '@classmoji/services';
 import Tasks from '@classmoji/tasks';
+import { gitTerms } from '~/utils/gitWeb';
 
 type Classroom = NonNullable<Awaited<ReturnType<typeof ClassmojiService.classroom.findBySlug>>>;
 type Repository = NonNullable<Awaited<ReturnType<typeof ClassmojiService.repository.findById>>>;
@@ -30,6 +31,7 @@ export const publishAssignment = async (
     const sessionId = nanoid();
     const classroom = await ClassmojiService.classroom.findById(classroomId);
     const repository = await ClassmojiService.repository.findById(repositoryId);
+    const terms = gitTerms(classroom?.git_organization?.provider === 'GITLAB');
 
     invariant(repository != null, 'Repository not found');
     invariant(repository.classroom_id === classroomId, 'Repository not found in classroom');
@@ -41,7 +43,7 @@ export const publishAssignment = async (
     );
     if (existingRepos.length > 0) {
       await ClassmojiService.repository.setPublished(repositoryId, true, classroomId);
-      return { success: 'Repository re-published. Use Sync to update repositories.' };
+      return { success: `${terms.Repo} re-published. Use Sync to update ${terms.repos}.` };
     }
 
     let skippedNoGitLab = 0;
@@ -82,7 +84,7 @@ export const publishAssignment = async (
         await ClassmojiService.repository.setPublished(repositoryId, true, classroomId);
 
         return {
-          success: 'Repository published! Student repositories are created as students join.',
+          success: `${terms.Repo} published! Student ${terms.repos} are created as students join.`,
           ...(skippedNoGitLab > 0 ? { info: skippedNote(skippedNoGitLab) } : {}),
         };
       }
@@ -120,7 +122,7 @@ export const publishAssignment = async (
       await ClassmojiService.assignment.publishReleased(repositoryId);
 
       return {
-        success: 'Repository published! Students can now form teams.',
+        success: `${terms.Repo} published! Students can now form teams.`,
       };
     } else {
       // Instructor-assigned teams
@@ -133,7 +135,7 @@ export const publishAssignment = async (
         await ClassmojiService.repository.setPublished(repositoryId, true, classroomId);
 
         return {
-          success: 'Repository published! Team repositories are created once teams exist.',
+          success: `${terms.Repo} published! Team ${terms.repos} are created once teams exist.`,
         };
       }
 

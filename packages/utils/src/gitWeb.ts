@@ -32,6 +32,45 @@ export function gitContextFor(classroom: ClassroomLike | null | undefined): GitW
   };
 }
 
+/**
+ * The words each provider uses for the same things. Copy that names a repo,
+ * pull request or organization reads from here so Gitlab classrooms say
+ * project, merge request and group.
+ */
+export function gitTerms(isGitLab: boolean) {
+  return isGitLab
+    ? {
+        platform: 'Gitlab',
+        repo: 'project',
+        repos: 'projects',
+        Repo: 'Project',
+        Repos: 'Projects',
+        pr: 'merge request',
+        prs: 'merge requests',
+        PR: 'Merge request',
+        prShort: 'MR',
+        org: 'group',
+        Org: 'Group',
+        changesTab: 'Changes',
+      }
+    : {
+        platform: 'Github',
+        repo: 'repository',
+        repos: 'repositories',
+        Repo: 'Repository',
+        Repos: 'Repositories',
+        pr: 'pull request',
+        prs: 'pull requests',
+        PR: 'Pull request',
+        prShort: 'PR',
+        org: 'organization',
+        Org: 'Organization',
+        changesTab: 'Files changed',
+      };
+}
+
+export type GitTerms = ReturnType<typeof gitTerms>;
+
 export function gitWeb(ctx: GitWebContext) {
   const isGitLab = ctx.provider === 'GITLAB';
   const host = isGitLab ? GITLAB_WEB : GITHUB_WEB;
@@ -40,8 +79,10 @@ export function gitWeb(ctx: GitWebContext) {
 
   return {
     isGitLab,
-    /** "GitLab" / "Github", for link labels. */
+    /** "Gitlab" / "Github", for link labels. */
     label: isGitLab ? 'Gitlab' : 'Github',
+    /** Provider vocabulary for UI copy (see gitTerms). */
+    terms: gitTerms(isGitLab),
     repo,
     /** A repo given as a full path (`owner/name`), e.g. a template. */
     fullPath: (path: string) => `${host}/${path}`,

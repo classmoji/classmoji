@@ -76,8 +76,10 @@ const ClassroomDetail = () => {
         <div className="mb-4 rounded-lg bg-amber-bg border border-amber-bord text-amber-ink px-4 py-2.5 text-sm flex items-start gap-2">
           <IconAlertTriangle size={16} className="shrink-0 mt-0.5" />
           <span>
-            <strong>{org.login}</strong> has no GitHub App installation id. Repository operations
-            for this classroom will fail.
+            <strong>{org.login}</strong>{' '}
+            {org.provider === 'GITLAB'
+              ? 'has no Gitlab connection. Project operations for this classroom will fail.'
+              : 'has no Github App installation id. Repository operations for this classroom will fail.'}
           </span>
         </div>
       ) : null}

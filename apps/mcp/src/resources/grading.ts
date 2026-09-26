@@ -15,6 +15,7 @@
  *                            rendering it — a data API must not mirror that leak.
  */
 
+import type { GitWebContext } from '@classmoji/utils';
 import getPrisma from '@classmoji/database';
 import { ClassmojiService } from '@classmoji/services';
 import { ToolError } from '../mcp/errors.ts';
@@ -28,6 +29,7 @@ import {
   graderRefs,
   issueUrl,
   orgLogin,
+  orgGit,
   publicUser,
   repoUrl,
   type SubmissionLike,
@@ -38,7 +40,7 @@ import {
  * Exported so the `list_submissions` tool (tools/reads.ts) renders the SAME
  * per-submission shape as the grading-queue resource — the two must never drift.
  */
-export function queueRow(s: SubmissionLike, org: string | null) {
+export function queueRow(s: SubmissionLike, git: GitWebContext | null) {
   return {
     id: s.id,
     status: s.status,
@@ -58,8 +60,8 @@ export function queueRow(s: SubmissionLike, org: string | null) {
     team: s.git_repo?.team ? { id: s.git_repo.team.id, name: s.git_repo.team.name ?? null } : null,
     grades: gradeRefs(s.grades),
     graders: graderRefs(s.graders),
-    issue_url: issueUrl(org, s),
-    repo_url: repoUrl(org, s),
+    issue_url: issueUrl(git, s),
+    repo_url: repoUrl(git, s),
   };
 }
 
@@ -143,6 +145,7 @@ export const gradingQueueResource: ResourceDefinition = {
   handler: async (_vars, ctx) => {
     const { classroomId } = classroomCtx(ctx);
     const org = orgLogin(ctx);
+    const git = orgGit(ctx);
     const [assignedToMe, { emoji_scale, all }] = await Promise.all([
       // Rows are GitRepoAssignmentGrader records wrapping the submission.
       ClassmojiService.gitRepoAssignmentGrader.findAssignedByGrader(
@@ -159,8 +162,8 @@ export const gradingQueueResource: ResourceDefinition = {
       assigned_to_me: assignedToMe
         .map(g => g.git_repo_assignment)
         .filter(Boolean)
-        .map(s => queueRow(s, org)),
-      all: all.map(s => queueRow(s, org)),
+        .map(s => queueRow(s, git)),
+      all: all.map(s => queueRow(s, git)),
     };
   },
 };
@@ -196,8 +199,9 @@ export const submissionResource: ResourceDefinition = {
     }
 
     const org = orgLogin(ctx);
+    const git = orgGit(ctx);
     return {
-      ...queueRow(submission, org),
+      ...queueRow(submission, git),
       git_repo_name: (submission.git_repo as { name?: string | null } | null)?.name ?? null,
       analytics_snapshot: submission.analytics_snapshot ?? null,
     };
@@ -233,7 +237,11 @@ interface RegradeRow {
   git_repo_assignment?: SubmissionLike | null;
 }
 
-function regradeRow(r: RegradeRow, org: string | null, { includeGraderComment = false } = {}) {
+function regradeRow(
+  r: RegradeRow,
+  git: GitWebContext | null,
+  { includeGraderComment = false } = {}
+) {
   const submission = r.git_repo_assignment;
   return {
     id: r.id,
@@ -249,7 +257,7 @@ function regradeRow(r: RegradeRow, org: string | null, { includeGraderComment = 
           assignment_title: submission.assignment?.title ?? null,
           repository_title: submission.git_repo?.repository?.title ?? null,
           current_grades: gradeRefs(submission.grades),
-          issue_url: issueUrl(org, submission),
+          issue_url: issueUrl(git, submission),
         }
       : null,
   };
@@ -270,9 +278,10 @@ export const regradeQueueResource: ResourceDefinition = {
       classroom_id: classroomId,
     })) as RegradeRow[];
     const org = orgLogin(ctx);
+    const git = orgGit(ctx);
     return {
       count: requests.length,
-      requests: requests.map(r => regradeRow(r, org, { includeGraderComment: true })),
+      requests: requests.map(r => regradeRow(r, git, { includeGraderComment: true })),
     };
   },
 };
@@ -293,10 +302,11 @@ export const regradeMineResource: ResourceDefinition = {
       student_id: ctx.viewer.userId,
     })) as RegradeRow[];
     const org = orgLogin(ctx);
+    const git = orgGit(ctx);
     return {
       count: requests.length,
       // grader_comment deliberately stripped for students (see module doc).
-      requests: requests.map(r => regradeRow(r, org, { includeGraderComment: false })),
+      requests: requests.map(r => regradeRow(r, git, { includeGraderComment: false })),
     };
   },
 };

@@ -12,6 +12,7 @@ import AssignmentsTable, {
 import AssignmentFormModal from '~/components/features/assignments/AssignmentFormModal';
 import { ClassmojiService } from '@classmoji/services';
 import { requireClassroomAdmin, assertClassroomMutationAllowed } from '~/utils/routeAuth.server';
+import { gitTerms } from '~/utils/gitWeb';
 import type { Route } from './+types/route';
 
 export const loader = async ({ params, request }: Route.LoaderArgs) => {
@@ -56,6 +57,7 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
     action: 'manage_assignments',
   });
   assertClassroomMutationAllowed({ status: classroom.status, role: membership!.role });
+  const terms = gitTerms(classroom.git_organization?.provider === 'GITLAB');
 
   const data = await request.json();
 
@@ -94,14 +96,14 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
           // seeds it from the title but the instructor can name it anything.
           const repoTitle = String(repo_name ?? '').trim() || title;
           const slug = titleToIdentifier(repoTitle);
-          if (!slug) return { error: 'Enter a name the repository can be created under.' };
+          if (!slug) return { error: `Enter a name the ${terms.repo} can be created under.` };
           const existing = await ClassmojiService.repository.findByClassroomAndTitle(
             classroom.id,
             repoTitle
           );
           if (existing) {
             return {
-              error: `A repository named "${repoTitle}" already exists. Pick it under "Existing repository", or use another name.`,
+              error: `A ${terms.repo} named "${repoTitle}" already exists. Pick it under "Existing ${terms.repo}", or use another name.`,
             };
           }
           // No template picked: make a blank one in the classroom's own org
@@ -126,7 +128,7 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
             } catch (error: unknown) {
               console.error('Blank template creation failed:', error);
               return {
-                error: `Could not create a blank template repository in ${classroom.git_organization.login}. Pick a template repository instead.`,
+                error: `Could not create a blank template ${terms.repo} in ${classroom.git_organization.login}. Pick a template ${terms.repo} instead.`,
               };
             }
           }
@@ -134,7 +136,7 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
           // per-repository, so it has to land on the repository we create here.
           const isTeam = repository_type === 'GROUP';
           if (isTeam && team_formation_mode === 'INSTRUCTOR' && !tag_id) {
-            return { error: 'Pick the team tag whose teams each get a repository.' };
+            return { error: `Pick the team tag whose teams each get a ${terms.repo}.` };
           }
           const repository = await ClassmojiService.repository.create({
             title: repoTitle,

@@ -60,7 +60,7 @@ export const graderAssignTool: ToolDefinition<GraderArgs> = {
   title: 'Assign a grader',
   description:
     'Assigns a teaching-team member as grader on a submission. Mirrors the grader to the ' +
-    'GitHub issue assignees. Owner only (matches the web admin repo view).',
+    'issue assignees on Github (Gitlab issues are left unassigned: one assignee per issue on its free plan). Owner only (matches the web admin repo view).',
   scope: 'write',
   roles: OWNER_ONLY,
   inputSchema: {
@@ -114,7 +114,7 @@ export const graderUnassignTool: ToolDefinition<GraderArgs> = {
   annotations: { destructive: true, openWorld: true },
   title: 'Unassign a grader',
   description:
-    'Removes a grader from a submission and from the GitHub issue assignees. Owner only.',
+    'Removes a grader from a submission and from the Github issue assignees. Owner only.',
   scope: 'write',
   roles: OWNER_ONLY,
   inputSchema: {
@@ -180,7 +180,7 @@ export const graderAssignBulkTool: ToolDefinition<GraderAssignBulkArgs> = {
     'grader. ' +
     'method=EXISTING copies the per-student/per-team grader mapping from template_assignment_id ' +
     '(required for EXISTING, and it must be an assignment in this classroom) — submissions with ' +
-    'no match in the template are skipped. Graders are mirrored onto the GitHub issue assignees. ' +
+    'no match in the template are skipped. Graders are mirrored onto the Github issue assignees (not on Gitlab). ' +
     'Runs in the background; `submissions_assigned` is the number of grader-assignment tasks ' +
     'queued, so with a multi-grader template it can exceed the submission count. Assignment ids ' +
     'come from list_repos. For one-off changes use grader_assign / grader_unassign instead.',

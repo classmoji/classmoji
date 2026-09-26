@@ -272,7 +272,8 @@ export const buildRepositoryNode = (
     }
     const gitRepo = bucket.gitRepo;
     const login = gitRepo?.classroom?.git_organization?.login;
-    const url = gitRepo && login ? webFor(gitRepo.classroom, ctx).repo(gitRepo.name) : null;
+    const repoWeb = webFor(gitRepo?.classroom, ctx);
+    const url = gitRepo && login ? repoWeb.repo(gitRepo.name) : null;
     repositoryChildren.push({
       key: `repo-${gitRepo.id}`,
       kind: 'repo',
@@ -286,7 +287,7 @@ export const buildRepositoryNode = (
           rel="noreferrer"
           className="text-sm font-medium text-sky-600 hover:text-sky-700 dark:text-sky-400"
         >
-          Open repo
+          {repoWeb.isGitLab ? 'Open project' : 'Open repo'}
         </a>
       ) : null,
       children: bucket.items.map(a =>

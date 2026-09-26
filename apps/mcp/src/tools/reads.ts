@@ -34,7 +34,7 @@ import { z, type ZodRawShape } from 'zod';
 import type { ResourceDefinition, ToolDefinition } from '../mcp/registry.ts';
 import { parseClassroomRef } from '../authz/pure.ts';
 import { ok, OWNER_TEACHER, requireClassroomCtx, TEACHING_TEAM } from './shared.ts';
-import { orgLogin, type SubmissionLike } from '../resources/shape.ts';
+import { orgGit, type SubmissionLike } from '../resources/shape.ts';
 import { meResource } from '../resources/me.ts';
 import { classroomInfoResource } from '../resources/classroomInfo.ts';
 import { rosterResource, teamsResource } from '../resources/roster.ts';
@@ -345,7 +345,7 @@ export const listSubmissionsTool: ToolDefinition<ListSubmissionsArgs> = {
   },
   handler: async (args, ctx) => {
     const { classroomId } = requireClassroomCtx(ctx);
-    const org = orgLogin(ctx);
+    const git = orgGit(ctx);
     // Shared with the grading-queue resource: one query + emoji-scale shaping.
     const { emoji_scale, all } = await loadGradingQueueData(classroomId);
 
@@ -377,7 +377,7 @@ export const listSubmissionsTool: ToolDefinition<ListSubmissionsArgs> = {
       total_matched: filtered.length,
       truncated: filtered.length > page.length,
       emoji_scale,
-      submissions: page.map(s => queueRow(s, org)),
+      submissions: page.map(s => queueRow(s, git)),
     });
   },
 };

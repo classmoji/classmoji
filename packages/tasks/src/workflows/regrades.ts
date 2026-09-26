@@ -75,8 +75,15 @@ export const requestRegradeTask = task({
       return;
     }
 
-    // The submission on GitHub: the issue in ISSUE mode, the repo in REPO mode.
+    // The submission on its git host: the issue in ISSUE mode, the repo in REPO mode.
     const web = gitWeb(gitContextFor(classroom));
+    // Name the student as their git host knows them: on Gitlab that's their
+    // Gitlab username, not `login` (the Github one when Github is connected).
+    const studentHandle = web.isGitLab
+      ? ((await ClassmojiService.user.findProviderUsernames([student.id], 'GITLAB')).get(
+          student.id
+        ) ?? student.login)
+      : student.login;
     const issueUrl =
       gitRepoAssignment.provider_issue_number != null
         ? web.issue(gitRepoAssignment.git_repo.name, gitRepoAssignment.provider_issue_number)
@@ -95,7 +102,7 @@ export const requestRegradeTask = task({
             // only thing standing between the two.
             variables: escapeVars({
               STUDENT_NAME: student.name,
-              STUDENT_LOGIN: student.login,
+              STUDENT_LOGIN: studentHandle,
               ASSIGNMENT_TITLE: gitRepoAssignment.assignment.title,
               ISSUE_URL: issueUrl,
               PREVIOUS_GRADE: previous_grade.map(grade => getEmojiSymbol(grade)).join(' '),

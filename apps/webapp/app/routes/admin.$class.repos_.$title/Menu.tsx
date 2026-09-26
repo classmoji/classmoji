@@ -2,6 +2,7 @@ import { Button, Dropdown } from 'antd';
 import { useNavigate, useParams } from 'react-router';
 import { useCallout } from '@classmoji/ui-components';
 import { useGlobalFetcher } from '~/hooks';
+import { useGitWeb } from '~/hooks/useGitWeb';
 
 interface MenuProps {
   repository: {
@@ -27,6 +28,7 @@ const Menu = ({ repository, assistants }: MenuProps) => {
   const { class: classSlug, title: repositoryTitle } = useParams();
   const { fetcher } = useGlobalFetcher();
   const callout = useCallout();
+  const web = useGitWeb();
 
   const calculateContributions = () => {
     if (repository.type === 'INDIVIDUAL') {
@@ -53,7 +55,7 @@ const Menu = ({ repository, assistants }: MenuProps) => {
             navigate(`/admin/${classSlug}/repos/form?title=${repositoryTitle}`);
           }}
         >
-          Edit repository
+          Edit {web.terms.repo}
         </button>
       ),
     },
@@ -79,7 +81,8 @@ const Menu = ({ repository, assistants }: MenuProps) => {
         </button>
       ),
     },
-    {
+    // Gitlab classrooms can't push template updates yet.
+    !web.isGitLab && {
       key: 'update-repositories',
       label: (
         <button

@@ -4,6 +4,8 @@ import { Avatar, Tooltip } from 'antd';
 import dayjs from 'dayjs';
 import { IconArrowRight, IconBrandGithub } from '@tabler/icons-react';
 import Emoji from '~/components/ui/display/Emoji';
+import { GitlabLogo } from '~/components/ui/display/GitlabLogo';
+import { useGitWeb } from '~/hooks/useGitWeb';
 
 export interface FeedbackItem {
   id: string;
@@ -91,9 +93,7 @@ const initials = (name: string | null, login: string | null) => {
 };
 
 const Eyebrow = ({ children }: { children: React.ReactNode }) => (
-  <div className="text-xs font-semibold tracking-[0.18em] text-ink-4 mb-2">
-    {children}
-  </div>
+  <div className="text-xs font-semibold tracking-[0.18em] text-ink-4 mb-2">{children}</div>
 );
 
 const PanelShell = ({
@@ -108,9 +108,7 @@ const PanelShell = ({
   footer?: React.ReactNode;
 }) => (
   <div className="h-full flex flex-col">
-    <h3 className="text-base sm:text-lg font-semibold text-ink-0 tracking-tight">
-      {title}
-    </h3>
+    <h3 className="text-base sm:text-lg font-semibold text-ink-0 tracking-tight">{title}</h3>
     {subtitle && <div className="text-xs text-ink-3 mt-0.5">{subtitle}</div>}
     <div className="flex-1 mt-4 min-h-0">{children}</div>
     {footer && (
@@ -146,9 +144,7 @@ const FeedbackPanel = ({ items }: { items: FeedbackItem[] }) => {
               ))}
             </div>
             <div className="flex-1 min-w-0">
-              <div className="text-sm font-medium text-ink-0 truncate">
-                {item.assignmentTitle}
-              </div>
+              <div className="text-sm font-medium text-ink-0 truncate">{item.assignmentTitle}</div>
               <div className="text-xs text-ink-3 truncate">
                 {item.graders
                   .map(g => g.name)
@@ -183,6 +179,7 @@ const TeamPanel = ({
   needsTeam: SelfFormedNeedsTeam | null;
   classSlug: string;
 }) => {
+  const web = useGitWeb();
   if (team) {
     const footer = (
       <>
@@ -203,8 +200,8 @@ const TeamPanel = ({
             rel="noreferrer"
             className="inline-flex items-center gap-1.5 text-xs font-medium text-white px-3 py-1.5 rounded-full bg-gray-900 dark:bg-gray-100 dark:text-gray-900 hover:bg-gray-800 dark:hover:bg-gray-200 transition-colors"
           >
-            <IconBrandGithub size={14} />
-            Go to repo
+            {web.isGitLab ? <GitlabLogo size={14} /> : <IconBrandGithub size={14} />}
+            {web.isGitLab ? 'Go to project' : 'Go to repo'}
             <IconArrowRight size={12} />
           </a>
         ) : (
@@ -215,11 +212,7 @@ const TeamPanel = ({
     return (
       <PanelShell
         title={team.teamName}
-        subtitle={
-          <span className="font-mono text-xs text-ink-3">
-            {team.moduleTitle}
-          </span>
-        }
+        subtitle={<span className="font-mono text-xs text-ink-3">{team.moduleTitle}</span>}
         footer={footer}
       >
         <Eyebrow>MEMBERS</Eyebrow>
@@ -260,7 +253,7 @@ const TeamPanel = ({
     );
   }
   return (
-    <PanelShell title="Team" subtitle="No group repositories in this class">
+    <PanelShell title="Team" subtitle={`No group ${web.terms.repos} in this class`}>
       <div className="h-full flex flex-col items-center justify-center text-center">
         <p className="text-sm text-ink-3">Nothing to show here yet.</p>
       </div>
@@ -300,12 +293,8 @@ const ResubmitsPanel = ({ items, classSlug }: { items: ResubmitItem[]; classSlug
             className="flex items-center gap-3 py-2.5 border-b border-line/60 last:border-0"
           >
             <div className="flex-1 min-w-0">
-              <div className="text-sm font-medium text-ink-0 truncate">
-                {item.assignmentTitle}
-              </div>
-              <div className="text-xs text-ink-3">
-                {fromNow(item.createdAt)}
-              </div>
+              <div className="text-sm font-medium text-ink-0 truncate">{item.assignmentTitle}</div>
+              <div className="text-xs text-ink-3">{fromNow(item.createdAt)}</div>
             </div>
             <span
               className={`text-xs font-bold tracking-wider px-2 py-0.5 rounded-full ring-1 ${

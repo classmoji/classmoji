@@ -20,6 +20,7 @@
  * cross-classroom probe cannot enumerate foreign staff.
  */
 
+import { gitTermsFor } from '../resources/shape.ts';
 import { ClassmojiService, StaffServiceError, type StaffRole } from '@classmoji/services';
 import { z } from 'zod';
 import { ToolError } from '../mcp/errors.ts';
@@ -65,13 +66,16 @@ function mapStaffError(error: unknown): unknown {
   if (!(error instanceof StaffServiceError)) return error;
   switch (error.code) {
     case 'git_user_not_found':
-      return new ToolError('not_found', 'GitHub user not found');
+      return new ToolError(
+        'not_found',
+        'No user with that username on the classroom’s Github/Gitlab'
+      );
     case 'staff_not_found':
       return scopedNotFound('Staff member');
     case 'no_org_configured':
       return new ToolError(
         'invalid_params',
-        'This classroom has no linked GitHub organization — staff cannot be managed'
+        'This classroom has no linked Github organization or Gitlab group — staff cannot be managed'
       );
     case 'login_conflict':
       return new ToolError(
@@ -243,8 +247,10 @@ export const staffAddTool: ToolDefinition<StaffAddArgs> = {
       github: result.alreadyOrgMember ? 'team_added' : 'invited',
       invite_pending: !result.alreadyOrgMember,
       message: result.alreadyOrgMember
-        ? `${result.login} was already in the GitHub org and has been added to the staff team as ${result.role}.`
-        : `${result.login} has been invited to the GitHub organization as ${result.role} — their access goes live once they accept the invite.`,
+        ? gitTermsFor(ctx).platform === 'Gitlab'
+          ? `${result.login} has been added to the class subgroup on Gitlab as ${result.role}; their access is live now.`
+          : `${result.login} was already in the Github org and has been added to the staff team as ${result.role}.`
+        : `${result.login} has been invited to the Github organization as ${result.role} — their access goes live once they accept the invite.`,
     });
   },
 };
@@ -409,7 +415,10 @@ export const staffRemoveTool: ToolDefinition<StaffRemoveArgs> = {
       login: result.login,
       user_id: result.userId,
       role: result.role,
-      message: `Removal of the ${result.role} role queued — removing the GitHub staff team membership (and org access if they hold no other role there) in the background.`,
+      message:
+        gitTermsFor(ctx).platform === 'Gitlab'
+          ? `Removal of the ${result.role} role queued — updating their class subgroup access on Gitlab in the background.`
+          : `Removal of the ${result.role} role queued — removing the Github staff team membership (and org access if they hold no other role there) in the background.`,
     });
   },
 };

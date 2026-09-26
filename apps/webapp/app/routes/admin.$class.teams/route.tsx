@@ -11,6 +11,7 @@ import {
 } from '~/components';
 import { ClassmojiService, TeamServiceError } from '@classmoji/services';
 import { useGlobalFetcher } from '~/hooks';
+import { useGitWeb } from '~/hooks/useGitWeb';
 import { ActionTypes } from '~/constants';
 import { requireClassroomAdmin, assertClassroomMutationAllowed } from '~/utils/routeAuth.server';
 import type { Route } from './+types/route';
@@ -45,6 +46,7 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
 
 const AdminTeams = ({ loaderData }: Route.ComponentProps) => {
   const navigate = useNavigate();
+  const web = useGitWeb();
   const { teams } = loaderData;
   const { fetcher, notify } = useGlobalFetcher();
   const [query, setQuery] = useState('');
@@ -145,16 +147,16 @@ const AdminTeams = ({ loaderData }: Route.ComponentProps) => {
         onCancel={() => setPendingDelete(null)}
       >
         <p className="text-sm text-ink-2">
-          Removes the team from Classmoji, with its memberships and its repository records
-          (submissions, grades and analytics). The GitHub team and the repositories stay in the
-          organization unless you choose otherwise.
+          Removes the team from Classmoji, with its memberships and its {web.terms.repo} records
+          (submissions, grades and analytics). The {web.label} {web.isGitLab ? 'subgroup' : 'team'}{' '}
+          and the {web.terms.repos} stay in the {web.terms.org} unless you choose otherwise.
         </p>
         <Checkbox
           className="mt-3"
           checked={deleteOnGitHub}
           onChange={e => setDeleteOnGitHub(e.target.checked)}
         >
-          Also delete the GitHub team and its repositories
+          Also delete the {web.label} {web.isGitLab ? 'subgroup' : 'team'} and its {web.terms.repos}
         </Checkbox>
       </Modal>
       <div className="flex items-center justify-between gap-3 mt-2 mb-4">
@@ -214,7 +216,7 @@ const AdminTeams = ({ loaderData }: Route.ComponentProps) => {
 
 const DELETE_ERRORS: Partial<Record<TeamServiceError['code'], string>> = {
   team_not_found: 'That team no longer exists in this classroom.',
-  no_org_configured: 'Git organization not configured',
+  no_org_configured: 'No Github organization or Gitlab group configured',
 };
 
 export const action = async ({ params, request }: Route.ActionArgs) => {

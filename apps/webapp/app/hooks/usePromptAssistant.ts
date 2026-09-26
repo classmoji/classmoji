@@ -1,4 +1,5 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
+import { useGitWeb } from '~/hooks/useGitWeb';
 
 interface UsePromptAssistantOptions {
   classroomSlug: string;
@@ -32,6 +33,7 @@ interface FormContext {
  * Handles SSE streaming, message state, and suggestions
  */
 export function usePromptAssistant({ classroomSlug }: UsePromptAssistantOptions) {
+  const repoWord = useGitWeb().terms.repo;
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [messages, setMessages] = useState<PromptMessage[]>([]);
   const [isStreaming, setIsStreaming] = useState(false);
@@ -233,7 +235,7 @@ export function usePromptAssistant({ classroomSlug }: UsePromptAssistantOptions)
   const restartWithCodeExploration = useCallback(
     async (formContext: FormContext, exampleRepoUrl: string) => {
       if (!exampleRepoUrl) {
-        setError('No example repository URL provided');
+        setError(`No example ${repoWord} URL provided`);
         return;
       }
 
@@ -267,7 +269,7 @@ export function usePromptAssistant({ classroomSlug }: UsePromptAssistantOptions)
       // Re-initialize with code exploration
       return initSession(formContext, exampleRepoUrl);
     },
-    [sessionId, classroomSlug, initSession]
+    [sessionId, classroomSlug, initSession, repoWord]
   );
 
   /**

@@ -5,6 +5,8 @@ import { useNotifiedFetcher } from '~/hooks';
 import { assertClassroomAccess, assertClassroomMutationAllowed } from '~/utils/helpers';
 import { getGitProvider } from '@classmoji/services';
 import InstallAppBanner from '~/components/features/InstallAppBanner';
+import { useGitWeb } from '~/hooks/useGitWeb';
+import { GITLAB_UNSUPPORTED, isGitLabClassroom } from '~/utils/gitlabGuard.server';
 import type { Route } from './+types/route';
 
 export const loader = async ({ params, request }: Route.LoaderArgs) => {
@@ -32,12 +34,25 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
     githubAppName: process.env.GITHUB_APP_NAME,
   };
 
+  const isGitLab = isGitLabClassroom(classroom);
+
   if (!gitOrgLogin) {
     return {
       githubOrganization: null,
       gitOrgLogin: null,
       ...install,
-      error: 'This classroom is not connected to a GitHub organization.',
+      error: isGitLab
+        ? 'This classroom is not connected to a Gitlab group.'
+        : 'This classroom is not connected to a Github organization.',
+    };
+  }
+
+  if (isGitLab) {
+    return {
+      githubOrganization: null,
+      gitOrgLogin,
+      ...install,
+      error: 'Project settings are not available for Gitlab classrooms yet.',
     };
   }
 
@@ -103,6 +118,7 @@ const SettingsRepos = ({ loaderData }: Route.ComponentProps) => {
   } = loaderData;
   const { class: classSlug } = useParams();
   const { fetcher } = useNotifiedFetcher();
+  const { terms } = useGitWeb();
 
   const showInstallBanner =
     !appInstalled && !isExample && Boolean(gitOrgLogin) && gitProvider === 'GITHUB';
@@ -121,7 +137,7 @@ const SettingsRepos = ({ loaderData }: Route.ComponentProps) => {
             offers the fix, so showing both repeats the diagnosis in vaguer
             words underneath the cure. */}
         {!showInstallBanner && (
-          <Alert message={error ?? 'Repository settings unavailable.'} type="warning" showIcon />
+          <Alert message={error ?? `${terms.Repo} settings unavailable.`} type="warning" showIcon />
         )}
       </div>
     );
@@ -135,15 +151,15 @@ const SettingsRepos = ({ loaderData }: Route.ComponentProps) => {
   };
 
   const permissionExplanations: Record<string, string> = {
-    none: 'Students are only able to view their personal or team repositories.',
-    read: 'Students are able to read other students repositories.',
-    write: 'Students are able to read and write to other students repositories.',
+    none: `Students are only able to view their personal or team ${terms.repos}.`,
+    read: `Students are able to read other students ${terms.repos}.`,
+    write: `Students are able to read and write to other students ${terms.repos}.`,
   };
   return (
     <div className="flex flex-col gap-14 pt-4">
       <Section
         title="Base permissions"
-        subtitle="Default permissions for when student repositories are created."
+        subtitle={`Default permissions for when student ${terms.repos} are created.`}
       >
         <div>
           <Select
@@ -170,7 +186,10 @@ const SettingsRepos = ({ loaderData }: Route.ComponentProps) => {
           )}
         </div>
       </Section>
-      <Section title="Repository creation" subtitle="Allow students to create repositories.">
+      <Section
+        title={`${terms.Repo} creation`}
+        subtitle={`Allow students to create ${terms.repos}.`}
+      >
         <Switch
           checked={githubOrganization.members_can_create_repositories}
           onChange={value =>
@@ -199,7 +218,11 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
 
   const gitOrgLogin = classroom.git_organization?.login;
   if (!gitOrgLogin) {
-    throw new Response('Git organization not configured', { status: 400 });
+    throw new Response('No Github organization or Gitlab group configured', { status: 400 });
+  }
+
+  if (isGitLabClassroom(classroom)) {
+    throw new Response(GITLAB_UNSUPPORTED, { status: 400 });
   }
 
   if (!classroom.git_organization?.github_installation_id) {

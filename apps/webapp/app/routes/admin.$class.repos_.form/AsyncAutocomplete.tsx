@@ -3,6 +3,7 @@ import type { Control, FieldValues } from 'react-hook-form';
 import { FormItem } from 'react-hook-form-antd';
 import { Select, Input, Spin, Tag } from 'antd';
 import { useDebounce } from '@uidotdev/usehooks';
+import { useGitWeb } from '~/hooks/useGitWeb';
 
 interface TemplateRepository {
   name: string;
@@ -51,6 +52,8 @@ const AsyncAutocomplete = ({
   classSlug,
 }: AsyncAutocompleteProps) => {
   const [loading, setLoading] = useState(false);
+  const web = useGitWeb();
+  const { terms } = web;
   const [data, setData] = useState<TemplateRepository[] | null>(null);
   const [query, setQuery] = useState('');
   const [value, setValue] = useState(template);
@@ -86,13 +89,13 @@ const AsyncAutocomplete = ({
         <div className="flex gap-2">
           <FormItem
             name="template"
-            label="Search template repositories"
+            label={`Search template ${terms.repos}`}
             className="w-full"
             control={control}
           >
             <Select
               className="w-full"
-              placeholder="Type to search template repositories..."
+              placeholder={`Type to search template ${terms.repos}...`}
               loading={loading}
               value={value}
               onSelect={v => {
@@ -108,9 +111,9 @@ const AsyncAutocomplete = ({
                     <Spin size="small" /> <span className="ml-2">Searching templates...</span>
                   </div>
                 ) : query ? (
-                  'No template repositories found'
+                  `No template ${terms.repos} found`
                 ) : (
-                  'Type to search for template repositories'
+                  `Type to search for template ${terms.repos}`
                 )
               }
               options={(data || []).map(d => ({
@@ -141,7 +144,8 @@ const AsyncAutocomplete = ({
 
       {isPublished && (
         <p className="text-sm text-blue-500 pt-1">
-          NOTE: Template repo cannot be changed for published assignments.
+          NOTE: Template {web.isGitLab ? terms.repo : 'repo'} cannot be changed for published
+          assignments.
         </p>
       )}
     </div>

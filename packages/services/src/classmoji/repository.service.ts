@@ -1,5 +1,5 @@
 import getPrisma from '@classmoji/database';
-import { titleToIdentifier } from '@classmoji/utils';
+import { gitTerms, titleToIdentifier } from '@classmoji/utils';
 import type { RepositoryType, Prisma } from '@prisma/client';
 import * as notificationService from './notification.service.ts';
 
@@ -359,6 +359,12 @@ export const setPublished = async (id: string, isPublished: boolean, classroomId
   if (previous && previous.is_published !== isPublished) {
     await notificationService.runSafely('repository publish notification', async () => {
       const studentIds = await notificationService.getStudentsInClassroom(mod.classroom_id);
+      // "Project" on Gitlab, "Repository" on Github (also the email subject).
+      const org = await getPrisma().gitOrganization.findFirst({
+        where: { classrooms: { some: { id: mod.classroom_id } } },
+        select: { provider: true },
+      });
+      const { Repo } = gitTerms(org?.provider === 'GITLAB');
       await notificationService.createNotifications({
         type: isPublished ? 'REPOSITORY_PUBLISHED' : 'REPOSITORY_UNPUBLISHED',
         classroomId: mod.classroom_id,
@@ -366,8 +372,8 @@ export const setPublished = async (id: string, isPublished: boolean, classroomId
         resourceType: 'repository',
         resourceId: mod.id,
         title: isPublished
-          ? `Repository published: ${mod.title}`
-          : `Repository unpublished: ${mod.title}`,
+          ? `${Repo} published: ${mod.title}`
+          : `${Repo} unpublished: ${mod.title}`,
       });
     });
   }

@@ -21,6 +21,8 @@ import QuizEvaluation, {
 import TypingIndicator from '~/components/ui/feedback/TypingIndicator';
 import QuestionCard from './QuestionCard';
 import ProgressDivider from './ProgressDivider';
+import { useGitWeb } from '~/hooks/useGitWeb';
+import { GitlabLogo } from '~/components/ui/display/GitlabLogo';
 
 const { Text } = Typography;
 
@@ -307,14 +309,15 @@ const createMarkdownComponents = (
 });
 
 // Function to get icon for tool (handles simple names, MCP-prefixed names, and trigger-mode names)
-const getToolIcon = (toolName: string | undefined) => {
+const getToolIcon = (toolName: string | undefined, isGitLab = false) => {
   // Normalize: extract simple name from MCP-prefixed names like mcp__secure-tools__secure_read
   const name = toolName?.includes('__') ? toolName.split('__').pop() : toolName;
 
   // Trigger-mode tool names
   if (name === 'explore_codebase') return <RocketOutlined style={{ color: '#3b82f6' }} />;
   if (name === 'github_tree') return <BranchesOutlined style={{ color: '#06b6d4' }} />;
-  if (name === 'github_read') return <GithubOutlined style={{ color: '#10b981' }} />;
+  if (name === 'github_read')
+    return isGitLab ? <GitlabLogo size={14} /> : <GithubOutlined style={{ color: '#10b981' }} />;
   if (name === 'synthesize') return <ExperimentOutlined style={{ color: '#8b5cf6' }} />;
 
   // Local/sandbox-mode tool names
@@ -397,7 +400,7 @@ const processCompletionMessage = (
 };
 
 // Render exploration steps collapse
-const renderExplorationSteps = (message: ChatMessage, isDarkMode: boolean) => {
+const renderExplorationSteps = (message: ChatMessage, isDarkMode: boolean, isGitLab: boolean) => {
   if (message.role?.toUpperCase() !== 'ASSISTANT' || !message.metadata?.explorationSteps?.length) {
     return null;
   }
@@ -429,7 +432,7 @@ const renderExplorationSteps = (message: ChatMessage, isDarkMode: boolean) => {
                       gap: '8px',
                     }}
                   >
-                    {getToolIcon(step.toolName || step.tool)}
+                    {getToolIcon(step.toolName || step.tool, isGitLab)}
                     <Text type="secondary" style={{ fontSize: '12px' }}>
                       {step.action}
                     </Text>
@@ -569,6 +572,7 @@ const QuizMessageList = ({
   evaluationData: propEvaluationData = null,
   focusMetrics = null,
 }: QuizMessageListProps) => {
+  const { isGitLab } = useGitWeb();
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const evaluationRef = useRef<HTMLDivElement>(null);
 
@@ -709,7 +713,7 @@ const QuizMessageList = ({
         )}
 
         {/* Show exploration steps if this is an assistant message with metadata */}
-        {renderExplorationSteps(message, isDarkMode)}
+        {renderExplorationSteps(message, isDarkMode, isGitLab)}
 
         <Space align="start">
           {role === 'ASSISTANT' && (
@@ -859,7 +863,7 @@ const QuizMessageList = ({
                         }}
                       >
                         <span className={isLastStep ? 'exploration-step-active' : ''}>
-                          {getToolIcon(step.toolName || step.tool)}
+                          {getToolIcon(step.toolName || step.tool, isGitLab)}
                         </span>
                         <Text type="secondary" style={{ fontSize: '11px' }}>
                           {step.action}

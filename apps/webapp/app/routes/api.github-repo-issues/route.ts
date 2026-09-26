@@ -36,7 +36,9 @@ export async function loader({ request }: Route.LoaderArgs) {
 
   if (!classroom.git_organization) {
     return new Response(
-      JSON.stringify({ error: 'No GitHub organization configured for this classroom' }),
+      JSON.stringify({
+        error: 'No Github organization or Gitlab group configured for this classroom',
+      }),
       {
         status: 400,
         headers: { 'Content-Type': 'application/json' },
@@ -61,7 +63,8 @@ export async function loader({ request }: Route.LoaderArgs) {
     });
   } catch (error: unknown) {
     console.error('[api.github-repo-issues] Error fetching issues:', error);
-    return new Response(JSON.stringify({ error: 'Failed to fetch repository issues' }), {
+    const repoWord = classroom.git_organization.provider === 'GITLAB' ? 'project' : 'repository';
+    return new Response(JSON.stringify({ error: `Failed to fetch ${repoWord} issues` }), {
       status: 500,
       headers: { 'Content-Type': 'application/json' },
     });

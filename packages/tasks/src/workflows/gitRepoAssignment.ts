@@ -5,7 +5,7 @@ import {
   getGitProvider,
   type GitLabProvider,
 } from '@classmoji/services';
-import { titleToIdentifier } from '@classmoji/utils';
+import { gitTerms, titleToIdentifier } from '@classmoji/utils';
 import { createRepositoriesTask } from './gitRepo.ts';
 import { nanoid } from 'nanoid';
 import dayjs from 'dayjs';
@@ -374,12 +374,12 @@ export const createGithubRepositoryAssignmentTask = task({
 
       if (status === 404) {
         throw new Error(
-          `Could not create assignment issue in ${organization.login}/${repoName}: repository was not found or is not accessible to the GitHub App. assignmentId=${assignment.id}, studentRepoId=${studentRepo.id}`
+          `Could not create assignment issue in ${owner}/${repoName}: ${gitTerms(provider === 'GITLAB').repo} was not found or is not accessible to Classmoji. assignmentId=${assignment.id}, studentRepoId=${studentRepo.id}`
         );
       }
 
       throw new Error(
-        `Could not create assignment issue in ${organization.login}/${repoName}: ${getErrorMessage(error)}. assignmentId=${assignment.id}, studentRepoId=${studentRepo.id}`
+        `Could not create assignment issue in ${owner}/${repoName}: ${getErrorMessage(error)}. assignmentId=${assignment.id}, studentRepoId=${studentRepo.id}`
       );
     }
 

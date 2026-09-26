@@ -1,4 +1,5 @@
 import { Tag, Tooltip } from 'antd';
+import { useGitWeb } from '~/hooks/useGitWeb';
 
 // Shared display for an autograding run, reused by the instructor roster table
 // (compact pill) and the student's own repo page (full card). Classmoji shows
@@ -28,9 +29,14 @@ interface AutogradingResultCardProps {
   embedded?: boolean;
 }
 
-function runUrl(org?: string | null, repoName?: string | null, runId?: string | null) {
+function runUrl(
+  web: ReturnType<typeof useGitWeb>,
+  org?: string | null,
+  repoName?: string | null,
+  runId?: string | null
+) {
   if (!org || !repoName || !runId) return null;
-  return `https://github.com/${org}/${repoName}/actions/runs/${runId}`;
+  return web.actionsRun(repoName, runId);
 }
 
 function shortSha(sha?: string | null) {
@@ -70,18 +76,19 @@ const AutogradingResultCard = ({
   compact,
   embedded,
 }: AutogradingResultCardProps) => {
+  const web = useGitWeb();
   if (!result) {
     return compact ? (
       <span className="text-xs text-ink-4">—</span>
     ) : (
       <div className="text-sm text-ink-4">
-        No autograding run yet. Push to your repo to run the tests.
+        No autograding run yet. Push to your {web.isGitLab ? 'project' : 'repo'} to run the tests.
       </div>
     );
   }
 
   const { color, label } = summary(result);
-  const url = runUrl(org, repoName, result.run_id);
+  const url = runUrl(web, org, repoName, result.run_id);
 
   // Compact pill for the instructor roster table.
   if (compact) {
@@ -92,7 +99,7 @@ const AutogradingResultCard = ({
     );
     return url ? (
       <a href={url} target="_blank" rel="noreferrer" className="no-underline">
-        <Tooltip title="View run on GitHub">{pill}</Tooltip>
+        <Tooltip title={`View run on ${web.label}`}>{pill}</Tooltip>
       </a>
     ) : (
       pill
@@ -110,11 +117,7 @@ const AutogradingResultCard = ({
   const exactWhen = result.reported_at ? new Date(result.reported_at).toLocaleString() : undefined;
 
   return (
-    <div
-      className={
-        embedded ? '' : 'rounded-xl ring-1 ring-line p-4 bg-white dark:bg-neutral-900'
-      }
-    >
+    <div className={embedded ? '' : 'rounded-xl ring-1 ring-line p-4 bg-white dark:bg-neutral-900'}>
       {/* Header: title + pass/fail tag. The "View run" link lives in the footer
           so it never collides with the modal's close button. */}
       <div className="flex items-center gap-2">

@@ -1,6 +1,7 @@
 import { namedAction } from 'remix-utils/named-action';
 import { GITLAB_UNSUPPORTED, isGitLabClassroom } from '~/utils/gitlabGuard.server';
 import { calculateContributions } from './helpers';
+import { gitTerms } from '~/utils/gitWeb';
 import { HelperService } from '@classmoji/services';
 import { requireClassroomAdmin, assertClassroomMutationAllowed } from '~/utils/routeAuth.server';
 import { ActionTypes } from '~/constants';
@@ -39,7 +40,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
       });
       return {
         action: data.action,
-        success: 'Repository deleted',
+        success: `${gitTerms(isGitLabClassroom(classroom)).Repo} deleted`,
       };
     },
 
