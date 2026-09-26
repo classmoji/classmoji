@@ -943,36 +943,53 @@ describe('getBlobContent', () => {
  * other, in one commit on the default branch.
  */
 describe('copyFolder', () => {
-  function mockCopyRoutes() {
+  const MB = 1024 * 1024;
+  /** The head commit's whole tree, as one recursive call returns it. */
+  const WHOLE_TREE = [
+    { path: 'slides', mode: '040000', type: 'tree', sha: 't-slides' },
+    { path: 'slides/intro', mode: '040000', type: 'tree', sha: 't-intro' },
+    { path: 'slides/intro/index.html', mode: '100644', type: 'blob', sha: 'a' },
+    { path: 'slides/intro/images', mode: '040000', type: 'tree', sha: 't-images' },
+    // 60 MB: the Contents API would hand back no body for this one.
+    {
+      path: 'slides/intro/images/clip.mp4',
+      mode: '100644',
+      type: 'blob',
+      sha: 'c',
+      size: 60 * MB,
+    },
+    { path: 'slides/intro/run.sh', mode: '100755', type: 'blob', sha: 'x' },
+    { path: 'slides/intro/latest', mode: '120000', type: 'blob', sha: 'l' },
+    { path: 'slides/intro/vendor', mode: '160000', type: 'commit', sha: 'sub' },
+    // A sibling whose name STARTS with the source's — must not be carried.
+    { path: 'slides/intro-old/index.html', mode: '100644', type: 'blob', sha: 'z' },
+  ];
+
+  /** The same tree one level at a time, for the truncated fallback. */
+  const LEVELS: Record<string, unknown[]> = {
+    'base-tree': [{ path: 'slides', mode: '040000', type: 'tree', sha: 't-slides' }],
+    't-slides': [
+      { path: 'intro', mode: '040000', type: 'tree', sha: 't-intro' },
+      { path: 'intro-old', mode: '040000', type: 'tree', sha: 't-old' },
+    ],
+    't-intro': [
+      { path: 'index.html', mode: '100644', type: 'blob', sha: 'a' },
+      { path: 'images', mode: '040000', type: 'tree', sha: 't-images' },
+      { path: 'run.sh', mode: '100755', type: 'blob', sha: 'x' },
+      { path: 'latest', mode: '120000', type: 'blob', sha: 'l' },
+      { path: 'vendor', mode: '160000', type: 'commit', sha: 'sub' },
+    ],
+    't-images': [{ path: 'clip.mp4', mode: '100644', type: 'blob', sha: 'c', size: 60 * MB }],
+  };
+
+  function mockCopyRoutes({ truncated = false, wholeTree = WHOLE_TREE } = {}) {
+    getDefaultBranchMock.mockResolvedValue('master');
     requestMock.mockImplementation(async (route: string, params: RequestParams) => {
       switch (route) {
-        case 'GET /repos/{owner}/{repo}/contents/{path}':
-          switch (params.path) {
-            case 'slides/intro':
-              return {
-                data: [
-                  { name: 'index.html', path: 'slides/intro/index.html', type: 'file', sha: 'a' },
-                  { name: 'images', path: 'slides/intro/images', type: 'dir', sha: 'b' },
-                ],
-              };
-            case 'slides/intro/images':
-              return {
-                data: [
-                  // 60 MB: the Contents API would hand back no body for this one.
-                  {
-                    name: 'clip.mp4',
-                    path: 'slides/intro/images/clip.mp4',
-                    type: 'file',
-                    sha: 'c',
-                    size: 60 * 1024 * 1024,
-                  },
-                ],
-              };
-            default:
-              throw new Error(`file bytes must not be read: ${params.path}`);
-          }
-        case 'GET /repos/{owner}/{repo}':
-          return { data: { default_branch: 'master' } };
+        case 'GET /repos/{owner}/{repo}/git/trees/{tree_sha}': {
+          if (params.recursive) return { data: { tree: wholeTree, truncated } };
+          return { data: { tree: LEVELS[String(params.tree_sha)] ?? [], truncated: false } };
+        }
         case 'GET /repos/{owner}/{repo}/git/ref/{ref}':
           return { data: { object: { sha: 'head-commit' } } };
         case 'GET /repos/{owner}/{repo}/git/commits/{commit_sha}':
@@ -983,14 +1000,30 @@ describe('copyFolder', () => {
           return { data: { sha: 'new-commit' } };
         case 'PATCH /repos/{owner}/{repo}/git/refs/{ref}':
           return { data: {} };
+        case 'GET /repos/{owner}/{repo}/contents/{path}':
+          return { data: [] };
         default:
           throw new Error(`unexpected route ${route}`);
       }
     });
   }
 
-  it('returns every destination path it wrote, nested folders included', async () => {
+  const EXPECTED_WRITES = [
+    { path: 'slides/intro-copy/index.html', mode: '100644', type: 'blob', sha: 'a' },
+    { path: 'slides/intro-copy/images/clip.mp4', mode: '100644', type: 'blob', sha: 'c' },
+    { path: 'slides/intro-copy/run.sh', mode: '100755', type: 'blob', sha: 'x' },
+    { path: 'slides/intro-copy/latest', mode: '120000', type: 'blob', sha: 'l' },
+  ];
+
+  function committedTree() {
+    return requestMock.mock.calls.find(
+      ([route]) => route === 'POST /repos/{owner}/{repo}/git/trees'
+    )![1] as { base_tree: string; tree: typeof EXPECTED_WRITES };
+  }
+
+  it('returns every destination path and { path, sha } it wrote, and the submodule it skipped', async () => {
     mockCopyRoutes();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
 
     const result = await ContentService.copyFolder({
       gitOrganization,
@@ -999,49 +1032,104 @@ describe('copyFolder', () => {
       destPath: 'slides/intro-copy',
     });
 
-    expect(result.copied).toBe(2);
-    expect([...result.paths].sort()).toEqual([
-      'slides/intro-copy/images/clip.mp4',
-      'slides/intro-copy/index.html',
-    ]);
+    expect(result).toEqual({
+      copied: 4,
+      paths: EXPECTED_WRITES.map(write => write.path),
+      entries: EXPECTED_WRITES.map(({ path, sha }) => ({ path, sha })),
+      skipped: ['slides/intro/vendor'],
+    });
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('slides/intro/vendor'));
+    warn.mockRestore();
   });
 
-  it('commits one tree pointing at the existing blob shas, on the default branch', async () => {
+  it('commits one tree from ONE recursive tree read, modes kept, on the default branch', async () => {
     mockCopyRoutes();
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
 
     await ContentService.copyFolder({
       gitOrganization,
       repo: 'copyfolder-shas',
-      sourcePath: 'slides/intro',
+      sourcePath: 'slides/intro/',
       destPath: 'slides/intro-copy',
       message: 'Duplicate slides: Intro',
     });
 
     const routes = requestMock.mock.calls.map(([route]) => route);
+    // No directory listing, so no 1,000-entry ceiling; no file bytes read or written.
+    expect(routes).not.toContain('GET /repos/{owner}/{repo}/contents/{path}');
     expect(routes).not.toContain('PUT /repos/{owner}/{repo}/contents/{path}');
     expect(routes).not.toContain('POST /repos/{owner}/{repo}/git/blobs');
+    const treeReads = requestMock.mock.calls.filter(
+      ([route]) => route === 'GET /repos/{owner}/{repo}/git/trees/{tree_sha}'
+    );
+    expect(treeReads).toHaveLength(1);
+    expect(treeReads[0]![1]).toMatchObject({ tree_sha: 'base-tree', recursive: '1' });
     expect(routes.filter(r => r === 'POST /repos/{owner}/{repo}/git/commits')).toHaveLength(1);
 
-    const tree = requestMock.mock.calls.find(
-      ([route]) => route === 'POST /repos/{owner}/{repo}/git/trees'
-    )![1] as { base_tree: string; tree: Array<{ path: string; sha: string; type: string }> };
+    const tree = committedTree();
     expect(tree.base_tree).toBe('base-tree');
-    expect(tree.tree).toEqual([
-      { path: 'slides/intro-copy/index.html', mode: '100644', type: 'blob', sha: 'a' },
-      { path: 'slides/intro-copy/images/clip.mp4', mode: '100644', type: 'blob', sha: 'c' },
-    ]);
+    expect(tree.tree).toEqual(EXPECTED_WRITES);
 
     const refUpdate = requestMock.mock.calls.find(
       ([route]) => route === 'PATCH /repos/{owner}/{repo}/git/refs/{ref}'
     )![1] as { ref: string; sha: string };
     expect(refUpdate).toMatchObject({ ref: 'heads/master', sha: 'new-commit' });
+    vi.restoreAllMocks();
+  });
+
+  it('walks the same tree a level at a time when the recursive read is truncated', async () => {
+    mockCopyRoutes({ truncated: true, wholeTree: WHOLE_TREE.slice(0, 2) });
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const result = await ContentService.copyFolder({
+      gitOrganization,
+      repo: 'copyfolder-truncated',
+      sourcePath: 'slides/intro',
+      destPath: 'slides/intro-copy',
+    });
+
+    expect(result.skipped).toEqual(['slides/intro/vendor']);
+    expect([...committedTree().tree].sort((a, b) => a.path.localeCompare(b.path))).toEqual(
+      [...EXPECTED_WRITES].sort((a, b) => a.path.localeCompare(b.path))
+    );
+    // Every level came from the snapshot's tree, never the branch as it is now.
+    const levelShas = requestMock.mock.calls
+      .filter(
+        ([route, params]) =>
+          route === 'GET /repos/{owner}/{repo}/git/trees/{tree_sha}' &&
+          !(params as RequestParams).recursive
+      )
+      .map(([, params]) => (params as RequestParams).tree_sha);
+    expect(levelShas).toEqual(['base-tree', 't-slides', 't-intro', 't-images']);
+    vi.restoreAllMocks();
+  });
+
+  it('drops the cached listings of the new folder and of the folder it was created in', async () => {
+    mockCopyRoutes();
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const repo = 'copyfolder-listing-cache';
+
+    await ContentService.listFolder({ gitOrganization, repo, path: 'slides' });
+    await ContentService.listFolder({ gitOrganization, repo, path: 'slides/intro-copy' });
+    await ContentService.listFolder({ gitOrganization, repo, path: 'slides/intro-copy/images' });
+    expect(contentsGetCalls().total).toBe(3);
+
+    await ContentService.copyFolder({
+      gitOrganization,
+      repo,
+      sourcePath: 'slides/intro',
+      destPath: 'slides/intro-copy',
+    });
+
+    await ContentService.listFolder({ gitOrganization, repo, path: 'slides' });
+    await ContentService.listFolder({ gitOrganization, repo, path: 'slides/intro-copy' });
+    await ContentService.listFolder({ gitOrganization, repo, path: 'slides/intro-copy/images' });
+    expect(contentsGetCalls().total).toBe(6);
+    vi.restoreAllMocks();
   });
 
   it('commits nothing for an empty folder', async () => {
-    requestMock.mockImplementation(async (route: string) => {
-      if (route === 'GET /repos/{owner}/{repo}/contents/{path}') return { data: [] };
-      throw new Error(`unexpected route ${route}`);
-    });
+    mockCopyRoutes({ wholeTree: [] });
 
     const result = await ContentService.copyFolder({
       gitOrganization,
@@ -1050,7 +1138,10 @@ describe('copyFolder', () => {
       destPath: 'slides/empty-copy',
     });
 
-    expect(result).toEqual({ copied: 0, paths: [] });
+    expect(result).toEqual({ copied: 0, paths: [], entries: [], skipped: [] });
+    expect(requestMock.mock.calls.map(([route]) => route)).not.toContain(
+      'POST /repos/{owner}/{repo}/git/commits'
+    );
   });
 });
 

@@ -115,6 +115,108 @@ function invalidateCache(org: string, repo: string, path: string): void {
   }
 }
 
+/** Drop the cached `listFolder` answer for one folder. */
+function invalidateListing(org: string, repo: string, dir: string): void {
+  responseCache.delete(getCacheKey(org, repo, dir) + ':list');
+}
+
+/** `a/b/c` → `a/b`; a top-level name → `''`. */
+function parentFolder(path: string): string {
+  return path.split('/').slice(0, -1).join('/');
+}
+
+interface GitTreeEntry {
+  path: string;
+  mode: string;
+  type: string;
+  sha: string;
+}
+
+/** A file under a copied folder: its path below the folder, mode and blob sha. */
+interface FolderTreeFile {
+  relativePath: string;
+  mode: string;
+  sha: string;
+}
+
+/** Submodule entries — a commit in ANOTHER repository, which a copy cannot carry. */
+const SUBMODULE_MODE = '160000';
+
+/**
+ * Every file under `folder` in the tree `rootTreeSha`, from that one tree.
+ *
+ * One recursive tree call when GitHub answers it whole. When it comes back
+ * `truncated`, the partial list is thrown away and the SAME tree is walked a
+ * level at a time — still one snapshot, which a fallback to the Contents API
+ * (it reads whatever the branch is by then) would not be.
+ */
+async function readFolderTree(
+  octokit: Awaited<ReturnType<typeof getOctokit>>,
+  owner: string,
+  repo: string,
+  rootTreeSha: string,
+  folder: string
+): Promise<{ files: FolderTreeFile[]; skipped: string[] }> {
+  const files: FolderTreeFile[] = [];
+  const skipped: string[] = [];
+  const prefix = folder ? `${folder}/` : '';
+
+  const take = (entry: GitTreeEntry, relativePath: string): void => {
+    if (entry.type === 'commit' || entry.mode === SUBMODULE_MODE) {
+      skipped.push(`${prefix}${relativePath}`);
+    } else if (entry.type === 'blob') {
+      files.push({ relativePath, mode: entry.mode, sha: entry.sha });
+    }
+  };
+
+  const readTree = async (
+    treeSha: string,
+    recursive: boolean
+  ): Promise<{ tree: GitTreeEntry[]; truncated: boolean }> => {
+    const { data } = await octokit.request('GET /repos/{owner}/{repo}/git/trees/{tree_sha}', {
+      owner,
+      repo,
+      tree_sha: treeSha,
+      ...(recursive ? { recursive: '1' } : {}),
+    });
+    return { tree: (data.tree ?? []) as GitTreeEntry[], truncated: Boolean(data.truncated) };
+  };
+
+  const whole = await readTree(rootTreeSha, true);
+  if (!whole.truncated) {
+    for (const entry of whole.tree) {
+      if (entry.path.startsWith(prefix)) take(entry, entry.path.slice(prefix.length));
+    }
+    return { files, skipped };
+  }
+
+  // Truncated: find the folder's own tree, then walk it one level at a time.
+  let folderSha = rootTreeSha;
+  for (const segment of folder ? folder.split('/') : []) {
+    const level = await readTree(folderSha, false);
+    const next = level.tree.find(entry => entry.path === segment && entry.type === 'tree');
+    if (!next) return { files, skipped };
+    folderSha = next.sha;
+  }
+
+  const walk = async (treeSha: string, below: string): Promise<void> => {
+    const level = await readTree(treeSha, false);
+    if (level.truncated) {
+      // One directory past GitHub's per-tree ceiling. Copying the part that came
+      // back would be a silent partial copy.
+      throw new Error(`The folder ${prefix}${below} is too large to copy.`);
+    }
+    for (const entry of level.tree) {
+      const relativePath = below ? `${below}/${entry.path}` : entry.path;
+      if (entry.type === 'tree') await walk(entry.sha, relativePath);
+      else take(entry, relativePath);
+    }
+  };
+  await walk(folderSha, '');
+
+  return { files, skipped };
+}
+
 /**
  * Check if a path looks like an image (skip caching for large binary files)
  * @param {string} path - File path
@@ -1551,20 +1653,31 @@ export class ContentService {
    *
    * No file bytes move. Git is content-addressed and both paths live in one
    * repo, so the copy is a new tree whose entries point at the blob shas the
-   * source already has: list → one tree → one commit → one ref. That is what
-   * lets a folder holding a 60 MB video duplicate at all — reading it back
-   * through the Contents API stops at 1 MB, and writing it again through any
-   * REST call stops near 35 MB — and it costs the org's shared token four
+   * source already has: one tree read → one tree → one commit → one ref. That
+   * is what lets a folder holding a 60 MB video duplicate at all — reading it
+   * back through the Contents API stops at 1 MB, and writing it again through
+   * any REST call stops near 35 MB — and it costs the org's shared token four
    * content-creating requests instead of one per file.
    *
-   * Committed to the repository's DEFAULT branch, which is where the listing
-   * reads from (and where the per-file `PUT`s this replaced used to land).
+   * The source is read from ONE commit's tree — the default branch's head —
+   * with a single recursive tree call, so every entry comes from the same
+   * snapshot and no directory stops at the Contents API's 1,000-entry listing.
+   * Should GitHub truncate that response, the same commit's tree is walked one
+   * level at a time instead. Modes are carried as they are (`100644`, an
+   * executable `100755`, a symlink `120000`); a submodule (`160000`) points at
+   * a commit in another repository and is not copied — it is reported in
+   * `skipped` rather than failing the copy.
    *
-   * @returns `{ copied, paths }` — `paths` are the DESTINATION paths written,
-   *   recursively. The caller needs them to decide what the copy actually
-   *   carries: a duplicated deck's HTML can reference a file by way of another
-   *   repo, and repointing such a reference at this copy is only correct when
-   *   the file is in it.
+   * Committed to the repository's DEFAULT branch, the one the tree is read at.
+   *
+   * @returns `{ copied, paths, entries, skipped }`:
+   *   - `paths` — the DESTINATION paths written, recursively. The caller needs
+   *     them to decide what the copy actually carries: a duplicated deck's HTML
+   *     can reference a file by way of another repo, and repointing such a
+   *     reference at this copy is only correct when the file is in it.
+   *   - `entries` — the same files as `{ path, sha }` (destination path, blob
+   *     sha), for recording the copy in the classroom's asset map.
+   *   - `skipped` — SOURCE paths not copied (submodules).
    */
   static async copyFolder({
     gitOrganization,
@@ -1578,83 +1691,102 @@ export class ContentService {
     sourcePath: string;
     destPath: string;
     message?: string;
-  }): Promise<{ copied: number; paths: string[] }> {
+  }): Promise<{
+    copied: number;
+    paths: string[];
+    entries: Array<{ path: string; sha: string }>;
+    skipped: string[];
+  }> {
     const octokit = await getOctokit(gitOrganization);
+    const owner = gitOrganization.login;
     const sourceRoot = sourcePath.replace(/\/+$/, '');
     const destRoot = destPath.replace(/\/+$/, '');
 
-    // Every file under the source, with the blob sha it already has. Uncached:
-    // the shas ARE the copy now, so a listing up to a minute old could commit a
-    // file as it was before its last save.
-    const entries: Array<{ path: string; sha: string }> = [];
-    const walk = async (dir: string): Promise<void> => {
-      const items = await this.listFolder({ gitOrganization, repo, path: dir, skipCache: true });
-      for (const item of items) {
-        if (item.type === 'dir') {
-          await walk(item.path);
-        } else {
-          entries.push({ path: item.path, sha: item.sha });
-        }
-      }
-    };
-    await walk(sourceRoot);
-
-    if (entries.length === 0) return { copied: 0, paths: [] };
-
-    const paths = entries.map(
-      entry => `${destRoot}/${entry.path.slice(sourceRoot.length).replace(/^\//, '')}`
-    );
-
-    const { data: repoData } = await octokit.request('GET /repos/{owner}/{repo}', {
-      owner: gitOrganization.login,
-      repo,
-    });
-    const branch: string = repoData.default_branch;
-
-    await this.#withGitRetry(async () => {
+    const branch = await resolveContentBranch(gitOrganization, owner, repo);
+    const readHeadTree = async (): Promise<{ commit: string; tree: string }> => {
       const { data: refData } = await octokit.request('GET /repos/{owner}/{repo}/git/ref/{ref}', {
-        owner: gitOrganization.login,
+        owner,
         repo,
         ref: `heads/${branch}`,
       });
-      const currentCommitSha = refData.object.sha;
-
+      const commit: string = refData.object.sha;
       const { data: commitData } = await octokit.request(
         'GET /repos/{owner}/{repo}/git/commits/{commit_sha}',
-        { owner: gitOrganization.login, repo, commit_sha: currentCommitSha }
+        { owner, repo, commit_sha: commit }
       );
+      return { commit, tree: commitData.tree.sha };
+    };
+
+    const snapshot = await readHeadTree();
+    const { files, skipped } = await readFolderTree(
+      octokit,
+      owner,
+      repo,
+      snapshot.tree,
+      sourceRoot
+    );
+    for (const path of skipped) {
+      console.warn(`[ContentService.copyFolder] ${owner}/${repo}: not copying submodule ${path}`);
+    }
+
+    if (files.length === 0) return { copied: 0, paths: [], entries: [], skipped };
+
+    const writes = files.map(file => ({
+      path: `${destRoot}/${file.relativePath}`,
+      mode: file.mode,
+      type: 'blob' as const,
+      sha: file.sha,
+    }));
+    const paths = writes.map(write => write.path);
+
+    let first = true;
+    await this.#withGitRetry(async () => {
+      // The snapshot's head on the first attempt; a fresh one after a lost race.
+      const head = first ? snapshot : await readHeadTree();
+      first = false;
 
       const { data: treeData } = await octokit.request('POST /repos/{owner}/{repo}/git/trees', {
-        owner: gitOrganization.login,
+        owner,
         repo,
-        base_tree: commitData.tree.sha,
-        tree: entries.map((entry, index) => ({
-          path: paths[index]!,
-          mode: '100644',
-          type: 'blob',
-          sha: entry.sha,
-        })),
+        base_tree: head.tree,
+        tree: writes,
       });
 
       const { data: newCommit } = await octokit.request('POST /repos/{owner}/{repo}/git/commits', {
-        owner: gitOrganization.login,
+        owner,
         repo,
         message: message || `Copy ${sourceRoot} to ${destRoot}`,
         tree: treeData.sha,
-        parents: [currentCommitSha],
+        parents: [head.commit],
       });
 
       await octokit.request('PATCH /repos/{owner}/{repo}/git/refs/{ref}', {
-        owner: gitOrganization.login,
+        owner,
         repo,
         ref: `heads/${branch}`,
         sha: newCommit.sha,
       });
     });
 
-    for (const path of paths) invalidateCache(gitOrganization.login, repo, path);
+    // Every file, and every folder listing the copy changed: the new folder's
+    // own (it may have been listed empty, or missing, a moment ago), each
+    // folder inside it, and the folder it was created IN — `invalidateCache`
+    // clears only the parent's plain key, never a `:list`.
+    for (const path of paths) invalidateCache(owner, repo, path);
+    const listings = new Set<string>([parentFolder(destRoot), destRoot]);
+    for (const path of paths) {
+      for (let dir = parentFolder(path); dir.length > destRoot.length; dir = parentFolder(dir)) {
+        listings.add(dir);
+      }
+    }
+    for (const dir of listings) invalidateListing(owner, repo, dir);
 
-    return { copied: paths.length, paths };
+    return {
+      copied: paths.length,
+      paths,
+      entries: writes.map(({ path, sha }) => ({ path, sha })),
+      skipped,
+    };
   }
 
   /**
