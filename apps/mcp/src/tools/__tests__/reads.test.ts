@@ -28,6 +28,7 @@ const mocks = vi.hoisted(() => ({
   findBySlug: vi.fn(), // classroom.findBySlug
   calculateClassLeaderboard: vi.fn(), // helper.calculateClassLeaderboard
   membershipsByClassroom: vi.fn(), // classroomMembership.findByClassroomId
+  tagsWithCounts: vi.fn(), // organizationTag.findByClassroomIdWithCounts
 }));
 
 vi.mock('@classmoji/services', () => ({
@@ -45,6 +46,9 @@ vi.mock('@classmoji/services', () => ({
     classroomMembership: {
       findByClassroomId: (...a: unknown[]) => mocks.membershipsByClassroom(...a),
     },
+    organizationTag: {
+      findByClassroomIdWithCounts: (...a: unknown[]) => mocks.tagsWithCounts(...a),
+    },
   },
 }));
 
@@ -54,6 +58,7 @@ const {
   listTeachingTeamTool,
   gradingReportTool,
   listTeamsTool,
+  listTagsTool,
 } = await import('../reads.ts');
 const { gradingQueueResource, leaderboardResource } = await import('../../resources/grading.ts');
 const { teamsResource } = await import('../../resources/roster.ts');
@@ -275,6 +280,36 @@ describe('list_teams — the description matches the handler policy', () => {
     expect(listTeamsTool.roles).toEqual(teamsResource.roles);
     expect(listTeamsTool.scope).toBe(teamsResource.scope);
     expect(listTeamsTool.description).not.toBe(teamsResource.description);
+  });
+});
+
+describe('list_tags', () => {
+  it('returns every tag with its id, name and counts, scoped to the ctx classroom', async () => {
+    mocks.tagsWithCounts.mockResolvedValue([
+      { id: 'tag-1', name: 'workshop-pairs', _count: { teams: 13, repositories: 1 } },
+      { id: 'tag-2', name: 'unused', _count: { teams: 0, repositories: 0 } },
+    ]);
+
+    const payload = parse(await listTagsTool.handler({ classroom: CLASSROOM }, staffCtx()));
+
+    expect(mocks.tagsWithCounts).toHaveBeenCalledWith('class-1');
+    expect(payload).toEqual({
+      count: 2,
+      tags: [
+        { id: 'tag-1', name: 'workshop-pairs', team_count: 13, repository_count: 1 },
+        { id: 'tag-2', name: 'unused', team_count: 0, repository_count: 0 },
+      ],
+    });
+  });
+
+  it('is a teaching-team read — students have no tool that takes a tag id', () => {
+    expect(listTagsTool.roles).toEqual(['OWNER', 'TEACHER', 'ASSISTANT']);
+    expect(listTagsTool.roles).not.toContain('STUDENT');
+    expect(listTagsTool.scope).toBe('read');
+  });
+
+  it('keeps its description under the 1,500-byte client cut', () => {
+    expect(new TextEncoder().encode(listTagsTool.description).length).toBeLessThan(1500);
   });
 });
 

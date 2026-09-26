@@ -307,7 +307,12 @@ describe('assignment_update: grader_deadline and release_at', () => {
         grader_deadline: new Date(GRADER).toISOString(),
         release_at: new Date(RELEASE).toISOString(),
       },
+      value: expect.any(String),
     });
+    // The dedup key: a digest of what was written, so two different edits
+    // inside audit's 5s window stay two rows.
+    const data = audit.data as { values: unknown; value: string };
+    expect(data.value).toBe(JSON.stringify(data.values));
   });
 
   it('clears both dates with null, as the web edit form does', async () => {
@@ -326,6 +331,7 @@ describe('assignment_update: grader_deadline and release_at', () => {
       tool: 'assignment_update',
       fields: ['grader_deadline', 'release_at'],
       values: { grader_deadline: null, release_at: null },
+      value: expect.any(String),
     });
   });
 
@@ -350,6 +356,7 @@ describe('assignment_update: grader_deadline and release_at', () => {
         grades_released: true,
         release_at: new Date(RELEASE).toISOString(),
       },
+      value: expect.any(String),
     });
   });
 

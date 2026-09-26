@@ -23,6 +23,22 @@ export const findByClassroomId = async (classroomId: string) => {
   });
 };
 
+/**
+ * Every tag in the classroom with how many teams carry it and how many
+ * repositories point at it, ordered by name.
+ */
+export const findByClassroomIdWithCounts = async (classroomId: string) => {
+  return getPrisma().tag.findMany({
+    where: { classroom_id: classroomId },
+    select: {
+      id: true,
+      name: true,
+      _count: { select: { teams: true, repositories: true } },
+    },
+    orderBy: { name: 'asc' },
+  });
+};
+
 export const findByClassroomIdAndName = async (classroomId: string, name: string) => {
   return getPrisma().tag.findUnique({
     where: {
