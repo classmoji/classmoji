@@ -8,7 +8,9 @@
  * GitHub account.
  *
  * The same goes for connecting an app (MCP OAuth consent): the access token it
- * issues would act as the viewed user.
+ * issues would act as the viewed user. That refusal is server-side in the
+ * shared better-auth hook (packages/auth/src/appConnectionGuard.ts); the
+ * consent page uses this helper only to explain it and turn Approve off.
  *
  * Takes the `getAuthSession` result; for a bare better-auth session
  * (`auth.api.getSession`), pass `{ session }`. Pure, so both loaders and
@@ -26,8 +28,8 @@ export const ORG_SETTINGS_IMPERSONATION_MESSAGE =
 export const GITHUB_CLEANUP_IMPERSONATION_MESSAGE =
   "Deleting GitHub artifacts isn't available while viewing as another user.";
 
-export const CONNECT_APP_IMPERSONATION_MESSAGE =
-  "Connecting apps isn't available while viewing as another user.";
+// The same string the server-side refusal sends, from one place.
+export { CONNECT_APP_VIEWING_AS_MESSAGE as CONNECT_APP_IMPERSONATION_MESSAGE } from '@classmoji/auth/app-connection';
 
 export const CLASSROOM_REMOVE_IMPERSONATION_MESSAGE =
   "Removing a classroom isn't available while viewing as another user.";

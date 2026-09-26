@@ -1,5 +1,5 @@
 import { betterAuth } from 'better-auth';
-import { APIError, createAuthMiddleware } from 'better-auth/api';
+import { APIError, createAuthMiddleware, getSession } from 'better-auth/api';
 import { prismaAdapter } from 'better-auth/adapters/prisma';
 import { admin, mcp } from 'better-auth/plugins';
 import getPrisma from '@classmoji/database';
@@ -18,8 +18,38 @@ import {
   sessionTokenFromCookieHeader,
 } from './secret.ts';
 import { ASK_MOJI_CLIENT_ID } from './mcpToken.ts';
+import { applyAppConnectionRules, type AppConnectionSession } from './appConnectionGuard.ts';
 
 export { AUTH_SECRET, COOKIE_PREFIX };
+export { CONNECT_APP_VIEWING_AS_MESSAGE } from './appConnectionGuard.ts';
+
+/**
+ * The current session, read from inside `hooks.before` the way better-auth's
+ * own `getSessionFromCtx` does (api/routes/session.mjs:242-259), with two
+ * differences: an error is thrown rather than read as "signed out", so the
+ * caller can tell a failed lookup from no session; and the lookup leaves no
+ * trace on the request (no session refresh, and `ctx.context.session` is put
+ * back), so the endpoint then runs exactly as it would have.
+ */
+async function lookupSessionForHook(ctx: {
+  context: { session?: unknown };
+  headers?: Headers;
+}): Promise<AppConnectionSession> {
+  const previous = ctx.context.session;
+  try {
+    const result = await (getSession() as unknown as (c: unknown) => Promise<unknown>)({
+      ...ctx,
+      asResponse: false,
+      headers: ctx.headers,
+      returnHeaders: false,
+      returnStatus: false,
+      query: { disableRefresh: true },
+    });
+    return (result ?? null) as AppConnectionSession;
+  } finally {
+    ctx.context.session = previous;
+  }
+}
 
 /**
  * Platform admins, by User.id, from `PLATFORM_ADMIN_USER_IDS` (comma-separated).
@@ -566,11 +596,18 @@ export const auth = betterAuth({
    * This hook runs before EVERY endpoint (better-auth gives user hooks a
    * `() => true` matcher — dist/api/to-auth-endpoints.mjs:159-170), including
    * hot in-process `auth.api.*` calls, so the non-matching path must stay a
-   * single string comparison.
+   * string comparison (plus, for the app-connection rules, one substring check
+   * on the cookie header), never a session lookup.
    */
   hooks: {
     before: createAuthMiddleware(async ctx => {
-      if (ctx.path !== '/mcp/token') return;
+      if (ctx.path !== '/mcp/token') {
+        // Connecting apps: the consent page is always shown, and no app is
+        // connected while viewing as another user (./appConnectionGuard.ts).
+        // Every other path returns after a string comparison and a
+        // cookie-header substring check, with no session lookup.
+        return applyAppConnectionRules(ctx, () => lookupSessionForHook(ctx));
+      }
 
       const authorization =
         ctx.request?.headers.get('authorization') ?? ctx.headers?.get('authorization') ?? null;

@@ -6,9 +6,12 @@
  * ?scope. Approving posts to /api/auth/oauth2/consent, which returns the
  * client redirect URI (with the authorization code) to send the browser to.
  *
- * While a platform admin is viewing as another user, approving is off here and
- * refused server-side in api.auth.$ (both /mcp/authorize and an approving
- * /oauth2/consent), since the token issued would act as that user.
+ * The authorization endpoint always sends the browser here (the shared
+ * better-auth hook sets prompt=consent on every /mcp/authorize). While a
+ * platform admin is viewing as another user, approving is off here and refused
+ * server-side by that same hook (packages/auth/src/appConnectionGuard.ts), on
+ * every origin that mounts the auth handler, since the token issued would act
+ * as that user. The refusal's error_description is what this page shows.
  */
 import { useState } from 'react';
 import { redirect, useLoaderData } from 'react-router';

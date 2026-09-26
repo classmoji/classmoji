@@ -1,12 +1,9 @@
 /**
- * Connecting an app (MCP OAuth) while a platform admin is viewing as another
- * user. The session then belongs to the viewed user, so an authorization code
- * issued now would give the app a token acting as them. Pins:
- *   - GET /api/auth/mcp/authorize and an approving POST /api/auth/oauth2/consent
- *     are refused server-side before better-auth runs;
- *   - denying consent, other auth endpoints, and ordinary sessions are
- *     unaffected;
- *   - the consent screen shows a note and turns Approve off.
+ * The consent page while a platform admin is viewing as another user. The
+ * refusal itself is server-side, in the shared better-auth hook, and is tested
+ * in packages/auth (appConnectionGuard.test.ts, appConnection.integration.test.ts).
+ * Here: the page reports the state, shows the note, and turns Approve off; and
+ * the webapp's auth route hands every request to the shared handler.
  */
 
 import { createElement } from 'react';
@@ -41,28 +38,11 @@ vi.mock('react-router', () => ({
 const authRoute = await import('../api.auth.$.ts');
 const consentRoute = await import('../oauth.consent/route.tsx');
 
-const MESSAGE = "Connecting apps isn't available while viewing as another user.";
 const VIEWING_AS = {
   user: { id: 'owner-1', name: 'owner' },
   session: { id: 's-1', impersonatedBy: 'platform-admin-1' },
 };
 const OWN_SESSION = { user: { id: 'owner-1', name: 'owner' }, session: { id: 's-1' } };
-
-const authorize = () =>
-  authRoute.loader({
-    request: new Request(
-      'http://localhost/api/auth/mcp/authorize?client_id=c1&response_type=code&redirect_uri=http://localhost:9/cb'
-    ),
-  } as unknown as Parameters<typeof authRoute.loader>[0]) as Promise<Response>;
-
-const consent = (accept: boolean) =>
-  authRoute.action({
-    request: new Request('http://localhost/api/auth/oauth2/consent', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ accept, consent_code: 'code-1' }),
-    }),
-  } as unknown as Parameters<typeof authRoute.action>[0]) as Promise<Response>;
 
 beforeEach(() => {
   mocks.getSession.mockReset();
@@ -72,65 +52,17 @@ beforeEach(() => {
   mocks.findApplication.mockResolvedValue({ name: 'Claude', icon: null });
 });
 
-describe('auth handler while viewing as another user', () => {
-  beforeEach(() => {
-    mocks.getSession.mockResolvedValue(VIEWING_AS);
-  });
-
-  it('refuses the authorization endpoint', async () => {
-    const response = await authorize();
-
-    expect(response.status).toBe(403);
-    expect(await response.text()).toBe(MESSAGE);
-    expect(mocks.handler).not.toHaveBeenCalled();
-  });
-
-  it('refuses approving consent, with a message the consent screen shows', async () => {
-    const response = await consent(true);
-
-    expect(response.status).toBe(403);
-    expect(await response.json()).toEqual({
-      error: 'access_denied',
-      error_description: MESSAGE,
-    });
-    expect(mocks.handler).not.toHaveBeenCalled();
-  });
-
-  it('lets a consent denial through, since it issues nothing', async () => {
-    await consent(false);
-    expect(mocks.handler).toHaveBeenCalledOnce();
-  });
-
-  it('leaves other auth endpoints alone, without looking up the session', async () => {
-    await authRoute.loader({
-      request: new Request('http://localhost/api/auth/get-session'),
-    } as unknown as Parameters<typeof authRoute.loader>[0]);
+describe('webapp auth route', () => {
+  it('hands authorization to the shared auth handler, where the rules run', async () => {
+    mocks.handler.mockResolvedValue(new Response(null, { status: 302 }));
+    const response = (await authRoute.loader({
+      request: new Request('http://localhost/api/auth/mcp/authorize?client_id=c1'),
+    } as unknown as Parameters<typeof authRoute.loader>[0])) as Response;
 
     expect(mocks.handler).toHaveBeenCalledOnce();
+    expect(response.status).toBe(302);
+    // No second session lookup at the route level.
     expect(mocks.getSession).not.toHaveBeenCalled();
-  });
-});
-
-describe('auth handler for an ordinary session', () => {
-  beforeEach(() => {
-    mocks.getSession.mockResolvedValue(OWN_SESSION);
-  });
-
-  it('passes authorization through to better-auth', async () => {
-    const response = await authorize();
-    expect(response.status).toBe(200);
-    expect(mocks.handler).toHaveBeenCalledOnce();
-  });
-
-  it('passes an approving consent through to better-auth', async () => {
-    await consent(true);
-    expect(mocks.handler).toHaveBeenCalledOnce();
-  });
-
-  it('passes authorization through when nobody is signed in (better-auth sends them to sign in)', async () => {
-    mocks.getSession.mockResolvedValue(null);
-    await authorize();
-    expect(mocks.handler).toHaveBeenCalledOnce();
   });
 });
 
