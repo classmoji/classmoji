@@ -1,28 +1,44 @@
-import {} from 'react';
 import { useParams } from 'react-router';
-import { Form, Switch, Input, Select, Button, Modal, Badge, Alert, Divider } from 'antd';
+import { Form, Switch, Input, Select, Button, Modal, Badge, Alert, Divider, Tag } from 'antd';
+import { IconInfoCircle } from '@tabler/icons-react';
 
 import { namedAction } from 'remix-utils/named-action';
 
-import { ClassmojiService } from '@classmoji/services';
+import { ClassmojiService, ClassroomSettingsEntitlementError } from '@classmoji/services';
 import { SettingSection } from '~/components';
 import { ActionTypes } from '~/constants';
 import { useGlobalFetcher } from '~/hooks';
 import { assertClassroomAccess, assertClassroomMutationAllowed } from '~/utils/helpers';
 import { isAIAgentConfigured } from '~/utils/aiFeatures.server';
+import { buildLLMSettingsPayload } from './llmSettingsPayload';
+import { getPlatformAIDefaults } from './platformDefaults.server';
 import type { Route } from './+types/route';
 
 const { Option } = Select;
 
-/** Per-classroom model choices. Null (or unset) = the platform default. */
-const MODEL_FIELDS = ['llm_model', 'code_aware_model', 'exploration_model'] as const;
+/**
+ * Per-classroom model choices: standard quizzes, code-aware quizzes, code
+ * exploration, Ask Moji. Null (or unset) = the platform default.
+ */
+const MODEL_FIELDS = [
+  'llm_model',
+  'code_aware_model',
+  'exploration_model',
+  'syllabus_bot_model',
+] as const;
 
 /**
- * Per-classroom reasoning effort, per quiz phase. Null (or unset) = the
- * ai-agent's platform default: medium for questions, high for grading, low for
- * exploration.
+ * Per-classroom reasoning effort, per quiz phase and for Ask Moji. Null (or
+ * unset) = the ai-agent's platform default (see platformDefaults.server.ts).
  */
-const EFFORT_FIELDS = ['question_effort', 'grading_effort', 'exploration_effort'] as const;
+const EFFORT_FIELDS = [
+  'question_effort',
+  'grading_effort',
+  'exploration_effort',
+  'syllabus_bot_effort',
+] as const;
+
+type SelectField = (typeof MODEL_FIELDS)[number] | (typeof EFFORT_FIELDS)[number];
 
 const EFFORT_OPTIONS = [
   { value: 'low', label: 'Low' },
@@ -47,18 +63,23 @@ const EFFORT_LEVELS: Record<(typeof EFFORT_FIELDS)[number], readonly string[]> =
   question_effort: EFFORT_OPTIONS.map(option => option.value),
   grading_effort: EFFORT_OPTIONS.map(option => option.value),
   exploration_effort: EXPLORATION_EFFORT_OPTIONS.map(option => option.value),
+  syllabus_bot_effort: EFFORT_OPTIONS.map(option => option.value),
 };
 
 const EFFORT_LABELS: Record<(typeof EFFORT_FIELDS)[number], string> = {
   question_effort: 'Question effort',
   grading_effort: 'Grading effort',
   exploration_effort: 'Exploration effort',
+  syllabus_bot_effort: 'Ask Moji effort',
 };
+
+const effortLabel = (level: string) =>
+  EFFORT_OPTIONS.find(option => option.value === level)?.label ?? level;
 
 export const loader = async ({ params, request }: Route.LoaderArgs) => {
   const classSlug = params.class!;
 
-  // Authorize: only OWNER can access quiz settings
+  // Authorize: only OWNER can access AI settings
   const { classroom } = await assertClassroomAccess({
     request,
     classroomSlug: classSlug,
@@ -71,8 +92,12 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
   const settings = await ClassmojiService.classroom.getClassroomSettingsForServer(classroom.id);
   const apiKey = settings?.anthropic_api_key;
 
+  // Ask Moji is Pro-only; its toggle is disabled (not hidden) on Free so
+  // owners can see the feature exists and why it is unavailable.
+  const askMojiEntitlement = await ClassmojiService.entitlement.canUseSyllabusBot(classroom.id);
+
   // Dynamically fetch available models
-  const { getAllModels } = await import('@classmoji/services');
+  const { getAllModels, getModelLabel } = await import('@classmoji/services');
 
   let models: { anthropic: { value: string; label: string }[] } = {
     anthropic: [],
@@ -82,18 +107,43 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
     // Try to fetch models - use API key from server-side fetch
     models = await getAllModels({ anthropicApiKey: apiKey! });
 
-    console.log('[Quiz Settings] Loaded models:', {
+    console.log('[AI Settings] Loaded models:', {
       anthropic: models.anthropic.length,
     });
   } catch (error: unknown) {
-    console.error('[Quiz Settings] Error loading models:', error);
+    console.error('[AI Settings] Error loading models:', error);
     // Fallback models are already handled in getAllModels
   }
 
-  // Return classroom with settings (excluding sensitive API keys)
+  // The "Default: X" on each select: what the ai-agent runs when the
+  // classroom names nothing.
+  const platformDefaults = getPlatformAIDefaults();
+  const defaultLabels = {} as Record<SelectField, string>;
+  for (const field of MODEL_FIELDS) {
+    defaultLabels[field] = getModelLabel(platformDefaults[field], models.anthropic);
+  }
+  for (const field of EFFORT_FIELDS) {
+    defaultLabels[field] = effortLabel(platformDefaults[field]);
+  }
+
+  // What the selects show. Without a classroom key every AI call runs on the
+  // platform defaults, whatever is stored (a value left from before the key was
+  // removed, or copied in by a config import), so the selects show the
+  // defaults too. The stored values are kept and apply again once a key is
+  // added.
+  const selectValues = {} as Record<SelectField, string | null>;
+  for (const field of [...MODEL_FIELDS, ...EFFORT_FIELDS]) {
+    selectValues[field] = apiKey ? (settings?.[field] ?? null) : null;
+  }
+
+  // Return classroom with settings (excluding sensitive API keys). Without a
+  // key the stored model and effort choices are not sent either (selectValues
+  // is all null then): nothing shows them, and they stay in the database for
+  // when a key is added.
   const safeSettings = settings
     ? {
         ...settings,
+        ...(apiKey ? {} : selectValues),
         anthropic_api_key: undefined,
         openai_api_key: undefined,
         has_anthropic_key: Boolean(settings.anthropic_api_key),
@@ -104,317 +154,278 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
     organization: { ...classroom, settings: safeSettings },
     availableModels: models,
     aiAgentAvailable: isAIAgentConfigured(),
+    askMojiProRequired: !askMojiEntitlement.allowed,
+    defaultLabels,
+    selectValues,
   };
 };
 
-const SettingsQuizzes = ({ loaderData }: Route.ComponentProps) => {
-  const { organization, availableModels, aiAgentAvailable } = loaderData;
+const SettingsAI = ({ loaderData }: Route.ComponentProps) => {
+  const {
+    organization,
+    availableModels,
+    aiAgentAvailable,
+    askMojiProRequired,
+    defaultLabels,
+    selectValues,
+  } = loaderData;
   const { class: classSlug } = useParams();
-  const [form] = Form.useForm();
 
   const { fetcher } = useGlobalFetcher();
 
   const settings = (organization.settings || {}) as Record<string, unknown>;
-  // Use the computed flag from getOrgForUI (API key is never sent to client)
-  const hasAnthropicKey = settings.has_anthropic_key;
-  const usingSystemDefaults = !hasAnthropicKey;
+  // Use the computed flag from the loader (API key is never sent to client)
+  const hasAnthropicKey = Boolean(settings.has_anthropic_key);
 
   // Get model lists from loader data
   const anthropicModels = availableModels?.anthropic || [];
 
-  const handleQuizzesToggle = (checked: boolean) => {
-    fetcher!.submit(
-      {
-        _action: 'saveQuizSettings',
-        quizzes_enabled: checked,
-      },
-      {
-        method: 'POST',
-        encType: 'application/json',
-        action: `/admin/${classSlug}/settings/quizzes`,
-      }
-    );
-  };
-
-  const handleSaveLLMSettings = (values: Record<string, unknown>) => {
-    const payload: Record<string, string | null> = {
-      _action: 'saveLLMSettings',
-      anthropic_api_key: (values.anthropic_api_key as string) || '',
-    };
-    // A cleared Select is undefined, which JSON.stringify drops, so the server
-    // would never see the clear. Send null to put the column back to default.
-    for (const field of [...MODEL_FIELDS, ...EFFORT_FIELDS]) {
-      payload[field] = (values[field] as string) || null;
-    }
+  const submit = (payload: Record<string, string | boolean | null>) => {
     fetcher!.submit(payload, {
       method: 'POST',
       encType: 'application/json',
-      action: `/admin/${classSlug}/settings/quizzes`,
+      action: `/admin/${classSlug}/settings/ai`,
     });
+  };
+
+  const handleQuizzesToggle = (checked: boolean) => {
+    submit({ _action: 'saveQuizSettings', quizzes_enabled: checked });
+  };
+
+  const handleAskMojiToggle = (checked: boolean) => {
+    submit({ _action: 'saveAskMojiSettings', syllabus_bot_enabled: checked });
+  };
+
+  const handleSaveLLMSettings = (values: Record<string, unknown>) => {
+    submit(buildLLMSettingsPayload(values, [...MODEL_FIELDS, ...EFFORT_FIELDS], hasAnthropicKey));
   };
 
   const handleClearSettings = () => {
     Modal.confirm({
-      title: 'Clear LLM Settings',
+      title: 'Clear all AI settings',
       content:
-        'This will remove all custom LLM configuration and revert to system defaults. Are you sure?',
+        "Removes the classroom's Anthropic API key and every model and effort choice on this page.",
       okText: 'Clear',
       okType: 'danger',
       onOk: () => {
-        fetcher!.submit(
-          {
-            _action: 'clearLLMSettings',
-          },
-          {
-            method: 'POST',
-            encType: 'application/json',
-            action: `/admin/${classSlug}/settings/quizzes`,
-          }
-        );
+        submit({ _action: 'clearLLMSettings' });
       },
     });
   };
+
+  const modelSelect = (field: (typeof MODEL_FIELDS)[number]) => (
+    <Select allowClear disabled={!hasAnthropicKey} placeholder={`Default: ${defaultLabels[field]}`}>
+      {anthropicModels.map((model: { value: string; label: string }) => (
+        <Option key={model.value} value={model.value}>
+          {model.label}
+        </Option>
+      ))}
+    </Select>
+  );
+
+  const effortSelect = (
+    field: (typeof EFFORT_FIELDS)[number],
+    options: readonly { value: string; label: string }[] = EFFORT_OPTIONS
+  ) => (
+    <Select allowClear disabled={!hasAnthropicKey} placeholder={`Default: ${defaultLabels[field]}`}>
+      {options.map(option => (
+        <Option key={option.value} value={option.value}>
+          {option.label}
+        </Option>
+      ))}
+    </Select>
+  );
+
+  // Code exploration runs in a Trigger.dev task on the Classmoji platform key
+  // (EXPLORATION_MODE=trigger), whichever key the classroom has.
+  const explorationLabel = (
+    <span className="inline-flex items-center gap-2">
+      Code exploration
+      <Tag className="m-0">Billed to Classmoji</Tag>
+    </span>
+  );
+
+  const subheading = (text: string) => (
+    <h3 className="mb-3 mt-2 text-sm font-semibold text-ink-1">{text}</h3>
+  );
+
+  const initialValues: Record<string, string | undefined> = { anthropic_api_key: '' };
+  for (const field of [...MODEL_FIELDS, ...EFFORT_FIELDS]) {
+    // undefined, not null, so an unset Select shows its placeholder.
+    initialValues[field] = selectValues[field] ?? undefined;
+  }
 
   return (
     <div className="">
       {!aiAgentAvailable && (
         <Alert
-          message="AI Agent Not Configured"
-          description="The AI agent service is not available. Quiz features require AI_AGENT_URL and AI_AGENT_SHARED_SECRET to be configured."
+          message="AI features aren't available on this server"
           type="warning"
           showIcon={true}
           style={{ marginBottom: '16px' }}
         />
       )}
 
-      {/* Quiz Functionality Section */}
-      <SettingSection
-        title="Quiz Functionality"
-        description="Enable or disable quizzes for all users in this classroom. When disabled, students, assistants, and admins will not be able to access the quiz feature."
-      >
-        <Form layout="vertical" className="w-3/4">
-          <Form.Item label="Enable Quizzes">
-            <Switch
-              checked={organization.settings?.quizzes_enabled ?? true}
-              onChange={handleQuizzesToggle}
-              disabled={!aiAgentAvailable}
-            />
-          </Form.Item>
-        </Form>
-      </SettingSection>
-
-      <Divider />
-
       <Form
-        form={form}
+        // Remount when the key comes or goes: initialValues apply only at
+        // mount, and the selects switch between stored values and defaults.
+        // No shared `form` instance: its store would outlive the remount, and
+        // rc-field-form merges a surviving store OVER the new initialValues
+        // (old choices after Clear; placeholders, then nulls on Save, when a
+        // key is added). Each mount makes its own store.
+        key={hasAnthropicKey ? 'keyed' : 'keyless'}
         layout="vertical"
-        className="w-3/4"
         onFinish={handleSaveLLMSettings}
-        initialValues={{
-          anthropic_api_key: '',
-          // undefined, not '', so an unset Select shows its placeholder.
-          llm_model: (settings.llm_model as string) || undefined,
-          code_aware_model: (settings.code_aware_model as string) || undefined,
-          exploration_model: (settings.exploration_model as string) || undefined,
-          question_effort: (settings.question_effort as string) || undefined,
-          grading_effort: (settings.grading_effort as string) || undefined,
-          exploration_effort: (settings.exploration_effort as string) || undefined,
-        }}
+        initialValues={initialValues}
       >
-        {/* API Keys Section */}
+        {/* API Key Section */}
         <SettingSection
           title="API Key"
-          description="Configure your Anthropic API key for AI-powered quizzes. Leave empty to use system-wide environment variables."
           extra={
-            usingSystemDefaults ? (
+            hasAnthropicKey ? (
               <Badge
                 count={
-                  <span className="px-3 py-1 bg-blue-100 text-blue-700 rounded-full text-sm">
-                    Using System Environment Variables
+                  <span className="px-3 py-1 bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-300 rounded-full text-sm">
+                    Using classroom key
                   </span>
                 }
               />
             ) : (
               <Badge
                 count={
-                  <span className="px-3 py-1 bg-green-100 text-green-700 rounded-full text-sm">
-                    Using Organization API Key
+                  <span className="px-3 py-1 bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300 rounded-full text-sm">
+                    Using system defaults
                   </span>
                 }
               />
             )
           }
         >
-          {usingSystemDefaults && (
-            <Alert
-              message="Provide an Anthropic API key below to configure custom model and effort settings."
-              type="info"
-              showIcon={true}
-              style={{ marginBottom: '16px' }}
+          <Form.Item
+            label="Anthropic API key"
+            extra="Models and effort below apply only when the classroom has its own key."
+          >
+            <div className="flex gap-2">
+              <Form.Item name="anthropic_api_key" noStyle>
+                <Input.Password placeholder="sk-ant-..." visibilityToggle />
+              </Form.Item>
+              <Button type="primary" htmlType="submit">
+                Save
+              </Button>
+            </div>
+          </Form.Item>
+        </SettingSection>
+
+        <Divider />
+
+        {/* AI Quizzes Section */}
+        <SettingSection title="AI Quizzes">
+          <Form.Item label="Enable quizzes">
+            <Switch
+              checked={organization.settings?.quizzes_enabled ?? true}
+              onChange={handleQuizzesToggle}
+              disabled={!aiAgentAvailable}
             />
+          </Form.Item>
+
+          {subheading('Models')}
+          <div className="grid grid-cols-1 gap-x-4 sm:grid-cols-2 xl:grid-cols-3">
+            <Form.Item label="Standard quizzes" name="llm_model">
+              {modelSelect('llm_model')}
+            </Form.Item>
+            <Form.Item label="Code-aware quizzes" name="code_aware_model">
+              {modelSelect('code_aware_model')}
+            </Form.Item>
+            <Form.Item label={explorationLabel} name="exploration_model">
+              {modelSelect('exploration_model')}
+            </Form.Item>
+          </div>
+
+          {subheading('Effort')}
+          <div className="grid grid-cols-1 gap-x-4 sm:grid-cols-2 xl:grid-cols-3">
+            <Form.Item label="Questions" name="question_effort">
+              {effortSelect('question_effort')}
+            </Form.Item>
+            <Form.Item label="Grading" name="grading_effort">
+              {effortSelect('grading_effort')}
+            </Form.Item>
+            <Form.Item label={explorationLabel} name="exploration_effort">
+              {effortSelect('exploration_effort', EXPLORATION_EFFORT_OPTIONS)}
+            </Form.Item>
+          </div>
+
+          {/* Without a key the selects are disabled and a Save sends nothing. */}
+          <Button type="primary" htmlType="submit" disabled={!hasAnthropicKey}>
+            Save
+          </Button>
+        </SettingSection>
+
+        <Divider />
+
+        {/* Ask Moji Section */}
+        <SettingSection
+          title={
+            <span className="inline-flex items-center gap-2">
+              Ask Moji
+              <span className="rounded-sm bg-amber-50 px-1.5 py-0.5 text-xs font-medium text-amber-600 dark:bg-amber-900/30 dark:text-amber-400">
+                Pro
+              </span>
+            </span>
+          }
+        >
+          <Form.Item label="Enable Ask Moji">
+            <Switch
+              checked={organization.settings?.syllabus_bot_enabled ?? false}
+              onChange={handleAskMojiToggle}
+              // The feature predates the Pro gate, so Free classrooms with a
+              // stale `true` exist. Turning it OFF stays allowed (the server
+              // gates only the `true` direction) — otherwise those owners are
+              // stuck with a flag they cannot clear.
+              disabled={
+                !aiAgentAvailable ||
+                (askMojiProRequired && !organization.settings?.syllabus_bot_enabled)
+              }
+            />
+          </Form.Item>
+
+          {askMojiProRequired && (
+            <div className="mb-6 flex items-start gap-2 rounded-lg bg-stone-50 p-3 text-sm text-gray-600 dark:bg-neutral-800 dark:text-gray-400">
+              <IconInfoCircle size={16} className="mt-0.5 shrink-0" />
+              <span>
+                Ask Moji is available on the Pro plan.{' '}
+                <a
+                  href="/settings/billing"
+                  className="text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300"
+                >
+                  Upgrade to enable it
+                </a>
+                .
+              </span>
+            </div>
           )}
 
-          <Form.Item
-            label="Anthropic API Key"
-            name="anthropic_api_key"
-            extra="Leave empty to use system default"
-          >
-            <Input.Password
-              placeholder="sk-ant-..."
-              visibilityToggle
-              value={hasAnthropicKey ? '••••••••••••••••' : ''}
-            />
-          </Form.Item>
+          <div className="grid grid-cols-1 gap-x-4 sm:grid-cols-2 xl:grid-cols-3">
+            <Form.Item label="Model" name="syllabus_bot_model">
+              {modelSelect('syllabus_bot_model')}
+            </Form.Item>
+            <Form.Item label="Effort" name="syllabus_bot_effort">
+              {effortSelect('syllabus_bot_effort')}
+            </Form.Item>
+          </div>
 
-          <Button type="primary" htmlType="submit">
-            Save
-          </Button>
-        </SettingSection>
-
-        <Divider />
-
-        {/* Standard Quiz Settings Section */}
-        <SettingSection
-          title="Standard Quiz Settings"
-          description="Configure the AI model for standard quizzes."
-        >
-          <Form.Item label="Model" name="llm_model">
-            <Select disabled={usingSystemDefaults} placeholder="Select a model">
-              {anthropicModels.map((model: { value: string; label: string }) => (
-                <Option key={model.value} value={model.value}>
-                  {model.label}
-                </Option>
-              ))}
-            </Select>
-          </Form.Item>
-
-          <Form.Item
-            label="Question effort"
-            name="question_effort"
-            extra="Question and conversation turns in standard and code-aware quizzes. Higher effort is slower but more thorough; models that don't support effort ignore it."
-          >
-            <Select allowClear disabled={!hasAnthropicKey} placeholder="Default: Medium">
-              {EFFORT_OPTIONS.map(option => (
-                <Option key={option.value} value={option.value}>
-                  {option.label}
-                </Option>
-              ))}
-            </Select>
-          </Form.Item>
-
-          <Button type="primary" htmlType="submit">
-            Save
-          </Button>
-        </SettingSection>
-
-        <Divider />
-
-        {/* Grading applies to both quiz types */}
-        <SettingSection
-          title="Quiz Grading"
-          description="Configure the final grading of standard and code-aware quizzes."
-        >
-          <Form.Item
-            label="Grading effort"
-            name="grading_effort"
-            extra="How much the AI reasons when it grades a finished quiz; models that don't support effort ignore it."
-          >
-            <Select allowClear disabled={!hasAnthropicKey} placeholder="Default: High">
-              {EFFORT_OPTIONS.map(option => (
-                <Option key={option.value} value={option.value}>
-                  {option.label}
-                </Option>
-              ))}
-            </Select>
-          </Form.Item>
-
-          <Button type="primary" htmlType="submit">
-            Save
-          </Button>
-        </SettingSection>
-
-        <Divider />
-
-        {/* Code-Aware Quiz Settings Section */}
-        <SettingSection
-          title="Code-Aware Quiz Settings"
-          description="Configure the AI models for code-aware quizzes that can explore student repositories."
-        >
-          <Form.Item
-            label="Agent Model"
-            name="code_aware_model"
-            extra={
-              hasAnthropicKey
-                ? 'Uses Anthropic API Key configured above'
-                : 'Provide Anthropic API Key above to enable'
-            }
-          >
-            <Select
-              disabled={!hasAnthropicKey}
-              placeholder={hasAnthropicKey ? 'Select a Claude model' : 'Anthropic API Key required'}
-            >
-              {anthropicModels.map((model: { value: string; label: string }) => (
-                <Option key={model.value} value={model.value}>
-                  {model.label}
-                </Option>
-              ))}
-            </Select>
-          </Form.Item>
-
-          <Form.Item
-            label="Exploration Model"
-            name="exploration_model"
-            extra={
-              hasAnthropicKey
-                ? "Picks the files and lines of the student's code the quiz agent sees. Runs on the Classmoji platform key, not the key above."
-                : 'Provide Anthropic API Key above to enable'
-            }
-          >
-            <Select
-              allowClear
-              disabled={!hasAnthropicKey}
-              placeholder={
-                hasAnthropicKey ? 'Default: Claude Sonnet 5' : 'Anthropic API Key required'
-              }
-            >
-              {anthropicModels.map((model: { value: string; label: string }) => (
-                <Option key={model.value} value={model.value}>
-                  {model.label}
-                </Option>
-              ))}
-            </Select>
-          </Form.Item>
-
-          <Form.Item
-            label="Exploration effort"
-            name="exploration_effort"
-            extra="How much the exploration model reasons when it picks the lines of code to show; models that don't support effort ignore it. Runs on the Classmoji platform key, not the key above."
-          >
-            <Select allowClear disabled={!hasAnthropicKey} placeholder="Default: Low">
-              {EXPLORATION_EFFORT_OPTIONS.map(option => (
-                <Option key={option.value} value={option.value}>
-                  {option.label}
-                </Option>
-              ))}
-            </Select>
-          </Form.Item>
-
-          <Button type="primary" htmlType="submit">
+          <Button type="primary" htmlType="submit" disabled={!hasAnthropicKey}>
             Save
           </Button>
         </SettingSection>
       </Form>
 
       {/* Clear All Settings Section */}
-      {!usingSystemDefaults && (
+      {hasAnthropicKey && (
         <>
           <Divider />
-          <SettingSection
-            title="Reset Configuration"
-            description="Remove all custom LLM configuration and revert to system defaults."
-          >
+          <SettingSection title="Reset">
             <Button type="primary" onClick={handleClearSettings}>
-              Clear All Settings
+              Clear all AI settings
             </Button>
           </SettingSection>
         </>
@@ -426,7 +437,7 @@ const SettingsQuizzes = ({ loaderData }: Route.ComponentProps) => {
 export const action = async ({ params, request }: Route.ActionArgs) => {
   const classSlug = params.class!;
 
-  // Authorize: only OWNER can modify quiz settings
+  // Authorize: only OWNER can modify AI settings
   const { classroom, membership } = await assertClassroomAccess({
     request,
     classroomSlug: classSlug,
@@ -461,21 +472,39 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
       };
     },
 
+    async saveAskMojiSettings() {
+      // Only the field the toggle owns; Ask Moji's model and effort go through
+      // saveLLMSettings. updateSettings is the hard Pro gate (it refuses only
+      // turning Ask Moji ON); catching here only turns the refusal into a
+      // readable message instead of a 500.
+      try {
+        await ClassmojiService.classroom.updateSettings(classroom.id, {
+          syllabus_bot_enabled: Boolean(data.syllabus_bot_enabled),
+        });
+      } catch (error: unknown) {
+        if (error instanceof ClassroomSettingsEntitlementError) {
+          return {
+            error: error.message,
+            action: ActionTypes.SAVE_QUIZ_SETTINGS,
+          };
+        }
+        throw error;
+      }
+      return {
+        success: 'Ask Moji settings updated',
+        action: ActionTypes.SAVE_QUIZ_SETTINGS,
+      };
+    },
+
     async saveLLMSettings() {
       const { anthropic_api_key } = data;
 
       // Only the fields this form owns. A stale client may still send
       // llm_temperature / llm_max_tokens; nothing sends those to a model, so
       // they are not written.
-      const updateData: {
-        anthropic_api_key?: string;
-        llm_model?: string | null;
-        code_aware_model?: string | null;
-        exploration_model?: string | null;
-        question_effort?: string | null;
-        grading_effort?: string | null;
-        exploration_effort?: string | null;
-      } = {};
+      const updateData: { anthropic_api_key?: string } & Partial<
+        Record<SelectField, string | null>
+      > = {};
       for (const field of MODEL_FIELDS) {
         if (!(field in data)) continue;
         const value = data[field];
@@ -515,21 +544,21 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
 
       if ([...MODEL_FIELDS, ...EFFORT_FIELDS].some(field => updateData[field]) && !willHaveKey) {
         return {
-          error:
-            'Custom model or effort selection requires an API key. Leave fields empty to use system defaults.',
+          error: 'Choosing a model or effort requires a classroom API key.',
           action: ActionTypes.SAVE_QUIZ_SETTINGS,
         };
       }
 
       await ClassmojiService.classroom.updateSettings(classroom.id, updateData);
       return {
-        success: 'LLM settings saved successfully',
+        success: 'AI settings saved',
         action: ActionTypes.SAVE_QUIZ_SETTINGS,
       };
     },
 
     async clearLLMSettings() {
-      // Clear all LLM-related settings
+      // Clear the key and every model and effort choice. Not the Enable
+      // switches: quizzes_enabled and syllabus_bot_enabled stay as they are.
       await ClassmojiService.classroom.updateSettings(classroom.id, {
         llm_provider: null,
         llm_model: null,
@@ -541,13 +570,15 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
         question_effort: null,
         grading_effort: null,
         exploration_effort: null,
+        syllabus_bot_model: null,
+        syllabus_bot_effort: null,
       });
       return {
-        success: 'LLM settings cleared. Using system defaults.',
+        success: 'AI settings cleared. Using system defaults.',
         action: ActionTypes.SAVE_QUIZ_SETTINGS,
       };
     },
   });
 };
 
-export default SettingsQuizzes;
+export default SettingsAI;

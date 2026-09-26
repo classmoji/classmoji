@@ -412,7 +412,7 @@ describe('api.quiz startQuiz — reasoning effort in quizConfig', () => {
 describe('api.quiz startQuiz — budget-stopped opening turn', () => {
   const budgetError = () =>
     Object.assign(
-      new Error('Starting the quiz took much longer than it should have, so I stopped.'),
+      new Error("Your first question couldn't be prepared. Send any message to try again."),
       { code: 'BUDGET_EXCEEDED', retryable: true }
     );
 
@@ -461,7 +461,7 @@ describe('api.quiz startQuiz — budget-stopped opening turn', () => {
     expect(addMessageMock).toHaveBeenCalledWith(
       ATTEMPT_ID,
       'ASSISTANT',
-      'I couldn\'t get your first question ready: it was taking much longer than it should have, so I stopped. Send any message ("ready" is fine) and I\'ll try again.',
+      "Your first question couldn't be prepared. Send any message to try again.",
       false,
       { errorType: 'BUDGET_EXCEEDED' }
     );

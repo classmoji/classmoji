@@ -69,6 +69,7 @@ describe('selectedSettingsFields', () => {
       'grading_effort',
       'exploration_effort',
       'syllabus_bot_model',
+      'syllabus_bot_effort',
     ]);
   });
 

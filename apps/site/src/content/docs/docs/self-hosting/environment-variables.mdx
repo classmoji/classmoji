@@ -26,7 +26,7 @@ description: All environment variables required to run Classmoji
 
 ### AI features
 
-AI features (quizzes, syllabus bot, prompt assistant) run on **Anthropic Claude**. They are optional: when `AI_AGENT_URL` and `AI_AGENT_SHARED_SECRET` are unset, AI features are hidden and the related API routes return 503.
+AI features (quizzes, Ask Moji, prompt assistant) run on **Anthropic Claude**. They are optional: when `AI_AGENT_URL` and `AI_AGENT_SHARED_SECRET` are unset, AI features are hidden and the related API routes return 503.
 
 | Name | Required | Default | Description |
 |------|----------|---------|-------------|
@@ -39,7 +39,9 @@ AI features (quizzes, syllabus bot, prompt assistant) run on **Anthropic Claude*
 | `QUIZ_QUESTION_EFFORT` | No | `medium` | Reasoning effort (`low`, `medium`, `high`, `xhigh`, `max`) for quiz question and conversation turns. A classroom with its own API key can override it. |
 | `QUIZ_GRADING_EFFORT` | No | `high` | Reasoning effort for final quiz grading. A classroom with its own API key can override it. |
 | `EXPLORATION_EFFORT` | No | `low` | Reasoning effort for the code-aware quiz's excerpt selection (`xhigh` and `max` run as `high`). A classroom with its own API key can override it. |
-| `QUIZ_MAX_BUDGET_USD` | No | `1.00` | Per-call cost ceiling in USD for quiz agent calls on the platform `ANTHROPIC_API_KEY`. A runaway guard, not a spend limit. |
+| `SYLLABUS_BOT_MODEL` | No | `LLM_MODEL` | Claude model used for Ask Moji. A classroom with its own API key can override it. |
+| `SYLLABUS_BOT_EFFORT` | No | `low` | Reasoning effort for Ask Moji. A classroom with its own API key can override it. |
+| `AI_MAX_BUDGET_USD` | No | `1.00` | Per-call cost ceiling in USD for quiz and Ask Moji agent calls on the platform `ANTHROPIC_API_KEY`. A runaway guard, not a spend limit. |
 | `OPENAI_API_KEY` | No | | Reserved. Not used by any current feature. |
 | `LLM_PROVIDER` | No | | Reserved. Only Anthropic/Claude is wired today. |
 

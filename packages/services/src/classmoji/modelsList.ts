@@ -118,6 +118,18 @@ function formatClaudeModelName(modelId: string): string {
     return knownModels[modelId];
   }
 
+  // Current ids name the family first: claude-sonnet-5, claude-opus-5-5,
+  // claude-sonnet-4-5-20250929. The parser below expects the version first
+  // (claude-3-5-sonnet) and would drop it here, labelling Opus 5.5 "Claude Opus".
+  const familyFirst = modelId.match(
+    /^claude-(opus|sonnet|haiku|fable|mythos)-(\d{1,2})(?:-(\d{1,2}))?(?:-\d{8})?$/
+  );
+  if (familyFirst) {
+    const [, family, major, minor] = familyFirst;
+    const name = family.charAt(0).toUpperCase() + family.slice(1);
+    return `Claude ${name} ${major}${minor === undefined ? '' : `.${minor}`}`;
+  }
+
   // Parse unknown models dynamically
   if (modelId.startsWith('claude-')) {
     const parts = modelId.split('-');
@@ -182,8 +194,8 @@ function formatClaudeModelName(modelId: string): string {
 /**
  * Fallback Anthropic models list (used if the API call fails or there is no key)
  *
- * SELECTABLE. This is what the quiz settings dropdown
- * (apps/webapp/app/routes/admin.$class.settings.quizzes) offers an instructor to
+ * SELECTABLE. This is what the AI settings dropdowns
+ * (apps/webapp/app/routes/admin.$class.settings.ai) offer an instructor to
  * save against their classroom whenever the live models call cannot answer, so
  * every entry must be a model the API still serves — picking a retired id writes
  * a setting that 404s on the next quiz, long after the person who chose it has
@@ -200,6 +212,23 @@ function getFallbackAnthropicModels(): Model[] {
     { value: 'claude-sonnet-4-5-20250929', label: 'Claude Sonnet 4.5' },
     { value: 'claude-haiku-4-5-20251001', label: 'Claude Haiku 4.5' },
   ];
+}
+
+/**
+ * The display name for a model id: its label in `models` (the list the
+ * settings page loaded, which carries the API's display_name), else in the
+ * fallback list, else one formatted from the id.
+ *
+ * @param {string} modelId - e.g. `claude-sonnet-5`
+ * @param {Model[]} [models] - the loaded model list
+ * @returns {string}
+ */
+export function getModelLabel(modelId: string, models: Model[] = []): string {
+  return (
+    models.find(model => model.value === modelId)?.label ??
+    getFallbackAnthropicModels().find(model => model.value === modelId)?.label ??
+    formatClaudeModelName(modelId)
+  );
 }
 
 /**

@@ -52,7 +52,7 @@ const extractDurationMetrics = (payload: Record<string, unknown> | null) => {
 };
 
 /**
- * The ai-agent's platform budget guard (QUIZ_MAX_BUDGET_USD) stopped the turn.
+ * The ai-agent's platform budget guard (AI_MAX_BUDGET_USD) stopped the turn.
  * aiAgentConnection carries the ERROR payload's `code` onto the thrown error.
  */
 const isBudgetExceeded = (error: unknown) =>
@@ -69,7 +69,7 @@ const isBudgetExceeded = (error: unknown) =>
  * questions_asked.
  */
 const BUDGET_STOPPED_START_MESSAGE =
-  'I couldn\'t get your first question ready: it was taking much longer than it should have, so I stopped. Send any message ("ready" is fine) and I\'ll try again.';
+  "Your first question couldn't be prepared. Send any message to try again.";
 
 export async function action({ request }: Route.ActionArgs) {
   // Only handle POST requests

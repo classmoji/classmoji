@@ -50,6 +50,7 @@ const SAFE_SETTINGS_FIELDS = [
   'exploration_effort',
   'syllabus_bot_enabled',
   'syllabus_bot_model',
+  'syllabus_bot_effort',
   'content_repo_name',
   'slides_enabled',
   'quizzes_enabled',
@@ -745,9 +746,7 @@ export const updateSettings = async (
   if (updates.syllabus_bot_enabled !== undefined && updates.syllabus_bot_enabled !== false) {
     const entitlement = await entitlementService.canUseSyllabusBot(classroomId);
     if (!entitlement.allowed) {
-      throw new ClassroomSettingsEntitlementError(
-        'The syllabus assistant requires a Pro subscription'
-      );
+      throw new ClassroomSettingsEntitlementError('Ask Moji requires a Pro subscription.');
     }
   }
 

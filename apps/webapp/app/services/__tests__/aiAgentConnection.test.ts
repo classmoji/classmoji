@@ -74,7 +74,7 @@ describe('sendRequest: ERROR replies', () => {
       type: 'ERROR',
       payload: {
         attemptId: 'attempt-1',
-        error: 'Starting the quiz took much longer than it should have, so I stopped.',
+        error: "Your first question couldn't be prepared. Send any message to try again.",
         code: 'BUDGET_EXCEEDED',
         retryable: true,
       },
@@ -83,7 +83,7 @@ describe('sendRequest: ERROR replies', () => {
     expect(error).toBeInstanceOf(AIAgentRequestError);
     expect(error).toBeInstanceOf(Error);
     expect(error).toMatchObject({
-      message: 'Starting the quiz took much longer than it should have, so I stopped.',
+      message: "Your first question couldn't be prepared. Send any message to try again.",
       code: 'BUDGET_EXCEEDED',
       retryable: true,
     });

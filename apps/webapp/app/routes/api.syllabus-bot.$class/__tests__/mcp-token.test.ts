@@ -294,4 +294,42 @@ describe('syllabus bot — a failed turn tells the browser nothing about why', (
       .join('\n');
     expect(logged).toContain(LEAKY);
   });
+
+  /**
+   * A budget-guard stop is the one failure the student can act on. The
+   * ai-agent answers it with ERROR `{ code: 'BUDGET_EXCEEDED', retryable: true }`,
+   * which aiAgentConnection puts on the thrown error. It gets its own fixed
+   * line, through both doors, and the ai-agent's own text still stays here.
+   *
+   * MUTATION: drop the isBudgetExceeded branch → the first test fails; match on
+   * anything but the code → the API_ERROR test fails.
+   */
+  const BUDGET_TEXT =
+    "Ask Moji couldn't finish that answer. Please ask again.";
+  const agentError = (code: string) =>
+    Object.assign(new Error('max budget $1.00 exceeded at ai-agent.internal'), {
+      code,
+      retryable: true,
+    });
+
+  it('says a budget stop plainly, in the body and over SSE', async () => {
+    sendRequestMock.mockRejectedValue(agentError('BUDGET_EXCEEDED'));
+
+    const res = await post({ _action: 'sendMessage', conversationId: 'conv-mine', content: 'x' });
+    const body = (await res.json()) as { error: string };
+
+    expect(body.error).toBe(BUDGET_TEXT);
+    const published = JSON.stringify((await streamManager()).publishError.mock.calls);
+    expect(published).toContain(BUDGET_TEXT);
+    expect(JSON.stringify(body) + published).not.toContain('ai-agent.internal');
+  });
+
+  it('keeps the generic line for every other ai-agent error code', async () => {
+    sendRequestMock.mockRejectedValue(agentError('API_ERROR'));
+
+    const res = await post({ _action: 'sendMessage', conversationId: 'conv-mine', content: 'x' });
+    const body = (await res.json()) as { error: string };
+
+    expect(body.error).toBe('Could not send your message. Please try again.');
+  });
 });
