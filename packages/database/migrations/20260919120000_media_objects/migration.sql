@@ -1,10 +1,10 @@
 -- Media objects: a classroom's large files, stored in R2 rather than in git.
 --
--- Content repos cap what an instructor can attach — 5 MB page assets, 35 MB
--- file slides, 100 MB at the Worker's GitHub origin — and lecture video is
--- none of those sizes. This table is the ledger for the files that go to R2
--- instead: what they are, who uploaded them, how big they are, and whether
--- they are finished.
+-- A content repo takes at most 35 MB per file (`REPO_REST_MAX_BYTES`: GitHub
+-- refuses the base64 request body above that), and lecture video is not that
+-- size. Media takes a Pro classroom's files up to 2 GB each. This table is the
+-- ledger for the files that go to R2 instead: what they are, who uploaded them,
+-- how big they are, and whether they are finished.
 --
 -- ── NOT A CACHE ─────────────────────────────────────────────────────────────
 -- `content_assets` is derivable from the repo and a lost row is repaired by a
@@ -44,7 +44,11 @@
 CREATE TYPE "MediaStatus" AS ENUM ('UPLOADING', 'READY', 'DELETED');
 
 -- CreateEnum
-CREATE TYPE "MediaKind" AS ENUM ('VIDEO', 'AUDIO', 'DOCUMENT', 'ARCHIVE', 'IMAGE');
+-- Any file with an extension is accepted (decision §7.10: Pro routes video, and
+-- anything over the repository's REST ceiling, to R2 — whatever it is). An
+-- extension the store has a type for gets its kind; every other one is OTHER,
+-- stored and served as application/octet-stream (a download).
+CREATE TYPE "MediaKind" AS ENUM ('VIDEO', 'AUDIO', 'DOCUMENT', 'ARCHIVE', 'IMAGE', 'OTHER');
 
 -- CreateEnum
 CREATE TYPE "MediaProcessing" AS ENUM ('NONE', 'PENDING', 'DONE', 'FAILED');
