@@ -12,7 +12,6 @@
  * on this path ever writes: the app uploads over the S3 API, and the Worker
  * only reads.
  */
-import { contentTypeForPath } from '../content-type.ts';
 import type { Env } from '../env.ts';
 import { contentTypeForMediaExt, mediaKey } from '../verify.ts';
 
@@ -43,29 +42,35 @@ export interface MediaBody extends MediaHead {
  * ONE classroom, and its type was assigned by `createUpload` from an allowlist
  * rather than taken from the uploader.
  *
- * The fallback is the variant's own extension, never a sniff of the bytes:
- * `web.mp4` is video, `poster.webp` is an image, and an `orig.{ext}` we have no
- * mapping for is an opaque download. Together with `nosniff` and the sandboxing
- * CSP (see cache.ts) that is what keeps an uploaded document from ever being
- * run as something else.
+ * The fallback is the variant's own extension, never a sniff of the bytes and
+ * never the general web table: `web.mp4` is video, `poster.webp` is an image,
+ * and an `orig.{ext}` the MEDIA store's own table does not know — `.html`,
+ * `.svg`, anything else a browser could run — is an opaque download rather
+ * than whatever the general table would have called it (`content-type.ts`
+ * would type `orig.html` as `text/html`, which is exactly the mistake this
+ * store exists to avoid). Together with `nosniff` and the sandboxing CSP (see
+ * cache.ts) that is what keeps an uploaded document from ever being run as
+ * something else.
  *
- * An `orig.{ext}` is resolved against the MEDIA store's own table first — the
- * same one the app assigned the stored type from — so a fallback answers what
- * the upload would have answered. `content-type.ts` is the general web table
- * and knows nothing of `mov`, `mp3` or `zip`, which are precisely the
- * extensions a fallback is reached for. Only when neither knows the extension
- * is the object an opaque download.
+ * An `orig.{ext}` is resolved against the MEDIA store's own table — the same
+ * one the app assigned the stored type from, so a fallback answers what the
+ * upload would have answered. `web.mp4` and `poster.webp` are the two other
+ * shapes `MEDIA_VARIANT_PATTERN` allows, never a user-supplied extension, so
+ * their type is looked up the same way, by the fixed extension each name
+ * carries.
  */
 const ORIG_PREFIX = 'orig.';
 
 function contentTypeOf(object: R2Object, variant: string): string {
   const stored = object.httpMetadata?.contentType;
   if (typeof stored === 'string' && stored.trim().length > 0) return stored;
-  if (variant.startsWith(ORIG_PREFIX)) {
-    const mediaType = contentTypeForMediaExt(variant.slice(ORIG_PREFIX.length));
-    if (mediaType !== null) return mediaType;
-  }
-  return contentTypeForPath(variant);
+
+  const ext = variant.startsWith(ORIG_PREFIX)
+    ? variant.slice(ORIG_PREFIX.length)
+    : variant === 'web.mp4'
+      ? 'mp4'
+      : 'webp'; // poster.webp — the only other shape MEDIA_VARIANT_PATTERN allows
+  return contentTypeForMediaExt(ext) ?? 'application/octet-stream';
 }
 
 export class MediaOrigin {

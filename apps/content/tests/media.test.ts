@@ -139,12 +139,16 @@ describe('media delivery', () => {
     ['web.mp4', 'video/mp4'],
     ['poster.webp', 'image/webp'],
     ['orig.pdf', 'application/pdf'],
+    ['orig.mp4', 'video/mp4'],
     // The three the general web table does not know: an `orig.{ext}` falls back
     // to the MEDIA store's own table, the same one the upload assigned from.
     ['orig.mov', 'video/quicktime'],
     ['orig.mp3', 'audio/mpeg'],
     ['orig.zip', 'application/zip'],
     ['orig.xyz', 'application/octet-stream'],
+    // Never the general web table: it would type this as `text/html`, and an
+    // uploaded document must stay an opaque download.
+    ['orig.html', 'application/octet-stream'],
   ])('falls back to the %s variant for the content type', async (variant, expected) => {
     // An object stored without an httpMetadata type — the variant names what it
     // is, and an extension neither table knows is an opaque download.
