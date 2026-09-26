@@ -1335,6 +1335,25 @@ export class GitLabProvider extends GitProvider {
     }
   }
 
+  /**
+   * Delete a group (and everything in it) by full path. GitLab may only mark
+   * it for deletion, restorable until its retention period ends. Returns
+   * 'missing' when there is no such group.
+   */
+  async deleteGroup(fullPath: string): Promise<'deleted' | 'missing'> {
+    const { ok, status, body } = await this.request(
+      `/api/v4/groups/${encodeURIComponent(fullPath)}`,
+      { method: 'DELETE' }
+    );
+    if (ok) return 'deleted';
+    if (status === 404) return 'missing';
+    const message =
+      body && typeof body === 'object' && 'message' in body
+        ? JSON.stringify((body as { message: unknown }).message)
+        : String(body ?? '');
+    throw new Error(`Gitlab API DELETE group ${fullPath} failed (${status}): ${message}`);
+  }
+
   /** Add a member to a team subgroup, as Developer. */
   async addTeamMember(group: string, subgroupPath: string, username: string): Promise<void> {
     await this.addGroupMember(`${group}/${subgroupPath}`, username, ACCESS_LEVELS.developer);

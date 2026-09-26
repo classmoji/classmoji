@@ -152,9 +152,9 @@ const DangerZone = ({ loaderData }: Route.ComponentProps) => {
             <div className="text-xs text-gray-500 dark:text-gray-400">
               {isGitLab ? (
                 <>
-                  The content project, the classroom subgroups, all student projects, and any
-                  template projects this classroom&rsquo;s import created. Leave unchecked to keep
-                  everything on Gitlab.
+                  The class subgroup and everything in it (the content project, all student and
+                  team projects, and the team subgroups), plus any template projects this
+                  classroom&rsquo;s import created. Leave unchecked to keep everything on Gitlab.
                 </>
               ) : (
                 <>
