@@ -362,8 +362,9 @@ export default function ImportProgressModal({
                 {warnings.length === 1 ? 'one file' : `${warnings.length} files`}
               </p>
               <ul className="mt-2 space-y-1 text-sm text-amber-700 dark:text-amber-400">
-                {warnings.map(warning => (
-                  <li key={warning} className="break-words">
+                {warnings.map((warning, index) => (
+                  // By position: two skipped files can produce the same sentence.
+                  <li key={index} className="break-words">
                     {warning}
                   </li>
                 ))}
