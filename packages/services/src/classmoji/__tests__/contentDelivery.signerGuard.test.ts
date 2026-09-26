@@ -80,6 +80,9 @@ vi.mock('../../content/ContentService.ts', () => ({
 
 vi.mock('../contentAssets.service.ts', () => ({
   ensureContentAssetsOutcome: async () => ({ result: null, mapIsTrustworthy: true }),
+  // The upload asks it (through `uploadFileTypes`) which file types to allow;
+  // the type policy is not what this suite is about.
+  isDeliverableClassroom: () => false,
   resolveContentBranch: async () => 'main',
   recordContentAsset: (...args: unknown[]) => recordContentAssetMock(...args),
   recordContentAssets: async () => true,

@@ -21,13 +21,20 @@ export {
   MAX_FILE_SIZE,
   ALLOWED_EXTENSIONS,
 } from './content/utils/validateFile.ts';
+export type { FileTypePolicy } from './content/utils/validateFile.ts';
+export {
+  RepoFileTooLargeError,
+  asRepoTooLarge,
+  isCommitTooLargeRefusal,
+} from './content/repoLimits.ts';
 export { getMimeType, isBinaryFile, isImageFile } from './content/utils/contentType.ts';
 
 // Slide SOURCE policy — what a FILE or LINK slide is allowed to be.
 //
 // Exported from the ROOT barrel although it lives under `src/slides/`, which is
-// otherwise the cheerio-bearing deck engine's territory. `slideSource.ts` has
-// no imports at all: it is constants, a link validator and three kind guards,
+// otherwise the cheerio-bearing deck engine's territory. `slideSource.ts`
+// imports only the two import-light modules that own the repository size cap:
+// it is constants, a link validator and three kind guards,
 // and the webapp needs every one of them to render a kind chip, validate a link
 // in an action and refuse a deck-only toggle. Importing the FILE itself (not
 // the `./slides` barrel) is what keeps the parser out of the webapp's graph —

@@ -7,7 +7,9 @@
 
 import getPrisma from '@classmoji/database';
 import { getGitProvider } from '../git/index.ts';
-import { validateFile, sanitizeFilename } from './utils/validateFile.ts';
+import { validateFile, sanitizeFilename, type FileTypePolicy } from './utils/validateFile.ts';
+import { REPO_REST_MAX_BYTES } from '@classmoji/utils';
+import { RepoFileTooLargeError, asRepoTooLarge } from './repoLimits.ts';
 
 interface GitOrganizationRecord {
   provider: string;
@@ -28,6 +30,7 @@ interface RepositoryContentItem {
   path: string;
   type: string;
   sha: string;
+  size?: number;
   content?: string;
 }
 
@@ -41,6 +44,13 @@ interface ErrorWithStatus {
 // Prevents redundant API calls during rapid operations (e.g., tests)
 // TTL: 60 seconds - short enough to avoid stale data, long enough to help tests
 // ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Largest file `upload` sends through the Contents API `PUT` (one request)
+ * rather than blob → tree → commit → ref (four). A request-budget choice, not a
+ * GitHub limit — see `upload`.
+ */
+const CONTENTS_PUT_MAX_BYTES = 1024 * 1024;
 
 const responseCache = new Map<string, CacheEntry>();
 const CACHE_TTL = 60 * 1000; // 60 seconds
@@ -177,6 +187,9 @@ const isGitRaceCondition = (error: unknown): error is ErrorWithStatus => {
     Boolean((error as ErrorWithStatus).message?.includes('not a fast forward'))
   );
 };
+
+/** The last segment of a repo path — the name a person uploaded the file as. */
+const basenameOf = (path: string): string => path.slice(path.lastIndexOf('/') + 1);
 
 const getErrorMessage = (error: unknown): string =>
   error instanceof Error ? error.message : String(error);
@@ -456,6 +469,9 @@ export class ContentService {
    * @param {string} [options.orgLogin] - Organization login (fallback, assumes GITHUB)
    * @param {string} options.repo - Repository name
    * @param {string} options.sha - The blob sha to fetch
+   * @param {boolean} [options.raw] - Return the bytes as base64 (newlines
+   *   stripped) instead of decoding them as utf-8 — for binary files. The Blobs
+   *   API serves up to 100 MB, where the Contents API's JSON body stops at 1 MB.
    * @returns {Promise<{ content: string, sha: string } | null>} - null when the
    *   blob does not exist in the repo (404, or GitHub's 422 for a malformed sha)
    */
@@ -464,11 +480,13 @@ export class ContentService {
     orgLogin,
     repo,
     sha,
+    raw = false,
   }: {
     gitOrganization?: GitOrganizationRecord;
     orgLogin?: string;
     repo: string;
     sha: string;
+    raw?: boolean;
   }): Promise<{ content: string; sha: string } | null> {
     try {
       const resolvedOrg = await resolveGitOrganization(gitOrganization, orgLogin);
@@ -478,8 +496,10 @@ export class ContentService {
         repo,
         file_sha: sha,
       });
+      // GitHub wraps the base64 at 60 columns; the newlines are transport.
+      const base64 = String(data.content ?? '').replace(/\n/g, '');
       return {
-        content: Buffer.from(data.content, 'base64').toString('utf-8'),
+        content: raw ? base64 : Buffer.from(base64, 'base64').toString('utf-8'),
         sha,
       };
     } catch (error: unknown) {
@@ -654,18 +674,32 @@ export class ContentService {
   }
 
   /**
-   * Upload a binary file (image, PDF, etc.)
-   * Automatically uses Git Blobs API for files > 1MB
-   * @param {Object} options
-   * @param {Object} [options.gitOrganization] - GitOrganization record from database
-   * @param {string} [options.orgLogin] - Organization login (fallback, assumes GITHUB)
-   * @param {string} options.repo - Repository name
-   * @param {Buffer} options.file - File buffer
-   * @param {string} options.filename - Original filename
-   * @param {string} options.folder - Target folder path
-   * @param {string} [options.branch] - Branch name (default: 'main')
-   * @param {string} [options.message] - Commit message
-   * @returns {Promise<{ path: string, sha: string, url: string }>}
+   * Upload one binary file — THE entry point for a single-file upload into a
+   * content repo: one size check, one type check, one too-large error.
+   *
+   * Two transports behind it, chosen by size, and deliberately not one:
+   *
+   *  - ≤ 1 MB: the Contents API `PUT` — ONE content-creating request. GitHub's
+   *    secondary limit is 80 content-creating requests a minute per token, and
+   *    every instructor in an org shares the installation's token, so the common
+   *    case (a screenshot, a diagram) should spend one of them, not four.
+   *  - > 1 MB: blob → tree → commit → ref (`uploadLarge`), which also retries a
+   *    lost ref race instead of failing the upload.
+   *
+   * The 1 MB line is ours, a cost trade-off rather than a limit: the `PUT` has
+   * no documented size, and both transports are bounded by the same thing —
+   * GitHub refuses a request body of roughly 50 MB, which is why the cap is
+   * `REPO_REST_MAX_BYTES`. Either transport's refusal becomes
+   * `RepoFileTooLargeError`.
+   *
+   * Both write to `branch`. (The `PUT` used to omit it, so a small file went to
+   * the repository's default branch and a large one to `branch` — two files
+   * from one upload box could land on two branches.)
+   *
+   * @param options.fileTypes - `'any'` only for a classroom `canDeliverContent`
+   *   says yes to; defaults to the image/PDF allowlist. See `validateFile.ts`.
+   * @returns `{ path, sha, url }` — `url` is the raw.githubusercontent.com URL
+   *   on `branch`.
    */
   static async upload({
     gitOrganization,
@@ -676,6 +710,7 @@ export class ContentService {
     folder,
     branch = 'main',
     message,
+    fileTypes = 'allowlist',
   }: {
     gitOrganization?: GitOrganizationRecord;
     orgLogin?: string;
@@ -685,14 +720,17 @@ export class ContentService {
     folder: string;
     branch?: string;
     message?: string;
+    fileTypes?: FileTypePolicy;
   }): Promise<{ path: string; sha: string; url: string }> {
-    const resolvedOrg = await resolveGitOrganization(gitOrganization, orgLogin);
-
-    // Validate file
-    const validation = validateFile({ filename, size: file.length });
+    // Validate before anything touches the network: a file that is too large or
+    // of the wrong type costs no round trip to find out.
+    const validation = validateFile({ filename, size: file.length, fileTypes });
     if (!validation.valid) {
+      if (file.length > REPO_REST_MAX_BYTES) throw new RepoFileTooLargeError();
       throw new Error(validation.error);
     }
+
+    const resolvedOrg = await resolveGitOrganization(gitOrganization, orgLogin);
 
     // Sanitize filename with timestamp
     const sanitizedFilename = sanitizeFilename(filename);
@@ -700,9 +738,7 @@ export class ContentService {
       ? `${folder.replace(/\/$/, '')}/${sanitizedFilename}`
       : sanitizedFilename;
 
-    // Use Git Blobs API for files > 1MB (Contents API limit)
-    const ONE_MB = 1024 * 1024;
-    if (file.length > ONE_MB) {
+    if (file.length > CONTENTS_PUT_MAX_BYTES) {
       return this.uploadLarge({
         gitOrganization: resolvedOrg,
         repo,
@@ -715,13 +751,19 @@ export class ContentService {
 
     const octokit = await getOctokit(resolvedOrg);
 
-    const { data } = await octokit.request('PUT /repos/{owner}/{repo}/contents/{path}', {
-      owner: resolvedOrg.login,
-      repo,
-      path: filePath,
-      message: message || `Upload ${sanitizedFilename}`,
-      content: file.toString('base64'),
-    });
+    let data;
+    try {
+      ({ data } = await octokit.request('PUT /repos/{owner}/{repo}/contents/{path}', {
+        owner: resolvedOrg.login,
+        repo,
+        path: filePath,
+        message: message || `Upload ${sanitizedFilename}`,
+        content: file.toString('base64'),
+        branch,
+      }));
+    } catch (error: unknown) {
+      throw asRepoTooLarge(error);
+    }
 
     // Invalidate cache for this path (and parent folder)
     invalidateCache(resolvedOrg.login, repo, filePath);
@@ -736,8 +778,10 @@ export class ContentService {
   }
 
   /**
-   * Upload a large file (> 1MB) using Git Blobs API
-   * This bypasses the Contents API's 1MB limit, supporting up to 100MB
+   * Commit one binary file as blob → tree → commit → ref, retrying a lost ref
+   * race. `upload` sends files over 1 MB here; the size ceiling is the same
+   * as the Contents path's (`REPO_REST_MAX_BYTES` — the blob is created from a
+   * base64 JSON body too), and GitHub's refusal becomes `RepoFileTooLargeError`.
    * @param {Object} options
    * @param {Object} options.gitOrganization - GitOrganization record from database
    * @param {string} options.repo - Repository name
@@ -765,12 +809,17 @@ export class ContentService {
     const octokit = await getOctokit(gitOrganization);
 
     // Step 1: Create the blob with file content (done once, content-addressed and idempotent)
-    const { data: blob } = await octokit.request('POST /repos/{owner}/{repo}/git/blobs', {
-      owner: gitOrganization.login,
-      repo,
-      content: file.toString('base64'),
-      encoding: 'base64',
-    });
+    let blob;
+    try {
+      ({ data: blob } = await octokit.request('POST /repos/{owner}/{repo}/git/blobs', {
+        owner: gitOrganization.login,
+        repo,
+        content: file.toString('base64'),
+        encoding: 'base64',
+      }));
+    } catch (error: unknown) {
+      throw asRepoTooLarge(error);
+    }
 
     // Git Trees operation wrapped in retry logic for race condition handling
     const gitOperation = async () => {
@@ -934,7 +983,9 @@ export class ContentService {
     path: string;
     ref?: string;
     skipCache?: boolean;
-  }): Promise<Array<{ name: string; path: string; type: 'file' | 'dir'; sha: string }>> {
+  }): Promise<
+    Array<{ name: string; path: string; type: 'file' | 'dir'; sha: string; size?: number }>
+  > {
     try {
       const resolvedOrg = await resolveGitOrganization(gitOrganization, orgLogin);
 
@@ -943,9 +994,9 @@ export class ContentService {
       const cacheKey = getCacheKey(resolvedOrg.login, repo, path) + ':list';
       if (!skipCache && !ref) {
         const cached =
-          getCache<Array<{ name: string; path: string; type: 'file' | 'dir'; sha: string }>>(
-            cacheKey
-          );
+          getCache<
+            Array<{ name: string; path: string; type: 'file' | 'dir'; sha: string; size?: number }>
+          >(cacheKey);
         if (cached !== null) {
           return cached;
         }
@@ -964,13 +1015,20 @@ export class ContentService {
         return [];
       }
 
-      const result: Array<{ name: string; path: string; type: 'file' | 'dir'; sha: string }> = (
-        data as RepositoryContentItem[]
-      ).map(item => ({
+      const result: Array<{
+        name: string;
+        path: string;
+        type: 'file' | 'dir';
+        sha: string;
+        size?: number;
+      }> = (data as RepositoryContentItem[]).map(item => ({
         name: item.name,
         path: item.path,
         type: item.type === 'dir' ? 'dir' : 'file',
         sha: item.sha,
+        // Bytes, as the directory listing reports them — lets a caller skip a
+        // file it cannot carry before reading it.
+        ...(typeof item.size === 'number' ? { size: item.size } : {}),
       }));
 
       // Cache the result (not for ref-bearing reads)
@@ -1092,6 +1150,11 @@ export class ContentService {
    * Upload multiple files in a single commit using Git Trees API.
    * This is much more efficient than individual uploads - 50 images = 1 commit instead of 50.
    * All files are uploaded atomically (all succeed or none).
+   *
+   * No size or type validation of its own — callers check their files first
+   * (against `REPO_REST_MAX_BYTES`, and whatever type policy is theirs). A file
+   * GitHub still refuses as too large surfaces as `RepoFileTooLargeError`
+   * naming that file, and nothing is committed.
    * @param {Object} options
    * @param {Object} [options.gitOrganization] - GitOrganization record from database
    * @param {string} [options.orgLogin] - Organization login (fallback, assumes GITHUB)
@@ -1188,17 +1251,21 @@ export class ContentService {
       }
       if (repositoryIsEmpty) {
         const seed = files[0]!;
-        await octokit.request('PUT /repos/{owner}/{repo}/contents/{path}', {
-          owner: resolvedOrg.login,
-          repo,
-          path: seed.path,
-          message: message || `Upload ${files.length} files`,
-          content:
-            (seed.encoding ?? 'utf-8') === 'base64'
-              ? seed.content
-              : Buffer.from(seed.content).toString('base64'),
-          branch,
-        });
+        try {
+          await octokit.request('PUT /repos/{owner}/{repo}/contents/{path}', {
+            owner: resolvedOrg.login,
+            repo,
+            path: seed.path,
+            message: message || `Upload ${files.length} files`,
+            content:
+              (seed.encoding ?? 'utf-8') === 'base64'
+                ? seed.content
+                : Buffer.from(seed.content).toString('base64'),
+            branch,
+          });
+        } catch (error: unknown) {
+          throw asRepoTooLarge(error, basenameOf(seed.path));
+        }
         // The seed file is re-written identically by the batch below, so the
         // final tree is exactly `files` either way.
       }
@@ -1211,12 +1278,19 @@ export class ContentService {
 
     const blobResults = await Promise.all(
       files.map(async ({ path, content, encoding = 'utf-8' }) => {
-        const { data } = await octokit.request('POST /repos/{owner}/{repo}/git/blobs', {
-          owner: resolvedOrg.login,
-          repo,
-          content: encoding === 'base64' ? content : Buffer.from(content).toString('base64'),
-          encoding: 'base64',
-        });
+        // Per file, so a refusal can name the file that caused it: GitHub's
+        // too-large answer arrives here, on the blob, never on the commit.
+        let data;
+        try {
+          ({ data } = await octokit.request('POST /repos/{owner}/{repo}/git/blobs', {
+            owner: resolvedOrg.login,
+            repo,
+            content: encoding === 'base64' ? content : Buffer.from(content).toString('base64'),
+            encoding: 'base64',
+          }));
+        } catch (error: unknown) {
+          throw asRepoTooLarge(error, basenameOf(path));
+        }
 
         // Report progress after each blob is created
         completedCount++;
@@ -1468,19 +1542,24 @@ export class ContentService {
   }
 
   /**
-   * Copy contents from one folder to another (for templates)
-   * @param {Object} options
-   * @param {Object} options.gitOrganization - GitOrganization record from database
-   * @param {string} options.repo - Repository name
-   * @param {string} options.sourcePath - Source folder path
-   * @param {string} options.destPath - Destination folder path
-   * @param {string} [options.message] - Commit message
-   * @returns {Promise<{ copied: number, paths: string[] }>}
+   * Copy a folder, recursively, to another path in the SAME repo — one commit.
    *
-   * `paths` are the DESTINATION paths written, recursively. The caller needs
-   * them to decide what the copy actually carries: a duplicated deck's HTML can
-   * reference a file by way of another repo, and repointing such a reference at
-   * this copy is only correct when the file is in it.
+   * No file bytes move. Git is content-addressed and both paths live in one
+   * repo, so the copy is a new tree whose entries point at the blob shas the
+   * source already has: list → one tree → one commit → one ref. That is what
+   * lets a folder holding a 60 MB video duplicate at all — reading it back
+   * through the Contents API stops at 1 MB, and writing it again through any
+   * REST call stops near 35 MB — and it costs the org's shared token four
+   * content-creating requests instead of one per file.
+   *
+   * Committed to the repository's DEFAULT branch, which is where the listing
+   * reads from (and where the per-file `PUT`s this replaced used to land).
+   *
+   * @returns `{ copied, paths }` — `paths` are the DESTINATION paths written,
+   *   recursively. The caller needs them to decide what the copy actually
+   *   carries: a duplicated deck's HTML can reference a file by way of another
+   *   repo, and repointing such a reference at this copy is only correct when
+   *   the file is in it.
    */
   static async copyFolder({
     gitOrganization,
@@ -1496,52 +1575,81 @@ export class ContentService {
     message?: string;
   }): Promise<{ copied: number; paths: string[] }> {
     const octokit = await getOctokit(gitOrganization);
+    const sourceRoot = sourcePath.replace(/\/+$/, '');
+    const destRoot = destPath.replace(/\/+$/, '');
 
-    // Get all files in source folder
-    const sourceFiles = await this.listFolder({ gitOrganization, repo, path: sourcePath });
-    let copied = 0;
-    const paths: string[] = [];
-
-    for (const item of sourceFiles) {
-      if (item.type === 'file') {
-        // Fetch file content
-        const { data } = await octokit.request('GET /repos/{owner}/{repo}/contents/{path}', {
-          owner: gitOrganization.login,
-          repo,
-          path: item.path,
-        });
-
-        // Determine new path
-        const relativePath = item.path.slice(sourcePath.length).replace(/^\//, '');
-        const newPath = `${destPath}/${relativePath}`;
-
-        // Create file at destination
-        await octokit.request('PUT /repos/{owner}/{repo}/contents/{path}', {
-          owner: gitOrganization.login,
-          repo,
-          path: newPath,
-          message: message || `Copy ${item.name} from template`,
-          content: data.content, // Already base64 encoded
-        });
-
-        copied++;
-        paths.push(newPath);
-      } else if (item.type === 'dir') {
-        // Recursively copy subdirectories
-        const relativePath = item.path.slice(sourcePath.length).replace(/^\//, '');
-        const result = await this.copyFolder({
-          gitOrganization,
-          repo,
-          sourcePath: item.path,
-          destPath: `${destPath}/${relativePath}`,
-          message,
-        });
-        copied += result.copied;
-        paths.push(...result.paths);
+    // Every file under the source, with the blob sha it already has. Uncached:
+    // the shas ARE the copy now, so a listing up to a minute old could commit a
+    // file as it was before its last save.
+    const entries: Array<{ path: string; sha: string }> = [];
+    const walk = async (dir: string): Promise<void> => {
+      const items = await this.listFolder({ gitOrganization, repo, path: dir, skipCache: true });
+      for (const item of items) {
+        if (item.type === 'dir') {
+          await walk(item.path);
+        } else {
+          entries.push({ path: item.path, sha: item.sha });
+        }
       }
-    }
+    };
+    await walk(sourceRoot);
 
-    return { copied, paths };
+    if (entries.length === 0) return { copied: 0, paths: [] };
+
+    const paths = entries.map(
+      entry => `${destRoot}/${entry.path.slice(sourceRoot.length).replace(/^\//, '')}`
+    );
+
+    const { data: repoData } = await octokit.request('GET /repos/{owner}/{repo}', {
+      owner: gitOrganization.login,
+      repo,
+    });
+    const branch: string = repoData.default_branch;
+
+    await this.#withGitRetry(async () => {
+      const { data: refData } = await octokit.request('GET /repos/{owner}/{repo}/git/ref/{ref}', {
+        owner: gitOrganization.login,
+        repo,
+        ref: `heads/${branch}`,
+      });
+      const currentCommitSha = refData.object.sha;
+
+      const { data: commitData } = await octokit.request(
+        'GET /repos/{owner}/{repo}/git/commits/{commit_sha}',
+        { owner: gitOrganization.login, repo, commit_sha: currentCommitSha }
+      );
+
+      const { data: treeData } = await octokit.request('POST /repos/{owner}/{repo}/git/trees', {
+        owner: gitOrganization.login,
+        repo,
+        base_tree: commitData.tree.sha,
+        tree: entries.map((entry, index) => ({
+          path: paths[index]!,
+          mode: '100644',
+          type: 'blob',
+          sha: entry.sha,
+        })),
+      });
+
+      const { data: newCommit } = await octokit.request('POST /repos/{owner}/{repo}/git/commits', {
+        owner: gitOrganization.login,
+        repo,
+        message: message || `Copy ${sourceRoot} to ${destRoot}`,
+        tree: treeData.sha,
+        parents: [currentCommitSha],
+      });
+
+      await octokit.request('PATCH /repos/{owner}/{repo}/git/refs/{ref}', {
+        owner: gitOrganization.login,
+        repo,
+        ref: `heads/${branch}`,
+        sha: newCommit.sha,
+      });
+    });
+
+    for (const path of paths) invalidateCache(gitOrganization.login, repo, path);
+
+    return { copied: paths.length, paths };
   }
 
   /**

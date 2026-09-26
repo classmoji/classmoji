@@ -26,6 +26,7 @@ vi.mock('@classmoji/database', () => ({
 }));
 
 const { ContentService } = await import('../ContentService.ts');
+const { RepoFileTooLargeError, isCommitTooLargeRefusal } = await import('../repoLimits.ts');
 
 const gitOrganization = { provider: 'GITHUB', login: 'test-org' };
 
@@ -930,45 +931,310 @@ describe('getBlobContent', () => {
  * question is asked per path. A recursion that counted subdirectories but
  * dropped their paths would answer "not copied" for every nested asset and
  * leave the whole images folder pointing at the original deck.
+ *
+ * And it copies by SHA: no file is read or re-uploaded, so a file over the
+ * Contents API's 1 MB read limit (or the REST write ceiling) copies like any
+ * other, in one commit on the default branch.
  */
 describe('copyFolder', () => {
-  it('returns every destination path it wrote, nested folders included', async () => {
-    const repo = 'copyfolder-paths';
+  function mockCopyRoutes() {
     requestMock.mockImplementation(async (route: string, params: RequestParams) => {
-      if (route === 'GET /repos/{owner}/{repo}/contents/{path}') {
-        switch (params.path) {
-          case 'slides/intro':
-            return {
-              data: [
-                { name: 'index.html', path: 'slides/intro/index.html', type: 'file', sha: 'a' },
-                { name: 'images', path: 'slides/intro/images', type: 'dir', sha: 'b' },
-              ],
-            };
-          case 'slides/intro/images':
-            return {
-              data: [{ name: 'x.png', path: 'slides/intro/images/x.png', type: 'file', sha: 'c' }],
-            };
-          default:
-            return { data: { content: 'Ym9keQ==', sha: 'blob' } };
-        }
+      switch (route) {
+        case 'GET /repos/{owner}/{repo}/contents/{path}':
+          switch (params.path) {
+            case 'slides/intro':
+              return {
+                data: [
+                  { name: 'index.html', path: 'slides/intro/index.html', type: 'file', sha: 'a' },
+                  { name: 'images', path: 'slides/intro/images', type: 'dir', sha: 'b' },
+                ],
+              };
+            case 'slides/intro/images':
+              return {
+                data: [
+                  // 60 MB: the Contents API would hand back no body for this one.
+                  {
+                    name: 'clip.mp4',
+                    path: 'slides/intro/images/clip.mp4',
+                    type: 'file',
+                    sha: 'c',
+                    size: 60 * 1024 * 1024,
+                  },
+                ],
+              };
+            default:
+              throw new Error(`file bytes must not be read: ${params.path}`);
+          }
+        case 'GET /repos/{owner}/{repo}':
+          return { data: { default_branch: 'master' } };
+        case 'GET /repos/{owner}/{repo}/git/ref/{ref}':
+          return { data: { object: { sha: 'head-commit' } } };
+        case 'GET /repos/{owner}/{repo}/git/commits/{commit_sha}':
+          return { data: { tree: { sha: 'base-tree' } } };
+        case 'POST /repos/{owner}/{repo}/git/trees':
+          return { data: { sha: 'new-tree' } };
+        case 'POST /repos/{owner}/{repo}/git/commits':
+          return { data: { sha: 'new-commit' } };
+        case 'PATCH /repos/{owner}/{repo}/git/refs/{ref}':
+          return { data: {} };
+        default:
+          throw new Error(`unexpected route ${route}`);
       }
-      if (route === 'PUT /repos/{owner}/{repo}/contents/{path}') {
-        return { data: { content: { sha: 'written' }, commit: { sha: 'commit' } } };
-      }
-      throw new Error(`unexpected route ${route}`);
     });
+  }
+
+  it('returns every destination path it wrote, nested folders included', async () => {
+    mockCopyRoutes();
 
     const result = await ContentService.copyFolder({
       gitOrganization,
-      repo,
+      repo: 'copyfolder-paths',
       sourcePath: 'slides/intro',
       destPath: 'slides/intro-copy',
     });
 
     expect(result.copied).toBe(2);
     expect([...result.paths].sort()).toEqual([
-      'slides/intro-copy/images/x.png',
+      'slides/intro-copy/images/clip.mp4',
       'slides/intro-copy/index.html',
     ]);
+  });
+
+  it('commits one tree pointing at the existing blob shas, on the default branch', async () => {
+    mockCopyRoutes();
+
+    await ContentService.copyFolder({
+      gitOrganization,
+      repo: 'copyfolder-shas',
+      sourcePath: 'slides/intro',
+      destPath: 'slides/intro-copy',
+      message: 'Duplicate slides: Intro',
+    });
+
+    const routes = requestMock.mock.calls.map(([route]) => route);
+    expect(routes).not.toContain('PUT /repos/{owner}/{repo}/contents/{path}');
+    expect(routes).not.toContain('POST /repos/{owner}/{repo}/git/blobs');
+    expect(routes.filter(r => r === 'POST /repos/{owner}/{repo}/git/commits')).toHaveLength(1);
+
+    const tree = requestMock.mock.calls.find(
+      ([route]) => route === 'POST /repos/{owner}/{repo}/git/trees'
+    )![1] as { base_tree: string; tree: Array<{ path: string; sha: string; type: string }> };
+    expect(tree.base_tree).toBe('base-tree');
+    expect(tree.tree).toEqual([
+      { path: 'slides/intro-copy/index.html', mode: '100644', type: 'blob', sha: 'a' },
+      { path: 'slides/intro-copy/images/clip.mp4', mode: '100644', type: 'blob', sha: 'c' },
+    ]);
+
+    const refUpdate = requestMock.mock.calls.find(
+      ([route]) => route === 'PATCH /repos/{owner}/{repo}/git/refs/{ref}'
+    )![1] as { ref: string; sha: string };
+    expect(refUpdate).toMatchObject({ ref: 'heads/master', sha: 'new-commit' });
+  });
+
+  it('commits nothing for an empty folder', async () => {
+    requestMock.mockImplementation(async (route: string) => {
+      if (route === 'GET /repos/{owner}/{repo}/contents/{path}') return { data: [] };
+      throw new Error(`unexpected route ${route}`);
+    });
+
+    const result = await ContentService.copyFolder({
+      gitOrganization,
+      repo: 'copyfolder-empty',
+      sourcePath: 'slides/empty',
+      destPath: 'slides/empty-copy',
+    });
+
+    expect(result).toEqual({ copied: 0, paths: [] });
+  });
+});
+
+describe('upload — one entry point, two transports', () => {
+  const tooLarge = () =>
+    Object.assign(new Error('Sorry, your input was too large to process.'), { status: 413 });
+
+  it('sends a small file through ONE Contents PUT, to the branch it was given', async () => {
+    requestMock.mockResolvedValue({ data: { content: { sha: 'put-sha' } } });
+
+    const result = await ContentService.upload({
+      gitOrganization,
+      repo: 'upload-small',
+      file: Buffer.from('png-bytes'),
+      filename: 'Diagram.PNG',
+      folder: 'pages/lab/assets',
+      branch: 'master',
+    });
+
+    expect(requestMock).toHaveBeenCalledTimes(1);
+    const [route, params] = requestMock.mock.calls[0] as [string, RequestParams];
+    expect(route).toBe('PUT /repos/{owner}/{repo}/contents/{path}');
+    expect(params.branch).toBe('master');
+    expect(params.path).toMatch(/^pages\/lab\/assets\/\d+-diagram\.png$/);
+    expect(result.sha).toBe('put-sha');
+    expect(result.url).toContain('/master/');
+  });
+
+  it('refuses a file over the cap before any request, with the shared sentence', async () => {
+    const error = await ContentService.upload({
+      gitOrganization,
+      repo: 'upload-over-cap',
+      file: Buffer.alloc(35 * 1024 * 1024 + 1),
+      filename: 'scan.png',
+      folder: 'pages/lab/assets',
+    }).catch((e: unknown) => e);
+
+    expect(error).toBeInstanceOf(RepoFileTooLargeError);
+    expect((error as Error).message).toBe(
+      'This file is larger than the 35 MB your course repository accepts.'
+    );
+    expect(requestMock).not.toHaveBeenCalled();
+  });
+
+  it('accepts a file exactly at the cap (and routes it to the blob path)', async () => {
+    requestMock.mockImplementation(async (route: string) => {
+      switch (route) {
+        case 'POST /repos/{owner}/{repo}/git/blobs':
+          return { data: { sha: 'blob' } };
+        case 'GET /repos/{owner}/{repo}/git/ref/{ref}':
+          return { data: { object: { sha: 'head' } } };
+        case 'GET /repos/{owner}/{repo}/git/commits/{commit_sha}':
+          return { data: { tree: { sha: 'tree' } } };
+        case 'POST /repos/{owner}/{repo}/git/trees':
+          return { data: { sha: 'new-tree' } };
+        case 'POST /repos/{owner}/{repo}/git/commits':
+          return { data: { sha: 'new-commit' } };
+        case 'PATCH /repos/{owner}/{repo}/git/refs/{ref}':
+          return { data: {} };
+        default:
+          throw new Error(`Unexpected route: ${route}`);
+      }
+    });
+
+    const result = await ContentService.upload({
+      gitOrganization,
+      repo: 'upload-at-cap',
+      file: Buffer.alloc(35 * 1024 * 1024),
+      filename: 'scan.png',
+      folder: 'pages/lab/assets',
+    });
+
+    expect(result.sha).toBe('blob');
+    expect(requestMock.mock.calls.map(([route]) => route)).not.toContain(
+      'PUT /repos/{owner}/{repo}/contents/{path}'
+    );
+  });
+
+  it('maps GitHub refusing the Contents PUT as too large to the typed error', async () => {
+    requestMock.mockRejectedValue(tooLarge());
+
+    await expect(
+      ContentService.upload({
+        gitOrganization,
+        repo: 'upload-put-refused',
+        file: Buffer.from('x'),
+        filename: 'a.png',
+        folder: 'f',
+      })
+    ).rejects.toBeInstanceOf(RepoFileTooLargeError);
+  });
+
+  it('maps GitHub refusing the blob as too large to the typed error', async () => {
+    requestMock.mockRejectedValue(Object.assign(new Error('Blob is too large'), { status: 422 }));
+
+    const error = await ContentService.upload({
+      gitOrganization,
+      repo: 'upload-blob-refused',
+      file: Buffer.alloc(2 * 1024 * 1024),
+      filename: 'a.png',
+      folder: 'f',
+    }).catch((e: unknown) => e);
+
+    expect(error).toBeInstanceOf(RepoFileTooLargeError);
+    expect(isCommitTooLargeRefusal(error)).toBe(true);
+  });
+
+  it('passes other GitHub errors through unchanged', async () => {
+    const notFound = Object.assign(new Error('Not Found'), { status: 404 });
+    requestMock.mockRejectedValue(notFound);
+
+    await expect(
+      ContentService.upload({
+        gitOrganization,
+        repo: 'upload-404',
+        file: Buffer.from('x'),
+        filename: 'a.png',
+        folder: 'f',
+      })
+    ).rejects.toBe(notFound);
+  });
+
+  it('keeps the image/PDF allowlist by default and widens it only when asked', async () => {
+    await expect(
+      ContentService.upload({
+        gitOrganization,
+        repo: 'upload-type-default',
+        file: Buffer.from('x'),
+        filename: 'notes.ipynb',
+        folder: 'f',
+      })
+    ).rejects.toThrow('Invalid file type');
+    expect(requestMock).not.toHaveBeenCalled();
+
+    requestMock.mockResolvedValue({ data: { content: { sha: 's' } } });
+    const result = await ContentService.upload({
+      gitOrganization,
+      repo: 'upload-type-any',
+      file: Buffer.from('x'),
+      filename: 'notes.ipynb',
+      folder: 'f',
+      fileTypes: 'any',
+    });
+    expect(result.path).toMatch(/^f\/\d+-notes\.ipynb$/);
+  });
+});
+
+describe('uploadBatch — too-large refusal', () => {
+  it('names the file GitHub refused and commits nothing', async () => {
+    requestMock.mockImplementation(async (route: string, params: RequestParams) => {
+      if (route === 'POST /repos/{owner}/{repo}/git/blobs') {
+        const decoded = Buffer.from(String(params.content), 'base64').toString('utf-8');
+        if (decoded === 'huge') {
+          throw Object.assign(new Error('input was too large'), { status: 413 });
+        }
+        return { data: { sha: 'ok' } };
+      }
+      throw new Error(`Unexpected route: ${route}`);
+    });
+
+    const error = await ContentService.uploadBatch({
+      gitOrganization,
+      repo: 'batch-too-large',
+      files: [
+        { path: 'slides/x/images/small.png', content: 'small' },
+        { path: 'slides/x/videos/lecture.mp4', content: 'huge' },
+      ],
+    }).catch((e: unknown) => e);
+
+    expect(error).toBeInstanceOf(RepoFileTooLargeError);
+    expect((error as InstanceType<typeof RepoFileTooLargeError>).filename).toBe('lecture.mp4');
+    expect((error as Error).message).toBe(
+      'lecture.mp4 is larger than the 35 MB your course repository accepts.'
+    );
+    const routes = requestMock.mock.calls.map(([route]) => route);
+    expect(routes).not.toContain('PATCH /repos/{owner}/{repo}/git/refs/{ref}');
+  });
+});
+
+describe('getBlobContent raw', () => {
+  it("returns base64 with GitHub's line wrapping stripped", async () => {
+    requestMock.mockResolvedValue({ data: { content: 'QUJD\nREVG\n' } });
+
+    const result = await ContentService.getBlobContent({
+      gitOrganization,
+      repo: 'blob-raw',
+      sha: 'abc',
+      raw: true,
+    });
+
+    expect(result).toEqual({ content: 'QUJDREVG', sha: 'abc' });
   });
 });

@@ -1,3 +1,4 @@
+import type { FileTypePolicy } from '../content/utils/validateFile.ts';
 import getPrisma from '@classmoji/database';
 import {
   contentDispositionFor,
@@ -260,6 +261,23 @@ export function canDeliverContent(
     | undefined
 ): boolean {
   return isContentDeliveryEnabled(classroom) && isDeliverableClassroom(classroom);
+}
+
+/**
+ * Which file types an upload into this classroom's content repo may be.
+ *
+ * `'any'` exactly when this layer serves the classroom: what makes an arbitrary
+ * file safe to host is the Worker — it types a blob from its signed extension
+ * alone, serves an unknown one as `application/octet-stream`, and sends
+ * `nosniff` and a sandboxing CSP on every response. A classroom it does not
+ * serve has its files read straight from GitHub, so it keeps the image/PDF
+ * allowlist. Every upload surface (page assets and covers, deck images, the MCP
+ * asset tool) asks this one function, so the policy cannot drift between them.
+ */
+export function uploadFileTypes(
+  classroom: Parameters<typeof canDeliverContent>[0]
+): FileTypePolicy {
+  return canDeliverContent(classroom) ? 'any' : 'allowlist';
 }
 
 /**
