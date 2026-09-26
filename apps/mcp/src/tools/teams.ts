@@ -1,10 +1,15 @@
 /**
  * Team tools — team_create / team_delete / team_rename, team_members_add /
- * team_member_remove, team_tag_add / team_tag_remove.
+ * team_member_remove, team_tag_add / team_tag_remove, and tag_create.
  *
  * ROUTE-DERIVED TIER: the web actions live in
  * apps/webapp/app/routes/admin.$class.teams*, all gated by assertClassroomAccess
- * with allowedRoles ['OWNER'] — OWNER only for all seven.
+ * with allowedRoles ['OWNER'] — OWNER only for all seven. tag_create mirrors the
+ * three web `createTag` actions (admin.$class.settings.team — the canonical tag
+ * manager — plus the inline ones in admin.$class.repos_.form and
+ * admin.$class.assignments), every one gated by requireClassroomAdmin: OWNER
+ * only too. Each trims, refuses an empty name and upserts; tag_create does the
+ * same through organizationTag.findOrCreate so it can report `created`.
  *
  * Backbone: ClassmojiService.teamAdmin.* (extracted so the web routes and these
  * tools take ONE code path — same precedent as roster.service.ts and
@@ -183,7 +188,7 @@ export const teamCreateTool: ToolDefinition<TeamCreateArgs> = {
     "the classroom's own membership teams), are refused before anything is created. is_visible " +
     'is recorded on the team but no read path currently varies on it: in list_teams a student ' +
     'sees the teams they belong to and the teaching team sees them all, either way. tag_ids ' +
-    '(from list_tags) attach classroom tags at creation time; a tag id ' +
+    '(from list_tags; create one with tag_create) attach classroom tags at creation time; a tag id ' +
     'from another classroom is reported in tags_failed and the team is still created. Add members ' +
     'afterwards with team_members_add.',
   scope: 'write',
@@ -330,7 +335,9 @@ export const teamDeleteTool: ToolDefinition<TeamDeleteArgs> = {
       result.reposDeleted > 0
         ? ` ${result.reposDeleted} linked repository record(s) were deleted with it, along with ` +
           'their submissions, grades and analytics' +
-          (args.delete_on_github ? ', and on GitHub.' : '; the GitHub repositories themselves remain.')
+          (args.delete_on_github
+            ? ', and on GitHub.'
+            : '; the GitHub repositories themselves remain.')
         : '';
 
     return ok({
@@ -622,6 +629,85 @@ export const teamMemberRemoveTool: ToolDefinition<TeamMemberRemoveArgs> = {
   },
 };
 
+// ─── tag_create ─────────────────────────────────────────────────────────────
+
+/**
+ * The longest tag name tag_create accepts. The column is unbounded text and no
+ * web tag form caps it; this is a sanity bound for an agent-supplied value, far
+ * above any tag name in use.
+ */
+export const TAG_NAME_MAX_LENGTH = 100;
+
+interface TagCreateArgs {
+  classroom: string;
+  name: string;
+}
+
+export const tagCreateTool: ToolDefinition<TagCreateArgs> = {
+  name: 'tag_create',
+  // Inserts one row or finds the existing one (the web's upsert semantics);
+  // repeating the call changes nothing further → idempotent. No provider call.
+  annotations: { destructive: false, idempotent: true, openWorld: false },
+  title: 'Create a tag',
+  description:
+    'Creates a classroom tag (Classmoji only — nothing is written to GitHub), as Settings → Team ' +
+    'does. Owner only. Tags group teams: attach one with team_tag_add or team_create, and point ' +
+    'an instructor-assigned GROUP repo at it with repo_create / repo_update tag_id. The name is ' +
+    "trimmed; names are case-sensitive, so 'Frontend' and 'frontend' are two tags. If the " +
+    'classroom already has a tag with this exact name, that tag is returned with created:false ' +
+    'and nothing changes. Returns { tag: {id, name}, created }.',
+  scope: 'write',
+  roles: OWNER_ONLY,
+  inputSchema: {
+    classroom: z.string().describe("Classroom reference as 'org/slug'"),
+    name: z
+      .string()
+      .trim()
+      .min(1)
+      .max(TAG_NAME_MAX_LENGTH)
+      .describe(`Tag name (trimmed, 1–${TAG_NAME_MAX_LENGTH} characters, case-sensitive)`),
+  },
+  handler: async (args, ctx) => {
+    const classroom = requireClassroomCtx(ctx);
+    // zod trims on the wire; trim again so a direct handler call (and any
+    // future caller bypassing the schema) cannot mint 'A' and 'A ' as two tags.
+    const name = args.name.trim();
+    if (!name || name.length > TAG_NAME_MAX_LENGTH) {
+      throw new ToolError(
+        'invalid_params',
+        `Tag name must be 1–${TAG_NAME_MAX_LENGTH} characters after trimming`
+      );
+    }
+
+    // classroomId is ALWAYS the authorized classroom, never request input.
+    const { tag, created } = await ClassmojiService.organizationTag.findOrCreate(
+      classroom.classroomId,
+      name
+    );
+
+    // A tag that already existed is not a mutation, so it writes no audit row.
+    // `value` keeps two different names created inside the audit dedup window
+    // from collapsing into one row.
+    if (created) {
+      await writeAudit(ctx, {
+        resource_type: 'TEAMS',
+        resource_id: tag.id,
+        action: 'CREATE',
+        data: { tool: 'tag_create', name: tag.name, value: tag.name },
+      });
+    }
+
+    return ok({
+      success: true,
+      created,
+      tag: { id: tag.id, name: tag.name },
+      message: created
+        ? `Tag '${tag.name}' created.`
+        : `Tag '${tag.name}' already existed — nothing changed.`,
+    });
+  },
+};
+
 // ─── team_tag_add ───────────────────────────────────────────────────────────
 
 interface TeamTagAddArgs {
@@ -638,8 +724,8 @@ export const teamTagAddTool: ToolDefinition<TeamTagAddArgs> = {
   title: 'Attach tags to a team',
   description:
     'Attaches classroom tags to a team (Classmoji only — nothing is written to GitHub). Owner ' +
-    'only. Tags group teams for assignment distribution. Tag ids come from list_tags and must ' +
-    'belong to this classroom; ' +
+    'only. Tags group teams for assignment distribution. Tag ids come from list_tags (create one ' +
+    'with tag_create) and must belong to this classroom; ' +
     'ones that do not are reported in failed while the rest are still attached. Attaching a tag ' +
     'the team already has is a no-op and counts as added.',
   scope: 'write',

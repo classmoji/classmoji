@@ -28,6 +28,7 @@ const mocks = vi.hoisted(() => ({
   findTeamsByClassroomId: vi.fn(),
   findMembershipsByClassroomId: vi.fn(),
   auditCreate: vi.fn(),
+  tagFindOrCreate: vi.fn(),
 }));
 
 vi.mock('@classmoji/services', () => {
@@ -62,6 +63,7 @@ vi.mock('@classmoji/services', () => {
         findByClassroomId: (...a: unknown[]) => mocks.findMembershipsByClassroomId(...a),
       },
       audit: { create: (...a: unknown[]) => mocks.auditCreate(...a) },
+      organizationTag: { findOrCreate: (...a: unknown[]) => mocks.tagFindOrCreate(...a) },
     },
   };
 });
@@ -75,6 +77,8 @@ const {
   teamMemberRemoveTool,
   teamTagAddTool,
   teamTagRemoveTool,
+  tagCreateTool,
+  TAG_NAME_MAX_LENGTH,
 } = await import('../teams.ts');
 
 const CTX: ToolContext = {
@@ -791,6 +795,99 @@ describe('team_tag_remove', () => {
   });
 });
 
+describe('tag_create', () => {
+  const ARGS = { classroom: 'org/cs1-w26', name: 'workshop-pairs' };
+
+  it('creates the tag in the ctx classroom, audits it with a scalar value', async () => {
+    mocks.tagFindOrCreate.mockResolvedValue({
+      tag: { id: 'tag-9', name: 'workshop-pairs', classroom_id: 'class-1' },
+      created: true,
+    });
+
+    const payload = parse(await tagCreateTool.handler(ARGS, CTX));
+
+    expect(mocks.tagFindOrCreate).toHaveBeenCalledExactlyOnceWith('class-1', 'workshop-pairs');
+    expect(payload).toMatchObject({
+      success: true,
+      created: true,
+      tag: { id: 'tag-9', name: 'workshop-pairs' },
+    });
+    // Allow-listed: the raw row (classroom_id etc.) is never echoed.
+    expect(payload.tag).toEqual({ id: 'tag-9', name: 'workshop-pairs' });
+    expect(auditRow()).toMatchObject({
+      action: 'CREATE',
+      classroom_id: 'class-1',
+      resource_type: 'TEAMS',
+      resource_id: 'tag-9',
+      data: { tool: 'tag_create', name: 'workshop-pairs', value: 'workshop-pairs' },
+    });
+  });
+
+  it('returns an existing tag with created:false and writes no audit row', async () => {
+    mocks.tagFindOrCreate.mockResolvedValue({
+      tag: { id: 'tag-1', name: 'workshop-pairs' },
+      created: false,
+    });
+
+    const payload = parse(await tagCreateTool.handler(ARGS, CTX));
+
+    expect(payload).toMatchObject({ created: false, tag: { id: 'tag-1', name: 'workshop-pairs' } });
+    expect(mocks.auditCreate).not.toHaveBeenCalled();
+  });
+
+  it('trims the name, on the wire and in the handler', async () => {
+    mocks.tagFindOrCreate.mockResolvedValue({
+      tag: { id: 'tag-9', name: 'Section A' },
+      created: true,
+    });
+
+    expect(tagCreateTool.inputSchema.name.parse('  Section A  ')).toBe('Section A');
+    await tagCreateTool.handler({ ...ARGS, name: '  Section A  ' }, CTX);
+    expect(mocks.tagFindOrCreate).toHaveBeenCalledWith('class-1', 'Section A');
+  });
+
+  it('keeps the case the caller sent (names are case-sensitive, as in the web)', async () => {
+    mocks.tagFindOrCreate.mockResolvedValue({ tag: { id: 't', name: 'Frontend' }, created: true });
+    await tagCreateTool.handler({ ...ARGS, name: 'Frontend' }, CTX);
+    expect(mocks.tagFindOrCreate).toHaveBeenCalledWith('class-1', 'Frontend');
+  });
+
+  it('rejects an empty or whitespace-only name', async () => {
+    expect(tagCreateTool.inputSchema.name.safeParse('').success).toBe(false);
+    expect(tagCreateTool.inputSchema.name.safeParse('   ').success).toBe(false);
+    await expect(tagCreateTool.handler({ ...ARGS, name: '   ' }, CTX)).rejects.toMatchObject({
+      kind: 'invalid_params',
+    });
+    expect(mocks.tagFindOrCreate).not.toHaveBeenCalled();
+  });
+
+  it(`rejects a name longer than ${TAG_NAME_MAX_LENGTH} characters`, async () => {
+    const tooLong = 'x'.repeat(TAG_NAME_MAX_LENGTH + 1);
+    expect(tagCreateTool.inputSchema.name.safeParse(tooLong).success).toBe(false);
+    expect(tagCreateTool.inputSchema.name.safeParse('x'.repeat(TAG_NAME_MAX_LENGTH)).success).toBe(
+      true
+    );
+    await expect(tagCreateTool.handler({ ...ARGS, name: tooLong }, CTX)).rejects.toMatchObject({
+      kind: 'invalid_params',
+    });
+    expect(mocks.tagFindOrCreate).not.toHaveBeenCalled();
+  });
+
+  it('is an OWNER-only, idempotent, non-destructive, closed-world write', () => {
+    expect(tagCreateTool.roles).toEqual(['OWNER']);
+    expect(tagCreateTool.scope).toBe('write');
+    expect(tagCreateTool.annotations).toEqual({
+      destructive: false,
+      idempotent: true,
+      openWorld: false,
+    });
+  });
+
+  it('keeps its description under the 1,500 bytes a client will keep', () => {
+    expect(new TextEncoder().encode(tagCreateTool.description).length).toBeLessThan(1500);
+  });
+});
+
 describe('tool declarations', () => {
   const TOOLS = [
     teamCreateTool,
@@ -800,6 +897,7 @@ describe('tool declarations', () => {
     teamMemberRemoveTool,
     teamTagAddTool,
     teamTagRemoveTool,
+    tagCreateTool,
   ];
 
   it('are all OWNER-only write tools taking a classroom argument', () => {
