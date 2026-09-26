@@ -11,10 +11,10 @@ import { getPlatformAIDefaults } from '../platformDefaults.server';
 describe('getPlatformAIDefaults', () => {
   it("uses the ai-agent's code fallbacks when no env var is set", () => {
     expect(getPlatformAIDefaults({})).toEqual({
-      llm_model: 'claude-sonnet-4-5-20250929',
-      code_aware_model: 'claude-sonnet-4-5-20250929',
+      llm_model: 'claude-sonnet-5',
+      code_aware_model: 'claude-sonnet-5',
       exploration_model: 'claude-sonnet-5',
-      syllabus_bot_model: 'claude-sonnet-4-5-20250929',
+      syllabus_bot_model: 'claude-sonnet-5',
       question_effort: 'medium',
       grading_effort: 'high',
       exploration_effort: 'low',

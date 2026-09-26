@@ -156,7 +156,7 @@ export function useSyllabusBot({ classroomSlug, userRole }: UseSyllabusBotOption
             // A non-JSON body is still a failure — just don't take the
             // listener down on the way to reporting it.
           }
-          setError(payload.error || 'The course assistant hit an error.');
+          setError(payload.error || 'Ask Moji hit an error.');
           setIsStreaming(false);
           return;
         }
@@ -168,7 +168,7 @@ export function useSyllabusBot({ classroomSlug, userRole }: UseSyllabusBotOption
         if (eventSource.readyState === EventSource.CLOSED) {
           streamAliveRef.current = false;
           setError(
-            'Lost the connection to the course assistant. Start a new conversation to retry.'
+            'Lost the connection to Ask Moji. Start a new conversation to retry.'
           );
           setIsStreaming(false);
         }
@@ -194,7 +194,7 @@ export function useSyllabusBot({ classroomSlug, userRole }: UseSyllabusBotOption
       // that could ever clear it — which is what left the input permanently
       // disabled instead of showing a failure.
       if (!streamAliveRef.current) {
-        setError('Not connected to the course assistant. Start a new conversation to retry.');
+        setError('Not connected to Ask Moji. Start a new conversation to retry.');
         return;
       }
 

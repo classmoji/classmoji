@@ -21,7 +21,7 @@ const EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max'] as const;
 type EffortLevel = (typeof EFFORT_LEVELS)[number];
 
 /** The ai-agent's literal when LLM_MODEL is unset. */
-const DEFAULT_LLM_MODEL = 'claude-sonnet-4-5-20250929';
+const DEFAULT_LLM_MODEL = 'claude-sonnet-5';
 const DEFAULT_EXPLORATION_MODEL = 'claude-sonnet-5';
 
 export interface PlatformAIDefaults {
