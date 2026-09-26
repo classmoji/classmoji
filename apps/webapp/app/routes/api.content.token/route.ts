@@ -138,11 +138,16 @@ export const action = async ({ request }: Route.ActionArgs) => {
     return json({ error: 'not found' }, 404);
   }
 
-  const org = classroom.git_organization.login;
+  // Where the content repo lives: the org on Github, the classroom's own
+  // subgroup on GitLab (the Worker calls `${org}/${repo}` either way).
+  const org =
+    classroom.git_organization.provider === 'GITLAB' && classroom.git_namespace
+      ? classroom.git_namespace
+      : classroom.git_organization.login;
   const repo = classroom.content_repo;
 
   try {
-    const provider = getGitProvider(classroom.git_organization);
+    const provider = getGitProvider({ ...classroom.git_organization, login: org });
 
     // NARROWED AT THE SOURCE. The Worker needs to read one repo; an unscoped
     // installation token would carry every permission the app holds on every
@@ -180,8 +185,7 @@ export const action = async ({ request }: Route.ActionArgs) => {
         ...(isGitLab
           ? {
               apiBase: (
-                classroom.git_organization.base_url ||
-                ClassmojiService.gitlabInstance.defaultHost()
+                classroom.git_organization.base_url || ClassmojiService.gitlabInstance.defaultHost()
               ).replace(/\/+$/, ''),
             }
           : {}),

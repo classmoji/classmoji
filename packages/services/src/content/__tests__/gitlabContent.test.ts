@@ -1,7 +1,11 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { createHash } from 'node:crypto';
 
-vi.mock('@classmoji/database', () => ({ default: () => ({}) }));
+// No classroom row: the content project path is the org login given (the
+// owner lookup that moves it to a class subgroup finds nothing to swap in).
+vi.mock('@classmoji/database', () => ({
+  default: () => ({ classroom: { findFirst: async () => null } }),
+}));
 vi.mock('../../classmoji/gitlabConnection.service.ts', () => ({
   getConnectionToken: async () => 'tok',
 }));

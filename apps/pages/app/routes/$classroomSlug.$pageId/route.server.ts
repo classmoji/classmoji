@@ -224,6 +224,7 @@ export const loader = async ({
           provider: gitOrg.provider,
           login: gitOrg.login,
           base_url: gitOrg.base_url,
+          git_namespace: (page.classroom as { git_namespace?: string | null }).git_namespace,
         }).contentCompare(repoName, 'main', previewBranch)
       : null;
 
@@ -253,6 +254,8 @@ export const loader = async ({
                   provider: gitOrg.provider,
                   login: gitOrg.login,
                   base_url: gitOrg.base_url,
+                  git_namespace: (page.classroom as { git_namespace?: string | null })
+                    .git_namespace,
                 }).contentFile(repoName, 'main', `${page.content_path}/content.json`)
               : null,
           }

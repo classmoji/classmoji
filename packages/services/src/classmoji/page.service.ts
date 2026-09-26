@@ -277,12 +277,18 @@ async function deletePreviewBranchBestEffort({
 }
 
 async function ensureContentRepoExists({ classroom, gitOrgLogin, repoName }: ContentRepoContext) {
+  // Where the content project lives: the org on Github, the classroom's own
+  // subgroup on GitLab (next to its student projects).
+  const contentOwner =
+    classroom.git_organization?.provider === 'GITLAB' && classroom.git_namespace
+      ? classroom.git_namespace
+      : gitOrgLogin;
   const gitProvider = getGitProvider(classroom.git_organization!);
-  const repoExists = await gitProvider.repositoryExists(gitOrgLogin, repoName);
+  const repoExists = await gitProvider.repositoryExists(contentOwner, repoName);
   if (!repoExists) {
     try {
       await gitProvider.createContentRepository(
-        gitOrgLogin,
+        contentOwner,
         repoName,
         `Course content for ${classroom.name || gitOrgLogin}`,
         // A Gitlab content project is always private: only the delivery
@@ -314,7 +320,7 @@ async function ensureContentRepoExists({ classroom, gitOrgLogin, repoName }: Con
     if (url && secret) {
       try {
         await (gitProvider as GitLabProvider).ensureProjectPushHook(
-          gitOrgLogin,
+          contentOwner,
           repoName,
           url,
           secret

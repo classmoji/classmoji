@@ -1,6 +1,7 @@
 import getPrisma from '@classmoji/database';
 import { ContentService } from '../content/ContentService.ts';
 import { getGitProvider } from '../git/index.ts';
+import { owned, type GitLabOrgRecord } from '../content/gitlabContent.ts';
 
 /**
  * The path → git object map for a classroom's content repo.
@@ -246,14 +247,14 @@ async function readRepoTree(
   classroom: ResolvedClassroom
 ): Promise<{ entries: TreeEntry[]; truncated: boolean; commit: string }> {
   const provider = getGitProvider(classroom.gitOrganization);
-  const branch = await provider.getDefaultBranch(classroom.org, classroom.content_repo);
-  const commit = await provider.getLatestCommitSHA(classroom.org, classroom.content_repo, branch);
-  const tree = await provider.getTree(
-    classroom.org,
-    classroom.content_repo,
-    commit,
-    /* recursive */ true
-  );
+  // GitLab: the content project lives in the classroom's subgroup.
+  const owner =
+    classroom.gitOrganization.provider === 'GITLAB'
+      ? (await owned(classroom.gitOrganization as GitLabOrgRecord, classroom.content_repo)).login
+      : classroom.org;
+  const branch = await provider.getDefaultBranch(owner, classroom.content_repo);
+  const commit = await provider.getLatestCommitSHA(owner, classroom.content_repo, branch);
+  const tree = await provider.getTree(owner, classroom.content_repo, commit, /* recursive */ true);
 
   if (tree.truncated) {
     // Reported, not thrown. A truncated tree is still hundreds of correct

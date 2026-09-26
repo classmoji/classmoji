@@ -61,14 +61,14 @@ async function repairClassrooms(classroomIds?: string[]): Promise<RepairResult> 
       continue;
     }
 
-    // Student projects live in the class subgroup; the content project at the
-    // group root.
+    // Student projects and the content project all live in the class subgroup.
     const targets = classroom.git_repos.map(repo => ({
       group: classroom.git_namespace as string,
       project: repo.name,
     }));
     if (classroom.content_repo) {
-      targets.push({ group: classroom.git_organization.login, project: classroom.content_repo });
+      // The content project lives in the class subgroup.
+      targets.push({ group: classroom.git_namespace as string, project: classroom.content_repo });
     }
 
     for (const target of targets) {

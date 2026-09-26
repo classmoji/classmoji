@@ -121,16 +121,16 @@ export function gitWeb(ctx: GitWebContext) {
     actionsRun: (name: string, runId: number | string) =>
       isGitLab ? `${repo(name)}/-/pipelines/${runId}` : `${repo(name)}/actions/runs/${runId}`,
     /**
-     * The classroom's content repo (pages and slides). It lives in the org on
-     * Github and at the group root on Gitlab, never in the class subgroup.
+     * The classroom's content repo (pages and slides): in the org on Github,
+     * in the class subgroup on Gitlab (next to the student projects).
      */
-    contentRepo: (name: string) => `${host}/${ctx.login}/${name}`,
+    contentRepo: (name: string) => `${host}/${owner}/${name}`,
     /** A branch comparison in the content repo (preview branches hold slashes). */
     contentCompare: (name: string, base: string, head: string) =>
-      `${host}/${ctx.login}/${name}${isGitLab ? '/-' : ''}/compare/${base}...${encodeURIComponent(head)}`,
+      `${host}/${owner}/${name}${isGitLab ? '/-' : ''}/compare/${base}...${encodeURIComponent(head)}`,
     /** A file in the content repo at `branch`. */
     contentFile: (name: string, branch: string, path: string) =>
-      `${host}/${ctx.login}/${name}${isGitLab ? '/-' : ''}/blob/${branch}/${path}`,
+      `${host}/${owner}/${name}${isGitLab ? '/-' : ''}/blob/${branch}/${path}`,
     /** Where all of the classroom's repos are listed. */
     reposIndex: () =>
       isGitLab ? `${host}/${owner}` : `${GITHUB_WEB}/orgs/${ctx.login}/repositories`,

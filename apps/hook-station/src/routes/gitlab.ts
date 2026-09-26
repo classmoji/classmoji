@@ -136,7 +136,9 @@ async function handlePush(data: GitLabPushPayload, instanceId: string | null): P
     }
   }
 
-  // Otherwise it may be a classroom's content project: `<group>/<content_repo>`.
+  // Otherwise it may be a classroom's content project, which lives in the
+  // class subgroup (`<class subgroup>/<content_repo>`; older ones at the group
+  // root, until moved).
   const fullPath = data.project?.path_with_namespace;
   if (!fullPath || !fullPath.includes('/')) return;
   const group = fullPath.slice(0, fullPath.lastIndexOf('/'));
@@ -144,7 +146,8 @@ async function handlePush(data: GitLabPushPayload, instanceId: string | null): P
   const classroom = await getPrisma().classroom.findFirst({
     where: {
       content_repo: repo,
-      git_organization: { provider: 'GITLAB', login: group, gitlab_instance_id: instanceId },
+      git_organization: { provider: 'GITLAB', gitlab_instance_id: instanceId },
+      OR: [{ git_namespace: group }, { git_organization: { login: group } }],
     },
     select: { id: true },
   });

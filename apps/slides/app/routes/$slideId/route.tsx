@@ -253,6 +253,7 @@ export const loader = async ({
     provider: slide.classroom.git_organization?.provider,
     login: gitOrgLogin,
     base_url: slide.classroom.git_organization?.base_url,
+    git_namespace: slide.classroom.git_namespace,
   }).contentCompare(repo, 'main', previewBranch);
 
   // Two reads, and the split is deliberate.

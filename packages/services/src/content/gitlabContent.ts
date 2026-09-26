@@ -4,8 +4,9 @@
  * Every function here answers in the shape the Github path of the same
  * ContentService method answers in, so callers (decks, pages, themes, the asset
  * map) never learn which provider holds the content project. The content
- * project lives at the group root, `<group>/<content_repo>`, exactly where the
- * Github content repo lives in the org.
+ * project lives in the classroom's own subgroup, `<class subgroup>/<content_repo>`,
+ * next to its student projects (on Github it sits in the org). Callers keep
+ * passing the org record; `owned` swaps in the class subgroup as the owner.
  *
  * Shas are git object ids on both providers: Gitlab's `blob_id` and tree ids are
  * the same values Github's Contents and Trees APIs report. Writes go through the
@@ -19,10 +20,12 @@
  */
 
 import { createHash } from 'node:crypto';
+import getPrisma from '@classmoji/database';
 import { getGitProvider } from '../git/index.ts';
 import type { GitLabProvider } from '../git/GitLabProvider.ts';
 
 export interface GitLabOrgRecord {
+  id?: string;
   provider: string;
   login: string;
   provider_id?: string | null;
@@ -43,6 +46,36 @@ function statusError(status: number, message: string): StatusError {
 /** The git blob id of these bytes. */
 export function gitBlobSha(bytes: Buffer): string {
   return createHash('sha1').update(`blob ${bytes.length}\0`).update(bytes).digest('hex');
+}
+
+// Which namespace a content project lives in, by org + content repo name (a
+// content repo name is unique within an org). Cached; it only changes when a
+// classroom is created or its project moves.
+const ownerCache = new Map<string, { owner: string; expiresAt: number }>();
+
+/**
+ * The org record with `login` set to the content project's real namespace:
+ * the classroom's subgroup. Falls back to the org login when no classroom
+ * matches (and when `login` already names a subgroup, it is kept).
+ */
+export async function owned(org: GitLabOrgRecord, repo: string): Promise<GitLabOrgRecord> {
+  const key = `${org.id ?? org.login}/${repo}`;
+  const cached = ownerCache.get(key);
+  if (cached && Date.now() < cached.expiresAt) return { ...org, login: cached.owner };
+  const classroom = await getPrisma().classroom.findFirst({
+    where: {
+      content_repo: repo,
+      git_namespace: { not: null },
+      OR: [
+        { git_organization: org.id ? { id: org.id } : { provider: 'GITLAB', login: org.login } },
+        { git_namespace: org.login },
+      ],
+    },
+    select: { git_namespace: true },
+  });
+  const owner = classroom?.git_namespace || org.login;
+  ownerCache.set(key, { owner, expiresAt: Date.now() + 5 * 60 * 1000 });
+  return { ...org, login: owner };
 }
 
 function provider(org: GitLabOrgRecord): GitLabProvider {
@@ -99,6 +132,7 @@ export async function getMeta(
   path: string,
   ref?: string
 ): Promise<{ sha: string; size: number } | null> {
+  org = await owned(org, repo);
   const file = await headFile(org, repo, path, ref);
   return file ? { sha: file.sha, size: file.size } : null;
 }
@@ -110,6 +144,7 @@ export async function getFile(
   path: string,
   ref?: string
 ): Promise<{ content: string; sha: string } | null> {
+  org = await owned(org, repo);
   const at = await refOr(org, repo, ref);
   const { ok, status, body } = await provider(org).request(
     `${fileApi(org, repo, path)}?ref=${encodeURIComponent(at)}`
@@ -126,6 +161,7 @@ export async function getBlob(
   repo: string,
   sha: string
 ): Promise<Buffer | null> {
+  org = await owned(org, repo);
   const res = await provider(org).fetchRaw(
     `${projectApi(org, repo)}/repository/blobs/${encodeURIComponent(sha)}/raw`
   );
@@ -141,6 +177,7 @@ export async function listFolder(
   ref?: string,
   recursive = false
 ): Promise<Array<{ name: string; path: string; type: 'file' | 'dir'; sha: string }>> {
+  org = await owned(org, repo);
   const at = await refOr(org, repo, ref);
   const params = new URLSearchParams({
     ref: at,
@@ -195,6 +232,7 @@ export async function commit(
   message: string,
   actions: CommitAction[]
 ): Promise<string> {
+  org = await owned(org, repo);
   const { ok, status, body } = await provider(org).request(
     `${projectApi(org, repo)}/repository/commits`,
     { method: 'POST', body: { branch, commit_message: message, actions } }
@@ -228,6 +266,7 @@ export async function upsertActions(
   ref: string,
   files: Array<{ path: string; bytes: Buffer }>
 ): Promise<CommitAction[]> {
+  org = await owned(org, repo);
   const heads = await mapLimit(files, 8, file => headFile(org, repo, file.path, ref));
   return files.map((file, i) => {
     const head = heads[i];
@@ -242,6 +281,7 @@ export async function upsertActions(
 }
 
 export async function headFileAt(org: GitLabOrgRecord, repo: string, path: string, ref: string) {
+  org = await owned(org, repo);
   return headFile(org, repo, path, ref);
 }
 
@@ -250,6 +290,7 @@ export async function branchHead(
   repo: string,
   branch: string
 ): Promise<string | null> {
+  org = await owned(org, repo);
   const { ok, status, body } = await provider(org).request(
     `${projectApi(org, repo)}/repository/branches/${encodeURIComponent(branch)}`
   );
@@ -264,6 +305,7 @@ export async function createBranch(
   branch: string,
   fromSha: string
 ): Promise<{ ref: string; sha: string }> {
+  org = await owned(org, repo);
   const created = (await provider(org).api(`${projectApi(org, repo)}/repository/branches`, {
     method: 'POST',
     body: { branch, ref: fromSha },
@@ -272,6 +314,7 @@ export async function createBranch(
 }
 
 export async function deleteBranch(org: GitLabOrgRecord, repo: string, branch: string) {
+  org = await owned(org, repo);
   await provider(org).api(
     `${projectApi(org, repo)}/repository/branches/${encodeURIComponent(branch)}`,
     { method: 'DELETE' }
@@ -308,6 +351,7 @@ export async function compareBranches(
   base: string,
   head: string
 ) {
+  org = await owned(org, repo);
   const [baseSha, headSha] = await Promise.all([
     branchHead(org, repo, base),
     branchHead(org, repo, head),
@@ -371,6 +415,7 @@ export async function mergeBranch(
   head: string,
   message?: string
 ): Promise<{ merged: boolean; sha?: string; conflict?: boolean }> {
+  org = await owned(org, repo);
   const [baseSha, headSha] = await Promise.all([
     branchHead(org, repo, base),
     branchHead(org, repo, head),
