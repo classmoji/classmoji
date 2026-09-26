@@ -27,9 +27,10 @@
  * assistants. It now runs BEFORE the request body is read, which it could not
  * do while the classroom was identified from a form field — it comes from the
  * URL, so a stranger's 35 MB upload is refused on the session, not after it has
- * been buffered. See `~/utils/uploadLimit` for the size gates themselves, and
- * `~/utils/uploadConcurrency.server` for how many uploads this process holds at
- * once (a cap on ONE upload says nothing about ten of them arriving together).
+ * been buffered. See `@classmoji/utils/upload-limit` for the size gates
+ * themselves, and `~/utils/uploadConcurrency.server` for how many uploads this
+ * process holds at once (a cap on ONE upload says nothing about ten of them
+ * arriving together).
  *
  * ## Why the picker is links and a search param
  *
@@ -64,7 +65,11 @@ import {
   validateSlideLinkUrl,
 } from '@classmoji/services/slides';
 import { webappClassUrl } from '~/utils/webappLinks';
-import { UploadTooLargeError, readLimitedFormData, uploadBodyLimit } from '~/utils/uploadLimit';
+import {
+  UploadTooLargeError,
+  readLimitedFormData,
+  uploadBodyLimit,
+} from '@classmoji/utils/upload-limit';
 import {
   UPLOAD_BUSY_MESSAGE,
   UPLOAD_RETRY_AFTER_SECONDS,

@@ -35,7 +35,11 @@ import { cloudinaryVideoSelection } from '@classmoji/utils';
 import { processZipImport } from '~/utils/slidesComImporter.server';
 import { isCloudinaryConfigured } from '~/utils/cloudinaryService.server';
 import { importStreamManager } from '~/utils/importStreamManager';
-import { UploadTooLargeError, readLimitedFormData, uploadBodyLimit } from '~/utils/uploadLimit';
+import {
+  UploadTooLargeError,
+  readLimitedFormData,
+  uploadBodyLimit,
+} from '@classmoji/utils/upload-limit';
 
 // Max file size for ZIP uploads (in bytes)
 const MAX_FILE_SIZE = 150 * 1024 * 1024; // 150MB
@@ -185,6 +189,7 @@ export const action = async ({ request }: { request: Request }) => {
     filename?: string;
     slideId?: string;
     message?: string;
+    warnings?: string[];
   }) => {
     importStreamManager.publish(importId, event);
   };

@@ -25,7 +25,7 @@ import {
   readLimitedChunks,
   readLimitedFormData,
   uploadBodyLimit,
-} from '../../app/utils/uploadLimit.ts';
+} from '@classmoji/utils/upload-limit';
 import {
   MAX_CONCURRENT_UPLOADS,
   acquireUploadSlot,

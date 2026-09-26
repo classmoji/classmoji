@@ -19,8 +19,16 @@
  * The cap passed in is a TRANSPORT cap: the multipart envelope, the boundary
  * markers and the other form fields all ride in the same body, so it has to be
  * the file limit plus slack. The authoritative per-FILE check stays where the
- * policy lives (`validateSlideFile`), which the caller runs on the parsed part.
+ * policy lives (`validateSlideFile`, `validateFile`), which the caller runs on
+ * the parsed part.
  *
+ * Every route that reads a multipart body — in the slides, pages and webapp
+ * apps alike — reads it through `readLimitedFormData`, and only AFTER its own
+ * auth check: the cap bounds what a signed-in caller can make this process
+ * hold, the auth check decides whether a stranger gets to send a byte at all.
+ *
+ * Server-side by intent, which is why it is a subpath (`@classmoji/utils/
+ * upload-limit`) and not part of the root barrel that client bundles import.
  * Pure enough to unit test: no Prisma, no services, web APIs only.
  */
 
@@ -42,10 +50,15 @@ export function uploadBodyLimit(fileMaxBytes: number): number {
 export class UploadTooLargeError extends Error {
   status = 413 as const;
   code = 'UPLOAD_TOO_LARGE' as const;
+  readonly limitBytes: number;
 
-  constructor(public readonly limitBytes: number) {
+  // A plain field rather than a constructor parameter property: a shared
+  // package can be loaded by `node --experimental-strip-types`, which refuses
+  // parameter properties.
+  constructor(limitBytes: number) {
     super(`Upload exceeds the ${limitBytes} byte limit.`);
     this.name = 'UploadTooLargeError';
+    this.limitBytes = limitBytes;
   }
 }
 

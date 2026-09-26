@@ -28,7 +28,11 @@ import {
 } from '@classmoji/services/slides';
 import { assertSlideInClassroom, assertSlideKind } from '~/utils/slideRouteGuards';
 import { webappClassUrl } from '~/utils/webappLinks';
-import { UploadTooLargeError, readLimitedFormData, uploadBodyLimit } from '~/utils/uploadLimit';
+import {
+  UploadTooLargeError,
+  readLimitedFormData,
+  uploadBodyLimit,
+} from '@classmoji/utils/upload-limit';
 import {
   UPLOAD_BUSY_MESSAGE,
   UPLOAD_RETRY_AFTER_SECONDS,
@@ -125,8 +129,8 @@ export const action = async ({
   const { membership } = await authorizeFileSlide(request, classroomSlug, slideId);
 
   // Every submission here carries a file, so this takes a slot unconditionally.
-  // The cap in `~/utils/uploadLimit` bounds one upload; this bounds how many of
-  // them the process is holding at the same moment.
+  // The cap in `@classmoji/utils/upload-limit` bounds one upload; this bounds
+  // how many of them the process is holding at the same moment.
   if (!acquireUploadSlot()) {
     return data(
       { error: UPLOAD_BUSY_MESSAGE },
