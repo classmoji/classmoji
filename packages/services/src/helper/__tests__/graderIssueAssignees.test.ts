@@ -30,8 +30,8 @@ vi.mock('../../classmoji/index.ts', () => ({
 }));
 
 const helper = await import('../index.ts');
-const HelperService = (helper as { default?: unknown; HelperService?: unknown }).HelperService ??
-  helper.default;
+const HelperService =
+  (helper as { default?: unknown; HelperService?: unknown }).HelperService ?? helper.default;
 
 const base = {
   repoName: 'lab-1-alice',
@@ -56,14 +56,14 @@ describe('grader assignment and the GitHub issue', () => {
     await svc.addGraderToGitRepoAssignment({ ...base, githubIssueNumber: 7 });
 
     expect(mocks.addIssueAssignees).toHaveBeenCalledWith('acme', 'lab-1-alice', 7, ['ta-bob']);
-    expect(mocks.addGraderToAssignment).toHaveBeenCalledWith('ra-1', 'user-bob');
+    expect(mocks.addGraderToAssignment).toHaveBeenCalledWith('ra-1', 'user-bob', { notify: true });
   });
 
   it('skips GitHub for a REPO-mode submission (no issue) and still records the grader', async () => {
     await svc.addGraderToGitRepoAssignment({ ...base, githubIssueNumber: null });
 
     expect(mocks.addIssueAssignees).not.toHaveBeenCalled();
-    expect(mocks.addGraderToAssignment).toHaveBeenCalledWith('ra-1', 'user-bob');
+    expect(mocks.addGraderToAssignment).toHaveBeenCalledWith('ra-1', 'user-bob', { notify: true });
   });
 
   it('unassigns the same way', async () => {

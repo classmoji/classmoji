@@ -116,7 +116,20 @@ export type {
 
 // Admin service result/error shapes shared by the web routes and the MCP tools.
 export { StaffServiceError } from './classmoji/staff.service.ts';
-export type { AddStaffResult, RemoveStaffResult, StaffRole } from './classmoji/staff.service.ts';
+export type {
+  AddStaffResult,
+  RemoveStaffResult,
+  StaffRemovalPreview,
+  StaffRole,
+} from './classmoji/staff.service.ts';
+export type { UngradedChoice } from './classmoji/graderReassignPlan.ts';
+export type {
+  MoveGraderSlotPayload,
+  StaffRemovalStart,
+  UngradedSlotsOutcome,
+} from './helper/index.ts';
+export { waitForRunOutcome } from './helper/runWait.ts';
+export type { RunOutcome } from './helper/runWait.ts';
 // GitHub organization repository settings: typed refusal + shared messages.
 export {
   OrgRepoSettingsError,
