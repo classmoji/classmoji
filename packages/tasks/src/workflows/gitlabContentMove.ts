@@ -5,9 +5,10 @@ import { getGitProvider, type GitLabProvider } from '@classmoji/services';
 /**
  * Move GitLab content projects (pages and slides) from the top group into
  * their classroom's subgroup, where content projects now live, next to the
- * class's student projects. One-time and idempotent: a project already in its
- * subgroup, or missing at the old path, is skipped. GitLab keeps redirects
- * from the old path, and the project keeps its hooks and history.
+ * class's student projects, and display them as "Content" (the path keeps the
+ * class name). Idempotent: a project already in its subgroup is only renamed,
+ * one missing at both paths is skipped. GitLab keeps redirects from the old
+ * path, and the project keeps its hooks and history.
  */
 export async function moveGitlabContentProjects(): Promise<{
   moved: number;
@@ -31,19 +32,19 @@ export async function moveGitlabContentProjects(): Promise<{
       const provider = getGitProvider(classroom.git_organization) as GitLabProvider;
       if (await provider.projectExists(namespace, repo)) {
         result.skipped += 1;
-        continue;
-      }
-      if (!(await provider.projectExists(group, repo))) {
+      } else if (await provider.projectExists(group, repo)) {
+        await provider.transferProject(group, repo, namespace);
+        result.moved += 1;
+        logger.info('Moved content project into its class subgroup', {
+          classroom: classroom.slug,
+          from: `${group}/${repo}`,
+          to: `${namespace}/${repo}`,
+        });
+      } else {
         result.skipped += 1;
         continue;
       }
-      await provider.transferProject(group, repo, namespace);
-      result.moved += 1;
-      logger.info('Moved content project into its class subgroup', {
-        classroom: classroom.slug,
-        from: `${group}/${repo}`,
-        to: `${namespace}/${repo}`,
-      });
+      await provider.setProjectDisplayName(namespace, repo, 'Content');
     } catch (error: unknown) {
       result.failed += 1;
       logger.warn('Could not move content project', {

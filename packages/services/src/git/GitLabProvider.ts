@@ -323,11 +323,13 @@ export class GitLabProvider extends GitProvider {
   ): Promise<GitRepository> {
     const namespaceId = await this.resolveGroupId(group);
     // Initialized with a README, like Github's auto_init, so the default
-    // branch exists before the first content write.
+    // branch exists before the first content write. Displayed as "Content":
+    // it sits in the class subgroup, so the class name in the path (kept
+    // unique per top group, as content lookups need) is noise on screen.
     const project = (await this.api('/api/v4/projects', {
       method: 'POST',
       body: {
-        name,
+        name: 'Content',
         path: toPath(name),
         namespace_id: namespaceId,
         description,
@@ -789,6 +791,14 @@ export class GitLabProvider extends GitProvider {
     await this.api(`/api/v4/projects/${encodeURIComponent(`${group}/${project}`)}/transfer`, {
       method: 'PUT',
       body: { namespace: toNamespace },
+    });
+  }
+
+  /** Set a project's display name only; its path (and every URL) stays. */
+  async setProjectDisplayName(group: string, project: string, name: string): Promise<void> {
+    await this.api(`/api/v4/projects/${encodeURIComponent(`${group}/${project}`)}`, {
+      method: 'PUT',
+      body: { name },
     });
   }
 
