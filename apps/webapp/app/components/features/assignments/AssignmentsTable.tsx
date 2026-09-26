@@ -74,6 +74,11 @@ interface AssignmentsTableProps {
   onDelete: (assignment: AssignmentRowData) => void;
   busy?: boolean;
   emptyText?: string;
+  /**
+   * Whether the classroom shows quizzes (`loadQuizzesVisible`). Without it the
+   * empty state names no quiz. Absent means hidden.
+   */
+  quizzesVisible?: boolean;
 }
 
 const AssignmentsTable = ({
@@ -84,6 +89,7 @@ const AssignmentsTable = ({
   onDelete,
   busy = false,
   emptyText = 'No assignments yet',
+  quizzesVisible = false,
 }: AssignmentsTableProps) => {
   const columns = [
     {
@@ -218,7 +224,7 @@ const AssignmentsTable = ({
             description={
               a.type === 'REPO'
                 ? 'This deletes the assignment and every student submission and grade under it.'
-                : 'This removes the assignment from its module. The quiz or form itself is kept.'
+                : `This removes the assignment from its module. The ${a.type === 'QUIZ' ? 'quiz' : 'form'} itself is kept.`
             }
             okText="Delete"
             okButtonProps={{ danger: true }}
@@ -252,7 +258,9 @@ const AssignmentsTable = ({
           <div className="text-center py-12 text-gray-500">
             <div className="font-medium">{emptyText}</div>
             <div className="text-sm">
-              An assignment is a repo issue, a quiz, or a form, with a weight and a due date.
+              {quizzesVisible
+                ? 'An assignment is a repo issue, a quiz, or a form, with a weight and a due date.'
+                : 'An assignment is a repo issue or a form, with a weight and a due date.'}
             </div>
           </div>
         ),

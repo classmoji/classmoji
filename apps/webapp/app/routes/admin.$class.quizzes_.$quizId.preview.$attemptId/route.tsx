@@ -3,7 +3,8 @@ import { useLocation, useNavigate, useParams } from 'react-router';
 import { Drawer, ConfigProvider, theme, Modal } from 'antd';
 import { useRouteDrawer, useDarkMode } from '~/hooks';
 import { QuizAttemptInterface } from '~/components';
-import { assertClassroomAccess, assertProTier } from '~/utils/helpers';
+import { assertClassroomAccess } from '~/utils/helpers';
+import { quizzesVisibleOrThrow } from '~/utils/classroomProFlag.server';
 import { attemptDrawerView, quizDrawerView } from '~/utils/quizPayloads';
 import type { Route } from './+types/route';
 
@@ -22,7 +23,9 @@ export async function loader({ params, request }: Route.LoaderArgs) {
     attemptedAction: 'preview',
   });
 
-  await assertProTier(classSlug);
+  if (!(await quizzesVisibleOrThrow(classroom.id))) {
+    throw new Response('Not Found', { status: 404 });
+  }
 
   // 2. Fetch quiz
   const quiz = await ClassmojiService.quiz.findById(quizId);

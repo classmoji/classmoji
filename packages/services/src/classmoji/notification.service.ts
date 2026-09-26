@@ -2,6 +2,7 @@ import getPrisma from '@classmoji/database';
 import { Prisma } from '@prisma/client';
 import type { Notification, NotificationPreference, NotificationType } from '@prisma/client';
 import { tasks } from '@trigger.dev/sdk';
+import * as entitlementService from './entitlement.service.ts';
 import { renderEmail } from './notificationEmails.ts';
 
 const TTL_DAYS = 30;
@@ -191,9 +192,57 @@ const enqueueEmails = async ({
 
 // ─────────────────── Bell queries ───────────────────
 
+type BellRow = { type: NotificationType; classroom_id: string | null; resource_id: string };
+
+/**
+ * The quiz assignments among those these rows' ASSIGNMENT_DUE_DATE_CHANGED
+ * notifications name. One query, and none when no such row is present. It
+ * runs before any visibility lookup: most due-date rows name REPO assignments,
+ * and one query settles all of them where a visibility lookup would cost one
+ * per classroom. ASSIGNMENT_GRADED is not asked about, since its recipients
+ * come from graded submission rows, which only REPO assignments have.
+ */
+const findQuizAssignmentIds = async (rows: BellRow[]): Promise<Set<string>> => {
+  const assignmentIds = [
+    ...new Set(
+      rows.flatMap(row => (row.type === 'ASSIGNMENT_DUE_DATE_CHANGED' ? [row.resource_id] : []))
+    ),
+  ];
+  if (assignmentIds.length === 0) return new Set();
+  const quizAssignments = await getPrisma().assignment.findMany({
+    where: { id: { in: assignmentIds }, type: 'QUIZ' },
+    select: { id: true },
+  });
+  return new Set(quizAssignments.map(assignment => assignment.id));
+};
+
+/**
+ * The classrooms among these quiz rows where quizzes are not visible
+ * (`entitlement.quizzesVisible`). Asked once per distinct classroom, and not
+ * at all when there are no quiz rows — the bell loads on every page.
+ */
+const classroomsHidingQuizzes = async (quizRows: BellRow[]): Promise<Set<string>> => {
+  const classroomIds = [
+    ...new Set(quizRows.flatMap(row => (row.classroom_id ? [row.classroom_id] : []))),
+  ];
+  const visible = await Promise.all(classroomIds.map(id => entitlementService.quizzesVisible(id)));
+  return new Set(classroomIds.filter((_, i) => !visible[i]));
+};
+
+/**
+ * The bell's items and unread badge. A notification about a quiz
+ * (QUIZ_PUBLISHED, or ASSIGNMENT_DUE_DATE_CHANGED for a quiz assignment) from a
+ * classroom where quizzes are not visible is left out of both, so the badge
+ * never counts a row the list does not show. The rows stay stored and return
+ * if the classroom qualifies again before they expire.
+ *
+ * The unread count is grouped by type, classroom and resource rather than
+ * counted outright, so hidden rows beyond the `limit` window drop out of it
+ * without another query. Filtering can leave fewer than `limit` items.
+ */
 export const getForBell = async (userId: string, limit = 50) => {
   const prisma = getPrisma();
-  const [items, unreadCount] = await Promise.all([
+  const [rows, unreadGroups] = await Promise.all([
     prisma.notification.findMany({
       where: { user_id: userId, expires_at: { gt: new Date() } },
       orderBy: { created_at: 'desc' },
@@ -202,10 +251,27 @@ export const getForBell = async (userId: string, limit = 50) => {
         classroom: { select: { id: true, slug: true, name: true } },
       },
     }),
-    prisma.notification.count({
+    prisma.notification.groupBy({
+      by: ['type', 'classroom_id', 'resource_id'],
       where: { user_id: userId, read_at: null, expires_at: { gt: new Date() } },
+      _count: { _all: true },
     }),
   ]);
+
+  const candidates: BellRow[] = [...rows, ...unreadGroups];
+  const quizAssignmentIds = await findQuizAssignmentIds(candidates);
+  const isAboutQuiz = (row: BellRow) =>
+    row.type === 'QUIZ_PUBLISHED' ||
+    (row.type === 'ASSIGNMENT_DUE_DATE_CHANGED' && quizAssignmentIds.has(row.resource_id));
+  const hidden = await classroomsHidingQuizzes(candidates.filter(isAboutQuiz));
+  const shows = (row: BellRow) =>
+    !(isAboutQuiz(row) && row.classroom_id !== null && hidden.has(row.classroom_id));
+
+  const items = rows.filter(shows);
+  const unreadCount = unreadGroups.reduce(
+    (sum, group) => (shows(group) ? sum + group._count._all : sum),
+    0
+  );
   return { items, unreadCount };
 };
 

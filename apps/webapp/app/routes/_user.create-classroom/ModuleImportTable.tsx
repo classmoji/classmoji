@@ -17,6 +17,8 @@ interface ModuleImportTableProps {
   selectedModules: Map<string, ModuleConfig>;
   onModuleToggle: (moduleId: string, checked: boolean) => void;
   onQuizToggle: (moduleId: string, checked: boolean) => void;
+  /** Off: the two quiz columns are left out. */
+  quizzesVisible: boolean;
 }
 
 const ModuleImportTable = ({
@@ -24,6 +26,7 @@ const ModuleImportTable = ({
   selectedModules,
   onModuleToggle,
   onQuizToggle,
+  quizzesVisible,
 }: ModuleImportTableProps) => {
   if (!repositories || repositories.length === 0) {
     return <Empty description="This classroom has no repositories to import" className="py-8" />;
@@ -66,6 +69,7 @@ const ModuleImportTable = ({
     },
     {
       title: 'Quizzes',
+      key: 'quizzes',
       dataIndex: ['_count', 'quizzes'],
       width: 100,
       align: 'center',
@@ -73,6 +77,7 @@ const ModuleImportTable = ({
     },
     {
       title: 'Include Quizzes',
+      key: 'includeQuizzes',
       dataIndex: 'includeQuizzes',
       width: 120,
       align: 'center',
@@ -93,7 +98,11 @@ const ModuleImportTable = ({
   return (
     <Table
       dataSource={repositories}
-      columns={columns as Parameters<typeof Table>[0]['columns']}
+      columns={
+        columns.filter(
+          c => quizzesVisible || (c.key !== 'quizzes' && c.key !== 'includeQuizzes')
+        ) as Parameters<typeof Table>[0]['columns']
+      }
       rowKey="id"
       pagination={false}
       size="small"

@@ -15,6 +15,7 @@
 // marked as such in the view rather than hidden.
 import { ClassmojiService } from '@classmoji/services';
 import { requireClassroomTeachingTeam } from '~/utils/routeAuth.server';
+import { loadQuizzesVisible } from '~/utils/classroomProFlag.server';
 import type { Route } from './+types/route';
 
 export { default } from '../admin.$class.repos/route';
@@ -30,21 +31,23 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
     action: 'view_repos',
   });
 
-  const [repositories, assignments, modules, candidates] = await Promise.all([
+  const [repositories, assignments, modules, candidates, quizzesVisible] = await Promise.all([
     ClassmojiService.repository.findByClassroomSlug(classSlug!),
     ClassmojiService.assignment.listForClassroom(classroom.id),
     ClassmojiService.module.findByClassroomSlug(classSlug!),
     ClassmojiService.module.getCandidateContent(classroom.id),
+    loadQuizzesVisible(classroom.id),
   ]);
 
   // Same shape as the admin loader: the component reads all of it, and the
-  // editor context stays harmless on a surface with no editors.
+  // editor context stays harmless on a surface with no editors. The same quiz
+  // rule applies: none of them leaves where the classroom's quizzes are hidden.
   return {
     repositories,
     editor: {
-      assignments,
+      assignments: quizzesVisible ? assignments : assignments.filter(a => a.type !== 'QUIZ'),
       modules: modules.map(m => ({ id: m.id, title: m.title })),
-      quizzes: candidates.quizzes,
+      quizzes: quizzesVisible ? candidates.quizzes : [],
       forms: candidates.forms,
       pages: candidates.pages,
       slides: candidates.slides,

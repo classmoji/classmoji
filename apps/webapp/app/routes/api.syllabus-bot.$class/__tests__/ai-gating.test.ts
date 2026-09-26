@@ -87,6 +87,7 @@ describe('api.syllabus-bot AI gating', () => {
     isAIAgentConfiguredMock.mockReturnValue(false);
     const res = await action(actionArgs({ _action: 'initConversation' }));
     expect(res.status).toBe(503);
-    expect(await res.json()).toMatchObject({ error: expect.stringMatching(/not configured/i) });
+    // Fixed copy any member may read: nothing about setup.
+    expect(await res.json()).toEqual({ error: "Ask Moji isn't available in this class." });
   });
 });

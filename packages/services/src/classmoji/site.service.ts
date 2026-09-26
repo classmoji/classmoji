@@ -8,6 +8,7 @@ import {
   isPlatformDomain,
 } from '@classmoji/utils';
 import { isItemPublished, isItemPubliclyVisible } from './module.service.ts';
+import * as entitlementService from './entitlement.service.ts';
 import { getProStateForClassroomId } from './subscription.service.ts';
 import { removeCert, isFlyCertsConfigured } from '../fly/index.ts';
 import type { ModuleItemType, Prisma, Role } from '@prisma/client';
@@ -963,6 +964,10 @@ function placeholderDueAt(item: SiteModuleItem): Date | null {
  * useless to the audience a public site is for. Structure — how many units,
  * what kinds of work, when things are due — is exactly what a prospective
  * student should see; the titles are what they should not.
+ *
+ * Quiz items appear only where quizzes do (`entitlement.quizzesVisible`).
+ * Otherwise they are dropped for every viewer, placeholder included, since a
+ * "Quiz" placeholder would still show the classroom has quizzes.
  */
 export async function listPublicModulesForViewer(
   classroomId: string,
@@ -975,12 +980,19 @@ export async function listPublicModulesForViewer(
     orderBy: [{ position: 'asc' }, { created_at: 'asc' }],
   });
 
+  // Asked once, and only when a quiz item is present, so a classroom without
+  // quizzes pays nothing for the lookup.
+  const hideQuizzes =
+    modules.some(module => module.items.some(item => item.item_type === 'QUIZ')) &&
+    !(await entitlementService.quizzesVisible(classroomId));
+  const hidden = (item: SiteModuleItem) => hideQuizzes && item.item_type === 'QUIZ';
+
   if (role !== null) {
     return modules
       .map(module => ({
         ...module,
         items: module.items
-          .filter(isItemPublished)
+          .filter(item => !hidden(item) && isItemPublished(item))
           .map((item): SiteScheduleItem => ({ ...item, kind: 'visible' })),
       }))
       .filter(module => module.items.length > 0);
@@ -992,6 +1004,7 @@ export async function listPublicModulesForViewer(
     // even a placeholder" is expressed, and item ORDER is preserved throughout
     // so placeholders sit at the positions the instructor put them.
     items: module.items.flatMap((item): SiteScheduleItem[] => {
+      if (hidden(item)) return [];
       if (isItemPubliclyVisible(item)) return [{ ...item, kind: 'visible' }];
       if (!isItemPublished(item)) return [];
       return [

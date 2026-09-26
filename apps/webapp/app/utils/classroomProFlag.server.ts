@@ -1,4 +1,5 @@
 import { ClassmojiService } from '@classmoji/services';
+import { isAIAgentConfigured } from '~/utils/aiFeatures.server';
 
 /**
  * Whether a classroom is on Pro, as a bare boolean — the one fact the staff
@@ -24,6 +25,37 @@ export const loadClassroomIsPro = async (classroomId: string): Promise<boolean> 
     return isPro === true;
   } catch (error) {
     console.error('[loadClassroomIsPro] Pro state lookup failed', error);
+    return false;
+  }
+};
+
+/**
+ * Whether quizzes may appear anywhere in this classroom's UI: the AI agent is
+ * configured, and `entitlement.quizzesVisible` (Pro, not switched off) holds.
+ *
+ * A failed lookup THROWS. Use this where the answer gates a quiz route or
+ * action (a 404 or the 403 refusal): a database blip there must surface as an
+ * error, not as "this class has no quizzes". Use `loadQuizzesVisible` to decide
+ * what to render. Takes a classroom id the caller has already authorized.
+ */
+export const quizzesVisibleOrThrow = async (classroomId: string): Promise<boolean> => {
+  if (!isAIAgentConfigured()) return false;
+  return ClassmojiService.entitlement.quizzesVisible(classroomId);
+};
+
+/**
+ * `quizzesVisibleOrThrow` for rendering: loaders filter quiz rows, tags,
+ * counts, columns and picker options on this, so a classroom without it shows
+ * no trace of quizzes.
+ *
+ * Like `loadClassroomIsPro`, a failed lookup answers `false`: hiding is the
+ * smaller failure. Takes a classroom id the caller has already authorized.
+ */
+export const loadQuizzesVisible = async (classroomId: string): Promise<boolean> => {
+  try {
+    return await quizzesVisibleOrThrow(classroomId);
+  } catch (error) {
+    console.error('[loadQuizzesVisible] quiz visibility lookup failed', error);
     return false;
   }
 };

@@ -8,8 +8,8 @@ import {
   addClassroomAuditLog,
   assertClassroomAccess,
   assertClassroomMutationAllowed,
-  assertProTier,
 } from '~/utils/helpers';
+import { quizzesVisibleOrThrow } from '~/utils/classroomProFlag.server';
 import type { Route } from './+types/route';
 import type React from 'react';
 import type { TablerIconsProps } from '@tabler/icons-react';
@@ -59,14 +59,10 @@ export async function loader({ params, request }: Route.LoaderArgs) {
     attemptedAction: 'view_admin_quizzes',
   });
 
-  await assertProTier(classSlug);
-
-  // Get classroom settings
-  const settings = await ClassmojiService.classroom.getClassroomSettingsForServer(classroom.id);
-
-  // Check if quizzes are enabled for this classroom
-  if (settings?.quizzes_enabled === false) {
-    throw new Response('Quizzes are currently disabled for this classroom', { status: 403 });
+  // A classroom without quizzes (not Pro, switched off, or no AI agent) has no
+  // quiz screens: the URL answers like any other that names nothing.
+  if (!(await quizzesVisibleOrThrow(classroom.id))) {
+    throw new Response('Not Found', { status: 404 });
   }
 
   const user = await ClassmojiService.user.findById(userId);
@@ -160,7 +156,11 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
     },
   });
   assertClassroomMutationAllowed({ status: classroom.status, role: membership!.role });
-  await assertProTier(classSlug);
+  // Checked here as well as in the loader: a tab opened before quizzes were
+  // hidden can still post, and a publish emails the class.
+  if (!(await quizzesVisibleOrThrow(classroom.id))) {
+    throw new Response('Not Found', { status: 404 });
+  }
 
   // Create FormData with the action from the JSON
   const formData = new FormData();

@@ -4,6 +4,7 @@ import { Button } from 'antd';
 import type { Route } from './+types/route';
 import { ClassmojiService } from '@classmoji/services';
 import { assertClassroomAccess } from '~/utils/helpers';
+import { loadQuizzesVisible } from '~/utils/classroomProFlag.server';
 import type { ModuleTreeNode } from '~/components/features/modules/ReadOnlyModulesTree';
 import StudentModuleCard from '~/components/features/modules/StudentModuleCard';
 import {
@@ -52,10 +53,22 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
 
   // The module list and the student's own repo-assignments are independent —
   // fetch them in parallel.
-  const [modules, repoAssignments] = await Promise.all([
+  const [listedModules, repoAssignments, quizzesVisible] = await Promise.all([
     ClassmojiService.module.listForClassroom(classSlug, { includeUnpublished: isStaff }),
     ClassmojiService.helper.findAllAssignmentsForStudent(userId, classSlug),
+    loadQuizzesVisible(classroom.id),
   ]);
+
+  // A classroom without quizzes (not Pro, or switched off) shows no trace of
+  // them, staff preview included: its quiz assignments and quiz items never
+  // leave the loader, so no row, label or item count can mention one.
+  const modules = quizzesVisible
+    ? listedModules
+    : listedModules.map(m => ({
+        ...m,
+        assignments: m.assignments.filter(a => a.type !== 'QUIZ'),
+        items: m.items.filter(item => item.item_type !== 'QUIZ'),
+      }));
 
   // Self-formed group repos: the viewer's team state per repository, so the
   // assignment row can send them to the team page. Students have no

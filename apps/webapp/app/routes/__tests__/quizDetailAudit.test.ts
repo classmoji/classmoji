@@ -9,9 +9,12 @@
  * classroom-wide clear on the quiz list route — the two clear different amounts
  * of data and must not look identical in the trail.
  *
- * The last block pins WHERE the gate runs rather than merely that it does. It
+ * The next block pins WHERE the gate runs rather than merely that it does. It
  * sits at the top of the action, so authentication is a property of the action
  * and not of the single branch that happens to exist beneath it.
+ *
+ * The last pins the quiz-visibility check on both halves: where the
+ * classroom's quizzes are hidden the page and its action answer 404.
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -19,17 +22,21 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => ({
   assertClassroomAccess: vi.fn(),
   assertClassroomMutationAllowed: vi.fn(),
-  assertProTier: vi.fn(),
+  quizzesVisibleOrThrow: vi.fn(),
   addClassroomAuditLog: vi.fn(),
   addAuditLog: vi.fn(),
   clearForUserAndQuiz: vi.fn(),
+  quizFindById: vi.fn(),
 }));
 
 vi.mock('~/utils/helpers', () => ({
   assertClassroomAccess: (...a: unknown[]) => mocks.assertClassroomAccess(...a),
-  assertProTier: (...a: unknown[]) => mocks.assertProTier(...a),
   addClassroomAuditLog: (...a: unknown[]) => mocks.addClassroomAuditLog(...a),
   addAuditLog: (...a: unknown[]) => mocks.addAuditLog(...a),
+}));
+
+vi.mock('~/utils/classroomProFlag.server', () => ({
+  quizzesVisibleOrThrow: (...a: unknown[]) => mocks.quizzesVisibleOrThrow(...a),
 }));
 
 vi.mock('~/utils/routeAuth.server', () => ({
@@ -43,7 +50,7 @@ vi.mock('@classmoji/services', () => ({
       findByQuiz: vi.fn(),
       getMessages: vi.fn(),
     },
-    quiz: { findById: vi.fn() },
+    quiz: { findById: (...a: unknown[]) => mocks.quizFindById(...a) },
     user: { findById: vi.fn() },
   },
 }));
@@ -113,6 +120,7 @@ beforeEach(() => {
     classroom: CLASSROOM,
     membership: { id: 'm-1', role: 'ASSISTANT' },
   });
+  mocks.quizzesVisibleOrThrow.mockResolvedValue(true);
   mocks.clearForUserAndQuiz.mockResolvedValue(undefined);
 });
 
@@ -163,15 +171,15 @@ describe('quiz detail action — clearMyAttempts audit row', () => {
  * Stated as a property of the action so it survives a second branch being
  * added: a branch that forgot to gate itself would inherit the gate rather
  * than run ungated. Pinned by asserting on work that happens BEFORE any
- * branch is selected — the tier check and the body read.
+ * branch is selected — the visibility check and the body read.
  */
 describe('quiz detail action — the gate runs before any other work', () => {
-  it('refuses an unauthorized caller before the tier check', async () => {
+  it('refuses an unauthorized caller before the visibility check', async () => {
     mocks.assertClassroomAccess.mockRejectedValue(new Response('Forbidden', { status: 403 }));
 
     await expect(submit({ _action: 'clearMyAttempts' })).rejects.toBeInstanceOf(Response);
 
-    expect(mocks.assertProTier).not.toHaveBeenCalled();
+    expect(mocks.quizzesVisibleOrThrow).not.toHaveBeenCalled();
   });
 
   it('refuses an unauthorized caller before the request body is read', async () => {
@@ -206,5 +214,35 @@ describe('quiz detail action — the gate runs before any other work', () => {
         resourceType: 'QUIZ_PREVIEW_ATTEMPTS',
       })
     );
+  });
+});
+
+describe('quiz detail — hidden quizzes', () => {
+  it('the page answers 404 and reads no quiz', async () => {
+    mocks.quizzesVisibleOrThrow.mockResolvedValue(false);
+
+    const thrown = await route
+      .loader({
+        params: { class: CLASS_SLUG, quizId: QUIZ_ID },
+        request: new Request(`http://localhost/admin/${CLASS_SLUG}/quizzes/${QUIZ_ID}`),
+      } as unknown as Parameters<typeof route.loader>[0])
+      .catch((e: unknown) => e);
+
+    expect(thrown).toBeInstanceOf(Response);
+    expect((thrown as Response).status).toBe(404);
+    expect(mocks.quizzesVisibleOrThrow).toHaveBeenCalledWith('class-1');
+    expect(mocks.quizFindById).not.toHaveBeenCalled();
+    expect(mocks.addAuditLog).not.toHaveBeenCalled();
+  });
+
+  it('the action answers 404 and clears nothing', async () => {
+    mocks.quizzesVisibleOrThrow.mockResolvedValue(false);
+
+    const thrown = await submit({ _action: 'clearMyAttempts' }).catch((e: unknown) => e);
+
+    expect(thrown).toBeInstanceOf(Response);
+    expect((thrown as Response).status).toBe(404);
+    expect(mocks.clearForUserAndQuiz).not.toHaveBeenCalled();
+    expect(mocks.addClassroomAuditLog).not.toHaveBeenCalled();
   });
 });

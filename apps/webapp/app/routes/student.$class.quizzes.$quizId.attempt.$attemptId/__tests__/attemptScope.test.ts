@@ -20,7 +20,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 const quizFindByIdMock = vi.fn();
 const findWithMessagesMock = vi.fn();
 const assertAccessMock = vi.fn();
-const assertProTierMock = vi.fn();
+const quizzesVisibleMock = vi.fn();
 
 vi.mock('@classmoji/services', () => ({
   ClassmojiService: {
@@ -32,7 +32,10 @@ vi.mock('@classmoji/services', () => ({
 
 vi.mock('~/utils/helpers', () => ({
   assertClassroomAccess: (...a: unknown[]) => assertAccessMock(...a),
-  assertProTier: (...a: unknown[]) => assertProTierMock(...a),
+}));
+
+vi.mock('~/utils/classroomProFlag.server', () => ({
+  quizzesVisibleOrThrow: (...a: unknown[]) => quizzesVisibleMock(...a),
 }));
 
 // The loader is what is under test; the view layer only needs to import.
@@ -113,7 +116,7 @@ describe('student quiz attempt loader — reads stay inside the authorized class
       classroom: CLASSROOM,
       membership: { role: 'STUDENT' },
     });
-    assertProTierMock.mockResolvedValue(undefined);
+    quizzesVisibleMock.mockResolvedValue(true);
     quizFindByIdMock.mockResolvedValue(QUIZ);
     findWithMessagesMock.mockResolvedValue({
       attempt: OWN_ATTEMPT,
@@ -223,6 +226,31 @@ describe('student quiz attempt loader — reads stay inside the authorized class
     assertAccessMock.mockRejectedValue(new Response('Forbidden', { status: 403 }));
 
     await expect(load()).rejects.toBeInstanceOf(Response);
+    expect(quizzesVisibleMock).not.toHaveBeenCalled();
+    expect(quizFindByIdMock).not.toHaveBeenCalled();
+    expect(findWithMessagesMock).not.toHaveBeenCalled();
+  });
+
+  it('answers 404 and reads nothing when the classroom has no quizzes', async () => {
+    // Not Pro, or switched off: the same answer as a URL that names nothing,
+    // never an upgrade or "disabled" message.
+    quizzesVisibleMock.mockResolvedValue(false);
+
+    const thrown = (await load().catch(e => e)) as Response;
+
+    expect(thrown).toBeInstanceOf(Response);
+    expect(thrown.status).toBe(404);
+    expect(await thrown.text()).toBe('Not Found');
+    expect(quizzesVisibleMock).toHaveBeenCalledWith('class-1');
+    expect(quizFindByIdMock).not.toHaveBeenCalled();
+    expect(findWithMessagesMock).not.toHaveBeenCalled();
+  });
+
+  it('lets a failed visibility lookup surface as an error, not a 404', async () => {
+    const failure = new Error("Can't reach database server");
+    quizzesVisibleMock.mockRejectedValue(failure);
+
+    await expect(load()).rejects.toBe(failure);
     expect(quizFindByIdMock).not.toHaveBeenCalled();
     expect(findWithMessagesMock).not.toHaveBeenCalled();
   });

@@ -27,7 +27,7 @@ const quizAttemptFindByIdMock = vi.fn();
 const gitRepoFindByStudentMock = vi.fn();
 
 const assertAccessMock = vi.fn();
-const assertProTierMock = vi.fn();
+const quizzesVisibleMock = vi.fn();
 const assertMutationMock = vi.fn();
 const initializeAgentMock = vi.fn();
 const getAuthSessionMock = vi.fn();
@@ -54,7 +54,10 @@ vi.mock('@classmoji/services', () => ({
 
 vi.mock('~/utils/helpers', () => ({
   assertClassroomAccess: (...a: unknown[]) => assertAccessMock(...a),
-  assertProTier: (...a: unknown[]) => assertProTierMock(...a),
+}));
+
+vi.mock('~/utils/classroomProFlag.server', () => ({
+  quizzesVisibleOrThrow: (...a: unknown[]) => quizzesVisibleMock(...a),
 }));
 
 vi.mock('~/utils/routeAuth.server', () => ({
@@ -152,7 +155,7 @@ describe('api.quiz startQuiz — background task containment', () => {
       classroom: { status: 'ACTIVE' },
       membership: { role: 'STUDENT' },
     });
-    assertProTierMock.mockResolvedValue(undefined);
+    quizzesVisibleMock.mockResolvedValue(true);
     assertMutationMock.mockReturnValue(undefined);
     getAuthSessionMock.mockResolvedValue({ token: 'ghu_token', session: {} });
 
@@ -353,7 +356,7 @@ describe('api.quiz startQuiz — reasoning effort in quizConfig', () => {
       classroom: { status: 'ACTIVE' },
       membership: { role: 'STUDENT' },
     });
-    assertProTierMock.mockResolvedValue(undefined);
+    quizzesVisibleMock.mockResolvedValue(true);
     assertMutationMock.mockReturnValue(undefined);
     getAuthSessionMock.mockResolvedValue({ token: 'ghu_token', session: {} });
     createNewMock.mockResolvedValue({ success: true, attemptId: ATTEMPT_ID });
@@ -429,7 +432,7 @@ describe('api.quiz startQuiz — budget-stopped opening turn', () => {
       classroom: { status: 'ACTIVE' },
       membership: { role: 'STUDENT' },
     });
-    assertProTierMock.mockResolvedValue(undefined);
+    quizzesVisibleMock.mockResolvedValue(true);
     assertMutationMock.mockReturnValue(undefined);
     getAuthSessionMock.mockResolvedValue({ token: 'ghu_token', session: {} });
     createNewMock.mockResolvedValue({ success: true, attemptId: ATTEMPT_ID });

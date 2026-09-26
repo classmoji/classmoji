@@ -14,6 +14,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const getProStateForClassroomIdMock = vi.fn();
 const findUniqueConversationMock = vi.fn();
+const findUniqueSettingsMock = vi.fn();
 
 vi.mock('../subscription.service.ts', () => ({
   getProStateForClassroomId: (...a: unknown[]) => getProStateForClassroomIdMock(...a),
@@ -22,6 +23,7 @@ vi.mock('../subscription.service.ts', () => ({
 vi.mock('@classmoji/database', () => ({
   default: () => ({
     aIConversation: { findUnique: (...a: unknown[]) => findUniqueConversationMock(...a) },
+    classroomSettings: { findUnique: (...a: unknown[]) => findUniqueSettingsMock(...a) },
   }),
 }));
 
@@ -151,6 +153,49 @@ describe('canUseSyllabusBotForConversation', () => {
     expect(await canUseSyllabusBotForConversation('conv-1')).toEqual({
       allowed: false,
       reason: 'pro_required',
+    });
+  });
+});
+
+describe('quizzesVisible', () => {
+  it('is true on Pro with quizzes on, and with no settings row (the schema default is on)', async () => {
+    getProStateForClassroomIdMock.mockResolvedValue({ isPro: true });
+    const { quizzesVisible } = await import('../entitlement.service.ts');
+
+    findUniqueSettingsMock.mockResolvedValue({ quizzes_enabled: true });
+    expect(await quizzesVisible(CLASSROOM_ID)).toBe(true);
+
+    findUniqueSettingsMock.mockResolvedValue(null);
+    expect(await quizzesVisible(CLASSROOM_ID)).toBe(true);
+  });
+
+  it('is false when the classroom is not Pro, even with quizzes switched on', async () => {
+    getProStateForClassroomIdMock.mockResolvedValue({ isPro: false, tier: 'FREE' });
+    findUniqueSettingsMock.mockResolvedValue({ quizzes_enabled: true });
+    const { quizzesVisible } = await import('../entitlement.service.ts');
+
+    expect(await quizzesVisible(CLASSROOM_ID)).toBe(false);
+  });
+
+  it('is false on Pro when quizzes are switched off', async () => {
+    getProStateForClassroomIdMock.mockResolvedValue({ isPro: true });
+    findUniqueSettingsMock.mockResolvedValue({ quizzes_enabled: false });
+    const { quizzesVisible } = await import('../entitlement.service.ts');
+
+    expect(await quizzesVisible(CLASSROOM_ID)).toBe(false);
+  });
+
+  it('asks the canonical resolver and reads only the switch, by classroom id', async () => {
+    getProStateForClassroomIdMock.mockResolvedValue({ isPro: true });
+    findUniqueSettingsMock.mockResolvedValue({ quizzes_enabled: true });
+    const { quizzesVisible } = await import('../entitlement.service.ts');
+
+    await quizzesVisible(CLASSROOM_ID);
+
+    expect(getProStateForClassroomIdMock).toHaveBeenCalledWith(CLASSROOM_ID);
+    expect(findUniqueSettingsMock).toHaveBeenCalledWith({
+      where: { classroom_id: CLASSROOM_ID },
+      select: { quizzes_enabled: true },
     });
   });
 });

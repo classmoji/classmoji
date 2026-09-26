@@ -17,6 +17,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => ({
   assertClassroomAccess: vi.fn(),
   quizFindMany: vi.fn(),
+  quizzesVisibleOrThrow: vi.fn(),
 }));
 
 vi.mock('@classmoji/database', () => ({
@@ -30,7 +31,6 @@ vi.mock('@classmoji/services', async () => {
   return {
     ClassmojiService: {
       quiz,
-      classroom: { getClassroomSettingsForServer: async () => ({ quizzes_enabled: true }) },
       user: { findById: async () => ({ id: 'stu-ada', login: 'ada' }) },
     },
     QuizAccessError: quiz.QuizAccessError,
@@ -39,7 +39,10 @@ vi.mock('@classmoji/services', async () => {
 
 vi.mock('~/utils/helpers', () => ({
   assertClassroomAccess: (...a: unknown[]) => mocks.assertClassroomAccess(...a),
-  assertProTier: async () => undefined,
+}));
+
+vi.mock('~/utils/classroomProFlag.server', () => ({
+  quizzesVisibleOrThrow: (...a: unknown[]) => mocks.quizzesVisibleOrThrow(...a),
 }));
 
 // The loader is under test; the view layer only needs to import.
@@ -148,6 +151,8 @@ const load = () =>
 beforeEach(() => {
   mocks.assertClassroomAccess.mockReset();
   mocks.quizFindMany.mockReset();
+  mocks.quizzesVisibleOrThrow.mockReset();
+  mocks.quizzesVisibleOrThrow.mockResolvedValue(true);
   mocks.assertClassroomAccess.mockResolvedValue({
     userId: 'stu-ada',
     classroom: { id: 'class-1', slug: CLASS_SLUG, status: 'ACTIVE' },
@@ -238,5 +243,38 @@ describe('student quiz list payload', () => {
     expect('rubric_prompt' in quiz).toBe(false);
     expect('systemPrompt' in quiz).toBe(false);
     expect('rubricPrompt' in quiz).toBe(false);
+  });
+});
+
+describe('student quiz list without quizzes', () => {
+  it('answers 404 before reading anything when the classroom has no quizzes', async () => {
+    // Not Pro, or switched off: the URL names nothing, and says nothing about
+    // upgrading or about quizzes being disabled.
+    mocks.quizzesVisibleOrThrow.mockResolvedValue(false);
+
+    const thrown = (await load().catch(e => e)) as Response;
+
+    expect(thrown).toBeInstanceOf(Response);
+    expect(thrown.status).toBe(404);
+    expect(await thrown.text()).toBe('Not Found');
+    expect(mocks.quizzesVisibleOrThrow).toHaveBeenCalledWith('class-1');
+    expect(mocks.quizFindMany).not.toHaveBeenCalled();
+  });
+
+  it('lets a failed visibility lookup surface as an error, not a 404', async () => {
+    const failure = new Error("Can't reach database server");
+    mocks.quizzesVisibleOrThrow.mockRejectedValue(failure);
+
+    await expect(load()).rejects.toBe(failure);
+    expect(mocks.quizFindMany).not.toHaveBeenCalled();
+  });
+
+  it('asks only after the access gate has admitted the viewer', async () => {
+    mocks.assertClassroomAccess.mockRejectedValue(new Response('Forbidden', { status: 403 }));
+
+    const thrown = (await load().catch(e => e)) as Response;
+
+    expect(thrown.status).toBe(403);
+    expect(mocks.quizzesVisibleOrThrow).not.toHaveBeenCalled();
   });
 });
