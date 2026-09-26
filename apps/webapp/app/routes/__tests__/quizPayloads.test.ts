@@ -19,6 +19,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => ({
   assertClassroomAccess: vi.fn(),
   assertProTier: vi.fn(),
+  loadQuizzesVisible: vi.fn(),
+  quizzesVisibleOrThrow: vi.fn(),
   addAuditLog: vi.fn(),
   quizFindById: vi.fn(),
   findByQuiz: vi.fn(),
@@ -34,6 +36,12 @@ vi.mock('~/utils/helpers', () => ({
   addClassroomAuditLog: vi.fn(),
 }));
 vi.mock('~/utils/routeAuth.server', () => ({ assertClassroomMutationAllowed: vi.fn() }));
+// Every loader here gates on quiz visibility; these payload tests run with
+// quizzes visible.
+vi.mock('~/utils/classroomProFlag.server', () => ({
+  loadQuizzesVisible: (...a: unknown[]) => mocks.loadQuizzesVisible(...a),
+  quizzesVisibleOrThrow: (...a: unknown[]) => mocks.quizzesVisibleOrThrow(...a),
+}));
 
 vi.mock('@classmoji/services', () => ({
   ClassmojiService: {
@@ -295,6 +303,8 @@ const attemptArgs = (prefix: string, attemptId: string) =>
 beforeEach(() => {
   for (const m of Object.values(mocks)) m.mockReset();
   mocks.assertProTier.mockResolvedValue(undefined);
+  mocks.loadQuizzesVisible.mockResolvedValue(true);
+  mocks.quizzesVisibleOrThrow.mockResolvedValue(true);
   mocks.quizFindById.mockResolvedValue(QUIZ_ROW);
   mocks.findByQuiz.mockResolvedValue(ATTEMPTS);
   // Wired so a loader that still read them would find something to send.

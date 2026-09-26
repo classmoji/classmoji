@@ -22,9 +22,10 @@
  * - recordModalOpen: Calculates gap time and adds to unfocused duration when modal reopens
  * - restartQuiz: Deletes and restarts a quiz attempt (dev mode only)
  */
-import { assertClassroomAccess, assertProTier } from '~/utils/helpers';
+import { assertClassroomAccess } from '~/utils/helpers';
 import { assertClassroomMutationAllowed } from '~/utils/routeAuth.server';
 import { isAIAgentConfigured } from '~/utils/aiFeatures.server';
+import { quizzesVisibleOrThrow } from '~/utils/classroomProFlag.server';
 import { runBackgroundTask } from '~/utils/backgroundTask.server';
 import { getQuestionProgressFromMessage, checkForCompletion } from '@classmoji/utils';
 import type { Role } from '@prisma/client';
@@ -70,6 +71,32 @@ const isBudgetExceeded = (error: unknown) =>
  */
 const BUDGET_STOPPED_START_MESSAGE =
   "Your first question couldn't be prepared. Send any message to try again.";
+
+/**
+ * The refusal for a classroom whose quizzes are not visible (not on Pro, or
+ * quizzes switched off). `code` is what the quiz UI branches on; `message` is
+ * shown as-is (a page left open across a plan lapse lands here).
+ */
+const QUIZZES_UNAVAILABLE_BODY = {
+  success: false,
+  code: 'QUIZZES_UNAVAILABLE',
+  message: "Quizzes aren't available in this class.",
+};
+
+/**
+ * Fixed copy for failures. Whatever went wrong is logged here and never sent to
+ * the browser or saved into the transcript.
+ */
+const GENERIC_FAILURE_MESSAGE = 'Something went wrong. Please try again.';
+const REPLY_FAILED_MESSAGE = "That reply couldn't be finished. Please send your message again.";
+const RESTART_FAILED_MESSAGE = "Couldn't start a new attempt. Please try again.";
+
+/**
+ * ai-agent codes whose text is fixed copy meant for the student (see
+ * aiAgentConnection's USER_FACING_ERROR_CODES), so a failed reply may show it.
+ * Every other code, API_ERROR included, gets REPLY_FAILED_MESSAGE.
+ */
+const STUDENT_FACING_AGENT_CODES = ['BUDGET_EXCEEDED'];
 
 export async function action({ request }: Route.ActionArgs) {
   // Only handle POST requests
@@ -306,12 +333,23 @@ export async function action({ request }: Route.ActionArgs) {
       metadata: context.metadata,
     });
     assertClassroomMutationAllowed({ status: access.classroom.status, role: access.membership!.role });
-    await assertProTier(access.classroom.slug);
 
     // Check AI agent availability AFTER auth (preserves audit logging)
     if (!isAIAgentConfigured()) {
       return new Response(JSON.stringify({ error: 'AI features are not configured' }), {
         status: 503,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }
+
+    // The same visibility rule every quiz surface uses (Pro, quizzes not
+    // switched off). Returned rather than thrown so the body is the fixed
+    // refusal the quiz UI knows how to show. A failed lookup throws, and the
+    // catch below answers it as any other failure (a 500 with fixed copy), so
+    // it neither serves the quiz nor tells the student quizzes are gone.
+    if (!(await quizzesVisibleOrThrow(context.classroomId))) {
+      return new Response(JSON.stringify(QUIZZES_UNAVAILABLE_BODY), {
+        status: 403,
         headers: { 'Content-Type': 'application/json' },
       });
     }
@@ -336,8 +374,8 @@ export async function action({ request }: Route.ActionArgs) {
             // Resume specific attempt (e.g., admin preview with pre-created attempt).
             // Bound to `quizId`, because that is the quiz every gate above was
             // resolved from: the classroom membership, the mutation check and
-            // the pro-tier check all answer for THAT quiz's classroom, so an
-            // attempt on any other one would run under gates that never
+            // the quiz-visibility check all answer for THAT quiz's classroom, so
+            // an attempt on any other one would run under gates that never
             // examined it. `findWithMessages` throws when there is no such
             // attempt, so both cases land on the same 404 below — and only
             // that error does; anything else the query raises still surfaces.
@@ -604,6 +642,11 @@ export async function action({ request }: Route.ActionArgs) {
       }
 
       case 'sendMessage': {
+        // Set once the viewer is known to own the attempt; the catch below only
+        // writes to a transcript the viewer may write to.
+        let ownsAttempt = false;
+        // Set once the ai-agent has replied; its reply is already saved.
+        let agentReplied = false;
         try {
           // SECURITY: Verify the user owns this attempt before allowing message
           const attemptData = context.attemptData;
@@ -641,6 +684,8 @@ export async function action({ request }: Route.ActionArgs) {
             });
           }
 
+          ownsAttempt = true;
+
           // Note: ai-agent saves user message via conversationStorage in handleStudentMessage
           // No need to save here - avoiding duplicate writes
 
@@ -651,36 +696,29 @@ export async function action({ request }: Route.ActionArgs) {
             // Both standard and code-aware quizzes use the same unified path
             // ai-agent saves all messages (user, exploration steps, response) to DB
             const result = await sendMessageToAgent(data.attemptId, data.content);
+            agentReplied = true;
 
             aiResponse = result.content;
           } catch (agentError) {
             console.error('[sendMessage] Quiz-agent failed:', agentError);
 
-            let friendlyError;
-
-            if (agentError instanceof Error && agentError.message?.includes('timeout')) {
-              // Timeout waiting for ai-agent (likely AI API slow/overloaded)
-              friendlyError =
-                `The AI API appears to be slow or overloaded right now. ` +
-                `This is on their end, not ours! Please wait a moment and try again—your quiz progress is saved.`;
-            } else {
-              // ai-agent returned an error message - use it directly if available
-              friendlyError =
-                (agentError instanceof Error ? agentError.message : null) ||
-                `I'm having trouble right now. Please try again—your quiz progress is saved.`;
-            }
-
-            aiResponse = friendlyError;
+            // Saved into the transcript, which the student and staff both
+            // read, so it is fixed copy: the ai-agent's own text only for the
+            // codes it writes for students, one line for anything else (a
+            // timeout included). The real error is in the log above.
+            const agentCode = (agentError as { code?: unknown } | null)?.code;
+            const code = typeof agentCode === 'string' ? agentCode : null;
+            aiResponse =
+              code && STUDENT_FACING_AGENT_CODES.includes(code) && agentError instanceof Error
+                ? agentError.message || REPLY_FAILED_MESSAGE
+                : REPLY_FAILED_MESSAGE;
 
             await ClassmojiService.aiConversation.addMessage(
               data.attemptId,
               'ASSISTANT',
               aiResponse,
               false,
-              {
-                errorType: 'AGENT_FAILURE',
-                errorMessage: agentError instanceof Error ? agentError.message : String(agentError),
-              }
+              { errorType: 'AGENT_FAILURE', code }
             );
 
             return new Response(JSON.stringify({ success: false, error: 'Agent failure' }), {
@@ -731,21 +769,37 @@ export async function action({ request }: Route.ActionArgs) {
             headers: { 'Content-Type': 'application/json' },
           });
         } catch (error: unknown) {
+          if (error instanceof Response) return error;
           console.error('[sendMessage] Error:', error);
 
-          const friendlyError = `I'm having trouble closing out your quiz right now. Please wait a moment and tap "Next" again, or refresh the page if it persists—your progress is already saved.`;
+          if (!ownsAttempt) {
+            return new Response(JSON.stringify({ success: false, error: GENERIC_FAILURE_MESSAGE }), {
+              status: 500,
+              headers: { 'Content-Type': 'application/json' },
+            });
+          }
 
+          // The reply is saved and the student sees it; the quiz page completes
+          // the attempt itself when the reply ends it. Nothing to resend.
+          if (agentReplied) {
+            return new Response(JSON.stringify({ success: true }), {
+              headers: { 'Content-Type': 'application/json' },
+            });
+          }
+
+          // Saved into the transcript like an ai-agent failure, so the same
+          // fixed line; the real error is in the log above.
           await ClassmojiService.aiConversation.addMessage(
             data.attemptId,
             'ASSISTANT',
-            friendlyError,
+            REPLY_FAILED_MESSAGE,
             false,
             {
               errorType: 'GENERAL_FAILURE',
             }
           );
 
-          return new Response(JSON.stringify({ success: false, error: friendlyError }), {
+          return new Response(JSON.stringify({ success: false, error: REPLY_FAILED_MESSAGE }), {
             status: 200,
             headers: { 'Content-Type': 'application/json' },
           });
@@ -1023,17 +1077,12 @@ export async function action({ request }: Route.ActionArgs) {
             headers: { 'Content-Type': 'application/json' },
           });
         } catch (error: unknown) {
+          if (error instanceof Response) return error;
           console.error('[restartQuiz] Error:', error);
-          return new Response(
-            JSON.stringify({
-              success: false,
-              message: error instanceof Error ? error.message : String(error),
-            }),
-            {
-              status: 500,
-              headers: { 'Content-Type': 'application/json' },
-            }
-          );
+          return new Response(JSON.stringify({ success: false, message: RESTART_FAILED_MESSAGE }), {
+            status: 500,
+            headers: { 'Content-Type': 'application/json' },
+          });
         }
       }
 
@@ -1044,13 +1093,12 @@ export async function action({ request }: Route.ActionArgs) {
         });
     }
   } catch (error: unknown) {
+    // A gate's refusal (access, classroom status) goes back exactly as thrown.
+    if (error instanceof Response) return error;
     console.error('API Quiz action error:', error);
-    return new Response(
-      JSON.stringify({ error: error instanceof Error ? error.message : String(error) }),
-      {
-        status: 500,
-        headers: { 'Content-Type': 'application/json' },
-      }
-    );
+    return new Response(JSON.stringify({ success: false, error: GENERIC_FAILURE_MESSAGE }), {
+      status: 500,
+      headers: { 'Content-Type': 'application/json' },
+    });
   }
 }

@@ -11,9 +11,10 @@
  * All payloads are HMAC-signed before being sent to ai-agent service.
  */
 
-import { assertClassroomAccess, assertProTier } from '~/utils/helpers';
+import { assertClassroomAccess } from '~/utils/helpers';
 import { assertClassroomMutationAllowed } from '~/utils/routeAuth.server';
 import { isAIAgentConfigured } from '~/utils/aiFeatures.server';
+import { quizzesVisibleOrThrow } from '~/utils/classroomProFlag.server';
 import { sendRequest } from '~/services/aiAgentConnection.server';
 import agentStreamManager from '~/utils/agentStreamManager';
 import { v4 as uuidv4 } from 'uuid';
@@ -27,12 +28,27 @@ const jsonResponse = (data: Record<string, unknown>, status = 200) =>
     headers: { 'Content-Type': 'application/json' },
   });
 
+/**
+ * What a failed init or turn says to the browser, whatever failed. The real
+ * error is logged; a send failure goes out through both the JSON body and the
+ * SSE error event, since both reach the same browser.
+ */
+const INIT_FAILED = "The prompt assistant couldn't start. Please try again.";
+const SEND_MESSAGE_FAILED = 'Could not send your message. Please try again.';
+
+/**
+ * The refusal for a classroom whose quizzes are not visible (not on Pro,
+ * quizzes switched off, or no AI agent): the assistant writes quiz prompts, so
+ * it goes wherever quizzes go.
+ */
+const QUIZZES_UNAVAILABLE = "Quizzes aren't available in this class.";
+
 export async function action({ request }: Route.ActionArgs) {
   const formData = await request.formData();
   const _action = formData.get('_action');
 
   if (!isAIAgentConfigured()) {
-    return jsonResponse({ error: 'AI features are not configured' }, 503);
+    return jsonResponse({ error: QUIZZES_UNAVAILABLE }, 503);
   }
 
   switch (_action) {
@@ -68,7 +84,10 @@ async function handleInitSession(request: Request, formData: FormData) {
     attemptedAction: 'init_session',
   });
   assertClassroomMutationAllowed({ status: classroom.status, role: membership!.role });
-  await assertProTier(classroomSlug);
+  // A failed lookup throws: an error, not a refusal.
+  if (!(await quizzesVisibleOrThrow(classroom.id))) {
+    return jsonResponse({ error: QUIZZES_UNAVAILABLE }, 403);
+  }
 
   // Get classroom settings for LLM config
   const { ClassmojiService } = await import('@classmoji/services');
@@ -139,7 +158,7 @@ async function handleInitSession(request: Request, formData: FormData) {
     });
   } catch (error: unknown) {
     console.error('[prompt-assistant] Init failed:', error);
-    return jsonResponse({ error: error instanceof Error ? error.message : String(error) }, 500);
+    return jsonResponse({ error: INIT_FAILED }, 500);
   }
 }
 
@@ -160,7 +179,9 @@ async function handleSendMessage(request: Request, formData: FormData) {
     attemptedAction: 'send_message',
   });
   assertClassroomMutationAllowed({ status: smClassroom.status, role: smMembership!.role });
-  await assertProTier(classroomSlug);
+  if (!(await quizzesVisibleOrThrow(smClassroom.id))) {
+    return jsonResponse({ error: QUIZZES_UNAVAILABLE }, 403);
+  }
 
   if (!sessionId || !content) {
     return jsonResponse({ error: 'Missing sessionId or content' }, 400);
@@ -204,8 +225,8 @@ async function handleSendMessage(request: Request, formData: FormData) {
     return jsonResponse({ success: true, messageId });
   } catch (error: unknown) {
     console.error('[prompt-assistant] Send message failed:', error);
-    agentStreamManager.publishError(sessionId, error instanceof Error ? error : String(error));
-    return jsonResponse({ error: error instanceof Error ? error.message : String(error) }, 500);
+    agentStreamManager.publishError(sessionId, SEND_MESSAGE_FAILED);
+    return jsonResponse({ error: SEND_MESSAGE_FAILED }, 500);
   }
 }
 

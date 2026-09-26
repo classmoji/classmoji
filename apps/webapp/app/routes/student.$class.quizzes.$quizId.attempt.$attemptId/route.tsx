@@ -4,7 +4,8 @@ import { Drawer, ConfigProvider, theme, Modal } from 'antd';
 import type { Route } from './+types/route';
 import { useRouteDrawer, useDarkMode } from '~/hooks';
 import { QuizAttemptInterface } from '~/components';
-import { assertClassroomAccess, assertProTier } from '~/utils/helpers';
+import { assertClassroomAccess } from '~/utils/helpers';
+import { quizzesVisibleOrThrow } from '~/utils/classroomProFlag.server';
 import { attemptDrawerView, quizDrawerView } from '~/utils/quizPayloads';
 
 export async function loader({ params, request }: Route.LoaderArgs) {
@@ -22,7 +23,12 @@ export async function loader({ params, request }: Route.LoaderArgs) {
     attemptedAction: 'view',
   });
 
-  await assertProTier(classSlug);
+  // A classroom without quizzes (not Pro, or switched off) has no attempt to
+  // show: the same 404 as the list, before anything is read. A failed lookup
+  // throws to the error page rather than answering 404.
+  if (!(await quizzesVisibleOrThrow(classroom.id))) {
+    throw new Response('Not Found', { status: 404 });
+  }
 
   // 2. Fetch quiz
   const quiz = await ClassmojiService.quiz.findById(quizId);

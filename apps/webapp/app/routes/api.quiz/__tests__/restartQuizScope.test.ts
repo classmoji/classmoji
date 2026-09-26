@@ -24,7 +24,7 @@ const createNewMock = vi.fn();
 const updateAgentConfigMock = vi.fn();
 
 const assertAccessMock = vi.fn();
-const assertProTierMock = vi.fn();
+const quizzesVisibleMock = vi.fn();
 const assertMutationMock = vi.fn();
 const getAuthSessionMock = vi.fn();
 const endQuizSessionMock = vi.fn();
@@ -46,7 +46,10 @@ vi.mock('@classmoji/services', () => ({
 
 vi.mock('~/utils/helpers', () => ({
   assertClassroomAccess: (...a: unknown[]) => assertAccessMock(...a),
-  assertProTier: (...a: unknown[]) => assertProTierMock(...a),
+}));
+
+vi.mock('~/utils/classroomProFlag.server', () => ({
+  quizzesVisibleOrThrow: (...a: unknown[]) => quizzesVisibleMock(...a),
 }));
 
 vi.mock('~/utils/routeAuth.server', () => ({
@@ -130,7 +133,7 @@ describe('api.quiz restartQuiz — writes stay inside the authorized classroom',
       classroom: { status: 'ACTIVE', slug: 'test-class' },
       membership: { role: 'STUDENT' },
     });
-    assertProTierMock.mockResolvedValue(undefined);
+    quizzesVisibleMock.mockResolvedValue(true);
     assertMutationMock.mockReturnValue(undefined);
     getAuthSessionMock.mockResolvedValue({ token: 'ghu_token', session: {} });
   });

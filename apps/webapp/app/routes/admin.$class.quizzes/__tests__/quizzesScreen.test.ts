@@ -10,7 +10,8 @@
  * prefix, so a prefix check reintroduced into the component would fail here.
  *
  * The loader half pins the one per-quiz object it used to pass through whole:
- * the viewer's own attempt, joined to their user row.
+ * the viewer's own attempt, joined to their user row — and that a classroom
+ * whose quizzes are hidden gets a 404 rather than the list.
  */
 
 import { createElement } from 'react';
@@ -20,9 +21,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
   assertClassroomAccess: vi.fn(),
-  assertProTier: vi.fn(),
+  quizzesVisibleOrThrow: vi.fn(),
   findByClassroom: vi.fn(),
-  getClassroomSettingsForServer: vi.fn(),
   userFindById: vi.fn(),
 }));
 
@@ -44,17 +44,17 @@ vi.mock('~/components', async () => ({
 
 vi.mock('~/utils/helpers', () => ({
   assertClassroomAccess: (...a: unknown[]) => mocks.assertClassroomAccess(...a),
-  assertProTier: (...a: unknown[]) => mocks.assertProTier(...a),
   assertClassroomMutationAllowed: vi.fn(),
   addClassroomAuditLog: vi.fn(),
+}));
+
+vi.mock('~/utils/classroomProFlag.server', () => ({
+  quizzesVisibleOrThrow: (...a: unknown[]) => mocks.quizzesVisibleOrThrow(...a),
 }));
 
 vi.mock('@classmoji/services', () => ({
   ClassmojiService: {
     quiz: { findByClassroom: (...a: unknown[]) => mocks.findByClassroom(...a) },
-    classroom: {
-      getClassroomSettingsForServer: (...a: unknown[]) => mocks.getClassroomSettingsForServer(...a),
-    },
     user: { findById: (...a: unknown[]) => mocks.userFindById(...a) },
   },
   QuizAccessError: class QuizAccessError extends Error {},
@@ -172,8 +172,7 @@ describe('quiz list loader — the viewer’s own attempt', () => {
       classroom: { id: 'class-1', slug: CLASS_SLUG, status: 'ACTIVE' },
       membership: { role: 'ASSISTANT' },
     });
-    mocks.assertProTier.mockResolvedValue(undefined);
-    mocks.getClassroomSettingsForServer.mockResolvedValue({ quizzes_enabled: true });
+    mocks.quizzesVisibleOrThrow.mockResolvedValue(true);
     mocks.userFindById.mockResolvedValue(viewer);
     mocks.findByClassroom.mockResolvedValue([
       {
@@ -202,5 +201,32 @@ describe('quiz list loader — the viewer’s own attempt', () => {
     expect(payload.quizzes[0].attemptStatus).toBe('in_progress');
     const serialized = JSON.stringify(payload);
     for (const sentinel of SENTINELS) expect(serialized).not.toContain(sentinel);
+  });
+
+  it('answers 404 where the classroom’s quizzes are hidden, and lists nothing', async () => {
+    mocks.quizzesVisibleOrThrow.mockResolvedValue(false);
+
+    const thrown = await route
+      .loader({
+        params: { class: CLASS_SLUG },
+        request: new Request(`http://localhost/assistant/${CLASS_SLUG}/quizzes`),
+      } as never)
+      .catch((e: unknown) => e);
+
+    expect(thrown).toBeInstanceOf(Response);
+    expect((thrown as Response).status).toBe(404);
+    expect(mocks.quizzesVisibleOrThrow).toHaveBeenCalledWith('class-1');
+    expect(mocks.findByClassroom).not.toHaveBeenCalled();
+  });
+
+  it('lets a failed visibility lookup surface as an error, not as a 404', async () => {
+    mocks.quizzesVisibleOrThrow.mockRejectedValue(new Error('db down'));
+
+    await expect(
+      route.loader({
+        params: { class: CLASS_SLUG },
+        request: new Request(`http://localhost/assistant/${CLASS_SLUG}/quizzes`),
+      } as never)
+    ).rejects.toThrow('db down');
   });
 });

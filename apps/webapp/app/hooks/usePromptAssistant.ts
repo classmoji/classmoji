@@ -1,4 +1,5 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
+import { serverErrorLine } from '~/utils/serverErrorLine';
 
 interface UsePromptAssistantOptions {
   classroomSlug: string;
@@ -28,6 +29,15 @@ interface FormContext {
 }
 
 /**
+ * What the assistant shows when a request fails and the server sent no line of
+ * its own (see serverErrorLine: a reply's `message`, else an `error` that is
+ * text rather than a bare code). An exception's text (a network failure, a body
+ * that isn't JSON) is never shown.
+ */
+const INIT_FAILED = "The prompt assistant couldn't start. Please try again.";
+const SEND_FAILED = 'Could not send your message. Please try again.';
+
+/**
  * Hook for managing prompt assistant conversations
  * Handles SSE streaming, message state, and suggestions
  */
@@ -50,6 +60,7 @@ export function usePromptAssistant({ classroomSlug }: UsePromptAssistantOptions)
     async (formContext: FormContext, exampleRepoUrl: string | null = null) => {
       setIsInitializing(true);
       setError(null);
+      let failure = INIT_FAILED;
 
       try {
         const formData = new FormData();
@@ -65,10 +76,12 @@ export function usePromptAssistant({ classroomSlug }: UsePromptAssistantOptions)
           body: formData,
         });
 
-        const result = await response.json();
+        // A body that isn't JSON (an error page) reads as no body at all.
+        const result = await response.json().catch(() => null);
 
-        if (!response.ok || result.error) {
-          throw new Error(result.error || 'Failed to initialize session');
+        if (!response.ok || !result || result.error) {
+          failure = serverErrorLine(result) ?? INIT_FAILED;
+          throw new Error(`initSession failed (${response.status})`);
         }
 
         setSessionId(result.sessionId);
@@ -84,7 +97,7 @@ export function usePromptAssistant({ classroomSlug }: UsePromptAssistantOptions)
 
         return result;
       } catch (err: unknown) {
-        setError(err instanceof Error ? err.message : String(err));
+        setError(failure);
         throw err;
       } finally {
         setIsInitializing(false);
@@ -133,11 +146,30 @@ export function usePromptAssistant({ classroomSlug }: UsePromptAssistantOptions)
       }
     });
 
+    // Two failures arrive on this one listener: a server-sent `event: error`
+    // (carries a JSON payload) and a transport failure (carries nothing). The
+    // copy is fixed for both.
     eventSource.addEventListener('error', event => {
       const messageEvent = event as MessageEvent;
-      const data = messageEvent.data ? JSON.parse(messageEvent.data) : {};
-      setError(data.error || 'Connection error');
-      setIsStreaming(false);
+
+      if (messageEvent.data) {
+        let payload: unknown = null;
+        try {
+          payload = JSON.parse(messageEvent.data);
+        } catch {
+          // A non-JSON body is still a failure; report it with fixed copy.
+        }
+        setError(serverErrorLine(payload) ?? SEND_FAILED);
+        setIsStreaming(false);
+        return;
+      }
+
+      // Transport failure. EventSource reconnects from transient drops on its
+      // own, so only CLOSED means no answer can arrive.
+      if (eventSource.readyState === EventSource.CLOSED) {
+        setError(SEND_FAILED);
+        setIsStreaming(false);
+      }
     });
 
     eventSource.addEventListener('done', () => {
@@ -179,15 +211,18 @@ export function usePromptAssistant({ classroomSlug }: UsePromptAssistantOptions)
           body: formData,
         });
 
-        const result = await response.json();
+        // A body that isn't JSON (an error page) reads as no body at all.
+        const result = await response.json().catch(() => null);
 
-        if (!response.ok || result.error) {
-          throw new Error(result.error || 'Failed to send message');
+        if (!response.ok || !result || result.error) {
+          setError(serverErrorLine(result) ?? SEND_FAILED);
+          setIsStreaming(false);
         }
 
         // Response will come via SSE
-      } catch (err: unknown) {
-        setError(err instanceof Error ? err.message : String(err));
+      } catch {
+        // The request itself failed (network): fixed copy, not its text.
+        setError(SEND_FAILED);
         setIsStreaming(false);
       }
     },

@@ -39,6 +39,14 @@ vi.mock('../subscription.service.ts', () => ({
   getProStateForClassroomId: (...a: unknown[]) => getProStateForClassroomId(...a),
 }));
 
+// Whether quizzes may appear is entitlement's decision
+// (entitlement.service.test.ts). Stubbed so the schedule tests pin what the
+// site does with the answer; true unless a test says otherwise.
+const quizzesVisible = vi.fn();
+vi.mock('../entitlement.service.ts', () => ({
+  quizzesVisible: (...a: unknown[]) => quizzesVisible(...a),
+}));
+
 // Certificate teardown is best-effort by design; these tests pin WHEN it is
 // asked for, not what Fly does with it.
 const removeCert = vi.fn();
@@ -97,6 +105,7 @@ beforeEach(() => {
   });
   isFlyCertsConfigured.mockReturnValue(true);
   removeCert.mockResolvedValue(true);
+  quizzesVisible.mockResolvedValue(true);
 });
 
 describe('site.checkSubdomainAvailability', () => {
@@ -970,6 +979,63 @@ describe('site.listPublicModulesForViewer', () => {
     await expect(listPublicModulesForViewer('class-1', null)).resolves.toEqual([
       { id: 'mod-4', title: 'Week 3', items: [] },
     ]);
+  });
+
+  // ── quizzes ──────────────────────────────────────────────────────────────
+  //
+  // A quiz item appears only where quizzes are visible. Otherwise it is gone
+  // for every viewer — not even a placeholder, which would still say "Quiz".
+
+  it('drops quiz items for a member when quizzes are not visible', async () => {
+    quizzesVisible.mockResolvedValue(false);
+    moduleFindMany.mockResolvedValue(modules);
+
+    const result = await listPublicModulesForViewer('class-1', 'STUDENT');
+
+    expect(quizzesVisible).toHaveBeenCalledWith('class-1');
+    expect(result[0].items.map(i => i.id)).toEqual(['i1', 'i2', 'i4', 'i5', 'i6']);
+  });
+
+  it('gives an anonymous visitor no quiz placeholder when quizzes are not visible', async () => {
+    quizzesVisible.mockResolvedValue(false);
+    moduleFindMany.mockResolvedValue(modules);
+
+    const result = await listPublicModulesForViewer('class-1', null);
+
+    expect(result[0].items.map(item => item.id)).not.toContain('i7');
+    expect(result.flatMap(m => m.items).some(item => item.item_type === 'QUIZ')).toBe(false);
+  });
+
+  it('applies the usual empty-module rules to a module that held only a quiz', async () => {
+    quizzesVisible.mockResolvedValue(false);
+    const quizOnly = [
+      {
+        id: 'mod-quiz',
+        title: 'Quizzes',
+        items: [
+          { id: 'i-q', item_type: 'QUIZ', quiz: { id: 'q9', status: 'PUBLISHED', due_date: null } },
+        ],
+      },
+    ];
+
+    // Members: a module left with nothing is dropped. Anonymous: a bare title.
+    moduleFindMany.mockResolvedValue(quizOnly);
+    await expect(listPublicModulesForViewer('class-1', 'STUDENT')).resolves.toEqual([]);
+    moduleFindMany.mockResolvedValue(quizOnly);
+    await expect(listPublicModulesForViewer('class-1', null)).resolves.toEqual([
+      expect.objectContaining({ id: 'mod-quiz', title: 'Quizzes', items: [] }),
+    ]);
+  });
+
+  it('asks once per call, and not at all when no module holds a quiz', async () => {
+    moduleFindMany.mockResolvedValue(modules);
+    await listPublicModulesForViewer('class-1', null);
+    expect(quizzesVisible).toHaveBeenCalledTimes(1);
+
+    quizzesVisible.mockClear();
+    moduleFindMany.mockResolvedValue([modules[1]]);
+    await listPublicModulesForViewer('class-1', null);
+    expect(quizzesVisible).not.toHaveBeenCalled();
   });
 });
 

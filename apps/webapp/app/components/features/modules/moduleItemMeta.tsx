@@ -18,6 +18,10 @@ export type ContentItemType = Exclude<ModuleItemType, 'REPOSITORY'>;
 
 export const CONTENT_TYPES: ContentItemType[] = ['PAGE', 'SLIDE', 'QUIZ', 'FORM'];
 
+/** The types a picker may offer: QUIZ only where the classroom shows quizzes. */
+export const contentTypesFor = (quizzesVisible: boolean): ContentItemType[] =>
+  quizzesVisible ? CONTENT_TYPES : CONTENT_TYPES.filter(t => t !== 'QUIZ');
+
 /**
  * Compile-time exhaustiveness guard for the switches over ModuleItemType,
  * mirroring the one in module.service. Adding a value to the enum without

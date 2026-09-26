@@ -16,7 +16,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 const quizFindByIdMock = vi.fn();
 const findWithMessagesMock = vi.fn();
 const assertAccessMock = vi.fn();
-const assertProTierMock = vi.fn();
+const quizzesVisibleMock = vi.fn();
 
 vi.mock('@classmoji/services', () => ({
   ClassmojiService: {
@@ -28,7 +28,10 @@ vi.mock('@classmoji/services', () => ({
 
 vi.mock('~/utils/helpers', () => ({
   assertClassroomAccess: (...a: unknown[]) => assertAccessMock(...a),
-  assertProTier: (...a: unknown[]) => assertProTierMock(...a),
+}));
+
+vi.mock('~/utils/classroomProFlag.server', () => ({
+  quizzesVisibleOrThrow: (...a: unknown[]) => quizzesVisibleMock(...a),
 }));
 
 // The loader is what is under test; the view layer only needs to import.
@@ -93,7 +96,7 @@ describe('quiz preview loader — reads stay inside the authorized classroom', (
       classroom: CLASSROOM,
       membership: { role: 'OWNER' },
     });
-    assertProTierMock.mockResolvedValue(undefined);
+    quizzesVisibleMock.mockResolvedValue(true);
     quizFindByIdMock.mockResolvedValue(QUIZ);
     findWithMessagesMock.mockResolvedValue({ attempt: OWN_ATTEMPT, messages: [] });
   });
@@ -172,6 +175,18 @@ describe('quiz preview loader — reads stay inside the authorized classroom', (
     assertAccessMock.mockRejectedValue(new Response('Forbidden', { status: 403 }));
 
     await expect(load()).rejects.toBeInstanceOf(Response);
+    expect(quizFindByIdMock).not.toHaveBeenCalled();
+    expect(findWithMessagesMock).not.toHaveBeenCalled();
+  });
+
+  it('answers 404 where the classroom’s quizzes are hidden, and reads nothing', async () => {
+    quizzesVisibleMock.mockResolvedValue(false);
+
+    const thrown = (await load().catch(e => e)) as Response;
+
+    expect(thrown).toBeInstanceOf(Response);
+    expect(thrown.status).toBe(404);
+    expect(quizzesVisibleMock).toHaveBeenCalledWith('class-1');
     expect(quizFindByIdMock).not.toHaveBeenCalled();
     expect(findWithMessagesMock).not.toHaveBeenCalled();
   });

@@ -6,13 +6,15 @@
  * 1. Authenticate user via cookie
  * 2. Verify session ownership via ai-agent (verifySessionOwnership)
  * 3. Falls back to in-memory session check (graceful degradation)
- * 4. Stream events from agentStreamManager
+ * 4. Refuse a classroom whose quizzes are not visible (quizzesVisibleOrThrow)
+ * 5. Stream events from agentStreamManager
  *
  * Access: Requires authenticated instructor with org access
  */
 
 import type { LoaderFunctionArgs } from 'react-router';
 import { assertClassroomAccess } from '~/utils/helpers';
+import { quizzesVisibleOrThrow } from '~/utils/classroomProFlag.server';
 import { verifySessionOwnership, AgentType } from '~/utils/agentVerification.server';
 import agentStreamManager from '~/utils/agentStreamManager';
 
@@ -21,6 +23,9 @@ export async function loader({ params, request }: LoaderFunctionArgs) {
 
   // Look up session ownership for authorization (in-memory fallback)
   const sessionOwnership = agentStreamManager.getSessionOwnership(sessionId);
+
+  // The classroom whichever access check below admitted the caller to.
+  let classroomId: string | null = null;
 
   // 1. Verify session ownership via ai-agent first (single source of truth)
   try {
@@ -37,13 +42,14 @@ export async function loader({ params, request }: LoaderFunctionArgs) {
     }
 
     // Verify user has access to the classroom
-    const { userId } = await assertClassroomAccess({
+    const { userId, classroom } = await assertClassroomAccess({
       request,
       classroomSlug,
       allowedRoles: ['OWNER', 'TEACHER', 'ASSISTANT'],
       resourceType: 'PROMPT_ASSISTANT_STREAM',
       attemptedAction: 'subscribe',
     });
+    classroomId = classroom.id;
 
     // Try ai-agent verification
     const verification = await verifySessionOwnership({
@@ -91,13 +97,14 @@ export async function loader({ params, request }: LoaderFunctionArgs) {
 
       // Verify the requester has access to the classroom that owns this session
       try {
-        await assertClassroomAccess({
+        const { classroom } = await assertClassroomAccess({
           request,
           classroomSlug: sessionOwnership.classroomSlug,
           allowedRoles: ['OWNER', 'TEACHER', 'ASSISTANT'],
           resourceType: 'PROMPT_ASSISTANT_STREAM',
           attemptedAction: 'subscribe',
         });
+        classroomId = classroom.id;
       } catch (orgError) {
         console.warn(
           `[prompt-assistant-stream] Unauthorized access attempt for session ${sessionId}:`,
@@ -129,6 +136,15 @@ export async function loader({ params, request }: LoaderFunctionArgs) {
         headers: { 'Content-Type': 'text/plain' },
       });
     }
+  }
+
+  // The same quiz-visibility gate as the prompt assistant's action, after
+  // either access path above. A failed lookup throws (a 500), not a refusal.
+  if (!classroomId || !(await quizzesVisibleOrThrow(classroomId))) {
+    return new Response('Forbidden', {
+      status: 403,
+      headers: { 'Content-Type': 'text/plain' },
+    });
   }
 
   // 2. Create SSE stream

@@ -11,7 +11,9 @@
  *   modules         — any member (mirrors student.$class.modules, which the
  *                     assistant route re-exports): show_modules=false →
  *                     {enabled:false}; staff see unpublished, students see
- *                     published modules with published items only.
+ *                     published modules with published items only. Quiz
+ *                     items are dropped for every role unless
+ *                     entitlement.quizzesVisible (Pro, quizzes on).
  *   quizzes         — roles OWNER/TEACHER/ASSISTANT/STUDENT, matching the quiz
  *                     routes. Gate order mirrors the routes: role check →
  *                     Pro-tier → quizzes_enabled. NOTE:
@@ -179,6 +181,13 @@ export const modulesResource: ResourceDefinition = {
       );
     }
 
+    // Quiz items appear only where quizzes do — the predicate the web app's
+    // module screens filter on too. Asked once, and only when a quiz item is
+    // present.
+    const hideQuizzes =
+      modules.some(m => m.items.some(item => item.item_type === 'QUIZ')) &&
+      !(await ClassmojiService.entitlement.quizzesVisible(classroomId));
+
     return {
       enabled: true,
       modules: modules.map(m => ({
@@ -188,7 +197,9 @@ export const modulesResource: ResourceDefinition = {
         description: m.description ?? null,
         position: m.position,
         ...(isStaff(role) ? { is_published: m.is_published } : {}),
-        items: m.items.map(moduleItemSummary),
+        items: m.items
+          .filter(item => !(hideQuizzes && item.item_type === 'QUIZ'))
+          .map(moduleItemSummary),
       })),
     };
   },

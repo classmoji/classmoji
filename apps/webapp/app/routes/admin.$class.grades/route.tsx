@@ -7,6 +7,7 @@ import { ClassmojiService } from '@classmoji/services';
 import { addAuditLog, addClassroomAuditLog } from '~/utils/helpers';
 import { pickOwnerOnlyContactFields } from '~/utils/studentFields.server';
 import { requireClassroomStaff, assertClassroomMutationAllowed } from '~/utils/routeAuth.server';
+import { loadQuizzesVisible } from '~/utils/classroomProFlag.server';
 import type { Route } from './+types/route';
 
 export const loader = async ({ request, params }: Route.LoaderArgs) => {
@@ -25,6 +26,9 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
   // resolves as OWNER. Same split the roster route applies, and the contact
   // trio is shared with it so the two cannot drift.
   const isRealOwner = membership?.role === 'OWNER';
+
+  // Never rejects: a failed lookup answers false.
+  const quizzesVisible = loadQuizzesVisible(classroom.id);
 
   const promises = {
     emojiMappings: ClassmojiService.emojiMapping.findByClassroomId(classroom.id),
@@ -77,10 +81,15 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
       ),
     // The columns: every published assignment, grouped under its module in the
     // grid (module order, then creation order). Grading weight lives here.
-    assignments: ClassmojiService.assignment
-      .listForClassroom(classroom.id, { publishedOnly: true })
-      .then(assignments =>
-        assignments.map(a => ({
+    // Where quizzes are hidden their assignments are no column at all, so the
+    // attempt lookups below never run for them either.
+    assignments: Promise.all([
+      ClassmojiService.assignment.listForClassroom(classroom.id, { publishedOnly: true }),
+      quizzesVisible,
+    ]).then(([assignments, showQuizzes]) =>
+      assignments
+        .filter(a => showQuizzes || a.type !== 'QUIZ')
+        .map(a => ({
           id: a.id,
           title: a.title,
           weight: a.weight,
@@ -96,7 +105,7 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
           submission_mode: a.submission_mode,
           grades_released: a.grades_released,
         }))
-      ),
+    ),
   };
 
   // Quiz and form assignments have no submission row; their per-student state

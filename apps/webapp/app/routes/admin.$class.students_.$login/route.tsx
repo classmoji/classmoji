@@ -17,6 +17,7 @@ import GradeBadges from '~/components/features/grading/GradeBadges';
 import { ASSIGNMENT_TYPE_META } from '~/components/features/assignments/AssignmentsTable';
 import { addAuditLog, addClassroomAuditLog } from '~/utils/helpers';
 import { requireClassroomStaff, assertClassroomMutationAllowed } from '~/utils/routeAuth.server';
+import { loadQuizzesVisible } from '~/utils/classroomProFlag.server';
 import { normalizeSchoolId } from '~/utils/schoolId';
 import type { Route } from './+types/route';
 
@@ -45,12 +46,13 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
   const studentId = enrollment.user.id;
 
   const [
-    assignments,
+    publishedAssignments,
     repoAssignments,
     emojiMappings,
     settingsRow,
     letterGradeMappings,
     tokenBalance,
+    quizzesVisible,
   ] = await Promise.all([
     ClassmojiService.assignment.listForClassroom(classroom.id, { publishedOnly: true }),
     // Individual repos AND team repos: a team member's submission row hangs
@@ -60,7 +62,14 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
     ClassmojiService.classroom.getClassroomSettingsForServer(classroom.id),
     ClassmojiService.letterGradeMapping.findByClassroomId(classroom.id),
     ClassmojiService.token.getBalance(classroom.id, studentId),
+    loadQuizzesVisible(classroom.id),
   ]);
+
+  // Where quizzes are hidden their assignments are no row here, and no attempt
+  // is looked up for them.
+  const assignments = quizzesVisible
+    ? publishedAssignments
+    : publishedAssignments.filter(a => a.type !== 'QUIZ');
 
   // Quiz attempts and form responses for this student, one lookup each.
   const quizStatus: Record<

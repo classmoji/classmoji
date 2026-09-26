@@ -9,6 +9,7 @@ interface ModuleSelectionDrawerProps {
   selectedModules: Map<string, ModuleConfig>;
   onModuleToggle: (moduleId: string, checked: boolean) => void;
   onQuizToggle: (moduleId: string, checked: boolean) => void;
+  quizzesVisible: boolean;
   onSelectAll: () => void;
   onDeselectAll: () => void;
 }
@@ -20,6 +21,7 @@ const ModuleSelectionDrawer = ({
   selectedModules,
   onModuleToggle,
   onQuizToggle,
+  quizzesVisible,
   onSelectAll,
   onDeselectAll,
 }: ModuleSelectionDrawerProps) => {
@@ -46,6 +48,7 @@ const ModuleSelectionDrawer = ({
         selectedModules={selectedModules}
         onModuleToggle={onModuleToggle}
         onQuizToggle={onQuizToggle}
+        quizzesVisible={quizzesVisible}
       />
       <div className="mt-4 text-sm text-gray-500">
         {selectedModules.size > 0 ? (

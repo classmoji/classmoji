@@ -30,7 +30,8 @@ interface StatCardProps {
 
 export const loader = async ({ request, params }: Route.LoaderArgs) => {
   const { ClassmojiService } = await import('@classmoji/services');
-  const { addAuditLog, assertClassroomAccess, assertProTier } = await import('~/utils/helpers');
+  const { addAuditLog, assertClassroomAccess } = await import('~/utils/helpers');
+  const { quizzesVisibleOrThrow } = await import('~/utils/classroomProFlag.server');
 
   const classSlug = params.class!;
   const quizId = params.quizId!;
@@ -44,7 +45,9 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
     attemptedAction: 'view',
   });
 
-  await assertProTier(classSlug);
+  if (!(await quizzesVisibleOrThrow(classroom.id))) {
+    throw new Response('Not Found', { status: 404 });
+  }
 
   const quiz = await ClassmojiService.quiz.findById(quizId);
 
@@ -81,17 +84,17 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
 
 export const action = async ({ params, request }: Route.ActionArgs) => {
   const { ClassmojiService } = await import('@classmoji/services');
-  const { addClassroomAuditLog, assertClassroomAccess, assertProTier } =
-    await import('~/utils/helpers');
+  const { addClassroomAuditLog, assertClassroomAccess } = await import('~/utils/helpers');
+  const { quizzesVisibleOrThrow } = await import('~/utils/classroomProFlag.server');
   const classSlug = params.class!;
   const quizId = params.quizId!;
 
-  // Authenticate FIRST, before the tier check and before the body is read.
+  // Authenticate FIRST, before the visibility check and before the body is read.
   //
   // This gate used to live inside the one named branch below, which made the
   // action's coverage a property of how many branches happened to exist rather
   // than of the action: a second branch added later would have been ungated by
-  // default, and an unauthenticated caller could reach assertProTier and
+  // default, and an unauthenticated caller could reach the visibility lookup and
   // request.json() on the way in. Hoisting it makes the guarantee structural.
   // The list is unchanged — the teaching team may clear their own preview
   // attempts — and this route is now served under /assistant and /teacher as
@@ -110,7 +113,9 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
   // with the gate rather than inside a branch.
   assertClassroomMutationAllowed({ status: classroom.status, role: membership!.role });
 
-  await assertProTier(classSlug);
+  if (!(await quizzesVisibleOrThrow(classroom.id))) {
+    throw new Response('Not Found', { status: 404 });
+  }
 
   const data = await request.json();
   console.log('[Quiz Detail Action] Received action:', data._action);
@@ -214,12 +219,17 @@ const QuizView = ({ loaderData }: Route.ComponentProps) => {
         }),
       });
 
-      const result = await response.json();
+      // A body that isn't JSON (an error page) reads as no body at all. The
+      // server's `message` is fixed copy; anything else gets this page's own.
+      const result = await response.json().catch(() => null);
 
-      if (!result.success) {
+      if (!result?.success) {
         Modal.error({
           title: 'Cannot Start Preview',
-          content: result.message,
+          content:
+            typeof result?.message === 'string' && result.message
+              ? result.message
+              : 'Failed to create preview attempt. Please try again.',
         });
         return;
       }

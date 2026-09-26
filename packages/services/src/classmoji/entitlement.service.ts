@@ -61,6 +61,28 @@ export const canUseQuizzes = async (classroomId: string): Promise<EntitlementRes
 };
 
 /**
+ * Whether quizzes may appear in this classroom at all: Pro, and not switched
+ * off in its settings. Every surface that lists, counts, links or schedules a
+ * quiz (modules, dashboards, calendars and feeds, gradebook, notifications, the
+ * public course site, MCP reads) filters on this one answer, so a classroom
+ * without it shows no trace of quizzes and nothing links to a refusing route.
+ *
+ * Stored quizzes are untouched; they reappear when the classroom qualifies
+ * again. The webapp wraps this as `loadQuizzesVisible`, which also requires the
+ * AI agent to be configured and answers false on a failed lookup.
+ */
+export const quizzesVisible = async (classroomId: string): Promise<boolean> => {
+  const [{ isPro }, settings] = await Promise.all([
+    subscriptionService.getProStateForClassroomId(classroomId),
+    getPrisma().classroomSettings.findUnique({
+      where: { classroom_id: classroomId },
+      select: { quizzes_enabled: true },
+    }),
+  ]);
+  return isPro === true && settings?.quizzes_enabled !== false;
+};
+
+/**
  * Same check, addressed by conversation — for the SSE stream route, which only
  * knows a conversation id.
  *

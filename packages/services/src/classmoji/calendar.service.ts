@@ -1,7 +1,8 @@
 import getPrisma from '@classmoji/database';
 import { Prisma } from '@prisma/client';
-import type { EventType } from '@prisma/client';
+import type { AssignmentType, EventType } from '@prisma/client';
 import { pagesUrl } from '../emails/escape.ts';
+import * as entitlementService from './entitlement.service.ts';
 import {
   CalendarTimeRangeError,
   isFeaturedLinkRow,
@@ -48,6 +49,7 @@ interface CalendarAssignmentLink extends OccurrenceLink {
   featured: boolean;
   assignment: {
     id: string;
+    type: AssignmentType;
     title: string;
     slug: string | null;
     is_published: boolean;
@@ -898,10 +900,12 @@ export const getClassroomCalendar = async (
         include: {
           // `is_published` on both rows is what decides whether this link is
           // shown at all: a link to an assignment (or to a repository) that has
-          // not been published is staff-only.
+          // not been published is staff-only. `type` is what drops a quiz
+          // assignment's link where quizzes are hidden.
           assignment: {
             select: {
               id: true,
+              type: true,
               title: true,
               slug: true,
               is_published: true,
@@ -919,8 +923,27 @@ export const getClassroomCalendar = async (
     },
   });
 
+  // Quiz visibility, asked at most once for this call and only when a quiz
+  // shows up in range; the event links and the deadlines share the answer.
+  let quizzesVisibleAnswer: Promise<boolean> | undefined;
+  const quizzesVisible = () =>
+    (quizzesVisibleAnswer ??= entitlementService.quizzesVisible(classroomId));
+
+  // A link to a quiz assignment goes where quizzes are hidden, before the rows
+  // are expanded: the displayed chips, the starred resource and the raw links
+  // the edit modal prefills from all read these rows.
+  const hideQuizLinks =
+    events.some(event => event.assignmentLinks.some(l => l.assignment?.type === 'QUIZ')) &&
+    !(await quizzesVisible());
+  const shownEvents = hideQuizLinks
+    ? events.map(event => ({
+        ...event,
+        assignmentLinks: event.assignmentLinks.filter(l => l.assignment?.type !== 'QUIZ'),
+      }))
+    : events;
+
   // Expand recurring events (pass includeRawLinks for admin UI editing)
-  const expandedEvents = events.flatMap(event =>
+  const expandedEvents = shownEvents.flatMap(event =>
     expandRecurringEvent(event, startDate, endDate, includeRawLinks, canSeeDrafts)
   );
 
@@ -931,7 +954,7 @@ export const getClassroomCalendar = async (
     endDate,
     userId,
     includeUnpublished,
-    { canSeeDrafts }
+    { canSeeDrafts, quizzesVisible }
   );
 
   // Get form close dates. Where the click-through goes is a role question, and
@@ -1047,6 +1070,12 @@ export const getFormCloseEventsForRange = async (
 
 /**
  * Get assignment deadlines as calendar items
+ *
+ * A quiz assignment's deadline appears only where quizzes do
+ * (`entitlement.quizzesVisible`). Every calendar surface — the web calendars,
+ * the student dashboard's week, the ICS feed and the MCP calendar reads — takes
+ * its deadlines from here, so this is the one place they are dropped.
+ *
  * @param {string} classroomId - The classroom ID
  * @param {Date} startDate - Start of date range
  * @param {Date} endDate - End of date range
@@ -1055,6 +1084,9 @@ export const getFormCloseEventsForRange = async (
  * @param {boolean} [options.canSeeDrafts=false] - Whether the viewer may see draft pages and decks
  *   attached to the assignment. Separate from `includeUnpublished`, which decides whether the
  *   assignment appears at all — see `getClassroomCalendar`.
+ * @param {Function} [options.quizzesVisible] - How to ask whether this classroom's quizzes are
+ *   visible. `getClassroomCalendar` passes its own so one call asks once; defaults to asking
+ *   `entitlement.quizzesVisible` directly.
  */
 export const getDeadlinesForRange = async (
   classroomId: string,
@@ -1062,7 +1094,10 @@ export const getDeadlinesForRange = async (
   endDate: Date,
   userId: string | null = null,
   includeUnpublished: boolean = false,
-  { canSeeDrafts = false }: { canSeeDrafts?: boolean } = {}
+  {
+    canSeeDrafts = false,
+    quizzesVisible = () => entitlementService.quizzesVisible(classroomId),
+  }: { canSeeDrafts?: boolean; quizzesVisible?: () => Promise<boolean> } = {}
 ) => {
   const assignments = await getPrisma().assignment.findMany({
     where: {
@@ -1177,7 +1212,15 @@ export const getDeadlinesForRange = async (
     },
   });
 
-  return assignments.map(assignment => {
+  // Asked once, and only when a quiz deadline is in range, so a classroom with
+  // none pays nothing for the lookup.
+  const hideQuizzes =
+    assignments.some(assignment => assignment.type === 'QUIZ') && !(await quizzesVisible());
+  const shown = hideQuizzes
+    ? assignments.filter(assignment => assignment.type !== 'QUIZ')
+    : assignments;
+
+  return shown.map(assignment => {
     const repoAssignment = (
       'git_repo_assignments' in assignment ? (assignment.git_repo_assignments?.[0] ?? null) : null
     ) as DeadlineRepositoryAssignment | null;

@@ -3,9 +3,9 @@ import { useFetcher } from 'react-router';
 import { Modal, Segmented, Select } from 'antd';
 
 import {
-  CONTENT_TYPES,
   TYPE_META,
   candidateOptions,
+  contentTypesFor,
   type CandidateContent,
   type ContentItemType,
   type ModuleItemLike,
@@ -21,6 +21,8 @@ interface AddContentItemModalProps {
   candidates: CandidateContent;
   /** Fix the kind (the caller already asked which kind to add). */
   presetType?: ContentItemType;
+  /** Whether the classroom shows quizzes; without it QUIZ is not offered. */
+  quizzesVisible?: boolean;
 }
 
 /**
@@ -35,6 +37,7 @@ const AddContentItemModal = ({
   items,
   candidates,
   presetType,
+  quizzesVisible = false,
 }: AddContentItemModalProps) => {
   const fetcher = useFetcher<{ success?: string; error?: string }>();
   const [type, setType] = useState<ContentItemType>('PAGE');
@@ -93,7 +96,10 @@ const AddContentItemModal = ({
               setType(value as ContentItemType);
               setTargetId(undefined);
             }}
-            options={CONTENT_TYPES.map(t => ({ value: t, label: TYPE_META[t].label }))}
+            options={contentTypesFor(quizzesVisible).map(t => ({
+              value: t,
+              label: TYPE_META[t].label,
+            }))}
           />
         )}
         <Select

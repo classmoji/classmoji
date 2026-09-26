@@ -1,11 +1,12 @@
-import { Outlet, useNavigate, useLocation } from 'react-router';
+import { Outlet, useNavigate, useLocation, useRevalidator } from 'react-router';
 import { useState } from 'react';
 import { Table, Badge, Typography, Button, Modal, Tag, Tooltip, Space, Select, Spin } from 'antd';
 import { CheckCircleOutlined, PlayCircleOutlined, TrophyOutlined } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import type { Route } from './+types/route';
 import { Countdown } from '~/components';
-import { assertClassroomAccess, assertProTier } from '~/utils/helpers';
+import { assertClassroomAccess } from '~/utils/helpers';
+import { quizzesVisibleOrThrow } from '~/utils/classroomProFlag.server';
 import { formatDuration } from '~/utils/quizUtils';
 import { studentQuizAttemptView, studentQuizAttemptsSummaryView } from '~/utils/quizPayloads';
 
@@ -59,6 +60,40 @@ interface GitHubRepo {
   name: string;
 }
 
+/** What /api/quiz's restartQuiz (and a failed startQuiz) answers with. */
+interface RestartQuizBody {
+  success?: boolean;
+  attemptId?: string;
+  reason?: string;
+  existingAttemptId?: string;
+  message?: string;
+}
+
+const RESTART_FAILED = "Couldn't start a new attempt. Please try again.";
+
+/**
+ * The JSON body of an /api/quiz reply, or null when there is none to read. A
+ * gate can answer with plain text, so a body that is not a JSON object counts
+ * as no body rather than an exception thrown into the page.
+ */
+const readJsonBody = async (response: Response): Promise<RestartQuizBody | null> => {
+  try {
+    const body: unknown = await response.json();
+    return body && typeof body === 'object' ? (body as RestartQuizBody) : null;
+  } catch {
+    return null;
+  }
+};
+
+/**
+ * The server's own message when it sent one (restartQuiz, or the startQuiz
+ * that follows it), otherwise ours. The server only sends fixed copy — among
+ * it the QUIZZES_UNAVAILABLE refusal a page left open gets once the class no
+ * longer has quizzes — so it is safe to show as is.
+ */
+const restartFailureCopy = (body: RestartQuizBody | null) =>
+  typeof body?.message === 'string' && body.message.trim() ? body.message : RESTART_FAILED;
+
 const getGradingStrategyLabel = (strategy: string) => {
   switch (strategy) {
     case 'HIGHEST':
@@ -87,14 +122,12 @@ export async function loader({ params, request }: Route.LoaderArgs) {
     attemptedAction: 'view_student_quizzes',
   });
 
-  await assertProTier(classSlug);
-
-  // Get classroom settings
-  const settings = await ClassmojiService.classroom.getClassroomSettingsForServer(classroom.id);
-
-  // Check if quizzes are enabled for this classroom
-  if (settings?.quizzes_enabled === false) {
-    throw new Response('Quizzes are currently disabled for this classroom', { status: 403 });
+  // A classroom without quizzes (not Pro, or switched off) has no quiz list:
+  // the URL answers like any other that names nothing, never with an upgrade
+  // or "disabled" message. A failed lookup throws to the error page rather
+  // than answering 404.
+  if (!(await quizzesVisibleOrThrow(classroom.id))) {
+    throw new Response('Not Found', { status: 404 });
   }
 
   // The service keeps its own role list, so it can disagree with the gate above
@@ -157,6 +190,7 @@ export default function StudentQuizzes({ loaderData }: Route.ComponentProps) {
   const [activeTab, setActiveTab] = useState('current');
   const navigate = useNavigate();
   const location = useLocation();
+  const revalidator = useRevalidator();
 
   // Repo selection state for TAs/admins on code-aware quizzes
   const [repoModalVisible, setRepoModalVisible] = useState(false);
@@ -230,11 +264,11 @@ export default function StudentQuizzes({ loaderData }: Route.ComponentProps) {
         }),
       });
 
-      const result = await response.json();
+      const result = await readJsonBody(response);
 
-      if (!result.success) {
+      if (!result?.success) {
         // If there's an incomplete attempt, offer to resume it
-        if (result.reason === 'incomplete_attempt_exists' && result.existingAttemptId) {
+        if (result?.reason === 'incomplete_attempt_exists' && result.existingAttemptId) {
           Modal.confirm({
             title: 'Resume or Start New?',
             content: 'You have an in-progress attempt. Would you like to resume it?',
@@ -250,13 +284,13 @@ export default function StudentQuizzes({ loaderData }: Route.ComponentProps) {
         }
         Modal.error({
           title: 'Cannot Start Quiz',
-          content: result.message,
+          content: restartFailureCopy(result),
         });
         return;
       }
 
       // Start the quiz
-      await fetch('/api/quiz', {
+      const startResponse = await fetch('/api/quiz', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -266,13 +300,24 @@ export default function StudentQuizzes({ loaderData }: Route.ComponentProps) {
         }),
       });
 
+      if (!startResponse.ok) {
+        // The new attempt exists even though it didn't start, so the list shows it.
+        revalidator.revalidate();
+        Modal.error({
+          title: 'Cannot Start Quiz',
+          content: restartFailureCopy(await readJsonBody(startResponse)),
+        });
+        return;
+      }
+
       // Navigate to the new attempt
       navigate(`/${rolePrefix}/${org}/quizzes/${quiz!.id}/attempt/${result.attemptId}`);
     } catch (error: unknown) {
+      // The raw error stays in the console; the page only ever shows fixed copy.
       console.error('Error creating new attempt:', error);
       Modal.error({
-        title: 'Error',
-        content: 'Failed to create new attempt. Please try again.',
+        title: 'Cannot Start Quiz',
+        content: RESTART_FAILED,
       });
     }
   };
@@ -374,6 +419,9 @@ export default function StudentQuizzes({ loaderData }: Route.ComponentProps) {
         key: 'timeSpent',
         width: 150,
         render: (_: unknown, record: QuizAttempt) => {
+          // An unfinished attempt has no settled duration or focus share yet;
+          // showing one reads as a finished attempt spent unfocused.
+          if (record.status !== 'completed') return <Text type="secondary">In progress</Text>;
           if (!record.focusMetrics) return <Text type="secondary">-</Text>;
 
           const { percentage, focusedMs, totalMs } = record.focusMetrics;
@@ -390,7 +438,6 @@ export default function StudentQuizzes({ loaderData }: Route.ComponentProps) {
               <Space size="small">
                 <Text type="secondary" style={{ fontSize: '12px' }}>
                   {timeStr}
-                  can{' '}
                 </Text>
                 <Tag color={color} style={{ fontSize: '11px', margin: 0 }}>
                   {clampedPercentage}%
