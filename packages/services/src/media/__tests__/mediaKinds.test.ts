@@ -111,6 +111,12 @@ describe('filenameRefusal', () => {
     expect(filenameRefusal('a.abcdefghi')).toContain('at most 8');
     expect(filenameRefusal('a.pdf')).toBeNull();
   });
+
+  it("reports an over-long extension's real length, not the capped one", () => {
+    expect(filenameRefusal('dir.v2/a.abcdefghijklmnopqrst')).toBe(
+      'File extensions can be at most 8 letters or digits (.abcdefghijklmnop… is 20).'
+    );
+  });
 });
 
 describe('knownExtensions', () => {

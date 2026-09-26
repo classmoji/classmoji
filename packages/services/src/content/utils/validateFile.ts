@@ -100,7 +100,7 @@ export function validateFile({
     // would commit fine but could never be served via a signed URL — refuse
     // it here instead, with the message the media store also uses.
     if (ext.length > MAX_EXT_LENGTH) {
-      return { valid: false, error: extensionTooLongMessage(ext) };
+      return { valid: false, error: extensionTooLongMessage(ext, extensionLength(name)) };
     }
     return { valid: true };
   }
@@ -121,9 +121,34 @@ export function validateFile({
  * `validateFile`'s `'any'` policy and by the media store's `filenameRefusal`
  * (`media/mediaKinds.ts`), so a name refused for its length reads the same
  * sentence wherever it is refused.
+ *
+ * `ext` is the extension as `sanitizedExtension` keeps it, which is capped, so
+ * the length is passed separately: `extensionLength` of the same name, the
+ * number of characters the uploader actually typed. A capped extension is shown
+ * with an ellipsis so the name and the number agree.
  */
-export function extensionTooLongMessage(ext: string): string {
-  return `File extensions can be at most ${MAX_EXT_LENGTH} letters or digits (.${ext} is ${ext.length}).`;
+export function extensionTooLongMessage(ext: string, length: number): string {
+  const shown = length > ext.length ? `${ext}…` : ext;
+  return `File extensions can be at most ${MAX_EXT_LENGTH} letters or digits (.${shown} is ${length}).`;
+}
+
+/** The extension's letters and digits, lowercased, before any cap. */
+function extensionChars(name: string): string {
+  const dot = name.lastIndexOf('.');
+  if (dot <= 0) return '';
+  return name
+    .slice(dot + 1)
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, '');
+}
+
+/**
+ * How long `name`'s extension is before `sanitizedExtension` caps it — what a
+ * refusal for length should report, since the capped one never exceeds
+ * `MAX_EXTENSION_LENGTH`.
+ */
+export function extensionLength(name: string): number {
+  return extensionChars(name).length;
 }
 
 /**
@@ -134,13 +159,7 @@ export function extensionTooLongMessage(ext: string): string {
  * (`media/mediaKinds.ts`), so "has an extension" means one thing everywhere.
  */
 export function sanitizedExtension(name: string): string {
-  const dot = name.lastIndexOf('.');
-  if (dot <= 0) return '';
-  return name
-    .slice(dot + 1)
-    .toLowerCase()
-    .replace(/[^a-z0-9]/g, '')
-    .slice(0, MAX_EXTENSION_LENGTH);
+  return extensionChars(name).slice(0, MAX_EXTENSION_LENGTH);
 }
 
 /**

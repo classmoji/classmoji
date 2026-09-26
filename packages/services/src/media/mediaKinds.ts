@@ -31,7 +31,11 @@
  * fall back on when an object carries no stored type.
  */
 
-import { extensionTooLongMessage, sanitizedExtension } from '../content/utils/validateFile.ts';
+import {
+  extensionLength,
+  extensionTooLongMessage,
+  sanitizedExtension,
+} from '../content/utils/validateFile.ts';
 import { contentTypeForMediaExt, origVariant } from './mediaKeys.ts';
 
 export type MediaKind = 'VIDEO' | 'AUDIO' | 'DOCUMENT' | 'ARCHIVE' | 'IMAGE' | 'OTHER';
@@ -86,8 +90,12 @@ const BY_EXT = new Map<string, { kind: MediaKind; contentType: string }>(
  */
 export function extensionOf(filename: string): string | null {
   if (typeof filename !== 'string') return null;
-  const name = filename.slice(Math.max(filename.lastIndexOf('/'), filename.lastIndexOf('\\')) + 1);
-  return sanitizedExtension(name) || null;
+  return sanitizedExtension(basenameOf(filename)) || null;
+}
+
+/** The part of a path after its last `/` or `\` — the file's own name. */
+function basenameOf(filename: string): string {
+  return filename.slice(Math.max(filename.lastIndexOf('/'), filename.lastIndexOf('\\')) + 1);
 }
 
 /** The kind an extension belongs to: a known one, or `OTHER`. */
@@ -109,7 +117,7 @@ export function filenameRefusal(filename: string): string | null {
   const ext = extensionOf(filename);
   if (!ext) return 'This file needs an extension, e.g. notes.txt';
   if (origVariant(ext) === null) {
-    return extensionTooLongMessage(ext);
+    return extensionTooLongMessage(ext, extensionLength(basenameOf(filename)));
   }
   return null;
 }

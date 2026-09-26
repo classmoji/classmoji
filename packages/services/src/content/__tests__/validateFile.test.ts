@@ -33,6 +33,15 @@ describe('validateFile — names under the two type policies', () => {
     });
   });
 
+  it("reports the extension's real length, not the sanitizer's 16-character cap", () => {
+    expect(
+      validateFile({ filename: 'notes.abcdefghijklmnopqrst', size: 10, fileTypes: 'any' })
+    ).toEqual({
+      valid: false,
+      error: 'File extensions can be at most 8 letters or digits (.abcdefghijklmnop… is 20).',
+    });
+  });
+
   it("leaves 'allowlist' refusals as they were", () => {
     for (const filename of ['Makefile', '.gitignore', 'README', 'x.データ', 'notes.txt']) {
       const result = validateFile({ filename, size: 10 });
