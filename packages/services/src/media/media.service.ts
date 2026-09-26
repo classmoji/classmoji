@@ -648,9 +648,12 @@ async function markDeleted(
  * trusts a number the client declared: the reservation, the per-file check, the
  * remaining-space arithmetic. `HeadObject` is the first moment the app learns
  * what was actually written, and a mismatch means every one of those decisions
- * was made against a false premise — so the object is deleted, the row is
- * marked DELETED, and the caller is told. Not rounded down to a warning: a
- * client that can overrun its declaration can fill the bucket.
+ * was made against a false premise — so the row is marked DELETED (only from
+ * UPLOADING), the object is deleted once that tombstone has landed, and the
+ * caller is told. Not rounded down to a warning: a client that can overrun its
+ * declaration can fill the bucket. A tombstone that does NOT land means another
+ * call moved the row first, and the bytes are left alone: a READY row is
+ * serving them, and that finished upload is this caller's answer too.
  *
  * A `HeadObject` that FAILS is the same outcome, not a lesser one. Letting the
  * error escape would leave a verified-by-nobody object in the bucket behind an
@@ -823,8 +826,19 @@ export async function completeUpload({
   const declared = Number(row.size_bytes);
 
   if (actual === null || actual !== declared) {
-    // Row first, then the bytes: see `deleteObjectsQuietly`.
-    await markDeleted(row.id, 'UPLOADING');
+    // Row first, then the bytes: see `deleteObjectsQuietly`. And the bytes ONLY
+    // if the tombstone landed. A concurrent complete of the same upload writes
+    // to the same key, and when it has already made the row READY this call's
+    // R2 request was a replay of a finished upload — the object it failed to
+    // measure is the file the READY row serves, and deleting it would break
+    // that file everywhere it is referenced. A row that went DELETED under us
+    // was cancelled or deleted by someone else, whose call owns what happens
+    // to the bytes.
+    if (!(await markDeleted(row.id, 'UPLOADING'))) {
+      const done = await finishedElsewhere(classroom, row.id);
+      if (done) return completedResult(done);
+      throw new MediaError('NOT_FOUND', 'This upload was cancelled before it finished');
+    }
     await deleteObjectsQuietly(client, bucket, [key]);
     if (actual === null) {
       throw new MediaError(

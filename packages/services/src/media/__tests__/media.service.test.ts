@@ -993,6 +993,86 @@ describe('completeUpload', () => {
     expect(sent.some(call => call.name === 'DeleteObject')).toBe(false);
   });
 
+  it('leaves the object alone when it cannot verify a file another call already finished', async () => {
+    // Two completes of one upload: A assembles, verifies and marks READY. B read
+    // the row while it was still open, R2 accepted B's complete as a replay of
+    // the finished upload, and then B could not read the object back. The bytes
+    // B failed to measure ARE A's file — B must not delete them, and since the
+    // file exists, B's caller is told it succeeded.
+    vi.useFakeTimers();
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const state = { status: 'UPLOADING' };
+    let staleReads = 0;
+    prisma.mediaObject.findFirst.mockImplementation(async () => {
+      if (staleReads > 0) {
+        staleReads -= 1;
+        return row({ status: 'UPLOADING', upload_id: 'up-1', size_bytes: BigInt(4096) });
+      }
+      return row({
+        status: state.status,
+        upload_id: state.status === 'UPLOADING' ? 'up-1' : null,
+        size_bytes: BigInt(4096),
+      });
+    });
+    prisma.mediaObject.updateMany.mockImplementation(
+      async ({ where, data }: { where: { status: string }; data: { status: string } }) => {
+        if (where.status !== state.status) return { count: 0 };
+        state.status = data.status;
+        return { count: 1 };
+      }
+    );
+    let headFails = false;
+    sendImpl.mockImplementation(async (name: string) => {
+      if (name !== 'HeadObject') return {};
+      if (headFails) throw new Error('r2 is down');
+      return { ContentLength: 4096 };
+    });
+
+    const a = await completeUpload({
+      classroom,
+      mediaId: MEDIA_ID,
+      parts: [{ partNumber: 1, etag: '"a"' }],
+    });
+    expect(state.status).toBe('READY');
+
+    // B's first read is from before A finished; its re-read after the lost
+    // tombstone is fresh.
+    staleReads = 1;
+    headFails = true;
+    sent.length = 0;
+    const b = await settleThroughRetry(
+      completeUpload({ classroom, mediaId: MEDIA_ID, parts: [{ partNumber: 1, etag: '"a"' }] })
+    );
+
+    expect(sent.filter(call => call.name === 'HeadObject')).toHaveLength(2);
+    expect(b).toEqual(a);
+    expect(state.status).toBe('READY');
+    expect(sent.some(call => call.name === 'DeleteObject')).toBe(false);
+  });
+
+  it('leaves the object to whoever deleted the row when it cannot verify a cancelled upload', async () => {
+    // The row went DELETED between this call's read and its tombstone: the
+    // conditional tombstone matches nothing, and this call is told what an
+    // abort would have told it — without deleting anything itself.
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    let reads = 0;
+    prisma.mediaObject.findFirst.mockImplementation(async () =>
+      ++reads === 1
+        ? row({ status: 'UPLOADING', upload_id: 'up-1', size_bytes: BigInt(4096) })
+        : row({ status: 'DELETED', upload_id: null, size_bytes: BigInt(4096) })
+    );
+    prisma.mediaObject.updateMany.mockResolvedValue({ count: 0 });
+    sendImpl.mockImplementation(async (name: string) =>
+      name === 'HeadObject' ? { ContentLength: 99_999_999 } : {}
+    );
+
+    await expect(
+      completeUpload({ classroom, mediaId: MEDIA_ID, parts: [{ partNumber: 1, etag: '"a"' }] })
+    ).rejects.toMatchObject({ code: 'NOT_FOUND' });
+
+    expect(sent.some(call => call.name === 'DeleteObject')).toBe(false);
+  });
+
   it('answers a repeated complete with the same result, touching nothing', async () => {
     // The lost-response retry: the first complete finished, its answer never
     // reached the browser, and the browser asks again.
