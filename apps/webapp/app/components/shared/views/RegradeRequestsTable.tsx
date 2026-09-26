@@ -1,4 +1,5 @@
 import { Table, Button, Tag } from 'antd';
+import { useGitContext } from '~/hooks/useGitWeb';
 import { useNavigate, useParams } from 'react-router';
 import { useGlobalFetcher, useRole } from '~/hooks';
 import { Emoji, EmojiGrader, TableActionButtons, UserThumbnailView } from '~/components';
@@ -43,6 +44,7 @@ interface RegradeRequestsTableProps {
 }
 
 const RegradeRequestsTable = ({ requests, emojiMappings, org }: RegradeRequestsTableProps) => {
+  const gitCtx = useGitContext();
   const navigate = useNavigate();
   const { role } = useRole();
   const { class: classSlug } = useParams();
@@ -142,7 +144,7 @@ const RegradeRequestsTable = ({ requests, emojiMappings, org }: RegradeRequestsT
           onView={
             org && request.git_repo_assignment?.git_repo
               ? () =>
-                  openRepositoryAssignmentInGithub(org, {
+                  openRepositoryAssignmentInGithub(gitCtx, {
                     ...request.git_repo_assignment,
                     provider_issue_number:
                       request.git_repo_assignment.provider_issue_number ?? undefined,

@@ -1,4 +1,5 @@
 import '@ant-design/v5-patch-for-react-19';
+import { classroomSlugFromPath, sessionMode, usernameForMode } from '~/utils/sessionMode.server';
 import {
   Links,
   Meta,
@@ -254,14 +255,35 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
     }
   }
 
+  // The session's mode (the provider it signed in with). A GitLab session sees
+  // only GitLab classrooms and GitLab identity; a Github one only Github's.
+  const gitMode = sessionMode(session, user?.provider);
+  if (user) {
+    const otherModeClassroom = (user.classroom_memberships ?? []).find(
+      m =>
+        m.classroom.slug === classroomSlugFromPath(url.pathname) &&
+        (m.classroom.git_organization?.provider ?? 'GITHUB') !== gitMode
+    );
+    if (otherModeClassroom) return redirect('/select-organization');
+    user.classroom_memberships = (user.classroom_memberships ?? []).filter(
+      m => (m.classroom.git_organization?.provider ?? 'GITHUB') === gitMode
+    );
+    // Identity follows the mode: the username of the account for this provider.
+    const modeUsername = await usernameForMode(user.id, gitMode);
+    if (modeUsername) user.login = modeUsername;
+    user.provider = gitMode;
+  }
+
   // For backward compat, map classroom_memberships to format expected by UI
   // TODO: Update UI to use classroom_memberships directly
   const memberships = user?.classroom_memberships?.map(m => {
-    // Construct avatar URL from GitHub org ID
+    // Github org avatars are addressable by org id; a GitLab group's id means
+    // nothing on Github, so GitLab classrooms get none.
     const gitOrgProviderId = m.classroom.git_organization?.provider_id;
-    const avatar_url = gitOrgProviderId
-      ? `https://avatars.githubusercontent.com/u/${gitOrgProviderId}?v=4`
-      : null;
+    const avatar_url =
+      gitOrgProviderId && m.classroom.git_organization?.provider !== 'GITLAB'
+        ? `https://avatars.githubusercontent.com/u/${gitOrgProviderId}?v=4`
+        : null;
 
     return {
       ...m,
@@ -285,6 +307,7 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
     organizations,
     publicToken,
     memberships,
+    gitMode,
     session,
     aiAgentAvailable: isAIAgentConfigured(),
     // Where "Stop viewing" should return to. Only set when apps/admin started

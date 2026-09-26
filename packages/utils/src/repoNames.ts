@@ -121,9 +121,24 @@ export function resolveTemplateRef(
   const trimmed = (template ?? '').trim().replace(/^\/+|\/+$/g, '');
   if (!trimmed) return null;
 
-  const [first, second] = trimmed.split('/');
-  if (second) return { owner: first!, repo: second };
+  // Split on the LAST slash: a GitLab template can sit in a nested group
+  // (`dept/cs10/starter` → owner `dept/cs10`). Github owners never contain one.
+  const slash = trimmed.lastIndexOf('/');
+  if (slash !== -1) {
+    return { owner: trimmed.slice(0, slash), repo: trimmed.slice(slash + 1) };
+  }
 
   const owner = (orgLogin ?? '').trim();
-  return owner ? { owner, repo: first! } : null;
+  return owner ? { owner, repo: trimmed } : null;
+}
+
+/**
+ * Where a classroom's student repos live: its own namespace when it has one
+ * (a GitLab classroom's subgroup), else the org itself (every Github classroom).
+ */
+export function repoNamespace(classroom: {
+  git_namespace?: string | null;
+  git_organization: { login: string | null };
+}): string | null {
+  return classroom.git_namespace || classroom.git_organization.login;
 }

@@ -1,4 +1,5 @@
 import { redirect, useNavigate, useFetcher, useSearchParams, useRevalidator } from 'react-router';
+import { sessionMode } from '~/utils/sessionMode.server';
 import { useState, useEffect, useRef } from 'react';
 import { useForm, FormProvider } from 'react-hook-form';
 import { Button, Card, Alert, Steps, Spin } from 'antd';
@@ -17,12 +18,23 @@ import { slugify, STEPS } from './utils';
 import { browserTimeZone } from '~/utils/browserTimeZone';
 import { SOURCE_ROLES } from './sourceAccess';
 import type { ImportSelections } from './types';
+import { loadGitLabOptions } from './gitlabOptions.server';
+import GitLabClassroomForm from './GitLabClassroomForm';
 import type { Route } from './+types/route';
 
 export const loader = async ({ request }: Route.LoaderArgs) => {
   const authData = await getAuthSession(request);
 
-  if (!authData?.token) return redirect('/');
+  if (!authData) return redirect('/');
+  // The session's mode picks the side: a GitLab session creates GitLab
+  // classrooms, a Github session Github ones.
+  const gitMode = sessionMode(
+    authData.session,
+    (authData.session as { user?: { provider?: string | null } } | undefined)?.user?.provider
+  );
+  const gitlab = await loadGitLabOptions(authData.userId);
+  if (gitMode === 'GITLAB') return { requiresGithub: true as const, gitMode, gitlab };
+  if (!authData.token) return { requiresGithub: true as const, gitMode, gitlab };
 
   const octokit = GitHubProvider.getUserOctokit(authData.token);
 
@@ -240,6 +252,9 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
   }));
 
   return {
+    requiresGithub: false as const,
+    gitMode,
+    gitlab,
     user,
     gitOrgs: gitOrgsWithAvatars,
     importableClassrooms: importSources,
@@ -247,7 +262,46 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
   };
 };
 
+type CreateClassroomData = Extract<Route.ComponentProps['loaderData'], { requiresGithub: false }>;
+
+/**
+ * A classroom lives on Github (an org with the Github App) or GitLab (a group
+ * with a GitLab connection). Offer whichever this user has connected.
+ */
 const CreateClassroom = ({ loaderData }: Route.ComponentProps) => {
+  const isGitLabMode = loaderData.gitMode === 'GITLAB';
+  const hasGithub = !isGitLabMode && !loaderData.requiresGithub;
+  const hasGitLab = isGitLabMode && loaderData.gitlab.enabled;
+
+  if (!hasGithub && !hasGitLab) {
+    return (
+      <div className="max-w-md mx-auto mt-16">
+        <Alert
+          type="info"
+          showIcon
+          message="Creating a classroom requires Github or Gitlab"
+          description="Connect an account in Settings to create a classroom."
+        />
+      </div>
+    );
+  }
+
+  // One side per session: its mode decides, so there is no Github/GitLab switch.
+  if (hasGitLab) {
+    return <GitLabClassroomForm gitlab={loaderData.gitlab} providerSwitch={null} />;
+  }
+  return (
+    <CreateClassroomForm loaderData={loaderData as CreateClassroomData} providerSwitch={null} />
+  );
+};
+
+const CreateClassroomForm = ({
+  loaderData,
+  providerSwitch,
+}: {
+  loaderData: CreateClassroomData;
+  providerSwitch: React.ReactNode;
+}) => {
   const { gitOrgs, importableClassrooms, githubAppName } = loaderData;
   const navigate = useNavigate();
   const { fetcher, notify } = useGlobalFetcher();
@@ -456,6 +510,7 @@ const CreateClassroom = ({ loaderData }: Route.ComponentProps) => {
   return (
     <div className="max-w-2xl mx-auto">
       <h1 className="text-xl font-semibold mb-6 dark:text-gray-100">Create New Classroom</h1>
+      {providerSwitch}
 
       {gitOrgs.length === 0 ? (
         isWaitingForOrg ? (

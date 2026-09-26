@@ -10,7 +10,6 @@ import ProfileSection from './ProfileSection';
 import StatusSection from './StatusSection';
 import DefaultPageSection from './DefaultPageSection';
 import TimeZoneSection from './TimeZoneSection';
-import TweaksSection from '~/components/features/tweaks/TweaksSection';
 import { assertClassroomAccess, assertClassroomMutationAllowed } from '~/utils/helpers';
 import type { Route } from './+types/route';
 
@@ -66,7 +65,6 @@ const SettingsGeneral = ({ loaderData }: Route.ComponentProps) => {
         menuPages={menuPages}
       />
       <TimeZoneSection current={timeZone} zones={timeZones} />
-      <TweaksSection />
       <SettingSection
         title="Features"
         description="Enable or disable optional features for this classroom."

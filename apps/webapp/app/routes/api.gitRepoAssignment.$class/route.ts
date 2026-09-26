@@ -1,4 +1,5 @@
 import { data as errorResponse } from 'react-router';
+import { GITLAB_UNSUPPORTED, isGitLabClassroom } from '~/utils/gitlabGuard.server';
 import { namedAction } from 'remix-utils/named-action';
 
 import { tasks } from '@trigger.dev/sdk';
@@ -43,6 +44,8 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
         metadata: { repositoryId: data.repositoryId },
       });
       assertClassroomMutationAllowed({ status: classroom.status, role: membership!.role });
+      // Autograding runs on Github Actions.
+      if (isGitLabClassroom(classroom)) return { error: GITLAB_UNSUPPORTED };
 
       // Verify the repository the task will act on belongs to this classroom
       // before triggering, and rebuild the payload explicitly — never spread the

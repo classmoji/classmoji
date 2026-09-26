@@ -16,6 +16,10 @@ type GitRepo = Awaited<ReturnType<typeof ClassmojiService.gitRepo.findByReposito
  * resolved from it rather than from the slug, and the repository — addressed by
  * a body-supplied id — is checked against it before anything is published.
  */
+const skippedNote = (count: number) =>
+  `${count} student${count === 1 ? '' : 's'} skipped: no Gitlab account connected yet. ` +
+  'Their projects are created when they connect Gitlab and open Classmoji.';
+
 export const publishAssignment = async (
   classroomSlug: string,
   classroomId: string,
@@ -40,6 +44,7 @@ export const publishAssignment = async (
       return { success: 'Repository re-published. Use Sync to update repositories.' };
     }
 
+    let skippedNoGitLab = 0;
     let numReposToCreate = 0;
     let numIssuesToCreate = 0;
     let _numStudents = 0;
@@ -50,7 +55,22 @@ export const publishAssignment = async (
         'STUDENT'
       );
 
-      const studentList = students.map(user => user.login || '').filter(login => login !== '');
+      let studentList = students.map(user => user.login || '').filter(login => login !== '');
+
+      // GitLab: a project is named after, and shared with, the student's GitLab
+      // username, so students without GitLab connected can't get one yet. Say
+      // so instead of letting the task skip them silently.
+      if (classroom?.git_organization?.provider === 'GITLAB') {
+        const gitlabUsernames = await ClassmojiService.user.findProviderUsernames(
+          students.map(user => user.id),
+          'GITLAB'
+        );
+        const withGitLab = new Set(
+          students.filter(user => gitlabUsernames.has(user.id)).map(user => user.login)
+        );
+        skippedNoGitLab = studentList.filter(login => !withGitLab.has(login)).length;
+        studentList = studentList.filter(login => withGitLab.has(login));
+      }
 
       // Nobody to provision for yet — an empty roster (pre-term staging) or a
       // roster whose invites are all still pending, so no GitHub login to create
@@ -63,6 +83,7 @@ export const publishAssignment = async (
 
         return {
           success: 'Repository published! Student repositories are created as students join.',
+          ...(skippedNoGitLab > 0 ? { info: skippedNote(skippedNoGitLab) } : {}),
         };
       }
 
@@ -153,6 +174,7 @@ export const publishAssignment = async (
         numReposToCreate: numReposToCreate * 2, // multiply by 2 to handle gh and cf creation
         numIssuesToCreate: numIssuesToCreate, // publish does not create issues
       },
+      ...(skippedNoGitLab > 0 ? { info: skippedNote(skippedNoGitLab) } : {}),
     };
   } catch (error: unknown) {
     console.error(error);

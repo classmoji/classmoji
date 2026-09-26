@@ -1,4 +1,5 @@
 import { Avatar, Tooltip } from 'antd';
+import { gitContextFor, gitWeb } from '~/utils/gitWeb';
 import { Link, useParams, useLocation, useRouteLoaderData } from 'react-router';
 import { useEffect, useRef, useState } from 'react';
 import { IconMenu2, IconApple } from '@tabler/icons-react';
@@ -205,6 +206,12 @@ const CommonLayout = ({
     if (item.link === '/quizzes' && !isProTier && isDemoClassroom === false) return null;
     if (item.link === '/quizzes' && classroom?.settings?.quizzes_enabled === false) return null;
     if (item.link === '/quizzes' && !aiAgentAvailable) return null;
+    // Pages and slides live in a Github content repo; GitLab has none yet.
+    if (
+      (item.link === '/pages' || item.link === '/slides') &&
+      classroom?.git_organization?.provider === 'GITLAB'
+    )
+      return null;
 
     // Hide slides if disabled in classroom settings
     if (item.link === '/slides' && classroom?.settings?.slides_enabled === false) return null;
@@ -274,6 +281,11 @@ const CommonLayout = ({
     if (item.link === '/quizzes' && !isProTier && !isDemoClassroom) return false;
     if (item.link === '/quizzes' && classroom?.settings?.quizzes_enabled === false) return false;
     if (item.link === '/quizzes' && !aiAgentAvailable) return false;
+    if (
+      (item.link === '/pages' || item.link === '/slides') &&
+      classroom?.git_organization?.provider === 'GITLAB'
+    )
+      return false;
     if (item.link === '/slides' && role === 'STUDENT' && hasModules) return false;
 
     // Student navigation visibility toggles (OWNER always retains access).
@@ -504,16 +516,11 @@ const CommonLayout = ({
             </button>
           </ProfileDropdown>
           {classroom?.git_organization?.login && (
-            <Tooltip title="View on GitHub">
+            <Tooltip title={`View on ${gitWeb(gitContextFor(classroom)).label}`}>
               <button
                 type="button"
                 className="p-1.5 rounded-lg hover:bg-nav-hover transition-colors shrink-0"
-                onClick={() =>
-                  window.open(
-                    `https://github.com/orgs/${classroom.git_organization?.login}/repositories`,
-                    '_blank'
-                  )
-                }
+                onClick={() => window.open(gitWeb(gitContextFor(classroom)).reposIndex(), '_blank')}
               >
                 <img src={githubLogo} alt="GitHub" className="w-[18px] h-[18px] dark:invert" />
               </button>

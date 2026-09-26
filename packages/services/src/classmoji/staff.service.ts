@@ -32,6 +32,7 @@ import { tasks } from '@trigger.dev/sdk';
 
 import getPrisma from '@classmoji/database';
 import { getGitProvider, ensureClassroomTeam } from '../git/index.ts';
+import type { GitLabProvider } from '../git/GitLabProvider.ts';
 import { buildRemoveUserPayload } from './removeUserPayload.ts';
 import * as classroomService from './classroom.service.ts';
 import * as classroomMembershipService from './classroomMembership.service.ts';
@@ -171,6 +172,10 @@ export const addStaff = async ({
   const classroom = await loadClassroom(classroomId);
   const gitOrganization = classroom.git_organization;
   const cleanLogin = login.replace('@', '').trim();
+
+  if (gitOrganization.provider === 'GITLAB') {
+    return addGitLabStaff({ classroom, username: cleanLogin, role, name, email });
+  }
 
   // Idempotency BEFORE any GitHub write: re-inviting existing staff would
   // re-add them to the team and then still fail on the unique constraint.
@@ -345,6 +350,133 @@ export const addStaff = async ({
     name: user.name,
     role,
     alreadyOrgMember: alreadyMember,
+  };
+};
+
+/**
+ * GitLab access level per staff role on the class subgroup. Members inherit
+ * every student project in it; teachers can also manage project settings.
+ */
+export const GITLAB_STAFF_ACCESS: Record<StaffRole, number> = {
+  OWNER: 40, // Maintainer
+  TEACHER: 40, // Maintainer
+  ASSISTANT: 30, // Developer
+};
+
+/**
+ * `addStaff` for a GitLab classroom. The counterpart of the Github staff team
+ * is the class subgroup itself: the person becomes a member of it and inherits
+ * every student project. GitLab adds members immediately (no invite to accept,
+ * no webhook), so the membership starts accepted.
+ *
+ * The person is identified by their GitLab account, never by `User.login`
+ * (which holds the Github username when Github is connected, and can name a
+ * different person). Someone not yet in Classmoji is pre-provisioned with a
+ * GitLab account row, which their first GitLab sign-in then resolves to.
+ */
+const addGitLabStaff = async ({
+  classroom,
+  username,
+  role,
+  name,
+  email,
+}: {
+  classroom: Awaited<ReturnType<typeof loadClassroom>>;
+  username: string;
+  role: StaffRole;
+  name?: string | null;
+  email?: string | null;
+}): Promise<AddStaffResult> => {
+  if (!classroom.git_namespace) {
+    throw new StaffServiceError(
+      'no_org_configured',
+      `[staff] classroom ${classroom.id} has no Gitlab class subgroup`
+    );
+  }
+  const provider = getGitProvider(classroom.git_organization) as GitLabProvider;
+  const gitlabUser = await provider.getUserByLogin(username);
+  if (!gitlabUser) {
+    throw new StaffServiceError('git_user_not_found', `[staff] Gitlab user ${username} not found`);
+  }
+  const gitlabId = String(gitlabUser.id);
+
+  const account = await getPrisma().account.findUnique({
+    where: { provider_id_account_id: { provider_id: 'gitlab', account_id: gitlabId } },
+    select: { user: { select: { id: true, login: true, name: true } } },
+  });
+  let user = account?.user ?? null;
+
+  if (user) {
+    const existing = await classroomMembershipService.findByClassroomAndUser(
+      classroom.id,
+      user.id,
+      role
+    );
+    if (existing) {
+      return {
+        created: false,
+        alreadyExists: true,
+        userId: user.id,
+        login: user.login ?? gitlabUser.username,
+        name: user.name,
+        role,
+        alreadyOrgMember: true,
+      };
+    }
+  } else {
+    // `login` is unique across providers; leave it empty rather than take a
+    // username someone else (e.g. a Github user) already holds.
+    const loginTaken = await getPrisma().user.findFirst({
+      where: { login: { equals: gitlabUser.username, mode: 'insensitive' } },
+      select: { id: true },
+    });
+    user = await getPrisma().user.create({
+      data: {
+        login: loginTaken ? null : gitlabUser.username,
+        name: name || gitlabUser.username,
+        provider: 'GITLAB',
+        provider_id: gitlabId,
+        role: 'user',
+        email: email ?? null,
+        accounts: {
+          create: { provider_id: 'gitlab', account_id: gitlabId, username: gitlabUser.username },
+        },
+      },
+      select: { id: true, login: true, name: true },
+    });
+  }
+
+  await provider.addGroupMember(
+    classroom.git_namespace,
+    gitlabUser.username,
+    GITLAB_STAFF_ACCESS[role]
+  );
+
+  try {
+    await getPrisma().classroomMembership.create({
+      data: { classroom_id: classroom.id, user_id: user.id, role, has_accepted_invite: true },
+    });
+  } catch (error: unknown) {
+    if (!isUniqueViolation(error)) throw error;
+    return {
+      created: false,
+      alreadyExists: true,
+      userId: user.id,
+      login: user.login ?? gitlabUser.username,
+      name: user.name,
+      role,
+      alreadyOrgMember: true,
+    };
+  }
+
+  return {
+    created: true,
+    alreadyExists: false,
+    userId: user.id,
+    login: user.login ?? gitlabUser.username,
+    name: user.name,
+    role,
+    alreadyOrgMember: true,
   };
 };
 

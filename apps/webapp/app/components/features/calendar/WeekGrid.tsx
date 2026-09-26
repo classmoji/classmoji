@@ -10,6 +10,7 @@
  * out of the student bundle.
  */
 
+import { useGitContext } from '~/hooks/useGitWeb';
 import { Fragment, useEffect, useState } from 'react';
 import {
   DEFAULT_END_HOUR,
@@ -94,8 +95,10 @@ const WeekGrid = ({
   renderEvent = defaultRenderEvent,
   renderCell = defaultRenderCell,
 }: WeekGridProps) => {
+  const gitCtx = useGitContext();
   const linkContext = {
     classSlug,
+    git: gitCtx,
     rolePrefix,
     pagesUrl,
     slidesUrl,

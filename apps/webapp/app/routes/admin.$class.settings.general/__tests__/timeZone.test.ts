@@ -32,7 +32,6 @@ vi.mock('@classmoji/services', () => ({
 
 vi.mock('~/components', () => ({ SettingSection: () => null }));
 vi.mock('~/hooks', () => ({ useGlobalFetcher: () => ({ fetcher: null }) }));
-vi.mock('~/components/features/tweaks/TweaksSection', () => ({ default: () => null }));
 
 const { action } = await import('../route');
 

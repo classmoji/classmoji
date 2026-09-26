@@ -78,6 +78,7 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
     slides,
     hasReposWithProjects,
     hasProvisionedRepos,
+    isGitLab: classroom.git_organization?.provider === 'GITLAB',
   };
 };
 
@@ -108,6 +109,7 @@ const ModuleForm = ({ loaderData }: Route.ComponentProps) => {
     slides,
     hasReposWithProjects,
     hasProvisionedRepos,
+    isGitLab,
   } = loaderData;
   const navigate = useNavigate();
   const { class: classSlug } = useParams();
@@ -149,6 +151,7 @@ const ModuleForm = ({ loaderData }: Route.ComponentProps) => {
         slides={slides}
         hasReposWithProjects={hasReposWithProjects}
         hasProvisionedRepos={hasProvisionedRepos}
+        isGitLab={isGitLab}
       />
     </div>
   );

@@ -1,4 +1,5 @@
 import { VideoCameraOutlined, GithubOutlined } from '@ant-design/icons';
+import { useGitContext } from '~/hooks/useGitWeb';
 import { IconExternalLink, IconClipboardList } from '@tabler/icons-react';
 import type { CalendarEventWithLinks } from './types';
 import ResourceLink, { LIST_LINK_CLASS, resourceKey, resourcesForEvent } from './ResourceLink';
@@ -32,8 +33,10 @@ const EventLinks = ({
   gitOrgLogin = null,
   repoAssignmentsByAssignmentId = {},
 }: EventLinksProps) => {
+  const gitCtx = useGitContext();
   const context: ResourceLinkContext = {
     classSlug,
+    git: gitCtx,
     rolePrefix,
     slidesUrl,
     pagesUrl,

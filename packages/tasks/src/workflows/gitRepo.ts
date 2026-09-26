@@ -8,8 +8,9 @@ import {
   HelperService,
   getGitProvider,
   ensureClassroomTeam,
+  type GitLabProvider,
 } from '@classmoji/services';
-import { titleToIdentifier, resolveTemplateRef } from '@classmoji/utils';
+import { titleToIdentifier, resolveTemplateRef, repoNamespace } from '@classmoji/utils';
 import { createGithubRepositoryAssignmentTask } from './gitRepoAssignment.ts';
 import { updateRepository, type UpdateRepositoryPayload } from '../helpers/updateRepository.ts';
 import { createRepository, type CreateRepositoryPayload } from '../helpers/createRepository.ts';
@@ -42,6 +43,12 @@ interface RepositoryRecord {
 interface StudentRecord {
   id: string;
   login: string | null;
+  /**
+   * The student's username on the classroom's git provider, when it differs
+   * from `login`: on GitLab, their GitLab username (`login` holds the Github
+   * one whenever Github is connected). Repo names and repo access use this.
+   */
+  git_login?: string;
 }
 
 interface TeamRecord {
@@ -52,6 +59,8 @@ interface TeamRecord {
 interface ClassroomRecord {
   id: string;
   slug: string;
+  /** GitLab: the class subgroup. Null on Github. */
+  git_namespace?: string | null;
   git_organization: GitOrganizationLike;
 }
 
@@ -178,6 +187,23 @@ export const createRepositoriesTask = task({
     );
     const teams: TeamRecord[] = await ClassmojiService.team.findByClassroomId(classroom.id);
 
+    // GitLab: projects are named after, and shared with, each student's GitLab
+    // username. Callers still identify students by `login`.
+    const isGitLab = classroom.git_organization.provider === 'GITLAB';
+    const gitlabUsernames = isGitLab
+      ? await ClassmojiService.user.findProviderUsernames(
+          students.map(student => student.id),
+          'GITLAB'
+        )
+      : null;
+    if (isGitLab && repository.type !== 'INDIVIDUAL') {
+      logger.warn('Team repositories are not supported on Gitlab classrooms yet; skipping', {
+        classroomSlug: org,
+        repositoryId: repository.id,
+      });
+      return { created: 0 };
+    }
+
     const gitProvider = getGitProvider(classroom.git_organization);
     const token = await gitProvider.getAccessToken();
     const githubOrganization = await gitProvider.getOrganization(classroom.git_organization.login);
@@ -187,7 +213,23 @@ export const createRepositoriesTask = task({
     const repositorySlug = repository.slug || titleToIdentifier(repository.title);
 
     const reposData = uniqueLogins.flatMap(login => {
-      const repoName = `${repositorySlug}-${login}`;
+      let repoName = `${repositorySlug}-${login}`;
+      let gitlabStudent: StudentRecord | undefined;
+      if (gitlabUsernames) {
+        const student = students.find(s => s.login === login);
+        const gitLogin = student ? gitlabUsernames.get(student.id) : undefined;
+        if (!student || !gitLogin) {
+          logger.warn('Skipping repo creation: student has no Gitlab account connected', {
+            classroomSlug: org,
+            repositoryId: repository.id,
+            login,
+          });
+          return [];
+        }
+        // GitLab lowercases project paths; keep the stored name identical.
+        repoName = `${repositorySlug}-${gitLogin}`.toLowerCase();
+        gitlabStudent = { ...student, git_login: gitLogin };
+      }
       const data: StandardCreateRepositoryTaskPayload = {
         repoName,
         classroom,
@@ -200,7 +242,7 @@ export const createRepositoriesTask = task({
       };
 
       if (repository.type === 'INDIVIDUAL') {
-        data.student = students.find(student => student.login === login);
+        data.student = gitlabStudent ?? students.find(student => student.login === login);
         if (!data.student) {
           logger.warn('Skipping repo creation for unknown student login', {
             classroomSlug: org,
@@ -296,6 +338,32 @@ export const createRepositoryTask = task({
         : payload;
       const { classroom } = normalizedPayload;
       const repoId = await createRepository(normalizedPayload);
+
+      // GitLab: pushes reach Classmoji through a project hook (Github's come
+      // through the App). Added after the template setup pushes above, so
+      // those never count as a submission. Best-effort: a missing hook only
+      // means pushes aren't tracked, which recordExistingPush later backfills.
+      if (classroom.git_organization.provider === 'GITLAB') {
+        const url = process.env.GITLAB_WEBHOOK_URL;
+        const secret = process.env.GITLAB_WEBHOOK_SECRET;
+        const namespace = repoNamespace(classroom);
+        if (url && secret && namespace) {
+          try {
+            await (
+              getGitProvider(classroom.git_organization) as GitLabProvider
+            ).ensureProjectPushHook(namespace, normalizedPayload.repoName, url, secret);
+          } catch (error: unknown) {
+            logger.warn('Could not add the Gitlab push webhook', {
+              repoName: normalizedPayload.repoName,
+              error: error instanceof Error ? error.message : String(error),
+            });
+          }
+        } else {
+          logger.warn('GITLAB_WEBHOOK_URL/SECRET not set: pushes to this project are not tracked', {
+            repoName: normalizedPayload.repoName,
+          });
+        }
+      }
 
       // Provision the autograding workflow for this fresh repo (best-effort,
       // never throws). Done here rather than via the template repo so repo
@@ -399,6 +467,19 @@ export const addCollaboratorsToRepoTask = task({
       }
 
       const gitProvider = getGitProvider(classroom.git_organization);
+
+      // GitLab: the student joins their own project as Developer and nothing
+      // else. Staff are members of the class subgroup and inherit every
+      // project in it, so there is no assistants team to add.
+      if (classroom.git_organization.provider === 'GITLAB') {
+        const namespace = repoNamespace(classroom);
+        const gitLogin = payload.student?.git_login;
+        if (!namespace || !gitLogin) {
+          throw new Error(`Missing class subgroup or Gitlab username for repo ${repoName}`);
+        }
+        await gitProvider.addCollaborator(namespace, repoName, gitLogin, 'push');
+        return;
+      }
 
       if (repository.type === 'INDIVIDUAL') {
         if (!payload.student?.login) {

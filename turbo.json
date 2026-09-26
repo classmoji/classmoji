@@ -43,6 +43,10 @@
       "persistent": true,
       "cache": false
     },
+    "hook:gitlab": {
+      "persistent": true,
+      "cache": false
+    },
     "hook:dev": {
       "persistent": true,
       "cache": false
@@ -172,6 +176,9 @@
     "GITLAB_ISSUER",
     "GITLAB_CLIENT_ID",
     "GITLAB_CLIENT_SECRET",
+    "GITLAB_WEBHOOK_URL",
+    "GITLAB_WEBHOOK_SECRET",
+    "GITLAB_SMEE_URL",
     "DATABASE_URL",
     "REDIS_URL",
     "RESEND_API_KEY",

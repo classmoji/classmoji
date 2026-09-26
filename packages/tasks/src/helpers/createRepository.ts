@@ -3,7 +3,8 @@ import { logger } from '@trigger.dev/sdk';
 import path from 'path';
 import fs from 'fs';
 
-import { CLASSMOJI_BOT_EMAIL, getGitProvider } from '@classmoji/services';
+import { CLASSMOJI_BOT_EMAIL, getGitProvider, type GitLabProvider } from '@classmoji/services';
+import { repoNamespace } from '@classmoji/utils';
 
 // Public fallback template used when an instructor's configured template repo has
 // no commits. An empty repo can't seed a student/team repo (the clone lands on an
@@ -17,7 +18,24 @@ const FALLBACK_TEMPLATE_URL = `https://github.com/${FALLBACK_TEMPLATE_REPO}.git`
 type GitOrganizationLike = Parameters<typeof getGitProvider>[0] & { login: string | null };
 
 interface ClassroomForRepositoryCreation {
+  /** GitLab: the class subgroup student repos live in. Null/absent on Github. */
+  git_namespace?: string | null;
   git_organization: GitOrganizationLike;
+}
+
+/**
+ * Authenticated HTTPS remote for `owner/repo` on the classroom's provider.
+ * Github installation tokens use `x-access-token`; GitLab OAuth tokens use
+ * `oauth2`, on the configured instance.
+ */
+function authedRemote(provider: string, token: string, fullPath: string): string {
+  if (provider === 'GITLAB') {
+    const host = (process.env.GITLAB_URL || process.env.GITLAB_ISSUER || 'https://gitlab.com')
+      .replace(/\/+$/, '')
+      .replace(/^https?:\/\//, '');
+    return `https://oauth2:${token}@${host}/${fullPath}.git`;
+  }
+  return `https://x-access-token:${token}@github.com/${fullPath}.git`;
 }
 
 export interface CreateRepositoryPayload {
@@ -37,7 +55,9 @@ export const createRepository = async (payload: CreateRepositoryPayload): Promis
   const { classroom, repoName, templateOwner, templateRepo, token, organizationGithubPlan } =
     payload;
   const gitProvider = getGitProvider(classroom.git_organization);
-  const gitOrgLogin = classroom.git_organization.login;
+  // The org on Github; the class subgroup on GitLab. Named for the Github case
+  // it started as, since every call below takes it as the repo owner.
+  const gitOrgLogin = repoNamespace(classroom);
 
   if (!gitOrgLogin) {
     throw new Error('Missing Git organization login');
@@ -51,7 +71,9 @@ export const createRepository = async (payload: CreateRepositoryPayload): Promis
     if (
       isAlreadyExistsError(error) &&
       error.status === 422 &&
-      error.message?.includes('name already exists')
+      // Github says "name already exists"; GitLab "has already been taken".
+      (error.message?.includes('name already exists') ||
+        error.message?.includes('has already been taken'))
     ) {
       logger.info(`GitRepo ${gitOrgLogin}/${repoName} already exists, fetching existing repo`);
       const existingRepo = await gitProvider.getRepository(gitOrgLogin, repoName);
@@ -62,8 +84,14 @@ export const createRepository = async (payload: CreateRepositoryPayload): Promis
   }
 
   const localPath = path.join(process.cwd(), 'repos', repoName);
-  const studentRepoUrl = `https://x-access-token:${token}@github.com/${gitOrgLogin}/${repoName}.git`;
-  const templateRepoUrl = `https://x-access-token:${token}@github.com/${templateOwner}/${templateRepo}.git`;
+  const provider = classroom.git_organization.provider;
+  // GitLab runs CI on every push to a project with a .gitlab-ci.yml, and these
+  // setup pushes run as the instructor's connection: without this, each new
+  // student project fires several pipelines (and failure emails) at them.
+  // Students' own pushes are untouched.
+  const setupPush = provider === 'GITLAB' ? ['-o', 'ci.skip'] : [];
+  const studentRepoUrl = authedRemote(provider, token, `${gitOrgLogin}/${repoName}`);
+  const templateRepoUrl = authedRemote(provider, token, `${templateOwner}/${templateRepo}`);
 
   const git = simpleGit();
 
@@ -129,9 +157,9 @@ export const createRepository = async (payload: CreateRepositoryPayload): Promis
       await repoGit.removeRemote('seed');
     }
 
-    await repoGit.push('origin', 'main', ['--force']);
+    await repoGit.push('origin', 'main', ['--force', ...setupPush]);
     await repoGit.checkoutLocalBranch('feedback');
-    await repoGit.push('origin', 'feedback', ['--set-upstream']);
+    await repoGit.push('origin', 'feedback', ['--set-upstream', ...setupPush]);
     await repoGit.checkout('main');
 
     const classmojiPath = path.join(localPath, 'CLASSMOJI.md');
@@ -139,7 +167,7 @@ export const createRepository = async (payload: CreateRepositoryPayload): Promis
 
     await repoGit.add('CLASSMOJI.md');
     await repoGit.commit('Add Classmoji welcome message');
-    await repoGit.push('origin', 'main');
+    await repoGit.push('origin', 'main', setupPush);
 
     await gitProvider.createPullRequest(
       gitOrgLogin,
@@ -151,10 +179,15 @@ export const createRepository = async (payload: CreateRepositoryPayload): Promis
     );
 
     await repoGit.checkoutLocalBranch('updates');
-    await repoGit.push('origin', 'updates', ['--set-upstream']);
+    await repoGit.push('origin', 'updates', ['--set-upstream', ...setupPush]);
 
     if (organizationGithubPlan !== 'free') {
       await gitProvider.protectBranch(gitOrgLogin, repoName, 'updates');
+    }
+
+    // GitLab protects `main` for Maintainers only; students are Developers.
+    if (provider === 'GITLAB') {
+      await (gitProvider as GitLabProvider).allowDeveloperPushes(gitOrgLogin, repoName, 'main');
     }
 
     await repoGit.checkout('main');

@@ -1,4 +1,5 @@
 import { App, Button, Checkbox, Popover, Table, Tooltip } from 'antd';
+import { useGitWeb } from '~/hooks/useGitWeb';
 import type { ColumnsType } from 'antd/es/table';
 import dayjs from 'dayjs';
 import { IconBrandGithub, IconLayoutKanban } from '@tabler/icons-react';
@@ -118,6 +119,7 @@ const SubmissionsTable = ({
   org,
   canEdit = true,
 }: SubmissionsTableProps) => {
+  const web = useGitWeb();
   // Repo-only: a push IS the submission, so nothing here is about issues and
   // autograding (which runs off an issue workflow) has nothing to report.
   const isPushOnly = assignments.length > 0 && assignments.every(a => a.submission_mode === 'REPO');
@@ -223,13 +225,11 @@ const SubmissionsTable = ({
       key: 'repo',
       width: 240,
       render: (_: unknown, repo) => {
-        const projectUrl = repo.project_number
-          ? `https://github.com/orgs/${org}/projects/${repo.project_number}`
-          : null;
+        const projectUrl = repo.project_number ? web.project(repo.project_number) : null;
         return (
           <div className="flex items-center gap-1 min-w-0">
             <a
-              href={`https://github.com/${org}/${repo.name}`}
+              href={web.repo(repo.name)}
               target="_blank"
               rel="noreferrer"
               className="inline-flex items-center gap-1.5 min-w-0 text-ink-1 hover:underline underline-offset-2"
@@ -283,7 +283,7 @@ const SubmissionsTable = ({
               return (
                 <CommitCount
                   snapshot={snapshot}
-                  href={`https://github.com/${org}/${repo.name}/commits`}
+                  href={web.commits(repo.name)}
                   size="lg"
                   className="text-sm!"
                 />
@@ -336,7 +336,7 @@ const SubmissionsTable = ({
         // read as an affirmative action next to a destructive one.
         <div className="flex items-center gap-4 whitespace-nowrap">
           <a
-            href={`https://github.com/${org}/${repo.name}`}
+            href={web.repo(repo.name)}
             target="_blank"
             rel="noreferrer"
             className="text-sm font-medium text-ink-2! hover:text-ink-1! hover:underline underline-offset-2"

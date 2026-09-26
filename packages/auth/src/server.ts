@@ -18,6 +18,7 @@ import {
   sessionTokenFromCookieHeader,
 } from './secret.ts';
 import { ASK_MOJI_CLIENT_ID } from './mcpToken.ts';
+import { mapGitHubProfile, mapGitLabProfile, onAccountCreated } from './providerProfile.ts';
 
 export { AUTH_SECRET, COOKIE_PREFIX };
 
@@ -389,73 +390,23 @@ export const auth = betterAuth({
       clientId: process.env.GITHUB_CLIENT_ID as string,
       clientSecret: process.env.GITHUB_CLIENT_SECRET as string,
       scope: [], // scopes are ignored for GitHub App auth; permissions come from App config
-      mapProfileToUser: async profile => {
-        // GitHub profile includes: login, id, name, email, avatar_url, etc.
-        const githubId = String(profile.id);
-        const login = profile.login;
-
-        // ── Link existing users instead of colliding on the unique `login` ──────
-        // Users can already exist in our DB without a linked GitHub account:
-        //  - pre-provisioned by username via ClassmojiService.user.create (login
-        //    set, no provider_id / no account row), e.g. roster/assistant invites
-        //  - a prior login whose account row was removed
-        // This hook runs BEFORE BetterAuth's findOAuthUser lookup. If we link the
-        // account here, findOAuthUser finds it and takes the (non-destructive) link
-        // path — instead of falling through to createOAuthUser, which would throw
-        // `unable to create user` on the `login`/`provider` unique constraints.
-        try {
-          const existing = await getPrisma().user.findFirst({
-            where: {
-              OR: [{ provider: 'GITHUB', provider_id: githubId }, { login }],
-            },
-            include: {
-              accounts: { where: { provider_id: 'github' }, select: { id: true } },
-            },
-          });
-
-          if (existing && existing.accounts.length === 0) {
-            // Backfill provider linkage on the existing record (login-only invites
-            // have a null provider_id) so the (provider, provider_id) unique key and
-            // future lookups resolve correctly.
-            await getPrisma().user.update({
-              where: { id: existing.id },
-              data: {
-                provider: 'GITHUB',
-                provider_id: githubId,
-                login: existing.login ?? login,
-              },
-            });
-
-            // Create the account link BetterAuth looks up by (provider_id, account_id).
-            // Tokens are intentionally left null — BetterAuth fills them on this same
-            // sign-in once it resolves the linked account.
-            await getPrisma().account.upsert({
-              where: {
-                provider_id_account_id: { provider_id: 'github', account_id: githubId },
-              },
-              update: {},
-              create: {
-                user_id: existing.id,
-                provider_id: 'github',
-                account_id: githubId,
-              },
-            });
-          }
-        } catch (error: unknown) {
-          // Never block sign-in on the linking attempt; if it fails, BetterAuth
-          // proceeds with its default behavior and we surface its error as before.
-          console.error('[auth] mapProfileToUser account-link failed', error);
-        }
-
-        // Map these to our custom User fields (used when BetterAuth creates a
-        // genuinely new user — i.e. no existing record was linked above).
-        return {
-          login, // GitHub username
-          provider: 'GITHUB',
-          provider_id: githubId, // GitHub user ID as string
-        };
-      },
+      mapProfileToUser: profile => mapGitHubProfile(getPrisma(), profile),
     },
+    // Registered only when configured, so an install without a GitLab app
+    // shows no GitLab button and exposes no GitLab callback.
+    ...(process.env.GITLAB_CLIENT_ID
+      ? {
+          gitlab: {
+            clientId: process.env.GITLAB_CLIENT_ID,
+            clientSecret: process.env.GITLAB_CLIENT_SECRET as string,
+            // Self-managed GitLab; unset means gitlab.com.
+            issuer: process.env.GITLAB_ISSUER || undefined,
+            // Default `read_user` scope only: identity, nothing on the user's projects.
+            mapProfileToUser: (profile: { id: number; username: string }) =>
+              mapGitLabProfile(getPrisma(), profile),
+          },
+        }
+      : {}),
   },
   session: {
     expiresIn: 60 * 60 * 24 * 7, // 7 days
@@ -474,6 +425,10 @@ export const auth = betterAuth({
       updatedAt: 'updated_at',
       impersonatedBy: 'impersonated_by',
     } as Record<string, string>,
+    // The provider the session signed in with: its GitLab/Github mode.
+    additionalFields: {
+      sign_in_provider: { type: 'string', required: false, input: false },
+    },
   },
   advanced: {
     database: {
@@ -524,6 +479,22 @@ export const auth = betterAuth({
   },
   account: {
     modelName: 'Account',
+    accountLinking: {
+      // better-auth otherwise attaches a new provider sign-in to any user with
+      // the same (verified) email. Email is not proof of identity across
+      // providers (a self-managed GitLab admin can set any address), so a
+      // GitLab sign-in must never land in an existing Github user's account.
+      // Checked before `trustedProviders`, so trust below never re-enables it.
+      disableImplicitLinking: true,
+      // Explicit linking only ("Connect GitLab" in settings, while signed in).
+      // better-auth refuses a link from an untrusted provider unless it reports
+      // a verified email, and its GitLab provider never does. Trusting both is
+      // safe here: a link needs a live session AND the provider's own consent.
+      trustedProviders: ['github', 'gitlab'],
+      // A person's Github and GitLab emails often differ; identity is the
+      // session doing the linking, not a matching address.
+      allowDifferentEmails: true,
+    },
     fields: {
       userId: 'user_id',
       accountId: 'account_id',
@@ -564,6 +535,29 @@ export const auth = betterAuth({
    * hot in-process `auth.api.*` calls, so the non-matching path must stay a
    * single string comparison.
    */
+  databaseHooks: {
+    session: {
+      create: {
+        // Record which provider this sign-in came through (the OAuth callback
+        // is `/callback/:id`). That provider is the session's mode: a GitLab
+        // session is shown only GitLab classrooms and GitLab identity.
+        before: async (session, ctx) => {
+          const id = (ctx?.params as { id?: string } | undefined)?.id;
+          if (id !== 'github' && id !== 'gitlab') return;
+          return { data: { ...session, sign_in_provider: id.toUpperCase() } };
+        },
+      },
+    },
+    account: {
+      create: {
+        // First sign-in or "Connect" in settings: record the provider username,
+        // and for Github make it the user's main login (see providerProfile.ts).
+        after: async account => {
+          await onAccountCreated(getPrisma(), account);
+        },
+      },
+    },
+  },
   hooks: {
     before: createAuthMiddleware(async ctx => {
       if (ctx.path !== '/mcp/token') return;

@@ -13,8 +13,8 @@ import {
 import { SettingSection } from '~/components';
 
 // Inline personal "Tweaks" for accent color, light/dark appearance, and
-// background preset. Renders in the classroom settings page next to the
-// classroom Theme section. Replaces the floating Tweaks FAB.
+// background preset. Stored per browser, so it lives in account settings and
+// the in-classroom member settings page, never in a classroom's own settings.
 
 interface AccentPreset {
   name: string;

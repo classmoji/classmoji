@@ -1,4 +1,5 @@
 import { Suspense } from 'react';
+import { gitContextFor, gitWeb } from '~/utils/gitWeb';
 import { Await } from 'react-router';
 import { Skeleton } from 'antd';
 import { namedAction } from 'remix-utils/named-action';
@@ -54,6 +55,7 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
   });
 
   const gitOrgLogin = classroom.git_organization?.login ?? null;
+  const web = gitWeb(gitContextFor(classroom));
 
   const dataPromise = (async (): Promise<AssignmentsData> => {
     const [repoAssignments, balance] = await Promise.all([
@@ -80,10 +82,7 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
         const status = classifyStatus(ra);
         // The student's (or their team's) own copy of the repository. With the
         // student Repositories screen gone, this row is where they reach it.
-        const repoUrl =
-          gitOrgLogin && ra.git_repo?.name
-            ? `https://github.com/${gitOrgLogin}/${ra.git_repo.name}`
-            : null;
+        const repoUrl = gitOrgLogin && ra.git_repo?.name ? web.repo(ra.git_repo.name) : null;
         const issueUrl =
           repoUrl && ra.provider_issue_number
             ? `${repoUrl}/issues/${ra.provider_issue_number}`

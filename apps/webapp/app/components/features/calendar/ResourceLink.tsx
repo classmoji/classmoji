@@ -20,6 +20,7 @@
  * staff calendar, and a 3px wobble is enough to arm it) nor opens the modal.
  */
 
+import { gitWeb, type GitWebContext } from '~/utils/gitWeb';
 import { NavLink } from 'react-router';
 import {
   IconClipboardList,
@@ -82,6 +83,8 @@ export interface ResourceLinkContext {
   pagesUrl?: string;
   slidesUrl?: string;
   gitOrgLogin?: string | null;
+  /** The classroom's git context (Github org or GitLab class subgroup). */
+  git?: GitWebContext;
   repoAssignmentsByAssignmentId?: Record<string, RepositoryAssignmentLinkInfo | undefined>;
 }
 
@@ -123,12 +126,12 @@ export const resourceDestination = (
   const repoAssignment = context.repoAssignmentsByAssignmentId?.[resource.id];
   const repoName = repoAssignment?.git_repo?.name;
   if (context.gitOrgLogin && repoName) {
-    const repoUrl = `https://github.com/${context.gitOrgLogin}/${repoName}`;
+    const web = gitWeb(context.git ?? { provider: 'GITHUB', login: context.gitOrgLogin });
     return {
       kind: 'external',
       href: repoAssignment?.provider_issue_number
-        ? `${repoUrl}/issues/${repoAssignment.provider_issue_number}`
-        : repoUrl,
+        ? web.issue(repoName, repoAssignment.provider_issue_number)
+        : web.repo(repoName),
     };
   }
 

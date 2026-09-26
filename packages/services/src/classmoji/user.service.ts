@@ -370,6 +370,28 @@ export const findById = async (id: string, options: { includeMemberships?: boole
   return user;
 };
 
+/**
+ * Each user's username on a git provider, read from their connected account
+ * (`Account.username`). `User.login` is the Github username whenever Github is
+ * connected, so GitLab-side work (project names, project membership) must go
+ * through this instead. Users without that provider connected are absent.
+ */
+export const findProviderUsernames = async (
+  userIds: string[],
+  provider: GitProvider
+): Promise<Map<string, string>> => {
+  if (userIds.length === 0) return new Map();
+  const accounts = await getPrisma().account.findMany({
+    where: {
+      user_id: { in: userIds },
+      provider_id: provider.toLowerCase(),
+      username: { not: null },
+    },
+    select: { user_id: true, username: true },
+  });
+  return new Map(accounts.map(a => [a.user_id, a.username as string]));
+};
+
 // TODO: refactor to just take any
 export const findByLogin = async (login: string) => {
   const user = await getPrisma().user.findUnique({

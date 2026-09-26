@@ -23,13 +23,10 @@ import {
 import Tasks from '@classmoji/tasks';
 import { ActionTypes } from '~/constants';
 import getPrisma from '@classmoji/database';
-import {
-  canonicalTimeZone,
-  defaultContentRepoName,
-  sanitizeRepoName,
-  suggestContentNamespace,
-} from '@classmoji/utils';
+import { canonicalTimeZone, defaultContentRepoName, sanitizeRepoName } from '@classmoji/utils';
 import { slugify } from './utils';
+import { pickContentNamespace } from './contentNamespace.server';
+import { createGitLabClassroom } from './createGitLabClassroom.server';
 import { resolveSourceAccess, SOURCE_ROLES, API_KEYS_STRIPPED_WARNING } from './sourceAccess';
 
 /** Background work needs Trigger.dev; without it the async phases can't run. */
@@ -82,35 +79,19 @@ async function canMintOrgToken(org: Parameters<typeof getGitProvider>[0]): Promi
   }
 }
 
-/**
- * Pick a free internal content namespace for a new classroom in this org.
- *
- * content_namespace no longer names anything on GitHub (content_repo does), but
- * it keeps a [git_org_id, content_namespace] unique constraint and is no longer
- * user-editable — so a collision has to be resolved silently here instead of
- * being handed back as an error the user has no field to fix. Candidates, in
- * order: the org-prefix-stripped slug, the raw slug (itself globally unique),
- * then numeric suffixes.
- */
-async function pickContentNamespace(gitOrgId: string, orgLogin: string, slug: string) {
-  const suggested = suggestContentNamespace({ orgLogin, slug });
-  const candidates = [suggested, slug, ...Array.from({ length: 20 }, (_, i) => `${slug}-${i + 2}`)];
-
-  const taken = new Set(
-    (
-      await getPrisma().classroom.findMany({
-        where: { git_org_id: gitOrgId, content_namespace: { in: candidates } },
-        select: { content_namespace: true },
-      })
-    ).map(c => c.content_namespace)
-  );
-
-  return candidates.find(c => !taken.has(c)) ?? `${slug}-${Date.now()}`;
-}
-
 export const action = checkAuth(async ({ request }: { request: Request }) => {
   const authData = await getAuthSession(request);
-  const octokit = GitHubProvider.getUserOctokit(authData!.token!);
+  const body = await request.json();
+
+  // A GitLab classroom: its own lean path (connection + group + subgroup).
+  if (body?.intent === 'create-gitlab' && authData) {
+    return createGitLabClassroom(authData.userId, body);
+  }
+
+  if (!authData?.token) {
+    return { error: 'Creating a classroom currently requires Github.' };
+  }
+  const octokit = GitHubProvider.getUserOctokit(authData.token);
 
   // Get authenticated user
   const { data: authenticatedUser } = await octokit.rest.users.getAuthenticated();
@@ -127,7 +108,7 @@ export const action = checkAuth(async ({ request }: { request: Request }) => {
     content_repo: contentRepoInput,
     importConfig,
     timezone: browserTimeZone,
-  } = await request.json();
+  } = body;
 
   // The creator's browser zone becomes the course's time zone. Validated
   // against Intl and stored canonically; anything else is dropped (the course

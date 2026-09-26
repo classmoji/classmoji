@@ -1,4 +1,5 @@
 import getPrisma from '@classmoji/database';
+import { gitContextFor, gitWeb, type ClassroomLike } from '@classmoji/utils';
 import { Prisma } from '@prisma/client';
 import type { EventType } from '@prisma/client';
 import { pagesUrl } from '../emails/escape.ts';
@@ -1181,17 +1182,19 @@ export const getDeadlinesForRange = async (
     const repoAssignment = (
       'git_repo_assignments' in assignment ? (assignment.git_repo_assignments?.[0] ?? null) : null
     ) as DeadlineRepositoryAssignment | null;
-    const gitOrgLogin = assignment.module?.classroom?.git_organization?.login;
+    const classroomRow = assignment.module?.classroom;
+    const gitOrgLogin = classroomRow?.git_organization?.login;
 
     // The student's submission on GitHub: their issue (ISSUE mode) or their
     // repo (REPO mode, no issue exists).
     let github_issue_url = null;
     if (repoAssignment && gitOrgLogin) {
-      const repoUrl = `https://github.com/${gitOrgLogin}/${repoAssignment.git_repo.name}`;
+      // Github org or GitLab class subgroup, whichever the classroom is on.
+      const web = gitWeb(gitContextFor(classroomRow as ClassroomLike));
       github_issue_url =
         repoAssignment.provider_issue_number != null
-          ? `${repoUrl}/issues/${repoAssignment.provider_issue_number}`
-          : repoUrl;
+          ? web.issue(repoAssignment.git_repo.name, repoAssignment.provider_issue_number)
+          : web.repo(repoAssignment.git_repo.name);
     }
 
     // Flag unpublished content for admin UI styling

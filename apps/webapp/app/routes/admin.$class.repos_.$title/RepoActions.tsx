@@ -1,4 +1,5 @@
 import { Button, Tooltip } from 'antd';
+import { useGitWeb } from '~/hooks/useGitWeb';
 import { IconLayoutKanban } from '@tabler/icons-react';
 import { TableActionButtons } from '~/components';
 import { useNotifiedFetcher } from '~/hooks';
@@ -11,7 +12,8 @@ interface RowActionsProps {
   org: string;
 }
 
-const RowActions = ({ repo, org }: RowActionsProps) => {
+const RowActions = ({ repo, org: _org }: RowActionsProps) => {
+  const web = useGitWeb();
   const { fetcher, notify } = useNotifiedFetcher();
 
   const deleteRepo = () => {
@@ -31,10 +33,8 @@ const RowActions = ({ repo, org }: RowActionsProps) => {
     LocalStorage.forceRefreshRepos();
   };
 
-  const repoUrl = `https://github.com/${org}/${repo.name}`;
-  const projectUrl = repo.project_number
-    ? `https://github.com/orgs/${org}/projects/${repo.project_number}`
-    : null;
+  const repoUrl = web.repo(repo.name);
+  const projectUrl = repo.project_number ? web.project(repo.project_number) : null;
 
   return (
     <TableActionButtons

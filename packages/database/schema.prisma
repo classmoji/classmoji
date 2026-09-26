@@ -184,6 +184,10 @@ model Account {
   refresh_token_expires_at DateTime?
   scope                    String?
   id_token                 String?
+  // This provider's username (Github login / GitLab username). A user with
+  // both providers connected has two; User.login holds the Github one when
+  // Github is connected, since every Github-side operation reads it.
+  username                 String?
   password                 String?
   created_at               DateTime  @default(now())
   updated_at               DateTime  @default(now()) @updatedAt
@@ -196,15 +200,18 @@ model Account {
 }
 
 model Session {
-  id             String   @id @default(uuid())
-  user_id        String
-  token          String   @unique
-  expires_at     DateTime
-  ip_address     String?
-  user_agent     String?
-  impersonatedBy String?  @map("impersonated_by")
-  created_at     DateTime @default(now())
-  updated_at     DateTime @default(now()) @updatedAt
+  id               String   @id @default(uuid())
+  user_id          String
+  token            String   @unique
+  expires_at       DateTime
+  ip_address       String?
+  user_agent       String?
+  impersonatedBy   String?  @map("impersonated_by")
+  // Provider this session signed in with ("GITHUB" | "GITLAB"): the session's
+  // mode. A GitLab session sees only GitLab classrooms and GitLab identity.
+  sign_in_provider String?
+  created_at       DateTime @default(now())
+  updated_at       DateTime @default(now()) @updatedAt
 
   user                 User  @relation("SessionUser", fields: [user_id], references: [id], onDelete: Cascade)
   impersonated_by_user User? @relation("ImpersonatedBy", fields: [impersonatedBy], references: [id])
@@ -351,6 +358,7 @@ model User {
   survey_responses              SurveyResponse[]
   team_sets_created             TeamSet[]
   team_set_runs_created         TeamSetRun[]
+  gitlab_connection             GitLabConnection?
 
   @@unique([provider, provider_id])
   @@index([provider, login])
@@ -379,6 +387,29 @@ model Subscription {
 // GIT ORGANIZATION & CLASSROOM
 // ============================================================================
 
+/// A GitLab OAuth grant with `api` scope that Classmoji uses to act on GitLab
+/// groups, the counterpart of a Github App installation. Kept apart from the
+/// user's sign-in Account (read_user only) so signing in never replaces it.
+/// GitLab refresh tokens are single-use, so every group sharing a connection
+/// must refresh through this one row.
+model GitLabConnection {
+  id                      String    @id @default(uuid())
+  user_id                 String    @unique
+  gitlab_user_id          String
+  gitlab_username         String
+  access_token            String
+  refresh_token           String?
+  access_token_expires_at DateTime?
+  scope                   String?
+  created_at              DateTime  @default(now())
+  updated_at              DateTime  @default(now()) @updatedAt
+
+  user              User              @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  git_organizations GitOrganization[]
+
+  @@map("gitlab_connections")
+}
+
 model GitOrganization {
   id                     String      @id @default(uuid())
   provider               GitProvider
@@ -387,10 +418,14 @@ model GitOrganization {
   base_url               String? // For self-hosted (null for github.com)
   github_installation_id String? // GitHub App installation ID
   access_token           String? // GitLab/Gitea/Bitbucket token (encrypted)
+  // GitLab: the connection whose token acts on this group, the counterpart of
+  // github_installation_id. Null for Github orgs.
+  gitlab_connection_id   String?
   created_at             DateTime    @default(now())
   updated_at             DateTime    @default(now()) @updatedAt
 
-  classrooms Classroom[]
+  classrooms        Classroom[]
+  gitlab_connection GitLabConnection? @relation(fields: [gitlab_connection_id], references: [id], onDelete: SetNull)
 
   @@unique([provider, provider_id])
   @@index([provider, login])
@@ -415,6 +450,10 @@ model Classroom {
   // NOT the same as ClassroomSettings.content_repo_name, which is a legacy
   // ORG-level content repo override (`content-{login}`) for a DIFFERENT repo.
   content_repo                 String
+  // Full path of the git namespace this classroom's student repos live in, when
+  // it is not the org itself. GitLab: the class subgroup (group/cs10-fall26).
+  // Null for Github, where repos sit directly in the org.
+  git_namespace                String?
   // GitHub Classroom course id, set on import; null for classrooms created
   // directly in Classmoji. Unique because one GitHub Classroom course maps to at
   // most one Classmoji classroom, which makes it the stable idempotency key for

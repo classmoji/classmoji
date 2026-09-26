@@ -1,6 +1,7 @@
 import Fastify, { type FastifyReply, type FastifyRequest } from 'fastify';
 import fastifyRawBody from 'fastify-raw-body';
 import githubRoutes from './routes/github.ts';
+import gitlabRoutes from './routes/gitlab.ts';
 import stripeRoutes from './routes/stripe.ts';
 import resendRoutes from './routes/resend.ts';
 
@@ -21,6 +22,9 @@ fastify.get('/', async function handler(_request: FastifyRequest, reply: Fastify
 
 await fastify.register(githubRoutes, { prefix: '/webhooks/callback' });
 await fastify.register(stripeRoutes, { prefix: '/webhooks/callback' });
+// Reads its secret per request, like resend below: unconfigured means 503 on
+// this path only.
+await fastify.register(gitlabRoutes, { prefix: '/webhooks/callback' });
 // Registered unconditionally, and it reads its secret per request rather than
 // at import: an unconfigured deployment must answer 503 on this one path, not
 // fail to boot and take GitHub and Stripe down with it. See routes/resend.ts.

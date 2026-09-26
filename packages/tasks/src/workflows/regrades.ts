@@ -1,7 +1,7 @@
 import { task } from '@trigger.dev/sdk';
 import { appUrl, ClassmojiService, escapeVars } from '@classmoji/services';
 import { sendBatchEmailTask, sendEmailTask } from './email.ts';
-import { getEmojiSymbol } from '@classmoji/utils';
+import { getEmojiSymbol, gitContextFor, gitWeb } from '@classmoji/utils';
 
 interface GitRepoAssignmentGraderRecord {
   grader: {
@@ -76,11 +76,11 @@ export const requestRegradeTask = task({
     }
 
     // The submission on GitHub: the issue in ISSUE mode, the repo in REPO mode.
-    const repoUrl = `https://github.com/${classroom.git_organization.login}/${gitRepoAssignment.git_repo.name}`;
+    const web = gitWeb(gitContextFor(classroom));
     const issueUrl =
       gitRepoAssignment.provider_issue_number != null
-        ? `${repoUrl}/issues/${gitRepoAssignment.provider_issue_number}`
-        : repoUrl;
+        ? web.issue(gitRepoAssignment.git_repo.name, gitRepoAssignment.provider_issue_number)
+        : web.repo(gitRepoAssignment.git_repo.name);
 
     if (gitRepoAssignment.graders && gitRepoAssignment.graders.length > 0) {
       // One batched request rather than one run (and one API request) per

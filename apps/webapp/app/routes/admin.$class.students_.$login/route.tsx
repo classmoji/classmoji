@@ -1,4 +1,5 @@
 import { Button, Input, Select, Tag, Tooltip } from 'antd';
+import { gitContextFor, gitWeb } from '~/utils/gitWeb';
 import dayjs from 'dayjs';
 import { IconChevronLeft } from '@tabler/icons-react';
 import { Link, useFetcher, useLocation, useNavigate } from 'react-router';
@@ -104,6 +105,7 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
     classroom: {
       slug: classroom.slug,
       gitOrgLogin: classroom.git_organization?.login ?? null,
+      git: gitContextFor(classroom),
     },
     student: {
       id: studentId,
@@ -490,8 +492,11 @@ const StudentReport = ({ loaderData }: Route.ComponentProps) => {
             )}
           </div>
         );
+        const repoWeb = gitWeb(classroom.git);
         const repoUrl = classroom.gitOrgLogin
-          ? `https://github.com/${classroom.gitOrgLogin}/${ra.git_repo.name}${ra.provider_issue_number ? `/issues/${ra.provider_issue_number}` : ''}`
+          ? ra.provider_issue_number
+            ? repoWeb.issue(ra.git_repo.name, ra.provider_issue_number)
+            : repoWeb.repo(ra.git_repo.name)
           : null;
         actions = (
           <div className="flex items-center gap-2">
