@@ -12,7 +12,7 @@ import {
   UPLOAD_RETRY_AFTER_SECONDS,
   acquireUploadSlot,
   releaseUploadSlot,
-} from '~/utils/uploadConcurrency.server.ts';
+} from '@classmoji/utils/upload-concurrency';
 
 /**
  * Image/file upload endpoint.

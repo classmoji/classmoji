@@ -13,7 +13,8 @@
     ".": "./src/index.ts",
     "./themes": "./src/themes.ts",
     "./repo-limits": "./src/repoLimits.ts",
-    "./upload-limit": "./src/uploadLimit.ts"
+    "./upload-limit": "./src/uploadLimit.ts",
+    "./upload-concurrency": "./src/uploadConcurrency.ts"
   },
   "devDependencies": {
     "vitest": "^4.1.5"

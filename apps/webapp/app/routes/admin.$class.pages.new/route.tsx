@@ -21,7 +21,7 @@ import {
   UPLOAD_RETRY_AFTER_SECONDS,
   acquireUploadSlot,
   releaseUploadSlot,
-} from '~/utils/uploadConcurrency.server';
+} from '@classmoji/utils/upload-concurrency';
 import { batchImportSummary, type BatchImportFailure } from './utils';
 import ImportTab from './ImportTab';
 import CreateBlankTab from './CreateBlankTab';

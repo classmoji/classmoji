@@ -26,7 +26,7 @@ import {
   UPLOAD_RETRY_AFTER_SECONDS,
   acquireUploadSlot,
   releaseUploadSlot,
-} from '~/utils/uploadConcurrency.server.ts';
+} from '@classmoji/utils/upload-concurrency';
 import { schema } from '~/components/editor/blocks/index.tsx';
 import type { PageForContent } from '~/types/pages.ts';
 import {

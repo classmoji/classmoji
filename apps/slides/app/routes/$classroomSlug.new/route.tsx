@@ -28,7 +28,7 @@
  * do while the classroom was identified from a form field — it comes from the
  * URL, so a stranger's 35 MB upload is refused on the session, not after it has
  * been buffered. See `@classmoji/utils/upload-limit` for the size gates
- * themselves, and `~/utils/uploadConcurrency.server` for how many uploads this
+ * themselves, and `@classmoji/utils/upload-concurrency` for how many uploads this
  * process holds at once (a cap on ONE upload says nothing about ten of them
  * arriving together).
  *
@@ -75,7 +75,7 @@ import {
   UPLOAD_RETRY_AFTER_SECONDS,
   acquireUploadSlot,
   releaseUploadSlot,
-} from '~/utils/uploadConcurrency.server';
+} from '@classmoji/utils/upload-concurrency';
 import {
   PendingCancelLink,
   PendingSubmitButton,
@@ -233,7 +233,7 @@ export const action = async ({
 
   // One slot per upload in flight, given back in the `finally` below. The size
   // cap bounds one upload; this bounds how many of them this process is holding
-  // at once. See `~/utils/uploadConcurrency.server`.
+  // at once. See `@classmoji/utils/upload-concurrency`.
   if (!acquireUploadSlot()) {
     return data(
       { error: UPLOAD_BUSY_MESSAGE, source: 'file' as SlideSource },

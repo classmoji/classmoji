@@ -68,7 +68,7 @@ vi.mock('react-router', () => ({
 
 const newPageRoute = await import('../route.tsx');
 const batchRoute = await import('../../api.pages.batch/route.ts');
-const slots = await import('~/utils/uploadConcurrency.server');
+const slots = await import('@classmoji/utils/upload-concurrency');
 
 const CLASS_SLUG = 'cs52-26f';
 const CLASSROOM = {

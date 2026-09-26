@@ -16,7 +16,7 @@ import {
   UPLOAD_RETRY_AFTER_SECONDS,
   acquireUploadSlot,
   releaseUploadSlot,
-} from '~/utils/uploadConcurrency.server';
+} from '@classmoji/utils/upload-concurrency';
 import type { Route } from './+types/route';
 
 /**
