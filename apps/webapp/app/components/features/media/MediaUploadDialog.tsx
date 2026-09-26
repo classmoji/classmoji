@@ -177,9 +177,8 @@ const MediaUploadDialog = ({
       <div className="pr-6">
         <h2 className="mb-1 text-lg font-semibold text-ink-0">Upload media</h2>
         <p className="mb-5 text-sm text-ink-3">
-          Video, audio, documents, archives — any file with an extension.{' '}
-          {formatBytes(free)} free of{' '}
-          {formatBytes(quota.quotaBytes)}, up to {formatBytes(quota.perFileBytes)} per file.
+          Video, audio, documents, archives — any file with an extension. {formatBytes(free)} free
+          of {formatBytes(quota.quotaBytes)}, up to {formatBytes(quota.perFileBytes)} per file.
         </p>
       </div>
 

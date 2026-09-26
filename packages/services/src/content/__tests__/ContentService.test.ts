@@ -1447,9 +1447,7 @@ describe('uploadBatch — bounded blob concurrency', () => {
 
     const result = await upload;
     expect(maxInFlight).toBe(4);
-    expect(result.files).toEqual(
-      files.map((file, i) => ({ path: file.path, sha: `blob-c${i}` }))
-    );
+    expect(result.files).toEqual(files.map((file, i) => ({ path: file.path, sha: `blob-c${i}` })));
   });
 
   it('starts no further blobs once one has been refused', async () => {
