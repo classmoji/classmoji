@@ -15,7 +15,10 @@
 export type MediaErrorCode =
   /** No R2 credentials on this deployment. The feature is off, not broken. */
   | 'NOT_CONFIGURED'
-  /** The filename's extension is not on the allowlist. */
+  /**
+   * The filename has no extension the store can address: none at all, or one
+   * longer than the `orig.{ext}` variant allows. The message says which.
+   */
   | 'KIND_NOT_ALLOWED'
   /** The classroom's owner has no active PRO subscription. */
   | 'PRO_REQUIRED'

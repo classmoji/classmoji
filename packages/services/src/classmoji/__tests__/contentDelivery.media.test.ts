@@ -354,6 +354,29 @@ describe('mediaDownloadUrl', () => {
     ).resolves.not.toBeNull();
   });
 
+  it('gives a student every kind but video, whatever the flag says', async () => {
+    // "Allow download" is about a lecture recording. A PDF, a zip or an
+    // unknown file IS what the student came for — including rows written
+    // before the flag was fixed true for them.
+    for (const [kind, ext] of [
+      ['DOCUMENT', 'pdf'],
+      ['ARCHIVE', 'zip'],
+      ['OTHER', 'ipynb'],
+    ] as const) {
+      const url = await mediaDownloadUrl({
+        classroom: ctx.classroom,
+        record: record({ kind, ext, filename: `notes.${ext}`, allowDownload: false }),
+        forStudent: true,
+      });
+      expect(url, kind).not.toBeNull();
+      await expect(verifyContentUrl(MASTER, url!)).resolves.toMatchObject({
+        ok: true,
+        tier: 'download',
+        variant: `orig.${ext}`,
+      });
+    }
+  });
+
   it('falls back to the id when the stored name cannot be a filename', async () => {
     // Without a `dl` the response carries no attachment disposition, so the
     // browser navigates to the file and Download plays the video instead.

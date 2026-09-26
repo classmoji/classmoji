@@ -14,10 +14,12 @@
 /**
  * SOURCE OF TRUTH: `packages/services/src/media/mediaKinds.ts`.
  *
- * Duplicated rather than imported because this list drives a file picker in the
- * browser, and the services package is server-side (Prisma, the S3 client).
- * When a kind is added there, add it here; the server refuses anything this
- * list lets through by mistake, so the two can only disagree about politeness.
+ * The extensions the store has a real type for, grouped by kind. The store
+ * takes ANY extension — everything not listed here is kind `other` and is
+ * served as a download — so this list no longer decides what may be picked;
+ * it only decides which files get the video options. Duplicated rather than
+ * imported because it runs in the browser, and the services package is
+ * server-side (Prisma, the S3 client).
  */
 export const MEDIA_EXTENSIONS = {
   video: ['mp4', 'webm', 'mov', 'm4v'],
@@ -27,13 +29,15 @@ export const MEDIA_EXTENSIONS = {
   image: ['png', 'jpg', 'jpeg', 'gif', 'webp'],
 } as const;
 
-export type MediaKind = keyof typeof MEDIA_EXTENSIONS;
+export type MediaKind = keyof typeof MEDIA_EXTENSIONS | 'other';
 
-/** What the `<input type="file">` offers, e.g. `.mp4,.webm,…`. */
-export const MEDIA_ACCEPT = Object.values(MEDIA_EXTENSIONS)
-  .flat()
-  .map(ext => `.${ext}`)
-  .join(',');
+/**
+ * The longest extension the store can address: its objects are keyed
+ * `orig.{ext}` and that grammar allows 8 letters or digits. The server refuses
+ * anything longer too; this is only so the uploader hears it before the bytes
+ * move.
+ */
+export const MAX_MEDIA_EXTENSION_LENGTH = 8;
 
 /** Containers whose usual codecs a browser may refuse when served untouched. */
 const FRAGILE_VIDEO_EXTENSIONS = ['mov'];
@@ -51,17 +55,29 @@ export const DEFAULT_VIDEO_OPTIONS: VideoOptions = {
   allowDownload: false,
 };
 
+/**
+ * A filename's extension by the server's rule (`sanitizedExtension`): the text
+ * after the last dot of the basename, lowercase letters and digits only, and
+ * none at all for a leading-dot name like `.gitignore`. `''` when there is none.
+ */
 export function extensionOf(filename: string): string {
-  const dot = filename.lastIndexOf('.');
-  return dot === -1 ? '' : filename.slice(dot + 1).toLowerCase();
+  const name = filename.slice(Math.max(filename.lastIndexOf('/'), filename.lastIndexOf('\\')) + 1);
+  const dot = name.lastIndexOf('.');
+  if (dot <= 0) return '';
+  return name
+    .slice(dot + 1)
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, '');
 }
 
+/** The file's kind, `other` for an extension the store has no type for, null for none. */
 export function kindForFilename(filename: string): MediaKind | null {
   const ext = extensionOf(filename);
+  if (!ext) return null;
   for (const [kind, extensions] of Object.entries(MEDIA_EXTENSIONS)) {
     if ((extensions as readonly string[]).includes(ext)) return kind as MediaKind;
   }
-  return null;
+  return 'other';
 }
 
 export const isVideoFilename = (filename: string) => kindForFilename(filename) === 'video';
@@ -124,14 +140,17 @@ export interface QuotaSummary {
 /**
  * The reason this file cannot be uploaded, or null.
  *
- * Order matters: an unsupported type is told first because no amount of freeing
- * space will help, and the per-file ceiling before the quota because it is the
- * fixed limit rather than the one they can do something about.
+ * Any file with an extension can be — media is a Pro surface and takes
+ * whatever the classroom needs to store. Order matters: a name the store cannot
+ * address is told first because no amount of freeing space will help, and the
+ * per-file ceiling before the quota because it is the fixed limit rather than
+ * the one they can do something about.
  */
 export function precheck(file: { name: string; size: number }, quota: QuotaSummary): string | null {
-  if (!kindForFilename(file.name)) {
-    const ext = extensionOf(file.name);
-    return `${ext ? `.${ext} files` : 'Files with no extension'} can't be uploaded. Accepted: ${MEDIA_ACCEPT.replaceAll('.', '').replaceAll(',', ', ')}.`;
+  const ext = extensionOf(file.name);
+  if (!ext) return 'This file needs an extension, e.g. notes.txt';
+  if (ext.length > MAX_MEDIA_EXTENSION_LENGTH) {
+    return `File extensions can be at most ${MAX_MEDIA_EXTENSION_LENGTH} letters or digits (.${ext} is ${ext.length}).`;
   }
   if (file.size > quota.perFileBytes) {
     return `This file is ${formatBytes(file.size)}. The limit is ${formatBytes(quota.perFileBytes)} per file.`;

@@ -1,41 +1,54 @@
 /**
  * What may be uploaded, and what it is served as.
  *
- * ## The allowlist is the whole defence
+ * ## Any file with an extension
  *
- * The content type on a media object is decided HERE, from the extension, and
- * never taken from the client. An uploader who names a file `x.html` is refused
- * outright rather than served `text/html` from a classmoji.io origin; one who
- * declares `video/mp4` for an HTML payload gets `video/mp4` back, which no
- * browser will run. The Worker adds `nosniff` and a sandboxed CSP on top, so
- * three separate things would have to be wrong at once.
+ * Media is where a Pro classroom's large files go — video always, and anything
+ * over the repository's REST ceiling (decision §7.10) — so it takes the same
+ * files the repository takes under its `'any'` policy: any extension at all,
+ * as long as there IS one. "Has an extension" is decided by the repository's
+ * own rule (`sanitizedExtension` in `content/utils/validateFile.ts`: the text
+ * after the last dot, lowercase letters and digits only), so a name one store
+ * accepts is not refused by the other for its shape.
  *
- * Images are on the list even though small ones belong in the content repo:
- * the repository takes files up to its REST ceiling (`REPO_REST_MAX_BYTES`,
- * 35 MB), and an instructor with a larger scan needs somewhere to put it.
- * Nothing routes an image here automatically.
+ * One narrower limit: the extension has to fit the variant grammar the signer
+ * and the Worker share, `orig.{ext}` with at most 8 characters. The repository
+ * rule keeps up to 16, so a `.longextension` file is refused here with a
+ * sentence that says why, rather than accepted and then unaddressable.
+ *
+ * ## The content type is still decided HERE, never taken from the client
+ *
+ * An extension this store knows (`MEDIA_KINDS`) is stored with its real type,
+ * from the table in `@classmoji/content-signing` the Worker also falls back
+ * on. Anything else is `application/octet-stream`: an opaque download. That is
+ * what keeps `x.html` or `x.svg` from being served as a page — it is stored
+ * and served as bytes to save, and the Worker's `nosniff` and sandboxing CSP
+ * sit on top of that. A declared `file.type` has no way in.
  *
  * The extension → content-type mapping itself is NOT here. It lives in
  * `@classmoji/content-signing` (reached through `mediaKeys.ts`, this folder's
  * one door onto that package) because the Worker needs the identical table to
- * fall back on when an object carries no stored type. What stays here is the
- * policy this module owns: which extensions are accepted at all, and which kind
- * each one belongs to.
+ * fall back on when an object carries no stored type.
  */
 
-import { contentTypeForMediaExt } from './mediaKeys.ts';
+import { sanitizedExtension } from '../content/utils/validateFile.ts';
+import { contentTypeForMediaExt, origVariant } from './mediaKeys.ts';
 
-export type MediaKind = 'VIDEO' | 'AUDIO' | 'DOCUMENT' | 'ARCHIVE' | 'IMAGE';
+export type MediaKind = 'VIDEO' | 'AUDIO' | 'DOCUMENT' | 'ARCHIVE' | 'IMAGE' | 'OTHER';
+
+/** Served as a download: the type of anything this store has no mapping for. */
+export const OPAQUE_CONTENT_TYPE = 'application/octet-stream';
 
 interface KindSpec {
-  kind: MediaKind;
+  kind: Exclude<MediaKind, 'OTHER'>;
   /** The extensions this kind accepts, lowercase and dotless. */
   exts: readonly string[];
 }
 
 /**
- * The allowlist, grouped by kind. Extensions are lowercase and dotless — the
- * same shape `mediaKey`'s `orig.{ext}` variant needs.
+ * The extensions this store knows, grouped by kind. Every other extension is
+ * `OTHER`. Lowercase and dotless — the same shape `mediaKey`'s `orig.{ext}`
+ * variant needs.
  */
 export const MEDIA_KINDS: readonly KindSpec[] = [
   { kind: 'VIDEO', exts: ['mp4', 'webm', 'mov', 'm4v'] },
@@ -49,12 +62,12 @@ const BY_EXT = new Map<string, { kind: MediaKind; contentType: string }>(
   MEDIA_KINDS.flatMap(spec =>
     spec.exts.map(ext => {
       const contentType = contentTypeForMediaExt(ext);
-      // An allowlisted extension with no type would be served as an opaque
-      // download by a store that had just promised to know what it was. The
-      // two lists are meant to be the same set, so a drift fails at import
-      // rather than at an upload months later.
+      // A known extension with no type would be served as an opaque download
+      // by a store that had just promised to know what it was. The two lists
+      // are meant to be the same set, so a drift fails at import rather than
+      // at an upload months later.
       if (contentType === null) {
-        throw new TypeError(`media: no content type for allowlisted extension .${ext}`);
+        throw new TypeError(`media: no content type for known extension .${ext}`);
       }
       return [ext, { kind: spec.kind, contentType }] as const;
     })
@@ -62,46 +75,59 @@ const BY_EXT = new Map<string, { kind: MediaKind; contentType: string }>(
 );
 
 /**
- * A filename → its canonical lowercase extension, or null.
+ * A filename → its canonical extension, or null when it has none.
  *
- * Only the last dot counts, and a leading-dot file (`.gitignore`) has no
- * extension at all rather than one called `gitignore`. Nothing here sanitizes
- * the NAME: the filename is display-only and never becomes a path, because the
- * R2 key is built from the row's uuid.
+ * The repository's rule (`sanitizedExtension`): only the last dot counts, a
+ * leading-dot file (`.gitignore`) has no extension, and what is kept is the
+ * lowercase letters and digits of it. A path prefix is dropped first — only
+ * the basename's extension is the file's. Nothing here sanitizes the NAME: the
+ * filename is display-only and never becomes a path, because the R2 key is
+ * built from the row's uuid.
  */
 export function extensionOf(filename: string): string | null {
   if (typeof filename !== 'string') return null;
-  const name = filename.slice(filename.lastIndexOf('/') + 1);
-  const dot = name.lastIndexOf('.');
-  if (dot <= 0 || dot === name.length - 1) return null;
-  return name.slice(dot + 1).toLowerCase();
+  const name = filename.slice(Math.max(filename.lastIndexOf('/'), filename.lastIndexOf('\\')) + 1);
+  return sanitizedExtension(name) || null;
 }
 
-/** The kind an extension belongs to, or null when it is not on the allowlist. */
-export function kindForExt(ext: string): MediaKind | null {
-  return BY_EXT.get(ext?.toLowerCase?.() ?? '')?.kind ?? null;
+/** The kind an extension belongs to: a known one, or `OTHER`. */
+export function kindForExt(ext: string): MediaKind {
+  return BY_EXT.get(ext?.toLowerCase?.() ?? '')?.kind ?? 'OTHER';
 }
 
-/** The content type an extension is served with, or null when not allowed. */
-export function contentTypeForExt(ext: string): string | null {
-  return BY_EXT.get(ext?.toLowerCase?.() ?? '')?.contentType ?? null;
+/** The content type an extension is stored and served with. */
+export function contentTypeForExt(ext: string): string {
+  return BY_EXT.get(ext?.toLowerCase?.() ?? '')?.contentType ?? OPAQUE_CONTENT_TYPE;
 }
 
 /**
- * Everything a create needs to know about a filename, or null when it is not
- * one this store accepts. One call rather than three, so a caller cannot check
- * the kind and then forget the content type.
+ * Why a filename cannot be stored, as a sentence for the uploader, or null when
+ * it can. The two refusals are the two shapes the store cannot address: no
+ * extension at all, and one longer than the variant grammar allows.
+ */
+export function filenameRefusal(filename: string): string | null {
+  const ext = extensionOf(filename);
+  if (!ext) return 'This file needs an extension, e.g. notes.txt';
+  if (origVariant(ext) === null) {
+    return `File extensions can be at most 8 letters or digits (.${ext} is ${ext.length}).`;
+  }
+  return null;
+}
+
+/**
+ * Everything a create needs to know about a filename, or null when it cannot
+ * be stored (see `filenameRefusal` for the reason). One call rather than three,
+ * so a caller cannot check the kind and then forget the content type.
  */
 export function classifyFilename(
   filename: string
 ): { ext: string; kind: MediaKind; contentType: string } | null {
-  const ext = extensionOf(filename);
-  if (!ext) return null;
-  const found = BY_EXT.get(ext);
-  return found ? { ext, kind: found.kind, contentType: found.contentType } : null;
+  if (filenameRefusal(filename) !== null) return null;
+  const ext = extensionOf(filename)!;
+  return { ext, kind: kindForExt(ext), contentType: contentTypeForExt(ext) };
 }
 
-/** Every extension the store takes, for an upload picker's `accept` list. */
-export function allowedExtensions(): string[] {
+/** The extensions this store has a real type for — the named kinds. */
+export function knownExtensions(): string[] {
   return [...BY_EXT.keys()];
 }

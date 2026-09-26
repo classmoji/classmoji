@@ -387,7 +387,7 @@ describe('createUpload', () => {
     configure();
 
     await expect(
-      createUpload({ classroom, userId: 'u', filename: 'a.html', sizeBytes: 1 })
+      createUpload({ classroom, userId: 'u', filename: 'README', sizeBytes: 1 })
     ).rejects.toMatchObject({ code: 'KIND_NOT_ALLOWED' });
 
     // Pro comes BEFORE the numbers, so a free classroom hears PRO_REQUIRED even
@@ -465,6 +465,50 @@ describe('createUpload', () => {
     );
   });
 
+  it('takes any extension, typing an unknown one as an opaque download', async () => {
+    // §7.10: media is where a Pro classroom's large files go, whatever they
+    // are. What it must never do is serve one as something runnable.
+    sendImpl.mockResolvedValue({ UploadId: 'up-1' });
+    for (const [filename, ext] of [
+      ['Week 3.ipynb', 'ipynb'],
+      ['page.HTML', 'html'],
+      ['diagram.svg', 'svg'],
+    ]) {
+      prisma.mediaObject.create.mockClear();
+      sent.length = 0;
+      const created = await createUpload({ classroom, userId: 'u', filename, sizeBytes: 10 });
+
+      expect(created.contentType).toBe('application/octet-stream');
+      expect(prisma.mediaObject.create.mock.calls[0][0].data).toMatchObject({
+        kind: 'OTHER',
+        ext,
+        content_type: 'application/octet-stream',
+        allow_download: true,
+      });
+      expect(sent.find(call => call.name === 'CreateMultipartUpload')?.input).toMatchObject({
+        ContentType: 'application/octet-stream',
+      });
+    }
+  });
+
+  it('refuses a name with no extension, or one the variant cannot carry', async () => {
+    for (const [filename, words] of [
+      ['Makefile', 'needs an extension'],
+      ['.gitignore', 'needs an extension'],
+      ['notes.データ', 'needs an extension'],
+      ['export.longextension', 'at most 8'],
+    ]) {
+      await expect(
+        createUpload({ classroom, userId: 'u', filename, sizeBytes: 10 }),
+        filename
+      ).rejects.toMatchObject({
+        code: 'KIND_NOT_ALLOWED',
+        message: expect.stringContaining(words),
+      });
+    }
+    expect(prisma.mediaObject.create).not.toHaveBeenCalled();
+  });
+
   it('defaults a video to optimise + keep original, and forces them off elsewhere', async () => {
     await createUpload({ classroom, userId: 'u', filename: 'a.mp4', sizeBytes: 10 });
     expect(prisma.mediaObject.create.mock.calls[0][0].data).toMatchObject({
@@ -487,7 +531,21 @@ describe('createUpload', () => {
       kind: 'DOCUMENT',
       optimise: false,
       keep_original: true,
-      allow_download: false,
+      // Download control is a VIDEO setting; a PDF is the file itself.
+      allow_download: true,
+    });
+
+    prisma.mediaObject.create.mockClear();
+    await createUpload({
+      classroom,
+      userId: 'u',
+      filename: 'handout.zip',
+      sizeBytes: 10,
+      options: { allowDownload: false },
+    });
+    expect(prisma.mediaObject.create.mock.calls[0][0].data).toMatchObject({
+      kind: 'ARCHIVE',
+      allow_download: true,
     });
   });
 

@@ -19,7 +19,7 @@ import { canDeliverContent } from '../classmoji/contentDelivery.service.ts';
 import { getProStateForClassroomId } from '../classmoji/subscription.service.ts';
 import { MediaError } from './MediaError.ts';
 import { mediaKey, mediaPrefix } from './mediaKeys.ts';
-import { classifyFilename } from './mediaKinds.ts';
+import { classifyFilename, filenameRefusal } from './mediaKinds.ts';
 import {
   findMediaRow,
   liveRows,
@@ -222,7 +222,8 @@ function requireClient(): { client: S3Client; bucket: string } {
  *
  *   1. configured — no credentials means the feature is off, not that this file
  *      is wrong, and saying so first keeps a dev laptop's error honest;
- *   2. kind — decided from the extension, which also fixes the content type;
+ *   2. extension — any, as long as there is one the store can address; it
+ *      decides the kind and fixes the content type;
  *   3. Pro — before the numbers, so a free classroom is told it needs Pro
  *      rather than that it is 2 GB over a quota of zero;
  *   4. delivery — a classroom whose references cannot be signed has nowhere to
@@ -268,9 +269,14 @@ export async function createUpload({
 }> {
   const { client, bucket } = requireClient();
 
+  // Any extension, as long as there is one the store can address (see
+  // mediaKinds.ts). The refusal says which of the two it was.
   const classified = classifyFilename(filename);
   if (!classified) {
-    throw new MediaError('KIND_NOT_ALLOWED', `Files of this type cannot be uploaded: ${filename}`);
+    throw new MediaError(
+      'KIND_NOT_ALLOWED',
+      filenameRefusal(filename) ?? `This file cannot be uploaded: ${filename}`
+    );
   }
 
   // Pro before the numbers: a classroom that cannot store media at all should
@@ -311,8 +317,13 @@ export async function createUpload({
     throw new MediaError('FILE_TOO_LARGE', 'This file is larger than the per-file limit');
   }
 
-  // Video-only options. For any other kind they are stored at their defaults
-  // and nothing reads them, so an uploader cannot mark a PDF for transcoding.
+  // Video-only options. For any other kind they are stored at fixed values and
+  // nothing reads them, so an uploader cannot mark a PDF for transcoding.
+  //
+  // `allowDownload` is fixed TRUE for everything but video. The setting exists
+  // for a lecture recording the instructor wants watched, not saved; a PDF, a
+  // zip or a deck IS the file a student came for, and there is no player to
+  // fall back on. `mediaDownloadUrl` applies the same rule on the read side.
   //
   // `keepOriginal` is forced true whenever `optimise` is off, and that is not a
   // default but an invariant: dropping the original is only meaningful once a
@@ -322,7 +333,7 @@ export async function createUpload({
   const isVideo = classified.kind === 'VIDEO';
   const optimise = isVideo ? options.optimise !== false : false;
   const keepOriginal = isVideo && optimise ? options.keepOriginal !== false : true;
-  const allowDownload = isVideo ? options.allowDownload === true : false;
+  const allowDownload = isVideo ? options.allowDownload === true : true;
 
   // The id is minted HERE rather than by the database, so the R2 key can be
   // built — and validated — before anything is written. `mediaKey` asserts

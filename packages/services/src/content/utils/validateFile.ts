@@ -107,9 +107,10 @@ export function validateFile({
  * The extension `sanitizeFilename` keeps for `name` — lowercase letters and
  * digits, capped — or `''` when it keeps none. A leading dot does not start an
  * extension (`.gitignore` is a name). `validateFile` asks the same function, so
- * what it checks is exactly what gets stored.
+ * what it checks is exactly what gets stored — and so does the media store
+ * (`media/mediaKinds.ts`), so "has an extension" means one thing everywhere.
  */
-function sanitizedExtension(name: string): string {
+export function sanitizedExtension(name: string): string {
   const dot = name.lastIndexOf('.');
   if (dot <= 0) return '';
   return name

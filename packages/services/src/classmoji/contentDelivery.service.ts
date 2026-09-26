@@ -1132,7 +1132,7 @@ export async function resolveMediaPoster(ctx: ResolveContext, ref: string): Prom
  *
  * Two separate reasons for null, and they are not the same thing:
  *
- *   - `forStudent` on a row whose uploader did not tick "Allow download". The
+ *   - `forStudent` on a VIDEO whose uploader did not tick "Allow download". The
  *     video still plays; there is simply no button, and minting the URL anyway
  *     would make the refusal cosmetic — a ten-minute unauthenticated handle to
  *     the file is exactly what the setting is about. Teaching staff always get
@@ -1154,7 +1154,11 @@ export async function mediaDownloadUrl({
   record: MediaRecord;
   forStudent: boolean;
 }): Promise<string | null> {
-  if (forStudent && !record.allowDownload) return null;
+  // `allowDownload` is a VIDEO setting. Every other kind is the file itself —
+  // a PDF, a zip, a deck — with no player to fall back on, so a student always
+  // gets it; that holds for rows written before the flag was fixed true for
+  // them, too, which is why the kind is checked here rather than only the flag.
+  if (forStudent && record.kind === 'VIDEO' && !record.allowDownload) return null;
 
   const ctx: ResolveContext = { classroom, tier: DOWNLOAD_TIER };
   const env = deliveryEnvFor(ctx);

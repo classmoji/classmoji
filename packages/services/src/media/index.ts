@@ -1,7 +1,7 @@
 /**
  * `ClassmojiService.media` — the media store's whole public face.
  *
- * The operations, the policy they enforce (quota numbers, the kind allowlist)
+ * The operations, the policy they enforce (quota numbers, the kinds)
  * and the error type a caller has to switch on, in one namespace. A route needs
  * all three to answer a request: the call, the code it failed with, and the
  * numbers to put in the body.
@@ -31,11 +31,13 @@ export type { MediaErrorCode } from './MediaError.ts';
 
 export {
   MEDIA_KINDS,
-  allowedExtensions,
+  OPAQUE_CONTENT_TYPE,
   classifyFilename,
   contentTypeForExt,
   extensionOf,
+  filenameRefusal,
   kindForExt,
+  knownExtensions,
 } from './mediaKinds.ts';
 export type { MediaKind } from './mediaKinds.ts';
 
