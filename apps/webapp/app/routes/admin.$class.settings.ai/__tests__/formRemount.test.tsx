@@ -130,6 +130,7 @@ const loaderData = (hasKey: boolean) =>
       },
       availableModels: { anthropic: MODELS },
       aiAgentAvailable: true,
+      quizzesProRequired: false,
       askMojiProRequired: false,
       defaultLabels: DEFAULT_LABELS,
       selectValues: hasKey ? STORED : ALL_NULL,

@@ -7,9 +7,10 @@ import * as subscriptionService from './subscription.service.ts';
  * This module does NOT decide what "Pro" means — `getProStateForClassroomId`
  * does, and every gate delegates to it so they cannot disagree. Quizzes reach
  * it through the webapp's `assertProTier` and the MCP's copy in
- * `apps/mcp/src/resources/content.ts`; the syllabus bot reaches it through
- * here. Reimplementing the tier rules (owner resolution, `ends_at`) in this
- * file would recreate the drift those call sites were consolidated to avoid.
+ * `apps/mcp/src/resources/content.ts` (and their settings switch through
+ * `canUseQuizzes` here); the syllabus bot reaches it through here.
+ * Reimplementing the tier rules (owner resolution, `ends_at`) in this file
+ * would recreate the drift those call sites were consolidated to avoid.
  *
  * Entitlement is evaluated at SERVE time, never stored. A feature flag such as
  * `syllabus_bot_enabled` is necessary but not sufficient: a classroom whose
@@ -44,6 +45,17 @@ const NOT_FOUND: EntitlementResult = { allowed: false, reason: 'not_found' };
  * AI feature — changing it starts here.
  */
 export const canUseSyllabusBot = async (classroomId: string): Promise<EntitlementResult> => {
+  const { isPro } = await subscriptionService.getProStateForClassroomId(classroomId);
+  return isPro ? ALLOWED : PRO_REQUIRED;
+};
+
+/**
+ * Whether AI quizzes may be turned on for this classroom. Same rule as the
+ * syllabus bot, through the same resolver the webapp's `assertProTier` serves
+ * quizzes by, so the settings switch and the quiz routes cannot disagree. A
+ * classroom's own key is not an access path here either.
+ */
+export const canUseQuizzes = async (classroomId: string): Promise<EntitlementResult> => {
   const { isPro } = await subscriptionService.getProStateForClassroomId(classroomId);
   return isPro ? ALLOWED : PRO_REQUIRED;
 };

@@ -19,7 +19,7 @@ export const loader = checkAuth(
           return data({ error: 'orgLogin is required' }, { status: 400 });
         }
 
-        await assertClassroomAccess({
+        const { classroom } = await assertClassroomAccess({
           request,
           classroomSlug: orgLogin,
           allowedRoles: ['OWNER'],
@@ -27,8 +27,9 @@ export const loader = checkAuth(
           attemptedAction: 'read_subscription',
         });
 
-        const subscription = await ClassmojiService.subscription.getByClassroom(orgLogin);
-        return subscription;
+        // The tier the Pro gates use (getProStateForClassroomId): an active PRO
+        // from any accepted owner, else FREE. Drives the Pro-only nav items.
+        return ClassmojiService.subscription.getClassroomSubscription(classroom.id);
       }
       case 'get-tc-installation-token': {
         // TODO: This method needs implementation in GitHubProvider

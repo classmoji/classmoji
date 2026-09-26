@@ -61,7 +61,12 @@ const MODELS = [
 const render = (
   hasKey: boolean,
   selectValues: Record<string, string | null>,
-  aiAgentAvailable = true
+  aiAgentAvailable = true,
+  extra: {
+    settings?: Record<string, unknown>;
+    quizzesProRequired?: boolean;
+    askMojiProRequired?: boolean;
+  } = {}
 ) => {
   const props = {
     loaderData: {
@@ -72,11 +77,13 @@ const render = (
           syllabus_bot_enabled: true,
           // What is stored. The page must not show it without a key.
           llm_model: 'claude-opus-5-5',
+          ...extra.settings,
         },
       },
       availableModels: { anthropic: MODELS },
       aiAgentAvailable,
-      askMojiProRequired: false,
+      quizzesProRequired: extra.quizzesProRequired ?? false,
+      askMojiProRequired: extra.askMojiProRequired ?? false,
       defaultLabels: DEFAULT_LABELS,
       selectValues,
     },
@@ -121,5 +128,117 @@ describe('AI settings: no AI agent on the server', () => {
 
   it('shows nothing about it when the agent is configured', () => {
     expect(render(true, ALL_NULL)).not.toContain('available on this server');
+  });
+});
+
+/** The page's two Enable switches, in page order: AI Quizzes, then Ask Moji. */
+const switches = (html: string) =>
+  [...html.matchAll(/<button[^>]*role="switch"[^>]*>/g)].map(([tag]) => ({
+    checked: tag.includes('aria-checked="true"'),
+    disabled: /\sdisabled=""/.test(tag),
+  }));
+
+// The Enable switches show the EFFECTIVE state: without Pro the feature is off,
+// whatever is stored, and the switch cannot change that. The stored flag is not
+// rewritten; it applies again once the classroom is back on Pro.
+describe('AI settings: Pro gating', () => {
+  it('marks AI Quizzes and Ask Moji Pro, with no upsell on a Pro classroom', () => {
+    const html = render(true, ALL_NULL);
+
+    expect(html.match(/>Pro</g)).toHaveLength(2);
+    expect(html).not.toContain('available on the Pro plan');
+    expect(switches(html)).toEqual([
+      { checked: true, disabled: false },
+      { checked: true, disabled: false },
+    ]);
+  });
+
+  it('shows the stored off on a Pro classroom, and lets it be turned on', () => {
+    const html = render(false, ALL_NULL, true, {
+      settings: { quizzes_enabled: false, syllabus_bot_enabled: false },
+    });
+
+    expect(switches(html)).toEqual([
+      { checked: false, disabled: false },
+      { checked: false, disabled: false },
+    ]);
+  });
+
+  it('shows AI Quizzes off and disabled without Pro, even when stored on', () => {
+    const html = render(true, ALL_NULL, true, {
+      quizzesProRequired: true,
+      settings: { quizzes_enabled: true },
+    });
+
+    expect(html).toContain('AI Quizzes is available on the Pro plan.');
+    expect(html).toContain('href="/settings/billing"');
+    expect(html).not.toContain('Ask Moji is available on the Pro plan.');
+    expect(switches(html)).toEqual([
+      { checked: false, disabled: true },
+      { checked: true, disabled: false },
+    ]);
+  });
+
+  it('shows Ask Moji off and disabled without Pro, even when stored on', () => {
+    const html = render(true, ALL_NULL, true, {
+      askMojiProRequired: true,
+      settings: { syllabus_bot_enabled: true },
+    });
+
+    expect(html).toContain('Ask Moji is available on the Pro plan.');
+    expect(html).not.toContain('AI Quizzes is available on the Pro plan.');
+    expect(switches(html)).toEqual([
+      { checked: true, disabled: false },
+      { checked: false, disabled: true },
+    ]);
+  });
+
+  it('shows both off and disabled without Pro when stored off', () => {
+    const html = render(true, ALL_NULL, true, {
+      quizzesProRequired: true,
+      askMojiProRequired: true,
+      settings: { quizzes_enabled: false, syllabus_bot_enabled: false },
+    });
+
+    expect(switches(html)).toEqual([
+      { checked: false, disabled: true },
+      { checked: false, disabled: true },
+    ]);
+  });
+
+  // No settings row yet: quizzes_enabled unset is the schema's true, and
+  // syllabus_bot_enabled unset is its false.
+  it('reads unset flags as their schema defaults on a Pro classroom', () => {
+    const html = render(true, ALL_NULL, true, {
+      settings: { quizzes_enabled: undefined, syllabus_bot_enabled: undefined },
+    });
+
+    expect(switches(html)).toEqual([
+      { checked: true, disabled: false },
+      { checked: false, disabled: false },
+    ]);
+  });
+
+  // A classroom's own key adds control, never access.
+  it('keeps the gate for a classroom with its own key', () => {
+    const html = render(true, ALL_NULL, true, {
+      quizzesProRequired: true,
+      askMojiProRequired: true,
+    });
+
+    expect(html).toContain('Using classroom key');
+    expect(switches(html)).toEqual([
+      { checked: false, disabled: true },
+      { checked: false, disabled: true },
+    ]);
+  });
+});
+
+describe('AI settings: code exploration', () => {
+  it('labels it with no billing copy', () => {
+    const html = render(true, ALL_NULL);
+
+    expect(html.match(/>Code exploration</g)).toHaveLength(2);
+    expect(html).not.toMatch(/billed/i);
   });
 });

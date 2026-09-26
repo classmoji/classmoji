@@ -750,6 +750,23 @@ export const updateSettings = async (
     }
   }
 
+  // Turning AI quizzes ON is Pro-only too, by the same rule and for the same
+  // callers; turning them OFF is always allowed.
+  //
+  // Unlike the syllabus bot, `quizzes_enabled` defaults to TRUE (schema), and
+  // the creation paths leave it true for every classroom, Free included — they
+  // write raw, never through here, so this gate never fires on create. What
+  // keeps a Free classroom from being served quizzes is the serve-time
+  // `assertProTier` on the quiz routes, not this flag. Config import needs no
+  // gate of its own: its only caller copies onto a newly created classroom,
+  // which is already `true`, so copying `true` changes nothing.
+  if (updates.quizzes_enabled !== undefined && updates.quizzes_enabled !== false) {
+    const entitlement = await entitlementService.canUseQuizzes(classroomId);
+    if (!entitlement.allowed) {
+      throw new ClassroomSettingsEntitlementError('AI Quizzes requires a Pro subscription.');
+    }
+  }
+
   // The course time zone: canonical IANA spelling, blank = cleared. Resolved
   // BEFORE the write so a refused zone costs nothing, and here rather than in
   // the callers because the web Settings page, classroom creation/import and the

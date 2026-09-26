@@ -103,7 +103,10 @@ export const classroomSettingsUpdateTool: ToolDefinition<ClassroomSettingsUpdate
       .boolean()
       .optional()
       .describe('Enable Ask Moji, the AI course assistant; turning it on requires Pro'),
-    quizzes_enabled: z.boolean().optional().describe('Enable AI quizzes'),
+    quizzes_enabled: z
+      .boolean()
+      .optional()
+      .describe('Enable AI quizzes; turning them on requires Pro'),
     recent_viewers_enabled: z
       .boolean()
       .optional()
