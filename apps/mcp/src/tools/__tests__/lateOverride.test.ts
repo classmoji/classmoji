@@ -599,6 +599,27 @@ describe('submission_late_override — through the registry', () => {
     );
   });
 
+  it('accepts a numeric id sent as a JSON number and passes it on as a string', async () => {
+    mockClassroom('ACTIVE', 'OWNER');
+    mocks.setLateOverride.mockResolvedValue(serviceResult({ updatedIds: ['5482151816'] }));
+
+    const single = await call({ ...ARGS, git_repo_assignment_id: 5482151816 });
+    expect(single.isError).toBeFalsy();
+    expect(mocks.setLateOverride).toHaveBeenLastCalledWith(
+      expect.objectContaining({ selector: { ids: ['5482151816'] } })
+    );
+
+    const list = await call({
+      classroom: 'org/c',
+      git_repo_assignment_ids: [5482151816, SUB_A],
+      is_late_override: true,
+    });
+    expect(list.isError).toBeFalsy();
+    expect(mocks.setLateOverride).toHaveBeenLastCalledWith(
+      expect.objectContaining({ selector: { ids: ['5482151816', SUB_A] } })
+    );
+  });
+
   it.each(['', 'abc', '12-34', '5482151816 ', '1'.repeat(65)])(
     'rejects %j as a submission id at the schema',
     async bad => {

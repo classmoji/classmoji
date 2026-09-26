@@ -128,7 +128,13 @@ describe('valid queries', () => {
         git_repo_assignment_id_grader_id: { git_repo_assignment_id: 'gra-1', grader_id: 'u-1' },
       },
     });
+    await validatingPrisma.gitRepoAssignmentGrader.findUnique({
+      where: {
+        git_repo_assignment_id_grader_id: { git_repo_assignment_id: 'gra-1', grader_id: 'u-1' },
+      },
+    });
     expect(prismaCallsFor('gitRepoAssignmentGrader', 'delete')).toHaveLength(1);
+    expect(prismaCallsFor('gitRepoAssignmentGrader', 'findUnique')).toHaveLength(1);
   });
 
   it('accepts a client-extension computed field in select', async () => {
@@ -164,6 +170,33 @@ describe('unknown field', () => {
     ).rejects.toThrow(
       'Unknown field `git_repo_assignment_id_grader_id.user_id` for where statement on model `GitRepoAssignmentGrader`.'
     );
+  });
+
+  it('rejects a compound unique selector missing one of its fields', async () => {
+    await expect(
+      validatingPrisma.gitRepoAssignmentGrader.delete({
+        where: { git_repo_assignment_id_grader_id: { git_repo_assignment_id: 'gra-1' } },
+      })
+    ).rejects.toThrow(
+      'Compound unique `git_repo_assignment_id_grader_id` on model `GitRepoAssignmentGrader` is missing `grader_id`.'
+    );
+  });
+
+  it('rejects a compound unique selector outside a unique where (findFirst, updateMany, under AND)', async () => {
+    const selector = {
+      git_repo_assignment_id_grader_id: { git_repo_assignment_id: 'gra-1', grader_id: 'u-1' },
+    };
+    const message =
+      'Unknown field `git_repo_assignment_id_grader_id` for where statement on model `GitRepoAssignmentGrader`.';
+    await expect(
+      validatingPrisma.gitRepoAssignmentGrader.findFirst({ where: selector })
+    ).rejects.toThrow(message);
+    await expect(
+      validatingPrisma.gitRepoAssignmentGrader.updateMany({ where: selector, data: {} })
+    ).rejects.toThrow(message);
+    await expect(
+      validatingPrisma.gitRepoAssignmentGrader.findUnique({ where: { AND: [selector] } })
+    ).rejects.toThrow(message);
   });
 
   it('rejects a select of a field the model does not have', async () => {

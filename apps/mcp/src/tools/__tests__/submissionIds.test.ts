@@ -7,19 +7,18 @@
  * keep the uuid. Tools used to validate these ids with `.uuid()`, which refused
  * every ISSUE-mode submission. Every submission-id input now uses the shared
  * `submissionIdSchema`. This file pins:
- *   1. the schema itself, and that every tool taking a submission id uses it,
- *      while ids of other records (users, assignments, grades) stay uuids;
- *   2. a source guard: no tool declares a submission id with `.uuid()` again;
+ *   1. the schema itself, including a numeric id sent as a JSON number;
+ *   2. that ids of other records on the same tools (users, assignments,
+ *      grades, regrade requests) stay uuids;
  *   3. get_submission and extension_purchase with a numeric id, end to end
  *      through their handlers (grade, grader, late-override and regrade tools
  *      have theirs in their own test files).
+ * submissionIds.registry.test.ts walks EVERY registered tool for inputs that
+ * name a submission and checks the schema the registry publishes.
  */
 
-import { readdirSync, readFileSync } from 'node:fs';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { z } from 'zod';
+import type { z } from 'zod';
 import type { ToolContext, ToolDefinition } from '../../mcp/registry.ts';
 
 const mocks = vi.hoisted(() => ({
@@ -44,13 +43,15 @@ vi.mock('@classmoji/services', () => ({
 
 vi.mock('@trigger.dev/sdk', () => ({ tasks: {}, runs: {} }));
 
-const { SUBMISSION_ID_PATTERN, submissionIdSchema } = await import('../shared.ts');
+const { SUBMISSION_ID_PATTERN, submissionIdSchema: makeSubmissionIdSchema } =
+  await import('../shared.ts');
+const submissionIdSchema = makeSubmissionIdSchema();
 const { graderAssignTool, graderUnassignTool, graderAssignBulkTool } =
   await import('../graders.ts');
-const { gradeAddTool, gradeRemoveTool, gradeRemoveAllTool } = await import('../grades.ts');
+const { gradeRemoveTool } = await import('../grades.ts');
 const { submissionLateOverrideTool } = await import('../lateOverride.ts');
 const { getSubmissionTool, listSubmissionsTool } = await import('../reads.ts');
-const { regradeCreateTool, regradeResolveTool } = await import('../regrades.ts');
+const { regradeResolveTool } = await import('../regrades.ts');
 const { extensionPurchaseTool } = await import('../extensions.ts');
 const { prismaCallsFor, resetPrismaStub, setPrismaRows } =
   await import('../../__tests__/prismaSchemaStub.ts');
@@ -68,7 +69,7 @@ function parse(result: { content: Array<{ text: string }> }) {
   return JSON.parse(result.content[0].text);
 }
 
-// ─── 1. The schema, and who uses it ─────────────────────────────────────────
+// ─── 1. The schema ──────────────────────────────────────────────────────────
 
 describe('submissionIdSchema', () => {
   it.each([NUMERIC_ID, UUID_ID, UUID_ID.toUpperCase(), '1', '9'.repeat(19)])('accepts %s', id => {
@@ -94,9 +95,26 @@ describe('submissionIdSchema', () => {
     expect(submissionIdSchema.safeParse(id).success).toBe(false);
   });
 
-  it('rejects non-strings', () => {
-    for (const value of [5482151816, null, undefined, { in: [NUMERIC_ID] }, [NUMERIC_ID]]) {
-      expect(submissionIdSchema.safeParse(value).success).toBe(false);
+  it('accepts a numeric id sent as a JSON number, as its digit string', () => {
+    expect(submissionIdSchema.parse(5482151816)).toBe(NUMERIC_ID);
+    expect(submissionIdSchema.parse(0)).toBe('0');
+    expect(submissionIdSchema.parse(Number.MAX_SAFE_INTEGER)).toBe(String(Number.MAX_SAFE_INTEGER));
+  });
+
+  it('rejects numbers that are not a safe non-negative integer, and other non-strings', () => {
+    for (const value of [
+      -5482151816,
+      54821518.16,
+      Number.MAX_SAFE_INTEGER + 1, // its digits would already be wrong
+      Number.NaN,
+      Number.POSITIVE_INFINITY,
+      null,
+      undefined,
+      true,
+      { in: [NUMERIC_ID] },
+      [NUMERIC_ID],
+    ]) {
+      expect(submissionIdSchema.safeParse(value).success, String(value)).toBe(false);
     }
   });
 
@@ -107,23 +125,12 @@ describe('submissionIdSchema', () => {
   });
 });
 
+// ─── 2. Other ids stay uuids ────────────────────────────────────────────────
+
 type AnyTool = ToolDefinition<never>;
 const field = (tool: AnyTool, key: string) => tool.inputSchema[key] as z.ZodTypeAny;
 
-/** Every tool input that names a submission (GitRepoAssignment). */
-const SUBMISSION_FIELDS: Array<[AnyTool, string]> = [
-  [graderAssignTool, 'git_repo_assignment_id'],
-  [graderUnassignTool, 'git_repo_assignment_id'],
-  [gradeAddTool, 'git_repo_assignment_id'],
-  [gradeRemoveTool, 'git_repo_assignment_id'],
-  [gradeRemoveAllTool, 'git_repo_assignment_id'],
-  [submissionLateOverrideTool, 'git_repo_assignment_id'],
-  [getSubmissionTool, 'submission_id'],
-  [regradeCreateTool, 'git_repo_assignment_id'],
-  [extensionPurchaseTool, 'git_repo_assignment_id'],
-].map(([tool, key]) => [tool as unknown as AnyTool, key as string]);
-
-/** Ids of other records on the same tools: real uuids, still `.uuid()`. */
+/** Ids of other records on tools that also take submission ids: real uuids. */
 const UUID_FIELDS: Array<[AnyTool, string]> = [
   [graderAssignTool, 'grader_id'],
   [graderUnassignTool, 'grader_id'],
@@ -137,23 +144,7 @@ const UUID_FIELDS: Array<[AnyTool, string]> = [
   [regradeResolveTool, 'regrade_request_id'],
 ].map(([tool, key]) => [tool as unknown as AnyTool, key as string]);
 
-describe('tool inputs', () => {
-  it.each(SUBMISSION_FIELDS.map(([t, k]) => [`${t.name}.${k}`, t, k] as const))(
-    '%s takes a numeric or uuid submission id',
-    (_, tool, key) => {
-      expect(field(tool, key).safeParse(NUMERIC_ID).success).toBe(true);
-      expect(field(tool, key).safeParse(UUID_ID).success).toBe(true);
-      expect(field(tool, key).safeParse('abc').success).toBe(false);
-      expect(field(tool, key).safeParse('1'.repeat(65)).success).toBe(false);
-    }
-  );
-
-  it('submission_late_override.git_repo_assignment_ids takes numeric ids too', () => {
-    const ids = field(submissionLateOverrideTool as unknown as AnyTool, 'git_repo_assignment_ids');
-    expect(ids.safeParse([NUMERIC_ID, UUID_ID]).success).toBe(true);
-    expect(ids.safeParse([NUMERIC_ID, 'abc']).success).toBe(false);
-  });
-
+describe('ids of other records', () => {
   it.each(UUID_FIELDS.map(([t, k]) => [`${t.name}.${k}`, t, k] as const))(
     '%s stays a uuid',
     (_, tool, key) => {
@@ -161,22 +152,6 @@ describe('tool inputs', () => {
       expect(field(tool, key).safeParse(NUMERIC_ID).success).toBe(false);
     }
   );
-});
-
-// ─── 2. Source guard ────────────────────────────────────────────────────────
-
-describe('source guard', () => {
-  it('no tool declares a submission id with .uuid()', () => {
-    const dir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-    const offenders: string[] = [];
-    for (const file of readdirSync(dir).filter(f => f.endsWith('.ts'))) {
-      const source = readFileSync(path.join(dir, file), 'utf8');
-      const pattern =
-        /\b(git_repo_assignment_ids?|submission_ids?)\s*:\s*z\s*\.(?:string\(\)\s*\.uuid\(\)|array\(\s*z\s*\.string\(\)\s*\.uuid\(\))/g;
-      for (const match of source.matchAll(pattern)) offenders.push(`${file}: ${match[1]}`);
-    }
-    expect(offenders).toEqual([]);
-  });
 });
 
 // ─── 3. Handlers with a numeric id ──────────────────────────────────────────

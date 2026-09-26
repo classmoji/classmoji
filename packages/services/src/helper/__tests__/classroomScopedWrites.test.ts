@@ -149,6 +149,36 @@ describe('addGraderInClassroom', () => {
     expect(mocks.addIssueAssignees).not.toHaveBeenCalled();
     expect(mocks.addGraderToAssignment).toHaveBeenCalledWith('ra-1', 'u-bob');
   });
+
+  it('reports already_assigned when a concurrent add inserts the row first (P2002)', async () => {
+    mocks.addGraderToAssignment.mockRejectedValue(
+      Object.assign(new Error('Unique constraint failed'), { code: 'P2002' })
+    );
+
+    const result = await HelperService.addGraderInClassroom({
+      classroomId: 'class-1',
+      gitOrganization: ORG,
+      gitRepoAssignmentId: 'ra-1',
+      graderId: 'u-bob',
+    });
+
+    expect(result).toEqual({ status: 'already_assigned', graderLogin: 'ta-bob' });
+  });
+
+  it('still throws any other write failure', async () => {
+    mocks.addGraderToAssignment.mockRejectedValue(
+      Object.assign(new Error('Foreign key constraint failed'), { code: 'P2003' })
+    );
+
+    await expect(
+      HelperService.addGraderInClassroom({
+        classroomId: 'class-1',
+        gitOrganization: ORG,
+        gitRepoAssignmentId: 'ra-1',
+        graderId: 'u-bob',
+      })
+    ).rejects.toThrow('Foreign key constraint failed');
+  });
 });
 
 describe('removeGraderInClassroom', () => {

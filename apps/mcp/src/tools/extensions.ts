@@ -71,7 +71,7 @@ export const extensionPurchaseTool: ToolDefinition<ExtensionPurchaseArgs> = {
   roles: ['STUDENT'],
   inputSchema: {
     classroom: z.string().describe("Classroom reference as 'org/slug'"),
-    git_repo_assignment_id: submissionIdSchema.describe('Your submission (GitRepoAssignment) id'),
+    git_repo_assignment_id: submissionIdSchema().describe('Your submission (GitRepoAssignment) id'),
     hours: z.number().int().positive().max(1000).describe('Late hours to purchase'),
   },
   handler: async (args, ctx) => {

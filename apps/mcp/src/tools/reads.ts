@@ -199,7 +199,7 @@ export const getSubmissionTool = mirrorResourceTool({
     'present. Teaching team only. `submission_id` comes from list_submissions; it is also the ' +
     'id that grade_add, grade_remove, grader_assign, and submission_late_override consume.',
   extraInput: {
-    submission_id: submissionIdSchema.describe('Submission (GitRepoAssignment) id'),
+    submission_id: submissionIdSchema().describe('Submission (GitRepoAssignment) id'),
   },
   buildVars: args => ({ submissionId: String(args.submission_id) }),
 });
@@ -400,18 +400,29 @@ interface ListTeachingTeamArgs {
 
 interface TeachingMembershipRow {
   role: Role;
+  is_grader?: boolean | null;
   user?: { id: string; login?: string | null; name?: string | null } | null;
 }
 
 const TEACHING_ROLE_SET: ReadonlySet<Role> = new Set(TEACHING_TEAM);
+
+/**
+ * The roles that can be a grader — gitRepoAssignmentGrader.GRADER_ROLES in
+ * packages/services, which findEligibleGrader (and so grader_assign) checks.
+ * OWNER is not one.
+ */
+const GRADER_ROLE_SET: ReadonlySet<Role> = new Set<Role>(['ASSISTANT', 'TEACHER']);
 
 export const listTeachingTeamTool: ToolDefinition<ListTeachingTeamArgs> = {
   name: 'list_teaching_team',
   title: 'List teaching team',
   description:
     "The classroom's staff — OWNER, TEACHER, and ASSISTANT members — each with { id, login, name, " +
-    'roles[] }. Use a member id as the `grader_id` for grader_assign / grader_unassign. One person ' +
-    'may hold several roles; those are returned in their `roles` array. Teaching team only.',
+    'roles[], grader_eligible }. One person may hold several roles; those are returned in their ' +
+    '`roles` array. grader_eligible is true when they hold ASSISTANT or TEACHER marked as a ' +
+    'grader (is_grader) and have a login: only those can be the `grader_id` for grader_assign. ' +
+    'OWNERs cannot be graders; staff_update sets is_grader. Any currently assigned grader can ' +
+    'be removed with grader_unassign. Teaching team only.',
   scope: 'read',
   roles: TEACHING_TEAM,
   inputSchema: {
@@ -429,19 +440,30 @@ export const listTeachingTeamTool: ToolDefinition<ListTeachingTeamArgs> = {
 
     const byUser = new Map<
       string,
-      { id: string; login: string | null; name: string | null; roles: Role[] }
+      {
+        id: string;
+        login: string | null;
+        name: string | null;
+        roles: Role[];
+        grader_eligible: boolean;
+      }
     >();
     for (const m of memberships) {
       if (!TEACHING_ROLE_SET.has(m.role) || !m.user) continue;
+      // The same test findEligibleGrader applies: a grader-role membership
+      // with is_grader, and a stored login to assign on GitHub.
+      const eligibleHere = GRADER_ROLE_SET.has(m.role) && m.is_grader === true && !!m.user.login;
       const existing = byUser.get(m.user.id);
       if (existing) {
         if (!existing.roles.includes(m.role)) existing.roles.push(m.role);
+        existing.grader_eligible ||= eligibleHere;
       } else {
         byUser.set(m.user.id, {
           id: m.user.id,
           login: m.user.login ?? null,
           name: m.user.name ?? null,
           roles: [m.role],
+          grader_eligible: eligibleHere,
         });
       }
     }

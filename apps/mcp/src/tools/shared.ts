@@ -72,12 +72,33 @@ export const SUBMISSION_ID_PATTERN =
  * ids of other records (users, assignments, grades, regrade requests) are
  * uuids and keep `.uuid()`. Lookups compare the id as a plain string inside the
  * classroom scope, so the shape changes nothing downstream.
+ *
+ * A numeric id looks like a number, so a client may send it as a JSON number
+ * (5482151816) rather than a string. A non-negative safe integer is turned
+ * into its digit string before validation; anything else (negative, fractional,
+ * past 2^53, where the digits would already be wrong) is left as is and fails
+ * the string check. The preprocess is invisible in the published JSON Schema,
+ * which still advertises a string with the pattern — the form ids come back in
+ * from list_submissions, and the one clients should send.
+ *
+ * A function, not a shared constant: the JSON Schema converter publishes a
+ * zod instance met twice in one tool as a `$ref` to its first use
+ * (submission_late_override's single id and its id list), which not every
+ * MCP client resolves. A fresh schema per use keeps every one inline.
  */
-export const submissionIdSchema = z
-  .string()
-  .min(1)
-  .max(64)
-  .regex(SUBMISSION_ID_PATTERN, 'Must be a submission id: a uuid or a numeric id');
+export function submissionIdSchema() {
+  return z.preprocess(
+    value =>
+      typeof value === 'number' && Number.isSafeInteger(value) && value >= 0
+        ? String(value)
+        : value,
+    z
+      .string()
+      .min(1)
+      .max(64)
+      .regex(SUBMISSION_ID_PATTERN, 'Must be a submission id: a uuid or a numeric id')
+  );
+}
 
 // ─── Results & errors ────────────────────────────────────────────────────────
 

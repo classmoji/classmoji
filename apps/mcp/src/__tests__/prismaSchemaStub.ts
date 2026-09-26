@@ -130,7 +130,25 @@ const computedFieldMisuse = (model: DmmfModel, key: string, kind: string): Error
 // Clause validators
 // ---------------------------------------------------------------------------
 
-function assertWhere(model: DmmfModel, clause: Clause): void {
+/**
+ * Methods whose `where` is a WhereUniqueInput — the only place Prisma accepts
+ * a compound unique selector (`cursor` is one too, checked separately).
+ */
+const UNIQUE_WHERE_METHODS = new Set([
+  'findUnique',
+  'findUniqueOrThrow',
+  'update',
+  'delete',
+  'upsert',
+]);
+
+/**
+ * `unique` is true only for the TOP level of a WhereUniqueInput: a compound
+ * unique selector is accepted there and nowhere else (not in findFirst /
+ * findMany / updateMany, not under AND / OR / NOT, not in a relation filter),
+ * and it must name exactly the index's fields.
+ */
+function assertWhere(model: DmmfModel, clause: Clause, unique = false): void {
   if (Array.isArray(clause)) {
     for (const entry of clause) assertWhere(model, entry);
     return;
@@ -142,14 +160,18 @@ function assertWhere(model: DmmfModel, clause: Clause): void {
       assertWhere(model, value);
       continue;
     }
-    const compoundFields = compoundUniqueFieldsOf(model, key);
+    const compoundFields = unique ? compoundUniqueFieldsOf(model, key) : undefined;
     if (compoundFields) {
-      // Its value names exactly the index's fields.
-      if (isPlainObject(value)) {
-        for (const inner of Object.keys(value)) {
-          if (!compoundFields.includes(inner))
-            throw unknownField(model, `${key}.${inner}`, 'where');
-        }
+      const given = isPlainObject(value) ? Object.keys(value) : [];
+      for (const inner of given) {
+        if (!compoundFields.includes(inner)) throw unknownField(model, `${key}.${inner}`, 'where');
+      }
+      const missing = compoundFields.filter(f => !given.includes(f));
+      if (missing.length > 0) {
+        throw new Error(
+          `Compound unique \`${key}\` on model \`${model.name}\` is missing ` +
+            `${missing.map(f => `\`${f}\``).join(', ')}.`
+        );
       }
       continue;
     }
@@ -320,12 +342,12 @@ function assertNestedWriteOperand(related: DmmfModel, op: string, operand: Claus
 }
 
 /** The clauses shared by every read: `select` / `include` / `where` / `orderBy`. */
-function assertReadArgs(model: DmmfModel, args: QueryArgs): void {
+function assertReadArgs(model: DmmfModel, args: QueryArgs, method = ''): void {
   assertSelect(model, args?.select, 'select');
   assertSelect(model, args?.include, 'include');
-  assertWhere(model, args?.where);
+  assertWhere(model, args?.where, UNIQUE_WHERE_METHODS.has(method));
   assertOrderBy(model, args?.orderBy);
-  assertWhere(model, args?.cursor);
+  assertWhere(model, args?.cursor, true);
   assertDistinct(model, args?.by);
   assertDistinct(model, args?.distinct);
 }
@@ -422,9 +444,9 @@ export function createValidatingPrisma(initialRows: PrismaRows = {}): Validating
     calls.push({ model: model.name, clientKey: key, method, args });
 
     if (READ_METHODS.has(method)) {
-      assertReadArgs(model, args);
+      assertReadArgs(model, args, method);
     } else if (WRITE_METHODS.has(method)) {
-      assertReadArgs(model, args);
+      assertReadArgs(model, args, method);
       if (method === 'upsert') {
         assertData(model, args?.create);
         assertData(model, args?.update);

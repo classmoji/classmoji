@@ -199,7 +199,8 @@ class HelperService {
    * ones the provider call uses. The grader must be in this classroom's grader
    * pool (`gitRepoAssignmentGrader.findEligibleGrader`), and their stored login
    * is the one assigned. Nothing reaches the provider or the database unless
-   * both checks pass. Someone already on the submission is left as is.
+   * both checks pass. Someone already on the submission is left as is,
+   * including when a concurrent add inserts the row first (P2002).
    */
   static async addGraderInClassroom(
     payload: ClassroomGraderPayload
@@ -223,14 +224,25 @@ class HelperService {
       return { status: 'already_assigned', graderLogin: grader.login };
     }
 
-    await this.addGraderToGitRepoAssignment({
-      repoName: submission.git_repo.name,
-      gitOrganization,
-      githubIssueNumber: submission.provider_issue_number,
-      graderLogin: grader.login,
-      graderId: grader.id,
-      gitRepoAssignmentId: submission.id,
-    });
+    try {
+      await this.addGraderToGitRepoAssignment({
+        repoName: submission.git_repo.name,
+        gitOrganization,
+        githubIssueNumber: submission.provider_issue_number,
+        graderLogin: grader.login,
+        graderId: grader.id,
+        gitRepoAssignmentId: submission.id,
+      });
+    } catch (error) {
+      // A concurrent add of the same grader won the race between the check
+      // above and the insert: the (submission, grader) row is unique, so the
+      // grader is on the submission either way. Adding the same GitHub
+      // assignee twice is a no-op there too.
+      if ((error as { code?: string })?.code === 'P2002') {
+        return { status: 'already_assigned', graderLogin: grader.login };
+      }
+      throw error;
+    }
     return { status: 'added', graderLogin: grader.login };
   }
 

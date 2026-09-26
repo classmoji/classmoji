@@ -1,11 +1,14 @@
 /**
  * Grader assignment tools — grader_assign / grader_unassign.
  *
- * ROUTE-DERIVED TIER: the web actions live in
- * apps/webapp/app/routes/admin.$class.repos_.$title/action.ts and
- * admin.$class.assignments_.$id (addGrader / removeGrader) and
- * .assign-graders (bulk), all gated by requireClassroomAdmin — OWNER only.
- * `roles` is who may CALL the tool; who may BE a grader is a separate rule.
+ * ROUTE-DERIVED TIER: the web adds and removes graders on the assignment page
+ * (apps/webapp/app/routes/admin.$class.assignments_.$id, re-exported under
+ * /teacher), whose action admits OWNER or TEACHER, and on the owner-only
+ * repository page (admin.$class.repos_.$title/action.ts). The wider of the two
+ * is the web's rule, so grader_assign / grader_unassign are OWNER + TEACHER.
+ * Bulk assignment (.assign-graders) is requireClassroomAdmin, so
+ * grader_assign_bulk stays OWNER only. `roles` is who may CALL a tool; who
+ * may BE a grader is a separate rule, below.
  *
  * Backbone: HelperService.addGraderInClassroom / removeGraderInClassroom, the
  * same classroom-scoped helpers the web actions call, so both surfaces apply
@@ -37,6 +40,7 @@ import {
   loadAssignmentInClassroom,
   ok,
   OWNER_ONLY,
+  OWNER_TEACHER,
   requireClassroomCtx,
   scopedNotFound,
   submissionIdSchema,
@@ -70,16 +74,17 @@ export const graderAssignTool: ToolDefinition<GraderArgs> = {
   title: 'Assign a grader',
   description:
     'Assigns a grader to one submission and mirrors them onto the GitHub issue assignees, like ' +
-    'the web repository and assignment pages. Owner only. The grader must be an ASSISTANT or ' +
+    'the web assignment page. Owner or teacher. The grader must be an ASSISTANT or ' +
     'TEACHER of this classroom marked as a grader (is_grader) — an owner, or staff without ' +
     'is_grader, is refused; staff_update sets is_grader. git_repo_assignment_id is the `id` from ' +
-    'list_submissions; grader_id is a user id from list_teaching_team. Assigning someone already ' +
-    'on the submission changes nothing and returns already_assigned: true.',
+    'list_submissions; grader_id is a user id from list_teaching_team (grader_eligible: true). ' +
+    'An eligible grader already on the submission changes nothing and returns ' +
+    'already_assigned: true.',
   scope: 'write',
-  roles: OWNER_ONLY,
+  roles: OWNER_TEACHER,
   inputSchema: {
     classroom: z.string().describe("Classroom reference as 'org/slug'"),
-    git_repo_assignment_id: submissionIdSchema.describe('Submission (GitRepoAssignment) id'),
+    git_repo_assignment_id: submissionIdSchema().describe('Submission (GitRepoAssignment) id'),
     grader_id: z
       .string()
       .uuid()
@@ -139,14 +144,14 @@ export const graderUnassignTool: ToolDefinition<GraderArgs> = {
   title: 'Unassign a grader',
   description:
     'Removes a grader from one submission and from the GitHub issue assignees, like the web ' +
-    'repository and assignment pages. Owner only. The grader must currently be assigned to the ' +
+    'assignment page. Owner or teacher. The grader must currently be assigned to the ' +
     'submission; anyone assigned can be removed, even if they are no longer marked as a grader. ' +
     'git_repo_assignment_id is the `id` from list_submissions.',
   scope: 'write',
-  roles: OWNER_ONLY,
+  roles: OWNER_TEACHER,
   inputSchema: {
     classroom: z.string().describe("Classroom reference as 'org/slug'"),
-    git_repo_assignment_id: submissionIdSchema.describe('Submission (GitRepoAssignment) id'),
+    git_repo_assignment_id: submissionIdSchema().describe('Submission (GitRepoAssignment) id'),
     grader_id: z.string().uuid().describe('User id of the currently assigned grader'),
   },
   handler: async (args, ctx) => {

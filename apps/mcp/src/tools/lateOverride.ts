@@ -139,11 +139,11 @@ export const submissionLateOverrideTool: ToolDefinition<LateOverrideArgs> = {
   roles: OWNER_TEACHER,
   inputSchema: {
     classroom: z.string().describe("Classroom reference as 'org/slug'"),
-    git_repo_assignment_id: submissionIdSchema
+    git_repo_assignment_id: submissionIdSchema()
       .optional()
       .describe('One submission (GitRepoAssignment) id'),
     git_repo_assignment_ids: z
-      .array(submissionIdSchema)
+      .array(submissionIdSchema())
       .min(1)
       .max(LATE_OVERRIDE_MAX_IDS)
       .optional()

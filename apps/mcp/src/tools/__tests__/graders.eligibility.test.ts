@@ -319,6 +319,58 @@ describe('grader_assign — who can be a grader (the web rule)', () => {
   });
 });
 
+describe('grader_assign — callers and races', () => {
+  const teacherCtx = {
+    ...ownerCtx,
+    viewer: { ...ownerCtx.viewer, userId: U.teacherGrader },
+    classroom: {
+      ...ownerCtx.classroom,
+      role: 'TEACHER',
+      membership: { id: 'm-teacher', role: 'TEACHER' },
+    },
+  } as unknown as ToolContext;
+
+  it('a TEACHER caller adds and removes graders, scoped to the same classroom', async () => {
+    const added = parse(
+      await graderAssignTool.handler(assignArgs(NUMERIC_SUB, U.taGrader), teacherCtx)
+    );
+    expect(added).toMatchObject({ success: true, grader: 'ta-g' });
+    expect(auditCreates()[0]).toMatchObject({ role: 'TEACHER', user_id: U.teacherGrader });
+
+    submissions[0].graders = [U.taGrader];
+    const removed = parse(
+      await graderUnassignTool.handler(assignArgs(NUMERIC_SUB, U.taGrader), teacherCtx)
+    );
+    expect(removed).toEqual({ success: true, removed_grader: 'ta-g' });
+
+    // Another classroom's submission is the same not_found for a teacher.
+    await expect(
+      graderAssignTool.handler(assignArgs(FOREIGN_SUB, U.taGrader), teacherCtx)
+    ).rejects.toMatchObject({ kind: 'not_found' });
+  });
+
+  it('reports already_assigned when a concurrent add wins the insert (P2002)', async () => {
+    setPrismaRows({
+      gitRepoAssignmentGrader: {
+        create: () => {
+          throw Object.assign(new Error('Unique constraint failed'), { code: 'P2002' });
+        },
+      },
+    });
+
+    const payload = parse(
+      await graderAssignTool.handler(assignArgs(REPO_SUB, U.taGrader), ownerCtx)
+    );
+    expect(payload).toEqual({
+      success: true,
+      already_assigned: true,
+      grader: 'ta-g',
+      git_repo_assignment_id: REPO_SUB,
+    });
+    expect(auditCreates()).toHaveLength(0);
+  });
+});
+
 describe('grader_assign / grader_unassign — the submission is scoped first', () => {
   it.each([
     ['another classroom', FOREIGN_SUB],
