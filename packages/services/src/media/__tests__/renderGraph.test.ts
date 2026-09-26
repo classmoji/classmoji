@@ -38,6 +38,7 @@ vi.mock('@aws-sdk/client-s3', () => {
     CreateMultipartUploadCommand: command('CreateMultipartUpload'),
     DeleteObjectCommand: command('DeleteObject'),
     HeadObjectCommand: command('HeadObject'),
+    ListObjectsV2Command: command('ListObjectsV2'),
     UploadPartCommand: command('UploadPart'),
   };
 });

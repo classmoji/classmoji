@@ -1,4 +1,9 @@
-import { contentTypeForMediaExt, isMediaVariant, mediaKey } from '@classmoji/content-signing';
+import {
+  contentTypeForMediaExt,
+  isClassroomId,
+  isMediaVariant,
+  mediaKey,
+} from '@classmoji/content-signing';
 
 /**
  * The R2 key shape, re-exported from the signing package.
@@ -37,4 +42,18 @@ export function origVariant(ext: string): string | null {
   if (typeof ext !== 'string') return null;
   const variant = `orig.${ext.toLowerCase()}`;
   return isMediaVariant(variant) ? variant : null;
+}
+
+/**
+ * `m/{classroomId}/` — everything one classroom has in the media bucket.
+ *
+ * The id is checked, because this string is handed to a LIST-and-delete: an
+ * empty id would be `m//`, and a truncated one would match its neighbours'
+ * prefixes too. Only a whole, lowercase classroom uuid gets a prefix at all.
+ */
+export function mediaPrefix(classroomId: string): string {
+  if (!isClassroomId(classroomId)) {
+    throw new TypeError(`media: not a classroom id (got ${classroomId})`);
+  }
+  return `m/${classroomId}/`;
 }

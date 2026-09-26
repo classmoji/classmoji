@@ -474,6 +474,11 @@ export interface ExampleCleanupReport {
  * cascades through memberships, repositories, git repos, grades, and audit
  * rows, exactly as the danger-zone delete does for a real classroom; there is
  * no Github side to clean because the sandbox org has no installation.
+ *
+ * A sandbox with ANY media row is counted as used and kept. Media objects live
+ * in R2, the cascade would drop the only rows naming them, and this sweep does
+ * not purge the bucket the way `classroom.deleteById` does — so it simply never
+ * deletes a classroom that has any.
  */
 export async function deleteAbandonedExampleClassrooms(
   options: { olderThanDays?: number; now?: Date } = {}
@@ -488,13 +493,14 @@ export async function deleteAbandonedExampleClassrooms(
     select: {
       id: true,
       memberships: { where: { role: 'OWNER' }, select: { tour_completed_at: true } },
-      _count: { select: { audit_logs: true } },
+      _count: { select: { audit_logs: true, media_objects: true } },
     },
   });
 
   const abandoned = candidates
     .filter(c => c.memberships.every(m => m.tour_completed_at === null))
     .filter(c => c._count.audit_logs === 0)
+    .filter(c => (c._count.media_objects ?? 0) === 0)
     .map(c => c.id);
 
   if (abandoned.length > 0) {

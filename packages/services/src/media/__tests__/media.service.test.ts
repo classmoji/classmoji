@@ -43,6 +43,7 @@ vi.mock('@aws-sdk/client-s3', () => ({
   CreateMultipartUploadCommand: command('CreateMultipartUpload'),
   DeleteObjectCommand: command('DeleteObject'),
   HeadObjectCommand: command('HeadObject'),
+  ListObjectsV2Command: command('ListObjectsV2'),
   UploadPartCommand: command('UploadPart'),
 }));
 
@@ -82,8 +83,16 @@ vi.mock('../../classmoji/subscription.service.ts', () => ({
   getProStateForClassroomId: (...args: unknown[]) => getProStateForClassroomId(...args),
 }));
 
-const { abortUpload, completeUpload, createUpload, deleteMedia, listMedia, signParts, usage } =
-  await import('../media.service.ts');
+const {
+  abortUpload,
+  completeUpload,
+  createUpload,
+  deleteMedia,
+  listMedia,
+  purgeClassroomMedia,
+  signParts,
+  usage,
+} = await import('../media.service.ts');
 const { PART_SIZE_BYTES, PER_FILE_MAX_BYTES, PRO_QUOTA_BYTES, RESERVATION_WINDOW_MS } =
   await import('../mediaQuota.ts');
 const { resetR2Client } = await import('../r2Client.ts');
@@ -1150,14 +1159,17 @@ describe('deleteMedia', () => {
     expect(warn).toHaveBeenCalledWith(expect.stringContaining('Could not delete'), 'r2 said no');
   });
 
-  it('tells the loser of a double delete that the object is gone', async () => {
+  it('lets the loser of a double delete finish the object deletes too', async () => {
+    // The winner tombstoned the row between the loser's read and its write.
+    // The loser does not tombstone again, but repeating the deletes is safe
+    // and is what a retry of a half-failed delete needs.
     prisma.mediaObject.findFirst.mockResolvedValue(row());
     prisma.mediaObject.updateMany.mockResolvedValue({ count: 0 });
 
-    await expect(deleteMedia({ classroom, mediaId: MEDIA_ID })).rejects.toMatchObject({
-      code: 'NOT_FOUND',
+    await expect(deleteMedia({ classroom, mediaId: MEDIA_ID })).resolves.toEqual({
+      mediaId: MEDIA_ID,
     });
-    expect(sent).toHaveLength(0);
+    expect(sent.filter(call => call.name === 'DeleteObject')).toHaveLength(3);
   });
 
   it('aborts first when the upload is still open', async () => {
@@ -1168,16 +1180,125 @@ describe('deleteMedia', () => {
     expect(sent.filter(call => call.name === 'DeleteObject')).toHaveLength(3);
   });
 
-  it('is NOT_FOUND for an id already gone, or one in another classroom', async () => {
-    prisma.mediaObject.findFirst.mockResolvedValue(row({ status: 'DELETED' }));
-    await expect(deleteMedia({ classroom, mediaId: MEDIA_ID })).rejects.toMatchObject({
-      code: 'NOT_FOUND',
+  it('re-attempts the object deletes for a row that is already deleted', async () => {
+    // A delete whose R2 half failed left a tombstone and some bytes. Asking
+    // again must finish the job, not answer NOT_FOUND and strand them.
+    prisma.mediaObject.findFirst.mockResolvedValue(
+      row({ status: 'DELETED', rendition_key: `m/${CLASSROOM_ID}/${MEDIA_ID}/web.mp4` })
+    );
+
+    await expect(deleteMedia({ classroom, mediaId: MEDIA_ID })).resolves.toEqual({
+      mediaId: MEDIA_ID,
     });
 
+    expect(sent.map(call => call.input.Key)).toEqual([
+      ORIG_KEY,
+      `m/${CLASSROOM_ID}/${MEDIA_ID}/web.mp4`,
+      `m/${CLASSROOM_ID}/${MEDIA_ID}/poster.webp`,
+    ]);
+    // The tombstone is not rewritten: `deleted_at` keeps the first delete's time.
+    expect(prisma.mediaObject.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('is NOT_FOUND for an id this classroom never had', async () => {
     prisma.mediaObject.findFirst.mockResolvedValue(null);
     await expect(deleteMedia({ classroom, mediaId: MEDIA_ID })).rejects.toMatchObject({
       code: 'NOT_FOUND',
     });
     expect(sent).toHaveLength(0);
+  });
+});
+
+describe('purgeClassroomMedia', () => {
+  const PREFIX = `m/${CLASSROOM_ID}/`;
+
+  it('does nothing on a deployment with no media store', async () => {
+    unconfigure();
+    await expect(purgeClassroomMedia(CLASSROOM_ID)).resolves.toEqual({ deleted: 0 });
+    expect(sent).toHaveLength(0);
+    expect(prisma.mediaObject.findMany).not.toHaveBeenCalled();
+  });
+
+  it('deletes every object under the classroom prefix, across pages', async () => {
+    sendImpl.mockImplementation(async (name: string, input: Record<string, unknown>) => {
+      if (name !== 'ListObjectsV2') return {};
+      return input.ContinuationToken === 'page-2'
+        ? { Contents: [{ Key: `${PREFIX}c/orig.zip` }], IsTruncated: false }
+        : {
+            Contents: [{ Key: `${PREFIX}a/orig.mp4` }, { Key: `${PREFIX}a/web.mp4` }],
+            IsTruncated: true,
+            NextContinuationToken: 'page-2',
+          };
+    });
+
+    await expect(purgeClassroomMedia(CLASSROOM_ID)).resolves.toEqual({ deleted: 3 });
+
+    const lists = sent.filter(call => call.name === 'ListObjectsV2');
+    expect(lists.map(call => call.input)).toEqual([
+      { Bucket: 'classmoji-media-test', Prefix: PREFIX, ContinuationToken: undefined },
+      { Bucket: 'classmoji-media-test', Prefix: PREFIX, ContinuationToken: 'page-2' },
+    ]);
+    expect(sent.filter(call => call.name === 'DeleteObject').map(call => call.input.Key)).toEqual([
+      `${PREFIX}a/orig.mp4`,
+      `${PREFIX}a/web.mp4`,
+      `${PREFIX}c/orig.zip`,
+    ]);
+  });
+
+  it('aborts the open uploads first, which a listing cannot see', async () => {
+    prisma.mediaObject.findMany.mockResolvedValue([
+      { id: MEDIA_ID, ext: 'mp4', upload_id: 'up-9' },
+    ]);
+    sendImpl.mockImplementation(async (name: string) =>
+      name === 'ListObjectsV2' ? { Contents: [], IsTruncated: false } : {}
+    );
+
+    await purgeClassroomMedia(CLASSROOM_ID);
+
+    expect(prisma.mediaObject.findMany.mock.calls[0][0].where).toMatchObject({
+      classroom_id: CLASSROOM_ID,
+      status: 'UPLOADING',
+    });
+    expect(sent[0]).toEqual({
+      name: 'AbortMultipartUpload',
+      input: { Bucket: 'classmoji-media-test', Key: ORIG_KEY, UploadId: 'up-9' },
+    });
+    expect(sent[1].name).toBe('ListObjectsV2');
+  });
+
+  it('throws when the listing fails, so the classroom is not deleted', async () => {
+    sendImpl.mockImplementation(async (name: string) => {
+      if (name === 'ListObjectsV2') throw new Error('r2 is down');
+      return {};
+    });
+    await expect(purgeClassroomMedia(CLASSROOM_ID)).rejects.toThrow('r2 is down');
+  });
+
+  it('tries every object, then throws when any of them could not be deleted', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    sendImpl.mockImplementation(async (name: string, input: Record<string, unknown>) => {
+      if (name === 'ListObjectsV2') {
+        return {
+          Contents: [{ Key: `${PREFIX}a/orig.mp4` }, { Key: `${PREFIX}b/orig.pdf` }],
+          IsTruncated: false,
+        };
+      }
+      if (name === 'DeleteObject' && input.Key === `${PREFIX}a/orig.mp4`) {
+        throw new Error('r2 said no');
+      }
+      return {};
+    });
+
+    await expect(purgeClassroomMedia(CLASSROOM_ID)).rejects.toThrow('1 media object');
+    expect(sent.filter(call => call.name === 'DeleteObject')).toHaveLength(2);
+  });
+
+  it('refuses anything that is not a whole classroom id', async () => {
+    // An empty id would be the prefix `m//`; a partial one matches neighbours.
+    for (const bad of ['', '1111', `${CLASSROOM_ID}/..`]) {
+      await expect(purgeClassroomMedia(bad)).rejects.toThrow(TypeError);
+    }
+    expect(sent).toHaveLength(0);
+    expect(prisma.mediaObject.findMany).not.toHaveBeenCalled();
   });
 });

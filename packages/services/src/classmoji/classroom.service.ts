@@ -2,6 +2,9 @@ import getPrisma from '@classmoji/database';
 import { canonicalTimeZone } from '@classmoji/utils';
 import { GitHubProvider } from '../git/index.ts';
 import * as entitlementService from './entitlement.service.ts';
+// The barrel, whose write half (and the S3 client behind it) loads only when a
+// classroom is actually deleted.
+import { purgeClassroomMedia } from '../media/index.ts';
 import type { Prisma, Role } from '@prisma/client';
 
 /**
@@ -235,11 +238,20 @@ export const update = async (id: string, updates: Prisma.ClassroomUpdateInput) =
 };
 
 /**
- * Delete a Classroom by ID
+ * Delete a Classroom by ID.
+ *
+ * The classroom's media objects in R2 go FIRST. Its `media_objects` rows
+ * cascade away with the classroom, and after that nothing names the objects —
+ * they would sit in the bucket unreachable and unbilled. A purge that fails
+ * throws and the classroom is NOT deleted, so the caller can say so and the
+ * delete can be retried; the purge is idempotent. A deployment with no media
+ * store skips it.
+ *
  * @param {string} id - UUID of the Classroom
  * @returns {Promise<Object>}
  */
 export const deleteById = async (id: string) => {
+  await purgeClassroomMedia(id);
   return getPrisma().classroom.delete({
     where: { id },
   });

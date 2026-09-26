@@ -125,6 +125,18 @@ export async function deleteMedia(
 }
 
 /**
+ * Every object a classroom has in the media bucket, deleted — the step that has
+ * to run before a classroom's rows cascade away. Lazy like the rest of the
+ * write half: `classroom.service.ts` names it, and a module that names it must
+ * not pay for the S3 client until a classroom is actually being deleted.
+ */
+export async function purgeClassroomMedia(
+  classroomId: Parameters<MediaWrites['purgeClassroomMedia']>[0]
+): ReturnType<MediaWrites['purgeClassroomMedia']> {
+  return (await mediaWrites()).purgeClassroomMedia(classroomId);
+}
+
+/**
  * `usage` and `listMedia` are reads, but they live with the writes.
  *
  * They are the admin media page's two calls and they run on the same request

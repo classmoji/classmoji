@@ -4,6 +4,7 @@ import {
   CreateMultipartUploadCommand,
   DeleteObjectCommand,
   HeadObjectCommand,
+  ListObjectsV2Command,
   S3Client,
   UploadPartCommand,
 } from '@aws-sdk/client-s3';
@@ -17,7 +18,7 @@ import getPrisma from '@classmoji/database';
 import { canDeliverContent } from '../classmoji/contentDelivery.service.ts';
 import { getProStateForClassroomId } from '../classmoji/subscription.service.ts';
 import { MediaError } from './MediaError.ts';
-import { mediaKey } from './mediaKeys.ts';
+import { mediaKey, mediaPrefix } from './mediaKeys.ts';
 import { classifyFilename } from './mediaKinds.ts';
 import {
   findMediaRow,
@@ -927,6 +928,17 @@ export async function abortUpload({
  *
  * Deleting an UPLOADING row aborts its multipart first: without that, R2 holds
  * the uploaded parts until its own 7-day expiry.
+ *
+ * ## Retryable, so idempotent
+ *
+ * Object deletes are best effort (`deleteObjectsQuietly`), so one can fail
+ * after the row is already a tombstone. Deleting a DELETED row therefore does
+ * not answer NOT_FOUND: it re-attempts the object deletes and succeeds, which
+ * is what lets a half-failed delete be finished by asking again. The same goes
+ * for the loser of two concurrent deletes. Only an id this classroom has never
+ * had is NOT_FOUND. A tombstoned row no longer carries its multipart id, so a
+ * retry cannot re-abort an upload whose first abort failed; R2's own 7-day
+ * expiry of incomplete uploads covers that one.
  */
 export async function deleteMedia({
   classroom,
@@ -937,9 +949,7 @@ export async function deleteMedia({
 }): Promise<{ mediaId: string }> {
   const { client, bucket } = requireClient();
   const row = await findMediaRow(classroom.id, mediaId);
-  if (!row || row.status === 'DELETED') {
-    throw new MediaError('NOT_FOUND', 'No such media object');
-  }
+  if (!row) throw new MediaError('NOT_FOUND', 'No such media object');
 
   const origKey = mediaKey(classroom.id, row.id, `orig.${row.ext}`);
 
@@ -947,9 +957,10 @@ export async function deleteMedia({
   // reader sees, and an R2 delete that fails halfway must not be able to leave
   // a READY row pointing at bytes that are gone — a permanently broken file in
   // every page that referenced it. Conditional, so a delete racing another one
-  // does not double-tombstone: the loser is told the object is already gone.
-  if (!(await markDeleted(row.id, ['UPLOADING', 'READY']))) {
-    throw new MediaError('NOT_FOUND', 'No such media object');
+  // does not double-tombstone; the loser simply goes on to the object deletes,
+  // which are safe to repeat.
+  if (row.status !== 'DELETED') {
+    await markDeleted(row.id, ['UPLOADING', 'READY']);
   }
 
   if (row.status === 'UPLOADING' && row.upload_id) {
@@ -967,4 +978,76 @@ export async function deleteMedia({
   ]);
 
   return { mediaId: row.id };
+}
+
+/**
+ * Delete every object a classroom has in the media bucket, ahead of the
+ * classroom itself being deleted.
+ *
+ * The rows go with the classroom (`ON DELETE CASCADE`), and once they are gone
+ * nothing names these objects any more: no page can reach them, no quota bills
+ * them, and no later delete will find them. So this runs BEFORE the cascade,
+ * over the whole `m/{classroomId}/` prefix rather than over the rows — every
+ * variant the rendition job ever wrote is under it, named in a column or not.
+ *
+ * Open multiparts are not objects and a listing does not show them, so the
+ * UPLOADING rows' uploads are aborted first, from the ids the rows hold. One
+ * that cannot be aborted is left to R2's 7-day expiry of incomplete uploads.
+ *
+ * A deployment with no media store has nothing to delete and returns at once.
+ * A LISTING that fails throws, and the caller must not delete the classroom:
+ * with the rows gone the prefix is the only record of what is there. Individual
+ * object deletes that fail are counted, and a purge with failures throws too,
+ * for the same reason — asking again deletes what is left.
+ *
+ * Returns how many objects were deleted, for the log line.
+ */
+export async function purgeClassroomMedia(classroomId: string): Promise<{ deleted: number }> {
+  const client = r2Client();
+  const bucket = mediaBucket();
+  if (!client || !bucket) return { deleted: 0 };
+  const prefix = mediaPrefix(classroomId);
+
+  const open = (await getPrisma().mediaObject.findMany({
+    where: { classroom_id: classroomId, status: 'UPLOADING', upload_id: { not: null } },
+    select: { id: true, ext: true, upload_id: true },
+  })) as { id: string; ext: string; upload_id: string }[];
+  for (const upload of open) {
+    const key = mediaKey(classroomId, upload.id, `orig.${upload.ext}`);
+    await abortQuietly(client, bucket, key, upload.upload_id);
+  }
+
+  let deleted = 0;
+  const failed: string[] = [];
+  let continuationToken: string | undefined;
+  do {
+    const page = await client.send(
+      new ListObjectsV2Command({
+        Bucket: bucket,
+        Prefix: prefix,
+        ContinuationToken: continuationToken,
+      })
+    );
+    for (const object of page.Contents ?? []) {
+      if (!object.Key) continue;
+      try {
+        await client.send(new DeleteObjectCommand({ Bucket: bucket, Key: object.Key }));
+        deleted += 1;
+      } catch (error) {
+        failed.push(object.Key);
+        console.warn(
+          `[media] Could not delete ${object.Key}:`,
+          error instanceof Error ? error.message : error
+        );
+      }
+    }
+    continuationToken = page.IsTruncated ? page.NextContinuationToken : undefined;
+  } while (continuationToken);
+
+  if (failed.length > 0) {
+    throw new Error(
+      `Could not delete ${failed.length} media object(s) for classroom ${classroomId}`
+    );
+  }
+  return { deleted };
 }
