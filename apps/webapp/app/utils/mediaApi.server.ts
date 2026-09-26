@@ -80,6 +80,9 @@ const STATUS_FOR: Record<string, number> = {
   BAD_STATE: 409,
   SIZE_MISMATCH: 409,
   VERIFY_FAILED: 409,
+  // Gone for good: the reservation lapsed and the upload was cancelled, so no
+  // retry of the same call can succeed. The client starts over.
+  UPLOAD_EXPIRED: 410,
 };
 
 /**

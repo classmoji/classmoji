@@ -84,7 +84,8 @@ vi.mock('../../classmoji/subscription.service.ts', () => ({
 
 const { abortUpload, completeUpload, createUpload, deleteMedia, listMedia, signParts, usage } =
   await import('../media.service.ts');
-const { PART_SIZE_BYTES, PER_FILE_MAX_BYTES, PRO_QUOTA_BYTES } = await import('../mediaQuota.ts');
+const { PART_SIZE_BYTES, PER_FILE_MAX_BYTES, PRO_QUOTA_BYTES, RESERVATION_WINDOW_MS } =
+  await import('../mediaQuota.ts');
 const { resetR2Client } = await import('../r2Client.ts');
 
 const CLASSROOM_ID = '11111111-2222-4333-8444-555555555555';
@@ -538,10 +539,94 @@ describe('signParts', () => {
 
     const inputs = getSignedUrl.mock.calls.map(call => (call[1] as { input: object }).input);
     expect(inputs).toEqual([
-      { Bucket: 'classmoji-media-test', Key: ORIG_KEY, UploadId: 'up-1', PartNumber: 1 },
-      { Bucket: 'classmoji-media-test', Key: ORIG_KEY, UploadId: 'up-1', PartNumber: 2 },
+      {
+        Bucket: 'classmoji-media-test',
+        Key: ORIG_KEY,
+        UploadId: 'up-1',
+        PartNumber: 1,
+        ContentLength: PART_SIZE_BYTES,
+      },
+      // The last part is the remainder: PART_SIZE_BYTES + 1 declared bytes.
+      {
+        Bucket: 'classmoji-media-test',
+        Key: ORIG_KEY,
+        UploadId: 'up-1',
+        PartNumber: 2,
+        ContentLength: 1,
+      },
     ]);
     expect(getSignedUrl.mock.calls[0][2]).toMatchObject({ expiresIn: 15 * 60 });
+    // The length is what the rule rests on, so it is named as signed rather
+    // than left to the presigner's default.
+    expect(
+      (getSignedUrl.mock.calls[0][2] as { signableHeaders: Set<string> }).signableHeaders.has(
+        'content-length'
+      )
+    ).toBe(true);
+  });
+
+  it('signs a full last part when the size is an exact multiple of the part size', async () => {
+    prisma.mediaObject.findFirst.mockResolvedValue(
+      row({ status: 'UPLOADING', upload_id: 'up-1', size_bytes: BigInt(2 * PART_SIZE_BYTES) })
+    );
+    await signParts({ classroom, mediaId: MEDIA_ID, partNumbers: [1, 2] });
+    const lengths = getSignedUrl.mock.calls.map(
+      call => (call[1] as { input: { ContentLength: number } }).input.ContentLength
+    );
+    expect(lengths).toEqual([PART_SIZE_BYTES, PART_SIZE_BYTES]);
+  });
+
+  it('signs a one-part file for exactly its own size', async () => {
+    prisma.mediaObject.findFirst.mockResolvedValue(
+      row({ status: 'UPLOADING', upload_id: 'up-1', size_bytes: BigInt(12_345) })
+    );
+    await signParts({ classroom, mediaId: MEDIA_ID, partNumbers: [1] });
+    expect(
+      (getSignedUrl.mock.calls[0][1] as { input: { ContentLength: number } }).input.ContentLength
+    ).toBe(12_345);
+  });
+
+  it('refuses and cancels an upload older than its reservation window', async () => {
+    // Its bytes stopped counting when the window closed. Letting it go on
+    // would store a file the quota never covered.
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    sendImpl.mockResolvedValue({});
+    prisma.mediaObject.findFirst.mockResolvedValue(
+      row({
+        status: 'UPLOADING',
+        upload_id: 'up-1',
+        created_at: new Date(Date.now() - RESERVATION_WINDOW_MS - 1000),
+      })
+    );
+
+    await expect(
+      signParts({ classroom, mediaId: MEDIA_ID, partNumbers: [1] })
+    ).rejects.toMatchObject({ code: 'UPLOAD_EXPIRED' });
+
+    expect(getSignedUrl).not.toHaveBeenCalled();
+    expect(sent).toEqual([
+      {
+        name: 'AbortMultipartUpload',
+        input: { Bucket: 'classmoji-media-test', Key: ORIG_KEY, UploadId: 'up-1' },
+      },
+    ]);
+    expect(prisma.mediaObject.updateMany.mock.calls.at(-1)?.[0]).toMatchObject({
+      where: { id: MEDIA_ID, status: 'UPLOADING' },
+      data: expect.objectContaining({ status: 'DELETED' }),
+    });
+  });
+
+  it('still signs an upload just inside its window', async () => {
+    prisma.mediaObject.findFirst.mockResolvedValue(
+      row({
+        status: 'UPLOADING',
+        upload_id: 'up-1',
+        created_at: new Date(Date.now() - RESERVATION_WINDOW_MS + 60_000),
+      })
+    );
+    const { urls } = await signParts({ classroom, mediaId: MEDIA_ID, partNumbers: [1] });
+    expect(urls).toHaveLength(1);
+    expect(prisma.mediaObject.updateMany).not.toHaveBeenCalled();
   });
 
   it('refuses a row that is not open, and one that is not this classroom', async () => {
@@ -843,6 +928,31 @@ describe('completeUpload', () => {
 
     expect(state.status).toBe('READY');
     expect(prisma.mediaObject.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('refuses and cancels an upload older than its reservation window', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    sendImpl.mockResolvedValue({});
+    prisma.mediaObject.findFirst.mockResolvedValue(
+      row({
+        status: 'UPLOADING',
+        upload_id: 'up-1',
+        size_bytes: BigInt(4096),
+        created_at: new Date(Date.now() - RESERVATION_WINDOW_MS - 1000),
+      })
+    );
+
+    await expect(
+      completeUpload({ classroom, mediaId: MEDIA_ID, parts: [{ partNumber: 1, etag: '"a"' }] })
+    ).rejects.toMatchObject({ code: 'UPLOAD_EXPIRED' });
+
+    // Aborted, never assembled, and the row tombstoned only from UPLOADING.
+    expect(sent.map(call => call.name)).toEqual(['AbortMultipartUpload']);
+    expect(prisma.mediaObject.updateMany.mock.calls.at(-1)?.[0]).toMatchObject({
+      where: { id: MEDIA_ID, status: 'UPLOADING' },
+      data: expect.objectContaining({ status: 'DELETED' }),
+    });
+    expect(prisma.mediaObject.update).not.toHaveBeenCalled();
   });
 
   it('refuses an empty parts list before touching R2', async () => {

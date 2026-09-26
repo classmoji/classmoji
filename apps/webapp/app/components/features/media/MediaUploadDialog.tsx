@@ -70,6 +70,8 @@ export function messageFor(error: MultipartUploadError, quota: QuotaSummary): st
       return 'The upload did not arrive intact and was discarded. Please try again.';
     case 'VERIFY_FAILED':
       return "The upload couldn't be verified. Try again.";
+    case 'UPLOAD_EXPIRED':
+      return 'This upload took too long. Start it again.';
     case 'NOT_FOUND':
     case 'BAD_STATE':
       return 'This upload is no longer valid. Please start it again.';

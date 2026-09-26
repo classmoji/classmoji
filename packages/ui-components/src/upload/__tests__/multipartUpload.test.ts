@@ -429,6 +429,29 @@ describe('uploadMultipart — server error codes', () => {
     }
   );
 
+  it('stops at UPLOAD_EXPIRED: no PUT, no retry, one cleanup', async () => {
+    // The server cancelled the upload because its reservation lapsed; asking
+    // again cannot succeed, so the client gives up at once.
+    const server = makeServer({ parts: () => json(410, { error: 'UPLOAD_EXPIRED' }) });
+
+    await expect(
+      uploadMultipart({ file: videoFile(), classroomId: 'class-1', endpoints: { base: BASE } })
+    ).rejects.toMatchObject({ code: 'UPLOAD_EXPIRED', status: 410 });
+
+    expect(server.partsCalls()).toBe(1);
+    expect(server.of('PUT')).toHaveLength(0);
+    expect(server.of('POST', '/complete')).toHaveLength(0);
+    expect(server.of('DELETE')).toHaveLength(1);
+  });
+
+  it('reads a bare 410 as UPLOAD_EXPIRED', async () => {
+    makeServer({ complete: () => new Response(null, { status: 410 }) });
+
+    await expect(
+      uploadMultipart({ file: videoFile(), classroomId: 'class-1', endpoints: { base: BASE } })
+    ).rejects.toMatchObject({ code: 'UPLOAD_EXPIRED' });
+  });
+
   it('falls back to NETWORK when the server answers with no usable body', async () => {
     makeServer({ create: () => new Response('<html>gateway</html>', { status: 502 }) });
 

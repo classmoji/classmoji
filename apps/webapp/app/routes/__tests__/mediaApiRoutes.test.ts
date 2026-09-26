@@ -162,6 +162,7 @@ describe('POST /api/media/uploads', () => {
       ['BAD_STATE', 409],
       ['SIZE_MISMATCH', 409],
       ['VERIFY_FAILED', 409],
+      ['UPLOAD_EXPIRED', 410],
     ];
 
     for (const [code, status] of cases) {

@@ -41,7 +41,14 @@ export type MediaErrorCode =
    * unverified — and distinct only so the client can say "try again" instead of
    * "your file was the wrong size".
    */
-  | 'VERIFY_FAILED';
+  | 'VERIFY_FAILED'
+  /**
+   * The upload was opened longer ago than its reservation lasts
+   * (`RESERVATION_WINDOW_MS`). Its bytes stopped counting against the quota
+   * when the window closed, so letting it finish would store a file the quota
+   * never covered. It has been cancelled; the uploader starts again.
+   */
+  | 'UPLOAD_EXPIRED';
 
 export class MediaError extends Error {
   readonly code: MediaErrorCode;

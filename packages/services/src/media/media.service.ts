@@ -23,6 +23,7 @@ import {
   findMediaRow,
   liveRows,
   liveRowsWhere,
+  reservationCutoff,
   toMediaRecord,
   type MediaClassroom,
   type MediaRecord,
@@ -423,6 +424,56 @@ async function uploadingRow(
 }
 
 /**
+ * Refuse — and cancel — an open upload whose reservation has lapsed.
+ *
+ * An UPLOADING row stops counting against the quota once it is older than
+ * `RESERVATION_WINDOW_MS`, which is what lets an abandoned upload free its
+ * bytes without a sweep. The other half of that rule is here: a row outside the
+ * window must not be allowed to go on and finish, or the bytes it stores would
+ * be ones no reservation ever covered, and waiting out the window would be a
+ * way to fit two files into the room for one.
+ *
+ * So `signParts` and `completeUpload` both ask this first. The multipart is
+ * aborted (best effort — R2 expires it on its own at 7 days if this fails) and
+ * the row tombstoned, conditionally, in that order: `markDeleted` clears the
+ * upload id the abort needs. The caller is told `UPLOAD_EXPIRED`, which the
+ * client treats as terminal.
+ *
+ * `abortUpload` does not ask: cancelling a lapsed upload is exactly what should
+ * happen to it, and refusing to would leave its parts in the bucket.
+ */
+async function refuseIfExpired(
+  client: S3Client,
+  bucket: string,
+  classroom: MediaClassroom,
+  row: MediaRow & { upload_id: string },
+  now: number = Date.now()
+): Promise<void> {
+  if (row.created_at.getTime() >= reservationCutoff(now).getTime()) return;
+
+  const key = mediaKey(classroom.id, row.id, `orig.${row.ext}`);
+  await abortQuietly(client, bucket, key, row.upload_id);
+  await markDeleted(row.id, 'UPLOADING');
+  throw new MediaError(
+    'UPLOAD_EXPIRED',
+    'This upload took too long and has been cancelled. Start it again.'
+  );
+}
+
+/**
+ * The exact byte count of one part of a file of `sizeBytes`.
+ *
+ * Every part is `PART_SIZE_BYTES` except the last, which is whatever is left —
+ * the same slicing the upload client does. A file that is an exact multiple of
+ * the part size has a FULL last part, never an empty one.
+ */
+export function partLengthFor(sizeBytes: number, partNumber: number): number {
+  const partCount = partCountFor(sizeBytes);
+  if (partNumber < partCount) return PART_SIZE_BYTES;
+  return sizeBytes - (partCount - 1) * PART_SIZE_BYTES;
+}
+
+/**
  * Presigned `UploadPart` URLs for a batch of part numbers.
  *
  * Batched rather than all at once because a 2 GB upload is 64 parts and the
@@ -452,6 +503,7 @@ export async function signParts({
 }): Promise<{ urls: { partNumber: number; url: string; expiresAt: string }[] }> {
   const { client, bucket } = requireClient();
   const row = await uploadingRow(classroom, mediaId);
+  await refuseIfExpired(client, bucket, classroom, row);
 
   const wanted = [...new Set(partNumbers)];
   if (wanted.length === 0 || wanted.length > MAX_PARTS_PER_SIGN) {
@@ -472,7 +524,18 @@ export async function signParts({
 
   const key = mediaKey(classroom.id, row.id, `orig.${row.ext}`);
   const expiresAt = new Date(Date.now() + PART_URL_TTL_SECONDS * 1000).toISOString();
+  const declared = Number(row.size_bytes);
 
+  // Each URL is signed for an exact `Content-Length`: the full part size for
+  // every part but the last, and the remainder for the last. The length is
+  // part of the signature, so a PUT carrying more (or fewer) bytes than that is
+  // refused by R2 before it is stored — the parts can only add up to the size
+  // the quota reserved. `completeUpload`'s size check still runs; this makes it
+  // a formality rather than the only line.
+  //
+  // `signableHeaders` names it explicitly. The presigner signs a
+  // `content-length` it finds on the request today, but that is its default
+  // rather than its contract, and this is the header the whole rule rests on.
   const urls = await Promise.all(
     wanted.map(async partNumber => ({
       partNumber,
@@ -483,8 +546,9 @@ export async function signParts({
           Key: key,
           UploadId: row.upload_id,
           PartNumber: partNumber,
+          ContentLength: partLengthFor(declared, partNumber),
         }),
-        { expiresIn: PART_URL_TTL_SECONDS }
+        { expiresIn: PART_URL_TTL_SECONDS, signableHeaders: new Set(['content-length']) }
       ),
       expiresAt,
     }))
@@ -664,6 +728,7 @@ export async function completeUpload({
 }): Promise<{ mediaId: string; ref: string; sizeBytes: number }> {
   const { client, bucket } = requireClient();
   const row = await uploadingRow(classroom, mediaId);
+  await refuseIfExpired(client, bucket, classroom, row);
 
   const key = mediaKey(classroom.id, row.id, `orig.${row.ext}`);
   const uploadId = row.upload_id;

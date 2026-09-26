@@ -75,6 +75,12 @@ export type MultipartUploadErrorCode =
   | 'SIZE_MISMATCH'
   /** The assembled object could not be read back, so it was discarded. */
   | 'VERIFY_FAILED'
+  /**
+   * The upload was open longer than its reservation lasts, and the server
+   * cancelled it. Terminal: the same call cannot succeed, the file has to be
+   * uploaded again from the start.
+   */
+  | 'UPLOAD_EXPIRED'
   /** The upload row is gone, or no longer in a state that accepts parts. */
   | 'NOT_FOUND'
   | 'BAD_STATE'
@@ -172,6 +178,7 @@ const STATUS_CODES: Record<number, MultipartUploadErrorCode> = {
   403: 'PRO_REQUIRED',
   404: 'NOT_FOUND',
   409: 'QUOTA_EXCEEDED',
+  410: 'UPLOAD_EXPIRED',
   413: 'FILE_TOO_LARGE',
   422: 'KIND_NOT_ALLOWED',
   503: 'NOT_CONFIGURED',
@@ -187,6 +194,7 @@ const KNOWN_CODES = new Set<string>([
   'KIND_NOT_ALLOWED',
   'SIZE_MISMATCH',
   'VERIFY_FAILED',
+  'UPLOAD_EXPIRED',
   'NOT_FOUND',
   'BAD_STATE',
 ]);
