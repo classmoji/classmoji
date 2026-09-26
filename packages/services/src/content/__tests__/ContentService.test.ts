@@ -10,10 +10,14 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 // the module-level 60s response cache can't leak state between tests.
 
 const requestMock = vi.fn();
+// Separate from `requestMock` on purpose: a test that makes every request fail
+// must still fail on the write it is about, not on the branch lookup before it.
+const getDefaultBranchMock = vi.fn();
 
 vi.mock('../../git/index.ts', () => ({
   getGitProvider: () => ({
     getOctokit: async () => ({ request: (...args: unknown[]) => requestMock(...args) }),
+    getDefaultBranch: (...args: unknown[]) => getDefaultBranchMock(...args),
   }),
 }));
 
@@ -46,6 +50,8 @@ function contentsGetCalls() {
 
 beforeEach(() => {
   requestMock.mockReset();
+  getDefaultBranchMock.mockReset();
+  getDefaultBranchMock.mockResolvedValue('main');
 });
 
 describe('uploadBatch', () => {
@@ -1071,6 +1077,76 @@ describe('upload — one entry point, two transports', () => {
     expect(params.path).toMatch(/^pages\/lab\/assets\/\d+-diagram\.png$/);
     expect(result.sha).toBe('put-sha');
     expect(result.url).toContain('/master/');
+  });
+
+  it("writes to the repository's default branch when none is given (small file)", async () => {
+    getDefaultBranchMock.mockResolvedValue('master');
+    requestMock.mockResolvedValue({ data: { content: { sha: 'put-sha' } } });
+
+    const result = await ContentService.upload({
+      gitOrganization,
+      repo: 'upload-default-branch',
+      file: Buffer.from('png-bytes'),
+      filename: 'a.png',
+      folder: 'pages/lab/assets',
+    });
+
+    expect(getDefaultBranchMock).toHaveBeenCalledWith('test-org', 'upload-default-branch');
+    const [, params] = requestMock.mock.calls[0] as [string, RequestParams];
+    expect(params.branch).toBe('master');
+    expect(result.url).toContain('/upload-default-branch/master/pages/lab/assets/');
+  });
+
+  it("writes to the repository's default branch when none is given (blob path)", async () => {
+    getDefaultBranchMock.mockResolvedValue('master');
+    requestMock.mockImplementation(async (route: string) => {
+      switch (route) {
+        case 'POST /repos/{owner}/{repo}/git/blobs':
+          return { data: { sha: 'blob' } };
+        case 'GET /repos/{owner}/{repo}/git/ref/{ref}':
+          return { data: { object: { sha: 'head' } } };
+        case 'GET /repos/{owner}/{repo}/git/commits/{commit_sha}':
+          return { data: { tree: { sha: 'tree' } } };
+        case 'POST /repos/{owner}/{repo}/git/trees':
+          return { data: { sha: 'new-tree' } };
+        case 'POST /repos/{owner}/{repo}/git/commits':
+          return { data: { sha: 'new-commit' } };
+        case 'PATCH /repos/{owner}/{repo}/git/refs/{ref}':
+          return { data: {} };
+        default:
+          throw new Error(`Unexpected route: ${route}`);
+      }
+    });
+
+    const result = await ContentService.upload({
+      gitOrganization,
+      repo: 'upload-default-branch-large',
+      file: Buffer.alloc(2 * 1024 * 1024),
+      filename: 'a.png',
+      folder: 'f',
+    });
+
+    const refs = requestMock.mock.calls
+      .filter(([route]) => String(route).includes('/git/ref'))
+      .map(([, params]) => (params as RequestParams).ref);
+    expect(refs).toEqual(['heads/master', 'heads/master']);
+    expect(result.url).toContain('/master/');
+  });
+
+  it('does not ask for the default branch when one is given', async () => {
+    requestMock.mockResolvedValue({ data: { content: { sha: 'put-sha' } } });
+
+    await ContentService.upload({
+      gitOrganization,
+      repo: 'upload-explicit-branch',
+      file: Buffer.from('x'),
+      filename: 'a.png',
+      folder: 'f',
+      branch: 'preview',
+    });
+
+    expect(getDefaultBranchMock).not.toHaveBeenCalled();
+    expect((requestMock.mock.calls[0]![1] as RequestParams).branch).toBe('preview');
   });
 
   it('refuses a file over the cap before any request, with the shared sentence', async () => {

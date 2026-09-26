@@ -10,6 +10,7 @@ import { getGitProvider } from '../git/index.ts';
 import { validateFile, sanitizeFilename, type FileTypePolicy } from './utils/validateFile.ts';
 import { REPO_REST_MAX_BYTES } from '@classmoji/utils';
 import { RepoFileTooLargeError, asRepoTooLarge } from './repoLimits.ts';
+import { resolveContentBranch } from './contentBranch.ts';
 
 interface GitOrganizationRecord {
   provider: string;
@@ -694,7 +695,9 @@ export class ContentService {
    *
    * Both write to `branch`. (The `PUT` used to omit it, so a small file went to
    * the repository's default branch and a large one to `branch` — two files
-   * from one upload box could land on two branches.)
+   * from one upload box could land on two branches.) Omitted, `branch` is the
+   * repository's DEFAULT branch, asked through `resolveContentBranch` — not an
+   * assumed `main`, which a course imported from an older org is not on.
    *
    * @param options.fileTypes - `'any'` only for a classroom `canDeliverContent`
    *   says yes to; defaults to the image/PDF allowlist. See `validateFile.ts`.
@@ -708,7 +711,7 @@ export class ContentService {
     file,
     filename,
     folder,
-    branch = 'main',
+    branch: requestedBranch,
     message,
     fileTypes = 'allowlist',
   }: {
@@ -731,6 +734,8 @@ export class ContentService {
     }
 
     const resolvedOrg = await resolveGitOrganization(gitOrganization, orgLogin);
+    const branch =
+      requestedBranch ?? (await resolveContentBranch(resolvedOrg, resolvedOrg.login, repo));
 
     // Sanitize filename with timestamp
     const sanitizedFilename = sanitizeFilename(filename);
