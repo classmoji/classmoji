@@ -25,7 +25,8 @@ export interface ConfigImportSelections {
   features?: boolean;
   /**
    * llm_provider, llm_model, llm_temperature, llm_max_tokens, code_aware_model,
-   * exploration_model, syllabus_bot_model
+   * exploration_model, question_effort, grading_effort, exploration_effort,
+   * syllabus_bot_model, syllabus_bot_effort
    */
   aiConfig?: boolean;
   /** openai_api_key, anthropic_api_key — OPT-IN secrets, never copied unless enabled */
@@ -90,7 +91,11 @@ export const SETTINGS_FIELD_GROUPS: Record<
     'llm_max_tokens',
     'code_aware_model',
     'exploration_model',
+    'question_effort',
+    'grading_effort',
+    'exploration_effort',
     'syllabus_bot_model',
+    'syllabus_bot_effort',
   ],
   apiKeys: ['openai_api_key', 'anthropic_api_key'],
 };

@@ -49,6 +49,18 @@ const BOT_ROLES = ['OWNER', 'TEACHER', 'ASSISTANT', 'STUDENT'] as const;
 const SEND_MESSAGE_FAILED = 'Could not send your message. Please try again.';
 
 /**
+ * What a turn says when the ai-agent's platform budget guard
+ * (AI_MAX_BUDGET_USD) stopped it. The ai-agent stores nothing for that turn and
+ * marks it retryable, so asking again is a real way forward. A fixed text, like
+ * SEND_MESSAGE_FAILED: the ai-agent's own message is not shown.
+ */
+const BUDGET_STOPPED_MESSAGE = "Ask Moji couldn't finish that answer. Please ask again.";
+
+/** aiAgentConnection carries the ERROR payload's `code` onto the thrown error. */
+const isBudgetExceeded = (error: unknown) =>
+  (error as { code?: unknown } | null)?.code === 'BUDGET_EXCEEDED';
+
+/**
  * Mint the MCP bearer this turn will carry (plan P1-3).
  *
  * EVERY turn, not just init. ai-agent builds its agent config once at init and
@@ -276,14 +288,14 @@ async function handleInitConversation(request: Request, classSlug: string, formD
   // After the access check, so this never reveals a classroom's plan to a non-member.
   const entitlement = await ClassmojiService.entitlement.canUseSyllabusBot(classroom.id);
   if (!entitlement.allowed) {
-    return jsonResponse({ error: 'The syllabus assistant requires a Pro subscription' }, 403);
+    return jsonResponse({ error: 'Ask Moji requires a Pro subscription.' }, 403);
   }
 
   const settings = await ClassmojiService.classroom.getClassroomSettingsForServer(classroom.id);
 
   // Check if syllabus bot is enabled
   if (!settings?.syllabus_bot_enabled) {
-    return jsonResponse({ error: 'Syllabus bot is not enabled for this course' }, 403);
+    return jsonResponse({ error: 'Ask Moji is not enabled for this course.' }, 403);
   }
 
   // Use URL-based role context if provided, otherwise fall back to membership role
@@ -317,9 +329,13 @@ async function handleInitConversation(request: Request, classSlug: string, formD
   const payload = {
     userId: userId.toString(),
     orgConfig,
+    // Ask Moji's own model and effort; null = the ai-agent's platform default
+    // (SYLLABUS_BOT_MODEL, SYLLABUS_BOT_EFFORT). Not the quiz model: Ask Moji
+    // used to borrow llm_model when it had none of its own.
     llmConfig: {
       anthropicApiKey: settings?.anthropic_api_key,
-      model: settings?.syllabus_bot_model || settings?.llm_model,
+      model: settings?.syllabus_bot_model,
+      effort: settings?.syllabus_bot_effort,
     },
     mcpToken,
   };
@@ -404,7 +420,7 @@ async function handleSendMessage(request: Request, classSlug: string, formData: 
   // already-open session can still be cleaned up.
   const smEntitlement = await ClassmojiService.entitlement.canUseSyllabusBot(smClassroom.id);
   if (!smEntitlement.allowed) {
-    return jsonResponse({ error: 'The syllabus assistant requires a Pro subscription' }, 403);
+    return jsonResponse({ error: 'Ask Moji requires a Pro subscription.' }, 403);
   }
 
   if (!conversationId || !content) {
@@ -471,12 +487,17 @@ async function handleSendMessage(request: Request, classSlug: string, formData: 
     // stack-shaped detail. A chat member is not the audience for any of it, and
     // "what went wrong" is not something they can act on differently.
     //
-    // Both exits get the same generic line, because the SSE channel reaches the
-    // same browser as the response body — fixing one and not the other would
-    // leave the leak open through the other door.
+    // The one exception is a budget-guard stop, which they CAN act on (ask
+    // again, or ask less at once). It is picked out by the ai-agent's error
+    // code, and gets its own fixed line; the ai-agent's text still stays here.
+    //
+    // Both exits get the same line, because the SSE channel reaches the same
+    // browser as the response body — fixing one and not the other would leave
+    // the leak open through the other door.
     console.error('[syllabus-bot] Send message failed:', error);
-    agentStreamManager.publishError(conversationId, SEND_MESSAGE_FAILED);
-    return jsonResponse({ error: SEND_MESSAGE_FAILED }, 500);
+    const message = isBudgetExceeded(error) ? BUDGET_STOPPED_MESSAGE : SEND_MESSAGE_FAILED;
+    agentStreamManager.publishError(conversationId, message);
+    return jsonResponse({ error: message }, 500);
   }
 }
 

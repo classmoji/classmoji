@@ -108,6 +108,7 @@ const buildAttempt = (
   overrides: Partial<{
     repository_id: string | null;
     include_code_context: boolean;
+    settings: Record<string, unknown>;
   }> = {}
 ) => ({
   id: ATTEMPT_ID,
@@ -125,7 +126,7 @@ const buildAttempt = (
     difficulty_level: 'Beginner',
     classroom: {
       slug: 'test-class',
-      settings: {},
+      settings: overrides.settings ?? {},
       git_organization: { login: 'test-org' },
     },
   },
@@ -330,5 +331,177 @@ describe('api.quiz startQuiz — background task containment', () => {
       true
     );
     expect(unhandled).toEqual([]);
+  });
+});
+
+// The ai-agent reads these quizConfig keys by name (questionEffort,
+// gradingEffort, explorationEffort); a rename on either side would quietly put
+// every classroom back on the platform default.
+describe('api.quiz startQuiz — reasoning effort in quizConfig', () => {
+  const EFFORTS = { question_effort: 'high', grading_effort: 'max', exploration_effort: 'medium' };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.useFakeTimers();
+    findByIdMock.mockResolvedValue({
+      id: 'quiz-1',
+      classroom_id: 'class-1',
+      classroom: { slug: 'test-class' },
+    });
+    assertAccessMock.mockResolvedValue({
+      userId: 'student-1',
+      classroom: { status: 'ACTIVE' },
+      membership: { role: 'STUDENT' },
+    });
+    assertProTierMock.mockResolvedValue(undefined);
+    assertMutationMock.mockReturnValue(undefined);
+    getAuthSessionMock.mockResolvedValue({ token: 'ghu_token', session: {} });
+    createNewMock.mockResolvedValue({ success: true, attemptId: ATTEMPT_ID });
+    gitRepoFindByStudentMock.mockResolvedValue({ name: 'student-repo' });
+    initializeAgentMock.mockResolvedValue({ openingMessage: 'First question?' });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  const start = async (attempt: ReturnType<typeof buildAttempt>) => {
+    findWithMessagesMock
+      .mockReset()
+      .mockResolvedValueOnce({ attempt })
+      .mockResolvedValueOnce({ attempt, messages: [] });
+    await action({
+      request: postRequest({ _action: 'startQuiz', quizId: 'quiz-1' }),
+    } as unknown as Parameters<typeof action>[0]);
+    await vi.runAllTimersAsync();
+    expect(initializeAgentMock).toHaveBeenCalledTimes(1);
+    return initializeAgentMock.mock.calls[0][1] as Record<string, unknown>;
+  };
+
+  it('standard: sends question and grading effort, not exploration effort', async () => {
+    const quizConfig = await start(buildAttempt({ settings: EFFORTS }));
+
+    expect(quizConfig).toMatchObject({ questionEffort: 'high', gradingEffort: 'max' });
+    expect(quizConfig).not.toHaveProperty('explorationEffort');
+  });
+
+  it('code-aware: sends all three', async () => {
+    const quizConfig = await start(
+      buildAttempt({ repository_id: 'repository-1', include_code_context: true, settings: EFFORTS })
+    );
+
+    expect(quizConfig).toMatchObject({
+      questionEffort: 'high',
+      gradingEffort: 'max',
+      explorationEffort: 'medium',
+    });
+  });
+
+  it('leaves unset efforts unset, so the ai-agent default applies', async () => {
+    const quizConfig = await start(buildAttempt({ settings: {} }));
+
+    expect(quizConfig.questionEffort).toBeUndefined();
+    expect(quizConfig.gradingEffort).toBeUndefined();
+  });
+});
+
+// The ai-agent's budget guard answers a stopped opening turn with an ERROR
+// carrying code BUDGET_EXCEEDED (aiAgentConnection puts it on the thrown
+// error). The attempt must stay at "no question asked": no invented question,
+// no questions_asked bump, so a message from the student retries Question 1.
+describe('api.quiz startQuiz — budget-stopped opening turn', () => {
+  const budgetError = () =>
+    Object.assign(
+      new Error("Your first question couldn't be prepared. Send any message to try again."),
+      { code: 'BUDGET_EXCEEDED', retryable: true }
+    );
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.useFakeTimers();
+    findByIdMock.mockResolvedValue({
+      id: 'quiz-1',
+      classroom_id: 'class-1',
+      classroom: { slug: 'test-class' },
+    });
+    assertAccessMock.mockResolvedValue({
+      userId: 'student-1',
+      classroom: { status: 'ACTIVE' },
+      membership: { role: 'STUDENT' },
+    });
+    assertProTierMock.mockResolvedValue(undefined);
+    assertMutationMock.mockReturnValue(undefined);
+    getAuthSessionMock.mockResolvedValue({ token: 'ghu_token', session: {} });
+    createNewMock.mockResolvedValue({ success: true, attemptId: ATTEMPT_ID });
+    gitRepoFindByStudentMock.mockResolvedValue({ name: 'student-repo' });
+    addMessageMock.mockResolvedValue(undefined);
+    incrementMock.mockResolvedValue(undefined);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  const start = async (attempt: ReturnType<typeof buildAttempt>) => {
+    findWithMessagesMock
+      .mockReset()
+      .mockResolvedValueOnce({ attempt })
+      .mockResolvedValueOnce({ attempt, messages: [] });
+    const response = await action({
+      request: postRequest({ _action: 'startQuiz', quizId: 'quiz-1' }),
+    } as unknown as Parameters<typeof action>[0]);
+    expect(response.status).toBe(200);
+    await vi.runAllTimersAsync();
+    await Promise.resolve();
+    await Promise.resolve();
+  };
+
+  const expectRetryMessageOnly = () => {
+    expect(addMessageMock).toHaveBeenCalledTimes(1);
+    expect(addMessageMock).toHaveBeenCalledWith(
+      ATTEMPT_ID,
+      'ASSISTANT',
+      "Your first question couldn't be prepared. Send any message to try again.",
+      false,
+      { errorType: 'BUDGET_EXCEEDED' }
+    );
+    expect(incrementMock).not.toHaveBeenCalled();
+  };
+
+  it('standard: saves the retry message, no question, no questions_asked bump', async () => {
+    initializeAgentMock.mockRejectedValue(budgetError());
+
+    await start(buildAttempt());
+
+    expect(runBackgroundTaskMock).toHaveBeenCalledWith('startQuiz:standard');
+    expectRetryMessageOnly();
+  });
+
+  it('code-aware: saves the retry message, no question, no questions_asked bump', async () => {
+    initializeAgentMock.mockRejectedValue(budgetError());
+
+    await start(buildAttempt({ repository_id: 'repository-1', include_code_context: true }));
+
+    expect(runBackgroundTaskMock).toHaveBeenCalledWith('startQuiz:codeAware');
+    expectRetryMessageOnly();
+  });
+
+  it('keeps the fallback question for any other coded error', async () => {
+    initializeAgentMock.mockRejectedValue(
+      Object.assign(new Error('The AI service is temporarily busy.'), {
+        code: 'API_ERROR',
+        retryable: true,
+      })
+    );
+
+    await start(buildAttempt());
+
+    expect(addMessageMock).toHaveBeenCalledWith(
+      ATTEMPT_ID,
+      'ASSISTANT',
+      expect.stringContaining("Let's begin with your first question"),
+      true
+    );
+    expect(incrementMock).toHaveBeenCalledWith(ATTEMPT_ID);
   });
 });

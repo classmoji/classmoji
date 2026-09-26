@@ -406,7 +406,7 @@ export {
 } from './classmoji/classroomSlug.ts';
 
 // Models list (moved from @classmoji/llm)
-export { getAllModels, getAnthropicModels } from './classmoji/modelsList.ts';
+export { getAllModels, getAnthropicModels, getModelLabel } from './classmoji/modelsList.ts';
 
 // Quiz prompts and examples (moved from @classmoji/llm)
 export {
