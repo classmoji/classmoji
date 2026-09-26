@@ -55,11 +55,11 @@ cleanup_ports
 # Set log file name and prefixes based on devport
 if [ -n "$DEVPORT_NAME" ]; then
   LOG_FILE="/tmp/classmoji-dev-${DEVPORT_NAME}.log"
-  PREFIX_BASE="web:$DEVPORT_NAME,slides:$DEVPORT_NAME,pages:$DEVPORT_NAME,admin:$DEVPORT_NAME,hook:$DEVPORT_NAME,mcp:$DEVPORT_NAME,trigger:$DEVPORT_NAME,smee-gh,smee-stripe,quiz:$DEVPORT_NAME"
+  PREFIX_BASE="web:$DEVPORT_NAME,slides:$DEVPORT_NAME,pages:$DEVPORT_NAME,admin:$DEVPORT_NAME,hook:$DEVPORT_NAME,mcp:$DEVPORT_NAME,trigger:$DEVPORT_NAME,smee-gh,smee-stripe,smee-gitlab,quiz:$DEVPORT_NAME"
   DB_NAME="classmoji_${DEVPORT_NAME//-/_}"
 else
   LOG_FILE="/tmp/classmoji-dev.log"
-  PREFIX_BASE="web,slides,pages,admin,hook,mcp,trigger,smee-gh,smee-stripe,quiz"
+  PREFIX_BASE="web,slides,pages,admin,hook,mcp,trigger,smee-gh,smee-stripe,smee-gitlab,quiz"
   DB_NAME="classmoji"
 fi
 
@@ -128,6 +128,7 @@ if [ "$RUN_FANOUT" = true ]; then
       "turbo run trigger:dev --log-prefix=none" \
       "turbo run hook:github --log-prefix=none" \
       "turbo run hook:stripe --log-prefix=none" \
+      "turbo run hook:gitlab --log-prefix=none" \
       "$AI_AGENT_CMD" \
       "node $SCRIPT_DIR/webhook-fanout.js" \
       2>&1 | tee "$LOG_FILE"
@@ -144,6 +145,7 @@ if [ "$RUN_FANOUT" = true ]; then
       "turbo run trigger:dev --log-prefix=none" \
       "turbo run hook:github --log-prefix=none" \
       "turbo run hook:stripe --log-prefix=none" \
+      "turbo run hook:gitlab --log-prefix=none" \
       "node $SCRIPT_DIR/webhook-fanout.js" \
       2>&1 | tee "$LOG_FILE"
   fi
@@ -162,6 +164,7 @@ else
       "turbo run trigger:dev --log-prefix=none" \
       "turbo run hook:github --log-prefix=none" \
       "turbo run hook:stripe --log-prefix=none" \
+      "turbo run hook:gitlab --log-prefix=none" \
       "$AI_AGENT_CMD" \
       2>&1 | tee "$LOG_FILE"
   else
@@ -177,6 +180,7 @@ else
       "turbo run trigger:dev --log-prefix=none" \
       "turbo run hook:github --log-prefix=none" \
       "turbo run hook:stripe --log-prefix=none" \
+      "turbo run hook:gitlab --log-prefix=none" \
       2>&1 | tee "$LOG_FILE"
   fi
 fi

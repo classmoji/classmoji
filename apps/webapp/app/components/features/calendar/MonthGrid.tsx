@@ -6,6 +6,7 @@
  * that dragging exists.
  */
 
+import { useGitContext } from '~/hooks/useGitWeb';
 import { Fragment } from 'react';
 import { monthDropId } from './geometry';
 import { DAY_LABELS, eventKey, formatDayLabel, isCurrentMonth, isSameDay } from './utils';
@@ -79,8 +80,10 @@ const MonthGrid = ({
   gitOrgLogin,
   repoAssignmentsByAssignmentId,
 }: MonthGridProps) => {
+  const gitCtx = useGitContext();
   const linkContext = {
     classSlug,
+    git: gitCtx,
     rolePrefix,
     pagesUrl,
     slidesUrl,

@@ -18,9 +18,12 @@ interface Props {
   notifications?: BellNotification[];
   unreadCount?: number;
   membershipRoles?: Record<string, NotificationRole[]>;
+  /** The session's mode: a GitLab session gets no Github-only actions. */
+  gitMode?: 'GITHUB' | 'GITLAB';
 }
 
 export function ClassroomsLandingScreen({
+  gitMode = 'GITHUB',
   user,
   classes,
   onOpenClass,
@@ -247,11 +250,13 @@ export function ClassroomsLandingScreen({
               Take a tour
             </Button>
           )}
-          <Link to="/import-classroom" data-onboarding="import">
-            <Button>
-              <IconGithub size={14} /> Import from GitHub Classroom
-            </Button>
-          </Link>
+          {gitMode === 'GITHUB' && (
+            <Link to="/import-classroom" data-onboarding="import">
+              <Button>
+                <IconGithub size={14} /> Import from GitHub Classroom
+              </Button>
+            </Link>
+          )}
           <Link to="/create-classroom" data-onboarding="new-class">
             <Button variant="primary">
               <IconPlus size={14} /> New class

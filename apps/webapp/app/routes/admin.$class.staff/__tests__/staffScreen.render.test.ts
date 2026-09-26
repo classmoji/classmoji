@@ -239,7 +239,8 @@ describe('FormStaff — what the instructor has to type', () => {
     const html = renderForm();
 
     expect(html.match(/ant-form-item-required/g) ?? []).toHaveLength(1);
-    expect(html).toMatch(/ant-form-item-required[^>]*>GitHub Username/);
+    // The label names the classroom's provider; a Github classroom by default.
+    expect(html).toMatch(/ant-form-item-required[^>]*>Github Username/);
   });
 
   it('labels name and email as optional and says what they default to', () => {

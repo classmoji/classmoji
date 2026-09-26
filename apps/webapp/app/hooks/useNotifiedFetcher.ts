@@ -66,7 +66,7 @@ export const useNotifiedFetcher = () => {
         variant: 'error',
         title: fetcher.data.error,
       });
-    } else if (fetcher.data?.info) {
+    } else if (fetcher.data?.info && !fetcher.data?.triggerSession) {
       callout.show({ variant: 'info', title: fetcher.data.info });
       fetcher.reset();
     } else if (fetcher.data?.triggerSession && !operation) {
@@ -81,6 +81,11 @@ export const useNotifiedFetcher = () => {
       });
       park(session);
       setOperation({ session, calloutId });
+      // A queued batch can carry a note about what it left out (e.g. students
+      // skipped for having no GitLab account connected).
+      if (typeof fetcher.data.info === 'string') {
+        callout.show({ variant: 'info', title: fetcher.data.info });
+      }
       fetcher.reset();
     }
     // `callout` and `finalize` are intentionally omitted: callout is stable per

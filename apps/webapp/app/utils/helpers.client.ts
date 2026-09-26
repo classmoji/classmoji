@@ -1,3 +1,5 @@
+import { gitWeb, type GitWebContext } from './gitWeb';
+
 interface RepoAssignmentForGithub {
   git_repo?: { name: string } | null;
   provider_issue_number?: number | null;
@@ -9,21 +11,23 @@ interface RepoAssignmentWithModule {
 }
 
 /**
- * The student's submission on GitHub: their issue in ISSUE mode, their repo
- * in REPO mode (no issue exists).
+ * The student's submission on its git host: their issue in ISSUE mode, their
+ * repo in REPO mode (no issue exists). A bare org login means Github; pass a
+ * GitWebContext (see ./gitWeb) for a classroom that may be on GitLab.
  */
 export const repositoryAssignmentGithubUrl = (
-  org: string,
+  org: string | GitWebContext,
   repositoryAssignment: RepoAssignmentForGithub
 ) => {
-  const repoUrl = `https://github.com/${org}/${repositoryAssignment.git_repo?.name}`;
+  const web = gitWeb(typeof org === 'string' ? { provider: 'GITHUB', login: org } : org);
+  const name = repositoryAssignment.git_repo?.name ?? '';
   return repositoryAssignment.provider_issue_number != null
-    ? `${repoUrl}/issues/${repositoryAssignment.provider_issue_number}`
-    : repoUrl;
+    ? web.issue(name, repositoryAssignment.provider_issue_number)
+    : web.repo(name);
 };
 
 export const openRepositoryAssignmentInGithub = (
-  org: string,
+  org: string | GitWebContext,
   repositoryAssignment: RepoAssignmentForGithub
 ) => window.open(repositoryAssignmentGithubUrl(org, repositoryAssignment), '_blank');
 

@@ -68,11 +68,11 @@ const staffErrorMessage = (error: unknown, fallback: string): string => {
 
   switch (error.code) {
     case 'git_user_not_found':
-      return 'No GitHub user with that username. Check the spelling and try again.';
+      return 'No user with that username on the classroom’s Github/Gitlab. Check the spelling and try again.';
     case 'staff_not_found':
       return 'That person no longer holds that role in this class — reload the page.';
     case 'no_org_configured':
-      return 'This classroom has no linked GitHub organization, so staff cannot be managed yet.';
+      return 'This classroom has no linked Github organization or Gitlab group, so staff cannot be managed yet.';
     case 'login_conflict':
       return 'That username belongs to a different account than the one already on file for it — contact support.';
     case 'last_owner':
@@ -140,7 +140,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
       if (!login) {
         return {
           action: ActionTypes.SAVE_USER,
-          error: 'Enter the GitHub username of the person to add.',
+          error: 'Enter the username of the person to add.',
         };
       }
 

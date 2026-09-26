@@ -5,9 +5,20 @@ import {
   type ModuleTreeNode,
   buildResourceLeaves,
   prettyType,
-  repoGithubUrl,
 } from '~/components/features/modules/ReadOnlyModulesTree';
 import AutogradingResultPill from '~/components/features/AutogradingResultPill';
+import { gitContextFor, gitWeb, type ClassroomLike, type GitWebContext } from '~/utils/gitWeb';
+
+/**
+ * Links for a repo row: the repo's own classroom when the row carries it (so a
+ * GitLab project resolves under its class subgroup), else the tree's context.
+ */
+const webFor = (classroom: ClassroomLike | null | undefined, ctx: StudentTreeCtx) =>
+  gitWeb(
+    classroom?.git_organization
+      ? gitContextFor(classroom)
+      : (ctx.git ?? { provider: 'GITHUB', login: ctx.gitOrgLogin })
+  );
 import type { AutogradingResultData } from '~/components/features/AutogradingResultCard';
 
 // These trees are assembled from loosely-typed Prisma includes that differ
@@ -34,6 +45,8 @@ export interface StudentTreeCtx {
   rolePrefix?: string;
   /** Org login, used to build the repository "View" fallback to the source repo. */
   gitOrgLogin?: string | null;
+  /** The classroom's git context (Github org or GitLab class subgroup). */
+  git?: GitWebContext;
   /**
    * The viewer's own git repo per repository unit, keyed by repository id.
    * Lets the "View" link reach the student's repo even when no GitHub issue
@@ -126,14 +139,15 @@ export const buildAssignmentLeaf = (
 ): ModuleTreeNode => {
   const showGrades = a.grades_released && (ra?.grades?.length ?? 0) > 0;
   const login = ra?.git_repo?.classroom?.git_organization?.login ?? ctx.gitOrgLogin;
+  const rowWeb = webFor(ra?.git_repo?.classroom, ctx);
   const issueUrl =
     login && ra?.provider_issue_number
-      ? `https://github.com/${login}/${ra.git_repo.name}/issues/${ra.provider_issue_number}`
+      ? rowWeb.issue(ra.git_repo.name, ra.provider_issue_number)
       : null;
   const ownRepo =
     ra?.git_repo ??
     (a.repository_id ? ctx.studentRepoByRepositoryId?.[String(a.repository_id)] : undefined);
-  const ownRepoUrl = ownRepo ? repoGithubUrl(ownRepo.name, login) : null;
+  const ownRepoUrl = ownRepo && login ? rowWeb.repo(ownRepo.name) : null;
 
   // A self-formed group assignment: until the viewer is on a team there is no
   // repo to open, so the row sends them to the team page instead of GitHub.
@@ -258,7 +272,7 @@ export const buildRepositoryNode = (
     }
     const gitRepo = bucket.gitRepo;
     const login = gitRepo?.classroom?.git_organization?.login;
-    const url = gitRepo ? repoGithubUrl(gitRepo.name, login) : null;
+    const url = gitRepo && login ? webFor(gitRepo.classroom, ctx).repo(gitRepo.name) : null;
     repositoryChildren.push({
       key: `repo-${gitRepo.id}`,
       kind: 'repo',
@@ -299,14 +313,17 @@ export const buildRepositoryNode = (
   // even before any GitHub issue exists), then any repo found via assignments,
   // then the template.
   const directRepo = ctx.studentRepoByRepositoryId?.[String(repository.id)];
-  const directRepoUrl = directRepo ? repoGithubUrl(directRepo.name, ctx.gitOrgLogin) : null;
+  const directRepoUrl =
+    directRepo && ctx.gitOrgLogin ? webFor(null, ctx).repo(directRepo.name) : null;
   const ownGitRepo = realRepoKeys.length > 0 ? buckets.get(realRepoKeys[0])?.gitRepo : undefined;
-  const ownRepoUrl = ownGitRepo
-    ? repoGithubUrl(ownGitRepo.name, ownGitRepo?.classroom?.git_organization?.login)
-    : null;
-  const sourceRepoUrl = repository.template
-    ? repoGithubUrl(repository.template, ctx.gitOrgLogin)
-    : null;
+  const ownRepoUrl =
+    ownGitRepo && ownGitRepo.classroom?.git_organization?.login
+      ? webFor(ownGitRepo.classroom, ctx).repo(ownGitRepo.name)
+      : null;
+  const sourceRepoUrl =
+    repository.template && (repository.template.includes('/') || ctx.gitOrgLogin)
+      ? webFor(null, ctx).template(repository.template)
+      : null;
   // The template fallback is deliberately NOT offered on a self-formed row: a
   // student with no team has no repo of their own, and a "View" pointing at the
   // instructor's template is how they end up committing and filing issues on

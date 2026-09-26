@@ -1,4 +1,5 @@
 import dayjs from 'dayjs';
+import { gitContextFor, gitWeb } from '~/utils/gitWeb';
 import { Tag } from 'antd';
 import { motion, useReducedMotion } from 'framer-motion';
 import { IconBrandGithub, IconCheck } from '@tabler/icons-react';
@@ -75,11 +76,14 @@ const AssignmentCard = ({
   const showGrades = assignment.grades_released && (repoAssignment?.grades?.length ?? 0) > 0;
 
   // The issue in ISSUE mode, the repo itself in REPO mode.
-  const githubIssueUrl = repoAssignment?.repository?.classroom?.git_organization?.login
-    ? repoAssignment.provider_issue_number != null
-      ? `https://github.com/${repoAssignment.repository.classroom.git_organization.login}/${repoAssignment.repository.name}/issues/${repoAssignment.provider_issue_number}`
-      : `https://github.com/${repoAssignment.repository.classroom.git_organization.login}/${repoAssignment.repository.name}`
-    : null;
+  const studentRepo = repoAssignment?.repository;
+  const repoWeb = gitWeb(gitContextFor(studentRepo?.classroom));
+  const githubIssueUrl =
+    studentRepo && studentRepo.classroom?.git_organization?.login
+      ? repoAssignment?.provider_issue_number != null
+        ? repoWeb.issue(studentRepo.name, repoAssignment.provider_issue_number)
+        : repoWeb.repo(studentRepo.name)
+      : null;
 
   return (
     <div className="bg-stone-50 dark:bg-neutral-800/60 rounded-lg p-4 mb-3">

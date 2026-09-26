@@ -1,4 +1,6 @@
 import { App, Button, Checkbox, Dropdown, Popover, Table, Tooltip } from 'antd';
+import { GitlabLogo } from '~/components/ui/display/GitlabLogo';
+import { gitContextFor, gitWeb, type ClassroomLike } from '~/utils/gitWeb';
 import type { MenuProps } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import dayjs from 'dayjs';
@@ -162,6 +164,9 @@ const SubmissionsTable = ({
   const { modal } = App.useApp();
   const { classroom } = useStore();
   const callout = useCallout();
+  // Github org or GitLab class subgroup, whichever this classroom is on.
+  const gitCtx = gitContextFor(classroom as ClassroomLike | null);
+  const web = gitWeb(gitCtx);
 
   const isIndividual = repositoryType === 'INDIVIDUAL';
   const isPushMode = assignment.submission_mode === 'REPO';
@@ -258,18 +263,20 @@ const SubmissionsTable = ({
       key: 'repo',
       width: 240,
       render: (_: unknown, repo) => {
-        const projectUrl = repo.project_number
-          ? `https://github.com/orgs/${org}/projects/${repo.project_number}`
-          : null;
+        const projectUrl = repo.project_number ? web.project(repo.project_number) : null;
         return (
           <div className="flex items-center gap-1 min-w-0">
             <a
-              href={`https://github.com/${org}/${repo.name}`}
+              href={web.repo(repo.name)}
               target="_blank"
               rel="noreferrer"
               className="inline-flex items-center gap-1.5 min-w-0 text-ink-1 hover:underline underline-offset-2"
             >
-              <IconBrandGithub size={14} className="shrink-0 text-gray-400" />
+              {web.isGitLab ? (
+                <GitlabLogo size={14} />
+              ) : (
+                <IconBrandGithub size={14} className="shrink-0 text-gray-400" />
+              )}
               <span className="truncate">{repo.name}</span>
             </a>
             {projectUrl && (
@@ -297,9 +304,7 @@ const SubmissionsTable = ({
         const n = snapshot?.total_commits;
         if (n === null || n === undefined) return <span className="text-ink-3">—</span>;
         const sha = latestCommitSha(snapshot?.commits);
-        const href = sha
-          ? `https://github.com/${org}/${repo.name}/commit/${sha}`
-          : `https://github.com/${org}/${repo.name}/commits`;
+        const href = sha ? web.commit(repo.name, sha) : web.commits(repo.name);
         return <CommitCount snapshot={snapshot} href={href} size="lg" className="text-sm!" />;
       },
     },
@@ -471,7 +476,7 @@ const SubmissionsTable = ({
               className={link}
               onClick={() =>
                 // The row IS the git repo; hand the helper its name explicitly.
-                openRepositoryAssignmentInGithub(org, {
+                openRepositoryAssignmentInGithub(gitCtx, {
                   git_repo: { name: repo.name },
                   provider_issue_number: s.provider_issue_number,
                 })

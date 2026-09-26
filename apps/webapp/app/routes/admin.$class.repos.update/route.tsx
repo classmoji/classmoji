@@ -1,4 +1,5 @@
 import { Modal, Form, Input, Alert } from 'antd';
+import { GITLAB_UNSUPPORTED, isGitLabClassroom } from '~/utils/gitlabGuard.server';
 import { useNavigate, useParams } from 'react-router';
 import { useEffect, useState, useRef } from 'react';
 import { auth, tasks } from '@trigger.dev/sdk';
@@ -110,6 +111,8 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
     action: 'update_repository',
   });
   assertClassroomMutationAllowed({ status: classroom.status, role: membership!.role });
+  // Pushes template updates with the Github API; no GitLab path yet.
+  if (isGitLabClassroom(classroom)) return { error: GITLAB_UNSUPPORTED };
 
   const { values, repository } = await request.json();
   const sessionId = nanoid();

@@ -17,6 +17,7 @@
  *      with `GitRepoContributorLink` rows taking precedence as manual overrides.
  *   5. Upsert the snapshot row (JSON columns + aggregate totals + stale/error flags).
  */
+import { repoNamespace } from '@classmoji/utils';
 import getPrisma from '@classmoji/database';
 import type { GitProvider } from '../git/GitProvider.ts';
 import { getGitProvider } from '../git/index.ts';
@@ -245,13 +246,15 @@ async function fetchLinkedSnapshot(
   gitOrg: Parameters<typeof getGitProvider>[0] & { login: string | null },
   classroomId: string,
   gitRepoId: string,
-  repoName: string
+  repoName: string,
+  /** Where the repo lives: the class subgroup on GitLab, else the org. */
+  owner?: string | null
 ): Promise<{ payload: SnapshotPayload; pending: boolean }> {
   if (!gitOrg.login) throw new Error('GitOrganization.login is required');
 
   const provider = getGitProvider(gitOrg);
   const [{ payload, pending }, loginToUserId] = await Promise.all([
-    buildSnapshot(provider, gitOrg.login, repoName),
+    buildSnapshot(provider, owner || gitOrg.login, repoName),
     buildLoginToUserIdMap(classroomId, gitRepoId),
   ]);
 
@@ -303,7 +306,8 @@ export async function refreshOne(
       gitOrg,
       classroom.id,
       repo.id,
-      repo.name
+      repo.name,
+      repoNamespace(classroom)
     );
 
     await upsertSnapshot(repositoryAssignmentId, payload, { stale: pending });
@@ -382,7 +386,8 @@ export async function refreshRepo(
       gitOrg,
       classroom.id,
       repo.id,
-      repo.name
+      repo.name,
+      repoNamespace(classroom)
     );
 
     for (const id of rowIds) {

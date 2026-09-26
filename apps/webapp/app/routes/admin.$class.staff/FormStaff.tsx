@@ -1,4 +1,5 @@
 import { Form, Input, Button, Space, Typography, Radio, Popconfirm } from 'antd';
+import { useGitWeb } from '~/hooks/useGitWeb';
 import { useState } from 'react';
 
 import { IconMail, IconUser, IconBrandGithubCopilot } from '@tabler/icons-react';
@@ -60,6 +61,9 @@ interface FormStaffProps {
  * owner can grant one.
  */
 const FormStaff = ({ close, initialRole = 'ASSISTANT' }: FormStaffProps) => {
+  // Github org or GitLab group: the username is on the classroom's provider.
+  const web = useGitWeb();
+  const platform = web.label;
   const { fetcher, notify } = useGlobalFetcher();
   const [form] = Form.useForm();
   const [role, setRole] = useState<StaffRole>(initialRole);
@@ -95,7 +99,10 @@ const FormStaff = ({ close, initialRole = 'ASSISTANT' }: FormStaffProps) => {
   };
 
   const onFinishFailed = () => {
-    callout.show({ variant: 'error', title: 'Enter the GitHub username of the person to add' });
+    callout.show({
+      variant: 'error',
+      title: `Enter the ${platform} username of the person to add`,
+    });
   };
 
   const submitButton = (
@@ -165,22 +172,28 @@ const FormStaff = ({ close, initialRole = 'ASSISTANT' }: FormStaffProps) => {
           resolved from their git profile, so the other two fields stay empty
           unless the instructor wants to override what GitHub says. */}
       <Form.Item
-        label="GitHub Username"
+        label={`${platform} Username`}
         name="login"
         rules={[
-          { required: true, message: 'Please enter GitHub username' },
+          { required: true, message: `Please enter ${platform} username` },
           {
-            pattern: /^[a-zA-Z0-9]([a-zA-Z0-9]|-)*[a-zA-Z0-9]$/,
-            message: 'Invalid GitHub username format',
+            // GitLab usernames also allow `.` and `_`.
+            pattern: web.isGitLab
+              ? /^[a-zA-Z0-9_]([a-zA-Z0-9_.-])*$/
+              : /^[a-zA-Z0-9]([a-zA-Z0-9]|-)*[a-zA-Z0-9]$/,
+            message: `Invalid ${platform} username format`,
           },
         ]}
         extra={
           <Text type="secondary" className="text-xs">
-            Enter the GitHub username (without @)
+            Enter the {platform} username (without @)
           </Text>
         }
       >
-        <Input placeholder="github-username" prefix={<IconBrandGithubCopilot size={16} />} />
+        <Input
+          placeholder={web.isGitLab ? 'gitlab-username' : 'github-username'}
+          prefix={<IconBrandGithubCopilot size={16} />}
+        />
       </Form.Item>
 
       {/* OPTIONAL OVERRIDES. These were required back when the form filled them

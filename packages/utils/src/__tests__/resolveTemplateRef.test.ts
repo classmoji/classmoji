@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { resolveTemplateRef } from '../repoNames.ts';
+import { repoNamespace, resolveTemplateRef } from '../repoNames.ts';
 
 const ORG = 'itmo-kotlin-android-tech-26-27';
 
@@ -35,5 +35,24 @@ describe('resolveTemplateRef', () => {
   it('returns null for a bare name with no org to qualify it', () => {
     expect(resolveTemplateRef('starter', null)).toBeNull();
     expect(resolveTemplateRef('starter', '')).toBeNull();
+  });
+
+  it('keeps a nested Gitlab group as the owner', () => {
+    expect(resolveTemplateRef('dept/cs10/starter', ORG)).toEqual({
+      owner: 'dept/cs10',
+      repo: 'starter',
+    });
+  });
+});
+
+describe('repoNamespace', () => {
+  it('uses the classroom subgroup when there is one', () => {
+    expect(
+      repoNamespace({ git_namespace: 'dept/cs10-fall26', git_organization: { login: 'dept' } })
+    ).toBe('dept/cs10-fall26');
+  });
+
+  it('falls back to the org for classrooms without one (Github)', () => {
+    expect(repoNamespace({ git_namespace: null, git_organization: { login: 'org' } })).toBe('org');
   });
 });

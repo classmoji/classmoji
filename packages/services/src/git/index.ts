@@ -1,6 +1,7 @@
 import { GitProvider } from './GitProvider.ts';
 import { GitHubProvider } from './GitHubProvider.ts';
 import { GitLabProvider } from './GitLabProvider.ts';
+import { getConnectionToken } from '../classmoji/gitlabConnection.service.ts';
 
 /**
  * Factory function - returns the appropriate provider adapter for the git organization.
@@ -19,7 +20,8 @@ export function getGitProvider(gitOrganization: {
   access_token?: string | null;
   base_url?: string | null;
   login?: string | null;
-  gitlab_group_id?: string | null;
+  provider_id?: string | null;
+  gitlab_connection_id?: string | null;
 }) {
   const {
     provider,
@@ -36,13 +38,19 @@ export function getGitProvider(gitOrganization: {
       }
       return new GitHubProvider(github_installation_id, login);
 
-    case 'GITLAB':
-      // GitLab uses group_id instead of installation_id
-      // access_token is required for API access
-      if (!access_token) {
-        throw new Error('GitLab provider requires access_token');
+    case 'GITLAB': {
+      // The connection is GitLab's counterpart of the installation: its token is
+      // fetched (and refreshed) per call, the way installation tokens are minted.
+      // A static access_token remains for a group set up with a pasted token.
+      const { gitlab_connection_id } = gitOrganization;
+      const token = gitlab_connection_id
+        ? () => getConnectionToken(gitlab_connection_id)
+        : access_token;
+      if (!token) {
+        throw new Error('Gitlab provider requires a Gitlab connection or access_token');
       }
-      return new GitLabProvider(gitOrganization.gitlab_group_id!, login, access_token);
+      return new GitLabProvider(gitOrganization.provider_id ?? '', login, token);
+    }
 
     // Future implementations:
 

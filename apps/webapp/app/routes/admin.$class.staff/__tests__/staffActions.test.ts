@@ -224,11 +224,14 @@ describe('staff action — createStaff', () => {
 
 describe('staff action — service errors map to their own messages', () => {
   const cases: [string, string][] = [
-    ['git_user_not_found', 'No GitHub user with that username. Check the spelling and try again.'],
+    [
+      'git_user_not_found',
+      'No user with that username on the classroom’s Github/Gitlab. Check the spelling and try again.',
+    ],
     ['staff_not_found', 'That person no longer holds that role in this class — reload the page.'],
     [
       'no_org_configured',
-      'This classroom has no linked GitHub organization, so staff cannot be managed yet.',
+      'This classroom has no linked Github organization or Gitlab group, so staff cannot be managed yet.',
     ],
     [
       'login_conflict',
@@ -330,7 +333,7 @@ describe('staff action — the sibling body fields', () => {
     const result = await run('createStaff', { login: { toString: 'nope' }, role: 'ASSISTANT' });
 
     expect(mocks.addStaff).not.toHaveBeenCalled();
-    expect(result.error).toBe('Enter the GitHub username of the person to add.');
+    expect(result.error).toBe('Enter the username of the person to add.');
   });
 
   it('refuses a blank login', async () => {

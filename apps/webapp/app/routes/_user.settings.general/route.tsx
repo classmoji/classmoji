@@ -1,10 +1,13 @@
 import { useEffect, useState } from 'react';
-import { useFetcher } from 'react-router';
+import { GitlabLogo } from '~/components/ui/display/GitlabLogo';
+import { useFetcher, useSearchParams } from 'react-router';
 import { Avatar, Input, Card, Button, Alert } from 'antd';
 import { GithubOutlined, MailOutlined, UserOutlined } from '@ant-design/icons';
 import { IconId } from '@tabler/icons-react';
 
 import useStore from '~/store';
+import { useGitProvider } from '~/hooks';
+import { authClient } from '@classmoji/auth/client';
 import { useCallout } from '@classmoji/ui-components';
 import { requireAuth } from '@classmoji/auth/server';
 import getPrisma from '@classmoji/database';
@@ -17,6 +20,52 @@ import { normalizeSchoolId, SCHOOL_ID_MAX_LENGTH } from '~/utils/schoolId';
 import type { Route } from './+types/route';
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+type LinkProvider = 'github' | 'gitlab';
+
+/** Sign-in methods on this account, for the Connected accounts section. */
+export const loader = async ({ request }: Route.LoaderArgs) => {
+  const { userId } = await requireAuth(request);
+  const accounts = await getPrisma().account.findMany({
+    where: { user_id: userId, provider_id: { in: ['github', 'gitlab'] } },
+    select: { provider_id: true, username: true },
+  });
+  const connected = accounts.map(a => ({
+    provider: a.provider_id as LinkProvider,
+    username: a.username,
+  }));
+
+  // Github is connected but its username could not become the main login
+  // because another user holds it, so Github courses are closed to this user.
+  // Unknown username (connected before usernames were recorded) is not "taken":
+  // the next Github sign-in records it and promotes it.
+  const githubUsername = connected.find(a => a.provider === 'github')?.username;
+  const githubLoginTaken = githubUsername
+    ? Boolean(
+        await getPrisma().user.findFirst({
+          where: { login: githubUsername, NOT: { id: userId } },
+          select: { id: true },
+        })
+      )
+    : false;
+
+  return {
+    connected,
+    githubLoginTaken,
+    // Only offer providers this deployment has configured.
+    available: ['github', ...(process.env.GITLAB_CLIENT_ID ? ['gitlab'] : [])] as LinkProvider[],
+  };
+};
+
+const PROVIDER_LABEL: Record<LinkProvider, string> = { github: 'Github', gitlab: 'Gitlab' };
+
+/** better-auth's link errors (its callback appends `?error=`), in plain words. */
+const LINK_ERRORS: Record<string, string> = {
+  account_already_linked_to_different_user:
+    'That account is already connected to a different Classmoji account.',
+  unable_to_link_account: 'We could not connect that account. Please try again.',
+  access_denied: 'Connection cancelled.',
+};
 
 /**
  * Account edits, all scoped to the signed-in user's own row (#343):
@@ -107,8 +156,117 @@ const FieldRow = ({
 
 const linkButton = 'text-xs font-medium text-accent hover:underline cursor-pointer';
 
-const SettingsGeneral = () => {
+const ConnectedAccounts = ({
+  connected,
+  available,
+  githubLoginTaken,
+}: {
+  connected: { provider: LinkProvider; username: string | null }[];
+  available: LinkProvider[];
+  githubLoginTaken: boolean;
+}) => {
+  const [searchParams, setSearchParams] = useSearchParams();
+  const [connecting, setConnecting] = useState<LinkProvider | null>(null);
+  const linkError = searchParams.get('error');
+  const justConnected = searchParams.get('connected') as LinkProvider | null;
+
+  const connect = async (provider: LinkProvider) => {
+    setConnecting(provider);
+    // Links to the SIGNED-IN user; better-auth sends them to the provider and
+    // back here, with `?error=` on failure.
+    await authClient.linkSocial({
+      provider,
+      callbackURL: `/settings/general?connected=${provider}`,
+      errorCallbackURL: '/settings/general',
+    });
+  };
+
+  const dismiss = () => setSearchParams({}, { replace: true });
+
+  return (
+    <div className="mt-8">
+      <h4 className="text-base font-semibold text-gray-800 dark:text-gray-100 mb-1">
+        Connected accounts
+      </h4>
+      <p className="text-sm text-ink-3 mb-4">
+        Sign in to this Classmoji account with any account connected here.
+      </p>
+
+      {linkError && (
+        <Alert
+          type="error"
+          showIcon
+          closable
+          onClose={dismiss}
+          style={{ marginBottom: 16 }}
+          message={LINK_ERRORS[linkError] ?? `We could not connect that account (${linkError}).`}
+        />
+      )}
+      {justConnected && connected.some(a => a.provider === justConnected) && (
+        <Alert
+          type="success"
+          showIcon
+          closable
+          onClose={dismiss}
+          style={{ marginBottom: 16 }}
+          message={`${PROVIDER_LABEL[justConnected]} connected. You can now sign in with it.`}
+        />
+      )}
+
+      {githubLoginTaken && (
+        <Alert
+          type="warning"
+          showIcon
+          style={{ marginBottom: 16 }}
+          message="Your Github username is already used by another Classmoji account."
+          description="You can sign in with Github, but you can't join Github courses until this is sorted out. Contact support."
+        />
+      )}
+
+      <div className="divide-y divide-stone-200 dark:divide-neutral-800 rounded-lg ring-1 ring-stone-200 dark:ring-neutral-800">
+        {available.map(provider => {
+          const account = connected.find(a => a.provider === provider);
+          return (
+            <div key={provider} className="flex items-center justify-between px-4 py-3">
+              <span className="flex items-center gap-2 text-sm font-medium text-ink-1">
+                {provider === 'gitlab' ? (
+                  <GitlabLogo size={14} />
+                ) : (
+                  <GithubOutlined />
+                )}
+                {PROVIDER_LABEL[provider]}
+                {account?.username && (
+                  <span className="font-normal text-ink-3">@{account.username}</span>
+                )}
+              </span>
+              {account ? (
+                <span className="text-xs font-medium text-green-700 dark:text-green-400">
+                  Connected
+                </span>
+              ) : (
+                <Button
+                  size="small"
+                  onClick={() => connect(provider)}
+                  loading={connecting === provider}
+                >
+                  Connect
+                </Button>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+};
+
+const SettingsGeneral = ({ loaderData }: Route.ComponentProps) => {
   const { user, setUser } = useStore();
+  const isGitLab = useGitProvider() === 'GITLAB';
+  const providerName = isGitLab ? 'Gitlab' : 'Github';
+  const ProviderIcon = isGitLab
+    ? ({ className }: { className?: string }) => <GitlabLogo size={14} className={className} />
+    : GithubOutlined;
 
   const codeFetcher = useFetcher<{ codeSent?: boolean; error?: string }>();
   const saveFetcher = useFetcher<{ changed?: boolean; error?: string }>();
@@ -202,7 +360,7 @@ const SettingsGeneral = () => {
             </h3>
             <p className="text-ink-2 text-base mb-3">{user?.email}</p>
             <div className="flex items-center gap-2 text-sm text-gray-500">
-              <GithubOutlined className="text-gray-400" />
+              <ProviderIcon className="text-gray-400" />
               <span>@{user?.login}</span>
             </div>
           </div>
@@ -261,17 +419,6 @@ const SettingsGeneral = () => {
                 variant="filled"
                 value={user?.email ?? ''}
                 prefix={<MailOutlined className="text-gray-400" />}
-                className={readOnlyInput}
-              />
-            </FieldRow>
-
-            <FieldRow htmlFor="account-login" label="Github Username">
-              <Input
-                id="account-login"
-                readOnly
-                variant="filled"
-                value={user?.login ?? ''}
-                prefix={<GithubOutlined className="text-gray-400" />}
                 className={readOnlyInput}
               />
             </FieldRow>
@@ -380,13 +527,22 @@ const SettingsGeneral = () => {
           <div className="p-4 bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded-lg">
             <div className="flex items-start gap-3">
               <div>
-                <p className="text-yellow-800 font-medium mb-1 text-sm">From your Github account</p>
-                <p className="text-yellow-700 text-sm leading-relaxed">
-                  Your name and Github username come from Github and cannot be edited here.
+                <p className="text-yellow-800 dark:text-yellow-200 font-medium mb-1 text-sm">
+                  From your {providerName} account
+                </p>
+                <p className="text-yellow-700 dark:text-yellow-300 text-sm leading-relaxed">
+                  Your name comes from the account you signed up with and cannot be edited here.
+                  Your usernames are listed under Connected accounts.
                 </p>
               </div>
             </div>
           </div>
+
+          <ConnectedAccounts
+            connected={loaderData.connected}
+            available={loaderData.available}
+            githubLoginTaken={loaderData.githubLoginTaken}
+          />
         </div>
       </Card>
     </div>

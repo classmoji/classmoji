@@ -17,6 +17,7 @@
  * the caller-supplied imported row ids, and the duplicate is always a NEW repo.
  */
 
+import type { GitLabProvider } from '../git/GitLabProvider.ts';
 import getPrisma from '@classmoji/database';
 import { ContentService } from '../content/ContentService.ts';
 import { getGitProvider } from '../git/index.ts';
@@ -299,7 +300,9 @@ interface GitOrgRecord {
   github_installation_id?: string | null;
   access_token?: string | null;
   base_url?: string | null;
-  gitlab_group_id?: string | null;
+  provider_id?: string | null;
+  /** GitLab: the connection whose token acts on the group. */
+  gitlab_connection_id?: string | null;
 }
 
 type WarnFn = (scope: string, detail: string) => void;
@@ -731,6 +734,27 @@ export async function createBlankTemplateRepository({
   const provider = getGitProvider(gitOrganization);
   const orgLogin = gitOrganization.login;
   const name = `${slug}-template`;
+
+  // GitLab: templates live in the group's `templates` subgroup, apart from the
+  // class subgroups full of student projects. The README is committed through
+  // GitLab's API (ContentService below speaks Github's).
+  if (gitOrganization.provider === 'GITLAB') {
+    const gitlab = provider as GitLabProvider;
+    const { full_path: namespace } = await gitlab.createSubgroup(
+      orgLogin,
+      'Templates',
+      'templates'
+    );
+    const project = await gitlab.createProjectWithReadme(
+      namespace,
+      name,
+      `# ${assignmentTitle}\n\n` +
+        `Starter code for **${assignmentTitle}** in ${classroomName}. ` +
+        'Anything committed here is what each student starts from.\n',
+      `Blank template for ${assignmentTitle}`
+    );
+    return { fullName: `${namespace}/${project.name}`, name: project.name };
+  }
 
   await createRepositoryWithBackoff({ provider, orgLogin, name, onWait: () => {} });
   try {

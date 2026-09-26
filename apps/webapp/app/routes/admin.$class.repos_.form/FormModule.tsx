@@ -84,6 +84,11 @@ interface FormModuleProps {
   hasReposWithProjects?: boolean;
   /** Repos already exist on GitHub: type and team formation are frozen. */
   hasProvisionedRepos?: boolean;
+  /**
+   * GitLab classroom: team repositories and autograding (Github Actions) are
+   * not supported there yet, so they aren't offered.
+   */
+  isGitLab?: boolean;
 }
 
 const FormModule = ({
@@ -96,6 +101,7 @@ const FormModule = ({
   slides = [],
   hasReposWithProjects = false,
   hasProvisionedRepos = false,
+  isGitLab = false,
 }: FormModuleProps) => {
   const { template, setTemplate } = useRepositoryFormStore();
 
@@ -424,7 +430,9 @@ const FormModule = ({
                   disabled={hasProvisionedRepos}
                 >
                   <Select.Option value="INDIVIDUAL">Individual</Select.Option>
-                  <Select.Option value="GROUP">Group</Select.Option>
+                  <Select.Option value="GROUP" disabled={isGitLab}>
+                    {isGitLab ? 'Group (not available on Gitlab yet)' : 'Group'}
+                  </Select.Option>
                 </Select>
               </FormItem>
             </div>
@@ -612,27 +620,29 @@ const FormModule = ({
             />
           </Card>
 
-          {/* Autograding tests */}
-          <Card className="shadow-xs mb-6">
-            <div className="flex justify-between items-start mb-4">
-              <SectionHeader
-                title="Autograding tests"
-                subtitle="Run tests on every push using GitHub Actions"
-                size="md"
-              />
-              <Tooltip title="Add autograding test">
-                <Button type="primary" icon={<PlusOutlined />} onClick={openNewTest}>
-                  Add test
-                </Button>
-              </Tooltip>
-            </div>
+          {/* Autograding tests: they run on Github Actions, so not on GitLab. */}
+          {!isGitLab && (
+            <Card className="shadow-xs mb-6">
+              <div className="flex justify-between items-start mb-4">
+                <SectionHeader
+                  title="Autograding tests"
+                  subtitle="Run tests on every push using GitHub Actions"
+                  size="md"
+                />
+                <Tooltip title="Add autograding test">
+                  <Button type="primary" icon={<PlusOutlined />} onClick={openNewTest}>
+                    Add test
+                  </Button>
+                </Tooltip>
+              </div>
 
-            <AutogradingTestsTable
-              tests={autogradingTests}
-              onEdit={openEditTest}
-              onRemove={removeTest}
-            />
-          </Card>
+              <AutogradingTestsTable
+                tests={autogradingTests}
+                onEdit={openEditTest}
+                onRemove={removeTest}
+              />
+            </Card>
+          )}
 
           {/* Linked Content */}
           <Card className="shadow-xs mb-6">

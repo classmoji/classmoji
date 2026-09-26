@@ -111,7 +111,8 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
           if (!templateRef) {
             if (!classroom.git_organization) {
               return {
-                error: 'This classroom has no GitHub organization to create a template in.',
+                error:
+                  'This classroom has no Github organization or Gitlab group to create a template in.',
               };
             }
             try {

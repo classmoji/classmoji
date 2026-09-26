@@ -1,5 +1,10 @@
 import { task, tasks, schedules, logger } from '@trigger.dev/sdk';
-import { ClassmojiService, HelperService, getGitProvider } from '@classmoji/services';
+import {
+  ClassmojiService,
+  HelperService,
+  getGitProvider,
+  type GitLabProvider,
+} from '@classmoji/services';
 import { titleToIdentifier } from '@classmoji/utils';
 import { createRepositoriesTask } from './gitRepo.ts';
 import { nanoid } from 'nanoid';
@@ -46,6 +51,8 @@ interface CreateGithubRepositoryAssignmentTaskPayload {
 interface CreateDatabaseRepositoryAssignmentTaskPayload {
   assignment: IssueAssignmentRecord;
   studentRepo: StudentRepositoryRecord;
+  /** The classroom's git provider. Absent on older payloads, which were all Github. */
+  provider?: 'GITHUB' | 'GITLAB';
   /** The GitHub issue, in ISSUE mode. Absent for a REPO-mode submission row. */
   issueNumber?: number;
   id?: string;
@@ -78,6 +85,8 @@ interface WebhookIssuePayload {
 
 interface GitRepoAssignmentWebhookTaskPayload {
   issue: WebhookIssuePayload;
+  /** Whose issue id `issue.id` is. Github's webhook payload has none: GITHUB. */
+  provider?: 'GITHUB' | 'GITLAB';
 }
 
 interface RepositoryPushTaskPayload {
@@ -147,6 +156,37 @@ const uniqueLogins = (logins: string[]): string[] => [
 const repoNameForLogin = (repositorySlug: string, login: string): string =>
   `${repositorySlug}-${login}`;
 
+/**
+ * login -> the student repo's name, as `create_git_repos` named it. Github
+ * repos use the login itself. GitLab projects use the student's GitLab
+ * username, lowercased (`User.login` is the Github one when Github is
+ * connected), so looking them up by login alone would never find them.
+ * Team repos use the team slug on both.
+ */
+const repoNamerFor = async (
+  classroom: ClassroomRecord,
+  repositorySlug: string
+): Promise<(login: string) => string> => {
+  if (classroom.git_organization.provider !== 'GITLAB') {
+    return login => repoNameForLogin(repositorySlug, login);
+  }
+  const students: Array<{ id: string; login: string | null }> =
+    await ClassmojiService.classroomMembership.findUsersByRole(classroom.id, 'STUDENT');
+  const usernames = await ClassmojiService.user.findProviderUsernames(
+    students.map(student => student.id),
+    'GITLAB'
+  );
+  const gitlabByLogin = new Map(
+    students.filter(s => s.login).map(s => [s.login as string, usernames.get(s.id)])
+  );
+  return login => {
+    const gitlabUsername = gitlabByLogin.get(login);
+    return gitlabUsername
+      ? `${repositorySlug}-${gitlabUsername}`.toLowerCase()
+      : repoNameForLogin(repositorySlug, login);
+  };
+};
+
 const ensureReposForLogins = async (
   classroom: ClassroomRecord,
   repository: ReleaseModuleRecord,
@@ -163,9 +203,8 @@ const ensureReposForLogins = async (
   )) as ExistingGitRepoRecord[];
 
   const existingNames = new Set(existingRepos.map(repo => repo.name));
-  const missingLogins = recipients.filter(
-    login => !existingNames.has(repoNameForLogin(repositorySlug, login))
-  );
+  const nameFor = await repoNamerFor(classroom, repositorySlug);
+  const missingLogins = recipients.filter(login => !existingNames.has(nameFor(login)));
 
   if (missingLogins.length > 0) {
     logger.info('Creating missing repos before assignment release', {
@@ -236,7 +275,7 @@ export const createGithubRepositoryAssignmentTask = task({
     // that is needed, and the push webhook fills in the rest.
     if (assignment.submission_mode === 'REPO') {
       await createDatabaseRepositoryAssignmentTask.triggerAndWait(
-        { assignment, studentRepo },
+        { assignment, studentRepo, provider: organization.provider as 'GITHUB' | 'GITLAB' },
         { tags: ctx.run.tags, concurrencyKey: organization.login }
       );
       // The repo may already hold work: an assignment added to a repository
@@ -249,25 +288,56 @@ export const createGithubRepositoryAssignmentTask = task({
         });
         if (row) await ClassmojiService.gitRepoAssignment.recordExistingPush(row.id);
       } catch (error) {
-        logger.warn('Could not read the repo history for an existing push; the next push will count', {
-          repoName,
-          assignmentId: assignment.id,
-          error: error instanceof Error ? error.message : String(error),
-        });
+        logger.warn(
+          'Could not read the repo history for an existing push; the next push will count',
+          {
+            repoName,
+            assignmentId: assignment.id,
+            error: error instanceof Error ? error.message : String(error),
+          }
+        );
       }
       return;
     }
 
     const gitProvider = getGitProvider(organization);
+    const provider = organization.provider as 'GITHUB' | 'GITLAB';
+
+    // Where the student repo lives: the org on Github, the class subgroup on
+    // GitLab (the org row carries no classroom, so read it off the repo).
+    let owner = organization.login;
+    if (provider === 'GITLAB') {
+      const repoRow = await ClassmojiService.gitRepo.find({ id: studentRepo.id });
+      const classroomRow = repoRow?.classroom_id
+        ? await ClassmojiService.classroom.findById(repoRow.classroom_id)
+        : null;
+      if (!classroomRow?.git_namespace) {
+        throw new Error(
+          `No Gitlab class subgroup for repo ${repoName} (studentRepoId=${studentRepo.id})`
+        );
+      }
+      owner = classroomRow.git_namespace;
+
+      // Projects created before issue mode existed on GitLab have a push-only
+      // hook; make sure close/reopen events reach Classmoji too.
+      const url = process.env.GITLAB_WEBHOOK_URL;
+      const secret = process.env.GITLAB_WEBHOOK_SECRET;
+      if (url && secret) {
+        try {
+          await (gitProvider as GitLabProvider).ensureProjectPushHook(owner, repoName, url, secret);
+        } catch (error: unknown) {
+          logger.warn('Could not update the Gitlab project webhook for issue events', {
+            repoName,
+            error: getErrorMessage(error),
+          });
+        }
+      }
+    }
 
     let issue: { id: string; number: number };
 
     try {
-      const existingIssue = await gitProvider.findIssueByTitle(
-        organization.login,
-        repoName,
-        assignment.title
-      );
+      const existingIssue = await gitProvider.findIssueByTitle(owner, repoName, assignment.title);
 
       if (existingIssue) {
         logger.info('Found existing GitHub assignment issue; adopting it', {
@@ -280,7 +350,7 @@ export const createGithubRepositoryAssignmentTask = task({
         });
         issue = existingIssue;
       } else {
-        issue = await gitProvider.createIssue(organization.login, repoName, {
+        issue = await gitProvider.createIssue(owner, repoName, {
           title: assignment.title,
           body: assignment.body ?? undefined,
           description: assignment.description ?? undefined,
@@ -337,6 +407,7 @@ export const createGithubRepositoryAssignmentTask = task({
         ...payload,
         id,
         issueNumber,
+        provider,
       },
       {
         tags: ctx.run.tags,
@@ -349,7 +420,7 @@ export const createGithubRepositoryAssignmentTask = task({
 export const createDatabaseRepositoryAssignmentTask = task({
   id: 'cf-create_git_repo_assignment',
   run: async (payload: CreateDatabaseRepositoryAssignmentTaskPayload) => {
-    const { assignment, studentRepo, issueNumber, id } = payload;
+    const { assignment, studentRepo, issueNumber, id, provider } = payload;
 
     // ISSUE mode: the row id and provider_id are the GitHub issue id. REPO
     // mode: no issue; the row gets a generated id and null provider fields.
@@ -357,7 +428,7 @@ export const createDatabaseRepositoryAssignmentTask = task({
       ...(id ? { id, provider_id: String(id) } : {}),
       assignment_id: assignment.id,
       git_repo_id: studentRepo.id,
-      provider: 'GITHUB',
+      provider: provider ?? 'GITHUB',
       provider_issue_number: issueNumber ?? null,
     };
 
@@ -392,7 +463,7 @@ export const repositoryAssignmentClosedHandlerTask = task({
   run: async (payload: GitRepoAssignmentWebhookTaskPayload) => {
     const { issue } = payload;
     const repoAssignment = await ClassmojiService.gitRepoAssignment.findByProviderId(
-      'GITHUB',
+      payload.provider ?? 'GITHUB',
       String(issue.id)
     );
 
@@ -418,7 +489,7 @@ export const repositoryAssignmentReopenedHandlerTask = task({
     // Resolves through the issue id, so a REPO-mode row (no issue) can never
     // be reopened this way.
     const repoAssignment = await ClassmojiService.gitRepoAssignment.findByProviderId(
-      'GITHUB',
+      payload.provider ?? 'GITHUB',
       String(issue.id)
     );
 
@@ -564,12 +635,13 @@ export const dailyRepositoryAssignmentsReleaseTask = schedules.task({
             nanoid()
           );
           const reposByName = new Map(repos.map(repo => [repo.name, repo]));
+          const nameFor = await repoNamerFor(classroom, repositorySlug);
 
           for await (const assignment of moduleAssignments) {
             logger.info('Processing assignment', { title: assignment.title });
 
             const payloads = recipients.map(login => {
-              const repoName = repoNameForLogin(repositorySlug, login);
+              const repoName = nameFor(login);
               const studentRepo = reposByName.get(repoName);
 
               if (!studentRepo) {
@@ -673,6 +745,7 @@ export const releaseAssignmentsNowTask = task({
       nanoid()
     );
     const reposByName = new Map(repos.map(repo => [repo.name, repo]));
+    const nameFor = await repoNamerFor(classroom, repositorySlug);
 
     for await (const assignment of assignments) {
       logger.info('Releasing assignment now', { title: assignment.title });
@@ -680,7 +753,7 @@ export const releaseAssignmentsNowTask = task({
       const payloads = (
         await Promise.all(
           recipients.map(async login => {
-            const repoName = repoNameForLogin(repositorySlug, login);
+            const repoName = nameFor(login);
             const studentRepo = reposByName.get(repoName);
 
             if (!studentRepo) {

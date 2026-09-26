@@ -1,5 +1,10 @@
 import { task } from '@trigger.dev/sdk';
-import { ClassmojiService, getGitProvider, getTeamNameForClassroom } from '@classmoji/services';
+import {
+  ClassmojiService,
+  getGitProvider,
+  getTeamNameForClassroom,
+  type GitLabProvider,
+} from '@classmoji/services';
 import { nanoid } from 'nanoid';
 import { createRepositoriesTask } from './gitRepo.ts';
 import invariant from 'tiny-invariant';
@@ -189,6 +194,45 @@ export const removeUserFromOrganizationTask = task({
 
     invariant(classroomData, '[remove_user] Missing classroom data in payload');
     invariant(gitOrgData, '[remove_user] Missing git organization data in payload');
+
+    // GitLab: staff access is membership of the class subgroup (no teams, no
+    // org invite), set to the highest staff role the person still holds here.
+    // Students were never subgroup members; their own projects stay theirs,
+    // like a Github student keeps collaborator access to their repo.
+    if (gitOrgData.provider === 'GITLAB') {
+      const userRole = role || 'STUDENT';
+      if (userRole !== 'STUDENT') {
+        const [classroomRow, usernames] = await Promise.all([
+          ClassmojiService.classroom.findById(classroomData.id),
+          ClassmojiService.user.findProviderUsernames([user.id], 'GITLAB'),
+        ]);
+        const gitlabUsername = usernames.get(user.id);
+        const namespace = classroomRow?.git_namespace;
+        if (namespace && gitlabUsername) {
+          const provider = getGitProvider(gitOrgData) as GitLabProvider;
+          const remaining = (['OWNER', 'TEACHER', 'ASSISTANT'] as const).filter(
+            other => other !== userRole
+          );
+          const stillHeld: Array<(typeof remaining)[number]> = [];
+          for (const other of remaining) {
+            if (
+              await ClassmojiService.classroomMembership.hasRole(classroomData.id, user.id, [other])
+            ) {
+              stillHeld.push(other);
+            }
+          }
+          if (stillHeld.length === 0) {
+            await provider.removeGroupMember(namespace, gitlabUsername);
+          } else {
+            const level = Math.max(
+              ...stillHeld.map(r => ClassmojiService.staff.GITLAB_STAFF_ACCESS[r])
+            );
+            await provider.addGroupMember(namespace, gitlabUsername, level);
+          }
+        }
+      }
+      return ClassmojiService.classroomMembership.remove(classroomData.id, user.id, userRole);
+    }
 
     if (user.has_accepted_invite) {
       const gitProvider = getGitProvider(gitOrgData);

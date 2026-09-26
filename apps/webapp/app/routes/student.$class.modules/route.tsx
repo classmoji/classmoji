@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { useGitContext } from '~/hooks/useGitWeb';
 import { useLocation } from 'react-router';
 import { Button } from 'antd';
 import type { Route } from './+types/route';
@@ -232,6 +233,7 @@ const StudentModules = ({ loaderData }: Route.ComponentProps) => {
   // return below.
   const rolePrefix = useLocation().pathname.split('/')[1];
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+  const gitCtx = useGitContext();
 
   if (!loaderData.enabled) {
     return (
@@ -263,6 +265,7 @@ const StudentModules = ({ loaderData }: Route.ComponentProps) => {
   // loader gave them no drafts to chip.
   const ctx: StudentTreeCtx = {
     classSlug,
+    git: gitCtx,
     slidesUrl,
     pagesUrl,
     rolePrefix,

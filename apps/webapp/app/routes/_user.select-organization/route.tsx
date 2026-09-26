@@ -1,4 +1,5 @@
 import { redirect, useNavigate, useSearchParams } from 'react-router';
+import { sessionMode, usernameForMode } from '~/utils/sessionMode.server';
 import { useEffect, useMemo, useState } from 'react';
 import { Modal, Button as AntdButton } from 'antd';
 import { useCallout } from '@classmoji/ui-components';
@@ -114,6 +115,54 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
       console.error('Failed to claim pending classroom invites:', error);
     }
 
+    // GitLab courses have no second invite to accept (on Github, "pending"
+    // means the Github org invite is still open), so a pending GitLab-course
+    // membership becomes active as soon as the student has GitLab connected.
+    // Flipped here first so a reload never re-triggers; the task then creates
+    // their projects. Runs after the invite claim so a just-claimed invite
+    // counts. Not during impersonation: an admin must not enroll on the user's
+    // behalf.
+    try {
+      const impersonatingNow = !!(
+        authData.session as { session?: { impersonatedBy?: string | null } } | undefined
+      )?.session?.impersonatedBy;
+      const pendingGitLab = impersonatingNow
+        ? []
+        : await getPrisma().classroomMembership.findMany({
+            where: {
+              user_id: typedUser.id,
+              has_accepted_invite: false,
+              classroom: { git_organization: { provider: 'GITLAB' } },
+            },
+            select: { id: true, classroom: { select: { git_org_id: true } } },
+          });
+      const gitlabUsername =
+        pendingGitLab.length > 0 && typedUser.login
+          ? (await ClassmojiService.user.findProviderUsernames([typedUser.id], 'GITLAB')).get(
+              typedUser.id
+            )
+          : undefined;
+      if (gitlabUsername && typedUser.login) {
+        await getPrisma().classroomMembership.updateMany({
+          where: { id: { in: pendingGitLab.map(m => m.id) } },
+          data: { has_accepted_invite: true },
+        });
+        for (const gitOrganizationId of new Set(pendingGitLab.map(m => m.classroom.git_org_id))) {
+          await tasks.trigger('activate_membership', { login: typedUser.login, gitOrganizationId });
+        }
+        const refreshedUser = await ClassmojiService.user.findById(typedUser.id, {
+          includeMemberships: true,
+        });
+        if (refreshedUser) {
+          user = refreshedUser;
+          typedUser = user as AppUser;
+          typedUser.memberships = (typedUser.memberships ?? []) as SelectOrganizationMembership[];
+        }
+      }
+    } catch (error) {
+      console.error('Failed to activate Gitlab course memberships:', error);
+    }
+
     // Runs after the invite claim above so a freshly-claimed student membership
     // counts toward the audience filter. Never asked during impersonation: a
     // platform admin must not answer on the user's behalf.
@@ -141,6 +190,18 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
       metadata: (n.metadata ?? null) as Record<string, unknown> | null,
     }));
 
+    // The session's mode decides which classrooms are listed: a GitLab
+    // session sees GitLab classrooms only, a Github session Github ones.
+    const gitMode = sessionMode(authData.session, typedUser.provider);
+    // Identity follows the mode too: show the username of this provider's account.
+    const modeUsername = await usernameForMode(typedUser.id, gitMode);
+    if (modeUsername) typedUser.login = modeUsername;
+    typedUser.memberships = (typedUser.memberships ?? []).filter(
+      m =>
+        ((m as { classroom?: { git_organization?: { provider?: string } } }).classroom
+          ?.git_organization?.provider ?? 'GITHUB') === gitMode
+    ) as SelectOrganizationMembership[];
+
     const membershipRoles: Record<string, NotificationRole[]> = {};
     for (const m of typedUser.memberships ?? []) {
       const orgId = (m as SelectOrganizationMembership).organization?.id;
@@ -161,6 +222,7 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
 
     return {
       user,
+      gitMode,
       memberships: typedUser.memberships as SelectOrganizationMembership[],
       githubAppName: process.env.GITHUB_APP_NAME,
       notifications,
@@ -406,6 +468,7 @@ const SelectOrganization = ({ loaderData }: Route.ComponentProps) => {
       </Modal>
 
       <ClassroomsLandingScreen
+        gitMode={loaderData.gitMode}
         user={
           user
             ? {
@@ -445,6 +508,59 @@ export const action = checkAuth(
 
     if (!membership) {
       return { error: 'Classroom not found' };
+    }
+
+    // `login` is a username on the user's own provider. Sent to a different
+    // provider's org it would name whoever holds that username there, so a
+    // GitLab `jdoe` would invite a stranger who is Github `jdoe`. Rows from
+    // before GitLab support have a null provider and are Github users.
+    // Connecting Github makes the Github username the main login (see
+    // packages/auth/src/providerProfile.ts), so the provider on the user row
+    // says which platform `login` belongs to.
+    const courseProvider = membership.classroom.git_organization.provider;
+
+    // GitLab course: the student needs GitLab connected (their project is
+    // named after, and shared with, their GitLab username). They never join
+    // the GitLab group: group members inherit every project in it, which would
+    // expose classmates' repos. Activation creates their projects straight
+    // away, since GitLab has no invite to accept and no webhook to wait for.
+    if (courseProvider === 'GITLAB') {
+      const gitlabUsername = (
+        await ClassmojiService.user.findProviderUsernames([user.userId], 'GITLAB')
+      ).get(user.userId);
+      if (!gitlabUsername) {
+        return {
+          error: 'This course uses Gitlab. Connect your Gitlab account in Settings to join it.',
+        };
+      }
+      // Activation still identifies the student by `login`.
+      if (!membership.user.login) {
+        return { error: 'Your account has no username yet. Contact support to join this course.' };
+      }
+      await tasks.trigger('activate_membership', {
+        login: membership.user.login,
+        gitOrganizationId: membership.classroom.git_organization.id,
+      });
+      return {
+        success: "You're in. Your Gitlab projects are being created.",
+        action: ActionTypes.SEND_INVITATION,
+      };
+    }
+
+    // Github course. Connecting Github makes the Github username the main
+    // login (see packages/auth/src/providerProfile.ts), so the provider on the
+    // user row says whether `login` is a Github username. Rows from before
+    // GitLab support have a null provider and are Github users.
+    if ((membership.user.provider ?? 'GITHUB') !== 'GITHUB') {
+      const githubAccount = await getPrisma().account.findFirst({
+        where: { user_id: user.userId, provider_id: 'github' },
+        select: { id: true },
+      });
+      return {
+        error: githubAccount
+          ? "Your Github username is already used by another Classmoji account, so you can't join Github courses yet. Contact support to sort it out."
+          : 'This course uses Github. Connect your Github account in Settings to join it.',
+      };
     }
 
     const student_login = membership.user.login;

@@ -1,4 +1,5 @@
 import { Button, Dropdown, Switch, Tag, Tooltip } from 'antd';
+import { gitContextFor, gitWeb, type ClassroomLike } from '~/utils/gitWeb';
 import type { MenuProps } from 'antd';
 import dayjs from 'dayjs';
 import { IconChevronLeft, IconDotsVertical, IconRobot } from '@tabler/icons-react';
@@ -315,7 +316,9 @@ const AssignmentPage = ({ loaderData }: Route.ComponentProps) => {
             <span>
               Repository{' '}
               <a
-                href={`https://github.com/${repository.template}`}
+                href={gitWeb(gitContextFor(classroom as ClassroomLike)).template(
+                  repository.template
+                )}
                 target="_blank"
                 rel="noreferrer"
                 className="text-ink-1 font-medium hover:underline underline-offset-2"
