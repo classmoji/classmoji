@@ -280,3 +280,44 @@ describe('P3-3 — hasContentRepo is now the webapp’s answer, not ai-agent’s
     expect((await res.json()).hasContentRepo).toBe(true);
   });
 });
+
+describe("llmConfig — Ask Moji's own model and effort", () => {
+  it('sends syllabus_bot_model and syllabus_bot_effort', async () => {
+    getClassroomSettingsForServerMock.mockResolvedValue({
+      syllabus_bot_enabled: true,
+      anthropic_api_key: 'sk-ant-classroom',
+      llm_model: 'claude-opus-5-5',
+      syllabus_bot_model: 'claude-sonnet-5',
+      syllabus_bot_effort: 'medium',
+    });
+
+    await post({ _action: 'initConversation' });
+
+    expect(payloadFor('SYLLABUS_BOT_INIT').llmConfig).toEqual({
+      anthropicApiKey: 'sk-ant-classroom',
+      model: 'claude-sonnet-5',
+      effort: 'medium',
+    });
+  });
+
+  // Ask Moji used to borrow the standard quiz model when it had none of its
+  // own. Null now means the platform default (SYLLABUS_BOT_MODEL).
+  it('does not fall back to the quiz model', async () => {
+    getClassroomSettingsForServerMock.mockResolvedValue({
+      syllabus_bot_enabled: true,
+      anthropic_api_key: 'sk-ant-classroom',
+      llm_model: 'claude-opus-5-5',
+      syllabus_bot_model: null,
+      syllabus_bot_effort: null,
+    });
+
+    await post({ _action: 'initConversation' });
+
+    const { llmConfig } = payloadFor('SYLLABUS_BOT_INIT') as {
+      llmConfig: { model?: string | null; effort?: string | null };
+    };
+    expect(llmConfig.model ?? null).toBeNull();
+    expect(llmConfig.effort ?? null).toBeNull();
+    expect(JSON.stringify(llmConfig)).not.toContain('claude-opus-5-5');
+  });
+});

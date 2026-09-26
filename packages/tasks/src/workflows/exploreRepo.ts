@@ -432,6 +432,45 @@ const LEGACY_MAX_RELEVANT_FILES = 5;
  */
 const METADATA_RESULT_MAX_BYTES = 200_000;
 
+/** Levels the Messages API takes in `output_config.effort`. */
+export const EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max'] as const;
+export type EffortLevel = (typeof EFFORT_LEVELS)[number];
+
+/**
+ * The payload's explorationEffort as a level, or null for "send no effort".
+ * The ai-agent has already resolved it (classroom > EXPLORATION_EFFORT >
+ * default) and dropped it for a model that takes no effort, so only the string
+ * is checked here: an unknown value would 400 the excerpt call.
+ */
+export function toEffortLevel(value: unknown): EffortLevel | null {
+  return typeof value === 'string' && (EFFORT_LEVELS as readonly string[]).includes(value)
+    ? (value as EffortLevel)
+    : null;
+}
+
+/**
+ * The effort the excerpt call actually runs at: xhigh and max run as high.
+ * That call reads up to ~20k tokens of code, and thinking counts against
+ * max_tokens, so at those two it can think through all of its room without
+ * answering and the task falls back to whole files. Quiz settings offer only
+ * low, medium and high for exploration; this covers an env value or an older
+ * stored one.
+ */
+export function capExcerptEffort(effort: EffortLevel | null): EffortLevel | null {
+  return effort === 'xhigh' || effort === 'max' ? 'high' : effort;
+}
+
+/**
+ * max_tokens for the excerpt call at a (capped) effort. The answer is a few
+ * hundred tokens; the rest is room to think. High, and no effort at all (the
+ * API's default is high), get twice what low and medium do. 16384 is still
+ * inside @anthropic-ai/sdk 0.39's non-streaming guard, which throws before
+ * sending once max_tokens implies more than ten minutes (above ~21,333).
+ */
+export function excerptMaxTokens(effort: EffortLevel | null): number {
+  return effort === 'low' || effort === 'medium' ? 8192 : 16384;
+}
+
 /** A pointer as the model gave it, after type coercion but before validation. */
 export type ExcerptPointer = {
   path: string;
@@ -1027,7 +1066,8 @@ export async function requestExcerptPointers(
   focusArea: string,
   previousFindings: string[],
   specificQuestion: string | null,
-  treeListing: string
+  treeListing: string,
+  effort: EffortLevel | null = null
 ): Promise<ExcerptResponse | null> {
   const isInitial = focusArea === 'initial';
 
@@ -1048,10 +1088,20 @@ export async function requestExcerptPointers(
   // No `thinking` param and a roomy max_tokens, for the same reasons as the
   // file picker above. The answer itself is a few hundred tokens, but thinking
   // counts against max_tokens and this call has up to ~20k tokens of code to
-  // think about, so it gets twice the picker's room.
-  const response = await client.messages.create({
+  // think about, so it gets at least twice the picker's room, sized to the
+  // effort (excerptMaxTokens), which is capped at high (capExcerptEffort).
+  //
+  // Effort goes on this call only (the picker keeps the model's default), and
+  // only when one was given. @anthropic-ai/sdk 0.39 predates `output_config`,
+  // hence the widened type; the SDK sends unknown body keys as given, so the
+  // field reaches the API (pinned in exploreRepo.effort.test.ts). Drop the
+  // widening once the SDK knows the field.
+  const runEffort = capExcerptEffort(effort);
+  const params: Anthropic.MessageCreateParamsNonStreaming & {
+    output_config?: { effort: EffortLevel };
+  } = {
     model,
-    max_tokens: 8192,
+    max_tokens: excerptMaxTokens(runEffort),
     messages: [
       {
         role: 'user',
@@ -1080,7 +1130,9 @@ RULES:
 - No text outside the JSON.`,
       },
     ],
-  });
+    ...(runEffort ? { output_config: { effort: runEffort } } : {}),
+  };
+  const response = await client.messages.create(params);
 
   return parseExcerptResponse(responseText(response, 'Excerpt selector'));
 }
@@ -1196,6 +1248,9 @@ export const exploreRepoTask = task({
     previouslyReadFiles?: string[];
     specificQuestion?: string | null;
     explorationModel?: string;
+    // Effort for the excerpt call, already resolved and capability-checked by
+    // the ai-agent. Absent (or not a known level) = no effort sent.
+    explorationEffort?: string | null;
   }) => {
     const {
       owner,
@@ -1207,14 +1262,25 @@ export const exploreRepoTask = task({
       previouslyReadFiles = [],
       specificQuestion = null,
       explorationModel,
+      explorationEffort,
     } = payload;
 
     const model = explorationModel || 'claude-sonnet-5';
+    const requestedEffort = toEffortLevel(explorationEffort);
+    if (explorationEffort && !requestedEffort) {
+      logger.warn(`Ignoring unknown explorationEffort ${JSON.stringify(explorationEffort)}`);
+    }
+    // Capped here too (requestExcerptPointers does it as well) so the log
+    // lines show the effort the excerpt call runs at.
+    const effort = capExcerptEffort(requestedEffort);
+    if (requestedEffort && effort !== requestedEffort) {
+      logger.info(`explorationEffort ${requestedEffort} runs as ${effort} on the excerpt call`);
+    }
     console.log(
-      `[explore-repo] Starting: ${owner}/${repo} — focus: ${focusArea}, depth: ${depth}, model: ${model}`
+      `[explore-repo] Starting: ${owner}/${repo} — focus: ${focusArea}, depth: ${depth}, model: ${model}, effort: ${effort ?? 'none'}`
     );
     logger.info(
-      `Exploring ${owner}/${repo} — focus: ${focusArea}, depth: ${depth}, model: ${model}`
+      `Exploring ${owner}/${repo} — focus: ${focusArea}, depth: ${depth}, model: ${model}, effort: ${effort ?? 'none'}`
     );
 
     // Initialize Anthropic client using env var (set in Trigger.dev config, NOT passed in payload)
@@ -1310,7 +1376,8 @@ export const exploreRepoTask = task({
           focusArea,
           previousFindings,
           specificQuestion,
-          treeListing
+          treeListing,
+          effort
         )
       : null;
 

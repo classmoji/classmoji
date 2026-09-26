@@ -82,7 +82,7 @@ export const classroomSettingsUpdateTool: ToolDefinition<ClassroomSettingsUpdate
   title: 'Update classroom settings',
   description:
     'Updates classroom settings: the display name, navigation/feature toggles (modules, pages, ' +
-    'repos, slides, syllabus bot, quizzes, recent viewers), token and late-penalty defaults, the ' +
+    'repos, slides, Ask Moji, quizzes, recent viewers), token and late-penalty defaults, the ' +
     'student landing page, and the theme. Owner only. Provide at least one field; omitted fields ' +
     'are left alone. Turning a feature off hides it from students but deletes nothing. ' +
     'default_student_page takes "dashboard", "repositories", or "page:{pageId}" for a specific ' +
@@ -99,7 +99,10 @@ export const classroomSettingsUpdateTool: ToolDefinition<ClassroomSettingsUpdate
     show_pages: z.boolean().optional().describe('Show course pages to students'),
     show_repos: z.boolean().optional().describe('Show repositories to students'),
     slides_enabled: z.boolean().optional().describe('Enable the slides feature'),
-    syllabus_bot_enabled: z.boolean().optional().describe('Enable the AI syllabus bot'),
+    syllabus_bot_enabled: z
+      .boolean()
+      .optional()
+      .describe('Enable Ask Moji, the AI course assistant; turning it on requires Pro'),
     quizzes_enabled: z.boolean().optional().describe('Enable AI quizzes'),
     recent_viewers_enabled: z
       .boolean()

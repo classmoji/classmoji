@@ -45,9 +45,10 @@ describe('updateSettings — syllabus bot Pro gate', () => {
     const { updateSettings, ClassroomSettingsEntitlementError } =
       await import('../classroom.service.ts');
 
-    await expect(
-      updateSettings(CLASSROOM_ID, { syllabus_bot_enabled: true })
-    ).rejects.toBeInstanceOf(ClassroomSettingsEntitlementError);
+    const refusal = updateSettings(CLASSROOM_ID, { syllabus_bot_enabled: true });
+    await expect(refusal).rejects.toBeInstanceOf(ClassroomSettingsEntitlementError);
+    // The AI settings tab and the MCP tool show this message as is.
+    await expect(refusal).rejects.toThrow('Ask Moji requires a Pro subscription.');
     expect(upsertMock).not.toHaveBeenCalled();
   });
 
