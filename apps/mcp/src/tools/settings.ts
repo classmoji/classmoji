@@ -298,6 +298,9 @@ interface OrgRepoSettingsUpdateArgs {
   confirm: true;
 }
 
+const MCP_GITHUB_SIGN_IN_AGAIN_MESSAGE =
+  'Your GitHub sign-in has expired. Sign in to Classmoji on the web again, then retry.';
+
 export const orgRepoSettingsUpdateTool: ToolDefinition<OrgRepoSettingsUpdateArgs> = {
   name: 'org_repo_settings_update',
   // Writes to GitHub, not our database → openWorld. It reaches far outside the
@@ -389,8 +392,15 @@ export const orgRepoSettingsUpdateTool: ToolDefinition<OrgRepoSettingsUpdateArgs
           case 'APP_NOT_INSTALLED':
             throw new ToolError('invalid_params', error.message, error.code);
           case 'NO_GITHUB_TOKEN':
+            // No usable token, or GitHub no longer accepts it: clear the stored
+            // one so the next sign-in starts clean, and point the caller at the
+            // web sign-in (this server cannot run the GitHub sign-in itself).
+            await ClassmojiService.githubUserToken.clearRevokedTokenForUser(ctx.viewer.userId);
+            throw new ToolError('forbidden', MCP_GITHUB_SIGN_IN_AGAIN_MESSAGE, error.code);
           case 'NOT_ORG_OWNER':
             throw new ToolError('forbidden', error.message, error.code);
+          case 'RATE_LIMITED':
+            throw new ToolError('rate_limited', error.message, error.code);
           default:
             throw new ToolError('internal', error.message, error.code);
         }

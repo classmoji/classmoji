@@ -22,6 +22,7 @@ const mocks = vi.hoisted(() => ({
   pageFindById: vi.fn(),
   updateOrgRepoSettings: vi.fn(),
   getGitHubTokenForUser: vi.fn(),
+  clearRevokedTokenForUser: vi.fn(),
   getGitProvider: vi.fn(),
   auditCreate: vi.fn(),
 }));
@@ -62,6 +63,7 @@ vi.mock('@classmoji/services', () => ({
     },
     githubUserToken: {
       getGitHubTokenForUser: (...a: unknown[]) => mocks.getGitHubTokenForUser(...a),
+      clearRevokedTokenForUser: (...a: unknown[]) => mocks.clearRevokedTokenForUser(...a),
     },
   },
   OrgRepoSettingsError,
@@ -410,33 +412,46 @@ describe('org_repo_settings_update', () => {
     expect(call.input).toEqual({ members_can_create_repositories: true });
   });
 
-  it('passes a missing token through so the service asks the caller to sign in again', async () => {
+  it('asks the caller to sign in on the web again when there is no usable token', async () => {
     mocks.getGitHubTokenForUser.mockResolvedValue(null);
     mocks.updateOrgRepoSettings.mockRejectedValue(
       new OrgRepoSettingsError('NO_GITHUB_TOKEN', 'Your GitHub sign-in has expired.')
     );
     await expect(
       orgRepoSettingsUpdateTool.handler({ ...BASE, members_can_create_repositories: false }, CTX)
-    ).rejects.toMatchObject({ kind: 'forbidden', code: 'NO_GITHUB_TOKEN' });
+    ).rejects.toMatchObject({
+      kind: 'forbidden',
+      code: 'NO_GITHUB_TOKEN',
+      message:
+        'Your GitHub sign-in has expired. Sign in to Classmoji on the web again, then retry.',
+    });
     const [call] = mocks.updateOrgRepoSettings.mock.calls[0] as [{ userToken: unknown }];
     expect(call.userToken).toBeNull();
+    // The stored token is cleared for the calling user.
+    expect(mocks.clearRevokedTokenForUser).toHaveBeenCalledWith('owner-1');
     expect(mocks.auditCreate).not.toHaveBeenCalled();
   });
 
-  it('reports a GitHub refusal as organization owners only', async () => {
+  it('reports a refused change as forbidden and keeps the stored token', async () => {
+    const message =
+      "GitHub didn't allow this change. Only organization owners can change these settings, and the Classmoji app needs access to the organization.";
     mocks.updateOrgRepoSettings.mockRejectedValue(
-      new OrgRepoSettingsError(
-        'NOT_ORG_OWNER',
-        'Only GitHub organization owners can change these settings.'
-      )
+      new OrgRepoSettingsError('NOT_ORG_OWNER', message)
     );
     await expect(
       orgRepoSettingsUpdateTool.handler({ ...BASE, default_repository_permission: 'none' }, CTX)
-    ).rejects.toMatchObject({
-      kind: 'forbidden',
-      code: 'NOT_ORG_OWNER',
-      message: 'Only GitHub organization owners can change these settings.',
-    });
+    ).rejects.toMatchObject({ kind: 'forbidden', code: 'NOT_ORG_OWNER', message });
+    expect(mocks.clearRevokedTokenForUser).not.toHaveBeenCalled();
+    expect(mocks.auditCreate).not.toHaveBeenCalled();
+  });
+
+  it('maps a GitHub rate limit to rate_limited', async () => {
+    mocks.updateOrgRepoSettings.mockRejectedValue(
+      new OrgRepoSettingsError('RATE_LIMITED', 'GitHub is rate limiting requests right now.')
+    );
+    await expect(
+      orgRepoSettingsUpdateTool.handler({ ...BASE, default_repository_permission: 'none' }, CTX)
+    ).rejects.toMatchObject({ kind: 'rate_limited', code: 'RATE_LIMITED' });
     expect(mocks.auditCreate).not.toHaveBeenCalled();
   });
 

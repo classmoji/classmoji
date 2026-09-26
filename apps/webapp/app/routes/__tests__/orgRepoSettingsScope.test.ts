@@ -11,7 +11,8 @@
  *   - a GitHub 403 is reported as "only organization owners";
  *   - each change writes an audit row with old → new values;
  *   - the loader reports whether the viewer can edit, from their own
- *     organization membership.
+ *     organization membership;
+ *   - while viewing as another user, nothing is sent to GitHub.
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -23,7 +24,8 @@ const mocks = vi.hoisted(() => ({
   getAuthSession: vi.fn(),
   getGitProvider: vi.fn(),
   getOrganization: vi.fn(),
-  getUserOctokit: vi.fn(),
+  getImmediateUserOctokit: vi.fn(),
+  clearRevokedToken: vi.fn(),
   userRequest: vi.fn(),
 }));
 
@@ -35,11 +37,14 @@ vi.mock('~/utils/helpers', () => ({
 
 vi.mock('@classmoji/auth/server', () => ({
   getAuthSession: (...a: unknown[]) => mocks.getAuthSession(...a),
+  clearRevokedToken: (...a: unknown[]) => mocks.clearRevokedToken(...a),
 }));
 
 // GitHub, replaced at the Octokit layer for the real service below.
 vi.mock('../../../../../packages/services/src/git/index.ts', () => ({
-  GitHubProvider: { getUserOctokit: (...a: unknown[]) => mocks.getUserOctokit(...a) },
+  GitHubProvider: {
+    getImmediateUserOctokit: (...a: unknown[]) => mocks.getImmediateUserOctokit(...a),
+  },
 }));
 
 vi.mock('@classmoji/services', async () => {
@@ -99,7 +104,7 @@ beforeEach(() => {
     membership: { role: 'OWNER' },
   });
   mocks.getAuthSession.mockResolvedValue({ userId: 'owner-1', token: USER_TOKEN });
-  mocks.getUserOctokit.mockReturnValue({ request: mocks.userRequest });
+  mocks.getImmediateUserOctokit.mockReturnValue({ request: mocks.userRequest });
   mocks.userRequest.mockImplementation(async (r: string, params: Record<string, unknown>) => {
     if (r === 'GET /orgs/{org}') {
       return {
@@ -139,7 +144,7 @@ describe('repository settings action', () => {
     const result = await post({ default_repository_permission: 'read' });
 
     expect(result).toEqual({ success: 'Permissions updated', action: 'UPDATE_MEMBER_PERMISSIONS' });
-    expect(mocks.getUserOctokit).toHaveBeenCalledWith(USER_TOKEN);
+    expect(mocks.getImmediateUserOctokit).toHaveBeenCalledWith(USER_TOKEN);
     expect(patchCalls()).toEqual([
       ['PATCH /orgs/{org}', { default_repository_permission: 'read', org: 'myorg' }],
     ]);
@@ -185,7 +190,7 @@ describe('repository settings action', () => {
     expect(mocks.addClassroomAuditLog).not.toHaveBeenCalled();
   });
 
-  it('reports a GitHub 403 as organization owners only, without an audit row', async () => {
+  it('reports a GitHub 403 as a refused change, without an audit row', async () => {
     mocks.userRequest.mockImplementation(async (r: string) => {
       if (r === 'PATCH /orgs/{org}') throw httpError(403);
       return { data: {} };
@@ -194,7 +199,8 @@ describe('repository settings action', () => {
     const result = await post({ default_repository_permission: 'write' });
 
     expect(result).toEqual({
-      error: 'Only GitHub organization owners can change these settings.',
+      error:
+        "GitHub didn't allow this change. Only organization owners can change these settings, and the Classmoji app needs access to the organization.",
       action: 'UPDATE_MEMBER_PERMISSIONS',
     });
     expect(mocks.addClassroomAuditLog).not.toHaveBeenCalled();
@@ -206,8 +212,68 @@ describe('repository settings action', () => {
     const result = await post({ default_repository_permission: 'read' });
 
     expect(result.error).toMatch(/sign in again/);
-    expect(mocks.getUserOctokit).not.toHaveBeenCalled();
+    expect(mocks.getImmediateUserOctokit).not.toHaveBeenCalled();
     expect(mocks.addClassroomAuditLog).not.toHaveBeenCalled();
+    expect(mocks.clearRevokedToken).toHaveBeenCalledWith('owner-1');
+  });
+
+  it('clears the cached token when GitHub no longer accepts it', async () => {
+    mocks.userRequest.mockRejectedValue(httpError(401));
+
+    const result = await post({ default_repository_permission: 'read' });
+
+    expect(result.error).toMatch(/sign in again/);
+    expect(mocks.clearRevokedToken).toHaveBeenCalledWith('owner-1');
+  });
+
+  it('keeps the cached token on other refusals', async () => {
+    mocks.userRequest.mockImplementation(async (r: string) => {
+      if (r === 'PATCH /orgs/{org}') throw httpError(403);
+      return { data: {} };
+    });
+    await post({ default_repository_permission: 'read' });
+    await post({ billing_email: 'x@y.z' });
+    expect(mocks.clearRevokedToken).not.toHaveBeenCalled();
+  });
+
+  it('reports a GitHub rate limit in the route error shape', async () => {
+    mocks.userRequest.mockImplementation(async (r: string) => {
+      if (r === 'PATCH /orgs/{org}') {
+        throw Object.assign(new Error('API rate limit exceeded'), {
+          status: 403,
+          response: { headers: { 'x-ratelimit-remaining': '0' } },
+        });
+      }
+      return { data: {} };
+    });
+
+    const result = await post({ default_repository_permission: 'read' });
+
+    expect(result).toEqual({
+      error: 'GitHub is rate limiting requests right now. Try again in a few minutes.',
+      action: 'UPDATE_MEMBER_PERMISSIONS',
+    });
+    expect(mocks.addClassroomAuditLog).not.toHaveBeenCalled();
+  });
+
+  it('refuses while viewing as another user, before contacting GitHub', async () => {
+    mocks.getAuthSession.mockResolvedValue({
+      userId: 'owner-1',
+      token: USER_TOKEN,
+      session: { session: { impersonatedBy: 'platform-admin-1' } },
+    });
+
+    const result = await post({ default_repository_permission: 'read' });
+
+    expect(result).toEqual({
+      error:
+        "Changes to GitHub organization settings aren't available while viewing as another user.",
+      action: 'UPDATE_MEMBER_PERMISSIONS',
+    });
+    expect(mocks.getImmediateUserOctokit).not.toHaveBeenCalled();
+    expect(mocks.userRequest).not.toHaveBeenCalled();
+    expect(mocks.addClassroomAuditLog).not.toHaveBeenCalled();
+    expect(mocks.clearRevokedToken).not.toHaveBeenCalled();
   });
 
   it('reports other GitHub failures in the route error shape', async () => {
@@ -254,16 +320,69 @@ describe('repository settings loader', () => {
   it('can edit when the viewer is an active organization owner', async () => {
     const data = await load();
 
-    expect(data).toMatchObject({ canEdit: true, error: null, gitOrgLogin: 'myorg' });
+    expect(data).toMatchObject({
+      canEdit: true,
+      editBlockedReason: null,
+      error: null,
+      gitOrgLogin: 'myorg',
+    });
     expect(mocks.userRequest).toHaveBeenCalledWith('GET /user/memberships/orgs/{org}', {
       org: 'myorg',
+      request: { signal: expect.any(AbortSignal) },
     });
-    expect(mocks.getUserOctokit).toHaveBeenCalledWith(USER_TOKEN);
+    expect(mocks.getImmediateUserOctokit).toHaveBeenCalledWith(USER_TOKEN);
   });
 
   it('cannot edit when the viewer is a member but not an owner', async () => {
     mocks.userRequest.mockResolvedValue({ data: { role: 'member', state: 'active' } });
-    expect(await load()).toMatchObject({ canEdit: false, error: null });
+    expect(await load()).toMatchObject({
+      canEdit: false,
+      editBlockedReason: 'not_owner',
+      error: null,
+    });
+  });
+
+  it('cannot edit while viewing as another user, and does not ask GitHub about membership', async () => {
+    mocks.getAuthSession.mockResolvedValue({
+      userId: 'owner-1',
+      token: USER_TOKEN,
+      session: { session: { impersonatedBy: 'platform-admin-1' } },
+    });
+
+    const data = await load();
+
+    expect(data).toMatchObject({ canEdit: false, editBlockedReason: 'impersonating', error: null });
+    expect(mocks.getImmediateUserOctokit).not.toHaveBeenCalled();
+    // The current values still display.
+    expect(mocks.getOrganization).toHaveBeenCalledWith('myorg');
+  });
+
+  it('starts the membership check without waiting for the settings read', async () => {
+    let releaseOrganization: (value: unknown) => void = () => {};
+    mocks.getOrganization.mockReturnValue(
+      new Promise(resolve => {
+        releaseOrganization = resolve;
+      })
+    );
+
+    const pending = load();
+    await vi.waitFor(() =>
+      expect(mocks.userRequest).toHaveBeenCalledWith(
+        'GET /user/memberships/orgs/{org}',
+        expect.anything()
+      )
+    );
+    releaseOrganization({ login: 'myorg', default_repository_permission: 'none' });
+    expect(await pending).toMatchObject({ canEdit: true, error: null });
+  });
+
+  it('keeps the settings-read error when GitHub cannot load the organization', async () => {
+    mocks.getOrganization.mockRejectedValue(httpError(404));
+    expect(await load()).toMatchObject({
+      githubOrganization: null,
+      canEdit: false,
+      error: expect.stringContaining("couldn't find"),
+    });
   });
 
   it('leaves editing on when the membership check fails', async () => {
@@ -274,7 +393,7 @@ describe('repository settings loader', () => {
   it('leaves editing on when there is no GitHub token, so the action explains', async () => {
     mocks.getAuthSession.mockResolvedValue({ userId: 'owner-1', token: null });
     expect(await load()).toMatchObject({ canEdit: true });
-    expect(mocks.getUserOctokit).not.toHaveBeenCalled();
+    expect(mocks.getImmediateUserOctokit).not.toHaveBeenCalled();
   });
 
   it('never returns the token', async () => {

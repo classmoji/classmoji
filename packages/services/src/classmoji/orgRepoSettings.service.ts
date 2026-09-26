@@ -43,6 +43,7 @@ export type OrgRepoSettingsErrorCode =
   | 'APP_NOT_INSTALLED'
   | 'NO_GITHUB_TOKEN'
   | 'NOT_ORG_OWNER'
+  | 'RATE_LIMITED'
   | 'GITHUB_ERROR';
 
 export class OrgRepoSettingsError extends Error {
@@ -58,8 +59,10 @@ export class OrgRepoSettingsError extends Error {
   }
 }
 
-export const ORG_OWNER_REQUIRED_MESSAGE =
-  'Only GitHub organization owners can change these settings.';
+export const GITHUB_REFUSED_CHANGE_MESSAGE =
+  "GitHub didn't allow this change. Only organization owners can change these settings, and the Classmoji app needs access to the organization.";
+export const GITHUB_RATE_LIMITED_MESSAGE =
+  'GitHub is rate limiting requests right now. Try again in a few minutes.';
 export const GITHUB_SIGN_IN_AGAIN_MESSAGE =
   'Your GitHub sign-in has expired. Sign out and sign in again, then retry.';
 
@@ -173,14 +176,10 @@ export function toOrgRepoSettingsError(error: unknown): OrgRepoSettingsError {
     return new OrgRepoSettingsError('NO_GITHUB_TOKEN', GITHUB_SIGN_IN_AGAIN_MESSAGE, status);
   }
   if (isRateLimited(error)) {
-    return new OrgRepoSettingsError(
-      'GITHUB_ERROR',
-      'GitHub is rate limiting requests right now. Try again in a few minutes.',
-      status
-    );
+    return new OrgRepoSettingsError('RATE_LIMITED', GITHUB_RATE_LIMITED_MESSAGE, status);
   }
   if (status === 403 || status === 404) {
-    return new OrgRepoSettingsError('NOT_ORG_OWNER', ORG_OWNER_REQUIRED_MESSAGE, status);
+    return new OrgRepoSettingsError('NOT_ORG_OWNER', GITHUB_REFUSED_CHANGE_MESSAGE, status);
   }
   return new OrgRepoSettingsError(
     'GITHUB_ERROR',
@@ -244,8 +243,9 @@ export async function updateOrgRepoSettings({
   }
 
   // The user's own token: GitHub applies the intersection of the App's
-  // permissions and this person's role in the organization.
-  const octokit = GitHubProvider.getUserOctokit(userToken);
+  // permissions and this person's role in the organization. The immediate
+  // variant reports a rate limit as an error rather than waiting it out.
+  const octokit = GitHubProvider.getImmediateUserOctokit(userToken);
 
   // Current values, for the before → after record. Best effort: a failed read
   // leaves `from` null and the update itself decides the outcome.
@@ -293,23 +293,29 @@ export async function updateOrgRepoSettings({
 
 export type OrgOwnerStatus = 'owner' | 'not_owner' | 'unknown';
 
+/** How long the page waits on the membership check before treating it as unknown. */
+export const ORG_OWNER_CHECK_TIMEOUT_MS = 3000;
+
 /**
  * Whether the user can change organization settings, from their own
  * membership (GET /user/memberships/orgs/{org} with their token):
  *   - 'owner'     — active membership with role 'admin'
  *   - 'not_owner' — GitHub reported a membership that is not an active owner
- *   - 'unknown'   — no token, or the check itself failed; callers should let
- *                   the user try and let GitHub decide
+ *   - 'unknown'   — no token, or the check failed or timed out; callers should
+ *                   let the user try and let GitHub decide
  */
 export async function getOrgOwnerStatus(
   orgLogin: string,
-  userToken: string | null | undefined
+  userToken: string | null | undefined,
+  { timeoutMs = ORG_OWNER_CHECK_TIMEOUT_MS }: { timeoutMs?: number } = {}
 ): Promise<OrgOwnerStatus> {
   if (!userToken) return 'unknown';
   try {
-    const octokit = GitHubProvider.getUserOctokit(userToken);
+    const octokit = GitHubProvider.getImmediateUserOctokit(userToken);
     const { data } = await octokit.request('GET /user/memberships/orgs/{org}', {
       org: orgLogin,
+      // A slow answer is treated like no answer: the page stays editable.
+      request: { signal: AbortSignal.timeout(timeoutMs) },
     });
     return data?.role === 'admin' && data?.state === 'active' ? 'owner' : 'not_owner';
   } catch {

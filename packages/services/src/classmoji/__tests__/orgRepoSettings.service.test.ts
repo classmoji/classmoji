@@ -13,12 +13,16 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
   getUserOctokit: vi.fn(),
+  getImmediateUserOctokit: vi.fn(),
   getGitProvider: vi.fn(),
   request: vi.fn(),
 }));
 
 vi.mock('../../git/index.ts', () => ({
-  GitHubProvider: { getUserOctokit: (...a: unknown[]) => mocks.getUserOctokit(...a) },
+  GitHubProvider: {
+    getUserOctokit: (...a: unknown[]) => mocks.getUserOctokit(...a),
+    getImmediateUserOctokit: (...a: unknown[]) => mocks.getImmediateUserOctokit(...a),
+  },
   getGitProvider: (...a: unknown[]) => mocks.getGitProvider(...a),
 }));
 
@@ -27,7 +31,8 @@ const {
   updateOrgRepoSettings,
   getOrgOwnerStatus,
   OrgRepoSettingsError,
-  ORG_OWNER_REQUIRED_MESSAGE,
+  GITHUB_REFUSED_CHANGE_MESSAGE,
+  GITHUB_RATE_LIMITED_MESSAGE,
   GITHUB_SIGN_IN_AGAIN_MESSAGE,
 } = await import('../orgRepoSettings.service.ts');
 
@@ -53,7 +58,7 @@ const patchCall = () => mocks.request.mock.calls.find(c => c[0] === 'PATCH /orgs
 
 beforeEach(() => {
   for (const m of Object.values(mocks)) m.mockReset();
-  mocks.getUserOctokit.mockReturnValue({ request: mocks.request });
+  mocks.getImmediateUserOctokit.mockReturnValue({ request: mocks.request });
   githubOrg({ default_repository_permission: 'none', members_can_create_repositories: false });
 });
 
@@ -113,9 +118,11 @@ describe('updateOrgRepoSettings', () => {
       input: { default_repository_permission: 'read' },
     });
 
-    expect(mocks.getUserOctokit).toHaveBeenCalledWith(USER_TOKEN);
-    for (const call of mocks.getUserOctokit.mock.calls) expect(call[0]).toBe(USER_TOKEN);
+    expect(mocks.getImmediateUserOctokit).toHaveBeenCalledWith(USER_TOKEN);
+    for (const call of mocks.getImmediateUserOctokit.mock.calls) expect(call[0]).toBe(USER_TOKEN);
     expect(mocks.getGitProvider).not.toHaveBeenCalled();
+    // The client that reports rate limits, not the one that waits them out.
+    expect(mocks.getUserOctokit).not.toHaveBeenCalled();
   });
 
   it('sends exactly the validated fields to the classroom organization', async () => {
@@ -131,7 +138,7 @@ describe('updateOrgRepoSettings', () => {
     ]);
   });
 
-  it('keeps the classroom organization even when the input names another', async () => {
+  it('refuses input that names an organization, and sends nothing to GitHub', async () => {
     await expect(
       updateOrgRepoSettings({
         gitOrganization: ORG,
@@ -182,7 +189,7 @@ describe('updateOrgRepoSettings', () => {
         input: { default_repository_permission: 'read' },
       })
     ).rejects.toMatchObject({ code: 'NO_GITHUB_TOKEN', message: GITHUB_SIGN_IN_AGAIN_MESSAGE });
-    expect(mocks.getUserOctokit).not.toHaveBeenCalled();
+    expect(mocks.getImmediateUserOctokit).not.toHaveBeenCalled();
   });
 
   it('refuses a classroom without a GitHub organization or App installation', async () => {
@@ -210,7 +217,7 @@ describe('updateOrgRepoSettings', () => {
     expect(mocks.request).not.toHaveBeenCalled();
   });
 
-  it.each([403, 404])('reports a GitHub %i as organization owners only', async status => {
+  it.each([403, 404])('reports a GitHub %i as a refused change', async status => {
     mocks.request.mockImplementation(async (route: string) => {
       if (route === 'PATCH /orgs/{org}') throw httpError(status);
       return { data: {} };
@@ -221,7 +228,11 @@ describe('updateOrgRepoSettings', () => {
         userToken: USER_TOKEN,
         input: { default_repository_permission: 'read' },
       })
-    ).rejects.toMatchObject({ code: 'NOT_ORG_OWNER', message: ORG_OWNER_REQUIRED_MESSAGE, status });
+    ).rejects.toMatchObject({
+      code: 'NOT_ORG_OWNER',
+      message: GITHUB_REFUSED_CHANGE_MESSAGE,
+      status,
+    });
   });
 
   it('reports a GitHub 401 as a sign-in problem', async () => {
@@ -235,11 +246,15 @@ describe('updateOrgRepoSettings', () => {
     ).rejects.toMatchObject({ code: 'NO_GITHUB_TOKEN' });
   });
 
-  it('does not report a rate limit as an ownership problem', async () => {
+  it.each([
+    [
+      'a primary limit (403, none remaining)',
+      httpError(403, 'API rate limit exceeded', { 'x-ratelimit-remaining': '0' }),
+    ],
+    ['a secondary limit (429)', httpError(429, 'You have exceeded a secondary rate limit')],
+  ])('reports %s as RATE_LIMITED, not as a refused change', async (_label, error) => {
     mocks.request.mockImplementation(async (route: string) => {
-      if (route === 'PATCH /orgs/{org}') {
-        throw httpError(403, 'API rate limit exceeded', { 'x-ratelimit-remaining': '0' });
-      }
+      if (route === 'PATCH /orgs/{org}') throw error;
       return { data: {} };
     });
     await expect(
@@ -248,7 +263,7 @@ describe('updateOrgRepoSettings', () => {
         userToken: USER_TOKEN,
         input: { default_repository_permission: 'read' },
       })
-    ).rejects.toMatchObject({ code: 'GITHUB_ERROR' });
+    ).rejects.toMatchObject({ code: 'RATE_LIMITED', message: GITHUB_RATE_LIMITED_MESSAGE });
   });
 
   it('reports other GitHub failures with their message', async () => {
@@ -273,11 +288,13 @@ describe('getOrgOwnerStatus', () => {
   it('is owner for an active admin membership, checked with the user token', async () => {
     mocks.request.mockResolvedValue({ data: { role: 'admin', state: 'active' } });
     await expect(getOrgOwnerStatus('myorg', USER_TOKEN)).resolves.toBe('owner');
-    expect(mocks.getUserOctokit).toHaveBeenCalledWith(USER_TOKEN);
+    expect(mocks.getImmediateUserOctokit).toHaveBeenCalledWith(USER_TOKEN);
     expect(mocks.request).toHaveBeenCalledWith('GET /user/memberships/orgs/{org}', {
       org: 'myorg',
+      request: { signal: expect.any(AbortSignal) },
     });
     expect(mocks.getGitProvider).not.toHaveBeenCalled();
+    expect(mocks.getUserOctokit).not.toHaveBeenCalled();
   });
 
   it('is not_owner for a member or a pending admin', async () => {
@@ -291,5 +308,22 @@ describe('getOrgOwnerStatus', () => {
     mocks.request.mockRejectedValue(httpError(404));
     await expect(getOrgOwnerStatus('myorg', USER_TOKEN)).resolves.toBe('unknown');
     await expect(getOrgOwnerStatus('myorg', null)).resolves.toBe('unknown');
+  });
+
+  it('is unknown when GitHub does not answer within the timeout', async () => {
+    // Behaves like fetch: settles only when the request's signal aborts.
+    mocks.request.mockImplementation(
+      (_route: string, params: { request: { signal: AbortSignal } }) =>
+        new Promise((_resolve, reject) => {
+          params.request.signal.addEventListener('abort', () =>
+            reject(params.request.signal.reason)
+          );
+        })
+    );
+    const startedAt = Date.now();
+    await expect(getOrgOwnerStatus('myorg', USER_TOKEN, { timeoutMs: 20 })).resolves.toBe(
+      'unknown'
+    );
+    expect(Date.now() - startedAt).toBeLessThan(1000);
   });
 });

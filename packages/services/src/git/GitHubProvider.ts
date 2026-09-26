@@ -1837,6 +1837,18 @@ export class GitHubProvider extends GitProvider {
   }
 
   /**
+   * A user-token Octokit that reports a rate limit instead of waiting it out
+   * (see `ImmediateOctokit`). For calls made while a web or MCP request waits
+   * on the answer, where a throttled request should come back as an error the
+   * caller can explain rather than hold the request open.
+   * @param {string} token - The user's GitHub token
+   * @returns {Octokit}
+   */
+  static getImmediateUserOctokit(token: string): Octokit {
+    return new ImmediateOctokit({ auth: token });
+  }
+
+  /**
    * Get an app-authenticated (JWT) Octokit instance for app-level endpoints
    * such as `GET /app/installations/{installation_id}`. Not scoped to a single
    * installation — use the instance methods for installation-scoped calls.
@@ -1870,36 +1882,5 @@ export class GitHubProvider extends GitProvider {
       clientId: process.env.GITHUB_CLIENT_ID!,
       clientSecret: process.env.GITHUB_CLIENT_SECRET!,
     });
-  }
-
-  /**
-   * Update the organization's repository defaults with the installation token.
-   *
-   * The classroom settings page and the MCP tool do not use this: they change
-   * these settings with the requesting user's own token through
-   * `ClassmojiService.orgRepoSettings.updateOrgRepoSettings`. The payload is
-   * typed to the two settings that page edits, and `org` is spread last so the
-   * body can never name a different organization than the path.
-   * @param {string} org - Organization login
-   * @param {Object} data - Settings to update
-   * @returns {Promise<Object>}
-   */
-  async updateOrganization(
-    org: string,
-    data: {
-      default_repository_permission?: 'none' | 'read' | 'write';
-      members_can_create_repositories?: boolean;
-    }
-  ): Promise<any> {
-    const octokit = await this.#getOctokit();
-    const payload: typeof data = {};
-    if (data.default_repository_permission !== undefined) {
-      payload.default_repository_permission = data.default_repository_permission;
-    }
-    if (data.members_can_create_repositories !== undefined) {
-      payload.members_can_create_repositories = data.members_can_create_repositories;
-    }
-    const { data: result } = await octokit.request('PATCH /orgs/{org}', { ...payload, org });
-    return result;
   }
 }

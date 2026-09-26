@@ -120,7 +120,8 @@ export type { AddStaffResult, RemoveStaffResult, StaffRole } from './classmoji/s
 // GitHub organization repository settings: typed refusal + shared messages.
 export {
   OrgRepoSettingsError,
-  ORG_OWNER_REQUIRED_MESSAGE,
+  GITHUB_REFUSED_CHANGE_MESSAGE,
+  GITHUB_RATE_LIMITED_MESSAGE,
   GITHUB_SIGN_IN_AGAIN_MESSAGE,
 } from './classmoji/orgRepoSettings.service.ts';
 export type {

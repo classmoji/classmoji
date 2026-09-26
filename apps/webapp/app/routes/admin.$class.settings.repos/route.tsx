@@ -7,10 +7,17 @@ import {
   assertClassroomAccess,
   assertClassroomMutationAllowed,
 } from '~/utils/helpers';
-import { getAuthSession } from '@classmoji/auth/server';
+import { clearRevokedToken, getAuthSession } from '@classmoji/auth/server';
 import { ClassmojiService, getGitProvider, OrgRepoSettingsError } from '@classmoji/services';
+import {
+  isImpersonatingSession,
+  ORG_SETTINGS_IMPERSONATION_MESSAGE,
+} from '~/utils/impersonationSession';
 import InstallAppBanner from '~/components/features/InstallAppBanner';
 import type { Route } from './+types/route';
+
+/** Why the controls are off when the settings themselves loaded fine. */
+type EditBlockedReason = 'impersonating' | 'not_owner' | null;
 
 export const loader = async ({ params, request }: Route.LoaderArgs) => {
   const classSlug = params.class!;
@@ -43,6 +50,7 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
       gitOrgLogin: null,
       ...install,
       canEdit: false,
+      editBlockedReason: null,
       error: 'This classroom is not connected to a GitHub organization.',
     };
   }
@@ -53,16 +61,34 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
       gitOrgLogin,
       ...install,
       canEdit: false,
+      editBlockedReason: null,
       error: `The Classmoji GitHub App isn't installed on "${gitOrgLogin}". Install it to manage repository settings.`,
     };
   }
 
-  let githubOrganization;
-  try {
-    // Display only: the current values are read with the App installation.
-    const gitProvider = getGitProvider(classroom.git_organization);
-    githubOrganization = await gitProvider.getOrganization(gitOrgLogin);
-  } catch (err: unknown) {
+  // Changes run with the viewer's own GitHub account. While viewing as another
+  // user that account is theirs, so changes are off and GitHub is not asked.
+  const authData = await getAuthSession(request);
+  const impersonating = isImpersonatingSession(authData);
+
+  // In parallel: the current values (display only, read with the App
+  // installation) and the viewer's own membership role in the organization.
+  // The membership check never throws; when it cannot answer (no token, GitHub
+  // error or timeout) the controls stay on and GitHub decides on submit.
+  const [organizationResult, ownerStatus] = await Promise.all([
+    Promise.resolve()
+      .then(() => getGitProvider(classroom.git_organization).getOrganization(gitOrgLogin))
+      .then(
+        data => ({ ok: true as const, data }),
+        (err: unknown) => ({ ok: false as const, err })
+      ),
+    impersonating
+      ? Promise.resolve('unknown' as const)
+      : ClassmojiService.orgRepoSettings.getOrgOwnerStatus(gitOrgLogin, authData?.token ?? null),
+  ]);
+
+  if (!organizationResult.ok) {
+    const err = organizationResult.err;
     const status =
       err && typeof err === 'object' && 'status' in err
         ? Number((err as { status: unknown }).status)
@@ -74,6 +100,7 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
       gitOrgLogin,
       ...install,
       canEdit: false,
+      editBlockedReason: null,
       error:
         status === 404
           ? `GitHub couldn't find the "${gitOrgLogin}" organization or the Classmoji App installation. The App may have been uninstalled or the org renamed.`
@@ -81,21 +108,18 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
     };
   }
 
-  // Changes run with the viewer's own GitHub account, so only an organization
-  // owner can make them. Ask GitHub for the viewer's own membership role; when
-  // that check cannot answer (no token, GitHub error), leave the controls on
-  // and let GitHub decide when the change is submitted.
-  const authData = await getAuthSession(request);
-  const ownerStatus = await ClassmojiService.orgRepoSettings.getOrgOwnerStatus(
-    gitOrgLogin,
-    authData?.token ?? null
-  );
+  const editBlockedReason: EditBlockedReason = impersonating
+    ? 'impersonating'
+    : ownerStatus === 'not_owner'
+      ? 'not_owner'
+      : null;
 
   return {
-    githubOrganization,
+    githubOrganization: organizationResult.data,
     gitOrgLogin,
     ...install,
-    canEdit: ownerStatus !== 'not_owner',
+    canEdit: editBlockedReason === null,
+    editBlockedReason,
     error: null,
   };
 };
@@ -128,6 +152,7 @@ const SettingsRepos = ({ loaderData }: Route.ComponentProps) => {
     gitProvider,
     githubAppName,
     canEdit,
+    editBlockedReason,
   } = loaderData;
   const { class: classSlug } = useParams();
   const { fetcher } = useNotifiedFetcher();
@@ -169,10 +194,18 @@ const SettingsRepos = ({ loaderData }: Route.ComponentProps) => {
   };
   return (
     <div className="flex flex-col gap-14 pt-4">
-      {!canEdit && (
+      {editBlockedReason === 'impersonating' && (
         <p
           className="text-sm text-gray-600 dark:text-gray-400 max-w-[640px]"
-          data-testid="org-settings-owner-notice"
+          data-testid="org-settings-edit-notice"
+        >
+          {ORG_SETTINGS_IMPERSONATION_MESSAGE}
+        </p>
+      )}
+      {editBlockedReason === 'not_owner' && (
+        <p
+          className="text-sm text-gray-600 dark:text-gray-400 max-w-[640px]"
+          data-testid="org-settings-edit-notice"
         >
           Only GitHub organization owners can change these settings. Changes here run with your own
           GitHub account, which is not an owner of <span className="font-mono">{gitOrgLogin}</span>.
@@ -250,6 +283,11 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
   // change, so only an organization owner can make it.
   const authData = await getAuthSession(request);
 
+  // While viewing as another user, that token is theirs: refuse.
+  if (isImpersonatingSession(authData)) {
+    return { error: ORG_SETTINGS_IMPERSONATION_MESSAGE, action: UPDATE_ACTION };
+  }
+
   let result;
   try {
     // Applies only the settings this page edits, to the classroom's own
@@ -261,6 +299,10 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
     });
   } catch (error: unknown) {
     if (error instanceof OrgRepoSettingsError) {
+      // No usable token, or GitHub no longer accepts it: drop the cached copy
+      // (memory and database) so the next request refreshes or asks for a new
+      // sign-in, as the classroom creation and organization pages do.
+      if (error.code === 'NO_GITHUB_TOKEN') await clearRevokedToken(userId);
       return { error: error.message, action: UPDATE_ACTION };
     }
     console.error('Failed to update GitHub organization repository settings:', error);
