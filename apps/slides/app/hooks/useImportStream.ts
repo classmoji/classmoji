@@ -2,7 +2,8 @@
  * useImportStream - Client hook for SSE-based import progress
  *
  * Subscribes to real-time progress events during slide imports.
- * Returns current step, progress counts, done/error states, and the final slideId.
+ * Returns current step, progress counts, done/error states, the final slideId,
+ * and any warnings the import finished with (files it left out).
  */
 
 import { useState, useEffect, useRef, useCallback } from 'react';
@@ -20,6 +21,7 @@ export function useImportStream(importId: string | null) {
   const [isDone, setIsDone] = useState(false);
   const [isConnected, setIsConnected] = useState(false);
   const [slideId, setSlideId] = useState<string | null>(null); // The actual slideId from done event
+  const [warnings, setWarnings] = useState<string[]>([]); // Files the import left out
   const eventSourceRef = useRef<EventSource | null>(null);
 
   // Reset state when importId changes
@@ -29,6 +31,7 @@ export function useImportStream(importId: string | null) {
     setIsDone(false);
     setIsConnected(false);
     setSlideId(null);
+    setWarnings([]);
   }, [importId]);
 
   // Subscribe to SSE stream
@@ -60,6 +63,11 @@ export function useImportStream(importId: string | null) {
           });
         } else if (data.type === 'done') {
           setSlideId(data.slideId); // Extract slideId from done event
+          setWarnings(
+            Array.isArray(data.warnings)
+              ? data.warnings.filter((w: unknown): w is string => typeof w === 'string')
+              : []
+          );
           setIsDone(true);
           eventSource.close();
         } else if (data.type === 'error') {
@@ -101,6 +109,7 @@ export function useImportStream(importId: string | null) {
     isDone,
     isConnected,
     slideId, // The actual slideId (available after done event)
+    warnings,
     disconnect,
   };
 }

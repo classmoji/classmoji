@@ -18,6 +18,7 @@ import {
 } from '@classmoji/services/slides';
 import { getContentRepoName } from '@classmoji/utils';
 import { getThemeUrls, saveTheme, generateThemeSlug } from './themeService.server.ts';
+import { RepoEntryGate } from './zipRepoEntries.ts';
 import {
   uploadVideoBuffer,
   isCloudinaryConfigured,
@@ -57,8 +58,18 @@ const SL_BLOCK_VISIBILITY_CSS = `
  * @param {string} options.contentNamespace - Classroom content namespace (e.g., "25w" or a slug)
  * @param {string} options.userId - User ID who is importing
  * @param {string[]} [options.cloudinaryVideoPaths] - Paths of videos to upload to Cloudinary instead of GitHub
- * @param {Function} [options.onProgress] - Callback for progress updates ({ type: 'step'|'done'|'error', step?: string, current?: number, total?: number, filename?: string })
- * @returns {Promise<{slideId: string, slideCount: number, imageCount: number, themeSaved?: string, cloudinaryUploads?: number}>}
+ * @param {Function} [options.onProgress] - Callback for progress updates ({ type: 'step'|'done'|'error', step?: string, current?: number, total?: number, filename?: string, warnings?: string[] })
+ * @returns {Promise<{slideId: string, slideCount: number, imageCount: number, themeSaved?: string, cloudinaryUploads?: number, warnings: string[]}>}
+ *
+ * ## Files too large for the course repository
+ *
+ * Everything the import keeps goes to GitHub in ONE commit, and GitHub refuses
+ * a single file over the REST ceiling by refusing the whole commit. So every
+ * entry is measured against `REPO_REST_MAX_BYTES` as it is read, and one over
+ * it is left out with a warning naming it (`warnings`, also on the `done`
+ * event) — the deck imports without it rather than not at all. Videos a Pro
+ * classroom sends to Cloudinary are not repository files and are not measured,
+ * unless Cloudinary fails and they fall back to the repository.
  */
 export async function processZipImport({
   zipFile,
@@ -95,6 +106,7 @@ export async function processZipImport({
     filename?: string;
     slideId?: string;
     message?: string;
+    warnings?: string[];
   }) => void;
 }) {
   // 1. Extract ZIP
@@ -167,6 +179,11 @@ export async function processZipImport({
 
   // 7. Collect files for batch upload
   const files: Array<{ path: string; content: string; encoding: 'utf-8' | 'base64' }> = [];
+
+  // Entries left out for being over the course repository's per-file ceiling —
+  // see "Files too large for the course repository" above.
+  const repoGate = new RepoEntryGate();
+  const { warnings } = repoGate;
   /** @type {Map<string, string>} Maps old image path to new absolute URL */
   const imageMap = new Map();
 
@@ -241,7 +258,9 @@ export async function processZipImport({
       filename,
     });
 
-    const content = await file.async('base64');
+    const buffer = await repoGate.read(file, filename);
+    if (!buffer) continue;
+    const content = buffer.toString('base64');
     const newPath = `${contentPath}/images/${filename}`;
 
     files.push({
@@ -282,7 +301,9 @@ export async function processZipImport({
       // We'll add to videoMap after upload
     } else {
       // Upload to GitHub as before
-      const content = await file.async('base64');
+      const buffer = await repoGate.read(file, filename);
+      if (!buffer) continue;
+      const content = buffer.toString('base64');
       const newPath = `${contentPath}/videos/${filename}`;
 
       files.push({
@@ -321,8 +342,9 @@ export async function processZipImport({
     const libFiles: Array<{ path: string; content: string; encoding: 'utf-8' | 'base64' }> = [];
     for (const [filePath, file] of Object.entries(zip.files)) {
       if (filePath.startsWith('lib/') && !file.dir) {
-        const content = await file.async('base64');
-        libFiles.push({ path: filePath, content, encoding: 'base64' });
+        const buffer = await repoGate.read(file, filePath.split('/').pop() || filePath);
+        if (!buffer) continue;
+        libFiles.push({ path: filePath, content: buffer.toString('base64'), encoding: 'base64' });
       }
     }
 
@@ -664,6 +686,7 @@ export async function processZipImport({
         const message = cloudErr instanceof Error ? cloudErr.message : String(cloudErr);
         console.error(`Cloudinary upload failed for ${filename}, falling back to GitHub:`, message);
 
+        if (!repoGate.admit(filename, buffer.length)) continue;
         const content = buffer.toString('base64');
         const newPath = `${contentPath}/videos/${filename}`;
 
@@ -861,7 +884,8 @@ export async function processZipImport({
   const slideCount = $slides.find('> section').length;
 
   // Signal completion
-  onProgress({ type: 'done', slideId: slide.id });
+  for (const warning of warnings) console.warn(`[slides.com import] ${warning}`);
+  onProgress({ type: 'done', slideId: slide.id, ...(warnings.length ? { warnings } : {}) });
 
   return {
     slideId: slide.id,
@@ -869,5 +893,6 @@ export async function processZipImport({
     imageCount: imageMap.size / 2, // Divide by 2 because we added each image twice (full path and filename)
     themeSaved, // Name of saved theme if saveThemeAs was used
     cloudinaryUploads: cloudinaryUploads > 0 ? cloudinaryUploads : undefined,
+    warnings, // Entries left out for being over the course repository's per-file ceiling
   };
 }
