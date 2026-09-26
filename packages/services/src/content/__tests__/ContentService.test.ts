@@ -1391,6 +1391,92 @@ describe('uploadBatch — too-large refusal', () => {
   });
 });
 
+describe('uploadBatch — bounded blob concurrency', () => {
+  /** The same happy-path Git Data answers the first uploadBatch test uses. */
+  function gitRoutes(route: string) {
+    switch (route) {
+      case 'GET /repos/{owner}/{repo}/git/ref/{ref}':
+        return { data: { object: { sha: 'head-commit' } } };
+      case 'GET /repos/{owner}/{repo}/git/commits/{commit_sha}':
+        return { data: { tree: { sha: 'base-tree' } } };
+      case 'POST /repos/{owner}/{repo}/git/trees':
+        return { data: { sha: 'new-tree' } };
+      case 'POST /repos/{owner}/{repo}/git/commits':
+        return { data: { sha: 'new-commit' } };
+      case 'PATCH /repos/{owner}/{repo}/git/refs/{ref}':
+        return { data: {} };
+      default:
+        throw new Error(`Unexpected route: ${route}`);
+    }
+  }
+
+  it('never has more than four blob creations in flight, and keeps file order', async () => {
+    // GitHub allows an installation 80 content-creating requests a minute,
+    // shared by the whole org; a large import must not spend them in a burst.
+    let inFlight = 0;
+    let maxInFlight = 0;
+    const pending: Array<() => void> = [];
+
+    requestMock.mockImplementation(async (route: string, params: RequestParams) => {
+      if (route !== 'POST /repos/{owner}/{repo}/git/blobs') return gitRoutes(route);
+      inFlight += 1;
+      maxInFlight = Math.max(maxInFlight, inFlight);
+      const decoded = Buffer.from(String(params.content), 'base64').toString('utf-8');
+      await new Promise<void>(resolve => pending.push(resolve));
+      inFlight -= 1;
+      return { data: { sha: `blob-${decoded}` } };
+    });
+
+    const files = Array.from({ length: 10 }, (_, i) => ({
+      path: `pages/p/f${i}.txt`,
+      content: `c${i}`,
+    }));
+    const upload = ContentService.uploadBatch({
+      gitOrganization,
+      repo: 'repo-bounded-blobs',
+      files,
+    });
+
+    // Release blobs LAST-started first, so completion order is not input order.
+    while (true) {
+      await new Promise(resolve => setTimeout(resolve, 0));
+      const release = pending.pop();
+      if (!release) break;
+      release();
+    }
+
+    const result = await upload;
+    expect(maxInFlight).toBe(4);
+    expect(result.files).toEqual(
+      files.map((file, i) => ({ path: file.path, sha: `blob-c${i}` }))
+    );
+  });
+
+  it('starts no further blobs once one has been refused', async () => {
+    const started: string[] = [];
+    requestMock.mockImplementation(async (route: string, params: RequestParams) => {
+      if (route !== 'POST /repos/{owner}/{repo}/git/blobs') return gitRoutes(route);
+      const decoded = Buffer.from(String(params.content), 'base64').toString('utf-8');
+      started.push(decoded);
+      if (decoded === 'c0') throw Object.assign(new Error('input was too large'), { status: 413 });
+      await new Promise(resolve => setTimeout(resolve, 5));
+      return { data: { sha: `blob-${decoded}` } };
+    });
+
+    const files = Array.from({ length: 10 }, (_, i) => ({
+      path: `pages/p/f${i}.bin`,
+      content: `c${i}`,
+    }));
+    await expect(
+      ContentService.uploadBatch({ gitOrganization, repo: 'repo-bounded-refusal', files })
+    ).rejects.toBeInstanceOf(RepoFileTooLargeError);
+
+    // The first four started together; the refusal stopped the rest.
+    await new Promise(resolve => setTimeout(resolve, 20));
+    expect(started).toEqual(['c0', 'c1', 'c2', 'c3']);
+  });
+});
+
 describe('getBlobContent raw', () => {
   it("returns base64 with GitHub's line wrapping stripped", async () => {
     requestMock.mockResolvedValue({ data: { content: 'QUJD\nREVG\n' } });

@@ -297,6 +297,44 @@ const basenameOf = (path: string): string => path.slice(path.lastIndexOf('/') + 
 const getErrorMessage = (error: unknown): string =>
   error instanceof Error ? error.message : String(error);
 
+/** Blob creations `uploadBatch` keeps in flight at once. */
+const BLOB_CONCURRENCY = 4;
+
+/**
+ * `Promise.all(items.map(fn))`, with at most `limit` calls of `fn` in flight.
+ *
+ * Results come back in INPUT order, whatever order the calls finish in. The
+ * first rejection rejects the whole call, as `Promise.all` would, and stops
+ * the workers taking new items: the calls already running finish, but nothing
+ * further is started for a batch that has already failed.
+ */
+export async function mapWithConcurrency<T, R>(
+  items: readonly T[],
+  limit: number,
+  fn: (item: T, index: number) => Promise<R>
+): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let next = 0;
+  let failed = false;
+
+  const worker = async () => {
+    while (!failed && next < items.length) {
+      const index = next++;
+      try {
+        results[index] = await fn(items[index]!, index);
+      } catch (error) {
+        failed = true;
+        throw error;
+      }
+    }
+  };
+
+  await Promise.all(
+    Array.from({ length: Math.max(1, Math.min(limit, items.length)) }, () => worker())
+  );
+  return results;
+}
+
 export class ContentService {
   /**
    * Execute Git Trees operation with retry on race condition
@@ -1378,13 +1416,20 @@ export class ContentService {
       }
     }
 
-    // Step 1: Create blobs for all files in parallel (done once, content-addressed and idempotent)
+    // Step 1: Create blobs for all files, BLOB_CONCURRENCY at a time (done once,
+    // content-addressed and idempotent). Not all at once: every blob is a
+    // content-creating request, and GitHub allows an installation 80 of those
+    // a minute and 500 an hour — shared by every classroom in the org. A
+    // 50-image import fired in parallel spends most of a minute's budget in one
+    // burst and trips the secondary rate limit for everyone else.
     // Track progress as each blob completes
     let completedCount = 0;
     const totalFiles = files.length;
 
-    const blobResults = await Promise.all(
-      files.map(async ({ path, content, encoding = 'utf-8' }) => {
+    const blobResults = await mapWithConcurrency(
+      files,
+      BLOB_CONCURRENCY,
+      async ({ path, content, encoding = 'utf-8' }) => {
         // Per file, so a refusal can name the file that caused it: GitHub's
         // too-large answer arrives here, on the blob, never on the commit.
         let data;
@@ -1410,7 +1455,7 @@ export class ContentService {
         }
 
         return { path, sha: data.sha };
-      })
+      }
     );
 
     // Git Trees operation wrapped in retry logic for race condition handling
