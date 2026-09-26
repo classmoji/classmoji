@@ -31,7 +31,7 @@
  * fall back on when an object carries no stored type.
  */
 
-import { sanitizedExtension } from '../content/utils/validateFile.ts';
+import { extensionTooLongMessage, sanitizedExtension } from '../content/utils/validateFile.ts';
 import { contentTypeForMediaExt, origVariant } from './mediaKeys.ts';
 
 export type MediaKind = 'VIDEO' | 'AUDIO' | 'DOCUMENT' | 'ARCHIVE' | 'IMAGE' | 'OTHER';
@@ -109,7 +109,7 @@ export function filenameRefusal(filename: string): string | null {
   const ext = extensionOf(filename);
   if (!ext) return 'This file needs an extension, e.g. notes.txt';
   if (origVariant(ext) === null) {
-    return `File extensions can be at most 8 letters or digits (.${ext} is ${ext.length}).`;
+    return extensionTooLongMessage(ext);
   }
   return null;
 }

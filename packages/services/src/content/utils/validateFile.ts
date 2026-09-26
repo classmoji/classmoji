@@ -28,12 +28,18 @@
  * Whatever the policy, a name must be a name: no path separators (it is a
  * basename, and becomes one segment of a git path), and not empty or only dots.
  * Under `'any'` it must also keep an extension after sanitizing, because the
- * extension is the only thing that types the stored file.
+ * extension is the only thing that types the stored file — and that extension
+ * must fit `MAX_EXT_LENGTH` (from `@classmoji/content-signing`), because a
+ * longer one would commit but could never be addressed by a signed URL
+ * (`EXT_PATTERN`/`orig.{ext}` in `content-signing/canonical.ts` sign only 1–8
+ * characters). The media store (`media/mediaKinds.ts`) checks the same limit
+ * with the same message, so a name one store refuses is refused everywhere.
  * `sanitizeFilename` then reduces it to lowercase ASCII — extension included,
  * which matters once any extension is allowed, because the extension lands in
  * the path verbatim.
  */
 
+import { MAX_EXT_LENGTH } from '@classmoji/content-signing';
 import { REPO_REST_MAX_BYTES, repoFileTooLargeMessage } from '@classmoji/utils';
 
 /**
@@ -86,8 +92,15 @@ export function validateFile({
     // Worker reads nothing else — so a name that keeps none after sanitizing
     // (`Makefile`, `.gitignore`, `x.データ`, a bare `.png`) is refused rather
     // than stored as an untyped blob.
-    if (!sanitizedExtension(name)) {
+    const ext = sanitizedExtension(name);
+    if (!ext) {
       return { valid: false, error: 'This file needs an extension, e.g. notes.txt' };
+    }
+    // A name that keeps an extension longer than the signer will ever sign
+    // would commit fine but could never be served via a signed URL — refuse
+    // it here instead, with the message the media store also uses.
+    if (ext.length > MAX_EXT_LENGTH) {
+      return { valid: false, error: extensionTooLongMessage(ext) };
     }
     return { valid: true };
   }
@@ -101,6 +114,16 @@ export function validateFile({
   }
 
   return { valid: true };
+}
+
+/**
+ * Why an extension is too long to ever be signed — shared verbatim by
+ * `validateFile`'s `'any'` policy and by the media store's `filenameRefusal`
+ * (`media/mediaKinds.ts`), so a name refused for its length reads the same
+ * sentence wherever it is refused.
+ */
+export function extensionTooLongMessage(ext: string): string {
+  return `File extensions can be at most ${MAX_EXT_LENGTH} letters or digits (.${ext} is ${ext.length}).`;
 }
 
 /**

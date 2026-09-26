@@ -20,6 +20,19 @@ describe('validateFile — names under the two type policies', () => {
     expect(validateFile({ filename, size: 10, fileTypes: 'any' })).toEqual({ valid: true });
   });
 
+  it("accepts an 8-character extension under 'any' — the longest the signer will sign", () => {
+    expect(validateFile({ filename: 'notes.abcdefgh', size: 10, fileTypes: 'any' })).toEqual({
+      valid: true,
+    });
+  });
+
+  it("refuses a 9-character extension under 'any': it would commit but never be servable", () => {
+    expect(validateFile({ filename: 'notes.abcdefghi', size: 10, fileTypes: 'any' })).toEqual({
+      valid: false,
+      error: 'File extensions can be at most 8 letters or digits (.abcdefghi is 9).',
+    });
+  });
+
   it("leaves 'allowlist' refusals as they were", () => {
     for (const filename of ['Makefile', '.gitignore', 'README', 'x.データ', 'notes.txt']) {
       const result = validateFile({ filename, size: 10 });
