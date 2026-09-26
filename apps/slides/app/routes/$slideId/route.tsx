@@ -30,7 +30,11 @@ import {
   type DeckThemeUrls,
   type MergeResolution,
 } from '@classmoji/services/slides';
-import { REPO_REST_MAX_BYTES, repoFileTooLargeMessage } from '@classmoji/utils/repo-limits';
+import {
+  REPO_REST_MAX_BYTES,
+  REPO_REST_MAX_LABEL,
+  repoFileTooLargeMessage,
+} from '@classmoji/utils/repo-limits';
 import {
   UploadTooLargeError,
   readLimitedFormData,
@@ -633,6 +637,13 @@ async function forgetThemeFiles(
 }
 
 /**
+ * What an author reads when a deck save is too large — the deck's sentence, not
+ * the file one, because the author is saving a deck and has picked no file. No
+ * full stop: the save-failure toast puts one after it.
+ */
+const DECK_TOO_LARGE_MESSAGE = `This deck is larger than the ${REPO_REST_MAX_LABEL} your course repository accepts`;
+
+/**
  * The most the deck editor's action reads of a request body.
  *
  * Two shapes arrive here. The image upload is multipart and carries one file,
@@ -696,13 +707,18 @@ export const action = async ({
       // its pending promise on `intent: 'upload-image'` — which the unread body
       // can no longer tell us, so it is named here.
       const multipart = (request.headers.get('content-type') ?? '').includes('multipart/form-data');
-      return data(
-        {
-          ...(multipart ? { intent: 'upload-image' as const } : {}),
-          error: repoFileTooLargeMessage(),
-        },
-        { status: 413 }
-      );
+      if (multipart) {
+        return data(
+          { intent: 'upload-image' as const, error: repoFileTooLargeMessage() },
+          { status: 413 }
+        );
+      }
+      // Everything else here is a deck save. `tooLarge` — deliberately NOT
+      // `code`, which the client answers with a whole-deck re-submit every time
+      // — lets a changes-only save fall back to ONE whole-deck save (its ops can
+      // outweigh the document they describe); a whole-deck save that is still
+      // too large shows the sentence.
+      return data({ error: DECK_TOO_LARGE_MESSAGE, tooLarge: true }, { status: 413 });
     }
     throw error;
   }
@@ -1706,6 +1722,11 @@ export const action = async ({
           { status: 409 }
         );
       }
+      // GitHub refused the commit as too large. No `tooLarge` flag: a
+      // whole-deck retry would carry the same deck and be refused again.
+      if (isCommitTooLargeRefusal(error)) {
+        return data({ error: DECK_TOO_LARGE_MESSAGE }, { status: 413 });
+      }
       console.error('Failed to save slide (ops):', error);
       return { error: error instanceof Error ? error.message : String(error) };
     }
@@ -1907,6 +1928,9 @@ export const action = async ({
         },
         { status: 409 }
       );
+    }
+    if (isCommitTooLargeRefusal(error)) {
+      return data({ error: DECK_TOO_LARGE_MESSAGE }, { status: 413 });
     }
     console.error('Failed to save slide:', error);
     return { error: error instanceof Error ? error.message : String(error) };
@@ -2364,6 +2388,21 @@ export default function SlideViewer() {
       saveInFlightRef.current = false;
       exitAfterSaveRef.current = false;
       setSavingInFlight(false);
+    } else if (fetcher.data?.tooLarge && lastPostedOpsRef.current && lastPostedContentRef.current) {
+      // A changes-only save was over the body cap — its ops can outweigh the
+      // document they describe. Re-run it ONCE as a whole-deck save: clearing
+      // the posted ops is what bounds this, since a whole-deck save that is
+      // still too large arrives here with no ops posted and falls through to
+      // the error toast below.
+      lastPostedOpsRef.current = null;
+      saveInFlightRef.current = true;
+      setSavingInFlight(true);
+      const payload: Record<string, string> = { content: lastPostedContentRef.current };
+      if (contentToken.content_sha) {
+        payload.content_sha = contentToken.content_sha;
+        payload.sha_source = contentToken.sha_source;
+      }
+      fetcher.submit(payload, { method: 'post' });
     } else if (fetcher.data?.code && lastPostedContentRef.current) {
       // A chooser re-submit was refused (stale ours_sha pin, conflict set
       // changed) OR an ops save answered OPS_BASE_MISMATCH. Re-run the plain
