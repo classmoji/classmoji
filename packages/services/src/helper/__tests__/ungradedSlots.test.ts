@@ -1,17 +1,23 @@
 /**
- * HelperService.moveGraderSlot / resolveUngradedSlots / removeStaffMember —
- * what happens to a departing grader's ungraded submissions.
+ * HelperService.moveGraderSlot / resolveUngradedSlots / startStaffRemoval /
+ * settleUngradedSlots — what happens to a departing grader's ungraded
+ * submissions.
  *
  * Pinned:
  *   - each move adds the new grader BEFORE removing the old one, through the
  *     classroom-scoped helpers (so the provider sees the stored repo, issue and
- *     logins, and the new grader is re-checked against the pool);
+ *     logins, and the new grader is re-checked against the pool), and sends no
+ *     per-submission notification;
+ *   - "still ungraded" is checked before the add AND before the remove;
+ *   - a planned grader who left the pool falls back to unassign on reassign;
  *   - keep changes nothing, unassign removes, reassign follows the plan and
  *     falls back to unassign with no other grader;
  *   - one failing slot does not stop the rest, and is counted;
- *   - above the inline limit the moves go out as one background run per slot;
- *   - removeStaffMember refuses (requireChoice) before anything is queued, and
- *     a removal the staff service refuses moves nothing.
+ *   - above the inline limit the moves go out as one background run per slot,
+ *     and a chunk that fails to queue fails only itself and what follows;
+ *   - each receiving grader gets ONE summary notification;
+ *   - startStaffRemoval refuses (requireChoice) before anything is queued and
+ *     moves nothing itself; settleUngradedSlots never throws.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -30,6 +36,7 @@ const mocks = vi.hoisted(() => ({
   previewRemoval: vi.fn(),
   removeStaff: vi.fn(),
   batchTrigger: vi.fn(),
+  createNotifications: vi.fn(),
 }));
 
 vi.mock('@trigger.dev/sdk', () => ({
@@ -65,6 +72,10 @@ vi.mock('../../classmoji/staff.service.ts', () => {
 vi.mock('../../classmoji/index.ts', () => ({
   default: {
     classroom: { findById: (...a: unknown[]) => mocks.classroomFindById(...a) },
+    notification: {
+      runSafely: (_label: string, fn: () => Promise<unknown>) => fn(),
+      createNotifications: (...a: unknown[]) => mocks.createNotifications(...a),
+    },
     staff: {
       previewRemoval: (...a: unknown[]) => mocks.previewRemoval(...a),
       removeStaff: (...a: unknown[]) => {
@@ -162,9 +173,11 @@ beforeEach(() => {
   mocks.previewRemoval.mockResolvedValue({
     userId: 'u-gone',
     login: 'ta-gone',
+    name: 'Gone Person',
     role: 'ASSISTANT',
     remainsGrader: false,
     ungradedCount: 3,
+    heldUngradedCount: 3,
   });
   mocks.removeStaff.mockResolvedValue({
     userId: 'u-gone',
@@ -189,6 +202,8 @@ describe('moveGraderSlot', () => {
       'gh-remove:ta-gone:2',
       'db-remove:u-gone:s2',
     ]);
+    // No per-submission notification: the caller sends one summary.
+    expect(mocks.addGraderToAssignment).toHaveBeenCalledWith('s2', 'u-ann', { notify: false });
     // The classroom's own installation, looked up from the classroom id.
     expect(mocks.classroomFindById).toHaveBeenCalledWith('class-1');
   });
@@ -205,7 +220,23 @@ describe('moveGraderSlot', () => {
     expect(mocks.calls).toEqual([]);
   });
 
-  it('keeps the old grader when the new one is no longer eligible', async () => {
+  it('keeps a grade that lands between the add and the remove on the record', async () => {
+    // Ungraded before the add, graded by the time the old grader would go.
+    mocks.gradesFor.mockResolvedValueOnce([]).mockResolvedValueOnce([{ id: 'g1' }]);
+    const result = await HelperService.moveGraderSlot({
+      classroomId: 'class-1',
+      gitRepoAssignmentId: 's1',
+      fromGraderId: 'u-gone',
+      toGraderId: 'u-ann',
+    });
+    expect(result).toEqual({ status: 'graded_since' });
+    expect(mocks.calls.some(c => c.startsWith('gh-remove') || c.startsWith('db-remove'))).toBe(
+      false
+    );
+    expect(submissions.get('s1')!.graderIds).toContain('u-gone');
+  });
+
+  it('without the fallback, keeps the old grader when the new one is no longer eligible', async () => {
     mocks.findEligibleGrader.mockResolvedValue(null);
     const result = await HelperService.moveGraderSlot({
       classroomId: 'class-1',
@@ -215,6 +246,19 @@ describe('moveGraderSlot', () => {
     });
     expect(result).toEqual({ status: 'grader_not_eligible' });
     expect(submissions.get('s1')!.graderIds).toEqual(['u-gone']);
+  });
+
+  it('with the fallback (reassign), unassigns when the planned grader left the pool', async () => {
+    mocks.findEligibleGrader.mockResolvedValue(null);
+    const result = await HelperService.moveGraderSlot({
+      classroomId: 'class-1',
+      gitRepoAssignmentId: 's1',
+      fromGraderId: 'u-gone',
+      toGraderId: 'u-ann',
+      fallbackToUnassign: true,
+    });
+    expect(result).toEqual({ status: 'unassigned', reason: 'grader_not_eligible' });
+    expect(submissions.get('s1')!.graderIds).toEqual([]);
   });
 
   it('is safe to repeat (a background retry)', async () => {
@@ -281,6 +325,47 @@ describe('resolveUngradedSlots', () => {
     expect(mocks.batchTrigger).not.toHaveBeenCalled();
   });
 
+  it('sends ONE summary notification per receiving grader', async () => {
+    await HelperService.resolveUngradedSlots({
+      classroomId: 'class-1',
+      graderId: 'u-gone',
+      choice: 'reassign',
+      departingName: 'Gone Person',
+    });
+    expect(mocks.createNotifications).toHaveBeenCalledTimes(2);
+    expect(mocks.createNotifications).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'TA_GRADING_ASSIGNED',
+        classroomId: 'class-1',
+        recipientUserIds: ['u-ann'],
+        resourceType: 'git_repo_assignment',
+        title: 'New grading: 2 submissions from Gone Person',
+      })
+    );
+    expect(mocks.createNotifications).toHaveBeenCalledWith(
+      expect.objectContaining({
+        recipientUserIds: ['u-bob'],
+        title: 'New grading: 1 submission from Gone Person',
+      })
+    );
+  });
+
+  it('unassign notifies nobody', async () => {
+    await resolve('unassign');
+    expect(mocks.createNotifications).not.toHaveBeenCalled();
+  });
+
+  it('reassign: a planned grader who left the pool is unassigned, with the reason', async () => {
+    mocks.findEligibleGrader.mockImplementation((_c: string, userId: string) =>
+      Promise.resolve(userId === 'u-ann' ? USERS['u-ann'] : null)
+    );
+    const outcome = await resolve('reassign');
+    // s2 was planned for u-bob, who is no longer eligible.
+    expect(outcome).toMatchObject({ unassigned: 1, unassignedIneligible: 1, failed: 0 });
+    expect(outcome.reassigned).toEqual([{ graderId: 'u-ann', login: 'ta-ann', count: 2 }]);
+    expect(submissions.get('s2')!.graderIds).toEqual([]);
+  });
+
   it('falls back to unassign when the plan finds no other grader, and says so', async () => {
     mocks.planUngradedReassignment.mockResolvedValue({
       moves: ['s1', 's2', 's3'].map(id => ({
@@ -327,18 +412,44 @@ describe('resolveUngradedSlots', () => {
         gitRepoAssignmentId: 's1',
         fromGraderId: 'u-gone',
         toGraderId: 'u-ann',
+        fallbackToUnassign: true,
       },
     });
     expect(outcome.reassigned.reduce((n, r) => n + r.count, 0)).toBe(
       helper.UNGRADED_INLINE_LIMIT + 1
     );
+    // One summary per grader, saying the moves are still going.
+    expect(mocks.createNotifications).toHaveBeenCalledTimes(2);
+    expect(mocks.createNotifications.mock.calls[0][0].title).toContain('(being assigned now)');
+  });
+
+  it('a chunk that fails to queue fails only itself and what follows', async () => {
+    seed(1001); // three chunks of at most 500
+    mocks.batchTrigger
+      .mockResolvedValueOnce({})
+      .mockRejectedValueOnce(new Error('trigger down'))
+      .mockResolvedValue({});
+    const outcome = await resolve('reassign');
+    expect(mocks.batchTrigger).toHaveBeenCalledTimes(2);
+    expect(outcome.queued).toBe(true);
+    expect(outcome.reassigned.reduce((n, r) => n + r.count, 0)).toBe(500);
+    expect(outcome.failed).toBe(501);
+  });
+
+  it('when the first chunk fails, nothing is reported queued and nobody is notified', async () => {
+    seed(helper.UNGRADED_INLINE_LIMIT + 1);
+    mocks.batchTrigger.mockRejectedValue(new Error('trigger down'));
+    const outcome = await resolve('reassign');
+    expect(outcome).toMatchObject({ queued: false, failed: helper.UNGRADED_INLINE_LIMIT + 1 });
+    expect(outcome.reassigned).toEqual([]);
+    expect(mocks.createNotifications).not.toHaveBeenCalled();
   });
 });
 
-describe('removeStaffMember', () => {
+describe('startStaffRemoval', () => {
   it('refuses without a choice when asked to, before anything is queued', async () => {
     await expect(
-      HelperService.removeStaffMember({
+      HelperService.startStaffRemoval({
         classroomId: 'class-1',
         login: 'ta-gone',
         role: 'ASSISTANT',
@@ -349,71 +460,92 @@ describe('removeStaffMember', () => {
     expect(mocks.calls).toEqual([]);
   });
 
-  it('without requireChoice, a missing choice keeps the slots', async () => {
-    const result = await HelperService.removeStaffMember({
-      classroomId: 'class-1',
-      login: 'ta-gone',
-      role: 'ASSISTANT',
-    });
-    expect(result.ungraded).toMatchObject({ choice: 'keep', kept: 3 });
-    expect(mocks.calls).toEqual(['removeStaff']);
+  it('a refusal from the preview (last owner, not found) comes before the question', async () => {
+    mocks.previewRemoval.mockRejectedValue(
+      Object.assign(new Error('last owner'), { code: 'last_owner' })
+    );
+    await expect(
+      HelperService.startStaffRemoval({
+        classroomId: 'class-1',
+        login: 'ta-gone',
+        role: 'OWNER',
+        requireChoice: true,
+      })
+    ).rejects.toMatchObject({ code: 'last_owner' });
+    expect(mocks.removeStaff).not.toHaveBeenCalled();
   });
 
-  it('queues the removal first, then moves the slots', async () => {
-    const result = await HelperService.removeStaffMember({
+  it('queues the removal and moves NOTHING itself', async () => {
+    const started = await HelperService.startStaffRemoval({
       classroomId: 'class-1',
       login: 'ta-gone',
       role: 'ASSISTANT',
       ungradedSubmissions: 'reassign',
       requireChoice: true,
     });
-    expect(mocks.calls[0]).toBe('removeStaff');
-    expect(result).toMatchObject({ runId: 'run-1', ungradedCount: 3 });
-    expect(result.ungraded?.reassigned.reduce((n, r) => n + r.count, 0)).toBe(3);
-  });
-
-  it('moves nothing when the staff service refuses the removal', async () => {
-    mocks.removeStaff.mockRejectedValue(
-      Object.assign(new Error('last owner'), { code: 'last_owner' })
-    );
-    await expect(
-      HelperService.removeStaffMember({
-        classroomId: 'class-1',
-        login: 'ta-gone',
-        role: 'OWNER',
-        ungradedSubmissions: 'reassign',
-      })
-    ).rejects.toMatchObject({ code: 'last_owner' });
+    expect(mocks.calls).toEqual(['removeStaff']);
     expect(mocks.findUngradedSlotsForGrader).not.toHaveBeenCalled();
-  });
-
-  it('asks nothing and moves nothing when there are no ungraded slots', async () => {
-    mocks.previewRemoval.mockResolvedValue({
+    expect(started).toMatchObject({
+      runId: 'run-1',
       userId: 'u-gone',
-      login: 'ta-gone',
-      role: 'TEACHER',
-      remainsGrader: true,
-      ungradedCount: 0,
+      name: 'Gone Person',
+      ungradedCount: 3,
+      heldUngradedCount: 3,
+      choice: 'reassign',
     });
-    const result = await HelperService.removeStaffMember({
-      classroomId: 'class-1',
-      login: 'ta-gone',
-      role: 'TEACHER',
-      requireChoice: true,
-    });
-    expect(result).toMatchObject({ ungradedCount: 0, ungraded: null });
-    expect(mocks.findUngradedSlotsForGrader).not.toHaveBeenCalled();
   });
 
-  it('reports a failure to move slots without failing the queued removal', async () => {
-    mocks.findUngradedSlotsForGrader.mockRejectedValue(new Error('db down'));
-    const result = await HelperService.removeStaffMember({
+  it('without requireChoice, a missing choice becomes keep', async () => {
+    const started = await HelperService.startStaffRemoval({
       classroomId: 'class-1',
       login: 'ta-gone',
       role: 'ASSISTANT',
-      ungradedSubmissions: 'unassign',
     });
-    expect(result.runId).toBe('run-1');
-    expect(result.ungraded).toMatchObject({ choice: 'unassign', failed: 3 });
+    expect(started.choice).toBe('keep');
+  });
+
+  it('no choice at all when nothing is at stake', async () => {
+    mocks.previewRemoval.mockResolvedValue({
+      userId: 'u-gone',
+      login: 'ta-gone',
+      name: null,
+      role: 'TEACHER',
+      remainsGrader: true,
+      ungradedCount: 0,
+      heldUngradedCount: 3,
+    });
+    const started = await HelperService.startStaffRemoval({
+      classroomId: 'class-1',
+      login: 'ta-gone',
+      role: 'TEACHER',
+      ungradedSubmissions: 'reassign',
+      requireChoice: true,
+    });
+    expect(started).toMatchObject({ choice: null, ungradedCount: 0, heldUngradedCount: 3 });
+  });
+});
+
+describe('settleUngradedSlots', () => {
+  it('carries out the choice', async () => {
+    const outcome = await HelperService.settleUngradedSlots({
+      classroomId: 'class-1',
+      graderId: 'u-gone',
+      choice: 'unassign',
+      departingName: 'Gone Person',
+      expectedCount: 3,
+    });
+    expect(outcome).toMatchObject({ choice: 'unassign', unassigned: 3 });
+  });
+
+  it('never throws: a failure counts every expected slot as failed', async () => {
+    mocks.findUngradedSlotsForGrader.mockRejectedValue(new Error('db down'));
+    const outcome = await HelperService.settleUngradedSlots({
+      classroomId: 'class-1',
+      graderId: 'u-gone',
+      choice: 'unassign',
+      departingName: 'Gone Person',
+      expectedCount: 3,
+    });
+    expect(outcome).toMatchObject({ choice: 'unassign', failed: 3 });
   });
 });

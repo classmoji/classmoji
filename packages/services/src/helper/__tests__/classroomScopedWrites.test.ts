@@ -89,7 +89,8 @@ describe('addGraderInClassroom', () => {
       assignmentId: undefined,
     });
     expect(mocks.addIssueAssignees).toHaveBeenCalledWith('acme', 'lab-1-alice', 7, ['ta-bob']);
-    expect(mocks.addGraderToAssignment).toHaveBeenCalledWith('ra-1', 'u-bob');
+    // Other callers keep the per-submission notification.
+    expect(mocks.addGraderToAssignment).toHaveBeenCalledWith('ra-1', 'u-bob', { notify: true });
   });
 
   it('refuses a submission outside the classroom with no GitHub call and no write', async () => {
@@ -147,7 +148,8 @@ describe('addGraderInClassroom', () => {
 
     expect(result.status).toBe('added');
     expect(mocks.addIssueAssignees).not.toHaveBeenCalled();
-    expect(mocks.addGraderToAssignment).toHaveBeenCalledWith('ra-1', 'u-bob');
+    // Other callers keep the per-submission notification.
+    expect(mocks.addGraderToAssignment).toHaveBeenCalledWith('ra-1', 'u-bob', { notify: true });
   });
 
   it('reports already_assigned when a concurrent add inserts the row first (P2002)', async () => {

@@ -388,11 +388,23 @@ export const removeGraderFromRepositoryAssignmentTask = task({
  * than UNGRADED_INLINE_LIMIT in packages/services/src/helper). Ids only: the classroom's git
  * organization, the repo, the issue and both logins are read from stored rows
  * by the classroom-scoped helpers, and the new grader is re-checked against the
- * pool when the run executes. Add-then-remove inside one run; a provider error
- * throws and the run retries, which is safe because both steps are idempotent.
+ * pool when the run executes. Add-then-remove inside one run. The project
+ * default is a single attempt, so this task sets its own retry: a provider
+ * error throws and the run is retried up to MOVE_GRADER_SLOT_RETRY.maxAttempts
+ * times with exponential backoff — safe because a repeated add reports
+ * already_assigned and a repeated removal reports already_removed.
  */
+const MOVE_GRADER_SLOT_RETRY = {
+  maxAttempts: 3,
+  factor: 2,
+  minTimeoutInMs: 2_000,
+  maxTimeoutInMs: 30_000,
+  randomize: true,
+};
+
 export const moveGraderSlotTask = task({
   id: 'move_grader_slot',
+  retry: MOVE_GRADER_SLOT_RETRY,
   run: async (payload: MoveGraderSlotPayload) => {
     const result = await HelperService.moveGraderSlot(payload);
     if (result.status !== 'moved' && result.status !== 'unassigned') {

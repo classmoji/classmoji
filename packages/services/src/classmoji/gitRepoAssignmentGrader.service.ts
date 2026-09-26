@@ -103,16 +103,22 @@ export const findGradersProgress = async (classroomId: string) => {
  * Add a grader to a GitRepoAssignment
  * @param {string} repositoryAssignmentId - UUID of the GitRepoAssignment
  * @param {string} graderId - UUID of the grader User
+ * @param options.notify - false skips the TA_GRADING_ASSIGNED notification
+ *   (a caller moving many slots sends one summary instead). Defaults to true.
  * @returns {Promise<Object>}
  */
-export const addGraderToAssignment = async (repositoryAssignmentId: string, graderId: string) => {
+export const addGraderToAssignment = async (
+  repositoryAssignmentId: string,
+  graderId: string,
+  { notify = true }: { notify?: boolean } = {}
+) => {
   const created = await getPrisma().gitRepoAssignmentGrader.create({
     data: {
       git_repo_assignment_id: repositoryAssignmentId,
       grader_id: graderId,
     },
   });
-  await notifyGraderAssigned(repositoryAssignmentId, [graderId]);
+  if (notify) await notifyGraderAssigned(repositoryAssignmentId, [graderId]);
   return created;
 };
 

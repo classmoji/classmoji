@@ -125,9 +125,11 @@ export type {
 export type { UngradedChoice } from './classmoji/graderReassignPlan.ts';
 export type {
   MoveGraderSlotPayload,
-  RemoveStaffMemberResult,
+  StaffRemovalStart,
   UngradedSlotsOutcome,
 } from './helper/index.ts';
+export { waitForRunOutcome } from './helper/runWait.ts';
+export type { RunOutcome } from './helper/runWait.ts';
 // Quiz authorization refusal, so routes can answer 403 instead of 500.
 export { QuizAccessError, QUIZ_STAFF_ROLES } from './classmoji/quiz.service.ts';
 // "No such attempt", so routes can answer 404 for that and only that — a query

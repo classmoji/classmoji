@@ -326,4 +326,10 @@ describe('UngradedChoice — what happens to ungraded submissions', () => {
     expect(html).toContain('dark:text-gray-100');
     expect(html).toContain('dark:text-gray-400');
   });
+
+  it('sets the graded-submissions note apart from the choices', () => {
+    expect(renderChoice()).toMatch(
+      /<p class="mt-2 [^"]*dark:text-gray-400">Graded submissions keep their grader\./
+    );
+  });
 });

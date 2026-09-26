@@ -4,8 +4,9 @@ import {
   ClassmojiService,
   HelperService,
   StaffServiceError,
-  type RemoveStaffMemberResult,
+  type StaffRemovalStart,
   type UngradedChoice,
+  type UngradedSlotsOutcome,
 } from '@classmoji/services';
 import { ActionTypes } from '~/constants';
 import { waitForRunCompletion } from '~/utils/helpers';
@@ -61,7 +62,7 @@ const parseGraderFlag = (value: unknown): boolean | null =>
 const parseOverride = (value: unknown): string | null =>
   typeof value === 'string' && value.trim().length > 0 ? value.trim() : null;
 
-/** What happens to a removed grader's ungraded submissions (see HelperService.removeStaffMember). */
+/** What happens to a removed grader's ungraded submissions (see HelperService.startStaffRemoval). */
 const UNGRADED_CHOICES = [
   'reassign',
   'unassign',
@@ -82,7 +83,7 @@ const parseUngradedChoice = (value: unknown): UngradedChoice | null | undefined 
 const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
 
 /** The success callout: the removal, then what became of the ungraded slots. */
-const removalMessage = ({ ungraded }: RemoveStaffMemberResult): string => {
+const removalMessage = (ungraded: UngradedSlotsOutcome | null): string => {
   if (!ungraded) return 'Staff member removed';
 
   const parts = ['Staff member removed.'];
@@ -107,6 +108,11 @@ const removalMessage = ({ ungraded }: RemoveStaffMemberResult): string => {
     if (dropped > 0) {
       parts.push(
         `${subs(dropped)} ${ungraded.queued ? 'being unassigned in the background' : 'unassigned'}.`
+      );
+    }
+    if (ungraded.unassignedIneligible > 0) {
+      parts.push(
+        `${plural(ungraded.unassignedIneligible, 'was', 'were')} unassigned because the grader picked for them is no longer a grader.`
       );
     }
   }
@@ -315,37 +321,50 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
         };
       }
 
+      let started: StaffRemovalStart;
       try {
         // The service resolves the target from the DB by (classroom, login,
-        // role) and builds the task payload entirely server-side; the route
-        // keeps awaiting the run so the UI can report the finished removal. It
-        // also refuses to remove the LAST owner before triggering anything,
-        // which is why that failure arrives here rather than inside the task.
+        // role) and builds the task payload entirely server-side. It refuses a
+        // missing role or the LAST owner before triggering anything, which is
+        // why those failures arrive here rather than inside the task.
         //
-        // Whether the ungraded-slot choice applies at all (no ASSISTANT or
-        // TEACHER role left afterwards) is decided there too, from the DB —
-        // never from what the page believed. The slots are moved with the
-        // classroom-scoped grader helpers while the removal run is going.
-        const result = await HelperService.removeStaffMember({
+        // Whether the ungraded-slot choice applies at all (no grader-flagged
+        // ASSISTANT or TEACHER role left afterwards) is decided there too,
+        // from the DB — never from what the page believed.
+        started = await HelperService.startStaffRemoval({
           classroomId: classroom.id,
           login,
           role,
           ungradedSubmissions,
         });
 
-        await waitForRunCompletion(result.runId);
-
-        return {
-          success: removalMessage(result),
-          action: ActionTypes.REMOVE_USER,
-        };
+        await waitForRunCompletion(started.runId);
       } catch (error: unknown) {
+        // Nothing has been moved yet: slots are settled only after the
+        // removal run has succeeded.
         console.error('removeStaff failed:', error);
         return {
           action: ActionTypes.REMOVE_USER,
           error: staffErrorMessage(error, 'Failed to remove staff member. Please try again.'),
         };
       }
+
+      // The removal is done; now carry out the choice. This never throws —
+      // anything it could not change is counted in `failed`.
+      const ungraded = started.choice
+        ? await HelperService.settleUngradedSlots({
+            classroomId: classroom.id,
+            graderId: started.userId,
+            choice: started.choice,
+            departingName: started.name || started.login,
+            expectedCount: started.ungradedCount,
+          })
+        : null;
+
+      return {
+        success: removalMessage(ungraded),
+        action: ActionTypes.REMOVE_USER,
+      };
     },
   });
 };

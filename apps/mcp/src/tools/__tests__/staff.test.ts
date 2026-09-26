@@ -24,6 +24,9 @@ const mocks = vi.hoisted(() => ({
   updateStaff: vi.fn(),
   removeStaff: vi.fn(),
   auditCreate: vi.fn(),
+  waitForRunOutcome: vi.fn(),
+  settleUngradedSlots: vi.fn(),
+  previewLeftoverSlots: vi.fn(),
 }));
 
 vi.mock('@classmoji/services', () => {
@@ -45,15 +48,18 @@ vi.mock('@classmoji/services', () => {
       staff: {
         addStaff: (...a: unknown[]) => mocks.addStaff(...a),
         updateStaff: (...a: unknown[]) => mocks.updateStaff(...a),
+        previewLeftoverSlots: (...a: unknown[]) => mocks.previewLeftoverSlots(...a),
       },
       audit: { create: (...a: unknown[]) => mocks.auditCreate(...a) },
     },
-    // staff_remove goes through the shared removal entry point, which also
-    // settles the person's ungraded grader slots. `mocks.removeStaff` stands
-    // in for it.
+    // staff_remove goes through the shared removal entry point
+    // (startStaffRemoval); `mocks.removeStaff` stands in for it. Slots are
+    // settled separately, after the removal run has succeeded.
     HelperService: {
-      removeStaffMember: (...a: unknown[]) => mocks.removeStaff(...a),
+      startStaffRemoval: (...a: unknown[]) => mocks.removeStaff(...a),
+      settleUngradedSlots: (...a: unknown[]) => mocks.settleUngradedSlots(...a),
     },
+    waitForRunOutcome: (...a: unknown[]) => mocks.waitForRunOutcome(...a),
   };
 });
 
@@ -596,23 +602,49 @@ describe('staff_remove — ungraded submissions', () => {
     expect(mocks.auditCreate).not.toHaveBeenCalled();
   });
 
-  it('reassign: reports reassigned_to per grader login and audits the choice and counts', async () => {
-    mocks.removeStaff.mockResolvedValue({
-      ...REMOVAL,
-      ungradedCount: 9,
-      ungraded: outcome({
+  /** A started removal with `count` ungraded slots at stake and `choice` to apply. */
+  const started = (count: number, choice: string | null, held = count) => ({
+    ...REMOVAL,
+    name: 'Ann Grader',
+    ungradedCount: count,
+    heldUngradedCount: held,
+    choice,
+  });
+
+  const withChoice = (choice: string) => ({ ...ARGS, ungraded_submissions: choice }) as never;
+
+  it('reassign: waits for the removal, THEN settles, and reports reassigned_to per login', async () => {
+    const order: string[] = [];
+    mocks.removeStaff.mockResolvedValue(started(9, 'reassign'));
+    mocks.waitForRunOutcome.mockImplementation(async () => {
+      order.push('wait');
+      return { outcome: 'completed' };
+    });
+    mocks.settleUngradedSlots.mockImplementation(async () => {
+      order.push('settle');
+      return outcome({
         reassigned: [
           { graderId: 'u-bob', login: 'ta-bob', count: 5 },
           { graderId: 'u-cat', login: 'ta-cat', count: 4 },
         ],
-      }),
+      });
     });
 
-    const payload = parse(
-      await staffRemoveTool.handler({ ...ARGS, ungraded_submissions: 'reassign' }, CTX)
-    );
+    const payload = parse(await staffRemoveTool.handler(withChoice('reassign'), CTX));
 
+    expect(order).toEqual(['wait', 'settle']);
     expect(mocks.removeStaff.mock.calls[0][0]).toMatchObject({ ungradedSubmissions: 'reassign' });
+    expect(mocks.waitForRunOutcome).toHaveBeenCalledWith('run-1', {
+      timeoutMs: expect.any(Number),
+    });
+    expect(mocks.settleUngradedSlots).toHaveBeenCalledWith({
+      classroomId: 'class-1',
+      graderId: 'ta-1',
+      choice: 'reassign',
+      departingName: 'Ann Grader',
+      expectedCount: 9,
+    });
+    expect(payload).toMatchObject({ success: true, queued: false, removal_completed: true });
     expect(payload.ungraded_submissions).toEqual({
       choice: 'reassign',
       total: 9,
@@ -629,6 +661,7 @@ describe('staff_remove — ungraded submissions', () => {
       tool: 'staff_remove',
       value: 'ASSISTANT:reassign',
       role: 'ASSISTANT',
+      removal: 'completed',
       ungraded_submissions: {
         choice: 'reassign',
         reassigned_to: { 'ta-bob': 5, 'ta-cat': 4 },
@@ -637,14 +670,12 @@ describe('staff_remove — ungraded submissions', () => {
   });
 
   it('reassign with no other grader reports the fallback', async () => {
-    mocks.removeStaff.mockResolvedValue({
-      ...REMOVAL,
-      ungradedCount: 2,
-      ungraded: outcome({ total: 2, unassigned: 2, fallback: 'no_eligible_graders' }),
-    });
-    const payload = parse(
-      await staffRemoveTool.handler({ ...ARGS, ungraded_submissions: 'reassign' }, CTX)
+    mocks.removeStaff.mockResolvedValue(started(2, 'reassign'));
+    mocks.waitForRunOutcome.mockResolvedValue({ outcome: 'completed' });
+    mocks.settleUngradedSlots.mockResolvedValue(
+      outcome({ total: 2, unassigned: 2, fallback: 'no_eligible_graders' })
     );
+    const payload = parse(await staffRemoveTool.handler(withChoice('reassign'), CTX));
     expect(payload.ungraded_submissions).toMatchObject({
       unassigned: 2,
       reassigned_to: {},
@@ -652,38 +683,204 @@ describe('staff_remove — ungraded submissions', () => {
     });
   });
 
-  it('unassign: reports the unassigned count (covered slots included)', async () => {
-    mocks.removeStaff.mockResolvedValue({
-      ...REMOVAL,
-      ungradedCount: 3,
-      ungraded: outcome({ choice: 'unassign', total: 3, unassigned: 2, alreadyCovered: 1 }),
-    });
-    const payload = parse(
-      await staffRemoveTool.handler({ ...ARGS, ungraded_submissions: 'unassign' }, CTX)
+  it('reassign: a planned grader who left the pool shows up as unassigned with the reason', async () => {
+    mocks.removeStaff.mockResolvedValue(started(3, 'reassign'));
+    mocks.waitForRunOutcome.mockResolvedValue({ outcome: 'completed' });
+    mocks.settleUngradedSlots.mockResolvedValue(
+      outcome({
+        total: 3,
+        reassigned: [{ graderId: 'u-bob', login: 'ta-bob', count: 2 }],
+        unassigned: 1,
+        unassignedIneligible: 1,
+      })
     );
+    const payload = parse(await staffRemoveTool.handler(withChoice('reassign'), CTX));
+    expect(payload.ungraded_submissions).toMatchObject({
+      unassigned: 1,
+      unassigned_grader_ineligible: 1,
+      failed: 0,
+    });
+  });
+
+  it('unassign: reports the unassigned count (covered slots included)', async () => {
+    mocks.removeStaff.mockResolvedValue(started(3, 'unassign'));
+    mocks.waitForRunOutcome.mockResolvedValue({ outcome: 'completed' });
+    mocks.settleUngradedSlots.mockResolvedValue(
+      outcome({ choice: 'unassign', total: 3, unassigned: 2, alreadyCovered: 1 })
+    );
+    const payload = parse(await staffRemoveTool.handler(withChoice('unassign'), CTX));
     expect(payload.ungraded_submissions).toMatchObject({ choice: 'unassign', unassigned: 3 });
     expect(auditRow().data).toMatchObject({ value: 'ASSISTANT:unassign' });
   });
 
   it('keep: reports the kept count', async () => {
-    mocks.removeStaff.mockResolvedValue({
-      ...REMOVAL,
-      ungradedCount: 4,
-      ungraded: outcome({ choice: 'keep', total: 4, kept: 4 }),
-    });
-    const payload = parse(
-      await staffRemoveTool.handler({ ...ARGS, ungraded_submissions: 'keep' }, CTX)
-    );
+    mocks.removeStaff.mockResolvedValue(started(4, 'keep'));
+    mocks.waitForRunOutcome.mockResolvedValue({ outcome: 'completed' });
+    mocks.settleUngradedSlots.mockResolvedValue(outcome({ choice: 'keep', total: 4, kept: 4 }));
+    const payload = parse(await staffRemoveTool.handler(withChoice('keep'), CTX));
     expect(payload.ungraded_submissions).toMatchObject({ choice: 'keep', kept: 4 });
     expect(auditRow().data).toMatchObject({ value: 'ASSISTANT:keep' });
   });
 
-  it('no ungraded slots: no param needed and no ungraded_submissions field', async () => {
-    mocks.removeStaff.mockResolvedValue({ ...REMOVAL, ungradedCount: 0, ungraded: null });
+  it('a removal still running after the wait: removal_pending, nothing moved', async () => {
+    mocks.removeStaff.mockResolvedValue(started(9, 'reassign'));
+    mocks.waitForRunOutcome.mockResolvedValue({ outcome: 'timeout', status: 'EXECUTING' });
+
+    const payload = parse(await staffRemoveTool.handler(withChoice('reassign'), CTX));
+
+    expect(mocks.settleUngradedSlots).not.toHaveBeenCalled();
+    expect(payload).toMatchObject({
+      success: true,
+      removal_pending: true,
+      ungraded_submissions: { pending: true, count: 9 },
+    });
+    expect(payload.message).toContain('NOT changed');
+    expect(payload.message).toContain('call staff_remove again');
+    expect(auditRow().data).toMatchObject({ removal: 'pending' });
+  });
+
+  it('a removal that failed: an error, nothing moved', async () => {
+    mocks.removeStaff.mockResolvedValue(started(9, 'reassign'));
+    mocks.waitForRunOutcome.mockResolvedValue({ outcome: 'failed', status: 'CRASHED' });
+
+    await expect(staffRemoveTool.handler(withChoice('reassign'), CTX)).rejects.toMatchObject({
+      kind: 'internal',
+    });
+    expect(mocks.settleUngradedSlots).not.toHaveBeenCalled();
+    expect(auditRow().data).toMatchObject({ removal: 'failed' });
+  });
+
+  it('no ungraded slots held: no wait, no param needed, no ungraded_submissions field', async () => {
+    mocks.removeStaff.mockResolvedValue(started(0, null));
     const payload = parse(await staffRemoveTool.handler(ARGS, CTX));
+    expect(mocks.waitForRunOutcome).not.toHaveBeenCalled();
+    expect(payload).toMatchObject({ queued: true });
     expect(payload).not.toHaveProperty('ungraded_submissions');
-    expect(auditRow().data).toMatchObject({ value: 'ASSISTANT:none' });
+    expect(auditRow().data).toMatchObject({ value: 'ASSISTANT:none', removal: 'queued' });
     expect(auditRow().data).not.toHaveProperty('ungraded_submissions');
+  });
+
+  it('slots held but not at stake (another grader role remains): waits, moves nothing', async () => {
+    mocks.removeStaff.mockResolvedValue(started(0, null, 9));
+    mocks.waitForRunOutcome.mockResolvedValue({ outcome: 'completed' });
+    const payload = parse(await staffRemoveTool.handler(ARGS, CTX));
+    expect(mocks.waitForRunOutcome).toHaveBeenCalled();
+    expect(mocks.settleUngradedSlots).not.toHaveBeenCalled();
+    expect(payload).toMatchObject({ removal_completed: true });
+    expect(payload).not.toHaveProperty('ungraded_submissions');
+  });
+
+  it('TEACHER then ASSISTANT back to back: the second call is asked about the slots', async () => {
+    // One person, both roles, both grading, nine ungraded slots. The fake
+    // entry point answers from `roles`; the removal run deletes the row it was
+    // queued for, and only once it has been waited on.
+    let roles = ['TEACHER', 'ASSISTANT'];
+    const pendingRuns = new Map<string, string>();
+    mocks.removeStaff.mockImplementation(
+      async (a: { role: string; ungradedSubmissions: string | null }) => {
+        const atStake = roles.some(r => r !== a.role) ? 0 : 9;
+        if (atStake > 0 && !a.ungradedSubmissions) {
+          throw new StaffServiceError('ungraded_choice_required', '[staff] 9', {
+            ungradedCount: 9,
+          } as never);
+        }
+        const runId = `run-${a.role}`;
+        pendingRuns.set(runId, a.role);
+        return {
+          ...REMOVAL,
+          role: a.role,
+          runId,
+          name: null,
+          ungradedCount: atStake,
+          heldUngradedCount: 9,
+          choice: atStake > 0 ? a.ungradedSubmissions : null,
+        };
+      }
+    );
+    mocks.waitForRunOutcome.mockImplementation(async (runId: string) => {
+      roles = roles.filter(r => r !== pendingRuns.get(runId));
+      return { outcome: 'completed' };
+    });
+    mocks.settleUngradedSlots.mockResolvedValue(
+      outcome({ reassigned: [{ graderId: 'u-bob', login: 'ta-bob', count: 9 }] })
+    );
+
+    // 1. Removing TEACHER: nothing at stake, but they hold slots → it waits.
+    await staffRemoveTool.handler({ ...ARGS, role: 'TEACHER' }, CTX);
+    expect(roles).toEqual(['ASSISTANT']);
+
+    // 2. Removing ASSISTANT right after: the first removal is done, so the
+    //    slots are at stake and the caller must choose.
+    await expect(
+      staffRemoveTool.handler({ ...ARGS, role: 'ASSISTANT' }, CTX)
+    ).rejects.toMatchObject({ code: 'UNGRADED_CHOICE_REQUIRED' });
+
+    // 3. With the choice, they are settled.
+    const payload = parse(
+      await staffRemoveTool.handler(
+        { ...ARGS, role: 'ASSISTANT', ungraded_submissions: 'reassign' } as never,
+        CTX
+      )
+    );
+    expect(payload.ungraded_submissions).toMatchObject({ reassigned_to: { 'ta-bob': 9 } });
+  });
+
+  it('after removal_pending, calling again once the role is gone settles the leftover slots', async () => {
+    mocks.removeStaff.mockRejectedValue(
+      new StaffServiceError('staff_not_found', '[staff] no such role')
+    );
+    mocks.previewLeftoverSlots.mockResolvedValue({
+      userId: 'ta-1',
+      login: 'ta-ann',
+      name: 'Ann Grader',
+      ungradedCount: 9,
+    });
+    mocks.settleUngradedSlots.mockResolvedValue(
+      outcome({ reassigned: [{ graderId: 'u-bob', login: 'ta-bob', count: 9 }] })
+    );
+
+    const payload = parse(await staffRemoveTool.handler(withChoice('reassign'), CTX));
+
+    expect(mocks.previewLeftoverSlots).toHaveBeenCalledWith({
+      classroomId: 'class-1',
+      login: 'ta-ann',
+    });
+    expect(mocks.settleUngradedSlots).toHaveBeenCalledWith(
+      expect.objectContaining({ classroomId: 'class-1', graderId: 'ta-1', choice: 'reassign' })
+    );
+    expect(payload).toMatchObject({
+      removal_already_done: true,
+      ungraded_submissions: { reassigned_to: { 'ta-bob': 9 } },
+    });
+    expect(auditRow()).toMatchObject({
+      action: 'UPDATE',
+      data: { tool: 'staff_remove', removal: 'already_done' },
+    });
+  });
+
+  it('without a choice, a missing role stays the uniform not-found', async () => {
+    mocks.removeStaff.mockRejectedValue(
+      new StaffServiceError('staff_not_found', '[staff] no such role')
+    );
+    await expect(staffRemoveTool.handler(ARGS, CTX)).rejects.toMatchObject({
+      kind: 'not_found',
+    });
+    expect(mocks.previewLeftoverSlots).not.toHaveBeenCalled();
+  });
+
+  it('with a choice but nothing left over, still the uniform not-found', async () => {
+    mocks.removeStaff.mockRejectedValue(
+      new StaffServiceError('staff_not_found', '[staff] no such role')
+    );
+    mocks.previewLeftoverSlots.mockRejectedValue(
+      new StaffServiceError('staff_not_found', '[staff] nothing left')
+    );
+    await expect(staffRemoveTool.handler(withChoice('reassign'), CTX)).rejects.toMatchObject({
+      kind: 'not_found',
+      message: 'Staff member not found in this classroom',
+    });
+    expect(mocks.settleUngradedSlots).not.toHaveBeenCalled();
+    expect(mocks.auditCreate).not.toHaveBeenCalled();
   });
 
   it('accepts only the three choices', () => {

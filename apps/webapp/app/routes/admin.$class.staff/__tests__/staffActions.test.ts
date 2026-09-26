@@ -50,11 +50,12 @@ vi.mock('@classmoji/services', () => ({
       updateStaff: (...a: unknown[]) => mocks.updateStaff(...a),
     },
   },
-  // Removal goes through the shared entry point that also settles the
-  // person's ungraded grader slots; `mocks.removeStaff` stands in for it.
-  // The ungraded-slot choices are pinned in routes/__tests__/staffRemoveUngraded.test.ts.
+  // Removal goes through the shared entry point (startStaffRemoval);
+  // `mocks.removeStaff` stands in for it. The ungraded-slot choices, settled
+  // after the run succeeds, are pinned in routes/__tests__/staffRemoveUngraded.test.ts.
   HelperService: {
-    removeStaffMember: (...a: unknown[]) => mocks.removeStaff(...a),
+    startStaffRemoval: (...a: unknown[]) => mocks.removeStaff(...a),
+    settleUngradedSlots: vi.fn(),
   },
   StaffServiceError: FakeStaffServiceError,
 }));

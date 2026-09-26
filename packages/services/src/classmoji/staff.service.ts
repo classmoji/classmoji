@@ -95,10 +95,12 @@ export interface StaffRemovalPreview {
   login: string;
   name: string | null;
   role: StaffRole;
-  /** true when another membership keeps them ASSISTANT or TEACHER here. */
+  /** true when another grader-flagged ASSISTANT or TEACHER membership remains. */
   remainsGrader: boolean;
   /** Ungraded grader slots that need a decision; 0 whenever remainsGrader. */
   ungradedCount: number;
+  /** Ungraded grader slots they hold here at all, at stake or not. */
+  heldUngradedCount: number;
 }
 
 /** A git provider 404 — the login genuinely names nobody (same shape the providers throw). */
@@ -426,13 +428,17 @@ export const updateStaff = async ({
  *
  * Roles are additive, so the question is asked about the classroom AFTER this
  * one (classroom, user, role) row is gone: do they still hold ASSISTANT or
- * TEACHER here (GRADER_ROLES, the roles the grader pool draws from)? If so they
- * still grade and nothing needs deciding. If not — including someone who stays
- * an OWNER, since owners are not in the grader pool — their ungraded slots are
- * counted. Asking with the removed row excluded gives the same answer whether
- * or not the background removal has deleted it yet.
+ * TEACHER here WITH is_grader set — i.e. are they still in the pool the
+ * pickers and reassignment draw from? If so nothing needs deciding. If not —
+ * including someone who stays an OWNER (owners are not in the pool) or keeps
+ * a non-grading assistant row — their ungraded slots are counted. Asking with
+ * the removed row excluded gives the same answer whether or not the background
+ * removal has deleted it yet. It cannot see ANOTHER removal still in flight,
+ * which is why callers wait for a run whenever the person holds ungraded slots
+ * at all (`heldUngradedCount`) — a second removal then sees the first done.
  *
- * Read-only; throws the same staff_not_found / invalid_role as removeStaff.
+ * Read-only; throws the same staff_not_found / invalid_role / last_owner as
+ * removeStaff, so callers refuse BEFORE asking any question about slots.
  */
 export const previewRemoval = async ({
   classroomId,
@@ -462,14 +468,24 @@ export const previewRemoval = async ({
     );
   }
 
+  if (role === 'OWNER') await assertNotLastOwner(classroomId, login);
+
   const otherGraderRoles = gitRepoAssignmentGraderService.GRADER_ROLES.filter(r => r !== role);
   const remainsGrader =
     otherGraderRoles.length > 0 &&
-    (await classroomMembershipService.hasRole(classroomId, user.id, [...otherGraderRoles]));
+    (await getPrisma().classroomMembership.count({
+      where: {
+        classroom_id: classroomId,
+        user_id: user.id,
+        role: { in: [...otherGraderRoles] },
+        is_grader: true,
+      },
+    })) > 0;
 
-  const ungradedCount = remainsGrader
-    ? 0
-    : await gitRepoAssignmentGraderService.countUngradedSlotsForGrader(classroomId, user.id);
+  const heldUngradedCount = await gitRepoAssignmentGraderService.countUngradedSlotsForGrader(
+    classroomId,
+    user.id
+  );
 
   return {
     userId: user.id,
@@ -477,8 +493,63 @@ export const previewRemoval = async ({
     name: user.name,
     role,
     remainsGrader,
-    ungradedCount,
+    ungradedCount: remainsGrader ? 0 : heldUngradedCount,
+    heldUngradedCount,
   };
+};
+
+/**
+ * Ungraded slots left behind by a removal that has already finished — the
+ * follow-up when staff_remove could not wait for the removal run. Only for
+ * someone who holds NO grader-flagged ASSISTANT/TEACHER role here any more and
+ * still holds ungraded slots in this classroom; anyone else is staff_not_found,
+ * the same answer as any other miss.
+ */
+export const previewLeftoverSlots = async ({
+  classroomId,
+  login,
+}: {
+  classroomId: string;
+  login: string;
+}): Promise<{ userId: string; login: string; name: string | null; ungradedCount: number }> => {
+  const user = await findUserByLoginInsensitive(login);
+  const notFound = new StaffServiceError(
+    'staff_not_found',
+    `[staff] ${login} has no leftover grading in classroom ${classroomId}`
+  );
+  if (!user) throw notFound;
+
+  const stillGrader =
+    (await getPrisma().classroomMembership.count({
+      where: {
+        classroom_id: classroomId,
+        user_id: user.id,
+        role: { in: [...gitRepoAssignmentGraderService.GRADER_ROLES] },
+        is_grader: true,
+      },
+    })) > 0;
+  if (stillGrader) throw notFound;
+
+  const ungradedCount = await gitRepoAssignmentGraderService.countUngradedSlotsForGrader(
+    classroomId,
+    user.id
+  );
+  if (ungradedCount === 0) throw notFound;
+
+  return { userId: user.id, login: user.login ?? login, name: user.name, ungradedCount };
+};
+
+/** Refuse to orphan the classroom — shared by previewRemoval and removeStaff. */
+const assertNotLastOwner = async (classroomId: string, login: string) => {
+  const ownerCount = await getPrisma().classroomMembership.count({
+    where: { classroom_id: classroomId, role: 'OWNER' },
+  });
+  if (ownerCount <= 1) {
+    throw new StaffServiceError(
+      'last_owner',
+      `[staff] ${login} is the only owner of classroom ${classroomId}`
+    );
+  }
 };
 
 /**
@@ -535,17 +606,7 @@ export const removeStaff = async ({
   }
 
   // Refuse to orphan the classroom BEFORE the fire-and-forget trigger.
-  if (role === 'OWNER') {
-    const ownerCount = await getPrisma().classroomMembership.count({
-      where: { classroom_id: classroomId, role: 'OWNER' },
-    });
-    if (ownerCount <= 1) {
-      throw new StaffServiceError(
-        'last_owner',
-        `[staff] ${login} is the only owner of classroom ${classroomId}`
-      );
-    }
-  }
+  if (role === 'OWNER') await assertNotLastOwner(classroomId, login);
 
   const run = await tasks.trigger('remove_user_from_organization', {
     payload: buildRemoveUserPayload({

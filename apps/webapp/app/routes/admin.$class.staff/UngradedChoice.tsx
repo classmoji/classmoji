@@ -60,7 +60,7 @@ const UngradedChoice = ({
         );
       })}
     </Radio.Group>
-    <p className="text-xs text-gray-500 dark:text-gray-400">
+    <p className="mt-2 text-xs text-gray-500 dark:text-gray-400">
       Graded submissions keep their grader.
     </p>
   </div>

@@ -17,6 +17,28 @@ const graderFindMany = vi.fn();
 const graderCount = vi.fn();
 const graderGroupBy = vi.fn();
 const userFindFirst = vi.fn();
+
+/** Memberships in the fake classroom, queried by classroomMembership.count. */
+interface Row {
+  classroom_id: string;
+  user_id: string;
+  role: string;
+  is_grader: boolean;
+}
+let memberships: Row[] = [];
+const membershipCount = ({ where }: { where: Record<string, unknown> }) =>
+  Promise.resolve(
+    memberships.filter(row => {
+      if (where.classroom_id !== undefined && row.classroom_id !== where.classroom_id) return false;
+      if (where.user_id !== undefined && row.user_id !== where.user_id) return false;
+      if (where.is_grader !== undefined && row.is_grader !== where.is_grader) return false;
+      const role = where.role as string | { in: string[] } | undefined;
+      if (typeof role === 'string' && row.role !== role) return false;
+      if (role && typeof role === 'object' && !role.in.includes(row.role)) return false;
+      return true;
+    }).length
+  );
+
 vi.mock('@classmoji/database', () => ({
   default: () => ({
     gitRepoAssignmentGrader: {
@@ -25,6 +47,9 @@ vi.mock('@classmoji/database', () => ({
       groupBy: (...a: unknown[]) => graderGroupBy(...a),
     },
     user: { findFirst: (...a: unknown[]) => userFindFirst(...a) },
+    classroomMembership: {
+      count: (args: { where: Record<string, unknown> }) => membershipCount(args),
+    },
   }),
 }));
 
@@ -144,55 +169,117 @@ describe('planUngradedReassignment', () => {
 });
 
 describe('staff.previewRemoval', () => {
+  const row = (role: string, is_grader = true, user_id = 'u-gone'): Row => ({
+    classroom_id: 'class-1',
+    user_id,
+    role,
+    is_grader,
+  });
+  /** What the removal run does when it finishes: delete that one row. */
+  const completeRemoval = (role: string) => {
+    memberships = memberships.filter(r => !(r.user_id === 'u-gone' && r.role === role));
+  };
+  const preview = (role: 'ASSISTANT' | 'TEACHER' | 'OWNER') =>
+    staff.previewRemoval({ classroomId: 'class-1', login: 'gone', role });
+
   beforeEach(() => {
+    memberships = [row('OWNER', false, 'u-owner')];
     userFindFirst.mockResolvedValue({ id: 'u-gone', login: 'Gone', name: 'Gone Person' });
-    findByClassroomAndUser.mockResolvedValue({ id: 'm-1' });
+    findByClassroomAndUser.mockImplementation((c: string, u: string, role: string) =>
+      Promise.resolve(
+        memberships.find(r => r.classroom_id === c && r.user_id === u && r.role === role) ?? null
+      )
+    );
     graderCount.mockResolvedValue(9);
   });
 
   it('counts ungraded slots when no ASSISTANT/TEACHER role is left', async () => {
-    hasRole.mockResolvedValue(false);
-    const preview = await staff.previewRemoval({
-      classroomId: 'class-1',
-      login: 'gone',
-      role: 'ASSISTANT',
-    });
-    expect(hasRole).toHaveBeenCalledWith('class-1', 'u-gone', ['TEACHER']);
-    expect(preview).toMatchObject({
+    memberships.push(row('ASSISTANT'));
+    expect(await preview('ASSISTANT')).toMatchObject({
       userId: 'u-gone',
       login: 'Gone',
+      name: 'Gone Person',
       remainsGrader: false,
       ungradedCount: 9,
+      heldUngradedCount: 9,
     });
   });
 
-  it('asks nothing when another grader role remains', async () => {
-    hasRole.mockResolvedValue(true);
-    const preview = await staff.previewRemoval({
-      classroomId: 'class-1',
-      login: 'gone',
-      role: 'TEACHER',
+  it('asks nothing when a grader-flagged role remains — but reports what they hold', async () => {
+    memberships.push(row('TEACHER'), row('ASSISTANT'));
+    expect(await preview('TEACHER')).toMatchObject({
+      remainsGrader: true,
+      ungradedCount: 0,
+      heldUngradedCount: 9,
     });
-    expect(hasRole).toHaveBeenCalledWith('class-1', 'u-gone', ['ASSISTANT']);
-    expect(preview).toMatchObject({ remainsGrader: true, ungradedCount: 0 });
+  });
+
+  it('a remaining role WITHOUT is_grader does not count as still grading', async () => {
+    memberships.push(row('TEACHER'), row('ASSISTANT', false));
+    expect(await preview('TEACHER')).toMatchObject({ remainsGrader: false, ungradedCount: 9 });
+  });
+
+  it('staying OWNER is not staying a grader', async () => {
+    memberships.push(row('OWNER', false), row('ASSISTANT'));
+    expect(await preview('ASSISTANT')).toMatchObject({ remainsGrader: false, ungradedCount: 9 });
+  });
+
+  it('refuses the last owner before anything about slots is asked', async () => {
+    memberships = [row('OWNER', false)];
+    await expect(preview('OWNER')).rejects.toMatchObject({ code: 'last_owner' });
     expect(graderCount).not.toHaveBeenCalled();
   });
 
-  it('removing OWNER checks both grader roles — an owner-only person still gets counted', async () => {
-    hasRole.mockResolvedValue(false);
-    const preview = await staff.previewRemoval({
-      classroomId: 'class-1',
-      login: 'gone',
-      role: 'OWNER',
-    });
-    expect(hasRole).toHaveBeenCalledWith('class-1', 'u-gone', ['ASSISTANT', 'TEACHER']);
-    expect(preview.ungradedCount).toBe(9);
+  it('refuses someone who does not hold the role here', async () => {
+    await expect(preview('ASSISTANT')).rejects.toMatchObject({ code: 'staff_not_found' });
   });
 
-  it('refuses someone who does not hold the role here', async () => {
-    findByClassroomAndUser.mockResolvedValue(null);
+  it('TEACHER then ASSISTANT: once the first removal has finished, the second is asked', async () => {
+    memberships.push(row('TEACHER'), row('ASSISTANT'));
+
+    // First call: the ASSISTANT row keeps them grading, so nothing is at stake
+    // — but they hold slots, which is what makes the callers wait for the run.
+    const first = await preview('TEACHER');
+    expect(first).toMatchObject({ ungradedCount: 0, heldUngradedCount: 9 });
+
+    // Had the caller not waited, the TEACHER row would still be there and the
+    // second removal would wrongly look like it leaves them a grader.
+    expect(await preview('ASSISTANT')).toMatchObject({ remainsGrader: true, ungradedCount: 0 });
+
+    // The caller waited: the run finished and deleted the TEACHER row.
+    completeRemoval('TEACHER');
+    expect(await preview('ASSISTANT')).toMatchObject({ remainsGrader: false, ungradedCount: 9 });
+  });
+});
+
+describe('staff.previewLeftoverSlots', () => {
+  beforeEach(() => {
+    memberships = [];
+    userFindFirst.mockResolvedValue({ id: 'u-gone', login: 'Gone', name: 'Gone Person' });
+    graderCount.mockResolvedValue(4);
+  });
+
+  it('finds the slots of someone whose grading role is already gone', async () => {
+    expect(await staff.previewLeftoverSlots({ classroomId: 'class-1', login: 'gone' })).toEqual({
+      userId: 'u-gone',
+      login: 'Gone',
+      name: 'Gone Person',
+      ungradedCount: 4,
+    });
+  });
+
+  it('is not-found for someone still grading, or with nothing left', async () => {
+    memberships = [
+      { classroom_id: 'class-1', user_id: 'u-gone', role: 'ASSISTANT', is_grader: true },
+    ];
     await expect(
-      staff.previewRemoval({ classroomId: 'class-1', login: 'gone', role: 'ASSISTANT' })
+      staff.previewLeftoverSlots({ classroomId: 'class-1', login: 'gone' })
+    ).rejects.toMatchObject({ code: 'staff_not_found' });
+
+    memberships = [];
+    graderCount.mockResolvedValue(0);
+    await expect(
+      staff.previewLeftoverSlots({ classroomId: 'class-1', login: 'gone' })
     ).rejects.toMatchObject({ code: 'staff_not_found' });
   });
 });
