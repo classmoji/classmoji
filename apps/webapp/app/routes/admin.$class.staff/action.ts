@@ -359,7 +359,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
         return {
           action: ActionTypes.REMOVE_USER,
           error:
-            'The removal is still in progress, so their ungraded submissions were not changed. Reload in a moment to check.',
+            'The removal is still in progress, so their ungraded submissions were not changed. Once it finishes, they stay listed as grader on those submissions — reassign them from the repository or assignment page.',
         };
       }
 
