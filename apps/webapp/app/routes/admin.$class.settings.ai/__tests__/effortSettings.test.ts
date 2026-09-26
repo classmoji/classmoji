@@ -14,6 +14,7 @@ const mocks = vi.hoisted(() => ({
   updateSettings: vi.fn(),
   getClassroomSettingsForServer: vi.fn(),
   canUseSyllabusBot: vi.fn(),
+  canUseQuizzes: vi.fn(),
   getAllModels: vi.fn(),
   EntitlementError: class ClassroomSettingsEntitlementError extends Error {},
 }));
@@ -29,7 +30,10 @@ vi.mock('@classmoji/services', () => ({
       updateSettings: (...a: unknown[]) => mocks.updateSettings(...a),
       getClassroomSettingsForServer: (...a: unknown[]) => mocks.getClassroomSettingsForServer(...a),
     },
-    entitlement: { canUseSyllabusBot: (...a: unknown[]) => mocks.canUseSyllabusBot(...a) },
+    entitlement: {
+      canUseSyllabusBot: (...a: unknown[]) => mocks.canUseSyllabusBot(...a),
+      canUseQuizzes: (...a: unknown[]) => mocks.canUseQuizzes(...a),
+    },
   },
   ClassroomSettingsEntitlementError: mocks.EntitlementError,
   getAllModels: (...a: unknown[]) => mocks.getAllModels(...a),
@@ -64,6 +68,7 @@ beforeEach(() => {
   mocks.updateSettings.mockResolvedValue({});
   mocks.getClassroomSettingsForServer.mockResolvedValue({ anthropic_api_key: 'sk-ant-classroom' });
   mocks.canUseSyllabusBot.mockResolvedValue({ allowed: true });
+  mocks.canUseQuizzes.mockResolvedValue({ allowed: true });
   mocks.getAllModels.mockResolvedValue({ anthropic: [] });
 });
 
@@ -245,6 +250,34 @@ describe('clearLLMSettings', () => {
   });
 });
 
+describe('saveQuizSettings', () => {
+  it('writes only quizzes_enabled', async () => {
+    const result = await post({
+      _action: 'saveQuizSettings',
+      quizzes_enabled: true,
+      llm_model: 'claude-opus-5-5',
+    });
+    expect(result.success).toBeDefined();
+    expect(mocks.updateSettings).toHaveBeenCalledWith('c1', { quizzes_enabled: true });
+  });
+
+  it("turns updateSettings' Pro refusal into a readable error", async () => {
+    mocks.updateSettings.mockRejectedValue(
+      new mocks.EntitlementError('AI Quizzes requires a Pro subscription.')
+    );
+    const result = await post({ _action: 'saveQuizSettings', quizzes_enabled: true });
+    expect(result.error).toBe('AI Quizzes requires a Pro subscription.');
+    expect(result.success).toBeUndefined();
+  });
+
+  it('rethrows anything else', async () => {
+    mocks.updateSettings.mockRejectedValue(new Error('db down'));
+    await expect(post({ _action: 'saveQuizSettings', quizzes_enabled: false })).rejects.toThrow(
+      'db down'
+    );
+  });
+});
+
 describe('saveAskMojiSettings', () => {
   it('writes only syllabus_bot_enabled', async () => {
     const result = await post({
@@ -371,5 +404,26 @@ describe('loader', () => {
   it('reports whether Ask Moji needs Pro', async () => {
     mocks.canUseSyllabusBot.mockResolvedValue({ allowed: false, reason: 'pro_required' });
     expect((await load()).askMojiProRequired).toBe(true);
+  });
+
+  it('reports whether AI Quizzes need Pro, asking by classroom id', async () => {
+    mocks.canUseQuizzes.mockResolvedValue({ allowed: false, reason: 'pro_required' });
+    const data = await load();
+    expect(data.quizzesProRequired).toBe(true);
+    expect(data.askMojiProRequired).toBe(false);
+    expect(mocks.canUseQuizzes).toHaveBeenCalledWith('c1');
+  });
+
+  // A classroom's own key adds control, never access: it does not lift the gate.
+  it('still reports Pro required for a classroom with its own key', async () => {
+    mocks.canUseQuizzes.mockResolvedValue({ allowed: false, reason: 'pro_required' });
+    mocks.getClassroomSettingsForServer.mockResolvedValue({ anthropic_api_key: 'sk-ant-own' });
+    expect((await load()).quizzesProRequired).toBe(true);
+  });
+
+  it('reports no Pro requirement on a Pro classroom', async () => {
+    const data = await load();
+    expect(data.quizzesProRequired).toBe(false);
+    expect(data.askMojiProRequired).toBe(false);
   });
 });

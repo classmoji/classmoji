@@ -1,5 +1,5 @@
 import { useParams } from 'react-router';
-import { Form, Switch, Input, Select, Button, Modal, Badge, Alert, Divider, Tag } from 'antd';
+import { Form, Switch, Input, Select, Button, Modal, Badge, Alert, Divider } from 'antd';
 import { IconInfoCircle } from '@tabler/icons-react';
 
 import { namedAction } from 'remix-utils/named-action';
@@ -92,9 +92,13 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
   const settings = await ClassmojiService.classroom.getClassroomSettingsForServer(classroom.id);
   const apiKey = settings?.anthropic_api_key;
 
-  // Ask Moji is Pro-only; its toggle is disabled (not hidden) on Free so
-  // owners can see the feature exists and why it is unavailable.
-  const askMojiEntitlement = await ClassmojiService.entitlement.canUseSyllabusBot(classroom.id);
+  // AI Quizzes and Ask Moji are Pro-only; their toggles are disabled (not
+  // hidden) on Free so owners can see the features exist and why they are
+  // unavailable.
+  const [quizzesEntitlement, askMojiEntitlement] = await Promise.all([
+    ClassmojiService.entitlement.canUseQuizzes(classroom.id),
+    ClassmojiService.entitlement.canUseSyllabusBot(classroom.id),
+  ]);
 
   // Dynamically fetch available models
   const { getAllModels, getModelLabel } = await import('@classmoji/services');
@@ -154,6 +158,7 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
     organization: { ...classroom, settings: safeSettings },
     availableModels: models,
     aiAgentAvailable: isAIAgentConfigured(),
+    quizzesProRequired: !quizzesEntitlement.allowed,
     askMojiProRequired: !askMojiEntitlement.allowed,
     defaultLabels,
     selectValues,
@@ -165,6 +170,7 @@ const SettingsAI = ({ loaderData }: Route.ComponentProps) => {
     organization,
     availableModels,
     aiAgentAvailable,
+    quizzesProRequired,
     askMojiProRequired,
     defaultLabels,
     selectValues,
@@ -236,14 +242,38 @@ const SettingsAI = ({ loaderData }: Route.ComponentProps) => {
     </Select>
   );
 
-  // Code exploration runs in a Trigger.dev task on the Classmoji platform key
-  // (EXPLORATION_MODE=trigger), whichever key the classroom has.
-  const explorationLabel = (
+  const proTitle = (feature: string) => (
     <span className="inline-flex items-center gap-2">
-      Code exploration
-      <Tag className="m-0">Billed to Classmoji</Tag>
+      {feature}
+      <span className="rounded-sm bg-amber-50 px-1.5 py-0.5 text-xs font-medium text-amber-600 dark:bg-amber-900/30 dark:text-amber-400">
+        Pro
+      </span>
     </span>
   );
+
+  const proUpsell = (feature: string) => (
+    <div className="mb-6 flex items-start gap-2 rounded-lg bg-stone-50 p-3 text-sm text-gray-600 dark:bg-neutral-800 dark:text-gray-400">
+      <IconInfoCircle size={16} className="mt-0.5 shrink-0" />
+      <span>
+        {feature} is available on the Pro plan.{' '}
+        <a
+          href="/settings/billing"
+          className="text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300"
+        >
+          Upgrade to enable it
+        </a>
+        .
+      </span>
+    </div>
+  );
+
+  // The Enable switches show whether the feature is ON for this classroom:
+  // without Pro that is off, whatever is stored. The stored flag is left alone
+  // (entitlement is checked when serving, never written into settings), so it
+  // applies again once the classroom is back on Pro. Unset quizzes_enabled is
+  // the schema default, on; unset syllabus_bot_enabled is off.
+  const quizzesOn = !quizzesProRequired && (organization.settings?.quizzes_enabled ?? true);
+  const askMojiOn = !askMojiProRequired && (organization.settings?.syllabus_bot_enabled ?? false);
 
   const subheading = (text: string) => (
     <h3 className="mb-3 mt-2 text-sm font-semibold text-ink-1">{text}</h3>
@@ -319,14 +349,16 @@ const SettingsAI = ({ loaderData }: Route.ComponentProps) => {
         <Divider />
 
         {/* AI Quizzes Section */}
-        <SettingSection title="AI Quizzes">
+        <SettingSection title={proTitle('AI Quizzes')}>
           <Form.Item label="Enable quizzes">
             <Switch
-              checked={organization.settings?.quizzes_enabled ?? true}
+              checked={quizzesOn}
               onChange={handleQuizzesToggle}
-              disabled={!aiAgentAvailable}
+              disabled={!aiAgentAvailable || quizzesProRequired}
             />
           </Form.Item>
+
+          {quizzesProRequired && proUpsell('AI Quizzes')}
 
           {subheading('Models')}
           <div className="grid grid-cols-1 gap-x-4 sm:grid-cols-2 xl:grid-cols-3">
@@ -336,7 +368,7 @@ const SettingsAI = ({ loaderData }: Route.ComponentProps) => {
             <Form.Item label="Code-aware quizzes" name="code_aware_model">
               {modelSelect('code_aware_model')}
             </Form.Item>
-            <Form.Item label={explorationLabel} name="exploration_model">
+            <Form.Item label="Code exploration" name="exploration_model">
               {modelSelect('exploration_model')}
             </Form.Item>
           </div>
@@ -349,7 +381,7 @@ const SettingsAI = ({ loaderData }: Route.ComponentProps) => {
             <Form.Item label="Grading" name="grading_effort">
               {effortSelect('grading_effort')}
             </Form.Item>
-            <Form.Item label={explorationLabel} name="exploration_effort">
+            <Form.Item label="Code exploration" name="exploration_effort">
               {effortSelect('exploration_effort', EXPLORATION_EFFORT_OPTIONS)}
             </Form.Item>
           </div>
@@ -363,46 +395,16 @@ const SettingsAI = ({ loaderData }: Route.ComponentProps) => {
         <Divider />
 
         {/* Ask Moji Section */}
-        <SettingSection
-          title={
-            <span className="inline-flex items-center gap-2">
-              Ask Moji
-              <span className="rounded-sm bg-amber-50 px-1.5 py-0.5 text-xs font-medium text-amber-600 dark:bg-amber-900/30 dark:text-amber-400">
-                Pro
-              </span>
-            </span>
-          }
-        >
+        <SettingSection title={proTitle('Ask Moji')}>
           <Form.Item label="Enable Ask Moji">
             <Switch
-              checked={organization.settings?.syllabus_bot_enabled ?? false}
+              checked={askMojiOn}
               onChange={handleAskMojiToggle}
-              // The feature predates the Pro gate, so Free classrooms with a
-              // stale `true` exist. Turning it OFF stays allowed (the server
-              // gates only the `true` direction) — otherwise those owners are
-              // stuck with a flag they cannot clear.
-              disabled={
-                !aiAgentAvailable ||
-                (askMojiProRequired && !organization.settings?.syllabus_bot_enabled)
-              }
+              disabled={!aiAgentAvailable || askMojiProRequired}
             />
           </Form.Item>
 
-          {askMojiProRequired && (
-            <div className="mb-6 flex items-start gap-2 rounded-lg bg-stone-50 p-3 text-sm text-gray-600 dark:bg-neutral-800 dark:text-gray-400">
-              <IconInfoCircle size={16} className="mt-0.5 shrink-0" />
-              <span>
-                Ask Moji is available on the Pro plan.{' '}
-                <a
-                  href="/settings/billing"
-                  className="text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300"
-                >
-                  Upgrade to enable it
-                </a>
-                .
-              </span>
-            </div>
-          )}
+          {askMojiProRequired && proUpsell('Ask Moji')}
 
           <div className="grid grid-cols-1 gap-x-4 sm:grid-cols-2 xl:grid-cols-3">
             <Form.Item label="Model" name="syllabus_bot_model">
@@ -463,9 +465,21 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
   return namedAction(formData, {
     async saveQuizSettings() {
       // Only the field the toggle owns; model fields go through saveLLMSettings.
-      await ClassmojiService.classroom.updateSettings(classroom.id, {
-        quizzes_enabled: Boolean(data.quizzes_enabled),
-      });
+      // updateSettings is the hard Pro gate (it refuses only turning quizzes
+      // ON); catching here only turns the refusal into a readable message.
+      try {
+        await ClassmojiService.classroom.updateSettings(classroom.id, {
+          quizzes_enabled: Boolean(data.quizzes_enabled),
+        });
+      } catch (error: unknown) {
+        if (error instanceof ClassroomSettingsEntitlementError) {
+          return {
+            error: error.message,
+            action: ActionTypes.SAVE_QUIZ_SETTINGS,
+          };
+        }
+        throw error;
+      }
       return {
         success: 'Quiz settings updated',
         action: ActionTypes.SAVE_QUIZ_SETTINGS,

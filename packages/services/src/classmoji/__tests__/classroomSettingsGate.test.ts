@@ -14,6 +14,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const upsertMock = vi.fn();
 const canUseSyllabusBotMock = vi.fn();
+const canUseQuizzesMock = vi.fn();
 
 const findUniqueMock = vi.fn();
 
@@ -28,6 +29,7 @@ vi.mock('@classmoji/database', () => ({
 
 vi.mock('../entitlement.service.ts', () => ({
   canUseSyllabusBot: (...a: unknown[]) => canUseSyllabusBotMock(...a),
+  canUseQuizzes: (...a: unknown[]) => canUseQuizzesMock(...a),
 }));
 
 vi.mock('../../git/index.ts', () => ({ GitHubProvider: class {} }));
@@ -90,6 +92,62 @@ describe('updateSettings — syllabus bot Pro gate', () => {
       // A JSON body can carry the string "true"; a strict === true check would
       // have waved this straight through to Prisma.
       updateSettings(CLASSROOM_ID, { syllabus_bot_enabled: 'true' as unknown as boolean })
+    ).rejects.toBeInstanceOf(ClassroomSettingsEntitlementError);
+    expect(upsertMock).not.toHaveBeenCalled();
+  });
+});
+
+// Same gate for AI quizzes. quizzes_enabled defaults to true, so a Free
+// classroom holds `true` from creation; turning it OFF must stay possible.
+describe('updateSettings — quizzes Pro gate', () => {
+  it('refuses to enable them on a classroom without Pro, and writes nothing', async () => {
+    canUseQuizzesMock.mockResolvedValue({ allowed: false, reason: 'pro_required' });
+    const { updateSettings, ClassroomSettingsEntitlementError } =
+      await import('../classroom.service.ts');
+
+    const refusal = updateSettings(CLASSROOM_ID, { quizzes_enabled: true });
+    await expect(refusal).rejects.toBeInstanceOf(ClassroomSettingsEntitlementError);
+    // The AI settings tab and the MCP tool show this message as is.
+    await expect(refusal).rejects.toThrow('AI Quizzes requires a Pro subscription.');
+    expect(upsertMock).not.toHaveBeenCalled();
+  });
+
+  it('allows enabling them on a Pro classroom', async () => {
+    canUseQuizzesMock.mockResolvedValue({ allowed: true });
+    const { updateSettings } = await import('../classroom.service.ts');
+
+    await updateSettings(CLASSROOM_ID, { quizzes_enabled: true });
+
+    expect(canUseQuizzesMock).toHaveBeenCalledWith(CLASSROOM_ID);
+    expect(upsertMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('always allows turning them OFF, even with no entitlement', async () => {
+    canUseQuizzesMock.mockResolvedValue({ allowed: false, reason: 'pro_required' });
+    const { updateSettings } = await import('../classroom.service.ts');
+
+    await updateSettings(CLASSROOM_ID, { quizzes_enabled: false });
+
+    expect(upsertMock).toHaveBeenCalledTimes(1);
+    expect(canUseQuizzesMock).not.toHaveBeenCalled();
+  });
+
+  it('does not consult entitlement for unrelated settings writes', async () => {
+    const { updateSettings } = await import('../classroom.service.ts');
+
+    await updateSettings(CLASSROOM_ID, { theme: 'stone' });
+
+    expect(canUseQuizzesMock).not.toHaveBeenCalled();
+    expect(upsertMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('refuses a non-boolean truthy value rather than passing it through', async () => {
+    canUseQuizzesMock.mockResolvedValue({ allowed: false, reason: 'pro_required' });
+    const { updateSettings, ClassroomSettingsEntitlementError } =
+      await import('../classroom.service.ts');
+
+    await expect(
+      updateSettings(CLASSROOM_ID, { quizzes_enabled: 'true' as unknown as boolean })
     ).rejects.toBeInstanceOf(ClassroomSettingsEntitlementError);
     expect(upsertMock).not.toHaveBeenCalled();
   });

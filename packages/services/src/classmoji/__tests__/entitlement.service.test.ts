@@ -85,6 +85,43 @@ describe('canUseSyllabusBot', () => {
   });
 });
 
+// The settings switch's answer must match the one the quiz routes serve by
+// (assertProTier → getProStateForClassroomId), so it delegates the same way.
+describe('canUseQuizzes', () => {
+  it('allows when the canonical resolver says the classroom is Pro', async () => {
+    getProStateForClassroomIdMock.mockResolvedValue({ isPro: true, tier: 'PRO', isActive: true });
+    const { canUseQuizzes } = await import('../entitlement.service.ts');
+
+    expect(await canUseQuizzes(CLASSROOM_ID)).toEqual({ allowed: true });
+    expect(getProStateForClassroomIdMock).toHaveBeenCalledTimes(1);
+    expect(getProStateForClassroomIdMock).toHaveBeenCalledWith(CLASSROOM_ID);
+  });
+
+  it('denies with pro_required when the resolver says it is not Pro', async () => {
+    getProStateForClassroomIdMock.mockResolvedValue({ isPro: false, tier: 'FREE', isActive: true });
+    const { canUseQuizzes } = await import('../entitlement.service.ts');
+
+    expect(await canUseQuizzes(CLASSROOM_ID)).toEqual({
+      allowed: false,
+      reason: 'pro_required',
+    });
+  });
+
+  it('trusts isPro alone — a lapsed PRO row is denied', async () => {
+    getProStateForClassroomIdMock.mockResolvedValue({
+      isPro: false,
+      tier: 'PRO',
+      isActive: false,
+    });
+    const { canUseQuizzes } = await import('../entitlement.service.ts');
+
+    expect(await canUseQuizzes(CLASSROOM_ID)).toEqual({
+      allowed: false,
+      reason: 'pro_required',
+    });
+  });
+});
+
 describe('canUseSyllabusBotForConversation', () => {
   it('resolves the conversation to its classroom and gates on that', async () => {
     findUniqueConversationMock.mockResolvedValue({ classroom_id: CLASSROOM_ID });
