@@ -7,8 +7,12 @@
  * viewing as another user, since the change would be made with that user's
  * GitHub account.
  *
- * Takes the `getAuthSession` result. Pure, so both loaders and components can
- * import it and the messages below.
+ * The same goes for connecting an app (MCP OAuth consent): the access token it
+ * issues would act as the viewed user.
+ *
+ * Takes the `getAuthSession` result; for a bare better-auth session
+ * (`auth.api.getSession`), pass `{ session }`. Pure, so both loaders and
+ * components can import it and the messages below.
  */
 export const isImpersonatingSession = (authData: unknown): boolean =>
   Boolean(
@@ -21,6 +25,9 @@ export const ORG_SETTINGS_IMPERSONATION_MESSAGE =
 
 export const GITHUB_CLEANUP_IMPERSONATION_MESSAGE =
   "Deleting GitHub artifacts isn't available while viewing as another user.";
+
+export const CONNECT_APP_IMPERSONATION_MESSAGE =
+  "Connecting apps isn't available while viewing as another user.";
 
 export const CLASSROOM_REMOVE_IMPERSONATION_MESSAGE =
   "Removing a classroom isn't available while viewing as another user.";

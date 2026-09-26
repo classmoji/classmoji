@@ -134,7 +134,7 @@ describe('updateOrgRepoSettings', () => {
 
     expect(patchCall()).toEqual([
       'PATCH /orgs/{org}',
-      { members_can_create_repositories: true, org: 'myorg' },
+      { members_can_create_repositories: true, org: 'myorg', request: { retries: 0 } },
     ]);
   });
 
@@ -291,7 +291,7 @@ describe('getOrgOwnerStatus', () => {
     expect(mocks.getImmediateUserOctokit).toHaveBeenCalledWith(USER_TOKEN);
     expect(mocks.request).toHaveBeenCalledWith('GET /user/memberships/orgs/{org}', {
       org: 'myorg',
-      request: { signal: expect.any(AbortSignal) },
+      request: { signal: expect.any(AbortSignal), retries: 0 },
     });
     expect(mocks.getGitProvider).not.toHaveBeenCalled();
     expect(mocks.getUserOctokit).not.toHaveBeenCalled();

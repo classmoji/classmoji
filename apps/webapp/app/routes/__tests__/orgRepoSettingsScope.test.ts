@@ -146,7 +146,10 @@ describe('repository settings action', () => {
     expect(result).toEqual({ success: 'Permissions updated', action: 'UPDATE_MEMBER_PERMISSIONS' });
     expect(mocks.getImmediateUserOctokit).toHaveBeenCalledWith(USER_TOKEN);
     expect(patchCalls()).toEqual([
-      ['PATCH /orgs/{org}', { default_repository_permission: 'read', org: 'myorg' }],
+      [
+        'PATCH /orgs/{org}',
+        { default_repository_permission: 'read', org: 'myorg', request: { retries: 0 } },
+      ],
     ]);
     // Changes never run with the App installation.
     expect(mocks.getGitProvider).not.toHaveBeenCalled();
@@ -214,16 +217,30 @@ describe('repository settings action', () => {
     expect(result.error).toMatch(/sign in again/);
     expect(mocks.getImmediateUserOctokit).not.toHaveBeenCalled();
     expect(mocks.addClassroomAuditLog).not.toHaveBeenCalled();
-    expect(mocks.clearRevokedToken).toHaveBeenCalledWith('owner-1');
+    // No token was sent, so there is nothing GitHub refused to clear.
+    expect(mocks.clearRevokedToken).not.toHaveBeenCalled();
   });
 
-  it('clears the cached token when GitHub no longer accepts it', async () => {
+  it('clears the cached token when GitHub no longer accepts it, naming that token', async () => {
     mocks.userRequest.mockRejectedValue(httpError(401));
 
     const result = await post({ default_repository_permission: 'read' });
 
     expect(result.error).toMatch(/sign in again/);
-    expect(mocks.clearRevokedToken).toHaveBeenCalledWith('owner-1');
+    expect(mocks.clearRevokedToken).toHaveBeenCalledWith('owner-1', USER_TOKEN);
+  });
+
+  it('still returns the sign-in message when clearing the token fails', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+    mocks.userRequest.mockRejectedValue(httpError(401));
+    mocks.clearRevokedToken.mockRejectedValue(new Error('database unavailable'));
+
+    const result = await post({ default_repository_permission: 'read' });
+
+    expect(result).toMatchObject({ action: 'UPDATE_MEMBER_PERMISSIONS' });
+    expect(result.error).toMatch(/sign in again/);
+    expect(consoleError).toHaveBeenCalled();
+    consoleError.mockRestore();
   });
 
   it('keeps the cached token on other refusals', async () => {
@@ -328,7 +345,7 @@ describe('repository settings loader', () => {
     });
     expect(mocks.userRequest).toHaveBeenCalledWith('GET /user/memberships/orgs/{org}', {
       org: 'myorg',
-      request: { signal: expect.any(AbortSignal) },
+      request: { signal: expect.any(AbortSignal), retries: 0 },
     });
     expect(mocks.getImmediateUserOctokit).toHaveBeenCalledWith(USER_TOKEN);
   });

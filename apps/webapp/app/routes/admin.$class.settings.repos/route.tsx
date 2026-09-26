@@ -299,10 +299,19 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
     });
   } catch (error: unknown) {
     if (error instanceof OrgRepoSettingsError) {
-      // No usable token, or GitHub no longer accepts it: drop the cached copy
-      // (memory and database) so the next request refreshes or asks for a new
-      // sign-in, as the classroom creation and organization pages do.
-      if (error.code === 'NO_GITHUB_TOKEN') await clearRevokedToken(userId);
+      // GitHub no longer accepts the token: drop the cached copy (memory, and
+      // the database if it still holds that same token) so the next request
+      // refreshes or asks for a new sign-in, as the classroom creation and
+      // organization pages do. A failure here is logged; the sign-in message
+      // still goes back.
+      const refusedToken = authData?.token;
+      if (error.code === 'NO_GITHUB_TOKEN' && error.status === 401 && refusedToken) {
+        try {
+          await clearRevokedToken(userId, refusedToken);
+        } catch (clearError: unknown) {
+          console.error('Failed to clear a GitHub token GitHub no longer accepts:', clearError);
+        }
+      }
       return { error: error.message, action: UPDATE_ACTION };
     }
     console.error('Failed to update GitHub organization repository settings:', error);

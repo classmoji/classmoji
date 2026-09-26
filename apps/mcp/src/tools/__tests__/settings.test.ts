@@ -30,9 +30,11 @@ const mocks = vi.hoisted(() => ({
 // Stand-in with the service's contract (the real one is tested in services).
 class OrgRepoSettingsError extends Error {
   code: string;
-  constructor(code: string, message: string) {
+  status?: number;
+  constructor(code: string, message: string, status?: number) {
     super(message);
     this.code = code;
+    this.status = status;
   }
 }
 
@@ -427,9 +429,37 @@ describe('org_repo_settings_update', () => {
     });
     const [call] = mocks.updateOrgRepoSettings.mock.calls[0] as [{ userToken: unknown }];
     expect(call.userToken).toBeNull();
-    // The stored token is cleared for the calling user.
-    expect(mocks.clearRevokedTokenForUser).toHaveBeenCalledWith('owner-1');
+    // No token was sent, so there is nothing GitHub refused to clear.
+    expect(mocks.clearRevokedTokenForUser).not.toHaveBeenCalled();
     expect(mocks.auditCreate).not.toHaveBeenCalled();
+  });
+
+  it('clears the stored token only if it is still the one GitHub refused', async () => {
+    mocks.updateOrgRepoSettings.mockRejectedValue(
+      new OrgRepoSettingsError('NO_GITHUB_TOKEN', 'Your GitHub sign-in has expired.', 401)
+    );
+    await expect(
+      orgRepoSettingsUpdateTool.handler({ ...BASE, members_can_create_repositories: false }, CTX)
+    ).rejects.toMatchObject({ kind: 'forbidden', code: 'NO_GITHUB_TOKEN' });
+    expect(mocks.clearRevokedTokenForUser).toHaveBeenCalledWith('owner-1', 'ghu_owner');
+  });
+
+  it('still asks the caller to sign in again when clearing the token fails', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+    mocks.updateOrgRepoSettings.mockRejectedValue(
+      new OrgRepoSettingsError('NO_GITHUB_TOKEN', 'Your GitHub sign-in has expired.', 401)
+    );
+    mocks.clearRevokedTokenForUser.mockRejectedValue(new Error('database unavailable'));
+    await expect(
+      orgRepoSettingsUpdateTool.handler({ ...BASE, members_can_create_repositories: false }, CTX)
+    ).rejects.toMatchObject({
+      kind: 'forbidden',
+      code: 'NO_GITHUB_TOKEN',
+      message:
+        'Your GitHub sign-in has expired. Sign in to Classmoji on the web again, then retry.',
+    });
+    expect(consoleError).toHaveBeenCalled();
+    consoleError.mockRestore();
   });
 
   it('reports a refused change as forbidden and keeps the stored token', async () => {

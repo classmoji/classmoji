@@ -209,6 +209,14 @@ export interface OrgRepoSettingsResult {
   value: string;
 }
 
+/**
+ * These calls answer a person waiting on the page or the tool. Octokit's retry
+ * plugin would otherwise retry a GitHub 5xx three times with 1s/4s/9s backoff,
+ * so a failing save would sit for about 14 seconds before saying so. One
+ * attempt, and the error is reported straight away.
+ */
+const NO_RETRY = { retries: 0 } as const;
+
 const pickSetting = (
   source: Record<string, unknown> | null | undefined,
   field: OrgRepoSettingsField
@@ -251,7 +259,7 @@ export async function updateOrgRepoSettings({
   // leaves `from` null and the update itself decides the outcome.
   let before: Record<string, unknown> | null = null;
   try {
-    const { data } = await octokit.request('GET /orgs/{org}', { org });
+    const { data } = await octokit.request('GET /orgs/{org}', { org, request: NO_RETRY });
     before = data as unknown as Record<string, unknown>;
   } catch {
     before = null;
@@ -269,7 +277,11 @@ export async function updateOrgRepoSettings({
 
   let after: Record<string, unknown> | null = null;
   try {
-    const { data } = await octokit.request('PATCH /orgs/{org}', { ...body, org });
+    const { data } = await octokit.request('PATCH /orgs/{org}', {
+      ...body,
+      org,
+      request: NO_RETRY,
+    });
     after = data as unknown as Record<string, unknown>;
   } catch (error: unknown) {
     throw toOrgRepoSettingsError(error);
@@ -314,8 +326,10 @@ export async function getOrgOwnerStatus(
     const octokit = GitHubProvider.getImmediateUserOctokit(userToken);
     const { data } = await octokit.request('GET /user/memberships/orgs/{org}', {
       org: orgLogin,
-      // A slow answer is treated like no answer: the page stays editable.
-      request: { signal: AbortSignal.timeout(timeoutMs) },
+      // A slow answer is treated like no answer: the page stays editable. No
+      // retries, so the timeout bounds the whole check (a timed-out request
+      // would otherwise be retried as a server error, with backoff).
+      request: { signal: AbortSignal.timeout(timeoutMs), retries: 0 },
     });
     return data?.role === 'admin' && data?.state === 'active' ? 'owner' : 'not_owner';
   } catch {

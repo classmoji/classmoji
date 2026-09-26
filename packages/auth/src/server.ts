@@ -272,14 +272,18 @@ export function clearTokenCache(userId: string | null = null): void {
  * Clear a revoked token from both cache and DB when GitHub returns 401.
  * Call this when you get "Bad credentials" from GitHub API.
  * @param {string} userId - The user ID whose token was revoked
+ * @param {string} [refusedToken] - The token GitHub refused. When given, the
+ *   stored token is cleared only if it is still that one, so a token refreshed
+ *   in the meantime survives. The in-memory cache is cleared either way (it is
+ *   re-read from the database on the next request).
  */
-export async function clearRevokedToken(userId: string): Promise<void> {
+export async function clearRevokedToken(userId: string, refusedToken?: string): Promise<void> {
   // Clear from memory cache (webapp session-layer cache, not the shared service).
   clearTokenCache(userId);
 
   // DB clear (sets access_token=null, expires_at=epoch so refresh still fires)
   // lives in the shared token service so workers can reuse it.
-  await ClassmojiService.githubUserToken.clearRevokedTokenForUser(userId);
+  await ClassmojiService.githubUserToken.clearRevokedTokenForUser(userId, refusedToken);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

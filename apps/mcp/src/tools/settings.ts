@@ -391,12 +391,28 @@ export const orgRepoSettingsUpdateTool: ToolDefinition<OrgRepoSettingsUpdateArgs
           case 'NO_ORGANIZATION':
           case 'APP_NOT_INSTALLED':
             throw new ToolError('invalid_params', error.message, error.code);
-          case 'NO_GITHUB_TOKEN':
-            // No usable token, or GitHub no longer accepts it: clear the stored
-            // one so the next sign-in starts clean, and point the caller at the
-            // web sign-in (this server cannot run the GitHub sign-in itself).
-            await ClassmojiService.githubUserToken.clearRevokedTokenForUser(ctx.viewer.userId);
+          case 'NO_GITHUB_TOKEN': {
+            // GitHub no longer accepts the token: clear the stored one, but only
+            // if it is still the token GitHub refused (a token refreshed in the
+            // meantime is left alone). A failure here is logged and the sign-in
+            // message still goes back. The message points at the web sign-in,
+            // since this server cannot run the GitHub sign-in itself.
+            const refusedToken = tokenResult?.token;
+            if (error.status === 401 && refusedToken) {
+              try {
+                await ClassmojiService.githubUserToken.clearRevokedTokenForUser(
+                  ctx.viewer.userId,
+                  refusedToken
+                );
+              } catch (clearError: unknown) {
+                console.error(
+                  'Failed to clear a GitHub token GitHub no longer accepts:',
+                  clearError
+                );
+              }
+            }
             throw new ToolError('forbidden', MCP_GITHUB_SIGN_IN_AGAIN_MESSAGE, error.code);
+          }
           case 'NOT_ORG_OWNER':
             throw new ToolError('forbidden', error.message, error.code);
           case 'RATE_LIMITED':

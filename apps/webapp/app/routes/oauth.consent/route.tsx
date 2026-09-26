@@ -5,12 +5,20 @@
  * client requests `prompt=consent`, passing ?consent_code, ?client_id and
  * ?scope. Approving posts to /api/auth/oauth2/consent, which returns the
  * client redirect URI (with the authorization code) to send the browser to.
+ *
+ * While a platform admin is viewing as another user, approving is off here and
+ * refused server-side in api.auth.$ (both /mcp/authorize and an approving
+ * /oauth2/consent), since the token issued would act as that user.
  */
 import { useState } from 'react';
 import { redirect, useLoaderData } from 'react-router';
 import { auth } from '@classmoji/auth/server';
 import getPrisma from '@classmoji/database';
 import { isHttpRedirectUri } from '~/utils/oauthRedirect';
+import {
+  CONNECT_APP_IMPERSONATION_MESSAGE,
+  isImpersonatingSession,
+} from '~/utils/impersonationSession';
 import type { LoaderFunctionArgs } from 'react-router';
 
 /**
@@ -58,11 +66,12 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     clientIcon: application?.icon || null,
     scopes: scope.split(' ').filter(Boolean),
     userLogin: session.user.name,
+    viewingAsAnotherUser: isImpersonatingSession({ session }),
   };
 };
 
 const OAuthConsent = () => {
-  const { consentCode, clientName, clientIcon, scopes, userLogin } =
+  const { consentCode, clientName, clientIcon, scopes, userLogin, viewingAsAnotherUser } =
     useLoaderData<typeof loader>();
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -109,8 +118,8 @@ const OAuthConsent = () => {
         </div>
 
         <p className="text-sm text-gray-600 dark:text-gray-400 mb-4">
-          <span className="font-medium">{clientName}</span> wants to access your Classmoji
-          account{userLogin ? ` (${userLogin})` : ''} with the following permissions:
+          <span className="font-medium">{clientName}</span> wants to access your Classmoji account
+          {userLogin ? ` (${userLogin})` : ''} with the following permissions:
         </p>
 
         <ul className="mb-6 space-y-2">
@@ -130,6 +139,15 @@ const OAuthConsent = () => {
           ))}
         </ul>
 
+        {viewingAsAnotherUser && (
+          <p
+            className="mb-4 text-sm text-gray-600 dark:text-gray-400"
+            data-testid="connect-app-notice"
+          >
+            {CONNECT_APP_IMPERSONATION_MESSAGE}
+          </p>
+        )}
+
         {error && (
           <div className="mb-4 rounded-md bg-red-50 dark:bg-red-900/30 px-3 py-2 text-sm text-red-700 dark:text-red-300">
             {error}
@@ -146,7 +164,7 @@ const OAuthConsent = () => {
           </button>
           <button
             onClick={() => respond(true)}
-            disabled={submitting}
+            disabled={submitting || viewingAsAnotherUser}
             className="flex-1 rounded-md bg-black dark:bg-gray-200 px-4 py-2 text-sm font-bold text-white dark:text-black hover:opacity-90 disabled:opacity-50 cursor-pointer"
           >
             Approve
