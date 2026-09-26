@@ -182,6 +182,30 @@ describe('removeStaff — ungraded submissions', () => {
     });
   });
 
+  it.each([
+    ['no final run (the subscription ended early)', undefined],
+    ['a run that is not COMPLETED', { status: 'EXECUTING' }],
+  ])('%s: moves nothing and says the removal is still in progress', async (_label, run) => {
+    mocks.startStaffRemoval.mockResolvedValue(started(3, 'reassign'));
+    mocks.waitForRunCompletion.mockResolvedValue(run);
+
+    const result = await remove({
+      login: 'ta-gone',
+      role: 'ASSISTANT',
+      ungradedSubmissions: 'reassign',
+    });
+
+    expect(mocks.settleUngradedSlots).not.toHaveBeenCalled();
+    expect(result.error).toContain('still in progress');
+    expect(result.error).toContain('ungraded submissions were not changed');
+  });
+
+  it('with nothing at stake, an unknown final run is reported as before', async () => {
+    mocks.waitForRunCompletion.mockResolvedValue(undefined);
+    const result = await remove({ login: 'ta-gone', role: 'ASSISTANT' });
+    expect(result.success).toBe('Staff member removed');
+  });
+
   it('sends null when the page offered no choice, and settles nothing at stake', async () => {
     const result = await remove({ login: 'ta-gone', role: 'ASSISTANT' });
     expect(mocks.startStaffRemoval.mock.calls[0][0]).toMatchObject({ ungradedSubmissions: null });

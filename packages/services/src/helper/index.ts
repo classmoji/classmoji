@@ -445,14 +445,28 @@ class HelperService {
         graderId: toGraderId,
         notify: false,
       });
-      if (added.status === 'grader_not_eligible' && payload.fallbackToUnassign) {
-        // The planned grader left the pool after the plan was made. Leaving the
-        // slot with the departing grader would strand it; unassign instead.
-        ineligible = true;
-      } else if (!('graderLogin' in added)) {
-        return { status: added.status };
-      } else {
+      if ('graderLogin' in added) {
         toLogin = added.graderLogin;
+      } else if (added.status === 'grader_not_eligible') {
+        // A retry after a partial success: the add went through last time and
+        // the grader has left the pool since. They are on the slot, so this is
+        // still a move — finish it by removing the departing grader.
+        const submission = await ClassmojiService.gitRepoAssignment.findByIdInClassroom(
+          gitRepoAssignmentId,
+          classroomId
+        );
+        const onSlot = submission?.graders.find(g => g.grader_id === toGraderId);
+        if (onSlot?.grader?.login) {
+          toLogin = onSlot.grader.login;
+        } else if (payload.fallbackToUnassign) {
+          // The planned grader left the pool after the plan was made. Leaving
+          // the slot with the departing grader would strand it; unassign instead.
+          ineligible = true;
+        } else {
+          return { status: 'grader_not_eligible' };
+        }
+      } else {
+        return { status: added.status };
       }
     }
 
@@ -465,7 +479,11 @@ class HelperService {
       graderId: fromGraderId,
     });
     if (removed.status === 'submission_not_found') return { status: 'submission_not_found' };
-    if (removed.status === 'grader_not_assigned') return { status: 'already_removed' };
+    if (removed.status === 'grader_not_assigned') {
+      // Already gone (a retry, or a concurrent move). With the new grader on the
+      // slot this is a completed move, and it belongs in the summary.
+      return toLogin ? { status: 'moved', toLogin } : { status: 'already_removed' };
+    }
 
     if (toLogin) return { status: 'moved', toLogin };
     return ineligible

@@ -27,6 +27,7 @@ const mocks = vi.hoisted(() => ({
   waitForRunOutcome: vi.fn(),
   settleUngradedSlots: vi.fn(),
   previewLeftoverSlots: vi.fn(),
+  countStrandedSlots: vi.fn(),
 }));
 
 vi.mock('@classmoji/services', () => {
@@ -49,6 +50,7 @@ vi.mock('@classmoji/services', () => {
         addStaff: (...a: unknown[]) => mocks.addStaff(...a),
         updateStaff: (...a: unknown[]) => mocks.updateStaff(...a),
         previewLeftoverSlots: (...a: unknown[]) => mocks.previewLeftoverSlots(...a),
+        countStrandedSlots: (...a: unknown[]) => mocks.countStrandedSlots(...a),
       },
       audit: { create: (...a: unknown[]) => mocks.auditCreate(...a) },
     },
@@ -637,6 +639,10 @@ describe('staff_remove — ungraded submissions', () => {
     expect(mocks.waitForRunOutcome).toHaveBeenCalledWith('run-1', {
       timeoutMs: expect.any(Number),
     });
+    // Budgeted from handler entry: ~45 s in all, minus the reserve for settling.
+    const { timeoutMs } = mocks.waitForRunOutcome.mock.calls[0][1];
+    expect(timeoutMs).toBeGreaterThan(30_000);
+    expect(timeoutMs).toBeLessThanOrEqual(33_000);
     expect(mocks.settleUngradedSlots).toHaveBeenCalledWith({
       classroomId: 'class-1',
       graderId: 'ta-1',
@@ -841,20 +847,189 @@ describe('staff_remove — ungraded submissions', () => {
 
     const payload = parse(await staffRemoveTool.handler(withChoice('reassign'), CTX));
 
+    // The service gate: role gone + an open removal row for THIS role (< 24h).
     expect(mocks.previewLeftoverSlots).toHaveBeenCalledWith({
       classroomId: 'class-1',
       login: 'ta-ann',
+      role: 'ASSISTANT',
     });
     expect(mocks.settleUngradedSlots).toHaveBeenCalledWith(
       expect.objectContaining({ classroomId: 'class-1', graderId: 'ta-1', choice: 'reassign' })
     );
     expect(payload).toMatchObject({
       removal_already_done: true,
+      role: 'ASSISTANT',
       ungraded_submissions: { reassigned_to: { 'ta-bob': 9 } },
     });
     expect(auditRow()).toMatchObject({
       action: 'UPDATE',
-      data: { tool: 'staff_remove', removal: 'already_done' },
+      data: {
+        tool: 'staff_remove',
+        role: 'ASSISTANT',
+        value: 'leftover:ASSISTANT:reassign',
+        removal: 'already_done',
+      },
+    });
+  });
+
+  it('a follow-up with keep changes nothing and records nothing', async () => {
+    mocks.removeStaff.mockRejectedValue(
+      new StaffServiceError('staff_not_found', '[staff] no such role')
+    );
+    mocks.previewLeftoverSlots.mockResolvedValue({
+      userId: 'ta-1',
+      login: 'ta-ann',
+      name: 'Ann Grader',
+      ungradedCount: 9,
+    });
+
+    const payload = parse(await staffRemoveTool.handler(withChoice('keep'), CTX));
+
+    expect(payload).toMatchObject({
+      success: true,
+      changed: false,
+      message: 'Nothing changed; their ungraded submissions stay assigned to them.',
+    });
+    expect(mocks.settleUngradedSlots).not.toHaveBeenCalled();
+    expect(mocks.auditCreate).not.toHaveBeenCalled();
+  });
+
+  it('a follow-up for someone who still holds the role, or with no open removal, is not-found', async () => {
+    // Both are refused inside staff.previewLeftoverSlots (pinned in the
+    // services suite); here: its refusal is the uniform not-found and nothing
+    // moves.
+    for (const reason of ['still holds the role', 'no pending removal row']) {
+      mocks.removeStaff.mockRejectedValue(
+        new StaffServiceError('staff_not_found', '[staff] no such role')
+      );
+      mocks.previewLeftoverSlots.mockRejectedValue(
+        new StaffServiceError('staff_not_found', reason)
+      );
+      await expect(staffRemoveTool.handler(withChoice('unassign'), CTX)).rejects.toMatchObject({
+        kind: 'not_found',
+        message: 'Staff member not found in this classroom',
+      });
+    }
+    expect(mocks.settleUngradedSlots).not.toHaveBeenCalled();
+    expect(mocks.auditCreate).not.toHaveBeenCalled();
+  });
+
+  it('too little budget left after the wait: nothing moved, the follow-up is left open', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      mocks.removeStaff.mockResolvedValue(started(9, 'reassign'));
+      mocks.waitForRunOutcome.mockImplementation(async (_runId: string, { timeoutMs }) => {
+        // The run finished right at the end of the wait window.
+        vi.setSystemTime(Date.now() + timeoutMs + 5_000);
+        return { outcome: 'completed' };
+      });
+
+      const payload = parse(await staffRemoveTool.handler(withChoice('reassign'), CTX));
+
+      expect(mocks.settleUngradedSlots).not.toHaveBeenCalled();
+      expect(payload).toMatchObject({
+        removal_completed: true,
+        ungraded_submissions: { choice: 'reassign', pending: true, count: 9 },
+      });
+      expect(payload.message).toContain('call staff_remove again');
+      expect(auditRow().data).toMatchObject({ removal: 'completed', settle_deferred: true });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('nothing at stake at the start but stranded after the wait: needs_decision', async () => {
+    mocks.removeStaff.mockResolvedValue(started(0, null, 9));
+    mocks.waitForRunOutcome.mockResolvedValue({ outcome: 'completed' });
+    mocks.countStrandedSlots.mockResolvedValue(9);
+
+    const payload = parse(await staffRemoveTool.handler(ARGS, CTX));
+
+    expect(mocks.countStrandedSlots).toHaveBeenCalledWith('class-1', 'ta-1');
+    expect(mocks.settleUngradedSlots).not.toHaveBeenCalled();
+    expect(payload).toMatchObject({
+      removal_completed: true,
+      ungraded_submissions: { needs_decision: true, count: 9 },
+    });
+    expect(auditRow().data).toMatchObject({
+      role: 'ASSISTANT',
+      removal: 'completed',
+      needs_decision: true,
+    });
+  });
+
+  it('TEACHER and ASSISTANT removed in parallel: both finish needing a decision, then one follow-up settles', async () => {
+    let roles = ['TEACHER', 'ASSISTANT'];
+    const audits: Array<Record<string, unknown>> = [];
+    mocks.auditCreate.mockImplementation(async (row: { data: Record<string, unknown> }) => {
+      audits.push(row.data);
+    });
+    // Each call starts while the OTHER role is still there: nothing at stake.
+    mocks.removeStaff.mockImplementation(async (a: { role: string }) => {
+      if (!roles.includes(a.role)) throw new StaffServiceError('staff_not_found', 'gone');
+      return {
+        ...REMOVAL,
+        role: a.role,
+        runId: `run-${a.role}`,
+        name: 'Ann Grader',
+        ungradedCount: 0,
+        heldUngradedCount: 9,
+        choice: null,
+      };
+    });
+    // Both runs finish once both calls are waiting.
+    let release!: () => void;
+    const bothWaiting = new Promise<void>(resolve => (release = resolve));
+    let waiting = 0;
+    mocks.waitForRunOutcome.mockImplementation(async () => {
+      if (++waiting === 2) {
+        roles = [];
+        release();
+      }
+      await bothWaiting;
+      return { outcome: 'completed' };
+    });
+    mocks.countStrandedSlots.mockImplementation(async () => (roles.length === 0 ? 9 : 0));
+
+    const [teacher, assistant] = (
+      await Promise.all([
+        staffRemoveTool.handler({ ...ARGS, role: 'TEACHER' }, CTX),
+        staffRemoveTool.handler({ ...ARGS, role: 'ASSISTANT' }, CTX),
+      ])
+    ).map(parse);
+
+    for (const reply of [teacher, assistant]) {
+      expect(reply.ungraded_submissions).toEqual({ needs_decision: true, count: 9 });
+    }
+    expect(audits.map(a => [a.role, a.needs_decision])).toEqual([
+      ['TEACHER', true],
+      ['ASSISTANT', true],
+    ]);
+
+    // The follow-up (either role) is accepted by the leftover gate and settles.
+    mocks.previewLeftoverSlots.mockResolvedValue({
+      userId: 'ta-1',
+      login: 'ta-ann',
+      name: 'Ann Grader',
+      ungradedCount: 9,
+    });
+    mocks.settleUngradedSlots.mockResolvedValue(
+      outcome({ reassigned: [{ graderId: 'u-bob', login: 'ta-bob', count: 9 }] })
+    );
+    const followUp = parse(
+      await staffRemoveTool.handler(
+        { ...ARGS, role: 'ASSISTANT', ungraded_submissions: 'reassign' } as never,
+        CTX
+      )
+    );
+    expect(mocks.previewLeftoverSlots).toHaveBeenCalledWith({
+      classroomId: 'class-1',
+      login: 'ta-ann',
+      role: 'ASSISTANT',
+    });
+    expect(followUp).toMatchObject({
+      removal_already_done: true,
+      ungraded_submissions: { reassigned_to: { 'ta-bob': 9 } },
     });
   });
 

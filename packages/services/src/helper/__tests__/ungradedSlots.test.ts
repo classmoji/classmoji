@@ -270,7 +270,37 @@ describe('moveGraderSlot', () => {
     };
     await HelperService.moveGraderSlot(payload);
     const again = await HelperService.moveGraderSlot(payload);
-    expect(again).toEqual({ status: 'already_removed' });
+    // A retry finds the move already made and reports it as the move it is.
+    expect(again).toEqual({ status: 'moved', toLogin: 'ta-ann' });
+    expect(submissions.get('s1')!.graderIds).toEqual(['u-ann']);
+    // Nothing doubled up: one add and one removal in all.
+    expect(mocks.addGraderToAssignment).toHaveBeenCalledTimes(1);
+    expect(mocks.removeGraderFromAssignment).toHaveBeenCalledTimes(1);
+  });
+
+  it('a retry after a partial success: the new grader is already on the slot but left the pool', async () => {
+    submissions.set('s1', { graderIds: ['u-gone', 'u-ann'] });
+    mocks.findEligibleGrader.mockResolvedValue(null);
+    const result = await HelperService.moveGraderSlot({
+      classroomId: 'class-1',
+      gitRepoAssignmentId: 's1',
+      fromGraderId: 'u-gone',
+      toGraderId: 'u-ann',
+      fallbackToUnassign: true,
+    });
+    expect(result).toEqual({ status: 'moved', toLogin: 'ta-ann' });
+    expect(submissions.get('s1')!.graderIds).toEqual(['u-ann']);
+  });
+
+  it('the departing grader already gone after a successful add is still a move', async () => {
+    submissions.set('s1', { graderIds: [] });
+    const result = await HelperService.moveGraderSlot({
+      classroomId: 'class-1',
+      gitRepoAssignmentId: 's1',
+      fromGraderId: 'u-gone',
+      toGraderId: 'u-ann',
+    });
+    expect(result).toEqual({ status: 'moved', toLogin: 'ta-ann' });
     expect(submissions.get('s1')!.graderIds).toEqual(['u-ann']);
   });
 
@@ -347,6 +377,20 @@ describe('resolveUngradedSlots', () => {
         recipientUserIds: ['u-bob'],
         title: 'New grading: 1 submission from Gone Person',
       })
+    );
+  });
+
+  it('a slot the departing grader had already left counts as reassigned in the summary', async () => {
+    // s2's departing grader is gone already (a retry of an earlier partial move).
+    submissions.set('s2', { graderIds: [] });
+    const outcome = await resolve('reassign');
+    expect(outcome.reassigned).toEqual([
+      { graderId: 'u-ann', login: 'ta-ann', count: 2 },
+      { graderId: 'u-bob', login: 'ta-bob', count: 1 },
+    ]);
+    expect(outcome.failed).toBe(0);
+    expect(mocks.createNotifications).toHaveBeenCalledWith(
+      expect.objectContaining({ recipientUserIds: ['u-bob'] })
     );
   });
 

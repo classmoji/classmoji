@@ -368,10 +368,16 @@ const staffRemoveShape = {
 };
 
 /**
- * How long staff_remove waits for the removal run before settling slots. Past
- * this it reports removal_pending and moves nothing.
+ * staff_remove's whole budget, measured from handler entry (the same shape as
+ * form_teams_run in ./formTeams.ts): the connector's own timeout is ~60 s. The
+ * removal wait gets what is left minus SETTLE_RESERVE_MS, so the inline settle
+ * (at most UNGRADED_INLINE_LIMIT slots, four at a time) still fits. If, after
+ * the wait, less than MIN_SETTLE_MS remains, nothing is moved and the reply
+ * says to call again — the follow-up path finishes it.
  */
-const REMOVAL_WAIT_MS = 45_000;
+const HANDLER_BUDGET_MS = 45_000;
+const SETTLE_RESERVE_MS = 12_000;
+const MIN_SETTLE_MS = 8_000;
 
 /** The response and audit fields describing what became of the ungraded slots. */
 function describeUngraded(outcome: UngradedSlotsOutcome) {
@@ -416,10 +422,11 @@ export const staffRemoveTool: StaffRemoveTool = {
     'ungraded_submissions is required and the refusal gives the count. reassign spreads them ' +
     'over the other eligible graders, least-loaded per assignment (unassigns when there are ' +
     'none); unassign removes them as grader; keep leaves them. Graded submissions never ' +
-    'change. Slots move only after the removal finishes, so this call waits for it; if it is ' +
-    'still running it returns removal_pending and changes nothing — call again with the same ' +
-    'arguments once list_teaching_team no longer shows the role. The response reports ' +
-    'ungraded_submissions: reassigned_to (count per grader login), unassigned, kept, failed.',
+    'change. Slots move only after the removal finishes, so this call waits for it. If it is ' +
+    'still running (removal_pending) or the slots newly need a decision (needs_decision), ' +
+    'nothing changes: call again with the same login, role and ungraded_submissions once ' +
+    'list_teaching_team no longer shows the role. The response reports ungraded_submissions: ' +
+    'reassigned_to (count per grader login), unassigned, kept, failed.',
   scope: 'write',
   roles: OWNER_ONLY,
   // Same tight bucket as staff_add: every call can revoke GitHub organization
@@ -427,6 +434,8 @@ export const staffRemoveTool: StaffRemoveTool = {
   rateLimit: { capacity: 5, refillPerSecond: 0.05 },
   inputSchema: staffRemoveShape,
   handler: async (args, ctx) => {
+    // The wait is budgeted from HERE: everything before it counts.
+    const entry = Date.now();
     const classroom = requireClassroomCtx(ctx);
 
     // confirm:true is in the schema the SDK validates, and re-parsed here so the
@@ -455,10 +464,17 @@ export const staffRemoveTool: StaffRemoveTool = {
         requireChoice: true,
       });
     } catch (error) {
-      // The follow-up to removal_pending: the role is already gone, and the
-      // caller is now giving the decision for the slots that were left.
+      // The follow-up to a removal that could not finish settling: the role is
+      // already gone, and the caller is now giving the decision for the slots
+      // that were left. Only a real open removal qualifies
+      // (staff.previewLeftoverSlots); anything else stays the uniform not-found.
       if (choiceArg && error instanceof StaffServiceError && error.code === 'staff_not_found') {
-        return settleLeftover(ctx, classroomId, parsed.data.login, choiceArg);
+        return settleLeftover(ctx, {
+          classroomId,
+          login: parsed.data.login,
+          role: parsed.data.role,
+          choice: choiceArg,
+        });
       }
       throw mapStaffError(error);
     }
@@ -468,31 +484,52 @@ export const staffRemoveTool: StaffRemoveTool = {
     // a second call removing their other role sees this one finished.
     let removal: 'queued' | 'completed' | 'failed' | 'pending' = 'queued';
     let outcome: UngradedSlotsOutcome | null = null;
+    // Why a completed removal still leaves the slots open for a follow-up call.
+    let followup: 'needs_decision' | 'settle_deferred' | null = null;
+    let strandedCount = 0;
     if (started.heldUngradedCount > 0) {
-      const waited = await waitForRunOutcome(started.runId, { timeoutMs: REMOVAL_WAIT_MS });
+      const timeoutMs = Math.max(0, entry + HANDLER_BUDGET_MS - SETTLE_RESERVE_MS - Date.now());
+      const waited = await waitForRunOutcome(started.runId, { timeoutMs });
       removal =
         waited.outcome === 'completed'
           ? 'completed'
           : waited.outcome === 'failed'
             ? 'failed'
             : 'pending';
+
       if (removal === 'completed' && started.choice) {
-        outcome = await HelperService.settleUngradedSlots({
+        if (entry + HANDLER_BUDGET_MS - Date.now() < MIN_SETTLE_MS) {
+          followup = 'settle_deferred';
+        } else {
+          outcome = await HelperService.settleUngradedSlots({
+            classroomId,
+            graderId: started.userId,
+            choice: started.choice,
+            departingName: started.name || started.login,
+            expectedCount: started.ungradedCount,
+          });
+        }
+      } else if (removal === 'completed') {
+        // Nothing was at stake when this call started, but a parallel removal
+        // of their other role may have finished too: ask again, now.
+        strandedCount = await ClassmojiService.staff.countStrandedSlots(
           classroomId,
-          graderId: started.userId,
-          choice: started.choice,
-          departingName: started.name || started.login,
-          expectedCount: started.ungradedCount,
-        });
+          started.userId
+        );
+        if (strandedCount > 0) followup = 'needs_decision';
       }
     }
 
     const ungraded = outcome
       ? describeUngraded(outcome)
-      : started.choice
-        ? // At stake, but the removal did not finish: nothing was moved.
-          { choice: started.choice, total: started.ungradedCount, moved: 0 }
-        : null;
+      : followup === 'needs_decision'
+        ? { needs_decision: true, count: strandedCount }
+        : followup === 'settle_deferred' || (removal === 'pending' && started.choice)
+          ? { choice: started.choice, pending: true, count: started.ungradedCount }
+          : started.choice
+            ? // At stake, but the removal did not finish: nothing was moved.
+              { choice: started.choice, total: started.ungradedCount, moved: 0 }
+            : null;
 
     await writeAudit(ctx, {
       resource_type: 'STAFF',
@@ -507,6 +544,8 @@ export const staffRemoveTool: StaffRemoveTool = {
         login: started.login,
         role: started.role,
         removal,
+        // The markers staff.previewLeftoverSlots accepts for a follow-up call.
+        ...(followup ? { [followup]: true } : {}),
         ...(ungraded ? { ungraded_submissions: ungraded } : {}),
       },
     });
@@ -527,9 +566,7 @@ export const staffRemoveTool: StaffRemoveTool = {
         login: started.login,
         user_id: started.userId,
         role: started.role,
-        ...(started.choice
-          ? { ungraded_submissions: { pending: true, count: started.ungradedCount } }
-          : {}),
+        ...(ungraded ? { ungraded_submissions: ungraded } : {}),
         message: started.choice
           ? `Removal of the ${started.role} role is still running, so their ${started.ungradedCount} ` +
             'ungraded submissions were NOT changed. Once list_teaching_team no longer shows the ' +
@@ -538,6 +575,9 @@ export const staffRemoveTool: StaffRemoveTool = {
       });
     }
 
+    const again =
+      'call staff_remove again with the same login and role and ungraded_submissions ' +
+      '(reassign, unassign or keep).';
     return ok({
       success: true,
       queued: removal === 'queued',
@@ -547,30 +587,53 @@ export const staffRemoveTool: StaffRemoveTool = {
       role: started.role,
       ...(ungraded ? { ungraded_submissions: ungraded } : {}),
       message:
-        removal === 'completed'
-          ? `Removed the ${started.role} role.`
-          : `Removal of the ${started.role} role queued — removing the GitHub staff team membership (and org access if they hold no other role there) in the background.`,
+        followup === 'needs_decision'
+          ? `Removed the ${started.role} role. Another removal finished at the same time, so they ` +
+            `are no longer a grader here and are assigned ${strandedCount} ungraded ` +
+            `submission${strandedCount === 1 ? '' : 's'}. Nothing was changed; ${again}`
+          : followup === 'settle_deferred'
+            ? `Removed the ${started.role} role, but there was no time left to move their ` +
+              `${started.ungradedCount} ungraded submissions; nothing was changed. To finish, ${again}`
+            : removal === 'completed'
+              ? `Removed the ${started.role} role.`
+              : `Removal of the ${started.role} role queued — removing the GitHub staff team membership (and org access if they hold no other role there) in the background.`,
     });
   },
 };
 
 /**
- * The second half of a removal that returned removal_pending: the role is
- * gone, the person keeps no grader-flagged ASSISTANT/TEACHER role here and
- * still holds ungraded slots, so carry out the decision now. Anyone else is
- * the same uniform not-found as any other miss.
+ * The second half of a removal that could not finish settling (removal_pending,
+ * needs_decision or a deferred settle): the role is gone, a staff_remove audit
+ * row for this user and role marks the removal open (< 24h), the person keeps
+ * no grader-flagged ASSISTANT/TEACHER role here and still holds ungraded slots
+ * — so carry out the decision now. Anyone else is the same uniform not-found
+ * as any other miss. `keep` changes nothing and records nothing.
  */
 async function settleLeftover(
   ctx: Parameters<StaffRemoveTool['handler']>[1],
-  classroomId: string,
-  login: string,
-  choice: UngradedChoiceArg
+  {
+    classroomId,
+    login,
+    role,
+    choice,
+  }: { classroomId: string; login: string; role: StaffRole; choice: UngradedChoiceArg }
 ) {
   let leftover;
   try {
-    leftover = await ClassmojiService.staff.previewLeftoverSlots({ classroomId, login });
+    leftover = await ClassmojiService.staff.previewLeftoverSlots({ classroomId, login, role });
   } catch (error) {
     throw mapStaffError(error);
+  }
+
+  if (choice === 'keep') {
+    return ok({
+      success: true,
+      changed: false,
+      login: leftover.login,
+      user_id: leftover.userId,
+      role,
+      message: 'Nothing changed; their ungraded submissions stay assigned to them.',
+    });
   }
 
   const outcome = await HelperService.settleUngradedSlots({
@@ -588,9 +651,10 @@ async function settleLeftover(
     action: 'UPDATE',
     data: {
       tool: 'staff_remove',
-      value: `leftover:${choice}`,
+      value: `leftover:${role}:${choice}`,
       user_id: leftover.userId,
       login: leftover.login,
+      role,
       removal: 'already_done',
       ungraded_submissions: ungraded,
     },
@@ -601,6 +665,7 @@ async function settleLeftover(
     removal_already_done: true,
     login: leftover.login,
     user_id: leftover.userId,
+    role,
     ungraded_submissions: ungraded,
     message: 'The role was already removed; their ungraded submissions have now been handled.',
   });

@@ -322,6 +322,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
       }
 
       let started: StaffRemovalStart;
+      let finalStatus: string | undefined;
       try {
         // The service resolves the target from the DB by (classroom, login,
         // role) and builds the task payload entirely server-side. It refuses a
@@ -338,7 +339,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
           ungradedSubmissions,
         });
 
-        await waitForRunCompletion(started.runId);
+        finalStatus = (await waitForRunCompletion(started.runId))?.status as string | undefined;
       } catch (error: unknown) {
         // Nothing has been moved yet: slots are settled only after the
         // removal run has succeeded.
@@ -346,6 +347,19 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
         return {
           action: ActionTypes.REMOVE_USER,
           error: staffErrorMessage(error, 'Failed to remove staff member. Please try again.'),
+        };
+      }
+
+      // waitForRunCompletion throws on a failed run but hands back undefined
+      // when its subscription ends without a terminal run. Only a run KNOWN to
+      // have completed may have its slots moved. (With nothing to move, the
+      // reply is what it always was.)
+      const completed = finalStatus === 'COMPLETED' || finalStatus === 'COMPLETED_SUCCESSFULLY';
+      if (started.choice && !completed) {
+        return {
+          action: ActionTypes.REMOVE_USER,
+          error:
+            'The removal is still in progress, so their ungraded submissions were not changed. Reload in a moment to check.',
         };
       }
 

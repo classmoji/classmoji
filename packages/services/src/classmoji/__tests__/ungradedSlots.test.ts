@@ -50,8 +50,11 @@ vi.mock('@classmoji/database', () => ({
     classroomMembership: {
       count: (args: { where: Record<string, unknown> }) => membershipCount(args),
     },
+    auditLog: { findFirst: (...a: unknown[]) => auditFindFirst(...a) },
   }),
 }));
+
+const auditFindFirst = vi.fn();
 
 vi.mock('../classroom.service.ts', () => ({ findById: vi.fn() }));
 
@@ -252,34 +255,97 @@ describe('staff.previewRemoval', () => {
   });
 });
 
-describe('staff.previewLeftoverSlots', () => {
+describe('staff.countStrandedSlots', () => {
   beforeEach(() => {
     memberships = [];
-    userFindFirst.mockResolvedValue({ id: 'u-gone', login: 'Gone', name: 'Gone Person' });
     graderCount.mockResolvedValue(4);
   });
 
-  it('finds the slots of someone whose grading role is already gone', async () => {
-    expect(await staff.previewLeftoverSlots({ classroomId: 'class-1', login: 'gone' })).toEqual({
+  it('0 while a grader-flagged ASSISTANT/TEACHER role remains', async () => {
+    memberships = [
+      { classroom_id: 'class-1', user_id: 'u-gone', role: 'TEACHER', is_grader: true },
+    ];
+    expect(await staff.countStrandedSlots('class-1', 'u-gone')).toBe(0);
+  });
+
+  it('every ungraded slot once none does', async () => {
+    memberships = [
+      { classroom_id: 'class-1', user_id: 'u-gone', role: 'ASSISTANT', is_grader: false },
+    ];
+    expect(await staff.countStrandedSlots('class-1', 'u-gone')).toBe(4);
+  });
+});
+
+describe('staff.previewLeftoverSlots', () => {
+  const leftover = () =>
+    staff.previewLeftoverSlots({ classroomId: 'class-1', login: 'gone', role: 'ASSISTANT' });
+
+  beforeEach(() => {
+    memberships = [];
+    userFindFirst.mockResolvedValue({ id: 'u-gone', login: 'Gone', name: 'Gone Person' });
+    findByClassroomAndUser.mockImplementation((c: string, u: string, role: string) =>
+      Promise.resolve(
+        memberships.find(r => r.classroom_id === c && r.user_id === u && r.role === role) ?? null
+      )
+    );
+    auditFindFirst.mockResolvedValue({ id: 'audit-1' });
+    graderCount.mockResolvedValue(4);
+  });
+
+  it('settles only for an open removal of that role: role gone, marker row, slots left', async () => {
+    expect(await leftover()).toEqual({
       userId: 'u-gone',
       login: 'Gone',
       name: 'Gone Person',
       ungradedCount: 4,
     });
+
+    const where = auditFindFirst.mock.calls[0][0].where;
+    expect(where).toMatchObject({
+      classroom_id: 'class-1',
+      resource_type: 'STAFF',
+      resource_id: 'u-gone',
+      action: 'DELETE',
+    });
+    // Within the last 24h.
+    const since = (where.timestamp.gte as Date).getTime();
+    expect(Date.now() - since).toBeGreaterThanOrEqual(24 * 60 * 60 * 1000 - 1000);
+    expect(Date.now() - since).toBeLessThanOrEqual(24 * 60 * 60 * 1000 + 1000);
+    // This tool, this role, and one of the follow-up markers.
+    expect(where.AND).toEqual([
+      { data: { path: ['tool'], equals: 'staff_remove' } },
+      { data: { path: ['role'], equals: 'ASSISTANT' } },
+      {
+        OR: [
+          { data: { path: ['removal'], equals: 'pending' } },
+          { data: { path: ['needs_decision'], equals: true } },
+          { data: { path: ['settle_deferred'], equals: true } },
+        ],
+      },
+    ]);
   });
 
-  it('is not-found for someone still grading, or with nothing left', async () => {
+  it('not-found while the person still holds the role', async () => {
     memberships = [
-      { classroom_id: 'class-1', user_id: 'u-gone', role: 'ASSISTANT', is_grader: true },
+      { classroom_id: 'class-1', user_id: 'u-gone', role: 'ASSISTANT', is_grader: false },
     ];
-    await expect(
-      staff.previewLeftoverSlots({ classroomId: 'class-1', login: 'gone' })
-    ).rejects.toMatchObject({ code: 'staff_not_found' });
+    await expect(leftover()).rejects.toMatchObject({ code: 'staff_not_found' });
+    expect(auditFindFirst).not.toHaveBeenCalled();
+  });
+
+  it('not-found without an open removal row for that role', async () => {
+    auditFindFirst.mockResolvedValue(null);
+    await expect(leftover()).rejects.toMatchObject({ code: 'staff_not_found' });
+  });
+
+  it('not-found for someone still grading through another role, or with nothing left', async () => {
+    memberships = [
+      { classroom_id: 'class-1', user_id: 'u-gone', role: 'TEACHER', is_grader: true },
+    ];
+    await expect(leftover()).rejects.toMatchObject({ code: 'staff_not_found' });
 
     memberships = [];
     graderCount.mockResolvedValue(0);
-    await expect(
-      staff.previewLeftoverSlots({ classroomId: 'class-1', login: 'gone' })
-    ).rejects.toMatchObject({ code: 'staff_not_found' });
+    await expect(leftover()).rejects.toMatchObject({ code: 'staff_not_found' });
   });
 });

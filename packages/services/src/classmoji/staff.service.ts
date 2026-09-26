@@ -499,41 +499,95 @@ export const previewRemoval = async ({
 };
 
 /**
- * Ungraded slots left behind by a removal that has already finished — the
- * follow-up when staff_remove could not wait for the removal run. Only for
- * someone who holds NO grader-flagged ASSISTANT/TEACHER role here any more and
- * still holds ungraded slots in this classroom; anyone else is staff_not_found,
- * the same answer as any other miss.
+ * Ungraded slots stranded right now: 0 while they still hold a grader-flagged
+ * ASSISTANT/TEACHER role here, otherwise every ungraded slot they hold. Used to
+ * re-check after a removal finishes, when a parallel removal of their other
+ * role may have left nothing behind them.
  */
-export const previewLeftoverSlots = async ({
-  classroomId,
-  login,
-}: {
-  classroomId: string;
-  login: string;
-}): Promise<{ userId: string; login: string; name: string | null; ungradedCount: number }> => {
-  const user = await findUserByLoginInsensitive(login);
-  const notFound = new StaffServiceError(
-    'staff_not_found',
-    `[staff] ${login} has no leftover grading in classroom ${classroomId}`
-  );
-  if (!user) throw notFound;
-
+export const countStrandedSlots = async (classroomId: string, userId: string) => {
   const stillGrader =
     (await getPrisma().classroomMembership.count({
       where: {
         classroom_id: classroomId,
-        user_id: user.id,
+        user_id: userId,
         role: { in: [...gitRepoAssignmentGraderService.GRADER_ROLES] },
         is_grader: true,
       },
     })) > 0;
-  if (stillGrader) throw notFound;
+  if (stillGrader) return 0;
+  return gitRepoAssignmentGraderService.countUngradedSlotsForGrader(classroomId, userId);
+};
 
-  const ungradedCount = await gitRepoAssignmentGraderService.countUngradedSlotsForGrader(
-    classroomId,
-    user.id
+/** How long a staff_remove follow-up stays open after the removal it finishes. */
+export const LEFTOVER_WINDOW_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * The staff_remove audit markers that leave a removal open for a follow-up
+ * call with a choice: the removal was still running (`removal: 'pending'`), it
+ * finished but a parallel removal left the slots needing a decision
+ * (`needs_decision`), or it finished with too little time left to move them
+ * (`settle_deferred`).
+ */
+const FOLLOWUP_MARKERS = [
+  { data: { path: ['removal'], equals: 'pending' } },
+  { data: { path: ['needs_decision'], equals: true } },
+  { data: { path: ['settle_deferred'], equals: true } },
+];
+
+/**
+ * The follow-up to a staff_remove that could not finish settling: ungraded
+ * slots left behind by a removal of `role` that has since completed. ALL of:
+ *   - the person no longer holds `role` in this classroom;
+ *   - a staff_remove audit row for this classroom, this user and this role,
+ *     carrying one of the follow-up markers, is less than 24h old;
+ *   - they hold no grader-flagged ASSISTANT/TEACHER role here now;
+ *   - they still hold ungraded slots here.
+ * Anything else is staff_not_found — the same answer as any other miss, so the
+ * path cannot be used to act on someone who was never mid-removal.
+ */
+export const previewLeftoverSlots = async ({
+  classroomId,
+  login,
+  role,
+}: {
+  classroomId: string;
+  login: string;
+  role: StaffRole;
+}): Promise<{ userId: string; login: string; name: string | null; ungradedCount: number }> => {
+  assertStaffRole(role);
+  const notFound = new StaffServiceError(
+    'staff_not_found',
+    `[staff] ${login} has no open ${role} removal in classroom ${classroomId}`
   );
+
+  const user = await findUserByLoginInsensitive(login);
+  if (!user) throw notFound;
+
+  const stillHoldsRole = await classroomMembershipService.findByClassroomAndUser(
+    classroomId,
+    user.id,
+    role
+  );
+  if (stillHoldsRole) throw notFound;
+
+  const openRemoval = await getPrisma().auditLog.findFirst({
+    where: {
+      classroom_id: classroomId,
+      resource_type: 'STAFF',
+      resource_id: user.id,
+      action: 'DELETE',
+      timestamp: { gte: new Date(Date.now() - LEFTOVER_WINDOW_MS) },
+      AND: [
+        { data: { path: ['tool'], equals: 'staff_remove' } },
+        { data: { path: ['role'], equals: role } },
+        { OR: FOLLOWUP_MARKERS },
+      ],
+    },
+    select: { id: true },
+  });
+  if (!openRemoval) throw notFound;
+
+  const ungradedCount = await countStrandedSlots(classroomId, user.id);
   if (ungradedCount === 0) throw notFound;
 
   return { userId: user.id, login: user.login ?? login, name: user.name, ungradedCount };
