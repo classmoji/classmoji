@@ -1873,14 +1873,33 @@ export class GitHubProvider extends GitProvider {
   }
 
   /**
-   * Update organization settings
+   * Update the organization's repository defaults with the installation token.
+   *
+   * The classroom settings page and the MCP tool do not use this: they change
+   * these settings with the requesting user's own token through
+   * `ClassmojiService.orgRepoSettings.updateOrgRepoSettings`. The payload is
+   * typed to the two settings that page edits, and `org` is spread last so the
+   * body can never name a different organization than the path.
    * @param {string} org - Organization login
    * @param {Object} data - Settings to update
    * @returns {Promise<Object>}
    */
-  async updateOrganization(org: string, data: Record<string, any>): Promise<any> {
+  async updateOrganization(
+    org: string,
+    data: {
+      default_repository_permission?: 'none' | 'read' | 'write';
+      members_can_create_repositories?: boolean;
+    }
+  ): Promise<any> {
     const octokit = await this.#getOctokit();
-    const { data: result } = await octokit.request('PATCH /orgs/{org}', { org, ...data });
+    const payload: typeof data = {};
+    if (data.default_repository_permission !== undefined) {
+      payload.default_repository_permission = data.default_repository_permission;
+    }
+    if (data.members_can_create_repositories !== undefined) {
+      payload.members_can_create_repositories = data.members_can_create_repositories;
+    }
+    const { data: result } = await octokit.request('PATCH /orgs/{org}', { ...payload, org });
     return result;
   }
 }

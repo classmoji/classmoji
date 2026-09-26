@@ -2,8 +2,13 @@ import { Select, Switch, Alert } from 'antd';
 import { useParams } from 'react-router';
 import { useNotifiedFetcher } from '~/hooks';
 
-import { assertClassroomAccess, assertClassroomMutationAllowed } from '~/utils/helpers';
-import { getGitProvider } from '@classmoji/services';
+import {
+  addClassroomAuditLog,
+  assertClassroomAccess,
+  assertClassroomMutationAllowed,
+} from '~/utils/helpers';
+import { getAuthSession } from '@classmoji/auth/server';
+import { ClassmojiService, getGitProvider, OrgRepoSettingsError } from '@classmoji/services';
 import InstallAppBanner from '~/components/features/InstallAppBanner';
 import type { Route } from './+types/route';
 
@@ -37,6 +42,7 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
       githubOrganization: null,
       gitOrgLogin: null,
       ...install,
+      canEdit: false,
       error: 'This classroom is not connected to a GitHub organization.',
     };
   }
@@ -46,14 +52,16 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
       githubOrganization: null,
       gitOrgLogin,
       ...install,
+      canEdit: false,
       error: `The Classmoji GitHub App isn't installed on "${gitOrgLogin}". Install it to manage repository settings.`,
     };
   }
 
+  let githubOrganization;
   try {
+    // Display only: the current values are read with the App installation.
     const gitProvider = getGitProvider(classroom.git_organization);
-    const githubOrganization = await gitProvider.getOrganization(gitOrgLogin);
-    return { githubOrganization, gitOrgLogin, ...install, error: null };
+    githubOrganization = await gitProvider.getOrganization(gitOrgLogin);
   } catch (err: unknown) {
     const status =
       err && typeof err === 'object' && 'status' in err
@@ -65,12 +73,31 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
       githubOrganization: null,
       gitOrgLogin,
       ...install,
+      canEdit: false,
       error:
         status === 404
           ? `GitHub couldn't find the "${gitOrgLogin}" organization or the Classmoji App installation. The App may have been uninstalled or the org renamed.`
           : `Couldn't reach GitHub to load repository settings (${msg}).`,
     };
   }
+
+  // Changes run with the viewer's own GitHub account, so only an organization
+  // owner can make them. Ask GitHub for the viewer's own membership role; when
+  // that check cannot answer (no token, GitHub error), leave the controls on
+  // and let GitHub decide when the change is submitted.
+  const authData = await getAuthSession(request);
+  const ownerStatus = await ClassmojiService.orgRepoSettings.getOrgOwnerStatus(
+    gitOrgLogin,
+    authData?.token ?? null
+  );
+
+  return {
+    githubOrganization,
+    gitOrgLogin,
+    ...install,
+    canEdit: ownerStatus !== 'not_owner',
+    error: null,
+  };
 };
 
 const Section = ({
@@ -100,6 +127,7 @@ const SettingsRepos = ({ loaderData }: Route.ComponentProps) => {
     isExample,
     gitProvider,
     githubAppName,
+    canEdit,
   } = loaderData;
   const { class: classSlug } = useParams();
   const { fetcher } = useNotifiedFetcher();
@@ -141,6 +169,15 @@ const SettingsRepos = ({ loaderData }: Route.ComponentProps) => {
   };
   return (
     <div className="flex flex-col gap-14 pt-4">
+      {!canEdit && (
+        <p
+          className="text-sm text-gray-600 dark:text-gray-400 max-w-[640px]"
+          data-testid="org-settings-owner-notice"
+        >
+          Only GitHub organization owners can change these settings. Changes here run with your own
+          GitHub account, which is not an owner of <span className="font-mono">{gitOrgLogin}</span>.
+        </p>
+      )}
       <Section
         title="Base permissions"
         subtitle="Default permissions for when student repositories are created."
@@ -148,6 +185,7 @@ const SettingsRepos = ({ loaderData }: Route.ComponentProps) => {
         <div>
           <Select
             className="w-[200px]"
+            disabled={!canEdit}
             value={githubOrganization.default_repository_permission}
             onChange={value =>
               updateOrganization({
@@ -172,6 +210,7 @@ const SettingsRepos = ({ loaderData }: Route.ComponentProps) => {
       </Section>
       <Section title="Repository creation" subtitle="Allow students to create repositories.">
         <Switch
+          disabled={!canEdit}
           checked={githubOrganization.members_can_create_repositories}
           onChange={value =>
             updateOrganization({
@@ -184,11 +223,13 @@ const SettingsRepos = ({ loaderData }: Route.ComponentProps) => {
   );
 };
 
+const UPDATE_ACTION = 'UPDATE_MEMBER_PERMISSIONS';
+
 export const action = async ({ params, request }: Route.ActionArgs) => {
   const classSlug = params.class!;
 
   // Get classroom with git_organization to find the GitHub org login
-  const { classroom, membership } = await assertClassroomAccess({
+  const { userId, classroom, membership } = await assertClassroomAccess({
     request,
     classroomSlug: classSlug,
     allowedRoles: ['OWNER'],
@@ -197,26 +238,56 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
   });
   assertClassroomMutationAllowed({ status: classroom.status, role: membership!.role });
 
-  const gitOrgLogin = classroom.git_organization?.login;
-  if (!gitOrgLogin) {
-    throw new Response('Git organization not configured', { status: 400 });
+  let input: unknown;
+  try {
+    input = await request.json();
+  } catch {
+    return { error: 'Expected the settings to change as JSON.', action: UPDATE_ACTION };
   }
 
-  if (!classroom.git_organization?.github_installation_id) {
-    throw new Response('GitHub App not installed for this organization', { status: 400 });
-  }
+  // The requesting owner's own GitHub token, the same way the classroom delete
+  // cleanup gets it: GitHub applies this person's organization role to the
+  // change, so only an organization owner can make it.
+  const authData = await getAuthSession(request);
 
-  const data = await request.json();
-  const gitProvider = getGitProvider(classroom.git_organization);
-  await (
-    gitProvider as {
-      updateOrganization: (login: string, data: Record<string, unknown>) => Promise<void>;
+  let result;
+  try {
+    // Applies only the settings this page edits, to the classroom's own
+    // organization (never one named in the request).
+    result = await ClassmojiService.orgRepoSettings.updateOrgRepoSettings({
+      gitOrganization: classroom.git_organization,
+      userToken: authData?.token ?? null,
+      input,
+    });
+  } catch (error: unknown) {
+    if (error instanceof OrgRepoSettingsError) {
+      return { error: error.message, action: UPDATE_ACTION };
     }
-  ).updateOrganization(gitOrgLogin, data);
+    console.error('Failed to update GitHub organization repository settings:', error);
+    return {
+      error: "Couldn't update the GitHub organization settings. Try again.",
+      action: UPDATE_ACTION,
+    };
+  }
+
+  await addClassroomAuditLog({
+    classroomId: classroom.id,
+    userId,
+    role: membership?.role,
+    action: 'UPDATE',
+    resourceType: 'REPO_SETTINGS',
+    resourceId: classroom.id,
+    metadata: {
+      tool: 'web:settings.repos',
+      org: result.org,
+      changes: result.changes,
+      value: result.value,
+    },
+  });
 
   return {
     success: 'Permissions updated',
-    action: 'UPDATE_MEMBER_PERMISSIONS',
+    action: UPDATE_ACTION,
   };
 };
 

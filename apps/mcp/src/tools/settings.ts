@@ -16,7 +16,9 @@
  * an unknown or secret key simply has no path to the database. The same rule
  * covers `classroom.update` (whitelisted to `name`, mirroring the web route's
  * PROFILE_FIELDS, which exists to keep `slug` and `git_org_id` unwritable) and
- * `gitProvider.updateOrganization`.
+ * the GitHub organization settings, which go through the same
+ * `ClassmojiService.orgRepoSettings.updateOrgRepoSettings` as the web route and
+ * run with the caller's own GitHub account.
  *
  * Responses echo only the fields the tool itself set — never the service
  * return, which carries the raw settings row (API keys included).
@@ -26,7 +28,7 @@ import {
   ClassmojiService,
   ClassroomSettingsEntitlementError,
   ClassroomSettingsValidationError,
-  getGitProvider,
+  OrgRepoSettingsError,
 } from '@classmoji/services';
 import { z } from 'zod';
 import { ToolError } from '../mcp/errors.ts';
@@ -313,8 +315,9 @@ export const orgRepoSettingsUpdateTool: ToolDefinition<OrgRepoSettingsUpdateArgs
     'on org repos: none (students see only their own or their team’s repos), read (students can ' +
     'read other students’ repos, including existing ones), or write (students can also write to ' +
     'them). members_can_create_repositories lets students create repositories in the org. ' +
-    'Confirm with the user which organization is affected before calling. Provide at least one ' +
-    'setting.',
+    'The change runs with the caller’s own GitHub account, so the caller must be an owner of ' +
+    'the GitHub organization; otherwise GitHub refuses it. Confirm with the user which ' +
+    'organization is affected before calling. Provide at least one setting.',
   scope: 'write',
   roles: OWNER_ONLY,
   // Tighter than the default bucket: every call is a live GitHub org-settings
@@ -340,8 +343,8 @@ export const orgRepoSettingsUpdateTool: ToolDefinition<OrgRepoSettingsUpdateArgs
   handler: async (args, ctx) => {
     const classroom = requireClassroomCtx(ctx);
 
-    // Strict, closed payload — built from validated values only. The web route
-    // forwards the request body straight to GitHub; this one cannot.
+    // Strict, closed payload — built from validated values only, so a stray
+    // argument never reaches the service (which applies the same whitelist).
     const updates: {
       default_repository_permission?: 'none' | 'read' | 'write';
       members_can_create_repositories?: boolean;
@@ -361,41 +364,58 @@ export const orgRepoSettingsUpdateTool: ToolDefinition<OrgRepoSettingsUpdateArgs
       );
     }
 
-    // Resolve the git organization from the authorized classroom (never from
-    // request input), and refuse the same two ways the web route does.
+    // The git organization comes from the authorized classroom, never from
+    // request input.
     const record = await ClassmojiService.classroom.findById(classroom.classroomId);
-    const gitOrganization = record?.git_organization;
-    if (!gitOrganization?.login) {
-      throw new ToolError(
-        'invalid_params',
-        'This classroom is not connected to a GitHub organization'
-      );
-    }
-    if (!gitOrganization.github_installation_id) {
-      throw new ToolError(
-        'invalid_params',
-        `The Classmoji GitHub App is not installed on '${gitOrganization.login}' — install it to manage repository settings`
-      );
-    }
 
-    const gitProvider = getGitProvider(gitOrganization) as unknown as {
-      updateOrganization: (login: string, data: Record<string, unknown>) => Promise<unknown>;
-    };
-    await gitProvider.updateOrganization(gitOrganization.login, updates);
+    // The caller's own GitHub token (refreshed if needed) — the same source the
+    // webapp session uses. GitHub applies the caller's organization role.
+    const tokenResult = await ClassmojiService.githubUserToken.getGitHubTokenForUser(
+      ctx.viewer.userId
+    );
+
+    let result;
+    try {
+      result = await ClassmojiService.orgRepoSettings.updateOrgRepoSettings({
+        gitOrganization: record?.git_organization,
+        userToken: tokenResult?.token ?? null,
+        input: updates,
+      });
+    } catch (error: unknown) {
+      if (error instanceof OrgRepoSettingsError) {
+        switch (error.code) {
+          case 'INVALID_INPUT':
+          case 'NO_ORGANIZATION':
+          case 'APP_NOT_INSTALLED':
+            throw new ToolError('invalid_params', error.message, error.code);
+          case 'NO_GITHUB_TOKEN':
+          case 'NOT_ORG_OWNER':
+            throw new ToolError('forbidden', error.message, error.code);
+          default:
+            throw new ToolError('internal', error.message, error.code);
+        }
+      }
+      throw error;
+    }
 
     await writeAudit(ctx, {
       resource_type: 'REPO_SETTINGS',
       resource_id: classroom.classroomId,
       action: 'UPDATE',
-      data: { tool: 'org_repo_settings_update', org: gitOrganization.login, ...updates },
+      data: {
+        tool: 'org_repo_settings_update',
+        org: result.org,
+        changes: result.changes,
+        value: result.value,
+      },
     });
 
     return ok({
       success: true,
-      organization: gitOrganization.login,
+      organization: result.org,
       updated_fields: fields,
-      settings: updates,
-      message: `Updated organization-wide GitHub settings for '${gitOrganization.login}' — this affects every classroom and repository in that organization.`,
+      settings: result.settings,
+      message: `Updated organization-wide GitHub settings for '${result.org}' — this affects every classroom and repository in that organization.`,
     });
   },
 };

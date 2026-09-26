@@ -8,7 +8,7 @@
  * object instead — so the load-bearing assertions here are that the object
  * handed to the service contains EXACTLY the expected keys, and that an extra
  * key riding along on the arguments is not forwarded. The same rule is checked
- * for classroom.update (name only) and gitProvider.updateOrganization.
+ * for classroom.update (name only) and the organization settings service call.
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -20,10 +20,20 @@ const mocks = vi.hoisted(() => ({
   updateSettings: vi.fn(),
   classroomFindById: vi.fn(),
   pageFindById: vi.fn(),
-  updateOrganization: vi.fn(),
+  updateOrgRepoSettings: vi.fn(),
+  getGitHubTokenForUser: vi.fn(),
   getGitProvider: vi.fn(),
   auditCreate: vi.fn(),
 }));
+
+// Stand-in with the service's contract (the real one is tested in services).
+class OrgRepoSettingsError extends Error {
+  code: string;
+  constructor(code: string, message: string) {
+    super(message);
+    this.code = code;
+  }
+}
 
 // The real rule lives in classroom.service (tested there); this stand-in has the
 // same contract so the tool's wiring — call it, store what it returns, map its
@@ -47,7 +57,14 @@ vi.mock('@classmoji/services', () => ({
     },
     page: { findById: (...a: unknown[]) => mocks.pageFindById(...a) },
     audit: { create: (...a: unknown[]) => mocks.auditCreate(...a) },
+    orgRepoSettings: {
+      updateOrgRepoSettings: (...a: unknown[]) => mocks.updateOrgRepoSettings(...a),
+    },
+    githubUserToken: {
+      getGitHubTokenForUser: (...a: unknown[]) => mocks.getGitHubTokenForUser(...a),
+    },
   },
+  OrgRepoSettingsError,
   getGitProvider: (...a: unknown[]) => mocks.getGitProvider(...a),
 }));
 
@@ -74,8 +91,19 @@ beforeEach(() => {
   mocks.auditCreate.mockResolvedValue(undefined);
   mocks.updateSettings.mockResolvedValue({});
   mocks.classroomUpdate.mockResolvedValue({ status: 'ACTIVE', is_archived: false });
-  mocks.getGitProvider.mockReturnValue({ updateOrganization: mocks.updateOrganization });
-  mocks.updateOrganization.mockResolvedValue(undefined);
+  mocks.getGitHubTokenForUser.mockResolvedValue({ token: 'ghu_owner', expiresAt: null });
+  mocks.updateOrgRepoSettings.mockImplementation(
+    async ({ input }: { input: Record<string, unknown> }) => ({
+      org: 'myorg',
+      changes: Object.fromEntries(
+        Object.entries(input).map(([field, to]) => [field, { from: null, to }])
+      ),
+      settings: input,
+      value: Object.entries(input)
+        .map(([field, to]) => `${field}=${String(to)}`)
+        .join(';'),
+    })
+  );
 });
 
 describe('classroom_settings_update', () => {
@@ -338,42 +366,97 @@ describe('org_repo_settings_update', () => {
     await expect(orgRepoSettingsUpdateTool.handler(BASE, CTX)).rejects.toMatchObject({
       kind: 'invalid_params',
     });
-    expect(mocks.updateOrganization).not.toHaveBeenCalled();
+    expect(mocks.updateOrgRepoSettings).not.toHaveBeenCalled();
   });
 
-  it('sends an exact object to updateOrganization for the ctx classroom org', async () => {
+  it('applies an exact object to the ctx classroom organization with the caller token', async () => {
     const payload = parse(
       await orgRepoSettingsUpdateTool.handler(
         { ...BASE, default_repository_permission: 'read' },
         CTX
       )
     );
-    expect(payload).toMatchObject({ success: true, organization: 'myorg' });
+    expect(payload).toMatchObject({
+      success: true,
+      organization: 'myorg',
+      settings: { default_repository_permission: 'read' },
+    });
 
     expect(mocks.classroomFindById).toHaveBeenCalledWith('class-1');
-    expect(mocks.getGitProvider).toHaveBeenCalledWith(ORG);
-    const [login, data] = mocks.updateOrganization.mock.calls[0] as [
-      string,
-      Record<string, unknown>,
+    // The caller's own GitHub token, looked up by the ctx viewer.
+    expect(mocks.getGitHubTokenForUser).toHaveBeenCalledWith('owner-1');
+    const [call] = mocks.updateOrgRepoSettings.mock.calls[0] as [
+      { gitOrganization: unknown; userToken: unknown; input: Record<string, unknown> },
     ];
-    expect(login).toBe('myorg');
-    expect(Object.keys(data)).toEqual(['default_repository_permission']);
-    expect(data).toEqual({ default_repository_permission: 'read' });
+    expect(call.gitOrganization).toBe(ORG);
+    expect(call.userToken).toBe('ghu_owner');
+    expect(call.input).toEqual({ default_repository_permission: 'read' });
+    // The App installation is never used for the change.
+    expect(mocks.getGitProvider).not.toHaveBeenCalled();
   });
 
-  it('never forwards extra argument keys to GitHub', async () => {
+  it('never forwards extra argument keys', async () => {
     await orgRepoSettingsUpdateTool.handler(
       {
         ...BASE,
         members_can_create_repositories: true,
         billing_email: 'nope@x.edu',
+        org: 'other-org',
       } as unknown as Parameters<typeof orgRepoSettingsUpdateTool.handler>[0],
       CTX
     );
-    // Neither the stray key nor `confirm` reaches the organization payload.
-    expect(mocks.updateOrganization.mock.calls[0][1]).toEqual({
-      members_can_create_repositories: true,
+    // Neither the stray keys nor `confirm` reach the service.
+    const [call] = mocks.updateOrgRepoSettings.mock.calls[0] as [{ input: unknown }];
+    expect(call.input).toEqual({ members_can_create_repositories: true });
+  });
+
+  it('passes a missing token through so the service asks the caller to sign in again', async () => {
+    mocks.getGitHubTokenForUser.mockResolvedValue(null);
+    mocks.updateOrgRepoSettings.mockRejectedValue(
+      new OrgRepoSettingsError('NO_GITHUB_TOKEN', 'Your GitHub sign-in has expired.')
+    );
+    await expect(
+      orgRepoSettingsUpdateTool.handler({ ...BASE, members_can_create_repositories: false }, CTX)
+    ).rejects.toMatchObject({ kind: 'forbidden', code: 'NO_GITHUB_TOKEN' });
+    const [call] = mocks.updateOrgRepoSettings.mock.calls[0] as [{ userToken: unknown }];
+    expect(call.userToken).toBeNull();
+    expect(mocks.auditCreate).not.toHaveBeenCalled();
+  });
+
+  it('reports a GitHub refusal as organization owners only', async () => {
+    mocks.updateOrgRepoSettings.mockRejectedValue(
+      new OrgRepoSettingsError(
+        'NOT_ORG_OWNER',
+        'Only GitHub organization owners can change these settings.'
+      )
+    );
+    await expect(
+      orgRepoSettingsUpdateTool.handler({ ...BASE, default_repository_permission: 'none' }, CTX)
+    ).rejects.toMatchObject({
+      kind: 'forbidden',
+      code: 'NOT_ORG_OWNER',
+      message: 'Only GitHub organization owners can change these settings.',
     });
+    expect(mocks.auditCreate).not.toHaveBeenCalled();
+  });
+
+  it('maps a missing organization or App installation to invalid_params', async () => {
+    for (const code of ['NO_ORGANIZATION', 'APP_NOT_INSTALLED']) {
+      mocks.updateOrgRepoSettings.mockRejectedValueOnce(new OrgRepoSettingsError(code, 'no'));
+      await expect(
+        orgRepoSettingsUpdateTool.handler({ ...BASE, members_can_create_repositories: false }, CTX)
+      ).rejects.toMatchObject({ kind: 'invalid_params', code });
+    }
+    expect(mocks.auditCreate).not.toHaveBeenCalled();
+  });
+
+  it('maps other GitHub failures to internal', async () => {
+    mocks.updateOrgRepoSettings.mockRejectedValue(
+      new OrgRepoSettingsError('GITHUB_ERROR', "GitHub couldn't apply the change (boom).")
+    );
+    await expect(
+      orgRepoSettingsUpdateTool.handler({ ...BASE, default_repository_permission: 'none' }, CTX)
+    ).rejects.toMatchObject({ kind: 'internal', code: 'GITHUB_ERROR' });
   });
 
   it('enforces a strict permission enum', () => {
@@ -399,32 +482,24 @@ describe('org_repo_settings_update', () => {
     expect(confirm.safeParse(undefined).success).toBe(false);
   });
 
-  it('says in its description that the change is organization-wide and immediate', () => {
+  it('says in its description that the change is organization-wide, immediate and runs as the caller', () => {
     expect(orgRepoSettingsUpdateTool.description).toContain('IMMEDIATELY');
     expect(orgRepoSettingsUpdateTool.description).toContain('ORGANIZATION-WIDE');
+    expect(orgRepoSettingsUpdateTool.description).toContain('own GitHub account');
+    expect(orgRepoSettingsUpdateTool.description).toContain('owner of the GitHub organization');
   });
 
-  it('refuses a classroom with no linked GitHub organization', async () => {
-    mocks.classroomFindById.mockResolvedValue({ id: 'class-1', git_organization: null });
-    await expect(
-      orgRepoSettingsUpdateTool.handler({ ...BASE, members_can_create_repositories: false }, CTX)
-    ).rejects.toMatchObject({ kind: 'invalid_params' });
-    expect(mocks.updateOrganization).not.toHaveBeenCalled();
+  it('keeps its description under 1,500 bytes', () => {
+    expect(Buffer.byteLength(orgRepoSettingsUpdateTool.description, 'utf8')).toBeLessThan(1500);
   });
 
-  it('refuses when the GitHub App is not installed on the org', async () => {
-    mocks.classroomFindById.mockResolvedValue({
-      id: 'class-1',
-      git_organization: { ...ORG, github_installation_id: null },
+  it('audits against REPO_SETTINGS with old and new values after the GitHub write', async () => {
+    mocks.updateOrgRepoSettings.mockResolvedValue({
+      org: 'myorg',
+      changes: { default_repository_permission: { from: 'read', to: 'none' } },
+      settings: { default_repository_permission: 'none' },
+      value: 'default_repository_permission=none',
     });
-    await expect(
-      orgRepoSettingsUpdateTool.handler({ ...BASE, members_can_create_repositories: false }, CTX)
-    ).rejects.toMatchObject({ kind: 'invalid_params' });
-    expect(mocks.updateOrganization).not.toHaveBeenCalled();
-    expect(mocks.auditCreate).not.toHaveBeenCalled();
-  });
-
-  it('audits against REPO_SETTINGS after the GitHub write', async () => {
     await orgRepoSettingsUpdateTool.handler(
       { ...BASE, default_repository_permission: 'none' },
       CTX
@@ -432,10 +507,17 @@ describe('org_repo_settings_update', () => {
     const audit = mocks.auditCreate.mock.calls[0][0] as {
       resource_type: string;
       classroom_id: string;
+      action: string;
       data: Record<string, unknown>;
     };
     expect(audit.resource_type).toBe('REPO_SETTINGS');
     expect(audit.classroom_id).toBe('class-1');
-    expect(audit.data).toMatchObject({ org: 'myorg', default_repository_permission: 'none' });
+    expect(audit.action).toBe('UPDATE');
+    expect(audit.data).toEqual({
+      tool: 'org_repo_settings_update',
+      org: 'myorg',
+      changes: { default_repository_permission: { from: 'read', to: 'none' } },
+      value: 'default_repository_permission=none',
+    });
   });
 });
