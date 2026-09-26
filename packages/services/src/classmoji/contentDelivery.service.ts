@@ -266,8 +266,12 @@ export function canDeliverContent(
 /**
  * Which file types an upload into this classroom's content repo may be.
  *
- * `'any'` exactly when this layer serves the classroom: what makes an arbitrary
- * file safe to host is the Worker — it types a blob from its signed extension
+ * `'any'` exactly when this layer serves the classroom: the deployment can sign
+ * (`isContentDeliveryConfigured`) AND the classroom is one it delivers
+ * (`canDeliverContent`). The classroom half alone is not enough — a deployment
+ * with no signing secret or origin serves every file straight from GitHub,
+ * however the row is set. What makes an arbitrary file safe to host is the
+ * Worker — it types a blob from its signed extension
  * alone, serves an unknown one as `application/octet-stream`, and sends
  * `nosniff` and a sandboxing CSP on every response. A classroom it does not
  * serve has its files read straight from GitHub, so it keeps the image/PDF
@@ -277,7 +281,7 @@ export function canDeliverContent(
 export function uploadFileTypes(
   classroom: Parameters<typeof canDeliverContent>[0]
 ): FileTypePolicy {
-  return canDeliverContent(classroom) ? 'any' : 'allowlist';
+  return isContentDeliveryConfigured() && canDeliverContent(classroom) ? 'any' : 'allowlist';
 }
 
 /**
