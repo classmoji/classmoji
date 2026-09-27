@@ -454,6 +454,8 @@ describe('createUpload', () => {
       createUpload({ classroom, userId: 'u', filename: 'a.mp4', sizeBytes: PER_FILE_MAX_BYTES })
     ).rejects.toMatchObject({
       code: 'QUOTA_EXCEEDED',
+      // Tim's decision (2026-09-27): full means full — say so, and how to get more.
+      message: "This class's media storage is full. Contact hello@classmoji.io to upgrade.",
       usedBytes: 9 * GIB,
       quotaBytes: PRO_QUOTA_BYTES,
     });

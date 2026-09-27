@@ -37,6 +37,10 @@ import { validateFile, type FileTypePolicy } from '../content/utils/validateFile
 import { extensionOf, filenameRefusal, kindForExt, type MediaKind } from './mediaKinds.ts';
 import { PER_FILE_MAX_BYTES } from './mediaQuota.ts';
 
+// For client code on the router subpath: the full-storage sentence the server
+// answers with, so a dialog that builds its own message says the same thing.
+export { MEDIA_QUOTA_FULL_MESSAGE } from './mediaQuota.ts';
+
 /** Why a file cannot be stored anywhere this classroom can put it. */
 export type StorageRefusalCode = 'TOO_LARGE_FOR_REPO' | 'MEDIA_UNAVAILABLE' | 'TYPE_NOT_ALLOWED';
 

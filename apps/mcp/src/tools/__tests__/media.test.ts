@@ -211,12 +211,12 @@ describe('file_upload_start', () => {
     expect(mocks.auditCreate).not.toHaveBeenCalled();
   });
 
-  it('carries the quota numbers on QUOTA_EXCEEDED', async () => {
-    mocks.startStagedUpload.mockRejectedValue(
-      new FakeMediaError('QUOTA_EXCEEDED', 'over quota', 9, 10)
-    );
+  it('carries the full-storage sentence and the quota numbers on QUOTA_EXCEEDED', async () => {
+    const full = "This class's media storage is full. Contact hello@classmoji.io to upgrade.";
+    mocks.startStagedUpload.mockRejectedValue(new FakeMediaError('QUOTA_EXCEEDED', full, 9, 10));
     await expect(start({ page_id: PAGE_ID })).rejects.toMatchObject({
       code: 'QUOTA_EXCEEDED',
+      message: full,
       data: { used_bytes: 9, quota_bytes: 10 },
     });
   });

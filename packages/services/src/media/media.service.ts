@@ -40,6 +40,7 @@ import {
 } from './mediaLookup.ts';
 import {
   MAX_PARTS_PER_SIGN,
+  MEDIA_QUOTA_FULL_MESSAGE,
   PART_SIZE_BYTES,
   PER_FILE_MAX_BYTES,
   partCountFor,
@@ -349,11 +350,7 @@ async function reserveUpload({
     const usedBytes = rows.reduce((total, live) => total + billedBytes(live), 0);
 
     if (usedBytes + sizeBytes > quotaBytes) {
-      throw new MediaError(
-        'QUOTA_EXCEEDED',
-        'This file would put the class over its storage quota',
-        { usedBytes, quotaBytes }
-      );
+      throw new MediaError('QUOTA_EXCEEDED', MEDIA_QUOTA_FULL_MESSAGE, { usedBytes, quotaBytes });
     }
 
     return tx.mediaObject.create({

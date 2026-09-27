@@ -63,6 +63,16 @@ export const PART_SIZE_BYTES = 32 * 1024 * 1024;
 /** The most part numbers one signing call will mint URLs for. */
 export const MAX_PARTS_PER_SIGN = 50;
 
+/**
+ * What a Pro class is told when its media storage is full (decided 2026-09-27):
+ * no repository fallback, a way to get more. Every surface that refuses on the
+ * quota — the upload routes, agent uploads, MCP — carries this sentence, with
+ * the numbers (`usedBytes`, `quotaBytes`) alongside it. Plain data, so a
+ * browser can show the same words (`@classmoji/services/media/router`).
+ */
+export const MEDIA_QUOTA_FULL_MESSAGE =
+  "This class's media storage is full. Contact hello@classmoji.io to upgrade.";
+
 export function quotaBytesFor(isPro: boolean): number {
   return isPro ? PRO_QUOTA_BYTES : FREE_QUOTA_BYTES;
 }

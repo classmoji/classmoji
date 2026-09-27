@@ -100,6 +100,10 @@ const STATUS_FOR: Record<string, number> = {
   DELIVERY_REQUIRED: 409,
   FILE_TOO_LARGE: 413,
   KIND_NOT_ALLOWED: 422,
+  // The body carries the service's sentence — "This class's media storage is
+  // full. Contact hello@classmoji.io to upgrade." (`MEDIA_QUOTA_FULL_MESSAGE`)
+  // — plus `usedBytes` / `quotaBytes`. No repository fallback: a full Pro
+  // class is refused, not rerouted.
   QUOTA_EXCEEDED: 409,
   NOT_FOUND: 404,
   BAD_STATE: 409,

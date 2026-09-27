@@ -40,7 +40,7 @@ import {
   toMediaRecord,
   type MediaRow,
 } from './mediaLookup.ts';
-import { PER_FILE_MAX_BYTES, quotaBytesFor } from './mediaQuota.ts';
+import { MEDIA_QUOTA_FULL_MESSAGE, PER_FILE_MAX_BYTES, quotaBytesFor } from './mediaQuota.ts';
 import {
   assertRepoTarget,
   uploadCapabilityFor,
@@ -237,11 +237,7 @@ async function insertStagingRow(args: {
       const usedBytes = live.reduce((total, row) => total + billedBytes(row), 0);
       const quotaBytes = quotaBytesFor(true);
       if (usedBytes + args.sizeBytes > quotaBytes) {
-        throw new MediaError(
-          'QUOTA_EXCEEDED',
-          'This file would put the class over its storage quota',
-          { usedBytes, quotaBytes }
-        );
+        throw new MediaError('QUOTA_EXCEEDED', MEDIA_QUOTA_FULL_MESSAGE, { usedBytes, quotaBytes });
       }
     }
 
@@ -1121,14 +1117,10 @@ export async function settleStagedImport(mediaId: string, sizeBytes: number): Pr
         .reduce((total, other) => total + billedBytes(other), 0);
       const quotaBytes = quotaBytesFor(true);
       if (usedBytes + sizeBytes > quotaBytes) {
-        throw new MediaError(
-          'QUOTA_EXCEEDED',
-          'This file would put the class over its storage quota',
-          {
-            usedBytes,
-            quotaBytes,
-          }
-        );
+        throw new MediaError('QUOTA_EXCEEDED', MEDIA_QUOTA_FULL_MESSAGE, {
+          usedBytes,
+          quotaBytes,
+        });
       }
     }
     await tx.mediaObject.updateMany({

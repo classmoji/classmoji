@@ -238,7 +238,10 @@ describe('startStagedUpload', () => {
         sizeBytes: 100,
         target,
       })
-    ).rejects.toMatchObject({ code: 'QUOTA_EXCEEDED' });
+    ).rejects.toMatchObject({
+      code: 'QUOTA_EXCEEDED',
+      message: "This class's media storage is full. Contact hello@classmoji.io to upgrade.",
+    });
     expect(prisma.mediaObject.create).not.toHaveBeenCalled();
   });
 
