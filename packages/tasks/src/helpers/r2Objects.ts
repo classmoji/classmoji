@@ -35,6 +35,15 @@ import { VideoRefusal } from './videoPlan.ts';
  * `ContentLength` — no buffering, no unknown-length handling, which is most of
  * what `Upload` exists for), and it keeps a new package out of the Trigger
  * image and the lockfile.
+ *
+ * ## Retries
+ *
+ * The SDK does not retry a request whose body is a stream (it cannot rewind
+ * it), so each part — and the single PUT — is retried here with a FRESH ranged
+ * read stream: a few tries with jittered backoff, only for failures another
+ * try can change (network, timeouts, 5xx, 408, 429). When a part gives up, the
+ * other parts in flight are cancelled and no new ones start before the upload
+ * is aborted.
  */
 
 export interface MediaStore {
@@ -63,6 +72,11 @@ export function mediaStore(): MediaStore | null {
     // aws-chunked encoding with a trailing checksum.
     requestChecksumCalculation: 'WHEN_REQUIRED',
     responseChecksumValidation: 'WHEN_REQUIRED',
+    // A stalled connection fails in a minute instead of holding the run until
+    // `maxDuration`. `socketTimeout` is an IDLE timeout on the socket, and it
+    // stays armed while a GetObject body streams to disk; a total-time limit
+    // would instead cut off a large transfer that is still moving.
+    requestHandler: { connectionTimeout: 10_000, socketTimeout: 60_000 },
   });
   cached = { key, store: { client, bucket } };
   return cached.store;
@@ -77,16 +91,63 @@ export const PART_BYTES = 64 * 1024 * 1024;
 /** Parts in flight at once — each is a file read stream, not a buffer. */
 const PART_CONCURRENCY = 4;
 
+/** Tries per part (and per single PUT), the first included. */
+export const PART_TRIES = 4;
+
+export interface TransferOptions {
+  /** Wait before try `n + 1` after try `n` failed. Tests pass `() => 0`. */
+  retryDelayMs?: (failedTry: number) => number;
+}
+
+/** 0.5–1 s, 1–1.5 s, 2–2.5 s: exponential with jitter. */
+function backoffMs(failedTry: number): number {
+  return 500 * 2 ** (failedTry - 1) + Math.random() * 500;
+}
+
+/**
+ * Worth another try: no HTTP status (network, socket timeout, a stream that
+ * broke), a 5xx, 408 or 429. Any other 4xx — `NoSuchUpload`, a bad request —
+ * will fail the same way again.
+ */
+export function isTransientS3Error(error: unknown): boolean {
+  const e = error as { name?: string; $metadata?: { httpStatusCode?: number } } | null;
+  if (e?.name === 'AbortError') return false;
+  const status = e?.$metadata?.httpStatusCode;
+  if (typeof status !== 'number') return true;
+  return status >= 500 || status === 408 || status === 429;
+}
+
+/**
+ * `send` up to `PART_TRIES` times while failures are transient and `stop`
+ * has not fired. `send` must build a fresh body each call.
+ */
+async function withRetries<T>(
+  send: () => Promise<T>,
+  { retryDelayMs = backoffMs }: TransferOptions,
+  stop?: AbortSignal
+): Promise<T> {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await send();
+    } catch (error) {
+      if (attempt >= PART_TRIES || stop?.aborted || !isTransientS3Error(error)) throw error;
+      await new Promise(resolve => setTimeout(resolve, retryDelayMs(attempt)));
+      if (stop?.aborted) throw error;
+    }
+  }
+}
+
 function isNotFound(error: unknown): boolean {
   const e = error as { name?: string; $metadata?: { httpStatusCode?: number } } | null;
   return e?.name === 'NoSuchKey' || e?.name === 'NotFound' || e?.$metadata?.httpStatusCode === 404;
 }
 
 /**
- * Stream an object to a local file. The byte count must be exactly
- * `expectedBytes` (the row's `size_bytes`, verified at upload): more is cut off
- * at the limit rather than filling the disk, and either way a mismatch is a
- * refusal — the stored object is not the one that was uploaded.
+ * Stream an object to a local file. The object's `ContentLength` must be
+ * `expectedBytes` (the row's `size_bytes`, verified at upload) — otherwise it
+ * is a refusal: the stored object is not the one that was uploaded. A stream
+ * that then ends SHORT of that is a broken transfer (retried); one that runs
+ * past it is cut off at the limit rather than filling the disk, and refused.
  */
 export async function downloadToFile(
   store: MediaStore,
@@ -95,16 +156,22 @@ export async function downloadToFile(
   expectedBytes: number
 ): Promise<void> {
   let body: unknown;
+  let declared: number | undefined;
   try {
     const object = await store.client.send(
       new GetObjectCommand({ Bucket: store.bucket, Key: key })
     );
     body = object.Body;
+    declared = object.ContentLength;
   } catch (error) {
     if (isNotFound(error)) throw new VideoRefusal('ORIGINAL_MISSING');
     throw error;
   }
   if (!(body instanceof Readable)) throw new Error(`media: no stream body for ${key}`);
+  if (typeof declared === 'number' && declared !== expectedBytes) {
+    body.destroy();
+    throw new VideoRefusal('ORIGINAL_MISMATCH', `stored ${declared} of ${expectedBytes} bytes`);
+  }
 
   let seen = 0;
   const limit = new Transform({
@@ -119,7 +186,7 @@ export async function downloadToFile(
   });
   await pipeline(body, limit, createWriteStream(file, { flags: 'wx' }));
   if (seen !== expectedBytes) {
-    throw new VideoRefusal('ORIGINAL_MISMATCH', `${seen} of ${expectedBytes} bytes`);
+    throw new Error(`media: download of ${key} ended at ${seen} of ${expectedBytes} bytes`);
   }
 }
 
@@ -132,25 +199,31 @@ export async function sha256File(file: string): Promise<string> {
 
 /**
  * Upload a local file of known size. One PUT when it fits in a part,
- * otherwise a multipart upload that is aborted if any part fails.
+ * otherwise a multipart upload that is aborted if any part fails. Each PUT
+ * and part is retried with a fresh read stream (see "Retries").
  */
 export async function uploadFile(
   store: MediaStore,
   key: string,
   file: string,
   sizeBytes: number,
-  contentType: string
+  contentType: string,
+  options: TransferOptions = {}
 ): Promise<void> {
   const { client, bucket } = store;
   if (sizeBytes <= PART_BYTES) {
-    await client.send(
-      new PutObjectCommand({
-        Bucket: bucket,
-        Key: key,
-        Body: createReadStream(file),
-        ContentLength: sizeBytes,
-        ContentType: contentType,
-      })
+    await withRetries(
+      () =>
+        client.send(
+          new PutObjectCommand({
+            Bucket: bucket,
+            Key: key,
+            Body: createReadStream(file),
+            ContentLength: sizeBytes,
+            ContentType: contentType,
+          })
+        ),
+      options
     );
     return;
   }
@@ -165,26 +238,43 @@ export async function uploadFile(
     const partCount = Math.ceil(sizeBytes / PART_BYTES);
     const etags: string[] = new Array(partCount);
     let next = 0;
+    // The first part to give up stops the rest: no new parts start, and the
+    // ones in flight are cancelled, so the abort below is the last word.
+    const stop = new AbortController();
+    let failure: { error: unknown } | null = null;
     const worker = async () => {
-      while (next < partCount) {
+      while (next < partCount && !stop.signal.aborted) {
         const i = next++;
         const start = i * PART_BYTES;
         const end = Math.min(sizeBytes, start + PART_BYTES); // exclusive
-        const part = await client.send(
-          new UploadPartCommand({
-            Bucket: bucket,
-            Key: key,
-            UploadId: uploadId,
-            PartNumber: i + 1,
-            Body: createReadStream(file, { start, end: end - 1 }),
-            ContentLength: end - start,
-          })
-        );
-        if (!part.ETag) throw new Error(`media: part ${i + 1} of ${key} returned no ETag`);
-        etags[i] = part.ETag;
+        try {
+          const part = await withRetries(
+            () =>
+              client.send(
+                new UploadPartCommand({
+                  Bucket: bucket,
+                  Key: key,
+                  UploadId: uploadId,
+                  PartNumber: i + 1,
+                  Body: createReadStream(file, { start, end: end - 1 }),
+                  ContentLength: end - start,
+                }),
+                { abortSignal: stop.signal }
+              ),
+            options,
+            stop.signal
+          );
+          if (!part.ETag) throw new Error(`media: part ${i + 1} of ${key} returned no ETag`);
+          etags[i] = part.ETag;
+        } catch (error) {
+          failure ??= { error };
+          stop.abort();
+          return;
+        }
       }
     };
     await Promise.all(Array.from({ length: Math.min(PART_CONCURRENCY, partCount) }, worker));
+    if (failure) throw (failure as { error: unknown }).error;
     await client.send(
       new CompleteMultipartUploadCommand({
         Bucket: bucket,
