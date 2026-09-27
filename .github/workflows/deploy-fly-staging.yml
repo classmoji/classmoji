@@ -102,6 +102,9 @@ jobs:
               - 'packages/database/**'
               - 'packages/services/**'
               - 'packages/utils/**'
+              # The worker bundles services, which signs media and content
+              # URLs with this package.
+              - 'packages/content-signing/**'
 
   # Build images before the migration barrier; only rollouts wait for webapp.
   # At most six monorepo builds: admin takes ai-agent's slot when it finishes.
