@@ -67,4 +67,12 @@ test.describe('reading and deleting a media-backed file slide', () => {
     expect(DELETE_SOURCE).toContain('mediaBacked');
     expect(DELETE_SOURCE).toContain("Its file stays in this class's media.");
   });
+
+  test('the delete screen decides "media-backed" by the service’s own rule — media_id wins', () => {
+    // Not its own copy of the condition: a row with BOTH media_id and
+    // source_path (a class import) is media-backed here exactly as it is to
+    // the delete and to every download path.
+    expect(DELETE_SOURCE).toContain('const mediaBacked = isMediaBackedFileSlide(slideInfo.slide);');
+    expect(DELETE_SOURCE).not.toContain('!slideInfo.slide.source_path');
+  });
 });

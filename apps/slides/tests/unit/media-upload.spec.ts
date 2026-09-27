@@ -45,6 +45,12 @@ const PRO: UploadCapability = {
 const FREE: UploadCapability = { ...PRO, isPro: false, media: null };
 /** A classroom the delivery layer does not serve: images and PDFs only. */
 const FREE_ALLOWLIST: UploadCapability = { ...FREE, repoFileTypes: 'allowlist' };
+/**
+ * Pro, but media cannot be offered here — no bucket on this deployment, or the
+ * classroom cannot be served signed. The router answers `MEDIA_UNAVAILABLE`,
+ * not `TOO_LARGE_FOR_REPO`: a Pro classroom is not sold what it already has.
+ */
+const PRO_NO_MEDIA: UploadCapability = { ...PRO, media: null };
 
 test.describe('where a deck asset goes', () => {
   test('a Pro video goes to media, whatever its size', () => {
@@ -96,6 +102,62 @@ test.describe('where a slide document goes', () => {
     if (target.kind !== 'refused') return;
     expect(target.message).toMatch(/35 MB/);
     expect(target.message).toContain('Pro stores files up to 2 GB');
+  });
+});
+
+test.describe('a Pro classroom whose media is unavailable (MEDIA_UNAVAILABLE)', () => {
+  /** The refusal, asserted to be one, with its sentence. */
+  function refusal(target: ReturnType<typeof deckAssetTarget>) {
+    expect(target.kind).toBe('refused');
+    if (target.kind !== 'refused') throw new Error('not refused');
+    return target;
+  }
+
+  test('a video over the repository cap is refused with the router’s sentence, not the Pro pitch', () => {
+    const target = refusal(deckAssetTarget(PRO_NO_MEDIA, { name: 'lecture.mp4', size: 80 * MB }));
+    expect(target.code).toBe('MEDIA_UNAVAILABLE');
+    expect(target.message).toContain("Media storage isn't available for this class right now");
+    expect(target.message).not.toContain('Pro stores files up to');
+  });
+
+  test('a deck image over the repository cap says the same', () => {
+    const target = refusal(deckAssetTarget(PRO_NO_MEDIA, { name: 'poster.png', size: 40 * MB }));
+    expect(target.code).toBe('MEDIA_UNAVAILABLE');
+    expect(target.message).toContain("Media storage isn't available");
+  });
+
+  test('a slide document over the repository cap says the same', () => {
+    const target = refusal(slideFileTarget(PRO_NO_MEDIA, { name: 'deck.pdf', size: 80 * MB }));
+    expect(target.code).toBe('MEDIA_UNAVAILABLE');
+    expect(target.message).toContain("Media storage isn't available");
+    expect(target.message).not.toContain('Pro stores files up to');
+  });
+
+  test('a video that fits still goes to the repository', () => {
+    expect(deckAssetTarget(PRO_NO_MEDIA, { name: 'intro.mp4', size: 3 * MB }).kind).toBe('repo');
+  });
+
+  // Every surface shows the refusal's own sentence rather than branching on a
+  // code, so a new refusal code can never fall through to a generic message or
+  // be sold as a Pro upgrade. Pinned by reading the sources, which need a
+  // browser to run.
+  test('every upload surface shows the router’s message, and none branches on a code', () => {
+    const surfaces = {
+      video: source('../../app/components/properties/editors/VideoProperties.tsx'),
+      deckImage: source('../../app/routes/$slideId/route.tsx'),
+      newFile: source('../../app/routes/$classroomSlug.new/route.tsx'),
+      replaceFile: source('../../app/routes/$classroomSlug.$slideId.replace/route.tsx'),
+    };
+    expect(surfaces.video).toContain('toast.error(target.message);');
+    expect(surfaces.deckImage).toContain(
+      "if (target.kind === 'refused') throw new Error(target.message);"
+    );
+    expect(surfaces.newFile).toContain("if (target.kind === 'refused') return target.message;");
+    expect(surfaces.replaceFile).toContain("if (target.kind === 'refused') return target.message;");
+    for (const text of Object.values(surfaces)) {
+      expect(text).not.toContain('TOO_LARGE_FOR_REPO');
+      expect(text).not.toContain('MEDIA_UNAVAILABLE');
+    }
   });
 });
 

@@ -61,8 +61,8 @@ const STEP_CONFIG = {
     label: 'Processing videos',
     icon: VideoCameraOutlined,
   },
-  uploading_cloudinary: {
-    label: 'Uploading to Cloudinary',
+  uploading_media: {
+    label: 'Saving videos to media storage',
     icon: CloudUploadOutlined,
   },
   saving_theme: {
@@ -85,7 +85,7 @@ const STEP_ORDER = [
   'parsing_html',
   'processing_images',
   'processing_videos',
-  'uploading_cloudinary',
+  'uploading_media',
   'saving_theme',
   'generating_html',
   'uploading_github',
@@ -251,10 +251,10 @@ export default function ImportProgressModal({
     const status = getStepStatus(stepKey, currentStep, isDone, !!error);
     if (status !== 'pending') return true;
 
-    // Skip video/cloudinary/theme steps if we're past images and never saw them
+    // Skip video/media/theme steps if we're past images and never saw them
     if (
       stepKey === 'processing_videos' ||
-      stepKey === 'uploading_cloudinary' ||
+      stepKey === 'uploading_media' ||
       stepKey === 'saving_theme'
     ) {
       const imageIndex = STEP_ORDER.indexOf('processing_images');

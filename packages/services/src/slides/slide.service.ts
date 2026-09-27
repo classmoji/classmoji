@@ -17,7 +17,7 @@ import * as contentManifestService from '../classmoji/contentManifest.service.ts
 import { ensureContentRepo } from '../classmoji/page.service.ts';
 import { mintSlideId, type IdGenerator } from './deckHtml.ts';
 import { previewBranchName, saveDeck } from './slideContent.service.ts';
-import { isDeckSlide, SlideKindError } from './slideSource.ts';
+import { isDeckSlide, isMediaBackedFileSlide, SlideKindError } from './slideSource.ts';
 import type { DeckJson } from './deckTypes.ts';
 
 const THEMES_FOLDER = '.slidesthemes';
@@ -651,9 +651,9 @@ export async function deleteSlide({
   // 404 logged as an error on an otherwise clean delete. Neither does a FILE
   // whose document lives in the media store: it was never committed. (Its media
   // object stays — it is in the classroom's media library, and removing it from
-  // there is a separate decision.)
-  const ownsRepoContent =
-    slide.kind !== 'LINK' && !(slide.kind === 'FILE' && slide.media_id && !slide.source_path);
+  // there is a separate decision.) `media_id` wins over a `source_path`, as it
+  // does for every reader — see `isMediaBackedFileSlide`.
+  const ownsRepoContent = slide.kind !== 'LINK' && !isMediaBackedFileSlide(slide);
 
   // Check if this slide uses a shared theme (deck.json-first). Decks only: a
   // theme is something a deck's `deck.json` names, and a file slide's folder

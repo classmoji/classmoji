@@ -25,6 +25,12 @@ export interface SkippedEntry {
   path: string;
   name: string;
   bytes: number;
+  /**
+   * The warning, when the entry was left out for something other than the
+   * repository's size cap — a video media storage refused (`skip`). Absent for
+   * the cap, whose sentence is built from the size.
+   */
+  reason?: string;
 }
 
 /**
@@ -68,6 +74,17 @@ export class RepoEntryGate {
     return this.admit(name, buffer.length, entry.name) ? buffer : null;
   }
 
+  /**
+   * Record an entry left out for a reason of the caller's own, with the
+   * sentence its warning says — a video bound for media storage whose write
+   * failed. Through the gate rather than beside it, so the entry takes the
+   * same road as one over the cap: its references are removed from the deck
+   * (`skippedPaths`) and its warning names the slides that used it.
+   */
+  skip(name: string, bytes: number, path: string, sentence: string): void {
+    this.skipped.push({ path, name, bytes, reason: sentence });
+  }
+
   /** The zip paths of the entries left out so far. */
   skippedPaths(): Set<string> {
     return new Set(this.skipped.map(entry => entry.path));
@@ -79,7 +96,7 @@ export class RepoEntryGate {
    */
   warnings(slidesByPath: ReadonlyMap<string, readonly string[]> = new Map()): string[] {
     return this.skipped.map(entry => {
-      const sentence = repoFileSkippedWarning(entry.name, entry.bytes);
+      const sentence = entry.reason ?? repoFileSkippedWarning(entry.name, entry.bytes);
       const slides = slidesByPath.get(entry.path) ?? [];
       if (slides.length === 0) return sentence;
       return `${slides.length === 1 ? 'Slide' : 'Slides'} ${slides.join(', ')}: ${sentence}`;

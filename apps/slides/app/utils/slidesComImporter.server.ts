@@ -18,12 +18,18 @@ import {
 } from '@classmoji/services/slides';
 import { getContentRepoName } from '@classmoji/utils';
 import { getThemeUrls, saveTheme, generateThemeSlug } from './themeService.server.ts';
-import { RepoEntryGate, resolveMediaRef, slideNumberLabel } from './zipRepoEntries.ts';
 import {
-  uploadVideoBuffer,
-  isCloudinaryConfigured,
-  deleteSlideVideos,
-} from './cloudinaryService.server.ts';
+  RepoEntryGate,
+  declaredUncompressedSize,
+  resolveMediaRef,
+  slideNumberLabel,
+} from './zipRepoEntries.ts';
+import {
+  IMPORT_VIDEO_OPTIONS,
+  importEntryGoesToMedia,
+  storeImportVideosInMedia,
+  type QueuedMediaVideo,
+} from './importVideoMedia.ts';
 
 /**
  * Seeded into deck.json's customCss at import time: overrides slides.com's
@@ -57,9 +63,8 @@ const SL_BLOCK_VISIBILITY_CSS = `
  * @param {string} options.classroomId - Classroom UUID (for database reference)
  * @param {string} options.contentNamespace - Classroom content namespace (e.g., "25w" or a slug)
  * @param {string} options.userId - User ID who is importing
- * @param {string[]} [options.cloudinaryVideoPaths] - Paths of videos to upload to Cloudinary instead of GitHub
  * @param {Function} [options.onProgress] - Callback for progress updates ({ type: 'step'|'done'|'error', step?: string, current?: number, total?: number, filename?: string, warnings?: string[] })
- * @returns {Promise<{slideId: string, slideCount: number, imageCount: number, themeSaved?: string, cloudinaryUploads?: number, warnings: string[]}>}
+ * @returns {Promise<{slideId: string, slideCount: number, imageCount: number, themeSaved?: string, mediaVideos?: number, warnings: string[]}>}
  *
  * ## Files too large for the course repository
  *
@@ -70,9 +75,17 @@ const SL_BLOCK_VISIBILITY_CSS = `
  * (`warnings`, also on the `done` event) — the deck imports without it rather
  * than not at all. An entry is measured by the size its ZIP header declares
  * before it is decompressed, and again after. The deck's references to a file
- * left out are removed rather than left pointing at nothing. Videos a Pro
- * classroom sends to Cloudinary are not repository files and are not measured,
- * unless Cloudinary fails and they fall back to the repository.
+ * left out are removed rather than left pointing at nothing.
+ *
+ * ## Videos on a classroom with media storage
+ *
+ * Where the classroom has media, the storage router sends every video there
+ * (and anything over the repository's cap), exactly as it does for the editor's
+ * own uploads. Those videos are not repository files: each is written with
+ * `putMediaObject` and the deck references it as `media://{id}`. A write that
+ * fails leaves that one video out, with a warning through the same channel as
+ * the size skips — never the whole import. See `importVideoMedia.ts`. A
+ * classroom without media keeps every video on the repository path above.
  */
 export async function processZipImport({
   zipFile,
@@ -86,7 +99,6 @@ export async function processZipImport({
   classroomId,
   contentNamespace,
   userId,
-  cloudinaryVideoPaths = [],
   onProgress = () => {},
 }: {
   zipFile: File | Blob;
@@ -100,7 +112,6 @@ export async function processZipImport({
   classroomId: string;
   contentNamespace: string;
   userId: string;
-  cloudinaryVideoPaths?: string[];
   onProgress?: (event: {
     type: string;
     step?: string;
@@ -180,6 +191,11 @@ export async function processZipImport({
   // The delivery layer serves gated classrooms; legacy ones read through the
   // authenticated proxy.
 
+  // Where this classroom's uploads can go — the same capability the editors
+  // route against, re-derived here from the classroom row. Media on it means
+  // the router sends videos to media storage instead of the repository.
+  const uploadCapability = await ClassmojiService.media.uploadCapabilityFor(classroom);
+
   // 7. Collect files for batch upload
   const files: Array<{ path: string; content: string; encoding: 'utf-8' | 'base64' }> = [];
 
@@ -210,13 +226,11 @@ export async function processZipImport({
   const videoMap = new Map();
   const videoBaseUrl = `${baseUrl}/videos`;
 
-  // Track videos for Cloudinary upload (uploaded after slide is created)
-  /** @type {Array<{filePath: string, filename: string, buffer: Buffer}>} */
-  const cloudinaryVideoQueue = [];
-  let cloudinaryUploads = 0;
-
-  // Convert cloudinaryVideoPaths to a Set for fast lookup
-  const cloudinaryVideoSet = new Set(cloudinaryVideoPaths);
+  // Videos the storage router sends to media — written after the slide row
+  // exists, so a failed import has one cleanup that covers them.
+  const mediaVideoQueue: QueuedMediaVideo[] = [];
+  /** Media objects this import wrote, deleted again if the import fails. */
+  const storedMediaIds: string[] = [];
 
   // 7c. First pass: identify images and videos for progress tracking
   /** @type {Array<{filePath: string, file: JSZip.JSZipObject, filename: string, type: 'image' | 'video', ext: string}>} */
@@ -301,30 +315,34 @@ export async function processZipImport({
       filename,
     });
 
-    // Check if this video should go to Cloudinary
-    if (cloudinaryVideoSet.has(filePath) && isCloudinaryConfigured()) {
-      // Queue for Cloudinary upload (needs slideId, which we get after creating slide record)
-      const buffer = await file.async('nodebuffer');
-      cloudinaryVideoQueue.push({ filePath, filename, buffer });
-      // We'll add to videoMap after upload
+    // The storage router decides, by the size the ZIP declares and then again
+    // by the bytes themselves: media where it sends the entry there, the
+    // repository (through the gate) everywhere else.
+    let buffer: Buffer | null;
+    const declared = declaredUncompressedSize(file);
+    if (importEntryGoesToMedia(uploadCapability, filename, declared ?? 0)) {
+      buffer = await file.async('nodebuffer');
+      if (importEntryGoesToMedia(uploadCapability, filename, buffer.length)) {
+        mediaVideoQueue.push({ filePath, filename, buffer });
+        continue;
+      }
+      // The header was only a claim: the bytes are the repository's.
+      if (!repoGate.admit(filename, buffer.length, filePath)) continue;
     } else {
-      // Upload to GitHub as before
-      const buffer = await repoGate.read(file, filename);
+      buffer = await repoGate.read(file, filename);
       if (!buffer) continue;
-      const content = buffer.toString('base64');
-      const newPath = `${contentPath}/videos/${filename}`;
-
-      files.push({
-        path: newPath,
-        content,
-        encoding: 'base64',
-      });
-
-      // Map old path to new absolute URL
-      const absoluteUrl = `${videoBaseUrl}/${filename}`;
-      videoMap.set(filePath, absoluteUrl);
-      videoMap.set(filename, absoluteUrl);
     }
+
+    files.push({
+      path: `${contentPath}/videos/${filename}`,
+      content: buffer.toString('base64'),
+      encoding: 'base64',
+    });
+
+    // Map old path to new absolute URL
+    const absoluteUrl = `${videoBaseUrl}/${filename}`;
+    videoMap.set(filePath, absoluteUrl);
+    videoMap.set(filename, absoluteUrl);
   }
 
   // 8. Handle theme - either use saved theme or extract from ZIP
@@ -567,7 +585,7 @@ export async function processZipImport({
     }
   });
 
-  // 9d. Video URL rewriting moved to step 11b (after Cloudinary uploads populate videoMap)
+  // 9d. Video URL rewriting moved to step 11b (after the media writes populate videoMap)
 
   // 9e. Process iframes - wrap any not already in sl-blocks
   // Some slides.com exports may have iframes outside sl-block structure
@@ -639,7 +657,8 @@ export async function processZipImport({
     }
   });
 
-  // 10. Create the slide database record first (needed for Cloudinary folder path)
+  // 10. Create the slide database record (before the media writes, so a failed
+  // import has one cleanup that covers both)
   const slide = await getPrisma().slide.create({
     data: {
       title: slideTitle,
@@ -660,79 +679,66 @@ export async function processZipImport({
     });
   }
 
-  /** Delete the slide record + any uploaded Cloudinary videos after a failed import. */
+  /**
+   * Delete the slide record, and the media objects this import wrote, after a
+   * failed import. Nothing references those objects once the commit is gone,
+   * and they would otherwise count against the class's quota. Best-effort per
+   * object: a delete that fails is logged, and the import's own error is the
+   * one the uploader sees.
+   */
   const cleanupFailedImport = async () => {
     await getPrisma().slide.delete({ where: { id: slide.id } });
 
-    if (cloudinaryUploads > 0) {
+    for (const mediaId of storedMediaIds) {
       try {
-        await deleteSlideVideos(slide.id);
-        console.log(`Cleaned up ${cloudinaryUploads} Cloudinary videos after failed import`);
+        await ClassmojiService.media.deleteMedia({ classroom, mediaId });
       } catch (cleanupErr: unknown) {
         const message = cleanupErr instanceof Error ? cleanupErr.message : String(cleanupErr);
-        console.error('Failed to clean up Cloudinary videos:', message);
+        console.error(`Failed to delete media ${mediaId} after a failed import:`, message);
       }
     }
   };
 
-  // 11. Upload Cloudinary videos (now that we have slideId)
-  if (cloudinaryVideoQueue.length > 0) {
-    console.log(`Uploading ${cloudinaryVideoQueue.length} videos to Cloudinary...`);
+  // 11. Write the videos the router sent to media. One that media storage
+  // refuses is left out with a warning; the rest of the import carries on.
+  if (mediaVideoQueue.length > 0) {
     onProgress({
       type: 'step',
-      step: 'uploading_cloudinary',
+      step: 'uploading_media',
       current: 0,
-      total: cloudinaryVideoQueue.length,
+      total: mediaVideoQueue.length,
     });
-
-    for (let i = 0; i < cloudinaryVideoQueue.length; i++) {
-      const { filePath, filename, buffer } = cloudinaryVideoQueue[i];
-      onProgress({
-        type: 'step',
-        step: 'uploading_cloudinary',
-        current: i + 1,
-        total: cloudinaryVideoQueue.length,
-        filename,
-      });
-
-      try {
-        const result = await uploadVideoBuffer(buffer, slide.id, filename);
-        cloudinaryUploads++;
-
-        // Map old path to Cloudinary URL
-        videoMap.set(filePath, result.optimizedUrl);
-        videoMap.set(filename, result.optimizedUrl);
-
-        console.log(
-          `Uploaded ${filename} to Cloudinary (${(result.bytes / 1024 / 1024).toFixed(1)} MB)`
-        );
-      } catch (cloudErr: unknown) {
-        // If Cloudinary fails, fall back to GitHub
-        const message = cloudErr instanceof Error ? cloudErr.message : String(cloudErr);
-        console.error(`Cloudinary upload failed for ${filename}, falling back to GitHub:`, message);
-
-        if (!repoGate.admit(filename, buffer.length, filePath)) continue;
-        const content = buffer.toString('base64');
-        const newPath = `${contentPath}/videos/${filename}`;
-
-        files.push({
-          path: newPath,
-          content,
-          encoding: 'base64',
-        });
-
-        const absoluteUrl = `${videoBaseUrl}/${filename}`;
-        videoMap.set(filePath, absoluteUrl);
-        videoMap.set(filename, absoluteUrl);
-      }
-    }
+    const stored = await storeImportVideosInMedia({
+      queue: mediaVideoQueue,
+      put: ({ filename, bytes }) =>
+        ClassmojiService.media.putMediaObject({
+          classroom,
+          userId,
+          filename,
+          bytes,
+          options: { ...IMPORT_VIDEO_OPTIONS },
+        }),
+      gate: repoGate,
+      videoMap,
+      onEach: (current, total, filename) =>
+        onProgress({ type: 'step', step: 'uploading_media', current, total, filename }),
+      onError: (filename, error) =>
+        console.error(
+          `[slides.com import] Media storage refused ${filename}:`,
+          error instanceof Error ? error.message : error
+        ),
+    });
+    storedMediaIds.push(...stored);
+    // The bytes are in media now (or left out); nothing below needs them.
+    mediaVideoQueue.length = 0;
   }
 
-  // 11b. Rewrite video URLs in HTML (now that videoMap has all URLs including Cloudinary)
+  // 11b. Rewrite video URLs in HTML (now that videoMap has every URL, media
+  // references included)
   //
   // As with images, a reference to a video the import left out — skipped on
-  // the way in, or refused when a Cloudinary upload fell back to the repository
-  // — is removed rather than left pointing into the ZIP.
+  // the way in, or refused by media storage — is removed rather than left
+  // pointing into the ZIP.
   const videoPaths = new Set(videoFiles.map(f => f.filePath));
   const skippedVideos = new Set([...repoGate.skippedPaths()].filter(p => videoPaths.has(p)));
 
@@ -898,7 +904,7 @@ export async function processZipImport({
     await ClassmojiService.contentAssets.recordContentAssets(classroom.id, result.files);
   } catch (uploadError: unknown) {
     console.log(uploadError);
-    // If upload fails, clean up slide record and Cloudinary videos
+    // If upload fails, clean up the slide record and the media it wrote
     await cleanupFailedImport();
 
     const message = uploadError instanceof Error ? uploadError.message : String(uploadError);
@@ -940,7 +946,7 @@ export async function processZipImport({
     slideCount,
     imageCount: imageMap.size / 2, // Divide by 2 because we added each image twice (full path and filename)
     themeSaved, // Name of saved theme if saveThemeAs was used
-    cloudinaryUploads: cloudinaryUploads > 0 ? cloudinaryUploads : undefined,
+    mediaVideos: storedMediaIds.length > 0 ? storedMediaIds.length : undefined,
     warnings, // Entries left out for being over the course repository's per-file ceiling
   };
 }
