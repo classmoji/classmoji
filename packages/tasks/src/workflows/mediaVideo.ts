@@ -29,7 +29,7 @@ import { probeFile, runFfmpeg } from '../helpers/videoTools.ts';
 
 /**
  * `media-video-process` — turn an uploaded video into a streaming rendition
- * (`web-{hex12}.mp4`) and a poster (`poster-{hex12}.webp`), plan §3.10, §12.3
+ * (`web-{hex12}.mp4`) and a poster (`poster-{hex12}.jpg`), plan §3.10, §12.3
  * and the binding amendments in §12.6.
  *
  * Queued by the services' `onMediaReady` for a READY video uploaded with
@@ -257,7 +257,7 @@ export async function processVideo(
     // 5. The poster — best-effort.
     let poster: { file: string; bytes: number } | null = null;
     try {
-      const file = join(dir, 'poster.webp');
+      const file = join(dir, 'poster.jpg');
       await deps.ffmpeg(
         posterArgs({
           rendition,
@@ -294,7 +294,7 @@ export async function processVideo(
         posterVariant((await deps.sha256(poster.file)).slice(0, 12))
       );
       uploaded.push(posterKey);
-      await deps.upload(posterKey, poster.file, poster.bytes, 'image/webp');
+      await deps.upload(posterKey, poster.file, poster.bytes, 'image/jpeg');
       const storedPoster = await deps.headBytes(posterKey);
       if (storedPoster !== poster.bytes) {
         throw new Error(`poster stored as ${storedPoster} bytes, expected ${poster.bytes}`);
@@ -472,8 +472,14 @@ export const mediaVideoProcess = task({
   /**
    * After the last attempt. `run` has usually recorded the failure already
    * (then this matches no PENDING row and does nothing); this catches a throw
-   * from outside its own catch. It does not run for a run that crashed or
-   * hit `maxDuration`.
+   * from outside its own catch.
+   *
+   * It runs IN the task process, only when `run` threw and no retry is left
+   * (SDK 4.6.3 `taskExecutor`). A run the platform ends from outside — killed
+   * at `maxDuration`, OOM-killed, over the disk limit, heartbeat timeout,
+   * cancelled, or a crash on its last attempt — never reaches it, and the row
+   * stays PENDING ("Optimising"). The original keeps serving; a Trigger replay
+   * picks the row up again.
    */
   onFailure: async ({ payload }) => {
     try {

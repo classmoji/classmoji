@@ -467,7 +467,14 @@ export function renditionArgs({
 
 /**
  * The poster: one frame of the RENDITION (already decodable and upright) at
- * `posterTime`, at most 1280 wide, as webp.
+ * `posterTime`, at most 1280 wide, as a baseline JPEG.
+ *
+ * JPEG, not webp: the `mjpeg` encoder is built into every ffmpeg (webp needs
+ * libwebp, which neither Homebrew's ffmpeg nor every distro build has).
+ * `format=yuvj420p` hands the encoder full-range 4:2:0 explicitly rather than
+ * leaving the range conversion to format negotiation, which has changed
+ * between releases; verified on 5.1.9 (Debian bookworm, what the Trigger image
+ * installs) and 8.1.
  */
 export function posterArgs({
   rendition,
@@ -492,15 +499,16 @@ export function posterArgs({
     '-frames:v',
     '1',
     '-vf',
-    `scale=${assertPositive(width)}:-2`,
+    `scale=${assertPositive(width)}:-2,format=yuvj420p`,
+    '-an',
     '-c:v',
-    'libwebp',
-    '-quality',
-    '80',
+    'mjpeg',
+    '-q:v',
+    '3',
     '-fs',
     String(POSTER_MAX_BYTES),
     '-f',
-    'webp',
+    'mjpeg',
     '-y',
     output,
   ];

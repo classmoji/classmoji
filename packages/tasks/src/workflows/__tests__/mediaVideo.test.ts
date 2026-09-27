@@ -36,7 +36,7 @@ const ORIG = `${PREFIX}orig.mp4`;
 const HASH_WEB = 'aaaaaaaaaaaa'.padEnd(64, '0');
 const HASH_POSTER = 'bbbbbbbbbbbb'.padEnd(64, '0');
 const WEB = `${PREFIX}web-aaaaaaaaaaaa.mp4`;
-const POSTER = `${PREFIX}poster-bbbbbbbbbbbb.webp`;
+const POSTER = `${PREFIX}poster-bbbbbbbbbbbb.jpg`;
 
 const PROBE_IN = {
   streams: [
@@ -127,7 +127,7 @@ function world(rowOver: Partial<Row> = {}) {
     ffmpeg: vi.fn(async (args: string[]) => {
       state.events.push(`ffmpeg:${args.at(-1)?.split('/').at(-1)}`);
     }),
-    sha256: vi.fn(async (file: string) => (file.endsWith('.webp') ? HASH_POSTER : HASH_WEB)),
+    sha256: vi.fn(async (file: string) => (file.endsWith('.jpg') ? HASH_POSTER : HASH_WEB)),
     fileSize: vi.fn(async () => 1000),
     makeTmpDir: vi.fn(async () => {
       const dir = `/tmp/media-video-${state.tmpDirs.size}`;
@@ -187,7 +187,7 @@ describe('the happy path', () => {
     expect(state.events).toEqual([
       `download:${ORIG}`,
       'ffmpeg:web.mp4',
-      'ffmpeg:poster.webp',
+      'ffmpeg:poster.jpg',
       `upload:${WEB}`,
       `upload:${POSTER}`,
       'commitDone',
@@ -210,16 +210,16 @@ describe('the happy path', () => {
     expect(deps.upload).toHaveBeenCalledWith(WEB, '/tmp/media-video-0/web.mp4', 1000, 'video/mp4');
     expect(deps.upload).toHaveBeenCalledWith(
       POSTER,
-      '/tmp/media-video-0/poster.webp',
+      '/tmp/media-video-0/poster.jpg',
       1000,
-      'image/webp'
+      'image/jpeg'
     );
   });
 
   it('a poster ffmpeg cannot make leaves poster_key null, not a failed job', async () => {
     const { state, deps } = world();
     (deps.ffmpeg as ReturnType<typeof vi.fn>).mockImplementation(async (args: string[]) => {
-      if (args.at(-1)?.endsWith('.webp')) throw new VideoRefusal('CONVERT_FAILED', 'libwebp');
+      if (args.at(-1)?.endsWith('.jpg')) throw new VideoRefusal('CONVERT_FAILED', 'mjpeg');
     });
     const result = await processVideo(PAYLOAD, deps);
     expect(result).toMatchObject({ status: 'done', posterKey: null });

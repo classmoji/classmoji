@@ -47,7 +47,7 @@ async function drain(body: unknown): Promise<number> {
 
 describe('uploadFile', () => {
   it('sends a small file as one streamed PUT with its length and type', async () => {
-    const file = join(dir, 'poster.webp');
+    const file = join(dir, 'poster.jpg');
     await writeFile(file, Buffer.alloc(1234, 1));
     const { store, send } = fakeStore(async command => {
       const input = (command as PutObjectCommand).input;
@@ -55,7 +55,7 @@ describe('uploadFile', () => {
       expect(await drain(input.Body)).toBe(1234);
       return {};
     });
-    await uploadFile(store, 'k', file, 1234, 'image/webp');
+    await uploadFile(store, 'k', file, 1234, 'image/jpeg');
     expect(send).toHaveBeenCalledTimes(1);
     const put = send.mock.calls[0][0] as PutObjectCommand;
     expect(put).toBeInstanceOf(PutObjectCommand);
@@ -63,7 +63,7 @@ describe('uploadFile', () => {
       Bucket: 'b',
       Key: 'k',
       ContentLength: 1234,
-      ContentType: 'image/webp',
+      ContentType: 'image/jpeg',
     });
   });
 

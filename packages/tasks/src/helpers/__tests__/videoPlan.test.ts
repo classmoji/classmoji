@@ -377,10 +377,10 @@ describe('argument lists — arrays, fixed shape, numbers only', () => {
     ).toThrow(TypeError);
   });
 
-  it('poster: seek before input, one frame, ≤1280 wide, webp', () => {
+  it('poster: seek before input, one frame, ≤1280 wide, JPEG from the built-in mjpeg encoder', () => {
     const args = posterArgs({
       rendition: OUT,
-      output: '/tmp/media-video-abc/poster.webp',
+      output: '/tmp/media-video-abc/poster.jpg',
       durationSec: 60,
       renditionWidth: 1920,
     });
@@ -388,12 +388,16 @@ describe('argument lists — arrays, fixed shape, numbers only', () => {
     expect(args[args.indexOf('-ss') + 1]).toBe('1.000');
     expect(args.indexOf('-ss')).toBeLessThan(args.indexOf('-i'));
     expect(args[args.indexOf('-frames:v') + 1]).toBe('1');
-    expect(args[args.indexOf('-vf') + 1]).toBe('scale=1280:-2');
-    expect(args[args.indexOf('-c:v') + 1]).toBe('libwebp');
-    expect(args[args.indexOf('-f') + 1]).toBe('webp');
+    expect(args[args.indexOf('-vf') + 1]).toBe('scale=1280:-2,format=yuvj420p');
+    expect(args[args.indexOf('-c:v') + 1]).toBe('mjpeg');
+    expect(args[args.indexOf('-q:v') + 1]).toBe('3');
+    expect(args[args.indexOf('-f') + 1]).toBe('mjpeg');
+    expect(args).toContain('-an');
+    expect(args).not.toContain('libwebp');
+    expect(args.at(-1)).toBe('/tmp/media-video-abc/poster.jpg');
     // Never upscaled.
     const small = posterArgs({ rendition: OUT, output: 'p', durationSec: 1, renditionWidth: 640 });
-    expect(small[small.indexOf('-vf') + 1]).toBe('scale=640:-2');
+    expect(small[small.indexOf('-vf') + 1]).toBe('scale=640:-2,format=yuvj420p');
     expect(small[small.indexOf('-ss') + 1]).toBe('0.500');
   });
 
