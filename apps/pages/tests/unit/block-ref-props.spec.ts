@@ -2,7 +2,7 @@
  * Every block prop that can hold a file reference is one the asset walk knows.
  *
  * `collectBlockAssetRefs` / `mapBlockAssetRefs` (`@classmoji/utils`, driven by
- * its `REF_PROPS` list) are what find a page's files: to sign them for display,
+ * its `BLOCK_ASSET_REF_PROPS` list) are what find a page's files: to sign them for display,
  * to canonicalize a signed URL back into a reference on save, to copy media on
  * a class import, to empty an unresolved `media://` before the class site
  * renders. A block that stores a file under a prop the walk does not know
@@ -12,13 +12,13 @@
  * So this enumerates EVERY string prop of EVERY block spec the pages app
  * registers and makes each one declare itself: either it is on the short list
  * of props that are never a file (colours, captions, titles, JSON blobs of
- * links…), or the walk must find a reference stored in it. A new block, or a
+ * links…), or it is on `BLOCK_ASSET_REF_PROPS` and the walk finds a reference
+ * stored in it. A new block, or a
  * new prop on an old one, fails here until someone decides which it is.
  */
 
 import { test, expect } from '@playwright/test';
-import * as utils from '@classmoji/utils';
-import { collectBlockAssetRefs, mapBlockAssetRefs } from '@classmoji/utils';
+import { BLOCK_ASSET_REF_PROPS, collectBlockAssetRefs, mapBlockAssetRefs } from '@classmoji/utils';
 
 import { schema } from '~/components/editor/blocks/index.tsx';
 import { viewerSchema } from '~/components/viewer/viewerBlocks.tsx';
@@ -81,7 +81,7 @@ for (const [label, blockSpecs] of [
         expect(
           collectBlockAssetRefs([block]),
           `${type}.${prop} can hold a file but the asset walk does not read it. ` +
-            'Add it to REF_PROPS in @classmoji/utils — or, if it never holds a file, ' +
+            'Add it to BLOCK_ASSET_REF_PROPS in @classmoji/utils — or, if it never holds a file, ' +
             'to NOT_FILE_REFS in this spec with the reason.'
         ).toEqual([REF]);
         const [mapped] = mapBlockAssetRefs([block], () => 'rewritten') as Array<{
@@ -93,10 +93,8 @@ for (const [label, blockSpecs] of [
   });
 }
 
-test('every prop the walk reads is on REF_PROPS, when @classmoji/utils exports it', () => {
-  const exported = (utils as Record<string, unknown>).REF_PROPS;
-  test.skip(!Array.isArray(exported), 'REF_PROPS is not exported from @classmoji/utils yet');
-  const refProps = new Set(exported as string[]);
+test('every file-bearing prop is on BLOCK_ASSET_REF_PROPS, the list the walk reads', () => {
+  const refProps = new Set<string>(BLOCK_ASSET_REF_PROPS);
   for (const [type, prop] of stringProps(schema.blockSpecs as Record<string, unknown>)) {
     if (prop in NOT_FILE_REFS) continue;
     expect(refProps.has(prop), `${type}.${prop}`).toBe(true);
