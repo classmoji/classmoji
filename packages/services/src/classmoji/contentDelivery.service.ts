@@ -264,6 +264,20 @@ export function canDeliverContent(
 }
 
 /**
+ * Will this classroom's content actually be served SIGNED, on this deployment?
+ *
+ * Both halves: the deployment can sign (`isContentDeliveryConfigured` — the
+ * secret and the origin) AND the classroom is one the layer delivers
+ * (`canDeliverContent`). The classroom half alone says yes on a deployment
+ * that cannot mint a single URL. Anything that is only ever served signed —
+ * media above all, which has no legacy path — asks this, so an upload is never
+ * offered where `createUpload` would refuse it.
+ */
+export function canServeSignedContent(classroom: Parameters<typeof canDeliverContent>[0]): boolean {
+  return isContentDeliveryConfigured() && canDeliverContent(classroom);
+}
+
+/**
  * Which file types an upload into this classroom's content repo may be.
  *
  * `'any'` exactly when this layer serves the classroom: the deployment can sign
@@ -281,7 +295,7 @@ export function canDeliverContent(
 export function uploadFileTypes(
   classroom: Parameters<typeof canDeliverContent>[0]
 ): FileTypePolicy {
-  return isContentDeliveryConfigured() && canDeliverContent(classroom) ? 'any' : 'allowlist';
+  return canServeSignedContent(classroom) ? 'any' : 'allowlist';
 }
 
 /**

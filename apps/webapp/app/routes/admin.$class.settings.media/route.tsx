@@ -324,8 +324,9 @@ export default function MediaSettings({ loaderData }: Route.ComponentProps) {
       )}
 
       {usage.isPro && configured && !canDeliver && (
-        // The deployment is fine and the classroom is on Pro; it is this class
-        // that has nowhere to serve from, which is a state an owner can fix.
+        // The bucket is there and the classroom is on Pro, but nothing can be
+        // served signed — this class is not delivered, or this deployment
+        // cannot sign — so nothing new can be added.
         <p className="mb-5 rounded-xl bg-amber-bg px-4 py-3 text-sm text-amber-ink ring-1 ring-amber-bord">
           Media can&rsquo;t be served for this class yet — content delivery isn&rsquo;t active.
         </p>

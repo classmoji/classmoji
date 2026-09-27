@@ -32,7 +32,7 @@ export interface MediaListItem {
 
 /**
  * The classroom fields this page reads — its id, plus everything
- * `canDeliverContent` decides on.
+ * `canServeSignedContent` decides on.
  *
  * Structural rather than the Prisma row for the same reason the delivery layer's
  * own predicate is: a caller holding a narrow slice still gets the same rule,
@@ -55,7 +55,9 @@ export interface MediaPageData {
   /** False when the deployment has no R2 credentials: no uploads, and we say so. */
   configured: boolean;
   /**
-   * Whether this classroom's references would actually come back SIGNED.
+   * Whether this classroom's references would actually come back SIGNED, on
+   * this deployment (`canServeSignedContent`: the signing secret and origin
+   * are set, and the classroom is one the layer delivers).
    *
    * The service refuses `createUpload` with `DELIVERY_REQUIRED` for a classroom
    * the delivery layer cannot sign for — media has no legacy serving path, so
@@ -131,10 +133,11 @@ export async function loadMediaPage(classroom: MediaPageClassroom): Promise<Medi
   return {
     classroomId: classroom.id,
     configured: ClassmojiService.media.isMediaConfigured(),
-    // The delivery layer's own predicate, not a copy of it: the service refuses
-    // an upload on exactly this answer, so the button and the refusal cannot
+    // The delivery layer's own predicate, not a copy of it — BOTH halves, the
+    // deployment's signing setup and the classroom: the service refuses an
+    // upload on exactly this answer, so the button and the refusal cannot
     // drift apart.
-    canDeliver: ClassmojiService.contentDelivery.canDeliverContent(classroom),
+    canDeliver: ClassmojiService.contentDelivery.canServeSignedContent(classroom),
     usage,
     proQuotaBytes: ClassmojiService.media.PRO_QUOTA_BYTES,
     items: records.map(record => ({
