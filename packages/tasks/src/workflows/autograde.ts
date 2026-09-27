@@ -51,6 +51,27 @@ export function publicTriggerApiBase(env: NodeJS.ProcessEnv = process.env): stri
   return base;
 }
 
+/**
+ * Where student CI posts results: hook-station's /autograde endpoint
+ * (AUTOGRADE_CALLBACK_URL), which checks the repo's token before starting the
+ * ingest task, so workflows carry no Trigger credentials. Null when unset:
+ * workflows then post straight to Trigger with a task-scoped token, as before.
+ */
+export function autogradeCallbackUrl(env: NodeJS.ProcessEnv = process.env): string | null {
+  const url = (env.AUTOGRADE_CALLBACK_URL || '').trim();
+  if (!url) return null;
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    throw new Error(`AUTOGRADE_CALLBACK_URL is not a URL: ${url}`);
+  }
+  if (env.NODE_ENV === 'production' && parsed.protocol !== 'https:') {
+    throw new Error(`AUTOGRADE_CALLBACK_URL must be https in production; got ${url}`);
+  }
+  return url;
+}
+
 type GitOrganizationLike = Parameters<typeof getGitProvider>[0];
 
 /** Commit the workflow, turning the App-permission 403 into an actionable error. */
@@ -100,9 +121,10 @@ export async function buildClassroomWorkflowYaml(
   triggerToken?: string
 ): Promise<string> {
   const generate = provider === 'GITLAB' ? generateGitlabCi : generateClassroomWorkflow;
+  const callback = autogradeCallbackUrl();
   return generate(tests, {
-    triggerUrl: `${publicTriggerApiBase()}/api/v1/tasks/${INGEST_TASK_ID}/trigger`,
-    triggerToken: triggerToken ?? (await mintIngestTriggerToken()),
+    triggerUrl: callback ?? `${publicTriggerApiBase()}/api/v1/tasks/${INGEST_TASK_ID}/trigger`,
+    triggerToken: callback ? null : (triggerToken ?? (await mintIngestTriggerToken())),
     classroomSlug,
     hmacToken: signAutogradeRepoToken(classroomSlug, repoPath),
   });
@@ -159,7 +181,10 @@ interface ProvisionPayload {
  */
 export const provisionAutogradeWorkflowTask = task({
   id: 'dispatch_autograde_workflow',
-  run: async ({ repositoryId, classroomSlug }: ProvisionPayload) => {
+  run: async (
+    { repositoryId, classroomSlug }: ProvisionPayload,
+    { ctx }: { ctx: { run: { tags?: string[] } } }
+  ) => {
     const repository = await getPrisma().repository.findUnique({
       where: { id: repositoryId },
       include: {
@@ -178,7 +203,7 @@ export const provisionAutogradeWorkflowTask = task({
     const tests = repository.autograding_tests as WorkflowTestInput[];
     // GitLab student projects live in the class subgroup's `projects`.
     const owner = repoNamespace(repository.classroom) || orgLogin;
-    const triggerToken = await mintIngestTriggerToken();
+    const triggerToken = autogradeCallbackUrl() ? undefined : await mintIngestTriggerToken();
 
     // Fan out to existing student repos. We deliberately do NOT write the
     // workflow to the template repo: that would make every future repo-creation
@@ -205,7 +230,8 @@ export const provisionAutogradeWorkflowTask = task({
               triggerToken
             ),
           },
-          options: { concurrencyKey: classroomSlug },
+          // The session tag, so the instructor's callout counts each repo.
+          options: { concurrencyKey: classroomSlug, tags: ctx.run.tags },
         }))
       );
       await commitAutogradeWorkflowToRepoTask.batchTriggerAndWait(payloads);
@@ -271,27 +297,62 @@ function graderPassed(resultBase64?: string): boolean {
  * public webapp URL — in dev it runs on the local worker and writes to the local
  * DB). Advisory CI feedback only — never written to the grade tables.
  */
+/**
+ * Give every repo in a classroom its own callback token by re-provisioning
+ * each repository's workflow (bot commits, which never count as submissions).
+ * Once a day per classroom at most, however many old workflows report.
+ */
+async function reprovisionLegacyClassroom(classroomId: string, classroomSlug: string) {
+  const repositories = await getPrisma().repository.findMany({
+    where: { classroom_id: classroomId, autograding_tests: { some: {} } },
+    select: { id: true },
+  });
+  const day = new Date().toISOString().slice(0, 10);
+  for (const repository of repositories) {
+    try {
+      await provisionAutogradeWorkflowTask.trigger(
+        { repositoryId: repository.id, classroomSlug },
+        { idempotencyKey: `autograde-legacy-${repository.id}-${day}` }
+      );
+    } catch (error: unknown) {
+      logger.warn('autograde ingest: could not re-provision a legacy workflow', {
+        repositoryId: repository.id,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+  logger.info('autograde ingest: legacy classroom token seen; re-provisioning', {
+    classroomSlug,
+    repositories: repositories.length,
+  });
+}
+
 export const ingestAutogradeResultTask = task({
   id: INGEST_TASK_ID,
   run: async (payload: IngestPayload) => {
     const { classroomSlug, repo, sha, run_id, token, results } = payload;
 
     // The token must be THIS repo's own. Github repos provisioned before
-    // per-repo tokens still carry the per-classroom one until their workflow
-    // is re-provisioned (the Autograde button); Gitlab never had it.
+    // per-repo tokens still carry the old per-classroom one (Gitlab never
+    // had it): accepted, but it also re-provisions the whole classroom so
+    // every repo gets its own token and the shared one stops mattering.
     const classroom = await getPrisma().classroom.findUnique({
       where: { slug: classroomSlug ?? '' },
-      select: { git_organization: { select: { provider: true } } },
+      select: { id: true, git_organization: { select: { provider: true } } },
     });
-    const isGitHub = classroom?.git_organization?.provider === 'GITHUB';
-    if (
-      !verifyAutogradeCallbackToken(classroomSlug, token ?? null, {
-        repoPath: repo,
-        allowLegacyClassroomToken: isGitHub,
-      })
-    ) {
+    const ownToken = verifyAutogradeCallbackToken(classroomSlug, token ?? null, { repoPath: repo });
+    const legacyToken =
+      !ownToken &&
+      classroom?.git_organization?.provider === 'GITHUB' &&
+      verifyAutogradeCallbackToken(classroomSlug, token ?? null, {
+        allowLegacyClassroomToken: true,
+      });
+    if (!ownToken && !legacyToken) {
       logger.warn('autograde ingest: invalid token', { classroomSlug, repo });
       return { ok: false, reason: 'invalid_token' };
+    }
+    if (legacyToken && classroom) {
+      await reprovisionLegacyClassroom(classroom.id, classroomSlug);
     }
     if (!repo || !sha || !results) {
       return { ok: false, reason: 'missing_fields' };

@@ -29,8 +29,8 @@ export interface GenerateWorkflowOptions {
    * and routes the run to the local dev worker (or deployed workers), which write
    * to the DB — so this works in local dev with no public webapp URL / tunnel.
    */
-  triggerUrl?: string | null; // full task-trigger endpoint
-  triggerToken?: string | null; // task-scoped public access token
+  triggerUrl?: string | null; // where results are POSTed (hook-station, or Trigger's task endpoint)
+  triggerToken?: string | null; // Trigger token, only when posting straight to Trigger
   classroomSlug?: string | null; // included in the payload + resolves the repo
   hmacToken?: string | null; // this repo's callback token (signAutogradeRepoToken)
 }
@@ -138,7 +138,7 @@ export function generateClassroomWorkflow(
   // grader's `outputs.result` (a base64-encoded JSON with the real pass/fail
   // status) — NOT `steps.<id>.outcome`, which is always "success" because the
   // graders catch failures internally and exit 0.
-  if (options.triggerUrl && options.triggerToken && tests.length) {
+  if (options.triggerUrl && tests.length) {
     // Each entry is a line of a JSON object inside a YAML literal block scalar
     // (indented 12 spaces, under the 10-space `AUTOGRADE_RESULTS:` key).
     const entries = tests.map(
@@ -168,8 +168,12 @@ export function generateClassroomWorkflow(
     lines.push(
       "            '{payload: {classroomSlug:$slug, repo:$repo, sha:$sha, run_id:$run_id, actor:$actor, token:$token, results:$results}}')"
     );
-    lines.push(`          if ! curl -sS --fail-with-body -X POST ${yamlStr(options.triggerUrl)} \\`);
-    lines.push(`            -H ${yamlStr(`Authorization: Bearer ${options.triggerToken}`)} \\`);
+    lines.push(
+      `          if ! curl -sS --fail-with-body -X POST ${yamlStr(options.triggerUrl)} \\`
+    );
+    if (options.triggerToken) {
+      lines.push(`            -H ${yamlStr(`Authorization: Bearer ${options.triggerToken}`)} \\`);
+    }
     lines.push('            -H "Content-Type: application/json" \\');
     lines.push('            -d "$payload"; then');
     lines.push(

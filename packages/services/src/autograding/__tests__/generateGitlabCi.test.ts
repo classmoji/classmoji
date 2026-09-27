@@ -129,4 +129,16 @@ describe('generateGitlabCi', () => {
     expect(out).toContain('crlf-name-here-0: pass');
     expect(code).toBe(1);
   });
+
+  it('posts to hook-station with no Trigger credentials when given no token', () => {
+    const yaml = generateGitlabCi([{ name: 't', method: 'COMMAND', run_command: 'true' }], {
+      triggerUrl: 'https://hooks.example.test/webhooks/callback/autograde',
+      triggerToken: null,
+      classroomSlug: 'c1',
+      hmacToken: 'abc',
+    });
+    expect(yaml).toContain("'https://hooks.example.test/webhooks/callback/autograde'");
+    expect(yaml).not.toContain('Authorization');
+    expect(yaml).not.toContain('Bearer');
+  });
 });

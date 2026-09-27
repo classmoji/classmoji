@@ -14,6 +14,8 @@ const ERRORS: Record<string, string> = {
     'Gitlab rejected that Application ID or Secret, or the callback URLs on the application do not match the ones above.',
   gitlab_setup_failed: 'Could not save that Gitlab. Try again.',
   gitlab_setup_exists: 'That Gitlab has already been requested or set up.',
+  gitlab_setup_too_many:
+    'There are already requests waiting for approval. Try again once they have been reviewed, or email hello@classmoji.io.',
   access_denied: 'You cancelled on Gitlab. Nothing was saved.',
   email_is_missing: 'Your Gitlab account has no email address Classmoji can read.',
   account_not_linked:

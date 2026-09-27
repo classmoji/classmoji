@@ -96,11 +96,17 @@ async function exchangeCode(
     tokenType: data.token_type,
     accessToken: data.access_token,
     refreshToken: data.refresh_token,
-    accessTokenExpiresAt: data.expires_in ? new Date(Date.now() + data.expires_in * 1000) : undefined,
+    accessTokenExpiresAt: data.expires_in
+      ? new Date(Date.now() + data.expires_in * 1000)
+      : undefined,
     scopes: data.scope ? data.scope.split(/[ ,]+/).filter(Boolean) : [],
     idToken: data.id_token,
   };
 }
+
+/** Open (unapproved) setup requests allowed at once, overall and per requester. */
+const MAX_PENDING_REQUESTS = 25;
+const MAX_PENDING_PER_REQUESTER = 2;
 
 /** What rides in the OAuth state for a setup round trip (secret encrypted). */
 interface PendingSetup {
@@ -303,9 +309,14 @@ export const gitlabInstances = () =>
             return fail(setup ? 'gitlab_setup_credentials' : 'oauth_code_verification_failed');
           }
 
-          const response = await svc().gitlabFetch(`${client.host}/api/v4/user`, {
-            headers: { Authorization: `Bearer ${tokens.accessToken}`, Accept: 'application/json' },
-          }).catch(() => null);
+          const response = await svc()
+            .gitlabFetch(`${client.host}/api/v4/user`, {
+              headers: {
+                Authorization: `Bearer ${tokens.accessToken}`,
+                Accept: 'application/json',
+              },
+            })
+            .catch(() => null);
           const profile = response?.ok ? ((await response.json()) as GitLabProfile) : null;
           if (!profile || profile.state !== 'active' || profile.locked) {
             return fail('user_info_is_missing');
@@ -328,6 +339,19 @@ export const gitlabInstances = () =>
               since: profile.created_at ? new Date(profile.created_at) : null,
               note: setup.note ?? null,
             };
+            // Caps, so a stream of fake Gitlabs can't bury the admins: a few
+            // open requests per requester, and a ceiling overall.
+            const pending = await getPrisma().gitLabInstance.count({
+              where: { approved_at: null },
+            });
+            const mine = email
+              ? await getPrisma().gitLabInstance.count({
+                  where: { approved_at: null, requester_email: email },
+                })
+              : 0;
+            if (pending >= MAX_PENDING_REQUESTS || mine >= MAX_PENDING_PER_REQUESTER) {
+              return fail('gitlab_setup_too_many');
+            }
             try {
               await svc().create({
                 host: setup.host,

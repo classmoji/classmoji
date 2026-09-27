@@ -113,16 +113,19 @@ export function generateGitlabCi(
   script.push('');
   script.push(`results="$results}"`);
 
-  if (options.triggerUrl && options.triggerToken && tests.length) {
+  if (options.triggerUrl && tests.length) {
     script.push('# Report per-test results to Classmoji (advisory, like GitHub).');
     script.push(
       `payload=$(printf '{"payload":{"classroomSlug":%s,"repo":"%s","sha":"%s","run_id":"%s","actor":"%s","token":%s,"results":%s}}' ` +
         `${shq(JSON.stringify(options.classroomSlug ?? ''))} "$CI_PROJECT_PATH" "$CI_COMMIT_SHA" "$CI_PIPELINE_ID" "\${GITLAB_USER_LOGIN:-}" ` +
         `${shq(JSON.stringify(options.hmacToken ?? ''))} "$results")`
     );
+    const auth = options.triggerToken
+      ? `-H ${shq(`Authorization: Bearer ${options.triggerToken}`)} `
+      : '';
     script.push(
       `curl -sS --fail-with-body -X POST ${shq(options.triggerUrl)} ` +
-        `-H ${shq(`Authorization: Bearer ${options.triggerToken}`)} ` +
+        auth +
         `-H 'Content-Type: application/json' -d "$payload" ` +
         `|| echo "[classmoji] Could not report autograding results to Classmoji"`
     );

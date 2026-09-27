@@ -19,7 +19,7 @@ vi.mock('@classmoji/services', () => ({
   verifyAutogradeCallbackToken: vi.fn(),
 }));
 
-const { publicTriggerApiBase } = await import('../autograde.ts');
+const { publicTriggerApiBase, autogradeCallbackUrl } = await import('../autograde.ts');
 
 describe('publicTriggerApiBase', () => {
   it('defaults to the Trigger.dev cloud', () => {
@@ -45,5 +45,23 @@ describe('publicTriggerApiBase', () => {
     expect(() => publicTriggerApiBase({ TRIGGER_PUBLIC_API_URL: 'http://localhost:3030' })).toThrow(
       /reachable/
     );
+  });
+});
+
+describe('autogradeCallbackUrl', () => {
+  it('is null when unset, so workflows keep posting to Trigger', () => {
+    expect(autogradeCallbackUrl({})).toBeNull();
+  });
+
+  it('returns the hook-station URL, and insists on https in production', () => {
+    expect(autogradeCallbackUrl({ AUTOGRADE_CALLBACK_URL: 'https://hooks.classmoji.io/x' })).toBe(
+      'https://hooks.classmoji.io/x'
+    );
+    expect(() =>
+      autogradeCallbackUrl({ AUTOGRADE_CALLBACK_URL: 'http://hooks/x', NODE_ENV: 'production' })
+    ).toThrow(/https/);
+    expect(
+      autogradeCallbackUrl({ AUTOGRADE_CALLBACK_URL: 'http://host.docker.internal:4001/x' })
+    ).toBe('http://host.docker.internal:4001/x');
   });
 });

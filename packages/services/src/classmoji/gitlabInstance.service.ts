@@ -78,7 +78,16 @@ export function decryptSecret(stored: string): string {
 
 // ─── Hosts ───────────────────────────────────────────────────────────────────
 
-const allowHttp = () => process.env.NODE_ENV !== 'production';
+/**
+ * Local development only: plain http and private addresses (a Gitlab
+ * container on localhost). Opt-in, so a deploy that forgets NODE_ENV (a
+ * Trigger worker, say) still refuses them: NODE_ENV must say development or
+ * test, or GITLAB_ALLOW_PRIVATE_HOSTS must be "true" (never in production).
+ */
+const allowHttp = () =>
+  process.env.NODE_ENV === 'development' ||
+  process.env.NODE_ENV === 'test' ||
+  (process.env.GITLAB_ALLOW_PRIVATE_HOSTS === 'true' && process.env.NODE_ENV !== 'production');
 
 /** The default instance's host: GITLAB_ISSUER / GITLAB_URL, else gitlab.com. */
 export function defaultHost(): string {
@@ -222,13 +231,16 @@ function ipv6Bytes(address: string): number[] | null {
   const v4 = text.match(/(\d+)\.(\d+)\.(\d+)\.(\d+)$/);
   if (v4) {
     const [a, b, c, d] = v4.slice(1).map(Number);
-    text = text.slice(0, -v4[0].length) + `${((a << 8) | b).toString(16)}:${((c << 8) | d).toString(16)}`;
+    text =
+      text.slice(0, -v4[0].length) +
+      `${((a << 8) | b).toString(16)}:${((c << 8) | d).toString(16)}`;
   }
   const [head, tail] = text.includes('::') ? text.split('::') : [text, null];
   const headGroups = head ? head.split(':') : [];
   const tailGroups = tail ? tail.split(':') : [];
   const missing = 8 - headGroups.length - tailGroups.length;
-  const groups = tail === null ? headGroups : [...headGroups, ...Array(missing).fill('0'), ...tailGroups];
+  const groups =
+    tail === null ? headGroups : [...headGroups, ...Array(missing).fill('0'), ...tailGroups];
   if (groups.length !== 8) return null;
   return groups.flatMap(g => {
     const n = parseInt(g || '0', 16);
@@ -325,7 +337,10 @@ async function guardedRequest(
   ]);
   const checkAddresses = !allowHttp();
   if (checkAddresses && url.protocol !== 'https:') {
-    throw new GitLabInstanceError('invalid_host', `Refusing a non-https Gitlab call to ${url.host}`);
+    throw new GitLabInstanceError(
+      'invalid_host',
+      `Refusing a non-https Gitlab call to ${url.host}`
+    );
   }
   // An IP address in the URL never goes through `lookup` below: check it here.
   const literal = url.hostname.replace(/^\[|\]$/g, '');
@@ -776,11 +791,7 @@ export async function checkHealth(instanceId: string): Promise<InstanceHealth> {
       const group = `${classroom.git_namespace}/${GITLAB_PROJECTS_SUBGROUP}`;
       const project = `${group}/${repo.name}`;
       try {
-        const status = await provider.getClassmojiHookStatus(
-          group,
-          repo.name,
-          url
-        );
+        const status = await provider.getClassmojiHookStatus(group, repo.name, url);
         if (status === 'ok') continue;
         if (status === 'missing') health.missingHooks += 1;
         else health.failingHooks += 1;

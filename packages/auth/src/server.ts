@@ -431,6 +431,16 @@ export const auth = betterAuth({
       sign_in_provider: { type: 'string', required: false, input: false },
     },
   },
+  // Per client IP. Tight on the public Gitlab endpoints: setup can be run
+  // against any Gitlab-looking server, and each request that gets through
+  // emails every platform admin (the setup callback also caps pending ones).
+  rateLimit: {
+    customRules: {
+      '/gitlab-instance/setup': { window: 60 * 60, max: 5 },
+      '/gitlab-instance/sign-in': { window: 60, max: 20 },
+      '/gitlab-instance/link': { window: 60, max: 10 },
+    },
+  },
   advanced: {
     database: {
       generateId: 'uuid',
