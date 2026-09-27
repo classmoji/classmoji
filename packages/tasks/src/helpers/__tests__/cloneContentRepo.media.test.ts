@@ -95,6 +95,9 @@ function fakeMedia() {
     discard: vi.fn(async () => {
       mocks.order.push('discard');
     }),
+    keep: vi.fn(() => {
+      mocks.order.push('keep');
+    }),
     prepare: vi.fn(async (texts: readonly (string | null | undefined)[]) => {
       mocks.order.push('prepare');
       prepared.push(texts.filter((t): t is string => typeof t === 'string'));
@@ -136,7 +139,7 @@ describe('cloneContentRepo — media in the tree', () => {
 
     await expect(run(media)).resolves.toMatchObject({ pushed: true });
 
-    expect(mocks.order).toEqual(['prepare', 'add', 'push']);
+    expect(mocks.order).toEqual(['prepare', 'add', 'push', 'keep']);
     expect(media.prepare).toHaveBeenCalledTimes(1);
     // The two text files with a marker — not the plain page, not the binary.
     expect(media.prepared[0].sort()).toEqual(
@@ -178,12 +181,17 @@ describe('cloneContentRepo — a push that fails', () => {
 
     expect(mocks.order).toEqual(['prepare', 'add', 'push', 'discard']);
     expect(media.discard).toHaveBeenCalledTimes(1);
+    expect(media.keep).not.toHaveBeenCalled();
   });
 
   it('keeps the copies once the push has landed', async () => {
     const media = fakeMedia();
     await run(media);
     expect(media.discard).not.toHaveBeenCalled();
+    // Marked kept right after the push, so a later step of the run that fails
+    // and discards cannot remove what the pushed tree references.
+    expect(mocks.order).toEqual(['prepare', 'add', 'push', 'keep']);
+    expect(media.keep).toHaveBeenCalledTimes(1);
   });
 });
 
