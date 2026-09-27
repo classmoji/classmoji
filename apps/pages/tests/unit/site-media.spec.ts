@@ -20,6 +20,7 @@ import {
   withoutUnresolvedMediaRefs,
 } from '~/site/siteMedia.server.ts';
 import {
+  isMediaPlaceholderUrl,
   isMediaRef,
   isMediaUrl,
   isRetryableDeliveryUrl,
@@ -34,6 +35,22 @@ const ORIGIN = 'https://content.classmoji.io';
 const signed = (variant: string) =>
   `${ORIGIN}/c/${CLASSROOM}/media/${MEDIA_ID}/${variant}?p=month&v=0&exp=1&sig=abc`;
 const PLACEHOLDER = `${ORIGIN}/c/${CLASSROOM}/missing/${encodeURIComponent(REF)}`;
+/** The same path shapes on a host that is not the delivery origin. */
+const foreign = (url: string, host = 'https://elsewhere.test') => url.replace(ORIGIN, host);
+
+/**
+ * Run with `CONTENT_DELIVERY_ORIGIN` set to `value` (deleted for null), and put
+ * back whatever was there — the renderer reads it at call time.
+ */
+function withDeliveryOrigin(value: string | null): () => void {
+  const previous = process.env.CONTENT_DELIVERY_ORIGIN;
+  if (value === null) delete process.env.CONTENT_DELIVERY_ORIGIN;
+  else process.env.CONTENT_DELIVERY_ORIGIN = value;
+  return () => {
+    if (previous === undefined) delete process.env.CONTENT_DELIVERY_ORIGIN;
+    else process.env.CONTENT_DELIVERY_ORIGIN = previous;
+  };
+}
 
 const resolveLink = () => null;
 
@@ -56,11 +73,52 @@ test.describe('media references and URLs, by shape', () => {
   });
 
   test('signed media URLs and their placeholders are media URLs; repo blobs are not', () => {
-    expect(isMediaUrl(signed('orig.mov'))).toBe(true);
-    expect(isMediaUrl(signed('web.mp4'))).toBe(true);
-    expect(isMediaUrl(PLACEHOLDER)).toBe(true);
-    expect(isMediaUrl(`${ORIGIN}/c/${CLASSROOM}/blob/abc.png?sig=x`)).toBe(false);
-    expect(isMediaUrl('https://youtu.be/abc')).toBe(false);
+    expect(isMediaUrl(signed('orig.mov'), ORIGIN)).toBe(true);
+    expect(isMediaUrl(signed('web.mp4'), ORIGIN)).toBe(true);
+    expect(isMediaUrl(PLACEHOLDER, ORIGIN)).toBe(true);
+    expect(isMediaPlaceholderUrl(PLACEHOLDER, ORIGIN)).toBe(true);
+    expect(isMediaPlaceholderUrl(signed('web.mp4'), ORIGIN)).toBe(false);
+    expect(isMediaUrl(`${ORIGIN}/c/${CLASSROOM}/blob/abc.png?sig=x`, ORIGIN)).toBe(false);
+    expect(isMediaUrl('https://youtu.be/abc', ORIGIN)).toBe(false);
+  });
+
+  test('a media-shaped URL is a media URL only on the delivery origin', () => {
+    // `orig.avi` carries no extension the fallback knows, so only the host
+    // decides whether it is ours.
+    const ours = signed('orig.avi');
+    expect(isMediaUrl(ours, ORIGIN)).toBe(true);
+    expect(playsAsNativeVideo(ours, ORIGIN)).toBe(true);
+
+    // Our host, spelled differently: case and a trailing slash on the origin.
+    expect(isMediaUrl(foreign(ours, 'https://CONTENT.classmoji.io'), ORIGIN)).toBe(true);
+    expect(isMediaUrl(ours, `${ORIGIN}/`)).toBe(true);
+
+    // Somebody else's host serving the same path is an ordinary link.
+    for (const host of [
+      'https://elsewhere.test',
+      'http://elsewhere.test',
+      'https://content.classmoji.io.elsewhere.test',
+      'https://content.classmoji.io:8443',
+    ]) {
+      const url = foreign(ours, host);
+      expect(isMediaUrl(url, ORIGIN), url).toBe(false);
+      expect(playsAsNativeVideo(url, ORIGIN), url).toBe(false);
+      expect(isMediaPlaceholderUrl(foreign(PLACEHOLDER, host), ORIGIN), host).toBe(false);
+      expect(isMediaUrl(foreign(PLACEHOLDER, host), ORIGIN), host).toBe(false);
+    }
+    // A foreign URL that happens to end in a video extension still plays by
+    // that extension, like any pasted direct link.
+    expect(playsAsNativeVideo(foreign(signed('web.mp4')), ORIGIN)).toBe(true);
+
+    // No delivery origin: this deployment mints no URLs, so none is ours. A
+    // `media://` reference is still one by its scheme.
+    for (const none of [null, undefined, '']) {
+      expect(isMediaUrl(ours, none), String(none)).toBe(false);
+      expect(isMediaPlaceholderUrl(PLACEHOLDER, none), String(none)).toBe(false);
+      expect(playsAsNativeVideo(ours, none), String(none)).toBe(false);
+      expect(playsAsNativeVideo(REF, none), String(none)).toBe(true);
+    }
+    expect(isMediaUrl(ours, 'not a url')).toBe(false);
   });
 
   test('native playback is decided by scheme, then by extension', () => {
@@ -75,7 +133,7 @@ test.describe('media references and URLs, by shape', () => {
       'https://cdn.test/lecture.mkv',
       'https://cdn.test/lecture.webm',
     ]) {
-      expect(playsAsNativeVideo(url), url).toBe(true);
+      expect(playsAsNativeVideo(url, ORIGIN), url).toBe(true);
     }
     for (const url of [
       'https://youtu.be/abc',
@@ -83,7 +141,7 @@ test.describe('media references and URLs, by shape', () => {
       'https://cdn.test/page',
       '',
     ]) {
-      expect(playsAsNativeVideo(url), url).toBe(false);
+      expect(playsAsNativeVideo(url, ORIGIN), url).toBe(false);
     }
   });
 
@@ -98,7 +156,13 @@ test.describe('media references and URLs, by shape', () => {
 });
 
 test.describe('the class site plays media videos natively', () => {
-  for (const variant of ['orig.mp4', 'orig.mov', 'orig.mkv', 'web.mp4']) {
+  let restore: () => void = () => {};
+  test.beforeAll(() => {
+    restore = withDeliveryOrigin(ORIGIN);
+  });
+  test.afterAll(() => restore());
+
+  for (const variant of ['orig.mp4', 'orig.mov', 'orig.mkv', 'orig.avi', 'web.mp4']) {
     test(`a signed ${variant} renders a <video>, not a frame`, async () => {
       const { html } = await renderSitePage({ blocks: [video(signed(variant))], resolveLink });
       expect(html).toContain('<video');
@@ -114,6 +178,41 @@ test.describe('the class site plays media videos natively', () => {
     // No player and no link to click — the block's own `data-url` attribute
     // still carries the placeholder, as it does for any unsignable reference.
     expect(html).not.toContain('<a ');
+  });
+
+  test('a media-shaped URL on another host is framed like any https page', async () => {
+    const url = foreign(signed('orig.avi'));
+    const { html } = await renderSitePage({ blocks: [video(url)], resolveLink });
+    expect(html).not.toContain('<video');
+    expect(html).toContain('<iframe');
+  });
+
+  test('a media-shaped http:// URL on another host is only a link', async () => {
+    const url = foreign(signed('web.mp4'), 'http://elsewhere.test');
+    const { html } = await renderSitePage({ blocks: [video(url)], resolveLink });
+    expect(html).not.toContain('<video');
+    expect(html).not.toContain('<iframe');
+    expect(html).toContain('<a ');
+  });
+
+  test('a placeholder-shaped URL on another host is not swallowed as ours', async () => {
+    const url = foreign(PLACEHOLDER);
+    const { html } = await renderSitePage({ blocks: [video(url)], resolveLink });
+    expect(html).toContain('<iframe');
+  });
+
+  test('with no delivery origin configured, no URL is a media URL', async () => {
+    const unset = withDeliveryOrigin(null);
+    try {
+      const { html } = await renderSitePage({
+        blocks: [video(signed('orig.avi'))],
+        resolveLink,
+      });
+      expect(html).not.toContain('<video');
+      expect(html).toContain('<iframe');
+    } finally {
+      unset();
+    }
   });
 
   test('a pasted direct .mov link plays natively too', async () => {

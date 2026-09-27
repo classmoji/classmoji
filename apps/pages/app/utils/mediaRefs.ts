@@ -7,7 +7,8 @@
  * file IS by its ending — the reference has no extension at all, and the
  * signed URL ends in a variant (`orig.mov`, `web.mp4`) that is an
  * implementation detail — so everything that has to decide how to show one
- * decides by SCHEME, here, rather than by extension.
+ * decides by SCHEME, here, rather than by extension. A URL's path shape counts
+ * only on the delivery origin's host, which callers pass in.
  *
  * Pure and import-free on purpose: the video block (client), the class-site
  * renderer (server) and the unit suite all read it, and none of them may pull
@@ -52,15 +53,51 @@ export function isMediaRef(ref: unknown): ref is string {
   return parseMediaRef(ref) !== null;
 }
 
-/** The placeholder a media reference resolves to when it cannot be signed. */
-export function isMediaPlaceholderUrl(url: unknown): url is string {
-  return typeof url === 'string' && MEDIA_PLACEHOLDER_URL.test(url);
+/**
+ * Is this URL on the delivery origin — the one host that mints media URLs?
+ *
+ * The shapes below are only a claim about the PATH, and anybody can host that
+ * path: a pasted `https://elsewhere.test/c/{uuid}/media/{uuid}/x` matches them
+ * exactly. So a shape match counts only on our own host, compared the way
+ * `contentDelivery.service.ts`'s `isOwnDeliveryHost` compares it. The origin
+ * is a parameter rather than read here, because this module is shared with the
+ * client and must stay import- and env-free; the server passes
+ * `CONTENT_DELIVERY_ORIGIN`. No origin (a deployment that mints nothing) means
+ * no URL is ours.
+ */
+function onDeliveryOrigin(url: string, deliveryOrigin: string | null | undefined): boolean {
+  if (!deliveryOrigin) return false;
+  try {
+    return new URL(url).host.toLowerCase() === new URL(deliveryOrigin).host.toLowerCase();
+  } catch {
+    return false;
+  }
 }
 
-/** A signed media URL, or the placeholder a media reference resolves to when it cannot be signed. */
-export function isMediaUrl(url: unknown): url is string {
+/**
+ * The placeholder a media reference resolves to when it cannot be signed —
+ * on `deliveryOrigin` only (see `onDeliveryOrigin`).
+ */
+export function isMediaPlaceholderUrl(
+  url: unknown,
+  deliveryOrigin: string | null | undefined
+): url is string {
   return (
-    typeof url === 'string' && (MEDIA_DELIVERY_URL.test(url) || MEDIA_PLACEHOLDER_URL.test(url))
+    typeof url === 'string' &&
+    MEDIA_PLACEHOLDER_URL.test(url) &&
+    onDeliveryOrigin(url, deliveryOrigin)
+  );
+}
+
+/**
+ * A signed media URL, or the placeholder a media reference resolves to when it
+ * cannot be signed — on `deliveryOrigin` only (see `onDeliveryOrigin`).
+ */
+export function isMediaUrl(url: unknown, deliveryOrigin: string | null | undefined): url is string {
+  return (
+    typeof url === 'string' &&
+    (MEDIA_DELIVERY_URL.test(url) || MEDIA_PLACEHOLDER_URL.test(url)) &&
+    onDeliveryOrigin(url, deliveryOrigin)
   );
 }
 
@@ -72,12 +109,16 @@ export function isRetryableDeliveryUrl(url: unknown): boolean {
 /**
  * Should a video block play this in a native `<video>` rather than embed it?
  *
- * By scheme first — a media reference or a media URL is always a file this
- * app serves — and only then by extension, for a direct link somebody pasted.
- * Everything else (YouTube, Vimeo, an arbitrary page) is an embed.
+ * By scheme first — a media reference, or a media URL on `deliveryOrigin`, is
+ * always a file this app serves — and only then by extension, for a direct
+ * link somebody pasted. Everything else (YouTube, Vimeo, an arbitrary page,
+ * a media-shaped URL on somebody else's host) is judged like any other link.
  */
-export function playsAsNativeVideo(url: unknown): boolean {
+export function playsAsNativeVideo(
+  url: unknown,
+  deliveryOrigin: string | null | undefined
+): boolean {
   if (typeof url !== 'string' || !url) return false;
-  if (isMediaRef(url) || isMediaUrl(url)) return true;
+  if (isMediaRef(url) || isMediaUrl(url, deliveryOrigin)) return true;
   return DIRECT_VIDEO_EXTENSION.test(url);
 }
