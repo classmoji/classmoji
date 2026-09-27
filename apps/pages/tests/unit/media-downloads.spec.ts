@@ -15,6 +15,7 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { test, expect } from '@playwright/test';
+import { createImageBlockSpec } from '@blocknote/core';
 
 import {
   collectMediaDownloadRefs,
@@ -317,6 +318,18 @@ test.describe('the viewer schema', () => {
         editorSpecs[type].implementation?.meta?.fileBlockAccept
       );
     }
+  });
+
+  test('the image block is still a file block, with BlockNote’s own accept and order', () => {
+    // The app overrides BlockNote's image block for responsive candidates. The
+    // override must keep what makes it a file block: `data-file-block` styling,
+    // the upload tab's accept, and drop/paste matching an image to it.
+    type Spec = { implementation?: { meta?: unknown; runsBefore?: unknown } };
+    const ours = editorSchema.blockSpecs.image as unknown as Spec;
+    const blocknote = createImageBlockSpec() as unknown as Spec;
+    expect(ours.implementation?.meta).toEqual(blocknote.implementation?.meta);
+    expect(ours.implementation?.meta).toEqual({ fileBlockAccept: ['image/*'] });
+    expect(ours.implementation?.runsBefore).toEqual(blocknote.implementation?.runsBefore);
   });
 
   test('reads documents with the same props as the editor', () => {
