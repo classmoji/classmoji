@@ -316,7 +316,9 @@ async function ensureContentRepoExists({ classroom, gitOrgLogin, repoName }: Con
   // idempotent) so a project created before the hook existed picks it up.
   if (classroom.git_organization?.provider === 'GITLAB') {
     const url = gitlabInstanceService.webhookUrl();
-    const secret = process.env.GITLAB_WEBHOOK_SECRET;
+    const secret = gitlabInstanceService.webhookSecret(
+      classroom.git_organization.gitlab_instance_id
+    );
     if (url && secret) {
       try {
         await (gitProvider as GitLabProvider).ensureProjectPushHook(

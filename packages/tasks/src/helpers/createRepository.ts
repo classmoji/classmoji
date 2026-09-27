@@ -99,6 +99,11 @@ export const createRepository = async (payload: CreateRepositoryPayload): Promis
   const setupPush = provider === 'GITLAB' ? ['-o', 'ci.skip'] : [];
   const terms = gitTerms(provider === 'GITLAB');
   const org = classroom.git_organization;
+  if (provider === 'GITLAB') {
+    await ClassmojiService.gitlabInstance.assertPublicGitlabHost(
+      org.base_url || ClassmojiService.gitlabInstance.defaultHost()
+    );
+  }
   const studentRepoUrl = authedRemote(org, token, `${gitOrgLogin}/${repoName}`);
   const templateRepoUrl = authedRemote(org, token, `${templateOwner}/${templateRepo}`);
 

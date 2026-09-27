@@ -7,7 +7,7 @@ import type {
   PRSummary,
 } from '../classmoji/repoAnalytics.types.ts';
 import { GITLAB_PROJECTS_SUBGROUP, GITLAB_TEAMS_SUBGROUP } from '@classmoji/utils';
-import { defaultHost } from '../classmoji/gitlabInstance.service.ts';
+import { defaultHost, gitlabFetch } from '../classmoji/gitlabInstance.service.ts';
 
 /**
  * The author of commits Classmoji makes in student projects (CI config, etc.).
@@ -150,7 +150,7 @@ export class GitLabProvider extends GitProvider {
       options.body = JSON.stringify(init.body);
     }
 
-    const res = await fetch(`${this.baseUrl}${path}`, options);
+    const res = await gitlabFetch(`${this.baseUrl}${path}`, options);
     const text = await res.text();
     let body: unknown = null;
     if (text) {
@@ -195,7 +195,7 @@ export class GitLabProvider extends GitProvider {
   async fetchRaw(path: string, init: { method?: string } = {}): Promise<Response> {
     const token = await this.getAccessToken();
     const url = path.startsWith('http') ? path : `${this.baseUrl}${path}`;
-    return fetch(url, {
+    return gitlabFetch(url, {
       method: init.method || 'GET',
       headers: { Authorization: `Bearer ${token}` },
     });
@@ -446,7 +446,9 @@ export class GitLabProvider extends GitProvider {
     if (!repo || !this.groupPath) {
       throw new Error('Gitlab tokens are only handed out for a single project');
     }
-    const key = `${this.groupPath}/${repo}`;
+    // The host is part of the key: two Gitlabs can have the same group and
+    // project path, and one must never be handed the other's token.
+    const key = `${this.baseUrl}/${this.groupPath}/${repo}`;
     const cached = GitLabProvider.#projectTokens.get(key);
     if (cached && Date.now() < cached.handOutUntil) {
       return { token: cached.token, expiresAt: new Date(cached.handOutUntil).toISOString() };
@@ -1201,7 +1203,8 @@ export class GitLabProvider extends GitProvider {
   async createSubgroup(
     parent: string,
     name: string,
-    path: string
+    path: string,
+    { adopt = true }: { adopt?: boolean } = {}
   ): Promise<{ id: number; full_path: string }> {
     const parentId = await this.resolveGroupId(parent);
     try {
@@ -1211,7 +1214,9 @@ export class GitLabProvider extends GitProvider {
       })) as { id: number; full_path: string };
       return { id: created.id, full_path: created.full_path };
     } catch (error: unknown) {
-      if ((error as { status?: number }).status !== 422) throw error;
+      // Taken: adopt the existing subgroup, unless the caller must own a
+      // fresh one (a class subgroup, which deleting the class deletes).
+      if ((error as { status?: number }).status !== 422 || !adopt) throw error;
       const existing = await this.getGroup(`${parent}/${path}`);
       return { id: existing.id, full_path: existing.full_path };
     }

@@ -73,10 +73,30 @@ function testScript(test: WorkflowTestInput, id: string): string[] {
   return lines;
 }
 
+/**
+ * Line breaks as `\n` only. A carriage return inside the YAML literal block
+ * ends the line for YAML without the indentation this file relies on, which
+ * would break the file (or let a crafted value add YAML of its own). Test
+ * names become one line; multi-line inputs and outputs keep their `\n`s.
+ */
+function normalizeTest(test: WorkflowTestInput): WorkflowTestInput {
+  const lines = (value: string | null | undefined) =>
+    value == null ? value : value.replace(/\r\n?/g, '\n');
+  return {
+    ...test,
+    name: (test.name ?? '').replace(/[\r\n]+/g, ' '),
+    setup_command: lines(test.setup_command),
+    run_command: lines(test.run_command),
+    input: lines(test.input),
+    expected_output: lines(test.expected_output),
+  };
+}
+
 export function generateGitlabCi(
-  tests: WorkflowTestInput[],
+  rawTests: WorkflowTestInput[],
   options: GenerateWorkflowOptions = {}
 ): string {
+  const tests = rawTests.map(normalizeTest);
   const script: string[] = [
     'set -u',
     // `timeout` from coreutils when the image has it; otherwise untimed (the

@@ -13,7 +13,7 @@
 import getPrisma from '@classmoji/database';
 import { parseGitlabId } from '@classmoji/utils';
 import type { Account as PrismaAccount } from '@prisma/client';
-import { oauthClient } from './gitlabInstance.service.ts';
+import { gitlabFetch, oauthClient } from './gitlabInstance.service.ts';
 
 export interface GitLabTokenResult {
   token: string;
@@ -74,13 +74,13 @@ async function refreshGitLabToken(
     refresh_token: account.refresh_token,
   });
 
-  const response = await fetch(`${client.host}/oauth/token`, {
+  const response = await gitlabFetch(`${client.host}/oauth/token`, {
     method: 'POST',
     headers: {
       'content-type': 'application/x-www-form-urlencoded',
       accept: 'application/json',
     },
-    body,
+    body: body.toString(),
   });
 
   if (!response.ok) {

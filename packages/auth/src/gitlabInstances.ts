@@ -33,7 +33,6 @@ import {
   handleOAuthUserInfo,
   parseState,
   setTokenUtil,
-  validateAuthorizationCode,
 } from 'better-auth/oauth2';
 /* eslint-enable import/no-unresolved */
 import type { BetterAuthPlugin } from 'better-auth';
@@ -61,6 +60,46 @@ interface GitLabProfile {
   /** Only present when the token's user is an administrator. */
   is_admin?: boolean;
   created_at?: string | null;
+}
+
+/** Trade an authorization code for tokens at a Gitlab's token endpoint. */
+async function exchangeCode(
+  client: { host: string; clientId: string; clientSecret: string },
+  params: { code: string; codeVerifier: string; redirectURI: string }
+) {
+  const response = await ClassmojiService.gitlabInstance.gitlabFetch(`${client.host}/oauth/token`, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/x-www-form-urlencoded',
+      accept: 'application/json',
+    },
+    body: new URLSearchParams({
+      grant_type: 'authorization_code',
+      code: params.code,
+      code_verifier: params.codeVerifier,
+      redirect_uri: params.redirectURI,
+      client_id: client.clientId,
+      client_secret: client.clientSecret,
+    }).toString(),
+  });
+  if (!response.ok) throw new Error(`Gitlab token exchange failed (${response.status})`);
+  const data = (await response.json()) as {
+    access_token?: string;
+    refresh_token?: string;
+    expires_in?: number;
+    scope?: string;
+    token_type?: string;
+    id_token?: string;
+  };
+  if (!data.access_token) throw new Error('Gitlab returned no access token');
+  return {
+    tokenType: data.token_type,
+    accessToken: data.access_token,
+    refreshToken: data.refresh_token,
+    accessTokenExpiresAt: data.expires_in ? new Date(Date.now() + data.expires_in * 1000) : undefined,
+    scopes: data.scope ? data.scope.split(/[ ,]+/).filter(Boolean) : [],
+    idToken: data.id_token,
+  };
 }
 
 /** What rides in the OAuth state for a setup round trip (secret encrypted). */
@@ -252,19 +291,19 @@ export const gitlabInstances = () =>
 
           let tokens;
           try {
-            tokens = await validateAuthorizationCode({
+            // Exchanged through gitlabFetch (not better-auth's fetch), so the
+            // call can't be pointed at a private address (see gitlabFetch).
+            tokens = await exchangeCode(client, {
               code: ctx.query.code as string,
               codeVerifier: state.codeVerifier,
               redirectURI: `${ctx.context.baseURL}${GITLAB_INSTANCE_CALLBACK_PATH}`,
-              options: { clientId: client.clientId, clientSecret: client.clientSecret },
-              tokenEndpoint: `${client.host}/oauth/token`,
             });
           } catch (error: unknown) {
             ctx.context.logger.error('Gitlab code exchange failed', error);
             return fail(setup ? 'gitlab_setup_credentials' : 'oauth_code_verification_failed');
           }
 
-          const response = await fetch(`${client.host}/api/v4/user`, {
+          const response = await svc().gitlabFetch(`${client.host}/api/v4/user`, {
             headers: { Authorization: `Bearer ${tokens.accessToken}`, Accept: 'application/json' },
           }).catch(() => null);
           const profile = response?.ok ? ((await response.json()) as GitLabProfile) : null;

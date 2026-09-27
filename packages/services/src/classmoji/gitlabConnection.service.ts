@@ -13,7 +13,7 @@
  */
 
 import getPrisma from '@classmoji/database';
-import { oauthClient, type GitLabOAuthClient } from './gitlabInstance.service.ts';
+import { gitlabFetch, oauthClient, type GitLabOAuthClient } from './gitlabInstance.service.ts';
 
 /** Refresh this long before expiry so a token never dies mid-request. */
 const REFRESH_BUFFER_MS = 5 * 60 * 1000;
@@ -35,7 +35,7 @@ async function postToken(
   client: GitLabOAuthClient,
   params: Record<string, string>
 ): Promise<TokenResponse> {
-  const response = await fetch(`${client.host}/oauth/token`, {
+  const response = await gitlabFetch(`${client.host}/oauth/token`, {
     method: 'POST',
     headers: {
       'content-type': 'application/x-www-form-urlencoded',
@@ -45,7 +45,7 @@ async function postToken(
       client_id: client.clientId,
       client_secret: client.clientSecret,
       ...params,
-    }),
+    }).toString(),
   });
   // GitLab, unlike Github's OAuth endpoint, reports failures with real statuses.
   const data = (await response.json().catch(() => ({}))) as Record<string, unknown>;
@@ -85,7 +85,7 @@ export async function fetchTokenUser(
   host: string,
   accessToken: string
 ): Promise<{ id: string; username: string }> {
-  const response = await fetch(`${host}/api/v4/user`, {
+  const response = await gitlabFetch(`${host}/api/v4/user`, {
     headers: { Authorization: `Bearer ${accessToken}`, Accept: 'application/json' },
   });
   if (!response.ok) throw new Error(`Gitlab /user failed (${response.status})`);

@@ -642,13 +642,18 @@ async function gitlabArtifactPlan(classroom: {
 /**
  * GitLab cleanup: the import-created template copies one by one, then the
  * class subgroup, which takes the content project, every student and team
- * project and every team subgroup with it. Runs with the classroom's Gitlab
- * connection (the account that created the subgroup); the route has already
- * checked the requester owns the classroom.
+ * project and every team subgroup with it.
+ *
+ * Runs with the REQUESTER's own Gitlab connection, never the classroom's (the
+ * account that made it), for the same reason the Github path uses the
+ * requester's token: Gitlab then checks the person's own rights, so a
+ * co-owner can't delete through someone else's account. No connection on
+ * this Gitlab, nothing deleted.
  */
 async function deleteGitLabArtifacts(
   classroomId: string,
-  artifacts: GitHubArtifact[]
+  artifacts: GitHubArtifact[],
+  requesterUserId: string | null
 ): Promise<GitHubCleanupSummary> {
   const summary: GitHubCleanupSummary = {
     deleted_repos: 0,
@@ -664,11 +669,31 @@ async function deleteGitLabArtifacts(
     summary.failures.push('no Gitlab group: nothing deleted on Gitlab');
     return summary;
   }
-  const { getGitProvider } = await import('../git/index.ts');
-  const provider = getGitProvider(classroom.git_organization) as unknown as {
-    deleteRepository(group: string, name: string): Promise<void>;
-    deleteGroup(fullPath: string): Promise<'deleted' | 'missing'>;
-  };
+  const org = classroom.git_organization;
+  const connection = requesterUserId
+    ? await getPrisma().gitLabConnection.findFirst({
+        where: { user_id: requesterUserId },
+        select: { id: true, gitlab_instance_id: true },
+      })
+    : null;
+  if (!connection || (connection.gitlab_instance_id ?? null) !== (org.gitlab_instance_id ?? null)) {
+    summary.failures.push(
+      'Connect your own Gitlab account on this Gitlab (Settings) to delete the class on Gitlab: nothing deleted on Gitlab'
+    );
+    return summary;
+  }
+  const [{ GitLabProvider }, gitlabConnection, gitlabInstance] = await Promise.all([
+    import('../git/GitLabProvider.ts'),
+    import('./gitlabConnection.service.ts'),
+    import('./gitlabInstance.service.ts'),
+  ]);
+  const host = org.base_url || (await gitlabInstance.hostFor(org.gitlab_instance_id));
+  const provider = new GitLabProvider(
+    '',
+    null,
+    () => gitlabConnection.getConnectionToken(connection.id),
+    host
+  );
 
   for (const artifact of artifacts.filter(a => a.label === 'template repo')) {
     try {
@@ -738,7 +763,8 @@ export interface GitHubCleanupSummary {
  */
 export const deleteGitHubArtifacts = async (
   classroomId: string,
-  userToken: string
+  userToken: string,
+  { requesterUserId = null }: { requesterUserId?: string | null } = {}
 ): Promise<GitHubCleanupSummary> => {
   const owner = await getPrisma().classroom.findUnique({
     where: { id: classroomId },
@@ -749,7 +775,7 @@ export const deleteGitHubArtifacts = async (
     if (unavailable) {
       return { deleted_repos: 0, deleted_teams: 0, skipped: 0, failures: [unavailable] };
     }
-    return deleteGitLabArtifacts(classroomId, artifacts);
+    return deleteGitLabArtifacts(classroomId, artifacts, requesterUserId);
   }
 
   if (!userToken) {

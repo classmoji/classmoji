@@ -3,6 +3,7 @@ import { execFileSync } from 'node:child_process';
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { parse } from 'yaml';
 import { generateGitlabCi } from '../generateGitlabCi.ts';
 
 /** Pull the job's script out of the YAML literal block and run it with bash. */
@@ -104,5 +105,28 @@ describe('generateGitlabCi', () => {
     const [entry] = Object.values(body.results) as Array<{ name: string; result: string }>;
     expect(entry.name).toBe('say "hi"');
     expect(decode(entry.result)).toBe('pass');
+  });
+
+  it('keeps the YAML intact when test values carry carriage returns', () => {
+    const yaml = generateGitlabCi([
+      {
+        name: 'crlf\r\nname\rhere',
+        method: 'IO',
+        run_command: 'cat',
+        input: 'a\r\nb',
+        expected_output: 'a\nb',
+        comparison_method: 'EXACT',
+      },
+      { name: 'evil', method: 'COMMAND', run_command: 'true\rinjected: {key: 1}' },
+    ]);
+    expect(yaml).not.toContain('\r');
+    const doc = parse(yaml) as Record<string, unknown>;
+    // Exactly one job, nothing smuggled in beside it.
+    expect(Object.keys(doc)).toEqual(['classmoji-autograding']);
+    const { code, out } = runScript(yaml);
+    // The name became one line (its id is derived from it), and the CRLF
+    // input still matches its LF expected output.
+    expect(out).toContain('crlf-name-here-0: pass');
+    expect(code).toBe(1);
   });
 });

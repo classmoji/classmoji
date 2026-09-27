@@ -376,7 +376,9 @@ export const createGithubRepositoryAssignmentTask = task({
       // Projects created before issue mode existed on GitLab have a push-only
       // hook; make sure close/reopen events reach Classmoji too.
       const url = ClassmojiService.gitlabInstance.webhookUrl(organization.gitlab_instance_id);
-      const secret = process.env.GITLAB_WEBHOOK_SECRET;
+      const secret = ClassmojiService.gitlabInstance.webhookSecret(
+        organization.gitlab_instance_id
+      );
       if (url && secret) {
         try {
           await (gitProvider as GitLabProvider).ensureProjectPushHook(owner, repoName, url, secret);

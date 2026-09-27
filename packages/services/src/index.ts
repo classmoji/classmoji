@@ -358,6 +358,7 @@ export type {
 // Autograding: per-classroom HMAC token (server-only; uses crypto + env)
 export {
   signAutogradeCallbackToken,
+  signAutogradeRepoToken,
   verifyAutogradeCallbackToken,
 } from './autograding/callbackToken.ts';
 

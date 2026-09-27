@@ -304,6 +304,7 @@ async function contentRepoCoordinates(
             namespace: classroom.git_namespace,
           }
         : undefined;
+    if (gitlab) await ClassmojiService.gitlabInstance.assertPublicGitlabHost(gitlab.host);
     return { orgLogin: org.login, repo: classroom.content_repo, token, gitlab };
   } catch (error: unknown) {
     throw new Error(describeTokenMintError(org.login, error));

@@ -9,7 +9,7 @@
  * instance id of null always means the default instance.
  */
 
-import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto';
+import { createCipheriv, createDecipheriv, createHash, createHmac, randomBytes } from 'node:crypto';
 import { lookup } from 'node:dns/promises';
 import { isIP } from 'node:net';
 import { tasks } from '@trigger.dev/sdk';
@@ -214,13 +214,198 @@ const PRIVATE_V4 = [
   /^100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\./,
 ];
 
-function isPrivateAddress(address: string): boolean {
+/** The 16 bytes of an IPv6 address, or null when it isn't one. */
+function ipv6Bytes(address: string): number[] | null {
+  if (isIP(address) !== 6) return null;
+  let text = address.toLowerCase().split('%')[0];
+  // A trailing dotted IPv4 (`::ffff:127.0.0.1`) becomes two hex groups.
+  const v4 = text.match(/(\d+)\.(\d+)\.(\d+)\.(\d+)$/);
+  if (v4) {
+    const [a, b, c, d] = v4.slice(1).map(Number);
+    text = text.slice(0, -v4[0].length) + `${((a << 8) | b).toString(16)}:${((c << 8) | d).toString(16)}`;
+  }
+  const [head, tail] = text.includes('::') ? text.split('::') : [text, null];
+  const headGroups = head ? head.split(':') : [];
+  const tailGroups = tail ? tail.split(':') : [];
+  const missing = 8 - headGroups.length - tailGroups.length;
+  const groups = tail === null ? headGroups : [...headGroups, ...Array(missing).fill('0'), ...tailGroups];
+  if (groups.length !== 8) return null;
+  return groups.flatMap(g => {
+    const n = parseInt(g || '0', 16);
+    return [(n >> 8) & 0xff, n & 0xff];
+  });
+}
+
+/**
+ * Loopback, private, link-local, carrier-grade NAT, unspecified: anything a
+ * server call must never reach. IPv6 is checked on its bytes, so every
+ * spelling of an embedded IPv4 (mapped `::ffff:7f00:1`, compatible `::7f00:1`,
+ * NAT64 `64:ff9b::7f00:1`, 6to4 `2002:7f00:1::`) is judged by that IPv4.
+ */
+export function isPrivateAddress(address: string): boolean {
   if (isIP(address) === 4) return PRIVATE_V4.some(re => re.test(address));
-  const a = address.toLowerCase();
-  if (a.startsWith('::ffff:')) return isPrivateAddress(a.slice(7));
-  return (
-    a === '::1' || a === '::' || a.startsWith('fc') || a.startsWith('fd') || a.startsWith('fe80')
-  );
+  const bytes = ipv6Bytes(address);
+  if (!bytes) return true;
+  const v4 = (offset: number) => bytes.slice(offset, offset + 4).join('.');
+  const zeros = (from: number, to: number) => bytes.slice(from, to).every(b => b === 0);
+  // ::ffff:a.b.c.d (mapped) and ::a.b.c.d (compatible, incl. :: and ::1)
+  if (zeros(0, 10) && ((bytes[10] === 0xff && bytes[11] === 0xff) || zeros(10, 12))) {
+    if (zeros(0, 15) && (bytes[15] === 0 || bytes[15] === 1)) return true; // :: and ::1
+    return isPrivateAddress(v4(12));
+  }
+  // 64:ff9b::/96 (NAT64) and 64:ff9b:1::/48 (local NAT64)
+  if (bytes[0] === 0x00 && bytes[1] === 0x64 && bytes[2] === 0xff && bytes[3] === 0x9b) {
+    return zeros(4, 12) ? isPrivateAddress(v4(12)) : true;
+  }
+  // 2002::/16 (6to4) embeds the IPv4 in bytes 2-5
+  if (bytes[0] === 0x20 && bytes[1] === 0x02) return isPrivateAddress(v4(2));
+  if ((bytes[0] & 0xfe) === 0xfc) return true; // fc00::/7 unique local
+  if (bytes[0] === 0xfe && (bytes[1] & 0xc0) === 0x80) return true; // fe80::/10 link-local
+  if (bytes[0] === 0xfe && (bytes[1] & 0xc0) === 0xc0) return true; // fec0::/10 site-local
+  if (bytes[0] === 0xff) return true; // multicast
+  return false;
+}
+
+// ─── Guarded fetch ───────────────────────────────────────────────────────────
+
+const MAX_REDIRECTS = 3;
+
+/**
+ * `fetch` for every call to a Gitlab (API, token exchange, sign-in profile).
+ *
+ * In production the address is checked when the socket CONNECTS, not in an
+ * earlier lookup: a Gitlab's DNS switched to an internal address after it was
+ * approved (or between a check and the call) still can't make Classmoji's
+ * servers reach 169.254.169.254 or anything private. Redirects are followed
+ * here, each hop checked the same way, and the Authorization header is
+ * dropped when a redirect leaves the origin. Bodies are strings (JSON or form
+ * encoded), which is all Gitlab calls send.
+ */
+export async function gitlabFetch(
+  input: string,
+  init: {
+    method?: string;
+    headers?: Record<string, string>;
+    body?: string;
+    signal?: AbortSignal;
+  } = {}
+): Promise<Response> {
+  // Development and tests may point at a local Gitlab: no address check,
+  // so the platform fetch (which tests stub) does the work.
+  if (allowHttp()) return fetch(input, init);
+  let url = new URL(input);
+  let headers = { ...(init.headers ?? {}) };
+  let method = init.method || 'GET';
+  let body = init.body;
+  for (let hop = 0; ; hop++) {
+    const res = await guardedRequest(url, { method, headers, body, signal: init.signal });
+    const location = res.headers.get('location');
+    if (res.status < 300 || res.status >= 400 || !location || hop >= MAX_REDIRECTS) return res;
+    const next = new URL(location, url);
+    if (next.origin !== url.origin) {
+      headers = Object.fromEntries(
+        Object.entries(headers).filter(([k]) => k.toLowerCase() !== 'authorization')
+      );
+    }
+    if (res.status === 303 || ((res.status === 301 || res.status === 302) && method === 'POST')) {
+      method = 'GET';
+      body = undefined;
+    }
+    url = next;
+  }
+}
+
+async function guardedRequest(
+  url: URL,
+  init: { method: string; headers: Record<string, string>; body?: string; signal?: AbortSignal }
+): Promise<Response> {
+  const [{ request: httpsRequest }, { request: httpRequest }] = await Promise.all([
+    import('node:https'),
+    import('node:http'),
+  ]);
+  const checkAddresses = !allowHttp();
+  if (checkAddresses && url.protocol !== 'https:') {
+    throw new GitLabInstanceError('invalid_host', `Refusing a non-https Gitlab call to ${url.host}`);
+  }
+  // An IP address in the URL never goes through `lookup` below: check it here.
+  const literal = url.hostname.replace(/^\[|\]$/g, '');
+  if (checkAddresses && isIP(literal) && isPrivateAddress(literal)) {
+    throw new GitLabInstanceError(
+      'unreachable',
+      `${url.hostname} is a private address; refusing to connect`
+    );
+  }
+  const request = url.protocol === 'https:' ? httpsRequest : httpRequest;
+  return new Promise<Response>((resolve, reject) => {
+    const req = request(
+      url,
+      {
+        method: init.method,
+        headers: {
+          ...init.headers,
+          ...(init.body !== undefined
+            ? { 'Content-Length': String(Buffer.byteLength(init.body)) }
+            : {}),
+        },
+        signal: init.signal,
+        timeout: 30_000,
+        // Every address the socket may use is checked here, at connect time.
+        lookup: checkAddresses
+          ? (hostname, options, callback) => {
+              lookup(hostname, { ...(options as object), all: true })
+                .then(addresses => {
+                  const bad = addresses.find(a => isPrivateAddress(a.address));
+                  if (addresses.length === 0 || bad) {
+                    callback(
+                      new GitLabInstanceError(
+                        'unreachable',
+                        `${hostname} resolves to a private address; refusing to connect`
+                      ),
+                      '',
+                      4
+                    );
+                    return;
+                  }
+                  if ((options as { all?: boolean }).all) {
+                    (callback as unknown as (e: null, a: typeof addresses) => void)(
+                      null,
+                      addresses
+                    );
+                  } else {
+                    callback(null, addresses[0].address, addresses[0].family);
+                  }
+                })
+                .catch(error => callback(error, '', 4));
+            }
+          : undefined,
+      },
+      res => {
+        const chunks: Buffer[] = [];
+        res.on('data', chunk => chunks.push(chunk as Buffer));
+        res.on('error', reject);
+        res.on('end', () => {
+          const headers = new Headers();
+          for (const [key, value] of Object.entries(res.headers)) {
+            if (Array.isArray(value)) value.forEach(v => headers.append(key, v));
+            else if (value !== undefined) headers.set(key, String(value));
+          }
+          const status = res.statusCode ?? 502;
+          const noBody = status === 204 || status === 304 || init.method === 'HEAD';
+          resolve(
+            new Response(noBody ? null : Buffer.concat(chunks), {
+              status,
+              statusText: res.statusMessage,
+              headers,
+            })
+          );
+        });
+      }
+    );
+    req.on('timeout', () => req.destroy(new Error(`Gitlab call to ${url.host} timed out`)));
+    req.on('error', reject);
+    if (init.body !== undefined) req.write(init.body);
+    req.end();
+  });
 }
 
 /**
@@ -246,6 +431,14 @@ async function assertPublicHost(host: string): Promise<void> {
 }
 
 /**
+ * For git (clone/push), which can't go through gitlabFetch: refuse a Gitlab
+ * host that resolves to a private address, right before the git command runs.
+ */
+export async function assertPublicGitlabHost(host: string): Promise<void> {
+  await assertPublicHost(new URL(host).origin);
+}
+
+/**
  * Check a host really is a GitLab that Classmoji can reach: GitLab serves its
  * OpenID configuration publicly, with its own origin as the issuer.
  */
@@ -259,11 +452,11 @@ export async function probe(input: string): Promise<string> {
   await assertPublicHost(host);
   let issuer: unknown;
   try {
-    const response = await fetch(`${host}/.well-known/openid-configuration`, {
+    const response = await gitlabFetch(`${host}/.well-known/openid-configuration`, {
       headers: { Accept: 'application/json' },
-      redirect: 'error',
       signal: AbortSignal.timeout(8000),
     });
+    if (response.status >= 300 && response.status < 400) throw new Error('redirected');
     if (!response.ok) throw new Error(String(response.status));
     issuer = ((await response.json()) as { issuer?: unknown }).issuer;
   } catch {
@@ -488,6 +681,22 @@ export function updateCredentials(instanceId: string, clientId: string, clientSe
  * project URL, so a relay (smee) that can't carry an extra path still works.
  * Null when webhooks aren't configured.
  */
+/**
+ * The token project hooks carry for an instance: derived from
+ * GITLAB_WEBHOOK_SECRET and the instance id, so each Gitlab only ever holds
+ * its own. A school's Gitlab admin can read the tokens on its projects; with a
+ * shared secret they could forge events for classes on every other Gitlab.
+ * hook-station works out the instance first, then checks the token for it.
+ * Null when webhooks aren't configured.
+ */
+export function webhookSecret(instanceId: string | null | undefined): string | null {
+  const secret = process.env.GITLAB_WEBHOOK_SECRET;
+  if (!secret) return null;
+  return createHmac('sha256', secret)
+    .update(`classmoji:gitlab-webhook:${instanceId ?? 'default'}`)
+    .digest('hex');
+}
+
 export function webhookUrl(_instanceId?: string | null): string | null {
   return process.env.GITLAB_WEBHOOK_URL?.replace(/\/+$/, '') || null;
 }

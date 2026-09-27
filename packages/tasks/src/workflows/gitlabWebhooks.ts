@@ -25,8 +25,7 @@ interface RepairResult {
 async function repairClassrooms(classroomIds?: string[]): Promise<RepairResult> {
   const result: RepairResult = { classrooms: 0, projects: 0, created: 0, updated: 0, failed: 0 };
   const url = ClassmojiService.gitlabInstance.webhookUrl();
-  const secret = process.env.GITLAB_WEBHOOK_SECRET;
-  if (!url || !secret) {
+  if (!url || !process.env.GITLAB_WEBHOOK_SECRET) {
     logger.warn('GITLAB_WEBHOOK_URL/SECRET not set: nothing to repair');
     return result;
   }
@@ -79,7 +78,9 @@ async function repairClassrooms(classroomIds?: string[]): Promise<RepairResult> 
           target.group,
           target.project,
           url,
-          secret
+          ClassmojiService.gitlabInstance.webhookSecret(
+            classroom.git_organization.gitlab_instance_id
+          ) as string
         );
         result[outcome] += 1;
       } catch (error: unknown) {

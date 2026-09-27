@@ -27,6 +27,7 @@ async function cloneRepo(
   if (org.provider === 'GITLAB') {
     const token = await getGitProvider(org).getAccessToken();
     const host = new URL(org.base_url || ClassmojiService.gitlabInstance.defaultHost());
+    await ClassmojiService.gitlabInstance.assertPublicGitlabHost(host.origin);
     remote = `${host.protocol}//oauth2:${token}@${host.host}/${repoNamespace(classroom)}/${repoName}.git`;
   } else {
     remote = `https://x-access-token:${accessToken}@github.com/${org.login}/${repoName}.git`;

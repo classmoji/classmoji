@@ -6,7 +6,7 @@ import {
   getGitProvider,
   generateClassroomWorkflow,
   generateGitlabCi,
-  signAutogradeCallbackToken,
+  signAutogradeRepoToken,
   verifyAutogradeCallbackToken,
   type GitProvider,
   type WorkflowTestInput,
@@ -75,28 +75,36 @@ export async function commitWorkflow(
   }
 }
 
+/** A Trigger token that can only start the ingest task, reusable for a year. */
+function mintIngestTriggerToken(): Promise<string> {
+  // multipleUse: trigger tokens are one-time-use by default — but this token is
+  // committed into the workflow and used on every push, so it must be reusable.
+  return auth.createTriggerPublicToken(INGEST_TASK_ID, {
+    expirationTime: '1y',
+    multipleUse: true,
+  });
+}
+
 /**
- * Mint a task-scoped Trigger token + per-classroom HMAC and render the
- * `classroom.yml` for a repository's tests. Shared by the provision task and
- * repo creation so both emit an identical, current workflow.
+ * Render the workflow (`classroom.yml`, or `.gitlab-ci.yml`) for ONE repo:
+ * its callback token is that repo's own (signAutogradeRepoToken), so the
+ * student who can read it can't report results for a classmate's repo.
+ * Shared by the provision task and repo creation so both emit an identical,
+ * current workflow.
  */
 export async function buildClassroomWorkflowYaml(
   tests: WorkflowTestInput[],
   classroomSlug: string,
-  provider: string = 'GITHUB'
+  provider: string = 'GITHUB',
+  repoPath: string,
+  triggerToken?: string
 ): Promise<string> {
-  // multipleUse: trigger tokens are one-time-use by default — but this token is
-  // committed into the workflow and used on every push, so it must be reusable.
-  const triggerToken = await auth.createTriggerPublicToken(INGEST_TASK_ID, {
-    expirationTime: '1y',
-    multipleUse: true,
-  });
   const generate = provider === 'GITLAB' ? generateGitlabCi : generateClassroomWorkflow;
   return generate(tests, {
     triggerUrl: `${publicTriggerApiBase()}/api/v1/tasks/${INGEST_TASK_ID}/trigger`,
-    triggerToken,
+    triggerToken: triggerToken ?? (await mintIngestTriggerToken()),
     classroomSlug,
-    hmacToken: signAutogradeCallbackToken(classroomSlug),
+    hmacToken: signAutogradeRepoToken(classroomSlug, repoPath),
   });
 }
 
@@ -124,7 +132,8 @@ export async function provisionAutogradeWorkflowForRepo(params: {
     const yaml = await buildClassroomWorkflowYaml(
       tests as WorkflowTestInput[],
       params.classroomSlug,
-      provider
+      provider,
+      `${login}/${params.repoName}`
     );
     const gitProvider = getGitProvider(params.gitOrganization);
     await commitWorkflow(gitProvider, login, params.repoName, yaml, provider);
@@ -167,9 +176,9 @@ export const provisionAutogradeWorkflowTask = task({
     }
 
     const tests = repository.autograding_tests as WorkflowTestInput[];
-    const yaml = await buildClassroomWorkflowYaml(tests, classroomSlug, gitOrganization.provider);
     // GitLab student projects live in the class subgroup's `projects`.
     const owner = repoNamespace(repository.classroom) || orgLogin;
+    const triggerToken = await mintIngestTriggerToken();
 
     // Fan out to existing student repos. We deliberately do NOT write the
     // workflow to the template repo: that would make every future repo-creation
@@ -181,12 +190,25 @@ export const provisionAutogradeWorkflowTask = task({
     });
 
     if (studentRepos.length) {
-      await commitAutogradeWorkflowToRepoTask.batchTriggerAndWait(
-        studentRepos.map(repo => ({
-          payload: { gitOrganization, repoName: repo.name, yaml, owner },
+      // One workflow per repo: each carries its own repo's callback token.
+      const payloads = await Promise.all(
+        studentRepos.map(async repo => ({
+          payload: {
+            gitOrganization,
+            repoName: repo.name,
+            owner,
+            yaml: await buildClassroomWorkflowYaml(
+              tests,
+              classroomSlug,
+              gitOrganization.provider,
+              `${owner}/${repo.name}`,
+              triggerToken
+            ),
+          },
           options: { concurrencyKey: classroomSlug },
         }))
       );
+      await commitAutogradeWorkflowToRepoTask.batchTriggerAndWait(payloads);
     }
 
     return { testCount: tests.length, repoCount: studentRepos.length };
@@ -254,7 +276,20 @@ export const ingestAutogradeResultTask = task({
   run: async (payload: IngestPayload) => {
     const { classroomSlug, repo, sha, run_id, token, results } = payload;
 
-    if (!verifyAutogradeCallbackToken(classroomSlug, token ?? null)) {
+    // The token must be THIS repo's own. Github repos provisioned before
+    // per-repo tokens still carry the per-classroom one until their workflow
+    // is re-provisioned (the Autograde button); Gitlab never had it.
+    const classroom = await getPrisma().classroom.findUnique({
+      where: { slug: classroomSlug ?? '' },
+      select: { git_organization: { select: { provider: true } } },
+    });
+    const isGitHub = classroom?.git_organization?.provider === 'GITHUB';
+    if (
+      !verifyAutogradeCallbackToken(classroomSlug, token ?? null, {
+        repoPath: repo,
+        allowLegacyClassroomToken: isGitHub,
+      })
+    ) {
       logger.warn('autograde ingest: invalid token', { classroomSlug, repo });
       return { ok: false, reason: 'invalid_token' };
     }

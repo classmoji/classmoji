@@ -173,6 +173,7 @@ async function updateGitLabRepository(
   const provider = getGitProvider(gitOrganization) as GitLabProvider;
   const token = await provider.getAccessToken();
   const host = new URL(gitOrganization.base_url || ClassmojiService.gitlabInstance.defaultHost());
+  await ClassmojiService.gitlabInstance.assertPublicGitlabHost(host.origin);
   const remote = (fullPath: string) =>
     `${host.protocol}//oauth2:${token}@${host.host}/${fullPath}.git`;
 

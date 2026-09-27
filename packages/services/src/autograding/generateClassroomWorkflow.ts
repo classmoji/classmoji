@@ -32,7 +32,7 @@ export interface GenerateWorkflowOptions {
   triggerUrl?: string | null; // full task-trigger endpoint
   triggerToken?: string | null; // task-scoped public access token
   classroomSlug?: string | null; // included in the payload + resolves the repo
-  hmacToken?: string | null; // per-classroom HMAC (verifyAutogradeCallbackToken)
+  hmacToken?: string | null; // this repo's callback token (signAutogradeRepoToken)
 }
 
 /** YAML double-quoted scalar (JSON string is a valid YAML scalar). */

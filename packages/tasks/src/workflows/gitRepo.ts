@@ -358,7 +358,9 @@ export const createRepositoryTask = task({
         const url = ClassmojiService.gitlabInstance.webhookUrl(
           classroom.git_organization.gitlab_instance_id
         );
-        const secret = process.env.GITLAB_WEBHOOK_SECRET;
+        const secret = ClassmojiService.gitlabInstance.webhookSecret(
+          classroom.git_organization.gitlab_instance_id
+        );
         const namespace = repoNamespace(classroom);
         if (url && secret && namespace) {
           try {

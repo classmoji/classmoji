@@ -146,7 +146,11 @@ export async function createGitLabClassroom(
   // their own project. Without it the classroom can't hold repos, so a failure
   // undoes the classroom rather than leaving a half-made one.
   try {
-    const subgroup = await provider.createSubgroup(group.full_path, name, classroom.slug);
+    // Never an existing subgroup: deleting the classroom deletes its subgroup,
+    // which must hold only what Classmoji made for it.
+    const subgroup = await provider.createSubgroup(group.full_path, name, classroom.slug, {
+      adopt: false,
+    });
     await getPrisma().classroom.update({
       where: { id: classroom.id },
       data: { git_namespace: subgroup.full_path },
@@ -155,6 +159,11 @@ export async function createGitLabClassroom(
     await getPrisma()
       .classroom.delete({ where: { id: classroom.id } })
       .catch(() => {});
+    if ((error as { status?: number }).status === 422) {
+      return {
+        error: `A subgroup named '${classroom.slug}' already exists in ${group.full_path} on Gitlab. Pick a different classroom name, or rename or remove that subgroup.`,
+      };
+    }
     return {
       error: `Could not create the class subgroup on Gitlab: ${
         error instanceof Error ? error.message : String(error)

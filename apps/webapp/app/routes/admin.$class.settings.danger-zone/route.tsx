@@ -236,7 +236,7 @@ const DangerZone = ({ loaderData }: Route.ComponentProps) => {
 export const action = async ({ request, params }: Route.ActionArgs) => {
   const classSlug = params.class!;
 
-  const { classroom, membership } = await requireClassroomAdmin(request, classSlug, {
+  const { classroom, membership, userId } = await requireClassroomAdmin(request, classSlug, {
     resourceType: 'SETTINGS',
     action: 'delete_classroom',
   });
@@ -258,7 +258,8 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
         classSlug,
         deleteGitHub,
         authData?.token ?? null,
-        classroom.git_organization?.provider === 'GITLAB'
+        classroom.git_organization?.provider === 'GITLAB',
+        userId
       );
     },
   });
@@ -269,7 +270,8 @@ const removeClassroomHandler = async (
   classSlug: string,
   deleteGitHub: boolean,
   userToken: string | null,
-  isGitLab: boolean
+  isGitLab: boolean,
+  requesterUserId: string
 ) => {
   const platform = isGitLab ? 'Gitlab' : 'Github';
   // GitHub cleanup MUST precede the DB delete: the cascade destroys the rows
@@ -283,9 +285,11 @@ const removeClassroomHandler = async (
     const retryHint = `Fix the ${platform} permissions and try again, or uncheck the ${platform} option to remove the classroom only.`;
     let summary;
     try {
+      // Gitlab: the requester's own Gitlab connection, likewise.
       summary = await ClassmojiService.classroom.deleteGitHubArtifacts(
         classroom.id,
-        userToken ?? ''
+        userToken ?? '',
+        { requesterUserId }
       );
     } catch (error: unknown) {
       console.error('GitHub cleanup failed on classroom delete:', error);

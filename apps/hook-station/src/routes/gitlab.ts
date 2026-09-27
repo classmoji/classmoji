@@ -9,8 +9,9 @@ import { scopeGitlabId } from '@classmoji/utils';
  * GitLab webhooks: the counterpart of routes/github.ts for GitLab classrooms.
  *
  * Classmoji registers a project hook on each student project after creating it
- * (group hooks need a paid plan on gitlab.com), with GITLAB_WEBHOOK_SECRET as
- * its token. GitLab sends that token back in `X-Gitlab-Token`.
+ * (group hooks need a paid plan on gitlab.com), with a token derived for its
+ * instance from GITLAB_WEBHOOK_SECRET (gitlabInstance.webhookSecret). GitLab
+ * sends that token back in `X-Gitlab-Token`.
  *
  * Two events matter, each handled by the same task its Github counterpart uses:
  *  - Push Hook: a push to a student project's default branch is a REPO-mode
@@ -210,19 +211,14 @@ const INSTANCE_ID = /^[0-9a-f-]{36}$/i;
 export default async function gitlabRoutes(fastify: FastifyInstance): Promise<void> {
   fastify.post<{ Params: { instanceId?: string } }>('/gitlab/:instanceId?', {
     preHandler: async function handler(request: FastifyRequest, reply: FastifyReply) {
-      const secret = process.env.GITLAB_WEBHOOK_SECRET;
-      if (!secret) {
+      if (!process.env.GITLAB_WEBHOOK_SECRET) {
         request.log.warn('GITLAB_WEBHOOK_SECRET is not set; refusing GitLab webhook');
         reply.status(503).send('GitLab webhooks are not configured');
         return;
       }
-      if (!tokenMatches(request.headers['x-gitlab-token'], secret)) {
-        reply.status(401).send('Unauthorized');
-        return;
-      }
     },
     handler: async function handler(request, reply) {
-      const fromPath = request.params.instanceId;
+      const fromPath = (request.params as { instanceId?: string }).instanceId;
       if (fromPath !== undefined && !INSTANCE_ID.test(fromPath)) {
         return reply.status(404).send('Unknown Gitlab instance');
       }
@@ -230,6 +226,13 @@ export default async function gitlabRoutes(fastify: FastifyInstance): Promise<vo
       const instanceId = fromPath ?? (await instanceFromPayload(body?.project?.web_url));
       // A GitLab Classmoji has no instance for: nothing here can be ours.
       if (instanceId === undefined) return reply.status(200).send({ success: true });
+      // Each instance's hooks carry that instance's own token, so an event
+      // claiming to come from one Gitlab must carry that Gitlab's token: one
+      // instance can't speak for another.
+      const expected = ClassmojiService.gitlabInstance.webhookSecret(instanceId);
+      if (!expected || !tokenMatches(request.headers['x-gitlab-token'], expected)) {
+        return reply.status(401).send('Unauthorized');
+      }
       const event = request.headers['x-gitlab-event'];
       if (event === 'Push Hook') {
         await handlePush(request.body as GitLabPushPayload, instanceId);
