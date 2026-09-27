@@ -36,6 +36,8 @@ export interface MediaListItem {
   posterUrl: string | null;
   optimise: boolean;
   keepOriginal: boolean;
+  /** True once the original was dropped for its streaming copy (`original_deleted_at`). */
+  originalDeleted: boolean;
   allowDownload: boolean;
   uploadedByName: string;
   createdAt: string;
@@ -213,6 +215,7 @@ export async function loadMediaPage(classroom: MediaPageClassroom): Promise<Medi
       posterUrl: posters.get(record.id) ?? null,
       optimise: record.optimise,
       keepOriginal: record.keepOriginal,
+      originalDeleted: Boolean(record.originalDeletedAt),
       allowDownload: record.allowDownload,
       uploadedByName: names.get(record.uploadedBy) ?? 'Unknown',
       createdAt: record.createdAt.toISOString(),
