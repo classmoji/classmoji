@@ -1,10 +1,11 @@
 /**
  * The decisions the upload dialog makes before a single byte moves.
  *
- * Pure on purpose. The dialog is the only place a video's processing options
- * can ever be set — there is no per-video control afterwards for anyone — so
- * the rules about which boxes appear and which of them may be unticked are
- * worth reading and testing on their own, away from any markup.
+ * Pure on purpose, so the rules can be read and tested away from any markup.
+ * The video choices themselves (the three boxes and how they are tied) are
+ * shared by every upload surface and live in
+ * `@classmoji/ui-components/media-options`; what is here is which files get
+ * them and what the dialog checks before sending.
  *
  * The server checks every one of these again. What is here is only so an
  * instructor finds out that a 4 GB export is too big before they have spent
@@ -12,6 +13,7 @@
  */
 
 import { kindOfFilename } from '@classmoji/services/media/router';
+import type { VideoOptions } from '@classmoji/ui-components/media-options';
 
 /**
  * The kinds the store has a real type for, lowercased for this dialog. The
@@ -31,22 +33,6 @@ export type MediaKind = 'video' | 'audio' | 'document' | 'archive' | 'image' | '
  * move.
  */
 export const MAX_MEDIA_EXTENSION_LENGTH = 8;
-
-/** Containers whose usual codecs a browser may refuse when served untouched. */
-const FRAGILE_VIDEO_EXTENSIONS = ['mov'];
-
-export interface VideoOptions {
-  optimise: boolean;
-  keepOriginal: boolean;
-  allowDownload: boolean;
-}
-
-/** §3.10: optimise on, keep the original on, no student download. */
-export const DEFAULT_VIDEO_OPTIONS: VideoOptions = {
-  optimise: true,
-  keepOriginal: true,
-  allowDownload: false,
-};
 
 /**
  * A filename's extension by the server's rule (`sanitizedExtension`): the text
@@ -86,37 +72,6 @@ export function createUploadOptions(
 ): Partial<VideoOptions> & { explicit: true } {
   return isVideoFilename(filename) ? { ...options, explicit: true } : { explicit: true };
 }
-
-/**
- * True when the file would very likely play for the uploader and fail for half
- * their class. A `.mov` off a Mac is usually HEVC, which Firefox does not
- * decode and Windows only does with a codec pack — exactly what optimising
- * fixes, which is why this only matters when they have turned optimising off.
- */
-export const warnsWithoutOptimising = (filename: string, options: VideoOptions) =>
-  !options.optimise && FRAGILE_VIDEO_EXTENSIONS.includes(extensionOf(filename));
-
-/**
- * Apply one checkbox toggle, keeping the pair that cannot disagree in step.
- *
- * "Keep the original" only means anything when there is a second copy to keep
- * it alongside. With optimising off the original IS the only copy, so the box
- * is forced on and disabled rather than hidden: an instructor who unticks
- * Optimise should see that their file is still safe, not watch a control
- * vanish and wonder what it did.
- */
-export function applyVideoOption(
-  options: VideoOptions,
-  field: keyof VideoOptions,
-  next: boolean
-): VideoOptions {
-  const updated = { ...options, [field]: next };
-  if (!updated.optimise) updated.keepOriginal = true;
-  return updated;
-}
-
-/** Whether "Keep the original" can be unticked in the state it is now in. */
-export const canDropOriginal = (options: VideoOptions) => options.optimise;
 
 /**
  * Sizes are counted in binary units and labelled in decimal ones, which is what

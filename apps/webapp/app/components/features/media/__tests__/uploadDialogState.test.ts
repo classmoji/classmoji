@@ -9,7 +9,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { DEFAULT_VIDEO_OPTIONS } from '../mediaUploadOptions';
+import { DEFAULT_VIDEO_OPTIONS } from '@classmoji/ui-components/media-options';
 import {
   INITIAL_UPLOAD_DIALOG_STATE,
   uploadDialogReducer,

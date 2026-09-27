@@ -1,4 +1,8 @@
-import { DEFAULT_VIDEO_OPTIONS, applyVideoOption, type VideoOptions } from './mediaUploadOptions';
+import {
+  DEFAULT_VIDEO_OPTIONS,
+  applyVideoOption,
+  type VideoOptions,
+} from '@classmoji/ui-components/media-options';
 
 /**
  * The upload dialog's state, as a reducer so every transition can be asserted

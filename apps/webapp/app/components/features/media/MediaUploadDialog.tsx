@@ -7,10 +7,11 @@ import type {
   uploadMultipart,
 } from '@classmoji/ui-components';
 
-import MediaVideoOptions from './MediaVideoOptions';
+import { MediaVideoOptions } from '@classmoji/ui-components/media-options';
 import {
   createUploadOptions,
   formatBytes,
+  isVideoFilename,
   precheck,
   type QuotaSummary,
 } from './mediaUploadOptions';
@@ -228,7 +229,10 @@ const MediaUploadDialog = ({
           </p>
         )}
 
-        {file && !refusal && (
+        {/* The three video choices, for a video only: a pdf or an mp3 has
+            nothing to decide, and an empty options area would only invite a
+            search for settings that are not there. */}
+        {file && !refusal && isVideoFilename(file.name) && (
           <MediaVideoOptions
             filename={file.name}
             value={options}

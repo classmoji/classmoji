@@ -1,0 +1,97 @@
+/*
+ * MediaVideoOptions — the three video upload choices.
+ *
+ * Plain CSS shipped with the component: a consuming app's Tailwind does not
+ * scan this package, and the pages app loads none of the shared tokens. Each
+ * colour reads the design token when the app has it and falls back to an
+ * equivalent value when it does not. Dark mode follows the `.dark` class every
+ * app puts on <html> (and `data-theme="dark"`, which tokens.css also honours).
+ */
+
+.cm-media-options {
+  --cmo-line: var(--line, #dfe4ee);
+  --cmo-hover: var(--nav-hover, #eef1f8);
+  --cmo-ink: var(--ink-0, #14151a);
+  --cmo-muted: var(--ink-3, #6d707b);
+  --cmo-accent: var(--accent, #21883d);
+  --cmo-warn-bg: var(--amber-bg, #fbf1dc);
+  --cmo-warn-line: var(--amber-bord, #ead8b1);
+  --cmo-warn-ink: var(--amber-ink, #8a5a12);
+
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+:where(.dark, [data-theme='dark']) .cm-media-options {
+  --cmo-line: var(--line, #262a38);
+  --cmo-hover: var(--nav-hover, #1f2333);
+  --cmo-ink: var(--ink-0, #f1f2f6);
+  --cmo-muted: var(--ink-3, #9398a6);
+  --cmo-accent: var(--accent, #4fb36a);
+  --cmo-warn-bg: var(--amber-bg, #362710);
+  --cmo-warn-line: var(--amber-bord, #523c1b);
+  --cmo-warn-ink: var(--amber-ink, #f3c76a);
+}
+
+.cm-media-option {
+  display: flex;
+  gap: 0.75rem;
+  padding: 0.625rem 0.75rem;
+  border-radius: 0.75rem;
+  box-shadow: inset 0 0 0 1px var(--cmo-line);
+  cursor: pointer;
+  text-align: left;
+  transition: background-color 120ms ease;
+}
+
+.cm-media-option:hover {
+  background-color: var(--cmo-hover);
+}
+
+.cm-media-option--disabled {
+  cursor: default;
+  opacity: 0.7;
+}
+
+.cm-media-option--disabled:hover {
+  background-color: transparent;
+}
+
+.cm-media-option__input {
+  flex-shrink: 0;
+  width: 1rem;
+  height: 1rem;
+  margin: 0.125rem 0 0;
+  accent-color: var(--cmo-accent);
+}
+
+.cm-media-option__text {
+  min-width: 0;
+}
+
+.cm-media-option__label {
+  display: block;
+  font-size: 0.875rem;
+  line-height: 1.25rem;
+  font-weight: 600;
+  color: var(--cmo-ink);
+}
+
+.cm-media-option__help {
+  display: block;
+  font-size: 0.75rem;
+  line-height: 1rem;
+  color: var(--cmo-muted);
+}
+
+.cm-media-options__warning {
+  margin: 0;
+  padding: 0.5rem 0.75rem;
+  border-radius: 0.75rem;
+  font-size: 0.75rem;
+  line-height: 1rem;
+  background-color: var(--cmo-warn-bg);
+  color: var(--cmo-warn-ink);
+  box-shadow: inset 0 0 0 1px var(--cmo-warn-line);
+}
