@@ -30,6 +30,7 @@ import {
 } from '@classmoji/utils/upload-concurrency';
 import { schema } from '~/components/editor/blocks/index.tsx';
 import type { PageForContent } from '~/types/pages.ts';
+import type { UploadCapability } from '@classmoji/services/media/router';
 import {
   assetResolveContext,
   canonicalizeAssetRef,
@@ -66,6 +67,27 @@ async function readPageJsonBody(request: Request): Promise<Record<string, unknow
   if (!request.body) return (await request.json()) as Record<string, unknown>;
   const bytes = await readLimitedBody(request.body, PAGE_JSON_BODY_MAX_BYTES);
   return JSON.parse(new TextDecoder().decode(bytes)) as Record<string, unknown>;
+}
+
+/**
+ * The upload capability, or null when it cannot be worked out.
+ *
+ * Null is safe rather than silent: the editor then routes every file the way it
+ * always has (to the repository, within its cap), and a file that belongs in
+ * media is still redirected there by the repository route's own 409
+ * `USE_MEDIA`. A lookup failure must not take the editor down with it.
+ */
+async function loadUploadCapability(page: {
+  classroom: { id: string };
+}): Promise<UploadCapability | null> {
+  try {
+    return await ClassmojiService.media.uploadCapabilityFor(
+      page.classroom as Parameters<typeof ClassmojiService.media.uploadCapabilityFor>[0]
+    );
+  } catch (error) {
+    console.warn('[pages] upload capability unavailable:', error);
+    return null;
+  }
 }
 
 /** Extensions a page cover may have — the image half of the upload allowlist. */
@@ -257,6 +279,12 @@ export const loader = async ({
     [coverImage?.url]
   );
 
+  // Where this editor's uploads go (`storageTargetFor` on the client): the
+  // repository, media, or a refusal it can state before a byte is sent. Staff
+  // who can edit only — a reader never uploads, and the capability carries the
+  // classroom's remaining media quota. Not in read-only preview either.
+  const uploadCapability = canEdit && !previewActive ? await loadUploadCapability(page) : null;
+
   // Build GitHub repo info for link
   const gitOrg = (page.classroom as Record<string, unknown>).git_organization as {
     login?: string;
@@ -309,6 +337,7 @@ export const loader = async ({
     resolvedSrcSets,
     userRole,
     canEdit,
+    uploadCapability,
     notice,
     noticeAutoMerged,
     // Conflict token (F2, 4b parity with slides): content.json's blob sha,
