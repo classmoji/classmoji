@@ -296,8 +296,9 @@ export function requireClient(): { client: S3Client; bucket: string } {
  * doors into media cannot disagree about who may store what. See
  * `createUpload` for the order and why it is the contract.
  *
- * Returns the minted id, the `orig.{ext}` key it will be written at, and the
- * classification. The row is UPLOADING — a reservation counted by the quota.
+ * Returns the minted id, the `orig.{ext}` key it will be written at, the
+ * classification, and the row as written. The row is UPLOADING — a reservation
+ * counted by the quota.
  */
 async function reserveUpload({
   classroom,
@@ -315,6 +316,7 @@ async function reserveUpload({
   mediaId: string;
   key: string;
   classified: NonNullable<ReturnType<typeof classifyFilename>>;
+  row: MediaRow;
 }> {
   // Any extension, as long as there is one the store can address (see
   // mediaKinds.ts). The refusal says which of the two it was.
@@ -417,7 +419,7 @@ async function reserveUpload({
   // Nothing slow is inside: no R2 call, no subscription lookup. The lock is
   // held for one SELECT and one INSERT, because it blocks every other upload
   // this classroom is opening.
-  await getPrisma().$transaction(async tx => {
+  const row = (await getPrisma().$transaction(async tx => {
     await tx.$queryRaw`SELECT id FROM classrooms WHERE id = ${classroom.id} FOR UPDATE`;
 
     const rows = (await tx.mediaObject.findMany({
@@ -444,9 +446,9 @@ async function reserveUpload({
         allow_download: allowDownload,
       },
     });
-  });
+  })) as MediaRow;
 
-  return { mediaId, key, classified };
+  return { mediaId, key, classified, row };
 }
 
 /**
@@ -1466,7 +1468,12 @@ export async function putMediaObject({
 }): Promise<{ mediaId: string; ref: string }> {
   const { client, bucket } = requireClient();
   const sizeBytes = bytes.length;
-  const { mediaId, key, classified } = await reserveUpload({
+  const {
+    mediaId,
+    key,
+    classified,
+    row: reserved,
+  } = await reserveUpload({
     classroom,
     userId,
     filename,
@@ -1529,8 +1536,18 @@ export async function putMediaObject({
     throw new MediaError('NOT_FOUND', 'This file was deleted before it finished writing');
   }
 
-  const row = await findMediaRow(classroom.id, mediaId);
-  if (row) await onMediaReady(toMediaRecord(row));
+  // Built in memory, the way `completeUpload` does, rather than read back: the
+  // row is READY and the bytes are served whatever happens next, so nothing
+  // after the flip may throw, and a video must always reach `onMediaReady`
+  // (which never throws) — a failed re-read would have skipped its job.
+  const ready: MediaRow = {
+    ...reserved,
+    status: 'READY',
+    ready_at: readyAt,
+    upload_id: null,
+    processing: 'NONE',
+  };
+  await onMediaReady(toMediaRecord(ready));
   return { mediaId, ref: mediaRef(mediaId) };
 }
 
