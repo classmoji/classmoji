@@ -14,10 +14,12 @@
  * Memory is the constraint that shapes `placeImportEntry`. A ZIP under the
  * upload cap can hold entries that inflate to gigabytes, so an entry is judged
  * by the size the ZIP declares BEFORE it is inflated, entries are placed one
- * at a time (inflate → store → drop), and the whole import has an inflated-bytes
- * budget (`IMPORT_INFLATE_BUDGET_BYTES`).
+ * at a time (inflate → store → drop), the whole import has an inflated-bytes
+ * budget (`IMPORT_INFLATE_BUDGET_BYTES`), and the files kept for the
+ * repository — held until the import's one commit — have a limit of their own
+ * (`IMPORT_REPO_HELD_BYTES`). Both live on one `ImportLimits` per import.
  *
- * An entry left out — too large, over the budget, or refused by media storage —
+ * An entry left out — too large, over a limit, or refused by media storage —
  * becomes a warning that names it, through the same gate as an entry over the
  * repository's cap. It never fails the import.
  *
@@ -134,16 +136,25 @@ export function importAssetType(filePath: string): 'image' | 'video' | null {
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
- * How many bytes one import may inflate in total, across every entry. The
- * slides VM has 2 GB of memory and an import's repository files are all held
- * until its single commit; this bounds the work one ZIP can ask for.
+ * How many bytes one import may inflate in total, across every entry — the
+ * repository's and media's alike. This bounds the work one ZIP can ask for;
+ * what is HELD at once is bounded by `IMPORT_REPO_HELD_BYTES`.
  */
 export const IMPORT_INFLATE_BUDGET_BYTES = 3_000_000_000;
 
-/** The import's running total of inflated bytes. */
-export class ImportInflateBudget {
+/**
+ * How many bytes of files kept for the course repository one import may hold.
+ * Every one of them is held — as base64, a third larger — until the import's
+ * single commit, on a 2 GB machine that also holds the uploaded ZIP. Images and
+ * video barely compress, so a real export's repository files come to about the
+ * size of its ZIP (150 MB at most); only an archive built to inflate gets here.
+ */
+export const IMPORT_REPO_HELD_BYTES = 256 * 1024 * 1024;
+
+/** A running total of bytes against a limit. */
+export class ImportByteBudget {
   private used = 0;
-  constructor(readonly limitBytes: number = IMPORT_INFLATE_BUDGET_BYTES) {}
+  constructor(readonly limitBytes: number) {}
 
   fits(bytes: number): boolean {
     return this.used + bytes <= this.limitBytes;
@@ -155,6 +166,24 @@ export class ImportInflateBudget {
 
   get usedBytes(): number {
     return this.used;
+  }
+}
+
+/**
+ * Everything one import counts as it places its entries: the bytes it has
+ * inflated, and the bytes it holds for the repository commit. One per import,
+ * shared by every entry it places — the theme's files included.
+ */
+export class ImportLimits {
+  readonly inflated: ImportByteBudget;
+  readonly repoHeld: ImportByteBudget;
+
+  constructor({
+    inflateBytes = IMPORT_INFLATE_BUDGET_BYTES,
+    repoHeldBytes = IMPORT_REPO_HELD_BYTES,
+  }: { inflateBytes?: number; repoHeldBytes?: number } = {}) {
+    this.inflated = new ImportByteBudget(inflateBytes);
+    this.repoHeld = new ImportByteBudget(repoHeldBytes);
   }
 }
 
@@ -171,6 +200,22 @@ export function importBudgetSkippedWarning(
   return (
     `Skipped ${name} (${formatMegabytes(bytes)}) — this import is over its ` +
     `${formatGigabytes(limitBytes)} limit for all files together`
+  );
+}
+
+/**
+ * The warning for an entry left out because the import already holds as much
+ * as it may for the course repository: `Skipped photo.png (30 MB) — this
+ * import is over its 256 MB limit for files kept in the course repository`.
+ */
+export function importRepoHeldSkippedWarning(
+  name: string,
+  bytes: number,
+  limitBytes: number
+): string {
+  return (
+    `Skipped ${name} (${formatMegabytes(bytes)}) — this import is over its ` +
+    `${formatMegabytes(limitBytes)} limit for files kept in the course repository`
   );
 }
 
@@ -200,7 +245,7 @@ export type ImportPlacement =
  * Place one entry: the repository, media, or nowhere (with a named warning).
  *
  * Checked by the DECLARED size first, so an entry too large for anywhere it
- * could go, or one the import's budget cannot cover, is never inflated at all.
+ * could go, or one the import's limits cannot cover, is never inflated at all.
  * The same checks run again on the bytes, because a header is only a claim.
  * A file bound for media is written before this returns and its bytes are not
  * kept — the caller places the next entry with this one's memory released.
@@ -209,21 +254,22 @@ export async function placeImportEntry({
   entry,
   capability,
   gate,
-  budget,
+  limits,
   put,
   onError = () => {},
 }: {
   entry: ImportZipEntry;
   capability: UploadCapability | null | undefined;
   gate: RepoEntryGate;
-  budget: ImportInflateBudget;
+  /** The import's running totals — one per import, shared by every entry. */
+  limits: ImportLimits;
   put: PutImportMedia;
   /** A refused media write, for the server log — the warning never carries it. */
   onError?: (filename: string, error: unknown) => void;
 }): Promise<ImportPlacement> {
   const { filePath, filename } = entry;
 
-  /** Leave the entry out if `bytes` fit nowhere, or not in the budget. */
+  /** Leave the entry out if `bytes` fit nowhere, or not within a limit. */
   const leftOut = (bytes: number): boolean => {
     // The router says media only within media's own per-file ceiling (the
     // capability's, never a constant here), so anything it does not send there
@@ -241,13 +287,23 @@ export async function placeImportEntry({
       }
       // The repository's own skip, with its own sentence.
       if (!gate.admit(filename, bytes, filePath)) return true;
+      // Held until the commit, together with every other repository file.
+      if (!limits.repoHeld.fits(bytes)) {
+        gate.skip(
+          filename,
+          bytes,
+          filePath,
+          importRepoHeldSkippedWarning(filename, bytes, limits.repoHeld.limitBytes)
+        );
+        return true;
+      }
     }
-    if (!budget.fits(bytes)) {
+    if (!limits.inflated.fits(bytes)) {
       gate.skip(
         filename,
         bytes,
         filePath,
-        importBudgetSkippedWarning(filename, bytes, budget.limitBytes)
+        importBudgetSkippedWarning(filename, bytes, limits.inflated.limitBytes)
       );
       return true;
     }
@@ -258,9 +314,10 @@ export async function placeImportEntry({
 
   const buffer = await entry.inflate();
   if (leftOut(buffer.length)) return { kind: 'skipped' };
-  budget.spend(buffer.length);
+  limits.inflated.spend(buffer.length);
 
   if (!importEntryGoesToMedia(capability, filename, buffer.length)) {
+    limits.repoHeld.spend(buffer.length);
     return { kind: 'repo', buffer };
   }
 

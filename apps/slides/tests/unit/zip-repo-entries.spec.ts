@@ -172,10 +172,10 @@ test.describe('slides.com importer', () => {
   test('reads every repository-bound ZIP entry through the gate', () => {
     // Images, videos and the theme's lib/ files are all placed by
     // `placeImportEntry`, which admits through the gate and the import's
-    // inflate budget (pinned in import-video-media.spec). Nothing reaches
-    // `files` straight from JSZip.
+    // limits (pinned in import-video-media.spec). Nothing reaches `files`
+    // straight from JSZip.
     expect(source.match(/gate: repoGate,/g)).toHaveLength(2);
-    expect(source.match(/budget: inflateBudget,/g)).toHaveLength(2);
+    expect(source.match(/^\s+limits,$/gm)).toHaveLength(2);
     expect(source.match(/file\.async\('nodebuffer'\)/g)).toHaveLength(2);
     expect(source).not.toMatch(/file\.async\('base64'\)/);
   });

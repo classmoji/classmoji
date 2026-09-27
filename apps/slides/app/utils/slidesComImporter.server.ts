@@ -25,7 +25,7 @@ import {
   slideNumberLabel,
 } from './zipRepoEntries.ts';
 import {
-  ImportInflateBudget,
+  ImportLimits,
   importAssetType,
   importMediaOptions,
   placeImportEntry,
@@ -92,9 +92,10 @@ const SL_BLOCK_VISIBILITY_CSS = `
  * A ZIP under the upload cap can hold entries that inflate to gigabytes. Each
  * entry is judged by its declared size BEFORE it is inflated (too large for
  * anywhere it could go → left out, never read), entries are placed one at a
- * time (a media file is stored and its bytes dropped before the next is read),
- * and the import has a total inflated-bytes budget; an entry past it is left
- * out with a warning. See `importVideoMedia.ts`.
+ * time (a media file is stored and its bytes dropped before the next is read).
+ * The files kept for the repository ARE held until the one commit, so their
+ * total has a limit, and the import has a total inflated-bytes budget; an entry
+ * past either is left out with a warning. See `importVideoMedia.ts`.
  */
 export async function processZipImport({
   zipFile,
@@ -299,8 +300,9 @@ export async function processZipImport({
     /** @type {Map<string, string>} Maps old video path to new absolute URL */
     const videoMap = new Map();
     const videoBaseUrl = `${baseUrl}/videos`;
-    // Every byte this import inflates counts, repository and media alike.
-    const inflateBudget = new ImportInflateBudget();
+    // What this import has inflated (repository and media alike) and what it
+    // holds for the commit (assets and theme files) — one set, every entry.
+    const limits = new ImportLimits();
 
     // 7c. First pass: identify images and videos for progress tracking
     const mediaFiles: Array<{
@@ -352,7 +354,7 @@ export async function processZipImport({
           },
           capability: uploadCapability,
           gate: repoGate,
-          budget: inflateBudget,
+          limits,
           put: bytes =>
             ClassmojiService.media.putMediaObject({
               classroom,
@@ -421,7 +423,7 @@ export async function processZipImport({
       for (const [filePath, file] of Object.entries(zip.files)) {
         if (filePath.startsWith('lib/') && !file.dir) {
           // The repository only (no capability, so never media), through the
-          // same gate and the same inflate budget as every other entry.
+          // same gate and the same limits as every other entry.
           const placed = await placeImportEntry({
             entry: {
               filePath,
@@ -431,7 +433,7 @@ export async function processZipImport({
             },
             capability: null,
             gate: repoGate,
-            budget: inflateBudget,
+            limits,
             put: async () => {
               throw new Error('Theme files are never stored in media.');
             },
