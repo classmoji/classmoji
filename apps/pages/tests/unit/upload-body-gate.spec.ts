@@ -77,8 +77,8 @@ test.describe('page uploads read the body after the gate', () => {
 
   test('the page action reads a multipart body only after membership and status', () => {
     const action = PAGE_ACTION_SOURCE.slice(PAGE_ACTION_SOURCE.indexOf('export const action'));
-    const membership = action.indexOf('classroomMembership.findByClassroomAndUser(');
-    const status = action.indexOf('pageMutationBlocked(page.classroom, membership.role)');
+    const membership = action.indexOf('const role = await findClassroomRole({');
+    const status = action.indexOf('pageMutationBlocked(page.classroom, role)');
     const read = action.indexOf('await readLimitedFormData(request, uploadBodyLimit(');
 
     for (const at of [membership, status, read]) expect(at).toBeGreaterThan(-1);
@@ -89,7 +89,7 @@ test.describe('page uploads read the body after the gate', () => {
 
   test('the page action reads a JSON save capped, after the same gates', () => {
     const action = PAGE_ACTION_SOURCE.slice(PAGE_ACTION_SOURCE.indexOf('export const action'));
-    const status = action.indexOf('pageMutationBlocked(page.classroom, membership.role)');
+    const status = action.indexOf('pageMutationBlocked(page.classroom, role)');
     const read = action.indexOf('data = await readPageJsonBody(request);');
 
     for (const at of [status, read]) expect(at).toBeGreaterThan(-1);
@@ -124,7 +124,7 @@ test.describe('page uploads take an upload slot', () => {
     const action = PAGE_ACTION_SOURCE.slice(
       PAGE_ACTION_SOURCE.indexOf('async function pageAction')
     );
-    const status = action.indexOf('pageMutationBlocked(page.classroom, membership.role)');
+    const status = action.indexOf('pageMutationBlocked(page.classroom, role)');
     const slot = action.indexOf('if (!acquireUploadSlot()) {');
     const read = action.indexOf('await readLimitedFormData(request, uploadBodyLimit(');
 
