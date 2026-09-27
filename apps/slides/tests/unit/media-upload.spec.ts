@@ -521,7 +521,6 @@ test.describe('the video element, structurally', () => {
     for (const file of [
       '../../app/utils/mediaUpload.ts',
       '../../app/utils/mediaClient.ts',
-      '../../app/utils/mediaRouterShared.ts',
       '../../app/utils/mediaRefs.ts',
       '../../app/hooks/useMediaUpload.ts',
       '../../app/components/media/VideoUploadDialog.tsx',

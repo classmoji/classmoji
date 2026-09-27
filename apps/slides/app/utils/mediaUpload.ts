@@ -12,13 +12,13 @@
  */
 
 import {
+  MEDIA_QUOTA_FULL_MESSAGE,
   kindOfFilename,
   storageTargetFor,
   type StorageTarget,
   type UploadCapability,
 } from '@classmoji/services/media/router';
 import { REPO_REST_MAX_BYTES, repoFileTooLargeMessage } from '@classmoji/utils/repo-limits';
-import { MEDIA_QUOTA_FULL_MESSAGE } from './mediaRouterShared.ts';
 
 export type { UploadCapability };
 
@@ -100,8 +100,9 @@ const VIDEO_EXTENSIONS = ['mp4', 'webm', 'mov', 'm4v', 'mkv', 'avi'].filter(
  */
 export const VIDEO_FILE_ACCEPT = ['video/*', ...VIDEO_EXTENSIONS.map(ext => `.${ext}`)].join(',');
 
-// The router's decimal formatter and the quota sentence (see the module).
-export { formatGigabytes, MEDIA_QUOTA_FULL_MESSAGE } from './mediaRouterShared.ts';
+// The router's decimal formatter (the per-file cap is a decimal 2 GB) and the
+// sentence every surface shows for a full quota.
+export { formatGigabytes, MEDIA_QUOTA_FULL_MESSAGE } from '@classmoji/services/media/router';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Video upload options (plan §3.10 — the uploader's three choices, once)
