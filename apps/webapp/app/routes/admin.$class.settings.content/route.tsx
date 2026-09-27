@@ -1,6 +1,6 @@
 import { useParams } from 'react-router';
 import { Button, Form, Modal, Switch } from 'antd';
-import { IconInfoCircle, IconExternalLink } from '@tabler/icons-react';
+import { IconExternalLink } from '@tabler/icons-react';
 
 import { namedAction } from 'remix-utils/named-action';
 
@@ -10,7 +10,6 @@ import { SettingSection } from '~/components';
 import { ActionTypes } from '~/constants';
 import { useGlobalFetcher } from '~/hooks';
 import { assertClassroomAccess, assertClassroomMutationAllowed } from '~/utils/helpers';
-import { isAIAgentConfigured } from '~/utils/aiFeatures.server';
 import type { Route } from './+types/route';
 
 export const loader = async ({ params, request }: Route.LoaderArgs) => {
@@ -25,20 +24,14 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
     attemptedAction: 'view',
   });
 
-  // The syllabus bot is Pro-only; the toggle is disabled (not hidden) on Free
-  // so owners can see the feature exists and why it is unavailable.
-  const syllabusBotEntitlement = await ClassmojiService.entitlement.canUseSyllabusBot(classroom.id);
-
   // Return classroom with settings for display (API keys stripped by assertClassroomAccess)
   return {
     organization: classroom,
-    aiAgentAvailable: isAIAgentConfigured(),
-    syllabusBotProRequired: !syllabusBotEntitlement.allowed,
   };
 };
 
 const SettingsContent = ({ loaderData }: Route.ComponentProps) => {
-  const { organization, aiAgentAvailable, syllabusBotProRequired } = loaderData;
+  const { organization } = loaderData;
   const { class: classSlug } = useParams();
 
   const { fetcher } = useGlobalFetcher();
@@ -73,20 +66,6 @@ const SettingsContent = ({ loaderData }: Route.ComponentProps) => {
       {
         _action: 'saveContentSettings',
         slides_enabled: checked,
-      },
-      {
-        method: 'POST',
-        encType: 'application/json',
-        action: `/admin/${classSlug}/settings/content`,
-      }
-    );
-  };
-
-  const handleSyllabusBotToggle = (checked: boolean) => {
-    fetcher!.submit(
-      {
-        _action: 'saveContentSettings',
-        syllabus_bot_enabled: checked,
       },
       {
         method: 'POST',
@@ -192,7 +171,7 @@ const SettingsContent = ({ loaderData }: Route.ComponentProps) => {
        */}
       {/* <SettingSection
         title="Content Repository"
-        description="Configure the GitHub repository where your course content is stored. This repository is used by Slides and the Syllabus Bot to access course materials."
+        description="Configure the GitHub repository where your course content is stored. This repository is used by Slides and Ask Moji to access course materials."
       >
         <Form layout="vertical" className="w-3/4">
           <Form.Item label="Repository Name">
@@ -214,80 +193,6 @@ const SettingsContent = ({ loaderData }: Route.ComponentProps) => {
           <Form.Item label="Enable Slides">
             <Switch checked={settings.slides_enabled ?? false} onChange={handleSlidesToggle} />
           </Form.Item>
-        </Form>
-      </SettingSection>
-
-      {/* Syllabus Bot Section */}
-      <SettingSection
-        title="Syllabus Bot"
-        description="Enable an AI-powered assistant that helps students find information about your course from the syllabus and course materials."
-      >
-        <Form layout="vertical" className="w-3/4">
-          <Form.Item label="Enable Syllabus Bot">
-            <Switch
-              checked={settings.syllabus_bot_enabled ?? false}
-              onChange={handleSyllabusBotToggle}
-              // The feature predates the Pro gate, so Free classrooms with a
-              // stale `true` exist. Turning it OFF stays allowed (the server
-              // gates only the `true` direction) — otherwise those owners are
-              // stuck with a flag they cannot clear.
-              disabled={
-                !aiAgentAvailable || (syllabusBotProRequired && !settings.syllabus_bot_enabled)
-              }
-            />
-          </Form.Item>
-
-          {syllabusBotProRequired && (
-            <div className="flex items-start gap-2 rounded-lg bg-stone-50 p-3 text-sm text-gray-600 dark:bg-neutral-800 dark:text-gray-400">
-              <IconInfoCircle size={16} className="mt-0.5 shrink-0" />
-              <span>
-                The Syllabus Bot is available on the Pro plan.{' '}
-                <a
-                  href="/settings/billing"
-                  className="text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300"
-                >
-                  Upgrade to enable it
-                </a>
-                .
-              </span>
-            </div>
-          )}
-
-          {/* Hidden when Pro is required: on a grandfathered Free classroom the
-              flag can still read `true`, but the runtime gate means students do
-              NOT see the Course Assistant button, so this panel would be lying. */}
-          {settings.syllabus_bot_enabled && !syllabusBotProRequired && (
-            <div className="mt-4 p-4 bg-nav-hover rounded-lg border border-gray-200 dark:border-neutral-700">
-              <div className="flex items-center gap-2 mb-3">
-                <IconInfoCircle size={16} className="text-ink-3" />
-                <span className="font-medium text-ink-0">About the Syllabus Bot</span>
-              </div>
-              <div className="space-y-2 text-sm text-gray-600 dark:text-gray-300">
-                <p>
-                  When enabled, students will see a Course Assistant button in the nav bar. They can
-                  ask questions about:
-                </p>
-                <ul className="list-disc list-inside ml-2 space-y-1 text-ink-3">
-                  <li>Due dates and deadlines</li>
-                  <li>Grading policies and rubrics</li>
-                  <li>Course schedule and topics</li>
-                  <li>Assignment requirements</li>
-                  <li>Office hours and contact information</li>
-                </ul>
-                <p className="mt-3">
-                  <span className="font-medium text-gray-700 dark:text-gray-200">
-                    Customization:
-                  </span>{' '}
-                  Add a{' '}
-                  <code className="bg-gray-200 dark:bg-neutral-700 px-1.5 py-0.5 rounded text-ink-1">
-                    bot-context/
-                  </code>{' '}
-                  folder to your content repository with additional context files (e.g., FAQ,
-                  policies, announcements).
-                </p>
-              </div>
-            </div>
-          )}
         </Form>
       </SettingSection>
     </div>

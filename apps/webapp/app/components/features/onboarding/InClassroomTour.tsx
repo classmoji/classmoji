@@ -326,11 +326,12 @@ const OWNER_STEPS: FeatureStep[] = [
       'Define the emoji-to-number scale (what each emoji is worth) and the letter-grade ranges that turn those numbers into final grades.',
   },
   {
-    link: '/settings/quizzes',
-    selector: '[data-tour="settings-tab-quizzes"]',
+    link: '/settings/ai',
+    selector: '[data-tour="settings-tab-ai"]',
     placement: 'bottom',
-    title: 'Quizzes tab',
-    description: 'Turn AI-graded quizzes on or off for the class and set their defaults.',
+    title: 'AI tab',
+    description:
+      'Turn AI-graded quizzes and Ask Moji on or off for the class and set their defaults.',
   },
   {
     link: '/settings/team',

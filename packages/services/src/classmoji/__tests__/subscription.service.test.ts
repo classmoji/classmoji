@@ -27,7 +27,7 @@ vi.mock('@classmoji/database', () => ({
   }),
 }));
 
-const { isSubscriptionActive, getProStateForClassroomId } =
+const { isSubscriptionActive, getProStateForClassroomId, getClassroomSubscription } =
   await import('../subscription.service.ts');
 
 const HOUR = 60 * 60 * 1000;
@@ -191,5 +191,62 @@ describe('getProStateForClassroomId', () => {
     expect(args.where).toEqual({ id: 'class-1' });
     expect(args.select.memberships.where).toEqual({ role: 'OWNER', has_accepted_invite: true });
     expect(args.select.memberships.orderBy).toEqual({ created_at: 'asc' });
+  });
+});
+
+// What /api/get-org-subscription returns to the webapp store, whose
+// useSubscription drives the Pro-only nav items. It must agree with the Pro
+// gates on the routes those items link to, so it is the resolver's `isPro`
+// dressed as a subscription row: the active PRO row, or a FREE placeholder.
+describe('getClassroomSubscription', () => {
+  const FREE = { tier: 'FREE', id: null };
+
+  it('returns the PRO row for a comped PRO owner', async () => {
+    classroomFindUnique.mockResolvedValue(classroomWithOwners({ tier: 'PRO', ends_at: null }));
+    await expect(getClassroomSubscription('class-1')).resolves.toMatchObject({
+      id: 'sub-0',
+      tier: 'PRO',
+    });
+  });
+
+  it('returns FREE for a lapsed PRO owner, not the PRO row', async () => {
+    // The resolver reports tier PRO here (isPro false); tier alone would say Pro.
+    classroomFindUnique.mockResolvedValue(classroomWithOwners({ tier: 'PRO', ends_at: past() }));
+    await expect(getClassroomSubscription('class-1')).resolves.toEqual(FREE);
+  });
+
+  it('returns the PRO row of a second accepted owner when the first is FREE', async () => {
+    classroomFindUnique.mockResolvedValue(
+      classroomWithOwners({ tier: 'FREE' }, { tier: 'PRO', ends_at: future() })
+    );
+    await expect(getClassroomSubscription('class-1')).resolves.toMatchObject({
+      id: 'sub-1',
+      tier: 'PRO',
+    });
+  });
+
+  it('returns FREE when a lapsed PRO co-owner is the only PRO', async () => {
+    classroomFindUnique.mockResolvedValue(
+      classroomWithOwners({ tier: 'FREE' }, { tier: 'PRO', ends_at: past() })
+    );
+    await expect(getClassroomSubscription('class-1')).resolves.toEqual(FREE);
+  });
+
+  it('returns FREE for a classroom with no accepted owners', async () => {
+    classroomFindUnique.mockResolvedValue({ memberships: [] });
+    await expect(getClassroomSubscription('class-1')).resolves.toEqual(FREE);
+  });
+
+  // An invited, not yet accepted, OWNER with PRO: the query leaves them out, so
+  // the rows above never include them. Pinned here on this path's own query.
+  it('counts only accepted owners, by classroom id', async () => {
+    classroomFindUnique.mockResolvedValue({ memberships: [] });
+    await getClassroomSubscription('class-1');
+
+    const [args] = classroomFindUnique.mock.calls[0] as [
+      { where: { id: string }; select: { memberships: { where: unknown } } },
+    ];
+    expect(args.where).toEqual({ id: 'class-1' });
+    expect(args.select.memberships.where).toEqual({ role: 'OWNER', has_accepted_invite: true });
   });
 });

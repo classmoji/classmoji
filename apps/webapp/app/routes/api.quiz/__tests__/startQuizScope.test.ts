@@ -5,7 +5,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
  *
  * `startQuiz` resolves its classroom from quizId, and every gate in front of
  * the branch answers for THAT quiz's classroom: the membership and role check,
- * the mutation check, the pro-tier check. The resume path then took attemptId
+ * the mutation check, the quiz-visibility check. The resume path then took attemptId
  * and verified only that the caller owned it, so a caller's own attempt on a
  * quiz in some other classroom could be driven under this classroom's gates —
  * past a tier or status that the attempt's own classroom would have refused.
@@ -20,7 +20,7 @@ const findWithMessagesMock = vi.fn();
 const createNewMock = vi.fn();
 
 const assertAccessMock = vi.fn();
-const assertProTierMock = vi.fn();
+const quizzesVisibleMock = vi.fn();
 const assertMutationMock = vi.fn();
 const getAuthSessionMock = vi.fn();
 
@@ -43,7 +43,10 @@ vi.mock('@classmoji/services', () => ({
 
 vi.mock('~/utils/helpers', () => ({
   assertClassroomAccess: (...a: unknown[]) => assertAccessMock(...a),
-  assertProTier: (...a: unknown[]) => assertProTierMock(...a),
+}));
+
+vi.mock('~/utils/classroomProFlag.server', () => ({
+  quizzesVisibleOrThrow: (...a: unknown[]) => quizzesVisibleMock(...a),
 }));
 
 vi.mock('~/utils/routeAuth.server', () => ({
@@ -70,6 +73,15 @@ vi.mock('../../student.$class.quizzes/aiAgent.server', () => ({
 
 vi.mock('@classmoji/auth/server', () => ({
   getAuthSession: (...a: unknown[]) => getAuthSessionMock(...a),
+}));
+
+// The per-call MCP read token (quiz source material, Stage 2). Mocked so no
+// test here mints against a real database.
+vi.mock('@classmoji/auth/mcp-token', () => ({
+  mintMcpAccessToken: vi.fn(async () => ({
+    accessToken: 'mcp-token',
+    expiresAt: new Date('2030-01-01T00:00:00.000Z'),
+  })),
 }));
 
 const { action } = await import('../route.ts');
@@ -142,7 +154,7 @@ describe('api.quiz startQuiz — writes stay inside the authorized classroom', (
       classroom: { status: 'ACTIVE', slug: 'test-class' },
       membership: { role: 'STUDENT' },
     });
-    assertProTierMock.mockResolvedValue(undefined);
+    quizzesVisibleMock.mockResolvedValue(true);
     assertMutationMock.mockReturnValue(undefined);
     getAuthSessionMock.mockResolvedValue({ token: 'ghu_token', session: {} });
   });
@@ -185,12 +197,17 @@ describe('api.quiz startQuiz — writes stay inside the authorized classroom', (
   it('lets a query failure surface instead of reporting the attempt as absent', async () => {
     // Only the service's "no such attempt" becomes a 404; a dropped connection
     // keeps its 500, so a student mid-quiz is not told their attempt is gone.
+    // The 500 carries fixed copy; the driver's text stays in the server log.
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
     findWithMessagesMock.mockRejectedValue(new Error('connection pool timeout'));
 
     const response = await start(OWN_ATTEMPT);
+    const body = await response.json();
 
     expect(response.status).toBe(500);
-    expect(await response.json()).toEqual({ error: 'connection pool timeout' });
+    expect(body).toEqual({ success: false, error: 'Something went wrong. Please try again.' });
+    expect(JSON.stringify(body)).not.toContain('connection pool timeout');
+    errorSpy.mockRestore();
   });
 
   it('creates a new attempt when none is named, leaving the resume path alone', async () => {

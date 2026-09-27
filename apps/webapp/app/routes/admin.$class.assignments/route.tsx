@@ -12,6 +12,7 @@ import AssignmentsTable, {
 import AssignmentFormModal from '~/components/features/assignments/AssignmentFormModal';
 import { ClassmojiService } from '@classmoji/services';
 import { requireClassroomAdmin, assertClassroomMutationAllowed } from '~/utils/routeAuth.server';
+import { loadQuizzesVisible } from '~/utils/classroomProFlag.server';
 import type { Route } from './+types/route';
 
 export const loader = async ({ params, request }: Route.LoaderArgs) => {
@@ -22,16 +23,19 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
     action: 'view_assignments',
   });
 
-  const [assignments, modules, repositories, candidates, tags] = await Promise.all([
+  const [assignments, modules, repositories, candidates, tags, quizzesVisible] = await Promise.all([
     ClassmojiService.assignment.listForClassroom(classroom.id),
     ClassmojiService.module.findByClassroomSlug(classSlug!),
     ClassmojiService.repository.findByClassroomSlug(classSlug!),
     ClassmojiService.module.getCandidateContent(classroom.id),
     ClassmojiService.organizationTag.findByClassroomId(classroom.id),
+    loadQuizzesVisible(classroom.id),
   ]);
 
+  // A classroom without quizzes shows no trace of them: its quiz assignments
+  // and the quizzes a new one could bind never leave the loader.
   return {
-    assignments,
+    assignments: quizzesVisible ? assignments : assignments.filter(a => a.type !== 'QUIZ'),
     modules: modules.map(m => ({ id: m.id, title: m.title, slug: m.slug, position: m.position })),
     repositories: repositories.map(r => ({
       id: r.id,
@@ -40,11 +44,12 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
       type: r.type,
       is_published: r.is_published,
     })),
-    quizzes: candidates.quizzes,
+    quizzes: quizzesVisible ? candidates.quizzes : [],
     forms: candidates.forms,
     pages: candidates.pages,
     slides: candidates.slides,
     tags: tags.map(t => ({ id: t.id, name: t.name })),
+    quizzesVisible,
   };
 };
 
@@ -69,7 +74,7 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
         const tag = await ClassmojiService.organizationTag.upsert(classroom.id, name);
         return { tag: { id: tag.id, name: tag.name } };
       } catch (error: unknown) {
-        console.error('Tag create error:', error);
+        console.error('[admin.assignments] Tag create error:', error);
         return { error: 'Could not create the tag. Try again.' };
       }
     },
@@ -84,6 +89,12 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
           tag_id,
           ...assignmentData
         } = data;
+        // The page offers no quiz to bind when quizzes are hidden; a crafted
+        // post is refused here. Type is fixed at creation, so update needs no
+        // matching check.
+        if (assignmentData.type === 'QUIZ' && !(await loadQuizzesVisible(classroom.id))) {
+          return { error: "Quizzes aren't available in this class." };
+        }
         // A REPO assignment may bring its own repository: created here from
         // the template, named after the assignment, so each student's copy is
         // `<title-slug>-<login>` (or `-<team>` for a team assignment).
@@ -123,7 +134,7 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
               });
               templateRef = blank.fullName;
             } catch (error: unknown) {
-              console.error('Blank template creation failed:', error);
+              console.error('[admin.assignments] Blank template creation failed:', error);
               return {
                 error: `Could not create a blank template repository in ${classroom.git_organization.login}. Pick a template repository instead.`,
               };
@@ -154,8 +165,8 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
         );
         return { success: `Assignment "${created.title}" created` };
       } catch (error: unknown) {
-        console.error('Assignment create error:', error);
-        return { error: error instanceof Error ? error.message : 'Failed to create assignment' };
+        console.error('[admin.assignments] Assignment create error:', error);
+        return { error: 'Failed to create assignment. Please try again.' };
       }
     },
     async update() {
@@ -168,8 +179,8 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
         );
         return { success: `Assignment "${updated.title}" updated` };
       } catch (error: unknown) {
-        console.error('Assignment update error:', error);
-        return { error: error instanceof Error ? error.message : 'Failed to update assignment' };
+        console.error('[admin.assignments] Assignment update error:', error);
+        return { error: 'Failed to update assignment. Please try again.' };
       }
     },
     async delete() {
@@ -177,15 +188,25 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
         await ClassmojiService.assignment.deleteInClassroom(data.id, classroom.id);
         return { success: 'Assignment deleted' };
       } catch (error: unknown) {
-        console.error('Assignment delete error:', error);
-        return { error: error instanceof Error ? error.message : 'Failed to delete assignment' };
+        console.error('[admin.assignments] Assignment delete error:', error);
+        return { error: 'Failed to delete assignment. Please try again.' };
       }
     },
   });
 };
 
 const AdminAssignments = ({ loaderData }: Route.ComponentProps) => {
-  const { assignments, modules, repositories, quizzes, forms, pages, slides, tags } = loaderData;
+  const {
+    assignments,
+    modules,
+    repositories,
+    quizzes,
+    forms,
+    pages,
+    slides,
+    tags,
+    quizzesVisible,
+  } = loaderData;
   const { class: classSlug } = useParams();
   const deleteFetcher = useFetcher<{ success?: string; error?: string }>();
 
@@ -262,6 +283,7 @@ const AdminAssignments = ({ loaderData }: Route.ComponentProps) => {
           onEdit={openEdit}
           onDelete={remove}
           busy={deleteFetcher.state !== 'idle'}
+          quizzesVisible={quizzesVisible}
         />
         {rows.length > 0 && (
           <div className="mt-4 flex items-center justify-end gap-2 text-sm text-ink-2">

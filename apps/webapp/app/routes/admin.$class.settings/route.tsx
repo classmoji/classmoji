@@ -11,7 +11,7 @@ const ALL_TABS: TabDef[] = [
   { key: 'general', label: 'General' },
   { key: 'repos', label: 'Repositories' },
   { key: 'grades', label: 'Grades' },
-  { key: 'quizzes', label: 'Quizzes' },
+  { key: 'ai', label: 'AI' },
   { key: 'content', label: 'Content' },
   { key: 'website', label: 'Website' },
   { key: 'team', label: 'Team' },

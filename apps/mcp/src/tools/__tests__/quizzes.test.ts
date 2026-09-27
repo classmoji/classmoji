@@ -200,6 +200,76 @@ describe('quiz_create', () => {
   });
 });
 
+describe('course_search_enabled (quiz source material, Stage 2 tier)', () => {
+  it('quiz_create forwards it as courseSearchEnabled and echoes it', async () => {
+    mocks.quizCreate.mockResolvedValue({ ...QUIZ_ROW, course_search_enabled: true });
+
+    const payload = parse(
+      await quizCreateTool.handler(
+        {
+          classroom: 'org/w26',
+          name: 'Q',
+          rubric_prompt: 'r',
+          course_search_enabled: true,
+        },
+        CTX
+      )
+    );
+
+    expect(mocks.quizCreate.mock.calls[0][0]).toMatchObject({ courseSearchEnabled: true });
+    expect(payload.quiz.course_search_enabled).toBe(true);
+  });
+
+  it('quiz_create leaves it out when not given, and the summary reports false', async () => {
+    mocks.quizCreate.mockResolvedValue(QUIZ_ROW);
+
+    const payload = parse(
+      await quizCreateTool.handler({ classroom: 'org/w26', name: 'Q', rubric_prompt: 'r' }, CTX)
+    );
+
+    expect(mocks.quizCreate.mock.calls[0][0]).not.toHaveProperty('courseSearchEnabled');
+    expect(payload.quiz.course_search_enabled).toBe(false);
+  });
+
+  it('quiz_update maps it alone as a field and audits the field name', async () => {
+    mocks.quizFindById.mockResolvedValue(QUIZ_ROW);
+    mocks.quizUpdate.mockResolvedValue({ ...QUIZ_ROW, course_search_enabled: false });
+
+    await quizUpdateTool.handler(
+      { classroom: 'org/w26', quiz_id: 'quiz-1', course_search_enabled: false },
+      CTX
+    );
+
+    expect(mocks.quizUpdate.mock.calls[0][1]).toEqual({ courseSearchEnabled: false });
+    const audit = mocks.auditCreate.mock.calls[0][0] as { data: { fields: string[] } };
+    expect(audit.data.fields).toEqual(['course_search_enabled']);
+  });
+
+  it('is a boolean in both schemas and neither tool takes source material', () => {
+    for (const tool of [quizCreateTool, quizUpdateTool]) {
+      const schema = z.object(tool.inputSchema);
+      expect(tool.inputSchema).toHaveProperty('course_search_enabled');
+      expect(tool.inputSchema).not.toHaveProperty('source_material');
+      expect(
+        schema.safeParse({
+          classroom: 'o/s',
+          quiz_id: 'x',
+          name: 'n',
+          rubric_prompt: 'r',
+          course_search_enabled: 'yes',
+        }).success
+      ).toBe(false);
+    }
+  });
+
+  it('keeps the descriptions under 1,500 bytes and points at the link tool for material', () => {
+    for (const tool of [quizCreateTool, quizUpdateTool, quizPublishTool]) {
+      expect(new TextEncoder().encode(tool.description).length, tool.name).toBeLessThan(1500);
+    }
+    expect(quizCreateTool.description).toContain('resource_link_add');
+  });
+});
+
 describe('quiz_update', () => {
   const ARGS = { classroom: 'org/w26', quiz_id: 'quiz-1', name: 'Renamed' };
 
@@ -355,6 +425,46 @@ describe('quiz_publish', () => {
     expect(payload.students_notified).toBe(false);
     expect(payload.previous_status).toBe('PUBLISHED');
     expect(quizPublishTool.annotations?.idempotent).toBe(true);
+  });
+
+  describe('source material all draft', () => {
+    const WARNING =
+      'All source material is still draft; students will not be able to start this quiz.';
+    const doc = (id: string, is_draft: boolean, order: number) => ({
+      kind: 'page',
+      id,
+      title: `Doc ${id}`,
+      is_draft,
+      order,
+    });
+
+    // The material rides on the loaded row only: quiz.publish returns the bare
+    // row, so the warning must be decided from the findById read.
+    async function publishWith(source_material: unknown[]) {
+      mocks.quizFindById.mockResolvedValue({ ...QUIZ_ROW, source_material });
+      mocks.quizPublish.mockResolvedValue({ ...QUIZ_ROW, status: 'PUBLISHED' });
+      return parse(await quizPublishTool.handler(ARGS, CTX));
+    }
+
+    it('warns, in the payload and the message, when every linked doc is a draft', async () => {
+      const payload = await publishWith([doc('p1', true, 0), doc('p2', true, 1)]);
+      expect(payload.success).toBe(true);
+      expect(payload.warning).toBe(WARNING);
+      expect(payload.message).toContain(WARNING);
+      expect(mocks.quizPublish).toHaveBeenCalledWith('quiz-1');
+    });
+
+    it('does not warn when at least one linked doc is published', async () => {
+      const payload = await publishWith([doc('p1', true, 0), doc('p2', false, 1)]);
+      expect(payload).not.toHaveProperty('warning');
+      expect(payload.message).not.toContain('Warning');
+    });
+
+    it('does not warn when the quiz has no source material', async () => {
+      const payload = await publishWith([]);
+      expect(payload).not.toHaveProperty('warning');
+      expect(payload.message).not.toContain('Warning');
+    });
   });
 
   it('refuses a quiz from another classroom (S1) and never publishes', async () => {

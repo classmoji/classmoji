@@ -211,46 +211,22 @@ export const getProStateForClassroomId = async (
 };
 
 /**
- * The owner's subscription for a classroom SLUG.
+ * A classroom's tier as a subscription row: the active PRO row that makes it
+ * Pro, or a FREE placeholder. The shape `/api/get-org-subscription` has always
+ * returned to the webapp store (`useSubscription`, which drives the owner
+ * sidebar's Pro-only nav items; the /teacher and /assistant layouts get a bare
+ * boolean from their own loaders instead), decided by
+ * `getProStateForClassroomId` so the nav agrees with the Pro gates on the
+ * routes it links to.
  *
- * Superseded by `getProStateForClassroomId` for every tier decision — it picks
- * an arbitrary owner and does not test `ends_at`. Kept because
- * `apps/webapp/app/routes/api.$operation` calls it with a git-org login rather
- * than a classroom slug (a separate pre-existing oddity), and the webapp test
- * helpers seed against its shape.
+ * Keyed on `isPro`, never on `tier`: the resolver reports the oldest owner's
+ * `tier` when nobody holds an active PRO, so a lapsed PRO row comes back as
+ * `tier: 'PRO', isPro: false`.
  */
-export const getByClassroom = async (classroomSlug: string): Promise<CurrentSubscription> => {
-  // Classroom slug is globally unique, so this resolves to exactly one classroom.
-  // The tier is the OWNER's most recent subscription — billing follows the person
-  // who owns the classroom, not the caller.
-  const classroom = await getPrisma().classroom.findUnique({
-    where: { slug: classroomSlug },
-    include: {
-      memberships: {
-        where: { role: 'OWNER' },
-        include: {
-          user: {
-            include: {
-              subscriptions: {
-                orderBy: { created_at: 'desc' },
-                take: 1,
-              },
-            },
-          },
-        },
-      },
-    },
-  });
-
-  if (!classroom || !classroom.memberships.length) {
-    return { tier: 'FREE', id: null };
-  }
-
-  const owner = classroom.memberships[0].user;
-
-  if (!owner.subscriptions.length) {
-    return { tier: 'FREE', id: null };
-  }
-
-  return owner.subscriptions[0];
+export const getClassroomSubscription = async (
+  classroomId: string
+): Promise<CurrentSubscription> => {
+  const { isPro, subscription } = await getProStateForClassroomId(classroomId);
+  if (isPro && subscription) return subscription;
+  return { tier: 'FREE', id: null };
 };

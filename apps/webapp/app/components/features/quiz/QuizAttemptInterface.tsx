@@ -14,6 +14,22 @@ import QuizMessageList from './QuizMessageList';
  */
 const DEBUG_QUIZ_METRICS = false;
 
+/** Shown when the quiz fails to start and the server sent no line of its own. */
+const QUIZ_START_FAILED = "The quiz couldn't start. Please try again.";
+const SEND_FAILED = "That reply couldn't be finished. Please send your message again.";
+
+/**
+ * The server's own fixed `message` from a failed /api/quiz reply (quizzes no
+ * longer available in this class, a locked class), if it sent one. A body that
+ * isn't JSON (an error page) reads as none. A status code or an exception's
+ * text is never shown.
+ */
+const serverMessage = async (res: Response): Promise<string | null> => {
+  const body = await res.json().catch(() => null);
+  const message = (body as { message?: unknown } | null)?.message;
+  return typeof message === 'string' && message ? message : null;
+};
+
 /** Metadata shape for quiz messages */
 interface QuizMessageMetadata {
   isOpeningMessage?: boolean;
@@ -21,7 +37,14 @@ interface QuizMessageMetadata {
   isExplorationStep?: boolean;
   toolName?: string;
   toolInput?: unknown;
+  /** A course-material step's document title (content_get), when the ai-agent saved one. */
+  title?: string;
   explorationSteps?: ExplorationStep[];
+  /**
+   * Set on a fixed-copy failure line the server saved in place of a reply
+   * (BUDGET_EXCEEDED, SOURCE_MATERIAL_UNAVAILABLE, AGENT_FAILURE, …).
+   */
+  errorType?: string;
   [key: string]: unknown;
 }
 
@@ -42,6 +65,18 @@ interface QuizMessage {
   timestamp?: string | Date;
 }
 
+/**
+ * Whether the transcript ends in a failure line the server saved in place of
+ * a question. Nothing more is coming for it, so the chat must stop waiting —
+ * a start refused for unavailable source material leaves that line as the
+ * ONLY assistant message, which the welcome-message rules below would
+ * otherwise read as "still waiting for question 1" and poll forever.
+ */
+const endsInFailureLine = (displayMessages: QuizMessage[]): boolean => {
+  const last = displayMessages[displayMessages.length - 1];
+  return last?.role === 'assistant' && Boolean(getMetadata(last.metadata)?.errorType);
+};
+
 /** Focus metrics snapshot from useQuizFocusMetrics */
 interface MetricsSnapshot {
   totalMs: number;
@@ -61,6 +96,7 @@ interface ExplorationStep {
   toolName: string;
   toolInput: unknown;
   timestamp: number;
+  title?: string;
 }
 
 interface QuizAttemptInterfaceProps {
@@ -118,6 +154,11 @@ function QuizAttemptInterface({
   // Keep ref fresh across re-renders (revalidator may change)
   revalidateRef.current = () => revalidator.revalidate();
   const startingQuizRef = useRef(false);
+  const startFailureRef = useRef<QuizMessage | null>(null); // The line a failed auto-start shows
+  // A failed send's own line and its failure line, and how many saved messages
+  // the transcript had when it failed.
+  const sendFailureRef = useRef<{ lines: QuizMessage[]; savedCount: number } | null>(null);
+  const savedCountRef = useRef(0); // Saved messages shown, as of the last transcript sync
   const welcomeInjectedRef = useRef(false);
   const pendingUserMessageRef = useRef<string | null>(null); // Tracks optimistic user message content during sends
   const explorationStepBaseRef = useRef(0); // Count of exploration steps before current send/load started
@@ -521,7 +562,8 @@ function QuizAttemptInterface({
       const hasOpeningMessage = assistantMessages.some(
         (m: QuizMessage) => getMetadata(m.metadata)?.isOpeningMessage
       );
-      const hasWelcomeOnly = assistantMessages.length === 1 && !hasOpeningMessage;
+      const hasWelcomeOnly =
+        assistantMessages.length === 1 && !hasOpeningMessage && !endsInFailureLine(displayMessages);
       if (hasWelcomeOnly && !readOnly) {
         setLoading(true);
       }
@@ -542,14 +584,19 @@ function QuizAttemptInterface({
 
   // Auto-start quiz if attempt exists but has no real messages
   useEffect(() => {
-    // Only start if we have attemptId BUT no real messages (SYSTEM already filtered from messages state)
-    const hasRealMessages = messages.some(
-      (m: QuizMessage) => m.role === 'assistant' || m.role === 'user'
-    );
+    // Only start if we have attemptId BUT no real messages (SYSTEM already filtered from messages state).
+    // Roles are compared case-insensitively: loader rows are lowercase, lines set here are not.
+    const hasRealMessages = messages.some((m: QuizMessage) => {
+      const role = m.role?.toLowerCase();
+      return role === 'assistant' || role === 'user';
+    });
 
     if (attemptId && !hasRealMessages && !readOnly && !startingQuizRef.current) {
       startingQuizRef.current = true;
       setLoading(true);
+
+      // What the chat shows if the start fails (see serverMessage).
+      let failureCopy = QUIZ_START_FAILED;
 
       // Start quiz with the existing attemptId
       fetch('/api/quiz', {
@@ -563,9 +610,8 @@ function QuizAttemptInterface({
       })
         .then(async res => {
           if (!res.ok) {
-            const text = await res.text();
-            console.error('Server error response:', text);
-            throw new Error(`HTTP error! status: ${res.status}`);
+            failureCopy = (await serverMessage(res)) ?? QUIZ_START_FAILED;
+            throw new Error(`startQuiz failed (${res.status})`);
           }
           return res.json();
         })
@@ -578,12 +624,14 @@ function QuizAttemptInterface({
         .catch(error => {
           console.error('Error starting quiz:', error);
           setLoading(false);
-          startingQuizRef.current = false;
+          // startingQuizRef stays true: a failed start is not re-sent on its
+          // own. Reopening the attempt or reloading the page starts it again.
           const errorMessage: QuizMessage = {
             id: 1,
             role: 'ASSISTANT',
-            content: `I'm having trouble starting the quiz. Error: ${error.message}. Please try refreshing the page.`,
+            content: failureCopy,
           };
+          startFailureRef.current = errorMessage;
           setMessages([errorMessage]);
         });
     }
@@ -612,6 +660,7 @@ function QuizAttemptInterface({
 
     // Filter out SYSTEM messages (exploration steps) from display messages
     const displayMessages = updatedMessages.filter((m: QuizMessage) => m.role !== 'system');
+    savedCountRef.current = displayMessages.length;
 
     // Smart merge: during sends, preserve the optimistic user message until DB catches up
     if (sending && pendingUserMessageRef.current) {
@@ -630,7 +679,18 @@ function QuizAttemptInterface({
         setMessages(displayMessages);
       }
     } else {
-      setMessages(displayMessages);
+      // A failed start's line stays until the transcript has messages of its own.
+      const shown =
+        displayMessages.length === 0 && startFailureRef.current
+          ? [startFailureRef.current]
+          : displayMessages;
+      // A failed send's two lines stay after the transcript until it has more
+      // messages than it had when the send failed.
+      const sendFailure = sendFailureRef.current;
+      if (sendFailure && displayMessages.length > sendFailure.savedCount) {
+        sendFailureRef.current = null;
+      }
+      setMessages(sendFailureRef.current ? [...shown, ...sendFailureRef.current.lines] : shown);
     }
 
     if (displayMessages.length > 0) {
@@ -651,7 +711,11 @@ function QuizAttemptInterface({
       const lastIsAssistantResponse =
         lastMsg?.role === 'assistant' && !getMetadata(lastMsg?.metadata)?.isWelcomeMessage;
 
-      if (hasOpeningMessage || (assistantMessages.length >= 2 && lastIsAssistantResponse)) {
+      if (
+        hasOpeningMessage ||
+        (assistantMessages.length >= 2 && lastIsAssistantResponse) ||
+        endsInFailureLine(displayMessages)
+      ) {
         setLoading(false);
       }
     }
@@ -732,6 +796,7 @@ function QuizAttemptInterface({
       content: messageContent,
     };
 
+    sendFailureRef.current = null;
     // Optimistic update: show user message immediately
     setMessages(prev => [...prev, userMessage]);
     pendingUserMessageRef.current = messageContent;
@@ -740,6 +805,7 @@ function QuizAttemptInterface({
       (m: QuizMessage) => m.role === 'system' && getMetadata(m.metadata)?.isExplorationStep
     ).length;
     setSending(true);
+    let failureCopy = SEND_FAILED;
 
     try {
       const response = await fetch('/api/quiz', {
@@ -753,7 +819,8 @@ function QuizAttemptInterface({
       });
 
       if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
+        failureCopy = (await serverMessage(response)) ?? SEND_FAILED;
+        throw new Error(`sendMessage failed (${response.status})`);
       }
 
       // The POST blocks until ai-agent saves the response, so it's in DB now.
@@ -765,7 +832,11 @@ function QuizAttemptInterface({
       const errorMessage: QuizMessage = {
         id: messages.length + 2,
         role: 'ASSISTANT',
-        content: "I'm having trouble connecting right now. Please try again in a moment.",
+        content: failureCopy,
+      };
+      sendFailureRef.current = {
+        lines: [userMessage, errorMessage],
+        savedCount: savedCountRef.current,
       };
       setMessages(prev => [...prev, errorMessage]);
       pendingUserMessageRef.current = null;
@@ -784,6 +855,7 @@ function QuizAttemptInterface({
       content: action,
     };
 
+    sendFailureRef.current = null;
     setMessages(prev => [...prev, userMessage]);
     pendingUserMessageRef.current = action;
     // Snapshot current exploration step count so real-time indicator only shows NEW steps
@@ -791,6 +863,7 @@ function QuizAttemptInterface({
       (m: QuizMessage) => m.role === 'system' && getMetadata(m.metadata)?.isExplorationStep
     ).length;
     setSending(true);
+    let failureCopy = SEND_FAILED;
 
     try {
       const response = await fetch('/api/quiz', {
@@ -804,7 +877,8 @@ function QuizAttemptInterface({
       });
 
       if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
+        failureCopy = (await serverMessage(response)) ?? SEND_FAILED;
+        throw new Error(`sendMessage failed (${response.status})`);
       }
 
       pendingUserMessageRef.current = null;
@@ -815,7 +889,11 @@ function QuizAttemptInterface({
       const errorMessage: QuizMessage = {
         id: messages.length + 2,
         role: 'ASSISTANT',
-        content: "I'm having trouble connecting right now. Please try again in a moment.",
+        content: failureCopy,
+      };
+      sendFailureRef.current = {
+        lines: [userMessage, errorMessage],
+        savedCount: savedCountRef.current,
       };
       setMessages(prev => [...prev, errorMessage]);
       pendingUserMessageRef.current = null;
@@ -833,12 +911,17 @@ function QuizAttemptInterface({
     );
     // During sends, slice off steps that existed before the send started
     const newSteps = sending ? allSteps.slice(explorationStepBaseRef.current) : allSteps;
-    return newSteps.map((m: QuizMessage) => ({
-      action: m.content,
-      toolName: (getMetadata(m.metadata)?.toolName as string) ?? '',
-      toolInput: getMetadata(m.metadata)?.toolInput,
-      timestamp: m.timestamp ? new Date(m.timestamp).getTime() : 0,
-    }));
+    return newSteps.map((m: QuizMessage) => {
+      const metadata = getMetadata(m.metadata);
+      return {
+        action: m.content,
+        toolName: (metadata?.toolName as string) ?? '',
+        toolInput: metadata?.toolInput,
+        timestamp: m.timestamp ? new Date(m.timestamp).getTime() : 0,
+        // Older steps, and every code step, carry none.
+        ...(typeof metadata?.title === 'string' && metadata.title ? { title: metadata.title } : {}),
+      };
+    });
   }, [initialMessages, sending]);
 
   return (

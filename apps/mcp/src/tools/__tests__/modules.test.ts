@@ -9,9 +9,10 @@
  *   - S4 role parity: all four tools are OWNER-only (requireClassroomAdmin,
  *     admin.$class.modules), FORM included. Attaching a form does not widen the
  *     tier to the forms batch's OWNER|TEACHER — it is still a curriculum edit.
- *   - The Pro gate runs on the FORM BRANCH ONLY. A free-tier classroom must
- *     keep adding pages, repos, quizzes and slides; it must not be able to
- *     attach a form.
+ *   - The Pro gate runs on the FORM BRANCH ONLY, and the quiz-visibility gate
+ *     (`entitlement.quizzesVisible`) on the QUIZ branch only. A free-tier
+ *     classroom must keep adding pages and slides; it must not be able to
+ *     attach a form or a quiz.
  *   - S1: a form belonging to another classroom is refused by
  *     `module.service.assertTargetInClassroom` with a generic Error, and this
  *     layer must translate it into the same uniform `not_found` every other
@@ -30,6 +31,7 @@ import { toolAnnotations, type ToolContext, type ToolDefinition } from '../../mc
 
 const mocks = vi.hoisted(() => ({
   assertProTier: vi.fn(),
+  quizzesVisible: vi.fn(),
   moduleCreate: vi.fn(),
   moduleUpdateForClassroom: vi.fn(),
   moduleSetPublished: vi.fn(),
@@ -50,6 +52,7 @@ vi.mock('@classmoji/services', () => ({
       addItem: (...a: unknown[]) => mocks.moduleAddItem(...a),
     },
     audit: { create: (...a: unknown[]) => mocks.auditCreate(...a) },
+    entitlement: { quizzesVisible: (...a: unknown[]) => mocks.quizzesVisible(...a) },
   },
 }));
 
@@ -100,6 +103,7 @@ function parse(result: { content: Array<{ text: string }> }) {
 beforeEach(() => {
   for (const m of Object.values(mocks)) m.mockReset();
   mocks.assertProTier.mockResolvedValue(undefined);
+  mocks.quizzesVisible.mockResolvedValue(true);
   mocks.auditCreate.mockResolvedValue(undefined);
   mocks.moduleCreate.mockResolvedValue(MODULE_ROW);
   mocks.moduleUpdateForClassroom.mockResolvedValue(MODULE_ROW);
@@ -364,10 +368,11 @@ describe('Pro gating of FORM items', () => {
     expect(mocks.auditCreate).not.toHaveBeenCalled();
   });
 
-  it('still adds a PAGE (and the other content types) in that same non-Pro classroom', async () => {
+  it('still adds a PAGE and a SLIDE in that same non-Pro classroom', async () => {
     mocks.assertProTier.mockRejectedValue(proDenial());
+    mocks.quizzesVisible.mockResolvedValue(false);
 
-    for (const item_type of ['PAGE', 'QUIZ', 'SLIDE']) {
+    for (const item_type of ['PAGE', 'SLIDE']) {
       mocks.moduleAddItem.mockClear();
       mocks.assertProTier.mockClear();
       mocks.moduleAddItem.mockResolvedValue({ ...ITEM_ROW, item_type });
@@ -381,9 +386,10 @@ describe('Pro gating of FORM items', () => {
 
       expect(payload.success, item_type).toBe(true);
       expect(mocks.moduleAddItem).toHaveBeenCalledWith('mod-1', item_type, 'target-1', 'class-1');
-      // The branch is what proves the gate is scoped: the non-FORM path never
-      // even asks.
+      // The branch is what proves the gates are scoped: a page or slide never
+      // even asks either of them.
       expect(mocks.assertProTier, item_type).not.toHaveBeenCalled();
+      expect(mocks.quizzesVisible, item_type).not.toHaveBeenCalled();
     }
   });
 
@@ -418,5 +424,60 @@ describe('Pro gating of FORM items', () => {
     expect(mocks.moduleCreate).toHaveBeenCalled();
     expect(mocks.moduleUpdateForClassroom).toHaveBeenCalled();
     expect(mocks.moduleSetPublished).toHaveBeenCalled();
+  });
+});
+
+// ─── Quiz visibility, on the QUIZ branch only ───────────────────────────────
+
+describe('quiz gating of QUIZ items', () => {
+  const ARGS = {
+    classroom: 'org/w26',
+    module_id: 'mod-1',
+    item_type: 'QUIZ' as const,
+    target_id: 'quiz-1',
+  };
+
+  it('refuses a QUIZ item where quizzes are not visible, before touching the service', async () => {
+    mocks.quizzesVisible.mockResolvedValue(false);
+
+    const error = await moduleItemAddTool.handler(ARGS as never, CTX).catch(e => e);
+
+    expect(error).toBeInstanceOf(ToolError);
+    expect((error as ToolError).kind).toBe('forbidden');
+    expect((error as ToolError).message).toContain('Pro subscription');
+    expect((error as ToolError).message).toContain('quizzes_enabled');
+    expect(mocks.moduleAddItem).not.toHaveBeenCalled();
+    expect(mocks.auditCreate).not.toHaveBeenCalled();
+  });
+
+  it('adds a QUIZ item where quizzes are visible', async () => {
+    mocks.moduleAddItem.mockResolvedValue({ ...ITEM_ROW, item_type: 'QUIZ' });
+
+    const payload = parse(await moduleItemAddTool.handler(ARGS as never, CTX));
+
+    expect(payload.success).toBe(true);
+    expect(mocks.moduleAddItem).toHaveBeenCalledWith('mod-1', 'QUIZ', 'quiz-1', 'class-1');
+    // Quizzes answer to their own predicate, not the forms gate.
+    expect(mocks.assertProTier).not.toHaveBeenCalled();
+  });
+
+  it('asks about the AUTHORIZED classroom id, never an argument', async () => {
+    await moduleItemAddTool.handler({ ...ARGS, classroom: 'other-org/other' } as never, CTX);
+
+    expect(mocks.quizzesVisible).toHaveBeenCalledTimes(1);
+    expect(mocks.quizzesVisible).toHaveBeenCalledWith('class-1');
+  });
+
+  it('does not ask on the FORM branch', async () => {
+    await moduleItemAddTool.handler(
+      { classroom: 'org/w26', module_id: 'mod-1', item_type: 'FORM', target_id: 'form-1' } as never,
+      CTX
+    );
+    expect(mocks.quizzesVisible).not.toHaveBeenCalled();
+  });
+
+  it('names the quiz requirement in the tool description', () => {
+    expect(moduleItemAddTool.description).toContain('quizzes_enabled');
+    expect(Buffer.byteLength(moduleItemAddTool.description, 'utf8')).toBeLessThan(1500);
   });
 });

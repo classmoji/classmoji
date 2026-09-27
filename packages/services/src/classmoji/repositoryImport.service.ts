@@ -147,6 +147,8 @@ export const cloneQuiz = async (
     throw new Error(`Source quiz not found: ${sourceQuizId}`);
   }
 
+  // Source material links are not cloned: they name the source classroom's
+  // page and slide ids, which would have to be mapped to the target's copies.
   return tx.quiz.create({
     data: {
       classroom_id: targetClassroomId,
@@ -159,6 +161,7 @@ export const cloneQuiz = async (
       difficulty_level: sourceQuiz.difficulty_level,
       subject: sourceQuiz.subject,
       include_code_context: sourceQuiz.include_code_context,
+      course_search_enabled: sourceQuiz.course_search_enabled,
       grading_strategy: sourceQuiz.grading_strategy,
       max_attempts: sourceQuiz.max_attempts,
       // Conditionally set status and deadline

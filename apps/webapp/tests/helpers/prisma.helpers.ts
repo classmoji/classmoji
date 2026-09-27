@@ -530,8 +530,9 @@ export async function seedQuiz(
 /**
  * Ensure the classroom's OWNER has an active PRO subscription so Pro-gated
  * features (quizzes, pages) render instead of throwing the 403 "requires a Pro
- * subscription" boundary. Pro tier is resolved off the owner membership's user,
- * matching ClassmojiService.subscription.getByClassroom. Idempotent.
+ * subscription" boundary. Pro tier is resolved off the owner membership's user
+ * (ClassmojiService.subscription.getProStateForClassroomId: any accepted owner
+ * with an active PRO). Idempotent.
  */
 export async function ensureClassroomProTier(classroomSlug: string): Promise<void> {
   const prisma = getTestPrisma();

@@ -65,31 +65,40 @@ const GITHUB_HEADERS = (token: string): Record<string, string> => ({
   'User-Agent': 'classmoji-explore',
 });
 
+/** One file of the repository tree, as the Git Trees API lists it. */
+interface TreeEntry {
+  path: string;
+  size: number;
+  type: string;
+  /** Git file mode, e.g. `100644`; `120000` is a symlink. */
+  mode?: string;
+}
+
+/** The git file mode of a symlink. Symlinks are not explored. */
+const SYMLINK_MODE = '120000';
+
 /**
  * Fetch the full gitRepo file tree via the Git Trees API.
- * Returns a flat list of all files with paths, sizes, and types.
+ * Returns a flat list of all files with paths, sizes, types and modes.
  *
  * @param {string} owner - GitHub org/user
  * @param {string} repo - GitRepo name
  * @param {string} token - GitHub installation access token
- * @returns {Promise<Array<{path: string, size: number, type: string}>>}
+ * @returns {Promise<TreeEntry[]>}
  */
-async function fetchRepoTree(
-  owner: string,
-  repo: string,
-  token: string
-): Promise<Array<{ path: string; size: number; type: string }>> {
+async function fetchRepoTree(owner: string, repo: string, token: string): Promise<TreeEntry[]> {
   const url = `${GITHUB_API}/repos/${owner}/${repo}/git/trees/HEAD?recursive=1`;
   const res = await githubFetch(url, GITHUB_HEADERS(token), `GitHub tree API (${owner}/${repo})`);
 
   const data = await res.json();
   // Filter to blobs (files) only, exclude tree entries (directories)
   return (data.tree || [])
-    .filter((entry: { type: string; path: string; size?: number }) => entry.type === 'blob')
-    .map((entry: { type: string; path: string; size?: number }) => ({
+    .filter((entry: { type: string }) => entry.type === 'blob')
+    .map((entry: { type: string; path: string; size?: number; mode?: string }) => ({
       path: entry.path,
       size: entry.size || 0,
       type: entry.type,
+      mode: entry.mode,
     }));
 }
 
@@ -103,7 +112,7 @@ async function fetchRepoTree(
  * @param {string} token - GitHub installation access token
  * @returns {Promise<string>} File content as text
  */
-async function fetchFileContent(
+export async function fetchFileContent(
   owner: string,
   repo: string,
   path: string,
@@ -117,6 +126,13 @@ async function fetchFileContent(
   const res = await githubFetch(url, GITHUB_HEADERS(token), `GitHub contents (${path})`);
 
   const data = await res.json();
+
+  // Symlinks are not explored. The tree listing already leaves them out; the
+  // Contents API's own answer is held to the same rule, including the path it
+  // says it returned.
+  if (data?.type === 'symlink' || (typeof data?.path === 'string' && !isVisiblePath(data.path))) {
+    throw new Error(`GitHub contents (${path}): not explored`);
+  }
 
   if (data.encoding === 'base64' && data.content) {
     return Buffer.from(data.content, 'base64').toString('utf-8');
@@ -165,6 +181,49 @@ async function fetchMultipleFiles(
     }
   }
   return results;
+}
+
+/**
+ * Which repository paths exploration may show or read.
+ *
+ * The same rule the ai-agent's secure file tools apply
+ * (apps/ai-agent src/llm/utils/pathValidator.js, `isVisiblePath`): any path
+ * with a dot-prefixed component is left out, with two exceptions a code quiz
+ * can use — `.gitignore` as the file itself, and `.github/workflows/...` at the
+ * repository root. Two dotted components are always left out.
+ */
+export function isVisiblePath(path: string): boolean {
+  const parts = path.split(/[\\/]+/).filter(part => part !== '' && part !== '.');
+  const dotted = parts.filter(part => part.startsWith('.'));
+  if (dotted.length === 0) return true;
+  if (dotted.length > 1) return false;
+
+  // `.gitignore`, and only as the file itself.
+  if (dotted[0] === '.gitignore' && parts[parts.length - 1] === '.gitignore') return true;
+
+  // `.github/workflows/...`, and only with `workflows` actually under it.
+  return dotted[0] === '.github' && parts[0] === '.github' && parts[1] === 'workflows';
+}
+
+/**
+ * Which tree entries exploration may list, pick or fetch: a visible path that
+ * is not a symlink (symlinks are not explored).
+ */
+export function isExplorableEntry(entry: { path: string; mode?: string }): boolean {
+  return entry.mode !== SYMLINK_MODE && isVisiblePath(entry.path);
+}
+
+/**
+ * The picker's paths that may be read: each must name a file in the (already
+ * filtered) tree, so a path the model made up, or one the tree left out, is
+ * never fetched.
+ */
+export function readablePickedPaths(
+  picked: string[],
+  tree: ReadonlyArray<{ path: string }>
+): string[] {
+  const inTree = new Set(tree.map(entry => entry.path));
+  return picked.filter(path => inTree.has(path) && isVisiblePath(path));
 }
 
 /**
@@ -431,6 +490,45 @@ const LEGACY_MAX_RELEVANT_FILES = 5;
  * JSON-escaped `findings` string.
  */
 const METADATA_RESULT_MAX_BYTES = 200_000;
+
+/** Levels the Messages API takes in `output_config.effort`. */
+export const EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max'] as const;
+export type EffortLevel = (typeof EFFORT_LEVELS)[number];
+
+/**
+ * The payload's explorationEffort as a level, or null for "send no effort".
+ * The ai-agent has already resolved it (classroom > EXPLORATION_EFFORT >
+ * default) and dropped it for a model that takes no effort, so only the string
+ * is checked here: an unknown value would 400 the excerpt call.
+ */
+export function toEffortLevel(value: unknown): EffortLevel | null {
+  return typeof value === 'string' && (EFFORT_LEVELS as readonly string[]).includes(value)
+    ? (value as EffortLevel)
+    : null;
+}
+
+/**
+ * The effort the excerpt call actually runs at: xhigh and max run as high.
+ * That call reads up to ~20k tokens of code, and thinking counts against
+ * max_tokens, so at those two it can think through all of its room without
+ * answering and the task falls back to whole files. Quiz settings offer only
+ * low, medium and high for exploration; this covers an env value or an older
+ * stored one.
+ */
+export function capExcerptEffort(effort: EffortLevel | null): EffortLevel | null {
+  return effort === 'xhigh' || effort === 'max' ? 'high' : effort;
+}
+
+/**
+ * max_tokens for the excerpt call at a (capped) effort. The answer is a few
+ * hundred tokens; the rest is room to think. High, and no effort at all (the
+ * API's default is high), get twice what low and medium do. 16384 is still
+ * inside @anthropic-ai/sdk 0.39's non-streaming guard, which throws before
+ * sending once max_tokens implies more than ten minutes (above ~21,333).
+ */
+export function excerptMaxTokens(effort: EffortLevel | null): number {
+  return effort === 'low' || effort === 'medium' ? 8192 : 16384;
+}
 
 /** A pointer as the model gave it, after type coercion but before validation. */
 export type ExcerptPointer = {
@@ -1027,7 +1125,8 @@ export async function requestExcerptPointers(
   focusArea: string,
   previousFindings: string[],
   specificQuestion: string | null,
-  treeListing: string
+  treeListing: string,
+  effort: EffortLevel | null = null
 ): Promise<ExcerptResponse | null> {
   const isInitial = focusArea === 'initial';
 
@@ -1048,10 +1147,20 @@ export async function requestExcerptPointers(
   // No `thinking` param and a roomy max_tokens, for the same reasons as the
   // file picker above. The answer itself is a few hundred tokens, but thinking
   // counts against max_tokens and this call has up to ~20k tokens of code to
-  // think about, so it gets twice the picker's room.
-  const response = await client.messages.create({
+  // think about, so it gets at least twice the picker's room, sized to the
+  // effort (excerptMaxTokens), which is capped at high (capExcerptEffort).
+  //
+  // Effort goes on this call only (the picker keeps the model's default), and
+  // only when one was given. @anthropic-ai/sdk 0.39 predates `output_config`,
+  // hence the widened type; the SDK sends unknown body keys as given, so the
+  // field reaches the API (pinned in exploreRepo.effort.test.ts). Drop the
+  // widening once the SDK knows the field.
+  const runEffort = capExcerptEffort(effort);
+  const params: Anthropic.MessageCreateParamsNonStreaming & {
+    output_config?: { effort: EffortLevel };
+  } = {
     model,
-    max_tokens: 8192,
+    max_tokens: excerptMaxTokens(runEffort),
     messages: [
       {
         role: 'user',
@@ -1080,7 +1189,9 @@ RULES:
 - No text outside the JSON.`,
       },
     ],
-  });
+    ...(runEffort ? { output_config: { effort: runEffort } } : {}),
+  };
+  const response = await client.messages.create(params);
 
   return parseExcerptResponse(responseText(response, 'Excerpt selector'));
 }
@@ -1196,6 +1307,9 @@ export const exploreRepoTask = task({
     previouslyReadFiles?: string[];
     specificQuestion?: string | null;
     explorationModel?: string;
+    // Effort for the excerpt call, already resolved and capability-checked by
+    // the ai-agent. Absent (or not a known level) = no effort sent.
+    explorationEffort?: string | null;
   }) => {
     const {
       owner,
@@ -1207,14 +1321,25 @@ export const exploreRepoTask = task({
       previouslyReadFiles = [],
       specificQuestion = null,
       explorationModel,
+      explorationEffort,
     } = payload;
 
     const model = explorationModel || 'claude-sonnet-5';
+    const requestedEffort = toEffortLevel(explorationEffort);
+    if (explorationEffort && !requestedEffort) {
+      logger.warn(`Ignoring unknown explorationEffort ${JSON.stringify(explorationEffort)}`);
+    }
+    // Capped here too (requestExcerptPointers does it as well) so the log
+    // lines show the effort the excerpt call runs at.
+    const effort = capExcerptEffort(requestedEffort);
+    if (requestedEffort && effort !== requestedEffort) {
+      logger.info(`explorationEffort ${requestedEffort} runs as ${effort} on the excerpt call`);
+    }
     console.log(
-      `[explore-repo] Starting: ${owner}/${repo} — focus: ${focusArea}, depth: ${depth}, model: ${model}`
+      `[explore-repo] Starting: ${owner}/${repo} — focus: ${focusArea}, depth: ${depth}, model: ${model}, effort: ${effort ?? 'none'}`
     );
     logger.info(
-      `Exploring ${owner}/${repo} — focus: ${focusArea}, depth: ${depth}, model: ${model}`
+      `Exploring ${owner}/${repo} — focus: ${focusArea}, depth: ${depth}, model: ${model}, effort: ${effort ?? 'none'}`
     );
 
     // Initialize Anthropic client using env var (set in Trigger.dev config, NOT passed in payload)
@@ -1233,7 +1358,8 @@ export const exploreRepoTask = task({
     ]);
     await metadata.flush();
 
-    const tree = await fetchRepoTree(owner, repo, accessToken);
+    // Only entries exploration may read are listed, picked or fetched.
+    const tree = (await fetchRepoTree(owner, repo, accessToken)).filter(isExplorableEntry);
     console.log(`[explore-repo] Step 1 done: ${tree.length} files in tree`);
     logger.info(`GitRepo has ${tree.length} files`);
 
@@ -1250,15 +1376,18 @@ export const exploreRepoTask = task({
     });
     await metadata.flush();
 
-    const filePaths = await pickRelevantFiles(
-      client,
-      model,
-      treeListing,
-      focusArea,
-      depth,
-      previousFindings,
-      specificQuestion,
-      previouslyReadFiles
+    const filePaths = readablePickedPaths(
+      await pickRelevantFiles(
+        client,
+        model,
+        treeListing,
+        focusArea,
+        depth,
+        previousFindings,
+        specificQuestion,
+        previouslyReadFiles
+      ),
+      tree
     );
     console.log(
       `[explore-repo] Step 2 done: picked ${filePaths.length} files: ${filePaths.join(', ')}`
@@ -1310,7 +1439,8 @@ export const exploreRepoTask = task({
           focusArea,
           previousFindings,
           specificQuestion,
-          treeListing
+          treeListing,
+          effort
         )
       : null;
 

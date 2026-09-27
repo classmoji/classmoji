@@ -194,9 +194,10 @@ describe('requestExcerptPointers', () => {
     await select();
     const params = mocks.create.mock.calls[0][0];
     expect(params).not.toHaveProperty('thinking');
-    // Thinking counts against max_tokens and this call reads the code, so it
-    // gets twice the picker's room.
-    expect(params.max_tokens).toBe(8192);
+    // Thinking counts against max_tokens and this call reads the code. With no
+    // effort (the API's default, high) it gets four times the picker's room;
+    // exploreRepo.effort.test.ts covers the other levels.
+    expect(params.max_tokens).toBe(16384);
     const prompt = params.messages[0].content as string;
     expect(prompt).toContain(
       '### FILE: src/App.jsx (1 lines)\n1| export default function App() {}'

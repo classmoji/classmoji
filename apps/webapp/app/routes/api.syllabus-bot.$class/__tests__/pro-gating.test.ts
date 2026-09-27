@@ -151,6 +151,8 @@ describe('syllabus bot Pro gating — action', () => {
     const res = (await post({ _action: 'initConversation' })) as Response;
 
     expect(res.status).toBe(403);
+    // A student on a widget left open can read this, so it names no plan.
+    expect(await res.json()).toEqual({ error: "Ask Moji isn't available in this class." });
     expect(sendRequestMock).not.toHaveBeenCalled();
   });
 
@@ -164,6 +166,7 @@ describe('syllabus bot Pro gating — action', () => {
     })) as Response;
 
     expect(res.status).toBe(403);
+    expect(await res.json()).toEqual({ error: "Ask Moji isn't available in this class." });
     expect(sendRequestMock).not.toHaveBeenCalled();
   });
 

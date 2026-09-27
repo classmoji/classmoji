@@ -56,7 +56,16 @@ export interface ModuleCardData {
   is_public: boolean;
   items: ModuleItemLike[];
   assignments: AssignmentRowData[];
+  /**
+   * True when the module owns assignments the page does not list
+   * (`forStaffPage`), whether or not it lists others. It cannot be deleted,
+   * and moving the listed ones would not change that, so it offers no Delete.
+   */
+  hasUnlistedAssignments?: boolean;
 }
+
+/** What a write from the card, or a drag into it, came back with. */
+type WriteResult = { success?: string; error?: string };
 
 interface ModuleCardProps {
   module: ModuleCardData;
@@ -70,6 +79,11 @@ interface ModuleCardProps {
   repositories: Array<{ id: string; title: string; is_published: boolean }>;
   boundQuizIds: Set<string>;
   boundFormIds: Set<string>;
+  /**
+   * Whether the classroom shows quizzes (`loadQuizzesVisible`). Without it the
+   * card offers no quiz assignment, quiz item or quiz link. Absent means hidden.
+   */
+  quizzesVisible?: boolean;
   /** Team tags in this classroom, for an instructor-assigned team assignment. */
   tags?: { id: string; name: string }[];
   /**
@@ -89,6 +103,11 @@ interface ModuleCardProps {
    * within this module or into another one.
    */
   coursework: CourseworkCardDrag;
+  /**
+   * How the page's last coursework drag went, once it is back; absent unless
+   * this card is the module it landed in.
+   */
+  moveResult?: WriteResult;
 }
 
 // antd's Dropdown clones its trigger child to attach its own onClick and ref,
@@ -274,8 +293,10 @@ const ModuleCard = ({
   repositories,
   boundQuizIds,
   boundFormIds,
+  quizzesVisible = false,
   tags = [],
   coursework,
+  moveResult,
   canEdit = true,
   dragProps,
   dragHandleProps,
@@ -292,8 +313,8 @@ const ModuleCard = ({
     `/${rolePrefix}/${classSlug}/repos`
   );
   const { modal } = App.useApp();
-  const moduleFetcher = useFetcher<{ success?: string; error?: string }>();
-  const assignmentFetcher = useFetcher<{ success?: string; error?: string }>();
+  const moduleFetcher = useFetcher<WriteResult>();
+  const assignmentFetcher = useFetcher<WriteResult>();
 
   const [editOpen, setEditOpen] = useState(false);
   const [contentOpen, setContentOpen] = useState(false);
@@ -312,11 +333,21 @@ const ModuleCard = ({
   const ownsCoursework = assignments.length > 0;
   const itemCount = assignments.length + contentItems.length;
 
+  // The line shows the latest write to come back, whichever fetcher sent it —
+  // the card's own two, or the page's drag into this card: an error stays up
+  // until a later write succeeds. Each result is watched on its own, so an
+  // older one never overrides a newer one.
+  const moduleResult = moduleFetcher.state === 'idle' ? moduleFetcher.data : undefined;
+  const assignmentResult = assignmentFetcher.state === 'idle' ? assignmentFetcher.data : undefined;
   useEffect(() => {
-    if (moduleFetcher.state === 'idle' && moduleFetcher.data?.error) {
-      setError(moduleFetcher.data.error);
-    }
-  }, [moduleFetcher.state, moduleFetcher.data]);
+    if (moduleResult) setError(moduleResult.error ?? null);
+  }, [moduleResult]);
+  useEffect(() => {
+    if (assignmentResult) setError(assignmentResult.error ?? null);
+  }, [assignmentResult]);
+  useEffect(() => {
+    if (moveResult) setError(moveResult.error ?? null);
+  }, [moveResult]);
 
   const post = (action: string, payload: Record<string, unknown>) =>
     moduleFetcher.submit(JSON.stringify(payload), {
@@ -337,8 +368,9 @@ const ModuleCard = ({
   const removeAssignment = (a: AssignmentRowData) =>
     modal.confirm({
       title: 'Delete assignment',
-      content:
-        'This deletes the assignment along with its submissions and grades. The repository, quiz or form it points at is kept.',
+      content: `This deletes the assignment along with its submissions and grades. The ${
+        quizzesVisible ? 'repository, quiz or form' : 'repository or form'
+      } it points at is kept.`,
       okText: 'Delete',
       okButtonProps: { danger: true },
       cancelText: 'Cancel',
@@ -382,22 +414,43 @@ const ModuleCard = ({
     position: module.position,
   };
 
+  const confirmDelete = () =>
+    modal.confirm({
+      title: 'Delete module',
+      content: `This removes the module. Its content items (${
+        quizzesVisible ? 'pages, quizzes, slides, forms' : 'pages, slides, forms'
+      }) are kept.`,
+      okText: 'Delete',
+      okButtonProps: { danger: true },
+      cancelText: 'Cancel',
+      onOk: () => post('delete', { id: module.id }),
+    });
+
+  // A module that owns assignments cannot be deleted. When all of them are
+  // listed the entry stays, disabled, saying to move them; when it owns some
+  // the page does not list (`hasUnlistedAssignments`), moving the listed ones
+  // would never unblock it, so there is no entry.
+  const offerDelete = !module.hasUnlistedAssignments;
   const menuItems: MenuProps['items'] = [
     { key: 'edit', label: 'Edit title & description', icon: <IconPencil size={15} /> },
-    { type: 'divider' },
-    {
-      key: 'delete',
-      label: ownsCoursework ? 'Delete (move its items first)' : 'Delete module',
-      icon: <IconTrash size={15} />,
-      danger: true,
-      disabled: ownsCoursework,
-    },
+    ...(offerDelete
+      ? [
+          { type: 'divider' as const },
+          {
+            key: 'delete',
+            label: ownsCoursework ? 'Delete (move its assignments first)' : 'Delete module',
+            icon: <IconTrash size={15} />,
+            danger: true,
+            disabled: ownsCoursework,
+          },
+        ]
+      : []),
   ];
 
   const onMenuClick: MenuProps['onClick'] = ({ key, domEvent }) => {
     domEvent.stopPropagation();
     if (key === 'edit') setEditOpen(true);
-    if (key === 'delete') post('delete', { id: module.id });
+    if (key === 'delete') confirmDelete();
   };
 
   // "Add item" asks which kind. An assignment picks how students submit
@@ -413,7 +466,15 @@ const ModuleCard = ({
           icon: <IconFolder size={15} />,
           label: 'Repository assignment',
         },
-        { key: 'ASSIGNMENT_QUIZ', icon: <IconHelpCircle size={15} />, label: 'Quiz assignment' },
+        ...(quizzesVisible
+          ? [
+              {
+                key: 'ASSIGNMENT_QUIZ',
+                icon: <IconHelpCircle size={15} />,
+                label: 'Quiz assignment',
+              },
+            ]
+          : []),
         { key: 'ASSIGNMENT_FORM', icon: <IconForms size={15} />, label: 'Form assignment' },
       ],
     },
@@ -444,10 +505,11 @@ const ModuleCard = ({
   };
   // What the assignment submits through, unless that is just its own title
   // again (a quiz assignment usually carries the quiz's name); then the kind.
-  // The form's page in the forms app (builder + responses); the admin splat
-  // route hands off to it. Falls back to the Forms list for a form with no slug.
+  // The form's page in the forms app (builder + responses); the section's
+  // splat route hands off to it. Falls back to the Forms list for a form with
+  // no slug.
   const formHref = (a: AssignmentRowData) =>
-    `/admin/${classSlug}/forms${a.form?.slug ? `/${encodeURIComponent(a.form.slug)}` : ''}`;
+    `/${rolePrefix}/${classSlug}/forms${a.form?.slug ? `/${encodeURIComponent(a.form.slug)}` : ''}`;
 
   // Clicking an assignment row shows its submissions: the assignment page
   // (one roster with submission state and grades), the quiz's attempts, or
@@ -462,7 +524,7 @@ const ModuleCard = ({
     }
     if (a.type === 'REPO' && a.repository) {
       navigate(`/${rolePrefix}/${classSlug}/assignments/${a.id}`);
-    } else if (a.type === 'QUIZ' && a.quiz) {
+    } else if (a.type === 'QUIZ' && a.quiz && quizzesVisible) {
       navigate(`/${rolePrefix}/${classSlug}/quizzes/${a.quiz.id}`);
     } else if (a.type === 'FORM') {
       navigate(formHref(a));
@@ -482,7 +544,9 @@ const ModuleCard = ({
     if (a.type === 'REPO' && a.repository?.title) {
       return `/admin/${classSlug}/repos/form?title=${encodeURIComponent(a.repository.title)}`;
     }
-    if (a.type === 'QUIZ' && a.quiz) return `/admin/${classSlug}/quizzes/form?quizId=${a.quiz.id}`;
+    if (a.type === 'QUIZ' && a.quiz && quizzesVisible) {
+      return `/admin/${classSlug}/quizzes/form?quizId=${a.quiz.id}`;
+    }
     if (a.type === 'FORM') return formHref(a);
     return null;
   };
@@ -585,9 +649,16 @@ const ModuleCard = ({
         )}
       </div>
 
+      {/* Under the header, so a collapsed card shows it too: a refused delete
+          is posted from the header's menu. */}
+      {error && (
+        <div role="alert" className="px-4 sm:px-5 pb-3 text-sm text-rose-600 dark:text-rose-400">
+          {error}
+        </div>
+      )}
+
       {expanded && (
         <div className="border-t border-line px-4 sm:px-5 pb-3">
-          {error && <div className="mt-3 text-sm text-rose-600 dark:text-rose-400">{error}</div>}
           {module.description && (
             <p className="mt-3 mb-1 text-sm text-ink-2 whitespace-pre-wrap">{module.description}</p>
           )}
@@ -602,12 +673,13 @@ const ModuleCard = ({
                   navigate(`/${rolePrefix}/${classSlug}/pages/${item.page.id}`);
                 } else if (item.item_type === 'SLIDE' && item.slide) {
                   window.open(`${slidesUrl}/${item.slide.id}`, '_blank');
-                } else if (item.item_type === 'QUIZ') {
+                } else if (item.item_type === 'QUIZ' && quizzesVisible) {
                   navigate(`/${rolePrefix}/${classSlug}/quizzes`);
                 } else if (item.item_type === 'FORM' && canEdit) {
-                  // Forms live in the admin section only; there is nowhere to
-                  // send a read-only viewer, so the row simply does not open.
-                  navigate(`/admin/${classSlug}/forms`);
+                  // Forms live in the owner's and teacher's sections only;
+                  // there is nowhere to send a read-only viewer, so the row
+                  // simply does not open.
+                  navigate(`/${rolePrefix}/${classSlug}/forms`);
                 }
               };
               return (
@@ -753,7 +825,7 @@ const ModuleCard = ({
         moduleId={module.id}
         modules={[moduleRef]}
         repositories={repositories}
-        quizzes={candidates.quizzes}
+        quizzes={quizzesVisible ? candidates.quizzes : []}
         forms={candidates.forms}
         pages={candidates.pages}
         slides={candidates.slides}
@@ -772,6 +844,7 @@ const ModuleCard = ({
         items={contentItems}
         candidates={candidates}
         presetType={contentType}
+        quizzesVisible={quizzesVisible}
       />
     </div>
   );
