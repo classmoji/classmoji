@@ -1,15 +1,12 @@
 import { data as errorResponse } from 'react-router';
 import { namedAction } from 'remix-utils/named-action';
 
-import { tasks } from '@trigger.dev/sdk';
+import { auth, tasks } from '@trigger.dev/sdk';
+import { nanoid } from 'nanoid';
 
 import { ClassmojiService, HelperService } from '@classmoji/services';
 import { ActionTypes } from '~/constants';
-import {
-  assertClassroomAccess,
-  waitForRunCompletion,
-  assertClassroomMutationAllowed,
-} from '~/utils/helpers';
+import { assertClassroomAccess, assertClassroomMutationAllowed } from '~/utils/helpers';
 import type { Route } from './+types/route';
 
 /**
@@ -65,18 +62,20 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
         );
       }
 
+      // Queued, not awaited: one commit per student repo can take minutes, and
+      // the progress callout counts them live from the session's runs.
       try {
-        const run = await tasks.trigger('dispatch_autograde_workflow', {
-          repositoryId,
-          classroomSlug: classSlug,
+        const sessionId = nanoid();
+        await tasks.trigger(
+          'dispatch_autograde_workflow',
+          { repositoryId, classroomSlug: classSlug },
+          { tags: [`session_${sessionId}`] }
+        );
+        const accessToken = await auth.createPublicToken({
+          scopes: { read: { tags: [`session_${sessionId}`] } },
         });
 
-        await waitForRunCompletion(run.id);
-
-        return {
-          success: 'Autograding workflow pushed to student repos',
-          action: 'AUTOGRADE_GIT_REPO_ASSIGNMENT',
-        };
+        return { triggerSession: { accessToken, id: sessionId } };
       } catch (error: unknown) {
         console.error('dispatch_autograde_workflow failed:', error);
         return {

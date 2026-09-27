@@ -126,9 +126,7 @@ async function gitlabServerPushTime(
         classroom: { select: { git_namespace: true, git_organization: true } },
       },
     });
-    const namespace = repo?.classroom?.git_namespace
-      ? repoNamespace(repo.classroom)
-      : null;
+    const namespace = repo?.classroom?.git_namespace ? repoNamespace(repo.classroom) : null;
     const org = repo?.classroom?.git_organization;
     if (!repo || !namespace || org?.provider !== 'GITLAB') return delivered;
     const provider = getGitProvider(org) as GitLabProvider;
@@ -285,219 +283,214 @@ const ensureReposForLogins = async (
   return existingRepos;
 };
 
-export const createGithubRepositoryAssignmentTask = task({
-  id: 'gh-create_git_repo_assignment',
-  queue: {
-    concurrencyLimit: 4,
-  },
-  run: async (
-    payload: CreateGithubRepositoryAssignmentTaskPayload,
-    { ctx }: GitRepoAssignmentTaskContext
-  ) => {
-    const { repoName, assignment, studentRepo } = payload;
-    const organization = payload.organization || payload.classroom?.git_organization;
+/**
+ * Adds one assignment to one student repo: the issue in ISSUE mode, and the
+ * submission row either way. Called directly by the repo-creation run, and by
+ * the task below everywhere else (Sync, the daily release).
+ */
+export const addAssignmentToRepo = async (payload: CreateGithubRepositoryAssignmentTaskPayload) => {
+  const { repoName, assignment, studentRepo } = payload;
+  const organization = payload.organization || payload.classroom?.git_organization;
 
-    if (!organization?.login) {
-      throw new Error(
-        'Missing organization in payload - expected organization or classroom.git_organization'
-      );
-    }
+  if (!organization?.login) {
+    throw new Error(
+      'Missing organization in payload - expected organization or classroom.git_organization'
+    );
+  }
 
-    // Idempotency guard: skip if this repo already has this assignment. createIssue mints a
-    // NEW GitHub issue every run, so a re-trigger (Sync, manual re-run, webhook redelivery)
-    // would otherwise create duplicate issues + rows. Centralizing the guard here protects
-    // every caller (gh-create_git_repo, daily_git_repo_assignments_release, and the
-    // already-guarded release_git_repo_assignments_now).
-    const existingAssignment = await ClassmojiService.gitRepoAssignment.findFirst({
-      assignment_id: assignment.id,
-      git_repo_id: studentRepo.id,
+  // Idempotency guard: skip if this repo already has this assignment. createIssue mints a
+  // NEW GitHub issue every run, so a re-trigger (Sync, manual re-run, webhook redelivery)
+  // would otherwise create duplicate issues + rows. Centralizing the guard here protects
+  // every caller (gh-create_git_repo, daily_git_repo_assignments_release, and the
+  // already-guarded release_git_repo_assignments_now).
+  const existingAssignment = await ClassmojiService.gitRepoAssignment.findFirst({
+    assignment_id: assignment.id,
+    git_repo_id: studentRepo.id,
+  });
+  if (existingAssignment) {
+    logger.info('Assignment issue already exists for this repo — skipping', {
+      repoName,
+      assignmentId: assignment.id,
+      gitRepoId: studentRepo.id,
     });
-    if (existingAssignment) {
-      logger.info('Assignment issue already exists for this repo — skipping', {
-        repoName,
-        assignmentId: assignment.id,
-        gitRepoId: studentRepo.id,
-      });
-      return;
-    }
+    return;
+  }
 
-    // REPO mode: the repository itself is the assignment and a push is the
-    // submission. Nothing is created on GitHub; the submission row is all
-    // that is needed, and the push webhook fills in the rest.
-    if (assignment.submission_mode === 'REPO') {
-      const created = await createDatabaseRepositoryAssignmentTask.triggerAndWait(
-        { assignment, studentRepo, provider: organization.provider as 'GITHUB' | 'GITLAB' },
-        { tags: ctx.run.tags, concurrencyKey: organization.login }
-      );
-      // Without the row the assignment reads "not released" for this student,
-      // so a failed child must fail this run (and retry), never pass silently.
-      if (!created.ok) throw created.error;
-      // The repo may already hold work: an assignment added to a repository
-      // students have been pushing to for weeks. The webhook only sees pushes
-      // from now on, so the latest commit stands in for the missed push.
-      try {
-        const row = await ClassmojiService.gitRepoAssignment.findFirst({
-          assignment_id: assignment.id,
-          git_repo_id: studentRepo.id,
-        });
-        if (row) await ClassmojiService.gitRepoAssignment.recordExistingPush(row.id);
-      } catch (error) {
-        logger.warn(
-          'Could not read the repo history for an existing push; the next push will count',
-          {
-            repoName,
-            assignmentId: assignment.id,
-            error: error instanceof Error ? error.message : String(error),
-          }
-        );
-      }
-      return;
-    }
-
-    const gitProvider = getGitProvider(organization);
-    const provider = organization.provider as 'GITHUB' | 'GITLAB';
-
-    // Where the student repo lives: the org on Github, the class subgroup's
-    // `projects` on GitLab (the org row carries no classroom, so read it off
-    // the repo).
-    let owner = organization.login;
-    if (provider === 'GITLAB') {
-      const repoRow = await ClassmojiService.gitRepo.find({ id: studentRepo.id });
-      const classroomRow = repoRow?.classroom_id
-        ? await ClassmojiService.classroom.findById(repoRow.classroom_id)
-        : null;
-      if (!classroomRow?.git_namespace) {
-        throw new Error(
-          `No Gitlab class subgroup for repo ${repoName} (studentRepoId=${studentRepo.id})`
-        );
-      }
-      owner = `${classroomRow.git_namespace}/${GITLAB_PROJECTS_SUBGROUP}`;
-
-      // Projects created before issue mode existed on GitLab have a push-only
-      // hook; make sure close/reopen events reach Classmoji too.
-      const url = ClassmojiService.gitlabInstance.webhookUrl(organization.gitlab_instance_id);
-      const secret = ClassmojiService.gitlabInstance.webhookSecret(
-        organization.gitlab_instance_id
-      );
-      if (url && secret) {
-        try {
-          await (gitProvider as GitLabProvider).ensureProjectPushHook(owner, repoName, url, secret);
-        } catch (error: unknown) {
-          logger.warn('Could not update the Gitlab project webhook for issue events', {
-            repoName,
-            error: getErrorMessage(error),
-          });
-        }
-      }
-    }
-
-    let issue: { id: string; number: number };
-
+  // REPO mode: the repository itself is the assignment and a push is the
+  // submission. Nothing is created on GitHub; the submission row is all
+  // that is needed, and the push webhook fills in the rest.
+  if (assignment.submission_mode === 'REPO') {
+    // Without the row the assignment reads "not released" for this student,
+    // so a failed write fails this run, never passes silently.
+    await createDatabaseRepositoryAssignment({
+      assignment,
+      studentRepo,
+      provider: organization.provider as 'GITHUB' | 'GITLAB',
+    });
+    // The repo may already hold work: an assignment added to a repository
+    // students have been pushing to for weeks. The webhook only sees pushes
+    // from now on, so the latest commit stands in for the missed push.
     try {
-      const existingIssue = await gitProvider.findIssueByTitle(owner, repoName, assignment.title);
-
-      if (existingIssue) {
-        logger.info('Found existing GitHub assignment issue; adopting it', {
-          organization: organization.login,
+      const row = await ClassmojiService.gitRepoAssignment.findFirst({
+        assignment_id: assignment.id,
+        git_repo_id: studentRepo.id,
+      });
+      if (row) await ClassmojiService.gitRepoAssignment.recordExistingPush(row.id);
+    } catch (error) {
+      logger.warn(
+        'Could not read the repo history for an existing push; the next push will count',
+        {
           repoName,
           assignmentId: assignment.id,
-          assignmentTitle: assignment.title,
-          studentRepoId: studentRepo.id,
-          issueNumber: existingIssue.number,
-        });
-        issue = existingIssue;
-      } else {
-        issue = await gitProvider.createIssue(owner, repoName, {
-          title: assignment.title,
-          body: assignment.body ?? undefined,
-          description: assignment.description ?? undefined,
+          error: error instanceof Error ? error.message : String(error),
+        }
+      );
+    }
+    return;
+  }
+
+  const gitProvider = getGitProvider(organization);
+  const provider = organization.provider as 'GITHUB' | 'GITLAB';
+
+  // Where the student repo lives: the org on Github, the class subgroup's
+  // `projects` on GitLab (the org row carries no classroom, so read it off
+  // the repo).
+  let owner = organization.login;
+  if (provider === 'GITLAB') {
+    const repoRow = await ClassmojiService.gitRepo.find({ id: studentRepo.id });
+    const classroomRow = repoRow?.classroom_id
+      ? await ClassmojiService.classroom.findById(repoRow.classroom_id)
+      : null;
+    if (!classroomRow?.git_namespace) {
+      throw new Error(
+        `No Gitlab class subgroup for repo ${repoName} (studentRepoId=${studentRepo.id})`
+      );
+    }
+    owner = `${classroomRow.git_namespace}/${GITLAB_PROJECTS_SUBGROUP}`;
+
+    // Projects created before issue mode existed on GitLab have a push-only
+    // hook; make sure close/reopen events reach Classmoji too.
+    const url = ClassmojiService.gitlabInstance.webhookUrl(organization.gitlab_instance_id);
+    const secret = ClassmojiService.gitlabInstance.webhookSecret(organization.gitlab_instance_id);
+    if (url && secret) {
+      try {
+        await (gitProvider as GitLabProvider).ensureProjectPushHook(owner, repoName, url, secret);
+      } catch (error: unknown) {
+        logger.warn('Could not update the Gitlab project webhook for issue events', {
+          repoName,
+          error: getErrorMessage(error),
         });
       }
-    } catch (error: unknown) {
-      const status = getErrorStatus(error);
-      const context = {
-        status,
+    }
+  }
+
+  let issue: { id: string; number: number };
+
+  try {
+    const existingIssue = await gitProvider.findIssueByTitle(owner, repoName, assignment.title);
+
+    if (existingIssue) {
+      logger.info('Found existing GitHub assignment issue; adopting it', {
         organization: organization.login,
         repoName,
         assignmentId: assignment.id,
         assignmentTitle: assignment.title,
         studentRepoId: studentRepo.id,
-      };
-
-      logger.error('Failed to create GitHub assignment issue', {
-        ...context,
-        error: getErrorMessage(error),
+        issueNumber: existingIssue.number,
       });
+      issue = existingIssue;
+    } else {
+      issue = await gitProvider.createIssue(owner, repoName, {
+        title: assignment.title,
+        body: assignment.body ?? undefined,
+        description: assignment.description ?? undefined,
+      });
+    }
+  } catch (error: unknown) {
+    const status = getErrorStatus(error);
+    const context = {
+      status,
+      organization: organization.login,
+      repoName,
+      assignmentId: assignment.id,
+      assignmentTitle: assignment.title,
+      studentRepoId: studentRepo.id,
+    };
 
-      if (status === 404) {
-        throw new Error(
-          `Could not create assignment issue in ${owner}/${repoName}: ${gitTerms(provider === 'GITLAB').repo} was not found or is not accessible to Classmoji. assignmentId=${assignment.id}, studentRepoId=${studentRepo.id}`
-        );
-      }
+    logger.error('Failed to create GitHub assignment issue', {
+      ...context,
+      error: getErrorMessage(error),
+    });
 
+    if (status === 404) {
       throw new Error(
-        `Could not create assignment issue in ${owner}/${repoName}: ${getErrorMessage(error)}. assignmentId=${assignment.id}, studentRepoId=${studentRepo.id}`
+        `Could not create assignment issue in ${owner}/${repoName}: ${gitTerms(provider === 'GITLAB').repo} was not found or is not accessible to Classmoji. assignmentId=${assignment.id}, studentRepoId=${studentRepo.id}`
       );
     }
 
-    const { number: issueNumber } = issue;
-    // A self-managed GitLab's issue ids are stored instance-scoped, the same
-    // form hook-station looks them up by.
-    const id =
-      provider === 'GITLAB' ? scopeGitlabId(organization.gitlab_instance_id, issue.id) : issue.id;
-
-    if (studentRepo.project_id) {
-      try {
-        const issueNodeId = await gitProvider.getIssueNodeId(
-          organization.login,
-          repoName,
-          issueNumber
-        );
-        await gitProvider.addIssueToProject(studentRepo.project_id, issueNodeId);
-        logger.info(`Linked issue #${issueNumber} to project`, {
-          repoName,
-          projectId: studentRepo.project_id,
-        });
-      } catch (error: unknown) {
-        logger.warn(`Failed to link issue #${issueNumber} to project: ${getErrorMessage(error)}`);
-      }
-    }
-
-    // Without the row the issue exists but Classmoji never sees it submitted,
-    // so a failed child fails this run (and retries) rather than passing.
-    const created = await createDatabaseRepositoryAssignmentTask.triggerAndWait(
-      {
-        ...payload,
-        id,
-        issueNumber,
-        provider,
-      },
-      {
-        tags: ctx.run.tags,
-        concurrencyKey: organization.login,
-      }
+    throw new Error(
+      `Could not create assignment issue in ${owner}/${repoName}: ${getErrorMessage(error)}. assignmentId=${assignment.id}, studentRepoId=${studentRepo.id}`
     );
-    if (!created.ok) throw created.error;
+  }
+
+  const { number: issueNumber } = issue;
+  // A self-managed GitLab's issue ids are stored instance-scoped, the same
+  // form hook-station looks them up by.
+  const id =
+    provider === 'GITLAB' ? scopeGitlabId(organization.gitlab_instance_id, issue.id) : issue.id;
+
+  if (studentRepo.project_id) {
+    try {
+      const issueNodeId = await gitProvider.getIssueNodeId(
+        organization.login,
+        repoName,
+        issueNumber
+      );
+      await gitProvider.addIssueToProject(studentRepo.project_id, issueNodeId);
+      logger.info(`Linked issue #${issueNumber} to project`, {
+        repoName,
+        projectId: studentRepo.project_id,
+      });
+    } catch (error: unknown) {
+      logger.warn(`Failed to link issue #${issueNumber} to project: ${getErrorMessage(error)}`);
+    }
+  }
+
+  // Without the row the issue exists but Classmoji never sees it submitted,
+  // so a failed write fails this run rather than passing.
+  await createDatabaseRepositoryAssignment({ ...payload, id, issueNumber, provider });
+};
+
+export const createGithubRepositoryAssignmentTask = task({
+  id: 'gh-create_git_repo_assignment',
+  queue: {
+    concurrencyLimit: 4,
   },
+  run: addAssignmentToRepo,
 });
+
+/** The submission row for one assignment in one student repo. */
+export const createDatabaseRepositoryAssignment = async (
+  payload: CreateDatabaseRepositoryAssignmentTaskPayload
+) => {
+  const { assignment, studentRepo, issueNumber, id, provider } = payload;
+
+  // ISSUE mode: the row id and provider_id are the GitHub issue id. REPO
+  // mode: no issue; the row gets a generated id and null provider fields.
+  const data = {
+    ...(id ? { id, provider_id: String(id) } : {}),
+    assignment_id: assignment.id,
+    git_repo_id: studentRepo.id,
+    provider: provider ?? 'GITHUB',
+    provider_issue_number: issueNumber ?? null,
+  };
+
+  return ClassmojiService.gitRepoAssignment.create(data);
+};
 
 export const createDatabaseRepositoryAssignmentTask = task({
   id: 'cf-create_git_repo_assignment',
-  run: async (payload: CreateDatabaseRepositoryAssignmentTaskPayload) => {
-    const { assignment, studentRepo, issueNumber, id, provider } = payload;
-
-    // ISSUE mode: the row id and provider_id are the GitHub issue id. REPO
-    // mode: no issue; the row gets a generated id and null provider fields.
-    const data = {
-      ...(id ? { id, provider_id: String(id) } : {}),
-      assignment_id: assignment.id,
-      git_repo_id: studentRepo.id,
-      provider: provider ?? 'GITHUB',
-      provider_issue_number: issueNumber ?? null,
-    };
-
-    return ClassmojiService.gitRepoAssignment.create(data);
-  },
+  run: createDatabaseRepositoryAssignment,
 });
 
 export const addGraderToRepositoryAssignmentTask = task({

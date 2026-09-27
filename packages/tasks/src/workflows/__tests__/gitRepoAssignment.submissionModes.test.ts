@@ -20,7 +20,6 @@ const mocks = vi.hoisted(() => ({
   recordExistingPush: vi.fn(),
   getGitProvider: vi.fn(),
   tasksTrigger: vi.fn(),
-  dbTriggerAndWait: vi.fn(),
 }));
 
 vi.mock('@trigger.dev/sdk', () => ({
@@ -32,7 +31,11 @@ vi.mock('@trigger.dev/sdk', () => ({
 
 vi.mock('@classmoji/services', () => ({
   ClassmojiService: {
-    assignment: { findForReleaseByRepository: vi.fn(), findReadyForRelease: vi.fn(), update: vi.fn() },
+    assignment: {
+      findForReleaseByRepository: vi.fn(),
+      findReadyForRelease: vi.fn(),
+      update: vi.fn(),
+    },
     classroomMembership: { findUsersByRole: vi.fn() },
     organizationTag: { findTeamsByTag: vi.fn() },
     gitRepo: { findByRepository: vi.fn(), recordPushTime: vi.fn() },
@@ -56,12 +59,6 @@ vi.mock('../gitRepo.ts', () => ({ createRepositoriesTask: { triggerAndWait: vi.f
 
 const workflows = await import('../gitRepoAssignment.ts');
 
-// The GitHub task hands off to the DB task in the same module; stub that
-// handle so the test sees the payload it was given.
-(
-  workflows.createDatabaseRepositoryAssignmentTask as unknown as { triggerAndWait: unknown }
-).triggerAndWait = (...a: unknown[]) => mocks.dbTriggerAndWait(...a);
-
 const runTask = <P>(t: unknown, payload: P) =>
   (t as { run: (p: P, ctx: unknown) => Promise<unknown> }).run(payload, {
     ctx: { run: { tags: ['t'] } },
@@ -73,7 +70,6 @@ const STUDENT_REPO = { id: 'gitrepo-1', project_id: 'proj-1' };
 beforeEach(() => {
   for (const m of Object.values(mocks)) m.mockReset();
   mocks.findFirstGitRepoAssignment.mockResolvedValue(null);
-  mocks.dbTriggerAndWait.mockResolvedValue({ ok: true });
   mocks.tasksTrigger.mockResolvedValue({ id: 'run-1' });
 });
 
@@ -87,11 +83,13 @@ describe('gh-create_git_repo_assignment in REPO mode', () => {
     });
 
     expect(mocks.getGitProvider).not.toHaveBeenCalled();
-    expect(mocks.dbTriggerAndWait).toHaveBeenCalledTimes(1);
-    const [payload] = mocks.dbTriggerAndWait.mock.calls[0] as [Record<string, unknown>];
-    expect(payload).toMatchObject({ assignment: { id: 'a-1' }, studentRepo: STUDENT_REPO });
-    expect(payload).not.toHaveProperty('id');
-    expect(payload).not.toHaveProperty('issueNumber');
+    // The row is written directly, with no issue fields.
+    expect(mocks.createGitRepoAssignment).toHaveBeenCalledWith({
+      assignment_id: 'a-1',
+      git_repo_id: 'gitrepo-1',
+      provider: 'GITHUB',
+      provider_issue_number: null,
+    });
   });
 
   it('asks the service to count a push that predates the assignment', async () => {
@@ -124,7 +122,7 @@ describe('gh-create_git_repo_assignment in REPO mode', () => {
         organization: ORG,
       })
     ).resolves.toBeUndefined();
-    expect(mocks.dbTriggerAndWait).toHaveBeenCalledTimes(1);
+    expect(mocks.createGitRepoAssignment).toHaveBeenCalledTimes(1);
   });
 
   it('still respects the idempotency guard', async () => {
@@ -137,7 +135,7 @@ describe('gh-create_git_repo_assignment in REPO mode', () => {
       organization: ORG,
     });
 
-    expect(mocks.dbTriggerAndWait).not.toHaveBeenCalled();
+    expect(mocks.createGitRepoAssignment).not.toHaveBeenCalled();
     expect(mocks.getGitProvider).not.toHaveBeenCalled();
   });
 
@@ -158,7 +156,9 @@ describe('gh-create_git_repo_assignment in REPO mode', () => {
     });
 
     expect(provider.findIssueByTitle).toHaveBeenCalled();
-    expect(mocks.dbTriggerAndWait.mock.calls[0][0]).toMatchObject({ id: 'issue-9', issueNumber: 9 });
+    expect(mocks.createGitRepoAssignment).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'issue-9', provider_issue_number: 9 })
+    );
   });
 });
 

@@ -35,9 +35,9 @@ const mocks = vi.hoisted(() => ({
   createRepository: vi.fn(),
   provisionAutograde: vi.fn(),
   batchTriggerCreateRepo: vi.fn(),
-  batchTriggerAssignments: vi.fn(),
-  addCollaborators: vi.fn(),
-  createRepoInDatabase: vi.fn(),
+  addAssignment: vi.fn(),
+  addCollaborator: vi.fn(),
+  gitRepoCreate: vi.fn(),
 }));
 
 vi.mock('@trigger.dev/sdk', () => ({
@@ -55,12 +55,15 @@ vi.mock('@classmoji/services', () => ({
     classroomMembership: { findUsersByRole: (...a: unknown[]) => mocks.findUsersByRole(...a) },
     team: { findByClassroomId: (...a: unknown[]) => mocks.findTeamsByClassroomId(...a) },
     assignment: { update: (...a: unknown[]) => mocks.assignmentUpdate(...a) },
+    gitRepo: { create: (...a: unknown[]) => mocks.gitRepoCreate(...a) },
   },
   HelperService: {},
-  ensureClassroomTeam: vi.fn(),
+  ensureClassroomTeam: vi.fn(async () => ({ slug: 'assistants' })),
   getGitProvider: () => ({
     getAccessToken: (...a: unknown[]) => mocks.getAccessToken(...a),
     getOrganization: (...a: unknown[]) => mocks.getOrganization(...a),
+    addCollaborator: (...a: unknown[]) => mocks.addCollaborator(...a),
+    addTeamToRepo: vi.fn(),
   }),
 }));
 
@@ -89,9 +92,7 @@ vi.mock('@classmoji/utils', () => ({
 }));
 
 vi.mock('../gitRepoAssignment.ts', () => ({
-  createGithubRepositoryAssignmentTask: {
-    batchTriggerAndWait: (...a: unknown[]) => mocks.batchTriggerAssignments(...a),
-  },
+  addAssignmentToRepo: (...a: unknown[]) => mocks.addAssignment(...a),
 }));
 
 vi.mock('../../helpers/createRepository.ts', () => ({
@@ -106,15 +107,9 @@ vi.mock('../autograde.ts', () => ({
 
 const gitRepo = await import('../gitRepo.ts');
 
-// Sibling tasks in this module are invoked through their trigger handles.
+// The per-repo run is fanned out through its trigger handle.
 (gitRepo.createRepositoryTask as unknown as { batchTriggerAndWait: unknown }).batchTriggerAndWait =
   (...a: unknown[]) => mocks.batchTriggerCreateRepo(...a);
-(gitRepo.addCollaboratorsToRepoTask as unknown as { triggerAndWait: unknown }).triggerAndWait = (
-  ...a: unknown[]
-) => mocks.addCollaborators(...a);
-(gitRepo.createRepoInDatabaseTask as unknown as { triggerAndWait: unknown }).triggerAndWait = (
-  ...a: unknown[]
-) => mocks.createRepoInDatabase(...a);
 
 const { createRepositoriesTask, createRepositoryTask } = gitRepo;
 
@@ -196,12 +191,9 @@ beforeEach(() => {
   mocks.createRepository.mockResolvedValue('gh-repo-1');
   mocks.provisionAutograde.mockResolvedValue(undefined);
   mocks.batchTriggerCreateRepo.mockResolvedValue(undefined);
-  mocks.batchTriggerAssignments.mockResolvedValue({ runs: [] });
-  mocks.addCollaborators.mockResolvedValue({ ok: true });
-  mocks.createRepoInDatabase.mockResolvedValue({
-    ok: true,
-    output: { id: 'gitrepo-1', project_id: null },
-  });
+  mocks.addAssignment.mockResolvedValue(undefined);
+  mocks.addCollaborator.mockResolvedValue(undefined);
+  mocks.gitRepoCreate.mockResolvedValue({ id: 'gitrepo-1', project_id: null });
 });
 
 describe('create_git_repos — repository publish side effect', () => {
@@ -233,11 +225,10 @@ describe('gh-create_git_repo — assignment release side effect', () => {
   it('files issues only for ALREADY published assignments when provisionOnly is set', async () => {
     await runCreateRepository([assignment('a-1', true), assignment('a-2', false)], true);
 
-    expect(mocks.batchTriggerAssignments).toHaveBeenCalledTimes(1);
-    const [payloads] = mocks.batchTriggerAssignments.mock.calls[0] as [
-      Array<{ payload: { assignment: { id: string } } }>,
-    ];
-    expect(payloads.map(p => p.payload.assignment.id)).toEqual(['a-1']);
+    const ids = mocks.addAssignment.mock.calls.map(
+      ([p]) => (p as { assignment: { id: string } }).assignment.id
+    );
+    expect(ids).toEqual(['a-1']);
   });
 
   it('never flips assignment publish state when provisionOnly is set', async () => {
@@ -249,17 +240,17 @@ describe('gh-create_git_repo — assignment release side effect', () => {
   it('files no issues at all when every released assignment is still a draft', async () => {
     await runCreateRepository([assignment('a-2', false)], true);
 
-    expect(mocks.batchTriggerAssignments).not.toHaveBeenCalled();
+    expect(mocks.addAssignment).not.toHaveBeenCalled();
     expect(mocks.assignmentUpdate).not.toHaveBeenCalled();
   });
 
   it('releases drafts whose release_at has passed on an instructor run (no regression)', async () => {
     await runCreateRepository([assignment('a-1', true), assignment('a-2', false)]);
 
-    const [payloads] = mocks.batchTriggerAssignments.mock.calls[0] as [
-      Array<{ payload: { assignment: { id: string } } }>,
-    ];
-    expect(payloads.map(p => p.payload.assignment.id)).toEqual(['a-1', 'a-2']);
+    const ids = mocks.addAssignment.mock.calls.map(
+      ([p]) => (p as { assignment: { id: string } }).assignment.id
+    );
+    expect(ids).toEqual(['a-1', 'a-2']);
     expect(mocks.assignmentUpdate).toHaveBeenCalledWith('a-1', { is_published: true });
     expect(mocks.assignmentUpdate).toHaveBeenCalledWith('a-2', { is_published: true });
   });
@@ -268,30 +259,36 @@ describe('gh-create_git_repo — assignment release side effect', () => {
     const future = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
     await runCreateRepository([assignment('a-1', true, future)], true);
 
-    expect(mocks.batchTriggerAssignments).not.toHaveBeenCalled();
+    expect(mocks.addAssignment).not.toHaveBeenCalled();
   });
 
   it('treats an assignment with no release_at as released (released on publish)', async () => {
     await runCreateRepository([assignment('a-1', true, null)], true);
 
-    expect(mocks.batchTriggerAssignments).toHaveBeenCalledTimes(1);
+    expect(mocks.addAssignment).toHaveBeenCalledTimes(1);
   });
 });
 
-describe('gh-create_git_repo — child failures are not swallowed', () => {
+describe('gh-create_git_repo — step failures are not swallowed', () => {
   it('fails the run when adding collaborators failed', async () => {
-    mocks.addCollaborators.mockResolvedValueOnce({ ok: false, error: new Error('no access') });
+    mocks.addCollaborator.mockRejectedValueOnce(new Error('no access'));
     await expect(runCreateRepository([assignment('a-1', true, null)], true)).rejects.toThrow(
       'no access'
     );
   });
 
   it('fails the run when creating an assignment row failed', async () => {
-    mocks.batchTriggerAssignments.mockResolvedValueOnce({
-      runs: [{ ok: false, error: new Error('row write failed') }],
-    });
+    mocks.addAssignment.mockRejectedValueOnce(new Error('row write failed'));
     await expect(runCreateRepository([assignment('a-1', true, null)], true)).rejects.toThrow(
       'row write failed'
     );
+  });
+
+  it('still attempts every assignment before failing on the first error', async () => {
+    mocks.addAssignment.mockRejectedValueOnce(new Error('row write failed'));
+    await expect(
+      runCreateRepository([assignment('a-1', true, null), assignment('a-2', true, null)], true)
+    ).rejects.toThrow('row write failed');
+    expect(mocks.addAssignment).toHaveBeenCalledTimes(2);
   });
 });

@@ -555,7 +555,9 @@ const createMissingAssignments = async (
       };
       assignmentsData.push({
         payload,
-        options: { tags: [`session_${sessionId}`] },
+        // `standalone`: this run is one repo's whole job here, not a step of a
+        // repo being created, so the progress callout counts it as a unit.
+        options: { tags: [`session_${sessionId}`, 'standalone'] },
       });
     });
   });

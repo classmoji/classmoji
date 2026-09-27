@@ -816,9 +816,8 @@ export class GitLabProvider extends GitProvider {
   ): Promise<{ id: number; iid: number; url: string }> {
     // Same argument order as GitHubProvider: (base, head). On GitLab the base
     // is the MR's target and the head its source.
-    const mr = (await this.api(
-      `/api/v4/projects/${encodeURIComponent(`${group}/${project}`)}/merge_requests`,
-      {
+    const create = () =>
+      this.api(`/api/v4/projects/${encodeURIComponent(`${group}/${project}`)}/merge_requests`, {
         method: 'POST',
         body: {
           source_branch: sourceBranch,
@@ -826,9 +825,24 @@ export class GitLabProvider extends GitProvider {
           title,
           description,
         },
+      }) as Promise<{ id: number; iid: number; web_url: string }>;
+
+    // GitLab registers a pushed branch in the background, so an MR opened right
+    // after the push can be refused with "does not exist" for a moment. Several
+    // projects created at once make the lag longer.
+    const delays = [500, 1000, 2000, 4000, 8000];
+    for (let attempt = 0; ; attempt++) {
+      try {
+        const mr = await create();
+        return { id: mr.id, iid: mr.iid, url: mr.web_url };
+      } catch (error: unknown) {
+        const branchNotReady =
+          (error as { status?: number }).status === 400 &&
+          String((error as Error).message).includes('does not exist');
+        if (!branchNotReady || attempt >= delays.length) throw error;
+        await new Promise(resolve => setTimeout(resolve, delays[attempt]));
       }
-    )) as { id: number; iid: number; web_url: string };
-    return { id: mr.id, iid: mr.iid, url: mr.web_url };
+    }
   }
 
   /** An open merge request from `source` into `target`, if any. */
