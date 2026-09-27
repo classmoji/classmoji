@@ -57,6 +57,25 @@ export const MEDIA_STATE_CHIP: Record<MediaState, string> = {
   failed: 'bg-peach-bg text-peach-ink !border-peach-bord',
 };
 
+/**
+ * The secondary line under a video whose original was dropped once its
+ * streaming copy existed (`original_deleted_at`). Downloads hand over the copy.
+ */
+export const ORIGINAL_NOT_KEPT_LABEL = 'Original not kept';
+
+/** How often the page reloads its rows while one of them is still optimising. */
+export const PENDING_REVALIDATE_MS = 15_000;
+
+/**
+ * Whether any row is still optimising — the only case in which the page reloads
+ * itself. Everything else changes only when the owner does something here.
+ */
+export function hasPendingProcessing(
+  records: readonly { status: MediaStatus; processing: MediaProcessing }[]
+): boolean {
+  return records.some(record => mediaState(record) === 'optimising');
+}
+
 /** Only a finished object can be handed over or referenced. */
 export const isActionable = (record: { status: MediaStatus }) => record.status === 'READY';
 

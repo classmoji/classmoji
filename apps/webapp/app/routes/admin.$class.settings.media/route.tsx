@@ -13,11 +13,13 @@ import { formatBytes } from '~/components/features/media/mediaUploadOptions';
 import {
   MEDIA_STATE_CHIP,
   MEDIA_STATE_LABEL,
+  ORIGINAL_NOT_KEPT_LABEL,
   isActionable,
   mediaState,
   meterReading,
   orderForDisplay,
 } from '~/components/features/media/mediaState';
+import { useRevalidateWhilePending } from '~/components/features/media/useRevalidateWhilePending';
 import { readJsonBody } from '~/utils/mediaApi.server';
 import { requireClassroomAdmin } from '~/utils/routeAuth.server';
 import { loadMediaPage, type MediaListItem } from './mediaPage.server';
@@ -142,6 +144,7 @@ export default function MediaSettings({ loaderData }: Route.ComponentProps) {
   // is the version that gets clicked anyway.
   const canUpload = configured && usage.isPro && canDeliver;
   const { revalidate } = useRevalidator();
+  useRevalidateWhilePending(items);
 
   const [dialogOpen, setDialogOpen] = useState(false);
   // Stable, because the dialog closes itself from an effect keyed on it.
@@ -251,6 +254,9 @@ export default function MediaSettings({ loaderData }: Route.ComponentProps) {
                 <div className="truncate text-xs text-ink-3" title={row.processingError}>
                   {row.processingError}
                 </div>
+              )}
+              {row.originalDeleted && (
+                <div className="text-xs text-ink-3">{ORIGINAL_NOT_KEPT_LABEL}</div>
               )}
             </div>
           </div>

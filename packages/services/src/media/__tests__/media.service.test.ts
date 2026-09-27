@@ -2089,7 +2089,7 @@ describe('onMediaReady', () => {
     expect(trigger).toHaveBeenCalledWith(
       'media-video-process',
       { classroomId: CLASSROOM_ID, mediaId },
-      { idempotencyKey: `media-video-process:${mediaId}` }
+      { idempotencyKey: `media-video-process:${mediaId}`, idempotencyKeyTTL: '10m' }
     );
   };
 
@@ -2227,6 +2227,31 @@ describe('onMediaReady', () => {
         filename: 'intro.mp4',
         bytes: Buffer.alloc(4096, 1),
       });
+      expect(claim()).toMatchObject({ where: { id: createdId, status: 'READY' } });
+      expectEnqueued(createdId);
+    });
+
+    it('putMediaObject queues from the row it wrote — no read after the flip can skip the job', async () => {
+      let createdId = '';
+      prisma.mediaObject.create.mockImplementation(async ({ data }: { data: { id: string } }) => {
+        createdId = data.id;
+        return row({ status: 'UPLOADING', ...data });
+      });
+      // Any read after the READY flip fails: the write must neither throw nor
+      // skip the video's job because of it.
+      prisma.mediaObject.findFirst.mockRejectedValue(new Error('db down'));
+      sendImpl.mockImplementation(async (name: string) =>
+        name === 'HeadObject' ? { ContentLength: 4096 } : {}
+      );
+
+      const result = await putMediaObject({
+        classroom,
+        userId: 'user-1',
+        filename: 'intro.mp4',
+        bytes: Buffer.alloc(4096, 1),
+      });
+      expect(result).toEqual({ mediaId: createdId, ref: `media://${createdId}` });
+      expect(prisma.mediaObject.findFirst).not.toHaveBeenCalled();
       expect(claim()).toMatchObject({ where: { id: createdId, status: 'READY' } });
       expectEnqueued(createdId);
     });

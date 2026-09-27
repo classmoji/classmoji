@@ -144,6 +144,12 @@ const PART_URL_TTL_SECONDS = 15 * 60;
 export const VIDEO_PROCESS_TASK_ID = 'media-video-process';
 
 /**
+ * How long `onMediaReady`'s idempotency key lives. Short on purpose: the DB
+ * claim is the real dedupe, and the key is only there for an immediate resend.
+ */
+export const VIDEO_PROCESS_IDEMPOTENCY_TTL = '10m';
+
+/**
  * What `processing_error` says when the job could not even be queued. Shown as
  * the detail under "Couldn't optimise — the original is shown", so it is about
  * the outcome, not the machinery.
@@ -162,10 +168,13 @@ export const VIDEO_ENQUEUE_FAILED_REASON = 'Optimising could not be started for 
  * job is queued, so it is written here, where that becomes true, and nowhere
  * else — a row carrying it with no job behind it shows as forever optimising.
  *
- * The claim is what makes a second call a no-op: a row already PENDING, DONE or
- * FAILED matches nothing, so a double fire (a copy reused by a retried import,
- * a concurrent complete) queues nothing twice. The idempotency key collapses a
- * repeat that did get through.
+ * The claim is the dedupe: a row already PENDING, DONE or FAILED matches
+ * nothing, so a double fire (a copy reused by a retried import, a concurrent
+ * complete) queues nothing twice. The idempotency key only covers the gap the
+ * claim cannot — a trigger whose answer was lost and is sent again moments
+ * later — so it lives for `VIDEO_PROCESS_IDEMPOTENCY_TTL`, not Trigger's 30-day
+ * default. A long-lived key would hand back the old, finished run to a later
+ * legitimate enqueue for the same id and leave the row PENDING with no job.
  *
  * NEVER throws. The object is already READY and serving its original; the
  * caller's upload succeeded whatever happens here. A failed enqueue marks the
@@ -192,7 +201,10 @@ export async function onMediaReady(row: MediaRecord): Promise<void> {
     await tasks.trigger(
       VIDEO_PROCESS_TASK_ID,
       { classroomId: row.classroomId, mediaId: row.id },
-      { idempotencyKey: `media-video-process:${row.id}` }
+      {
+        idempotencyKey: `media-video-process:${row.id}`,
+        idempotencyKeyTTL: VIDEO_PROCESS_IDEMPOTENCY_TTL,
+      }
     );
   } catch (error) {
     console.warn(
@@ -284,8 +296,9 @@ export function requireClient(): { client: S3Client; bucket: string } {
  * doors into media cannot disagree about who may store what. See
  * `createUpload` for the order and why it is the contract.
  *
- * Returns the minted id, the `orig.{ext}` key it will be written at, and the
- * classification. The row is UPLOADING — a reservation counted by the quota.
+ * Returns the minted id, the `orig.{ext}` key it will be written at, the
+ * classification, and the row as written. The row is UPLOADING — a reservation
+ * counted by the quota.
  */
 async function reserveUpload({
   classroom,
@@ -303,6 +316,7 @@ async function reserveUpload({
   mediaId: string;
   key: string;
   classified: NonNullable<ReturnType<typeof classifyFilename>>;
+  row: MediaRow;
 }> {
   // Any extension, as long as there is one the store can address (see
   // mediaKinds.ts). The refusal says which of the two it was.
@@ -405,7 +419,7 @@ async function reserveUpload({
   // Nothing slow is inside: no R2 call, no subscription lookup. The lock is
   // held for one SELECT and one INSERT, because it blocks every other upload
   // this classroom is opening.
-  await getPrisma().$transaction(async tx => {
+  const row = (await getPrisma().$transaction(async tx => {
     await tx.$queryRaw`SELECT id FROM classrooms WHERE id = ${classroom.id} FOR UPDATE`;
 
     const rows = (await tx.mediaObject.findMany({
@@ -432,9 +446,9 @@ async function reserveUpload({
         allow_download: allowDownload,
       },
     });
-  });
+  })) as MediaRow;
 
-  return { mediaId, key, classified };
+  return { mediaId, key, classified, row };
 }
 
 /**
@@ -1454,7 +1468,12 @@ export async function putMediaObject({
 }): Promise<{ mediaId: string; ref: string }> {
   const { client, bucket } = requireClient();
   const sizeBytes = bytes.length;
-  const { mediaId, key, classified } = await reserveUpload({
+  const {
+    mediaId,
+    key,
+    classified,
+    row: reserved,
+  } = await reserveUpload({
     classroom,
     userId,
     filename,
@@ -1517,8 +1536,18 @@ export async function putMediaObject({
     throw new MediaError('NOT_FOUND', 'This file was deleted before it finished writing');
   }
 
-  const row = await findMediaRow(classroom.id, mediaId);
-  if (row) await onMediaReady(toMediaRecord(row));
+  // Built in memory, the way `completeUpload` does, rather than read back: the
+  // row is READY and the bytes are served whatever happens next, so nothing
+  // after the flip may throw, and a video must always reach `onMediaReady`
+  // (which never throws) — a failed re-read would have skipped its job.
+  const ready: MediaRow = {
+    ...reserved,
+    status: 'READY',
+    ready_at: readyAt,
+    upload_id: null,
+    processing: 'NONE',
+  };
+  await onMediaReady(toMediaRecord(ready));
   return { mediaId, ref: mediaRef(mediaId) };
 }
 

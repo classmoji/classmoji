@@ -307,6 +307,10 @@ export interface MediaListItem {
   id: string;
   filename: string;
   kind: MediaKind;
+  /**
+   * What the file costs the classroom (`billedBytes`): the original while it is
+   * kept, the streaming copy's bytes once the original has been dropped.
+   */
   sizeBytes: number;
   /** `media://{id}` — the reference the picker puts into content. */
   ref: string;
@@ -344,6 +348,8 @@ export async function listReadyMedia(
       filename: true,
       kind: true,
       size_bytes: true,
+      rendition_bytes: true,
+      original_deleted_at: true,
       created_at: true,
       processing: true,
       processing_error: true,
@@ -353,6 +359,8 @@ export async function listReadyMedia(
     filename: string;
     kind: MediaKind;
     size_bytes: bigint;
+    rendition_bytes: bigint | null;
+    original_deleted_at: Date | null;
     created_at: Date;
     processing: MediaProcessing;
     processing_error: string | null;
@@ -362,7 +370,7 @@ export async function listReadyMedia(
     id: row.id,
     filename: row.filename,
     kind: row.kind,
-    sizeBytes: Number(row.size_bytes),
+    sizeBytes: billedBytes(row),
     ref: mediaRef(row.id),
     createdAt: row.created_at,
     processing: row.processing,

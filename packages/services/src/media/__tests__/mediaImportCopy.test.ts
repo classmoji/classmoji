@@ -852,6 +852,73 @@ describe('createMediaImportCopier: resuming from a persisted map', () => {
     expect(list).toEqual([]);
   });
 
+  /** The destination's READY lookup answers with these full copy rows. */
+  function withReadyCopyRows(copies: ReturnType<typeof row>[]) {
+    prisma.mediaObject.findMany.mockImplementation(
+      async ({
+        where,
+      }: {
+        where: { classroom_id: string; status?: string; id?: { in: string[] } };
+      }) => {
+        if (where.classroom_id === SOURCE) return [row()].filter(r => where.id?.in.includes(r.id));
+        if (where.status === 'READY') return copies.filter(c => where.id?.in.includes(c.id));
+        return [];
+      }
+    );
+  }
+
+  it('queues a reused copy an earlier run left unqueued, from its own row', async () => {
+    // Run 1 flipped the copy READY (processing NONE) and died before queueing.
+    withReadyCopyRows([row({ id: COPY, classroom_id: TARGET, processing: 'NONE' })]);
+    const copier = createMediaImportCopier({
+      sourceClassroomId: SOURCE,
+      targetClassroomId: TARGET,
+      warn: () => {},
+      knownCopies: { [VIDEO]: COPY },
+    });
+
+    await copier.prepare([`media://${VIDEO}`]);
+
+    expect(copier.copiedIdFor(VIDEO)).toBe(COPY);
+    expect(sent).toEqual([]);
+    expect(onMediaReady).toHaveBeenCalledTimes(1);
+    expect(onMediaReady.mock.calls[0][0]).toMatchObject({
+      id: COPY,
+      classroomId: TARGET,
+      kind: 'VIDEO',
+      optimise: true,
+      status: 'READY',
+    });
+  });
+
+  it('a reused copy that carries a rendition, or is not optimisable, queues nothing', async () => {
+    withReadyCopyRows([
+      row({
+        id: COPY,
+        classroom_id: TARGET,
+        processing: 'DONE',
+        rendition_key: `m/${TARGET}/${COPY}/web-0123456789ab.mp4`,
+        rendition_bytes: BigInt(400),
+      }),
+    ]);
+    await createMediaImportCopier({
+      sourceClassroomId: SOURCE,
+      targetClassroomId: TARGET,
+      warn: () => {},
+      knownCopies: { [VIDEO]: COPY },
+    }).prepare([`media://${VIDEO}`]);
+    expect(onMediaReady).not.toHaveBeenCalled();
+
+    withReadyCopyRows([row({ id: COPY, classroom_id: TARGET, optimise: false })]);
+    await createMediaImportCopier({
+      sourceClassroomId: SOURCE,
+      targetClassroomId: TARGET,
+      warn: () => {},
+      knownCopies: { [VIDEO]: COPY },
+    }).prepare([`media://${VIDEO}`]);
+    expect(onMediaReady).not.toHaveBeenCalled();
+  });
+
   it('copies again when the known copy is gone, and records the new pair', async () => {
     withReadyCopies([]); // deleted, or never finished
     const onCopied = vi.fn();
