@@ -36,47 +36,39 @@ async function zipWith(entries: Record<string, Uint8Array>) {
 }
 
 test.describe('RepoEntryGate', () => {
-  test('keeps an entry at the cap and leaves out one over it, by name', async () => {
-    const zip = await zipWith({
-      'images/at-cap.png': new Uint8Array(CAP),
-      'videos/lecture.mp4': new Uint8Array(CAP + 5 * 1024 * 1024),
-    });
+  test('keeps an entry at the cap and leaves out one over it, by name', () => {
     const gate = new RepoEntryGate();
 
-    const kept = await gate.read(zip.file('images/at-cap.png')!, 'at-cap.png');
-    const skipped = await gate.read(zip.file('videos/lecture.mp4')!, 'lecture.mp4');
+    expect(gate.admit('at-cap.png', CAP, 'images/at-cap.png')).toBe(true);
+    expect(gate.admit('lecture.mp4', CAP + 5 * 1024 * 1024, 'videos/lecture.mp4')).toBe(false);
 
-    expect(kept?.length).toBe(CAP);
-    expect(skipped).toBeNull();
     expect(gate.warnings()).toEqual([
       'Skipped lecture.mp4 (40 MB) — larger than the 35 MB your course repository accepts',
     ]);
     expect(gate.skippedPaths()).toEqual(new Set(['videos/lecture.mp4']));
   });
 
-  test('refuses an entry by its declared size without decompressing it', async () => {
+  test('reads the size an entry declares from the ZIP’s directory, without inflating it', async () => {
     const zip = await zipWith({ 'videos/lecture.mp4': new Uint8Array(CAP + 1) });
-    const entry = zip.file('videos/lecture.mp4')!;
-    expect(declaredUncompressedSize(entry)).toBe(CAP + 1);
-
-    let decompressed = false;
-    const original = entry.async.bind(entry);
-    entry.async = ((type: 'nodebuffer') => {
-      decompressed = true;
-      return original(type);
-    }) as typeof entry.async;
-
-    expect(await new RepoEntryGate().read(entry, 'lecture.mp4')).toBeNull();
-    expect(decompressed).toBe(false);
+    expect(declaredUncompressedSize(zip.file('videos/lecture.mp4')!)).toBe(CAP + 1);
   });
 
-  test('falls back to measuring the bytes when no size is declared', async () => {
-    // An entry added in memory has no directory record behind it.
+  test('declares nothing for an entry with no directory record behind it', () => {
+    // An entry added in memory.
     const zip = new JSZip();
     zip.file('images/a.png', new Uint8Array(10));
-    const entry = zip.file('images/a.png')!;
-    expect(declaredUncompressedSize(entry)).toBeNull();
-    expect((await new RepoEntryGate().read(entry, 'a.png'))?.length).toBe(10);
+    expect(declaredUncompressedSize(zip.file('images/a.png')!)).toBeNull();
+  });
+
+  test('has no reader of its own: every entry is inflated through inflateAtMost', () => {
+    // Code only: the doc comment on inflateAtMost names what it replaces.
+    const module = readFileSync(join(here, '../../app/utils/zipRepoEntries.ts'), 'utf8')
+      .split('\n')
+      .filter(line => !/^\s*(\*|\/\/|\/\*\*)/.test(line))
+      .join('\n');
+    expect(module).toContain("entry.nodeStream('nodebuffer')");
+    expect(module).not.toMatch(/\basync read\(/);
+    expect(module).not.toMatch(/\.async\('(nodebuffer|string|uint8array|base64)'\)/);
   });
 
   test('admits by size alone for bytes already in hand', () => {
