@@ -22,6 +22,7 @@ import {
   assertClassroomAccess,
   assertClassroomMutationAllowed,
 } from '~/utils/helpers';
+import { loadQuizzesVisible, quizzesVisibleOrThrow } from '~/utils/classroomProFlag.server';
 import { buildCalendarUrl, getCalendarDateRange } from '~/utils/calendar.server';
 import type { Route } from './+types/route';
 import CourseCalendar from '~/components/features/calendar/CourseCalendar';
@@ -101,7 +102,9 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
   // Only staff reach this loader (OWNER, TEACHER, ASSISTANT), and the calendar
   // they are already served shows the same drafts with the same Draft pill.
   // Assignments stay published-only: unpublished ones have no student-facing
-  // page to link to at all.
+  // page to link to at all. Quiz assignments are left out where the
+  // classroom's quizzes are hidden.
+  const quizzesVisible = await loadQuizzesVisible(classroom.id);
   const [pages, slides, assignments] = await Promise.all([
     getPrisma().page.findMany({
       where: { classroom_id: classroom.id },
@@ -114,7 +117,11 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
       orderBy: { title: 'asc' },
     }),
     getPrisma().assignment.findMany({
-      where: { module: { classroom_id: classroom.id }, is_published: true },
+      where: {
+        module: { classroom_id: classroom.id },
+        is_published: true,
+        ...(quizzesVisible ? {} : { type: { not: 'QUIZ' } }),
+      },
       select: { id: true, title: true, repository: { select: { title: true, slug: true } } },
       orderBy: { title: 'asc' },
     }),
@@ -434,6 +441,12 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
         { success: false, error: 'Assignment does not belong to this classroom' },
         { status: 403 }
       );
+    }
+
+    // Where quizzes are hidden, a quiz assignment answers as a missing one does:
+    // its deadline is not on the calendar, and moving it would notify the class.
+    if (assignment.type === 'QUIZ' && !(await quizzesVisibleOrThrow(classroom.id))) {
+      return data({ success: false, error: 'Assignment not found' }, { status: 404 });
     }
 
     const previousDeadline = assignment.student_deadline;

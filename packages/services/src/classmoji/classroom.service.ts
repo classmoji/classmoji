@@ -48,8 +48,12 @@ const SAFE_SETTINGS_FIELDS = [
   'llm_max_tokens',
   'code_aware_model',
   'exploration_model',
+  'question_effort',
+  'grading_effort',
+  'exploration_effort',
   'syllabus_bot_enabled',
   'syllabus_bot_model',
+  'syllabus_bot_effort',
   'content_repo_name',
   'slides_enabled',
   'quizzes_enabled',
@@ -755,9 +759,24 @@ export const updateSettings = async (
   if (updates.syllabus_bot_enabled !== undefined && updates.syllabus_bot_enabled !== false) {
     const entitlement = await entitlementService.canUseSyllabusBot(classroomId);
     if (!entitlement.allowed) {
-      throw new ClassroomSettingsEntitlementError(
-        'The syllabus assistant requires a Pro subscription'
-      );
+      throw new ClassroomSettingsEntitlementError('Ask Moji requires a Pro subscription.');
+    }
+  }
+
+  // Turning AI quizzes ON is Pro-only too, by the same rule and for the same
+  // callers; turning them OFF is always allowed.
+  //
+  // Unlike the syllabus bot, `quizzes_enabled` defaults to TRUE (schema), and
+  // the creation paths leave it true for every classroom, Free included — they
+  // write raw, never through here, so this gate never fires on create. What
+  // keeps a Free classroom from being served quizzes is the serve-time
+  // `assertProTier` on the quiz routes, not this flag. Config import needs no
+  // gate of its own: its only caller copies onto a newly created classroom,
+  // which is already `true`, so copying `true` changes nothing.
+  if (updates.quizzes_enabled !== undefined && updates.quizzes_enabled !== false) {
+    const entitlement = await entitlementService.canUseQuizzes(classroomId);
+    if (!entitlement.allowed) {
+      throw new ClassroomSettingsEntitlementError('AI Quizzes requires a Pro subscription.');
     }
   }
 

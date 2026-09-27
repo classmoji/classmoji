@@ -6,6 +6,7 @@ import RepositoriesTable from '~/components/features/repositories/RepositoriesTa
 import { SearchInput, ButtonNew, RequireRole } from '~/components';
 import { ClassmojiService } from '@classmoji/services';
 import { requireClassroomAdmin } from '~/utils/routeAuth.server';
+import { loadQuizzesVisible } from '~/utils/classroomProFlag.server';
 import type { Route } from './+types/route';
 
 export const loader = async ({ params, request }: Route.LoaderArgs) => {
@@ -20,19 +21,22 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
   // the same context the Assignments page gives it: every assignment (the full
   // row to edit, and which quizzes/forms are already bound), the modules it
   // may belong to, and the content it may link.
-  const [repositories, assignments, modules, candidates] = await Promise.all([
+  const [repositories, assignments, modules, candidates, quizzesVisible] = await Promise.all([
     ClassmojiService.repository.findByClassroomSlug(classSlug!),
     ClassmojiService.assignment.listForClassroom(classroom.id),
     ClassmojiService.module.findByClassroomSlug(classSlug!),
     ClassmojiService.module.getCandidateContent(classroom.id),
+    loadQuizzesVisible(classroom.id),
   ]);
 
+  // Where the classroom's quizzes are hidden, its quiz assignments and the
+  // quizzes the editor could bind never leave the loader.
   return {
     repositories,
     editor: {
-      assignments,
+      assignments: quizzesVisible ? assignments : assignments.filter(a => a.type !== 'QUIZ'),
       modules: modules.map(m => ({ id: m.id, title: m.title })),
-      quizzes: candidates.quizzes,
+      quizzes: quizzesVisible ? candidates.quizzes : [],
       forms: candidates.forms,
       pages: candidates.pages,
       slides: candidates.slides,

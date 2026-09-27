@@ -25,7 +25,7 @@ test.describe('Settings Navigation', () => {
     await expect(tab(page, /^General$/)).toBeVisible();
     await expect(tab(page, /^Repositories$/)).toBeVisible();
     await expect(tab(page, /^Grades$/)).toBeVisible();
-    await expect(tab(page, /^Quizzes$/)).toBeVisible();
+    await expect(tab(page, /^AI$/)).toBeVisible();
     await expect(tab(page, /^Content$/)).toBeVisible();
     await expect(tab(page, /^Team$/)).toBeVisible();
     await expect(tab(page, /^Extension$/)).toBeVisible();
@@ -38,10 +38,10 @@ test.describe('Settings Navigation', () => {
     await expect(page).toHaveURL(new RegExp(`/admin/${testOrg}/settings/grades`));
   });
 
-  test('can navigate to Quizzes tab', async ({ authenticatedPage: page, testOrg }) => {
-    await tab(page, /^Quizzes$/).click();
-    await page.waitForURL(`**/admin/${testOrg}/settings/quizzes`);
-    await expect(page).toHaveURL(new RegExp(`/admin/${testOrg}/settings/quizzes`));
+  test('can navigate to AI tab', async ({ authenticatedPage: page, testOrg }) => {
+    await tab(page, /^AI$/).click();
+    await page.waitForURL(`**/admin/${testOrg}/settings/ai`);
+    await expect(page).toHaveURL(new RegExp(`/admin/${testOrg}/settings/ai`));
   });
 
   test('can navigate to Extension tab', async ({ authenticatedPage: page, testOrg }) => {
@@ -91,41 +91,38 @@ test.describe('Grades Settings Tab', () => {
   });
 });
 
-test.describe('Quiz Settings Tab', () => {
+test.describe('AI Settings Tab', () => {
   test.beforeEach(async ({ authenticatedPage: page, testOrg }) => {
-    await page.goto(`/admin/${testOrg}/settings/quizzes`);
+    await page.goto(`/admin/${testOrg}/settings/ai`);
     await waitForDataLoad(page);
   });
 
-  test('displays quiz functionality toggle', async ({ authenticatedPage: page }) => {
-    await expect(page.getByText(/Quiz Functionality/i)).toBeVisible();
-    await expect(page.getByText(/Enable Quizzes/i)).toBeVisible();
+  test('displays the quiz and Ask Moji toggles', async ({ authenticatedPage: page }) => {
+    await expect(page.getByText('AI Quizzes', { exact: true })).toBeVisible();
+    await expect(page.getByText('Enable quizzes', { exact: true })).toBeVisible();
+    await expect(page.getByText('Enable Ask Moji', { exact: true })).toBeVisible();
     await expect(page.locator('.ant-switch').first()).toBeVisible();
   });
 
   test('displays API Key section', async ({ authenticatedPage: page }) => {
     await expect(page.getByText(/API Key/i).first()).toBeVisible();
-    await expect(page.getByText('Anthropic API Key', { exact: true })).toBeVisible();
+    await expect(page.getByText('Anthropic API key', { exact: true })).toBeVisible();
   });
 
-  test('displays standard quiz settings', async ({ authenticatedPage: page }) => {
-    await expect(page.getByText(/Standard Quiz Settings/i)).toBeVisible();
-    await expect(page.getByText(/Temperature/i)).toBeVisible();
-    await expect(page.getByText(/Max Tokens/i)).toBeVisible();
-  });
-
-  test('displays code-aware quiz settings', async ({ authenticatedPage: page }) => {
-    await expect(page.getByText(/Code-Aware Quiz Settings/i)).toBeVisible();
-    await expect(page.getByText('Agent Model', { exact: true })).toBeVisible();
+  test('displays the quiz model and effort selects', async ({ authenticatedPage: page }) => {
+    await expect(page.getByText('Standard quizzes', { exact: true })).toBeVisible();
+    await expect(page.getByText('Code-aware quizzes', { exact: true })).toBeVisible();
+    await expect(page.getByText('Questions', { exact: true })).toBeVisible();
+    await expect(page.getByText('Grading', { exact: true })).toBeVisible();
   });
 
   test('shows api-key status badge', async ({ authenticatedPage: page }) => {
-    // Exactly one badge always renders (system-defaults vs org key). Poll with a
-    // single .or() locator instead of an instant isVisible() so a late-rendering
-    // badge doesn't flake the assertion.
+    // Exactly one badge always renders (system defaults vs classroom key). Poll
+    // with a single .or() locator instead of an instant isVisible() so a
+    // late-rendering badge doesn't flake the assertion.
     const badge = page
-      .getByText(/Using System Environment Variables/i)
-      .or(page.getByText(/Using Organization API Key/i));
+      .getByText(/Using system defaults/i)
+      .or(page.getByText(/Using classroom key/i));
     await expect(badge.first()).toBeVisible();
   });
 });
@@ -177,19 +174,28 @@ test.describe('Settings Tab Routing (render + URL only)', () => {
     await page.waitForURL(`**/admin/${testOrg}/settings/grades`);
     await expect(page).toHaveURL(new RegExp(`/admin/${testOrg}/settings/grades`));
 
-    await tab(page, /^Quizzes$/).click();
-    await page.waitForURL(`**/admin/${testOrg}/settings/quizzes`);
-    await expect(page).toHaveURL(new RegExp(`/admin/${testOrg}/settings/quizzes`));
+    await tab(page, /^AI$/).click();
+    await page.waitForURL(`**/admin/${testOrg}/settings/ai`);
+    await expect(page).toHaveURL(new RegExp(`/admin/${testOrg}/settings/ai`));
   });
 
   test('direct URL navigation lands on the requested tab', async ({
     authenticatedPage: page,
     testOrg,
   }) => {
-    await page.goto(`/admin/${testOrg}/settings/quizzes`);
+    await page.goto(`/admin/${testOrg}/settings/ai`);
     await waitForDataLoad(page);
 
-    await expect(page).toHaveURL(new RegExp(`/admin/${testOrg}/settings/quizzes`));
-    await expect(page.getByText(/Quiz Functionality/i)).toBeVisible();
+    await expect(page).toHaveURL(new RegExp(`/admin/${testOrg}/settings/ai`));
+    await expect(page.getByText('AI Quizzes', { exact: true })).toBeVisible();
+  });
+
+  test('the old Quizzes tab URL redirects to the AI tab', async ({
+    authenticatedPage: page,
+    testOrg,
+  }) => {
+    await page.goto(`/admin/${testOrg}/settings/quizzes`);
+    await page.waitForURL(`**/admin/${testOrg}/settings/ai`);
+    await expect(page).toHaveURL(new RegExp(`/admin/${testOrg}/settings/ai`));
   });
 });

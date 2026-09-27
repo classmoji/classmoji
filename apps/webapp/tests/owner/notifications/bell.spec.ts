@@ -41,8 +41,10 @@ async function seedNotifications(
       id: f.id,
       user_id: userId,
       classroom_id: classroomId,
-      type: f.type ?? 'QUIZ_PUBLISHED',
-      resource_type: 'quiz',
+      // Not QUIZ_PUBLISHED: the bell hides those in classrooms without quizzes,
+      // and this suite does not depend on the test classroom's plan.
+      type: f.type ?? 'REPOSITORY_PUBLISHED',
+      resource_type: 'repository',
       resource_id: `seed-${idx}`,
       title: f.title,
       metadata: { test_tag: TAG },

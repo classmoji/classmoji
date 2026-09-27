@@ -14,7 +14,8 @@
     "./secret": "./src/secret.ts",
     "./mcp-token": "./src/mcpToken.ts",
     "./site-return": "./src/siteReturnToken.ts",
-    "./invite-token": "./src/inviteToken.ts"
+    "./invite-token": "./src/inviteToken.ts",
+    "./app-connection": "./src/appConnectionMessages.ts"
   },
   "dependencies": {
     "@classmoji/database": "*",

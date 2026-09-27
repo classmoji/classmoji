@@ -1837,6 +1837,18 @@ export class GitHubProvider extends GitProvider {
   }
 
   /**
+   * A user-token Octokit that reports a rate limit instead of waiting it out
+   * (see `ImmediateOctokit`). For calls made while a web or MCP request waits
+   * on the answer, where a throttled request should come back as an error the
+   * caller can explain rather than hold the request open.
+   * @param {string} token - The user's GitHub token
+   * @returns {Octokit}
+   */
+  static getImmediateUserOctokit(token: string): Octokit {
+    return new ImmediateOctokit({ auth: token });
+  }
+
+  /**
    * Get an app-authenticated (JWT) Octokit instance for app-level endpoints
    * such as `GET /app/installations/{installation_id}`. Not scoped to a single
    * installation — use the instance methods for installation-scoped calls.
@@ -1870,17 +1882,5 @@ export class GitHubProvider extends GitProvider {
       clientId: process.env.GITHUB_CLIENT_ID!,
       clientSecret: process.env.GITHUB_CLIENT_SECRET!,
     });
-  }
-
-  /**
-   * Update organization settings
-   * @param {string} org - Organization login
-   * @param {Object} data - Settings to update
-   * @returns {Promise<Object>}
-   */
-  async updateOrganization(org: string, data: Record<string, any>): Promise<any> {
-    const octokit = await this.#getOctokit();
-    const { data: result } = await octokit.request('PATCH /orgs/{org}', { org, ...data });
-    return result;
   }
 }

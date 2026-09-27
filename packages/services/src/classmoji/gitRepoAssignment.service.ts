@@ -44,6 +44,47 @@ export const findById = async (id: string) => {
   });
 };
 
+/** A usable id for a scoped `where`: a non-empty string, nothing else. */
+const isScopedId = (value: unknown): value is string => typeof value === 'string' && value !== '';
+
+/**
+ * Find one submission (GitRepoAssignment) of a classroom, through its git
+ * repo's classroom, optionally narrowed to one Repository or one Assignment.
+ *
+ * Returns null — without querying — when an id is not a non-empty string:
+ * Prisma drops an `undefined` value from a `where`, and an id field also
+ * accepts a filter object, so an unchecked value would match an arbitrary
+ * submission of the classroom.
+ *
+ * Includes the git repo (its stored name) and the assigned graders with their
+ * users (their stored logins).
+ */
+export const findByIdInClassroom = async (
+  id: unknown,
+  classroomId: string,
+  options: { repositoryId?: string; assignmentId?: string } = {}
+) => {
+  if (!isScopedId(id) || !isScopedId(classroomId)) return null;
+  const { repositoryId, assignmentId } = options;
+  if (repositoryId !== undefined && !isScopedId(repositoryId)) return null;
+  if (assignmentId !== undefined && !isScopedId(assignmentId)) return null;
+
+  return getPrisma().gitRepoAssignment.findFirst({
+    where: {
+      id,
+      ...(assignmentId ? { assignment_id: assignmentId } : {}),
+      git_repo: {
+        classroom_id: classroomId,
+        ...(repositoryId ? { repository_id: repositoryId } : {}),
+      },
+    },
+    include: {
+      git_repo: true,
+      graders: { include: { grader: true } },
+    },
+  });
+};
+
 /**
  * Find a GitRepoAssignment by provider and provider_id
  * Used for webhook lookups

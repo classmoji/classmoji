@@ -10,12 +10,14 @@ import { ClassmojiService } from '@classmoji/services';
 import type { ModuleItemType } from '@prisma/client';
 import { requireClassroomAdmin } from '~/utils/routeAuth.server';
 import { assertClassroomMutationAllowed } from '~/utils/helpers';
+import { loadQuizzesVisible } from '~/utils/classroomProFlag.server';
 import ModuleCard, { type ModuleCardData } from '~/components/features/modules/ModuleCard';
 import {
   useCourseworkDrag,
   type CourseworkMove,
 } from '~/components/features/modules/useCourseworkDrag';
 import ModuleFormModal from './ModuleFormModal';
+import { fullAssignmentOrder, fullItemOrder, withoutQuizRows } from './quizRows.server';
 import type { Route } from './+types/route';
 
 export const loader = async ({ params, request }: Route.LoaderArgs) => {
@@ -27,17 +29,23 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
   });
 
   // Every module with everything it owns, plus what the pickers may add.
-  const [modules, candidates, allAssignments, repositories, tags] = await Promise.all([
-    ClassmojiService.module.listModuleContentsForClassroom(classroom.id),
-    ClassmojiService.module.getCandidateContent(classroom.id),
-    ClassmojiService.assignment.listForClassroom(classroom.id),
-    ClassmojiService.repository.findByClassroomId(classroom.id),
-    ClassmojiService.organizationTag.findByClassroomId(classroom.id),
-  ]);
+  const [modules, candidates, allAssignments, repositories, tags, quizzesVisible] =
+    await Promise.all([
+      ClassmojiService.module.listModuleContentsForClassroom(classroom.id),
+      ClassmojiService.module.getCandidateContent(classroom.id),
+      ClassmojiService.assignment.listForClassroom(classroom.id),
+      ClassmojiService.repository.findByClassroomId(classroom.id),
+      ClassmojiService.organizationTag.findByClassroomId(classroom.id),
+      loadQuizzesVisible(classroom.id),
+    ]);
 
+  // A classroom without quizzes (not Pro, or switched off) shows no trace of
+  // them: its quiz items, quiz assignments and quiz candidates never leave the
+  // loader, and `quizzesVisible` drops the quiz entries from the card menus.
   return {
-    modules,
-    candidates,
+    modules: quizzesVisible ? modules : modules.map(withoutQuizRows),
+    candidates: quizzesVisible ? candidates : { ...candidates, quizzes: [] },
+    quizzesVisible,
     // A REPO assignment may submit through any repository in the classroom.
     repositories: repositories.map(r => ({
       id: r.id,
@@ -50,7 +58,9 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
     // Team tags, for an instructor-assigned team assignment created from a card.
     tags: tags.map(t => ({ id: t.id, name: t.name })),
     // A quiz or form binds to at most one assignment in the classroom.
-    boundQuizIds: allAssignments.map(a => a.quiz_id).filter(Boolean) as string[],
+    boundQuizIds: quizzesVisible
+      ? (allAssignments.map(a => a.quiz_id).filter(Boolean) as string[])
+      : [],
     boundFormIds: allAssignments.map(a => a.form_id).filter(Boolean) as string[],
   };
 };
@@ -147,6 +157,11 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
       }
     },
     async addItem() {
+      // The picker offers no quiz where the classroom shows none; a page loaded
+      // before that changed is refused here.
+      if (data.itemType === 'QUIZ' && !(await loadQuizzesVisible(classroom.id))) {
+        return { error: "Quizzes aren't available in this class." };
+      }
       try {
         await ClassmojiService.module.addItem(
           data.moduleId!,
@@ -175,7 +190,7 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
       try {
         await ClassmojiService.module.reorderItems(
           data.moduleId!,
-          data.orderedItemIds ?? [],
+          await fullItemOrder(classroom.id, data.moduleId!, data.orderedItemIds ?? []),
           classroom.id
         );
         return { success: 'Module order updated' };
@@ -188,7 +203,7 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
       try {
         await ClassmojiService.assignment.reorderInModule(
           data.moduleId!,
-          data.orderedAssignmentIds ?? [],
+          await fullAssignmentOrder(classroom.id, data.moduleId!, data.orderedAssignmentIds ?? []),
           classroom.id
         );
         return { success: 'Module order updated' };
@@ -202,7 +217,7 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
         await ClassmojiService.module.moveItemToModule(
           data.moduleItemId!,
           data.toModuleId!,
-          data.orderedItemIds ?? [],
+          await fullItemOrder(classroom.id, data.toModuleId!, data.orderedItemIds ?? []),
           classroom.id
         );
         return { success: 'Item moved' };
@@ -221,7 +236,11 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
         await ClassmojiService.assignment.moveToModule(
           data.assignmentId!,
           data.toModuleId!,
-          data.orderedAssignmentIds ?? [],
+          await fullAssignmentOrder(
+            classroom.id,
+            data.toModuleId!,
+            data.orderedAssignmentIds ?? []
+          ),
           classroom.id
         );
         return { success: 'Assignment moved' };
@@ -248,8 +267,16 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
  * assignments and content in place. Nothing needs the module detail page.
  */
 const ModulesIndex = ({ loaderData }: Route.ComponentProps) => {
-  const { modules, candidates, repositories, slidesUrl, boundQuizIds, boundFormIds, tags } =
-    loaderData;
+  const {
+    modules,
+    candidates,
+    repositories,
+    slidesUrl,
+    boundQuizIds,
+    boundFormIds,
+    tags,
+    quizzesVisible,
+  } = loaderData;
   const { class: classSlug } = useParams();
   const orderFetcher = useFetcher<{ success?: string; error?: string }>();
   const [query, setQuery] = useState('');
@@ -367,6 +394,7 @@ const ModulesIndex = ({ loaderData }: Route.ComponentProps) => {
             repositories={repositories}
             boundQuizIds={quizSet}
             boundFormIds={formSet}
+            quizzesVisible={quizzesVisible}
             tags={tags}
             coursework={coursework.forModule(m.id)}
             canEdit={canEdit}

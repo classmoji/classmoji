@@ -70,6 +70,11 @@ interface ModuleCardProps {
   repositories: Array<{ id: string; title: string; is_published: boolean }>;
   boundQuizIds: Set<string>;
   boundFormIds: Set<string>;
+  /**
+   * Whether the classroom shows quizzes (`loadQuizzesVisible`). Without it the
+   * card offers no quiz assignment, quiz item or quiz link. Absent means hidden.
+   */
+  quizzesVisible?: boolean;
   /** Team tags in this classroom, for an instructor-assigned team assignment. */
   tags?: { id: string; name: string }[];
   /**
@@ -274,6 +279,7 @@ const ModuleCard = ({
   repositories,
   boundQuizIds,
   boundFormIds,
+  quizzesVisible = false,
   tags = [],
   coursework,
   canEdit = true,
@@ -337,8 +343,9 @@ const ModuleCard = ({
   const removeAssignment = (a: AssignmentRowData) =>
     modal.confirm({
       title: 'Delete assignment',
-      content:
-        'This deletes the assignment along with its submissions and grades. The repository, quiz or form it points at is kept.',
+      content: `This deletes the assignment along with its submissions and grades. The ${
+        quizzesVisible ? 'repository, quiz or form' : 'repository or form'
+      } it points at is kept.`,
       okText: 'Delete',
       okButtonProps: { danger: true },
       cancelText: 'Cancel',
@@ -413,7 +420,15 @@ const ModuleCard = ({
           icon: <IconFolder size={15} />,
           label: 'Repository assignment',
         },
-        { key: 'ASSIGNMENT_QUIZ', icon: <IconHelpCircle size={15} />, label: 'Quiz assignment' },
+        ...(quizzesVisible
+          ? [
+              {
+                key: 'ASSIGNMENT_QUIZ',
+                icon: <IconHelpCircle size={15} />,
+                label: 'Quiz assignment',
+              },
+            ]
+          : []),
         { key: 'ASSIGNMENT_FORM', icon: <IconForms size={15} />, label: 'Form assignment' },
       ],
     },
@@ -462,7 +477,7 @@ const ModuleCard = ({
     }
     if (a.type === 'REPO' && a.repository) {
       navigate(`/${rolePrefix}/${classSlug}/assignments/${a.id}`);
-    } else if (a.type === 'QUIZ' && a.quiz) {
+    } else if (a.type === 'QUIZ' && a.quiz && quizzesVisible) {
       navigate(`/${rolePrefix}/${classSlug}/quizzes/${a.quiz.id}`);
     } else if (a.type === 'FORM') {
       navigate(formHref(a));
@@ -482,7 +497,9 @@ const ModuleCard = ({
     if (a.type === 'REPO' && a.repository?.title) {
       return `/admin/${classSlug}/repos/form?title=${encodeURIComponent(a.repository.title)}`;
     }
-    if (a.type === 'QUIZ' && a.quiz) return `/admin/${classSlug}/quizzes/form?quizId=${a.quiz.id}`;
+    if (a.type === 'QUIZ' && a.quiz && quizzesVisible) {
+      return `/admin/${classSlug}/quizzes/form?quizId=${a.quiz.id}`;
+    }
     if (a.type === 'FORM') return formHref(a);
     return null;
   };
@@ -602,7 +619,7 @@ const ModuleCard = ({
                   navigate(`/${rolePrefix}/${classSlug}/pages/${item.page.id}`);
                 } else if (item.item_type === 'SLIDE' && item.slide) {
                   window.open(`${slidesUrl}/${item.slide.id}`, '_blank');
-                } else if (item.item_type === 'QUIZ') {
+                } else if (item.item_type === 'QUIZ' && quizzesVisible) {
                   navigate(`/${rolePrefix}/${classSlug}/quizzes`);
                 } else if (item.item_type === 'FORM' && canEdit) {
                   // Forms live in the admin section only; there is nowhere to
@@ -753,7 +770,7 @@ const ModuleCard = ({
         moduleId={module.id}
         modules={[moduleRef]}
         repositories={repositories}
-        quizzes={candidates.quizzes}
+        quizzes={quizzesVisible ? candidates.quizzes : []}
         forms={candidates.forms}
         pages={candidates.pages}
         slides={candidates.slides}
@@ -772,6 +789,7 @@ const ModuleCard = ({
         items={contentItems}
         candidates={candidates}
         presetType={contentType}
+        quizzesVisible={quizzesVisible}
       />
     </div>
   );

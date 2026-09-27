@@ -11,6 +11,8 @@
 // requireClassroomAdmin, so a read-only surface has nothing to post to.
 import { ClassmojiService } from '@classmoji/services';
 import { requireClassroomTeachingTeam } from '~/utils/routeAuth.server';
+import { loadQuizzesVisible } from '~/utils/classroomProFlag.server';
+import { withoutQuizRows } from '../admin.$class.modules/quizRows.server';
 import type { Route } from './+types/route';
 
 export { default } from '../admin.$class.modules/route';
@@ -23,19 +25,23 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
     action: 'view_modules',
   });
 
-  const [modules, candidates, allAssignments, repositories, tags] = await Promise.all([
-    ClassmojiService.module.listModuleContentsForClassroom(classroom.id),
-    ClassmojiService.module.getCandidateContent(classroom.id),
-    ClassmojiService.assignment.listForClassroom(classroom.id),
-    ClassmojiService.repository.findByClassroomId(classroom.id),
-    ClassmojiService.organizationTag.findByClassroomId(classroom.id),
-  ]);
+  const [modules, candidates, allAssignments, repositories, tags, quizzesVisible] =
+    await Promise.all([
+      ClassmojiService.module.listModuleContentsForClassroom(classroom.id),
+      ClassmojiService.module.getCandidateContent(classroom.id),
+      ClassmojiService.assignment.listForClassroom(classroom.id),
+      ClassmojiService.repository.findByClassroomId(classroom.id),
+      ClassmojiService.organizationTag.findByClassroomId(classroom.id),
+      loadQuizzesVisible(classroom.id),
+    ]);
 
   // Same shape as the admin loader: the component reads all of it, and the
-  // picker data stays harmless on a surface with no pickers.
+  // picker data stays harmless on a surface with no pickers. A classroom
+  // without quizzes sends no quiz rows or candidates here either.
   return {
-    modules,
-    candidates,
+    modules: quizzesVisible ? modules : modules.map(withoutQuizRows),
+    candidates: quizzesVisible ? candidates : { ...candidates, quizzes: [] },
+    quizzesVisible,
     repositories: repositories.map(r => ({
       id: r.id,
       title: r.title,
@@ -45,7 +51,9 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
     })),
     slidesUrl: process.env.SLIDES_URL || 'http://localhost:6500',
     tags: tags.map(t => ({ id: t.id, name: t.name })),
-    boundQuizIds: allAssignments.map(a => a.quiz_id).filter(Boolean) as string[],
+    boundQuizIds: quizzesVisible
+      ? (allAssignments.map(a => a.quiz_id).filter(Boolean) as string[])
+      : [],
     boundFormIds: allAssignments.map(a => a.form_id).filter(Boolean) as string[],
   };
 };

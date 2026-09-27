@@ -194,12 +194,13 @@ class AgentStreamManager extends EventEmitter {
   }
 
   /**
-   * Publish error event
+   * Publish error event. `message` is shown in the browser as-is, so it is the
+   * caller's fixed copy, never an exception's text (log that instead).
    */
-  publishError(sessionId: string, error: Error | string) {
+  publishError(sessionId: string, message: string) {
     this.publishEvent(sessionId, {
       type: 'error',
-      data: { error: typeof error === 'string' ? error : error.message },
+      data: { error: message },
     });
   }
 

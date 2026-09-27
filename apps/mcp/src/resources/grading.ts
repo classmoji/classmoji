@@ -178,8 +178,9 @@ export const submissionResource: ResourceDefinition = {
     const { classroomId } = classroomCtx(ctx);
     // Mirrors the admin.$class.submissions.$id loader, which is itself a raw
     // Prisma read (no service accessor includes analytics_snapshot). S1: the
-    // classroom scope is enforced IN the query — a UUID from another
-    // classroom simply doesn't match.
+    // classroom scope is enforced IN the query — an id from another
+    // classroom simply doesn't match. Ids are compared as plain strings
+    // (a uuid, or the numeric GitHub issue id of an ISSUE-mode submission).
     const submission = (await getPrisma().gitRepoAssignment.findFirst({
       where: { id: vars.submissionId, git_repo: { classroom_id: classroomId } },
       include: {

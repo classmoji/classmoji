@@ -11,6 +11,10 @@
  * mutates an Assignment rather than a CalendarEvent, so it uses the MCP
  * assignment vocabulary ('ASSIGNMENT') and is keyed on the assignment id —
  * writing it as CALENDAR would file it under a record that never changed.
+ *
+ * The last blocks pin the quiz rule on this route: where the classroom's
+ * quizzes are hidden, the link picker offers no quiz assignment and a quiz
+ * assignment's deadline cannot be moved.
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -19,6 +23,9 @@ const mocks = vi.hoisted(() => ({
   assertClassroomAccess: vi.fn(),
   assertClassroomMutationAllowed: vi.fn(),
   addClassroomAuditLog: vi.fn(),
+  loadQuizzesVisible: vi.fn(),
+  quizzesVisibleOrThrow: vi.fn(),
+  assignmentFindMany: vi.fn(),
   createEvent: vi.fn(),
   updateEvent: vi.fn(),
   updateEventWithScope: vi.fn(),
@@ -34,6 +41,11 @@ vi.mock('~/utils/helpers', () => ({
   assertClassroomAccess: (...a: unknown[]) => mocks.assertClassroomAccess(...a),
   assertClassroomMutationAllowed: (...a: unknown[]) => mocks.assertClassroomMutationAllowed(...a),
   addClassroomAuditLog: (...a: unknown[]) => mocks.addClassroomAuditLog(...a),
+}));
+
+vi.mock('~/utils/classroomProFlag.server', () => ({
+  loadQuizzesVisible: (...a: unknown[]) => mocks.loadQuizzesVisible(...a),
+  quizzesVisibleOrThrow: (...a: unknown[]) => mocks.quizzesVisibleOrThrow(...a),
 }));
 
 // The write policy is NOT mocked: it is a dependency-free module, so the action
@@ -62,9 +74,9 @@ vi.mock('@classmoji/services', () => ({
 
 vi.mock('@classmoji/database', () => ({
   default: () => ({
-    page: { findMany: vi.fn() },
-    slide: { findMany: vi.fn() },
-    assignment: { findMany: vi.fn() },
+    page: { findMany: vi.fn(async () => []) },
+    slide: { findMany: vi.fn(async () => []) },
+    assignment: { findMany: (...a: unknown[]) => mocks.assignmentFindMany(...a) },
   }),
 }));
 
@@ -151,6 +163,9 @@ beforeEach(() => {
     repository: { classroom_id: 'class-1' },
     student_deadline: new Date('2026-01-01T00:00:00.000Z'),
   });
+  mocks.loadQuizzesVisible.mockResolvedValue(true);
+  mocks.quizzesVisibleOrThrow.mockResolvedValue(true);
+  mocks.assignmentFindMany.mockResolvedValue([]);
 });
 
 describe('calendar action — audit rows', () => {
@@ -652,5 +667,94 @@ describe('calendar action — the assistant event-type limit follows the role', 
     });
 
     expect(mocks.createEvent).toHaveBeenCalled();
+  });
+});
+
+describe('calendar loader — the link picker and hidden quizzes', () => {
+  const load = () =>
+    route.loader({
+      params: { class: CLASS_SLUG },
+      request: new Request(`http://localhost/admin/${CLASS_SLUG}/calendar`),
+    } as unknown as Parameters<typeof route.loader>[0]);
+
+  /** The `where` the picker's assignment query ran with. */
+  const assignmentWhere = () =>
+    (mocks.assignmentFindMany.mock.calls[0][0] as { where: Record<string, unknown> }).where;
+
+  it('offers no quiz assignment where the classroom’s quizzes are hidden', async () => {
+    mocks.loadQuizzesVisible.mockResolvedValue(false);
+
+    await load();
+
+    expect(mocks.loadQuizzesVisible).toHaveBeenCalledWith('class-1');
+    expect(assignmentWhere()).toEqual({
+      module: { classroom_id: 'class-1' },
+      is_published: true,
+      type: { not: 'QUIZ' },
+    });
+  });
+
+  it('offers every published assignment where quizzes show', async () => {
+    await load();
+
+    expect(assignmentWhere()).toEqual({ module: { classroom_id: 'class-1' }, is_published: true });
+  });
+});
+
+describe('calendar action — a quiz deadline where quizzes are hidden', () => {
+  const moveQuizDeadline = () =>
+    submit({
+      intent: 'update_deadline',
+      assignmentId: 'assignment-quiz',
+      newDeadline: '2026-03-05T23:59:00.000Z',
+    });
+
+  beforeEach(() => {
+    mocks.assignmentFindById.mockResolvedValue({
+      id: 'assignment-quiz',
+      type: 'QUIZ',
+      module: { classroom_id: 'class-1' },
+      repository: null,
+      student_deadline: new Date('2026-01-01T00:00:00.000Z'),
+    });
+  });
+
+  it('answers as a missing assignment does, and moves and audits nothing', async () => {
+    mocks.quizzesVisibleOrThrow.mockResolvedValue(false);
+
+    const result = (await moveQuizDeadline()) as { data: unknown; init: { status: number } };
+
+    expect(result.init.status).toBe(404);
+    expect(result.data).toEqual({ success: false, error: 'Assignment not found' });
+    expect(mocks.quizzesVisibleOrThrow).toHaveBeenCalledWith('class-1');
+    expect(mocks.assignmentUpdate).not.toHaveBeenCalled();
+    expect(mocks.addClassroomAuditLog).not.toHaveBeenCalled();
+  });
+
+  it('moves it where quizzes show', async () => {
+    await moveQuizDeadline();
+
+    expect(mocks.assignmentUpdate).toHaveBeenCalledWith('assignment-quiz', {
+      student_deadline: new Date('2026-03-05T23:59:00.000Z'),
+    });
+  });
+
+  it('asks nothing about quizzes for any other kind of assignment', async () => {
+    mocks.assignmentFindById.mockResolvedValue({
+      id: 'assignment-1',
+      type: 'REPO',
+      module: { classroom_id: 'class-1' },
+      repository: { classroom_id: 'class-1' },
+      student_deadline: null,
+    });
+
+    await submit({
+      intent: 'update_deadline',
+      assignmentId: 'assignment-1',
+      newDeadline: '2026-03-05T23:59:00.000Z',
+    });
+
+    expect(mocks.quizzesVisibleOrThrow).not.toHaveBeenCalled();
+    expect(mocks.assignmentUpdate).toHaveBeenCalled();
   });
 });

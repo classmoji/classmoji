@@ -113,8 +113,9 @@ export function registerAllTools(): void {
   // submission, a list, or every submission of an assignment.
   registerToolDefinition(submissionLateOverrideTool);
 
-  // Grader assignment (OWNER — route-derived); bulk distributes across a whole
-  // assignment in one call.
+  // Grader assignment: single add/remove OWNER+TEACHER (the web assignment
+  // page); bulk (OWNER, the web assign-graders route) distributes across a
+  // whole assignment in one call.
   registerToolDefinition(graderAssignTool);
   registerToolDefinition(graderUnassignTool);
   registerToolDefinition(graderAssignBulkTool);

@@ -28,6 +28,7 @@ import {
   OWNER_ONLY,
   requireClassroomCtx,
   scopedNotFound,
+  submissionIdSchema,
   TEACHING_TEAM,
   writeAudit,
 } from './shared.ts';
@@ -74,7 +75,7 @@ export const gradeAddTool: ToolDefinition<GradeAddArgs> = {
   roles: TEACHING_TEAM,
   inputSchema: {
     classroom: z.string().describe("Classroom reference as 'org/slug'"),
-    git_repo_assignment_id: z.string().uuid().describe('Submission (GitRepoAssignment) id'),
+    git_repo_assignment_id: submissionIdSchema().describe('Submission (GitRepoAssignment) id'),
     emoji: z.string().min(1).max(16).describe('Emoji grade (must be in the grading scale)'),
   },
   handler: async (args, ctx) => {
@@ -134,7 +135,7 @@ export const gradeRemoveTool: ToolDefinition<GradeRemoveArgs> = {
   roles: TEACHING_TEAM,
   inputSchema: {
     classroom: z.string().describe("Classroom reference as 'org/slug'"),
-    git_repo_assignment_id: z.string().uuid().describe('Submission (GitRepoAssignment) id'),
+    git_repo_assignment_id: submissionIdSchema().describe('Submission (GitRepoAssignment) id'),
     grade_id: z.string().uuid().describe('AssignmentGrade id to remove'),
   },
   handler: async (args, ctx) => {
@@ -184,7 +185,7 @@ export const gradeRemoveAllTool: ToolDefinition<GradeRemoveAllArgs> = {
   roles: OWNER_ONLY,
   inputSchema: {
     classroom: z.string().describe("Classroom reference as 'org/slug'"),
-    git_repo_assignment_id: z.string().uuid().describe('Submission (GitRepoAssignment) id'),
+    git_repo_assignment_id: submissionIdSchema().describe('Submission (GitRepoAssignment) id'),
   },
   handler: async (args, ctx) => {
     const classroom = requireClassroomCtx(ctx);

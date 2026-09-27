@@ -242,8 +242,55 @@ describe('list_teaching_team', () => {
     expect(byId.u1.roles).toEqual(['OWNER', 'ASSISTANT']);
     expect(byId.u2.roles).toEqual(['TEACHER']);
     expect(byId.u3).toBeUndefined(); // students are not teaching team
-    // Only id/login/name/roles — no PII (email/school_id) or avatar.
-    expect(Object.keys(byId.u1).sort()).toEqual(['id', 'login', 'name', 'roles']);
+    // Only id/login/name/roles/grader_eligible — no PII (email/school_id) or avatar.
+    expect(Object.keys(byId.u1).sort()).toEqual([
+      'grader_eligible',
+      'id',
+      'login',
+      'name',
+      'roles',
+    ]);
+  });
+
+  it('marks grader_eligible exactly as grader_assign decides it', async () => {
+    const user = (id: string, login: string | null = id) => ({ id, login, name: id });
+    mocks.membershipsByClassroom.mockResolvedValue([
+      // An OWNER flagged is_grader is still not a grader: the role decides.
+      { role: 'OWNER', is_grader: true, user: user('owner') },
+      // A second, grader-flagged ASSISTANT role makes the same person eligible.
+      { role: 'OWNER', is_grader: false, user: user('owner-ta') },
+      { role: 'ASSISTANT', is_grader: true, user: user('owner-ta') },
+      { role: 'ASSISTANT', is_grader: true, user: user('ta') },
+      { role: 'ASSISTANT', is_grader: false, user: user('ta-plain') },
+      { role: 'TEACHER', is_grader: true, user: user('teacher') },
+      { role: 'TEACHER', is_grader: false, user: user('teacher-plain') },
+      { role: 'ASSISTANT', is_grader: true, user: user('ta-nologin', null) },
+    ]);
+
+    const payload = parse(await listTeachingTeamTool.handler({ classroom: CLASSROOM }, staffCtx()));
+    const eligible = Object.fromEntries(
+      (payload.members as Array<{ id: string; grader_eligible: boolean }>).map(m => [
+        m.id,
+        m.grader_eligible,
+      ])
+    );
+    expect(eligible).toEqual({
+      owner: false,
+      'owner-ta': true,
+      ta: true,
+      'ta-plain': false,
+      teacher: true,
+      'teacher-plain': false,
+      'ta-nologin': false,
+    });
+  });
+
+  it('says who can be a grader, under the 1,500-byte client cut', () => {
+    const d = listTeachingTeamTool.description;
+    expect(d).toMatch(/grader_eligible/);
+    expect(d).toMatch(/ASSISTANT or TEACHER/);
+    expect(d).toMatch(/OWNERs cannot be graders/);
+    expect(Buffer.byteLength(d, 'utf8')).toBeLessThan(1500);
   });
 });
 

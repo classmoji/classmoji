@@ -22,6 +22,8 @@ interface StepReviewProps {
   sourceClassroom?: ImportableClassroom;
   selectedModules: Map<string, ModuleConfig>;
   importSelections?: ImportSelections;
+  /** Quiz import is offered to Pro creators only; otherwise quizzes go unmentioned. */
+  quizzesVisible: boolean;
 }
 
 /** Distinct non-empty template refs across a classroom's repositories. */
@@ -68,6 +70,7 @@ const StepReview = ({
   sourceClassroom,
   selectedModules,
   importSelections,
+  quizzesVisible,
 }: StepReviewProps) => {
   const { git_org_id, name } = formValues;
   const selectedOrg = gitOrgs.find(o => o.id === git_org_id);
@@ -191,14 +194,17 @@ const StepReview = ({
                 {totalAssignments}
               </Tag>
             </div>
-            <div className="flex justify-between items-center">
-              <span className="text-gray-500">Quizzes</span>
-              <Tag color="purple" icon={<QuestionCircleOutlined />}>
-                {totalQuizzes}
-              </Tag>
-            </div>
+            {quizzesVisible && (
+              <div className="flex justify-between items-center">
+                <span className="text-gray-500">Quizzes</span>
+                <Tag color="purple" icon={<QuestionCircleOutlined />}>
+                  {totalQuizzes}
+                </Tag>
+              </div>
+            )}
             <div className="pt-2 border-t border-gray-200 dark:border-neutral-700 text-sm text-gray-500">
-              All deadlines will be cleared. Repositories and quizzes will start unpublished.
+              All deadlines will be cleared.{' '}
+              {quizzesVisible ? 'Repositories and quizzes' : 'Repositories'} will start unpublished.
             </div>
           </div>
         </Card>

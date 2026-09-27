@@ -16,7 +16,8 @@ import {
 import { RobotOutlined, DeleteOutlined, BulbOutlined } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import { useRouteDrawer, useDarkMode } from '~/hooks';
-import { assertClassroomAccess, assertProTier } from '~/utils/helpers';
+import { assertClassroomAccess } from '~/utils/helpers';
+import { quizzesVisibleOrThrow } from '~/utils/classroomProFlag.server';
 import { ClassmojiService } from '@classmoji/services';
 import { PromptAssistant, type PromptSuggestion } from '~/components/quiz/PromptAssistant';
 
@@ -43,7 +44,9 @@ export async function loader({ params, request }: Route.LoaderArgs) {
     attemptedAction: quizId ? 'edit_quiz' : 'create_quiz',
   });
 
-  await assertProTier(classSlug);
+  if (!(await quizzesVisibleOrThrow(classroom.id))) {
+    throw new Response('Not Found', { status: 404 });
+  }
 
   // Fetch repositories for linking
   const repositories = await ClassmojiService.repository.findByClassroomId(classroom.id);
@@ -92,7 +95,7 @@ function QuizFormDrawer({ loaderData }: Route.ComponentProps) {
   const navigate = useNavigate();
   const { class: classSlug } = useParams();
   const fetcher = useFetcher();
-  // Served under every prefix this route's gate allows (/admin and /teacher).
+  // Served under every prefix this route's gate allows (/admin, /teacher and /assistant).
   // The submit target matters as much as the links: posting to the other
   // prefix's list route would miss this drawer's parent action.
   const rolePrefix = useLocation().pathname.split('/')[1];

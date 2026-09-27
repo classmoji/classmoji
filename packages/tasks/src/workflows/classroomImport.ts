@@ -811,6 +811,12 @@ export const importModulesTask = task({
     await writer.flush();
 
     const idMaps = job.progress.id_maps ?? {};
+    // No repository asked for its quizzes (a classroom without Pro never
+    // does), so a quiz item missing from the maps is expected, not a skip to
+    // report.
+    const quizzesImported = (job.selections.repositories ?? []).some(
+      r => r.includeQuizzes === true
+    );
     const summary = await ClassmojiService.classroomConfigImport.importModules(
       job.source_classroom_id,
       job.classroom_id,
@@ -819,7 +825,8 @@ export const importModulesTask = task({
         quizzes: idMaps.quizzes ?? {},
         pages: idMaps.pages ?? {},
         slides: idMaps.slides ?? {},
-      }
+      },
+      { quizzesImported }
     );
 
     writer.mergeCounts({ modules: summary.modules });

@@ -1,6 +1,7 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
 import { processResponseReferences } from '~/utils/contentReferenceUrl';
 import { browserTimeZone } from '~/utils/browserTimeZone';
+import { serverErrorLine } from '~/utils/serverErrorLine';
 
 /**
  * Hook for managing syllabus bot conversations
@@ -31,6 +32,22 @@ interface SuggestedQuestion {
   [key: string]: unknown;
 }
 
+/**
+ * What the widget shows when a request fails and the server sent no line of its
+ * own (see serverErrorLine: a reply's `message`, else an `error` that is text
+ * rather than a bare code). An exception's text (a network failure, a body that
+ * isn't JSON) is never shown.
+ */
+const INIT_FAILED = 'Could not start the assistant. Please try again.';
+const SEND_FAILED = 'Could not send your message. Please try again.';
+
+/**
+ * What the widget shows once no answer can arrive in this conversation (its
+ * stream has closed). The "New conversation" button is the way forward; it is
+ * the same line the server sends for a session it no longer holds.
+ */
+const CONVERSATION_ENDED = 'This conversation has ended. Start a new one to keep asking.';
+
 export function useSyllabusBot({ classroomSlug, userRole }: UseSyllabusBotOptions) {
   const [conversationId, setConversationId] = useState<string | null>(null);
   const [messages, setMessages] = useState<BotMessage[]>([]);
@@ -52,6 +69,7 @@ export function useSyllabusBot({ classroomSlug, userRole }: UseSyllabusBotOption
   const initConversation = useCallback(async () => {
     setIsInitializing(true);
     setError(null);
+    let failure = INIT_FAILED;
 
     try {
       const formData = new FormData();
@@ -69,10 +87,12 @@ export function useSyllabusBot({ classroomSlug, userRole }: UseSyllabusBotOption
         body: formData,
       });
 
-      const result = await response.json();
+      // A body that isn't JSON (an error page) reads as no body at all.
+      const result = await response.json().catch(() => null);
 
-      if (!response.ok || result.error) {
-        throw new Error(result.error || 'Failed to initialize conversation');
+      if (!response.ok || !result || result.error) {
+        failure = serverErrorLine(result) ?? INIT_FAILED;
+        throw new Error(`initConversation failed (${response.status})`);
       }
 
       setConversationId(result.conversationId);
@@ -95,7 +115,7 @@ export function useSyllabusBot({ classroomSlug, userRole }: UseSyllabusBotOption
 
       return result;
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : String(err));
+      setError(failure);
       throw err;
     } finally {
       setIsInitializing(false);
@@ -149,14 +169,14 @@ export function useSyllabusBot({ classroomSlug, userRole }: UseSyllabusBotOption
         const messageEvent = event as MessageEvent;
 
         if (messageEvent.data) {
-          let payload: { error?: string } = {};
+          let payload: unknown = null;
           try {
             payload = JSON.parse(messageEvent.data);
           } catch {
             // A non-JSON body is still a failure — just don't take the
             // listener down on the way to reporting it.
           }
-          setError(payload.error || 'The course assistant hit an error.');
+          setError(serverErrorLine(payload) ?? 'Ask Moji hit an error.');
           setIsStreaming(false);
           return;
         }
@@ -167,9 +187,7 @@ export function useSyllabusBot({ classroomSlug, userRole }: UseSyllabusBotOption
         // of sitting disabled forever.
         if (eventSource.readyState === EventSource.CLOSED) {
           streamAliveRef.current = false;
-          setError(
-            'Lost the connection to the course assistant. Start a new conversation to retry.'
-          );
+          setError(CONVERSATION_ENDED);
           setIsStreaming(false);
         }
       });
@@ -194,7 +212,7 @@ export function useSyllabusBot({ classroomSlug, userRole }: UseSyllabusBotOption
       // that could ever clear it — which is what left the input permanently
       // disabled instead of showing a failure.
       if (!streamAliveRef.current) {
-        setError('Not connected to the course assistant. Start a new conversation to retry.');
+        setError(CONVERSATION_ENDED);
         return;
       }
 
@@ -221,15 +239,18 @@ export function useSyllabusBot({ classroomSlug, userRole }: UseSyllabusBotOption
           body: formData,
         });
 
-        const result = await response.json();
+        // A body that isn't JSON (an error page) reads as no body at all.
+        const result = await response.json().catch(() => null);
 
-        if (!response.ok || result.error) {
-          throw new Error(result.error || 'Failed to send message');
+        if (!response.ok || !result || result.error) {
+          setError(serverErrorLine(result) ?? SEND_FAILED);
+          setIsStreaming(false);
         }
 
         // Response will come via SSE
-      } catch (err: unknown) {
-        setError(err instanceof Error ? err.message : String(err));
+      } catch {
+        // The request itself failed (network): fixed copy, not its text.
+        setError(SEND_FAILED);
         setIsStreaming(false);
       }
     },

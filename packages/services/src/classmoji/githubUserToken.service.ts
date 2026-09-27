@@ -183,6 +183,7 @@ export async function getGitHubTokenForUser(userId: string): Promise<GitHubToken
 
 /**
  * Clear a revoked token in the DB when GitHub returns 401 "Bad credentials".
+ * Pass `refusedToken` to clear only if the stored token is still that one.
  *
  * Sets `access_token` to null and `access_token_expires_at` to the epoch (NOT
  * null) so the refresh-detection above still fires on the next read — a null
@@ -191,9 +192,18 @@ export async function getGitHubTokenForUser(userId: string): Promise<GitHubToken
  * NOTE: this only touches the DB. The webapp's in-memory token cache is cleared
  * separately by `@classmoji/auth`'s `clearRevokedToken`, which calls this.
  */
-export async function clearRevokedTokenForUser(userId: string): Promise<void> {
+export async function clearRevokedTokenForUser(
+  userId: string,
+  refusedToken?: string
+): Promise<void> {
   await getPrisma().account.updateMany({
-    where: { user_id: userId, provider_id: 'github' },
+    where: {
+      user_id: userId,
+      provider_id: 'github',
+      // When the caller knows which token GitHub refused, clear only that one:
+      // a token refreshed in the meantime is left alone.
+      ...(refusedToken ? { access_token: refusedToken } : {}),
+    },
     data: { access_token: null, access_token_expires_at: new Date(0) },
   });
 }

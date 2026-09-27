@@ -1,5 +1,6 @@
 import { getAuthSession } from '@classmoji/auth/server';
 import { checkAuth } from '~/utils/helpers';
+import { quizzesVisibleOrThrow } from '~/utils/classroomProFlag.server';
 import {
   ClassmojiService,
   ClassroomSlugUnavailableError,
@@ -521,6 +522,20 @@ export const action = checkAuth(async ({ request }: { request: Request }) => {
       repoConfigs = requestedRepos.filter(r => sourceRepoIds.has(r.id));
       if (repoConfigs.length !== requestedRepos.length) {
         importWarnings.push('repositories outside the source classroom were skipped');
+      }
+      // Quizzes are copied only into a classroom that shows them: Pro, quizzes
+      // not switched off, and the AI agent configured; the wizard offers them on
+      // the same terms. Decided on the classroom just created, after its owner
+      // membership exists and after the settings copy above, so a copied
+      // `quizzes_enabled: false` counts. A failed lookup copies none and the
+      // classroom is still created. Cleared on `repoConfigs` itself, which the
+      // job row also keeps, so nothing later can bring the flag back.
+      if (repoConfigs.some(r => r.includeQuizzes)) {
+        const copyQuizzes = await quizzesVisibleOrThrow(classroom.id).catch((error: unknown) => {
+          console.error('Quiz visibility lookup failed; copying no quizzes:', error);
+          return false;
+        });
+        if (!copyQuizzes) repoConfigs = repoConfigs.map(r => ({ ...r, includeQuizzes: false }));
       }
       if (repoConfigs.length > 0) {
         try {
