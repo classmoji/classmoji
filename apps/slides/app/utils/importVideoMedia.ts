@@ -90,6 +90,21 @@ function mediaRefusalPhrase(error: unknown): string {
 }
 
 /**
+ * What a full media store says, as the server wrote it (or the shared sentence
+ * when it wrote none); null for any other refusal.
+ */
+export function importQuotaSentence(error: unknown): string | null {
+  const failure = error as { code?: unknown; message?: unknown } | null;
+  if (failure?.code !== 'QUOTA_EXCEEDED') return null;
+  return typeof failure.message === 'string' && failure.message.trim()
+    ? failure.message.trim()
+    : MEDIA_QUOTA_FULL_MESSAGE;
+}
+
+/** The gate group every entry left out for a full media store shares. */
+export const MEDIA_FULL_GROUP = 'media-full';
+
+/**
  * The warning for a file left out because media storage would not take it:
  * `Skipped lecture.mp4 (40 MB) — media storage could not take it (it is over the
  * limit for one file)`. A full quota says what the server says — who to contact
@@ -97,14 +112,8 @@ function mediaRefusalPhrase(error: unknown): string {
  * media storage is full. Contact hello@classmoji.io to upgrade.`
  */
 export function importMediaSkippedWarning(name: string, bytes: number, error: unknown): string {
-  const failure = error as { code?: unknown; message?: unknown } | null;
-  if (failure?.code === 'QUOTA_EXCEEDED') {
-    const sentence =
-      typeof failure.message === 'string' && failure.message.trim()
-        ? failure.message.trim()
-        : MEDIA_QUOTA_FULL_MESSAGE;
-    return `Skipped ${name} (${formatMegabytes(bytes)}) — ${sentence}`;
-  }
+  const quota = importQuotaSentence(error);
+  if (quota !== null) return `Skipped ${name} (${formatMegabytes(bytes)}) — ${quota}`;
   return (
     `Skipped ${name} (${formatMegabytes(bytes)}) — media storage could not take it ` +
     `(${mediaRefusalPhrase(error)})`
@@ -188,12 +197,19 @@ export class ImportByteBudget {
 
 /**
  * Everything one import counts as it places its entries: the bytes it has
- * inflated, and the bytes it holds for the repository commit. One per import,
- * shared by every entry it places — the theme's files included.
+ * inflated, the bytes it holds for the repository commit, and whether media
+ * storage has already said it is full. One per import, shared by every entry
+ * it places — the theme's files included.
  */
 export class ImportLimits {
   readonly inflated: ImportByteBudget;
   readonly repoHeld: ImportByteBudget;
+  /**
+   * The full-quota sentence, once media storage has answered with it. Every
+   * later entry bound for media is left out on its declared size, without
+   * being inflated: the store will not take it either.
+   */
+  mediaFull: string | null = null;
 
   constructor({
     inflateBytes = IMPORT_INFLATE_BUDGET_BYTES,
@@ -352,7 +368,18 @@ export async function placeImportEntry({
     return false;
   };
 
-  if (entry.declared !== null && leftOut(entry.declared)) return { kind: 'skipped' };
+  /** Leave the entry out if it is bound for a media store that is full. */
+  const mediaIsFull = (bytes: number): boolean => {
+    if (limits.mediaFull === null || !importEntryGoesToMedia(capability, filename, bytes)) {
+      return false;
+    }
+    gate.skip(filename, bytes, filePath, limits.mediaFull, MEDIA_FULL_GROUP);
+    return true;
+  };
+
+  if (entry.declared !== null && (leftOut(entry.declared) || mediaIsFull(entry.declared))) {
+    return { kind: 'skipped' };
+  }
 
   // Never more than the header declared (every check above passed on that
   // size), and with no header, never more than one entry or the budget left.
@@ -372,7 +399,7 @@ export async function placeImportEntry({
     }
     return { kind: 'skipped' };
   }
-  if (leftOut(buffer.length)) return { kind: 'skipped' };
+  if (leftOut(buffer.length) || mediaIsFull(buffer.length)) return { kind: 'skipped' };
   limits.inflated.spend(buffer.length);
 
   if (!importEntryGoesToMedia(capability, filename, buffer.length)) {
@@ -385,12 +412,19 @@ export async function placeImportEntry({
     return { kind: 'media', mediaId, ref };
   } catch (error: unknown) {
     onError(filename, error);
-    gate.skip(
-      filename,
-      buffer.length,
-      filePath,
-      importMediaSkippedWarning(filename, buffer.length, error)
-    );
+    const quota = importQuotaSentence(error);
+    if (quota !== null) {
+      // Full: this entry and every later one bound for media share ONE warning.
+      limits.mediaFull = quota;
+      gate.skip(filename, buffer.length, filePath, quota, MEDIA_FULL_GROUP);
+    } else {
+      gate.skip(
+        filename,
+        buffer.length,
+        filePath,
+        importMediaSkippedWarning(filename, buffer.length, error)
+      );
+    }
     return { kind: 'skipped' };
   }
 }

@@ -18,7 +18,11 @@
  */
 
 import type JSZip from 'jszip';
-import { REPO_REST_MAX_BYTES, repoFileSkippedWarning } from '@classmoji/utils/repo-limits';
+import {
+  REPO_REST_MAX_BYTES,
+  formatMegabytes,
+  repoFileSkippedWarning,
+} from '@classmoji/utils/repo-limits';
 
 /** An entry the import left out. `path` is its path inside the ZIP. */
 export interface SkippedEntry {
@@ -28,9 +32,15 @@ export interface SkippedEntry {
   /**
    * The warning, when the entry was left out for something other than the
    * repository's size cap — a video media storage refused (`skip`). Absent for
-   * the cap, whose sentence is built from the size.
+   * the cap, whose sentence is built from the size. For an entry in a `group`,
+   * only the sentence after the dash, shared by the whole group.
    */
   reason?: string;
+  /**
+   * Entries left out for the same reason, reported as ONE warning that names
+   * them all — every file a full media store turned away.
+   */
+  group?: string;
 }
 
 /**
@@ -153,8 +163,8 @@ export class RepoEntryGate {
    * same road as one over the cap: its references are removed from the deck
    * (`skippedPaths`) and its warning names the slides that used it.
    */
-  skip(name: string, bytes: number, path: string, sentence: string): void {
-    this.skipped.push({ path, name, bytes, reason: sentence });
+  skip(name: string, bytes: number, path: string, sentence: string, group?: string): void {
+    this.skipped.push({ path, name, bytes, reason: sentence, ...(group ? { group } : {}) });
   }
 
   /** The zip paths of the entries left out so far. */
@@ -163,16 +173,37 @@ export class RepoEntryGate {
   }
 
   /**
-   * One sentence per entry left out, naming the slides that used it where the
-   * importer found any: `Slide 3: Skipped lecture.mp4 (40 MB) — …`.
+   * One sentence per entry left out — or per group, naming every entry in it —
+   * with the slides that used it where the importer found any:
+   * `Slide 3: Skipped lecture.mp4 (40 MB) — …`, or
+   * `Slides 2, 5: Skipped a.mp4 (5 MB), b.mp4 (1 MB) — …`.
    */
   warnings(slidesByPath: ReadonlyMap<string, readonly string[]> = new Map()): string[] {
-    return this.skipped.map(entry => {
-      const sentence = entry.reason ?? repoFileSkippedWarning(entry.name, entry.bytes);
-      const slides = slidesByPath.get(entry.path) ?? [];
-      if (slides.length === 0) return sentence;
-      return `${slides.length === 1 ? 'Slide' : 'Slides'} ${slides.join(', ')}: ${sentence}`;
-    });
+    const withSlides = (sentence: string, slides: readonly string[]) =>
+      slides.length === 0
+        ? sentence
+        : `${slides.length === 1 ? 'Slide' : 'Slides'} ${slides.join(', ')}: ${sentence}`;
+
+    const groups = new Map<string, SkippedEntry[]>();
+    for (const entry of this.skipped) {
+      if (entry.group) groups.set(entry.group, [...(groups.get(entry.group) ?? []), entry]);
+    }
+
+    const warnings: string[] = [];
+    for (const entry of this.skipped) {
+      if (!entry.group) {
+        const sentence = entry.reason ?? repoFileSkippedWarning(entry.name, entry.bytes);
+        warnings.push(withSlides(sentence, slidesByPath.get(entry.path) ?? []));
+        continue;
+      }
+      const members = groups.get(entry.group);
+      // The whole group is one warning, where its first member was met.
+      if (!members || members[0] !== entry) continue;
+      const names = members.map(m => `${m.name} (${formatMegabytes(m.bytes)})`).join(', ');
+      const slides = [...new Set(members.flatMap(m => slidesByPath.get(m.path) ?? []))];
+      warnings.push(withSlides(`Skipped ${names} — ${entry.reason ?? ''}`, slides));
+    }
+    return warnings;
   }
 }
 

@@ -108,7 +108,10 @@ function fakeEntry(
   };
 }
 
-/** Stores everything but `lecture.mp4`, which the quota refuses. */
+/**
+ * Stores everything but `lecture.mp4`, which the quota refuses, and
+ * `broken.mp4`, whose write fails for another reason.
+ */
 function mockPut(log: string[]) {
   const put =
     (filename: string): PutImportMedia =>
@@ -120,6 +123,7 @@ function mockPut(log: string[]) {
           code: 'QUOTA_EXCEEDED',
         });
       }
+      if (filename === 'broken.mp4') throw new Error('socket hang up');
       const mediaId = filename === 'intro.mp4' ? ID_A : ID_C;
       return { mediaId, ref: `media://${mediaId}` };
     };
@@ -135,7 +139,7 @@ test.describe('placing ZIP entries (media storage mocked)', () => {
     const errors: string[] = [];
     const entries = [
       fakeEntry(log, 'media/a/intro.mp4', 3 * MB),
-      fakeEntry(log, 'media/b/lecture.mp4', 5 * MB),
+      fakeEntry(log, 'media/b/broken.mp4', 5 * MB),
       fakeEntry(log, 'media/c/outro.mp4', 1 * MB),
     ];
 
@@ -159,8 +163,8 @@ test.describe('placing ZIP entries (media storage mocked)', () => {
     expect(log).toEqual([
       'inflate intro.mp4',
       `put intro.mp4 ${3 * MB}`,
-      'inflate lecture.mp4',
-      `put lecture.mp4 ${5 * MB}`,
+      'inflate broken.mp4',
+      `put broken.mp4 ${5 * MB}`,
       'inflate outro.mp4',
       `put outro.mp4 ${1 * MB}`,
     ]);
@@ -172,19 +176,55 @@ test.describe('placing ZIP entries (media storage mocked)', () => {
     ]);
 
     // Refused: through the gate, so the deck drops its references and the
-    // warning names the slides that used it.
-    expect(errors).toEqual(['lecture.mp4']);
-    expect(gate.skippedPaths()).toEqual(new Set(['media/b/lecture.mp4']));
-    const [warning] = gate.warnings(new Map([['media/b/lecture.mp4', ['4']]]));
-    // A full quota says what the server says: who to contact.
-    expect(warning).toBe(
-      "Slide 4: Skipped lecture.mp4 (5 MB) — This class's media storage is full. Contact hello@classmoji.io to upgrade."
-    );
-    expect(warning).not.toContain('QUOTA_EXCEEDED');
-    expect(resolveMediaRef('media/b/lecture.mp4', new Map(), gate.skippedPaths())).toEqual({
+    // warning names the slides that used it — never the upstream message.
+    expect(errors).toEqual(['broken.mp4']);
+    expect(gate.skippedPaths()).toEqual(new Set(['media/b/broken.mp4']));
+    expect(gate.warnings(new Map([['media/b/broken.mp4', ['4']]]))).toEqual([
+      'Slide 4: Skipped broken.mp4 (5 MB) — media storage could not take it (the upload failed)',
+    ]);
+    expect(resolveMediaRef('media/b/broken.mp4', new Map(), gate.skippedPaths())).toEqual({
       kind: 'skipped',
-      path: 'media/b/lecture.mp4',
+      path: 'media/b/broken.mp4',
     });
+  });
+
+  test('a full media store: every later media-bound entry is left out uninflated, in one warning', async () => {
+    const log: string[] = [];
+    const put = mockPut(log);
+    const gate = new RepoEntryGate();
+    const limits = new ImportLimits();
+    const entries = [
+      fakeEntry(log, 'media/a/lecture.mp4', 5 * MB),
+      fakeEntry(log, 'media/b/outro.mp4', 1 * MB),
+      // Not bound for media: the repository still takes it.
+      fakeEntry(log, 'img/logo.png', 1 * MB),
+      fakeEntry(log, 'media/c/intro.mp4', 2 * MB),
+    ];
+
+    const placed = [];
+    for (const entry of entries) {
+      placed.push(
+        await placeImportEntry({ entry, capability: PRO, gate, limits, put: put(entry.filename) })
+      );
+    }
+
+    expect(placed.map(p => p.kind)).toEqual(['skipped', 'skipped', 'repo', 'skipped']);
+    expect(log).toEqual(['inflate lecture.mp4', `put lecture.mp4 ${5 * MB}`, 'inflate logo.png']);
+    expect(gate.skippedPaths()).toEqual(
+      new Set(['media/a/lecture.mp4', 'media/b/outro.mp4', 'media/c/intro.mp4'])
+    );
+    // One warning, saying what the server says: who to contact.
+    const warnings = gate.warnings(
+      new Map([
+        ['media/a/lecture.mp4', ['4']],
+        ['media/c/intro.mp4', ['1', '4']],
+      ])
+    );
+    expect(warnings).toEqual([
+      'Slides 4, 1: Skipped lecture.mp4 (5 MB), outro.mp4 (1 MB), intro.mp4 (2 MB) — ' +
+        "This class's media storage is full. Contact hello@classmoji.io to upgrade.",
+    ]);
+    expect(warnings[0]).not.toContain('QUOTA_EXCEEDED');
   });
 
   test('an entry declared over the per-file media cap is never inflated', async () => {
