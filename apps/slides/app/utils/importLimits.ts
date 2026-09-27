@@ -1,12 +1,15 @@
 /**
- * importLimits.ts — the one size cap for a slides.com ZIP import.
+ * importLimits.ts — the one size cap for a slides.com ZIP import, read by the
+ * import screen (the dropzone's check and its hint) and the import endpoint
+ * (the metered body read and the size check).
  *
- * Shared by the import screen (the dropzone's own check and its hint) and the
- * import endpoint (the metered body read and the size check), which used to
- * carry a literal each. Browser-safe: no imports.
+ * TEMPORARY local values: `@classmoji/utils/repo-limits` exports the shared
+ * pair on the services slice (feat/media-p3-review-services). AFTER THE MERGE,
+ * replace everything below this comment with ONE line:
  *
- * TODO(media P3 merge): re-export `SLIDES_IMPORT_MAX_BYTES` and its label from
- * `@classmoji/utils` once that lands, so every app reads one constant.
+ *   export { SLIDES_IMPORT_MAX_BYTES, SLIDES_IMPORT_MAX_LABEL } from '@classmoji/utils/repo-limits';
+ *
+ * Same values (150 MiB, `150 MB`). Browser-safe: no imports.
  */
 
 /** The largest ZIP the importer accepts. */
