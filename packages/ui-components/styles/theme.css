@@ -58,6 +58,7 @@
   --color-panel-hover: var(--panel-hover);
   --color-sidebar: var(--sidebar);
   --color-nav-hover: var(--nav-hover);
+  --color-sidebar-hover: var(--sidebar-hover);
 
   /* Accent (driven by Tweaks panel) */
   --color-accent: var(--accent);

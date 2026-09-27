@@ -51,6 +51,10 @@
   --ink-4: #8a8d97;
 
   --nav-hover: #eef1f8;
+  /* Sidebar item hover. --nav-hover is ~3% off the white sidebar and reads as
+     no hover at all. A translucent ink wash instead sits on whatever --sidebar
+     is, so it stays visible under the background presets and glass mode. */
+  --sidebar-hover: rgba(20, 21, 26, 0.08);
   --bar-track: #e4e8f1;
   --chip-neutral-bg: #eef1f7;
   --chip-neutral-border: #d8dde8;
@@ -138,6 +142,7 @@ html[data-theme='dark'] {
   --ink-3: #9398a6;
   --ink-4: #767c8c;
   --nav-hover: #1f2333;
+  --sidebar-hover: rgba(241, 242, 246, 0.08);
   --bar-track: #252a3b;
   --chip-neutral-bg: #242839;
   --chip-neutral-border: #323648;
