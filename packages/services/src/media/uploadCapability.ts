@@ -14,7 +14,7 @@
  */
 
 import getPrisma from '@classmoji/database';
-import { REPO_REST_MAX_BYTES } from '@classmoji/utils/repo-limits';
+import { REPO_REST_MAX_BYTES } from '@classmoji/utils';
 import { canDeliverContent, uploadFileTypes } from '../classmoji/contentDelivery.service.ts';
 import { getProStateForClassroomId } from '../classmoji/subscription.service.ts';
 import { isMediaConfigured } from './mediaConfig.ts';

@@ -14,9 +14,8 @@ vi.mock('@classmoji/database', () => ({
   default: () => ({ mediaObject: { findMany: (...a: unknown[]) => findMany(...a) } }),
 }));
 
-const { billedBytes, listReadyMedia, liveRowsWhere, reservationCutoff } = await import(
-  '../mediaLookup.ts'
-);
+const { billedBytes, listReadyMedia, liveRowsWhere, reservationCutoff } =
+  await import('../mediaLookup.ts');
 const { RESERVATION_WINDOW_MS } = await import('../mediaQuota.ts');
 
 describe('liveRowsWhere', () => {
@@ -52,9 +51,9 @@ describe('liveRowsWhere', () => {
 
 describe('billedBytes', () => {
   it('bills the original while it is there', () => {
-    expect(
-      billedBytes({ size_bytes: 100n, rendition_bytes: 40n, original_deleted_at: null })
-    ).toBe(100);
+    expect(billedBytes({ size_bytes: 100n, rendition_bytes: 40n, original_deleted_at: null })).toBe(
+      100
+    );
   });
 
   it('bills the rendition once the original is gone', () => {

@@ -1,10 +1,12 @@
 import getPrisma from '@classmoji/database';
 import { ClassmojiService } from '@classmoji/services';
+/* eslint-disable import/no-unresolved -- a package `exports` subpath, which this resolver does not read */
 import {
   UploadTooLargeError,
   declaredBodyTooLarge,
   readLimitedBody,
 } from '@classmoji/utils/upload-limit';
+/* eslint-enable import/no-unresolved */
 import {
   assertClassroomAccess,
   assertClassroomEntryAllowed,

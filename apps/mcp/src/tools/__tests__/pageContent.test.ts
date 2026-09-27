@@ -1313,9 +1313,8 @@ describe('page_asset_upload', () => {
   });
 
   it('points a file the storage router sends to media at file_upload_start', async () => {
-    const { MediaRoutingError } = await import(
-      '../../../../../packages/services/src/media/MediaRoutingError.ts'
-    );
+    const { MediaRoutingError } =
+      await import('../../../../../packages/services/src/media/MediaRoutingError.ts');
     // Media is only ever on for a classroom the delivery layer serves, which is
     // one whose repository takes any file type.
     mocks.uploadFileTypes.mockReturnValueOnce('any');

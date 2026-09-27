@@ -11,7 +11,7 @@ import {
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { randomUUID } from 'node:crypto';
 import getPrisma from '@classmoji/database';
-import { REPO_REST_MAX_BYTES } from '@classmoji/utils/repo-limits';
+import { REPO_REST_MAX_BYTES } from '@classmoji/utils';
 // The delivery layer's own predicate, not a copy of it: "can this classroom's
 // references be signed" has one definition and media must not grow a second.
 // No cycle — contentDelivery reaches media through `mediaLookup.ts`, which

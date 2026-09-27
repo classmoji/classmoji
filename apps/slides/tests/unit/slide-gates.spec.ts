@@ -515,7 +515,10 @@ test.describe('the upload endpoints', () => {
 
   test('a deck image upload asks the storage router before it commits anything', () => {
     const start = VIEWER_SOURCE.indexOf("if (intent === 'upload-image') {");
-    const intent = VIEWER_SOURCE.slice(start, VIEWER_SOURCE.indexOf("if (intent === 'save-snippet')"));
+    const intent = VIEWER_SOURCE.slice(
+      start,
+      VIEWER_SOURCE.indexOf("if (intent === 'save-snippet')")
+    );
     const routed = intent.indexOf('ClassmojiService.media.assertRepoTarget(slide.classroom');
     const commit = intent.indexOf('ContentService.upload(');
 

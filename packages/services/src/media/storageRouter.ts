@@ -32,7 +32,7 @@
  * here: it does not belong in the repository just because media is full.
  */
 
-import { formatMegabytes } from '@classmoji/utils/repo-limits';
+import { formatMegabytes } from '@classmoji/utils';
 import { validateFile, type FileTypePolicy } from '../content/utils/validateFile.ts';
 import { extensionOf, filenameRefusal, kindForExt, type MediaKind } from './mediaKinds.ts';
 import { PER_FILE_MAX_BYTES } from './mediaQuota.ts';
@@ -135,6 +135,8 @@ export function storageTargetFor(
   const tooLarge = `This file is larger than the ${formatMegabytes(cap.repoMaxBytes)} your course repository accepts.`;
   return refused(
     'TOO_LARGE_FOR_REPO',
-    cap.isPro ? tooLarge : `${tooLarge} Pro stores files up to ${formatGigabytes(PER_FILE_MAX_BYTES)}.`
+    cap.isPro
+      ? tooLarge
+      : `${tooLarge} Pro stores files up to ${formatGigabytes(PER_FILE_MAX_BYTES)}.`
   );
 }
