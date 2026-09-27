@@ -46,7 +46,14 @@ import {
 } from '@classmoji/utils/upload-limit';
 import { SandpackRenderer } from '@classmoji/ui-components/sandpack';
 import { uploadMultipart } from '@classmoji/ui-components/upload';
-import { deckAssetTarget, deckUploadErrorMessage, mediaUploadMessage } from '~/utils/mediaUpload';
+import {
+  UploadReroute,
+  afterMediaFailure,
+  deckUploadErrorMessage,
+  editorMediaOptions,
+  placeDeckAsset,
+  type UploadFailure,
+} from '~/utils/mediaUpload';
 import { playableMediaUrl } from '~/utils/mediaClient';
 import { canonicalMediaUrls, deliveryHostOf } from '~/utils/mediaRefs';
 import { useToast, useUser } from '~/hooks';
@@ -2632,43 +2639,56 @@ export default function SlideViewer() {
   // Routed first: a file the storage router sends to media (a Pro video, or
   // anything over the repository's cap on a classroom with media) goes straight
   // there from the browser and is placed by its playable URL; a refusal is the
-  // router's own sentence. Everything else takes the deck's repository upload,
-  // which asks the router again and answers `USE_MEDIA` if this was wrong.
+  // router's own sentence. Everything else takes the deck's repository upload.
+  // The capability can be stale, so the server's answer wins, ONCE
+  // (`placeDeckAsset`): the repository answering `USE_MEDIA` sends the file to
+  // media, and media turning away a file the repository can take (not Pro any
+  // more, media unavailable, `USE_REPO`) sends it to the repository. A full
+  // media quota is refused with the server's sentence and never falls back.
+  // `first` lets a caller that already knows skip the router.
   const handleImageUpload = useCallback(
-    async (file: File): Promise<string> => {
-      const target = uploadCapability
-        ? deckAssetTarget(uploadCapability, file)
-        : ({ kind: 'repo' } as const);
-      if (target.kind === 'refused') throw new Error(target.message);
-      if (target.kind === 'media') {
-        try {
-          const { ref } = await uploadMultipart({
-            file,
-            classroomId: slide.classroom_id,
-            endpoints: { base: '/api/media' },
-          });
-          return await playableMediaUrl(slide.id, ref);
-        } catch (error: unknown) {
-          throw new Error(mediaUploadMessage(error as { code?: string }) ?? 'Upload cancelled.');
-        }
-      }
+    async (file: File, first?: 'repo' | 'media'): Promise<string> =>
+      placeDeckAsset(
+        file,
+        uploadCapability,
+        {
+          toMedia: async mediaFile => {
+            try {
+              const { ref } = await uploadMultipart({
+                file: mediaFile,
+                classroomId: slide.classroom_id,
+                options: editorMediaOptions(mediaFile),
+                endpoints: { base: '/api/media' },
+              });
+              return await playableMediaUrl(slide.id, ref);
+            } catch (error: unknown) {
+              const outcome = afterMediaFailure(
+                error as UploadFailure,
+                mediaFile,
+                uploadCapability
+              );
+              if (outcome.kind === 'repo') throw new UploadReroute('repo');
+              throw new Error(outcome.message ?? 'Upload cancelled.');
+            }
+          },
+          toRepo: repoFile =>
+            new Promise<string>((resolve, reject) => {
+              const formData = new FormData();
+              formData.append('intent', 'upload-image');
+              formData.append('file', repoFile);
 
-      return new Promise<string>((resolve, reject) => {
-        const formData = new FormData();
-        formData.append('intent', 'upload-image');
-        formData.append('file', file);
+              fetcher.submit(formData, {
+                method: 'post',
+                encType: 'multipart/form-data',
+              });
 
-        fetcher.submit(formData, {
-          method: 'post',
-          encType: 'multipart/form-data',
-        });
-
-        // We'll resolve this in the useEffect when we get the response
-        // Store the resolve/reject for later
-        window.__imageUploadResolve = resolve;
-        window.__imageUploadReject = reject;
-      });
-    },
+              // Settled by the effect below when the response arrives.
+              window.__imageUploadResolve = resolve;
+              window.__imageUploadReject = reject;
+            }),
+        },
+        first
+      ),
     [fetcher, uploadCapability, slide.classroom_id, slide.id]
   );
 
@@ -2677,9 +2697,11 @@ export default function SlideViewer() {
     if (fetcher.data?.intent === 'upload-image') {
       if (fetcher.data.success && fetcher.data.url) {
         window.__imageUploadResolve?.(fetcher.data.url);
+      } else if (fetcher.data.error === 'USE_MEDIA') {
+        // The file belongs in media: `placeDeckAsset` sends it there, once.
+        window.__imageUploadReject?.(new UploadReroute('media'));
       } else if (fetcher.data.error) {
-        // The server's sentence, never its code: a `USE_MEDIA` refusal carries
-        // what it means in `message`.
+        // The server's sentence, never its code.
         window.__imageUploadReject?.(new Error(deckUploadErrorMessage(fetcher.data)));
       }
       // Clean up

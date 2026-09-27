@@ -156,9 +156,17 @@ export function warnsWithoutOptimising(filename: string, options: VideoOptions):
 /** The parts of a `MultipartUploadError` a message is built from. */
 export interface UploadFailure {
   code?: string;
+  /** The server's sentence, when it sent one. */
   message?: string;
   usedBytes?: number;
   quotaBytes?: number;
+}
+
+/** The server's own sentence, or null when all it said was a status. */
+function serverSentence(failure: UploadFailure): string | null {
+  const message = failure.message?.trim();
+  if (!message || /^Upload failed \(\d+\)\.$/.test(message)) return null;
+  return message;
 }
 
 /** Binary units, labelled as a file browser labels them. */
@@ -188,13 +196,22 @@ export function mediaUploadMessage(error: UploadFailure | null | undefined): str
     case 'NOT_CONFIGURED':
       return 'Media storage is not available right now.';
     case 'PRO_REQUIRED':
-      return 'Storing files this large needs a Pro classroom.';
+      return 'Media storage needs a Pro classroom.';
     case 'DELIVERY_REQUIRED':
       return "This class isn't set up to serve content yet, so media can't be uploaded.";
-    case 'QUOTA_EXCEEDED':
-      return error.usedBytes !== undefined && error.quotaBytes !== undefined
-        ? `Not enough storage — ${formatSize(error.usedBytes)} of ${formatSize(error.quotaBytes)} is already in use. Delete something from Media and try again.`
-        : 'Not enough media storage left. Delete something from Media and try again.';
+    case 'USE_REPO':
+      return 'This file goes in the course repository. Reload the page and try again.';
+    case 'QUOTA_EXCEEDED': {
+      // The server's sentence as it is: it says what to do (who to contact).
+      // Ours only when it sent none.
+      const sentence = serverSentence(error);
+      if (sentence) return sentence;
+      const usage =
+        error.usedBytes !== undefined && error.quotaBytes !== undefined
+          ? ` (${formatSize(error.usedBytes)} of ${formatSize(error.quotaBytes)} in use)`
+          : '';
+      return `This class's media storage is full${usage}. Contact hello@classmoji.io to upgrade.`;
+    }
     case 'FILE_TOO_LARGE':
       return 'That file is over the limit for a single upload.';
     case 'KIND_NOT_ALLOWED':
@@ -211,6 +228,137 @@ export function mediaUploadMessage(error: UploadFailure | null | undefined): str
     default:
       return 'The upload could not finish. Check your connection and try again.';
   }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// When the server disagrees with the browser's routing
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * What a failed MEDIA upload means for the file, given what the browser knows.
+ *
+ * The capability the editor routed with can be stale (the class may have lapsed
+ * from Pro, or its delivery setup changed, since the page was opened), and the
+ * server is the one that decides. So:
+ *
+ *   - `USE_REPO` — the router keeps this file in the repository: go there.
+ *   - `PRO_REQUIRED`, `DELIVERY_REQUIRED`, `NOT_CONFIGURED` — media cannot take
+ *     it here. A file that fits the repository goes there; one that does not
+ *     is refused with the router's own sentence for that case (what Pro
+ *     stores, or that media is unavailable), never a Pro pitch for a file the
+ *     repository could have taken.
+ *   - `QUOTA_EXCEEDED` — refused with the server's sentence as it is, and never
+ *     sent to the repository instead: a full quota is not a reason to put a
+ *     class's videos in git.
+ *   - anything else — refused with its sentence (null for a cancel).
+ */
+export function afterMediaFailure(
+  failure: UploadFailure,
+  file: FileFacts,
+  capability: UploadCapability | null | undefined
+): { kind: 'repo' } | { kind: 'refused'; message: string | null } {
+  switch (failure.code) {
+    case 'USE_REPO':
+      return { kind: 'repo' };
+    case 'PRO_REQUIRED':
+    case 'DELIVERY_REQUIRED':
+    case 'NOT_CONFIGURED': {
+      const repoMaxBytes = capability?.repoMaxBytes ?? REPO_REST_MAX_BYTES;
+      if (file.size <= repoMaxBytes) return { kind: 'repo' };
+      // The router's answer for this file on a class without media: the Pro
+      // note when the server says the class is not Pro, "media is unavailable"
+      // otherwise.
+      const target = storageTargetFor(
+        {
+          repoMaxBytes,
+          repoFileTypes: capability?.repoFileTypes ?? 'any',
+          isPro: failure.code === 'PRO_REQUIRED' ? false : (capability?.isPro ?? true),
+          media: null,
+        },
+        { name: file.name, size: file.size }
+      );
+      return {
+        kind: 'refused',
+        message: target.kind === 'refused' ? target.message : mediaUploadMessage(failure),
+      };
+    }
+    default:
+      return { kind: 'refused', message: mediaUploadMessage(failure) };
+  }
+}
+
+/** The sentence a failed media upload shows, for a caller with nowhere else to send it. */
+export function mediaFailureMessage(
+  failure: UploadFailure,
+  file: FileFacts,
+  capability: UploadCapability | null | undefined
+): string | null {
+  const outcome = afterMediaFailure(failure, file, capability);
+  return outcome.kind === 'refused' ? outcome.message : mediaUploadMessage({ code: 'USE_REPO' });
+}
+
+/** The server sent the file to the other store. */
+export class UploadReroute extends Error {
+  readonly to: 'repo' | 'media';
+  constructor(to: 'repo' | 'media') {
+    super(`Upload belongs in ${to}.`);
+    this.name = 'UploadReroute';
+    this.to = to;
+  }
+}
+
+/** The two ways a deck asset can travel. Each throws `UploadReroute` to hand the file over. */
+export interface DeckUploadPorts {
+  /** The deck's repository upload. `UploadReroute('media')` on `USE_MEDIA`. */
+  toRepo(file: File): Promise<string>;
+  /** Multipart to media. `UploadReroute('repo')` when `afterMediaFailure` says so. */
+  toMedia(file: File): Promise<string>;
+}
+
+/** The sentence when the two stores keep handing the file back to each other. */
+const NOWHERE_MESSAGE = 'This file could not be stored. Reload the page and try again.';
+
+/**
+ * Upload one deck asset where it belongs, and follow the server ONCE.
+ *
+ * The first destination is the router's (`deckAssetTarget`), or `first` when
+ * the caller already knows (media refused a file that fits the repository).
+ * A server that disagrees — the repository answering `USE_MEDIA`, media
+ * answering `USE_REPO` or that it cannot take a file the repository can — gets
+ * the file on the other side; a second disagreement is refused rather than
+ * chased back. Resolves with the URL the editor places.
+ */
+export async function placeDeckAsset(
+  file: File,
+  capability: UploadCapability | null | undefined,
+  ports: DeckUploadPorts,
+  first?: 'repo' | 'media'
+): Promise<string> {
+  let to = first;
+  if (!to) {
+    const target = deckAssetTarget(capability, file);
+    if (target.kind === 'refused') throw new Error(target.message);
+    to = target.kind;
+  }
+  const send = (where: 'repo' | 'media') =>
+    where === 'repo' ? ports.toRepo(file) : ports.toMedia(file);
+
+  try {
+    return await send(to);
+  } catch (error: unknown) {
+    if (!(error instanceof UploadReroute) || error.to === to) throw error;
+    try {
+      return await send(error.to);
+    } catch (second: unknown) {
+      if (second instanceof UploadReroute) throw new Error(NOWHERE_MESSAGE);
+      throw second;
+    }
+  }
+}
+
+/** The processing choices a video placed straight from the editor gets: the dialog's defaults. */
+export function editorMediaOptions(file: Pick<FileFacts, 'name'>): VideoOptions | undefined {
+  return isVideoFile(file) ? { ...DEFAULT_VIDEO_OPTIONS } : undefined;
 }
 
 /**

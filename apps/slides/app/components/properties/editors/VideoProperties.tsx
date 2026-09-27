@@ -118,6 +118,29 @@ export default function VideoProperties({ element }: { element: HTMLVideoElement
     [placeMedia]
   );
 
+  /**
+   * The deck's own upload, repository first. It follows the server once: a
+   * repository that answers "this belongs in media" (the capability was stale)
+   * sends it there with the dialog's default choices.
+   */
+  const uploadToRepo = useCallback(
+    async (file: File) => {
+      if (!onUploadAsset) return;
+      setRepoUploading(true);
+      try {
+        applySrc(await onUploadAsset(file, 'repo'));
+        toast.success('Video uploaded.');
+      } catch (err: unknown) {
+        toast.error(
+          deckUploadErrorMessage({ error: err instanceof Error ? err.message : String(err) })
+        );
+      } finally {
+        setRepoUploading(false);
+      }
+    },
+    [onUploadAsset, applySrc, toast]
+  );
+
   // A file was picked: route it, then upload it where it belongs.
   const handleFileChosen = useCallback(
     async (file: File | undefined) => {
@@ -132,21 +155,19 @@ export default function VideoProperties({ element }: { element: HTMLVideoElement
         setDialogFile(file);
         return;
       }
-
-      if (!onUploadAsset) return;
-      setRepoUploading(true);
-      try {
-        applySrc(await onUploadAsset(file));
-        toast.success('Video uploaded.');
-      } catch (err: unknown) {
-        toast.error(
-          deckUploadErrorMessage({ error: err instanceof Error ? err.message : String(err) })
-        );
-      } finally {
-        setRepoUploading(false);
-      }
+      await uploadToRepo(file);
     },
-    [uploadCapability, onUploadAsset, applySrc, toast]
+    [uploadCapability, uploadToRepo, toast]
+  );
+
+  // Media turned the file away and the repository can take it: close the
+  // dialog and upload it there.
+  const handleUseRepo = useCallback(
+    (file: File) => {
+      setDialogFile(null);
+      void uploadToRepo(file);
+    },
+    [uploadToRepo]
   );
 
   // Update autoplay
@@ -324,8 +345,10 @@ export default function VideoProperties({ element }: { element: HTMLVideoElement
           <VideoUploadDialog
             file={dialogFile}
             classroomId={classroomId}
+            capability={uploadCapability}
             onClose={() => setDialogFile(null)}
             onUploaded={handleMediaUploaded}
+            onUseRepo={onUploadAsset ? handleUseRepo : undefined}
           />
           <MediaPickerDialog
             open={pickerOpen}

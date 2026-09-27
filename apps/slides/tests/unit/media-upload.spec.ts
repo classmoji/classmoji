@@ -19,7 +19,13 @@ import { test, expect } from '@playwright/test';
 import { MEDIA_KINDS } from '../../../../packages/services/src/media/mediaKinds.ts';
 import {
   DEFAULT_VIDEO_OPTIONS,
+  UploadReroute,
   VIDEO_FILE_ACCEPT,
+  afterMediaFailure,
+  editorMediaOptions,
+  mediaFailureMessage,
+  placeDeckAsset,
+  type DeckUploadPorts,
   applyVideoOption,
   canDropOriginal,
   deckAssetTarget,
@@ -168,7 +174,10 @@ test.describe('a Pro classroom whose media is unavailable (MEDIA_UNAVAILABLE)', 
       replaceFile: source('../../app/routes/$classroomSlug.$slideId.replace/route.tsx'),
     };
     expect(surfaces.video).toContain('toast.error(target.message);');
-    expect(surfaces.deckImage).toContain(
+    // The deck editor routes through `placeDeckAsset`, which throws the
+    // router's sentence for a refusal.
+    expect(surfaces.deckImage).toContain('placeDeckAsset(');
+    expect(source('../../app/utils/mediaUpload.ts')).toContain(
       "if (target.kind === 'refused') throw new Error(target.message);"
     );
     expect(surfaces.newFile).toContain("if (target.kind === 'refused') return target.message;");
@@ -238,10 +247,27 @@ test.describe('what an uploader is told', () => {
     expect(mediaUploadMessage({ code: 'ABORTED' })).toBeNull();
   });
 
-  test('a quota refusal names the numbers', () => {
-    expect(
-      mediaUploadMessage({ code: 'QUOTA_EXCEEDED', usedBytes: 9 * GB, quotaBytes: 10 * GB })
-    ).toContain('9.0 GB of 10 GB');
+  test('a quota refusal is the server’s sentence, as it wrote it', () => {
+    const sentence =
+      "This class's media storage is full. Contact hello@classmoji.io to upgrade to more storage.";
+    expect(mediaUploadMessage({ code: 'QUOTA_EXCEEDED', message: sentence })).toBe(sentence);
+    // No sentence (or only a status): ours, with the numbers and who to ask.
+    for (const message of [undefined, 'Upload failed (409).']) {
+      const fallback = mediaUploadMessage({
+        code: 'QUOTA_EXCEEDED',
+        message,
+        usedBytes: 9 * GB,
+        quotaBytes: 10 * GB,
+      });
+      expect(fallback).toContain('9.0 GB of 10 GB');
+      expect(fallback).toContain('hello@classmoji.io');
+    }
+  });
+
+  test('USE_REPO is not a connection problem', () => {
+    const message = mediaUploadMessage({ code: 'USE_REPO' }) ?? '';
+    expect(message).toContain('course repository');
+    expect(message).not.toMatch(/connection/i);
   });
 
   test('never the raw code', () => {
@@ -249,6 +275,8 @@ test.describe('what an uploader is told', () => {
       'NOT_CONFIGURED',
       'PRO_REQUIRED',
       'DELIVERY_REQUIRED',
+      'USE_REPO',
+      'QUOTA_EXCEEDED',
       'FILE_TOO_LARGE',
       'KIND_NOT_ALLOWED',
       'SIZE_MISMATCH',
@@ -278,6 +306,170 @@ test.describe('what an uploader is told', () => {
     expect(deckUploadErrorMessage({ error: 'That file type is not allowed.' })).toBe(
       'That file type is not allowed.'
     );
+  });
+});
+
+test.describe('when media turns a file away (afterMediaFailure)', () => {
+  const video = (size: number) => ({ name: 'talk.mp4', size });
+
+  test('USE_REPO: the repository', () => {
+    expect(afterMediaFailure({ code: 'USE_REPO' }, video(2 * MB), PRO)).toEqual({ kind: 'repo' });
+  });
+
+  test('not Pro / no delivery / not configured, and the file fits: the repository', () => {
+    for (const code of ['PRO_REQUIRED', 'DELIVERY_REQUIRED', 'NOT_CONFIGURED']) {
+      expect(afterMediaFailure({ code }, video(20 * MB), PRO), code).toEqual({ kind: 'repo' });
+      // A lookup that failed (no capability) judges by the repository's cap.
+      expect(afterMediaFailure({ code }, video(20 * MB), null), code).toEqual({ kind: 'repo' });
+    }
+  });
+
+  test('…and it does not fit: the router’s sentence for that case, never the old Pro line', () => {
+    const notPro = afterMediaFailure({ code: 'PRO_REQUIRED' }, video(40 * MB), PRO);
+    expect(notPro.kind).toBe('refused');
+    if (notPro.kind === 'refused') {
+      expect(notPro.message).toContain('course repository');
+      expect(notPro.message).toContain('Pro stores files up to');
+    }
+    const unavailable = afterMediaFailure({ code: 'DELIVERY_REQUIRED' }, video(40 * MB), PRO);
+    expect(unavailable.kind).toBe('refused');
+    if (unavailable.kind === 'refused') {
+      expect(unavailable.message).toContain("Media storage isn't available");
+    }
+    for (const outcome of [notPro, unavailable]) {
+      if (outcome.kind === 'refused') {
+        expect(outcome.message).not.toContain('Storing files this large');
+      }
+    }
+  });
+
+  test('a full quota is refused with the server’s sentence, and never goes to the repository', () => {
+    const sentence = 'Contact hello@classmoji.io to upgrade.';
+    for (const size of [2 * MB, 40 * MB]) {
+      expect(
+        afterMediaFailure({ code: 'QUOTA_EXCEEDED', message: sentence }, video(size), PRO)
+      ).toEqual({ kind: 'refused', message: sentence });
+    }
+  });
+
+  test('a cancel says nothing', () => {
+    expect(afterMediaFailure({ code: 'ABORTED' }, video(MB), PRO)).toEqual({
+      kind: 'refused',
+      message: null,
+    });
+  });
+
+  test('a file slide with nowhere else to go gets the router’s sentence', () => {
+    const message = mediaFailureMessage(
+      { code: 'PRO_REQUIRED' },
+      { name: 'deck.pdf', size: 40 * MB },
+      FREE
+    );
+    expect(message).toContain('Pro stores files up to');
+  });
+});
+
+test.describe('placing a deck asset, following the server once (placeDeckAsset)', () => {
+  const file = (name: string, size: number) => ({ name, size }) as unknown as File;
+
+  /** Ports that answer from a script and record where the file went. */
+  function ports(script: { repo?: () => Promise<string>; media?: () => Promise<string> }) {
+    const calls: string[] = [];
+    const p: DeckUploadPorts = {
+      toRepo: async () => {
+        calls.push('repo');
+        return script.repo ? script.repo() : 'repo-url';
+      },
+      toMedia: async () => {
+        calls.push('media');
+        return script.media ? script.media() : 'media-url';
+      },
+    };
+    return { p, calls };
+  }
+
+  test('a repository that answers USE_MEDIA (stale capability) sends it to media once', async () => {
+    const { p, calls } = ports({
+      repo: async () => {
+        throw new UploadReroute('media');
+      },
+    });
+    // FREE says a small video goes to the repository; the server knows better.
+    await expect(placeDeckAsset(file('talk.mp4', 2 * MB), FREE, p)).resolves.toBe('media-url');
+    expect(calls).toEqual(['repo', 'media']);
+  });
+
+  test('media turning a fitting file away sends it to the repository once', async () => {
+    const { p, calls } = ports({
+      media: async () => {
+        throw new UploadReroute('repo');
+      },
+    });
+    await expect(placeDeckAsset(file('talk.mp4', 2 * MB), PRO, p)).resolves.toBe('repo-url');
+    expect(calls).toEqual(['media', 'repo']);
+  });
+
+  test('a second disagreement is refused, not chased', async () => {
+    const { p, calls } = ports({
+      repo: async () => {
+        throw new UploadReroute('media');
+      },
+      media: async () => {
+        throw new UploadReroute('repo');
+      },
+    });
+    await expect(placeDeckAsset(file('talk.mp4', 2 * MB), FREE, p)).rejects.toThrow(
+      'This file could not be stored'
+    );
+    expect(calls).toEqual(['repo', 'media']);
+  });
+
+  test('a refusal is thrown as it is, with no reroute', async () => {
+    const { p, calls } = ports({
+      media: async () => {
+        throw new Error('Contact hello@classmoji.io to upgrade.');
+      },
+    });
+    await expect(placeDeckAsset(file('talk.mp4', 2 * MB), PRO, p)).rejects.toThrow(
+      'Contact hello@classmoji.io'
+    );
+    expect(calls).toEqual(['media']);
+  });
+
+  test('the router refuses before anything is sent; `first` skips the router', async () => {
+    const { p, calls } = ports({});
+    await expect(placeDeckAsset(file('talk.mp4', 40 * MB), FREE, p)).rejects.toThrow(
+      'course repository'
+    );
+    expect(calls).toEqual([]);
+    await expect(placeDeckAsset(file('talk.mp4', 2 * MB), PRO, p, 'repo')).resolves.toBe(
+      'repo-url'
+    );
+    expect(calls).toEqual(['repo']);
+  });
+
+  test('a video sent from the editor carries the dialog’s default choices', () => {
+    expect(editorMediaOptions({ name: 'talk.mkv' })).toEqual(DEFAULT_VIDEO_OPTIONS);
+    expect(editorMediaOptions({ name: 'poster.png' })).toBeUndefined();
+  });
+});
+
+test.describe('the reroute, structurally', () => {
+  const VIEWER = source('../../app/routes/$slideId/route.tsx');
+  const DIALOG = source('../../app/components/media/VideoUploadDialog.tsx');
+  const PANEL = source('../../app/components/properties/editors/VideoProperties.tsx');
+
+  test('the deck editor turns USE_MEDIA into a reroute and a media refusal into the table', () => {
+    expect(VIEWER).toContain("fetcher.data.error === 'USE_MEDIA'");
+    expect(VIEWER).toContain("window.__imageUploadReject?.(new UploadReroute('media'));");
+    expect(VIEWER).toContain("if (outcome.kind === 'repo') throw new UploadReroute('repo');");
+  });
+
+  test('the video dialog hands a file media turned away to the repository', () => {
+    expect(DIALOG).toContain('afterMediaFailure(failure, file, capability)');
+    expect(DIALOG).toContain('onUseRepo(file);');
+    expect(PANEL).toContain('onUseRepo={onUploadAsset ? handleUseRepo : undefined}');
+    expect(PANEL).toContain("await onUploadAsset(file, 'repo')");
   });
 });
 

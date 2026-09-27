@@ -114,7 +114,7 @@ interface ElementSelectionProviderProps {
   /** The deck — what a media reference is resolved for. */
   slideId?: string | null;
   /** Commit a file into the deck's folder in the course repository → its URL. */
-  onUploadAsset?: (file: File) => Promise<string>;
+  onUploadAsset?: (file: File, first?: 'repo' | 'media') => Promise<string>;
 }
 
 /** Value provided by the ElementSelectionContext */
@@ -151,7 +151,7 @@ export interface ElementSelectionContextValue {
   uploadCapability: UploadCapability | null;
   classroomId: string | null;
   slideId: string | null;
-  onUploadAsset?: (file: File) => Promise<string>;
+  onUploadAsset?: (file: File, first?: 'repo' | 'media') => Promise<string>;
 }
 
 const ElementSelectionContext = createContext<ElementSelectionContextValue | null>(null);

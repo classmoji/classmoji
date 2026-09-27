@@ -88,7 +88,7 @@ import { isSubmissionPending } from '~/utils/pendingSubmission';
 import { MediaUploadProgress } from '~/components/media/MediaUploadProgress';
 import { useMediaUpload } from '~/hooks/useMediaUpload';
 import { useDiscardRefusedUpload } from '~/hooks/useDiscardRefusedUpload';
-import { formatGigabytes, slideFileTarget } from '~/utils/mediaUpload';
+import { formatGigabytes, mediaFailureMessage, slideFileTarget } from '~/utils/mediaUpload';
 
 /** The four things the picker offers. `import` is a link, not a form. */
 type SlideSource = 'blank' | 'file' | 'link';
@@ -620,7 +620,11 @@ export default function NewSlidePage() {
   /** Upload to media, then post the form with the uploaded object's id. */
   const submitViaMedia = async (file: File) => {
     setViaMedia(true);
-    const result = await media.start(file);
+    // A refusal in the router's words for THIS file (what Pro stores, or that
+    // media is unavailable) — or a full quota in the server's.
+    const result = await media.start(file, {}, failure => ({
+      message: mediaFailureMessage(failure, file, uploadCapability),
+    }));
     if (!result) {
       setViaMedia(false);
       return;

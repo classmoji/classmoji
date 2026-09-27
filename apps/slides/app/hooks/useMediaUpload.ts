@@ -4,7 +4,7 @@ import {
   type MediaUploadOptions,
   type MultipartUploadResult,
 } from '@classmoji/ui-components/upload';
-import { mediaUploadMessage } from '~/utils/mediaUpload';
+import { mediaUploadMessage, type UploadFailure } from '~/utils/mediaUpload';
 
 /** Where the slides app's own media routes hang. */
 const MEDIA_ENDPOINTS = { base: '/api/media' };
@@ -18,11 +18,19 @@ export interface MediaUploadState {
 }
 
 /**
+ * What a caller makes of a failed upload: the sentence to show (null says
+ * nothing), or `handled` when it has taken the file somewhere else itself.
+ */
+export type UploadFailureAnswer = { handled: true } | { message: string | null };
+
+/**
  * One media upload at a time, with progress and a cancel.
  *
  * `start` resolves with the uploaded object, or with null when the upload was
  * cancelled or failed — the failure is in `state.error`, already worded, so a
- * caller never has to put a code in front of a person. Unmounting cancels.
+ * caller never has to put a code in front of a person. `onFailure` lets the
+ * caller word it with what it knows (the file, the capability) or take the file
+ * elsewhere instead. Unmounting cancels.
  */
 export function useMediaUpload(classroomId: string | null | undefined) {
   const [state, setState] = useState<MediaUploadState>({ file: null, sentBytes: 0, error: null });
@@ -31,7 +39,11 @@ export function useMediaUpload(classroomId: string | null | undefined) {
   useEffect(() => () => controller.current?.abort(), []);
 
   const start = useCallback(
-    async (file: File, options: MediaUploadOptions = {}): Promise<MultipartUploadResult | null> => {
+    async (
+      file: File,
+      options: MediaUploadOptions = {},
+      onFailure?: (failure: UploadFailure) => UploadFailureAnswer
+    ): Promise<MultipartUploadResult | null> => {
       if (!classroomId) {
         setState({
           file: null,
@@ -57,10 +69,12 @@ export function useMediaUpload(classroomId: string | null | undefined) {
         setState({ file: null, sentBytes: 0, error: null });
         return result;
       } catch (error: unknown) {
+        const failure = error as UploadFailure;
+        const answer = onFailure?.(failure) ?? { message: mediaUploadMessage(failure) };
         setState({
           file: null,
           sentBytes: 0,
-          error: mediaUploadMessage(error as { code?: string }),
+          error: 'handled' in answer ? null : answer.message,
         });
         return null;
       } finally {
