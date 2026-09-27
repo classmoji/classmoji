@@ -100,6 +100,20 @@ export function firstDestination(
   return target;
 }
 
+/** What a failed page action or upload route answers with: a code, and maybe the sentence. */
+export type ActionFailure = { error?: unknown; message?: unknown };
+
+/**
+ * The sentence to show for a failed action: its `message` when it sent one,
+ * else its `error` — never a bare code like `USE_MEDIA` or `CLASSROOM_LOCKED`
+ * when the server said something a person can read.
+ */
+export function coverFailureMessage(data: ActionFailure | null | undefined): string | null {
+  if (!data || !data.error) return null;
+  if (typeof data.message === 'string' && data.message) return data.message;
+  return typeof data.error === 'string' ? data.error : null;
+}
+
 /** The sentence when the two stores keep handing the file back to each other. */
 const NOWHERE_MESSAGE = 'This file could not be stored. Reload the page and try again.';
 

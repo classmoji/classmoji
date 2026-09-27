@@ -1,8 +1,9 @@
-import React, { useState, useRef, useCallback, useEffect } from 'react';
+import React, { useState, useRef, useCallback } from 'react';
 import { useFetcher } from 'react-router';
-import { toast } from 'react-toastify';
+import type { UploadCapability } from '@classmoji/services/media/router';
 import useHeaderImageDrag from '~/hooks/useHeaderImageDrag.ts';
 import { usePageMedia } from './media/PageMedia.tsx';
+import { useCoverUpload } from './media/useCoverUpload.ts';
 
 /**
  * Header/banner image with Notion-style drag-to-reposition.
@@ -15,9 +16,17 @@ interface HeaderImageProps {
   position: number;
   editMode: boolean;
   pageId: string;
+  /** Where a new cover goes (`storageTargetFor`); null routes it to the repository. */
+  uploadCapability?: UploadCapability | null;
 }
 
-const HeaderImage = ({ imageUrl, position, editMode, pageId: _pageId }: HeaderImageProps) => {
+const HeaderImage = ({
+  imageUrl,
+  position,
+  editMode,
+  pageId: _pageId,
+  uploadCapability = null,
+}: HeaderImageProps) => {
   const [isHovering, setIsHovering] = useState(false);
   const [isRepositioning, setIsRepositioning] = useState(false);
   const [localPosition, setLocalPosition] = useState(position);
@@ -26,6 +35,9 @@ const HeaderImage = ({ imageUrl, position, editMode, pageId: _pageId }: HeaderIm
   const fileInputRef = useRef<HTMLInputElement>(null);
   const fetcher = useFetcher();
   const media = usePageMedia();
+  // Uploads through the storage router, and owns this fetcher's failure toast
+  // (the 409 "page changed — try again" from the cover CAS write included).
+  const cover = useCoverUpload(fetcher, uploadCapability);
   const positionBeforeReposition = useRef(position);
 
   // Sync localPosition when prop changes (e.g. after save + revalidation)
@@ -43,33 +55,14 @@ const HeaderImage = ({ imageUrl, position, editMode, pageId: _pageId }: HeaderIm
     containerRef,
   });
 
-  // Surface mutation failures — notably the 409 "page changed — try again"
-  // from the cover-image CAS write (F5); this component has no other
-  // error indicator.
-  useEffect(() => {
-    if (fetcher.state === 'idle' && fetcher.data?.error) {
-      toast.error(fetcher.data.error);
-    }
-  }, [fetcher.state, fetcher.data]);
-
   const handleFileSelect = useCallback(
     (e: React.ChangeEvent<HTMLInputElement>) => {
       const file = e.target.files?.[0];
-      if (!file) return;
-
-      const formData = new FormData();
-      formData.append('intent', 'upload-header-image');
-      formData.append('file', file);
-
-      fetcher.submit(formData, {
-        method: 'POST',
-        encType: 'multipart/form-data',
-      });
-
       // Reset input so same file can be re-selected
       if (fileInputRef.current) fileInputRef.current.value = '';
+      if (file) cover.upload(file);
     },
-    [fetcher]
+    [cover]
   );
 
   const handleStartReposition = useCallback(() => {
@@ -131,7 +124,7 @@ const HeaderImage = ({ imageUrl, position, editMode, pageId: _pageId }: HeaderIm
   if (!imageUrl) {
     if (!editMode) return null;
 
-    const uploading = fetcher.state !== 'idle';
+    const uploading = fetcher.state !== 'idle' || cover.uploading;
 
     // Edit mode: "Add cover" button with upload spinner
     return (
@@ -160,7 +153,7 @@ const HeaderImage = ({ imageUrl, position, editMode, pageId: _pageId }: HeaderIm
   }
 
   // --- Has image ---
-  const isBusy = fetcher.state !== 'idle';
+  const isBusy = fetcher.state !== 'idle' || cover.uploading;
 
   return (
     <div
