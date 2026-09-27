@@ -227,6 +227,8 @@ describe('loader', () => {
     const data = await loader(args(get()));
 
     expect(data.items[0].billedBytes).toBe(300 * 1024 * 1024);
+    // The page says so under the name.
+    expect(data.items[0].originalDeleted).toBe(true);
   });
 
   it('shows the uploaded size while the original is still kept', async () => {
@@ -234,7 +236,9 @@ describe('loader', () => {
       record({ renditionBytes: 300 * 1024 * 1024, originalDeletedAt: null }),
     ]);
 
-    expect((await loader(args(get()))).items[0].billedBytes).toBe(2 * GiB);
+    const data = await loader(args(get()));
+    expect(data.items[0].billedBytes).toBe(2 * GiB);
+    expect(data.items[0].originalDeleted).toBe(false);
   });
 
   it('renders for a free classroom rather than refusing it', async () => {

@@ -11,6 +11,8 @@ import { describe, expect, it } from 'vitest';
 import {
   MEDIA_STATE_CHIP,
   MEDIA_STATE_LABEL,
+  ORIGINAL_NOT_KEPT_LABEL,
+  hasPendingProcessing,
   isActionable,
   mediaState,
   meterReading,
@@ -51,6 +53,30 @@ describe('mediaState', () => {
   it('offers actions only on a finished object', () => {
     expect(isActionable({ status: 'READY' })).toBe(true);
     expect(isActionable({ status: 'UPLOADING' })).toBe(false);
+  });
+});
+
+describe('hasPendingProcessing', () => {
+  it('is true only while a READY row is optimising', () => {
+    expect(hasPendingProcessing([])).toBe(false);
+    expect(
+      hasPendingProcessing([
+        { status: 'READY', processing: 'NONE' },
+        { status: 'READY', processing: 'DONE' },
+        { status: 'READY', processing: 'FAILED' },
+        { status: 'UPLOADING', processing: 'PENDING' },
+      ])
+    ).toBe(false);
+    expect(
+      hasPendingProcessing([
+        { status: 'READY', processing: 'DONE' },
+        { status: 'READY', processing: 'PENDING' },
+      ])
+    ).toBe(true);
+  });
+
+  it('names a dropped original plainly', () => {
+    expect(ORIGINAL_NOT_KEPT_LABEL).toBe('Original not kept');
   });
 });
 

@@ -1068,7 +1068,7 @@ describe('placeIntoMedia: an optimisable video gets its job (onMediaReady)', () 
       [
         'media-video-process',
         { classroomId: CLASSROOM_ID, mediaId: MEDIA_ID },
-        { idempotencyKey: `media-video-process:${MEDIA_ID}` },
+        { idempotencyKey: `media-video-process:${MEDIA_ID}`, idempotencyKeyTTL: '10m' },
       ],
     ]);
   });

@@ -377,6 +377,26 @@ describe('media_list / media_delete', () => {
     expect(Object.keys(mediaListTool.inputSchema)).toEqual(['classroom', 'kind']);
   });
 
+  it('says size_bytes is the billed size, which the service reports', async () => {
+    // `listReadyMedia` reports the billed size (the rendition once the original
+    // is dropped); the tool passes it through unchanged and says what it means.
+    mocks.listReadyMedia.mockResolvedValue([
+      {
+        id: 'm-3',
+        ref: 'media://m-3',
+        filename: 'c.mp4',
+        kind: 'VIDEO',
+        sizeBytes: 800,
+        createdAt: new Date('2026-09-26T00:00:00Z'),
+        processing: 'DONE',
+        processingError: null,
+      },
+    ]);
+    const payload = parse(await mediaListTool.handler({ classroom: 'org/cs' }, TEACHER));
+    expect(payload.media[0].size_bytes).toBe(800);
+    expect(mediaListTool.description).toMatch(/`size_bytes` is what the file costs the class/);
+  });
+
   it('keeps its description under 1,500 bytes', () => {
     expect(Buffer.byteLength(mediaListTool.description, 'utf8')).toBeLessThan(1500);
   });

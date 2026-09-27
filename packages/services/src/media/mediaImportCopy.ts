@@ -868,6 +868,11 @@ export function createMediaImportCopier(opts: MediaImportCopyOptions): MediaImpo
   /**
    * Take over the copies an earlier run made, for the wanted ids that have one
    * still READY in the destination; those leave `wanted`.
+   *
+   * Each one is also handed to `queueCopyProcessing`, judged by its OWN row: an
+   * earlier run can have flipped the copy READY and died before queueing its
+   * job, and nothing else would ever queue it. A copy already claimed (PENDING,
+   * DONE, FAILED) or carrying a rendition queues nothing.
    */
   async function reuseKnownCopies(wanted: Set<string>): Promise<void> {
     /** source id → the ids its copy may have, in order of preference. */
@@ -889,15 +894,15 @@ export function createMediaImportCopier(opts: MediaImportCopyOptions): MediaImpo
         status: 'READY',
         id: { in: [...candidates.values()].flat() },
       },
-      select: { id: true },
-    })) as { id: string }[];
-    const ready = new Set(live.map(row => row.id));
+    })) as MediaRow[];
+    const ready = new Map(live.map(row => [row.id, row]));
     for (const [id, ids] of candidates) {
       const copy = ids.find(candidate => ready.has(candidate));
       if (!copy) continue;
       settled.add(id);
       copied.set(id, copy);
       wanted.delete(id);
+      await queueCopyProcessing(ready.get(copy)!, copy);
     }
   }
 
@@ -981,9 +986,10 @@ export function createMediaImportCopier(opts: MediaImportCopyOptions): MediaImpo
   /**
    * A copy that did not carry a rendition is an unprocessed original, and an
    * optimisable video gets its own job — the source's (queued, failed, or never
-   * run) belongs to the source. `onMediaReady` claims the copy only from
-   * READY + NONE, so a copy reused from another attempt of this import, whose
-   * own flip already queued it, queues nothing twice. Never throws.
+   * run) belongs to the source. `row` is the source row, or, for a copy an
+   * earlier run made (`reuseKnownCopies`), the copy's own row. `onMediaReady`
+   * claims the copy only from READY + NONE, so a copy whose own flip already
+   * queued it queues nothing twice. Never throws.
    */
   async function queueCopyProcessing(row: MediaRow, copyId: string): Promise<void> {
     if (row.kind !== 'VIDEO' || !row.optimise || copiesRendition(row)) return;
