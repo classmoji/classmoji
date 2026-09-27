@@ -16,6 +16,7 @@ import { assertClassroomMutationAllowed } from '~/utils/routeAuth.server';
 import { isAIAgentConfigured } from '~/utils/aiFeatures.server';
 import { quizzesVisibleOrThrow } from '~/utils/classroomProFlag.server';
 import { sendRequest } from '~/services/aiAgentConnection.server';
+import { verifySessionOwnership, AgentType } from '~/utils/agentVerification.server';
 import agentStreamManager from '~/utils/agentStreamManager';
 import { v4 as uuidv4 } from 'uuid';
 import { getInstallationToken } from '~/routes/student.$class.quizzes/helpers.server';
@@ -29,12 +30,23 @@ const jsonResponse = (data: Record<string, unknown>, status = 200) =>
   });
 
 /**
- * What a failed init or turn says to the browser, whatever failed. The real
- * error is logged; a send failure goes out through both the JSON body and the
- * SSE error event, since both reach the same browser.
+ * What a failed init or turn says to the browser, whatever failed (a lost
+ * session aside, below). The real error is logged; a send failure goes out
+ * through both the JSON body and the SSE error event, since both reach the
+ * same browser.
  */
 const INIT_FAILED = "The prompt assistant couldn't start. Please try again.";
 const SEND_MESSAGE_FAILED = 'Could not send your message. Please try again.';
+
+/**
+ * What a turn says when the ai-agent no longer holds the session (code
+ * SESSION_NOT_FOUND). The panel's "New conversation" button is the way
+ * forward; the hook shows the same line when its stream has closed.
+ */
+const SESSION_ENDED_MESSAGE = 'This conversation has ended. Start a new one to keep going.';
+
+/** aiAgentConnection carries the ERROR payload's `code` onto the thrown error. */
+const agentErrorCode = (error: unknown) => (error as { code?: unknown } | null)?.code;
 
 /**
  * The refusal for a classroom whose quizzes are not visible (not on Pro,
@@ -42,6 +54,31 @@ const SEND_MESSAGE_FAILED = 'Could not send your message. Please try again.';
  * it goes wherever quizzes go.
  */
 const QUIZZES_UNAVAILABLE = "Quizzes aren't available in this class.";
+
+/**
+ * Whether the caller opened this session, in this classroom. The record kept
+ * at init answers first; without one (after a webapp restart) the ai-agent's
+ * answer does, as for the stream. A check that can't be answered is a no.
+ */
+async function ownsSession(sessionId: string, userId: string, classroomSlug: string) {
+  const owner = agentStreamManager.getSessionOwnership(sessionId);
+  if (owner) return owner.userId === userId && owner.classroomSlug === classroomSlug;
+
+  try {
+    const verification = await verifySessionOwnership({
+      sessionId,
+      agentType: AgentType.PROMPT_ASSISTANT,
+      userId,
+    });
+    return verification.valid;
+  } catch (error: unknown) {
+    console.warn(
+      '[prompt-assistant] Session ownership check failed:',
+      error instanceof Error ? error.message : String(error)
+    );
+    return false;
+  }
+}
 
 export async function action({ request }: Route.ActionArgs) {
   const formData = await request.formData();
@@ -171,7 +208,11 @@ async function handleSendMessage(request: Request, formData: FormData) {
   const content = formData.get('content') as string | null;
 
   // Verify instructor has access
-  const { classroom: smClassroom, membership: smMembership } = await assertClassroomAccess({
+  const {
+    userId,
+    classroom: smClassroom,
+    membership: smMembership,
+  } = await assertClassroomAccess({
     request,
     classroomSlug,
     allowedRoles: ['OWNER', 'TEACHER', 'ASSISTANT'],
@@ -185,6 +226,11 @@ async function handleSendMessage(request: Request, formData: FormData) {
 
   if (!sessionId || !content) {
     return jsonResponse({ error: 'Missing sessionId or content' }, 400);
+  }
+
+  // Only the session's owner may send to or end it.
+  if (!(await ownsSession(sessionId, userId.toString(), classroomSlug))) {
+    return jsonResponse({ error: SEND_MESSAGE_FAILED }, 403);
   }
 
   try {
@@ -216,7 +262,9 @@ async function handleSendMessage(request: Request, formData: FormData) {
         payload: { content: string; suggestions?: string[]; explorationSteps?: unknown[] };
       }
     ).payload;
+    // `messageId` lets the hook skip a reply the stream replays on reconnect.
     agentStreamManager.publishMessageReady(sessionId, {
+      messageId,
       content: resultPayload.content,
       suggestions: resultPayload.suggestions,
       explorationSteps: resultPayload.explorationSteps || [],
@@ -224,9 +272,13 @@ async function handleSendMessage(request: Request, formData: FormData) {
 
     return jsonResponse({ success: true, messageId });
   } catch (error: unknown) {
+    // A lost session is the one failure with its own line; everything else
+    // gets the generic one. The ai-agent's text stays in the log either way.
     console.error('[prompt-assistant] Send message failed:', error);
-    agentStreamManager.publishError(sessionId, SEND_MESSAGE_FAILED);
-    return jsonResponse({ error: SEND_MESSAGE_FAILED }, 500);
+    const message =
+      agentErrorCode(error) === 'SESSION_NOT_FOUND' ? SESSION_ENDED_MESSAGE : SEND_MESSAGE_FAILED;
+    agentStreamManager.publishError(sessionId, message);
+    return jsonResponse({ error: message }, 500);
   }
 }
 
@@ -238,7 +290,7 @@ async function handleEndSession(request: Request, formData: FormData) {
   const sessionId = formData.get('sessionId') as string | null;
 
   // Verify instructor has access
-  await assertClassroomAccess({
+  const { userId } = await assertClassroomAccess({
     request,
     classroomSlug,
     allowedRoles: ['OWNER', 'TEACHER', 'ASSISTANT'],
@@ -248,6 +300,11 @@ async function handleEndSession(request: Request, formData: FormData) {
 
   if (!sessionId) {
     return jsonResponse({ error: 'Missing sessionId' }, 400);
+  }
+
+  // Only the session's owner may send to or end it.
+  if (!(await ownsSession(sessionId, userId.toString(), classroomSlug))) {
+    return jsonResponse({ error: 'Forbidden' }, 403);
   }
 
   try {

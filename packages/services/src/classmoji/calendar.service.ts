@@ -87,10 +87,15 @@ interface CalendarDisplaySlide {
   };
 }
 
-/** A linked assignment as the calendar DISPLAYS it, with its repository. */
+/**
+ * A linked assignment as the calendar DISPLAYS it, with its repository.
+ * `type` is what decides where the link goes: a form assignment has no screen
+ * under /assistant, so an assistant is shown it without a link.
+ */
 interface CalendarDisplayAssignment {
   assignment: {
     id: string;
+    type: AssignmentType;
     title: string;
     slug: string | null;
     is_published: boolean;
@@ -570,6 +575,7 @@ const mapLinksToDisplayFormat = (
       {
         assignment: {
           id: assignment.id,
+          type: assignment.type,
           title: assignment.title,
           slug: assignment.slug,
           is_published: assignment.is_published,
@@ -901,7 +907,8 @@ export const getClassroomCalendar = async (
           // `is_published` on both rows is what decides whether this link is
           // shown at all: a link to an assignment (or to a repository) that has
           // not been published is staff-only. `type` is what drops a quiz
-          // assignment's link where quizzes are hidden.
+          // assignment's link where quizzes are hidden, and it travels on to
+          // the display row.
           assignment: {
             select: {
               id: true,
@@ -1735,6 +1742,13 @@ export const getUserEvents = async (userId: string, classroomId: string) => {
  * @param {object|null} featured - Which of those links the month view shows under the event on
  *   this date, as `{ kind, id }`. At most one, across all three kinds. A ref naming something
  *   this write is not linking is dropped silently rather than refused — see `resolveFeaturedLink`.
+ * @returns {object} `linked`: how many links of each kind this write created, once the ids that
+ *   did not validate were dropped. The web actions' audit rows record these counts.
+ *
+ * Where the classroom's quizzes are hidden (`entitlement.quizzesVisible`) the calendar read drops
+ * links to quiz assignments, so an edit made there saves without them. This write leaves such a
+ * link on this date in place instead of deleting it, and adds no new one, so the date's quiz
+ * links are back as they were when quizzes show again.
  */
 export const updateEventLinks = async (
   eventId: string,
@@ -1768,8 +1782,11 @@ export const updateEventLinks = async (
     ? new Date(new Date(occurrenceDate).toISOString().split('T')[0])
     : null;
 
-  // Validate all resources belong to this classroom
-  const [pages, slides, assignments] = await Promise.all([
+  // Validate all resources belong to this classroom. An assignment belongs to
+  // one through its module: quiz and form assignments have no repository.
+  // Alongside, how many quiz links this date already holds — the one fact the
+  // quiz rule below needs about what is stored.
+  const [pages, slides, assignments, storedQuizLinks] = await Promise.all([
     pageIds.length > 0
       ? getPrisma().page.findMany({
           where: { id: { in: pageIds }, classroom_id: classroomId },
@@ -1784,16 +1801,32 @@ export const updateEventLinks = async (
       : [],
     assignmentIds.length > 0
       ? getPrisma().assignment.findMany({
-          where: { id: { in: assignmentIds }, repository: { classroom_id: classroomId } },
-          select: { id: true },
+          where: { id: { in: assignmentIds }, module: { classroom_id: classroomId } },
+          select: { id: true, type: true },
         })
       : [],
+    getPrisma().calendarEventAssignmentLink.count({
+      where: { event_id: eventId, occurrence_date: normalizedDate, assignment: { type: 'QUIZ' } },
+    }),
   ]);
 
-  // Only use validated IDs (filter out any that don't belong to this classroom)
+  // The count above runs on every save: even one that links no assignment has
+  // to keep the stored quiz links where quizzes are hidden. The entitlement
+  // lookup is asked only when a quiz link is part of this write, as one being
+  // added or one already stored on this date. Asked before the transaction,
+  // not inside it: the star below is resolved against the ids that survive
+  // this rule.
+  const quizzesHidden =
+    (storedQuizLinks > 0 || assignments.some(a => a.type === 'QUIZ')) &&
+    !(await entitlementService.quizzesVisible(classroomId));
+
+  // Only use validated IDs (filter out any that don't belong to this classroom).
+  // A quiz assignment is dropped the same way where quizzes are hidden.
   const validPageIds = pages.map(p => p.id);
   const validSlideIds = slides.map(s => s.id);
-  const validAssignmentIds = assignments.map(a => a.id);
+  const validAssignmentIds = assignments
+    .filter(a => !(quizzesHidden && a.type === 'QUIZ'))
+    .map(a => a.id);
 
   // The star is resolved against the VALIDATED lists, so an id this write is
   // not actually linking — including one from another classroom, already
@@ -1841,9 +1874,31 @@ export const updateEventLinks = async (
     await tx.calendarEventSlideLink.deleteMany({
       where: { event_id: eventId, occurrence_date: normalizedDate },
     });
+    // Where quizzes are hidden the caller never saw this date's quiz links, so
+    // leaving them out of the save is not a request to remove them.
     await tx.calendarEventAssignmentLink.deleteMany({
-      where: { event_id: eventId, occurrence_date: normalizedDate },
+      where: {
+        event_id: eventId,
+        occurrence_date: normalizedDate,
+        ...(quizzesHidden ? { assignment: { type: { not: 'QUIZ' } } } : {}),
+      },
     });
+
+    // A kept quiz link may hold this date's star. A save that stars something
+    // else takes it over: one star per date, and the partial unique index on
+    // this table would refuse a second starred assignment row. Cleared before
+    // the inserts below for that reason.
+    if (quizzesHidden && featuredLink) {
+      await tx.calendarEventAssignmentLink.updateMany({
+        where: {
+          event_id: eventId,
+          occurrence_date: normalizedDate,
+          featured: true,
+          assignment: { type: 'QUIZ' },
+        },
+        data: { featured: false },
+      });
+    }
 
     // Create new links (only for validated IDs, preserving order)
     if (validPageIds.length > 0) {
@@ -1869,17 +1924,36 @@ export const updateEventLinks = async (
       });
     }
     if (validAssignmentIds.length > 0) {
+      // Kept quiz links keep their order, and the new rows go after them: the
+      // read sorts on `order` alone, so starting again at 0 would tie with the
+      // kept rows and leave the two to interleave when quizzes show again.
+      // After the delete above, the kept rows are all this bucket holds.
+      let firstOrder = 0;
+      if (quizzesHidden) {
+        const kept = await tx.calendarEventAssignmentLink.aggregate({
+          where: { event_id: eventId, occurrence_date: normalizedDate },
+          _max: { order: true },
+        });
+        firstOrder = (kept._max.order ?? -1) + 1;
+      }
       await tx.calendarEventAssignmentLink.createMany({
         data: validAssignmentIds.map((id, idx) => ({
           event_id: eventId,
           assignment_id: id,
           occurrence_date: normalizedDate,
-          order: idx,
+          order: firstOrder + idx,
           featured: isFeaturedLinkRow(featuredLink, 'assignment', id),
         })),
       });
     }
 
-    return { success: true };
+    return {
+      success: true,
+      linked: {
+        pages: validPageIds.length,
+        slides: validSlideIds.length,
+        assignments: validAssignmentIds.length,
+      },
+    };
   });
 };
