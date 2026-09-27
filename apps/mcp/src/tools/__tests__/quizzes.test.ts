@@ -200,6 +200,76 @@ describe('quiz_create', () => {
   });
 });
 
+describe('course_search_enabled (quiz source material, Stage 2 tier)', () => {
+  it('quiz_create forwards it as courseSearchEnabled and echoes it', async () => {
+    mocks.quizCreate.mockResolvedValue({ ...QUIZ_ROW, course_search_enabled: true });
+
+    const payload = parse(
+      await quizCreateTool.handler(
+        {
+          classroom: 'org/w26',
+          name: 'Q',
+          rubric_prompt: 'r',
+          course_search_enabled: true,
+        },
+        CTX
+      )
+    );
+
+    expect(mocks.quizCreate.mock.calls[0][0]).toMatchObject({ courseSearchEnabled: true });
+    expect(payload.quiz.course_search_enabled).toBe(true);
+  });
+
+  it('quiz_create leaves it out when not given, and the summary reports false', async () => {
+    mocks.quizCreate.mockResolvedValue(QUIZ_ROW);
+
+    const payload = parse(
+      await quizCreateTool.handler({ classroom: 'org/w26', name: 'Q', rubric_prompt: 'r' }, CTX)
+    );
+
+    expect(mocks.quizCreate.mock.calls[0][0]).not.toHaveProperty('courseSearchEnabled');
+    expect(payload.quiz.course_search_enabled).toBe(false);
+  });
+
+  it('quiz_update maps it alone as a field and audits the field name', async () => {
+    mocks.quizFindById.mockResolvedValue(QUIZ_ROW);
+    mocks.quizUpdate.mockResolvedValue({ ...QUIZ_ROW, course_search_enabled: false });
+
+    await quizUpdateTool.handler(
+      { classroom: 'org/w26', quiz_id: 'quiz-1', course_search_enabled: false },
+      CTX
+    );
+
+    expect(mocks.quizUpdate.mock.calls[0][1]).toEqual({ courseSearchEnabled: false });
+    const audit = mocks.auditCreate.mock.calls[0][0] as { data: { fields: string[] } };
+    expect(audit.data.fields).toEqual(['course_search_enabled']);
+  });
+
+  it('is a boolean in both schemas and neither tool takes source material', () => {
+    for (const tool of [quizCreateTool, quizUpdateTool]) {
+      const schema = z.object(tool.inputSchema);
+      expect(tool.inputSchema).toHaveProperty('course_search_enabled');
+      expect(tool.inputSchema).not.toHaveProperty('source_material');
+      expect(
+        schema.safeParse({
+          classroom: 'o/s',
+          quiz_id: 'x',
+          name: 'n',
+          rubric_prompt: 'r',
+          course_search_enabled: 'yes',
+        }).success
+      ).toBe(false);
+    }
+  });
+
+  it('keeps both descriptions under 1,500 bytes and points at the link tool for material', () => {
+    for (const tool of [quizCreateTool, quizUpdateTool]) {
+      expect(new TextEncoder().encode(tool.description).length, tool.name).toBeLessThan(1500);
+    }
+    expect(quizCreateTool.description).toContain('resource_link_add');
+  });
+});
+
 describe('quiz_update', () => {
   const ARGS = { classroom: 'org/w26', quiz_id: 'quiz-1', name: 'Renamed' };
 

@@ -3,9 +3,12 @@
  * resource_links_list.
  *
  * A resource link attaches a page or slide deck to a repository (the assignment
- * container) or to one specific assignment inside it. It is how content becomes
- * VISIBLE to students: the student repo/assignment pages list exactly what is
- * linked here, so adding and removing links is load-bearing, not decorative.
+ * container), to one specific assignment inside it, or to a quiz. It is how
+ * content becomes VISIBLE to students: the student repo/assignment pages list
+ * exactly what is linked here, so adding and removing links is load-bearing,
+ * not decorative. A quiz link makes the document the quiz's SOURCE MATERIAL:
+ * the quiz asks about it (students do not see a quiz's links as a list), and it
+ * rebuilds no manifest.
  *
  * ROUTE-DERIVED TIER: the web surface is admin.$class.resources/action.ts, gated
  * by assertClassroomAccess with allowedRoles ['OWNER','TEACHER'] — so
@@ -36,7 +39,14 @@ import { ok, OWNER_TEACHER, requireClassroomCtx, scopedNotFound, writeAudit } fr
 const AUDIT_RESOURCE_TYPE = 'RESOURCES';
 
 type ResourceType = 'page' | 'slide';
-type TargetType = 'repository' | 'assignment';
+type TargetType = 'repository' | 'assignment' | 'quiz';
+
+/** The name a not-found reports for each target type. */
+const TARGET_NOUN: Record<TargetType, string> = {
+  repository: 'Repository',
+  assignment: 'Assignment',
+  quiz: 'Quiz',
+};
 
 /**
  * Map the service's caller-fixable failures onto tool errors.
@@ -59,7 +69,7 @@ function mapResourceLinkError(
     case 'resource_not_found':
       return scopedNotFound(resourceType === 'page' ? 'Page' : 'Slide');
     case 'target_not_found':
-      return scopedNotFound(targetType === 'repository' ? 'Repository' : 'Assignment');
+      return scopedNotFound(targetType ? TARGET_NOUN[targetType] : 'Assignment');
     case 'already_linked':
       return new ToolError(
         'invalid_params',
@@ -77,10 +87,10 @@ const resourceTypeArg = z
   .enum(['page', 'slide'])
   .describe("Which kind of content to link: 'page' or 'slide' (a slide deck)");
 const targetTypeArg = z
-  .enum(['repository', 'assignment'])
+  .enum(['repository', 'assignment', 'quiz'])
   .describe(
-    "What to link it to: 'repository' (shows on the whole assignment container) or " +
-      "'assignment' (shows on that one assignment only)"
+    "What to link it to: 'repository' (shows on the whole assignment container), " +
+      "'assignment' (shows on that one assignment only) or 'quiz' (the quiz's source material)"
   );
 
 interface ResourceLinkAddArgs {
@@ -97,20 +107,18 @@ export const resourceLinkAddTool: ToolDefinition<ResourceLinkAddArgs> = {
   // because the successful write also commits an updated content manifest to
   // the classroom content repo on GitHub.
   annotations: { destructive: false, openWorld: true },
-  title: 'Link a page or slide deck to a repo or assignment',
+  title: 'Link a page or slide deck to a repo, assignment or quiz',
   description:
     'Links a page or slide deck to a repository (the assignment container — the content then ' +
-    'appears on that repo page) or to one specific assignment inside it. This is what makes the ' +
-    'content visible to students on that repo/assignment page, so it is how you publish existing ' +
-    'content to a place students will find it. Owner and teacher only. Use list_pages / ' +
-    'list_slides for resource ids and list_repos for repository and assignment ids, and ' +
-    'resource_links_list to see what is already linked. Each successful link also rebuilds the ' +
-    'classroom content manifest and commits it to the content repository on GitHub: that commit ' +
-    'is best effort and its outcome is reported as manifest_synced, and because every call pays ' +
-    'for a whole-classroom rebuild plus a git write, heavy looping is deliberately throttled — ' +
-    'link in small batches rather than in a tight loop. Distinct from module_item_add, which ' +
-    'places content in a curriculum module, and from calendar event links, which attach content ' +
-    'to a scheduled session.',
+    'appears on that repo page), to one specific assignment inside it, or to a quiz. A repo or ' +
+    'assignment link makes the content visible to students on that page. A quiz link makes it ' +
+    "the quiz's source material: questions are generated from it, in link order (drafts are " +
+    'used once published). Owner and teacher only. Use list_pages / list_slides for resource ' +
+    'ids, list_repos for repository and assignment ids, list_quizzes for quiz ids, and ' +
+    'resource_links_list to see what is already linked. A repo or assignment link also rebuilds ' +
+    'the classroom content manifest and commits it to GitHub (best effort, reported as ' +
+    'manifest_synced); calls are throttled, so link in small batches. Distinct from ' +
+    'module_item_add (curriculum modules) and calendar event links (scheduled sessions).',
   scope: 'write',
   roles: OWNER_TEACHER,
   // Tighter than the default bucket: every call rebuilds the whole classroom
@@ -122,7 +130,11 @@ export const resourceLinkAddTool: ToolDefinition<ResourceLinkAddArgs> = {
     resource_type: resourceTypeArg,
     resource_id: z.string().min(1).max(100).describe('Id of the page or slide deck to link'),
     target_type: targetTypeArg,
-    target_id: z.string().min(1).max(100).describe('Id of the repository or assignment to link to'),
+    target_id: z
+      .string()
+      .min(1)
+      .max(100)
+      .describe('Id of the repository, assignment or quiz to link to'),
   },
   handler: async (args, ctx) => {
     const classroom = requireClassroomCtx(ctx);
@@ -173,7 +185,10 @@ export const resourceLinkAddTool: ToolDefinition<ResourceLinkAddArgs> = {
       // The link row is committed either way; this says whether the manifest
       // commit that follows it actually landed.
       manifest_synced: link.manifestSynced,
-      message: `Linked ${link.resourceType} ${link.resourceId} to ${link.targetType} ${link.targetId} — students will now see it there.`,
+      message:
+        link.targetType === 'quiz'
+          ? `Linked ${link.resourceType} ${link.resourceId} to quiz ${link.targetId} as source material.`
+          : `Linked ${link.resourceType} ${link.resourceId} to ${link.targetType} ${link.targetId} — students will now see it there.`,
     });
   },
 };
@@ -194,15 +209,15 @@ export const resourceLinkRemoveTool: ToolDefinition<ResourceLinkRemoveArgs> = {
   annotations: { destructive: true, openWorld: true },
   title: 'Unlink a page or slide deck',
   description:
-    'Removes a link between a page or slide deck and a repository or assignment. Owner and ' +
-    'teacher only. Only the link is deleted — the page/slide deck and the repo/assignment are ' +
-    'left untouched, and the link can be recreated with resource_link_add — but students stop ' +
-    'seeing that content on the repo/assignment page, so it changes what the class can reach. ' +
-    'Get link ids from resource_links_list. Each successful removal also rebuilds the classroom ' +
-    'content manifest and commits it to the content repository on GitHub: that commit is best ' +
-    'effort and its outcome is reported as manifest_synced, and because every call pays for a ' +
-    'whole-classroom rebuild plus a git write, heavy looping is deliberately throttled — unlink ' +
-    'in small batches rather than in a tight loop.',
+    'Removes a link between a page or slide deck and a repository, assignment or quiz. Owner ' +
+    'and teacher only. Only the link is deleted — the page/slide deck and the target are left ' +
+    'untouched, and the link can be recreated with resource_link_add — but students stop seeing ' +
+    'that content on the repo/assignment page, and a quiz stops using it as source material. ' +
+    'Get link ids from resource_links_list. Removing a repo or assignment link also rebuilds the ' +
+    'classroom content manifest and commits it to the content repository on GitHub: that commit ' +
+    'is best effort and its outcome is reported as manifest_synced, and because every call can ' +
+    'pay for a whole-classroom rebuild plus a git write, heavy looping is deliberately throttled ' +
+    '— unlink in small batches rather than in a tight loop.',
   scope: 'write',
   roles: OWNER_TEACHER,
   // Same bucket as resource_link_add, and for the same reason: a manifest
@@ -275,11 +290,11 @@ export const resourceLinksListTool: ToolDefinition<ResourceLinksListArgs> = {
   title: 'List page and slide deck links',
   description:
     'Lists every page and slide deck link in the classroom — which content is attached to which ' +
-    'repository or assignment, and therefore what students see on those pages. Owner and teacher ' +
-    'only. Filter by resource_type/resource_id to see where one page or deck appears, or by ' +
-    'target_type/target_id to see everything attached to one repo or assignment. The link ids ' +
-    'returned here are what resource_link_remove takes; use list_pages, list_slides and ' +
-    `list_repos for the page, deck, repository and assignment ids that resource_link_add takes. ` +
+    'repository, assignment or quiz (a quiz link is source material; order is its position). ' +
+    'Owner and teacher only. Filter by resource_type/resource_id to see where one page or deck ' +
+    'appears, or by target_type/target_id to see everything attached to one repo, assignment or ' +
+    'quiz. The link ids returned here are what resource_link_remove takes; use list_pages, ' +
+    'list_slides, list_repos and list_quizzes for the ids that resource_link_add takes. ' +
     `Returns at most ${LIST_LINKS_LIMIT_DEFAULT} links by default; total_matched and truncated ` +
     'say whether a filter or a larger limit is needed to see the rest.',
   scope: 'read',
@@ -297,15 +312,15 @@ export const resourceLinksListTool: ToolDefinition<ResourceLinksListArgs> = {
       .optional()
       .describe('Only links for this one page or slide deck'),
     target_type: z
-      .enum(['repository', 'assignment'])
+      .enum(['repository', 'assignment', 'quiz'])
       .optional()
-      .describe('Only links pointing at repositories, or only links pointing at assignments'),
+      .describe('Only links pointing at repositories, at assignments, or at quizzes'),
     target_id: z
       .string()
       .min(1)
       .max(100)
       .optional()
-      .describe('Only links pointing at this one repository or assignment'),
+      .describe('Only links pointing at this one repository, assignment or quiz'),
     limit: z
       .number()
       .int()

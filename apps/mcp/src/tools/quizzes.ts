@@ -78,6 +78,7 @@ interface QuizRow {
   max_attempts?: number;
   grading_strategy?: string;
   include_code_context?: boolean;
+  course_search_enabled?: boolean;
 }
 
 /**
@@ -98,6 +99,7 @@ function quizSummary(quiz: QuizRow) {
     max_attempts: quiz.max_attempts ?? null,
     grading_strategy: quiz.grading_strategy ?? null,
     include_code_context: quiz.include_code_context ?? false,
+    course_search_enabled: quiz.course_search_enabled ?? false,
     subject: quiz.subject ?? null,
     difficulty_level: quiz.difficulty_level ?? null,
     system_prompt: quiz.system_prompt ?? null,
@@ -126,6 +128,13 @@ const gradingStrategySchema = z
   .enum(['HIGHEST', 'MOST_RECENT', 'FIRST'])
   .describe('Which attempt counts toward the grade (default HIGHEST)');
 
+const courseSearchSchema = z
+  .boolean()
+  .describe(
+    'Let the quiz search the whole course, not only its linked source material, to check ' +
+      'whether the course covers something a student mentions (default false)'
+  );
+
 const dueDateSchema = z
   .string()
   .datetime({ offset: true })
@@ -143,6 +152,7 @@ interface QuizCreateArgs {
   difficulty_level?: string;
   subject?: string;
   include_code_context?: boolean;
+  course_search_enabled?: boolean;
   grading_strategy?: 'HIGHEST' | 'MOST_RECENT' | 'FIRST';
   max_attempts?: number;
 }
@@ -156,7 +166,9 @@ export const quizCreateTool: ToolDefinition<QuizCreateArgs> = {
     'Creates an AI-conversation quiz. There is NO stored question bank: the AI generates and ' +
     'asks questions live from rubric_prompt (required) and system_prompt, and question_count ' +
     'just tells it how many to ask. Set include_code_context to have it explore the student’s ' +
-    'repository for the linked repo while questioning them. Teaching-team only (owner, teacher or assistant); requires a Pro ' +
+    'repository for the linked repo while questioning them. Link source material (the pages ' +
+    'and decks the questions come from) with resource_link_add target_type quiz. ' +
+    'Teaching-team only (owner, teacher or assistant); requires a Pro ' +
     'subscription and quizzes enabled. ALWAYS created as a DRAFT (students see nothing) — use ' +
     'quiz_publish to go live and notify students.',
   scope: 'write',
@@ -192,6 +204,7 @@ export const quizCreateTool: ToolDefinition<QuizCreateArgs> = {
       .boolean()
       .optional()
       .describe('Let the AI read the student’s repo for the linked repository (default false)'),
+    course_search_enabled: courseSearchSchema.optional(),
     grading_strategy: gradingStrategySchema.optional(),
     max_attempts: maxAttemptsSchema.optional(),
   },
@@ -223,6 +236,9 @@ export const quizCreateTool: ToolDefinition<QuizCreateArgs> = {
       ...(args.subject !== undefined ? { subject: args.subject } : {}),
       ...(args.include_code_context !== undefined
         ? { includeCodeContext: args.include_code_context }
+        : {}),
+      ...(args.course_search_enabled !== undefined
+        ? { courseSearchEnabled: args.course_search_enabled }
         : {}),
       ...(args.grading_strategy !== undefined ? { gradingStrategy: args.grading_strategy } : {}),
       ...(args.max_attempts !== undefined ? { maxAttempts: args.max_attempts } : {}),
@@ -259,6 +275,7 @@ interface QuizServiceUpdate {
   weight?: number;
   questionCount?: number;
   includeCodeContext?: boolean;
+  courseSearchEnabled?: boolean;
   maxAttempts?: number;
   gradingStrategy?: 'HIGHEST' | 'MOST_RECENT' | 'FIRST';
 }
@@ -277,6 +294,7 @@ interface QuizUpdateArgs {
   difficulty_level?: string;
   subject?: string;
   include_code_context?: boolean;
+  course_search_enabled?: boolean;
   grading_strategy?: 'HIGHEST' | 'MOST_RECENT' | 'FIRST';
   max_attempts?: number;
 }
@@ -330,6 +348,7 @@ export const quizUpdateTool: ToolDefinition<QuizUpdateArgs> = {
       .boolean()
       .optional()
       .describe('Let the AI read the student’s repo for the linked repository'),
+    course_search_enabled: courseSearchSchema.optional(),
     grading_strategy: gradingStrategySchema.optional(),
     max_attempts: maxAttemptsSchema.optional(),
   },
@@ -359,6 +378,7 @@ export const quizUpdateTool: ToolDefinition<QuizUpdateArgs> = {
     set('difficulty_level', 'difficultyLevel', args.difficulty_level);
     set('subject', 'subject', args.subject);
     set('include_code_context', 'includeCodeContext', args.include_code_context);
+    set('course_search_enabled', 'courseSearchEnabled', args.course_search_enabled);
     set('grading_strategy', 'gradingStrategy', args.grading_strategy);
     set('max_attempts', 'maxAttempts', args.max_attempts);
     if (args.repository_id !== undefined) fields.push('repository_id');
