@@ -226,10 +226,13 @@ export async function upsertSnapshot(
 /**
  * Build an `identity → userId` map for a gitRepo, keys lowercased (see
  * identityKeys). Every classroom member answers to their Classmoji login,
- * their Gitlab username and their email, and to their name when no other
- * member shares it (Gitlab reports commit authors by name and email). Then
- * any `GitRepoContributorLink` rows for this repo overlay it (manual overrides
- * win).
+ * their Gitlab username and their email (Gitlab reports commit authors by
+ * email, and its no-reply addresses carry the username). Never by display
+ * name: anyone can commit as any name, and the contributor breakdown should
+ * not credit one student's commits to another on that alone. Then any
+ * `GitRepoContributorLink` rows for this repo overlay it (manual overrides
+ * win). Commit emails are self-asserted too, as on Github: attribution is a
+ * teaching aid, and a TA can relink.
  */
 async function buildLoginToUserIdMap(
   classroomId: string,
@@ -245,7 +248,6 @@ async function buildLoginToUserIdMap(
             id: true,
             login: true,
             email: true,
-            name: true,
             accounts: { where: { provider_id: 'gitlab' }, select: { username: true } },
           },
         },
@@ -260,20 +262,11 @@ async function buildLoginToUserIdMap(
   const add = (identity: string | null | undefined, userId: string) => {
     for (const key of identityKeys(identity)) if (!map.has(key)) map.set(key, userId);
   };
-  const nameCounts = new Map<string, number>();
-  for (const m of memberships) {
-    const name = m.user?.name?.trim().toLowerCase();
-    if (name) nameCounts.set(name, (nameCounts.get(name) ?? 0) + 1);
-  }
   for (const m of memberships) {
     if (!m.user) continue;
     add(m.user.login, m.user.id);
     for (const account of m.user.accounts ?? []) add(account.username, m.user.id);
     add(m.user.email, m.user.id);
-  }
-  for (const m of memberships) {
-    const name = m.user?.name?.trim().toLowerCase();
-    if (m.user && name && nameCounts.get(name) === 1) add(name, m.user.id);
   }
   // Overrides take precedence.
   for (const l of links) {

@@ -42,8 +42,17 @@ const TOKEN_FIELDS = {
 } as const;
 
 function tokenKey(): Buffer {
-  const secret = process.env.BETTER_AUTH_SECRET || 'dev-secret-change-in-production-32chars!';
-  return createHash('sha256').update(`classmoji:oauth-token:${secret}`).digest();
+  const secret = process.env.BETTER_AUTH_SECRET;
+  // Never the public development key in production: tokens written with it are
+  // as good as plain text, and ones written with the real key would read back
+  // as null. Every process that touches tokens (webapp, workers, hook-station,
+  // ai-agent) needs BETTER_AUTH_SECRET.
+  if (!secret && process.env.NODE_ENV === 'production') {
+    throw new Error('BETTER_AUTH_SECRET is not set: OAuth tokens cannot be encrypted or read');
+  }
+  return createHash('sha256')
+    .update(`classmoji:oauth-token:${secret || 'dev-secret-change-in-production-32chars!'}`)
+    .digest();
 }
 
 export function encryptToken(value: string): string {
@@ -66,7 +75,9 @@ export function decryptToken(value: string | null): string | null {
       decipher.update(Buffer.from(data, 'base64url')),
       decipher.final(),
     ]).toString('utf8');
-  } catch {
+  } catch (error: unknown) {
+    // A missing secret is a misconfiguration, not a bad token: say so loudly.
+    if (!process.env.BETTER_AUTH_SECRET && process.env.NODE_ENV === 'production') throw error;
     // Wrong key (BETTER_AUTH_SECRET rotated) or damaged: no token, so callers
     // refresh or ask the person to reconnect instead of sending garbage.
     console.error('[database] could not decrypt a stored OAuth token');

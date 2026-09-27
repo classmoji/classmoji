@@ -327,6 +327,32 @@ async function reprovisionLegacyClassroom(classroomId: string, classroomSlug: st
   });
 }
 
+/**
+ * One-off, for rollouts: re-provision the autograding workflow of every
+ * repository that has tests, so each student repo gets its own callback token
+ * (and posts to AUTOGRADE_CALLBACK_URL when set). Idempotent; commits are the
+ * Classmoji bot's, which never count as submissions.
+ */
+export const reprovisionAllAutogradingTask = task({
+  id: 'autograde-reprovision-all',
+  run: async () => {
+    const repositories = await getPrisma().repository.findMany({
+      where: { autograding_tests: { some: {} }, classroom: { is_archived: false } },
+      select: { id: true, classroom: { select: { slug: true } } },
+    });
+    for (const repository of repositories) {
+      await provisionAutogradeWorkflowTask.trigger(
+        { repositoryId: repository.id, classroomSlug: repository.classroom.slug },
+        { concurrencyKey: repository.classroom.slug }
+      );
+    }
+    logger.info('autograde: re-provisioning every repository with tests', {
+      repositories: repositories.length,
+    });
+    return { repositories: repositories.length };
+  },
+});
+
 export const ingestAutogradeResultTask = task({
   id: INGEST_TASK_ID,
   run: async (payload: IngestPayload) => {
@@ -341,8 +367,14 @@ export const ingestAutogradeResultTask = task({
       select: { id: true, git_organization: { select: { provider: true } } },
     });
     const ownToken = verifyAutogradeCallbackToken(classroomSlug, token ?? null, { repoPath: repo });
+    // Only while AUTOGRADE_LEGACY_TOKENS_UNTIL (an ISO date) is ahead: that
+    // token lets anyone who read it report for every repo in the class, so it
+    // is a rollout bridge, not a standing exception. Run the
+    // `autograde-reprovision-all` task to hand every repo its own token.
+    const legacyUntil = Date.parse(process.env.AUTOGRADE_LEGACY_TOKENS_UNTIL ?? '');
     const legacyToken =
       !ownToken &&
+      legacyUntil > Date.now() &&
       classroom?.git_organization?.provider === 'GITHUB' &&
       verifyAutogradeCallbackToken(classroomSlug, token ?? null, {
         allowLegacyClassroomToken: true,

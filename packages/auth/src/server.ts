@@ -442,6 +442,12 @@ export const auth = betterAuth({
     },
   },
   advanced: {
+    // Whose IP a request is (rate limits, sessions). On Fly, Fly-Client-IP is
+    // written by the proxy and can't be forged, unlike the first entry of
+    // X-Forwarded-For, which the client controls.
+    ...(process.env.NODE_ENV === 'production'
+      ? { ipAddress: { ipAddressHeaders: ['fly-client-ip'] } }
+      : {}),
     database: {
       generateId: 'uuid',
     },

@@ -514,6 +514,8 @@ export async function create(input: {
   clientSecret: string;
   createdByUserId: string | null;
   requester?: InstanceRequester;
+  /** The client IP the setup came from, for the per-IP cap on open requests. */
+  requestIp?: string | null;
 }) {
   const host = normalizeHost(input.host);
   if (!host) throw new GitLabInstanceError('invalid_host', 'Invalid Gitlab address');
@@ -534,6 +536,7 @@ export async function create(input: {
         requester_is_admin: input.requester?.isAdmin ?? false,
         requester_since: input.requester?.since ?? null,
         request_note: input.requester?.note ?? null,
+        request_ip: input.requestIp ?? null,
       },
       select: { id: true, host: true },
     });

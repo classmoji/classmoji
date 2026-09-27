@@ -449,6 +449,8 @@ model GitLabInstance {
   requester_since           DateTime?
   /// What the requester wrote about themselves and their course.
   request_note              String?
+  /// The client IP the request came from (caps open requests per IP).
+  request_ip                String?
   created_at                DateTime  @default(now())
   updated_at                DateTime  @default(now()) @updatedAt
 

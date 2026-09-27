@@ -682,6 +682,17 @@ export const renameTeam = async ({
     repoRenames: succeeded,
   });
 
+  // A repo's autograding token is signed over its full path, and the paths
+  // just changed: re-provision the workflows of every repository these repos
+  // belong to (bot commits, never submissions), or their CI reports would be
+  // refused as someone else's.
+  await reprovisionAutograding(
+    classroomId,
+    repositories
+      .filter(repo => succeeded.some(s => s.id === repo.id))
+      .map(repo => (repo as { repository_id?: string | null }).repository_id)
+  );
+
   return {
     teamId: team.id,
     newName: updated.name,
@@ -690,6 +701,34 @@ export const renameTeam = async ({
     failed,
   };
 };
+
+/** Re-run autograde provisioning for these repositories (those with tests). Best-effort. */
+async function reprovisionAutograding(
+  classroomId: string,
+  repositoryIds: Array<string | null | undefined>
+): Promise<void> {
+  const ids = [...new Set(repositoryIds.filter((id): id is string => Boolean(id)))];
+  if (ids.length === 0) return;
+  try {
+    const [classroom, withTests] = await Promise.all([
+      getPrisma().classroom.findUnique({ where: { id: classroomId }, select: { slug: true } }),
+      getPrisma().repository.findMany({
+        where: { id: { in: ids }, autograding_tests: { some: {} } },
+        select: { id: true },
+      }),
+    ]);
+    if (!classroom) return;
+    const { tasks } = await import('@trigger.dev/sdk');
+    for (const repository of withTests) {
+      await tasks.trigger('dispatch_autograde_workflow', {
+        repositoryId: repository.id,
+        classroomSlug: classroom.slug,
+      });
+    }
+  } catch (error: unknown) {
+    console.error('[team] could not re-provision autograding after a rename', error);
+  }
+}
 
 const assertSlugFree = async ({
   classroomId,

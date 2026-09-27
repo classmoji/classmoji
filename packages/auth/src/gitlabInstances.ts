@@ -104,6 +104,18 @@ async function exchangeCode(
   };
 }
 
+/**
+ * The client IP of a request: Fly-Client-IP in production (written by Fly's
+ * proxy, not forgeable), else the first X-Forwarded-For entry (local dev).
+ */
+function clientIp(headers: Headers | undefined): string | null {
+  if (!headers) return null;
+  const fly = headers.get('fly-client-ip');
+  if (fly) return fly.trim();
+  if (process.env.NODE_ENV === 'production') return null;
+  return headers.get('x-forwarded-for')?.split(',')[0]?.trim() || null;
+}
+
 /** Open (unapproved) setup requests allowed at once, overall and per requester. */
 const MAX_PENDING_REQUESTS = 25;
 const MAX_PENDING_PER_REQUESTER = 2;
@@ -340,16 +352,28 @@ export const gitlabInstances = () =>
               note: setup.note ?? null,
             };
             // Caps, so a stream of fake Gitlabs can't bury the admins: a few
-            // open requests per requester, and a ceiling overall.
-            const pending = await getPrisma().gitLabInstance.count({
-              where: { approved_at: null },
-            });
-            const mine = email
-              ? await getPrisma().gitLabInstance.count({
-                  where: { approved_at: null, requester_email: email },
-                })
-              : 0;
-            if (pending >= MAX_PENDING_REQUESTS || mine >= MAX_PENDING_PER_REQUESTER) {
+            // open requests per client IP (the email comes from the Gitlab
+            // itself, which a fake one controls) and per email, and a
+            // ceiling overall.
+            const requestIp = clientIp(ctx.request?.headers);
+            const [pending, mine, fromIp] = await Promise.all([
+              getPrisma().gitLabInstance.count({ where: { approved_at: null } }),
+              email
+                ? getPrisma().gitLabInstance.count({
+                    where: { approved_at: null, requester_email: email },
+                  })
+                : 0,
+              requestIp
+                ? getPrisma().gitLabInstance.count({
+                    where: { approved_at: null, request_ip: requestIp },
+                  })
+                : 0,
+            ]);
+            if (
+              pending >= MAX_PENDING_REQUESTS ||
+              mine >= MAX_PENDING_PER_REQUESTER ||
+              fromIp >= MAX_PENDING_PER_REQUESTER
+            ) {
               return fail('gitlab_setup_too_many');
             }
             try {
@@ -359,6 +383,7 @@ export const gitlabInstances = () =>
                 clientSecret: client.clientSecret,
                 createdByUserId: null,
                 requester,
+                requestIp,
               });
             } catch (error: unknown) {
               ctx.context.logger.error('Gitlab instance setup failed', error);
