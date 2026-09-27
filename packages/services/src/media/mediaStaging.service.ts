@@ -21,6 +21,7 @@ import { uploadPageAsset, type PageWithContentRepo } from '../classmoji/pageCont
 import { MediaError } from './MediaError.ts';
 import {
   abortQuietly,
+  afterFailedReadyFlip,
   deleteObjectsQuietly,
   markDeleted,
   onMediaReady,
@@ -562,16 +563,31 @@ async function placeIntoMedia(client: S3Client, bucket: string, row: MediaRow): 
 
   const ref = mediaRef(row.id);
   const readyAt = new Date();
-  const { count } = await getPrisma().mediaObject.updateMany({
-    where: { id: row.id, status: 'STAGING' },
-    data: {
-      status: 'READY',
-      ready_at: readyAt,
-      placed_ref: ref,
-      processing: 'NONE',
-      upload_id: null,
-    },
-  });
+  let count: number;
+  try {
+    ({ count } = await getPrisma().mediaObject.updateMany({
+      where: { id: row.id, status: 'STAGING' },
+      data: {
+        status: 'READY',
+        ready_at: readyAt,
+        placed_ref: ref,
+        processing: 'NONE',
+        upload_id: null,
+      },
+    }));
+  } catch (error) {
+    // The copy is in media and the flip to READY failed. If it landed after
+    // all, carry on. Otherwise remove the copy — nothing serves it — and leave
+    // the row STAGING, its staged bytes intact, so finishing again (or the
+    // placement job's retry) copies it again; a final failure tombstones it and
+    // removes the key once more (`failStagedPlacement`).
+    const outcome = await afterFailedReadyFlip(row.classroom_id, row.id, null);
+    if (outcome !== 'ready') {
+      if (outcome === 'released') await deleteObjectsQuietly(client, bucket, [target]);
+      throw error;
+    }
+    count = 1;
+  }
   if (count === 0) {
     const fresh = await findMediaRow(row.classroom_id, row.id);
     if (fresh?.status === 'READY') return fresh.placed_ref ?? ref;
@@ -738,7 +754,19 @@ export async function failStagedPlacement(mediaId: string, reason: string): Prom
   if (!client) return;
   const key = stageKey(row.classroom_id, row.id);
   if (row.upload_id) await abortQuietly(client.client, client.bucket, key, row.upload_id);
-  await deleteObjectsQuietly(client.client, client.bucket, [key]);
+  // A media-bound stage may have got as far as its copy into media before it
+  // failed (`placeIntoMedia` whose READY flip did not land). The row never
+  // became READY — this tombstone came from STAGING — so nothing serves that
+  // key, and it goes with the staged bytes.
+  const keys = [key];
+  if (row.destination === 'media') {
+    try {
+      keys.push(mediaKey(row.classroom_id, row.id, `orig.${row.ext}`));
+    } catch {
+      // An extension the key grammar refuses was never copied anywhere.
+    }
+  }
+  await deleteObjectsQuietly(client.client, client.bucket, keys);
 }
 
 function requireClientOrNull(): { client: S3Client; bucket: string } | null {

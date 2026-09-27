@@ -1387,10 +1387,22 @@ export async function putMediaObject({
   }
 
   const readyAt = new Date();
-  const { count } = await getPrisma().mediaObject.updateMany({
-    where: { id: mediaId, status: 'UPLOADING' },
-    data: { status: 'READY', ready_at: readyAt, upload_id: null, processing: 'NONE' },
-  });
+  let count: number;
+  try {
+    ({ count } = await getPrisma().mediaObject.updateMany({
+      where: { id: mediaId, status: 'UPLOADING' },
+      data: { status: 'READY', ready_at: readyAt, upload_id: null, processing: 'NONE' },
+    }));
+  } catch (error) {
+    // The bytes are written and the flip to READY failed. Whether it landed is
+    // asked, not assumed: a lost response looks exactly like a failed write.
+    const outcome = await afterFailedReadyFlip(classroom.id, mediaId, 'UPLOADING');
+    if (outcome !== 'ready') {
+      if (outcome === 'released') await deleteObjectsQuietly(client, bucket, [key]);
+      throw error;
+    }
+    count = 1;
+  }
   if (count === 0) {
     // Deleted from Settings → Media while the write ran: nothing will serve it.
     await deleteObjectsQuietly(client, bucket, [key]);
@@ -1400,6 +1412,43 @@ export async function putMediaObject({
   const row = await findMediaRow(classroom.id, mediaId);
   if (row) await onMediaReady(toMediaRecord(row));
   return { mediaId, ref: mediaRef(mediaId) };
+}
+
+/**
+ * What to do with bytes already written when the flip to READY threw.
+ *
+ *   - `'ready'`    — the flip landed after all (its response was lost): the
+ *                    object is being served; keep it and carry on;
+ *   - `'released'` — the row is not READY, and is now tombstoned from `from`
+ *                    (or was already gone): nothing will ever serve the object,
+ *                    so the caller deletes it;
+ *   - `'unknown'`  — the row could not be read or tombstoned. The object is
+ *                    left: deleting bytes a READY row might be serving is worse
+ *                    than an orphan, which `deleteMedia` / the classroom purge
+ *                    still reach through the row.
+ *
+ * `from: null` skips the tombstone and only answers whether the flip landed —
+ * for a caller that keeps its row for a retry (an agent upload stays STAGING;
+ * its staged bytes are still there to copy again).
+ */
+export async function afterFailedReadyFlip(
+  classroomId: string,
+  mediaId: string,
+  from: MediaStatus | null
+): Promise<'ready' | 'released' | 'unknown'> {
+  let fresh: MediaRow | null;
+  try {
+    fresh = await findMediaRow(classroomId, mediaId);
+  } catch {
+    return 'unknown';
+  }
+  if (fresh?.status === 'READY') return 'ready';
+  if (!fresh || fresh.status === 'DELETED' || from === null) return 'released';
+  try {
+    return (await markDeleted(mediaId, from)) ? 'released' : 'unknown';
+  } catch {
+    return 'unknown';
+  }
 }
 
 /**

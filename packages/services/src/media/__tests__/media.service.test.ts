@@ -1880,6 +1880,53 @@ describe('putMediaObject', () => {
     });
   });
 
+  it('removes the object and the reservation when the READY flip throws', async () => {
+    sendImpl.mockImplementation(async (name: string) =>
+      name === 'HeadObject' ? { ContentLength: 10 } : {}
+    );
+    prisma.mediaObject.findFirst.mockImplementation(async () => row({ status: 'UPLOADING' }));
+    prisma.mediaObject.updateMany.mockImplementation(
+      async ({ data }: { data: { status?: string } }) => {
+        if (data.status === 'READY') throw new Error('connection reset');
+        return { count: 1 };
+      }
+    );
+
+    await expect(
+      putMediaObject({ classroom, userId: 'u', filename: 'intro.mp4', bytes: Buffer.alloc(10) })
+    ).rejects.toThrow('connection reset');
+
+    expect(prisma.mediaObject.updateMany.mock.calls.at(-1)?.[0]).toMatchObject({
+      where: { id: reservedId(), status: 'UPLOADING' },
+      data: expect.objectContaining({ status: 'DELETED' }),
+    });
+    expect(sent.filter(call => call.name === 'DeleteObject').map(call => call.input.Key)).toEqual([
+      `m/${CLASSROOM_ID}/${reservedId()}/orig.mp4`,
+    ]);
+  });
+
+  it('succeeds when the READY flip landed but its answer was lost', async () => {
+    sendImpl.mockImplementation(async (name: string) =>
+      name === 'HeadObject' ? { ContentLength: 10 } : {}
+    );
+    prisma.mediaObject.findFirst.mockImplementation(async () => row({ status: 'READY' }));
+    prisma.mediaObject.updateMany.mockImplementation(
+      async ({ data }: { data: { status?: string } }) => {
+        if (data.status === 'READY') throw new Error('connection reset');
+        return { count: 1 };
+      }
+    );
+
+    const result = await putMediaObject({
+      classroom,
+      userId: 'u',
+      filename: 'intro.mp4',
+      bytes: Buffer.alloc(10),
+    });
+    expect(result.mediaId).toBe(reservedId());
+    expect(sent.some(call => call.name === 'DeleteObject')).toBe(false);
+  });
+
   it('applies createUpload’s rules: USE_REPO unless explicit, then Pro', async () => {
     await expect(
       putMediaObject({ classroom, userId: 'u', filename: 'a.png', bytes: Buffer.alloc(10) })

@@ -599,6 +599,81 @@ describe('placeStagedObject', () => {
   });
 });
 
+describe('placeIntoMedia: the READY flip fails after the copy', () => {
+  const videoStage = () =>
+    stagedRow({
+      kind: 'VIDEO',
+      filename: 'lecture.mp4',
+      ext: 'mp4',
+      content_type: 'video/mp4',
+      destination: 'media',
+    });
+  const DEST = `m/${CLASSROOM_ID}/${MEDIA_ID}/orig.mp4`;
+
+  beforeEach(() => {
+    sendImpl.mockImplementation(async (name: string) =>
+      name === 'HeadObject' ? { ContentLength: 4096 } : {}
+    );
+    prisma.mediaObject.updateMany.mockImplementation(
+      async ({ data }: { data: { status?: string } }) => {
+        if (data.status === 'READY') throw new Error('connection reset');
+        return { count: 1 };
+      }
+    );
+  });
+
+  it('removes the copy and keeps the row STAGING so finishing again can retry', async () => {
+    prisma.mediaObject.findFirst.mockResolvedValue(videoStage());
+    await expect(
+      staging.finishStagedUpload({ classroom, userId: USER, uploadId: MEDIA_ID })
+    ).rejects.toThrow('connection reset');
+
+    const deleted = sent.filter(call => call.name === 'DeleteObject').map(call => call.input.Key);
+    expect(deleted).toEqual([DEST]);
+    // The staged bytes are still there, and the row was not tombstoned.
+    expect(deleted).not.toContain(STAGE_KEY);
+    expect(
+      prisma.mediaObject.updateMany.mock.calls.some(
+        ([arg]) => (arg as { data: { status?: string } }).data.status === 'DELETED'
+      )
+    ).toBe(false);
+  });
+
+  it('keeps the copy when the flip landed after all (its answer was lost)', async () => {
+    prisma.mediaObject.findFirst
+      .mockResolvedValueOnce(videoStage())
+      .mockResolvedValue(stagedRow({ status: 'READY', destination: 'media' }));
+    await expect(
+      staging.finishStagedUpload({ classroom, userId: USER, uploadId: MEDIA_ID })
+    ).resolves.toMatchObject({ status: 'placed', ref: `media://${MEDIA_ID}` });
+    const deleted = sent.filter(call => call.name === 'DeleteObject').map(call => call.input.Key);
+    expect(deleted).not.toContain(DEST);
+  });
+
+  it('leaves the copy when the row cannot even be read', async () => {
+    prisma.mediaObject.findFirst
+      .mockResolvedValueOnce(videoStage())
+      .mockRejectedValue(new Error('db down'));
+    await expect(
+      staging.finishStagedUpload({ classroom, userId: USER, uploadId: MEDIA_ID })
+    ).rejects.toThrow('connection reset');
+    expect(sent.some(call => call.name === 'DeleteObject')).toBe(false);
+  });
+});
+
+describe('failStagedPlacement: a media-bound stage', () => {
+  it('also removes the media key a failed placement may have copied to', async () => {
+    prisma.mediaObject.findUnique.mockResolvedValue(
+      stagedRow({ destination: 'media', ext: 'mp4', filename: 'lecture.mp4' })
+    );
+    await staging.failStagedPlacement(MEDIA_ID, 'The file could not be verified.');
+    expect(sent.filter(call => call.name === 'DeleteObject').map(call => call.input.Key)).toEqual([
+      STAGE_KEY,
+      `m/${CLASSROOM_ID}/${MEDIA_ID}/orig.mp4`,
+    ]);
+  });
+});
+
 describe('finishStagedUpload: routes again before placing into media', () => {
   function mediaStage() {
     prisma.mediaObject.findFirst.mockResolvedValue(
