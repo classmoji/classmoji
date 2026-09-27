@@ -328,6 +328,7 @@ describe('media_list / media_delete', () => {
     expect(mocks.deleteMedia).toHaveBeenCalledWith({
       classroom: { id: 'class-1' },
       mediaId: UPLOAD_ID,
+      userId: TEACHER.viewer.userId,
     });
     expect(mocks.auditCreate).toHaveBeenCalledWith(
       expect.objectContaining({ resource_type: 'MEDIA', action: 'DELETE' })

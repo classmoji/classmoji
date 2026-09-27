@@ -1447,7 +1447,7 @@ describe('abortUpload', () => {
     );
     sendImpl.mockResolvedValue({});
 
-    await expect(abortUpload({ classroom, mediaId: MEDIA_ID })).resolves.toEqual({
+    await expect(abortUpload({ classroom, mediaId: MEDIA_ID, userId: 'user-1' })).resolves.toEqual({
       mediaId: MEDIA_ID,
       aborted: true,
     });
@@ -1465,7 +1465,7 @@ describe('abortUpload', () => {
       row({ status: 'STAGING', destination: 'media', upload_id: 'up-7' })
     );
     sendImpl.mockResolvedValue({});
-    await abortUpload({ classroom, mediaId: MEDIA_ID });
+    await abortUpload({ classroom, mediaId: MEDIA_ID, userId: 'user-1' });
     expect(sent[0]).toEqual({
       name: 'AbortMultipartUpload',
       input: { Bucket: 'classmoji-media-test', Key: STAGE_KEY_FIXTURE(), UploadId: 'up-7' },
@@ -1477,7 +1477,7 @@ describe('abortUpload', () => {
       row({ status: 'STAGING', destination: 'media', upload_id: null })
     );
     prisma.mediaObject.updateMany.mockResolvedValue({ count: 0 });
-    await expect(abortUpload({ classroom, mediaId: MEDIA_ID })).resolves.toEqual({
+    await expect(abortUpload({ classroom, mediaId: MEDIA_ID, userId: 'user-1' })).resolves.toEqual({
       mediaId: MEDIA_ID,
       aborted: false,
     });
@@ -1488,6 +1488,28 @@ describe('abortUpload', () => {
     prisma.mediaObject.findFirst.mockResolvedValue(null);
     await expect(abortUpload({ classroom, mediaId: MEDIA_ID })).rejects.toMatchObject({
       code: 'NOT_FOUND',
+    });
+  });
+
+  it('is NOT_FOUND for somebody else’s agent upload still staging — and touches nothing', async () => {
+    prisma.mediaObject.findFirst.mockResolvedValue(
+      row({ status: 'STAGING', destination: 'media', upload_id: 'up-7' })
+    );
+    for (const userId of ['user-2', undefined]) {
+      await expect(abortUpload({ classroom, mediaId: MEDIA_ID, userId })).rejects.toMatchObject({
+        code: 'NOT_FOUND',
+      });
+    }
+    expect(sent).toHaveLength(0);
+    expect(prisma.mediaObject.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('still cancels a browser upload (UPLOADING) for any teaching-team caller', async () => {
+    prisma.mediaObject.findFirst.mockResolvedValue(row({ status: 'UPLOADING', upload_id: 'up-1' }));
+    sendImpl.mockResolvedValue({});
+    await expect(abortUpload({ classroom, mediaId: MEDIA_ID, userId: 'user-2' })).resolves.toEqual({
+      mediaId: MEDIA_ID,
+      aborted: true,
     });
   });
 });
@@ -1614,7 +1636,7 @@ describe('deleteMedia', () => {
     prisma.mediaObject.findFirst.mockResolvedValue(
       row({ status: 'STAGING', destination: 'media', upload_id: 'up-3' })
     );
-    await deleteMedia({ classroom, mediaId: MEDIA_ID });
+    await deleteMedia({ classroom, mediaId: MEDIA_ID, userId: 'user-1' });
 
     expect(prisma.mediaObject.updateMany.mock.calls.at(-1)?.[0]).toMatchObject({
       where: { id: MEDIA_ID, status: { in: ['UPLOADING', 'READY', 'STAGING'] } },
@@ -1626,6 +1648,24 @@ describe('deleteMedia', () => {
     expect(sent.filter(call => call.name === 'DeleteObject').map(call => call.input.Key)).toContain(
       STAGE_KEY_FIXTURE()
     );
+  });
+
+  it('is NOT_FOUND for somebody else’s agent upload still staging', async () => {
+    prisma.mediaObject.findFirst.mockResolvedValue(
+      row({ status: 'STAGING', destination: 'media', upload_id: 'up-3' })
+    );
+    await expect(
+      deleteMedia({ classroom, mediaId: MEDIA_ID, userId: 'user-2' })
+    ).rejects.toMatchObject({ code: 'NOT_FOUND' });
+    expect(sent).toHaveLength(0);
+    expect(prisma.mediaObject.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('deletes a READY object for any caller, as before', async () => {
+    prisma.mediaObject.findFirst.mockResolvedValue(row({ uploaded_by: 'user-1' }));
+    await expect(
+      deleteMedia({ classroom, mediaId: MEDIA_ID, userId: 'user-2' })
+    ).resolves.toMatchObject({ mediaId: MEDIA_ID });
   });
 
   it('also clears the stage key of a media row that began as an agent upload', async () => {

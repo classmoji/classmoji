@@ -625,7 +625,14 @@ export async function finishStagedUpload({
     );
   }
 
+  // The route is decided again before anything lands in media. The class may
+  // have changed since the stage opened — lost Pro, lost delivery, media
+  // switched off — and placing then would store bytes nothing can serve. The
+  // quota is NOT re-checked: this row has held its reservation since it was
+  // opened, under the lock (`insertStagingRow`).
   if (row.destination === 'media') {
+    const routed = await rerouteBeforeMedia(row);
+    if (routed === 'repo') return queueRepoPlacement(classroom.id, { ...row, destination: 'repo' });
     const ref = await placeIntoMedia(client, bucket, row);
     return {
       status: 'placed',
@@ -636,12 +643,41 @@ export async function finishStagedUpload({
     };
   }
 
-  // Repo: claim the placement (STAGING/NONE → PENDING) and queue it.
+  return queueRepoPlacement(classroom.id, row);
+}
+
+/**
+ * Route a media-bound stage again, at finish. `'media'` to go ahead; `'repo'`
+ * when the class can no longer take media but the file fits the repository
+ * (the row's destination is rewritten); a refusal is recorded on the row
+ * (`failStagedPlacement`) and thrown as the router's `STORAGE_REFUSED`.
+ */
+async function rerouteBeforeMedia(row: MediaRow): Promise<'repo' | 'media'> {
+  let routed: 'repo' | 'media';
+  try {
+    routed = await routeAgentFile({ id: row.classroom_id }, row.filename, Number(row.size_bytes));
+  } catch (error) {
+    if (error instanceof MediaError && error.code === 'STORAGE_REFUSED') {
+      await failStagedPlacement(row.id, error.message);
+    }
+    throw error;
+  }
+  if (routed === 'repo') {
+    await getPrisma().mediaObject.updateMany({
+      where: { id: row.id, status: 'STAGING' },
+      data: { destination: 'repo' },
+    });
+  }
+  return routed;
+}
+
+/** Repo: claim the placement (STAGING/NONE → PENDING) and queue it. */
+async function queueRepoPlacement(classroomId: string, row: MediaRow): Promise<StagedStatus> {
   const { count } = await getPrisma().mediaObject.updateMany({
     where: { id: row.id, status: 'STAGING', processing: 'NONE' },
     data: { processing: 'PENDING' },
   });
-  if (count === 0) return statusOf((await findMediaRow(classroom.id, row.id)) ?? row);
+  if (count === 0) return statusOf((await findMediaRow(classroomId, row.id)) ?? row);
   const pending = { ...row, processing: 'PENDING' as const };
   try {
     await enqueuePlacement(pending);

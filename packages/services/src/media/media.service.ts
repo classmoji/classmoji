@@ -1051,6 +1051,22 @@ export async function completeUpload({
 }
 
 /**
+ * The row, unless it is an agent upload still STAGING that `userId` did not
+ * open — then null, which the callers answer NOT_FOUND.
+ *
+ * A stage is its uploader's until it is placed: `file_upload_finish` and
+ * `file_upload_status` are already bound to them (`ownStagedRow`), and a
+ * cancel or delete must not be the way around that for another member of the
+ * teaching team. Every other status is a classroom resource, as before — an
+ * UPLOADING browser upload included, so the web abort route is unchanged.
+ */
+function stagedRowOf(row: MediaRow | null, userId: string | null | undefined): MediaRow | null {
+  if (!row) return null;
+  if (row.status === 'STAGING' && (!userId || row.uploaded_by !== userId)) return null;
+  return row;
+}
+
+/**
  * Cancel an upload in flight — the client's own "stop" button, and the upload
  * client's cleanup after any failure.
  *
@@ -1070,12 +1086,15 @@ export async function completeUpload({
 export async function abortUpload({
   classroom,
   mediaId,
+  userId,
 }: {
   classroom: MediaClassroom;
   mediaId: string;
+  /** The caller. Required to touch an agent upload still STAGING — see `stagedRowOf`. */
+  userId?: string | null;
 }): Promise<{ mediaId: string; aborted: boolean }> {
   const { client, bucket } = requireClient();
-  const row = await findMediaRow(classroom.id, mediaId);
+  const row = stagedRowOf(await findMediaRow(classroom.id, mediaId), userId);
   if (!row) throw new MediaError('NOT_FOUND', 'No such media object');
 
   // An agent upload not yet placed: cancelling it removes the staged bytes.
@@ -1139,12 +1158,15 @@ export async function abortUpload({
 export async function deleteMedia({
   classroom,
   mediaId,
+  userId,
 }: {
   classroom: MediaClassroom;
   mediaId: string;
+  /** The caller. Required to touch an agent upload still STAGING — see `stagedRowOf`. */
+  userId?: string | null;
 }): Promise<{ mediaId: string }> {
   const { client, bucket } = requireClient();
-  const row = await findMediaRow(classroom.id, mediaId);
+  const row = stagedRowOf(await findMediaRow(classroom.id, mediaId), userId);
   if (!row) throw new MediaError('NOT_FOUND', 'No such media object');
 
   const origKey = mediaKey(classroom.id, row.id, `orig.${row.ext}`);

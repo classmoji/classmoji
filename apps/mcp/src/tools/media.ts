@@ -200,7 +200,12 @@ export const mediaDeleteTool: ToolDefinition<MediaDeleteArgs> = {
   handler: async (args, ctx) => {
     const { classroomId } = requireClassroomCtx(ctx);
     const result = await callMedia(() =>
-      ClassmojiService.media.deleteMedia({ classroom: { id: classroomId }, mediaId: args.media_id })
+      ClassmojiService.media.deleteMedia({
+        classroom: { id: classroomId },
+        mediaId: args.media_id,
+        // An agent upload still staging is its uploader's to delete.
+        userId: ctx.viewer.userId,
+      })
     );
     await writeAudit(ctx, {
       resource_type: 'MEDIA',

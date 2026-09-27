@@ -355,7 +355,9 @@ describe('finishStagedUpload', () => {
 
   it('answers a concurrent finish that already made the row READY with the same ref', async () => {
     prisma.mediaObject.findFirst
-      .mockResolvedValueOnce(stagedRow({ destination: 'media' }))
+      .mockResolvedValueOnce(
+        stagedRow({ kind: 'VIDEO', filename: 'lecture.mp4', ext: 'mp4', destination: 'media' })
+      )
       .mockResolvedValue(stagedRow({ status: 'READY', placed_ref: `media://${MEDIA_ID}` }));
     sendImpl.mockImplementation(async (name: string) => {
       if (name === 'HeadObject') return { ContentLength: 4096 };
@@ -559,6 +561,73 @@ describe('placeStagedObject', () => {
     expect(
       staging.isPermanentPlacementError(Object.assign(new Error('x'), { code: 'FILE_REFUSED' }))
     ).toBe(true);
+  });
+});
+
+describe('finishStagedUpload: routes again before placing into media', () => {
+  function mediaStage() {
+    prisma.mediaObject.findFirst.mockResolvedValue(
+      stagedRow({
+        kind: 'VIDEO',
+        filename: 'lecture.mp4',
+        ext: 'mp4',
+        content_type: 'video/mp4',
+        size_bytes: BigInt(4096),
+        destination: 'media',
+      })
+    );
+    prisma.mediaObject.findUnique.mockResolvedValue(stagedRow({ destination: 'media' }));
+    sendImpl.mockImplementation(async (name: string) =>
+      name === 'HeadObject' ? { ContentLength: 4096 } : {}
+    );
+  }
+
+  it('a class that lost Pro gets the file queued for its repository instead', async () => {
+    mediaStage();
+    capability.mockResolvedValue(FREE_CAP);
+    const status = await staging.finishStagedUpload({
+      classroom,
+      userId: USER,
+      uploadId: MEDIA_ID,
+    });
+    expect(status.status).toBe('placing');
+    expect(prisma.mediaObject.updateMany).toHaveBeenCalledWith({
+      where: { id: MEDIA_ID, status: 'STAGING' },
+      data: { destination: 'repo' },
+    });
+    expect(sent.some(call => call.name === 'CopyObject')).toBe(false);
+    expect(trigger).toHaveBeenCalledWith(
+      staging.PLACE_STAGED_TASK_ID,
+      { mediaId: MEDIA_ID },
+      expect.anything()
+    );
+  });
+
+  it('a file the class can no longer store anywhere is refused and recorded', async () => {
+    mediaStage();
+    prisma.mediaObject.findFirst.mockResolvedValue(
+      stagedRow({
+        kind: 'VIDEO',
+        filename: 'lecture.mp4',
+        ext: 'mp4',
+        size_bytes: BigInt(200 * MB),
+        destination: 'media',
+      })
+    );
+    sendImpl.mockImplementation(async (name: string) =>
+      name === 'HeadObject' ? { ContentLength: 200 * MB } : {}
+    );
+    capability.mockResolvedValue(FREE_CAP);
+    await expect(
+      staging.finishStagedUpload({ classroom, userId: USER, uploadId: MEDIA_ID })
+    ).rejects.toMatchObject({ code: 'STORAGE_REFUSED' });
+    expect(prisma.mediaObject.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: MEDIA_ID, status: 'STAGING' },
+        data: expect.objectContaining({ status: 'DELETED' }),
+      })
+    );
+    expect(sent.some(call => call.name === 'CopyObject')).toBe(false);
   });
 });
 
