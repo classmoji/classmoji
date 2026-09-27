@@ -37,6 +37,8 @@ interface QuizMessageMetadata {
   isExplorationStep?: boolean;
   toolName?: string;
   toolInput?: unknown;
+  /** A course-material step's document title (content_get), when the ai-agent saved one. */
+  title?: string;
   explorationSteps?: ExplorationStep[];
   /**
    * Set on a fixed-copy failure line the server saved in place of a reply
@@ -94,6 +96,7 @@ interface ExplorationStep {
   toolName: string;
   toolInput: unknown;
   timestamp: number;
+  title?: string;
 }
 
 interface QuizAttemptInterfaceProps {
@@ -908,12 +911,17 @@ function QuizAttemptInterface({
     );
     // During sends, slice off steps that existed before the send started
     const newSteps = sending ? allSteps.slice(explorationStepBaseRef.current) : allSteps;
-    return newSteps.map((m: QuizMessage) => ({
-      action: m.content,
-      toolName: (getMetadata(m.metadata)?.toolName as string) ?? '',
-      toolInput: getMetadata(m.metadata)?.toolInput,
-      timestamp: m.timestamp ? new Date(m.timestamp).getTime() : 0,
-    }));
+    return newSteps.map((m: QuizMessage) => {
+      const metadata = getMetadata(m.metadata);
+      return {
+        action: m.content,
+        toolName: (metadata?.toolName as string) ?? '',
+        toolInput: metadata?.toolInput,
+        timestamp: m.timestamp ? new Date(m.timestamp).getTime() : 0,
+        // Older steps, and every code step, carry none.
+        ...(typeof metadata?.title === 'string' && metadata.title ? { title: metadata.title } : {}),
+      };
+    });
   }, [initialMessages, sending]);
 
   return (
