@@ -9,7 +9,7 @@
  */
 
 import { test, expect } from '@playwright/test';
-import type { UploadCapability } from '@classmoji/services/media/router';
+import { MEDIA_QUOTA_FULL_MESSAGE, type UploadCapability } from '@classmoji/services/media/router';
 import { REPO_REST_MAX_BYTES } from '@classmoji/utils/repo-limits';
 
 import {
@@ -26,6 +26,8 @@ import {
 } from '~/components/editor/media/uploadRouting.ts';
 
 const GIB = 1024 * 1024 * 1024;
+/** The media per-file ceiling: a DECIMAL 2 GB (`PER_FILE_MAX_BYTES`). */
+const PER_FILE = 2_000_000_000;
 
 const FREE: UploadCapability = {
   repoMaxBytes: REPO_REST_MAX_BYTES,
@@ -36,7 +38,7 @@ const FREE: UploadCapability = {
 const PRO: UploadCapability = {
   ...FREE,
   isPro: true,
-  media: { perFileMaxBytes: 2 * GIB, remainingBytes: 10 * GIB },
+  media: { perFileMaxBytes: PER_FILE, remainingBytes: 10 * GIB },
 };
 
 /** A File-shaped stand-in: routing reads the name and the size only. */
@@ -178,40 +180,33 @@ test.describe('placing an upload', () => {
 });
 
 test.describe('media refusals read as sentences', () => {
-  test('quota names the numbers when the server sent them', () => {
-    expect(
-      mediaUploadMessage({ code: 'QUOTA_EXCEEDED', usedBytes: 9 * GIB, quotaBytes: 10 * GIB }, PRO)
-    ).toContain('9 GB of 10 GB');
-  });
-
   test('a full quota shows the server sentence verbatim', () => {
     const server = 'Your class media is full. Contact hello@classmoji.io to upgrade your storage.';
     expect(
       mediaUploadMessage(
-        { code: 'QUOTA_EXCEEDED', message: server, usedBytes: 9 * GIB, quotaBytes: 10 * GIB },
-        PRO
-      )
-    ).toBe(server);
-  });
-
-  test('a quota refusal with no server sentence still names the numbers', () => {
-    // `Upload failed (409).` is what the client synthesizes for a bodyless
-    // answer — a status, not a sentence to show.
-    expect(
-      mediaUploadMessage(
         {
           code: 'QUOTA_EXCEEDED',
-          message: 'Upload failed (409).',
+          serverMessage: server,
           usedBytes: 9 * GIB,
           quotaBytes: 10 * GIB,
         },
         PRO
       )
-    ).toContain('9 GB of 10 GB');
+    ).toBe(server);
   });
 
-  test('the per-file limit comes from the capability', () => {
-    expect(mediaUploadMessage({ code: 'FILE_TOO_LARGE' }, PRO)).toContain('2 GB');
+  test('a full quota with no server sentence says the same thing the server would', () => {
+    expect(
+      mediaUploadMessage({ code: 'QUOTA_EXCEEDED', usedBytes: 9 * GIB, quotaBytes: 10 * GIB }, PRO)
+    ).toBe(MEDIA_QUOTA_FULL_MESSAGE);
+    expect(MEDIA_QUOTA_FULL_MESSAGE).toContain('hello@classmoji.io');
+  });
+
+  test('the per-file limit comes from the capability, in decimal gigabytes', () => {
+    // 2,000,000,000 bytes is "2 GB", not the "1.9 GB" binary units would say.
+    expect(mediaUploadMessage({ code: 'FILE_TOO_LARGE' }, PRO)).toBe(
+      'That file is over the 2 GB limit for a single upload.'
+    );
   });
 
   test('an unknown failure reads as a connection problem, not silence', () => {
@@ -227,7 +222,7 @@ test.describe('the media progress toast', () => {
   });
 
   test('a full store reads as none free, not a rounding artefact', () => {
-    const full = { ...PRO, media: { perFileMaxBytes: 2 * GIB, remainingBytes: 0 } };
+    const full = { ...PRO, media: { perFileMaxBytes: PER_FILE, remainingBytes: 0 } };
     expect(mediaProgressLabel({ name: 'a.mp4' }, full)).toContain('— 0 KB free');
   });
 

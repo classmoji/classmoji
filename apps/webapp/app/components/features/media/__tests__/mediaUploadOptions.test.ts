@@ -21,7 +21,9 @@ import {
 import { DEFAULT_VIDEO_OPTIONS } from '@classmoji/ui-components/media-options';
 
 const GiB = 1024 ** 3;
-const quota: QuotaSummary = { usedBytes: 0, quotaBytes: 10 * GiB, perFileBytes: 2 * GiB };
+/** The media per-file ceiling: a DECIMAL 2 GB (`PER_FILE_MAX_BYTES`). */
+const PER_FILE = 2_000_000_000;
+const quota: QuotaSummary = { usedBytes: 0, quotaBytes: 10 * GiB, perFileBytes: PER_FILE };
 
 describe('kinds', () => {
   it.each([
@@ -107,10 +109,15 @@ describe('pre-checks', () => {
     expect(precheck({ name: 'a.abcdefgh', size: 10 }, quota)).toBeNull();
   });
 
-  it('quotes the per-file ceiling', () => {
-    const message = precheck({ name: 'huge.mp4', size: 3 * GiB }, quota);
-    expect(message).toContain('3.0 GB');
-    expect(message).toContain('2.0 GB');
+  it('quotes the per-file ceiling, in the decimal gigabytes it is set in', () => {
+    const message = precheck({ name: 'huge.mp4', size: 3_000_000_000 }, quota);
+    expect(message).toBe('This file is 3 GB. The limit is 2 GB per file.');
+  });
+
+  it('a file just over the ceiling does not read as under it', () => {
+    // In binary units 2,050,000,000 bytes is "1.9 GB" — under a "2 GB" limit.
+    const message = precheck({ name: 'big.mp4', size: 2_050_000_000 }, quota);
+    expect(message).toContain('This file is 2.1 GB');
   });
 
   it('quotes what is actually free, not the whole quota', () => {
@@ -121,7 +128,7 @@ describe('pre-checks', () => {
   });
 
   it('refuses everything once the quota is zero, which is where a free classroom sits', () => {
-    const free = { usedBytes: 0, quotaBytes: 0, perFileBytes: 2 * GiB };
+    const free = { usedBytes: 0, quotaBytes: 0, perFileBytes: PER_FILE };
     expect(precheck({ name: 'lecture.mp4', size: 1 }, free)).toContain('0 bytes');
   });
 });

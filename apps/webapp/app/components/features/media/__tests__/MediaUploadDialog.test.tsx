@@ -11,6 +11,7 @@
 import { describe, expect, it } from 'vitest';
 import { messageFor } from '../MediaUploadDialog';
 import type { MultipartUploadError } from '@classmoji/ui-components';
+import { MEDIA_QUOTA_FULL_MESSAGE } from '@classmoji/services/media/router';
 import type { QuotaSummary } from '../mediaUploadOptions';
 
 const GiB = 1024 ** 3;
@@ -18,7 +19,8 @@ const GiB = 1024 ** 3;
 const quota: QuotaSummary = {
   usedBytes: 2 * GiB,
   quotaBytes: 10 * GiB,
-  perFileBytes: 2 * GiB,
+  // The media per-file ceiling: a DECIMAL 2 GB (`PER_FILE_MAX_BYTES`).
+  perFileBytes: 2_000_000_000,
 };
 
 /** A `MultipartUploadError` as the dialog receives it — only `code` is read. */
@@ -66,20 +68,23 @@ describe('messageFor', () => {
     const server = 'Your class media is full. Contact hello@classmoji.io to upgrade your storage.';
     expect(
       messageFor(
-        failure('QUOTA_EXCEEDED', { message: server, usedBytes: 9 * GiB, quotaBytes: 10 * GiB }),
+        failure('QUOTA_EXCEEDED', {
+          serverMessage: server,
+          usedBytes: 9 * GiB,
+          quotaBytes: 10 * GiB,
+        }),
         quota
       )
     ).toBe(server);
   });
 
-  it('puts the server numbers in the quota message when there is no server sentence, and the page numbers when it has none', () => {
-    const bodyless = { message: 'Upload failed (409).' };
-    expect(
-      messageFor(
-        failure('QUOTA_EXCEEDED', { ...bodyless, usedBytes: 9 * GiB, quotaBytes: 10 * GiB }),
-        quota
-      )
-    ).toContain('9.0 GB of 10 GB');
-    expect(messageFor(failure('QUOTA_EXCEEDED', bodyless), quota)).toContain('2.0 GB of 10 GB');
+  it('says what the server would for a full quota it did not word', () => {
+    expect(messageFor(failure('QUOTA_EXCEEDED'), quota)).toBe(MEDIA_QUOTA_FULL_MESSAGE);
+  });
+
+  it('quotes the per-file limit in decimal gigabytes', () => {
+    expect(messageFor(failure('FILE_TOO_LARGE'), quota)).toBe(
+      'That file is over the 2 GB limit for a single upload.'
+    );
   });
 });

@@ -530,6 +530,30 @@ describe('uploadMultipart — server error codes', () => {
       usedBytes: 10_500_000_000,
       quotaBytes: 10_737_418_240,
     });
+    // No sentence from the server: nothing a dialog should show verbatim.
+    expect((error as MultipartUploadError).serverMessage).toBeUndefined();
+  });
+
+  it("keeps the server's sentence apart, so a full store's message is shown as sent", async () => {
+    const sentence = "This class's media storage is full. Contact hello@classmoji.io to upgrade.";
+    makeServer({
+      create: () =>
+        json(409, {
+          error: 'QUOTA_EXCEEDED',
+          message: sentence,
+          usedBytes: 10_500_000_000,
+          quotaBytes: 10_737_418_240,
+        }),
+    });
+
+    const error = await uploadMultipart({
+      file: videoFile(),
+      classroomId: 'class-1',
+      endpoints: { base: BASE },
+    }).catch((e: MultipartUploadError) => e);
+
+    expect(error).toMatchObject({ code: 'QUOTA_EXCEEDED', serverMessage: sentence });
+    expect((error as MultipartUploadError).message).toBe(sentence);
   });
 
   it.each(['SIZE_MISMATCH', 'VERIFY_FAILED'])(

@@ -1,4 +1,6 @@
 import {
+  MEDIA_QUOTA_FULL_MESSAGE,
+  formatGigabytes,
   kindOfFilename,
   storageTargetFor,
   type UploadCapability,
@@ -182,17 +184,6 @@ export function formatBytes(bytes: number): string {
 }
 
 /**
- * The sentence the server sent with a refusal, or null when there was none —
- * `MultipartUploadError` synthesizes `Upload failed (409).` for a body with no
- * `message`, and that is a status, not a sentence.
- */
-function serverSentence(message: string | undefined): string | null {
-  if (typeof message !== 'string' || !message.trim()) return null;
-  if (/^Upload failed \(\d+\)\.$/.test(message)) return null;
-  return message;
-}
-
-/**
  * Media refusals that mean the capability the editor routed with was stale:
  * the classroom is no longer on Pro, can no longer serve content, or media is
  * not available right now. A file the repository can take goes there instead
@@ -232,7 +223,7 @@ export function mediaRefusalGoesToRepo(
  * upload dialog so the same refusal reads the same on every surface.
  */
 export function mediaUploadMessage(
-  error: Pick<MultipartUploadError, 'code' | 'usedBytes' | 'quotaBytes'> & { message?: string },
+  error: Pick<MultipartUploadError, 'code' | 'usedBytes' | 'quotaBytes' | 'serverMessage'>,
   capability: UploadCapability | null | undefined
 ): string {
   switch (error.code) {
@@ -242,20 +233,16 @@ export function mediaUploadMessage(
       return 'Uploading media needs a Pro classroom.';
     case 'DELIVERY_REQUIRED':
       return "This class isn't set up to serve content yet, so media can't be uploaded.";
-    case 'QUOTA_EXCEEDED': {
+    case 'QUOTA_EXCEEDED':
       // The server's own sentence, verbatim: it says what to do about a full
       // store (who to contact to upgrade), which is not this client's to word.
-      const serverMessage = serverSentence(error.message);
-      if (serverMessage) return serverMessage;
-      if (typeof error.usedBytes === 'number' && typeof error.quotaBytes === 'number') {
-        return `Not enough storage — ${formatBytes(error.usedBytes)} of ${formatBytes(error.quotaBytes)} is already in use. Delete something and try again.`;
-      }
-      return 'Not enough storage for this file. Delete something and try again.';
-    }
+      // The same sentence, from the same module, when it sent none.
+      return error.serverMessage ?? MEDIA_QUOTA_FULL_MESSAGE;
     case 'FILE_TOO_LARGE': {
+      // A decimal ceiling, read as the router reads it (`2 GB`).
       const limit = capability?.media?.perFileMaxBytes;
       return limit
-        ? `That file is over the ${formatBytes(limit)} limit for a single upload.`
+        ? `That file is over the ${formatGigabytes(limit)} limit for a single upload.`
         : 'That file is over the limit for a single upload.';
     }
     case 'KIND_NOT_ALLOWED':

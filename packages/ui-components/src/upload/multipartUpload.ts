@@ -106,23 +106,39 @@ export type MultipartUploadErrorCode =
 
 /**
  * Everything this module rejects with, so a caller can branch on `code` instead
- * of matching message strings. `QUOTA_EXCEEDED` carries the numbers the dialog
- * needs to say how much room is left.
+ * of matching message strings. `QUOTA_EXCEEDED` carries the numbers
+ * (`usedBytes`/`quotaBytes`), and — like every refusal the routes word —
+ * the server's own sentence as `serverMessage`, which is what a dialog shows:
+ * for a full store it says who to contact to upgrade, and that wording is the
+ * server's, not the dialog's.
  */
 export class MultipartUploadError extends Error {
   readonly code: MultipartUploadErrorCode;
   readonly status?: number;
   readonly usedBytes?: number;
   readonly quotaBytes?: number;
+  /**
+   * The sentence the server sent with its refusal (`body.message`), when it
+   * sent one. Absent for a bodyless answer, where `message` is only this
+   * module's `Upload failed (409).` stand-in and not something to show.
+   */
+  readonly serverMessage?: string;
 
   constructor(
     code: MultipartUploadErrorCode,
     message: string,
-    extra: { status?: number; usedBytes?: number; quotaBytes?: number; cause?: unknown } = {}
+    extra: {
+      status?: number;
+      usedBytes?: number;
+      quotaBytes?: number;
+      serverMessage?: string;
+      cause?: unknown;
+    } = {}
   ) {
     super(message, extra.cause === undefined ? undefined : { cause: extra.cause });
     this.name = 'MultipartUploadError';
     this.code = code;
+    this.serverMessage = extra.serverMessage;
     this.status = extra.status;
     this.usedBytes = extra.usedBytes;
     this.quotaBytes = extra.quotaBytes;
@@ -245,8 +261,9 @@ function delay(ms: number, signal?: AbortSignal): Promise<void> {
  * An error response turned into a typed one.
  *
  * The body is the first source — the routes answer `{ error: 'QUOTA_EXCEEDED',
- * usedBytes, quotaBytes }` — and the status is the fallback for anything that
- * failed before a handler ran (a proxy 503, say).
+ * message, usedBytes, quotaBytes }`, and `message` is kept apart as
+ * `serverMessage` so a dialog can show it verbatim — and the status is the
+ * fallback for anything that failed before a handler ran (a proxy 503, say).
  */
 async function errorFromResponse(response: Response): Promise<MultipartUploadError> {
   let body: Record<string, unknown> = {};
@@ -271,6 +288,8 @@ async function errorFromResponse(response: Response): Promise<MultipartUploadErr
     status: response.status,
     usedBytes: typeof body.usedBytes === 'number' ? body.usedBytes : undefined,
     quotaBytes: typeof body.quotaBytes === 'number' ? body.quotaBytes : undefined,
+    serverMessage:
+      typeof body.message === 'string' && body.message.trim() ? body.message : undefined,
   });
 }
 

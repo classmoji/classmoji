@@ -7,6 +7,7 @@ import type {
   uploadMultipart,
 } from '@classmoji/ui-components';
 
+import { MEDIA_QUOTA_FULL_MESSAGE, formatGigabytes } from '@classmoji/services/media/router';
 import { MediaVideoOptions } from '@classmoji/ui-components/media-options';
 import '@classmoji/ui-components/styles/media-options.css';
 import {
@@ -56,19 +57,14 @@ export function messageFor(error: MultipartUploadError, quota: QuotaSummary): st
       return 'Uploading media needs a Pro classroom.';
     case 'DELIVERY_REQUIRED':
       return "This class isn't set up to serve content yet, so media can't be uploaded.";
-    case 'QUOTA_EXCEEDED': {
+    case 'QUOTA_EXCEEDED':
       // The server's own sentence, verbatim: it says what to do about a full
       // store (who to contact to upgrade), which is not this dialog's to word.
-      // `Upload failed (409).` is the client's stand-in for a bodyless answer.
-      if (error.message && !/^Upload failed \(\d+\)\.$/.test(error.message)) {
-        return error.message;
-      }
-      const used = error.usedBytes ?? quota.usedBytes;
-      const total = error.quotaBytes ?? quota.quotaBytes;
-      return `Not enough storage — ${formatBytes(used)} of ${formatBytes(total)} is already in use. Delete something and try again.`;
-    }
+      // The same sentence, from the same module, when it sent none.
+      return error.serverMessage ?? MEDIA_QUOTA_FULL_MESSAGE;
     case 'FILE_TOO_LARGE':
-      return `That file is over the ${formatBytes(quota.perFileBytes)} limit for a single upload.`;
+      // A decimal ceiling, read as the router reads it (`2 GB`).
+      return `That file is over the ${formatGigabytes(quota.perFileBytes)} limit for a single upload.`;
     case 'KIND_NOT_ALLOWED':
       return "That file can't be uploaded. It needs an extension of at most 8 letters or digits.";
     case 'SIZE_MISMATCH':
@@ -199,7 +195,7 @@ const MediaUploadDialog = ({
         <h2 className="mb-1 text-lg font-semibold text-ink-0">Upload media</h2>
         <p className="mb-5 text-sm text-ink-3">
           Video, audio, documents, archives — any file with an extension. {formatBytes(free)} free
-          of {formatBytes(quota.quotaBytes)}, up to {formatBytes(quota.perFileBytes)} per file.
+          of {formatBytes(quota.quotaBytes)}, up to {formatGigabytes(quota.perFileBytes)} per file.
         </p>
       </div>
 

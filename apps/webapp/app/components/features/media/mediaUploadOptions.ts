@@ -12,7 +12,7 @@
  * twenty minutes sending it.
  */
 
-import { kindOfFilename } from '@classmoji/services/media/router';
+import { formatGigabytes, kindOfFilename } from '@classmoji/services/media/router';
 import type { VideoOptions } from '@classmoji/ui-components/media-options';
 
 /**
@@ -113,7 +113,9 @@ export function precheck(file: { name: string; size: number }, quota: QuotaSumma
     return `File extensions can be at most ${MAX_MEDIA_EXTENSION_LENGTH} letters or digits (.${ext} is ${ext.length}).`;
   }
   if (file.size > quota.perFileBytes) {
-    return `This file is ${formatBytes(file.size)}. The limit is ${formatBytes(quota.perFileBytes)} per file.`;
+    // Both in decimal gigabytes, the unit the ceiling is set in (`2 GB`), so
+    // the two numbers compare the way they read.
+    return `This file is ${formatGigabytes(file.size)}. The limit is ${formatGigabytes(quota.perFileBytes)} per file.`;
   }
   const free = Math.max(0, quota.quotaBytes - quota.usedBytes);
   if (file.size > free) {
