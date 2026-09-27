@@ -311,6 +311,10 @@ export interface MediaListItem {
   /** `media://{id}` — the reference the picker puts into content. */
   ref: string;
   createdAt: Date;
+  /** The video job's state (NONE for everything it never ran on). Read-only. */
+  processing: MediaProcessing;
+  /** Why it FAILED, in a sentence; null otherwise. */
+  processingError: string | null;
 }
 
 /** The most rows one picker read returns — the newest ones. */
@@ -335,8 +339,24 @@ export async function listReadyMedia(
     where: { classroom_id: classroomId, status: 'READY', ...(kind ? { kind } : {}) },
     orderBy: { created_at: 'desc' },
     take: MEDIA_LIST_LIMIT,
-    select: { id: true, filename: true, kind: true, size_bytes: true, created_at: true },
-  })) as { id: string; filename: string; kind: MediaKind; size_bytes: bigint; created_at: Date }[];
+    select: {
+      id: true,
+      filename: true,
+      kind: true,
+      size_bytes: true,
+      created_at: true,
+      processing: true,
+      processing_error: true,
+    },
+  })) as {
+    id: string;
+    filename: string;
+    kind: MediaKind;
+    size_bytes: bigint;
+    created_at: Date;
+    processing: MediaProcessing;
+    processing_error: string | null;
+  }[];
 
   return rows.map(row => ({
     id: row.id,
@@ -345,5 +365,7 @@ export async function listReadyMedia(
     sizeBytes: Number(row.size_bytes),
     ref: mediaRef(row.id),
     createdAt: row.created_at,
+    processing: row.processing,
+    processingError: row.processing === 'FAILED' ? row.processing_error : null,
   }));
 }

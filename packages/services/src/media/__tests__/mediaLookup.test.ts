@@ -153,7 +153,24 @@ describe('listReadyMedia', () => {
   it('asks for READY rows of the one classroom, newest first, as picker items', async () => {
     const created = new Date('2026-09-26T12:00:00Z');
     findMany.mockResolvedValue([
-      { id: 'm-1', filename: 'intro.mp4', kind: 'VIDEO', size_bytes: 2048n, created_at: created },
+      {
+        id: 'm-1',
+        filename: 'intro.mp4',
+        kind: 'VIDEO',
+        size_bytes: 2048n,
+        created_at: created,
+        processing: 'FAILED',
+        processing_error: 'The video could not be read.',
+      },
+      {
+        id: 'm-2',
+        filename: 'b.mp4',
+        kind: 'VIDEO',
+        size_bytes: 1n,
+        created_at: created,
+        processing: 'DONE',
+        processing_error: 'stale',
+      },
     ]);
 
     await expect(listReadyMedia('class-1', { kind: 'VIDEO' })).resolves.toEqual([
@@ -164,6 +181,19 @@ describe('listReadyMedia', () => {
         sizeBytes: 2048,
         ref: 'media://m-1',
         createdAt: created,
+        processing: 'FAILED',
+        processingError: 'The video could not be read.',
+      },
+      {
+        id: 'm-2',
+        filename: 'b.mp4',
+        kind: 'VIDEO',
+        sizeBytes: 1,
+        ref: 'media://m-2',
+        createdAt: created,
+        processing: 'DONE',
+        // A reason is only ever reported beside FAILED.
+        processingError: null,
       },
     ]);
     const query = findMany.mock.calls[0][0];
