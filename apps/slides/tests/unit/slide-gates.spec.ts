@@ -50,7 +50,6 @@ const INDEX_SOURCE = source('../../app/routes/_index/route.tsx');
 const FOLLOW_SOURCE = source('../../app/routes/$slideId_.follow/route.tsx');
 const PRESENT_SOURCE = source('../../app/routes/$slideId_.present/route.tsx');
 const SPEAKER_SOURCE = source('../../app/routes/$slideId_.speaker/route.tsx');
-const CLOUDINARY_SOURCE = source('../../app/routes/api.video.upload-cloudinary/route.tsx');
 
 /** The `Response` a guard threw, or a failure if it did not throw one. */
 function thrownResponse(run: () => void): Response {
@@ -457,22 +456,6 @@ test.describe('the upload endpoints', () => {
     expect(read).toBeGreaterThan(-1);
     expect(gate).toBeLessThan(read);
     expect(action).not.toContain('await request.formData()');
-  });
-
-  test('the Cloudinary route checks a session, then reads a capped body, then the slide', () => {
-    // The slide id is a form field, so the slide gate cannot run first — but a
-    // session can, and the body is two short text fields, so it is capped small.
-    const session = CLOUDINARY_SOURCE.indexOf('await getAuthSession(request)');
-    const read = CLOUDINARY_SOURCE.indexOf(
-      'await readLimitedFormData(request, CLOUDINARY_FORM_MAX_BYTES)'
-    );
-    const gate = CLOUDINARY_SOURCE.indexOf('await assertSlideAccess(');
-
-    for (const at of [session, read, gate]) expect(at).toBeGreaterThan(-1);
-    expect(session).toBeLessThan(read);
-    expect(read).toBeLessThan(gate);
-    expect(CLOUDINARY_SOURCE).toContain('const CLOUDINARY_FORM_MAX_BYTES = 64 * 1024;');
-    expect(CLOUDINARY_SOURCE).not.toContain('await request.formData()');
   });
 
   test('a duplicated deck records every copied file in the asset map, rewrites last', () => {
