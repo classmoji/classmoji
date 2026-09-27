@@ -339,6 +339,178 @@ export async function mapWithConcurrency<T, R>(
   return results;
 }
 
+const sleep = (ms: number): Promise<void> => new Promise(resolve => setTimeout(resolve, ms));
+
+/**
+ * Content-creating requests one `uploadBatch` sends per rolling minute.
+ *
+ * GitHub's secondary limit is 80 a minute per installation, and the
+ * installation is shared by every classroom in the org. 60 leaves the rest of
+ * the org 20 while a large import runs. `BLOB_CONCURRENCY` does not bound
+ * this: four requests in flight that each answer in 200 ms is 1,200 a minute.
+ */
+const BATCH_WRITES_PER_MINUTE = 60;
+const WRITE_WINDOW_MS = 60_000;
+
+/** Rate-limit retries per request before the refusal is thrown. */
+const RATE_LIMIT_MAX_RETRIES = 3;
+/**
+ * The longest one rate-limit wait may be. A batch runs inside a web request or
+ * a task with its own deadline; when GitHub asks for longer than this, the
+ * refusal is thrown at once rather than slept on past the caller's patience.
+ */
+const RATE_LIMIT_MAX_WAIT_MS = 120_000;
+/** First wait for a rate limit that names no time (GitHub: "at least one minute"). */
+const RATE_LIMIT_BACKOFF_MS = 60_000;
+/** 5xx retries per request — what the Octokit retry plugin gave these calls. */
+const SERVER_ERROR_MAX_RETRIES = 3;
+
+/**
+ * Sliding-window pacer for the content-creating requests of ONE batch.
+ *
+ * Every attempt takes a slot, retries included: GitHub counts each request, not
+ * each success. The first `limit` requests in any window go straight through,
+ * so a batch that fits in a minute's budget is never slowed; the next one waits
+ * until the oldest slot is a full window old.
+ *
+ * `close()` is for a batch that has already failed: a worker still waiting for
+ * a slot (or sleeping out a rate limit) throws instead of spending the org's
+ * budget on a blob nobody will commit.
+ */
+class WritePacer {
+  readonly #limit: number;
+  readonly #windowMs: number;
+  #stamps: number[] = [];
+  #closed = false;
+
+  constructor(limit: number, windowMs: number) {
+    this.#limit = limit;
+    this.#windowMs = windowMs;
+  }
+
+  close(): void {
+    this.#closed = true;
+  }
+
+  async acquire(): Promise<void> {
+    for (;;) {
+      if (this.#closed) throw new Error('Upload batch already failed');
+      const now = Date.now();
+      while (this.#stamps.length > 0 && this.#stamps[0]! <= now - this.#windowMs) {
+        this.#stamps.shift();
+      }
+      if (this.#stamps.length < this.#limit) {
+        this.#stamps.push(now);
+        return;
+      }
+      // Several workers can wake on the same freed slot; the loop re-checks.
+      await sleep(this.#stamps[0]! + this.#windowMs - now);
+    }
+  }
+}
+
+/** A header value as Octokit hands it over (string, or number in some fetch shims). */
+const headerNumber = (value: unknown): number | null => {
+  if (value === undefined || value === null || value === '') return null;
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
+};
+
+/**
+ * How long to wait before retrying `error`, if it is a GitHub rate limit.
+ *
+ * - `null`: not a rate limit — retrying would not help (a 403 for missing
+ *   permissions looks the same apart from these headers and message).
+ * - `'too-long'`: a rate limit whose stated wait exceeds `RATE_LIMIT_MAX_WAIT_MS`.
+ * - a number: milliseconds to wait.
+ *
+ * GitHub answers both its primary and secondary limits with 403 or 429. The
+ * wait follows its documented order: `retry-after` seconds when present; else,
+ * when `x-ratelimit-remaining` is 0, until `x-ratelimit-reset` (epoch seconds,
+ * plus a second so the retry lands after it); else at least a minute, doubling
+ * per retry. A 429 is a rate limit by definition; a 403 only with one of those
+ * headers or a message saying so.
+ */
+function rateLimitWait(error: unknown, retry: number, now: number): number | 'too-long' | null {
+  if (typeof error !== 'object' || error === null) return null;
+  const { status, message } = error as ErrorWithStatus;
+  if (status !== 403 && status !== 429) return null;
+
+  const headers =
+    (error as { response?: { headers?: Record<string, unknown> } }).response?.headers ?? {};
+  const retryAfter = headerNumber(headers['retry-after']);
+  const remaining = headers['x-ratelimit-remaining'];
+  const reset = headerNumber(headers['x-ratelimit-reset']);
+  const exhausted = remaining !== undefined && String(remaining) === '0';
+
+  const isRateLimit =
+    status === 429 ||
+    retryAfter !== null ||
+    exhausted ||
+    /rate limit/i.test(typeof message === 'string' ? message : '');
+  if (!isRateLimit) return null;
+
+  let stated: number | null = null;
+  if (retryAfter !== null) stated = Math.max(0, retryAfter * 1000);
+  else if (exhausted && reset !== null) stated = Math.max(0, reset * 1000 - now + 1000);
+  if (stated !== null) return stated > RATE_LIMIT_MAX_WAIT_MS ? 'too-long' : stated;
+
+  return Math.min(RATE_LIMIT_BACKOFF_MS * 2 ** retry, RATE_LIMIT_MAX_WAIT_MS);
+}
+
+/**
+ * One content-creating request of an `uploadBatch`: paced, and retried on a
+ * rate limit or a 5xx.
+ *
+ * `retries: 0` switches off the Octokit retry plugin for this request so this
+ * loop is the one retry policy. Left on, the plugin answers a 429 with three
+ * more requests at 1/4/9 s — ignoring `Retry-After`, at the moment GitHub is
+ * asking for fewer requests — and only then would this see it. The 5xx retry
+ * the plugin gave these calls is kept here, on the same 1/4/9 s schedule.
+ * Other 4xx (409, 413, …) are not retried; they will not change on a retry.
+ *
+ * On a 403 rate limit the umbrella client's throttling plugin has already
+ * waited and retried once before this sees the error — that plugin cannot be
+ * turned off per request.
+ *
+ * Kept apart from `#withGitRetry`: that one retries the whole ref-read → tree
+ * → commit → ref sequence when the branch moved underneath it; this retries a
+ * single request GitHub refused to serve yet.
+ */
+async function sendBatchWrite(
+  octokit: Awaited<ReturnType<typeof getOctokit>>,
+  pacer: WritePacer,
+  route: string,
+  params: Record<string, unknown>
+): Promise<any> {
+  let rateLimitRetries = 0;
+  let serverRetries = 0;
+  for (;;) {
+    await pacer.acquire();
+    try {
+      return await octokit.request(route, { ...params, request: { retries: 0 } });
+    } catch (error: unknown) {
+      const wait = rateLimitWait(error, rateLimitRetries, Date.now());
+      if (wait !== null) {
+        if (wait === 'too-long' || rateLimitRetries >= RATE_LIMIT_MAX_RETRIES) throw error;
+        rateLimitRetries++;
+        console.warn(
+          `[ContentService] GitHub rate limit on ${route}, retry ${rateLimitRetries}/${RATE_LIMIT_MAX_RETRIES} in ${Math.ceil(wait / 1000)}s`
+        );
+        await sleep(wait);
+        continue;
+      }
+      const status = (error as ErrorWithStatus | null)?.status;
+      if (typeof status === 'number' && status >= 500 && serverRetries < SERVER_ERROR_MAX_RETRIES) {
+        serverRetries++;
+        await sleep(serverRetries ** 2 * 1000);
+        continue;
+      }
+      throw error;
+    }
+  }
+}
+
 export class ContentService {
   /**
    * Execute Git Trees operation with retry on race condition
@@ -1383,6 +1555,9 @@ export class ContentService {
 
     const resolvedOrg = await resolveGitOrganization(gitOrganization, orgLogin);
     const octokit = await getOctokit(resolvedOrg);
+    // Every content-creating request below — seed, blobs, tree, commit, ref —
+    // goes through this, so the whole batch stays inside one minute's budget.
+    const writes = new WritePacer(BATCH_WRITES_PER_MINUTE, WRITE_WINDOW_MS);
 
     // Step 0 (opt-in): give an EMPTY repository its initial commit, because
     // every Git Data API call below — starting with blob creation — answers
@@ -1406,7 +1581,7 @@ export class ContentService {
       if (repositoryIsEmpty) {
         const seed = files[0]!;
         try {
-          await octokit.request('PUT /repos/{owner}/{repo}/contents/{path}', {
+          await sendBatchWrite(octokit, writes, 'PUT /repos/{owner}/{repo}/contents/{path}', {
             owner: resolvedOrg.login,
             repo,
             path: seed.path,
@@ -1430,7 +1605,9 @@ export class ContentService {
     // content-creating request, and GitHub allows an installation 80 of those
     // a minute and 500 an hour — shared by every classroom in the org. A
     // 50-image import fired in parallel spends most of a minute's budget in one
-    // burst and trips the secondary rate limit for everyone else.
+    // burst and trips the secondary rate limit for everyone else. Concurrency
+    // bounds the burst; `writes` bounds the RATE, so a 200-file import is
+    // spread over minutes instead of refused part-way through.
     // Track progress as each blob completes
     let completedCount = 0;
     const totalFiles = files.length;
@@ -1443,12 +1620,17 @@ export class ContentService {
         // too-large answer arrives here, on the blob, never on the commit.
         let data;
         try {
-          ({ data } = await octokit.request('POST /repos/{owner}/{repo}/git/blobs', {
-            owner: resolvedOrg.login,
-            repo,
-            content: encoding === 'base64' ? content : Buffer.from(content).toString('base64'),
-            encoding: 'base64',
-          }));
+          ({ data } = await sendBatchWrite(
+            octokit,
+            writes,
+            'POST /repos/{owner}/{repo}/git/blobs',
+            {
+              owner: resolvedOrg.login,
+              repo,
+              content: encoding === 'base64' ? content : Buffer.from(content).toString('base64'),
+              encoding: 'base64',
+            }
+          ));
         } catch (error: unknown) {
           throw asRepoTooLarge(error, basenameOf(path));
         }
@@ -1465,7 +1647,12 @@ export class ContentService {
 
         return { path, sha: data.sha };
       }
-    );
+    ).catch((error: unknown) => {
+      // The workers still waiting on a slot or a rate limit stop here instead
+      // of creating blobs for a batch that will not be committed.
+      writes.close();
+      throw error;
+    });
 
     // Git Trees operation wrapped in retry logic for race condition handling
     const gitOperation = async () => {
@@ -1511,29 +1698,39 @@ export class ContentService {
       const baseTreeSha = commitData.tree.sha;
 
       // Step 4: Create a new tree with all blobs
-      const { data: treeData } = await octokit.request('POST /repos/{owner}/{repo}/git/trees', {
-        owner: resolvedOrg.login,
-        repo,
-        base_tree: baseTreeSha,
-        tree: blobResults.map(({ path, sha }) => ({
-          path,
-          mode: '100644', // Regular file
-          type: 'blob',
-          sha,
-        })),
-      });
+      const { data: treeData } = await sendBatchWrite(
+        octokit,
+        writes,
+        'POST /repos/{owner}/{repo}/git/trees',
+        {
+          owner: resolvedOrg.login,
+          repo,
+          base_tree: baseTreeSha,
+          tree: blobResults.map(({ path, sha }) => ({
+            path,
+            mode: '100644', // Regular file
+            type: 'blob',
+            sha,
+          })),
+        }
+      );
 
       // Step 5: Create a new commit pointing to the new tree
-      const { data: newCommit } = await octokit.request('POST /repos/{owner}/{repo}/git/commits', {
-        owner: resolvedOrg.login,
-        repo,
-        message: message || `Upload ${files.length} files`,
-        tree: treeData.sha,
-        parents: [currentCommitSha],
-      });
+      const { data: newCommit } = await sendBatchWrite(
+        octokit,
+        writes,
+        'POST /repos/{owner}/{repo}/git/commits',
+        {
+          owner: resolvedOrg.login,
+          repo,
+          message: message || `Upload ${files.length} files`,
+          tree: treeData.sha,
+          parents: [currentCommitSha],
+        }
+      );
 
       // Step 6: Update the branch reference (this is where race condition can occur)
-      await octokit.request('PATCH /repos/{owner}/{repo}/git/refs/{ref}', {
+      await sendBatchWrite(octokit, writes, 'PATCH /repos/{owner}/{repo}/git/refs/{ref}', {
         owner: resolvedOrg.login,
         repo,
         ref: `heads/${branch}`,
