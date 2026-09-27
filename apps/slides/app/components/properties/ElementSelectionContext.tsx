@@ -634,7 +634,7 @@ export function ElementSelectionProvider({
     selectElement,
     clearSelection,
     onContentChange,
-    onSaveContent, // Auto-save without exiting edit mode (used after destructive ops like Cloudinary upload)
+    onSaveContent, // Auto-save without exiting edit mode
     // Theme management (presentation-level settings)
     getThemes,
     setTheme,

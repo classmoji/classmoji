@@ -9,7 +9,6 @@ import { UploadTooLargeError, readLimitedFormData } from '@classmoji/utils/uploa
 import { ClassmojiService } from '@classmoji/services';
 import { ContentService } from '@classmoji/content';
 import { isDeckSlide, slideService } from '@classmoji/services/slides';
-import { deleteSlideVideos } from '~/utils/cloudinaryService.server';
 import { resolveDeckThumbnailUrls } from '~/utils/deckDelivery.server';
 import { enqueueDeckThumbnail } from '~/utils/deckThumbnailEnqueue.server';
 import { deckOnlyMessage, isDeckKind } from '~/utils/slideKind';
@@ -203,14 +202,9 @@ export const action = async ({ request }: { request: Request }) => {
       return { error: message };
     }
 
-    // Delete the slide (no theme cleanup for simple deletion). Cloudinary
-    // video cleanup stays app-local — supplied as the service's callback.
+    // Delete the slide (no theme cleanup for simple deletion).
     try {
-      await slideService.deleteSlide({
-        slideId,
-        deleteTheme: false,
-        onDeleteVideos: deleteSlideVideos,
-      });
+      await slideService.deleteSlide({ slideId, deleteTheme: false });
       return { success: true, intent: 'delete', deletedSlideId: slideId };
     } catch (error: unknown) {
       console.error('Failed to delete slide:', error);
