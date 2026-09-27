@@ -388,14 +388,12 @@ const RepositoryAssignmentsTable = ({
         const page = instructionPages[record.assignment_id];
         if (!page || !classSlug) return title;
         return (
-          <Tooltip title={`Open instructions: ${page.title}`}>
-            <Link
-              to={`/${rolePrefix}/${classSlug}/pages/${page.id}`}
-              className="text-primary-600 hover:underline dark:text-primary-300"
-            >
-              {title}
-            </Link>
-          </Tooltip>
+          <Link
+            to={`/${rolePrefix}/${classSlug}/pages/${page.id}`}
+            className="text-primary-600 hover:underline dark:text-primary-300"
+          >
+            {title}
+          </Link>
         );
       },
     },
