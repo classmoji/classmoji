@@ -97,6 +97,15 @@ vi.mock('@classmoji/auth/server', () => ({
   getAuthSession: (...a: unknown[]) => getAuthSessionMock(...a),
 }));
 
+// The per-call MCP read token (quiz source material, Stage 2). Mocked so no
+// test here mints against a real database.
+vi.mock('@classmoji/auth/mcp-token', () => ({
+  mintMcpAccessToken: vi.fn(async () => ({
+    accessToken: 'mcp-token',
+    expiresAt: new Date('2030-01-01T00:00:00.000Z'),
+  })),
+}));
+
 const { action } = await import('../route.ts');
 
 const postRequest = (body: unknown) =>
@@ -249,7 +258,8 @@ describe('api.quiz startQuiz — background task containment', () => {
     expect(initializeAgentMock).toHaveBeenCalledWith(
       ATTEMPT_ID,
       expect.any(Object),
-      expect.objectContaining({ orgLogin: 'test-org', repoName: 'student-repo' })
+      expect.objectContaining({ orgLogin: 'test-org', repoName: 'student-repo' }),
+      expect.anything()
     );
     expect(unhandled).toEqual([]);
   });

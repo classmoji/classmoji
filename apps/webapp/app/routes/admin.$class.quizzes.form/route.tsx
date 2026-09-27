@@ -1,5 +1,6 @@
 import { useEffect, useState, useMemo } from 'react';
 import { useFetcher, useLocation, useNavigate, useParams } from 'react-router';
+import { useCallout } from '@classmoji/ui-components';
 import {
   Drawer,
   ConfigProvider,
@@ -28,6 +29,25 @@ import './quiz-form.css';
 const { TextArea } = Input;
 const { Option } = Select;
 
+/** One entry of the source-material picker: `page:<id>` or `slide:<id>`. */
+type SourceMaterialValue = `${'page' | 'slide'}:${string}`;
+
+interface PickerDoc {
+  id: string;
+  title: string;
+  is_draft: boolean;
+}
+
+/** The picker's value for a document, and back. */
+const toPickerValue = (kind: 'page' | 'slide', id: string): SourceMaterialValue => `${kind}:${id}`;
+const fromPickerValue = (value: string) => {
+  const at = value.indexOf(':');
+  return { kind: value.slice(0, at) as 'page' | 'slide', id: value.slice(at + 1) };
+};
+
+/** A picker label: the title, and a plain-text marker on a draft. */
+const pickerLabel = (doc: PickerDoc) => (doc.is_draft ? `${doc.title} — draft` : doc.title);
+
 export async function loader({ params, request }: Route.LoaderArgs) {
   const classSlug = params.class!;
   const url = new URL(request.url);
@@ -51,31 +71,55 @@ export async function loader({ params, request }: Route.LoaderArgs) {
   // Fetch repositories for linking
   const repositories = await ClassmojiService.repository.findByClassroomId(classroom.id);
   const examplePrompts = getExamplePrompts();
+  // Pages and reveal.js decks for the source-material picker (id, title, draft).
+  const sourceMaterialOptions =
+    await ClassmojiService.quizSourceMaterial.listSourceMaterialOptions(classroom.id);
 
   // If editing, fetch the quiz data
   let quiz = null;
+  // Linked documents the picker does not list (a FILE or LINK slide linked
+  // through the MCP tool, say), so the Select can still name them.
+  const linkedOutsideOptions: Array<PickerDoc & { kind: 'page' | 'slide' }> = [];
   if (quizId) {
-    quiz = await ClassmojiService.quiz.findById(quizId);
-    if (!quiz || quiz.classroom_id.toString() !== classroom.id.toString()) {
+    const found = await ClassmojiService.quiz.findById(quizId);
+    if (!found || found.classroom_id.toString() !== classroom.id.toString()) {
       throw new Response('Quiz not found', { status: 404 });
+    }
+
+    const offered = new Set([
+      ...sourceMaterialOptions.pages.map(doc => toPickerValue('page', doc.id)),
+      ...sourceMaterialOptions.decks.map(doc => toPickerValue('slide', doc.id)),
+    ]);
+    for (const doc of found.source_material) {
+      if (!offered.has(toPickerValue(doc.kind, doc.id))) {
+        linkedOutsideOptions.push({
+          kind: doc.kind,
+          id: doc.id,
+          title: doc.title,
+          is_draft: doc.is_draft,
+        });
+      }
     }
 
     // Transform for frontend
     quiz = {
-      id: quiz.id,
-      name: quiz.name,
-      moduleId: quiz.repository_id?.toString() || null,
-      systemPrompt: quiz.system_prompt,
-      rubricPrompt: quiz.rubric_prompt,
-      subject: quiz.subject || '',
-      difficultyLevel: quiz.difficulty_level || 'Beginner',
-      dueDate: quiz.due_date,
-      status: quiz.status,
-      weight: quiz.weight,
-      questionCount: quiz.question_count || 5,
-      maxAttempts: quiz.max_attempts ?? 1,
-      gradingStrategy: quiz.grading_strategy || 'HIGHEST',
-      includeCodeContext: quiz.include_code_context || false,
+      id: found.id,
+      name: found.name,
+      moduleId: found.repository_id?.toString() || null,
+      systemPrompt: found.system_prompt,
+      rubricPrompt: found.rubric_prompt,
+      subject: found.subject || '',
+      difficultyLevel: found.difficulty_level || 'Beginner',
+      dueDate: found.due_date,
+      status: found.status,
+      weight: found.weight,
+      questionCount: found.question_count || 5,
+      maxAttempts: found.max_attempts ?? 1,
+      gradingStrategy: found.grading_strategy || 'HIGHEST',
+      includeCodeContext: found.include_code_context || false,
+      // In material order, as picker values.
+      sourceMaterial: found.source_material.map(doc => toPickerValue(doc.kind, doc.id)),
+      courseSearchEnabled: found.course_search_enabled,
     };
   }
 
@@ -85,11 +129,22 @@ export async function loader({ params, request }: Route.LoaderArgs) {
     isEditing: Boolean(quizId),
     assignments: repositories, // Keep variable name for backward compat with component
     examplePrompts,
+    sourceMaterialOptions: {
+      pages: [
+        ...sourceMaterialOptions.pages,
+        ...linkedOutsideOptions.filter(doc => doc.kind === 'page'),
+      ].map(({ id, title, is_draft }) => ({ id, title, is_draft })),
+      decks: [
+        ...sourceMaterialOptions.decks,
+        ...linkedOutsideOptions.filter(doc => doc.kind === 'slide'),
+      ].map(({ id, title, is_draft }) => ({ id, title, is_draft })),
+    },
   };
 }
 
 function QuizFormDrawer({ loaderData }: Route.ComponentProps) {
-  const { org, quiz, isEditing, assignments, examplePrompts } = loaderData;
+  const { org, quiz, isEditing, assignments, examplePrompts, sourceMaterialOptions } = loaderData;
+  const callout = useCallout();
   const { opened, close } = useRouteDrawer({});
   const { isDarkMode } = useDarkMode();
   const navigate = useNavigate();
@@ -178,6 +233,37 @@ function QuizFormDrawer({ loaderData }: Route.ComponentProps) {
     }
   }, [quiz, form]);
 
+  // Two option groups for the one ordered source-material list.
+  const sourceMaterialSelectOptions = useMemo(
+    () => [
+      {
+        label: 'Pages',
+        options: sourceMaterialOptions.pages.map((doc: PickerDoc) => ({
+          label: pickerLabel(doc),
+          value: toPickerValue('page', doc.id),
+        })),
+      },
+      {
+        label: 'Slide decks',
+        options: sourceMaterialOptions.decks.map((doc: PickerDoc) => ({
+          label: pickerLabel(doc),
+          value: toPickerValue('slide', doc.id),
+        })),
+      },
+    ],
+    [sourceMaterialOptions]
+  );
+
+  // A save that published a quiz students cannot start yet (all of its source
+  // material is still draft) comes back with a warning alongside the success.
+  useEffect(() => {
+    if (fetcher.state === 'idle' && fetcher.data?.warning) {
+      callout.show({ variant: 'info', title: fetcher.data.warning });
+    }
+    // `callout` is stable per CalloutProvider.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fetcher.state, fetcher.data]);
+
   // Handle successful form submission
   useEffect(() => {
     if (fetcher.state === 'idle' && fetcher.data?.success) {
@@ -209,6 +295,9 @@ function QuizFormDrawer({ loaderData }: Route.ComponentProps) {
       const formData = {
         ...values,
         dueDate: values.dueDate ? values.dueDate.toISOString() : null,
+        // Selection order is material order: one list across pages and decks.
+        sourceMaterial: ((values.sourceMaterial ?? []) as string[]).map(fromPickerValue),
+        courseSearchEnabled: values.courseSearchEnabled === true,
         _action: isEditing ? 'updateQuiz' : 'createQuiz',
         id: quiz?.id,
       };
@@ -335,6 +424,8 @@ function QuizFormDrawer({ loaderData }: Route.ComponentProps) {
                         difficultyLevel: 'Beginner',
                         status: 'DRAFT',
                         includeCodeContext: false,
+                        sourceMaterial: [],
+                        courseSearchEnabled: false,
                       }
                 }
               >
@@ -358,6 +449,30 @@ function QuizFormDrawer({ loaderData }: Route.ComponentProps) {
                       </Option>
                     ))}
                   </Select>
+                </Form.Item>
+
+                <Form.Item
+                  name="sourceMaterial"
+                  label="Source material"
+                  extra="Questions are generated from these documents, in this order. Drafts are used once published."
+                >
+                  <Select
+                    mode="multiple"
+                    showSearch
+                    allowClear
+                    optionFilterProp="label"
+                    placeholder="Pick the pages and slide decks this quiz is about"
+                    options={sourceMaterialSelectOptions}
+                  />
+                </Form.Item>
+
+                <Form.Item
+                  name="courseSearchEnabled"
+                  label="Allow whole-course search"
+                  valuePropName="checked"
+                  extra="Lets the quiz look beyond the linked material to check whether the course covers something a student mentions."
+                >
+                  <Switch checkedChildren="On" unCheckedChildren="Off" />
                 </Form.Item>
 
                 {/* Example Solution Repo (optional - for AI assistant code exploration) */}
@@ -486,9 +601,9 @@ function QuizFormDrawer({ loaderData }: Route.ComponentProps) {
 
                 <Form.Item
                   name="rubricPrompt"
-                  label="Rubric Prompt"
-                  rules={[{ required: true, message: 'Please enter a rubric prompt' }]}
-                  tooltip="List the specific concepts and skills to assess. This is the primary content that guides the quiz questions."
+                  label="Grading rubric"
+                  rules={[{ required: true, message: 'Please enter a grading rubric' }]}
+                  extra="How answers are graded. Put what the quiz covers in Source material."
                 >
                   <TextArea
                     autoSize={{ minRows: 8, maxRows: 20 }}

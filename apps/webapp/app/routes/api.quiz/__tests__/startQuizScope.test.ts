@@ -75,6 +75,15 @@ vi.mock('@classmoji/auth/server', () => ({
   getAuthSession: (...a: unknown[]) => getAuthSessionMock(...a),
 }));
 
+// The per-call MCP read token (quiz source material, Stage 2). Mocked so no
+// test here mints against a real database.
+vi.mock('@classmoji/auth/mcp-token', () => ({
+  mintMcpAccessToken: vi.fn(async () => ({
+    accessToken: 'mcp-token',
+    expiresAt: new Date('2030-01-01T00:00:00.000Z'),
+  })),
+}));
+
 const { action } = await import('../route.ts');
 // The service's own "no such attempt" signal, taken from the mocked module so
 // the action's instanceof check sees the same class it does in production.

@@ -94,9 +94,40 @@ const RESTART_FAILED_MESSAGE = "Couldn't start a new attempt. Please try again."
 /**
  * ai-agent codes whose text is fixed copy meant for the student (see
  * aiAgentConnection's USER_FACING_ERROR_CODES), so a failed reply may show it.
- * Every other code, API_ERROR included, gets REPLY_FAILED_MESSAGE.
+ * Every other code, API_ERROR included, gets REPLY_FAILED_MESSAGE — except
+ * source_material_unavailable, which gets SOURCE_MATERIAL_UNAVAILABLE_MESSAGE.
  */
 const STUDENT_FACING_AGENT_CODES = ['BUDGET_EXCEEDED'];
+
+/**
+ * A quiz that links source material (pages and decks) is built from it, so a
+ * student who can see none of it has nothing to be quizzed on: every linked
+ * document is still a draft, or none has been indexed yet. Fixed copy, shown
+ * as-is by the quiz list and the attempt modal (they read `message`).
+ */
+const SOURCE_MATERIAL_UNAVAILABLE_MESSAGE =
+  "This quiz's source material isn't available yet. Ask your instructor.";
+
+/**
+ * The ai-agent's own refusal for the same state, raised when its load at
+ * attempt start (or on session recovery) finds no document for this user — a
+ * page unpublished between the pre-check and the init, say. aiAgentConnection
+ * carries the ERROR payload's `code` onto the thrown error.
+ */
+const isSourceMaterialUnavailable = (error: unknown) =>
+  (error as { code?: unknown } | null)?.code === 'source_material_unavailable';
+
+/** The 409 a start or restart answers when nothing linked is available. */
+const sourceMaterialUnavailableResponse = () =>
+  new Response(
+    JSON.stringify({
+      success: false,
+      code: 'SOURCE_MATERIAL_UNAVAILABLE',
+      message: SOURCE_MATERIAL_UNAVAILABLE_MESSAGE,
+      error: SOURCE_MATERIAL_UNAVAILABLE_MESSAGE,
+    }),
+    { status: 409, headers: { 'Content-Type': 'application/json' } }
+  );
 
 export async function action({ request }: Route.ActionArgs) {
   // Only handle POST requests
@@ -356,6 +387,52 @@ export async function action({ request }: Route.ActionArgs) {
 
     const { userId } = access;
 
+    /**
+     * The pre-attempt source-material check (quiz source material §4.3).
+     *
+     * A quiz with NO linked documents is ungrounded and behaves exactly as it
+     * always has: no extra query. One with links answers 409 when none of them
+     * would reach this user's prompt, BEFORE an attempt exists, so a refused
+     * start consumes no attempt. The ai-agent repeats the check at init.
+     */
+    const sourceMaterialRefusal = async (
+      quiz: { id: string; classroom_id: string; source_material?: unknown[] } | undefined
+    ): Promise<Response | null> => {
+      if (!quiz?.source_material?.length) return null;
+      const { configured, startable } = await ClassmojiService.quizSourceMaterial.countStartable({
+        quizId: quiz.id,
+        classroomId: quiz.classroom_id,
+        userId,
+      });
+      return configured > 0 && startable === 0 ? sourceMaterialUnavailableResponse() : null;
+    };
+
+    /**
+     * The MCP read token this ai-agent call carries (quiz source material,
+     * Stage 2), minted for the caller the way Ask Moji mints it: every call,
+     * reusing a live token with time left. The quiz uses it to read linked
+     * documents in full and, when the quiz allows it, to search the course.
+     *
+     * A mint failure does NOT fail the turn: the quiz runs without that
+     * verification. NEVER LOG THE TOKEN; it goes only into the HMAC-signed
+     * payload, never to the browser and never into storage.
+     */
+    const mintQuizMcpToken = async (): Promise<
+      { accessToken: string; expiresAt: string } | undefined
+    > => {
+      try {
+        const { mintMcpAccessToken } = await import('@classmoji/auth/mcp-token');
+        const { accessToken, expiresAt } = await mintMcpAccessToken(userId);
+        return { accessToken, expiresAt: expiresAt.toISOString() };
+      } catch (error) {
+        console.error(
+          '[quiz] MCP token mint failed; continuing without course verification:',
+          error instanceof Error ? error.message : 'unknown error'
+        );
+        return undefined;
+      }
+    };
+
     // Check if admin is impersonating a student (for "View As" feature)
     // Impersonating admins can interact with quiz attempts on behalf of students
     const { getAuthSession } = await import('@classmoji/auth/server');
@@ -369,6 +446,8 @@ export async function action({ request }: Route.ActionArgs) {
           // If attemptId is provided, use it (for resuming specific attempts)
           // Otherwise create a new attempt respecting max_attempts
           let attempt;
+          // Whether the source-material pre-check has already run for this call.
+          let materialChecked = false;
 
           if (data.attemptId) {
             // Resume specific attempt (e.g., admin preview with pre-created attempt).
@@ -405,6 +484,12 @@ export async function action({ request }: Route.ActionArgs) {
 
             attempt = attemptData.attempt;
           } else {
+            // Nothing linked is available to this user: refuse BEFORE the
+            // attempt row exists, so the refusal costs no attempt.
+            const refusal = await sourceMaterialRefusal(context.quiz);
+            if (refusal) return refusal;
+            materialChecked = true;
+
             // Create new attempt with max_attempts validation
             const result = await ClassmojiService.quizAttempt.createNew(
               data.quizId,
@@ -433,6 +518,14 @@ export async function action({ request }: Route.ActionArgs) {
             return new Response(JSON.stringify({ attemptId: attempt.id }), {
               headers: { 'Content-Type': 'application/json' },
             });
+          }
+
+          // A fresh attempt made by restartQuiz (which ran the same check) is
+          // about to start: check again, since the material can have changed
+          // in between. An attempt already under way is never stopped here.
+          if (!materialChecked) {
+            const refusal = await sourceMaterialRefusal(context.quiz);
+            if (refusal) return refusal;
           }
 
           // Check if this is a code-aware quiz (linked to a repository with code context enabled)
@@ -488,6 +581,7 @@ export async function action({ request }: Route.ActionArgs) {
 
                 // Load classroom settings for LLM configuration
                 const classroomSettings = attempt.quiz.classroom?.settings;
+                const mcpToken = await mintQuizMcpToken();
 
                 // Initialize via WebSocket to ai-agent service
                 // ai-agent saves all messages (welcome, exploration steps, opening) to DB
@@ -513,7 +607,8 @@ export async function action({ request }: Route.ActionArgs) {
                     explorationEffort: classroomSettings?.exploration_effort,
                   },
                   // Code-aware options
-                  { orgLogin: gitOrganization.login, repoName, accessToken }
+                  { orgLogin: gitOrganization.login, repoName, accessToken },
+                  { mcpToken }
                 );
 
                 // ai-agent already saved the opening message to AIConversationMessage
@@ -530,6 +625,19 @@ export async function action({ request }: Route.ActionArgs) {
                 // Frontend picks up new messages via DB polling (revalidation)
               } catch (error: unknown) {
                 console.error('[startQuiz] Quiz-agent initialization failed:', error);
+
+                // The ai-agent found nothing to build the quiz from: say so,
+                // and ask no question (no generic fallback, no count bump).
+                if (isSourceMaterialUnavailable(error)) {
+                  await ClassmojiService.aiConversation.addMessage(
+                    attempt.id,
+                    'ASSISTANT',
+                    SOURCE_MATERIAL_UNAVAILABLE_MESSAGE,
+                    false,
+                    { errorType: 'SOURCE_MATERIAL_UNAVAILABLE' }
+                  );
+                  return;
+                }
 
                 // Stopped by the budget guard: say so, and ask no question.
                 if (isBudgetExceeded(error)) {
@@ -579,20 +687,27 @@ export async function action({ request }: Route.ActionArgs) {
                 // Load classroom settings for LLM configuration
                 const classroomSettings = attempt.quiz.classroom?.settings;
 
+                const mcpToken = await mintQuizMcpToken();
+
                 // Initialize via WebSocket to ai-agent service (no code-aware options)
                 // ai-agent saves all messages to DB, frontend polls via revalidation
-                const result = await initializeQuizViaAgent(attempt.id, {
-                  systemPrompt: attempt.quiz.system_prompt,
-                  rubricPrompt: attempt.quiz.rubric_prompt,
-                  questionCount: attempt.quiz.question_count || 5,
-                  subject: attempt.quiz.subject,
-                  difficultyLevel: attempt.quiz.difficulty_level,
-                  anthropicApiKey: classroomSettings?.anthropic_api_key,
-                  model: classroomSettings?.llm_model,
-                  // Reasoning effort per phase; null = the ai-agent's default.
-                  questionEffort: classroomSettings?.question_effort,
-                  gradingEffort: classroomSettings?.grading_effort,
-                });
+                const result = await initializeQuizViaAgent(
+                  attempt.id,
+                  {
+                    systemPrompt: attempt.quiz.system_prompt,
+                    rubricPrompt: attempt.quiz.rubric_prompt,
+                    questionCount: attempt.quiz.question_count || 5,
+                    subject: attempt.quiz.subject,
+                    difficultyLevel: attempt.quiz.difficulty_level,
+                    anthropicApiKey: classroomSettings?.anthropic_api_key,
+                    model: classroomSettings?.llm_model,
+                    // Reasoning effort per phase; null = the ai-agent's default.
+                    questionEffort: classroomSettings?.question_effort,
+                    gradingEffort: classroomSettings?.grading_effort,
+                  },
+                  null,
+                  { mcpToken }
+                );
 
                 // ai-agent already saved the opening message to AIConversationMessage
                 // Check first question was received
@@ -607,6 +722,19 @@ export async function action({ request }: Route.ActionArgs) {
                 // Frontend picks up new messages via DB polling (revalidation)
               } catch (llmError) {
                 console.error('[startQuiz] Quiz-agent error:', llmError);
+
+                // The ai-agent found nothing to build the quiz from: say so,
+                // and ask no question (no generic fallback, no count bump).
+                if (isSourceMaterialUnavailable(llmError)) {
+                  await ClassmojiService.aiConversation.addMessage(
+                    attempt.id,
+                    'ASSISTANT',
+                    SOURCE_MATERIAL_UNAVAILABLE_MESSAGE,
+                    false,
+                    { errorType: 'SOURCE_MATERIAL_UNAVAILABLE' }
+                  );
+                  return;
+                }
 
                 // Stopped by the budget guard: say so, and ask no question.
                 if (isBudgetExceeded(llmError)) {
@@ -695,7 +823,8 @@ export async function action({ request }: Route.ActionArgs) {
             // Send message via WebSocket to ai-agent service
             // Both standard and code-aware quizzes use the same unified path
             // ai-agent saves all messages (user, exploration steps, response) to DB
-            const result = await sendMessageToAgent(data.attemptId, data.content);
+            const mcpToken = await mintQuizMcpToken();
+            const result = await sendMessageToAgent(data.attemptId, data.content, { mcpToken });
             agentReplied = true;
 
             aiResponse = result.content;
@@ -708,8 +837,9 @@ export async function action({ request }: Route.ActionArgs) {
             // timeout included). The real error is in the log above.
             const agentCode = (agentError as { code?: unknown } | null)?.code;
             const code = typeof agentCode === 'string' ? agentCode : null;
-            aiResponse =
-              code && STUDENT_FACING_AGENT_CODES.includes(code) && agentError instanceof Error
+            aiResponse = isSourceMaterialUnavailable(agentError)
+              ? SOURCE_MATERIAL_UNAVAILABLE_MESSAGE
+              : code && STUDENT_FACING_AGENT_CODES.includes(code) && agentError instanceof Error
                 ? agentError.message || REPLY_FAILED_MESSAGE
                 : REPLY_FAILED_MESSAGE;
 
@@ -1030,6 +1160,11 @@ export async function action({ request }: Route.ActionArgs) {
 
       case 'restartQuiz': {
         try {
+          // Nothing linked is available to this user: refuse before anything
+          // changes — no session is ended and no attempt is created.
+          const refusal = await sourceMaterialRefusal(context.quiz);
+          if (refusal) return refusal;
+
           // Cleanup via ai-agent service BEFORE creating new attempt.
           // The attempt created below is the caller's own, so the only session
           // worth ending is the caller's own attempt on this same quiz. An id

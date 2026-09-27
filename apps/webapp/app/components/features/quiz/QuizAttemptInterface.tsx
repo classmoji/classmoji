@@ -38,6 +38,11 @@ interface QuizMessageMetadata {
   toolName?: string;
   toolInput?: unknown;
   explorationSteps?: ExplorationStep[];
+  /**
+   * Set on a fixed-copy failure line the server saved in place of a reply
+   * (BUDGET_EXCEEDED, SOURCE_MATERIAL_UNAVAILABLE, AGENT_FAILURE, …).
+   */
+  errorType?: string;
   [key: string]: unknown;
 }
 
@@ -57,6 +62,18 @@ interface QuizMessage {
   metadata?: Prisma.JsonValue;
   timestamp?: string | Date;
 }
+
+/**
+ * Whether the transcript ends in a failure line the server saved in place of
+ * a question. Nothing more is coming for it, so the chat must stop waiting —
+ * a start refused for unavailable source material leaves that line as the
+ * ONLY assistant message, which the welcome-message rules below would
+ * otherwise read as "still waiting for question 1" and poll forever.
+ */
+const endsInFailureLine = (displayMessages: QuizMessage[]): boolean => {
+  const last = displayMessages[displayMessages.length - 1];
+  return last?.role === 'assistant' && Boolean(getMetadata(last.metadata)?.errorType);
+};
 
 /** Focus metrics snapshot from useQuizFocusMetrics */
 interface MetricsSnapshot {
@@ -542,7 +559,8 @@ function QuizAttemptInterface({
       const hasOpeningMessage = assistantMessages.some(
         (m: QuizMessage) => getMetadata(m.metadata)?.isOpeningMessage
       );
-      const hasWelcomeOnly = assistantMessages.length === 1 && !hasOpeningMessage;
+      const hasWelcomeOnly =
+        assistantMessages.length === 1 && !hasOpeningMessage && !endsInFailureLine(displayMessages);
       if (hasWelcomeOnly && !readOnly) {
         setLoading(true);
       }
@@ -690,7 +708,11 @@ function QuizAttemptInterface({
       const lastIsAssistantResponse =
         lastMsg?.role === 'assistant' && !getMetadata(lastMsg?.metadata)?.isWelcomeMessage;
 
-      if (hasOpeningMessage || (assistantMessages.length >= 2 && lastIsAssistantResponse)) {
+      if (
+        hasOpeningMessage ||
+        (assistantMessages.length >= 2 && lastIsAssistantResponse) ||
+        endsInFailureLine(displayMessages)
+      ) {
         setLoading(false);
       }
     }
