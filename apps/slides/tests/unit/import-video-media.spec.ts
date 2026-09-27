@@ -567,7 +567,9 @@ test.describe('the importer’s wiring', () => {
     }
     expect(existsSync(path('../../app/components/VideoSelectionModal.tsx'))).toBe(false);
     expect(existsSync(path('../../app/utils/zipAnalyzer.ts'))).toBe(false);
-    expect(PROGRESS).toContain('uploading_media');
+    // Media writes happen inside the processing steps, one entry at a time,
+    // so there is no separate step to show.
+    expect(PROGRESS).not.toContain('uploading_media');
   });
 
   test('the rules module stays off the services barrel', () => {
