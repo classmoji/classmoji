@@ -153,6 +153,7 @@ export async function getRecentViewers({
             name: true,
             login: true,
             image: true,
+            provider: true,
             provider_id: true,
           },
         },
@@ -188,6 +189,7 @@ type ResourceViewWithUser = Prisma.ResourceViewGetPayload<{
         name: true;
         login: true;
         image: true;
+        provider: true;
         provider_id: true;
       };
     };
@@ -304,6 +306,7 @@ export async function getRecentViewersForPaths({
             name: true,
             login: true,
             image: true,
+            provider: true,
             provider_id: true,
           },
         },

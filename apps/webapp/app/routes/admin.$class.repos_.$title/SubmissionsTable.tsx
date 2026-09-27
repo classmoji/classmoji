@@ -75,7 +75,7 @@ export interface SubmissionsRepo {
     slug?: string | null;
     [key: string]: unknown;
   } | null;
-  team?: { avatar_url: string; name: string; slug: string; [key: string]: unknown } | null;
+  team?: { avatar_url?: string | null; name: string; slug: string; [key: string]: unknown } | null;
   assignments?: RepoAssignmentEntry[];
   project_number?: number | null;
   metadata?: unknown;

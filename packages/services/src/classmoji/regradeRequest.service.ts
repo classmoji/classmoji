@@ -81,6 +81,7 @@ export const findMany = async (query: Prisma.RegradeRequestWhereInput) => {
           id: true,
           email: true,
           image: true,
+          provider: true,
           provider_id: true,
           _count: {
             select: {

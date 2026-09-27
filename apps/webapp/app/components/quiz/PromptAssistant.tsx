@@ -283,6 +283,7 @@ function MessageBubble({
 }: MessageBubbleProps) {
   const isUser = message.role === 'user';
   const { content, suggestions } = parseSuggestions(message.content);
+  const { isGitLab } = useGitWeb();
 
   return (
     <div className={`pa-message ${isUser ? 'user' : 'assistant'}`}>
@@ -318,7 +319,8 @@ function MessageBubble({
       {isUser &&
         (userLogin ? (
           <Avatar
-            src={`https://github.com/${userLogin}.png?size=40`}
+            // A Gitlab username names a stranger on github.com: initial only.
+            src={isGitLab ? undefined : `https://github.com/${userLogin}.png?size=40`}
             style={{ backgroundColor: '#52c41a', flexShrink: 0 }}
           >
             {userLogin[0]?.toUpperCase()}

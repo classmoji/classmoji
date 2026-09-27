@@ -20,7 +20,7 @@ interface Team {
   id: string;
   name: string;
   slug: string;
-  avatar_url?: string;
+  avatar_url?: string | null;
   tags: Array<{ id: string; tag: { name: string } }>;
   memberships: Array<{
     user: {

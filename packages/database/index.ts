@@ -54,8 +54,11 @@ function createPrismaClient() {
       },
       team: {
         avatar_url: {
-          needs: { provider_id: true },
-          compute(team: { provider_id: string | null }) {
+          needs: { provider_id: true, provider: true },
+          compute(team: { provider_id: string | null; provider: string | null }) {
+            // Only Github team avatars can be built from an id; a Gitlab
+            // team (subgroup) gets none, and the UI shows its initial.
+            if (team.provider === 'GITLAB') return null;
             if (!team.provider_id) {
               return 'https://cdn-icons-png.flaticon.com/512/25/25231.png';
             }

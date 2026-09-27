@@ -92,7 +92,7 @@ export interface SubmissionsRepo {
     slug?: string | null;
     [key: string]: unknown;
   } | null;
-  team?: { avatar_url: string; name: string; slug: string; [key: string]: unknown } | null;
+  team?: { avatar_url?: string | null; name: string; slug: string; [key: string]: unknown } | null;
   submission: SubmissionRow | null;
   project_number?: number | null;
   metadata?: unknown;

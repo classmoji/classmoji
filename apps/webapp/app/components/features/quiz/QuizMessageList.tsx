@@ -760,7 +760,8 @@ const QuizMessageList = ({
           {role === 'USER' &&
             (userLogin ? (
               <Avatar
-                src={`https://github.com/${userLogin}.png?size=40`}
+                // A Gitlab username names a stranger on github.com: initial only.
+                src={isGitLab ? undefined : `https://github.com/${userLogin}.png?size=40`}
                 style={{ backgroundColor: '#52c41a' }}
               >
                 {userLogin[0]?.toUpperCase()}

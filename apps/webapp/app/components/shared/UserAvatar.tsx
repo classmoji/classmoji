@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { useGitWeb } from '~/hooks/useGitWeb';
 
 const GRADIENTS = [
   'from-rose-400 to-pink-500',
@@ -47,12 +48,15 @@ const UserAvatar = ({
   ringClassName = 'ring-1 ring-gray-200 dark:ring-gray-700',
 }: UserAvatarProps) => {
   const [errored, setErrored] = useState(false);
+  // Avatars come from github.com by login; in a Gitlab classroom that login
+  // names a stranger there, so Gitlab users get their initials.
+  const { isGitLab } = useGitWeb();
   const initials = getInitials(name, login);
   const gradient = pickGradient(seed || login || name || 'x');
   const style = { width: size, height: size };
   const fontSize = Math.max(10, Math.round(size * 0.38));
 
-  if (!login || errored) {
+  if (!login || errored || isGitLab) {
     return (
       <div
         style={{ ...style, fontSize }}

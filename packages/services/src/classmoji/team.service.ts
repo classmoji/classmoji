@@ -160,7 +160,14 @@ export const findByTagId = async (classroomId: string, tagId: string) => {
       memberships: {
         include: {
           user: {
-            select: { id: true, name: true, login: true, provider_id: true },
+            select: {
+              id: true,
+              name: true,
+              login: true,
+              provider: true,
+              provider_id: true,
+              image: true,
+            },
           },
         },
       },
@@ -180,7 +187,14 @@ export const findUserTeamByTag = async (classroomId: string, tagId: string, user
       memberships: {
         include: {
           user: {
-            select: { id: true, name: true, login: true, provider_id: true },
+            select: {
+              id: true,
+              name: true,
+              login: true,
+              provider: true,
+              provider_id: true,
+              image: true,
+            },
           },
         },
       },
