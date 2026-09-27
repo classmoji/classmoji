@@ -68,10 +68,13 @@ import { uploadCapabilityFor } from './uploadCapability.ts';
  *
  * ## "Never a half-rewritten file", decided
  *
- * `rewrite` replaces a reference only when its object was copied and its new
- * row is READY; every other reference in the same file is left byte-for-byte as
- * it was. The invariant that holds is the one the plan cares about: NO file
- * ever points at a new id whose object does not exist. The alternative — leave
+ * `rewrite` repoints a reference only when its object was copied and its new
+ * row is READY; every other `media://` reference in the same file is left
+ * byte-for-byte as it was, and a signed URL naming the source whose object was
+ * not copied becomes the bare `media://{sourceId}` (so no source signature is
+ * ever carried into the copy; see "Signed URLs are references too"). The
+ * invariant that holds is the one the plan cares about: NO file ever points at
+ * a new id whose object does not exist. The alternative — leave
  * the whole file untouched when any one of its objects could not be copied —
  * was weighed and rejected: it would strand the copies that DID succeed (billed
  * to the destination, referenced by nothing) and leave more broken references
@@ -85,7 +88,9 @@ import { uploadCapabilityFor } from './uploadCapability.ts';
  * storage as well (pasted from a rendered page, or saved before the editor
  * canonicalized its own URLs). One naming the SOURCE classroom is treated
  * exactly like `media://{mediaId}`: copied, and rewritten to `media://{newId}`,
- * which the destination signs for itself on render. Any variant — the original,
+ * which the destination signs for itself on render — and when it could NOT be
+ * copied, still rewritten, to the bare `media://{mediaId}`: the signature is
+ * the source's, and it never travels into the copy. Any variant — the original,
  * the rendition, the poster — becomes the bare reference, the same rule
  * `canonicalizeAssetRef` applies on save. A signed URL naming any OTHER
  * classroom is the third-classroom case and is left alone with a warning; it
@@ -226,28 +231,39 @@ export function collectMediaRefs(text: string, sourceClassroomId: string): Colle
 }
 
 /**
- * Replace every reference whose object was copied with `media://{newId}`.
+ * Replace every reference whose object was copied with `media://{newId}`, and
+ * every signed URL naming the source with a bare reference.
  *
- * Only ids in `copied` move; everything else — an object that could not be
- * copied, one that was never the source's, a signed URL for another classroom —
- * comes back exactly as it was. See the header for why that is the rule.
+ * Only ids in `copied` move to a new id. A `media://` reference whose object
+ * was not copied, and a signed URL for another classroom, come back exactly as
+ * they were; a signed URL naming the SOURCE whose object was not copied comes
+ * back as `media://{sourceId}` — never with its signature. See the header.
  */
 export function rewriteMediaRefs(
   text: string,
   sourceClassroomId: string,
   copied: ReadonlyMap<string, string>
 ): string {
-  if (copied.size === 0 || typeof text !== 'string' || text.length === 0) return text;
+  if (typeof text !== 'string' || text.length === 0) return text;
   const source = sourceClassroomId.toLowerCase();
 
+  // EVERY signed URL naming the source becomes a bare reference, copied or
+  // not: its object's copy when there is one, otherwise the SOURCE id. A URL
+  // carries a live signature for the source classroom, and a copy that could
+  // not be made must not carry it into the destination's content (where it
+  // would keep serving the source's bytes until it expired). The bare source
+  // reference resolves, in the destination, to the `/missing/` placeholder —
+  // the lookup is scoped to the classroom rendering it — which is exactly what
+  // an uncopied object is there.
   const withUrls = text.replace(
     SIGNED_MEDIA_URL_PATTERN,
     (url: string, classroomId: string, mediaId: string) => {
       if (classroomId.toLowerCase() !== source) return url;
-      const next = copied.get(mediaId.toLowerCase());
-      return next ? mediaRef(next) : url;
+      const id = mediaId.toLowerCase();
+      return mediaRef(copied.get(id) ?? id);
     }
   );
+  if (copied.size === 0) return withUrls;
 
   return withUrls.replace(MEDIA_REF_PATTERN, (ref: string, mediaId: string) => {
     const next = copied.get(mediaId);
@@ -272,6 +288,10 @@ const KIND_LABEL: Record<MediaKind, string> = {
 function describe(row: Pick<MediaRow, 'kind' | 'filename'>): string {
   return `${KIND_LABEL[row.kind] ?? 'file'} "${row.filename}"`;
 }
+
+/** Why an object was skipped when the destination's media storage had no room for it. */
+export const DESTINATION_FULL_REASON =
+  "the destination class's media storage is full (contact hello@classmoji.io to upgrade)";
 
 /** How many files a skip summary names before it counts the rest. */
 const SKIPPED_NAMED_MAX = 5;
@@ -353,11 +373,14 @@ async function copyOne({
   bucket,
   row,
   opts,
+  onQuotaFull,
 }: {
   client: S3Client;
   bucket: string;
   row: MediaRow;
   opts: MediaImportCopyOptions;
+  /** The destination had no room for this object; the caller warns. */
+  onQuotaFull: (row: MediaRow) => void;
 }): Promise<string | null> {
   const { sourceClassroomId, targetClassroomId, warn } = opts;
   const newId = randomUUID();
@@ -444,7 +467,8 @@ async function copyOne({
   });
 
   if (!reserved.ok) {
-    warn(`Skipped ${describe(row)}: the destination class is over its media storage quota`);
+    // Named by the caller, in one summary for the whole pass.
+    onQuotaFull(row);
     return null;
   }
 
@@ -617,15 +641,23 @@ export function createMediaImportCopier(opts: MediaImportCopyOptions): MediaImpo
     // SUM and INSERT, and the copies are server-side, so running them in
     // parallel would buy little and would race this run's own reservations
     // against each other for no reason.
+    const noRoom: MediaRow[] = [];
     for (const row of rows) {
       settled.add(row.id);
-      const newId = await copyOne({ client, bucket, row, opts });
+      const newId = await copyOne({
+        client,
+        bucket,
+        row,
+        opts,
+        onQuotaFull: full => noRoom.push(full),
+      });
       if (newId) {
         copied.set(row.id, newId);
         created.set(row.id, newId);
         opts.onCopied?.(row.id, newId);
       }
     }
+    if (noRoom.length > 0) warn(skippedSummary(noRoom, DESTINATION_FULL_REASON));
   }
 
   async function discard(): Promise<void> {

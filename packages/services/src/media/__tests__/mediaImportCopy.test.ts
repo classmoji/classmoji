@@ -564,7 +564,8 @@ describe('createMediaImportCopier: what is not copied', () => {
     expect(sent).toEqual([]);
     expect(copier.rewrite(text)).toBe(text);
     expect(list).toEqual([
-      'Skipped video "lecture.mp4": the destination class is over its media storage quota',
+      'Skipped video "lecture.mp4": the destination class\'s media storage is full ' +
+        '(contact hello@classmoji.io to upgrade)',
     ]);
   });
 
@@ -612,6 +613,51 @@ describe('createMediaImportCopier: what is not copied', () => {
     expect(list).toEqual([
       'Could not copy video "lecture.mp4" into this class: R2 is having a moment',
     ]);
+  });
+});
+
+describe('createMediaImportCopier: a partial copy never leaks a source signature', () => {
+  it('one copied, one refused for quota: new ref, bare source ref, one summary warning', async () => {
+    const BIG = row({
+      id: PDF,
+      kind: 'DOCUMENT',
+      filename: 'huge.pdf',
+      ext: 'pdf',
+      size_bytes: BigInt(PRO_QUOTA_BYTES + 1),
+    });
+    database({ sourceRows: [row(), BIG] });
+    const { list, warn } = warnings();
+    const copier = createMediaImportCopier({
+      sourceClassroomId: SOURCE,
+      targetClassroomId: TARGET,
+      warn,
+    });
+    const html =
+      `<video src="${signed(SOURCE, VIDEO, 'web.mp4', '&amp;')}"></video>` +
+      `<a href="${signed(SOURCE, PDF, 'orig.pdf', '&amp;')}">notes</a>` +
+      `<img src="${signed(THIRD, FOREIGN, 'orig.png')}">`;
+
+    await copier.prepare([html]);
+    const out = copier.rewrite(html);
+
+    const copy = copier.copiedIdFor(VIDEO)!;
+    expect(copier.copiedIdFor(PDF)).toBeNull();
+    expect(out).toBe(
+      `<video src="media://${copy}"></video>` +
+        `<a href="media://${PDF}">notes</a>` +
+        `<img src="${signed(THIRD, FOREIGN, 'orig.png')}">`
+    );
+    // No signature naming the SOURCE survives anywhere in the copy.
+    expect(out).not.toContain(`/c/${SOURCE}/`);
+    expect(list.filter(line => line.includes('storage is full'))).toEqual([
+      'Skipped document "huge.pdf": the destination class\'s media storage is full ' +
+        '(contact hello@classmoji.io to upgrade)',
+    ]);
+  });
+
+  it('canonicalizes a source signed URL even when nothing was copied', () => {
+    const text = `url(&quot;${signed(SOURCE, VIDEO, 'orig.png', '&amp;')}&quot;)`;
+    expect(rewriteMediaRefs(text, SOURCE, new Map())).toBe(`url(&quot;media://${VIDEO}&quot;)`);
   });
 });
 
