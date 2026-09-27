@@ -133,6 +133,13 @@ export async function completeUpload(
   return (await mediaWrites()).completeUpload(args);
 }
 
+/** Store bytes the server already holds (slides.com import videos on Pro). */
+export async function putMediaObject(
+  args: Parameters<MediaWrites['putMediaObject']>[0]
+): ReturnType<MediaWrites['putMediaObject']> {
+  return (await mediaWrites()).putMediaObject(args);
+}
+
 export async function abortUpload(
   args: Parameters<MediaWrites['abortUpload']>[0]
 ): ReturnType<MediaWrites['abortUpload']> {

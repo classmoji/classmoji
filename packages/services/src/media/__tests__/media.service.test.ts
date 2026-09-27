@@ -44,6 +44,7 @@ vi.mock('@aws-sdk/client-s3', () => ({
   DeleteObjectCommand: command('DeleteObject'),
   HeadObjectCommand: command('HeadObject'),
   ListObjectsV2Command: command('ListObjectsV2'),
+  PutObjectCommand: command('PutObject'),
   UploadPartCommand: command('UploadPart'),
 }));
 
@@ -90,7 +91,9 @@ const {
   deleteMedia,
   listMedia,
   purgeClassroomMedia,
+  putMediaObject,
   signParts,
+  SINGLE_PUT_MAX_BYTES,
   usage,
 } = await import('../media.service.ts');
 const { PART_SIZE_BYTES, PER_FILE_MAX_BYTES, PRO_QUOTA_BYTES, RESERVATION_WINDOW_MS } =
@@ -1789,5 +1792,127 @@ describe('purgeClassroomMedia', () => {
     }
     expect(sent).toHaveLength(0);
     expect(prisma.mediaObject.findMany).not.toHaveBeenCalled();
+  });
+});
+
+describe('putMediaObject', () => {
+  beforeEach(() => {
+    prisma.mediaObject.create.mockImplementation(async ({ data }: { data: object }) =>
+      row({ status: 'UPLOADING', ...data })
+    );
+    prisma.mediaObject.findFirst.mockImplementation(async () => row());
+  });
+
+  const reservedId = (): string =>
+    prisma.mediaObject.create.mock.calls[0][0].data.id as unknown as string;
+
+  it('reserves under the lock, PUTs with the server type and exact length, verifies, READY', async () => {
+    const bytes = Buffer.alloc(4096, 1);
+    sendImpl.mockImplementation(async (name: string) =>
+      name === 'HeadObject' ? { ContentLength: 4096 } : {}
+    );
+
+    const result = await putMediaObject({
+      classroom,
+      userId: 'user-1',
+      filename: 'intro.mp4',
+      bytes,
+    });
+
+    expect(result).toEqual({ mediaId: reservedId(), ref: `media://${reservedId()}` });
+    expect(prisma.$queryRaw).toHaveBeenCalled();
+    expect(prisma.mediaObject.create.mock.calls[0][0].data).toMatchObject({
+      size_bytes: BigInt(4096),
+      content_type: 'video/mp4',
+    });
+    const key = `m/${CLASSROOM_ID}/${reservedId()}/orig.mp4`;
+    expect(sent.map(call => call.name)).toEqual(['PutObject', 'HeadObject']);
+    expect(sent[0].input).toEqual({
+      Bucket: 'classmoji-media-test',
+      Key: key,
+      Body: bytes,
+      ContentType: 'video/mp4',
+      ContentLength: 4096,
+    });
+    expect(prisma.mediaObject.updateMany.mock.calls.at(-1)?.[0]).toMatchObject({
+      where: { id: reservedId(), status: 'UPLOADING' },
+      data: expect.objectContaining({ status: 'READY' }),
+    });
+  });
+
+  it('applies createUpload’s rules: USE_REPO unless explicit, then Pro', async () => {
+    await expect(
+      putMediaObject({ classroom, userId: 'u', filename: 'a.png', bytes: Buffer.alloc(10) })
+    ).rejects.toMatchObject({ code: 'USE_REPO' });
+
+    getProStateForClassroomId.mockResolvedValue({ isPro: false });
+    await expect(
+      putMediaObject({
+        classroom,
+        userId: 'u',
+        filename: 'a.png',
+        bytes: Buffer.alloc(10),
+        options: { explicit: true },
+      })
+    ).rejects.toMatchObject({ code: 'PRO_REQUIRED' });
+    expect(prisma.mediaObject.create).not.toHaveBeenCalled();
+    expect(sent).toHaveLength(0);
+  });
+
+  it('refuses over the quota before writing anything', async () => {
+    prisma.mediaObject.findMany.mockResolvedValue([row({ size_bytes: BigInt(PRO_QUOTA_BYTES) })]);
+    await expect(
+      putMediaObject({ classroom, userId: 'u', filename: 'a.mp4', bytes: Buffer.alloc(10) })
+    ).rejects.toMatchObject({ code: 'QUOTA_EXCEEDED' });
+    expect(sent).toHaveLength(0);
+  });
+
+  it('tombstones and removes the object when the size does not verify', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    sendImpl.mockImplementation(async (name: string) =>
+      name === 'HeadObject' ? { ContentLength: 5 } : {}
+    );
+    await expect(
+      putMediaObject({ classroom, userId: 'u', filename: 'a.mp4', bytes: Buffer.alloc(10) })
+    ).rejects.toMatchObject({ code: 'SIZE_MISMATCH' });
+    expect(prisma.mediaObject.updateMany.mock.calls[0][0]).toMatchObject({
+      where: { status: 'UPLOADING' },
+      data: expect.objectContaining({ status: 'DELETED' }),
+    });
+    expect(sent.at(-1)?.name).toBe('DeleteObject');
+  });
+
+  it('tombstones the reservation when the PUT fails', async () => {
+    sendImpl.mockImplementation(async (name: string) => {
+      if (name === 'PutObject') throw new Error('r2 down');
+      return {};
+    });
+    await expect(
+      putMediaObject({ classroom, userId: 'u', filename: 'a.mp4', bytes: Buffer.alloc(10) })
+    ).rejects.toThrow('r2 down');
+    expect(prisma.mediaObject.updateMany.mock.calls[0][0].data).toMatchObject({
+      status: 'DELETED',
+    });
+  });
+
+  it('writes in parts above the single-PUT limit', async () => {
+    const size = SINGLE_PUT_MAX_BYTES + 5;
+    const bytes = Buffer.allocUnsafe(size);
+    sendImpl.mockImplementation(async (name: string) => {
+      if (name === 'CreateMultipartUpload') return { UploadId: 'up-big' };
+      if (name === 'UploadPart') return { ETag: '"e"' };
+      if (name === 'HeadObject') return { ContentLength: size };
+      return {};
+    });
+
+    await putMediaObject({ classroom, userId: 'u', filename: 'a.mp4', bytes });
+
+    const parts = sent.filter(call => call.name === 'UploadPart');
+    expect(parts.length).toBe(Math.ceil(size / PART_SIZE_BYTES));
+    expect(parts.reduce((total, call) => total + (call.input.ContentLength as number), 0)).toBe(
+      size
+    );
+    expect(sent.some(call => call.name === 'PutObject')).toBe(false);
+    expect(sent.some(call => call.name === 'CompleteMultipartUpload')).toBe(true);
   });
 });
