@@ -273,6 +273,27 @@ function describe(row: Pick<MediaRow, 'kind' | 'filename'>): string {
   return `${KIND_LABEL[row.kind] ?? 'file'} "${row.filename}"`;
 }
 
+/** How many files a skip summary names before it counts the rest. */
+const SKIPPED_NAMED_MAX = 5;
+
+/**
+ * Every object a pass could not copy for one shared reason, as one warning:
+ * `Skipped video "a.mp4": …` for one, `Skipped 12 media files (video "a.mp4",
+ * …, and 7 more): …` for many.
+ */
+export function skippedSummary(
+  rows: readonly Pick<MediaRow, 'kind' | 'filename'>[],
+  reason: string
+): string {
+  if (rows.length === 1) return `Skipped ${describe(rows[0])}: ${reason}`;
+  const named = rows.slice(0, SKIPPED_NAMED_MAX).map(describe);
+  const more = rows.length - named.length;
+  return (
+    `Skipped ${rows.length} media files (${named.join(', ')}` +
+    `${more > 0 ? `, and ${more} more` : ''}): ${reason}`
+  );
+}
+
 function errText(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
@@ -584,12 +605,11 @@ export function createMediaImportCopier(opts: MediaImportCopyOptions): MediaImpo
     const client = r2Client();
     const bucket = mediaBucket();
     if (reason || !client || !bucket) {
-      for (const row of rows) {
-        settled.add(row.id);
-        warn(
-          `Skipped ${describe(row)}: ${reason ?? 'media storage is not configured on this deployment'}`
-        );
-      }
+      for (const row of rows) settled.add(row.id);
+      // ONE warning for the lot: every object is skipped for the same reason,
+      // and a course with forty videos would otherwise fill the import's
+      // bounded warning list with forty copies of one sentence.
+      warn(skippedSummary(rows, reason ?? 'media storage is not configured on this deployment'));
       return;
     }
 

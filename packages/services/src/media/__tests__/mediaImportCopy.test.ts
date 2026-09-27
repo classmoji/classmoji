@@ -68,7 +68,7 @@ vi.mock('../media.service.ts', () => ({
   deleteMedia: (...args: unknown[]) => deleteMedia(...args),
 }));
 
-const { collectMediaRefs, createMediaImportCopier, rewriteMediaRefs } =
+const { collectMediaRefs, createMediaImportCopier, rewriteMediaRefs, skippedSummary } =
   await import('../mediaImportCopy.ts');
 const { PRO_QUOTA_BYTES } = await import('../mediaQuota.ts');
 const { resetR2Client } = await import('../r2Client.ts');
@@ -488,6 +488,35 @@ describe('createMediaImportCopier: what is not copied', () => {
     expect(list).toEqual([
       'Skipped video "lecture.mp4": the destination class has no media storage (Pro)',
     ]);
+  });
+
+  it('collapses many skipped objects into ONE warning with a count', async () => {
+    uploadCapabilityFor.mockResolvedValue({ isPro: false, media: null });
+    const ids = Array.from({ length: 7 }, (_, i) => `7777777${i}-8888-4999-8aaa-bbbbbbbbbbbb`);
+    database({
+      sourceRows: ids.map((id, i) => row({ id, filename: `lecture-${i}.mp4` })),
+    });
+    const { list, warn } = warnings();
+    const copier = createMediaImportCopier({
+      sourceClassroomId: SOURCE,
+      targetClassroomId: TARGET,
+      warn,
+    });
+
+    await copier.prepare([ids.map(id => `media://${id}`).join(' ')]);
+
+    expect(sent).toEqual([]);
+    expect(list).toHaveLength(1);
+    expect(list[0]).toMatch(/^Skipped 7 media files \(video "lecture-0\.mp4", /);
+    expect(list[0]).toContain('video "lecture-4.mp4", and 2 more');
+    expect(list[0]).not.toContain('lecture-5.mp4');
+    expect(list[0]).toMatch(/: the destination class has no media storage \(Pro\)$/);
+  });
+
+  it('skippedSummary: one object reads as before', () => {
+    expect(skippedSummary([{ kind: 'IMAGE', filename: 'a.png' }], 'why')).toBe(
+      'Skipped image "a.png": why'
+    );
   });
 
   it('names an unconfigured deployment without asking for a capability', async () => {

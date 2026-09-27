@@ -477,6 +477,7 @@ export const importContentTask = task({
         keepSlides: wantSlides,
         commitMessage: `Import content from ${source.repo}`,
         onStep: note => writer.patch(...activePhases.map(phase => ({ phase, note }))),
+        warn: detail => writer.addWarnings([`content: ${detail}`]),
         media,
       });
       writer.patch(...activePhases.map(phase => ({ phase, note: null })));
