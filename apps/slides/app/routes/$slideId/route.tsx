@@ -2066,24 +2066,22 @@ export default function SlideViewer() {
     }
   }, [returnUrl]);
 
-  // Update revealInstance when RevealSlides mounts/updates
-  // Needed for both edit mode (notes editing) and view mode (notes preview)
-  useEffect(() => {
-    if (revealRef.current) {
-      // Small delay to ensure Reveal.js has initialized
-      const timer = setTimeout(() => {
-        setRevealInstance(revealRef.current?.getRevealInstance?.() ?? null);
-        // Update current theme for Sandpack auto-theme detection
-        const themes = revealRef.current?.getThemes?.();
-        if (themes?.theme) {
-          setCurrentSlideTheme(themes.theme);
-        }
-      }, 100);
-      return () => clearTimeout(timer);
-    } else {
-      setRevealInstance(null);
-    }
-  }, [isEditing, editableContent, slideContent]); // Re-run when editing state or content changes
+  // RevealSlides reports its Reveal.js instance once initialize() resolves (and
+  // null when it is torn down). The notes panel, toolbar and overview all
+  // subscribe to this instance, in both edit and view mode.
+  //
+  // This used to read the instance off the ref 100ms after each render. On a
+  // large deck in view mode Reveal is not ready by then, the read came back
+  // null, and nothing ever read again — so the notes panel never saw a slide
+  // and showed "No speaker notes" on every one.
+  const handleRevealReady = useCallback((deck: RevealApi | null) => {
+    setRevealInstance(deck);
+  }, []);
+  // Sandpack auto-theme follows the theme RevealSlides extracts on each content
+  // parse — including a theme-only change that does not rebuild Reveal.
+  const handleThemeChange = useCallback(({ theme }: { theme: string; codeTheme: string }) => {
+    setCurrentSlideTheme(theme);
+  }, []);
 
   // Trigger Reveal.js layout recalculation when entering edit mode
   // This fixes centering issues caused by CSS changes (like min-height on columns)
@@ -3040,6 +3038,8 @@ export default function SlideViewer() {
                 canEdit={effectiveCanEdit}
                 isEditing={isEditing}
                 onContentChange={handleContentChange}
+                onRevealReady={handleRevealReady}
+                onThemeChange={handleThemeChange}
                 customThemes={customThemes}
                 sharedThemes={sharedThemes}
               />
