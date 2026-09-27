@@ -334,6 +334,17 @@ function nativeVideo(src: string) {
   });
 }
 
+/**
+ * The content-delivery origin — the one host whose `/c/{classroom}/media/…`
+ * URLs are ours — or null on a deployment that mints none. The same variable
+ * the services sign with, read at call time. Read here rather than through
+ * `~/site/env.server.ts`, which re-exports from `@classmoji/services`, so the
+ * renderer's import graph stays clear of the services root (and Prisma).
+ */
+function contentDeliveryOrigin(): string | null {
+  return process.env.CONTENT_DELIVERY_ORIGIN || null;
+}
+
 function StaticVideo(props: RenderProps) {
   const url = String(props.block.props.url || '');
   const caption = String(props.block.props.caption || '');
@@ -347,17 +358,20 @@ function StaticVideo(props: RenderProps) {
   // turned `media://{id}` into a signed URL of our own delivery origin (or the
   // placeholder for one it could not sign). Its ending is a variant name, not
   // a promise about the format, so it is never judged by extension — and it is
-  // ours, so it is never framed or turned into an outbound link.
-  if (isMediaRef(url) || isMediaPlaceholderUrl(url)) {
+  // ours, so it is never framed or turned into an outbound link. "Ours" is the
+  // HOST, not the path shape: a media-shaped URL pasted from any other host is
+  // an ordinary link and takes the checks below like one.
+  const deliveryOrigin = contentDeliveryOrigin();
+  if (isMediaRef(url) || isMediaPlaceholderUrl(url, deliveryOrigin)) {
     return h('div', { className: 'bn-site-empty' });
   }
-  if (isMediaUrl(url)) {
+  if (isMediaUrl(url, deliveryOrigin)) {
     return h('div', null, [h('div', { key: 'm' }, nativeVideo(url)), captionNode]);
   }
 
   if (!isHttpsUrl(url)) return h('div', null, [plainLink(url), captionNode]);
 
-  const media = playsAsNativeVideo(url)
+  const media = playsAsNativeVideo(url, deliveryOrigin)
     ? nativeVideo(url)
     : frameBox(
         h('iframe', {

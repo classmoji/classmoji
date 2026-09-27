@@ -177,7 +177,11 @@ export const Video = createReactBlockSpec(
           ) : (
             /* Populated state */
             <>
-              {playsAsNativeVideo(url) ? (
+              {/* No delivery origin here: `url` is what the author stored — a
+                  `media://` reference or a pasted link — so the scheme and the
+                  extension decide, and a media-shaped URL is judged like any
+                  other link (a signed one is saved back as its reference). */}
+              {playsAsNativeVideo(url, null) ? (
                 // eslint-disable-next-line jsx-a11y/media-has-caption -- user-uploaded content
                 <video
                   src={videoSrc}
