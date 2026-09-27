@@ -25,7 +25,6 @@ import {
   data,
 } from 'react-router';
 import getPrisma from '@classmoji/database';
-import { ClassmojiService } from '@classmoji/services';
 import { assertSlideAccess } from '@classmoji/auth/server';
 import {
   SLIDE_FILE_EXTENSIONS,
@@ -37,6 +36,7 @@ import {
 } from '@classmoji/services/slides';
 import { assertSlideInClassroom, assertSlideKind } from '~/utils/slideRouteGuards';
 import { webappClassUrl } from '~/utils/webappLinks';
+import { loadUploadCapability } from '~/utils/uploadCapability.server';
 import {
   UploadTooLargeError,
   readLimitedFormData,
@@ -98,7 +98,7 @@ export const loader = async ({
 
   // Where a new document goes — see the new-slide screen. Re-derived by the
   // action from the uploaded row; this is only what the form says.
-  const uploadCapability = await ClassmojiService.media.uploadCapabilityFor(slide.classroom);
+  const uploadCapability = await loadUploadCapability(slide.classroom, 'replace slide file');
 
   return {
     classroomSlug,
@@ -122,7 +122,7 @@ export const loader = async ({
     // is what this avoids.
     upload: {
       maxBytes: SLIDE_FILE_MAX_BYTES,
-      maxLabel: uploadCapability.media
+      maxLabel: uploadCapability?.media
         ? formatGigabytes(uploadCapability.media.perFileMaxBytes)
         : SLIDE_FILE_MAX_LABEL,
       extensions: [...SLIDE_FILE_EXTENSIONS] as string[],

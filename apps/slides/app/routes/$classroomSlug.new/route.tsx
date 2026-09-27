@@ -55,7 +55,6 @@ import {
   data,
 } from 'react-router';
 import getPrisma from '@classmoji/database';
-import { ClassmojiService } from '@classmoji/services';
 import { requireClassroomTeachingTeam } from '@classmoji/auth/server';
 import {
   SLIDE_FILE_EXTENSIONS,
@@ -67,6 +66,7 @@ import {
   validateSlideLinkUrl,
 } from '@classmoji/services/slides';
 import { webappClassUrl } from '~/utils/webappLinks';
+import { loadUploadCapability } from '~/utils/uploadCapability.server';
 import {
   UploadTooLargeError,
   readLimitedFormData,
@@ -149,7 +149,7 @@ export const loader = async ({
   // What this classroom's uploads can do: on Pro with media, a document too
   // large for the repository goes to media instead of being refused. The
   // action re-derives it from the uploaded row; this is only what the form says.
-  const uploadCapability = await ClassmojiService.media.uploadCapabilityFor(classroom);
+  const uploadCapability = await loadUploadCapability(classroom, 'new slide');
 
   return {
     classroomSlug,
@@ -180,7 +180,7 @@ export const loader = async ({
       maxBytes: SLIDE_FILE_MAX_BYTES,
       // The largest file the form will take — media's ceiling where the
       // classroom has media, the repository's otherwise.
-      maxLabel: uploadCapability.media
+      maxLabel: uploadCapability?.media
         ? formatGigabytes(uploadCapability.media.perFileMaxBytes)
         : SLIDE_FILE_MAX_LABEL,
       extensions: [...SLIDE_FILE_EXTENSIONS] as string[],

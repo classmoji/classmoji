@@ -107,6 +107,23 @@ test.describe('where a slide document goes', () => {
   });
 });
 
+test.describe('no capability (the loader could not work it out)', () => {
+  test('a file that fits goes to the repository, which redirects a media file itself', () => {
+    expect(deckAssetTarget(null, { name: 'talk.mp4', size: 20 * MB })).toEqual({ kind: 'repo' });
+    expect(slideFileTarget(null, { name: 'deck.pdf', size: 20 * MB })).toEqual({ kind: 'repo' });
+  });
+
+  test('a file over the repository cap is refused with the repository’s sentence', () => {
+    for (const target of [
+      deckAssetTarget(null, { name: 'talk.mp4', size: 40 * MB }),
+      slideFileTarget(undefined, { name: 'deck.pdf', size: 40 * MB }),
+    ]) {
+      expect(target.kind).toBe('refused');
+      if (target.kind === 'refused') expect(target.message).toContain('course repository');
+    }
+  });
+});
+
 test.describe('a Pro classroom whose media is unavailable (MEDIA_UNAVAILABLE)', () => {
   /** The refusal, asserted to be one, with its sentence. */
   function refusal(target: ReturnType<typeof deckAssetTarget>) {

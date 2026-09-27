@@ -17,6 +17,7 @@ import { requireClassroomStaff } from '@classmoji/auth/server';
 import { useUser } from '~/root';
 import { webappClassUrl } from '~/utils/webappLinks';
 import { listSavedThemes } from '~/utils/themeService.server';
+import { loadUploadCapability } from '~/utils/uploadCapability.server';
 import ImportProgressModal from '~/components/ImportProgressModal';
 import { useImportStream } from '~/hooks/useImportStream';
 import { SLIDES_IMPORT_MAX_BYTES, SLIDES_IMPORT_MAX_LABEL } from '~/utils/importLimits';
@@ -66,10 +67,10 @@ export const loader = async ({ request }: { request: Request }) => {
 
   // Where the ZIP's videos will go, for the note under the dropzone ONLY: the
   // importer asks the storage router again, per entry, from the classroom row.
-  const uploadCapability = await ClassmojiService.media.uploadCapabilityFor(classroom);
+  const uploadCapability = await loadUploadCapability(classroom, 'slides.com import');
 
   return {
-    videosToMedia: uploadCapability.media !== null,
+    videosToMedia: uploadCapability?.media != null,
     repoMaxLabel: REPO_REST_MAX_LABEL,
     classroomSlug,
     contentNamespace: classroom.content_namespace,

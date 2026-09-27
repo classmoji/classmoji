@@ -51,6 +51,7 @@ import { playableMediaUrl } from '~/utils/mediaClient';
 import { useToast, useUser } from '~/hooks';
 import { diffDeckSnapshots, extractDeckSnapshot, type DeckSnapshot } from '~/utils/deckOpsDiff';
 import { getThemeUrls } from '~/utils/themeService.server';
+import { loadUploadCapability } from '~/utils/uploadCapability.server';
 import {
   deckAccessFor,
   deckDeliveryContext,
@@ -529,7 +530,7 @@ export const loader = async ({
   // student opening every slide, so the Pro and usage reads would be pure cost
   // for them. Every upload route re-derives it from the file it receives.
   const uploadCapability = canEdit
-    ? await ClassmojiService.media.uploadCapabilityFor(slide.classroom)
+    ? await loadUploadCapability(slide.classroom, 'deck editor')
     : null;
 
   return {

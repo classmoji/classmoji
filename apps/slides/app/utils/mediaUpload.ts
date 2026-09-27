@@ -17,6 +17,7 @@ import {
   type StorageTarget,
   type UploadCapability,
 } from '@classmoji/services/media/router';
+import { REPO_REST_MAX_BYTES, repoFileTooLargeMessage } from '@classmoji/utils/repo-limits';
 
 export type { UploadCapability };
 
@@ -31,13 +32,28 @@ export interface FileFacts {
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
+ * Where a file goes when the capability could not be worked out (the loader's
+ * lookup failed): the course repository if it fits, as before routing existed.
+ * The repository route still redirects a file that belongs in media
+ * (`USE_MEDIA`), so a Pro video is not lost — it takes one extra round trip.
+ */
+function withoutCapability(file: FileFacts): StorageTarget {
+  if (file.size <= REPO_REST_MAX_BYTES) return { kind: 'repo' };
+  return { kind: 'refused', code: 'TOO_LARGE_FOR_REPO', message: repoFileTooLargeMessage() };
+}
+
+/**
  * Where a deck asset — a video or an image placed in the editor — goes.
  *
  * The router's own answer. A Pro classroom's videos go to media whatever their
  * size; anything over the repository's cap goes to media where the classroom
  * has it; everything else stays in the course repository.
  */
-export function deckAssetTarget(capability: UploadCapability, file: FileFacts): StorageTarget {
+export function deckAssetTarget(
+  capability: UploadCapability | null | undefined,
+  file: FileFacts
+): StorageTarget {
+  if (!capability) return withoutCapability(file);
   return storageTargetFor(capability, { name: file.name, size: file.size });
 }
 
@@ -52,7 +68,11 @@ export function deckAssetTarget(capability: UploadCapability, file: FileFacts): 
  * to media? A document that fits takes the slide's own repository path, whose
  * checks are unchanged.
  */
-export function slideFileTarget(capability: UploadCapability, file: FileFacts): StorageTarget {
+export function slideFileTarget(
+  capability: UploadCapability | null | undefined,
+  file: FileFacts
+): StorageTarget {
+  if (!capability) return withoutCapability(file);
   if (file.size <= capability.repoMaxBytes) return { kind: 'repo' };
   return storageTargetFor(capability, { name: file.name, size: file.size });
 }
