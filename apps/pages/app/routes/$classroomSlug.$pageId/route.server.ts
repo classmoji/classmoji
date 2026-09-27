@@ -867,6 +867,15 @@ async function pageAction({ params, request }: PageActionArgs, slot: { held: boo
   if (intent === 'set-header-image') {
     try {
       const coverUrl = await canonicalizeAssetRef(actionAssetCtx, data.url as string | null);
+      // The media half of the cover rule, judged on the CANONICAL form (a signed
+      // media URL has just become its `media://` reference). A `media://` cover
+      // must name a ready IMAGE of this page's own classroom; a video, a deleted
+      // object or another classroom's id is answered like an asset that is not
+      // there. Repo paths and URLs pass through untouched — this editor keeps
+      // its own policy for those.
+      if (!(await ClassmojiService.pageContent.coverMediaRefAllowed(actionPage, coverUrl))) {
+        return Response.json({ error: 'Image not found' }, { status: 404 });
+      }
       const coverImage = coverUrl
         ? {
             url: coverUrl,

@@ -41,6 +41,23 @@ test.describe('the upload capability', () => {
   });
 });
 
+test.describe('set-header-image', () => {
+  test('refuses a media cover the classroom may not use, after canonicalizing and before saving', () => {
+    const intent = LOADER_SOURCE.slice(LOADER_SOURCE.indexOf("intent === 'set-header-image'"));
+    const canonical = intent.indexOf('await canonicalizeAssetRef(actionAssetCtx,');
+    const gate = intent.indexOf(
+      'await ClassmojiService.pageContent.coverMediaRefAllowed(actionPage, coverUrl)'
+    );
+    const refused = intent.indexOf("Response.json({ error: 'Image not found' }, { status: 404 })");
+    const save = intent.indexOf('await savePageCoverImage(actionPage,');
+
+    for (const at of [canonical, gate, refused, save]) expect(at).toBeGreaterThan(-1);
+    expect(canonical).toBeLessThan(gate);
+    expect(gate).toBeLessThan(refused);
+    expect(refused).toBeLessThan(save);
+  });
+});
+
 test.describe('/api/media-url', () => {
   test('refuses anything but a media reference, and checks edit access before signing', () => {
     const shape = MEDIA_URL_SOURCE.indexOf('!isMediaRef(ref)');
