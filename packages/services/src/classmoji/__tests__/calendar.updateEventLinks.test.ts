@@ -10,6 +10,12 @@
  * Every caller reaches this after its own gate, so the check is a backstop
  * rather than the only wall; it is also the one place that holds for callers
  * added later.
+ *
+ * The later blocks pin which assignments may be linked — any in the classroom,
+ * found through the module, since quiz and form assignments have no repository
+ * — and the quiz rule: where the classroom's quizzes are hidden the calendar
+ * read drops quiz links, so a save made there neither adds one nor deletes
+ * the ones it was never shown.
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
@@ -20,7 +26,14 @@ const slide = { findMany: vi.fn() };
 const assignment = { findMany: vi.fn() };
 const calendarEventPageLink = { deleteMany: vi.fn(), createMany: vi.fn() };
 const calendarEventSlideLink = { deleteMany: vi.fn(), createMany: vi.fn() };
-const calendarEventAssignmentLink = { deleteMany: vi.fn(), createMany: vi.fn() };
+const calendarEventAssignmentLink = {
+  deleteMany: vi.fn(),
+  createMany: vi.fn(),
+  count: vi.fn(),
+  updateMany: vi.fn(),
+  aggregate: vi.fn(),
+};
+const quizzesVisible = vi.fn();
 
 /** The parent-event row lock the transaction takes before it writes anything. */
 const $queryRaw = vi.fn();
@@ -39,6 +52,10 @@ const client = {
 
 vi.mock('@classmoji/database', () => ({ default: () => client }));
 
+vi.mock('../entitlement.service.ts', () => ({
+  quizzesVisible: (...a: unknown[]) => quizzesVisible(...a),
+}));
+
 const { updateEventLinks } = await import('../calendar.service.ts');
 
 beforeEach(() => {
@@ -49,6 +66,10 @@ beforeEach(() => {
   page.findMany.mockResolvedValue([{ id: 'p-1' }]);
   slide.findMany.mockResolvedValue([]);
   assignment.findMany.mockResolvedValue([]);
+  // No quiz link stored on the date unless a test says so.
+  calendarEventAssignmentLink.count.mockResolvedValue(0);
+  calendarEventAssignmentLink.aggregate.mockResolvedValue({ _max: { order: null } });
+  quizzesVisible.mockResolvedValue(true);
 });
 
 describe('updateEventLinks — the event has to be in this classroom', () => {
@@ -212,5 +233,262 @@ describe('updateEventLinks — the star', () => {
     expect(calendarEventPageLink.deleteMany).toHaveBeenCalledWith({
       where: { event_id: 'event-1', occurrence_date: expect.any(Date) },
     });
+  });
+});
+
+/** The assignment link rows the write created, id → featured. */
+const assignmentRows = () => {
+  const call = calendarEventAssignmentLink.createMany.mock.calls[0]?.[0] as
+    | { data: Array<{ assignment_id: string; featured: boolean }> }
+    | undefined;
+  return Object.fromEntries((call?.data ?? []).map(row => [row.assignment_id, row.featured]));
+};
+
+describe('updateEventLinks — which assignments may be linked', () => {
+  it('finds them through the module, since quiz and form assignments have no repository', async () => {
+    await updateEventLinks('event-1', 'class-1', { assignmentIds: ['a-quiz', 'a-form'] });
+
+    expect(assignment.findMany).toHaveBeenCalledWith({
+      where: { id: { in: ['a-quiz', 'a-form'] }, module: { classroom_id: 'class-1' } },
+      select: { id: true, type: true },
+    });
+  });
+
+  it('links quiz, form and repo assignments alike, and stars any of them', async () => {
+    assignment.findMany.mockResolvedValue([
+      { id: 'a-quiz', type: 'QUIZ' },
+      { id: 'a-form', type: 'FORM' },
+      { id: 'a-repo', type: 'REPO' },
+    ]);
+
+    const result = await updateEventLinks(
+      'event-1',
+      'class-1',
+      { assignmentIds: ['a-quiz', 'a-form', 'a-repo'] },
+      null,
+      { kind: 'assignment', id: 'a-form' }
+    );
+
+    expect(assignmentRows()).toEqual({ 'a-quiz': false, 'a-form': true, 'a-repo': false });
+    expect(result.linked).toEqual({ pages: 0, slides: 0, assignments: 3 });
+  });
+
+  it('drops an assignment from another classroom, and the star naming it', async () => {
+    // The module condition is what drops it: the query does not return it.
+    assignment.findMany.mockResolvedValue([{ id: 'a-form', type: 'FORM' }]);
+
+    const result = await updateEventLinks(
+      'event-1',
+      'class-1',
+      { assignmentIds: ['a-form', 'a-elsewhere'] },
+      null,
+      { kind: 'assignment', id: 'a-elsewhere' }
+    );
+
+    expect(assignmentRows()).toEqual({ 'a-form': false });
+    expect(result.linked.assignments).toBe(1);
+  });
+
+  it('reports what it saved, not what it was asked for', async () => {
+    page.findMany.mockResolvedValue([{ id: 'p-1' }]);
+    slide.findMany.mockResolvedValue([]);
+
+    const result = await updateEventLinks('event-1', 'class-1', {
+      pageIds: ['p-1', 'p-elsewhere'],
+      slideIds: ['s-elsewhere'],
+    });
+
+    expect(result).toEqual({ success: true, linked: { pages: 1, slides: 0, assignments: 0 } });
+  });
+});
+
+describe('updateEventLinks — quiz links where quizzes are hidden', () => {
+  beforeEach(() => {
+    quizzesVisible.mockResolvedValue(false);
+    page.findMany.mockResolvedValue([{ id: 'p-1' }]);
+  });
+
+  it('asks nothing about quizzes when none is linked or stored', async () => {
+    assignment.findMany.mockResolvedValue([{ id: 'a-form', type: 'FORM' }]);
+
+    await updateEventLinks('event-1', 'class-1', { pageIds: ['p-1'], assignmentIds: ['a-form'] });
+
+    expect(quizzesVisible).not.toHaveBeenCalled();
+    // A plain replace: nothing stored is kept.
+    expect(calendarEventAssignmentLink.deleteMany).toHaveBeenCalledWith({
+      where: { event_id: 'event-1', occurrence_date: null },
+    });
+    expect(calendarEventAssignmentLink.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('counts the quiz links already stored on the date being written', async () => {
+    const occurrence = new Date('2026-09-28T00:00:00.000Z');
+    await updateEventLinks('event-1', 'class-1', { pageIds: ['p-1'] }, occurrence);
+
+    expect(calendarEventAssignmentLink.count).toHaveBeenCalledWith({
+      where: { event_id: 'event-1', occurrence_date: occurrence, assignment: { type: 'QUIZ' } },
+    });
+  });
+
+  it('drops a quiz being added, as it drops an id from elsewhere, and its star with it', async () => {
+    assignment.findMany.mockResolvedValue([
+      { id: 'a-quiz', type: 'QUIZ' },
+      { id: 'a-form', type: 'FORM' },
+    ]);
+
+    const result = await updateEventLinks(
+      'event-1',
+      'class-1',
+      { assignmentIds: ['a-quiz', 'a-form'] },
+      null,
+      { kind: 'assignment', id: 'a-quiz' }
+    );
+
+    expect(quizzesVisible).toHaveBeenCalledWith('class-1');
+    expect(assignmentRows()).toEqual({ 'a-form': false });
+    expect(result.linked.assignments).toBe(1);
+  });
+
+  it('keeps the quiz links stored on the date instead of deleting them', async () => {
+    // The edit modal was never shown them, so their absence from the save is
+    // not a request to remove them.
+    calendarEventAssignmentLink.count.mockResolvedValue(1);
+    assignment.findMany.mockResolvedValue([{ id: 'a-form', type: 'FORM' }]);
+
+    await updateEventLinks('event-1', 'class-1', { pageIds: ['p-1'], assignmentIds: ['a-form'] });
+
+    expect(quizzesVisible).toHaveBeenCalledWith('class-1');
+    expect(calendarEventAssignmentLink.deleteMany).toHaveBeenCalledWith({
+      where: {
+        event_id: 'event-1',
+        occurrence_date: null,
+        assignment: { type: { not: 'QUIZ' } },
+      },
+    });
+    // Pages and decks are replaced as always.
+    expect(calendarEventPageLink.deleteMany).toHaveBeenCalledWith({
+      where: { event_id: 'event-1', occurrence_date: null },
+    });
+  });
+
+  it('leaves a kept quiz link its star when the save stars nothing', async () => {
+    calendarEventAssignmentLink.count.mockResolvedValue(1);
+
+    await updateEventLinks('event-1', 'class-1', { pageIds: ['p-1'] });
+
+    expect(calendarEventAssignmentLink.updateMany).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['a page', { kind: 'page' as const, id: 'p-1' }],
+    ['an assignment', { kind: 'assignment' as const, id: 'a-form' }],
+  ])(
+    'moves the star off a kept quiz link, before inserting, when the save stars %s',
+    async (_what, featured) => {
+      // One star per date. On an assignment row the partial unique index would
+      // refuse the insert outright if the kept row were still starred.
+      calendarEventAssignmentLink.count.mockResolvedValue(1);
+      assignment.findMany.mockResolvedValue([{ id: 'a-form', type: 'FORM' }]);
+
+      await updateEventLinks(
+        'event-1',
+        'class-1',
+        { pageIds: ['p-1'], assignmentIds: ['a-form'] },
+        null,
+        featured
+      );
+
+      expect(calendarEventAssignmentLink.updateMany).toHaveBeenCalledWith({
+        where: {
+          event_id: 'event-1',
+          occurrence_date: null,
+          featured: true,
+          assignment: { type: 'QUIZ' },
+        },
+        data: { featured: false },
+      });
+      expect(calendarEventAssignmentLink.updateMany.mock.invocationCallOrder[0]).toBeGreaterThan(
+        calendarEventAssignmentLink.deleteMany.mock.invocationCallOrder[0]
+      );
+      expect(calendarEventAssignmentLink.updateMany.mock.invocationCallOrder[0]).toBeLessThan(
+        calendarEventAssignmentLink.createMany.mock.invocationCallOrder[0]
+      );
+
+      // And exactly one created row carries the star.
+      const pageRows = (
+        calendarEventPageLink.createMany.mock.calls[0][0] as {
+          data: Array<{ featured: boolean }>;
+        }
+      ).data;
+      const starred = [...pageRows.map(r => r.featured), ...Object.values(assignmentRows())];
+      expect(starred.filter(Boolean)).toHaveLength(1);
+    }
+  );
+
+  it('places the new assignment links after the kept quiz links', async () => {
+    // The read sorts on `order` alone. New rows starting again at 0 would tie
+    // with the kept ones and interleave with them when quizzes show again.
+    calendarEventAssignmentLink.count.mockResolvedValue(1);
+    calendarEventAssignmentLink.aggregate.mockResolvedValue({ _max: { order: 2 } });
+    assignment.findMany.mockResolvedValue([
+      { id: 'a-form', type: 'FORM' },
+      { id: 'a-repo', type: 'REPO' },
+    ]);
+    const occurrence = new Date('2026-09-28T00:00:00.000Z');
+
+    await updateEventLinks(
+      'event-1',
+      'class-1',
+      { assignmentIds: ['a-form', 'a-repo'] },
+      occurrence
+    );
+
+    expect(calendarEventAssignmentLink.aggregate).toHaveBeenCalledWith({
+      where: { event_id: 'event-1', occurrence_date: occurrence },
+      _max: { order: true },
+    });
+    // Asked after the delete, when the kept rows are all the date holds.
+    expect(calendarEventAssignmentLink.aggregate.mock.invocationCallOrder[0]).toBeGreaterThan(
+      calendarEventAssignmentLink.deleteMany.mock.invocationCallOrder[0]
+    );
+    const [{ data }] = calendarEventAssignmentLink.createMany.mock.calls[0] as [
+      { data: Array<{ assignment_id: string; order: number }> },
+    ];
+    expect(data.map(row => [row.assignment_id, row.order])).toEqual([
+      ['a-form', 3],
+      ['a-repo', 4],
+    ]);
+  });
+
+  it('numbers the new assignment links from 0 where no quiz link is kept', async () => {
+    quizzesVisible.mockResolvedValue(true);
+    calendarEventAssignmentLink.count.mockResolvedValue(1);
+    assignment.findMany.mockResolvedValue([
+      { id: 'a-quiz', type: 'QUIZ' },
+      { id: 'a-form', type: 'FORM' },
+    ]);
+
+    await updateEventLinks('event-1', 'class-1', { assignmentIds: ['a-quiz', 'a-form'] });
+
+    expect(calendarEventAssignmentLink.aggregate).not.toHaveBeenCalled();
+    const [{ data }] = calendarEventAssignmentLink.createMany.mock.calls[0] as [
+      { data: Array<{ assignment_id: string; order: number }> },
+    ];
+    expect(data.map(row => row.order)).toEqual([0, 1]);
+  });
+
+  it('replaces the stored quiz links as usual where quizzes show', async () => {
+    quizzesVisible.mockResolvedValue(true);
+    calendarEventAssignmentLink.count.mockResolvedValue(1);
+
+    await updateEventLinks('event-1', 'class-1', { pageIds: ['p-1'] }, null, {
+      kind: 'page',
+      id: 'p-1',
+    });
+
+    expect(calendarEventAssignmentLink.deleteMany).toHaveBeenCalledWith({
+      where: { event_id: 'event-1', occurrence_date: null },
+    });
+    expect(calendarEventAssignmentLink.updateMany).not.toHaveBeenCalled();
   });
 });
